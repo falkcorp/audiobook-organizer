@@ -1,5 +1,5 @@
 // file: internal/database/activity_store_instrumented.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-0002-bcde-000000000002
 // last-edited: 2026-09-19
 
@@ -98,6 +98,10 @@ func (i *InstrumentedActivityStorer) QueryWithPartial(ctx context.Context, filte
 }
 
 var _ ActivityPartialQuerier = (*InstrumentedActivityStorer)(nil)
+
+// Unwrap returns the wrapped store, for callers that need a concrete backend's
+// capability (the filter-index backfill needs the Pebble store itself).
+func (i *InstrumentedActivityStorer) Unwrap() ActivityStorer { return i.store }
 
 // Summarize traces the Summarize operation.
 func (i *InstrumentedActivityStorer) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {

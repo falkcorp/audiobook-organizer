@@ -1,5 +1,5 @@
 // file: internal/database/activity_partial_query.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: efd7ba68-8c39-42ce-8254-130d1f7e22a8
 // last-edited: 2026-09-19
 
@@ -23,4 +23,25 @@ func QueryWithPartialOf(ctx context.Context, store ActivityReader, f ActivityFil
 		return ActivityQueryResult{}, err
 	}
 	return ActivityQueryResult{Entries: entries, Total: total}, nil
+}
+
+// FindPebbleActivityStore returns the Pebble activity store inside store,
+// peeling the migration and instrumentation wrappers, or nil when there is none.
+// A type assertion on the outermost store alone would miss a wrapped Pebble
+// store, and a caller gating a feature on it would turn the feature off with no
+// error anywhere.
+func FindPebbleActivityStore(store ActivityStorer) *PebbleActivityStore {
+	for store != nil {
+		switch w := store.(type) {
+		case *PebbleActivityStore:
+			return w
+		case *MigratingActivityStore:
+			store = w.Primary()
+		case *InstrumentedActivityStorer:
+			store = w.Unwrap()
+		default:
+			return nil
+		}
+	}
+	return nil
 }
