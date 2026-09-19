@@ -130,27 +130,38 @@ func (bp *BatchPoller) Poll(ctx context.Context) (int, error) {
 		if b.Status != "completed" {
 			continue
 		}
-		if !bp.claim(b.ID) {
-			continue
+		if bp.dispatch(ctx, b) {
+			processed++
 		}
-
-		handler, ok := bp.handlers[b.Type]
-		if !ok {
-			batchPollerLog.Warn("no handler for batch type %q (batch %s); recording it handled", b.Type, b.ID)
-			bp.finish(b.ID, b.Type, true)
-			continue
-		}
-
-		if err := handler(ctx, b.ID, b.OutputFileID); err != nil {
-			batchPollerLog.Error("handler for %s batch %s failed, will retry next poll: %v", b.Type, b.ID, err)
-			bp.finish(b.ID, b.Type, false)
-			continue
-		}
-		bp.finish(b.ID, b.Type, true)
-		processed++
-		batchPollerLog.Info("processed %s batch %s", b.Type, b.ID)
 	}
 	return processed, nil
+}
+
+// dispatch runs one completed batch through its handler and reports whether it
+// was handled. The in-flight hold is released by a deferred finish so a
+// panicking handler cannot leave the batch claimed for the process lifetime.
+func (bp *BatchPoller) dispatch(ctx context.Context, b ai.BatchInfo) (handled bool) {
+	if !bp.claim(b.ID) {
+		return false
+	}
+	handler, ok := bp.handlers[b.Type]
+	if !ok {
+		// Memory only, never journaled: the poller did no work on this batch
+		// (author_dedup / author_review / diagnostics batches are collected by
+		// their owners), and a handler registered in a later build must still
+		// see it. The in-memory mark just stops the warning repeating each tick.
+		batchPollerLog.Warn("no handler for batch type %q (batch %s)", b.Type, b.ID)
+		bp.release(b.ID, true)
+		return false
+	}
+	defer func() { bp.finish(b.ID, b.Type, handled) }()
+
+	if err := handler(ctx, b.ID, b.OutputFileID); err != nil {
+		batchPollerLog.Error("handler for %s batch %s failed, will retry next poll: %v", b.Type, b.ID, err)
+		return false
+	}
+	batchPollerLog.Info("processed %s batch %s", b.Type, b.ID)
+	return true
 }
 
 // reconcile hands each registered reconciler the listed batches of its type
@@ -202,14 +213,19 @@ func (bp *BatchPoller) finish(batchID, batchType string, handled bool) {
 	if handled {
 		journalErr = bp.writeJournal(batchID, batchType)
 	}
+	bp.release(batchID, handled)
+	if journalErr != nil {
+		batchPollerLog.Error("record batch %s handled: %v (it will be re-delivered once after a restart)", batchID, journalErr)
+	}
+}
+
+// release drops the in-flight hold and, when handled, caches the in-memory mark.
+func (bp *BatchPoller) release(batchID string, handled bool) {
 	bp.mu.Lock()
+	defer bp.mu.Unlock()
 	delete(bp.inFlight, batchID)
 	if handled {
 		bp.processed[batchID] = true
-	}
-	bp.mu.Unlock()
-	if journalErr != nil {
-		batchPollerLog.Error("record batch %s handled: %v (it will be re-delivered once after a restart)", batchID, journalErr)
 	}
 }
 

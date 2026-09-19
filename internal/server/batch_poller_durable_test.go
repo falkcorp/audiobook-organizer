@@ -183,3 +183,41 @@ func TestBatchPoller_OrphanedJobAttachedAndAppliedOnce(t *testing.T) {
 	_, _ = aijobsPoller(t, store, client).Poll(context.Background())
 	assert.Equal(t, 1, cc.calls)
 }
+
+// A batch type with no handler is skipped in memory only: a new poller (or a
+// later build that registers a handler) must still see it.
+func TestBatchPoller_UnhandledTypeNotJournaled(t *testing.T) {
+	store := newPollerTestStore(t)
+	client := &fakeBatchClient{batches: []ai.BatchInfo{{ID: "batch_u", Status: "completed", Type: "author_review"}}}
+	_, err := newTestPoller(t, store, client).Poll(context.Background())
+	require.NoError(t, err)
+
+	var calls atomic.Int32
+	later := newTestPoller(t, store, client)
+	later.RegisterHandler("author_review", func(context.Context, string, string) error { calls.Add(1); return nil })
+	_, err = later.Poll(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), calls.Load())
+}
+
+// A panicking handler must not leave its batch claimed forever.
+func TestBatchPoller_PanickingHandlerReleasesClaim(t *testing.T) {
+	store := newPollerTestStore(t)
+	client := &fakeBatchClient{batches: []ai.BatchInfo{{ID: "batch_p", Status: "completed", Type: "t"}}}
+	bp := newTestPoller(t, store, client)
+	boom := true
+	calls := 0
+	bp.RegisterHandler("t", func(context.Context, string, string) error {
+		calls++
+		if boom {
+			boom = false
+			panic("boom")
+		}
+		return nil
+	})
+	require.Panics(t, func() { _, _ = bp.Poll(context.Background()) })
+	_, err := bp.Poll(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls)
+	assert.True(t, bp.IsProcessed("batch_p"))
+}
