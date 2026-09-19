@@ -5,3 +5,6 @@
 - `RecomputeBookAggregates` and the split-book merge now store `Book.Duration` from the same rows. Missing rows are no longer counted beside the present copies a repoint leaves them next to.
 - Opening a multi-file book no longer backfills `Book.Duration` with one chapter's probed length.
 - The dedup compare drawer and the metadata review spine show a partial runtime as "at least 40m (2 of 30 files)" instead of as the book's length.
+- The bulk-apply gate is never looser than before on a real contradiction. A partial runtime is a lower bound, and it still blocks as `runtime_mismatch` when it exceeds the candidate by more than the block ratio. A narrator mismatch still blocks whenever the runtime does not confirm the match.
+- A missing file row counts toward the runtime unless it is a repoint copy of a present row. A copy is matched by content hash, original file hash, original filename, base name or size. So a chapter that is missing from disk makes the runtime partial, and it never lowers the stored `Book.Duration`.
+- Dedup reads a book's file rows once per book in each full scan and in each stale-candidate drain. Title and series guards now run before any file read.

@@ -1,5 +1,5 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
 // last-edited: 2026-09-19
 
@@ -149,6 +149,18 @@ func CollectDuration(
 	book *database.Book,
 	cfg DurationCollectorConfig,
 ) ([]unified.Signal, error) {
+	return collectDuration(store, tagStore, nil, book, cfg)
+}
+
+// collectDuration is CollectDuration with the engine's run-scoped runtime
+// memo (nil outside a run).
+func collectDuration(
+	store DurationCollectorStore,
+	tagStore database.BookTagSingletonStore,
+	memo *bookRuntimeMemo,
+	book *database.Book,
+	cfg DurationCollectorConfig,
+) ([]unified.Signal, error) {
 	if book == nil {
 		return nil, nil
 	}
@@ -160,7 +172,7 @@ func CollectDuration(
 	}
 	// Canonical runtime, complete only: a partial or unknown runtime is no
 	// duration evidence at all.
-	bookDur, known := knownRuntimeSec(store, book)
+	bookDur, known := knownRuntimeSec(store, memo, book)
 	if !known {
 		return nil, nil
 	}
@@ -193,7 +205,25 @@ func CollectDuration(
 		if !prefilterOtherDuration(bookDur, other, cfg.AbridgedThreshold) {
 			continue
 		}
-		otherDur, otherKnown := knownRuntimeSec(store, other)
+
+		// Guards that need no file read run BEFORE the runtime read; both
+		// actions below require titleDist <= cfg.LevenshteinMax.
+		// Series-volume guard (same as checkDurationMatch).
+		otherSeriesNum := seriesNumberOf(other)
+		if bookSeriesNum != "" && otherSeriesNum != "" && bookSeriesNum != otherSeriesNum {
+			continue
+		}
+		otherNorm := normalizeTitle(other.Title)
+		if titlesDifferOnlyInDigits(bookNorm, otherNorm) {
+			continue
+		}
+		otherForms := allNormalizedTitleFormsForStore(store, other)
+		titleDist := minLevenshteinBetweenForms(bookForms, otherForms)
+		if titleDist > cfg.LevenshteinMax {
+			continue
+		}
+
+		otherDur, otherKnown := knownRuntimeSec(store, memo, other)
 		if !otherKnown {
 			continue
 		}
@@ -201,19 +231,6 @@ func CollectDuration(
 
 		// Short-circuit: completely unrelated durations (> 20% diff).
 		if pct >= cfg.AbridgedThreshold {
-			continue
-		}
-
-		otherForms := allNormalizedTitleFormsForStore(store, other)
-		titleDist := minLevenshteinBetweenForms(bookForms, otherForms)
-		otherNorm := normalizeTitle(other.Title)
-
-		// Series-volume guard (same as checkDurationMatch).
-		otherSeriesNum := seriesNumberOf(other)
-		if bookSeriesNum != "" && otherSeriesNum != "" && bookSeriesNum != otherSeriesNum {
-			continue
-		}
-		if titlesDifferOnlyInDigits(bookNorm, otherNorm) {
 			continue
 		}
 

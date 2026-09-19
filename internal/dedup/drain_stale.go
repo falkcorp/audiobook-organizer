@@ -1,5 +1,5 @@
 // file: internal/dedup/drain_stale.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 60d982e2-6836-4327-9ddf-9b55375f39ea
 // last-edited: 2026-09-19
 
@@ -87,6 +87,12 @@ type DrainStaleSample struct {
 type drainBookMeta struct {
 	stub    *database.Book
 	missing bool
+	// runtime and fileRows are the book's canonical runtime and file-row
+	// count, read ONCE per book at lookup, so the min-duration and
+	// part-vs-whole gates cost no store read per candidate.
+	runtime  database.BookRuntime
+	fileRows int
+	filesOK  bool
 }
 
 // DrainStaleCandidates re-evaluates pending exact-layer candidates against the
@@ -133,6 +139,7 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 				ASIN:             b.ASIN,
 				IsPrimaryVersion: b.IsPrimaryVersion,
 			}
+			m.runtime, m.fileRows, m.filesOK = runtimeAndRows(de.bookStore, nil, b)
 		}
 		cache[id] = m
 		return m
@@ -319,10 +326,13 @@ func (de *Engine) classifyStaleCandidate(a, b drainBookMeta) (string, bool) {
 	if isBoilerplateTitle(a.stub.Title) || isBoilerplateTitle(b.stub.Title) {
 		return drainReasonBoilerplateTitle, true
 	}
-	if de.hasKnownShortDuration(a.stub) || de.hasKnownShortDuration(b.stub) {
+	// Same gates as upsertExactCandidate (hasKnownShortDuration,
+	// isPartVsWholeMismatch), on the runtimes cached at lookup.
+	if shortRuntime(a.runtime) || shortRuntime(b.runtime) {
 		return drainReasonShortDuration, true
 	}
-	if de.isPartVsWholeMismatch(a.stub, b.stub) {
+	if a.filesOK && b.filesOK && a.fileRows > 0 && b.fileRows > 0 &&
+		partVsWholeRuntime(a.runtime, a.fileRows, b.runtime, b.fileRows) {
 		return drainReasonPartVsWhole, true
 	}
 	return "", false

@@ -1,5 +1,5 @@
 // file: internal/database/book_runtime_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 295552ed-1de2-49e3-9bf6-7cb94a4ad6eb
 // last-edited: 2026-09-19
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -31,6 +32,17 @@ func TestComputeBookRuntime(t *testing.T) {
 	thirtyKnown := rows(repeat(30, 1200)...)
 	twoOfThirty := rows(append(repeat(2, 1200), repeat(28, 0)...)...)
 	withMissing := append(rows(34401), BookFile{ID: "old", Duration: 34401, Missing: true})
+	withMissing[0].FileSize = 500_000_000
+	withMissing[1].FileSize = 500_000_000
+	// Reviewer probe: a 45 s intro on disk, 20 × 30 min chapters missing.
+	introAndMissing := rows(45)
+	for i := 0; i < 20; i++ {
+		introAndMissing = append(introAndMissing, BookFile{ID: "m", FilePath: "/old/" + string(rune('a'+i)) + ".mp3", Duration: 1800, Missing: true})
+	}
+	renamedRepoint := []BookFile{
+		{ID: "new", FilePath: "/lib/Book - 01.mp3", OriginalFileHash: "h1", FileHash: "h1-tagged", Duration: 1200, FileSize: 101},
+		{ID: "old", FilePath: "/in/01 Chapter.mp3", FileHash: "h1", Duration: 1200, FileSize: 100, Missing: true},
+	}
 	allMissing := []BookFile{{ID: "x", Duration: 600, Missing: true}, {ID: "y", Duration: 900, Missing: true}}
 	fpOnly := []BookFile{{ID: "fp", AcoustIDFingerprintDurationSec: 1799.6}}
 
@@ -48,7 +60,10 @@ func TestComputeBookRuntime(t *testing.T) {
 		{"single row without duration falls back to Book.Duration", &Book{Duration: d(5000)}, rows(0), 5000, "book_aggregate", true},
 		{"no rows falls back to Book.Duration", &Book{Duration: d(5000)}, nil, 5000, "book_aggregate", true},
 		{"no rows and no aggregate is unknown", &Book{}, nil, 0, "unknown", false},
-		{"missing row beside its present copy is not double counted", nil, withMissing, 34401, "complete", true},
+		{"missing row beside its present copy (same size) is not double counted", nil, withMissing, 34401, "complete", true},
+		{"repoint duplicate matched by pre-organize hash is not double counted", nil, renamedRepoint, 1200, "complete", true},
+		{"missing chapters with no present copy make the runtime partial, never a 45s book", nil, introAndMissing, 36045, "partial", false},
+		{"unidentifiable missing row is counted, not assumed a duplicate", nil, append(rows(1200), BookFile{ID: "x", Duration: 1200, Missing: true}), 2400, "partial", false},
 		{"all rows missing: runtime from the missing rows", nil, allMissing, 1500, "complete", true},
 		{"fingerprint duration is a whole-file fallback", nil, fpOnly, 1800, "complete", true},
 		{"millisecond row is normalized", nil, []BookFile{{ID: "ms", Duration: 3_600_000, FileSize: 57_600_000}}, 3600, "complete", true},
@@ -107,5 +122,48 @@ func TestStoredAggregateSec(t *testing.T) {
 	}
 	if _, ok := ComputeBookRuntime(nil, rows(0, 0)).StoredAggregateSec(); ok {
 		t.Fatal("no-duration rows produced a stored aggregate")
+	}
+}
+
+// TestRecomputeBookAggregates_MissingChapterNeverLowersDuration runs the real
+// persistence path: 20 chapters are imported, then 19 go missing (the file
+// rows stay, flagged missing) with no present copy. The stored Book.Duration
+// must stay the whole book's 20 × 30 min — the first version of the
+// canonical runtime dropped every missing row whenever one present row
+// existed and persisted the one surviving chapter.
+func TestRecomputeBookAggregates_MissingChapterNeverLowersDuration(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	b, err := store.CreateBook(&Book{Title: "Chaptered", FilePath: "/lib/Chaptered"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []*BookFile
+	for i := 0; i < 20; i++ {
+		files = append(files, &BookFile{
+			ID: fmt.Sprintf("f%02d", i), BookID: b.ID,
+			FilePath: fmt.Sprintf("/lib/Chaptered/%02d.mp3", i),
+			Duration: 1800, FileSize: int64(40_000_000 + i),
+		})
+	}
+	if err := store.BatchUpsertBookFiles(files); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files[1:] {
+		f.Missing = true
+		if err := store.UpdateBookFile(f.ID, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.GetBookByID(b.ID)
+	if err != nil || got == nil || got.Duration == nil {
+		t.Fatalf("book = %+v, %v", got, err)
+	}
+	if *got.Duration != 36000 {
+		t.Fatalf("Book.Duration = %d after chapters went missing, want 36000", *got.Duration)
+	}
+	stored, _ := store.GetBookFiles(b.ID)
+	if rt := ComputeBookRuntime(got, stored); rt.Complete() || rt.FilesMissingUnmatched != 19 {
+		t.Fatalf("runtime = %+v, want partial with 19 unmatched missing rows", rt)
 	}
 }
