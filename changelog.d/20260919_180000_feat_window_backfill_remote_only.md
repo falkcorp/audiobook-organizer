@@ -10,4 +10,11 @@
   - Workers built before this change refuse a bootstrap `hello`.
 - Remote-only liveness. One heartbeat per tier reports progress on a fixed period, so a crashed worker holding the head of the queue no longer silences the op until the watchdog kills it. A run that no worker contacts within `no_worker_grace_sec` (default 15 min) ends with a clear error. It no longer holds the `acoustid.fingerprint` key for 72 h. After contact, the allowed silence with nothing leased is the longer of the grace and the lease TTL plus 2 minutes.
 - With `fingerprint_window_reference_tools` set, a live run without `remote_only` is refused, because it would re-cut the library on the server. Pass `allow_server_decode: true` to do that deliberately.
+- Bootstrap hardening:
+  - An OK result of a bootstrap job is stored only while that job's claim is the live one, held by the worker that posted it. A claimant whose claim lapsed or passed to another worker gets `superseded_bootstrap`, even for files nobody re-leased.
+  - Once the reference exists, a worker that bootstrapped under another claim may not lease until a new `hello` gives it the real calibration, so it must pass byte parity.
+  - "Reference windows exist" now means any stored window cut with exactly the reference pair, current or not. If none is usable, workers get `reference_pending` with that reason, instead of a new unchecked bootstrap. The only way to bootstrap again is the explicit `rebootstrap_reference: true` param.
+  - A refused wrong-pair lease no longer extends the claim.
+  - `worker_id` is not tied to the API key: any key holder can use any ID.
+- Only lease, renew and results calls count as worker contact; a `hello` does not. A new `pending_grace_sec` (default 1800) ends a run in which every worker has only been told `reference_pending`. The error names the missing reference pair and the waiting workers.
 - Building calibration files (stats and head reads over NFS) no longer holds any hub lock, so a slow `hello` cannot stall leases or results.

@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-09-19
 
@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -155,6 +156,11 @@ type workerJob struct {
 	dur      fingerprint.DurationUsed
 	specs    []fingerprint.WindowSpec
 	versions workerapi.ToolVersions
+	// boot: issued during a remote-only bootstrap (no reference windows yet),
+	// under claim epoch. Its ok result counts only while that claim is the
+	// live one, or when that claim is the one that defined the reference.
+	boot  bool
+	epoch int
 }
 
 // hubRun is one attached live run. Every field below mu-guarded is only
@@ -184,15 +190,32 @@ type hubRun struct {
 	calibBuilt bool // calibOut is final for this run
 	calibOut   []workerapi.CalibrationFile
 	calibExtra []windowItem // remote-only: files written this run with the reference pair
-	// refExists: a present libroot file has current windows cut with exactly
-	// the reference pair, per the plan's census of the stored windows or a
-	// worker's write this run. While false a remote-only run bootstraps.
+	// refExists: some stored window was cut with exactly the reference pair,
+	// current or not (the plan's census), or a worker wrote reference windows
+	// this run. While false a remote-only run bootstraps; once true it never
+	// does again (unless the owner passes rebootstrap_reference).
 	refExists bool
 	// bootWorker holds the ONE bootstrap claim until bootExpires. The
 	// claimant's hello, lease, renew and results calls extend it; a claimant
 	// that vanishes loses it after workerapi.LeaseTTL of silence.
+	//
+	// Trusted-key model: worker_id is whatever the caller says. Any holder
+	// of the API key can hello under any worker_id and reported tool pair,
+	// and so can take a lapsed claim or impersonate the claimant. The claim
+	// orders honest workers; it is not authentication.
 	bootWorker  string
 	bootExpires time.Time
+	// bootEpoch numbers claims: it moves on every grant to a new holder, and
+	// a bootstrap job carries the epoch it was issued under, so moving the
+	// claim invalidates every job the old claimant holds. refEpoch is the
+	// epoch whose worker wrote the first reference windows (0: the reference
+	// came from the store).
+	bootEpoch int
+	refEpoch  int
+	// bootstrapped: workers given bootstrap=true, with their epoch. Once the
+	// reference exists, one that did not define it may not lease again until
+	// a hello has handed it the real calibration (so it must pass parity).
+	bootstrapped map[string]int
 
 	cancel    context.CancelFunc
 	sweepDone chan struct{}
@@ -214,11 +237,22 @@ type hubRun struct {
 	jobs      map[string]*workerJob
 	doneCount int // items in qDone this tier
 
-	// Worker contact, for the no-worker grace (mu-guarded; kept across
-	// tiers).
+	// Worker contact, for the no-worker and pending graces (mu-guarded;
+	// kept across tiers). Only lease, renew and results are progress
+	// contact; a hello is not (a pending worker hellos forever).
 	attachedAt  time.Time
 	lastContact time.Time
 	contacted   bool
+	// pendingSince: first reference_pending hello since the last progress
+	// contact (zero: none). pendingSeen: who was told to wait, for the error.
+	pendingSince time.Time
+	pendingSeen  map[string]pendingWorker
+}
+
+// pendingWorker is a worker last told reference_pending at at.
+type pendingWorker struct {
+	pair string
+	at   time.Time
 }
 
 // hubMode is how a live run attaches.
@@ -297,14 +331,17 @@ func (h *WorkerHub) attach(ctx context.Context, p *Plugin, wt fingerprint.Window
 		identity:   mode.identity,
 		refExists:  mode.refExists,
 		attachedAt: h.now(),
-		probe:      p.currentScanProbe(),
-		cancel:     cancel,
-		sweepDone:  make(chan struct{}),
-		changed:    make(chan struct{}, 1),
-		bcast:      make(chan struct{}),
-		open:       map[int]struct{}{},
-		leases:     map[string]*workerLease{},
-		jobs:       map[string]*workerJob{},
+		// bootstrapped/pendingSeen are guarded by calibMu/mu respectively.
+		bootstrapped: map[string]int{},
+		pendingSeen:  map[string]pendingWorker{},
+		probe:        p.currentScanProbe(),
+		cancel:       cancel,
+		sweepDone:    make(chan struct{}),
+		changed:      make(chan struct{}, 1),
+		bcast:        make(chan struct{}),
+		open:         map[int]struct{}{},
+		leases:       map[string]*workerLease{},
+		jobs:         map[string]*workerJob{},
 	}
 	h.mu.Lock()
 	h.run = r
@@ -580,7 +617,12 @@ const windowNoWorkerMargin = 2 * time.Minute
 // too long without any worker: none contacted it within grace of the start,
 // or, after contact, none for max(grace, LeaseTTL+margin) with nothing
 // leased. Empty when the run should keep waiting.
-func (h *WorkerHub) noWorkerExpired(grace time.Duration) string {
+//
+// While workers are only being told reference_pending (every one waits on a
+// reference nobody can cut), pendingGrace governs instead: that much time
+// with no progress contact since the first such hello ends the run, naming
+// the missing pair and the waiting workers.
+func (h *WorkerHub) noWorkerExpired(grace, pendingGrace time.Duration) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	r := h.run
@@ -588,6 +630,20 @@ func (h *WorkerHub) noWorkerExpired(grace time.Duration) string {
 		return ""
 	}
 	now := h.now()
+	if !r.pendingSince.IsZero() {
+		if gap := now.Sub(r.pendingSince); gap > pendingGrace {
+			var waiting []string
+			for id, pw := range r.pendingSeen {
+				if !pw.at.Before(r.pendingSince) {
+					waiting = append(waiting, id+" ("+pw.pair+")")
+				}
+			}
+			sort.Strings(waiting)
+			return fmt.Sprintf("no worker with the reference pair %s/%s made progress for %s (pending grace %s): every worker is waiting on reference_pending (waiting workers: %s)",
+				r.server.Fpcalc, r.server.FFmpeg, gap.Round(time.Second), pendingGrace, strings.Join(waiting, ", "))
+		}
+		return ""
+	}
 	if !r.contacted {
 		if gap := now.Sub(r.attachedAt); gap > grace {
 			return fmt.Sprintf("no fp-worker called the worker API in the %s since this run started (grace %s); start fp-worker with the reference pair, then queue the run again",
@@ -603,10 +659,17 @@ func (h *WorkerHub) noWorkerExpired(grace time.Duration) string {
 	return ""
 }
 
-// noteContact records a worker's API call and extends the bootstrap claim
-// when the caller holds it. Called with mu held.
-func (r *hubRun) noteContact(now time.Time, worker string) {
+// noteContact records progress contact (a lease, renew or results call)
+// and clears the pending clock. Called with mu held.
+func (r *hubRun) noteContact(now time.Time) {
 	r.lastContact, r.contacted = now, true
+	r.pendingSince = time.Time{}
+}
+
+// refreshClaim extends the bootstrap claim when worker holds it (a live
+// claim only: a lapsed one is never revived). Called only after the call
+// was validated (tool pair, lease ownership). Takes calibMu; mu may be held.
+func (r *hubRun) refreshClaim(worker string, now time.Time) {
 	r.calibMu.Lock()
 	defer r.calibMu.Unlock()
 	if worker != "" && worker == r.bootWorker && now.Before(r.bootExpires) {
@@ -614,13 +677,53 @@ func (r *hubRun) noteContact(now time.Time, worker string) {
 	}
 }
 
-// touch is noteContact for the calls that take mu only briefly.
-func (h *WorkerHub) touch(r *hubRun, worker string) {
+// notePending records a hello answered reference_pending.
+func (h *WorkerHub) notePending(r *hubRun, req workerapi.HelloRequest) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.run != r {
+		return
+	}
+	now := h.now()
+	if r.pendingSince.IsZero() {
+		r.pendingSince = now
+	}
+	if _, ok := r.pendingSeen[req.WorkerID]; ok || len(r.pendingSeen) < 64 {
+		r.pendingSeen[req.WorkerID] = pendingWorker{pair: req.FpcalcVersion + "/" + req.FFmpegVersion, at: now}
+	}
+}
+
+// touch records progress contact for calls that take mu only briefly.
+func (h *WorkerHub) touch(r *hubRun) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.run == r {
-		r.noteContact(h.now(), worker)
+		r.noteContact(h.now())
 	}
+}
+
+// bootJobState is what a job issued now carries: whether the run is still
+// bootstrapping, and under which claim epoch.
+func (r *hubRun) bootJobState() (bool, int) {
+	r.calibMu.Lock()
+	defer r.calibMu.Unlock()
+	return r.remoteOnly && !r.refExists, r.bootEpoch
+}
+
+// bootstrapResultOK: an ok result of a bootstrap job is taken only while its
+// claim is the live one, held by the job's worker (a claimant whose claim
+// lapsed or moved is superseded, even for items nobody re-leased), and, once
+// the reference exists, only from the claim that defined it.
+func (r *hubRun) bootstrapResultOK(j *workerJob, now time.Time) bool {
+	if !j.boot {
+		return true
+	}
+	r.calibMu.Lock()
+	defer r.calibMu.Unlock()
+	if !r.refExists {
+		return j.worker == r.bootWorker && j.epoch == r.bootEpoch && now.Before(r.bootExpires)
+	}
+	return j.epoch == r.refEpoch
 }
 
 // bootstrapLeaseOK: in a remote-only run with no reference windows, only the
@@ -630,7 +733,10 @@ func (r *hubRun) bootstrapLeaseOK(req workerapi.LeaseRequest, now time.Time) boo
 	r.calibMu.Lock()
 	defer r.calibMu.Unlock()
 	if r.refExists {
-		return true
+		// A worker that bootstrapped under a claim that did not define the
+		// reference never passed parity against it: it must hello again.
+		e, ok := r.bootstrapped[req.WorkerID]
+		return !ok || e == r.refEpoch
 	}
 	return r.bootWorker != "" && req.WorkerID == r.bootWorker && now.Before(r.bootExpires) &&
 		req.FpcalcVersion == r.server.Fpcalc && req.FFmpegVersion == r.server.FFmpeg
@@ -759,8 +865,10 @@ func (h *WorkerHub) Hello(_ context.Context, req workerapi.HelloRequest) (*worke
 	if err != nil {
 		return nil, err
 	}
-	h.touch(r, req.WorkerID)
 	c := r.calibration(req, h.now)
+	if c.pending {
+		h.notePending(r, req)
+	}
 	resp := &workerapi.HelloResponse{
 		Pipeline:         fingerprint.WindowPipelineID,
 		WindowSet:        fingerprint.WindowSetWS1,
@@ -818,6 +926,7 @@ func (r *hubRun) calibration(req workerapi.HelloRequest, now func() time.Time) h
 	r.calibMu.Lock()
 	if r.calibBuilt {
 		out := r.calibOut
+		delete(r.bootstrapped, req.WorkerID) // it gets the real gate now
 		r.calibMu.Unlock()
 		return helloCalibration{files: out}
 	}
@@ -832,12 +941,14 @@ func (r *hubRun) calibration(req workerapi.HelloRequest, now func() time.Time) h
 	}
 	if r.calibBuilt {
 		out := r.calibOut
+		delete(r.bootstrapped, req.WorkerID)
 		r.calibMu.Unlock()
 		return helloCalibration{files: out}
 	}
 	if r.refExists {
 		r.calibMu.Unlock()
-		return helloCalibration{pending: true, waiting: "reference windows exist but none of their files is readable with matching size and mtime right now"}
+		return helloCalibration{pending: true, waiting: "reference windows exist but none usable (no file still matches the size and mtime they were cut from); " +
+			"re-run with a fresh file set, or clear them deliberately / queue the run with rebootstrap_reference: true"}
 	}
 	t := now()
 	if r.bootWorker != "" && !t.Before(r.bootExpires) {
@@ -854,11 +965,15 @@ func (r *hubRun) calibration(req workerapi.HelloRequest, now func() time.Time) h
 		r.calibMu.Unlock()
 		return helloCalibration{pending: true, waiting: "another reference-pair worker holds the bootstrap; this worker is parity-checked against its windows once they exist"}
 	}
-	if r.bootWorker == "" {
-		hubLog.Warn("bootstrap claim granted to worker %s (fpcalc %s + ffmpeg %s): its windows become the reference, with no byte-parity check",
-			logger.SanitizeLogValue(req.WorkerID), r.server.Fpcalc, r.server.FFmpeg)
+	if r.bootWorker != req.WorkerID {
+		// A new holder: a new epoch, so every job an earlier claimant was
+		// issued is superseded (bootstrapResultOK).
+		r.bootEpoch++
+		hubLog.Warn("bootstrap claim %d granted to worker %s (fpcalc %s + ffmpeg %s): its windows become the reference, with no byte-parity check",
+			r.bootEpoch, logger.SanitizeLogValue(req.WorkerID), r.server.Fpcalc, r.server.FFmpeg)
 	}
 	r.bootWorker, r.bootExpires = req.WorkerID, t.Add(workerapi.LeaseTTL)
+	r.bootstrapped[req.WorkerID] = r.bootEpoch
 	r.calibMu.Unlock()
 	return helloCalibration{files: r.buildIdentityCalibration(), bootstrap: true} // I/O, unlocked
 }
@@ -1009,7 +1124,6 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 		return nil, ErrNoWindowRun
 	}
 	now := h.now()
-	r.noteContact(now, req.WorkerID)
 	if req.Pipeline != fingerprint.WindowPipelineID || !versionsAllowed(r.allowed, req.FpcalcVersion, req.FFmpegVersion) {
 		h.mu.Unlock()
 		return nil, fmt.Errorf("%w: pipeline=%q fpcalc=%q ffmpeg=%q", ErrToolsNotAllowed, req.Pipeline, req.FpcalcVersion, req.FFmpegVersion)
@@ -1021,9 +1135,15 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 	// skipped its gate.
 	if r.remoteOnly && !r.bootstrapLeaseOK(req, now) {
 		h.mu.Unlock()
-		return nil, fmt.Errorf("%w: no reference windows exist yet; only the worker holding the bootstrap claim (fpcalc=%q ffmpeg=%q) may lease until they do",
+		return nil, fmt.Errorf("%w: only the worker holding the live bootstrap claim (fpcalc=%q ffmpeg=%q) may lease until reference windows exist, "+
+			"and a worker that bootstrapped under a claim that did not define them must restart so it passes the parity gate",
 			ErrToolsNotAllowed, r.server.Fpcalc, r.server.FFmpeg)
 	}
+	// Only a call that passed the gates is progress, and only it extends
+	// the claim: a wrong-pair call under the claimant's ID must not keep a
+	// claim alive.
+	r.noteContact(now)
+	r.refreshClaim(req.WorkerID, now)
 	// Same gate as the server lane (waitForLibraryScan): nothing new is cut
 	// while a library.scan may be rewriting the files. 204: retry later.
 	if r.probe != nil && r.probe.LibraryScanRunning() {
@@ -1107,6 +1227,7 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 		jid := fmt.Sprintf("%s-%d", leaseID, len(lease.jobs))
 		j := &workerJob{id: jid, lease: leaseID, worker: req.WorkerID, idx: c.idx, ref: database.FileWindowRef(it.FileID),
 			size: stats[i].Size(), mtime: stats[i].ModTime().Unix(), dur: st.dur, specs: st.specs, versions: lease.versions}
+		j.boot, j.epoch = r.bootJobState()
 		r.jobs[jid] = j
 		st.jobs = append(st.jobs, jid)
 		lease.jobs = append(lease.jobs, jid)
@@ -1140,11 +1261,12 @@ func (h *WorkerHub) Renew(leaseID string, req workerapi.RenewRequest) (*workerap
 	}
 	l := r.leases[leaseID]
 	now := h.now()
-	r.noteContact(now, req.WorkerID)
 	// Another worker's lease answers exactly like a missing one.
 	if l == nil || !now.Before(l.expires) || l.worker != req.WorkerID {
 		return nil, ErrLeaseGone
 	}
+	r.noteContact(now)
+	r.refreshClaim(req.WorkerID, now)
 	l.expires = now.Add(workerapi.LeaseTTL)
 	return &workerapi.RenewResponse{LeaseID: leaseID, ExpiresAt: l.expires}, nil
 }
@@ -1157,7 +1279,6 @@ func (h *WorkerHub) Release(leaseID string, req workerapi.ReleaseRequest) (*work
 	if r == nil {
 		return nil, ErrNoWindowRun
 	}
-	r.noteContact(h.now(), req.WorkerID)
 	l := r.leases[leaseID]
 	if l == nil || l.worker != req.WorkerID {
 		return nil, ErrLeaseGone
@@ -1191,7 +1312,7 @@ func (h *WorkerHub) Results(_ context.Context, req workerapi.ResultsRequest) (*w
 	if err != nil {
 		return nil, err
 	}
-	h.touch(r, req.WorkerID)
+	h.touch(r)
 	resp := &workerapi.ResultsResponse{Statuses: make([]workerapi.JobStatus, 0, len(req.Results))}
 	for _, res := range req.Results {
 		status, reason := h.applyResult(req.WorkerID, res)
@@ -1218,6 +1339,9 @@ type resultDecision struct {
 func (r *hubRun) noteReferenceWrite(it windowItem, j *workerJob) {
 	r.calibMu.Lock()
 	defer r.calibMu.Unlock()
+	if j.boot && !r.refExists {
+		r.refEpoch = j.epoch
+	}
 	r.refExists = true
 	if r.calibBuilt || len(r.calibExtra) >= calibrationCandidates {
 		return
@@ -1261,6 +1385,16 @@ func (h *WorkerHub) applyResult(worker string, res workerapi.JobResult) (string,
 		h.mu.Unlock()
 		return workerapi.StatusRejected, "ref_mismatch"
 	}
+	now := h.now()
+	if res.Outcome == workerapi.OutcomeOK && !r.bootstrapResultOK(j, now) {
+		// An unchecked bootstrap worker whose claim lapsed, moved, or did
+		// not define the reference: its prints are never stored, even for
+		// an item nobody re-leased. Stale, so the worker carries on.
+		h.mu.Unlock()
+		hubLog.Warn("worker %s job %s: bootstrap claim superseded; result dropped", logger.SanitizeLogValue(worker), j.id)
+		return workerapi.StatusStale, "superseded_bootstrap"
+	}
+	r.refreshClaim(worker, now)
 	st := &r.st[j.idx]
 	it := r.items[j.idx]
 	gen := r.gen
