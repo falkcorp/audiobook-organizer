@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/workerclient_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 0f3c9a52-6f0e-4d7b-9a55-3d1e2b8c7a41
 // last-edited: 2026-09-19
 
@@ -73,6 +73,7 @@ type fakeServer struct {
 	runID        string // the live run; lease and results must echo it
 	churn        bool   // every lease answers run_changed, whatever its run ID
 	flipAfterOne bool   // the first accepted results post moves the run to run-2
+	bumpPerLease bool   // every served lease moves the run on (a deploy per lease)
 	helloAt      []time.Time
 	pending      []workerapi.Job
 	leaseScript  []int // statuses answered to lease before any job is served
@@ -159,6 +160,9 @@ func (s *fakeServer) handler() http.Handler {
 		resp := workerapi.LeaseResponse{LeaseID: fmt.Sprintf("L%d", s.nLease), ExpiresAt: time.Now().Add(time.Minute),
 			Jobs: append([]workerapi.Job(nil), s.pending[:n]...)}
 		s.pending = s.pending[n:]
+		if s.bumpPerLease {
+			s.runID = fmt.Sprintf("run-%d", s.nLease+1)
+		}
 		writeJSON(w, resp)
 	}))
 	mux.HandleFunc("POST "+p+"/lease/{id}/renew", auth(func(w http.ResponseWriter, r *http.Request) {
@@ -1255,5 +1259,45 @@ func TestRun_RunChangedOnPostStopsTheLease(t *testing.T) {
 	defer mu.Unlock()
 	if len(started) > 3 {
 		t.Errorf("%d of 5 jobs were cut after the run changed under the lease; want at most 3", len(started))
+	}
+}
+
+// TestRun_RunChangeStreakResetsAfterASuccessfulLease: a long-lived worker
+// sees a run change on every server deploy. Changes separated by successful
+// leases are not a churn streak: after far more than maxRunChanges of them in
+// total, the worker is still running and still leasing.
+func TestRun_RunChangeStreakResetsAfterASuccessfulLease(t *testing.T) {
+	const cycles = 25
+	e := newTestEnv(t)
+	e.cfg.MaxJobs = 1
+	e.srv.bumpPerLease = true
+	for i := range cycles {
+		e.addJob(fmt.Sprintf("Deploy/j%02d.mp3", i), []byte(fmt.Sprintf("job %d", i)))
+	}
+	drain, done := e.start()
+	deadline := time.After(15 * time.Second)
+	for {
+		e.srv.mu.Lock()
+		n := e.srv.nLease
+		e.srv.mu.Unlock()
+		if n >= cycles {
+			break
+		}
+		select {
+		case r := <-done:
+			t.Fatalf("Run returned after %d leases (want it still running after %d run changes, each followed by a lease): %v", n, cycles, r.err)
+		case <-deadline:
+			t.Fatalf("only %d of %d leases served", n, cycles)
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	close(drain)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	e.srv.mu.Lock()
+	defer e.srv.mu.Unlock()
+	if len(e.srv.helloQueries) < cycles {
+		t.Errorf("%d hellos; want one per run (%d)", len(e.srv.helloQueries), cycles)
 	}
 }
