@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-19
 
@@ -9,7 +9,7 @@ package logger
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
 	slogRatchetFileCeiling = 320
-	slogRatchetCallCeiling = 1891
+	slogRatchetCallCeiling = 1889
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -251,7 +251,7 @@ var slogRatchet = map[string]int{
 	"internal/server/external_id_backfill.go":                    2,
 	"internal/server/file_io_pool.go":                            13,
 	"internal/server/folder_autoscan_op.go":                      1,
-	"internal/server/handlers/abs/browse.go":                     22,
+	"internal/server/handlers/abs/browse.go":                     20,
 	"internal/server/handlers/abs/me.go":                         2,
 	"internal/server/handlers/abs/openid.go":                     2,
 	"internal/server/handlers/abs/stats.go":                      1,
