@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.29.1
+// version: 1.30.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package database
 
@@ -1290,7 +1290,10 @@ func (m *MemStore) GetBookFileByAcoustIDFuzzy(fp string, minSimilarity float64) 
 			bf.AcoustIDSeg4, bf.AcoustIDSeg5, bf.AcoustIDSeg6,
 		}
 		for _, seg := range segs {
-			if seg == "" {
+			// Legacy-era rows: Seg0 may be DeriveSeg0 of misdecoded
+			// bytes — missing evidence for a FUZZY match (exact
+			// lookups use the book_file_acoustid: index instead).
+			if seg == "" || !bf.HasCurrentPrint() {
 				continue
 			}
 			sim, simErr := fingerprint.HammingSimilarity(fp, seg)

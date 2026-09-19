@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.21.0
+// version: 2.22.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package database
 
@@ -259,6 +259,12 @@ type BookMutator interface {
 	// must do slow work between read and write, pair it with SnapshotBook and
 	// MergeBookChanges.
 	ModifyBook(id string, fn func(*Book) error) (*Book, error)
+	// ClearBookSignature deletes the book's stored signature (all BookSig*
+	// fields) under the book's write lock. Passing nil fields through
+	// ModifyBook/UpdateBook cannot do this: nil means "not loaded" and the
+	// stored signature is preserved. Used when a re-synthesis finds no usable
+	// data, so a stale or legacy-era signature does not outlive its inputs.
+	ClearBookSignature(id string) error
 	UpdateBookRating(id string, req UpdateBookRatingRequest) error
 	// FillBookMediaInfo sets the patch's media fields on the stored row only
 	// where they are still empty, re-reading the row inside the store; it

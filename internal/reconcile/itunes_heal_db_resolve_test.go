@@ -1,5 +1,5 @@
 // file: internal/reconcile/itunes_heal_db_resolve_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b04ad264-d893-44f7-bd8c-d7f85f1b2385
 // last-edited: 2026-09-19
 
@@ -8,6 +8,7 @@ package reconcile
 import (
 	"context"
 	"encoding/binary"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"sync/atomic"
 	"testing"
 
@@ -47,7 +48,7 @@ func TestResolveAmbiguousByDB_UnreadablePrintIsUnknownNotMerge(t *testing.T) {
 				if p == "/b.m4b" {
 					fp, bookID = tc.second, "B"
 				}
-				return &database.BookFile{ID: "f" + bookID, BookID: bookID, FilePath: p, AcoustIDFingerprint: fp}, nil
+				return &database.BookFile{ID: "f" + bookID, BookID: bookID, FilePath: p, AcoustIDFingerprint: fp, AcoustIDFPVersion: fingerprint.PrintEncodingVersion}, nil
 			}
 			m.GetBookByIDFunc = func(id string) (*database.Book, error) {
 				mergeReads.Add(1)

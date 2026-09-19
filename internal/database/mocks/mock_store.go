@@ -5943,6 +5943,57 @@ func (_c *MockStore_ClearBatchBucket_Call) RunAndReturn(run func(opType string, 
 	return _c
 }
 
+// ClearBookSignature provides a mock function for the type MockStore
+func (_mock *MockStore) ClearBookSignature(id string) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ClearBookSignature")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_ClearBookSignature_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ClearBookSignature'
+type MockStore_ClearBookSignature_Call struct {
+	*mock.Call
+}
+
+// ClearBookSignature is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) ClearBookSignature(id any) *MockStore_ClearBookSignature_Call {
+	return &MockStore_ClearBookSignature_Call{Call: _e.mock.On("ClearBookSignature", id)}
+}
+
+func (_c *MockStore_ClearBookSignature_Call) Run(run func(id string)) *MockStore_ClearBookSignature_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ClearBookSignature_Call) Return(err error) *MockStore_ClearBookSignature_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_ClearBookSignature_Call) RunAndReturn(run func(id string) error) *MockStore_ClearBookSignature_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ClearITunesPID provides a mock function for the type MockStore
 func (_mock *MockStore) ClearITunesPID(itunesPID string) (bool, error) {
 	ret := _mock.Called(itunesPID)

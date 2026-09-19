@@ -1,7 +1,7 @@
 // file: internal/database/dataloss_preserve_invariant_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: d3f4a5b6-7c8d-9e0f-1a2b-preserveinv001
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package database
 
@@ -17,7 +17,7 @@ import (
 // this count) you MUST also add its preserve-on-nil branch to UpdateBook, then
 // bump this constant. If the count changes and this test starts failing, that
 // is the signal — do not just bump the number without adding the guard branch.
-const wantStrippedCount = 9
+const wantStrippedCount = 10 // + BookSigVersion (2026-09-19)
 
 // dlFixedTime is a clean, monotonic-clock-free UTC instant so JSON round-trips
 // are byte-exact and reflect.DeepEqual on *time.Time fields is reliable.

@@ -1038,7 +1038,10 @@ func (s *PebbleStore) GetBookFileByAcoustIDFuzzy(fp string, minSimilarity float6
 			f.AcoustIDSeg4, f.AcoustIDSeg5, f.AcoustIDSeg6}
 		matched := false
 		for _, seg := range segs {
-			if seg == "" {
+			// Legacy-era rows: Seg0 may be DeriveSeg0 of misdecoded
+			// bytes — missing evidence for a FUZZY match (exact
+			// lookups use the book_file_acoustid: index instead).
+			if seg == "" || !f.HasCurrentPrint() {
 				continue
 			}
 			sim, err := fingerprint.HammingSimilarity(fp, seg)
@@ -2226,6 +2229,7 @@ func (s *PebbleStore) ClearAllAcoustIDFingerprints(ctx context.Context, batchSiz
 		// half-cleared state and the LSH index orphaned.
 		f.AcoustIDFingerprint = nil
 		f.AcoustIDFingerprintDurationSec = 0
+		f.AcoustIDFPVersion = 0
 		f.UpdatedAt = time.Now()
 
 		data, err := json.Marshal(&f)

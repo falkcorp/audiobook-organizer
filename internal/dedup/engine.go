@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.80.1
+// version: 1.81.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package dedup
 
@@ -2085,7 +2085,10 @@ func (de *Engine) bookSignature(b *database.Book) (sig, mask string, ok bool) {
 		}
 		b = full
 	}
-	if b.BookSigV1 == nil || *b.BookSigV1 == "" {
+	// A legacy-era signature (BookSigVersion unset/old) was synthesized from
+	// misdecoded prints: treat it as NO signature, so the veto never fires on
+	// it. Old-vs-new of the same audio scores ~0.5, below the veto threshold.
+	if !b.HasCurrentBookSig() {
 		return "", "", false
 	}
 	if b.BookSigV1Mask != nil {
@@ -2158,7 +2161,8 @@ func (de *Engine) ReevaluateAcoustIDConflicts(ctx context.Context, dryRun bool) 
 		b, err := de.bookStore.GetBookByID(id)
 		if err == nil && b != nil {
 			m.title = b.Title
-			if b.BookSigV1 != nil && *b.BookSigV1 != "" {
+			// Legacy-era signatures are missing evidence (no veto).
+			if b.HasCurrentBookSig() {
 				m.sig = *b.BookSigV1
 				if b.BookSigV1Mask != nil {
 					m.mask = *b.BookSigV1Mask
@@ -4650,7 +4654,9 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 				// Tier-0: whole-file LSH candidate set + Hamming refine.
 				// Sub-linear via the fpidx: secondary index, so it runs
 				// unconditionally (index caps candidates, so work is bounded).
-				if lshStore != nil && len(f.AcoustIDFingerprint) > 0 {
+				// Legacy-era prints (AcoustIDFPVersion 0) are misdecoded
+				// bytes: missing evidence, never a candidate source.
+				if lshStore != nil && len(f.AcoustIDFingerprint) > 0 && f.HasCurrentPrint() {
 					cands, _ := lshStore.LookupAcoustIDCandidates(f.AcoustIDFingerprint, 200)
 					for _, candID := range cands {
 						if candID == f.ID {
@@ -4658,7 +4664,7 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 						}
 						cand, _ := lshStore.GetBookFileByID("", candID)
 						if cand == nil || cand.BookID == book.ID || len(cand.AcoustIDFingerprint) == 0 ||
-							isBoilerplateTitle(cand.Title) {
+							!cand.HasCurrentPrint() || isBoilerplateTitle(cand.Title) {
 							continue
 						}
 						sim, simErr := fingerprint.WholeFileSimilarity(f.AcoustIDFingerprint, cand.AcoustIDFingerprint)
@@ -4749,7 +4755,9 @@ func (de *Engine) BookSignatureScan(ctx context.Context, progress func(done, tot
 	// Filter to books that have a book signature
 	var booksWithSig []database.Book
 	for _, b := range books {
-		if b.BookSigV1 != nil && *b.BookSigV1 != "" {
+		// Only current-era signatures: a legacy one (built from misdecoded
+		// prints) is missing evidence, not a comparable signature.
+		if b.HasCurrentBookSig() {
 			booksWithSig = append(booksWithSig, b)
 		}
 	}

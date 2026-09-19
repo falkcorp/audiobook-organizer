@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package acoustid
 
@@ -583,11 +583,25 @@ func doFingerprintFile(store pluginStore, f database.BookFile, force bool) finge
 		updated.FingerprintFailureDetail = nil
 	}
 
+	stampFreshPrint(&updated)
 	if err := store.UpdateBookFile(f.ID, &updated); err != nil {
 		slog.Warn("fingerprint update", "id", f.ID, "err", err)
 		return fingerprintOutcomeFailed
 	}
 	return fingerprintOutcomeFingerprinted
+}
+
+// stampFreshPrint marks a row whose print was just (re)computed: it carries
+// the current encoding version, so fuzzy consumers stop treating it as
+// legacy-era missing evidence, and its AcoustID online-lookup verdict is
+// cleared, because that verdict was reached with the OLD print (a legacy
+// print was not a valid AcoustID submission, so "looked up, no match" said
+// nothing about the audio and must not bury the file from the next lookup).
+func stampFreshPrint(f *database.BookFile) {
+	f.AcoustIDFPVersion = fingerprint.PrintEncodingVersion
+	f.AcoustIDOnlineLookedUpAt = nil
+	f.AcoustIDOnlineRecordingID = ""
+	f.AcoustIDOnlineScore = 0
 }
 
 // markFingerprintFailure writes a permanent failure tombstone to the BookFile row so
@@ -650,7 +664,10 @@ func synthesizeBookSignatureForBook(store pluginStore, bookID string) error {
 				break
 			}
 		}
-		if len(src.AcoustIDFingerprint) == 0 && sf.Segments.Seg0 == "" {
+		// A legacy-era row (print written before the 2026-09-19 decoder
+		// fix) is missing too: its bytes/Seg0 are misdecoded, and a
+		// signature built from them is not comparable with anything.
+		if (len(src.AcoustIDFingerprint) == 0 && sf.Segments.Seg0 == "") || !src.HasCurrentPrint() {
 			inp.Missing = true
 			inp.EstimatedLen = fingerprint.EstimateSegmentCount(
 				src.Duration, int(src.FileSize), src.BitrateKbps, 0,
@@ -663,6 +680,13 @@ func synthesizeBookSignatureForBook(store pluginStore, bookID string) error {
 	sig, mask, coverage, preLen, err := fingerprint.SynthesizePartialBookSignature(inputs)
 	if err != nil {
 		if err == fingerprint.ErrIncompleteFingerprint {
+			// No usable current-era data: delete any existing signature so a
+			// legacy (misdecoded) or stale one does not outlive its inputs.
+			// Setting the fields to nil would not do it — nil means "not
+			// loaded" to the store and the old signature is preserved.
+			if cerr := store.ClearBookSignature(bookID); cerr != nil {
+				return fmt.Errorf("clear stale signature: %w", cerr)
+			}
 			return nil
 		}
 		return fmt.Errorf("synthesize signature: %w", err)
@@ -679,6 +703,8 @@ func synthesizeBookSignatureForBook(store pluginStore, bookID string) error {
 		book.BookSigBuiltAt = &now
 		book.BookSigV1Mask = &mask
 		book.BookSigCoveragePct = &coverage
+		sigVersion := fingerprint.BookSignatureVersion
+		book.BookSigVersion = &sigVersion
 		return nil
 	})
 	if err != nil {

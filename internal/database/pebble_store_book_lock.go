@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package database
 
@@ -13,6 +13,8 @@ import (
 	"hash/fnv"
 	"reflect"
 	"sync"
+
+	"github.com/cockroachdb/pebble/v2"
 )
 
 // bookLockStripes is the number of per-book write locks. A fixed array, not a
@@ -86,6 +88,14 @@ var ErrSkipBookWrite = errors.New("skip book write")
 // ErrSkipBookWrite, which returns the unmodified row and a nil error.
 //
 // fn runs while the stripe is held: see the LOCK RULES on bookLocks.
+// ClearBookSignature implements Store: delete the book_sig: sidecar under the
+// book's write lock.
+func (p *PebbleStore) ClearBookSignature(id string) error {
+	unlock := p.lockBook(id)
+	defer unlock()
+	return p.db.Delete(bookSigKey(id), pebble.Sync)
+}
+
 func (p *PebbleStore) ModifyBook(id string, fn func(*Book) error) (*Book, error) {
 	unlock := p.lockBook(id)
 	defer unlock()

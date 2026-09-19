@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package database
 
@@ -72,6 +72,8 @@ type BookFileCore struct {
 
 	// AcoustIDFingerprintDurationSec is RETAINED on Core (not stripped).
 	AcoustIDFingerprintDurationSec float64 `json:"acoustid_fingerprint_duration_sec,omitempty"`
+	// AcoustIDFPVersion is RETAINED on Core (see BookFile.AcoustIDFPVersion).
+	AcoustIDFPVersion int `json:"acoustid_fp_version,omitempty"`
 
 	// FingerprintFailedAt is RETAINED on Core (not stripped).
 	FingerprintFailedAt *time.Time `json:"fingerprint_failed_at,omitempty"`
@@ -151,6 +153,7 @@ func (f *BookFile) Core() BookFileCore {
 		PostMetadataHash:               f.PostMetadataHash,
 		Scan:                           f.Scan,
 		AcoustIDFingerprintDurationSec: f.AcoustIDFingerprintDurationSec,
+		AcoustIDFPVersion:              f.AcoustIDFPVersion,
 		FingerprintFailedAt:            f.FingerprintFailedAt,
 		AcoustIDOnlineRecordingID:      f.AcoustIDOnlineRecordingID,
 		AcoustIDOnlineScore:            f.AcoustIDOnlineScore,

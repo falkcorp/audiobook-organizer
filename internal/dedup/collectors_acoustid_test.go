@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_acoustid_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b8c4d952-e0f3-5a26-99b1-6cd23f458g7e
-// last-edited: 2026-07-12
+// last-edited: 2026-09-19
 
 package dedup
 
@@ -232,12 +232,12 @@ func TestCollectLSHAcoustID_TruePositive(t *testing.T) {
 	queryFile := &database.BookFile{
 		ID:                  "qfile1",
 		BookID:              "bookA",
-		AcoustIDFingerprint: queryFP,
+		AcoustIDFingerprint: queryFP, AcoustIDFPVersion: fingerprint.PrintEncodingVersion,
 	}
 	candFile := &database.BookFile{
 		ID:                  "cfile1",
 		BookID:              "bookB",
-		AcoustIDFingerprint: candFP,
+		AcoustIDFingerprint: candFP, AcoustIDFPVersion: fingerprint.PrintEncodingVersion,
 	}
 
 	store := &stubLSHStore{
@@ -274,7 +274,7 @@ func TestCollectLSHAcoustID_BelowBandThreshold(t *testing.T) {
 	queryFile := &database.BookFile{
 		ID:                  "qfile1",
 		BookID:              "bookA",
-		AcoustIDFingerprint: queryFP,
+		AcoustIDFingerprint: queryFP, AcoustIDFPVersion: fingerprint.PrintEncodingVersion,
 	}
 
 	store := &stubLSHStore{
@@ -303,12 +303,12 @@ func TestCollectLSHAcoustID_HammingRefineRejection(t *testing.T) {
 	queryFile := &database.BookFile{
 		ID:                  "qfile1",
 		BookID:              "bookA",
-		AcoustIDFingerprint: queryFP,
+		AcoustIDFingerprint: queryFP, AcoustIDFPVersion: fingerprint.PrintEncodingVersion,
 	}
 	candFile := &database.BookFile{
 		ID:                  "cfile_low",
 		BookID:              "bookC",
-		AcoustIDFingerprint: candFP,
+		AcoustIDFingerprint: candFP, AcoustIDFPVersion: fingerprint.PrintEncodingVersion,
 	}
 
 	store := &stubLSHStore{
@@ -333,7 +333,7 @@ func TestCollectLSHAcoustID_UnbuiltIndexSkip(t *testing.T) {
 	queryFile := &database.BookFile{
 		ID:                  "qfile1",
 		BookID:              "bookA",
-		AcoustIDFingerprint: queryFP,
+		AcoustIDFingerprint: queryFP, AcoustIDFPVersion: fingerprint.PrintEncodingVersion,
 	}
 
 	store := &stubLSHStore{
@@ -361,13 +361,13 @@ func TestCollectLSHAcoustID_SelfMatchSkipped(t *testing.T) {
 	queryFile := &database.BookFile{
 		ID:                  "qfile1",
 		BookID:              "bookA",
-		AcoustIDFingerprint: queryFP,
+		AcoustIDFingerprint: queryFP, AcoustIDFPVersion: fingerprint.PrintEncodingVersion,
 	}
 	// Candidate is in the same book.
 	selfFile := &database.BookFile{
 		ID:                  "other-qfile",
 		BookID:              "bookA",
-		AcoustIDFingerprint: queryFP,
+		AcoustIDFingerprint: queryFP, AcoustIDFPVersion: fingerprint.PrintEncodingVersion,
 	}
 
 	store := &stubLSHStore{

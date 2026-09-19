@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_acoustid.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a7b3c841-d9e2-4f15-88a0-5bc12e347f6d
-// last-edited: 2026-08-19
+// last-edited: 2026-09-19
 
 // Package dedup — acoustic-ID collector family (fable5 T013).
 //
@@ -262,6 +262,11 @@ func CollectLSHAcoustID(
 		return nil, nil
 	}
 
+	// Legacy-era query print (misdecoded bytes): missing evidence, no probe.
+	if !queryFile.HasCurrentPrint() {
+		return nil, nil
+	}
+
 	// Step 1: derive subprints from the whole-file fingerprint.
 	subs, bands, err := fingerprint.Subprints(queryFile.AcoustIDFingerprint)
 	if err != nil {
@@ -309,9 +314,9 @@ func CollectLSHAcoustID(
 		if candFile.BookID == queryBookID || seen[candFile.BookID] {
 			continue
 		}
-		if len(candFile.AcoustIDFingerprint) == 0 {
-			// Candidate was indexed but fingerprint was subsequently cleared —
-			// skip; stale index entry, harmless.
+		if len(candFile.AcoustIDFingerprint) == 0 || !candFile.HasCurrentPrint() {
+			// Candidate was indexed but fingerprint was subsequently cleared,
+			// or it is a legacy-era print (missing evidence) — skip.
 			continue
 		}
 		if knownShortFingerprintFile(*candFile) {

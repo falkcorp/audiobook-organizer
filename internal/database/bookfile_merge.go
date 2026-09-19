@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package database
 
@@ -210,6 +210,7 @@ var bookFileFieldClasses = map[string]bookFileFieldRule{
 	"PostMetadataHash":               preserveBytes,
 	"AcoustIDFingerprint":            {class: bfPreserveAlways, derived: derivedAudio}, // memdb-stripped
 	"AcoustIDFingerprintDurationSec": preserveAudio,
+	"AcoustIDFPVersion":              preserveAudio, // stamped with AcoustIDFingerprint by the acoustid backfill via UpdateBookFile
 	"AcoustIDSeg0":                   {class: bfNotStored},
 	"AcoustIDSeg1":                   {class: bfNotStored},
 	"AcoustIDSeg2":                   {class: bfNotStored},

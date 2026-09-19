@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/builder.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 4a91c7e0-6d83-4b25-9f10-2c5a8e7d4b31
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 // Package dataset builds labeled dedup examples and runs deterministic catchers
 // over them. Pure: a store interface in, a database.LabeledExample out, no
@@ -142,7 +142,7 @@ func buildFeatures(bk *database.Book, files []database.BookFile) database.BookFe
 	}
 	if bk != nil {
 		f.Title = bk.Title
-		f.WholeBookSigPresent = bk.BookSigV1 != nil && *bk.BookSigV1 != ""
+		f.WholeBookSigPresent = bk.HasCurrentBookSig() // legacy-era sigs are not usable signal
 		// Snapshot hard-identity fields; nil pointer → "" (unknown, non-disqualifying).
 		if bk.ASIN != nil {
 			f.ASIN = *bk.ASIN
@@ -274,8 +274,8 @@ func signatureRelation(a, b *database.Book) string {
 	if a == nil || b == nil {
 		return "unknown"
 	}
-	if a.BookSigV1 == nil || *a.BookSigV1 == "" || b.BookSigV1 == nil || *b.BookSigV1 == "" {
-		return "unknown"
+	if !a.HasCurrentBookSig() || !b.HasCurrentBookSig() {
+		return "unknown" // absent or legacy-era signature: missing, not a mismatch
 	}
 	sim, err := fingerprint.BookSignatureSimilarity(*a.BookSigV1, *b.BookSigV1)
 	if err != nil {
