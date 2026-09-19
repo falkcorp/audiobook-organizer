@@ -9,3 +9,8 @@
   failed link still stamped the new copy with a group of its own. Either way a book advertised other
   versions that could not be listed. A copy now joins the existing group, and is left ungrouped when it
   cannot be linked at all.
+- Stopped the bulk metadata apply from undoing concurrent changes. Each book in a bulk apply was read,
+  changed, and written back as a whole row, so a change that landed while the apply was resolving that
+  book's author and series was reverted — including changes made by other books in the same apply run.
+  The apply now writes only the fields it actually changed.
+- Fixed the same problem in the iTunes path repair, which writes a book's file path.
