@@ -1,7 +1,7 @@
 // file: internal/deluge/discovery.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-01
+// last-edited: 2026-09-19
 //
 // Four-tier matching to decide if a labeled Deluge torrent is already in
 // the library — run in order, stop on first hit:
@@ -220,13 +220,14 @@ func IsContentFingerprintTracked(store ContentFingerprintStore, contentPath stri
 		return false
 	}
 
-	segs, err := fingerprint.FileSegments(firstAudio, 0)
+	// Only the intro segment is compared, so only it is computed: the full
+	// FileSegments set costs a duration probe plus six 300 s decodes that
+	// this check would discard.
+	introFP, err := fingerprint.FileHeadSegment(firstAudio)
 	if err != nil {
 		slog.Warn("deluge discovery fingerprint", "firstAudio", firstAudio, "err", err)
 		return false
 	}
-	// Use the intro segment (seg[0]) for exact and fuzzy lookups.
-	introFP := segs[0]
 	if introFP == "" {
 		return false
 	}
