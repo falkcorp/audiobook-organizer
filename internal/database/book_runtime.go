@@ -1,15 +1,11 @@
 // file: internal/database/book_runtime.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 64a8ba17-7539-4be1-a2f7-1ee0f0e0cc44
 // last-edited: 2026-09-19
 
 package database
 
-import (
-	"math"
-	"path/filepath"
-	"strings"
-)
+import "math"
 
 // Canonical book runtime.
 //
@@ -65,8 +61,8 @@ type BookRuntime struct {
 	AllFilesMissing bool `json:"all_files_missing,omitempty"`
 	// FilesMissingUnmatched counts missing rows that match no present row
 	// (see ComputeBookRuntime): chapters the book records but does not have
-	// on disk. They are counted in FilesCounted, and any of them makes the
-	// runtime partial — never complete.
+	// on disk. They are counted in FilesCounted with their durations; one
+	// with no known duration makes the runtime partial like any other row.
 	FilesMissingUnmatched int `json:"files_missing_unmatched,omitempty"`
 	// BookAggregateSec is the stored Book.Duration, reported for display and
 	// diagnosis only. It is NOT a runtime when Source != RuntimeSourceBook.
@@ -81,7 +77,11 @@ func (r BookRuntime) Complete() bool {
 	}
 	switch r.Source {
 	case RuntimeSourceFiles:
-		return r.FilesKnown > 0 && r.FilesKnown == r.FilesCounted && r.FilesMissingUnmatched == 0
+		// Every counted row has a known duration. An unmatched missing row is
+		// counted WITH its duration: "missing" means the file is off disk,
+		// not that its length is unknown, so a book whose every chapter has a
+		// duration has a known total whether or not all are on disk.
+		return r.FilesKnown > 0 && r.FilesKnown == r.FilesCounted
 	case RuntimeSourceBook:
 		return true
 	}
@@ -89,8 +89,8 @@ func (r BookRuntime) Complete() bool {
 }
 
 // Partial reports whether Seconds is a lower bound that must not be compared
-// as a total: some counted file has no known duration, or the book records a
-// chapter that is missing from disk.
+// as a total: some counted row (present, or missing with no present copy) has
+// no known duration.
 func (r BookRuntime) Partial() bool {
 	return r.Source == RuntimeSourceFiles && r.FilesKnown > 0 && !r.Complete()
 }
@@ -149,15 +149,14 @@ func BookFileRuntimeSec(f *BookFile) int {
 //     missing row that matches one is the old half of a repoint — the same
 //     content at its previous path — and counting it would double the file.
 //     An unmatched missing row is a chapter the book has and the disk lacks:
-//     it is counted, and it makes the runtime partial. Dropping it instead
+//     it is counted with its duration. Dropping it instead
 //     (the first version of this function) turned "45 s intro present, 20
 //     chapters missing" into a COMPLETE 45 s runtime, which the dedup
 //     min-duration gate read as a 45-second book;
 //   - when no row is present, every row (AllFilesMissing).
 //
 // Result:
-//   - every counted row has a duration and none is an unmatched missing row
-//     → Complete, Source files;
+//   - every counted row has a duration → Complete, Source files;
 //   - some counted row has a duration → Partial: Seconds is the known sum;
 //   - none has, and the book has at most one row → Book.Duration when
 //     positive, Source book_aggregate, Complete;
@@ -212,40 +211,61 @@ func ComputeBookRuntime(book *Book, files []BookFile) BookRuntime {
 }
 
 // missingDuplicateOf returns the index into present of an unabsorbed present
-// row that the missing row m is a copy of, or -1. A repoint (or an organize
-// move whose old row was left behind) keeps the content and usually one of:
-// a content hash (current or pre-organize), the original filename, the base
-// name, or the byte size. Only non-empty / positive values match, so rows
-// that carry nothing identifying are never treated as duplicates — the
-// conservative direction, since an unmatched row can only make the runtime
-// partial, never shrink it.
+// row that the missing row m is a copy of, or -1. A copy must be proven by
+// CONTENT identity, never by a name or a size alone:
+//   - a content hash in common (FileHash or OriginalFileHash on either side —
+//     a repoint keeps the bytes; an organize tag-write keeps the pre-write
+//     hash as OriginalFileHash), or
+//   - the same original filename AND the same byte size.
+//
+// A base name alone is shared by every disc of a multi-disc rip
+// (CD1/01.mp3, CD2/01.mp3), and a size alone by every chapter of a
+// constant-bitrate split (Part 01..20, all 28.8 MB); matching on either
+// absorbed real chapters. When both rows carry a duration the durations must
+// also agree within durationMatchSlack, so even a hash collision between
+// genuinely different files cannot absorb one. An unmatched row is counted,
+// so the failure mode left is over-counting a copy nothing identifies —
+// a longer runtime, which only ever makes a runtime check stricter.
 func missingDuplicateOf(m *BookFile, files []BookFile, present []int, absorbed []bool) int {
 	mHashes := [...]string{m.FileHash, m.OriginalFileHash}
-	mName := strings.ToLower(filepath.Base(m.FilePath))
-	if m.FilePath == "" {
-		mName = ""
-	}
 	for j, pi := range present {
 		if absorbed[j] {
 			continue
 		}
 		p := &files[pi]
+		same := false
 		for _, h := range mHashes {
 			if h != "" && (h == p.FileHash || h == p.OriginalFileHash) {
-				return j
+				same = true
 			}
 		}
-		if m.OriginalFilename != "" && strings.EqualFold(m.OriginalFilename, p.OriginalFilename) {
-			return j
+		if !same && m.OriginalFilename != "" && m.FileSize > 0 &&
+			m.OriginalFilename == p.OriginalFilename && m.FileSize == p.FileSize {
+			same = true
 		}
-		if mName != "" && p.FilePath != "" && mName == strings.ToLower(filepath.Base(p.FilePath)) {
-			return j
-		}
-		if m.FileSize > 0 && m.FileSize == p.FileSize {
+		if same && durationsAgree(BookFileRuntimeSec(m), BookFileRuntimeSec(p)) {
 			return j
 		}
 	}
 	return -1
+}
+
+// durationMatchSlack is how far two copies' durations may differ (container
+// rounding, a re-mux) and still be one file: 2 s or 1%, whichever is larger.
+const durationMatchSlack = 2
+
+// durationsAgree reports whether two file durations can be the same file.
+// An unknown duration (0) on either side does not disagree.
+func durationsAgree(a, b int) bool {
+	if a <= 0 || b <= 0 {
+		return true
+	}
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	lim := max(a, b) / 100
+	return d <= max(lim, durationMatchSlack)
 }
 
 // StoredAggregateSec is the value Book.Duration should hold for this runtime,

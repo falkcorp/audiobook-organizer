@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.8.1
+// version: 1.8.2
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
 // last-edited: 2026-09-19
 //
@@ -81,11 +81,7 @@ import {
 function bookRuntimeLabel(book: CandidateResult['book']): string | undefined {
   if (book.duration_seconds) return formatDuration(book.duration_seconds);
   if (book.runtime_status === 'partial' && book.runtime_lower_bound_seconds) {
-    const gap =
-      (book.runtime_files_known ?? 0) < (book.runtime_files_counted ?? 0)
-        ? `${book.runtime_files_known} of ${book.runtime_files_counted} files measured`
-        : 'some files missing from disk';
-    return `at least ${formatDuration(book.runtime_lower_bound_seconds)} (${gap})`;
+    return `at least ${formatDuration(book.runtime_lower_bound_seconds)} (${book.runtime_files_known} of ${book.runtime_files_counted} files measured)`;
   }
   return undefined;
 }
