@@ -1,0 +1,79 @@
+// file: internal/aiscan/external_results.go
+// version: 1.0.0
+// guid: 7aa87f93-e965-48b3-9872-35ac6c51a6ea
+// last-edited: 2026-09-19
+
+package aiscan
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+)
+
+// externalSourcePrefix marks a scan recorded from a batch submitted outside
+// the pipeline. Stored in Scan.OperationID, which is otherwise the id of the
+// ai.author-scan op running the scan; the prefix keeps the two apart.
+const externalSourcePrefix = "ai-dedup-batch:"
+
+// RecordFullScanResults records a whole-library author dedup batch submitted
+// outside the pipeline (maintenance.ai-dedup-batch) as a completed AI scan:
+// one complete full_scan phase and its cross-validated results. That puts the
+// suggestions in the same review queue ai.author-scan's results are reviewed
+// and applied from, instead of the op's result blob nobody reads.
+//
+// Idempotent per sourceID: a replay finds the scan it already recorded and
+// finishes it if an earlier attempt stopped part way, so aijobs re-running
+// the callback never produces a second scan or a second set of results.
+func RecordFullScanResults(store *database.AIScanStore, sourceID string, suggestions []ai.AuthorDiscoverySuggestion) (int, error) {
+	key := externalSourcePrefix + sourceID
+	scans, err := store.ListScans()
+	if err != nil {
+		return 0, fmt.Errorf("list scans: %w", err)
+	}
+	var scan *database.Scan
+	for i := range scans {
+		if scans[i].OperationID == key {
+			scan = &scans[i]
+			break
+		}
+	}
+	if scan != nil && scan.Status == "complete" {
+		return scan.ID, nil
+	}
+	if scan == nil {
+		scan, err = store.CreateScan("batch", map[string]string{"full": "batch"}, 0)
+		if err != nil {
+			return 0, fmt.Errorf("create scan: %w", err)
+		}
+		if err := store.UpdateScanOperationID(scan.ID, key); err != nil {
+			return 0, fmt.Errorf("tag scan %d with its source: %w", scan.ID, err)
+		}
+	}
+
+	if p, err := store.GetPhase(scan.ID, "full_scan"); err != nil {
+		return 0, err
+	} else if p == nil {
+		if _, err := store.CreatePhase(scan.ID, "full_scan", "batch"); err != nil {
+			return 0, fmt.Errorf("create phase: %w", err)
+		}
+	}
+	scanSuggestions := fullSuggestionsToScanSuggestions(suggestions)
+	outputJSON, _ := json.Marshal(suggestions)
+	suggestionsJSON, _ := json.Marshal(scanSuggestions)
+	if err := store.SavePhaseData(scan.ID, "full_scan", nil, outputJSON, suggestionsJSON); err != nil {
+		return 0, fmt.Errorf("save phase data: %w", err)
+	}
+	if err := store.UpdatePhaseStatus(scan.ID, "full_scan", "complete", ""); err != nil {
+		return 0, fmt.Errorf("mark phase complete: %w", err)
+	}
+	if err := store.ReplaceScanResults(scan.ID, CrossValidate(scan.ID, nil, scanSuggestions)); err != nil {
+		return 0, fmt.Errorf("save results: %w", err)
+	}
+	if err := store.UpdateScanStatus(scan.ID, "complete"); err != nil {
+		return 0, fmt.Errorf("mark scan complete: %w", err)
+	}
+	return scan.ID, nil
+}

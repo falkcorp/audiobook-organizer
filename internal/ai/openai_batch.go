@@ -1,5 +1,5 @@
 // file: internal/ai/openai_batch.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b3c4d5e6-f7a8-9b0c-1d2e-3f4a5b6c7d8e
 // last-edited: 2026-09-19
 
@@ -226,44 +226,17 @@ func (p *OpenAIParser) CreateBatchAuthorDedup(ctx context.Context, inputs []Auth
 		return "", fmt.Errorf("no inputs provided")
 	}
 
-	// Build the system and user prompts (same as discoverAuthorBatch)
-	systemPrompt := `You are an expert audiobook metadata reviewer. You will receive a list of authors with their IDs, book counts, and sample book titles. Find groups of authors that are likely the same person (different name formats, typos, abbreviations, last-name-first, etc).
-
-CRITICAL RULES:
-- COMPOUND NAMES: Many author entries contain multiple people separated by commas, ampersands, "and", or semicolons. When you find a compound entry that matches an individual author entry, suggest a merge with the individual as canonical.
-- Use sample_titles to distinguish authors from narrators.
-- NEVER merge two genuinely different people.
-- Only merge when names clearly refer to the same person.
-- If unsure, use action "skip".
-- Identify narrators or publishers incorrectly listed as authors.
-- INITIALS FORMATTING: Always use spaces after periods in initials: "C. B. Lee" not "C.B. Lee".
-- PEN NAMES & ALIASES: When names are clearly pen names or handles, use action "alias" instead of "merge".
-
-Return ONLY valid JSON: {"suggestions": [{"author_ids": [1, 42], "action": "merge|rename|split|skip|alias", "canonical_name": "Correct Name", "reason": "brief explanation", "confidence": "high|medium|low", "is_narrator": [ids], "is_publisher": [ids]}]}
-
-Only include groups where you find actual duplicates or issues.`
-
-	batchJSON, err := json.Marshal(inputs)
+	body, err := authorDedupFullBody(p.metadataReviewModel(), inputs) // batch author dedup uses MetadataReviewModel
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal inputs: %w", err)
+		return "", err
 	}
-
-	userPrompt := fmt.Sprintf("Find duplicate authors in this list:\n\n%s", string(batchJSON))
 
 	// Build JSONL with a single request
 	req := BatchRequest{
 		CustomID: "author-dedup-full",
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
-		Body: map[string]any{
-			"model": p.metadataReviewModel(), // batch author dedup uses MetadataReviewModel
-			"messages": []map[string]string{
-				{"role": "system", "content": systemPrompt},
-				{"role": "user", "content": userPrompt},
-			},
-			"max_completion_tokens": 16000,
-			"response_format":       map[string]string{"type": "json_object"},
-		},
+		Body:     body,
 	}
 
 	var buf bytes.Buffer
@@ -596,4 +569,40 @@ Return ONLY valid JSON: {"suggestions": [{"author_ids": [1, 42], "action": "merg
 	user = fmt.Sprintf("Find duplicate authors in this list:\n\n%s", string(batchJSON))
 	model = shared.ChatModel(p.metadataReviewModel()) // BuildAuthorDedupMessages uses MetadataReviewModel
 	return
+}
+
+// authorDedupFullSystemPrompt is the whole-library author dedup prompt, shared
+// by the ai.author-scan full_scan batch and maintenance.ai-dedup-batch.
+const authorDedupFullSystemPrompt = `You are an expert audiobook metadata reviewer. You will receive a list of authors with their IDs, book counts, and sample book titles. Find groups of authors that are likely the same person (different name formats, typos, abbreviations, last-name-first, etc).
+
+CRITICAL RULES:
+- COMPOUND NAMES: Many author entries contain multiple people separated by commas, ampersands, "and", or semicolons. When you find a compound entry that matches an individual author entry, suggest a merge with the individual as canonical.
+- Use sample_titles to distinguish authors from narrators.
+- NEVER merge two genuinely different people.
+- Only merge when names clearly refer to the same person.
+- If unsure, use action "skip".
+- Identify narrators or publishers incorrectly listed as authors.
+- INITIALS FORMATTING: Always use spaces after periods in initials: "C. B. Lee" not "C.B. Lee".
+- PEN NAMES & ALIASES: When names are clearly pen names or handles, use action "alias" instead of "merge".
+
+Return ONLY valid JSON: {"suggestions": [{"author_ids": [1, 42], "action": "merge|rename|split|skip|alias", "canonical_name": "Correct Name", "reason": "brief explanation", "confidence": "high|medium|low", "is_narrator": [ids], "is_publisher": [ids]}]}
+
+Only include groups where you find actual duplicates or issues.`
+
+// authorDedupFullBody is the /v1/chat/completions body for one whole-library
+// author dedup request.
+func authorDedupFullBody(model string, inputs []AuthorDiscoveryInput) (map[string]any, error) {
+	batchJSON, err := json.Marshal(inputs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal inputs: %w", err)
+	}
+	return map[string]any{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": authorDedupFullSystemPrompt},
+			{"role": "user", "content": fmt.Sprintf("Find duplicate authors in this list:\n\n%s", string(batchJSON))},
+		},
+		"max_completion_tokens": 16000,
+		"response_format":       map[string]string{"type": "json_object"},
+	}, nil
 }
