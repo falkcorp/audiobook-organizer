@@ -1,7 +1,7 @@
 // file: internal/acoustid/client.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 5d6e7f80-9a1b-2c3d-4e5f-607182931a2b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 // Package acoustid is a thin client for the acoustid.org /v2/lookup API.
 // We only need the smallest slice of the response — top-scoring
@@ -98,9 +98,10 @@ func NewClient(apiKey string) *Client {
 }
 
 // Lookup runs a single /v2/lookup against acoustid.org. The fingerprint
-// must be the canonical chromaprint base64 form (with the 4-byte v1
-// header) — internal/fingerprint.EncodeWholeFingerprint produces this
-// from the raw fp bytes stored on BookFile.AcoustIDFingerprint.
+// must be Chromaprint's compressed base64 form (what fpcalc prints) —
+// internal/fingerprint.EncodeCompressedFingerprint produces it from the raw
+// frame bytes stored on BookFile.AcoustIDFingerprint. EncodeWholeFingerprint
+// is the app's uncompressed storage form and is NOT accepted by the service.
 //
 // duration is the file's measured duration in seconds (integer); the API
 // uses it to disambiguate fingerprints that overlap on short clips.
