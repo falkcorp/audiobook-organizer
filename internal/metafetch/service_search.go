@@ -1,12 +1,14 @@
 // file: internal/metafetch/service_search.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package metafetch
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -313,6 +315,101 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 // rate governs ACTUAL requests rather than books. Cache hits skip the source calls
 // entirely and therefore consume no tokens. ctx is threaded to every source call
 // (and to the Audnexus ASIN lookup) so a batch cancel aborts in-flight requests.
+// searchInputVersion versions the provider query ladder in
+// searchMetadataForBook. It is part of every SearchFingerprint, so BUMP IT
+// whenever the ladder changes what it asks (new rung, new title variant, a
+// different author/narrator resolution): a cached "every provider has nothing"
+// verdict is only valid for the exact questions that produced it.
+const searchInputVersion = "1"
+
+// searchInputs is what the provider ladder actually queries with, after hint
+// defaulting, chapter stripping and author/narrator resolution.
+type searchInputs struct {
+	title      string // searchTitle
+	author     string // searchAuthor: the hint, else the book's resolved author
+	bookAuthor string // the book's own author for scoring ("" if garbage)
+	narrator   string // bookNarrator
+}
+
+// resolveSearchInputs derives the ladder's query inputs from the book row and
+// the caller's hints. searchMetadataForBook and SearchFingerprintFor both use
+// it, so a fingerprint computed before a search names the same questions the
+// search asks.
+func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narrator string) searchInputs {
+	searchTitle := query
+	if searchTitle == "" {
+		searchTitle = book.Title
+	}
+	searchTitle = stripChapterFromTitle(searchTitle)
+
+	// If title is effectively empty but we have author/narrator hints,
+	// use the author name as search query to get results
+	if strings.TrimSpace(searchTitle) == "" || searchTitle == "-" {
+		if author != "" {
+			searchTitle = author
+		} else if book.AuthorID != nil {
+			if a, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil {
+				searchTitle = a.Name
+			}
+		}
+	}
+
+	searchAuthor := strings.TrimSpace(author)
+	searchNarrator := strings.TrimSpace(narrator)
+
+	// Always resolve the book's own author and narrator for scoring tiebreaks,
+	// even when no explicit hints were provided in the search request
+	bookAuthor := searchAuthor
+	if bookAuthor == "" && book.AuthorID != nil {
+		if a, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil {
+			bookAuthor = a.Name
+		}
+	}
+	if IsGarbageValue(bookAuthor) {
+		bookAuthor = ""
+	}
+	// The provider ladder searches by the book's own author when no hint was
+	// passed. GetBookByID leaves book.Author unhydrated, so the batch
+	// candidate fetch always passed an empty hint and every provider was asked
+	// by title alone: Audible, which answers only exact titles, missed books
+	// it finds with the author ("Blood of Elves" + Sapkowski). The hint alone
+	// still decides the cache input hash; this changes only the queries.
+	if searchAuthor == "" {
+		searchAuthor = bookAuthor
+	}
+	bookNarrator := searchNarrator
+	if bookNarrator == "" && book.Narrator != nil && *book.Narrator != "" {
+		bookNarrator = *book.Narrator
+	}
+	if IsGarbageValue(bookNarrator) {
+		bookNarrator = ""
+	}
+	return searchInputs{title: searchTitle, author: searchAuthor, bookAuthor: bookAuthor, narrator: bookNarrator}
+}
+
+// fingerprint hashes the questions the ladder asks for these inputs: the
+// ladder version, the book's own title (the ladder also queries it and its
+// variants) and the resolved title, author and narrator. Unlike the cache's
+// SourceHash, which hashes the caller's HINTS, this sees an author resolved
+// from AuthorID, so renaming the author changes it.
+func (in searchInputs) fingerprint(bookTitle string) string {
+	h := sha256.New()
+	for _, part := range []string{searchInputVersion, bookTitle, in.title, in.author, in.narrator} {
+		h.Write([]byte(part))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// SearchFingerprintFor returns the fingerprint a search for book with these
+// hints would record (SearchMetadataResponse.InputFingerprint).
+func (mfs *Service) SearchFingerprintFor(book *database.Book, query, author, narrator string) string {
+	if mfs == nil || mfs.db == nil || book == nil {
+		return ""
+	}
+	return mfs.resolveSearchInputs(book, query, author, narrator).fingerprint(book.Title)
+}
+
 func (mfs *Service) searchMetadataForBook(
 	ctx context.Context,
 	limiter *rate.Limiter,
@@ -337,23 +434,9 @@ func (mfs *Service) searchMetadataForBook(
 	// and bulk paths and vice versa (A3#14).
 	searchIdentity := mfs.fetchCacheIdentity(book)
 
-	searchTitle := query
-	if searchTitle == "" {
-		searchTitle = book.Title
-	}
-	searchTitle = stripChapterFromTitle(searchTitle)
-
-	// If title is effectively empty but we have author/narrator hints,
-	// use the author name as search query to get results
-	if strings.TrimSpace(searchTitle) == "" || searchTitle == "-" {
-		if author != "" {
-			searchTitle = author
-		} else if book.AuthorID != nil {
-			if a, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil {
-				searchTitle = a.Name
-			}
-		}
-	}
+	in := mfs.resolveSearchInputs(book, query, author, narrator)
+	searchTitle, searchAuthor, bookAuthor, bookNarrator := in.title, in.author, in.bookAuthor, in.narrator
+	searchSeries := strings.TrimSpace(series)
 
 	var sources []metadata.MetadataSource
 	if len(mfs.overrideSources) > 0 {
@@ -364,38 +447,23 @@ func (mfs *Service) searchMetadataForBook(
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("no metadata sources enabled")
 	}
-
-	// Normalize explicit author/narrator/series hints for downstream scoring.
-	searchAuthor := strings.TrimSpace(author)
-	searchNarrator := strings.TrimSpace(narrator)
-	searchSeries := strings.TrimSpace(series)
-
-	// Always resolve the book's own author and narrator for scoring tiebreaks,
-	// even when no explicit hints were provided in the search request
-	bookAuthor := searchAuthor
-	if bookAuthor == "" && book.AuthorID != nil {
-		if author, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && author != nil {
-			bookAuthor = author.Name
+	// A partial re-ask (the batch fetch asking only the providers without a
+	// valid answer): restrict to the named sources.
+	if len(opts.OnlySources) > 0 {
+		want := make(map[string]bool, len(opts.OnlySources))
+		for _, n := range opts.OnlySources {
+			want[n] = true
 		}
-	}
-	if IsGarbageValue(bookAuthor) {
-		bookAuthor = ""
-	}
-	// The provider ladder searches by the book's own author when no hint was
-	// passed. GetBookByID leaves book.Author unhydrated, so the batch
-	// candidate fetch always passed an empty hint and every provider was asked
-	// by title alone: Audible, which answers only exact titles, missed books
-	// it finds with the author ("Blood of Elves" + Sapkowski). The hint alone
-	// still decides the cache input hash; this changes only the queries.
-	if searchAuthor == "" {
-		searchAuthor = bookAuthor
-	}
-	bookNarrator := searchNarrator
-	if bookNarrator == "" && book.Narrator != nil && *book.Narrator != "" {
-		bookNarrator = *book.Narrator
-	}
-	if IsGarbageValue(bookNarrator) {
-		bookNarrator = ""
+		kept := make([]metadata.MetadataSource, 0, len(opts.OnlySources))
+		for _, src := range sources {
+			if want[src.Name()] {
+				kept = append(kept, src)
+			}
+		}
+		if len(kept) == 0 {
+			return nil, fmt.Errorf("none of the requested metadata sources %v is enabled", opts.OnlySources)
+		}
+		sources = kept
 	}
 
 	searchWords := SignificantWords(searchTitle)
@@ -416,7 +484,7 @@ func (mfs *Service) searchMetadataForBook(
 	// Dedupe by lowercase title+author
 	seen := map[string]bool{}
 	var candidates []MetadataCandidate
-	var sourcesTried []string
+	var sourcesTried, sourcesAnswered []string
 	sourcesFailed := map[string]string{}
 
 	// gatedSearch runs one LIVE source call after acquiring a limiter token
@@ -447,6 +515,10 @@ func (mfs *Service) searchMetadataForBook(
 		baseScores []float64
 		baseTier   string
 		failedErr  string
+		// answered: this source's ladder ran every rung it would run, and
+		// none of them errored, was throttled, or was cut off by a cancel.
+		// Only such a source has actually said "I have nothing".
+		answered bool
 	}
 	fetched := make([]sourceFetch, len(sources))
 
@@ -463,6 +535,7 @@ func (mfs *Service) searchMetadataForBook(
 			var lastErr error
 			var failedErr string
 			cacheHit := false
+			answered := false
 
 			// Check the metadata fetch cache before hitting the
 			// external API. Cache key is (bookID, source name) —
@@ -503,7 +576,9 @@ func (mfs *Service) searchMetadataForBook(
 				// shared breaker — both close the ladder. A sentinel never
 				// displaces a real diagnosis already held (keepDiagnosis).
 				ladderOpen := true
+				stepFailed := false
 				note := func(serr error) {
+					stepFailed = true
 					lastErr = keepDiagnosis(lastErr, serr)
 					if providerSentinel(serr) {
 						ladderOpen = false
@@ -532,9 +607,7 @@ func (mfs *Service) searchMetadataForBook(
 					}); serr == nil {
 						allResults = append(allResults, results...)
 					} else {
-						if providerSentinel(serr) {
-							ladderOpen = false
-						}
+						note(serr)
 						slog.Debug("metadata-search narrator-as-author fallback( ) error", "name", src.Name(), "searchTitle", logger.SanitizeLogValue(searchTitle), "narrator", bookNarrator, "error", serr)
 					}
 				}
@@ -609,6 +682,7 @@ func (mfs *Service) searchMetadataForBook(
 				if len(allResults) == 0 && lastErr != nil {
 					failedErr = lastErr.Error()
 				}
+				answered = !stepFailed && ladderOpen && ctx.Err() == nil
 
 				slog.Debug("metadata-search returned raw results for", "name", src.Name(), "count", len(allResults), "searchTitle", logger.SanitizeLogValue(searchTitle))
 
@@ -632,6 +706,7 @@ func (mfs *Service) searchMetadataForBook(
 				baseScores: baseScores,
 				baseTier:   baseTier,
 				failedErr:  failedErr,
+				answered:   cacheHit || answered,
 			}
 			return nil
 		})
@@ -650,6 +725,9 @@ func (mfs *Service) searchMetadataForBook(
 		sourcesTried = append(sourcesTried, sf.name)
 		if sf.failedErr != "" {
 			sourcesFailed[sf.name] = sf.failedErr
+		}
+		if sf.answered {
+			sourcesAnswered = append(sourcesAnswered, sf.name)
 		}
 		allResults := sf.results
 		baseScores, baseTier := sf.baseScores, sf.baseTier
@@ -967,10 +1045,12 @@ func (mfs *Service) searchMetadataForBook(
 	slog.Debug("metadata-search returning candidates for (search words )", "candidateCount", len(candidates), "searchTitle", logger.SanitizeLogValue(searchTitle), "searchWords", searchWords)
 
 	return &SearchMetadataResponse{
-		Results:       candidates,
-		Query:         searchTitle,
-		SourcesTried:  sourcesTried,
-		SourcesFailed: sourcesFailed,
+		Results:          candidates,
+		Query:            searchTitle,
+		SourcesTried:     sourcesTried,
+		SourcesFailed:    sourcesFailed,
+		SourcesAnswered:  sourcesAnswered,
+		InputFingerprint: in.fingerprint(book.Title),
 	}, nil
 }
 

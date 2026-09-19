@@ -1,5 +1,5 @@
 // file: internal/database/iface_metadata.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4c6267a6-b5ae-4e10-bce6-94b362c33a3f
 // last-edited: 2026-09-19
 //
@@ -47,21 +47,22 @@ type MetadataCandidateCache struct {
 	// "nobody has looked at this in 30 days" from "we looked an hour ago and
 	// the providers have nothing".
 	LastEmptyFetchAt *time.Time `json:"last_empty_fetch_at,omitempty"`
-	// EmptySources names the metadata sources that ANSWERED a search for these
-	// same inputs (SourceHash) and had nothing, accumulated across searches:
-	// a source that errored, was throttled or was cut off by a cancel is NOT
-	// in it, because "the provider could not be asked" is not "the provider
-	// has nothing". Sorted, de-duplicated.
-	//
-	// It is what makes an empty result a durable verdict. The batch candidate
-	// fetch skips a book whose inputs are unchanged and whose EmptySources
-	// covers every source currently enabled -- refetching it would ask the
-	// same providers the same question again. A newly enabled provider, or a
-	// title/author edit (which changes SourceHash), re-opens the question, and
-	// so does age: see MetadataKnownEmptyTTL.
-	// Rows written before this field existed carry none; see
-	// metafetch.Service.CachedBatchVerdict for how those are treated.
-	EmptySources []string `json:"empty_sources,omitempty"`
+	// SearchFingerprint identifies the questions the search that wrote this
+	// entry asked the providers: ladder version, book title, and the RESOLVED
+	// title/author/narrator (metafetch searchInputs.fingerprint). SourceHash
+	// hashes the caller's hints and misses an author resolved from AuthorID;
+	// this does not. The batch fetch trusts the entry only when the book's
+	// current fingerprint matches it. Empty on entries written before
+	// 2026-09-19, which are therefore never trusted as a verdict.
+	SearchFingerprint string `json:"search_fingerprint,omitempty"`
+	// EmptyAnswers maps a metadata source to when it last ANSWERED these
+	// inputs (SearchFingerprint) with nothing: its whole query ladder ran and
+	// no rung errored, was throttled or was cancelled. A source that could
+	// not be asked is absent: "could not ask" is not "has nothing". Each
+	// answer ages on its own against MetadataKnownEmptyTTL, and only
+	// providers without a valid answer are re-asked. Reset whenever the
+	// fingerprint changes; nil whenever the entry holds fresh candidates.
+	EmptyAnswers map[string]time.Time `json:"empty_answers,omitempty"`
 }
 
 // MetadataCacheTTL is the freshness window. Entries older than this

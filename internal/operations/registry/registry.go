@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.26.0
+// version: 3.27.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package registry
 
@@ -1255,6 +1255,20 @@ func (r *Registry) GetCurrentItem(opID string) string {
 		return ""
 	}
 	return h.getCurrentItem()
+}
+
+// IsRunning reports whether a worker in THIS process holds a live run handle
+// for opID. A row whose status reads "running" but has no handle is left over
+// from a crash or restart, and nothing will produce its results until the
+// resume sweep re-dispatches it.
+func (r *Registry) IsRunning(opID string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.running[opID]
+	return ok
 }
 
 // ActiveDefs returns all registered OperationDefs.

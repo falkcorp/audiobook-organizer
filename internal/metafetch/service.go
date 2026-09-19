@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.31.0
+// version: 5.32.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package metafetch
 
@@ -350,6 +350,13 @@ type SearchMetadataResponse struct {
 	Query         string              `json:"query"`
 	SourcesTried  []string            `json:"sources_tried"`
 	SourcesFailed map[string]string   `json:"sources_failed,omitempty"`
+	// SourcesAnswered names the sources whose query ladder completed without
+	// an error, throttle or cancel (a fetch-cache hit counts). Internal: it is
+	// what cacheSearchResponse records as a provider's "nothing" answer.
+	SourcesAnswered []string `json:"-"`
+	// InputFingerprint identifies the questions this search asked (see
+	// searchInputs.fingerprint). Internal, stored on the cache entry.
+	InputFingerprint string `json:"-"`
 }
 
 // SearchOptions carries optional per-request flags for SearchMetadataForBook.
@@ -360,6 +367,12 @@ type SearchOptions struct {
 	// MetadataLLMScoringEnabled is true on the server). When false, only
 	// the base scorer tier runs.
 	UseRerank bool
+
+	// OnlySources, when non-empty, restricts the search to the named sources
+	// (metadata.MetadataSource.Name()). The batch candidate fetch uses it to
+	// re-ask only the providers that have no valid answer for the book's
+	// current inputs, instead of every provider again.
+	OnlySources []string
 
 	// BypassProviderThrottle lets this ONE search call a provider that is
 	// globally throttled.
