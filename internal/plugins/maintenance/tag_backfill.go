@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
 // last-edited: 2026-09-19
 
@@ -285,8 +285,8 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 					written += refused.Committed
 					notWritten += len(refused.RefusedFileIDs)
 					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-						"%d row(s) not written: their book was deleted during the run (books %v, rows %v); %d rows of the batch written",
-						len(refused.RefusedFileIDs), refused.MissingBookIDs, refused.RefusedFileIDs, refused.Committed))
+						"%d row(s) not written: their book or the row itself was deleted during the run (missing books %v, reason by row %v); %d rows of the batch written",
+						len(refused.RefusedFileIDs), refused.MissingBookIDs, refused.Reasons, refused.Committed))
 					pending = pending[n:]
 					continue
 				}
