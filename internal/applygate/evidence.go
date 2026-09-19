@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-09-19
 
@@ -210,6 +210,12 @@ func checkRuntime(rt database.BookRuntime, c *metafetch.MetadataCandidate, overw
 		desc = mins(bookSec) + " (stored book duration; no file durations)"
 	}
 	if !known || c.DurationSec <= 0 {
+		if agg, ratio, ok := storedDurationContradicts(rt, c.DurationSec); ok {
+			r.Outcome, r.Reason = OutcomeBlock, ReasonRuntimeMismatch
+			r.Detail = "stored book duration " + mins(agg) + " (files " + runtimeDesc(rt) + "), candidate " + mins(c.DurationSec) +
+				" (" + strconv.Itoa(int(ratio*100+0.5)) + "% off)"
+			return r
+		}
 		if lb, ratio, ok := lowerBoundContradicts(rt, c.DurationSec); ok {
 			r.Outcome, r.Reason = OutcomeBlock, ReasonRuntimeMismatch
 			r.Detail = "files at least " + mins(lb) + " (" + runtimeDesc(rt) + "), candidate " + mins(c.DurationSec) +
@@ -619,6 +625,39 @@ func runtimeLowerBound(rt database.BookRuntime) int {
 		return rt.Seconds
 	}
 	return 0
+}
+
+// storedDurationContradicts is main's runtime check, run against the stored
+// Book.Duration, for a PARTIAL runtime whose Book.Duration is NOT the partial
+// known sum. Such a value came from somewhere other than the rows the
+// canonical runtime just summed — an earlier measurement of more files, a
+// probe, an apply — and main compared it in both directions, so the gate
+// must still block on it to stay never looser than main.
+//
+// When Book.Duration EQUALS the partial known sum (within the duplicate
+// slack), it is exactly the lower bound RecomputeBookAggregates stored, and
+// comparing it as a total is the defect this PR fixes: on prod every one of
+// the 26 sampled partial books had Book.Duration == its known sum, and main
+// vetoed their correct candidates. Only that value is set aside;
+// lowerBoundContradicts still blocks on it in the direction it proves.
+func storedDurationContradicts(rt database.BookRuntime, candSec int) (agg int, ratio float64, ok bool) {
+	agg = rt.BookAggregateSec
+	if !rt.Partial() || agg <= 0 || candSec <= 0 || isPartialSum(agg, rt.Seconds) {
+		return agg, 0, false
+	}
+	d := agg - candSec
+	if d < 0 {
+		d = -d
+	}
+	ratio = float64(d) / float64(agg)
+	return agg, ratio, ratio > RuntimeBlockRatio
+}
+
+// isPartialSum reports whether a stored Book.Duration is the partial known
+// sum (2 s slack for rounding in how the aggregate was summed).
+func isPartialSum(agg, knownSum int) bool {
+	d := agg - knownSum
+	return d >= -2 && d <= 2
 }
 
 // lowerBoundContradicts reports whether a partial runtime still PROVES a
