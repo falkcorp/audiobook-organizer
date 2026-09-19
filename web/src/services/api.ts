@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.115.0
+// version: 2.116.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-19
 
@@ -4970,6 +4970,8 @@ export interface AIScan {
     | 'canceled'
     // An unreviewed nightly ai-dedup-batch scan replaced by a newer run.
     | 'superseded';
+  // The scan that replaced this one, when status is 'superseded'.
+  superseded_by?: number;
   mode: 'batch' | 'realtime';
   models: { groups: string; full: string };
   author_count: number;

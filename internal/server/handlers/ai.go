@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -16,6 +16,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -611,6 +612,14 @@ func (h *AIHandler) ApplyScanResults(c *gin.Context) {
 	var errors []string
 	for _, resultID := range req.ResultIDs {
 		if err := h.scanStore.MarkResultApplied(scanID, resultID); err != nil {
+			// A superseded scan's list was replaced by a newer run: refuse the
+			// whole request and point at the newer scan, rather than a 200
+			// with every result listed as an error.
+			var superseded *database.ScanSupersededError
+			if stderrors.As(err, &superseded) {
+				httputil.RespondWithConflict(c, superseded.Error())
+				return
+			}
 			errors = append(errors, fmt.Sprintf("result %d: %v", resultID, err))
 		} else {
 			applied++
