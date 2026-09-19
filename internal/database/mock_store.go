@@ -361,6 +361,8 @@ type MockStore struct {
 	GetRawFunc                       func(key string) ([]byte, error)
 	DeleteRawFunc                    func(key string) error
 	ScanPrefixFunc                   func(prefix string) ([]KVPair, error)
+	ScanPrefixPageFunc               func(prefix, after string, limit int) ([]KVPair, string, error)
+	DeleteRawBatchFunc               func(keys []string) error
 	CountPrefixFunc                  func(prefix string) (int64, error)
 	CreateOperationResultFunc        func(result *OperationResult) error
 	GetOperationResultsFunc          func(operationID string) ([]OperationResult, error)
@@ -2936,6 +2938,18 @@ func (m *MockStore) ScanPrefix(prefix string) ([]KVPair, error) {
 		return m.ScanPrefixFunc(prefix)
 	}
 	return nil, nil
+}
+func (m *MockStore) ScanPrefixPage(prefix, after string, limit int) ([]KVPair, string, error) {
+	if m.ScanPrefixPageFunc != nil {
+		return m.ScanPrefixPageFunc(prefix, after, limit)
+	}
+	return nil, "", nil
+}
+func (m *MockStore) DeleteRawBatch(keys []string) error {
+	if m.DeleteRawBatchFunc != nil {
+		return m.DeleteRawBatchFunc(keys)
+	}
+	return nil
 }
 func (m *MockStore) CountPrefix(prefix string) (int64, error) {
 	if m.CountPrefixFunc != nil {

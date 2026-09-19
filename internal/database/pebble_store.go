@@ -1,11 +1,12 @@
 // file: internal/database/pebble_store.go
-// version: 1.174.0
+// version: 1.175.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-19
 
 package database
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -4624,6 +4625,69 @@ func (p *PebbleStore) ScanPrefix(prefix string) ([]KVPair, error) {
 		pairs = append(pairs, KVPair{Key: string(iter.Key()), Value: val})
 	}
 	return pairs, nil
+}
+
+// ScanPrefixPage implements RawKVStore.ScanPrefixPage with a bounded iterator:
+// it reads at most limit+1 keys (the extra one only to learn whether another
+// page exists), so memory is bounded by limit however large the keyspace is.
+// The upper bound comes from prefixUpperBound (embedding_store.go), which
+// handles a trailing 0xff byte; the older ScanPrefix increments the last byte
+// in place and does not.
+func (p *PebbleStore) ScanPrefixPage(prefix, after string, limit int) ([]KVPair, string, error) {
+	if limit <= 0 {
+		return nil, "", fmt.Errorf("ScanPrefixPage: limit must be positive, got %d", limit)
+	}
+	prefixBytes := []byte(prefix)
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefixBytes,
+		UpperBound: prefixUpperBound(prefixBytes),
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	defer iter.Close()
+
+	var valid bool
+	if after == "" {
+		valid = iter.First()
+	} else {
+		afterBytes := []byte(after)
+		valid = iter.SeekGE(afterBytes)
+		if valid && bytes.Equal(iter.Key(), afterBytes) {
+			valid = iter.Next()
+		}
+	}
+
+	pairs := make([]KVPair, 0, min(limit, 1024))
+	for ; valid; valid = iter.Next() {
+		if len(pairs) == limit {
+			// One more matching key exists: the caller has another page.
+			return pairs, pairs[len(pairs)-1].Key, nil
+		}
+		val := make([]byte, len(iter.Value()))
+		copy(val, iter.Value())
+		pairs = append(pairs, KVPair{Key: string(iter.Key()), Value: val})
+	}
+	if err := iter.Error(); err != nil {
+		return nil, "", err
+	}
+	return pairs, "", nil
+}
+
+// DeleteRawBatch implements RawKVStore.DeleteRawBatch: one pebble batch, one
+// synced commit.
+func (p *PebbleStore) DeleteRawBatch(keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	b := p.db.NewBatch()
+	defer b.Close()
+	for _, k := range keys {
+		if err := b.Delete([]byte(k), nil); err != nil {
+			return err
+		}
+	}
+	return b.Commit(pebble.Sync)
 }
 
 func (p *PebbleStore) CountPrefix(prefix string) (int64, error) {

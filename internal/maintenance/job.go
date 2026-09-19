@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -367,15 +367,14 @@ type jobOperationStore interface {
 }
 
 // jobKVStore is settings plus the raw key/value space the retention and sweep
-// jobs use for their own bookkeeping rows.
+// jobs use for their own bookkeeping rows. The raw half is database.RawKVStore
+// embedded rather than spelled out: jobs pass this store to helpers typed
+// database.RawKVStore (metadata fetch cache, source-chain walk), so a
+// hand-copied subset stops satisfying it the moment RawKVStore grows.
 type jobKVStore interface {
 	GetSetting(key string) (*database.Setting, error)
 	SetSetting(key, value, typ string, isSecret bool) error
-	GetRaw(key string) ([]byte, error)
-	SetRaw(key string, value []byte) error
-	DeleteRaw(key string) error
-	ScanPrefix(prefix string) ([]database.KVPair, error)
-	CountPrefix(prefix string) (int64, error)
+	database.RawKVStore
 }
 
 type jobExternalIDStore interface {

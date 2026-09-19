@@ -1,5 +1,5 @@
 // file: internal/server/indexed_store.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 5d2e4f3a-7b5a-4a70-b8c5-3d7e0f1b9a79
 // last-edited: 2026-09-19
 //
@@ -64,6 +64,13 @@ var _ database.StoreUnwrapper = (*indexedStore)(nil)
 // a capability interface outside Store, this line fails the build instead of a
 // type assertion failing silently in production.
 var _ database.FingerprintWindowStore = (*indexedStore)(nil)
+
+// Compile-time proof that the raw KV methods -- including the paged
+// ScanPrefixPage and DeleteRawBatch the AI result-journal prune relies on --
+// reach callers through the decorator. They are part of database.Store (via
+// RawKVStore) and promoted by the embedded Store; the aijournal: keyspace is
+// not indexed by Bleve, so no override is needed.
+var _ database.RawKVStore = (*indexedStore)(nil)
 
 // CreateBook writes to the inner store and schedules an index
 // refresh for the newly-assigned book ID on success.

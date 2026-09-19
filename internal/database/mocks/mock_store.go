@@ -9946,6 +9946,57 @@ func (_c *MockStore_DeleteRaw_Call) RunAndReturn(run func(key string) error) *Mo
 	return _c
 }
 
+// DeleteRawBatch provides a mock function for the type MockStore
+func (_mock *MockStore) DeleteRawBatch(keys []string) error {
+	ret := _mock.Called(keys)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteRawBatch")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func([]string) error); ok {
+		r0 = returnFunc(keys)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_DeleteRawBatch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteRawBatch'
+type MockStore_DeleteRawBatch_Call struct {
+	*mock.Call
+}
+
+// DeleteRawBatch is a helper method to define mock.On call
+//   - keys []string
+func (_e *MockStore_Expecter) DeleteRawBatch(keys any) *MockStore_DeleteRawBatch_Call {
+	return &MockStore_DeleteRawBatch_Call{Call: _e.mock.On("DeleteRawBatch", keys)}
+}
+
+func (_c *MockStore_DeleteRawBatch_Call) Run(run func(keys []string)) *MockStore_DeleteRawBatch_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []string
+		if args[0] != nil {
+			arg0 = args[0].([]string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_DeleteRawBatch_Call) Return(err error) *MockStore_DeleteRawBatch_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_DeleteRawBatch_Call) RunAndReturn(run func(keys []string) error) *MockStore_DeleteRawBatch_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // DeleteReviewItem provides a mock function for the type MockStore
 func (_mock *MockStore) DeleteReviewItem(id string) error {
 	ret := _mock.Called(id)
@@ -27731,6 +27782,86 @@ func (_c *MockStore_ScanPrefix_Call) Return(kVPairs []database.KVPair, err error
 }
 
 func (_c *MockStore_ScanPrefix_Call) RunAndReturn(run func(prefix string) ([]database.KVPair, error)) *MockStore_ScanPrefix_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ScanPrefixPage provides a mock function for the type MockStore
+func (_mock *MockStore) ScanPrefixPage(prefix string, after string, limit int) ([]database.KVPair, string, error) {
+	ret := _mock.Called(prefix, after, limit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ScanPrefixPage")
+	}
+
+	var r0 []database.KVPair
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, int) ([]database.KVPair, string, error)); ok {
+		return returnFunc(prefix, after, limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, int) []database.KVPair); ok {
+		r0 = returnFunc(prefix, after, limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.KVPair)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, int) string); ok {
+		r1 = returnFunc(prefix, after, limit)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(string, string, int) error); ok {
+		r2 = returnFunc(prefix, after, limit)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockStore_ScanPrefixPage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ScanPrefixPage'
+type MockStore_ScanPrefixPage_Call struct {
+	*mock.Call
+}
+
+// ScanPrefixPage is a helper method to define mock.On call
+//   - prefix string
+//   - after string
+//   - limit int
+func (_e *MockStore_Expecter) ScanPrefixPage(prefix any, after any, limit any) *MockStore_ScanPrefixPage_Call {
+	return &MockStore_ScanPrefixPage_Call{Call: _e.mock.On("ScanPrefixPage", prefix, after, limit)}
+}
+
+func (_c *MockStore_ScanPrefixPage_Call) Run(run func(prefix string, after string, limit int)) *MockStore_ScanPrefixPage_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 int
+		if args[2] != nil {
+			arg2 = args[2].(int)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ScanPrefixPage_Call) Return(pairs []database.KVPair, next string, err error) *MockStore_ScanPrefixPage_Call {
+	_c.Call.Return(pairs, next, err)
+	return _c
+}
+
+func (_c *MockStore_ScanPrefixPage_Call) RunAndReturn(run func(prefix string, after string, limit int) ([]database.KVPair, string, error)) *MockStore_ScanPrefixPage_Call {
 	_c.Call.Return(run)
 	return _c
 }

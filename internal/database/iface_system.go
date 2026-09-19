@@ -1,7 +1,7 @@
 // file: internal/database/iface_system.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 92c85d7d-c1fb-43c0-a0a4-2ef742107420
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package database
 
@@ -72,8 +72,22 @@ type RawKVStore interface {
 	SetRaw(key string, value []byte) error
 	GetRaw(key string) ([]byte, error)
 	DeleteRaw(key string) error
+	// ScanPrefix loads EVERY matching pair into memory. Use it only for
+	// keyspaces known to stay small; anything that grows with the library
+	// pages through ScanPrefixPage instead.
 	ScanPrefix(prefix string) ([]KVPair, error)
+	// ScanPrefixPage returns at most limit pairs whose keys start with
+	// prefix and sort strictly after `after` ("" starts at the beginning),
+	// in key order. next is the cursor for the following call: the last key
+	// returned when more matching keys remain, "" when the scan is
+	// exhausted (including when the final page is exactly full). limit must
+	// be positive. Memory is bounded by limit, not by the keyspace.
+	ScanPrefixPage(prefix, after string, limit int) (pairs []KVPair, next string, err error)
 	CountPrefix(prefix string) (int64, error)
+	// DeleteRawBatch deletes every key in one atomic, durably-synced write
+	// (one fsync for the whole slice instead of one per key, which is what
+	// DeleteRaw costs). Missing keys are not an error.
+	DeleteRawBatch(keys []string) error
 }
 
 // LifecycleStore covers store startup/teardown.
