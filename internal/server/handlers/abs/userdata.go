@@ -346,6 +346,7 @@ func (p *userDataProvider) progressRow(userID string, pos database.UserPosition)
 		// Derived from (user, item) rather than random so a client that stores the id
 		// keeps matching the same row across restarts. Same formula as item.go.
 		ID:            userID + "-" + syncID,
+		bookID:        pos.BookID,
 		IsFinished:    finished,
 		LastUpdate:    lastUpdate,
 		LibraryItemID: syncID,

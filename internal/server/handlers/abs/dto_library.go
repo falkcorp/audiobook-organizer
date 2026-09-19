@@ -337,6 +337,11 @@ type mediaProgressDTO struct {
 	Progress                  float64 `json:"progress"`
 	StartedAt                 int64   `json:"startedAt"`
 	UserID                    string  `json:"userId"`
+
+	// bookID is the internal book the row was rendered from. Never serialized;
+	// it lets in-process readers (the progress filter) use the row without
+	// resolving libraryItemId back through the sync keyspace.
+	bookID string
 }
 
 // ── list envelopes ──────────────────────────────────────────────────────────

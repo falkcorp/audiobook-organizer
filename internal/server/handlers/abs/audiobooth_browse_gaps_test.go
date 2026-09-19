@@ -257,3 +257,20 @@ func TestAuthorsSort_NameIsCaseInsensitive(t *testing.T) {
 		t.Errorf("authors name desc = %v, want %v", got, want)
 	}
 }
+
+// Review W6: filter requests — every group, every page — are served from the
+// cached attribute index; the whole-library BookCore walk happens once.
+func TestItemsFilter_AttributeIndexIsCachedAcrossRequestsAndPages(t *testing.T) {
+	f := newBrowseGapsFixture(t)
+	f.items(t, "filter=genres."+b64("Fiction")+"&limit=1&page=0")
+	first := f.lib.coreWalkCalls()
+	if first == 0 {
+		t.Fatal("the first filter request did not build the index; the counter is not observing it")
+	}
+	f.items(t, "filter=genres."+b64("Fiction")+"&limit=1&page=1")
+	f.items(t, "filter=languages."+b64("German"))
+	f.items(t, "filter=publishedDecades."+b64("1990"))
+	if got := f.lib.coreWalkCalls(); got != first {
+		t.Fatalf("GetAllBooksCore ran %d times across 4 filter requests, want %d (the first build only)", got, first)
+	}
+}

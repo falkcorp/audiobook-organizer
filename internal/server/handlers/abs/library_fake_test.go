@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-19
 
@@ -111,6 +111,15 @@ type fakeLibrary struct {
 
 	// tags backs GetBooksByTag: normalized tag -> book ids.
 	tags map[string][]string
+
+	// coreWalks counts GetAllBooksCore calls (the whole-library projection).
+	coreWalks int
+}
+
+func (f *fakeLibrary) coreWalkCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.coreWalks
 }
 
 // GetBooksByTag mirrors PebbleStore: the tag is normalized, and an empty tag is
@@ -488,6 +497,7 @@ func (f *fakeLibrary) GetAllBookSummariesFiltered(limit, offset int, fl database
 func (f *fakeLibrary) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.coreWalks++
 	out := []database.BookCore{}
 	for i, id := range f.order {
 		if i < offset {

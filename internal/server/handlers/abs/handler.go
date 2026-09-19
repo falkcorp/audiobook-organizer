@@ -393,6 +393,16 @@ type Handler struct {
 	// grouping, or the background refresh behind an expired one) onto one pass.
 	seriesBooksSF singleflight.Group
 
+	// attrIndex caches the visible-book attribute projection behind the
+	// genre/language/publisher/decade/tag/progress filters (browse_filters.go),
+	// so a filter request — and every page of one — reads memory instead of
+	// walking the whole library. Same TTL + single-flight shape as the series
+	// grouping above.
+	attrIndexMu sync.Mutex
+	attrIndex   *visibleAttrIndex
+	attrIndexAt time.Time
+	attrIndexSF singleflight.Group
+
 	// One background refresher per cache: an expired build is served while its
 	// refresher rebuilds it (cache_refresh.go).
 	contributorsRefresh cacheRefresher
