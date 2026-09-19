@@ -1,5 +1,5 @@
 // file: internal/database/fingerprint_window.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c23e6967-5192-4584-a48c-2b5d89c2e887
 // last-edited: 2026-09-19
 
@@ -8,6 +8,7 @@ package database
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -73,6 +74,12 @@ const (
 	fpwinKeyPrefix     = "fpwin:"
 	fpwinFailKeyPrefix = "fpwin_fail:"
 )
+
+// ErrFingerprintWindowRowGone is wrapped by every window write refused because
+// the f: ref's book_file row does not exist (or was deleted while the write
+// waited). The row is resolved by file ID, so a row moved to another book is
+// NOT gone.
+var ErrFingerprintWindowRowGone = errors.New("fingerprint window: book_file row does not exist")
 
 // FingerprintWindowRef names what a set of windows describes: "f:<file_id>" for
 // a tracked book_file row, or "p:<sha256 hex>" for an untracked file identified
@@ -235,8 +242,16 @@ type FingerprintWindowFailure struct {
 	FFmpegVersion   string               `json:"ffmpeg_version"`
 	SourceSize      int64                `json:"source_size"`
 	SourceMtimeUnix int64                `json:"source_mtime_unix"`
-	FailedAt        time.Time            `json:"failed_at"`
-	Host            string               `json:"host"`
+	// DurationUsedSec/DurationSource are the duration the failing cut was
+	// planned from (possibly a fresh ffprobe after a retry).
+	DurationUsedSec float64 `json:"duration_used_sec"`
+	DurationSource  string  `json:"duration_source,omitempty"`
+	// PlannedDurationSec is the duration the book_file ROW gave when the
+	// file was planned (0 = unknown). A tombstone is current only while the
+	// row still gives the same value, so correcting a wrong duration re-plans.
+	PlannedDurationSec float64   `json:"planned_duration_sec"`
+	FailedAt           time.Time `json:"failed_at"`
+	Host               string    `json:"host"`
 }
 
 // validate checks the invariants the tombstone key depends on.

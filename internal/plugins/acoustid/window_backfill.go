@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
 // last-edited: 2026-09-19
 
@@ -293,6 +293,9 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 	}
 
 	workers := windowWorkers(params.Concurrency)
+	p.toolsMu.Lock()
+	probe := p.scanProbe
+	p.toolsMu.Unlock()
 	host, herr := os.Hostname()
 	if herr != nil {
 		// Host is provenance only; a window without it is still valid.
@@ -300,6 +303,7 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 		host = ""
 	}
 	var tally windowTally
+	run := &windowRun{p: p, wt: wt, host: host, t: &tally, reporter: reporter, probe: probe}
 	total := len(plan.tiers[0]) + len(plan.tiers[1])
 	done := 0
 	for tier := range windowTierCount {
@@ -322,8 +326,10 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 			continue
 		}
 		opts := windowRunOptions(workers, done, total, tier, items, params, reporter, &tally)
+		run.progCur.Store(int64(done))
+		run.progTotal.Store(int64(total))
 		err := registry.RunItems(ctx, reporter, items, func(ctx context.Context, it windowItem) error {
-			return p.windowFile(ctx, wt, host, it, &tally)
+			return run.file(ctx, it)
 		}, opts)
 		if err != nil {
 			fillWindowResult(res, &tally)
@@ -519,9 +525,12 @@ func (p *Plugin) planOne(f database.BookFileCore, roots []string, versions *fing
 		BookID:     f.BookID,
 		Path:       f.FilePath,
 		FpDuration: f.AcoustIDFingerprintDurationSec,
-		Duration:   float64(f.Duration),
-		Size:       fi.Size(),
-		MtimeUnix:  fi.ModTime().Unix(),
+		// Pre-CONS-18 rows can hold milliseconds in this seconds field; the
+		// write chokepoint repairs only rows that carry FileSize, so judge by
+		// the size on disk. A wrong duration moves every window past EOF.
+		Duration:  float64(database.NormalizeDurationSec(fi.Size(), f.Duration)),
+		Size:      fi.Size(),
+		MtimeUnix: fi.ModTime().Unix(),
 	}
 	state, err := p.windowStateOf(it, versions)
 	if err != nil {
@@ -554,6 +563,7 @@ func (p *Plugin) windowStateOf(it windowItem, versions *fingerprint.ToolVersionI
 	}
 	if fail != nil && fail.SourceSize == it.Size && fail.SourceMtimeUnix == it.MtimeUnix &&
 		fail.Pipeline == fingerprint.WindowPipelineID && fail.WindowSet == fingerprint.WindowSetWS1 &&
+		fail.PlannedDurationSec == plannedDuration(it) &&
 		(versions == nil || (fail.FpcalcVersion == versions.Fpcalc && fail.FFmpegVersion == versions.FFmpeg)) {
 		return windowTombstoned, nil
 	}
@@ -598,27 +608,49 @@ func windowsCurrent(stored []database.FingerprintWindow, it windowItem, versions
 }
 
 // iTunesRoots returns the configured iTunes roots (the folder of the library
-// file and the media root), cleaned. The books/itunes/ segment match in
+// file and the media root), cleaned, each also symlink-resolved when it
+// resolves to somewhere else. The books/itunes/ segment match in
 // config.UnderFrozenITunesTree applies whatever this returns.
 func iTunesRoots() []string {
 	it := config.AppConfig.ITunes
 	var roots []string
+	add := func(r string) {
+		r = filepath.Clean(r)
+		roots = append(roots, r)
+		if real, err := filepath.EvalSymlinks(r); err == nil && real != r {
+			roots = append(roots, real)
+		}
+	}
 	if it.LibraryReadPath != "" {
-		roots = append(roots, filepath.Clean(filepath.Dir(it.LibraryReadPath)))
+		add(filepath.Dir(it.LibraryReadPath))
 	}
 	if it.MediaRoot != "" {
-		roots = append(roots, filepath.Clean(it.MediaRoot))
+		add(it.MediaRoot)
 	}
 	return roots
 }
 
+// underITunes reports whether path is in the frozen iTunes tree, matching
+// case-insensitively (the tree is reached as "Books/iTunes" on a
+// case-insensitive client mount, and HFS/APFS-origin paths vary in case) and
+// through symlinks: a library folder that links into the tree is the tree.
+// A missing leaf cannot be resolved, so its parent directory is.
 func underITunes(path string, roots []string) bool {
-	if config.UnderFrozenITunesTree(path) {
-		return true
+	cands := []string{path}
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		cands = append(cands, real)
+	} else if dir, derr := filepath.EvalSymlinks(filepath.Dir(path)); derr == nil {
+		cands = append(cands, filepath.Join(dir, filepath.Base(path)))
 	}
-	for _, r := range roots {
-		if pathutil.IsWithin(path, r) {
+	for _, c := range cands {
+		lc := strings.ToLower(c)
+		if config.UnderFrozenITunesTree(lc) {
 			return true
+		}
+		for _, r := range roots {
+			if pathutil.IsWithin(lc, strings.ToLower(r)) {
+				return true
+			}
 		}
 	}
 	return false
@@ -658,24 +690,124 @@ var windowProbeDuration = func(ctx context.Context, path string) (float64, error
 	return audioutil.ProbeDurationSeconds(ctx, "", path)
 }
 
-// windowFile computes and stores one file's windows. It returns an error only
-// when the run must stop (cancellation, or tools that cannot run at all);
-// every per-file outcome is tallied and returns nil so the watermark moves on.
-func (p *Plugin) windowFile(ctx context.Context, wt fingerprint.WindowTools, host string, it windowItem, t *windowTally) error {
-	// Two attempts: a file that changed between planning and the first
-	// attempt is re-planned once from its new size/mtime; one that changes
-	// again while being read is left for the next run.
+// windowBreakerThreshold is how many I/O-shaped failures in a row (stat
+// errors, tool start failures, signal deaths, I/O errors, per-window
+// timeouts) stop the run. A dead mount turns every remaining file into one of
+// these; without the breaker the op would walk the whole library, write
+// nothing, and finish green. A variable so tests can lower it.
+var windowBreakerThreshold int64 = 50
+
+// errWindowBreaker is the run's error when the breaker trips.
+var errWindowBreaker = errors.New("window-backfill: stopped after too many consecutive I/O failures (is the library mount alive?); rerun once it is: finished files are skipped")
+
+// windowScanPoll is how often a paused worker re-checks for a library.scan.
+var windowScanPoll = 30 * time.Second
+
+// windowLogBurst is how many I/O-shaped failures are logged in full before
+// the log drops to one line per windowLogEvery.
+const (
+	windowLogBurst = 20
+	windowLogEvery = 100
+)
+
+// libraryScanProbe reports whether a library.scan is running.
+// *registry.Registry satisfies it (LibraryScanRunning).
+type libraryScanProbe interface {
+	LibraryScanRunning() bool
+}
+
+// setScanProbe wires the registry so the op yields to a library.scan.
+func (p *Plugin) setScanProbe(sp libraryScanProbe) {
+	p.toolsMu.Lock()
+	defer p.toolsMu.Unlock()
+	p.scanProbe = sp
+}
+
+// windowRun is the state one live run's workers share.
+type windowRun struct {
+	p        *Plugin
+	wt       fingerprint.WindowTools
+	host     string
+	t        *windowTally
+	reporter sdk.Reporter
+	probe    libraryScanProbe
+
+	consecutive atomic.Int64 // I/O-shaped failures since the last good file
+	ioFailures  atomic.Int64 // all I/O-shaped failures, for log rate-limiting
+
+	progCur, progTotal atomic.Int64 // last progress, re-sent while paused
+}
+
+// waitForLibraryScan parks the worker while a library.scan runs (standing
+// rule: nothing fights the scanner for the disks, and the scanner may be
+// rewriting the very files being cut). It yields rather than taking the scan
+// stand-down: a stand-down would park library.scan for this op's whole
+// multi-hour run. Progress is re-sent on every poll so the watchdog sees a
+// live op, not a wedged one.
+func (r *windowRun) waitForLibraryScan(ctx context.Context) error {
+	if r.probe == nil || !r.probe.LibraryScanRunning() {
+		return nil
+	}
+	wbLog.Info("library.scan is running; window backfill paused until it finishes")
+	for r.probe.LibraryScanRunning() {
+		_ = r.reporter.UpdateProgress(int(r.progCur.Load()), int(r.progTotal.Load()), "Paused: library.scan is running")
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(windowScanPoll):
+		}
+	}
+	wbLog.Info("library.scan finished; window backfill resuming")
+	return nil
+}
+
+// good resets the breaker after a file that produced an outcome.
+func (r *windowRun) good() { r.consecutive.Store(0) }
+
+// ioFailure tallies an I/O-shaped failure, logs it (rate-limited), and trips
+// the breaker at windowBreakerThreshold consecutive ones.
+func (r *windowRun) ioFailure(it windowItem, what string, err error) error {
+	r.t.transient.Add(1)
+	n := r.ioFailures.Add(1)
+	if n <= windowLogBurst || n%windowLogEvery == 0 {
+		wbLog.Warn("window-backfill %s %s (%s): %v [I/O-shaped failure #%d]", what, it.FileID, it.Path, err, n)
+	}
+	if c := r.consecutive.Add(1); c >= windowBreakerThreshold {
+		return fmt.Errorf("%w: %d in a row, last %s %s: %v", errWindowBreaker, c, what, it.Path, err)
+	}
+	return nil
+}
+
+// plannedDuration is the duration the book_file row gives (0 = unknown). It
+// is what a tombstone is pinned to.
+func plannedDuration(it windowItem) float64 {
+	if d, err := fingerprint.ChooseDuration(it.FpDuration, it.Duration, nil); err == nil {
+		return d.Sec
+	}
+	return 0
+}
+
+// file computes and stores one file's windows. It returns an error only when
+// the run must stop (cancellation, the breaker, or tools that cannot run at
+// all); every other outcome is tallied and returns nil so the watermark moves.
+func (r *windowRun) file(ctx context.Context, it windowItem) error {
+	if err := r.waitForLibraryScan(ctx); err != nil {
+		return err
+	}
+	// Two passes: a file that changed between planning and the first pass is
+	// re-planned once from its new size/mtime; one that changes again while
+	// being read is left for the next run.
 	for attempt := range 2 {
 		fi, err := os.Stat(it.Path)
 		if err != nil {
-			t.transient.Add(1)
-			return nil
+			return r.ioFailure(it, "stat", err)
 		}
-		// Plan from the bytes as they are now; if they moved since planning,
-		// the stored windows were stale anyway.
 		it.Size, it.MtimeUnix = fi.Size(), fi.ModTime().Unix()
 
-		prints, slot, werr := computeWindows(ctx, wt, it)
+		prints, dur, slot, werr := computeWindows(ctx, r.wt, it, nil)
+		if werr != nil && isDurableWindowErr(werr) && ctx.Err() == nil {
+			prints, dur, slot, werr = r.retry(ctx, it, dur, werr)
+		}
 		if cerr := ctx.Err(); cerr != nil {
 			return cerr
 		}
@@ -686,59 +818,100 @@ func (p *Plugin) windowFile(ctx context.Context, wt fingerprint.WindowTools, hos
 		// Re-check the bytes before any write (design (e)).
 		after, serr := os.Stat(it.Path)
 		if serr != nil {
-			t.transient.Add(1)
-			return nil
+			return r.ioFailure(it, "stat", serr)
 		}
 		if after.Size() != it.Size || after.ModTime().Unix() != it.MtimeUnix {
 			if attempt == 0 {
 				continue
 			}
-			t.stale.Add(1)
+			r.t.stale.Add(1)
+			r.good()
 			return nil
 		}
 
 		switch {
 		case werr == nil:
-			p.storeWindows(it, prints, host, t)
+			r.p.storeWindows(it, prints, r.host, r.t)
+			r.good()
 		case isDurableWindowErr(werr):
-			p.storeFailure(it, slot, werr, wt, host, t)
+			r.p.storeFailure(it, slot, dur, werr, r.wt, r.host, r.t)
+			r.good()
+		case errors.Is(werr, fingerprint.ErrWindowTransient) || errors.Is(werr, context.DeadlineExceeded):
+			return r.ioFailure(it, "cut", werr)
 		default:
-			// Timeout, unknown duration, anything else: retried next run.
+			// Unknown duration and the like: a fact about this file's row,
+			// not about the mount. Retried next run; does not feed the breaker.
 			wbLog.Debug("window %s: transient: %v", it.FileID, werr)
-			t.transient.Add(1)
+			r.t.transient.Add(1)
 		}
 		return nil
 	}
 	return nil
 }
 
+// retry is the single inline retry before a durable tombstone. A short
+// decode or too few frames usually means the duration was wrong (a
+// size/bitrate estimate, a stale row), so the file is ffprobed and re-planned
+// from what ffprobe says. Anything else is retried as-is. Only the SAME
+// deterministic failure on the retry is returned as durable; a different
+// outcome is marked transient.
+func (r *windowRun) retry(ctx context.Context, it windowItem, dur fingerprint.DurationUsed, first error) ([]*fingerprint.WindowPrint, fingerprint.DurationUsed, int, error) {
+	var forced *fingerprint.DurationUsed
+	if (errors.Is(first, fingerprint.ErrWindowShortDecode) || errors.Is(first, fingerprint.ErrFingerprintTooShort)) &&
+		dur.Source != fingerprint.DurationSourceFFprobe {
+		if sec, perr := windowProbeDuration(ctx, it.Path); perr == nil && sec > 0 {
+			forced = &fingerprint.DurationUsed{Sec: sec, Source: fingerprint.DurationSourceFFprobe}
+		}
+	}
+	prints, dur2, slot, err := computeWindows(ctx, r.wt, it, forced)
+	switch {
+	case err == nil:
+		return prints, dur2, slot, nil
+	case isDurableWindowErr(err) && windowFailReason(err) == windowFailReason(first):
+		return nil, dur2, slot, err
+	default:
+		return nil, dur2, slot, fmt.Errorf("%w: retry disagreed (first: %v; retry: %w)", fingerprint.ErrWindowTransient, first, err)
+	}
+}
+
 // computeWindows plans and cuts every window of one file, one after another
 // on this worker (so an m4b's moov read stays in the page cache). All or
 // nothing: the first failing window fails the file and its slot is returned.
-func computeWindows(ctx context.Context, wt fingerprint.WindowTools, it windowItem) ([]*fingerprint.WindowPrint, int, error) {
-	dur, err := fingerprint.ChooseDuration(it.FpDuration, it.Duration, func() (float64, error) {
-		return windowProbeDuration(ctx, it.Path)
-	})
-	if err != nil {
-		return nil, 0, err
+// forced, when set, replaces the row's duration (the post-ffprobe retry).
+func computeWindows(ctx context.Context, wt fingerprint.WindowTools, it windowItem, forced *fingerprint.DurationUsed) ([]*fingerprint.WindowPrint, fingerprint.DurationUsed, int, error) {
+	var dur fingerprint.DurationUsed
+	if forced != nil {
+		dur = *forced
+	} else {
+		d, err := fingerprint.ChooseDuration(it.FpDuration, it.Duration, func() (float64, error) {
+			return windowProbeDuration(ctx, it.Path)
+		})
+		if err != nil {
+			return nil, dur, 0, err
+		}
+		dur = d
 	}
 	specs, err := fingerprint.PlanWindows(dur, fingerprint.WindowSetWS1)
 	if err != nil {
-		return nil, 0, err
+		return nil, dur, 0, err
 	}
 	out := make([]*fingerprint.WindowPrint, 0, len(specs))
 	for _, s := range specs {
 		wp, err := wt.FileWindow(ctx, it.Path, s)
 		if err != nil {
-			return nil, s.SlotBP, err
+			return nil, dur, s.SlotBP, err
 		}
 		out = append(out, wp)
 	}
-	return out, 0, nil
+	return out, dur, 0, nil
 }
 
+// isDurableWindowErr: a pipeline failure that says something about the file.
+// ErrWindowTransient is checked first because it is wrapped alongside
+// ErrWindowFFmpeg/ErrWindowFpcalc.
 func isDurableWindowErr(err error) bool {
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, fingerprint.ErrWindowTransient) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return false
 	}
 	for _, d := range windowDurableErrors {
@@ -785,25 +958,28 @@ func (p *Plugin) storeWindows(it windowItem, prints []*fingerprint.WindowPrint, 
 	t.written.Add(1)
 }
 
-func (p *Plugin) storeFailure(it windowItem, slot int, werr error, wt fingerprint.WindowTools, host string, t *windowTally) {
+func (p *Plugin) storeFailure(it windowItem, slot int, dur fingerprint.DurationUsed, werr error, wt fingerprint.WindowTools, host string, t *windowTally) {
 	detail := werr.Error()
 	if len(detail) > 1024 {
 		detail = detail[:1024]
 	}
 	f := &database.FingerprintWindowFailure{
-		SchemaVersion:   database.FingerprintWindowSchemaVersion,
-		Ref:             database.FileWindowRef(it.FileID),
-		Reason:          windowFailReason(werr),
-		Detail:          detail,
-		SlotBP:          slot,
-		WindowSet:       fingerprint.WindowSetWS1,
-		Pipeline:        fingerprint.WindowPipelineID,
-		FpcalcVersion:   wt.Versions.Fpcalc,
-		FFmpegVersion:   wt.Versions.FFmpeg,
-		SourceSize:      it.Size,
-		SourceMtimeUnix: it.MtimeUnix,
-		FailedAt:        time.Now().UTC(),
-		Host:            host,
+		SchemaVersion:      database.FingerprintWindowSchemaVersion,
+		Ref:                database.FileWindowRef(it.FileID),
+		Reason:             windowFailReason(werr),
+		Detail:             detail,
+		SlotBP:             slot,
+		WindowSet:          fingerprint.WindowSetWS1,
+		Pipeline:           fingerprint.WindowPipelineID,
+		FpcalcVersion:      wt.Versions.Fpcalc,
+		FFmpegVersion:      wt.Versions.FFmpeg,
+		SourceSize:         it.Size,
+		SourceMtimeUnix:    it.MtimeUnix,
+		DurationUsedSec:    dur.Sec,
+		DurationSource:     string(dur.Source),
+		PlannedDurationSec: plannedDuration(it),
+		FailedAt:           time.Now().UTC(),
+		Host:               host,
 	}
 	if err := p.store.RecordFingerprintWindowFailure(f); err != nil {
 		p.countWriteErr(it, err, t)
@@ -812,36 +988,17 @@ func (p *Plugin) storeFailure(it windowItem, slot int, werr error, wt fingerprin
 	t.failed.Add(1)
 }
 
-// countWriteErr separates a row deleted mid-run (the store refuses a window
-// for a row that is gone; nothing to do) from a real write failure, which
-// fails the run at the end rather than passing as success. A row that moved
-// to another book is not "gone": windows are keyed by file ID and the store
-// resolves it, so a failed write for it is a real failure.
+// countWriteErr separates a row deleted mid-run from a real write failure,
+// which fails the run at the end rather than passing as success. The store
+// resolves the row by FILE ID and says so with ErrFingerprintWindowRowGone, so
+// a row that moved to another book is never mistaken for a gone one.
 func (p *Plugin) countWriteErr(it windowItem, err error, t *windowTally) {
-	if gone, lerr := p.fileRowGone(it); lerr == nil && gone {
+	if errors.Is(err, database.ErrFingerprintWindowRowGone) {
 		t.rowGone.Add(1)
 		return
 	}
 	wbLog.Error("window-backfill write %s: %v", it.FileID, err)
 	t.writeErrors.Add(1)
-}
-
-// fileRowGone reports whether the row is no longer under the book it was
-// planned under. A moved row is keyed by file ID and still resolves, so a
-// write for it does not fail on existence; only a vanished row lands here.
-// One book's rows, not a library listing: this runs on every failed write,
-// and a store that is failing every write must not also be scanned per file.
-func (p *Plugin) fileRowGone(it windowItem) (bool, error) {
-	files, err := p.store.GetBookFiles(it.BookID)
-	if err != nil {
-		return false, err
-	}
-	for _, f := range files {
-		if f.ID == it.FileID {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 func windowFailReason(err error) string {

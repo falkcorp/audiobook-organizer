@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown_hold.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3b7e91d4-0c52-4f6a-a8e3-6d2f1c9b5a07
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package registry
 
@@ -113,6 +113,12 @@ func (r *Registry) TryAcquireScanStandDown(holderOpID, reason string) (func(), e
 	var once sync.Once
 	return func() { once.Do(func() { r.releaseScanStandDown(holderOpID) }) }, nil
 }
+
+// LibraryScanRunning reports whether a library.scan is claimed or running. It
+// is a read: it registers no holder, parks nothing and starts no grace timer.
+// For long read-mostly ops that yield to a scan (acoustid.window-backfill)
+// rather than holding the scan down for hours.
+func (r *Registry) LibraryScanRunning() bool { return r.anyScanClaimed() }
 
 // anyScanClaimed reports whether any library.scan handle, full or stub, is in
 // r.running.
