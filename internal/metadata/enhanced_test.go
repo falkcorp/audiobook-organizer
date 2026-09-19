@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8f7e6d5c-4b3a-2c1d-0e9f-8a7b6c5d4e3f
 // last-edited: 2026-09-19
 
@@ -382,7 +382,7 @@ func TestAuthorSeriesResolution(t *testing.T) {
 		store := newMockStore(t)
 		existingID := 5
 		book := &database.Book{ID: "b1", Title: "T"}
-		store.EXPECT().GetBookByID("b1").Return(book, nil).Once()
+		expectFreshRead(t, store, "b1", book)
 		store.EXPECT().GetAuthorByName("Ursula Le Guin").
 			Return(&database.Author{ID: existingID, Name: "Ursula Le Guin"}, nil).Once()
 		// CreateAuthor must NOT be called (no expectation set → call would fail).
@@ -407,7 +407,7 @@ func TestAuthorSeriesResolution(t *testing.T) {
 		newAuthorID := 7
 		newSeriesID := 3
 		book := &database.Book{ID: "b2", Title: "T"}
-		store.EXPECT().GetBookByID("b2").Return(book, nil).Once()
+		expectFreshRead(t, store, "b2", book)
 		store.EXPECT().GetAuthorByName("New Author").Return(nil, nil).Once()
 		store.EXPECT().CreateAuthor("New Author").
 			Return(&database.Author{ID: newAuthorID, Name: "New Author"}, nil).Once()
@@ -442,7 +442,7 @@ func TestAuthorSeriesResolution(t *testing.T) {
 		store := newMockStore(t)
 		existingID := 9
 		book := &database.Book{ID: "b3", Title: "Old", AuthorID: &existingID}
-		store.EXPECT().GetBookByID("b3").Return(book, nil).Once()
+		expectFreshRead(t, store, "b3", book)
 		// No GetAuthorByName/CreateAuthor/RecordMetadataChange expectations:
 		// an empty name is a no-op that must not clear the existing ID.
 		expectMergedBook(t, store, "b3", book, func(b *database.Book) bool {
@@ -461,7 +461,7 @@ func TestAuthorSeriesResolution(t *testing.T) {
 	t.Run("resolution store error is fail-open: other fields still applied, ID left unset", func(t *testing.T) {
 		store := newMockStore(t)
 		book := &database.Book{ID: "b4", Title: "Old"}
-		store.EXPECT().GetBookByID("b4").Return(book, nil).Once()
+		expectFreshRead(t, store, "b4", book)
 		store.EXPECT().GetAuthorByName("Boom").Return(nil, errors.New("store down")).Once()
 		// No RecordMetadataChange (no successful ID change). Title still applied,
 		// AuthorID left unset.
@@ -834,5 +834,18 @@ func expectMergedBook(t *testing.T, store *mocks.MockStore, id string, stored *d
 				t.Errorf("merged row for %s does not match expectation: %+v", id, cur)
 			}
 			return cur, nil
+		}).Once()
+}
+
+// expectFreshRead wires GetBookByID to return an independent copy of stored on
+// each call, as PebbleStore does (it unmarshals a new Book per read). Returning
+// the stored pointer itself would alias the worker's copy with the row the
+// ModifyBook fake re-reads, so the worker's own edits would already be on the
+// "stored" row and every ID change would look like a no-op to the ledger.
+func expectFreshRead(t *testing.T, store *mocks.MockStore, id string, stored *database.Book) {
+	t.Helper()
+	store.EXPECT().GetBookByID(id).
+		RunAndReturn(func(string) (*database.Book, error) {
+			return database.SnapshotBook(stored)
 		}).Once()
 }
