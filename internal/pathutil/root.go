@@ -1,5 +1,5 @@
 // file: internal/pathutil/root.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b80aa1d4-2163-4b47-b76d-27c524672a3c
 // last-edited: 2026-09-19
 
@@ -7,7 +7,10 @@ package pathutil
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -67,4 +70,38 @@ func ValidateRel(rel string) error {
 		return errors.Join(ErrBadRelPath, errors.New("not clean"))
 	}
 	return nil
+}
+
+// ErrEscapesRoot is returned by JoinRoot when the resolved path lies outside
+// the root (a symlink pointing out of the mount).
+var ErrEscapesRoot = errors.New("pathutil: path escapes its root")
+
+// JoinRoot is the worker side of SplitRoot (windowed-fingerprint design (d2)):
+// it joins a root-relative wire path onto rootResolved, this host's mount of
+// that root, and returns the path with every symlink resolved. rootResolved
+// must itself already be resolved (filepath.EvalSymlinks, once, at startup);
+// otherwise the containment check below compares against the wrong prefix.
+//
+// It fails with ErrBadRelPath when rel fails ValidateRel, with an error
+// wrapping fs.ErrNotExist when the path (or a symlink target on it) does not
+// exist, and with ErrEscapesRoot when the resolved path is not rootResolved
+// or under it. It never normalizes Unicode and never folds case: rel's bytes
+// are handed to the filesystem as they are.
+func JoinRoot(rootResolved, rel string) (string, error) {
+	if err := ValidateRel(rel); err != nil {
+		return "", err
+	}
+	joined := filepath.Join(rootResolved, filepath.FromSlash(rel))
+	if _, err := os.Lstat(joined); err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		return "", err
+	}
+	r, err := filepath.Rel(rootResolved, resolved)
+	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) || filepath.IsAbs(r) {
+		return "", fmt.Errorf("%w: %s", ErrEscapesRoot, rel)
+	}
+	return resolved, nil
 }

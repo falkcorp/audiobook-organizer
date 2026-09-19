@@ -1,5 +1,5 @@
 // file: internal/pathutil/root_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 62f8c58b-6cc2-486b-9ee7-06af5c6e6a58
 // last-edited: 2026-09-19
 
@@ -7,6 +7,10 @@ package pathutil
 
 import (
 	"encoding/base64"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -68,5 +72,58 @@ func TestSplitRoot_NonUTF8SurvivesBase64(t *testing.T) {
 	dec, err := base64.StdEncoding.DecodeString(enc)
 	if err != nil || string(dec) != rel {
 		t.Fatalf("round trip = %q, %v; want %q", dec, err, rel)
+	}
+}
+
+func TestJoinRoot(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(p string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk(filepath.Join(root, "Author", "Book", "a:b.mp3"))
+	mk(filepath.Join(outside, "secret.mp3"))
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.mp3"), filepath.Join(root, "link.mp3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "Author"), filepath.Join(root, "inside")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := JoinRoot(root, "Author/Book/a:b.mp3")
+	if err != nil || got != filepath.Join(root, "Author", "Book", "a:b.mp3") {
+		t.Errorf("plain file = %q, %v", got, err)
+	}
+	got, err = JoinRoot(root, "inside/Book/a:b.mp3")
+	if err != nil || got != filepath.Join(root, "Author", "Book", "a:b.mp3") {
+		t.Errorf("symlink inside the root = %q, %v", got, err)
+	}
+	for _, rel := range []string{"..", "../x", "a/../../x", "/etc/passwd", "a\x00b", "", ".", "a//b"} {
+		if _, err := JoinRoot(root, rel); !errors.Is(err, ErrBadRelPath) {
+			t.Errorf("JoinRoot(%q) = %v, want ErrBadRelPath", rel, err)
+		}
+	}
+	for _, rel := range []string{"escape/secret.mp3", "link.mp3"} {
+		if _, err := JoinRoot(root, rel); !errors.Is(err, ErrEscapesRoot) {
+			t.Errorf("JoinRoot(%q) = %v, want ErrEscapesRoot", rel, err)
+		}
+	}
+	if _, err := JoinRoot(root, "Author/missing.mp3"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("missing file = %v, want fs.ErrNotExist", err)
 	}
 }
