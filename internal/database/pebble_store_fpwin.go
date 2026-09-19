@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_fpwin.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d40d1916-5ea7-4ce8-9fb6-fab9d3d56026
 // last-edited: 2026-09-19
 
@@ -336,6 +336,40 @@ func (s *PebbleStore) lockWindowRefs(refs ...FingerprintWindowRef) func() {
 // commits it, holding those files' window stripes across stage AND commit and
 // releasing them before returning. The three book_file delete paths use it.
 // On error the batch is closed.
+// commitWithWindowCascadeIfPresent is commitWithWindowCascade for the delete
+// of ONE book_file row: under the window-ref locks and then the row's owner
+// stripe (innermost), it re-checks that key is still committed and returns
+// errBookFileRowVanished — applying nothing — when it is not (the row was
+// moved or deleted after it was read). The fsync runs after the owner stripe
+// is released (book_delete_owns_files.go).
+func (s *PebbleStore) commitWithWindowCascadeIfPresent(batch *pebble.Batch, f *BookFile, key []byte) error {
+	unlockWin := s.lockWindowRefs(FileWindowRef(f.ID))
+	defer unlockWin()
+	if err := s.stageFileWindowCascade(batch, f); err != nil {
+		batch.Close()
+		return err
+	}
+	unlockOwner := s.lockBookOwners(f.BookID)
+	_, closer, err := s.db.Get(key)
+	if errors.Is(err, pebble.ErrNotFound) {
+		unlockOwner()
+		batch.Close()
+		return errBookFileRowVanished
+	}
+	if err != nil {
+		unlockOwner()
+		batch.Close()
+		return err
+	}
+	_ = closer.Close()
+	err = batch.Commit(pebble.NoSync)
+	unlockOwner()
+	if err != nil {
+		return err
+	}
+	return s.syncBookFileWAL()
+}
+
 func (s *PebbleStore) commitWithWindowCascade(batch *pebble.Batch, files ...*BookFile) error {
 	refs := make([]FingerprintWindowRef, 0, len(files))
 	for _, f := range files {

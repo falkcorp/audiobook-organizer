@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-19
 
@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -318,6 +319,19 @@ func (s *PebbleStore) stagePIDTransfer(batch *pebble.Batch, file *BookFile) (*Bo
 // It writes the primary key book_file:<bookID>:<fileID> and secondary indexes
 // for iTunes PID and file path (when non-empty) atomically in a single batch.
 func (s *PebbleStore) CreateBookFile(file *BookFile) error {
+	// Re-staged when a row it rewrites (a prior PID owner) vanished after it
+	// was read: the re-read then finds no prior owner and the create proceeds
+	// without the transfer. A missing owner book is final (ErrBookFileOwnerMissing).
+	var err error
+	for range maxStageRetries {
+		if err = s.createBookFileAttempt(file); !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
+			return err
+		}
+	}
+	return fmt.Errorf("CreateBookFile %s: %w", file.ID, err)
+}
+
+func (s *PebbleStore) createBookFileAttempt(file *BookFile) error {
 	// CONS-18: repair millisecond-valued durations at the write chokepoint so no
 	// ingest path can re-create the ms/seconds corruption (CONS-16).
 	normalizeBookFileDuration(file)
@@ -379,8 +393,14 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 	}
 
 	// Under the book's owner stripe, refusing a row for a book that has no
-	// row (book_delete_owns_files.go): that row would be born orphaned.
-	if err := s.commitBookFileBatch(batch, nil, []string{file.BookID}, nil); err != nil {
+	// row (book_delete_owns_files.go): that row would be born orphaned. The
+	// prior PID owner's row is rewritten by this batch too, so its key is
+	// re-checked under its own book's stripe.
+	var rewrite [][]byte
+	if priorPIDOwner != nil {
+		rewrite = [][]byte{bookFileKey(priorPIDOwner.BookID, priorPIDOwner.ID)}
+	}
+	if err := s.commitBookFileBatch(batch, nil, []string{file.BookID}, rewrite); err != nil {
 		return err
 	}
 	s.InvalidateLibraryStats()
@@ -432,8 +452,17 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 // stagePIDTransfer now stages that work into THIS batch, so the claim is true for
 // a caller that does supply PIDs.
 func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
+	return s.partitionedBookFileWrite(files, nil, func(fs []*BookFile, _ []bool) (map[string][]*BookFile, error) {
+		return s.batchCreateBookFilesAttempt(fs)
+	})
+}
+
+// batchCreateBookFilesAttempt is one staging pass of BatchCreateBookFiles. It
+// returns the staged rows grouped by owner book, so partitionedBookFileWrite
+// can refuse exactly the rows of an owner that turned out to be missing.
+func (s *PebbleStore) batchCreateBookFilesAttempt(files []*BookFile) (map[string][]*BookFile, error) {
 	if len(files) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	now := time.Now()
@@ -467,7 +496,7 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 			id, err := newULID()
 			if err != nil {
 				batch.Close()
-				return err
+				return nil, err
 			}
 			file.ID = id
 		}
@@ -484,13 +513,13 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 		// it is cheap to detect, and silence is the worst of the three options.
 		if file.BookID == "" {
 			batch.Close()
-			return fmt.Errorf("BatchCreateBookFiles: row %s has an empty BookID; a book_file must belong to a book", file.ID)
+			return nil, fmt.Errorf("BatchCreateBookFiles: row %s has an empty BookID; a book_file must belong to a book", file.ID)
 		}
 
 		if file.ITunesPersistentID != "" {
 			if prior, dup := seenPIDs[file.ITunesPersistentID]; dup {
 				batch.Close()
-				return fmt.Errorf("BatchCreateBookFiles: iTunes persistent ID %q appears on two rows in one batch (%s and %s); "+
+				return nil, fmt.Errorf("BatchCreateBookFiles: iTunes persistent ID %q appears on two rows in one batch (%s and %s); "+
 					"a PID must identify exactly one row", file.ITunesPersistentID, prior, file.ID)
 			}
 			seenPIDs[file.ITunesPersistentID] = file.ID
@@ -503,7 +532,7 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 		prior, err := s.stagePIDTransfer(batch, file)
 		if err != nil {
 			batch.Close()
-			return err
+			return nil, err
 		}
 		if prior != nil {
 			// Deliberately NOT added to affectedBooks. Taking a PID away rewrites
@@ -522,17 +551,17 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 		data, err := marshalBookFileDropSegs(file)
 		if err != nil {
 			batch.Close()
-			return err
+			return nil, err
 		}
 
 		key := []byte(fmt.Sprintf("book_file:%s:%s", file.BookID, file.ID))
 		if err := batch.Set(key, data, nil); err != nil {
 			batch.Close()
-			return err
+			return nil, err
 		}
 		if err := writeBookFileSecondaryIndexes(batch, file); err != nil {
 			batch.Close()
-			return err
+			return nil, err
 		}
 
 		if _, ok := seenBooks[file.BookID]; !ok && file.BookID != "" {
@@ -544,13 +573,22 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 
 	if len(staged) == 0 {
 		batch.Close()
-		return nil
+		return nil, nil
+	}
+	byOwner := make(map[string][]*BookFile, len(affectedBooks))
+	for _, f := range staged {
+		byOwner[f.BookID] = append(byOwner[f.BookID], f)
+	}
+	priorKeys := make([][]byte, 0, len(clearedPriorOwners))
+	for _, pr := range clearedPriorOwners {
+		priorKeys = append(priorKeys, bookFileKey(pr.BookID, pr.ID))
 	}
 
 	// Every staged row is new, so every book in affectedBooks must exist,
-	// checked under their owner stripes (book_delete_owns_files.go).
-	if err := s.commitBookFileBatch(batch, nil, affectedBooks, nil); err != nil {
-		return err
+	// checked under their owner stripes; prior PID owners' rows are rewritten
+	// and re-checked (book_delete_owns_files.go).
+	if err := s.commitBookFileBatch(batch, nil, affectedBooks, priorKeys); err != nil {
+		return byOwner, err
 	}
 
 	s.InvalidateLibraryStats()
@@ -570,7 +608,7 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 	// method. Best-effort like every other caller: the rows are committed, and a
 	// failure to refresh a derived aggregate must not be reported as a failed write.
 	s.notifyBookFileChanges(affectedBooks)
-	return nil
+	return byOwner, nil
 }
 
 // UpdateBookFile replaces an existing BookFile, cleaning up stale secondary
@@ -1158,7 +1196,34 @@ func (s *PebbleStore) DeleteBookFile(id string) error {
 	if found == nil {
 		return nil // already gone
 	}
+	// A concurrent move can take the row to another book between the lookup
+	// and the delete: the delete then removes the already vacated old key and
+	// the row lives on under its new owner — a "successful" delete that
+	// deleted nothing. So after each delete the id index is consulted again,
+	// and a row that turns up under another book is deleted there too.
+	// Bounded: each extra round needs another move to land in between.
+	for range maxStageRetries {
+		err := s.deleteBookFileAt(found)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errBookFileRowVanished) {
+			return err
+		}
+		// The row left found's key before our commit: re-resolve it.
+		again := s.lookupBookFileByIDIndex(id)
+		if again == nil {
+			return nil // deleted by someone else
+		}
+		found = again
+	}
+	return fmt.Errorf("DeleteBookFile %s: the row kept moving while being deleted: %w", id, errBookFileRowVanished)
+}
 
+// deleteBookFileAt deletes the book_file row at the location found names,
+// with its secondary indexes and fingerprint-window cascade.
+func (s *PebbleStore) deleteBookFileAt(found *BookFile) error {
+	id := found.ID
 	batch := s.db.NewIndexedBatch()
 
 	// Delete primary key.
@@ -1178,7 +1243,11 @@ func (s *PebbleStore) DeleteBookFile(id string) error {
 	// (pebble_store_fpwin.go). The file's window stripe is held across stage and
 	// commit so a concurrent window write cannot land between them and orphan
 	// itself; it is released before the post-commit work below.
-	if err := s.commitWithWindowCascade(batch, found); err != nil {
+	// Commit under the row's owner stripe after re-checking its key, so a
+	// concurrent move (which re-checks the same key under the same stripe)
+	// and this delete are ordered: whichever commits second sees the other.
+	// The stripe is innermost, inside the window-ref locks.
+	if err := s.commitWithWindowCascadeIfPresent(batch, found, primaryKey); err != nil {
 		return err
 	}
 	s.InvalidateLibraryStats()
@@ -1526,11 +1595,21 @@ func (s *PebbleStore) BatchUpsertScannedBookFiles(rows []ScannedBookFile) error 
 // batchUpsertBookFiles is the shared body. present is nil (no row observed on
 // disk) or parallel to files.
 func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) error {
-	if len(files) == 0 {
-		return nil
-	}
 	if present != nil && len(present) != len(files) {
 		return fmt.Errorf("batchUpsertBookFiles: %d presence flags for %d rows", len(present), len(files))
+	}
+	return s.partitionedBookFileWrite(files, present, s.batchUpsertBookFilesAttempt)
+}
+
+// batchUpsertBookFilesAttempt is one staging pass of batchUpsertBookFiles; it
+// returns the rows it staged as NEW, grouped by owner book (see
+// partitionedBookFileWrite).
+func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []bool) (map[string][]*BookFile, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+	if present != nil && len(present) != len(files) {
+		return nil, fmt.Errorf("batchUpsertBookFiles: %d presence flags for %d rows", len(present), len(files))
 	}
 
 	batch := s.db.NewIndexedBatch()
@@ -1545,6 +1624,7 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 	seenBooks := make(map[string]struct{}, len(files))
 	var newOwners []string
 	var rewriteKeys [][]byte
+	newRowsByOwner := map[string][]*BookFile{}
 
 	// Rows already staged in THIS batch, indexed the same two ways the committed
 	// lookups below index them. Both lookups read s.db.Get, i.e. COMMITTED state,
@@ -1611,13 +1691,13 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 			}
 			if lookupErr != nil {
 				batch.Close()
-				return lookupErr
+				return nil, lookupErr
 			}
 			if existing == nil && file.FilePath != "" {
 				existing, lookupErr = s.GetBookFileByPath(file.FilePath)
 				if lookupErr != nil {
 					batch.Close()
-					return lookupErr
+					return nil, lookupErr
 				}
 			}
 		}
@@ -1652,7 +1732,7 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 
 			if err := s.deleteBookFileSecondaryIndexes(batch, existing); err != nil {
 				batch.Close()
-				return err
+				return nil, err
 			}
 
 			if mergeTarget != nil {
@@ -1683,7 +1763,7 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 				id, err := newULID()
 				if err != nil {
 					batch.Close()
-					return err
+					return nil, err
 				}
 				file.ID = id
 			}
@@ -1698,6 +1778,7 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 		// (mergeTarget) is neither — it is staged, not committed.
 		if existing == nil {
 			newOwners = append(newOwners, file.BookID)
+			newRowsByOwner[file.BookID] = append(newRowsByOwner[file.BookID], file)
 		} else if mergeTarget == nil {
 			rewriteKeys = append(rewriteKeys, []byte(fmt.Sprintf("book_file:%s:%s", existing.BookID, existing.ID)))
 		}
@@ -1711,18 +1792,18 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 		data, err := marshalBookFileDropSegs(file)
 		if err != nil {
 			batch.Close()
-			return err
+			return nil, err
 		}
 
 		key := []byte(fmt.Sprintf("book_file:%s:%s", file.BookID, file.ID))
 		if err := batch.Set(key, data, nil); err != nil {
 			batch.Close()
-			return err
+			return nil, err
 		}
 
 		if err := writeBookFileSecondaryIndexes(batch, file); err != nil {
 			batch.Close()
-			return err
+			return nil, err
 		}
 
 		// Record AFTER staging, so a row that failed to stage is never offered as a
@@ -1738,7 +1819,7 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 	}
 
 	if err := s.commitBookFileBatch(batch, affectedBooks, newOwners, rewriteKeys); err != nil {
-		return err
+		return newRowsByOwner, err
 	}
 	// Refresh memdb for every upserted file. UpdateBookFile does this per row;
 	// BatchUpsertBookFiles historically did not, so after a batch write the memdb
@@ -1776,7 +1857,7 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 	// Best-effort, like every other caller: the rows are committed, and a failure
 	// to refresh a derived aggregate must not be reported as a failed write.
 	s.notifyBookFileChanges(affectedBooks)
-	return nil
+	return newRowsByOwner, nil
 }
 
 // GetBookFileByID returns a single BookFile by bookID and fileID.
@@ -1834,6 +1915,18 @@ type BookFileMove struct {
 // every row must currently exist under its stated source, and any miss fails the
 // whole batch without writing anything.
 func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID string) error {
+	// Re-read and re-stage when a source row changed after it was read; the
+	// re-read then reports a row that is gone as "file not found".
+	var err error
+	for range maxStageRetries {
+		if err = s.moveBookFilesToBookBulkAttempt(moves, targetBookID); !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
+			return err
+		}
+	}
+	return fmt.Errorf("MoveBookFilesToBookBulk: %w", err)
+}
+
+func (s *PebbleStore) moveBookFilesToBookBulkAttempt(moves []BookFileMove, targetBookID string) error {
 	if len(moves) == 0 {
 		return nil
 	}
@@ -1843,6 +1936,7 @@ func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID
 	// Retained so the post-commit memdb refresh can replay exactly the rows that
 	// were written, rather than re-reading them under their new keys.
 	moved := make([]*BookFile, 0, len(moves))
+	var oldKeys [][]byte
 
 	// Distinct books touched, in first-seen order. The target is seeded first so
 	// it is recomputed even when every move turns out to be a self-move.
@@ -1863,6 +1957,7 @@ func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID
 
 			// Delete old primary key
 			oldKey := []byte(fmt.Sprintf("book_file:%s:%s", mv.SourceBookID, fid))
+			oldKeys = append(oldKeys, oldKey)
 			if err := batch.Delete(oldKey, nil); err != nil {
 				batch.Close()
 				return err
@@ -1907,7 +2002,12 @@ func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID
 	// The target must still exist when the rows land on it, checked under its
 	// owner stripe, so a concurrent DeleteBook of the target either sees these
 	// rows (and refuses) or has already committed (and this move refuses).
-	if err := s.commitBookFileBatch(batch, affected, []string{targetBookID}, nil); err != nil {
+	//
+	// The source rows were read before the stripes were taken, so each one's
+	// old key is re-checked under them: a row deleted meanwhile must not be
+	// recreated under the target, and a row a concurrent move already took
+	// must not end up under two books.
+	if err := s.commitBookFileBatch(batch, affected, []string{targetBookID}, oldKeys); err != nil {
 		return err
 	}
 
