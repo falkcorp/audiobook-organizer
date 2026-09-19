@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.19.1
+// version: 2.20.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package registry
 
@@ -53,8 +53,11 @@ type runHandle struct {
 	// channel-full undo path all at once (same hygiene as concurrencyKey; the
 	// C-2 leak class cannot recur here because there is no separate map to
 	// forget to clear).
-	writes        []Resource
-	cancel        context.CancelFunc
+	writes []Resource
+	cancel context.CancelFunc
+	// cancelCause cancels the run with a cause (see cancelWithCause). Nil on
+	// dispatcher stub handles, like cancel.
+	cancelCause   context.CancelCauseFunc
 	abandoned     bool
 	currentItem   string
 	currentItemMu sync.Mutex
@@ -120,6 +123,20 @@ func (h *runHandle) cancelIfActive() {
 	if h != nil && h.cancel != nil {
 		h.cancel()
 	}
+}
+
+// cancelWithCause is cancelIfActive with a cancellation cause the run can read
+// through context.Cause. Shutdown passes ErrShutdown so a ResumeRestart op can
+// tell a restart from an operator cancel.
+func (h *runHandle) cancelWithCause(cause error) {
+	if h == nil {
+		return
+	}
+	if h.cancelCause != nil {
+		h.cancelCause(cause)
+		return
+	}
+	h.cancelIfActive()
 }
 
 func (h *runHandle) setCurrentItem(label string) {
@@ -203,7 +220,14 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			timeout = 120 * time.Minute
 		}
 	}
-	runCtx, cancel := context.WithTimeout(parentCtx, timeout)
+	// The cause layer sits under the timeout so a cancel with a cause
+	// (Shutdown's ErrShutdown) is visible through context.Cause(runCtx).
+	causeCtx, cancelCause := context.WithCancelCause(parentCtx)
+	runCtx, cancelTimeout := context.WithTimeout(causeCtx, timeout)
+	cancel := func() {
+		cancelTimeout()
+		cancelCause(nil)
+	}
 	// Decorate the run context (e.g. install a context-bound slog.Logger that
 	// tags every line with the operation id) via the optional decorator hook.
 	// Nil is the default when no decorator was wired via
@@ -242,6 +266,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		resumePolicy:   qr.resumePolicy,
 		writes:         def.Writes,
 		cancel:         cancel,
+		cancelCause:    cancelCause,
 		parked:         make(chan struct{}),
 	}
 	h.attemptStartedAt.Store(attemptStartedAt.UnixNano())

@@ -1,5 +1,5 @@
 // file: internal/ai/openai_batch.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b3c4d5e6-f7a8-9b0c-1d2e-3f4a5b6c7d8e
 // last-edited: 2026-09-19
 
@@ -7,6 +7,7 @@ package ai
 
 import (
 	"bufio"
+	"errors"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -29,7 +30,17 @@ const (
 	BatchMetaScanID = "scan_id"
 	// BatchMetaScanPhase is the scan phase type ("groups_scan", "full_scan").
 	BatchMetaScanPhase = "scan_phase"
+	// BatchMetaScanNonce is a value unique to one scan (its creation time in
+	// unix nanoseconds). scan_id alone repeats after the scan store is rebuilt,
+	// and across installs sharing one OpenAI project; matching on the nonce
+	// too keeps a lookup from attaching another scan's batch.
+	BatchMetaScanNonce = "scan_nonce"
 )
+
+// ErrBatchListTruncated reports that a batch listing hit its page cap before
+// reaching the requested since. Results up to that point are still returned,
+// but the absence of a batch from them proves nothing.
+var ErrBatchListTruncated = errors.New("batch listing truncated before reaching the requested window")
 
 // batchMetadata returns standard metadata tags for OpenAI batch creation, plus
 // any caller-supplied owner keys. The standard keys always win: an extra
@@ -111,7 +122,8 @@ func (p *OpenAIParser) CreateBatchWithMetadata(ctx context.Context, fileID strin
 // maxBatchListPages bounds ListProjectBatches' walk back through history. At
 // 100 batches a page that is 5,000 batches — far past OpenAI's retention of
 // anything a pending job could still be waiting on.
-const maxBatchListPages = 50
+// A var only so tests can make truncation reachable.
+var maxBatchListPages = 50
 
 // ListProjectBatches lists recent batches tagged with our project metadata.
 //
@@ -119,7 +131,8 @@ const maxBatchListPages = 50
 // whole OpenAI project, filtered to ours afterwards — so fewer than 100 of
 // ours). With a non-zero since it keeps paging until a page reaches batches
 // created before since, so a job whose batch id was never recorded is found
-// however much other traffic the project has had since.
+// however much other traffic the project has had since. If the page cap stops
+// that walk first, the partial results are returned with ErrBatchListTruncated.
 func (p *OpenAIParser) ListProjectBatches(ctx context.Context, since time.Time) ([]BatchInfo, error) {
 	if !p.enabled {
 		return nil, fmt.Errorf("OpenAI parser is not enabled")
@@ -144,13 +157,17 @@ func (p *OpenAIParser) ListProjectBatches(ctx context.Context, since time.Time) 
 			}
 			results = append(results, batchInfoFrom(b))
 		}
-		if since.IsZero() || reachedSince || len(page.Data) == 0 || pages >= maxBatchListPages {
+		if since.IsZero() || reachedSince || len(page.Data) == 0 {
 			break
 		}
-		page, err = page.GetNextPage()
+		next, err := page.GetNextPage()
 		if err != nil {
 			return results, fmt.Errorf("list batches (page %d): %w", pages+1, err)
 		}
+		if next != nil && pages >= maxBatchListPages {
+			return results, fmt.Errorf("%w: stopped after %d pages", ErrBatchListTruncated, pages)
+		}
+		page = next
 	}
 	return results, nil
 }

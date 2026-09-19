@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_durable_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e3808e03-3f51-4f6d-83b8-9621db7b7f15
 // last-edited: 2026-09-19
 
@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -94,6 +93,7 @@ type fakeAccount struct {
 type fakeBatch struct {
 	id, phase, status string
 	owner             map[string]string
+	noOutput          bool // an expired/cancelled/failed batch with no output file
 	inputs            []ai.AuthorDiscoveryInput
 	groups            []ai.AuthorDedupInput
 }
@@ -134,10 +134,21 @@ type fakeLLM struct {
 	// enrichment re-ask (a call carrying only author 1) answer "high", so
 	// enriched and un-enriched results differ.
 	uncertainFirst bool
+
+	// blockDiscoverUntilCtx makes that realtime call (0-based) wait for its
+	// context and return ctx.Err(), as the real client does on cancel.
+	blockDiscoverUntilCtx int
+	// createErr makes CreateBatch* return an error; createErrAfterAccept
+	// first registers the batch with OpenAI (an ambiguous failure: the
+	// request reached OpenAI but the response was lost).
+	createErr, createErrAfterAccept bool
+	// downloadFails makes that many downloads fail before one succeeds.
+	downloadFails int
+	cancels       int
 }
 
 func newFakeLLM(acct *fakeAccount) *fakeLLM {
-	return &fakeLLM{acct: acct, blockDiscoverAt: -1, entered: make(chan struct{}, 1)}
+	return &fakeLLM{acct: acct, blockDiscoverAt: -1, blockDiscoverUntilCtx: -1, entered: make(chan struct{}, 1)}
 }
 
 // suggestionsFor is the deterministic "model output": one high-confidence
@@ -157,7 +168,7 @@ func (f *fakeLLM) ReviewAuthorDuplicates(context.Context, []ai.AuthorDedupInput)
 	return nil, fmt.Errorf("unexpected groups review: the fixture has no duplicate groups")
 }
 
-func (f *fakeLLM) DiscoverAuthorDuplicates(_ context.Context, inputs []ai.AuthorDiscoveryInput) ([]ai.AuthorDiscoverySuggestion, error) {
+func (f *fakeLLM) DiscoverAuthorDuplicates(ctx context.Context, inputs []ai.AuthorDiscoveryInput) ([]ai.AuthorDiscoverySuggestion, error) {
 	f.mu.Lock()
 	call := len(f.discoverCalls)
 	ids := make([]int, 0, len(inputs))
@@ -169,6 +180,11 @@ func (f *fakeLLM) DiscoverAuthorDuplicates(_ context.Context, inputs []ai.Author
 	if call == f.blockDiscoverAt {
 		f.entered <- struct{}{}
 		select {} // the process dies here
+	}
+	if call == f.blockDiscoverUntilCtx {
+		f.entered <- struct{}{}
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
 	out := suggestionsFor(inputs)
 	if f.uncertainFirst {
@@ -185,7 +201,12 @@ func (f *fakeLLM) DiscoverAuthorDuplicates(_ context.Context, inputs []ai.Author
 func (f *fakeLLM) createBatch(phase string, owner map[string]string, inputs []ai.AuthorDiscoveryInput) (string, error) {
 	f.mu.Lock()
 	f.createCalls++
+	createErr, afterAccept := f.createErr, f.createErrAfterAccept
+	f.createErr, f.createErrAfterAccept = false, false // one-shot
 	f.mu.Unlock()
+	if createErr && !afterAccept {
+		return "", fmt.Errorf("create batch: connection refused")
+	}
 	f.acct.mu.Lock()
 	f.acct.nextID++
 	id := fmt.Sprintf("batch_%d", f.acct.nextID)
@@ -195,11 +216,17 @@ func (f *fakeLLM) createBatch(phase string, owner map[string]string, inputs []ai
 		f.entered <- struct{}{}
 		select {} // OpenAI holds the batch; we die before recording its id
 	}
+	if createErr {
+		return "", fmt.Errorf("create batch: read tcp: connection reset by peer")
+	}
 	return id, nil
 }
 
 func (f *fakeLLM) CreateBatchAuthorReview(_ context.Context, groups []ai.AuthorDedupInput, owner map[string]string) (string, error) {
 	id, err := f.createBatch("groups_scan", owner, nil)
+	if id == "" {
+		return "", err
+	}
 	f.acct.mu.Lock()
 	f.acct.batches[id].groups = groups
 	f.acct.mu.Unlock()
@@ -217,17 +244,37 @@ func (f *fakeLLM) CheckBatchStatus(_ context.Context, batchID string) (string, s
 	if !ok {
 		return "", "", fmt.Errorf("no batch %s", batchID)
 	}
+	if b.noOutput {
+		return b.status, "", nil
+	}
 	return b.status, "file_" + batchID, nil
 }
 
-func (f *fakeLLM) CancelBatch(context.Context, string) error { return nil }
+func (f *fakeLLM) CancelBatch(context.Context, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancels++
+	return nil
+}
+
+// failDownload consumes one configured download failure.
+func (f *fakeLLM) failDownload() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.downloads++
+	if f.downloadFails > 0 {
+		f.downloadFails--
+		return fmt.Errorf("download: 502 bad gateway")
+	}
+	return nil
+}
 
 // DownloadBatchGroupsResults answers "merge" for every group it was asked
 // about, naming the group only by index — as the real model does.
 func (f *fakeLLM) DownloadBatchGroupsResults(_ context.Context, outputFileID string) ([]ai.AuthorDedupSuggestion, error) {
-	f.mu.Lock()
-	f.downloads++
-	f.mu.Unlock()
+	if err := f.failDownload(); err != nil {
+		return nil, err
+	}
 	f.acct.mu.Lock()
 	defer f.acct.mu.Unlock()
 	b := f.acct.batches[outputFileID[len("file_"):]]
@@ -242,9 +289,9 @@ func (f *fakeLLM) DownloadBatchGroupsResults(_ context.Context, outputFileID str
 }
 
 func (f *fakeLLM) DownloadBatchResults(_ context.Context, outputFileID string) ([]ai.AuthorDiscoverySuggestion, error) {
-	f.mu.Lock()
-	f.downloads++
-	f.mu.Unlock()
+	if err := f.failDownload(); err != nil {
+		return nil, err
+	}
 	f.acct.mu.Lock()
 	defer f.acct.mu.Unlock()
 	b := f.acct.batches[outputFileID[len("file_"):]]
@@ -257,16 +304,29 @@ func (f *fakeLLM) counts() (discover, create, downloads int) {
 	return len(f.discoverCalls), f.createCalls, f.downloads
 }
 
-// finderLLM adds the batch-metadata lookup, matching the scan_id / scan_phase
-// owner keys the pipeline wrote at CreateBatch time. A plain *fakeLLM
-// deliberately lacks it.
-type finderLLM struct{ *fakeLLM }
+// finderLLM adds the batch-metadata lookup, matching every owner key the
+// pipeline wrote at CreateBatch time (scan id, phase and nonce). A plain
+// *fakeLLM deliberately lacks it. err, when set, is returned instead (a failed
+// or truncated listing).
+type finderLLM struct {
+	*fakeLLM
+	err *error
+}
 
-func (f finderLLM) FindScanBatch(_ context.Context, scanID int, phaseType string) (string, bool, error) {
+func (f finderLLM) FindBatchByMetadata(_ context.Context, match map[string]string, _ time.Time) (string, bool, error) {
+	if f.err != nil && *f.err != nil {
+		return "", false, *f.err
+	}
 	f.acct.mu.Lock()
 	defer f.acct.mu.Unlock()
 	for id, b := range f.acct.batches {
-		if b.owner[ai.BatchMetaScanID] == strconv.Itoa(scanID) && b.owner[ai.BatchMetaScanPhase] == phaseType {
+		ok := len(match) > 0
+		for k, v := range match {
+			if b.owner[k] != v {
+				ok = false
+			}
+		}
+		if ok {
 			return id, true, nil
 		}
 	}
@@ -455,7 +515,7 @@ func TestBatchCrashAfterCreateReattaches(t *testing.T) {
 	waitPhase(t, store, scan.ID, "full_scan", "submitting")
 
 	llm2 := newFakeLLM(acct)
-	pm2 := NewPipelineManager(store, main, finderLLM{llm2})
+	pm2 := NewPipelineManager(store, main, finderLLM{fakeLLM: llm2})
 	run := runAsync(pm2, scan.ID)
 	waitPhase(t, store, scan.ID, "full_scan", "submitted")
 	p, err := store.GetPhase(scan.ID, "full_scan")
@@ -575,7 +635,7 @@ func TestBatchSubmittingWithNoBatchSubmitsOnce(t *testing.T) {
 	require.NoError(t, store.UpdatePhaseStatus(scan.ID, "full_scan", "submitting", ""))
 
 	llm := newFakeLLM(acct)
-	pm := NewPipelineManager(store, main, finderLLM{llm})
+	pm := NewPipelineManager(store, main, finderLLM{fakeLLM: llm})
 	run := runAsync(pm, scan.ID)
 	waitPhase(t, store, scan.ID, "full_scan", "submitted")
 	_, creates, _ := llm.counts()

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/lifecycle"
 	"log/slog"
 	"strings"
 	"sync"
@@ -1290,6 +1291,11 @@ func (r *Registry) Def(id string) (OperationDef, bool) {
 	return def, ok
 }
 
+// ErrShutdown is the cause Shutdown cancels running ops with; read it with
+// context.Cause or lifecycle.IsShutdown. It is lifecycle.ErrShutdown, re-exported
+// so callers that already import the registry need nothing else.
+var ErrShutdown = lifecycle.ErrShutdown
+
 // Shutdown drains the worker pool. On timeout it marks remaining running ops
 // as interrupted per their ResumePolicy and returns.
 func (r *Registry) Shutdown(ctx context.Context) error {
@@ -1322,9 +1328,11 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	}
 	r.mu.Unlock()
 
-	// Cancel all running ops.
+	// Cancel all running ops, with ErrShutdown as the cause so a
+	// ResumeRestart op can leave external work (an OpenAI batch) running for
+	// its resumed run instead of treating this as an operator cancel.
 	for _, h := range handles {
-		h.cancelIfActive()
+		h.cancelWithCause(ErrShutdown)
 	}
 
 	// Wait until context expires or all workers drain.
