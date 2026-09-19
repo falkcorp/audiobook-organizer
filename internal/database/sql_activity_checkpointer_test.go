@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_checkpointer_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d3f6a1e-2b7c-4e90-9f15-6a4c0b8e7d23
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 // Tests for the SQLActivityStore's WAL checkpointing (sql_activity_checkpointer.go):
 // foreground writes never checkpoint, the background checkpointer does, the
@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,10 +93,11 @@ func TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle(t *test
 	s, path := openCkptTestStore(t, 20*time.Millisecond)
 
 	var (
-		mu        sync.Mutex
-		passive   int
-		truncDone = make(chan struct{})
-		truncOnce sync.Once
+		mu         sync.Mutex
+		passive    int
+		truncDone  = make(chan struct{})
+		truncOnce  sync.Once
+		writesDone atomic.Bool
 	)
 	fn := ckptHookFn(func(mode string, res walCheckpointResult, err error) {
 		switch mode {
@@ -104,7 +106,10 @@ func TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle(t *test
 			passive++
 			mu.Unlock()
 		case "TRUNCATE":
-			if err == nil && res.Busy == 0 {
+			// Only a TRUNCATE after the last write proves the idle path:
+			// the loop may also truncate in a pause between Records, and
+			// the writes after it regrow the WAL before the size check.
+			if err == nil && res.Busy == 0 && writesDone.Load() {
 				truncOnce.Do(func() { close(truncDone) })
 			}
 		}
@@ -116,6 +121,7 @@ func TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle(t *test
 		_, err := s.Record(bulkyEntry(i, base))
 		require.NoError(t, err)
 	}
+	writesDone.Store(true)
 
 	select {
 	case <-truncDone:

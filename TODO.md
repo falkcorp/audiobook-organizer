@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.11 -->
+<!-- version: 10.73.12 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-19 -->
 
@@ -45,7 +45,7 @@ into one of the curated sections below, is a normal direct edit.
       remaining workers until the cancel lands, or run the first pass with
       concurrency 1) instead of racing the pool.
 
-- [ ] **Flaky: `TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle`** (`internal/database`) failed 4 of 5 isolated `-race` runs on a Mac on 2026-09-19, on clean `origin/main` as well as on a branch, so it is not caused by a change. Find the timing assumption (idle detection vs. checkpoint interval under `-race`) and make the test wait on the condition rather than on wall time. It can block unrelated PRs if CI hits it.
+- [x] **Flaky: `TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle`** — FIXED 2026-09-19 (fix/ckpt-idle-test-flake): the test accepted a TRUNCATE that ran in a pause between writes; later writes regrew the WAL (CI: 407,912 bytes). It now counts only a TRUNCATE after the last write. (`internal/database`) failed 4 of 5 isolated `-race` runs on a Mac on 2026-09-19, on clean `origin/main` as well as on a branch, so it is not caused by a change. Find the timing assumption (idle detection vs. checkpoint interval under `-race`) and make the test wait on the condition rather than on wall time. It can block unrelated PRs if CI hits it.
 
 - [ ] **Normalize path keys to NFC before use as Pebble keys.** `book_file_path:`
       and book path keys are built from the raw string
