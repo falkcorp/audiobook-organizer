@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-09-19
 
@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -215,9 +216,9 @@ func (j *mergeChapterGroupsJob) apply(ctx context.Context, store maintenance.Job
 	}
 	opID := maintenance.OperationIDFromCtx(ctx)
 	opts.PathPrefix = "" // the members' folders ARE the scope; re-verify them as they are
-	siblings, err := chapterSiblingIndex(store)
-	if err != nil {
-		return err
+	lister, ok := store.(chapterDirLister)
+	if !ok {
+		return errChapterMergeStore
 	}
 	claimed := map[string]bool{}
 	res.GroupsFound = len(res.Params.Groups)
@@ -233,7 +234,7 @@ func (j *mergeChapterGroupsJob) apply(ctx context.Context, store maintenance.Job
 			out.SourceBookIDs = append([]string(nil), sel.BookIDs[1:]...)
 		}
 		res.TotalBooksAffected += len(sel.BookIDs)
-		j.applyOne(store, ds, cc, opID, opts, siblings, claimed, sel, &out)
+		j.applyOne(store, lister, ds, cc, opID, opts, claimed, sel, &out)
 		switch out.Status {
 		case "failed":
 			res.GroupsFailed++
@@ -251,24 +252,44 @@ func (j *mergeChapterGroupsJob) apply(ctx context.Context, store maintenance.Job
 	return nil
 }
 
-// chapterSiblingIndex maps each directory to the ids of the live books whose
-// FilePath lies directly in it, read once per real run. Groups never span
-// folders, so a group's whole context is its members' folder(s).
-func chapterSiblingIndex(store maintenance.JobStore) (map[string][]string, error) {
-	all, err := store.GetAllBooksCore(0, 0)
-	if err != nil {
-		return nil, fmt.Errorf("load books for chapter re-verification: %w", err)
-	}
-	out := map[string][]string{}
-	for i := range all {
-		b := &all[i]
-		if b.FilePath == "" || b.IsSoftDeleted() || (b.MergedIntoBookID != nil && *b.MergedIntoBookID != "") {
-			continue
+// chapterFolderSiblings lists the live books directly in each member folder,
+// plus, for a folder that is one disc of a multi-disc book, the books in its
+// sibling disc folders (same parent, same stem once the disc token is
+// removed), so the multi-disc blocker the preview saw is seen here too.
+func chapterFolderSiblings(lister chapterDirLister, dirs map[string]bool) ([]string, error) {
+	seen := map[string]bool{}
+	var ids []string
+	for dir := range dirs {
+		listDir := dir
+		discKey, isDisc := scanner.DiscFolderKey(dir)
+		if isDisc {
+			listDir = filepath.Dir(dir)
 		}
-		dir := filepath.Dir(b.FilePath)
-		out[dir] = append(out[dir], b.ID)
+		books, err := lister.LiveBookPathsUnderDir(listDir)
+		if err != nil {
+			return nil, fmt.Errorf("re-list folder %s: %w", listDir, err)
+		}
+		for id, path := range books {
+			bookDir := filepath.Dir(path)
+			keep := bookDir == dir
+			if !keep && isDisc {
+				k, ok := scanner.DiscFolderKey(bookDir)
+				keep = ok && k == discKey
+			}
+			if keep && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
 	}
-	return out, nil
+	slices.Sort(ids)
+	return ids, nil
+}
+
+// chapterDirLister re-lists a folder from the book_atpath index. It is on
+// database.Store (BookPathSetReader), so the prod indexedStore forwards it.
+type chapterDirLister interface {
+	LiveBookPathsUnderDir(dir string) (map[string]string, error)
 }
 
 // verifyChapterSelection checks a reviewed group against the library now.
@@ -290,11 +311,13 @@ func chapterSiblingIndex(store maintenance.JobStore) (map[string][]string, error
 // allow_low_confidence acknowledgement -- the card sets it only for a group
 // the operator ticked one by one, never through "Select all").
 //
-// The caller passes the sibling index: the run-level one before the lock,
-// and a freshly re-listed one under the lock (precheck), so a book that
-// landed in the folder after the run began is seen before anything is
-// written.
-func verifyChapterSelection(store maintenance.JobStore, sel chapterGroupSelection, st *chapterGroupState, opts scanner.ChapterDetectOptions, siblings map[string][]string) (scanner.ChapterGroup, string, string) {
+// The folder is re-listed on every call -- once before the lock and again
+// under it (precheck) -- through the book_atpath index: one range scan over
+// the folder (over the parent for a disc folder, to find its sibling discs)
+// plus a point read per book found. It never loads the whole library: the
+// earlier version did, once per group while holding the process-wide merge
+// lock.
+func verifyChapterSelection(store maintenance.JobStore, lister chapterDirLister, sel chapterGroupSelection, st *chapterGroupState, opts scanner.ChapterDetectOptions) (scanner.ChapterGroup, string, string) {
 	if chapterFingerprint(st.members) != sel.Fingerprint {
 		return scanner.ChapterGroup{}, "members changed since the preview (fingerprint mismatch)", "drifted"
 	}
@@ -306,34 +329,22 @@ func verifyChapterSelection(store maintenance.JobStore, sel chapterGroupSelectio
 		dirs[filepath.Dir(b.FilePath)] = true
 		cores = append(cores, b.Core())
 	}
-	// A member folder that is one disc of a multi-disc book brings its
-	// sibling disc folders into the context, so the multi-disc blocker the
-	// preview saw is seen here too.
-	for dir := range dirs {
-		if !scanner.IsDiscFolderName(filepath.Base(dir)) {
+	siblingIDs, err := chapterFolderSiblings(lister, dirs)
+	if err != nil {
+		return scanner.ChapterGroup{}, err.Error(), "drifted"
+	}
+	for _, id := range siblingIDs {
+		if inSel[id] {
 			continue
 		}
-		parent := filepath.Dir(dir)
-		for other := range siblings {
-			if filepath.Dir(other) == parent && scanner.IsDiscFolderName(filepath.Base(other)) {
-				dirs[other] = true
-			}
+		b, err := store.GetBookByID(id)
+		if err != nil {
+			return scanner.ChapterGroup{}, fmt.Sprintf("folder sibling %s not readable: %v", id, err), "drifted"
 		}
-	}
-	for dir := range dirs {
-		for _, id := range siblings[dir] {
-			if inSel[id] {
-				continue
-			}
-			b, err := store.GetBookByID(id)
-			if err != nil {
-				return scanner.ChapterGroup{}, fmt.Sprintf("folder sibling %s not readable: %v", id, err), "drifted"
-			}
-			if b == nil {
-				continue // deleted since the index was read
-			}
-			cores = append(cores, b.Core())
+		if b == nil {
+			continue
 		}
+		cores = append(cores, b.Core())
 	}
 	det := scanner.DetectChapterGroupsWithOptions(cores, opts)
 	for _, g := range det.Blocked {
@@ -353,7 +364,7 @@ func verifyChapterSelection(store maintenance.JobStore, sel chapterGroupSelectio
 	return scanner.ChapterGroup{}, fmt.Sprintf("selection_mismatch: the selected books are not exactly one detected group of their folder (the folder now has %d mergeable and %d blocked group(s)); preview again", len(det.Groups), len(det.Blocked)), "selection_mismatch"
 }
 
-func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.Store, cc *chapterCarryContext, opID string, opts scanner.ChapterDetectOptions, siblings map[string][]string, claimed map[string]bool, sel chapterGroupSelection, out *chapterGroupOutcome) {
+func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, lister chapterDirLister, ds dedup.Store, cc *chapterCarryContext, opID string, opts scanner.ChapterDetectOptions, claimed map[string]bool, sel chapterGroupSelection, out *chapterGroupOutcome) {
 	if len(sel.BookIDs) < 2 || sel.PrimaryBookID == "" || sel.BookIDs[0] != sel.PrimaryBookID || sel.Fingerprint == "" {
 		out.Status = "failed"
 		out.Errors = append(out.Errors, "malformed group: needs primary_book_id == book_ids[0], at least 2 books, and the preview fingerprint")
@@ -377,7 +388,7 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 	}
 	out.Members = st.members
 	out.PrimaryTitle = st.books[0].Title
-	g, why, status := verifyChapterSelection(store, sel, st, opts, siblings)
+	g, why, status := verifyChapterSelection(store, lister, sel, st, opts)
 	if why != "" {
 		out.Status = status
 		if status == "blocked" || status == "selection_mismatch" {
@@ -433,14 +444,10 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 		if err != nil {
 			return &chapterStepError{status: "failed", msg: err.Error()}
 		}
-		// Re-list the folder under the lock: the run-level index was read
-		// before this group's turn, and a book that landed in the folder
-		// since (a second copy, a new chapter) must be seen.
-		fresh, ferr := chapterSiblingIndex(store)
-		if ferr != nil {
-			return &chapterStepError{status: "failed", msg: ferr.Error()}
-		}
-		if _, why, status := verifyChapterSelection(store, sel, cur, opts, fresh); why != "" {
+		// verifyChapterSelection re-lists the members' folder itself, so a
+		// book that landed there since the pre-lock check (a second copy, a
+		// new chapter) is seen here, under the lock.
+		if _, why, status := verifyChapterSelection(store, lister, sel, cur, opts); why != "" {
 			if status == "blocked" || status == "selection_mismatch" {
 				return &chapterStepError{status: status, msg: why, blockers: []string{why}}
 			}
@@ -571,7 +578,8 @@ type chapterActiveOpsStore interface {
 // running: the ConcurrencyKey keeps the dispatcher from starting both, and
 // this covers any path into Run that did not go through it. It fails CLOSED:
 // a store that cannot list operations is not proof that no scan runs. A
-// zombie "running" scan row also refuses; clear it rather than bypass this.
+// zombie "running" scan row (silent past chapterZombieScanAfter) is ignored
+// with a warning, the way the registry skips rows with no live handle.
 func refuseDuringLibraryScan(store maintenance.JobStore) error {
 	qs, ok := store.(chapterActiveOpsStore)
 	if !ok {
@@ -581,10 +589,34 @@ func refuseDuringLibraryScan(store maintenance.JobStore) error {
 	if err != nil {
 		return fmt.Errorf("merge-chapter-groups: cannot list active operations; refusing to merge: %w", err)
 	}
+	now := time.Now()
 	for _, op := range active {
-		if op.DefID == chapterLibraryScanKey && op.Status == "running" {
-			return fmt.Errorf("merge-chapter-groups: library.scan is running (op %s); refusing to merge during a scan", op.ID)
+		if op.DefID != chapterLibraryScanKey || op.Status != "running" {
+			continue
 		}
+		last := op.QueuedAt
+		for _, t := range []*time.Time{op.StartedAt, op.LastProgressAt} {
+			if t != nil && t.After(last) {
+				last = *t
+			}
+		}
+		if now.Sub(last) > chapterZombieScanAfter {
+			chapterLog.Warn("merge-chapter-groups: ignoring library.scan row %s: running but silent for %s (a zombie row; the registry skips it too)",
+				logger.SanitizeLogValue(op.ID), now.Sub(last).Round(time.Second))
+			continue
+		}
+		return fmt.Errorf("merge-chapter-groups: library.scan is running (op %s); refusing to merge during a scan", op.ID)
 	}
 	return nil
 }
+
+// chapterZombieScanAfter is how long a "running" library.scan row may be
+// silent (no start, no progress stamp) before this guard treats it as a
+// zombie. The registry's own test for a zombie is "no live run handle"
+// (registry.hasLiveHandle), which a job cannot see; the observable
+// equivalent is the watchdog: a live run that reports no progress for its
+// ProgressTimeout (library.scan uses the 5-minute default) is canceled and
+// leaves "running". So a row silent for 3x that long has no live run behind
+// it. Serialization against a LIVE scan does not depend on this guard at
+// all: the shared ConcurrencyKey (dispatcher Gate 3) keeps the two apart.
+const chapterZombieScanAfter = 15 * time.Minute

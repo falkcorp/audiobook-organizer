@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.24.0
+// version: 2.25.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-09-19
 
@@ -108,6 +108,19 @@ type BookPathSetReader interface {
 	// every decorator that embeds Store (server.indexedStore in production)
 	// forwards it.
 	LiveBookIDsAtPath(path string) ([]string, error)
+}
+
+// BookDirLister lists live books beneath a folder. Its own interface,
+// embedded in BookStore (so still on Store and the prod indexedStore) rather
+// than in BookReader: only the chapter merge calls it, and on the reader every
+// read-only test double would have to carry a method it never uses.
+type BookDirLister interface {
+	// LiveBookPathsUnderDir returns id -> FilePath for every live book whose
+	// FilePath lies beneath dir (any depth), index-backed once the
+	// book_atpath index is built. Fails closed like LiveBookIDsAtPath. The
+	// chapter merge re-lists a group's folder with it under the merge lock
+	// instead of loading the whole library.
+	LiveBookPathsUnderDir(dir string) (map[string]string, error)
 }
 
 // BookPathIndexStatus reports on the book_atpath index behind
@@ -381,4 +394,5 @@ type BookStore interface {
 	BookWriter
 	BookCompletenessReader
 	BookPathIndexStatus
+	BookDirLister
 }

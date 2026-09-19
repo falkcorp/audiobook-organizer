@@ -33,11 +33,12 @@ var _ Store = (*MockStore)(nil)
 // MockStore is a simple mock implementation for testing services
 type MockStore struct {
 	// Book methods
-	GetBookByIDFunc        func(id string) (*Book, error)
-	ClearBookSignatureFunc func(id string) error
-	GetBooksByIDsFunc      func(ids []string) ([]Book, error)
-	GetBookByFilePathFunc  func(path string) (*Book, error)
-	LiveBookIDsAtPathFunc  func(path string) ([]string, error)
+	GetBookByIDFunc           func(id string) (*Book, error)
+	ClearBookSignatureFunc    func(id string) error
+	GetBooksByIDsFunc         func(ids []string) ([]Book, error)
+	GetBookByFilePathFunc     func(path string) (*Book, error)
+	LiveBookIDsAtPathFunc     func(path string) ([]string, error)
+	LiveBookPathsUnderDirFunc func(dir string) (map[string]string, error)
 	// GetAllBooksFunc is test-only plumbing (NOT a Store interface method —
 	// GetAllBooks was removed from the interface in STOREFID W5z). Several
 	// dedup tests set only this; GetAllBooksCoreFunc's default (see
@@ -1087,6 +1088,15 @@ func (m *MockStore) GetBookByFilePath(path string) (*Book, error) {
 func (m *MockStore) LiveBookIDsAtPath(path string) ([]string, error) {
 	if m.LiveBookIDsAtPathFunc != nil {
 		return m.LiveBookIDsAtPathFunc(path)
+	}
+	return nil, nil
+}
+
+// LiveBookPathsUnderDir returns nil, nil when unconfigured: "no live book
+// under this dir", like LiveBookIDsAtPath.
+func (m *MockStore) LiveBookPathsUnderDir(dir string) (map[string]string, error) {
+	if m.LiveBookPathsUnderDirFunc != nil {
+		return m.LiveBookPathsUnderDirFunc(dir)
 	}
 	return nil, nil
 }

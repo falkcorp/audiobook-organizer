@@ -427,3 +427,47 @@ func TestReview5_TwoBookLengthMembersBlock(t *testing.T) {
 		t.Fatalf("want blocked naming members 2 and 3, got %+v", d.Blocked)
 	}
 }
+
+// --- Sixth review round ---
+
+// (R6-1) The disc token may sit anywhere in the folder name, and in words:
+// "Dune - CD1", "Disc One", "Dune (Disc 1)". Sibling folders that share the
+// stem once the token is removed are one multi-disc book.
+func TestReview6_DiscTokenAnywhereInFolderName(t *testing.T) {
+	a := 7
+	for name, folders := range map[string][2]string{
+		"Title - CDn":    {"Dunes - CD1", "Dunes - CD2"},
+		"Disc One/Two":   {"Disc One", "Disc Two"},
+		"Title (Disc n)": {"Dunes (Disc 1)", "Dunes (Disc 2)"},
+		"Title_disk_0n":  {"Dunes_disk_01", "Dunes_disk_02"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var books []database.BookCore
+			for d, f := range folders {
+				for i := 1; i <= 4; i++ {
+					n := fmt.Sprintf("%02d - Dunes", i)
+					books = append(books, rvBook(fmt.Sprintf("d%d-%d", d, i), n, "/lib/H/Dunes/"+f+"/"+n+".mp3", 1500, &a))
+				}
+			}
+			d := shDetect(books)
+			noMergeable(t, d)
+			if len(d.Blocked) != 2 || !anyContains(d.Blocked[0].Blockers, "multi-disc book") {
+				t.Fatalf("want both disc folders blocked as multi-disc, got %+v", d.Blocked)
+			}
+		})
+	}
+	// Different stems under one parent are different books, not discs:
+	// "Alpha - CD1" beside "Beta - CD1" do not block each other.
+	var books []database.BookCore
+	for d, f := range []string{"Alpha - CD1", "Beta - CD1"} {
+		for i := 1; i <= 4; i++ {
+			n := fmt.Sprintf("%02d - Tale", i)
+			books = append(books, rvBook(fmt.Sprintf("o%d-%d", d, i), n, "/lib/H/Mixed/"+f+"/"+n+".mp3", 1500, &a))
+		}
+	}
+	for _, g := range shDetect(books).Blocked {
+		if anyContains(g.Blockers, "multi-disc") {
+			t.Fatalf("different stems blocked as one multi-disc book: %+v", g)
+		}
+	}
+}
