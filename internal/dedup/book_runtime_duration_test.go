@@ -1,5 +1,5 @@
 // file: internal/dedup/book_runtime_duration_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6ae0f0e7-3cf7-42c7-b2c5-88b2a24e8c27
 // last-edited: 2026-09-19
 
@@ -210,3 +210,27 @@ func TestBookRuntimeMemo_ReadsOncePerUpdatedAt(t *testing.T) {
 type filesGetterFunc func(string) ([]database.BookFile, error)
 
 func (f filesGetterFunc) GetBookFiles(id string) ([]database.BookFile, error) { return f(id) }
+
+// TestUpsertExactCandidate_ReadsEachBookOnce: the min-duration and
+// part-vs-whole gates share one runtime read per book per call. The pair is
+// a single-file part of a multi-file whole, so the part-vs-whole gate drops
+// it before label capture (which reads files on its own).
+func TestUpsertExactCandidate_ReadsEachBookOnce(t *testing.T) {
+	engine, mock, _ := setupTestEngine(t)
+	reads := map[string]int{}
+	mock.GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
+		reads[id]++
+		if id == "A" {
+			return chapterRows(id, 1, 600, 1), nil
+		}
+		return chapterRows(id, 3, 1200, 3), nil
+	}
+	a := &database.Book{ID: "A", Title: "Foundation"}
+	b := &database.Book{ID: "B", Title: "Foundation"}
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+		t.Fatal(err)
+	}
+	if reads["A"] != 1 || reads["B"] != 1 {
+		t.Fatalf("reads = %v, want one per book", reads)
+	}
+}
