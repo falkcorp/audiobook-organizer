@@ -1,5 +1,5 @@
 // file: internal/dedup/book_runtime.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1c5335bc-2f9e-4f1a-829a-f8ed1a96ebc5
 // last-edited: 2026-09-19
 
@@ -16,14 +16,14 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 )
 
-// bookRuntimeMemo caches canonical runtimes for the length of one run
-// (FullScan). GetBookFiles is a Pebble range scan plus a JSON decode per row,
-// not a memdb read, and the duration collectors, the min-duration gate and
-// the part-vs-whole gate each want the same book's runtime — per candidate
-// pair, for every same-author survivor. Keyed by book ID and validated
-// against the book's UpdatedAt, so a book whose aggregate was rewritten
-// mid-run (a file change recomputes it) is read again. Only the small
-// BookRuntime and the row count are kept, never the rows.
+// bookRuntimeMemo caches canonical runtimes for ONE call (a candidate
+// upsert's two gates, one checkDurationMatch). GetBookFiles is a Pebble range
+// scan plus a JSON decode per row, and within one call several gates want
+// the same book's runtime. It is never shared across calls or installed on
+// the engine: nothing cheap tells a cache that a book's rows changed —
+// RecomputeBookAggregates moves UpdatedAt only when the sum or size changes,
+// so flipping a missing flag or adding a row with no duration leaves it
+// still. Only the small BookRuntime and the row count are kept.
 type bookRuntimeMemo struct {
 	mu    sync.Mutex
 	byID  map[string]memoEntry
@@ -102,9 +102,6 @@ func knownRuntimeSec(store database.BookFilesGetter, memo *bookRuntimeMemo, book
 	sec, ok := rt.KnownSeconds()
 	return float64(sec), ok
 }
-
-// runtimeMemo is the engine's run-scoped memo, or nil outside a run.
-func (de *Engine) runtimeMemo() *bookRuntimeMemo { return de.rtMemo.Load() }
 
 // shortRuntime reports whether a canonical runtime is COMPLETE and strictly
 // under minFingerprintMatchSeconds. Unknown and partial runtimes are never

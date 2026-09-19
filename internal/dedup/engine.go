@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.83.2
+// version: 1.83.3
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-19
 
@@ -83,15 +83,12 @@ type Engine struct {
 	// rescoreWriter overrides the embedding store as Rescore's write target.
 	// nil means "use embedStore"; only SetRescoreWriter sets it.
 	rescoreWriter RescoreWriter
-	// rtMemo is the run-scoped canonical-runtime cache (bookRuntimeMemo);
-	// FullScan installs it for its duration, nil otherwise.
-	rtMemo       atomic.Pointer[bookRuntimeMemo]
-	chromemStore database.VectorANNStore
-	bookStore    Store
-	embedClient  *ai.EmbeddingClient
-	llmParser    *ai.OpenAIParser
-	mergeService *merge.Service
-	aiJobsStore  database.AIJobsStore
+	chromemStore  database.VectorANNStore
+	bookStore     Store
+	embedClient   *ai.EmbeddingClient
+	llmParser     *ai.OpenAIParser
+	mergeService  *merge.Service
+	aiJobsStore   database.AIJobsStore
 
 	// Thresholds (read from config or set directly)
 	BookHighThreshold   float64
@@ -956,7 +953,7 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	// otherwise. Passing ctx makes the scan cancellable mid-flight (#19).
 	allISBNSigs, _ := CollectISBNASIN(ctx, de.bookStore, de.isbnIndexStore, book)
 	allMetaSrcSigs, _ := CollectMetaSrcHash(de.bookStore, book)
-	allDurationSigs, _ := collectDuration(de.bookStore, de.bookStore, de.runtimeMemo(), book, durCfg)
+	allDurationSigs, _ := collectDuration(de.bookStore, de.bookStore, nil, book, durCfg)
 
 	// AcoustID: collect across all bookFiles once (same hoist rationale).
 	var allExactAcoustSigs, allLSHAcoustSigs []unified.Signal
@@ -1733,8 +1730,10 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 	if !hasUsableTitle(book.Title) {
 		return nil
 	}
-	// Canonical runtime, complete only (see knownRuntimeSec).
-	memo := de.runtimeMemo()
+	// Canonical runtime, complete only (see knownRuntimeSec). The memo lives
+	// for this call only: every book's rows are read at most once here, and
+	// never served stale to a later call.
+	memo := newBookRuntimeMemo()
 	bookDur, known := knownRuntimeSec(de.bookStore, memo, book)
 	if !known {
 		return nil
@@ -1922,11 +1921,11 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 		return nil
 	}
 	// Both runtime gates below read each book's file rows; one memo for this
-	// call (or the run's, inside FullScan) makes that one read per book.
-	memo := de.runtimeMemo()
-	if memo == nil {
-		memo = newBookRuntimeMemo()
-	}
+	// call makes that one read per book. Call-scoped on purpose: a memo that
+	// outlived the call could serve a runtime whose rows changed without the
+	// book's UpdatedAt moving (a missing flag flipping, a row added with no
+	// duration — RecomputeBookAggregates only writes when a sum changes).
+	memo := newBookRuntimeMemo()
 	if de.hasKnownShortDurationMemo(memo, a) || de.hasKnownShortDurationMemo(memo, b) {
 		slog.Debug("dedup exact candidate dropped by min-duration gate",
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
@@ -1996,7 +1995,7 @@ func (de *Engine) hasKnownShortDuration(book *database.Book) bool {
 	if book == nil {
 		return false
 	}
-	return de.hasKnownShortDurationMemo(de.runtimeMemo(), book)
+	return de.hasKnownShortDurationMemo(nil, book)
 }
 
 // hasKnownShortDurationMemo is hasKnownShortDuration through the given memo.
@@ -2019,7 +2018,7 @@ func (de *Engine) hasKnownShortDurationMemo(memo *bookRuntimeMemo, book *databas
 // the guard — this only fires when both sides' file counts and durations are
 // known and clearly mismatched, mirroring hasPlausibleAudio's convention.
 func (de *Engine) isPartVsWholeMismatch(a, b *database.Book) bool {
-	return de.isPartVsWholeMismatchMemo(de.runtimeMemo(), a, b)
+	return de.isPartVsWholeMismatchMemo(nil, a, b)
 }
 
 // isPartVsWholeMismatchMemo is isPartVsWholeMismatch through the given memo.
@@ -3078,17 +3077,6 @@ func (de *Engine) deleteBookFromChromem(ctx context.Context, bookID string) {
 func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done, total int)) error {
 	_, span := dedupTracer.Start(ctx, "dedup.full_scan")
 	defer span.End()
-
-	// One canonical-runtime memo for the whole scan: every book's file rows
-	// are read at most once (per UpdatedAt) however many pairs and gates ask.
-	// Only install it when no other run holds one, and only remove our own.
-	memo := newBookRuntimeMemo()
-	if de.rtMemo.CompareAndSwap(nil, memo) {
-		defer func() {
-			de.rtMemo.CompareAndSwap(memo, nil)
-			logging.Info(ctx, "dedup full scan runtime reads", "book_file_reads", memo.reads.Load(), "books_cached", memo.size())
-		}()
-	}
 
 	// Unfiltered (includes non-primary version-group members): FullScan is
 	// also the mechanism that keeps non-primary embeddings fresh as

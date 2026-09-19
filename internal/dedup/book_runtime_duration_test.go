@@ -1,5 +1,5 @@
 // file: internal/dedup/book_runtime_duration_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6ae0f0e7-3cf7-42c7-b2c5-88b2a24e8c27
 // last-edited: 2026-09-19
 
@@ -232,5 +232,25 @@ func TestUpsertExactCandidate_ReadsEachBookOnce(t *testing.T) {
 	}
 	if reads["A"] != 1 || reads["B"] != 1 {
 		t.Fatalf("reads = %v, want one per book", reads)
+	}
+}
+
+// TestRuntimeGates_NoStaleRuntimeAcrossCalls: a chapter that goes missing
+// with no present copy and no duration known changes the runtime without
+// moving the book's UpdatedAt. The next gate call must see it, so no runtime
+// may be cached beyond one call.
+func TestRuntimeGates_NoStaleRuntimeAcrossCalls(t *testing.T) {
+	engine, mock, _ := setupTestEngine(t)
+	files := chapterRows("A", 1, 45, 1) // a 45 s single-file book: "short"
+	mock.GetBookFilesFunc = func(string) ([]database.BookFile, error) { return files, nil }
+	stamp := time.Unix(1_700_000_000, 0)
+	book := &database.Book{ID: "A", UpdatedAt: &stamp}
+	if !engine.hasKnownShortDuration(book) {
+		t.Fatal("45 s book not short")
+	}
+	// A second row appears with no duration; UpdatedAt does not move.
+	files = append(files, database.BookFile{ID: "A-2", BookID: "A"})
+	if engine.hasKnownShortDuration(book) {
+		t.Fatal("stale runtime: the book gained a row of unknown length but still reads as a complete 45 s book")
 	}
 }

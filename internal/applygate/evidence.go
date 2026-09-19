@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-09-19
 
@@ -198,6 +198,17 @@ func checkRuntime(rt database.BookRuntime, c *metafetch.MetadataCandidate, overw
 	// right candidate. A lower bound can still PROVE a mismatch in one
 	// direction, and that is kept: see lowerBoundContradicts.
 	bookSec, known := rt.KnownSeconds()
+	desc := runtimeDesc(rt)
+	if !known && rt.Source == database.RuntimeSourceNone && rt.BookAggregateSec > 0 {
+		// A multi-file book with NO file durations (or unreadable rows):
+		// compare the stored Book.Duration in both directions, exactly as
+		// main did. It may be a stale partial sum or one chapter's probe, so
+		// this can block a right candidate; the owner rule is that the gate
+		// is never looser than main, and here the files add nothing to
+		// improve on it.
+		bookSec, known = rt.BookAggregateSec, true
+		desc = mins(bookSec) + " (stored book duration; no file durations)"
+	}
 	if !known || c.DurationSec <= 0 {
 		if lb, ratio, ok := lowerBoundContradicts(rt, c.DurationSec); ok {
 			r.Outcome, r.Reason = OutcomeBlock, ReasonRuntimeMismatch
@@ -218,7 +229,7 @@ func checkRuntime(rt database.BookRuntime, c *metafetch.MetadataCandidate, overw
 		delta = -delta
 	}
 	ratio := float64(delta) / float64(bookSec)
-	r.Detail = "files " + runtimeDesc(rt) + ", candidate " + mins(c.DurationSec) + " (" + strconv.Itoa(int(ratio*100+0.5)) + "% off)"
+	r.Detail = "files " + desc + ", candidate " + mins(c.DurationSec) + " (" + strconv.Itoa(int(ratio*100+0.5)) + "% off)"
 	switch {
 	case ratio > RuntimeBlockRatio:
 		r.Outcome, r.Reason = OutcomeBlock, ReasonRuntimeMismatch
@@ -599,31 +610,24 @@ func runtimeDesc(rt database.BookRuntime) string {
 	}
 }
 
-// runtimeLowerBound is a value the book's true runtime cannot be below, when
-// the runtime is not complete: the known sum of a partial runtime, or — for a
-// multi-file book with no file durations at all — the stored Book.Duration,
-// which on such a book is a sum of some chapters or one chapter's probe. Main
-// compared that stored value as the total; keeping it as a lower bound means
-// the gate still blocks every contradiction main blocked in this direction.
+// runtimeLowerBound is a value the book's true runtime cannot be below when
+// the runtime is PARTIAL: the sum of its counted rows with known durations.
+// Complete runtimes are compared as totals, and the no-file-duration case is
+// compared on Book.Duration as main did (checkRuntime), so neither needs one.
 func runtimeLowerBound(rt database.BookRuntime) int {
-	switch {
-	case rt.Complete():
-		return 0
-	case rt.Partial():
+	if rt.Partial() {
 		return rt.Seconds
-	default:
-		return rt.BookAggregateSec
 	}
+	return 0
 }
 
-// lowerBoundContradicts reports whether an incomplete runtime still PROVES
-// a runtime_mismatch: its lower bound LB exceeds the candidate by more than
+// lowerBoundContradicts reports whether a partial runtime still PROVES a
+// runtime_mismatch: its lower bound LB exceeds the candidate by more than
 // RuntimeBlockRatio. The true runtime T is >= LB, and for T above the
 // candidate the gate's ratio (T-cand)/T only grows with T, so
 // (LB-cand)/LB > RuntimeBlockRatio implies the complete runtime would block
-// too. This is exactly main's block for a book whose Book.Duration was that
-// lower bound; the opposite direction (LB below the candidate) proves nothing,
-// which is the fix.
+// too. The opposite direction (LB below the candidate, with some row's
+// duration unknown) proves nothing: that is the one case this PR unblocks.
 func lowerBoundContradicts(rt database.BookRuntime, candSec int) (lb int, ratio float64, ok bool) {
 	lb = runtimeLowerBound(rt)
 	if lb <= 0 || candSec <= 0 || lb <= candSec {
@@ -633,14 +637,14 @@ func lowerBoundContradicts(rt database.BookRuntime, candSec int) (lb int, ratio 
 	return lb, ratio, ratio > RuntimeBlockRatio
 }
 
-// narratorVetoArmed reports whether a narrator contradiction blocks. With a
-// complete runtime it is main's rule: the runtime check looked and did not
-// agree (neutral or block). With an INCOMPLETE runtime there is no runtime
-// confirmation to excuse a different narrator, so the veto is armed whenever
-// the book has any runtime data and the candidate a runtime — main compared
-// the stored partial sum there and armed the veto unless that sum happened to
-// land in the agree band, so this is never looser. No runtime data at all,
-// or a candidate without one, keeps main's neutral.
+// narratorVetoArmed reports whether a narrator contradiction blocks. main's
+// rule is kept: the runtime check looked and did not agree (neutral or
+// block) — which covers complete runtimes and the stored-duration comparison.
+// A PARTIAL runtime has no confirmation to excuse a different narrator, so
+// the veto is armed whenever the candidate has a runtime; main compared the
+// partial sum there and armed it unless that sum landed in the agree band, so
+// this is never looser. No runtime data, or a candidate without one, keeps
+// main's neutral.
 func narratorVetoArmed(rt database.BookRuntime, c *metafetch.MetadataCandidate, runtimeOutcome string) bool {
 	// main's rule, unchanged: the runtime check looked and did not agree.
 	if runtimeOutcome == OutcomeNeutral || runtimeOutcome == OutcomeBlock {

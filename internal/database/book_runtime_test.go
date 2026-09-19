@@ -1,5 +1,5 @@
 // file: internal/database/book_runtime_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 295552ed-1de2-49e3-9bf6-7cb94a4ad6eb
 // last-edited: 2026-09-19
 
@@ -32,8 +32,10 @@ func TestComputeBookRuntime(t *testing.T) {
 	thirtyKnown := rows(repeat(30, 1200)...)
 	twoOfThirty := rows(append(repeat(2, 1200), repeat(28, 0)...)...)
 	withMissing := append(rows(34401), BookFile{ID: "old", Duration: 34401, Missing: true})
-	withMissing[0].FileSize = 500_000_000
-	withMissing[1].FileSize = 500_000_000
+	withMissing[0].FileHash, withMissing[0].FileSize = "c0ffee", 500_000_000
+	withMissing[1].FileHash, withMissing[1].FileSize = "c0ffee", 500_000_000
+	sizeOnly := append(rows(34401), BookFile{ID: "old", Duration: 34401, Missing: true})
+	sizeOnly[0].FileSize, sizeOnly[1].FileSize = 500_000_000, 500_000_000
 	// Reviewer probe: a 45 s intro on disk, 20 × 30 min chapters missing.
 	introAndMissing := rows(45)
 	for i := 0; i < 20; i++ {
@@ -60,10 +62,18 @@ func TestComputeBookRuntime(t *testing.T) {
 		{"single row without duration falls back to Book.Duration", &Book{Duration: d(5000)}, rows(0), 5000, "book_aggregate", true},
 		{"no rows falls back to Book.Duration", &Book{Duration: d(5000)}, nil, 5000, "book_aggregate", true},
 		{"no rows and no aggregate is unknown", &Book{}, nil, 0, "unknown", false},
-		{"missing row beside its present copy (same size) is not double counted", nil, withMissing, 34401, "complete", true},
+		{"missing row beside its present copy (same hash) is not double counted", nil, withMissing, 34401, "complete", true},
+		{"equal size alone does not prove a copy", nil, sizeOnly, 68802, "complete", true},
 		{"repoint duplicate matched by pre-organize hash is not double counted", nil, renamedRepoint, 1200, "complete", true},
-		{"missing chapters with no present copy make the runtime partial, never a 45s book", nil, introAndMissing, 36045, "partial", false},
-		{"unidentifiable missing row is counted, not assumed a duplicate", nil, append(rows(1200), BookFile{ID: "x", Duration: 1200, Missing: true}), 2400, "partial", false},
+		{"missing chapters with no present copy are counted: a 10h book, never a 45s one", nil, introAndMissing, 36045, "complete", true},
+		{"unidentifiable missing row is counted, not assumed a duplicate", nil, append(rows(1200), BookFile{ID: "x", Duration: 1200, Missing: true}), 2400, "complete", true},
+		{"missing row with no duration makes the runtime partial", nil, append(rows(1200), BookFile{ID: "x", Missing: true}), 1200, "partial", false},
+		{"disc 2 sharing disc 1's base names is not a duplicate", nil, discs(), 36000, "complete", true},
+		{"equal-size CBR parts are not duplicates of each other", nil, equalSizeParts(), 36000, "complete", true},
+		{"same hash but different duration is not a duplicate", nil, []BookFile{
+			{ID: "p", FileHash: "h", Duration: 1800}, {ID: "m", FileHash: "h", Duration: 600, Missing: true}}, 2400, "complete", true},
+		{"original filename plus size is a duplicate", nil, []BookFile{
+			{ID: "p", OriginalFilename: "01.mp3", FileSize: 10, Duration: 1800}, {ID: "m", OriginalFilename: "01.mp3", FileSize: 10, Duration: 1800, Missing: true}}, 1800, "complete", true},
 		{"all rows missing: runtime from the missing rows", nil, allMissing, 1500, "complete", true},
 		{"fingerprint duration is a whole-file fallback", nil, fpOnly, 1800, "complete", true},
 		{"millisecond row is normalized", nil, []BookFile{{ID: "ms", Duration: 3_600_000, FileSize: 57_600_000}}, 3600, "complete", true},
@@ -163,7 +173,31 @@ func TestRecomputeBookAggregates_MissingChapterNeverLowersDuration(t *testing.T)
 		t.Fatalf("Book.Duration = %d after chapters went missing, want 36000", *got.Duration)
 	}
 	stored, _ := store.GetBookFiles(b.ID)
-	if rt := ComputeBookRuntime(got, stored); rt.Complete() || rt.FilesMissingUnmatched != 19 {
-		t.Fatalf("runtime = %+v, want partial with 19 unmatched missing rows", rt)
+	if rt := ComputeBookRuntime(got, stored); !rt.Complete() || rt.Seconds != 36000 || rt.FilesMissingUnmatched != 19 {
+		t.Fatalf("runtime = %+v, want complete 36000 with 19 unmatched missing rows", rt)
 	}
+}
+
+// discs is a two-disc rip: CD1/01..10 present, CD2/01..10 missing, the same
+// base names on both discs, distinct sizes, 30 min each.
+func discs() []BookFile {
+	var out []BookFile
+	for d := 1; d <= 2; d++ {
+		for i := 1; i <= 10; i++ {
+			out = append(out, BookFile{ID: fmt.Sprint(d, i), FilePath: fmt.Sprintf("/lib/x/CD%d/%02d.mp3", d, i),
+				OriginalFilename: fmt.Sprintf("%02d.mp3", i), FileSize: int64(d*1_000_000 + i), Duration: 1800, Missing: d == 2})
+		}
+	}
+	return out
+}
+
+// equalSizeParts is a constant-bitrate split: 20 parts of identical size,
+// the second ten missing.
+func equalSizeParts() []BookFile {
+	var out []BookFile
+	for i := 0; i < 20; i++ {
+		out = append(out, BookFile{ID: fmt.Sprint(i), FilePath: fmt.Sprintf("/lib/x/Part %02d.mp3", i),
+			OriginalFilename: fmt.Sprintf("Part %02d.mp3", i), FileSize: 28_800_000, Duration: 1800, Missing: i >= 10})
+	}
+	return out
 }
