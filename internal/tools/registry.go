@@ -1,7 +1,7 @@
 // file: internal/tools/registry.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b8c9d0e1-f2a3-4567-bcde-567890123456
-// last-edited: 2026-06-15
+// last-edited: 2026-09-19
 
 package tools
 
@@ -159,15 +159,23 @@ func (r *ToolRegistry) managedPath(def ToolDef) string {
 	return filepath.Join(r.cfg.ManagedDir, def.Name, def.Release.Version, def.Name)
 }
 
+// toolConfig returns name's config with an unset Mode read as
+// ToolModeSystem, the same default InitConfig writes. A persisted config blob
+// saved before the tools block existed decodes to Mode "", which overrides
+// that default on load; treating "" as unknown made fpcalc unresolvable on
+// prod while the PATH fallback in fingerprint.lookupFpcalc hid it.
 func (r *ToolRegistry) toolConfig(name string) ToolConfig {
+	var c ToolConfig
 	switch name {
 	case "ollama":
-		return r.cfg.Ollama
+		c = r.cfg.Ollama
 	case "fpcalc":
-		return r.cfg.Fpcalc
-	default:
-		return ToolConfig{Mode: ToolModeSystem}
+		c = r.cfg.Fpcalc
 	}
+	if c.Mode == "" {
+		c.Mode = ToolModeSystem
+	}
+	return c
 }
 
 // InvalidateCache clears the resolved-path cache for name (e.g. after install).
