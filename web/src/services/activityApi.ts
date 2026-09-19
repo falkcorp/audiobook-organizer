@@ -1,6 +1,6 @@
 // file: web/src/services/activityApi.ts
-// version: 2.7.0
-// last-edited: 2026-09-10
+// version: 2.8.0
+// last-edited: 2026-09-19
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import { apiFetch } from '../utils/apiFetch';
@@ -52,6 +52,10 @@ export interface ActivityEntry {
 export interface ActivityResponse {
   entries: ActivityEntry[];
   total: number;
+  /** The server stopped at its scan budget before filling the page or reaching
+   *  the oldest match: older matches were NOT searched and `total` is only a
+   *  lower bound. Absent from servers that predate the flag. */
+  partial?: boolean;
 }
 
 export interface ActivityFilter {
