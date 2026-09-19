@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/session_local_all.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: fcff98d1-5709-4c26-a345-d79231c02527
 // last-edited: 2026-09-19
 
@@ -8,6 +8,7 @@ package abs
 import (
 	"math"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,8 +31,9 @@ import (
 // CONFLICT POLICY (applyLocalSession): (a) forward-only, EXCEPT a session whose
 // startedAt is after the server's newest known position may move it either way;
 // (b) while a progress-reset tombstone exists, a session is discarded unless its
-// position's updatedAt provably post-dates the reset AND the position is
-// physically reachable from 0 since the reset (elapsed × max playback rate);
+// position's updatedAt provably post-dates the reset AND the position does not
+// land back on a position the reset discarded (unless the listener has already
+// listened up to it since);
 // (c) a position absurdly past the item's duration is refused, one slightly past
 // it is clamped to the end. Background on the forward-only default follows.
 //
@@ -88,7 +90,17 @@ const absClockSkewTolerance = 2 * time.Minute
 // listening. AudioBooth's speed picker tops out at 3.5x
 // (SpeedPickerSheetModel.swift: range 0.5...3.5); 4.0 leaves headroom for other
 // clients.
+// It bounds only LEGACY tombstones, written before the reset recorded the
+// discarded position (see resetPositionResurrected).
 const absMaxPlaybackRate = 4.0
+
+// absResetPositionWindowSec / absResetPositionWindowFrac: a replayed position
+// within ±max(30 s, 1% of the old position) of a position a reset discarded
+// is that discarded position coming back.
+const (
+	absResetPositionWindowSec  = 30.0
+	absResetPositionWindowFrac = 0.01
+)
 
 // absEndOfBookMargin is how far past the known duration a reported position may
 // fall and still be treated as "at the end" (clamped + finished) rather than as
@@ -249,18 +261,33 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	// post-reset sync, which is refused; about one sync interval (~20 s) of
 	// listening is lost, and the playhead carries over on the next sync.
 	//
-	// PHYSICAL BOUND (review of #3470 at 414d54805): some clients RE-STAMP
-	// updatedAt=now when replaying a backlog (spec §1.8.7), so a pre-reset
-	// backlog replayed after the reset passes the updatedAt test. But the
-	// playhead restarts at 0 on reset, and listening cannot move it faster than
-	// elapsed time × max playback rate. A position beyond
-	// (updatedAt − reset) × absMaxPlaybackRate + tolerance cannot have been
-	// reached by listening since the reset, so it is discarded. This needs no
-	// trust in startedAt.
+	// DISCARDED POSITIONS (review of #3470 at 9e2e39285): some clients
+	// RE-STAMP updatedAt=now when replaying a backlog (spec §1.8.7), so a
+	// pre-reset backlog replayed after the reset passes the updatedAt test.
+	// The tombstone records every position a reset discarded; a replay that
+	// lands within the window of one is discarded whatever its timestamps.
+	// There is deliberately no "already listened up to it" exemption: a
+	// backlog is a queue of rising positions and each is applied in turn, so
+	// such an exemption lets the queue walk itself onto the old position.
+	// Everything else is accepted, including a seek far ahead right after the
+	// reset. An earlier 4x "physical bound" narrowed
+	// the hole but let a backlog replayed hours later (the normal offline
+	// case) through, and refused real seeks; it now applies only to legacy
+	// tombstones that recorded no position.
 	//
-	// ⚠️ KNOWN LIMIT (seek): a listener who resets and then SEEKS ahead is held
-	// to the same bound until enough time passes; each later sync is judged
-	// again with a later updatedAt, so the position lands once reachable.
+	// ⚠️ KNOWN LIMIT (deliberate seek back): a user who resets and then SEEKS
+	// straight to (within the window of) the position they discarded, without
+	// listening up to it, is indistinguishable from the stale backlog and is
+	// discarded; the playhead lands on their next sync outside the window.
+	// Likewise genuine post-reset listening that passes THROUGH the old
+	// position loses the syncs inside the window (at most ~2 × window of
+	// position unsynced); the next sync beyond it lands normally.
+	//
+	// ⚠️ KNOWN LIMIT (backlog body): only a replay landing ON a discarded
+	// position is recognisable. Re-stamped backlog entries short of it look
+	// exactly like real post-reset listening and are accepted (forward-only),
+	// so a replayed backlog can still move the playhead up to just before the
+	// window. Entries that are not re-stamped are caught by the updatedAt rule.
 	if state != nil && state.ProgressResetAt != nil {
 		resetMs := state.ProgressResetAt.UnixMilli()
 		trusted := s.UpdatedAt != nil && *s.UpdatedAt > 0 && *s.UpdatedAt <= now.UnixMilli()+tol
@@ -269,9 +296,18 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 			res.discarded = true
 			return res
 		}
-		reachable := float64(*s.UpdatedAt-resetMs)/1000*absMaxPlaybackRate + absClockSkewTolerance.Seconds()
-		if ct > reachable {
-			res.Error = "position cannot have been reached by listening since the progress reset"
+		if len(state.ProgressResetPositions) == 0 {
+			// Legacy tombstone: no position recorded, keep the physical bound.
+			reachable := float64(*s.UpdatedAt-resetMs)/1000*absMaxPlaybackRate + absClockSkewTolerance.Seconds()
+			if ct > reachable {
+				res.Error = "position cannot have been reached by listening since the progress reset"
+				res.discarded = true
+				return res
+			}
+		} else if slices.ContainsFunc(state.ProgressResetPositions, func(old float64) bool {
+			return resetPositionResurrected(ct, old)
+		}) {
+			res.Error = "session position is the position a progress reset discarded"
 			res.discarded = true
 			return res
 		}
@@ -366,4 +402,12 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	}
 	res.ProgressSynced = true
 	return res
+}
+
+// resetPositionResurrected reports whether a replayed position ct would bring
+// back old, a position a reset discarded: it lands within ±max(30 s, 1%) of
+// it. A discarded position within the window of 0 resurrects nothing.
+func resetPositionResurrected(ct, old float64) bool {
+	window := max(absResetPositionWindowSec, absResetPositionWindowFrac*old)
+	return old > window && math.Abs(ct-old) <= window
 }
