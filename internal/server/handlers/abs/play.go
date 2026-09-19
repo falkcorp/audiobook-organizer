@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
 // last-edited: 2026-09-19
 
@@ -208,7 +208,14 @@ func (h *Handler) Play(c *gin.Context) {
 	// rewinds the user to the beginning of the book (§1.8.7).
 	currentTime := 0.0
 	if h.progress != nil {
-		if pos, perr := h.progress.GetUserPosition(user.ID, book.ID); perr == nil && pos != nil {
+		pos, perr := h.progress.GetUserPosition(user.ID, book.ID)
+		if perr != nil {
+			// Fail closed: an unreadable position is not "no position yet",
+			// and answering currentTime 0 rewinds the client. Transient: 503.
+			respondError(c, http.StatusServiceUnavailable, "could not load progress")
+			return
+		}
+		if pos != nil {
 			currentTime = pos.PositionSeconds
 		}
 	}
@@ -352,6 +359,8 @@ func (h *Handler) SessionSync(c *gin.Context) {
 // SessionClose handles POST /api/session/:id/close. It applies any final sync in the
 // body, then drops the session.
 func (h *Handler) SessionClose(c *gin.Context) {
+	// "" also when the final sync could not be persisted (503): the session is
+	// kept so the client's retry lands.
 	id := h.applySessionUpdate(c)
 	if id != "" {
 		h.sessions.remove(id)
@@ -427,10 +436,22 @@ func (h *Handler) SessionLocal(c *gin.Context) {
 // client silently forever. §1.7.3 item 2 makes the same point for offline replay: a
 // 4xx WEDGES THE REPLAY QUEUE PERMANENTLY. So this endpoint ignores what it cannot
 // place and reports success.
-func (h *Handler) applySessionUpdate(c *gin.Context) string {
+//
+// The ONE exception is a stored position that cannot be read: merging against it
+// as if empty would rewind the listener, so nothing is written and it answers a
+// non-empty 503 (a 5xx, which clients retry — not the 4xx that wedges them), and
+// returns "" so /close keeps the session for the retry.
+func (h *Handler) applySessionUpdate(c *gin.Context) (actedOn string) {
 	// Answered before anything else can fail, so no error path can produce an empty
 	// 200 — fatal for these decoders (§1.8.6).
-	defer respondPlainOK(c)
+	unavailable := false
+	defer func() {
+		if unavailable {
+			respondError(c, http.StatusServiceUnavailable, "could not load progress")
+			return
+		}
+		respondPlainOK(c)
+	}()
 
 	user, ok := servermiddleware.CurrentUser(c)
 	if !ok || user == nil {
@@ -467,7 +488,10 @@ func (h *Handler) applySessionUpdate(c *gin.Context) string {
 	newPosition := session.CurrentTime
 	session.mu.Unlock()
 
-	h.persistProgress(session, newPosition, req.Duration)
+	if err := h.persistProgress(session, newPosition, req.Duration); errors.Is(err, errProgressPositionUnreadable) {
+		unavailable = true
+		return ""
+	}
 	return sessionID
 }
 
@@ -479,16 +503,21 @@ func (h *Handler) applySessionUpdate(c *gin.Context) string {
 // while offline still advances the position. That specific clobber is what would cost
 // the owner their place in a book, which is the whole reason this project exists.
 //
-// A failure here is logged by the caller's audit trail but never surfaced: the
-// endpoint has already promised 200, and a client that treats a sync failure as fatal
-// would stop syncing altogether.
-func (h *Handler) persistProgress(s *playSession, position float64, clientDuration *float64) {
+// Write failures are not surfaced: a client that treats a sync failure as fatal
+// would stop syncing altogether. The one error returned is an unreadable stored
+// position (errProgressPositionUnreadable): nothing is written, because merging
+// against it as if empty would rewind the listener, and the caller answers 503.
+func (h *Handler) persistProgress(s *playSession, position float64, clientDuration *float64) error {
 	if h.progress == nil || position <= 0 {
-		return
+		return nil
 	}
 
 	stored := 0.0
-	if pos, err := h.progress.GetUserPosition(s.UserID, s.BookID); err == nil && pos != nil {
+	pos, err := h.progress.GetUserPosition(s.UserID, s.BookID)
+	if err != nil {
+		return fmt.Errorf("%w: %s/%s: %w", errProgressPositionUnreadable, s.UserID, s.BookID, err)
+	}
+	if pos != nil {
 		stored = pos.PositionSeconds
 	}
 
@@ -514,11 +543,11 @@ func (h *Handler) persistProgress(s *playSession, position float64, clientDurati
 	}
 	merged, accepted := progress.MergeIncoming(serverProgress, incoming)
 	if !accepted {
-		return
+		return nil
 	}
 
 	if err := h.progress.SetUserPosition(s.UserID, s.BookID, absProgressSegmentID, merged.CurrentTime); err != nil {
-		return
+		return nil
 	}
 
 	status := database.UserBookStatusInProgress
@@ -549,6 +578,7 @@ func (h *Handler) persistProgress(s *playSession, position float64, clientDurati
 		state.TotalListenedSeconds = timeListening
 		state.ProgressPct = pct
 	})
+	return nil
 }
 
 // setDerivedStatus writes a status the server COMPUTED from a position, unless
@@ -573,10 +603,14 @@ func (h *Handler) updateUserBookState(userID, bookID string, mutate func(*databa
 		return nil
 	}
 	state, err := h.progress.GetUserBookState(userID, bookID)
-	if err != nil || state == nil {
-		// A read error is treated as "no row yet" rather than propagated: losing the
-		// previous StatusManual/hide flag is bad, but refusing to record the user's
-		// new position is worse, and this path has already promised the client 200.
+	if err != nil {
+		// Fail closed. An unreadable row is NOT "no row yet": writing a fresh
+		// row over it silently dropped StatusManual, the hide flag and the
+		// progress-reset tombstone (and with the tombstone gone, an offline
+		// backlog replay undoes the reset). Write nothing; callers answer 503.
+		return fmt.Errorf("%w: %s/%s: %w", errProgressStateUnreadable, userID, bookID, err)
+	}
+	if state == nil {
 		state = &database.UserBookState{UserID: userID, BookID: bookID}
 	}
 	mutate(state)

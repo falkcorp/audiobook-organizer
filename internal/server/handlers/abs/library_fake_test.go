@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.14.0
+// version: 1.17.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-19
 
@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,12 @@ import (
 // ULIDs would let a regression through.
 type fakeLibrary struct {
 	mu sync.Mutex
+
+	// stateErr, when set, makes GetUserBookState fail: a transient read error
+	// (I/O, decode) as opposed to "no row yet" (nil, nil).
+	stateErr error
+	// posErr, when set, makes GetUserPosition fail the same way.
+	posErr error
 
 	// order preserves seed order, which is what the list endpoints iterate.
 	order    []string
@@ -911,6 +918,9 @@ func (f *fakeLibrary) GetChaptersForBook(bookID string) ([]database.Chapter, err
 func (f *fakeLibrary) GetUserPosition(userID, bookID string) (*database.UserPosition, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.posErr != nil {
+		return nil, f.posErr
+	}
 	return f.positions[userID+"|"+bookID], nil
 }
 
@@ -940,6 +950,9 @@ func (f *fakeLibrary) ClearUserPositions(userID, bookID string) error {
 func (f *fakeLibrary) GetUserBookState(userID, bookID string) (*database.UserBookState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.stateErr != nil {
+		return nil, f.stateErr
+	}
 	return f.states[userID+"|"+bookID], nil
 }
 
@@ -950,6 +963,9 @@ func (f *fakeLibrary) SetUserBookState(s *database.UserBookState) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cp := *s
+	// Deep-copy slice fields: the real store round-trips the row through
+	// JSON, so a caller must never share a backing array with the stored row.
+	cp.ProgressResetPositions = slices.Clone(s.ProgressResetPositions)
 	f.states[s.UserID+"|"+s.BookID] = &cp
 	return nil
 }
