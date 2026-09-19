@@ -1,5 +1,5 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
 // last-edited: 2026-09-19
 
@@ -44,6 +44,10 @@ type BookFileCreator interface {
 // BookFileUpserter updates, patches and upserts existing book_file rows through the shared merge rule (bookfile_merge.go).
 type BookFileUpserter interface {
 	UpdateBookFile(id string, file *BookFile) error
+	// UpdateBookFiles is UpdateBookFile for many rows: written by ID, one
+	// aggregate recompute per affected book instead of one per row, ctx checked
+	// between rows. See pebble_store_bookfiles.go.
+	UpdateBookFiles(ctx context.Context, files []*BookFile, afterRow func(done int)) (int, error)
 	UpsertBookFile(file *BookFile) error
 	// PatchBookFileFields sets only the fields named in patch on a fresh read
 	// of the row, so it cannot revert another writer's column the way a

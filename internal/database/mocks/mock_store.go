@@ -29864,6 +29864,78 @@ func (_c *MockStore_UpdateBookFileHashes_Call) RunAndReturn(run func(id string, 
 	return _c
 }
 
+// UpdateBookFiles provides a mock function for the type MockStore
+func (_mock *MockStore) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(done int)) (int, error) {
+	ret := _mock.Called(ctx, files, afterRow)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateBookFiles")
+	}
+
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []*database.BookFile, func(done int)) (int, error)); ok {
+		return returnFunc(ctx, files, afterRow)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []*database.BookFile, func(done int)) int); ok {
+		r0 = returnFunc(ctx, files, afterRow)
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, []*database.BookFile, func(done int)) error); ok {
+		r1 = returnFunc(ctx, files, afterRow)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_UpdateBookFiles_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateBookFiles'
+type MockStore_UpdateBookFiles_Call struct {
+	*mock.Call
+}
+
+// UpdateBookFiles is a helper method to define mock.On call
+//   - ctx context.Context
+//   - files []*database.BookFile
+//   - afterRow func(done int)
+func (_e *MockStore_Expecter) UpdateBookFiles(ctx any, files any, afterRow any) *MockStore_UpdateBookFiles_Call {
+	return &MockStore_UpdateBookFiles_Call{Call: _e.mock.On("UpdateBookFiles", ctx, files, afterRow)}
+}
+
+func (_c *MockStore_UpdateBookFiles_Call) Run(run func(ctx context.Context, files []*database.BookFile, afterRow func(done int))) *MockStore_UpdateBookFiles_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 []*database.BookFile
+		if args[1] != nil {
+			arg1 = args[1].([]*database.BookFile)
+		}
+		var arg2 func(done int)
+		if args[2] != nil {
+			arg2 = args[2].(func(done int))
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_UpdateBookFiles_Call) Return(n int, err error) *MockStore_UpdateBookFiles_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockStore_UpdateBookFiles_Call) RunAndReturn(run func(ctx context.Context, files []*database.BookFile, afterRow func(done int)) (int, error)) *MockStore_UpdateBookFiles_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UpdateBookRating provides a mock function for the type MockStore
 func (_mock *MockStore) UpdateBookRating(id string, req database.UpdateBookRatingRequest) error {
 	ret := _mock.Called(id, req)
