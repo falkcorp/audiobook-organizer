@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-09-19
 
@@ -72,6 +72,7 @@ var hubLog = logger.New("acoustid.worker-hub")
 // handler package need not import this plugin).
 var (
 	ErrNoWindowRun      = workerapi.ErrNoRun
+	ErrRunChanged       = workerapi.ErrRunChanged
 	ErrLeaseGone        = workerapi.ErrLeaseGone
 	ErrToolsNotAllowed  = workerapi.ErrToolsNotAllowed
 	ErrTooManyLeases    = workerapi.ErrTooManyLeases
@@ -178,6 +179,12 @@ type hubRun struct {
 
 	// remoteOnly: the server lane decodes nothing (see the package comment).
 	remoteOnly bool
+	// runID is this run's random ID (Hello answers it; lease, renew and
+	// results must echo it). The claim, epochs and bootstrapped set below
+	// exist only for this run, so a worker from an earlier run must hello
+	// and pass its gate again before it may lease.
+	runID    string
+	headHash func(string) (string, error)
 	// identity are present libroot files offered identity-only (no windows)
 	// while a remote-only run bootstraps its reference windows.
 	identity []windowItem
@@ -267,12 +274,16 @@ type hubMode struct {
 // WorkerHub is the lease manager. The zero value is not usable; Plugin owns
 // one (Plugin.WorkerHub).
 type WorkerHub struct {
-	mu  sync.Mutex
-	now func() time.Time
-	run *hubRun
+	mu sync.Mutex
+	// headHash hashes a calibration file's first 64 KiB; each run copies it
+	// at attach. Injected rather than a package variable so a test can make
+	// it slow without racing the run that reads it.
+	headHash func(string) (string, error)
+	now      func() time.Time
+	run      *hubRun
 }
 
-func newWorkerHub() *WorkerHub { return &WorkerHub{now: time.Now} }
+func newWorkerHub() *WorkerHub { return &WorkerHub{now: time.Now, headHash: headSHA256} }
 
 // WorkerHub returns the plugin's lease manager, for the HTTP layer.
 func (p *Plugin) WorkerHub() *WorkerHub {
@@ -329,6 +340,8 @@ func (h *WorkerHub) attach(ctx context.Context, p *Plugin, wt fingerprint.Window
 		calib:      calib,
 		remoteOnly: mode.remoteOnly,
 		identity:   mode.identity,
+		runID:      newID(),
+		headHash:   h.headHash,
 		refExists:  mode.refExists,
 		attachedAt: h.now(),
 		// bootstrapped/pendingSeen are guarded by calibMu/mu respectively.
@@ -877,6 +890,7 @@ func (h *WorkerHub) Hello(_ context.Context, req workerapi.HelloRequest) (*worke
 		Bootstrap:        c.bootstrap,
 		ReferencePending: c.pending,
 		Waiting:          c.waiting,
+		RunID:            r.runID,
 		Limits: workerapi.Limits{
 			MaxJobsPerLease:    workerapi.MaxJobsPerLease,
 			LeaseTTLSec:        int(workerapi.LeaseTTL / time.Second),
@@ -993,7 +1007,7 @@ func (r *hubRun) buildIdentityCalibration() []workerapi.CalibrationFile {
 		if err != nil || !fi.Mode().IsRegular() {
 			continue
 		}
-		head, err := calibHeadSHA256(it.Path)
+		head, err := r.headHash(it.Path)
 		if err != nil {
 			continue
 		}
@@ -1024,7 +1038,7 @@ func (r *hubRun) buildCalibration(cands []windowItem) []workerapi.CalibrationFil
 		if err != nil || fi.Size() != it.Size || fi.ModTime().Unix() != it.MtimeUnix {
 			continue
 		}
-		head, err := calibHeadSHA256(it.Path)
+		head, err := r.headHash(it.Path)
 		if err != nil {
 			continue
 		}
@@ -1078,9 +1092,6 @@ func (r *hubRun) buildCalibration(cands []windowItem) []workerapi.CalibrationFil
 	return out
 }
 
-// calibHeadSHA256 is headSHA256; a variable so a test can make it slow.
-var calibHeadSHA256 = headSHA256
-
 func headSHA256(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1122,6 +1133,10 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 	if r == nil {
 		h.mu.Unlock()
 		return nil, ErrNoWindowRun
+	}
+	if req.RunID != r.runID {
+		h.mu.Unlock()
+		return nil, ErrRunChanged
 	}
 	now := h.now()
 	if req.Pipeline != fingerprint.WindowPipelineID || !versionsAllowed(r.allowed, req.FpcalcVersion, req.FFmpegVersion) {
@@ -1259,6 +1274,9 @@ func (h *WorkerHub) Renew(leaseID string, req workerapi.RenewRequest) (*workerap
 	if r == nil {
 		return nil, ErrNoWindowRun
 	}
+	if req.RunID != r.runID {
+		return nil, ErrRunChanged
+	}
 	l := r.leases[leaseID]
 	now := h.now()
 	// Another worker's lease answers exactly like a missing one.
@@ -1311,6 +1329,9 @@ func (h *WorkerHub) Results(_ context.Context, req workerapi.ResultsRequest) (*w
 	r, err := h.liveRun()
 	if err != nil {
 		return nil, err
+	}
+	if req.RunID != r.runID {
+		return nil, ErrRunChanged
 	}
 	h.touch(r)
 	resp := &workerapi.ResultsResponse{Statuses: make([]workerapi.JobStatus, 0, len(req.Results))}
