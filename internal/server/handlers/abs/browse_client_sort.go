@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse_client_sort.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b122ca1-3d17-4eb2-b2dd-5707ab882ef2
 // last-edited: 2026-09-19
 //
@@ -25,16 +25,18 @@ package abs
 
 import (
 	"encoding/json"
-	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"sort"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
+
+var clientSortLog = logger.New("abs")
 
 // Canonical handler-side book sort keys, as absHandlerSort returns them.
 const (
@@ -252,8 +254,7 @@ func (h *Handler) progressKeys(c *gin.Context, key string) map[string]clientSort
 	}
 	rows, err := h.userData.MediaProgress(user.ID)
 	if err != nil {
-		slog.Warn("abs: progress sort: user progress unavailable, serving title order",
-			"sort", key, "err", err)
+		clientSortLog.Warn("abs: progress sort: user progress unavailable, serving title order: sort=%s err=%v", key, err)
 		return keys
 	}
 	for _, raw := range rows {

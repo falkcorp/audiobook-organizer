@@ -1,12 +1,11 @@
 // file: internal/server/handlers/abs/playlists.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c41e97b2-0d85-4f36-a7e9-1b620c8ad573
 // last-edited: 2026-09-19
 
 package abs
 
 import (
-	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -16,6 +15,8 @@ import (
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
+
+var playlistsLog = logger.New("abs")
 
 // ── GET /api/libraries/:libraryId/playlists ─────────────────────────────────
 //
@@ -202,9 +203,8 @@ func (h *Handler) playlistItems(c *gin.Context, playlistID string, bookIDs []str
 		// book blanked every playlist.
 		v, verr := h.loadItemView(c.Request.Context(), book)
 		if verr != nil || v == nil {
-			slog.Warn("abs: playlist item dropped: its library item could not be built",
-				"playlist_id", logger.SanitizeLogValue(playlistID), "book_id", book.ID,
-				"library_item_id", syncID, "err", verr)
+			playlistsLog.Warn("abs: playlist item dropped: its library item could not be built: playlist_id=%s book_id=%s library_item_id=%s err=%v",
+				logger.SanitizeLogValue(playlistID), book.ID, syncID, verr)
 			continue
 		}
 		item := gin.H{
