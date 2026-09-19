@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -104,6 +105,15 @@ func (f *fakeStoreForDedup) MarkAIJobFailed(id, msg string) error {
 	j.ErrorMsg = msg
 	f.jobs[id] = j
 	return nil
+}
+func (f *fakeStoreForDedup) MarkAIJobApplyFailed(id, msg string) (database.AIJob, error) {
+	j := f.jobs[id]
+	j.Status = "apply_failed"
+	j.ApplyAttempts++
+	j.LastApplyError = msg
+	j.LastApplyAt = time.Now()
+	f.jobs[id] = j
+	return j, nil
 }
 func (f *fakeStoreForDedup) ListAIJobs(t, s string, l, o int) ([]database.AIJob, error) {
 	var out []database.AIJob

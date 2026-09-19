@@ -1,5 +1,5 @@
 // file: internal/server/batch_poller.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: f8a1b2c3-d4e5-6789-abcd-0123456789ab
 // last-edited: 2026-09-19
 
@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -157,6 +158,10 @@ func (bp *BatchPoller) dispatch(ctx context.Context, b ai.BatchInfo) (handled bo
 	defer func() { bp.finish(b.ID, b.Type, handled) }()
 
 	if err := handler(ctx, b.ID, b.OutputFileID); err != nil {
+		if errors.Is(err, aijobs.ErrApplyBackoff) {
+			batchPollerLog.Info("%s batch %s: %v", b.Type, b.ID, err)
+			return false
+		}
 		batchPollerLog.Error("handler for %s batch %s failed, will retry next poll: %v", b.Type, b.ID, err)
 		return false
 	}
@@ -307,7 +312,7 @@ func aijobsReconciler(getStore func() database.AIJobsStore) BatchReconciler {
 		}
 		orphans := make([]aijobs.OrphanBatch, 0, len(batches))
 		for _, b := range batches {
-			orphans = append(orphans, aijobs.OrphanBatch{ID: b.ID, Metadata: b.Metadata})
+			orphans = append(orphans, aijobs.OrphanBatch{ID: b.ID, Status: b.Status, Metadata: b.Metadata})
 		}
 		_, err := aijobs.ReconcileOrphans(store, orphans)
 		return err

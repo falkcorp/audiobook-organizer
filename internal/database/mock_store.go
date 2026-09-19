@@ -279,14 +279,15 @@ type MockStore struct {
 	PruneSystemActivityLogsFunc      func(olderThan time.Time) (int, error)
 
 	// AI jobs
-	CreateAIJobFunc        func(job AIJob, payloadJSON []byte) error
-	GetAIJobFunc           func(id string) (AIJob, error)
-	GetAIJobByBatchIDFunc  func(batchID string) (AIJob, error)
-	GetAIJobPayloadFunc    func(id string) ([]byte, error)
-	MarkAIJobSubmittedFunc func(id, batchID string) error
-	MarkAIJobCompletedFunc func(id, status string, successCount, errorCount int, rowErrors []AIJobRowError) error
-	MarkAIJobFailedFunc    func(id, errMsg string) error
-	ListAIJobsFunc         func(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error)
+	CreateAIJobFunc          func(job AIJob, payloadJSON []byte) error
+	GetAIJobFunc             func(id string) (AIJob, error)
+	GetAIJobByBatchIDFunc    func(batchID string) (AIJob, error)
+	GetAIJobPayloadFunc      func(id string) ([]byte, error)
+	MarkAIJobSubmittedFunc   func(id, batchID string) error
+	MarkAIJobCompletedFunc   func(id, status string, successCount, errorCount int, rowErrors []AIJobRowError) error
+	MarkAIJobFailedFunc      func(id, errMsg string) error
+	MarkAIJobApplyFailedFunc func(id, errMsg string) (AIJob, error)
+	ListAIJobsFunc           func(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error)
 
 	// Metadata rejections
 	AddMetadataRejectionFunc          func(r MetadataRejection) error
@@ -3569,6 +3570,13 @@ func (m *MockStore) MarkAIJobFailed(id, errMsg string) error {
 		return m.MarkAIJobFailedFunc(id, errMsg)
 	}
 	return nil
+}
+
+func (m *MockStore) MarkAIJobApplyFailed(id, errMsg string) (AIJob, error) {
+	if m.MarkAIJobApplyFailedFunc != nil {
+		return m.MarkAIJobApplyFailedFunc(id, errMsg)
+	}
+	return AIJob{}, nil
 }
 
 func (m *MockStore) ListAIJobs(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error) {

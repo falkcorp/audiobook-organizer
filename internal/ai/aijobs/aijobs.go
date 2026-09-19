@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -170,6 +171,28 @@ func Submit(ctx context.Context, deps Deps, req SubmitRequest) (string, error) {
 	return jobID, nil
 }
 
+// MaxApplyAttempts is how many failed applies a job gets before it is marked
+// terminally "failed". Failures of our own apply (store busy, shutdown cancel,
+// a recovered callback panic) are usually transient, so one failure must not
+// throw away a paid batch's results; five spread over the backoff below is
+// more than an hour of retrying before giving up.
+const MaxApplyAttempts = 5
+
+// applyBackoffBase is the wait after the first failed apply; it doubles per
+// further failure (5m, 10m, 20m, 40m) and is capped at applyBackoffMax.
+const (
+	applyBackoffBase = 5 * time.Minute
+	applyBackoffMax  = time.Hour
+)
+
+// now is the clock Dispatch reads; tests replace it.
+var now = time.Now
+
+// ErrApplyBackoff is returned by Dispatch for a job whose last apply failed
+// too recently to retry. It is not a failure: the poller leaves the batch
+// unhandled and offers it again on a later tick.
+var ErrApplyBackoff = errors.New("aijobs: apply retry backing off")
+
 // terminalJobStatuses are the ai_jobs statuses Dispatch must never apply again.
 // Listed explicitly rather than as "anything but submitted": a job row read back
 // with an empty status is not evidence it was already applied.
@@ -180,9 +203,55 @@ var terminalJobStatuses = map[string]bool{
 	"expired":               true,
 }
 
-// IsTerminalStatus reports whether a job in this status has been dispatched to
-// an outcome and must not be applied again.
-func IsTerminalStatus(status string) bool { return terminalJobStatuses[status] }
+// IsTerminalJob reports whether a job has been dispatched to an outcome and
+// must not be applied again.
+//
+// "failed" is terminal only once the apply budget is spent. A failed row with
+// ApplyAttempts < MaxApplyAttempts is either a submit-time failure (never has
+// a batch id, so Dispatch never sees it) or a row an earlier build marked
+// failed on its first apply error — that build retried such rows every tick,
+// so they still get the bounded retry budget rather than being dropped.
+func IsTerminalJob(job database.AIJob) bool {
+	if job.Status == "failed" {
+		return job.ApplyAttempts >= MaxApplyAttempts
+	}
+	return terminalJobStatuses[job.Status]
+}
+
+// applyBackoff is the wait after the attempts-th failed apply.
+func applyBackoff(attempts int) time.Duration {
+	d := applyBackoffBase
+	for i := 1; i < attempts && d < applyBackoffMax; i++ {
+		d *= 2
+	}
+	if d > applyBackoffMax {
+		d = applyBackoffMax
+	}
+	return d
+}
+
+// recordApplyFailure books one failed apply. Below the budget the job is left
+// "apply_failed" for a later retry; at the budget it becomes terminal "failed"
+// and is logged at error level (it also shows as failed, with the message, in
+// the ai jobs list). Always returns an error so the poller does not record the
+// batch handled on this tick; once terminal, the next Dispatch returns nil.
+func recordApplyFailure(store database.AIJobsStore, job database.AIJob, batchID string, cause error) error {
+	updated, err := store.MarkAIJobApplyFailed(job.ID, cause.Error())
+	if err != nil {
+		return fmt.Errorf("aijobs.Dispatch: %w (and recording the failed apply failed: %v)", cause, err)
+	}
+	if updated.ApplyAttempts >= MaxApplyAttempts {
+		msg := fmt.Sprintf("apply failed %d times, giving up: %v", updated.ApplyAttempts, cause)
+		if ferr := store.MarkAIJobFailed(job.ID, msg); ferr != nil {
+			return fmt.Errorf("aijobs.Dispatch: %w (and marking the job failed failed: %v)", cause, ferr)
+		}
+		log.Error("job %s (type %s, batch %s) %s — its results were NOT applied", job.ID, job.Type, batchID, msg)
+		return fmt.Errorf("aijobs.Dispatch: job %s: %s", job.ID, msg)
+	}
+	log.Warn("job %s (type %s, batch %s) apply attempt %d/%d failed, will retry after %s: %v",
+		job.ID, job.Type, batchID, updated.ApplyAttempts, MaxApplyAttempts, applyBackoff(updated.ApplyAttempts), cause)
+	return fmt.Errorf("aijobs.Dispatch: %w", cause)
+}
 
 // Dispatch is called by the BatchPoller when an aijobs batch completes.
 // It looks up the ai_jobs row, loads the payload, invokes the registered callback,
@@ -194,32 +263,36 @@ func IsTerminalStatus(status string) bool { return terminalJobStatuses[status] }
 // results being applied a second time. Returning nil (not an error) lets the
 // poller record the batch as handled instead of retrying it every tick.
 //
-// "failed" is terminal too: a fatal callback error is recorded on the row and
-// surfaced in the jobs list rather than retried blind every poll, since the
-// callback may have applied part of the batch before failing.
+// A failed apply (no callback registered, payload unreadable, callback fatal
+// error or panic) is recorded with MarkAIJobApplyFailed and retried on later
+// polls with exponential backoff; after MaxApplyAttempts the job becomes
+// terminal "failed". Retrying may replay a callback that applied part of the
+// batch before failing, which the replay-safety contract covers.
 func Dispatch(ctx context.Context, store database.AIJobsStore, batchID string, results []RowResult) (err error) {
 	job, err := store.GetAIJobByBatchID(batchID)
 	if err != nil {
 		return fmt.Errorf("aijobs.Dispatch: lookup batch %s: %w", batchID, err)
 	}
-	if IsTerminalStatus(job.Status) {
+	if IsTerminalJob(job) {
 		log.Info("batch %s: job %s already %s, not applying again", batchID, job.ID, job.Status)
 		return nil
+	}
+	if job.ApplyAttempts > 0 && !job.LastApplyAt.IsZero() {
+		if wait := job.LastApplyAt.Add(applyBackoff(job.ApplyAttempts)).Sub(now()); wait > 0 {
+			return fmt.Errorf("%w: job %s, attempt %d, %s left", ErrApplyBackoff, job.ID, job.ApplyAttempts+1, wait.Round(time.Second))
+		}
 	}
 
 	registryMu.RLock()
 	cb, ok := registry[job.Type]
 	registryMu.RUnlock()
 	if !ok {
-		msg := fmt.Sprintf("no callback registered for type %q", job.Type)
-		_ = store.MarkAIJobFailed(job.ID, msg)
-		return fmt.Errorf("aijobs.Dispatch: %s", msg)
+		return recordApplyFailure(store, job, batchID, fmt.Errorf("no callback registered for type %q", job.Type))
 	}
 
 	payload, err := store.GetAIJobPayload(job.ID)
 	if err != nil {
-		_ = store.MarkAIJobFailed(job.ID, fmt.Sprintf("load payload: %v", err))
-		return fmt.Errorf("aijobs.Dispatch: load payload: %w", err)
+		return recordApplyFailure(store, job, batchID, fmt.Errorf("load payload: %w", err))
 	}
 
 	// Recover from panics in the callback so one bad feature cannot crash the poller.
@@ -236,8 +309,7 @@ func Dispatch(ctx context.Context, store database.AIJobsStore, batchID string, r
 	}()
 
 	if fatalErr != nil {
-		_ = store.MarkAIJobFailed(job.ID, fatalErr.Error())
-		return fatalErr
+		return recordApplyFailure(store, job, batchID, fatalErr)
 	}
 
 	status := "completed"
@@ -254,8 +326,13 @@ func Dispatch(ctx context.Context, store database.AIJobsStore, batchID string, r
 // OrphanBatch is one listed OpenAI batch as ReconcileOrphans needs it.
 type OrphanBatch struct {
 	ID       string
+	Status   string // OpenAI batch status: completed, failed, expired, cancelled, ...
 	Metadata map[string]string
 }
+
+// openAIFailedStatuses are batch statuses where OpenAI, not our apply, ended
+// the batch. There are no results to retry, so the job is marked terminal.
+var openAIFailedStatuses = map[string]bool{"failed": true, "expired": true, "cancelled": true}
 
 // ReconcileOrphans re-attaches batches whose id never reached their job row.
 //
@@ -271,6 +348,11 @@ type OrphanBatch struct {
 // Submit's caller saw that failure and may already have resubmitted the same
 // items, and attaching the old batch would apply them twice.
 //
+// It also closes out jobs whose batch OpenAI itself failed, expired or
+// cancelled: those never reach Dispatch (the poller dispatches completed batches
+// only), so without this the job would sit "submitted" forever. That is marked
+// terminal "failed" immediately, unlike an apply failure, which is retried.
+//
 // Returns the number of jobs attached. Per-batch errors are logged and skipped
 // so one bad row cannot block the rest; the returned error is the first one.
 func ReconcileOrphans(store database.AIJobsStore, batches []OrphanBatch) (int, error) {
@@ -285,6 +367,18 @@ func ReconcileOrphans(store database.AIJobsStore, batches []OrphanBatch) (int, e
 		if err != nil || job.ID == "" {
 			// A batch naming a job this store never had (another install
 			// sharing the OpenAI project, or a deleted row) is not ours.
+			continue
+		}
+		if job.BatchID == b.ID && openAIFailedStatuses[b.Status] && job.Status == "submitted" {
+			msg := fmt.Sprintf("openai batch %s: %s", b.ID, b.Status)
+			if err := store.MarkAIJobFailed(jobID, msg); err != nil {
+				log.Error("mark job %s failed after %s: %v", jobID, msg, err)
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			log.Error("job %s: %s — no results to apply", jobID, msg)
 			continue
 		}
 		if job.BatchID != "" {

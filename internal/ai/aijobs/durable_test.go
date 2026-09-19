@@ -1,5 +1,5 @@
 // file: internal/ai/aijobs/durable_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d96ffcde-7b33-4014-985a-a56c427cac9d
 // last-edited: 2026-09-19
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
@@ -74,6 +75,9 @@ func TestDispatch_CompletedJobIsNoOp(t *testing.T) {
 			require.NoError(t, store.MarkAIJobSubmitted("J1", "batch_done"))
 			j := store.jobs["J1"]
 			j.Status = status
+			if status == "failed" {
+				j.ApplyAttempts = MaxApplyAttempts // failed is terminal only once the budget is spent
+			}
 			store.jobs["J1"] = j
 
 			err := Dispatch(context.Background(), store, "batch_done", []RowResult{{CustomID: "J1-0", Content: "{}"}})
@@ -172,4 +176,135 @@ func TestReconcileOrphans_LeavesFailedJobAlone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 	assert.Empty(t, store.jobs["JF"].BatchID)
+}
+
+// flakyCallback fails its first failN calls, then applies idempotently.
+type flakyCallback struct {
+	effectSink
+	failN int
+}
+
+func (f *flakyCallback) cb(ctx context.Context, p []byte, r []RowResult) (int, int, []database.AIJobRowError, error) {
+	f.mu.Lock()
+	if f.failN > 0 {
+		f.failN--
+		f.calls++
+		f.mu.Unlock()
+		return 0, 0, nil, errors.New("database is busy")
+	}
+	f.mu.Unlock()
+	return f.effectSink.callback(ctx, p, r)
+}
+
+func withClock(t *testing.T, start time.Time) *time.Time {
+	t.Helper()
+	cur := start
+	prev := now
+	now = func() time.Time { return cur }
+	t.Cleanup(func() { now = prev })
+	return &cur
+}
+
+func seedSubmitted(t *testing.T, store *fakeStore, id, typ, batch string) {
+	t.Helper()
+	require.NoError(t, store.CreateAIJob(database.AIJob{ID: id, Type: typ, Status: "pending"}, []byte("[]")))
+	require.NoError(t, store.MarkAIJobSubmitted(id, batch))
+}
+
+// A transient apply failure is retried after backoff and applied exactly once.
+func TestDispatch_TransientFailureRetriedThenAppliedOnce(t *testing.T) {
+	store := newFakeStore()
+	fc := &flakyCallback{effectSink: effectSink{effects: map[string]int{}}, failN: 1}
+	Register("durable_transient", fc.cb)
+	seedSubmitted(t, store, "JT", "durable_transient", "batch_t")
+	clock := withClock(t, time.Now())
+	results := []RowResult{{CustomID: "JT-0", Content: "{}"}}
+
+	require.Error(t, Dispatch(context.Background(), store, "batch_t", results))
+	j := store.jobs["JT"]
+	require.Equal(t, "apply_failed", j.Status, "a transient failure must stay retriable")
+	require.Equal(t, 1, j.ApplyAttempts)
+	require.Contains(t, j.LastApplyError, "busy")
+	// fakeStore stamps LastApplyAt with the wall clock; align it with ours.
+	j.LastApplyAt = *clock
+	store.jobs["JT"] = j
+
+	// Next tick, inside the backoff window: not retried yet.
+	*clock = clock.Add(time.Minute)
+	err := Dispatch(context.Background(), store, "batch_t", results)
+	require.ErrorIs(t, err, ErrApplyBackoff)
+	require.Equal(t, 1, fc.calls)
+
+	// After the backoff: retried and applied.
+	*clock = clock.Add(applyBackoffBase)
+	require.NoError(t, Dispatch(context.Background(), store, "batch_t", results))
+	assert.Equal(t, "completed", store.jobs["JT"].Status)
+	assert.Equal(t, map[string]int{"JT-0": 1}, fc.effects)
+
+	// Completed: never applied again.
+	require.NoError(t, Dispatch(context.Background(), store, "batch_t", results))
+	assert.Equal(t, 2, fc.calls, "one failed attempt plus exactly one successful apply")
+}
+
+// A permanent failure becomes terminal "failed" after MaxApplyAttempts, and
+// Dispatch then returns nil so the poller stops offering the batch.
+func TestDispatch_PermanentFailureTerminalAfterMaxAttempts(t *testing.T) {
+	store := newFakeStore()
+	fc := &flakyCallback{effectSink: effectSink{effects: map[string]int{}}, failN: 1 << 30}
+	Register("durable_permanent", fc.cb)
+	seedSubmitted(t, store, "JP", "durable_permanent", "batch_perm")
+	clock := withClock(t, time.Now())
+
+	for i := 1; i <= MaxApplyAttempts; i++ {
+		require.Error(t, Dispatch(context.Background(), store, "batch_perm", nil))
+		j := store.jobs["JP"]
+		require.Equal(t, i, j.ApplyAttempts)
+		if i < MaxApplyAttempts {
+			require.Equal(t, "apply_failed", j.Status)
+		}
+		j.LastApplyAt = *clock
+		store.jobs["JP"] = j
+		*clock = clock.Add(applyBackoffMax)
+	}
+	j := store.jobs["JP"]
+	assert.Equal(t, "failed", j.Status)
+	assert.Contains(t, j.ErrorMsg, "giving up")
+
+	require.NoError(t, Dispatch(context.Background(), store, "batch_perm", nil))
+	assert.Equal(t, MaxApplyAttempts, fc.calls, "no attempt after the budget is spent")
+}
+
+// A job an earlier build marked failed on its first apply error still gets the
+// retry budget instead of being dropped.
+func TestDispatch_LegacyFailedJobStillRetried(t *testing.T) {
+	store := newFakeStore()
+	sink := newEffectSink()
+	Register("durable_legacy", sink.callback)
+	seedSubmitted(t, store, "JL", "durable_legacy", "batch_legacy")
+	require.NoError(t, store.MarkAIJobFailed("JL", "callback panic: old build"))
+
+	require.NoError(t, Dispatch(context.Background(), store, "batch_legacy", []RowResult{{CustomID: "JL-0"}}))
+	assert.Equal(t, 1, sink.calls)
+	assert.Equal(t, "completed", store.jobs["JL"].Status)
+}
+
+// OpenAI failing or expiring the batch is terminal at once (nothing to retry),
+// unlike our own apply failing.
+func TestReconcileOrphans_OpenAIFailedBatchMarksJobFailed(t *testing.T) {
+	for _, st := range []string{"failed", "expired", "cancelled"} {
+		t.Run(st, func(t *testing.T) {
+			store := newFakeStore()
+			seedSubmitted(t, store, "JO", "t", "batch_o")
+			_, err := ReconcileOrphans(store, []OrphanBatch{{ID: "batch_o", Status: st, Metadata: map[string]string{MetadataJobIDKey: "JO"}}})
+			require.NoError(t, err)
+			assert.Equal(t, "failed", store.jobs["JO"].Status)
+			assert.Contains(t, store.jobs["JO"].ErrorMsg, st)
+		})
+	}
+	// An in-progress batch leaves the job alone.
+	store := newFakeStore()
+	seedSubmitted(t, store, "JR", "t", "batch_r")
+	_, err := ReconcileOrphans(store, []OrphanBatch{{ID: "batch_r", Status: "in_progress", Metadata: map[string]string{MetadataJobIDKey: "JR"}}})
+	require.NoError(t, err)
+	assert.Equal(t, "submitted", store.jobs["JR"].Status)
 }

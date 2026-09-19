@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
@@ -66,6 +67,15 @@ func (f *fakeStore) MarkAIJobFailed(id, msg string) error {
 	j.ErrorMsg = msg
 	f.jobs[id] = j
 	return nil
+}
+func (f *fakeStore) MarkAIJobApplyFailed(id, msg string) (database.AIJob, error) {
+	j := f.jobs[id]
+	j.Status = "apply_failed"
+	j.ApplyAttempts++
+	j.LastApplyError = msg
+	j.LastApplyAt = time.Now()
+	f.jobs[id] = j
+	return j, nil
 }
 func (f *fakeStore) ListAIJobs(t, s string, l, o int) ([]database.AIJob, error) {
 	var out []database.AIJob
@@ -213,8 +223,9 @@ func TestDispatch_PanicInCallbackRecovered(t *testing.T) {
 	err := Dispatch(context.Background(), store, "batch_p", []RowResult{{CustomID: "x"}})
 	require.Error(t, err)
 	j, _ := store.GetAIJob("01P")
-	assert.Equal(t, "failed", j.Status)
-	assert.Contains(t, j.ErrorMsg, "panic")
+	assert.Equal(t, "apply_failed", j.Status, "a recovered panic is a retriable apply failure")
+	assert.Equal(t, 1, j.ApplyAttempts)
+	assert.Contains(t, j.LastApplyError, "panic")
 }
 
 // helpers

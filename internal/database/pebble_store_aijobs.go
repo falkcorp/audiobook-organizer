@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_aijobs.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 702bf788-2e84-43d9-81c3-81c3146ba7c0
-// last-edited: 2026-07-03
+// last-edited: 2026-09-19
 
 package database
 
@@ -134,6 +134,26 @@ func (p *PebbleStore) MarkAIJobFailed(id, errMsg string) error {
 		return err
 	}
 	return p.db.Set([]byte(fmt.Sprintf("aijob:%s", id)), data, pebble.Sync)
+}
+
+// MarkAIJobApplyFailed records one failed apply attempt and returns the row.
+func (p *PebbleStore) MarkAIJobApplyFailed(id, errMsg string) (AIJob, error) {
+	job, err := p.GetAIJob(id)
+	if err != nil {
+		return AIJob{}, err
+	}
+	job.Status = "apply_failed"
+	job.ApplyAttempts++
+	job.LastApplyError = errMsg
+	job.LastApplyAt = time.Now().UTC()
+	data, err := json.Marshal(job)
+	if err != nil {
+		return AIJob{}, err
+	}
+	if err := p.db.Set([]byte(fmt.Sprintf("aijob:%s", id)), data, pebble.Sync); err != nil {
+		return AIJob{}, err
+	}
+	return job, nil
 }
 
 // ListAIJobs returns jobs matching optional type/status filters, with
