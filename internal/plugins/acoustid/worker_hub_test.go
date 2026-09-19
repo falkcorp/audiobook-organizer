@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 23143bc2-39af-48f3-a47c-8c1f392e2ab9
 // last-edited: 2026-09-19
 
@@ -68,7 +68,7 @@ func attachHub(t *testing.T, e *wbEnv) *hubEnv {
 	}
 	h := &hubEnv{wbEnv: e, hub: e.plugin.WorkerHub(), clock: &testClock{}, tally: &windowTally{}, items: items}
 	h.hub.now = h.clock.now
-	h.hub.attach(context.Background(), e.plugin, e.tools, h.tally, plan.calibration)
+	h.hub.attach(context.Background(), e.plugin, e.tools, h.tally, plan.calibration, hubMode{})
 	t.Cleanup(h.hub.detach)
 	h.hub.beginTier(windowTierPresent, items)
 	return h

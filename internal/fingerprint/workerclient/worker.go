@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/worker.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 201f885e-8d5c-40a3-8022-a6a19631e9d9
 // last-edited: 2026-09-19
 
@@ -168,27 +168,35 @@ func Run(ctx context.Context, drain <-chan struct{}, cfg Config) error {
 		w.maxLeases = hello.Limits.MaxLeasesPerWorker
 	}
 
-	cfs, err := w.calibrationTargets(hello)
+	cfs, bootstrap, err := w.calibrationTargets(hello)
 	if err != nil {
 		return err
 	}
+	// The identity checks run in every mode, bootstrap included: they are
+	// what proves the root mapping points at the server's tree.
 	paths, err := w.checkCalibrationFiles(cfs)
 	if err != nil {
 		return err
 	}
 	w.calib = cfs
-	if err := w.parity(ctx, cfs, paths, hello.WindowSet); err != nil {
-		if errors.Is(err, errDrained) {
-			log.Info("drained during the parity gate; nothing was leased")
-			return nil
+	if bootstrap {
+		log.Warn("!!! BOOTSTRAP REFERENCE: the server has no reference windows yet and this worker (fpcalc %s + ffmpeg %s) is the configured reference pair. "+
+			"Its root mapping was verified on %d calibration file(s), but NO byte-parity check ran: the windows it cuts DEFINE the reference every later worker must reproduce",
+			cfg.Versions.Fpcalc, cfg.Versions.FFmpeg, len(cfs))
+	} else {
+		if err := w.parity(ctx, cfs, paths, hello.WindowSet); err != nil {
+			if errors.Is(err, errDrained) {
+				log.Info("drained during the parity gate; nothing was leased")
+				return nil
+			}
+			return err
 		}
-		return err
+		nWin := 0
+		for _, cf := range cfs {
+			nWin += len(cf.Windows)
+		}
+		log.Info("parity gate passed: %d calibration windows over %d files reproduced byte for byte", nWin, len(cfs))
 	}
-	nWin := 0
-	for _, cf := range cfs {
-		nWin += len(cf.Windows)
-	}
-	log.Info("parity gate passed: %d calibration windows over %d files reproduced byte for byte", nWin, len(cfs))
 
 	go w.recheckLoop(ctx)
 	w.loop(ctx)
