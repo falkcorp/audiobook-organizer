@@ -224,6 +224,9 @@ type IdentityStore interface {
 	// what made broad searches take tens of seconds.
 	MintOrGetSyncFileIDs(bookID string, fileIDs []string) (map[string]string, error)
 	GetSyncFileID(bookID, fileID string) (string, bool, error)
+	// GetSyncIDForBook is the read-only reverse lookup (no mint, no write),
+	// used on render/retry paths that must not write (canonicalBookID).
+	GetSyncIDForBook(bookID string) (string, bool, error)
 	ListSyncFilesForBook(bookID string) ([]database.SyncFile, error)
 }
 

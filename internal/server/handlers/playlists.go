@@ -1,5 +1,5 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
 // last-edited: 2026-09-19
 
@@ -256,7 +256,11 @@ func (h *PlaylistHandler) UpdatePlaylist(c *gin.Context) {
 			if pl.Type != database.UserPlaylistTypeStatic {
 				return playlistBadRequest("book_ids only valid for static playlists")
 			}
-			pl.BookIDs = append([]string(nil), (*req.BookIDs)...)
+			// Never a blind replace: the retry re-applies this against the
+			// FRESH row, and a list the client built from an older read would
+			// silently drop members added since. See MergeMemberListNoLoss;
+			// removal goes through DELETE /playlists/:id/books/:bookID.
+			pl.BookIDs = database.MergeMemberListNoLoss(pl.BookIDs, *req.BookIDs)
 		}
 		if req.Query != nil {
 			if pl.Type != database.UserPlaylistTypeSmart {

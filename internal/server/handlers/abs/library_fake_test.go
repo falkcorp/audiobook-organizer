@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-19
 
@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/conformance"
@@ -114,7 +115,16 @@ type fakeLibrary struct {
 
 	// coreWalks counts GetAllBooksCore calls (the whole-library projection).
 	coreWalks int
+
+	// resolveErr injects a ResolveSyncItem failure for a sync id.
+	resolveErr map[string]error
+
+	// gen is the library-generation counter (LibraryGeneration).
+	gen cache.Generation
 }
+
+// LibraryGeneration mirrors PebbleStore: book writes bump it.
+func (f *fakeLibrary) LibraryGeneration() *cache.Generation { return &f.gen }
 
 func (f *fakeLibrary) coreWalkCalls() int {
 	f.mu.Lock()
@@ -766,6 +776,9 @@ func (f *fakeLibrary) MintOrGetSyncID(bookID string) (string, error) {
 func (f *fakeLibrary) ResolveSyncItem(syncID string) (*database.SyncItem, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.resolveErr[syncID]; err != nil {
+		return nil, err
+	}
 	current := syncID
 	for range 10 {
 		it, ok := f.syncItems[current]

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/playlists_write.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6ddbf78d-bfe3-47a7-946a-c677d6f16821
 // last-edited: 2026-09-19
 
@@ -113,11 +113,16 @@ func (h *Handler) CreatePlaylist(c *gin.Context) {
 		return
 	}
 
+	bookIDs, rerr := h.resolveSyncIDs(playlistItemSyncIDs(req.Items))
+	if rerr != nil {
+		respondResolveError(c)
+		return
+	}
 	pl := &database.UserPlaylist{
 		Name:            name,
 		Description:     strings.TrimSpace(req.Description),
 		Type:            database.UserPlaylistTypeStatic,
-		BookIDs:         h.resolveSyncIDs(playlistItemSyncIDs(req.Items)),
+		BookIDs:         bookIDs,
 		CreatedByUserID: u.ID,
 		Dirty:           true, // same as the native create: new playlists need iTunes sync
 	}
@@ -145,6 +150,17 @@ func (h *Handler) UpdatePlaylist(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "invalid playlist payload")
 		return
 	}
+	// Resolved ONCE, before the retry loop: translation does not depend on the
+	// row, and a lookup error fails the request instead of dropping members.
+	var incoming []string
+	if req.Items != nil {
+		ids, rerr := h.resolveSyncIDs(playlistItemSyncIDs(*req.Items))
+		if rerr != nil {
+			respondResolveError(c)
+			return
+		}
+		incoming = ids
+	}
 	h.mutateOwnedPlaylist(c, func(pl *database.UserPlaylist) (int, string) {
 		if req.Name != nil {
 			name := strings.TrimSpace(*req.Name)
@@ -160,7 +176,11 @@ func (h *Handler) UpdatePlaylist(c *gin.Context) {
 			if pl.Type != database.UserPlaylistTypeStatic {
 				return http.StatusConflict, "this is a smart playlist; its members come from its query"
 			}
-			pl.BookIDs = h.resolveSyncIDs(playlistItemSyncIDs(*req.Items))
+			// 🔴 NOT a replace. The app builds `items` from the playlist it
+			// last read; a replace (re-applied by the retry to the fresh row)
+			// would drop anything added since. Reorder what it names, add what
+			// is new, keep the rest; removal is batch/remove or item delete.
+			pl.BookIDs = database.MergeMemberListNoLoss(pl.BookIDs, incoming)
 		}
 		return 0, ""
 	})
@@ -193,11 +213,16 @@ func (h *Handler) BatchAddToPlaylist(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "items are required")
 		return
 	}
+	adds, rerr := h.resolveSyncIDs(playlistItemSyncIDs(req.Items))
+	if rerr != nil {
+		respondResolveError(c)
+		return
+	}
 	h.mutateOwnedPlaylist(c, func(pl *database.UserPlaylist) (int, string) {
 		if pl.Type != database.UserPlaylistTypeStatic {
 			return http.StatusConflict, "this is a smart playlist; its members come from its query"
 		}
-		for _, id := range h.resolveSyncIDs(playlistItemSyncIDs(req.Items)) {
+		for _, id := range adds {
 			if !slices.Contains(pl.BookIDs, id) {
 				pl.BookIDs = append(pl.BookIDs, id)
 			}
@@ -217,11 +242,16 @@ func (h *Handler) BatchRemoveFromPlaylist(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "items are required")
 		return
 	}
+	drops, rerr := h.resolveSyncIDs(playlistItemSyncIDs(req.Items))
+	if rerr != nil {
+		respondResolveError(c)
+		return
+	}
 	h.mutateOwnedPlaylist(c, func(pl *database.UserPlaylist) (int, string) {
 		if pl.Type != database.UserPlaylistTypeStatic {
 			return http.StatusConflict, "this is a smart playlist; its members come from its query"
 		}
-		pl.BookIDs = h.withoutMembers(pl.BookIDs, h.resolveSyncIDs(playlistItemSyncIDs(req.Items)))
+		pl.BookIDs = h.withoutMembers(pl.BookIDs, drops)
 		return 0, ""
 	})
 }
@@ -231,7 +261,11 @@ func (h *Handler) BatchRemoveFromPlaylist(c *gin.Context) {
 // A libraryItemId that does not resolve cannot be in the playlist, so the
 // requested end state already holds and the playlist is returned unchanged.
 func (h *Handler) RemovePlaylistItem(c *gin.Context) {
-	target := h.resolveSyncIDs([]string{c.Param("libraryItemId")})
+	target, rerr := h.resolveSyncIDs([]string{c.Param("libraryItemId")})
+	if rerr != nil {
+		respondResolveError(c)
+		return
+	}
 	h.mutateOwnedPlaylist(c, func(pl *database.UserPlaylist) (int, string) {
 		if pl.Type != database.UserPlaylistTypeStatic {
 			return http.StatusConflict, "this is a smart playlist; its members come from its query"

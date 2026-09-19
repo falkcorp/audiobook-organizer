@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
 // last-edited: 2026-09-19
 
@@ -8,6 +8,7 @@ package abs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -172,11 +173,16 @@ func (h *Handler) CreateCollection(c *gin.Context) {
 	// surface is static. Dynamic collections are created on the native API, and
 	// this surface renders them as ordinary collections of their materialized
 	// members — the client never needs to know the difference.
+	bookIDs, rerr := h.resolveSyncIDs(req.Books)
+	if rerr != nil {
+		respondResolveError(c)
+		return
+	}
 	col := &database.Collection{
 		Name:            name,
 		Description:     strings.TrimSpace(req.Description),
 		Type:            database.CollectionTypeStatic,
-		BookIDs:         h.resolveSyncIDs(req.Books),
+		BookIDs:         bookIDs,
 		CreatedByUserID: createdBy,
 	}
 
@@ -245,7 +251,13 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 				"this is a dynamic collection; its members come from its query")
 			return
 		}
-		col.BookIDs = h.resolveSyncIDs(*req.Books)
+		ids, rerr := h.resolveSyncIDs(*req.Books)
+		if rerr != nil {
+			respondResolveError(c)
+			return
+		}
+		// No-loss merge, never a replace: see database.MergeMemberListNoLoss.
+		col.BookIDs = database.MergeMemberListNoLoss(col.BookIDs, ids)
 	}
 
 	if err := h.collections.UpdateCollection(col); err != nil {
@@ -306,7 +318,11 @@ func (h *Handler) AddBookToCollection(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "invalid payload")
 		return
 	}
-	ids := h.resolveSyncIDs([]string{req.ID})
+	ids, rerr := h.resolveSyncIDs([]string{req.ID})
+	if rerr != nil {
+		respondResolveError(c)
+		return
+	}
 	if len(ids) == 0 {
 		respondError(c, http.StatusNotFound, "book not found")
 		return
@@ -354,7 +370,11 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 		return
 	}
 
-	target := h.resolveSyncIDs([]string{strings.TrimSpace(c.Param("bookId"))})
+	target, rerr := h.resolveSyncIDs([]string{strings.TrimSpace(c.Param("bookId"))})
+	if rerr != nil {
+		respondResolveError(c)
+		return
+	}
 	if len(target) == 0 {
 		// The sync id does not resolve. The collection cannot contain it, so the
 		// requested end state already holds; report the collection unchanged
@@ -436,8 +456,13 @@ func (h *Handler) batchEditCollection(c *gin.Context, apply func(col *database.C
 		respondError(c, http.StatusBadRequest, "books are required")
 		return
 	}
+	ids, rerr := h.resolveSyncIDs(req.Books)
+	if rerr != nil {
+		respondResolveError(c)
+		return
+	}
 	col.BookIDs = append([]string(nil), col.BookIDs...)
-	apply(col, h.resolveSyncIDs(req.Books))
+	apply(col, ids)
 
 	if err := h.collections.UpdateCollection(col); err != nil {
 		if errors.Is(err, database.ErrCollectionVersionConflict) {
@@ -606,8 +631,10 @@ func (h *Handler) canonicalBookID(bookID string) string {
 	if h.identity == nil {
 		return bookID
 	}
-	syncID, err := h.identity.MintOrGetSyncID(bookID)
-	if err != nil {
+	// READ-ONLY lookup: this runs on every render and every retry, and a book
+	// with no sync id cannot be a merge loser (a loser keeps its id).
+	syncID, found, err := h.identity.GetSyncIDForBook(bookID)
+	if err != nil || !found {
 		return bookID
 	}
 	item, err := h.identity.ResolveSyncItem(syncID)
@@ -667,10 +694,15 @@ func (h *Handler) withoutMembers(stored, drop []string) []string {
 //
 // Duplicates are collapsed: a collection holding the same book twice has no
 // meaning, and the client's own UI treats membership as a set.
-func (h *Handler) resolveSyncIDs(syncIDs []string) []string {
+//
+// A sync id that does not exist is dropped (the client named nothing we have).
+// A LOOKUP ERROR is returned, never treated as "does not exist": dropping an id
+// on a transient read failure would permanently delete that member from the
+// list being written (review of #3470).
+func (h *Handler) resolveSyncIDs(syncIDs []string) ([]string, error) {
 	out := make([]string, 0, len(syncIDs))
 	if h.identity == nil {
-		return out
+		return out, nil
 	}
 	seen := make(map[string]struct{}, len(syncIDs))
 	for _, raw := range syncIDs {
@@ -678,7 +710,10 @@ func (h *Handler) resolveSyncIDs(syncIDs []string) []string {
 		if id == "" {
 			continue
 		}
-		bookID := h.bookIDForSyncID(id)
+		bookID, err := h.bookIDForSyncID(id)
+		if err != nil {
+			return nil, err
+		}
 		if bookID == "" {
 			continue
 		}
@@ -688,11 +723,15 @@ func (h *Handler) resolveSyncIDs(syncIDs []string) []string {
 		seen[bookID] = struct{}{}
 		out = append(out, bookID)
 	}
-	return out
+	return out, nil
 }
 
+// errResolveSyncID wraps a sync-keyspace read failure during id translation.
+var errResolveSyncID = errors.New("could not resolve library item ids")
+
 // bookIDForSyncID resolves one sync id to a book id, following a single merge
-// redirect.
+// redirect. ("", nil) means the id names no book; an error means we could not
+// tell, and callers must fail rather than guess.
 //
 // A sync item whose book was merged into another carries RedirectTo rather than
 // a CurrentBookID. Not following it would silently drop books the user picked —
@@ -700,22 +739,34 @@ func (h *Handler) resolveSyncIDs(syncIDs []string) []string {
 // and only this lookup would disagree. One hop, not a loop: a redirect chain
 // would mean the merge bookkeeping is itself broken, and spinning here would
 // turn that into a hung request instead of a dropped book.
-func (h *Handler) bookIDForSyncID(syncID string) string {
+func (h *Handler) bookIDForSyncID(syncID string) (string, error) {
 	item, err := h.identity.ResolveSyncItem(syncID)
-	if err != nil || item == nil {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %v", errResolveSyncID, syncID, err)
+	}
+	if item == nil {
+		return "", nil
 	}
 	if item.CurrentBookID != "" {
-		return item.CurrentBookID
+		return item.CurrentBookID, nil
 	}
 	if item.RedirectTo == "" || item.RedirectTo == syncID {
-		return ""
+		return "", nil
 	}
 	next, err := h.identity.ResolveSyncItem(item.RedirectTo)
-	if err != nil || next == nil {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %v", errResolveSyncID, item.RedirectTo, err)
 	}
-	return next.CurrentBookID
+	if next == nil {
+		return "", nil
+	}
+	return next.CurrentBookID, nil
+}
+
+// respondResolveError answers a failed id translation: 503, retryable, and
+// nothing written.
+func respondResolveError(c *gin.Context) {
+	respondError(c, http.StatusServiceUnavailable, "could not resolve library items; nothing was changed, retry")
 }
 
 // collectionDTO maps one Collection onto the upstream ABS collection shape.

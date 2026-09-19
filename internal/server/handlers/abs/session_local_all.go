@@ -133,7 +133,11 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 		res.Error = "podcast episodes are not supported"
 		return res
 	}
-	bookID := h.bookIDForSyncID(strings.TrimSpace(s.LibraryItemID))
+	bookID, rerr := h.bookIDForSyncID(strings.TrimSpace(s.LibraryItemID))
+	if rerr != nil {
+		res.Error = "could not resolve library item; retry"
+		return res
+	}
 	if bookID == "" {
 		res.Error = "library item not found"
 		return res
