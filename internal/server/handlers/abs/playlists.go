@@ -1,16 +1,18 @@
 // file: internal/server/handlers/abs/playlists.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c41e97b2-0d85-4f36-a7e9-1b620c8ad573
-// last-edited: 2026-08-13
+// last-edited: 2026-09-19
 
 package abs
 
 import (
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -193,6 +195,18 @@ func (h *Handler) playlistItems(c *gin.Context, playlistID string, bookIDs []str
 		if err != nil {
 			continue
 		}
+		// 🔴 A book whose item view cannot be built is DROPPED, like a deleted
+		// one. AudioBooth's PlaylistItem decodes libraryItem non-optionally
+		// whenever episodeId is null, so emitting the item without it (as this
+		// did) failed the decode of the ENTIRE Page<Playlist> -- one unreadable
+		// book blanked every playlist.
+		v, verr := h.loadItemView(c.Request.Context(), book)
+		if verr != nil || v == nil {
+			slog.Warn("abs: playlist item dropped: its library item could not be built",
+				"playlist_id", logger.SanitizeLogValue(playlistID), "book_id", book.ID,
+				"library_item_id", syncID, "err", verr)
+			continue
+		}
 		item := gin.H{
 			// The playlist-item id is synthesized from (playlist, item): our store
 			// has no PlaylistItem row for UserPlaylist — membership is an ordered
@@ -201,9 +215,7 @@ func (h *Handler) playlistItems(c *gin.Context, playlistID string, bookIDs []str
 			"playlistId":    playlistID,
 			"libraryItemId": syncID,
 			"episodeId":     nil,
-		}
-		if v, verr := h.loadItemView(c.Request.Context(), book); verr == nil && v != nil {
-			item["libraryItem"] = h.minifiedItem(v)
+			"libraryItem":   h.minifiedItem(v),
 		}
 		built = append(built, positioned{pos: pos, val: item})
 	}

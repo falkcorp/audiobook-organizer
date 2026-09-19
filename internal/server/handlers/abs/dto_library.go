@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/dto_library.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c471e9a0-5b83-4d16-92fe-08a7c35d1b6e
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package abs
 
@@ -464,6 +464,14 @@ type episodesResponse struct {
 //
 // Note the asymmetry in §1.7.3 item 8, which is easy to get backwards: Authors is
 // OBJECTS while Narrators is PLAIN NAME STRINGS.
+// libraryWithFilterDataResponse is GET /api/libraries/:id?include=filterdata.
+// AudioBooth decodes `filterdata` non-optionally; see Handler.Library.
+type libraryWithFilterDataResponse struct {
+	Filterdata *filterDataResponse `json:"filterdata"`
+	Issues     int                 `json:"issues"`
+	Library    libraryDTO          `json:"library"`
+}
+
 type filterDataResponse struct {
 	AuthorCount int         `json:"authorCount"`
 	Authors     []idNameDTO `json:"authors"`
