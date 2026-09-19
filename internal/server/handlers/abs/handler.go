@@ -127,6 +127,9 @@ type LibraryBookReader interface {
 	GetBooksByIDs(ids []string) ([]database.Book, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// GetBookFilesForIDsCore is the batched file read behind the size sort
+	// (browse_client_sort.go sizeKeys), which runs over the whole visible library.
+	GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error)
 }
 
 // LibrarySummaryReader reads paged and filtered book summaries.
@@ -153,6 +156,8 @@ type LibrarySearchReader interface {
 	// WHOLE library. It replaced a GetAllBooksCore(5000, 0) scan whose first
 	// 5,000 ULID-ordered rows were the only ones a decade could ever come from.
 	GetDistinctPublishedYears() ([]int, error)
+	// GetBooksByTag backs the ?filter=tags.<b64> group (browse_filters.go).
+	GetBooksByTag(tag string) ([]string, error)
 }
 
 // LibraryCreditReader reads contributors for books.

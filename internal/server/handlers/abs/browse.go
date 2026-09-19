@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-19
 
@@ -792,6 +792,21 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 	// lastBookAdded, lastBookUpdated, totalDuration, random). This comment used to
 	// say name was the only sort the app sends; the other six all came back in
 	// name order. An unrecognised key still keeps name order rather than erroring.
+	// 🔴 ?filter= WAS NEVER READ HERE (item-6 B2, 2026-09-19): the app sends it
+	// from SeriesPageModel, and the filtered response was byte-identical to the
+	// unfiltered one. Upstream ABS filters the series tab by the SAME
+	// <group>.<base64> tokens as /items, keeping every series that holds at least
+	// one matching book. Same resolver as /items, and the same fail-empty rule for
+	// anything unresolvable — the whole series list under a filter's name would be
+	// a wrong answer that looks like a right one.
+	if raw := strings.TrimSpace(c.Query("filter")); raw != "" {
+		kept, ok := h.filterSeries(c, raw, series, bySeries)
+		if !ok {
+			return
+		}
+		series = kept
+	}
+
 	sortSeries(series, c.Query("sort"), c.Query("desc") == "1" || c.Query("sortDesc") == "1", bySeries)
 
 	// 🔴 page/limit/sort WERE ACCEPTED AND IGNORED. Confirmed against production
@@ -848,6 +863,49 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 		Limit:   limit,
 		Page:    page,
 	})
+}
+
+// filterSeries applies a series-tab ?filter= token. It writes the response
+// itself (an empty page, or a 500) and reports false when the caller must stop.
+func (h *Handler) filterSeries(
+	c *gin.Context,
+	raw string,
+	series []database.Series,
+	bySeries map[int]seriesBooksBuilt,
+) ([]database.Series, bool) {
+	empty := func() ([]database.Series, bool) {
+		respondJSON(c, http.StatusOK, pageResponse{Results: []any{}, Total: 0,
+			Limit: queryInt(c, "limit", 0), Page: queryInt(c, "page", 0)})
+		return nil, false
+	}
+	group, value, ok := absFilterGroup(raw)
+	if !ok {
+		slog.Warn("abs: undecodable series filter, serving empty page", "filter", logger.SanitizeLogValue(raw))
+		return empty()
+	}
+	ids, status, err := h.filterGroupBookIDs(c, group, value)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not list series")
+		return nil, false
+	}
+	if status != filterResolved {
+		logUnresolvedFilter("series", group, value, status)
+		return empty()
+	}
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	kept := make([]database.Series, 0)
+	for _, s := range series {
+		for _, id := range bySeries[s.ID].bookIDs {
+			if _, hit := want[id]; hit {
+				kept = append(kept, s)
+				break
+			}
+		}
+	}
+	return kept, true
 }
 
 // SeriesDetail handles GET /api/series/:id. The full series row is deliberately
@@ -1478,14 +1536,14 @@ func (h *Handler) contributorDTOs(ctx context.Context) (*contributorIndex, error
 			UpdatedAt: now,
 		})
 	}
-	sort.SliceStable(idx.authors, func(i, j int) bool { return idx.authors[i].Name < idx.authors[j].Name })
+	sort.SliceStable(idx.authors, func(i, j int) bool { return absNameLess(idx.authors[i].Name, idx.authors[j].Name) })
 
 	idx.narrators = make([]narratorDTO, 0, len(narratorSeen))
 	for name := range narratorSeen {
 		n := len(idx.narratorBooks[name])
 		idx.narrators = append(idx.narrators, narratorDTO{ID: narratorID(name), Name: name, NumBooks: &n})
 	}
-	sort.SliceStable(idx.narrators, func(i, j int) bool { return idx.narrators[i].Name < idx.narrators[j].Name })
+	sort.SliceStable(idx.narrators, func(i, j int) bool { return absNameLess(idx.narrators[i].Name, idx.narrators[j].Name) })
 
 	return idx, nil
 }
@@ -1740,9 +1798,9 @@ func (h *Handler) itemViewsByIDs(ctx context.Context, ids []string) ([]itemView,
 func authorLess(sortBy string) func(a, b authorDTO) bool {
 	switch strings.TrimSpace(sortBy) {
 	case "", "name":
-		return func(a, b authorDTO) bool { return a.Name < b.Name }
+		return func(a, b authorDTO) bool { return absNameLess(a.Name, b.Name) }
 	case "lastFirst":
-		return func(a, b authorDTO) bool { return a.LastFirst < b.LastFirst }
+		return func(a, b authorDTO) bool { return absNameLess(a.LastFirst, b.LastFirst) }
 	case "numBooks":
 		return func(a, b authorDTO) bool { return a.NumBooks < b.NumBooks }
 	case "addedAt":
@@ -1751,6 +1809,24 @@ func authorLess(sortBy string) func(a, b authorDTO) bool {
 		return func(a, b authorDTO) bool { return a.UpdatedAt < b.UpdatedAt }
 	}
 	return nil
+}
+
+// absNameLess orders contributor names CASE-INSENSITIVELY, as upstream ABS does
+// (its name sorts compare with NOCASE collation). A byte-wise < put every
+// lowercase-initial name after every capitalised one — measured on prod
+// 2026-09-19 (item-6 B5): "read by a Full Cast" sorted after "read by Steven
+// Weber". Byte order is kept only as the tie-break, so the order stays total and
+// pagination stays stable.
+//
+// It is used for the contributor index's BUILD order as well as for ?sort=name:
+// sortAuthors serves the no-parameter and ascending-name requests straight from
+// the index, so fixing only authorLess would have left the default order wrong.
+func absNameLess(a, b string) bool {
+	la, lb := strings.ToLower(a), strings.ToLower(b)
+	if la != lb {
+		return la < lb
+	}
+	return a < b
 }
 
 // sortAuthors returns a sorted COPY of the author list.
@@ -2793,53 +2869,13 @@ func (h *Handler) filteredItems(c *gin.Context, raw string, p pageParams, resp *
 		return
 	}
 
-	var ids []string
-	switch group {
-	case "series":
-		seriesID, err := strconv.Atoi(strings.TrimSpace(value))
-		if err != nil {
-			slog.Warn("abs: series filter value is not a series id", "value", logger.SanitizeLogValue(value))
-			respondJSON(c, http.StatusOK, resp)
-			return
-		}
-		bySeries, berr := h.seriesBooksCached()
-		if berr != nil {
-			respondError(c, http.StatusInternalServerError, "could not list library items")
-			return
-		}
-		// Reuses the SAME grouping the series list renders from, so the tile and
-		// the drill-down cannot disagree, and it is already ordered by series
-		// sequence — which is the order a series should be read in.
-		ids = bySeries[seriesID].bookIDs
-	case "authors":
-		// The value is the author ID the /authors list published, which is
-		// strconv.Itoa of the store's int id — not a name.
-		authorID, err := strconv.Atoi(strings.TrimSpace(value))
-		if err != nil {
-			slog.Warn("abs: author filter value is not an author id", "value", logger.SanitizeLogValue(value))
-			respondJSON(c, http.StatusOK, resp)
-			return
-		}
-		idx, ierr := h.contributorsCached(c.Request.Context())
-		if ierr != nil {
-			respondError(c, http.StatusInternalServerError, "could not list library items")
-			return
-		}
-		ids = idx.authorBooks[authorID]
-	case "narrators":
-		// Narrators are addressed by NAME, not by id — narratorID is just base64 of
-		// the name, so decoding the filter token yields the name back. Verified
-		// against the live client: it sends narrators.<the id from /narrators>, and
-		// prod logged group=narrators value="Jeff Hays, Annie Ellicott".
-		idx, ierr := h.contributorsCached(c.Request.Context())
-		if ierr != nil {
-			respondError(c, http.StatusInternalServerError, "could not list library items")
-			return
-		}
-		ids = idx.narratorBooks[strings.TrimSpace(value)]
-	default:
-		slog.Warn("abs: unimplemented item filter group, serving empty page",
-			"group", logger.SanitizeLogValue(group), "value", logger.SanitizeLogValue(value))
+	ids, status, ferr := h.filterGroupBookIDs(c, group, value)
+	if ferr != nil {
+		respondError(c, http.StatusInternalServerError, "could not list library items")
+		return
+	}
+	if status != filterResolved {
+		logUnresolvedFilter("items", group, value, status)
 		respondJSON(c, http.StatusOK, resp)
 		return
 	}
