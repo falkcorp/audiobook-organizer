@@ -1,5 +1,5 @@
 <!-- file: docs/architecture/2026-09-18-pluggable-media-platform-decision-record.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b0b3170b-f4c0-4030-b6ee-d69f47323db1 -->
 <!-- last-edited: 2026-09-18 -->
 
@@ -27,13 +27,22 @@ No application behavior changes are approved by this document.
    protocol is language-neutral and permissioned.
 6. **Core owns platform concerns; modules own media-specific data and logic.**
    A generic nullable media-item table is rejected.
-7. **Books and audiobooks link through a shared work/edition graph.** Links are
-   explicit, provenance-backed, and reviewable rather than title-derived.
+7. **Books and audiobooks initially link through shared works.** Links are
+   explicit, provenance-backed, and reviewable rather than title-derived;
+   edition/expression modeling is deferred until real data justifies it.
 8. **The browser navigation comes from enabled module descriptors.** First-party
    UI bundles remain compiled into the web build; arbitrary remote JavaScript
    is not supported.
 9. **Ebooks are the first new module.** TV and movies wait until shared
    acquisition/download contracts are real.
+10. **Module enablement is restart-bound initially.** Hot enable/disable is
+    deferred until routes, operations, and dependency lifecycle are reversible.
+11. **The existing event bus is notification-only.** Correctness-critical
+    cross-module work uses durable operations or an outbox.
+12. **Audiobooks and ebooks initially link at Work, not Edition.** A richer
+    bibliographic layer must be justified by real cross-format data.
+13. **Existing audiobook Pebble keys remain in place during extraction.** New
+    modules use namespaced keys; legacy migration is a later measured decision.
 
 ## Alternatives rejected or deferred
 
