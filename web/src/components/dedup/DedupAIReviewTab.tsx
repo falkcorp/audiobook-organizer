@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupAIReviewTab.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-19
 import { useState, useEffect } from 'react';
@@ -125,6 +125,13 @@ function AIAuthorPipelinePage() {
       setSelected(new Set());
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to apply results');
+      // 409: the scan was superseded after it was loaded. Reload it so it
+      // shows as superseded and read-only, instead of leaving an apply button
+      // that can only fail again.
+      if (e instanceof api.ApiError && e.status === 409) {
+        setSelected(new Set());
+        await loadScan(scan.id);
+      }
     }
   };
 

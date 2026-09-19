@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.5.0
+// version: 2.6.0
 // last-edited: 2026-09-19
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -45,6 +45,10 @@ type AIScanStore struct {
 	// could read "nothing applied", an apply land, and the scan then be hidden
 	// with an applied result in it.
 	applyMu sync.Mutex
+	// stateMu serializes every read-modify-write of a phase row or a scan's
+	// status, so TransitionPhase and CompleteScanIfActive are true
+	// compare-and-set operations against CancelScan's writes.
+	stateMu sync.Mutex
 }
 
 // Scan represents a full pipeline run.
@@ -253,6 +257,12 @@ func (s *AIScanStore) GetScan(id int) (*Scan, error) {
 
 // UpdateScanStatus updates the status of a scan. Sets CompletedAt if status is "complete" or "failed".
 func (s *AIScanStore) UpdateScanStatus(id int, status string) error {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.updateScanStatusLocked(id, status)
+}
+
+func (s *AIScanStore) updateScanStatusLocked(id int, status string) error {
 	scan, err := s.GetScan(id)
 	if err != nil {
 		return err
@@ -277,6 +287,8 @@ func (s *AIScanStore) UpdateScanStatus(id int, status string) error {
 
 // UpdateScanOperationID sets the operation ID on an existing scan.
 func (s *AIScanStore) UpdateScanOperationID(id int, operationID string) error {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	scan, err := s.GetScan(id)
 	if err != nil {
 		return err
@@ -393,6 +405,79 @@ func (e *ScanSupersededError) Error() string {
 	return fmt.Sprintf("scan %d was superseded by scan %d; apply from scan %d instead", e.ScanID, e.By, e.By)
 }
 
+// isTerminalScanStatus reports whether a scan status admits no more phase
+// progress.
+func isTerminalScanStatus(status string) bool {
+	return status == "complete" || status == "failed" || status == "canceled" || status == "superseded"
+}
+
+// TransitionPhase moves a phase to status `to` (recording batchID when non-
+// empty) only if its current status is one of from AND its scan is not
+// terminal, and reports whether it did. It is the only safe way to record a
+// batch id: a blind write can land on a phase CancelScan just marked
+// canceled, attaching a live paid batch to a dead scan that nothing will ever
+// cancel or collect. On false the caller owns cleaning up that batch.
+func (s *AIScanStore) TransitionPhase(scanID int, phaseType string, from []string, to, batchID string) (bool, error) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	scan, err := s.GetScan(scanID)
+	if err != nil {
+		return false, err
+	}
+	if scan == nil || isTerminalScanStatus(scan.Status) {
+		return false, nil
+	}
+	phase, err := s.GetPhase(scanID, phaseType)
+	if err != nil || phase == nil {
+		return false, err
+	}
+	allowed := false
+	for _, f := range from {
+		if phase.Status == f {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return false, nil
+	}
+	return true, s.updatePhaseStatusLocked(scanID, phaseType, to, batchID)
+}
+
+// CompleteScanIfActive marks a scan complete unless it already reached a
+// terminal status (an operator cancel, a failure) — so work that finishes
+// after a cancel never overwrites it — and reports whether it did.
+func (s *AIScanStore) CompleteScanIfActive(scanID int) (bool, error) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	scan, err := s.GetScan(scanID)
+	if err != nil {
+		return false, err
+	}
+	if scan == nil || (isTerminalScanStatus(scan.Status) && scan.Status != "complete") {
+		return false, nil
+	}
+	return true, s.updateScanStatusLocked(scanID, "complete")
+}
+
+// ReplaceScanResultsIfUnapplied replaces a scan's results unless any of them
+// has been applied, under the same lock as MarkResultApplied, and reports
+// whether it replaced them. A replay must never wipe a result a user applied.
+func (s *AIScanStore) ReplaceScanResultsIfUnapplied(scanID int, results []ScanResult) (bool, error) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	existing, err := s.GetScanResults(scanID)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range existing {
+		if r.Applied {
+			return false, nil
+		}
+	}
+	return true, s.ReplaceScanResults(scanID, results)
+}
+
 // SupersedeIfUnapplied marks scanID superseded by byID unless any of its
 // results has been applied, and reports whether it did. It holds applyMu, so
 // it cannot interleave with MarkResultApplied.
@@ -408,6 +493,8 @@ func (s *AIScanStore) SupersedeIfUnapplied(scanID, byID int) (bool, error) {
 			return false, nil
 		}
 	}
+	s.stateMu.Lock() // lock order: applyMu, then stateMu
+	defer s.stateMu.Unlock()
 	scan, err := s.GetScan(scanID)
 	if err != nil || scan == nil {
 		return false, fmt.Errorf("read scan %d: %v", scanID, err)
@@ -535,6 +622,12 @@ func (s *AIScanStore) GetPhase(scanID int, phaseType string) (*ScanPhase, error)
 // UpdatePhaseStatus updates the status and optionally the batch ID of a phase.
 // Sets StartedAt on "submitting", "submitted" or "processing", CompletedAt on "complete" or "failed".
 func (s *AIScanStore) UpdatePhaseStatus(scanID int, phaseType, status, batchID string) error {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.updatePhaseStatusLocked(scanID, phaseType, status, batchID)
+}
+
+func (s *AIScanStore) updatePhaseStatusLocked(scanID int, phaseType, status, batchID string) error {
 	phase, err := s.GetPhase(scanID, phaseType)
 	if err != nil {
 		return err
@@ -568,6 +661,8 @@ func (s *AIScanStore) UpdatePhaseStatus(scanID int, phaseType, status, batchID s
 
 // SavePhaseData saves input, output, and suggestions data for a phase.
 func (s *AIScanStore) SavePhaseData(scanID int, phaseType string, input, output, suggestions json.RawMessage) error {
+	s.stateMu.Lock() // it rewrites the whole row, status included
+	defer s.stateMu.Unlock()
 	phase, err := s.GetPhase(scanID, phaseType)
 	if err != nil {
 		return err
