@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_emit_shard_race_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 7e1f2a93-4b6c-4d5e-8f01-2a3b4c5d6e7f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 // Race/invariant tests for CONC-3 (INIT-2 T5): the full-scan emit() no longer
 // runs under one global mutex. Per-pair "already handled" state is sharded
@@ -46,6 +46,11 @@ func makeUsefulFP(seed byte) string {
 	for i := range buf {
 		buf[i] = seed + byte(i*7)
 	}
+	// Chromaprint header for the app's uncompressed form (algorithm 1,
+	// frame count 0, then little-endian frames — what EncodeWholeFingerprint
+	// writes). Any other header is now decoded as a compressed print and
+	// rejected, since these bytes are not a valid compressed bitstream.
+	copy(buf, []byte{0x01, 0x00, 0x00, 0x00})
 	return base64.StdEncoding.EncodeToString(buf)
 }
 

@@ -1,12 +1,11 @@
 // file: internal/plugins/acoustid/signature_lost_update_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4ae5494-c39a-4c29-8456-9a40033177cc
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package acoustid
 
 import (
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"math/rand"
@@ -14,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 
 // sigLostUpdateStore is a one-row stateful book store for the lost-update
@@ -77,14 +77,16 @@ func (s *sigLostUpdateStore) stored() *database.Book {
 	return s.row
 }
 
-// lostUpdateSegment is a decodable segment fingerprint: base64 of
-// little-endian uint32 words, the encoding fingerprint.SynthesizePartialBookSignature reads.
+// lostUpdateSegment is a decodable segment fingerprint in the app's
+// uncompressed stored form (fingerprint.EncodeWholeFingerprint: chromaprint
+// header with frame count 0, then little-endian uint32 frames), which
+// fingerprint.SynthesizePartialBookSignature reads.
 func lostUpdateSegment(rng *rand.Rand, words int) string {
 	buf := make([]byte, words*4)
 	for i := 0; i < words; i++ {
 		binary.LittleEndian.PutUint32(buf[i*4:], rng.Uint32())
 	}
-	return base64.StdEncoding.EncodeToString(buf)
+	return fingerprint.EncodeWholeFingerprint(buf)
 }
 
 // TestSynthesizeBookSignatureForBook_DoesNotRevertConcurrentColumns pins the
