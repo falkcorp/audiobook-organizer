@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_fpwin.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d40d1916-5ea7-4ce8-9fb6-fab9d3d56026
 // last-edited: 2026-09-19
 
@@ -56,15 +56,30 @@ func (s *PebbleStore) PutFingerprintWindow(w *FingerprintWindow) error {
 		return fmt.Errorf("PutFingerprintWindow %s: marshal: %w", row.Ref, err)
 	}
 
+	fileID, isFile := fileIDOfWindowRef(row.Ref)
+	var hint *BookFile
+	if isFile {
+		// Resolved BEFORE fpwinMu: the pre-index fallback is a scan of every
+		// book_file row, and holding the store-wide window lock across it would
+		// stall every concurrent window writer behind it. Existence is then
+		// re-confirmed under the lock with point reads only.
+		if hint, err = s.resolveBookFileByID(fileID); err != nil {
+			return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, err)
+		}
+		if hint == nil {
+			return fmt.Errorf("PutFingerprintWindow %s: book_file %s does not exist", row.Ref, fileID)
+		}
+	}
+
 	s.fpwinMu.Lock()
 	defer s.fpwinMu.Unlock()
-	if fileID, ok := fileIDOfWindowRef(row.Ref); ok {
-		f, ferr := s.resolveBookFileByID(fileID)
-		if ferr != nil {
-			return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, ferr)
+	if isFile {
+		ok, cerr := s.fileRowStillExists(fileID, hint)
+		if cerr != nil {
+			return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, cerr)
 		}
-		if f == nil {
-			return fmt.Errorf("PutFingerprintWindow %s: book_file %s does not exist", row.Ref, fileID)
+		if !ok {
+			return fmt.Errorf("PutFingerprintWindow %s: book_file %s was deleted", row.Ref, fileID)
 		}
 	}
 	if err := s.db.Set(fpwinKey(&row), data, pebble.Sync); err != nil {
@@ -87,7 +102,7 @@ func (s *PebbleStore) GetFingerprintWindows(ref FingerprintWindowRef) ([]Fingerp
 
 // WindowsForFile returns the file's stored windows plus, when the book_file row
 // carries a legacy print, a virtual kind=head row synthesized from
-// BookFile.AcoustIDFingerprint (Virtual=true, Pipeline=LegacyHeadPipeline).
+// BookFile.AcoustIDFingerprint (Virtual=true, Pipeline and tool fields empty).
 // This is the "migration: none" shim: legacy prints stay where they are.
 //
 // The row is read from Pebble by primary key, NEVER from memdb: memdb strips
@@ -156,6 +171,21 @@ func (s *PebbleStore) CarryOverFingerprintWindows(from, to FingerprintWindowRef)
 		return 0, nil
 	}
 
+	// Target row resolved before the lock, re-confirmed under it; see
+	// PutFingerprintWindow.
+	toFileID, toIsFile := fileIDOfWindowRef(to)
+	var hint *BookFile
+	if toIsFile {
+		f, ferr := s.resolveBookFileByID(toFileID)
+		if ferr != nil {
+			return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: %w", from, to, ferr)
+		}
+		if f == nil {
+			return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: book_file %s does not exist", from, to, toFileID)
+		}
+		hint = f
+	}
+
 	s.fpwinMu.Lock()
 	defer s.fpwinMu.Unlock()
 
@@ -175,13 +205,13 @@ func (s *PebbleStore) CarryOverFingerprintWindows(from, to FingerprintWindowRef)
 		}
 		return 0, nil
 	}
-	if fileID, ok := fileIDOfWindowRef(to); ok {
-		f, ferr := s.resolveBookFileByID(fileID)
-		if ferr != nil {
-			return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: %w", from, to, ferr)
+	if toIsFile {
+		ok, cerr := s.fileRowStillExists(toFileID, hint)
+		if cerr != nil {
+			return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: %w", from, to, cerr)
 		}
-		if f == nil {
-			return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: book_file %s does not exist", from, to, fileID)
+		if !ok {
+			return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: book_file %s was deleted", from, to, toFileID)
 		}
 	}
 	existing, err := s.readFingerprintWindows(to)
@@ -302,6 +332,26 @@ func (s *PebbleStore) resolveBookFileByID(fileID string) (*BookFile, error) {
 		return f, nil
 	}
 	return s.scanForBookFileByID(fileID)
+}
+
+// fileRowStillExists re-confirms, under fpwinMu, that a row resolved before the
+// lock still exists, using point reads only: the primary key the pre-lock read
+// found, then the book_file_id index (which a move between books rewrites).
+// Every delete path removes the primary key in the same batch as its window
+// cascade, and holds fpwinMu across that commit, so a miss on both means the
+// row is gone and a window written now would be an orphan.
+func (s *PebbleStore) fileRowStillExists(fileID string, hint *BookFile) (bool, error) {
+	if hint != nil && hint.BookID != "" {
+		_, closer, err := s.db.Get([]byte(fmt.Sprintf("book_file:%s:%s", hint.BookID, fileID)))
+		if err == nil {
+			closer.Close()
+			return true, nil
+		}
+		if !errors.Is(err, pebble.ErrNotFound) {
+			return false, fmt.Errorf("re-check book_file %s: %w", fileID, err)
+		}
+	}
+	return s.lookupBookFileByIDIndex(fileID) != nil, nil
 }
 
 func windowKindOrder(k FingerprintWindowKind) int {

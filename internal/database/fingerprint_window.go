@@ -1,5 +1,5 @@
 // file: internal/database/fingerprint_window.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c23e6967-5192-4584-a48c-2b5d89c2e887
 // last-edited: 2026-09-19
 
@@ -34,6 +34,8 @@ const (
 	// BookFile.AcoustIDFingerprint is exposed as a virtual row of this kind.
 	WindowKindHead FingerprintWindowKind = "head"
 	// WindowKindWindow is a print cut at a fraction of the duration (SlotBP).
+	// Slot 0 is legal and distinct from head: a short file's single window
+	// covering the whole file is window:0 (CoversWhole), not head:0.
 	WindowKindWindow FingerprintWindowKind = "window"
 	// WindowKindWhole is a print over the entire file.
 	WindowKindWhole FingerprintWindowKind = "whole"
@@ -51,12 +53,6 @@ func (k FingerprintWindowKind) Valid() bool {
 // FingerprintWindowSchemaVersion is FingerprintWindow.SchemaVersion for rows
 // written by this code.
 const FingerprintWindowSchemaVersion = 1
-
-// LegacyHeadPipeline is FingerprintWindow.Pipeline on the virtual head row
-// synthesized from BookFile.AcoustIDFingerprint. That print came from fpcalc
-// reading the container directly, not from the ffmpeg PCM pipe, so it must never
-// pair with a window of a different pipeline. Consumers pair on Pipeline.
-const LegacyHeadPipeline = "fpcalc-direct-head/legacy"
 
 // MaxWindowSlotBP is the largest SlotBP: 100% of the duration, in basis points.
 const MaxWindowSlotBP = 10000
@@ -189,10 +185,16 @@ func fpwinFailKey(ref FingerprintWindowRef) []byte {
 // legacyHeadWindow synthesizes the virtual kind=head row from a book_file row's
 // legacy print. ok is false when the row carries no print.
 //
-// Fields the legacy write path never recorded are left zero rather than guessed:
-// LengthSec (the analysis length, config-dependent and not persisted),
-// DecodedSec, Algorithm, tool versions, source size/mtime and ComputedAt.
-// Consumers identify this row by Virtual or by Pipeline == LegacyHeadPipeline.
+// Pipeline and every tool/version field are deliberately EMPTY. The legacy print
+// came from fpcalc reading the container directly, not from the ffmpeg PCM
+// pipe, and similarity code pairs windows on Pipeline: stamping any pipeline ID
+// here would let it compare incompatible prints and still return a number.
+// Pinned by TestFpwin_WindowsForFileAddsTheLegacyHead.
+//
+// Fields the legacy write path never recorded are likewise left zero rather
+// than guessed: LengthSec (the analysis length, config-dependent and not
+// persisted), DecodedSec, Algorithm, source size/mtime and ComputedAt.
+// Consumers identify this row by Virtual.
 func legacyHeadWindow(f *BookFile) (FingerprintWindow, bool) {
 	if f == nil || len(f.AcoustIDFingerprint) == 0 {
 		return FingerprintWindow{}, false
@@ -207,7 +209,6 @@ func legacyHeadWindow(f *BookFile) (FingerprintWindow, bool) {
 		DurationSource:  "acoustid_fingerprint_duration_sec",
 		Frames:          len(f.AcoustIDFingerprint) / 4,
 		Raw:             f.AcoustIDFingerprint,
-		Pipeline:        LegacyHeadPipeline,
 		Virtual:         true,
 	}, true
 }
