@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0d4c7f61-2b58-4a39-9c6e-51f0a7d3b284
 // last-edited: 2026-09-19
 
@@ -420,6 +420,149 @@ func TestAuthorPathLink_CreateMissingDisabled(t *testing.T) {
 	}
 	if b, _ := s.GetBookByID("newrow"); b == nil || b.AuthorID != nil {
 		t.Fatalf("book was linked: %+v", b)
+	}
+}
+
+// failScalarStore fails the FIRST ModifyBook call, which is exactly the shape
+// of a transient store error landing between the credit write and the scalar
+// write.
+type failScalarStore struct {
+	database.Store
+	mu     sync.Mutex
+	failed bool
+}
+
+func (s *failScalarStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	s.mu.Lock()
+	first := !s.failed
+	s.failed = true
+	s.mu.Unlock()
+	if first {
+		return nil, errors.New("injected: scalar write failed")
+	}
+	return s.Store.ModifyBook(id, fn)
+}
+
+// 🔴 A HALF-WRITE IS RESUMED, NOT STRANDED. The first run's credit lands and
+// its scalar write fails; the book then has a credit and a nil scalar, the one
+// state a "book already has credits, leave it alone" rule would refuse forever.
+// The second run must finish it.
+func TestAuthorPathLink_ResumesHalfWrite(t *testing.T) {
+	s := pathLinkPebble(t)
+	a, err := s.CreateAuthor("Charles Dickens")
+	if err != nil {
+		t.Fatalf("CreateAuthor: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		pathLinkCreateBook(t, s, fmt.Sprintf("fill%d", i), fmt.Sprintf("/mnt/bigdata/books/audiobook-organizer/Filler/f%d/x.m4b", i), &a.ID)
+	}
+	pathLinkCreateBook(t, s, "half", "/mnt/bigdata/books/audiobook-organizer/Charles Dickens/Bleak House/x.m4b", nil)
+
+	// Run one: the credit commits, the scalar does not.
+	broken := New(&fakeDeps{store: &failScalarStore{Store: s}})
+	res := runPathLink(t, broken, `{"dry_run":false}`)
+	if res.Outcomes[authorPathLinkFailed] != 1 {
+		t.Fatalf("run 1 outcomes=%v, want one %s", res.Outcomes, authorPathLinkFailed)
+	}
+	joins, _ := s.GetBookAuthors("half")
+	if len(joins) != 1 || joins[0].AuthorID != a.ID {
+		t.Fatalf("run 1 left book_authors=%+v, want the half-write credit", joins)
+	}
+	if b, _ := s.GetBookByID("half"); b == nil || b.AuthorID != nil {
+		t.Fatalf("run 1 wrote the scalar after all: %+v", b)
+	}
+
+	// Run two must complete the book rather than refuse it.
+	res = runPathLink(t, New(&fakeDeps{store: s}), `{"dry_run":false}`)
+	if res.Outcomes[authorPathLinkLinked] != 1 {
+		t.Fatalf("run 2 outcomes=%v, want one %s", res.Outcomes, authorPathLinkLinked)
+	}
+	b, _ := s.GetBookByID("half")
+	if b == nil || b.AuthorID == nil || *b.AuthorID != a.ID {
+		t.Fatalf("run 2 did not finish the link: %+v", b)
+	}
+	joins, _ = s.GetBookAuthors("half")
+	if len(joins) != 1 || joins[0].AuthorID != a.ID {
+		t.Fatalf("run 2 disturbed the credit: %+v", joins)
+	}
+}
+
+// 🔴 A credit that is NOT this op's half-write is still left alone.
+func TestAuthorPathLink_ForeignCreditLeftAlone(t *testing.T) {
+	s := pathLinkPebble(t)
+	dickens, _ := s.CreateAuthor("Charles Dickens")
+	other, _ := s.CreateAuthor("Jane Doe")
+	for i := 0; i < 3; i++ {
+		pathLinkCreateBook(t, s, fmt.Sprintf("fill%d", i), fmt.Sprintf("/mnt/bigdata/books/audiobook-organizer/Filler/f%d/x.m4b", i), &dickens.ID)
+	}
+	pathLinkCreateBook(t, s, "credited", "/mnt/bigdata/books/audiobook-organizer/Charles Dickens/Bleak House/x.m4b", nil)
+	if err := s.SetBookAuthors("credited", []database.BookAuthor{{BookID: "credited", AuthorID: other.ID, Role: "author", Position: 0}}); err != nil {
+		t.Fatalf("SetBookAuthors: %v", err)
+	}
+
+	res := runPathLink(t, New(&fakeDeps{store: s}), `{"dry_run":false}`)
+	if res.Outcomes[authorPathLinkExistingCredits] != 1 {
+		t.Fatalf("outcomes=%v, want one %s", res.Outcomes, authorPathLinkExistingCredits)
+	}
+	joins, _ := s.GetBookAuthors("credited")
+	if len(joins) != 1 || joins[0].AuthorID != other.ID {
+		t.Fatalf("the existing credit was rewritten: %+v", joins)
+	}
+	if b, _ := s.GetBookByID("credited"); b == nil || b.AuthorID != nil {
+		t.Fatalf("scalar was written beside a foreign credit: %+v", b)
+	}
+}
+
+// 🔴 The shared person-shape gate lets a long title segment through on its
+// initials branch; the op's own word bound must refuse it.
+func TestAuthorPathLink_PersonShapeBound(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"Book 03 - The Hero of Ages (Unabridged) [v1.0]", false},
+		{"J. R. R. Tolkien", true},
+		{"Charles Dickens", true},
+		{"Of Fire and Night", false},
+		{"Tolkien", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := authorPathLinkPersonShaped(tc.name); got != tc.want {
+				t.Fatalf("authorPathLinkPersonShaped(%q) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// 🔴 A target row author-title-fragment-scan would flag is never linked to,
+// even when it has plenty of books.
+func TestAuthorPathLink_TitleFragmentTargetRefused(t *testing.T) {
+	f := &pathLinkFixture{}
+	f.author(1, "American Gods The Tenth Anniversary")
+	f.filler(1, 6)
+	f.book("frag", "/mnt/bigdata/books/audiobook-organizer/American Gods The Tenth Anniversary/A Title/x.m4b", nil)
+
+	res := runPathLink(t, New(&fakeDeps{store: f.store(t)}), `{"dry_run":true}`)
+	got := outcomeOf(t, res, "frag")
+	if got.Outcome != authorPathLinkSuspectFragment {
+		t.Fatalf("outcome %q, want %q (outcomes=%v)", got.Outcome, authorPathLinkSuspectFragment, res.Outcomes)
+	}
+}
+
+// 🔴 The dry run names the rows an apply would create, once per distinct name.
+func TestAuthorPathLink_DryRunReportsWouldMint(t *testing.T) {
+	f := &pathLinkFixture{}
+	for i := 0; i < 3; i++ {
+		f.book(fmt.Sprintf("new%d", i), fmt.Sprintf("/mnt/bigdata/books/abooks/imported/Ursula Le Guin/Book %d/x.m4b", i), nil)
+	}
+	res := runPathLink(t, New(&fakeDeps{store: f.store(t)}), `{"dry_run":true}`)
+	if len(res.CreatedAuthors) != 1 {
+		t.Fatalf("created_authors=%+v, want one entry", res.CreatedAuthors)
+	}
+	got := res.CreatedAuthors[0]
+	if got.AuthorID != 0 || got.Name != "Ursula Le Guin" || got.Books != 3 {
+		t.Fatalf("created_authors[0]=%+v, want {0 Ursula Le Guin 3}", got)
 	}
 }
 
