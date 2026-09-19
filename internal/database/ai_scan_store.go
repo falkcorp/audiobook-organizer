@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.2.0
+// version: 2.3.0
 // last-edited: 2026-09-19
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -402,6 +402,11 @@ func (s *AIScanStore) GetPhaseArtifacts(scanID int, phaseType string) (map[strin
 // SaveScanResult per row so that running it again — after a restart, or when
 // both enrichment phases finish at once and each triggers it — leaves exactly
 // one set of results instead of appending a duplicate of every suggestion.
+//
+// It discards Applied / AppliedAt. That is safe only because the pipeline
+// calls it solely while its cross_validate phase is not yet complete, and
+// marks the phase complete right after; results are applied by a user after
+// that. Do not call it on a scan whose results may already have been applied.
 func (s *AIScanStore) ReplaceScanResults(scanID int, results []ScanResult) error {
 	batch := s.db.NewBatch()
 	defer batch.Close()
