@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-19
 
@@ -237,6 +237,8 @@ type seqCand struct {
 	disc  int
 	index int
 	total int
+	// copySuffix: the file name ended in " (N)", the mark of a second copy.
+	copySuffix bool
 	// titleMarker is true when the TITLE (not just the file) is a position;
 	// titleBare when it is ONLY a position.
 	titleMarker, titleBare bool
@@ -263,6 +265,14 @@ func classifySeqCand(b database.BookCore) (seqCand, bool) {
 	base := filepath.Base(b.FilePath)
 	ext := strings.ToLower(filepath.Ext(base))
 	c := seqCand{book: b, ext: ext, stem: strings.TrimSuffix(base, filepath.Ext(base))}
+	// "Chapter 1 (1).mp3" is a second copy of "Chapter 1.mp3" (the name a
+	// copy gets when it lands beside the original). Parse the name without
+	// the suffix so the copy groups with the original, and remember it so
+	// the run is reported as holding a duplicate copy.
+	if m := seqCopySuffixRe.FindStringSubmatchIndex(c.stem); m != nil {
+		c.stem = c.stem[:m[0]]
+		c.copySuffix = true
+	}
 	tm, tok := ParseSequenceMarker(b.Title)
 	fm, fok := ParseFilenameSequence(c.stem)
 	if !tok && !fok {
@@ -314,6 +324,19 @@ func classifySeqCand(b database.BookCore) (seqCand, bool) {
 		c.key2 = sequenceResidualKey(b)
 	}
 	return c, true
+}
+
+// seqCopySuffixRe is the " (1)" a file manager appends to a second copy.
+var seqCopySuffixRe = regexp.MustCompile(`\s+\(\d{1,2}\)$`)
+
+// seqDiscFolderRe matches a per-disc subfolder name: "Disc 1", "CD2",
+// "disk_03", "Part 2", "Disc 1 of 2".
+var seqDiscFolderRe = regexp.MustCompile(`(?i)^(?:disc|disk|cd|part)\s*[-_.#]?\s*\d{1,3}\b`)
+
+// IsDiscFolderName reports whether a folder's base name reads as one disc (or
+// part) of a book split into sibling folders.
+func IsDiscFolderName(name string) bool {
+	return seqDiscFolderRe.MatchString(strings.TrimSpace(name))
 }
 
 // seqTitleCarriesNothing reports whether a non-position title adds nothing
@@ -417,12 +440,26 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 	}
 	sort.Strings(dirs)
 
+	// A book split into sibling "Disc N" folders cannot be merged one disc
+	// at a time: each disc alone would become a half-book. Count the disc
+	// folders under each parent; any parent with two or more blocks them.
+	discFolders := map[string]int{}
+	for _, d := range dirs {
+		if IsDiscFolderName(filepath.Base(d)) {
+			discFolders[filepath.Dir(d)]++
+		}
+	}
+
 	results := make([]dirResult, len(dirs))
 	var eg errgroup.Group
 	eg.SetLimit(runtime.NumCPU())
 	for i, dir := range dirs {
 		eg.Go(func() error {
-			results[i] = detectInDir(dir, byDir[dir], opts, vi)
+			multiDisc := 0
+			if IsDiscFolderName(filepath.Base(dir)) {
+				multiDisc = discFolders[filepath.Dir(dir)]
+			}
+			results[i] = detectInDir(dir, byDir[dir], opts, vi, multiDisc)
 			return nil
 		})
 	}
@@ -439,7 +476,7 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 }
 
 // detectInDir groups one folder's candidates.
-func detectInDir(dir string, books []database.BookCore, opts ChapterDetectOptions, vi versionIndex) dirResult {
+func detectInDir(dir string, books []database.BookCore, opts ChapterDetectOptions, vi versionIndex, multiDisc int) dirResult {
 	var res dirResult
 	buckets := map[string][]seqCand{}
 	for _, b := range books {
@@ -497,6 +534,9 @@ func detectInDir(dir string, books []database.BookCore, opts ChapterDetectOption
 			review = bareReview
 		}
 		g, verdict := evaluateSeqBucket(dir, k, folderKey, review, cs, opts, vi)
+		if multiDisc >= 2 && verdict != seqVerdictNotSequence && verdict != seqVerdictSamePosition {
+			g.Blockers = append(g.Blockers, fmt.Sprintf("multi-disc book: merge across discs not supported (%d disc folders under %s)", multiDisc, filepath.Dir(dir)))
+		}
 		switch verdict {
 		case seqVerdictNotSequence:
 			res.notSequence++
@@ -872,6 +912,18 @@ func evaluateSeqBucket(dir, key, folderKey, review string, cs []seqCand, opts Ch
 	//     book-length. Both fail safe: the run is reported blocked with the
 	//     members named, never merged wrongly.
 	knownAllBook := len(known) >= 2 && bookLength == len(known)
+	if bookLength >= 2 && !knownAllBook {
+		g.Blockers = append(g.Blockers, fmt.Sprintf("%d members are book-length among chapter-length ones: separate books in the run? (book-length members: %s)", bookLength, seqJoinCapped(bookLabels, 8)))
+	}
+	copies := 0
+	for _, c := range cs {
+		if c.copySuffix {
+			copies++
+		}
+	}
+	if copies > 0 {
+		g.Blockers = append(g.Blockers, fmt.Sprintf("duplicate copy present: %d file(s) named like a second copy (\"… (1)\")", copies))
+	}
 	if knownAllBook {
 		g.Blockers = append(g.Blockers, fmt.Sprintf("every member with a known duration (%d) is book-length: separate volumes, not chapters (book-length members: %s)", len(known), seqJoinCapped(bookLabels, 8)))
 	}
@@ -900,9 +952,9 @@ func evaluateSeqBucket(dir, key, folderKey, review string, cs []seqCand, opts Ch
 	// titles ("Lore - 001" episodes) is indistinguishable from episodes or
 	// volumes and is low at most.
 	forceLow := ""
-	if bookLength > 0 {
-		// Chapter-length and book-length members in one run: at most low,
-		// and the book-length ones are named for the reviewer.
+	if bookLength == 1 {
+		// One book-length member among chapter-length ones: at most low,
+		// and it is named for the reviewer (two or more block, above).
 		forceLow = fmt.Sprintf("book-length members: %s", seqJoinCapped(bookLabels, 8))
 	}
 	trailingOnly := true

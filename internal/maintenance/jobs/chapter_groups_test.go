@@ -601,3 +601,69 @@ func TestMergeChapterGroups_SubsetOfBlockedGroupIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// A sibling that lands in the folder after the run's folder index was read
+// (here: between the pre-lock verification and the merge lock) is seen by
+// the re-verification under the lock, which re-lists the folder.
+func TestMergeChapterGroups_LateSiblingIsSeenUnderTheLock(t *testing.T) {
+	s := ddRealStore(t)
+	books := chSeedGroup(t, s, "/lib/L/Tale", "Tale", 3, 300)
+	ids := []string{books[0].ID, books[1].ID, books[2].ID}
+	sel := chSelectionFor(t, s, ids)
+	chapterPrecheckTestHook = func() {
+		late := ddMustBook(t, s, &database.Book{Title: "01 - Tale", FilePath: "/lib/L/Tale/01 - Tale.m4a", Duration: chIntP(300)})
+		ddMustFile(t, s, &database.BookFile{BookID: late.ID, FilePath: "/lib/L/Tale/01 - Tale.m4a", Duration: 300})
+	}
+	t.Cleanup(func() { chapterPrecheckTestHook = nil })
+	res := chApply(t, s, sel)
+	if res.BooksMerged != 0 || res.Groups[0].Status == "merged" {
+		t.Fatalf("a copy that arrived before the lock was not seen: %+v", res.Groups)
+	}
+	if ddMustGet(t, s, books[1].ID).IsSoftDeleted() {
+		t.Fatal("refused merge soft-deleted a member")
+	}
+}
+
+// The merge never runs alongside a library scan: it shares library.scan's
+// ConcurrencyKey (the registry serializes the two), and a real apply refuses
+// to start while a library.scan is running.
+func TestMergeChapterGroups_NeverAppliesDuringALibraryScan(t *testing.T) {
+	if got := (&mergeChapterGroupsJob{}).Policy().ConcurrencyKey; got != "library.scan" {
+		t.Fatalf("merge-chapter-groups ConcurrencyKey = %q, want library.scan", got)
+	}
+	s := ddRealStore(t)
+	books := chSeedGroup(t, s, "/lib/S/Tale", "Tale", 2, 300)
+	sel := chSelectionFor(t, s, []string{books[0].ID, books[1].ID})
+	if err := s.InsertOperationV2(database.OperationV2Row{ID: "op-scan", DefID: "library.scan", Plugin: "library", Status: "queued"}); err != nil {
+		t.Fatalf("InsertOperationV2: %v", err)
+	}
+	if ok, err := s.SetOperationV2StatusIfQueued("op-scan", "running"); err != nil || !ok {
+		t.Fatalf("start the scan row: ok=%v err=%v", ok, err)
+	}
+	raw, _ := json.Marshal(map[string]any{"dry_run": false, "groups": []chapterGroupSelection{sel}})
+	if _, err := chRunRaw(t, &mergeChapterGroupsJob{}, s, string(raw), false); err == nil || !strings.Contains(err.Error(), "library.scan") {
+		t.Fatalf("real merge ran during a library.scan (err=%v)", err)
+	}
+	if ddMustGet(t, s, books[1].ID).IsSoftDeleted() {
+		t.Fatal("merged during a library.scan")
+	}
+}
+
+// One disc folder of a multi-disc book is refused at apply: verification
+// brings the sibling disc folders into its context, so the multi-disc
+// blocker the preview reported holds for a hand-built selection too.
+func TestMergeChapterGroups_OneDiscOfAMultiDiscBookIsRefused(t *testing.T) {
+	s := ddRealStore(t)
+	disc1 := chSeedGroup(t, s, "/lib/H/Dunes/Disc 1", "Dunes", 4, 1500)
+	chSeedGroup(t, s, "/lib/H/Dunes/Disc 2", "Dunes", 4, 1500)
+	ids := make([]string, len(disc1))
+	for i, b := range disc1 {
+		ids[i] = b.ID
+	}
+	sel := chSelectionFor(t, s, ids)
+	sel.AllowLowConfidence = true
+	res := chApply(t, s, sel)
+	if res.BooksMerged != 0 || res.Groups[0].Status != "blocked" || !strings.Contains(strings.Join(res.Groups[0].Blockers, ";"), "multi-disc") {
+		t.Fatalf("one disc of a multi-disc book merged: %+v", res.Groups)
+	}
+}

@@ -367,3 +367,63 @@ func TestReview3_BookLengthOutliersAreLowAndNamed(t *testing.T) {
 		})
 	}
 }
+
+// --- Fifth review round ---
+
+// (R5-2) A book split into "Disc N" subfolders is one book across folders:
+// each disc on its own would merge into a half-book. Blocked.
+func TestReview5_DiscSubfoldersBlock(t *testing.T) {
+	a := 7
+	var books []database.BookCore
+	for d := 1; d <= 2; d++ {
+		for i := 1; i <= 4; i++ {
+			n := fmt.Sprintf("%02d - Dunes", i)
+			books = append(books, rvBook(fmt.Sprintf("d%d-%d", d, i), n, fmt.Sprintf("/lib/H/Dunes/Disc %d/%s.mp3", d, n), 1500, &a))
+		}
+	}
+	d := shDetect(books)
+	noMergeable(t, d)
+	if len(d.Blocked) != 2 || !anyContains(d.Blocked[0].Blockers, "multi-disc book") {
+		t.Fatalf("want both disc folders blocked as multi-disc, got %+v", d.Blocked)
+	}
+	// One disc-like folder alone ("CD1" with no sibling disc) is not blocked
+	// for that reason.
+	d = shDetect(books[:4])
+	for _, g := range d.Blocked {
+		if anyContains(g.Blockers, "multi-disc") {
+			t.Fatalf("a lone disc folder was blocked as multi-disc: %+v", g)
+		}
+	}
+}
+
+// (R5-3) A second copy whose files carry a " (1)" suffix is reported, not
+// silently dropped.
+func TestReview5_CopySuffixDuplicateIsFlagged(t *testing.T) {
+	a := 7
+	var books []database.BookCore
+	for i := 1; i <= 3; i++ {
+		books = append(books,
+			rvBook(fmt.Sprintf("a%d", i), fmt.Sprintf("Chapter %d", i), fmt.Sprintf("/lib/A/Dup/Chapter %d.mp3", i), 1500, &a),
+			rvBook(fmt.Sprintf("b%d", i), fmt.Sprintf("Chapter %d", i), fmt.Sprintf("/lib/A/Dup/Chapter %d (1).mp3", i), 1500, &a))
+	}
+	d := shDetect(books)
+	noMergeable(t, d)
+	if len(d.Blocked) != 1 || len(d.Blocked[0].BookIDs) != 6 || !anyContains(d.Blocked[0].Blockers, "duplicate copy present") {
+		t.Fatalf("want the folder blocked with both copies, got %+v", d.Blocked)
+	}
+}
+
+// (R5-4) Two or more book-length members block the run outright.
+func TestReview5_TwoBookLengthMembersBlock(t *testing.T) {
+	a := 7
+	var books []database.BookCore
+	for i, dur := range []int{1500, 50000, 40000, 1400, 1500} {
+		n := fmt.Sprintf("Chapter %d", i+1)
+		books = append(books, rvBook(fmt.Sprintf("m%d", i), n, "/lib/A/Mix2/"+n+".mp3", dur, &a))
+	}
+	d := shDetect(books)
+	noMergeable(t, d)
+	if len(d.Blocked) != 1 || !anyContains(d.Blocked[0].Blockers, "book-length members: 2, 3") {
+		t.Fatalf("want blocked naming members 2 and 3, got %+v", d.Blocked)
+	}
+}

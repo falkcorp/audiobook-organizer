@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-09-19
 
@@ -108,6 +108,11 @@ func (j *mergeChapterGroupsJob) Run(ctx context.Context, store maintenance.JobSt
 	p.DryRun = dryRun
 	if !dryRun && len(p.Groups) == 0 {
 		return errChapterMergeNoGroups
+	}
+	if !dryRun {
+		if err := refuseDuringLibraryScan(store); err != nil {
+			return err
+		}
 	}
 	bs, ok := store.(chapterBlockerStore)
 	if !ok {
@@ -285,9 +290,10 @@ func chapterSiblingIndex(store maintenance.JobStore) (map[string][]string, error
 // allow_low_confidence acknowledgement -- the card sets it only for a group
 // the operator ticked one by one, never through "Select all").
 //
-// A book imported into the folder after the sibling index was read is not
-// seen by this check (siblings are re-read by id, not re-listed): a narrow
-// window, and the fingerprint still pins the members.
+// The caller passes the sibling index: the run-level one before the lock,
+// and a freshly re-listed one under the lock (precheck), so a book that
+// landed in the folder after the run began is seen before anything is
+// written.
 func verifyChapterSelection(store maintenance.JobStore, sel chapterGroupSelection, st *chapterGroupState, opts scanner.ChapterDetectOptions, siblings map[string][]string) (scanner.ChapterGroup, string, string) {
 	if chapterFingerprint(st.members) != sel.Fingerprint {
 		return scanner.ChapterGroup{}, "members changed since the preview (fingerprint mismatch)", "drifted"
@@ -299,6 +305,20 @@ func verifyChapterSelection(store maintenance.JobStore, sel chapterGroupSelectio
 		inSel[b.ID] = true
 		dirs[filepath.Dir(b.FilePath)] = true
 		cores = append(cores, b.Core())
+	}
+	// A member folder that is one disc of a multi-disc book brings its
+	// sibling disc folders into the context, so the multi-disc blocker the
+	// preview saw is seen here too.
+	for dir := range dirs {
+		if !scanner.IsDiscFolderName(filepath.Base(dir)) {
+			continue
+		}
+		parent := filepath.Dir(dir)
+		for other := range siblings {
+			if filepath.Dir(other) == parent && scanner.IsDiscFolderName(filepath.Base(other)) {
+				dirs[other] = true
+			}
+		}
 	}
 	for dir := range dirs {
 		for _, id := range siblings[dir] {
@@ -406,11 +426,21 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 	// order itself is recomputed under the lock (OrderByBooks: the primary,
 	// then the sources in chapter order).
 	precheck := func() error {
+		if chapterPrecheckTestHook != nil {
+			chapterPrecheckTestHook()
+		}
 		cur, err := readChapterGroup(store, sel.BookIDs)
 		if err != nil {
 			return &chapterStepError{status: "failed", msg: err.Error()}
 		}
-		if _, why, status := verifyChapterSelection(store, sel, cur, opts, siblings); why != "" {
+		// Re-list the folder under the lock: the run-level index was read
+		// before this group's turn, and a book that landed in the folder
+		// since (a second copy, a new chapter) must be seen.
+		fresh, ferr := chapterSiblingIndex(store)
+		if ferr != nil {
+			return &chapterStepError{status: "failed", msg: ferr.Error()}
+		}
+		if _, why, status := verifyChapterSelection(store, sel, cur, opts, fresh); why != "" {
 			if status == "blocked" || status == "selection_mismatch" {
 				return &chapterStepError{status: status, msg: why, blockers: []string{why}}
 			}
@@ -487,6 +517,11 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 	}
 }
 
+// chapterPrecheckTestHook, when set (tests only), runs first under the merge
+// lock, so a test can land a change between the pre-lock verification and the
+// re-verification under the lock.
+var chapterPrecheckTestHook func()
+
 // chapterStepError is a Precheck refusal, carrying the outcome status.
 type chapterStepError struct {
 	status   string
@@ -510,7 +545,46 @@ func chapterTitleDecision(primary *database.Book, commonTitle string) (string, s
 	return "", "kept"
 }
 
-// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+// Policy is DefaultPolicy with library.scan's ConcurrencyKey. The owner's
+// standing rule is that nothing applies to the library during a scan: sharing
+// the key makes the registry run this job and library.scan one at a time,
+// in either order (a scan queued while a merge runs waits, and vice versa).
+// It JOINS library.scan's key; it never gives library.scan a different one.
+// The previews queue behind a running scan too -- they are cheap to re-run.
 func (j *mergeChapterGroupsJob) Policy() maintenance.ExecutionPolicy {
-	return maintenance.DefaultPolicy()
+	p := maintenance.DefaultPolicy()
+	p.ConcurrencyKey = chapterLibraryScanKey
+	return p
+}
+
+// chapterLibraryScanKey is library.scan's ConcurrencyKey
+// (internal/server/library_core_ops.go).
+const chapterLibraryScanKey = "library.scan"
+
+// chapterActiveOpsStore is what the scan guard reads. database.Store (and so
+// the prod indexedStore) has it.
+type chapterActiveOpsStore interface {
+	ListActiveOperationsV2() ([]database.OperationV2Row, error)
+}
+
+// refuseDuringLibraryScan fails a real merge while a library.scan is
+// running: the ConcurrencyKey keeps the dispatcher from starting both, and
+// this covers any path into Run that did not go through it. It fails CLOSED:
+// a store that cannot list operations is not proof that no scan runs. A
+// zombie "running" scan row also refuses; clear it rather than bypass this.
+func refuseDuringLibraryScan(store maintenance.JobStore) error {
+	qs, ok := store.(chapterActiveOpsStore)
+	if !ok {
+		return errors.New("merge-chapter-groups: cannot verify that no library.scan is running; refusing to merge")
+	}
+	active, err := qs.ListActiveOperationsV2()
+	if err != nil {
+		return fmt.Errorf("merge-chapter-groups: cannot list active operations; refusing to merge: %w", err)
+	}
+	for _, op := range active {
+		if op.DefID == chapterLibraryScanKey && op.Status == "running" {
+			return fmt.Errorf("merge-chapter-groups: library.scan is running (op %s); refusing to merge during a scan", op.ID)
+		}
+	}
+	return nil
 }
