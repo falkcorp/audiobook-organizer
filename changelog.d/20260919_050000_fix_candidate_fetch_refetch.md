@@ -17,3 +17,9 @@
   enabling another provider, asks again. So does sending `force: true` to the
   batch-fetch endpoint. The progress line and the finish log now show how many
   books were answered from the cache and how many were already known to be empty.
+
+- **A second "fetch all unmatched" click while one is running no longer queues
+  the same books again.** The check for books already being fetched read a
+  capped slice of operation history, so a long fetch could drop out of it while
+  still running. It now reads the list of operations that are actually queued
+  or running.
