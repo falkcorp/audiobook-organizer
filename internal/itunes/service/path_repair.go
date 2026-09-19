@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_repair.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 01ad6c79-5f3f-4ee1-a07a-1f4b3a8c0d12
-// last-edited: 2026-09-07
+// last-edited: 2026-09-19
 //
 // PathRepairer dumps the iTunes XML, finds tracks whose Location no
 // longer exists on disk, re-discovers the correct path via three tiers
@@ -97,7 +97,9 @@ type pathRepairerStore interface {
 	opResultWriter
 	operations.OperationStateDeleter
 
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook, not UpdateBook: a path repair sets FilePath and nothing else,
+	// so it must not write back a whole row it read earlier.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	UpdateBookFile(id string, file *database.BookFile) error
 	RecordPathChange(change *database.BookPathChange) error
 }
@@ -533,19 +535,22 @@ func (r *PathRepairer) applyResolution(pid, bookID, oldPath, newPath string) (en
 
 	// Fall back to book-level fields when no matching BookFile.
 	if !updated {
-		book, err := r.store.GetBookByID(bookID)
-		if err != nil || book == nil {
-			return false, fmt.Errorf("get book %s: %w", bookID, err)
-		}
-		changed := false
-		if book.FilePath != newPath {
-			book.FilePath = newPath
-			changed = true
-		}
-		if changed {
-			if _, err := r.store.UpdateBook(bookID, book); err != nil {
-				return false, fmt.Errorf("update book %s: %w", bookID, err)
+		// ModifyBook, not a read followed by UpdateBook: the read is separated
+		// from the write by the whole BookFile scan above, and writing the row
+		// back whole would revert whatever another writer committed in that
+		// gap. Only FilePath is this repair's to set.
+		written, err := r.store.ModifyBook(bookID, func(cur *database.Book) error {
+			if cur.FilePath == newPath {
+				return database.ErrSkipBookWrite
 			}
+			cur.FilePath = newPath
+			return nil
+		})
+		if err != nil {
+			return false, fmt.Errorf("update book %s: %w", bookID, err)
+		}
+		if written == nil {
+			return false, fmt.Errorf("get book %s: book no longer exists", bookID)
 		}
 	}
 

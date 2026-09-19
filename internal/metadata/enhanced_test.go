@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8f7e6d5c-4b3a-2c1d-0e9f-8a7b6c5d4e3f
-// last-edited: 2026-07-11
+// last-edited: 2026-09-19
 
 package metadata
 
@@ -260,12 +260,12 @@ func TestBatchUpdateMetadata_Success(t *testing.T) {
 	}
 	store.EXPECT().GetBookByID("book1").Return(book1, nil).Once()
 	store.EXPECT().GetBookByID("book2").Return(book2, nil).Once()
-	store.EXPECT().UpdateBook("book1", mock.MatchedBy(func(book *database.Book) bool {
+	expectMergedBook(t, store, "book1", book1, func(book *database.Book) bool {
 		return book != nil && book.Title == "New Title 1" && book.Format == "m4b"
-	})).Return(book1, nil).Once()
-	store.EXPECT().UpdateBook("book2", mock.MatchedBy(func(book *database.Book) bool {
+	})
+	expectMergedBook(t, store, "book2", book2, func(book *database.Book) bool {
 		return book != nil && book.Title == "New Title 2"
-	})).Return(book2, nil).Once()
+	})
 
 	// Create batch updates
 	updates := []MetadataUpdate{
@@ -352,7 +352,7 @@ func TestBatchUpdateMetadata_UpdateError(t *testing.T) {
 		AuthorID: &authorID,
 	}
 	store.EXPECT().GetBookByID("book1").Return(book1, nil).Once()
-	store.EXPECT().UpdateBook("book1", mock.Anything).Return(nil, errors.New("database error")).Once()
+	store.EXPECT().ModifyBook("book1", mock.Anything).Return(nil, errors.New("database error")).Once()
 
 	updates := []MetadataUpdate{
 		{
@@ -389,9 +389,9 @@ func TestAuthorSeriesResolution(t *testing.T) {
 		store.EXPECT().RecordMetadataChange(mock.MatchedBy(func(r *database.MetadataChangeRecord) bool {
 			return r.Field == "author_id" && r.BookID == "b1"
 		})).Return(nil).Once()
-		store.EXPECT().UpdateBook("b1", mock.MatchedBy(func(b *database.Book) bool {
+		expectMergedBook(t, store, "b1", book, func(b *database.Book) bool {
 			return b.AuthorID != nil && *b.AuthorID == existingID
-		})).Return(book, nil).Once()
+		})
 
 		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
 			BookID:  "b1",
@@ -424,10 +424,10 @@ func TestAuthorSeriesResolution(t *testing.T) {
 		store.EXPECT().RecordMetadataChange(mock.MatchedBy(func(r *database.MetadataChangeRecord) bool {
 			return r.Field == "series_id"
 		})).Return(nil).Once()
-		store.EXPECT().UpdateBook("b2", mock.MatchedBy(func(b *database.Book) bool {
+		expectMergedBook(t, store, "b2", book, func(b *database.Book) bool {
 			return b.AuthorID != nil && *b.AuthorID == newAuthorID &&
 				b.SeriesID != nil && *b.SeriesID == newSeriesID
-		})).Return(book, nil).Once()
+		})
 
 		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
 			BookID:  "b2",
@@ -445,9 +445,9 @@ func TestAuthorSeriesResolution(t *testing.T) {
 		store.EXPECT().GetBookByID("b3").Return(book, nil).Once()
 		// No GetAuthorByName/CreateAuthor/RecordMetadataChange expectations:
 		// an empty name is a no-op that must not clear the existing ID.
-		store.EXPECT().UpdateBook("b3", mock.MatchedBy(func(b *database.Book) bool {
+		expectMergedBook(t, store, "b3", book, func(b *database.Book) bool {
 			return b.AuthorID != nil && *b.AuthorID == existingID && b.Title == "New"
-		})).Return(book, nil).Once()
+		})
 
 		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
 			BookID:  "b3",
@@ -465,9 +465,9 @@ func TestAuthorSeriesResolution(t *testing.T) {
 		store.EXPECT().GetAuthorByName("Boom").Return(nil, errors.New("store down")).Once()
 		// No RecordMetadataChange (no successful ID change). Title still applied,
 		// AuthorID left unset.
-		store.EXPECT().UpdateBook("b4", mock.MatchedBy(func(b *database.Book) bool {
+		expectMergedBook(t, store, "b4", book, func(b *database.Book) bool {
 			return b.AuthorID == nil && b.Title == "New"
-		})).Return(book, nil).Once()
+		})
 
 		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
 			BookID:  "b4",
@@ -493,7 +493,7 @@ func TestLegacyHistoryStubRetired(t *testing.T) {
 	store.EXPECT().GetAuthorByName("A").Return(&database.Author{ID: 1, Name: "A"}, nil).Once()
 	store.EXPECT().RecordMetadataChange(mock.Anything).
 		Run(func(r *database.MetadataChangeRecord) { recorded = true }).Return(nil).Once()
-	store.EXPECT().UpdateBook("b5", mock.Anything).Return(book, nil).Once()
+	store.EXPECT().ModifyBook("b5", mock.Anything).Return(book, nil).Once()
 
 	BatchUpdateMetadata([]MetadataUpdate{{
 		BookID:  "b5",
@@ -812,4 +812,27 @@ func TestWriteMetadataToFile_BackupFailed(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when backup creation fails")
 	}
+}
+
+// expectMergedBook wires the ModifyBook expectation that replaced UpdateBook in
+// BatchUpdateMetadata. The apply merges its changes onto the row as stored
+// rather than writing back the copy it read, so the fake mirrors ModifyBook:
+// it re-reads `stored` into an independent copy, runs the real callback against
+// that copy, and asserts `want` holds for the merged result.
+func expectMergedBook(t *testing.T, store *mocks.MockStore, id string, stored *database.Book, want func(*database.Book) bool) {
+	t.Helper()
+	store.EXPECT().ModifyBook(id, mock.Anything).
+		RunAndReturn(func(_ string, fn func(*database.Book) error) (*database.Book, error) {
+			cur, serr := database.SnapshotBook(stored)
+			if serr != nil {
+				return nil, serr
+			}
+			if err := fn(cur); err != nil {
+				return nil, err
+			}
+			if want != nil && !want(cur) {
+				t.Errorf("merged row for %s does not match expectation: %+v", id, cur)
+			}
+			return cur, nil
+		}).Once()
 }

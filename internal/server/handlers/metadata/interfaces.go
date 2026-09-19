@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -113,6 +113,11 @@ type MetadataBookStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the lost-update-safe write BatchUpdateMetadata needs: the
+	// bulk apply resolves authors and series between reading a book and writing
+	// it, so it merges its changes onto the stored row rather than writing back
+	// the copy it read.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	CreateBook(book *database.Book) (*database.Book, error)
 	// GetBookAuthors reads the author join before a bulk apply, so undo can
 	// restore it together with the author column.
