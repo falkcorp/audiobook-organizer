@@ -1,5 +1,5 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
 // last-edited: 2026-09-19
 
@@ -403,6 +403,7 @@ func (p *PebbleStore) partitionedBookFileWrite(files []*BookFile, present []bool
 	var missing []string
 	var durErr error
 	reasons := map[*BookFile]string{}
+	vanishes := map[*BookFile]int{}
 	idleRounds := 0
 	total := 0
 	for _, f := range files {
@@ -452,21 +453,38 @@ func (p *PebbleStore) partitionedBookFileWrite(files []*BookFile, present []bool
 					}
 				}
 			}
+			// Count vanishes per ROW (by the caller's struct), not per round.
+			if staged != nil {
+				for _, k := range stale.vanishedKeys {
+					if c := staged.byRewriteKey[string(k)]; c != nil {
+						if o := origOf[c]; o != nil {
+							vanishes[o]++
+						}
+					}
+				}
+			}
 			if newlyRefused == 0 {
 				idleRounds++
 				if idleRounds >= maxStageRetries {
-					// Sustained churn: the rows whose re-checked keys keep
-					// vanishing are refused on their own, with a reason, and
-					// the rest of the batch goes ahead on the next pass.
+					// Sustained churn: refuse, on its own and with a reason,
+					// only a row whose re-checked key vanished in two or more
+					// rounds — it keeps changing. A row that vanished once is
+					// re-staged like any other; one concurrent write is not
+					// churn. Threshold 2 because a single vanish is exactly
+					// what one retry is for.
 					for _, k := range stale.vanishedKeys {
-						if staged != nil && staged.byRewriteKey[string(k)] != nil {
-							refuse(staged.byRewriteKey[string(k)], "the row it rewrites kept changing under the write ("+string(k)+")")
+						if c := staged.byRewriteKey[string(k)]; c != nil {
+							if o := origOf[c]; o != nil && vanishes[o] >= 2 {
+								refuse(c, "the row it rewrites kept changing under the write ("+string(k)+")")
+							}
 						}
 					}
-					if newlyRefused == 0 {
+					// Bounded: rows are finite and every idle round adds a
+					// vanish to some row, so a row reaches 2 within
+					// len(files)+1 rounds past the limit.
+					if newlyRefused == 0 && idleRounds >= maxStageRetries+len(files)+1 {
 						return fmt.Errorf("book_file batch: rows kept changing under the write: %w", err)
 					}
-					idleRounds = 0
 				}
 			}
 			continue

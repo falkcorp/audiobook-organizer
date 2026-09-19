@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-09-19
 
@@ -1990,7 +1990,13 @@ func (imp *Importer) repointImportedRows(book *database.Book, files []database.B
 		}
 		updated := f
 		updated.FilePath = newPath
-		if err := imp.store.UpdateBookFile(f.ID, &updated); err != nil {
+		upErr := imp.store.UpdateBookFile(f.ID, &updated)
+		if errors.Is(upErr, database.ErrBookFileDurabilityUnknown) {
+			// Written; only its fsync failed. It is done, not failed.
+			log.Error("repoint book_file %s of '%s' to %s was written but its fsync failed (%v): durability unknown; treating it as applied", f.ID, book.Title, newPath, upErr)
+			upErr = nil
+		}
+		if err := upErr; err != nil {
 			imp.restoreImportedRows(book, done, log)
 			return fmt.Errorf("repoint book_file %s of '%s' to %s: %w", f.ID, book.Title, newPath, err)
 		}

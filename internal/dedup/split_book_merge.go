@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-09-19
 
@@ -21,6 +21,7 @@
 package dedup
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -271,7 +272,16 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 			persist()
 		}
 		if len(p.fileIDs) > 0 {
-			if err := store.MoveBookFilesToBook(p.fileIDs, srcID, keepID); err != nil {
+			mvErr := store.MoveBookFilesToBook(p.fileIDs, srcID, keepID)
+			if errors.Is(mvErr, database.ErrBookFileDurabilityUnknown) {
+				// Moved (visible); only the fsync failed. Recording "nothing
+				// moved" would make the journal's undo wrong.
+				msg := fmt.Sprintf("move files from %s was written but its fsync failed (%v): durability unknown; treated as applied", srcID, mvErr)
+				result.Errors = append(result.Errors, msg)
+				journal.Warnings = append(journal.Warnings, msg)
+				mvErr = nil
+			}
+			if err := mvErr; err != nil {
 				// Atomic: nothing moved. The entry stays (with nothing to undo
 				// beyond a no-op) marked LeftLive.
 				leaveLive(fmt.Sprintf("move files from %s: %v; %s left live", srcID, err, srcID))

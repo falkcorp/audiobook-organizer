@@ -1,5 +1,5 @@
 // file: internal/database/book_delete_owns_files_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ea8c9be0-11d7-4035-b1ea-a50f919e06cd
 // last-edited: 2026-09-19
 
@@ -556,5 +556,53 @@ func TestBatchUpsert_ChurningRowRefusedOthersCommit(t *testing.T) {
 		if r, _ := store.GetBookFileByPath(fmt.Sprintf("/lib/churn/b/%02d.mp3", i)); r == nil {
 			t.Fatalf("row %d was not committed", i)
 		}
+	}
+}
+
+// Only a row that KEPT changing is refused as churn. A row whose re-checked
+// key vanished once, in the same round the churn limit was reached, is
+// re-staged and committed — it counted rounds, not rows, and refused it too.
+func TestBatchUpsert_ChurnRefusesOnlyRowsThatVanishedRepeatedly(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	b, _ := store.CreateBook(&Book{Title: "b", FilePath: "/lib/churn2/b"})
+	const hot, once = "/lib/churn2/b/hot.mp3", "/lib/churn2/b/once.mp3"
+	for _, p := range []string{hot, once} {
+		if err := store.CreateBookFile(&BookFile{BookID: b.ID, FilePath: p}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recreate := func(p string) {
+		if cur, _ := store.GetBookFileByPath(p); cur != nil {
+			_ = store.DeleteBookFile(cur.ID)
+		}
+		_ = store.CreateBookFile(&BookFile{BookID: b.ID, FilePath: p})
+	}
+	inHook, calls := false, 0
+	bookFileBeforeCommitHook = func() {
+		if inHook {
+			return
+		}
+		inHook = true
+		defer func() { inHook = false }()
+		calls++
+		recreate(hot)
+		if calls == maxStageRetries { // vanishes exactly once, in the limit round
+			recreate(once)
+		}
+	}
+	t.Cleanup(func() { bookFileBeforeCommitHook = nil })
+
+	err := store.BatchUpsertBookFiles([]*BookFile{
+		{BookID: b.ID, FilePath: hot, Title: "hot"},
+		{BookID: b.ID, FilePath: once, Title: "once"},
+	})
+	bookFileBeforeCommitHook = nil
+	var refused *BookFileRowsRefusedError
+	if !errors.As(err, &refused) || len(refused.RefusedFileIDs) != 1 || refused.Committed != 1 {
+		t.Fatalf("err = %v, want exactly the hot row refused and the other committed", err)
+	}
+	if r, _ := store.GetBookFileByPath(once); r == nil || r.Title != "once" {
+		t.Fatalf("the row that vanished only once was not committed: %+v", r)
 	}
 }

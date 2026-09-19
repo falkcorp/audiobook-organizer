@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -279,7 +280,15 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 			for _, m := range a.Moves {
 				bulk = append(bulk, database.BookFileMove{FileIDs: []string{m.FileID}, SourceBookID: m.From})
 			}
-			if err := store.MoveBookFilesToBookBulk(bulk, target); err != nil {
+			bulkErr := store.MoveBookFilesToBookBulk(bulk, target)
+			if errors.Is(bulkErr, database.ErrBookFileDurabilityUnknown) {
+				// Everything moved (visible); only the fsync failed. The
+				// per-file retry below would find the rows gone from their
+				// sources and count every move as failed.
+				_ = reporter.Log(slog.LevelError, fmt.Sprintf("bulk move of %d files -> %s was written but its fsync failed (%v): durability unknown; treating it as applied", len(bulk), target, bulkErr))
+				bulkErr = nil
+			}
+			if err := bulkErr; err != nil {
 				// The bulk form is atomic, so NOTHING moved. Fall back to the
 				// per-file loop rather than failing the whole group: a plan is
 				// frozen ahead of the apply, so a single file that vanished in
