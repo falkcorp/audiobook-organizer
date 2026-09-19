@@ -7,6 +7,7 @@ package abs
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -186,6 +187,10 @@ func (h *Handler) Play(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 
 	view, err := h.loadItemView(c.Request.Context(), book)
+	if errors.Is(err, errRedirectedSyncID) {
+		respondError(c, http.StatusNotFound, "library item not found")
+		return
+	}
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not open play session")
 		return

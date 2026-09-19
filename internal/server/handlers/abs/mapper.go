@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
 // last-edited: 2026-09-19
 
@@ -16,10 +16,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -144,9 +146,32 @@ func (h *Handler) loadItemViews(ctx context.Context, books []database.Book) ([]i
 	for i := range out {
 		if !dropped[i] {
 			kept = append(kept, out[i])
+		} else {
+			warnRedirectedItemDropped(books[i].ID)
 		}
 	}
 	return kept, nil
+}
+
+// mapperLog is the mapper's logger.
+var mapperLog = logger.New("abs")
+
+// absRedirectDropLastWarn rate-limits warnRedirectedItemDropped.
+var absRedirectDropLastWarn atomic.Int64
+
+// warnRedirectedItemDropped reports a list that tried to render a merge loser.
+// Every such drop is a book whose row still passes a visibility filter while
+// its sync id redirects (a contradictory primary+organized merge loser — the S1
+// shape), or a caller rendering an unfiltered source; either is worth fixing at
+// the source. One line per minute at most: a whole page of losers must not
+// flood the journal, and the line is a signal, not a census.
+func warnRedirectedItemDropped(bookID string) {
+	now := time.Now().UnixMilli()
+	last := absRedirectDropLastWarn.Load()
+	if now-last < time.Minute.Milliseconds() || !absRedirectDropLastWarn.CompareAndSwap(last, now) {
+		return
+	}
+	mapperLog.Warn("abs: dropped a merge loser from a list: its sync id redirects to another item: book_id=%s (rate-limited to 1/min)", bookID)
 }
 
 // errRedirectedSyncID marks a book whose sync id is a merge REDIRECT: the book
@@ -159,6 +184,16 @@ func (h *Handler) loadItemViews(ctx context.Context, books []database.Book) ([]i
 // of 652 prod hits. List callers (search, collections, playlists, sessions,
 // personalized shelves) DROP the book; the single-item route is unaffected
 // because it starts from the client's id and resolves forward to the survivor.
+//
+// Membership lists (collections, playlists) never reach this drop: they map a
+// loser to its survivor first (canonicalMembers). What can reach it is a paged
+// list whose source still admits a loser — only the contradictory
+// primary+organized loser (absItemFilterBase excludes ordinary ones). On such a
+// page `total` was computed before the drop and can exceed the rendered rows by
+// the number dropped. That is accepted rather than re-counted: re-counting would
+// need the guard's point-get for every book in the library on every page, and
+// the discrepancy is bounded by rows that are themselves data errors, each of
+// which warnRedirectedItemDropped reports.
 var errRedirectedSyncID = errors.New("abs: book's sync id redirects to another item (merge loser)")
 
 // loadItemView is the single-book path (GET /api/items/:id, play sessions).
@@ -166,6 +201,11 @@ func (h *Handler) loadItemView(ctx context.Context, book *database.Book) (*itemV
 	views, err := h.loadItemViews(ctx, []database.Book{*book})
 	if err != nil {
 		return nil, err
+	}
+	if len(views) == 0 {
+		// The book is a merge loser (loadItemViews dropped it). Callers answer
+		// 404, not 500: the item behind this id no longer exists as itself.
+		return nil, errRedirectedSyncID
 	}
 	if len(views) != 1 {
 		return nil, fmt.Errorf("abs: loadItemView: expected 1 view, got %d", len(views))

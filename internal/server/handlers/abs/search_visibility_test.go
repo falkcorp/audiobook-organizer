@@ -187,3 +187,46 @@ func TestItemPath_ComesFromAPresentTrack(t *testing.T) {
 		t.Fatalf("item path = %q, want the present track's directory (Right Book)", path)
 	}
 }
+
+// Review W5: a membership list naming a merge loser shows the SURVIVOR in its
+// place (not nothing), and removing that survivor id removes the stored loser.
+func TestMembership_MergeLoserShowsAsSurvivorAndIsRemovable(t *testing.T) {
+	v := newVisFixture(t)
+	v.add("01WINNER00000000000000000V", "Winner", true, "organized")
+	v.add("01LOSER000000000000000000L", "Loser", false, "organized")
+	_, winnerSync := v.lib.mergeLoser(t, "01LOSER000000000000000000L", "01WINNER00000000000000000V")
+	loserOnly := []string{"01LOSER000000000000000000L"}
+
+	col, err := v.cols.CreateCollection(&database.Collection{Name: "c", Type: database.CollectionTypeStatic, BookIDs: loserOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	books, _ := v.get(t, "/api/collections/"+col.ID)["books"].([]any)
+	if len(books) != 1 || obj(t, books[0])["id"] != winnerSync {
+		t.Fatalf("collection holding only a merge loser rendered %v, want the survivor %s", books, winnerSync)
+	}
+
+	v.lists.lists = []database.UserPlaylist{{ID: "01PL", Name: "p", Type: database.UserPlaylistTypeStatic,
+		CreatedByUserID: "u1", BookIDs: loserOnly}}
+	items, _ := v.get(t, "/api/playlists/01PL")["items"].([]any)
+	if len(items) != 1 || obj(t, items[0])["libraryItemId"] != winnerSync {
+		t.Fatalf("playlist holding only a merge loser rendered %v, want the survivor %s", items, winnerSync)
+	}
+
+	// Removing by the id the client sees (the survivor's) removes the stored loser.
+	if code, body := v.h.doAny(t, request{method: http.MethodPost, path: "/api/playlists/01PL/batch/remove",
+		headers: bearer(v.tok), body: map[string]any{"items": []map[string]any{{"libraryItemId": winnerSync}}}}); code != http.StatusOK {
+		t.Fatalf("playlist batch/remove = %d %v", code, body)
+	}
+	if got := v.lists.lists[0].BookIDs; len(got) != 0 {
+		t.Fatalf("playlist still stores %v after removing the survivor id", got)
+	}
+	abscolGrantManage(t, v.h, "u1")
+	if code, body := v.h.doAny(t, request{method: http.MethodDelete, path: "/api/collections/" + col.ID + "/book/" + winnerSync,
+		headers: bearer(v.tok)}); code != http.StatusOK {
+		t.Fatalf("collection remove = %d %v", code, body)
+	}
+	if got, _ := v.cols.GetCollection(col.ID); len(got.BookIDs) != 0 {
+		t.Fatalf("collection still stores %v after removing the survivor id", got.BookIDs)
+	}
+}
