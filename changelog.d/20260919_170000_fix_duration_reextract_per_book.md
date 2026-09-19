@@ -31,3 +31,12 @@
   aggregate recompute on any error, including `ErrBookFileDurabilityUnknown`,
   where the row *was* applied and is visible. The book's totals then disagreed
   with its rows. They now recompute whenever the row was applied.
+- **A disconnected browser no longer leaves a merged multidisc book
+  half-numbered.** The disc/track numbering that follows a multidisc review
+  approval ran on the request context, so a client disconnect or a proxy
+  timeout after the merge had committed stopped it partway — and nothing
+  finishes it later, because a re-approve finds fewer than two members and the
+  numbering skips a survivor that already carries a number. It now runs to the
+  end once the merge has committed. The fs-regroup fragments track pass is the
+  same case: a group is applied atomically, so a cancel is honoured between
+  groups, never inside one, where it could leave duplicate track numbers.

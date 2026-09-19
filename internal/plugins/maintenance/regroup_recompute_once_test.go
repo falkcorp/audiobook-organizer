@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_recompute_once_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1459a1bf-2291-48b5-9eaa-be04214b421c
 // last-edited: 2026-09-19
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
 func seedTrackBook(t *testing.T, s *database.PebbleStore, n int, path func(i int) string) (string, []string) {
@@ -102,5 +103,106 @@ func TestFSRegroupTrackPass_RecomputesSurvivorOnce(t *testing.T) {
 	}
 	if len(changes) != n {
 		t.Errorf("journaled %d track changes, want %d", len(changes), n)
+	}
+}
+
+// cancelAfterCombine runs the real combine, then cancels: the review handler's
+// request context dying (client gone, proxy timeout) just after the merge
+// committed.
+type cancelAfterCombine struct {
+	inner  bookCombiner
+	cancel context.CancelFunc
+}
+
+func (c cancelAfterCombine) CombineBooks(ids []string, primaryID string, o *merge.CombineOverride) (*merge.CombineResult, error) {
+	res, err := c.inner.CombineBooks(ids, primaryID, o)
+	c.cancel()
+	return res, err
+}
+
+// Once CombineBooks has committed, nothing can finish a partial numbering (a
+// re-approve no-ops on <2 members; the group guard skips a numbered survivor),
+// so a cancel after the combine must not stop it.
+func TestApplyMultidisc_CancelAfterCombineStillNumbersEveryRow(t *testing.T) {
+	store := newApplyTestStore(t)
+	const n = 6
+	paths := make([]string, n)
+	tracks := make([]int, n)
+	for i := range n {
+		paths[i] = fmt.Sprintf("/lib/Saga/Saga_%d.mp3", i+1)
+		tracks[i] = i + 1
+	}
+	ids, _ := seedNumberedBooks(t, store, paths)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	apply := ApplyMultidisc(store, cancelAfterCombine{inner: merge.NewService(store), cancel: cancel})
+	item := multidiscItemWithNumbers(t, "/lib/Saga", ids, paths, make([]int, n), tracks)
+	if err := apply(ctx, item); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("test setup: ctx was not cancelled after the combine")
+	}
+
+	files, err := store.GetBookFiles(minID(ids...))
+	if err != nil {
+		t.Fatalf("GetBookFiles: %v", err)
+	}
+	if len(files) != n {
+		t.Fatalf("survivor has %d files, want %d", len(files), n)
+	}
+	for _, f := range files {
+		if f.TrackNumber == 0 {
+			t.Errorf("row %s left unnumbered after a post-combine cancel", f.FilePath)
+		}
+	}
+}
+
+// cancelOnTouch cancels ctx at the k-th liveness touch: a cancel arriving in
+// the middle of the fragments track pass.
+type cancelOnTouch struct {
+	livenessReporter
+	k      int64
+	cancel context.CancelFunc
+}
+
+func (r *cancelOnTouch) TouchLiveness() {
+	if r.touches.Add(1) == r.k {
+		r.cancel()
+	}
+}
+
+// A group is applied atomically; a cancel mid-track-pass must not leave the
+// survivor half-renumbered (possibly with duplicate track numbers) while
+// applyFragments goes on to retire the shells.
+func TestFSRegroupTrackPass_CancelMidPassStillRenumbersWholeGroup(t *testing.T) {
+	s := newRepairPebble(t)
+	const n = 20
+	bookID, _ := seedTrackBook(t, s, n, func(i int) string {
+		return fmt.Sprintf("/lib/Chapters/Chapters - %02d/f.mp3", i+1)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rep := &cancelOnTouch{k: 3, cancel: cancel}
+	a := &fsApplier{store: s, opID: "op-cancel", reporter: rep}
+
+	if !a.renumberFragmentTracks(ctx, bookID, "/lib/Chapters") {
+		t.Fatalf("track pass did not complete (errs=%d)", a.errs.Load())
+	}
+	if ctx.Err() == nil {
+		t.Fatal("test setup: ctx was not cancelled mid-pass")
+	}
+	files, _ := s.GetBookFiles(bookID)
+	seen := map[int]string{}
+	for _, f := range files {
+		if f.TrackNumber == 0 {
+			t.Errorf("row %s left unnumbered by a mid-pass cancel", f.FilePath)
+			continue
+		}
+		if prev, dup := seen[f.TrackNumber]; dup {
+			t.Errorf("track %d on both %s and %s", f.TrackNumber, prev, f.FilePath)
+		}
+		seen[f.TrackNumber] = f.FilePath
 	}
 }

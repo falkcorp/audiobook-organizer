@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/purge_millisecond_durations.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 7ad86e89-caff-4b83-8cdb-ec0403de1d98
 // last-edited: 2026-09-19
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -141,6 +142,10 @@ func (p *Plugin) runPurgeMillisecondDurations(ctx context.Context, raw json.RawM
 	// 🔒 Shared across workers — see the pool below.
 	var mu sync.Mutex
 	var fixed, wouldFix, failed, recomputed, skipped int
+	// skippedCanceled: rows a cancel stopped before they were attempted (not
+	// failures). recomputeFailed: books whose rows were written but whose
+	// aggregate recompute failed, so their totals may be stale.
+	var skippedCanceled, recomputeFailed int
 	var examples []string
 
 	// PASS 2 — full fidelity, per affected book. Parallel by book: a book_file row
@@ -211,20 +216,24 @@ func (p *Plugin) runPurgeMillisecondDurations(ctx context.Context, raw json.RawM
 		// its rows each time -- O(n^2) on a large book, the defect that got
 		// duration-reextract killed as stuck on 2026-09-19. ctx is checked
 		// between rows and liveness is stamped after each one.
+		attempted := 0
 		n, uerr := store.UpdateBookFiles(ctx, toWrite, func(int, bool) {
+			attempted++ // afterRow runs on this goroutine, synchronously
 			registry.TouchLiveness(reporter)
 		})
+		recomputeErr := errors.Is(uerr, database.ErrBookAggregatesRecompute)
 		mu.Lock()
 		fixed += n
+		failed += attempted - n                     // rows attempted and not applied
+		skippedCanceled += len(toWrite) - attempted // rows a cancel never reached
 		switch {
-		case uerr == nil:
-			recomputed++
-		case n < len(toWrite):
-			failed += len(toWrite) - n
-		default:
-			// Every row applied, yet an error: the recompute (or an fsync)
-			// failed, so the book's totals may be stale.
+		case recomputeErr:
+			recomputeFailed++
 			failed++
+		case n > 0:
+			// Rows written and no recompute error: the book was recomputed once.
+			// (A durability-unknown row error still recomputes.)
+			recomputed++
 		}
 		mu.Unlock()
 		if uerr != nil {
@@ -243,7 +252,8 @@ func (p *Plugin) runPurgeMillisecondDurations(ctx context.Context, raw json.RawM
 		},
 	})
 	if runErr != nil && ctx.Err() != nil {
-		log.Warn("purge-millisecond-durations: cancelled", "fixed", fixed, "books", len(bookIDs))
+		log.Warn("purge-millisecond-durations: cancelled", "fixed", fixed, "books", len(bookIDs),
+			"skipped_canceled", skippedCanceled, "failed", failed, "recompute_failed", recomputeFailed)
 		return ctx.Err()
 	}
 	if runErr != nil {
@@ -258,9 +268,9 @@ func (p *Plugin) runPurgeMillisecondDurations(ctx context.Context, raw json.RawM
 	// on the memdb-backed read path until it refreshes.
 	summary := fmt.Sprintf(
 		"purge-millisecond-durations: %d rows scanned, %d book(s) affected, %d ms row(s), %s, "+
-			"skipped %d (already seconds), failed %d "+
+			"skipped %d (already seconds), skipped_canceled %d, failed %d (recompute_failed %d) "+
 			"| NOTE: corrected totals may not appear until memdb refreshes (restart) | e.g. %s",
-		len(cores), len(byBook), candidates, verb, skipped, failed, strings.Join(examples, "; "))
+		len(cores), len(byBook), candidates, verb, skipped, skippedCanceled, failed, recomputeFailed, strings.Join(examples, "; "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	_ = reporter.UpdateProgress(len(bookIDs), len(bookIDs), summary)
 	return nil

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-09-19
 
@@ -1241,13 +1241,19 @@ func (a *fsApplier) applyFragments(ctx context.Context, g fsRepairGroup) {
 // chapter folder and journals each row that landed. All of the rows go through
 // ONE UpdateBookFiles call: per-row UpdateBookFile recomputed the survivor's
 // aggregates after every row, re-reading all of its rows each time (O(n^2) on
-// a many-chapter book; see duration-reextract, 2026-09-19). ctx is checked
-// between rows, and liveness is stamped after each one. A cancel leaves every
-// written row complete and journaled, and the rest at their old number.
+// a many-chapter book; see duration-reextract, 2026-09-19). Liveness is
+// stamped after each row.
+//
+// NOT cancellable mid-pass: the pass runs under context.WithoutCancel. A group
+// is applied atomically under merge.LockMergeRMW, and a half-renumbered
+// survivor can hold duplicate track numbers that a re-run cannot repair (the
+// group no longer plans as fragments). Cancellation is honoured between
+// groups, by RunItems, not inside one.
 //
 // Reports whether the survivor's aggregates were recomputed after its rows
 // were final, so the caller can skip its own trailing recompute.
 func (a *fsApplier) renumberFragmentTracks(ctx context.Context, survivorID, folder string) bool {
+	ctx = context.WithoutCancel(ctx)
 	rows, err := a.store.GetBookFiles(survivorID)
 	if err != nil {
 		a.errs.Add(1)
@@ -1281,7 +1287,7 @@ func (a *fsApplier) renumberFragmentTracks(ctx context.Context, survivorID, fold
 	})
 	if err != nil {
 		if !rowFailed {
-			a.errs.Add(1) // cancel, fsync, or recompute failure: no row callback counted it
+			a.errs.Add(1) // fsync or recompute failure: no row callback counted it
 		}
 		a.log(slog.LevelWarn, "fragments %q: set track numbers on %s: %v", folder, survivorID, err)
 		return false

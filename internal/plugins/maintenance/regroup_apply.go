@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
 // last-edited: 2026-09-19
 
@@ -201,10 +201,16 @@ func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.
 
 		// Stamp the merged book's files with the per-file disc/track order the classifier
 		// derived. Best-effort: the combine (the actual merge) already committed, so a
-		// numbering failure logs a warning but does NOT fail the review item — the disc/
-		// track can be re-derived by re-running the dry-run, and leaving the item "failed"
-		// would wrongly imply the books weren't merged.
-		if n, derr := applyDiscTrackNumbers(ctx, store, res.PrimaryID, p); derr != nil {
+		// numbering failure logs a warning but does NOT fail the review item — leaving
+		// it "failed" would wrongly imply the books weren't merged.
+		//
+		// Nothing finishes a numbering left incomplete here: a re-approve finds <2
+		// members and no-ops, and the group guard in applyDiscTrackNumbers leaves a
+		// survivor alone once any row carries a number. So once CombineBooks has
+		// committed, the numbering runs to the end under context.WithoutCancel: ctx is
+		// the review handler's request context, and a client disconnect or proxy
+		// timeout must not stop it halfway. ctx is honoured only before the combine.
+		if n, derr := applyDiscTrackNumbers(context.WithoutCancel(ctx), store, res.PrimaryID, p); derr != nil {
 			slog.Warn("regroup multidisc apply: disc/track numbering incomplete",
 				"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID, "updated", n, "err", derr)
 		} else if n > 0 {
@@ -225,9 +231,11 @@ func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.
 //     empty incoming value. Never a full fresh/partial BookFile write-back.
 //   - ONE UpdateBookFiles call for the whole survivor, so its aggregates are
 //     recomputed once, not once per row (per-row UpdateBookFile re-read every row
-//     of the survivor after each write: O(n^2) on a many-file book). ctx is checked
-//     between rows. A failed row no longer stops the rows after it; the returned
-//     count is the rows applied and the error names every failed row.
+//     of the survivor after each write: O(n^2) on a many-file book). A failed row
+//     does not stop the rows after it; the returned count is the rows applied and
+//     the error names every failed row. ctx is passed through, but ApplyMultidisc
+//     hands it a WithoutCancel context: a partial numbering cannot be finished
+//     later (see the call site).
 //   - GROUP-LEVEL "already set → leave it" guard: if ANY survivor file already carries
 //     disc/track metadata, the whole group is left untouched. That both honors the
 //     owner's "unless the disk is already set, then leave it" and prevents a collision
