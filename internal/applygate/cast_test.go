@@ -1,7 +1,7 @@
 // file: internal/applygate/cast_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3f9b6d20-8e1c-4a75-b2d4-6c0e9a7f1d58
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package applygate
 
@@ -147,7 +147,7 @@ func TestCheckEvidence_SelfReadIsNotCast(t *testing.T) {
 	book := database.Book{Title: "A Promised Land", Duration: intp(104400), Narrator: strp("Barack Obama"),
 		FilePath: "/lib/Barack Obama/A Promised Land/A Promised Land.m4b"}
 	cand := metafetch.MetadataCandidate{Title: "A Promised Land", Author: "Barack Obama", DurationSec: 104400}
-	v := CheckEvidence(&book, &cand, false)
+	v := CheckEvidence(&book, database.ComputeBookRuntime(&book, nil), &cand, false)
 	if v.Reason == ReasonCastInAuthor {
 		t.Fatalf("self-read blocked as cast: %+v", v)
 	}
@@ -167,7 +167,7 @@ func TestCheckEvidence_CastInAuthorBlocks(t *testing.T) {
 	book := database.Book{Title: "Old Soldiers", Duration: intp(4789), Narrator: strp("James Swallow"),
 		FilePath: "/lib/James Swallow/Old Soldiers/Old Soldiers.m4b"}
 	cand := metafetch.MetadataCandidate{Title: "Old Soldiers", Author: "James Swallow, Nicholas Courtney, Toby Longworth", DurationSec: 4789}
-	v := CheckEvidence(&book, &cand, false)
+	v := CheckEvidence(&book, database.ComputeBookRuntime(&book, nil), &cand, false)
 	if v.Pass || v.Reason != ReasonCastInAuthor {
 		t.Fatalf("pass=%v reason=%q (%s), want %q", v.Pass, v.Reason, v.Detail, ReasonCastInAuthor)
 	}

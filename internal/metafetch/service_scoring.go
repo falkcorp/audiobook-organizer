@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package metafetch
 
@@ -869,10 +869,7 @@ func (mfs *Service) bestTitleMatchForBook(
 	}
 
 	baseScores, baseTier := mfs.ScoreBaseCandidates(context.Background(), book, results, searchWords)
-	bookDurationSec := 0
-	if book.Duration != nil {
-		bookDurationSec = *book.Duration
-	}
+	bookDurationSec := mfs.bookRuntimeSec(book)
 	return pickBestMatchFromScored(results, baseScores, baseTier, searchWords, bookAuthor, bookNarrator, bookDurationSec, hintsFromBook(book))
 }
 

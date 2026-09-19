@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-09-19
 
@@ -59,7 +59,7 @@ func (svc *AudiobookService) GetAudiobook(ctx context.Context, id string) (*data
 	// and the response is built from that row -- never UpdateBook(book): book
 	// was read before ffprobe and the tag read, and a whole-struct save of it
 	// reverted any apply or edit that landed in between.
-	if book.FilePath != "" && book.Duration == nil {
+	if book.FilePath != "" && book.Duration == nil && svc.fileProbeIsWholeBook(book.ID) {
 		if mi, miErr := extractMediaInfo(book.FilePath); miErr == nil && mi.Duration > 0 {
 			book.Duration = &mi.Duration
 			if fresh := svc.fillMediaInfo(book.ID, database.BookMediaInfoPatch{Duration: &mi.Duration}); fresh != nil {
@@ -136,7 +136,7 @@ func (svc *AudiobookService) GetAudiobookTags(ctx context.Context, id string, co
 				book.Channels = &mi.Channels
 				patch.Channels = &mi.Channels
 			}
-			if book.Duration == nil && mi.Duration > 0 {
+			if book.Duration == nil && mi.Duration > 0 && svc.fileProbeIsWholeBook(book.ID) {
 				book.Duration = &mi.Duration
 				patch.Duration = &mi.Duration
 			}
@@ -617,4 +617,17 @@ func (svc *AudiobookService) CountAudiobooks(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+// fileProbeIsWholeBook reports whether probing Book.FilePath measures the
+// whole book, i.e. the book has at most one file row. For a multi-file book
+// FilePath is one chapter (or the folder), and backfilling its probed duration
+// into Book.Duration stored ONE chapter's length as the book's runtime —
+// which RecomputeBookAggregates then kept whenever no file row had a duration.
+// Book.Duration for a multi-file book comes from its file rows only
+// (RecomputeBookAggregates; the canonical runtime is database.ComputeBookRuntime).
+// A read error answers false: no backfill beats a wrong one.
+func (svc *AudiobookService) fileProbeIsWholeBook(bookID string) bool {
+	files, err := svc.store.GetBookFiles(bookID)
+	return err == nil && len(files) <= 1
 }

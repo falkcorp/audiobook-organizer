@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 //
 // Background job that upgrades metadata from lower-quality sources
 // (primarily Google Books) to richer ones (Hardcover, Audible/Audnexus)
@@ -32,6 +32,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
@@ -181,6 +182,15 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		return false, nil // no results at all
 	}
 
+	// The gate's runtime check compares the canonical runtime (sum over the
+	// book's files), never Book.Duration, which is a partial sum for a
+	// multi-file book whose chapters were not all probed. A read failure makes
+	// the runtime unknown — missing evidence — rather than a false mismatch.
+	rt, rtErr := database.LoadBookRuntime(s.DB, book)
+	if rtErr != nil {
+		logging.Warn(ctx, "upgrade: book files unreadable; runtime treated as unknown", "id", bookID, "err", rtErr)
+	}
+
 	// Find the best candidate from a source OTHER than the current one.
 	var bestCandidate *metafetch.MetadataCandidate
 	for i := range resp.Results {
@@ -201,7 +211,7 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		// "Big Cats 1" however well it scores. There is no cache-identity leg
 		// here: the candidates were searched a moment ago from the book's
 		// current fields, so nothing can have drifted.
-		v := applygate.Evaluate(book, c, nil)
+		v := applygate.Evaluate(book, rt, c, nil)
 		slog.Debug("upgrade gate", "id", bookID, "score", c.Score, "gate", v.ScoreFloor,
 			"transcription_confirms", v.AudioConfirmed, "allowed", v.Allowed, "reason", v.Reason, "detail", v.Detail)
 		if !v.Allowed {

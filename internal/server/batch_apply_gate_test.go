@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_gate_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8b4f2d70-1e9a-4c63-a7d5-f0c3e6b91a24
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 //
 // The certainty gate on both bulk-apply paths, and the dry run's read-only
 // contract.
@@ -224,7 +224,7 @@ func hasChange(changes []metafetch.FieldChange, field, newV string) bool {
 // A preview error must never be reported as "apply".
 func TestPreviewBulkApplyRow_PreviewErrorIsNotApply(t *testing.T) {
 	cand := metafetch.MetadataCandidate{Title: "Dune", Score: 0.95}
-	v := applygate.Evaluate(&database.Book{Title: "Dune"}, &cand, nil)
+	v := applygate.Evaluate(&database.Book{Title: "Dune"}, database.ComputeBookRuntime(&database.Book{Title: "Dune"}, nil), &cand, nil)
 	plan := cachedApplyPlan{Book: &database.Book{ID: "b", Title: "Dune"}, Candidate: &cand, Gate: &v}
 	row := previewBulkApplyRow(erroringPreview{&fakeApplySvc{}}, "b", plan, true)
 	if row.Verdict != previewVerdictBlocked || row.Reason != "preview_failed" {

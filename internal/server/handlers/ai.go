@@ -1,5 +1,5 @@
 // file: internal/server/handlers/ai.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
 // last-edited: 2026-09-19
 
@@ -28,6 +28,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/gin-gonic/gin"
@@ -156,6 +157,9 @@ type aiStore interface {
 	aiReviewGroupsStore
 	aiAuthorReviewStore
 	aiOperationStore
+	// BookFilesGetter feeds the parse context's runtime
+	// (database.LoadBookRuntime), which sums the book's files.
+	database.BookFilesGetter
 }
 
 // aiReviewGroupsStore is the two methods AIReviewGroupsMode itself touches. It
@@ -406,8 +410,19 @@ func (h *AIHandler) ParseAudiobook(c *gin.Context) {
 	if book.Narrator != nil {
 		abCtx.Narrator = *book.Narrator
 	}
-	if book.Duration != nil {
-		abCtx.TotalDuration = *book.Duration
+	// Total duration is the canonical runtime (sum over the book's files), and
+	// only when complete: Book.Duration is a partial sum for a multi-file book
+	// whose chapters were not all probed, and telling the model a 10 h book is
+	// 40 minutes long is worse than telling it nothing.
+	rt, rtErr := database.LoadBookRuntime(h.store, book)
+	if rtErr != nil {
+		logging.Warn(c.Request.Context(), "ai parse: book files unreadable; runtime omitted", "book_id", book.ID, "err", rtErr)
+	}
+	if sec, ok := rt.KnownSeconds(); ok {
+		abCtx.TotalDuration = sec
+	}
+	if rt.FilesCounted > 0 {
+		abCtx.FileCount = rt.FilesCounted
 	}
 	// Resolve author name from author_id
 	if book.AuthorID != nil {

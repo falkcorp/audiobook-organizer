@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-09-19
 
@@ -473,12 +473,10 @@ func (mfs *Service) searchMetadataForBook(
 		}
 	}
 
-	// Duration of the local audiobook files (seconds). Used to score candidates
-	// by how closely their Audible runtime matches our files. Zero = unknown.
-	bookDurationSec := 0
-	if book.Duration != nil {
-		bookDurationSec = *book.Duration
-	}
+	// Runtime of the local audiobook files (seconds). Used to score candidates
+	// by how closely their Audible runtime matches our files. Zero = unknown,
+	// which includes a partial runtime (see bookRuntimeSec).
+	bookDurationSec := mfs.bookRuntimeSec(book)
 	th := hintsFromBook(book)
 
 	// Dedupe by lowercase title+author
