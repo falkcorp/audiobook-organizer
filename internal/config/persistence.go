@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package config
 
@@ -1090,6 +1090,10 @@ func applySetting(key, value, typ string) error {
 		case "enable_ai_parsing":
 			if b, err := strconv.ParseBool(value); err == nil {
 				c.EnableAIParsing = b
+			}
+		case "ai_endpoints_routing":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.AIEndpointsRouting = b
 			}
 		case "openai_api_key":
 			c.OpenAIAPIKey = value
