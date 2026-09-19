@@ -1,5 +1,5 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.17.0
+// version: 1.18.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
 // last-edited: 2026-09-19
 import { useEffect, useState, useCallback, useRef } from 'react';
@@ -270,6 +270,7 @@ const chapterStatusColor: Record<
   would_skip: 'warning',
   blocked: 'warning',
   drifted: 'warning',
+  selection_mismatch: 'warning',
   merged: 'success',
   partial: 'warning',
   failed: 'error',

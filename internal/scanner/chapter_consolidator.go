@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-19
 
@@ -149,8 +149,10 @@ var chapterTokenRe = regexp.MustCompile(`(?i)[\s\-_.,:]*\b(chapter|chap|ch|track
 // different case, grouped by folder.
 const minChapterKeyLen = 3
 
-// fullBookSeconds is the per-file length above which a member reads as a
-// whole book rather than a chapter, for the duplicate-copies check.
+// fullBookSeconds is the per-file length at or above which a member reads as
+// a whole book rather than a chapter. A real chapter over an hour is
+// therefore treated as book-length: a deliberate false negative (the run is
+// blocked or low, never merged unreviewed).
 const fullBookSeconds = 3600
 
 // maxSparseFraction is the largest share of missing positions in a run's
@@ -836,6 +838,7 @@ func evaluateSeqBucket(dir, key, folderKey, review string, cs []seqCand, opts Ch
 	// bare one.
 	var known []int
 	long, bookLength := 0, 0
+	var bookLabels []string
 	for _, c := range cs {
 		if c.book.Duration != nil && *c.book.Duration > 0 {
 			d := *c.book.Duration
@@ -846,6 +849,7 @@ func evaluateSeqBucket(dir, key, folderKey, review string, cs []seqCand, opts Ch
 			}
 			if d >= fullBookSeconds {
 				bookLength++
+				bookLabels = append(bookLabels, c.label())
 			}
 		}
 	}
@@ -858,11 +862,18 @@ func evaluateSeqBucket(dir, key, folderKey, review string, cs []seqCand, opts Ch
 		missingEv = append(missingEv, fmt.Sprintf("%d member(s) are book-length (>= %d s)", bookLength, fullBookSeconds))
 	}
 	// Every member with a known duration book-length is a set of volumes,
-	// not chapters -- unless the titles declare "N of M" parts.
-	declared := g.DeclaredTotal > 0
+	// not chapters. A declared "N of M" total does NOT exempt it: "Part 1
+	// of 3".."Part 3 of 3" at 60-70k s each is a trilogy of novels.
+	//
+	// Known false negatives, accepted on purpose (blocked, never merged):
+	//   - a real book whose chapters each run over fullBookSeconds (an
+	//     hour), e.g. an Audible "Part 1 of 2" split;
+	//   - durations stored in milliseconds (1,800,000 for 30 min) read as
+	//     book-length. Both fail safe: the run is reported blocked with the
+	//     members named, never merged wrongly.
 	knownAllBook := len(known) >= 2 && bookLength == len(known)
-	if knownAllBook && !declared {
-		g.Blockers = append(g.Blockers, fmt.Sprintf("every member with a known duration (%d) is book-length and no \"N of M\" total is declared: separate volumes, not chapters", len(known)))
+	if knownAllBook {
+		g.Blockers = append(g.Blockers, fmt.Sprintf("every member with a known duration (%d) is book-length: separate volumes, not chapters (book-length members: %s)", len(known), seqJoinCapped(bookLabels, 8)))
 	}
 	bareTitles := 0
 	for _, c := range cs {
@@ -889,8 +900,10 @@ func evaluateSeqBucket(dir, key, folderKey, review string, cs []seqCand, opts Ch
 	// titles ("Lore - 001" episodes) is indistinguishable from episodes or
 	// volumes and is low at most.
 	forceLow := ""
-	if bookLength > 1 {
-		forceLow = fmt.Sprintf("%d members are book-length", bookLength)
+	if bookLength > 0 {
+		// Chapter-length and book-length members in one run: at most low,
+		// and the book-length ones are named for the reviewer.
+		forceLow = fmt.Sprintf("book-length members: %s", seqJoinCapped(bookLabels, 8))
 	}
 	trailingOnly := true
 	for _, c := range cs {

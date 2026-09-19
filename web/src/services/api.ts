@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.119.0
+// version: 2.120.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-19
 
@@ -6402,7 +6402,15 @@ export interface ChapterGroup {
   /** What the preview saw; a real merge sends it back and drifted groups are skipped. */
   fingerprint?: string;
   /** would_merge / would_skip / blocked (dry run) or merged / partial / failed / drifted / blocked. */
-  status?: 'would_merge' | 'would_skip' | 'blocked' | 'drifted' | 'merged' | 'partial' | 'failed';
+  status?:
+    | 'would_merge'
+    | 'would_skip'
+    | 'blocked'
+    | 'drifted'
+    | 'selection_mismatch'
+    | 'merged'
+    | 'partial'
+    | 'failed';
   /** Why the group is never merged: a detection blocker (non-primary versions, iTunes library,
    * duplicate or sparse positions) or data a merge cannot carry. */
   blockers?: string[];
@@ -6436,6 +6444,8 @@ export interface ChapterGroupsResult {
   groups_failed: number;
   groups_blocked?: number;
   groups_drifted?: number;
+  /** Selections that were not exactly one detected group of their folder (refused; preview again). */
+  groups_selection_mismatch?: number;
   groups: ChapterGroup[];
 }
 

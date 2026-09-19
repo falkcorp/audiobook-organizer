@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_detect_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a7c3e19-2b84-4d6f-9e01-c8b4f2a6d735
 // last-edited: 2026-09-19
 
@@ -211,9 +211,9 @@ func TestReview_ConfidenceReflectsEvidence(t *testing.T) {
 // --- Second review round (probe cases) ---
 
 // (R2-1) Untagged series volumes whose titles are their stems ("01 - The
-// Tower") are positions in shape, but every member is book-length and no
-// "N of M" total says they are parts: blocked. Declaring a total lets a
-// book-length run through (capped at low).
+// Tower") are positions in shape, but every member is book-length: blocked.
+// (A declared "N of M" total does not exempt them: see
+// TestReview3_DeclaredTotalDoesNotExemptBookLength.)
 func TestReview2_BookLengthVolumesBlockUnlessTotalDeclared(t *testing.T) {
 	a := 7
 	var books []database.BookCore
@@ -239,15 +239,6 @@ func TestReview2_BookLengthVolumesBlockUnlessTotalDeclared(t *testing.T) {
 		saga = append(saga, rvBook(fmt.Sprintf("g%d", i), n, "/lib/Jim Q/The Saga/"+n+".m4b", dur, &a))
 	}
 	noMergeable(t, shDetect(saga))
-	// A declared total ("Part N of M") admits book-length parts, at low.
-	var declared []database.BookCore
-	for i := 1; i <= 3; i++ {
-		declared = append(declared, rvBook(fmt.Sprintf("p%d", i), fmt.Sprintf("Part %d of 3", i), fmt.Sprintf("/lib/A/Long Epic/Part %d of 3.m4b", i), 40000, &a))
-	}
-	dd := shDetect(declared)
-	if len(dd.Groups) != 1 || dd.Groups[0].Confidence != ChapterConfidenceLow {
-		t.Fatalf("declared-total book-length parts: want one low group, got groups=%+v blocked=%+v", dd.Groups, dd.Blocked)
-	}
 }
 
 // (R2-2) Book names containing "Part N - Subtitle" never regroup by the
@@ -314,5 +305,65 @@ func TestReview2_BareTitlesNeedCorroborationWhateverTheKey(t *testing.T) {
 	noMergeable(t, d)
 	if len(d.Blocked) != 1 || !anyContains(d.Blocked[0].Blockers, "needs durations") {
 		t.Fatalf("want bare/no-duration run blocked, got %+v", d.Blocked)
+	}
+}
+
+// --- Third review round ---
+
+// (R3-2) A declared total does not turn an all-book-length run into a
+// mergeable one: "Part 1 of 3".."Part 3 of 3" at 60-70k s are three novels.
+func TestReview3_DeclaredTotalDoesNotExemptBookLength(t *testing.T) {
+	a := 7
+	mk := func(prefix, dir string, titles []string, durs []int) []database.BookCore {
+		var out []database.BookCore
+		for i, ti := range titles {
+			out = append(out, rvBook(fmt.Sprintf("%s%d", prefix, i), ti, dir+ti+".m4b", durs[i], &a))
+		}
+		return out
+	}
+	cases := map[string][]database.BookCore{
+		"Part N of 3":        mk("d1", "/lib/T/Ring Q/", []string{"Part 1 of 3", "Part 2 of 3", "Part 3 of 3"}, []int{70000, 60000, 65000}),
+		"Series N of 3":      mk("d2", "/lib/T/Ring Q2/", []string{"The Ring Q 1 of 3", "The Ring Q 2 of 3", "The Ring Q 3 of 3"}, []int{70000, 60000, 65000}),
+		"bare N of 3":        mk("d3", "/lib/T/Ring Q3/", []string{"1 of 3", "2 of 3", "3 of 3"}, []int{70000, 60000, 65000}),
+		"Title, Part N of 2": mk("d6", "/lib/S/Kings Q/", []string{"The Kings Q, Part 1 of 2", "The Kings Q, Part 2 of 2"}, []int{90000, 85000}),
+	}
+	for name, books := range cases {
+		t.Run(name, func(t *testing.T) { noMergeable(t, shDetect(books)) })
+	}
+}
+
+// (R3-3) A run mixing chapter-length and book-length members is low, and
+// names the book-length members.
+func TestReview3_BookLengthOutliersAreLowAndNamed(t *testing.T) {
+	a := 7
+	for name, durs := range map[string][]int{
+		"one book-length": {1500, 1600, 40000, 1400, 1500},
+		"two book-length": {1500, 50000, 40000, 1400, 1500},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var books []database.BookCore
+			for i, d := range durs {
+				n := fmt.Sprintf("Chapter %d", i+1)
+				books = append(books, rvBook(fmt.Sprintf("m%d", i), n, "/lib/A/Mix/"+n+".mp3", d, &a))
+			}
+			d := shDetect(books)
+			all := append(append([]ChapterGroup{}, d.Groups...), d.Blocked...)
+			if len(all) != 1 {
+				t.Fatalf("want one group, got %+v", d)
+			}
+			g := all[0]
+			if len(d.Groups) == 1 && g.Confidence != ChapterConfidenceLow {
+				t.Fatalf("mixed-length run offered at %s", g.Confidence)
+			}
+			named := false
+			for _, r := range append(g.Reasons, g.Blockers...) {
+				if i := strings.Index(r, "book-length members: "); i >= 0 && strings.Contains(r[i:], "3") {
+					named = true
+				}
+			}
+			if !named {
+				t.Fatalf("book-length outliers not named: reasons=%v blockers=%v", g.Reasons, g.Blockers)
+			}
+		})
 	}
 }
