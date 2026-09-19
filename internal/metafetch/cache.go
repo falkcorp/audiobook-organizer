@@ -215,10 +215,11 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 
 	sourceHash := hashSearchInputs(bookID, query, author, narrator, series)
 	entry := &MetadataCandidateCache{
-		BookID:     bookID,
-		Candidates: raw,
-		FetchedAt:  nowUTC(),
-		SourceHash: sourceHash,
+		BookID:            bookID,
+		Candidates:        raw,
+		FetchedAt:         nowUTC(),
+		SourceHash:        sourceHash,
+		SearchFingerprint: resp.InputFingerprint,
 	}
 
 	// Preserve-on-empty. A search WITH results always replaces, exactly as
@@ -228,7 +229,7 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	if len(raw) == 0 {
 		now := nowUTC()
 		entry.LastEmptyFetchAt = &now
-		entry.EmptySources = answeredEmptySources(resp)
+		entry.EmptyAnswers = emptyAnswers(resp, now)
 		if mfs.db != nil {
 			if prev, perr := mfs.db.GetMetadataCache(bookID); perr == nil && prev != nil && prev.SourceHash == sourceHash {
 				if len(prev.Candidates) > 0 {
@@ -238,12 +239,14 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 					// month-old candidates as freshly fetched.
 					entry.FetchedAt = prev.FetchedAt
 				}
-				// Same inputs: a source that answered "nothing" last time and
-				// could not be asked this time (quota, throttle, outage) still
-				// answered "nothing". Accumulate, so a provider that is down on
-				// every run does not keep the verdict open forever for the ones
-				// that did answer.
-				entry.EmptySources = mergeSourceNames(prev.EmptySources, entry.EmptySources)
+				// Same questions (fingerprint): a source that answered "nothing"
+				// earlier and was not asked, or could not be asked, this time still
+				// answered "nothing" -- keep its answer with ITS timestamp, so each
+				// answer ages on its own. A different fingerprint means different
+				// questions, and the old answers say nothing about them.
+				if prev.SearchFingerprint != "" && prev.SearchFingerprint == entry.SearchFingerprint {
+					entry.EmptyAnswers = mergeEmptyAnswers(prev.EmptyAnswers, entry.EmptyAnswers, now)
+				}
 			}
 		}
 	}
@@ -259,22 +262,39 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	return entry
 }
 
-// answeredEmptySources returns the sources that were asked and answered
-// without error, sorted. Only meaningful for a response with no results: every
-// source in it then answered "nothing". A source in SourcesFailed (error,
-// throttle hold, cancellation) is excluded -- it never gave an answer.
-func answeredEmptySources(resp *SearchMetadataResponse) []string {
-	if resp == nil {
+// emptyAnswers records, at now, every source in resp that answered: its
+// ladder completed without error (SearchMetadataResponse.SourcesAnswered).
+// Only meaningful for a response with no results, where every such source
+// answered "nothing".
+func emptyAnswers(resp *SearchMetadataResponse, now time.Time) map[string]time.Time {
+	if resp == nil || len(resp.SourcesAnswered) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(resp.SourcesTried))
-	for _, name := range resp.SourcesTried {
-		if _, failed := resp.SourcesFailed[name]; failed {
-			continue
-		}
-		out = append(out, name)
+	out := make(map[string]time.Time, len(resp.SourcesAnswered))
+	for _, name := range resp.SourcesAnswered {
+		out[name] = now
 	}
-	return mergeSourceNames(nil, out)
+	return out
+}
+
+// mergeEmptyAnswers overlays fresh on prev, keeping the newer time per source
+// and dropping answers already past MetadataKnownEmptyTTL at now.
+func mergeEmptyAnswers(prev, fresh map[string]time.Time, now time.Time) map[string]time.Time {
+	out := make(map[string]time.Time, len(prev)+len(fresh))
+	for _, m := range []map[string]time.Time{prev, fresh} {
+		for name, at := range m {
+			if now.Sub(at) >= database.MetadataKnownEmptyTTL {
+				continue
+			}
+			if cur, ok := out[name]; !ok || at.After(cur) {
+				out[name] = at
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // mergeSourceNames returns the sorted, de-duplicated union of a and b, or nil
@@ -313,78 +333,76 @@ type BatchVerdict int
 
 const (
 	// BatchVerdictNone: the cache cannot answer for the book as it is now
-	// (no row, inputs changed, stale candidates, or an empty result that not
-	// every enabled provider has answered). Ask the providers.
+	// (no row, a legacy row, inputs changed, stale candidates, or an empty
+	// result some enabled provider has no valid answer for). Ask the
+	// providers CachedBatchVerdict names -- all of them when it names none.
 	BatchVerdictNone BatchVerdict = iota
 	// BatchVerdictFreshCandidates: the row holds candidates fetched for the
 	// book's current inputs within MetadataCacheTTL. Serve them.
 	BatchVerdictFreshCandidates
-	// BatchVerdictKnownEmpty: every currently enabled provider has already
-	// answered the book's current inputs with nothing. Asking again is the
-	// same question to the same providers; it is re-opened by an input change
-	// (title/author, which changes SourceHash), a newly enabled provider, an
-	// explicit force, or database.MetadataKnownEmptyTTL passing.
+	// BatchVerdictKnownEmpty: every currently enabled provider has answered
+	// the book's current inputs with nothing within MetadataKnownEmptyTTL.
+	// Asking again is the same question to the same providers. Re-opened by
+	// an input change (anything in the search fingerprint, including an
+	// author rename), a newly enabled provider, an answer ageing past the
+	// TTL, or an explicit force.
 	BatchVerdictKnownEmpty
 )
 
 // CachedBatchVerdict decides whether the batch candidate fetch may answer
-// book from the candidate cache without a provider call, and returns the
-// entry it decided on.
+// book (searched as query/author, the hints the fetch passes) from the
+// candidate cache without a provider call. It returns the entry it decided
+// on, the verdict, and -- for BatchVerdictNone on an empty entry whose
+// questions still match -- the providers that lack a valid answer, which are
+// the only ones the fetch needs to ask. A nil list means "ask every provider".
 //
-// Identity is ValidateCachedIdentityForBook's rule (batch or full input
-// shape), except that a row with NO SourceHash is never trusted here: that
-// check fails open for legacy rows so an apply still works, but skipping a
-// fetch on a row we cannot tie to the book's inputs would freeze whatever it
-// holds forever.
-//
-// A zero-candidate row written before EmptySources existed cannot say which
-// providers answered, so it falls back to the TTL the review UI already uses
-// for "last checked": skip while LastEmptyFetchAt is within MetadataCacheTTL,
-// and let the next search after that write EmptySources.
-func (mfs *Service) CachedBatchVerdict(book *database.Book) (*MetadataCandidateCache, BatchVerdict) {
+// The entry is trusted only when BOTH identities hold: the cache's SourceHash
+// rule (ValidateCachedIdentityForBook, with a missing hash never trusted) and
+// the search fingerprint, which binds it to the questions actually asked
+// (resolved author included). An entry with no fingerprint predates
+// 2026-09-19; the path that wrote it recorded an empty result even when every
+// provider had failed, so it proves nothing and is re-asked in full.
+func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string) (*MetadataCandidateCache, BatchVerdict, []string) {
 	if mfs == nil || mfs.db == nil || book == nil {
-		return nil, BatchVerdictNone
+		return nil, BatchVerdictNone, nil
 	}
 	entry, err := mfs.db.GetMetadataCache(book.ID)
-	if err != nil || entry == nil || entry.SourceHash == "" {
-		return entry, BatchVerdictNone
+	if err != nil || entry == nil || entry.SourceHash == "" || entry.SearchFingerprint == "" {
+		return entry, BatchVerdictNone, nil
 	}
 	if mfs.ValidateCachedIdentityForBook(entry, book) != nil {
-		return entry, BatchVerdictNone
+		return entry, BatchVerdictNone, nil
 	}
+	if entry.SearchFingerprint != mfs.SearchFingerprintFor(book, query, author, "") {
+		return entry, BatchVerdictNone, nil
+	}
+	now := nowUTC()
 	if len(entry.Candidates) > 0 {
 		// Fresh by "last checked", the same rule the review list uses for its
 		// is_fresh flag (and so for the stale-refetch button): a search that
 		// came back empty an hour ago kept these candidates and re-dated the
 		// look, not the candidates.
 		if entry.IsFresh() ||
-			(entry.LastEmptyFetchAt != nil && nowUTC().Sub(*entry.LastEmptyFetchAt) < database.MetadataCacheTTL) {
-			return entry, BatchVerdictFreshCandidates
+			(entry.LastEmptyFetchAt != nil && now.Sub(*entry.LastEmptyFetchAt) < database.MetadataCacheTTL) {
+			return entry, BatchVerdictFreshCandidates, nil
 		}
-		return entry, BatchVerdictNone
-	}
-	if entry.LastEmptyFetchAt == nil {
-		return entry, BatchVerdictNone
-	}
-	if len(entry.EmptySources) == 0 {
-		if nowUTC().Sub(*entry.LastEmptyFetchAt) < database.MetadataCacheTTL {
-			return entry, BatchVerdictKnownEmpty
-		}
-		return entry, BatchVerdictNone
-	}
-	if nowUTC().Sub(*entry.LastEmptyFetchAt) >= database.MetadataKnownEmptyTTL {
-		return entry, BatchVerdictNone
+		return entry, BatchVerdictNone, nil
 	}
 	active := mfs.ActiveSourceNames()
 	if len(active) == 0 {
-		return entry, BatchVerdictNone
+		return entry, BatchVerdictNone, nil
 	}
+	var ask []string
 	for _, name := range active {
-		if _, found := slices.BinarySearch(entry.EmptySources, name); !found {
-			return entry, BatchVerdictNone
+		at, ok := entry.EmptyAnswers[name]
+		if !ok || now.Sub(at) >= database.MetadataKnownEmptyTTL {
+			ask = append(ask, name)
 		}
 	}
-	return entry, BatchVerdictKnownEmpty
+	if len(ask) == 0 {
+		return entry, BatchVerdictKnownEmpty, nil
+	}
+	return entry, BatchVerdictNone, ask
 }
 
 // ListCachedSummaries returns one summary per cached entry, ordered

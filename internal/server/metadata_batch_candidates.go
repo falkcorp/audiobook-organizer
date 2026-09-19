@@ -110,7 +110,12 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 	// while still running, and the guard then waved every one of its books
 	// through again. A failed read refuses rather than guessing "nothing is
 	// running".
-	alreadyFetching, err := metabatch.ActiveCandidateFetchBookIDs(store)
+	//
+	// force does NOT bypass this: forcing re-queries books whose cached answer
+	// is still valid, but two runs fetching the same book at once would race
+	// on its cache entry and pay the providers twice. A forced request for a
+	// book already in flight waits for that run.
+	alreadyFetching, err := metabatch.ActiveCandidateFetchBookIDs(store, s.opRegistry.IsRunning)
 	if err != nil {
 		httputil.InternalError(c, "failed to check running metadata fetches", err)
 		return
@@ -254,8 +259,15 @@ func (s *Server) fetchCandidateForBook(
 	if len(authorHint) > 0 {
 		authorForHash = authorHint[0]
 	}
+	// askOnly: providers without a valid answer for these inputs. When the
+	// cache holds an empty result that some providers already answered, only
+	// the rest are asked (a quota-starved provider no longer drags the others
+	// into every run); nil asks every provider.
+	var askOnly []string
 	if !force {
-		switch cached, verdict := mfs.CachedBatchVerdict(book); verdict {
+		cached, verdict, ask := mfs.CachedBatchVerdict(book, book.Title, authorForHash)
+		askOnly = ask
+		switch verdict {
 		case metafetch.BatchVerdictFreshCandidates:
 			result := candidateResultFromEntry(store, bookInfo, bookID, book.Title, cached)
 			result.Cached = candidateCachedCandidates
@@ -275,7 +287,7 @@ func (s *Server) fetchCandidateForBook(
 		}
 	}
 
-	entry, err := mfs.FetchAndCacheLimited(ctx, limiter, bookID, book.Title, authorForHash, "", "", metafetch.SearchOptions{})
+	entry, err := mfs.FetchAndCacheLimited(ctx, limiter, bookID, book.Title, authorForHash, "", "", metafetch.SearchOptions{OnlySources: askOnly})
 	if err != nil {
 		return CandidateResult{
 			Book:   bookInfo,

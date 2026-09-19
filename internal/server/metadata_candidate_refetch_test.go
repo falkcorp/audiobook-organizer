@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_refetch_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 53254e8b-33e1-4370-80d0-245b21ecc8f8
 // last-edited: 2026-09-19
 
@@ -235,12 +235,15 @@ func TestCandidateFetch_KnownEmptyExpiresAfterBackstop(t *testing.T) {
 
 	runCandidateFetch(t, s, "op-backstop-1", []string{book.ID}, false)
 	entry, err := store.GetMetadataCache(book.ID)
-	if err != nil || entry == nil || entry.LastEmptyFetchAt == nil || len(entry.EmptySources) == 0 {
+	if err != nil || entry == nil || entry.LastEmptyFetchAt == nil || len(entry.EmptyAnswers) == 0 {
 		t.Fatalf("first run did not record a known-empty verdict: %+v (err %v)", entry, err)
 	}
 	old := time.Now().UTC().Add(-91 * 24 * time.Hour)
 	entry.LastEmptyFetchAt = &old
 	entry.FetchedAt = old
+	for name := range entry.EmptyAnswers {
+		entry.EmptyAnswers[name] = old
+	}
 	if err := store.PutMetadataCache(entry); err != nil {
 		t.Fatalf("PutMetadataCache: %v", err)
 	}

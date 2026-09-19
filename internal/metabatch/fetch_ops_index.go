@@ -1,5 +1,5 @@
 // file: internal/metabatch/fetch_ops_index.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c1d4f60-2a97-4e35-b8d1-6f0e3a7c95b2
 // last-edited: 2026-09-19
 
@@ -12,7 +12,10 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+var activeFetchLog = logger.New("metabatch.active-fetch")
 
 // CandidateFetchDefID is the v2 OperationDef id for metadata candidate fetches.
 const CandidateFetchDefID = "metadata.candidate-fetch"
@@ -200,8 +203,10 @@ type ActiveCandidateFetchLister interface {
 	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 }
 
-// ActiveCandidateFetchBookIDs returns every book id owned by a queued or
-// running metadata.candidate-fetch, read off the active-operations index.
+// ActiveCandidateFetchBookIDs returns every book id owned by a live
+// metadata.candidate-fetch: queued, or running with a live worker handle
+// (isRunning; nil means "cannot tell" and trusts the row). Read off the
+// active-operations index.
 //
 // The batch-fetch handler used CandidateFetchOps for this, which reads the
 // whole operation HISTORY capped at a row count and filters by def id AFTER
@@ -210,9 +215,12 @@ type ActiveCandidateFetchLister interface {
 // click re-queued every one of its books. The active index holds only live
 // work, so there is no cap for it to fall out of.
 //
-// An error is returned rather than an empty set: the caller must not read
-// "could not look" as "nothing is running" and pay for a duplicate run.
-func ActiveCandidateFetchBookIDs(store ActiveCandidateFetchLister) (map[string]bool, error) {
+// A "running" row with no handle is a crash leftover: guarding its books
+// would block every fetch of them until the resume sweep ran. A row whose
+// params will not decode is skipped and logged, not fatal: one bad row must
+// not block every fetch. A failed LISTING is an error, never an empty set --
+// the caller must not read "could not look" as "nothing is running".
+func ActiveCandidateFetchBookIDs(store ActiveCandidateFetchLister, isRunning func(opID string) bool) (map[string]bool, error) {
 	rows, err := store.ListActiveOperationsV2()
 	if err != nil {
 		return nil, fmt.Errorf("list active operations: %w", err)
@@ -222,9 +230,13 @@ func ActiveCandidateFetchBookIDs(store ActiveCandidateFetchLister) (map[string]b
 		if row.DefID != CandidateFetchDefID || !IsActiveFetchStatus(row.Status) || row.Params == "" {
 			continue
 		}
+		if row.Status == "running" && isRunning != nil && !isRunning(row.ID) {
+			continue
+		}
 		var p FetchOpParams
 		if err := json.Unmarshal([]byte(row.Params), &p); err != nil {
-			return nil, fmt.Errorf("decode params of active candidate fetch %s: %w", row.ID, err)
+			activeFetchLog.Warn("candidate-fetch in-flight guard: skipping op %s, params do not decode: %v", row.ID, err)
+			continue
 		}
 		for _, id := range p.BookIDs {
 			out[id] = true
