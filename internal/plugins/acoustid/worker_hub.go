@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-09-19
 
@@ -19,7 +19,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -177,13 +176,23 @@ type hubRun struct {
 	// while a remote-only run bootstraps its reference windows.
 	identity []windowItem
 
+	// calibMu guards the calibration and bootstrap state below. It may be
+	// taken with or without mu held (never mu while holding it), and nothing
+	// does I/O under it: calibration files are built unlocked, then swapped
+	// in, so a slow NFS stat or head read never stalls the hub.
 	calibMu    sync.Mutex
 	calibBuilt bool // calibOut is final for this run
 	calibOut   []workerapi.CalibrationFile
 	calibExtra []windowItem // remote-only: files written this run with the reference pair
-	// refReady: a remote-only Hello found reference-pair calibration windows,
-	// so a non-reference (allowlisted) pair can be parity-checked and may lease.
-	refReady atomic.Bool
+	// refExists: a present libroot file has current windows cut with exactly
+	// the reference pair, per the plan's census of the stored windows or a
+	// worker's write this run. While false a remote-only run bootstraps.
+	refExists bool
+	// bootWorker holds the ONE bootstrap claim until bootExpires. The
+	// claimant's hello, lease, renew and results calls extend it; a claimant
+	// that vanishes loses it after workerapi.LeaseTTL of silence.
+	bootWorker  string
+	bootExpires time.Time
 
 	cancel    context.CancelFunc
 	sweepDone chan struct{}
@@ -204,6 +213,12 @@ type hubRun struct {
 	leases    map[string]*workerLease
 	jobs      map[string]*workerJob
 	doneCount int // items in qDone this tier
+
+	// Worker contact, for the no-worker grace (mu-guarded; kept across
+	// tiers).
+	attachedAt  time.Time
+	lastContact time.Time
+	contacted   bool
 }
 
 // hubMode is how a live run attaches.
@@ -211,6 +226,8 @@ type hubMode struct {
 	remoteOnly bool
 	// identity: identity-only calibration candidates (remote-only bootstrap).
 	identity []windowItem
+	// refExists: the plan found current exact-reference-pair windows.
+	refExists bool
 }
 
 // WorkerHub is the lease manager. The zero value is not usable; Plugin owns
@@ -278,6 +295,8 @@ func (h *WorkerHub) attach(ctx context.Context, p *Plugin, wt fingerprint.Window
 		calib:      calib,
 		remoteOnly: mode.remoteOnly,
 		identity:   mode.identity,
+		refExists:  mode.refExists,
+		attachedAt: h.now(),
 		probe:      p.currentScanProbe(),
 		cancel:     cancel,
 		sweepDone:  make(chan struct{}),
@@ -507,9 +526,10 @@ func (r *hubRun) signal() {
 // Called by RunItems' workers in item order, so the run's checkpoint
 // watermark is the unbroken prefix of items that are finished or deferred:
 // it moves past deferred items and never past one a worker still owes.
-// progress is called every windowDrainPoll while it waits, so the watchdog
-// sees a live op.
-func (h *WorkerHub) awaitRemote(ctx context.Context, idx int, progress func(done, leased, total int)) (string, error) {
+// It reports no progress itself: every waiter can sit on one stuck item
+// while other items finish, so liveness comes from the tier's single
+// heartbeat (windowRun.remoteHeartbeat), not from here.
+func (h *WorkerHub) awaitRemote(ctx context.Context, idx int) (string, error) {
 	for {
 		h.mu.Lock()
 		r := h.run
@@ -532,18 +552,88 @@ func (h *WorkerHub) awaitRemote(ctx context.Context, idx int, progress func(done
 			return why, nil
 		}
 		ch := r.bcast
-		done, leased, total := r.doneCount, r.inflight, len(r.st)
 		h.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case <-ch:
-		case <-time.After(windowDrainPoll):
-			if progress != nil {
-				progress(done, leased, total)
-			}
 		}
 	}
+}
+
+// tierCounts is the current tier's resolved, leased and total item counts.
+func (h *WorkerHub) tierCounts() (done, leased, total int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.run == nil {
+		return 0, 0, 0
+	}
+	return h.run.doneCount, h.run.inflight, len(h.run.st)
+}
+
+// windowNoWorkerMargin is added to the lease TTL for the gap allowed once a
+// worker has made contact: a worker between leases (backoff, restart) is
+// silent for up to about one TTL.
+const windowNoWorkerMargin = 2 * time.Minute
+
+// noWorkerExpired reports, as a message, that a remote-only run has waited
+// too long without any worker: none contacted it within grace of the start,
+// or, after contact, none for max(grace, LeaseTTL+margin) with nothing
+// leased. Empty when the run should keep waiting.
+func (h *WorkerHub) noWorkerExpired(grace time.Duration) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	r := h.run
+	if r == nil {
+		return ""
+	}
+	now := h.now()
+	if !r.contacted {
+		if gap := now.Sub(r.attachedAt); gap > grace {
+			return fmt.Sprintf("no fp-worker called the worker API in the %s since this run started (grace %s); start fp-worker with the reference pair, then queue the run again",
+				gap.Round(time.Second), grace)
+		}
+		return ""
+	}
+	limit := max(grace, workerapi.LeaseTTL+windowNoWorkerMargin)
+	if gap := now.Sub(r.lastContact); r.inflight == 0 && gap > limit {
+		return fmt.Sprintf("no fp-worker has called the worker API for %s with nothing leased (limit %s); every worker seems gone",
+			gap.Round(time.Second), limit)
+	}
+	return ""
+}
+
+// noteContact records a worker's API call and extends the bootstrap claim
+// when the caller holds it. Called with mu held.
+func (r *hubRun) noteContact(now time.Time, worker string) {
+	r.lastContact, r.contacted = now, true
+	r.calibMu.Lock()
+	defer r.calibMu.Unlock()
+	if worker != "" && worker == r.bootWorker && now.Before(r.bootExpires) {
+		r.bootExpires = now.Add(workerapi.LeaseTTL)
+	}
+}
+
+// touch is noteContact for the calls that take mu only briefly.
+func (h *WorkerHub) touch(r *hubRun, worker string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.run == r {
+		r.noteContact(h.now(), worker)
+	}
+}
+
+// bootstrapLeaseOK: in a remote-only run with no reference windows, only the
+// worker holding the live bootstrap claim, with the reference pair, may
+// lease. Called with mu held.
+func (r *hubRun) bootstrapLeaseOK(req workerapi.LeaseRequest, now time.Time) bool {
+	r.calibMu.Lock()
+	defer r.calibMu.Unlock()
+	if r.refExists {
+		return true
+	}
+	return r.bootWorker != "" && req.WorkerID == r.bootWorker && now.Before(r.bootExpires) &&
+		req.FpcalcVersion == r.server.Fpcalc && req.FFmpegVersion == r.server.FFmpeg
 }
 
 // markServerOnly routes an item to the server lane for the rest of the run.
@@ -664,18 +754,21 @@ func (h *WorkerHub) liveRun() (*hubRun, error) {
 
 // Hello returns the root map, the pipeline and tool allowlist, and the
 // calibration files for the worker's startup gate.
-func (h *WorkerHub) Hello(_ context.Context) (*workerapi.HelloResponse, error) {
+func (h *WorkerHub) Hello(_ context.Context, req workerapi.HelloRequest) (*workerapi.HelloResponse, error) {
 	r, err := h.liveRun()
 	if err != nil {
 		return nil, err
 	}
-	calib, bootstrap := r.calibration()
+	h.touch(r, req.WorkerID)
+	c := r.calibration(req, h.now)
 	resp := &workerapi.HelloResponse{
-		Pipeline:     fingerprint.WindowPipelineID,
-		WindowSet:    fingerprint.WindowSetWS1,
-		ToolVersions: r.allowed,
-		Calibration:  calib,
-		Bootstrap:    bootstrap,
+		Pipeline:         fingerprint.WindowPipelineID,
+		WindowSet:        fingerprint.WindowSetWS1,
+		ToolVersions:     r.allowed,
+		Calibration:      c.files,
+		Bootstrap:        c.bootstrap,
+		ReferencePending: c.pending,
+		Waiting:          c.waiting,
 		Limits: workerapi.Limits{
 			MaxJobsPerLease:    workerapi.MaxJobsPerLease,
 			LeaseTTLSec:        int(workerapi.LeaseTTL / time.Second),
@@ -696,30 +789,78 @@ func (h *WorkerHub) Hello(_ context.Context) (*workerapi.HelloResponse, error) {
 	return resp, nil
 }
 
-// calibration returns the calibration files Hello offers, and whether they
-// are a remote-only bootstrap (identity only, no windows).
+// helloCalibration is what Hello offers one caller.
+type helloCalibration struct {
+	files     []workerapi.CalibrationFile
+	bootstrap bool   // identity-only files; the caller holds the bootstrap claim
+	pending   bool   // nothing to calibrate against yet: retry hello later
+	waiting   string // why pending
+}
+
+// calibration decides what Hello offers the caller.
 //
 // A normal run builds once and keeps the result. A remote-only run keeps a
-// result only once it carries reference windows: until then every Hello
-// rebuilds, now also from the files workers wrote with the reference pair
-// during this run (calibExtra), so the first reference worker's windows
-// become the calibration of every later worker without a restart.
-func (r *hubRun) calibration() ([]workerapi.CalibrationFile, bool) {
+// result once it carries reference windows; until then:
+//
+//   - when reference windows exist (the plan's census found current
+//     exact-reference-pair windows, or a worker wrote some this run) but none
+//     is readable right now, the caller is told to wait: the run never
+//     bootstraps again over existing reference windows;
+//   - otherwise it is bootstrapping, and exactly ONE caller, a valid worker
+//     ID with exactly the reference pair, gets the bootstrap claim and the
+//     identity-only files. Every other caller is told to wait until the
+//     claimant's windows exist, and then has to pass the byte-parity gate
+//     against them. A claim nobody refreshes lapses after LeaseTTL.
+//
+// Files are built with no lock held (stats and 64 KiB head reads over NFS)
+// and swapped in under calibMu.
+func (r *hubRun) calibration(req workerapi.HelloRequest, now func() time.Time) helloCalibration {
 	r.calibMu.Lock()
-	defer r.calibMu.Unlock()
 	if r.calibBuilt {
-		return r.calibOut, false
+		out := r.calibOut
+		r.calibMu.Unlock()
+		return helloCalibration{files: out}
 	}
 	cands := append(append([]windowItem(nil), r.calib...), r.calibExtra...)
-	out := r.buildCalibration(cands)
-	if !r.remoteOnly || len(out) > 0 {
-		r.calibOut, r.calibBuilt = out, true
-		if r.remoteOnly {
-			r.refReady.Store(true)
-		}
-		return out, false
+	r.calibMu.Unlock()
+
+	built := r.buildCalibration(cands) // I/O, unlocked
+
+	r.calibMu.Lock()
+	if !r.calibBuilt && (len(built) > 0 || !r.remoteOnly) {
+		r.calibOut, r.calibBuilt = built, true
 	}
-	return r.buildIdentityCalibration(), true
+	if r.calibBuilt {
+		out := r.calibOut
+		r.calibMu.Unlock()
+		return helloCalibration{files: out}
+	}
+	if r.refExists {
+		r.calibMu.Unlock()
+		return helloCalibration{pending: true, waiting: "reference windows exist but none of their files is readable with matching size and mtime right now"}
+	}
+	t := now()
+	if r.bootWorker != "" && !t.Before(r.bootExpires) {
+		hubLog.Warn("bootstrap claim of worker %s lapsed (no contact for %s); the next reference-pair worker may claim it",
+			logger.SanitizeLogValue(r.bootWorker), workerapi.LeaseTTL)
+		r.bootWorker = ""
+	}
+	isRef := req.FpcalcVersion == r.server.Fpcalc && req.FFmpegVersion == r.server.FFmpeg
+	switch {
+	case !isRef || !validWorkerID(req.WorkerID):
+		r.calibMu.Unlock()
+		return helloCalibration{pending: true, waiting: fmt.Sprintf("no reference windows exist yet; a worker with exactly fpcalc %s + ffmpeg %s must cut them first", r.server.Fpcalc, r.server.FFmpeg)}
+	case r.bootWorker != "" && r.bootWorker != req.WorkerID:
+		r.calibMu.Unlock()
+		return helloCalibration{pending: true, waiting: "another reference-pair worker holds the bootstrap; this worker is parity-checked against its windows once they exist"}
+	}
+	if r.bootWorker == "" {
+		hubLog.Warn("bootstrap claim granted to worker %s (fpcalc %s + ffmpeg %s): its windows become the reference, with no byte-parity check",
+			logger.SanitizeLogValue(req.WorkerID), r.server.Fpcalc, r.server.FFmpeg)
+	}
+	r.bootWorker, r.bootExpires = req.WorkerID, t.Add(workerapi.LeaseTTL)
+	r.calibMu.Unlock()
+	return helloCalibration{files: r.buildIdentityCalibration(), bootstrap: true} // I/O, unlocked
 }
 
 // buildIdentityCalibration offers present libroot files with NO windows: the
@@ -737,7 +878,7 @@ func (r *hubRun) buildIdentityCalibration() []workerapi.CalibrationFile {
 		if err != nil || !fi.Mode().IsRegular() {
 			continue
 		}
-		head, err := headSHA256(it.Path)
+		head, err := calibHeadSHA256(it.Path)
 		if err != nil {
 			continue
 		}
@@ -768,7 +909,7 @@ func (r *hubRun) buildCalibration(cands []windowItem) []workerapi.CalibrationFil
 		if err != nil || fi.Size() != it.Size || fi.ModTime().Unix() != it.MtimeUnix {
 			continue
 		}
-		head, err := headSHA256(it.Path)
+		head, err := calibHeadSHA256(it.Path)
 		if err != nil {
 			continue
 		}
@@ -822,6 +963,9 @@ func (r *hubRun) buildCalibration(cands []windowItem) []workerapi.CalibrationFil
 	return out
 }
 
+// calibHeadSHA256 is headSHA256; a variable so a test can make it slow.
+var calibHeadSHA256 = headSHA256
+
 func headSHA256(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -864,17 +1008,20 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 		h.mu.Unlock()
 		return nil, ErrNoWindowRun
 	}
+	now := h.now()
+	r.noteContact(now, req.WorkerID)
 	if req.Pipeline != fingerprint.WindowPipelineID || !versionsAllowed(r.allowed, req.FpcalcVersion, req.FFmpegVersion) {
 		h.mu.Unlock()
 		return nil, fmt.Errorf("%w: pipeline=%q fpcalc=%q ffmpeg=%q", ErrToolsNotAllowed, req.Pipeline, req.FpcalcVersion, req.FFmpegVersion)
 	}
-	// Remote-only bootstrap: until reference windows exist, a non-reference
-	// (allowlisted) pair has nothing to have passed its parity gate against,
-	// so only the reference pair may lease. The worker enforces the same rule
-	// on itself; this holds against one that skipped its gate.
-	if r.remoteOnly && !r.refReady.Load() && (req.FpcalcVersion != r.server.Fpcalc || req.FFmpegVersion != r.server.FFmpeg) {
+	// Remote-only bootstrap: until reference windows exist, nobody but the
+	// holder of the bootstrap claim has anything to have passed a parity gate
+	// against, so only it may lease. The worker enforces the same rule on
+	// itself (it waits on reference_pending); this holds against one that
+	// skipped its gate.
+	if r.remoteOnly && !r.bootstrapLeaseOK(req, now) {
 		h.mu.Unlock()
-		return nil, fmt.Errorf("%w: no reference windows exist yet; only the reference pair fpcalc=%q ffmpeg=%q may lease until they do",
+		return nil, fmt.Errorf("%w: no reference windows exist yet; only the worker holding the bootstrap claim (fpcalc=%q ffmpeg=%q) may lease until they do",
 			ErrToolsNotAllowed, r.server.Fpcalc, r.server.FFmpeg)
 	}
 	// Same gate as the server lane (waitForLibraryScan): nothing new is cut
@@ -993,6 +1140,7 @@ func (h *WorkerHub) Renew(leaseID string, req workerapi.RenewRequest) (*workerap
 	}
 	l := r.leases[leaseID]
 	now := h.now()
+	r.noteContact(now, req.WorkerID)
 	// Another worker's lease answers exactly like a missing one.
 	if l == nil || !now.Before(l.expires) || l.worker != req.WorkerID {
 		return nil, ErrLeaseGone
@@ -1009,6 +1157,7 @@ func (h *WorkerHub) Release(leaseID string, req workerapi.ReleaseRequest) (*work
 	if r == nil {
 		return nil, ErrNoWindowRun
 	}
+	r.noteContact(h.now(), req.WorkerID)
 	l := r.leases[leaseID]
 	if l == nil || l.worker != req.WorkerID {
 		return nil, ErrLeaseGone
@@ -1038,9 +1187,11 @@ func (h *WorkerHub) Results(_ context.Context, req workerapi.ResultsRequest) (*w
 	if len(req.Results) > 4*workerapi.MaxJobsPerLease {
 		return nil, fmt.Errorf("%w: %d results in one request", ErrBadWorkerRequest, len(req.Results))
 	}
-	if _, err := h.liveRun(); err != nil {
+	r, err := h.liveRun()
+	if err != nil {
 		return nil, err
 	}
+	h.touch(r, req.WorkerID)
 	resp := &workerapi.ResultsResponse{Statuses: make([]workerapi.JobStatus, 0, len(req.Results))}
 	for _, res := range req.Results {
 		status, reason := h.applyResult(req.WorkerID, res)
@@ -1059,13 +1210,15 @@ type resultDecision struct {
 	written        bool // the windows were stored
 }
 
-// noteReferenceWrite makes a file a worker just wrote with the reference pair
-// a calibration candidate for later Hellos of this remote-only run, until the
-// calibration is final. Called with WorkerHub.mu held; calibMu nests inside it
-// and is never held while taking mu.
+// noteReferenceWrite records that reference windows now exist (the
+// bootstrap is over) and makes the file a calibration candidate for later
+// Hellos of this remote-only run, until the calibration is final. Called with
+// WorkerHub.mu held; calibMu nests inside it, is never held while taking mu,
+// and is never held across I/O, so this cannot stall behind a slow Hello.
 func (r *hubRun) noteReferenceWrite(it windowItem, j *workerJob) {
 	r.calibMu.Lock()
 	defer r.calibMu.Unlock()
+	r.refExists = true
 	if r.calibBuilt || len(r.calibExtra) >= calibrationCandidates {
 		return
 	}

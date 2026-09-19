@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerapi/types.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d5f6ff4f-9158-43e6-b27a-0ef43f926bfb
 // last-edited: 2026-09-19
 
@@ -130,15 +130,40 @@ type HelloResponse struct {
 	// nothing): the configured reference pair that stands in for the
 	// server's own. Calibration windows carry exactly this pair.
 	ReferenceTools *ToolVersions `json:"reference_tools,omitempty"`
-	// Bootstrap is set by a remote-only run while no window cut with
-	// ReferenceTools exists under a remote root yet. Its calibration files
-	// then carry NO windows (identity only: size, mtime, Head64K): a worker
-	// whose exact pair equals ReferenceTools passes on the identity checks
-	// alone and becomes the reference; any other worker must refuse. A worker
-	// that predates this field sees calibration files without windows and
-	// refuses, which is the safe reading.
+	// Bootstrap is set by a remote-only run, for exactly ONE worker at a
+	// time (the bootstrap claim), while no window cut with ReferenceTools
+	// exists under a remote root yet. Its calibration files then carry NO
+	// windows (identity only: size, mtime, Head64K): that worker, whose exact
+	// pair equals ReferenceTools, passes on the identity checks alone and
+	// becomes the reference. A worker that predates this field sees
+	// calibration files without windows and refuses, which is the safe
+	// reading.
 	Bootstrap bool `json:"bootstrap,omitempty"`
+	// ReferencePending: the worker cannot be calibrated yet (no reference
+	// windows exist and another worker holds the bootstrap claim, or this
+	// worker's pair is not the reference pair, or no reference file is
+	// readable right now). Calibration is empty; the worker must wait and
+	// call hello again, not exit. Waiting says why.
+	ReferencePending bool   `json:"reference_pending,omitempty"`
+	Waiting          string `json:"waiting,omitempty"`
 }
+
+// HelloRequest identifies the caller of GET hello, sent as the query
+// parameters worker_id, fpcalc_version and ffmpeg_version. All optional for
+// backward compatibility; a remote-only run offers the bootstrap only to a
+// caller that sends a valid worker_id and exactly the reference pair.
+type HelloRequest struct {
+	WorkerID      string
+	FpcalcVersion string
+	FFmpegVersion string
+}
+
+// Query parameter names of HelloRequest.
+const (
+	HelloParamWorkerID = "worker_id"
+	HelloParamFpcalc   = "fpcalc_version"
+	HelloParamFFmpeg   = "ffmpeg_version"
+)
 
 // Limits restates the protocol constants so a worker need not hard-code them.
 type Limits struct {

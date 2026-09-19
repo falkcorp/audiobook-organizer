@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
 // last-edited: 2026-09-19
 
@@ -84,9 +84,15 @@ import (
 // it again. The configured reference pair
 // (fingerprint_window_reference_tools) stands in for the server's own tool
 // pair everywhere: equivalence, the lease allowlist, calibration. A tier ends
-// when every one of its files is written, deferred or otherwise resolved; a
-// run with no worker attached waits (and reports that it waits) until one
-// comes or the op times out.
+// when every one of its files is written, deferred or otherwise resolved. A
+// single heartbeat per tier reports progress on a fixed period while workers
+// run, and ends the run with an error when no worker has called the API
+// within no_worker_grace_sec (default 15 min) of the start, or for longer
+// than max(grace, lease TTL + 2 min) with nothing leased after contact.
+//
+// With fingerprint_window_reference_tools set, a live run WITHOUT
+// remote_only is refused unless allow_server_decode is passed: it would
+// re-cut the library on the server with the server's own pair.
 
 // windowBackfillDefID is the op's def ID.
 const windowBackfillDefID = "acoustid.window-backfill"
@@ -124,6 +130,19 @@ type WindowBackfillParams struct {
 	// A live run refuses to start unless fingerprint_remote_workers_enabled
 	// is on and fingerprint_window_reference_tools names one tool pair.
 	RemoteOnly bool `json:"remote_only,omitempty"`
+	// AllowServerDecode lets a live run WITHOUT remote_only decode on the
+	// server while fingerprint_window_reference_tools is set. Owner rule
+	// 2026-09-19: no decoding on the server; with a reference pair configured
+	// the operator has opted into remote-only, so a plain live run (which
+	// would re-cut the library with the server's own pair) is refused unless
+	// this says it is deliberate.
+	AllowServerDecode bool `json:"allow_server_decode,omitempty"`
+	// NoWorkerGraceSec ends a remote-only run with an error when no worker
+	// has contacted the API within this many seconds of the start (0: 900,
+	// 15 min). After a worker has made contact, the allowed silence with
+	// nothing leased is max(this, lease TTL + 2 min). The op holds the
+	// acoustid.fingerprint key while it waits, so it must not wait forever.
+	NoWorkerGraceSec int `json:"no_worker_grace_sec,omitempty"`
 	// Resume is the checkpoint cursor; set by the op, not by callers.
 	Resume *WindowBackfillCursor `json:"resume,omitempty"`
 }
@@ -305,6 +324,11 @@ type windowPlan struct {
 	// state: the identity-only calibration of a remote-only bootstrap, when
 	// no file has reference windows yet (so calibration is empty).
 	identity []windowItem
+	// exactCurrent: some present libroot file has current windows cut with
+	// exactly the run's pair (the reference pair in a remote-only run). The
+	// database's answer to "do reference windows exist", which is what
+	// decides a bootstrap, not what one Hello happens to read.
+	exactCurrent bool
 }
 
 // windowRunResult is what a run did, for tests and the final census.
@@ -367,6 +391,11 @@ func (t *windowTally) deferredByReason() map[string]int {
 // windowBackfill runs the op body. Split from runWindowBackfill so tests get
 // the counts back.
 func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, params WindowBackfillParams) (*windowRunResult, error) {
+	if params.Live && !params.RemoteOnly && !params.AllowServerDecode &&
+		strings.TrimSpace(config.AppConfig.FingerprintWindowReferenceTools) != "" {
+		return nil, errors.New("window-backfill: fingerprint_window_reference_tools is set, so windows are cut by remote workers only " +
+			"(no decoding on the server); queue the run with \"remote_only\": true, or pass \"allow_server_decode\": true to decode on the server deliberately")
+	}
 	var wt fingerprint.WindowTools
 	var terr error
 	if params.RemoteOnly {
@@ -420,7 +449,7 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 	var tally windowTally
 	run := &windowRun{p: p, wt: wt, host: host, t: &tally, reporter: reporter, probe: probe}
 	hub := p.WorkerHub()
-	hub.attach(ctx, p, wt, &tally, plan.calibration, hubMode{remoteOnly: params.RemoteOnly, identity: plan.identity})
+	hub.attach(ctx, p, wt, &tally, plan.calibration, hubMode{remoteOnly: params.RemoteOnly, identity: plan.identity, refExists: plan.exactCurrent})
 	defer hub.detach()
 	if params.RemoteOnly {
 		wbLog.Info("window-backfill REMOTE-ONLY: the server decodes nothing; reference pair fpcalc %s + ffmpeg %s; files no worker may have are deferred to a later run",
@@ -456,7 +485,21 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 		run.progTotal.Store(int64(total))
 		var err error
 		if params.RemoteOnly {
-			err = registry.RunItems(ctx, reporter, items, run.remoteOnlyItem(hub, tier), opts)
+			// One heartbeat for the tier (every waiter may sit on one stuck
+			// lease while others finish), which also ends the tier when no
+			// worker is around (the no-worker grace).
+			tctx, stop := context.WithCancelCause(ctx)
+			hbDone := make(chan struct{})
+			go func() {
+				defer close(hbDone)
+				run.remoteHeartbeat(tctx, stop, hub, tier, noWorkerGrace(params.NoWorkerGraceSec))
+			}()
+			err = registry.RunItems(tctx, reporter, items, run.remoteOnlyItem(hub), opts)
+			stop(nil)
+			<-hbDone
+			if cause := context.Cause(tctx); err != nil && errors.Is(cause, errNoRemoteWorkers) {
+				err = cause
+			}
 			// No drain: RunItems returned only after every item was finished by
 			// a worker or deferred, so nothing is leased or owed any more.
 		} else {
@@ -561,6 +604,7 @@ type windowPlanRow struct {
 	missing  bool
 	excluded string // non-empty: reason, not eligible
 	state    windowState
+	exact    bool // current, and every window cut with exactly the run's pair
 	item     windowItem
 }
 
@@ -640,9 +684,17 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 		switch r.state {
 		case windowCurrent:
 			plan.current[tier]++
-			if len(plan.calibration) < calibrationCandidates {
+			// Calibration candidates are files whose windows were ALL cut
+			// with exactly the run's pair: a file current only by
+			// equivalence (an allowlisted pair) cannot calibrate anyone, and
+			// letting it take a slot could leave no usable candidate while
+			// reference windows exist.
+			if r.exact {
 				if root, _, ok := pathutil.SplitRoot(r.item.Path, libRoots); ok && root == "libroot" {
-					plan.calibration = append(plan.calibration, r.item)
+					plan.exactCurrent = true
+					if len(plan.calibration) < calibrationCandidates {
+						plan.calibration = append(plan.calibration, r.item)
+					}
 				}
 			}
 		case windowTombstoned:
@@ -700,11 +752,11 @@ func (p *Plugin) planOne(f database.BookFileCore, itunes *iTunesMatcher, version
 		Size:      fi.Size(),
 		MtimeUnix: fi.ModTime().Unix(),
 	}
-	state, err := p.windowStateOf(it, versions)
+	state, exact, err := p.windowStateOf(it, versions)
 	if err != nil {
 		return windowPlanRow{}, err
 	}
-	return windowPlanRow{present: true, state: state, item: it}, nil
+	return windowPlanRow{present: true, state: state, exact: exact, item: it}, nil
 }
 
 // windowStateOf decides whether a file's stored windows (or tombstone) still
@@ -716,26 +768,44 @@ func (p *Plugin) planOne(f database.BookFileCore, itunes *iTunesMatcher, version
 // known, and covering the slots the plan would cut today when the duration is
 // known from the row. A tombstone is current under the same bytes/pipeline/
 // set/tool rule, so a new ffmpeg retries a file the old one could not read.
-func (p *Plugin) windowStateOf(it windowItem, versions *fingerprint.ToolVersionInfo) (windowState, error) {
+//
+// exact reports, for a current file, that every stored window was cut with
+// exactly *versions (not merely an equivalent pair).
+func (p *Plugin) windowStateOf(it windowItem, versions *fingerprint.ToolVersionInfo) (windowState, bool, error) {
 	ref := database.FileWindowRef(it.FileID)
 	stored, err := p.store.GetFingerprintWindows(ref)
 	if err != nil {
-		return windowNeedsWork, err
+		return windowNeedsWork, false, err
 	}
 	if windowsCurrent(stored, it, versions) {
-		return windowCurrent, nil
+		return windowCurrent, versions != nil && windowsExactPair(stored, *versions), nil
 	}
 	fail, err := p.store.GetFingerprintWindowFailure(ref)
 	if err != nil {
-		return windowNeedsWork, err
+		return windowNeedsWork, false, err
 	}
 	if fail != nil && fail.SourceSize == it.Size && fail.SourceMtimeUnix == it.MtimeUnix &&
 		fail.Pipeline == fingerprint.WindowPipelineID && fail.WindowSet == fingerprint.WindowSetWS1 &&
 		fail.PlannedDurationSec == plannedDuration(it) &&
 		(versions == nil || (fail.FpcalcVersion == versions.Fpcalc && fail.FFmpegVersion == versions.FFmpeg)) {
-		return windowTombstoned, nil
+		return windowTombstoned, false, nil
 	}
-	return windowNeedsWork, nil
+	return windowNeedsWork, false, nil
+}
+
+// windowsExactPair: every stored window row was cut with exactly v.
+func windowsExactPair(stored []database.FingerprintWindow, v fingerprint.ToolVersionInfo) bool {
+	n := 0
+	for _, w := range stored {
+		if w.Kind != database.WindowKindWindow {
+			continue
+		}
+		if w.FpcalcVersion != v.Fpcalc || w.FFmpegVersion != v.FFmpeg {
+			return false
+		}
+		n++
+	}
+	return n > 0
 }
 
 func windowsCurrent(stored []database.FingerprintWindow, it windowItem, versions *fingerprint.ToolVersionInfo) bool {
@@ -1019,13 +1089,9 @@ func (r *windowRun) drainRemote(ctx context.Context, hub *WorkerHub, tier, worke
 // remoteOnlyItem is the remote-only server lane's RunItems callback: it cuts
 // nothing, it waits for a worker to finish the item (WorkerHub.awaitRemote)
 // and counts the item deferred when no worker may have it.
-func (r *windowRun) remoteOnlyItem(hub *WorkerHub, tier int) func(context.Context, windowItem) error {
+func (r *windowRun) remoteOnlyItem(hub *WorkerHub) func(context.Context, windowItem) error {
 	return func(ctx context.Context, it windowItem) error {
-		why, err := hub.awaitRemote(ctx, it.qi, func(done, leased, total int) {
-			_ = r.reporter.UpdateProgress(int(r.progCur.Load())+done, int(r.progTotal.Load()),
-				fmt.Sprintf("%s (remote-only): %d/%d files resolved, %d leased to remote workers; waiting for workers (%s)",
-					windowTierNames[tier], done, total, leased, r.t.summary()))
-		})
+		why, err := hub.awaitRemote(ctx, it.qi)
 		if err != nil {
 			return err
 		}
@@ -1033,6 +1099,46 @@ func (r *windowRun) remoteOnlyItem(hub *WorkerHub, tier int) func(context.Contex
 			r.t.deferItem(why)
 		}
 		return nil
+	}
+}
+
+// errNoRemoteWorkers ends a remote-only run that waited too long for any
+// worker (WindowBackfillParams.NoWorkerGraceSec).
+var errNoRemoteWorkers = errors.New("window-backfill remote-only: no fp-worker")
+
+// windowNoWorkerGrace is the default no-worker grace.
+const windowNoWorkerGrace = 15 * time.Minute
+
+func noWorkerGrace(sec int) time.Duration {
+	if sec > 0 {
+		return time.Duration(sec) * time.Second
+	}
+	return windowNoWorkerGrace
+}
+
+// remoteHeartbeat is a remote-only tier's single liveness source: every
+// windowDrainPoll, on a fixed ticker that nothing resets, it reports
+// progress (so the watchdog sees a live op even while every RunItems waiter
+// sits on one crashed worker's lease), and it ends the tier through stop
+// when WorkerHub.noWorkerExpired says the run has waited too long.
+func (r *windowRun) remoteHeartbeat(ctx context.Context, stop context.CancelCauseFunc, hub *WorkerHub, tier int, grace time.Duration) {
+	t := time.NewTicker(windowDrainPoll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if msg := hub.noWorkerExpired(grace); msg != "" {
+			wbLog.Error("window-backfill remote-only: %s", msg)
+			stop(fmt.Errorf("%w: %s", errNoRemoteWorkers, msg))
+			return
+		}
+		done, leased, total := hub.tierCounts()
+		_ = r.reporter.UpdateProgress(int(r.progCur.Load())+done, int(r.progTotal.Load()),
+			fmt.Sprintf("%s (remote-only heartbeat): %d/%d files resolved, %d leased to remote workers (%s)",
+				windowTierNames[tier], done, total, leased, r.t.summary()))
 	}
 }
 

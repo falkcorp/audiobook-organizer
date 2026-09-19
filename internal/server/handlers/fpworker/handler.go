@@ -1,5 +1,5 @@
 // file: internal/server/handlers/fpworker/handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 561e8ac1-7cd0-46f4-8b06-e0461af0be94
 // last-edited: 2026-09-19
 
@@ -32,7 +32,7 @@ import (
 
 // Hub is the lease manager (acoustid.WorkerHub).
 type Hub interface {
-	Hello(ctx context.Context) (*workerapi.HelloResponse, error)
+	Hello(ctx context.Context, req workerapi.HelloRequest) (*workerapi.HelloResponse, error)
 	Lease(ctx context.Context, req workerapi.LeaseRequest) (*workerapi.LeaseResponse, error)
 	Renew(leaseID string, req workerapi.RenewRequest) (*workerapi.RenewResponse, error)
 	Release(leaseID string, req workerapi.ReleaseRequest) (*workerapi.ReleaseResponse, error)
@@ -144,7 +144,12 @@ func (h *Handler) hello(c *gin.Context) {
 	if !h.available(c) {
 		return
 	}
-	resp, err := h.hub.Hello(c.Request.Context())
+	req := workerapi.HelloRequest{
+		WorkerID:      c.Query(workerapi.HelloParamWorkerID),
+		FpcalcVersion: c.Query(workerapi.HelloParamFpcalc),
+		FFmpegVersion: c.Query(workerapi.HelloParamFFmpeg),
+	}
+	resp, err := h.hub.Hello(c.Request.Context(), req)
 	if err != nil {
 		h.respondErr(c, err)
 		return

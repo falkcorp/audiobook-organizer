@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/workerclient_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0f3c9a52-6f0e-4d7b-9a55-3d1e2b8c7a41
 // last-edited: 2026-09-19
 
@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -66,10 +67,12 @@ type fakeServer struct {
 	t  *testing.T
 	mu sync.Mutex
 
-	hello       workerapi.HelloResponse
-	pending     []workerapi.Job
-	leaseScript []int // statuses answered to lease before any job is served
-	nLease      int
+	hello        workerapi.HelloResponse
+	helloScript  []workerapi.HelloResponse // answered, in order, before hello
+	helloQueries []url.Values
+	pending      []workerapi.Job
+	leaseScript  []int // statuses answered to lease before any job is served
+	nLease       int
 
 	leaseCalls  int
 	renewCalls  int
@@ -100,9 +103,16 @@ func (s *fakeServer) handler() http.Handler {
 		_ = json.NewEncoder(w).Encode(v)
 	}
 	p := apiPrefix
-	mux.HandleFunc("GET "+p+"/hello", auth(func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET "+p+"/hello", auth(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		s.helloQueries = append(s.helloQueries, r.URL.Query())
+		if len(s.helloScript) > 0 {
+			h := s.helloScript[0]
+			s.helloScript = s.helloScript[1:]
+			writeJSON(w, h)
+			return
+		}
 		writeJSON(w, s.hello)
 	}))
 	mux.HandleFunc("POST "+p+"/lease", auth(func(w http.ResponseWriter, r *http.Request) {
@@ -1059,6 +1069,34 @@ func TestRun_BootstrapNonReferencePairRefuses(t *testing.T) {
 	}
 	if n := e.srv.leaseCallsSafe(); n != 0 {
 		t.Errorf("leased %d times", n)
+	}
+}
+
+// TestRun_ReferencePendingRetriesThenRuns: while the server answers
+// reference_pending (another worker holds the bootstrap, or this pair must
+// wait for reference windows), the worker waits and asks again instead of
+// exiting, then passes the normal parity gate. Hello identifies the worker.
+func TestRun_ReferencePendingRetriesThenRuns(t *testing.T) {
+	e := newTestEnv(t)
+	pending := workerapi.HelloResponse{ReferencePending: true, Waiting: "another reference-pair worker holds the bootstrap",
+		Calibration: []workerapi.CalibrationFile{}}
+	e.srv.helloScript = []workerapi.HelloResponse{pending, pending}
+	e.addJob("A/B/c.mp3", []byte("after the wait"))
+	drain, done := e.start()
+	e.waitResults(1, done)
+	close(drain)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	e.srv.mu.Lock()
+	defer e.srv.mu.Unlock()
+	if len(e.srv.helloQueries) < 3 {
+		t.Fatalf("%d hellos, want the 2 pending answers retried", len(e.srv.helloQueries))
+	}
+	q := e.srv.helloQueries[0]
+	if q.Get(workerapi.HelloParamWorkerID) != "test-worker" || q.Get(workerapi.HelloParamFpcalc) != testVersions.Fpcalc ||
+		q.Get(workerapi.HelloParamFFmpeg) != testVersions.FFmpeg {
+		t.Errorf("hello query = %v, want the worker id and tool pair", q)
 	}
 }
 
