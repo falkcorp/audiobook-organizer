@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.109.0
+// version: 2.110.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -6328,64 +6328,53 @@ export async function getCacheStats(): Promise<CacheStatsResponse> {
 }
 
 // ─── Chapter Consolidation (MATCH-2) ─────────────────────────────────────────
+//
+// The synchronous GET /maintenance/chapter-groups and POST
+// /maintenance/merge-chapter-groups routes were deleted on 2026-05-01
+// (ASYNC-CLEAN-1), which left the Maintenance card answering "endpoint not
+// found". Both are now maintenance jobs (scan-chapter-groups,
+// merge-chapter-groups) started through POST /maintenance/jobs/:job_id; the
+// structured result is read from GET /operations/:id/result once the run ends.
 
-export interface ChapterGroup {
-  primary_book_id: string;
-  book_ids: string[];
-  common_title: string;
-  total_duration: number;
-  file_count: number;
-}
-
-export interface ChapterGroupsResult {
-  groups: ChapterGroup[];
-  total_books_affected: number;
-}
-
-export interface ChapterMergeResult {
-  dry_run: boolean;
-  groups_found: number;
-  books_merged: number;
-  books_skipped: number;
-  groups: ChapterGroup[];
-}
-
-export async function scanChapterGroups(params?: {
+export interface ChapterGroupsParams {
   min_files?: number;
   max_per_file_duration?: number;
   path_prefix?: string;
-}): Promise<ChapterGroupsResult> {
-  const q = new URLSearchParams();
-  if (params?.min_files != null) q.set('min_files', String(params.min_files));
-  if (params?.max_per_file_duration != null)
-    q.set('max_per_file_duration', String(params.max_per_file_duration));
-  if (params?.path_prefix) q.set('path_prefix', params.path_prefix);
-  const url = `${API_BASE}/maintenance/chapter-groups${q.toString() ? `?${q}` : ''}`;
-  const response = await apiFetch(url);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to scan chapter groups');
-  }
-  const body_data = await response.json();
-  return body_data.data ?? body_data;
 }
 
-export async function mergeChapterGroups(params?: {
-  dry_run?: boolean;
-  min_files?: number;
-  max_per_file_duration?: number;
-}): Promise<ChapterMergeResult> {
-  const q = new URLSearchParams();
-  if (params?.dry_run != null) q.set('dry_run', String(params.dry_run));
-  if (params?.min_files != null) q.set('min_files', String(params.min_files));
-  if (params?.max_per_file_duration != null)
-    q.set('max_per_file_duration', String(params.max_per_file_duration));
-  const url = `${API_BASE}/maintenance/merge-chapter-groups${q.toString() ? `?${q}` : ''}`;
-  const response = await apiFetch(url, { method: 'POST' });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to merge chapter groups');
-  }
-  const body_data = await response.json();
-  return body_data.data ?? body_data;
+/** Per-group outcome. The merge-only fields are absent on a scan. */
+export interface ChapterGroup {
+  primary_book_id: string;
+  book_ids: string[];
+  source_book_ids: string[];
+  common_title: string;
+  total_duration: number;
+  file_count: number;
+  directory: string;
+  /** would_merge / would_skip (dry run) or merged / partial / failed. */
+  status?: 'would_merge' | 'would_skip' | 'merged' | 'partial' | 'failed';
+  primary_title?: string;
+  /** set = filename-derived title replaced; kept = curated title left alone. */
+  title_action?: 'set' | 'kept' | 'kept_locked';
+  books_merged?: number;
+  files_moved?: number;
+  /** Combine journal id; the merge is reversed by undoing this journal. */
+  journal_id?: string;
+  errors?: string[];
+}
+
+/** Structured result both chapter jobs persist on their operation. */
+export interface ChapterGroupsResult {
+  job: 'scan-chapter-groups' | 'merge-chapter-groups';
+  dry_run: boolean;
+  params: ChapterGroupsParams & { dry_run: boolean };
+  groups_found: number;
+  total_books_affected: number;
+  groups_skipped_unknown_duration: number;
+  books_merged: number;
+  books_skipped: number;
+  groups_failed: number;
+  groups: ChapterGroup[];
 }
 
 // ─── SHA Duplicate File Detection (FILE-SHA-2) ───────────────────────────────
@@ -6582,19 +6571,25 @@ export async function listMaintenanceJobs(): Promise<MaintenanceJobDef[]> {
   return (body as MaintenanceJobsResult).jobs ?? [];
 }
 
+// params carries a job's custom keys (e.g. min_files); dry_run always comes
+// from the dryRun argument so a stray params.dry_run cannot override it.
 export async function runMaintenanceJob(
   jobId: string,
-  dryRun = false
+  dryRun = false,
+  params: Record<string, unknown> = {}
 ): Promise<{ operation_id: string }> {
   const response = await apiFetch(`${API_BASE}/maintenance/jobs/${encodeURIComponent(jobId)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dry_run: dryRun }),
+    body: JSON.stringify({ ...params, dry_run: dryRun }),
   });
   if (!response.ok) {
     throw await buildApiError(response, `Failed to run maintenance job "${jobId}"`);
   }
-  return response.json();
+  // The dispatcher answers 202 {data: {operation_id}}. This returned the
+  // envelope itself, so every caller read operation_id as undefined.
+  const body = await response.json();
+  return body.data ?? body;
 }
 
 export async function startOptimize(): Promise<{ operation_id: string }> {
