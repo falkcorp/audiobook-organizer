@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
 // last-edited: 2026-09-19
 
@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -420,7 +421,7 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 	if err != nil {
 		return nil, fmt.Errorf("window-backfill: list book files: %w", err)
 	}
-	roots := iTunesRoots()
+	itunes := newITunesMatcher(iTunesRoots())
 	rows := make([]windowPlanRow, len(cores))
 	var chunks [][2]int
 	for lo := 0; lo < len(cores); lo += windowPlanChunk {
@@ -431,7 +432,7 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			r, perr := p.planOne(cores[i], roots, versions)
+			r, perr := p.planOne(cores[i], itunes, versions)
 			if perr != nil {
 				// A store read failure on one file must not read as "needs
 				// work" (it would recompute) or "current" (it would skip);
@@ -492,11 +493,11 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 }
 
 // planOne classifies one tracked row.
-func (p *Plugin) planOne(f database.BookFileCore, roots []string, versions *fingerprint.ToolVersionInfo) (windowPlanRow, error) {
+func (p *Plugin) planOne(f database.BookFileCore, itunes *iTunesMatcher, versions *fingerprint.ToolVersionInfo) (windowPlanRow, error) {
 	switch {
 	case f.FilePath == "":
 		return windowPlanRow{excluded: "empty_path"}, nil
-	case underITunes(f.FilePath, roots):
+	case itunes.under(f.FilePath):
 		// Checked before the stat: nothing under the iTunes tree is touched,
 		// not even read, and its missing rows do not make a book unmatched.
 		return windowPlanRow{excluded: "itunes_tree"}, nil
@@ -630,30 +631,66 @@ func iTunesRoots() []string {
 	return roots
 }
 
-// underITunes reports whether path is in the frozen iTunes tree, matching
+// iTunesMatcher decides whether a path is in the frozen iTunes tree,
 // case-insensitively (the tree is reached as "Books/iTunes" on a
 // case-insensitive client mount, and HFS/APFS-origin paths vary in case) and
 // through symlinks: a library folder that links into the tree is the tree.
-// A missing leaf cannot be resolved, so its parent directory is.
-func underITunes(path string, roots []string) bool {
-	cands := []string{path}
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		cands = append(cands, real)
-	} else if dir, derr := filepath.EvalSymlinks(filepath.Dir(path)); derr == nil {
-		cands = append(cands, filepath.Join(dir, filepath.Base(path)))
+//
+// Note the lowercasing also excludes a genuinely distinct "Books/Itunes" tree
+// on a case-sensitive filesystem. That is deliberate: this is a hands-off
+// rule, and the fail-safe direction is to skip.
+//
+// Symlinks are resolved on the PARENT directory, memoized: planning visits
+// every book_file row, EvalSymlinks costs an lstat per path component, and
+// files cluster by folder, so one resolve per folder instead of one per row.
+// Only a path the cheap textual check did not already exclude is resolved.
+type iTunesMatcher struct {
+	roots []string // lowercased
+	dirs  sync.Map // parent dir -> resolved parent dir ("" when unresolvable)
+}
+
+func newITunesMatcher(roots []string) *iTunesMatcher {
+	m := &iTunesMatcher{}
+	for _, r := range roots {
+		m.roots = append(m.roots, strings.ToLower(r))
 	}
-	for _, c := range cands {
-		lc := strings.ToLower(c)
-		if config.UnderFrozenITunesTree(lc) {
+	return m
+}
+
+func (m *iTunesMatcher) textual(p string) bool {
+	lp := strings.ToLower(p)
+	if config.UnderFrozenITunesTree(lp) {
+		return true
+	}
+	for _, r := range m.roots {
+		if pathutil.IsWithin(lp, r) {
 			return true
-		}
-		for _, r := range roots {
-			if pathutil.IsWithin(lc, strings.ToLower(r)) {
-				return true
-			}
 		}
 	}
 	return false
+}
+
+func (m *iTunesMatcher) under(path string) bool {
+	if m.textual(path) {
+		return true
+	}
+	dir := filepath.Dir(path)
+	var real string
+	if v, ok := m.dirs.Load(dir); ok {
+		real = v.(string)
+	} else {
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			real = r
+		}
+		m.dirs.Store(dir, real)
+	}
+	if real == "" || real == dir {
+		return false
+	}
+	// A symlinked LEAF inside a real folder is not resolved here; the
+	// library's links are folder links, and resolving every leaf is the
+	// per-row cost this avoids.
+	return m.textual(filepath.Join(real, filepath.Base(path)))
 }
 
 func windowPlanSummary(plan *windowPlan) string {
