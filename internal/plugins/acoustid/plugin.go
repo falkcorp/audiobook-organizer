@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
 // last-edited: 2026-09-19
 
@@ -82,12 +82,11 @@ func (p *Plugin) opDefs() []sdk.OperationDef {
 }
 
 // pluginStore is what this plugin reads and writes, measured with an
-// empty-interface compiler probe under -gcflags=-e: nine methods (split
-// below to stay under the interfacebloat limit), no
-// forwarding constraints. It was pluginStore -- 398 methods -- until
-// 2026-08-19. The window backfill added the four fpwin: sidecar methods
-// (2026-09-19); the set is split into three embedded interfaces to stay under
-// the interfacebloat width gate.
+// empty-interface compiler probe under -gcflags=-e: nine methods, no
+// forwarding constraints, plus the four fpwin: sidecar methods the window
+// backfill added (2026-09-19). Composed from four small interfaces to stay
+// under the interfacebloat limit. It was pluginStore -- 398 methods -- until
+// 2026-08-19.
 //
 // The batched fast paths (ClearAllAcoustIDFingerprints and friends) live on
 // *PebbleStore, not on this interface, and are resolved with
