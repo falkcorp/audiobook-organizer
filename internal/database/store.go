@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.101.0
+// version: 2.102.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-09-19
 
@@ -1069,8 +1069,14 @@ type UserBookState struct {
 	// It is a USER INTENT, not derived state. Anything that rewrites a
 	// UserBookState must read-modify-write rather than construct a fresh literal, or
 	// the next playback sync silently un-hides what the user hid.
-	HideFromContinueListening bool      `json:"hide_from_continue_listening,omitempty"`
-	UpdatedAt                 time.Time `json:"updated_at"`
+	HideFromContinueListening bool `json:"hide_from_continue_listening,omitempty"`
+	// ProgressResetAt is the tombstone of the user's last "reset progress"
+	// (ABS DELETE /api/me/progress/:id). An offline session that STARTED before
+	// it is a listen the user has since discarded, so offline replay
+	// (/api/session/local[-all]) refuses it instead of resurrecting the old
+	// position. Additive: nil on rows written before it existed.
+	ProgressResetAt *time.Time `json:"progress_reset_at,omitempty"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // UserBookStatus values. Auto-computed from UserPosition rows

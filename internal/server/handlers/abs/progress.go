@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package abs
 
@@ -226,6 +226,10 @@ func (h *Handler) MediaProgressDelete(c *gin.Context) {
 		state.LastSegmentID = ""
 		state.HideFromContinueListening = false
 		state.LastActivityAt = h.now()
+		// Tombstone: offline sessions that started before this reset must not
+		// replay the discarded position back (session_local_all.go).
+		resetAt := h.now()
+		state.ProgressResetAt = &resetAt
 	}); err != nil {
 		respondError(c, http.StatusInternalServerError, "could not reset progress")
 		return

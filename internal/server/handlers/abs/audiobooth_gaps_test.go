@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -453,5 +454,137 @@ func TestPlaylists_RenameOntoTakenNameIsGenericConflict(t *testing.T) {
 	}
 	if store.lists[1].Name != "Commute" {
 		t.Fatalf("rename was written: %q", store.lists[1].Name)
+	}
+}
+
+// ── Review B1: a hand-pinned status survives automatic progress writes ─────
+
+func pinStatus(t *testing.T, w *writeHarness, status string) {
+	t.Helper()
+	if err := w.seed.lib.SetUserBookState(&database.UserBookState{UserID: w.userID, BookID: w.bookID,
+		Status: status, StatusManual: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertPinned(t *testing.T, w *writeHarness, status string) {
+	t.Helper()
+	st, _ := w.seed.lib.GetUserBookState(w.userID, w.bookID)
+	if st == nil || st.Status != status || !st.StatusManual {
+		t.Fatalf("book state = %+v; the hand-pinned %q status was overwritten by a derived one", st, status)
+	}
+}
+
+func TestSessionSync_LeavesAManualStatusAlone(t *testing.T) {
+	w := newWriteHarness(t)
+	pinStatus(t, w, database.UserBookStatusAbandoned)
+	sess := startSession(t, w.harness, w.syncID, w.token)
+	id, _ := sess["id"].(string)
+	if code, _, raw := w.req(t, http.MethodPost, "/api/session/"+id+"/sync",
+		map[string]any{"currentTime": 100.0, "timeListened": 10.0}); code != http.StatusOK {
+		t.Fatalf("sync = %d %s", code, raw)
+	}
+	if got := storedPosition(t, w); got != 100 {
+		t.Fatalf("position = %v, want 100 (the position still moves)", got)
+	}
+	assertPinned(t, w, database.UserBookStatusAbandoned)
+}
+
+func TestSessionLocalAll_LeavesAManualStatusAlone(t *testing.T) {
+	w := newWriteHarness(t)
+	pinStatus(t, w, database.UserBookStatusAbandoned)
+	localAll(t, w, map[string]any{"id": "m1", "userId": w.userID, "libraryItemId": w.syncID, "currentTime": 80.0})
+	if got := storedPosition(t, w); got != 80 {
+		t.Fatalf("position = %v, want 80", got)
+	}
+	assertPinned(t, w, database.UserBookStatusAbandoned)
+}
+
+// ── Review W3: offline replay rules ─────────────────────────────────────────
+
+// (a) A session that BEGAN after the server's newest position may rewind it
+// (the user re-listened offline); one that began earlier stays forward-only.
+func TestSessionLocalAll_RewindOnlyWhenSessionStartedAfterStoredProgress(t *testing.T) {
+	w := newWriteHarness(t)
+	if err := w.seed.lib.SetUserPosition(w.userID, w.bookID, "abs", 500); err != nil {
+		t.Fatal(err)
+	}
+	older := time.Now().Add(-time.Hour).UnixMilli()
+	localAll(t, w, map[string]any{"id": "old", "userId": w.userID, "libraryItemId": w.syncID,
+		"currentTime": 100.0, "startedAt": older})
+	if got := storedPosition(t, w); got != 500 {
+		t.Fatalf("a session that started BEFORE the stored progress rewound it to %v", got)
+	}
+	newer := time.Now().Add(time.Minute).UnixMilli()
+	rows := localAll(t, w, map[string]any{"id": "new", "userId": w.userID, "libraryItemId": w.syncID,
+		"currentTime": 100.0, "startedAt": newer})
+	if rows[0]["progressSynced"] != true {
+		t.Fatalf("results = %v", rows)
+	}
+	if got := storedPosition(t, w); got != 100 {
+		t.Fatalf("a session that started AFTER the stored progress did not apply: position %v, want 100", got)
+	}
+}
+
+// (b) Reset progress leaves a tombstone; a replayed session from before the
+// reset must not resurrect the discarded position.
+func TestSessionLocalAll_RefusesSessionsFromBeforeAProgressReset(t *testing.T) {
+	w := newWriteHarness(t)
+	w.patch(t, map[string]any{"currentTime": 300.0})
+	before := time.Now().Add(-time.Minute).UnixMilli()
+	if code, _, raw := w.req(t, http.MethodDelete, "/api/me/progress/"+w.rowID(), nil); code != http.StatusOK {
+		t.Fatalf("reset = %d %s", code, raw)
+	}
+	rows := localAll(t, w, map[string]any{"id": "pre-reset", "userId": w.userID, "libraryItemId": w.syncID,
+		"currentTime": 300.0, "startedAt": before})
+	if rows[0]["success"] != false {
+		t.Fatalf("a pre-reset session was accepted: %v", rows)
+	}
+	if got := storedPosition(t, w); got != 0 {
+		t.Fatalf("the reset position was resurrected: %v", got)
+	}
+	after := time.Now().Add(time.Minute).UnixMilli()
+	localAll(t, w, map[string]any{"id": "post-reset", "userId": w.userID, "libraryItemId": w.syncID,
+		"currentTime": 30.0, "startedAt": after})
+	if got := storedPosition(t, w); got != 30 {
+		t.Fatalf("a post-reset session did not apply: %v", got)
+	}
+}
+
+// (c) A position far past the end is rejected and never marks the book done.
+func TestSessionLocalAll_RejectsAPositionBeyondTheDuration(t *testing.T) {
+	w := newWriteHarness(t)
+	code, item, raw := w.req(t, http.MethodGet, "/api/items/"+w.syncID, nil)
+	if code != http.StatusOK {
+		t.Fatalf("item = %d %s", code, raw)
+	}
+	dur, _ := obj(t, item["media"])["duration"].(float64)
+	if dur <= 0 {
+		t.Fatalf("fixture book has no duration: %s", raw)
+	}
+	rows := localAll(t, w, map[string]any{"id": "absurd", "userId": w.userID, "libraryItemId": w.syncID,
+		"currentTime": dur * 50})
+	if rows[0]["success"] != false {
+		t.Fatalf("an out-of-range position was accepted: %v", rows)
+	}
+	if got := storedPosition(t, w); got != 0 {
+		t.Fatalf("position = %v after an out-of-range session, want untouched", got)
+	}
+	if st, _ := w.seed.lib.GetUserBookState(w.userID, w.bookID); st != nil && st.Status == database.UserBookStatusFinished {
+		t.Fatalf("an out-of-range position auto-finished the book")
+	}
+}
+
+// ── Review W4: /api/session/local applies its session ──────────────────────
+
+func TestSessionLocal_AppliesTheSession(t *testing.T) {
+	w := newWriteHarness(t)
+	code, _, raw := w.req(t, http.MethodPost, "/api/session/local", map[string]any{
+		"id": "single-1", "userId": w.userID, "libraryItemId": w.syncID, "currentTime": 77.0})
+	if code != http.StatusOK || raw != "OK" {
+		t.Fatalf("session/local = %d %q, want 200 OK", code, raw)
+	}
+	if got := storedPosition(t, w); got != 77 {
+		t.Fatalf("position = %v, want 77: /api/session/local still discards its session", got)
 	}
 }

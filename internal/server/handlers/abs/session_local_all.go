@@ -1,11 +1,12 @@
 // file: internal/server/handlers/abs/session_local_all.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fcff98d1-5709-4c26-a345-d79231c02527
 // last-edited: 2026-09-19
 
 package abs
 
 import (
+	"math"
 	"net/http"
 	"strings"
 
@@ -25,7 +26,13 @@ import (
 // {"results":[{"id","success","progressSynced","error"?}]}. AudioBooth types the
 // response as Data, so the body only has to be a non-empty 2xx.
 //
-// CONFLICT POLICY — deliberately STRICTER than upstream ABS. Upstream applies a
+// CONFLICT POLICY (applyLocalSession): (a) forward-only, EXCEPT a session whose
+// startedAt is after the server's newest known position may move it either way;
+// (b) a session that started before the user's last progress reset is refused;
+// (c) a position past the item's duration is rejected, never turned into
+// "finished". Background on the forward-only default follows.
+//
+// Deliberately STRICTER than upstream ABS. Upstream applies a
 // local session when session.updatedAt > the stored progress's lastUpdate. We use
 // progress.MergeOfflineReplay, which ignores timestamps and is forward-only on
 // position, because offline clients RE-STAMP backlog entries with updatedAt=now
@@ -52,7 +59,15 @@ type localSessionReq struct {
 	EpisodeID     *string  `json:"episodeId"`
 	CurrentTime   *float64 `json:"currentTime"`
 	Duration      *float64 `json:"duration"`
+	// StartedAt is when the listen began on the device (ms epoch). Unlike
+	// updatedAt, clients do not re-stamp it when they replay a backlog, so it is
+	// the one timestamp this endpoint can trust.
+	StartedAt *int64 `json:"startedAt"`
 }
+
+// absLocalSessionOverrunSec is how far past the item's duration a reported
+// position may run before it is treated as garbage rather than "at the end".
+const absLocalSessionOverrunSec = 5.0
 
 type localAllReq struct {
 	Sessions []localSessionReq `json:"sessions"`
@@ -123,36 +138,81 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 		res.Error = "library item not found"
 		return res
 	}
-	res.Success = true
-	if h.progress == nil || s.CurrentTime == nil || *s.CurrentTime <= 0 {
+	if h.progress == nil || s.CurrentTime == nil || *s.CurrentTime == 0 {
 		// Nothing positional to apply (or nowhere to apply it). The session is
 		// accepted; there is simply no progress change.
+		res.Success = true
+		return res
+	}
+	ct := *s.CurrentTime
+	if math.IsNaN(ct) || math.IsInf(ct, 0) || ct < 0 {
+		res.Error = "currentTime is not a valid position"
 		return res
 	}
 
-	stored := progress.Progress{}
-	if pos, err := h.progress.GetUserPosition(userID, bookID); err == nil && pos != nil {
-		stored.CurrentTime = pos.PositionSeconds
-		stored.UpdatedAtMs = msEpoch(pos.UpdatedAt)
-	} else if err != nil {
+	pos, err := h.progress.GetUserPosition(userID, bookID)
+	if err != nil {
 		// Unknown stored position: writing blind could rewind the listener,
 		// which is the one outcome this endpoint must never produce.
-		res.Success = false
 		res.Error = "could not read stored progress"
 		return res
 	}
-	if state, err := h.progress.GetUserBookState(userID, bookID); err == nil && state != nil {
-		stored.IsFinished = state.Status == database.UserBookStatusFinished
+	state, _ := h.progress.GetUserBookState(userID, bookID)
+
+	// (b) Reset tombstone: a session that started before the user's last
+	// "reset progress" belongs to a listen the user discarded. No startedAt
+	// means we cannot prove it came after, so it is refused too.
+	if state != nil && state.ProgressResetAt != nil {
+		if s.StartedAt == nil || *s.StartedAt <= state.ProgressResetAt.UnixMilli() {
+			res.Error = "session predates a progress reset"
+			return res
+		}
 	}
+
 	duration := h.durationForBook(bookID, s.Duration)
-	stored.Duration = duration
+	// (c) An out-of-range position is rejected, never clamped into "finished":
+	// a corrupt or foreign value past the end must not mark the book done.
+	if duration > 0 && ct > duration+absLocalSessionOverrunSec {
+		res.Error = "currentTime is beyond the item's duration"
+		return res
+	}
+	if duration > 0 && ct > duration {
+		ct = duration
+	}
+
+	stored := progress.Progress{Duration: duration}
+	if pos != nil {
+		stored.CurrentTime = pos.PositionSeconds
+		stored.UpdatedAtMs = msEpoch(pos.UpdatedAt)
+	}
+	if state != nil {
+		stored.IsFinished = state.Status == database.UserBookStatusFinished
+		if ms := msEpoch(state.LastActivityAt); ms > stored.UpdatedAtMs {
+			stored.UpdatedAtMs = ms
+		}
+	}
 
 	now := h.now()
-	merged, accepted := progress.MergeOfflineReplay(stored, progress.Progress{
-		CurrentTime: *s.CurrentTime,
-		Duration:    duration,
-		UpdatedAtMs: now.UnixMilli(),
-	})
+	var (
+		merged   progress.Progress
+		accepted bool
+	)
+	if s.StartedAt != nil && *s.StartedAt > stored.UpdatedAtMs {
+		// (a) The listen BEGAN after the server's newest known position, so it
+		// is genuinely newer and may move the position either way (the user
+		// re-listened to an earlier chapter while offline). startedAt is not
+		// re-stamped on replay, which is what makes this safe where updatedAt
+		// is not. Finished stays sticky, exactly as on /sync.
+		merged, accepted = progress.MergeIncoming(stored, progress.Progress{
+			CurrentTime: ct, Duration: duration, UpdatedAtMs: *s.StartedAt,
+		})
+	} else {
+		// Otherwise forward-only: a backlog entry can never rewind the server.
+		merged, accepted = progress.MergeOfflineReplay(stored, progress.Progress{
+			CurrentTime: ct, Duration: duration, UpdatedAtMs: now.UnixMilli(),
+		})
+	}
+	res.Success = true
 	if !accepted {
 		// The server is already at or past this session. Success, no change.
 		return res
@@ -170,13 +230,14 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	if merged.Duration > 0 {
 		pct = min(int(merged.CurrentTime/merged.Duration*100), 100)
 	}
-	// Read-modify-write through the shared helper so user intent
-	// (HideFromContinueListening, StatusManual) survives, exactly as on /sync.
-	if err := h.updateUserBookState(userID, bookID, func(state *database.UserBookState) {
-		state.Status = status
-		state.ProgressPct = pct
-		state.LastSegmentID = absProgressSegmentID
-		state.LastActivityAt = now
+	// Read-modify-write so HideFromContinueListening survives, and
+	// setDerivedStatus so a status the user pinned by hand (StatusManual) is
+	// left alone rather than overwritten by this computed one.
+	if err := h.updateUserBookState(userID, bookID, func(st *database.UserBookState) {
+		setDerivedStatus(st, status)
+		st.ProgressPct = pct
+		st.LastSegmentID = absProgressSegmentID
+		st.LastActivityAt = now
 	}); err != nil {
 		res.Error = "position stored; book state not updated"
 	}
