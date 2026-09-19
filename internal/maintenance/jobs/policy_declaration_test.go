@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
-// last-edited: 2026-09-10
+// last-edited: 2026-09-19
 
 package jobs_test
 
@@ -114,10 +114,20 @@ func TestPolicyIsBehaviourPreservingVersusTheBridge(t *testing.T) {
 		"scan-composer-tags":      opsregistry.ResumeRestart,
 	}
 
+	// The only jobs permitted to declare a ConcurrencyKey, and the key.
+	// merge-chapter-groups JOINS library.scan's key (added 2026-09-19): the
+	// owner's standing rule is that nothing applies to the library during a
+	// scan, and sharing the key is what makes the registry serialize the two.
+	// It never changes library.scan's own key.
+	wantKeyOverride := map[string]string{
+		"merge-chapter-groups": "library.scan",
+	}
+
 	jobs := maintenance.All()
 	if len(jobs) == 0 {
 		t.Fatal("no maintenance jobs registered; this test would pass vacuously")
 	}
+	seenKeyOverrides := 0
 
 	seenOverrides := 0
 	for _, job := range jobs {
@@ -128,10 +138,16 @@ func TestPolicyIsBehaviourPreservingVersusTheBridge(t *testing.T) {
 				t.Errorf("Liveness = %v, want %v (the bridge's value); PR-1 is "+
 					"behaviour-preserving and does not change liveness", p.Liveness, bridgeLiveness)
 			}
-			if p.ConcurrencyKey != bridgeConcurrencyKey {
-				t.Errorf("ConcurrencyKey = %q, want %q; the bridge allows all 37 to run "+
-					"concurrently today, so a key here is a behaviour change and belongs in PR-2",
-					p.ConcurrencyKey, bridgeConcurrencyKey)
+			wantKey, keyOverride := wantKeyOverride[job.ID()]
+			if !keyOverride {
+				wantKey = bridgeConcurrencyKey
+			} else {
+				seenKeyOverrides++
+			}
+			if p.ConcurrencyKey != wantKey {
+				t.Errorf("ConcurrencyKey = %q, want %q; a declared key is a behaviour change "+
+					"and must be listed in wantKeyOverride with its reason",
+					p.ConcurrencyKey, wantKey)
 			}
 
 			want, isOverride := wantResumeOverride[job.ID()]
@@ -147,6 +163,9 @@ func TestPolicyIsBehaviourPreservingVersusTheBridge(t *testing.T) {
 		})
 	}
 
+	if seenKeyOverrides != len(wantKeyOverride) {
+		t.Errorf("matched %d of %d declared ConcurrencyKey overrides", seenKeyOverrides, len(wantKeyOverride))
+	}
 	if seenOverrides != len(wantResumeOverride) {
 		t.Errorf("matched %d of %d declared resume overrides; a job ID in "+
 			"wantResumeOverride does not exist, so its override is not being checked",
