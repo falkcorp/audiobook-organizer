@@ -1,5 +1,5 @@
 // file: internal/scanner/directory_book_bounds_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b1d0f83-2c47-4a91-95ea-0d4b7e6c1a52
 // last-edited: 2026-09-19
 
@@ -271,4 +271,85 @@ func TestSaveBookToDatabase_ConcurrentWritersMintOneRowPerPath(t *testing.T) {
 	require.Equal(t, 1, atPath,
 		"%d writers saving one directory path produced %d book rows at it; "+
 			"each such row goes on to own its own full set of book_file rows", writers, atPath)
+}
+
+// racedCreateStore simulates the other writer deterministically: the FIRST
+// lookup of the target path reports "no row" (which is what sends
+// saveBookToDatabase down the create path) and creates the row as it returns,
+// so the re-read under the stripe finds it. No sleeps, no goroutines.
+type racedCreateStore struct {
+	scannerStore
+	target string
+	once   sync.Once
+	rowID  string
+}
+
+func (s *racedCreateStore) GetBookByFilePath(path string) (*database.Book, error) {
+	if path == s.target {
+		created := false
+		s.once.Do(func() {
+			row, err := s.scannerStore.CreateBook(&database.Book{FilePath: path, Title: "Raced Copy"})
+			if err == nil {
+				s.rowID = row.ID
+			}
+			created = true
+		})
+		if created {
+			return nil, nil
+		}
+	}
+	return s.scannerStore.GetBookByFilePath(path)
+}
+
+// TestSaveBookToDatabase_RacedMergeCarriesTheVersionLink covers the interaction
+// the directory-path race test cannot reach. The hash-duplicate branch writes a
+// version group onto the PARTNER row and then clears `existing` so the row
+// created here joins it. When that create loses the race, the merge path takes
+// over -- and applyScannerFields owns neither version field, so without an
+// explicit carry the partner is stranded in a group of one, which reads
+// downstream as "this book has other versions" and lists none.
+func TestSaveBookToDatabase_RacedMergeCarriesTheVersionLink(t *testing.T) {
+	base, cleanup := setupPebbleStore(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	partnerPath := filepath.Join(dir, "partner.mp3")
+	newPath := filepath.Join(dir, "copy.mp3")
+	require.NoError(t, os.WriteFile(partnerPath, []byte("identical bytes"), 0o644))
+	require.NoError(t, os.WriteFile(newPath, []byte("identical bytes"), 0o644))
+
+	hash, err := ComputeFileHash(partnerPath)
+	require.NoError(t, err)
+	partner, err := base.CreateBook(&database.Book{
+		FilePath: partnerPath,
+		Title:    "Partner",
+		FileHash: &hash,
+	})
+	require.NoError(t, err)
+
+	raced := &racedCreateStore{scannerStore: base, target: newPath}
+	SetStore(raced)
+	defer SetStore(nil)
+
+	require.NoError(t, saveBookToDatabase(context.Background(), &Book{
+		FilePath: newPath,
+		Title:    "Raced Copy",
+		FileHash: hash,
+	}))
+	require.NotEmpty(t, raced.rowID, "the fixture never created the racing row")
+
+	// The hash-duplicate branch grouped the partner. The row that won the race
+	// must be in that same group, or the partner is a group of one.
+	partnerAfter, err := base.GetBookByID(partner.ID)
+	require.NoError(t, err)
+	require.NotNil(t, partnerAfter.VersionGroupID)
+	require.NotEmpty(t, *partnerAfter.VersionGroupID,
+		"the hash-duplicate branch did not group the partner; the fixture no longer exercises the branch")
+
+	racedRow, err := base.GetBookByID(raced.rowID)
+	require.NoError(t, err)
+	require.NotNil(t, racedRow.VersionGroupID,
+		"the row that won the race carries no version group, so partner %s is stranded in a group of one",
+		partner.ID)
+	require.Equal(t, *partnerAfter.VersionGroupID, *racedRow.VersionGroupID)
 }
