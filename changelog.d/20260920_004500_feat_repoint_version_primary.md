@@ -57,3 +57,14 @@
   longer side). Without it a complete single-file book that happens to be
   version-linked to one chapter of the imported copy passes every other check,
   and demoting it would hide a whole book while a lone chapter became primary.
+
+  The op takes the derived per-job concurrency key, so it serializes against
+  ITSELF — two concurrent runs would otherwise interleave a promote and a demote
+  on the same pair. It cannot also join `library.scan`'s lane: `ConcurrencyKey`
+  is one field and every maintenance def's key must be distinct. The scan
+  interlock is instead two layers: the fail-closed refusal to write while a scan
+  is running, plus both write closures re-asserting the `library_state` they
+  classified on against the row re-read under the write lock — so a scan that
+  starts mid-run and reverts organized→imported causes a skip, not a write from
+  a stale snapshot. That is stronger than the lane, because it holds per row and
+  at the instant of the write.

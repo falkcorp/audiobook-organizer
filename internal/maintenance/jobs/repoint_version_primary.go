@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
 // last-edited: 2026-09-20
 
@@ -120,17 +120,34 @@ func (j *repointVersionPrimaryJob) Description() string {
 		"Report only by default; send {\"apply\": true, \"dry_run\": false} to write. Keeps the version link intact."
 }
 
-// Policy is DefaultPolicy with library.scan's ConcurrencyKey, JOINING it the way
-// merge-chapter-groups does (never splitting it). The justification is specific,
-// not a generic "nothing applies during a scan": the scanner REVERTS
-// library_state organized->imported on every rescan (PR #3097), and
-// library_state is exactly the field this job's predicate keys on. A scan
-// running beside it could flip a twin between the snapshot and the write, so the
-// pair the report describes would not be the pair that was written.
+// Policy is DefaultPolicy, so registration derives the per-job key
+// "maintenance.repoint-version-primary" and this job serializes against ITSELF.
+//
+// It briefly declared library.scan's key instead, to join the lane the way
+// merge-chapter-groups does. That is not expressible: ConcurrencyKey is one
+// field and TestMaintenanceOpSerializesAgainstItself requires every maintenance
+// def's key to be DISTINCT, because a shared key turns independently-runnable
+// jobs into one queue. Joining library.scan therefore meant giving up
+// self-exclusion, and two concurrent runs of THIS job would interleave a promote
+// and a demote on the same pair — a correctness property, not a nicety. So
+// self-exclusion wins the field.
+//
+// What still guarantees the scan interlock, in two layers:
+//
+//  1. refuseDuringLibraryScan on the apply path (Run), failing CLOSED: a store
+//     that cannot list active operations refuses the write. That covers a scan
+//     already running when this job starts.
+//  2. The hazard the key was really bought for is a scan starting MID-RUN and
+//     reverting library_state organized->imported under this job (PR #3097),
+//     because library_state is what the predicate keys on. Lane serialization
+//     would have prevented that only at op granularity; instead BOTH write
+//     closures in applyPair re-assert the library_state they classified on,
+//     against the row ModifyBook re-read under its write lock. A row a scan
+//     flipped is then skipped and reported as drifted rather than written from a
+//     stale snapshot — a strictly stronger guarantee than the lane, because it
+//     holds per row and at the instant of the write.
 func (j *repointVersionPrimaryJob) Policy() maintenance.ExecutionPolicy {
-	p := maintenance.DefaultPolicy()
-	p.ConcurrencyKey = chapterLibraryScanKey
-	return p
+	return maintenance.DefaultPolicy()
 }
 
 // repointVersionPrimaryParams is the operator-facing parameter shape.
@@ -720,6 +737,12 @@ func (j *repointVersionPrimaryJob) applyPair(store maintenance.JobStore, d *repo
 			skip = "member was trashed"
 		case strPtr(cur.MergedIntoBookID) != "":
 			skip = "member was merged away"
+		case strPtr(cur.LibraryState) != repointStateImported:
+			// A library.scan running beside this job rewrites library_state
+			// (PR #3097), which is what classify keyed on. Re-asserting it here,
+			// on the row ModifyBook re-read under the write lock, is what
+			// replaces the library.scan ConcurrencyKey this job cannot declare.
+			skip = fmt.Sprintf("member's library_state became %q", strPtr(cur.LibraryState))
 		}
 		if skip != "" || alreadyTrue {
 			return database.ErrSkipBookWrite
@@ -757,6 +780,14 @@ func (j *repointVersionPrimaryJob) applyPair(store maintenance.JobStore, d *repo
 			dskip = "twin's flag became nil"
 		case !*cur.IsPrimaryVersion:
 			dskip = "twin was already demoted"
+		case strPtr(cur.LibraryState) != repointStateOrganized:
+			// Same reason as the promote closure: a concurrent scan must not be
+			// able to make this job demote a row it would no longer classify.
+			// NOTE this one lands in the "not demoted, no error" branch below,
+			// where the twin is STILL explicitly primary — so it is correctly
+			// reported as left_double_primary and not reverted into a group with
+			// no primary at all.
+			dskip = fmt.Sprintf("twin's library_state became %q", strPtr(cur.LibraryState))
 		}
 		if dskip != "" {
 			return database.ErrSkipBookWrite

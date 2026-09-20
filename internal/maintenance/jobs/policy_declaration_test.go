@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
 // last-edited: 2026-09-20
 
@@ -125,14 +125,14 @@ func TestPolicyIsBehaviourPreservingVersusTheBridge(t *testing.T) {
 	// scan, and sharing the key is what makes the registry serialize the two.
 	// It never changes library.scan's own key.
 	//
-	// repoint-version-primary JOINS the same key (added 2026-09-20) for a
-	// specific reason on top of the standing rule: a scan REVERTS library_state
-	// organized->imported on every pass (PR #3097), and library_state is the
-	// field that job's predicate keys on, so a concurrent scan could flip a
-	// twin between the snapshot and the write.
+	// repoint-version-primary briefly joined it too (2026-09-20) and was reverted
+	// the same day: ConcurrencyKey is ONE field, and internal/server's
+	// TestMaintenanceOpSerializesAgainstItself requires every maintenance def's
+	// key to be DISTINCT, so joining the lane meant giving up self-exclusion.
+	// That job now takes the derived per-job key and re-asserts library_state
+	// inside its write closures instead — see its Policy() doc.
 	wantKeyOverride := map[string]string{
-		"merge-chapter-groups":    "library.scan",
-		"repoint-version-primary": "library.scan",
+		"merge-chapter-groups": "library.scan",
 	}
 
 	jobs := maintenance.All()
