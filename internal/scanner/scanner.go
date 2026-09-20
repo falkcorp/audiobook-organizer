@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.104.0
+// version: 1.105.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-19
+// last-edited: 2026-09-20
 
 package scanner
 
@@ -2377,22 +2377,36 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		// list IS the positional order a book falls back to when its tag
 		// numbers are refused, so put it in natural order.
 		slices.SortFunc(segmentFiles, util.CompareNatural)
+	}
 
-		// Second site of the hard bound (the first is groupFilesIntoBooks).
-		// This one covers rows that ALREADY exist in the directory shape —
-		// the 205 measured books — because a rescan reaches this expansion
-		// through scanner.go's directory-book branch without going back
-		// through the grouping rule. Refuse rather than truncate: create no
-		// rows at all and say so loudly. The files are left unimported by this
-		// pass, which is the visible failure; a book silently owning an
-		// arbitrary 250 of them is the invisible one.
-		if len(segmentFiles) > maxDirectoryBookFiles {
-			scanLog.Warn("refusing to expand directory book %s into %d book_file rows (limit %d): "+
-				"a single flat directory holding this many audio files is an author shelf, not one book; "+
-				"no book_file rows were created for it",
-				logger.SanitizeLogValue(scanDir), len(segmentFiles), maxDirectoryBookFiles)
-			return normalizedPath
-		}
+	// The hard bound's backstop, on the SHAPE rather than on one branch.
+	//
+	// It sits here, after the directory expansion and OUTSIDE the
+	// `len(segmentFiles) == 0` block, because this is the single place where a
+	// book's rows are minted and every route arrives at it: the nil-segment
+	// directory expansion above, an album group's explicit list, and
+	// DetectMultiFileGroup's. Until 2026-09-20 it was inside that block, so an
+	// explicit 1,494-entry list walked straight past it and created the very
+	// rows the grouping refusal exists to prevent.
+	//
+	// What it does NOT do, despite an earlier comment here claiming it: cover
+	// the 205 already-oversized books. The `len(existing) > 0` branch above
+	// returns before this point, so a rescan of a book that already HAS its
+	// rows never reaches here. What it does cover is the window that made those
+	// books -- a directory-shaped row minted by one pass and expanded by a
+	// later one, which is the 10-day gap measured between the Gene Wolfe book's
+	// created_at and its book_files'.
+	//
+	// Refuse rather than truncate: create no rows at all and say so loudly. The
+	// files are left unimported by this pass, which is the visible failure; a
+	// book silently owning an arbitrary 250 of them is the invisible one.
+	if len(segmentFiles) > maxDirectoryBookFiles {
+		scanLog.Warn("refusing to give book %s %d book_file rows from %s (limit %d): "+
+			"a single flat directory holding this many audio files is an author shelf, not one book; "+
+			"no book_file rows were created for it",
+			logger.SanitizeLogValue(dbBook.ID), len(segmentFiles),
+			logger.SanitizeLogValue(scanDir), maxDirectoryBookFiles)
+		return normalizedPath
 	}
 
 	bfs := make([]*database.BookFile, 0, len(segmentFiles))
@@ -2743,7 +2757,20 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 			infos[i] = quickReadMultiFileInfo(f)
 			noteFile()
 		}
-		if ok, sorted := DetectMultiFileGroup(infos, DefaultMultiFileConfig()); ok {
+		if ok, sorted := DetectMultiFileGroup(infos, DefaultMultiFileConfig()); ok && len(sorted) > maxDirectoryBookFiles {
+			// The ceiling applies to this path too. This detector is the
+			// STRONGER rule -- a sequential naming pattern plus a shared album
+			// -- but "stronger" is not "unbounded": the 2,162-row organized
+			// folder measured on 2026-09-19 is this shape, and a book of that
+			// size is not made correct by the evidence being better. Fall
+			// through to the album pass below, where the same ceiling splits
+			// it, rather than returning one book here.
+			logging.Warn(ctx, "scanner refusing multi-file group: too many files for one book",
+				"dir", filepath.Dir(sorted[0].Path),
+				"count", len(sorted),
+				"limit", maxDirectoryBookFiles,
+			)
+		} else if ok {
 			segs := make([]string, len(sorted))
 			for i, s := range sorted {
 				segs[i] = s.Path
@@ -2775,78 +2802,97 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 	// work therefore collapsed into ONE book — measured in prod, a 1,494-file
 	// Gene Wolfe shelf recorded as a single 404.9-hour "book", and 205 books
 	// library-wide holding 20.1% of every book_file row. Two bounds now apply.
-	sampleSize := min(directoryBookFastSampleFiles, len(files))
-	if len(files) > directoryBookFastSampleMaxDirFiles {
-		// Bound 1 — above a small directory, three files are not evidence about
-		// the other N-3. Read EVERY file's album tag instead of sampling. This
-		// costs nothing over the alternative: the mixed-directory fallthrough
-		// below already calls quickReadAlbum on every file, so the worst case is
-		// the reads that branch was going to do anyway. A genuine single-album
-		// folder still agrees unanimously and still becomes one book.
-		sampleSize = len(files)
-	}
-
-	var firstAlbum string
-	allSame := true
-	for i := range sampleSize {
-		album := quickReadAlbum(files[i])
-		if album == "" {
-			allSame = false
-			break
+	// Bound 1, fast half. A SMALL directory keeps the three-file sample exactly
+	// as it was: three of N really is most of N here, and reading only three
+	// tags is why this shortcut exists. This is the common folder in the
+	// library, so it must not get slower.
+	if len(files) <= directoryBookFastSampleMaxDirFiles {
+		var firstAlbum string
+		allSame := true
+		for i := range min(directoryBookFastSampleFiles, len(files)) {
+			album := quickReadAlbum(files[i])
+			if album == "" {
+				allSame = false
+				break
+			}
+			if firstAlbum == "" {
+				firstAlbum = util.NormalizeString(album)
+			} else if util.NormalizeString(album) != firstAlbum {
+				allSame = false
+				break
+			}
 		}
-		if firstAlbum == "" {
-			firstAlbum = util.NormalizeString(album)
-		} else if util.NormalizeString(album) != firstAlbum {
-			allSame = false
-			break
+		if allSame && firstAlbum != "" && len(files) > 1 {
+			dirPath := filepath.Dir(files[0])
+			return []Book{{
+				FilePath: dirPath,
+				Format:   strings.ToLower(filepath.Ext(files[0])),
+			}}
 		}
 	}
 
-	// Bound 2 — a hard ceiling that no amount of agreement overrides. A single
-	// flat directory holding more than maxDirectoryBookFiles audio files is
-	// almost certainly an author shelf or a dumping ground, not one work; the
-	// measured library has a median of a handful of files per book and only 205
-	// of 76,267 books above 200. A unanimous album tag across 1,494 files is
-	// more likely one publisher writing the author's name into every ALBUM tag
-	// than a 400-hour book. Refuse the directory verdict and fall through to
-	// album grouping, which splits on the evidence it actually has — and say so
-	// in the scan log, because a silent refusal here is indistinguishable from
-	// the folder simply being mixed.
-	if allSame && firstAlbum != "" && len(files) > maxDirectoryBookFiles {
-		logging.Warn(ctx, "scanner refusing directory-book verdict: too many files in one flat directory",
-			"dir", filepath.Dir(files[0]),
-			"count", len(files),
-			"limit", maxDirectoryBookFiles,
-			"album", firstAlbum,
-		)
-		allSame = false
-	}
-
-	// If all sampled files share the same album and there are multiple files,
-	// treat the entire directory as a single multi-file book
-	if allSame && firstAlbum != "" && len(files) > 1 {
-		dirPath := filepath.Dir(files[0])
-		return []Book{{
-			FilePath: dirPath,
-			Format:   strings.ToLower(filepath.Ext(files[0])),
-		}}
-	}
-
-	// Mixed directory — group by album, create one book per album group
+	// ONE album-tag pass for everything else, feeding BOTH the unanimity test
+	// (bound 1's slow half) and the mixed-directory grouping below.
+	//
+	// Deliberately one pass and not two. A first cut of this fix ran a separate
+	// unanimity loop before this one, so a large unanimous folder read every
+	// album tag TWICE -- in the function whose own doc comment calls this the
+	// longest uninterrupted stretch of a scan, and on exactly the folders the
+	// stuck-op watchdog kills. The map below answers both questions, and the
+	// ctx check and noteFile() checkpoint cover the whole of it.
 	albumGroups := make(map[string][]string) // normalized album -> file paths
 	var noAlbum []string
 	for _, f := range files {
+		// A cancel not observed in this loop is a cancel not observed for
+		// minutes on a flat library. Returning nil (partial) is safe: the
+		// caller discards it on ctx error.
+		if ctx.Err() != nil {
+			return nil
+		}
 		album := quickReadAlbum(f)
-		// This is the other unbounded tag-reading pass, and the one a flat
-		// library actually hits: a folder of many unrelated books fails the
-		// multi-file-group check above and lands here, reading tags from every
-		// file with no checkpoint of its own.
 		noteFile()
 		if album == "" {
 			noAlbum = append(noAlbum, f)
 		} else {
 			key := util.NormalizeString(album)
 			albumGroups[key] = append(albumGroups[key], f)
+		}
+	}
+
+	// Bound 1, slow half + bound 2. Above a small directory, three files are
+	// not evidence about the other N-3, so the directory verdict now requires
+	// EVERY file to carry the same album tag -- which the pass above has just
+	// established exactly.
+	//
+	// Bound 2 is the hard ceiling that no amount of agreement overrides. A
+	// single flat directory holding more than maxDirectoryBookFiles audio files
+	// is almost certainly an author shelf or a dumping ground, not one work:
+	// the measured library has a median of a handful of files per book and only
+	// 205 of 76,267 books above 200. A unanimous album tag across 1,494 files
+	// is more likely one publisher writing the author's name into every ALBUM
+	// tag than a 400-hour book. The refusal is logged, because a silent one is
+	// indistinguishable from the folder simply being mixed -- and it must not
+	// be allowed to leak out through the album-group branch below either, which
+	// is what the same ceiling there is for.
+	if len(noAlbum) == 0 && len(albumGroups) == 1 && len(files) > 1 {
+		for album, group := range albumGroups {
+			if len(group) != len(files) {
+				break
+			}
+			if len(files) > maxDirectoryBookFiles {
+				logging.Warn(ctx, "scanner refusing directory-book verdict: too many files in one flat directory",
+					"dir", filepath.Dir(files[0]),
+					"count", len(files),
+					"limit", maxDirectoryBookFiles,
+					"album", album,
+				)
+				break
+			}
+			dirPath := filepath.Dir(files[0])
+			return []Book{{
+				FilePath: dirPath,
+				Format:   strings.ToLower(filepath.Ext(files[0])),
+			}}
 		}
 	}
 
@@ -2879,6 +2925,32 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 
 	var books []Book
 	for _, albumFiles := range albumGroups {
+		// The same ceiling as the directory verdict, on the same SHAPE. A
+		// unanimous author shelf that the verdict above refuses lands here as
+		// ONE album group holding every file, and emitting it as a single book
+		// with an N-entry SegmentFiles recreates precisely the record the
+		// refusal was for -- a 1,494-row "book" -- differing only in that its
+		// FilePath is a file rather than the directory. Refusing in one place
+		// and not the other is not a bound at all.
+		//
+		// One book per file is the fallback, because that is what the evidence
+		// supports: a shared ALBUM tag across this many files in one flat
+		// folder is a publisher's author name, not a claim that they are one
+		// work, and there is nothing else here to group on.
+		if len(albumFiles) > maxDirectoryBookFiles {
+			logging.Warn(ctx, "scanner refusing album group: too many files for one book",
+				"dir", filepath.Dir(albumFiles[0]),
+				"count", len(albumFiles),
+				"limit", maxDirectoryBookFiles,
+			)
+			for _, f := range albumFiles {
+				books = append(books, Book{
+					FilePath: f,
+					Format:   strings.ToLower(filepath.Ext(f)),
+				})
+			}
+			continue
+		}
 		if len(albumFiles) > 1 {
 			// Multi-file book: use first file as FilePath, store all files for
 			// segment creation. The files arrive in os.ReadDir (alphabetical)
@@ -3346,10 +3418,12 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				if dbBook.VersionGroupID != nil && *dbBook.VersionGroupID != "" {
 					groupID, primary := *dbBook.VersionGroupID, dbBook.IsPrimaryVersion
 					joined := false
+					var heldGroup string
 					if _, merr := getStore().ModifyBook(raced.ID, func(fresh *database.Book) error {
 						// A row another writer already grouped keeps that
 						// group; two groups for one row is worse than one.
 						if fresh.VersionGroupID != nil && *fresh.VersionGroupID != "" {
+							heldGroup = *fresh.VersionGroupID
 							return database.ErrSkipBookWrite
 						}
 						fresh.VersionGroupID = &groupID
@@ -3359,10 +3433,29 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					}); merr != nil {
 						defaultLog.Warn("could not join raced row %s (%s) to version group %s: %v",
 							raced.ID, book.FilePath, groupID, merr)
-					} else if joined {
-						// The same follow the create path does: the ABS sync
-						// identity and the listening position keyed to the
-						// superseded ULID have to move to the row that won.
+					} else if !joined {
+						// ErrSkipBookWrite comes back as (unmodified row, nil),
+						// so this is the branch that used to say nothing at all.
+						// It is not benign: the partner was already linked into
+						// `groupID` by linkVersionGroup above and now has no
+						// second member, and if this row was elected primary the
+						// group has no primary either (#3481's rule reads a nil
+						// or false primary as NOT primary). Neither is
+						// repairable from here -- unwinding the partner's link
+						// would race the writer that grouped this row -- so name
+						// it loudly for the reconcile pass that owns group
+						// repair, rather than leaving it to be inferred from row
+						// counts.
+						defaultLog.Warn("raced row %s (%s) already belongs to version group %q, "+
+							"so it did not join %q; that group may now hold only %s and may have no primary "+
+							"(reconcile elect-missing-primaries owns the repair)",
+							raced.ID, book.FilePath, heldGroup, groupID, supersededBookID)
+					}
+					if joined || heldGroup != "" {
+						// The ABS sync identity and the listening position keyed
+						// to the superseded ULID follow the row that won either
+						// way: it is the record at this path now, whichever
+						// group it ended up in.
 						followSyncIdentityOnVersionLink(supersededBookID, supersededBookPath, raced.ID)
 					}
 				}
