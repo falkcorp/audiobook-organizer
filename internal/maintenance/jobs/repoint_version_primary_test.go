@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repoint_version_primary_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c3f1b52-6a04-4de7-9b18-2f7a05c9d6e1
 // last-edited: 2026-09-20
 
@@ -443,6 +443,192 @@ func TestRepointVersionPrimary_PartiallyRepointedGroupStaysInScope(t *testing.T)
 	if rvpFlag(t, s, imported[0].ID) != "true" || rvpFlag(t, s, twins[0].ID) != "false" {
 		t.Fatalf("last pair not repointed: %s / %s",
 			rvpFlag(t, s, imported[0].ID), rvpFlag(t, s, twins[0].ID))
+	}
+}
+
+// rvpPrimaryCount counts the version group's primaries BOTH ways, because the
+// two helpers disagree about nil: effective (nil = primary) and strict
+// (elect_primaries' countsAsPrimary, nil = not primary). A correct outcome is
+// exactly one by each.
+func rvpPrimaryCount(t *testing.T, s *database.PebbleStore, gid string) (effective, strict int) {
+	t.Helper()
+	books, err := s.GetAllBooksCore(0, 0)
+	if err != nil {
+		t.Fatalf("GetAllBooksCore: %v", err)
+	}
+	for i := range books {
+		b := &books[i]
+		if strPtr(b.VersionGroupID) != gid || b.IsSoftDeleted() {
+			continue
+		}
+		if database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion) {
+			effective++
+		}
+		if b.IsPrimaryVersion != nil && *b.IsPrimaryVersion && repointElectable(b) {
+			strict++
+		}
+	}
+	return effective, strict
+}
+
+// rvpTwinStore subverts the TWIN's write the way a concurrent writer would:
+// ErrSkipBookWrite territory (already demoted / left the group) or a row that no
+// longer exists. Both return (row-or-nil, nil) from ModifyBook — NOT an error —
+// so a recovery path that cannot tell "skipped" from "failed" reverts a
+// promotion that should have stood.
+type rvpTwinStore struct {
+	maintenance.JobStore
+	inner  *database.PebbleStore
+	twinID string
+	// before runs against the twin just before the job's ModifyBook reaches it.
+	before func(*database.Book)
+	// deleteTwin makes the twin's row vanish instead.
+	deleteTwin bool
+	done       bool
+}
+
+func (f *rvpTwinStore) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
+	return f.inner.ListActiveOperationsV2()
+}
+
+func (f *rvpTwinStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if id == f.twinID && !f.done {
+		f.done = true
+		if f.deleteTwin {
+			return nil, nil // the row is gone: ModifyBook's (nil, nil)
+		}
+		if _, err := f.inner.ModifyBook(id, func(b *database.Book) error { f.before(b); return nil }); err != nil {
+			return nil, err
+		}
+	}
+	return f.inner.ModifyBook(id, fn)
+}
+
+// TestRepointVersionPrimary_SkippedDemoteIsNotAFailedDemote is the regression
+// for the revert path. ModifyBook answers "wrote", "skipped" and "no such row"
+// all with a nil error. In the skip cases the target state ALREADY holds —
+// the promoted member is the group's one primary — and reverting there would
+// leave the group with ZERO primaries, hiding both books from the library list
+// and from ABS. The revert must fire only on a genuine error.
+func TestRepointVersionPrimary_SkippedDemoteIsNotAFailedDemote(t *testing.T) {
+	fls := false
+	cases := []struct {
+		name   string
+		before func(*database.Book)
+		gone   bool
+	}{
+		{"twin already demoted", func(b *database.Book) { b.IsPrimaryVersion = &fls }, false},
+		{"twin left the version group", func(b *database.Book) { b.VersionGroupID = rvpStr("vg-elsewhere") }, false},
+		{"twin row is gone", nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := ddRealStore(t)
+			imported, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 2, "vg")
+			fs := &rvpTwinStore{JobStore: s, inner: s, twinID: twins[0].ID, before: tc.before, deleteTwin: tc.gone}
+
+			res := rvpRun(t, fs, `{"apply":true}`, false)
+			if res.Counts[bucketRepointed] != 2 {
+				t.Fatalf("a SKIPPED demote was treated as a failure: %+v", res.Counts)
+			}
+			// The promotion must STAND: reverting it would empty the group.
+			if got := rvpFlag(t, s, imported[0].ID); got != "true" {
+				t.Fatalf("promotion was reverted over a skipped demote: flag=%s", got)
+			}
+			eff, strict := rvpPrimaryCount(t, s, "vg-1")
+			if eff != 1 || strict != 1 {
+				t.Fatalf("version group vg-1 has effective=%d strict=%d primaries, want 1/1", eff, strict)
+			}
+		})
+	}
+}
+
+// TestRepointVersionPrimary_TwinFlagWentNilIsReportedNotReverted: a twin whose
+// flag became nil reads as primary to EffectiveIsPrimaryVersion, so with the
+// member explicit true the group has TWO effective primaries. Reverting would
+// swap that for zero by countsAsPrimary. Both are hand fixes; only one hides the
+// books, so this is reported and the run does not complete green.
+func TestRepointVersionPrimary_TwinFlagWentNilIsReportedNotReverted(t *testing.T) {
+	s := ddRealStore(t)
+	imported, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 2, "vg")
+	fs := &rvpTwinStore{JobStore: s, inner: s, twinID: twins[0].ID,
+		before: func(b *database.Book) { b.IsPrimaryVersion = nil }}
+
+	res, err := rvpTryRun(t, fs, `{"apply":true}`, false)
+	if err == nil {
+		t.Fatal("a pair left with an ambiguous twin completed green")
+	}
+	if res.Counts[bucketLeftDoublePrimary] != 1 {
+		t.Fatalf("ambiguous twin not reported: %+v", res.Counts)
+	}
+	if got := rvpFlag(t, s, imported[0].ID); got != "true" {
+		t.Fatalf("promotion was reverted into a zero-primary group: flag=%s", got)
+	}
+}
+
+// TestRepointVersionPrimary_AlreadyPromotedMemberStillDemotesItsTwin: if the
+// member is already explicitly true when the write lands, returning early would
+// leave TWO primaries — and a re-run could not heal it, because classify stops
+// such a member at already_primary and never reaches applyPair. So the demote
+// still runs.
+func TestRepointVersionPrimary_AlreadyPromotedMemberStillDemotesItsTwin(t *testing.T) {
+	s := ddRealStore(t)
+	imported, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 2, "vg")
+	tru := true
+	fs := &rvpTwinStore{JobStore: s, inner: s, twinID: imported[0].ID,
+		before: func(b *database.Book) { b.IsPrimaryVersion = &tru }}
+
+	res := rvpRun(t, fs, `{"apply":true}`, false)
+	if res.Counts[bucketRepointed] != 2 {
+		t.Fatalf("already-promoted member did not finish its pair: %+v", res.Counts)
+	}
+	if rvpFlag(t, s, twins[0].ID) != "false" {
+		t.Fatalf("twin left primary beside an already-promoted member: flag=%s", rvpFlag(t, s, twins[0].ID))
+	}
+	eff, strict := rvpPrimaryCount(t, s, "vg-1")
+	if eff != 1 || strict != 1 {
+		t.Fatalf("version group vg-1 has effective=%d strict=%d primaries, want 1/1", eff, strict)
+	}
+}
+
+// TestRepointVersionPrimary_TwinDurationMustCorroborate: nothing else in the
+// predicate distinguishes a copy of THIS CHAPTER from a complete single-file
+// book that happens to be version-linked to one chapter. Demoting the latter
+// would hide a whole book while a lone chapter became primary.
+func TestRepointVersionPrimary_TwinDurationMustCorroborate(t *testing.T) {
+	s := ddRealStore(t)
+	_, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 3, "vg")
+	// twins[0] is really a whole book; twins[1] never had its duration measured.
+	if _, err := s.ModifyBook(twins[0].ID, func(b *database.Book) error {
+		b.Duration = chIntP(1200 * 12)
+		return nil
+	}); err != nil {
+		t.Fatalf("ModifyBook: %v", err)
+	}
+	if _, err := s.ModifyBook(twins[1].ID, func(b *database.Book) error {
+		b.Duration = nil
+		return nil
+	}); err != nil {
+		t.Fatalf("ModifyBook: %v", err)
+	}
+
+	res := rvpRun(t, s, `{"apply":true}`, false)
+	if res.Counts[bucketDurationMismatch] != 2 || res.Counts[bucketRepointed] != 1 {
+		t.Fatalf("duration gate: %+v", res.Counts)
+	}
+	if rvpFlag(t, s, twins[0].ID) != "true" || rvpFlag(t, s, twins[1].ID) != "true" {
+		t.Fatalf("an uncorroborated twin was demoted")
+	}
+	// A couple of seconds of rounding slack still qualifies.
+	if _, err := s.ModifyBook(twins[0].ID, func(b *database.Book) error {
+		b.Duration = chIntP(1201)
+		return nil
+	}); err != nil {
+		t.Fatalf("ModifyBook: %v", err)
+	}
+	again := rvpRun(t, s, `{"apply":true}`, false)
+	if again.Counts[bucketRepointed] != 1 || again.Counts[bucketDurationMismatch] != 1 {
+		t.Fatalf("1 s of rounding slack was refused: %+v", again.Counts)
 	}
 }
 

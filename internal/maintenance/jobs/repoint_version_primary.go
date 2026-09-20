@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
 // last-edited: 2026-09-20
 
@@ -215,6 +215,7 @@ const (
 	bucketTwinNotPrimary    = "twin_not_primary"
 	bucketTwinInChapterRun  = "twin_in_chapter_run"
 	bucketTwinNotSingleFile = "twin_not_single_file"
+	bucketDurationMismatch  = "duration_mismatch"
 	bucketStateMismatch     = "state_mismatch"
 	bucketNotElectable      = "not_electable"
 	bucketOwnerManualOnly   = "owner_manual_only"
@@ -562,6 +563,20 @@ func (j *repointVersionPrimaryJob) classify(store maintenance.JobStore, idx *rep
 		d.Reason = fmt.Sprintf("twin library_state is %q, want %q", state, repointStateOrganized)
 		return d
 	}
+	// CORROBORATION. Everything above establishes the SHAPE of a duplicate pair;
+	// nothing yet establishes that the twin is a copy of this CHAPTER rather than
+	// a complete book. A single-file whole-book .m4b, organized, version-linked to
+	// one chapter of the imported copy, satisfies every check above — and
+	// demoting it would hide the whole book while a lone chapter became primary.
+	// The measured prod cases all show EXACT duration equality between the two
+	// sides (blocker-analysis note §2, "same duration" on every sampled pair), so
+	// the durations must agree, and an unknown duration on either side is refused
+	// rather than assumed.
+	if why := repointDurationAgrees(b, twin); why != "" {
+		d.Bucket = bucketDurationMismatch
+		d.Reason = why
+		return d
+	}
 	files, ferr := store.GetBookFiles(twin.ID)
 	if ferr != nil {
 		d.Bucket = bucketTwinNotSingleFile
@@ -577,6 +592,48 @@ func (j *repointVersionPrimaryJob) classify(store maintenance.JobStore, idx *rep
 	d.Reason = fmt.Sprintf("promote imported chapter %s, demote organized single-chapter twin %s (%s)",
 		filepath.Base(b.FilePath), twin.ID, filepath.Base(twin.FilePath))
 	return d
+}
+
+// repointDurationTolerance is how far the two sides' durations may differ and
+// still be called copies of each other: 2 seconds, or 1% of the longer side,
+// whichever is larger. The measured pairs agree EXACTLY, so this is slack for
+// re-probed durations rounding differently between the two rows, not a
+// similarity threshold. It is far tighter than the gap this gate exists to
+// catch — a whole book against one of its chapters, which differs by a factor,
+// not by a percent.
+const repointDurationTolerance = 2
+
+// repointDurationAgrees returns "" when the two rows' durations corroborate that
+// they are copies of each other, or the reason they do not. An unknown duration
+// on either side is refused: this gate is the only corroboration in the
+// predicate, so "not measured" must not read as "agrees".
+func repointDurationAgrees(member, twin *database.BookCore) string {
+	m, t := 0, 0
+	if member.Duration != nil {
+		m = *member.Duration
+	}
+	if twin.Duration != nil {
+		t = *twin.Duration
+	}
+	if m <= 0 || t <= 0 {
+		return fmt.Sprintf("duration unknown on one side (member=%ds twin=%ds); nothing corroborates that the twin is a copy of this chapter rather than a whole book", m, t)
+	}
+	diff := m - t
+	if diff < 0 {
+		diff = -diff
+	}
+	longer := m
+	if t > longer {
+		longer = t
+	}
+	tol := repointDurationTolerance
+	if pct := longer / 100; pct > tol {
+		tol = pct
+	}
+	if diff > tol {
+		return fmt.Sprintf("durations disagree (member=%ds twin=%ds, differ by %ds > %ds); the twin may be a whole book, not a copy of this chapter", m, t, diff, tol)
+	}
+	return ""
 }
 
 // repointElectable replicates reconcile/elect_primaries.go:203's electableRow
@@ -601,87 +658,168 @@ func repointElectable(b *database.BookCore) bool {
 // Invisible is worse than duplicated, so the transient state is the double, and
 // it is only ever transient by one write.
 //
-// If the demote fails, a compensating revert puts the promoted row back to
-// explicit false — restoring the exact pre-state, because the promotion
-// candidate is always explicitly false to begin with. The revert is itself a
-// guarded ModifyBook (revert only if the row is still the explicit true this
-// run wrote), so a concurrent legitimate promotion is not stomped. If the revert
-// ALSO fails, the pair is reported as left_double_primary with both ids and the
-// version group id — that list is what an operator hand-fixes, and it is kept
-// out of the generic error count for exactly that reason.
+// # A skipped demote is NOT a failed demote
 //
-// Every write goes through ModifyBook, which re-reads the row under its write
-// lock and applies the mutation there, so no concurrent commit lands between
-// read and write. Each mutation re-checks the precondition on that fresh row and
-// returns database.ErrSkipBookWrite when it no longer holds: a row that changed
-// underneath is SKIPPED and reported as drifted, never clobbered. (ModifyBook
-// returns the unmodified row and a nil error in that case, which is
-// indistinguishable from success by the return value alone — hence the explicit
-// `wrote` flag set inside each closure.)
+// ModifyBook answers three different things with a nil error: it wrote, it hit
+// ErrSkipBookWrite (returning the unmodified row), or the row does not exist
+// (returning nil, nil). So "did not demote" covers four situations, and in THREE
+// of them the state this job wants ALREADY HOLDS — the twin was demoted by
+// something else, it left the version group, or its row is gone — leaving the
+// promoted member as the group's one primary.
+//
+// Reverting there would write the member back to explicit false and leave the
+// group with ZERO primaries by both helpers: both books disappear from the
+// library list and from ABS. That is precisely the harm the promote-first
+// ordering above exists to make impossible, reintroduced on the recovery path.
+// It needs no exotic interleaving — a deleted twin is enough — and the snapshot
+// is minutes old by the time the last pair is written, while ConcurrencyKey
+// "library.scan" does not serialize this job against elect-missing-primaries or
+// a dedup merge, both of which write this same field.
+//
+// So the revert fires ONLY when the demote genuinely ERRORED (demoteErr != nil),
+// which is the only case in which the twin is still presumed primary. On a skip
+// the twin's fresh row decides:
+//
+//   - gone, out of the group, or explicitly false -> the target state holds;
+//     counted as repointed.
+//   - flag became nil -> reported as left_double_primary and NOT reverted: nil
+//     reads as primary to EffectiveIsPrimaryVersion, so with the member explicit
+//     true the group has two effective primaries, and reverting would swap that
+//     for zero by countsAsPrimary. Both are hand fixes; only one of them hides
+//     the books.
+//
+// The revert is guarded on the row still being explicitly true AND still in the
+// group, so a member that moved groups is not demoted inside its new one. The
+// guard CANNOT distinguish this run's own true from a concurrent legitimate
+// promotion — nothing in the row records who wrote it. That is safe only because
+// the revert now runs solely in the demote-errored branch, where the twin is
+// still primary, so writing the member back to false leaves exactly one primary
+// (the twin) and restores the pre-state. It is not a general-purpose revert.
+//
+// If the revert also fails, the pair is reported as left_double_primary with
+// both ids and the version group id — that list is what an operator hand-fixes,
+// and it errors the run (Run's tally) rather than completing green.
 func (j *repointVersionPrimaryJob) applyPair(store maintenance.JobStore, d *repointPairDecision) {
 	tru, fls := true, false
 	gid := d.VersionGroupID
 
-	promoted := false
-	if _, err := store.ModifyBook(d.PromoteBookID, func(cur *database.Book) error {
-		if strPtr(cur.VersionGroupID) != gid ||
-			cur.IsPrimaryVersion == nil || *cur.IsPrimaryVersion ||
-			cur.IsSoftDeleted() || strPtr(cur.MergedIntoBookID) != "" {
+	// PROMOTE. Each skip reason is captured, because they are not equivalent:
+	// "already explicitly true" means a previous attempt got this far and the
+	// pair must still be finished, while the others mean the member is no longer
+	// the row this run classified.
+	promoted, alreadyTrue, skip := false, false, ""
+	row, err := store.ModifyBook(d.PromoteBookID, func(cur *database.Book) error {
+		switch {
+		case strPtr(cur.VersionGroupID) != gid:
+			skip = "member left version group " + gid
+		case cur.IsPrimaryVersion != nil && *cur.IsPrimaryVersion:
+			alreadyTrue = true
+		case cur.IsPrimaryVersion == nil:
+			skip = "member's flag became nil"
+		case cur.IsSoftDeleted():
+			skip = "member was trashed"
+		case strPtr(cur.MergedIntoBookID) != "":
+			skip = "member was merged away"
+		}
+		if skip != "" || alreadyTrue {
 			return database.ErrSkipBookWrite
 		}
 		cur.IsPrimaryVersion = &tru
 		promoted = true
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		d.Bucket = bucketWriteFailed
 		d.Reason = fmt.Sprintf("promote %s failed, nothing written: %v", d.PromoteBookID, err)
 		return
 	}
-	if !promoted {
+	if row == nil {
 		d.Bucket = bucketDrifted
-		d.Reason = "member changed underneath between detection and the write; skipped, not clobbered"
+		d.Reason = fmt.Sprintf("member %s no longer exists; nothing written", d.PromoteBookID)
 		return
 	}
+	if !promoted && !alreadyTrue {
+		d.Bucket = bucketDrifted
+		d.Reason = skip + "; skipped, not clobbered"
+		return
+	}
+	// alreadyTrue falls THROUGH to the demote deliberately. Returning here would
+	// leave a member that is primary beside a twin that still is — two primaries,
+	// and a re-run cannot heal it because classify stops such a member at
+	// already_primary and never reaches this function.
 
-	demoted := false
-	demoteErr := error(nil)
-	if _, err := store.ModifyBook(d.DemoteBookID, func(cur *database.Book) error {
-		if strPtr(cur.VersionGroupID) != gid ||
-			cur.IsPrimaryVersion == nil || !*cur.IsPrimaryVersion {
+	demoted, dskip := false, ""
+	twin, demoteErr := store.ModifyBook(d.DemoteBookID, func(cur *database.Book) error {
+		switch {
+		case strPtr(cur.VersionGroupID) != gid:
+			dskip = "twin left version group " + gid
+		case cur.IsPrimaryVersion == nil:
+			dskip = "twin's flag became nil"
+		case !*cur.IsPrimaryVersion:
+			dskip = "twin was already demoted"
+		}
+		if dskip != "" {
 			return database.ErrSkipBookWrite
 		}
 		cur.IsPrimaryVersion = &fls
 		demoted = true
 		return nil
-	}); err != nil {
-		demoteErr = err
-	}
+	})
 	if demoted {
-		d.Bucket = bucketRepointed
-		d.Reason = fmt.Sprintf("primary moved from %s to %s; version link untouched", d.DemoteBookID, d.PromoteBookID)
+		j.recordRepointed(d, "primary moved from "+d.DemoteBookID+" to "+d.PromoteBookID+"; version link untouched")
 		return
 	}
 
-	// Compensating revert: restore the promoted row's explicit false.
+	if demoteErr == nil {
+		// The twin was not written and the store did not fail, so the twin's
+		// own state says whether the job is already done.
+		if twin == nil || strPtr(twin.VersionGroupID) != gid ||
+			(twin.IsPrimaryVersion != nil && !*twin.IsPrimaryVersion) {
+			where := "twin row is gone"
+			if twin != nil {
+				where = dskip
+			}
+			j.recordRepointed(d, fmt.Sprintf("%s: %s already counts as the group's only primary; no revert",
+				where, d.PromoteBookID))
+			return
+		}
+		d.Bucket = bucketLeftDoublePrimary
+		d.Reason = fmt.Sprintf("twin %s is not explicitly non-primary (%s) while %s is explicit true, so version group %s reads as TWO primaries; NOT reverted, because reverting would leave it with none",
+			d.DemoteBookID, dskip, d.PromoteBookID, gid)
+		return
+	}
+
+	// The demote ERRORED: the twin is still presumed primary, so putting the
+	// member back to explicit false restores the pre-state exactly.
 	reverted := false
 	_, rerr := store.ModifyBook(d.PromoteBookID, func(cur *database.Book) error {
-		if cur.IsPrimaryVersion == nil || !*cur.IsPrimaryVersion {
+		if strPtr(cur.VersionGroupID) != gid || cur.IsPrimaryVersion == nil || !*cur.IsPrimaryVersion {
 			return database.ErrSkipBookWrite
 		}
 		cur.IsPrimaryVersion = &fls
 		reverted = true
 		return nil
 	})
-	why := "twin changed underneath"
-	if demoteErr != nil {
-		why = demoteErr.Error()
-	}
 	if reverted && rerr == nil {
 		d.Bucket = bucketDrifted
-		d.Reason = fmt.Sprintf("demote of %s not applied (%s); promotion reverted, pair unchanged", d.DemoteBookID, why)
+		d.Reason = fmt.Sprintf("demote of %s errored (%v); promotion reverted, pair unchanged", d.DemoteBookID, demoteErr)
 		return
 	}
 	d.Bucket = bucketLeftDoublePrimary
-	d.Reason = fmt.Sprintf("demote of %s not applied (%s) and the revert of %s did not restore it (reverted=%t err=%v); version group %s now has TWO primaries and needs a manual fix",
-		d.DemoteBookID, why, d.PromoteBookID, reverted, rerr, gid)
+	d.Reason = fmt.Sprintf("demote of %s errored (%v) and the revert of %s did not restore it (reverted=%t err=%v); version group %s now has TWO primaries and needs a manual fix",
+		d.DemoteBookID, demoteErr, d.PromoteBookID, reverted, rerr, gid)
+}
+
+// recordRepointed buckets a finished pair AND logs it.
+//
+// With no undo journal, the whole reversal record is the SetResult payload,
+// which is written once after every pair. A truncated or lost payload would take
+// the record of ~1,426 flips with it, so each pair is also logged at Info as it
+// lands, with both ids, both PRIOR tri-states and the version group — everything
+// a manual reversal needs.
+func (j *repointVersionPrimaryJob) recordRepointed(d *repointPairDecision, reason string) {
+	d.Bucket = bucketRepointed
+	d.Reason = reason
+	chapterLog.Info("repoint-version-primary: repointed version_group=%s promote=%s (was %s) demote=%s (was %s): %s",
+		d.VersionGroupID, d.PromoteBookID, d.PromotePriorFlag, d.DemoteBookID, d.DemotePriorFlag, reason)
 }
