@@ -89,6 +89,8 @@ type journalCountingParser struct {
 	// short makes it return one fewer result than asked, to exercise the
 	// alignment guard.
 	short bool
+	// nilFor names filenames the model has nothing to say about.
+	nilFor map[string]bool
 }
 
 func (p *journalCountingParser) ParseBatch(_ context.Context, filenames []string) ([]*ai.ParsedMetadata, error) {
@@ -106,6 +108,9 @@ func (p *journalCountingParser) ParseBatch(_ context.Context, filenames []string
 	}
 	out := make([]*ai.ParsedMetadata, n)
 	for i := 0; i < n; i++ {
+		if p.nilFor[filenames[i]] {
+			continue // leave nil: the model had nothing for this one
+		}
 		out[i] = &ai.ParsedMetadata{Title: "T:" + filenames[i], Author: "A", Confidence: "high"}
 	}
 	return out, nil
@@ -290,5 +295,44 @@ func TestWithParseJournal_StoreWithoutRawKVDegrades(t *testing.T) {
 	wrapped := withParseJournal(inner, notAKV{}, logger.New("test"))
 	if wrapped != aiBatchParser(inner) {
 		t.Fatalf("expected the parser to be returned unchanged, got %T", wrapped)
+	}
+}
+
+// A filename the model has NOTHING to say about must be journalled too.
+// Otherwise the least useful filenames are the ones re-sent to the model on
+// every run, forever — the exact waste this decorator exists to remove.
+//
+// This is the path the other tests never reach: journalCountingParser returns a
+// result for every input unless told otherwise, so without this fixture a nil
+// mishandling would sit behind a fully green suite.
+func TestJournalledParser_NilResultIsJournalledAndStaysNil(t *testing.T) {
+	kv := newParseKV()
+	names := []string{"known.mp3", "mystery.mp3"}
+
+	first := &journalCountingParser{nilFor: map[string]bool{"mystery.mp3": true}}
+	got1, err := newTestJournalledParser(t, first, kv).ParseBatch(context.Background(), names)
+	if err != nil {
+		t.Fatalf("first parse: %v", err)
+	}
+	if got1[1] != nil {
+		t.Fatalf("fixture did not produce a nil result: %+v", got1[1])
+	}
+
+	second := &journalCountingParser{nilFor: map[string]bool{"mystery.mp3": true}}
+	got2, err := newTestJournalledParser(t, second, kv).ParseBatch(context.Background(), names)
+	if err != nil {
+		t.Fatalf("second parse: %v", err)
+	}
+	if second.calls != 0 {
+		t.Fatalf("the model was re-asked %v after a restart; a nil result must be journalled too",
+			second.totalAsked())
+	}
+	// A journalled null must come back as a NIL result, never a zero-valued
+	// struct: that would turn "no answer" into an answer of empty strings.
+	if got2[1] != nil {
+		t.Fatalf("journalled nil came back as %+v; want nil", got2[1])
+	}
+	if got2[0] == nil || got2[0].Title != "T:known.mp3" {
+		t.Fatalf("the non-nil neighbour was lost: %+v", got2[0])
 	}
 }

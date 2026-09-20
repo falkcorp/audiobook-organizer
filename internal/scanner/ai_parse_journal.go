@@ -1,11 +1,12 @@
 // file: internal/scanner/ai_parse_journal.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d3f4b17-6c92-4e05-a71d-5f0b29ce8a46
 // last-edited: 2026-09-20
 
 package scanner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 
@@ -91,6 +92,8 @@ func (p *journalledParser) ParseBatch(ctx context.Context, filenames []string) (
 				misses = append(misses, i)
 				continue
 			}
+			// md may be nil here: a journalled "the model had nothing". That is
+			// a HIT, not a miss, and must not be re-asked.
 			out[i] = md
 		default:
 			misses = append(misses, i)
@@ -131,12 +134,16 @@ func (p *journalledParser) ParseBatch(ctx context.Context, filenames []string) (
 	for i, idx := range misses {
 		md := results[i]
 		out[idx] = md
-		if md == nil {
-			// The model had nothing for this filename. That IS a result — it is
-			// what re-asking would produce again — so journal it, otherwise the
-			// least useful filenames are the ones re-sent on every run.
-			continue
-		}
+		// A nil md IS journalled. The model was asked and had nothing to say,
+		// which is a result: re-asking the same filename would produce the same
+		// nothing. Skipping it would mean the LEAST useful filenames are the
+		// ones re-sent to the model on every single run, forever — the exact
+		// waste this decorator exists to remove. A later, better model gets its
+		// chance through an aiParsePromptVersion bump, which is what that
+		// constant is for.
+		//
+		// It round-trips as JSON null and decodeParsedMetadata maps null back to
+		// a nil result, so a journal hit is indistinguishable from a fresh nil.
 		if cerr := p.journal.Complete(aiParseContentKey(filenames[idx]), p.endpoint, p.model, md); cerr != nil {
 			// The result is valid and is still returned and applied; only the
 			// caching failed. The cost is that a restart re-asks for this one.
@@ -147,7 +154,21 @@ func (p *journalledParser) ParseBatch(ctx context.Context, filenames []string) (
 }
 
 // decodeParsedMetadata turns a stored journal entry back into a result.
+//
+// A stored JSON null is "the model had nothing for this filename" and must come
+// back as a NIL result, not a zero-valued one: unmarshalling null into a struct
+// leaves it zero and returning &that would turn "no answer" into an answer of
+// empty strings.
+//
+// The round trip is lossy for ParsedMetadata.numericCoercions, which is
+// unexported. That is harmless and already intended: the field exists only so
+// logNumericCoercions can report a coercion once, and it clears the field
+// afterwards precisely "so a cached copy does not log again"
+// (ai/openai_parser.go). Nothing reads it for behaviour.
 func decodeParsedMetadata(raw json.RawMessage) (*ai.ParsedMetadata, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, nil
+	}
 	var md ai.ParsedMetadata
 	if err := json.Unmarshal(raw, &md); err != nil {
 		return nil, err
