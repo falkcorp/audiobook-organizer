@@ -1,5 +1,5 @@
 // file: internal/reconcile/elect_primaries_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: aa557927-956b-41a5-a90b-6ef0093fdcbc
 // last-edited: 2026-09-19
 
@@ -185,7 +185,7 @@ func TestVersionGroupInvariant_ZeroPrimaryGroupsAreRepaired(t *testing.T) {
 			"If this is 0 the invariant check is vacuous and proves nothing.", len(bad), bad)
 	}
 
-	res, err := ElectMissingPrimaries(store, false)
+	res, err := ElectMissingPrimaries(store, false, nil)
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestElectMissingPrimaries_DryRunWritesNothing(t *testing.T) {
 		store.addElectBook(fmt.Sprintf("dry-%02d", i), fmt.Sprintf("Dry %02d", i), gid, false, base)
 	}
 
-	res, err := ElectMissingPrimaries(store, true)
+	res, err := ElectMissingPrimaries(store, true, nil)
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestElectMissingPrimaries_SkipsGroupThatGainedPrimary(t *testing.T) {
 		return out
 	}
 
-	res, err := ElectMissingPrimaries(store, false)
+	res, err := ElectMissingPrimaries(store, false, nil)
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestElectMissingPrimaries_NeverCrownsAMergeLoser(t *testing.T) {
 	store.addElectBook("survivor-elsewhere", "S", "vg-s", true, base)
 	store.markElectMerged("loser", "survivor-elsewhere")
 
-	res, err := ElectMissingPrimaries(store, false)
+	res, err := ElectMissingPrimaries(store, false, nil)
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestElectMissingPrimaries_AllMergedOrDeletedGroupStaysWithoutPrimary(t *tes
 		}
 	}
 
-	res, err := ElectMissingPrimaries(store, false)
+	res, err := ElectMissingPrimaries(store, false, nil)
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -489,7 +489,7 @@ func TestElectMissingPrimaries_WinnerMergedAfterGroupReadIsNotCrowned(t *testing
 		return members // the listing still shows w unmerged
 	}
 
-	res, err := ElectMissingPrimaries(store, false)
+	res, err := ElectMissingPrimaries(store, false, nil)
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestElectMissingPrimaries_MergedPrimaryDoesNotCount(t *testing.T) {
 	store.addElectBook("surv", "S", "vg-s", true, base)
 	store.markElectMerged("loser", "surv")
 
-	res, err := ElectMissingPrimaries(store, false)
+	res, err := ElectMissingPrimaries(store, false, nil)
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestElectMissingPrimaries_LoserOfDeadSurvivorIsElectable(t *testing.T) {
 	store.addElectBook("orphan", "O", "vg-d", false, base)
 	store.markElectMerged("orphan", "hard-deleted-survivor")
 
-	res, err := ElectMissingPrimaries(store, false)
+	res, err := ElectMissingPrimaries(store, false, nil)
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}

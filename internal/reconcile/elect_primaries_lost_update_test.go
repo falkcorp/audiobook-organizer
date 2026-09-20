@@ -1,7 +1,7 @@
 // file: internal/reconcile/elect_primaries_lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e7852bba-e5a0-4efe-980b-3c35ba39fb0d
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package reconcile
 
@@ -56,7 +56,7 @@ func TestElectMissingPrimaries_DoesNotRevertConcurrentColumns(t *testing.T) {
 	inner.addElectBook("solo", "Solo", "vg-solo", false, base)
 	store := electLostUpdateStore{inner}
 
-	res, err := ElectMissingPrimaries(store, false)
+	res, err := ElectMissingPrimaries(store, false, nil)
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
