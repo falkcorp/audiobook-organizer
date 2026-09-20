@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-09-20-unified-dedup-signal-store-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2f7a4c19-6b3d-4e82-9c05-1d8e7a6b3f40 -->
 <!-- last-edited: 2026-09-20 -->
 
@@ -100,15 +100,20 @@ same recording.
 - **Why not a decoded-PCM hash:** it would cost a full decode of the library (see cost
   below) and would still be brittle against decoder-version differences. Chromaprint
   already gives decode-level invariance.
-- **Cost:** one full sequential read of every present file — **681,180 files**, roughly
-  20 TB of audio (pool `bigdata` ~24 T, memory `project_dedup_sandbox`). It is
-  I/O-bound, not CPU-bound: at a pool-sequential 600 MB/s this is ~9-10 h of pure disk
-  time, and it will contend with anything else touching the pool. **Estimate, not a
-  measurement.**
-- **Compare:** a decoded-PCM hash needs the whole library decoded — ~760,000 h of audio at
-  a nominal 300x realtime ≈ 2,530 core-hours ≈ 6.6 days at 16 workers. Windowed
-  fingerprints decode only 3x120 s per file ≈ 68,000 h ≈ 227 core-hours. So a decode hash
-  is ~11x the windowed run; a demux hash is ~0 CPU and one disk pass.
+- **Cost:** one full sequential read of every present file — **681,180 files** (measured).
+  🔶 **The rest of this bullet is DERIVED FROM ASSUMPTIONS, not measured.** Audio volume is
+  taken as ~20 TB, inferred from the `bigdata` pool size (~24 T, memory
+  `project_dedup_sandbox`) — that is the *pool*, not the audio, and it is an upper bound.
+  Total runtime is taken as ~760,000 h from `76,267 books x ~10 h`, a round per-book mean
+  nobody has measured. **Before sizing a real run, replace both: `du` the library roots for
+  bytes, and sum `AcoustIDFingerprintDurationSec` over the 645,945 rows that carry it for
+  hours.** With those assumptions: at a pool-sequential 600 MB/s the demux pass is ~9-10 h
+  of pure disk time, and it will contend with anything else touching the pool.
+- **Compare (same assumptions):** a decoded-PCM hash needs the whole library decoded —
+  ~760,000 h at a nominal 300x realtime ≈ 2,530 core-hours ≈ 6.6 days at 16 workers.
+  Windowed fingerprints decode only 3x120 s per file ≈ 68,000 h ≈ 227 core-hours. The
+  **ratio (~11x) is robust** — both sides scale with the same unmeasured mean, so it
+  survives the assumption being wrong. The absolute hours do not.
 - **Sequencing verdict:** do **not** give it a dedicated pass ahead of windows. Attach it
   to the next pass that already reads every byte (the `file_hash` backfill of §1.1 reads
   head+tail only, so it does not qualify — but a `file_hash` *whole-file* variant and the
@@ -266,11 +271,12 @@ never loads them — the same rule `bookSigKeyPrefix` and `fpwinKeyPrefix` alrea
 sig:f:<file_id>          → FileSignals JSON     (per-file)
 sig:b:<book_id>          → BookSignals JSON     (per-book, derived from its files)
 sig_idx:<kind>:<bucket>:<entity_id> → (empty)   (bulk-read fan-out index)
+sig_dirty:<book_id>      → (empty)              (recompute queue, §2.4)
 ```
 
 `sig:` sorts outside `["book:", "book;")` and `["book_file:", "book_file;")`. Note the
 `fpwin_fail:` lesson (`fingerprint_window.go:66-69`): a rollback `DeleteRange` must cover
-`sig:` **and** `sig_idx:` as two ranges.
+`sig:`, `sig_idx:` **and** `sig_dirty:` as three ranges.
 
 This store **derives nothing new**. It is a *materialized read model*: every value in it is
 copied from the row or sidecar that already owns it (§1), with a provenance stamp. That is
@@ -453,7 +459,7 @@ Rules:
 1. A signal is `not_comparable` when either side's value is nil, when the two sides' `Kind`
    differs (a sampled hash vs a whole hash), when either side's stamp is stale, or when the
    comparator's own minimum is unmet (`MinUsefulFingerprintFrames = 80`,
-   `internal/fingerprint/fpcalc.go:88`).
+   `internal/fingerprint/fpcalc.go:90`).
 2. **`not_comparable` never enters the noisy-OR product and never subtracts.** It is
    carried through to the UI and to the stored breakdown, so the score is reproducible.
 3. A `disagree` outcome is *not* a zero-confidence agree. It is a distinct input, and it is
@@ -741,7 +747,7 @@ op dedup.calibrate-embedding-thresholds '{"model":"bge-m3","target_precision":0.
 **Step 3 — build the signal store on the sandbox and re-score.**
 
 ```bash
-op dedup.build-signal-store '{"concurrency":16}'                "$SBX"
+op dedup.build-signal-store '{"concurrency":16}'                "$SBX"   # NEW — does not exist yet, ships in PR 3 (§6)
 op dedup.rescore            '{"formula_version":"noisy-or-v2"}' "$SBX"
 op dedup.rescore-labeled-examples '{}'                          "$SBX"
 op dedup.calibrate-composite      '{}'                          "$SBX"
@@ -892,7 +898,11 @@ Source: `.claude/notes/oversized-and-split-books-2026-09-19.md`.
   `is_primary_version=true` in eight *singleton* version groups. That is 28 book pairs, and
   a naive per-file cross product on any one of them is ~1,494² ≈ 2.2 M comparisons — ~62 M
   for the 28 pairs, from one pathological book.
-- **Mitigation, explicit:** `maxFilesForPairwise = 64`. Above it the pair is compared at
+- **Mitigation, explicit:** `maxFilesForPairwise = 64` — **an invented constant, not a
+  derived one** (see §9.7). The reasoning is only that 64² = 4,096 comparisons per pair is
+  affordable and that a genuine audiobook rarely exceeds ~64 chapter files, so the cap bites
+  only on the pathological rows. It needs a measured file-count distribution before it is
+  trusted. Above the cap the pair is compared at
   **book level only** — `TotalDurationSec`, `FileCount`, `ChapterLayout`, `book_sig:`,
   title/author — and the per-file cross product is never built. `BookSignals.FileIDs` is
   capped with `FileIDsTruncated: true` so a consumer can never silently read a truncated
@@ -974,3 +984,7 @@ capability test, or the backfill will quietly no-op in production while passing 
 6. **PR 2 (one title normalizer):** it changes matching behaviour across dedup, deluge
    discovery and metafetch calibration at once. Land it alone, as proposed — or narrow it
    to dedup first and leave the other two?
+7. **`maxFilesForPairwise = 64` (§8.2):** this is the constant that actually defuses the
+   62 M-comparison bomb, and it is invented, not derived. Approve measuring the file-count
+   distribution first (one pass over `sig:b:`, or over `GET /api/v1/audiobooks`'s
+   `total_file_count`) and setting it at, say, the 99.9th percentile instead?
