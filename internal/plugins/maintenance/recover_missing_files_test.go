@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
 // last-edited: 2026-09-19
 
@@ -32,6 +32,9 @@ type recoverFakeStore struct {
 	cores   []database.BookFileCore
 	full    map[string][]database.BookFile
 	updates []database.BookFile
+	// batches counts UpdateBookFiles CALLS, so a test can prove the op pays one
+	// batched write per book rather than one per row. Guarded by mu.
+	batches int
 	// updateErr, when set, fails every row of UpdateBookFiles instead of writing — to exercise
 	// the write phase's update-error branch (UpdateErrs++, row not counted as repointed).
 	updateErr error
@@ -49,6 +52,9 @@ func (f *recoverFakeStore) GetBookFiles(bookID string) ([]database.BookFile, err
 // afterRow as NOT applied, exactly as PebbleStore.UpdateBookFiles does, so the
 // op's UpdateErrs / Repointed split is exercised for real.
 func (f *recoverFakeStore) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
+	f.mu.Lock()
+	f.batches++
+	f.mu.Unlock()
 	written := 0
 	var errs []error
 	for i, file := range files {

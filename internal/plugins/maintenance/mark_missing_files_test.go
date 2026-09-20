@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8b2e4f61-9c73-45a0-8d1e-2f6a7c904b3d
 // last-edited: 2026-09-19
 
@@ -29,6 +29,9 @@ type markFakeStore struct {
 	books   []database.BookCore
 	full    map[string][]database.BookFile
 	updates []database.BookFile
+	// batches counts UpdateBookFiles CALLS, so a test can prove the op pays one
+	// batched write per book rather than one per row. Guarded by mu.
+	batches int
 }
 
 func (f *markFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
@@ -66,6 +69,9 @@ func (f *markFakeStore) GetBookFiles(bookID string) ([]database.BookFile, error)
 // documents (one committed write per row, afterRow per row, ctx checked before
 // each row) rather than pretending the batch is atomic.
 func (f *markFakeStore) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
+	f.mu.Lock()
+	f.batches++
+	f.mu.Unlock()
 	written := 0
 	for i, file := range files {
 		if err := ctx.Err(); err != nil {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
 // last-edited: 2026-09-19
 
@@ -111,7 +111,11 @@ type repointPlan struct {
 	Repointable      int  `json:"repointable"`
 	Repointed        int  `json:"repointed"`
 	UpdateErrs       int  `json:"update_errs"`
-	CappedAt         int  `json:"capped_at,omitempty"`
+	// RecomputeErrs counts BOOKS whose rows were written but whose aggregate
+	// recompute then failed — separate from UpdateErrs, because those rows ARE
+	// written and re-running them would be wrong.
+	RecomputeErrs int `json:"recompute_errs"`
+	CappedAt      int `json:"capped_at,omitempty"`
 
 	// ReportPath is where the full per-row TSV was written.
 	ReportPath string `json:"report_path,omitempty"`
@@ -136,9 +140,9 @@ func (p repointPlan) summary() string {
 		mode = "APPLIED"
 	}
 	return fmt.Sprintf(
-		"%s scanned=%d missing=%d repointable=%d repointed=%d | rejected: no-shape=%d no-bytes=%d size-mismatch=%d collision=%d already-claimed=%d | update_errs=%d",
+		"%s scanned=%d missing=%d repointable=%d repointed=%d | rejected: no-shape=%d no-bytes=%d size-mismatch=%d collision=%d already-claimed=%d | update_errs=%d recompute_errs=%d",
 		mode, p.ScannedRows, p.MissingRows, p.Repointable, p.Repointed,
-		p.NoShape, p.NoCandidateBytes, p.SizeMismatch, p.TargetCollision, p.TargetClaimed, p.UpdateErrs)
+		p.NoShape, p.NoCandidateBytes, p.SizeMismatch, p.TargetCollision, p.TargetClaimed, p.UpdateErrs, p.RecomputeErrs)
 }
 
 func (p *Plugin) missingFileRepointDef() sdk.OperationDef {
@@ -527,7 +531,7 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 	// killed by the stuck-op watchdog. Grouping by book also makes the pool's
 	// partitions disjoint, so two workers can never race each other's recompute
 	// of the same book.
-	var repointed, updateErrs, rowsDone, booksDone atomic.Int64
+	var repointed, updateErrs, recomputeErrs, rowsDone, booksDone atomic.Int64
 	var standDownLost atomic.Bool
 	totalRewrites := len(rewrites)
 	groups := groupItemsByBook(rewrites,
@@ -605,6 +609,7 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 			},
 		})
 		updateErrs.Add(int64(out.RowErrs))
+		recomputeErrs.Add(int64(out.RecomputeErrs))
 		if out.RowErrs > 0 {
 			log.Warn("missing-file-repoint: update failed for some rows",
 				"book", bookID, "rows", len(rows), "row_errors", out.RowErrs)
@@ -613,6 +618,10 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 		if out.RecomputeErrs > 0 {
 			log.Warn("missing-file-repoint: paths written but the book's aggregates could not be recomputed",
 				"book", bookID, "books", out.RecomputeErrs)
+		}
+		if out.Cancelled {
+			log.Warn("missing-file-repoint: book's writes stopped early (cancelled or stand-down lost)",
+				"book", bookID, "planned", len(rows), "written", out.Applied)
 		}
 		return nil
 	}, registry.RunItemsOptions{
@@ -631,6 +640,7 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 	}
 	plan.Repointed = int(repointed.Load())
 	plan.UpdateErrs = int(updateErrs.Load())
+	plan.RecomputeErrs = int(recomputeErrs.Load())
 	if standDownLost.Load() {
 		return plan, fmt.Errorf("missing-file-repoint: scan stand-down lease lapsed mid-apply after %d repoints — aborted (re-run after the scan is idle)", plan.Repointed)
 	}
