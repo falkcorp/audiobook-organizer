@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -227,14 +228,28 @@ func TestRewritePathPrefix_BookCollisionRefusedAndReported(t *testing.T) {
 	require.Empty(t, store.bookWrites)
 	require.Empty(t, store.fileWrites)
 
-	var found bool
+	// The verdict is book-level but the report is per-field, so the colliding
+	// book is named on the row that CAUSED the refusal; the other rows of the
+	// same book point at that row instead of repeating a reason about a path
+	// they are not about. Asserting "b-other" on every row would be asserting
+	// that older, misleading behaviour.
+	var named, crossReferenced int
 	for _, d := range plan.all {
-		if d.Bucket == "collision" {
-			found = true
-			require.Contains(t, d.Reason, "b-other")
+		if d.Bucket != "collision" {
+			continue
+		}
+		switch {
+		case strings.Contains(d.Reason, "b-other"):
+			named++
+		case strings.Contains(d.Reason, "refused with its book"):
+			crossReferenced++
+		default:
+			t.Fatalf("collision row %s explains nothing: %q", d.RowID, d.Reason)
 		}
 	}
-	require.True(t, found, "the collision must be REPORTED, not just counted")
+	require.Positive(t, named, "the collision must be REPORTED, not just counted")
+	require.Equal(t, 1, named, "only the causing row should name the colliding book")
+	_ = crossReferenced
 }
 
 // A book_file target already claimed by another row is refused too.

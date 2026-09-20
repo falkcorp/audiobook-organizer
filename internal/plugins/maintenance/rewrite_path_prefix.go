@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 1.2.0
+// version: 2.2.0
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
 // last-edited: 2026-09-19
 
@@ -212,6 +212,22 @@ type rewriteBookPlan struct {
 	// Bucket is the decision. "rewritable" is the only one that writes.
 	Bucket string
 	Reason string
+	// CauseRowID is the row whose check produced Bucket/Reason. checkRewriteBook
+	// short-circuits on the FIRST failing field, so the verdict is book-level
+	// while the report has one line per FIELD. Without this, recordBook stamped
+	// the same reason onto every line, and a reason that names a path ("file
+	// does not exist on disk: .../001.mp3") sat next to rows for 002, 003, ...
+	// Seen for real on prod 2026-09-20: every refused line of the Paolini
+	// rename dry run cited file 001 whatever file the line was about, which
+	// would send anyone debugging a genuine per-file refusal to the wrong file.
+	// Empty when the verdict came from a book-level rule that names no path
+	// (the run cap, or "would rewrite").
+	//
+	// CauseField is part of the key, not decoration: "book.file_path" and
+	// "book.source_import_path" BOTH carry the book's own ID as RowID, so a
+	// RowID alone matches two different report lines of the same book.
+	CauseRowID string
+	CauseField string
 }
 
 type rewritePathPrefixPlan struct {
@@ -560,8 +576,8 @@ func planRewritePathPrefix(
 	prog.Start(fmt.Sprintf("Checking %d book(s) under %s…", len(plans), params.OldPrefix))
 
 	err = registry.RunItems(ctx, reporter, plans, func(_ context.Context, bp *rewriteBookPlan) error {
-		bucket, reason := checkRewriteBook(store, bp, claimed, params)
-		bp.Bucket, bp.Reason = bucket, reason
+		bucket, reason, causeRow, causeField := checkRewriteBook(store, bp, claimed, params)
+		bp.Bucket, bp.Reason, bp.CauseRowID, bp.CauseField = bucket, reason, causeRow, causeField
 		if bucket == "rewritable" {
 			okCount.Add(1)
 		} else {
@@ -717,7 +733,7 @@ func checkRewriteBook(
 	bp *rewriteBookPlan,
 	claimed map[string]string,
 	params rewritePathPrefixParams,
-) (bucket, reason string) {
+) (bucket, reason, causeRowID, causeField string) {
 	for _, ch := range bp.Changes {
 		switch ch.Field {
 		case "book.file_path":
@@ -726,11 +742,11 @@ func checkRewriteBook(
 			// consults, and it fails closed when the index is not built.
 			ids, err := store.LiveBookIDsAtPath(ch.New)
 			if err != nil {
-				return "unreadable", fmt.Sprintf("LiveBookIDsAtPath(%s): %v", ch.New, err)
+				return "unreadable", fmt.Sprintf("LiveBookIDsAtPath(%s): %v", ch.New, err), ch.RowID, ch.Field
 			}
 			for _, id := range ids {
 				if id != bp.BookID {
-					return "collision", fmt.Sprintf("book %s already occupies %s", id, ch.New)
+					return "collision", fmt.Sprintf("book %s already occupies %s", id, ch.New), ch.RowID, ch.Field
 				}
 			}
 			if params.requireTargetExists() {
@@ -740,25 +756,25 @@ func checkRewriteBook(
 				// kinds are legitimate targets.
 				if _, serr := os.Stat(ch.New); serr != nil {
 					if os.IsNotExist(serr) {
-						return "target-missing", "book path does not exist on disk: " + ch.New
+						return "target-missing", "book path does not exist on disk: " + ch.New, ch.RowID, ch.Field
 					}
-					return "unreadable", fmt.Sprintf("stat %s: %v", ch.New, serr)
+					return "unreadable", fmt.Sprintf("stat %s: %v", ch.New, serr), ch.RowID, ch.Field
 				}
 			}
 		case "book_file.file_path":
 			if owner, taken := claimed[ch.New]; taken && owner != ch.RowID {
-				return "collision", fmt.Sprintf("book_file %s already claims %s", owner, ch.New)
+				return "collision", fmt.Sprintf("book_file %s already claims %s", owner, ch.New), ch.RowID, ch.Field
 			}
 			if params.requireTargetExists() {
 				st, serr := os.Stat(ch.New)
 				if serr != nil {
 					if os.IsNotExist(serr) {
-						return "target-missing", "file does not exist on disk: " + ch.New
+						return "target-missing", "file does not exist on disk: " + ch.New, ch.RowID, ch.Field
 					}
-					return "unreadable", fmt.Sprintf("stat %s: %v", ch.New, serr)
+					return "unreadable", fmt.Sprintf("stat %s: %v", ch.New, serr), ch.RowID, ch.Field
 				}
 				if st.IsDir() {
-					return "collision", "a DIRECTORY sits at the new file path: " + ch.New
+					return "collision", "a DIRECTORY sits at the new file path: " + ch.New, ch.RowID, ch.Field
 				}
 			}
 		case "book.source_import_path":
@@ -791,11 +807,12 @@ func checkRewriteBook(
 		}
 	}
 	if sourceImportOnly {
+		// No CauseRowID: this verdict names no path, so every row may carry it.
 		return "rewritable-source-import-only",
 			"would rewrite source_import_path only — no file or folder location changes, " +
-				"so no stat or collision check applies"
+				"so no stat or collision check applies", "", ""
 	}
-	return "rewritable", "would rewrite"
+	return "rewritable", "would rewrite", "", ""
 }
 
 // applyRewriteBook performs one book's writes and returns a decision per field.
@@ -1030,11 +1047,21 @@ func applyRewriteBook(
 }
 
 // recordBook files one decision per field for a book that was not written.
+//
+// The verdict is book-level (checkRewriteBook stops at the first failing field)
+// but the report has one line per field, so only the row that actually produced
+// the verdict carries its reason verbatim. Every other row of the same book says
+// so and points at that row, instead of repeating a reason that names a path the
+// line is not about.
 func (p *rewritePathPrefixPlan) recordBook(bp *rewriteBookPlan) {
 	for _, ch := range bp.Changes {
+		reason := bp.Reason
+		if bp.CauseRowID != "" && (ch.RowID != bp.CauseRowID || ch.Field != bp.CauseField) {
+			reason = fmt.Sprintf("refused with its book (%s); see %s row %s", bp.Bucket, bp.CauseField, bp.CauseRowID)
+		}
 		p.record(rewriteDecision{
 			Bucket: bp.Bucket, BookID: bp.BookID, Field: ch.Field, RowID: ch.RowID,
-			Old: ch.Old, New: ch.New, Reason: bp.Reason})
+			Old: ch.Old, New: ch.New, Reason: reason})
 	}
 }
 
