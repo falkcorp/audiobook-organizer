@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0d4c7f61-2b58-4a39-9c6e-51f0a7d3b284
 // last-edited: 2026-09-19
 
@@ -23,6 +23,24 @@ import (
 type pathLinkFixture struct {
 	authors []database.Author
 	books   []*database.Book
+	// ownCounts overrides what GetAllAuthorBookCounts reports for the listed
+	// rows -- the row's OWN count, the number GET /api/v1/authors/<id> serves.
+	//
+	// 🔴 WITHOUT AN OVERRIDE THE TWO COUNTS AGREE BY CONSTRUCTION here: the
+	// fixture writes no book_authors join rows, so a row's own count is just the
+	// scalar count computed the same way. The divergence the thin bar exists for
+	// -- a row whose scalar reach is large while its own count is 0, because its
+	// books' join rows credit somebody else -- only happens when a test asks for
+	// it. TestAuthorPathLink_ThinRowReadsTheRowsOwnCount is the one that does.
+	ownCounts map[int]int
+}
+
+// ownCount pins the row's own book count, independent of the scalar count.
+func (f *pathLinkFixture) ownCount(authorID, n int) {
+	if f.ownCounts == nil {
+		f.ownCounts = map[int]int{}
+	}
+	f.ownCounts[authorID] = n
 }
 
 func (f *pathLinkFixture) author(id int, name string) {
@@ -58,6 +76,21 @@ func (f *pathLinkFixture) store(t *testing.T) *database.MockStore {
 	}
 	return &database.MockStore{
 		GetAllAuthorsFunc: func() ([]database.Author, error) { return f.authors, nil },
+		// The row's own counts. MockStore's default is an EMPTY map, which would
+		// read as "every row has zero books" and turn the whole run into
+		// suspect_thin_row, so the fixture has to serve this deliberately.
+		GetAllAuthorBookCountsFunc: func() (map[int]int, error) {
+			out := map[int]int{}
+			for _, b := range f.books {
+				if b.AuthorID != nil && !b.IsSoftDeleted() {
+					out[*b.AuthorID]++
+				}
+			}
+			for id, n := range f.ownCounts {
+				out[id] = n
+			}
+			return out, nil
+		},
 		GetAllBooksCoreCompleteFunc: func(limit, offset int) ([]database.BookCore, error) {
 			if offset > 0 {
 				return nil, nil
