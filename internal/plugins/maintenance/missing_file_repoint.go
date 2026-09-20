@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // Package maintenance — REPOINT repair for book_file rows whose FilePath no longer
 // resolves but whose bytes are still on disk under a different name.
@@ -248,7 +248,10 @@ type repointStore interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
-	UpdateBookFile(id string, file *database.BookFile) error
+	// UpdateBookFiles, not per-row UpdateBookFile: the apply phase rewrites
+	// many rows of the same book and must recompute that book's aggregates
+	// once after the rows, not once per row (see bookfile_batch_write.go).
+	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 }
 
 func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanController, params missingFileRepointParams, reporter sdk.Reporter) (repointPlan, error) {
@@ -511,12 +514,26 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 	defer releaseStandDown()
 
 	// Phase 3 — write. Rehydrate the FULL BookFile and change only FilePath:
-	// UpdateBookFile does a full-record replacement, so constructing a partial
-	// BookFile here would wipe the fingerprint, transcript and tags that make these
-	// rows worth recovering in the first place.
-	var repointed, updateErrs atomic.Int64
+	// UpdateBookFile semantics are a full-record replacement, so constructing a
+	// partial BookFile here would wipe the fingerprint, transcript and tags that
+	// make these rows worth recovering in the first place.
+	//
+	// The work item is a BOOK, not a rewrite. The targets are derived from
+	// track-shaped sibling paths, so a book's rows repoint together — and a flat
+	// per-row loop paid one GetBookFiles AND one whole-book aggregate recompute
+	// per row, each re-reading every row of the book: O(n^2). A run with Max
+	// raised to library scale (the 2026-09-05 sweep repointed ~48k rows) over a
+	// book of up to 1,494 files is exactly the shape that got duration-reextract
+	// killed by the stuck-op watchdog. Grouping by book also makes the pool's
+	// partitions disjoint, so two workers can never race each other's recompute
+	// of the same book.
+	var repointed, updateErrs, rowsDone atomic.Int64
 	var standDownLost atomic.Bool
-	err = registry.RunItems(ctx, reporter, rewrites, func(_ context.Context, rw rewrite) error {
+	totalRewrites := len(rewrites)
+	groups := groupItemsByBook(rewrites,
+		func(rw rewrite) string { return rw.item.file.BookID },
+		func(rw rewrite) string { return rw.item.file.ID })
+	err = registry.RunItems(ctx, reporter, groups, func(itemCtx context.Context, g bookFileBatchGroup[rewrite]) error {
 		// Heartbeat + hard-abort guard (RunItems does not renew the lease).
 		if standDownLost.Load() {
 			return nil
@@ -526,37 +543,82 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 			log.Warn("missing-file-repoint: scan stand-down lease lost — aborting remaining writes")
 			return nil
 		}
-		siblings, gerr := store.GetBookFiles(rw.item.file.BookID)
+		siblings, gerr := store.GetBookFiles(g.BookID)
 		if gerr != nil {
-			updateErrs.Add(1)
-			log.Warn("missing-file-repoint: load book files", "book", rw.item.file.BookID, "err", gerr)
+			// One error per row that would have been written, matching the
+			// per-row loop this replaced: each of those rows did its own
+			// GetBookFiles and counted its own failure.
+			updateErrs.Add(int64(len(g.Items)))
+			rowsDone.Add(int64(len(g.Items)))
+			log.Warn("missing-file-repoint: load book files", "book", g.BookID, "err", gerr)
 			return nil
 		}
-		var full *database.BookFile
+		byID := make(map[string]*database.BookFile, len(siblings))
 		for i := range siblings {
-			if siblings[i].ID == rw.item.file.ID {
-				full = &siblings[i]
-				break
+			byID[siblings[i].ID] = &siblings[i]
+		}
+		rows := make([]*database.BookFile, 0, len(g.Items))
+		for _, rw := range g.Items {
+			full := byID[rw.item.file.ID]
+			if full == nil {
+				updateErrs.Add(1)
+				rowsDone.Add(1)
+				log.Warn("missing-file-repoint: row vanished before write", "file", rw.item.file.ID)
+				continue
 			}
+			full.FilePath = rw.target
+			rows = append(rows, full)
 		}
-		if full == nil {
-			updateErrs.Add(1)
-			log.Warn("missing-file-repoint: row vanished before write", "file", rw.item.file.ID)
+		if len(rows) == 0 {
 			return nil
 		}
-		full.FilePath = rw.target
-		if uerr := store.UpdateBookFile(full.ID, full); uerr != nil {
-			updateErrs.Add(1)
-			log.Warn("missing-file-repoint: update failed", "file", full.ID, "err", uerr)
-			return nil
+
+		bookID := g.BookID
+		out := writeBookFileBatch(itemCtx, store, rows, bookFileBatchOpts{
+			Reporter: reporter,
+			Abort: func() bool {
+				if standDownLost.Load() {
+					return true
+				}
+				if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+					standDownLost.Store(true)
+					log.Warn("missing-file-repoint: scan stand-down lease lost — aborting remaining writes")
+					return true
+				}
+				return false
+			},
+			Progress: func(done, total int) (int, int, string) {
+				return int(rowsDone.Load()), totalRewrites, fmt.Sprintf(
+					"book %s: wrote row %d/%d (repointed %d/%d, errs=%d)",
+					bookID, done, total, rowsDone.Load(), totalRewrites, updateErrs.Load())
+			},
+			OnRow: func(_ int, applied bool) {
+				rowsDone.Add(1)
+				if applied {
+					repointed.Add(1)
+				}
+			},
+		})
+		updateErrs.Add(int64(out.RowErrs))
+		if out.RowErrs > 0 {
+			log.Warn("missing-file-repoint: update failed for some rows",
+				"book", bookID, "rows", len(rows), "row_errors", out.RowErrs)
 		}
-		repointed.Add(1)
+		// Rows committed, book totals possibly stale — NOT an update error.
+		if out.RecomputeErrs > 0 {
+			log.Warn("missing-file-repoint: paths written but the book's aggregates could not be recomputed",
+				"book", bookID, "books", out.RecomputeErrs)
+		}
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency: missingFileStatConcurrency,
 		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Repointed %d/%d rows (errs=%d)", i+1, t, updateErrs.Load())
+		// The items are books now, so the label counts ROWS from its own atomic
+		// rather than the item index, which would read as "repointed 3/120" for
+		// 120 books holding 500 rows.
+		Label: func(_, books int) string {
+			return fmt.Sprintf("Repointed %d/%d rows across %d books (errs=%d)",
+				rowsDone.Load(), totalRewrites, books, updateErrs.Load())
 		},
 	})
 	if err != nil {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // Package maintenance — MARK missing book_file rows by reconciling the stored
 // book_file.Missing flag with what is actually on disk.
@@ -246,7 +246,10 @@ type markMissingStore interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
-	UpdateBookFile(id string, file *database.BookFile) error
+	// UpdateBookFiles, not per-row UpdateBookFile: the apply phase rewrites
+	// many rows of the same book and must recompute that book's aggregates
+	// once after the rows, not once per row (see bookfile_batch_write.go).
+	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 }
 
 // flip is one row whose Missing flag disagrees with disk.
@@ -410,13 +413,25 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 	defer releaseStandDown()
 
 	// Phase 3 — write. Rehydrate the FULL BookFile and change only Missing:
-	// UpdateBookFile is a full-record replacement, so a partial record would wipe
-	// the fingerprint/transcript/tags. Re-stat immediately before writing (the
-	// interlock): if disk no longer agrees with the planned value, skip the row
-	// rather than write a value a concurrent scan just invalidated.
-	var markedMissing, clearedStale, skippedChanged, updateErrs atomic.Int64
+	// UpdateBookFile semantics are a full-record replacement, so a partial record
+	// would wipe the fingerprint/transcript/tags. Re-stat immediately before
+	// writing (the interlock): if disk no longer agrees with the planned value,
+	// skip the row rather than write a value a concurrent scan just invalidated.
+	//
+	// The work item is a BOOK, not a flip. A flat per-flip loop did one
+	// GetBookFiles AND one aggregate recompute per flip, each re-reading every
+	// row of the book: O(n^2) for a book many of whose rows flip, and this op is
+	// uncapped by default over a library with ~66k missing rows and books of up
+	// to 1,494 files. Grouped, each book pays one read and one recompute.
+	// Grouping by book also makes the pool's partitions disjoint, so two workers
+	// can never race each other's recompute of the same book.
+	var markedMissing, clearedStale, skippedChanged, updateErrs, rowsDone atomic.Int64
 	var standDownLost atomic.Bool
-	err = registry.RunItems(ctx, reporter, flips, func(_ context.Context, fl flip) error {
+	totalFlips := len(flips)
+	groups := groupItemsByBook(flips,
+		func(fl flip) string { return fl.file.BookID },
+		func(fl flip) string { return fl.file.ID })
+	err = registry.RunItems(ctx, reporter, groups, func(itemCtx context.Context, g bookFileBatchGroup[flip]) error {
 		// Heartbeat + hard-abort guard (RunItems does not renew the lease).
 		if standDownLost.Load() {
 			return nil
@@ -426,63 +441,131 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 			log.Warn("mark-missing-files: scan stand-down lease lost — aborting remaining writes")
 			return nil
 		}
-		// Interlock: fresh truth at write time.
-		switch _, serr := os.Stat(fl.file.FilePath); {
-		case serr == nil:
-			if fl.toValue { // planned "gone" but present now — disk changed
+		// Interlock: fresh truth from disk for every row of this book. The stat
+		// pass runs BEFORE the DB read so that GetBookFiles' snapshot — the one
+		// the write is actually built from, and therefore the one whose
+		// staleness could lose a concurrent update — is the younger of the two.
+		// The window is wider than the old per-row stat-then-write; it is now
+		// bounded by one book's stat pass rather than by a single stat.
+		wanted := make(map[string]bool, len(g.Items))
+		for _, fl := range g.Items {
+			switch _, serr := os.Stat(fl.file.FilePath); {
+			case serr == nil:
+				if fl.toValue { // planned "gone" but present now — disk changed
+					skippedChanged.Add(1)
+					rowsDone.Add(1)
+					continue
+				}
+			case os.IsNotExist(serr):
+				if !fl.toValue { // planned "present" but gone now — disk changed
+					skippedChanged.Add(1)
+					rowsDone.Add(1)
+					continue
+				}
+			default:
+				// Now unreadable; don't write a value we can't stand behind.
 				skippedChanged.Add(1)
-				return nil
+				rowsDone.Add(1)
+				continue
 			}
-		case os.IsNotExist(serr):
-			if !fl.toValue { // planned "present" but gone now — disk changed
-				skippedChanged.Add(1)
-				return nil
-			}
-		default:
-			// Now unreadable; don't write a value we can't stand behind.
-			skippedChanged.Add(1)
+			wanted[fl.file.ID] = fl.toValue
+		}
+		if len(wanted) == 0 {
 			return nil
 		}
 
-		siblings, gerr := store.GetBookFiles(fl.file.BookID)
+		siblings, gerr := store.GetBookFiles(g.BookID)
 		if gerr != nil {
-			updateErrs.Add(1)
-			log.Warn("mark-missing-files: load book files", "book", fl.file.BookID, "err", gerr)
+			// One error per row that would have been written, matching the
+			// per-row loop this replaced: each of those rows did its own
+			// GetBookFiles and counted its own failure.
+			updateErrs.Add(int64(len(wanted)))
+			rowsDone.Add(int64(len(wanted)))
+			log.Warn("mark-missing-files: load book files", "book", g.BookID, "err", gerr)
 			return nil
 		}
-		var full *database.BookFile
+		byID := make(map[string]*database.BookFile, len(siblings))
 		for i := range siblings {
-			if siblings[i].ID == fl.file.ID {
-				full = &siblings[i]
-				break
+			byID[siblings[i].ID] = &siblings[i]
+		}
+		rows := make([]*database.BookFile, 0, len(wanted))
+		values := make([]bool, 0, len(wanted))
+		for _, fl := range g.Items {
+			toValue, ok := wanted[fl.file.ID]
+			if !ok {
+				continue
 			}
+			full := byID[fl.file.ID]
+			if full == nil {
+				updateErrs.Add(1)
+				rowsDone.Add(1)
+				log.Warn("mark-missing-files: row vanished before write", "file", fl.file.ID)
+				continue
+			}
+			if full.Missing == toValue {
+				// Already reconciled (a concurrent run or a re-stat already fixed it).
+				rowsDone.Add(1)
+				continue
+			}
+			full.Missing = toValue
+			rows = append(rows, full)
+			values = append(values, toValue)
 		}
-		if full == nil {
-			updateErrs.Add(1)
-			log.Warn("mark-missing-files: row vanished before write", "file", fl.file.ID)
+		if len(rows) == 0 {
 			return nil
 		}
-		if full.Missing == fl.toValue {
-			// Already reconciled (a concurrent run or a re-stat already fixed it).
-			return nil
+
+		bookID := g.BookID
+		out := writeBookFileBatch(itemCtx, store, rows, bookFileBatchOpts{
+			Reporter: reporter,
+			Abort: func() bool {
+				if standDownLost.Load() {
+					return true
+				}
+				if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+					standDownLost.Store(true)
+					log.Warn("mark-missing-files: scan stand-down lease lost — aborting remaining writes")
+					return true
+				}
+				return false
+			},
+			Progress: func(done, total int) (int, int, string) {
+				return int(rowsDone.Load()), totalFlips, fmt.Sprintf(
+					"book %s: wrote flag %d/%d (reconciled %d/%d, errs=%d)",
+					bookID, done, total, rowsDone.Load(), totalFlips, updateErrs.Load())
+			},
+			OnRow: func(i int, applied bool) {
+				rowsDone.Add(1)
+				if !applied {
+					return
+				}
+				if values[i] {
+					markedMissing.Add(1)
+				} else {
+					clearedStale.Add(1)
+				}
+			},
+		})
+		updateErrs.Add(int64(out.RowErrs))
+		if out.RowErrs > 0 {
+			log.Warn("mark-missing-files: update failed for some rows",
+				"book", bookID, "rows", len(rows), "row_errors", out.RowErrs)
 		}
-		full.Missing = fl.toValue
-		if uerr := store.UpdateBookFile(full.ID, full); uerr != nil {
-			updateErrs.Add(1)
-			log.Warn("mark-missing-files: update failed", "file", full.ID, "err", uerr)
-			return nil
-		}
-		if fl.toValue {
-			markedMissing.Add(1)
-		} else {
-			clearedStale.Add(1)
+		// Rows committed, book totals possibly stale — NOT an update error.
+		if out.RecomputeErrs > 0 {
+			log.Warn("mark-missing-files: flags written but the book's aggregates could not be recomputed",
+				"book", bookID, "books", out.RecomputeErrs)
 		}
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency: missingFileStatConcurrency,
 		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Reconciled %d/%d flags (errs=%d)", i+1, t, updateErrs.Load())
+		// The items are books now, so the label counts FLIPS from its own
+		// atomic rather than the item index, which would read as "reconciled
+		// 3/900" for 900 books holding 40,000 flips.
+		Label: func(_, books int) string {
+			return fmt.Sprintf("Reconciled %d/%d flags across %d books (errs=%d)",
+				rowsDone.Load(), totalFlips, books, updateErrs.Load())
 		},
 	})
 	if err != nil {

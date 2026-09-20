@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 // Package maintenance — RECOVER missing book_file rows by matching their recorded
 // FileSize to real files on disk, for the rows that maintenance.missing-file-repoint
@@ -336,7 +336,10 @@ func (p *Plugin) runRecoverMissingFiles(ctx context.Context, rawParams json.RawM
 type recoverStore interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
-	UpdateBookFile(id string, file *database.BookFile) error
+	// UpdateBookFiles, not per-row UpdateBookFile: the apply phase rewrites
+	// many rows of the same book and must recompute that book's aggregates
+	// once after the rows, not once per row (see bookfile_batch_write.go).
+	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 }
 
 // invFile is one unclaimed file found on disk during the inventory walk.
@@ -742,10 +745,21 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	// wipe the fingerprint/transcript/tags that make these rows worth recovering. Re-stat
 	// the target immediately before writing (the interlock): if it is gone or its size no
 	// longer matches, skip rather than write a value a concurrent scan just invalidated. ---
-	var repointed, skippedChanged, updateErrs atomic.Int64
+	// The work item is a BOOK, not a rewrite row. A flat per-row loop paid one
+	// GetBookFiles AND one whole-book aggregate recompute per row, each
+	// re-reading every row of the book: O(n^2) for a book several of whose rows
+	// recover together — which is the normal case here, since a book's segments
+	// go missing and come back as a set. Grouping by book also makes the pool's
+	// partitions disjoint, so two workers can never race each other's recompute
+	// of the same book.
+	var repointed, skippedChanged, updateErrs, rowsDone atomic.Int64
 	var standDownLost atomic.Bool
 	var mu sync.Mutex // guards plan.record (RunItems runs the callback concurrently)
-	err = registry.RunItems(ctx, reporter, rewrites, func(_ context.Context, rw rewriteRow) error {
+	totalRewrites := len(rewrites)
+	groups := groupItemsByBook(rewrites,
+		func(rw rewriteRow) string { return rw.file.BookID },
+		func(rw rewriteRow) string { return rw.file.ID })
+	err = registry.RunItems(ctx, reporter, groups, func(itemCtx context.Context, g bookFileBatchGroup[rewriteRow]) error {
 		// Heartbeat + hard-abort guard: RunItems stamps op progress but does NOT
 		// renew the stand-down lease, so renew it here and stop writing if it is
 		// lost (a lapsed lease resumes the scanner into ungated concurrent writes).
@@ -757,47 +771,105 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 			log.Warn("recover-missing-files: scan stand-down lease lost — aborting remaining writes")
 			return nil
 		}
-		st, serr := os.Stat(rw.target)
-		if serr != nil || st.IsDir() || st.Size() != rw.file.FileSize {
-			skippedChanged.Add(1)
-			mu.Lock()
-			plan.record(recoverDecision{FileID: rw.file.ID, BookID: rw.file.BookID, Bucket: "skipped-changed",
-				Size: rw.file.FileSize, OldPath: rw.file.FilePath, NewPath: rw.target,
-				Reason: "target changed between plan and write (gone, directory, or size differs) — skipped"})
-			mu.Unlock()
-			return nil
-		}
-		siblings, gerr := store.GetBookFiles(rw.file.BookID)
-		if gerr != nil {
-			updateErrs.Add(1)
-			log.Warn("recover-missing-files: load book files", "book", rw.file.BookID, "err", gerr)
-			return nil
-		}
-		var full *database.BookFile
-		for i := range siblings {
-			if siblings[i].ID == rw.file.ID {
-				full = &siblings[i]
-				break
+		// Interlock: re-stat every target of this book BEFORE the DB read, so
+		// that GetBookFiles' snapshot — the one the write is built from, and
+		// therefore the one whose staleness could lose a concurrent update — is
+		// the younger of the two. The window between a row's stat and its write
+		// is now bounded by one book's stat pass rather than by a single stat.
+		keep := make([]rewriteRow, 0, len(g.Items))
+		for _, rw := range g.Items {
+			st, serr := os.Stat(rw.target)
+			if serr != nil || st.IsDir() || st.Size() != rw.file.FileSize {
+				skippedChanged.Add(1)
+				rowsDone.Add(1)
+				mu.Lock()
+				plan.record(recoverDecision{FileID: rw.file.ID, BookID: rw.file.BookID, Bucket: "skipped-changed",
+					Size: rw.file.FileSize, OldPath: rw.file.FilePath, NewPath: rw.target,
+					Reason: "target changed between plan and write (gone, directory, or size differs) — skipped"})
+				mu.Unlock()
+				continue
 			}
+			keep = append(keep, rw)
 		}
-		if full == nil {
-			updateErrs.Add(1)
-			log.Warn("recover-missing-files: row vanished before write", "file", rw.file.ID)
+		if len(keep) == 0 {
 			return nil
 		}
-		full.FilePath = rw.target
-		if uerr := store.UpdateBookFile(full.ID, full); uerr != nil {
-			updateErrs.Add(1)
-			log.Warn("recover-missing-files: update failed", "file", full.ID, "err", uerr)
+
+		siblings, gerr := store.GetBookFiles(g.BookID)
+		if gerr != nil {
+			// One error per row that would have been written, matching the
+			// per-row loop this replaced: each of those rows did its own
+			// GetBookFiles and counted its own failure.
+			updateErrs.Add(int64(len(keep)))
+			rowsDone.Add(int64(len(keep)))
+			log.Warn("recover-missing-files: load book files", "book", g.BookID, "err", gerr)
 			return nil
 		}
-		repointed.Add(1)
+		byID := make(map[string]*database.BookFile, len(siblings))
+		for i := range siblings {
+			byID[siblings[i].ID] = &siblings[i]
+		}
+		rows := make([]*database.BookFile, 0, len(keep))
+		for _, rw := range keep {
+			full := byID[rw.file.ID]
+			if full == nil {
+				updateErrs.Add(1)
+				rowsDone.Add(1)
+				log.Warn("recover-missing-files: row vanished before write", "file", rw.file.ID)
+				continue
+			}
+			full.FilePath = rw.target
+			rows = append(rows, full)
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+
+		bookID := g.BookID
+		out := writeBookFileBatch(itemCtx, store, rows, bookFileBatchOpts{
+			Reporter: reporter,
+			Abort: func() bool {
+				if standDownLost.Load() {
+					return true
+				}
+				if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+					standDownLost.Store(true)
+					log.Warn("recover-missing-files: scan stand-down lease lost — aborting remaining writes")
+					return true
+				}
+				return false
+			},
+			Progress: func(done, total int) (int, int, string) {
+				return int(rowsDone.Load()), totalRewrites, fmt.Sprintf(
+					"book %s: wrote row %d/%d (repointed %d/%d, errs=%d)",
+					bookID, done, total, rowsDone.Load(), totalRewrites, updateErrs.Load())
+			},
+			OnRow: func(_ int, applied bool) {
+				rowsDone.Add(1)
+				if applied {
+					repointed.Add(1)
+				}
+			},
+		})
+		updateErrs.Add(int64(out.RowErrs))
+		if out.RowErrs > 0 {
+			log.Warn("recover-missing-files: update failed for some rows",
+				"book", bookID, "rows", len(rows), "row_errors", out.RowErrs)
+		}
+		// Rows committed, book totals possibly stale — NOT an update error.
+		if out.RecomputeErrs > 0 {
+			log.Warn("recover-missing-files: paths written but the book's aggregates could not be recomputed",
+				"book", bookID, "books", out.RecomputeErrs)
+		}
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency: missingFileStatConcurrency,
 		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Repointed %d/%d rows (skipped=%d errs=%d)", i+1, t, skippedChanged.Load(), updateErrs.Load())
+		// The items are books now, so the label counts ROWS from its own atomic
+		// rather than the item index.
+		Label: func(_, books int) string {
+			return fmt.Sprintf("Repointed %d/%d rows across %d books (skipped=%d errs=%d)",
+				rowsDone.Load(), totalRewrites, books, skippedChanged.Load(), updateErrs.Load())
 		},
 	})
 	if err != nil {
