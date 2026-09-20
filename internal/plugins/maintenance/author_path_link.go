@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
 // last-edited: 2026-09-19
 
@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/oklog/ulid/v2"
 
@@ -54,8 +55,14 @@ import (
 //	                        "Christopher Paolini". The remedy is to fix the
 //	                        FOLDER; listing the book ids does not override this
 //	                        hold (see BookIDs).
-//	suspect_thin_row        the target row has book_count <= 1, the shape of a
+//	suspect_thin_row        the target row is thin by EITHER of the two book
+//	                        counts (see authorPathLinkIndex), the shape of a
 //	                        title-fragment "author" row. Skipped.
+//	suspect_placeholder_row the target row is named with the system's own
+//	                        "we could not resolve an author" placeholder.
+//	                        Skipped.
+//	suspect_non_person_row  the target row's NAME reads as a title, a franchise
+//	                        or a collective rather than a person. Skipped.
 //	suspect_title_fragment_row
 //	                        the target row is one author-title-fragment-scan
 //	                        would flag. Linking cannot create such a row but
@@ -103,7 +110,18 @@ const (
 	// this many books is the shape of a title-fragment row ("Freedom's Dawn",
 	// row 43771, book_count 0), and attaching 110 books to one would launder it
 	// into a plausible author.
+	//
+	// 🔴 THE BAR IS APPLIED TO THE LOWER OF TWO COUNTS, and until 2026-09-19 it
+	// was applied to the wrong one. See authorPathLinkIndex for what the two
+	// counts are and the measured cost of reading only the scalar one.
 	authorPathLinkThinRowBooks = 1
+
+	// authorPathLinkMinAllCapsWords is the shout bar in
+	// authorPathLinkNonPersonRow: this many ALL-CAPS words or more and the row
+	// is a franchise shout ("STAR TREK POWER KLINGON"), not a name. Two is
+	// deliberately NOT enough -- "STEPHEN KING" is a real author row typed in
+	// caps, and holding it would cost a genuine link.
+	authorPathLinkMinAllCapsWords = 3
 )
 
 // Per-book outcomes. Every scanned in-scope book gets exactly one.
@@ -132,6 +150,18 @@ const (
 	// cannot create such a row but can ATTACH books to one, which is the
 	// pre-apply cross-check the approved design asks for.
 	authorPathLinkSuspectFragment = "suspect_title_fragment_row"
+	// authorPathLinkSuspectPlaceholder is a target row named with the system's
+	// own placeholder ("Unknown Author"). authorname.IsPlaceholder has always
+	// been run on the DERIVED name in authorPathLinkCandidates; it was never run
+	// on the row that name RESOLVES to, so a placeholder row was a legal link
+	// target -- a predicate that existed but was not applied where it mattered.
+	authorPathLinkSuspectPlaceholder = "suspect_placeholder_row"
+	// authorPathLinkSuspectNonPerson is a target row whose NAME reads as a
+	// title, a franchise or a collective rather than a person. It is kept
+	// distinct from suspect_title_fragment_row so that bucket keeps its precise
+	// meaning -- "author-title-fragment-scan would flag this row" -- and so a
+	// dry run says which bar refused a row.
+	authorPathLinkSuspectNonPerson = "suspect_non_person_row"
 )
 
 // authorPathLinkDetailed reports whether an outcome's full entry belongs in the
@@ -147,6 +177,7 @@ func authorPathLinkDetailed(outcome string) bool {
 		authorPathLinkCreatedAndLinked, authorPathLinkWouldCreate, authorPathLinkCreateDisabled,
 		authorPathLinkNearMiss, authorPathLinkSuspectThin, authorPathLinkSuspectLeaf,
 		authorPathLinkAmbiguous, authorPathLinkExistingCredits, authorPathLinkSuspectFragment,
+		authorPathLinkSuspectPlaceholder, authorPathLinkSuspectNonPerson,
 		authorPathLinkChangedSinceScan, authorPathLinkFailed:
 		return true
 	}
@@ -237,9 +268,17 @@ type authorPathLinkChange struct {
 	// book is not linkable or the row does not exist yet.
 	AuthorID   int    `json:"author_id,omitempty"`
 	AuthorName string `json:"author_name,omitempty"`
-	// TargetBookCount is the target row's live-book count at scan time, the
-	// number the suspect bar is applied to.
-	TargetBookCount int `json:"target_book_count,omitempty"`
+	// TargetBookCount is the SCALAR count: live books whose scalar AuthorID
+	// names the target row, counted over this run's snapshot.
+	//
+	// TargetRowBookCount is the row's OWN count -- the same quantity
+	// GET /api/v1/authors/<id> reports. Both are recorded, and neither carries
+	// omitempty, because ZERO is the interesting value here: a row that reads
+	// 110 on one count and 0 on the other is the exact divergence the thin bar
+	// now refuses, and a reader of the dry run has to be able to see both
+	// numbers rather than just the verdict.
+	TargetBookCount    int `json:"target_book_count"`
+	TargetRowBookCount int `json:"target_row_book_count"`
 	// NearestAuthorID/Name/Distance describe the row a near miss nearly hit.
 	NearestAuthorID   int    `json:"nearest_author_id,omitempty"`
 	NearestAuthorName string `json:"nearest_author_name,omitempty"`
@@ -282,6 +321,11 @@ type authorPathLinkResult struct {
 // resolve a derived name to a row, and mint one when it is nobody's near miss.
 type authorPathLinkAuthorStore interface {
 	GetAllAuthors() ([]database.Author, error)
+	// GetAllAuthorBookCounts is the row's OWN book count, the number
+	// GET /api/v1/authors/<id> reports. One call for the whole library, at
+	// index-build time: the suspect bar needs it for every candidate target and
+	// a per-book author read would make a library-scale op N+1.
+	GetAllAuthorBookCounts() (map[int]int, error)
 	GetAuthorByName(name string) (*database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	CreateAuthor(name string) (*database.Author, error)
@@ -316,8 +360,10 @@ func (p *Plugin) authorPathLinkDef() sdk.OperationDef {
 		Description: "Books with NO author id whose PATH names an author: the person-shaped path segment " +
 			"is resolved through the author:name index and the book is linked to that row (join row and " +
 			"scalar). A person-shaped name with no row is created and linked; a NEAR MISS of an existing " +
-			"row is reported and never created. Suspect targets (book_count<=1, or a match on the book's " +
-			"own folder) and ambiguous paths are skipped. Books that already have an author id, books " +
+			"row is reported and never created. Suspect targets and ambiguous paths are skipped: a row thin " +
+			"by EITHER its scalar count or its own book_count, a row named with the placeholder, a row " +
+			"whose name reads as a title/franchise/collective, and a match on the book's own folder. " +
+			"Books that already have an author id, books " +
 			"under books/itunes/**, and Doctor Who / Big Finish / Torchwood are never touched. Defaults " +
 			"to dry_run=true; bookIds and pathPrefix scope a run.",
 		// Idempotent: a linked book has a non-nil scalar and is out of the
@@ -391,6 +437,111 @@ func authorPathLinkPersonShaped(name string) bool {
 	return true
 }
 
+// authorPathLinkCollectiveWords are the words that make a row a COLLECTIVE
+// rather than a person: an "author" that is really "we do not know" or "several
+// people". They are matched as whole words, case-insensitively, anywhere in the
+// name, so "Various Authors" and "Anonymous" are both caught.
+var authorPathLinkCollectiveWords = map[string]bool{
+	"various":        true,
+	"anonymous":      true,
+	"unknown":        true,
+	"assorted":       true,
+	"multiple":       true,
+	"misc":           true,
+	"miscellaneous":  true,
+	"anthology":      true,
+	"compilation":    true,
+	"uncredited":     true,
+	"unattributed":   true,
+	"unspecified":    true,
+	"unidentified":   true,
+	"untitled":       true,
+	"undetermined":   true,
+	"crowdsourced":   true,
+	"contributors":   true,
+	"groupofauthors": true,
+}
+
+// authorPathLinkNonPersonRow reports whether a TARGET ROW's name reads as a
+// title, a franchise or a collective rather than a person.
+//
+// 🔴 WHY THIS IS NOT classifyTitleFragmentAuthor, AND NOT A CHANGE TO IT.
+// author-title-fragment-scan shares that predicate, and it is deliberately a
+// BROAD HUMAN-REVIEW NET with its own two-reason taxonomy and its own sample
+// pools: its job is to hand a person a list to read. This op's job is to REFUSE
+// a write, which wants a stricter, differently-shaped test. The two callers
+// legitimately want different answers, so widening the shared one would change
+// an op outside this fix and would not even be the right change for it.
+// Improving the shared predicate is a real follow-up; it is not this fix.
+//
+// The measured gap this closes: classifyTitleFragmentAuthor is
+// personname.LooksLikePersonName plus a leading-hyphen test, and
+// "Freedom's Dawn" is two capitalised words, so the cross-check the op's header
+// advertises against exactly that row returned nothing on the 2026-09-19 prod
+// dry run.
+//
+// Four signals, each one structural rather than a wordlist of titles:
+//
+//	possessive       a word ending in "'s" ("Freedom's Dawn"). Names do not
+//	                 inflect that way; "O'Brien" and "D'Angelo" do not end in s.
+//	leading article  the first word is "the", "a" or "an" ("The Messenger").
+//	all-caps shout   authorPathLinkMinAllCapsWords or more words that are
+//	                 entirely uppercase letters ("STAR TREK POWER KLINGON").
+//	collective       a word from authorPathLinkCollectiveWords ("Various
+//	                 Authors").
+//
+// 🔴 WHAT IT DOES NOT CATCH, said plainly rather than patched over: a franchise
+// whose name is two ordinary capitalised words -- row 46072 "Star Trek" -- is
+// structurally indistinguishable from a person here and still links. The
+// wordlist that would catch it is a list of titles, which misfires on real
+// authors and fails silently years later, so it is not added. That row stays an
+// owner-review item.
+func authorPathLinkNonPersonRow(name string) bool {
+	fields := strings.Fields(strings.TrimSpace(name))
+	if len(fields) == 0 {
+		return false
+	}
+	if first := strings.ToLower(strings.Trim(fields[0], ".,")); first == "the" || first == "a" || first == "an" {
+		return true
+	}
+	allCaps := 0
+	for _, w := range fields {
+		lower := strings.ToLower(strings.Trim(w, ".,;:'\"()"))
+		if strings.HasSuffix(lower, "'s") || strings.HasSuffix(lower, "’s") {
+			return true
+		}
+		if authorPathLinkCollectiveWords[lower] {
+			return true
+		}
+		if authorPathLinkIsAllCapsWord(w) {
+			allCaps++
+		}
+	}
+	return allCaps >= authorPathLinkMinAllCapsWords
+}
+
+// authorPathLinkIsAllCapsWord reports whether w has no lowercase in it and two
+// or more UPPERCASE letters.
+//
+// Two minimum so a bare initial ("J.") is not a shout. Uppercase is required
+// POSITIVELY here, unlike personname.LooksLikePersonName's "must not be
+// lowercase" test, and for the mirror-image reason: unicode.IsUpper is false for
+// every caseless script, so counting positively is what keeps a CJK or Hebrew
+// name from being read as shouting. A bar that holds a row must fail towards
+// letting the row through.
+func authorPathLinkIsAllCapsWord(w string) bool {
+	upper := 0
+	for _, r := range w {
+		if unicode.IsLower(r) {
+			return false
+		}
+		if unicode.IsUpper(r) {
+			upper++
+		}
+	}
+	return upper >= 2
+}
+
 // authorPathLinkCandidate is one gate-passing segment of a book's path.
 type authorPathLinkCandidate struct {
 	Name   string
@@ -448,9 +599,30 @@ func authorPathLinkCandidates(filePath string) []authorPathLinkCandidate {
 // GetAllBooksCoreComplete snapshot. If it were recomputed as the run proceeded,
 // books linked early would inflate a row past the suspect bar and change how
 // LATER books classify, so a dry run would stop predicting the apply.
+// 🔴 AND IT IS TWO COUNTS, NOT ONE, because they are two different quantities
+// and the old bar read the one that cannot see the defect it was written for.
+//
+//	bookCount     SCALAR reach: live books whose scalar AuthorID names the row,
+//	              counted in authorPathLinkScope over this run's snapshot.
+//	ownBookCount  the row's OWN count: database.GetAllAuthorBookCounts, the
+//	              number GET /api/v1/authors/<id> reports. It credits a book to
+//	              the authors in its book_authors array, falling back to the
+//	              scalar only for books with no join row at all, and it skips
+//	              non-primary versions.
+//
+// They diverge whenever a book's scalar names one row while its join names
+// another, and whenever a row's books are non-primary versions. Row 43771
+// "Freedom's Dawn" -- the row this bar's comment cites as what it must refuse --
+// reads 110 on the scalar count and 0 on its own. Measured on the 2026-09-19
+// prod dry run: 8 of the 37 thin-ish targets diverged that way, 120 books moved
+// from held to written, 110 of them onto that one row. So the bar holds when
+// EITHER count is thin: a row is only fat if both quantities agree it is, and
+// the cost of holding a row wrongly is one reported line in a dry run, while the
+// cost of writing to one wrongly is a laundered title row with books on it.
 type authorPathLinkIndex struct {
 	byNormalized map[string]database.Author
 	bookCount    map[int]int
+	ownBookCount map[int]int
 	// titleFragment marks the normalized names whose row author-title-fragment-scan
 	// would flag: a title sitting where an author should be. Never a link target.
 	titleFragment map[string]bool
@@ -527,12 +699,26 @@ func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex) auth
 		ch.DerivedName, ch.MatchKind = matched.Name, matched.Kind
 		ch.AuthorID, ch.AuthorName = matchedAuthor.ID, matchedAuthor.Name
 		ch.TargetBookCount = idx.bookCount[matchedAuthor.ID]
+		ch.TargetRowBookCount = idx.ownBookCount[matchedAuthor.ID]
+		// 🔴 A LADDER, AND THE ORDER IS THE ANSWER. Several bars can hold the
+		// same row; the first one that matches names the outcome, so the order
+		// decides what a dry run says about it. Path shape first (the leaf rule
+		// is about the derivation, not the row), then the three NAME bars from
+		// most specific to broadest -- the system's own placeholder, the shared
+		// title-fragment predicate, this op's stricter non-person read -- and
+		// the COUNT bar last, because a row that is both badly named and thin is
+		// more usefully reported by its name than by its number.
 		switch {
 		case matched.IsLeaf:
 			ch.Outcome = authorPathLinkSuspectLeaf
+		case authorname.IsPlaceholder(matchedAuthor.Name):
+			ch.Outcome = authorPathLinkSuspectPlaceholder
 		case idx.titleFragment[normalizeAuthorNameForLink(matchedAuthor.Name)]:
 			ch.Outcome = authorPathLinkSuspectFragment
-		case ch.TargetBookCount <= authorPathLinkThinRowBooks:
+		case authorPathLinkNonPersonRow(matchedAuthor.Name):
+			ch.Outcome = authorPathLinkSuspectNonPerson
+		case ch.TargetBookCount <= authorPathLinkThinRowBooks,
+			ch.TargetRowBookCount <= authorPathLinkThinRowBooks:
 			ch.Outcome = authorPathLinkSuspectThin
 		default:
 			ch.Outcome = authorPathLinkWouldLink
@@ -744,9 +930,22 @@ func authorPathLinkBuildIndex(store authorPathLinkAuthorStore) (*authorPathLinkI
 	if err != nil {
 		return nil, fmt.Errorf("author-path-link: list authors: %w", err)
 	}
+	// The row's own counts, one call for the whole library. A failure is fatal
+	// rather than degraded: with an empty map every row reads as thin, which
+	// would turn the whole run into suspect_thin_row and look like a clean
+	// "nothing to do" -- the fail-closed-read-path shape this repo has been bitten
+	// by before. The op refuses to classify without the number its bar needs.
+	ownCounts, err := store.GetAllAuthorBookCounts()
+	if err != nil {
+		return nil, fmt.Errorf("author-path-link: author book counts: %w", err)
+	}
+	if ownCounts == nil {
+		ownCounts = map[int]int{}
+	}
 	idx := &authorPathLinkIndex{
 		byNormalized:  make(map[string]database.Author, len(authors)),
 		bookCount:     map[int]int{},
+		ownBookCount:  ownCounts,
 		byLength:      map[int][]string{},
 		titleFragment: map[string]bool{},
 	}
