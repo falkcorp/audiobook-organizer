@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: a1000020-0000-0000-0000-000000000020
-// last-edited: 2026-09-19
+// last-edited: 2026-09-20
 
 package jobs
 
@@ -111,7 +111,7 @@ func (j *mergeChapterGroupsJob) Run(ctx context.Context, store maintenance.JobSt
 		return errChapterMergeNoGroups
 	}
 	if !dryRun {
-		if err := refuseDuringLibraryScan(store); err != nil {
+		if err := refuseDuringLibraryScan(store, j.ID()); err != nil {
 			return err
 		}
 	}
@@ -581,14 +581,14 @@ type chapterActiveOpsStore interface {
 // a store that cannot list operations is not proof that no scan runs. A
 // zombie "running" scan row (silent past chapterZombieScanAfter) is ignored
 // with a warning, the way the registry skips rows with no live handle.
-func refuseDuringLibraryScan(store maintenance.JobStore) error {
+func refuseDuringLibraryScan(store maintenance.JobStore, opName string) error {
 	qs, ok := store.(chapterActiveOpsStore)
 	if !ok {
-		return errors.New("merge-chapter-groups: cannot verify that no library.scan is running; refusing to merge")
+		return fmt.Errorf("%s: cannot verify that no library.scan is running; refusing to write", opName)
 	}
 	active, err := qs.ListActiveOperationsV2()
 	if err != nil {
-		return fmt.Errorf("merge-chapter-groups: cannot list active operations; refusing to merge: %w", err)
+		return fmt.Errorf("%s: cannot list active operations; refusing to write: %w", opName, err)
 	}
 	now := time.Now()
 	for _, op := range active {

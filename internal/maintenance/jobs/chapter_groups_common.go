@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/chapter_groups_common.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c619d4b3-ba60-4e76-b0ea-a5ff309d39f7
-// last-edited: 2026-09-19
+// last-edited: 2026-09-20
 
 package jobs
 
@@ -219,18 +219,30 @@ func chapterDetectOptionsForRun(p chapterGroupParams) (scanner.ChapterDetectOpti
 // run's params and exclusions. Used by the scan and the dry-run preview only:
 // a real merge never detects to decide what to merge.
 func detectChapterGroupsForRun(ctx context.Context, store maintenance.JobStore, p chapterGroupParams) (scanner.ChapterDetection, error) {
+	det, _, err := detectChapterGroupsForRunWithBooks(ctx, store, p)
+	return det, err
+}
+
+// detectChapterGroupsForRunWithBooks is detectChapterGroupsForRun plus the very
+// rows detection ran on. A caller that has to reason about books detection did
+// NOT group (repoint-version-primary reads each member's version-group twin,
+// which is a lone single-chapter record below MinFiles and so never in a
+// detected group) must use this: loading the library a second time would give
+// it a DIFFERENT snapshot, and a decision made by joining two snapshots can
+// describe a pair that never existed at one instant.
+func detectChapterGroupsForRunWithBooks(ctx context.Context, store maintenance.JobStore, p chapterGroupParams) (scanner.ChapterDetection, []database.BookCore, error) {
 	opts, err := chapterDetectOptionsForRun(p)
 	if err != nil {
-		return scanner.ChapterDetection{}, err
+		return scanner.ChapterDetection{}, nil, err
 	}
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
-		return scanner.ChapterDetection{}, err
+		return scanner.ChapterDetection{}, nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		return scanner.ChapterDetection{}, err
+		return scanner.ChapterDetection{}, nil, err
 	}
-	return scanner.DetectChapterGroupsWithOptions(books, opts), nil
+	return scanner.DetectChapterGroupsWithOptions(books, opts), books, nil
 }
 
 // newChapterGroupOutcome is a detected group as the card renders it. A group
