@@ -32,6 +32,7 @@ func (p *Plugin) Version() string { return "1.0.0" }
 func (p *Plugin) Register(r sdk.Registry) error {
 	defs := []sdk.OperationDef{
 		// --- cleanup ---
+		p.repairLibraryStateDef(),
 		p.purgeDeletedDef(),
 		p.tombstoneCleanupDef(),
 		p.tempFileCleanupDef(),
