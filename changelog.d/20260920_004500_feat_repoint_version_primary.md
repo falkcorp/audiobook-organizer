@@ -21,8 +21,13 @@
   not a parallel heuristic: the job calls the shared
   `detectChapterGroupsForRunWithBooks` and reasons over the very snapshot
   detection ran on, so a pair cannot qualify against rows detection never saw. A
-  group qualifies on its ROWS — one blocker and every member non-primary — never
-  on the blocker's prose, which has already been reworded twice.
+  group qualifies on its ROWS — one blocker and at least one non-primary member —
+  never on the blocker's prose, which has already been reworded twice. "At least
+  one", not "every one", on purpose: a group that repoints only partly (one
+  member left behind as drifted or state-mismatched) must stay in the population
+  on the next run rather than becoming invisible to the very op that exists to
+  unblock it, and the 10 groups measured as "K of N members are non-primary"
+  were partial from the start.
 
   Report-only by default; `{"apply": true, "dry_run": false}` writes, and
   `group_ids` restricts a run to named version groups. Writes go through
