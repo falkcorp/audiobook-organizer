@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/report_path_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b7314ebb-e6db-49d3-af82-37738df6214a
-// last-edited: 2026-09-12
+// last-edited: 2026-09-20
 
 package maintenance
 
@@ -101,6 +101,10 @@ func reportOpCases() []reportOpCase {
 		{"mark-missing-files", (*Plugin).runMarkMissingFiles, "mark-missing-files-unknown-op.tsv"},
 		{"recover-missing-files", (*Plugin).runRecoverMissingFiles, "recover-missing-files-unknown-op.tsv"},
 		{"dedupe-book-file-rows", (*Plugin).runDedupeBookFileRows, "dedupe-book-file-rows-dryrun.tsv"},
+		// book-shape-report has no apply mode at all, so the apply-refusal case
+		// below is passing it a parameter it ignores -- what it proves for this op
+		// is that an unusable report directory is refused BEFORE the store is read.
+		{"book-shape-report", (*Plugin).runBookShapeReport, "book-shape-report-unknown-op.tsv"},
 	}
 }
 

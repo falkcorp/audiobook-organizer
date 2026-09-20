@@ -112,6 +112,11 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// whether Book.FilePath is safe to trust as an identity signal at all,
 		// which any future write path touching Book.FilePath must re-check first.
 		p.filePathCollisionReportDef(),
+		// book-shape-report is the report-only classifier for the oversized-book
+		// and same-path split shapes measured on 2026-09-19. No existing op covers
+		// them, and three of the shapes it names must NOT be merged -- so it
+		// classifies and recommends, and has no apply mode at all.
+		p.bookShapeReportDef(),
 		// unknown-author-audit is the report-only census of books already filed
 		// under an "Unknown Author" directory -- the backlog the HasResolvedAuthor
 		// rename gate cannot reach because it only stops NEW placeholder paths.
