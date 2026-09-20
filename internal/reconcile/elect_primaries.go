@@ -1,5 +1,5 @@
 // file: internal/reconcile/elect_primaries.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 25e1f705-9130-4eb0-bd4b-04d45908c704
 // last-edited: 2026-09-19
 
@@ -77,7 +77,10 @@ type ElectPrimaryResult struct {
 	// Elected.
 	GroupsExcluded int `json:"groups_excluded"`
 	// BooksExcluded counts the members of those groups: the books this run
-	// deliberately leaves invisible.
+	// deliberately leaves invisible. They are counted INSIDE BooksTrapped for
+	// the same reason GroupsExcluded is counted inside GroupsWithoutPrimary,
+	// so the books an apply actually frees is BooksTrapped − BooksExcluded.
+	// Read BooksTrapped alone on a filtered run and you overstate the repair.
 	BooksExcluded int `json:"books_excluded"`
 	// ExcludedApplied lists the exclude-list ids that actually held a
 	// candidate group back.
