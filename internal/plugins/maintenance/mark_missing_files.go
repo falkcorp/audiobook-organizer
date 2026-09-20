@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
 // last-edited: 2026-09-19
 
@@ -22,17 +22,21 @@
 // mark would let the counter drift permanently high after a repair.
 //
 // This op WRITES only the Missing boolean. It never moves a file, never deletes
-// a row, never touches FilePath. The write goes through UpdateBookFile as a
-// full-record replacement (rehydrate → mutate one field → write back), so the
-// fingerprint, transcript and tags on the row are preserved.
+// a row, never touches FilePath. The write goes through UpdateBookFiles with
+// UpdateBookFile's full-record-replacement semantics (rehydrate → mutate one
+// field → write back), so the fingerprint, transcript and tags on the row are
+// preserved. One book's flips are written in ONE call, so the book's aggregates
+// are recomputed once rather than once per flipped row — see
+// bookfile_batch_write.go for why that matters.
 //
 // ⚠️ SCAN INTERLOCK (enforced at runtime as of PR #3080). On apply=true this op
 // cooperatively stands the library scanner down for its write phase (acquires the
 // scan stand-down, renews it per write, aborts the run if the lease lapses), so a
 // scan can no longer mutate the same rows underneath the write. This replaces the
 // old "operational, not enforced" precondition. As a second line of defense the
-// op also re-stats each row immediately before writing it, so a row whose disk
-// state changed since the plan phase is skipped rather than written stale. Missing
+// op also re-stats every row of a book immediately before writing that book, so a
+// row whose disk state changed since the plan phase is skipped rather than written
+// stale. The stat and the write are one book apart, not one row apart. Missing
 // is a boolean the next run reconciles, so any transient wrong value is
 // self-healing regardless.
 package maintenance
@@ -425,13 +429,19 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 	// to 1,494 files. Grouped, each book pays one read and one recompute.
 	// Grouping by book also makes the pool's partitions disjoint, so two workers
 	// can never race each other's recompute of the same book.
-	var markedMissing, clearedStale, skippedChanged, updateErrs, rowsDone atomic.Int64
+	var markedMissing, clearedStale, skippedChanged, updateErrs, rowsDone, booksDone atomic.Int64
 	var standDownLost atomic.Bool
 	totalFlips := len(flips)
 	groups := groupItemsByBook(flips,
 		func(fl flip) string { return fl.file.BookID },
 		func(fl flip) string { return fl.file.ID })
+	totalBooks := len(groups)
 	err = registry.RunItems(ctx, reporter, groups, func(itemCtx context.Context, g bookFileBatchGroup[flip]) error {
+		// RunItems reports progress in BOOKS (the item). The in-book progress
+		// line below must use the same units or the bar alternates between two
+		// scales and appears to jump backwards -- see run_items.go's P-2 note.
+		// The row counts live in the message text instead.
+		defer booksDone.Add(1)
 		// Heartbeat + hard-abort guard (RunItems does not renew the lease).
 		if standDownLost.Load() {
 			return nil
@@ -530,7 +540,7 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 				return false
 			},
 			Progress: func(done, total int) (int, int, string) {
-				return int(rowsDone.Load()), totalFlips, fmt.Sprintf(
+				return int(booksDone.Load()), totalBooks, fmt.Sprintf(
 					"book %s: wrote flag %d/%d (reconciled %d/%d, errs=%d)",
 					bookID, done, total, rowsDone.Load(), totalFlips, updateErrs.Load())
 			},

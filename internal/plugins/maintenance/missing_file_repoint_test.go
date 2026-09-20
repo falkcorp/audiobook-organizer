@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b6d0f39c-4a17-4e82-95c1-70fe2a8b31d4
 // last-edited: 2026-09-19
 
@@ -17,10 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// repointFakeStore records every UpdateBookFile so a test can assert BOTH what was
+// repointFakeStore records every written row so a test can assert BOTH what was
 // written and — just as importantly — that nothing else was.
 type repointFakeStore struct {
-	mu      sync.Mutex // UpdateBookFile is called from RunItems' worker pool
+	mu      sync.Mutex // UpdateBookFiles is called from RunItems' worker pool
 	cores   []database.BookFileCore
 	books   []database.BookCore            // owning books, for the book-path fallback derivation
 	full    map[string][]database.BookFile // bookID → rows

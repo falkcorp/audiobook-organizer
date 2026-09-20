@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-09-19
 
@@ -49,8 +49,9 @@
 // This op matches against an inventory SNAPSHOT that may be minutes stale, so standing
 // the scan down while it writes stops a scan from moving files underneath the rewrite.
 // The write-time re-stat interlock below is the second line of defense: each candidate
-// is re-stat'd immediately before its row is written; a disagreement skips the row
-// rather than writing it stale.
+// is re-stat'd immediately before its book's rows are written; a disagreement skips
+// the row rather than writing it stale. The stat pass and the write are one book
+// apart, not one row apart (see bookfile_batch_write.go).
 package maintenance
 
 import (
@@ -741,10 +742,11 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	defer releaseStandDown()
 
 	// --- Phase 4 — write (Branch A only). Rehydrate the FULL BookFile and change only
-	// FilePath: UpdateBookFile is a full-record replacement, so a partial record would
-	// wipe the fingerprint/transcript/tags that make these rows worth recovering. Re-stat
-	// the target immediately before writing (the interlock): if it is gone or its size no
-	// longer matches, skip rather than write a value a concurrent scan just invalidated. ---
+	// FilePath: UpdateBookFiles carries UpdateBookFile's full-record-replacement
+	// semantics, so a partial record would wipe the fingerprint/transcript/tags that make
+	// these rows worth recovering. Re-stat every target of a book immediately before that
+	// book is written (the interlock): if one is gone or its size no longer matches, skip
+	// that row rather than write a value a concurrent scan just invalidated. ---
 	// The work item is a BOOK, not a rewrite row. A flat per-row loop paid one
 	// GetBookFiles AND one whole-book aggregate recompute per row, each
 	// re-reading every row of the book: O(n^2) for a book several of whose rows
@@ -752,14 +754,19 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	// go missing and come back as a set. Grouping by book also makes the pool's
 	// partitions disjoint, so two workers can never race each other's recompute
 	// of the same book.
-	var repointed, skippedChanged, updateErrs, rowsDone atomic.Int64
+	var repointed, skippedChanged, updateErrs, rowsDone, booksDone atomic.Int64
 	var standDownLost atomic.Bool
 	var mu sync.Mutex // guards plan.record (RunItems runs the callback concurrently)
 	totalRewrites := len(rewrites)
 	groups := groupItemsByBook(rewrites,
 		func(rw rewriteRow) string { return rw.file.BookID },
 		func(rw rewriteRow) string { return rw.file.ID })
+	totalBooks := len(groups)
 	err = registry.RunItems(ctx, reporter, groups, func(itemCtx context.Context, g bookFileBatchGroup[rewriteRow]) error {
+		// RunItems reports progress in BOOKS (the item). The in-book progress
+		// line below must use the same units or the bar alternates between two
+		// scales and appears to jump backwards -- see run_items.go's P-2 note.
+		defer booksDone.Add(1)
 		// Heartbeat + hard-abort guard: RunItems stamps op progress but does NOT
 		// renew the stand-down lease, so renew it here and stop writing if it is
 		// lost (a lapsed lease resumes the scanner into ungated concurrent writes).
@@ -840,7 +847,7 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 				return false
 			},
 			Progress: func(done, total int) (int, int, string) {
-				return int(rowsDone.Load()), totalRewrites, fmt.Sprintf(
+				return int(booksDone.Load()), totalBooks, fmt.Sprintf(
 					"book %s: wrote row %d/%d (repointed %d/%d, errs=%d)",
 					bookID, done, total, rowsDone.Load(), totalRewrites, updateErrs.Load())
 			},

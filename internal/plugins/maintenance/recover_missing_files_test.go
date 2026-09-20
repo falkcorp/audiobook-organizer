@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
 // last-edited: 2026-09-19
 
@@ -23,16 +23,16 @@ import (
 // errFakeUpdate is the injected write failure for the update-error path test.
 var errFakeUpdate = errors.New("fake update failure")
 
-// recoverFakeStore implements recoverStore. It records every UpdateBookFile so a test
+// recoverFakeStore implements recoverStore. It records every written row so a test
 // can assert BOTH what was written and that nothing else was. It reuses the package's
 // writeFile helper for the on-disk fixtures (os.Stat / filepath.WalkDir are the whole
 // mechanism — an in-memory fixture cannot observe this op).
 type recoverFakeStore struct {
-	mu      sync.Mutex // UpdateBookFile is called from RunItems' worker pool
+	mu      sync.Mutex // UpdateBookFiles is called from RunItems' worker pool
 	cores   []database.BookFileCore
 	full    map[string][]database.BookFile
 	updates []database.BookFile
-	// updateErr, when set, is returned by UpdateBookFile instead of writing — to exercise
+	// updateErr, when set, fails every row of UpdateBookFiles instead of writing — to exercise
 	// the write phase's update-error branch (UpdateErrs++, row not counted as repointed).
 	updateErr error
 }
