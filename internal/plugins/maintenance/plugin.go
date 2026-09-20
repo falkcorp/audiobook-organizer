@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.47.0
+// version: 1.48.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-19
 
@@ -100,6 +100,13 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.bookAtPathIndexBackfillDef(),
 		p.missingFileRepairDef(),
 		p.missingFileRepointDef(),
+		// rewrite-path-prefix is the repoint op's complement: repoint repairs a
+		// row whose bytes moved WITHIN its own recorded directory, which is the
+		// only shape it can derive. A renamed PARENT directory is invisible to it
+		// (every row under it lands in "no-candidate-bytes"), and a library scan
+		// — the other thing that re-discovers paths — is banned here, so this op
+		// is the only route back from a folder rename.
+		p.rewritePathPrefixDef(),
 		// filepath-collision-report is a standing library-health check, decoupled
 		// from the missing-file-audit/repair/repoint trio above: it answers
 		// whether Book.FilePath is safe to trust as an identity signal at all,
