@@ -1,5 +1,5 @@
 // file: internal/reconcile/elect_primaries_exclude_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1c6f0b2a-5d83-4a71-9f2c-7b4e83d1a905
 // last-edited: 2026-09-19
 
@@ -115,6 +115,13 @@ func TestElectMissingPrimaries_ExcludedGroupIsHeldAndCounted(t *testing.T) {
 	}
 	if res.BooksTrapped != 5 {
 		t.Errorf("BooksTrapped = %d, want 5", res.BooksTrapped)
+	}
+	// The book-level analogue, which is the number an operator quotes: the
+	// books an apply frees is BooksTrapped minus BooksExcluded, because the
+	// held group's members are inside BooksTrapped.
+	if freed := res.BooksTrapped - res.BooksExcluded; freed != 2 {
+		t.Errorf("books freed = %d (trapped %d - excluded %d), want 2",
+			freed, res.BooksTrapped, res.BooksExcluded)
 	}
 	if got := res.GroupsWithoutPrimary - res.GroupsExcluded - res.SkippedConcurrent -
 		res.SkippedVanished - res.SkippedNoEligible - res.SkippedWinnerChanged - res.Errors; got != res.Elected {
@@ -251,7 +258,10 @@ func TestElectMissingPrimaries_UnknownAndInertExcludeIDsAreReported(t *testing.T
 	}
 	// "VG-REAL" is a case-flipped paste of a real id and must NOT silently
 	// count as protecting vg-real: ids are matched exactly, so it is reported
-	// as matching nothing.
+	// as matching nothing. The list is sorted byte-wise, which is why the
+	// uppercase id comes first — compared as an ordered slice on purpose, so
+	// a future change that made the order depend on map iteration fails here
+	// rather than producing a payload that reshuffles between runs.
 	if !slices.Equal(res.ExcludedUnmatched, []string{"VG-REAL", "vg-typo-not-in-library"}) {
 		t.Errorf("ExcludedUnmatched = %v, want [VG-REAL vg-typo-not-in-library]", res.ExcludedUnmatched)
 	}
