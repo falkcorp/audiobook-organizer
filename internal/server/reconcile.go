@@ -1,7 +1,7 @@
 // file: internal/server/reconcile.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-09-11
+// last-edited: 2026-09-19
 // HTTP adapters — all logic in internal/reconcile
 
 package server
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -209,12 +210,42 @@ func (s *Server) assignOrphanVGsHandler(c *gin.Context) {
 //
 // Defaults to a dry run: a mutating apply must be opted into explicitly with
 // ?dry_run=false, so an accidental POST previews rather than rewrites rows.
+//
+// ?exclude_groups= names version groups the election must leave alone. The
+// 2026-09-19 census found 15 groups whose "versions" are in fact the chapter
+// files of one book, where crowning a member makes a chapter the book; the
+// apply was blocked on having no way to hold them back. Repeat the parameter,
+// pass it comma-separated, or use the exclude_groups[] spelling. Ids that
+// match nothing come back in the result's excluded_unmatched rather than
+// failing the request — see ElectMissingPrimaries.
 func (s *Server) electMissingPrimariesHandler(c *gin.Context) {
 	dryRun := c.DefaultQuery("dry_run", "true") != "false"
-	result, err := reconcile.ElectMissingPrimaries(s.storeForWiring(), dryRun)
+	exclude := electExcludeGroupsFromQuery(c)
+	result, err := reconcile.ElectMissingPrimaries(s.storeForWiring(), dryRun, exclude)
 	if err != nil {
 		httputil.InternalError(c, "failed to elect missing primary versions", err)
 		return
 	}
 	httputil.RespondWithOK(c, gin.H{"dry_run": dryRun, "result": result})
+}
+
+// electExcludeGroupsFromQuery reads the exclude_groups parameter in every
+// spelling the rest of this API accepts for a repeated list: the parameter
+// given more than once, the tags[] style bracket alias (handlers/audiobooks
+// handler.go:491), and one comma-separated value, which is what an operator
+// pasting a list of 15 ids from a report will actually type. Values are
+// passed through verbatim; ElectMissingPrimaries trims and dedupes them and
+// reports the ones that match nothing.
+//
+// Deliberately NOT accepting a camelCase excludeGroups: no query parameter
+// on this API is spelled that way (dry_run on this same handler, status,
+// tags/tags[] elsewhere), and a second accepted spelling is a second thing to
+// keep in step with the docs.
+func electExcludeGroupsFromQuery(c *gin.Context) []string {
+	raw := append(c.QueryArray("exclude_groups"), c.QueryArray("exclude_groups[]")...)
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		out = append(out, strings.Split(v, ",")...)
+	}
+	return out
 }

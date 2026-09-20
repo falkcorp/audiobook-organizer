@@ -1,5 +1,5 @@
 // file: internal/reconcile/elect_primaries.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 25e1f705-9130-4eb0-bd4b-04d45908c704
 // last-edited: 2026-09-19
 
@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -64,9 +66,68 @@ type ElectPrimaryResult struct {
 	GroupsNoEligible int `json:"groups_no_eligible"`
 	// SkippedWinnerChanged counts groups whose chosen winner was merged
 	// away or trashed between the group read and the write.
-	SkippedWinnerChanged int                    `json:"skipped_winner_changed"`
-	Errors               int                    `json:"errors"`
-	Samples              []ElectedPrimarySample `json:"samples,omitempty"`
+	SkippedWinnerChanged int `json:"skipped_winner_changed"`
+	// GroupsExcluded counts candidate groups the operator's exclude list held
+	// back. They ARE still counted in GroupsWithoutPrimary, BooksTrapped and
+	// the singleton/multi split — the scan really did find them electing no
+	// primary, and an operator diffing this run against an earlier unfiltered
+	// dry run must see the same flagged total. The run reconciles as
+	// GroupsWithoutPrimary − GroupsExcluded − SkippedConcurrent −
+	// SkippedVanished − SkippedNoEligible − SkippedWinnerChanged − Errors =
+	// Elected.
+	GroupsExcluded int `json:"groups_excluded"`
+	// BooksExcluded counts the members of those groups: the books this run
+	// deliberately leaves invisible.
+	BooksExcluded int `json:"books_excluded"`
+	// ExcludedApplied lists the exclude-list ids that actually held a
+	// candidate group back.
+	ExcludedApplied []string `json:"excluded_applied,omitempty"`
+	// ExcludedNotCandidate lists exclude-list ids naming a real group that
+	// was not a candidate anyway (it already elects a primary, or has no
+	// electable member). Nothing was held for them.
+	ExcludedNotCandidate []string `json:"excluded_not_candidate,omitempty"`
+	// ExcludedUnmatched lists exclude-list ids naming no group in this scan
+	// at all — a typo, or a group since re-split. Reported and logged rather
+	// than failing the run: a stale id must not block an otherwise correct
+	// apply, but it must never pass unnoticed either, because "held it back"
+	// and "matched nothing" look identical from the outside.
+	ExcludedUnmatched []string               `json:"excluded_unmatched,omitempty"`
+	Errors            int                    `json:"errors"`
+	Samples           []ElectedPrimarySample `json:"samples,omitempty"`
+}
+
+// normalizeExcludedGroups turns an operator-supplied list into a lookup set:
+// trimmed, empties dropped, deduped. Ids are matched EXACTLY — a version
+// group id is either an uppercase ULID or a lowercase "vg-<hex>", so a
+// case-flipped paste must surface as unmatched rather than silently failing
+// to protect the group it names.
+func normalizeExcludedGroups(ids []string) map[string]bool {
+	if len(ids) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			set[id] = true
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+// sortedGroupIDs renders a set as a stable list for the result payload.
+func sortedGroupIDs(m map[string]bool) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // maxElectionSamples bounds the dry-run preview payload. The full counts are
@@ -189,14 +250,52 @@ var errNotElectable = errors.New("elect-missing-primaries: winner no longer elec
 // by version group — each group is handled by exactly one worker — so no two
 // workers can ever write competing primaries into the same group.
 //
+// excludeGroups names version groups the election must leave alone, and is
+// the operator's only lever: a group named here is counted in the flagged
+// totals, reported by id, and never written. It exists because the
+// 2026-09-19 census found 15 groups whose "versions" are the CHAPTER FILES
+// of one book (.claude/notes/elect-primaries-dryrun-and-band-census-2026-09-19.md
+// §4), where crowning a member makes a chapter the book; with no way to hold
+// those back, the whole 1,140-group apply was blocked on 15 rows.
+//
+// Why there is no automatic "this group looks like chapters" refusal here,
+// although internal/scanner/version_link.go has exactly that predicate
+// (versionLinkIsPart, built on ParseSequenceMarker / ParseFilenameSequence):
+//
+//  1. It does not cover the cases. Five of the twelve tier-1 chapter groups
+//     are folder-shaped — their rows' file paths are extensionless directory
+//     names ("Logan Jacobs", "Immortal Mana", "Master of Formalities
+//     (Unabridged)") with nothing positional in them, so the predicate reads
+//     them as whole books and would elect in them anyway. A predicate that
+//     holds 10 of 15 still needs the list for the other 5, and then the list
+//     is what is doing the work.
+//  2. It fires on ordinary books. config.DefaultFileNamingPattern is
+//     "{title} - {track:02d}", and seqStemTrailingRe (chapter_sequence.go)
+//     matches exactly that stem, so EVERY organized single-file book reads as
+//     a positional part.
+//  3. The error asymmetry is inverted between the two callers. For the
+//     scanner, refusing to link is the cheap error: the book stays ungrouped
+//     and is still its own primary. For this repair, refusing to elect is the
+//     expensive error: the group keeps no primary, and every member stays
+//     hidden from the library list and from bulk metadata fetch — the exact
+//     harm this pass exists to undo. A gate whose false positives are
+//     permanent invisibility does not belong on the repair path.
+//
+// So the shape judgement stays where the evidence is (a census an operator
+// reads) and this pass takes the answer as data. If the scanner fix re-splits
+// those groups, the ids simply stop matching and are reported as unmatched.
+//
 // Clobber guard: the initial scan and the per-group write are not atomic, so
 // each worker re-reads the group's live membership immediately before writing.
 // If a primary has appeared in the meantime the worker skips the group instead
 // of creating a second one. This is also what makes the singleton-vs-multi
 // distinction trustworthy: membership is confirmed against the live index, not
 // inferred from the snapshot.
-func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error) {
+func ElectMissingPrimaries(store Store, dryRun bool, excludeGroups []string) (*ElectPrimaryResult, error) {
 	result := &ElectPrimaryResult{DryRun: dryRun}
+	excluded := normalizeExcludedGroups(excludeGroups)
+	excludedSeen := make(map[string]bool, len(excluded))
+	excludedHeld := make(map[string]bool, len(excluded))
 
 	// One-call snapshot enumeration — see loadAllBooksCore in reconcile.go for
 	// why offset pages over the async memdb snapshot silently skip rows.
@@ -243,6 +342,13 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 
 	var candidates []string
 	for gid, gs := range groups {
+		if excluded[gid] {
+			// Seen means "this id names a real group", whatever the group's
+			// state. Recorded before the classification below so an id that
+			// names a non-candidate group is reported as inert rather than as
+			// unknown — the two call for different operator action.
+			excludedSeen[gid] = true
+		}
 		if gs.primaries > 0 {
 			continue
 		}
@@ -252,7 +358,6 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 			result.GroupsNoEligible++
 			continue
 		}
-		candidates = append(candidates, gid)
 		result.GroupsWithoutPrimary++
 		result.BooksTrapped += gs.members
 		if gs.members == 1 {
@@ -260,9 +365,46 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 		} else {
 			result.MultiMemberGroups++
 		}
+		if excluded[gid] {
+			// Held back by the operator: counted in the flagged totals above
+			// (the scan did find it primary-less) but never queued for a
+			// write, and kept out of the samples so the preview shows only
+			// what would actually change.
+			excludedHeld[gid] = true
+			result.GroupsExcluded++
+			result.BooksExcluded += gs.members
+			continue
+		}
+		candidates = append(candidates, gid)
 	}
 	// Deterministic order so dry-run samples are stable across runs.
 	sort.Strings(candidates)
+
+	result.ExcludedApplied = sortedGroupIDs(excludedHeld)
+	for gid := range excluded {
+		switch {
+		case excludedHeld[gid]:
+		case excludedSeen[gid]:
+			result.ExcludedNotCandidate = append(result.ExcludedNotCandidate, gid)
+		default:
+			result.ExcludedUnmatched = append(result.ExcludedUnmatched, gid)
+		}
+	}
+	sort.Strings(result.ExcludedNotCandidate)
+	sort.Strings(result.ExcludedUnmatched)
+	if len(result.ExcludedUnmatched) > 0 {
+		// Logged as well as returned: the result payload is read once, the
+		// service log is what gets grepped when someone later asks whether a
+		// given group was really held back. Through pkgLog with sanitized
+		// ids, not slog: these strings come straight off the query string
+		// (internal/logger's slog guard).
+		safe := make([]string, 0, len(result.ExcludedUnmatched))
+		for _, gid := range result.ExcludedUnmatched {
+			safe = append(safe, logger.SanitizeLogValue(gid))
+		}
+		pkgLog.Warn("elect-missing-primaries: exclude list names %d group(s) this scan did not see (%s); %d matched",
+			len(safe), strings.Join(safe, ", "), len(excludedSeen))
+	}
 
 	if len(candidates) == 0 {
 		slog.Info("elect-missing-primaries: nothing to repair",
@@ -392,6 +534,9 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 		"skipped_no_eligible", result.SkippedNoEligible,
 		"skipped_winner_changed", result.SkippedWinnerChanged,
 		"groups_no_eligible", result.GroupsNoEligible,
+		"groups_excluded", result.GroupsExcluded,
+		"books_excluded", result.BooksExcluded,
+		"excluded_unmatched", len(result.ExcludedUnmatched),
 		"errors", result.Errors,
 	)
 
