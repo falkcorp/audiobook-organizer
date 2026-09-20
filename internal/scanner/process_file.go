@@ -1,7 +1,7 @@
 // file: internal/scanner/process_file.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 // Package scanner provides file scanning and processing utilities for the
 // audiobook organizer. ProcessFile is the single-pass entry point that opens
@@ -355,6 +355,16 @@ func probeSingleFileChapters(ctx context.Context, filePath string, scanLog logge
 // deferred to a later phase and NOT implemented here) MUST compare against
 // this chapter-derived, sum-of-tracks value -- not Book.Duration -- since it
 // matches real Audiobookshelf startOffset values exactly.
+//
+// Do NOT size that tolerance off the ~52ms above: sum-of-tracks is not one
+// number. audioutil.ProbeDurationSeconds tries mediainfo first and falls back
+// to ffprobe, and the two tools disagree per file (measured 2026-09-19 on the
+// six odyssey mp3s with MediaInfoLib v26.05: 52ms on four tracks, 94ms on two).
+// Over those six the sums are 9975.827 (mediainfo) vs 9975.431 (ffprobe) -- a
+// 396ms spread from nothing but which binary is installed on the host, roughly
+// 8x the fixture's ~52ms container-vs-chapters spread and growing with track
+// count. This bit chapter_persistence_test.go, which pinned the ffprobe sum as
+// a literal and failed on every machine with mediainfo installed.
 func synthesizeMultiFileChapters(ctx context.Context, files []database.BookFile, scanLog logger.Logger) []audioutil.Chapter {
 	tracks := make([]audioutil.TrackInfo, len(files))
 	for i, f := range files {
