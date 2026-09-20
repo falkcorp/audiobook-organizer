@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
 // last-edited: 2026-09-19
 
@@ -114,7 +114,13 @@ type markMissingPlan struct {
 	Unreadable       int `json:"unreadable"`
 	SkippedChanged   int `json:"skipped_changed"`
 	UpdateErrs       int `json:"update_errs"`
-	CappedAt         int `json:"capped_at,omitempty"`
+	// RecomputeErrs counts BOOKS whose rows were written but whose aggregate
+	// recompute then failed. Deliberately separate from UpdateErrs: those rows
+	// ARE written, so re-running them would be wrong — but a run that reported
+	// only update_errs=0 would leave the operator with "some unknown set of
+	// books has stale totals, go grep the logs".
+	RecomputeErrs int `json:"recompute_errs"`
+	CappedAt      int `json:"capped_at,omitempty"`
 
 	// BooksNowBroken is the distinct-primary-book count the dashboard's BrokenFiles
 	// counter will show after this run — i.e. books with ≥1 row that IS missing on
@@ -149,10 +155,10 @@ func (p markMissingPlan) summary() string {
 		mode = "APPLIED"
 	}
 	return fmt.Sprintf(
-		"%s scanned=%d | mark-missing: would=%d wrote=%d | clear-stale: would=%d wrote=%d | unchanged=%d unreadable=%d skipped-changed=%d update_errs=%d | books_broken_on_disk=%d",
+		"%s scanned=%d | mark-missing: would=%d wrote=%d | clear-stale: would=%d wrote=%d | unchanged=%d unreadable=%d skipped-changed=%d update_errs=%d recompute_errs=%d | books_broken_on_disk=%d",
 		mode, p.ScannedRows, p.WouldMarkMissing, p.MarkedMissing,
 		p.WouldClearStale, p.ClearedStale, p.Unchanged, p.Unreadable,
-		p.SkippedChanged, p.UpdateErrs, p.BooksBrokenOnDisk)
+		p.SkippedChanged, p.UpdateErrs, p.RecomputeErrs, p.BooksBrokenOnDisk)
 }
 
 func (p *Plugin) markMissingFilesDef() sdk.OperationDef {
@@ -429,7 +435,7 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 	// to 1,494 files. Grouped, each book pays one read and one recompute.
 	// Grouping by book also makes the pool's partitions disjoint, so two workers
 	// can never race each other's recompute of the same book.
-	var markedMissing, clearedStale, skippedChanged, updateErrs, rowsDone, booksDone atomic.Int64
+	var markedMissing, clearedStale, skippedChanged, updateErrs, recomputeErrs, rowsDone, booksDone atomic.Int64
 	var standDownLost atomic.Bool
 	totalFlips := len(flips)
 	groups := groupItemsByBook(flips,
@@ -458,7 +464,24 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 		// The window is wider than the old per-row stat-then-write; it is now
 		// bounded by one book's stat pass rather than by a single stat.
 		wanted := make(map[string]bool, len(g.Items))
-		for _, fl := range g.Items {
+		// The stat pass is the longest stretch between two stand-down renewals,
+		// and RunItems renews only per BOOK — so stamp liveness and re-check the
+		// lease from inside it. See bookFileStatLivenessEvery.
+		beat := prewriteHeartbeat(reporter, func() bool {
+			if standDownLost.Load() {
+				return true
+			}
+			if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+				standDownLost.Store(true)
+				log.Warn("mark-missing-files: scan stand-down lease lost — aborting remaining writes")
+				return true
+			}
+			return false
+		})
+		for fi, fl := range g.Items {
+			if !beat(fi) {
+				return nil
+			}
 			switch _, serr := os.Stat(fl.file.FilePath); {
 			case serr == nil:
 				if fl.toValue { // planned "gone" but present now — disk changed
@@ -557,6 +580,7 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 			},
 		})
 		updateErrs.Add(int64(out.RowErrs))
+		recomputeErrs.Add(int64(out.RecomputeErrs))
 		if out.RowErrs > 0 {
 			log.Warn("mark-missing-files: update failed for some rows",
 				"book", bookID, "rows", len(rows), "row_errors", out.RowErrs)
@@ -565,6 +589,10 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 		if out.RecomputeErrs > 0 {
 			log.Warn("mark-missing-files: flags written but the book's aggregates could not be recomputed",
 				"book", bookID, "books", out.RecomputeErrs)
+		}
+		if out.Cancelled {
+			log.Warn("mark-missing-files: book's flag writes stopped early (cancelled or stand-down lost)",
+				"book", bookID, "planned", len(rows), "written", out.Applied)
 		}
 		return nil
 	}, registry.RunItemsOptions{
@@ -585,6 +613,7 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 	plan.ClearedStale = int(clearedStale.Load())
 	plan.SkippedChanged = int(skippedChanged.Load())
 	plan.UpdateErrs = int(updateErrs.Load())
+	plan.RecomputeErrs = int(recomputeErrs.Load())
 	if standDownLost.Load() {
 		return plan, fmt.Errorf("mark-missing-files: scan stand-down lease lapsed mid-apply after %d flips — aborted (re-run after the scan is idle)", plan.MarkedMissing+plan.ClearedStale)
 	}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-09-19
 
@@ -167,7 +167,11 @@ type recoverPlan struct {
 	Repointed      int `json:"repointed"`
 	SkippedChanged int `json:"skipped_changed"`
 	UpdateErrs     int `json:"update_errs"`
-	CappedAt       int `json:"capped_at,omitempty"`
+	// RecomputeErrs counts BOOKS whose rows were written but whose aggregate
+	// recompute then failed — separate from UpdateErrs, because those rows ARE
+	// written and re-running them would be wrong.
+	RecomputeErrs int `json:"recompute_errs"`
+	CappedAt      int `json:"capped_at,omitempty"`
 
 	// Branch B (reflinkOutside). Reflinkable is the post-uniqueness count of
 	// "outside" rows with exactly one unclaimed source of their size wanted by
@@ -207,11 +211,11 @@ func (p recoverPlan) summary() string {
 	}
 	return fmt.Sprintf(
 		"%s scanned=%d missing=%d | in-tree repointable=%d repointed=%d | outside reflinkable=%d reflinked=%d (skipped-exists=%d errs=%d) | "+
-			"census: outside=%d nowhere=%d | refused: ambiguous=%d size-collision=%d ext-mismatch=%d no-size=%d | skipped-changed=%d update_errs=%d",
+			"census: outside=%d nowhere=%d | refused: ambiguous=%d size-collision=%d ext-mismatch=%d no-size=%d | skipped-changed=%d update_errs=%d recompute_errs=%d",
 		mode, p.ScannedRows, p.MissingRows, p.Repointable, p.Repointed,
 		p.Reflinkable, p.Reflinked, p.ReflinkSkippedExists, p.ReflinkErrs,
 		p.Outside, p.Nowhere, p.Ambiguous, p.SizeCollision, p.ExtMismatch, p.NoSize,
-		p.SkippedChanged, p.UpdateErrs)
+		p.SkippedChanged, p.UpdateErrs, p.RecomputeErrs)
 }
 
 func (p *Plugin) recoverMissingFilesDef() sdk.OperationDef {
@@ -754,7 +758,7 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	// go missing and come back as a set. Grouping by book also makes the pool's
 	// partitions disjoint, so two workers can never race each other's recompute
 	// of the same book.
-	var repointed, skippedChanged, updateErrs, rowsDone, booksDone atomic.Int64
+	var repointed, skippedChanged, updateErrs, recomputeErrs, rowsDone, booksDone atomic.Int64
 	var standDownLost atomic.Bool
 	var mu sync.Mutex // guards plan.record (RunItems runs the callback concurrently)
 	totalRewrites := len(rewrites)
@@ -784,7 +788,24 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 		// the younger of the two. The window between a row's stat and its write
 		// is now bounded by one book's stat pass rather than by a single stat.
 		keep := make([]rewriteRow, 0, len(g.Items))
-		for _, rw := range g.Items {
+		// The stat pass is the longest stretch between two stand-down renewals,
+		// and RunItems renews only per BOOK — so stamp liveness and re-check the
+		// lease from inside it. See bookFileStatLivenessEvery.
+		beat := prewriteHeartbeat(reporter, func() bool {
+			if standDownLost.Load() {
+				return true
+			}
+			if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+				standDownLost.Store(true)
+				log.Warn("recover-missing-files: scan stand-down lease lost — aborting remaining writes")
+				return true
+			}
+			return false
+		})
+		for fi, rw := range g.Items {
+			if !beat(fi) {
+				return nil
+			}
 			st, serr := os.Stat(rw.target)
 			if serr != nil || st.IsDir() || st.Size() != rw.file.FileSize {
 				skippedChanged.Add(1)
@@ -859,6 +880,7 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 			},
 		})
 		updateErrs.Add(int64(out.RowErrs))
+		recomputeErrs.Add(int64(out.RecomputeErrs))
 		if out.RowErrs > 0 {
 			log.Warn("recover-missing-files: update failed for some rows",
 				"book", bookID, "rows", len(rows), "row_errors", out.RowErrs)
@@ -867,6 +889,10 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 		if out.RecomputeErrs > 0 {
 			log.Warn("recover-missing-files: paths written but the book's aggregates could not be recomputed",
 				"book", bookID, "books", out.RecomputeErrs)
+		}
+		if out.Cancelled {
+			log.Warn("recover-missing-files: book's writes stopped early (cancelled or stand-down lost)",
+				"book", bookID, "planned", len(rows), "written", out.Applied)
 		}
 		return nil
 	}, registry.RunItemsOptions{
@@ -885,6 +911,7 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	plan.Repointed = int(repointed.Load())
 	plan.SkippedChanged = int(skippedChanged.Load())
 	plan.UpdateErrs = int(updateErrs.Load())
+	plan.RecomputeErrs = int(recomputeErrs.Load())
 
 	// --- Phase 5 — reflink write (Branch B, only when reflinkOutside). For each unique
 	// outside match, clone the source bytes back to the row's OWN FilePath so the row

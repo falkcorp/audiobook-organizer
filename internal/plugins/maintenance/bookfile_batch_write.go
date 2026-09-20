@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/bookfile_batch_write.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f0a9c61-8d24-4b17-9e35-c1a7f2b64d08
 // last-edited: 2026-09-19
 
@@ -76,6 +76,43 @@ func groupItemsByBook[T any](items []T, bookID func(T) string, sortKey func(T) s
 	return groups
 }
 
+// bookFileStatLivenessEvery is how often a book's PRE-WRITE pass (the re-stat
+// interlock, and anything else between the item starting and its first row
+// write) stamps liveness and re-checks the caller's abort.
+//
+// WHY THIS EXISTS. registry.RunItems stamps liveness and renews a scan
+// stand-down hold once per ITEM, and the item is now a whole book. So the chain
+// from one renewal to the next became: Checkpoint → N os.Stat calls →
+// GetBookFiles (~1 s on a 1,494-row book) → the first row write → the first
+// Abort(). Before the batching that gap was a single stat. The watchdog strike
+// and defaultScanStandDownLease are both 5 minutes, which is ample on a healthy
+// filesystem — but these are stats of paths known to be MISSING, and on a
+// stalled mount at ~200 ms each a 1,494-row book exhausts the lease inside the
+// gap. The scanner would then resume and write the same rows while the batch is
+// built from a snapshot that is already stale, and the first Abort() would kill
+// the rest of the run. That silent gap is the exact shape that got
+// duration-reextract killed on 2026-09-19.
+//
+// 64 keeps the stamp interval at ~13 s even at 200 ms per stat, two orders of
+// magnitude inside the 5-minute lease, while costing one cheap call per 64 rows.
+const bookFileStatLivenessEvery = 64
+
+// prewriteHeartbeat returns the per-row callback for a book's pre-write pass.
+// Call it with each row's index; it stamps liveness and re-checks abort every
+// bookFileStatLivenessEvery rows (starting at the first), and returns false
+// when the pass should stop.
+func prewriteHeartbeat(reporter sdk.Reporter, abort func() bool) func(i int) bool {
+	return func(i int) bool {
+		if i%bookFileStatLivenessEvery != 0 {
+			return true
+		}
+		if reporter != nil {
+			registry.TouchLiveness(reporter)
+		}
+		return abort == nil || !abort()
+	}
+}
+
 // bookFileBatchWriter is the one store method these ops need for the write.
 type bookFileBatchWriter interface {
 	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
@@ -114,12 +151,22 @@ type bookFileWriteOutcome struct {
 func classifyBookFileWrites(written int, err error) bookFileWriteOutcome {
 	out := bookFileWriteOutcome{Applied: written}
 	for _, e := range flattenJoinedErrs(err) {
-		switch {
-		case errors.Is(e, context.Canceled), errors.Is(e, context.DeadlineExceeded):
+		ctxErr := errors.Is(e, context.Canceled) || errors.Is(e, context.DeadlineExceeded)
+		if ctxErr {
 			out.Cancelled = true
+		}
+		switch {
 		case errors.Is(e, database.ErrBookAggregatesRecompute):
 			out.RecomputeErrs++
+		case e == context.Canceled || e == context.DeadlineExceeded:
+			// The loop's own stop signal, appended bare by UpdateBookFiles. It
+			// describes no row, so it is not a row error.
 		default:
+			// Everything else is a row failure — INCLUDING a row error that
+			// happens to wrap a context error. Matching on errors.Is alone put
+			// such a row in no bucket at all: invisible in RowErrs, invisible
+			// in RecomputeErrs, and the caller reported zero errors for a row
+			// that did not write.
 			out.RowErrs++
 		}
 	}

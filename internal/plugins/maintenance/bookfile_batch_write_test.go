@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/bookfile_batch_write_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c1d80fe-4a52-47b3-9d8e-0b2f5a9c7314
 // last-edited: 2026-09-19
 
@@ -181,6 +181,90 @@ func TestWriteBookFileBatch_EmptyRows(t *testing.T) {
 	require.Equal(t, bookFileWriteOutcome{}, out)
 }
 
+// The per-book pre-write pass (the re-stat interlock) must stamp liveness and
+// re-check the abort REPEATEDLY, not once per book. RunItems renews the scan
+// stand-down hold once per item, and the item is now a whole book, so a long
+// stat pass would otherwise run the lease down with nothing renewing it.
+func TestPrewriteHeartbeat_StampsRepeatedlyAndAborts(t *testing.T) {
+	rep := &livenessReporter{}
+	beat := prewriteHeartbeat(rep, func() bool { return false })
+	const rows = bookFileStatLivenessEvery*3 + 5
+	for i := range rows {
+		require.True(t, beat(i), "no abort, so the pass must keep going")
+	}
+	require.Equal(t, int64(4), rep.touches.Load(),
+		"one stamp per %d rows, starting at the first", bookFileStatLivenessEvery)
+
+	// An abort stops the pass at the next stamp point, not at the next row.
+	aborted := &livenessReporter{}
+	beat = prewriteHeartbeat(aborted, func() bool { return true })
+	require.False(t, beat(0), "an abort at the first row must stop the pass")
+	require.Equal(t, int64(1), aborted.touches.Load())
+}
+
+// A run spanning several books at Concurrency > 1, so -race actually covers the
+// Label closures (run_items.go renders Label INSIDE each worker goroutine), the
+// grouping, and the shared counters. The single-book fixtures above exercise
+// none of that.
+func TestMarkMissing_MultipleBooksUnderConcurrency(t *testing.T) {
+	dir := t.TempDir()
+	const books, perBook = 6, 5
+	store := &markFakeStore{full: map[string][]database.BookFile{}}
+	for b := range books {
+		bookID := fmt.Sprintf("b%d", b)
+		for f := range perBook {
+			id := fmt.Sprintf("f%d-%d", b, f)
+			// Never written to disk: the bytes are gone, so every row flips.
+			path := filepath.Join(dir, bookID, fmt.Sprintf("part%d.mp3", f))
+			store.cores = append(store.cores,
+				database.BookFileCore{ID: id, BookID: bookID, FilePath: path})
+			store.full[bookID] = append(store.full[bookID],
+				database.BookFile{ID: id, BookID: bookID, FilePath: path})
+		}
+	}
+
+	plan, err := planMarkMissingFiles(context.Background(), store, nil,
+		markMissingParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, books*perBook, plan.MarkedMissing, "every row of every book must be written")
+	require.Equal(t, 0, plan.UpdateErrs)
+	require.Equal(t, 0, plan.RecomputeErrs)
+	require.Len(t, store.updates, books*perBook)
+	// One batch per book, not one per row: every row of a book is handed to a
+	// single UpdateBookFiles call.
+	require.Equal(t, books, store.batches, "one batched write per book")
+}
+
+// recover's plan.record runs inside the worker pool behind a mutex. Drive it
+// over several books with a mix of written and skipped-changed rows so -race
+// covers that path too.
+func TestRecover_MultipleBooksUnderConcurrency(t *testing.T) {
+	root := t.TempDir()
+	const books = 6
+	store := &recoverFakeStore{full: map[string][]database.BookFile{}}
+	for b := range books {
+		bookID := fmt.Sprintf("b%d", b)
+		for f := range 4 {
+			id := fmt.Sprintf("f%d-%d", b, f)
+			size := 5000 + b*10 + f // unique across the whole fixture
+			writeFile(t, filepath.Join(root, bookID, fmt.Sprintf("renamed%d.mp3", f)), size)
+			gone := filepath.Join(root, bookID, fmt.Sprintf("gone%d.mp3", f))
+			store.cores = append(store.cores, database.BookFileCore{
+				ID: id, BookID: bookID, FilePath: gone, FileSize: int64(size)})
+			store.full[bookID] = append(store.full[bookID], database.BookFile{
+				ID: id, BookID: bookID, FilePath: gone, FileSize: int64(size)})
+		}
+	}
+
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
+		recoverMissingParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, books*4, plan.Repointed)
+	require.Equal(t, 0, plan.UpdateErrs)
+	require.Equal(t, 0, plan.RecomputeErrs)
+	require.Equal(t, books, store.batches, "one batched write per book")
+}
+
 // classifyBookFileWrites must keep a post-commit aggregate failure OUT of the
 // row-error count: those rows are written, and reporting them as failed writes
 // would send a person to re-run work that is already correct.
@@ -195,6 +279,24 @@ func TestClassifyBookFileWrites_SeparatesRecomputeFromRowErrors(t *testing.T) {
 	require.Equal(t, 1, out.RowErrs)
 	require.Equal(t, 1, out.RecomputeErrs)
 	require.True(t, out.Cancelled)
+}
+
+// A ROW error that happens to wrap a context error is still a row error. An
+// earlier errors.Is-first classification put it in no bucket at all: invisible
+// in RowErrs, invisible in RecomputeErrs, so the caller reported zero errors
+// for a row that did not write.
+func TestClassifyBookFileWrites_RowErrorWrappingCtxIsStillARowError(t *testing.T) {
+	out := classifyBookFileWrites(0, errors.Join(
+		fmt.Errorf("book file f1: %w", context.Canceled),
+	))
+	require.Equal(t, 1, out.RowErrs, "a row error must never be swallowed")
+	require.True(t, out.Cancelled, "and it still reports that the batch was cancelled")
+
+	// The bare context error UpdateBookFiles appends as its own stop signal
+	// describes no row, so it is not a row error.
+	bare := classifyBookFileWrites(2, errors.Join(context.Canceled))
+	require.Equal(t, 0, bare.RowErrs)
+	require.True(t, bare.Cancelled)
 }
 
 // groupItemsByBook must be deterministic: the ops sort their flat work list by
