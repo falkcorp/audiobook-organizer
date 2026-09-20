@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.102.0
+// version: 1.103.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-19
 
@@ -2267,6 +2267,34 @@ func applyTagPositionsIfTrusted(bfs []*database.BookFile, placements []metadata.
 		logger.SanitizeLogValue(bookFilePath), len(bfs), verdict, logger.SanitizeLogValue(why))
 }
 
+// Bounds on the directory-book shape. See groupFilesIntoBooks for the rule they
+// enforce and the prod measurement they are drawn from (2026-09-19 census of
+// 76,267 books / 550,847 book_file rows).
+const (
+	// directoryBookFastSampleFiles is the historical sample: the first three
+	// files of a directory. It remains the whole check for a SMALL directory,
+	// where three of N really is most of N, so ordinary chapter folders are
+	// decided exactly as they were before.
+	directoryBookFastSampleFiles = 3
+
+	// directoryBookFastSampleMaxDirFiles is how big a directory may be before
+	// the three-file sample stops counting as evidence about the rest. Chosen
+	// to sit comfortably above a normal chapterized audiobook (a few dozen
+	// chapter files at most) and far below the shelves that produced the
+	// defect.
+	directoryBookFastSampleMaxDirFiles = 24
+
+	// maxDirectoryBookFiles is the hard ceiling on how many files one book may
+	// claim out of a single flat directory, regardless of how unanimous the
+	// evidence is. 250 sits just above the 205 books (0.27% of the library)
+	// measured holding more than 200 book_file rows — i.e. above every book in
+	// the healthy body of the distribution and below nothing legitimate we can
+	// find. It is deliberately a refusal, not a truncation: a book silently
+	// owning the first 250 of 1,494 files is a worse record than no book at
+	// all, because nothing downstream can tell it is partial.
+	maxDirectoryBookFiles = 250
+)
+
 func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog logger.Logger, normalizeBookPath bool, knownHashes ...map[string]string) string {
 	if getStore() == nil {
 		return ""
@@ -2349,6 +2377,22 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		// list IS the positional order a book falls back to when its tag
 		// numbers are refused, so put it in natural order.
 		slices.SortFunc(segmentFiles, util.CompareNatural)
+
+		// Second site of the hard bound (the first is groupFilesIntoBooks).
+		// This one covers rows that ALREADY exist in the directory shape —
+		// the 205 measured books — because a rescan reaches this expansion
+		// through scanner.go's directory-book branch without going back
+		// through the grouping rule. Refuse rather than truncate: create no
+		// rows at all and say so loudly. The files are left unimported by this
+		// pass, which is the visible failure; a book silently owning an
+		// arbitrary 250 of them is the invisible one.
+		if len(segmentFiles) > maxDirectoryBookFiles {
+			scanLog.Warn("refusing to expand directory book %s into %d book_file rows (limit %d): "+
+				"a single flat directory holding this many audio files is an author shelf, not one book; "+
+				"no book_file rows were created for it",
+				logger.SanitizeLogValue(scanDir), len(segmentFiles), maxDirectoryBookFiles)
+			return normalizedPath
+		}
 	}
 
 	bfs := make([]*database.BookFile, 0, len(segmentFiles))
@@ -2718,8 +2762,29 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 		}
 	}
 
-	// Sample up to 3 files to quickly check if directory is a single-album book
-	sampleSize := min(3, len(files))
+	// The directory-book verdict: claim the WHOLE directory as one book, with
+	// FilePath = the directory and no segment list, which makes
+	// createBookFilesForBook re-enumerate the folder and mint one row per audio
+	// file in it (see the hard bound there). It is the only branch in this
+	// function that claims files it never looked at, so the evidence it demands
+	// has to scale with how many files that is.
+	//
+	// Until 2026-09-19 it demanded the same three files no matter how big the
+	// directory was: `sampleSize := min(3, len(files))`. A flat iTunes author
+	// shelf whose first three entries happen to be consecutive chapters of one
+	// work therefore collapsed into ONE book — measured in prod, a 1,494-file
+	// Gene Wolfe shelf recorded as a single 404.9-hour "book", and 205 books
+	// library-wide holding 20.1% of every book_file row. Two bounds now apply.
+	sampleSize := min(directoryBookFastSampleFiles, len(files))
+	if len(files) > directoryBookFastSampleMaxDirFiles {
+		// Bound 1 — above a small directory, three files are not evidence about
+		// the other N-3. Read EVERY file's album tag instead of sampling. This
+		// costs nothing over the alternative: the mixed-directory fallthrough
+		// below already calls quickReadAlbum on every file, so the worst case is
+		// the reads that branch was going to do anyway. A genuine single-album
+		// folder still agrees unanimously and still becomes one book.
+		sampleSize = len(files)
+	}
 
 	var firstAlbum string
 	allSame := true
@@ -2735,6 +2800,26 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 			allSame = false
 			break
 		}
+	}
+
+	// Bound 2 — a hard ceiling that no amount of agreement overrides. A single
+	// flat directory holding more than maxDirectoryBookFiles audio files is
+	// almost certainly an author shelf or a dumping ground, not one work; the
+	// measured library has a median of a handful of files per book and only 205
+	// of 76,267 books above 200. A unanimous album tag across 1,494 files is
+	// more likely one publisher writing the author's name into every ALBUM tag
+	// than a 400-hour book. Refuse the directory verdict and fall through to
+	// album grouping, which splits on the evidence it actually has — and say so
+	// in the scan log, because a silent refusal here is indistinguishable from
+	// the folder simply being mixed.
+	if allSame && firstAlbum != "" && len(files) > maxDirectoryBookFiles {
+		logging.Warn(ctx, "scanner refusing directory-book verdict: too many files in one flat directory",
+			"dir", filepath.Dir(files[0]),
+			"count", len(files),
+			"limit", maxDirectoryBookFiles,
+			"album", firstAlbum,
+		)
+		allSame = false
 	}
 
 	// If all sampled files share the same album and there are multiple files,
@@ -3221,33 +3306,64 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			// that span two new files in one folder each read a primary-less
 			// folder and each crown themselves. The lock is released the
 			// moment the row exists.
-			parentDir := filepath.Dir(book.FilePath)
-			unlockVersionLink := lockVersionLinkFor(dbBook, parentDir)
-			if versionLinkEligible(dbBook) {
-				siblings, lookupErr := getStore().GetBooksByTitleInDir(strings.ToLower(dbBook.Title), parentDir)
-				if lookupErr != nil {
-					// Cannot tell whether this row has versions, so do not
-					// guess one. Leaving it ungrouped keeps it visible in the
-					// library, which is the safe side of this call.
-					defaultLog.Warn("Version link skipped for %s: same-title lookup in %s failed: %v",
-						book.FilePath, parentDir, lookupErr)
-				} else if len(siblings) > 0 {
-					applySmartVersionLink(dbBook, siblings, parentDir)
-				}
+			// Create-if-absent. The `existing == nil` above was read at the TOP
+			// of this function, before the tag reads, hashing and
+			// author/series/work resolution -- a span that takes seconds per
+			// book on a full scan. Two writers that both read nil in that
+			// window both reached CreateBook and both minted a row at the same
+			// path; the version-link stripe below does not prevent it, because
+			// it is keyed on folder+title and is a no-op for an ineligible row.
+			// Take the path's own stripe and re-read inside it: whoever gets
+			// here second now sees the first one's row and takes the rescan
+			// merge path instead of minting a twin. See lockBookPath.
+			unlockPath := lockBookPath(book.FilePath)
+			raced, racedErr := getStore().GetBookByFilePath(book.FilePath)
+			if racedErr != nil {
+				unlockPath()
+				return fmt.Errorf("book lookup failed: %w", racedErr)
 			}
+			if raced != nil {
+				// Another writer created this path while we were working.
+				// Release the stripe -- there is nothing left to create -- and
+				// fall through to the merge path below, which overlays the
+				// scanner's fields onto the row that exists.
+				unlockPath()
+				defaultLog.Info("book row for %s was created concurrently; merging into %s instead of creating a second row",
+					book.FilePath, raced.ID)
+				existing = raced
+			} else {
+				parentDir := filepath.Dir(book.FilePath)
+				unlockVersionLink := lockVersionLinkFor(dbBook, parentDir)
+				if versionLinkEligible(dbBook) {
+					siblings, lookupErr := getStore().GetBooksByTitleInDir(strings.ToLower(dbBook.Title), parentDir)
+					if lookupErr != nil {
+						// Cannot tell whether this row has versions, so do not
+						// guess one. Leaving it ungrouped keeps it visible in the
+						// library, which is the safe side of this call.
+						defaultLog.Warn("Version link skipped for %s: same-title lookup in %s failed: %v",
+							book.FilePath, parentDir, lookupErr)
+					} else if len(siblings) > 0 {
+						applySmartVersionLink(dbBook, siblings, parentDir)
+					}
+				}
 
-			_, err = getStore().CreateBook(dbBook)
-			unlockVersionLink()
-			if err == nil {
-				followSyncIdentityOnVersionLink(supersededBookID, supersededBookPath, dbBook.ID)
-				// Check for metadata hash duplicates
-				detectMetadataHashDuplicate(dbBook, defaultLog)
-				if hooks := currentScanHooks(); hooks != nil {
-					hooks.OnBookScanned(dbBook.ID, dbBook.Title)
-					hooks.OnImportDedup(dbBook.ID)
+				_, err = getStore().CreateBook(dbBook)
+				unlockVersionLink()
+				// The path stripe is held across the re-read and the create, and
+				// released only once the row exists (or failed to): that span is
+				// the whole point of the lock.
+				unlockPath()
+				if err == nil {
+					followSyncIdentityOnVersionLink(supersededBookID, supersededBookPath, dbBook.ID)
+					// Check for metadata hash duplicates
+					detectMetadataHashDuplicate(dbBook, defaultLog)
+					if hooks := currentScanHooks(); hooks != nil {
+						hooks.OnBookScanned(dbBook.ID, dbBook.Title)
+						hooks.OnImportDedup(dbBook.ID)
+					}
 				}
+				return err
 			}
-			return err
 		}
 
 		// Rescan of an already-imported file (matched by path, or an existing
