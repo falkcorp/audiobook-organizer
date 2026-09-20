@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.16.1
+// version: 3.17.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-09-19
+// last-edited: 2026-09-20
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -87,7 +87,24 @@ import (
 )
 
 type durationReextractParams struct {
-	DryRun bool `json:"dryRun"`
+	// DryRun defaults to TRUE when absent. dry_run (snake_case) is accepted as
+	// an alias; sending both with different values is an error, never a guess.
+	//
+	// The alias is not tidiness. This op tagged its flag `dryRun` ONLY, while
+	// the ops beside it in this package tag theirs `dry_run` — and encoding/json
+	// discards a field it does not recognise without a word. So an operator who
+	// reached for the spelling every neighbouring op uses got the struct default
+	// instead: the run reported `examined=76280 ... would-change=17161`, the
+	// same summary a dry run prints, and wrote NOTHING. Measured in prod on
+	// 2026-09-20; the book the summary named as `13s -> 2221s` was still 13s
+	// afterwards. It fails safe, but it fails silently, which is worse than
+	// loudly: the only way to catch it was to re-read a row the op claimed to
+	// have corrected.
+	//
+	// maintenance.author-path-link and maintenance.author-id-repair already
+	// solve this exactly this way; this op is the outlier that did not.
+	DryRun      *bool `json:"dryRun,omitempty"`
+	DryRunSnake *bool `json:"dry_run,omitempty"`
 	// Limit caps the number of books examined in one run (0 = no cap). Useful for
 	// a bounded first pass over a large library.
 	Limit int `json:"limit"`
@@ -306,11 +323,25 @@ func processBookForReextract(ctx context.Context, store bookFileLister, book dat
 var reextractSegmentProgressInterval = 15 * time.Second
 
 func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	params := durationReextractParams{DryRun: true, Workers: 4, SkipAgeDays: 90} // safe defaults
+	params := durationReextractParams{Workers: 4, SkipAgeDays: 90} // safe defaults
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
 		}
+	}
+	// Both spellings sent and disagreeing is an error, never a guess: picking
+	// one would silently write in a run the caller may have meant as a preview.
+	if params.DryRun != nil && params.DryRunSnake != nil && *params.DryRun != *params.DryRunSnake {
+		return fmt.Errorf("maintenance.duration-reextract: dryRun=%v and dry_run=%v disagree; send one",
+			*params.DryRun, *params.DryRunSnake)
+	}
+	// Absent means TRUE. This op WRITES book and segment durations, so the
+	// default has to be the previewing one.
+	dryRun := true
+	if params.DryRun != nil {
+		dryRun = *params.DryRun
+	} else if params.DryRunSnake != nil {
+		dryRun = *params.DryRunSnake
 	}
 	// Clamp worker count.
 	if params.Workers < 1 {
@@ -330,7 +361,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		return fmt.Errorf("database not initialized")
 	}
 
-	if params.DryRun {
+	if dryRun {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 
@@ -471,7 +502,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		}
 		if !res.wouldChange {
 			// Duration is already correct — stamp verified and move on.
-			if !params.DryRun {
+			if !dryRun {
 				stampVerifiedAt(store, reporter, res.book.ID)
 			}
 			continue
@@ -485,7 +516,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 			examples = append(examples, res.example)
 		}
 
-		if params.DryRun {
+		if dryRun {
 			continue
 		}
 
@@ -580,7 +611,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 	}
 
 	verb := "would correct"
-	if !params.DryRun {
+	if !dryRun {
 		verb = fmt.Sprintf("corrected %d;", written)
 	}
 	summary := fmt.Sprintf(

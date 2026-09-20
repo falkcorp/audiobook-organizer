@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract_test.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
-// last-edited: 2026-09-02
+// last-edited: 2026-09-20
 
 package maintenance
 
@@ -21,7 +21,7 @@ import (
 
 func mustReextractParams(t *testing.T, dryRun bool, limit int) json.RawMessage {
 	t.Helper()
-	b, err := json.Marshal(durationReextractParams{DryRun: dryRun, Limit: limit})
+	b, err := json.Marshal(durationReextractParams{DryRun: boolPtr(dryRun), Limit: limit})
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestDurationReextract_ParallelWorkers_AllBooksProcessed(t *testing.T) {
 		},
 	}
 
-	params, _ := json.Marshal(durationReextractParams{DryRun: false, Workers: 4})
+	params, _ := json.Marshal(durationReextractParams{DryRun: boolPtr(false), Workers: 4})
 	p := New(fakeDeps{store: store})
 	if err := p.runDurationReextract(context.Background(), params, &fakeReporter{}); err != nil {
 		t.Fatalf("run: %v", err)
@@ -522,7 +522,7 @@ func TestDurationReextract_OnlyMissingDuration_SkipsKnownDuration(t *testing.T) 
 	p := New(fakeDeps{store: store})
 	reporter := &fakeReporter{}
 
-	params, err := json.Marshal(durationReextractParams{DryRun: true, OnlyMissingDuration: true})
+	params, err := json.Marshal(durationReextractParams{DryRun: boolPtr(true), OnlyMissingDuration: true})
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestDurationReextract_OnlyMissingDuration_DefaultExaminesAll(t *testing.T) 
 	p := New(fakeDeps{store: store})
 	reporter := &fakeReporter{}
 
-	params, err := json.Marshal(durationReextractParams{DryRun: true})
+	params, err := json.Marshal(durationReextractParams{DryRun: boolPtr(true)})
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}
@@ -557,5 +557,98 @@ func TestDurationReextract_OnlyMissingDuration_DefaultExaminesAll(t *testing.T) 
 	got := examinedCountFromSummary(t, reporter.logs)
 	if got != 2 {
 		t.Errorf("examined = %d, want 2 (OnlyMissingDuration=false must examine both books)", got)
+	}
+}
+
+// driftedBookStore builds a one-book library whose single segment has a stored
+// fingerprint duration far from the stored value, so an APPLY must write it and
+// a preview must not. Returns the store and a pointer to the written segment IDs.
+func driftedBookStore() (*database.MockStore, *[]string) {
+	written := make([]string, 0)
+	books := []database.Book{{ID: "b1", FilePath: "/lib/b1", Duration: new(50)}}
+	store := &database.MockStore{
+		CountAllBooksFunc:       func() (int, error) { return 1, nil },
+		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
+		GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) {
+			if offset >= 1 {
+				return nil, nil
+			}
+			return books, nil
+		},
+		GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
+			return []database.BookFile{
+				{ID: id + "-s1", BookID: id, FilePath: "/nonexistent/01.mp3", Duration: 50, AcoustIDFingerprintDurationSec: 3600.0},
+			}, nil
+		},
+		UpdateBookFileFunc: func(_ string, f *database.BookFile) error {
+			written = append(written, f.ID)
+			return nil
+		},
+	}
+	return store, &written
+}
+
+// THE PARAMS ARE RAW JSON ON PURPOSE.
+//
+// Every existing apply test builds durationReextractParams as a Go struct
+// literal, which type-checks the field and therefore cannot reach this bug at
+// all. In prod on 2026-09-20 the op was asked to apply with {"dry_run":false}
+// while the only tag it declared was `dryRun`; encoding/json dropped the
+// unknown field silently, the struct default (dryRun=true) stood, and the run
+// printed the same `examined=76280 ... would-change=17161` summary a real
+// apply prints while writing nothing. Only re-reading a row it claimed to have
+// corrected revealed it. These tests go through the JSON boundary so a
+// regression there fails here.
+func TestDurationReextract_SnakeCaseDryRunFalseApplies(t *testing.T) {
+	store, written := driftedBookStore()
+	p := New(fakeDeps{store: store})
+
+	if err := p.runDurationReextract(context.Background(), json.RawMessage(`{"dry_run":false}`), &fakeReporter{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(*written) != 1 {
+		t.Errorf("dry_run=false must APPLY, wrote %d segments, want 1 "+
+			"(this is the prod failure: the flag was dropped and the run silently previewed)", len(*written))
+	}
+}
+
+func TestDurationReextract_CamelCaseDryRunFalseStillApplies(t *testing.T) {
+	store, written := driftedBookStore()
+	p := New(fakeDeps{store: store})
+
+	if err := p.runDurationReextract(context.Background(), json.RawMessage(`{"dryRun":false}`), &fakeReporter{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(*written) != 1 {
+		t.Errorf("the original spelling must keep working, wrote %d segments, want 1", len(*written))
+	}
+}
+
+func TestDurationReextract_SnakeCaseDryRunTruePreviews(t *testing.T) {
+	store, written := driftedBookStore()
+	p := New(fakeDeps{store: store})
+
+	if err := p.runDurationReextract(context.Background(), json.RawMessage(`{"dry_run":true}`), &fakeReporter{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(*written) != 0 {
+		// Guards the obvious over-correction: making both spellings apply.
+		t.Errorf("dry_run=true must write nothing, wrote %d segments", len(*written))
+	}
+}
+
+func TestDurationReextract_DisagreeingSpellingsAreRefused(t *testing.T) {
+	store, written := driftedBookStore()
+	p := New(fakeDeps{store: store})
+
+	err := p.runDurationReextract(context.Background(), json.RawMessage(`{"dryRun":true,"dry_run":false}`), &fakeReporter{})
+	if err == nil {
+		t.Fatal("sending both spellings with different values must be an error, not a guess")
+	}
+	if !strings.Contains(err.Error(), "disagree") {
+		t.Errorf("error should say the flags disagree, got %q", err)
+	}
+	if len(*written) != 0 {
+		t.Errorf("a refused run must write nothing, wrote %d", len(*written))
 	}
 }

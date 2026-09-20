@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract_perbook_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d727c43-4cac-44cd-a1d2-3e4c07c99da4
-// last-edited: 2026-09-19
+// last-edited: 2026-09-20
 
 package maintenance
 
@@ -28,7 +28,7 @@ import (
 
 func applyReextractParams(t *testing.T) json.RawMessage {
 	t.Helper()
-	b, err := json.Marshal(durationReextractParams{DryRun: false, Workers: 4, SkipAgeDays: 0})
+	b, err := json.Marshal(durationReextractParams{DryRun: boolPtr(false), Workers: 4, SkipAgeDays: 0})
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}
