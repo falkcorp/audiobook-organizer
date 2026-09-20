@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
 // last-edited: 2026-09-19
 
@@ -441,25 +441,24 @@ func authorPathLinkPersonShaped(name string) bool {
 // rather than a person: an "author" that is really "we do not know" or "several
 // people". They are matched as whole words, case-insensitively, anywhere in the
 // name, so "Various Authors" and "Anonymous" are both caught.
+// 🔴 KEPT SHORT ON PURPOSE. Every word here is one a human would write meaning
+// "no single author", and the list stops there. A first draft carried
+// "untitled", "contributors", "crowdsourced" and four more speculative entries:
+// none of them appears on any of the 176 target rows the 2026-09-19 dry run
+// listed, "untitled" is a TITLE word rather than a collective, and a list that
+// grows on guesses is how a franchise wordlist gets in later by citing this one
+// as precedent. Add a word when a run produces the row that needs it.
 var authorPathLinkCollectiveWords = map[string]bool{
-	"various":        true,
-	"anonymous":      true,
-	"unknown":        true,
-	"assorted":       true,
-	"multiple":       true,
-	"misc":           true,
-	"miscellaneous":  true,
-	"anthology":      true,
-	"compilation":    true,
-	"uncredited":     true,
-	"unattributed":   true,
-	"unspecified":    true,
-	"unidentified":   true,
-	"untitled":       true,
-	"undetermined":   true,
-	"crowdsourced":   true,
-	"contributors":   true,
-	"groupofauthors": true,
+	"various":       true,
+	"anonymous":     true,
+	"unknown":       true,
+	"assorted":      true,
+	"multiple":      true,
+	"misc":          true,
+	"miscellaneous": true,
+	"anthology":     true,
+	"compilation":   true,
+	"uncredited":    true,
 }
 
 // authorPathLinkNonPersonRow reports whether a TARGET ROW's name reads as a
@@ -484,7 +483,8 @@ var authorPathLinkCollectiveWords = map[string]bool{
 //
 //	possessive       a word ending in "'s" ("Freedom's Dawn"). Names do not
 //	                 inflect that way; "O'Brien" and "D'Angelo" do not end in s.
-//	leading article  the first word is "the", "a" or "an" ("The Messenger").
+//	leading article  the first word is "the", "a" or "an" ("The Messenger") --
+//	                 the WORD, not an initial: "A. Merritt" is an author.
 //	all-caps shout   authorPathLinkMinAllCapsWords or more words that are
 //	                 entirely uppercase letters ("STAR TREK POWER KLINGON").
 //	collective       a word from authorPathLinkCollectiveWords ("Various
@@ -501,7 +501,13 @@ func authorPathLinkNonPersonRow(name string) bool {
 	if len(fields) == 0 {
 		return false
 	}
-	if first := strings.ToLower(strings.Trim(fields[0], ".,")); first == "the" || first == "a" || first == "an" {
+	// 🔴 THE PERIOD IS NOT STRIPPED HERE, AND THAT IS THE WHOLE TEST. An
+	// INITIAL is not an article: "A. Merritt" and "A. A. Milne" are real
+	// authors, and trimming "." before the comparison turns both of them into a
+	// leading "a" and holds them. Only a comma is stripped ("The, ..." is not a
+	// shape this needs to survive). A bar that refuses a write has to fail
+	// towards letting a real author through.
+	if first := strings.ToLower(strings.TrimRight(fields[0], ",")); first == "the" || first == "a" || first == "an" {
 		return true
 	}
 	allCaps := 0

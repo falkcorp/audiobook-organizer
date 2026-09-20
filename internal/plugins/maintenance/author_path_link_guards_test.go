@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link_guards_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f21c5a7-4d63-4b90-a1e8-6c07f2d95b31
 // last-edited: 2026-09-19
 
@@ -177,6 +177,12 @@ func TestAuthorPathLinkNonPersonRow(t *testing.T) {
 		{"STEPHEN KING", false},
 		{"Ursula K. Le Guin", false},
 		{"O'Brien Smith", false},
+		// 🔴 AN INITIAL IS NOT AN ARTICLE. "A. Merritt" is a real author, and a
+		// leading-article test that strips the period before comparing holds
+		// him -- the exact failure direction this predicate must not have.
+		{"A. Merritt", false},
+		{"A. A. Milne", false},
+		{"A.A. Milne", false},
 		{"", false},
 	}
 	for _, tc := range cases {
