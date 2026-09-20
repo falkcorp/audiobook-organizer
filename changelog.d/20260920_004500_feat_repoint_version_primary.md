@@ -41,3 +41,19 @@
   key and additionally refuses to write while a scan is running, because a scan
   reverts `library_state` organized→imported — the very field the predicate
   keys on.
+
+  A skipped demote is not a failed demote. `ModifyBook` reports "wrote",
+  "skipped" and "no such row" all with a nil error, and in the skip cases the
+  wanted state already holds — the promoted member is the group's one primary.
+  The compensating revert therefore fires only when the demote genuinely
+  errored; reverting on a skip would have written the member back to
+  non-primary and left the group with NO primary, hiding both books from the
+  library list and from ABS — the exact harm the promote-first ordering exists
+  to prevent. A twin whose flag went nil is reported rather than reverted, for
+  the same reason. Each repointed pair is also logged as it lands, with both
+  prior flags, so the record survives a lost result payload.
+
+  The twin must also have the same duration as the member (2 s, or 1% of the
+  longer side). Without it a complete single-file book that happens to be
+  version-linked to one chapter of the imported copy passes every other check,
+  and demoting it would hide a whole book while a lone chapter became primary.
