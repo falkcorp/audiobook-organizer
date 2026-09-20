@@ -151,7 +151,10 @@ func TestBookShape_DuplicateRowsAtPath_OverlapClassification(t *testing.T) {
 		wantShape string
 		wantWord  string
 	}{
-		{"full-overlap-subset", []string{"1.mp3"}, []string{"1.mp3", "2.mp3"}, shapeContainment, "overlap fully"},
+		// A strict subset is a CONTAINMENT, but the sets do not overlap FULLY --
+		// the shape and the overlap word answer different questions.
+		{"subset-is-partial-overlap", []string{"1.mp3"}, []string{"1.mp3", "2.mp3"}, shapeContainment, "overlap partially"},
+		{"identical-is-full-overlap", []string{"1.mp3", "2.mp3"}, []string{"1.mp3", "2.mp3"}, shapeContainment, "overlap fully (identical"},
 		{"partial-overlap", []string{"1.mp3", "3.mp3"}, []string{"1.mp3", "2.mp3"}, shapePartialOverlap, "overlap partially"},
 		{"no-overlap", []string{"1.mp3"}, []string{"2.mp3"}, shapePartition, "do not overlap"},
 	} {
@@ -218,6 +221,52 @@ func TestBookShape_PartitionRequiresTheDiskCount(t *testing.T) {
 	require.Contains(t, part[0].Detail, "NEITHER is complete")
 	require.Contains(t, part[0].Recommendation, "MERGE and re-own")
 	require.Empty(t, findingsOf(got, shapeOrphanedFiles))
+}
+
+// A union that reaches the right SIZE while containing rows for files that are
+// no longer on disk is not a partition of the folder: merging on it would be
+// merging on missing rows. The library holds ~66,753 such rows.
+func TestBookShape_PartitionRejectsMissingRows(t *testing.T) {
+	dir := t.TempDir()
+	touchAudio(t, dir, "1.mp3", "2.mp3")
+
+	var f bookShapeFixture
+	f.addBook("a", dir, "organized", true)
+	f.addBook("b", dir, "organized", false)
+	f.addRows("a", filepath.Join(dir, "1.mp3"))
+	// b's row names a file that does NOT exist: the union is 2 and the disk
+	// count is 2, so an integer comparison would call this a partition.
+	f.addRows("b", filepath.Join(dir, "gone.mp3"))
+
+	got := f.run(t, bookShapeReportParams{})
+	require.Empty(t, findingsOf(got, shapePartition), "a missing row must not satisfy the partition gate")
+	require.Len(t, findingsOf(got, shapeDisjointUnaccounted), 1)
+	// And the file on disk that nobody owns is still surfaced, even though the
+	// folder holds as many rows as it holds files.
+	orph := findingsOf(got, shapeOrphanedFiles)
+	require.Len(t, orph, 1)
+	require.Contains(t, orph[0].Detail, "2.mp3")
+}
+
+// A record already absorbed into another is retired: it must not be grouped,
+// because a merge recommendation for a merged-away row is work already done.
+func TestBookShape_MergedAwayRecordsAreExcluded(t *testing.T) {
+	dir := t.TempDir()
+	touchAudio(t, dir, "1.mp3")
+
+	var f bookShapeFixture
+	f.addBook("live", dir, "organized", true)
+	f.addBook("gone", dir, "organized", false)
+	into := "live"
+	f.books[1].MergedIntoBookID = &into
+	f.addRows("live", filepath.Join(dir, "1.mp3"))
+	f.addRows("gone", filepath.Join(dir, "1.mp3"))
+
+	got := f.run(t, bookShapeReportParams{})
+	require.Equal(t, 1, got.MergedAway)
+	require.Equal(t, 0, got.MultiBookPaths)
+	require.Empty(t, findingsOf(got, shapeDuplicateRowsAtPath))
+	require.Empty(t, findingsOf(got, shapeContainment))
 }
 
 // --- shape 3: different content, which must never be recommended for a merge ---
