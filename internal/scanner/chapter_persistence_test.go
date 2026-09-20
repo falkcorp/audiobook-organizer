@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_persistence_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: cb2ed4a4-974b-4d88-8d46-0a0f365ba430
-// last-edited: 2026-08-19
+// last-edited: 2026-09-19
 
 package scanner
 
@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -39,6 +40,11 @@ func odysseyTrackTitle(n int) string {
 	return "The Odyssey: Book 0" + string(rune('0'+n))
 }
 
+// requireChapterTestFFprobe guards on ffprobe alone even though
+// audioutil.ProbeDurationSeconds prefers mediainfo. That is still SUFFICIENT --
+// ProbeDurationSeconds always falls back to ffprobe, so ffprobe on PATH means
+// every probe in these tests can be answered. The only cost is a false skip on
+// the unusual machine that has mediainfo but not ffprobe.
 func requireChapterTestFFprobe(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("ffprobe"); err != nil {
@@ -143,10 +149,50 @@ func TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags(t *testin
 		}
 	}
 
-	const wantSumOfTracks = 9975.431111
+	// wantSumOfTracks is DERIVED, not a literal, and that is the point of this
+	// block. It used to be the constant 9975.431111, which is what
+	// `ffprobe -show_entries format=duration` sums to over these six mp3s. But
+	// audioutil.ProbeDurationSeconds -- the function synthesizeMultiFileChapters
+	// actually calls -- tries mediainfo FIRST and only falls back to ffprobe
+	// (see the doc comment on ProbeDurationSeconds). On a machine with
+	// mediainfo installed the same six files sum to 9975.827000, because
+	// mediainfo counts frames where ffprobe estimates: measured per track with
+	// MediaInfoLib v26.05, the two disagree by 52ms on tracks 1/2/3/5 and 94ms
+	// on tracks 4/6. So the literal did not encode "the sum of the tracks" at
+	// all -- it encoded "the sum of the tracks AS REPORTED BY WHICHEVER PROBE
+	// BINARY HAPPENS TO BE INSTALLED", and the test failed by 0.396s on any
+	// developer machine that has mediainfo. It never caught this in CI because
+	// no workflow in .github/workflows installs ffmpeg or mediainfo, so the
+	// requireChapterTestFFprobe guard skips this test on every CI run.
+	//
+	// Summing ProbeDurationSeconds here instead makes the tolerance TIGHTER,
+	// not looser: SynthesizeChapters accumulates `start = start + dur` in
+	// GetBookFiles order (audioutil/timeline.go), and the loop below performs
+	// the identical float64 additions in the identical order, so the two agree
+	// to the last bit and 1e-6 covers accumulation only. The alternative --
+	// setting audioutil's mediainfo kill-switch env var to force ffprobe and
+	// keep the absolute literal -- was rejected: it would pin a pretty number
+	// by exercising a probe path production does not take on this machine.
+	//
+	// Two pre-existing assertions, not one, keep a derived expectation from
+	// being vacuous, and they catch different regressions. The monotonic-offset
+	// loop above catches a probe that returns zero durations with no error --
+	// wantSumOfTracks would be 0, every chapter would start at 0, and it fails
+	// there. The containerDuration check below catches a wrong-but-nonzero
+	// duration source (Book.Duration, the container, a rounded value); it holds
+	// under either prober, since the ffprobe sum misses the container by 0.049s
+	// and the mediainfo sum by 0.347s, both outside its 0.01 window.
+	var wantSumOfTracks float64
+	for n := 1; n <= 6; n++ {
+		dur, err := audioutil.ProbeDurationSeconds(ctx, "", chapterTestOdysseyMP3Track(n))
+		if err != nil {
+			t.Fatalf("ProbeDurationSeconds(track %d): %v", n, err)
+		}
+		wantSumOfTracks += dur
+	}
 	const containerDuration = 9975.480544
-	if diff := chs[5].EndSec - wantSumOfTracks; diff > 0.001 || diff < -0.001 {
-		t.Errorf("chs[5].EndSec = %v, want within 0.001 of sum-of-tracks %v", chs[5].EndSec, wantSumOfTracks)
+	if diff := chs[5].EndSec - wantSumOfTracks; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("chs[5].EndSec = %v, want within 1e-6 of sum-of-tracks %v", chs[5].EndSec, wantSumOfTracks)
 	}
 	if diff := chs[5].EndSec - containerDuration; diff > -0.01 && diff < 0.01 {
 		t.Errorf("chs[5].EndSec = %v must NOT be close to container duration %v (this book has no container in this path)", chs[5].EndSec, containerDuration)
