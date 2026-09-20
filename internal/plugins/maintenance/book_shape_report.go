@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/book_shape_report.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f0c5a71-8d4e-4a92-9b16-2c7e5d40ab31
 // last-edited: 2026-09-20
 
@@ -142,8 +142,9 @@ var bookShapeRecommendations = map[string]string{
 	shapePartialOverlap: "INVESTIGATE before any merge: the sets neither duplicate nor partition each " +
 		"other, so neither the containment gate nor the partition gate holds.",
 	shapePartition: "MERGE and re-own: move every row under one book, then recompute aggregates. Gate the " +
-		"merge on all three facts this row already carries — disjoint sets, same directory, and " +
-		"owned_rows == disk_files. Without the disk count the gate is unsound.",
+		"merge on all three facts this row already carries — disjoint sets, same directory, and an owned " +
+		"path set that is EXACTLY the set of files present on disk (not merely the same count, which a " +
+		"missing row can fake). Without the disk set the gate is unsound.",
 	shapeDisjointUnaccounted: "DO NOT MERGE on the disjointness alone: the union does not account for the " +
 		"folder. Re-scan the folder (the scanner rules were fixed in #3481/#3488) and re-report before " +
 		"treating it as a partition.",
@@ -291,6 +292,9 @@ type bookShapeReport struct {
 	ShapeCounts map[string]int
 	// Findings holds every finding, sorted for a deterministic, diffable report.
 	Findings []bookShapeFinding
+	// MergedAway counts records excluded from grouping because they are already
+	// absorbed into another book.
+	MergedAway int
 	// UnreadableDirs counts grouping directories the op could not read. These
 	// are REPORTED (DiskFiles = -1, PathKind = unreadable), never fatal.
 	UnreadableDirs int
@@ -314,8 +318,8 @@ func (r bookShapeReport) summary() string {
 	if r.DiskStatSkipped {
 		skipped = " disk_stat=SKIPPED(no partition/orphan findings possible)"
 	}
-	return fmt.Sprintf("books=%d file_rows=%d empty_path=%d groups=%d multi_book_paths=%d unreadable_dirs=%d%s findings=%d [%s]",
-		r.TotalBooks, r.TotalFileRows, r.EmptyFilePath, r.Groups, r.MultiBookPaths,
+	return fmt.Sprintf("books=%d file_rows=%d empty_path=%d merged_away=%d groups=%d multi_book_paths=%d unreadable_dirs=%d%s findings=%d [%s]",
+		r.TotalBooks, r.TotalFileRows, r.EmptyFilePath, r.MergedAway, r.Groups, r.MultiBookPaths,
 		r.UnreadableDirs, skipped, len(r.Findings), strings.Join(parts, " "))
 }
 
@@ -448,6 +452,13 @@ func hasConcatenatedAbsolutePath(p string) bool {
 type bookShapeDirStat struct {
 	Kind       string // dir | file | missing | unreadable | not-statted
 	AudioFiles int    // -1 when unknown
+	// Present is the SET of audio file paths actually in the directory. The
+	// orphan and partition tests compare SETS against it, never two integers:
+	// the library holds ~66,753 rows whose file no longer exists, so a folder
+	// can hold more owned rows than files on disk while still having files
+	// nobody owns. An integer comparison hides exactly the Foundation shape
+	// this op exists to find. Nil when the directory could not be read.
+	Present map[string]struct{}
 }
 
 // statGroupDir stats the grouping path and counts the audio files directly
@@ -471,16 +482,16 @@ func statGroupDir(dir string) bookShapeDirStat {
 	if err != nil {
 		return bookShapeDirStat{Kind: "unreadable", AudioFiles: -1}
 	}
-	n := 0
+	present := make(map[string]struct{}, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		if linkintegrity.IsAudioFile(e.Name()) {
-			n++
+			present[filepath.Join(dir, e.Name())] = struct{}{}
 		}
 	}
-	return bookShapeDirStat{Kind: "dir", AudioFiles: n}
+	return bookShapeDirStat{Kind: "dir", AudioFiles: len(present), Present: present}
 }
 
 // bookShapeMember is one book row inside a group, with the file paths it owns.
@@ -587,7 +598,16 @@ func buildBookShapeReport(ctx context.Context, store bookShapeStore, params book
 	// sequential; the parallel pass below is the one that stats directories.
 	byDir := make(map[string][]bookShapeMember, len(books))
 	emptyPath := 0
+	merged := 0
 	for _, b := range books {
+		// A record already absorbed into another is retired: grouping it would
+		// report work that is already done and could earn a merge recommendation
+		// for a row nothing should touch. (Soft-deleted rows are already excluded
+		// upstream -- GetAllBooksCore filters MarkedForDeletion by default.)
+		if b.MergedIntoBookID != nil && strings.TrimSpace(*b.MergedIntoBookID) != "" {
+			merged++
+			continue
+		}
 		key := bookShapeGroupKey(b.FilePath)
 		if key == "" {
 			emptyPath++
@@ -619,6 +639,7 @@ func buildBookShapeReport(ctx context.Context, store bookShapeStore, params book
 
 	report := bookShapeReport{
 		TotalBooks:      len(books),
+		MergedAway:      merged,
 		TotalFileRows:   totalFileRows,
 		EmptyFilePath:   emptyPath,
 		Groups:          len(groups),
@@ -757,22 +778,22 @@ func classifyGroup(g bookShapeGroup, stat bookShapeDirStat, params bookShapeRepo
 
 	// Orphaned files is NOT mutually exclusive with the shape ladder: Foundation
 	// is simultaneously disjoint-unaccounted and ~170 files short.
-	if stat.AudioFiles >= 0 {
-		owned := map[string]struct{}{}
-		for _, m := range g.members {
-			for p := range m.set {
-				if filepath.Dir(p) == g.dir {
-					owned[p] = struct{}{}
-				}
+	if stat.Present != nil {
+		owned := ownedInDir(g)
+		var orphans []string
+		for p := range stat.Present {
+			if _, ok := owned[p]; !ok {
+				orphans = append(orphans, p)
 			}
 		}
-		if stat.AudioFiles > len(owned) {
+		if len(orphans) > 0 {
+			sort.Strings(orphans)
 			out = append(out, bookShapeFinding{
 				Shape: shapeOrphanedFiles, Dir: g.dir, BookIDs: memberIDs(g), PathKind: stat.Kind,
 				LibraryState: joinStates(g), IsPrimary: joinPrimary(g),
 				OwnedRows: len(owned), DiskFiles: stat.AudioFiles,
-				Detail: fmt.Sprintf("%d audio file(s) on disk are owned by no book row (%d owned vs %d on disk)",
-					stat.AudioFiles-len(owned), len(owned), stat.AudioFiles),
+				Detail: fmt.Sprintf("%d audio file(s) on disk are owned by no book row (%d row(s) own a path in this folder, %d file(s) present), e.g. %q",
+					len(orphans), len(owned), stat.AudioFiles, filepath.Base(orphans[0])),
 				Recommendation: bookShapeRecommendations[shapeOrphanedFiles],
 			})
 		}
@@ -873,9 +894,14 @@ func groupShape(g bookShapeGroup, stat bookShapeDirStat, corruptBooks map[string
 	for _, m := range g.members {
 		union += len(m.set)
 	}
-	if stat.AudioFiles >= 0 && union == stat.AudioFiles {
+	// Set equality against the files actually PRESENT, not len == len: a union
+	// that reaches the right size while containing rows for files that no longer
+	// exist is not a partition of this folder, and a merge gated on it would be
+	// a merge gated on missing rows. The library held ~66,753 such rows in
+	// 2026-09.
+	if stat.Present != nil && sameSet(ownedInDir(g), stat.Present) {
 		return shapePartition, fmt.Sprintf(
-			"disjoint file sets whose union (%d) equals the %d audio file(s) on disk: one folder's files really are split across %d records, and NEITHER is complete",
+			"disjoint file sets whose union (%d) is EXACTLY the %d audio file(s) present on disk: one folder's files really are split across %d records, and NEITHER is complete",
 			union, stat.AudioFiles, len(g.members))
 	}
 	disk := "unknown"
@@ -942,6 +968,32 @@ func collisionSuffixExplosion(m bookShapeMember, minDirs int) (string, string, i
 	return "", "", 0
 }
 
+// ownedInDir is every path inside the group directory that some member owns.
+func ownedInDir(g bookShapeGroup) map[string]struct{} {
+	owned := map[string]struct{}{}
+	for _, m := range g.members {
+		for p := range m.set {
+			if filepath.Dir(p) == g.dir {
+				owned[p] = struct{}{}
+			}
+		}
+	}
+	return owned
+}
+
+// sameSet reports exact set equality.
+func sameSet(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for p := range a {
+		if _, ok := b[p]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func sharedPathCount(g bookShapeGroup) int {
 	seen := map[string]int{}
 	for _, m := range g.members {
@@ -1002,17 +1054,37 @@ func memberByID(g bookShapeGroup, id string) bookShapeMember {
 	return bookShapeMember{}
 }
 
+// overlapWord answers the report's "fully, partially or not at all" question
+// about the members' file sets. FULLY means IDENTICAL sets -- a strict subset
+// is a partial overlap, however clearly it is also a containment. The shape and
+// the overlap word answer different questions and are deliberately not the same
+// test.
 func overlapWord(g bookShapeGroup) string {
 	shared := sharedPathCount(g)
-	switch {
-	case shared == 0:
+	if shared == 0 {
 		return "file sets do not overlap"
-	default:
-		if _, _, ok := subsetPair(g); ok {
-			return fmt.Sprintf("file sets overlap fully (one is a subset of another, %d shared path(s))", shared)
-		}
-		return fmt.Sprintf("file sets overlap partially (%d shared path(s))", shared)
 	}
+	if allSetsIdentical(g) {
+		return fmt.Sprintf("file sets overlap fully (identical, %d path(s) each)", shared)
+	}
+	return fmt.Sprintf("file sets overlap partially (%d shared path(s))", shared)
+}
+
+// allSetsIdentical reports whether every member owns exactly the same paths.
+func allSetsIdentical(g bookShapeGroup) bool {
+	if len(g.members) < 2 {
+		return false
+	}
+	first := g.members[0].set
+	if len(first) == 0 {
+		return false
+	}
+	for _, m := range g.members[1:] {
+		if !sameSet(first, m.set) {
+			return false
+		}
+	}
+	return true
 }
 
 func memberIDs(g bookShapeGroup) []string {
