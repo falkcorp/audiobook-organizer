@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
 // last-edited: 2026-09-19
 
@@ -642,7 +642,11 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 	plan.UpdateErrs = int(updateErrs.Load())
 	plan.RecomputeErrs = int(recomputeErrs.Load())
 	if standDownLost.Load() {
-		return plan, fmt.Errorf("missing-file-repoint: scan stand-down lease lapsed mid-apply after %d repoints — aborted (re-run after the scan is idle)", plan.Repointed)
+		// Repointed/UpdateErrs describe only the rows this run ATTEMPTED: an abort
+		// abandons the rest of the aborting book and every book after it without
+		// counting them, so the buckets do not sum to the planned count.
+		return plan, fmt.Errorf("missing-file-repoint: scan stand-down lease lapsed mid-apply after %d of %d repoints — aborted; the remaining %d were NOT attempted and are not counted in any bucket (re-run after the scan is idle)",
+			plan.Repointed, totalRewrites, totalRewrites-(plan.Repointed+plan.UpdateErrs))
 	}
 	return plan, nil
 }

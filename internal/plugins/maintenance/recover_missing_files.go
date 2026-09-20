@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-09-19
 
@@ -1001,7 +1001,13 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	}
 
 	if standDownLost.Load() {
-		return plan, fmt.Errorf("recover-missing-files: scan stand-down lease lapsed mid-apply after %d repoints / %d reflinks — aborted (re-run after the scan is idle)", plan.Repointed, plan.Reflinked)
+		// Repointed/SkippedChanged/UpdateErrs describe only the rows this run
+		// ATTEMPTED: an abort abandons the rest of the aborting book and every
+		// book after it without counting them, so the buckets do not sum to the
+		// planned count.
+		return plan, fmt.Errorf("recover-missing-files: scan stand-down lease lapsed mid-apply after %d of %d repoints / %d reflinks — aborted; the remaining %d repoint rows were NOT attempted and are not counted in any bucket (re-run after the scan is idle)",
+			plan.Repointed, totalRewrites, plan.Reflinked,
+			totalRewrites-(plan.Repointed+plan.SkippedChanged+plan.UpdateErrs))
 	}
 	return plan, nil
 }

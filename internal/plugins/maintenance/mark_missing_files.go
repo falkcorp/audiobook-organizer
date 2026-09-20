@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
 // last-edited: 2026-09-19
 
@@ -615,7 +615,14 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 	plan.UpdateErrs = int(updateErrs.Load())
 	plan.RecomputeErrs = int(recomputeErrs.Load())
 	if standDownLost.Load() {
-		return plan, fmt.Errorf("mark-missing-files: scan stand-down lease lapsed mid-apply after %d flips — aborted (re-run after the scan is idle)", plan.MarkedMissing+plan.ClearedStale)
+		// The per-bucket counts describe only the rows this run ATTEMPTED. An
+		// abort abandons the rest of the aborting book and every book after it
+		// without counting them anywhere, so marked+cleared+skipped+errs does
+		// NOT sum to the planned flip count on an aborted run. Say so here
+		// rather than leaving the operator to discover the gap by subtraction.
+		return plan, fmt.Errorf("mark-missing-files: scan stand-down lease lapsed mid-apply after %d of %d flips — aborted; the remaining %d were NOT attempted and are not counted in any bucket (re-run after the scan is idle)",
+			plan.MarkedMissing+plan.ClearedStale, totalFlips,
+			totalFlips-(plan.MarkedMissing+plan.ClearedStale+plan.SkippedChanged+plan.UpdateErrs))
 	}
 	return plan, nil
 }
