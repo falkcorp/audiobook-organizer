@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b036c68e-a6da-48df-806b-b765cda262ef
 // last-edited: 2026-09-19
 
@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -36,6 +37,12 @@ type rewriteFakeStore struct {
 	// callback — the seam a test uses to simulate another writer moving the row
 	// between the scan and the write.
 	modifyBookHook func(b *database.Book)
+
+	// modifyBookErr makes every ModifyBook fail, as a store-level write error
+	// would. The callback still runs first, which is the point: it is what sets
+	// the op's bookOld/bookNew, so this seam is what proves those values do not
+	// reach the ledger when the commit did not happen.
+	modifyBookErr error
 }
 
 func (f *rewriteFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
@@ -79,6 +86,11 @@ func (f *rewriteFakeStore) ModifyBook(id string, fn func(*database.Book) error) 
 			return stored, nil
 		}
 		return nil, err
+	}
+	if f.modifyBookErr != nil {
+		// The callback has already run (and already set the op's bookOld/
+		// bookNew); the COMMIT is what fails.
+		return nil, f.modifyBookErr
 	}
 	f.fullBooks[id] = &row
 	f.bookWrites = append(f.bookWrites, row)
@@ -400,6 +412,127 @@ func TestRewritePathPrefix_ParamValidation(t *testing.T) {
 		})
 	}
 	require.NoError(t, rewritePathPrefixParams{OldPrefix: "/a", NewPrefix: "/b"}.validate())
+}
+
+// C1: the book row's own write FAILS. Its file rows must not move — that would
+// be the half-written book the op's whole-or-nothing rule exists to prevent —
+// and no path_history entry may be written, because bookOld/bookNew are set
+// inside the callback (before the commit) and would otherwise journal a move
+// the store rejected. A row heals on re-run; a false ledger line is permanent.
+func TestRewritePathPrefix_BookWriteFailureLeavesFilesAndLedgerUntouched(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new")
+	makeTree(t, newDir)
+	store := seedRewrite(t, oldDir)
+	store.modifyBookErr = errors.New("pebble: write failed")
+
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewriteParams(oldDir, newDir, false), &fakeReporter{})
+	// C2: a run whose writes failed must NOT return success.
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "FAILED")
+
+	require.Empty(t, store.bookWrites)
+	require.Empty(t, store.fileWrites, "the file rows must not move without their book row")
+	require.Empty(t, store.ledger, "no path_history entry may assert a move that never committed")
+	require.Zero(t, plan.BooksRewritten)
+	require.Zero(t, plan.FieldsRewritten)
+	require.Positive(t, plan.UpdateErrs)
+
+	// The file rows are REFUSED into a bucket, not silently dropped.
+	var sawFileRefusal bool
+	for _, d := range plan.all {
+		if d.Field == "book_file.file_path" && d.Bucket == "update-error" {
+			sawFileRefusal = true
+			require.Contains(t, d.Reason, "not attempted")
+		}
+	}
+	require.True(t, sawFileRefusal, "the un-attempted file rows must land in a bucket")
+}
+
+// C3: an old_prefix that CONTAINS an iTunes root is refused. Testing only
+// "is the prefix inside a root" passes this and would rewrite books/itunes/**.
+func TestRewritePathPrefix_PrefixContainingITunesRootIsRefused(t *testing.T) {
+	roots := []string{"/mnt/bigdata/books/itunes"}
+	require.True(t, prefixTouchesITunes("/mnt/bigdata/books", roots),
+		"a prefix that CONTAINS an iTunes root must be refused")
+	require.True(t, prefixTouchesITunes("/mnt/bigdata/books/itunes/Sub", roots),
+		"a prefix INSIDE an iTunes root must be refused")
+	require.True(t, prefixTouchesITunes("/mnt/bigdata/books/itunes", roots))
+	require.False(t, prefixTouchesITunes("/mnt/bigdata/newbooks", roots),
+		"a sibling tree must still be allowed")
+	require.False(t, prefixTouchesITunes("/mnt/bigdata/books2", roots),
+		"the boundary rule must hold here too")
+	require.False(t, prefixTouchesITunes("", roots))
+}
+
+// Nested prefixes are neither idempotent nor reversible by swapping, so they
+// are rejected before any store read.
+func TestRewritePathPrefix_NestedPrefixesRejected(t *testing.T) {
+	require.Error(t, rewritePathPrefixParams{OldPrefix: "/books/A", NewPrefix: "/books/A/sub"}.validate())
+	require.Error(t, rewritePathPrefixParams{OldPrefix: "/books/A/sub", NewPrefix: "/books/A"}.validate())
+	require.NoError(t, rewritePathPrefixParams{OldPrefix: "/books/A", NewPrefix: "/books/B"}.validate())
+	require.NoError(t, rewritePathPrefixParams{OldPrefix: "/books/A", NewPrefix: "/books/AB"}.validate(),
+		"a sibling whose name merely starts the same is not nested")
+}
+
+// A book matched ONLY through source_import_path is rewritten, but reported in
+// its own bucket and counted apart — nothing about it can be stat- or
+// collision-checked, so the operator has to be able to see that population.
+func TestRewritePathPrefix_SourceImportOnlyIsBucketedApart(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new") // deliberately NOT created on disk
+	store := seedRewrite(t, oldDir)
+	// Only source_import_path matches: the book and its file live elsewhere.
+	outside := filepath.Join(root, "elsewhere")
+	store.books[0].FilePath = outside
+	store.fullBooks["b1"].FilePath = outside
+	store.fileCores[0].FilePath = filepath.Join(outside, "01.mp3")
+	store.fullFiles["f1"].FilePath = filepath.Join(outside, "01.mp3")
+
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewriteParams(oldDir, newDir, true), &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.Rewritable)
+	require.Equal(t, 1, plan.SourceImportOnly)
+	require.Zero(t, plan.TargetMissing, "a provenance field is not stat-gated")
+
+	var bucket string
+	for _, d := range plan.all {
+		if d.Field == "book.source_import_path" {
+			bucket = d.Bucket
+		}
+	}
+	require.Equal(t, "rewritable-source-import-only", bucket)
+}
+
+// Books above the cap land in their own bucket instead of vanishing from the
+// report the operator sizes the next run against.
+func TestRewritePathPrefix_CappedBooksAreReported(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new")
+	makeTree(t, newDir)
+	store := seedRewrite(t, oldDir)
+	// A second book in a subdirectory of the same tree, so both are matched.
+	b2Old := filepath.Join(oldDir, "sub")
+	store.books = append(store.books, database.BookCore{ID: "b2", FilePath: b2Old})
+	store.fullBooks["b2"] = &database.Book{ID: "b2", FilePath: b2Old}
+	require.NoError(t, os.MkdirAll(filepath.Join(newDir, "sub"), 0o755))
+
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewritePathPrefixParams{OldPrefix: oldDir, NewPrefix: newDir, Max: 1}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.CappedAt)
+	var capped int
+	for _, d := range plan.all {
+		if d.Bucket == "capped" {
+			capped++
+		}
+	}
+	require.Positive(t, capped, "the truncated tail must still be reported")
 }
 
 // --- the completeness proof, against a REAL store ---
