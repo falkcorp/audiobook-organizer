@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
-// last-edited: 2026-09-19
+// last-edited: 2026-09-20
 
 package jobs_test
 
@@ -30,7 +30,12 @@ import (
 // fix_library_states_test.go, which pins its absence. Re-counted after the
 // removal: `maintenance.All()` returns 37 and there are 37 `maintenance.Register`
 // calls across 37 non-test files under internal/maintenance/jobs.
-const wantJobCount = 37
+//
+// 2026-09-20: 37 → 38. `repoint-version-primary` was added
+// (repoint_version_primary.go): it moves is_primary_version from an organized
+// single-chapter book onto its imported twin so a chapter run whose members are
+// all non-primary versions can be consolidated.
+const wantJobCount = 38
 
 // TestEveryJobDeclaresAUsablePolicy is the reason ExecutionPolicy can be a struct
 // rather than five separate interface methods.
@@ -119,8 +124,15 @@ func TestPolicyIsBehaviourPreservingVersusTheBridge(t *testing.T) {
 	// owner's standing rule is that nothing applies to the library during a
 	// scan, and sharing the key is what makes the registry serialize the two.
 	// It never changes library.scan's own key.
+	//
+	// repoint-version-primary JOINS the same key (added 2026-09-20) for a
+	// specific reason on top of the standing rule: a scan REVERTS library_state
+	// organized->imported on every pass (PR #3097), and library_state is the
+	// field that job's predicate keys on, so a concurrent scan could flip a
+	// twin between the snapshot and the write.
 	wantKeyOverride := map[string]string{
-		"merge-chapter-groups": "library.scan",
+		"merge-chapter-groups":    "library.scan",
+		"repoint-version-primary": "library.scan",
 	}
 
 	jobs := maintenance.All()
