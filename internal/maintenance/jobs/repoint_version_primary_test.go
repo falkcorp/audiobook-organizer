@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repoint_version_primary_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c3f1b52-6a04-4de7-9b18-2f7a05c9d6e1
 // last-edited: 2026-09-20
 
@@ -630,6 +630,65 @@ func TestRepointVersionPrimary_TwinDurationMustCorroborate(t *testing.T) {
 	if again.Counts[bucketRepointed] != 1 || again.Counts[bucketDurationMismatch] != 1 {
 		t.Fatalf("1 s of rounding slack was refused: %+v", again.Counts)
 	}
+}
+
+// TestRepointVersionPrimary_ScanFlippedStateMidRunIsNotWritten is what replaces
+// the library.scan ConcurrencyKey this job cannot declare (one key field, and
+// internal/server's TestMaintenanceOpSerializesAgainstItself requires it to be
+// distinct, so joining the lane would have cost self-exclusion). A scan that
+// starts mid-run rewrites library_state (PR #3097) — the field classify keyed
+// on — so both write closures re-assert it against the row ModifyBook re-read
+// under the write lock. A flipped row is skipped, never written from the stale
+// snapshot.
+func TestRepointVersionPrimary_ScanFlippedStateMidRunIsNotWritten(t *testing.T) {
+	t.Run("member flipped", func(t *testing.T) {
+		s := ddRealStore(t)
+		imported, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 2, "vg")
+		fs := &rvpTwinStore{JobStore: s, inner: s, twinID: imported[0].ID,
+			before: func(b *database.Book) { b.LibraryState = rvpStr("organized") }}
+
+		res := rvpRun(t, fs, `{"apply":true}`, false)
+		if res.Counts[bucketDrifted] != 1 || res.Counts[bucketRepointed] != 1 {
+			t.Fatalf("member flipped mid-run: %+v", res.Counts)
+		}
+		if rvpFlag(t, s, imported[0].ID) != "false" || rvpFlag(t, s, twins[0].ID) != "true" {
+			t.Fatalf("a row a scan flipped was written from the stale snapshot")
+		}
+		// Find the drifted pair by bucket: the group's BookIDs are in chapter
+		// order, which is not the order rvpSeedRun returns.
+		found := ""
+		for _, p := range res.Groups[0].Pairs {
+			if p.Bucket == bucketDrifted {
+				found = p.Reason
+			}
+		}
+		if !strings.Contains(found, "library_state") {
+			t.Fatalf("drifted reason does not name the flipped field: %q", found)
+		}
+	})
+
+	t.Run("twin flipped", func(t *testing.T) {
+		s := ddRealStore(t)
+		imported, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 2, "vg")
+		fs := &rvpTwinStore{JobStore: s, inner: s, twinID: twins[0].ID,
+			before: func(b *database.Book) { b.LibraryState = rvpStr("imported") }}
+
+		// The twin is still explicitly primary, so this is the two-primaries
+		// case: reported, NOT reverted into a group with no primary at all.
+		res, err := rvpTryRun(t, fs, `{"apply":true}`, false)
+		if err == nil {
+			t.Fatal("a pair left with two primaries completed green")
+		}
+		if res.Counts[bucketLeftDoublePrimary] != 1 {
+			t.Fatalf("twin flipped mid-run: %+v", res.Counts)
+		}
+		if rvpFlag(t, s, twins[0].ID) != "true" {
+			t.Fatalf("a twin a scan flipped was demoted anyway")
+		}
+		if got := rvpFlag(t, s, imported[0].ID); got != "true" {
+			t.Fatalf("promotion reverted into a zero-primary group: flag=%s", got)
+		}
+	})
 }
 
 // rvpBlindStore is a JobStore that cannot answer "is a library.scan running?".
