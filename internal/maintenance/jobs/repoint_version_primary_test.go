@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repoint_version_primary_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c3f1b52-6a04-4de7-9b18-2f7a05c9d6e1
 // last-edited: 2026-09-20
 
@@ -394,6 +394,55 @@ func TestRepointVersionPrimary_GroupIDsTouchOnlyThose(t *testing.T) {
 	}
 	if _, err := parseRepointVersionPrimaryParams(json.RawMessage(`{"group_ids":["a"],"groupIds":["b"]}`)); err == nil {
 		t.Fatal("group_ids and groupIds disagreeing was accepted")
+	}
+}
+
+// TestRepointVersionPrimary_PartiallyRepointedGroupStaysInScope: a group does
+// NOT leave the population because some of its members have already been
+// repointed. Requiring EVERY member to be non-primary would strand any group
+// with one drifted or state-mismatched member — still blocked from
+// consolidation, and now invisible to the op that exists to unblock it — and
+// would also miss the 10 "K of N" groups the 2026-09-19 measurement found.
+func TestRepointVersionPrimary_PartiallyRepointedGroupStaysInScope(t *testing.T) {
+	s := ddRealStore(t)
+	imported, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 3, "vg")
+	// Member 0's twin is not organized, so that pair cannot repoint this run.
+	if _, err := s.ModifyBook(twins[0].ID, func(b *database.Book) error {
+		b.LibraryState = rvpStr("imported")
+		return nil
+	}); err != nil {
+		t.Fatalf("ModifyBook: %v", err)
+	}
+
+	first := rvpRun(t, s, `{"apply":true}`, false)
+	if first.Counts[bucketRepointed] != 2 || first.Counts[bucketStateMismatch] != 1 {
+		t.Fatalf("first pass: %+v", first.Counts)
+	}
+
+	// The group is now MIXED. It must still be in scope.
+	second := rvpRun(t, s, `{"apply":true}`, false)
+	if second.GroupsSoleNonPrimary != 1 {
+		t.Fatalf("partially repointed group left the population: sole=%d other=%d",
+			second.GroupsSoleNonPrimary, second.GroupsOtherBlockers)
+	}
+	if second.Counts[bucketStateMismatch] != 1 || second.Counts[bucketAlreadyPrimary] != 2 {
+		t.Fatalf("second pass buckets: %+v", second.Counts)
+	}
+
+	// Repair the twin and the last member repoints.
+	if _, err := s.ModifyBook(twins[0].ID, func(b *database.Book) error {
+		b.LibraryState = rvpStr("organized")
+		return nil
+	}); err != nil {
+		t.Fatalf("ModifyBook: %v", err)
+	}
+	third := rvpRun(t, s, `{"apply":true}`, false)
+	if third.Counts[bucketRepointed] != 1 {
+		t.Fatalf("third pass did not finish the group: %+v", third.Counts)
+	}
+	if rvpFlag(t, s, imported[0].ID) != "true" || rvpFlag(t, s, twins[0].ID) != "false" {
+		t.Fatalf("last pair not repointed: %s / %s",
+			rvpFlag(t, s, imported[0].ID), rvpFlag(t, s, twins[0].ID))
 	}
 }
 

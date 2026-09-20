@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
 // last-edited: 2026-09-20
 
@@ -21,8 +21,8 @@ import (
 func init() { maintenance.Register(&repointVersionPrimaryJob{}) }
 
 // repointVersionPrimaryJob moves the is_primary_version flag from an organized
-// single-chapter book onto its imported twin, so a detected chapter run whose
-// every member is a non-primary version can be consolidated.
+// single-chapter book onto its imported twin, so a detected chapter run blocked
+// on non-primary members can be consolidated.
 //
 // # The problem this exists to fix
 //
@@ -57,11 +57,12 @@ func init() { maintenance.Register(&repointVersionPrimaryJob{}) }
 //
 // # Which groups qualify
 //
-// A blocked group qualifies when `len(Blockers) == 1` and every member fails
+// A blocked group qualifies when `len(Blockers) == 1` and at least one member fails
 // `EffectiveIsPrimaryVersion`. That is a row-derived test, not a string match on
 // the blocker prose (which has already changed twice — 3b11ae96b, 10b6e20d8):
-// :852 always appends the non-primary blocker when any member is non-primary,
-// so one blocker plus all-members-non-primary means that one blocker IS it.
+// :852 appends the non-primary blocker iff some member is non-primary,
+// so one blocker plus one non-primary member means that blocker IS it. See
+// soleNonPrimaryBlocker for why this is not "every member".
 //
 // # Never zero primaries, never two
 //
@@ -433,19 +434,30 @@ func priorFlag(f *bool) string {
 
 // soleNonPrimaryBlocker is the row-derived test for "the non-primary rule is the
 // only thing keeping this group out". It never reads the blocker prose: the
-// consolidator appends the non-primary blocker whenever any member is
-// non-primary, so one blocker plus every-member-non-primary identifies it.
+// consolidator appends the non-primary blocker if and only if AT LEAST ONE
+// member is non-primary, so one blocker plus one non-primary member proves that
+// single blocker IS the non-primary one.
+//
+// It is deliberately "at least one", not "every member". Requiring every member
+// would strand any group that repointed only partly: one member left behind in
+// drifted / state_mismatch / not_electable flips the group out of this
+// population on the next run, so it stays blocked from consolidation AND becomes
+// invisible to the op that exists to unblock it, reported as if it carried some
+// other blocker. It would also structurally exclude the 10 groups the
+// 2026-09-19 measurement recorded as "K of N members are non-primary" — partial
+// from the start. Mixed groups need no special handling: classify answers per
+// member and returns already_primary for the ones that need nothing.
 func soleNonPrimaryBlocker(g scanner.ChapterGroup, idx *repointIndex) bool {
-	if len(g.Blockers) != 1 || len(g.BookIDs) == 0 {
+	if len(g.Blockers) != 1 {
 		return false
 	}
 	for _, id := range g.BookIDs {
 		b := idx.byID[id]
-		if b == nil || database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion) {
-			return false
+		if b != nil && !database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion) {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // classify decides one member's outcome without writing anything.
