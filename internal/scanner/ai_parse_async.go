@@ -590,7 +590,23 @@ func primaryVersionOf(store scanBookLookup, row *database.Book) (*database.Book,
 // openai-fallback-local resolves to a parserChain, not to a single client. Both
 // callers only ever hand the result to runAIBatchPhase, which already takes the
 // interface, so nothing loses a capability by this.
+// newAIParser returns the configured parser, wrapped so its results survive a
+// restart (see ai_parse_journal.go).
+//
+// The wrap is HERE, at one exit, rather than at each call site: the constructor
+// below has several returns -- the ai_endpoints routing pool, a plain local
+// parser, and the fallback ladder -- and prod runs the ROUTED one. Wrapping any
+// single branch would leave production exactly as it was while the tests went
+// green.
 func newAIParser(scanLog logger.Logger) (aiBatchParser, bool) {
+	parser, ok := newAIParserUnjournalled(scanLog)
+	if !ok {
+		return parser, ok
+	}
+	return withParseJournal(parser, getStore(), scanLog), true
+}
+
+func newAIParserUnjournalled(scanLog logger.Logger) (aiBatchParser, bool) {
 	if !config.AppConfig.EnableAIParsing {
 		return nil, false
 	}
