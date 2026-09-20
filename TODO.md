@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.12 -->
+<!-- version: 10.73.13 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-19 -->
+<!-- last-edited: 2026-09-20 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,49 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-TITLEDIR** Index `GetBooksByTitleInDir` — it full-scans every book
+      row once per newly imported book, inside the scan's version-link lock.
+      `internal/database/pebble_store.go:1556` iterates and JSON-decodes the
+      entire book keyspace (`forEachBookRow`) to find same-title siblings in one
+      directory; its own comment concedes "Always scans Pebble — MemStore has no
+      title+dir index". `internal/scanner/scanner.go:3227` calls it for **every
+      new book** on the import path, so cost is (new books) × (all book rows):
+      against a ~76k-row library, importing a 1,494-file folder is up to ~114M
+      row decodes for that one folder. Worse than a bare O(n²): the call sits
+      inside `lockVersionLinkFor(dbBook, parentDir)`, so each full scan is held
+      under a folder+title stripe and serializes concurrent imports into the
+      same folder. The hazard was already written down and then violated —
+      `GetFolderDuplicatesCore` (`pebble_store.go` ~1592) documents that it
+      deliberately never calls this method because doing so per book is "that
+      O(N^2) shape". Fix direction: give MemStore a `(normalizedTitle,
+      parentDir)` index and delegate when published (the same shape
+      `GetBooksBySeriesIDCore` and `GetFolderDuplicatesCore` already use), or at
+      minimum replace the full keyspace walk with an iterator bounded by a
+      dir-prefixed key range. Pre-existing; surfaced by the #3481 review, not
+      caused by it.
+
+- [ ] **Find what put TWO deciders on one directory path within a single scan run.**
+      Prod holds eight book rows at one iTunes shelf path, minted in two bursts
+      within one run each (3 rows in 2m07s on 2026-08-16, 5 rows in 2m56s on
+      2026-08-17). The check-then-create gap in `saveBookToDatabase` is closed
+      (FilePath-keyed stripe, `internal/scanner/version_link.go` `lockBookPath`),
+      which is what turned two deciders into two rows — but what produced two
+      deciders is NOT confirmed in source. Ruled out by reading: the
+      per-directory scan pool in `scanner.go` dispatches over a `dirs` slice
+      whose entries are distinct, and `groupFilesIntoBooks` emits at most one
+      directory book per directory, so one pass over one directory is one
+      decision. Candidates not yet checked: two overlapping scan runs in one
+      process (a boot resume sweep reviving an interrupted scan alongside a
+      fresh one), or two configured scan roots that contain each other — the
+      stripe covers both, since both produce two writers at the SAME path
+      string. A second PROCESS it does not cover. Explicitly NOT a candidate:
+      `registerDirectory` admitting both a real directory and a symlink to it.
+      A symlink and its target are different path strings, so that shape yields
+      one row at each of two paths, not eight at one — and for the same reason
+      the stripe, which keys on the path string, would not have covered it.
+      Worth settling before any data repair of the 2,409 directory paths that
+      carry more than one book row.
 
 - [ ] **AISCAN-BATCH-COLLECT** Batch-mode `ai.author-scan` results are never
       collected. Its batches are tagged `author_review` / `author_dedup`, but
