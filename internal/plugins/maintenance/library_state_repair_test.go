@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/library_state_repair_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8b1c47-90fd-4a26-b5e1-6c7a24f0d913
 // last-edited: 2026-09-20
 
@@ -18,6 +18,8 @@ const (
 )
 
 func lsrBook(id, path, state string, hash bool) database.BookCore {
+	// Primary by default: EffectiveIsPrimaryVersion reads a nil flag as primary,
+	// so these fixtures reach the gates that follow the primary test.
 	b := database.BookCore{ID: id, FilePath: path}
 	if state != "" {
 		s := state
@@ -28,6 +30,33 @@ func lsrBook(id, path, state string, hash bool) database.BookCore {
 		b.OrganizedFileHash = &h
 	}
 	return b
+}
+
+func lsrNonPrimary(b database.BookCore) database.BookCore {
+	f := false
+	b.IsPrimaryVersion = &f
+	return b
+}
+
+// A non-primary row is repairable only when the caller explicitly widens the
+// scope, and that is never the default.
+func TestClassifyLibraryStateRepair_NonPrimaryOnlyWithExplicitOptIn(t *testing.T) {
+	book := lsrNonPrimary(lsrBook("np", lsrTestRoot+"/A/B/01.mp3", libStateImported, true))
+	if _, keep := classifyLibraryStateRepair(book, libraryStateRepairParams{}, lsrTestRoot, nil); keep {
+		t.Fatal("non-primary repaired under the default scope")
+	}
+	wide := false
+	_, keep := classifyLibraryStateRepair(book, libraryStateRepairParams{OnlyPrimary: &wide}, lsrTestRoot, nil)
+	if !keep {
+		t.Fatal("non-primary not repaired even with only_primary:false")
+	}
+}
+
+func TestLibraryStateRepairParams_OnlyPrimaryDefaultsTrue(t *testing.T) {
+	var p libraryStateRepairParams
+	if !p.onlyPrimary() {
+		t.Fatal("an omitted only_primary must read as the narrow scope")
+	}
 }
 
 func TestClassifyLibraryStateRepair(t *testing.T) {
@@ -96,6 +125,13 @@ func TestClassifyLibraryStateRepair(t *testing.T) {
 			name:        "nil state is never guessed",
 			book:        lsrBook("b10", organizedPath, "", true),
 			wantOutcome: lsrStateNotAllowed,
+		},
+		{
+			// No ABS benefit, and repairing these would delete
+			// repoint-version-primary's promote-candidate pool.
+			name:        "non-primary is skipped by default",
+			book:        lsrNonPrimary(lsrBook("b13", organizedPath, libStateImported, true)),
+			wantOutcome: lsrNotPrimary,
 		},
 		{
 			name:        "empty path",

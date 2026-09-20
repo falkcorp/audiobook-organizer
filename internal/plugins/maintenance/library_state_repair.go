@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/library_state_repair.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c41d9e2-8b06-4f53-9a17-2e5d0b3c68af
 // last-edited: 2026-09-20
 
@@ -89,12 +89,32 @@ type libraryStateRepairParams struct {
 	// IncludeSuspicious widens the allowlist to the derived "suspicious" state.
 	// Defaults false: see the note above on why that is a separate decision.
 	IncludeSuspicious bool `json:"include_suspicious"`
+	// OnlyPrimary restricts the repair to books that count as the primary
+	// version, and DEFAULTS TRUE. Two reasons, one of them a cross-op hazard
+	// found by the first prod dry run (2026-09-20), which reported 15,055
+	// would_repair where the primary-only census had predicted 5,857:
+	//
+	//  1. The ABS benefit exists only for primary rows. absItemFilterBase
+	//     requires primary AND organized, so repairing a NON-primary row's state
+	//     makes no book visible; it only rewrites a column nobody reads.
+	//  2. maintenance.repoint-version-primary selects, as its promote
+	//     candidate, a NON-primary group member whose library_state is exactly
+	//     "imported" (repoint_version_primary.go:522). Repairing those ~9,198
+	//     rows to "organized" would silently delete that op's candidate pool —
+	//     a green run here quietly breaking a different op's input.
+	//
+	// A *bool so an omitted field reads as the safe narrow scope.
+	OnlyPrimary *bool `json:"only_primary"`
 	// BookIDs, when non-empty, scopes the run to exactly those books. Anything
 	// outside the list is untouched however well it matches.
 	BookIDs []string `json:"book_ids"`
 }
 
 func (p libraryStateRepairParams) dryRun() bool { return p.DryRun == nil || *p.DryRun }
+
+func (p libraryStateRepairParams) onlyPrimary() bool {
+	return p.OnlyPrimary == nil || *p.OnlyPrimary
+}
 
 const (
 	libStateImported        = "imported"
@@ -117,6 +137,7 @@ const (
 	lsrOrganizedSource    = "organized_source_left_alone"
 	lsrSuspiciousExcluded = "suspicious_excluded"
 	lsrStateNotAllowed    = "state_not_in_allowlist"
+	lsrNotPrimary         = "not_primary_version"
 	lsrEmptyPath          = "empty_file_path"
 	lsrChangedSinceScan   = "changed_since_scan"
 	lsrWriteFailed        = "write_failed"
@@ -134,6 +155,7 @@ type libraryStateRepairChange struct {
 type libraryStateRepairResult struct {
 	DryRun            bool                       `json:"dry_run"`
 	IncludeSuspicious bool                       `json:"include_suspicious"`
+	OnlyPrimary       bool                       `json:"only_primary"`
 	RootDir           string                     `json:"root_dir"`
 	BooksScanned      int                        `json:"books_scanned"`
 	SoftDeleted       int                        `json:"soft_deleted"`
@@ -199,6 +221,7 @@ func (p *Plugin) runRepairLibraryState(ctx context.Context, rawParams json.RawMe
 	res := &libraryStateRepairResult{
 		DryRun:            params.dryRun(),
 		IncludeSuspicious: params.IncludeSuspicious,
+		OnlyPrimary:       params.onlyPrimary(),
 		RootDir:           rootDir,
 		Outcomes:          map[string]int{},
 	}
@@ -324,6 +347,10 @@ func classifyLibraryStateRepair(
 		// The demoted source of an organized copy. Its state is CORRECT; the
 		// organized twin is the copy that should be visible.
 		ch.Outcome = lsrOrganizedSource
+	case params.onlyPrimary() && !database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion):
+		// See OnlyPrimary: no ABS benefit, and repairing these deletes
+		// repoint-version-primary's promote-candidate pool.
+		ch.Outcome = lsrNotPrimary
 	case underITunes(b.FilePath, itunesRoots):
 		ch.Outcome = lsrITunes
 	case !pathutil.IsWithin(b.FilePath, rootDir):
@@ -395,8 +422,8 @@ func (p *Plugin) finishLibraryStateRepair(reporter sdk.Reporter, res *librarySta
 		verb = "repaired"
 	}
 	n := res.Outcomes[lsrRepaired] + res.Outcomes[lsrWouldRepair]
-	msg := fmt.Sprintf("repair-library-state (dry_run=%t, include_suspicious=%t): scanned=%d %s=%d outcomes=%v",
-		res.DryRun, res.IncludeSuspicious, res.BooksScanned, verb, n, res.Outcomes)
+	msg := fmt.Sprintf("repair-library-state (dry_run=%t, include_suspicious=%t, only_primary=%t): scanned=%d %s=%d outcomes=%v",
+		res.DryRun, res.IncludeSuspicious, res.OnlyPrimary, res.BooksScanned, verb, n, res.Outcomes)
 	if err := registry.ReporterSetResult(reporter, res); err != nil {
 		reporter.Logger().Debug("repair-library-state: result not persisted", "err", err)
 	}
