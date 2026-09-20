@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
 // last-edited: 2026-09-19
 
@@ -59,8 +59,22 @@
 //	                               AtPathIndexFollows, which asserts
 //	                               LiveBookIDsAtPath answers at the NEW path and
 //	                               no longer at the old one.
-//	book_path:<path>               same commit (deleteBookPathKeyIfOwned /
-//	                               setBookPathKeyIfFree).
+//	book_path:<path>               same commit, but with a caveat worth stating
+//	                               exactly: setBookPathKeyIfFree SILENTLY NO-OPS
+//	                               when the target key already belongs to another
+//	                               live book (it warns and leaves the key with the
+//	                               incumbent, because refusing the write would
+//	                               lose a book for a scan or import). So this
+//	                               index follows only when the key is free. That
+//	                               is not a gap for THIS op: the same condition —
+//	                               another live book at the new path — is exactly
+//	                               what the collision gate refuses via
+//	                               LiveBookIDsAtPath before any write, so a book
+//	                               this op rewrites has already been shown to have
+//	                               a free path. The one way the two can disagree
+//	                               is a book_atpath: index that is itself stale,
+//	                               which maintenance.book-atpath-index-verify
+//	                               exists to detect and the backfill to repair.
 //	book_file_path:<crc32hex>      updateBookFileLocked, which drops stale
 //	                               secondary indexes and writes new ones on a
 //	                               path change.
@@ -161,6 +175,17 @@ func (p rewritePathPrefixParams) validate() error {
 	if old == nw {
 		return fmt.Errorf("old_prefix and new_prefix are identical (%q): nothing to rewrite", old)
 	}
+	// NESTED prefixes are refused. old=/books/A with new=/books/A/sub is not
+	// idempotent — the rewritten paths still match old_prefix, so a second run
+	// moves them again — and it breaks the swap-reversal this op relies on as its
+	// undo, because the swapped pair would re-match its own output. The reverse
+	// nesting (new inside old) has the same defect from the other side.
+	co, cn := filepath.Clean(old), filepath.Clean(nw)
+	if pathutil.IsWithin(cn, co) || pathutil.IsWithin(co, cn) {
+		return fmt.Errorf("old_prefix %q and new_prefix %q are nested: a rewritten path would still "+
+			"match the prefix it was rewritten from, so the run is neither idempotent nor reversible "+
+			"by swapping the two", old, nw)
+	}
 	return nil
 }
 
@@ -202,6 +227,12 @@ type rewritePathPrefixPlan struct {
 	TargetCollision int `json:"target_collision"`
 	Unreadable      int `json:"unreadable"`
 	Rewritable      int `json:"rewritable"`
+	// SourceImportOnly counts the rewritable books whose ONLY matched field is
+	// source_import_path: no file or folder changes location, and nothing about
+	// them was stat- or collision-checked because nothing about them could be.
+	// Reported apart so an operator approving an apply knows which population
+	// they are approving.
+	SourceImportOnly int `json:"source_import_only"`
 
 	BooksRewritten  int `json:"books_rewritten"`
 	FieldsRewritten int `json:"fields_rewritten"`
@@ -251,11 +282,11 @@ func (p rewritePathPrefixPlan) summary() string {
 		mode = "APPLIED"
 	}
 	return fmt.Sprintf(
-		"%s scanned=%d books/%d files | matched books=%d fields=%d | rewritable=%d "+
+		"%s scanned=%d books/%d files | matched books=%d fields=%d | rewritable=%d (source-import-only=%d) "+
 			"rewrote books=%d fields=%d | refused: target-missing=%d collision=%d unreadable=%d | "+
 			"skipped: changed-underneath=%d row-gone=%d | update_errs=%d",
 		mode, p.ScannedBooks, p.ScannedBookFiles, p.MatchedBooks, p.MatchedFields,
-		p.Rewritable, p.BooksRewritten, p.FieldsRewritten,
+		p.Rewritable, p.SourceImportOnly, p.BooksRewritten, p.FieldsRewritten,
 		p.TargetMissing, p.TargetCollision, p.Unreadable,
 		p.SkippedChanged, p.SkippedGone, p.UpdateErrs)
 }
@@ -321,7 +352,7 @@ func (p *Plugin) runRewritePathPrefix(ctx context.Context, rawParams json.RawMes
 	if itErr != nil {
 		return fmt.Errorf("rewrite-path-prefix: %w", itErr)
 	}
-	if underITunes(params.OldPrefix, roots) || underITunes(params.NewPrefix, roots) {
+	if prefixTouchesITunes(params.OldPrefix, roots) || prefixTouchesITunes(params.NewPrefix, roots) {
 		return fmt.Errorf("rewrite-path-prefix: refusing — %q or %q is inside an iTunes library root; "+
 			"the iTunes tree is frozen and its rows are never rewritten by a maintenance op",
 			params.OldPrefix, params.NewPrefix)
@@ -373,6 +404,37 @@ func (p *Plugin) runRewritePathPrefix(ctx context.Context, rawParams json.RawMes
 	}
 	log.Info("rewrite-path-prefix complete", "summary", plan.summary())
 	return nil
+}
+
+// prefixTouchesITunes reports whether a SWEEP PREFIX can reach an iTunes root.
+//
+// underITunes alone answers only "is p inside a root", which is the wrong
+// question for a prefix: `old_prefix = /mnt/bigdata/books` with an iTunes root
+// at /mnt/bigdata/books/itunes is NOT inside the root, yet it sweeps every row
+// under it — the standing "never mutate books/itunes/**" invariant, violated by
+// a prefix that passed the guard. So containment is tested BOTH ways: the
+// prefix inside a root, and a root inside the prefix.
+//
+// Paths are compared cleaned on both sides, since a root from config and a
+// prefix from an operator will not agree on trailing separators.
+func prefixTouchesITunes(p string, roots []string) bool {
+	if strings.TrimSpace(p) == "" {
+		return false
+	}
+	if underITunes(p, roots) {
+		return true
+	}
+	clean := filepath.Clean(p)
+	if config.UnderFrozenITunesTree(clean) {
+		return true
+	}
+	for _, root := range roots {
+		// The other direction: does this prefix CONTAIN an iTunes root?
+		if pathutil.IsWithin(filepath.Clean(root), clean) {
+			return true
+		}
+	}
+	return false
 }
 
 // rewriteTarget is old→new for one field, with the boundary already applied.
@@ -522,6 +584,9 @@ func planRewritePathPrefix(
 		switch bp.Bucket {
 		case "rewritable":
 			rewritable = append(rewritable, bp)
+		case "rewritable-source-import-only":
+			plan.SourceImportOnly++
+			rewritable = append(rewritable, bp)
 		case "target-missing":
 			plan.TargetMissing++
 			plan.recordBook(bp)
@@ -539,6 +604,15 @@ func planRewritePathPrefix(
 		plan.CappedAt = maxBooks
 		log.Warn("rewrite-path-prefix: more rewritable books than the cap — taking the first N by book ID",
 			"rewritable", len(rewritable), "cap", maxBooks)
+		// The books above the cap get their own bucket rather than vanishing from
+		// the report: "every matched field lands in exactly one bucket" has to
+		// hold for the truncated tail too, or the report silently understates the
+		// population an operator is sizing the next run against.
+		for _, bp := range rewritable[maxBooks:] {
+			bp.Bucket = "capped"
+			bp.Reason = fmt.Sprintf("above this run's cap of %d books — rewritable, not yet attempted", maxBooks)
+			plan.recordBook(bp)
+		}
 		rewritable = rewritable[:maxBooks]
 	}
 
@@ -613,10 +687,23 @@ func planRewritePathPrefix(
 	plan.SkippedChanged = int(skippedChanged.Load())
 	plan.SkippedGone = int(skippedGone.Load())
 	plan.UpdateErrs = int(updateErrs.Load())
+	// A run whose writes ALL failed must not return success. The per-item
+	// callback deliberately returns nil (one bad row must not abort the sweep),
+	// so ErrModeCollect never fires and UpdateErrs was previously visible only in
+	// the summary string — on the one op where "did the writes land?" is the
+	// entire question, a total failure looked green. The report and the counts
+	// are already written by the caller before this error surfaces.
+	// Stand-down loss is checked first: it explains WHY the remaining writes did
+	// not happen, which subsumes a write-failure count taken from the same run.
 	if standDownLost.Load() {
 		return plan, fmt.Errorf("rewrite-path-prefix: scan stand-down lease lapsed mid-apply after %d "+
 			"book(s) — aborted (re-run after the scan is idle; already-rewritten rows no longer match "+
 			"old_prefix, so the re-run finishes the rest)", plan.BooksRewritten)
+	}
+	if plan.UpdateErrs > 0 {
+		return plan, fmt.Errorf("rewrite-path-prefix: %d field write(s) FAILED across %d rewritten "+
+			"book(s) — see the per-row report's update-error rows; a book whose own row write failed "+
+			"had its file rows left untouched, so re-running is safe", plan.UpdateErrs, plan.BooksRewritten)
 	}
 	return plan, nil
 }
@@ -675,13 +762,38 @@ func checkRewriteBook(
 				}
 			}
 		case "book.source_import_path":
-			// Provenance-adjacent and not a filesystem claim: nothing else keys
-			// off it and it may legitimately name a tree that no longer exists
-			// (the import folder the book was first seen in). Neither stat-gated
-			// nor collision-checked, so it never refuses a book on its own — but
-			// it rides along with the book row's write so
-			// CountBooksByPathPrefix's input stays truthful.
+			// NO stat gate and NO collision check, deliberately, and this is the
+			// one field where that is the right answer rather than an omission:
+			//
+			//   - it is not a filesystem claim. It records the import folder the
+			//     book was FIRST discovered in, and that folder legitimately may
+			//     no longer exist (the book was moved into RootDir long ago). A
+			//     stat gate would refuse the very rows it is meant to repair.
+			//   - many books share one import folder by design, so "another row
+			//     holds this path" is the normal case, not a collision.
+			//
+			// What it gets instead is VISIBILITY: a book matched ONLY through
+			// this field lands in its own bucket below, so an operator reading
+			// the dry run can tell a real folder move from a provenance-only
+			// touch before applying.
 		}
+	}
+	// A book whose ONLY matched field is source_import_path moves no file and
+	// changes no location — nothing about it was stat- or collision-checked,
+	// because nothing about it could be. It is still rewritten (the field is a
+	// live input to CountBooksByPathPrefix), but it is reported apart so the
+	// operator is never left guessing which population they are approving.
+	sourceImportOnly := true
+	for _, ch := range bp.Changes {
+		if ch.Field != "book.source_import_path" {
+			sourceImportOnly = false
+			break
+		}
+	}
+	if sourceImportOnly {
+		return "rewritable-source-import-only",
+			"would rewrite source_import_path only — no file or folder location changes, " +
+				"so no stat or collision check applies"
 	}
 	return "rewritable", "would rewrite"
 }
@@ -710,7 +822,14 @@ func applyRewriteBook(
 	}
 
 	// --- the book row: FilePath and SourceImportPath in ONE ModifyBook ---
+	//
+	// bookOld/bookNew are written INSIDE the ModifyBook callback, i.e. before the
+	// commit, so they are a statement of intent, not of fact. The three
+	// *Committed flags below are set only on the branch where the store returned
+	// a committed row, and they — never the intent variables — decide what the
+	// ledger records.
 	var bookOld, bookNew string
+	var bookPathCommitted, sourceImportCommitted, filesCommitted bool
 	bookChanges := map[string]rewriteFieldChange{}
 	for _, ch := range bp.Changes {
 		if strings.HasPrefix(ch.Field, "book.") {
@@ -764,12 +883,31 @@ func applyRewriteBook(
 			}
 			return nil
 		})
+		// refuseFileRows records every planned book_file row of this book as
+		// refused. It exists because the book row's write is the FIRST write of
+		// the book: if it did not land, continuing into the file loop produces
+		// exactly the half-written book — folder unmoved, files moved — that this
+		// op's whole-or-nothing rule exists to prevent. Recording rather than
+		// silently returning keeps the "every matched field lands in exactly one
+		// bucket" property true.
+		refuseFileRows := func(bucket, reason string) {
+			for _, ch := range bp.Changes {
+				if ch.Field == "book_file.file_path" {
+					dec(bucket, ch.Field, ch.RowID, ch.Old, ch.New, reason)
+				}
+			}
+		}
 		switch {
 		case err != nil:
 			for _, ch := range bookChanges {
 				dec("update-error", ch.Field, ch.RowID, ch.Old, ch.New, err.Error())
 			}
-			log.Warn("rewrite-path-prefix: book update failed", "book", bp.BookID, "err", err)
+			refuseFileRows("update-error",
+				"not attempted: the book row's own write failed, and moving its files without it "+
+					"would leave the book half-written")
+			log.Warn("rewrite-path-prefix: book update failed — this book's file rows were NOT attempted",
+				"book", bp.BookID, "err", err)
+			return decisions, false
 		case bookPathStale:
 			// Abandon the whole book: every planned field, file rows included.
 			for _, ch := range bp.Changes {
@@ -782,10 +920,22 @@ func applyRewriteBook(
 			for _, ch := range bookChanges {
 				dec("skipped-row-gone", ch.Field, ch.RowID, ch.Old, ch.New, "book row vanished before write")
 			}
+			refuseFileRows("skipped-row-gone",
+				"not attempted: the owning book row vanished before its write")
+			return decisions, false
 		default:
+			// COMMITTED. Only here are bookOld/bookNew trustworthy: they are
+			// assigned inside the callback, which runs BEFORE the commit, so a
+			// failed write leaves them set describing a move that never happened.
+			// Promoting them to the committed pair only on success is what keeps
+			// the ledger below from asserting a move the store rejected.
+			bookPathCommitted = bookNew != ""
 			for _, ch := range applied {
 				dec("rewritten", ch.Field, ch.RowID, ch.Old, ch.New, "rewritten")
 				wroteAnything = true
+				if ch.Field == "book.source_import_path" {
+					sourceImportCommitted = true
+				}
 			}
 			for _, ch := range skipReasons {
 				dec("skipped-changed-underneath", ch.Field, ch.RowID, ch.Old, "",
@@ -824,6 +974,7 @@ func applyRewriteBook(
 		default:
 			dec("rewritten", ch.Field, ch.RowID, ch.Old, newPath, "rewritten")
 			wroteAnything = true
+			filesCommitted = true
 		}
 	}
 
@@ -835,24 +986,37 @@ func applyRewriteBook(
 	// recorded; the file rows beneath it move with it and are enumerated in the
 	// run's TSV report.
 	//
-	// A book whose own FilePath did NOT match old_prefix but whose file rows did
-	// still gets an entry, under the distinct type "prefix-rewrite-files" and
-	// carrying the PREFIXES rather than a book path. Gating the ledger on the
-	// book row's own move would have left that case with no journal line at all,
-	// and inventing a book path for it from a file's directory would record
-	// something the row never held. The per-field TSV remains the record of
-	// exactly which rows moved.
-	if wroteAnything {
-		change := &database.BookPathChange{
-			BookID:     bp.BookID,
-			OldPath:    bookOld,
-			NewPath:    bookNew,
-			ChangeType: "prefix-rewrite",
-		}
-		if bookNew == "" {
-			change.OldPath, change.NewPath = params.OldPrefix, params.NewPrefix
-			change.ChangeType = "prefix-rewrite-files"
-		}
+	// The type names WHICH of the three committed, so a reader of path_history
+	// can tell a folder move from a files-only or an import-provenance-only one:
+	//
+	//	prefix-rewrite               the book row's own FilePath moved; carries
+	//	                             the book's real old and new path.
+	//	prefix-rewrite-files         only book_file rows moved; carries the
+	//	                             PREFIXES, because inventing a book path from
+	//	                             a file's directory would record something the
+	//	                             row never held.
+	//	prefix-rewrite-source-import only source_import_path moved — no file
+	//	                             changed location at all, so calling it a
+	//	                             "files" rewrite would be a lie.
+	//
+	// Every branch reads a *Committed flag, never bookOld/bookNew directly: those
+	// are set inside the callback, so a book row whose write FAILED would
+	// otherwise journal a move that never happened. A row's state heals on a
+	// re-run; a false ledger entry is permanent.
+	var change *database.BookPathChange
+	switch {
+	case bookPathCommitted:
+		change = &database.BookPathChange{BookID: bp.BookID, OldPath: bookOld, NewPath: bookNew,
+			ChangeType: "prefix-rewrite"}
+	case filesCommitted:
+		change = &database.BookPathChange{BookID: bp.BookID,
+			OldPath: params.OldPrefix, NewPath: params.NewPrefix, ChangeType: "prefix-rewrite-files"}
+	case sourceImportCommitted:
+		change = &database.BookPathChange{BookID: bp.BookID,
+			OldPath: params.OldPrefix, NewPath: params.NewPrefix,
+			ChangeType: "prefix-rewrite-source-import"}
+	}
+	if change != nil {
 		if rerr := store.RecordPathChange(change); rerr != nil {
 			// Not fatal and NOT counted as an update error: the row write already
 			// succeeded and undoing it here would be worse than a missing ledger
