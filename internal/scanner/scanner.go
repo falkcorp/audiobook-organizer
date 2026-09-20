@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.103.0
+// version: 1.104.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-19
 
@@ -3331,6 +3331,41 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				defaultLog.Info("book row for %s was created concurrently; merging into %s instead of creating a second row",
 					book.FilePath, raced.ID)
 				existing = raced
+
+				// Carry the version link across. A content-hash branch above
+				// (single-hash duplicate, or multi-file segment dedup) may
+				// already have written a group ID onto the PARTNER row and then
+				// cleared `existing` so that the new row created here would join
+				// it. The raced row IS that new row now, and the merge path
+				// below does not carry the two version fields --
+				// applyScannerFields deliberately owns neither. Without this,
+				// the partner is left holding a group no other row belongs to:
+				// the orphan version group this function's other branches
+				// explicitly refuse to mint, which reads downstream as "this
+				// book has other versions" and lists none.
+				if dbBook.VersionGroupID != nil && *dbBook.VersionGroupID != "" {
+					groupID, primary := *dbBook.VersionGroupID, dbBook.IsPrimaryVersion
+					joined := false
+					if _, merr := getStore().ModifyBook(raced.ID, func(fresh *database.Book) error {
+						// A row another writer already grouped keeps that
+						// group; two groups for one row is worse than one.
+						if fresh.VersionGroupID != nil && *fresh.VersionGroupID != "" {
+							return database.ErrSkipBookWrite
+						}
+						fresh.VersionGroupID = &groupID
+						fresh.IsPrimaryVersion = primary
+						joined = true
+						return nil
+					}); merr != nil {
+						defaultLog.Warn("could not join raced row %s (%s) to version group %s: %v",
+							raced.ID, book.FilePath, groupID, merr)
+					} else if joined {
+						// The same follow the create path does: the ABS sync
+						// identity and the listening position keyed to the
+						// superseded ULID have to move to the row that won.
+						followSyncIdentityOnVersionLink(supersededBookID, supersededBookPath, raced.ID)
+					}
+				}
 			} else {
 				parentDir := filepath.Dir(book.FilePath)
 				unlockVersionLink := lockVersionLinkFor(dbBook, parentDir)

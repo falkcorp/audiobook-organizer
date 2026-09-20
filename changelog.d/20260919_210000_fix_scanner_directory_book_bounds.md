@@ -20,4 +20,6 @@
   only guard — and production holds eight book rows at one shelf path, each
   owning its own full set of 1,494 book_file rows. The create is now serialised
   per path and re-checks under the lock, merging into the existing row instead
-  of minting a twin.
+  of minting a twin — and carrying across the version group a content-hash
+  match had already written onto the partner row, so the partner is not left in
+  a group of one that reads as "this book has other versions" and lists none.
