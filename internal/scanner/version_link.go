@@ -1,5 +1,5 @@
 // file: internal/scanner/version_link.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f4ff5e2-d0d7-45eb-ac42-18142fcf22cb
 // last-edited: 2026-09-19
 
@@ -245,6 +245,41 @@ func versionLinkEligible(dbBook *database.Book) bool {
 const versionLinkStripeCount = 64
 
 var versionLinkStripeMu [versionLinkStripeCount]sync.Mutex
+
+// bookPathStripeMu serialises the [re-read GetBookByFilePath -> CreateBook]
+// span per FilePath, and is a DIFFERENT lock from the version-link stripes
+// above even though it uses the same fixed-array pattern.
+//
+// Why a second one: saveBookToDatabase's existence check
+// (`GetBookByFilePath(book.FilePath)`) runs at the top of the upsert and the
+// CreateBook that acts on its answer runs hundreds of lines later, after tag
+// reads, hashing and author/series/work resolution. Nothing re-reads the path
+// in between. The version-link stripe DOES span CreateBook, but it is keyed on
+// `parentDir + "\x00" + title` -- not on FilePath -- and lockVersionLinkFor
+// returns a no-op unlock whenever versionLinkEligible is false, so it is not a
+// guard against two writers minting a row at one path.
+//
+// The gap is widest exactly where it did damage: a DIRECTORY-shaped book has no
+// file hash (ComputeFileHash of a directory fails), so every hash-duplicate
+// branch is skipped and GetBookByFilePath is the ONLY thing standing between
+// two writers and two rows at one directory. Prod holds eight book rows at one
+// iTunes shelf path, each owning its own private full set of 1,494 book_file
+// rows.
+//
+// Process-local, like the version-link stripes, and claims nothing about a
+// second process.
+const bookPathStripeCount = 64
+
+var bookPathStripeMu [bookPathStripeCount]sync.Mutex
+
+// lockBookPath locks the stripe for a book FilePath and returns its unlock.
+func lockBookPath(filePath string) func() {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(filePath))
+	mu := &bookPathStripeMu[h.Sum32()%bookPathStripeCount]
+	mu.Lock()
+	return mu.Unlock
+}
 
 // lockVersionLinkFor locks the stripe for this row's folder+title and returns
 // its unlock. The caller holds it across applySmartVersionLink AND the
