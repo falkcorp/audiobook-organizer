@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.8.0
+// version: 1.1.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
-// last-edited: 2026-09-19
+// last-edited: 2026-09-20
 
 package acoustid
 
@@ -380,9 +380,54 @@ func (t *windowTally) summary() string {
 	s := fmt.Sprintf("written=%d failed=%d transient=%d stale=%d gone=%d write_errors=%d",
 		t.written.Load(), t.failed.Load(), t.transient.Load(), t.stale.Load(), t.rowGone.Load(), t.writeErrors.Load())
 	if n := t.deferred.Load(); n > 0 {
-		s += fmt.Sprintf(" deferred_server_only=%d", n)
+		s += fmt.Sprintf(" deferred_server_only=%d%s", n, t.deferredByString())
 	}
 	return s
+}
+
+// deferredByString renders the deferral reasons for the periodic heartbeat,
+// as "(not_under_libroot=41203 unknown_duration=812 …)".
+//
+// WHY THE HEARTBEAT AND NOT JUST THE FINAL MESSAGE. Until 2026-09-20 the
+// by-reason split existed only in the run's CLOSING message (the
+// "deferred_server_only by reason" clause below). A remote-only run over the
+// full library is a ~14-hour job, so the one number that says WHICH of these
+// files can never succeed -- not_under_libroot, which no worker may be offered
+// and which a re-run therefore defers again forever -- arrived half a day
+// after the point where it would have changed what the operator ran. A
+// permanent cause and a retryable one (unknown_duration, fixed by
+// maintenance.duration-reextract; a worker decode error, fixed by a re-run)
+// are indistinguishable in a bare total.
+//
+// Reasons are a small closed set written by markServerOnly/remoteEligible, so
+// the whole map is rendered rather than a top-N; sorted by count descending
+// then by name so successive heartbeats are diffable. Takes deferMu because
+// deferItem writes the map from the result-handling path.
+func (t *windowTally) deferredByString() string {
+	t.deferMu.Lock()
+	defer t.deferMu.Unlock()
+	if len(t.deferredBy) == 0 {
+		return ""
+	}
+	type kv struct {
+		why string
+		n   int
+	}
+	pairs := make([]kv, 0, len(t.deferredBy))
+	for why, n := range t.deferredBy {
+		pairs = append(pairs, kv{why, n})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].n != pairs[j].n {
+			return pairs[i].n > pairs[j].n
+		}
+		return pairs[i].why < pairs[j].why
+	})
+	parts := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		parts = append(parts, fmt.Sprintf("%s=%d", p.why, p.n))
+	}
+	return " (" + strings.Join(parts, " ") + ")"
 }
 
 // deferItem counts one file a remote-only run left for a later run.
@@ -563,8 +608,12 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 	tombstoned := plan.tombstoned[0] + plan.tombstoned[1] + int(res.failed)
 	msg := fmt.Sprintf("Window backfill: %d/%d eligible present files have current windows, %d tombstoned (%s)",
 		current, eligible, tombstoned, tally.summary())
+	// tally.summary() above now carries the by-reason split on every heartbeat,
+	// so this clause keeps the EXPLANATION and no longer repeats the counts --
+	// printing them twice in one line, once count-sorted and once key-sorted by
+	// %v, reads as two different measurements of the same thing.
 	if len(res.deferred) > 0 {
-		msg += fmt.Sprintf("; deferred_server_only by reason (remote-only: not cut, not tombstoned, replanned next run): %v", res.deferred)
+		msg += "; deferred_server_only is remote-only: not cut, not tombstoned, replanned next run"
 	}
 	wbLog.Info("%s", msg)
 	_ = reporter.UpdateProgress(total, max(total, 1), msg)
