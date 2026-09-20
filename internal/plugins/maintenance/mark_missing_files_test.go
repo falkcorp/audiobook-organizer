@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8b2e4f61-9c73-45a0-8d1e-2f6a7c904b3d
-// last-edited: 2026-09-06
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -60,11 +60,26 @@ func (f *markFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore,
 func (f *markFakeStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
 	return f.full[bookID], nil
 }
-func (f *markFakeStore) UpdateBookFile(id string, file *database.BookFile) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.updates = append(f.updates, *file)
-	return nil
+
+// UpdateBookFiles records each row in order. The op now writes a whole book's
+// rows in one call, so the fake mirrors the per-row semantics UpdateBookFiles
+// documents (one committed write per row, afterRow per row, ctx checked before
+// each row) rather than pretending the batch is atomic.
+func (f *markFakeStore) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
+	written := 0
+	for i, file := range files {
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
+		f.mu.Lock()
+		f.updates = append(f.updates, *file)
+		f.mu.Unlock()
+		written++
+		if afterRow != nil {
+			afterRow(i, true)
+		}
+	}
+	return written, nil
 }
 
 // seedMark builds a store with one row at path, its stored Missing flag, and a

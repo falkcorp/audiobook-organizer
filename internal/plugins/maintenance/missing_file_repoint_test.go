@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b6d0f39c-4a17-4e82-95c1-70fe2a8b31d4
-// last-edited: 2026-09-06
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -47,11 +47,25 @@ func (f *repointFakeStore) GetBookFiles(bookID string) ([]database.BookFile, err
 	}
 	return f.full[bookID], nil
 }
-func (f *repointFakeStore) UpdateBookFile(id string, file *database.BookFile) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.updates = append(f.updates, *file)
-	return nil
+
+// UpdateBookFiles records each row in order — see markFakeStore's twin for why
+// the fake reproduces UpdateBookFiles' per-row semantics rather than treating
+// the batch as atomic.
+func (f *repointFakeStore) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
+	written := 0
+	for i, file := range files {
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
+		f.mu.Lock()
+		f.updates = append(f.updates, *file)
+		f.mu.Unlock()
+		written++
+		if afterRow != nil {
+			afterRow(i, true)
+		}
+	}
+	return written, nil
 }
 
 // writeFile creates a real file on disk — os.Stat is the whole mechanism here, so

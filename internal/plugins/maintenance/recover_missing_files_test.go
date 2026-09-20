@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package maintenance
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,14 +43,36 @@ func (f *recoverFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error
 func (f *recoverFakeStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
 	return f.full[bookID], nil
 }
-func (f *recoverFakeStore) UpdateBookFile(id string, file *database.BookFile) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.updateErr != nil {
-		return f.updateErr // do not record — a failed write must not read as a success
+
+// UpdateBookFiles records each row in order, or fails every row when updateErr
+// is set. A failed row is joined into the returned error and reported to
+// afterRow as NOT applied, exactly as PebbleStore.UpdateBookFiles does, so the
+// op's UpdateErrs / Repointed split is exercised for real.
+func (f *recoverFakeStore) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
+	written := 0
+	var errs []error
+	for i, file := range files {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		if f.updateErr != nil {
+			// Do not record — a failed write must not read as a success.
+			errs = append(errs, fmt.Errorf("book file %s: %w", file.ID, f.updateErr))
+			if afterRow != nil {
+				afterRow(i, false)
+			}
+			continue
+		}
+		f.mu.Lock()
+		f.updates = append(f.updates, *file)
+		f.mu.Unlock()
+		written++
+		if afterRow != nil {
+			afterRow(i, true)
+		}
 	}
-	f.updates = append(f.updates, *file)
-	return nil
+	return written, errors.Join(errs...)
 }
 
 // The core recovery: a missing row whose recorded size matches exactly one unclaimed
