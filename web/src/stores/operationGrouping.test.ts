@@ -1,10 +1,11 @@
 // file: web/src/stores/operationGrouping.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d19a6f2-83bc-4571-b0e8-27fa5c96de13
-// last-edited: 2026-09-10
+// last-edited: 2026-09-20
 
 import { describe, it, expect } from 'vitest';
 import {
+  byNewestFirst,
   groupOperations,
   GROUP_IDLE_GAP_MS,
   GROUP_MAX_SPAN_MS,
@@ -353,5 +354,43 @@ describe('groupOperations second pass (adjacent rows)', () => {
   it('is stable: the same input grouped twice yields the same rows', () => {
     const ops = [...run(5, 10_000), op({ id: 'late', finishedAt: T0 + 20 * 60_000 })];
     expect(groupOperations([...ops].reverse())).toEqual(groupOperations(ops));
+  });
+});
+
+describe('byNewestFirst', () => {
+  /**
+   * The bug this exists for: groupOperations emits bucket by bucket, so the
+   * newest completion lands wherever its KIND's bucket happens to fall. With a
+   * fresh row of a kind whose bucket sorts early, the newest op rendered LAST
+   * in the bell and the user never saw it.
+   */
+  it('puts the newest completion first even when grouping emits it last', () => {
+    const scan = op({ id: 'A1', def_id: 'library.scan', status: 'completed', finishedAt: T0 });
+    const older = op({ id: 'A2', def_id: 'library.ai-parse', status: 'completed', finishedAt: T0 - 60_000 });
+    const newest = op({ id: 'A3', def_id: 'library.ai-parse', status: 'completed', finishedAt: T0 + 60_000 });
+
+    // Deliberately NOT in time order, the way Object.values() over the poll map
+    // hands them over.
+    const rendered = [scan, older, newest].sort(byNewestFirst);
+    expect(rendered.map((o) => o.id)).toEqual(['A3', 'A1', 'A2']);
+  });
+
+  it('orders a synthetic group parent by its own timestamps, not specially', () => {
+    const parent = op({ id: 'G1', status: 'completed', finishedAt: T0 + 5_000, parent_id: null });
+    const solo = op({ id: 'S1', status: 'completed', finishedAt: T0 });
+    expect([solo, parent].sort(byNewestFirst).map((o) => o.id)).toEqual(['G1', 'S1']);
+  });
+
+  it('breaks ties on id descending so rows do not reshuffle between polls', () => {
+    const a = op({ id: 'X1', status: 'completed', finishedAt: T0 });
+    const b = op({ id: 'X2', status: 'completed', finishedAt: T0 });
+    expect([a, b].sort(byNewestFirst).map((o) => o.id)).toEqual(['X2', 'X1']);
+    expect([b, a].sort(byNewestFirst).map((o) => o.id)).toEqual(['X2', 'X1']);
+  });
+
+  it('keeps an op with no timestamps last instead of dropping it', () => {
+    const timeless = op({ id: 'Z1', status: 'completed', finishedAt: undefined, startedAt: undefined });
+    const dated = op({ id: 'Z2', status: 'completed', finishedAt: T0 });
+    expect([timeless, dated].sort(byNewestFirst).map((o) => o.id)).toEqual(['Z2', 'Z1']);
   });
 });

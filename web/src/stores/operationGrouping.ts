@@ -1,7 +1,7 @@
 // file: web/src/stores/operationGrouping.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c4a1f37-2b95-4e60-9d13-6a7fb2e08c54
-// last-edited: 2026-09-10
+// last-edited: 2026-09-20
 
 import type { ActiveOperation } from './useOperationsStore';
 
@@ -71,9 +71,35 @@ export interface OperationGroup {
 
 /** groupTimestamp is the single time an op is ordered by. finishedAt for
  *  anything that ended, startedAt otherwise (which fromV2 falls back to
- *  queued_at, so a queued op still has one). */
-function groupTimestamp(op: ActiveOperation): number {
+ *  queued_at, so a queued op still has one).
+ *
+ *  Exported so the bell orders rows by the same clock the fold does. A synthetic
+ *  group parent carries the timestamps makeGroupParent gave it (head's start,
+ *  tail's finish), so it sorts among real rows without a special case. */
+export function groupTimestamp(op: ActiveOperation): number {
   return op.finishedAt ?? op.startedAt ?? 0;
+}
+
+/**
+ * byNewestFirst orders rendered rows newest-first.
+ *
+ * groupOperations CANNOT do this for its callers: it emits bucket by bucket
+ * (all of one def_id+status, then all of the next), so its output is ordered by
+ * kind, never by time, whatever order the input arrived in. Sorting its input
+ * would not help. The list that is rendered is the only place the order can be
+ * fixed.
+ *
+ * The id tiebreak is the same one byTimeThenId uses and is load-bearing for the
+ * same reason: ops queued together share a timestamp to the millisecond, and the
+ * underlying map is rebuilt on every poll, so without a total order the rows
+ * reshuffle under the cursor every five seconds. Ids are ULIDs, so descending id
+ * is descending creation time.
+ */
+export function byNewestFirst(a: ActiveOperation, b: ActiveOperation): number {
+  const at = groupTimestamp(a);
+  const bt = groupTimestamp(b);
+  if (at !== bt) return bt - at;
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
 }
 
 /**
