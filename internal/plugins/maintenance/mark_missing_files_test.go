@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8b2e4f61-9c73-45a0-8d1e-2f6a7c904b3d
 // last-edited: 2026-09-19
 
@@ -17,10 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// markFakeStore records every UpdateBookFile so a test can assert BOTH what was
+// markFakeStore records every written row so a test can assert BOTH what was
 // written and that nothing else was. It reuses the package's writeFile helper.
 type markFakeStore struct {
-	mu    sync.Mutex // UpdateBookFile is called from RunItems' worker pool
+	mu    sync.Mutex // UpdateBookFiles is called from RunItems' worker pool
 	cores []database.BookFileCore
 	// books overrides the book-core set GetAllBooksCore returns. When nil, the
 	// store DERIVES one all-primary book per distinct BookID in cores — so the

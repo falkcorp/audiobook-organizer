@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
 // last-edited: 2026-09-19
 
@@ -527,13 +527,18 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 	// killed by the stuck-op watchdog. Grouping by book also makes the pool's
 	// partitions disjoint, so two workers can never race each other's recompute
 	// of the same book.
-	var repointed, updateErrs, rowsDone atomic.Int64
+	var repointed, updateErrs, rowsDone, booksDone atomic.Int64
 	var standDownLost atomic.Bool
 	totalRewrites := len(rewrites)
 	groups := groupItemsByBook(rewrites,
 		func(rw rewrite) string { return rw.item.file.BookID },
 		func(rw rewrite) string { return rw.item.file.ID })
+	totalBooks := len(groups)
 	err = registry.RunItems(ctx, reporter, groups, func(itemCtx context.Context, g bookFileBatchGroup[rewrite]) error {
+		// RunItems reports progress in BOOKS (the item). The in-book progress
+		// line below must use the same units or the bar alternates between two
+		// scales and appears to jump backwards -- see run_items.go's P-2 note.
+		defer booksDone.Add(1)
 		// Heartbeat + hard-abort guard (RunItems does not renew the lease).
 		if standDownLost.Load() {
 			return nil
@@ -588,7 +593,7 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 				return false
 			},
 			Progress: func(done, total int) (int, int, string) {
-				return int(rowsDone.Load()), totalRewrites, fmt.Sprintf(
+				return int(booksDone.Load()), totalBooks, fmt.Sprintf(
 					"book %s: wrote row %d/%d (repointed %d/%d, errs=%d)",
 					bookID, done, total, rowsDone.Load(), totalRewrites, updateErrs.Load())
 			},

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/bookfile_batch_write_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c1d80fe-4a52-47b3-9d8e-0b2f5a9c7314
 // last-edited: 2026-09-19
 
@@ -144,11 +144,18 @@ func TestWriteBookFileBatch_CancelStopsMidBook(t *testing.T) {
 	}
 
 	seen := 0
+	rep := &livenessReporter{}
 	out := writeBookFileBatch(context.Background(), s, rows, bookFileBatchOpts{
 		OnRow:    func(int, bool) { seen++ },
 		Abort:    func() bool { return seen >= 3 },
-		Reporter: &fakeReporter{},
+		Reporter: rep,
 	})
+	// The load-bearing claim of this whole change: liveness is stamped per ROW.
+	// RunItems stamps once per item and the item is now a whole book, so without
+	// this the stuck-op watchdog would kill a large book mid-batch — the very
+	// failure the batching exists to fix.
+	require.Equal(t, int64(3), rep.touches.Load(),
+		"liveness must be stamped once per row, not once per book")
 	require.True(t, out.Cancelled, "the batch must report that it stopped early")
 	require.Equal(t, 3, out.Applied, "only the rows written before the abort")
 	require.Equal(t, 0, out.RowErrs)
