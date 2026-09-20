@@ -41,7 +41,7 @@ import (
 var transcribeBatchFn = transcribe.TranscribeBatchOpts
 
 // whisperJournalKind is the resultjournal kind for whisper transcripts.
-const whisperJournalKind = "whisper"
+const whisperJournalKind = resultjournal.KindWhisperIntro
 
 const (
 	introTranscribePageSize  = 200

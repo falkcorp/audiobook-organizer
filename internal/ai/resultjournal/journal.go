@@ -1,5 +1,5 @@
 // file: internal/ai/resultjournal/journal.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 10003ffd-5d00-48b1-865a-37ac9f9ae826
 // last-edited: 2026-09-19
 
@@ -49,6 +49,29 @@ var journalLog = logger.New("resultjournal")
 
 // keyPrefix is the root of every journal key: aijournal:<kind>:<contentKey>.
 const keyPrefix = "aijournal:"
+
+// The journal's kinds live here, with the journal that owns the keyspace,
+// rather than beside each caller.
+//
+// WHY: the pruner (maintenance.prune-ai-journal) has to walk EVERY kind. While
+// the only kind was whisper's it named that one literal, so adding a second
+// kind elsewhere in the tree would have grown forever with nothing reporting a
+// problem -- the journal has one entry per distinct input, so for filename
+// parse that is one per distinct basename in the library. AllKinds is the list
+// the pruner iterates: add a kind here and it is pruned by construction.
+const (
+	// KindWhisperIntro holds intro transcripts, keyed by clip content.
+	KindWhisperIntro = "whisper"
+	// KindLLMFilenameParse holds llm.filename_parse results, keyed by the
+	// filename the model was shown plus the parse prompt version.
+	KindLLMFilenameParse = "llm_filename_parse"
+)
+
+// AllKinds returns every kind stored in the journal, for callers that must
+// cover all of them (the pruner).
+func AllKinds() []string {
+	return []string{KindWhisperIntro, KindLLMFilenameParse}
+}
 
 // KVStore is the slice of the store the journal needs: the raw key-value escape
 // hatch (database.RawKVStore). Narrow on purpose -- the journal has no business

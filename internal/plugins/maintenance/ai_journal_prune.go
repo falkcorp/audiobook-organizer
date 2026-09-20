@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/ai_journal_prune.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d906856e-dcfc-4b03-a4ad-ca561f540095
 // last-edited: 2026-09-19
 
@@ -98,18 +98,38 @@ func (p *Plugin) runPruneAIJournal(ctx context.Context, raw json.RawMessage, rep
 		return opsregistry.ReporterSetResult(reporter, PruneAIJournalResult{Skipped: true})
 	}
 
-	j, err := resultjournal.New(p.deps.OpsStore(), whisperJournalKind)
-	if err != nil {
-		return fmt.Errorf("prune-ai-journal: %w", err)
+	// EVERY kind, not just whisper's. This walked one hardcoded kind while
+	// whisper was the only one; a second kind (llm.filename_parse) would then
+	// have grown forever -- one entry per distinct filename in the library --
+	// with nothing reporting a problem. resultjournal.AllKinds() is the list,
+	// so a kind added there is pruned by construction.
+	kinds := resultjournal.AllKinds()
+	deleted := 0
+	var firstErr error
+	for i, kind := range kinds {
+		j, err := resultjournal.New(p.deps.OpsStore(), kind)
+		if err != nil {
+			return fmt.Errorf("prune-ai-journal: %s: %w", kind, err)
+		}
+		_ = reporter.UpdateProgress(i, len(kinds),
+			fmt.Sprintf("Pruning %s journal entries older than %d day(s)", kind, days))
+		n, perr := j.Prune(ctx, time.Duration(days)*24*time.Hour)
+		deleted += n
+		if perr != nil {
+			// Keep going: one unprunable kind must not leave the others
+			// unpruned. The first error is returned once every kind has been
+			// attempted, with the count actually deleted.
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", kind, perr)
+			}
+		}
 	}
-	_ = reporter.UpdateProgress(0, 1, fmt.Sprintf("Pruning whisper journal entries older than %d day(s)", days))
-	deleted, err := j.Prune(ctx, time.Duration(days)*24*time.Hour)
 	setErr := opsregistry.ReporterSetResult(reporter, PruneAIJournalResult{RetentionDays: days, Deleted: deleted})
-	if err != nil {
-		return fmt.Errorf("prune-ai-journal: deleted %d before failing: %w", deleted, err)
+	if firstErr != nil {
+		return fmt.Errorf("prune-ai-journal: deleted %d before failing: %w", deleted, firstErr)
 	}
-	msg := fmt.Sprintf("Pruned %d whisper journal entr(ies) older than %d day(s)", deleted, days)
-	_ = reporter.UpdateProgress(1, 1, msg)
+	msg := fmt.Sprintf("Pruned %d AI journal entr(ies) across %d kind(s) older than %d day(s)", deleted, len(kinds), days)
+	_ = reporter.UpdateProgress(len(kinds), len(kinds), msg)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	if setErr != nil {
 		return fmt.Errorf("prune-ai-journal: persist result: %w", setErr)
