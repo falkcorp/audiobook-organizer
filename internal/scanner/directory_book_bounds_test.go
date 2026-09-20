@@ -1,7 +1,7 @@
 // file: internal/scanner/directory_book_bounds_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b1d0f83-2c47-4a91-95ea-0d4b7e6c1a52
-// last-edited: 2026-09-19
+// last-edited: 2026-09-20
 
 package scanner
 
@@ -54,7 +54,11 @@ func writeDirFixture(t *testing.T, dir string, names []string, album string, tag
 	for i, n := range names {
 		content := []byte("untagged " + n)
 		if tagged(i) {
-			content = id3AlbumFile(album)
+			// Distinct bytes per file, after the ID3 frame. Byte-identical
+			// fixtures make every file a content duplicate of the first, which
+			// sends the hash-dedup branches somewhere no real folder goes and
+			// quietly disarms any test that depends on them.
+			content = append(id3AlbumFile(album), []byte("payload "+n)...)
 		}
 		require.NoError(t, os.WriteFile(filepath.Join(dir, n), content, 0o644))
 	}
@@ -149,6 +153,78 @@ func TestGroupFilesIntoBooks_HardBoundRefusesAnAuthorShelf(t *testing.T) {
 	require.False(t, hasDirectoryBook(books, dir),
 		"%d files in one flat directory were claimed as a single book despite the hard bound of %d",
 		n, maxDirectoryBookFiles)
+
+	// The assertion above is NOT sufficient on its own and was not, in the
+	// first cut of this fix: refusing the directory verdict merely sent the
+	// unanimous folder into the album-group branch, which emitted ONE book
+	// carrying all 251 files as an explicit SegmentFiles list. That book has a
+	// FILE as its FilePath, so `hasDirectoryBook` reports false while the
+	// 251-row record the bound exists to prevent gets created anyway. Assert
+	// the SHAPE: no emitted book may own more than the ceiling, however it
+	// carries its files.
+	for _, b := range books {
+		require.LessOrEqual(t, len(b.SegmentFiles), maxDirectoryBookFiles,
+			"book at %s owns %d segment files, above the ceiling of %d",
+			b.FilePath, len(b.SegmentFiles), maxDirectoryBookFiles)
+	}
+}
+
+// TestGroupFilesIntoBooks_HardBoundAppliesToASequentialGroupToo covers the
+// other route to an unbounded SegmentFiles list. DetectMultiFileGroup is the
+// STRONGER rule and claims a folder before the sample is reached — but
+// "stronger" is not "unbounded", and the 2,162-row organized folder measured on
+// 2026-09-19 is exactly this shape.
+func TestGroupFilesIntoBooks_HardBoundAppliesToASequentialGroupToo(t *testing.T) {
+	dir := t.TempDir()
+	n := maxDirectoryBookFiles + 1
+	files := writeDirFixture(t, dir, chapterFiles(n), "One Long Work", func(int) bool { return true })
+
+	books := groupFilesIntoBooks(context.Background(), files)
+
+	require.False(t, hasDirectoryBook(books, dir))
+	for _, b := range books {
+		require.LessOrEqual(t, len(b.SegmentFiles), maxDirectoryBookFiles,
+			"a sequential group of %d files was emitted as one book of %d segments",
+			n, len(b.SegmentFiles))
+	}
+}
+
+// TestCreateBookFilesForBook_HardBoundAppliesToAnExplicitSegmentList is the
+// backstop test. The ceiling used to live inside `if len(segmentFiles) == 0`,
+// so a caller handing over an explicit oversized list walked straight past it.
+// Every route into this function must hit the same bound.
+func TestCreateBookFilesForBook_HardBoundAppliesToAnExplicitSegmentList(t *testing.T) {
+	store, cleanup := setupPebbleStore(t)
+	defer cleanup()
+	SetStore(store)
+	defer SetStore(nil)
+
+	oldExts := config.AppConfig.SupportedExtensions
+	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
+
+	dir := t.TempDir()
+	names := unnumberedNames(maxDirectoryBookFiles + 1)
+	segs := make([]string, 0, len(names))
+	for _, n := range names {
+		p := filepath.Join(dir, n)
+		require.NoError(t, os.WriteFile(p, []byte("audio"), 0o644))
+		segs = append(segs, p)
+	}
+	// The album-group shape: FilePath is the FIRST FILE, with every file
+	// carried as an explicit segment list.
+	row, err := store.CreateBook(&database.Book{FilePath: segs[0], Title: "Author Shelf"})
+	require.NoError(t, err)
+
+	rec := &recordingLogger{Logger: logger.New("test")}
+	createBookFilesForBook(segs[0], segs, rec, false)
+
+	files, err := store.GetBookFiles(row.ID)
+	require.NoError(t, err)
+	require.Empty(t, files,
+		"an explicit %d-entry segment list was expanded anyway: %d book_file rows created",
+		len(segs), len(files))
+	require.True(t, rec.sawWarn(), "the refusal was silent")
 }
 
 // TestCreateBookFilesForBook_HardBoundRefusesUnboundedExpansion covers the
@@ -271,6 +347,56 @@ func TestSaveBookToDatabase_ConcurrentWritersMintOneRowPerPath(t *testing.T) {
 	require.Equal(t, 1, atPath,
 		"%d writers saving one directory path produced %d book rows at it; "+
 			"each such row goes on to own its own full set of book_file rows", writers, atPath)
+}
+
+// TestProcessBooksParallel_RescanOfAnOversizedFolderDoesNotGrowTheRowCount is
+// the end-to-end guard for the amplification this PR exists to stop.
+//
+// The album-group shape stores FilePath = files[0] and createBookFilesForBook
+// then normalizes the row to the DIRECTORY. The next scan re-emits files[0],
+// GetBookByFilePath misses, and the hash branch's "fall through to create the
+// new (non-primary) record" mints a SECOND row with its own full expansion —
+// one more twin per scan, which is the eight-times-over shape measured in prod.
+// Scanning the same folder twice must not grow the row count.
+func TestProcessBooksParallel_RescanOfAnOversizedFolderDoesNotGrowTheRowCount(t *testing.T) {
+	SetScanner(nil)
+	t.Cleanup(func() { SetScanner(nil) })
+
+	store, cleanup := setupPebbleStore(t)
+	defer cleanup()
+	SetStore(store)
+	defer SetStore(nil)
+
+	oldExts := config.AppConfig.SupportedExtensions
+	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
+
+	dir := t.TempDir()
+	files := writeDirFixture(t, dir, unnumberedNames(maxDirectoryBookFiles+1), "Author Shelf", func(int) bool { return true })
+
+	// Count every row, not one row per path. A per-path lookup answers with a
+	// single row however many sit at that path, which is exactly the blindness
+	// that let the 8x amplification go unseen: it is the duplicates at ONE path
+	// that matter here.
+	countRows := func() int {
+		all, err := store.GetAllBooksCore(0, 0)
+		require.NoError(t, err)
+		return len(all)
+	}
+
+	first := groupFilesIntoBooks(context.Background(), files)
+	require.NoError(t, ProcessBooksParallel(context.Background(), first, 2, nil, logger.New("test")))
+	after1 := countRows()
+	require.Positive(t, after1, "the first pass imported nothing, so the second proves nothing")
+
+	second := groupFilesIntoBooks(context.Background(), files)
+	require.NoError(t, ProcessBooksParallel(context.Background(), second, 2, nil, logger.New("test")))
+	after2 := countRows()
+
+	t.Logf("book rows after pass 1 = %d, after pass 2 = %d", after1, after2)
+	require.Equal(t, after1, after2,
+		"a rescan of the same folder grew the book rows from %d to %d; every extra row "+
+			"goes on to own its own full set of book_file rows", after1, after2)
 }
 
 // racedCreateStore simulates the other writer deterministically: the FIRST
