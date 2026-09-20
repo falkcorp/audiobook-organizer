@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/op_params.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 89996e05-3a09-42d5-866b-67006fe7787f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -51,21 +51,38 @@ type pathPrefixParams interface {
 // Callers must call this BEFORE any store read or write, so a bad body fails
 // the op having done nothing.
 func decodeOpParams(raw json.RawMessage, dst pathPrefixParams) error {
-	if len(bytes.TrimSpace(raw)) > 0 {
-		if err := rejectDuplicateKeys(raw); err != nil {
-			return err
-		}
-		dec := json.NewDecoder(bytes.NewReader(raw))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(dst); err != nil {
-			return err
-		}
-		var extra json.RawMessage
-		if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-			return errors.New("unexpected data after the params object")
-		}
+	if err := decodeStrictParams(raw, dst); err != nil {
+		return err
 	}
 	return dst.foldPathPrefixAlias()
+}
+
+// decodeStrictParams is decodeOpParams without the path-prefix alias fold: the
+// strictness (unknown keys rejected, duplicate keys rejected, trailing data
+// rejected, empty body = zero value) for a params struct that has no
+// pathPrefix/path_prefix pair to reconcile.
+//
+// It exists so an op whose scope key is NOT "pathPrefix" — rewrite-path-prefix
+// scopes by oldPrefix/newPrefix — gets the same "a mistyped scope key fails the
+// run instead of widening it" contract without having to implement a no-op
+// foldPathPrefixAlias just to satisfy the interface.
+func decodeStrictParams(raw json.RawMessage, dst any) error {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	if err := rejectDuplicateKeys(raw); err != nil {
+		return err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("unexpected data after the params object")
+	}
+	return nil
 }
 
 // rejectDuplicateKeys fails a top-level object that names any key twice.

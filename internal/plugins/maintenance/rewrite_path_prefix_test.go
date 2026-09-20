@@ -1,0 +1,424 @@
+// file: internal/plugins/maintenance/rewrite_path_prefix_test.go
+// version: 1.0.0
+// guid: b036c68e-a6da-48df-806b-b765cda262ef
+// last-edited: 2026-09-19
+
+package maintenance
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/stretchr/testify/require"
+)
+
+// rewriteFakeStore records every write so a test can assert BOTH what was
+// written and — just as importantly — that nothing else was.
+type rewriteFakeStore struct {
+	mu sync.Mutex // the write phase runs on RunItems' worker pool
+
+	books     []database.BookCore
+	fullBooks map[string]*database.Book
+	fileCores []database.BookFileCore
+	fullFiles map[string]*database.BookFile // fileID → row
+
+	atPath map[string][]string // path → live book IDs
+
+	bookWrites []database.Book
+	fileWrites []database.BookFile
+	ledger     []database.BookPathChange
+
+	// modifyBookHook runs inside ModifyBook, under the fake's lock, BEFORE the
+	// callback — the seam a test uses to simulate another writer moving the row
+	// between the scan and the write.
+	modifyBookHook func(b *database.Book)
+}
+
+func (f *rewriteFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
+	if offset >= len(f.books) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(f.books) {
+		end = len(f.books)
+	}
+	return f.books[offset:end], nil
+}
+
+func (f *rewriteFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
+	return f.fileCores, nil
+}
+
+func (f *rewriteFakeStore) LiveBookIDsAtPath(path string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.atPath[path], nil
+}
+
+func (f *rewriteFakeStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.modifyBookHook != nil {
+		// Mutates the STORED row, as a concurrent writer that committed just
+		// before we took the lock would have. The op must then read the moved
+		// value, not the one its scan saw.
+		f.modifyBookHook(f.fullBooks[id])
+		f.modifyBookHook = nil
+	}
+	stored := f.fullBooks[id]
+	if stored == nil {
+		return nil, nil
+	}
+	row := *stored
+	if err := fn(&row); err != nil {
+		if err == database.ErrSkipBookWrite {
+			return stored, nil
+		}
+		return nil, err
+	}
+	f.fullBooks[id] = &row
+	f.bookWrites = append(f.bookWrites, row)
+	return &row, nil
+}
+
+func (f *rewriteFakeStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored := f.fullFiles[fileID]
+	if stored == nil {
+		return nil, nil
+	}
+	row := *stored
+	if err := fn(&row); err != nil {
+		if err == database.ErrSkipBookFileWrite {
+			return stored, nil
+		}
+		return nil, err
+	}
+	f.fullFiles[fileID] = &row
+	f.fileWrites = append(f.fileWrites, row)
+	return &row, nil
+}
+
+func (f *rewriteFakeStore) RecordPathChange(change *database.BookPathChange) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ledger = append(f.ledger, *change)
+	return nil
+}
+
+// seedRewrite builds one book with one file under oldDir, plus a
+// source_import_path under the same tree, and creates the NEW tree on disk so
+// the default require_target_exists gate passes.
+func seedRewrite(t *testing.T, oldDir, newDir string) *rewriteFakeStore {
+	t.Helper()
+	oldFile := filepath.Join(oldDir, "01.mp3")
+	src := oldDir
+	return &rewriteFakeStore{
+		books: []database.BookCore{{ID: "b1", FilePath: oldDir, SourceImportPath: &src}},
+		fullBooks: map[string]*database.Book{
+			"b1": {ID: "b1", FilePath: oldDir, SourceImportPath: &src},
+		},
+		fileCores: []database.BookFileCore{{ID: "f1", BookID: "b1", FilePath: oldFile}},
+		fullFiles: map[string]*database.BookFile{
+			"f1": {ID: "f1", BookID: "b1", FilePath: oldFile,
+				AcoustIDFingerprint: []byte("fp-keep-me")},
+		},
+		atPath: map[string][]string{oldDir: {"b1"}},
+	}
+}
+
+func rewriteParams(old, nw string, dryRun bool) rewritePathPrefixParams {
+	return rewritePathPrefixParams{OldPrefix: old, NewPrefix: nw, DryRun: &dryRun}
+}
+
+// makeTree creates <dir>/01.mp3 so the stat gate has something to find.
+func makeTree(t *testing.T, dir string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "01.mp3"), []byte("x"), 0o644))
+}
+
+// The happy path, and the whole point of the op: EVERY enumerated field follows
+// the prefix, and the fingerprint (which a full-record replacement would wipe)
+// survives.
+func TestRewritePathPrefix_ApplyRewritesEveryEnumeratedField(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "Christopher Paolin - The Inheritance Cycle")
+	newDir := filepath.Join(root, "Christopher Paolini - The Inheritance Cycle")
+	makeTree(t, newDir)
+	store := seedRewrite(t, oldDir, newDir)
+
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewriteParams(oldDir, newDir, false), &fakeReporter{})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, plan.MatchedBooks)
+	require.Equal(t, 3, plan.MatchedFields, "book.file_path + book.source_import_path + book_file.file_path")
+	require.Equal(t, 1, plan.BooksRewritten)
+	require.Equal(t, 3, plan.FieldsRewritten)
+	require.Zero(t, plan.UpdateErrs)
+
+	require.Len(t, store.bookWrites, 1)
+	require.Equal(t, newDir, store.bookWrites[0].FilePath)
+	require.NotNil(t, store.bookWrites[0].SourceImportPath)
+	require.Equal(t, newDir, *store.bookWrites[0].SourceImportPath)
+
+	require.Len(t, store.fileWrites, 1)
+	require.Equal(t, filepath.Join(newDir, "01.mp3"), store.fileWrites[0].FilePath)
+	require.Equal(t, []byte("fp-keep-me"), store.fileWrites[0].AcoustIDFingerprint,
+		"a full-record replacement would have wiped the fingerprint")
+
+	// The ledger: one entry, AFTER the write, with the old value as read.
+	require.Len(t, store.ledger, 1)
+	require.Equal(t, "prefix-rewrite", store.ledger[0].ChangeType)
+	require.Equal(t, oldDir, store.ledger[0].OldPath)
+	require.Equal(t, newDir, store.ledger[0].NewPath)
+}
+
+// The separator-boundary trap: "/x/ab" must NOT match "/x/abooks/…".
+func TestRewritePathPrefix_SeparatorBoundaryDoesNotMatchSibling(t *testing.T) {
+	root := t.TempDir()
+	oldPrefix := filepath.Join(root, "ab")
+	sibling := filepath.Join(root, "abooks")
+	newPrefix := filepath.Join(root, "cd")
+	makeTree(t, newPrefix)
+
+	store := seedRewrite(t, sibling, newPrefix)
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewriteParams(oldPrefix, newPrefix, false), &fakeReporter{})
+	require.NoError(t, err)
+	require.Zero(t, plan.MatchedBooks, "%q must not be swept by prefix %q", sibling, oldPrefix)
+	require.Empty(t, store.bookWrites)
+	require.Empty(t, store.fileWrites)
+}
+
+// A new path already occupied by a DIFFERENT live book is refused and reported,
+// not written.
+func TestRewritePathPrefix_BookCollisionRefusedAndReported(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new")
+	makeTree(t, newDir)
+	store := seedRewrite(t, oldDir, newDir)
+	store.atPath[newDir] = []string{"b-other"}
+
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewriteParams(oldDir, newDir, false), &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.TargetCollision)
+	require.Zero(t, plan.Rewritable)
+	require.Empty(t, store.bookWrites)
+	require.Empty(t, store.fileWrites)
+
+	var found bool
+	for _, d := range plan.all {
+		if d.Bucket == "collision" {
+			found = true
+			require.Contains(t, d.Reason, "b-other")
+		}
+	}
+	require.True(t, found, "the collision must be REPORTED, not just counted")
+}
+
+// A book_file target already claimed by another row is refused too.
+func TestRewritePathPrefix_FileCollisionRefused(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new")
+	makeTree(t, newDir)
+	store := seedRewrite(t, oldDir, newDir)
+	// Another row already sits on the target file.
+	store.fileCores = append(store.fileCores, database.BookFileCore{
+		ID: "f-other", BookID: "b-other", FilePath: filepath.Join(newDir, "01.mp3")})
+
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewriteParams(oldDir, newDir, false), &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.TargetCollision)
+	require.Empty(t, store.fileWrites)
+}
+
+// The stat gate: with the default require_target_exists, a rewrite whose target
+// is not on disk is refused. This is also what a dry run BEFORE the rename looks
+// like.
+func TestRewritePathPrefix_MissingTargetRefused(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new") // never created
+	store := seedRewrite(t, oldDir, newDir)
+
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewritePathPrefixParams{OldPrefix: oldDir, NewPrefix: newDir, DryRun: boolPtr(false)},
+		&fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.TargetMissing)
+	require.Zero(t, plan.BooksRewritten)
+	require.Empty(t, store.bookWrites)
+
+	// …and the opt-out lets it through.
+	store2 := seedRewrite(t, oldDir, newDir)
+	plan2, err := planRewritePathPrefix(context.Background(), store2, nil,
+		rewritePathPrefixParams{OldPrefix: oldDir, NewPrefix: newDir,
+			DryRun: boolPtr(false), RequireTargetExists: boolPtr(false)},
+		&fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan2.BooksRewritten)
+}
+
+// Dry run is the DEFAULT and it writes nothing.
+func TestRewritePathPrefix_DryRunIsDefaultAndWritesNothing(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new")
+	makeTree(t, newDir)
+	store := seedRewrite(t, oldDir, newDir)
+
+	// DryRun left NIL: the omitted key must mean dry run, not apply.
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewritePathPrefixParams{OldPrefix: oldDir, NewPrefix: newDir}, &fakeReporter{})
+	require.NoError(t, err)
+	require.True(t, plan.DryRun)
+	require.Equal(t, 1, plan.Rewritable)
+	require.Zero(t, plan.BooksRewritten)
+	require.Empty(t, store.bookWrites)
+	require.Empty(t, store.fileWrites)
+	require.Empty(t, store.ledger)
+}
+
+// A re-run after a PARTIAL apply completes the rest and does not touch what is
+// already done: a rewritten row no longer matches old_prefix, so it is simply
+// not selected again.
+func TestRewritePathPrefix_RerunAfterPartialApplyCompletesTheRest(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new")
+	makeTree(t, newDir)
+	require.NoError(t, os.WriteFile(filepath.Join(newDir, "02.mp3"), []byte("x"), 0o644))
+
+	store := seedRewrite(t, oldDir, newDir)
+	// A second book, already rewritten by the interrupted first run.
+	store.books = append(store.books, database.BookCore{ID: "b2", FilePath: newDir})
+	store.fullBooks["b2"] = &database.Book{ID: "b2", FilePath: newDir}
+	store.fileCores = append(store.fileCores, database.BookFileCore{
+		ID: "f2", BookID: "b2", FilePath: filepath.Join(newDir, "02.mp3")})
+	store.fullFiles["f2"] = &database.BookFile{
+		ID: "f2", BookID: "b2", FilePath: filepath.Join(newDir, "02.mp3")}
+	store.atPath[newDir] = []string{"b2"}
+
+	// b1's target is newDir, which b2 now holds — a real collision, so use a
+	// distinct destination for b1 to keep this test about re-selection.
+	newDir2 := filepath.Join(root, "new2")
+	makeTree(t, newDir2)
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewriteParams(oldDir, newDir2, false), &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.MatchedBooks, "the already-rewritten book must not be re-selected")
+	require.Equal(t, 1, plan.BooksRewritten)
+	require.Len(t, store.bookWrites, 1)
+	require.Equal(t, "b1", store.bookWrites[0].ID)
+}
+
+// Another writer moved the row between the scan and the write: the op SKIPS it
+// rather than clobbering it with this run's stale idea of where it was.
+func TestRewritePathPrefix_RowChangedUnderneathIsSkippedNotClobbered(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new")
+	elsewhere := filepath.Join(root, "elsewhere")
+	makeTree(t, newDir)
+	store := seedRewrite(t, oldDir, newDir)
+	// Between the plan's read and the write, the row moved out of old_prefix.
+	store.modifyBookHook = func(b *database.Book) { b.FilePath = elsewhere }
+
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewriteParams(oldDir, newDir, false), &fakeReporter{})
+	require.NoError(t, err)
+	require.Positive(t, plan.SkippedChanged)
+	require.Zero(t, plan.BooksRewritten, "the book row must not have been written")
+	require.Empty(t, store.bookWrites)
+	require.Equal(t, elsewhere, store.fullBooks["b1"].FilePath,
+		"the concurrent writer's value must survive")
+	require.Empty(t, store.ledger, "no ledger line for a write that did not happen")
+}
+
+// Params that cannot be meant are rejected before any store read.
+func TestRewritePathPrefix_ParamValidation(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		params rewritePathPrefixParams
+	}{
+		{"empty old", rewritePathPrefixParams{NewPrefix: "/a"}},
+		{"empty new", rewritePathPrefixParams{OldPrefix: "/a"}},
+		{"relative old", rewritePathPrefixParams{OldPrefix: "a", NewPrefix: "/b"}},
+		{"relative new", rewritePathPrefixParams{OldPrefix: "/a", NewPrefix: "b"}},
+		{"identical", rewritePathPrefixParams{OldPrefix: "/a", NewPrefix: "/a"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			require.Error(t, c.params.validate())
+		})
+	}
+	require.NoError(t, rewritePathPrefixParams{OldPrefix: "/a", NewPrefix: "/b"}.validate())
+}
+
+// --- the completeness proof, against a REAL store ---
+//
+// The op never writes the book_atpath: index itself; it relies on ModifyBook's
+// commit to do it. This test is what turns "I read updateBookLockedMode and it
+// deletes the old key" into demonstrated behaviour: after an apply,
+// LiveBookIDsAtPath must answer at the NEW path and no longer at the old one.
+func TestRewritePathPrefix_ApplyAtPathIndexFollows(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old book")
+	newDir := filepath.Join(root, "new book")
+	makeTree(t, newDir)
+
+	s, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	book, err := s.CreateBook(&database.Book{Title: "T", FilePath: oldDir})
+	require.NoError(t, err)
+	require.NoError(t, s.CreateBookFile(&database.BookFile{
+		ID: "f1", BookID: book.ID, FilePath: filepath.Join(oldDir, "01.mp3")}))
+
+	before, err := s.LiveBookIDsAtPath(oldDir)
+	require.NoError(t, err)
+	require.Equal(t, []string{book.ID}, before)
+
+	plan, err := planRewritePathPrefix(context.Background(), s, nil,
+		rewriteParams(oldDir, newDir, false), &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.BooksRewritten)
+
+	after, err := s.LiveBookIDsAtPath(newDir)
+	require.NoError(t, err)
+	require.Equal(t, []string{book.ID}, after, "the book_atpath: index must follow the row")
+
+	gone, err := s.LiveBookIDsAtPath(oldDir)
+	require.NoError(t, err)
+	require.Empty(t, gone, "the OLD index key must be gone, or a later move reads a taken path as free")
+
+	// The book_file row and its path index followed too.
+	got, err := s.GetBookFileByPath(filepath.Join(newDir, "01.mp3"))
+	require.NoError(t, err)
+	require.NotNil(t, got, "book_file_path: secondary index must resolve the new path")
+	require.Equal(t, "f1", got.ID)
+
+	// And the ledger recorded it.
+	hist, err := s.GetBookPathHistory(book.ID)
+	require.NoError(t, err)
+	var sawRewrite bool
+	for _, h := range hist {
+		if h.ChangeType == "prefix-rewrite" {
+			sawRewrite = true
+			require.Equal(t, oldDir, h.OldPath)
+			require.Equal(t, newDir, h.NewPath)
+		}
+	}
+	require.True(t, sawRewrite, "path_history must carry a prefix-rewrite entry")
+}

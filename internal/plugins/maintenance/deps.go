@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.47.0
+// version: 1.48.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-19
 
@@ -50,19 +50,44 @@ type opsBookReader interface {
 	ListBookIDs() ([]string, error)
 }
 
-// opsBookWriter creates, mutates and retires books.
-type opsBookWriter interface {
+// opsBookMutator creates and changes book rows, and records the ledger entry a
+// location change owes.
+type opsBookMutator interface {
 	CreateBook(book *database.Book) (*database.Book, error)
-	DeleteBook(id string) error
-	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
-	ListSoftDeletedBooks(limit int, offset int, olderThan *time.Time) ([]database.Book, error)
 	RecomputeBookAggregates(bookID string) error
-	ResolveTombstoneChains() (int, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	// ModifyBook is the atomic read-check-write repoint-unrecorded-renames
 	// uses for a book row's FilePath, so the "row still holds old_path" check
 	// and the write cannot be split by a concurrent edit.
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	// RecordPathChange appends to the book's path_history: ledger. It is the
+	// existing journal for "this book's location changed" (CreateBook writes
+	// the "import" entry, the quarantine service writes its own), and
+	// rewrite-path-prefix appends a "prefix-rewrite" entry AFTER each row write
+	// it describes.
+	RecordPathChange(change *database.BookPathChange) error
+}
+
+// opsBookRetirer removes books and resolves what their removal leaves behind.
+type opsBookRetirer interface {
+	DeleteBook(id string) error
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	ListSoftDeletedBooks(limit int, offset int, olderThan *time.Time) ([]database.Book, error)
+	ResolveTombstoneChains() (int, error)
+}
+
+// opsBookWriter creates, mutates and retires books.
+//
+// Split into the two interfaces above on 2026-09-19, when adding
+// RecordPathChange (rewrite-path-prefix's ledger append) took it to 9 declared
+// entries and over the interfacebloat limit of 8. Same shape and same reasoning
+// as the opsBookFileWriter split: the name is retained as their composition so
+// the method set stays byte-identical and no consumer moves, which the type
+// checker verifies because every implementation fails to compile if a method
+// were dropped or re-signatured in the regrouping.
+type opsBookWriter interface {
+	opsBookMutator
+	opsBookRetirer
 }
 
 // opsFileAndPathReader reads book files and the configured import paths.
@@ -270,7 +295,7 @@ type opsPeopleStore interface {
 	opsNarratorStore
 }
 
-// OpsStore is the 62 methods the maintenance ops need -- what they call directly
+// OpsStore is the 63 methods the maintenance ops need -- what they call directly
 // plus what the package's own helpers require of a store handed to them. Exported
 // so *server.Server can name it as a return type.
 type OpsStore interface {
