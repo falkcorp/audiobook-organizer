@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.17.0
+// version: 3.17.1
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-09-20
 
@@ -94,12 +94,14 @@ type durationReextractParams struct {
 	// the ops beside it in this package tag theirs `dry_run` — and encoding/json
 	// discards a field it does not recognise without a word. So an operator who
 	// reached for the spelling every neighbouring op uses got the struct default
-	// instead: the run reported `examined=76280 ... would-change=17161`, the
-	// same summary a dry run prints, and wrote NOTHING. Measured in prod on
-	// 2026-09-20; the book the summary named as `13s -> 2221s` was still 13s
-	// afterwards. It fails safe, but it fails silently, which is worse than
-	// loudly: the only way to catch it was to re-read a row the op claimed to
-	// have corrected.
+	// instead: a run started as an APPLY previewed and wrote nothing. Measured
+	// in prod on 2026-09-20.
+	//
+	// The summary is not at fault and does distinguish the modes ("corrected N"
+	// vs "would correct"). That is exactly what made the drop hard to spot from
+	// the outside: the line was a truthful dry-run summary for a run the caller
+	// believed was applying, so it looked like a completed repair unless you
+	// read the verb or re-read a row it named.
 	//
 	// maintenance.author-path-link and maintenance.author-id-repair already
 	// solve this exactly this way; this op is the outlier that did not.
