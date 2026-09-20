@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.12.0
+// version: 4.13.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-20
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -33,6 +33,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { OperationActivityPanel } from '../OperationActivityPanel';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
+import { byNewestFirst } from '../../stores/operationGrouping';
 import { formatProgressCounts, operationDisplayName } from './operationsFormat';
 import { isTerminal } from '../../utils/operationPolling';
 import { cancelOperation } from '../../services/api';
@@ -223,7 +224,14 @@ export function OperationsIndicator() {
   // tree rendering — no indentation, no expander — so a group's children would
   // land in it as duplicate flat rows. The parent alone is the roll-up, and the
   // Activity page is where the members are.
-  const rows = groupedOperations.filter((op) => !op.parent_id);
+  // NEWEST FIRST, and it has to happen here. groupOperations emits bucket by
+  // bucket (every row of one def_id+status, then the next kind), so the list it
+  // returns is ordered by KIND and carries no time order at all — which is why
+  // the newest completion used to land wherever its kind's bucket happened to
+  // fall, usually at the bottom of the popover where nobody saw it. The Activity
+  // page already sorts its own history sections by finishedAt; this is the bell
+  // catching up to it, through the same groupTimestamp both folds use.
+  const rows = groupedOperations.filter((op) => !op.parent_id).sort(byNewestFirst);
   const inProgress = rows.filter((op) => !isTerminal(op.status));
   const queued = inProgress.filter((op) => op.status === 'queued');
   const running = inProgress.filter((op) => op.status !== 'queued');
