@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
 // last-edited: 2026-09-19
 
@@ -834,18 +834,32 @@ func applyRewriteBook(
 	// snapshot. path_history is book-keyed, so the book row's move is what is
 	// recorded; the file rows beneath it move with it and are enumerated in the
 	// run's TSV report.
-	if bookNew != "" && wroteAnything {
-		if rerr := store.RecordPathChange(&database.BookPathChange{
+	//
+	// A book whose own FilePath did NOT match old_prefix but whose file rows did
+	// still gets an entry, under the distinct type "prefix-rewrite-files" and
+	// carrying the PREFIXES rather than a book path. Gating the ledger on the
+	// book row's own move would have left that case with no journal line at all,
+	// and inventing a book path for it from a file's directory would record
+	// something the row never held. The per-field TSV remains the record of
+	// exactly which rows moved.
+	if wroteAnything {
+		change := &database.BookPathChange{
 			BookID:     bp.BookID,
 			OldPath:    bookOld,
 			NewPath:    bookNew,
 			ChangeType: "prefix-rewrite",
-		}); rerr != nil {
+		}
+		if bookNew == "" {
+			change.OldPath, change.NewPath = params.OldPrefix, params.NewPrefix
+			change.ChangeType = "prefix-rewrite-files"
+		}
+		if rerr := store.RecordPathChange(change); rerr != nil {
 			// Not fatal and NOT counted as an update error: the row write already
 			// succeeded and undoing it here would be worse than a missing ledger
 			// line. Said loudly so it is not silent.
 			log.Warn("rewrite-path-prefix: RecordPathChange failed (the row write DID land)",
-				"book", bp.BookID, "old", bookOld, "new", bookNew, "err", rerr)
+				"book", bp.BookID, "kind", change.ChangeType,
+				"old", change.OldPath, "new", change.NewPath, "err", rerr)
 		}
 	}
 	return decisions, wroteAnything
