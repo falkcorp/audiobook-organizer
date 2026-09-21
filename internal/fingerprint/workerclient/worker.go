@@ -70,6 +70,11 @@ type worker struct {
 	cfg   Config
 	api   *apiClient
 	roots map[string]string // root name -> resolved local mount
+
+	// rejection logging state (logRejection).
+	rejectMu         sync.Mutex
+	rejectSeen       map[string]time.Time
+	rejectSuppressed map[string]int
 	// calib is read by the re-check goroutine and replaced by admit after a
 	// run change, so it is guarded by calibMu.
 	calibMu sync.Mutex
@@ -777,11 +782,61 @@ func fmtCounts(m map[string]int) string {
 //   - timeout: a window hit the per-window timeout, or a transient I/O
 //     failure repeated.
 //   - decode_error: ffmpeg or fpcalc failed, or the print was too short.
+//
+// rejectLogEvery rate-limits the rejection log: a systematic cause (a root the
+// worker was never given, say) produces one refusal per job, and the first few
+// plus a periodic repeat say everything a flood would.
+var rejectLogEvery = 30 * time.Second
+
+// logRejection reports a refused job once per rejectLogEvery per distinct
+// reason, naming the ROOT the server asked for and the roots this worker
+// actually holds — the pair that makes "root not configured" actionable
+// instead of merely true.
+func (w *worker) logRejection(root, msg string) {
+	w.rejectMu.Lock()
+	defer w.rejectMu.Unlock()
+	if w.rejectSeen == nil {
+		w.rejectSeen = map[string]time.Time{}
+	}
+	now := time.Now()
+	if last, ok := w.rejectSeen[msg]; ok && now.Sub(last) < rejectLogEvery {
+		w.rejectSuppressed[msg]++
+		return
+	}
+	if w.rejectSuppressed == nil {
+		w.rejectSuppressed = map[string]int{}
+	}
+	have := make([]string, 0, len(w.roots))
+	for name := range w.roots {
+		have = append(have, name)
+	}
+	sort.Strings(have)
+	n := w.rejectSuppressed[msg]
+	w.rejectSuppressed[msg] = 0
+	w.rejectSeen[msg] = now
+	if n > 0 {
+		log.Warn("refused a job: %s (server asked for root %q; this worker holds %s) [+%d more since the last line]",
+			msg, root, strings.Join(have, ", "), n)
+		return
+	}
+	log.Warn("refused a job: %s (server asked for root %q; this worker holds %s)",
+		msg, root, strings.Join(have, ", "))
+}
+
 func (w *worker) process(ctx context.Context, job workerapi.Job) workerapi.JobResult {
 	res := workerapi.JobResult{JobID: job.JobID, Ref: job.Ref, Pipeline: fingerprint.WindowPipelineID,
 		FpcalcVersion: w.cfg.Versions.Fpcalc, FFmpegVersion: w.cfg.Versions.FFmpeg}
 	fail := func(outcome, msg string) workerapi.JobResult {
 		res.Outcome, res.Error, res.Windows = outcome, w.scrub(msg), nil
+		// Say it out loud. A refusal used to be reported only back to the
+		// server, which logged it at Debug while prod runs at info — so a run
+		// that refused 91,346 of its jobs could not tell anyone which of six
+		// causes applied, from either end. The worker is the side that knows;
+		// rejections are rate-limited because a systematic cause produces one
+		// per job.
+		if outcome == workerapi.OutcomeRejected {
+			w.logRejection(job.Root, msg)
+		}
 		return res
 	}
 	mount, ok := w.roots[job.Root]
