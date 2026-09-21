@@ -1,7 +1,7 @@
 // file: internal/server/wire_operations_routes.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
-// last-edited: 2026-09-11
+// last-edited: 2026-09-20
 
 package server
 
@@ -33,6 +33,14 @@ func (s *Server) wireOperationsRoutes(
 	// DELETE /operations/v2/:id stays "cancel"; this removes the row itself.
 	protected.DELETE("/operations/v2/:id/record", s.perm(auth.PermSettingsManage), opsV2H.DiscardOperationV2)
 	protected.POST("/operations/v2", s.perm(auth.PermScanTrigger), opsV2H.TriggerOperationV2)
+
+	// Operator pause: drain in-flight items, hold before dispatching new ones.
+	// PermSettingsManage, the same guard as cancel and retry — acting on runs
+	// that already exist rather than triggering new work. GET is view-level so
+	// the UI banner can render for anyone who can see the operations list.
+	protected.POST("/operations/pause", s.perm(auth.PermSettingsManage), operationsH.PauseOperations)
+	protected.POST("/operations/resume", s.perm(auth.PermSettingsManage), operationsH.ResumeOperations)
+	protected.GET("/operations/pause", s.perm(auth.PermLibraryView), operationsH.GetPauseState)
 	protected.GET("/op-defs", s.perm(auth.PermLibraryView), opsV2H.ListOpDefs)
 	protected.GET("/op-defs/:id", s.perm(auth.PermLibraryView), opsV2H.GetOpDef)
 

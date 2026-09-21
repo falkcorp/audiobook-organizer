@@ -1,7 +1,7 @@
 // file: internal/operations/registry/run_items.go
-// version: 1.5.3
+// version: 1.6.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-09-12
+// last-edited: 2026-09-20
 
 package registry
 
@@ -218,6 +218,23 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 	// own index for identity.
 	var completed atomic.Int64
 	runOne := func(ctx context.Context, i int, item T) error {
+		// OPERATOR PAUSE — drain in-flight items, hold before dispatching new
+		// ones. An item already inside fn below is untouched and runs to
+		// completion; this parks the NEXT one.
+		//
+		// BEFORE the PerItemTimeout context on purpose. That timeout is 3
+		// minutes on the batch apply, so a gate placed after it would start
+		// each parked item's clock at dispatch and fail every one of them with
+		// DeadlineExceeded the moment a pause outlasted it. The item's clock
+		// must start when the item actually begins.
+		//
+		// Returns ctx.Err() if the op is cancelled while parked, so a paused op
+		// stays cancellable without being resumed first.
+		if globalPauseGate.IsPaused() {
+			if err := globalPauseGate.Wait(ctx, r, lbl(i, progTotal)); err != nil {
+				return err
+			}
+		}
 		itemCtx := ctx
 		if opt.PerItemTimeout > 0 {
 			var cancel context.CancelFunc
