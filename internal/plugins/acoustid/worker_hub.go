@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-09-21
 
@@ -1037,15 +1037,18 @@ func (r *hubRun) calibration(req workerapi.HelloRequest, now func() time.Time) h
 	return helloCalibration{files: r.buildIdentityCalibration(), bootstrap: true} // I/O, unlocked
 }
 
-// buildIdentityCalibration offers present libroot files with NO windows: the
+// buildIdentityCalibration offers present files with NO windows: the
 // remote-only bootstrap, when no reference-pair window exists yet. They prove
 // only a worker's root mapping (size, mtime, first 64 KiB); the worker gate
 // lets the reference pair alone pass on that (workerclient.calibrationTargets).
 func (r *hubRun) buildIdentityCalibration() []workerapi.CalibrationFile {
 	out := []workerapi.CalibrationFile{}
 	for _, it := range r.identity {
+		// Any known root. A worker must be given a candidate for EVERY root it
+		// holds or its parity gate refuses to start it; libroot-only candidates
+		// are what made --root books=… fatal.
 		root, rel, ok := pathutil.SplitRoot(it.Path, r.roots)
-		if !ok || root != "libroot" {
+		if !ok {
 			continue
 		}
 		fi, err := os.Stat(it.Path)
@@ -1065,14 +1068,15 @@ func (r *hubRun) buildIdentityCalibration() []workerapi.CalibrationFile {
 	return out
 }
 
-// buildCalibration reads the calibration candidates: files under libroot
-// whose stored windows are current. A candidate whose bytes moved since is
-// dropped.
+// buildCalibration reads the calibration candidates: files under ANY known
+// root whose stored windows are current. A candidate whose bytes moved since
+// is dropped. Per-root coverage matters: the worker gate needs one per root it
+// holds.
 func (r *hubRun) buildCalibration(cands []windowItem) []workerapi.CalibrationFile {
 	out := []workerapi.CalibrationFile{}
 	for _, it := range cands {
 		root, rel, ok := pathutil.SplitRoot(it.Path, r.roots)
-		if !ok || root != "libroot" {
+		if !ok {
 			continue
 		}
 		stored, err := r.p.store.GetFingerprintWindows(database.FileWindowRef(it.FileID))
