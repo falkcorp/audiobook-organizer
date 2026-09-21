@@ -1,7 +1,7 @@
 // file: internal/fingerprint/workerapi/types.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d5f6ff4f-9158-43e6-b27a-0ef43f926bfb
-// last-edited: 2026-09-19
+// last-edited: 2026-09-21
 
 // Package workerapi is the wire format of the remote fingerprint worker API
 // (/api/v1/fingerprint/worker/*), shared by the server (the lease manager in
@@ -109,6 +109,21 @@ type CalibrationFile struct {
 	MtimeUnix int64               `json:"mtime_unix"`
 	Head64K   string              `json:"head_64k_sha256"`
 	Windows   []CalibrationWindow `json:"windows"`
+
+	// IdentityOnly marks a file that proves the ROOT MAPPING only — size,
+	// mtime, first 64 KiB — and carries no window to reproduce. The server
+	// offers one for a root it has no reference window under yet, which is
+	// every root on a run's first pass.
+	//
+	// It exists because the weaker claim had no representation in the
+	// protocol: the worker inferred "useless" from len(Windows) == 0 and
+	// dropped the file, so a root could never be proven until it had windows
+	// and could never get windows until a worker holding it started. Both prod
+	// workers deadlocked on that circle on 2026-09-21. A worker accepts an
+	// identity-only file as proof of the mapping for its root and skips the
+	// parity cut for it, but still requires at least one parity-bearing file
+	// overall, so pipeline parity is never silently waived.
+	IdentityOnly bool `json:"identity_only,omitempty"`
 }
 
 // CalibrationWindow is one stored window of a calibration file. Normally only
