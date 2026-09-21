@@ -228,7 +228,11 @@ func TestWindowBackfill_RemoteOnly_DeferredItemsEndTheTierAndMoveTheCheckpoint(t
 	require.NoError(t, err, "the tier must end once only deferred files are left")
 	require.Zero(t, calls.Load())
 	require.Empty(t, e.invoked(), "a handed-back file must not be cut by the server")
-	require.Equal(t, map[string]int{"unknown_duration": 4, "worker_decode_error": 1}, res.deferred)
+	// The deferral key now carries the worker's reason (normalizeWorkerReason).
+	// "Invalid data" is a real ffmpeg decode message but matches none of the
+	// named cases, so it buckets as ":other" — which is the correct answer:
+	// the suffix reports what was recognised, it does not invent a diagnosis.
+	require.Equal(t, map[string]int{"unknown_duration": 4, "worker_decode_error:other": 1}, res.deferred)
 	require.Zero(t, res.written)
 	require.Zero(t, res.failed)
 	for _, id := range ids {
