@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill_remote_only_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 609372fb-2803-46d8-a413-c4263e5f71be
-// last-edited: 2026-09-19
+// last-edited: 2026-09-20
 
 package acoustid
 
@@ -61,10 +61,18 @@ func noLocalTools(e *wbEnv) *atomic.Int64 {
 	return &calls
 }
 
-// addOutside adds a present file outside RootDir (so not under libroot).
+// addOutside adds a present file outside EVERY known root (its own TempDir, not
+// under RootDir nor RootDir's parent), so it is genuinely unreachable by a
+// worker rather than merely outside libroot.
 func (e *wbEnv) addOutside(name string) string {
 	e.t.Helper()
-	dir := e.t.TempDir()
+	// NOT t.TempDir(): that returns a SIBLING of e.lib under the same per-test
+	// parent, and the parent is exactly the "books" root, so such a file is
+	// legitimately reachable now and this helper would no longer mean what its
+	// name says. os.MkdirTemp("") lands outside the test's own tree.
+	dir, err := os.MkdirTemp("", "wb-outside-")
+	require.NoError(e.t, err)
+	e.t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	path := filepath.Join(dir, name)
 	require.NoError(e.t, os.WriteFile(path, []byte("audio:"+name), 0o644))
 	b, err := e.store.CreateBook(&database.Book{Title: "Outside " + name, FilePath: dir})
@@ -176,7 +184,7 @@ func TestWindowBackfill_RemoteOnly_ServerDecodesNothing(t *testing.T) {
 		require.Equal(t, "fp-worker:mac1", ws[0].Host)
 		require.Equal(t, refPair.FFmpeg, ws[0].FFmpegVersion)
 	}
-	require.Equal(t, map[string]int{"unknown_duration": 1, "not_under_libroot": 1}, res.deferred)
+	require.Equal(t, map[string]int{"unknown_duration": 1, "not_under_any_root": 1}, res.deferred)
 	for _, id := range []string{unknown, outside} {
 		require.Empty(t, e.windows(id), "deferred file %s was written", id)
 		require.Nil(t, e.tombstone(id), "deferred file %s was tombstoned", id)
@@ -253,7 +261,7 @@ func TestWindowBackfill_RemoteOnly_NoWorkerOnlyDeferredStillEnds(t *testing.T) {
 	defer cancel()
 	res, err := e.run(ctx, nil, WindowBackfillParams{Live: true, RemoteOnly: true})
 	require.NoError(t, err)
-	require.EqualValues(t, 2, res.deferred["unknown_duration"]+res.deferred["not_under_libroot"])
+	require.EqualValues(t, 2, res.deferred["unknown_duration"]+res.deferred["not_under_any_root"])
 }
 
 // TestWindowBackfill_RemoteOnly_WaitsForWorkersInsteadOfFinishingGreen: an
@@ -1047,4 +1055,67 @@ func TestWorkerHub_RemoteOnly_NewRunRequiresHelloAgain(t *testing.T) {
 	resp, err := h2.hub.Lease(ctx, reqA)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
+}
+
+// addUnderBooksParent adds a present file under RootDir's PARENT — the "books"
+// root pathutil.PathVars has always returned alongside "libroot".
+func (e *wbEnv) addUnderBooksParent(name string) string {
+	e.t.Helper()
+	dir := filepath.Dir(e.lib) // …/books, the parent of …/books/audiobook-organizer
+	path := filepath.Join(dir, name)
+	require.NoError(e.t, os.WriteFile(path, []byte("audio:"+name), 0o644))
+	b, err := e.store.CreateBook(&database.Book{Title: "Parent " + name, FilePath: dir})
+	require.NoError(e.t, err)
+	f := &database.BookFile{BookID: b.ID, FilePath: path, Format: "m4b", Duration: 3600}
+	require.NoError(e.t, e.store.CreateBookFile(f))
+	return f.ID
+}
+
+// TestWindowBackfill_RemoteOnly_FilesUnderBooksParentAreEligible is the
+// regression test for the restriction that discarded most of the library.
+//
+// remoteEligible used to require the "libroot" root specifically. PathVars has
+// always returned TWO roots — libroot and its parent books — so every file
+// under the parent was refused with "not_under_libroot" and no worker was ever
+// offered it. In prod on 2026-09-20 that was 144,708 of 200,729 files walked in
+// a single run (72%), refused again on every re-run; a 400-book sample of the
+// library held 339 under books against 60 under libroot.
+//
+// The file here sits under the parent and must now be WRITTEN by a worker. The
+// job it receives must also name the root it was split against, or the worker
+// resolves the relative path under the wrong mount.
+func TestWindowBackfill_RemoteOnly_FilesUnderBooksParentAreEligible(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	noLocalTools(e)
+	parent := e.addUnderBooksParent("parent.m4b")
+
+	var sawRoot atomic.Value
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	wctx, stopWorker := context.WithCancel(ctx)
+	h := &hubEnv{wbEnv: e, hub: e.plugin.WorkerHub()}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fakeRefWorker(wctx, h.hub, func(j workerapi.Job) workerapi.JobResult {
+			sawRoot.Store(j.Root)
+			return refResult(h, j, 7)
+		})
+	}()
+	res, err := e.run(ctx, nil, WindowBackfillParams{Live: true, RemoteOnly: true, Concurrency: 2})
+	stopWorker()
+	<-done
+	require.NoError(t, err)
+
+	require.EqualValues(t, 1, res.written,
+		"a file under the books root must be fingerprinted, not deferred (deferred=%v)", res.deferred)
+	require.Empty(t, res.deferred["not_under_any_root"],
+		"a file under a KNOWN root must not be refused as unreachable")
+	require.NotEmpty(t, e.windows(parent), "no windows were written for the parent-root file")
+
+	// The job must carry the root it was actually split against.
+	require.Equal(t, "books", sawRoot.Load(),
+		"the job named the wrong root; the worker would resolve rel under the wrong mount")
 }
