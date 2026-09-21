@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.27.0
+// version: 3.28.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-19
+// last-edited: 2026-09-20
 
 package registry
 
@@ -254,6 +254,19 @@ func (r *Registry) SetScanStandDownStore(s standDownPersister) {
 	r.mu.Lock()
 	r.scanStandDownStore = s
 	r.mu.Unlock()
+	// The operator pause marker rides the same persister rather than adding a
+	// second wiring call. Two setters would mean two chances to forget one, and
+	// a pause whose marker is not persisted silently resumes at the next
+	// deploy — which is exactly the failure the persistence exists to prevent.
+	SetPauseStore(s)
+	if restored, err := RestorePauseState(s); err != nil {
+		slog.Warn("could not read the operations pause marker; starting unpaused",
+			"err", err)
+	} else if restored {
+		st := OperationsPauseState()
+		slog.Warn("OPERATIONS ARE PAUSED — item dispatch is held until a resume",
+			"reason", st.Reason, "by", st.By, "since", st.Since)
+	}
 }
 
 // SetDepsScheduler wires the dependency scheduler. Must be called BEFORE
