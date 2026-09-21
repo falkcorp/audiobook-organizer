@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
-// last-edited: 2026-09-19
+// last-edited: 2026-09-20
 
 package acoustid
 
@@ -132,8 +132,13 @@ type queueItem struct {
 	remote    int8
 	jobs      []string // job IDs issued for it; pruned when it is done
 	rel       string   // root-relative path when remote == remoteYes
-	dur       fingerprint.DurationUsed
-	specs     []fingerprint.WindowSpec
+	// root is the NAME of the root rel is relative to ("libroot", "books").
+	// Carried per item rather than assumed: the job handed to a worker must
+	// name the same root the path was split against, or the worker resolves it
+	// under the wrong mount.
+	root  string
+	dur   fingerprint.DurationUsed
+	specs []fingerprint.WindowSpec
 }
 
 type workerLease struct {
@@ -765,10 +770,30 @@ func (r *hubRun) markServerOnly(idx int, why string) {
 	}
 }
 
-// remoteEligible decides once whether an item may go to a worker: under
-// libroot (v1), a clean relative path, and a duration the row already knows
-// (a worker cannot ffprobe for the server). Called with mu held; string work
-// only, no I/O.
+// remoteEligible decides once whether an item may go to a worker: under ANY
+// root the server knows, a clean relative path, and a duration the row already
+// knows (a worker cannot ffprobe for the server). Called with mu held; string
+// work only, no I/O.
+//
+// IT USED TO REQUIRE "libroot" SPECIFICALLY, and that threw away most of the
+// library. pathutil.PathVars has always returned TWO roots — libroot
+// (…/books/audiobook-organizer) and books (its parent, …/books) — but this
+// test insisted on the first, so every file under the parent was refused with
+// "not_under_libroot" and no worker was ever offered it. Measured in prod on
+// 2026-09-20: 144,708 of 200,729 files walked in one run (72%) were refused
+// for exactly this reason, and a re-run refuses them again, forever. A 400-book
+// sample of the library found 339 under books, 60 under libroot, 0 anywhere
+// else — so the restriction was discarding the MAJORITY of the collection.
+//
+// Nothing technical required it. The worker already accepts a map of roots
+// (workerclient.Config.Roots, repeatable --root name=/path) and both prod
+// workers can already read the parent mount; only the job below hardcoded
+// "libroot" as the name it sent. Widening this therefore needs the workers
+// started with the matching --root books=… , which is why the job now names
+// st.root rather than assuming.
+//
+// A path under NO known root is still refused — that is a genuine "the worker
+// cannot reach it", not a policy.
 func (r *hubRun) remoteEligible(idx int) bool {
 	st := &r.st[idx]
 	if st.remote == remoteUnknown {
@@ -776,8 +801,8 @@ func (r *hubRun) remoteEligible(idx int) bool {
 		it := r.items[idx]
 		root, rel, ok := pathutil.SplitRoot(it.Path, r.roots)
 		switch {
-		case !ok || root != "libroot":
-			st.whyServer = "not_under_libroot"
+		case !ok || root == "":
+			st.whyServer = "not_under_any_root"
 		default:
 			dur, err := fingerprint.ChooseDuration(it.FpDuration, it.Duration, nil)
 			if err != nil {
@@ -789,7 +814,7 @@ func (r *hubRun) remoteEligible(idx int) bool {
 				st.whyServer = "no_window_plan"
 				break
 			}
-			st.remote, st.rel, st.dur, st.specs = remoteYes, rel, dur, specs
+			st.remote, st.rel, st.root, st.dur, st.specs = remoteYes, rel, root, dur, specs
 		}
 	}
 	return st.remote == remoteYes && !st.serverOnly
@@ -1246,7 +1271,10 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 		r.jobs[jid] = j
 		st.jobs = append(st.jobs, jid)
 		lease.jobs = append(lease.jobs, jid)
-		wj := workerapi.Job{JobID: jid, Ref: string(j.ref), Root: "libroot",
+		// st.root, never a literal: the worker resolves Rel under the mount it
+		// registered for THIS root name, so sending "libroot" for a path split
+		// against "books" would point it at the wrong directory.
+		wj := workerapi.Job{JobID: jid, Ref: string(j.ref), Root: st.root,
 			RelB64: base64.StdEncoding.EncodeToString([]byte(st.rel)), Rel: strings.ToValidUTF8(st.rel, "�"),
 			Size: j.size, MtimeUnix: j.mtime, DurationSec: j.dur.Sec, DurationSource: string(j.dur.Source),
 			WindowSet: fingerprint.WindowSetWS1}
