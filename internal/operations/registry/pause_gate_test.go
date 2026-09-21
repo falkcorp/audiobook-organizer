@@ -37,7 +37,7 @@ func resumeAfterTest(t *testing.T) {
 func TestPause_InFlightItemCompletesAndNextItemHolds(t *testing.T) {
 	resumeAfterTest(t)
 
-	entered := make(chan struct{})     // item 0 has started
+	entered := make(chan struct{})      // item 0 has started
 	releaseItem0 := make(chan struct{}) // item 0 may finish
 	var started, finished atomic.Int32
 
