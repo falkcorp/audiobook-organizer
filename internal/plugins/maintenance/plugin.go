@@ -52,7 +52,6 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.repairJunkTitlesDef(),
 		p.seriesDenumberDef(),
 		p.seriesPhantomRepairDef(),
-		p.purgeMillisecondDurationsDef(),
 		p.integrityCheckDef(),
 		p.itunesPlaylistImportDef(),
 
@@ -186,14 +185,12 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.titleBackfillDef(),
 		p.titleRepairDef(),
 
-		// --- duration repair ---
+		// --- duration repair: ONE op (absorbed duration-reextract and
+		// purge-millisecond-durations, 2026-09-21) ---
 		p.durationBackfillDef(),
 
 		// --- booksig/description recovery audit (STOR-1/STOR-2, read-only dry-run) ---
 		p.bookSigRecoveryAuditDef(),
-
-		// --- duration re-extract (real ffprobe duration; PR #1555) ---
-		p.durationReextractDef(),
 
 		// --- iTunes re-group heal (CONS-FRAG) ---
 		p.itunesRegroupDef(),

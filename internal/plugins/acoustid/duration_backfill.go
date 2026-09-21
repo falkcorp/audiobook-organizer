@@ -1,22 +1,25 @@
 // file: internal/plugins/acoustid/duration_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a8b
-// last-edited: 2026-08-30
+// last-edited: 2026-09-21
 
 package acoustid
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// DurationBackfillParams controls the acoustid.duration-backfill operation.
+// DurationBackfillParams controls the acoustid.fingerprint-duration-repair operation.
 // Live defaults to false (the Go zero value), so triggering the op with no
 // params — or any params JSON that omits the field — is always a safe,
 // read-only dry run. Callers must explicitly pass {"live": true} to write.
@@ -26,11 +29,18 @@ type DurationBackfillParams struct {
 
 func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              "acoustid.duration-backfill",
+		// Renamed from "acoustid.duration-backfill" on 2026-09-21. That name sat
+		// next to maintenance.duration-backfill and read as its twin, when the
+		// two share nothing: this one re-runs fpcalc (a full audio DECODE) to
+		// repopulate BookFile.AcoustIDFingerprintDurationSec, while the
+		// maintenance op fills in book durations from values already stored.
+		// They are sequential stages — this one produces the field the
+		// maintenance op prefers as its first source of truth — not duplicates.
+		ID:              "acoustid.fingerprint-duration-repair",
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "acoustid",
-		DisplayName:     "AcoustID DurationSec repair",
-		Description:     "Re-derives AcoustIDFingerprintDurationSec for book_files that have a fingerprint but DurationSec==0 (STOREFID follow-up). Dry-run by default; pass live=true to write.",
+		DisplayName:     "Repair fingerprint duration (re-runs fpcalc)",
+		Description:     "Re-runs fpcalc on book_files that have a fingerprint but AcoustIDFingerprintDurationSec==0, to repopulate that field (STOREFID follow-up). This DECODES audio, so it is refused on the server when a reference tool pair is configured. Dry-run by default; pass live=true to write.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "acoustid.fingerprint",
@@ -68,6 +78,16 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, params json.RawMessage
 			reporter.Logger().Error("failed to unmarshal params", "error", err)
 			req = DurationBackfillParams{}
 		}
+	}
+
+	// No decoding on the server (owner rule, 2026-09-19). This op calls fpcalc
+	// directly on the host that runs it, and it had no gate at all — the same
+	// hazard window-backfill refuses by hand. It does not yet speak the
+	// worker-hub lease protocol, so there is no remote mode to fall back to;
+	// until it has one, refuse rather than decode where we must not.
+	if req.Live && strings.TrimSpace(config.AppConfig.FingerprintWindowReferenceTools) != "" {
+		return errors.New("acoustid.fingerprint-duration-repair: fingerprint_window_reference_tools is set, so audio is decoded by remote workers only " +
+			"(no decoding on the server). This op still decodes locally and has no remote mode yet; run it on a worker host, or clear the reference pair deliberately first")
 	}
 
 	_ = reporter.UpdateProgress(0, 1, "Scanning for zero-duration fingerprinted files...")
