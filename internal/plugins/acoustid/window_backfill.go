@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
 // last-edited: 2026-09-21
 
@@ -1269,9 +1269,17 @@ func (r *windowRun) remoteHeartbeat(ctx context.Context, stop context.CancelCaus
 			return
 		}
 		done, leased, total := hub.tierCounts()
+		// Why nothing is being leased belongs in the same line as "0
+		// resolved": without it a stuck remote-only run reports only that it
+		// is stuck. The lease endpoint answers 204 for every poll in that
+		// state, so the operator's only other instrument is a packet trace.
+		why := ""
+		if w := hub.ineligibleReasons(); w != "" {
+			why = "; not eligible for a worker: " + w
+		}
 		_ = r.reporter.UpdateProgress(int(r.progCur.Load())+done, int(r.progTotal.Load()),
-			fmt.Sprintf("%s (remote-only heartbeat): %d/%d files resolved, %d leased to remote workers (%s)",
-				windowTierNames[tier], done, total, leased, r.t.summary()))
+			fmt.Sprintf("%s (remote-only heartbeat): %d/%d files resolved, %d leased to remote workers (%s)%s",
+				windowTierNames[tier], done, total, leased, r.t.summary(), why))
 	}
 }
 
