@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-09-21
 
@@ -1669,13 +1669,56 @@ func (r *hubRun) decideErrorOutcome(j *workerJob, res workerapi.JobResult, it wi
 			return resultDecision{status: workerapi.StatusAccepted, reason: "changed_requeued", next: qPending}
 		}
 	case workerapi.OutcomeDecodeError:
-		return resultDecision{status: workerapi.StatusAccepted, reason: "server_lane", next: qPending, serverOnly: true, why: "worker_decode_error"}
+		return resultDecision{status: workerapi.StatusAccepted, reason: "server_lane", next: qPending, serverOnly: true,
+			why: "worker_decode_error" + normalizeWorkerReason(res.Error)}
 	case workerapi.OutcomeRejected:
-		return resultDecision{status: workerapi.StatusAccepted, reason: "server_lane", next: qPending, serverOnly: true, why: "worker_rejected"}
+		return resultDecision{status: workerapi.StatusAccepted, reason: "server_lane", next: qPending, serverOnly: true,
+			why: "worker_rejected" + normalizeWorkerReason(res.Error)}
 	case workerapi.OutcomeTimeout:
 		return resultDecision{status: workerapi.StatusAccepted, reason: "requeued", next: qPending, timeout: true}
 	default: // OutcomeStale
 		return resultDecision{status: workerapi.StatusAccepted, reason: "requeued", next: qPending}
+	}
+}
+
+// normalizeWorkerReason maps a worker's error text to a SHORT, BOUNDED suffix
+// for the deferral tally, as ":cause" or "" when nothing is recognised.
+//
+// The worker already says exactly why it refused a job, and the hub already
+// receives it — but it only reached hubLog.Debug, and prod runs at info. On
+// 2026-09-21 a run deferred 56,196 files as a flat "worker_rejected" with no
+// way to tell which of six unrelated causes it was; raising the level at
+// runtime does not work either, because the slog handler's level is fixed at
+// startup. A reason nobody can read is not a reason.
+//
+// The mapping is a fixed whitelist on purpose. This value becomes a map key in
+// the tally, so folding raw error text in would give it unbounded cardinality
+// (every path, every base64 blob) in both memory and the progress line.
+func normalizeWorkerReason(errText string) string {
+	e := strings.ToLower(errText)
+	switch {
+	case e == "":
+		return ""
+	case strings.Contains(e, "is not configured on this worker"):
+		return ":root_not_configured"
+	case strings.Contains(e, "not a regular file"):
+		return ":not_regular_file"
+	case strings.Contains(e, "rel_b64"):
+		return ":bad_rel_b64"
+	case strings.Contains(e, "job has no windows"):
+		return ":no_windows"
+	case strings.Contains(e, "tools"):
+		return ":tools_missing"
+	case strings.Contains(e, "too short"):
+		return ":too_short"
+	case strings.Contains(e, "ffmpeg"):
+		return ":ffmpeg"
+	case strings.Contains(e, "fpcalc"):
+		return ":fpcalc"
+	case strings.HasPrefix(e, "path: "):
+		return ":path_other"
+	default:
+		return ":other"
 	}
 }
 
