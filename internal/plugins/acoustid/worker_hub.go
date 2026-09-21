@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-09-21
 
@@ -993,6 +993,39 @@ func (r *hubRun) calibration(req workerapi.HelloRequest, now func() time.Time) h
 	r.calibMu.Unlock()
 
 	built := r.buildCalibration(cands) // I/O, unlocked
+
+	// PER-ROOT TOP-UP. buildCalibration can only offer files whose windows are
+	// already CURRENT, so a root the backfill has not reached yet — which is
+	// every root on its first run — has no candidate by that path. The worker
+	// gate then refuses to start:
+	//
+	//   parity gate failed: the server offered no calibration file under root
+	//   "books"
+	//
+	// and the circle closes: the root cannot be proven until its files have
+	// windows, and its files cannot get windows until a worker holding that
+	// root starts. Prod hit exactly this on 2026-09-21 — both workers verified
+	// both mounts, failed the gate, exited, and the run sat at "0 leased to
+	// remote workers" for hours with the whole T0 population under the
+	// unreachable root.
+	//
+	// Identity candidates (present files with NO windows) break it. They prove
+	// the root MAPPING only — size, mtime, first 64 KiB — not pipeline parity,
+	// which is exactly the right claim for a root that has nothing to compare
+	// against yet. Roots that DO have windowed candidates keep them, so real
+	// byte-parity is still proven wherever it can be.
+	if len(built) > 0 {
+		have := map[string]bool{}
+		for _, cf := range built {
+			have[cf.Root] = true
+		}
+		for _, cf := range r.buildIdentityCalibration() {
+			if !have[cf.Root] {
+				built = append(built, cf)
+				have[cf.Root] = true
+			}
+		}
+	}
 
 	r.calibMu.Lock()
 	if !r.calibBuilt && (len(built) > 0 || !r.remoteOnly) {
