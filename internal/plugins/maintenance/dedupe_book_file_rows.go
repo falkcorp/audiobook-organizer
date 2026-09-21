@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-09-19
+// last-edited: 2026-09-21
 
 package maintenance
 
@@ -38,6 +38,27 @@ type DedupeBookFileRowsParams struct {
 	// path under {root_dir}/.reports/. The report is written on EVERY run, dry or apply,
 	// so an operator always has the census the summary line only samples.
 	ReportPath string `json:"reportPath,omitempty"`
+	// PruneSuperseded folds a row whose file is GONE from disk into a sibling
+	// row, in the same book and the same directory, whose file is present —
+	// then the ordinary keeper/salvage/delete path removes it.
+	//
+	// These rows are left over from an organize or rename that recorded the new
+	// path without retiring the old one. They are invisible while a book plays
+	// (playback streams one track, the present one) and fatal to a download,
+	// which fetches EVERY track and 404s on the first absent file. They also
+	// deny the whole book a duration, because the duration pass cannot resolve
+	// the segment.
+	//
+	// Folding requires EXACTLY ONE present file in that directory. With two,
+	// which of them the absent row belonged to is a guess, and this op deletes
+	// rows — it does not guess. A pointer of nil means enabled; send false to
+	// restrict the run to exact duplicate paths.
+	PruneSuperseded *bool `json:"pruneSuperseded,omitempty"`
+}
+
+// pruneSupersededEnabled reports the PruneSuperseded setting, default true.
+func (p DedupeBookFileRowsParams) pruneSupersededEnabled() bool {
+	return p.PruneSuperseded == nil || *p.PruneSuperseded
 }
 
 func (p *Plugin) dedupeBookFileRowsDef() sdk.OperationDef {
@@ -117,8 +138,28 @@ type dupeReportRow struct {
 //  3. has a file hash              — used by integrity checks
 //  4. lexicographically smallest ID — arbitrary but STABLE, so a dry run and the
 //     apply that follows it choose the same keeper
-func rankKeeper(files []database.BookFile) []database.BookFile {
+//
+// present, when non-nil, maps a file path to whether it exists on disk. A row
+// whose file is PRESENT outranks every absent row regardless of the evidence
+// the absent one carries — an absent row cannot be the survivor, because the
+// survivor is the one a download and a duration probe have to be able to open.
+// Its evidence is not lost: mergeMissingFields salvages every field the keeper
+// lacks before the absent rows are deleted.
+//
+// nil (or a path missing from the map) disables the check, which is the
+// same-path case: every row in that group shares one path, so presence cannot
+// discriminate between them.
+func rankKeeper(files []database.BookFile, present map[string]bool) []database.BookFile {
 	out := append([]database.BookFile(nil), files...)
+	isPresent := func(f database.BookFile) int {
+		if present == nil {
+			return 0
+		}
+		if present[f.FilePath] {
+			return 1
+		}
+		return 0
+	}
 	score := func(f database.BookFile) (int, int, int) {
 		fp, dur, hash := 0, 0, 0
 		if len(f.AcoustIDFingerprint) > 0 {
@@ -133,6 +174,9 @@ func rankKeeper(files []database.BookFile) []database.BookFile {
 		return fp, dur, hash
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if pi, pj := isPresent(out[i]), isPresent(out[j]); pi != pj {
+			return pi > pj
+		}
 		fi, di, hi := score(out[i])
 		fj, dj, hj := score(out[j])
 		if fi != fj {
@@ -275,6 +319,40 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		dupRows += len(ids) - 1
 	}
 
+	// Books that hold no exact-duplicate path but DO hold two or more distinct
+	// paths in one directory: the only shape a superseded row can take, since
+	// folding is same-directory by definition. Without this the sweep never
+	// looks at them — the reported book had one real file and one leftover row
+	// under DIFFERENT names, so it matched no duplicate-path group at all and
+	// was invisible to this op.
+	//
+	// The candidate test costs nothing: byBookPath's keys are already one per
+	// distinct (book, path), so counting them per directory needs no extra
+	// read. Deciding which of those rows is actually absent is a stat, and it
+	// happens per book in the pool below. This op runs on the server, where the
+	// library is a local filesystem.
+	supersededCandidates := 0
+	if params.pruneSupersededEnabled() {
+		perBookDir := map[string]int{}
+		for key := range byBookPath {
+			parts := strings.SplitN(key, "\x00", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			perBookDir[parts[0]+"\x00"+filepath.Dir(parts[1])]++
+		}
+		for key, n := range perBookDir {
+			if n < 2 {
+				continue
+			}
+			bookID := strings.SplitN(key, "\x00", 2)[0]
+			if _, ok := affected[bookID]; !ok {
+				affected[bookID] = nil // visited for folding only
+				supersededCandidates++
+			}
+		}
+	}
+
 	bookIDs := make([]string, 0, len(affected))
 	for id := range affected {
 		bookIDs = append(bookIDs, id)
@@ -290,13 +368,20 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		"redundant_rows", dupRows)
 
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"%d book(s) hold duplicate book_file rows (%d redundant rows)", len(affected), dupRows))
+		"%d book(s) hold duplicate book_file rows (%d redundant rows); %d more visited for superseded-row folding",
+		len(affected)-supersededCandidates, dupRows, supersededCandidates))
 
 	// 🔒 Counters are touched by every worker — see the pool below. A single mutex
 	// is right here: contention is negligible against per-book DB work, and the
 	// alternative (five atomics plus a locked slice) buys nothing but subtlety.
 	var mu sync.Mutex
 	var deleted, wouldDelete, failed, recomputed, salvaged int
+	// Superseded rows folded into a present sibling, and the books holding
+	// them. Reported separately from exact duplicates: they are a different
+	// defect with a different cause (an organize that recorded the new path
+	// without retiring the old one) and an operator reading a dry run needs to
+	// see which of the two a number came from.
+	var supersededRows, supersededBooks int
 	var examples []string
 	var reportRows []dupeReportRow // appended by every worker: always under mu
 
@@ -357,6 +442,54 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		for _, rs := range byPath {
 			totalRows += len(rs)
 		}
+
+		// Presence is read ONCE per distinct path, before any folding, and the
+		// same map is handed to rankKeeper below so the keeper decision and the
+		// folding decision can never disagree about which files exist.
+		present := make(map[string]bool, len(byPath))
+		for path := range byPath {
+			fi, serr := os.Stat(path)
+			present[path] = serr == nil && fi.Mode().IsRegular()
+		}
+
+		// Fold superseded rows into their surviving sibling. Only within one
+		// directory, and only where that directory holds EXACTLY ONE present
+		// file: with two, which of them an absent row belonged to is a guess.
+		supersededHere := 0
+		if params.pruneSupersededEnabled() {
+			byDir := map[string][]string{}
+			for path := range byPath {
+				byDir[filepath.Dir(path)] = append(byDir[filepath.Dir(path)], path)
+			}
+			for _, paths := range byDir {
+				var here, gone []string
+				for _, path := range paths {
+					if present[path] {
+						here = append(here, path)
+					} else {
+						gone = append(gone, path)
+					}
+				}
+				if len(here) != 1 || len(gone) == 0 {
+					continue
+				}
+				// Deterministic: a book with several absent rows must fold them
+				// in a fixed order so two runs produce the same report.
+				sort.Strings(gone)
+				for _, g := range gone {
+					supersededHere += len(byPath[g])
+					byPath[here[0]] = append(byPath[here[0]], byPath[g]...)
+					delete(byPath, g)
+				}
+			}
+		}
+		if supersededHere > 0 {
+			mu.Lock()
+			supersededRows += supersededHere
+			supersededBooks++
+			mu.Unlock()
+		}
+
 		distinct := len(byPath)
 		dupHasFP := false
 
@@ -393,7 +526,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			if len(rows) < 2 {
 				continue
 			}
-			ranked := rankKeeper(rows)
+			ranked := rankKeeper(rows, present)
 			keeper, redundant := ranked[0], ranked[1:]
 			// Read BEFORE mergeMissingFields, which may copy a twin's fingerprint
 			// onto the keeper: the report column is about the rows being removed.
@@ -650,9 +783,11 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	// service restart was what surfaced the (already correct) values. Say so, or
 	// the next operator concludes the op did nothing.
 	summary := fmt.Sprintf(
-		"dedupe-book-file-rows: %d rows scanned, %d books affected, %d redundant rows, %s, failed %d "+
+		"dedupe-book-file-rows: %d rows scanned, %d books affected, %d redundant rows, "+
+			"%d superseded rows in %d books (file gone, one present sibling in the same folder), %s, failed %d "+
 			"| %s | NOTE: corrected totals may not appear until memdb refreshes (restart) | e.g. %s",
-		len(cores), len(affected), dupRows, verb, failed, reportNote, strings.Join(examples, "; "))
+		len(cores), len(affected), dupRows, supersededRows, supersededBooks, verb, failed, reportNote,
+		strings.Join(examples, "; "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	_ = reporter.UpdateProgress(len(bookIDs), len(bookIDs), summary)
 	return nil
