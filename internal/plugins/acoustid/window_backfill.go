@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
-// last-edited: 2026-09-20
+// last-edited: 2026-09-21
 
 package acoustid
 
@@ -334,10 +334,15 @@ type windowPlan struct {
 	// calibration is a few files under libroot whose windows are current,
 	// offered to remote workers by hello for their parity gate.
 	calibration []windowItem
+	// calibrationByRoot caps candidates PER ROOT so every root a worker may
+	// hold can be proven (see the selection site).
+	calibrationByRoot map[string]int
 	// identity is a few present files under libroot whatever their window
 	// state: the identity-only calibration of a remote-only bootstrap, when
 	// no file has reference windows yet (so calibration is empty).
 	identity []windowItem
+	// identityByRoot: same per-root cap for the bootstrap candidates.
+	identityByRoot map[string]int
 	// exactCurrent: some present libroot file has current windows cut with
 	// exactly the run's pair (the reference pair in a remote-only run). The
 	// database's answer to "do reference windows exist", which is what
@@ -753,10 +758,24 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 			tier = windowTierUnmatched
 		}
 		plan.eligible[tier]++
-		if len(plan.identity) < calibrationCandidates {
-			if root, _, ok := pathutil.SplitRoot(r.item.Path, libRoots); ok && root == "libroot" {
-				plan.identity = append(plan.identity, r.item)
+		// PER ROOT, not "libroot only". workerclient/gate.go's
+		// calibrationTargets "requires at least one per configured root:
+		// without one, neither the root mapping nor the pipeline parity can be
+		// proven". A worker started with --root books=… therefore EXITS when
+		// every candidate came from libroot:
+		//
+		//   parity gate failed: the server offered no calibration file under
+		//   root "books"
+		//
+		// which is how widening eligibility alone took both production workers
+		// down on 2026-09-21. Keep up to calibrationCandidates per root so each
+		// root a worker might hold can be proven.
+		if root, _, ok := pathutil.SplitRoot(r.item.Path, libRoots); ok && plan.identityByRoot[root] < calibrationCandidates {
+			plan.identity = append(plan.identity, r.item)
+			if plan.identityByRoot == nil {
+				plan.identityByRoot = map[string]int{}
 			}
+			plan.identityByRoot[root]++
 		}
 		switch r.state {
 		case windowCurrent:
@@ -767,10 +786,15 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 			// letting it take a slot could leave no usable candidate while
 			// reference windows exist.
 			if r.exact {
-				if root, _, ok := pathutil.SplitRoot(r.item.Path, libRoots); ok && root == "libroot" {
+				// Per root, for the same reason as plan.identity above.
+				if root, _, ok := pathutil.SplitRoot(r.item.Path, libRoots); ok {
 					plan.exactCurrent = true
-					if len(plan.calibration) < calibrationCandidates {
+					if plan.calibrationByRoot[root] < calibrationCandidates {
 						plan.calibration = append(plan.calibration, r.item)
+						if plan.calibrationByRoot == nil {
+							plan.calibrationByRoot = map[string]int{}
+						}
+						plan.calibrationByRoot[root]++
 					}
 				}
 			}
