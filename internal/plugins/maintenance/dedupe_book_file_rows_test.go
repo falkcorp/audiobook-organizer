@@ -27,7 +27,7 @@ func TestRankKeeper_PrefersTheFingerprintedRow(t *testing.T) {
 		{ID: "zzz-last-alphabetically", Duration: 600, FileHash: "h1",
 			AcoustIDFingerprint: []byte{0x01, 0x02, 0x03}},
 	}
-	got := rankKeeper(rows)[0]
+	got := rankKeeper(rows, nil)[0]
 	if got.ID != "zzz-last-alphabetically" {
 		t.Fatalf("keeper = %q, want the FINGERPRINTED row — a fingerprint costs a "+
 			"full-file decode and cannot be guessed back", got.ID)
@@ -41,7 +41,7 @@ func TestRankKeeper_PrefersRowWithDuration(t *testing.T) {
 		{ID: "a", Duration: 0},
 		{ID: "b", Duration: 3600},
 	}
-	if got := rankKeeper(rows)[0]; got.ID != "b" {
+	if got := rankKeeper(rows, nil)[0]; got.ID != "b" {
 		t.Fatalf("keeper = %q, want the row with a duration", got.ID)
 	}
 }
@@ -53,7 +53,7 @@ func TestRankKeeper_FingerprintOutranksDuration(t *testing.T) {
 		{ID: "has-duration-only", Duration: 3600},
 		{ID: "has-fingerprint-only", AcoustIDFingerprint: []byte{0x09}},
 	}
-	if got := rankKeeper(rows)[0]; got.ID != "has-fingerprint-only" {
+	if got := rankKeeper(rows, nil)[0]; got.ID != "has-fingerprint-only" {
 		t.Fatalf("keeper = %q, want the fingerprinted row", got.ID)
 	}
 }
@@ -69,9 +69,9 @@ func TestRankKeeper_IsDeterministicAcrossRuns(t *testing.T) {
 			{ID: "bbb", Duration: 600},
 		}
 	}
-	first := rankKeeper(mk())[0].ID
+	first := rankKeeper(mk(), nil)[0].ID
 	for range 20 {
-		if got := rankKeeper(mk())[0].ID; got != first {
+		if got := rankKeeper(mk(), nil)[0].ID; got != first {
 			t.Fatalf("keeper changed between runs: %q then %q — a dry run would not "+
 				"describe the same deletion the apply performs", first, got)
 		}
@@ -87,7 +87,7 @@ func TestRankKeeper_PrefersRowWithFileHash(t *testing.T) {
 		{ID: "aaa", Duration: 600},
 		{ID: "zzz", Duration: 600, FileHash: "abc123"},
 	}
-	if got := rankKeeper(rows)[0]; got.ID != "zzz" {
+	if got := rankKeeper(rows, nil)[0]; got.ID != "zzz" {
 		t.Fatalf("keeper = %q, want the row carrying a file hash", got.ID)
 	}
 }
@@ -190,7 +190,7 @@ func TestDedupeBookFileRowsDef_DeclaresAGenerousProgressTimeout(t *testing.T) {
 // A single row is returned untouched — nothing to choose, nothing to delete.
 func TestRankKeeper_SingleRowUnchanged(t *testing.T) {
 	rows := []database.BookFile{{ID: "only", Duration: 42}}
-	got := rankKeeper(rows)
+	got := rankKeeper(rows, nil)
 	if len(got) != 1 || got[0].ID != "only" {
 		t.Fatalf("single row was altered: %+v", got)
 	}
@@ -203,7 +203,7 @@ func TestRankKeeper_DoesNotMutateInput(t *testing.T) {
 		{ID: "aaa"},
 		{ID: "zzz", AcoustIDFingerprint: []byte{0x01}},
 	}
-	_ = rankKeeper(rows)
+	_ = rankKeeper(rows, nil)
 	if rows[0].ID != "aaa" || rows[1].ID != "zzz" {
 		t.Fatalf("input slice was reordered: %s, %s", rows[0].ID, rows[1].ID)
 	}
