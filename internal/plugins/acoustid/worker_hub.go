@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-09-21
 
@@ -83,6 +83,13 @@ var (
 const maxWorkerIDLen = 128
 
 // calibrationFiles is how many calibration files hello offers.
+// calibrationFiles is the cap PER ROOT, not per response. workerclient's
+// parity gate requires a calibration file for every root the worker was
+// started with, so a global cap silently starves the roots that sort last:
+// with libroot's files first in the candidate list, a global cap of 3 returned
+// three libroot files and nothing under "books", and both prod workers exited
+// on "the server offered no calibration file under root \"books\"" for ~6
+// hours on 2026-09-21 with 72% of the corpus sitting under that root.
 const calibrationFiles = 3
 
 // calibrationCandidates is how many current files the plan keeps for hello
@@ -1027,6 +1034,18 @@ func (r *hubRun) calibration(req workerapi.HelloRequest, now func() time.Time) h
 		}
 	}
 
+	// What the gate will actually see, per root. A root that is absent here
+	// refuses every worker configured with it — including the work its healthy
+	// siblings could have done — so name the gap explicitly rather than
+	// leaving it to be inferred from a worker's exit message.
+	offered := map[string]int{}
+	for _, cf := range built {
+		offered[cf.Root]++
+	}
+	for _, v := range r.roots {
+		hubLog.Warn("calibration offered under root %q: %d file(s)", logger.SanitizeLogValue(v.Name), offered[v.Name])
+	}
+
 	r.calibMu.Lock()
 	if !r.calibBuilt && (len(built) > 0 || !r.remoteOnly) {
 		r.calibOut, r.calibBuilt = built, true
@@ -1076,12 +1095,13 @@ func (r *hubRun) calibration(req workerapi.HelloRequest, now func() time.Time) h
 // lets the reference pair alone pass on that (workerclient.calibrationTargets).
 func (r *hubRun) buildIdentityCalibration() []workerapi.CalibrationFile {
 	out := []workerapi.CalibrationFile{}
+	perRoot := map[string]int{}
 	for _, it := range r.identity {
 		// Any known root. A worker must be given a candidate for EVERY root it
 		// holds or its parity gate refuses to start it; libroot-only candidates
 		// are what made --root books=… fatal.
 		root, rel, ok := pathutil.SplitRoot(it.Path, r.roots)
-		if !ok {
+		if !ok || perRoot[root] >= calibrationFiles {
 			continue
 		}
 		fi, err := os.Stat(it.Path)
@@ -1094,9 +1114,7 @@ func (r *hubRun) buildIdentityCalibration() []workerapi.CalibrationFile {
 		}
 		out = append(out, workerapi.CalibrationFile{Root: root, RelB64: base64.StdEncoding.EncodeToString([]byte(rel)), Rel: rel,
 			Size: fi.Size(), MtimeUnix: fi.ModTime().Unix(), Head64K: head, Windows: []workerapi.CalibrationWindow{}})
-		if len(out) == calibrationFiles {
-			break
-		}
+		perRoot[root]++
 	}
 	return out
 }
@@ -1107,9 +1125,10 @@ func (r *hubRun) buildIdentityCalibration() []workerapi.CalibrationFile {
 // holds.
 func (r *hubRun) buildCalibration(cands []windowItem) []workerapi.CalibrationFile {
 	out := []workerapi.CalibrationFile{}
+	perRoot := map[string]int{}
 	for _, it := range cands {
 		root, rel, ok := pathutil.SplitRoot(it.Path, r.roots)
-		if !ok {
+		if !ok || perRoot[root] >= calibrationFiles {
 			continue
 		}
 		stored, err := r.p.store.GetFingerprintWindows(database.FileWindowRef(it.FileID))
@@ -1166,9 +1185,7 @@ func (r *hubRun) buildCalibration(cands []windowItem) []workerapi.CalibrationFil
 		}
 		if len(cf.Windows) > 0 {
 			out = append(out, cf)
-		}
-		if len(out) == calibrationFiles {
-			break
+			perRoot[root]++
 		}
 	}
 	return out
