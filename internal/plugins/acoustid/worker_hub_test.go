@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/worker_hub_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 23143bc2-39af-48f3-a47c-8c1f392e2ab9
-// last-edited: 2026-09-19
+// last-edited: 2026-09-21
 
 package acoustid
 
@@ -467,7 +467,12 @@ func TestWorkerHub_HelloOffersRootsToolsAndCalibration(t *testing.T) {
 
 	hello, err := h.hub.Hello(context.Background(), workerapi.HelloRequest{})
 	require.NoError(t, err)
-	require.Equal(t, []workerapi.Root{{ID: "libroot", Remote: true}, {ID: "books", Remote: false}}, hello.Roots)
+	// EVERY root is offered as remote. This assertion previously pinned
+	// {books, Remote:false}, which was not a harmless description: the worker's
+	// startup gate refuses to run when a root IT is configured with comes back
+	// Remote=false, so `--root books=…` was an unstartable configuration and
+	// this test was guarding that.
+	require.Equal(t, []workerapi.Root{{ID: "libroot", Remote: true}, {ID: "books", Remote: true}}, hello.Roots)
 	require.Equal(t, fingerprint.WindowPipelineID, hello.Pipeline)
 	require.Contains(t, hello.ToolVersions, workerapi.ToolVersions{Fpcalc: e.tools.Versions.Fpcalc, FFmpeg: e.tools.Versions.FFmpeg})
 	require.Len(t, hello.Calibration, 1)
@@ -872,4 +877,32 @@ func TestWorkerHub_ResultForAnEarlierRunIsRunChanged(t *testing.T) {
 	require.Equal(t, workerapi.StatusStale, st)
 	require.Equal(t, workerapi.RunChangedMarker, reason)
 	require.Empty(t, h.windows(h.fileID(resp.Jobs[0])), "a result of a detached run was written")
+}
+
+// TestWorkerHub_EveryOfferedRootIsRemote pins the coupling that made this a
+// fleet-stopping bug rather than a cosmetic flag.
+//
+// workerclient/gate.go walks the roots the WORKER was configured with and
+// refuses to start if any comes back Remote=false:
+//
+//	"the server does not offer root %q to remote workers"
+//
+// So a server that offers a root but marks it non-remote does not merely skip
+// those files — it makes that worker configuration unstartable. remoteEligible
+// accepting a root and Hello advertising it must therefore agree; if a future
+// change narrows one, this fails.
+func TestWorkerHub_EveryOfferedRootIsRemote(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	e.addFile("", "a/one.m4b", true, 3600)
+	h := attachHub(t, e)
+
+	hello, err := h.hub.Hello(context.Background(), workerapi.HelloRequest{})
+	require.NoError(t, err)
+	require.NotEmpty(t, hello.Roots)
+	for _, r := range hello.Roots {
+		require.True(t, r.Remote,
+			"root %q is advertised but not remote; a worker configured with it "+
+				"would refuse to start (workerclient/gate.go)", r.ID)
+	}
 }
