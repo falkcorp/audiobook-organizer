@@ -29,7 +29,7 @@ const (
 	// the memdb-safe PROXY for "has a raw fpcalc print": the only writer of the
 	// duration (acoustid doFingerprintFile) writes it together with the raw
 	// bytes. It undercounts raw prints written before the duration field
-	// existed (the rows acoustid.duration-backfill targets). Pass deep=true for
+	// existed (the rows acoustid.fingerprint-duration-repair targets). Pass deep=true for
 	// the exact raw count.
 	SignalFingerprintDuration = "fingerprint_duration_proxy"
 	SignalDuration            = "duration"

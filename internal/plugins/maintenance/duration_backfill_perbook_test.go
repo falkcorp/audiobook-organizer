@@ -1,4 +1,4 @@
-// file: internal/plugins/maintenance/duration_reextract_perbook_test.go
+// file: internal/plugins/maintenance/duration_backfill_perbook_test.go
 // version: 1.1.0
 // guid: 4d727c43-4cac-44cd-a1d2-3e4c07c99da4
 // last-edited: 2026-09-20
@@ -73,7 +73,7 @@ func TestDurationReextract_ManySegmentBook_RecomputesAggregatesOnce(t *testing.T
 
 	logs := aggtest.Capture(t) // after setup: only the op's recomputes count
 	p := New(fakeDeps{store: s})
-	if err := p.runDurationReextract(context.Background(), applyReextractParams(t), &fakeReporter{}); err != nil {
+	if err := p.runDurationBackfill(context.Background(), applyReextractParams(t), &fakeReporter{}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestDurationReextract_CancelStopsSegmentWritesMidBook(t *testing.T) {
 
 	p := New(fakeDeps{store: store})
 	done := make(chan error, 1)
-	go func() { done <- p.runDurationReextract(ctx, applyReextractParams(t), &fakeReporter{}) }()
+	go func() { done <- p.runDurationBackfill(ctx, applyReextractParams(t), &fakeReporter{}) }()
 
 	select {
 	case err := <-done:
@@ -178,7 +178,7 @@ func TestDurationReextract_ReportsProgressDuringLongBook(t *testing.T) {
 	}
 
 	p := New(fakeDeps{store: store})
-	if err := p.runDurationReextract(context.Background(), applyReextractParams(t), rep); err != nil {
+	if err := p.runDurationBackfill(context.Background(), applyReextractParams(t), rep); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if len(touchesAtWrite) != n {

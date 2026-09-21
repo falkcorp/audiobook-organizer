@@ -160,7 +160,7 @@ func TestGetAcoustIDStats_ZeroDurationInvariant(t *testing.T) {
 }
 
 // TestGetFilesWithZeroDurationFingerprint_ScopesToViolatingRows verifies the
-// row-level getter that backs the acoustid.duration-backfill op: it must
+// row-level getter that backs the acoustid.fingerprint-duration-repair op: it must
 // return exactly the rows with a fingerprint blob but DurationSec==0, and
 // nothing else (not normal fingerprinted rows, not fingerprint-less rows).
 func TestGetFilesWithZeroDurationFingerprint_ScopesToViolatingRows(t *testing.T) {

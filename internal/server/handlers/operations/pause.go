@@ -67,7 +67,6 @@ var pausableDefs = map[string]bool{
 	"acoustid.backfill":                true,
 	"acoustid.lsh-backfill":            true,
 	"metadata.batch-apply-cached":      true,
-	"maintenance.duration-reextract":   true,
 	"maintenance.duration-backfill":    true,
 	"maintenance.author-path-link":     true,
 	"maintenance.repair-library-state": true,
