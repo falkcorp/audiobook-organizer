@@ -809,6 +809,16 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 	for t := range windowTierCount {
 		slices.SortFunc(plan.tiers[t], func(a, b windowItem) int { return strings.Compare(a.FileID, b.FileID) })
 	}
+	// Per-root candidate counts, at Warn so they survive prod's log level. The
+	// worker parity gate refuses to start a worker when ANY root it was
+	// configured with has no calibration file, and a root with zero candidates
+	// here is unprovable no matter what the hub does later — which is the
+	// shape that deadlocked both prod workers for ~6 hours on 2026-09-21. A
+	// zero for a root a worker holds is the diagnosis, not a curiosity.
+	for _, v := range libRoots {
+		wbLog.Warn("calibration candidates under root %q: identity=%d parity=%d",
+			logger.SanitizeLogValue(v.Name), plan.identityByRoot[v.Name], plan.calibrationByRoot[v.Name])
+	}
 	return plan, nil
 }
 
