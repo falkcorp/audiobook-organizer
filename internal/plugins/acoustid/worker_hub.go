@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-09-21
 
@@ -186,8 +186,14 @@ type hubRun struct {
 	server  fingerprint.ToolVersionInfo
 	allowed []workerapi.ToolVersions
 	roots   []pathutil.PathVar
-	calib   []windowItem
-	probe   libraryScanProbe // nil: no library.scan gate (tests)
+	// ineligible counts, by reason, why an item may not go to a remote
+	// worker. A remote-only run that resolves nothing otherwise reports no
+	// reason at all: on 2026-09-21 the lease endpoint answered 204 for every
+	// poll and the only visible number was "0/13167 files resolved", which
+	// says a run is stuck but not why. Touched with WorkerHub.mu held.
+	whyCount map[string]int
+	calib    []windowItem
+	probe    libraryScanProbe // nil: no library.scan gate (tests)
 
 	// remoteOnly: the server lane decodes nothing (see the package comment).
 	remoteOnly bool
@@ -623,6 +629,36 @@ func (h *WorkerHub) awaitRemote(ctx context.Context, idx int) (string, error) {
 	}
 }
 
+// ineligibleReasons is why items the hub has classified may not go to a
+// remote worker, as "reason=count" pairs sorted by count. Empty when every
+// classified item is eligible.
+func (h *WorkerHub) ineligibleReasons() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.run == nil || len(h.run.whyCount) == 0 {
+		return ""
+	}
+	type kv struct {
+		k string
+		n int
+	}
+	out := make([]kv, 0, len(h.run.whyCount))
+	for k, n := range h.run.whyCount {
+		out = append(out, kv{k, n})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].n != out[j].n {
+			return out[i].n > out[j].n
+		}
+		return out[i].k < out[j].k
+	})
+	parts := make([]string, len(out))
+	for i, e := range out {
+		parts[i] = fmt.Sprintf("%s=%d", e.k, e.n)
+	}
+	return strings.Join(parts, " ")
+}
+
 // tierCounts is the current tier's resolved, leased and total item counts.
 func (h *WorkerHub) tierCounts() (done, leased, total int) {
 	h.mu.Lock()
@@ -805,6 +841,18 @@ func (r *hubRun) remoteEligible(idx int) bool {
 	st := &r.st[idx]
 	if st.remote == remoteUnknown {
 		st.remote = remoteNo
+		defer func() {
+			if st.remote != remoteYes {
+				if r.whyCount == nil {
+					r.whyCount = map[string]int{}
+				}
+				why := st.whyServer
+				if why == "" {
+					why = "server_only"
+				}
+				r.whyCount[why]++
+			}
+		}()
 		it := r.items[idx]
 		root, rel, ok := pathutil.SplitRoot(it.Path, r.roots)
 		switch {
