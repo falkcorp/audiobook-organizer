@@ -1,7 +1,7 @@
 // file: internal/fingerprint/workerclient/gate.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 35b498ed-d496-4677-81eb-adf09304d580
-// last-edited: 2026-09-19
+// last-edited: 2026-09-21
 
 package workerclient
 
@@ -149,17 +149,41 @@ func (w *worker) calibrationTargets(h *workerapi.HelloResponse) (cfs []workerapi
 		bootstrap = true
 	}
 	seen := map[string]bool{}
+	mappingOnly := map[string]bool{}
+	parityWindows := 0
 	for _, cf := range h.Calibration {
-		if _, ok := w.roots[cf.Root]; !ok || (len(cf.Windows) == 0 && !bootstrap) {
+		if _, ok := w.roots[cf.Root]; !ok {
 			continue
 		}
+		// A file with no window proves the root MAPPING only. Accept it when
+		// the server said so (IdentityOnly) or when the whole response is a
+		// bootstrap; a windowless file with neither marker is malformed and
+		// is dropped as before.
+		if len(cf.Windows) == 0 && !cf.IdentityOnly && !bootstrap {
+			continue
+		}
+		if len(cf.Windows) == 0 {
+			mappingOnly[cf.Root] = true
+		}
+		parityWindows += len(cf.Windows)
 		cfs = append(cfs, cf)
 		seen[cf.Root] = true
 	}
 	for name := range w.roots {
 		if !seen[name] {
-			return nil, false, fmt.Errorf("%w: the server offered no calibration file under root %q, so the root mapping and pipeline parity cannot be proven (the window backfill must have reference windows first)", ErrParity, name)
+			return nil, false, fmt.Errorf("%w: the server offered no calibration file under root %q, so the root mapping cannot be proven. The window backfill offers one file per root; a root with no tracked file under it cannot be proven at all and should not be configured on this worker", ErrParity, name)
 		}
+	}
+	// Pipeline parity is never waived by accident: outside a bootstrap at
+	// least one offered file must carry a window to reproduce. Without this,
+	// an all-identity response would start a worker with no byte-parity check
+	// at all.
+	if !bootstrap && parityWindows == 0 {
+		return nil, false, fmt.Errorf("%w: every calibration file the server offered proves only the root mapping, so pipeline parity cannot be checked against anything. The window backfill must cut reference windows with %s + ffmpeg %s first",
+			ErrParity, w.cfg.Versions.Fpcalc, w.cfg.Versions.FFmpeg)
+	}
+	for name := range mappingOnly {
+		log.Warn("root %q was proven by MAPPING ONLY (size, mtime, first 64 KiB): the server has no reference window under it yet, so this worker's prints for that root are not byte-parity checked until one exists", name)
 	}
 	return cfs, bootstrap, nil
 }
