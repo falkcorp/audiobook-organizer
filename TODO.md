@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.13 -->
+<!-- version: 10.73.14 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-20 -->
+<!-- last-edited: 2026-09-21 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,100 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **`metadata.batch-apply-cached` re-picks books whose refusal can never change.**
+      Measured 2026-09-20 over 4 completed batches: 359 gate refusals across only
+      196 distinct books — 163 of them refused TWICE within ~40 minutes. The
+      refusals are structural (a duplicated file set, a path with no author in
+      it, a candidate that will never match a transcribed title), so nothing
+      about them differs on the next run. The backlog cannot drain; every future
+      batch re-pays the same cost and the owner sees another `applied 0 of N`.
+      Needs a suppression/backoff so a book refused for a stable reason is not
+      re-offered until the inputs that caused the refusal change.
+      Evidence: per-book `book not applied` lines in the op logs (`GET /operations/v2/<id>/logs/download`, zstd).
+
+- [ ] **The dry-run flag spelling is split across the op registry.**
+      Measured 2026-09-20: 11 params structs tag it `dryRun`, 18 tag it
+      `dry_run`. `encoding/json` drops an unrecognised field silently, so an
+      operator who reaches for the wrong one for a given op gets that op's
+      default with no warning. `maintenance.author-path-link` and
+      `maintenance.author-id-repair` already handle this correctly — `*bool`,
+      absent means dry run, both spellings accepted, disagreement refused — and
+      `maintenance.duration-reextract` was brought in line after it silently
+      previewed a run meant as an apply. Sweep the rest onto the same pattern,
+      and check each one's default: a `bool` field with no explicit default
+      means Go's zero value (false = APPLY) decides when the flag is dropped.
+
+- [ ] **10 books hold their entire file set twice (exactly 2.00x runtime).**
+      Found via `runtime_mismatch` gate refusals on 2026-09-20. Verified on
+      01M07EDG4YNX7E7DEAAZXBE7FQ ("Star Divide"): two file rows,
+      217,245,811 B and 217,214,993 B — the same audio with different tags, so
+      the hashes differ and nothing deduped them. 01M2TAE4V238P1MFAWMT97CQTY
+      ("Apocalypse Tamer") is the same shape at 82 file rows: 41 chapters
+      attached twice.
+      Both rows are `file_exists: true`, `missing: false`, so the "never delete
+      book_file rows — REPOINT" rule does not govern: there is nothing to
+      repoint to. This is on-disk duplicate territory. OWNER DECISION on the
+      repair; until then these books can never receive metadata, and each one
+      costs a gate refusal on every batch.
+      Full list: the `runtime_mismatch` refusals at ratio 2.00 in those op logs.
+
+- [ ] **`transcription_mismatch` refusals name neither side's values.**
+      It is the single biggest refusal bucket (147 events / 81 books on
+      2026-09-20, 41%), and its Detail is the fixed sentence "book has a
+      transcribed title the candidate does not match" — no titles, no authors,
+      no indication of WHICH leg failed. `runtime_mismatch` next to it prints
+      "files 905 min, candidate 452 min (50% off)" and is diagnosable from the
+      log alone; this one required reading `applygate.ScoreGate` and
+      `util.MainTranscriptionConfirms` to explain a single refusal.
+      Make it report the failing leg and both values. Pure observability, no
+      behaviour change — and it is the prerequisite for answering whether the
+      gate's exact-title + substring-author rule is calibrated right for Whisper
+      output, where a one-letter surname error is the norm.
+      Evidence: per-book `book not applied` lines in the op logs (`GET /operations/v2/<id>/logs/download`, zstd).
+
+- [ ] **`window-backfill`'s `unknown_duration` deferrals are NOT fixed by
+      `maintenance.duration-reextract`, despite the comment saying so.**
+      `internal/plugins/acoustid/window_backfill.go` (~line 398) calls
+      unknown_duration "a retryable one (unknown_duration, fixed by
+      maintenance.duration-reextract)". Measured on 2026-09-20 that is false for
+      the population that actually defers:
+
+      - before the reextract apply: T0 deferred 74%, unknown_duration 61%
+      - after correcting 17,161 book durations: T0 deferred 2,661/2,673 (99%),
+        unknown_duration 75%, written 12
+
+      A follow-up run scoped to the residual
+      (`onlyMissingDuration:true, force:true`) examined 8,252 books and returned
+      **eligible=0, read-errors=8,227** — the zero-duration books are
+      overwhelmingly UNREADABLE from the server, so no ffprobe-based op can give
+      them a duration.
+
+      Meanwhile the deferring T0 items are files the backfill itself just
+      stat'ed successfully (it reads `fi.Size()`/`fi.ModTime()` when building
+      `windowItem`), so the FILE is present — what is missing is
+      `book_file.Duration` and `AcoustIDFingerprintDurationSec` on the row.
+      `maintenance.duration-backfill` is not the answer either; it only repairs
+      millisecond-valued durations.
+
+      Two things to do: correct the comment so it stops sending operators at the
+      wrong op, and decide what actually populates a per-FILE duration for a
+      present file with an empty row — the remote worker already decodes these
+      files and could report duration back, which would close the loop without
+      any server-side I/O.
+
+- [ ] **Let `fp-worker` run on Windows.** `internal/fingerprint/workerclient/mount_other.go`
+  (`statMount`) and `probe_other.go` (`writeProbe`) have no Windows implementation, so
+  the worker refuses to start before leasing a single job — it cannot prove the library
+  mount is read-only. Measured 2026-09-20: the box at the `windows-gpu` ssh alias is a
+  Ryzen 7 3800X (8C/16T, 64 GB), a real third worker's worth of CPU. Its GPU (Radeon
+  R9 200, 2013 silicon, no CUDA and dropped from ROCm) is NOT worth using — CPU only.
+  Needs: a Windows `statMount` (drive type + read-only volume flag) and `writeProbe`;
+  SMB credentials reachable from an SSH session, since mapped drives show `Unavailable`
+  there and only UNC paths work; and a Windows ffmpeg/fpcalc pair that reproduces the
+  reference prints byte for byte, which the parity gate will reject if it does not.
+  Deferred 2026-09-20 (owner): two Macs cover the current windowed run. Revisit before
+  whole-file fingerprints, which is a far bigger job.
 
 - [ ] **TODO-TITLEDIR** Index `GetBooksByTitleInDir` — it full-scans every book
       row once per newly imported book, inside the scan's version-link lock.
