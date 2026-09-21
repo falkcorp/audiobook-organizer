@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-09-21
 
@@ -379,7 +379,16 @@ func processBookForReextract(ctx context.Context, store bookFileLister, book dat
 			res.roughDouble = true
 		}
 	}
-	res.example = fmt.Sprintf("%s %ds→%ds (%d seg)", book.ID, oldDur, newDur, len(segs))
+	// Name the unresolved count in the example. "36229s->1713s (36 seg)" reads
+	// as a measured correction when it can equally mean 35 of 36 segments were
+	// unreadable; the totals are not comparable in that case and the new one is
+	// withheld. "(36 seg, 35 unresolved -> total withheld)" says which it is.
+	if res.unresolved > 0 {
+		res.example = fmt.Sprintf("%s %ds→%ds (%d seg, %d unresolved → total withheld)",
+			book.ID, oldDur, newDur, len(segs), res.unresolved)
+	} else {
+		res.example = fmt.Sprintf("%s %ds→%ds (%d seg)", book.ID, oldDur, newDur, len(segs))
+	}
 	return res
 }
 
@@ -596,6 +605,20 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			examples = append(examples, res.example)
 		}
 
+		// Count the withheld books in DRY RUN TOO. incomplete++ used to live
+		// only in the apply path below, past this guard, so a preview always
+		// reported incomplete-books=0 — it could not preview the one behaviour
+		// that matters most here, namely which books have their total withheld
+		// because a segment could not be resolved.
+		//
+		// That gap is not cosmetic. Without it a preview line like
+		// "36229s->1713s (36 seg)" is unreadable: a book that really is shorter
+		// and a book where 35 of 36 segments were unreadable produce the same
+		// text, and the only number that separates them reads 0 either way.
+		if res.unresolved > 0 {
+			incomplete++
+		}
+
 		if dryRun {
 			continue
 		}
@@ -651,7 +674,6 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			// with a confidently wrong one.
 			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
 				"book %s: %d segment(s) unresolved; leaving the total alone for a later run", res.book.ID, res.unresolved))
-			incomplete++
 			continue
 		} else {
 			// The new duration was measured against res.book's stored value
@@ -695,8 +717,6 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		// SkipAgeDays.
 		if res.unresolved == 0 {
 			stampVerifiedAt(store, reporter, res.book.ID)
-		} else {
-			incomplete++
 		}
 		heartbeat(false)
 	}
