@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
-// last-edited: 2026-09-20
+// last-edited: 2026-09-21
 
 package acoustid
 
@@ -925,7 +925,27 @@ func (h *WorkerHub) Hello(_ context.Context, req workerapi.HelloRequest) (*worke
 		},
 	}
 	for _, v := range r.roots {
-		resp.Roots = append(resp.Roots, workerapi.Root{ID: v.Name, Remote: v.Name == "libroot"})
+		// EVERY root the server knows is offered to remote workers.
+		//
+		// This flag is load-bearing in a way the name hides: the worker's
+		// startup gate (workerclient/gate.go) walks the roots IT was configured
+		// with and refuses to run if any of them is absent from this list or
+		// carries Remote=false — "the server does not offer root %q to remote
+		// workers". So `Remote: v.Name == "libroot"` did not merely describe a
+		// policy, it made `--root books=…` an unstartable configuration.
+		//
+		// That was the third site of one bug. remoteEligible refused non-libroot
+		// files, the job hardcoded Root: "libroot", and this told any worker
+		// configured for another root to exit. Fixing the first two without this
+		// one would have looked correct in tests and bricked the fleet on the
+		// next restart.
+		//
+		// Remote=true is now consistent with remoteEligible, which accepts any
+		// root it can split a path against. A root a worker cannot actually
+		// reach still fails — at job time, with a specific per-job rejection
+		// ("root X is not configured on this worker"), which is visible and
+		// per-file rather than a silent whole-population refusal.
+		resp.Roots = append(resp.Roots, workerapi.Root{ID: v.Name, Remote: true})
 	}
 	if r.remoteOnly {
 		resp.ReferenceTools = &workerapi.ToolVersions{Fpcalc: r.server.Fpcalc, FFmpeg: r.server.FFmpeg}
