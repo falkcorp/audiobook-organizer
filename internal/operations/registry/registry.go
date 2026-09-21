@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.28.0
+// version: 3.29.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-09-20
 
@@ -258,15 +258,13 @@ func (r *Registry) SetScanStandDownStore(s standDownPersister) {
 	// second wiring call. Two setters would mean two chances to forget one, and
 	// a pause whose marker is not persisted silently resumes at the next
 	// deploy — which is exactly the failure the persistence exists to prevent.
+	// Wire the operator-pause persister onto the same store. This setter does
+	// NOT read it: the marker is restored in Start(), because a setter that
+	// performs a database read as a side effect surprises every caller that
+	// only wanted to wire a dependency — every test constructing a server with
+	// a strict mock store started failing on an unexpected GetSetting, which is
+	// the design telling on itself.
 	SetPauseStore(s)
-	if restored, err := RestorePauseState(s); err != nil {
-		slog.Warn("could not read the operations pause marker; starting unpaused",
-			"err", err)
-	} else if restored {
-		st := OperationsPauseState()
-		slog.Warn("OPERATIONS ARE PAUSED — item dispatch is held until a resume",
-			"reason", st.Reason, "by", st.By, "since", st.Since)
-	}
 }
 
 // SetDepsScheduler wires the dependency scheduler. Must be called BEFORE
@@ -461,6 +459,18 @@ func (r *Registry) Start(ctx context.Context) {
 	r.mu.Lock()
 	r.notifyStopped = false
 	r.mu.Unlock()
+	// Restore an operator pause BEFORE resume/dispatch, so a held system does
+	// not process a single item between boot and the marker being read.
+	r.mu.RLock()
+	pauseStore := r.scanStandDownStore
+	r.mu.RUnlock()
+	if restored, err := RestorePauseState(pauseStore); err != nil {
+		r.logger.Warn("could not read the operations pause marker; starting unpaused", "err", err)
+	} else if restored {
+		st := OperationsPauseState()
+		r.logger.Warn("OPERATIONS ARE PAUSED — item dispatch is held until a resume",
+			"reason", st.Reason, "by", st.By, "since", st.Since)
+	}
 	// Resume must complete before the dispatcher starts accepting new work.
 	r.resumeAfterStartup(ctx)
 	// Reload any journaled batch buckets from the previous run and re-arm their

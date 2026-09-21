@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/pause.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f6b0c28-5a17-4e93-b2d4-91e7c05a8b63
 // last-edited: 2026-09-20
 
@@ -9,13 +9,18 @@ import (
 	"encoding/json"
 	"strings"
 
-	"log/slog"
-
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
 )
+
+// pauseLog is this package's sanitizing logger. NOT a direct slog call: those
+// bypass sanitizeLogLine entirely, which is how main accumulated 307
+// go/log-injection alerts (docs/audits/2026-09-13-log-injection-sweep.md) and
+// why internal/logger's guard test refuses new ones.
+var pauseLog = logger.New("operations.pause")
 
 // Operator pause endpoints.
 //
@@ -90,7 +95,7 @@ func (h *Handler) PauseOperations(c *gin.Context) {
 
 	// The hold is in effect regardless; the error is the marker write only.
 	if err := registry.PauseOperations(reason, by); err != nil {
-		slog.Warn("operations pause: hold is active but the marker could not be persisted; a restart would resume", "err", logging.SanitizeErr(err))
+		pauseLog.Warn("operations pause: hold is active but the marker could not be persisted; a restart would resume: %v", logging.SanitizeErr(err))
 	}
 	httputil.RespondWithOK(c, h.pauseStatePayload())
 }
@@ -98,7 +103,7 @@ func (h *Handler) PauseOperations(c *gin.Context) {
 // ResumeOperations releases the hold.
 func (h *Handler) ResumeOperations(c *gin.Context) {
 	if err := registry.ResumeOperations(); err != nil {
-		slog.Warn("operations resume: hold released but the marker could not be cleared", "err", logging.SanitizeErr(err))
+		pauseLog.Warn("operations resume: hold released but the marker could not be cleared: %v", logging.SanitizeErr(err))
 	}
 	httputil.RespondWithOK(c, h.pauseStatePayload())
 }
