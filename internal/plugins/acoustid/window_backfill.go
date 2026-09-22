@@ -56,11 +56,15 @@ import (
 // answer was tracked rows only for v1, so that tier is not built here and the
 // design's T1/T2 are this op's T0/T1.
 //
-// Excluded, and counted by reason: rows under the frozen iTunes tree
-// (books/itunes/** or the configured iTunes roots; the design is silent on
-// reading them, and the standing owner rule is hands off), SkipScan rows,
-// non-decodable extensions, empty paths, and files that do not stat as regular
-// files.
+// Excluded, and counted by reason: SkipScan rows, non-decodable extensions,
+// empty paths, and files that do not stat as regular files.
+//
+// The frozen iTunes tree is NOT excluded. It was until 2026-09-22, on the
+// standing "hands off iTunes" rule -- but that rule is about MUTATION, and
+// fingerprinting only reads. Excluding it denied an acoustic signal to
+// ~143,766 files, 19% of the corpus, for no benefit. Every iTunes mutation
+// guard (config.UnderFrozenITunesTree in internal/merge and the maintenance
+// ops) is untouched, and this op has never written to an audio file.
 //
 // Dry-run is the default: {"live": true} writes. A dry run builds the full
 // plan (stat, stored-window and tombstone reads) and reports it per tier.
@@ -707,7 +711,6 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 	if err != nil {
 		return nil, fmt.Errorf("window-backfill: list book files: %w", err)
 	}
-	itunes := newITunesMatcher(iTunesRoots())
 	rows := make([]windowPlanRow, len(cores))
 	var durProbed, durProbeFailed atomic.Int64
 	var chunks [][2]int
@@ -719,7 +722,7 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			r, perr := p.planOne(ctx, cores[i], itunes, versions, &durProbed, &durProbeFailed)
+			r, perr := p.planOne(ctx, cores[i], versions, &durProbed, &durProbeFailed)
 			if perr != nil {
 				// A store read failure on one file must not read as "needs
 				// work" (it would recompute) or "current" (it would skip);
@@ -833,14 +836,10 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 }
 
 // planOne classifies one tracked row.
-func (p *Plugin) planOne(ctx context.Context, f database.BookFileCore, itunes *iTunesMatcher, versions *fingerprint.ToolVersionInfo, probed, probeFailed *atomic.Int64) (windowPlanRow, error) {
+func (p *Plugin) planOne(ctx context.Context, f database.BookFileCore, versions *fingerprint.ToolVersionInfo, probed, probeFailed *atomic.Int64) (windowPlanRow, error) {
 	switch {
 	case f.FilePath == "":
 		return windowPlanRow{excluded: "empty_path"}, nil
-	case itunes.under(f.FilePath):
-		// Checked before the stat: nothing under the iTunes tree is touched,
-		// not even read, and its missing rows do not make a book unmatched.
-		return windowPlanRow{excluded: "itunes_tree"}, nil
 	}
 	fi, err := os.Stat(f.FilePath)
 	if err != nil {
@@ -1004,91 +1003,6 @@ func windowsCurrent(stored []database.FingerprintWindow, it windowItem, versions
 		return slices.Equal(have, want)
 	}
 	return true
-}
-
-// iTunesRoots returns the configured iTunes roots (the folder of the library
-// file and the media root), cleaned, each also symlink-resolved when it
-// resolves to somewhere else. The books/itunes/ segment match in
-// config.UnderFrozenITunesTree applies whatever this returns.
-func iTunesRoots() []string {
-	it := config.AppConfig.ITunes
-	var roots []string
-	add := func(r string) {
-		r = filepath.Clean(r)
-		roots = append(roots, r)
-		if real, err := filepath.EvalSymlinks(r); err == nil && real != r {
-			roots = append(roots, real)
-		}
-	}
-	if it.LibraryReadPath != "" {
-		add(filepath.Dir(it.LibraryReadPath))
-	}
-	if it.MediaRoot != "" {
-		add(it.MediaRoot)
-	}
-	return roots
-}
-
-// iTunesMatcher decides whether a path is in the frozen iTunes tree,
-// case-insensitively (the tree is reached as "Books/iTunes" on a
-// case-insensitive client mount, and HFS/APFS-origin paths vary in case) and
-// through symlinks: a library folder that links into the tree is the tree.
-//
-// Note the lowercasing also excludes a genuinely distinct "Books/Itunes" tree
-// on a case-sensitive filesystem. That is deliberate: this is a hands-off
-// rule, and the fail-safe direction is to skip.
-//
-// Symlinks are resolved on the PARENT directory, memoized: planning visits
-// every book_file row, EvalSymlinks costs an lstat per path component, and
-// files cluster by folder, so one resolve per folder instead of one per row.
-// Only a path the cheap textual check did not already exclude is resolved.
-type iTunesMatcher struct {
-	roots []string // lowercased
-	dirs  sync.Map // parent dir -> resolved parent dir ("" when unresolvable)
-}
-
-func newITunesMatcher(roots []string) *iTunesMatcher {
-	m := &iTunesMatcher{}
-	for _, r := range roots {
-		m.roots = append(m.roots, strings.ToLower(r))
-	}
-	return m
-}
-
-func (m *iTunesMatcher) textual(p string) bool {
-	lp := strings.ToLower(p)
-	if config.UnderFrozenITunesTree(lp) {
-		return true
-	}
-	for _, r := range m.roots {
-		if pathutil.IsWithin(lp, r) {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *iTunesMatcher) under(path string) bool {
-	if m.textual(path) {
-		return true
-	}
-	dir := filepath.Dir(path)
-	var real string
-	if v, ok := m.dirs.Load(dir); ok {
-		real = v.(string)
-	} else {
-		if r, err := filepath.EvalSymlinks(dir); err == nil {
-			real = r
-		}
-		m.dirs.Store(dir, real)
-	}
-	if real == "" || real == dir {
-		return false
-	}
-	// A symlinked LEAF inside a real folder is not resolved here; the
-	// library's links are folder links, and resolving every leaf is the
-	// per-row cost this avoids.
-	return m.textual(filepath.Join(real, filepath.Base(path)))
 }
 
 func windowPlanSummary(plan *windowPlan) string {
