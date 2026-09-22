@@ -1,5 +1,5 @@
 <!-- file: docs/architecture/identification-pipeline.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 7c3e9a15-42bd-4f68-b0d1-5e8a97c3f204 -->
 <!-- last-edited: 2026-09-21 -->
 
@@ -387,6 +387,14 @@ every one of its files is, which makes a partially-missing book block *visibly*
 instead of averaging out. Book **flags** — `matched`, `embedded`,
 `transcribed`, `scored` — are independent and advance on their own.
 
+> **A surfaced file is excluded from the `MIN`, and its book advances with the
+> gap recorded.** This is the load-bearing half of the rule. Including surfaced
+> files would pin a book behind one permanently-undecodable file forever — which
+> is the 3,121-file dead end reincarnated at book granularity, and the same
+> drifted-state shape that made 93% of the ABS-invisible books invisible. A book
+> whose files are `[ok, ok, SURFACED]` is `fp_windowed` **and** carries a
+> `files_surfaced: 1` count. It advances; it does not pretend to be whole.
+
 > Keeping the book level as flags rather than a second chain is load-bearing.
 > Part I establishes that provider matching is a parallel branch and never a
 > gate (ASIN coverage ~29%). A single book enum would put `matched` in a chain
@@ -505,8 +513,25 @@ deployment, not by protocol**:
 
 **Provisioning dependency, not code:** `llm1` needs the library mounted, an
 fpcalc+ffmpeg pair inside `allowedToolVersions` (`worker_hub.go:314`), and the
-supervisor running. `workerclient/gate.go` refuses startup on a missing root,
-so this fails loudly at launch rather than silently at lease time.
+supervisor running. Two different failures, at two different times — worth
+knowing which you are looking at:
+
+- **A root `llm1` is configured for but has not mounted fails at startup.**
+  `checkMount` (`workerclient/gate.go:59`) verifies the mount exists, is an
+  allowed filesystem type, sits under its reported mount point, and is mounted
+  **read-only** — the error literally asks "is the share mounted?".
+- **A root the server offers that `llm1` is not configured for fails per job**,
+  with `root X is not configured on this worker`. That is deliberate: the
+  comment at `worker_hub.go:998-1003` explains it is "visible and per-file
+  rather than a silent whole-population refusal."
+
+One more thing the gate settles: `checkHello` (`gate.go:88`) refuses to run if
+the server's pipeline is not the one the worker was built for. So pipeline
+separation is enforced on **both** sides already — the worker refuses a
+mismatched run at hello, the server refuses a mismatched lease
+(`worker_hub.go:1290`). A full-file worker is therefore a distinct supervisor
+carrying `WholeFilePipelineID`, and today's window workers would refuse a
+full-file run outright rather than silently accept it.
 
 ## Target decision tree for one file
 
