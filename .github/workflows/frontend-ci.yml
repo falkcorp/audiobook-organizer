@@ -1,7 +1,7 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.11.0
+# version: 2.12.0
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
-# last-edited: 2026-09-12
+# last-edited: 2026-09-22
 
 name: Frontend CI
 
@@ -48,7 +48,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          lfs: true
           submodules: recursive
 
       - name: Load frontend configuration

@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 3.1.0
+# version: 3.2.0
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-09-01
+# last-edited: 2026-09-22
 
 name: Prerelease on Merge
 
@@ -70,7 +70,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          lfs: true
           submodules: recursive
 
       - name: Count RCs for this base version
