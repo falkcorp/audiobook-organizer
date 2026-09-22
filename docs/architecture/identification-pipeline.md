@@ -1,5 +1,5 @@
 <!-- file: docs/architecture/identification-pipeline.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 7c3e9a15-42bd-4f68-b0d1-5e8a97c3f204 -->
 <!-- last-edited: 2026-09-21 -->
 
@@ -574,17 +574,46 @@ full-file pass is a tail that never gates scoring.
 
 ## What has to be built
 
+> **Status, 2026-09-22.** Items 3 and 4 are BUILT, MERGED and DEPLOYED, with the
+> results measured on prod below. Item 7's weight is decided (0.85-0.93). Items
+> 1 and 2 are not started. The rest of this document remains a proposal.
+
 | # | Change | Where | Size |
 |---|---|---|---|
 | 1 | Per-stage `StageStatus` on `ScanState` | `internal/database/scan_state.go` | small, but touches every writer |
 | 2 | `identification.advance` driver op | new, `internal/plugins/maintenance/` | the bulk of the work |
-| 3 | Duration as an inline header read | `worker_hub.go` `remoteEligible` | small |
-| 4 | Delete the iTunes planner exclusion | `window_backfill.go:830` | one `case` |
+| 3 | ✅ **DONE** — duration probed in `planOne` | `window_backfill.go` | merged `b8a6609e8` |
+| 4 | ✅ **DONE** — iTunes exclusion deleted | `window_backfill.go` | merged `4fa425d54` |
 | 5 | Full-file op + `WholeFilePipelineID` | `internal/plugins/acoustid/` | medium |
 | 6 | `llm1` fp supervisor provisioning | ops, not code | small |
-| 7 | `SignalKind` for chapter structure | `internal/dedup/unified/` | small |
+| 7 | `SignalKind` for chapter structure (weight **0.85-0.93**, owner 2026-09-22) | `internal/dedup/unified/` | small |
 
 Order matters for 1 and 2 only; 3, 4 and 7 are independent and can land first.
+
+## Measured outcome of items 3 and 4
+
+Deployed 2026-09-22 02:31 and confirmed from the live plan, not predicted:
+
+```
+window-backfill plan (live): rows=762662 missing_rows=92655
+  duration_probed=62185 duration_probe_failed=57
+  T0 eligible=114368  T1 eligible=555537
+  excluded=map[non_audio_ext:25 not_regular_file:77]
+```
+
+- **`itunes_tree` is gone from `excluded`** — it read `itunes_tree:143766`
+  before. Those files are in the eligible pool for the first time, and the run's
+  total rose from 366,243 to 413,484.
+- **`unknown_duration` collapsed from 3,928 to 5** in the running tally. The
+  probe measured 62,185 durations with 57 failures (0.09%). Note that 62,185 is
+  ~15x the pre-change `unknown_duration` count: most of the newly-included
+  iTunes files lacked a duration too, which an estimate taken before the change
+  could not have seen.
+- Deferrals that remain are real per-file decode failures
+  (`worker_decode_error:*`), not eligibility refusals.
+
+Both changes are inert until `acoustid.window-backfill` re-plans, which is why
+the deploy was followed by a restart of that op.
 
 ## What deliberately does not change
 
