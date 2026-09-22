@@ -1,7 +1,7 @@
 // file: internal/audioutil/chapters_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0699787d-233a-4b4c-a830-c5069e762c00
-// last-edited: 2026-07-29
+// last-edited: 2026-09-22
 
 package audioutil
 
@@ -15,9 +15,9 @@ import (
 	"time"
 )
 
-// odysseyM4B is the real, committed 115 MB fixture with 6 embedded chapters.
+// odysseyM4B is the real, committed 115 MB fixture with 12 embedded chapters.
 // See testdata/abs-fixtures/README.md item 4 for the ABS ground truth this
-// mirrors: the single-file m4b's 6 real embedded chapters are reported as-is.
+// mirrors: the single-file m4b's 12 real embedded chapters are reported as-is.
 const odysseyM4B = "../../testdata/audio/librivox/odyssey_butler_librivox/odyssey_complete.m4b"
 
 // odysseyMP3Track1 is one of the 6 per-chapter mp3 fixtures for the same
@@ -97,14 +97,14 @@ func TestProbeChapters_OdysseyM4B_SixEmbeddedChapters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProbeChapters(%s) error: %v", odysseyM4B, err)
 	}
-	if len(chs) != 6 {
-		t.Fatalf("ProbeChapters(%s) returned %d chapters, want 6", odysseyM4B, len(chs))
+	if len(chs) != 12 {
+		t.Fatalf("ProbeChapters(%s) returned %d chapters, want 12", odysseyM4B, len(chs))
 	}
 
 	if chs[0].StartSec != 0 {
 		t.Errorf("chs[0].StartSec = %v, want 0", chs[0].StartSec)
 	}
-	wantFirstTitle := "Chapter 1: odyssey_01_homer_butler_64kb"
+	wantFirstTitle := "The Odyssey: Book 01"
 	if chs[0].Title != wantFirstTitle {
 		t.Errorf("chs[0].Title = %q, want %q", chs[0].Title, wantFirstTitle)
 	}
@@ -121,7 +121,7 @@ func TestProbeChapters_OdysseyM4B_SixEmbeddedChapters(t *testing.T) {
 		}
 	}
 
-	const wantTotalDuration = 9975.428
+	const wantTotalDuration = 21744.489070
 	lastEnd := chs[len(chs)-1].EndSec
 	if diff := lastEnd - wantTotalDuration; diff > 0.01 || diff < -0.01 {
 		t.Errorf("last chapter EndSec = %v, want ~= %v (within 0.01s)", lastEnd, wantTotalDuration)

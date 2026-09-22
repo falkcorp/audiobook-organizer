@@ -1,15 +1,23 @@
-*.m4b filter=lfs diff=lfs merge=lfs -text
-*.m4a filter=lfs diff=lfs merge=lfs -text
-*.mp3 filter=lfs diff=lfs merge=lfs -text
-*.flac filter=lfs diff=lfs merge=lfs -text
-*.png filter=lfs diff=lfs merge=lfs -text
-*.webm filter=lfs diff=lfs merge=lfs -text
+# Git LFS was retired on 2026-09-22.
+#
+# The audio test fixtures under testdata/audio/ were the only reason LFS
+# existed here: ~1.8 GB of LibriVox recordings. Every CI job fetched all of it
+# on checkout -- 23 checkout steps across 13 workflows, none of which read
+# testdata/audio -- which cost roughly 36 GB of LFS bandwidth per pull-request
+# push and exhausted the repository's LFS budget, failing every job before any
+# project code ran.
+#
+# Those fixtures are now fetched on demand from archive.org, pinned by sha256:
+# see testdata/audio/manifest.json and scripts/fetch_fixtures.py, or run
+# `make fixtures`. They are gitignored, so nothing large re-enters the repo.
+#
+# testdata/fixtures/test_sample.{mp3,m4b,flac} stay committed as ordinary
+# files. They total 11.6 KB, and a dozen tests want them on every checkout.
 
-# Visual-regression goldens are ~2KB each and must be a readable PNG on EVERY
-# checkout, including CI runners that do not fetch LFS. The blanket `*.png`
-# LFS rule above was catching them, so what landed in the working tree on CI
-# was an LFS POINTER FILE, and Playwright reported
-# "Could not decode expected image as PNG" -- which reads like a corrupt
-# golden rather than a missing LFS fetch. These three files are the only PNGs
-# in the repo; LFS exists here for the audio fixtures, not for them.
-web/tests/e2e/**/*.png !filter !diff !merge -text
+# Media are binary: never newline-normalize them.
+*.m4b -text
+*.m4a -text
+*.mp3 -text
+*.flac -text
+*.webm -text
+*.png -text

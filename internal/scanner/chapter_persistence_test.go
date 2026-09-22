@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_persistence_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: cb2ed4a4-974b-4d88-8d46-0a0f365ba430
-// last-edited: 2026-09-19
+// last-edited: 2026-09-22
 
 package scanner
 
@@ -82,19 +82,19 @@ func TestPersistChaptersForBook_SingleFileM4B_UsesEmbeddedChapters(t *testing.T)
 	if err != nil {
 		t.Fatalf("GetChaptersForBook: %v", err)
 	}
-	if len(chs) != 6 {
-		t.Fatalf("got %d chapters, want 6: %+v", len(chs), chs)
+	if len(chs) != 12 {
+		t.Fatalf("got %d chapters, want 12: %+v", len(chs), chs)
 	}
 	if chs[0].StartSec != 0 {
 		t.Errorf("chs[0].StartSec = %v, want 0", chs[0].StartSec)
 	}
-	wantTitle := "Chapter 1: odyssey_01_homer_butler_64kb"
+	wantTitle := "The Odyssey: Book 01"
 	if chs[0].Title != wantTitle {
 		t.Errorf("chs[0].Title = %q, want %q", chs[0].Title, wantTitle)
 	}
-	const wantEnd = 9975.428000
-	if diff := chs[5].EndSec - wantEnd; diff > 0.001 || diff < -0.001 {
-		t.Errorf("chs[5].EndSec = %v, want within 0.001 of %v (m4b's own last-chapter end)", chs[5].EndSec, wantEnd)
+	const wantEnd = 21744.489070
+	if diff := chs[11].EndSec - wantEnd; diff > 0.001 || diff < -0.001 {
+		t.Errorf("chs[11].EndSec = %v, want within 0.001 of %v (m4b's own last-chapter end)", chs[11].EndSec, wantEnd)
 	}
 }
 

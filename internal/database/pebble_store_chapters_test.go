@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_chapters_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: efc1583b-2f69-4546-980f-92bea6798fb2
-// last-edited: 2026-07-30
+// last-edited: 2026-09-22
 
 package database
 
@@ -13,18 +13,24 @@ import (
 // odysseyChapters mirrors the real, verified ffprobe -show_chapters output
 // for the committed fixture
 // testdata/audio/librivox/odyssey_butler_librivox/odyssey_complete.m4b (see
-// docs/specs/2026-07-29-abs-sync-api-design.md §5b): 6 embedded chapters,
-// first starting at 0.000000, last ending at 9975.428000. These exact float
+// docs/specs/2026-07-29-abs-sync-api-design.md §5b): 12 embedded chapters,
+// first starting at 0.000000, last ending at 21744.489070. These exact float
 // values are the ground truth this persistence layer must round-trip without
 // coercion or rounding.
 func odysseyChapters() []Chapter {
 	return []Chapter{
-		{ID: 0, StartSec: 0.000000, EndSec: 1386.057000, Title: "Chapter 1: odyssey_01_homer_butler_64kb"},
-		{ID: 1, StartSec: 1386.057000, EndSec: 2788.701000, Title: "Chapter 2: odyssey_02_homer_butler_64kb"},
-		{ID: 2, StartSec: 2788.701000, EndSec: 4309.210000, Title: "Chapter 3: odyssey_03_homer_butler_64kb"},
-		{ID: 3, StartSec: 4309.210000, EndSec: 6928.977000, Title: "Chapter 4: odyssey_04_homer_butler_64kb"},
-		{ID: 4, StartSec: 6928.977000, EndSec: 8602.198000, Title: "Chapter 5: odyssey_05_homer_butler_64kb"},
-		{ID: 5, StartSec: 8602.198000, EndSec: 9975.428000, Title: "Chapter 6: odyssey_06_homer_butler_64kb"},
+		{ID: 0, StartSec: 0.000000, EndSec: 1386.002063, Title: "The Odyssey: Book 01"},
+		{ID: 1, StartSec: 1386.002063, EndSec: 2788.017279, Title: "The Odyssey: Book 02"},
+		{ID: 2, StartSec: 2788.017279, EndSec: 4309.006735, Title: "The Odyssey: Book 03"},
+		{ID: 3, StartSec: 4309.006735, EndSec: 6929.004104, Title: "The Odyssey: Book 04"},
+		{ID: 4, StartSec: 6929.004104, EndSec: 8602.009841, Title: "The Odyssey: Book 05"},
+		{ID: 5, StartSec: 8602.009841, EndSec: 9975.017642, Title: "The Odyssey: Book 06"},
+		{ID: 6, StartSec: 9975.017642, EndSec: 11125.007959, Title: "The Odyssey: Book 07"},
+		{ID: 7, StartSec: 11125.007959, EndSec: 12938.005624, Title: "The Odyssey: Book 08"},
+		{ID: 8, StartSec: 12938.005624, EndSec: 15242.004036, Title: "The Odyssey: Book 09"},
+		{ID: 9, StartSec: 15242.004036, EndSec: 17466.005760, Title: "The Odyssey: Book 10"},
+		{ID: 10, StartSec: 17466.005760, EndSec: 19940.007710, Title: "The Odyssey: Book 11"},
+		{ID: 11, StartSec: 19940.007710, EndSec: 21744.489070, Title: "The Odyssey: Book 12"},
 	}
 }
 

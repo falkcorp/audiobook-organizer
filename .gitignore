@@ -362,3 +362,8 @@ testdata/abs-oracle/library/
 # tracked until 2026-09-11 (forward-only hygiene, docs/plans/2026-07-10-repo-size-history-rewrite-plan.md).
 /mtls-bridge
 /mtls-bridge.exe
+
+# Audio test fixtures, fetched on demand from archive.org (LFS retired
+# 2026-09-22). See testdata/audio/manifest.json + `make fixtures`.
+# testdata/fixtures/test_sample.* are NOT ignored: 11.6 KB, committed.
+/testdata/audio/librivox/

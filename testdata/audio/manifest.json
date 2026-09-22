@@ -1,0 +1,120 @@
+{
+  "_comment": "Test fixtures fetched on demand from archive.org. LibriVox recordings are public domain. Generated for the LFS retirement; see scripts/fetch_fixtures.py.",
+  "downloads": [
+    {
+      "path": "testdata/audio/librivox/moby_dick_librivox/mobydick_000_melville_64kb.mp3",
+      "sha256": "6393f88e7d776340660c0d70166bf080f95c7d2b1566b5c04e7801ce5693b4e6",
+      "url": "https://archive.org/download/moby_dick_librivox/mobydick_000_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/moby_dick_librivox/mobydick_001_002_melville_64kb.mp3",
+      "sha256": "5ec76198d81c3b0618342448b3bd688485032c84f4d3acd35d4c20bb8496f7e5",
+      "url": "https://archive.org/download/moby_dick_librivox/mobydick_001_002_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/moby_dick_librivox/mobydick_003_melville_64kb.mp3",
+      "sha256": "eadb7d8e8d664aff10183fdbe935a0dec15428e73fcd3f17e7be938ad805b42b",
+      "url": "https://archive.org/download/moby_dick_librivox/mobydick_003_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/moby_dick_librivox/mobydick_004_007_melville_64kb.mp3",
+      "sha256": "7c777677073ea3855b871c8ab1a35580a1c360e5e8d695945c03865f51594828",
+      "url": "https://archive.org/download/moby_dick_librivox/mobydick_004_007_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/moby_dick_librivox/mobydick_008_009_melville_64kb.mp3",
+      "sha256": "383801cc8939f42465dcec48549adc13ff817174af36c6463a7cd033f28efc93",
+      "url": "https://archive.org/download/moby_dick_librivox/mobydick_008_009_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/moby_dick_librivox/mobydick_010_012_melville_64kb.mp3",
+      "sha256": "0074ffde73d489ff8547a097b7388b8f9d092c13c022e40795238155fbce75d5",
+      "url": "https://archive.org/download/moby_dick_librivox/mobydick_010_012_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/mobydick2_2511_librivox/mobydickorthewhale_001_melville_64kb.mp3",
+      "sha256": "f61d1d9c73704c36e2b0c1869d1cf72fd817dd04484b2296d65439bbcb47f779",
+      "url": "https://archive.org/download/mobydick2_2511_librivox/mobydickorthewhale_001_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/mobydick2_2511_librivox/mobydickorthewhale_002_melville_64kb.mp3",
+      "sha256": "e3e75a6a8b379af9bf02d653ac1fa1894579dfa202edffed10c2b2886c76432c",
+      "url": "https://archive.org/download/mobydick2_2511_librivox/mobydickorthewhale_002_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/mobydick2_2511_librivox/mobydickorthewhale_003_melville_64kb.mp3",
+      "sha256": "49c4b7b018a540fcb132796060dcc7503dff5c04704b3dcdbebf2ea9a590a5a6",
+      "url": "https://archive.org/download/mobydick2_2511_librivox/mobydickorthewhale_003_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/mobydick2_2511_librivox/mobydickorthewhale_004_melville_64kb.mp3",
+      "sha256": "25037a8eb45b6697242aa28a1af982f90663b3decc9a39f6ee81d0fd5ade1cd6",
+      "url": "https://archive.org/download/mobydick2_2511_librivox/mobydickorthewhale_004_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/mobydick2_2511_librivox/mobydickorthewhale_005_melville_64kb.mp3",
+      "sha256": "226523833c01adabb51929f4bb50a55c30f5f6310a10b7300ac4820036c116fb",
+      "url": "https://archive.org/download/mobydick2_2511_librivox/mobydickorthewhale_005_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/mobydick2_2511_librivox/mobydickorthewhale_006_melville_64kb.mp3",
+      "sha256": "45edcef71d7ed7b8441ffa855309a095cf684453e324b95f5bada96ae6c9d09a",
+      "url": "https://archive.org/download/mobydick2_2511_librivox/mobydickorthewhale_006_melville_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/odyssey_butler_librivox/odyssey_01_homer_butler_64kb.mp3",
+      "sha256": "d48d944c91a0fd01fb3a7df8ef47168e199228a19c753379482d473d4faac268",
+      "url": "https://archive.org/download/odyssey_butler_librivox/odyssey_01_homer_butler_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/odyssey_butler_librivox/odyssey_02_homer_butler_64kb.mp3",
+      "sha256": "c00c1243542875446565e080f95a3ee8625fec274258698e25d975d58fc035f8",
+      "url": "https://archive.org/download/odyssey_butler_librivox/odyssey_02_homer_butler_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/odyssey_butler_librivox/odyssey_03_homer_butler_64kb.mp3",
+      "sha256": "176a558a9d77a49ff0fa5f2be496990bb5d85409e0c2f47e712a5cc2f12f4955",
+      "url": "https://archive.org/download/odyssey_butler_librivox/odyssey_03_homer_butler_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/odyssey_butler_librivox/odyssey_04_homer_butler_64kb.mp3",
+      "sha256": "2bd88fc505cd49dc8d071fd7d7a33639c34dde8a72b58b367c8747ce860141b6",
+      "url": "https://archive.org/download/odyssey_butler_librivox/odyssey_04_homer_butler_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/odyssey_butler_librivox/odyssey_05_homer_butler_64kb.mp3",
+      "sha256": "d1820a01e13d9d2606e99e2dd4a4dcf025d78838bc0f984e27193e982ced0ee7",
+      "url": "https://archive.org/download/odyssey_butler_librivox/odyssey_05_homer_butler_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/odyssey_butler_librivox/odyssey_06_homer_butler_64kb.mp3",
+      "sha256": "d36c577d82e0b123a2724ab5ed3ba35b7e01f198ead9b62702dd49aaf4dfb2a7",
+      "url": "https://archive.org/download/odyssey_butler_librivox/odyssey_06_homer_butler_64kb.mp3"
+    },
+    {
+      "path": "testdata/audio/librivox/odyssey_butler_librivox/odyssey_complete.m4b",
+      "sha256": "d69d7d972ffb88b48e5c37528176c05e6fc920e9368379eb64fe2c3e4901aac7",
+      "url": "https://archive.org/download/odyssey_butler_librivox/OdysseyPart1_64kb_librivox.m4b"
+    },
+    {
+      "path": "testdata/audio/librivox/iliadv2_2407_librivox/the_iliad_(version_2).m4b",
+      "sha256": "1af9a5373ebd2975520212dc2093c68e96e2b2387913768442cf99c5c5155175",
+      "url": "https://archive.org/download/iliadv2_2407_librivox/Iliad01-12_librivox.m4b"
+    },
+    {
+      "path": "testdata/audio/librivox/moby_dick_librivox/moby_dick.m4b",
+      "sha256": "eabdeac5517f4469037165a0950e58fe9a87815a6485f28da3a707770fad9eb1",
+      "url": "https://archive.org/download/moby_dick_librivox/MobyDickOrTheWhalePart1_librivox.m4b"
+    }
+  ],
+  "copies": [
+    {
+      "path": "testdata/audio/librivox/odyssey_butler_librivox/odyssey_complete.m4a",
+      "from": "testdata/audio/librivox/odyssey_butler_librivox/odyssey_complete.m4b"
+    },
+    {
+      "path": "testdata/audio/librivox/odyssey_butler_librivox/the_odyssey.m4a",
+      "from": "testdata/audio/librivox/odyssey_butler_librivox/odyssey_complete.m4b"
+    }
+  ]
+}

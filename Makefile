@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.27.0
+# version: 2.28.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-09-01
+# last-edited: 2026-09-22
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -199,6 +199,14 @@ web-lint-memory:
 ## commit, 532s with a normal TMPDIR vs 33.7s with TMPDIR on a RAM disk (35.5s
 ## on Linux) — see TODO-SRVTIMEOUT. The package is not CPU-slow. CI uses the
 ## -short variant which fits the default; this full target needs the headroom.
+fixtures:
+	@echo "🎧 Fetching audio test fixtures (archive.org, sha256-pinned)..."
+	@python3 scripts/fetch_fixtures.py
+	@echo "✅ Fixtures ready"
+
+fixtures-check:
+	@python3 scripts/fetch_fixtures.py --check
+
 test: vet
 	@echo "🧪 Running backend tests (full suite)..."
 	@go test ./... -v -race -timeout 25m
@@ -474,6 +482,7 @@ test-frontend: web-test
 
 ## test-everything: Every test surface in ONE run, continuing past failures, ending in a matrix
 ##                  (local pre-PR sweep; replaces the retired scripts/run-all-tests.sh)
+.PHONY: fixtures fixtures-check
 .PHONY: test-everything
 test-everything:
 	@echo "🧪 Running every test surface: backend, frontend, e2e."
