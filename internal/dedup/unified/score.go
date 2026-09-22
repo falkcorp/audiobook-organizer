@@ -55,6 +55,20 @@ const (
 	// confidence 0.65–0.80.
 	SigEmbedMedium SignalKind = "embedding_med"
 
+	// SigChapterStructure is a per-chapter boundary match: the same chapter
+	// COUNT and every boundary within a tolerance. Confidence 0.85–0.93,
+	// scaled by how tightly the boundaries align (owner decision 2026-09-22).
+	//
+	// Ranked above SigEmbedMedium and beneath SigLSHAcoustID on purpose: a
+	// matching chapter table is structural evidence of the same EDITION, which
+	// is stronger than text similarity but weaker than matching audio. Two
+	// different editions of a book essentially never share an exact chapter
+	// table, because the boundaries come from the recording, not the text.
+	//
+	// Chapter data has been collected per book since chapters were persisted
+	// and read by nobody in dedup until now.
+	SigChapterStructure SignalKind = "chapter_structure"
+
 	// Supporting signals — these are NOT included in the noisy-OR product.
 	// They add bounded additive boosts AFTER the primary product is computed.
 	// A set of supporting-only signals can never reach a candidate-eligible

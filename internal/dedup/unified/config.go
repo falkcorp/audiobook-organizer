@@ -109,6 +109,16 @@ func DefaultScoreConfig() ScoreConfig {
 				MaxConfidence: 0.95,
 				Boost:         0,
 			},
+			string(SigChapterStructure): {
+				// Same chapter count with every boundary inside the
+				// tolerance; 0.93 for an exact table, degrading to 0.85 at
+				// the tolerance edge. Owner decision 2026-09-22.
+				Base:          0.85,
+				Scale:         1.00,
+				MinConfidence: 0.85,
+				MaxConfidence: 0.93,
+				Boost:         0,
+			},
 			string(SigMetaSrcHash): {
 				Base:          0.97,
 				Scale:         1.00,
@@ -232,7 +242,8 @@ func LoadScoreConfig(ov ScoreOverrides) (ScoreConfig, error) {
 	for _, kind := range []SignalKind{
 		SigExactFile, SigExactAcoustID, SigISBNASIN,
 		SigLSHAcoustID, SigEmbedHigh, SigMetaSrcHash,
-		SigMetaFuzzy, SigEmbedMedium, SigDuration, SigFolderPath,
+		SigMetaFuzzy, SigEmbedMedium, SigChapterStructure,
+		SigDuration, SigFolderPath,
 	} {
 		key := "dedup.signals." + string(kind)
 		if !viper.IsSet(key) {
@@ -337,7 +348,7 @@ func (c ScoreConfig) Validate() error {
 	for _, kind := range []SignalKind{
 		SigExactFile, SigExactAcoustID, SigISBNASIN,
 		SigLSHAcoustID, SigEmbedHigh, SigMetaSrcHash,
-		SigMetaFuzzy, SigEmbedMedium,
+		SigMetaFuzzy, SigEmbedMedium, SigChapterStructure,
 	} {
 		kc, ok := c.Signals[string(kind)]
 		if !ok {
