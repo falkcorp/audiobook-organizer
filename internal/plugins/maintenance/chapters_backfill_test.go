@@ -915,3 +915,155 @@ func TestChaptersBackfill_ResumeIsStableAgainstStoreEnumerationOrder(t *testing.
 		}
 	}
 }
+
+// ── overwrite: repairing a WRONG stored timeline ────────────────────────────
+//
+// The skip-if-present rule that TestChaptersBackfill_AlreadyPersisted asserts is
+// correct for a backfill and wrong for a repair, because nothing in this
+// codebase distinguishes "has chapters" from "has correct chapters" — the skip
+// below and mapper.go's loadChapters both test only len(stored) > 0. These
+// tests pin the escape hatch and, just as importantly, its refusal.
+
+func TestChaptersBackfill_Overwrite_ReplacesWrongStoredTimeline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	spy := &chbfProbeSpy{result: chbfChapters()}
+	spy.install(t)
+
+	s := chbfStore(t)
+	id := chbfSeedBook(t, s, "Bad Timeline", 1)
+	// The exact production shape: a zero-length chapter titled with the book's
+	// own name, plus one spanning the whole container.
+	bad := []database.Chapter{
+		{ID: 0, StartSec: 0, EndSec: 0, Title: "Bad Timeline"},
+		{ID: 1, StartSec: 0, EndSec: 93042.568, Title: "Bad Timeline"},
+	}
+	if err := s.SaveChaptersForBook(id, bad); err != nil {
+		t.Fatalf("SaveChaptersForBook: %v", err)
+	}
+
+	if err := chbfRun(t, s, chaptersBackfillParams{
+		Apply: true, Overwrite: true, BookIDs: []string{id},
+	}); err != nil {
+		t.Fatalf("runChaptersBackfill: %v", err)
+	}
+
+	if n := spy.calls.Load(); n != 1 {
+		t.Fatalf("probed %d times under overwrite; want 1 — the stored-chapters "+
+			"short-circuit must not apply", n)
+	}
+	got, err := s.GetChaptersForBook(id)
+	if err != nil {
+		t.Fatalf("GetChaptersForBook: %v", err)
+	}
+	want := chbfChapters()
+	if len(got) != len(want) {
+		t.Fatalf("stored %d chapters after overwrite, want %d (%+v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].Title != want[i].Title || got[i].StartSec != want[i].StartSec {
+			t.Fatalf("chapter %d = %+v, want %+v — the bad timeline survived", i, got[i], want[i])
+		}
+	}
+}
+
+// Without the flag the SAME inputs must leave the bad timeline alone. This is
+// the control for the test above: it proves the replacement is attributable to
+// overwrite and not to the cohort or to apply.
+func TestChaptersBackfill_WithoutOverwrite_LeavesWrongTimelineAlone(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	spy := &chbfProbeSpy{result: chbfChapters()}
+	spy.install(t)
+
+	s := chbfStore(t)
+	id := chbfSeedBook(t, s, "Bad Timeline", 1)
+	bad := []database.Chapter{{ID: 0, StartSec: 0, EndSec: 0, Title: "Bad Timeline"}}
+	if err := s.SaveChaptersForBook(id, bad); err != nil {
+		t.Fatalf("SaveChaptersForBook: %v", err)
+	}
+
+	if err := chbfRun(t, s, chaptersBackfillParams{
+		Apply: true, BookIDs: []string{id},
+	}); err != nil {
+		t.Fatalf("runChaptersBackfill: %v", err)
+	}
+
+	if n := spy.calls.Load(); n != 0 {
+		t.Fatalf("probed %d times without overwrite; want 0", n)
+	}
+	got, err := s.GetChaptersForBook(id)
+	if err != nil {
+		t.Fatalf("GetChaptersForBook: %v", err)
+	}
+	if len(got) != 1 || got[0].Title != "Bad Timeline" {
+		t.Fatalf("stored chapters changed without overwrite: %+v", got)
+	}
+}
+
+// 🔴 The guard. A library-wide overwrite is an unreviewable rewrite of every
+// stored timeline, so the op must REFUSE rather than run — and refuse before
+// touching the store, so a fat-fingered request cannot half-apply.
+func TestChaptersBackfill_OverwriteWithoutBookIDs_Refuses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	spy := &chbfProbeSpy{result: chbfChapters()}
+	spy.install(t)
+
+	s := chbfStore(t)
+	id := chbfSeedBook(t, s, "Untouched", 1)
+	seeded := []database.Chapter{{ID: 0, StartSec: 0, EndSec: 42, Title: "pre-existing"}}
+	if err := s.SaveChaptersForBook(id, seeded); err != nil {
+		t.Fatalf("SaveChaptersForBook: %v", err)
+	}
+
+	err := chbfRun(t, s, chaptersBackfillParams{Apply: true, Overwrite: true})
+	if err == nil {
+		t.Fatal("library-wide overwrite was ACCEPTED; it must be refused")
+	}
+	if !strings.Contains(err.Error(), "bookIds") {
+		t.Fatalf("refusal does not name the missing parameter: %v", err)
+	}
+	if n := spy.calls.Load(); n != 0 {
+		t.Fatalf("refused run still probed %d files; the guard must run first", n)
+	}
+	got, err2 := s.GetChaptersForBook(id)
+	if err2 != nil {
+		t.Fatalf("GetChaptersForBook: %v", err2)
+	}
+	if len(got) != 1 || got[0].Title != "pre-existing" {
+		t.Fatalf("refused run still mutated chapters: %+v", got)
+	}
+}
+
+// Dropping Overwrite from the checkpoint would turn the unfinished half of a
+// repair back into a skip-if-present pass — leaving every book past the
+// watermark holding the timeline the run was started to replace, and reporting
+// success. Same failure class as dropping Apply.
+func TestChaptersBackfill_CheckpointCarriesOverwrite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	(&chbfProbeSpy{result: chbfChapters()}).install(t)
+
+	s := chbfStore(t)
+	ids := chbfSeedSorted(t, s, 3)
+	cohort := []string{ids[0], ids[1]}
+
+	rep := chbfRunSpying(t, s, chaptersBackfillParams{
+		Apply: true, Overwrite: true, BookIDs: cohort,
+	})
+	got := rep.last(t)
+
+	if !got.Overwrite {
+		t.Fatal("checkpoint dropped Overwrite: a resumed repair would silently " +
+			"revert to skipping books that already have (wrong) chapters")
+	}
+}

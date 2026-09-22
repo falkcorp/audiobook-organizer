@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
-// last-edited: 2026-09-02
+// last-edited: 2026-09-22
 
 // Package maintenance — op maintenance.chapters-backfill.
 //
@@ -95,6 +95,23 @@ type chaptersBackfillParams struct {
 	// against a bounded cohort before a whole-library pass.
 	BookIDs []string `json:"bookIds,omitempty"`
 
+	// Overwrite REPLACES chapters that are already persisted instead of
+	// skipping the book. It exists because "has chapters" and "has CORRECT
+	// chapters" are the same thing to every reader in this codebase: the skip
+	// check below and mapper.go's loadChapters both test only len(stored) > 0,
+	// so a book holding two junk rows is indistinguishable from a book holding
+	// a real 94-chapter timeline. Found in production on
+	// 01M0Z06VXNTSN1Q23YMVQQR823, whose container carries 94 markers while
+	// Pebble held a zero-length chapter plus one spanning the whole book — a
+	// timeline that renders as unnavigable in the player.
+	//
+	// 🔴 REFUSED unless BookIDs is non-empty AND Apply is set. A library-wide
+	// overwrite is not a repair, it is an unreviewable rewrite of every stored
+	// timeline including ones a re-probe would render WORSE (a container whose
+	// markers were since stripped would go from a good stored timeline to
+	// none). Repair is per-book and deliberate, so the parameter is too.
+	Overwrite bool `json:"overwrite,omitempty"`
+
 	// ResumeFrom is the contiguous-completion watermark a previous attempt
 	// reached: every item below it is provably finished. RunItems slices the
 	// work at this index. The registry merges checkpoint JSON back into params
@@ -182,7 +199,9 @@ func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 			"extraction only ever ran on the scanner's new-book save path, so every book predating 2026-07-30 was " +
 			"never probed. Multi-file books are skipped deliberately: their persisted form is identical to the " +
 			"live synthesis and would go stale undetectably. Refuses to run when ffprobe is unavailable. " +
-			"DRY RUN unless {\"apply\": true}.",
+			"DRY RUN unless {\"apply\": true}. Books that already have chapters are skipped unless " +
+			"{\"overwrite\": true} is set, which REPLACES the stored timeline and requires an explicit " +
+			"bookIds cohort — a stored timeline can be wrong, and every reader here tests only that it exists.",
 		// ResumeRestart, not Drop. This op has the longest Timeout in the
 		// codebase (24h) and re-enumerates the whole library, so an interrupted
 		// run used to throw away a day of ffprobe work. Every item is
@@ -192,6 +211,16 @@ func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 		// chapters. Those two properties are what make a watermark safe here;
 		// they are exactly what maintenance.duration-backfill lacks, which is
 		// why that op stays on Drop.
+		//
+		// The overwrite parameter removes the skip, so re-reading this comment
+		// literally it no longer holds for such a run. The watermark is still
+		// safe there for a different reason: a re-probe of the same container
+		// yields the same markers, so a book re-processed after a restart is
+		// written the identical timeline it was written before. Idempotency is
+		// the property that matters, and overwrite preserves it; the skip was
+		// only ever the cheap way of achieving it. Overwrite is additionally
+		// confined to an explicit bookIds cohort, which bounds any re-work to
+		// the size of that list.
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		// Shares the ffprobe lane with the other whole-library probe op so the
@@ -232,9 +261,13 @@ func chaptersBackfillResolves(path string) bool {
 }
 
 type chaptersBackfillCounters struct {
-	examined       atomic.Int64
-	skipMultiFile  atomic.Int64
-	skipHasStored  atomic.Int64
+	examined      atomic.Int64
+	skipMultiFile atomic.Int64
+	skipHasStored atomic.Int64
+	// replaced counts books whose EXISTING chapters were overwritten. Kept
+	// apart from persisted so a repair run's summary distinguishes a fill from
+	// a rewrite — the two have very different blast radii.
+	replaced       atomic.Int64
 	skipNoPath     atomic.Int64
 	probeFailed    atomic.Int64
 	noChapters     atomic.Int64
@@ -257,9 +290,9 @@ func (c *chaptersBackfillCounters) summary(apply bool) string {
 		n = c.persisted.Load()
 	}
 	return fmt.Sprintf(
-		"examined=%d %s=%d (%d chapters) | skipped: multi-file=%d already-had=%d no-path=%d | "+
+		"examined=%d %s=%d (%d chapters, %d replacing existing) | skipped: multi-file=%d already-had=%d no-path=%d | "+
 			"no-markers=%d probe-failed=%d persist-failed=%d | recovered-via-book-path=%d",
-		c.examined.Load(), verb, n, c.chaptersWorked.Load(),
+		c.examined.Load(), verb, n, c.chaptersWorked.Load(), c.replaced.Load(),
 		c.skipMultiFile.Load(), c.skipHasStored.Load(), c.skipNoPath.Load(),
 		c.noChapters.Load(), c.probeFailed.Load(), c.persistFailed.Load(),
 		c.recoveredViaBook.Load(),
@@ -272,6 +305,26 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
 		}
+	}
+
+	// ── refuse a library-wide overwrite ──────────────────────────────────────
+	//
+	// Overwrite is a repair tool, and a repair is something you can name the
+	// subjects of. Without this guard a single `{"apply":true,"overwrite":true}`
+	// re-probes and rewrites every stored timeline in the library, and any book
+	// whose container lost its markers since the original extraction would be
+	// left WORSE than before — the op would find fewer than
+	// minPersistableChapters, skip the write, and leave the old rows in place
+	// for some books while replacing others, with no record of which. Requiring
+	// an explicit cohort keeps the blast radius equal to the list the caller
+	// typed. Checked before ffprobe so a malformed request fails on its own
+	// terms rather than on a missing binary.
+	if params.Overwrite && len(params.BookIDs) == 0 {
+		return fmt.Errorf("refusing overwrite without bookIds: overwrite REPLACES stored chapter " +
+			"timelines and is a per-book repair, not a library-wide pass — pass an explicit bookIds list")
+	}
+	if params.Overwrite && !params.Apply {
+		_ = reporter.Log(slog.LevelInfo, "overwrite requested on a DRY RUN — reporting what would be replaced, writing nothing")
 	}
 
 	// ── refuse to run without ffprobe ────────────────────────────────────────
@@ -346,9 +399,18 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		// Already extracted — idempotent, the same rule the scanner applies.
 		// Checked BEFORE the file read so a re-run over a mostly-done library
 		// costs one Pebble get per book and nothing more.
+		//
+		// Under Overwrite the book is processed anyway and counted as a
+		// replacement, which is the whole point of that parameter: a stored
+		// timeline can be WRONG, and every other reader in this codebase tests
+		// only that it is non-empty.
+		replacing := false
 		if stored, err := persister.GetChaptersForBook(id); err == nil && len(stored) > 0 {
-			c.skipHasStored.Add(1)
-			return nil
+			if !params.Overwrite {
+				c.skipHasStored.Add(1)
+				return nil
+			}
+			replacing = true
 		}
 
 		files, ferr := store.GetBookFiles(id)
@@ -413,8 +475,15 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		}
 
 		c.chaptersWorked.Add(int64(len(chs)))
+		// replaced tracks the counter the summary reports, so it follows the
+		// same verb: in a dry run it counts what WOULD be replaced, and on a
+		// live run only what actually was. Counting it back at the stored-check
+		// would inflate it with books whose probe later failed.
 		if !params.Apply {
 			c.wouldPersist.Add(1)
+			if replacing {
+				c.replaced.Add(1)
+			}
 			return nil
 		}
 		if params.Limit > 0 && priorPersisted+c.persisted.Load() >= int64(params.Limit) {
@@ -434,6 +503,9 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 			return nil
 		}
 		c.persisted.Add(1)
+		if replacing {
+			c.replaced.Add(1)
+		}
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency:   runtime.NumCPU(),
@@ -449,12 +521,16 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		// MERGED into the resumed run's params, so anything omitted here comes
 		// back as its zero value: dropping Apply would silently downgrade a
 		// live run to a dry run on restart, and dropping BookIDs would widen a
-		// cohort run to the whole library.
+		// cohort run to the whole library. Dropping Overwrite would turn the
+		// unfinished half of a repair run back into a skip-if-present pass,
+		// leaving the books past the watermark holding the bad timeline the run
+		// was started to replace — and reporting success.
 		CheckpointStateFn: func(ctx context.Context, watermark int) error {
 			return reporter.Checkpoint(chaptersBackfillParams{
 				Apply:            params.Apply,
 				Limit:            params.Limit,
 				BookIDs:          params.BookIDs,
+				Overwrite:        params.Overwrite,
 				ResumeFrom:       watermark,
 				AlreadyPersisted: int(priorPersisted + c.persisted.Load()),
 			})
