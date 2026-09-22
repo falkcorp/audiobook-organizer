@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.131.2
+// version: 1.132.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-19
+// last-edited: 2026-09-22
 
 package database
 
@@ -221,6 +221,7 @@ type MockStore struct {
 
 	// Metadata
 	GetMetadataFieldStatesFunc   func(bookID string) ([]MetadataFieldState, error)
+	GetChaptersForBookFunc       func(bookID string) ([]Chapter, error)
 	UpsertMetadataFieldStateFunc func(state *MetadataFieldState) error
 	DeleteMetadataFieldStateFunc func(bookID, field string) error
 
@@ -689,6 +690,13 @@ func (m *MockStore) Close() error {
 func (m *MockStore) GetMetadataFieldStates(bookID string) ([]MetadataFieldState, error) {
 	if m.GetMetadataFieldStatesFunc != nil {
 		return m.GetMetadataFieldStatesFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetChaptersForBook(bookID string) ([]Chapter, error) {
+	if m.GetChaptersForBookFunc != nil {
+		return m.GetChaptersForBookFunc(bookID)
 	}
 	return nil, nil
 }

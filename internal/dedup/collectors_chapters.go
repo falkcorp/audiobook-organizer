@@ -1,5 +1,5 @@
 // file: internal/dedup/collectors_chapters.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b4e1f78-25ac-4d93-9e07-3c8f1ab60d24
 // last-edited: 2026-09-22
 
@@ -22,6 +22,11 @@ type ChapterStore interface {
 
 // ChapterCollectorConfig tunes the comparison.
 type ChapterCollectorConfig struct {
+	// Enabled gates the signal entirely. FALSE by default: the confidence
+	// range feeds a noisy-OR, so turning it on shifts band assignments across
+	// the whole library, and review-apply may act on a book that moves up a
+	// band. An operator enables it, runs one dedup.rescore, and compares.
+	Enabled bool
 	// BoundaryToleranceSec is how far two corresponding chapter boundaries may
 	// differ and still count as the same table. 1.0s by default: the same
 	// recording encoded twice lands well inside a second, while genuinely

@@ -1,7 +1,7 @@
 // file: internal/dedup/unified/score.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: e12361d1-96ea-4301-919d-3fdb51e12f8f
-// last-edited: 2026-07-11
+// last-edited: 2026-09-22
 
 // Package unified provides the scoring core for the unified deduplication
 // pipeline (SPEC 1, fable5). It is intentionally pure: no I/O, no storage

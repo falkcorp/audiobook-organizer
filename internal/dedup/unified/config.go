@@ -1,7 +1,7 @@
 // file: internal/dedup/unified/config.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: d8a383db-5083-4257-be54-686ac2e72d32
-// last-edited: 2026-09-02
+// last-edited: 2026-09-22
 
 package unified
 

@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.103.0
+// version: 2.104.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-19
+// last-edited: 2026-09-22
 
 package database
 
@@ -68,10 +68,29 @@ type catalogStore interface {
 type mediaStore interface {
 	BookFileStore
 	BookSegmentStore
+	ChapterReader
 	PlaylistStore
 	UserPlaylistStore
 	PathHistoryStore
 	PlaybackStore
+}
+
+// ChapterReader reads the per-book chapter table ("chapters:<bookID>").
+//
+// READ ONLY, and on Store deliberately. The table is written by the scanner and
+// the chapters backfill, which hold the concrete store; the reason this is on
+// the Store interface at all is that dedup now scores chapter structure
+// (SigChapterStructure), and production wraps the store in the Bleve
+// indexedStore decorator. A capability assertion for a method that is NOT on
+// this interface silently misses through that decorator -- the shape that hid
+// LiveBookIDsAtPath in #3335 -- and a dedup signal that never fires is
+// indistinguishable from one that found nothing. Declaring it here makes a
+// decorator that forgets to forward it fail the BUILD instead.
+//
+// Writes stay off Store on purpose: nothing needs to write chapters through
+// this interface, and widening it further would be surface for no caller.
+type ChapterReader interface {
+	GetChaptersForBook(bookID string) ([]Chapter, error)
 }
 
 // accountStore is identity and authorisation.
