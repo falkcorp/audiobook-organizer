@@ -16003,6 +16003,68 @@ func (_c *MockStore_GetBooksByWorkID_Call) RunAndReturn(run func(workID string) 
 	return _c
 }
 
+// GetChaptersForBook provides a mock function for the type MockStore
+func (_mock *MockStore) GetChaptersForBook(bookID string) ([]database.Chapter, error) {
+	ret := _mock.Called(bookID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetChaptersForBook")
+	}
+
+	var r0 []database.Chapter
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]database.Chapter, error)); ok {
+		return returnFunc(bookID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []database.Chapter); ok {
+		r0 = returnFunc(bookID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.Chapter)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(bookID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetChaptersForBook_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetChaptersForBook'
+type MockStore_GetChaptersForBook_Call struct {
+	*mock.Call
+}
+
+// GetChaptersForBook is a helper method to define mock.On call
+//   - bookID string
+func (_e *MockStore_Expecter) GetChaptersForBook(bookID any) *MockStore_GetChaptersForBook_Call {
+	return &MockStore_GetChaptersForBook_Call{Call: _e.mock.On("GetChaptersForBook", bookID)}
+}
+
+func (_c *MockStore_GetChaptersForBook_Call) Run(run func(bookID string)) *MockStore_GetChaptersForBook_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetChaptersForBook_Call) Return(chapters []database.Chapter, err error) *MockStore_GetChaptersForBook_Call {
+	_c.Call.Return(chapters, err)
+	return _c
+}
+
+func (_c *MockStore_GetChaptersForBook_Call) RunAndReturn(run func(bookID string) ([]database.Chapter, error)) *MockStore_GetChaptersForBook_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetCollection provides a mock function for the type MockStore
 func (_mock *MockStore) GetCollection(id string) (*database.Collection, error) {
 	ret := _mock.Called(id)

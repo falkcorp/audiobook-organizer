@@ -1,7 +1,7 @@
 // file: internal/dedup/rescore.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 8b1d4f27-6a90-4c3e-9d21-0f5a7c2e8b64
-// last-edited: 2026-09-19
+// last-edited: 2026-09-22
 
 // Package dedup — per-pair signal gather shared by the operational unified scan
 // and the dedup.rescore-labeled-examples op (ScorePairsForBook).
@@ -58,6 +58,7 @@ type pairSignalBatches struct {
 	embeddingMap map[pairKey]float64
 	embCfg       EmbeddingCollectorConfig
 	fuzCfg       MetaFuzzyConfig
+	chapCfg      ChapterCollectorConfig
 	authorName   string
 }
 
@@ -123,6 +124,21 @@ func (de *Engine) collectPairSignals(book *database.Book, candID string, b pairS
 	// Metadata-fuzzy (per-candidate by design — takes candIDs param).
 	if sigs, err := CollectMetaFuzzy(de.bookStore, book, b.authorName, []string{candID}, b.fuzCfg); err == nil {
 		signals = append(signals, sigs...)
+	}
+
+	// Chapter structure (per-candidate by design, like metadata-fuzzy above).
+	//
+	// OFF unless dedup.signals.chapter_structure.enabled is set. The weight
+	// (0.85–0.93) feeds a noisy-OR, so switching it on moves band assignments
+	// library-wide; it ships disabled so an operator can run one
+	// dedup.rescore and compare before it influences anything.
+	//
+	// A read failure is swallowed exactly as CollectMetaFuzzy's is: one
+	// unavailable chapter table must not drop the pair's other evidence.
+	if b.chapCfg.Enabled {
+		if sigs, err := CollectChapterStructure(context.Background(), de.bookStore, book.ID, []string{candID}, b.chapCfg); err == nil {
+			signals = append(signals, sigs...)
+		}
 	}
 
 	// AcoustID signals (pre-computed).
