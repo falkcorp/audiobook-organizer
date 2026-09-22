@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 28adbfaa-a61f-4e34-ae2b-516e70cf775f
-// last-edited: 2026-09-19
+// last-edited: 2026-09-22
 
 package acoustid
 
@@ -703,4 +703,66 @@ func TestWindowBackfill_PausesWhileLibraryScanRuns(t *testing.T) {
 	_, err = e.run(ctx, nil, WindowBackfillParams{Live: true})
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Empty(t, e.windows(id2))
+}
+
+// A row with no duration used to be declined outright as unknown_duration --
+// the planner refused to open a file over a number it would get by opening
+// that file. It is measured instead, with a header read.
+func TestWindowBackfill_UnknownDurationIsProbedNotDeclined(t *testing.T) {
+	e := newWBEnv(t)
+	_, id := e.addFile("", "a/nodur.m4b", true, 0)
+
+	orig := windowProbeDuration
+	t.Cleanup(func() { windowProbeDuration = orig })
+	var probedPath string
+	windowProbeDuration = func(_ context.Context, path string) (float64, error) {
+		probedPath = path
+		return 300, nil
+	}
+
+	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(e.lib, "a/nodur.m4b"), probedPath, "the file with no duration is the one probed")
+	require.EqualValues(t, 1, res.plan.durationProbed)
+	require.Zero(t, res.plan.durationProbeFailed)
+	require.NotEmpty(t, e.windows(id), "a probed duration makes the row eligible")
+}
+
+// A probe that cannot answer must be COUNTED, not silently folded in with rows
+// nobody tried to measure: "no duration" and "the prober is broken" are
+// different problems and the summary has to tell them apart.
+func TestWindowBackfill_DurationProbeFailureIsCounted(t *testing.T) {
+	e := newWBEnv(t)
+	_, id := e.addFile("", "a/nodur.m4b", true, 0)
+
+	orig := windowProbeDuration
+	t.Cleanup(func() { windowProbeDuration = orig })
+	windowProbeDuration = func(_ context.Context, _ string) (float64, error) {
+		return 0, errors.New("ffprobe: not on PATH")
+	}
+
+	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	require.NoError(t, err)
+	require.Zero(t, res.plan.durationProbed)
+	require.EqualValues(t, 1, res.plan.durationProbeFailed)
+	require.Empty(t, e.windows(id), "still ineligible, but now visibly so")
+}
+
+// A row that already carries a duration is never probed: the probe is a
+// subprocess per file and must not run across the whole library.
+func TestWindowBackfill_KnownDurationIsNotProbed(t *testing.T) {
+	e := newWBEnv(t)
+	_, _ = e.addFile("", "a/hasdur.m4b", true, 300)
+
+	orig := windowProbeDuration
+	t.Cleanup(func() { windowProbeDuration = orig })
+	windowProbeDuration = func(_ context.Context, path string) (float64, error) {
+		t.Errorf("probed %s, which already has a duration", path)
+		return 0, errors.New("must not be called")
+	}
+
+	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	require.NoError(t, err)
+	require.Zero(t, res.plan.durationProbed)
+	require.Zero(t, res.plan.durationProbeFailed)
 }

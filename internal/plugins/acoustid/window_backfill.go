@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
-// last-edited: 2026-09-21
+// last-edited: 2026-09-22
 
 package acoustid
 
@@ -331,6 +331,13 @@ type windowPlan struct {
 	excluded    map[string]int       // reason -> count
 	rows        int
 	missingRows int
+	// durationProbed counts rows whose duration was unknown in the database
+	// and was measured here instead; durationProbeFailed counts the ones the
+	// probe could not answer, which stay ineligible as unknown_duration.
+	// Reported separately because "no duration" and "the prober is broken"
+	// are different problems and must not look alike in the summary.
+	durationProbed      int64
+	durationProbeFailed int64
 	// calibration is a few files under libroot whose windows are current,
 	// offered to remote workers by hello for their parity gate.
 	calibration []windowItem
@@ -702,6 +709,7 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 	}
 	itunes := newITunesMatcher(iTunesRoots())
 	rows := make([]windowPlanRow, len(cores))
+	var durProbed, durProbeFailed atomic.Int64
 	var chunks [][2]int
 	for lo := 0; lo < len(cores); lo += windowPlanChunk {
 		chunks = append(chunks, [2]int{lo, min(lo+windowPlanChunk, len(cores))})
@@ -711,7 +719,7 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			r, perr := p.planOne(cores[i], itunes, versions)
+			r, perr := p.planOne(ctx, cores[i], itunes, versions, &durProbed, &durProbeFailed)
 			if perr != nil {
 				// A store read failure on one file must not read as "needs
 				// work" (it would recompute) or "current" (it would skip);
@@ -735,6 +743,8 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 	// Books with at least one missing tracked row are the unmatched books.
 	unmatched := make(map[string]bool)
 	plan := &windowPlan{excluded: map[string]int{}, rows: len(cores)}
+	plan.durationProbed = durProbed.Load()
+	plan.durationProbeFailed = durProbeFailed.Load()
 	libRoots := pathutil.PathVars(config.AppConfig.RootDir)
 	for i, r := range rows {
 		if r.missing {
@@ -823,7 +833,7 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 }
 
 // planOne classifies one tracked row.
-func (p *Plugin) planOne(f database.BookFileCore, itunes *iTunesMatcher, versions *fingerprint.ToolVersionInfo) (windowPlanRow, error) {
+func (p *Plugin) planOne(ctx context.Context, f database.BookFileCore, itunes *iTunesMatcher, versions *fingerprint.ToolVersionInfo, probed, probeFailed *atomic.Int64) (windowPlanRow, error) {
 	switch {
 	case f.FilePath == "":
 		return windowPlanRow{excluded: "empty_path"}, nil
@@ -851,6 +861,32 @@ func (p *Plugin) planOne(f database.BookFileCore, itunes *iTunesMatcher, version
 	if !fpcalcDecodableExtensions[ext] {
 		return windowPlanRow{present: true, excluded: "non_audio_ext"}, nil
 	}
+	dur := float64(database.NormalizeDurationSec(fi.Size(), f.Duration))
+	// A file with no duration used to be declined outright: remoteEligible
+	// answers "unknown_duration" because PlanWindows cannot place a window
+	// without one, and its comment notes a worker cannot ffprobe for the
+	// server. True -- but the SERVER can, and this is a HEADER read, not a
+	// decode: `ffprobe -show_entries format=duration` (mediainfo first), which
+	// is permitted here where decoding is not. Declining to open a file over a
+	// number obtained by opening that file left 3,121 rows deferred forever.
+	//
+	// Done here rather than in remoteEligible deliberately: that function is
+	// memoized per item under the hub lock and documented "string-work only,
+	// no I/O". planOne already stats every row, and runs on a bounded pool
+	// (windowPlanWorkers), so the probe inherits that ceiling.
+	if dur <= 0 && f.AcoustIDFingerprintDurationSec <= 0 {
+		secs, perr := windowProbeDuration(ctx, f.FilePath)
+		switch {
+		case perr == nil && secs > 0:
+			dur = secs
+			probed.Add(1)
+		default:
+			// Left at zero: the row stays ineligible as unknown_duration, but
+			// it is now counted as a FAILED probe rather than silently
+			// indistinguishable from a row nobody tried to measure.
+			probeFailed.Add(1)
+		}
+	}
 	it := windowItem{
 		FileID:     f.ID,
 		BookID:     f.BookID,
@@ -859,7 +895,7 @@ func (p *Plugin) planOne(f database.BookFileCore, itunes *iTunesMatcher, version
 		// Pre-CONS-18 rows can hold milliseconds in this seconds field; the
 		// write chokepoint repairs only rows that carry FileSize, so judge by
 		// the size on disk. A wrong duration moves every window past EOF.
-		Duration:  float64(database.NormalizeDurationSec(fi.Size(), f.Duration)),
+		Duration:  dur,
 		Size:      fi.Size(),
 		MtimeUnix: fi.ModTime().Unix(),
 	}
@@ -1056,8 +1092,8 @@ func (m *iTunesMatcher) under(path string) bool {
 }
 
 func windowPlanSummary(plan *windowPlan) string {
-	return fmt.Sprintf("rows=%d missing_rows=%d | T0 eligible=%d current=%d tombstoned=%d todo=%d | T1 eligible=%d current=%d tombstoned=%d todo=%d | excluded=%v",
-		plan.rows, plan.missingRows,
+	return fmt.Sprintf("rows=%d missing_rows=%d duration_probed=%d duration_probe_failed=%d | T0 eligible=%d current=%d tombstoned=%d todo=%d | T1 eligible=%d current=%d tombstoned=%d todo=%d | excluded=%v",
+		plan.rows, plan.missingRows, plan.durationProbed, plan.durationProbeFailed,
 		plan.eligible[0], plan.current[0], plan.tombstoned[0], len(plan.tiers[0]),
 		plan.eligible[1], plan.current[1], plan.tombstoned[1], len(plan.tiers[1]),
 		plan.excluded)
@@ -1083,8 +1119,14 @@ var windowDurableErrors = []error{
 	fingerprint.ErrFingerprintTooShort,
 }
 
-// windowProbeDuration is the ffprobe fallback of ChooseDuration. A variable
-// so tests do not need ffprobe.
+// windowProbeDuration is the ffprobe fallback of ChooseDuration, used by
+// planOne when a row carries no duration. A variable so tests do not need
+// ffprobe on PATH.
+//
+// ProbeDurationSeconds prefers mediainfo and falls back to
+// `ffprobe -show_entries format=duration`: both read the container HEADER and
+// neither decodes audio, which is what makes this safe to run server-side
+// where decoding is not.
 var windowProbeDuration = func(ctx context.Context, path string) (float64, error) {
 	return audioutil.ProbeDurationSeconds(ctx, "", path)
 }
