@@ -1,5 +1,5 @@
 // file: internal/dedup/store.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
 // last-edited: 2026-09-22
 
@@ -76,6 +76,15 @@ type dedupBookReader interface {
 	// DedupSeries (SeriesID) write user-lockable columns on the WINNER and go
 	// through database.LoadFieldLocks -- the guard every metadata writer shares.
 	database.MetadataFieldStateReader
+
+	// The per-book chapter table, read by the chapter-structure signal
+	// (unified.SigChapterStructure). Embedded HERE rather than as its own
+	// entry on Store: chapters are a book read, and Store already declares
+	// eight entries, which is interfacebloat's limit. Its safety comes from
+	// the other side -- GetChaptersForBook is on database.Store, so the Bleve
+	// indexedStore decorator that wraps the store in production must carry it
+	// or fail to build.
+	database.ChapterReader
 }
 
 type dedupBookWriter interface {
@@ -153,19 +162,5 @@ type Store interface {
 	dedupSeriesStore
 	dedupDuplicateStore
 	dedupSplitMergeStore
-	dedupChapterReader
 }
 
-// dedupChapterReader is the per-book chapter table, read by the chapter
-// structure signal (unified.SigChapterStructure).
-//
-// Narrow on purpose, like every other group here -- but note that its safety
-// comes from the OTHER side: GetChaptersForBook is declared on
-// database.ChapterReader and therefore on database.Store, so the Bleve
-// indexedStore decorator that wraps the store in production must carry it or
-// fail to build. Declaring it only here would have left a decorator free to
-// drop it, and a dedup signal that silently never fires is indistinguishable
-// from one that found nothing.
-type dedupChapterReader interface {
-	GetChaptersForBook(bookID string) ([]database.Chapter, error)
-}
