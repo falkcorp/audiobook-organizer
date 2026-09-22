@@ -379,23 +379,25 @@ func TestWindowBackfill_TombstoneSkipsUntilTheFileChanges(t *testing.T) {
 	require.Greater(t, len(e.invoked()), n, "a changed file is retried despite its tombstone")
 }
 
-func TestWindowBackfill_ITunesTreeExcluded(t *testing.T) {
+// The frozen iTunes tree is fingerprinted like anything else. The standing
+// "hands off iTunes" rule is about MUTATION; this op only ever reads, and
+// excluding the tree denied an acoustic signal to ~19% of the corpus.
+func TestWindowBackfill_ITunesTreeIsFingerprinted(t *testing.T) {
 	e := newWBEnv(t)
 	// A book with a present file and a missing file both under books/itunes/:
-	// neither is read, and the missing one does not make the book unmatched.
+	// the present one is read, and the missing one counts as missing like any
+	// other row rather than being silently written off.
 	ib, itunesFile := e.addFile("", "books/itunes/iTunes Media/Audiobooks/a.m4b", true, 300)
 	_, _ = e.addFile(ib, "books/itunes/iTunes Media/Audiobooks/gone.m4b", false, 300)
 	_, _ = e.addFile("", "books/audiobook-organizer/b.m4b", true, 300)
 
 	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
 	require.NoError(t, err)
-	require.Equal(t, 2, res.plan.excluded["itunes_tree"])
-	require.Zero(t, res.plan.missingRows)
-	for _, p := range e.invoked() {
-		require.NotContains(t, p, "books/itunes/")
-	}
-	require.Empty(t, e.windows(itunesFile))
-	require.EqualValues(t, 1, res.written)
+	require.Zero(t, res.plan.excluded["itunes_tree"], "no row is excluded for being under the iTunes tree")
+	require.EqualValues(t, 1, res.plan.missingRows)
+	require.Contains(t, e.invoked(), filepath.Join(e.lib, "books/itunes/iTunes Media/Audiobooks/a.m4b"))
+	require.NotEmpty(t, e.windows(itunesFile), "the iTunes file gets windows like any other")
+	require.EqualValues(t, 2, res.written)
 }
 
 func TestWindowBackfill_MissingFilesSkipped(t *testing.T) {
@@ -622,7 +624,12 @@ func TestWindowBackfill_MovedRowWriteFailureIsAWriteError(t *testing.T) {
 	require.Zero(t, tally.rowGone.Load())
 }
 
-func TestWindowBackfill_ITunesExclusionIgnoresCaseAndFollowsSymlinks(t *testing.T) {
+// A path that reaches the iTunes tree by an upper-case spelling or through a
+// symlink is fingerprinted too. This used to assert the mirror image -- that
+// both were excluded -- and the case/symlink handling existed only to make the
+// exclusion airtight. Now that nothing is excluded, what matters is that
+// neither spelling is accidentally skipped.
+func TestWindowBackfill_ITunesTreeFingerprintedThroughCaseAndSymlinks(t *testing.T) {
 	e := newWBEnv(t)
 	_, upper := e.addFile("", "Books/iTunes/iTunes Media/a.m4b", true, 300)
 	// A symlinked directory elsewhere in the library that points into the tree.
@@ -636,10 +643,9 @@ func TestWindowBackfill_ITunesExclusionIgnoresCaseAndFollowsSymlinks(t *testing.
 
 	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
 	require.NoError(t, err)
-	require.Equal(t, 3, res.plan.excluded["itunes_tree"])
-	require.Empty(t, e.windows(upper))
-	require.Empty(t, e.windows(link.ID))
-	require.Equal(t, []string{filepath.Join(e.lib, "books/audiobook-organizer/c.m4b")}, e.invoked())
+	require.Zero(t, res.plan.excluded["itunes_tree"])
+	require.NotEmpty(t, e.windows(upper), "an upper-case iTunes path is still fingerprinted")
+	require.NotEmpty(t, e.windows(link.ID), "a symlink into the tree is still fingerprinted")
 }
 
 // MEDIUM: a dead mount makes every file an I/O failure. The run must stop
