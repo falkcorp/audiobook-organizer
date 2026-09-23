@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_split_joined_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9882c157-c994-478a-89fd-0568ba93a56c
 // last-edited: 2026-09-23
 
@@ -209,4 +209,15 @@ func TestSplitJoinedNarrators_AppliesCreditRulesPerBook(t *testing.T) {
 	author, err := s.GetNarratorByName("Adrian Tchaikovsky")
 	require.NoError(t, err)
 	require.Nil(t, author, "the author must not be minted as a narrator")
+}
+
+func TestSplitJoinedNarrators_RunPersistsReportAsResult(t *testing.T) {
+	f := newSplitJoinedFixture(t)
+	p := &Plugin{deps: fakeDeps{store: f.s}}
+	rep := &resultReporter{}
+	require.NoError(t, p.runSplitJoinedNarrators(context.Background(), nil, rep))
+	got, ok := rep.result.(splitJoinedReport)
+	require.True(t, ok, "the run must persist its report, got %T", rep.result)
+	require.Equal(t, 3, got.BooksAffected)
+	require.Len(t, got.BooksPreview, 3, "the dry-run preview is what the owner reads from the result")
 }

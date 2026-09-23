@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_split_joined.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b580d009-3cf0-45d9-bf1b-18f6e1f6c33d
 // last-edited: 2026-09-23
 
@@ -173,7 +173,14 @@ func (p *Plugin) runSplitJoinedNarrators(ctx context.Context, rawParams json.Raw
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
-	_, err := p.splitJoinedNarrators(ctx, params, reporter)
+	report, err := p.splitJoinedNarrators(ctx, params, reporter)
+	// Persist the report even when the run failed: a partial apply's counts
+	// and the dry run's per-book preview are what the owner reviews, and until
+	// 2026-09-23 this discarded them, so GET /operations/:id/result had
+	// nothing and the preview existed only in memory.
+	if serr := registry.ReporterSetResult(reporter, report); serr != nil {
+		reporter.Logger().Warn("split-joined-narrators: report not persisted", "err", serr)
+	}
 	return err
 }
 
