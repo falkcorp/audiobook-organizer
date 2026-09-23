@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reliability_fixes_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8f1c2a3b-4d5e-6f70-8192-a3b4c5d6e7f8
-// last-edited: 2026-09-02
+// last-edited: 2026-09-22
 
 package registry_test
 
@@ -121,10 +121,11 @@ func TestAbandoned_TerminalStatusAllowsReenqueue(t *testing.T) {
 	}
 
 	// Cancel op1; after AbandonGrace it is classified abandoned and must get a
-	// terminal status (interrupted_dropped for ResumeDrop) so it leaves the
-	// active index.
+	// terminal status so it leaves the active index. A deliberate Cancel is
+	// "canceled" however slowly the Run unwinds -- never a resumable
+	// interrupted_* status, which would bring a killed op back on next boot.
 	_ = r.Cancel(op1)
-	awaitStatus(t, store, op1, "interrupted_dropped", 5*time.Second)
+	awaitStatus(t, store, op1, "canceled", 5*time.Second)
 
 	// Re-enqueue: the ConcurrencyKey dedupe must NOT return the zombie's ID.
 	op2, err := r.EnqueueOp(ctx, "test.abandoned-reenqueue", nil)
@@ -207,4 +208,36 @@ func TestCancel_OpQueuedInWorkerChannelNeverRuns(t *testing.T) {
 	if got := store.statusOf(targetID); got != "canceled" {
 		t.Errorf("expected target status to remain canceled, got %q", got)
 	}
+}
+
+// TestAbandoned_WatchdogKillIsNotResumable is the 2026-09-22 production shape:
+// a ResumeRestart op (library.scan) went quiet inside a 14 GB copy, the
+// watchdog cancelled it, and it took 87s to unwind -- past the abandon grace.
+// The abandon path wrote interrupted_quiesced from the ResumePolicy alone, so a
+// deliberately killed op was left to resume on the next boot. A watchdog kill
+// must be "canceled" however slowly the run unwinds.
+func TestAbandoned_WatchdogKillIsNotResumable(t *testing.T) {
+	ctx := t.Context()
+	store := newFakeStore()
+	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+		WatchdogInterval: 50 * time.Millisecond,
+		AbandonedCap:     10,
+		AbandonGrace:     100 * time.Millisecond,
+	})
+
+	release := make(chan struct{})
+	defer close(release)
+	def := makeValidDef("test.watchdog-abandoned")
+	def.ResumePolicy = registry.ResumeRestart
+	def.ProgressTimeout = 200 * time.Millisecond
+	def.Run = func(_ context.Context, _ json.RawMessage, rep registry.Reporter) error {
+		rep.UpdateProgress(1, 2, "one item, then silence")
+		<-release // ignore ctx: a run that unwinds slower than the grace
+		return nil
+	}
+	_ = r.RegisterOp(def)
+	r.Start(ctx)
+
+	id, _ := r.EnqueueOp(ctx, def.ID, nil)
+	awaitStatus(t, store, id, "canceled", 5*time.Second)
 }

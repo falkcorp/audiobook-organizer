@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.20.0
+// version: 2.21.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-19
+// last-edited: 2026-09-22
 
 package registry
 
@@ -471,13 +471,27 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			// index. Without this the row stayed "running" forever, and the
 			// ConcurrencyKey enqueue-dedupe in EnqueueOp kept returning this
 			// zombie op's ID for every future enqueue of the def — silently
-			// disabling the op type until restart. Mirror Shutdown's semantics:
-			// interrupted_* per the def's ResumePolicy. Nothing else writes this
+			// disabling the op type until restart. Nothing else writes this
 			// row's status afterwards: the runaway goroutine's eventual return
 			// only decrements the abandoned counter (below).
+			//
+			// The status comes from finalStatusForCanceledRun, the same single
+			// decision point the non-abandoned path uses. This used to write
+			// interruptedStatus(ResumePolicy) unconditionally, which ignored
+			// userCanceled: a run the WATCHDOG killed, or a user canceled, that
+			// merely took longer than the grace to unwind was recorded as
+			// interrupted_quiesced and resumed on the next boot — the stuck ->
+			// cancel -> resume loop finalStatusForCanceledRun exists to prevent.
+			// Hit on 2026-09-22: library.scan 01M33DPQG1W005NJ246SEZA5DJ was
+			// watchdog-killed inside a 14 GB backup copy, returned 87s later,
+			// and was left resumable. Whether a run is abandoned says how
+			// slowly it unwound, not why it was stopped.
 			abandonedAt := time.Now().UTC()
-			abandonStatus := interruptedStatus(qr.resumePolicy)
+			abandonStatus, reason := r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
 			abandonMsg := "abandoned: op goroutine did not exit within grace after context cancellation"
+			if reason != nil {
+				abandonMsg += "; " + *reason
+			}
 			if err := r.store.UpdateOperationV2Status(qr.opID, abandonStatus, nil, &abandonedAt, &abandonMsg); err != nil {
 				r.logger.Warn("registry: failed to mark abandoned op interrupted", "op_id", qr.opID, "error", err)
 			}

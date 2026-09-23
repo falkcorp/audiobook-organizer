@@ -1,7 +1,7 @@
 // file: internal/operations/registry/terminal_events_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7e3d9c1a-2b46-4f80-9c5e-1a7f2b3c4d5e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-22
 
 package registry_test
 
@@ -137,8 +137,9 @@ func TestTerminalEvent_CanceledRunning(t *testing.T) {
 	}
 }
 
-// TestTerminalEvent_Abandoned asserts op.terminal fires with an interrupted_*
-// status when a run ignores cancellation and is classified as abandoned.
+// TestTerminalEvent_Abandoned asserts op.terminal fires when a run ignores
+// cancellation and is abandoned. The status follows WHY the run was stopped,
+// not how slowly it unwound: a Registry.Cancel is "canceled".
 func TestTerminalEvent_Abandoned(t *testing.T) {
 	ctx := t.Context()
 
@@ -153,7 +154,7 @@ func TestTerminalEvent_Abandoned(t *testing.T) {
 
 	release := make(chan struct{})
 	started := make(chan struct{})
-	def := makeValidDef("test.term-abandoned") // ResumeDrop → interrupted_dropped
+	def := makeValidDef("test.term-abandoned")
 	def.Run = func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error {
 		close(started)
 		<-release // ignore ctx: forces the abandonment path
@@ -170,9 +171,9 @@ func TestTerminalEvent_Abandoned(t *testing.T) {
 	}
 	_ = r.Cancel(opID)
 
-	awaitStatus(t, store, opID, "interrupted_dropped", 5*time.Second)
-	if got := bus.waitTerminal(t, opID, 5*time.Second); got != "interrupted_dropped" {
-		t.Errorf("op.terminal status: got %q want interrupted_dropped", got)
+	awaitStatus(t, store, opID, "canceled", 5*time.Second)
+	if got := bus.waitTerminal(t, opID, 5*time.Second); got != "canceled" {
+		t.Errorf("op.terminal status: got %q want canceled", got)
 	}
 	close(release)
 }

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/retry_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c2e9f14-5b3a-4d86-a1f0-3e8b6c9d2a47
-// last-edited: 2026-09-12
+// last-edited: 2026-09-22
 
 package registry_test
 
@@ -473,10 +473,16 @@ func TestRetryInterrupted_ConcurrentEnqueueCannotSlipASecondRunIn(t *testing.T) 
 	}
 }
 
-// While a watchdog-abandoned Run of an op is still executing, Retry on that op
-// must be refused: re-queuing it would start a second Run of the same op id
-// next to the first. Once the runaway goroutine returns, Retry is accepted and
-// the op runs again under the same id.
+// While an abandoned Run of an op is still executing, Retry on that op must be
+// refused: re-queuing it would start a second Run of the same op id next to
+// the first. Once the runaway goroutine returns, Retry is accepted and the op
+// runs again under the same id.
+//
+// The abandoned row is produced by a scan stand-down quiesce, the one
+// non-shutdown path that legitimately leaves an abandoned run RESUMABLE. This
+// test used to get there with Registry.Cancel, which only worked because the
+// abandon path ignored userCanceled and recorded a deliberate cancel as
+// interrupted -- the bug fixed alongside this rewrite.
 //
 // Mutation check: drop the abandonedAlive refusal in RetryInterrupted and the
 // first Retry is accepted while the first Run is still blocked.
@@ -491,9 +497,9 @@ func TestRetryInterrupted_RefusesWhileAnAbandonedRunIsStillExecuting(t *testing.
 	release := make(chan struct{})
 	started := make(chan struct{})
 	var calls atomic.Int32
-	def := makeValidDef("test.retry-abandoned")
+	def := makeValidDef("library.scan")
 	def.Plugin = "retry-abandoned-plugin"
-	def.ResumePolicy = registry.ResumeDrop
+	def.ResumePolicy = registry.ResumeRestart
 	def.Run = func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error {
 		if calls.Add(1) == 1 {
 			close(started)
@@ -523,23 +529,40 @@ func TestRetryInterrupted_RefusesWhileAnAbandonedRunIsStillExecuting(t *testing.
 	case <-time.After(5 * time.Second):
 		t.Fatal("first Run did not start")
 	}
-	_ = r.Cancel(id)
-	// The watchdog marks the run abandoned-but-alive before it writes this
-	// status, so once the status is visible the guard is armed.
-	awaitStatus(t, store, id, "interrupted_dropped", 5*time.Second)
+	// A maintenance op stands the scan down. The Run ignores ctx, so it is
+	// abandoned after AbandonGrace while the holder waits for it to park.
+	type acquireResult struct {
+		release func()
+		err     error
+	}
+	acquired := make(chan acquireResult, 1)
+	go func() {
+		rel, aerr := r.AcquireScanStandDown(ctx, "holder-op", "test")
+		acquired <- acquireResult{rel, aerr}
+	}()
+	// The run is marked abandoned-but-alive before this status is written, so
+	// once the status is visible the guard is armed.
+	awaitStatus(t, store, id, "interrupted_quiesced", 5*time.Second)
 
 	err = r.RetryInterrupted(ctx, id, "alice")
 	if !errors.Is(err, registry.ErrOpActive) {
 		t.Fatalf("err = %v, want ErrOpActive while the abandoned Run is still executing", err)
 	}
-	if got := store.statusOf(id); got != "interrupted_dropped" {
+	if got := store.statusOf(id); got != "interrupted_quiesced" {
 		t.Errorf("refused retry wrote status %q; must leave the row untouched", got)
 	}
 	if n := calls.Load(); n != 1 {
 		t.Errorf("Run called %d times while the first was still executing, want 1", n)
 	}
 
+	// Let the runaway Run return. The scan has now parked, so the holder's
+	// acquire completes -- and while it is still held, Gate 3.5 keeps the
+	// retried scan queued rather than running it.
 	releaseRun()
+	res := <-acquired
+	if res.err != nil {
+		t.Fatalf("stand-down acquire: %v", res.err)
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for r.AbandonedCount(def.Plugin) > 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -547,6 +570,7 @@ func TestRetryInterrupted_RefusesWhileAnAbandonedRunIsStillExecuting(t *testing.
 	if err := r.RetryInterrupted(ctx, id, "alice"); err != nil {
 		t.Fatalf("retry after the abandoned Run returned: %v", err)
 	}
+	res.release()
 	waitForRetryStatus(t, store, id, "completed")
 	if n := calls.Load(); n != 2 {
 		t.Errorf("Run called %d times in total, want 2", n)
