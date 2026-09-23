@@ -1,7 +1,7 @@
 // file: internal/database/narrator_credit_sync_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3345795a-09fa-4889-a511-4bb98ed412d5
-// last-edited: 2026-09-22
+// last-edited: 2026-09-23
 
 package database
 
@@ -110,4 +110,125 @@ func newNarratorSyncTestStore(t *testing.T) *PebbleStore {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// ---- store-level sync: every book write that changes Narrator ----
+
+
+func TestCreateBook_SyncsNarratorJunction(t *testing.T) {
+	s := newNarratorSyncTestStore(t)
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-create.m4b", Narrator: strp("Kate Reading, Michael Kramer")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Kate Reading", "Michael Kramer"}
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, want) {
+		t.Fatalf("narrators = %v, want %v", got, want)
+	}
+}
+
+func TestModifyBook_NarratorChangeReplacesJunction(t *testing.T) {
+	s := newNarratorSyncTestStore(t)
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-modify.m4b", Narrator: strp("Old Reader")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = strp("Dorrie Sacks & Jeff Hays"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Dorrie Sacks", "Jeff Hays"}
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, want) {
+		t.Fatalf("narrators = %v, want %v", got, want)
+	}
+}
+
+func TestUpdateBook_NarratorChangeReplacesJunction(t *testing.T) {
+	s := newNarratorSyncTestStore(t)
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-update.m4b", Narrator: strp("Old Reader")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := s.GetBookByID(b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh.Narrator = strp("Kate Reading; Michael Kramer")
+	if _, err := s.UpdateBook(b.ID, fresh); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Kate Reading", "Michael Kramer"}
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, want) {
+		t.Fatalf("narrators = %v, want %v", got, want)
+	}
+}
+
+// A write that leaves Narrator alone must not touch a hand-curated junction.
+func TestModifyBook_UnchangedNarratorLeavesCuratedJunction(t *testing.T) {
+	s := newNarratorSyncTestStore(t)
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-curated.m4b", Narrator: strp("Kate Reading")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra, err := s.CreateNarrator("Hand Added")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := s.GetBookNarrators(b.ID)
+	rows = append(rows, BookNarrator{NarratorID: extra.ID, Role: "co-narrator", Position: 1})
+	if err := s.SetBookNarrators(b.ID, rows); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Title = "Retitled"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Kate Reading", "Hand Added"}
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, want) {
+		t.Fatalf("narrators = %v, want %v (untouched)", got, want)
+	}
+}
+
+// Clearing the column is not "no narrators": the junction stays.
+func TestModifyBook_ClearedNarratorLeavesJunction(t *testing.T) {
+	s := newNarratorSyncTestStore(t)
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-clear.m4b", Narrator: strp("Kate Reading")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = nil; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, []string{"Kate Reading"}) {
+		t.Fatalf("narrators = %v, want unchanged", got)
+	}
+}
+
+// A write that lands after this sync resolved its credit, but before it takes
+// the stripe, owns the junction: the stale sync must not overwrite it.
+func TestNarratorSync_LaterWriteWinsTheRace(t *testing.T) {
+	s := newNarratorSyncTestStore(t)
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-race.m4b", Narrator: strp("Old Reader")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fired := false
+	narratorSyncAfterResolveHook = func(bookID string) {
+		if fired || bookID != b.ID {
+			return
+		}
+		fired = true
+		if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = strp("Later Writer"); return nil }); err != nil {
+			t.Errorf("racing write: %v", err)
+		}
+	}
+	t.Cleanup(func() { narratorSyncAfterResolveHook = nil })
+
+	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = strp("Stale Credit"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !fired {
+		t.Fatal("race hook never ran")
+	}
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, []string{"Later Writer"}) {
+		t.Fatalf("narrators = %v, want the later write's [Later Writer]", got)
+	}
 }

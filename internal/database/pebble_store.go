@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.178.0
+// version: 1.179.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-19
+// last-edited: 2026-09-23
 
 package database
 
@@ -2400,6 +2400,16 @@ func (p *PebbleStore) booksByAuthorIDForMutation(authorID int, includeTrashed bo
 }
 
 func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
+	created, err := p.createBook(book)
+	if err == nil && created != nil {
+		p.syncNarratorJunctionAfterWrite(created.ID, "", narratorOf(created))
+	}
+	return created, err
+}
+
+// createBook is CreateBook's body; it takes and releases the book stripe
+// itself, so CreateBook can run the narrator junction sync after it.
+func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	// A caller-supplied ID is written into the key verbatim, so it must be a
 	// single key segment. See ValidateBookID (book_id.go).
 	if err := ValidateBookID(book.ID); err != nil {
@@ -2576,21 +2586,29 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 // still replaces that write with its stale copy. Use ModifyBook (read and
 // write under one hold) for that.
 func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
-	unlock := p.lockBook(id)
-	defer unlock()
-	return p.updateBookLocked(id, book)
+	var before string
+	updated, err := func() (*Book, error) {
+		unlock := p.lockBook(id)
+		defer unlock()
+		return p.updateBookLockedMode(id, book, false, func(old *Book) { before = narratorOf(old) })
+	}()
+	if err == nil && updated != nil {
+		p.syncNarratorJunctionAfterWrite(id, before, narratorOf(updated))
+	}
+	return updated, err
 }
 
 // updateBookLocked is UpdateBook's body. The caller must hold id's write
 // stripe (lockBook).
 func (p *PebbleStore) updateBookLocked(id string, book *Book) (*Book, error) {
-	return p.updateBookLockedMode(id, book, false)
+	return p.updateBookLockedMode(id, book, false, nil)
 }
 
 // updateBookLockedMode is updateBookLocked; clearSig=true drops the book's
 // signature (sidecar deleted, row written without it) instead of preserving
-// it. Only ClearBookSignature passes true.
-func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool) (*Book, error) {
+// it. Only ClearBookSignature passes true. onOld, when set, is handed the
+// stored row as read under the stripe, before anything is written.
+func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool, onOld func(*Book)) (*Book, error) {
 	// Get old book to clean up old indexes
 	oldBook, err := p.GetBookByID(id)
 	if err != nil {
@@ -2598,6 +2616,9 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool)
 	}
 	if oldBook == nil {
 		return nil, fmt.Errorf("book not found")
+	}
+	if onOld != nil {
+		onOld(oldBook)
 	}
 	if updateBookAfterOldReadHook != nil {
 		updateBookAfterOldReadHook(id)
