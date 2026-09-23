@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
 // last-edited: 2026-09-22
 
@@ -132,6 +132,43 @@ type chaptersBackfillParams struct {
 	// twice-restarted run with limit=100 could write 300 books while every
 	// individual attempt honoured its cap.
 	AlreadyPersisted int `json:"alreadyPersisted,omitempty"`
+}
+
+// isDegenerateTimeline reports whether a STORED chapter list is self-evidently
+// broken, independent of the container it came from.
+//
+// Two shapes qualify, and both were measured in production on 2026-09-22:
+//
+//   - any chapter with EndSec <= StartSec. A zero-length chapter cannot be
+//     played or seeked to. 47 books carried one.
+//   - every chapter starting at 0 when there is more than one. Chapters are a
+//     partition of the running time; overlapping from zero means the list was
+//     never a timeline. 42 books carried this, the owner's included.
+//
+// Both come from the same origin: the scanner persists one chapter per FILE for
+// a multi-file book, so a book that briefly had a phantom second book_file row
+// got a two-entry list — the phantom contributing a 0 -> 0 chapter — which then
+// outlived the row. mapper.go short-circuits on len(stored) > 0, so it won.
+//
+// Deliberately NOT a general correctness check. It does not compare against the
+// container's real markers or the book duration: a timeline that is merely
+// STALE is indistinguishable from a correct one without re-probing, and this
+// predicate gates a DELETE. It answers only "is this list broken on its face",
+// so a false positive is impossible without the data already being unusable.
+func isDegenerateTimeline(stored []database.Chapter) bool {
+	if len(stored) == 0 {
+		return false
+	}
+	allStartAtZero := len(stored) > 1
+	for _, c := range stored {
+		if c.EndSec <= c.StartSec {
+			return true
+		}
+		if c.StartSec != 0 {
+			allStartAtZero = false
+		}
+	}
+	return allStartAtZero
 }
 
 // chaptersBackfillCheckpointEvery is how many completed books pass between
@@ -267,7 +304,12 @@ type chaptersBackfillCounters struct {
 	// replaced counts books whose EXISTING chapters were overwritten. Kept
 	// apart from persisted so a repair run's summary distinguishes a fill from
 	// a rewrite — the two have very different blast radii.
-	replaced       atomic.Int64
+	replaced atomic.Int64
+	// cleared counts DEGENERATE stored timelines deleted because the container
+	// had nothing to restore. Reported apart from persisted: one writes a real
+	// timeline, the other removes a broken one so live synthesis can take over.
+	cleared        atomic.Int64
+	wouldClear     atomic.Int64
 	skipNoPath     atomic.Int64
 	probeFailed    atomic.Int64
 	noChapters     atomic.Int64
@@ -285,14 +327,18 @@ type chaptersBackfillCounters struct {
 func (c *chaptersBackfillCounters) summary(apply bool) string {
 	verb := "would persist"
 	n := c.wouldPersist.Load()
+	clearVerb := "would clear"
+	cleared := c.wouldClear.Load()
 	if apply {
 		verb = "persisted"
 		n = c.persisted.Load()
+		clearVerb = "cleared"
+		cleared = c.cleared.Load()
 	}
 	return fmt.Sprintf(
-		"examined=%d %s=%d (%d chapters, %d replacing existing) | skipped: multi-file=%d already-had=%d no-path=%d | "+
+		"examined=%d %s=%d (%d chapters, %d replacing existing) | %s=%d degenerate | skipped: multi-file=%d already-had=%d no-path=%d | "+
 			"no-markers=%d probe-failed=%d persist-failed=%d | recovered-via-book-path=%d",
-		c.examined.Load(), verb, n, c.chaptersWorked.Load(), c.replaced.Load(),
+		c.examined.Load(), verb, n, c.chaptersWorked.Load(), c.replaced.Load(), clearVerb, cleared,
 		c.skipMultiFile.Load(), c.skipHasStored.Load(), c.skipNoPath.Load(),
 		c.noChapters.Load(), c.probeFailed.Load(), c.persistFailed.Load(),
 		c.recoveredViaBook.Load(),
@@ -405,12 +451,14 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		// timeline can be WRONG, and every other reader in this codebase tests
 		// only that it is non-empty.
 		replacing := false
+		storedIsDegenerate := false
 		if stored, err := persister.GetChaptersForBook(id); err == nil && len(stored) > 0 {
 			if !params.Overwrite {
 				c.skipHasStored.Add(1)
 				return nil
 			}
 			replacing = true
+			storedIsDegenerate = isDegenerateTimeline(stored)
 		}
 
 		files, ferr := store.GetBookFiles(id)
@@ -471,6 +519,38 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		}
 		if len(chs) < minPersistableChapters {
 			c.noChapters.Add(1)
+
+			// The container has nothing to restore. Without the clause below
+			// the op returns here and a DEGENERATE stored timeline survives a
+			// repair run that reported success — which is what happened on the
+			// first production cohort: 21 of 31 books were repaired and 10 kept
+			// their junk, because `overwrite` could replace a wrong timeline
+			// but never clear an unrecoverable one.
+			//
+			// Clearing is the correct end state for those. SaveChaptersForBook
+			// deletes the key on an empty slice, and mapper.go's loadChapters
+			// then falls back to live synthesis — one chapter spanning the
+			// container for a single-file book. That is strictly better than a
+			// stored zero-length chapter, which renders as an unnavigable stub.
+			//
+			// 🔴 GATED ON storedIsDegenerate, NOT merely on Overwrite. A book
+			// whose container LOST its markers since extraction still has a
+			// good stored timeline, and deleting that would destroy the only
+			// surviving copy — the "render WORSE" case this op's own Overwrite
+			// doc warns about. We clear junk; we never clear data we cannot
+			// reconstruct.
+			if params.Overwrite && storedIsDegenerate {
+				if !params.Apply {
+					c.wouldClear.Add(1)
+					return nil
+				}
+				if derr := persister.SaveChaptersForBook(id, nil); derr != nil {
+					c.persistFailed.Add(1)
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("clear chapters(%s): %v", id, derr))
+					return nil
+				}
+				c.cleared.Add(1)
+			}
 			return nil
 		}
 
