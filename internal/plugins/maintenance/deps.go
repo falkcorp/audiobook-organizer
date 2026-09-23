@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-19
+// last-edited: 2026-09-23
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -284,6 +284,11 @@ type opsSystemPreferences interface {
 type opsNarratorStore interface {
 	ListNarrators() ([]database.Narrator, error)
 	DeleteNarrator(id int) error
+	// split-joined-narrators relinks books to the people a joined name
+	// stands for.
+	CreateNarrator(name string) (*database.Narrator, error)
+	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
+	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
 }
 
 // opsPeopleStore groups the two person-record families (authors, narrators) so
