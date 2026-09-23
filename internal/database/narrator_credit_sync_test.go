@@ -1,5 +1,5 @@
 // file: internal/database/narrator_credit_sync_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 3345795a-09fa-4889-a511-4bb98ed412d5
 // last-edited: 2026-09-23
 
@@ -36,70 +36,123 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-func TestSyncBookNarratorsFromCredit_SplitsCastIntoPeople(t *testing.T) {
-	s := newNarratorSyncTestStore(t)
-	wrote, err := SyncBookNarratorsFromCredit(s, "book1", "Dorrie Sacks, Jeff Hays & Kate Reading")
-	if err != nil || !wrote {
-		t.Fatalf("SyncBookNarratorsFromCredit = %v, %v; want wrote", wrote, err)
+// createNarratedBook creates a book with the given narrator credit and,
+// when authorName is set, credits that author on it.
+func createNarratedBook(t *testing.T, s *PebbleStore, path, credit, authorName string) *Book {
+	t.Helper()
+	b := &Book{Title: "T", FilePath: path, Narrator: strp(credit)}
+	if authorName != "" {
+		a, err := s.CreateAuthor(authorName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.AuthorID = &a.ID
 	}
+	created, err := s.CreateBook(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return created
+}
+
+func TestNarratorSync_SplitsCastIntoPeople(t *testing.T) {
+	s := newNarratorSyncTestStore(t)
+	b := createNarratedBook(t, s, "/tmp/nsync-cast.m4b", "Dorrie Sacks, Jeff Hays & Kate Reading", "")
 	want := []string{"Dorrie Sacks", "Jeff Hays", "Kate Reading"}
-	if got := narratorNamesOf(t, s, "book1"); !equalStrings(got, want) {
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, want) {
 		t.Fatalf("narrators = %v, want %v", got, want)
 	}
-	rows, _ := s.GetBookNarrators("book1")
+	rows, _ := s.GetBookNarrators(b.ID)
 	if rows[0].Role != "narrator" || rows[1].Role != "co-narrator" || rows[2].Position != 2 {
 		t.Errorf("roles/positions = %+v", rows)
 	}
 }
 
-func TestSyncBookNarratorsFromCredit_KeepsSurnameFirstWhole(t *testing.T) {
+func TestNarratorSync_KeepsSurnameFirstWhole(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
-	if _, err := SyncBookNarratorsFromCredit(s, "book1", "Le Guin, Ursula"); err != nil {
-		t.Fatal(err)
-	}
-	if got := narratorNamesOf(t, s, "book1"); !equalStrings(got, []string{"Le Guin, Ursula"}) {
+	b := createNarratedBook(t, s, "/tmp/nsync-leguin.m4b", "Le Guin, Ursula", "")
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, []string{"Le Guin, Ursula"}) {
 		t.Fatalf("narrators = %v, want one person", got)
 	}
 }
 
-// Replace, not merge: a narrator the new credit drops leaves the junction.
-func TestSyncBookNarratorsFromCredit_ReplacesExisting(t *testing.T) {
+// Owner rule 2026-09-23: the book's own author is dropped from a credit that
+// also names a real narrator.
+func TestNarratorSync_DropsBookAuthorFromCredit(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
-	if _, err := SyncBookNarratorsFromCredit(s, "book1", "Old Reader, Kate Reading"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := SyncBookNarratorsFromCredit(s, "book1", "Kate Reading, Michael Kramer"); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"Kate Reading", "Michael Kramer"}
-	if got := narratorNamesOf(t, s, "book1"); !equalStrings(got, want) {
-		t.Fatalf("narrators = %v, want %v", got, want)
+	b := createNarratedBook(t, s, "/tmp/nsync-author.m4b", "Adrian Tchaikovsky, Ben Allen", "Adrian Tchaikovsky")
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, []string{"Ben Allen"}) {
+		t.Fatalf("narrators = %v, want [Ben Allen]", got)
 	}
 }
 
-func TestSyncBookNarratorsFromCredit_EmptyCreditLeavesJunction(t *testing.T) {
+// An author credited only through the book_authors join counts too.
+func TestNarratorSync_DropsJoinOnlyAuthor(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
-	if _, err := SyncBookNarratorsFromCredit(s, "book1", "Kate Reading"); err != nil {
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-joinauthor.m4b"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	wrote, err := SyncBookNarratorsFromCredit(s, "book1", "   ")
-	if err != nil || wrote {
-		t.Fatalf("empty credit: wrote=%v err=%v; want no-op", wrote, err)
+	a, err := s.CreateAuthor("Michael Anderle")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := narratorNamesOf(t, s, "book1"); !equalStrings(got, []string{"Kate Reading"}) {
-		t.Fatalf("narrators = %v, want unchanged", got)
+	if err := s.SetBookAuthors(b.ID, []BookAuthor{{AuthorID: a.ID, Role: "author"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = strp("Michael Anderle, Kate Reading"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, []string{"Kate Reading"}) {
+		t.Fatalf("narrators = %v, want [Kate Reading]", got)
 	}
 }
 
-func TestSyncBookNarratorsFromCredit_UnchangedCreditDoesNotWrite(t *testing.T) {
+// Every piece is an author: self-read or mis-tag, so the junction is left.
+func TestNarratorSync_AllAuthorsLeavesJunction(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
-	if _, err := SyncBookNarratorsFromCredit(s, "book1", "Kate Reading & Michael Kramer"); err != nil {
+	b := createNarratedBook(t, s, "/tmp/nsync-allauth.m4b", "Old Reader", "Craig Martelle")
+	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = strp("Craig Martelle"); return nil }); err != nil {
 		t.Fatal(err)
 	}
-	wrote, err := SyncBookNarratorsFromCredit(s, "book1", "Kate Reading, Michael Kramer")
-	if err != nil || wrote {
-		t.Fatalf("same people re-synced: wrote=%v err=%v; want no write", wrote, err)
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, []string{"Old Reader"}) {
+		t.Fatalf("narrators = %v, want unchanged [Old Reader]", got)
 	}
+}
+
+func TestNarratorSync_JunkCreditLeavesJunction(t *testing.T) {
+	s := newNarratorSyncTestStore(t)
+	b := createNarratedBook(t, s, "/tmp/nsync-junk.m4b", "https://kickass.to/user/Morrogoth/", "")
+	if got := narratorNamesOf(t, s, b.ID); len(got) != 0 {
+		t.Fatalf("narrators = %v, want none for a URL credit", got)
+	}
+}
+
+func TestNarratorSync_DropsTranslatorAndByPrefix(t *testing.T) {
+	s := newNarratorSyncTestStore(t)
+	b := createNarratedBook(t, s, "/tmp/nsync-roles.m4b", "By: Rick Partlow, Zachary J. Lorang - translator", "")
+	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, []string{"Rick Partlow"}) {
+		t.Fatalf("narrators = %v, want [Rick Partlow]", got)
+	}
+}
+
+// Same people in the same order: no write, so a re-save does not churn.
+func TestNarratorSync_UnchangedPeopleDoNotRewrite(t *testing.T) {
+	s := newNarratorSyncTestStore(t)
+	b := createNarratedBook(t, s, "/tmp/nsync-same.m4b", "Kate Reading & Michael Kramer", "")
+	wrote, err := setNarratorsIfChanged(s, b.ID, mustResolve(t, s, b.ID, "Kate Reading, Michael Kramer"))
+	if err != nil || wrote {
+		t.Fatalf("same people: wrote=%v err=%v; want no write", wrote, err)
+	}
+}
+
+func mustResolve(t *testing.T, s *PebbleStore, bookID, credit string) []BookNarrator {
+	t.Helper()
+	rows, _, err := resolveNarratorCredit(s, bookID, credit, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
 }
 
 func newNarratorSyncTestStore(t *testing.T) *PebbleStore {

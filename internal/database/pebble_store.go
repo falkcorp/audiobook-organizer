@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.179.0
+// version: 1.179.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-23
 
@@ -2402,7 +2402,7 @@ func (p *PebbleStore) booksByAuthorIDForMutation(authorID int, includeTrashed bo
 func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 	created, err := p.createBook(book)
 	if err == nil && created != nil {
-		p.syncNarratorJunctionAfterWrite(created.ID, "", narratorOf(created))
+		p.syncNarratorJunctionAfterWrite(created.ID, "", created)
 	}
 	return created, err
 }
@@ -2593,7 +2593,7 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 		return p.updateBookLockedMode(id, book, false, func(old *Book) { before = narratorOf(old) })
 	}()
 	if err == nil && updated != nil {
-		p.syncNarratorJunctionAfterWrite(id, before, narratorOf(updated))
+		p.syncNarratorJunctionAfterWrite(id, before, updated)
 	}
 	return updated, err
 }

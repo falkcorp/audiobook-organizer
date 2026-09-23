@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
 // last-edited: 2026-09-23
 
@@ -89,7 +89,7 @@ var ErrSkipBookWrite = errors.New("skip book write")
 func (p *PebbleStore) ModifyBook(id string, fn func(*Book) error) (*Book, error) {
 	updated, before, err := p.modifyBookLocked(id, fn)
 	if err == nil && updated != nil {
-		p.syncNarratorJunctionAfterWrite(id, before, narratorOf(updated))
+		p.syncNarratorJunctionAfterWrite(id, before, updated)
 	}
 	return updated, err
 }

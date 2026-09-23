@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_split_joined_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9882c157-c994-478a-89fd-0568ba93a56c
 // last-edited: 2026-09-23
 
@@ -126,4 +126,69 @@ func TestSplitJoinedNarrators_LimitHoldsStillLinkedJoined(t *testing.T) {
 	for _, b := range []string{f.book1, f.book2, f.book3} {
 		splitNamesOf(t, f.s, b)
 	}
+}
+
+// Owner rules 2026-09-23: the book's author is dropped from an author+narrator
+// credit; an authors-only credit and a URL are held for review, unsplit, and
+// their joined entities stay linked, so they are not deleted.
+func TestSplitJoinedNarrators_AppliesCreditRulesPerBook(t *testing.T) {
+	s := newSeriesPhantomStore(t)
+	mkN := func(name string) *database.Narrator {
+		n, err := s.CreateNarrator(name)
+		require.NoError(t, err)
+		return n
+	}
+	mkBook := func(title string, n *database.Narrator, authors ...string) string {
+		b, err := s.CreateBook(&database.Book{Title: title, FilePath: "/splitrules/" + title})
+		require.NoError(t, err)
+		var links []database.BookAuthor
+		for i, name := range authors {
+			a, err := s.CreateAuthor(name)
+			require.NoError(t, err)
+			links = append(links, database.BookAuthor{AuthorID: a.ID, Role: "author", Position: i})
+		}
+		if len(links) > 0 {
+			require.NoError(t, s.SetBookAuthors(b.ID, links))
+		}
+		require.NoError(t, s.SetBookNarrators(b.ID, []database.BookNarrator{{NarratorID: n.ID, Role: "narrator"}}))
+		return b.ID
+	}
+	mixed := mkN("Adrian Tchaikovsky, Ben Allen")
+	authorsOnly := mkN("Craig Martelle, Michael Anderle")
+	junk := mkN("https://kickass.to/user/Morrogoth/")
+	withTranslator := mkN("By: Rick Partlow, Zachary J. Lorang - translator")
+
+	bMixed := mkBook("mixed", mixed, "Adrian Tchaikovsky")
+	bAuthors := mkBook("authors", authorsOnly, "Craig Martelle", "Michael Anderle")
+	bJunk := mkBook("junk", junk)
+	bTrans := mkBook("trans", withTranslator)
+
+	p := &Plugin{deps: fakeDeps{store: s}}
+	dry, err := p.splitJoinedNarrators(context.Background(), splitJoinedNarratorsParams{}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 2, dry.HeldForReview, "authors-only and URL credits are held in the dry run")
+
+	rep, err := p.splitJoinedNarrators(context.Background(), splitJoinedNarratorsParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 2, rep.HeldForReview)
+	require.Equal(t, 2, rep.BooksRewritten)
+
+	require.Equal(t, []string{"Ben Allen"}, splitNamesOf(t, s, bMixed))
+	require.Equal(t, []string{"Rick Partlow"}, splitNamesOf(t, s, bTrans))
+	require.Equal(t, []string{"Craig Martelle, Michael Anderle"}, splitNamesOf(t, s, bAuthors), "held, unsplit")
+	require.Equal(t, []string{"https://kickass.to/user/Morrogoth/"}, splitNamesOf(t, s, bJunk), "held, unsplit")
+
+	for _, n := range []*database.Narrator{authorsOnly, junk} {
+		got, err := s.GetNarratorByID(n.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got, "a held joined narrator %q is still linked and must not be deleted", n.Name)
+	}
+	for _, n := range []*database.Narrator{mixed, withTranslator} {
+		got, err := s.GetNarratorByID(n.ID)
+		require.NoError(t, err)
+		require.Nil(t, got, "split joined narrator %q should be deleted", n.Name)
+	}
+	author, err := s.GetNarratorByName("Adrian Tchaikovsky")
+	require.NoError(t, err)
+	require.Nil(t, author, "the author must not be minted as a narrator")
 }

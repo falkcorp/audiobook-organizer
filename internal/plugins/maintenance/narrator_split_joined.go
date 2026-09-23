@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_split_joined.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b580d009-3cf0-45d9-bf1b-18f6e1f6c33d
 // last-edited: 2026-09-23
 
@@ -35,7 +35,13 @@ import (
 // book links it, is deleted.
 //
 // The splitter keeps "Surname, Given" whole, so "Le Guin, Ursula" is not a
-// joined name.
+// joined name. Each credit then goes through util.CleanNarratorCredit with the
+// BOOK's authors (owner rules 2026-09-23): translators, editors and
+// introducers are dropped, a leading "By:" is stripped, and the book's own
+// authors are dropped when a real narrator remains. A credit that is a URL, or
+// that names only the book's authors, is NOT split: that book keeps its joined
+// credit and is listed under held_for_review, since the text cannot tell a
+// self-read from a mis-tagged author.
 //
 // Guards, as in purge-empty-narrators:
 //   - DRY RUN by default. The report lists the joined names, what each splits
@@ -73,11 +79,22 @@ type joinedNarratorSample struct {
 	Books      int      `json:"books"`
 }
 
+type heldSplitCredit struct {
+	BookID string `json:"book_id"`
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
 type splitJoinedReport struct {
 	TotalNarrators int                    `json:"total_narrators"`
 	Joined         int                    `json:"joined"`
 	JoinedSample   []joinedNarratorSample `json:"joined_sample,omitempty"`
 	BooksAffected  int                    `json:"books_affected"`
+	// HeldForReview counts (book, joined credit) pairs left unsplit because
+	// the credit is junk or names only the book's authors. Reported in the
+	// dry run too.
+	HeldForReview       int                `json:"held_for_review"`
+	HeldForReviewSample []heldSplitCredit  `json:"held_for_review_sample,omitempty"`
 	// Apply only.
 	BooksRewritten   int    `json:"books_rewritten"`
 	BooksUnchanged   int    `json:"books_unchanged"`
@@ -90,9 +107,9 @@ type splitJoinedReport struct {
 }
 
 func (r splitJoinedReport) summary() string {
-	s := fmt.Sprintf("narrators=%d joined=%d books_affected=%d rewritten=%d unchanged=%d failed=%d "+
+	s := fmt.Sprintf("narrators=%d joined=%d books_affected=%d held_for_review=%d rewritten=%d unchanged=%d failed=%d "+
 		"journal_failed=%d joined_deleted=%d joined_held(still linked)=%d joined_delete_failed=%d",
-		r.TotalNarrators, r.Joined, r.BooksAffected, r.BooksRewritten, r.BooksUnchanged, r.BooksFailed,
+		r.TotalNarrators, r.Joined, r.BooksAffected, r.HeldForReview, r.BooksRewritten, r.BooksUnchanged, r.BooksFailed,
 		r.JournalFailed, r.NarratorsDeleted, r.NarratorsHeld, r.NarratorsFailed)
 	if r.Aborted != "" {
 		s += " ABORTED: " + r.Aborted
@@ -132,29 +149,33 @@ func (p *Plugin) runSplitJoinedNarrators(ctx context.Context, rawParams json.Raw
 	return err
 }
 
-// joinedNarrators maps each joined narrator's ID to the people it names.
-func joinedNarrators(narrators []database.Narrator) map[int][]string {
-	out := make(map[int][]string)
+// joinedNarrators maps each joined narrator's ID to its name: a name the
+// credit splitter breaks into two or more pieces.
+func joinedNarrators(narrators []database.Narrator) map[int]string {
+	out := make(map[int]string)
 	for _, n := range narrators {
-		var people []string
+		pieces := 0
 		for _, piece := range util.SplitCreditNames(n.Name) {
-			if piece = strings.TrimSpace(piece); piece != "" {
-				people = append(people, piece)
+			if strings.TrimSpace(piece) != "" {
+				pieces++
 			}
 		}
-		if len(people) > 1 {
-			out[n.ID] = people
+		if pieces > 1 {
+			out[n.ID] = n.Name
 		}
 	}
 	return out
 }
 
 // splitCredits returns rows with every joined credit replaced, in its
-// position, by the people it names. resolve maps a person to a narrator ID. A
-// narrator credited twice (say, once directly and once inside a cast) is kept
-// at its first position. Positions and roles are renumbered from 0. changed
-// is false when no row was joined.
-func splitCredits(bookID string, rows []database.BookNarrator, joined map[int][]string, resolve func(string) (int, error)) ([]database.BookNarrator, bool, error) {
+// position, by the narrators util.CleanNarratorCredit finds in it for this
+// book. A joined credit whose verdict is not NarratorCreditPeople is KEPT as
+// is and returned in held. resolve maps a person to a narrator ID; it is not
+// called for held credits, so a dry run can pass a resolver that only
+// records. A narrator credited twice is kept at its first position. Positions
+// and roles are renumbered from 0. changed is false when nothing was split.
+func splitCredits(bookID string, rows []database.BookNarrator, joined map[int]string, bookAuthors []string,
+	resolve func(string) (int, error)) (out []database.BookNarrator, changed bool, held []heldSplitCredit, err error) {
 	ordered := append([]database.BookNarrator(nil), rows...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Position < ordered[j].Position })
 	var ids []int
@@ -165,26 +186,31 @@ func splitCredits(bookID string, rows []database.BookNarrator, joined map[int][]
 			ids = append(ids, id)
 		}
 	}
-	changed := false
 	for _, r := range ordered {
-		people, isJoined := joined[r.NarratorID]
+		name, isJoined := joined[r.NarratorID]
 		if !isJoined {
+			add(r.NarratorID)
+			continue
+		}
+		people, verdict := util.CleanNarratorCredit(name, bookAuthors)
+		if verdict != util.NarratorCreditPeople {
+			held = append(held, heldSplitCredit{BookID: bookID, Name: name, Reason: splitVerdictReason(verdict)})
 			add(r.NarratorID)
 			continue
 		}
 		changed = true
 		for _, person := range people {
-			id, err := resolve(person)
-			if err != nil {
-				return nil, false, fmt.Errorf("resolve %q: %w", person, err)
+			id, rerr := resolve(person)
+			if rerr != nil {
+				return nil, false, held, fmt.Errorf("resolve %q: %w", person, rerr)
 			}
 			add(id)
 		}
 	}
 	if !changed {
-		return rows, false, nil
+		return rows, false, held, nil
 	}
-	out := make([]database.BookNarrator, 0, len(ids))
+	out = make([]database.BookNarrator, 0, len(ids))
 	for i, id := range ids {
 		role := "narrator"
 		if i > 0 {
@@ -192,7 +218,51 @@ func splitCredits(bookID string, rows []database.BookNarrator, joined map[int][]
 		}
 		out = append(out, database.BookNarrator{BookID: bookID, NarratorID: id, Role: role, Position: i})
 	}
-	return out, true, nil
+	return out, true, held, nil
+}
+
+func splitVerdictReason(v util.NarratorCreditVerdict) string {
+	switch v {
+	case util.NarratorCreditJunk:
+		return "not_a_list_of_people"
+	case util.NarratorCreditAllAuthors:
+		return "names_only_the_books_authors"
+	case util.NarratorCreditEmpty:
+		return "no_narrator_left_after_cleaning"
+	}
+	return "unknown"
+}
+
+// bookAuthorNamesForSplit reads the names of every author credited on a book
+// (join plus author_id column). Fails closed: an incomplete list would turn
+// an author into a narrator.
+func bookAuthorNamesForSplit(store OpsStore, bookID string) ([]string, error) {
+	ids := make(map[int]bool)
+	if b, err := store.GetBookByID(bookID); err != nil {
+		return nil, fmt.Errorf("read book: %w", err)
+	} else if b != nil && b.AuthorID != nil && *b.AuthorID > 0 {
+		ids[*b.AuthorID] = true
+	}
+	links, err := store.GetBookAuthors(bookID)
+	if err != nil {
+		return nil, fmt.Errorf("read book authors: %w", err)
+	}
+	for _, l := range links {
+		if l.AuthorID > 0 {
+			ids[l.AuthorID] = true
+		}
+	}
+	var names []string
+	for id := range ids {
+		a, err := store.GetAuthorByID(id)
+		if err != nil {
+			return nil, fmt.Errorf("read author %d: %w", id, err)
+		}
+		if a != nil {
+			names = append(names, a.Name)
+		}
+	}
+	return names, nil
 }
 
 func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNarratorsParams, reporter sdk.Reporter) (splitJoinedReport, error) {
@@ -256,11 +326,44 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			break
 		}
 		report.JoinedSample = append(report.JoinedSample, joinedNarratorSample{
-			NarratorID: n.ID, Name: n.Name, People: joined[n.ID], Books: perNarrator[n.ID],
+			NarratorID: n.ID, Name: n.Name, People: util.SplitCreditNames(n.Name), Books: perNarrator[n.ID],
 		})
 	}
+
+	// Per-book review pass, run in the dry run AND before an apply so both
+	// report the same held set. It resolves nothing: the resolver only hands
+	// out placeholder IDs so splitCredits can dedupe.
+	sortedBooks := make([]string, 0, len(books))
+	for id := range books {
+		sortedBooks = append(sortedBooks, id)
+	}
+	sort.Strings(sortedBooks)
+	authorsByBook := make(map[string][]string, len(books))
+	placeholder := make(map[string]int)
+	dryResolve := func(name string) (int, error) {
+		if id, ok := placeholder[name]; ok {
+			return id, nil
+		}
+		placeholder[name] = -1 - len(placeholder)
+		return placeholder[name], nil
+	}
+	for _, bookID := range sortedBooks {
+		authors, aerr := bookAuthorNamesForSplit(store, bookID)
+		if aerr != nil {
+			return report, fmt.Errorf("split-joined-narrators: book %s: %w", bookID, aerr)
+		}
+		authorsByBook[bookID] = authors
+		_, _, heldHere, _ := splitCredits(bookID, books[bookID], joined, authors, dryResolve)
+		report.HeldForReview += len(heldHere)
+		for _, h := range heldHere {
+			if len(report.HeldForReviewSample) < splitJoinedSampleLimit {
+				report.HeldForReviewSample = append(report.HeldForReviewSample, h)
+			}
+		}
+	}
 	log.Info("split-joined-narrators classified", "joined", report.Joined, "books_affected", report.BooksAffected,
-		"sample", report.JoinedSample)
+		"held_for_review", report.HeldForReview, "sample", report.JoinedSample,
+		"held_for_review_sample", report.HeldForReviewSample)
 
 	if !params.Apply {
 		_ = reporter.UpdateProgress(3, 3, "DRY RUN (nothing written) — "+report.summary())
@@ -279,11 +382,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 		}
 	}()
 
-	bookIDs := make([]string, 0, len(books))
-	for id := range books {
-		bookIDs = append(bookIDs, id)
-	}
-	sort.Strings(bookIDs)
+	bookIDs := sortedBooks
 	if params.Limit > 0 && len(bookIDs) > params.Limit {
 		bookIDs = bookIDs[:params.Limit]
 	}
@@ -324,7 +423,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			log.Warn("split-joined-narrators: re-read failed, book skipped", "book_id", bookID, "err", rerr)
 			continue
 		}
-		next, changed, serr := splitCredits(bookID, current, joined, resolve)
+		next, changed, _, serr := splitCredits(bookID, current, joined, authorsByBook[bookID], resolve)
 		if serr != nil {
 			report.BooksFailed++
 			log.Warn("split-joined-narrators: resolve failed, book skipped", "book_id", bookID, "err", serr)
