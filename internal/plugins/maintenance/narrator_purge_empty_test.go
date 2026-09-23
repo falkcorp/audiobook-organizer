@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/narrator_purge_empty_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f7912f12-2468-4645-af36-7afebc4a496b
-// last-edited: 2026-09-12
+// last-edited: 2026-09-23
 
 package maintenance
 
@@ -341,6 +341,10 @@ func TestPurgeEmptyNarrators_RealPebble_HoldsTrashedNonPrimaryAndOrphanLinks(t *
 		require.NoError(t, err)
 		if n != nil {
 			require.NoError(t, s.SetBookNarrators(created.ID, []database.BookNarrator{{NarratorID: n.ID, Role: "narrator"}}))
+		} else if narratorText != "" {
+			// CreateBook now links the credit it was given; clear the link to
+			// rebuild the legacy "credited in text, linked nowhere" row.
+			require.NoError(t, s.SetBookNarrators(created.ID, nil))
 		}
 	}
 	link("trashed", true, true, "", trashedOnly)

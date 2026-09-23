@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
-// last-edited: 2026-09-19
+// last-edited: 2026-09-23
 
 package database
 
@@ -87,23 +87,36 @@ var ErrSkipBookWrite = errors.New("skip book write")
 //
 // fn runs while the stripe is held: see the LOCK RULES on bookLocks.
 func (p *PebbleStore) ModifyBook(id string, fn func(*Book) error) (*Book, error) {
+	updated, before, err := p.modifyBookLocked(id, fn)
+	if err == nil && updated != nil {
+		p.syncNarratorJunctionAfterWrite(id, before, narratorOf(updated))
+	}
+	return updated, err
+}
+
+// modifyBookLocked is ModifyBook's body under the stripe. It also returns the
+// Narrator the stored row held before fn ran, read under the same hold, so the
+// junction sync compares against what was really overwritten.
+func (p *PebbleStore) modifyBookLocked(id string, fn func(*Book) error) (*Book, string, error) {
 	unlock := p.lockBook(id)
 	defer unlock()
 
 	fresh, err := p.GetBookByID(id)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if fresh == nil {
-		return nil, nil
+		return nil, "", nil
 	}
+	before := narratorOf(fresh)
 	if err := fn(fresh); err != nil {
 		if errors.Is(err, ErrSkipBookWrite) {
-			return fresh, nil
+			return fresh, before, nil
 		}
-		return nil, err
+		return nil, "", err
 	}
-	return p.updateBookLocked(id, fresh)
+	updated, err := p.updateBookLocked(id, fresh)
+	return updated, before, err
 }
 
 // SnapshotBook returns a deep copy of b (a JSON round trip, so pointer fields
@@ -225,6 +238,6 @@ func (p *PebbleStore) ClearBookSignature(id string) error {
 	if _, has := bookSigOf(fresh); !has {
 		return nil
 	}
-	_, err = p.updateBookLockedMode(id, fresh, true)
+	_, err = p.updateBookLockedMode(id, fresh, true, nil)
 	return err
 }
