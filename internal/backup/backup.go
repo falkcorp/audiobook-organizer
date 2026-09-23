@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-09-22
 
@@ -550,6 +550,10 @@ const checkpointStagingDirName = ".backup-staging"
 // since deleted, and a legacy one in BackupDir is a full 14 GB copy.
 const staleCheckpointAge = 24 * time.Hour
 
+// checkpointSweepLog routes the sweep through internal/logger (the
+// log-injection barrier) rather than adding direct slog calls.
+var checkpointSweepLog = logger.New("backup.checkpoint-sweep")
+
 // deviceIDFn is swapped by tests to simulate a cross-device layout.
 var deviceIDFn = deviceID
 
@@ -609,10 +613,10 @@ func sweepStaleCheckpoints(stagingRoot, backupDir string, now time.Time) {
 			}
 			p := filepath.Join(dir, e.Name())
 			if err := os.RemoveAll(p); err != nil {
-				slog.Warn("backup: could not remove stale checkpoint", "path", p, "error", err)
+				checkpointSweepLog.Warn("could not remove stale checkpoint %s: %s", p, logger.SanitizeLogValue(err.Error()))
 				continue
 			}
-			slog.Info("backup: removed stale checkpoint", "path", p, "age", now.Sub(info.ModTime()).Truncate(time.Minute))
+			checkpointSweepLog.Info("removed stale checkpoint %s (age %s)", p, now.Sub(info.ModTime()).Truncate(time.Minute))
 		}
 	}
 	sweep(stagingRoot, "run-")
