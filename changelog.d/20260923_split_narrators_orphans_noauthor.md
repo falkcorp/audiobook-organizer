@@ -1,0 +1,4 @@
+### Fixed
+
+- `maintenance.split-joined-narrators` no longer treats `book_narrators` rows for deleted books as books. On production 305 of 306 "affected books" were such orphans, left by `DeleteBook` before it removed the junction row; the dry run listed them with blank titles and no authors. They are now counted separately (`orphan_links`, with a sample), left out of the preview and the per-name book counts, and cleared on apply (ledgered as `narrator_orphan_unlink`, the book re-checked first) so they stop holding joined entities undeletable.
+- A book with no linked author is now held for review (`book_has_no_authors`) instead of split. With nothing to check against, the author-drop rule could not run, so a credit like "Andrzej Sapkowski, Peter Kenny" would have kept the author as a narrator.

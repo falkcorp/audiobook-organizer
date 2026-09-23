@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_split_joined_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9882c157-c994-478a-89fd-0568ba93a56c
 // last-edited: 2026-09-23
 
@@ -22,7 +22,9 @@ type splitJoinedFixture struct {
 
 // book1 [Kate Reading, Michael Kramer] (joined), book2 [Kate Reading] + the
 // same joined name, book3 [Dorrie Sacks & Jeff Hays] (joined) + Le Guin,
-// bk4 [Le Guin, Ursula] only (a surname-first name, NOT joined).
+// bk4 [Le Guin, Ursula] only (a surname-first name, NOT joined). Every book
+// is credited to one author who is none of the narrators: a book with no
+// linked author is held, not split.
 func newSplitJoinedFixture(t *testing.T) splitJoinedFixture {
 	s := newSeriesPhantomStore(t)
 	mk := func(name string) *database.Narrator {
@@ -30,6 +32,8 @@ func newSplitJoinedFixture(t *testing.T) splitJoinedFixture {
 		require.NoError(t, err)
 		return n
 	}
+	author, err := s.CreateAuthor("Fixture Author")
+	require.NoError(t, err)
 	f := splitJoinedFixture{s: s}
 	f.kate = mk("Kate Reading")
 	f.joined1 = mk("Kate Reading, Michael Kramer")
@@ -43,6 +47,7 @@ func newSplitJoinedFixture(t *testing.T) splitJoinedFixture {
 			rows = append(rows, database.BookNarrator{NarratorID: n.ID, Role: "narrator", Position: i})
 		}
 		require.NoError(t, s.SetBookNarrators(b.ID, rows))
+		require.NoError(t, s.SetBookAuthors(b.ID, []database.BookAuthor{{AuthorID: author.ID, Role: "author"}}))
 		return b.ID
 	}
 	f.book1 = book("one", f.joined1)
@@ -161,7 +166,7 @@ func TestSplitJoinedNarrators_AppliesCreditRulesPerBook(t *testing.T) {
 	bMixed := mkBook("mixed", mixed, "Adrian Tchaikovsky")
 	bAuthors := mkBook("authors", authorsOnly, "Craig Martelle", "Michael Anderle")
 	bJunk := mkBook("junk", junk)
-	bTrans := mkBook("trans", withTranslator)
+	bTrans := mkBook("trans", withTranslator, "Some Author")
 
 	p := &Plugin{deps: fakeDeps{store: s}}
 	dry, err := p.splitJoinedNarrators(context.Background(), splitJoinedNarratorsParams{}, &fakeReporter{})
@@ -220,4 +225,67 @@ func TestSplitJoinedNarrators_RunPersistsReportAsResult(t *testing.T) {
 	require.True(t, ok, "the run must persist its report, got %T", rep.result)
 	require.Equal(t, 3, got.BooksAffected)
 	require.Len(t, got.BooksPreview, 3, "the dry-run preview is what the owner reads from the result")
+}
+
+// A junction row whose book is gone is an orphan, not a book: it is counted
+// but never previewed or split, and apply clears it so the joined entity it
+// held can be deleted.
+func TestSplitJoinedNarrators_OrphanLinksAreClearedNotSplit(t *testing.T) {
+	f := newSplitJoinedFixture(t)
+	gone := "01KJBN4S75DFPD56DKY9VBMAPH"
+	require.NoError(t, f.s.SetBookNarrators(gone, []database.BookNarrator{{NarratorID: f.joined2.ID, Role: "narrator"}}))
+	p := &Plugin{deps: fakeDeps{store: f.s}}
+
+	dry, err := p.splitJoinedNarrators(context.Background(), splitJoinedNarratorsParams{}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, dry.OrphanLinks)
+	require.Equal(t, []string{gone}, dry.OrphanLinkSample)
+	require.Equal(t, 3, dry.BooksAffected, "the orphan is not a book")
+	for _, pv := range dry.BooksPreview {
+		require.NotEqual(t, gone, pv.BookID, "an orphan must not be previewed")
+		require.NotEmpty(t, pv.Title, "every previewed book exists")
+	}
+	for _, js := range dry.JoinedSample {
+		if js.NarratorID == f.joined2.ID {
+			require.Equal(t, 1, js.Books, "book counts exclude orphans")
+		}
+	}
+	rows, err := f.s.GetBookNarrators(gone)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "dry run writes nothing")
+
+	rep, err := p.splitJoinedNarrators(context.Background(), splitJoinedNarratorsParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.OrphanLinksCleared)
+	require.Equal(t, 3, rep.BooksRewritten)
+	rows, err = f.s.GetBookNarrators(gone)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	require.Equal(t, 2, rep.NarratorsDeleted, "the orphan no longer holds the joined entity")
+	gotBook, err := f.s.GetBookByID(gone)
+	require.NoError(t, err)
+	require.Nil(t, gotBook, "clearing an orphan must not create a book")
+}
+
+// With no linked author the author-drop rule has nothing to check against,
+// so the credit is held rather than split (a Witcher book credited
+// "Andrzej Sapkowski, ..." would otherwise keep the author as narrator).
+func TestSplitJoinedNarrators_BookWithNoAuthorsIsHeld(t *testing.T) {
+	s := newSeriesPhantomStore(t)
+	n, err := s.CreateNarrator("Andrzej Sapkowski, Peter Kenny")
+	require.NoError(t, err)
+	b, err := s.CreateBook(&database.Book{Title: "Blood of Elves", FilePath: "/splitnoauth/elves"})
+	require.NoError(t, err)
+	require.NoError(t, s.SetBookNarrators(b.ID, []database.BookNarrator{{NarratorID: n.ID, Role: "narrator"}}))
+	p := &Plugin{deps: fakeDeps{store: s}}
+
+	rep, err := p.splitJoinedNarrators(context.Background(), splitJoinedNarratorsParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.HeldForReview)
+	require.Equal(t, splitReasonNoAuthors, rep.HeldForReviewSample[0].Reason)
+	require.Zero(t, rep.BooksRewritten)
+	require.Equal(t, []string{"Andrzej Sapkowski, Peter Kenny"}, splitNamesOf(t, s, b.ID), "held, unsplit")
+	got, err := s.GetNarratorByID(n.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "still linked, so not deleted")
 }
