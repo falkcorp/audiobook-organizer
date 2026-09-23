@@ -1,7 +1,7 @@
 // file: internal/organizer/backup_progress_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f80a3d5-71c6-4e0b-9a48-c5d2b6e91473
-// last-edited: 2026-09-12
+// last-edited: 2026-09-22
 
 package organizer
 
@@ -176,7 +176,7 @@ func TestBackupProgressReporter_NamesEachPhase(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.phase, func(t *testing.T) {
 			log := &recordingLogger{}
-			backupProgressReporter(context.Background(), log, 1*time.Hour)(tc.phase, 1, 1024)
+			backupProgressReporter(context.Background(), log, 1*time.Hour)(tc.phase, 0, 1024)
 			msgs := log.messages()
 			if len(msgs) != 1 {
 				t.Fatalf("expected 1 update, got %v", msgs)
@@ -204,6 +204,32 @@ func TestHumanBytes(t *testing.T) {
 	for _, tc := range cases {
 		if got := humanBytes(tc.in); got != tc.want {
 			t.Errorf("humanBytes(%d) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// Phase boundaries bypass the throttle. On 2026-09-22 the "checkpoint
+// finished" stamp fell inside the interval and was dropped, so a 6m49s silence
+// could not be placed in the checkpoint or after it. Both checkpoint brackets
+// and the first report of each new phase must reach the log.
+func TestBackupProgressReporter_PhaseBoundariesBypassThrottle(t *testing.T) {
+	log := &recordingLogger{}
+	report := backupProgressReporter(context.Background(), log, 1*time.Hour)
+
+	report(backup.PhaseCheckpoint, 0, 0)
+	report(backup.PhaseCheckpoint, 1, 0)
+	report(backup.PhaseArchive, 1, 1024)
+	report(backup.PhaseArchive, 2, 2048) // same phase, inside interval: throttled
+	report(backup.PhaseChecksum, 0, 4096)
+
+	msgs := log.messages()
+	want := []string{"snapshotting database", "database snapshot taken", "archived 1 files", "verifying archive"}
+	if len(msgs) != len(want) {
+		t.Fatalf("got %d updates %v, want %d (%v)", len(msgs), msgs, len(want), want)
+	}
+	for i, w := range want {
+		if !strings.Contains(msgs[i], w) {
+			t.Errorf("update %d = %q, want it to mention %q", i, msgs[i], w)
 		}
 	}
 }

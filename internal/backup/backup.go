@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.21.2
+// version: 1.22.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-09-12
+// last-edited: 2026-09-22
 
 package backup
 
@@ -474,48 +474,149 @@ func CreateBackupWithCheckpoint(store Checkpointable, dbSourcePath, databaseType
 		return nil, err
 	}
 
-	// Create a temp directory for the checkpoint.
-	tmpDir, err := os.MkdirTemp(config.BackupDir, "pebble-checkpoint-*")
-	if err != nil {
-		return nil, fmt.Errorf("create temp checkpoint dir: %w", err)
+	// Stage the checkpoint on the DATABASE's filesystem, never in BackupDir.
+	//
+	// Checkpoint is only cheap because it hard-links SSTs, and a hard link
+	// cannot cross a filesystem. Pebble's vfs.LinkOrCopy does not fail on
+	// EXDEV; it silently falls back to a full byte copy, with no progress
+	// callback, because Checkpoint is opaque to us. Production moved the
+	// database onto its own ZFS dataset (.appdata) on 2026-09-09 while
+	// BackupDir stayed on the library dataset, so from then on every
+	// checkpoint copied ~14 GB in silence. On 2026-09-22 that took 6m49s, the
+	// registry watchdog correctly cancelled the library.scan the backup ran
+	// inside, and auto-organize failed for 5,790 books.
+	stagingRoot := checkpointStagingRoot(dbSourcePath)
+	if err := os.MkdirAll(stagingRoot, 0o775); err != nil {
+		return nil, fmt.Errorf("create checkpoint staging dir: %w", err)
 	}
-	// Pebble requires the destination not to exist — remove the empty dir
-	// it was created with (MkdirTemp creates it), then let Checkpoint re-create it.
-	if err := os.Remove(tmpDir); err != nil {
-		return nil, fmt.Errorf("remove pre-created checkpoint tmp dir: %w", err)
+	sweepStaleCheckpoints(stagingRoot, config.BackupDir, time.Now())
+
+	// Refuse rather than let Pebble copy. A backup that fails in milliseconds
+	// costs one missed pre-organize backup (autoBackup logs it and organize
+	// proceeds); a silent 14 GB copy costs the whole scan.
+	if err := ensureSameDevice(stagingRoot, dbSourcePath); err != nil {
+		return nil, err
 	}
 
-	// Use a closure so the defer always removes whichever path is current.
-	cleanupDir := tmpDir
-	defer func() { os.RemoveAll(cleanupDir) }()
+	runDir, err := os.MkdirTemp(stagingRoot, "run-*")
+	if err != nil {
+		return nil, fmt.Errorf("create checkpoint run dir: %w", err)
+	}
+	defer os.RemoveAll(runDir)
+
+	// Checkpoint straight into <runDir>/<db basename>, so archive entries carry
+	// the database's own name ("audiobooks.pebble/...") and restore recreates
+	// it. Pebble requires the destination not to exist; runDir is fresh, so it
+	// does not.
+	base := filepath.Base(dbSourcePath)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "database"
+	}
+	cpDir := filepath.Join(runDir, base)
 
 	// Bracket the checkpoint rather than reporting inside it: Checkpoint() is
 	// opaque to us, so a stamp during it would be a guess. Bracketing still
 	// tells the caller which phase is running when it goes quiet, which is the
 	// difference between "the backup is hung" and "the backup is hung IN THE
-	// CHECKPOINT".
+	// CHECKPOINT". The callback's error is honored: it is the caller's
+	// cancellation checkpoint, and a run canceled before the checkpoint must
+	// not start one.
 	if config.Progress != nil {
-		config.Progress(PhaseCheckpoint, 0, 0)
+		if perr := config.Progress(PhaseCheckpoint, 0, 0); perr != nil {
+			return nil, perr
+		}
 	}
-	if err := store.Checkpoint(tmpDir); err != nil {
+	if err := store.Checkpoint(cpDir); err != nil {
 		return nil, fmt.Errorf("pebble checkpoint: %w", err)
 	}
 	if config.Progress != nil {
-		config.Progress(PhaseCheckpoint, 1, 0)
-	}
-
-	// Rename checkpoint dir to source DB basename so tar archive entries use
-	// the expected name. Restoring to a target then creates "target/test.pebble/"
-	// rather than "target/pebble-checkpoint-XYZ/".
-	if base := filepath.Base(dbSourcePath); base != "" && base != "." {
-		named := filepath.Join(filepath.Dir(tmpDir), base)
-		if renErr := os.Rename(tmpDir, named); renErr == nil {
-			cleanupDir = named
-			tmpDir = named
+		if perr := config.Progress(PhaseCheckpoint, 1, 0); perr != nil {
+			return nil, perr
 		}
 	}
 
-	return CreateBackup(tmpDir, databaseType, config)
+	return CreateBackup(cpDir, databaseType, config)
+}
+
+// checkpointStagingDirName is the directory, beside the database, that holds
+// in-flight checkpoints. It is dedicated so the stale sweep can never reach
+// anything else.
+const checkpointStagingDirName = ".backup-staging"
+
+// staleCheckpointAge is how old a leftover checkpoint must be before the sweep
+// removes it. A healthy backup finishes in well under an hour and removes its
+// own staging; anything older was orphaned by a crash or a kill. Leftovers are
+// not free: a same-device checkpoint's hard links pin SSTs that compaction has
+// since deleted, and a legacy one in BackupDir is a full 14 GB copy.
+const staleCheckpointAge = 24 * time.Hour
+
+// deviceIDFn is swapped by tests to simulate a cross-device layout.
+var deviceIDFn = deviceID
+
+// ErrCheckpointCrossDevice reports that the checkpoint staging directory and
+// the database are on different filesystems, where Pebble would silently copy
+// the whole database instead of hard-linking it.
+var ErrCheckpointCrossDevice = errors.New("checkpoint staging is not on the database's filesystem")
+
+// checkpointStagingRoot returns the staging root for a database path: a
+// sibling of the database directory, so it shares the database's filesystem
+// in any layout where the database's PARENT is on that filesystem (production:
+// the parent is the .appdata dataset mount).
+func checkpointStagingRoot(dbSourcePath string) string {
+	return filepath.Join(filepath.Dir(filepath.Clean(dbSourcePath)), checkpointStagingDirName)
+}
+
+// ensureSameDevice returns ErrCheckpointCrossDevice when staging and the
+// database sit on different devices. An unknown device (a platform with no
+// st_dev) passes: the guard exists to catch a known-bad layout, not to refuse
+// backups wherever it cannot see.
+func ensureSameDevice(stagingRoot, dbSourcePath string) error {
+	sDev, sOK, err := deviceIDFn(stagingRoot)
+	if err != nil {
+		return fmt.Errorf("checkpoint staging device: %w", err)
+	}
+	dDev, dOK, err := deviceIDFn(dbSourcePath)
+	if err != nil {
+		return fmt.Errorf("database device: %w", err)
+	}
+	if sOK && dOK && sDev != dDev {
+		return fmt.Errorf("%w: staging %s is device %d, database %s is device %d; "+
+			"hard links would fail and Pebble would copy the entire database with no progress",
+			ErrCheckpointCrossDevice, stagingRoot, sDev, dbSourcePath, dDev)
+	}
+	return nil
+}
+
+// sweepStaleCheckpoints removes orphaned checkpoints older than
+// staleCheckpointAge: run dirs in the staging root, and the legacy
+// "pebble-checkpoint-*" dirs that older builds staged inside backupDir. Both
+// are matched by exact shape and must be directories; nothing else in either
+// place is touched. Failures are logged, never returned: a leftover costs
+// space, and refusing the backup over it would cost the backup.
+func sweepStaleCheckpoints(stagingRoot, backupDir string, now time.Time) {
+	sweep := func(dir, prefix string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil || now.Sub(info.ModTime()) < staleCheckpointAge {
+				continue
+			}
+			p := filepath.Join(dir, e.Name())
+			if err := os.RemoveAll(p); err != nil {
+				slog.Warn("backup: could not remove stale checkpoint", "path", p, "error", err)
+				continue
+			}
+			slog.Info("backup: removed stale checkpoint", "path", p, "age", now.Sub(info.ModTime()).Truncate(time.Minute))
+		}
+	}
+	sweep(stagingRoot, "run-")
+	sweep(backupDir, "pebble-checkpoint-")
 }
 
 // ErrVerificationUnsupported is returned by RestoreBackup when the caller

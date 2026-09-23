@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-19
+// last-edited: 2026-09-22
 
 package organizer
 
@@ -579,21 +579,35 @@ const backupProgressInterval = 15 * time.Second
 // holder failed with "scan did not park within 5m0s" -- the author duplicate
 // merge failures. This matches every other scan phase, which parks on ctx.Err().
 func backupProgressReporter(ctx context.Context, log logger.Logger, interval time.Duration) backup.BackupProgress {
-	var last time.Time
+	var (
+		last      time.Time
+		lastPhase string
+	)
 	return func(phase string, filesDone int, bytesDone int64) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("auto-backup stopped: %w", err)
 		}
 		now := time.Now()
-		if !last.IsZero() && now.Sub(last) < interval {
+		// A phase boundary always gets through, as do both checkpoint brackets
+		// (there are only two). The throttle exists to tame the per-file
+		// archive stream; applied to boundaries it swallowed "checkpoint
+		// finished" whenever the archive started within the interval, so on
+		// 2026-09-22 the log could not say whether 6m49s of silence was spent
+		// IN the checkpoint or after it.
+		boundary := phase != lastPhase || phase == backup.PhaseCheckpoint
+		if !boundary && !last.IsZero() && now.Sub(last) < interval {
 			return nil
 		}
-		last = now
+		last, lastPhase = now, phase
 
 		var msg string
 		switch phase {
 		case backup.PhaseCheckpoint:
-			msg = "Backing up: snapshotting database"
+			if filesDone > 0 {
+				msg = "Backing up: database snapshot taken"
+			} else {
+				msg = "Backing up: snapshotting database"
+			}
 		case backup.PhaseArchive:
 			msg = fmt.Sprintf("Backing up: archived %d files (%s)", filesDone, humanBytes(bytesDone))
 		case backup.PhaseChecksum:
