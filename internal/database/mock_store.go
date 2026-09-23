@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.132.0
+// version: 1.133.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-22
+// last-edited: 2026-09-23
 
 package database
 
@@ -218,6 +218,7 @@ type MockStore struct {
 	// "referenced by nothing" would let a purge test pass against a dead guard.
 	GetAllNarratorRefsFunc     func() (NarratorRefs, error)
 	CountNarratorBookLinksFunc func(narratorID int) (int, error)
+	BookNarratorsLinkingFunc   func(narratorIDs map[int]bool) (map[string][]BookNarrator, error)
 
 	// Metadata
 	GetMetadataFieldStatesFunc   func(bookID string) ([]MetadataFieldState, error)
@@ -940,6 +941,15 @@ func (m *MockStore) CountNarratorBookLinks(narratorID int) (int, error) {
 	}
 	return 0, fmt.Errorf("MockStore.CountNarratorBookLinksFunc is not set: "+
 		"a test reaching the per-narrator re-check must say what the live link count is (narrator %d)", narratorID)
+}
+
+// BookNarratorsLinking satisfies NarratorRefStore. Unset means UNANSWERABLE.
+func (m *MockStore) BookNarratorsLinking(narratorIDs map[int]bool) (map[string][]BookNarrator, error) {
+	if m.BookNarratorsLinkingFunc != nil {
+		return m.BookNarratorsLinkingFunc(narratorIDs)
+	}
+	return nil, fmt.Errorf("MockStore.BookNarratorsLinkingFunc is not set: " +
+		"a test reaching the narrator split must say which books link the joined narrators")
 }
 
 func (m *MockStore) UpdateSeriesName(id int, name string) error {

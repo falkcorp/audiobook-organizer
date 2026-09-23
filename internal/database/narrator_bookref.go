@@ -1,7 +1,7 @@
 // file: internal/database/narrator_bookref.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 36c225c3-b235-4aac-b164-0273255164fd
-// last-edited: 2026-09-12
+// last-edited: 2026-09-23
 
 package database
 
@@ -86,6 +86,10 @@ type NarratorRefStore interface {
 	// it is cheap enough to call once per narrator immediately before deleting
 	// it; that is its job.
 	CountNarratorBookLinks(narratorID int) (int, error)
+	// BookNarratorsLinking returns, for every book whose book_narrators row
+	// names at least one of narratorIDs, that book's full junction row. It
+	// reads the LIVE junction in one pass.
+	BookNarratorsLinking(narratorIDs map[int]bool) (map[string][]BookNarrator, error)
 }
 
 // AsNarratorRefStore returns s as a NarratorRefStore, or nil if the backing
@@ -126,6 +130,19 @@ func NarratorLinkCount(store any, narratorID int) (int, error) {
 			"refusing to delete it unverified", narratorID, store)
 	}
 	return rs.CountNarratorBookLinks(narratorID)
+}
+
+// BooksLinkingNarrators returns every book whose narrator credits name one of
+// narratorIDs, with the book's whole credit list. Fails CLOSED like
+// NarratorRefCounts: a missed book would keep a credit the caller meant to
+// rewrite, and the caller may then delete the narrator that credit names.
+func BooksLinkingNarrators(store any, narratorIDs map[int]bool) (map[string][]BookNarrator, error) {
+	rs := AsNarratorRefStore(store)
+	if rs == nil {
+		return nil, fmt.Errorf("store cannot list the books linking narrators (got %T); "+
+			"refusing to rewrite credits from an unverified list", store)
+	}
+	return rs.BookNarratorsLinking(narratorIDs)
 }
 
 // narratorRefKey identifies one (book, narrator) attachment, so a credit list
@@ -270,4 +287,25 @@ func (p *PebbleStore) CountNarratorBookLinks(narratorID int) (int, error) {
 		return 0, err
 	}
 	return len(books), nil
+}
+
+// BookNarratorsLinking scans the live junction once and keeps the rows of
+// every book that credits any of narratorIDs.
+func (p *PebbleStore) BookNarratorsLinking(narratorIDs map[int]bool) (map[string][]BookNarrator, error) {
+	out := make(map[string][]BookNarrator)
+	if len(narratorIDs) == 0 {
+		return out, nil
+	}
+	err := scanNarratorJunction(p.db, func(bookID string, rows []BookNarrator) {
+		for _, r := range rows {
+			if narratorIDs[r.NarratorID] {
+				out[bookID] = rows
+				return
+			}
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
