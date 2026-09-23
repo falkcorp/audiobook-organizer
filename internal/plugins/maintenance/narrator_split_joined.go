@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_split_joined.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: b580d009-3cf0-45d9-bf1b-18f6e1f6c33d
 // last-edited: 2026-09-23
 
@@ -41,7 +41,17 @@ import (
 // authors are dropped when a real narrator remains. A credit that is a URL, or
 // that names only the book's authors, is NOT split: that book keeps its joined
 // credit and is listed under held_for_review, since the text cannot tell a
-// self-read from a mis-tagged author.
+// self-read from a mis-tagged author. A book with NO linked author is held
+// the same way (book_has_no_authors): with nothing to check against, the
+// author-drop rule cannot run, and splitting would keep an author credited as
+// a narrator.
+//
+// A book_narrators row whose book no longer exists is an ORPHAN link, left by
+// DeleteBook before it tore the junction row down. It is not a book: it is
+// never previewed or split, the dry run counts it (orphan_links), and apply
+// clears it (ledgered as narrator_orphan_unlink, book re-checked first). An
+// orphan still linking a joined entity would otherwise hold that entity
+// undeletable forever.
 //
 // Guards, as in purge-empty-narrators:
 //   - DRY RUN by default. The report lists the joined names, what each splits
@@ -123,6 +133,12 @@ type splitJoinedReport struct {
 	// BooksWithDrops counts books where the rules removed at least one piece
 	// of a joined credit (an author, a translator, ...).
 	BooksWithDrops int `json:"books_with_drops"`
+	// OrphanLinks counts book_narrators rows linking a joined narrator whose
+	// book no longer exists. Apply clears them.
+	OrphanLinks        int      `json:"orphan_links"`
+	OrphanLinkSample   []string `json:"orphan_link_sample,omitempty"`
+	OrphanLinksCleared int      `json:"orphan_links_cleared"`
+	OrphanClearFailed  int      `json:"orphan_links_clear_failed"`
 	// Apply only.
 	BooksRewritten   int    `json:"books_rewritten"`
 	BooksUnchanged   int    `json:"books_unchanged"`
@@ -135,10 +151,10 @@ type splitJoinedReport struct {
 }
 
 func (r splitJoinedReport) summary() string {
-	s := fmt.Sprintf("narrators=%d joined=%d books_affected=%d held_for_review=%d rewritten=%d unchanged=%d failed=%d "+
-		"journal_failed=%d joined_deleted=%d joined_held(still linked)=%d joined_delete_failed=%d",
-		r.TotalNarrators, r.Joined, r.BooksAffected, r.HeldForReview, r.BooksRewritten, r.BooksUnchanged, r.BooksFailed,
-		r.JournalFailed, r.NarratorsDeleted, r.NarratorsHeld, r.NarratorsFailed)
+	s := fmt.Sprintf("narrators=%d joined=%d books_affected=%d orphan_links=%d held_for_review=%d rewritten=%d unchanged=%d failed=%d "+
+		"orphans_cleared=%d orphan_clear_failed=%d journal_failed=%d joined_deleted=%d joined_held(still linked)=%d joined_delete_failed=%d",
+		r.TotalNarrators, r.Joined, r.BooksAffected, r.OrphanLinks, r.HeldForReview, r.BooksRewritten, r.BooksUnchanged, r.BooksFailed,
+		r.OrphanLinksCleared, r.OrphanClearFailed, r.JournalFailed, r.NarratorsDeleted, r.NarratorsHeld, r.NarratorsFailed)
 	if r.Aborted != "" {
 		s += " ABORTED: " + r.Aborted
 	}
@@ -228,8 +244,15 @@ func splitCredits(bookID string, rows []database.BookNarrator, joined map[int]st
 			continue
 		}
 		people, verdict := util.CleanNarratorCredit(name, bookAuthors)
-		if verdict != util.NarratorCreditPeople {
-			held = append(held, heldSplitCredit{BookID: bookID, Name: name, Reason: splitVerdictReason(verdict)})
+		reason := ""
+		switch {
+		case verdict != util.NarratorCreditPeople:
+			reason = splitVerdictReason(verdict)
+		case len(bookAuthors) == 0:
+			reason = splitReasonNoAuthors
+		}
+		if reason != "" {
+			held = append(held, heldSplitCredit{BookID: bookID, Name: name, Reason: reason})
 			add(r.NarratorID)
 			continue
 		}
@@ -260,17 +283,10 @@ func splitCredits(bookID string, rows []database.BookNarrator, joined map[int]st
 // the separator-split pieces of each joined credit that did not survive
 // verbatim into after: removed as an author or a role credit, or rewritten
 // (a "By:" prefix stripped), in which case the cleaned name is in After.
-func previewSplit(store OpsStore, bookID string, authors []string, before, after []database.BookNarrator,
-	joined map[int]string, nameOf map[int]string) (splitBookPreview, error) {
-	b, err := store.GetBookByID(bookID)
-	if err != nil {
-		return splitBookPreview{}, fmt.Errorf("read book: %w", err)
-	}
-	pv := splitBookPreview{BookID: bookID, Authors: append([]string(nil), authors...)}
+func previewSplit(b *database.Book, authors []string, before, after []database.BookNarrator,
+	joined map[int]string, nameOf map[int]string) splitBookPreview {
+	pv := splitBookPreview{BookID: b.ID, Title: b.Title, Authors: append([]string(nil), authors...)}
 	sort.Strings(pv.Authors)
-	if b != nil {
-		pv.Title = b.Title
-	}
 	names := func(rows []database.BookNarrator) []string {
 		ordered := append([]database.BookNarrator(nil), rows...)
 		sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Position < ordered[j].Position })
@@ -297,8 +313,13 @@ func previewSplit(store OpsStore, bookID string, authors []string, before, after
 			}
 		}
 	}
-	return pv, nil
+	return pv
 }
+
+// splitReasonNoAuthors holds a credit on a book with no linked author: the
+// author-drop rule has nothing to check against, so a split could keep an
+// author credited as a narrator.
+const splitReasonNoAuthors = "book_has_no_authors"
 
 func splitVerdictReason(v util.NarratorCreditVerdict) string {
 	switch v {
@@ -312,17 +333,15 @@ func splitVerdictReason(v util.NarratorCreditVerdict) string {
 	return "unknown"
 }
 
-// bookAuthorNamesForSplit reads the names of every author credited on a book
+// bookAuthorNamesForSplit reads the names of every author credited on b
 // (join plus author_id column). Fails closed: an incomplete list would turn
 // an author into a narrator.
-func bookAuthorNamesForSplit(store OpsStore, bookID string) ([]string, error) {
+func bookAuthorNamesForSplit(store OpsStore, b *database.Book) ([]string, error) {
 	ids := make(map[int]bool)
-	if b, err := store.GetBookByID(bookID); err != nil {
-		return nil, fmt.Errorf("read book: %w", err)
-	} else if b != nil && b.AuthorID != nil && *b.AuthorID > 0 {
+	if b.AuthorID != nil && *b.AuthorID > 0 {
 		ids[*b.AuthorID] = true
 	}
-	links, err := store.GetBookAuthors(bookID)
+	links, err := store.GetBookAuthors(b.ID)
 	if err != nil {
 		return nil, fmt.Errorf("read book authors: %w", err)
 	}
@@ -375,6 +394,30 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 	books, err := database.BooksLinkingNarrators(store, ids)
 	if err != nil {
 		return report, fmt.Errorf("split-joined-narrators: %w", err)
+	}
+	// Separate orphan links (the book row is gone) from real books before
+	// anything is counted, so every figure below is about books that exist.
+	bookByID := make(map[string]*database.Book, len(books))
+	var orphans []string
+	for bookID := range books {
+		b, berr := store.GetBookByID(bookID)
+		if berr != nil {
+			return report, fmt.Errorf("split-joined-narrators: book %s: read book: %w", bookID, berr)
+		}
+		if b == nil {
+			orphans = append(orphans, bookID)
+			delete(books, bookID)
+			continue
+		}
+		bookByID[bookID] = b
+	}
+	sort.Strings(orphans)
+	report.OrphanLinks = len(orphans)
+	for _, id := range orphans {
+		if len(report.OrphanLinkSample) >= splitJoinedSampleLimit {
+			break
+		}
+		report.OrphanLinkSample = append(report.OrphanLinkSample, id)
 	}
 	report.BooksAffected = len(books)
 
@@ -432,7 +475,8 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 		return placeholder[name], nil
 	}
 	for _, bookID := range sortedBooks {
-		authors, aerr := bookAuthorNamesForSplit(store, bookID)
+		b := bookByID[bookID]
+		authors, aerr := bookAuthorNamesForSplit(store, b)
 		if aerr != nil {
 			return report, fmt.Errorf("split-joined-narrators: book %s: %w", bookID, aerr)
 		}
@@ -441,10 +485,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 		if serr != nil {
 			return report, fmt.Errorf("split-joined-narrators: book %s preview: %w", bookID, serr)
 		}
-		preview, perr := previewSplit(store, bookID, authors, books[bookID], next, joined, nameOf)
-		if perr != nil {
-			return report, fmt.Errorf("split-joined-narrators: book %s: %w", bookID, perr)
-		}
+		preview := previewSplit(b, authors, books[bookID], next, joined, nameOf)
 		if len(preview.Dropped) > 0 {
 			report.BooksWithDrops++
 		}
@@ -459,6 +500,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 		}
 	}
 	log.Info("split-joined-narrators classified", "joined", report.Joined, "books_affected", report.BooksAffected,
+		"orphan_links", report.OrphanLinks,
 		"held_for_review", report.HeldForReview, "books_with_drops", report.BooksWithDrops, "sample", report.JoinedSample,
 		"held_for_review_sample", report.HeldForReviewSample)
 
@@ -554,6 +596,57 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 		if (i+1)%50 == 0 {
 			prog.StepN(i+1, fmt.Sprintf("Rewrote %d/%d…", report.BooksRewritten, len(bookIDs)))
 		}
+	}
+
+	// Clear orphan links: junction rows for books that no longer exist.
+	// Re-checked per row, so a book created under that ID since the review
+	// pass is left alone.
+	for _, bookID := range orphans {
+		if err := ctx.Err(); err != nil {
+			prog.Done("cancelled — " + report.summary())
+			return report, err
+		}
+		if scanStandDownLostForApply(p.deps, holderID, held) {
+			report.Aborted = errSplitJoinedStandDownLost.Error()
+			prog.Done(report.summary())
+			return report, errSplitJoinedStandDownLost
+		}
+		if b, berr := store.GetBookByID(bookID); berr != nil || b != nil {
+			if berr != nil {
+				report.OrphanClearFailed++
+				log.Warn("split-joined-narrators: orphan re-check failed, row kept", "book_id", bookID, "err", berr)
+			}
+			continue
+		}
+		current, rerr := store.GetBookNarrators(bookID)
+		if rerr != nil {
+			report.OrphanClearFailed++
+			log.Warn("split-joined-narrators: orphan re-read failed, row kept", "book_id", bookID, "err", rerr)
+			continue
+		}
+		if len(current) == 0 {
+			continue
+		}
+		before, _ := json.Marshal(current)
+		if jerr := store.CreateOperationChange(&database.OperationChange{
+			ID:          ulid.Make().String(),
+			OperationID: opID,
+			BookID:      bookID,
+			ChangeType:  "narrator_orphan_unlink",
+			FieldName:   "book_narrators",
+			OldValue:    string(before),
+			NewValue:    "[]",
+		}); jerr != nil {
+			report.JournalFailed++
+			log.Warn("split-joined-narrators: undo-ledger write failed, orphan row kept", "book_id", bookID, "err", jerr)
+			continue
+		}
+		if werr := store.SetBookNarrators(bookID, []database.BookNarrator{}); werr != nil {
+			report.OrphanClearFailed++
+			log.Warn("split-joined-narrators: orphan clear failed (its ledger row was already written)", "book_id", bookID, "err", werr)
+			continue
+		}
+		report.OrphanLinksCleared++
 	}
 
 	// Delete joined entities nothing links any more. A limited run leaves
