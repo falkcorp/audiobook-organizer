@@ -1067,3 +1067,135 @@ func TestChaptersBackfill_CheckpointCarriesOverwrite(t *testing.T) {
 			"revert to skipping books that already have (wrong) chapters")
 	}
 }
+
+// ── clearing a DEGENERATE timeline the container cannot restore ─────────────
+//
+// The first production cohort exposed the hole these cover: 21 of 31 books were
+// repaired and 10 kept their junk, because `overwrite` could replace a wrong
+// timeline but the no-markers branch returned before any write. Clearing lets
+// mapper.go's live synthesis take over, which beats a stored zero-length stub.
+
+func TestChaptersBackfill_Overwrite_ClearsDegenerateWhenContainerHasNoMarkers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	(&chbfProbeSpy{result: nil}).install(t) // container carries no markers
+
+	s := chbfStore(t)
+	id := chbfSeedBook(t, s, "No Markers", 1)
+	junk := []database.Chapter{
+		{ID: 0, StartSec: 0, EndSec: 0, Title: "No Markers"},
+		{ID: 1, StartSec: 0, EndSec: 3600, Title: "No Markers"},
+	}
+	if err := s.SaveChaptersForBook(id, junk); err != nil {
+		t.Fatalf("SaveChaptersForBook: %v", err)
+	}
+
+	if err := chbfRun(t, s, chaptersBackfillParams{
+		Apply: true, Overwrite: true, BookIDs: []string{id},
+	}); err != nil {
+		t.Fatalf("runChaptersBackfill: %v", err)
+	}
+
+	got, err := s.GetChaptersForBook(id)
+	if err != nil {
+		t.Fatalf("GetChaptersForBook: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("degenerate timeline survived a repair run: %+v — the reader "+
+			"short-circuits on len(stored) > 0, so it still wins over synthesis", got)
+	}
+}
+
+// 🔴 The guard that makes clearing safe. A book whose container LOST its markers
+// still holds the only surviving copy of a GOOD timeline; deleting it would
+// destroy data nothing can reconstruct. Clearing is gated on the stored list
+// being broken on its face, never on Overwrite alone.
+func TestChaptersBackfill_Overwrite_KeepsGoodTimelineWhenContainerHasNoMarkers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	(&chbfProbeSpy{result: nil}).install(t)
+
+	s := chbfStore(t)
+	id := chbfSeedBook(t, s, "Markers Stripped", 1)
+	good := []database.Chapter{
+		{ID: 0, StartSec: 0, EndSec: 600, Title: "Chapter 1"},
+		{ID: 1, StartSec: 600, EndSec: 1200, Title: "Chapter 2"},
+		{ID: 2, StartSec: 1200, EndSec: 1800, Title: "Chapter 3"},
+	}
+	if err := s.SaveChaptersForBook(id, good); err != nil {
+		t.Fatalf("SaveChaptersForBook: %v", err)
+	}
+
+	if err := chbfRun(t, s, chaptersBackfillParams{
+		Apply: true, Overwrite: true, BookIDs: []string{id},
+	}); err != nil {
+		t.Fatalf("runChaptersBackfill: %v", err)
+	}
+
+	got, err := s.GetChaptersForBook(id)
+	if err != nil {
+		t.Fatalf("GetChaptersForBook: %v", err)
+	}
+	if len(got) != len(good) {
+		t.Fatalf("a GOOD stored timeline was deleted because the container no "+
+			"longer has markers; that destroys the only surviving copy: %+v", got)
+	}
+}
+
+// A dry run must not clear either.
+func TestChaptersBackfill_OverwriteDryRun_DoesNotClear(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	(&chbfProbeSpy{result: nil}).install(t)
+
+	s := chbfStore(t)
+	id := chbfSeedBook(t, s, "Dry", 1)
+	junk := []database.Chapter{{ID: 0, StartSec: 0, EndSec: 0, Title: "Dry"}}
+	if err := s.SaveChaptersForBook(id, junk); err != nil {
+		t.Fatalf("SaveChaptersForBook: %v", err)
+	}
+
+	if err := chbfRun(t, s, chaptersBackfillParams{
+		Apply: false, Overwrite: true, BookIDs: []string{id},
+	}); err != nil {
+		t.Fatalf("runChaptersBackfill: %v", err)
+	}
+
+	got, _ := s.GetChaptersForBook(id)
+	if len(got) != 1 {
+		t.Fatalf("a DRY RUN deleted stored chapters: %+v", got)
+	}
+}
+
+func TestIsDegenerateTimeline(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []database.Chapter
+		want bool
+	}{
+		{"empty is not degenerate", nil, false},
+		{"zero-length chapter", []database.Chapter{
+			{StartSec: 0, EndSec: 0}, {StartSec: 0, EndSec: 100}}, true},
+		{"end before start", []database.Chapter{
+			{StartSec: 100, EndSec: 50}}, true},
+		{"all start at zero", []database.Chapter{
+			{StartSec: 0, EndSec: 100}, {StartSec: 0, EndSec: 200}}, true},
+		{"single whole-book chapter is FINE", []database.Chapter{
+			{StartSec: 0, EndSec: 93042}}, false},
+		{"ordinary timeline", []database.Chapter{
+			{StartSec: 0, EndSec: 100}, {StartSec: 100, EndSec: 200}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isDegenerateTimeline(tc.in); got != tc.want {
+				t.Fatalf("isDegenerateTimeline(%+v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
