@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_split_joined.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b580d009-3cf0-45d9-bf1b-18f6e1f6c33d
 // last-edited: 2026-09-23
 
@@ -93,8 +93,8 @@ type splitJoinedReport struct {
 	// HeldForReview counts (book, joined credit) pairs left unsplit because
 	// the credit is junk or names only the book's authors. Reported in the
 	// dry run too.
-	HeldForReview       int                `json:"held_for_review"`
-	HeldForReviewSample []heldSplitCredit  `json:"held_for_review_sample,omitempty"`
+	HeldForReview       int               `json:"held_for_review"`
+	HeldForReviewSample []heldSplitCredit `json:"held_for_review_sample,omitempty"`
 	// Apply only.
 	BooksRewritten   int    `json:"books_rewritten"`
 	BooksUnchanged   int    `json:"books_unchanged"`
