@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.32.0
+// version: 1.32.1
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-09-19
+// last-edited: 2026-09-22
 
 package merge
 
@@ -733,7 +733,10 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			continue
 		}
 		for _, m := range mappings {
-			if m.Source == "itunes" && m.ExternalID != "" && !m.Tombstoned {
+			// m.BookID must be the loser itself. A mapping another book owns
+			// (a stale reverse-index entry) would queue removal of the
+			// survivor's own iTunes track.
+			if m.Source == "itunes" && m.ExternalID != "" && !m.Tombstoned && m.BookID == book.ID {
 				dupPIDs = append(dupPIDs, m.ExternalID)
 			}
 		}
