@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
-// last-edited: 2026-09-19
+// last-edited: 2026-09-22
 
 package abs
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -360,7 +361,8 @@ func (h *Handler) loadChapters(bookID string, files []fileView) []audioutil.Chap
 //	     costs one query instead of fifty.
 //	2nd  Book.NarratorsJSON — a JSON array written by the importer; used only when
 //	     the junction is empty, for rows written before the junction existed.
-//	3rd  Book.Narrator — the single-string legacy column, last resort.
+//	3rd  Book.Narrator — the single-string legacy column, last resort, split
+//	     into people with util.SplitCreditNames.
 //
 // The fallbacks are read-only: nothing here writes back, so this function cannot
 // change stored data. If the junction is ever backfilled from the other two, the
@@ -400,7 +402,14 @@ func resolveNarratorTiers(junction []database.Narrator, narratorsJSON, narrator 
 	}
 	if narrator != nil {
 		if name := strings.TrimSpace(*narrator); name != "" {
-			return []string{name}
+			// Split the legacy column the same way every writer that DOES fill
+			// the junction splits it. Metadata providers hand us a narrator
+			// LIST and metafetch joins it with ", " into this column without
+			// touching the junction, so a book whose cast came from Audible
+			// reached the app as one "person" named "Dorrie Sacks, Justin
+			// Thomas James, …" (2026-09-22). SplitCreditNames keeps
+			// "Surname, Given" as one person.
+			return util.SplitCreditNames(name)
 		}
 	}
 	return nil
@@ -431,13 +440,9 @@ func parseNarratorsJSON(raw string) []string {
 		}
 		return out
 	}
-	var out []string
-	for n := range strings.SplitSeq(raw, ",") {
-		if n = strings.TrimSpace(n); n != "" {
-			out = append(out, n)
-		}
-	}
-	return out
+	// A bare string, not JSON: the same splitter as the legacy column, so
+	// "Surname, Given" survives here too.
+	return util.SplitCreditNames(raw)
 }
 
 // ── rendering ───────────────────────────────────────────────────────────────
