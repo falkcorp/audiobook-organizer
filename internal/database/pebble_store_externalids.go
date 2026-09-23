@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_externalids.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f2e5ddb-e07e-4fbb-98a7-ea24d07ec445
-// last-edited: 2026-07-03
+// last-edited: 2026-09-22
 
 package database
 
@@ -15,6 +15,11 @@ import (
 )
 
 // CreateExternalIDMapping creates or replaces an external ID mapping.
+//
+// When the replace moves the ID to a different book, the previous owner's
+// reverse key is deleted in the same batch. Leaving it behind made the old book
+// still list the ID in GetExternalIDsForBook, and a merge that retired that old
+// book queued an iTunes removal for a track the surviving book owned.
 func (p *PebbleStore) CreateExternalIDMapping(mapping *ExternalIDMapping) error {
 	now := time.Now()
 	mapping.CreatedAt = now
@@ -28,9 +33,20 @@ func (p *PebbleStore) CreateExternalIDMapping(mapping *ExternalIDMapping) error 
 	primaryKey := []byte(fmt.Sprintf("ext_id:%s:%s", mapping.Source, mapping.ExternalID))
 	reverseKey := []byte(fmt.Sprintf("ext_id:book:%s:%s:%s", mapping.BookID, mapping.Source, mapping.ExternalID))
 
+	prevOwner, err := p.externalIDOwner(primaryKey)
+	if err != nil {
+		return err
+	}
+
 	batch := p.db.NewBatch()
 	defer batch.Close()
 
+	if prevOwner != "" && prevOwner != mapping.BookID {
+		oldReverseKey := []byte(fmt.Sprintf("ext_id:book:%s:%s:%s", prevOwner, mapping.Source, mapping.ExternalID))
+		if err := batch.Delete(oldReverseKey, nil); err != nil {
+			return fmt.Errorf("pebble Delete ext_id previous owner reverse: %w", err)
+		}
+	}
 	if err := batch.Set(primaryKey, data, nil); err != nil {
 		return fmt.Errorf("pebble Set ext_id primary: %w", err)
 	}
@@ -39,6 +55,27 @@ func (p *PebbleStore) CreateExternalIDMapping(mapping *ExternalIDMapping) error 
 	}
 
 	return batch.Commit(pebble.Sync)
+}
+
+// externalIDOwner returns the BookID currently stored under primaryKey, or ""
+// when there is no mapping. A read failure is an error. An undecodable record
+// returns "" with no error: the caller is about to overwrite it, and refusing
+// would make a corrupt record impossible to repair through this path. Its old
+// reverse key, if any, is then filtered out by GetExternalIDsForBook.
+func (p *PebbleStore) externalIDOwner(primaryKey []byte) (string, error) {
+	data, closer, err := p.db.Get(primaryKey)
+	if err == pebble.ErrNotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("pebble Get ext_id primary: %w", err)
+	}
+	defer closer.Close()
+	var existing ExternalIDMapping
+	if err := json.Unmarshal(data, &existing); err != nil {
+		return "", nil
+	}
+	return existing.BookID, nil
 }
 
 // GetBookByExternalID returns the book_id for a non-tombstoned external ID.
@@ -64,18 +101,32 @@ func (p *PebbleStore) GetBookByExternalID(source, externalID string) (string, er
 }
 
 // GetExternalIDsForBook returns all external ID mappings for a book.
+//
+// The reverse index is only a pointer; the forward record is the truth. A
+// reverse key whose forward mapping now names a different book is stale (left
+// by an owner change before CreateExternalIDMapping cleaned them up) and is
+// skipped, so a book never reports an ID another book owns.
 func (p *PebbleStore) GetExternalIDsForBook(bookID string) ([]ExternalIDMapping, error) {
+	results, _, err := p.externalIDsForBook(bookID)
+	return results, err
+}
+
+// externalIDsForBook walks bookID's reverse index. It returns the mappings the
+// book really owns plus the reverse keys found to be stale, so writers that
+// rewrite the book's index can delete them in the same batch.
+func (p *PebbleStore) externalIDsForBook(bookID string) ([]ExternalIDMapping, [][]byte, error) {
 	prefix := []byte(fmt.Sprintf("ext_id:book:%s:", bookID))
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: append(prefix, 0xff),
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer iter.Close()
 
 	var results []ExternalIDMapping
+	var stale [][]byte
 	for iter.First(); iter.Valid(); iter.Next() {
 		// Parse source and externalID from key: ext_id:book:<bookID>:<source>:<externalID>
 		parts := strings.SplitN(string(iter.Key()), ":", 5)
@@ -96,9 +147,13 @@ func (p *PebbleStore) GetExternalIDsForBook(bookID string) ([]ExternalIDMapping,
 			continue
 		}
 		closer.Close()
+		if mapping.BookID != bookID {
+			stale = append(stale, append([]byte(nil), iter.Key()...))
+			continue
+		}
 		results = append(results, mapping)
 	}
-	return results, nil
+	return results, stale, nil
 }
 
 // IsExternalIDTombstoned checks whether an external ID is tombstoned.
@@ -146,13 +201,21 @@ func (p *PebbleStore) TombstoneExternalID(source, externalID string) error {
 
 // ReassignExternalIDs moves all external ID mappings from one book to another (for merges).
 func (p *PebbleStore) ReassignExternalIDs(oldBookID, newBookID string) error {
-	mappings, err := p.GetExternalIDsForBook(oldBookID)
+	mappings, stale, err := p.externalIDsForBook(oldBookID)
 	if err != nil {
 		return err
 	}
 
 	batch := p.db.NewBatch()
 	defer batch.Close()
+
+	// The old book is being retired; its stale reverse keys point at IDs other
+	// books own and must not be moved to newBookID, only dropped.
+	for _, k := range stale {
+		if err := batch.Delete(k, nil); err != nil {
+			return fmt.Errorf("pebble Delete ext_id stale reverse: %w", err)
+		}
+	}
 
 	now := time.Now()
 	for _, m := range mappings {
@@ -238,8 +301,17 @@ func (p *PebbleStore) BulkCreateExternalIDMappings(mappings []ExternalIDMapping)
 	defer batch.Close()
 
 	now := time.Now()
+	// The existence check reads the committed DB, which cannot see this batch's
+	// own writes. A repeated ID in one call would otherwise be written twice, and
+	// if the repeats named different books the first book's reverse key would be
+	// left stale. First occurrence wins, matching the skip-existing semantics.
+	seen := make(map[string]struct{}, len(mappings))
 	for _, m := range mappings {
 		primaryKey := []byte(fmt.Sprintf("ext_id:%s:%s", m.Source, m.ExternalID))
+		if _, dup := seen[string(primaryKey)]; dup {
+			continue
+		}
+		seen[string(primaryKey)] = struct{}{}
 		// Check if already exists
 		if _, closer, err := p.db.Get(primaryKey); err == nil {
 			closer.Close()
