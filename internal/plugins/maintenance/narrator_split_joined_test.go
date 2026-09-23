@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_split_joined_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9882c157-c994-478a-89fd-0568ba93a56c
 // last-edited: 2026-09-23
 
@@ -167,6 +167,21 @@ func TestSplitJoinedNarrators_AppliesCreditRulesPerBook(t *testing.T) {
 	dry, err := p.splitJoinedNarrators(context.Background(), splitJoinedNarratorsParams{}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 2, dry.HeldForReview, "authors-only and URL credits are held in the dry run")
+	require.Equal(t, 2, dry.BooksWithDrops, "the author and the translator/By: pieces are dropped")
+	preview := make(map[string]splitBookPreview, len(dry.BooksPreview))
+	for _, pv := range dry.BooksPreview {
+		preview[pv.BookID] = pv
+	}
+	require.Len(t, preview, 4, "every affected book is previewed")
+	require.Equal(t, splitBookPreview{
+		BookID: bMixed, Title: "mixed", Authors: []string{"Adrian Tchaikovsky"},
+		Before: []string{"Adrian Tchaikovsky, Ben Allen"}, After: []string{"Ben Allen"},
+		Dropped: []string{"Adrian Tchaikovsky"},
+	}, preview[bMixed])
+	require.Equal(t, []string{"Rick Partlow"}, preview[bTrans].After)
+	require.Equal(t, []string{"By: Rick Partlow", "Zachary J. Lorang - translator"}, preview[bTrans].Dropped)
+	require.Equal(t, []string{"Craig Martelle, Michael Anderle"}, preview[bAuthors].After, "held credits preview unchanged")
+	require.Empty(t, preview[bAuthors].Dropped)
 
 	rep, err := p.splitJoinedNarrators(context.Background(), splitJoinedNarratorsParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
@@ -177,6 +192,9 @@ func TestSplitJoinedNarrators_AppliesCreditRulesPerBook(t *testing.T) {
 	require.Equal(t, []string{"Rick Partlow"}, splitNamesOf(t, s, bTrans))
 	require.Equal(t, []string{"Craig Martelle, Michael Anderle"}, splitNamesOf(t, s, bAuthors), "held, unsplit")
 	require.Equal(t, []string{"https://kickass.to/user/Morrogoth/"}, splitNamesOf(t, s, bJunk), "held, unsplit")
+	for _, id := range []string{bMixed, bTrans, bAuthors, bJunk} {
+		require.Equal(t, preview[id].After, splitNamesOf(t, s, id), "the dry-run preview must be what apply writes")
+	}
 
 	for _, n := range []*database.Narrator{authorsOnly, junk} {
 		got, err := s.GetNarratorByID(n.ID)

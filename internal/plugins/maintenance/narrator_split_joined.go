@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_split_joined.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b580d009-3cf0-45d9-bf1b-18f6e1f6c33d
 // last-edited: 2026-09-23
 
@@ -62,6 +62,11 @@ import (
 
 const splitJoinedSampleLimit = 100
 
+// splitJoinedPreviewLimit caps the per-book preview. It is set well above the
+// 306 books production had on 2026-09-23 so the review sees every book, while
+// keeping a pathological store from producing an unbounded result.
+const splitJoinedPreviewLimit = 2000
+
 var errSplitJoinedStandDownLost = errors.New("split-joined-narrators: scan stand-down lease lost; remaining work abandoned")
 
 type splitJoinedNarratorsParams struct {
@@ -72,11 +77,26 @@ type splitJoinedNarratorsParams struct {
 	Limit int `json:"limit"`
 }
 
+// joinedNarratorSample describes a joined entity. RawSplit is the name split
+// on separators only, BEFORE the per-book rules drop authors, translators and
+// the like; what a book would actually get is in splitBookPreview.
 type joinedNarratorSample struct {
 	NarratorID int      `json:"narrator_id"`
 	Name       string   `json:"name"`
-	People     []string `json:"people"`
+	RawSplit   []string `json:"raw_split"`
 	Books      int      `json:"books"`
+}
+
+// splitBookPreview is what one book's narrator credits would become: the
+// ordered names before and after, and the pieces of a joined credit the rules
+// removed. Held credits stay in After unchanged.
+type splitBookPreview struct {
+	BookID  string   `json:"book_id"`
+	Title   string   `json:"title"`
+	Authors []string `json:"authors"`
+	Before  []string `json:"before"`
+	After   []string `json:"after"`
+	Dropped []string `json:"dropped,omitempty"`
 }
 
 type heldSplitCredit struct {
@@ -95,6 +115,14 @@ type splitJoinedReport struct {
 	// dry run too.
 	HeldForReview       int               `json:"held_for_review"`
 	HeldForReviewSample []heldSplitCredit `json:"held_for_review_sample,omitempty"`
+	// BooksPreview lists, for every affected book up to
+	// splitJoinedPreviewLimit, what its credits would become. Built in the
+	// dry run and before an apply from the same splitCredits call the apply
+	// makes, so it shows the rules' effect rather than the raw split.
+	BooksPreview []splitBookPreview `json:"books_preview,omitempty"`
+	// BooksWithDrops counts books where the rules removed at least one piece
+	// of a joined credit (an author, a translator, ...).
+	BooksWithDrops int `json:"books_with_drops"`
 	// Apply only.
 	BooksRewritten   int    `json:"books_rewritten"`
 	BooksUnchanged   int    `json:"books_unchanged"`
@@ -221,6 +249,50 @@ func splitCredits(bookID string, rows []database.BookNarrator, joined map[int]st
 	return out, true, held, nil
 }
 
+// previewSplit renders one book's before/after credits by name. Dropped lists
+// the separator-split pieces of each joined credit that did not survive
+// verbatim into after: removed as an author or a role credit, or rewritten
+// (a "By:" prefix stripped), in which case the cleaned name is in After.
+func previewSplit(store OpsStore, bookID string, authors []string, before, after []database.BookNarrator,
+	joined map[int]string, nameOf map[int]string) (splitBookPreview, error) {
+	b, err := store.GetBookByID(bookID)
+	if err != nil {
+		return splitBookPreview{}, fmt.Errorf("read book: %w", err)
+	}
+	pv := splitBookPreview{BookID: bookID, Authors: append([]string(nil), authors...)}
+	sort.Strings(pv.Authors)
+	if b != nil {
+		pv.Title = b.Title
+	}
+	names := func(rows []database.BookNarrator) []string {
+		ordered := append([]database.BookNarrator(nil), rows...)
+		sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Position < ordered[j].Position })
+		out := make([]string, 0, len(ordered))
+		for _, r := range ordered {
+			out = append(out, nameOf[r.NarratorID])
+		}
+		return out
+	}
+	pv.Before = names(before)
+	pv.After = names(after)
+	kept := make(map[string]bool, len(pv.After))
+	for _, n := range pv.After {
+		kept[n] = true
+	}
+	for _, r := range before {
+		name, isJoined := joined[r.NarratorID]
+		if !isJoined || kept[name] {
+			continue
+		}
+		for _, piece := range util.SplitCreditNames(name) {
+			if !kept[piece] {
+				pv.Dropped = append(pv.Dropped, piece)
+			}
+		}
+	}
+	return pv, nil
+}
+
 func splitVerdictReason(v util.NarratorCreditVerdict) string {
 	switch v {
 	case util.NarratorCreditJunk:
@@ -326,7 +398,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			break
 		}
 		report.JoinedSample = append(report.JoinedSample, joinedNarratorSample{
-			NarratorID: n.ID, Name: n.Name, People: util.SplitCreditNames(n.Name), Books: perNarrator[n.ID],
+			NarratorID: n.ID, Name: n.Name, RawSplit: util.SplitCreditNames(n.Name), Books: perNarrator[n.ID],
 		})
 	}
 
@@ -340,11 +412,16 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 	sort.Strings(sortedBooks)
 	authorsByBook := make(map[string][]string, len(books))
 	placeholder := make(map[string]int)
+	nameOf := make(map[int]string, len(narrators))
+	for _, n := range narrators {
+		nameOf[n.ID] = n.Name
+	}
 	dryResolve := func(name string) (int, error) {
 		if id, ok := placeholder[name]; ok {
 			return id, nil
 		}
 		placeholder[name] = -1 - len(placeholder)
+		nameOf[placeholder[name]] = name
 		return placeholder[name], nil
 	}
 	for _, bookID := range sortedBooks {
@@ -353,7 +430,20 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			return report, fmt.Errorf("split-joined-narrators: book %s: %w", bookID, aerr)
 		}
 		authorsByBook[bookID] = authors
-		_, _, heldHere, _ := splitCredits(bookID, books[bookID], joined, authors, dryResolve)
+		next, _, heldHere, serr := splitCredits(bookID, books[bookID], joined, authors, dryResolve)
+		if serr != nil {
+			return report, fmt.Errorf("split-joined-narrators: book %s preview: %w", bookID, serr)
+		}
+		preview, perr := previewSplit(store, bookID, authors, books[bookID], next, joined, nameOf)
+		if perr != nil {
+			return report, fmt.Errorf("split-joined-narrators: book %s: %w", bookID, perr)
+		}
+		if len(preview.Dropped) > 0 {
+			report.BooksWithDrops++
+		}
+		if len(report.BooksPreview) < splitJoinedPreviewLimit {
+			report.BooksPreview = append(report.BooksPreview, preview)
+		}
 		report.HeldForReview += len(heldHere)
 		for _, h := range heldHere {
 			if len(report.HeldForReviewSample) < splitJoinedSampleLimit {
@@ -362,7 +452,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 		}
 	}
 	log.Info("split-joined-narrators classified", "joined", report.Joined, "books_affected", report.BooksAffected,
-		"held_for_review", report.HeldForReview, "sample", report.JoinedSample,
+		"held_for_review", report.HeldForReview, "books_with_drops", report.BooksWithDrops, "sample", report.JoinedSample,
 		"held_for_review_sample", report.HeldForReviewSample)
 
 	if !params.Apply {
