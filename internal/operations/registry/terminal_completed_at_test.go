@@ -1,7 +1,7 @@
 // file: internal/operations/registry/terminal_completed_at_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 65ef6402-0192-4d0d-ac5a-0314f463137c
-// last-edited: 2026-09-12
+// last-edited: 2026-09-22
 
 package registry_test
 
@@ -128,9 +128,10 @@ func TestTerminalCompletedAt_CanceledWhileQueued(t *testing.T) {
 	requireCompletedAtT12(t, store, opID, "canceled")
 }
 
-// TestTerminalCompletedAt_InterruptedDropped covers the abandonment path: a run
-// that ignores cancellation under ResumeDrop is written interrupted_dropped.
-func TestTerminalCompletedAt_InterruptedDropped(t *testing.T) {
+// TestTerminalCompletedAt_Abandoned covers the abandonment path: a run that
+// ignores cancellation still gets completed_at stamped. A deliberate Cancel is
+// written "canceled" however slowly the Run unwinds.
+func TestTerminalCompletedAt_Abandoned(t *testing.T) {
 	ctx := t.Context()
 	store := newFakeStore()
 	bus := &t06TermBus{}
@@ -144,7 +145,7 @@ func TestTerminalCompletedAt_InterruptedDropped(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	started := make(chan struct{})
-	def := makeValidDef("test.t12-dropped") // ResumeDrop -> interrupted_dropped
+	def := makeValidDef("test.t12-dropped")
 	def.Run = func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error {
 		close(started)
 		<-release // ignore ctx: forces the abandonment path
@@ -161,5 +162,5 @@ func TestTerminalCompletedAt_InterruptedDropped(t *testing.T) {
 	}
 	_ = r.Cancel(opID)
 	bus.waitTerminal(t, opID, 5*time.Second)
-	requireCompletedAtT12(t, store, opID, "interrupted_dropped")
+	requireCompletedAtT12(t, store, opID, "canceled")
 }
