@@ -1,5 +1,5 @@
 // file: internal/database/narrator_credit_sync_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3345795a-09fa-4889-a511-4bb98ed412d5
 // last-edited: 2026-09-23
 
@@ -113,7 +113,6 @@ func newNarratorSyncTestStore(t *testing.T) *PebbleStore {
 }
 
 // ---- store-level sync: every book write that changes Narrator ----
-
 
 func TestCreateBook_SyncsNarratorJunction(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
