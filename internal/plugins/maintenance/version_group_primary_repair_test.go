@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_repair_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b6c88f6f-930b-4ea7-bded-52290d5a52aa
 // last-edited: 2026-09-24
 
@@ -326,5 +326,184 @@ func TestVGPrimaryRepair_ReportsNonLiveEffectivePrimaries(t *testing.T) {
 	require.Equal(t, 1, rep.NonLivePrimaryGroups)
 	require.Equal(t, 1, rep.NonLivePrimaryBooks)
 	require.Equal(t, []string{"vg-ok"}, rep.NonLivePrimarySample)
-	require.Equal(t, 2, rep.Candidates, "vg-ok's live members are still exactly one true, one false")
+	// vg-ok's live members are exactly one true, one false, but the loser
+	// is still counted primary and ABS lists it, so vg-ok is now a
+	// candidate (2026-09-24) whose apply demotes only the loser.
+	require.Equal(t, 3, rep.Candidates)
+	var ok *vgRepairGroupReport
+	for i := range rep.Groups {
+		if rep.Groups[i].GroupID == "vg-ok" {
+			ok = &rep.Groups[i]
+		}
+	}
+	require.NotNil(t, ok)
+	require.Equal(t, vgDecisionDemoteNonLive, ok.Kind)
+	require.Equal(t, []string{"LOSER"}, ok.DemoteNonLive)
+
+	rep, err = f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Apply: true, GroupIDs: []string{"vg-ok"}})
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.Applied)
+	require.Equal(t, "false", f.flag(t, "LOSER"))
+	require.Equal(t, "true", f.flag(t, "OK1"))
+	require.Equal(t, "false", f.flag(t, "OK2"))
 }
+
+// seedBackwardsMerge builds prod's backwards MATCH-4 shape through the real
+// store path: SRC (organized_source, older) and ORG (organized, the library
+// copy, same tier) in vg-rev, then FlagMetadataHashDuplicate(SRC, ORG), which
+// writes ORG merged_into=SRC and is_primary_version=false exactly as MATCH-4
+// did. SRC keeps its explicit true, so the live members look correct.
+func (f *vgRepairFixture) seedBackwardsMerge(t *testing.T, gid, src, org string) {
+	t.Helper()
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	f.book(t, src, gid, "organized_source", "true", 10, false, base, func(b *database.Book) {
+		b.Description = strPtr("source description")
+	})
+	f.book(t, org, gid, "organized", "true", 10, false, base.Add(time.Hour), nil)
+	require.NoError(t, f.s.FlagMetadataHashDuplicate(src, org))
+	require.Equal(t, "false", f.flag(t, org))
+}
+
+func findGroup(t *testing.T, rep *vgRepairReport, gid string) *vgRepairGroupReport {
+	t.Helper()
+	for i := range rep.Groups {
+		if rep.Groups[i].GroupID == gid {
+			return &rep.Groups[i]
+		}
+	}
+	t.Fatalf("group %s not in report", gid)
+	return nil
+}
+
+func TestVGPrimaryRepair_ReviveBackwardsMerge(t *testing.T) {
+	f := newVGRepairFixture(t)
+	f.seedBackwardsMerge(t, "vg-rev", "SRC", "ORG")
+
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{})
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.Candidates, "a same-group merge loser makes the group a candidate")
+	g := findGroup(t, rep, "vg-rev")
+	require.Equal(t, vgDecisionRevive, g.Kind)
+	require.Equal(t, "ORG", g.WinnerID)
+	require.Equal(t, "ORG", g.RevivedID)
+	require.Equal(t, "SRC", g.RevivedFrom)
+	require.Equal(t, 1, rep.ByDecision[vgDecisionRevive])
+	b, err := f.s.GetBookByID("ORG")
+	require.NoError(t, err)
+	require.Equal(t, "SRC", *b.MergedIntoBookID, "dry run wrote")
+
+	rep, err = f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Apply: true, GroupIDs: []string{"vg-rev"}})
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.Applied)
+	require.Equal(t, "true", f.flag(t, "ORG"))
+	require.Equal(t, "false", f.flag(t, "SRC"))
+	b, err = f.s.GetBookByID("ORG")
+	require.NoError(t, err)
+	require.Nil(t, b.MergedIntoBookID)
+	// Carry-over donors must be eligible, so the organized_source row
+	// donates nothing.
+	require.True(t, b.Description == nil || *b.Description == "")
+	// The memdb/core projection agrees: the merge is gone, not put back.
+	cores, err := f.s.GetAllBooksCoreComplete(0, 0)
+	require.NoError(t, err)
+	for _, c := range cores {
+		if c.ID == "ORG" {
+			require.Nil(t, c.MergedIntoBookID)
+		}
+	}
+
+	// Rerun: nothing left to do.
+	rep, err = f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{})
+	require.NoError(t, err)
+	require.Zero(t, rep.Candidates)
+
+	// Undo on the revived book restores the merge and the flag.
+	svc := metafetch.NewService(f.s)
+	res, err := svc.UndoLastApply("ORG")
+	require.NoError(t, err)
+	require.Contains(t, res.Reverted, "merged_into_book_id")
+	require.Contains(t, res.Reverted, "is_primary_version")
+	b, err = f.s.GetBookByID("ORG")
+	require.NoError(t, err)
+	require.NotNil(t, b.MergedIntoBookID)
+	require.Equal(t, "SRC", *b.MergedIntoBookID)
+	require.Equal(t, "false", f.flag(t, "ORG"))
+}
+
+// A better-tier source keeps the group held: reviving would crown the worse
+// copy.
+func TestVGPrimaryRepair_ReviveRefusedWhenSourceIsBetter(t *testing.T) {
+	f := newVGRepairFixture(t)
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	f.book(t, "SRC", "vg-rev", "organized_source", "true", 10, false, base, nil)
+	f.book(t, "ORG", "vg-rev", "organized", "true", 1, false, base.Add(time.Hour), nil)
+	require.NoError(t, f.s.FlagMetadataHashDuplicate("SRC", "ORG"))
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Apply: true, GroupIDs: []string{"vg-rev"}})
+	require.NoError(t, err)
+	require.Equal(t, versionprimary.DecisionHeld, findGroup(t, rep, "vg-rev").Kind)
+	require.Zero(t, rep.Applied)
+	b, err := f.s.GetBookByID("ORG")
+	require.NoError(t, err)
+	require.Equal(t, "SRC", *b.MergedIntoBookID)
+}
+
+// A loser whose file is in the iTunes library is hands-off.
+func TestVGPrimaryRepair_ReviveRefusesITunes(t *testing.T) {
+	f := newVGRepairFixture(t)
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	f.book(t, "SRC", "vg-rev", "organized_source", "true", 10, false, base, nil)
+	f.book(t, "ORG", "vg-rev", "organized", "true", 10, true, base.Add(time.Hour), nil)
+	path := filepath.Join(f.root, "books", "itunes", "ORG", "ORG.m4b")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("m4b"), 0o644))
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{ID: "bf-ORG", BookID: "ORG", FilePath: path}))
+	f.chapters[path] = 10
+	require.NoError(t, f.s.FlagMetadataHashDuplicate("SRC", "ORG"))
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Apply: true, GroupIDs: []string{"vg-rev"}})
+	require.NoError(t, err)
+	require.Equal(t, versionprimary.DecisionHeld, findGroup(t, rep, "vg-rev").Kind)
+	require.Zero(t, rep.Applied)
+	require.Equal(t, "false", f.flag(t, "ORG"))
+}
+
+// The organized copy was merged into a healthy book of ANOTHER group: the
+// held group is labelled, and nothing is written even on apply.
+func TestVGPrimaryRepair_LeftoverMergedElsewhereIsReportOnly(t *testing.T) {
+	f := newVGRepairFixture(t)
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	f.book(t, "SRC", "vg-left", "organized_source", "nil", 10, false, base, nil)
+	f.book(t, "ORG", "vg-left", "organized", "true", 10, false, base.Add(time.Hour), nil)
+	f.book(t, "OTHER", "vg-other", "organized", "true", 10, false, base, nil)
+	require.NoError(t, f.s.FlagMetadataHashDuplicate("OTHER", "ORG"))
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Apply: true, GroupIDs: []string{"vg-left"}})
+	require.NoError(t, err)
+	g := findGroup(t, rep, "vg-left")
+	require.Equal(t, vgDecisionLeftover, g.Kind)
+	require.Equal(t, "ORG", g.LeftoverBookID)
+	require.Equal(t, "OTHER", g.LeftoverTargetBookID)
+	require.Equal(t, "vg-other", g.LeftoverTargetGroupID)
+	require.Zero(t, rep.Applied)
+	require.Equal(t, "nil", f.flag(t, "SRC"))
+	b, err := f.s.GetBookByID("ORG")
+	require.NoError(t, err)
+	require.Equal(t, "OTHER", *b.MergedIntoBookID)
+}
+
+// A non-live primary in a group with no live primary to hand over to is
+// kept: ABS lists merge losers, so demoting it could hide the only copy.
+func TestVGPrimaryRepair_NonLiveKeptWhenGroupHeld(t *testing.T) {
+	f := newVGRepairFixture(t)
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	f.book(t, "SRC", "vg-h", "organized_source", "nil", 10, false, base, nil)
+	f.book(t, "LOSER", "vg-h", "imported", "true", 10, false, base.Add(time.Hour), func(b *database.Book) {
+		b.MergedIntoBookID = strPtr("SRC")
+	})
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Apply: true, GroupIDs: []string{"vg-h"}})
+	require.NoError(t, err)
+	g := findGroup(t, rep, "vg-h")
+	require.Equal(t, versionprimary.DecisionHeld, g.Kind)
+	require.Equal(t, []string{"LOSER"}, g.NonLiveKept)
+	require.Equal(t, 1, rep.NonLiveKeptBooks)
+	require.Equal(t, "true", f.flag(t, "LOSER"))
+}
+

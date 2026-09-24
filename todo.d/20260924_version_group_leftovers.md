@@ -1,0 +1,2 @@
+- [ ] Fold the 216 held "suspicious" version groups (chapter fragments, owner 2026-09-24) into the parked chapter-consolidation work; leave them held until then. Also list the truncated m4bs found there (Neverwhere, the 10 Bobiverse 2 `_copyN` files).
+- [ ] Decide the `leftover_merged_elsewhere` groups from `maintenance.version-group-primary-repair` (organized copy merged into another group's book); the op only labels them.
