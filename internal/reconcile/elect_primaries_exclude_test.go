@@ -1,7 +1,7 @@
 // file: internal/reconcile/elect_primaries_exclude_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1c6f0b2a-5d83-4a71-9f2c-7b4e83d1a905
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package reconcile
 
@@ -63,7 +63,7 @@ func (f *electFakeStore) addElectBookAt(id, title, gid string, primary bool, cre
 // than an off switch.
 func TestElectMissingPrimaries_ExcludedGroupIsHeldAndCounted(t *testing.T) {
 	base := time.Date(2026, 4, 4, 0, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 
 	// Held: a three-chapter run of one book, the shape from the census.
 	store.addElectBookAt("hold-a", "Foundation And", "vg-hold", false, base,
@@ -79,7 +79,7 @@ func TestElectMissingPrimaries_ExcludedGroupIsHeldAndCounted(t *testing.T) {
 	store.addElectBookAt("keep-b", "Shadowfever", "vg-keep", false, base.Add(time.Hour),
 		"/books/Moning/Shadowfever/Shadowfever (1).m4b")
 
-	res, err := ElectMissingPrimaries(store, false, []string{"vg-hold"})
+	res, err := ElectMissingPrimaries(store, false, []string{"vg-hold"}, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestElectMissingPrimaries_ExcludedGroupIsHeldAndCounted(t *testing.T) {
 // predicate sees nothing positional in it.
 func TestElectMissingPrimaries_CensusChapterGroupsAreNotCrowned(t *testing.T) {
 	base := time.Date(2026, 4, 4, 0, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 
 	numbered := map[string]bool{
 		"vg-3112fc4ebc1e715d": true, "vg-108615cd250b7fca": true,
@@ -169,7 +169,7 @@ func TestElectMissingPrimaries_CensusChapterGroupsAreNotCrowned(t *testing.T) {
 	store.addElectBookAt("control-b", "Control", "vg-control", false, base.Add(time.Hour),
 		"/books/Control/Control (1).m4b")
 
-	res, err := ElectMissingPrimaries(store, false, electCensusChapterGroups)
+	res, err := ElectMissingPrimaries(store, false, electCensusChapterGroups, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -207,11 +207,11 @@ func TestElectMissingPrimaries_CensusChapterGroupsAreNotCrowned(t *testing.T) {
 // list BEFORE authorising the apply — which is the whole point of previewing.
 func TestElectMissingPrimaries_DryRunWithExclusionWritesNothing(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 	store.addElectBook("dry-hold", "Dry Hold", "vg-dry-hold", false, base)
 	store.addElectBook("dry-keep", "Dry Keep", "vg-dry-keep", false, base)
 
-	res, err := ElectMissingPrimaries(store, true, []string{"vg-dry-hold"})
+	res, err := ElectMissingPrimaries(store, true, []string{"vg-dry-hold"}, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestElectMissingPrimaries_DryRunWithExclusionWritesNothing(t *testing.T) {
 // difference without reading the group by hand.
 func TestElectMissingPrimaries_UnknownAndInertExcludeIDsAreReported(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 	store.addElectBook("real-a", "Real", "vg-real", false, base)
 	// Already elects a primary: excluding it holds nothing back.
 	store.addElectBook("done-a", "Done", "vg-done", true, base)
@@ -246,7 +246,7 @@ func TestElectMissingPrimaries_UnknownAndInertExcludeIDsAreReported(t *testing.T
 
 	res, err := ElectMissingPrimaries(store, true, []string{
 		"vg-real", "vg-done", "vg-typo-not-in-library", " ", "VG-REAL",
-	})
+	}, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/reconcile/elect_primaries_lost_update_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e7852bba-e5a0-4efe-980b-3c35ba39fb0d
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package reconcile
 
@@ -51,12 +51,12 @@ func (s electLostUpdateStore) ModifyBook(id string, fn func(*database.Book) erro
 // its write survives. Against the old GetBookByID -> UpdateBook(whole row) it
 // fails with "Duration reverted".
 func TestElectMissingPrimaries_DoesNotRevertConcurrentColumns(t *testing.T) {
-	inner := newElectFakeStore()
+	inner := newElectFakeStore(t)
 	base := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
 	inner.addElectBook("solo", "Solo", "vg-solo", false, base)
 	store := electLostUpdateStore{inner}
 
-	res, err := ElectMissingPrimaries(store, false, nil)
+	res, err := ElectMissingPrimaries(store, false, nil, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
