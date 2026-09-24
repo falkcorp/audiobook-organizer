@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e8b5d10-7c4a-4f93-8a61-d9f3b7c2e045
 // last-edited: 2026-09-24
 
@@ -96,10 +96,20 @@ func newICFixture(t *testing.T) *icFixture {
 // (created on disk), each with PID "PID-<i>-<id>" when pids is true.
 func (f *icFixture) book(t *testing.T, id, gid, title string, paths []string) {
 	t.Helper()
+	f.bookBy(t, id, gid, title, nil, "", paths)
+}
+
+// bookBy is book with an author id and an ASIN (either may be empty).
+func (f *icFixture) bookBy(t *testing.T, id, gid, title string, authorID *int, asin string, paths []string) {
+	t.Helper()
 	st, g, tru := "organized", gid, true
 	c := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	_, err := f.s.CreateBook(&database.Book{ID: id, Title: title, VersionGroupID: &g, LibraryState: &st,
-		IsPrimaryVersion: &tru, CreatedAt: &c, FilePath: paths[0]})
+	b := &database.Book{ID: id, Title: title, VersionGroupID: &g, LibraryState: &st,
+		IsPrimaryVersion: &tru, CreatedAt: &c, FilePath: paths[0], AuthorID: authorID}
+	if asin != "" {
+		b.ASIN = &asin
+	}
+	_, err := f.s.CreateBook(b)
 	require.NoError(t, err)
 	for i, p := range paths {
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
@@ -266,4 +276,62 @@ func TestITunesClone_Refusals(t *testing.T) {
 	p := &Plugin{deps: f.deps}
 	_, err = p.itunesCloneIntoLibrary(context.Background(), icParams{Apply: true}, f.root, &opIDReporter{id: "x"})
 	require.ErrorContains(t, err, "group_ids")
+}
+
+func TestICTitleKeys(t *testing.T) {
+	for _, tc := range []struct {
+		title string
+		want  []string
+	}{
+		{"Chaos Vector", []string{"chaos vector"}},
+		{"02 - Chaos Vector", []string{"02 chaos vector", "chaos vector"}},
+		{"Champion of Deania: A Cultivating Gamelit Harem Adventure (Spellheart Book 6)",
+			[]string{"champion of deania a cultivating gamelit harem adventure spellheart book 6", "champion of deania"}},
+		{"The Tower's Price", []string{"towers price"}},
+		{"01", nil},
+		{"", nil},
+	} {
+		require.Equal(t, tc.want, icTitleKeys(tc.title), tc.title)
+	}
+}
+
+// The same book organized in the library under ANOTHER group is found by
+// author+title or by ASIN, and the group is skipped with nothing written.
+// A copy with no file under the root, a different author, and a bare-number
+// title are not matches.
+func TestITunesClone_SkipsBookAlreadyInLibrary(t *testing.T) {
+	f := newICFixture(t)
+	a7, a8, a9 := 7, 8, 9
+	lib := func(name string) string { return filepath.Join(f.root, "Elsewhere", name) }
+
+	f.bookBy(t, "S", "vg-s", "02 - Chaos Vector", &a7, "", []string{f.itunes("02 - Chaos Vector.m4b")})
+	f.bookBy(t, "L", "vg-l", "Chaos Vector", &a7, "", []string{lib("Chaos Vector.m4b")})
+
+	f.bookBy(t, "A", "vg-a", "Book A", &a8, "b0asin", []string{f.itunes("Book A.m4b")})
+	f.bookBy(t, "LA", "vg-la", "Some Other Title", &a9, " B0ASIN ", []string{lib("Other.m4b")})
+
+	// Same title and author, but its only file is in iTunes: not a library copy.
+	f.bookBy(t, "N", "vg-n", "Book N", &a7, "", []string{f.itunes("Book N.m4b")})
+	f.bookBy(t, "N2", "vg-n2", "Book N", &a7, "", []string{f.itunes("Book N copy.m4b")})
+	// Same title, different author.
+	f.bookBy(t, "D", "vg-d", "Chaos Vector", &a9, "", []string{f.itunes("Chaos Vector by 9.m4b")})
+	// Bare-number titles by one author never match each other.
+	f.bookBy(t, "Z", "vg-z", "01", &a8, "", []string{f.itunes("01.m4b")})
+	f.bookBy(t, "Z2", "vg-z2", "01", &a8, "", []string{lib("01.m4b")})
+
+	rep := f.run(t, icParams{Apply: true, GroupIDs: []string{"vg-s", "vg-a", "vg-n", "vg-d", "vg-z"}})
+
+	for gid, copyID := range map[string]string{"vg-s": "L", "vg-a": "LA"} {
+		g := icGroup(t, rep, gid)
+		require.Equal(t, icDecisionSkip, g.Decision, gid)
+		require.Equal(t, "already_in_library", g.Reason, gid+" "+g.Error)
+		require.Equal(t, []string{copyID}, g.LibraryCopies, gid)
+		require.Empty(t, g.Outcome, gid+": nothing written")
+	}
+	_, err := os.Stat(filepath.Join(f.root, "Author", "02 - Chaos Vector"))
+	require.True(t, os.IsNotExist(err), "a skipped group wrote a clone")
+	for _, gid := range []string{"vg-n", "vg-d", "vg-z"} {
+		g := icGroup(t, rep, gid)
+		require.Equal(t, icOutcomeApplied, g.Outcome, gid+" "+g.Reason+g.Error)
+	}
 }

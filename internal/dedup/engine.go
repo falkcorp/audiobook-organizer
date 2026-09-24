@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.83.3
+// version: 1.84.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package dedup
 
@@ -4225,6 +4225,11 @@ var normalizeTitleQuoteStripper = regexp.MustCompile("[\u0027\u2018\u2019\u201C\
 // two titles are "the same book". They are applied uniformly on both sides
 // of any title comparison so the folding never produces false positives on
 // its own — the caller still has to decide how close is close enough.
+// NormalizeTitle is normalizeTitle for callers outside the package that must
+// fold titles exactly as dedup does (maintenance.itunes-clone-into-library's
+// already-in-library check), so the two never drift apart.
+func NormalizeTitle(title string) string { return normalizeTitle(title) }
+
 func normalizeTitle(title string) string {
 	title = strings.ToLower(strings.TrimSpace(title))
 

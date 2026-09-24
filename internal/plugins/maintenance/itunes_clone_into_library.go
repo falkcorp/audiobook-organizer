@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-09-24
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -54,6 +56,14 @@ import (
 // by group) of exactly what it changed: the new book, each PID's old and new
 // row, each repointed row's old path, the source's prior state. mode rollback
 // with group_ids reverses from the record, never by inference.
+//
+// ALREADY IN LIBRARY. A group is only one view of a book: the same book is
+// often organized in the library under ANOTHER group (a separate import that
+// was never linked). Cloning then adds a duplicate. The 2026-09-24 canary did
+// that for about 11 of 20. So before planning a clone the op looks for a book
+// outside the group that is organized with a live file under the root and is
+// the same book by ASIN, or by author plus title (icTitleKeys); a hit skips
+// the group as already_in_library and names those books for a merge.
 //
 // Guards: dry run by default; apply and rollback need explicit group_ids;
 // refuses while library.scan runs and holds the scan stand-down; Doctor Who /
@@ -123,8 +133,11 @@ type icGroupReport struct {
 	Bytes        int64    `json:"bytes,omitempty"`
 	Destinations []string `json:"destinations,omitempty"`
 	CloneBookID  string   `json:"clone_book_id,omitempty"`
-	Outcome      string   `json:"outcome,omitempty"`
-	Error        string   `json:"error,omitempty"`
+	// LibraryCopies are the books outside the group that already hold this
+	// book in the library (reason already_in_library).
+	LibraryCopies []string `json:"library_copies,omitempty"`
+	Outcome       string   `json:"outcome,omitempty"`
+	Error         string   `json:"error,omitempty"`
 }
 
 type icReport struct {
@@ -199,6 +212,7 @@ type icRunner struct {
 	rootDir string
 	opID    string
 	apply   bool
+	library *icLibraryIndex
 }
 
 func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, rootDir string, reporter sdk.Reporter) (*icReport, error) {
@@ -226,10 +240,14 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 	run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, cloner: p.deps, rootDir: rootDir, opID: opID, apply: params.Apply}
 
 	work := requested
-	if len(work) == 0 {
-		var err error
-		if work, err = run.discover(); err != nil {
-			return report, err
+	if !params.Rollback {
+		books, err := ops.GetAllBooksCoreComplete(0, 0)
+		if err != nil {
+			return report, fmt.Errorf("list books: %w", err)
+		}
+		run.library = newICLibraryIndex(books)
+		if len(work) == 0 {
+			work = discoverITunesCloneGroups(books)
 		}
 	}
 	report.Candidates = len(work)
@@ -311,14 +329,10 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 	return report, nil
 }
 
-// discover lists groups with a live organized member that is iTunes-linked
-// (a PID, an iTunes import source, or a path under books/itunes). The plan
-// then reads each one's files and decides.
-func (r *icRunner) discover() ([]string, error) {
-	books, err := r.store.GetAllBooksCoreComplete(0, 0)
-	if err != nil {
-		return nil, fmt.Errorf("list books: %w", err)
-	}
+// discoverITunesCloneGroups lists groups with a live organized member that
+// is iTunes-linked (a PID, an iTunes import source, or a path under
+// books/itunes). The plan then reads each one's files and decides.
+func discoverITunesCloneGroups(books []database.BookCore) []string {
 	seen := map[string]bool{}
 	var out []string
 	for i := range books {
@@ -337,6 +351,131 @@ func (r *icRunner) discover() ([]string, error) {
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// icLeadingNumber is a track or series number an iTunes title often carries
+// ("02 - Chaos Vector").
+var icLeadingNumber = regexp.MustCompile(`^\s*\d+\s*[-.\x{2013}]\s*`)
+
+// icTitleKeys are the folded forms a title is matched on: the whole title,
+// and its base (no leading number, nothing after a colon or an opening
+// parenthesis), so "Champion of Deania: A ... Adventure (Spellheart Book 6)"
+// meets "Champion of Deania". A key with no letter ("01") is dropped: bare
+// numbers are exactly the mis-titled rows that must not match each other.
+// A shared base between two different books by one author is possible
+// ("Foo: Book 1" / "Foo: Book 2"); that errs toward skipping, which only
+// holds a group for review, never writes.
+func icTitleKeys(title string) []string {
+	base := title
+	if i := strings.IndexAny(base, ":("); i > 0 {
+		base = base[:i]
+	}
+	var keys []string
+	for _, k := range []string{dedup.NormalizeTitle(title), dedup.NormalizeTitle(icLeadingNumber.ReplaceAllString(base, ""))} {
+		if k == "" || !strings.ContainsFunc(k, func(r rune) bool { return r >= 'a' && r <= 'z' }) {
+			continue
+		}
+		if len(keys) == 0 || keys[0] != k {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+// icLibraryIndex finds organized books by author+title key and by ASIN. It
+// is built once per run from the full book list; each hit is re-read and its
+// files checked at plan time (libraryCopies), so a stale entry cannot cause a
+// skip on its own.
+type icLibraryIndex struct {
+	byTitle map[string][]string // "<authorID>|<title key>" -> book ids
+	byASIN  map[string][]string
+}
+
+func icASINKey(asin *string) string {
+	if asin == nil {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimSpace(*asin))
+}
+
+func icTitleIndexKey(authorID int, key string) string { return fmt.Sprintf("%d|%s", authorID, key) }
+
+func newICLibraryIndex(books []database.BookCore) *icLibraryIndex {
+	ix := &icLibraryIndex{byTitle: map[string][]string{}, byASIN: map[string][]string{}}
+	for i := range books {
+		b := &books[i]
+		if b.IsSoftDeleted() || b.LibraryState == nil || *b.LibraryState != "organized" {
+			continue
+		}
+		if b.AuthorID != nil {
+			for _, k := range icTitleKeys(b.Title) {
+				tk := icTitleIndexKey(*b.AuthorID, k)
+				ix.byTitle[tk] = append(ix.byTitle[tk], b.ID)
+			}
+		}
+		if a := icASINKey(b.ASIN); a != "" {
+			ix.byASIN[a] = append(ix.byASIN[a], b.ID)
+		}
+	}
+	return ix
+}
+
+// candidates returns the ids that share the book's ASIN, or its author and a
+// title key. A book with neither has none: no author means no safe match.
+func (ix *icLibraryIndex) candidates(book *database.Book) []string {
+	seen := map[string]bool{book.ID: true}
+	var out []string
+	add := func(ids []string) {
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	if a := icASINKey(book.ASIN); a != "" {
+		add(ix.byASIN[a])
+	}
+	if book.AuthorID != nil {
+		for _, k := range icTitleKeys(book.Title) {
+			add(ix.byTitle[icTitleIndexKey(*book.AuthorID, k)])
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// libraryCopies returns the books outside group gid that hold this book in
+// the library: live, organized, and at least one present file under the
+// root that is not an iTunes file. A read error fails the group closed.
+func (r *icRunner) libraryCopies(book *database.Book, gid string) ([]string, error) {
+	if r.library == nil {
+		return nil, nil
+	}
+	var out []string
+	for _, id := range r.library.candidates(book) {
+		b, err := r.store.GetBookByID(id)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", id, err)
+		}
+		if b == nil || b.IsSoftDeleted() || b.LibraryState == nil || *b.LibraryState != "organized" {
+			continue
+		}
+		if b.VersionGroupID != nil && *b.VersionGroupID == gid {
+			continue
+		}
+		files, err := r.store.GetBookFiles(id)
+		if err != nil {
+			return nil, fmt.Errorf("read files of %s: %w", id, err)
+		}
+		for _, f := range files {
+			if !f.Missing && !authorPathLinkIsITunes(f.FilePath) && pathutil.IsWithin(f.FilePath, r.rootDir) {
+				out = append(out, id)
+				break
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -398,6 +537,15 @@ func (r *icRunner) plan(ctx context.Context, gid string) (icGroupReport, *icPlan
 	g.SourceBookID, g.Title = book.ID, book.Title
 	if applygate.IsOwnerManualOnly(book.FilePath, "") || applygate.IsOwnerManualOnly(book.Title, "") {
 		return skipped(g, "owner_manual_only"), nil
+	}
+	copies, err := r.libraryCopies(book, gid)
+	if err != nil {
+		g.Decision, g.Error = icDecisionSkip, "already-in-library check: "+err.Error()
+		return g, nil
+	}
+	if len(copies) > 0 {
+		g.LibraryCopies = copies
+		return skipped(g, "already_in_library"), nil
 	}
 	all, err := r.store.GetBookFiles(book.ID)
 	if err != nil {
