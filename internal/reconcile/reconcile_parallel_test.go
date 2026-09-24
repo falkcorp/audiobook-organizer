@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_parallel_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package reconcile
 
@@ -100,6 +100,22 @@ func (f *fakeReconcileStore) ModifyBook(id string, fn func(*database.Book) error
 	f.updated[id] = &stored
 	return &cp, nil
 }
+
+// GetBooksByVersionGroup and GetChaptersForBook serve the primary hand-off
+// (versionprimary.EnsureSinglePrimary) the retiring passes now run.
+func (f *fakeReconcileStore) GetBooksByVersionGroup(gid string) ([]database.Book, error) {
+	f.lock()
+	defer f.unlock()
+	var out []database.Book
+	for _, b := range f.byID {
+		if b.VersionGroupID != nil && *b.VersionGroupID == gid {
+			out = append(out, *b)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeReconcileStore) GetChaptersForBook(string) ([]database.Chapter, error) { return nil, nil }
 
 // TestFindBrokenSegmentBooks_ParallelOrderAndCounts verifies the parallelized
 // FindBrokenSegmentBooks: Details must come out in book order (not scrambled by
