@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-24
 
@@ -187,7 +187,7 @@ var slogRatchet = map[string]int{
 	"internal/metafetch/metadata_state_service.go":               2,
 	"internal/metafetch/openlibrary.go":                          8,
 	"internal/metafetch/service.go":                              11,
-	"internal/metafetch/service_apply.go":                        29,
+	"internal/metafetch/service_apply.go":                        27,
 	"internal/metafetch/service_fetch.go":                        12,
 	"internal/metafetch/service_files.go":                        7,
 	"internal/metafetch/service_normalize.go":                    2,

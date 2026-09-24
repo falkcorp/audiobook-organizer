@@ -1,5 +1,5 @@
 // file: internal/versionprimary/rank.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c2a14de5-3125-41f3-a4e8-e0126c71293f
 // last-edited: 2026-09-24
 
@@ -247,6 +247,12 @@ func Tier(s Signals) int {
 		return TierM4BNoChapters
 	}
 }
+
+// Eligible reports whether a member with these signals may be crowned: live,
+// organized, and every active file present under the library root. It is
+// the test Elect applies, exported for callers that rank candidates outside
+// a version group (MATCH-4's survivor choice).
+func Eligible(b *database.Book, s Signals) bool { return ineligibleReason(b, s) == "" }
 
 // ineligibleReason returns "" for an eligible member.
 func ineligibleReason(b *database.Book, s Signals) string {

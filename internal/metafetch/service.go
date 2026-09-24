@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.32.0
+// version: 5.33.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package metafetch
 
@@ -121,6 +121,9 @@ type metafetchFileReader interface {
 	// fingerprint, transcript and tags on the row.
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	GetAllImportPaths() ([]database.ImportPath, error)
+	// GetChaptersForBook is the chapter-table fallback versionprimary's
+	// Loader reads when MATCH-4 ranks a single m4b's content tier.
+	database.ChapterReader
 }
 
 // metafetchFileWriter creates and mutates file rows and records the
