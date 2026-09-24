@@ -125,8 +125,8 @@ type vgRepairGroupReport struct {
 	// one of them carries a merge target (a merge LOSER). A merge survivor
 	// carries no marker on its row, so a double caused by a survivor is not
 	// detected here; this is a lower bound on merge-caused doubles.
-	MergedLoserAmongPrimaries bool   `json:"merged_loser_among_primaries,omitempty"`
-	ChapterCountUnknown       bool   `json:"chapter_count_unknown,omitempty"`
+	MergedLoserAmongPrimaries bool `json:"merged_loser_among_primaries,omitempty"`
+	ChapterCountUnknown       bool `json:"chapter_count_unknown,omitempty"`
 	// RevivedID is the merge loser a revive_merged_copy decision un-merges
 	// and crowns; RevivedFrom is the survivor it was merged into.
 	RevivedID   string `json:"revived_book_id,omitempty"`
@@ -186,7 +186,7 @@ type vgRepairReport struct {
 	// group has no live primary.
 	NonLiveDemoteBooks int `json:"nonlive_demote_books"`
 	NonLiveKeptBooks   int `json:"nonlive_kept_no_live_primary_books"`
-	Errors               int      `json:"errors"`
+	Errors             int `json:"errors"`
 	// Apply only.
 	Applied          int    `json:"applied"`
 	ChangedSincePlan int    `json:"changed_since_plan"`

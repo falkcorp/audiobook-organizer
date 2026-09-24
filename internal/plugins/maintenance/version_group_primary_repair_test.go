@@ -506,4 +506,3 @@ func TestVGPrimaryRepair_NonLiveKeptWhenGroupHeld(t *testing.T) {
 	require.Equal(t, 1, rep.NonLiveKeptBooks)
 	require.Equal(t, "true", f.flag(t, "LOSER"))
 }
-
