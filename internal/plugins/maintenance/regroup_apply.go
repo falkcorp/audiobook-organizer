@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
 // last-edited: 2026-09-24
 
@@ -367,11 +367,29 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 		if target == "" {
 			target = ulid.Make().String()
 		}
-		// Link: set ONLY VersionGroupID, under the book's write lock
-		// (ModifyBook), so a column another writer commits between the hold
-		// read and this write is not reverted (audit A1#15). Skip the write
-		// when it already matches on the fresh row (idempotent). The primary
-		// flag is decided below over the whole group, not here.
+		// A reused group that already has a live explicit primary keeps the
+		// right to it: a member JOINING that group arrives as explicit false,
+		// so it is not a second incumbent that would make the hand-off below
+		// re-rank a healthy group (the scanner's joinPrimaryFlag, same rule).
+		// In a fresh group every member keeps its flag and the rule decides.
+		reusedHasPrimary := false
+		if len(groups) > 0 {
+			current, err := store.GetBooksByVersionGroup(target)
+			if err != nil {
+				return fmt.Errorf("regroup version-group apply: list group %s members: %w", target, err)
+			}
+			for i := range current {
+				m := &current[i]
+				if !m.IsSoftDeleted() && m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
+					reusedHasPrimary = true
+				}
+			}
+		}
+		// Link: set VersionGroupID (and a joiner's flag, above), under the
+		// book's write lock (ModifyBook), so a column another writer commits
+		// between the hold read and this write is not reverted (audit
+		// A1#15). Skip the write when the row is already in the group
+		// (idempotent). The primary is decided below over the whole group.
 		for _, b := range books {
 			vg := target
 			written, err := store.ModifyBook(b.ID, func(cur *database.Book) error {
@@ -379,6 +397,10 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 					return database.ErrSkipBookWrite
 				}
 				cur.VersionGroupID = &vg
+				if reusedHasPrimary {
+					f := false
+					cur.IsPrimaryVersion = &f
+				}
 				return nil
 			})
 			if err != nil {
@@ -397,24 +419,26 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 		// crowned whatever its state, and a group reused with a healthy
 		// primary outside the hold had that primary demoted.
 		//
-		// When the rule holds the group (no member is eligible), the approve
-		// still has to designate one: the reviewer linked these books as
-		// versions, and leaving the group with no primary (or with each
-		// former standalone book still primary) hides editions or lists them
-		// twice. The hold member with the smallest ULID (pickPrimary) is
-		// crowned, as before; version-group-primary-repair re-ranks the group
-		// once a member becomes eligible.
-		ids := make([]string, len(books))
-		for i, b := range books {
-			ids[i] = b.ID
-		}
-		res, err := versionprimary.EnsureSinglePrimary(ctx, store, target,
-			versionprimary.Env{RootDir: config.AppConfig.RootDir})
+		// When the rule holds the group, the approve still has to designate
+		// one: the reviewer linked these books as versions, and leaving the
+		// group with no primary (or with each former standalone book still
+		// primary) hides editions or lists them twice. This is the one
+		// hand-off site that writes to a held group. It crowns the first
+		// hold member (by ULID) that is itself eligible -- Elect also holds
+		// when an eligible copy exists but a better one sits outside the
+		// library -- and only when none is, the smallest ULID (pickPrimary),
+		// as before. version-group-primary-repair re-ranks the group later.
+		rootDir := config.AppConfig.RootDir
+		res, err := versionprimary.EnsureSinglePrimary(ctx, store, target, versionprimary.Env{RootDir: rootDir})
 		if err != nil {
 			return fmt.Errorf("regroup version-group apply: decide the primary of %s: %w", target, err)
 		}
 		if res.Outcome == versionprimary.OutcomeHeld {
-			if res, err = versionprimary.Crown(store, target, pickPrimary(ids)); err != nil {
+			keep, kerr := heldGroupFallback(ctx, store, books, rootDir)
+			if kerr != nil {
+				return fmt.Errorf("regroup version-group apply: choose the primary of held group %s: %w", target, kerr)
+			}
+			if res, err = versionprimary.Crown(store, target, keep); err != nil {
 				return fmt.Errorf("regroup version-group apply: crown the primary of held group %s: %w", target, err)
 			}
 		}
@@ -423,6 +447,37 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 			logger.SanitizeLogValue(target), logger.SanitizeLogValue(res.PrimaryID), res.Outcome)
 		return nil
 	}
+}
+
+// heldGroupFallback picks the member a version-group apply crowns when
+// versionprimary holds the group: the smallest-ULID hold member that is itself
+// eligible (organized, files present under rootDir), else the smallest ULID.
+func heldGroupFallback(ctx context.Context, store versionGroupWriter, books []*database.Book, rootDir string) (string, error) {
+	ids := make([]string, len(books))
+	byID := make(map[string]*database.Book, len(books))
+	for i, b := range books {
+		ids[i] = b.ID
+		byID[b.ID] = b
+	}
+	sort.Strings(ids)
+	loader := versionprimary.Loader{Files: store, Chapters: store, RootDir: rootDir}
+	for _, id := range ids {
+		cur, err := store.GetBookByID(id)
+		if err != nil {
+			return "", err
+		}
+		if cur == nil || cur.IsSoftDeleted() {
+			continue
+		}
+		sig, err := loader.Load(ctx, cur, true)
+		if err != nil {
+			return "", err
+		}
+		if versionprimary.IneligibleReason(cur, sig) == "" {
+			return id, nil
+		}
+	}
+	return pickPrimary(ids), nil
 }
 
 // decodeRegroupPayload unmarshals the hold's JSON payload (the shape the producer
