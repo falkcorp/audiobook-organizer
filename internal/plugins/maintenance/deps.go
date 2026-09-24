@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-24
 
@@ -673,6 +673,25 @@ type BookMerger interface {
 	MergeBooks(bookIDs []string, primaryID string) (mergedCount int, err error)
 }
 
+// LibraryCloner clones an iTunes-only book into the library root as a new
+// organized version (itunes-clone-into-library). Implemented on
+// *server.Server over the wired organize service with the transfer forced to
+// REFLINK ONLY (no copy or hardlink fallback), so the maintenance plugin never
+// imports internal/organizer's service wiring or internal/server.
+type LibraryCloner interface {
+	// PlanLibraryClone returns the library paths book's active files would
+	// land at, in files order. Nothing is written.
+	PlanLibraryClone(book *database.Book, files []database.BookFile) ([]string, error)
+	// CloneBookIntoLibrary reflinks the files and creates the organized
+	// version (CreateOrganizedVersion: the iTunes PID moves to the new rows,
+	// the source becomes organized_source, the group's primary is handed on).
+	// Returns the new book's id; on error nothing it made is left behind.
+	CloneBookIntoLibrary(book *database.Book, files []database.BookFile, opID string) (string, error)
+	// LibraryITunesPath is the iTunes path the organize service records for a
+	// library file.
+	LibraryITunesPath(path string) string
+}
+
 // ServerDeps is the narrow interface that *server.Server satisfies implicitly.
 // All operations are expressed as methods so there is no import cycle.
 //
@@ -707,6 +726,7 @@ type ServerDeps interface { //nolint:interfacebloat // transitional composition 
 	OpEnqueuer
 	ScanController
 	BookMerger
+	LibraryCloner
 }
 
 // ----- reporter adapter -----
