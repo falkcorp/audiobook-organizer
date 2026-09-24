@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-24
 
@@ -957,6 +957,9 @@ func FindBrokenSegmentBooks(store VersionGroupStore, dryRun bool) (*BrokenSegmen
 	//     is folded in book order afterwards, so it is identical to the former
 	//     sequential append order.
 	//   - Counters are atomic and assigned once at the end.
+	// Snapshot the root once: the workers below read it, and must not read
+	// the global config after a test (or a settings write) replaces it.
+	rootDir := config.AppConfig.RootDir
 	entries := make([]*BrokenSegmentEntry, len(allBooks))
 	var booksChecked, brokenBooks, markedForReview int64
 	var g errgroup.Group
@@ -964,7 +967,7 @@ func FindBrokenSegmentBooks(store VersionGroupStore, dryRun bool) (*BrokenSegmen
 	for i := range allBooks {
 		book := allBooks[i]
 		// Only check directory-based books in import paths (not in library)
-		if config.AppConfig.RootDir != "" && pathutil.IsWithin(book.FilePath, config.AppConfig.RootDir) {
+		if rootDir != "" && pathutil.IsWithin(book.FilePath, rootDir) {
 			continue
 		}
 		g.Go(func() error {
@@ -1033,7 +1036,7 @@ func FindBrokenSegmentBooks(store VersionGroupStore, dryRun bool) (*BrokenSegmen
 					// primary of hands the flag on. Workers marking two
 					// members of one group are serialised by the hand-off's
 					// per-group lock.
-					handOffRetired(store, written, config.AppConfig.RootDir)
+					handOffRetired(store, written, rootDir)
 				}
 			}
 			return nil
