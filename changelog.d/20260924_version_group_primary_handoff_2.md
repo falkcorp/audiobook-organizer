@@ -7,4 +7,4 @@
 - `CleanupDuplicateVersionGroups`, the broken-segment mark and the no-VG duplicate merge hand the primary on with the shared rule instead of crowning the oldest library copy by hand.
 - The iTunes blocked-hash soft-delete, `DeleteAudiobook` (soft and hard), `RestoreAudiobook`, the diagnostics `delete_orphan` suggestion and `CombineBooks` (absorbed shells) hand a retired or restored member's group on.
 - `fix-version-groups` hands an unlinked outlier's old group on with the shared rule instead of promoting the lowest ID; a group with no eligible member is held and nobody is promoted.
-- The regroup version-group apply picks the primary with the shared rule over the whole group and keeps a healthy incumbent; the hold's earliest-created member is crowned only when the rule holds the group.
+- The regroup version-group apply picks the primary with the shared rule over the whole group and keeps a healthy incumbent (a member joining a reused group arrives non-primary); when the rule holds the group, the first eligible hold member is crowned, else the earliest-created one.
