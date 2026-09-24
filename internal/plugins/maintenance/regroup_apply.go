@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -56,17 +56,18 @@
 //     on an empty incoming value) — never a full/partial BookFile write-back. It is
 //     guarded group-level ("any file already numbered → leave the whole set alone")
 //     and best-effort (a numbering error warns, never fails the merge).
-//   - Version-group uses re-fetch-and-patch: GetBookByID returns the FULL row, we
-//     mutate ONLY VersionGroupID, then UpdateBook. Never construct a fresh/partial
-//     Book and write it back — UpdateBook is a full-column replace.
+//   - Version-group sets ONLY VersionGroupID under each book's lock (ModifyBook),
+//     then hands the primary flag to versionprimary. Never construct a
+//     fresh/partial Book and write it back — UpdateBook is a full-column replace.
 // Both paths are covered by regroup_apply_test.go's invariant assertions.
 //
 // GROUP-INTEGRITY GUARDS (holds can be DAYS older than their approve):
 //   - Soft-deleted members (merged away since the dry-run) are skipped exactly
 //     like vanished ones — GetBookByID does not filter MarkedForDeletion, so both
 //     paths check it explicitly (a corpse must never be re-linked or made primary).
-//   - On group reuse, ALL current group members are enumerated and any stale
-//     primary outside the hold is demoted — one primary per group, always.
+//   - The primary is decided over ALL current group members, including any
+//     outside the hold, and every other live member is demoted — one primary
+//     per group, always (see ApplyVersionGroup).
 //   - Members spanning TWO different existing version groups are REFUSED (error →
 //     item goes to "failed" with a reason) instead of silently merging groups.
 
@@ -82,9 +83,14 @@ import (
 
 	ulid "github.com/oklog/ulid/v2"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
+
+var regroupLog = logger.New("regroup-apply")
 
 // bookCombiner is the slim slice of merge.Service the multidisc apply path needs.
 // Narrowing to an interface keeps the apply function unit-testable without a full
@@ -361,31 +367,18 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 		if target == "" {
 			target = ulid.Make().String()
 		}
-		// Designate a single primary deterministically: the smallest ULID (earliest-
-		// created), consistent with pickPrimary and stable across retries. The plan
-		// prefers the Unabridged edition, but that signal is not in the payload; a
-		// deterministic primary is the safe fallback. BOTH editions stay visible — we
-		// never soft-delete here.
-		primaryID := books[0].ID
-		for _, b := range books[1:] {
-			if b.ID < primaryID {
-				primaryID = b.ID
-			}
-		}
-		// Set ONLY VersionGroupID + IsPrimaryVersion, under the book's write
-		// lock (ModifyBook), so a column another writer commits between the
-		// hold read and this write is not reverted (audit A1#15). Skip the
-		// write when both already match on the fresh row (idempotent).
+		// Link: set ONLY VersionGroupID, under the book's write lock
+		// (ModifyBook), so a column another writer commits between the hold
+		// read and this write is not reverted (audit A1#15). Skip the write
+		// when it already matches on the fresh row (idempotent). The primary
+		// flag is decided below over the whole group, not here.
 		for _, b := range books {
 			vg := target
-			isPrimary := b.ID == primaryID
 			written, err := store.ModifyBook(b.ID, func(cur *database.Book) error {
-				if cur.VersionGroupID != nil && *cur.VersionGroupID == target &&
-					cur.IsPrimaryVersion != nil && *cur.IsPrimaryVersion == isPrimary {
+				if cur.VersionGroupID != nil && *cur.VersionGroupID == target {
 					return database.ErrSkipBookWrite
 				}
 				cur.VersionGroupID = &vg
-				cur.IsPrimaryVersion = &isPrimary
 				return nil
 			})
 			if err != nil {
@@ -395,56 +388,39 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 				return fmt.Errorf("regroup version-group apply: set version group on %s: book not found", b.ID)
 			}
 		}
-		// Single-primary invariant across the WHOLE group: when target is a reused
-		// group it can contain books that are NOT in this hold (e.g. its existing
-		// primary). The loop above only touches hold members, so a stale primary
-		// would otherwise survive alongside the new one. Enumerate every current
-		// member and demote strays. (GetBooksByVersionGroup already filters
-		// soft-deleted rows.)
-		if len(groups) > 0 { // group pre-existed → may contain non-hold members
-			all, err := store.GetBooksByVersionGroup(target)
-			if err != nil {
-				return fmt.Errorf("regroup version-group apply: list group %s members: %w", target, err)
-			}
-			for _, m := range all {
-				// VG-DOUBLE-PRIMARY: a nil flag is NOT safe to skip. The store
-				// reads nil as primary (database.EffectiveIsPrimaryVersion; the
-				// memdb is_primary_version index defaults to true), so a nil
-				// member left alone lists alongside the new primary. Only an
-				// explicit false is already demoted. Writing explicit false is
-				// correct under both nil readings — the repair if nil counts as
-				// primary, a no-op if it does not — which is why merge
-				// (internal/merge/service.go) and fs_regroup_xml.go's demotion
-				// rewrite nil the same way. The ELECTION is deliberately not
-				// shared with merge: lowest-ULID here, BookIsBetter there.
-				if m.ID == primaryID || !database.EffectiveIsPrimaryVersion(m.IsPrimaryVersion) {
-					continue
-				}
-				// Demote ONLY IsPrimaryVersion, under the book's write lock
-				// (ModifyBook), so a column another writer commits meanwhile
-				// is not reverted (audit A1#15); a member demoted meanwhile
-				// is left alone.
-				notPrimary := false
-				written, err := store.ModifyBook(m.ID, func(cur *database.Book) error {
-					if !database.EffectiveIsPrimaryVersion(cur.IsPrimaryVersion) {
-						return database.ErrSkipBookWrite
-					}
-					cur.IsPrimaryVersion = &notPrimary
-					return nil
-				})
-				if err != nil {
-					return fmt.Errorf("regroup version-group apply: demote stale primary %s: %w", m.ID, err)
-				}
-				if written == nil {
-					continue
-				}
-				slog.Info("regroup version-group apply: demoted stale primary",
-					"item", item.ID, "book", m.ID, "version_group", target, "new_primary", primaryID)
+		// Primary: the shared rule over EVERY current member of the group,
+		// including members of a reused group that are not in this hold.
+		// versionprimary.EnsureSinglePrimary keeps a healthy incumbent,
+		// otherwise crowns the best eligible member (organized, files present
+		// under the library root) and demotes every other live member, nil
+		// flags included. Until 2026-09-24 the smallest ULID in the hold was
+		// crowned whatever its state, and a group reused with a healthy
+		// primary outside the hold had that primary demoted.
+		//
+		// When the rule holds the group (no member is eligible), the approve
+		// still has to designate one: the reviewer linked these books as
+		// versions, and leaving the group with no primary (or with each
+		// former standalone book still primary) hides editions or lists them
+		// twice. The hold member with the smallest ULID (pickPrimary) is
+		// crowned, as before; version-group-primary-repair re-ranks the group
+		// once a member becomes eligible.
+		ids := make([]string, len(books))
+		for i, b := range books {
+			ids[i] = b.ID
+		}
+		res, err := versionprimary.EnsureSinglePrimary(ctx, store, target,
+			versionprimary.Env{RootDir: config.AppConfig.RootDir})
+		if err != nil {
+			return fmt.Errorf("regroup version-group apply: decide the primary of %s: %w", target, err)
+		}
+		if res.Outcome == versionprimary.OutcomeHeld {
+			if res, err = versionprimary.Crown(store, target, pickPrimary(ids)); err != nil {
+				return fmt.Errorf("regroup version-group apply: crown the primary of held group %s: %w", target, err)
 			}
 		}
-		slog.Info("regroup version-group apply: linked members",
-			"item", item.ID, "folder", p.Folder, "version_group", target,
-			"primary", primaryID, "members", len(books))
+		regroupLog.Info("regroup version-group apply: item %s linked %d members of %s into version group %s, primary %s (%s)",
+			logger.SanitizeLogValue(item.ID), len(books), logger.SanitizeLogValue(p.Folder),
+			logger.SanitizeLogValue(target), logger.SanitizeLogValue(res.PrimaryID), res.Outcome)
 		return nil
 	}
 }
@@ -489,10 +465,14 @@ func presentMembers(store bookByIDReader, ids []string) ([]string, error) {
 	return present, nil
 }
 
-// pickPrimary chooses the survivor deterministically: the lexicographically smallest
-// member ID. Member IDs are ULIDs (time-sortable), so the smallest is the earliest-
-// created book — a stable, sensible canonical survivor that is identical across
-// retries (which the idempotency/partial-failure story relies on).
+// pickPrimary chooses deterministically: the lexicographically smallest member ID.
+// Member IDs are ULIDs (time-sortable), so the smallest is the earliest-created
+// book, identical across retries (which the idempotency/partial-failure story
+// relies on). It names the CombineBooks survivor for multidisc — the row that
+// absorbs the others' files, not a version-group primary; merge.CombineBooks
+// hands any group an absorbed book leaves on with versionprimary — and the
+// fallback primary of a version-group apply only when versionprimary holds the
+// group.
 func pickPrimary(ids []string) string {
 	primary := ids[0]
 	for _, id := range ids[1:] {

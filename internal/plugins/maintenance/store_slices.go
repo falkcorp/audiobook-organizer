@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // Narrow store slices for this package's helpers.
@@ -197,9 +198,9 @@ type bookFileTrackWriter interface {
 
 // versionGroupWriter applies a version-group decision across the group's books.
 type versionGroupWriter interface {
-	GetBookByID(id string) (*database.Book, error)
-	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	// versionprimary.EnsureStore: the member reads, the flag writes and the
+	// file/chapter reads the shared primary rule ranks with.
+	versionprimary.EnsureStore
 }
 
 // bookByIDReader reads single books by ID. Read-only by construction.
