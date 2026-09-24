@@ -1,7 +1,7 @@
 // file: internal/scanner/store.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
-// last-edited: 2026-09-14
+// last-edited: 2026-09-24
 
 package scanner
 
@@ -46,6 +46,10 @@ type scanBookLookup interface {
 	// rather than writing to the row organize demoted. See
 	// saveAIFieldsToPrimary.
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	// The chapter table: a hash-duplicate version link hands the group's
+	// primary on through versionprimary.EnsureSinglePrimary, whose ranking
+	// reads it (handOffLinkedGroup).
+	database.ChapterReader
 }
 
 type scanBookWriter interface {
