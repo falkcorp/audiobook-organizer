@@ -1,5 +1,5 @@
 // file: internal/versionprimary/rank_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 18620ce0-4bca-4216-a65a-507cf54533a0
 // last-edited: 2026-09-24
 
@@ -288,5 +288,23 @@ func TestPlanAndApplyCarryOver_FillsOnlyEmptyFields(t *testing.T) {
 	}
 	if winner.ITunesPersistentID != nil || winner.Duration != nil || winner.AuthorID != nil {
 		t.Fatal("file-identity and join-backed fields must never be carried")
+	}
+}
+
+// A merge loser is not live while its survivor is; once the survivor is gone
+// it is the work's only copy and electable again. Soft-deleted never is.
+func TestElectable_MergeLoserFollowsItsSurvivor(t *testing.T) {
+	loser := &database.Book{ID: "L", MergedIntoBookID: strp("S")}
+	if Electable(loser, func(string) bool { return true }) {
+		t.Fatal("loser of a live survivor must not be electable")
+	}
+	if !Electable(loser, func(string) bool { return false }) {
+		t.Fatal("loser of a dead survivor must be electable")
+	}
+	if !Electable(&database.Book{ID: "X", MergedIntoBookID: strp("")}, func(string) bool { return true }) {
+		t.Fatal("empty merge target is not a merge")
+	}
+	if Electable(&database.Book{ID: "D", MarkedForDeletion: boolp(true)}, func(string) bool { return false }) {
+		t.Fatal("soft-deleted must not be electable")
 	}
 }
