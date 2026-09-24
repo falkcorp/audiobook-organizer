@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package logger
 
@@ -9,7 +9,7 @@ package logger
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
 	slogRatchetFileCeiling = 320
-	slogRatchetCallCeiling = 1889
+	slogRatchetCallCeiling = 1887
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -219,7 +219,7 @@ var slogRatchet = map[string]int{
 	"internal/plugins/dedup/rescore_op.go":                       1,
 	"internal/plugins/deluge/register.go":                        1,
 	"internal/plugins/maintenance/itunes_playlist_import.go":     4,
-	"internal/plugins/maintenance/regroup_apply.go":              14,
+	"internal/plugins/maintenance/regroup_apply.go":              12,
 	"internal/plugins/maintenance/relink_unlinked.go":            1,
 	"internal/plugins/maintenance/transcribe_stats_accum.go":     1,
 	"internal/plugins/metafetch/register.go":                     1,
