@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.5.3
+// version: 1.6.0
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-24
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //
@@ -125,6 +125,7 @@ func TestExecute_NonXMLBinary_ReturnsError(t *testing.T) {
 }
 
 func TestSync_CorruptXML_ReturnsError(t *testing.T) {
+	enableSyncForTest(t)
 	dir := t.TempDir()
 	badPath := filepath.Join(dir, "bad.xml")
 	require.NoError(t, os.WriteFile(badPath, []byte("<not valid plist"), 0o644))
@@ -144,6 +145,7 @@ func TestSync_CorruptXML_ReturnsError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSync_Concurrent_NoPanic(t *testing.T) {
+	enableSyncForTest(t)
 	xmlContent := validEmptyXML()
 	dir := t.TempDir()
 	xmlPath := filepath.Join(dir, "iTunes Library.xml")
@@ -363,6 +365,7 @@ func TestExecute_CreateBookFails_ContinuesAndCountsFailed(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSync_GetAllBooksFails_ReturnsError(t *testing.T) {
+	enableSyncForTest(t)
 	dir := t.TempDir()
 	trackPath := filepath.Join(dir, "sync-chapter.m4b")
 	require.NoError(t, os.WriteFile(trackPath, bytes.Repeat([]byte("e"), 512), 0o644))

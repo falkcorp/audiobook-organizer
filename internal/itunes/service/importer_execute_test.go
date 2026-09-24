@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_execute_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-11
+// last-edited: 2026-09-24
 
 package itunesservice
 
@@ -212,6 +212,7 @@ func TestExecute_ParseFailure(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSync_EmptyLibrary(t *testing.T) {
+	enableSyncForTest(t)
 	xmlContent := `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -245,6 +246,7 @@ func TestSync_EmptyLibrary(t *testing.T) {
 }
 
 func TestSync_ParseFailure(t *testing.T) {
+	enableSyncForTest(t)
 	dir := t.TempDir()
 	badPath := filepath.Join(dir, "bad.xml")
 	require.NoError(t, os.WriteFile(badPath, []byte("not xml"), 0o644))
