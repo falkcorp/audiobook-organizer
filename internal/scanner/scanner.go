@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.105.0
+// version: 1.106.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-20
+// last-edited: 2026-09-24
 
 package scanner
 
@@ -40,6 +40,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // saveBook is the per-book persistence hook used by ProcessBooksParallel.
@@ -3175,6 +3176,11 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// position keyed to the old ULID) has to be carried forward explicitly
 		// once the new row exists. See followSyncIdentityOnVersionLink.
 		var supersededBookID, supersededBookPath string
+		// linkedVersionGroup is the group a content-hash branch below linked
+		// this book into. Once the row exists (created or raced), the group is
+		// handed to versionprimary (handOffLinkedGroup) so it ends with one
+		// live primary.
+		var linkedVersionGroup string
 
 		// Upsert semantics with duplicate detection:
 		// 1. Try lookup by file path first (exact match)
@@ -3266,7 +3272,8 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 						// group comes back instead, so the new row joins THAT
 						// group rather than orphaning itself in a fresh one.
 						dbBook.VersionGroupID = &linkedGroup
-						dbBook.IsPrimaryVersion = &newPrimary
+						dbBook.IsPrimaryVersion = joinPrimaryFlag(linkedGroup, groupID, newPrimary)
+						linkedVersionGroup = linkedGroup
 						defaultLog.Info("Auto-linked hash-duplicate as version group %s (primary=%s): %s <-> %s",
 							linkedGroup, existing.FilePath, existing.FilePath, book.FilePath)
 						// A new ULID is about to be minted for this path; remember
@@ -3348,7 +3355,8 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 							book.FilePath, matchedBook.FilePath)
 					} else {
 						dbBook.VersionGroupID = &linkedGroup
-						dbBook.IsPrimaryVersion = &newPrimary
+						dbBook.IsPrimaryVersion = joinPrimaryFlag(linkedGroup, groupID, newPrimary)
+						linkedVersionGroup = linkedGroup
 						defaultLog.Info("Multi-file dedup: linked %q as version group %s (%d/%d files matched)",
 							matchedBook.Title, linkedGroup, bestCount, len(book.SegmentFiles))
 						// Same untagged-move follow as the single-hash branch above.
@@ -3440,16 +3448,19 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 						// `groupID` by linkVersionGroup above and now has no
 						// second member, and if this row was elected primary the
 						// group has no primary either (#3481's rule reads a nil
-						// or false primary as NOT primary). Neither is
-						// repairable from here -- unwinding the partner's link
-						// would race the writer that grouped this row -- so name
-						// it loudly for the reconcile pass that owns group
-						// repair, rather than leaving it to be inferred from row
-						// counts.
+						// or false primary as NOT primary). Unwinding the
+						// partner's link would race the writer that grouped this
+						// row, so the partner stays in `groupID` and the
+						// hand-off below gives that group its primary back.
 						defaultLog.Warn("raced row %s (%s) already belongs to version group %q, "+
-							"so it did not join %q; that group may now hold only %s and may have no primary "+
-							"(reconcile elect-missing-primaries owns the repair)",
+							"so it did not join %q; that group may now hold only %s; handing its primary on",
 							raced.ID, book.FilePath, heldGroup, groupID, supersededBookID)
+					}
+					// Both stripes are released above; the hand-off takes the
+					// group lock and then each member's write stripe.
+					handOffLinkedGroup(ctx, groupID, rootDir)
+					if heldGroup != "" && heldGroup != groupID {
+						handOffLinkedGroup(ctx, heldGroup, rootDir)
 					}
 					if joined || heldGroup != "" {
 						// The ABS sync identity and the listening position keyed
@@ -3482,6 +3493,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				// the whole point of the lock.
 				unlockPath()
 				if err == nil {
+					// After both stripes are released: the hand-off takes the
+					// group lock and then each member's write stripe.
+					handOffLinkedGroup(ctx, linkedVersionGroup, rootDir)
 					followSyncIdentityOnVersionLink(supersededBookID, supersededBookPath, dbBook.ID)
 					// Check for metadata hash duplicates
 					detectMetadataHashDuplicate(dbBook, defaultLog)
@@ -3976,6 +3990,43 @@ func linkVersionGroup(bookID, groupID string, primary bool) (string, bool) {
 		return "", false
 	}
 	return *written.VersionGroupID, true
+}
+
+// joinPrimaryFlag is the flag a new row takes when it joins linkedGroup.
+// When the scanner minted that group (linkedGroup == mintedGroup) it wrote the
+// partner's flag itself, so newPrimary is the other half of that pair and the
+// group holds exactly one explicit primary. When another writer had grouped
+// the partner first, the group is theirs and may already have a primary: the
+// new row joins as explicit false and handOffLinkedGroup decides. Until
+// 2026-09-24 it joined with newPrimary, which could put a second primary
+// beside the group's own.
+func joinPrimaryFlag(linkedGroup, mintedGroup string, newPrimary bool) *bool {
+	v := newPrimary && linkedGroup == mintedGroup
+	return &v
+}
+
+// handOffLinkedGroup runs versionprimary.EnsureSinglePrimary on a group the
+// scanner just linked a row into, so it ends with one live eligible primary:
+// a healthy incumbent is kept and any second primary demoted; otherwise the
+// shared rule elects one, or holds the group (nothing written) when no member
+// is organized with its files present under rootDir. rootDir is the scan's
+// snapshot, not config.AppConfig. It must be called with no book stripe held.
+// Best-effort: the link has committed; a failed hand-off is logged and left
+// for version-group-primary-repair.
+func handOffLinkedGroup(ctx context.Context, gid, rootDir string) {
+	if gid == "" {
+		return
+	}
+	res, err := versionprimary.EnsureSinglePrimary(ctx, getStore(), gid, versionprimary.Env{RootDir: rootDir})
+	if err != nil {
+		defaultLog.Warn("version group %s: primary hand-off after a scan link failed: %v",
+			logger.SanitizeLogValue(gid), err)
+		return
+	}
+	if len(res.Writes) > 0 {
+		defaultLog.Info("version group %s: primary hand-off after a scan link (%s, primary %s, %d flag write(s))",
+			logger.SanitizeLogValue(gid), res.Outcome, logger.SanitizeLogValue(res.PrimaryID), len(res.Writes))
+	}
 }
 
 func applyScannerFields(dst *database.Book, scanned *database.Book, locked map[string]bool) {
