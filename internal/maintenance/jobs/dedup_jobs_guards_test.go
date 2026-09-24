@@ -1,16 +1,18 @@
 // file: internal/maintenance/jobs/dedup_jobs_guards_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b3d1f62-47a9-4c05-9e1b-6f2a8d4c7e91
-// last-edited: 2026-09-13
+// last-edited: 2026-09-24
 
 package jobs
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 
 // A subdir with no audio is refused before any write. On main the book's
@@ -49,41 +51,30 @@ func TestVGPlanAuthorDirFix_AmbiguousNamesRefuse(t *testing.T) {
 	}
 }
 
-// Unlinking a group's primary as an outlier promotes a remaining member first,
-// and the outlier becomes primary of its own new group.
+// Unlinking a group's primary as an outlier hands the old group's primary to
+// its eligible remaining member (versionprimary's rule, not lowest ID), and
+// the outlier becomes primary of its own new group.
 func TestVGUnlinkOutliers_KeepsAPrimaryOnBothSides(t *testing.T) {
-	yes, no := true, false
-	vg := "g1"
-	rows := map[string]*database.Book{
-		"a": {ID: "a", VersionGroupID: &vg, IsPrimaryVersion: &no},
-		"b": {ID: "b", VersionGroupID: &vg, IsPrimaryVersion: &no},
-		"o": {ID: "o", VersionGroupID: &vg, IsPrimaryVersion: &yes},
+	f := vptest.New(t)
+	f.Book(t, vptest.Spec{ID: "a", Group: "g1", Primary: "false", Outside: true})
+	b := f.Book(t, vptest.Spec{ID: "b", Group: "g1", Primary: "false"})
+	o := f.Book(t, vptest.Spec{ID: "o", Group: "g1", Primary: "true"})
+	ob, err := f.S.GetBookByID(o)
+	if err != nil {
+		t.Fatal(err)
 	}
-	store := &database.MockStore{
-		GetBookByIDFunc: func(id string) (*database.Book, error) {
-			cp := *rows[id]
-			return &cp, nil
-		},
-		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
-			cp := *b
-			rows[id] = &cp
-			return b, nil
-		},
-	}
-	group := []database.BookCore{rows["a"].Core(), rows["b"].Core(), rows["o"].Core()}
-	if err := vgUnlinkOutliers(store, group, []database.BookCore{rows["o"].Core()}); err != nil {
+	if err := vgUnlinkOutliers(context.Background(), f.S, "g1", []database.BookCore{ob.Core()}, f.Root); err != nil {
 		t.Fatalf("vgUnlinkOutliers: %v", err)
 	}
-	if a := rows["a"]; a.IsPrimaryVersion == nil || !*a.IsPrimaryVersion {
-		t.Error("old group lost its primary: the lowest-ID remaining member must be promoted")
+	f.RequireSinglePrimary(t, "g1", b)
+	moved, err := f.S.GetBookByID(o)
+	if err != nil {
+		t.Fatal(err)
 	}
-	o := rows["o"]
-	if o.VersionGroupID == nil || *o.VersionGroupID == vg {
+	if moved.VersionGroupID == nil || *moved.VersionGroupID == "g1" {
 		t.Fatal("outlier was not moved to a new group")
 	}
-	if o.IsPrimaryVersion == nil || !*o.IsPrimaryVersion {
-		t.Error("outlier must be primary of its new singleton group")
-	}
+	f.RequireSinglePrimary(t, *moved.VersionGroupID, o)
 }
 
 // A soft-delete that absorbs files clears FilePath and demotes the primary.
