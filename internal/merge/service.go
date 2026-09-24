@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-09-24
 
@@ -1151,6 +1151,20 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	if err := ms.db.RecomputeBookAggregates(survivor.ID); err != nil {
 		slog.Warn("combine RecomputeBookAggregates", "id", survivor.ID, "err", err)
 	}
+
+	// An absorbed shell that was its version group's primary is soft-deleted
+	// above, which left that group with no live primary: hand each group an
+	// absorbed book belonged to on with versionprimary, after the file moves
+	// and aggregates (the survivor may itself be in one of those groups, and
+	// is ranked on the files it now owns). UndoCombine restores such a shell
+	// as non-primary when another member holds the flag by then.
+	leftGroups := map[string]bool{}
+	for _, a := range kept {
+		if a.VersionGroupID != nil && *a.VersionGroupID != "" {
+			leftGroups[*a.VersionGroupID] = true
+		}
+	}
+	handOffLeftGroups(ms.db, leftGroups)
 
 	if override != nil && (override.Title != "" || override.Author != "" || override.Narrator != "") {
 		journal.Override = ms.applyCombineOverride(primaryID, override)
