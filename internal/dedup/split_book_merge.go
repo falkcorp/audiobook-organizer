@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -21,6 +21,7 @@
 package dedup
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -452,6 +453,22 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 			persist()
 		}
 	}
+
+	// Step 3b: a soft-deleted src that was its version group's primary hands
+	// the flag on, so the group is not left with none. The hand-off is not
+	// journaled: UndoCombine restores a src's primary flag only when its group
+	// has no other live explicit primary (combine_journal.go), so undoing
+	// after a hand-off leaves the group with one primary either way.
+	handoff := map[string]bool{}
+	for _, a := range journal.Absorbed {
+		if a.LeftLive || a.MarkedForDeletionAt == nil || a.VersionGroupID == nil || *a.VersionGroupID == "" {
+			continue
+		}
+		if a.IsPrimaryVersion == nil || *a.IsPrimaryVersion {
+			handoff[*a.VersionGroupID] = true
+		}
+	}
+	handOffRetiredPrimaries(context.Background(), store, handoff)
 
 	// Step 4: finalize the journal. Srcs for which nothing at all was written
 	// (a failed atomic move) are dropped; everything else stays so undo can

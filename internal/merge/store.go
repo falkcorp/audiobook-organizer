@@ -1,11 +1,14 @@
 // file: internal/merge/store.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-09-14
+// last-edited: 2026-09-24
 
 package merge
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import (
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+)
 
 // The store surface this package needs, measured with an empty-interface
 // compiler probe under -gcflags=-e: 19 methods, no forwarding constraints. It
@@ -160,4 +163,7 @@ type Store interface {
 	mergeExternalIDReader
 	mergeVersionGroupReader
 	combineUndoStore
+	// versionprimary.EnsureStore: MergeBooks hands the primary flag on in
+	// each group a participant left (handOffLeftGroups).
+	versionprimary.EnsureStore
 }

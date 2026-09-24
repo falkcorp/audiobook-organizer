@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_review_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c9e7a15-6b2d-4f80-9a41-d5e8f2b6c073
-// last-edited: 2026-09-13
+// last-edited: 2026-09-24
 
 package jobs
 
@@ -12,7 +12,9 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -369,9 +371,24 @@ func TestDedupBooks_DryRunHandoffMatchesApply(t *testing.T) {
 			run := func(dry bool) (*database.PebbleStore, []string) {
 				s := ddRealStore(t)
 				yes := true
+				// The successor is elected by versionprimary.Elect, which
+				// crowns only an organized member whose files are on disk
+				// under the library root: seed G's members that way, created
+				// in order so the tie-break (earliest created) decides.
+				root := t.TempDir()
+				prevRoot := config.AppConfig.RootDir
+				config.AppConfig.RootDir = root
+				t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
 				byTitle := map[string]*database.Book{}
-				for _, title := range []string{"M1", "M2", "M3"} {
-					b := ddMustBook(t, s, &database.Book{Title: title, FilePath: "/lib/G/" + title + ".m4b"})
+				for i, title := range []string{"M1", "M2", "M3"} {
+					path := filepath.Join(root, "G", title+".m4b")
+					ddWriteAudio(t, path)
+					organized := "organized"
+					created := time.Date(2026, 1, 1+i, 0, 0, 0, 0, time.UTC)
+					b := ddMustBook(t, s, &database.Book{Title: title, FilePath: path, LibraryState: &organized, CreatedAt: &created})
+					if err := s.CreateBookFile(&database.BookFile{ID: "bf-" + title, BookID: b.ID, FilePath: path}); err != nil {
+						t.Fatalf("seed file: %v", err)
+					}
 					ddSetGroup(t, s, b.ID, "G", nil)
 					byTitle[title] = b
 				}

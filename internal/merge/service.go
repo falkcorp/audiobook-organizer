@@ -1,11 +1,12 @@
 // file: internal/merge/service.go
-// version: 1.32.1
+// version: 1.33.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-09-22
+// last-edited: 2026-09-24
 
 package merge
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,9 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -557,6 +560,16 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// queryable and the relationship survives through the
 	// soft-delete call below.
 	resolvedPrimaryID := books[bestIdx].ID
+	// Groups a live participant is about to LEAVE for versionGroupID. If it
+	// was that group's primary, the group would be left with none; each is
+	// handed on after the merge (handOffLeftGroups). The merge's own group is
+	// not: its primary is this call's explicit or elected choice.
+	leftGroups := map[string]bool{}
+	for _, b := range books {
+		if !b.IsSoftDeleted() && b.VersionGroupID != nil && *b.VersionGroupID != "" && *b.VersionGroupID != versionGroupID {
+			leftGroups[*b.VersionGroupID] = true
+		}
+	}
 	for i, book := range books {
 		isPrimary := i == bestIdx
 		if !isPrimary && book.IsSoftDeleted() &&
@@ -810,12 +823,35 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	}
 	FollowMerge(ms.db, ms.syncFollower, resolvedPrimaryID, losers)
 
+	handOffLeftGroups(ms.db, leftGroups)
+
 	return &Result{
 		PrimaryID:      resolvedPrimaryID,
 		VersionGroupID: versionGroupID,
 		MergedCount:    len(books),
 		SoftDeleted:    softDeleted,
 	}, nil
+}
+
+// handOffLeftGroups runs versionprimary.EnsureSinglePrimary on each group a
+// merge participant left. Best-effort: the merge has committed, and a group
+// the hand-off cannot repair (a read error, or a held decision) is left for
+// version-group-primary-repair, which is what happened to every such group
+// before this ran. No probe: the chapter table ranks, which restores the
+// one-primary invariant without an ffprobe per merge.
+func handOffLeftGroups(store Store, groups map[string]bool) {
+	env := versionprimary.Env{RootDir: config.AppConfig.RootDir}
+	for gid := range groups {
+		res, err := versionprimary.EnsureSinglePrimary(context.Background(), store, gid, env)
+		if err != nil {
+			mlog.Warn("merge: primary hand-off in left group %s failed: %v", logger.SanitizeLogValue(gid), err)
+			continue
+		}
+		if len(res.Writes) > 0 {
+			mlog.Info("merge: left group %s primary is now %s (%s)",
+				logger.SanitizeLogValue(gid), logger.SanitizeLogValue(res.PrimaryID), res.Outcome)
+		}
+	}
 }
 
 // CombineResult is the outcome of a CombineBooks call.

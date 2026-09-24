@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package maintenance
 
@@ -392,6 +392,11 @@ type JobStore interface {
 	jobOperationStore
 	jobKVStore
 	jobExternalIDStore
+	// database.ChapterReader: a job that retires a version group's primary
+	// hands the flag on through versionprimary.EnsureSinglePrimary, whose
+	// ranking reads the chapter table (purge-unknown-author-duplicates,
+	// dedup-books).
+	database.ChapterReader
 }
 
 // ParamsValidator is implemented by jobs that can reject a request's params

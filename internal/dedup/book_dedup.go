@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-14
+// last-edited: 2026-09-24
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -17,11 +17,13 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -490,6 +492,26 @@ func retireMergedLoser(store Store, eidStore merge.ExternalIDReassigner, keepID 
 	return nil
 }
 
+// handOffRetiredPrimaries runs versionprimary.EnsureSinglePrimary on each
+// group a retired loser was primary of. Without a probe: chapter counts come
+// from the chapter table, which is enough to restore the one-primary
+// invariant; re-ranking is version-group-primary-repair's job. A held group
+// is left as it is (EnsureSinglePrimary logs it).
+func handOffRetiredPrimaries(ctx context.Context, store Store, groups map[string]bool) {
+	env := versionprimary.Env{RootDir: config.AppConfig.RootDir}
+	for gid := range groups {
+		res, err := versionprimary.EnsureSinglePrimary(ctx, store, gid, env)
+		if err != nil {
+			bookMergeLog.Warn("book merge: primary hand-off for group %s failed: %v", logger.SanitizeLogValue(gid), err)
+			continue
+		}
+		if len(res.Writes) > 0 {
+			bookMergeLog.Info("book merge: group %s primary handed to %s (%s)",
+				logger.SanitizeLogValue(gid), logger.SanitizeLogValue(res.PrimaryID), res.Outcome)
+		}
+	}
+}
+
 // Concurrency: this is a package-level function (NOT merge.Service.MergeBooks)
 // with its own unguarded read-modify-write, reached from two async ops with
 // DIFFERENT ConcurrencyKeys (dedup.book-merge and the iTunes-heal op), so it can
@@ -526,7 +548,7 @@ func retireMergedLoser(store Store, eidStore merge.ExternalIDReassigner, keepID 
 // write-back batcher, so no ITL removal is queued for the loser's PIDs here.
 // The PIDs now point at the kept book, which is what the ITL should show.
 func MergeBooks(
-	_ context.Context,
+	ctx context.Context,
 	store Store,
 	opID, keepID string,
 	mergeIDs []string,
@@ -587,6 +609,11 @@ func MergeBooks(
 	eidStore := merge.AsExternalIDReassigner(store)
 
 	var result BookMergeResult
+	// Groups whose primary a retired loser was. This path never rewrites
+	// version groups, so a loser that was its group's primary would leave
+	// that group with none; each is handed on after the keep-book write
+	// below (see handOffRetiredPrimaries).
+	handoffGroups := map[string]bool{}
 	for i, mergeID := range mergeIDs {
 		if progress != nil && progress.IsCanceled() {
 			return result, fmt.Errorf("cancelled")
@@ -636,6 +663,10 @@ func MergeBooks(
 			}); err != nil {
 				bookMergeLog.Warn("book merge: could not journal the soft delete loser_id=%s keep_id=%s: %v", mergeID, keepID, err)
 			}
+			if mergeBook.VersionGroupID != nil && *mergeBook.VersionGroupID != "" &&
+				(mergeBook.IsPrimaryVersion == nil || *mergeBook.IsPrimaryVersion) {
+				handoffGroups[*mergeBook.VersionGroupID] = true
+			}
 			result.MergedCount++
 		}
 
@@ -650,6 +681,10 @@ func MergeBooks(
 		result.Errors = append(result.Errors,
 			fmt.Sprintf("failed to update keep book: %v", err))
 	}
+	// After the keep-book write, never before: that write is a whole-row
+	// UpdateBook of kBook as read at the top, so a flag the hand-off wrote on
+	// the keep book (when it shares the loser's group) would be reverted.
+	handOffRetiredPrimaries(ctx, store, handoffGroups)
 
 	if progress != nil {
 		msg := fmt.Sprintf("Book merge complete: merged %d, %d errors",
