@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package maintenance
 
@@ -84,6 +84,9 @@ func (d fakeDeps) MetadataCacheStore() database.MetadataCacheStore {
 // answers (nil, nil) — "no active ops" — so mock-backed tests see an idle queue
 // and the dedupe scan guard lets them through.
 func (d fakeDeps) OperationQueueStore() OpQueueReader { return d.store }
+
+// VersionPrimaryStore hands back the store unchanged, as Server's does.
+func (d fakeDeps) VersionPrimaryStore() VersionPrimaryStore { return d.store }
 
 // ReviewStatusIndexStore mirrors Server's accessor: the rebuild is not part of
 // database.Store, so this asserts and yields nil for a store that lacks it.

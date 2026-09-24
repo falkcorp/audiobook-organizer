@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -70,6 +70,12 @@ func (s *Server) MetadataCacheStore() database.MetadataCacheStore { return s.sto
 // OpsV2Store), so the indexedStore decorator installed by NewServer forwards it
 // like every other Store method.
 func (s *Server) OperationQueueStore() maintenanceplugin.OpQueueReader { return s.store }
+
+// VersionPrimaryStore implements maintenance.StoreProvider. It serves
+// version-group-primary-repair: GetChaptersForBook and RecordMetadataChange
+// are both part of database.Store, so the indexedStore decorator forwards
+// them and no capability resolution is needed.
+func (s *Server) VersionPrimaryStore() maintenanceplugin.VersionPrimaryStore { return s.store }
 
 // FileProvenanceStore exposes the append-only file provenance chain.
 //
