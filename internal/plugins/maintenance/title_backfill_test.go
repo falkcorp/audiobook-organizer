@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-09-24
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -52,6 +53,15 @@ var _ sdk.Reporter = (*fakeReporter)(nil)
 type fakeDeps struct{ store database.Store }
 
 func (d fakeDeps) MergeBooks(bookIDs []string, primaryID string) (int, error) { return 0, nil }
+
+// LibraryCloner (unused by these fakes; itunes_clone tests use their own).
+func (d fakeDeps) PlanLibraryClone(*database.Book, []database.BookFile) ([]string, error) {
+	return nil, errors.New("fakeDeps: no library cloner")
+}
+func (d fakeDeps) CloneBookIntoLibrary(*database.Book, []database.BookFile, string) (string, error) {
+	return "", errors.New("fakeDeps: no library cloner")
+}
+func (d fakeDeps) LibraryITunesPath(string) string { return "" }
 
 // ScanController (no-op): these fakes drive plan functions directly and pass a nil
 // controller, so the stand-down is never held in these tests. The methods exist

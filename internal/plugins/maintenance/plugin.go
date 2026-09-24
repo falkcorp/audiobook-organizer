@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-24
 
@@ -68,6 +68,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// with versionprimary's rule. Dry run by default; apply needs
 		// explicit group_ids and refuses while library.scan runs.
 		p.versionGroupPrimaryRepairDef(),
+		p.itunesCloneIntoLibraryDef(),
 
 		// --- author/series ---
 		p.authorDedupScanDef(),
