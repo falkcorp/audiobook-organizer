@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.7.0
+// version: 3.7.1
 // guid: a1000010-0000-0000-0000-000000000010
 // last-edited: 2026-09-24
 
@@ -528,8 +528,12 @@ type ddBookModifier interface {
 
 // ddRetireBook soft-deletes book after the guards every retirement shares:
 // the iTunes guard (nothing under books/itunes/** is mutated) and the primary
-// hand-off (a group's primary is never retired without a successor being
-// promoted first). heir is the book absorbing this one, or nil.
+// hand-off (a successor is promoted before a group's primary is retired).
+// The one exception, since 2026-09-24: when versionprimary.Elect holds the
+// group (no remaining member is an organized library copy with its files
+// present, or a better copy sits outside the library) no successor is
+// promoted and the group is left with no primary for
+// version-group-primary-repair. heir is the book absorbing this one, or nil.
 //
 // In dry-run it runs the same guards and writes nothing, so a dry-run count is
 // the count apply would reach.
