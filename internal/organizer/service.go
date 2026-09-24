@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-22
+// last-edited: 2026-09-24
 
 package organizer
 
@@ -28,6 +28,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // Store is the narrow slice of database.Store required by this package.
@@ -132,6 +133,9 @@ type Store interface {
 	OrganizerAuditWriter
 	// Durable skip records for declined destination conflicts.
 	DurableSkipStore
+	// CreateOrganizedVersion hands the version group's primary flag on
+	// (versionprimary.EnsureSinglePrimary).
+	versionprimary.EnsureStore
 }
 
 // Compile-time proof that PebbleStore satisfies organizer.Store.
@@ -1989,6 +1993,18 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 	// This left 10,780 groups holding surplus primaries in production before it
 	// was guarded — see
 	// docs/audits/2026-08-13-mass-reorganize-duplicated-14tb-under-unknown-author.md
+	//
+	// "Incumbent wins" holds only while the incumbent is a copy ABS can show.
+	// When it is not (not organized, files missing, or outside the library
+	// root under versionprimary's eligibility rule), the new copy is still
+	// created non-primary here, and the hand-off at the end of this function
+	// (versionprimary.EnsureSinglePrimary, once the new row and its files
+	// exist and the source row is demoted) crowns the best eligible member,
+	// normally this new copy.
+	//
+	// A failed read REFUSES the organize (since 2026-09-24): creating a
+	// primary without knowing whether the group already has one is how
+	// groups got two.
 	if joinedExistingGroup {
 		if members, err := orgSvc.db.GetBooksByVersionGroup(versionGroupID); err == nil {
 			for i := range members {
@@ -2003,9 +2019,10 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 				}
 			}
 		} else {
-			// Fail open on the read: a lookup failure must not block the
-			// organize itself. Worst case is the pre-guard behaviour.
-			log.Warn("Could not check version group %s for an existing primary: %v", versionGroupID, err)
+			log.Error("organize: cannot read version group %s of %s (%s) to check for an existing primary: %v — refusing, removing the %d file(s) this organize wrote",
+				versionGroupID, book.Title, book.ID, err, len(landing.Created))
+			orgSvc.rollbackOrganizedVersion("", landing, log)
+			return nil, fmt.Errorf("read version group %s: %w", versionGroupID, err)
 		}
 	}
 
@@ -2232,6 +2249,23 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 			OldValue:    "",
 			NewValue:    versionGroupID,
 		})
+	}
+
+	// Hand-off: leave the group with exactly one live, eligible primary. A
+	// healthy group (its incumbent is organized with its files present under
+	// the library root) keeps it; a group whose incumbent is not gets the
+	// best eligible member, normally this new copy. No ffprobe on this path:
+	// chapter counts come from the chapter table. A failure here is logged,
+	// not returned: the organize itself has committed.
+	if joinedExistingGroup {
+		res, herr := versionprimary.EnsureSinglePrimary(context.Background(), orgSvc.db, versionGroupID,
+			versionprimary.Env{RootDir: config.AppConfig.RootDir})
+		switch {
+		case herr != nil:
+			log.Warn("organize: primary hand-off for version group %s failed: %v", versionGroupID, herr)
+		case len(res.Writes) > 0:
+			log.Info("organize: version group %s primary is %s (%s)", versionGroupID, res.PrimaryID, res.Outcome)
+		}
 	}
 
 	return createdBook, nil
