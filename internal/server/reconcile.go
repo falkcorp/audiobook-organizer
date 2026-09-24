@@ -1,7 +1,7 @@
 // file: internal/server/reconcile.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 // HTTP adapters — all logic in internal/reconcile
 
 package server
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/gin-gonic/gin"
 )
 
@@ -218,10 +219,22 @@ func (s *Server) assignOrphanVGsHandler(c *gin.Context) {
 // pass it comma-separated, or use the exclude_groups[] spelling. Ids that
 // match nothing come back in the result's excluded_unmatched rather than
 // failing the request — see ElectMissingPrimaries.
+//
+// The election is versionprimary's rule (2026-09-24): it reads each member's
+// book_file rows and, for a single m4b/m4a, ffprobes the chapter count. With
+// no ffprobe on PATH the chapter table is used instead, so a missing binary
+// degrades the ranking rather than failing the request; the result's
+// held_* counters say which groups were not crowned and why.
 func (s *Server) electMissingPrimariesHandler(c *gin.Context) {
 	dryRun := c.DefaultQuery("dry_run", "true") != "false"
 	exclude := electExcludeGroupsFromQuery(c)
-	result, err := reconcile.ElectMissingPrimaries(s.storeForWiring(), dryRun, exclude)
+	env := reconcile.ElectEnv{RootDir: config.AppConfig.RootDir}
+	if probe, perr := versionprimary.FFprobeChapterCounter(); perr == nil {
+		env.Probe = probe
+	} else {
+		slog.Warn("elect-missing-primaries: ffprobe unavailable; chapter counts come from the chapter table", "err", perr)
+	}
+	result, err := reconcile.ElectMissingPrimaries(s.storeForWiring(), dryRun, exclude, env)
 	if err != nil {
 		httputil.InternalError(c, "failed to elect missing primary versions", err)
 		return

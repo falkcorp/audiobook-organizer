@@ -1,11 +1,12 @@
 // file: internal/reconcile/elect_primaries.go
-// version: 1.7.1
+// version: 2.0.0
 // guid: 25e1f705-9130-4eb0-bd4b-04d45908c704
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package reconcile
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -28,6 +30,32 @@ type ElectedPrimarySample struct {
 	BookID         string `json:"book_id"`
 	Title          string `json:"title"`
 	GroupMembers   int    `json:"group_members"`
+}
+
+// HeldPrimarySample records one group the rule held back, with its reason,
+// so the operator can see why a primary-less group stays that way.
+type HeldPrimarySample struct {
+	VersionGroupID string `json:"version_group_id"`
+	HoldReason     string `json:"hold_reason"`
+	Reason         string `json:"reason"`
+	GroupMembers   int    `json:"group_members"`
+}
+
+// ElectStore is ElectMissingPrimaries' store: the package Store plus the
+// chapter table, which versionprimary reads when ffprobe cannot. Kept off
+// Store itself so the other reconcile passes, and the maintenance OpsStore
+// that feeds them, do not grow a method they never call.
+type ElectStore interface {
+	Store
+	database.ChapterReader
+}
+
+// ElectEnv is what the election needs beyond the store: the library root
+// (config.AppConfig.RootDir) and the chapter prober. A nil Probe makes every
+// chapter count come from the chapter table, or "unknown".
+type ElectEnv struct {
+	RootDir string
+	Probe   versionprimary.ChapterProber
 }
 
 // ElectPrimaryResult summarises an ElectMissingPrimaries run.
@@ -67,14 +95,23 @@ type ElectPrimaryResult struct {
 	// SkippedWinnerChanged counts groups whose chosen winner was merged
 	// away or trashed between the group read and the write.
 	SkippedWinnerChanged int `json:"skipped_winner_changed"`
+	// GroupsHeld counts candidate groups versionprimary.Elect refused to
+	// crown (2026-09-24): no member ABS can show
+	// (HeldNeedsOrganizeOrRestore), or a copy outside the library with
+	// better content than every library copy (HeldBetterCopyNotInLibrary).
+	// A held group is never written; the owner decides it.
+	GroupsHeld                 int                 `json:"groups_held"`
+	HeldNeedsOrganizeOrRestore int                 `json:"held_needs_organize_or_restore"`
+	HeldBetterCopyNotInLibrary int                 `json:"held_better_copy_not_in_library"`
+	HeldSamples                []HeldPrimarySample `json:"held_samples,omitempty"`
 	// GroupsExcluded counts candidate groups the operator's exclude list held
 	// back. They ARE still counted in GroupsWithoutPrimary, BooksTrapped and
 	// the singleton/multi split — the scan really did find them electing no
 	// primary, and an operator diffing this run against an earlier unfiltered
 	// dry run must see the same flagged total. The run reconciles as
 	// GroupsWithoutPrimary − GroupsExcluded − SkippedConcurrent −
-	// SkippedVanished − SkippedNoEligible − SkippedWinnerChanged − Errors =
-	// Elected.
+	// SkippedVanished − SkippedNoEligible − SkippedWinnerChanged −
+	// GroupsHeld − Errors = Elected.
 	GroupsExcluded int `json:"groups_excluded"`
 	// BooksExcluded counts the members of those groups: the books this run
 	// deliberately leaves invisible. They are counted INSIDE BooksTrapped for
@@ -137,63 +174,41 @@ func sortedGroupIDs(m map[string]bool) []string {
 // always exact; only the illustrative sample list is capped.
 const maxElectionSamples = 50
 
-// electPrimaryFor picks which member of a primary-less group becomes primary.
+// electPrimaryFor decides a primary-less group with versionprimary.Elect,
+// the one rule every primary choice shares (2026-09-24).
 //
-// Rule: the earliest-created member wins, tie-broken by book ID so the choice
-// is deterministic and a re-run converges on the same answer. Earliest-created
-// is the original import — the row other records are most likely to already
-// reference. This deliberately does NOT try to pick the "best quality" copy;
-// that is a separate concern and re-electing later is a cheap, safe operation,
-// whereas leaving the group with no primary keeps the book invisible.
+// Until 2026-09-24 this crowned the earliest-created electable member. In the
+// common organize-collision pair that is the organized_source copy, which ABS
+// does not list, so running the repair kept those books hidden. The rule now
+// crowns only a member ABS can show (live, organized, every active book_file
+// present under the library root), ranked by content (m4b with chapters >
+// m4b without > other formats), then metadata, then runtime, bitrate and
+// creation order; and it HOLDS a group whose better copy exists only outside
+// the library rather than crowning the worse one.
 //
-// Only an electable member (electable) can win. Until 2026-09-19 this picked
-// among every member, and a merge loser is usually the OLDEST record in its
-// group, so a group that lost its primary re-crowned the book a merge had
-// absorbed. The 09-19 census found 302 merged books flagged primary and 218
-// both primary and organized, i.e. listed by ABS next to their survivor.
-// Returns nil when no member is electable.
-func electPrimaryFor(members []database.Book, alive survivorAlive) *database.Book {
-	sorted := make([]*database.Book, 0, len(members))
-	for i := range members {
-		if electable(&members[i], alive) {
-			sorted = append(sorted, &members[i])
-		}
+// Only an electable member (electable) can win: a merge loser is usually the
+// OLDEST record in its group, and the 09-19 census found 302 merged books
+// flagged primary.
+func electPrimaryFor(ctx context.Context, loader versionprimary.Loader, members []database.Book, alive survivorAlive) (versionprimary.Decision, error) {
+	ms, err := loader.LoadMembers(ctx, members, alive)
+	if err != nil {
+		return versionprimary.Decision{}, err
 	}
-	if len(sorted) == 0 {
-		return nil
-	}
-	sort.SliceStable(sorted, func(i, j int) bool {
-		a, b := sorted[i], sorted[j]
-		switch {
-		case a.CreatedAt != nil && b.CreatedAt != nil && !a.CreatedAt.Equal(*b.CreatedAt):
-			return a.CreatedAt.Before(*b.CreatedAt)
-		case a.CreatedAt != nil && b.CreatedAt == nil:
-			return true
-		case a.CreatedAt == nil && b.CreatedAt != nil:
-			return false
-		}
-		return a.ID < b.ID
-	})
-	return sorted[0]
+	return versionprimary.Elect(ms), nil
 }
 
 // survivorAlive reports whether a merge target still exists and is not
 // soft-deleted.
-type survivorAlive func(id string) bool
+type survivorAlive = func(id string) bool
 
-// electable reports whether b may be (or count as) its group's primary: not
-// soft-deleted, and not a merge loser whose survivor is alive. MergedIntoBookID
-// is never cleared, so a loser whose survivor was later trashed or removed is
-// electable again: otherwise its group could never have a primary.
+// electable reports whether b may be (or count as) its group's primary. The
+// rule lives in versionprimary.Electable.
 func electable(b *database.Book, alive survivorAlive) bool {
-	return electableRow(b.IsSoftDeleted(), b.MergedIntoBookID, alive)
+	return versionprimary.Electable(b, alive)
 }
 
 func electableRow(softDeleted bool, mergedInto *string, alive survivorAlive) bool {
-	if softDeleted {
-		return false
-	}
-	return mergedInto == nil || *mergedInto == "" || !alive(*mergedInto)
+	return versionprimary.ElectableRow(softDeleted, mergedInto, alive)
 }
 
 // countsAsPrimary is the primary test the pass uses everywhere: a flagged
@@ -294,7 +309,7 @@ var errNotElectable = errors.New("elect-missing-primaries: winner no longer elec
 // of creating a second one. This is also what makes the singleton-vs-multi
 // distinction trustworthy: membership is confirmed against the live index, not
 // inferred from the snapshot.
-func ElectMissingPrimaries(store Store, dryRun bool, excludeGroups []string) (*ElectPrimaryResult, error) {
+func ElectMissingPrimaries(store ElectStore, dryRun bool, excludeGroups []string, env ElectEnv) (*ElectPrimaryResult, error) {
 	result := &ElectPrimaryResult{DryRun: dryRun}
 	excluded := normalizeExcludedGroups(excludeGroups)
 	excludedSeen := make(map[string]bool, len(excluded))
@@ -417,10 +432,13 @@ func ElectMissingPrimaries(store Store, dryRun bool, excludeGroups []string) (*E
 
 	var (
 		elected, skippedConcurrent, skippedVanished, skippedNoEligible, skippedWinnerChanged, errCount, processed int64
+		heldNeedsOrganize, heldBetterCopy                                                                         int64
 		sampleMu                                                                                                  sync.Mutex
 	)
 
 	alive := storeSurvivorAlive(store)
+	loader := versionprimary.Loader{Files: store, Chapters: store, RootDir: env.RootDir, Probe: env.Probe}
+	ctx := context.Background()
 	var g errgroup.Group
 	g.SetLimit(max(runtime.NumCPU(), 1))
 	for _, gid := range candidates {
@@ -451,9 +469,50 @@ func ElectMissingPrimaries(store Store, dryRun bool, excludeGroups []string) (*E
 				}
 			}
 
-			winner := electPrimaryFor(members, alive)
-			if winner == nil {
+			anyElectable := false
+			for i := range members {
+				if electable(&members[i], alive) {
+					anyElectable = true
+					break
+				}
+			}
+			if !anyElectable {
 				atomic.AddInt64(&skippedNoEligible, 1)
+				return nil
+			}
+			decision, err := electPrimaryFor(ctx, loader, members, alive)
+			if err != nil {
+				slog.Warn("elect-missing-primaries failed to read member signals", "group", gid, "err", err)
+				atomic.AddInt64(&errCount, 1)
+				return nil
+			}
+			if decision.Kind == versionprimary.DecisionHeld {
+				if decision.HoldReason == versionprimary.HoldBetterCopyNotInLibrary {
+					atomic.AddInt64(&heldBetterCopy, 1)
+				} else {
+					atomic.AddInt64(&heldNeedsOrganize, 1)
+				}
+				sampleMu.Lock()
+				if len(result.HeldSamples) < maxElectionSamples {
+					result.HeldSamples = append(result.HeldSamples, HeldPrimarySample{
+						VersionGroupID: gid,
+						HoldReason:     decision.HoldReason,
+						Reason:         decision.Reason,
+						GroupMembers:   len(members),
+					})
+				}
+				sampleMu.Unlock()
+				return nil
+			}
+			var winner *database.Book
+			for i := range members {
+				if members[i].ID == decision.WinnerID {
+					winner = &members[i]
+				}
+			}
+			if winner == nil {
+				slog.Warn("elect-missing-primaries: decided winner is not a group member", "group", gid, "winner", decision.WinnerID)
+				atomic.AddInt64(&errCount, 1)
 				return nil
 			}
 
@@ -516,11 +575,17 @@ func ElectMissingPrimaries(store Store, dryRun bool, excludeGroups []string) (*E
 	result.SkippedVanished = int(skippedVanished)
 	result.SkippedNoEligible = int(skippedNoEligible)
 	result.SkippedWinnerChanged = int(skippedWinnerChanged)
+	result.HeldNeedsOrganizeOrRestore = int(heldNeedsOrganize)
+	result.HeldBetterCopyNotInLibrary = int(heldBetterCopy)
+	result.GroupsHeld = result.HeldNeedsOrganizeOrRestore + result.HeldBetterCopyNotInLibrary
 	result.Errors = int(errCount)
 
 	// Keep samples deterministic regardless of worker completion order.
 	sort.Slice(result.Samples, func(i, j int) bool {
 		return result.Samples[i].VersionGroupID < result.Samples[j].VersionGroupID
+	})
+	sort.Slice(result.HeldSamples, func(i, j int) bool {
+		return result.HeldSamples[i].VersionGroupID < result.HeldSamples[j].VersionGroupID
 	})
 
 	slog.Info("elect-missing-primaries summary",
@@ -536,6 +601,9 @@ func ElectMissingPrimaries(store Store, dryRun bool, excludeGroups []string) (*E
 		"skipped_vanished", result.SkippedVanished,
 		"skipped_no_eligible", result.SkippedNoEligible,
 		"skipped_winner_changed", result.SkippedWinnerChanged,
+		"groups_held", result.GroupsHeld,
+		"held_needs_organize_or_restore", result.HeldNeedsOrganizeOrRestore,
+		"held_better_copy_not_in_library", result.HeldBetterCopyNotInLibrary,
 		"groups_no_eligible", result.GroupsNoEligible,
 		"groups_excluded", result.GroupsExcluded,
 		"books_excluded", result.BooksExcluded,

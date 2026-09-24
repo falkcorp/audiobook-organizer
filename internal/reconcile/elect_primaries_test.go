@@ -1,17 +1,21 @@
 // file: internal/reconcile/elect_primaries_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: aa557927-956b-41a5-a90b-6ef0093fdcbc
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package reconcile
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // electFakeStore is a concurrency-safe Store double for the
@@ -27,19 +31,69 @@ type electFakeStore struct {
 	updated map[string]*database.Book
 	mu      chan struct{} // 1-slot semaphore used as a mutex
 
+	// root is the library root the election is run against; addElectBook
+	// gives every book one real .m4b under it, organized, so by default a
+	// member is eligible and the members of a group tie on content and
+	// metadata (the rule then falls through to creation order, then ID).
+	root     string
+	files    map[string][]database.BookFile
+	chapters map[string]int // probe result by file path; absent = 0
+
 	// onGroupRead, when non-nil, runs inside GetBooksByVersionGroup before the
 	// members are returned. It is the seam used to simulate another writer
 	// electing a primary between the initial scan and this worker's re-read.
 	onGroupRead func(gid string, members []database.Book) []database.Book
 }
 
-func newElectFakeStore() *electFakeStore {
+func newElectFakeStore(t *testing.T) *electFakeStore {
+	t.Helper()
 	return &electFakeStore{
-		byID:    map[string]*database.Book{},
-		byGroup: map[string][]database.Book{},
-		updated: map[string]*database.Book{},
-		mu:      make(chan struct{}, 1),
+		byID:     map[string]*database.Book{},
+		byGroup:  map[string][]database.Book{},
+		updated:  map[string]*database.Book{},
+		mu:       make(chan struct{}, 1),
+		root:     t.TempDir(),
+		files:    map[string][]database.BookFile{},
+		chapters: map[string]int{},
 	}
+}
+
+// electEnv is the ElectEnv for this fake: its root, and a prober that answers
+// from the chapters map (no real ffprobe in unit tests).
+func (f *electFakeStore) electEnv() ElectEnv {
+	return ElectEnv{RootDir: f.root, Probe: func(_ context.Context, path string) (int, error) {
+		f.lock()
+		defer f.unlock()
+		return f.chapters[path], nil
+	}}
+}
+
+func (f *electFakeStore) GetBookFiles(id string) ([]database.BookFile, error) {
+	f.lock()
+	defer f.unlock()
+	return append([]database.BookFile(nil), f.files[id]...), nil
+}
+
+func (f *electFakeStore) GetChaptersForBook(string) ([]database.Chapter, error) { return nil, nil }
+
+// setElectState sets LibraryState on id in every projection.
+func (f *electFakeStore) setElectState(id, state string) {
+	f.lock()
+	defer f.unlock()
+	st := state
+	f.byID[id].LibraryState = &st
+	for gid, ms := range f.byGroup {
+		for i := range ms {
+			if ms[i].ID == id {
+				f.byGroup[gid][i].LibraryState = &st
+			}
+		}
+	}
+}
+
+// electFilePath is the one file addElectBook creates for id.
+func (f *electFakeStore) electFilePath(id string) string {
+	return filepath.Join(f.root, "Author", id, id+".m4b")
 }
 
 func (f *electFakeStore) lock()   { f.mu <- struct{}{} }
@@ -50,8 +104,17 @@ func (f *electFakeStore) addElectBook(id, title, gid string, primary bool, creat
 	g := gid
 	p := primary
 	c := created
+	organized := "organized"
 	core := database.BookCore{ID: id, Title: title, CreatedAt: &c}
-	full := &database.Book{ID: id, Title: title, CreatedAt: &c}
+	full := &database.Book{ID: id, Title: title, CreatedAt: &c, LibraryState: &organized}
+	path := f.electFilePath(id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(path, []byte("m4b"), 0o644); err != nil {
+		panic(err)
+	}
+	f.files[id] = []database.BookFile{{ID: "f-" + id, BookID: id, FilePath: path}}
 	if gid != "" {
 		core.VersionGroupID = &g
 		full.VersionGroupID = &g
@@ -162,7 +225,7 @@ func countGroupsWithoutPrimary(f *electFakeStore) []string {
 // and multi-member groups that somehow lost their primary.
 func TestVersionGroupInvariant_ZeroPrimaryGroupsAreRepaired(t *testing.T) {
 	base := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 
 	// Broken singleton — exactly the shape importer.go used to write.
 	store.addElectBook("solo-1", "Book II", "vg-solo", false, base)
@@ -185,7 +248,7 @@ func TestVersionGroupInvariant_ZeroPrimaryGroupsAreRepaired(t *testing.T) {
 			"If this is 0 the invariant check is vacuous and proves nothing.", len(bad), bad)
 	}
 
-	res, err := ElectMissingPrimaries(store, false, nil)
+	res, err := ElectMissingPrimaries(store, false, nil, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -252,13 +315,13 @@ func keysOfElectUpdated(f *electFakeStore) []string {
 // silently wrote would be the worst possible failure.
 func TestElectMissingPrimaries_DryRunWritesNothing(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 	for i := range 12 {
 		gid := fmt.Sprintf("vg-dry-%02d", i)
 		store.addElectBook(fmt.Sprintf("dry-%02d", i), fmt.Sprintf("Dry %02d", i), gid, false, base)
 	}
 
-	res, err := ElectMissingPrimaries(store, true, nil)
+	res, err := ElectMissingPrimaries(store, true, nil, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -293,7 +356,7 @@ func TestElectMissingPrimaries_DryRunWritesNothing(t *testing.T) {
 // supposed to be the cure for, so the group must be skipped.
 func TestElectMissingPrimaries_SkipsGroupThatGainedPrimary(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 	store.addElectBook("racy-a", "Racy A", "vg-racy", false, base)
 	store.addElectBook("racy-b", "Racy B", "vg-racy", false, base.Add(time.Hour))
 	store.addElectBook("calm-a", "Calm A", "vg-calm", false, base)
@@ -309,7 +372,7 @@ func TestElectMissingPrimaries_SkipsGroupThatGainedPrimary(t *testing.T) {
 		return out
 	}
 
-	res, err := ElectMissingPrimaries(store, false, nil)
+	res, err := ElectMissingPrimaries(store, false, nil, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -330,65 +393,57 @@ func TestElectMissingPrimaries_SkipsGroupThatGainedPrimary(t *testing.T) {
 	}
 }
 
-// TestElectPrimaryFor_DeterministicOrder pins the election rule itself:
-// earliest CreatedAt wins, ties break on book ID, and a nil CreatedAt sorts
-// last so a row with unknown provenance never beats a dated one. Determinism
-// matters because a re-run must converge rather than churn the primary flag.
+// TestElectPrimaryFor_DeterministicOrder pins the tie-break at the end of the
+// rule: members equal on content, metadata and every other signal are ordered
+// by earliest CreatedAt, then book ID, with a nil CreatedAt sorting last so a
+// row with unknown provenance never beats a dated one. Determinism matters
+// because a re-run must converge rather than churn the primary flag.
 func TestElectPrimaryFor_DeterministicOrder(t *testing.T) {
 	base := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
-	older := base
-	newer := base.Add(time.Hour)
-
-	tests := []struct {
-		name    string
-		members []database.Book
-		want    string
-	}{
-		{
-			name: "earliest created wins regardless of slice order",
-			members: []database.Book{
-				{ID: "z", CreatedAt: &newer},
-				{ID: "a", CreatedAt: &older},
-			},
-			want: "a",
-		},
-		{
-			name: "equal timestamps tie-break on id",
-			members: []database.Book{
-				{ID: "b", CreatedAt: &older},
-				{ID: "a", CreatedAt: &older},
-			},
-			want: "a",
-		},
-		{
-			name: "nil CreatedAt sorts after a dated row",
-			members: []database.Book{
-				{ID: "a"},
-				{ID: "z", CreatedAt: &newer},
-			},
-			want: "z",
-		},
-		{
-			name:    "empty group yields no winner",
-			members: nil,
-			want:    "",
-		},
+	alive := func(string) bool { return true }
+	type add struct {
+		id      string
+		created time.Time
+		nilDate bool
 	}
-
+	tests := []struct {
+		name string
+		adds []add
+		want string
+	}{
+		{"earliest created wins regardless of slice order", []add{{id: "z", created: base.Add(time.Hour)}, {id: "a", created: base}}, "a"},
+		{"equal timestamps tie-break on id", []add{{id: "b", created: base}, {id: "a", created: base}}, "a"},
+		{"nil CreatedAt sorts after a dated row", []add{{id: "a", nilDate: true}, {id: "z", created: base.Add(time.Hour)}}, "z"},
+		{"empty group yields no winner", nil, ""},
+	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := electPrimaryFor(tc.members, func(string) bool { return true })
+			store := newElectFakeStore(t)
+			for _, a := range tc.adds {
+				store.addElectBook(a.id, a.id, "vg", false, a.created)
+			}
+			members := append([]database.Book(nil), store.byGroup["vg"]...)
+			for i := range members {
+				for _, a := range tc.adds {
+					if a.id == members[i].ID && a.nilDate {
+						members[i].CreatedAt = nil
+					}
+				}
+			}
+			env := store.electEnv()
+			loader := versionprimary.Loader{Files: store, Chapters: store, RootDir: env.RootDir, Probe: env.Probe}
+			d, err := electPrimaryFor(context.Background(), loader, members, alive)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if tc.want == "" {
-				if got != nil {
-					t.Fatalf("got %q, want no winner", got.ID)
+				if d.WinnerID != "" || d.Kind != versionprimary.DecisionHeld {
+					t.Fatalf("got %+v, want no winner", d)
 				}
 				return
 			}
-			if got == nil {
-				t.Fatalf("got no winner, want %q", tc.want)
-			}
-			if got.ID != tc.want {
-				t.Errorf("winner = %q, want %q", got.ID, tc.want)
+			if d.WinnerID != tc.want {
+				t.Errorf("winner = %q, want %q", d.WinnerID, tc.want)
 			}
 		})
 	}
@@ -421,13 +476,13 @@ func (f *electFakeStore) markElectMerged(id, into string) {
 // organized and listed by ABS beside their survivor).
 func TestElectMissingPrimaries_NeverCrownsAMergeLoser(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 	store.addElectBook("loser", "Old", "vg-m", false, base)
 	store.addElectBook("keeper", "New", "vg-m", false, base.Add(time.Hour))
 	store.addElectBook("survivor-elsewhere", "S", "vg-s", true, base)
 	store.markElectMerged("loser", "survivor-elsewhere")
 
-	res, err := ElectMissingPrimaries(store, false, nil)
+	res, err := ElectMissingPrimaries(store, false, nil, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -447,7 +502,7 @@ func TestElectMissingPrimaries_NeverCrownsAMergeLoser(t *testing.T) {
 // primary: its work is represented by the survivor.
 func TestElectMissingPrimaries_AllMergedOrDeletedGroupStaysWithoutPrimary(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 	store.addElectBook("m1", "A", "vg-all", false, base)
 	store.addElectBook("d1", "B", "vg-all", false, base.Add(time.Minute))
 	store.addElectBook("s", "S", "vg-s", true, base)
@@ -461,7 +516,7 @@ func TestElectMissingPrimaries_AllMergedOrDeletedGroupStaysWithoutPrimary(t *tes
 		}
 	}
 
-	res, err := ElectMissingPrimaries(store, false, nil)
+	res, err := ElectMissingPrimaries(store, false, nil, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -479,7 +534,7 @@ func TestElectMissingPrimaries_AllMergedOrDeletedGroupStaysWithoutPrimary(t *tes
 // after the group was listed must not be undone by crowning it.
 func TestElectMissingPrimaries_WinnerMergedAfterGroupReadIsNotCrowned(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 	store.addElectBook("w", "W", "vg-race", false, base)
 	store.onGroupRead = func(gid string, members []database.Book) []database.Book {
 		v := "s"
@@ -489,7 +544,7 @@ func TestElectMissingPrimaries_WinnerMergedAfterGroupReadIsNotCrowned(t *testing
 		return members // the listing still shows w unmerged
 	}
 
-	res, err := ElectMissingPrimaries(store, false, nil)
+	res, err := ElectMissingPrimaries(store, false, nil, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -505,13 +560,13 @@ func TestElectMissingPrimaries_WinnerMergedAfterGroupReadIsNotCrowned(t *testing
 // survivor is alive (census: 302 such rows): the live member is elected.
 func TestElectMissingPrimaries_MergedPrimaryDoesNotCount(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 	store.addElectBook("loser", "Old", "vg-p", true, base)
 	store.addElectBook("live", "New", "vg-p", false, base.Add(time.Hour))
 	store.addElectBook("surv", "S", "vg-s", true, base)
 	store.markElectMerged("loser", "surv")
 
-	res, err := ElectMissingPrimaries(store, false, nil)
+	res, err := ElectMissingPrimaries(store, false, nil, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
@@ -526,16 +581,84 @@ func TestElectMissingPrimaries_MergedPrimaryDoesNotCount(t *testing.T) {
 // primary again.
 func TestElectMissingPrimaries_LoserOfDeadSurvivorIsElectable(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	store := newElectFakeStore()
+	store := newElectFakeStore(t)
 	store.addElectBook("orphan", "O", "vg-d", false, base)
 	store.markElectMerged("orphan", "hard-deleted-survivor")
 
-	res, err := ElectMissingPrimaries(store, false, nil)
+	res, err := ElectMissingPrimaries(store, false, nil, store.electEnv())
 	if err != nil {
 		t.Fatalf("ElectMissingPrimaries: %v", err)
 	}
 	w, ok := store.updated["orphan"]
 	if !ok || w.IsPrimaryVersion == nil || !*w.IsPrimaryVersion {
 		t.Fatalf("loser of a dead survivor not elected; result %+v", res)
+	}
+}
+
+// The 2026-09-24 bug. Organize leaves the old copy as organized_source and
+// the library copy as organized; the source row is older, so the old
+// earliest-created rule crowned it and the book stayed hidden from ABS
+// (which lists only organized primaries). The library copy must win.
+func TestElectMissingPrimaries_OrganizedSourcePairCrownsTheOrganizedCopy(t *testing.T) {
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	store := newElectFakeStore(t)
+	store.addElectBook("src", "Book", "vg-pair", false, base)
+	store.addElectBook("lib", "Book", "vg-pair", false, base.Add(time.Hour))
+	store.setElectState("src", "organized_source")
+
+	res, err := ElectMissingPrimaries(store, false, nil, store.electEnv())
+	if err != nil {
+		t.Fatalf("ElectMissingPrimaries: %v", err)
+	}
+	if res.Elected != 1 || res.GroupsHeld != 0 {
+		t.Fatalf("Elected=%d GroupsHeld=%d, want 1/0", res.Elected, res.GroupsHeld)
+	}
+	if _, ok := store.updated["src"]; ok {
+		t.Fatal("organized_source copy was crowned")
+	}
+	if w, ok := store.updated["lib"]; !ok || w.IsPrimaryVersion == nil || !*w.IsPrimaryVersion {
+		t.Fatal("organized library copy was not crowned")
+	}
+}
+
+// Behaviour change pinned on purpose (PLAN.md, owner-approved): a group
+// whose only member ABS cannot show — the iTunes-imported singleton this
+// endpoint was first written for — is HELD as needs_organize_or_restore and
+// not crowned. Crowning an imported row makes it primary without making it
+// visible in ABS, and a held group is never flipped.
+func TestElectMissingPrimaries_ImportedSingletonIsHeld(t *testing.T) {
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	store := newElectFakeStore(t)
+	store.addElectBook("imp", "Imported", "vg-imp", false, base)
+	store.setElectState("imp", "imported")
+
+	res, err := ElectMissingPrimaries(store, false, nil, store.electEnv())
+	if err != nil {
+		t.Fatalf("ElectMissingPrimaries: %v", err)
+	}
+	if res.Elected != 0 || res.HeldNeedsOrganizeOrRestore != 1 || len(store.updated) != 0 {
+		t.Fatalf("Elected=%d HeldNeedsOrganize=%d writes=%d, want 0/1/0", res.Elected, res.HeldNeedsOrganizeOrRestore, len(store.updated))
+	}
+	if len(res.HeldSamples) != 1 || res.HeldSamples[0].HoldReason != versionprimary.HoldNeedsOrganizeOrRestore {
+		t.Fatalf("HeldSamples = %+v", res.HeldSamples)
+	}
+}
+
+// The source copy has chapters and the library copy does not: held for the
+// owner, never crowned with the worse copy.
+func TestElectMissingPrimaries_BetterCopyOutsideLibraryIsHeld(t *testing.T) {
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	store := newElectFakeStore(t)
+	store.addElectBook("src", "Book", "vg-held", false, base)
+	store.addElectBook("lib", "Book", "vg-held", false, base.Add(time.Hour))
+	store.setElectState("src", "organized_source")
+	store.chapters[store.electFilePath("src")] = 24
+
+	res, err := ElectMissingPrimaries(store, false, nil, store.electEnv())
+	if err != nil {
+		t.Fatalf("ElectMissingPrimaries: %v", err)
+	}
+	if res.Elected != 0 || res.HeldBetterCopyNotInLibrary != 1 || len(store.updated) != 0 {
+		t.Fatalf("Elected=%d HeldBetterCopy=%d writes=%d, want 0/1/0", res.Elected, res.HeldBetterCopyNotInLibrary, len(store.updated))
 	}
 }
