@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
 // last-edited: 2026-09-24
 
@@ -127,8 +127,25 @@ type vgRepairGroupReport struct {
 	// detected here; this is a lower bound on merge-caused doubles.
 	MergedLoserAmongPrimaries bool   `json:"merged_loser_among_primaries,omitempty"`
 	ChapterCountUnknown       bool   `json:"chapter_count_unknown,omitempty"`
-	Outcome                   string `json:"outcome,omitempty"`
-	Error                     string `json:"error,omitempty"`
+	// RevivedID is the merge loser a revive_merged_copy decision un-merges
+	// and crowns; RevivedFrom is the survivor it was merged into.
+	RevivedID   string `json:"revived_book_id,omitempty"`
+	RevivedFrom string `json:"revived_from_book_id,omitempty"`
+	// Leftover* name, for leftover_merged_elsewhere, the member whose
+	// organized copy was merged into another group's book.
+	LeftoverBookID        string `json:"leftover_book_id,omitempty"`
+	LeftoverTargetBookID  string `json:"leftover_target_book_id,omitempty"`
+	LeftoverTargetGroupID string `json:"leftover_target_group_id,omitempty"`
+	// DemoteNonLive are merge losers still flagged primary that apply sets
+	// explicit false, after the group's live primary is written.
+	DemoteNonLive []string `json:"demote_nonlive,omitempty"`
+	// NonLiveKept are merge losers still flagged primary in a group with no
+	// live primary to hand over to (held / leftover). They are left: ABS
+	// does not filter merge losers, so demoting one could hide the only copy
+	// it lists.
+	NonLiveKept []string `json:"nonlive_kept_no_live_primary,omitempty"`
+	Outcome     string   `json:"outcome,omitempty"`
+	Error       string   `json:"error,omitempty"`
 }
 
 type vgRepairReport struct {
@@ -142,6 +159,9 @@ type vgRepairReport struct {
 	ZeroExplicit  int `json:"candidates_zero_explicit"`
 	MultiExplicit int `json:"candidates_multi_explicit"`
 	NilOnly       int `json:"candidates_nil_only"`
+	// MergeOnly are candidates whose live members are already right; only a
+	// merge loser (same-group, or still counted primary) makes them one.
+	MergeOnly int `json:"candidates_merge_only"`
 	// Requested ids that named no group, or a group that is not a candidate.
 	RequestedUnmatched     []string       `json:"requested_unmatched,omitempty"`
 	RequestedNotCandidate  []string       `json:"requested_not_candidate,omitempty"`
@@ -161,6 +181,11 @@ type vgRepairReport struct {
 	NonLivePrimaryBooks  int      `json:"nonlive_effective_primary_books"`
 	NonLivePrimarySample []string `json:"nonlive_effective_primary_sample,omitempty"`
 	ChapterUnknownGroups int      `json:"groups_with_unknown_chapter_count"`
+	// NonLiveDemoteBooks / NonLiveKeptBooks split the non-live effective
+	// primaries of the ranked groups: demoted on apply, or left because the
+	// group has no live primary.
+	NonLiveDemoteBooks int `json:"nonlive_demote_books"`
+	NonLiveKeptBooks   int `json:"nonlive_kept_no_live_primary_books"`
 	Errors               int      `json:"errors"`
 	// Apply only.
 	Applied          int    `json:"applied"`
@@ -177,13 +202,13 @@ type vgRepairReport struct {
 }
 
 func (r *vgRepairReport) summary() string {
-	s := fmt.Sprintf("dry_run=%v books=%d groups=%d candidates=%d (zero_explicit=%d multi_explicit=%d nil_only=%d) "+
+	s := fmt.Sprintf("dry_run=%v books=%d groups=%d candidates=%d (zero_explicit=%d multi_explicit=%d nil_only=%d merge_only=%d) "+
 		"decisions=%v holds=%v content_not_metadata_best=%d carry_fills=%d carry_conflicts=%d "+
-		"merged_loser=%d nonlive_primary_groups=%d chapter_unknown=%d errors=%d applied=%d changed_since_plan=%d partial=%d "+
+		"merged_loser=%d nonlive_primary_groups=%d nonlive_demote=%d nonlive_kept=%d chapter_unknown=%d errors=%d applied=%d changed_since_plan=%d partial=%d "+
 		"apply_failed=%d fields_filled=%d history_failed=%d",
-		r.DryRun, r.TotalBooks, r.GroupsScanned, r.Candidates, r.ZeroExplicit, r.MultiExplicit, r.NilOnly,
+		r.DryRun, r.TotalBooks, r.GroupsScanned, r.Candidates, r.ZeroExplicit, r.MultiExplicit, r.NilOnly, r.MergeOnly,
 		r.ByDecision, r.ByHoldReason, r.ContentNotMetadataBest, r.WithCarryOverFills, r.WithCarryOverConflicts,
-		r.MergeLoserGroups, r.NonLivePrimaryGroups, r.ChapterUnknownGroups, r.Errors, r.Applied, r.ChangedSincePlan, r.Partial,
+		r.MergeLoserGroups, r.NonLivePrimaryGroups, r.NonLiveDemoteBooks, r.NonLiveKeptBooks, r.ChapterUnknownGroups, r.Errors, r.Applied, r.ChangedSincePlan, r.Partial,
 		r.ApplyFailed, r.FieldsFilled, r.HistoryFailed)
 	if r.Aborted != "" {
 		s += " ABORTED: " + r.Aborted
@@ -236,11 +261,18 @@ func (p *Plugin) runVersionGroupPrimaryRepair(ctx context.Context, rawParams jso
 	return err
 }
 
-// vgCandidateCounts is a group's primary tally over its live members.
-type vgCandidateCounts struct{ live, explicitTrue, effective int }
+// vgCandidateCounts is a group's primary tally over its live members, plus
+// the two merge-loser shapes whose live members can look correct:
+// nonLivePrimary (a loser still counted primary, which ABS lists) and
+// sameGroupLoser (a member merged into another member of its own group, the
+// backwards MATCH-4 merge, whose loser MATCH-4 wrote explicit false).
+type vgCandidateCounts struct {
+	live, explicitTrue, effective  int
+	nonLivePrimary, sameGroupLoser bool
+}
 
 func (c vgCandidateCounts) candidate() bool {
-	return c.live > 0 && (c.explicitTrue != 1 || c.effective != 1)
+	return (c.live > 0 && (c.explicitTrue != 1 || c.effective != 1)) || c.nonLivePrimary || c.sameGroupLoser
 }
 
 func normalizeGroupIDs(ids []string) []string {
@@ -287,6 +319,12 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 		liveIDs[books[i].ID] = !books[i].IsSoftDeleted()
 	}
 	snapAlive := func(id string) bool { return liveIDs[id] }
+	groupOf := make(map[string]string, len(books))
+	for i := range books {
+		if books[i].VersionGroupID != nil {
+			groupOf[books[i].ID] = *books[i].VersionGroupID
+		}
+	}
 	counts := map[string]*vgCandidateCounts{}
 	nonLive := map[string]bool{}
 	for i := range books {
@@ -302,7 +340,11 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 		if !versionprimary.ElectableRow(b.IsSoftDeleted(), b.MergedIntoBookID, snapAlive) {
 			if database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion) {
 				nonLive[*b.VersionGroupID] = true
+				c.nonLivePrimary = true
 				report.NonLivePrimaryBooks++
+			}
+			if groupOf[*b.MergedIntoBookID] == *b.VersionGroupID {
+				c.sameGroupLoser = true
 			}
 			continue
 		}
@@ -352,6 +394,8 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 			report.ZeroExplicit++
 		case c.explicitTrue > 1:
 			report.MultiExplicit++
+		case c.effective == 1:
+			report.MergeOnly++
 		default:
 			report.NilOnly++
 		}
@@ -458,6 +502,8 @@ func (r *vgRepairReport) tally(g *vgRepairGroupReport) {
 	if g.MergedLoserAmongPrimaries {
 		r.MergeLoserGroups++
 	}
+	r.NonLiveDemoteBooks += len(g.DemoteNonLive)
+	r.NonLiveKeptBooks += len(g.NonLiveKept)
 	if g.ChapterCountUnknown {
 		r.ChapterUnknownGroups++
 	}
@@ -563,11 +609,15 @@ func (a *vgApplier) planAndApply(ctx context.Context, loader versionprimary.Load
 		}
 	}
 	g.MergedLoserAmongPrimaries = multi > 1 && mergeAmongPrimaries
+	if err := a.classifyMerged(ms, alive, byID, &g); err != nil {
+		g.Error = err.Error()
+		return g
+	}
 	if g.WinnerID != "" && g.MetadataBestID != "" && g.MetadataBestID != g.WinnerID {
 		cp := versionprimary.PlanCarryOver(byID[g.WinnerID], byID[g.MetadataBestID])
 		g.CarryOver = &cp
 	}
-	if !a.apply || g.Kind != versionprimary.DecisionElect {
+	if !a.apply || !vgWritable(g.Kind) {
 		return g
 	}
 	a.write(gid, members, &g)
@@ -587,7 +637,11 @@ func vgStoreAlive(store OpsStore) func(string) bool {
 	}
 }
 
-// write applies one elect decision. Winner first, then the demotions.
+// write applies one elect, revive or demote_nonlive decision. Winner first
+// (for a revive, its merge is cleared in the same write), then the live
+// demotions, then the non-live ones: a failure part way leaves a visible
+// double rather than a hidden zero, and a non-live copy ABS still lists is
+// only demoted once the live primary is in place.
 func (a *vgApplier) write(gid string, planned []database.Book, g *vgRepairGroupReport) {
 	fresh, err := a.store.GetBooksByVersionGroup(gid)
 	if err != nil {
@@ -608,28 +662,39 @@ func (a *vgApplier) write(gid string, planned []database.Book, g *vgRepairGroupR
 		}
 	}
 
-	// Winner: explicit true plus carry-over.
-	filled, err := a.modify(g.WinnerID, plannedKeys[g.WinnerID], true, donor)
-	if err != nil {
-		if errors.Is(err, errVGChangedSincePlan) {
-			g.Outcome = vgOutcomeChangedSincePlan
-		} else {
-			g.Outcome, g.Error = vgOutcomeFailed, fmt.Sprintf("write winner %s: %v", g.WinnerID, err)
-		}
-		return
-	}
-	a.fieldsFilled.Add(int64(filled))
-
-	// Every other live member: explicit false.
-	for _, m := range g.Members {
-		if m.BookID == g.WinnerID || !m.Live || m.StoredPrimary == "false" {
-			continue
-		}
-		if _, err := a.modify(m.BookID, plannedKeys[m.BookID], false, nil); err != nil {
+	// Winner: explicit true plus carry-over (and, for a revive, the cleared
+	// merge). A demote_nonlive group's winner is already right.
+	if g.Kind != vgDecisionDemoteNonLive {
+		filled, err := a.modify(g.WinnerID, plannedKeys[g.WinnerID], true, donor, g.Kind == vgDecisionRevive)
+		if err != nil {
 			if errors.Is(err, errVGChangedSincePlan) {
-				g.Outcome = vgOutcomePartial
+				g.Outcome = vgOutcomeChangedSincePlan
 			} else {
-				g.Outcome, g.Error = vgOutcomeFailed, fmt.Sprintf("demote %s: %v", m.BookID, err)
+				g.Outcome, g.Error = vgOutcomeFailed, fmt.Sprintf("write winner %s: %v", g.WinnerID, err)
+			}
+			return
+		}
+		a.fieldsFilled.Add(int64(filled))
+	}
+
+	// Every other live member, then every non-live one still counted
+	// primary: explicit false.
+	var demote []string
+	for _, m := range g.Members {
+		if m.BookID != g.WinnerID && m.Live && m.StoredPrimary != "false" {
+			demote = append(demote, m.BookID)
+		}
+	}
+	demote = append(demote, g.DemoteNonLive...)
+	for i, id := range demote {
+		if _, err := a.modify(id, plannedKeys[id], false, nil, false); err != nil {
+			switch {
+			case errors.Is(err, errVGChangedSincePlan) && i == 0 && g.Kind == vgDecisionDemoteNonLive:
+				g.Outcome = vgOutcomeChangedSincePlan
+			case errors.Is(err, errVGChangedSincePlan):
+				g.Outcome = vgOutcomePartial
+			default:
+				g.Outcome, g.Error = vgOutcomeFailed, fmt.Sprintf("demote %s: %v", id, err)
 			}
 			return
 		}
@@ -639,14 +704,17 @@ func (a *vgApplier) write(gid string, planned []database.Book, g *vgRepairGroupR
 
 // vgHistoryFields is every column this op can change, in history order.
 var vgHistoryFields = []string{
-	"is_primary_version", "description", "narrator", "publisher", "language", "genre",
+	"is_primary_version", "merged_into_book_id", "description", "narrator", "publisher", "language", "genre",
 	"cover_url", "isbn10", "isbn13", "asin", "subtitle", "edition",
 }
 
 // modify sets one member's flag (and, for the winner, fills its empty fields
 // from donor) inside ModifyBook, then records history for what changed.
+// clearMerge sets merged_into_book_id to nil, not "": the MATCH-4 hash index
+// (memdb_metadata_hash.go) treats any non-nil value as merged. The vgKeyOf
+// check has already confirmed it still names the planned survivor.
 // Returns the number of carried fields written.
-func (a *vgApplier) modify(bookID string, want vgMemberKey, primary bool, donor *database.Book) (int, error) {
+func (a *vgApplier) modify(bookID string, want vgMemberKey, primary bool, donor *database.Book, clearMerge bool) (int, error) {
 	var before, after *database.Book
 	written, err := a.store.ModifyBook(bookID, func(row *database.Book) error {
 		if vgKeyOf(row) != want {
@@ -665,6 +733,9 @@ func (a *vgApplier) modify(bookID string, want vgMemberKey, primary bool, donor 
 		}
 		flag := primary
 		row.IsPrimaryVersion = &flag
+		if clearMerge {
+			row.MergedIntoBookID = nil
+		}
 		post, perr := database.SnapshotBook(row)
 		if perr != nil {
 			return perr
@@ -697,7 +768,7 @@ func (a *vgApplier) recordHistory(bookID string, before, after *database.Book) i
 		if oerr != nil || nerr != nil || oldV == newV {
 			continue
 		}
-		if field != "is_primary_version" {
+		if field != "is_primary_version" && field != "merged_into_book_id" {
 			carried++
 		}
 		oldJSON, newJSON := vgJSONString(oldV), vgJSONString(newV)
