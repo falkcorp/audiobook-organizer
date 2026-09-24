@@ -482,7 +482,7 @@ func ElectMissingPrimaries(store ElectStore, dryRun bool, excludeGroups []string
 			}
 			decision, err := electPrimaryFor(ctx, loader, members, alive)
 			if err != nil {
-				slog.Warn("elect-missing-primaries failed to read member signals", "group", gid, "err", err)
+				pkgLog.Warn("elect-missing-primaries failed to read member signals for group %s: %v", logger.SanitizeLogValue(gid), err)
 				atomic.AddInt64(&errCount, 1)
 				return nil
 			}
@@ -511,7 +511,7 @@ func ElectMissingPrimaries(store ElectStore, dryRun bool, excludeGroups []string
 				}
 			}
 			if winner == nil {
-				slog.Warn("elect-missing-primaries: decided winner is not a group member", "group", gid, "winner", decision.WinnerID)
+				pkgLog.Warn("elect-missing-primaries: decided winner %s is not a member of group %s", logger.SanitizeLogValue(decision.WinnerID), logger.SanitizeLogValue(gid))
 				atomic.AddInt64(&errCount, 1)
 				return nil
 			}

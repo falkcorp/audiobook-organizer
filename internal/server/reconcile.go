@@ -232,7 +232,7 @@ func (s *Server) electMissingPrimariesHandler(c *gin.Context) {
 	if probe, perr := versionprimary.FFprobeChapterCounter(); perr == nil {
 		env.Probe = probe
 	} else {
-		slog.Warn("elect-missing-primaries: ffprobe unavailable; chapter counts come from the chapter table", "err", perr)
+		lifecycleLog.Warn("elect-missing-primaries: ffprobe unavailable; chapter counts come from the chapter table: %v", perr)
 	}
 	result, err := reconcile.ElectMissingPrimaries(s.storeForWiring(), dryRun, exclude, env)
 	if err != nil {
