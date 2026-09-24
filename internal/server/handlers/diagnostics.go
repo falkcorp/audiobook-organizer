@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-09-14
+// last-edited: 2026-09-24
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -17,6 +17,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -29,8 +30,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/gin-gonic/gin"
 )
 
@@ -566,6 +569,9 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 					applyErr = fmt.Errorf("book %s not found", bookID)
 					break
 				}
+				// A suggested "orphan" can still be its version group's
+				// primary; marking it deleted hands the flag on.
+				handOffDeletedPrimary(store, marked)
 			}
 
 		case "fix_metadata":
@@ -774,4 +780,22 @@ func resolveKeyCounter(s any) keyCounter {
 		return c
 	}
 	return nil
+}
+
+var diagnosticsLog = logger.New("handlers.diagnostics")
+
+// handOffDeletedPrimary runs versionprimary.EnsureSinglePrimary on the group
+// of a book diagnostics just marked deleted, so a group it was primary of
+// ends with one live eligible primary (or is held for
+// version-group-primary-repair). Best-effort: the mark has committed.
+func handOffDeletedPrimary(store versionprimary.EnsureStore, b *database.Book) {
+	if b == nil || b.VersionGroupID == nil || *b.VersionGroupID == "" {
+		return
+	}
+	gid := *b.VersionGroupID
+	if _, err := versionprimary.EnsureSinglePrimary(context.Background(), store, gid,
+		versionprimary.Env{RootDir: config.AppConfig.RootDir}); err != nil {
+		diagnosticsLog.Warn("diagnostics: primary hand-off in version group %s after deleting %s failed: %v",
+			logger.SanitizeLogValue(gid), logger.SanitizeLogValue(b.ID), err)
+	}
 }
