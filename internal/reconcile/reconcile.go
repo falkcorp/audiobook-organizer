@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.15.1
+// version: 1.16.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package reconcile
 
@@ -30,6 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // pkgLog serves the whole-library passes that take no logger.Logger parameter
@@ -86,6 +87,16 @@ type Store interface {
 	importPathReader
 	operationRecorder
 	fieldLockReader
+}
+
+// VersionGroupStore is Store plus the chapter table, for the passes that
+// retire or re-flag a version-group member and hand the group's primary on
+// through versionprimary (handOffPrimary), whose ranking reads chapters.
+// Kept apart from Store so the read-only reconcile passes and their callers
+// do not carry it.
+type VersionGroupStore interface {
+	Store
+	database.ChapterReader
 }
 
 // ReconcileMatch represents a potential match between a broken DB record and an untracked file.
@@ -146,6 +157,10 @@ type VersionGroupCleanupResult struct {
 	// book_file rows: removing them would orphan those rows
 	// (database.ErrBookOwnsFiles), and their files are not deleted either.
 	SkippedOwnsFiles int `json:"skipped_owns_files"`
+	// PrimaryHeld counts cleaned groups versionprimary held: no member is an
+	// organized library copy with its files present, so nothing was crowned
+	// and the group is left for version-group-primary-repair.
+	PrimaryHeld int `json:"primary_held"`
 }
 
 // BrokenSegmentResult describes books with missing segment files.
@@ -785,7 +800,7 @@ func CountMatchType(matches []ReconcileMatch, matchType string) int {
 // CleanupDuplicateVersionGroups finds version groups with more than 2 members
 // (1 original + 1 organized) and removes the extra organized copies that were
 // created by the organize-reprocessing bug.
-func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*VersionGroupCleanupResult, error) {
+func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryRun bool) (*VersionGroupCleanupResult, error) {
 	result := &VersionGroupCleanupResult{}
 
 	// Fetch all books and group by version_group_id. Core-typed: grouping and
@@ -875,17 +890,20 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 			result.DuplicatesRemoved++
 		}
 
-		// Ensure the kept library copy is primary and the original(s) are
-		// non-primary. Each row goes through setPrimaryFlag (ModifyBook), which
-		// re-reads the full row under its own write lock — kept/orig are Core
-		// projections here — and sets only IsPrimaryVersion. The kept/original
-		// pair is NOT one atomic swap: the store holds one book stripe at a
-		// time, so it is one write per row, each touching only that row's
-		// column, and a failure on one row does not undo the other.
+		// Hand the group's primary on with the shared rule. Until 2026-09-24
+		// this crowned the oldest library copy and demoted the originals by
+		// hand: a kept copy with no files was crowned all the same, and a
+		// duplicate kept because it still owns files kept its own flag, so the
+		// group could end with two primaries or with one ABS cannot show.
+		// EnsureSinglePrimary keeps a healthy incumbent, else elects, and
+		// holds (writes nothing) when no member is eligible.
 		if !dryRun {
-			setPrimaryFlag(store, result, libraryCopies[keepIdx].ID, true, "kept")
-			for _, origCore := range originals {
-				setPrimaryFlag(store, result, origCore.ID, false, "original")
+			res, herr := handOffPrimary(store, groupID, rootDir)
+			switch {
+			case herr != nil:
+				result.WriteErrors++
+			case res.Outcome == versionprimary.OutcomeHeld:
+				result.PrimaryHeld++
 			}
 		}
 	}
@@ -893,35 +911,31 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 	return result, nil
 }
 
-// setPrimaryFlag writes IsPrimaryVersion=primary on one row through ModifyBook,
-// so a column another writer commits meanwhile is not reverted (audit A1#15).
-// A row that already holds the value is left alone. A failed write or a row
-// that vanished is logged and counted in result.WriteErrors; CleanupVersionGroups
-// carried on past these errors before (it discarded them), so it keeps carrying
-// on, just visibly.
-func setPrimaryFlag(store bookWriter, result *VersionGroupCleanupResult, id string, primary bool, role string) {
-	written, err := store.ModifyBook(id, func(b *database.Book) error {
-		if b.IsPrimaryVersion != nil && *b.IsPrimaryVersion == primary {
-			return database.ErrSkipBookWrite
-		}
-		v := primary
-		b.IsPrimaryVersion = &v
-		return nil
-	})
+// handOffPrimary runs versionprimary.EnsureSinglePrimary on group gid after
+// a pass here retired or re-flagged one of its members, so the group ends
+// with one live eligible primary, or is held (nothing written) for
+// version-group-primary-repair. A failure is logged; the caller decides
+// whether to count it. An empty gid is a no-op.
+func handOffPrimary(store VersionGroupStore, gid, rootDir string) (versionprimary.HandoffResult, error) {
+	res, err := versionprimary.EnsureSinglePrimary(context.Background(), store, gid, versionprimary.Env{RootDir: rootDir})
 	if err != nil {
-		pkgLog.Warn("version-group cleanup failed to write is_primary_version=%v on %s book %s: %v", primary, role, id, err)
-		result.WriteErrors++
+		pkgLog.Warn("version group %s: primary hand-off failed: %v", logger.SanitizeLogValue(gid), err)
+	}
+	return res, err
+}
+
+// handOffRetired hands on the primary of a just-retired book's group, if it
+// has one. written is the row as the retiring write left it.
+func handOffRetired(store VersionGroupStore, written *database.Book, rootDir string) {
+	if written == nil || written.VersionGroupID == nil || *written.VersionGroupID == "" {
 		return
 	}
-	if written == nil {
-		pkgLog.Warn("version-group cleanup: %s book %s vanished before is_primary_version=%v could be written", role, id, primary)
-		result.WriteErrors++
-	}
+	_, _ = handOffPrimary(store, *written.VersionGroupID, rootDir)
 }
 
 // FindBrokenSegmentBooks finds books whose segment files don't exist on disk
 // and optionally marks them as needs_review.
-func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, error) {
+func FindBrokenSegmentBooks(store VersionGroupStore, dryRun bool) (*BrokenSegmentResult, error) {
 	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get books: %w", err)
@@ -1015,6 +1029,11 @@ func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, err
 					pkgLog.Warn("broken book %s vanished before it could be marked for review", book.ID)
 				default:
 					atomic.AddInt64(&markedForReview, 1)
+					// The mark soft-deletes the book, so a group it was
+					// primary of hands the flag on. Workers marking two
+					// members of one group are serialised by the hand-off's
+					// per-group lock.
+					handOffRetired(store, written, config.AppConfig.RootDir)
 				}
 			}
 			return nil
@@ -1036,7 +1055,7 @@ func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, err
 
 // MergeNoVGDuplicates finds no-VG books that match VG books by title, merges metadata, and soft-deletes.
 // It also deduplicates among the remaining no-VG orphans (keeping one per title, soft-deleting extras).
-func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplicatesResult, error) {
+func MergeNoVGDuplicates(store VersionGroupStore, rootDir string, dryRun bool) (*MergeDuplicatesResult, error) {
 	result := &MergeDuplicatesResult{}
 
 	// Load all books in pages. Core-typed: grouping/keeper-selection only needs
@@ -1090,6 +1109,10 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 		if written == nil {
 			return fmt.Errorf("book %s vanished before it could be soft-deleted", id)
 		}
+		// The candidates are chosen with no version group, so this is
+		// normally a no-op; a book grouped since the load hands its
+		// group's primary on.
+		handOffRetired(store, written, rootDir)
 		return nil
 	}
 
