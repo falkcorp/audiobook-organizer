@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_repair_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b6c88f6f-930b-4ea7-bded-52290d5a52aa
 // last-edited: 2026-09-24
 
@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
@@ -281,4 +282,49 @@ func TestVGPrimaryRepair_ChangedSincePlanIsSkipped(t *testing.T) {
 	hist, err := f.s.GetBookChangeHistory("A", 100)
 	require.NoError(t, err)
 	require.Empty(t, hist)
+}
+
+// Rollback: the history rows this op writes are what "undo last apply"
+// reverts. Undo is per book: the winner's batch restores its filled fields
+// (and flag), each loser's batch restores its flag.
+func TestVGPrimaryRepair_UndoLastApplyRestoresFieldsAndFlags(t *testing.T) {
+	f := newVGRepairFixture(t)
+	f.seed(t)
+	_, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Apply: true, GroupIDs: []string{"vg-double"}})
+	require.NoError(t, err)
+	svc := metafetch.NewService(f.s)
+
+	res, err := svc.UndoLastApply("A")
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"description", "publisher", "asin"}, res.Reverted)
+	a, err := f.s.GetBookByID("A")
+	require.NoError(t, err)
+	require.True(t, a.Description == nil || *a.Description == "", "description: %v", a.Description)
+	require.True(t, a.Publisher == nil || *a.Publisher == "")
+	require.Equal(t, "Keep", *a.Narrator)
+
+	_, err = svc.UndoLastApply("B")
+	require.NoError(t, err)
+	require.Equal(t, "true", f.flag(t, "B"))
+	_, err = svc.UndoLastApply("C")
+	require.NoError(t, err)
+	require.Equal(t, "nil", f.flag(t, "C"))
+}
+
+// A merge loser still flagged primary is not live, so this op neither counts
+// it as a primary nor demotes it; the dry run reports it so the totals
+// reconcile with version-group-primary-report.
+func TestVGPrimaryRepair_ReportsNonLiveEffectivePrimaries(t *testing.T) {
+	f := newVGRepairFixture(t)
+	f.seed(t)
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	f.book(t, "LOSER", "vg-ok", "organized", "true", 5, false, base.Add(3*time.Hour), func(b *database.Book) {
+		b.MergedIntoBookID = strPtr("OK1")
+	})
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{})
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.NonLivePrimaryGroups)
+	require.Equal(t, 1, rep.NonLivePrimaryBooks)
+	require.Equal(t, []string{"vg-ok"}, rep.NonLivePrimarySample)
+	require.Equal(t, 2, rep.Candidates, "vg-ok's live members are still exactly one true, one false")
 }
