@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-09-13
+// last-edited: 2026-09-24
 
 package jobs
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 var ddLog = logger.New("dedup-books")
@@ -395,41 +396,14 @@ func ddCountsAsPrimary(b *database.Book) bool {
 	return b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
 }
 
+// ddBookScore is the keeper score: the shared metadata scorer
+// (versionprimary.MetadataScore, the one set of weights every primary and
+// keeper choice uses) plus this job's own created-at term, which makes an
+// older row win an otherwise equal score. The created-at term stays here
+// rather than in the shared scorer because primary election breaks ties by
+// creation order explicitly, after its other signals.
 func ddBookScore(b *database.Book) int {
-	score := 0
-	if b.AuthorID != nil {
-		score += 100
-	}
-	if b.SeriesID != nil {
-		score += 20
-	}
-	if b.Description != nil && *b.Description != "" {
-		score += 10
-	}
-	if b.Narrator != nil && *b.Narrator != "" {
-		score += 5
-	}
-	if b.Duration != nil {
-		score += 5
-	}
-	if b.ISBN10 != nil || b.ISBN13 != nil || b.ASIN != nil {
-		score += 10
-	}
-	if b.ITunesPersistentID != nil {
-		score += 10
-	}
-	if b.Publisher != nil && *b.Publisher != "" {
-		score += 3
-	}
-	if b.Language != nil && *b.Language != "" {
-		score += 2
-	}
-	if b.Genre != nil && *b.Genre != "" {
-		score += 2
-	}
-	if b.CoverURL != nil && *b.CoverURL != "" {
-		score += 3
-	}
+	score := versionprimary.MetadataScore(b)
 	if b.CreatedAt != nil {
 		score -= int(b.CreatedAt.Unix() / 1_000_000)
 	}
