@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -853,19 +853,20 @@ func (r fsRepairResult) String() string {
 // refuseWhileLibraryScanActive fails closed unless the queue shows no
 // library.scan queued or running. The stand-down alone does not cover a scan
 // that resumed after a restart, so this point-in-time check comes first (same
-// shape as dedupe_book_file_rows.go).
-func refuseWhileLibraryScanActive(queue OpQueueReader) error {
+// shape as dedupe_book_file_rows.go). opName prefixes the error so the
+// operator sees which op refused.
+func refuseWhileLibraryScanActive(queue OpQueueReader, opName string) error {
 	if queue == nil {
-		return fmt.Errorf("fs-regroup-xml: cannot verify no library.scan is active; refusing to apply")
+		return fmt.Errorf("%s: cannot verify no library.scan is active; refusing to apply", opName)
 	}
 	active, err := queue.ListActiveOperationsV2()
 	if err != nil {
-		return fmt.Errorf("fs-regroup-xml: cannot list active operations; refusing to apply: %w", err)
+		return fmt.Errorf("%s: cannot list active operations; refusing to apply: %w", opName, err)
 	}
 	for _, op := range active {
 		if op.DefID == "library.scan" && (op.Status == "running" || op.Status == "queued") {
-			return fmt.Errorf("fs-regroup-xml: library.scan is %s (op %s); refusing to apply — a scan rewrites the "+
-				"rows this op moves. If that row is a stale zombie, clear it rather than bypassing this check", op.Status, op.ID)
+			return fmt.Errorf("%s: library.scan is %s (op %s); refusing to apply — a scan rewrites the "+
+				"rows this op changes. If that row is a stale zombie, clear it rather than bypassing this check", opName, op.Status, op.ID)
 		}
 	}
 	return nil
@@ -930,7 +931,7 @@ func applyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanContro
 		_ = reporter.Log(slog.LevelInfo, "fs-regroup-xml: nothing to apply")
 		return res, nil
 	}
-	if err := refuseWhileLibraryScanActive(queue); err != nil {
+	if err := refuseWhileLibraryScanActive(queue, "fs-regroup-xml"); err != nil {
 		return res, err
 	}
 	holderID, held, release, err := acquireScanStandDownForApply(ctx, scan, reporter, "fs-regroup-xml apply")

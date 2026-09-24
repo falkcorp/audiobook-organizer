@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.49.0
+// version: 1.50.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-23
+// last-edited: 2026-09-24
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -368,6 +368,20 @@ type StoreProvider interface {
 	// run must refuse while library.scan is queued or running, because a scan
 	// concurrently rewrites the same book_file rows that op deletes.
 	OperationQueueStore() OpQueueReader
+	// VersionPrimaryStore serves version-group-primary-repair: the chapter
+	// table (the fallback when ffprobe cannot read a file) and the metadata
+	// history its apply records after each write.
+	VersionPrimaryStore() VersionPrimaryStore
+}
+
+// VersionPrimaryStore is what version-group-primary-repair needs beyond
+// OpsStore. Its own accessor, like OpQueueReader, because OpsStore and
+// opsRecordsAndQueue are both at the interfacebloat cap of 8. Both methods
+// are part of database.Store, so the production decorator forwards them and
+// a plain `return s.store` is correct.
+type VersionPrimaryStore interface {
+	database.ChapterReader
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
 }
 
 // OpQueueReader is the single method the dedupe repair needs to see whether a

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-23
+// last-edited: 2026-09-24
 
 package maintenance
 
@@ -64,6 +64,10 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// schedule): it counts version groups with more than one effective
 		// primary (VG-DOUBLE-PRIMARY) and changes nothing.
 		p.versionGroupPrimaryReportDef(),
+		// version-group-primary-repair fixes zero- and double-primary groups
+		// with versionprimary's rule. Dry run by default; apply needs
+		// explicit group_ids and refuses while library.scan runs.
+		p.versionGroupPrimaryRepairDef(),
 
 		// --- author/series ---
 		p.authorDedupScanDef(),
