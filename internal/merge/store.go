@@ -1,5 +1,5 @@
 // file: internal/merge/store.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
 // last-edited: 2026-09-24
 
@@ -88,19 +88,24 @@ type mergeExternalIDReader interface {
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
 }
 
-// mergeVersionGroupReader loads every CURRENT live member of a version group.
+// mergeVersionGroupStore loads every CURRENT live member of a version group.
 // MergeBooks needs it to demote pre-existing members when it reuses an
 // existing group's ID (VG-DOUBLE-PRIMARY): without it, a member that joined
 // the group in a PRIOR merge and is absent from this call keeps its
 // is_primary_version=true and the group ends up with two primaries.
 //
-// Deliberately its own single-method interface rather than an addition to
+// Deliberately its own interface rather than an addition to
 // BookReader/BookWriter: those two are exported precisely so internal/importer
 // and internal/dedup can forward their own stores into BookTitle and
 // SoftDeleteBook, and widening either would force a method on callers that do
 // not need it. Only Store composes this.
-type mergeVersionGroupReader interface {
+//
+// It also carries versionprimary.EnsureStore: MergeBooks hands the primary
+// flag on in each group a participant left (handOffLeftGroups), which reads
+// the group, its members' files and chapter rows and writes the flags.
+type mergeVersionGroupStore interface {
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	versionprimary.EnsureStore
 }
 
 // syncCapabilityStore is deliberately `any`: FollowFileMove and
@@ -161,9 +166,6 @@ type Store interface {
 	mergeAuthorStore
 	UserProgressMerger
 	mergeExternalIDReader
-	mergeVersionGroupReader
+	mergeVersionGroupStore
 	combineUndoStore
-	// versionprimary.EnsureStore: MergeBooks hands the primary flag on in
-	// each group a participant left (handOffLeftGroups).
-	versionprimary.EnsureStore
 }

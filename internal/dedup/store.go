@@ -1,5 +1,5 @@
 // file: internal/dedup/store.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
 // last-edited: 2026-09-24
 
@@ -99,6 +99,10 @@ type dedupBookWriter interface {
 	DeleteBook(id string) error
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
 	RevertBookToVersion(id string, ts time.Time) (*database.Book, error)
+	// versionprimary.EnsureStore: a merge that retires a group's primary
+	// hands the flag on (handOffRetiredPrimaries), which reads the group,
+	// its members' files and chapter rows and writes the flags.
+	versionprimary.EnsureStore
 }
 
 type dedupAuthorStore interface {
@@ -163,8 +167,4 @@ type Store interface {
 	dedupSeriesStore
 	dedupDuplicateStore
 	dedupSplitMergeStore
-	// versionprimary.EnsureStore: a merge that retires a group's primary
-	// hands the flag on (handOffRetiredPrimaries), which reads the group,
-	// its members' files and chapter rows.
-	versionprimary.EnsureStore
 }
