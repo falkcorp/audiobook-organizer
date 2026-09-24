@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
 // last-edited: 2026-09-24
 
@@ -121,12 +121,14 @@ type vgRepairGroupReport struct {
 	ExplicitTrue       int                       `json:"explicit_true"`
 	EffectivePrimaries int                       `json:"effective_primaries"`
 	CarryOver          *versionprimary.CarryPlan `json:"carry_over,omitempty"`
-	// MergeParticipantAmongPrimaries: a group with two or more explicit
-	// primaries where one of those members carries a merge target.
-	MergeParticipantAmongPrimaries bool   `json:"merge_participant_among_primaries,omitempty"`
-	ChapterCountUnknown            bool   `json:"chapter_count_unknown,omitempty"`
-	Outcome                        string `json:"outcome,omitempty"`
-	Error                          string `json:"error,omitempty"`
+	// MergedLoserAmongPrimaries: two or more members are explicit true and
+	// one of them carries a merge target (a merge LOSER). A merge survivor
+	// carries no marker on its row, so a double caused by a survivor is not
+	// detected here; this is a lower bound on merge-caused doubles.
+	MergedLoserAmongPrimaries bool   `json:"merged_loser_among_primaries,omitempty"`
+	ChapterCountUnknown       bool   `json:"chapter_count_unknown,omitempty"`
+	Outcome                   string `json:"outcome,omitempty"`
+	Error                     string `json:"error,omitempty"`
 }
 
 type vgRepairReport struct {
@@ -148,9 +150,18 @@ type vgRepairReport struct {
 	ContentNotMetadataBest int            `json:"content_winner_not_metadata_winner"`
 	WithCarryOverFills     int            `json:"groups_with_carry_over_fills"`
 	WithCarryOverConflicts int            `json:"groups_with_carry_over_conflicts"`
-	MergeParticipantGroups int            `json:"multi_primary_groups_with_merge_participant"`
-	ChapterUnknownGroups   int            `json:"groups_with_unknown_chapter_count"`
-	Errors                 int            `json:"errors"`
+	MergeLoserGroups       int            `json:"multi_primary_groups_with_merged_loser"`
+	// NonLivePrimary* count groups where a member that is NOT live (a merge
+	// loser whose survivor is alive) is still an effective primary. This op
+	// neither counts nor demotes such members ("every other LIVE member"),
+	// so these groups can stay double after an apply. Counted here so the
+	// totals reconcile with version-group-primary-report, which counts every
+	// non-deleted member.
+	NonLivePrimaryGroups int      `json:"groups_with_nonlive_effective_primary"`
+	NonLivePrimaryBooks  int      `json:"nonlive_effective_primary_books"`
+	NonLivePrimarySample []string `json:"nonlive_effective_primary_sample,omitempty"`
+	ChapterUnknownGroups int      `json:"groups_with_unknown_chapter_count"`
+	Errors               int      `json:"errors"`
 	// Apply only.
 	Applied          int    `json:"applied"`
 	ChangedSincePlan int    `json:"changed_since_plan"`
@@ -168,11 +179,11 @@ type vgRepairReport struct {
 func (r *vgRepairReport) summary() string {
 	s := fmt.Sprintf("dry_run=%v books=%d groups=%d candidates=%d (zero_explicit=%d multi_explicit=%d nil_only=%d) "+
 		"decisions=%v holds=%v content_not_metadata_best=%d carry_fills=%d carry_conflicts=%d "+
-		"merge_participant=%d chapter_unknown=%d errors=%d applied=%d changed_since_plan=%d partial=%d "+
+		"merged_loser=%d nonlive_primary_groups=%d chapter_unknown=%d errors=%d applied=%d changed_since_plan=%d partial=%d "+
 		"apply_failed=%d fields_filled=%d history_failed=%d",
 		r.DryRun, r.TotalBooks, r.GroupsScanned, r.Candidates, r.ZeroExplicit, r.MultiExplicit, r.NilOnly,
 		r.ByDecision, r.ByHoldReason, r.ContentNotMetadataBest, r.WithCarryOverFills, r.WithCarryOverConflicts,
-		r.MergeParticipantGroups, r.ChapterUnknownGroups, r.Errors, r.Applied, r.ChangedSincePlan, r.Partial,
+		r.MergeLoserGroups, r.NonLivePrimaryGroups, r.ChapterUnknownGroups, r.Errors, r.Applied, r.ChangedSincePlan, r.Partial,
 		r.ApplyFailed, r.FieldsFilled, r.HistoryFailed)
 	if r.Aborted != "" {
 		s += " ABORTED: " + r.Aborted
@@ -277,6 +288,7 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 	}
 	snapAlive := func(id string) bool { return liveIDs[id] }
 	counts := map[string]*vgCandidateCounts{}
+	nonLive := map[string]bool{}
 	for i := range books {
 		b := &books[i]
 		if b.VersionGroupID == nil || *b.VersionGroupID == "" || b.IsSoftDeleted() {
@@ -288,6 +300,10 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 			counts[*b.VersionGroupID] = c
 		}
 		if !versionprimary.ElectableRow(b.IsSoftDeleted(), b.MergedIntoBookID, snapAlive) {
+			if database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion) {
+				nonLive[*b.VersionGroupID] = true
+				report.NonLivePrimaryBooks++
+			}
 			continue
 		}
 		c.live++
@@ -299,6 +315,14 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 		}
 	}
 	report.GroupsScanned = len(counts)
+	report.NonLivePrimaryGroups = len(nonLive)
+	for gid := range nonLive {
+		report.NonLivePrimarySample = append(report.NonLivePrimarySample, gid)
+	}
+	sort.Strings(report.NonLivePrimarySample)
+	if len(report.NonLivePrimarySample) > 200 {
+		report.NonLivePrimarySample = report.NonLivePrimarySample[:200]
+	}
 
 	var work []string
 	if len(requested) > 0 {
@@ -431,8 +455,8 @@ func (r *vgRepairReport) tally(g *vgRepairGroupReport) {
 	if g.CarryOver != nil && len(g.CarryOver.Conflicts) > 0 {
 		r.WithCarryOverConflicts++
 	}
-	if g.MergeParticipantAmongPrimaries {
-		r.MergeParticipantGroups++
+	if g.MergedLoserAmongPrimaries {
+		r.MergeLoserGroups++
 	}
 	if g.ChapterCountUnknown {
 		r.ChapterUnknownGroups++
@@ -538,7 +562,7 @@ func (a *vgApplier) planAndApply(ctx context.Context, loader versionprimary.Load
 			g.EffectivePrimaries++
 		}
 	}
-	g.MergeParticipantAmongPrimaries = multi > 1 && mergeAmongPrimaries
+	g.MergedLoserAmongPrimaries = multi > 1 && mergeAmongPrimaries
 	if g.WinnerID != "" && g.MetadataBestID != "" && g.MetadataBestID != g.WinnerID {
 		cp := versionprimary.PlanCarryOver(byID[g.WinnerID], byID[g.MetadataBestID])
 		g.CarryOver = &cp
