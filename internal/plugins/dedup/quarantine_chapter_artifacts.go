@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1d7a4f92-3c60-4e85-9b21-6a5e8c0d3f47
-// last-edited: 2026-09-13
+// last-edited: 2026-09-24
 
 // Package dedup — op dedup.quarantine-chapter-artifacts.
 //
@@ -46,10 +46,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -338,6 +340,18 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 				atomic.AddInt64(&goneCount, 1)
 			case wrote:
 				atomic.AddInt64(&quarantinedCount, 1)
+				// The plan kept every artifact whose group had no surviving
+				// explicit primary, but that was decided on the pre-run read:
+				// a survivor retired since (another op, a user delete) would
+				// leave the group with none. Re-check the invariant after the
+				// write; a healthy group costs one stat of its primary.
+				if a.Group != "" && a.CountsPrimary {
+					if _, herr := versionprimary.EnsureSinglePrimary(ctx, p.store, a.Group,
+						versionprimary.Env{RootDir: config.AppConfig.RootDir}); herr != nil {
+						atomic.AddInt64(&failedCount, 1)
+						reporter.Logger().Error("quarantine primary hand-off error", "group", a.Group, "error", herr)
+					}
+				}
 			}
 			return nil
 		}, registry.RunItemsOptions{

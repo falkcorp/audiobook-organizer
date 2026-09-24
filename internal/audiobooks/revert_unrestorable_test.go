@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.5.3
+// version: 1.6.0
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
-// last-edited: 2026-09-13
+// last-edited: 2026-09-24
 
 package audiobooks
 
@@ -78,6 +78,11 @@ func (s *ledgerStub) ModifyBook(id string, fn func(*database.Book) error) (*data
 }
 
 func (s *ledgerStub) GetBookFiles(string) ([]database.BookFile, error) { return nil, nil }
+
+// GetBooksByVersionGroup and GetChaptersForBook satisfy versionprimary.EnsureStore
+// (revertBookPrimaryDemote crowns a restored primary); the stub has no groups.
+func (s *ledgerStub) GetBooksByVersionGroup(string) ([]database.Book, error) { return nil, nil }
+func (s *ledgerStub) GetChaptersForBook(string) ([]database.Chapter, error)  { return nil, nil }
 func (s *ledgerStub) GetOperationChanges(string) ([]*database.OperationChange, error) {
 	return s.changes, nil
 }
