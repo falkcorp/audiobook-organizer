@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package itunesservice
 
@@ -22,6 +22,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
@@ -35,6 +36,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // itlState guards the last ITL read time for conflict detection.
@@ -196,6 +198,14 @@ type importerCheckpointStore interface {
 	operations.OperationParamsWriter
 }
 
+// importerVersionStore is what the version-primary hand-off
+// (versionprimary.EnsureSinglePrimary) reads beyond bookLookup: a retired
+// book's group and each member's chapter rows.
+type importerVersionStore interface {
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	database.ChapterReader
+}
+
 // importerStore is everything the import pipeline needs, and nothing else.
 type importerStore interface {
 	bookLookup
@@ -203,6 +213,7 @@ type importerStore interface {
 	contributorWriter
 	itunesImportState
 	importerCheckpointStore
+	importerVersionStore
 }
 
 // Importer runs the iTunes import pipeline and incremental sync.
@@ -789,6 +800,18 @@ func (imp *Importer) softDeleteBlockedBook(bookID, hashedPath, hash string, impo
 		return false
 	}
 	log.Warn("Hash validation: blocked hash for '%s', soft-deleted", row.Title)
+	// The soft-deleted book is its group's primary: a fresh import is minted
+	// as the sole primary of its own group, and another writer may have
+	// grouped it since. Hand the flag on, so a group with other live members
+	// is not left without one (a group of one is left as it is). Best-effort:
+	// the soft-delete has landed.
+	if row.VersionGroupID != nil && *row.VersionGroupID != "" {
+		if _, herr := versionprimary.EnsureSinglePrimary(context.Background(), imp.store, *row.VersionGroupID,
+			versionprimary.Env{RootDir: config.AppConfig.RootDir}); herr != nil {
+			log.Warn("Hash validation: primary hand-off for version group %s failed: %v",
+				logger.SanitizeLogValue(*row.VersionGroupID), herr)
+		}
+	}
 	return true
 }
 
