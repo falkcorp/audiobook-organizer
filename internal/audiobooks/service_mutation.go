@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package audiobooks
 
@@ -445,6 +445,8 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 			return nil, fmt.Errorf("audiobook not found")
 		}
 		book = updated
+		// A soft-deleted primary hands its group's flag on.
+		svc.handOffPrimary(updated)
 
 		// Optionally block the hash
 		blocked := false
@@ -507,6 +509,9 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		}
 		return nil, err
 	}
+	// A hard-deleted primary hands its group's flag on too; book is the row
+	// read before the delete, so it still names the group.
+	svc.handOffPrimary(book)
 
 	if svc.itunesEnqueuer != nil {
 		for _, pid := range itunesPIDs {

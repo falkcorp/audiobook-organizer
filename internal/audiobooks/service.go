@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -125,6 +125,11 @@ type bookFileStore interface {
 	GetFolderDuplicatesCore() ([][]database.BookCore, error)
 	AddBlockedHash(hash, reason string) error
 	GetAllImportPaths() ([]database.ImportPath, error)
+	// A delete or restore hands the book's version group primary on through
+	// versionprimary.EnsureSinglePrimary (handOffPrimary), which reads the
+	// group's members and ranks them with their files and chapter rows.
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	database.ChapterReader
 }
 
 // perUserStateStore is the per-user and per-field state the listing endpoint

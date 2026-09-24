@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package audiobooks
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // GetAudiobook retrieves a single audiobook by ID with full metadata provenance
@@ -601,9 +602,30 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 	if err != nil {
 		return nil, err
 	}
+	// The restored row keeps its stored flag, so a book that was primary
+	// comes back beside whoever was handed the flag while it was deleted.
+	// Re-check its group: one primary, by the shared rule.
+	svc.handOffPrimary(updated)
 
 	svc.InvalidateBookCaches()
 	return updated, nil
+}
+
+// handOffPrimary runs versionprimary.EnsureSinglePrimary on b's version
+// group after a delete or restore changed whether b is live, so the group
+// ends with one live eligible primary, or is held (nothing written) for
+// version-group-primary-repair. Best-effort: the delete or restore has
+// committed; a failed hand-off is logged. A nil or ungrouped b is a no-op.
+func (svc *AudiobookService) handOffPrimary(b *database.Book) {
+	if b == nil || b.VersionGroupID == nil || *b.VersionGroupID == "" {
+		return
+	}
+	gid := *b.VersionGroupID
+	if _, err := versionprimary.EnsureSinglePrimary(context.Background(), svc.store, gid,
+		versionprimary.Env{RootDir: config.AppConfig.RootDir}); err != nil {
+		singleLog.Warn("version group %s: primary hand-off after deleting or restoring %s failed: %v",
+			logger.SanitizeLogValue(gid), logger.SanitizeLogValue(b.ID), err)
+	}
 }
 
 // CountAudiobooks returns the total count of audiobooks
