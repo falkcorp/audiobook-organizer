@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-09-24
 
@@ -65,6 +65,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -138,6 +139,9 @@ func (p fsRegroupParams) categorySet() (map[string]bool, error) {
 // method, so the apply cannot remove a row even by mistake.
 type fsRepairStore interface {
 	fsRegroupStore
+	// A retired shell that was its version group's primary hands the flag on
+	// (fsApplier.retire).
+	versionprimary.EnsureStore
 	regroupSnapshotReader
 	CreateOperationChange(change *database.OperationChange) error
 	database.MetadataFieldStateReader
@@ -1384,7 +1388,8 @@ func (a *fsApplier) retire(kind, folder, shellID, targetID, note string) {
 	}
 	// merge.MergeBooks demotes its losers; a retired shell left primary would
 	// still compete for its version group.
-	if b.IsPrimaryVersion == nil || *b.IsPrimaryVersion {
+	wasPrimary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
+	if wasPrimary {
 		// Demote only IsPrimaryVersion, under the book's write lock
 		// (ModifyBook), so a column another writer commits meanwhile is not
 		// reverted (audit A1#15); a shell demoted meanwhile is not journaled
@@ -1424,6 +1429,22 @@ func (a *fsApplier) retire(kind, folder, shellID, targetID, note string) {
 	}
 	a.softDeleted.Add(1)
 	a.journal(shellID, fsChangeSoftDelete, "marked_for_deletion", "", note)
+	// Hand the shell's group on, or it is left with no primary. The writes
+	// are not journaled (undo has no promote kind): a revert restores the
+	// shell and revertBookPrimaryDemote then crowns it and demotes the rest
+	// (versionprimary.Crown), so the group still ends with one primary.
+	if wasPrimary && b.VersionGroupID != nil && *b.VersionGroupID != "" {
+		res, herr := versionprimary.EnsureSinglePrimary(context.Background(), a.store, *b.VersionGroupID,
+			versionprimary.Env{RootDir: config.AppConfig.RootDir})
+		if herr != nil {
+			a.errs.Add(1)
+			a.log(slog.LevelWarn, "%s %q: primary hand-off in group %s after retiring %s: %v", kind, folder,
+				logger.SanitizeLogValue(*b.VersionGroupID), shellID, herr)
+		} else if len(res.Writes) > 0 {
+			a.log(slog.LevelInfo, "%s %q: group %s primary handed from %s to %s", kind, folder,
+				logger.SanitizeLogValue(*b.VersionGroupID), shellID, logger.SanitizeLogValue(res.PrimaryID))
+		}
+	}
 	for _, e := range exts {
 		if err := a.store.ReassignExternalID(e.Source, e.ExternalID, targetID); err != nil {
 			// The id stays on the soft-deleted shell, which a revert restores.

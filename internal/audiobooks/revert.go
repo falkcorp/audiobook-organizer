@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-09-14
+// last-edited: 2026-09-24
 
 package audiobooks
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // revertServiceStore is the slice of the store this service uses: the ledger
@@ -38,6 +39,9 @@ type revertServiceStore interface {
 	revertLedgerStore
 	revertSeriesStore
 	revertBookFileStore
+	// revertBookPrimaryDemote re-crowns a restored primary and demotes the
+	// rest of its group (versionprimary.Crown).
+	versionprimary.EnsureStore
 }
 
 // revertLedgerStore reads the operation's ledger, marks rows reverted, and
@@ -688,6 +692,15 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange) error
 
 // revertBookPrimaryDemote restores a retired shell's primary flag ("" is nil,
 // the never-set shape) while it is still the false the operation wrote.
+//
+// Restoring an explicit true re-crowns the shell with versionprimary.Crown,
+// which also writes explicit false on every other live member: the operation
+// (fs-regroup-xml's retire) hands the group's flag to a sibling after the
+// demote, without journaling that promotion, so writing true on the shell
+// alone would leave the group with two primaries. Crown runs after the
+// shell's own write, outside its ModifyBook callback, and only when the shell
+// is live again (the soft-delete row, later in the ledger, is reverted
+// first); otherwise the restored true on a deleted row competes with nobody.
 func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) error {
 	var restored *bool
 	switch c.OldValue {
@@ -700,13 +713,27 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) er
 	}
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
-	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+	group := ""
+	if err := rs.modifyBook(c.BookID, func(book *database.Book) error {
 		if book.IsPrimaryVersion == nil || *book.IsPrimaryVersion {
 			return driftRefusal("book %s was made primary again since the operation", book.ID)
 		}
 		book.IsPrimaryVersion = restored
+		group = ""
+		if book.VersionGroupID != nil {
+			group = *book.VersionGroupID
+		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if restored == nil || !*restored || group == "" {
+		return nil
+	}
+	if _, err := versionprimary.Crown(rs.db, group, c.BookID); err != nil {
+		return fmt.Errorf("demote the rest of group %s after restoring %s as primary: %w", group, c.BookID, err)
+	}
+	return nil
 }
 
 // revertExternalIDReassign moves one external id back from the book it was
