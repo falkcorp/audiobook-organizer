@@ -1,7 +1,7 @@
 // file: internal/organizer/saferename.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2df18e44-98f0-407e-ab5f-daf158f22554
-// last-edited: 2026-09-02
+// last-edited: 2026-09-24
 
 package organizer
 
@@ -151,12 +151,12 @@ func finalizeExclusive(tmp, dst string) error {
 // same audio under two names, and the next scan sees the book twice. So here
 // that is an error, and the caller must not record dst as the file's path.
 //
-// Directories cannot be hard-linked, so a directory move is safeRename with
-// rename(2)'s own directory semantics standing in for exclusivity: a rename
-// onto an existing NON-EMPTY directory fails (ENOTEMPTY/EEXIST) and onto a
-// file fails (ENOTDIR), so the only thing a racing directory rename can replace
-// is an EMPTY directory — nothing is lost. The Lstat guard in safeRename still
-// turns the common case into a clear error before the syscall gets to decide.
+// Directories cannot be hard-linked, so a directory move is renameDirExclusive,
+// with rename(2)'s own directory semantics standing in for exclusivity: a
+// rename onto an existing NON-EMPTY directory fails (ENOTEMPTY/EEXIST) and onto
+// a file fails (ENOTDIR), so the only thing a directory rename can replace is
+// an EMPTY directory — nothing is lost. An empty directory at dst is replaced
+// on purpose; anything else at dst is refused before the syscall.
 //
 // A symlink source — what the `symlink` organization strategy leaves in the
 // library — takes the same route. link(2) on a symlink is filesystem-defined
@@ -170,10 +170,58 @@ func moveExclusive(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("stat move source %s: %w", src, err)
 	}
-	if info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+	if info.IsDir() {
+		return renameDirExclusive(src, dst, info)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
 		return safeRename(src, dst)
 	}
 	return linkMoveExclusive(src, dst, false)
+}
+
+// beforeEmptyDirRename runs between renameDirExclusive's emptiness check and
+// its rename(2). Tests set it to fill the destination in that window; it is
+// nil in production.
+var beforeEmptyDirRename func(dst string)
+
+// renameDirExclusive moves directory src to dst. An absent dst goes through
+// safeRename. An existing EMPTY directory at dst is replaced, which is what
+// the organize caller already asks for (service.go skips its occupied-check
+// for an empty destination directory) but could never get: safeRename's
+// Lstat guard refuses every existing dst, so all 101 "destination already
+// exists" failures of the 2026-09-23 scan auto-organize came from here, and
+// 92 of those destinations were empty folders.
+//
+// Replacing is safe because rename(2) only replaces a directory that is
+// empty at the moment of the syscall. If a file lands in dst after the
+// dirIsEmpty check, the kernel fails with ENOTEMPTY (or EEXIST), which is
+// returned as the same fs.ErrExist collision every other refusal here uses.
+// Anything else at dst -- a non-empty directory, a file, a symlink, or a
+// directory whose emptiness cannot be read -- is refused as before.
+func renameDirExclusive(src, dst string, srcInfo os.FileInfo) error {
+	dstInfo, err := os.Lstat(dst)
+	if err != nil {
+		// Absent, or unreadable: safeRename reports both exactly as before.
+		return safeRename(src, dst)
+	}
+	if !dstInfo.IsDir() || !dirIsEmpty(dst) {
+		slog.Warn("exclusive move refusing to replace occupied destination",
+			"src", src, "dst", dst)
+		return &os.LinkError{Op: "rename", Old: src, New: dst, Err: fs.ErrExist}
+	}
+	if beforeEmptyDirRename != nil {
+		beforeEmptyDirRename(dst)
+	}
+	// syscall.Rename, not os.Rename: os.Rename refuses any existing
+	// destination directory with EEXIST before the kernel is asked, which is
+	// exactly the replace-an-empty-directory case this function exists for.
+	if err := syscall.Rename(src, dst); err != nil {
+		if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+			return &os.LinkError{Op: "rename", Old: src, New: dst, Err: fs.ErrExist}
+		}
+		return &os.LinkError{Op: "rename", Old: src, New: dst, Err: err}
+	}
+	return verifyRenamed(src, dst, srcInfo)
 }
 
 // linkMoveExclusive is the shared body of finalizeExclusive and moveExclusive:
