@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-09-15
+// last-edited: 2026-09-24
 
 package server
 
@@ -115,6 +115,9 @@ type serverBookWriter interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
 	SetLastWrittenAt(id string, t time.Time) error
+	// CreateBookFile: a transcode's output gets its own file row, which is
+	// what lets the version-primary rule consider it (recordTranscodedVersion).
+	CreateBookFile(file *database.BookFile) error
 }
 
 // serverBookVersionStore: Reads and writes version rows for a book.
@@ -122,6 +125,10 @@ type serverBookVersionStore interface {
 	GetBookVersion(id string) (*database.BookVersion, error)
 	UpdateBookVersion(v *database.BookVersion) error
 	DeleteBookVersion(id string) error
+	// The version-group primary hand-off (versionprimary.EnsureStore) after
+	// a transcode: the group's members and each member's chapter rows.
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	database.ChapterReader
 }
 
 // serverBookFileReader: Reads book_file rows. Cannot delete one -- see the

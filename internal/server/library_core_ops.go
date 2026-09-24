@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-14
+// last-edited: 2026-09-24
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -20,7 +20,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -435,95 +434,23 @@ func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 				return fmt.Errorf("failed to get original book: %s not found", p.BookID)
 			}
 
-			groupID := ""
-			if originalBook.VersionGroupID != nil && *originalBook.VersionGroupID != "" {
-				groupID = *originalBook.VersionGroupID
-			} else {
-				groupID = ulid.Make().String()
-			}
-
-			// Demote the original through ModifyBook: it re-reads the row
-			// under the book's write lock and sets only the three version
-			// columns, so a column another writer committed during the
-			// (long) transcode above is not reverted (audit A1#15).
-			// originalBook, the pre-transcode snapshot, is only the source
-			// of the metadata copied onto the new version below.
-			notPrimary := false
-			origNotes := "Original format"
-			demoted, err := s.Ops().ModifyBook(p.BookID, func(b *database.Book) error {
-				b.IsPrimaryVersion = &notPrimary
-				b.VersionGroupID = &groupID
-				b.VersionNotes = &origNotes
-				return nil
-			})
-			switch {
-			case err != nil:
-				progress.Log("warn", fmt.Sprintf("Failed to update original book version info: %v", err), nil)
-			case demoted == nil:
-				progress.Log("warn", fmt.Sprintf("Failed to update original book version info: book %s no longer exists", p.BookID), nil)
-			}
-
-			m4bFormat := "m4b"
-			aacCodec := "aac"
 			bitrateVal := opts.Bitrate
 			if bitrateVal <= 0 {
 				bitrateVal = 128
 			}
-			isPrimary := true
-			m4bNotes := "Transcoded to M4B"
-
-			newBook := &database.Book{
-				ID:                   ulid.Make().String(),
-				Title:                originalBook.Title,
-				FilePath:             outputPath,
-				Format:               m4bFormat,
-				Codec:                &aacCodec,
-				Bitrate:              &bitrateVal,
-				AuthorID:             originalBook.AuthorID,
-				SeriesID:             originalBook.SeriesID,
-				SeriesSequence:       originalBook.SeriesSequence,
-				Duration:             originalBook.Duration,
-				Narrator:             originalBook.Narrator,
-				Publisher:            originalBook.Publisher,
-				PrintYear:            originalBook.PrintYear,
-				AudiobookReleaseYear: originalBook.AudiobookReleaseYear,
-				ISBN10:               originalBook.ISBN10,
-				ISBN13:               originalBook.ISBN13,
-				ASIN:                 originalBook.ASIN,
-				Language:             originalBook.Language,
-				CoverURL:             originalBook.CoverURL,
-				IsPrimaryVersion:     &isPrimary,
-				VersionGroupID:       &groupID,
-				VersionNotes:         &m4bNotes,
+			// Records the output as a new version and decides the group's
+			// primary with versionprimary; see recordTranscodedVersion.
+			newBook, inPlace, err := recordTranscodedVersion(ctx, s.Ops(), originalBook, outputPath, bitrateVal,
+				config.AppConfig.RootDir, func(level, msg string) { progress.Log(level, msg, nil) })
+			if err != nil {
+				return err
 			}
-			if _, err := s.Ops().CreateBook(newBook); err != nil {
-				progress.Log("warn", fmt.Sprintf("Failed to create M4B version record, updating original: %v", err), nil)
-				isPrim := true
-				// Same locked column write as the demote above: only the
-				// file, format and version columns of the in-place row
-				// change; the note records the path the locked row had.
-				rewritten, updateErr := s.Ops().ModifyBook(p.BookID, func(b *database.Book) error {
-					fallbackNotes := fmt.Sprintf("Transcoded to M4B (in-place, original was at %s)", b.FilePath)
-					b.FilePath = outputPath
-					b.Format = m4bFormat
-					b.Codec = &aacCodec
-					b.Bitrate = &bitrateVal
-					b.IsPrimaryVersion = &isPrim
-					b.VersionGroupID = &groupID
-					b.VersionNotes = &fallbackNotes
-					return nil
-				})
-				if updateErr != nil {
-					return updateErr
-				}
-				if rewritten == nil {
-					return fmt.Errorf("transcode: book %s no longer exists; transcoded file left at %s", p.BookID, outputPath)
-				}
+			if inPlace {
 				return nil
 			}
 
 			op.AddEntity("books", newBook.ID)
-			progress.Log("info", fmt.Sprintf("Created M4B version %s (group %s), original %s demoted to non-primary", newBook.ID, groupID, p.BookID), nil)
+			progress.Log("info", fmt.Sprintf("Created M4B version %s (group %s) of %s", newBook.ID, *newBook.VersionGroupID, p.BookID), nil)
 
 			if !config.AppConfig.ITunes.WriteBackEnabled &&
 				originalBook.ITunesPersistentID != nil &&
