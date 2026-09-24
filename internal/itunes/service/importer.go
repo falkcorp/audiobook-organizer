@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-09-24
 
@@ -918,7 +918,22 @@ func (imp *Importer) applyDeferredITunesUpdates(log logger.Logger) {
 }
 
 // Sync performs an incremental sync from the iTunes library XML.
+// ErrSyncDisabled is returned by Sync while itunes.sync_enabled is false.
+var ErrSyncDisabled = errors.New("iTunes sync is disabled (itunes.sync_enabled=false)")
+
+// Sync applies the iTunes library XML to the store. It refuses with
+// ErrSyncDisabled while itunes.sync_enabled is false. Until 2026-09-24 that
+// flag gated nothing: neither the itunes.sync op nor organize's pre-sync read
+// it, so "disable the sync" left both able to repoint every PID-matched row
+// whose ITunesPath differs from the XML Location back to the iTunes file,
+// which is what an organized or library-cloned row looks like until iTunes
+// regenerates its XML. Checked here, the one choke point, so every caller
+// honors it.
 func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings []itunes.PathMapping, activityFn func(database.ActivityEntry), log logger.Logger) error {
+	if !config.AppConfig.ITunes.SyncEnabled {
+		log.Info("Skipping iTunes sync of %s: itunes.sync_enabled is false", libraryPath)
+		return ErrSyncDisabled
+	}
 	log.UpdateProgress(0, 0, "Parsing iTunes library XML...")
 	log.Info("Starting iTunes sync from %s", libraryPath)
 

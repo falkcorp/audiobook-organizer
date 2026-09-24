@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-24
 
@@ -723,6 +723,10 @@ func (orgSvc *Service) autoBackup(ctx context.Context, log logger.Logger) backup
 }
 
 func (orgSvc *Service) syncITunesBeforeOrganize(ctx context.Context, log logger.Logger) {
+	if !config.AppConfig.ITunes.SyncEnabled {
+		log.Info("Skipping iTunes sync before organize: itunes.sync_enabled is false")
+		return
+	}
 	libraryPath := orgSvc.DiscoverITunesLibraryPath()
 	if libraryPath == "" {
 		log.Info("Skipping iTunes sync: no library found")
