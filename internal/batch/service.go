@@ -1,5 +1,5 @@
 // file: internal/batch/service.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-24
 
@@ -413,9 +413,14 @@ var batchLog = logger.New("batch")
 //   - is_primary_version=true on a live book is the user's explicit choice:
 //     versionprimary.Crown makes it the primary and demotes the rest (until
 //     2026-09-24 it was written beside the incumbent, leaving two).
-//   - Any other change to the flag, the deletion mark or the group runs
-//     versionprimary.EnsureSinglePrimary on the book's group, and on the
-//     group it left, so a deleted or demoted primary is handed on.
+//   - is_primary_version=false on a live book is also the user's choice, and
+//     a lock row records it: its group is NOT re-elected, because Elect
+//     could crown the same book again. The group may be left with no
+//     primary; the user picks one, or version-group-primary-repair does.
+//   - A change to the deletion mark or the group runs
+//     versionprimary.EnsureSinglePrimary on the book's group, so a deleted
+//     primary is handed on.
+//   - The group the book LEFT is always re-checked.
 //
 // Best-effort: the edit itself has committed; a failed hand-off is logged
 // and left for version-group-primary-repair.
@@ -433,6 +438,8 @@ func (bs *BatchService) handOffPrimary(before, after *database.Book, updates map
 			batchLog.Warn("batch: crowning %s in version group %s failed: %v",
 				logger.SanitizeLogValue(after.ID), logger.SanitizeLogValue(newG), err)
 		}
+	} else if v, ok := updates["is_primary_version"].(bool); ok && !v && !after.IsSoftDeleted() {
+		// Explicit demotion: leave newG as the user set it.
 	} else if newG != "" {
 		if _, err := versionprimary.EnsureSinglePrimary(context.Background(), bs.db, newG, env); err != nil {
 			batchLog.Warn("batch: primary hand-off in version group %s failed: %v", logger.SanitizeLogValue(newG), err)
