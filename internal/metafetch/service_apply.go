@@ -1,15 +1,17 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-19
+// last-edited: 2026-09-24
 
 package metafetch
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // renderableCoverURL decides what cover_url to persist during an apply.
@@ -1024,10 +1027,67 @@ func appendMetadataVersionNote(book *database.Book, marker string) {
 	book.VersionNotes = &notes
 }
 
+// match4Log is MATCH-4's logger.New printf-style logger.
+var match4Log = logger.New("metafetch.match4")
+
+// match4Candidate is one book of a metadata-source-hash cluster as the
+// survivor choice sees it.
+type match4Candidate struct {
+	book     database.Book
+	files    int
+	eligible bool
+	tier     int
+	// unit is the version group id, or "book:<id>" for an ungrouped book.
+	// Books of one unit are versions of each other and never duplicates.
+	unit string
+}
+
+// match4Better orders two cluster candidates. When rank is true (some
+// candidate in the cluster is eligible) the versionprimary signals come
+// first: an eligible copy, then the better content tier. The final
+// tie-break is the pre-2026-09-24 rule: most book_files, then the earliest
+// created_at (nil last), then the lowest id so the answer is deterministic.
+func match4Better(a, b *match4Candidate, rank bool) bool {
+	if rank {
+		if a.eligible != b.eligible {
+			return a.eligible
+		}
+		if a.tier != b.tier {
+			return a.tier > b.tier
+		}
+	}
+	if a.files != b.files {
+		return a.files > b.files
+	}
+	ac, bc := a.book.CreatedAt, b.book.CreatedAt
+	switch {
+	case ac != nil && bc != nil && !ac.Equal(*bc):
+		return ac.Before(*bc)
+	case ac != nil && bc == nil:
+		return true
+	case ac == nil && bc != nil:
+		return false
+	}
+	return a.book.ID < b.book.ID
+}
+
 // checkMetadataSourceHashDuplicates auto-flags any existing non-merged book
-// that shares the same metadata_source_hash as bookID (MATCH-4). The book
-// with the most book_files is kept as primary; all others get
-// merged_into_book_id set to point at it.
+// that shares the same metadata_source_hash as bookID (MATCH-4): every book
+// outside the survivor's version group gets merged_into_book_id set to the
+// survivor.
+//
+// Two rules changed on 2026-09-24, after prod showed 146 version groups
+// whose organized library copy had been merged into its own unorganized
+// source (the organize pair: equal file counts, the source created first, so
+// "most files, then earliest" always kept the source ABS cannot list):
+//
+//   - Members of one version group are versions of each other by design, not
+//     duplicates, so they are never flagged against each other. A cluster
+//     whose books all sit in one group writes nothing.
+//   - The survivor is chosen with versionprimary's signals when any candidate
+//     is eligible (live, organized, every file present under the library
+//     root): eligible first, then content tier, then the old rule. When no
+//     candidate is eligible the old rule alone decides, as before.
 //
 // Every read the election depends on is completed BEFORE any book is
 // demoted, and a failure on any of them aborts the whole cluster with an
@@ -1063,41 +1123,56 @@ func (mfs *Service) checkMetadataSourceHashDuplicates(bookID, hash string) error
 
 	// Score first, decide second: a read error on ANY candidate aborts the
 	// election before a primary is chosen, so it can never be mistaken for a
-	// book that legitimately has zero files.
-	fileCounts := make(map[string]int, len(allMap))
-	for id := range allMap {
+	// book that legitimately has zero files. The chapter probe is not run
+	// here (this is the metadata-apply path); a single m4b's chapter count
+	// comes from the chapter table.
+	loader := versionprimary.Loader{Files: mfs.db, Chapters: mfs.db, RootDir: config.AppConfig.RootDir}
+	cands := make([]match4Candidate, 0, len(allMap))
+	units := map[string]bool{}
+	anyEligible := false
+	for id, b := range allMap {
 		files, err := mfs.db.GetBookFiles(id)
 		if err != nil {
 			return fmt.Errorf("MATCH-4 count files for book %s in hash cluster %s: %w", id, hash, err)
 		}
-		fileCounts[id] = len(files)
+		sig, err := loader.Load(context.Background(), &b, true)
+		if err != nil {
+			return fmt.Errorf("MATCH-4 rank book %s in hash cluster %s: %w", id, hash, err)
+		}
+		c := match4Candidate{book: b, files: len(files), eligible: versionprimary.Eligible(&b, sig), tier: versionprimary.Tier(sig), unit: "book:" + id}
+		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
+			c.unit = *b.VersionGroupID
+		}
+		anyEligible = anyEligible || c.eligible
+		units[c.unit] = true
+		cands = append(cands, c)
+	}
+	if len(units) < 2 {
+		return nil // every candidate is a version of the same book
 	}
 
-	// Pick primary: book with the most book_files. On tie, prefer earlier created_at.
-	primaryID := bookID
-	maxFiles := -1
-	for id, b := range allMap {
-		n := fileCounts[id]
-		isBetter := n > maxFiles
-		if n == maxFiles && b.CreatedAt != nil {
-			if cur, ok := allMap[primaryID]; ok && cur.CreatedAt != nil && b.CreatedAt.Before(*cur.CreatedAt) {
-				isBetter = true
-			}
-		}
-		if isBetter {
-			maxFiles = n
-			primaryID = id
+	best := 0
+	for i := 1; i < len(cands); i++ {
+		if match4Better(&cands[i], &cands[best], anyEligible) {
+			best = i
 		}
 	}
+	// Copied out before the sort below reorders cands.
+	primaryID, survivorUnit := cands[best].book.ID, cands[best].unit
 
-	for id := range allMap {
-		if id == primaryID {
+	sort.Slice(cands, func(i, j int) bool { return cands[i].book.ID < cands[j].book.ID })
+	for i := range cands {
+		c := &cands[i]
+		if c.unit == survivorUnit {
 			continue
 		}
+		id := c.book.ID
 		if err := mfs.db.FlagMetadataHashDuplicate(primaryID, id); err != nil {
-			slog.Warn("MATCH-4 failed to flag book as duplicate of", "dupID", logger.SanitizeLogValue(id), "primaryID", logger.SanitizeLogValue(primaryID), "error", logger.SanitizeLogValue(err.Error()))
+			match4Log.Warn("MATCH-4 failed to flag book %s as duplicate of %s: %s",
+				logger.SanitizeLogValue(id), logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(err.Error()))
 		} else {
-			slog.Info("MATCH-4 auto-flagged book as merged into primary (hash )", "dupID", logger.SanitizeLogValue(id), "primaryID", logger.SanitizeLogValue(primaryID), "hash", hash)
+			match4Log.Info("MATCH-4 auto-flagged book %s as merged into primary %s (hash %s)",
+				logger.SanitizeLogValue(id), logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(hash))
 		}
 	}
 	return nil
