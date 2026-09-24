@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 3.2.1
+// version: 3.3.0
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-09-13
+// last-edited: 2026-09-24
 
 package jobs
 
@@ -13,14 +13,15 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -92,7 +93,7 @@ func (j *fixVersionGroupsJob) Run(ctx context.Context, store maintenance.JobStor
 		}
 
 		if !dryRun {
-			if applyErr := vgUnlinkOutliers(store, books, outliers); applyErr != nil {
+			if applyErr := vgUnlinkOutliers(ctx, store, groupID, outliers, config.AppConfig.RootDir); applyErr != nil {
 				vgLog.Error("unlink outliers group=%s: %s", logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(applyErr.Error()))
 				mismatchErrors++
 			} else {
@@ -225,56 +226,43 @@ func vgLongWords(s string) map[string]bool {
 	return set
 }
 
-// vgUnlinkOutliers moves each outlier into a fresh version group of its own,
-// every write under the book's lock (ModifyBook).
+// vgUnlinkOutliers moves each outlier out of version group groupID into a
+// fresh group of its own, every write under the book's lock (ModifyBook).
 //
 // Primary bookkeeping, both sides:
 //   - The outlier is the sole member of its new group, so it is made that
 //     group's primary. A singleton whose only member is not primary is
 //     invisible under the UI's default is_primary_version filter.
-//   - If an outlier counted as the OLD group's primary (nil counts, the
-//     destructive-guard reading -- see ddCountsAsPrimary) and no remaining
-//     member is an explicit primary, the lowest-ID remaining member is
-//     promoted FIRST, so the group is never left with none. IDs are ULIDs, so
-//     lowest ID is earliest created, reconcile's election rule.
-func vgUnlinkOutliers(store bookModifier, group, outliers []database.BookCore) error {
-	isOutlier := make(map[string]bool, len(outliers))
-	lostPrimary := false
-	for _, ob := range outliers {
-		isOutlier[ob.ID] = true
-		if ob.IsPrimaryVersion == nil || *ob.IsPrimaryVersion {
-			lostPrimary = true
+//   - The old group is handed to versionprimary.EnsureSinglePrimary once the
+//     outliers have left, including after a failed unlink (deferred), so an
+//     outlier that was its primary hands the flag on with the shared rule: a
+//     healthy remaining primary is kept, otherwise the best eligible member
+//     (organized, files present under the library root) is crowned, and when
+//     none is eligible the group is held and left for
+//     version-group-primary-repair. Until 2026-09-24 the lowest-ID remaining
+//     member was promoted blindly, whether or not ABS could show it.
+func vgUnlinkOutliers(ctx context.Context, store versionprimary.EnsureStore, groupID string,
+	outliers []database.BookCore, rootDir string) (err error) {
+	defer func() {
+		res, herr := versionprimary.EnsureSinglePrimary(ctx, store, groupID, versionprimary.Env{RootDir: rootDir})
+		switch {
+		case herr != nil:
+			err = errors.Join(err, fmt.Errorf("hand on the primary of %s: %w", groupID, herr))
+		case res.Outcome == versionprimary.OutcomeHeld:
+			vgLog.Info("fix-version-groups: group %s held after unlinking outliers; left for version-group-primary-repair",
+				logger.SanitizeLogValue(groupID))
 		}
-	}
-	if lostPrimary {
-		var remaining []database.BookCore
-		hasExplicit := false
-		for _, m := range group {
-			if isOutlier[m.ID] || m.IsSoftDeleted() {
-				continue
-			}
-			if m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
-				hasExplicit = true
-			}
-			remaining = append(remaining, m)
-		}
-		if !hasExplicit && len(remaining) > 0 {
-			sort.Slice(remaining, func(i, j int) bool { return remaining[i].ID < remaining[j].ID })
-			if _, _, err := ddPromotePrimary(store, remaining[0].ID); err != nil {
-				return fmt.Errorf("promote %s before unlinking the group's primary: %w", remaining[0].ID, err)
-			}
-		}
-	}
+	}()
 	for _, ob := range outliers {
 		newGroupID := ulid.Make().String()
-		updated, err := store.ModifyBook(ob.ID, func(b *database.Book) error {
+		updated, merr := store.ModifyBook(ob.ID, func(b *database.Book) error {
 			t := true
 			b.VersionGroupID = &newGroupID
 			b.IsPrimaryVersion = &t
 			return nil
 		})
-		if err != nil {
-			return fmt.Errorf("unlink %s: %w", ob.ID, err)
+		if merr != nil {
+			return fmt.Errorf("unlink %s: %w", ob.ID, merr)
 		}
 		if updated == nil {
 			return fmt.Errorf("book %s not found", ob.ID)
@@ -282,9 +270,6 @@ func vgUnlinkOutliers(store bookModifier, group, outliers []database.BookCore) e
 	}
 	return nil
 }
-
-// bookModifier is the per-book locked read-modify-write.
-type bookModifier = ddBookModifier
 
 func vgIsAuthorDirectory(dir string) bool {
 	entries, err := os.ReadDir(dir)

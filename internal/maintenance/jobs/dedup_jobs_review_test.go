@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_jobs_review_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c9e7a15-6b2d-4f80-9a41-d5e8f2b6c073
 // last-edited: 2026-09-24
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 
 // Real-Pebble tests for the second review round of the dedup-jobs data-loss
@@ -117,35 +118,33 @@ func TestVGPlanAuthorDirFix_SizeMismatchIsNotRepointed(t *testing.T) {
 	}
 }
 
-// vgUnlinkOutliers against a real store: both groups end with exactly one
-// explicit primary.
-func TestVGUnlinkOutliers_RealStoreKeepsOnePrimaryEachSide(t *testing.T) {
-	s := ddRealStore(t)
-	yes, no := true, false
-	const vg = "vg-outlier"
-	a := ddMustBook(t, s, &database.Book{Title: "Alpha", FilePath: "/lib/A/a.m4b"})
-	b := ddMustBook(t, s, &database.Book{Title: "Alpha", FilePath: "/lib/A/b.m4b"})
-	o := ddMustBook(t, s, &database.Book{Title: "Omega", FilePath: "/lib/O/o.m4b"})
-	ddSetGroup(t, s, a.ID, vg, &no)
-	ddSetGroup(t, s, b.ID, vg, &no)
-	ddSetGroup(t, s, o.ID, vg, &yes)
-	var group []database.BookCore
-	for _, id := range []string{a.ID, b.ID, o.ID} {
-		group = append(group, ddMustGet(t, s, id).Core())
+// vgUnlinkOutliers when no remaining member is eligible (none is organized
+// with its files under the library root): the old group is held, so nobody
+// is crowned there -- a change from the lowest-ID promotion before
+// 2026-09-24 -- and the outlier is still primary of its own new group.
+func TestVGUnlinkOutliers_HeldGroupCrownsNobody(t *testing.T) {
+	f := vptest.New(t)
+	a := f.Book(t, vptest.Spec{ID: "a", Group: "vg-outlier", Primary: "false", State: "imported"})
+	b := f.Book(t, vptest.Spec{ID: "b", Group: "vg-outlier", Primary: "false", Outside: true})
+	o := f.Book(t, vptest.Spec{ID: "o", Group: "vg-outlier", Primary: "true"})
+	ob, err := f.S.GetBookByID(o)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := vgUnlinkOutliers(s, group, group[2:]); err != nil {
+	if err := vgUnlinkOutliers(context.Background(), f.S, "vg-outlier", []database.BookCore{ob.Core()}, f.Root); err != nil {
 		t.Fatalf("vgUnlinkOutliers: %v", err)
 	}
-	if got := ddLiveExplicitPrimaries(t, s, vg); len(got) != 1 {
-		t.Fatalf("old group primaries = %v, want exactly one", got)
+	if got := f.LivePrimaries(t, "vg-outlier"); len(got) != 0 {
+		t.Fatalf("held group primaries = %v, want none", got)
 	}
-	og := ddMustGet(t, s, o.ID)
-	if og.VersionGroupID == nil || *og.VersionGroupID == vg {
+	if f.Flag(t, a) != "false" || f.Flag(t, b) != "false" {
+		t.Fatal("held group: remaining members' flags must be left as they were")
+	}
+	og := ddMustGet(t, f.S, o)
+	if og.VersionGroupID == nil || *og.VersionGroupID == "vg-outlier" {
 		t.Fatal("outlier was not moved to a new group")
 	}
-	if got := ddLiveExplicitPrimaries(t, s, *og.VersionGroupID); len(got) != 1 {
-		t.Fatalf("new group primaries = %v, want the outlier", got)
-	}
+	f.RequireSinglePrimary(t, *og.VersionGroupID, o)
 }
 
 type ddMoveFails struct{ *database.PebbleStore }
