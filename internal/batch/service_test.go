@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.4.0
-// last-edited: 2026-09-19
+// version: 1.5.0
+// last-edited: 2026-09-24
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -666,3 +666,7 @@ func TestApplyUpdates_AbsentSeriesIDIsKept(t *testing.T) {
 		t.Fatalf("title not applied: %q", book.Title)
 	}
 }
+
+// The version-group hand-off surface (versionprimary.EnsureStore).
+func (m *MockBookStore) GetBookFiles(string) ([]database.BookFile, error)      { return nil, nil }
+func (m *MockBookStore) GetChaptersForBook(string) ([]database.Chapter, error) { return nil, nil }

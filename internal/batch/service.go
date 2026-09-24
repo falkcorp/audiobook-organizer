@@ -1,15 +1,19 @@
 // file: internal/batch/service.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-14
+// last-edited: 2026-09-24
 
 package batch
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // batchBookStore is the three-method slice of the book store that batch
@@ -34,6 +38,10 @@ type batchBookStore interface {
 	// value no reader can compare against.
 	GetAuthorByID(id int) (*database.Author, error)
 	GetSeriesByID(id int) (*database.Series, error)
+	// A batch edit that changes a book's primary flag, deletion state or
+	// version group keeps each group it touched at one primary
+	// (handOffPrimary).
+	versionprimary.EnsureStore
 }
 
 // BatchService handles bulk operations on audiobooks.
@@ -98,7 +106,8 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 		return resp
 	}
 	for _, id := range req.IDs {
-		if book, err := bs.db.GetBookByID(id); err != nil || book == nil {
+		book, err := bs.db.GetBookByID(id)
+		if err != nil || book == nil {
 			resp.addError(id, "not found")
 			continue
 		}
@@ -117,6 +126,7 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 			resp.addError(id, "not found")
 			continue
 		}
+		bs.handOffPrimary(book, updated, req.Updates)
 		if err := bs.recordUserLocks(id, req.Updates); err != nil {
 			resp.addError(id, err.Error())
 			continue
@@ -148,7 +158,8 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 	for _, op := range req.Operations {
 		switch op.Action {
 		case "update":
-			if book, err := bs.db.GetBookByID(op.ID); err != nil || book == nil {
+			book, err := bs.db.GetBookByID(op.ID)
+			if err != nil || book == nil {
 				resp.addError(op.ID, "not found")
 				continue
 			}
@@ -167,6 +178,7 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				resp.addError(op.ID, "not found")
 				continue
 			}
+			bs.handOffPrimary(book, updated, op.Updates)
 			if err := bs.recordUserLocks(op.ID, op.Updates); err != nil {
 				resp.addError(op.ID, err.Error())
 				continue
@@ -174,7 +186,8 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			resp.addSuccess(op.ID)
 
 		case "delete":
-			if book, err := bs.db.GetBookByID(op.ID); err != nil || book == nil {
+			book, err := bs.db.GetBookByID(op.ID)
+			if err != nil || book == nil {
 				resp.addError(op.ID, "not found")
 				continue
 			}
@@ -202,12 +215,14 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				case updated == nil:
 					resp.addError(op.ID, "not found")
 				default:
+					bs.handOffPrimary(book, updated, map[string]any{"marked_for_deletion": true})
 					resp.addSuccess(op.ID)
 				}
 			}
 
 		case "restore":
-			if book, err := bs.db.GetBookByID(op.ID); err != nil || book == nil {
+			book, err := bs.db.GetBookByID(op.ID)
+			if err != nil || book == nil {
 				resp.addError(op.ID, "not found")
 				continue
 			}
@@ -229,6 +244,7 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			case updated == nil:
 				resp.addError(op.ID, "not found")
 			default:
+				bs.handOffPrimary(book, updated, map[string]any{"marked_for_deletion": false})
 				resp.addSuccess(op.ID)
 			}
 
@@ -386,4 +402,52 @@ func applyUpdates(book *database.Book, updates map[string]any) {
 	if v, ok := updates["library_state"].(string); ok {
 		book.LibraryState = &v
 	}
+}
+
+var batchLog = logger.New("batch")
+
+// handOffPrimary keeps every version group a batch edit touched at exactly
+// one live primary. before is the row read before the write, after the row
+// as written; updates names the fields the edit set.
+//
+//   - is_primary_version=true on a live book is the user's explicit choice:
+//     versionprimary.Crown makes it the primary and demotes the rest (until
+//     2026-09-24 it was written beside the incumbent, leaving two).
+//   - Any other change to the flag, the deletion mark or the group runs
+//     versionprimary.EnsureSinglePrimary on the book's group, and on the
+//     group it left, so a deleted or demoted primary is handed on.
+//
+// Best-effort: the edit itself has committed; a failed hand-off is logged
+// and left for version-group-primary-repair.
+func (bs *BatchService) handOffPrimary(before, after *database.Book, updates map[string]any) {
+	_, flag := updates["is_primary_version"]
+	_, del := updates["marked_for_deletion"]
+	_, grp := updates["version_group_id"]
+	if !flag && !del && !grp {
+		return
+	}
+	oldG, newG := groupOf(before), groupOf(after)
+	env := versionprimary.Env{RootDir: config.AppConfig.RootDir}
+	if v, ok := updates["is_primary_version"].(bool); ok && v && newG != "" && !after.IsSoftDeleted() {
+		if _, err := versionprimary.Crown(bs.db, newG, after.ID); err != nil {
+			batchLog.Warn("batch: crowning %s in version group %s failed: %v",
+				logger.SanitizeLogValue(after.ID), logger.SanitizeLogValue(newG), err)
+		}
+	} else if newG != "" {
+		if _, err := versionprimary.EnsureSinglePrimary(context.Background(), bs.db, newG, env); err != nil {
+			batchLog.Warn("batch: primary hand-off in version group %s failed: %v", logger.SanitizeLogValue(newG), err)
+		}
+	}
+	if oldG != "" && oldG != newG {
+		if _, err := versionprimary.EnsureSinglePrimary(context.Background(), bs.db, oldG, env); err != nil {
+			batchLog.Warn("batch: primary hand-off in version group %s failed: %v", logger.SanitizeLogValue(oldG), err)
+		}
+	}
+}
+
+func groupOf(b *database.Book) string {
+	if b == nil || b.VersionGroupID == nil {
+		return ""
+	}
+	return *b.VersionGroupID
 }
