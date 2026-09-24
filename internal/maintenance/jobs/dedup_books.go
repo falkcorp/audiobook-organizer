@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: a1000010-0000-0000-0000-000000000010
 // last-edited: 2026-09-24
 
@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
@@ -415,6 +416,9 @@ func ddBookScore(b *database.Book) int {
 type ddGroupStore interface {
 	merge.ITunesGuardStore
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	// The successor election (ddElectSuccessor) ranks with
+	// versionprimary, which reads each member's chapter rows.
+	database.ChapterReader
 }
 
 // ddPlanPrimaryHandoff decides who becomes primary of book's version group
@@ -424,8 +428,14 @@ type ddGroupStore interface {
 //
 // heir is the book absorbing this one (nil in phase 1). When heir is in the
 // same group -- or joins it through ddMergeBookFields' VersionGroupID fill --
-// heir takes the primary. Otherwise the earliest-created live member does,
-// the same rule reconcile.ElectMissingPrimaries uses.
+// heir takes the primary. Otherwise versionprimary.Elect picks among the
+// remaining live members (ddElectSuccessor), the rule
+// reconcile.ElectMissingPrimaries and version-group-primary-repair use. When
+// Elect holds the group (no remaining member is organized with its files
+// present under the library root, or a better copy sits outside it) nobody
+// is promoted: the book is still retired and the group is left for
+// version-group-primary-repair, rather than crowned with a copy ABS cannot
+// show. Until 2026-09-24 the earliest-created member was promoted blindly.
 //
 // sim overlays what this run has already done (apply) or would have done
 // (dry-run): retired members are skipped and promoted members count as
@@ -475,19 +485,34 @@ func ddPlanPrimaryHandoff(store ddGroupStore, sim *ddSim, book, heir *database.B
 	if len(others) == 0 {
 		return "", nil
 	}
-	sort.SliceStable(others, func(i, j int) bool {
-		a, b := others[i], others[j]
-		switch {
-		case a.CreatedAt != nil && b.CreatedAt != nil && !a.CreatedAt.Equal(*b.CreatedAt):
-			return a.CreatedAt.Before(*b.CreatedAt)
-		case a.CreatedAt != nil && b.CreatedAt == nil:
+	return ddElectSuccessor(store, vg, others)
+}
+
+// ddElectSuccessor runs versionprimary.Elect over the members left once a
+// primary is retired. No ffprobe: chapter counts come from the chapter table
+// (an unknown count ranks as an m4b without chapters), so a full-library run
+// does not probe a file per retirement; version-group-primary-repair re-ranks
+// with ffprobe. A held group returns "".
+func ddElectSuccessor(store ddGroupStore, vg string, others []database.Book) (string, error) {
+	loader := versionprimary.Loader{Files: store, Chapters: store, RootDir: config.AppConfig.RootDir}
+	alive := func(id string) bool {
+		b, err := store.GetBookByID(id)
+		if err != nil {
 			return true
-		case a.CreatedAt == nil && b.CreatedAt != nil:
-			return false
 		}
-		return a.ID < b.ID
-	})
-	return others[0].ID, nil
+		return b != nil && !b.IsSoftDeleted()
+	}
+	ms, err := loader.LoadMembers(context.Background(), others, alive)
+	if err != nil {
+		return "", fmt.Errorf("read signals of version group %s: %w", vg, err)
+	}
+	d := versionprimary.Elect(ms)
+	if d.Kind == versionprimary.DecisionHeld {
+		ddLog.Info("dedup-books: version group %s held (%s), no successor promoted: %s",
+			logger.SanitizeLogValue(vg), d.HoldReason, d.Reason)
+		return "", nil
+	}
+	return d.WinnerID, nil
 }
 
 // ddRetireStore is everything ddRetireBook and ddMergeDuplicateBook need.

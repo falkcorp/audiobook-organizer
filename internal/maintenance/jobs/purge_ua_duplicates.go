@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/purge_ua_duplicates.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7a4d1e58-9c26-4b73-b0f2-5e8c3a6d9f41
-// last-edited: 2026-09-15
+// last-edited: 2026-09-24
 
 package jobs
 
@@ -22,11 +22,15 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"golang.org/x/sync/errgroup"
 )
 
 func init() { maintenance.Register(&purgeUADuplicatesJob{}) }
+
+var purgeUALog = logger.New("purge-ua-duplicates")
 
 // purgeUADuplicatesJob soft-deletes "Unknown Author/" books that are verified
 // duplicates of a real-author copy. Rules come from the 2026-08-13 audit
@@ -178,6 +182,20 @@ func (j *purgeUADuplicatesJob) Run(ctx context.Context, store maintenance.JobSto
 					return nil
 				}
 				atomic.AddInt64(&purged, 1)
+				// A purged copy that was its version group's primary hands
+				// the flag on (its twin is often a sibling in that group),
+				// so the group is not left with none. Workers purging two
+				// members of one group are serialised by the hand-off's
+				// per-group lock.
+				if full.VersionGroupID != nil && *full.VersionGroupID != "" &&
+					(full.IsPrimaryVersion == nil || *full.IsPrimaryVersion) {
+					if _, herr := versionprimary.EnsureSinglePrimary(gctx, store, *full.VersionGroupID,
+						versionprimary.Env{RootDir: root}); herr != nil {
+						purgeUALog.Warn("purge-ua-duplicates: primary hand-off for group %s failed: %v",
+							logger.SanitizeLogValue(*full.VersionGroupID), herr)
+						atomic.AddInt64(&errCount, 1)
+					}
+				}
 			case reason == "no-twin":
 				atomic.AddInt64(&skippedNoTwin, 1)
 			default:
