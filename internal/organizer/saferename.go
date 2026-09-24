@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"os"
 	"syscall"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // safeRename renames src to dst, refusing to overwrite an existing dst.
@@ -205,8 +207,8 @@ func renameDirExclusive(src, dst string, srcInfo os.FileInfo) error {
 		return safeRename(src, dst)
 	}
 	if !dstInfo.IsDir() || !dirIsEmpty(dst) {
-		slog.Warn("exclusive move refusing to replace occupied destination",
-			"src", src, "dst", dst)
+		collisionLog.Warn("exclusive move refusing to replace occupied destination src=%s dst=%s",
+			logger.SanitizeLogValue(src), logger.SanitizeLogValue(dst))
 		return &os.LinkError{Op: "rename", Old: src, New: dst, Err: fs.ErrExist}
 	}
 	if beforeEmptyDirRename != nil {
