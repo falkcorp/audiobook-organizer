@@ -49,9 +49,9 @@ package audiobookshandler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
-	"encoding/json"
 	"os"
 	"sort"
 	"strconv"
@@ -107,12 +107,12 @@ type Handler struct {
 	// Concrete caches (the cache exception): clean generic db-adjacent types
 	// under heavy multi-method use, passed by pointer. The handlers nil-check
 	// them exactly where the originals did.
-	listCache    *cache.Cache[gin.H]
+	listCache *cache.Cache[gin.H]
 	// searchCacheOn reports whether the search result cache is active.
 	searchCacheOn func() bool
-	facetsCache  *cache.Cache[gin.H]
-	authorsCache *cache.Cache[*audiobookspkg.AuthorWithCountListResponse]
-	seriesCache  *cache.Cache[*audiobookspkg.SeriesWithCountsResponse]
+	facetsCache   *cache.Cache[gin.H]
+	authorsCache  *cache.Cache[*audiobookspkg.AuthorWithCountListResponse]
+	seriesCache   *cache.Cache[*audiobookspkg.SeriesWithCountsResponse]
 
 	// --- injected funcs wrapping behavior that stays in package server ---
 

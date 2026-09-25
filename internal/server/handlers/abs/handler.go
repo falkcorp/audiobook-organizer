@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-09-25
 
@@ -35,6 +35,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )
 
 // ABSUserStore ABSUserStore reads and updates the user rows the ABS auth flow touches.
@@ -159,6 +161,10 @@ type LibrarySearchReader interface {
 	// only admitted books count toward limit. The ABS search uses it with
 	// absItemFilterBase(); see buildSearch for why SearchBooks alone was wrong.
 	SearchBooksFiltered(query string, limit, offset int, f database.BookSummaryFilter) ([]database.Book, error)
+	// SearchBookIDsFiltered is SearchBooksFiltered returning IDs only, in the
+	// same order; limit 0 means every match. The shared search result cache
+	// builds its ranked lists with it (search_book_cache.go).
+	SearchBookIDsFiltered(query string, limit, offset int, f database.BookSummaryFilter) ([]string, error)
 	GetDistinctGenres() ([]string, error)
 	// GetGenreCounts feeds /filterdata's genre list AND the per-genre numItems
 	// that a /search genre hit must carry (AudioBooth decodes search genres as
@@ -300,6 +306,12 @@ type Options struct {
 	// unavailable rather than 500-ing. Unlike playlists these are server-wide —
 	// see collections.go.
 	Collections CollectionStore
+
+	// SearchResults is the shared search result cache. When set, /search book
+	// hits come from it and the /search document cache is invalidated by the
+	// store change generation instead of only by its TTL. nil keeps the
+	// direct search.
+	SearchResults *searchcache.Cache
 
 	// CoverRoot is config.AppConfig.RootDir — the library root that
 	// metadata.CoverPathForBook resolves covers under, and the base for the relative
@@ -455,6 +467,8 @@ type Handler struct {
 	searchCacheMu sync.Mutex
 	searchCache   map[string]searchCacheEntry
 	searchSF      singleflight.Group
+	// bookSearch is Options.SearchResults.
+	bookSearch *searchcache.Cache
 
 	// now and newID are injectable for deterministic tests.
 	now   func() time.Time
@@ -494,6 +508,7 @@ func New(o Options) (*Handler, error) {
 		chapters:    o.Chapters,
 		playlists:   o.Playlists,
 		collections: o.Collections,
+		bookSearch:  o.SearchResults,
 		progress:    o.Progress,
 		bookmarks:   o.Bookmarks,
 		coverRoot:   o.CoverRoot,
