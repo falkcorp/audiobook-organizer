@@ -1,5 +1,5 @@
 // file: tests/audiobooth-decode/Tests/DecodeTests/DecodeTests.swift
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e5c8f36-2a9d-4b71-a4c0-9f3d6b2e7a85
 // last-edited: 2026-09-25
 
@@ -229,6 +229,7 @@ final class DecodeTests: XCTestCase {
     let tally = Tally()
     var decodedSites = Set<String>(), dataSites = Set<String>(), designedErrorSites = Set<String>()
     var naSites = Set<String>(), failedSites = Set<String>(), vacuousRows: [String] = []
+    var withDataSites = Set<String>()
     var lines: [String] = []
 
     for row in rows {
@@ -280,14 +281,19 @@ final class DecodeTests: XCTestCase {
         lines.append("  2xx      \(row.id) (Data: the app does not decode)")
       } else {
         decodedSites.insert(row.callSite)
-        lines.append("  decoded  \(row.id) as \(row.decode)")
+        if row.vacuous == nil { withDataSites.insert(row.callSite) }
+        lines.append("  decoded  \(row.id) as \(row.decode)\(row.vacuous == nil ? "" : " (vacuous, see below)")")
       }
       if let v = row.vacuous { vacuousRows.append("\(row.id): \(v)") }
     }
 
     // A call site counts only if EVERY row for it passed; a Data row does not upgrade
-    // a site to "decoded", and N/A is reported separately rather than as a pass.
+    // a site to "decoded", and N/A is reported separately rather than as a pass. A site
+    // whose every decoded row is empty by design is reported apart from the ones that
+    // decoded real data: a vacuous pass is exactly what item 6 was closed on before.
     let decoded = decodedSites.subtracting(failedSites)
+    let decodedWithData = decoded.intersection(withDataSites)
+    let decodedEmpty = decoded.subtracting(withDataSites)
     let dataOnly = dataSites.subtracting(decodedSites).subtracting(failedSites)
     let errOK = designedErrorSites.subtracting(decodedSites).subtracting(dataSites)
     let na = naSites.subtracting(decodedSites).subtracting(dataSites).subtracting(designedErrorSites)
@@ -310,7 +316,10 @@ final class DecodeTests: XCTestCase {
       let n = tally.models[name] ?? 0
       if n > 0 {
         modelsDecoded += 1
-        modelLines.append("  decoded  \(name) x\(n)")
+        // The app never decodes Personalized itself: it decodes [Personalized.Section]
+        // and builds the wrapper (LibrariesService.fetchPersonalized).
+        let via = name == "Personalized" ? " (as [Personalized.Section] sections)" : ""
+        modelLines.append("  decoded  \(name) x\(n)\(via)")
       } else if let r = naReason {
         modelLines.append("  N/A      \(name): \(r)")
       } else {
@@ -320,13 +329,15 @@ final class DecodeTests: XCTestCase {
 
     let report = """
       AudioBooth decode proof (pin: \(pinnedSHA()))
-      Call sites: \(decoded.count) of 45 decoded, \(dataOnly.count) of 45 2xx-only (Data), \
-      \(errOK.count) of 45 error-by-design, \(na.count) of 45 N/A, \(failedSites.count) of 45 FAILED
+      Call sites: \(decodedWithData.count) of 45 decoded with data, \
+      \(decodedEmpty.count) of 45 decoded but empty by design, \
+      \(dataOnly.count) of 45 2xx-only (Data), \(errOK.count) of 45 error-by-design, \
+      \(na.count) of 45 N/A, \(failedSites.count) of 45 FAILED
       Models: \(modelsDecoded) of 26 decoded with data
       \(lines.joined(separator: "\n"))
       Models:
       \(modelLines.joined(separator: "\n"))
-      Vacuous by design:
+      Vacuous rows (decoded, but proves nothing about populated data):
         \(vacuousRows.joined(separator: "\n  "))
       """
     print(report)
