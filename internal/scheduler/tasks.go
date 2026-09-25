@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -672,6 +672,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
+			// EMPTY ON PURPOSE (2026-09-25): with no dry_run key the op
+			// defaults to a dry run, so a scheduled run previews and writes
+			// nothing. The schedule was disabled in prod when this changed.
 			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.author-split-scan", schedulerExtraOpParams{})
 			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.author-split-scan: %w", enqErr)
@@ -823,6 +826,8 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
+			// EMPTY ON PURPOSE (2026-09-25): no dry_run key means a dry run;
+			// see the author_split_scan trigger above.
 			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.resolve-production-authors", schedulerExtraOpParams{})
 			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.resolve-production-authors: %w", enqErr)

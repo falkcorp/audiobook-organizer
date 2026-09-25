@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-09-15
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -52,6 +54,57 @@ import (
 // the operator reviews the dry run's list before turning it on. Measured on the
 // live library 2026-09-04: 812 such rows, 187 distinct residues, every one a
 // chapter or book title, a track name, or bitrate shrapnel.
+
+// 🔴 PLACEHOLDERS ARE NOT JUNK (2026-09-25). "Unknown Author", "Unknown",
+// "Various", "n/a", "None" and "Audiobook" are all rejected by
+// CleanAuthorNameForCreation, because they are on personname's structural-word
+// list, and all of them look positional to isPositionalScope for the same
+// reason. Before this change the op therefore planned to DELETE them: the dry
+// run of 2026-09-25 listed the canonical Unknown Author row (the one
+// author-id-repair and the entity handlers fall back to) among its deletes and
+// left 244 books authorless. A placeholder is not a corrupt credit; it is the
+// library's own way of saying "author not known yet". So:
+//
+//   - the canonical row (database.UnknownAuthorName, resolved through the same
+//     GetAuthorByName call author-id-repair uses) is NEVER deleted or merged;
+//   - every OTHER placeholder row, including a duplicate "Unknown Author", is
+//     MERGED INTO the canonical row, so its books keep a credit;
+//   - with no canonical row, placeholders are left alone and counted. This op
+//     does not create the row: creating author rows is another path's job.
+
+// placeholderAuthorNames are the lower-cased, normalized names that mean "no
+// known author". Kept here rather than in personname because this op decides
+// what to do with them; the list is the subset of personname's structural
+// words that stand in for a whole credit rather than for a part of a book.
+var placeholderAuthorNames = map[string]bool{
+	"unknown author": true, "unknown": true, "various": true,
+	"various artists": true, "various authors": true, "va": true,
+	"n/a": true, "none": true, "null": true, "audiobook": true,
+}
+
+// isPlaceholderAuthorName reports whether name is a "no known author" stand-in.
+func isPlaceholderAuthorName(name string) bool {
+	return placeholderAuthorNames[strings.ToLower(dedup.NormalizeAuthorName(name))]
+}
+
+// trackArtifactRe and embeddedTimecodeRe cover two numbering shapes that
+// CleanAuthorNameForCreation ACCEPTS as ordinary names, so the op never saw
+// them: a track label glued to its number ("Track01", "Track_01") and a
+// chapter-splitter timecode embedded after a filename
+// ("Lords of the Sith_418m_07s_"). Both are the same defect as the zero-padded
+// shapes this op already handles (chapter-file numbering lifted into an
+// artist tag), so they belong in its junk bucket. Bare "NN-NN" numbering is
+// already in scope through IsPositionalArtifactName.
+var (
+	trackArtifactRe    = regexp.MustCompile(`(?i)^\s*track[\s_.-]*\d{1,4}\s*$`)
+	embeddedTimecodeRe = regexp.MustCompile(`(?i)(?:^|_)\d{1,4}m_\d{1,2}s(?:_|$)`)
+)
+
+// isTrackOrTimecodeArtifact reports whether name carries one of the two
+// numbering shapes above.
+func isTrackOrTimecodeArtifact(name string) bool {
+	return trackArtifactRe.MatchString(name) || embeddedTimecodeRe.MatchString(name)
+}
 
 // authorStripMergeSampleLimit bounds how many per-row decisions are surfaced in
 // the report, so a reviewer can eyeball the plan without the report becoming the
@@ -116,10 +169,18 @@ type authorStripMergeReport struct {
 
 	// OutOfScope are rows rejected by the name predicate for a reason that is
 	// NOT numbering — publisher and copyright shrapnel. Counted, never touched.
-	OutOfScope   int
-	Merged       int
-	Deleted      int
-	BooksTouched int
+	OutOfScope int
+	// Placeholders counts non-canonical placeholder rows ("Unknown",
+	// "Various", a duplicate "Unknown Author") planned for a merge into the
+	// canonical Unknown Author row. PlaceholdersNoCanonical counts the ones
+	// left alone because no canonical row exists. CanonicalUnknownID is the
+	// row this run protects (0 when none exists).
+	Placeholders            int
+	PlaceholdersNoCanonical int
+	CanonicalUnknownID      int
+	Merged                  int
+	Deleted                 int
+	BooksTouched            int
 	// BooksLeftAuthorless counts books whose EVERY credit is a row this run
 	// deletes. Computed in the dry run too, through the same code the apply
 	// uses, so the report says what the apply will do to books and not just
@@ -134,9 +195,10 @@ type authorStripMergeReport struct {
 
 func (r authorStripMergeReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d junk=%d mergeable=%d ambiguous=%d target-is-junk=%d stripped-no-target=%d out-of-scope=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d",
+		"authors=%d junk=%d mergeable=%d ambiguous=%d target-is-junk=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d",
 		r.TotalAuthors, r.Junk, r.Mergeable, r.Ambiguous, r.TargetIsJunk,
-		r.StrippedNoTarget, r.OutOfScope, r.Merged, r.Deleted, r.BooksTouched,
+		r.StrippedNoTarget, r.OutOfScope, r.Placeholders, r.PlaceholdersNoCanonical,
+		r.CanonicalUnknownID, r.Merged, r.Deleted, r.BooksTouched,
 		r.BooksLeftAuthorless, r.Failed)
 }
 
@@ -150,7 +212,9 @@ func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
 			"'Track 01', '000m_00s__056m_16s_43h'). Strips the numbering; when the residue names " +
 			"an existing author the row is MERGED into it ('001-147 Kevin J Anderson'), and rows " +
 			"that carry no usable name are DELETED. Rows whose residue matches nothing are left " +
-			"alone rather than renamed; pass delete_unmatched=true to delete those too (review " +
+			"alone rather than renamed. Placeholder rows ('Unknown', 'Various', 'n/a', a duplicate " +
+			"'Unknown Author') are MERGED INTO the canonical Unknown Author row, which is never " +
+			"deleted. Pass delete_unmatched=true to delete those too (review " +
 			"the dry run first: 812 on this library, chapter and book titles). Measured 2,793 " +
 			"of 19,972 authors on this library. " +
 			"REPORT-ONLY BY DEFAULT: pass apply=true to write. Idempotent.",
@@ -173,7 +237,8 @@ func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
 // that IsDirtyAuthorName also covers. Only the former is this op's business.
 func isPositionalScope(name string) bool {
 	n := dedup.NormalizeAuthorName(name)
-	return dedup.IsPositionalArtifactName(n) || dedup.StripPositionalPrefix(n) != n
+	return dedup.IsPositionalArtifactName(n) || dedup.StripPositionalPrefix(n) != n ||
+		isTrackOrTimecodeArtifact(n)
 }
 
 // authorStripPlan is one row's decision, computed before anything is written so
@@ -225,9 +290,39 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 	var plans []authorStripPlan
 	tombstoneWarned := false
 
+	// The canonical placeholder, resolved the same way author-id-repair
+	// resolves its fallback so both ops agree on which row it is. A lookup
+	// error stops the run: without knowing which row to protect, the
+	// classification below cannot be trusted not to delete it.
+	var canonicalUnknown *database.Author
+	if u, uErr := store.GetAuthorByName(database.UnknownAuthorName); uErr != nil {
+		return fmt.Errorf("resolve %q author: %w", database.UnknownAuthorName, uErr)
+	} else if u != nil && u.ID > 0 {
+		canonicalUnknown = u
+		report.CanonicalUnknownID = u.ID
+	}
+
 	_ = reporter.UpdateProgress(1, 2, "Classifying author names…")
 	for _, a := range authors {
+		if canonicalUnknown != nil && a.ID == canonicalUnknown.ID {
+			continue // the canonical placeholder is never touched
+		}
+		if isPlaceholderAuthorName(a.Name) {
+			if canonicalUnknown == nil {
+				report.PlaceholdersNoCanonical++
+				continue
+			}
+			report.Placeholders++
+			into := *canonicalUnknown
+			plans = append(plans, authorStripPlan{from: a, into: &into, reason: "placeholder"})
+			continue
+		}
 		cleaned, ok := dedup.CleanAuthorNameForCreation(a.Name)
+		if ok && isTrackOrTimecodeArtifact(a.Name) {
+			// Accepted by the creation gate, but carries track or timecode
+			// numbering this op owns; judge it as junk below.
+			ok = false
+		}
 		if !ok {
 			// SCOPE GUARD. CleanAuthorNameForCreation also rejects the
 			// publisher and copyright shrapnel IsDirtyAuthorName was built for
@@ -309,6 +404,11 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		}
 		if i%25 == 0 {
 			_ = reporter.UpdateProgress(i, len(plans), "Applying author repairs…")
+		}
+		if canonicalUnknown != nil && pl.from.ID == canonicalUnknown.ID {
+			// Unreachable through the classifier above; kept so that a future
+			// planning branch cannot delete or merge away the fallback row.
+			continue
 		}
 		if !params.Apply && pl.reason == "unmatched" {
 			// The control on delete_unmatched is "read the list first", and a

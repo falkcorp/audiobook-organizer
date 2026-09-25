@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1f0b7e-2d94-4a58-9e3b-7f2a5c8d1b04
-// last-edited: 2026-09-15
+// last-edited: 2026-09-25
 
 package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync"
@@ -204,7 +205,7 @@ func TestAuthorSplit_DoesNotRevertConcurrentColumns(t *testing.T) {
 		})
 
 	p := New(fakeDeps{store: store})
-	if err := p.runAuthorSplitScan(context.Background(), nil, &fakeReporter{}); err != nil {
+	if err := p.runAuthorSplitScan(context.Background(), json.RawMessage(`{"dry_run":false}`), &fakeReporter{}); err != nil {
 		t.Fatalf("runAuthorSplitScan: %v", err)
 	}
 	got := rows.get("bk1")

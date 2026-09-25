@@ -1,12 +1,13 @@
 // file: internal/scheduler/author_split_relink_trashed_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b8d5e72-0c4f-4a91-9e26-d71f84a3c6b0
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -84,7 +85,7 @@ func runSplitScanOp(t *testing.T, store ExtraOpsStore) *splitRelinkReporter {
 	def, ok := reg.Def("scheduler.author-split-scan")
 	require.True(t, ok)
 	rep := &splitRelinkReporter{}
-	require.NoError(t, def.Run(context.Background(), nil, rep))
+	require.NoError(t, def.Run(context.Background(), json.RawMessage(`{"dry_run":false}`), rep))
 	return rep
 }
 
