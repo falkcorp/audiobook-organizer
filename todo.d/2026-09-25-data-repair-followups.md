@@ -1,6 +1,5 @@
 - [ ] **BUILD-FOLDER-HELD-75** The `build-folder-book-files` dry run (2026-09-25) found 106 books; 31 clean ones were applied (1,010 rows). Of the other 75, 58 share folder files with another live book (building would show a truncated book, e.g. Warforged Sorcerer 10/52), and 54 look multi-work. Owner chose "report, then decide": list who owns the shared files. Doctor Who (Farewell, Great Macedon) and The Forsaken God stay excluded.
 - [ ] **REPOINT-FOLDER-AUDIO-RUN** Dry-run then apply `maintenance.repoint-missing-to-folder-audio` (#3551, deployed 2026-09-25) for ABS books reading duration 0.
-- [ ] **JUNK-TITLE-AUTHORS** Books whose author is their own title (e.g. "Arcane Chef 2", author 64477, fixed by hand 2026-09-25). Include this pattern in the junk-author cleanup op.
 - [ ] **C2B-SEVEN-GROUPS** Re-ask the owner about the 7 parked C2b clone groups (parked 2026-09-24 night).
 - [ ] **CLONE-LINK-PROMOTE** Build the approved link mode (~1,030 identical groups) and promote mode (~420 tag-edited groups) for the iTunes clone op.
 - [ ] **TWO-PRIMARIES-COUNT** Read-only count of version groups with two primaries; send the Bern Dean missed duplicate to dedup review; investigate wrong-author folders via DB metadata + organize.
