@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 19a97553-68fc-4ef6-a326-cc9e694d8698
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -162,7 +162,7 @@ func (j *backfillITunesPositionsJob) DefaultParams() any {
 	return struct {
 		DryRun bool   `json:"dry_run"`
 		UserID string `json:"user_id_env_hint"`
-	}{DryRun: false, UserID: ITunesPositionBackfillUserIDEnv}
+	}{DryRun: true, UserID: ITunesPositionBackfillUserIDEnv}
 }
 
 // CanResume is false for the same reason as backfill-sync-ids: every per-book
