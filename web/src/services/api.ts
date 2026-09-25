@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.122.0
+// version: 2.123.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-25
 
@@ -1776,14 +1776,19 @@ export async function getBookDuplicates(): Promise<DuplicatesResponse> {
   return body.data;
 }
 
-export async function mergeBooks(keepId: string, mergeIds: string[]): Promise<Operation> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/merge`, {
+// linkBooks links a set of books into one version group (no files move; the
+// losers are soft-deleted book rows only). Renamed from mergeBooks
+// (naming-audit class "merge vs link verbs",
+// docs/audits/2026-09-25-interface-naming-consistency.md class 2) — the
+// old verb "merge" implied files moved, but this always linked as versions.
+export async function linkBooks(keepId: string, mergeIds: string[]): Promise<Operation> {
+  const response = await apiFetch(`${API_BASE}/audiobooks/link`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ keep_id: keepId, merge_ids: mergeIds }),
   });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to merge books');
+    throw await buildApiError(response, 'Failed to link books');
   }
   // Unwrap `data`, like every sibling trigger. This returned the whole
   // {data: ...} envelope, so `.id` on the result was undefined and the caller
@@ -1810,7 +1815,7 @@ export interface CombineOverride {
 }
 
 // combineBooks combines several single-file books into ONE multi-file book on the
-// survivor (keepId), soft-deleting the absorbed shells (undoable). Distinct from mergeBooks,
+// survivor (keepId), soft-deleting the absorbed shells (undoable). Distinct from linkBooks,
 // which links them as alternate versions in a version group. Synchronous.
 // override is optional: non-empty fields overwrite the survivor's metadata after
 // the combine (useful when all source books have per-chapter titles).
@@ -1866,29 +1871,38 @@ export async function scanBookDuplicates(): Promise<Operation> {
   return body.data;
 }
 
-export async function mergeBookDuplicatesAsVersions(
+// linkBookDuplicatesAsVersions links a group of duplicate books into a
+// version group. Renamed from mergeBookDuplicatesAsVersions (naming-audit
+// class "merge vs link verbs",
+// docs/audits/2026-09-25-interface-naming-consistency.md class 2).
+export async function linkBookDuplicatesAsVersions(
   bookIds: string[]
 ): Promise<{ message: string; version_group_id: string; primary_id: string }> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/duplicates/merge`, {
+  const response = await apiFetch(`${API_BASE}/audiobooks/duplicates/link`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ book_ids: bookIds }),
   });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to merge book duplicates as versions');
+    throw await buildApiError(response, 'Failed to link book duplicates as versions');
   }
   const body = await response.json();
   return body.data;
 }
 
-export async function dismissBookDuplicateGroup(groupKey: string): Promise<{ message: string }> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/duplicates/dismiss`, {
+// rejectBookDuplicateGroup marks a book duplicate group as not-duplicates.
+// Renamed from dismissBookDuplicateGroup (naming-audit class "dismiss vs
+// reject vs undo",
+// docs/audits/2026-09-25-interface-naming-consistency.md class 3) to match
+// the review-queue/metadata-candidate "reject" vocabulary.
+export async function rejectBookDuplicateGroup(groupKey: string): Promise<{ message: string }> {
+  const response = await apiFetch(`${API_BASE}/audiobooks/duplicates/reject`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ group_key: groupKey }),
   });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to dismiss duplicate group');
+    throw await buildApiError(response, 'Failed to reject duplicate group');
   }
   const body = await response.json();
   return body.data;
@@ -5781,8 +5795,11 @@ export async function getDedupStats(): Promise<{ stats: DedupStats[] }> {
   return responseData.data;
 }
 
-export async function mergeDedupCandidate(id: number, keepId?: string): Promise<void> {
-  // When keepId is provided, the backend uses it as the merge primary
+// linkDedupCandidate links the candidate's two books into a version group.
+// Renamed from mergeDedupCandidate (naming-audit class "merge vs link
+// verbs", docs/audits/2026-09-25-interface-naming-consistency.md class 2).
+export async function linkDedupCandidate(id: number, keepId?: string): Promise<void> {
+  // When keepId is provided, the backend uses it as the link primary
   // (which book is kept). When omitted, the backend falls back to
   // auto-select by format/bitrate/size. keepId must match the candidate's
   // entity_a_id or entity_b_id, otherwise the server returns 400.
@@ -5791,21 +5808,24 @@ export async function mergeDedupCandidate(id: number, keepId?: string): Promise<
     init.headers = { 'Content-Type': 'application/json' };
     init.body = JSON.stringify({ keep_id: keepId });
   }
-  const response = await apiFetch(`${API_BASE}/dedup/candidates/${id}/merge`, init);
-  // 409 = candidate was already merged/stale — the backend already marked it
+  const response = await apiFetch(`${API_BASE}/dedup/candidates/${id}/link`, init);
+  // 409 = candidate was already linked/stale — the backend already marked it
   // merged and fired the event. Treat as success so the UI drops the row.
   if (response.status === 409) return;
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to merge dedup candidate');
+    throw await buildApiError(response, 'Failed to link dedup candidate');
   }
 }
 
-export async function dismissDedupCandidate(id: number): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/dedup/candidates/${id}/dismiss`, {
+// rejectDedupCandidate marks a candidate pair as not-duplicates. Renamed
+// from dismissDedupCandidate (naming-audit class "dismiss vs reject vs
+// undo", docs/audits/2026-09-25-interface-naming-consistency.md class 3).
+export async function rejectDedupCandidate(id: number): Promise<void> {
+  const response = await apiFetch(`${API_BASE}/dedup/candidates/${id}/reject`, {
     method: 'POST',
   });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to dismiss dedup candidate');
+    throw await buildApiError(response, 'Failed to reject dedup candidate');
   }
 }
 
@@ -5827,7 +5847,12 @@ export interface BulkMergeDedupResult {
  * endpoint cannot express it and callers must refuse the bulk action while it
  * is active rather than send a wider filter than the reviewer sees.
  */
-export async function bulkMergeDedupCandidates(filter: {
+// bulkLinkDedupCandidates was renamed from bulkMergeDedupCandidates
+// (naming-audit class "merge vs link verbs",
+// docs/audits/2026-09-25-interface-naming-consistency.md class 2): every
+// matching candidate's books are linked into a version group, not merged
+// into one file.
+export async function bulkLinkDedupCandidates(filter: {
   entity_type?: string;
   status?: string;
   layer?: string;
@@ -5841,13 +5866,13 @@ export async function bulkMergeDedupCandidates(filter: {
   // `band` caused before it was added on both sides.
   q?: string;
 }): Promise<BulkMergeDedupResult> {
-  const response = await apiFetch(`${API_BASE}/dedup/candidates/bulk-merge`, {
+  const response = await apiFetch(`${API_BASE}/dedup/candidates/bulk-link`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(filter),
   });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to bulk-merge dedup candidates');
+    throw await buildApiError(response, 'Failed to bulk-link dedup candidates');
   }
   const responseData = await response.json();
   return responseData.data;
@@ -5860,11 +5885,13 @@ export interface ClusterMergeResult {
   result?: unknown;
 }
 
-// mergeDedupCluster merges a set of book IDs into one version group.
+// linkDedupCluster links a set of book IDs into one version group. Renamed
+// from mergeDedupCluster (naming-audit class "merge vs link verbs",
+// docs/audits/2026-09-25-interface-naming-consistency.md class 2).
 // If primaryBookId is provided, that book is forced as the version-group
 // primary (overrides the bookIsBetter auto-pick based on path origin,
 // curation, format, bitrate, size). If omitted, the backend auto-picks.
-export async function mergeDedupCluster(
+export async function linkDedupCluster(
   bookIds: string[],
   primaryBookId?: string
 ): Promise<ClusterMergeResult> {
@@ -5872,13 +5899,13 @@ export async function mergeDedupCluster(
   if (primaryBookId) {
     body.primary_book_id = primaryBookId;
   }
-  const response = await apiFetch(`${API_BASE}/dedup/candidates/merge-cluster`, {
+  const response = await apiFetch(`${API_BASE}/dedup/candidates/link-cluster`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to merge dedup cluster');
+    throw await buildApiError(response, 'Failed to link dedup cluster');
   }
   const responseData = await response.json();
   return responseData.data;
@@ -5909,29 +5936,35 @@ export interface SeriesMergeResult {
   failures?: string[];
 }
 
-export async function mergeDedupCandidateSeries(seriesId: number): Promise<SeriesMergeResult> {
-  const response = await apiFetch(`${API_BASE}/dedup/candidates/merge-series`, {
+// linkDedupCandidateSeries was renamed from mergeDedupCandidateSeries
+// (naming-audit class "merge vs link verbs",
+// docs/audits/2026-09-25-interface-naming-consistency.md class 2).
+export async function linkDedupCandidateSeries(seriesId: number): Promise<SeriesMergeResult> {
+  const response = await apiFetch(`${API_BASE}/dedup/candidates/link-series`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ series_id: seriesId }),
   });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to merge dedup series');
+    throw await buildApiError(response, 'Failed to link dedup series');
   }
   const responseData = await response.json();
   return responseData.data;
 }
 
-export async function dismissDedupCluster(
+// rejectDedupCluster was renamed from dismissDedupCluster (naming-audit
+// class "dismiss vs reject vs undo",
+// docs/audits/2026-09-25-interface-naming-consistency.md class 3).
+export async function rejectDedupCluster(
   bookIds: string[]
 ): Promise<{ status: string; dismissed: number }> {
-  const response = await apiFetch(`${API_BASE}/dedup/candidates/dismiss-cluster`, {
+  const response = await apiFetch(`${API_BASE}/dedup/candidates/reject-cluster`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ book_ids: bookIds }),
   });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to dismiss dedup cluster');
+    throw await buildApiError(response, 'Failed to reject dedup cluster');
   }
   const responseData = await response.json();
   return responseData.data;

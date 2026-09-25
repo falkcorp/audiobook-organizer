@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
-// last-edited: 2026-09-01
+// last-edited: 2026-09-25
 //
 // The behaviour under test is mostly the behaviour that a port loses silently:
 // eight keyboard shortcuts, a suppression guard, a keep-side decision shared
@@ -102,7 +102,7 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
 
     act(() => result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' }));
 
-    expect(api.bulkMergeDedupCandidates).not.toHaveBeenCalled();
+    expect(api.bulkLinkDedupCandidates).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(MERGE_ALL_BLOCKED_REASON, 'warning');
   });
 
@@ -116,14 +116,14 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
 
     // Dispatch directly, bypassing any UI disabled state entirely.
     act(() => result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' }));
-    expect(api.bulkMergeDedupCandidates).not.toHaveBeenCalled();
+    expect(api.bulkLinkDedupCandidates).not.toHaveBeenCalled();
   });
 
   it('sends band and entity_id when it does run, so the merge matches the screen', async () => {
     // The defect this replaces: band was not in the bulk endpoint's vocabulary,
     // so narrowing to REVIEW and pressing "merge everything matching this
     // filter" merged every pending candidate in the library.
-    vi.mocked(api.bulkMergeDedupCandidates).mockResolvedValue({
+    vi.mocked(api.bulkLinkDedupCandidates).mockResolvedValue({
       attempted: 1,
       merged: 1,
       failed: 0,
@@ -139,7 +139,7 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
     // cannot fail when a filter is MISSING, which is the only way this action
     // ever breaks. The suite stayed green through exactly that gap when `q`
     // was added to the list endpoint and not to this one.
-    expect(api.bulkMergeDedupCandidates).toHaveBeenCalledWith({
+    expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith({
       entity_type: 'book',
       status: 'pending',
       band: 'REVIEW',
@@ -155,7 +155,7 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
     mockSearchableList([makeCandidate(1), makeCandidate(2)], (c, q) =>
       (c.book_a?.title ?? '').toLowerCase().includes(q)
     );
-    vi.mocked(api.bulkMergeDedupCandidates).mockResolvedValue({
+    vi.mocked(api.bulkLinkDedupCandidates).mockResolvedValue({
       attempted: 1,
       merged: 1,
       failed: 0,
@@ -175,7 +175,7 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
       result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' });
     });
 
-    expect(api.bulkMergeDedupCandidates).toHaveBeenCalledWith({
+    expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith({
       entity_type: 'book',
       status: 'pending',
       band: undefined,
@@ -208,7 +208,7 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
     await act(async () => {
       result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' });
     });
-    expect(api.bulkMergeDedupCandidates).not.toHaveBeenCalled();
+    expect(api.bulkLinkDedupCandidates).not.toHaveBeenCalled();
 
     await act(async () => {
       release({ candidates: [makeCandidate(1)], total: 1 });
@@ -352,23 +352,23 @@ describe('keyboard shortcuts', () => {
         book_b: { id: 'b1', title: 'Rich', asin: 'B00ABC1234' },
       } as Partial<api.DedupCandidate>),
     ]);
-    vi.mocked(api.mergeDedupCandidate).mockResolvedValue(undefined);
+    vi.mocked(api.linkDedupCandidate).mockResolvedValue(undefined);
     await renderLane();
 
     press('m');
 
-    await waitFor(() => expect(api.mergeDedupCandidate).toHaveBeenCalledWith(1, 'b1'));
+    await waitFor(() => expect(api.linkDedupCandidate).toHaveBeenCalledWith(1, 'b1'));
   });
 
   it('dismisses on d and opens the drawer on Enter', async () => {
-    vi.mocked(api.dismissDedupCandidate).mockResolvedValue(undefined);
+    vi.mocked(api.rejectDedupCandidate).mockResolvedValue(undefined);
     const { result } = await renderLane();
 
     press('Enter');
     expect(result.current.drawerCandidateId).toBe(1);
 
     press('d');
-    await waitFor(() => expect(api.dismissDedupCandidate).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(api.rejectDedupCandidate).toHaveBeenCalledWith(1));
   });
 
   it('leaves already-decided rows alone', async () => {
@@ -380,8 +380,8 @@ describe('keyboard shortcuts', () => {
     press('m');
     press('d');
 
-    expect(api.mergeDedupCandidate).not.toHaveBeenCalled();
-    expect(api.dismissDedupCandidate).not.toHaveBeenCalled();
+    expect(api.linkDedupCandidate).not.toHaveBeenCalled();
+    expect(api.rejectDedupCandidate).not.toHaveBeenCalled();
   });
 
   it('Shift+A selects only what the search left on screen', async () => {
@@ -420,7 +420,7 @@ describe('keyboard shortcuts', () => {
     input.focus();
 
     press('m');
-    expect(api.mergeDedupCandidate).not.toHaveBeenCalled();
+    expect(api.linkDedupCandidate).not.toHaveBeenCalled();
 
     input.remove();
   });
@@ -458,7 +458,7 @@ describe('an inactive lane', () => {
     press('m');
 
     expect(api.getDedupCandidates).not.toHaveBeenCalled();
-    expect(api.mergeDedupCandidate).not.toHaveBeenCalled();
+    expect(api.linkDedupCandidate).not.toHaveBeenCalled();
   });
 });
 
@@ -646,21 +646,21 @@ describe('stats', () => {
 
 describe('bulk actions over a selection', () => {
   it('dismisses each selected id, then clears the selection', async () => {
-    vi.mocked(api.dismissDedupCandidate).mockResolvedValue(undefined);
+    vi.mocked(api.rejectDedupCandidate).mockResolvedValue(undefined);
     const { result } = await renderLane();
 
     await act(async () => {
       result.current.dispatch({ lane: 'dupes', type: 'dismissSelected', ids: [1, 2] });
     });
 
-    expect(api.dismissDedupCandidate).toHaveBeenCalledTimes(2);
+    expect(api.rejectDedupCandidate).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(result.current.selectedIds.size).toBe(0));
   });
 
   it('ignores an empty selection rather than calling the endpoint', async () => {
     const { result } = await renderLane();
     act(() => result.current.dispatch({ lane: 'dupes', type: 'mergeSelected', ids: [] }));
-    expect(api.mergeDedupCandidate).not.toHaveBeenCalled();
+    expect(api.linkDedupCandidate).not.toHaveBeenCalled();
   });
 });
 
@@ -682,7 +682,7 @@ describe('a dispatched decision suppresses its row immediately', () => {
     // Typed as a callable rather than `| null` so control-flow analysis does
     // not narrow it to `never`: TS cannot see the Promise executor run.
     let release: () => void = () => {};
-    vi.mocked(api.mergeDedupCandidate).mockImplementation(
+    vi.mocked(api.linkDedupCandidate).mockImplementation(
       () =>
         new Promise<void>((resolve) => {
           release = () => resolve(undefined);
@@ -693,7 +693,7 @@ describe('a dispatched decision suppresses its row immediately', () => {
     press('m'); // decides candidate 1; its row leaves `visible` at once
     press('m'); // must therefore land on candidate 2
 
-    expect(vi.mocked(api.mergeDedupCandidate).mock.calls.map((c) => c[0])).toEqual([1, 2]);
+    expect(vi.mocked(api.linkDedupCandidate).mock.calls.map((c) => c[0])).toEqual([1, 2]);
     release();
   });
 
@@ -701,7 +701,7 @@ describe('a dispatched decision suppresses its row immediately', () => {
     // Auto-advance falls out of the suppression rather than being a second
     // mechanism that could disagree with it. focusedIndex never moves.
     mockList([makeCandidate(1), makeCandidate(2)]);
-    vi.mocked(api.mergeDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
+    vi.mocked(api.linkDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
     const { result } = await renderLane();
     expect(result.current.candidates.map((c) => c.id)).toEqual([1, 2]);
 
@@ -719,8 +719,8 @@ describe('a dispatched decision suppresses its row immediately', () => {
     // change removes. Clamping in an effect rather than in the handler is what
     // keeps the keys alive rather than merely safe.
     mockList([makeCandidate(1), makeCandidate(2)]);
-    vi.mocked(api.mergeDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
-    vi.mocked(api.dismissDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
+    vi.mocked(api.linkDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
+    vi.mocked(api.rejectDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
     const { result } = await renderLane();
 
     press('j');
@@ -733,7 +733,7 @@ describe('a dispatched decision suppresses its row immediately', () => {
 
     // The proof that matters: the keyboard still acts on the row that is left.
     press('d');
-    expect(api.dismissDedupCandidate).toHaveBeenCalledWith(1);
+    expect(api.rejectDedupCandidate).toHaveBeenCalledWith(1);
   });
 
   it('puts the row back when the decision fails', async () => {
@@ -741,7 +741,7 @@ describe('a dispatched decision suppresses its row immediately', () => {
     // of the queue silently -- the merge did not happen, but the reviewer never
     // sees the row again.
     mockList([makeCandidate(1), makeCandidate(2)]);
-    vi.mocked(api.mergeDedupCandidate).mockRejectedValue(new Error('conflict'));
+    vi.mocked(api.linkDedupCandidate).mockRejectedValue(new Error('conflict'));
     const { result } = await renderLane();
 
     press('m');
@@ -760,7 +760,7 @@ describe('a dispatched decision suppresses its row immediately', () => {
     // and re-arm the double-merge.
     const stale = [makeCandidate(1), makeCandidate(2)];
     vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: stale, total: 2 });
-    vi.mocked(api.mergeDedupCandidate).mockResolvedValue(undefined);
+    vi.mocked(api.linkDedupCandidate).mockResolvedValue(undefined);
     const { result } = await renderLane();
 
     press('m');
@@ -778,7 +778,7 @@ describe('a dispatched decision suppresses its row immediately', () => {
     vi.mocked(api.getDedupCandidates)
       .mockResolvedValueOnce({ candidates: [makeCandidate(1), makeCandidate(2)], total: 2 })
       .mockResolvedValue({ candidates: [makeCandidate(2)], total: 1 });
-    vi.mocked(api.mergeDedupCandidate).mockResolvedValue(undefined);
+    vi.mocked(api.linkDedupCandidate).mockResolvedValue(undefined);
     const { result } = await renderLane();
 
     press('m');
@@ -810,13 +810,13 @@ describe('a and b merge a chosen side rather than the recommended one', () => {
         book_b: { id: 'b1', title: 'Rich', asin: 'B00ABC1234' },
       } as Partial<api.DedupCandidate>),
     ]);
-    vi.mocked(api.mergeDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
+    vi.mocked(api.linkDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
     await renderLane();
 
     press('a');
-    expect(api.mergeDedupCandidate).toHaveBeenCalledWith(1, 'a1');
+    expect(api.linkDedupCandidate).toHaveBeenCalledWith(1, 'a1');
 
-    vi.mocked(api.mergeDedupCandidate).mockClear();
+    vi.mocked(api.linkDedupCandidate).mockClear();
     mockList([
       makeCandidate(2, {
         book_a: { id: 'a2', title: 'Rich', asin: 'B00ABC1234' },
@@ -827,7 +827,7 @@ describe('a and b merge a chosen side rather than the recommended one', () => {
     expect(second.result.current.candidates).toHaveLength(1);
 
     press('b');
-    expect(api.mergeDedupCandidate).toHaveBeenCalledWith(2, 'b2');
+    expect(api.linkDedupCandidate).toHaveBeenCalledWith(2, 'b2');
   });
 
   it('does not collide with Shift+A select-all', async () => {
@@ -838,7 +838,7 @@ describe('a and b merge a chosen side rather than the recommended one', () => {
 
     press('A', { shiftKey: true });
 
-    expect(api.mergeDedupCandidate).not.toHaveBeenCalled();
+    expect(api.linkDedupCandidate).not.toHaveBeenCalled();
     expect(result.current.selectedIds.size).toBe(2);
   });
 
@@ -849,7 +849,7 @@ describe('a and b merge a chosen side rather than the recommended one', () => {
     press('a');
     press('b');
 
-    expect(api.mergeDedupCandidate).not.toHaveBeenCalled();
+    expect(api.linkDedupCandidate).not.toHaveBeenCalled();
   });
 });
 
