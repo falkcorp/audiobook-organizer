@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_junk_titles.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9c4e7a12-3b58-4d06-8f21-7ae5c0d94b63
-// last-edited: 2026-09-15
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -40,7 +42,9 @@ func (p *Plugin) repairJunkTitlesDef() sdk.OperationDef {
 			"promoted to the book title (\"Intro\", \"Opening Credits\", \"Big Finish Ident\"). Recovers the real " +
 			"title from the folder for multi-file books and from the filename convention for single-file books, " +
 			"and refuses rather than guesses when there is no trustworthy evidence. Honours user overrides, " +
-			"fetched values and provider-applied metadata. Dry-run by default; pass {\"apply\": true} to write.",
+			"fetched values and provider-applied metadata. Never touches Doctor Who / Big Finish / Torchwood " +
+			"books (owner-manual) or books under the iTunes tree, and refuses a recovered title that is the " +
+			"name of the book's author or narrator. Dry-run by default; pass {\"apply\": true} to write.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.repair-junk-titles",
@@ -77,15 +81,45 @@ func (p *Plugin) runRepairJunkTitles(ctx context.Context, raw json.RawMessage, r
 	if err != nil {
 		return fmt.Errorf("GetAllBooksCore: %w", err)
 	}
+	// Owner-manual series (Doctor Who / Big Finish / Torchwood) are applied by
+	// hand, by explicit book id, and never by a bulk op. The 2026-09-25 dry run
+	// would have retitled a "Big Finish Ident" book to an actor's name. The
+	// series list is read once rather than once per book; a failed read stops
+	// the run, because without it the exclusion cannot be applied.
+	allSeries, err := store.GetAllSeries()
+	if err != nil {
+		return fmt.Errorf("GetAllSeries: %w", err)
+	}
+	manualSeries := map[int]bool{}
+	for i := range allSeries {
+		if junkTitleOwnerManual("", "", allSeries[i].Name) {
+			manualSeries[allSeries[i].ID] = true
+		}
+	}
+
 	var candidates []database.BookCore
 	scanned := len(all)
+	var skipOwnerManual, skipITunes, skipNamesPerson atomic.Int64
 	for i := range all {
 		if all[i].IsSoftDeleted() {
 			continue
 		}
-		if IsJunkTitle(all[i].Title) {
-			candidates = append(candidates, all[i])
+		if !IsJunkTitle(all[i].Title) {
+			continue
 		}
+		// The cheap exclusions run here, on the Core projection; the worker
+		// repeats them against the book_file paths, because book.file_path can
+		// be stale.
+		if junkTitleOwnerManual(all[i].FilePath, all[i].Title, "") ||
+			(all[i].SeriesID != nil && manualSeries[*all[i].SeriesID]) {
+			skipOwnerManual.Add(1)
+			continue
+		}
+		if config.UnderFrozenITunesTree(all[i].FilePath) {
+			skipITunes.Add(1)
+			continue
+		}
+		candidates = append(candidates, all[i])
 	}
 	if params.Limit > 0 && len(candidates) > params.Limit {
 		candidates = candidates[:params.Limit]
@@ -93,7 +127,8 @@ func (p *Plugin) runRepairJunkTitles(ctx context.Context, raw json.RawMessage, r
 
 	log.Info("repair-junk-titles: scan complete", "scanned", scanned, "junk_titled", len(candidates))
 	if len(candidates) == 0 {
-		summary := fmt.Sprintf("repair-junk-titles: %d books scanned, 0 junk titles found — nothing to do", scanned)
+		summary := fmt.Sprintf("repair-junk-titles: %d books scanned, 0 repairable junk titles — nothing to do "+
+			"(skipped %d owner-manual, %d iTunes tree)", scanned, skipOwnerManual.Load(), skipITunes.Load())
 		_ = reporter.Log(slog.LevelInfo, summary)
 		_ = reporter.UpdateProgress(1, 1, summary)
 		return nil
@@ -157,10 +192,52 @@ func (p *Plugin) runRepairJunkTitles(ctx context.Context, raw json.RawMessage, r
 				paths = append(paths, files[i].FilePath)
 			}
 		}
+		// Same exclusions against the file rows: book.file_path is stale on
+		// this library and the files are where the book really lives.
+		for _, fp := range paths {
+			if junkTitleOwnerManual(fp, "", "") {
+				skipOwnerManual.Add(1)
+				return nil
+			}
+			if config.UnderFrozenITunesTree(fp) {
+				skipITunes.Add(1)
+				return nil
+			}
+		}
 
-		newTitle, method, ok := DeriveJunkTitleReplacement(b.Title, authorName(b.AuthorID), paths)
+		primaryAuthor := authorName(b.AuthorID)
+		newTitle, method, ok := DeriveJunkTitleReplacement(b.Title, primaryAuthor, paths)
 		if !ok {
 			skipNoEvidence.Add(1)
+			return nil
+		}
+
+		// A person's name is not a title. The 2026-09-25 dry run turned
+		// "read by narrator" into "C. T. Phipps": the filename convention put
+		// the author where the title was expected. Refuse any recovered title
+		// that equals the book's author, its narrator, or any linked author.
+		people := []string{primaryAuthor}
+		if b.Narrator != nil {
+			people = append(people, splitCreditNames(*b.Narrator)...)
+		}
+		links, lerr := store.GetBookAuthors(b.ID)
+		if lerr != nil {
+			// Fail closed: without the linked names the check is incomplete.
+			failed.Add(1)
+			log.Warn("repair-junk-titles: GetBookAuthors failed", "book_id", b.ID, "err", lerr)
+			return nil
+		}
+		for _, l := range links {
+			id := l.AuthorID
+			people = append(people, authorName(&id))
+		}
+		if titleNamesAPerson(newTitle, people) {
+			skipNamesPerson.Add(1)
+			mu.Lock()
+			if len(examples) < 12 {
+				examples = append(examples, fmt.Sprintf("%q → %q refused: names a person", b.Title, newTitle))
+			}
+			mu.Unlock()
 			return nil
 		}
 
@@ -217,10 +294,50 @@ func (p *Plugin) runRepairJunkTitles(ctx context.Context, raw json.RawMessage, r
 
 	summary := fmt.Sprintf(
 		"repair-junk-titles: %d books scanned, %d junk-titled, %s (by evidence: %s), "+
-			"skipped %d (protected provenance), %d (no trustworthy evidence), failed %d | e.g. %s",
+			"skipped %d (protected provenance), %d (no trustworthy evidence), %d (owner-manual series), "+
+			"%d (iTunes tree), %d (recovered title names the author or narrator), failed %d | e.g. %s",
 		scanned, len(candidates), verb, strings.Join(methods, " "),
-		skipProvenance.Load(), skipNoEvidence.Load(), failed.Load(), ex)
+		skipProvenance.Load(), skipNoEvidence.Load(), skipOwnerManual.Load(), skipITunes.Load(),
+		skipNamesPerson.Load(), failed.Load(), ex)
 	_ = reporter.Log(slog.LevelInfo, summary)
 	_ = reporter.UpdateProgress(len(candidates), len(candidates), summary)
 	return nil
+}
+
+// junkTitleOwnerManual reports whether any of path, title or series marks the
+// book as owner-manual (Doctor Who / Big Finish / Torchwood). The title is
+// checked because "Big Finish Ident" is itself one of the junk titles this op
+// targets, and a book carrying it is Big Finish content.
+func junkTitleOwnerManual(path, title, series string) bool {
+	return applygate.IsOwnerManualOnly(path, series) || applygate.IsOwnerManualOnly(title, "")
+}
+
+// splitCreditNames splits a denormalized credit string ("A, B & C") into the
+// names it lists, keeping the whole string too.
+func splitCreditNames(s string) []string {
+	out := []string{s}
+	parts := strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ';' || r == '&' || r == '/' })
+	for _, p := range parts {
+		for _, q := range strings.Split(p, " and ") {
+			if q = strings.TrimSpace(q); q != "" {
+				out = append(out, q)
+			}
+		}
+	}
+	return out
+}
+
+// titleNamesAPerson reports whether title equals, case-insensitively and
+// ignoring surrounding whitespace, any of the given names.
+func titleNamesAPerson(title string, names []string) bool {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return false
+	}
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n != "" && strings.EqualFold(t, n) {
+			return true
+		}
+	}
+	return false
 }

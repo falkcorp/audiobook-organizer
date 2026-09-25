@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -260,6 +260,37 @@ func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry)
 
 // --- author-split-scan ---
 
+// schedulerAuthorDryRunParams is the params shape of scheduler.author-split-scan
+// and scheduler.resolve-production-authors. Both ignored their params until
+// 2026-09-25 and wrote on every run. dry_run defaults to TRUE when absent;
+// dryRun is accepted as an alias; disagreeing values are an error. The
+// scheduled trigger (tasks.go) sends schedulerExtraOpParams{}, which carries
+// neither key, so a scheduled run is a dry run. Mirrors
+// internal/plugins/maintenance/author.go's parseAuthorOpDryRun.
+type schedulerAuthorDryRunParams struct {
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
+}
+
+func parseSchedulerAuthorDryRun(opID string, raw json.RawMessage) (bool, error) {
+	var params schedulerAuthorDryRunParams
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return true, fmt.Errorf("%s: invalid params: %w", opID, err)
+		}
+	}
+	if params.DryRun != nil && params.DryRunCamel != nil && *params.DryRun != *params.DryRunCamel {
+		return true, fmt.Errorf("%s: dry_run=%v and dryRun=%v disagree; send one", opID, *params.DryRun, *params.DryRunCamel)
+	}
+	switch {
+	case params.DryRun != nil:
+		return *params.DryRun, nil
+	case params.DryRunCamel != nil:
+		return *params.DryRunCamel, nil
+	}
+	return true, nil
+}
+
 // RegisterAuthorSplitScanOp registers the scheduler.author-split-scan OperationDef.
 func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
@@ -267,7 +298,7 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "scheduler",
 		DisplayName:     "Author Split Scan",
-		Description:     "Find and split composite author names into individual author records.",
+		Description:     "Find and split composite author names into individual author records. Dry run by default (scheduled runs too); pass dry_run=false to write.",
 		DefaultPriority: opsregistry.PriorityLow,
 		Cancellable:     true,
 		Isolate:         false,
@@ -277,12 +308,16 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+			dryRun, err := parseSchedulerAuthorDryRun("scheduler.author-split-scan", rawParams)
+			if err != nil {
+				return err
+			}
 			progress := extraOpsProgressAdapter{r: reporter}
 			store := r.Store
 			if store == nil {
 				return fmt.Errorf("database not initialized")
 			}
-			_ = progress.Log("info", "Starting author split scan", nil)
+			_ = progress.Log("info", fmt.Sprintf("Starting author split scan (dry_run=%v)", dryRun), nil)
 			authors, err := store.GetAllAuthors()
 			if err != nil {
 				return fmt.Errorf("failed to get authors: %w", err)
@@ -292,6 +327,7 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 			splitCount := 0
 			booksUpdated := 0
 			errCount := 0
+			wouldSplit, wouldCreate, wouldRelink := 0, 0, 0
 			total := len(authors)
 			p := sdk.NewProgress(reporter, total)
 			p.Start(fmt.Sprintf("Scanning %d authors for composite names", total))
@@ -306,6 +342,32 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 					if (i+1)%200 == 0 {
 						p.StepN(i+1, fmt.Sprintf("Checked %d/%d authors", i+1, total))
 					}
+					continue
+				}
+
+				if dryRun {
+					// Reads only; see the maintenance sibling's comment.
+					missing := 0
+					for _, name := range parts {
+						name = strings.TrimSpace(name)
+						if name == "" {
+							continue
+						}
+						if existing, lerr := store.GetAuthorByName(name); lerr != nil || existing == nil {
+							missing++
+						}
+					}
+					books, berr := store.GetBooksByAuthorIDForRelinkCore(author.ID)
+					if berr != nil {
+						errCount++
+						_ = progress.Log("warning", fmt.Sprintf("Failed to get books for author %q: %v", author.Name, berr), nil)
+						continue
+					}
+					wouldSplit++
+					wouldCreate += missing
+					wouldRelink += len(books)
+					_ = progress.Log("info", fmt.Sprintf("Would split %q (id %d) → %q (%d new authors, %d books)",
+						author.Name, author.ID, parts, missing, len(books)), nil)
 					continue
 				}
 
@@ -435,6 +497,14 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 				if (i+1)%200 == 0 || splitCount%50 == 0 {
 					p.StepN(i+1, fmt.Sprintf("Checked %d/%d authors, split %d so far", i+1, total, splitCount))
 				}
+			}
+
+			if dryRun {
+				resultMsg := fmt.Sprintf("DRY RUN: would split %d composite authors, create %d authors, relink %d books (%d errors); "+
+					"pass dry_run=false to write", wouldSplit, wouldCreate, wouldRelink, errCount)
+				_ = progress.Log("info", resultMsg, nil)
+				p.Done(resultMsg)
+				return nil
 			}
 
 			// Invalidate dedup cache since authors changed
@@ -774,7 +844,7 @@ func (r *ExtraOpsRegistrar) RegisterResolveProductionAuthorsOp(reg *opsregistry.
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "scheduler",
 		DisplayName:     "Resolve Production Authors",
-		Description:     "Resolve real authors for production company entries.",
+		Description:     "Resolve real authors for production company entries. Dry run by default (scheduled runs too): counts the books it would re-fetch; pass dry_run=false to fetch and write.",
 		DefaultPriority: opsregistry.PriorityLow,
 		Cancellable:     true,
 		Isolate:         false,
@@ -784,12 +854,16 @@ func (r *ExtraOpsRegistrar) RegisterResolveProductionAuthorsOp(reg *opsregistry.
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkOpenAI},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+			dryRun, err := parseSchedulerAuthorDryRun("scheduler.resolve-production-authors", rawParams)
+			if err != nil {
+				return err
+			}
 			progress := extraOpsProgressAdapter{r: reporter}
 			store := r.Store
 			if store == nil {
 				return fmt.Errorf("database not initialized")
 			}
-			_ = progress.Log("info", "Starting production author resolution", nil)
+			_ = progress.Log("info", fmt.Sprintf("Starting production author resolution (dry_run=%v)", dryRun), nil)
 			authors, err := store.GetAllAuthors()
 			if err != nil {
 				return fmt.Errorf("failed to get authors: %w", err)
@@ -805,6 +879,7 @@ func (r *ExtraOpsRegistrar) RegisterResolveProductionAuthorsOp(reg *opsregistry.
 			_ = progress.Log("info", fmt.Sprintf("Found %d production company authors", len(prodAuthors)), nil)
 			total := len(prodAuthors)
 			resolved := 0
+			wouldFetch := 0
 			p := sdk.NewProgress(reporter, total)
 			p.Start(fmt.Sprintf("Processing %d production companies", total))
 			for i, author := range prodAuthors {
@@ -814,6 +889,15 @@ func (r *ExtraOpsRegistrar) RegisterResolveProductionAuthorsOp(reg *opsregistry.
 				books, err := store.GetBooksByAuthorIDWithRoleCore(author.ID)
 				if err != nil {
 					p.StepN(i+1, fmt.Sprintf("Processed %d/%d production companies (%d books resolved)", i+1, total, resolved))
+					continue
+				}
+				if dryRun {
+					// FetchMetadataForBookByTitle fetches AND applies, so the
+					// dry run must not call it; it counts the books instead.
+					wouldFetch += len(books)
+					_ = progress.Log("info", fmt.Sprintf("Would re-fetch metadata for %d books credited to %q (id %d)",
+						len(books), author.Name, author.ID), nil)
+					p.StepN(i+1, fmt.Sprintf("Processed %d/%d production companies (dry run)", i+1, total))
 					continue
 				}
 				for _, book := range books {
@@ -829,6 +913,14 @@ func (r *ExtraOpsRegistrar) RegisterResolveProductionAuthorsOp(reg *opsregistry.
 					}
 				}
 				p.StepN(i+1, fmt.Sprintf("Processed %d/%d production companies (%d books resolved)", i+1, total, resolved))
+			}
+
+			if dryRun {
+				resultMsg := fmt.Sprintf("DRY RUN: would re-fetch metadata for %d books across %d production companies; "+
+					"pass dry_run=false to write", wouldFetch, total)
+				_ = progress.Log("info", resultMsg, nil)
+				p.Done(resultMsg)
+				return nil
 			}
 
 			if r.Deps.DedupCache != nil {

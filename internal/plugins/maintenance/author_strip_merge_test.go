@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8f5723a5-46b7-409b-901e-e791fdd71228
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -439,4 +439,136 @@ func containsInt(xs []int, v int) bool {
 		}
 	}
 	return false
+}
+
+// placeholderFixture: author 3 ("Unknown") owns bk-junk through the shared
+// newStripPlugin book mocks, so the merge into the canonical row is observable
+// on a book. 50 is the canonical Unknown Author, 51 a duplicate of it.
+func placeholderFixture() []database.Author {
+	return []database.Author{
+		{ID: 1, Name: "Kevin J Anderson"},
+		{ID: 3, Name: "Unknown"},
+		{ID: 50, Name: database.UnknownAuthorName},
+		{ID: 51, Name: "Unknown Author"},
+		{ID: 52, Name: "Various"},
+		{ID: 53, Name: "n/a"},
+		{ID: 54, Name: "Audiobook"},
+		{ID: 55, Name: "None"},
+		{ID: 56, Name: "Various Artists"},
+		{ID: 60, Name: "Track01"},
+		{ID: 61, Name: "Lords of the Sith_418m_07s_"},
+		{ID: 62, Name: "14-25"},
+		{ID: 63, Name: "Track_07"},
+	}
+}
+
+func runPlaceholderStripMerge(t *testing.T, params string, canonical *database.Author) (*stripMergeCalls, string) {
+	t.Helper()
+	calls := &stripMergeCalls{}
+	p := newStripPlugin(placeholderFixture(), calls)
+	store := p.deps.(*fakeDeps).store.(*database.MockStore)
+	store.GetAuthorByNameFunc = func(name string) (*database.Author, error) {
+		if name == database.UnknownAuthorName && canonical != nil {
+			c := *canonical
+			return &c, nil
+		}
+		return nil, nil
+	}
+	var raw json.RawMessage
+	if params != "" {
+		raw = json.RawMessage(params)
+	}
+	rep := &summaryReporter{}
+	if err := p.runAuthorStripMerge(context.Background(), raw, rep); err != nil {
+		t.Fatalf("runAuthorStripMerge: %v", err)
+	}
+	return calls, rep.summary(t)
+}
+
+// 🔴 THE CANONICAL UNKNOWN AUTHOR IS NEVER DELETED. The 2026-09-25 dry run
+// planned to delete it, and every placeholder with it, leaving 244 books
+// authorless. Placeholders are merged INTO the canonical row instead.
+func TestAuthorStripMerge_KeepsCanonicalUnknownAndMergesPlaceholders(t *testing.T) {
+	canonical := &database.Author{ID: 50, Name: database.UnknownAuthorName}
+	calls, summary := runPlaceholderStripMerge(t, `{"apply":true}`, canonical)
+	if containsInt(calls.deleted, 50) {
+		t.Fatalf("the canonical Unknown Author row 50 was deleted; deleted=%v", calls.deleted)
+	}
+	for _, id := range []int{3, 51, 52, 53, 54, 55, 56} {
+		if !containsInt(calls.deleted, id) {
+			t.Errorf("placeholder row %d was not merged away; deleted=%v", id, calls.deleted)
+		}
+		found := false
+		for _, ts := range calls.tombstones {
+			if ts == [2]int{id, 50} {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("placeholder row %d was not MERGED into 50 (no tombstone %d->50); tombstones=%v", id, id, calls.tombstones)
+		}
+	}
+	got := calls.setAuthors["bk-junk"]
+	if len(got) != 1 || got[0].AuthorID != 50 {
+		t.Errorf("book credited to placeholder 3 should be relinked to the canonical row 50: %+v", got)
+	}
+	if b := calls.updated["bk-junk"]; b == nil || b.AuthorID == nil || *b.AuthorID != 50 {
+		t.Errorf("bk-junk primary should move to the canonical row 50: %+v", b)
+	}
+	if !strings.Contains(summary, "placeholders=7") || !strings.Contains(summary, "canonical-unknown-id=50") {
+		t.Errorf("summary should count 7 placeholders and name the canonical row: %s", summary)
+	}
+	if !strings.Contains(summary, "books-left-authorless=0") {
+		t.Errorf("merging placeholders must leave no book authorless: %s", summary)
+	}
+}
+
+// With no canonical row, placeholders are left alone: this op does not create
+// author rows, and deleting them is the defect being fixed.
+func TestAuthorStripMerge_NoCanonicalLeavesPlaceholdersAlone(t *testing.T) {
+	calls, summary := runPlaceholderStripMerge(t, `{"apply":true}`, nil)
+	for _, id := range []int{3, 50, 51, 52, 53, 54, 55, 56} {
+		if containsInt(calls.deleted, id) {
+			t.Errorf("placeholder row %d was deleted with no canonical row to merge into", id)
+		}
+	}
+	if !strings.Contains(summary, "placeholders-no-canonical=8") {
+		t.Errorf("summary should count 8 untouched placeholders: %s", summary)
+	}
+}
+
+// Track and timecode numbering that CleanAuthorNameForCreation accepts
+// ("Track01", "..._418m_07s_") is in scope as junk, as is bare "NN-NN".
+func TestAuthorStripMerge_TrackAndTimecodeRowsAreJunk(t *testing.T) {
+	canonical := &database.Author{ID: 50, Name: database.UnknownAuthorName}
+	calls, summary := runPlaceholderStripMerge(t, `{"apply":true}`, canonical)
+	for _, id := range []int{60, 61, 62, 63} {
+		if !containsInt(calls.deleted, id) {
+			t.Errorf("track/timecode row %d was not deleted as junk; deleted=%v", id, calls.deleted)
+		}
+	}
+	if containsInt(calls.deleted, 1) {
+		t.Error("the real author row was deleted")
+	}
+	if !strings.Contains(summary, "junk=4") {
+		t.Errorf("summary should count 4 junk rows: %s", summary)
+	}
+	for _, name := range []string{"Kevin J Anderson", "Track Palin", "50 Cent", "Homer"} {
+		if isTrackOrTimecodeArtifact(name) {
+			t.Errorf("isTrackOrTimecodeArtifact(%q) = true; a person's name must not match", name)
+		}
+	}
+}
+
+// The placeholder dry run writes nothing.
+func TestAuthorStripMerge_PlaceholderDryRunWritesNothing(t *testing.T) {
+	canonical := &database.Author{ID: 50, Name: database.UnknownAuthorName}
+	calls, summary := runPlaceholderStripMerge(t, ``, canonical)
+	if len(calls.deleted) != 0 || len(calls.setAuthors) != 0 || len(calls.updated) != 0 || len(calls.tombstones) != 0 {
+		t.Errorf("dry run wrote: deleted=%v setAuthors=%v updated=%v tombstones=%v",
+			calls.deleted, calls.setAuthors, calls.updated, calls.tombstones)
+	}
+	if !strings.Contains(summary, "placeholders=7") {
+		t.Errorf("dry run should still count the placeholders: %s", summary)
+	}
 }

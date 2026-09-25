@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-09-15
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -88,16 +88,50 @@ func (p *Plugin) runAuthorDedupScan(ctx context.Context, _ json.RawMessage, repo
 	return nil
 }
 
+// authorOpDryRunParams is the params shape of author-split-scan and
+// resolve-production-authors. Both ops ignored their params until 2026-09-25
+// and wrote on every run, including the Monday 02:00 schedule. dry_run
+// defaults to TRUE when absent; dryRun (camelCase) is accepted as an alias,
+// and sending both with different values is an error rather than a guess --
+// the same contract as author-id-repair and duration-reextract, whose comment
+// records the prod run that silently previewed because of a misspelled key.
+type authorOpDryRunParams struct {
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
+}
+
+// parseAuthorOpDryRun resolves raw to the dry-run flag, defaulting to true.
+func parseAuthorOpDryRun(opID string, raw json.RawMessage) (bool, error) {
+	var params authorOpDryRunParams
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return true, fmt.Errorf("%s: invalid params: %w", opID, err)
+		}
+	}
+	if params.DryRun != nil && params.DryRunCamel != nil && *params.DryRun != *params.DryRunCamel {
+		return true, fmt.Errorf("%s: dry_run=%v and dryRun=%v disagree; send one", opID, *params.DryRun, *params.DryRunCamel)
+	}
+	switch {
+	case params.DryRun != nil:
+		return *params.DryRun, nil
+	case params.DryRunCamel != nil:
+		return *params.DryRunCamel, nil
+	}
+	return true, nil
+}
+
 // --- author-split-scan ---
 
 func (p *Plugin) authorSplitScanDef() sdk.OperationDef {
 	sched := "0 2 * * 1" // 02:00 every Monday
 	return sdk.OperationDef{
-		ID:              "maintenance.author-split-scan",
-		Liveness:        sdk.LivenessManual,
-		Plugin:          "maintenance",
-		DisplayName:     "Author split scan",
-		Description:     "Finds and splits composite author names (e.g. 'Smith, J. & Jones, A.').",
+		ID:          "maintenance.author-split-scan",
+		Liveness:    sdk.LivenessManual,
+		Plugin:      "maintenance",
+		DisplayName: "Author split scan",
+		Description: "Finds and splits composite author names (e.g. 'Smith, J. & Jones, A.'). " +
+			"DRY RUN BY DEFAULT, including the scheduled run: lists each composite and its parts; " +
+			"pass dry_run=false to create the parts, relink books and delete the composite.",
 		ResumePolicy:    sdk.ResumeRequeue,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.author-split-scan",
@@ -110,12 +144,16 @@ func (p *Plugin) authorSplitScanDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
+	dryRun, err := parseAuthorOpDryRun("maintenance.author-split-scan", raw)
+	if err != nil {
+		return err
+	}
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_ = reporter.Log(slog.LevelInfo, "Starting author split scan")
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Starting author split scan (dry_run=%v)", dryRun))
 
 	authors, err := store.GetAllAuthors()
 	if err != nil {
@@ -126,6 +164,7 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 	splitCount := 0
 	booksUpdated := 0
 	errCount := 0
+	wouldSplit, wouldCreate, wouldRelink := 0, 0, 0
 	// H8 (2026-07 error-correction sweep): GetBookAuthors errors below used to
 	// be a bare `continue` — the book is left un-relinked to the new
 	// individual authors, yet DeleteAuthor(author.ID) below still removes the
@@ -147,6 +186,35 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 			if (i+1)%200 == 0 {
 				prog.StepN(i+1, fmt.Sprintf("Checked %d/%d authors", i+1, total))
 			}
+			continue
+		}
+
+		if dryRun {
+			// Reads only: no CreateAuthor, SetBookAuthors, ModifyBook or
+			// DeleteAuthor. Every composite is logged with its parts, because
+			// the splitter is known to cut titles into "authors" and the list
+			// is what an operator reviews before passing dry_run=false.
+			missing := 0
+			for _, name := range parts {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+				if existing, lerr := store.GetAuthorByName(name); lerr != nil || existing == nil {
+					missing++
+				}
+			}
+			books, berr := store.GetBooksByAuthorIDForRelinkCore(author.ID)
+			if berr != nil {
+				errCount++
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Failed to get books for author %q: %v", author.Name, berr))
+				continue
+			}
+			wouldSplit++
+			wouldCreate += missing
+			wouldRelink += len(books)
+			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Would split %q (id %d) → %q (%d new authors, %d books)",
+				author.Name, author.ID, parts, missing, len(books)))
 			continue
 		}
 
@@ -286,6 +354,14 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 		}
 	}
 
+	if dryRun {
+		resultMsg := fmt.Sprintf("DRY RUN: would split %d composite authors, create %d authors, relink %d books (%d errors); "+
+			"pass dry_run=false to write", wouldSplit, wouldCreate, wouldRelink, errCount)
+		_ = reporter.Log(slog.LevelInfo, resultMsg)
+		prog.Done(resultMsg)
+		return nil
+	}
+
 	// Invalidate dedup cache since authors changed
 	p.deps.InvalidateDedupCache()
 
@@ -300,11 +376,12 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 
 func (p *Plugin) resolveProductionAuthorsDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              "maintenance.resolve-production-authors",
-		Liveness:        sdk.LivenessManual,
-		Plugin:          "maintenance",
-		DisplayName:     "Resolve production company authors",
-		Description:     "Resolves real authors for production company entries using external metadata.",
+		ID:          "maintenance.resolve-production-authors",
+		Liveness:    sdk.LivenessManual,
+		Plugin:      "maintenance",
+		DisplayName: "Resolve production company authors",
+		Description: "Resolves real authors for production company entries using external metadata. " +
+			"DRY RUN BY DEFAULT: lists the production-company authors; pass dry_run=false to write.",
 		ResumePolicy:    sdk.ResumeRequeue,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.resolve-production-authors",
@@ -317,12 +394,16 @@ func (p *Plugin) resolveProductionAuthorsDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runResolveProductionAuthors(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
+	dryRun, err := parseAuthorOpDryRun("maintenance.resolve-production-authors", raw)
+	if err != nil {
+		return err
+	}
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_ = reporter.Log(slog.LevelInfo, "Starting production author resolution")
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Starting production author resolution (dry_run=%v)", dryRun))
 
 	authors, err := store.GetAllAuthors()
 	if err != nil {
@@ -337,6 +418,17 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, _ json.RawMess
 	}
 
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Found %d production company authors", len(prodAuthors)))
+	if dryRun {
+		// NOTE: the apply path below resolves nothing yet (its loop only
+		// reports progress); the only thing it changes is the dedup cache.
+		// The dry run lists the rows so the operator sees the scope.
+		for _, a := range prodAuthors {
+			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Production-company author %q (id %d)", a.Name, a.ID))
+		}
+		resultMsg := fmt.Sprintf("DRY RUN: %d production company authors found; pass dry_run=false to write", len(prodAuthors))
+		_ = reporter.Log(slog.LevelInfo, resultMsg)
+		return nil
+	}
 	total := len(prodAuthors)
 	resolved := 0
 	prog := sdk.NewProgress(reporter, total)

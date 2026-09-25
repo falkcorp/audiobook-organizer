@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/author_split_writeback_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4b7e1d92-8c6a-4f3b-9a02-1e5c7d8f0a3b
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -97,7 +98,7 @@ func TestAuthorSplit_WritesFreshAuthorNotStaleOrNil(t *testing.T) {
 		})
 
 	p := New(fakeDeps{store: store})
-	if err := p.runAuthorSplitScan(context.Background(), nil, &fakeReporter{}); err != nil {
+	if err := p.runAuthorSplitScan(context.Background(), json.RawMessage(`{"dry_run":false}`), &fakeReporter{}); err != nil {
 		t.Fatalf("runAuthorSplitScan: %v", err)
 	}
 

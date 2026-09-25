@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"testing"
 
@@ -132,7 +133,7 @@ func TestAuthorSplitScan_RelinksTrashedBook(t *testing.T) {
 	trashed := mkRelinkTrashedBook(t, s, "split-trashed", composite.ID, true)
 
 	p := &Plugin{deps: fakeDeps{store: s}}
-	require.NoError(t, p.runAuthorSplitScan(context.Background(), nil, &fakeReporter{}))
+	require.NoError(t, p.runAuthorSplitScan(context.Background(), json.RawMessage(`{"dry_run":false}`), &fakeReporter{}))
 
 	requireAuthorGone(t, s, composite.ID)
 	alice, err := s.GetAuthorByName("Alice Smith")
