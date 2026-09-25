@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_shape_report_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b2d9e14-0c63-4a58-8f71-6d3a92c4e150
-// last-edited: 2026-09-20
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -348,6 +348,30 @@ func TestBookShape_CollisionSuffixExplosion(t *testing.T) {
 	varied.addBook("boom", base, "organized", true)
 	varied.addRows("boom", base+" - 2/1.mp3", base+" - 3/2.mp3", base+" - 4/3.mp3")
 	require.Empty(t, findingsOf(varied.run(t, bookShapeReportParams{SkipDiskStat: true}), shapeCollisionSuffixExplosion))
+}
+
+// CHAPTER-SUBFOLDER-NN-ROWS: the same one-basename signature inside a book
+// folder named after the prefix is a real chapter-folder layout. It must not
+// be reported as a retry loop (whose advice is to collapse the directories)
+// nor marked corrupt.
+func TestBookShape_ChapterFolderLayoutIsNotARetryLoop(t *testing.T) {
+	book := "/data/books/Author/Steamforged Sorcery"
+	var f bookShapeFixture
+	f.addBook("layout", book, "organized", true)
+	f.addRows("layout",
+		book+"/Steamforged Sorcery - 01/32.m4b",
+		book+"/Steamforged Sorcery - 02/32.m4b",
+		book+"/Steamforged Sorcery - 03/32.m4b",
+	)
+
+	got := f.run(t, bookShapeReportParams{SkipDiskStat: true})
+	require.Empty(t, findingsOf(got, shapeCollisionSuffixExplosion))
+	cl := findingsOf(got, shapeChapterFolderLayout)
+	require.Len(t, cl, 1)
+	require.Equal(t, []string{"layout"}, cl[0].BookIDs)
+	require.Contains(t, cl[0].Detail, `32.m4b`)
+	require.Contains(t, cl[0].Recommendation, "KEEP the rows")
+	require.NotContains(t, cl[0].Recommendation, "COLLAPSE")
 }
 
 // --- the empty-member branches, which must never reach the merge shapes ---

@@ -1,7 +1,7 @@
 // file: internal/dedup/chapter_sibling.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c1d4e7a2-9b35-4f80-8e16-2a7c0d5b9f43
-// last-edited: 2026-06-21
+// last-edited: 2026-09-25
 
 // Package dedup — same-physical-book detection for emit-time suppression.
 //
@@ -61,8 +61,19 @@ func chapterSiblings(aPath, bPath string) bool {
 // multi-file audiobook — either chapters in the same folder (same parent dir) or
 // chapters shattered across `<prefix> - N` sibling subdirs. Such pairs must
 // never be emitted as duplicate candidates.
+//
+// Two book rows at the SAME path are not two chapters of one book: a chapter
+// book is a single file, and two chapters never share one file. They are the
+// "two book rows at one path" duplicate (CHAPTER-SUBFOLDER-NN-ROWS, 2026-09-25:
+// a regrouped `<Book>/<Book> - NN/32.m4b` book sat at the same book folder as
+// the real one; ABS listed both and this guard kept dedup from pairing them,
+// because filepath.Dir of two equal paths is equal). They are left for the
+// other guards and the scorer to judge.
 func sameMultiFileBook(a, b *database.Book) bool {
 	if a.FilePath == "" || b.FilePath == "" {
+		return false
+	}
+	if filepath.Clean(a.FilePath) == filepath.Clean(b.FilePath) {
 		return false
 	}
 	if filepath.Dir(a.FilePath) == filepath.Dir(b.FilePath) {

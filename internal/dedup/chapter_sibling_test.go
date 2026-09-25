@@ -1,7 +1,7 @@
 // file: internal/dedup/chapter_sibling_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e3a8c7d1-4b62-4f90-9a05-7c2e1d8b6f54
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package dedup
 
@@ -147,5 +147,64 @@ func TestUnifiedPass_DeletesSuppressedChapterSiblingCandidate(t *testing.T) {
 	}
 	if cands := pendingCandidates(t, es); len(cands) != 0 {
 		t.Errorf("backstop should have deleted the suppressed candidate, got %d: %+v", len(cands), cands)
+	}
+}
+
+// CHAPTER-SUBFOLDER-NN-ROWS: a regrouped chapter-folder book (rows in
+// `<Book> - NN/32.m4b`, Book.FilePath = the book folder) and the real book at
+// the SAME folder are two book rows at one path — a duplicate, not two
+// chapters of one book. same_dir_multi_file used to suppress the pair because
+// filepath.Dir of two identical paths is equal, so ABS listed both books and
+// dedup never paired them. Both the folder form and the file form of a shared
+// path must be emitted.
+func TestExactEmitters_EmitTwoBooksAtOnePath(t *testing.T) {
+	for _, path := range []string{
+		"/lib/Author/Steamforged Sorcery",
+		"/lib/Author/Steamforged Sorcery/Steamforged Sorcery.m4b",
+	} {
+		t.Run(path, func(t *testing.T) {
+			engine, mock, es := setupTestEngine(t)
+			engine.AutoMergeEnabled = false
+			real := chapterBook("R", "Steamforged Sorcery", path)
+			regrouped := chapterBook("G", "Steamforged Sorcery", path)
+			byAuthor := []database.Book{*real, *regrouped}
+			wireExactTitleOnly(mock, map[string]*database.Book{"R": real, "G": regrouped}, byAuthor)
+
+			for _, id := range []string{"R", "G"} {
+				if _, err := engine.CheckBook(context.Background(), id); err != nil {
+					t.Fatalf("CheckBook(%s): %v", id, err)
+				}
+			}
+			if cands := pendingCandidates(t, es); len(cands) == 0 {
+				t.Fatalf("two books at one path produced 0 candidates, want ≥1")
+			}
+			if ok, sup := PairEligibility(real, regrouped); !ok {
+				t.Errorf("two books at one path must be eligible, suppressors=%v", sup)
+			}
+		})
+	}
+}
+
+// Chapters of one book are still suppressed after the one-path carve-out.
+func TestSameMultiFileBook_OnePathIsNotChapters(t *testing.T) {
+	base := "/lib/Author/Book"
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"identical folder path", base, base, false},
+		{"identical file path", base + "/01.mp3", base + "/01.mp3", false},
+		{"same path, trailing slash", base, base + "/", false},
+		{"two chapter files in one folder", base + "/01.mp3", base + "/02.mp3", true},
+		{"two chapter folders", base + "/Book - 1/32.m4b", base + "/Book - 2/32.m4b", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := sameMultiFileBook(&database.Book{FilePath: c.a}, &database.Book{FilePath: c.b})
+			if got != c.want {
+				t.Errorf("sameMultiFileBook(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+			}
+		})
 	}
 }
