@@ -1,5 +1,5 @@
 // file: internal/database/book_own_folder.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: 83d7e159-50f7-47e5-8303-8d8212c3bd8e
 // last-edited: 2026-09-25
 
@@ -223,20 +223,23 @@ func markBookFileCopies(files []BookFile, inside []bool, crossDir bool) []bool {
 
 // keeperLess orders rows by how strongly each should be the row its copy
 // cluster counts:
-//  1. a known duration (> 0), so excluding a copy never drops a duration the
-//     cluster knew: the counted sum loses a copy's runtime, never the
-//     content's;
-//  2. present on disk, so ABS streams a file that exists;
+//  1. present on disk, so ABS lists and streams a file that exists. A
+//     missing keeper would also exclude its present twin for good, since
+//     nothing re-admits a copy;
+//  2. a known duration (> 0), so among present rows excluding a copy never
+//     drops a measured duration. (A present unmeasured row beats a missing
+//     measured twin: the book reads short until the next duration backfill
+//     fills that counted zero row, rather than listing a dead track.);
 //  3. inside the book's own folder;
 //  4. a name without organize's `_copyN` suffix (the original);
 //  5. original row order.
 func keeperLess(files []BookFile, inside []bool, a, b int) bool {
 	fa, fb := &files[a], &files[b]
-	if ka, kb := fa.Duration > 0, fb.Duration > 0; ka != kb {
-		return ka
-	}
 	if fa.Missing != fb.Missing {
 		return !fa.Missing
+	}
+	if ka, kb := fa.Duration > 0, fb.Duration > 0; ka != kb {
+		return ka
 	}
 	if inside[a] != inside[b] {
 		return inside[a]

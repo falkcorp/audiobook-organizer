@@ -333,3 +333,34 @@ func TestDurationBackfill_ZeroRowsSkipsSameFolderCopies(t *testing.T) {
 		t.Errorf("zero-rows mode must fill exactly the counted zero rows %v (never a _copy1 twin), wrote %v", want, got)
 	}
 }
+
+// DUR-SAME-FOLDER-COPIES, normal mode: the measured total is the counted sum
+// (each `_copy1` twin once), the same total RecomputeBookAggregates stores, so
+// the book does not read "would change" on every run; the twins are not
+// filled. A distinct `_copy1` chapter (different size) is measured and counts.
+func TestDurationBackfill_NormalModeMeasuresCountedRowsOnly(t *testing.T) {
+	var segWrites, bookWrites int
+	segs := []database.BookFile{
+		{ID: "01", BookID: "b1", FilePath: "/lib/B/B - 01.m4a", FileSize: 50_000_000, Duration: 3600, AcoustIDFingerprintDurationSec: 3600.0},
+		{ID: "01c", BookID: "b1", FilePath: "/lib/B/B - 01_copy1.m4a", FileSize: 50_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 3600.0},
+		{ID: "02", BookID: "b1", FilePath: "/lib/B/B - 02.m4a", FileSize: 60_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 4000.0},
+		{ID: "02c", BookID: "b1", FilePath: "/lib/B/B - 02_copy1.m4a", FileSize: 60_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 4000.0},
+		{ID: "03x", BookID: "b1", FilePath: "/lib/B/B - 03_copy1.m4a", FileSize: 38_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 1900.0},
+	}
+	store := bookWithSegs(t, segs, &segWrites, &bookWrites)
+	book := database.Book{ID: "b1", Title: "B", FilePath: "/lib/B", Duration: new(15500)}
+	res := processBookForReextract(context.Background(), store, book, time.Time{})
+	if want := 3600 + 4000 + 1900; res.newDur != want {
+		t.Errorf("newDur = %d, want the counted sum %d", res.newDur, want)
+	}
+	if res.copies != 2 {
+		t.Errorf("copies = %d, want 2", res.copies)
+	}
+	var changed []string
+	for _, f := range res.changedBFs {
+		changed = append(changed, f.ID)
+	}
+	if len(changed) != 2 || changed[0] != "02" || changed[1] != "03x" {
+		t.Errorf("changed rows = %v, want [02 03x] (never a _copy1 twin)", changed)
+	}
+}
