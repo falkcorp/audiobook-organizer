@@ -198,3 +198,64 @@ func TestIndexedStore_ModifyBookReachesIndex(t *testing.T) {
 		t.Fatalf("old title still matches after ModifyBook: %v", hits)
 	}
 }
+
+// failingReadStore fails every read of one book ID, as a permanently
+// unreadable row would.
+type failingReadStore struct {
+	*database.PebbleStore
+	bad string
+}
+
+func (f *failingReadStore) GetBooksByIDs(ids []string) ([]database.Book, error) {
+	for _, id := range ids {
+		if id == f.bad {
+			return nil, fmt.Errorf("simulated unreadable row %s", id)
+		}
+	}
+	return f.PebbleStore.GetBooksByIDs(ids)
+}
+
+func (f *failingReadStore) GetBookByID(id string) (*database.Book, error) {
+	if id == f.bad {
+		return nil, fmt.Errorf("simulated unreadable row %s", id)
+	}
+	return f.PebbleStore.GetBookByID(id)
+}
+
+// One row that can never be read must not hold library search on the
+// substring path forever: the gate is released after reconcileStuckPassLimit
+// no-progress passes, the other books are indexed, and the bad row stays dirty.
+func TestReconciler_UnreadableRowDoesNotPinRebuildGate(t *testing.T) {
+	pebble, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = pebble.Close() })
+	idx, err := search.Open(filepath.Join(t.TempDir(), "bleve"))
+	if err != nil {
+		t.Fatalf("bleve: %v", err)
+	}
+	t.Cleanup(func() { _ = idx.Close() })
+	store := &failingReadStore{PebbleStore: pebble, bad: "bad"}
+	for _, id := range []string{"good-1", "bad", "good-2"} {
+		if _, err := pebble.CreateBook(&database.Book{ID: id, Title: "Title " + id, FilePath: "/tmp/" + id, Format: "m4b"}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+	srv := NewServer(store)
+	srv.setSearchIndex(idx)
+	srv.reconcileSearchIndexCoverage() // seeds all three as missing
+
+	for pass := 0; pass < 5 && idx.Rebuilding(); pass++ {
+		srv.reconcileOnce()
+	}
+	if idx.Rebuilding() {
+		t.Fatal("one unreadable row pinned the rebuild gate; library search would stay on the substring path forever")
+	}
+	if n, _ := idx.DocCount(); n != 2 {
+		t.Fatalf("index has %d docs, want the 2 readable books", n)
+	}
+	if got := dirtyCount(t, store); got != 1 {
+		t.Fatalf("dirty set has %d keys, want 1 (the unreadable row stays dirty)", got)
+	}
+}

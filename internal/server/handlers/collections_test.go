@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d17e903-2b48-4c81-96af-70e3c5a12b8d
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package handlers_test
 
@@ -428,6 +428,10 @@ func colEvalRouter(t *testing.T, store handlers.CollectionStore, bookIDs ...stri
 	idx, err := search.Open(filepath.Join(t.TempDir(), "bleve"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = idx.Close() })
+	// Fixture indexes every book itself, so it is complete by construction.
+	if err := idx.MarkRebuilt(); err != nil {
+		t.Fatalf("MarkRebuilt: %v", err)
+	}
 
 	docs := make([]search.BookDocument, 0, len(bookIDs))
 	for _, id := range bookIDs {

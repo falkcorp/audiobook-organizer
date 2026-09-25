@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_facets.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d2b1c4e-8f3a-4b6d-9e0c-1a2b3c4d5e6f
-// last-edited: 2026-07-11
+// last-edited: 2026-09-25
 
 // AudiobookService.FacetCounts (INIT-4 T4) — a thin wrapper around
 // BleveIndex.FacetCounts giving the /audiobooks/facets response optional
@@ -27,7 +27,9 @@ var ErrSearchIndexUnavailable = errors.New("search index not yet available")
 // when the index hasn't been wired in yet (SetSearchIndex not called, or
 // called with nil) — never a panic, never a partial/inconsistent result.
 func (svc *AudiobookService) FacetCounts() (genres, languages, tags map[string]int, err error) {
-	if svc.searchIndex == nil {
+	// A rebuilding index would report counts for only the books indexed so
+	// far; that is a partial result, so it is unavailable too.
+	if !svc.bleveSearchable() {
 		return nil, nil, nil, ErrSearchIndexUnavailable
 	}
 	return svc.searchIndex.FacetCounts(0)

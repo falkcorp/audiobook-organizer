@@ -1,5 +1,5 @@
 // file: internal/playlist/evaluator_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d3e5f2a-7b4a-4a70-b8c5-3d7e0f1b9a69
 
 package playlist
@@ -29,6 +29,10 @@ func buildEvalFixture(t *testing.T) (*database.PebbleStore, *search.BleveIndex, 
 		t.Fatalf("bleve open: %v", err)
 	}
 	t.Cleanup(func() { _ = idx.Close() })
+	// Fixture indexes every book itself, so it is complete by construction.
+	if err := idx.MarkRebuilt(); err != nil {
+		t.Fatalf("MarkRebuilt: %v", err)
+	}
 
 	type seed struct {
 		id     string
