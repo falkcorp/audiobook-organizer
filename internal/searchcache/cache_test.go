@@ -1,5 +1,5 @@
 // file: internal/searchcache/cache_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 88a06138-3f42-4544-a283-88594317ab8b
 // last-edited: 2026-09-25
 
@@ -596,4 +596,14 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("condition not met within 5s")
+}
+
+// Owner decision 2026-09-25: the default change ring holds 65,536 records.
+func TestChangeLog_DefaultRingSize(t *testing.T) {
+	if DefaultRingSize != 65536 {
+		t.Fatalf("DefaultRingSize = %d, want 65536", DefaultRingSize)
+	}
+	if n := len(NewChangeLog(0).ring); n != 65536 {
+		t.Fatalf("NewChangeLog(0) ring holds %d records, want 65536", n)
+	}
 }

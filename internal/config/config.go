@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.124.0
+// version: 1.124.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-25
 
@@ -3838,7 +3838,9 @@ type SearchConfig struct {
 // restores the per-request search. max_bytes (default 128 MiB) caps the IDs
 // held, least recently used first. wait_seconds (default 20) is how long a web
 // request waits for a new search before it is answered 202 with a search ID to
-// poll.
+// poll. The change ring that keeps entries current is not configurable: it
+// holds the last 65,536 changed books (searchcache.DefaultRingSize); an entry
+// read after more changes than that is rebuilt instead of patched.
 type SearchResultCacheConfig struct {
 	Enabled     bool  `json:"enabled" mapstructure:"enabled"`
 	MaxBytes    int64 `json:"max_bytes" mapstructure:"max_bytes"`
