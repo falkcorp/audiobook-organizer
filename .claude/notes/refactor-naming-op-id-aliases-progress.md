@@ -1,5 +1,5 @@
 <!-- file: .claude/notes/refactor-naming-op-id-aliases-progress.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5c0f2e61-8a3d-4b7e-9f14-2d6a8c1e7b30 -->
 <!-- last-edited: 2026-09-25 -->
 
@@ -21,6 +21,12 @@ Renames:
 - maintenance.dedup-llm-review -> alias of dedup.llm-review (duplicate op; def removed)
 
 Done:
-- (in progress) registry alias layer
+- registry alias layer + metric + validation (aliases.go)
+- renames + FormerIDs
+- handlers timeline filter / display / notify level; scheduler hasActiveV2Op
+- registry tests (aliases_test.go, supersede grouping)
+- guard test internal/server/op_id_aliases_test.go + testdata/op_ids.golden (231 IDs)
+- plugins expose OperationDefs()
+- web/src api.ts, docs/system/{api,runbooks,incidents}.md, changelog fragment
 
-Next: renames, handlers, scheduler hasActiveV2Op, web/docs, guard test, changelog.
+Next: vet/tests on touched packages, make ci, final report.

@@ -1,7 +1,7 @@
 <!-- file: docs/system/runbooks.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: e5f6a7b8-c9d0-1234-ef01-234567890123 -->
-<!-- last-edited: 2026-07-03 -->
+<!-- last-edited: 2026-09-25 -->
 
 # Operator Runbooks
 
@@ -145,7 +145,7 @@ If organize moved files and iTunes paths became stale (FilePath records no longe
 ```bash
 curl -X POST https://<server>/api/v1/operations/v2 \
   -H "Authorization: Bearer abk_..." \
-  -d '{"def_id":"maintenance.itunes-heal"}'
+  -d '{"def_id":"itunes.heal"}'
 ```
 
 This op parses the iTunes XML, builds a filename index of the organized library, and heals stale paths using author/album/track-number signals. Idempotent (uses ZFS reflinks). First run healed 2,274 tracks; 0 errors.
