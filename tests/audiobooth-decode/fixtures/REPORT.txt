@@ -1,5 +1,5 @@
 AudioBooth decode proof (pin: 849eac04ed92c6f0c75d977ee6bf17e01b3b2b77)
-Call sites: 35 of 45 decoded, 6 of 45 2xx-only (Data), 1 of 45 error-by-design, 3 of 45 N/A, 0 of 45 FAILED
+Call sites: 32 of 45 decoded with data, 3 of 45 decoded but empty by design, 6 of 45 2xx-only (Data), 1 of 45 error-by-design, 3 of 45 N/A, 0 of 45 FAILED
 Models: 19 of 26 decoded with data
   extra    status as ServerStatus
   extra    login as Authorize
@@ -8,7 +8,7 @@ Models: 19 of 26 decoded with data
   decoded  library_filterdata as FilterDataResponse
   decoded  personalized as [Personalized.Section]
   decoded  items_title as Page<Book>
-  decoded  items_collapse_series as Page<Book>
+  decoded  items_collapse_series as Page<Book> (vacuous, see below)
   decoded  items_filter_series as Page<Book>
   decoded  items_filter_narrator as Page<Book>
   decoded  items_filter_genre as Page<Book>
@@ -47,7 +47,7 @@ Models: 19 of 26 decoded with data
   decoded  authors_updatedAt as Page<Author>
   decoded  author_detail as AuthorDetails
   decoded  narrators as NarratorsResponse
-  decoded  recent_episodes as RecentEpisodesResponse
+  decoded  recent_episodes as RecentEpisodesResponse (vacuous, see below)
   decoded  progress_get as User.MediaProgress
   2xx      progress_patch (Data: the app does not decode)
   decoded  play as PlaySession
@@ -58,8 +58,8 @@ Models: 19 of 26 decoded with data
   decoded  bookmark_create as User.Bookmark
   decoded  bookmark_update as User.Bookmark
   decoded  authorize_after_writes as Authorize
-  decoded  listening_sessions as ListeningHistoryResponse
-  decoded  item_listening_sessions as ItemListeningSessionsResponse
+  decoded  listening_sessions as ListeningHistoryResponse (vacuous, see below)
+  decoded  item_listening_sessions as ItemListeningSessionsResponse (vacuous, see below)
   decoded  listening_stats as ListeningStats
   decoded  year_stats as YearStats
   decoded  collection_create as Collection
@@ -101,7 +101,7 @@ Models:
   EMPTY    ListeningHistorySession: only ever decoded as an empty array (vacuous)
   decoded  ListeningStats x1
   decoded  Narrator x2
-  decoded  Personalized x4
+  decoded  Personalized x4 (as [Personalized.Section] sections)
   decoded  Playlist x7
   N/A      Podcast: podcast libraries only
   N/A      PodcastEpisode: podcast libraries only
@@ -113,7 +113,8 @@ Models:
   EMPTY    SessionSync: only ever decoded as an empty array (vacuous)
   decoded  User x3
   decoded  YearStats x1
-Vacuous by design:
+Vacuous rows (decoded, but proves nothing about populated data):
+  items_collapse_series: the server ignores collapseseries: both books of 'Homeric Epics' come back uncollapsed and no collapsedSeries element is emitted, so Book.CollapsedSeries is never exercised (behaviour gap, not a decode failure)
   recent_episodes: podcast-only data; a book library has no episodes, so [] is the correct answer
   listening_sessions: sessions are not persisted server-side (stats.go), so the page is always empty
   item_listening_sessions: sessions are not persisted server-side (stats.go), so the page is always empty
