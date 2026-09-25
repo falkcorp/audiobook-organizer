@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_book_files.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1000005-0000-0000-0000-000000000005
-// last-edited: 2026-09-01
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -11,10 +11,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"time"
 
 	"log/slog"
 
+	"golang.org/x/sync/errgroup"
+
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
@@ -46,6 +51,13 @@ func (j *backfillBookFilesJob) Description() string {
 	return "Create book_files rows for books that have none"
 }
 func (j *backfillBookFilesJob) CanResume() bool { return false }
+
+// backfillBookFilesConcurrency sizes the worker pool: one per CPU, capped at 8
+// because the per-row work is a header read of the library disk (I/O bound
+// past a few readers), not CPU.
+func backfillBookFilesConcurrency() int {
+	return max(1, min(runtime.NumCPU(), 8))
+}
 func (j *backfillBookFilesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
@@ -53,41 +65,84 @@ func (j *backfillBookFilesJob) Run(ctx context.Context, store maintenance.JobSto
 	}
 	reporter.SetTotal(len(books))
 	result := backfillBookFilesResult{DryRun: dryRun, BooksScanned: len(books)}
+
+	// Worker pool over books. Each new row now gets a duration header read (a
+	// subprocess) before it is written, which on a sequential whole-library
+	// loop is the single-core shape CLAUDE.md forbids. Workers are partitioned
+	// by book: a worker only creates rows for the one book it holds, so no two
+	// workers write the same book. mu guards result and reporter, which were
+	// single-goroutine before.
+	var mu sync.Mutex
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(backfillBookFilesConcurrency())
 	for i := range books {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if gctx.Err() != nil {
+			break
 		}
 		book := &books[i]
-		reporter.Increment()
-		files, err := store.GetBookFiles(book.ID)
-		if err != nil {
-			continue
-		}
-		if len(files) > 0 {
-			continue
-		}
-		audioFiles := backfillBookFilePaths(book.FilePath)
-		newFiles := make([]*database.BookFile, 0, len(audioFiles))
-		for _, fp := range audioFiles {
-			result.CandidateFiles++
-			newFiles = append(newFiles, &database.BookFile{
-				ID:       ulid.Make().String(),
-				BookID:   book.ID,
-				FilePath: fp,
-				Format:   filepath.Ext(fp),
-			})
-		}
-		if dryRun || len(newFiles) == 0 {
-			continue
-		}
-		if cerr := store.BatchCreateBookFiles(newFiles); cerr != nil {
-			msg := cerr.Error()
-			slog.Error("failed to create book files", "details", msg)
-			reporter.Log("error", "backfill-book-files: failed to create book_files", &msg)
-			result.Errors += len(newFiles)
-			continue
-		}
-		result.Created += len(newFiles)
+		g.Go(func() error {
+			if err := gctx.Err(); err != nil {
+				return err
+			}
+			mu.Lock()
+			reporter.Increment()
+			mu.Unlock()
+			files, err := store.GetBookFiles(book.ID)
+			if err != nil {
+				return nil
+			}
+			if len(files) > 0 {
+				return nil
+			}
+			audioFiles := backfillBookFilePaths(book.FilePath)
+			newFiles := make([]*database.BookFile, 0, len(audioFiles))
+			for _, fp := range audioFiles {
+				newFiles = append(newFiles, &database.BookFile{
+					ID:       ulid.Make().String(),
+					BookID:   book.ID,
+					FilePath: fp,
+					Format:   filepath.Ext(fp),
+				})
+			}
+			mu.Lock()
+			result.CandidateFiles += len(newFiles)
+			mu.Unlock()
+			if dryRun || len(newFiles) == 0 {
+				return nil
+			}
+			// Never write a readable file with Duration 0 (ABS sums row
+			// durations). A single-file book may use its own duration; every
+			// other row gets a bounded header read.
+			known := bookfileaudio.Known{SingleFileBook: len(newFiles) == 1}
+			if book.Duration != nil {
+				known.BookDurationSec = *book.Duration
+			}
+			for _, bf := range newFiles {
+				if st, serr := os.Stat(bf.FilePath); serr == nil {
+					bf.FileSize = st.Size()
+				}
+				bookfileaudio.EnsureDuration(bf, known, nil)
+			}
+			if cerr := store.BatchCreateBookFiles(newFiles); cerr != nil {
+				msg := cerr.Error()
+				slog.Error("failed to create book files", "details", msg)
+				mu.Lock()
+				reporter.Log("error", "backfill-book-files: failed to create book_files", &msg)
+				result.Errors += len(newFiles)
+				mu.Unlock()
+				return nil
+			}
+			mu.Lock()
+			result.Created += len(newFiles)
+			mu.Unlock()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	return saveBackfillBookFilesResult(ctx, store, result)

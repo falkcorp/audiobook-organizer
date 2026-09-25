@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package importer
 
@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -347,6 +348,15 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	if meta.TrackNumber > 0 {
 		bf.TrackNumber = meta.TrackNumber
 	}
+	// Single-file shape (see above), so the book's duration is the file's; the
+	// import reads no media info of its own, so without one this is a header
+	// read. A row with Duration 0 shows the book as "0" in ABS, which sums the
+	// rows. A probe failure leaves 0 and is logged; it never fails the import.
+	known := bookfileaudio.Known{SingleFileBook: true}
+	if created.Duration != nil {
+		known.BookDurationSec = *created.Duration
+	}
+	bookfileaudio.EnsureDuration(bf, known, nil)
 	if bfErr := is.db.CreateBookFile(bf); bfErr != nil {
 		slog.Warn("import: could not create book_file row — the book has no route to its audio, and organize will skip it",
 			"book_id", created.ID, "path", created.FilePath, "err", bfErr)

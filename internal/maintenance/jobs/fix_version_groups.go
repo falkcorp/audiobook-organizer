@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -524,6 +525,10 @@ func vgCreateBookFiles(store bookFileCreator, bookID string, filePaths []string)
 			Format:           format,
 			FileSize:         fileSize,
 		}
+		// These rows join a book that already has others (kept or repointed),
+		// so the book's duration says nothing about one file: header read.
+		// Duration 0 would under-report the book in ABS, which sums rows.
+		bookfileaudio.EnsureDuration(bf, bookfileaudio.Known{}, vgLog)
 		if err := store.CreateBookFile(bf); err != nil {
 			return fmt.Errorf("CreateBookFile(%q): %w", fp, err)
 		}

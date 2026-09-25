@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 package merge
 
@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -1464,9 +1465,13 @@ func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) (Com
 		FilePath: b.FilePath,
 		Format:   strings.TrimPrefix(strings.ToLower(filepath.Ext(b.FilePath)), "."),
 	}
+	// A virtual book is one file, so its duration is the row's; with none, a
+	// header read, never a 0 for a readable file (ABS sums row durations).
+	known := bookfileaudio.Known{SingleFileBook: true}
 	if b.Duration != nil {
-		bf.Duration = *b.Duration
+		known.BookDurationSec = *b.Duration
 	}
+	bookfileaudio.EnsureDuration(bf, known, nil)
 	if err := ms.db.CreateBookFile(bf); err != nil {
 		slog.Warn("combine create file", "path", b.FilePath, "err", err)
 		return CombineFileMove{}, 0

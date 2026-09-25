@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -57,6 +57,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -1170,6 +1171,10 @@ func (a *fsApplier) applyFragments(ctx context.Context, g fsRepairGroup) {
 			Duration:    memberOf[b.ID].DurationSec,
 			TrackNumber: n,
 		}
+		// The member was a single-file book, so its DurationSec is this
+		// file's. When it had none, read the header rather than write a 0 the
+		// survivor's ABS total (a sum of rows) would silently lose.
+		bookfileaudio.EnsureDuration(bf, bookfileaudio.Known{}, nil)
 		if err := a.store.CreateBookFile(bf); err != nil {
 			createFailed[b.ID] = true
 			a.errs.Add(1)
