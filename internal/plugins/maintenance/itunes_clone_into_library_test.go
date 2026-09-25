@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2e8b5d10-7c4a-4f93-8a61-d9f3b7c2e045
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -293,6 +293,13 @@ func TestICTitleMatching(t *testing.T) {
 		// Different colon subtitles under one base are a series prefix.
 		{"The Land: Founding (Chaos Seeds) (Volume 1)", "The Land: Predators: A LitRPG Saga", false},
 		{"Jack Reacher 4: The Visitor (Jeff Harding)", "Jack Reacher 4: Running Blind (Johnathan McClain)", false},
+		// A filename-derived " - Unknown Author" (and what follows) is not part
+		// of the title.
+		{"Deadeye Dick", "Deadeye Dick - Unknown Author", true},
+		{"Deadeye Dick", "Deadeye Dick - unknown author - read by narrator", true},
+		{"Point of Entry", "Point of Entry \u2013 Unknown Author", true},
+		{"Deadeye Dick - Unknown Author", "Breakfast of Champions - Unknown Author", false},
+		{"Unknown Author", "Unknown Author", true},
 		{"01", "01", false},
 		{"Elantris", "Warbreaker", false},
 	} {

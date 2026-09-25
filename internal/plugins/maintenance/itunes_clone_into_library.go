@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -424,7 +424,14 @@ type icTitle struct {
 	subtitled  bool
 }
 
+// icUnknownAuthorSuffix is the " - Unknown Author" a filename-derived title
+// carries when the parser had no author, plus anything after it (" - read by
+// ..."): "Deadeye Dick - Unknown Author" is the book "Deadeye Dick". It is cut
+// before any other folding so both sides of a match see the same title.
+var icUnknownAuthorSuffix = regexp.MustCompile(`(?i)\s*[-\x{2013}]\s*unknown author\b.*$`)
+
 func icTitleForms(title string) icTitle {
+	title = icUnknownAuthorSuffix.ReplaceAllString(title, "")
 	base, rest := title, ""
 	if i := strings.IndexAny(title, ":("); i > 0 {
 		base, rest = title[:i], title[i:]
