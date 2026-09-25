@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/sweep_pebble_metrics_ttl.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b8c9d0e1-f2a3-0008-1234-000000000008
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 
 // Package jobs — maintenance job: sweep expired Pebble metrics snapshots.
 //
@@ -34,7 +34,7 @@ func (j *sweepPebbleMetricsTTLJob) CanResume() bool { return false }
 func (j *sweepPebbleMetricsTTLJob) DefaultParams() any {
 	return struct {
 		DryRun bool `json:"dry_run"`
-	}{DryRun: false}
+	}{DryRun: true} // preview by default (owner 2026-09-25); send dry_run=false to apply
 }
 
 // Run sweeps expired Pebble metrics entries.

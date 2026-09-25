@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_backups.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1000021-0000-0000-0000-000000000021
-// last-edited: 2026-08-30
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -31,7 +31,7 @@ func (j *cleanupBackupsJob) Category() string { return "cleanup" }
 func (j *cleanupBackupsJob) DefaultParams() any {
 	return struct {
 		DryRun bool `json:"dry_run"`
-	}{DryRun: false}
+	}{DryRun: true} // preview by default (owner 2026-09-25); send dry_run=false to apply
 }
 func (j *cleanupBackupsJob) Description() string {
 	return "Delete .backup and .bak files from the library root"

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_sync_ids.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 85ae5c94-d001-49d9-9f65-97f73f32522b
-// last-edited: 2026-08-17
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -40,7 +40,7 @@ func (j *backfillSyncIDsJob) Description() string {
 func (j *backfillSyncIDsJob) DefaultParams() any {
 	return struct {
 		DryRun bool `json:"dry_run"`
-	}{DryRun: false}
+	}{DryRun: true} // preview by default (owner 2026-09-25); send dry_run=false to apply
 }
 
 // CanResume returns false deliberately, and NOT because the job is

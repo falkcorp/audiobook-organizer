@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/enrich_book_files.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1000009-0000-0000-0000-000000000009
-// last-edited: 2026-08-17
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -30,7 +30,7 @@ func (j *enrichBookFilesJob) Category() string { return "files" }
 func (j *enrichBookFilesJob) DefaultParams() any {
 	return struct {
 		DryRun bool `json:"dry_run"`
-	}{DryRun: false}
+	}{DryRun: true} // preview by default (owner 2026-09-25); send dry_run=false to apply
 }
 func (j *enrichBookFilesJob) Description() string {
 	return "Backfill track numbers for book_files from filenames"

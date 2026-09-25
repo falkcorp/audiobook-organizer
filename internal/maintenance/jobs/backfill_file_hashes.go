@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-09-10
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -34,7 +34,7 @@ func (j *backfillFileHashesJob) Category() string { return "files" }
 func (j *backfillFileHashesJob) DefaultParams() any {
 	return struct {
 		DryRun bool `json:"dry_run"`
-	}{DryRun: false}
+	}{DryRun: true} // preview by default (owner 2026-09-25); send dry_run=false to apply
 }
 func (j *backfillFileHashesJob) Description() string {
 	return "Compute and store file hashes for book_files missing them"

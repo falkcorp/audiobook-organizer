@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_itunes_paths.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: a1000013-0000-0000-0000-000000000013
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -27,7 +27,7 @@ func (j *recomputeITunesPathsJob) Category() string { return "itunes" }
 func (j *recomputeITunesPathsJob) DefaultParams() any {
 	return struct {
 		DryRun bool `json:"dry_run"`
-	}{DryRun: false}
+	}{DryRun: true} // preview by default (owner 2026-09-25); send dry_run=false to apply
 }
 func (j *recomputeITunesPathsJob) Description() string {
 	return "Recompute iTunes path mapping for all book files"

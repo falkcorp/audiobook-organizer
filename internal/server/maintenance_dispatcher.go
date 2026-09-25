@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 55555555-5555-5555-5555-555555555555
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package server
 
@@ -199,6 +199,13 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// the fail-safe direction (omission now previews instead of applies). The 16
 	// jobs advertising false are unaffected. An explicit "dry_run": false still
 	// applies — callers that mean it say so.
+	//
+	// Update 2026-09-25 (owner: preview by default for every writing op): the 8
+	// jobs that advertised false but DO honor dryRun now advertise true, so 30 of
+	// 38 preview on omission. The 4 that still advertise false (relink-report and
+	// the three scan-* reports) ignore dryRun, and 4 advertise no dry_run key at
+	// all; TestMaintenanceJobs_PreviewByDefault in internal/maintenance/jobs
+	// names each of the 8 with its reason and fails on any new one.
 	dryRun := advertisedDryRunDefault(job)
 	if reqDryRun != nil {
 		dryRun = *reqDryRun
