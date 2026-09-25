@@ -165,10 +165,10 @@ func TestExactEmitters_EmitTwoBooksAtOnePath(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			engine, mock, es := setupTestEngine(t)
 			engine.AutoMergeEnabled = false
-			real := chapterBook("R", "Steamforged Sorcery", path)
+			realBook := chapterBook("R", "Steamforged Sorcery", path)
 			regrouped := chapterBook("G", "Steamforged Sorcery", path)
-			byAuthor := []database.Book{*real, *regrouped}
-			wireExactTitleOnly(mock, map[string]*database.Book{"R": real, "G": regrouped}, byAuthor)
+			byAuthor := []database.Book{*realBook, *regrouped}
+			wireExactTitleOnly(mock, map[string]*database.Book{"R": realBook, "G": regrouped}, byAuthor)
 
 			for _, id := range []string{"R", "G"} {
 				if _, err := engine.CheckBook(context.Background(), id); err != nil {
@@ -178,7 +178,7 @@ func TestExactEmitters_EmitTwoBooksAtOnePath(t *testing.T) {
 			if cands := pendingCandidates(t, es); len(cands) == 0 {
 				t.Fatalf("two books at one path produced 0 candidates, want ≥1")
 			}
-			if ok, sup := PairEligibility(real, regrouped); !ok {
+			if ok, sup := PairEligibility(realBook, regrouped); !ok {
 				t.Errorf("two books at one path must be eligible, suppressors=%v", sup)
 			}
 		})
