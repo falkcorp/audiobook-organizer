@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
 // last-edited: 2026-09-25
 
@@ -448,7 +448,7 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 // A client-supplied duration is a last-resort fallback only, never a preference.
 func (h *Handler) durationForBook(bookID string, clientDuration *float64) (float64, error) {
 	if h.library != nil {
-		// countedBookFiles: the same rows (out-of-folder copies excluded) the
+		// countedBookFiles: the same rows (copies excluded) the
 		// mapper lists.
 		book, files, err := countedBookFiles(h.library, bookID)
 		if err != nil {
