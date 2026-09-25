@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
-// last-edited: 2026-09-22
+// last-edited: 2026-09-25
 
 // Package maintenance — op maintenance.chapters-backfill.
 //
@@ -242,7 +242,7 @@ func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 			"live synthesis and would go stale undetectably. Refuses to run when ffprobe is unavailable. " +
 			"DRY RUN unless {\"apply\": true}. Books that already have chapters are skipped unless " +
 			"{\"overwrite\": true} is set, which REPLACES the stored timeline and requires an explicit " +
-			"bookIds cohort — a stored timeline can be wrong, and every reader here tests only that it exists.",
+			"book_ids cohort — a stored timeline can be wrong, and every reader here tests only that it exists.",
 		// ResumeRestart, not Drop. This op has the longest Timeout in the
 		// codebase (24h) and re-enumerates the whole library, so an interrupted
 		// run used to throw away a day of ffprobe work. Every item is
@@ -260,7 +260,7 @@ func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 		// written the identical timeline it was written before. Idempotency is
 		// the property that matters, and overwrite preserves it; the skip was
 		// only ever the cheap way of achieving it. Overwrite is additionally
-		// confined to an explicit bookIds cohort, which bounds any re-work to
+		// confined to an explicit book_ids cohort, which bounds any re-work to
 		// the size of that list.
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
@@ -356,9 +356,23 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	if len(params.BookIDs) > 0 && len(params.BookIDsCamel) > 0 &&
-		!slices.Equal(params.BookIDs, params.BookIDsCamel) {
-		return fmt.Errorf("book_ids and bookIds disagree; send one")
+	if len(params.BookIDs) > 0 && len(params.BookIDsCamel) > 0 {
+		// Order-insensitive: a resumed run's checkpoint always writes the
+		// canonical book_ids key SORTED (see the sort.Strings(ids) below,
+		// which mutates params.BookIDs in place since `ids` is the same
+		// backing array), while requeueInPlace's checkpoint merge
+		// (mergeJSONParams, internal/operations/registry/resume.go) keeps
+		// the original request's unsorted bookIds key alongside it. A
+		// resumed run that was originally submitted with the legacy bookIds
+		// alias would otherwise see the same book set in two different
+		// orders and be refused as "disagreeing" on every restart.
+		a := slices.Clone(params.BookIDs)
+		b := slices.Clone(params.BookIDsCamel)
+		sort.Strings(a)
+		sort.Strings(b)
+		if !slices.Equal(a, b) {
+			return fmt.Errorf("book_ids and bookIds disagree; send one")
+		}
 	}
 	if len(params.BookIDs) == 0 && len(params.BookIDsCamel) > 0 {
 		params.BookIDs = params.BookIDsCamel
@@ -377,8 +391,8 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 	// typed. Checked before ffprobe so a malformed request fails on its own
 	// terms rather than on a missing binary.
 	if params.Overwrite && len(params.BookIDs) == 0 {
-		return fmt.Errorf("refusing overwrite without bookIds: overwrite REPLACES stored chapter " +
-			"timelines and is a per-book repair, not a library-wide pass — pass an explicit bookIds list")
+		return fmt.Errorf("refusing overwrite without book_ids: overwrite REPLACES stored chapter " +
+			"timelines and is a per-book repair, not a library-wide pass — pass an explicit book_ids list")
 	}
 	if params.Overwrite && !params.Apply {
 		_ = reporter.Log(slog.LevelInfo, "overwrite requested on a DRY RUN — reporting what would be replaced, writing nothing")

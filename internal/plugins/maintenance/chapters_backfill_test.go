@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/chapters_backfill_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8a41c0e6-52b7-4d93-9f18-7c3ea05b61d4
 // last-edited: 2026-09-25
 
@@ -450,6 +450,49 @@ func TestChaptersBackfill_BookIDsCamelCaseAlias_StillDecodes(t *testing.T) {
 	}
 	if got, _ := s.GetChaptersForBook(outOfScope); len(got) != 0 {
 		t.Fatalf("out-of-scope book got %d chapters; the legacy bookIds alias leaked scope", len(got))
+	}
+}
+
+// TestChaptersBackfill_ResumedRunWithLegacyAlias_NotFlaggedAsConflict covers
+// the checkpoint/resume interaction: requeueInPlace (internal/operations/
+// registry/resume.go) merges the checkpoint's JSON overlay onto the
+// ORIGINAL request params key-wise (mergeJSONParams), so a run that was
+// originally submitted with the legacy `bookIds` alias resumes with BOTH
+// `bookIds` (the original, unsorted) and `book_ids` (the checkpoint's
+// canonical, SORTED copy — see sort.Strings(ids) in runChaptersBackfill)
+// present in the same params blob. That must not be treated as the two
+// aliases disagreeing.
+func TestChaptersBackfill_ResumedRunWithLegacyAlias_NotFlaggedAsConflict(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	spy := &chbfProbeSpy{result: chbfChapters()}
+	spy.install(t)
+
+	s := chbfStore(t)
+	b1 := chbfSeedBook(t, s, "B One", 1)
+	b2 := chbfSeedBook(t, s, "B Two", 1)
+
+	// Simulates the merged params a resumed run actually receives: the
+	// checkpoint's book_ids arrives SORTED and the original bookIds survives
+	// in its original (here, deliberately reversed) order.
+	sortedIDs := []string{b1, b2}
+	sort.Strings(sortedIDs)
+	reversedIDs := []string{sortedIDs[1], sortedIDs[0]}
+
+	rawStr := fmt.Sprintf(`{"apply": true, "book_ids": [%q, %q], "bookIds": [%q, %q]}`,
+		sortedIDs[0], sortedIDs[1], reversedIDs[0], reversedIDs[1])
+	p := &Plugin{deps: fakeDeps{store: &chbfDecorator{Store: s}}}
+	if err := p.runChaptersBackfill(context.Background(), json.RawMessage(rawStr), &fakeReporter{}); err != nil {
+		t.Fatalf("runChaptersBackfill: unexpected error on a resumed-run-shaped params blob: %v", err)
+	}
+
+	if got, _ := s.GetChaptersForBook(b1); len(got) != 6 {
+		t.Fatalf("book1 got %d chapters, want 6", len(got))
+	}
+	if got, _ := s.GetChaptersForBook(b2); len(got) != 6 {
+		t.Fatalf("book2 got %d chapters, want 6", len(got))
 	}
 }
 
@@ -1075,7 +1118,7 @@ func TestChaptersBackfill_OverwriteWithoutBookIDs_Refuses(t *testing.T) {
 	if err == nil {
 		t.Fatal("library-wide overwrite was ACCEPTED; it must be refused")
 	}
-	if !strings.Contains(err.Error(), "bookIds") {
+	if !strings.Contains(err.Error(), "book_ids") {
 		t.Fatalf("refusal does not name the missing parameter: %v", err)
 	}
 	if n := spy.calls.Load(); n != 0 {

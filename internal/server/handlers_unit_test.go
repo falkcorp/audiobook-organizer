@@ -405,7 +405,7 @@ func TestHandler_GetDashboard_Success(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp struct{ Data map[string]any }
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, float64(100), resp.Data["totalBooks"])
+	assert.Equal(t, float64(100), resp.Data["total_books"])
 }
 
 func TestHandler_GetDashboard_StoreError(t *testing.T) {
