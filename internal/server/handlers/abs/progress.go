@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
 // last-edited: 2026-09-25
 
@@ -448,12 +448,13 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 // A client-supplied duration is a last-resort fallback only, never a preference.
 func (h *Handler) durationForBook(bookID string, clientDuration *float64) (float64, error) {
 	if h.library != nil {
-		files, err := h.library.GetBookFiles(bookID)
+		// countedBookFiles: the same own-folder rows the mapper lists.
+		book, files, err := countedBookFiles(h.library, bookID)
 		if err != nil {
 			// Fail closed: the duration decides "finished" and the percent;
 			// silently substituting the client's value is not a fallback, it
 			// is a different answer.
-			return 0, fmt.Errorf("%w: files for %s: %w", errBookDurationUnreadable, bookID, err)
+			return 0, fmt.Errorf("%w: %w", errBookDurationUnreadable, err)
 		}
 		if len(files) > 0 {
 			total := 0.0
@@ -463,10 +464,6 @@ func (h *Handler) durationForBook(bookID string, clientDuration *float64) (float
 			if total > 0 {
 				return total, nil
 			}
-		}
-		book, err := h.library.GetBookByID(bookID)
-		if err != nil {
-			return 0, fmt.Errorf("%w: book %s: %w", errBookDurationUnreadable, bookID, err)
 		}
 		if book != nil && book.Duration != nil {
 			return float64(*book.Duration), nil
@@ -487,9 +484,9 @@ func (h *Handler) durationForBook(bookID string, clientDuration *float64) (float
 // slack. A read error is returned (errBookDurationUnreadable), never guessed past.
 func (h *Handler) durationBoundsForBook(bookID string, clientDuration *float64) (duration float64, known bool, fileCount int, err error) {
 	if h.library != nil {
-		files, err := h.library.GetBookFiles(bookID)
+		_, files, err := countedBookFiles(h.library, bookID)
 		if err != nil {
-			return 0, false, 0, fmt.Errorf("%w: files for %s: %w", errBookDurationUnreadable, bookID, err)
+			return 0, false, 0, fmt.Errorf("%w: %w", errBookDurationUnreadable, err)
 		}
 		if len(files) > 0 {
 			total := 0.0

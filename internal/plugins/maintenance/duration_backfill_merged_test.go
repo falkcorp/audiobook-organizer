@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_merged_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b41e7c3-2d58-4a06-bf19-6e35c0d7a284
 // last-edited: 2026-09-25
 
@@ -172,8 +172,19 @@ func TestDurationBackfill_BookIDsReadsOnlyThoseBooks(t *testing.T) {
 // zeroRowsStore is bookWithSegs for one book with the given visibility.
 func zeroRowsStore(t *testing.T, segs []database.BookFile, primary bool, state string, segWrites, bookWrites *int) *database.MockStore {
 	t.Helper()
+	return zeroRowsStoreWith(t, "/lib/B", segs, primary, state, segWrites, bookWrites)
+}
+
+// zeroRowsStoreAt is zeroRowsStore for a visible book at filePath.
+func zeroRowsStoreAt(t *testing.T, filePath string, segs []database.BookFile, segWrites, bookWrites *int) *database.MockStore {
+	t.Helper()
+	return zeroRowsStoreWith(t, filePath, segs, true, "organized", segWrites, bookWrites)
+}
+
+func zeroRowsStoreWith(t *testing.T, filePath string, segs []database.BookFile, primary bool, state string, segWrites, bookWrites *int) *database.MockStore {
+	t.Helper()
 	store := bookWithSegs(t, segs, segWrites, bookWrites)
-	book := database.Book{ID: "b1", Title: "B", FilePath: "/lib/B", Duration: new(3000),
+	book := database.Book{ID: "b1", Title: "B", FilePath: filePath, Duration: new(3000),
 		IsPrimaryVersion: &primary, LibraryState: &state, DurationVerifiedAt: new(time.Now())}
 	store.GetAllBooksFullFromFunc = pageBooksFullFrom([]database.Book{book})
 	return store
@@ -210,17 +221,77 @@ func TestDurationBackfill_ZeroRowsFillsOnlyZeroRows(t *testing.T) {
 	}
 }
 
-// A book whose rows span two folders (duplicate rows) is skipped: summing
-// them after the write is what inflated totals in the full run.
-func TestDurationBackfill_ZeroRowsSkipsMultiDirBooks(t *testing.T) {
+// captureRowWrites records the IDs of every row UpdateBookFiles writes.
+func captureRowWrites(store *database.MockStore) *[]string {
+	var written []string
+	store.UpdateBookFilesFunc = func(_ context.Context, files []*database.BookFile, after func(int, bool)) (int, error) {
+		for i, f := range files {
+			written = append(written, f.ID)
+			if after != nil {
+				after(i, true)
+			}
+		}
+		return len(files), nil
+	}
+	return &written
+}
+
+// A book whose rows span its own folder and other folders gets its own-folder
+// zero rows filled (CD2/ subfolder included); the stray zero rows elsewhere
+// are left untouched, because the ABS duration and RecomputeBookAggregates
+// count only the own-folder rows of such a book.
+func TestDurationBackfill_ZeroRowsFillsOwnFolderOnly(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "s1", BookID: "b1", FilePath: "/itunes/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "s2", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 1800, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "own1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "own2", BookID: "b1", FilePath: "/lib/B/CD2/02.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "own3", BookID: "b1", FilePath: "/lib/B/03.m4b", Duration: 900, AcoustIDFingerprintDurationSec: 900.0},
+		{ID: "stray-old", BookID: "b1", FilePath: "/srv/old/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "stray-itunes", BookID: "b1", FilePath: "/srv/books/itunes/A/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+	}
+	store := zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites)
+	written := captureRowWrites(store)
+	runZeroRows(t, store)
+	if got := *written; len(got) != 2 || got[0] != "own1" || got[1] != "own2" {
+		t.Errorf("zero-rows mode must fill exactly the own-folder zero rows [own1 own2], wrote %v", got)
+	}
+}
+
+// A book with no row in its own folder has no row set ABS would count on its
+// own, so it is skipped rather than filled.
+func TestDurationBackfill_ZeroRowsSkipsBookWithNoOwnFolderRows(t *testing.T) {
+	var segWrites, bookWrites int
+	segs := []database.BookFile{
+		{ID: "s1", BookID: "b1", FilePath: "/srv/old/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "s2", BookID: "b1", FilePath: "/srv/older/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
 	}
 	runZeroRows(t, zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites))
 	if segWrites != 0 || bookWrites != 0 {
-		t.Errorf("multi-dir book must be skipped: segment writes=%d book writes=%d", segWrites, bookWrites)
+		t.Errorf("book with no own-folder rows must be skipped: segment writes=%d book writes=%d", segWrites, bookWrites)
+	}
+}
+
+// books/itunes/** is hands-off: a book whose own folder is in the iTunes tree
+// is never written, whether or not it has rows elsewhere.
+func TestDurationBackfill_ZeroRowsNeverWritesITunesFolder(t *testing.T) {
+	for name, segs := range map[string][]database.BookFile{
+		"itunes only": {
+			{ID: "i1", BookID: "b1", FilePath: "/srv/books/itunes/A/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+			{ID: "i2", BookID: "b1", FilePath: "/srv/books/itunes/A/B/02.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
+		},
+		"itunes own folder with a stray": {
+			{ID: "i1", BookID: "b1", FilePath: "/srv/books/itunes/A/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+			{ID: "s1", BookID: "b1", FilePath: "/srv/old/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var segWrites, bookWrites int
+			store := zeroRowsStoreAt(t, "/srv/books/itunes/A/B", segs, &segWrites, &bookWrites)
+			runZeroRows(t, store)
+			if segWrites != 0 || bookWrites != 0 {
+				t.Errorf("iTunes folder must never be written: segment writes=%d book writes=%d", segWrites, bookWrites)
+			}
+		})
 	}
 }
 

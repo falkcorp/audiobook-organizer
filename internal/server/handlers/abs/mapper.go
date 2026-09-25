@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
-// last-edited: 2026-09-22
+// last-edited: 2026-09-25
 
 package abs
 
@@ -235,6 +235,16 @@ func (h *Handler) loadOneItemView(
 	if err != nil {
 		return nil, fmt.Errorf("load files for %s: %w", book.ID, err)
 	}
+	// A book whose rows span its own folder and somewhere else (the iTunes
+	// copy, the library copy, old chapter files) lists and sums only its
+	// own-folder rows: the other copies are the same content again, and
+	// counting them is what read "Awaken Online: Flame" as 43.7 h instead of
+	// 17.6 h. The filter runs BEFORE the loop, not on the sum alone, so the
+	// track list, start offsets, size and synthesized chapters all describe
+	// the same timeline as DurationSec (§5b). durationFor (userdata.go) and
+	// durationForBook / durationBoundsForBook (progress.go) apply the same
+	// rule through countedBookFiles.
+	files = database.OwnFolderFiles(book, files)
 	// Track order is the playback timeline, so it must be deterministic and it must
 	// match what the listener expects: disc, then track, then path as a last-resort
 	// tiebreak for files with no numbering at all.
@@ -290,6 +300,30 @@ func (h *Handler) loadOneItemView(
 		view.Series = seriesByID[*book.SeriesID]
 	}
 	return view, nil
+}
+
+// absBookFileLoader is the two reads countedBookFiles needs; both the
+// handler's library and the userdata provider's satisfy it.
+type absBookFileLoader interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// countedBookFiles returns the book (nil when it does not exist) and the file
+// rows its ABS duration counts: database.OwnFolderFiles, the same rows
+// loadOneItemView lists. Every ABS duration path must go through this or
+// loadOneItemView — §5b's one-duration rule breaks the moment one of them
+// sums a different set of rows.
+func countedBookFiles(lib absBookFileLoader, bookID string) (*database.Book, []database.BookFile, error) {
+	files, err := lib.GetBookFiles(bookID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("files for %s: %w", bookID, err)
+	}
+	book, err := lib.GetBookByID(bookID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("book %s: %w", bookID, err)
+	}
+	return book, database.OwnFolderFiles(book, files), nil
 }
 
 // loadFileView builds one file's view. syncFileID is resolved by the caller's
