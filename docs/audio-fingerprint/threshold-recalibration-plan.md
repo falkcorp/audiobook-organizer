@@ -1,5 +1,5 @@
 <!-- file: docs/audio-fingerprint/threshold-recalibration-plan.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 8c41e2d7-5a93-4b6f-a0d8-71f3c9e25b14 -->
 <!-- last-edited: 2026-09-25 -->
 
@@ -126,9 +126,10 @@ What the code does today:
   `LSHIndexVersion` (0x02, **not bumped by the fix**).
 - As a result, `fpidx:` rows written from legacy prints before 2026-09-19
   **stay in the index**. Nothing purges them.
-- `LookupAcoustIDCandidates` ranks by band-hit count and applies the
-  `MaxCandidates` cap (200) **before** `CollectLSHAcoustID` filters out
-  legacy candidates. A garbage row that reaches `LSHMinBandHits` can therefore
+- `PebbleStore.LSHProbe` (`pebble_store_lsh.go`), which `CollectLSHAcoustID`
+  calls, ranks by band-hit count and applies the `MaxCandidates` cap (200)
+  **before** the collector filters out legacy candidates.
+  `LookupAcoustIDCandidates` caps the same way. A garbage row that reaches `LSHMinBandHits` can therefore
   take a slot from a real candidate.
 - Subprints of random bitstream rarely collide with real ones, so the
   exposure is small but not zero.
@@ -168,8 +169,11 @@ sides are current-era:
 
 **Scores.** For each pair, compute `WholeFileSimilarity` (Group A) and
 `BookSignatureSimilarityMasked` with its overlap (Group B). The inputs are
-stored bytes, so there is no audio decoding. Export the prints read-only
-through the API and compute on the Mac; do not add CPU load on U0.
+stored bytes, so there is no audio decoding, and the U0 decode ban does not
+cover it. The Mac is still preferred so U0 carries no extra CPU load.
+**No endpoint returns raw `AcoustIDFingerprint` bytes today.** Add a
+read-only export (current-era rows plus labels) or a small op that emits
+per-pair scores.
 
 **Sweep.** Reuse the shape of `dedup.calibrate-composite` and
 `dedup.calibrate-embedding-thresholds`:
