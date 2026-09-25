@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/check-errcheck-ratchet.sh
-# version: 1.0.0
+# version: 1.1.0
 # guid: 9c3e7a1d-5b48-4f0a-8e6c-2d1a9f7b3c05
 # last-edited: 2026-09-25
 #
@@ -9,7 +9,7 @@
 #
 # Why a ratchet and not a plain pass/fail gate: Wave 0 of the silent-failure
 # sweep (docs/audits/2026-08-11-silent-failure-error-discards.md) wired errcheck
-# into .golangci.yml with the bucket-(f) exclude list, but left ~834 pre-existing
+# into .golangci.yml with the bucket-(f) exclude list, but left ~838 pre-existing
 # findings unfixed on purpose -- fixing them one at a time is waves 4-13. A bare
 # `golangci-lint run --enable-only errcheck` is permanently red at that count and
 # gets switched off by whoever sees it next (the exact failure mode
@@ -17,7 +17,24 @@
 # UP" instead of "are there any findings", so it can gate from day one while the
 # backlog is paid down wave by wave -- same shape as interface-width, which
 # solved the identical problem for interfacebloat.
+#
+# Why GOOS/GOARCH are pinned below: this codebase has several build-tagged
+# files (internal/fileops/reflink_{darwin,linux}.go,
+# internal/sysinfo/{memory,uptime}_{darwin,linux}.go, etc.), and errcheck
+# findings inside them are only visible under the GOOS that selects that file.
+# CI runs on ubuntu-latest. Measured 2026-09-25 on this tree: a plain darwin
+# run (a developer's Mac) reports 834; `GOOS=linux GOARCH=amd64` reports 838 --
+# four more, all inside *_linux.go files a darwin toolchain never loads
+# (internal/fileops/reflink_linux.go:40,51,
+# internal/sysinfo/memory_linux.go:22,47). No *_darwin.go file contributed a
+# finding on either side. Pinning GOOS/GOARCH here means this script reports
+# the same number CI will, regardless of which OS runs it -- without the pin,
+# .errcheck-baseline would need two numbers, and every darwin run would
+# spuriously report "went DOWN" against the linux-measured baseline.
 set -euo pipefail
+
+export GOOS=linux
+export GOARCH=amd64
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
