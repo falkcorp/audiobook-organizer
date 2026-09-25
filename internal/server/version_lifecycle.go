@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 //
 // Version lifecycle HTTP handlers. Core logic lives in internal/versions.
 
@@ -140,7 +140,17 @@ func CleanupTrashedVersions(store trashedVersionCleaner) (purged int) {
 }
 
 // registerVersionLifecycleRoutes wires the version lifecycle endpoints.
+//
+// Canonical noun is /audiobooks/, matching every other per-book version
+// route (see wire_library_routes.go's /audiobooks/:id/versions); the
+// /books/:id/versions/:vid/... paths are kept registered as DEPRECATED
+// aliases to the same handlers (naming-audit 2026-09-25, class 1:
+// docs/audits/2026-09-25-interface-naming-consistency.md).
 func (s *Server) registerVersionLifecycleRoutes(protected *gin.RouterGroup) {
+	protected.DELETE("/audiobooks/:id/versions/:vid", s.perm(auth.PermLibraryDelete), s.handleTrashVersion)
+	protected.POST("/audiobooks/:id/versions/:vid/restore", s.perm(auth.PermLibraryOrganize), s.handleRestoreVersion)
+	protected.POST("/audiobooks/:id/versions/:vid/purge-now", s.perm(auth.PermLibraryDelete), s.handlePurgeVersion)
+	// Deprecated aliases — DO NOT remove without a deprecation window.
 	protected.DELETE("/books/:id/versions/:vid", s.perm(auth.PermLibraryDelete), s.handleTrashVersion)
 	protected.POST("/books/:id/versions/:vid/restore", s.perm(auth.PermLibraryOrganize), s.handleRestoreVersion)
 	protected.POST("/books/:id/versions/:vid/purge-now", s.perm(auth.PermLibraryDelete), s.handlePurgeVersion)
