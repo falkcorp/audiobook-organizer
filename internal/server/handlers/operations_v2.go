@@ -825,11 +825,11 @@ func (h *OperationsV2Handler) GetOpDef(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "op-def", id)
 		return
 	}
-	for _, d := range h.registry.ActiveDefs() {
-		if d.ID == id {
-			httputil.RespondWithOK(c, gin.H{"def": defToResponse(d)})
-			return
-		}
+	// Def resolves a former (renamed) ID, so a UI link or script naming the old
+	// ID still gets the def; the response carries the canonical def.ID.
+	if d, ok := h.registry.Def(id); ok {
+		httputil.RespondWithOK(c, gin.H{"def": defToResponse(d)})
+		return
 	}
 	httputil.RespondWithNotFound(c, "op-def", id)
 }

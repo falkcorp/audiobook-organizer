@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package handlers_test
 
@@ -69,7 +69,7 @@ func TestOperationsV2Handler_GetOperationTimeline_Success(t *testing.T) {
 		{ID: "op1", DefID: "library.scan", Status: "queued"},
 	}, nil)
 	// Timeline calls displayNameFor + notifyLevelFor → ActiveDefs (status != running, so no GetCurrentItem).
-	registry.EXPECT().ActiveDefs().Return([]opsregistry.OperationDef{
+	expectRegisteredDefs(registry, []opsregistry.OperationDef{
 		{ID: "library.scan", DisplayName: "Library Scan"},
 	})
 
@@ -106,7 +106,7 @@ func TestOperationsV2Handler_GetOperationV2_Success(t *testing.T) {
 	store.EXPECT().GetOpLogsV2("op1", 50).Return([]database.OpLogV2Row{
 		{OperationID: "op1", Level: "info", Message: "done", Attrs: "{}"},
 	}, nil)
-	registry.EXPECT().ActiveDefs().Return([]opsregistry.OperationDef{
+	expectRegisteredDefs(registry, []opsregistry.OperationDef{
 		{ID: "library.scan", DisplayName: "Library Scan"},
 	})
 
@@ -237,7 +237,7 @@ func TestOperationsV2Handler_ListOpDefs_NilRegistry(t *testing.T) {
 
 func TestOperationsV2Handler_ListOpDefs_Success(t *testing.T) {
 	registry := handlersmocks.NewMockOperationsRegistry(t)
-	registry.EXPECT().ActiveDefs().Return([]opsregistry.OperationDef{
+	expectRegisteredDefs(registry, []opsregistry.OperationDef{
 		{ID: "library.scan", DisplayName: "Library Scan"},
 	})
 
@@ -261,7 +261,7 @@ func TestOperationsV2Handler_GetOpDef_NilRegistry(t *testing.T) {
 
 func TestOperationsV2Handler_GetOpDef_Found(t *testing.T) {
 	registry := handlersmocks.NewMockOperationsRegistry(t)
-	registry.EXPECT().ActiveDefs().Return([]opsregistry.OperationDef{
+	expectRegisteredDefs(registry, []opsregistry.OperationDef{
 		{ID: "library.scan", DisplayName: "Library Scan"},
 	})
 
@@ -275,7 +275,7 @@ func TestOperationsV2Handler_GetOpDef_Found(t *testing.T) {
 
 func TestOperationsV2Handler_GetOpDef_NotFound(t *testing.T) {
 	registry := handlersmocks.NewMockOperationsRegistry(t)
-	registry.EXPECT().ActiveDefs().Return([]opsregistry.OperationDef{
+	expectRegisteredDefs(registry, []opsregistry.OperationDef{
 		{ID: "library.scan", DisplayName: "Library Scan"},
 	})
 
