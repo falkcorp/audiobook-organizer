@@ -1,7 +1,7 @@
 // file: src/services/api.test.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
@@ -36,7 +36,7 @@ describe('api import paths', () => {
       new Response(
         JSON.stringify({
           data: {
-            importPaths: [
+            import_paths: [
               {
                 id: 1,
                 path: '/tmp',
@@ -74,7 +74,7 @@ describe('api import paths', () => {
       new Response(
         JSON.stringify({
           data: {
-            importPath: {
+            import_path: {
               id: 2,
               path: '/new',
               name: 'New',
@@ -104,7 +104,7 @@ describe('api import paths', () => {
       new Response(
         JSON.stringify({
           data: {
-            importPath: {
+            import_path: {
               id: 3,
               path: '/detailed',
               name: 'Detailed',
