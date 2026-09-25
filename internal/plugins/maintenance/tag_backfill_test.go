@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 5b6e7f4a-9c1d-4e0a-8f2b-3a6d1c9e5b70
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -336,7 +336,7 @@ func TestTagBackfill_ParallelProducesSameResultAsSerial(t *testing.T) {
 	}
 
 	reporter := &fakeReporter{}
-	raw, err := json.Marshal(tagBackfillParams{DryRun: false})
+	raw, err := json.Marshal(tagBackfillParams{DryRun: boolPtr(false)})
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}
@@ -626,7 +626,7 @@ func TestTagBackfill_DryRunWritesNothingAndCounts(t *testing.T) {
 		"c1.mp3": tagMeta(1, 3, 0, 0), "c2.mp3": tagMeta(2, 3, 0, 0),
 		"d1.mp3": tagMeta(2, 2, 0, 0),
 	})
-	summary := fx.run(tagBackfillParams{DryRun: true})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(true)})
 	if len(fx.batches) != 0 {
 		t.Fatalf("dry run wrote %d batches", len(fx.batches))
 	}

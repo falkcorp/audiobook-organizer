@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
 // last-edited: 2026-09-25
 
@@ -107,6 +107,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -166,16 +167,7 @@ type rfParams struct {
 }
 
 func (p rfParams) dryRun() (bool, error) {
-	if p.DryRun != nil && p.DryRunSnake != nil && *p.DryRun != *p.DryRunSnake {
-		return true, fmt.Errorf("dryRun=%v and dry_run=%v disagree; send one", *p.DryRun, *p.DryRunSnake)
-	}
-	if p.DryRun != nil {
-		return *p.DryRun, nil
-	}
-	if p.DryRunSnake != nil {
-		return *p.DryRunSnake, nil
-	}
-	return true, nil
+	return opmode.ResolveDryRun("maintenance.repoint-missing-to-folder-audio", p.DryRunSnake, p.DryRun)
 }
 
 func (p rfParams) bookIDs() []string {
