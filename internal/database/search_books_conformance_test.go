@@ -1,7 +1,7 @@
 // file: internal/database/search_books_conformance_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e9a1f77-63b2-4c05-8ad1-9b52e7c30f6a
-// last-edited: 2026-09-08
+// last-edited: 2026-09-25
 
 package database
 
@@ -176,10 +176,11 @@ func TestSearchBooks_MemDBAndPebbleAgree(t *testing.T) {
 		require.Empty(t, got[false], "pebble returned hits for a query nothing matches")
 	})
 
-	// The load-bearing ordering claim. memdb's id index and Pebble's book:
-	// keyspace must iterate in the same order, or the limit early-exit keeps a
-	// DIFFERENT subset on each path — and since ABS search does not paginate,
-	// whatever the fast path drops is unreachable.
+	// The load-bearing ordering claim. Both paths rank every match with the
+	// shared SearchRank order (tier, title length, ID) and cut to limit AFTER
+	// ranking; if they ranked differently, the limit would keep a DIFFERENT
+	// subset on each path — and since ABS search does not paginate, whatever
+	// the fast path drops is unreachable.
 	t.Run("limit truncates to the same rows in the same order", func(t *testing.T) {
 		for limit := 1; limit <= 3; limit++ {
 			got := searchBothWays(t, p, "needlemark", limit, 0)
@@ -190,8 +191,8 @@ func TestSearchBooks_MemDBAndPebbleAgree(t *testing.T) {
 		}
 	})
 
-	// offset counts MATCHES, not books scanned — `count++` sits inside the match
-	// branch in the Pebble loop. A rewrite using slice indices would differ.
+	// offset counts MATCHES in ranked order, not books scanned: the shared
+	// searchRanker drops the first `offset` ranked matches on both paths.
 	t.Run("offset skips matches, not books", func(t *testing.T) {
 		for offset := range 3 {
 			got := searchBothWays(t, p, "needlemark", 0, offset)

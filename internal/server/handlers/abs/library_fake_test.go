@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-25
 
@@ -832,20 +832,39 @@ func (f *fakeLibrary) mergeLoser(t *testing.T, loserBookID, winnerBookID string)
 
 // SearchBooksFiltered mirrors the store: the visibility filter is applied
 // BEFORE a match counts toward limit, and matches are put in the store's
-// relevance order (database.RankSubstringMatches) before offset and limit cut.
-// The fake matches on title only (no author map), as before.
+// relevance order (database.SubstringSearchRank) before offset and limit cut.
+// The fake passes no author map, so it matches title and narrator (the store
+// also matches the primary author's name).
 func (f *fakeLibrary) SearchBooksFiltered(query string, limit, offset int, fl database.BookSummaryFilter) ([]database.Book, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.searchScans++
-	admitted := []database.Book{}
-	for _, id := range f.order {
+	// The store's final tie-break is the book ID, which in production is a
+	// ULID and therefore creation order. The fake's IDs are hand-written
+	// ("01SINGLEFILE...", "01MULTIFILE...") and do not sort in insertion order,
+	// so the fake substitutes its insertion index for the ID when ranking —
+	// the same creation-order tie-break the store gets from real ULIDs.
+	type hit struct {
+		rank database.SearchRank
+		book database.Book
+	}
+	q := strings.ToLower(query)
+	hits := []hit{}
+	for pos, id := range f.order {
 		b := f.books[id]
-		if f.matchesFilter(b, database.BookSummary{}, fl) {
-			admitted = append(admitted, *b)
+		if !f.matchesFilter(b, database.BookSummary{}, fl) {
+			continue
+		}
+		if r, ok := database.SubstringSearchRank(b.ID, b.Title, b.Narrator, b.AuthorID, nil, q); ok {
+			r.ID = fmt.Sprintf("%010d", pos)
+			hits = append(hits, hit{rank: r, book: *b})
 		}
 	}
-	ranked := database.RankSubstringMatches(admitted, nil, strings.ToLower(query))
+	sort.Slice(hits, func(i, j int) bool { return hits[i].rank.Less(hits[j].rank) })
+	ranked := make([]database.Book, 0, len(hits))
+	for _, h := range hits {
+		ranked = append(ranked, h.book)
+	}
 	offset = max(offset, 0)
 	if offset > len(ranked) {
 		offset = len(ranked)

@@ -1,7 +1,7 @@
 // file: internal/database/search_books_filtered_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d9d7272-0eb0-4b4c-8b28-90e895f4e6fd
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package database
 
@@ -38,7 +38,9 @@ func TestSearchBooksFiltered_LimitCountsAdmittedHitsOnly(t *testing.T) {
 		require.NoError(t, err)
 		return created.ID
 	}
-	// Hidden first, so they sort first in ULID order.
+	// Hidden first: each hidden title is no longer than the visible ones and
+	// has an earlier ID, so in SearchRank order (tier, title length, ID) every
+	// hidden row ranks ahead of both visible rows.
 	mk("Needle loser", func(b *Book) { b.IsPrimaryVersion = &no; b.LibraryState = &source })
 	mk("Needle source copy", func(b *Book) { b.LibraryState = &source })
 	mk("Needle non-primary", func(b *Book) { b.IsPrimaryVersion = &no })
