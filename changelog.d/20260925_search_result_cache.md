@@ -1,0 +1,5 @@
+- Library search results are cached: each distinct search is run once and every page after it, and every repeat, is served from the cached list (about 0.8 ms instead of about 100 ms per page on a 100k-book test library), with an exact match count. Book, author, series and tag changes show up on the next search. `search.result_cache.enabled` (default on) switches it off; `search.result_cache.max_bytes` (default 128 MiB) caps its memory.
+- A search that takes longer than 20 seconds keeps running when the page is closed. The Library shows its spinner and picks up the result when it is ready, instead of the request being cut off.
+- The quick search returns every match instead of stopping at 50.
+- Audiobookshelf-app search results use the same cache, and a book edit shows up on the next search instead of up to 2 minutes later.
+- Renaming an author or series, changing a book's tags, and file changes that update a book's duration now refresh library search. Before, search kept finding the book under the old values until a later edit to that book.
