@@ -1,5 +1,5 @@
 // file: internal/server/handlers/admindebug/handler_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 553f618b-e6c3-4b54-ad05-30f3d39136b9
 // last-edited: 2026-09-25
 
@@ -222,7 +222,7 @@ func TestUndo_RefusedAfterLaterChangeUnlessForced(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w, out := do(t, r, http.MethodPost, "/api/v1/admin/debug/edits/"+editID+"/undo", "")
+	w, _ := do(t, r, http.MethodPost, "/api/v1/admin/debug/edits/"+editID+"/undo", "")
 	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 	require.Equal(t, 50000, fx.fileDuration(t, fx.broken), "a refused undo wrote the row")
 	require.Len(t, fx.activity.all(), 1, "a refused undo wrote an audit row")
