@@ -1339,7 +1339,7 @@ export async function searchBooksPage(
     is_primary_version: 'true',
   });
   if (showFailed) params.set('show_quarantined', 'true');
-  const response = await apiFetch(`${API_BASE}/audiobooks?${params}`, { signal });
+  const response = await fetchListWithSearchPoll(`${API_BASE}/audiobooks?${params}`, signal);
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to search books');
   }
