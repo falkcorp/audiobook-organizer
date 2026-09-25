@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps_triage_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 858930a2-ded4-48a8-9404-abc75c5bd103
-// last-edited: 2026-07-18
+// last-edited: 2026-09-25
 
 package server
 
@@ -203,4 +203,48 @@ func TestDedupTriageExactPending_Apply_SecondRunDoesNotRecountDismissed(t *testi
 			require.Equal(t, "pending", got.Status)
 		}
 	}
+}
+
+// TestDedupTriageExactPending_Apply_KeepsManualStub proves a manual candidate
+// is classified and counted like any other but never dismissed. A rowless shell
+// book classifies as a stub, which is exactly the pair a human enqueues to
+// review. The scanner-layer control of the same shape IS dismissed, so the
+// fixture provably reaches the dismiss branch.
+func TestDedupTriageExactPending_Apply_KeepsManualStub(t *testing.T) {
+	embStore := newTriageTestEmbeddingStore(t)
+	books := map[string]database.Book{
+		"m-a": t03TriageBook("m-a", "Shell Pair", 10*1024*1024, 3600, ""),
+		"m-b": t03TriageBook("m-b", "Shell Pair", 100, 1, ""),
+		"c-a": t03TriageBook("c-a", "Stub Pair A", 10*1024*1024, 3600, ""),
+		"c-b": t03TriageBook("c-b", "Stub Pair B", 100, 1, ""),
+	}
+	srv := &Server{store: &database.MockStore{
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			b, ok := books[id]
+			if !ok {
+				return nil, nil
+			}
+			return &b, nil
+		},
+	}, embeddingStore: embStore}
+
+	manual, err := embStore.EnqueueManualCandidate("book", "m-a", "m-b", "shell")
+	require.NoError(t, err)
+	ctlID, _, err := embStore.UpsertCandidateNew(database.DedupCandidate{
+		EntityType: "book", EntityAID: "c-a", EntityBID: "c-b",
+		Layer: "exact", ScoreBreakdown: t03SoftSignalBreakdown(),
+	})
+	require.NoError(t, err)
+
+	report, err := srv.DedupTriageExactPending(context.Background(), true)
+	require.NoError(t, err)
+	require.Equal(t, 2, report.PurgeableCount, "both pairs classify purgeable")
+	require.Equal(t, 1, report.DismissedCount, "only the scanner control is dismissed")
+
+	ctl, err := embStore.GetCandidateByID(ctlID)
+	require.NoError(t, err)
+	require.Equal(t, "dismissed", ctl.Status)
+	got, err := embStore.GetCandidateByID(manual.Candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", got.Status)
 }

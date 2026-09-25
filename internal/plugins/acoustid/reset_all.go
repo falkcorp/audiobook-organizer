@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package acoustid
 
@@ -180,6 +180,11 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 
 		if len(allCands) > 0 {
 			if derr := registry.RunItems(ctx, reporter, allCands, func(_ context.Context, c database.DedupCandidate) error {
+				// A pinned manual candidate keeps its acoustid layer. Resetting
+				// fingerprints does not withdraw a human's review request.
+				if database.IsManualCandidate(c) {
+					return nil
+				}
 				if err := p.embeddingStore.DeleteCandidate(c.ID); err != nil {
 					log.Warn("acoustid reset-all: delete candidate failed", "id", c.ID, "err", err)
 					return nil

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/breakdown_backfill.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: ec0f5e9d-2f6d-485d-9f24-ad3d917d1834
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 // Package dedup — op dedup.breakdown-backfill.
 //
@@ -189,6 +189,7 @@ type breakdownBackfillReport struct {
 	Apply               bool           `json:"apply"`
 	TotalPending        int            `json:"total_pending"`
 	SkippedHasBreakdown int            `json:"skipped_has_breakdown"`
+	SkippedManual       int            `json:"skipped_manual"`
 	Targets             int            `json:"targets"`
 	Processed           int            `json:"processed"`
 	Backfilled          int            `json:"backfilled"`
@@ -324,6 +325,7 @@ func runBreakdownBackfillWith(
 
 	// --- Partition: already-scored rows are skipped, the rest are targets ---
 	skippedHasBreakdown := 0
+	skippedManual := 0
 	groupByA := make(map[string]*backfillGroup)
 	targets := 0
 	missingSignalCounts := map[string]int{}
@@ -331,6 +333,13 @@ func runBreakdownBackfillWith(
 		c := &cands[i]
 		if c.ScoreBreakdown != nil && len(c.ScoreBreakdown.Signals) > 0 {
 			skippedHasBreakdown++
+			continue
+		}
+		// A manual candidate stays unscored, as the unified scan leaves it: a
+		// band is what auto-resolve and band-scoped bulk merge select on, and
+		// a human asked to decide this pair.
+		if database.IsManualCandidate(*c) {
+			skippedManual++
 			continue
 		}
 		ref := backfillRef{candID: c.ID, otherID: c.EntityBID}
@@ -364,6 +373,7 @@ func runBreakdownBackfillWith(
 		"apply", params.Apply,
 		"total_pending", len(cands),
 		"skipped_has_breakdown", skippedHasBreakdown,
+		"skipped_manual", skippedManual,
 		"targets", targets,
 		"a_groups", len(groups),
 		"workers", runtime.NumCPU(),
@@ -521,6 +531,7 @@ func runBreakdownBackfillWith(
 		Apply:               params.Apply,
 		TotalPending:        len(cands),
 		SkippedHasBreakdown: skippedHasBreakdown,
+		SkippedManual:       skippedManual,
 		Targets:             targets,
 		Processed:           processed,
 		Backfilled:          backfilled,

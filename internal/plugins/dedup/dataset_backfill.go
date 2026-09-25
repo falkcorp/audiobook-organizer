@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/dataset_backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2d6f8a13-7c40-4e92-8b15-9a3e5c7d2f64
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 
 // Package dedup — op dedup.dataset-backfill (spec C4 backfill).
 //
@@ -271,7 +271,9 @@ func runDatasetBackfillWith(
 			// write actually succeeded. On an upsert failure the candidate
 			// stays "pending" for retry — dismissing it here would leave the
 			// label unwritten AND the candidate unreachable for re-examination.
-			if upsertOK && ex.Label == "not_dup" {
+			// A manual candidate is never dismissed by a catcher: a human
+			// enqueued it to decide it. Its example is still labeled above.
+			if upsertOK && ex.Label == "not_dup" && !database.IsManualCandidate(c) {
 				if err := embStore.UpdateCandidateStatus(c.ID, "dismissed"); err != nil {
 					reporter.Logger().Error("dataset-backfill: suppress error",
 						"candidate_id", c.ID, "error", err)

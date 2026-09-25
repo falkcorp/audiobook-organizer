@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package dedup
 
@@ -223,6 +223,10 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 // Returns (true, humanReason) only when EVERY guard holds. The reason string is
 // surfaced in the audit sample so an operator can see why each pair qualified.
 func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *database.Book) (bool, string) {
+	// A human enqueued (or pinned) this pair so that a human decides it.
+	if database.IsManualCandidate(c) {
+		return false, "manual candidate: enqueued for human review"
+	}
 	if c.Band != unified.BandCertain {
 		return false, "band is not CERTAIN"
 	}

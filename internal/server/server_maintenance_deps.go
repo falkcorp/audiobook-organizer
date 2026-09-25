@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -577,7 +577,10 @@ func (s *Server) DedupTriageExactPending(ctx context.Context, apply bool) (*main
 		ps := pops[cls]
 		ps.count++
 
-		if apply && maintenanceplugin.IsPurgeable(cls) {
+		// A manual candidate is classified and reported like any other but
+		// never dismissed: a rowless shell book classifies as a stub, which is
+		// exactly the pair a human enqueues to look at.
+		if apply && maintenanceplugin.IsPurgeable(cls) && !database.IsManualCandidate(c) {
 			if derr := s.embeddingStore.UpdateCandidateStatus(c.ID, "dismissed"); derr != nil {
 				dismissErrs++
 				if firstDismissErr == nil {

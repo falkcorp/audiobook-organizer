@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -132,6 +132,8 @@ func New(
 //	entity_id   — restrict to candidates where EITHER side of the pair is this
 //	             entity ("this book's duplicates"). Filtered at scan level, so
 //	             "total" reflects the whole matching set, not one page.
+//	source      — "manual" lists hand-enqueued candidates (POST /dedup/candidates),
+//	             including pinned scanner rows
 //	include_breakdown=true — include score_breakdown (full signal array)
 //	                         in each row; default false (payload savings)
 //	limit (int, default 50), offset (int) — pagination
@@ -179,6 +181,12 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	// candidate sat on page 2 showed an empty list under a banner naming it.
 	if v := c.Query("entity_id"); v != "" {
 		filter.EntityID = v
+	}
+	// source=manual lists the hand-enqueued candidates, including scanner
+	// rows a human pinned (those keep their scanner layer, so layer=manual
+	// alone would miss them).
+	if v := c.Query("source"); v != "" {
+		filter.Source = v
 	}
 	// q is the panel's free-text search. Until this existed the search box
 	// filtered only the rows already fetched -- 50 of 40,251 candidates in
@@ -311,6 +319,8 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 			"updated_at":      cand.UpdatedAt,
 			"band":            cand.Band,
 			"formula_version": cand.FormulaVersion,
+			"source":          cand.Source,
+			"source_note":     cand.SourceNote,
 		}
 		// Surface top-level score (avoids T017 having to unpack score_breakdown).
 		if cand.ScoreBreakdown != nil {

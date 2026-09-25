@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupEmbeddingTab.tsx
-// version: 1.3.2
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567891
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -87,6 +87,8 @@ const LAYER_COLORS: Record<string, 'error' | 'primary' | 'secondary'> = {
   exact: 'error',
   embedding: 'primary',
   llm: 'secondary',
+  // Hand-enqueued for review (POST /dedup/candidates).
+  manual: 'secondary',
 };
 
 /**

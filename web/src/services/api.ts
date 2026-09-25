@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.121.2
+// version: 2.122.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -5678,7 +5678,8 @@ export interface DedupCandidate {
   entity_type: 'book' | 'author';
   entity_a_id: string;
   entity_b_id: string;
-  layer: 'exact' | 'embedding' | 'llm';
+  // 'manual' = a pair a human enqueued via POST /dedup/candidates.
+  layer: 'exact' | 'embedding' | 'llm' | 'manual';
   similarity?: number;
   llm_verdict?: string;
   llm_reason?: string;
@@ -5690,6 +5691,11 @@ export interface DedupCandidate {
   formula_version?: string;
   score?: number;
   score_breakdown?: DedupScoreBreakdown;
+  // 'manual' when a human enqueued or pinned the pair for review; such rows
+  // are exempt from automated purge / auto-merge passes. source_note is the
+  // reason they gave.
+  source?: string;
+  source_note?: string;
   // Inline book enrichment, populated only when getDedupCandidates is called
   // with include_books=true. Lets the unified UI render rich cards
   // (title/author/path/metadata-quality) without per-book getBook() fetches.

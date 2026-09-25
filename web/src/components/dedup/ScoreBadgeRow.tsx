@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/ScoreBadgeRow.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: c2b3d4e5-f6a7-8901-bcde-cb2345678901
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 
 // ScoreBadgeRow renders a compact row of band + score chips for a candidate.
 // Used inside the candidate table and the comparison drawer header.
@@ -22,6 +22,8 @@ interface ScoreBadgeRowProps {
 const NOTABLE_LAYER_COLORS: Record<string, 'primary' | 'secondary' | 'default'> = {
   embedding: 'primary',
   llm: 'secondary',
+  // A pair a human enqueued for review (POST /dedup/candidates).
+  manual: 'default',
 };
 
 export function ScoreBadgeRow({ band, score, layer, similarity }: ScoreBadgeRowProps) {
