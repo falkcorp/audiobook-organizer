@@ -387,7 +387,7 @@ func TestTagBackfill_AllTrackOneKeepsPositions(t *testing.T) {
 	}, map[string]metadata.Metadata{
 		"a1.mp3": tagMeta(1, 1, 0, 0), "a2.mp3": tagMeta(1, 1, 0, 0), "a3.mp3": tagMeta(1, 1, 0, 0),
 	})
-	summary := fx.run(tagBackfillParams{})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	for i, id := range []string{"a1", "a2", "a3"} {
 		f := fx.row(id)
 		if len(f.RawTags) == 0 {
@@ -415,7 +415,7 @@ func TestTagBackfill_DistinctTagTracksAreTaken(t *testing.T) {
 	}, map[string]metadata.Metadata{
 		"b1.mp3": tagMeta(4, 4, 0, 0), "b2.mp3": tagMeta(2, 4, 0, 0), "b3.mp3": tagMeta(3, 4, 0, 0),
 	})
-	summary := fx.run(tagBackfillParams{})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	for id, want := range map[string]int{"b1": 4, "b2": 2, "b3": 3, "b4": 1} {
 		if f := fx.row(id); f.TrackNumber != want || f.TrackCount != 4 {
 			t.Errorf("%s: track = %d/%d, want %d/4", id, f.TrackNumber, f.TrackCount, want)
@@ -430,7 +430,7 @@ func TestTagBackfill_TaggedSiblingCollisionRefuses(t *testing.T) {
 		{ID: "s1", BookID: "S", TrackNumber: 1},
 		{ID: "s2", BookID: "S", TrackNumber: 2, RawTags: map[string]string{"TRCK": "1"}},
 	}, map[string]metadata.Metadata{"s1.mp3": tagMeta(1, 2, 0, 0)})
-	summary := fx.run(tagBackfillParams{})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	if f := fx.row("s1"); f.TrackNumber != 1 || f.TrackCount != 0 || len(f.RawTags) == 0 {
 		t.Fatalf("s1 should get RawTags only, got %+v", f)
 	}
@@ -449,7 +449,7 @@ func TestTagBackfill_MissingTrackTagKeepsPositions(t *testing.T) {
 	}, map[string]metadata.Metadata{
 		"c1.mp3": tagMeta(7, 9, 0, 0), "c2.mp3": tagMeta(8, 9, 0, 0), "c3.mp3": tagMeta(0, 0, 0, 0),
 	})
-	summary := fx.run(tagBackfillParams{})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	for i, id := range []string{"c1", "c2", "c3"} {
 		f := fx.row(id)
 		if len(f.RawTags) == 0 {
@@ -476,7 +476,7 @@ func TestTagBackfill_MultiDiscPairs(t *testing.T) {
 		"x1.mp3": tagMeta(1, 2, 1, 2), "x2.mp3": tagMeta(2, 2, 1, 2),
 		"x3.mp3": tagMeta(1, 2, 2, 2), "x4.mp3": tagMeta(1, 2, 2, 2),
 	})
-	summary := fx.run(tagBackfillParams{})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	for id, want := range map[string][2]int{"m1": {1, 1}, "m2": {1, 2}, "m3": {2, 1}, "m4": {2, 2}} {
 		f := fx.row(id)
 		assertPosition(t, f, want[0], want[1])
@@ -501,7 +501,7 @@ func TestTagBackfill_NoDiscTagClearsStoredDisc(t *testing.T) {
 		{ID: "n1", BookID: "N", DiscNumber: 1, DiscCount: 1, TrackNumber: 1},
 		{ID: "n2", BookID: "N", DiscNumber: 1, DiscCount: 1, TrackNumber: 2},
 	}, map[string]metadata.Metadata{"n1.mp3": tagMeta(2, 2, 0, 0), "n2.mp3": tagMeta(1, 2, 0, 0)})
-	fx.run(tagBackfillParams{})
+	fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	for id, track := range map[string]int{"n1": 2, "n2": 1} {
 		f := fx.row(id)
 		assertPosition(t, f, 0, track)
@@ -532,7 +532,7 @@ func TestTagBackfill_SecondRunRenumbersSiblings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s1 := fx.run(tagBackfillParams{})
+	s1 := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	for i := 1; i <= 10; i++ {
 		id := fmt.Sprintf("t%02d", i)
 		assertPosition(t, fx.row(id), 0, i)
@@ -543,7 +543,7 @@ func TestTagBackfill_SecondRunRenumbersSiblings(t *testing.T) {
 	assertSummaryHas(t, s1, "read-rawtags-only=9", "books-refused-missing=1", "missing-on-disk=1", "siblings-renumbered=0")
 
 	mustWriteFile(t, fx.path("t03"))
-	s2 := fx.run(tagBackfillParams{})
+	s2 := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	for id, p := range want {
 		assertPosition(t, fx.row(id), p.disc, p.track)
 	}
@@ -573,7 +573,7 @@ func TestTagBackfill_LimitWindowRefuses(t *testing.T) {
 		{ID: "L2", BookID: "L", TrackNumber: 2},
 		{ID: "L3", BookID: "L", TrackNumber: 3},
 	}, map[string]metadata.Metadata{"L1.mp3": tagMeta(3, 3, 0, 0), "L2.mp3": tagMeta(1, 3, 0, 0), "L3.mp3": tagMeta(2, 3, 0, 0)})
-	summary := fx.run(tagBackfillParams{Limit: 2})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false), Limit: 2})
 	assertPosition(t, fx.row("L1"), 0, 1)
 	assertPosition(t, fx.row("L2"), 0, 2)
 	if fx.writtenIDs()["L3"] {
@@ -586,7 +586,7 @@ func TestTagBackfill_LimitWindowRefuses(t *testing.T) {
 func TestTagBackfill_SingleFileBookTakesTag(t *testing.T) {
 	fx := newTagFixture(t, []database.BookFile{{ID: "one", BookID: "ONE", TrackNumber: 1}},
 		map[string]metadata.Metadata{"one.mp3": tagMeta(3, 12, 0, 0)})
-	summary := fx.run(tagBackfillParams{})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	if f := fx.row("one"); f.TrackNumber != 3 || f.TrackCount != 12 {
 		t.Errorf("single-file book: track = %d/%d, want 3/12", f.TrackNumber, f.TrackCount)
 	}
@@ -602,7 +602,7 @@ func TestTagBackfill_MP4SiblingKeys(t *testing.T) {
 		{ID: "q1", BookID: "Q", TrackNumber: 1},
 		{ID: "q2", BookID: "Q", TrackNumber: 2, RawTags: map[string]string{"trkn": "1", "disk": "1"}},
 	}, map[string]metadata.Metadata{"p1.mp3": tagMeta(1, 2, 1, 1), "q1.mp3": tagMeta(1, 2, 1, 1)})
-	summary := fx.run(tagBackfillParams{})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	assertPosition(t, fx.row("p1"), 1, 1)
 	assertPosition(t, fx.row("p2"), 1, 2)
 	assertPosition(t, fx.row("q1"), 0, 1)
@@ -656,7 +656,7 @@ func TestTagBackfill_WritesInBoundedBatches(t *testing.T) {
 		tags[id+".mp3"] = tagMeta(i+1, 5, 0, 0)
 	}
 	fx := newTagFixture(t, files, tags)
-	summary := fx.run(tagBackfillParams{})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 
 	bookOf := map[string]string{}
 	for _, f := range files {
@@ -728,7 +728,7 @@ func TestTagBackfill_CancelFlushesCompleteBooks(t *testing.T) {
 		cancel()
 	}
 
-	logs, err := fx.runErr(ctx, tagBackfillParams{})
+	logs, err := fx.runErr(ctx, tagBackfillParams{DryRun: boolPtr(false)})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -772,7 +772,7 @@ func TestTagBackfill_WriteErrorReportsNotWrittenAndSummary(t *testing.T) {
 		return errors.New("simulated store failure")
 	}
 
-	logs, err := fx.runErr(context.Background(), tagBackfillParams{})
+	logs, err := fx.runErr(context.Background(), tagBackfillParams{DryRun: boolPtr(false)})
 	if err == nil || !strings.Contains(err.Error(), "batch write of 2 rows failed (0 rows written before it)") {
 		t.Fatalf("err = %v, want the failed-batch error counting 0 rows written", err)
 	}
@@ -814,7 +814,7 @@ func TestTagBackfill_FinalFlushErrorCountsEveryJudgedRow(t *testing.T) {
 	fx := newTagFixture(t, files, tags)
 	fx.store.BatchUpsertBookFilesFunc = func([]*database.BookFile) error { return errors.New("simulated store failure") }
 
-	logs, err := fx.runErr(context.Background(), tagBackfillParams{})
+	logs, err := fx.runErr(context.Background(), tagBackfillParams{DryRun: boolPtr(false)})
 	if err == nil || !strings.Contains(err.Error(), "batch write of 12 rows failed") {
 		t.Fatalf("err = %v, want the failed 12-row final flush", err)
 	}
@@ -840,7 +840,7 @@ func TestTagBackfill_MixedDiscTagsRefuse(t *testing.T) {
 		}
 	}
 	fx := newTagFixture(t, files, tags)
-	summary := fx.run(tagBackfillParams{})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	for i := 1; i <= 10; i++ {
 		id := fmt.Sprintf("md%02d", i)
 		f := fx.row(id)
@@ -870,7 +870,7 @@ func TestTagBackfill_MixedDiscTagsRefuseWithStoredSiblings(t *testing.T) {
 			RawTags: map[string]string{"TRCK": strconv.Itoa(i - 3)}})
 	}
 	fx := newTagFixture(t, files, tags)
-	summary := fx.run(tagBackfillParams{})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false)})
 	for i := 1; i <= 6; i++ {
 		assertPosition(t, fx.row(fmt.Sprintf("ms%02d", i)), 0, i)
 	}
@@ -885,7 +885,7 @@ func TestTagBackfill_ForceMissingCandidateCountsOnce(t *testing.T) {
 		{ID: "fm1", BookID: "FM", TrackNumber: 2, RawTags: map[string]string{"TRCK": "1"}},
 		{ID: "fm2", BookID: "FM", TrackNumber: 1, RawTags: map[string]string{"TRCK": "2"}}, // no file on disk
 	}, map[string]metadata.Metadata{"fm1.mp3": tagMeta(1, 2, 0, 0)})
-	summary := fx.run(tagBackfillParams{Force: true})
+	summary := fx.run(tagBackfillParams{DryRun: boolPtr(false), Force: true})
 	assertPosition(t, fx.row("fm1"), 0, 1)
 	assertPosition(t, fx.row("fm2"), 0, 2)
 	assertSummaryHas(t, summary, "missing-on-disk=0", "siblings-renumbered=1", "read-took-tag-tracks=1",
