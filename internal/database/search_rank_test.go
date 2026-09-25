@@ -1,5 +1,5 @@
 // file: internal/database/search_rank_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f7c1e0a-9b2d-4e65-8a14-6d0c2b9e7f53
 // last-edited: 2026-09-25
 
@@ -156,6 +156,15 @@ func TestSubstringSearch_UnderscoreReadsAsSpace(t *testing.T) {
 	require.True(t, SubstringSearchMatches("Arcane Chef 2", nil, nil, nil, "arcane_chef"))
 	_, ok = SubstringSearchRank("b1", "Arcane Chef 2", nil, nil, nil, "arcane_chef")
 	require.True(t, ok)
+
+	// A double underscore (a colon in the source title) and "_ " both fold to
+	// ONE space, so a query that spells the words out still matches.
+	require.True(t, SubstringSearchMatches(title, nil, nil, nil, "arcane chef 2 a litrpg"))
+	require.True(t, SubstringSearchMatches("Rebel Stars_ Books 0-2", nil, nil, nil, "stars books"))
+	_, ok = SubstringSearchRank("b4", "Rebel Stars_ Books 0-2", nil, nil, nil, "stars books")
+	require.True(t, ok)
+	// A trailing space in the query is not trimmed away.
+	require.False(t, SubstringSearchMatches("Scrolls", nil, nil, nil, "roll "))
 
 	narr := "Some_Reader"
 	require.True(t, SubstringSearchMatches("x", &narr, nil, nil, "some reader"))

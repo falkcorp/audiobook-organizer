@@ -1,5 +1,5 @@
 // file: internal/database/search_rank.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a46bc2cf-3cc2-4402-b32f-c2fba2c7c95c
 // last-edited: 2026-09-25
 
@@ -98,12 +98,38 @@ func SubstringSearchRank(id, title string, narrator *string, authorID *int, auth
 }
 
 // searchFold is the one normalization both search predicates apply to the
-// query and to every compared field: an underscore reads as a space. Files
-// named by tools that replace spaces ("Arcane_Chef_2__A_LitRPG_Adventure")
-// carry that into the title, and a user typing "arcane chef" must find them.
-// strings.ReplaceAll returns s unchanged, without allocating, when there is no
-// underscore, so the common case costs one scan.
-func searchFold(s string) string { return strings.ReplaceAll(s, "_", " ") }
+// query and to every compared field: an underscore reads as a space, and a run
+// of spaces reads as one. Files named by tools that replace spaces carry that
+// into the title ("Arcane_Chef_2__A_LitRPG_Adventure", "Rebel Stars_ Books
+// 0-2"), and "arcane chef 2 a litrpg" / "stars books" must find them. Ends are
+// NOT trimmed: the exact/prefix tiers already compare a trimmed form, and a
+// deliberate trailing space in the query ("roll ") keeps its meaning.
+//
+// Strings with no underscore and no double space are returned unchanged
+// without allocating, so the common case costs one scan.
+func searchFold(s string) string {
+	if !strings.Contains(s, "_") && !strings.Contains(s, "  ") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := false
+	for _, r := range s {
+		if r == '_' {
+			r = ' '
+		}
+		if r == ' ' {
+			if prevSpace {
+				continue
+			}
+			prevSpace = true
+		} else {
+			prevSpace = false
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
 
 // containsWholeWord reports whether needle occurs in s with no letter or digit
 // immediately before or after it — "roll" in "rock and roll" but not in
