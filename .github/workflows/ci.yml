@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.14.0
+# version: 3.15.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-09-25
 
@@ -52,29 +52,33 @@ jobs:
       go-lint: true
       # --enable-only OVERRIDES .golangci.yml's enable list, and it is load-bearing,
       # not a tidiness flag. That config also enables errcheck, which currently has
-      # 834 open findings held as Wave 0's backlog (see the header in .golangci.yml,
+      # 838 open findings held as Wave 0's backlog (see the header in .golangci.yml,
       # .errcheck-baseline, and docs/audits/2026-08-11-silent-failure-error-discards.md).
-      # A bare `golangci-lint run ./...` would exit non-zero on those 834 -- this
+      # A bare `golangci-lint run ./...` would exit non-zero on those 838 -- this
       # job would be red on day one and switched off by whoever saw it next.
       #
-      # interfacebloat and errcheck are deliberately NOT in this selector even
-      # though interfacebloat is the linter this whole effort is about and
-      # errcheck is the silent-failure sweep's own gate. golangci-lint exits
-      # non-zero on ANY finding, and the tree legitimately holds accepted
-      # findings for both (5 for interfacebloat, see .interface-width-baseline;
-      # 834 for errcheck, see .errcheck-baseline), so listing either here
-      # reproduces the same permanently-red failure. Each runs in its own ratchet
-      # job below instead (Interface Width Ratchet, Errcheck Ratchet), which
-      # compares against its baseline and is what actually enforces the gate.
-      # Measured 2026-08-18 on this tree: nolintlint 0 issues (exit 0),
-      # interfacebloat 5 (exit 1); errcheck 834 (exit 1), measured 2026-09-25.
+      # interfacebloat is deliberately NOT in this selector even though it is the
+      # linter this whole effort is about. golangci-lint exits non-zero on ANY
+      # finding, and the tree legitimately holds 0 accepted-with-//nolint cases
+      # today (see .interface-width-baseline), so listing it here would still
+      # reproduce the errcheck failure above the moment a new wide interface
+      # needed a //nolint. It runs in the interface-width job below instead,
+      # which compares against the baseline and is what actually enforces the
+      # ratchet. Measured 2026-08-18 on this tree: nolintlint 0 issues (exit 0),
+      # interfacebloat 5 (exit 1, pre-#2564 baseline); the current baseline is 0.
       #
-      # interfacebloat's own baseline reached 0 on 2026-08-19 and it STILL runs
-      # only via its ratchet job, not this selector -- a 0 baseline means no
-      # UNSUPPRESSED finding exceeds the threshold, not that every future one
-      # will be caught the instant it appears without a full ./... run, and the
-      # ratchet job already does that. Treat errcheck the same way: paying its
-      # backlog to 0 does not by itself justify moving it into this selector.
+      # errcheck is also NOT in this selector, for the identical reason: 838
+      # open findings measured 2026-09-25 (see .errcheck-baseline). It now runs
+      # in its own ratchet job below (Errcheck Ratchet), added alongside
+      # Interface Width Ratchet rather than in this selector, for the same
+      # reason interfacebloat isn't here even at a 0 baseline: a ratchet answers
+      # "did the count change", a selector answers "are there any findings", and
+      # only the first can gate while a backlog exists.
+      #
+      # When Wave 0's errcheck backlog closes, add errcheck here rather than
+      # removing the selector -- that was the original plan for this line, and
+      # closing the backlog to 0 doesn't retire the ratchet job on its own
+      # (interfacebloat's is still live at a 0 baseline); it's a separate call.
       golangci-lint-args: '--enable-only nolintlint'
       # Advisory only: reports, never blocks. See super-linter-pr.env.
       super-linter: true
@@ -159,10 +163,11 @@ jobs:
   # has ~927 open findings held as Wave 0's backlog and a bare
   # `golangci-lint run ./...` would be red on day one -- and that comment ends
   # "When Wave 0 closes, add errcheck here rather than removing the selector."
-  # Wave 0's helper package and lint config landed; the backlog itself (834
-  # findings, measured 2026-09-25, see .errcheck-baseline) is paid down file by
-  # file across waves 4-13, exactly like interfacebloat's 28-finding backlog was
-  # paid down to 0 before it could be a hard gate. Until it reaches 0 the
+  # Wave 0's helper package and lint config landed; the backlog itself (838
+  # findings on this ubuntu-latest runner, see .errcheck-baseline for why that
+  # differs from a local darwin count) is paid down file by file across waves
+  # 4-13, exactly like interfacebloat's 28-finding backlog was paid down to 0
+  # before it could be a hard gate. Until it reaches 0 the
   # question this job can answer is "did the count go UP", not "are there any
   # findings" -- so it ratchets instead of gating outright, and reports rather
   # than blocks pre-merge for the same reason interface-width does: main has no
