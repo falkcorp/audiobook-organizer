@@ -106,6 +106,10 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.bookAtPathIndexBackfillDef(),
 		p.missingFileRepairDef(),
 		p.missingFileRepointDef(),
+		// repoint-missing-to-folder-audio: the folder-content complement of
+		// missing-file-repoint (a row whose chapter file was consolidated into one
+		// file in the same folder). Dry run by default; never deletes a row.
+		p.repointMissingToFolderAudioDef(),
 		// rewrite-path-prefix is the repoint op's complement: repoint repairs a
 		// row whose bytes moved WITHIN its own recorded directory, which is the
 		// only shape it can derive. A renamed PARENT directory is invisible to it
