@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-09-25
 
@@ -135,15 +135,16 @@ type durationReextractParams struct {
 	// books ABS lists (primary + organized) are examined, and only file rows
 	// whose stored Duration is <= 0 are written.
 	//
-	// A book whose rows span its own folder and somewhere else (iTunes copy +
-	// library copy + old chapter files) has only its OWN-folder rows filled
-	// (database.SplitOwnFolderFiles); the others are reported as stray and
-	// left untouched. That is safe because the ABS duration and
-	// RecomputeBookAggregates count only the own-folder rows of such a book
-	// (database.OwnFolderFiles) — summing every copy is what would have taken
-	// "Awaken Online: Flame" from 17.6 h to 43.7 h (measured 2026-09-25). A
-	// book with no present own-folder row is skipped (no-own-folder), and a
-	// book whose counted rows lie in the frozen iTunes tree is never written.
+	// A book whose rows span its own folder and somewhere else has its
+	// COUNTED rows filled (database.SplitOwnFolderFiles): every row except the
+	// out-of-folder copies of a present own-folder row, which are reported as
+	// copies and left untouched. Those are exactly the rows the ABS duration
+	// and RecomputeBookAggregates sum (database.OwnFolderFiles), so no fill
+	// can add a copy's runtime twice. Out-of-folder rows that are NOT copies
+	// (a merge's moved rows) are real content and are filled. A book with no
+	// present own-folder row is skipped (no-own-folder): there is no basis to
+	// call anything a copy. A book whose counted rows lie in the frozen iTunes
+	// tree is never written.
 	ZeroRowsOnly      bool     `json:"zeroRowsOnly"`
 	ZeroRowsOnlySnake bool     `json:"zero_rows_only"`
 	BookIDsSnake      []string `json:"book_ids,omitempty"`
@@ -239,15 +240,16 @@ func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 // all counter mutations and DB writes.
 type bookProcessResult struct {
 	// noOwnFolder: zero-rows mode, the rows span several folders and none of
-	// them is a present row in the book's own folder, so there is no row set
-	// ABS would count by itself; skipped.
+	// them is a present row in the book's own folder, so there is no basis to
+	// call any row a copy; skipped rather than risk filling duplicate copies.
 	noOwnFolder bool
 	// itunes: zero-rows mode, a counted row lies in the frozen iTunes tree
 	// (books/itunes/**); the book is never written.
 	itunes bool
-	// stray: zero-rows mode, rows outside the book's own folder that were
-	// excluded from the fill (and are excluded from every sum).
-	stray int
+	// copies: zero-rows mode, rows outside the book's own folder that are
+	// copies of a present own-folder row (database.IsBookFileCopy); excluded
+	// from the fill, as they are from every sum.
+	copies        int
 	book          database.Book
 	segs          []database.BookFile // may be nil for virtual single-file books
 	newDur        int
@@ -284,8 +286,8 @@ func processBookForReextract(ctx context.Context, store bookFileLister, book dat
 
 // processBookForReextractMode is processBookForReextract with the ZeroRowsOnly
 // scope: only rows stored as <= 0 become writes, the total alone never does,
-// and a book whose rows span several folders is filled in its own folder only
-// (see durationReextractParams.ZeroRowsOnly).
+// and a book whose rows span several folders is filled in its counted rows only:
+// out-of-folder copies are left alone (see durationReextractParams.ZeroRowsOnly).
 func processBookForReextractMode(ctx context.Context, store bookFileLister, book database.Book, skipBefore time.Time, zeroRows bool) bookProcessResult {
 	res := bookProcessResult{book: book}
 	if !skipBefore.IsZero() && book.DurationVerifiedAt != nil && book.DurationVerifiedAt.After(skipBefore) {
@@ -299,7 +301,7 @@ func processBookForReextractMode(ctx context.Context, store bookFileLister, book
 		// The same split the ABS mapper and RecomputeBookAggregates use, so
 		// the rows filled here are exactly the rows that are summed.
 		split := database.SplitOwnFolderFiles(&book, segs)
-		if len(split.Stray) > 0 && !split.Active() {
+		if len(split.Copies)+len(split.Others) > 0 && !split.HasOwnBasis() {
 			res.noOwnFolder = true
 			return res
 		}
@@ -317,7 +319,7 @@ func processBookForReextractMode(ctx context.Context, store bookFileLister, book
 		if !hasZero {
 			return res // nothing counted is stored as 0: out of scope
 		}
-		res.stray = len(segs) - len(counted)
+		res.copies = len(split.Copies)
 		segs = counted
 		res.segs = segs
 	}
@@ -457,8 +459,8 @@ func processBookForReextractMode(ctx context.Context, store bookFileLister, book
 	} else {
 		res.example = fmt.Sprintf("%s %ds→%ds (%d seg)", book.ID, oldDur, newDur, len(segs))
 	}
-	if res.stray > 0 {
-		res.example += fmt.Sprintf(" +%d stray untouched", res.stray)
+	if res.copies > 0 {
+		res.example += fmt.Sprintf(" +%d copies untouched", res.copies)
 	}
 	return res
 }
@@ -538,8 +540,8 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		noPath         int
 		noOwnFolder    int
 		itunesSkipped  int
-		strayBooks     int
-		strayRows      int
+		copyBooks      int
+		copyRows       int
 		fpBooks        int
 		ffprobeBooks   int
 		storedDurBooks int
@@ -668,9 +670,9 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			itunesSkipped++
 			continue
 		}
-		if res.stray > 0 {
-			strayBooks++
-			strayRows += res.stray
+		if res.copies > 0 {
+			copyBooks++
+			copyRows += res.copies
 		}
 		// readErr / estimated are now PER-SEGMENT facts, not verdicts on the
 		// book. Count them, but keep going when the book still produced usable
@@ -840,8 +842,8 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		verb = fmt.Sprintf("corrected %d;", written)
 	}
 	summary := fmt.Sprintf(
-		"examined=%d eligible=%d (from-fingerprint=%d from-stored=%d from-ffprobe=%d) %s would-change=%d (~2x=%d) ms-corrected-rows=%d incomplete-books=%d estimated-segments=%d read-errors=%d no-filepath=%d no-own-folder-skipped=%d itunes-skipped=%d stray-books=%d stray-rows-untouched=%d | e.g. %s",
-		examined, eligible, fpBooks, storedDurBooks, ffprobeBooks, verb, wouldChange, roughlyDouble, msFixedRows, incomplete, estimated, readErr, noPath, noOwnFolder, itunesSkipped, strayBooks, strayRows,
+		"examined=%d eligible=%d (from-fingerprint=%d from-stored=%d from-ffprobe=%d) %s would-change=%d (~2x=%d) ms-corrected-rows=%d incomplete-books=%d estimated-segments=%d read-errors=%d no-filepath=%d no-own-folder-skipped=%d itunes-skipped=%d copy-books=%d copy-rows-untouched=%d | e.g. %s",
+		examined, eligible, fpBooks, storedDurBooks, ffprobeBooks, verb, wouldChange, roughlyDouble, msFixedRows, incomplete, estimated, readErr, noPath, noOwnFolder, itunesSkipped, copyBooks, copyRows,
 		strings.Join(examples, ", "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	total := totalBooks

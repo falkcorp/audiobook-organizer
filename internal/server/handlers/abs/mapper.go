@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
 // last-edited: 2026-09-25
 
@@ -236,14 +236,15 @@ func (h *Handler) loadOneItemView(
 		return nil, fmt.Errorf("load files for %s: %w", book.ID, err)
 	}
 	// A book whose rows span its own folder and somewhere else (the iTunes
-	// copy, the library copy, old chapter files) lists and sums only its
-	// own-folder rows: the other copies are the same content again, and
-	// counting them is what read "Awaken Online: Flame" as 43.7 h instead of
-	// 17.6 h. The filter runs BEFORE the loop, not on the sum alone, so the
-	// track list, start offsets, size and synthesized chapters all describe
-	// the same timeline as DurationSec (§5b). durationFor (userdata.go) and
-	// durationForBook / durationBoundsForBook (progress.go) apply the same
-	// rule through countedBookFiles.
+	// copy, the library copy, old chapter files) neither lists nor sums the
+	// out-of-folder rows that are copies of a present own-folder row
+	// (database.OwnFolderFiles / IsBookFileCopy): they are the same content
+	// again. Out-of-folder rows that are not copies (a merge's moved rows)
+	// are real content and stay. The filter runs BEFORE the loop, not on the
+	// sum alone, so the track list, start offsets, size and synthesized
+	// chapters all describe the same timeline as DurationSec (§5b).
+	// durationFor (userdata.go) and durationForBook / durationBoundsForBook
+	// (progress.go) apply the same rule through countedBookFiles.
 	files = database.OwnFolderFiles(book, files)
 	// Track order is the playback timeline, so it must be deterministic and it must
 	// match what the listener expects: disc, then track, then path as a last-resort
@@ -310,7 +311,8 @@ type absBookFileLoader interface {
 }
 
 // countedBookFiles returns the book (nil when it does not exist) and the file
-// rows its ABS duration counts: database.OwnFolderFiles, the same rows
+// rows its ABS duration counts: database.OwnFolderFiles (every row except the
+// out-of-folder copies), the same rows
 // loadOneItemView lists. Every ABS duration path must go through this or
 // loadOneItemView — §5b's one-duration rule breaks the moment one of them
 // sums a different set of rows.
