@@ -1,5 +1,5 @@
 // file: internal/searchcache/cache.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: bcadc16f-696c-468a-a3e4-afea4c81bc5c
 // last-edited: 2026-09-25
 
@@ -386,9 +386,7 @@ func (c *Cache) bringForward(ctx context.Context, key string, ev Evaluator, opts
 			return Result{IDs: ids, Gen: current}, nil
 		}
 	}
-	c.mu.Lock()
-	_, _ = c.startBuildLocked(key, ev)
-	c.mu.Unlock()
+	c.queueRebuild(key, ev)
 	if opts.AllowStale {
 		res.Stale = true
 		return res, nil
@@ -425,18 +423,27 @@ func (c *Cache) patchEntry(key string, ev Evaluator) patchResult {
 	}
 	// Ring overflow, or a change this evaluator cannot patch: rebuild in the
 	// background and report what we have.
-	c.mu.Lock()
-	_, _ = c.startBuildLocked(key, ev)
-	c.mu.Unlock()
+	c.queueRebuild(key, ev)
 	return patchResult{res: Result{IDs: e.ids, Gen: e.gen}}
 }
 
 // afterPatch schedules the drift-correcting rebuild for an OrderDrifter.
 func (c *Cache) afterPatch(key string, ev Evaluator) {
 	if d, ok := ev.(OrderDrifter); ok && d.OrderDriftsOnPatch() {
-		c.mu.Lock()
-		_, _ = c.startBuildLocked(key, ev)
-		c.mu.Unlock()
+		c.queueRebuild(key, ev)
+	}
+}
+
+// queueRebuild starts (or joins) a background rebuild of key that no caller
+// waits on. The only failure is ErrBusy (the build queue is full): the entry
+// then stays as it is, and the next lookup that finds it out of date asks
+// again, so nothing is lost; it is logged so a saturated queue is visible.
+func (c *Cache) queueRebuild(key string, ev Evaluator) {
+	c.mu.Lock()
+	_, err := c.startBuildLocked(key, ev)
+	c.mu.Unlock()
+	if err != nil {
+		cacheLog.Warn("search cache: background rebuild not queued: %v", err)
 	}
 }
 
