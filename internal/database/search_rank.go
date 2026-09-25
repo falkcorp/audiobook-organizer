@@ -1,5 +1,5 @@
 // file: internal/database/search_rank.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a46bc2cf-3cc2-4402-b32f-c2fba2c7c95c
 // last-edited: 2026-09-25
 
@@ -66,7 +66,8 @@ func SubstringSearchRank(id, title string, narrator *string, authorID *int, auth
 	if lowerQuery == "" {
 		return SearchRank{Tier: SearchTierExactTitle, ID: id}, true
 	}
-	lt := strings.ToLower(title)
+	lowerQuery = searchFold(lowerQuery)
+	lt := searchFold(strings.ToLower(title))
 	r := SearchRank{TitleLen: len(lt), ID: id}
 	if strings.Contains(lt, lowerQuery) {
 		tq := strings.TrimSpace(lowerQuery)
@@ -84,17 +85,25 @@ func SubstringSearchRank(id, title string, narrator *string, authorID *int, auth
 		return r, true
 	}
 	if authorID != nil {
-		if name, ok := authorNames[*authorID]; ok && strings.Contains(name, lowerQuery) {
+		if name, ok := authorNames[*authorID]; ok && strings.Contains(searchFold(name), lowerQuery) {
 			r.Tier = SearchTierAuthor
 			return r, true
 		}
 	}
-	if narrator != nil && strings.Contains(strings.ToLower(*narrator), lowerQuery) {
+	if narrator != nil && strings.Contains(searchFold(strings.ToLower(*narrator)), lowerQuery) {
 		r.Tier = SearchTierNarrator
 		return r, true
 	}
 	return SearchRank{}, false
 }
+
+// searchFold is the one normalization both search predicates apply to the
+// query and to every compared field: an underscore reads as a space. Files
+// named by tools that replace spaces ("Arcane_Chef_2__A_LitRPG_Adventure")
+// carry that into the title, and a user typing "arcane chef" must find them.
+// strings.ReplaceAll returns s unchanged, without allocating, when there is no
+// underscore, so the common case costs one scan.
+func searchFold(s string) string { return strings.ReplaceAll(s, "_", " ") }
 
 // containsWholeWord reports whether needle occurs in s with no letter or digit
 // immediately before or after it — "roll" in "rock and roll" but not in

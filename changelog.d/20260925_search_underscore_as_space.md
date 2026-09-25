@@ -1,0 +1,1 @@
+- Library search treats an underscore as a space, so "arcane chef" finds titles like `Arcane_Chef_2__A_LitRPG_Adventure`.

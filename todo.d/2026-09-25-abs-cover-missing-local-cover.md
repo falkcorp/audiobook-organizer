@@ -1,0 +1,1 @@
+- [ ] **ABS-COVER-LOCAL** ABS shows no cover for books whose organizer cover is a local cover (`cover_url=/api/v1/covers/local/<hash>.jpg`). Example: Arcane Chef book 1 (01KZRBPK913Y3HKS3TQB8JQJKJ). The web UI shows the cover; ABS item `coverPath` is null and `/api/items/:id/cover` returns 404. Find the mapper gap and count affected books.
