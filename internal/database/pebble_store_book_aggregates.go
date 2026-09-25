@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_aggregates.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package database — book aggregate recomputation from BookFiles.
 //
@@ -35,8 +35,10 @@ import (
 
 const bookAggregatesBackfillKey = "system:backfill:book_aggregates_v1_done"
 
-// RecomputeBookAggregates sums Duration and FileSize from all BookFile records
-// for the given bookID and updates the parent Book atomically using a
+// RecomputeBookAggregates sums Duration and FileSize from the BookFile records
+// for the given bookID — all of them, except that a book whose rows span its
+// own folder and somewhere else counts only its own-folder rows
+// (OwnFolderFiles) — and updates the parent Book atomically using a
 // read-modify-write under Pebble's own MVCC layer (same pattern as UpdateBook).
 //
 // Partial-data rule: if the book already has a populated Duration from a prior
@@ -50,36 +52,50 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 		return fmt.Errorf("RecomputeBookAggregates GetBookFiles %s: %w", bookID, err)
 	}
 
-	var sumFileSize int64
-	filesWithFileSize := 0
-
-	// Duration comes from the canonical runtime (ComputeBookRuntime) so the
-	// stored aggregate and every runtime comparison count the same rows:
-	// present rows plus every missing row that is not a repoint duplicate of
-	// a present one, millisecond rows normalized. Rule: this is the all-rows
-	// sum this function always stored, minus ONLY the old copy a repoint
-	// leaves beside its present row (the raw sum counted that content twice).
-	// A chapter that goes missing without a present copy stays counted, so a
-	// missing chapter can never lower Book.Duration.
-	rt := ComputeBookRuntime(nil, files)
-	sumDuration, _ := rt.StoredAggregateSec()
-	filesWithDuration := rt.FilesKnown
-
-	for _, f := range files {
-		if f.FileSize > 0 {
-			sumFileSize += f.FileSize
-			filesWithFileSize++
+	// The sums are computed inside the ModifyBook closure below because they
+	// need the book: when its rows span its own folder and somewhere else
+	// (iTunes copy + library copy + old chapter files), only the own-folder
+	// rows count (OwnFolderFiles). Summing every copy inflated the total.
+	var (
+		sumDuration       int
+		filesWithDuration int
+		sumFileSize       int64
+		filesWithFileSize int
+		countedFiles      int
+	)
+	sumCounted := func(book *Book) {
+		counted := OwnFolderFiles(book, files)
+		countedFiles = len(counted)
+		// Duration comes from the canonical runtime (ComputeBookRuntime) so the
+		// stored aggregate and every runtime comparison count the same rows:
+		// present rows plus every missing row that is not a repoint duplicate of
+		// a present one, millisecond rows normalized. Rule: this is the all-rows
+		// sum this function always stored, minus ONLY the old copy a repoint
+		// leaves beside its present row (the raw sum counted that content twice).
+		// A chapter that goes missing without a present copy stays counted, so a
+		// missing chapter can never lower Book.Duration.
+		rt := ComputeBookRuntime(nil, counted)
+		sumDuration, _ = rt.StoredAggregateSec()
+		filesWithDuration = rt.FilesKnown
+		sumFileSize, filesWithFileSize = 0, 0
+		for _, f := range counted {
+			if f.FileSize > 0 {
+				sumFileSize += f.FileSize
+				filesWithFileSize++
+			}
 		}
 	}
 
 	// Read-modify-write of the book row under its write stripe (ModifyBook):
-	// the file sums above are computed outside it; only the row read, the
-	// partial-data decision and the commit run inside.
+	// the file rows above are read outside it; only the row read, the sums
+	// that depend on the book's own folder, the partial-data decision and the
+	// commit run inside.
 	var wantDuration int
 	var wantFileSize int64
 	found, wrote := false, false
 	_, err = p.ModifyBook(bookID, func(book *Book) error {
 		found = true
+		sumCounted(book)
 
 		// --- partial-data rule for Duration ---
 		// Estimate how many files contributed to the existing snapshot. We can't
@@ -185,6 +201,7 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 		"files_with_duration", filesWithDuration,
 		"files_with_file_size", filesWithFileSize,
 		"total_files", len(files),
+		"counted_files", countedFiles,
 	)
 	return nil
 }
