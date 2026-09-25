@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-09-25
 
@@ -179,7 +179,9 @@ func (r *icReport) summary() string {
 
 func (p *Plugin) itunesCloneIntoLibraryDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.itunes-clone-into-library",
+		ID: "itunes.clone-into-library",
+		// Renamed 2026-09-25 (naming audit class 8): every iTunes op lives in itunes.*, whichever Go package implements it.
+		FormerIDs:   []string{"maintenance.itunes-clone-into-library"},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Clone iTunes-only books into the library",
@@ -192,7 +194,7 @@ func (p *Plugin) itunesCloneIntoLibraryDef() sdk.OperationDef {
 			"primary hand-off.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.itunes-clone-into-library",
+		ConcurrencyKey:  "itunes.clone-into-library",
 		Cancellable:     true,
 		Timeout:         4 * time.Hour,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},

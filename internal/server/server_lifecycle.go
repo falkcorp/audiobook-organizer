@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.12.0
+// version: 4.13.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-09-25
 
@@ -952,7 +952,7 @@ func (s *Server) startBackfills() {
 	// acoustid.backfill (internal/plugins/acoustid/backfill.go, registry.RunItems
 	// with bounded Concurrency). That deletion left startup no longer
 	// auto-fingerprinting — coverage only advanced when an operator ran the
-	// on-demand library.optimize sweep. Restore the original boot behavior by
+	// on-demand maintenance.library-optimize sweep. Restore the original boot behavior by
 	// enqueuing the parallel op once at startup. It is idempotent (skips files
 	// that already have a fingerprint) and runs in the registry's own worker
 	// pool, so this is fire-and-forget — no bgWG enrollment (the op's lifecycle

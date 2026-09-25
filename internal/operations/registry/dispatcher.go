@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-06
+// last-edited: 2026-09-25
 
 package registry
 
@@ -81,9 +81,13 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 		}
 
 		// Gate 1: def must be registered.
-		r.mu.RLock()
-		def, ok := r.defs[row.DefID]
-		r.mu.RUnlock()
+		// row.DefID may be a former ID (a row persisted before a rename); it
+		// resolves to the canonical def, and everything built from this row
+		// below carries def.ID, never the stored alias.
+		def, ok := r.lookupDef(row.DefID)
+		if ok {
+			r.noteAliasUse(row.DefID, aliasEntryStoredRow)
+		}
 		if !ok {
 			// Unknown def — skip; may appear during rolling restarts.
 			continue
@@ -186,7 +190,7 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 		// pickup at worker.go:138.
 		r.running[row.ID] = &runHandle{
 			id:             row.ID,
-			defID:          row.DefID,
+			defID:          def.ID,
 			plugin:         def.Plugin,
 			concurrencyKey: def.ConcurrencyKey,
 			resumePolicy:   def.ResumePolicy,
@@ -248,7 +252,7 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 
 		qr := &queuedRun{
 			opID:         row.ID,
-			defID:        row.DefID,
+			defID:        def.ID,
 			params:       params,
 			priority:     Priority(row.Priority),
 			concurrKey:   def.ConcurrencyKey,

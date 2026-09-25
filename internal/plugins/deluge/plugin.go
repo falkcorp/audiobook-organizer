@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/plugin.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-47a8-b9c0-d1e2f3a4b5c6
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 
 // Package deluge implements the UOS plugin for Deluge integration operations.
 package deluge
@@ -48,11 +48,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		return nil
 	}
 
-	ops := []sdk.OperationDef{
-		p.protectedPathsSyncDef(),
-		p.centralizationDef(),
-		p.pathUpdateDef(),
-	}
+	ops := p.OperationDefs()
 
 	for _, op := range ops {
 		if err := r.RegisterOp(op); err != nil {
@@ -60,6 +56,19 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		}
 	}
 	return nil
+}
+
+// OperationDefs returns every OperationDef this plugin registers, independent
+// of whether its dependencies are wired. Register gates on those dependencies;
+// this does not, so the op-ID ledger guard (internal/server
+// TestOpIDs_NoRenameWithoutAlias) can enumerate the plugin's IDs and FormerIDs
+// from a zero-value Plugin. Keep Register's list and this one the same list.
+func (p *Plugin) OperationDefs() []sdk.OperationDef {
+	return []sdk.OperationDef{
+		p.protectedPathsSyncDef(),
+		p.centralizationDef(),
+		p.pathUpdateDef(),
+	}
 }
 
 // pluginStore is what this plugin reads and writes, measured with an

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.21.0
+// version: 2.22.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-22
+// last-edited: 2026-09-25
 
 package registry
 
@@ -192,9 +192,7 @@ func (r *Registry) startWorker(ctx context.Context, slot int) {
 // abandonGrace), in which case the caller (startWorker) should exit so the
 // replacement worker owns that slot.
 func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAbandoned bool) {
-	r.mu.RLock()
-	def, ok := r.defs[qr.defID]
-	r.mu.RUnlock()
+	def, ok := r.lookupDef(qr.defID)
 	if !ok {
 		r.logger.Warn("registry: worker got run for unknown def; skipping", "def_id", qr.defID)
 		// Release the dispatcher's stub handle so its plugin slot and

@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package scheduler
 
@@ -105,8 +105,15 @@ func (ts *TaskScheduler) hasActiveV2Op(defID string) bool {
 	if err != nil {
 		return false
 	}
+	// Compare canonical IDs: an active row persisted before an op rename keeps
+	// its former def_id, and it is still this task's op running.
+	canonical := func(id string) string { return id }
+	if ts.deps.OpRegistry != nil {
+		canonical = ts.deps.OpRegistry.CanonicalDefID
+	}
+	want := canonical(defID)
 	for _, op := range ops {
-		if op.DefID == defID {
+		if canonical(op.DefID) == want {
 			return true
 		}
 	}

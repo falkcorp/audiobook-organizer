@@ -1,7 +1,7 @@
 <!-- file: docs/system/incidents.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: a7b8c9d0-e1f2-3456-0123-456789012345 -->
-<!-- last-edited: 2026-07-11 -->
+<!-- last-edited: 2026-09-25 -->
 
 # Incidents and Decisions
 
@@ -67,8 +67,8 @@ This document records known failure modes, historical incidents, architectural d
 **Date:** 2026-06-26
 **Component:** `internal/itunes` — `BackfillExternalIDs`, file path tracking
 **Root cause:** An organize run moved ~19,922 iTunes-linked audio files into the organized library directory (`/mnt/bigdata/books/audiobook-organizer/`). The `BookFile.FilePath` records still pointed to the old import paths. `file_not_found` errors appeared for all affected iTunes tracks.
-**Fix (PR #1625):** New `maintenance.itunes-heal` op: parses iTunes XML as ground truth, builds a parallel filename index of the organized library, fans out 16 workers using `RunItems[T]` for O(1) map lookup + ZFS reflink per track. First run: 2,274 healed, 3,720 ambiguous, 5,349 not found on disk, 0 errors.
-**Prevention:** After any organize run, check for iTunes `file_not_found` errors in the activity log. Run `maintenance.itunes-heal` if present. Never dismiss iTunes `file_not_found` as "expected" — all files live on the NAS (<server>); zero Windows-local-only files exist.
+**Fix (PR #1625):** New `maintenance.itunes-heal` op (renamed `itunes.heal` on 2026-09-25; the old ID still resolves): parses iTunes XML as ground truth, builds a parallel filename index of the organized library, fans out 16 workers using `RunItems[T]` for O(1) map lookup + ZFS reflink per track. First run: 2,274 healed, 3,720 ambiguous, 5,349 not found on disk, 0 errors.
+**Prevention:** After any organize run, check for iTunes `file_not_found` errors in the activity log. Run `itunes.heal` if present. Never dismiss iTunes `file_not_found` as "expected" — all files live on the NAS (<server>); zero Windows-local-only files exist.
 
 ---
 
@@ -181,7 +181,7 @@ When investigating an issue, start here:
 | Symptom | First check |
 |---|---|
 | Page 2 of library returns 0 items | `didPushdown` flag in `service_filtering.go`; check `list-cache` key format |
-| iTunes book shows `file_not_found` | Run `maintenance.itunes-heal`; check `FilePath` vs actual disk path |
+| iTunes book shows `file_not_found` | Run `itunes.heal`; check `FilePath` vs actual disk path |
 | Dedup false positives | Run `maintenance.dedup-exact-triage`; check stub/fragment/title_leak counts |
 | High memory usage | Check cache warm-up (`internal/cache`); disable warm-ups if RSS > 2 GB |
 | Transcribed fields are wrong | Run `maintenance.transcribe-book-intros` with `reparse_only=true` |

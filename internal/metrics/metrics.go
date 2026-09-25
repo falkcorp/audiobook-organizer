@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package metrics
 
@@ -88,6 +88,18 @@ var (
 		Name:      "sort_by_requested_total",
 		Help:      "Library list requests by requested sort_by field (known field, \"default\" when omitted, \"other\" when unrecognised)",
 	}, []string{"field"})
+	// operationDeprecatedDefIDTotal counts every time a former (renamed) op ID
+	// arrived at the operations registry and was resolved to its canonical
+	// def (registry/aliases.go). It is the removal signal for an alias: zero
+	// increments for an alias over a long enough window means nothing still
+	// sends or stores that spelling. Both labels are BOUNDED: "alias" is only
+	// ever a key of the registry's alias table (never a raw request string),
+	// and "entry" is a fixed enum naming where the ID came in.
+	operationDeprecatedDefIDTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "operation_deprecated_def_id_total",
+		Help:      "Former (renamed) operation def IDs resolved to their canonical def, by alias and by entry point (enqueue, stored_row, retry, subprocess, timeline_filter)",
+	}, []string{"alias", "entry"})
 	// searchIndexDirtyBacklogGauge is the size of that dirty set, sampled at
 	// each reconcile tick, so a backlog that is not draining is visible.
 	searchIndexDirtyBacklogGauge = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -228,7 +240,7 @@ func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
 			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
-			opActivityMirrorDroppedTotal, sortByRequestedTotal,
+			opActivityMirrorDroppedTotal, sortByRequestedTotal, operationDeprecatedDefIDTotal,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
 			itunesLocationUnmappable, organizeTargetPathCollision, aiBackendAvailable,
 			opItemsProcessed, opItemsTotal,
@@ -260,6 +272,13 @@ func SetBackendAvailable(backend string, ok bool) {
 		v = 1.0
 	}
 	aiBackendAvailable.WithLabelValues(backend).Set(v)
+}
+
+// IncOperationDeprecatedDefID counts one resolution of a former op ID to its
+// canonical def. alias must be a key of the registry's alias table and entry
+// one of its fixed entry names; see operationDeprecatedDefIDTotal.
+func IncOperationDeprecatedDefID(alias, entry string) {
+	operationDeprecatedDefIDTotal.WithLabelValues(alias, entry).Inc()
 }
 
 // Operation lifecycle helpers

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 // batch.go implements M3: coalescing burst enqueues of a Batchable op type into
 // one OperationV2Row via a debounce timer.
@@ -224,9 +224,9 @@ func (r *Registry) batchFire(opType string, capturedGen uint64) {
 		return
 	}
 
-	r.mu.RLock()
-	def, defOK := r.defs[opType]
-	r.mu.RUnlock()
+	// opType is already canonical (EnqueueOp resolves before batchAdd); the
+	// resolving lookup is for symmetry with every other def read.
+	def, defOK := r.lookupDef(opType)
 	if !defOK {
 		r.logger.Warn("batch: fire: op def not found; dropping subjects",
 			"op_type", logger.SanitizeLogValue(opType), "count", len(snapshot))

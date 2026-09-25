@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 28adbfaa-a61f-4e34-ae2b-516e70cf775f
-// last-edited: 2026-09-22
+// last-edited: 2026-09-25
 
 package acoustid
 
@@ -259,7 +259,7 @@ func TestWindowBackfill_DefUsesFingerprintKey(t *testing.T) {
 
 	// Register publishes it, and no two of the plugin's defs share an ID.
 	seen := map[string]bool{}
-	for _, d := range (&Plugin{}).opDefs() {
+	for _, d := range (&Plugin{}).OperationDefs() {
 		require.NoError(t, registry.ValidateOpDef(d), d.ID)
 		require.False(t, seen[d.ID], "duplicate def %s", d.ID)
 		seen[d.ID] = true

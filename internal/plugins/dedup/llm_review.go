@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/llm_review.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-11
+// last-edited: 2026-09-25
 
 package dedup
 
@@ -16,7 +16,11 @@ import (
 
 func (p *Plugin) llmReviewDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:           "dedup.llm-review",
+		ID: "dedup.llm-review",
+		// maintenance.dedup-llm-review was a second registration of this same
+		// engine review in the maintenance namespace, removed 2026-09-25
+		// (naming audit class 8); its ID resolves here.
+		FormerIDs:    []string{"maintenance.dedup-llm-review"},
 		Liveness:     sdk.LivenessManual,
 		Plugin:       "dedup",
 		DisplayName:  "LLM review of candidates",

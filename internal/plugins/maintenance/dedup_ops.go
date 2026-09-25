@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e1f2a3b4-c5d6-7890-4567-012345678901
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -20,36 +20,13 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// --- dedup-llm-review ---
-
-func (p *Plugin) dedupLLMReviewDef() sdk.OperationDef {
-	return sdk.OperationDef{
-		ID:              "maintenance.dedup-llm-review",
-		Liveness:        sdk.LivenessNone,
-		ProgressTimeout: 60 * time.Minute, // LivenessNone requires an explicit budget
-		Plugin:          "maintenance",
-		DisplayName:     "Dedup LLM review",
-		Description:     "Runs LLM review of ambiguous author-dedup candidates.",
-		ResumePolicy:    sdk.ResumeDrop,
-		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.dedup-llm-review",
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         60 * time.Minute,
-		Schedule:        nil,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapNetworkOpenAI},
-		Run:             p.runDedupLLMReview,
-	}
-}
-
-func (p *Plugin) runDedupLLMReview(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	if !p.deps.HasDedupEngine() {
-		_ = reporter.Log(slog.LevelInfo, "Dedup engine not initialized, skipping LLM review")
-		return nil
-	}
-	_ = reporter.Log(slog.LevelInfo, "Starting LLM review of ambiguous dedup candidates")
-	return p.deps.DedupLLMReview(ctx)
-}
+// maintenance.dedup-llm-review was removed 2026-09-25 (naming audit class 8).
+// It called the same dedup engine RunLLMReview as dedup.llm-review, under a
+// description ("author-dedup candidates") that was wrong, without
+// CapLibraryWrite, and with its own ConcurrencyKey -- so the two could review
+// the same candidates concurrently. Its ID is now a FormerID of
+// dedup.llm-review (internal/plugins/dedup/llm_review.go), so anything that
+// still sends it runs the one correctly-declared review op.
 
 // --- ai-dedup-batch ---
 

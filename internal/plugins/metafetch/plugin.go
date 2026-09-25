@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/plugin.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c4d1f0a-2b7e-4c61-8a3d-5e9f0b1c2d34
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package metafetch is the UOS plugin for metadata-fetch maintenance/analysis
 // operations. It wraps the internal metafetch.Service (persisted candidate
@@ -52,15 +52,24 @@ func (p *Plugin) Version() string { return "1.0.0" }
 // Register registers all metafetch OperationDefs with the UOS registry.
 func (p *Plugin) Register(r sdk.Registry) error {
 	p.registry = r
-	ops := []sdk.OperationDef{
-		p.calibrateScoringDef(), // INIT-3-T1: read-only scoring calibration report
-	}
+	ops := p.OperationDefs()
 	for _, op := range ops {
 		if err := r.RegisterOp(op); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// OperationDefs returns every OperationDef this plugin registers, independent
+// of whether its dependencies are wired. Register gates on those dependencies;
+// this does not, so the op-ID ledger guard (internal/server
+// TestOpIDs_NoRenameWithoutAlias) can enumerate the plugin's IDs and FormerIDs
+// from a zero-value Plugin. Keep Register's list and this one the same list.
+func (p *Plugin) OperationDefs() []sdk.OperationDef {
+	return []sdk.OperationDef{
+		p.calibrateScoringDef(), // INIT-3-T1: read-only scoring calibration report
+	}
 }
 
 // pluginStore is what this plugin reads, measured with an empty-interface
