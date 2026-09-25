@@ -1,5 +1,5 @@
 # file: .errcheck-baseline
-# version: 1.0.0
+# version: 1.1.0
 # guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
 # last-edited: 2026-09-25
 
@@ -26,4 +26,18 @@
 # is the pre-existing backlog `make lint-errcheck` already reported red; nothing
 # in this PR fixes any of it. Lower this number in the same PR as any fix that
 # closes findings, exactly as the interface-width baseline instructs.
-834
+#
+# The number is 838, not the 834 a local darwin run reports, and that gap is
+# the reason for this note. The CI job (Errcheck Ratchet) runs on
+# ubuntu-latest; a platform build constraint means some files a darwin run
+# never type-checks are exactly the ones a linux run does, and vice versa.
+# Measured with `GOOS=linux GOARCH=amd64 golangci-lint run --enable-only
+# errcheck ./...` on this tree: 838, four more than the 834 seen locally on
+# darwin -- internal/fileops/reflink_linux.go:40,51 and
+# internal/sysinfo/memory_linux.go:22,47, none of which a darwin toolchain
+# loads at all. No darwin-only file (reflink_darwin.go, memory_darwin.go, ...)
+# contributed a finding on either side, so the true CI count is the linux
+# count, and this baseline is set to that number rather than the one measured
+# on the machine that wrote it. If you add a new build-tagged file, measure
+# with GOOS=linux before trusting a local darwin count.
+838
