@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_merged_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9b41e7c3-2d58-4a06-bf19-6e35c0d7a284
 // last-edited: 2026-09-25
 
@@ -306,5 +306,30 @@ func TestDurationBackfill_ZeroRowsIgnoresHiddenBooks(t *testing.T) {
 	runZeroRows(t, zeroRowsStore(t, segs, false, "organized", &segWrites, &bookWrites))
 	if segWrites != 0 {
 		t.Errorf("non-primary book must not be touched: segment writes=%d", segWrites)
+	}
+}
+
+// DUR-SAME-FOLDER-COPIES: Awaken Online: Flame's shape — `_copy1` twins and
+// zero-duration rows all inside the book's own folder. Only the counted zero
+// rows are filled: the unmeasured real chapter 03, never the twins (filling
+// them is what would have pushed Flame to ~26.4 h against a true 21.85 h). A
+// distinct chapter that organize merely suffixed `_copy1` (a different size,
+// Axiom's shape) is real content and is filled.
+func TestDurationBackfill_ZeroRowsSkipsSameFolderCopies(t *testing.T) {
+	var segWrites, bookWrites int
+	segs := []database.BookFile{
+		{ID: "01", BookID: "b1", FilePath: "/lib/B/B - 01.m4a", FileSize: 50_000_000, Duration: 3600, AcoustIDFingerprintDurationSec: 3600.0},
+		{ID: "01c", BookID: "b1", FilePath: "/lib/B/B - 01_copy1.m4a", FileSize: 50_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 3600.0},
+		{ID: "02", BookID: "b1", FilePath: "/lib/B/B - 02.m4a", FileSize: 60_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 4000.0},
+		{ID: "02c", BookID: "b1", FilePath: "/lib/B/B - 02_copy1.m4a", FileSize: 60_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 4000.0},
+		{ID: "03", BookID: "b1", FilePath: "/lib/B/B - 03.m4a", FileSize: 40_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 2000.0},
+		{ID: "03x", BookID: "b1", FilePath: "/lib/B/B - 03_copy1.m4a", FileSize: 38_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 1900.0},
+	}
+	store := zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites)
+	written := captureRowWrites(store)
+	runZeroRows(t, store)
+	want := []string{"02", "03", "03x"}
+	if got := *written; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("zero-rows mode must fill exactly the counted zero rows %v (never a _copy1 twin), wrote %v", want, got)
 	}
 }

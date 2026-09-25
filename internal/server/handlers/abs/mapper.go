@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
 // last-edited: 2026-09-25
 
@@ -237,8 +237,9 @@ func (h *Handler) loadOneItemView(
 	}
 	// A book whose rows span its own folder and somewhere else (the iTunes
 	// copy, the library copy, old chapter files) neither lists nor sums the
-	// out-of-folder rows that are copies of a present own-folder row
-	// (database.OwnFolderFiles / IsBookFileCopy): they are the same content
+	// rows that are copies of a counted row — out-of-folder copies and
+	// `_copyN` twins in its own folder (database.OwnFolderFiles /
+	// IsBookFileCopy): they are the same content
 	// again. Out-of-folder rows that are not copies (a merge's moved rows)
 	// are real content and stay. The filter runs BEFORE the loop, not on the
 	// sum alone, so the track list, start offsets, size and synthesized
@@ -312,7 +313,7 @@ type absBookFileLoader interface {
 
 // countedBookFiles returns the book (nil when it does not exist) and the file
 // rows its ABS duration counts: database.OwnFolderFiles (every row except the
-// out-of-folder copies), the same rows
+// copies), the same rows
 // loadOneItemView lists. Every ABS duration path must go through this or
 // loadOneItemView — §5b's one-duration rule breaks the moment one of them
 // sums a different set of rows.

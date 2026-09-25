@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-09-25
 
@@ -135,16 +135,17 @@ type durationReextractParams struct {
 	// books ABS lists (primary + organized) are examined, and only file rows
 	// whose stored Duration is <= 0 are written.
 	//
-	// A book whose rows span its own folder and somewhere else has its
-	// COUNTED rows filled (database.SplitOwnFolderFiles): every row except the
-	// out-of-folder copies of a present own-folder row, which are reported as
-	// copies and left untouched. Those are exactly the rows the ABS duration
-	// and RecomputeBookAggregates sum (database.OwnFolderFiles), so no fill
-	// can add a copy's runtime twice. Out-of-folder rows that are NOT copies
-	// (a merge's moved rows) are real content and are filled. A book with no
-	// present own-folder row is skipped (no-own-folder): there is no basis to
-	// call anything a copy. A book whose counted rows lie in the frozen iTunes
-	// tree is never written.
+	// Only a book's COUNTED rows are filled (database.SplitOwnFolderFiles):
+	// every row except the copies (database.IsBookFileCopy) — `_copyN` twins
+	// and same-content rows in the book's own folder, another folder, or two
+	// other folders — which are reported as copies and left untouched. Those
+	// are exactly the rows the ABS duration and RecomputeBookAggregates sum
+	// (database.OwnFolderFiles), so no fill can add a copy's runtime twice.
+	// Out-of-folder rows that are NOT copies (a merge's moved rows) are real
+	// content and are filled. A book with rows outside its own folder and no
+	// present own-folder row is skipped (no-own-folder): Book.FilePath may be
+	// the stale one, and a fill is a write. A book whose counted rows lie in
+	// the frozen iTunes tree is never written.
 	ZeroRowsOnly      bool     `json:"zeroRowsOnly"`
 	ZeroRowsOnlySnake bool     `json:"zero_rows_only"`
 	BookIDsSnake      []string `json:"book_ids,omitempty"`
@@ -239,16 +240,16 @@ func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 // processBookForReextract and consumed by the collector goroutine, which owns
 // all counter mutations and DB writes.
 type bookProcessResult struct {
-	// noOwnFolder: zero-rows mode, the rows span several folders and none of
-	// them is a present row in the book's own folder, so there is no basis to
-	// call any row a copy; skipped rather than risk filling duplicate copies.
+	// noOwnFolder: zero-rows mode, some rows lie outside the book's own
+	// folder and none of the rows is a present row in it, so Book.FilePath
+	// may be stale; skipped rather than risk filling on a wrong basis.
 	noOwnFolder bool
 	// itunes: zero-rows mode, a counted row lies in the frozen iTunes tree
 	// (books/itunes/**); the book is never written.
 	itunes bool
-	// copies: zero-rows mode, rows outside the book's own folder that are
-	// copies of a present own-folder row (database.IsBookFileCopy); excluded
-	// from the fill, as they are from every sum.
+	// copies: zero-rows mode, rows that are copies of a counted row
+	// (database.IsBookFileCopy), in or out of the own folder; excluded from
+	// the fill, as they are from every sum.
 	copies        int
 	book          database.Book
 	segs          []database.BookFile // may be nil for virtual single-file books
@@ -286,8 +287,8 @@ func processBookForReextract(ctx context.Context, store bookFileLister, book dat
 
 // processBookForReextractMode is processBookForReextract with the ZeroRowsOnly
 // scope: only rows stored as <= 0 become writes, the total alone never does,
-// and a book whose rows span several folders is filled in its counted rows only:
-// out-of-folder copies are left alone (see durationReextractParams.ZeroRowsOnly).
+// and a book is filled in its counted rows only: copies are left alone (see
+// durationReextractParams.ZeroRowsOnly).
 func processBookForReextractMode(ctx context.Context, store bookFileLister, book database.Book, skipBefore time.Time, zeroRows bool) bookProcessResult {
 	res := bookProcessResult{book: book}
 	if !skipBefore.IsZero() && book.DurationVerifiedAt != nil && book.DurationVerifiedAt.After(skipBefore) {
@@ -301,7 +302,7 @@ func processBookForReextractMode(ctx context.Context, store bookFileLister, book
 		// The same split the ABS mapper and RecomputeBookAggregates use, so
 		// the rows filled here are exactly the rows that are summed.
 		split := database.SplitOwnFolderFiles(&book, segs)
-		if len(split.Copies)+len(split.Others) > 0 && !split.HasOwnBasis() {
+		if split.HasOutside() && !split.HasOwnBasis() {
 			res.noOwnFolder = true
 			return res
 		}
