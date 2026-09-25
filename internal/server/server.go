@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.64.0
+// version: 2.65.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-25
 
@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -242,7 +243,12 @@ type Server struct {
 	// an item and decremented when done. Tests use this to synchronize
 	// without relying on timed sleeps.
 	indexWorkerBusy int32
-	http3Server     *http3.Server
+	// searchCoverageSeeded is set once reconcileSearchIndexCoverage has
+	// finished marking every missing book dirty in this process. Until then
+	// an empty dirty set does NOT mean the index is complete, so the
+	// reconciler must not clear a rebuilding index's marker.
+	searchCoverageSeeded atomic.Bool
+	http3Server          *http3.Server
 
 	hub              *realtime.EventHub
 	writeBackBatcher *itunesservice.WriteBackBatcher

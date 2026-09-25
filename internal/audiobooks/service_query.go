@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-09-25
 
@@ -225,7 +225,7 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 			// Scoped search: every match inside the author/series set, with no
 			// window. The post-filter block below counts and paginates it.
 			books, resultTotal, err = svc.searchWithinIDs(search, idMembership, f.UserID)
-		} else if svc.searchIndex != nil {
+		} else if svc.bleveSearchable() {
 			// When post-filters will run below, the index must hand back the
 			// whole candidate set, NOT one page.
 			//
@@ -266,7 +266,7 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 			// tokenise, so a multi-word query like "jobs classes" matches
 			// nothing rather than ANDing the terms. That is a large, silent
 			// behaviour change from the Bleve path, so say it happened.
-			slog.Warn("search: search index is nil; falling back to substring SearchBooks",
+			slog.Warn("search: search index is nil or rebuilding; falling back to substring SearchBooks",
 				"query", search, "fallback", "store.SearchBooks")
 			// Same over-fetch as the Bleve branch, for the same reason: the
 			// post-filter block below paginates, so it must be handed the
@@ -786,8 +786,8 @@ func (svc *AudiobookService) searchWithinIDs(query string, set map[string]struct
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	if svc.searchIndex == nil {
-		slog.Warn("search: search index is nil; scoped search falling back to the substring predicate",
+	if !svc.bleveSearchable() {
+		slog.Warn("search: search index is nil or rebuilding; scoped search falling back to the substring predicate",
 			"query", query, "scope", len(ids), "fallback", "database.SubstringSearchMatches")
 		return svc.substringSearchWithin(query, ids)
 	}
@@ -1025,6 +1025,15 @@ func (svc *AudiobookService) EnrichAudiobooksWithNamesAndFiles(books []database.
 // is (or is not) bounded by it without indexing 10,000 documents. Nothing in
 // production assigns it.
 var searchPostFilterWindow = 10000
+
+// bleveSearchable reports whether library search may be answered by the
+// Bleve index. A nil index cannot; neither can one that is still being
+// rebuilt (created empty, e.g. by a mapping-version bump, and not yet
+// drained): answering from it would silently return only the books indexed
+// so far. Both cases use the substring path, which reads the store.
+func (svc *AudiobookService) bleveSearchable() bool {
+	return svc.searchIndex != nil && !svc.searchIndex.Rebuilding()
+}
 
 // searchWithBleve parses the query via the DSL, translates to a
 // Bleve native query, and returns the matching books. Per-user

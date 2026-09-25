@@ -1,7 +1,7 @@
 // file: internal/server/search_coverage.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: ee9cc3d9-3925-4f72-af8a-e9f25a943fb9
-// last-edited: 2026-08-14
+// last-edited: 2026-09-25
 //
 // Boot-time repair for a PARTIALLY built Bleve search index.
 //
@@ -128,6 +128,7 @@ func (s *Server) reconcileSearchIndexCoverage() {
 
 	if len(missing) == 0 && len(stale) == 0 {
 		slog.Info("search index coverage OK", "indexed", len(docIDs), "books", len(ids))
+		s.searchCoverageSeeded.Store(true)
 		return
 	}
 
@@ -157,20 +158,25 @@ func (s *Server) reconcileSearchIndexCoverage() {
 	// restored from soft-delete later is re-indexed by the restore path
 	// itself: RestoreAudiobook goes through store.UpdateBook, and the
 	// indexedStore decorator enqueues a reindex on every UpdateBook.
+	//
+	// One batch per chunk rather than one Delete per doc: each scorch write
+	// is its own segment and its own wait for persistence.
 	deleted := 0
-	for _, id := range stale {
+	for lo := 0; lo < len(stale); lo += reconcileChunkSize {
 		select {
 		case <-s.bgCtx.Done():
 			slog.Info("search coverage: stale-doc deletion canceled (bgCtx)", "deleted", deleted, "of", len(stale))
 			return
 		default:
 		}
-		if err := s.searchIndex.DeleteBook(id); err != nil {
-			slog.Warn("search coverage: failed to delete stale doc", "bookID", id, "err", err)
+		chunk := stale[lo:min(lo+reconcileChunkSize, len(stale))]
+		if err := s.searchIndex.ApplyBatch(nil, chunk); err != nil {
+			slog.Warn("search coverage: failed to delete stale doc", "bookID", chunk[0], "err", err)
 			continue
 		}
-		deleted++
+		deleted += len(chunk)
 	}
+	s.searchCoverageSeeded.Store(true)
 	slog.Info("search coverage: reconciled",
 		"marked_missing", marked, "deleted_stale", deleted, "took", time.Since(start))
 }

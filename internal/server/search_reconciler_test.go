@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9a1e7c40-2b83-4f16-90ad-6c4b1f2e8d55
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 //
 // Tests for search-index reconciliation after a dropped index event.
 //
@@ -66,8 +66,10 @@ func TestNextBatchSize(t *testing.T) {
 		{"floor beats the proportional rate", 4000, reconcileMinBatch},
 		// 20,000/10 = 2,000 — proportional range.
 		{"proportional in the middle", 20000, 2000},
-		// The measured prod backlog: 56,537/10 = 5,653, above the cap.
-		{"prod bulk-day backlog is capped", 56537, reconcileMaxBatch},
+		// The 2026-08-10 prod backlog: 56,537/10 = 5,653, inside the range.
+		{"prod bulk-day backlog is proportional", 56537, 5653},
+		// The 2026-09-25 prod backlog: 100,161/10 = 10,016.
+		{"prod wedge backlog is proportional", 100161, 10016},
 		{"absurd backlog stays capped", 5000000, reconcileMaxBatch},
 	}
 	for _, tc := range tests {

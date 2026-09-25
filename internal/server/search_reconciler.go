@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 7c2bb743-3521-45cf-8815-32a1bb927cca
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 //
 // Reconciles the Bleve search index against the DB after dropped updates.
 //
@@ -33,47 +33,81 @@
 // See docs/design/2026-08-09-search-backend-options.md and
 // todo.d/20260810-search-index-queue-drops-silently.md.
 
+//
+// WHY IT WEDGED ON 2026-09-24/25 (and what this file now does about it)
+//
+// Production sat at 61,334 indexed docs against 100,774 books across 13
+// restarts with a 100,161-entry dirty set and not one "search index
+// reconcile" line. The goroutine dump showed every index writer (this
+// reconciler, the index worker, the coverage pass) blocked in scorch's
+// prepareSegment waiting for `persisted`; scorch's own stats showed why:
+// CurOnDiskFiles=10,202, 92 failed file-merge plans and zero successful ones,
+// and the persister paused in pausePersisterForMergerCatchUp, which waits for
+// a merge to succeed whenever the directory holds >= 1000 files. A safe
+// scorch write returns only after persistence, so every write blocked
+// forever. The old per-tick summary was logged AFTER the loop, so it never
+// printed. Three changes follow from that:
+//
+//   - scorch async errors are now logged (internal/search/bleve_index.go);
+//   - a watchdog (runSearchIndexWatchdog) reports any write that has been
+//     inside bleve longer than searchIndexWriteStallAfter, with the scorch
+//     counters that name the cause, from a goroutine that is never itself
+//     inside a write;
+//   - the drain applies chunks as ONE bleve batch each (one segment, one
+//     persistence wait) instead of one single-document segment per book,
+//     so a 100k backlog is ~400 batches rather than 100k.
+
 package server
 
 import (
+	"errors"
 	"log/slog"
-
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
+
+var searchIndexLog = logger.New("search-index")
 
 // Reconciler tuning. Named constants because the drain rate is a real
 // operational trade-off, not an implementation detail — see nextBatchSize.
 const (
-	// reconcileInterval is how often the dirty set is drained. Short enough
-	// that a normal-day backlog (a handful of drops) clears promptly, long
-	// enough that the scan is nowhere near a hot path.
+	// reconcileInterval is how often an EMPTY-or-stalled dirty set is
+	// re-checked. A backlog that is making progress is drained continuously
+	// (see runSearchReconciler), not once per interval.
 	reconcileInterval = 30 * time.Second
 
 	// reconcileMinBatch is drained even when the backlog is tiny, so small
-	// backlogs clear in a single tick rather than trickling.
+	// backlogs clear in a single pass rather than trickling.
 	reconcileMinBatch = 500
 
-	// reconcileMaxBatch caps a single tick's work so a huge backlog cannot
-	// monopolise the store or Bleve in one burst.
-	reconcileMaxBatch = 5000
+	// reconcileMaxBatch caps one pass. A pass lists this many keys, applies
+	// them in reconcileChunkSize batches, clears them and logs; the next pass
+	// starts immediately while the backlog is still shrinking. The cap bounds
+	// how much work one summary line covers, not the drain rate.
+	reconcileMaxBatch = 20000
 
-	// reconcileBacklogDivisor sets the adaptive rate: each tick drains
+	// reconcileBacklogDivisor sets the adaptive rate: each pass drains
 	// backlog/divisor, clamped to [reconcileMinBatch, reconcileMaxBatch].
-	//
-	// 10 (i.e. 10% per tick) rather than the 1% first sketched: at 1% a
-	// 56,537-entry backlog drains ~565 per tick, which is indistinguishable
-	// from the fixed floor of 500 and takes ~50 minutes. Percentage drains
-	// also decay — the batch shrinks as the backlog does, so the tail is the
-	// slowest part, which is backwards. At 10% capped, the same backlog
-	// clears in ~11 ticks (~5.5 minutes) and small backlogs still clear in
-	// one. Change this one constant to retune.
 	reconcileBacklogDivisor = 10
+
+	// reconcileChunkSize is books per bleve batch: one GetBooksByIDs, three
+	// relation batch reads and one Batch commit. Inside bleve's recommended
+	// 100-1000 docs per batch.
+	reconcileChunkSize = 250
+
+	// searchIndexWriteStallAfter is how long a single bleve write may take
+	// before the watchdog reports it. Healthy batches persist in well under a
+	// second; a minute is unambiguous.
+	searchIndexWriteStallAfter = time.Minute
 )
 
 // searchIndexDropped counts index events dropped because the queue was full,
@@ -89,11 +123,11 @@ var searchIndexDropped atomic.Int64
 // Exposed for the metrics endpoint and for tests.
 func SearchIndexDroppedCount() int64 { return searchIndexDropped.Load() }
 
-// nextBatchSize returns how many dirty books to drain this tick.
+// nextBatchSize returns how many dirty books to drain this pass.
 //
 // Adaptive: proportional to the backlog, clamped at both ends. Small
 // backlogs clear immediately via the floor; bulk-operation backlogs clear
-// quickly without a single tick doing unbounded work.
+// in a bounded number of back-to-back passes.
 func nextBatchSize(backlog int) int {
 	if backlog <= 0 {
 		return 0
@@ -122,11 +156,105 @@ func (s *Server) markIndexDirty(bookID string) {
 	}
 }
 
-// runSearchReconciler drains the dirty set on a ticker until bgCtx is done.
+// indexChunkStore is what applyIndexChunk reads: a batch point read plus
+// the three relation batch reads search.LoadBookRelations uses.
+type indexChunkStore interface {
+	GetBooksByIDs(ids []string) ([]database.Book, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetAuthorsByIDs(ids []int) (map[int]*database.Author, error)
+	GetSeriesByIDs(ids []int) (map[int]*database.Series, error)
+	GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error)
+}
+
+// indexChunkResult reports one applyIndexChunk call. done holds the IDs
+// whose index state now matches the store (upserted or removed); failed
+// holds IDs that must stay dirty.
+type indexChunkResult struct {
+	upserted, removed int
+	done, failed      []string
+}
+
+// applyIndexChunk re-derives the index state of ids from the store and
+// writes it as ONE bleve batch.
 //
-// Runs as a single goroutine so re-index work stays serialized with respect
-// to itself, matching runIndexWorker's rationale: Bleve sees ordered writes
-// and no read of DB state races another reconcile of the same book.
+// Truth is re-read rather than trusting a recorded upsert/delete intent (see
+// the package comment): a row that is gone or soft-deleted is removed from the
+// index, every other row is upserted.
+//
+// GetBooksByIDs skips not-found rows silently and, on the first real read
+// error, returns the rows read so far PLUS the error. "Requested but not
+// returned" therefore means "gone" only when err == nil; on an error the chunk
+// falls back to per-ID reads so a single unreadable row fails alone instead
+// of pinning its whole chunk dirty forever.
+func (s *Server) applyIndexChunk(store indexChunkStore, ids []string) indexChunkResult {
+	var res indexChunkResult
+	if len(ids) == 0 || s.searchIndex == nil {
+		return res
+	}
+	books, err := store.GetBooksByIDs(ids)
+	var live []database.Book
+	var deletes []string
+	if err == nil {
+		got := make(map[string]struct{}, len(books))
+		for i := range books {
+			got[books[i].ID] = struct{}{}
+			if books[i].IsSoftDeleted() {
+				deletes = append(deletes, books[i].ID)
+			} else {
+				live = append(live, books[i])
+			}
+		}
+		for _, id := range ids {
+			if _, ok := got[id]; !ok {
+				deletes = append(deletes, id)
+			}
+		}
+	} else {
+		searchIndexLog.Warn("search index: batch book read failed, retrying chunk per book: %v", err)
+		for _, id := range ids {
+			b, gerr := store.GetBookByID(id)
+			switch {
+			case gerr != nil:
+				searchIndexLog.Warn("search index: read book %s: %v", logger.SanitizeLogValue(id), gerr)
+				res.failed = append(res.failed, id)
+			case b == nil || b.IsSoftDeleted():
+				deletes = append(deletes, id)
+			default:
+				live = append(live, *b)
+			}
+		}
+	}
+
+	rel, rerr := search.LoadBookRelations(store, live)
+	if rerr != nil {
+		searchIndexLog.Warn("search index: relation batch read failed (indexing %d books with partial relations): %v", len(live), rerr)
+	}
+	docs := make([]search.BookDocument, 0, len(live))
+	for i := range live {
+		docs = append(docs, search.BookToDocWithRelations(&live[i], rel))
+	}
+	if err := s.searchIndex.ApplyBatch(docs, deletes); err != nil {
+		searchIndexLog.Warn("search index: batch commit failed for %d books: %v", len(docs)+len(deletes), err)
+		for i := range docs {
+			res.failed = append(res.failed, docs[i].BookID)
+		}
+		res.failed = append(res.failed, deletes...)
+		return res
+	}
+	res.upserted, res.removed = len(docs), len(deletes)
+	for i := range docs {
+		res.done = append(res.done, docs[i].BookID)
+	}
+	res.done = append(res.done, deletes...)
+	return res
+}
+
+// runSearchReconciler drains the dirty set until bgCtx is done.
+//
+// While a pass makes progress and backlog remains, the next pass starts
+// immediately; the ticker only paces re-checks of an empty or non-draining
+// set. The previous shape — at most one capped batch per 30 s tick — put a
+// floor of hours under a 100k backlog even with a healthy index.
 func (s *Server) runSearchReconciler() {
 	if s.searchIndex == nil {
 		return
@@ -139,94 +267,151 @@ func (s *Server) runSearchReconciler() {
 		case <-s.bgCtx.Done():
 			return
 		case <-ticker.C:
-			s.reconcileOnce()
+		}
+		for s.bgCtx.Err() == nil {
+			drained, remaining := s.reconcileOnce()
+			if drained == 0 || remaining == 0 {
+				break
+			}
 		}
 	}
 }
 
-// reconcileOnce drains one adaptive batch from the dirty set.
+// reconcileOnce drains one adaptive pass from the dirty set and reports how
+// many keys it cleared and how many remain.
 //
-// Each entry is re-derived from the DB rather than replaying a recorded
-// upsert/delete intent: if the book still exists it is re-indexed, otherwise
-// it is removed from the index. Re-reading truth is the point — this whole
-// mechanism exists because a recorded intent was lost, so trusting another
-// recorded intent would repeat the mistake.
-func (s *Server) reconcileOnce() {
+// The pass is split into reconcileChunkSize chunks applied by a bounded
+// errgroup: chunk IDs are disjoint slices of one listing, so two workers
+// never write the same document. Each chunk's keys are cleared right after
+// its batch commits (a safe scorch batch returns only once persisted), so a
+// restart mid-pass loses at most the in-flight chunks' work, never a clear
+// that ran ahead of its write.
+func (s *Server) reconcileOnce() (drained, remaining int) {
 	ds := database.AsSearchIndexDirtyStore(s.Ops())
-	if ds == nil {
-		return
+	if ds == nil || s.searchIndex == nil {
+		return 0, 0
+	}
+	store, ok := s.Ops().(indexChunkStore)
+	if !ok {
+		searchIndexLog.Warn("search reconcile: store cannot batch-read books; reconcile disabled")
+		return 0, 0
 	}
 
 	backlog, err := ds.CountSearchIndexDirty()
 	if err != nil {
-		slog.Warn("search reconcile: count dirty set", "err", err)
-		return
+		searchIndexLog.Warn("search reconcile: count dirty set: %v", err)
+		return 0, 0
 	}
 	metrics.SetSearchIndexDirtyBacklog(backlog)
 	if backlog == 0 {
-		return
+		s.maybeMarkSearchIndexRebuilt()
+		return 0, 0
 	}
 
-	batch := nextBatchSize(backlog)
-	ids, err := ds.ListSearchIndexDirty(batch)
+	ids, err := ds.ListSearchIndexDirty(nextBatchSize(backlog))
 	if err != nil {
-		slog.Warn("search reconcile: list dirty set", "err", err)
-		return
+		searchIndexLog.Warn("search reconcile: list dirty set: %v", err)
+		return 0, backlog
 	}
 
 	start := time.Now()
-	repaired, removed, failed := 0, 0, 0
-
-	for _, id := range ids {
-		// Shutdown mid-batch: stop cleanly. Un-drained keys stay in the set
-		// and are picked up on the next start, which is exactly what
-		// persisting the set buys us.
-		if s.bgCtx.Err() != nil {
-			break
-		}
-
-		// GetBookByID, matching IndexBookByID's own read — a nil book with a
-		// nil error is the "row is gone" signal, which is what distinguishes
-		// a reindex from an index delete.
-		book, gerr := s.Ops().GetBookByID(id)
-		switch {
-		case gerr != nil:
-			// Leave the key in place so the next tick retries it.
-			slog.Warn("search reconcile: read book", "bookID", id, "err", gerr)
-			failed++
-			continue
-		case book == nil:
-			// Book is gone; the index entry must go too.
-			if derr := s.DeleteIndexedBook(id); derr != nil {
-				slog.Warn("search reconcile: delete from index", "bookID", id, "err", derr)
-				failed++
-				continue
+	var mu sync.Mutex
+	upserted, removed, failed, cleared := 0, 0, 0, 0
+	g, gctx := errgroup.WithContext(s.bgCtx)
+	g.SetLimit(max(1, runtime.NumCPU()))
+	for lo := 0; lo < len(ids); lo += reconcileChunkSize {
+		chunk := ids[lo:min(lo+reconcileChunkSize, len(ids))]
+		g.Go(func() error {
+			if err := gctx.Err(); err != nil {
+				return err
 			}
-			removed++
-		default:
-			if ierr := s.IndexBookByID(id); ierr != nil {
-				slog.Warn("search reconcile: reindex", "bookID", id, "err", ierr)
-				failed++
-				continue
+			res := s.applyIndexChunk(store, chunk)
+			// Clear only what was written. A failed clear costs one redundant
+			// re-index next pass; clearing early would silently drop a repair.
+			n := 0
+			for _, id := range res.done {
+				if cerr := ds.ClearSearchIndexDirty(id); cerr != nil {
+					searchIndexLog.Warn("search reconcile: clear dirty key %s: %v", logger.SanitizeLogValue(id), cerr)
+					continue
+				}
+				n++
 			}
-			repaired++
-		}
-
-		// Clear only after the index write succeeded. A failed clear leaves a
-		// redundant re-index next tick, which is harmless; clearing early
-		// would silently drop the repair, which is not.
-		if cerr := ds.ClearSearchIndexDirty(id); cerr != nil {
-			slog.Warn("search reconcile: clear dirty key", "bookID", id, "err", cerr)
-		}
+			mu.Lock()
+			upserted += res.upserted
+			removed += res.removed
+			failed += len(res.failed)
+			cleared += n
+			mu.Unlock()
+			return nil
+		})
+	}
+	if werr := g.Wait(); werr != nil && !errors.Is(werr, s.bgCtx.Err()) {
+		searchIndexLog.Warn("search reconcile: pass stopped: %v", werr)
 	}
 
-	slog.Info("search index reconcile",
-		"backlog", backlog,
-		"batch", len(ids),
-		"repaired", repaired,
-		"removed", removed,
-		"failed", failed,
-		"remaining", backlog-repaired-removed,
-		"took", time.Since(start).Round(time.Millisecond),
-	)
+	remaining = max(0, backlog-cleared)
+	metrics.SetSearchIndexDirtyBacklog(remaining)
+	searchIndexLog.Info("search index reconcile: batch=%d repaired=%d removed=%d failed=%d elapsed=%s remaining=%d",
+		len(ids), upserted, removed, failed, time.Since(start).Round(time.Millisecond), remaining)
+	if remaining == 0 {
+		s.maybeMarkSearchIndexRebuilt()
+	}
+	return cleared, remaining
+}
+
+// maybeMarkSearchIndexRebuilt clears a rebuilding index's marker once the
+// index provably covers the library: the coverage pass has seeded every
+// missing book in THIS process and the dirty set is empty. Without the
+// coverage condition a reconciler pass that ran before seeding finished would
+// see an empty set and declare a 0%-covered index complete.
+func (s *Server) maybeMarkSearchIndexRebuilt() {
+	if s.searchIndex == nil || !s.searchIndex.Rebuilding() || !s.searchCoverageSeeded.Load() {
+		return
+	}
+	if err := s.searchIndex.MarkRebuilt(); err != nil {
+		searchIndexLog.Error("search index: rebuild finished but the marker could not be cleared: %v", err)
+		return
+	}
+	searchIndexLog.Info("search index rebuild complete; library search is served by the index again")
+}
+
+// runSearchIndexWatchdog reports bleve writes that do not return.
+//
+// It must run in its own goroutine: on 2026-09-24/25 every goroutine that
+// could have logged the stall was itself blocked inside a write. The report
+// carries scorch's own counters, which is what named the cause then
+// (CurOnDiskFiles over the persister's 1000-file pause threshold, merge plans
+// failing with none succeeding).
+func (s *Server) runSearchIndexWatchdog() {
+	if s.searchIndex == nil {
+		return
+	}
+	ticker := time.NewTicker(searchIndexWriteStallAfter / 2)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.bgCtx.Done():
+			return
+		case <-ticker.C:
+			s.checkSearchIndexStall()
+		}
+	}
+}
+
+// checkSearchIndexStall logs one Error line when the oldest in-flight write
+// has exceeded searchIndexWriteStallAfter. Returns whether it reported.
+func (s *Server) checkSearchIndexStall() bool {
+	oldest, n := s.searchIndex.OldestWrite()
+	if oldest < searchIndexWriteStallAfter {
+		return false
+	}
+	st := s.searchIndex.HealthStats()
+	searchIndexLog.Error("search index write stalled: oldest=%s inflight=%d on_disk_files=%d root_segments=%d "+
+		"merge_tasks_failed=%d merge_tasks_done=%d last_merged_epoch=%d last_persisted_epoch=%d "+
+		"persister_merger_pauses=%d resumes=%d async_errors=%d",
+		oldest.Round(time.Second), n, st["CurOnDiskFiles"], st["TotFileSegmentsAtRoot"],
+		st["TotFileMergePlanTasksErr"], st["TotFileMergePlanTasksDone"], st["LastMergedEpoch"],
+		st["LastPersistedEpoch"], st["TotPersisterSlowMergerPause"], st["TotPersisterSlowMergerResume"],
+		search.AsyncErrorCount())
+	return true
 }

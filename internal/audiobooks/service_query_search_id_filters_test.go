@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_id_filters_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: de1c4eca-5371-4c44-9c6e-8a7d61b37aeb
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 // Regression tests for author_id / series_id surviving a search, and for
 // author_id + series_id intersecting instead of author winning.
@@ -129,7 +129,7 @@ func buildIDFilterFixture(t *testing.T, withIndex bool) *idFilterFixture {
 
 	svc := NewAudiobookService(ps)
 	if withIndex {
-		svc.SetSearchIndex(buildSearchTestIndex(t, fx.all...))
+		svc.SetSearchIndex(completedIndex(t, buildSearchTestIndex(t, fx.all...)))
 	}
 	fx.svc = svc
 	return fx
