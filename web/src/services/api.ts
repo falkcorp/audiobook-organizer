@@ -6883,9 +6883,10 @@ export async function pullAIBackendModel(
 // Universal Review Queue (PR-A2 frontend for the PR-A1 backend).
 //
 // Field-name note: the backend serialises ReviewItem with snake_case struct
-// tags (dedup_key, folder_ref, created_at, updated_at) but the count endpoint's
-// byKind map is a camelCase gin.H literal key — so this contract is genuinely
-// mixed-case. Types below mirror the wire shapes exactly; do not normalise.
+// tags (dedup_key, folder_ref, created_at, updated_at); the count endpoint's
+// by_kind map and the approve endpoint's chosen_action were camelCase gin.H
+// literal keys until the 2026-09-25 snake_case naming sweep converted them.
+// Types below mirror the wire shapes exactly; do not normalise.
 // =====================================================================
 
 /** A single review-queue hold. `payload` is a JSON STRING (opaque here — the
@@ -6907,10 +6908,10 @@ export interface ReviewItem {
   chosen_action?: string;
 }
 
-/** GET /review/count → data.{count, byKind}. Both cover PENDING items only. */
+/** GET /review/count → data.{count, by_kind}. Both cover PENDING items only. */
 export interface ReviewCount {
   count: number;
-  byKind: Record<string, number>;
+  by_kind: Record<string, number>;
 }
 
 /** GET /review/items → flat {items, count, limit, offset, total} (RespondWithList,
@@ -6993,7 +6994,7 @@ export async function getReviewCount(): Promise<ReviewCount> {
   }
   const body = await response.json();
   const data = body.data ?? {};
-  return { count: data.count ?? 0, byKind: data.byKind ?? {} };
+  return { count: data.count ?? 0, by_kind: data.by_kind ?? {} };
 }
 
 export async function getReviewItems(

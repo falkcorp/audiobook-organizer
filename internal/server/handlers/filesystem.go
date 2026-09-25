@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 // Package handlers — FilesystemHandler covers home-directory, filesystem
 // browse, exclusion CRUD, import-path CRUD, and the on-demand single-file
@@ -208,7 +208,7 @@ func (h *FilesystemHandler) ListImportPaths(c *gin.Context) {
 		}
 	}
 
-	httputil.RespondWithOK(c, gin.H{"importPaths": folders, "count": len(folders)})
+	httputil.RespondWithOK(c, gin.H{"import_paths": folders, "count": len(folders)})
 }
 
 // AddImportPath handles POST /api/v1/import-paths.
@@ -245,7 +245,7 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 	if req.Enabled != nil && !*req.Enabled {
 		folder.Enabled = false
 		if err := h.store.UpdateImportPath(folder.ID, folder); err != nil {
-			httputil.RespondWithCreated(c, gin.H{"importPath": folder, "warning": "created but could not update enabled flag"})
+			httputil.RespondWithCreated(c, gin.H{"import_path": folder, "warning": "created but could not update enabled flag"})
 			return
 		}
 	}
@@ -263,7 +263,7 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 		}
 		opID, enqErr := h.opEnqueuer.EnqueueOp(c.Request.Context(), "library.folder-auto-scan", params)
 		if enqErr == nil {
-			httputil.RespondWithCreated(c, gin.H{"importPath": folder, "scan_operation_id": opID})
+			httputil.RespondWithCreated(c, gin.H{"import_path": folder, "scan_operation_id": opID})
 			return
 		}
 		// The folder WAS created, so this still answers 201 — but the scan the
@@ -321,7 +321,7 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 		}
 	}
 
-	httputil.RespondWithCreated(c, gin.H{"importPath": folder})
+	httputil.RespondWithCreated(c, gin.H{"import_path": folder})
 }
 
 // RemoveImportPath handles DELETE /api/v1/import-paths/:id.

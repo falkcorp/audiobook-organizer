@@ -70,6 +70,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -92,8 +93,11 @@ type chaptersBackfillParams struct {
 	// applies to the writes and never to the measurement.
 	Limit int `json:"limit"`
 	// BookIDs restricts the run to an explicit set. Used to exercise the op
-	// against a bounded cohort before a whole-library pass.
-	BookIDs []string `json:"bookIds,omitempty"`
+	// against a bounded cohort before a whole-library pass. bookIds
+	// (camelCase) is accepted as a request alias; sending both with
+	// different, non-empty lists is an error rather than a silent pick.
+	BookIDs      []string `json:"book_ids,omitempty"`
+	BookIDsCamel []string `json:"bookIds,omitempty"`
 
 	// Overwrite REPLACES chapters that are already persisted instead of
 	// skipping the book. It exists because "has chapters" and "has CORRECT
@@ -351,6 +355,13 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
 		}
+	}
+	if len(params.BookIDs) > 0 && len(params.BookIDsCamel) > 0 &&
+		!slices.Equal(params.BookIDs, params.BookIDsCamel) {
+		return fmt.Errorf("book_ids and bookIds disagree; send one")
+	}
+	if len(params.BookIDs) == 0 && len(params.BookIDsCamel) > 0 {
+		params.BookIDs = params.BookIDsCamel
 	}
 
 	// ── refuse a library-wide overwrite ──────────────────────────────────────
