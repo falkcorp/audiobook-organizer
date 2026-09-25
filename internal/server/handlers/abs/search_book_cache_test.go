@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/search_book_cache_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e10f4fe-7e2d-4948-a417-4c262f7ac2f4
 // last-edited: 2026-09-25
 
@@ -91,6 +91,14 @@ func TestSearch_SharedResultCache(t *testing.T) {
 	// lookups; neither Match nor the order comparator rescanned the library.
 	if seed.lib.searchCalls() != scans {
 		t.Fatalf("the patch ran full library scans (%d -> %d)", scans, seed.lib.searchCalls())
+	}
+	// Review finding 28: ABS hydrates hits without the ~22 KB signature
+	// sidecar, which no ABS response carries.
+	seed.lib.mu.Lock()
+	sig := seed.lib.sigHydrations
+	seed.lib.mu.Unlock()
+	if sig != 0 {
+		t.Fatalf("ABS hydrated %d times with the signature sidecar", sig)
 	}
 }
 

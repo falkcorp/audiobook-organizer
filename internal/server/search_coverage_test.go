@@ -1,7 +1,7 @@
 // file: internal/server/search_coverage_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 000a3aed-48a5-49fd-b36a-d52d7d4de58e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 //
 // Regression tests for a PARTIALLY built search index.
 //
@@ -23,6 +23,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )
 
 // seedPartialIndex creates n books and indexes only the first indexed of
@@ -208,7 +209,27 @@ func TestSearchCoverage_StaleDocsAreDeleted(t *testing.T) {
 		t.Fatalf("precondition: %d docs, want 4 (2 live + 2 stale)", docs)
 	}
 
+	// Review finding 27: the stale-doc deletes are Bleve writes, so the
+	// search result cache's change log must record them.
+	srv.searchChanges = searchcache.NewChangeLog(0)
+	gen := srv.searchChanges.Generation()
+
 	srv.reconcileSearchIndexCoverage()
+
+	changed, _, ok := srv.searchChanges.ChangedSince(gen)
+	if !ok {
+		t.Fatal("change log cannot answer since the pre-sweep generation")
+	}
+	for _, ghost := range []string{"ghost-01", "ghost-02"} {
+		found := false
+		for _, id := range changed {
+			found = found || id == ghost
+		}
+		if !found {
+			t.Errorf("coverage sweep deleted %s without recording it: %v", ghost, changed)
+		}
+	}
+
 	srv.reconcileOnce()
 
 	// The stale docs are gone, the missing live book is indexed: exactly the
