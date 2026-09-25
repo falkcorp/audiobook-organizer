@@ -1,6 +1,6 @@
 // file: internal/server/playlist_handlers_test.go
-// version: 1.1.0
-// last-edited: 2026-08-15
+// version: 1.1.1
+// last-edited: 2026-09-25
 // guid: 8b4d6f3e-9c4a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -41,6 +41,10 @@ func setupPlaylistTestServer(t *testing.T) *Server {
 		t.Fatalf("bleve open: %v", err)
 	}
 	t.Cleanup(func() { _ = idx.Close() })
+	// Fixture indexes every book itself, so it is complete by construction.
+	if err := idx.MarkRebuilt(); err != nil {
+		t.Fatalf("MarkRebuilt: %v", err)
+	}
 
 	srv := NewServer(store)
 	srv.setSearchIndex(idx) // test-only setter

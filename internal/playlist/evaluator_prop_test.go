@@ -1,5 +1,5 @@
 // file: internal/playlist/evaluator_prop_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: bcc094f5-1645-44d3-be21-3087888fdaea
 
 // Property-based tests for the smart-playlist evaluator.
@@ -15,7 +15,7 @@
 // PerUserFilterIsolation is the exception — it asserts len(aliceGot)==n for
 // THIS iteration's books only, which breaks when alice state from prior
 // iterations lingers. That test uses per-iteration fixtures with rt.Cleanup.
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package playlist
 
@@ -44,6 +44,10 @@ func openPropFixture(t *testing.T) (*database.PebbleStore, *search.BleveIndex) {
 		t.Fatalf("bleve open: %v", err)
 	}
 	t.Cleanup(func() { _ = idx.Close() })
+	// Fixture indexes every book itself, so it is complete by construction.
+	if err := idx.MarkRebuilt(); err != nil {
+		t.Fatalf("MarkRebuilt: %v", err)
+	}
 
 	return store, idx
 }

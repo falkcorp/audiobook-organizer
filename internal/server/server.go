@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.65.0
+// version: 2.65.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-25
 
@@ -248,6 +248,9 @@ type Server struct {
 	// an empty dirty set does NOT mean the index is complete, so the
 	// reconciler must not clear a rebuilding index's marker.
 	searchCoverageSeeded atomic.Bool
+	// reconcileStuckPasses counts consecutive reconcile passes that failed
+	// every remaining key; see reconcileStuckPassLimit.
+	reconcileStuckPasses atomic.Int32
 	http3Server          *http3.Server
 
 	hub              *realtime.EventHub

@@ -1,5 +1,5 @@
 // file: internal/server/search_reconciler.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c2bb743-3521-45cf-8815-32a1bb927cca
 // last-edited: 2026-09-25
 //
@@ -166,6 +166,18 @@ type indexChunkStore interface {
 	GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error)
 }
 
+// Compile-time proof that the production store (the indexedStore decorator,
+// which embeds database.Store) satisfies indexChunkStore. Without it a method
+// missing from database.Store would silently disable the reconciler and send
+// every worker event to the dirty set.
+var _ indexChunkStore = database.Store(nil)
+
+// reconcileStuckPassLimit is how many consecutive passes may fail EVERY
+// remaining key before the rebuild gate is released anyway (see
+// reconcileOnce). Without it one permanently unreadable row would keep
+// library search on the substring path forever.
+const reconcileStuckPassLimit = 2
+
 // indexChunkResult reports one applyIndexChunk call. done holds the IDs
 // whose index state now matches the store (upserted or removed); failed
 // holds IDs that must stay dirty.
@@ -234,11 +246,27 @@ func (s *Server) applyIndexChunk(store indexChunkStore, ids []string) indexChunk
 		docs = append(docs, search.BookToDocWithRelations(&live[i], rel))
 	}
 	if err := s.searchIndex.ApplyBatch(docs, deletes); err != nil {
-		searchIndexLog.Warn("search index: batch commit failed for %d books: %v", len(docs)+len(deletes), err)
+		// Retry one document at a time, as indexBookChunk does, so a single
+		// bad document costs one row rather than the chunk.
+		searchIndexLog.Warn("search index: batch commit failed for %d books, retrying per book: %v", len(docs)+len(deletes), err)
 		for i := range docs {
-			res.failed = append(res.failed, docs[i].BookID)
+			if e := s.searchIndex.ApplyBatch(docs[i:i+1], nil); e != nil {
+				searchIndexLog.Warn("search index: index %s: %v", logger.SanitizeLogValue(docs[i].BookID), e)
+				res.failed = append(res.failed, docs[i].BookID)
+				continue
+			}
+			res.upserted++
+			res.done = append(res.done, docs[i].BookID)
 		}
-		res.failed = append(res.failed, deletes...)
+		for _, id := range deletes {
+			if e := s.searchIndex.ApplyBatch(nil, []string{id}); e != nil {
+				searchIndexLog.Warn("search index: delete %s: %v", logger.SanitizeLogValue(id), e)
+				res.failed = append(res.failed, id)
+				continue
+			}
+			res.removed++
+			res.done = append(res.done, id)
+		}
 		return res
 	}
 	res.upserted, res.removed = len(docs), len(deletes)
@@ -353,6 +381,24 @@ func (s *Server) reconcileOnce() (drained, remaining int) {
 	metrics.SetSearchIndexDirtyBacklog(remaining)
 	searchIndexLog.Info("search index reconcile: batch=%d repaired=%d removed=%d failed=%d elapsed=%s remaining=%d",
 		len(ids), upserted, removed, failed, time.Since(start).Round(time.Millisecond), remaining)
+
+	// A pass that listed the WHOLE remaining set and failed every key made
+	// no progress and never will on its own. After reconcileStuckPassLimit
+	// such passes, release the rebuild gate: the rest of the library is
+	// indexed, and the failing keys stay dirty and keep being retried.
+	if len(ids) == backlog && cleared == 0 && failed == len(ids) {
+		if s.reconcileStuckPasses.Add(1) >= reconcileStuckPassLimit && s.searchIndex.Rebuilding() && s.searchCoverageSeeded.Load() {
+			sample := ids[:min(len(ids), 5)]
+			for i := range sample {
+				sample[i] = logger.SanitizeLogValue(sample[i])
+			}
+			searchIndexLog.Error("search index: %d book(s) fail to index on every pass (e.g. %v); "+
+				"releasing the rebuild gate anyway, they stay dirty and are retried", len(ids), sample)
+			s.forceMarkSearchIndexRebuilt()
+		}
+	} else {
+		s.reconcileStuckPasses.Store(0)
+	}
 	if remaining == 0 {
 		s.maybeMarkSearchIndexRebuilt()
 	}
@@ -364,10 +410,27 @@ func (s *Server) reconcileOnce() (drained, remaining int) {
 // missing book in THIS process and the dirty set is empty. Without the
 // coverage condition a reconciler pass that ran before seeding finished would
 // see an empty set and declare a 0%-covered index complete.
+//
+// The dirty set is re-counted here rather than trusting a pass's arithmetic:
+// a pass that started before coverage wrote its last marks can compute zero
+// while real keys remain. Seeded is loaded FIRST so the count is taken after
+// seeding finished.
 func (s *Server) maybeMarkSearchIndexRebuilt() {
 	if s.searchIndex == nil || !s.searchIndex.Rebuilding() || !s.searchCoverageSeeded.Load() {
 		return
 	}
+	ds := database.AsSearchIndexDirtyStore(s.Ops())
+	if ds == nil {
+		return
+	}
+	if n, err := ds.CountSearchIndexDirty(); err != nil || n != 0 {
+		return
+	}
+	s.forceMarkSearchIndexRebuilt()
+}
+
+// forceMarkSearchIndexRebuilt clears the rebuilding marker and logs it.
+func (s *Server) forceMarkSearchIndexRebuilt() {
 	if err := s.searchIndex.MarkRebuilt(); err != nil {
 		searchIndexLog.Error("search index: rebuild finished but the marker could not be cleared: %v", err)
 		return
