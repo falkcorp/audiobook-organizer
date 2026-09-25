@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.33.0
+// version: 2.34.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package server
 
@@ -13,6 +13,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	admindebug "github.com/falkcorp/audiobook-organizer/internal/server/handlers/admindebug"
 	aibackendshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/aibackends"
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
 	deduphandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/dedup"
@@ -706,4 +707,15 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	s.wireReviewRoutes(protected, reviewH)
 	s.wireAudiobooksRoutes(protected, audiobooksH)
 	s.wireMetadataRoutes(protected, metadataH)
+
+	// Admin debug API: one-off field fixes of book / book_file rows with a
+	// preview, an audit row and an undo. Register applies RequireAdmin itself.
+	// Typed-nil guard as above: a nil *activity.Service boxed into the
+	// interface would pass the handler's nil check (apply refuses with 503
+	// when there is no audit log).
+	var adminDebugActivity admindebug.ActivityRecorder
+	if s.activityService != nil {
+		adminDebugActivity = s.activityService
+	}
+	admindebug.New(s.storeForWiring(), adminDebugActivity).Register(protected)
 }
