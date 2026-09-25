@@ -1,0 +1,119 @@
+AudioBooth decode proof (pin: 849eac04ed92c6f0c75d977ee6bf17e01b3b2b77)
+Call sites: 35 of 45 decoded, 6 of 45 2xx-only (Data), 1 of 45 error-by-design, 3 of 45 N/A, 0 of 45 FAILED
+Models: 19 of 26 decoded with data
+  extra    status as ServerStatus
+  extra    login as Authorize
+  decoded  authorize as Authorize
+  decoded  libraries as LibrariesResponse
+  decoded  library_filterdata as FilterDataResponse
+  decoded  personalized as [Personalized.Section]
+  decoded  items_title as Page<Book>
+  decoded  items_collapse_series as Page<Book>
+  decoded  items_filter_series as Page<Book>
+  decoded  items_filter_narrator as Page<Book>
+  decoded  items_filter_genre as Page<Book>
+  decoded  items_sort_authorName as Page<Book>
+  decoded  items_sort_authorNameLF as Page<Book>
+  decoded  items_sort_author as Page<Book>
+  decoded  items_sort_publishedYear as Page<Book>
+  decoded  items_sort_addedAt_desc as Page<Book>
+  decoded  items_sort_size as Page<Book>
+  decoded  items_sort_duration as Page<Book>
+  decoded  items_sort_numTracks as Page<Book>
+  decoded  items_sort_updatedAt as Page<Book>
+  decoded  items_sort_progress as Page<Book>
+  decoded  items_sort_progressFinishedAt as Page<Book>
+  decoded  items_sort_progressCreatedAt as Page<Book>
+  decoded  items_sort_birthtime as Page<Book>
+  decoded  items_sort_modified as Page<Book>
+  decoded  items_sort_random as Page<Book>
+  decoded  item_detail as Book
+  decoded  search_title as SearchResponse
+  decoded  search_series as SearchResponse
+  decoded  search_author as SearchResponse
+  decoded  search_narrator as SearchResponse
+  decoded  search_genre as SearchResponse
+  decoded  series_name as Page<Series>
+  decoded  series_numBooks_desc as Page<Series>
+  decoded  series_addedAt as Page<Series>
+  decoded  series_lastBookAdded as Page<Series>
+  decoded  series_lastBookUpdated as Page<Series>
+  decoded  series_totalDuration as Page<Series>
+  decoded  series_random as Page<Series>
+  decoded  authors_page as Page<Author>
+  decoded  authors_lastFirst_desc as Page<Author>
+  decoded  authors_numBooks as Page<Author>
+  decoded  authors_addedAt as Page<Author>
+  decoded  authors_updatedAt as Page<Author>
+  decoded  author_detail as AuthorDetails
+  decoded  narrators as NarratorsResponse
+  decoded  recent_episodes as RecentEpisodesResponse
+  decoded  progress_get as User.MediaProgress
+  2xx      progress_patch (Data: the app does not decode)
+  decoded  play as PlaySession
+  2xx      session_sync (Data: the app does not decode)
+  2xx      session_close (Data: the app does not decode)
+  2xx      session_local (Data: the app does not decode)
+  2xx      session_local_all (Data: the app does not decode)
+  decoded  bookmark_create as User.Bookmark
+  decoded  bookmark_update as User.Bookmark
+  decoded  authorize_after_writes as Authorize
+  decoded  listening_sessions as ListeningHistoryResponse
+  decoded  item_listening_sessions as ItemListeningSessionsResponse
+  decoded  listening_stats as ListeningStats
+  decoded  year_stats as YearStats
+  decoded  collection_create as Collection
+  decoded  collection_batch_add as Collection
+  decoded  collections_page as Page<Collection>
+  decoded  collection_get as Collection
+  decoded  collection_update as Collection
+  decoded  collection_batch_remove as Collection
+  decoded  collection_remove_book as Collection
+  2xx      collection_delete (Data: the app does not decode)
+  decoded  playlist_create as Playlist
+  decoded  playlist_batch_add as Playlist
+  decoded  playlists_page as Page<Playlist>
+  decoded  playlist_get as Playlist
+  decoded  playlist_update as Playlist
+  decoded  playlist_batch_remove as Playlist
+  decoded  playlist_remove_item as Playlist
+  2xx      playlist_delete (Data: the app does not decode)
+  decoded  remove_from_continue_listening as EmptyResponse
+  2xx      bookmark_delete (Data: the app does not decode)
+  2xx      progress_delete (Data: the app does not decode)
+  ERR-OK   send_ebook: HTTP 400 by design (no e-reader devices or outbound email exist on this server (unsupported.go); the app surfaces the 400 message)
+  N/A      podcast_items: podcast libraries only; this server exposes a single book library (mediaType book)
+  N/A      podcast_detail: podcast libraries only
+  N/A      podcast_feed: podcast libraries only
+  N/A      podcast_download_episodes: podcast libraries only
+Models:
+  decoded  AudioTrack x19
+  decoded  Author x14
+  decoded  AuthorDetails x1
+  decoded  Authorize x3
+  decoded  Book x85
+  decoded  Collection x7
+  N/A      Connection: app state (Keychain), never a response
+  EMPTY    EreaderDevice: only ever decoded as an empty array (vacuous)
+  decoded  FilterData x1
+  decoded  Library x1
+  decoded  ListeningHistoryResponse x1
+  EMPTY    ListeningHistorySession: only ever decoded as an empty array (vacuous)
+  decoded  ListeningStats x1
+  decoded  Narrator x2
+  decoded  Personalized x4
+  decoded  Playlist x7
+  N/A      Podcast: podcast libraries only
+  N/A      PodcastEpisode: podcast libraries only
+  N/A      RecentEpisode: podcast libraries only
+  decoded  SearchResponse x5
+  decoded  Series x9
+  decoded  ServerSettings x3
+  decoded  ServerStatus x1
+  EMPTY    SessionSync: only ever decoded as an empty array (vacuous)
+  decoded  User x3
+  decoded  YearStats x1
+Vacuous by design:
+  recent_episodes: podcast-only data; a book library has no episodes, so [] is the correct answer
+  listening_sessions: sessions are not persisted server-side (stats.go), so the page is always empty
+  item_listening_sessions: sessions are not persisted server-side (stats.go), so the page is always empty

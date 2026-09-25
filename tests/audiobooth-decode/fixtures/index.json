@@ -1,0 +1,407 @@
+{
+  "author_detail": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "author_detail.json"
+  },
+  "authorize": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "authorize.json"
+  },
+  "authorize_after_writes": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "authorize_after_writes.json"
+  },
+  "authors_addedAt": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "authors_addedAt.json"
+  },
+  "authors_lastFirst_desc": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "authors_lastFirst_desc.json"
+  },
+  "authors_numBooks": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "authors_numBooks.json"
+  },
+  "authors_page": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "authors_page.json"
+  },
+  "authors_updatedAt": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "authors_updatedAt.json"
+  },
+  "bookmark_create": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "bookmark_create.json"
+  },
+  "bookmark_delete": {
+    "status": 200,
+    "contentType": "text/plain; charset=utf-8",
+    "file": "bookmark_delete.body"
+  },
+  "bookmark_update": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "bookmark_update.json"
+  },
+  "collection_batch_add": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "collection_batch_add.json"
+  },
+  "collection_batch_remove": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "collection_batch_remove.json"
+  },
+  "collection_create": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "collection_create.json"
+  },
+  "collection_delete": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "collection_delete.body"
+  },
+  "collection_get": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "collection_get.json"
+  },
+  "collection_remove_book": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "collection_remove_book.json"
+  },
+  "collection_update": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "collection_update.json"
+  },
+  "collections_page": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "collections_page.json"
+  },
+  "item_detail": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "item_detail.json"
+  },
+  "item_listening_sessions": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "item_listening_sessions.json"
+  },
+  "items_collapse_series": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_collapse_series.json"
+  },
+  "items_filter_genre": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_filter_genre.json"
+  },
+  "items_filter_narrator": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_filter_narrator.json"
+  },
+  "items_filter_series": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_filter_series.json"
+  },
+  "items_sort_addedAt_desc": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_addedAt_desc.json"
+  },
+  "items_sort_author": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_author.json"
+  },
+  "items_sort_authorName": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_authorName.json"
+  },
+  "items_sort_authorNameLF": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_authorNameLF.json"
+  },
+  "items_sort_birthtime": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_birthtime.json"
+  },
+  "items_sort_duration": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_duration.json"
+  },
+  "items_sort_modified": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_modified.json"
+  },
+  "items_sort_numTracks": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_numTracks.json"
+  },
+  "items_sort_progress": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_progress.json"
+  },
+  "items_sort_progressCreatedAt": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_progressCreatedAt.json"
+  },
+  "items_sort_progressFinishedAt": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_progressFinishedAt.json"
+  },
+  "items_sort_publishedYear": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_publishedYear.json"
+  },
+  "items_sort_random": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_random.json"
+  },
+  "items_sort_size": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_size.json"
+  },
+  "items_sort_updatedAt": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_sort_updatedAt.json"
+  },
+  "items_title": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "items_title.json"
+  },
+  "libraries": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "libraries.json"
+  },
+  "library_filterdata": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "library_filterdata.json"
+  },
+  "listening_sessions": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "listening_sessions.json"
+  },
+  "listening_stats": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "listening_stats.json"
+  },
+  "login": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "login.json"
+  },
+  "narrators": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "narrators.json"
+  },
+  "personalized": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "personalized.json"
+  },
+  "play": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "play.json"
+  },
+  "playlist_batch_add": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "playlist_batch_add.json"
+  },
+  "playlist_batch_remove": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "playlist_batch_remove.json"
+  },
+  "playlist_create": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "playlist_create.json"
+  },
+  "playlist_delete": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "playlist_delete.body"
+  },
+  "playlist_get": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "playlist_get.json"
+  },
+  "playlist_remove_item": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "playlist_remove_item.json"
+  },
+  "playlist_update": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "playlist_update.json"
+  },
+  "playlists_page": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "playlists_page.json"
+  },
+  "progress_delete": {
+    "status": 200,
+    "contentType": "text/plain; charset=utf-8",
+    "file": "progress_delete.body"
+  },
+  "progress_get": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "progress_get.json"
+  },
+  "progress_patch": {
+    "status": 200,
+    "contentType": "text/plain; charset=utf-8",
+    "file": "progress_patch.body"
+  },
+  "recent_episodes": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "recent_episodes.json"
+  },
+  "remove_from_continue_listening": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "remove_from_continue_listening.json"
+  },
+  "search_author": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "search_author.json"
+  },
+  "search_genre": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "search_genre.json"
+  },
+  "search_narrator": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "search_narrator.json"
+  },
+  "search_series": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "search_series.json"
+  },
+  "search_title": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "search_title.json"
+  },
+  "send_ebook": {
+    "status": 400,
+    "contentType": "text/plain; charset=utf-8",
+    "file": "send_ebook.body"
+  },
+  "series_addedAt": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "series_addedAt.json"
+  },
+  "series_lastBookAdded": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "series_lastBookAdded.json"
+  },
+  "series_lastBookUpdated": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "series_lastBookUpdated.json"
+  },
+  "series_name": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "series_name.json"
+  },
+  "series_numBooks_desc": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "series_numBooks_desc.json"
+  },
+  "series_random": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "series_random.json"
+  },
+  "series_totalDuration": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "series_totalDuration.json"
+  },
+  "session_close": {
+    "status": 200,
+    "contentType": "text/plain; charset=utf-8",
+    "file": "session_close.body"
+  },
+  "session_local": {
+    "status": 200,
+    "contentType": "text/plain; charset=utf-8",
+    "file": "session_local.body"
+  },
+  "session_local_all": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "session_local_all.body"
+  },
+  "session_sync": {
+    "status": 200,
+    "contentType": "text/plain; charset=utf-8",
+    "file": "session_sync.body"
+  },
+  "status": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "status.json"
+  },
+  "year_stats": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "file": "year_stats.json"
+  }
+}
