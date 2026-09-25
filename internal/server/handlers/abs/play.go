@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
 // last-edited: 2026-09-25
 
@@ -175,7 +175,7 @@ func (h *Handler) Play(c *gin.Context) {
 		respondError(c, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	book, requestedID := h.resolveItemAs(c)
+	book, ref := h.resolveItemAs(c)
 	if book == nil {
 		return
 	}
@@ -198,7 +198,7 @@ func (h *Handler) Play(c *gin.Context) {
 	// The session's libraryItemId (and its embedded libraryItem.id) echo the id
 	// the client opened, as GET /api/items/:id does: the player files the
 	// session's progress under it. Writes key by session.BookID (canonical).
-	view.SyncID = requestedID
+	view.SyncID = ref.RequestedID
 
 	sessionID, err := newSessionID()
 	if err != nil {

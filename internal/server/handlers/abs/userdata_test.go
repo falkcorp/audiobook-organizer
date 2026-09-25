@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/userdata_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7ac71a7b-e1cb-4416-a393-1fa38af8871f
 // last-edited: 2026-09-25
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -45,8 +46,16 @@ type udFake struct {
 	syncErr      map[string]error
 
 	// aliases: syncID -> the merge-loser syncIDs ListSyncAliases reports.
+	// ResolveSyncItem resolves each of them to that syncID.
 	aliases  map[string][]string
 	aliasErr error
+
+	// used: user -> alias ids the client has addressed (AliasUseStore).
+	used       map[string][]string
+	seeded     map[string]bool
+	usedErr    error
+	seedErr    error
+	seedWrites int
 
 	mints int
 }
@@ -202,6 +211,67 @@ func (f *udFake) ListSyncAliases(syncID string) ([]string, error) {
 	return f.aliases[syncID], nil
 }
 
+// ResolveSyncItem: an id listed in aliases resolves to its live syncID;
+// otherwise a preset/minted syncID resolves to itself.
+func (f *udFake) ResolveSyncItem(syncID string) (*database.SyncItem, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	target := syncID
+	for canon, ids := range f.aliases {
+		if slices.Contains(ids, syncID) {
+			target = canon
+		}
+	}
+	for book, id := range f.syncIDs {
+		if id == target {
+			return &database.SyncItem{SyncID: target, CurrentBookID: book}, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *udFake) ListSyncAliasUses(userID string) ([]string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.usedErr != nil {
+		return nil, false, f.usedErr
+	}
+	return slices.Clone(f.used[userID]), f.seeded[userID], nil
+}
+
+func (f *udFake) SeedSyncAliasUses(userID string, aliases []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seedWrites++
+	if f.seedErr != nil {
+		return f.seedErr
+	}
+	if f.used == nil {
+		f.used = map[string][]string{}
+	}
+	if f.seeded == nil {
+		f.seeded = map[string]bool{}
+	}
+	f.used[userID] = append(f.used[userID], aliases...)
+	f.seeded[userID] = true
+	return nil
+}
+
+// markUsed records aliases as used by userID and marks the user seeded, so a
+// test sees exactly these aliases and no seed.
+func (f *udFake) markUsed(userID string, aliases ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.used == nil {
+		f.used = map[string][]string{}
+	}
+	if f.seeded == nil {
+		f.seeded = map[string]bool{}
+	}
+	f.used[userID] = append(f.used[userID], aliases...)
+	f.seeded[userID] = true
+}
+
 func (f *udFake) MintOrGetSyncID(bookID string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -243,6 +313,7 @@ func udProvider(t *testing.T, f *udFake) abshandler.UserDataProvider {
 		Bookmarks: f,
 		Identity:  f,
 		Library:   f,
+		AliasUses: f,
 	})
 	if err != nil {
 		t.Fatalf("NewUserData: %v", err)
@@ -350,13 +421,14 @@ func udBool(t *testing.T, row map[string]json.Number, key string) bool {
 // Refusing to build is the only safe outcome; the caller exits on the error.
 func TestUserDataProviderRefusesMissingDependencies(t *testing.T) {
 	f := newUDFake()
-	full := abshandler.UserDataOptions{Progress: f, Bookmarks: f, Identity: f, Library: f}
+	full := abshandler.UserDataOptions{Progress: f, Bookmarks: f, Identity: f, Library: f, AliasUses: f}
 
 	cases := map[string]func(o *abshandler.UserDataOptions){
 		"progress":  func(o *abshandler.UserDataOptions) { o.Progress = nil },
 		"bookmarks": func(o *abshandler.UserDataOptions) { o.Bookmarks = nil },
 		"identity":  func(o *abshandler.UserDataOptions) { o.Identity = nil },
 		"library":   func(o *abshandler.UserDataOptions) { o.Library = nil },
+		"aliasUses": func(o *abshandler.UserDataOptions) { o.AliasUses = nil },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

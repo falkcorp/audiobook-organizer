@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/canonical_readonly_internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f16aca7b-73fa-4183-b604-cfce7af5fb36
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package abs
 
@@ -41,6 +41,8 @@ func (m *mintCountingIdentity) MintOrGetSyncFileIDs(string, []string) (map[strin
 func (m *mintCountingIdentity) GetSyncFileID(string, string) (string, bool, error) {
 	return "", false, nil
 }
+func (m *mintCountingIdentity) ListSyncAliases(string) ([]string, error) { return nil, nil }
+
 func (m *mintCountingIdentity) ListSyncFilesForBook(string) ([]database.SyncFile, error) {
 	return nil, nil
 }

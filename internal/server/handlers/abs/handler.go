@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-09-25
 
@@ -248,6 +248,16 @@ type IdentityStore interface {
 	// used on render/retry paths that must not write (canonicalBookID).
 	GetSyncIDForBook(bookID string) (string, bool, error)
 	ListSyncFilesForBook(bookID string) ([]database.SyncFile, error)
+	// ListSyncAliases names the merge losers' syncIDs that still resolve to a
+	// live syncID. The bookmark routes read and match bookmarks stored under
+	// them (bookmarks.go), because a merge does not move bookmarks.
+	ListSyncAliases(syncID string) ([]string, error)
+}
+
+// AliasUseRecorder records that a user's client addressed a merge loser's
+// libraryItemId (database.SyncAliasUseStore). See item_ref.go.
+type AliasUseRecorder interface {
+	RecordSyncAliasUse(userID, aliasSyncID string) error
 }
 
 // ChapterStore reads the persisted per-book chapter timeline (Phase 4). Optional:
@@ -299,6 +309,10 @@ type Options struct {
 	Identity IdentityStore
 	Chapters ChapterStore
 	Progress ProgressStore
+	// AliasUses records which alias item ids each user's client has addressed
+	// (item_ref.go noteAliasUse). Nil records nothing: /api/me then carries no
+	// alias rows for aliases first used from now on.
+	AliasUses AliasUseRecorder
 	// Bookmarks gates the bookmark CRUD routes. Nil means they are not registered
 	// at all rather than registered and answering 500 — a client that gets a 404
 	// hides the feature, while one that gets a 500 shows an error on every open.
@@ -350,6 +364,12 @@ type Handler struct {
 	collections CollectionStore
 	coverRoot   string
 	libraryName string
+
+	// aliasUses records alias item-id uses; aliasUseSeen remembers the ones
+	// already recorded by this process (userID + "\x00" + alias). See
+	// item_ref.go noteAliasUse.
+	aliasUses    AliasUseRecorder
+	aliasUseSeen sync.Map
 
 	// sessions holds the live play sessions. See play.go: they are in-memory on
 	// purpose, and a sync for an id we do not know is answered idempotently rather
@@ -516,6 +536,7 @@ func New(o Options) (*Handler, error) {
 		bookSearch:  o.SearchResults,
 		progress:    o.Progress,
 		bookmarks:   o.Bookmarks,
+		aliasUses:   o.AliasUses,
 		coverRoot:   o.CoverRoot,
 		libraryName: name,
 		itemsCount:  map[string]itemsCountEntry{},
