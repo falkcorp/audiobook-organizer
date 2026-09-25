@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-25
 
@@ -71,7 +71,7 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	dryRun, err := opmode.ResolveDryRun("maintenance.itunes-regroup", params.DryRunSnake, params.DryRun)
+	dryRun, err := opmode.ResolveDryRun("itunes.regroup", params.DryRunSnake, params.DryRun)
 	if err != nil {
 		return err
 	}
