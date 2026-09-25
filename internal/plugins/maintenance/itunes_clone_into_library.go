@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-09-24
 
@@ -62,8 +62,11 @@ import (
 // was never linked). Cloning then adds a duplicate. The 2026-09-24 canary did
 // that for about 11 of 20. So before planning a clone the op looks for a book
 // outside the group that is organized with a live file under the root and is
-// the same book by ASIN, or by author plus title (icTitleKeys); a hit skips
-// the group as already_in_library and names those books for a merge.
+// the same book by ASIN, or by author plus title (icTitleForms); a hit skips
+// the group as already_in_library and names those books for a merge. A copy
+// filed under "Unknown Author" or no author at all matches on title alone and
+// skips the group as possibly_in_library, a separate reason because a title
+// with no author behind it is weaker evidence (owner, 2026-09-24).
 //
 // Guards: dry run by default; apply and rollback need explicit group_ids;
 // refuses while library.scan runs and holds the scan stand-down; Doctor Who /
@@ -245,7 +248,11 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 		if err != nil {
 			return report, fmt.Errorf("list books: %w", err)
 		}
-		run.library = newICLibraryIndex(books)
+		unknown, err := unknownAuthorIDs(ops)
+		if err != nil {
+			return report, err
+		}
+		run.library = newICLibraryIndex(books, unknown)
 		if len(work) == 0 {
 			work = discoverITunesCloneGroups(books)
 		}
@@ -329,6 +336,21 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 	return report, nil
 }
 
+// unknownAuthorIDs is the id of the "Unknown Author" placeholder row, if one
+// exists: a copy filed under it has no known author to compare.
+func unknownAuthorIDs(store interface {
+	GetAuthorByName(string) (*database.Author, error)
+}) ([]int, error) {
+	a, err := store.GetAuthorByName(database.UnknownAuthorName)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %q author: %w", database.UnknownAuthorName, err)
+	}
+	if a == nil {
+		return nil, nil
+	}
+	return []int{a.ID}, nil
+}
+
 // discoverITunesCloneGroups lists groups with a live organized member that
 // is iTunes-linked (a PID, an iTunes import source, or a path under
 // books/itunes). The plan then reads each one's files and decides.
@@ -358,39 +380,83 @@ func discoverITunesCloneGroups(books []database.BookCore) []string {
 // ("02 - Chaos Vector").
 var icLeadingNumber = regexp.MustCompile(`^\s*\d+\s*[-.\x{2013}]\s*`)
 
-// icTitleKeys are the folded forms a title is matched on: the whole title,
-// and its base (no leading number, nothing after a colon or an opening
-// parenthesis), so "Champion of Deania: A ... Adventure (Spellheart Book 6)"
-// meets "Champion of Deania". A key with no letter ("01") is dropped: bare
-// numbers are exactly the mis-titled rows that must not match each other.
-// A shared base between two different books by one author is possible
-// ("Foo: Book 1" / "Foo: Book 2"); that errs toward skipping, which only
-// holds a group for review, never writes.
-func icTitleKeys(title string) []string {
-	base := title
-	if i := strings.IndexAny(base, ":("); i > 0 {
-		base = base[:i]
+// icTitle is a title folded for matching: the whole title, its base (no
+// leading number, nothing after a colon or an opening parenthesis), and
+// whether a colon subtitle was cut off. A form with no letter ("01") is
+// empty: bare numbers are exactly the mis-titled rows that must not match.
+type icTitle struct {
+	full, base string
+	subtitled  bool
+}
+
+func icTitleForms(title string) icTitle {
+	base, rest := title, ""
+	if i := strings.IndexAny(title, ":("); i > 0 {
+		base, rest = title[:i], title[i:]
 	}
-	var keys []string
-	for _, k := range []string{dedup.NormalizeTitle(title), dedup.NormalizeTitle(icLeadingNumber.ReplaceAllString(base, ""))} {
-		if k == "" || !strings.ContainsFunc(k, func(r rune) bool { return r >= 'a' && r <= 'z' }) {
-			continue
+	fold := func(s string) string {
+		k := dedup.NormalizeTitle(s)
+		if !strings.ContainsFunc(k, func(r rune) bool { return r >= 'a' && r <= 'z' }) {
+			return ""
 		}
-		if len(keys) == 0 || keys[0] != k {
-			keys = append(keys, k)
+		return k
+	}
+	return icTitle{full: fold(title), base: fold(icLeadingNumber.ReplaceAllString(base, "")),
+		subtitled: strings.Contains(rest, ":")}
+}
+
+// keys are the index keys a title is filed under.
+func (t icTitle) keys() []string {
+	var out []string
+	for _, k := range []string{t.full, t.base} {
+		if k != "" && (len(out) == 0 || out[0] != k) {
+			out = append(out, k)
 		}
 	}
-	return keys
+	return out
+}
+
+// icTitlesMatch: whole titles agree, one title's base is the other whole
+// title ("Champion of Deania: A ... Adventure" / "Champion of Deania"), or
+// the bases agree and at most one of them had a colon subtitle cut off. Two
+// DIFFERENT subtitles under one base are a series prefix, not one book ("The
+// Land: Founding" / "The Land: Predators"; "Jack Reacher 4: The Visitor" /
+// "Jack Reacher 4: Running Blind").
+func icTitlesMatch(a, b icTitle) bool {
+	switch {
+	case a.full != "" && (a.full == b.full || a.full == b.base):
+		return true
+	case a.base != "" && a.base == b.full:
+		return true
+	default:
+		return a.base != "" && a.base == b.base && !(a.subtitled && b.subtitled)
+	}
+}
+
+// icMatch says how a candidate copy matched: by ASIN or author plus title
+// (strong), or by title alone against an Unknown/no-author copy (weak).
+const (
+	icMatchStrong = iota + 1
+	icMatchUnknownAuthor
+)
+
+type icIndexEntry struct {
+	id    string
+	title icTitle
 }
 
 // icLibraryIndex finds organized books by author+title key and by ASIN. It
 // is built once per run from the full book list; each hit is re-read and its
 // files checked at plan time (libraryCopies), so a stale entry cannot cause a
-// skip on its own.
+// skip on its own. Books with no author, or the "Unknown Author" row, are
+// filed under icUnknownAuthorKey.
 type icLibraryIndex struct {
-	byTitle map[string][]string // "<authorID>|<title key>" -> book ids
+	byTitle map[string][]icIndexEntry // "<author key>|<title key>"
 	byASIN  map[string][]string
+	unknown map[int]bool // author ids that mean "no known author"
 }
+
+const icUnknownAuthorKey = "unknown"
 
 func icASINKey(asin *string) string {
 	if asin == nil {
@@ -399,20 +465,27 @@ func icASINKey(asin *string) string {
 	return strings.ToUpper(strings.TrimSpace(*asin))
 }
 
-func icTitleIndexKey(authorID int, key string) string { return fmt.Sprintf("%d|%s", authorID, key) }
+func (ix *icLibraryIndex) authorKey(authorID *int) string {
+	if authorID == nil || ix.unknown[*authorID] {
+		return icUnknownAuthorKey
+	}
+	return fmt.Sprint(*authorID)
+}
 
-func newICLibraryIndex(books []database.BookCore) *icLibraryIndex {
-	ix := &icLibraryIndex{byTitle: map[string][]string{}, byASIN: map[string][]string{}}
+func newICLibraryIndex(books []database.BookCore, unknownAuthorIDs []int) *icLibraryIndex {
+	ix := &icLibraryIndex{byTitle: map[string][]icIndexEntry{}, byASIN: map[string][]string{}, unknown: map[int]bool{}}
+	for _, id := range unknownAuthorIDs {
+		ix.unknown[id] = true
+	}
 	for i := range books {
 		b := &books[i]
 		if b.IsSoftDeleted() || b.LibraryState == nil || *b.LibraryState != "organized" {
 			continue
 		}
-		if b.AuthorID != nil {
-			for _, k := range icTitleKeys(b.Title) {
-				tk := icTitleIndexKey(*b.AuthorID, k)
-				ix.byTitle[tk] = append(ix.byTitle[tk], b.ID)
-			}
+		t, ak := icTitleForms(b.Title), ix.authorKey(b.AuthorID)
+		for _, k := range t.keys() {
+			tk := ak + "|" + k
+			ix.byTitle[tk] = append(ix.byTitle[tk], icIndexEntry{id: b.ID, title: t})
 		}
 		if a := icASINKey(b.ASIN); a != "" {
 			ix.byASIN[a] = append(ix.byASIN[a], b.ID)
@@ -421,43 +494,62 @@ func newICLibraryIndex(books []database.BookCore) *icLibraryIndex {
 	return ix
 }
 
-// candidates returns the ids that share the book's ASIN, or its author and a
-// title key. A book with neither has none: no author means no safe match.
-func (ix *icLibraryIndex) candidates(book *database.Book) []string {
-	seen := map[string]bool{book.ID: true}
-	var out []string
-	add := func(ids []string) {
-		for _, id := range ids {
-			if !seen[id] {
-				seen[id] = true
-				out = append(out, id)
-			}
+// candidates returns the ids that may be this book, with how each matched: a
+// shared ASIN, or the same known author and a matching title (strong); or a
+// matching title on a copy with no known author (weak). A strong match wins
+// when an id matches both ways.
+func (ix *icLibraryIndex) candidates(book *database.Book) map[string]int {
+	out := map[string]int{}
+	add := func(id string, how int) {
+		if id == book.ID {
+			return
+		}
+		if cur, ok := out[id]; !ok || how < cur {
+			out[id] = how
 		}
 	}
 	if a := icASINKey(book.ASIN); a != "" {
-		add(ix.byASIN[a])
-	}
-	if book.AuthorID != nil {
-		for _, k := range icTitleKeys(book.Title) {
-			add(ix.byTitle[icTitleIndexKey(*book.AuthorID, k)])
+		for _, id := range ix.byASIN[a] {
+			add(id, icMatchStrong)
 		}
 	}
-	sort.Strings(out)
+	t := icTitleForms(book.Title)
+	lookup := func(ak string, how int) {
+		for _, k := range t.keys() {
+			for _, e := range ix.byTitle[ak+"|"+k] {
+				if icTitlesMatch(t, e.title) {
+					add(e.id, how)
+				}
+			}
+		}
+	}
+	if ak := ix.authorKey(book.AuthorID); ak != icUnknownAuthorKey {
+		lookup(ak, icMatchStrong)
+	}
+	lookup(icUnknownAuthorKey, icMatchUnknownAuthor)
 	return out
 }
 
 // libraryCopies returns the books outside group gid that hold this book in
-// the library: live, organized, and at least one present file under the
-// root that is not an iTunes file. A read error fails the group closed.
-func (r *icRunner) libraryCopies(book *database.Book, gid string) ([]string, error) {
+// the library (live, organized, and at least one present file under the root
+// that is not an iTunes file) and whether any of them matched strongly. A
+// read error fails the group closed.
+func (r *icRunner) libraryCopies(book *database.Book, gid string) ([]string, bool, error) {
 	if r.library == nil {
-		return nil, nil
+		return nil, false, nil
 	}
+	cands := r.library.candidates(book)
+	ids := make([]string, 0, len(cands))
+	for id := range cands {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
 	var out []string
-	for _, id := range r.library.candidates(book) {
+	strong := false
+	for _, id := range ids {
 		b, err := r.store.GetBookByID(id)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", id, err)
+			return nil, false, fmt.Errorf("read %s: %w", id, err)
 		}
 		if b == nil || b.IsSoftDeleted() || b.LibraryState == nil || *b.LibraryState != "organized" {
 			continue
@@ -467,16 +559,17 @@ func (r *icRunner) libraryCopies(book *database.Book, gid string) ([]string, err
 		}
 		files, err := r.store.GetBookFiles(id)
 		if err != nil {
-			return nil, fmt.Errorf("read files of %s: %w", id, err)
+			return nil, false, fmt.Errorf("read files of %s: %w", id, err)
 		}
 		for _, f := range files {
 			if !f.Missing && !authorPathLinkIsITunes(f.FilePath) && pathutil.IsWithin(f.FilePath, r.rootDir) {
 				out = append(out, id)
+				strong = strong || cands[id] == icMatchStrong
 				break
 			}
 		}
 	}
-	return out, nil
+	return out, strong, nil
 }
 
 // icPlan is one group's decided clone.
@@ -538,14 +631,17 @@ func (r *icRunner) plan(ctx context.Context, gid string) (icGroupReport, *icPlan
 	if applygate.IsOwnerManualOnly(book.FilePath, "") || applygate.IsOwnerManualOnly(book.Title, "") {
 		return skipped(g, "owner_manual_only"), nil
 	}
-	copies, err := r.libraryCopies(book, gid)
+	copies, strong, err := r.libraryCopies(book, gid)
 	if err != nil {
 		g.Decision, g.Error = icDecisionSkip, "already-in-library check: "+err.Error()
 		return g, nil
 	}
 	if len(copies) > 0 {
 		g.LibraryCopies = copies
-		return skipped(g, "already_in_library"), nil
+		if strong {
+			return skipped(g, "already_in_library"), nil
+		}
+		return skipped(g, "possibly_in_library"), nil
 	}
 	all, err := r.store.GetBookFiles(book.ID)
 	if err != nil {

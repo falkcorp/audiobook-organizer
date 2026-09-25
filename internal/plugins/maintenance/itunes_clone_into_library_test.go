@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e8b5d10-7c4a-4f93-8a61-d9f3b7c2e045
 // last-edited: 2026-09-24
 
@@ -278,20 +278,26 @@ func TestITunesClone_Refusals(t *testing.T) {
 	require.ErrorContains(t, err, "group_ids")
 }
 
-func TestICTitleKeys(t *testing.T) {
+func TestICTitleMatching(t *testing.T) {
+	require.Equal(t, icTitle{full: "02 chaos vector", base: "chaos vector"}, icTitleForms("02 - Chaos Vector"))
+	require.Equal(t, icTitle{}, icTitleForms("01"))
+	require.Empty(t, icTitleForms("01").keys())
 	for _, tc := range []struct {
-		title string
-		want  []string
+		a, b string
+		want bool
 	}{
-		{"Chaos Vector", []string{"chaos vector"}},
-		{"02 - Chaos Vector", []string{"02 chaos vector", "chaos vector"}},
-		{"Champion of Deania: A Cultivating Gamelit Harem Adventure (Spellheart Book 6)",
-			[]string{"champion of deania a cultivating gamelit harem adventure spellheart book 6", "champion of deania"}},
-		{"The Tower's Price", []string{"towers price"}},
-		{"01", nil},
-		{"", nil},
+		{"Chaos Vector", "02 - Chaos Vector", true},
+		{"Champion of Deania: A Cultivating Gamelit Harem Adventure (Spellheart Book 6)", "Champion of Deania", true},
+		{"Shadow Sun Survival: Shadow Sun, Book 1", "Shadow Sun Survival (Unabridged)", true},
+		{"The Tower's Price", "Tower's Price", true},
+		// Different colon subtitles under one base are a series prefix.
+		{"The Land: Founding (Chaos Seeds) (Volume 1)", "The Land: Predators: A LitRPG Saga", false},
+		{"Jack Reacher 4: The Visitor (Jeff Harding)", "Jack Reacher 4: Running Blind (Johnathan McClain)", false},
+		{"01", "01", false},
+		{"Elantris", "Warbreaker", false},
 	} {
-		require.Equal(t, tc.want, icTitleKeys(tc.title), tc.title)
+		require.Equal(t, tc.want, icTitlesMatch(icTitleForms(tc.a), icTitleForms(tc.b)), tc.a+" / "+tc.b)
+		require.Equal(t, tc.want, icTitlesMatch(icTitleForms(tc.b), icTitleForms(tc.a)), tc.b+" / "+tc.a)
 	}
 }
 
@@ -315,22 +321,36 @@ func TestITunesClone_SkipsBookAlreadyInLibrary(t *testing.T) {
 	f.bookBy(t, "N2", "vg-n2", "Book N", &a7, "", []string{f.itunes("Book N copy.m4b")})
 	// Same title, different author.
 	f.bookBy(t, "D", "vg-d", "Chaos Vector", &a9, "", []string{f.itunes("Chaos Vector by 9.m4b")})
+	// A copy under the "Unknown Author" row, and one with no author: title
+	// alone, reported as possibly_in_library.
+	unknown, err := f.s.CreateAuthor(database.UnknownAuthorName)
+	require.NoError(t, err)
+	f.bookBy(t, "U", "vg-u", "Deadeye Dick", &a7, "", []string{f.itunes("Deadeye Dick.m4b")})
+	f.bookBy(t, "LU", "vg-lu", "Deadeye Dick", &unknown.ID, "", []string{lib("Deadeye Dick.m4b")})
+	f.bookBy(t, "V", "vg-v", "Voidwalker: BK01", &a8, "", []string{f.itunes("Voidwalker BK01.m4b")})
+	f.bookBy(t, "LV", "vg-lv", "Voidwalker", nil, "", []string{lib("Voidwalker.m4b")})
+	// Different subtitles under one base, same author: not the same book.
+	f.bookBy(t, "J", "vg-j", "The Land: Founding", &a9, "", []string{f.itunes("The Land Founding.m4b")})
+	f.bookBy(t, "LJ", "vg-lj", "The Land: Predators", &a9, "", []string{lib("The Land Predators.m4b")})
 	// Bare-number titles by one author never match each other.
 	f.bookBy(t, "Z", "vg-z", "01", &a8, "", []string{f.itunes("01.m4b")})
 	f.bookBy(t, "Z2", "vg-z2", "01", &a8, "", []string{lib("01.m4b")})
 
-	rep := f.run(t, icParams{Apply: true, GroupIDs: []string{"vg-s", "vg-a", "vg-n", "vg-d", "vg-z"}})
+	rep := f.run(t, icParams{Apply: true, GroupIDs: []string{"vg-s", "vg-a", "vg-n", "vg-d", "vg-z", "vg-u", "vg-v", "vg-j"}})
 
-	for gid, copyID := range map[string]string{"vg-s": "L", "vg-a": "LA"} {
+	for gid, want := range map[string][2]string{
+		"vg-s": {"already_in_library", "L"}, "vg-a": {"already_in_library", "LA"},
+		"vg-u": {"possibly_in_library", "LU"}, "vg-v": {"possibly_in_library", "LV"},
+	} {
 		g := icGroup(t, rep, gid)
 		require.Equal(t, icDecisionSkip, g.Decision, gid)
-		require.Equal(t, "already_in_library", g.Reason, gid+" "+g.Error)
-		require.Equal(t, []string{copyID}, g.LibraryCopies, gid)
+		require.Equal(t, want[0], g.Reason, gid+" "+g.Error)
+		require.Equal(t, []string{want[1]}, g.LibraryCopies, gid)
 		require.Empty(t, g.Outcome, gid+": nothing written")
 	}
-	_, err := os.Stat(filepath.Join(f.root, "Author", "02 - Chaos Vector"))
+	_, err = os.Stat(filepath.Join(f.root, "Author", "02 - Chaos Vector"))
 	require.True(t, os.IsNotExist(err), "a skipped group wrote a clone")
-	for _, gid := range []string{"vg-n", "vg-d", "vg-z"} {
+	for _, gid := range []string{"vg-n", "vg-d", "vg-z", "vg-j"} {
 		g := icGroup(t, rep, gid)
 		require.Equal(t, icOutcomeApplied, g.Outcome, gid+" "+g.Reason+g.Error)
 	}
