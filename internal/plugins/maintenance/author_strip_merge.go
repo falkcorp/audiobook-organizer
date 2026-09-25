@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
 // last-edited: 2026-09-25
 
@@ -283,7 +283,7 @@ type authorStripMergeReport struct {
 	// TitleAsAuthorUnverified are rows that matched on their primary-author
 	// books but whose full credit set could not be read; never deleted.
 	TitleAsAuthorUnverified int
-	Mergeable     int
+	Mergeable               int
 	// Ambiguous are rows whose stripped name matches MORE THAN ONE existing
 	// author. Reported rather than merged: a name index resolves to one row and
 	// silently hides the duplicates, so picking one here would be a guess.

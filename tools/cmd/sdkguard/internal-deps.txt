@@ -1,5 +1,5 @@
 # file: tools/cmd/sdkguard/internal-deps.txt
-# version: 1.4.0
+# version: 1.4.1
 # guid: 3f2a7c48-9d1e-4b60-8a55-c07e19b4d2f3
 # last-edited: 2026-09-25
 #
@@ -16,6 +16,7 @@
 github.com/falkcorp/audiobook-organizer/internal/audioutil
 github.com/falkcorp/audiobook-organizer/internal/auth
 github.com/falkcorp/audiobook-organizer/internal/cache
+github.com/falkcorp/audiobook-organizer/internal/chaptershape
 github.com/falkcorp/audiobook-organizer/internal/database
 github.com/falkcorp/audiobook-organizer/internal/fingerprint
 github.com/falkcorp/audiobook-organizer/internal/lifecycle
