@@ -81,14 +81,6 @@ func TestStripCopySuffix(t *testing.T) {
 	}
 }
 
-func sumDurations(files []BookFile) int {
-	n := 0
-	for _, f := range files {
-		n += f.Duration
-	}
-	return n
-}
-
 // DUR-SAME-FOLDER-COPIES: the counted set per book shape. Every case names the
 // rows that must be excluded; every other row must count.
 func TestSplitOwnFolderFiles_Copies(t *testing.T) {
@@ -152,6 +144,17 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			copies: []string{"o"},
 		},
 		{
+			// Present beats measured: listing a dead track is worse than
+			// reading short until the backfill fills the counted zero row.
+			name:     "a present unmeasured twin is kept over a missing measured original",
+			bookPath: "/lib/A/B",
+			rows: []BookFile{
+				{ID: "o", FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: 3600, Missing: true},
+				{ID: "c", FilePath: "/lib/A/B/01_copy1.m4a", FileSize: 5000},
+			},
+			copies: []string{"o"},
+		},
+		{
 			// DUR "pairs of out-of-folder rows": two copies of one file, both
 			// outside the own folder and neither a copy of an own row.
 			name:     "two out-of-folder copies of each other count once",
@@ -211,11 +214,12 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			counted := OwnFolderFiles(book, c.rows)
 			assert.Len(t, counted, len(c.rows)-len(c.copies))
 
-			// Excluding a copy never loses a duration the cluster knew: every
-			// distinct measured duration a copy carried is still carried by a
-			// counted row with the same size.
+			// Excluding a PRESENT copy never loses a duration: a present,
+			// measured copy always has a measured counted twin of its size.
+			// (A missing measured copy may give way to a present unmeasured
+			// twin; see keeperLess.)
 			for _, cp := range s.Copies {
-				if cp.Duration <= 0 {
+				if cp.Duration <= 0 || cp.Missing {
 					continue
 				}
 				found := false

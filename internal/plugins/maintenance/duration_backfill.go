@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-09-25
 
@@ -322,6 +322,15 @@ func processBookForReextractMode(ctx context.Context, store bookFileLister, book
 		}
 		res.copies = len(split.Copies)
 		segs = counted
+		res.segs = segs
+	} else if split := database.SplitOwnFolderFiles(&book, segs); len(split.Copies) > 0 {
+		// Every mode measures only the counted rows. With the copies in, the
+		// total here was the inflated sum: the book read as "would change"
+		// on every run against the counted total RecomputeBookAggregates
+		// then stores, and a copy's unreadable file withheld a correct
+		// total. Copies are never summed, so they are not filled either.
+		res.copies = len(split.Copies)
+		segs = split.Counted(segs)
 		res.segs = segs
 	}
 
