@@ -1,5 +1,5 @@
 <!-- file: .claude/notes/fix-ops-preview-by-default-progress.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: ba9ea3aa-1777-4ba4-85c6-6afc338eb305 -->
 <!-- last-edited: 2026-09-25 -->
 
@@ -15,5 +15,9 @@
 - Guards: AST scan (opmode/guard_test.go), jobs registry iteration, wiring tests. Mutation-checked both guards.
 - Inventory doc, changelog fragment, todo.d follow-ups.
 
+- Rebased onto origin/proposed-main; build, vet, touched-package tests pass.
+- make ci reds not from this branch: logger slog ratchet (dedup/engine.go, from 082ff2e82),
+  sdkguard (internal/chaptershape), fmt-check (author_strip_merge.go), database 25m timeout.
+
 ## Next
-- Finish go test on touched packages, make ci, rebase onto origin/proposed-main, push.
+- Push to proposed-main by SHA; hand back.
