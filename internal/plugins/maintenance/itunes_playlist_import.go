@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_playlist_import.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7c4e91a3-58bd-42f6-9e0a-1d6b3f8c25e4
 // last-edited: 2026-09-25
 
@@ -106,7 +106,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 			return fmt.Errorf("itunes-playlist-import: bad params: %w", err)
 		}
 	}
-	dryRun, err := opmode.ResolveDryRun("maintenance.itunes-playlist-import", params.DryRunSnake, params.DryRun)
+	dryRun, err := opmode.ResolveDryRun("itunes.playlist-import", params.DryRunSnake, params.DryRun)
 	if err != nil {
 		return err
 	}
