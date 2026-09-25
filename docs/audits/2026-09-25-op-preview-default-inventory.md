@@ -270,6 +270,7 @@ section 1 and, for a caller sending snake `dry_run`, the 8 in section 2.
 | Direct maintenance job runs | only `maintenance_dispatcher.go` (HTTP) and the v2 Run closure call jobs | 0 |
 | Retry / resume | copy `row.Params` verbatim; the dispatcher always persists the RESOLVED `dry_run`, so a pre-deploy live run resumes live | 0 |
 | `scripts/` | no script targets a section 1/2 op | 0 |
+| Go test fixtures | `tag_backfill_test.go` built params from the zero `tagBackfillParams{}`, which marshaled to `dryRun:false` (live); 18 sites now pass `DryRun: boolPtr(false)`. `maintenance_dryrun_default_test.go` pinned `backfill-file-hashes` as the live-default real job; now pins it true and `relink-report` false | 2 files |
 
 Deliberately NOT changed: `scheduler.author-split-scan` and `scheduler.resolve-production-authors` are
 enqueued with `schedulerExtraOpParams{}` and preview by the owner's earlier decision; adding `dry_run:false`
