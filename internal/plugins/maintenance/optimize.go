@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -17,17 +17,20 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// optimizeDef returns the OperationDef for library.optimize.
+// optimizeDef returns the OperationDef for maintenance.library-optimize
+// (registered as library.optimize until 2026-09-25).
 func (p *Plugin) optimizeDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              "library.optimize",
+		ID: "maintenance.library-optimize",
+		// Renamed 2026-09-25 (naming audit class 8): a sweep of maintenance ops is a maintenance op.
+		FormerIDs:       []string{"library.optimize"},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Library optimize sweep",
 		Description:     "Chains cleanup-stale → fingerprint-rescan(missing) → dedup-acoustid-scan → backfill into one user-triggered maintenance pass.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
-		ConcurrencyKey:  "library.optimize",
+		ConcurrencyKey:  "maintenance.library-optimize",
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         36 * time.Hour,
@@ -54,7 +57,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 	opID := ctxOpID(ctx)
 	start := time.Now()
 
-	logging.Info(ctx, "library.optimize: sweep started",
+	logging.Info(ctx, "maintenance.library-optimize: sweep started",
 		"operation_id", opID,
 	)
 	_ = reporter.Log(slog.LevelInfo, "Library optimize sweep started")
@@ -96,7 +99,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 		kept := make([]childOp, 0, len(children))
 		for _, ch := range children {
 			if ch.defID == "acoustid.backfill" {
-				logging.Info(ctx, "library.optimize: acoustid-backfill excluded",
+				logging.Info(ctx, "maintenance.library-optimize: acoustid-backfill excluded",
 					"operation_id", opID,
 					"reason", "maintenance.acoustid_backfill=false",
 				)
@@ -118,7 +121,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 
 	for i, ch := range children {
 		if reporter.IsCanceled() {
-			logging.Info(ctx, "library.optimize: sweep canceled",
+			logging.Info(ctx, "maintenance.library-optimize: sweep canceled",
 				"operation_id", opID,
 				"completed", completed,
 				"failed", failed,
@@ -136,7 +139,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 		prog.StepN(i, fmt.Sprintf("Running child op %d/%d: %s", i+1, total, ch.name))
 
 		childStart := time.Now()
-		logging.Info(ctx, "library.optimize: child started",
+		logging.Info(ctx, "maintenance.library-optimize: child started",
 			"operation_id", opID,
 			"child", ch.name,
 			"def_id", ch.defID,
@@ -148,7 +151,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 		childID, err := p.deps.EnqueueOp(ctx, ch.defID, ch.params)
 		if err != nil {
 			elapsed := time.Since(childStart)
-			logging.Warn(ctx, "library.optimize: child enqueue failed",
+			logging.Warn(ctx, "maintenance.library-optimize: child enqueue failed",
 				"operation_id", opID,
 				"child", ch.name,
 				"def_id", ch.defID,
@@ -161,7 +164,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 			continue
 		}
 
-		logging.Info(ctx, "library.optimize: child enqueued",
+		logging.Info(ctx, "maintenance.library-optimize: child enqueued",
 			"operation_id", opID,
 			"child", ch.name,
 			"child_id", childID,
@@ -170,7 +173,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 		// Wait for the child to reach a terminal state.
 		if waitErr := p.deps.WaitForOp(ctx, childID); waitErr != nil {
 			elapsed := time.Since(childStart)
-			logging.Warn(ctx, "library.optimize: child failed or timed out",
+			logging.Warn(ctx, "maintenance.library-optimize: child failed or timed out",
 				"operation_id", opID,
 				"child", ch.name,
 				"child_id", childID,
@@ -184,7 +187,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 		}
 
 		elapsed := time.Since(childStart)
-		logging.Info(ctx, "library.optimize: child completed",
+		logging.Info(ctx, "maintenance.library-optimize: child completed",
 			"operation_id", opID,
 			"child", ch.name,
 			"child_id", childID,
@@ -196,7 +199,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 	}
 
 	totalElapsed := time.Since(start)
-	logging.Info(ctx, "library.optimize: sweep complete",
+	logging.Info(ctx, "maintenance.library-optimize: sweep complete",
 		"operation_id", opID,
 		"children_completed", completed,
 		"children_failed", failed,

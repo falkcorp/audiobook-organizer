@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.29.0
+// version: 3.30.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-20
+// last-edited: 2026-09-25
 
 package registry
 
@@ -40,8 +40,11 @@ var ErrOpActive = errors.New("registry: operation is still active; cancel it fir
 // Registry is the central in-memory and DB-backed object that owns every
 // OperationDef, dispatches runs, enforces policies, and routes events.
 type Registry struct {
-	mu              sync.RWMutex
-	defs            map[string]OperationDef
+	mu   sync.RWMutex
+	defs map[string]OperationDef
+	// aliases maps each former (renamed) def ID to its canonical ID. Written
+	// only by RegisterOp via copy-and-swap; read lock-free. See aliases.go.
+	aliases         atomic.Pointer[aliasTable]
 	running         map[string]*runHandle // opID → handle
 	pluginRunning   map[string]int        // plugin → count of running ops
 	pluginMax       map[string]int        // plugin → max_concurrent (0 = unlimited)
@@ -593,7 +596,7 @@ func ValidateOpDef(def OperationDef) error {
 		return fmt.Errorf("registry: OperationDef.Liveness is LivenessNone but ProgressTimeout is unset (id=%s): "+
 			"an op that never reports must state how long it may run in silence", def.ID)
 	}
-	return nil
+	return validateFormerIDs(def)
 }
 
 // RegisterOp validates and registers an OperationDef.
@@ -614,6 +617,10 @@ func (r *Registry) RegisterOp(def OperationDef) error {
 	if _, exists := r.defs[def.ID]; exists {
 		r.mu.Unlock()
 		return fmt.Errorf("registry: OperationDef already registered (id=%s)", def.ID)
+	}
+	if err := r.checkAliasCollisionsLocked(def); err != nil {
+		r.mu.Unlock()
+		return err
 	}
 
 	// Cycle check: build the full requirement graph including the new def and
@@ -638,6 +645,7 @@ func (r *Registry) RegisterOp(def OperationDef) error {
 	// If you are about to add another assignment here, route it through this
 	// function instead.
 	r.defs[def.ID] = def
+	r.publishAliasesLocked(def)
 	r.mu.Unlock()
 
 	// Persist to op_definitions_v2. Best-effort; log on error.
@@ -702,12 +710,15 @@ func (r *Registry) upsertDefToDB(def OperationDef) error {
 // need the resulting op ID may subscribe to the op.created SSE event. All
 // existing callers ignore or log the returned ID, so this is safe.
 func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts ...EnqueueOption) (string, error) {
-	r.mu.RLock()
-	def, ok := r.defs[defID]
-	r.mu.RUnlock()
+	def, ok := r.lookupDef(defID)
 	if !ok {
 		return "", fmt.Errorf("registry: unknown defID %q", defID)
 	}
+	// Past this line only the canonical ID exists: a caller that sent a former
+	// ID takes the same admission lock, batch bucket and dedupe key as one that
+	// sent the new ID, and the row below is written under the canonical ID.
+	r.noteAliasUse(defID, aliasEntryEnqueue)
+	defID = def.ID
 
 	// Marshal params. This runs FIRST — above both the batchable branch and the
 	// ConcurrencyKey dedupe — because all three need the same bytes: the batch
@@ -775,7 +786,8 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 	if def.ConcurrencyKey != "" {
 		if active, listErr := r.store.ListActiveOperationsV2(); listErr == nil {
 			for _, op := range active {
-				if op.DefID != defID {
+				// A row persisted before a rename carries the former ID.
+				if r.canonicalDefID(op.DefID) != defID {
 					continue
 				}
 				// C-3: skip zombie rows — a row can be left "running" with no
@@ -1306,12 +1318,13 @@ func (r *Registry) ActiveDefs() []OperationDef {
 	return out
 }
 
-// Def returns the registered OperationDef for the given ID, if any.
+// Def returns the registered OperationDef for the given ID, if any. A former
+// (renamed) ID resolves to its canonical def, whose ID field is the canonical
+// ID -- so def.ID != id tells the caller it was given an alias. Def does not
+// count toward the deprecation metric: it also serves display lookups for
+// stored history rows, which are not new uses of the old ID.
 func (r *Registry) Def(id string) (OperationDef, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	def, ok := r.defs[id]
-	return def, ok
+	return r.lookupDef(id)
 }
 
 // ErrShutdown is the cause Shutdown cancels running ops with; read it with

@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-25
 
@@ -205,13 +205,6 @@ func (s *Server) PollBatch(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	return s.batchPoller.Poll(ctx)
-}
-
-func (s *Server) DedupLLMReview(ctx context.Context) error {
-	if s.dedupEngine == nil {
-		return fmt.Errorf("dedup engine not initialized")
-	}
-	return s.dedupEngine.RunLLMReview(ctx)
 }
 
 func (s *Server) InvalidateDedupCache() {
@@ -446,7 +439,7 @@ func (s *Server) BackupRetentionDays() int {
 	return days
 }
 
-// ---- operation orchestration (library.optimize) ----
+// ---- operation orchestration (maintenance.library-optimize) ----
 
 // EnqueueOp implements maintenance.ServerDeps. It delegates to the UOS registry.
 // Returns an error if the registry is not initialized or the operation enqueue fails.

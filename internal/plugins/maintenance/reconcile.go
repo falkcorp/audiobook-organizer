@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b8c9d0e1-f2a3-4567-1234-789012345678
-// last-edited: 2026-09-07
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -81,14 +81,16 @@ func (p *Plugin) runReconcileScan(ctx context.Context, _ json.RawMessage, report
 // matching, and refllinks it back — 16 workers, completes in minutes.
 func (p *Plugin) itunesHealDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              "maintenance.itunes-heal",
+		ID: "itunes.heal",
+		// Renamed 2026-09-25 (naming audit class 8): every iTunes op lives in itunes.*, whichever Go package implements it.
+		FormerIDs:       []string{"maintenance.itunes-heal"},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "iTunes path heal",
 		Description:     "Heals iTunes tracks moved by the organize operation: parses iTunes XML, finds each missing file in the library by filename/author/track, and reflinks it back to the expected path.",
 		ResumePolicy:    sdk.ResumeRestart, // reflink is idempotent
 		DefaultPriority: sdk.PriorityNormal,
-		ConcurrencyKey:  "maintenance.itunes-heal",
+		ConcurrencyKey:  "itunes.heal",
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         60 * time.Minute,

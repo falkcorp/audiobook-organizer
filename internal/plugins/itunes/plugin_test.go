@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/plugin_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a7b8c9d0-e1f2-3456-ghij-567890123456
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 
 package itunes
 
@@ -139,7 +139,7 @@ func TestRegister_OnlyRegistersDefsWithARealRun(t *testing.T) {
 
 	p := New(nil)
 	var got []string
-	for _, def := range p.registeredDefs() {
+	for _, def := range p.OperationDefs() {
 		got = append(got, def.ID)
 	}
 

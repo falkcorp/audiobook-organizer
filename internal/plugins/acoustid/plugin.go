@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package acoustid is the UOS plugin for AcoustID fingerprinting operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -61,7 +61,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		return nil
 	}
 
-	ops := p.opDefs()
+	ops := p.OperationDefs()
 
 	for _, op := range ops {
 		if err := r.RegisterOp(op); err != nil {
@@ -71,9 +71,12 @@ func (p *Plugin) Register(r sdk.Registry) error {
 	return nil
 }
 
-// opDefs is every op the plugin registers, split out of Register so a test can
-// validate each def without a dedup engine.
-func (p *Plugin) opDefs() []sdk.OperationDef {
+// OperationDefs returns every OperationDef this plugin registers, independent
+// of whether its dependencies are wired. Register gates on those dependencies;
+// this does not, so the op-ID ledger guard (internal/server
+// TestOpIDs_NoRenameWithoutAlias) can enumerate the plugin's IDs and FormerIDs
+// from a zero-value Plugin. Keep Register's list and this one the same list.
+func (p *Plugin) OperationDefs() []sdk.OperationDef {
 	return []sdk.OperationDef{
 		p.scanDef(),
 		p.backfillDef(),
