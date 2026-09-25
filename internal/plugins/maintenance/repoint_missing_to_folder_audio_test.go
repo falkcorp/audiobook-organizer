@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7aa3a17c-fb70-48c4-ad3c-0911029bae0b
 // last-edited: 2026-09-25
 
@@ -26,7 +26,9 @@ type rfFakeStore struct {
 	books      []database.BookCore
 	rows       map[string][]database.BookFile
 	liveAtPath map[string][]string
-	updates    []database.BookFile
+	// indexNotBuilt reports the book_atpath index as unbuilt.
+	indexNotBuilt bool
+	updates       []database.BookFile
 	// failOnWrite makes UpdateBookFiles fail the test (dry-run guard).
 	failOnWrite *testing.T
 }
@@ -74,6 +76,8 @@ func (s *rfFakeStore) BookFilesAtPath(path string) ([]database.BookFile, error) 
 func (s *rfFakeStore) LiveBookIDsAtPath(path string) ([]string, error) {
 	return s.liveAtPath[path], nil
 }
+
+func (s *rfFakeStore) BookAtPathIndexBuilt() (bool, error) { return !s.indexNotBuilt, nil }
 
 func (s *rfFakeStore) UpdateBookFiles(_ context.Context, files []*database.BookFile, afterRow func(int, bool)) (int, error) {
 	if s.failOnWrite != nil {
@@ -161,7 +165,7 @@ func TestRepointFolderAudio_ConsolidatedRepointsOneRowAndMarksRestMissing(t *tes
 	store, target := seedConsolidated(t, root, 250)
 
 	got := rfOnly(t, rfRun(t, store, root, false))
-	require.Equal(t, rfDecisionConsolidated, got.Decision, got.Reason+" "+got.Error)
+	require.Equal(t, rfDecisionConsolidated, got.Decision, got.Reason+" "+got.Detail)
 	require.Equal(t, rfOutcomeApplied, got.Outcome, got.Error)
 	require.Equal(t, 3600, got.DurationSec)
 	require.Len(t, store.updates, 3)
@@ -206,7 +210,7 @@ func TestRepointFolderAudio_OneToOneSizeMatchRepoints(t *testing.T) {
 	}
 
 	got := rfOnly(t, rfRun(t, store, root, false))
-	require.Equal(t, rfDecisionSizeMatch, got.Decision, got.Reason+" "+got.Error)
+	require.Equal(t, rfDecisionSizeMatch, got.Decision, got.Reason+" "+got.Detail)
 	require.Equal(t, rfOutcomeApplied, got.Outcome, got.Error)
 	require.Len(t, store.updates, 1, "only the missing row is written")
 	u := store.updates[0]
@@ -246,7 +250,7 @@ func TestRepointFolderAudio_AmbiguousCasesAreUntouched(t *testing.T) {
 				rows: map[string][]database.BookFile{"b1": rows}}
 			got := rfOnly(t, rfRun(t, store, root, false))
 			require.Equal(t, rfDecisionAmbiguous, got.Decision)
-			require.Equal(t, tc.reason, got.Reason, got.Error)
+			require.Equal(t, tc.reason, got.Reason, got.Detail)
 			require.Empty(t, store.updates, "an ambiguous book must not be written")
 		})
 	}
@@ -358,4 +362,64 @@ func TestRepointFolderAudio_TwoBooksOnOneTargetCollide(t *testing.T) {
 	sort.Strings(reasons)
 	require.Equal(t, []string{"target-collision", "target-collision"}, reasons)
 	require.Empty(t, store.updates)
+}
+
+func TestRepointFolderAudio_RowlessBookAtTheFolderOwnsIt(t *testing.T) {
+	root := t.TempDir()
+	rfStubProbe(t, 60)
+	store, _ := seedConsolidated(t, root, 250)
+	folder := filepath.Join(root, "Author", "Book")
+	store.books = append(store.books, rfBookCore("rowless", folder))
+	store.liveAtPath = map[string][]string{folder: {"rowless"}}
+
+	got := rfOnly(t, rfRun(t, store, root, false))
+	require.Equal(t, "folder-shared-with-other-book", got.Reason, got.Detail)
+	require.Empty(t, store.updates, "a book whose file_path is the folder owns its audio")
+}
+
+func TestRepointFolderAudio_RefusesWithoutPathIndex(t *testing.T) {
+	root := t.TempDir()
+	rfStubProbe(t, 60)
+	store, _ := seedConsolidated(t, root, 250)
+	store.indexNotBuilt = true
+	dry := true
+	report, err := repointMissingToFolderAudio(context.Background(),
+		rfEnv{store: store, rootDir: root, queue: fsQueue{}}, rfParams{DryRun: &dry}, &fakeReporter{})
+	require.Error(t, err)
+	require.Contains(t, report.Aborted, "book_atpath index not built")
+	require.Empty(t, store.updates)
+}
+
+// A consolidation resets the kept row even when its recorded size happens to
+// equal the new file's: it described one chapter, and a chapter duration left
+// on it would survive EnsureDuration and become the whole book's length.
+func TestRepointFolderAudio_ConsolidationResetsKeptRowEvenOnEqualSize(t *testing.T) {
+	root := t.TempDir()
+	rfStubProbe(t, 3600)
+	store, target := seedConsolidated(t, root, 250)
+	for i := range store.rows["b1"] {
+		if store.rows["b1"][i].ID == "fb" { // track 1: the kept row
+			store.rows["b1"][i].FileSize = 250
+			store.rows["b1"][i].Duration = 120
+		}
+	}
+	got := rfOnly(t, rfRun(t, store, root, false))
+	require.Equal(t, rfOutcomeApplied, got.Outcome, got.Detail+" "+got.Error)
+	kept, ok := store.updateByID("fb")
+	require.True(t, ok)
+	require.Equal(t, target, kept.FilePath)
+	require.Equal(t, 3600, kept.Duration, "the chapter's 120 s must not survive as the whole file's duration")
+}
+
+func TestRepointFolderAudio_ReportsRequestedIDsOutOfScope(t *testing.T) {
+	root := t.TempDir()
+	rfStubProbe(t, 60)
+	store, _ := seedConsolidated(t, root, 250)
+	dry := true
+	report, err := repointMissingToFolderAudio(context.Background(),
+		rfEnv{store: store, rootDir: root, queue: fsQueue{}},
+		rfParams{DryRun: &dry, BookIDs: []string{"b1", "nope"}}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"nope"}, report.OutOfScope)
+	require.Equal(t, 1, report.Planned)
 }

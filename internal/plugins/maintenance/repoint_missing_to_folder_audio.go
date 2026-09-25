@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
 // last-edited: 2026-09-25
 
@@ -192,7 +192,10 @@ type rfBookResult struct {
 	ActiveRows  int `json:"active_rows"`
 	MissingRows int `json:"missing_rows"`
 	// Candidates are the unowned audio files the decision was made over.
-	Candidates []string `json:"candidates,omitempty"`
+	// Candidates lists up to rfMaxChangesPerBook of them; CandidateCount is
+	// the total.
+	Candidates     []string `json:"candidates,omitempty"`
+	CandidateCount int      `json:"candidate_count,omitempty"`
 	// SizeRatio is candidate size ÷ the missing rows' total recorded size
 	// (consolidation only), so the plausibility band can be tuned.
 	SizeRatio float64 `json:"size_ratio,omitempty"`
@@ -206,8 +209,11 @@ type rfBookResult struct {
 	// Changes lists up to rfMaxChangesPerBook rows; ChangeCount is the total.
 	Changes     []rfChange `json:"changes,omitempty"`
 	ChangeCount int        `json:"change_count,omitempty"`
-	Outcome     string     `json:"outcome,omitempty"`
-	Error       string     `json:"error,omitempty"`
+	// Detail explains an ambiguous decision (which file, which row).
+	Detail  string `json:"detail,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
+	// Error is set only when an apply of this book failed or was skipped.
+	Error string `json:"error,omitempty"`
 
 	// plan is the full write plan; not serialized.
 	plan *rfPlan
@@ -227,9 +233,12 @@ type rfReport struct {
 	ByOutcome         map[string]int `json:"by_outcome,omitempty"`
 	RowsRepointed     int            `json:"rows_repointed"`
 	RowsMarkedMissing int            `json:"rows_marked_missing"`
-	ReportPath        string         `json:"report_path,omitempty"`
-	Aborted           string         `json:"aborted,omitempty"`
-	Books             []rfBookResult `json:"books"`
+	// OutOfScope lists requested book_ids that are not live primary +
+	// organized books, so a book_ids run that plans nothing says why.
+	OutOfScope []string       `json:"out_of_scope,omitempty"`
+	ReportPath string         `json:"report_path,omitempty"`
+	Aborted    string         `json:"aborted,omitempty"`
+	Books      []rfBookResult `json:"books"`
 }
 
 func (r *rfReport) summary() string {
@@ -271,6 +280,9 @@ type rfStore interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	BookFilesAtPath(path string) ([]database.BookFile, error)
 	LiveBookIDsAtPath(path string) ([]string, error)
+	// BookAtPathIndexBuilt must be true before asking LiveBookIDsAtPath per
+	// item: until the index is built each call scans every book row.
+	BookAtPathIndexBuilt() (bool, error)
 	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 }
 
@@ -390,9 +402,21 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 	}
 
 	// --- scope: primary + organized books, and their active rows ---
-	books, err := rfScopedBooks(env.store, params.bookIDs())
+	requested := params.bookIDs()
+	books, err := rfScopedBooks(env.store, requested)
 	if err != nil {
 		return report, err
+	}
+	if len(requested) > 0 {
+		in := map[string]bool{}
+		for _, c := range books.scoped {
+			in[c.ID] = true
+		}
+		for _, id := range requested {
+			if !in[id] {
+				report.OutOfScope = append(report.OutOfScope, id)
+			}
+		}
 	}
 	liveBooks := books.live
 	files, err := env.store.GetAllBookFilesCore()
@@ -456,6 +480,14 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 		affected = affected[:params.Limit]
 	}
 	report.Planned = len(affected)
+	if len(affected) > 0 {
+		built, berr := env.store.BookAtPathIndexBuilt()
+		if berr != nil || !built {
+			report.Aborted = fmt.Sprintf("book_atpath index not built (built=%v err=%v); every per-file owner check "+
+				"would scan every book row. Run maintenance.book-atpath-index-backfill first", built, berr)
+			return report, fmt.Errorf("%s: %s", rfOpName, report.Aborted)
+		}
+	}
 
 	// --- phase 2: plan each book (parallel, read-only) ---
 	results := make([]rfBookResult, len(affected))
@@ -632,7 +664,7 @@ func rfAmbiguous(r rfBookResult, reason, detail string) rfBookResult {
 	r.Decision = rfDecisionAmbiguous
 	r.Reason = reason
 	if detail != "" {
-		r.Error = detail
+		r.Detail = detail
 	}
 	r.plan = nil
 	r.NewPaths = nil
@@ -666,6 +698,17 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 		return amb(reason, folder)
 	}
 	r.Folder = folder
+
+	// A book whose own file_path IS this folder (a directory book, or a
+	// rowless one) owns what is in it, and neither index lookup on a FILE
+	// below can see it: it has no rows, and its path is the folder.
+	folderOwner, err := rfOtherLiveBook(env.store, b.core.ID, folder)
+	if err != nil {
+		return amb("owner-check-failed", err.Error())
+	}
+	if folderOwner != "" {
+		return amb("folder-shared-with-other-book", "the folder is book "+folderOwner+"'s file_path")
+	}
 
 	entries, err := os.ReadDir(folder)
 	if err != nil {
@@ -709,6 +752,7 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 	for _, c := range cands {
 		r.Candidates = append(r.Candidates, c.path)
 	}
+	r.CandidateCount = len(cands)
 	if len(cands) == 0 {
 		return amb("no-candidate", "")
 	}
@@ -753,7 +797,10 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 		r.Reason = fmt.Sprintf("%d row(s) -> 1 file", len(rows))
 		plan.Repoints[keep.ID] = target.path
 		plan.OldPaths[keep.ID] = keep.FilePath
-		plan.ResetContent = keep.FileSize != target.size
+		// Reset whenever rows collapse: the kept row described ONE chapter,
+		// so even an equal size is a coincidence, and a chapter duration left
+		// in place would survive EnsureDuration (it never overwrites > 0).
+		plan.ResetContent = len(rows) > 1 || keep.FileSize != target.size
 		r.Changes = append(r.Changes, rfChange{FileID: keep.ID, Action: rfActionRepoint, OldPath: keep.FilePath, NewPath: target.path})
 		for _, f := range rows[1:] {
 			plan.MarkMissing = append(plan.MarkMissing, f.ID)
@@ -892,6 +939,12 @@ func rfOtherOwner(store rfStore, liveBooks map[string]bool, bookID, path string)
 			return rows[i].BookID, nil
 		}
 	}
+	return rfOtherLiveBook(store, bookID, path)
+}
+
+// rfOtherLiveBook returns a live book other than bookID whose file_path is
+// exactly path, or "".
+func rfOtherLiveBook(store rfStore, bookID, path string) (string, error) {
 	ids, err := store.LiveBookIDsAtPath(path)
 	if err != nil {
 		return "", fmt.Errorf("live books at %s: %w", path, err)
@@ -1030,6 +1083,9 @@ func finishRFReport(report *rfReport, results []rfBookResult) {
 		if len(out.Changes) > rfMaxChangesPerBook {
 			out.Changes = out.Changes[:rfMaxChangesPerBook]
 		}
+		if len(out.Candidates) > rfMaxChangesPerBook {
+			out.Candidates = out.Candidates[:rfMaxChangesPerBook]
+		}
 		report.Books = append(report.Books, out)
 	}
 }
@@ -1051,7 +1107,13 @@ func writeRFReport(path string, books []rfBookResult) error {
 			fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t\t\t%s\t\n", r.BookID, r.Decision, clean(r.Reason), r.Outcome, clean(r.Folder))
 			continue
 		}
-		for id, old := range r.plan.OldPaths {
+		ids := make([]string, 0, len(r.plan.OldPaths))
+		for id := range r.plan.OldPaths {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			old := r.plan.OldPaths[id]
 			action, newPath := rfActionMarkMissing, ""
 			if t, ok := r.plan.Repoints[id]; ok {
 				action, newPath = rfActionRepoint, t
