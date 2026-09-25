@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_shape_report.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f0c5a71-8d4e-4a92-9b16-2c7e5d40ab31
-// last-edited: 2026-09-20
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -123,6 +124,17 @@ const (
 	// re-suffixed its destination once per attempt (Magi'i of Cyador: 113 dirs,
 	// all holding a file named 117.mp3).
 	shapeCollisionSuffixExplosion = "collision-suffix-explosion"
+
+	// shapeChapterFolderLayout wears the same signature — N "<prefix> - <n>"
+	// directories whose rows all name ONE basename — but the directories sit
+	// inside a book folder named after the prefix (internal/chaptershape's
+	// guard): `<Book>/<Book> - 01/32.m4b`, `<Book>/<Book> - 02/32.m4b`, ...
+	// That is a real one-chapter-per-folder download layout (the chaptershape
+	// tests carry `The Shining - 1/58.MP3`), not a retry loop: every row is a
+	// chapter, and collapsing the directories would destroy the only place the
+	// chapter number lives. CHAPTER-SUBFOLDER-NN-ROWS (2026-09-25): such a book
+	// shared its book folder with a second book, and ABS listed both.
+	shapeChapterFolderLayout = "chapter-folder-layout"
 )
 
 // bookShapeRecommendations maps each shape to the treatment a repair op or a
@@ -163,6 +175,11 @@ var bookShapeRecommendations = map[string]string{
 	shapeCollisionSuffixExplosion: "COLLAPSE the '<prefix> - N' siblings: this is an organize/rename retry " +
 		"loop that re-suffixed its destination once per attempt. Repoint the rows to one destination folder " +
 		"and remove the empty suffixed directories. Not a merge candidate.",
+	shapeChapterFolderLayout: "KEEP the rows: this is a real one-chapter-per-folder layout (<Book>/<Book> - N/), " +
+		"not a retry loop, and every row is a chapter. Do NOT collapse the directories. If another book " +
+		"row sits at the same book folder, the two are duplicates for dedup review (same_dir_multi_file no " +
+		"longer hides two books at one path). Flattening the layout is maintenance.fs-regroup-xml's " +
+		"chapter_folder_layout category, whose apply is not implemented.",
 }
 
 // --- defaults ---
@@ -765,13 +782,19 @@ func classifyGroup(g bookShapeGroup, stat bookShapeDirStat, params bookShapeRepo
 			})
 		}
 		if prefix, base, n := collisionSuffixExplosion(m, params.collisionSuffixMin()); n > 0 {
-			corruptBooks[m.book.ID] = true
+			// The chapter-folder layout is real content, not a corrupt row:
+			// it stays usable as merge evidence.
+			shape := shapeChapterFolderLayout
+			if !chaptershape.PrefixInParent(filepath.Dir(prefix), filepath.Base(prefix)) {
+				shape = shapeCollisionSuffixExplosion
+				corruptBooks[m.book.ID] = true
+			}
 			out = append(out, bookShapeFinding{
-				Shape: shapeCollisionSuffixExplosion, Dir: g.dir, BookIDs: []string{m.book.ID}, PathKind: kind,
+				Shape: shape, Dir: g.dir, BookIDs: []string{m.book.ID}, PathKind: kind,
 				LibraryState: strField(m.book.LibraryState), IsPrimary: boolField(m.book.IsPrimaryVersion),
 				OwnedRows: len(m.paths), DiskFiles: stat.AudioFiles,
 				Detail:         fmt.Sprintf("%d sibling %q - N director(ies) all naming one basename %q", n, prefix, base),
-				Recommendation: bookShapeRecommendations[shapeCollisionSuffixExplosion],
+				Recommendation: bookShapeRecommendations[shape],
 			})
 		}
 	}
@@ -929,10 +952,11 @@ func concatenatedPaths(m bookShapeMember) []string {
 	return bad
 }
 
-// collisionSuffixExplosion reports the rename/organize retry loop: N sibling
-// "<prefix> - <n>" directories whose rows all name ONE basename. Returns the
-// prefix, the basename, and how many suffixed directories were found (0 = not
-// this shape).
+// collisionSuffixExplosion finds N sibling "<prefix> - <n>" directories whose
+// rows all name ONE basename. Returns the prefix (joined to its parent
+// directory), the basename, and how many suffixed directories were found (0 =
+// not this shape). The caller tells a retry loop from a chapter-folder layout
+// (shapeChapterFolderLayout) by chaptershape's prefix-in-parent guard.
 func collisionSuffixExplosion(m bookShapeMember, minDirs int) (string, string, int) {
 	byPrefix := map[string]map[string]struct{}{}
 	baseByPrefix := map[string]map[string]struct{}{}
