@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
 // last-edited: 2026-09-25
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -89,37 +90,13 @@ func (p *Plugin) runAuthorDedupScan(ctx context.Context, _ json.RawMessage, repo
 	return nil
 }
 
-// authorOpDryRunParams is the params shape of author-split-scan and
-// resolve-production-authors. Both ops ignored their params until 2026-09-25
-// and wrote on every run, including the Monday 02:00 schedule. dry_run
-// defaults to TRUE when absent; dryRun (camelCase) is accepted as an alias,
-// and sending both with different values is an error rather than a guess --
-// the same contract as author-id-repair and duration-reextract, whose comment
+// author-split-scan and resolve-production-authors take only a mode. Both
+// ignored their params until 2026-09-25 and wrote on every run, including the
+// Monday 02:00 schedule. They resolve it through opmode.ParseDryRun: dry_run
+// defaults to TRUE when absent, dryRun (camelCase) is accepted as an alias, and
+// sending both with different values is an error rather than a guess -- the
+// same contract as author-id-repair and duration-reextract, whose comment
 // records the prod run that silently previewed because of a misspelled key.
-type authorOpDryRunParams struct {
-	DryRun      *bool `json:"dry_run,omitempty"`
-	DryRunCamel *bool `json:"dryRun,omitempty"`
-}
-
-// parseAuthorOpDryRun resolves raw to the dry-run flag, defaulting to true.
-func parseAuthorOpDryRun(opID string, raw json.RawMessage) (bool, error) {
-	var params authorOpDryRunParams
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return true, fmt.Errorf("%s: invalid params: %w", opID, err)
-		}
-	}
-	if params.DryRun != nil && params.DryRunCamel != nil && *params.DryRun != *params.DryRunCamel {
-		return true, fmt.Errorf("%s: dry_run=%v and dryRun=%v disagree; send one", opID, *params.DryRun, *params.DryRunCamel)
-	}
-	switch {
-	case params.DryRun != nil:
-		return *params.DryRun, nil
-	case params.DryRunCamel != nil:
-		return *params.DryRunCamel, nil
-	}
-	return true, nil
-}
 
 // --- author-split-scan ---
 
@@ -146,7 +123,7 @@ func (p *Plugin) authorSplitScanDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	dryRun, err := parseAuthorOpDryRun("maintenance.author-split-scan", raw)
+	dryRun, err := opmode.ParseDryRun("maintenance.author-split-scan", raw)
 	if err != nil {
 		return err
 	}
@@ -410,7 +387,7 @@ func (p *Plugin) resolveProductionAuthorsDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	dryRun, err := parseAuthorOpDryRun("maintenance.resolve-production-authors", raw)
+	dryRun, err := opmode.ParseDryRun("maintenance.resolve-production-authors", raw)
 	if err != nil {
 		return err
 	}

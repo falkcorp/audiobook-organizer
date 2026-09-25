@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-09-25
 
@@ -36,6 +36,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
@@ -261,36 +262,13 @@ func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry)
 
 // --- author-split-scan ---
 
-// schedulerAuthorDryRunParams is the params shape of scheduler.author-split-scan
-// and scheduler.resolve-production-authors. Both ignored their params until
-// 2026-09-25 and wrote on every run. dry_run defaults to TRUE when absent;
-// dryRun is accepted as an alias; disagreeing values are an error. The
+// scheduler.author-split-scan and scheduler.resolve-production-authors take
+// only a mode. Both ignored their params until 2026-09-25 and wrote on every
+// run. They resolve it through opmode.ParseDryRun: dry_run defaults to TRUE when
+// absent; dryRun is accepted as an alias; disagreeing values are an error. The
 // scheduled trigger (tasks.go) sends schedulerExtraOpParams{}, which carries
-// neither key, so a scheduled run is a dry run. Mirrors
-// internal/plugins/maintenance/author.go's parseAuthorOpDryRun.
-type schedulerAuthorDryRunParams struct {
-	DryRun      *bool `json:"dry_run,omitempty"`
-	DryRunCamel *bool `json:"dryRun,omitempty"`
-}
-
-func parseSchedulerAuthorDryRun(opID string, raw json.RawMessage) (bool, error) {
-	var params schedulerAuthorDryRunParams
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return true, fmt.Errorf("%s: invalid params: %w", opID, err)
-		}
-	}
-	if params.DryRun != nil && params.DryRunCamel != nil && *params.DryRun != *params.DryRunCamel {
-		return true, fmt.Errorf("%s: dry_run=%v and dryRun=%v disagree; send one", opID, *params.DryRun, *params.DryRunCamel)
-	}
-	switch {
-	case params.DryRun != nil:
-		return *params.DryRun, nil
-	case params.DryRunCamel != nil:
-		return *params.DryRunCamel, nil
-	}
-	return true, nil
-}
+// neither key, so a scheduled run is a dry run -- deliberately, by owner
+// decision; do not add dry_run=false to those two enqueues.
 
 // RegisterAuthorSplitScanOp registers the scheduler.author-split-scan OperationDef.
 func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry) error {
@@ -309,7 +287,7 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			dryRun, err := parseSchedulerAuthorDryRun("scheduler.author-split-scan", rawParams)
+			dryRun, err := opmode.ParseDryRun("scheduler.author-split-scan", rawParams)
 			if err != nil {
 				return err
 			}
@@ -869,7 +847,7 @@ func (r *ExtraOpsRegistrar) RegisterResolveProductionAuthorsOp(reg *opsregistry.
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkOpenAI},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			dryRun, err := parseSchedulerAuthorDryRun("scheduler.resolve-production-authors", rawParams)
+			dryRun, err := opmode.ParseDryRun("scheduler.resolve-production-authors", rawParams)
 			if err != nil {
 				return err
 			}
