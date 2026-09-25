@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 package metafetch
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -133,6 +134,19 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 					slog.Warn("applyMetadataToBook extracted artist matches neither author nor narrator for book", "extracted_author", logger.SanitizeLogValue(extractedAuthor), "name", existingAuthor.Name, "narrator", logger.SanitizeLogValue(*book.Narrator), "id", book.ID)
 				}
 			}
+		}
+	}
+	// The shared creation gate runs BEFORE the lookup: IsGarbageValue is a
+	// 15-word list, and a provider returning "Epigraph" (ASIN B0BYTJ23J7,
+	// 2026-09-15) must neither mint that row nor link an existing one. A junk
+	// name is no author; the book keeps whatever credit it already had.
+	if extractedAuthor != "" && !IsGarbageValue(extractedAuthor) {
+		if cleaned, why := personname.PrepareAuthorNameForCreation(extractedAuthor); why != "" {
+			logger.New("metafetch").Info("applyMetadataToBook: book %s: provider author %q is not a plausible name (%s); not crediting it",
+				book.ID, logger.SanitizeLogValue(extractedAuthor), why)
+			extractedAuthor = ""
+		} else {
+			extractedAuthor = cleaned
 		}
 	}
 	if extractedAuthor != "" && !IsGarbageValue(extractedAuthor) {

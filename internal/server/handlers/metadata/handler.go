@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-09-14
+// last-edited: 2026-09-25
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -68,6 +68,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"
@@ -1187,8 +1188,17 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 
 		if meta.Author != "" && !metafetch.IsGarbageValue(meta.Author) {
 			addFetched(database.FieldKeyAuthorName, meta.Author)
-			if shouldApply(database.FieldKeyAuthorName, hasBookValue(database.FieldKeyAuthorName)) {
-				author, err := store.GetAuthorByName(meta.Author)
+			// The shared creation gate runs before the lookup: a provider
+			// author that is junk ("Epigraph", "read by narrator") is no
+			// author, so the field is simply not applied -- the item still
+			// succeeds with every other field.
+			authorName, why := personname.PrepareAuthorNameForCreation(meta.Author)
+			if why != "" {
+				logger.New("metadata-apply").Info("book %s: provider author %q is not a plausible name (%s); not applying it",
+					logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(meta.Author), why)
+			}
+			if why == "" && shouldApply(database.FieldKeyAuthorName, hasBookValue(database.FieldKeyAuthorName)) {
+				author, err := store.GetAuthorByName(authorName)
 				if err != nil {
 					result.Status = "error"
 					result.Message = "failed to resolve author"
@@ -1196,7 +1206,7 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 					return nil
 				}
 				if author == nil {
-					author, err = store.CreateAuthor(meta.Author)
+					author, err = store.CreateAuthor(authorName)
 					if err != nil {
 						result.Status = "error"
 						result.Message = "failed to create author"

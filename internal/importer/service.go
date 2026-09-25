@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-09-25
 
@@ -7,6 +7,7 @@ package importer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -231,13 +233,23 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		// Creation gate (C413): copyright fragments and entity shrapnel from
 		// artist tags must not become author rows. A book with NO author is
 		// honest; an author named "&#169" is a repair job.
-		if dedup.IsDirtyAuthorName(normalizedArtist) {
+		//
+		// The shared gate (personname.PrepareAuthorNameForCreation) also runs
+		// here, so "read by narrator", "14 BBY" and friends are refused the
+		// same way, and a store-side refusal (database.ErrImplausibleAuthorName)
+		// means "no author" rather than a failed import.
+		prepared, why := personname.PrepareAuthorNameForCreation(normalizedArtist)
+		if dedup.IsDirtyAuthorName(normalizedArtist) || why != "" {
 			slog.Warn("importer: artist tag rejected as author name",
-				"artist", logging.Sanitize(meta.Artist), "path", logging.Sanitize(req.FilePath))
+				"artist", logging.Sanitize(meta.Artist), "path", logging.Sanitize(req.FilePath), "reason", string(why))
 		} else {
+			normalizedArtist = prepared
 			author, err := is.db.GetAuthorByName(normalizedArtist)
 			if err != nil {
 				author, err = is.db.CreateAuthor(normalizedArtist)
+				if errors.Is(err, database.ErrImplausibleAuthorName) {
+					author, err = nil, nil
+				}
 				if err != nil {
 					return nil, fmt.Errorf("failed to create author: %w", err)
 				}

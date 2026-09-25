@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -1118,6 +1118,12 @@ func (c *authorPathLinkCreator) resolveOrCreate(name string, allowCreate bool) (
 		return *existing, false, nil
 	}
 	if !allowCreate {
+		return database.Author{}, false, nil
+	}
+	// The store refuses a junk name (database.ErrImplausibleAuthorName), so a
+	// dry run must refuse it too or its would-mint preview overstates what an
+	// apply creates. Refused names resolve to "no author", like allowCreate=false.
+	if database.CheckAuthorNameForCreation(name) != nil {
 		return database.Author{}, false, nil
 	}
 	if c.dryRun {

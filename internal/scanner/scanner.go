@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.107.0
+// version: 1.108.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-25
 
@@ -3786,6 +3786,18 @@ func resolveAuthorID(authorName string) (*int, error) {
 	}
 	trimmed = strings.TrimSpace(trimmed)
 
+	// The shared creation gate runs BEFORE the lookup, not just before the
+	// create: an existing junk row ("read by narrator", "14 BBY") must not be
+	// handed back either, or every rescan links more books to it. A junk name
+	// means "this source carries no author", the same as an empty one, so the
+	// book is saved with no author rather than failing the save.
+	cleaned, why := personname.PrepareAuthorNameForCreation(trimmed)
+	if why != "" {
+		defaultLog.Debug("scanner: not creating author %q (%s)", logger.SanitizeLogValue(trimmed), why)
+		return nil, nil
+	}
+	trimmed = cleaned
+
 	author, err := getStore().GetAuthorByName(trimmed)
 	if err != nil {
 		return nil, fmt.Errorf("author lookup failed: %w", err)
@@ -3796,6 +3808,11 @@ func resolveAuthorID(authorName string) (*int, error) {
 
 	author, err = getStore().CreateAuthor(trimmed)
 	if err != nil {
+		if errors.Is(err, database.ErrImplausibleAuthorName) {
+			// Backstop: the store's gate refused a name the gate above let
+			// through. Same meaning -- no author -- never a failed save.
+			return nil, nil
+		}
 		if !isUniqueConstraintError(err) {
 			return nil, fmt.Errorf("author create failed: %w", err)
 		}

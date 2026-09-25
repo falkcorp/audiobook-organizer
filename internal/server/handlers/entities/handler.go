@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-09-14
+// last-edited: 2026-09-25
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -608,6 +608,13 @@ func (h *Handler) SplitCompositeAuthor(c *gin.Context) {
 		}
 		created, err := h.store.CreateAuthor(name)
 		if err != nil {
+			// A part the creation gate refuses is the caller's input, not a
+			// server fault: say which part and why, and change nothing.
+			var implausible *database.ImplausibleAuthorNameError
+			if errors.As(err, &implausible) {
+				httputil.RespondWithBadRequest(c, fmt.Sprintf("refusing to create author %q: %s", implausible.Name, implausible.Reason))
+				return
+			}
 			httputil.InternalError(c, "failed to create author", err)
 			return
 		}

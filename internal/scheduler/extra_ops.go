@@ -17,6 +17,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -373,6 +374,7 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 
 				// Actually split: create/find individual authors
 				var newAuthors []database.Author
+				partFailed := false
 				for _, name := range parts {
 					name = strings.TrimSpace(name)
 					if name == "" {
@@ -384,14 +386,27 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 						continue
 					}
 					created, err := store.CreateAuthor(name)
+					if errors.Is(err, database.ErrImplausibleAuthorName) {
+						// A junk part ("read by narrator" split out of
+						// "Stephen King, read by narrator") is dropped on
+						// purpose: it was never a credit worth keeping.
+						continue
+					}
 					if err != nil {
 						errCount++
+						partFailed = true
 						_ = progress.Log("warning", fmt.Sprintf("Failed to create author %q: %v", name, err), nil)
 						continue
 					}
 					newAuthors = append(newAuthors, *created)
 				}
-				if len(newAuthors) == 0 {
+				// Every real part must resolve, or the composite is left alone. The
+				// relink below REPLACES the composite credit with newAuthors and the
+				// composite row is then deleted, so a store error on one part would
+				// silently drop that person's credit from every book. Only a part
+				// the creation gate refuses (database.ErrImplausibleAuthorName) is
+				// dropped, because it was junk rather than a person.
+				if partFailed || len(newAuthors) == 0 {
 					continue
 				}
 
