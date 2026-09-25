@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.11.0
+// version: 4.12.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package server
 
@@ -94,6 +94,11 @@ func (s *Server) startSearchIndexing() {
 	})
 	s.bgWG.Go("index-worker", func() {
 		s.runIndexWorker()
+	})
+	// Reports bleve writes that never return. Separate goroutine because a
+	// wedged index blocks every writer, including the reconciler and worker.
+	s.bgWG.Go("search-index-watchdog", func() {
+		s.runSearchIndexWatchdog()
 	})
 	// Route the /audiobooks?search= path through Bleve.
 	if s.audiobookService != nil {

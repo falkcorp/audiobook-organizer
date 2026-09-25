@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_hydration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9f0a1b2c-3d4e-5f60-7182-93a4b5c6d7e8
-// last-edited: 2026-07-11
+// last-edited: 2026-09-25
 
 // Tests for the searchWithBleve batch-hydration fail-open path (INIT-4 T3).
 // GetBookByID's per-hit loop was replaced with a single GetBooksByIDs call
@@ -59,7 +59,7 @@ func TestSearchWithBleveHydrationErrorPartialPage(t *testing.T) {
 	buf := captureWarnLog(t)
 
 	svc := NewAudiobookService(mockStore)
-	svc.SetSearchIndex(idx)
+	svc.SetSearchIndex(completedIndex(t, idx))
 
 	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson", nil, nil, ListFilters{})
 	assert.NoError(t, err, "hydration error must never fail the whole search request")

@@ -1,6 +1,6 @@
 // file: internal/server/audiobook_service_bleve_test.go
-// version: 1.1.0
-// last-edited: 2026-08-15
+// version: 1.1.1
+// last-edited: 2026-09-25
 // guid: 7f3d5a4b-9c5a-4a70-b8c5-3d7e0f1b9a99
 
 package server
@@ -32,7 +32,7 @@ func setupBleveBackedService(t *testing.T) (*AudiobookService, *database.PebbleS
 	t.Cleanup(func() { _ = idx.Close() })
 
 	svc := NewAudiobookService(store)
-	svc.SetSearchIndex(idx)
+	svc.SetSearchIndex(completedIndex(t, idx))
 
 	seedRows := []struct {
 		id, title, author, format string
@@ -117,4 +117,19 @@ func TestService_NoIndexUsesLegacy(t *testing.T) {
 	// implementation; the important contract is: no panic, no error,
 	// and the call path was legacy (not Bleve).
 	_ = books
+}
+
+// completedIndex marks a test-built index as fully covering its library. A
+// freshly created index reports Rebuilding until the reconciler confirms
+// coverage, and the service answers searches from the substring path while
+// it does; a fixture that indexed every book itself is complete by
+// construction.
+func completedIndex(t testing.TB, idx *search.BleveIndex) *search.BleveIndex {
+	t.Helper()
+	if idx != nil {
+		if err := idx.MarkRebuilt(); err != nil {
+			t.Fatalf("MarkRebuilt: %v", err)
+		}
+	}
+	return idx
 }

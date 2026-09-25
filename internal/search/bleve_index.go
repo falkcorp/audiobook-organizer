@@ -1,7 +1,7 @@
 // file: internal/search/bleve_index.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
-// last-edited: 2026-08-20
+// last-edited: 2026-09-25
 //
 // BleveIndex is the single-package wrapper around a Bleve v2 scorch
 // index backing library search (spec DES-1 / backlog §4.7). The
@@ -25,17 +25,69 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/analysis/analyzer/custom"
 	"github.com/blevesearch/bleve/v2/analysis/analyzer/standard"
+	regexpchar "github.com/blevesearch/bleve/v2/analysis/char/regexp"
 	"github.com/blevesearch/bleve/v2/analysis/lang/en"
 	"github.com/blevesearch/bleve/v2/analysis/token/lowercase"
 	"github.com/blevesearch/bleve/v2/analysis/token/porter"
 	"github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
+	"github.com/blevesearch/bleve/v2/index/scorch"
 	"github.com/blevesearch/bleve/v2/mapping"
 	"github.com/blevesearch/bleve/v2/search/query"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+var indexLog = logger.New("search-index")
+
+// asyncErrorCallbackName is the scorch registry key for onAsyncError.
+//
+// WHY: scorch's merger and persister run in their own goroutines and report
+// failures ONLY through config["asyncErrorCallbackName"]. With no callback
+// registered (the state until 2026-09-25) every failure is counted in a stat
+// and otherwise discarded. Production ran 92 consecutive failed file-merge
+// plans in 13 minutes with zero log lines; the persister, which waits for the
+// merger once the index directory holds >= 1000 files, paused forever, and
+// every safe Batch/Index/Delete blocked on it. The whole search-index write
+// path wedged and nothing said why.
+const asyncErrorCallbackName = "audiobook-organizer"
+
+// asyncErrors counts scorch async errors for the process lifetime.
+var asyncErrors atomic.Int64
+
+// lastAsyncErrorLog rate-limits the Error line: a failing merge plan retries
+// in a tight loop and would otherwise log hundreds of identical lines.
+var lastAsyncErrorLog atomic.Int64
+
+func init() {
+	scorch.RegistryAsyncErrorCallbacks[asyncErrorCallbackName] = func(err error, path string) {
+		n := asyncErrors.Add(1)
+		now := time.Now().UnixNano()
+		last := lastAsyncErrorLog.Load()
+		if n > 1 && now-last < int64(time.Minute) {
+			return
+		}
+		if !lastAsyncErrorLog.CompareAndSwap(last, now) {
+			return
+		}
+		indexLog.Error("search index background error (scorch merger/persister): %v (path=%s, total_async_errors=%d)",
+			err, logger.SanitizeLogValue(path), n)
+	}
+}
+
+// AsyncErrorCount reports scorch async errors seen since process start.
+func AsyncErrorCount() int64 { return asyncErrors.Load() }
+
+// runtimeConfig is passed on EVERY open, not just create: bleve.Open with no
+// config would drop the callback on the second boot of any index.
+func runtimeConfig() map[string]interface{} {
+	return map[string]interface{}{"asyncErrorCallbackName": asyncErrorCallbackName}
+}
 
 // BleveIndex wraps a bleve.Index with a small, opinionated API tuned
 // to this project. Concurrency: Bleve indexes are safe for
@@ -51,6 +103,18 @@ type BleveIndex struct {
 	// because its mapping version was stale. Read via
 	// RecreatedForMappingChange; set once at Open and never mutated after.
 	recreatedForMapping bool
+
+	// rebuilding is true from the moment an index is created empty until
+	// MarkRebuilt: the index does not yet cover the library, so callers must
+	// not treat a miss as "no such book". Backed by a sibling marker file so
+	// it survives a restart mid-drain (RecreatedForMappingChange does not).
+	rebuilding atomic.Bool
+
+	// inflight tracks the start time of every write currently inside bleve,
+	// so a watchdog can see a write that never returns (see OldestWrite).
+	inflightMu  sync.Mutex
+	inflightSeq uint64
+	inflight    map[uint64]time.Time
 }
 
 // bookTextAnalyzerName is the analyzer every free-text field is indexed
@@ -91,7 +155,21 @@ const bookTextAnalyzerName = "book_en_nostop"
 //
 //	1 (implicit, unmarked) — stock `en` analyzer on all text fields
 //	2                      — bookTextAnalyzerName, stopwords preserved
-const bookMappingVersion = "2"
+//	3                      — '_' mapped to a space before tokenising, so
+//	                         "Arcane_Chef_2__A_LitRPG" is five tokens, not one
+//
+// A bump deletes the on-disk index and rebuilds it through the durable dirty
+// set; while that runs the index reports Rebuilding and library search uses
+// the substring path (see audiobooks.AudiobookService.bleveSearchable).
+const bookMappingVersion = "3"
+
+// underscoreCharFilterName maps '_' to ' ' ahead of the unicode tokenizer.
+// The tokenizer follows Unicode word-break rules, under which '_' is an
+// ExtendNumLet word-joiner, so a filename-derived title such as
+// "Arcane_Chef_2__A_LitRPG_Adventure" indexed as ONE token and no word
+// query could reach it. database.searchFold does the same fold for the
+// substring path (#3559).
+const underscoreCharFilterName = "underscore_to_space"
 
 // mappingMarkerPath returns the sibling file recording which mapping version
 // built the index. Deliberately a SIBLING of the index directory rather than a
@@ -113,15 +191,19 @@ func Open(path string) (*BleveIndex, error) {
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		stored := readMappingMarker(path)
 		if stored == bookMappingVersion {
-			idx, err := bleve.Open(path)
+			idx, err := bleve.OpenUsing(path, runtimeConfig())
 			if err != nil {
 				return nil, fmt.Errorf("bleve open existing at %s: %w", path, err)
 			}
-			return &BleveIndex{idx: idx, path: path}, nil
+			b := &BleveIndex{idx: idx, path: path}
+			if _, err := os.Stat(rebuildingMarkerPath(path)); err == nil {
+				b.rebuilding.Store(true)
+			}
+			return b, nil
 		}
 		slog.Warn("search index mapping version changed; recreating index. "+
-			"Search will be incomplete until the reconciler drains the "+
-			"dirty set.",
+			"Library search uses the substring path until the reconciler "+
+			"drains the dirty set.",
 			"path", path, "stored", stored, "want", bookMappingVersion)
 		if err := os.RemoveAll(path); err != nil {
 			return nil, fmt.Errorf("bleve remove stale index at %s: %w", path, err)
@@ -145,7 +227,14 @@ func Open(path string) (*BleveIndex, error) {
 // written must not be treated as written, or every boot recreates the index
 // forever.
 func createIndex(path string) (*BleveIndex, error) {
-	idx, err := bleve.NewUsing(path, bookIndexMapping(), "scorch", "scorch", nil)
+	// Rebuilding marker FIRST: a crash between create and the drain finishing
+	// must come back as "rebuilding", never as a complete index.
+	rebuildMarker := rebuildingMarkerPath(path)
+	if err := os.WriteFile(rebuildMarker, []byte("1\n"), 0o644); err != nil {
+		indexLog.Error("search: failed to write rebuilding marker %s: %v; a restart mid-rebuild will serve partial search results",
+			logger.SanitizeLogValue(rebuildMarker), err)
+	}
+	idx, err := bleve.NewUsing(path, bookIndexMapping(), "scorch", "scorch", runtimeConfig())
 	if err != nil {
 		return nil, fmt.Errorf("bleve create at %s: %w", path, err)
 	}
@@ -158,7 +247,105 @@ func createIndex(path string) (*BleveIndex, error) {
 			"will be rebuilt on EVERY restart until this is fixed",
 			"marker", marker, "err", err)
 	}
-	return &BleveIndex{idx: idx, path: path}, nil
+	b := &BleveIndex{idx: idx, path: path}
+	b.rebuilding.Store(true)
+	return b, nil
+}
+
+// rebuildingMarkerPath is the sibling file that marks an index as still
+// being filled. Sibling, not inside the index dir, for the same reason as
+// mappingMarkerPath.
+func rebuildingMarkerPath(indexPath string) string {
+	return filepath.Join(filepath.Dir(indexPath),
+		filepath.Base(indexPath)+".rebuilding")
+}
+
+// Rebuilding reports whether the index was created empty and has not yet
+// been confirmed complete by MarkRebuilt.
+func (b *BleveIndex) Rebuilding() bool {
+	if b == nil {
+		return false
+	}
+	return b.rebuilding.Load()
+}
+
+// MarkRebuilt records that the index now covers the library. The caller
+// (the server's reconciler) decides that: coverage was seeded in this
+// process AND the dirty set drained to zero.
+func (b *BleveIndex) MarkRebuilt() error {
+	if b == nil || !b.rebuilding.Load() {
+		return nil
+	}
+	if err := os.Remove(rebuildingMarkerPath(b.path)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove rebuilding marker: %w", err)
+	}
+	b.rebuilding.Store(false)
+	return nil
+}
+
+// trackWrite registers an in-flight write and returns its release func.
+func (b *BleveIndex) trackWrite() func() {
+	b.inflightMu.Lock()
+	if b.inflight == nil {
+		b.inflight = map[uint64]time.Time{}
+	}
+	b.inflightSeq++
+	id := b.inflightSeq
+	b.inflight[id] = time.Now()
+	b.inflightMu.Unlock()
+	return func() {
+		b.inflightMu.Lock()
+		delete(b.inflight, id)
+		b.inflightMu.Unlock()
+	}
+}
+
+// OldestWrite reports how long the oldest still-running write has been
+// inside bleve, and how many writes are in flight. A safe scorch write
+// returns only after persistence, so a large value means the persister is
+// not making progress.
+func (b *BleveIndex) OldestWrite() (time.Duration, int) {
+	if b == nil {
+		return 0, 0
+	}
+	b.inflightMu.Lock()
+	defer b.inflightMu.Unlock()
+	var oldest time.Duration
+	now := time.Now()
+	for _, t := range b.inflight {
+		if d := now.Sub(t); d > oldest {
+			oldest = d
+		}
+	}
+	return oldest, len(b.inflight)
+}
+
+// HealthStats returns the scorch counters that diagnose a stalled write
+// path: file count against the persister's 1000-file pause threshold, and
+// merge plan outcomes. Missing keys are omitted.
+func (b *BleveIndex) HealthStats() map[string]uint64 {
+	out := map[string]uint64{}
+	if b == nil {
+		return out
+	}
+	b.mu.RLock()
+	idx := b.idx
+	b.mu.RUnlock()
+	if idx == nil {
+		return out
+	}
+	sm, ok := idx.StatsMap()["index"].(map[string]interface{})
+	if !ok {
+		return out
+	}
+	for _, k := range []string{"CurOnDiskFiles", "TotFileSegmentsAtRoot", "TotFileMergePlanTasksErr",
+		"TotFileMergePlanTasksDone", "LastMergedEpoch", "LastPersistedEpoch", "CurRootEpoch",
+		"TotPersisterSlowMergerPause", "TotPersisterSlowMergerResume"} {
+		if v, ok := sm[k].(uint64); ok {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // readMappingMarker returns the recorded mapping version, or "" when the
@@ -212,6 +399,7 @@ func (b *BleveIndex) IndexBook(doc BookDocument) error {
 	if doc.Type == "" {
 		doc.Type = BookDocType
 	}
+	defer b.trackWrite()()
 	return b.idx.Index(doc.BookID, doc)
 }
 
@@ -235,6 +423,41 @@ func (b *BleveIndex) IndexBookBatch(docs []BookDocument) error {
 			return err
 		}
 	}
+	defer b.trackWrite()()
+	return b.idx.Batch(batch)
+}
+
+// ApplyBatch upserts docs and deletes deleteIDs in ONE bleve batch, i.e. one
+// segment and one wait for persistence. It returns only once the batch is
+// durable (scorch's safe-batch mode), so a caller may clear a durable
+// "needs re-index" record after a nil return and not before.
+func (b *BleveIndex) ApplyBatch(docs []BookDocument, deleteIDs []string) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.idx == nil {
+		return fmt.Errorf("bleve index not open")
+	}
+	if len(docs) == 0 && len(deleteIDs) == 0 {
+		return nil
+	}
+	batch := b.idx.NewBatch()
+	for i := range docs {
+		if docs[i].BookID == "" {
+			continue
+		}
+		if docs[i].Type == "" {
+			docs[i].Type = BookDocType
+		}
+		if err := batch.Index(docs[i].BookID, docs[i]); err != nil {
+			return fmt.Errorf("batch index %s: %w", docs[i].BookID, err)
+		}
+	}
+	for _, id := range deleteIDs {
+		if id != "" {
+			batch.Delete(id)
+		}
+	}
+	defer b.trackWrite()()
 	return b.idx.Batch(batch)
 }
 
@@ -246,6 +469,7 @@ func (b *BleveIndex) DeleteBook(bookID string) error {
 	if b.idx == nil {
 		return fmt.Errorf("bleve index not open")
 	}
+	defer b.trackWrite()()
 	return b.idx.Delete(bookID)
 }
 
@@ -442,9 +666,17 @@ func bookIndexMapping() mapping.IndexMapping {
 	// the stock analyzer rather than shipping an index with no analyzer
 	// at all — degraded phrase precision beats unusable search.
 	textAnalyzerName := bookTextAnalyzerName
+	if err := im.AddCustomCharFilter(underscoreCharFilterName, map[string]any{
+		"type":    regexpchar.Name,
+		"regexp":  "_",
+		"replace": " ",
+	}); err != nil {
+		indexLog.Error("search: underscore char filter registration failed: %v", err)
+	}
 	if err := im.AddCustomAnalyzer(bookTextAnalyzerName, map[string]any{
-		"type":      custom.Name,
-		"tokenizer": unicode.Name,
+		"type":         custom.Name,
+		"char_filters": []string{underscoreCharFilterName},
+		"tokenizer":    unicode.Name,
 		"token_filters": []string{
 			en.PossessiveName, // strip trailing 's
 			lowercase.Name,

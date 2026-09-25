@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_facets_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a5e9c1b-6d2f-4a80-9b1c-7e4f0a2d5c6b
-// last-edited: 2026-07-11
+// last-edited: 2026-09-25
 
 // Tests for AudiobookService.FacetCounts (INIT-4 T4): the nil-index
 // sentinel path and the pass-through-to-BleveIndex.FacetCounts path.
@@ -51,7 +51,7 @@ func TestAudiobookService_FacetCounts_WithIndex(t *testing.T) {
 	}
 
 	svc := &AudiobookService{}
-	svc.SetSearchIndex(idx)
+	svc.SetSearchIndex(completedIndex(t, idx))
 
 	genres, languages, tags, err := svc.FacetCounts()
 	if err != nil {
@@ -83,7 +83,7 @@ func TestAudiobookService_FacetCounts_SetNilRevertsToSentinel(t *testing.T) {
 	t.Cleanup(func() { _ = idx.Close() })
 
 	svc := &AudiobookService{}
-	svc.SetSearchIndex(idx)
+	svc.SetSearchIndex(completedIndex(t, idx))
 	svc.SetSearchIndex(nil)
 
 	if _, _, _, err := svc.FacetCounts(); !errors.Is(err, ErrSearchIndexUnavailable) {

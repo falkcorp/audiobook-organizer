@@ -1,7 +1,7 @@
 // file: internal/search/bleve_translator.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
-// last-edited: 2026-08-14
+// last-edited: 2026-09-25
 //
 // AST → Bleve query translator (spec DES-1 v1.1). Walks the AST
 // produced by ParseQuery and emits a bleve/v2 query.Query suitable
@@ -246,6 +246,17 @@ func translateField(n *FieldNode, perUser *[]PerUserFilter, negated bool) (query
 	}
 
 	// Fuzzy / prefix / wildcard — take precedence over default match.
+	if (n.Fuzzy || n.Prefix || n.Wildcard) && strings.Contains(n.Value, "_") {
+		pattern := n.Value
+		if n.Wildcard {
+			if n.Prefix {
+				pattern = "*" + pattern + "*"
+			} else {
+				pattern = "*" + pattern
+			}
+		}
+		return underscorePatternQuery(n.Field, pattern, n.Prefix && !n.Wildcard, n.Fuzzy, n.Boost), nil
+	}
 	if n.Fuzzy {
 		// FuzzyQuery bypasses the field analyser exactly as PrefixQuery and
 		// WildcardQuery do (see patternTerm), so an uppercase term could never
@@ -341,7 +352,57 @@ func translateValueAlt(n *ValueAltNode, perUser *[]PerUserFilter, negated bool) 
 // still match "classes"), so it is deliberately not applied.
 func patternTerm(s string) string { return strings.ToLower(s) }
 
+// underscorePatternQuery handles a prefix, fuzzy or wildcard term that
+// contains '_'. Those query types bypass the field analyser (see
+// patternTerm), so the index's underscore char filter never runs on them: the
+// index holds "arcane" and "chef" as separate terms, and a prefix query for
+// "arcane_ch" can match neither. Split the term the way the char filter does
+// and AND the parts: every part but the last is a whole word (analysed
+// match), the last keeps the prefix; a part carrying '*' or '?' stays a
+// wildcard; a fuzzy term makes every part fuzzy.
+func underscorePatternQuery(field, pattern string, lastIsPrefix, fuzzy bool, boost float64) query.Query {
+	parts := strings.FieldsFunc(pattern, func(r rune) bool { return r == '_' })
+	children := make([]query.Query, 0, len(parts))
+	for i, part := range parts {
+		last := i == len(parts)-1
+		var q query.Query
+		switch {
+		case fuzzy:
+			fq := bleve.NewFuzzyQuery(patternTerm(part))
+			fq.SetField(field)
+			q = fq
+		case strings.ContainsAny(part, "*?"):
+			wq := bleve.NewWildcardQuery(patternTerm(part))
+			wq.SetField(field)
+			q = wq
+		case last && lastIsPrefix:
+			pq := bleve.NewPrefixQuery(patternTerm(part))
+			pq.SetField(field)
+			q = pq
+		default:
+			mq := bleve.NewMatchQuery(part)
+			mq.SetField(field)
+			q = mq
+		}
+		children = append(children, q)
+	}
+	if len(children) == 1 {
+		if b, ok := children[0].(query.BoostableQuery); ok && boost > 0 {
+			b.SetBoost(boost)
+		}
+		return children[0]
+	}
+	cq := bleve.NewConjunctionQuery(children...)
+	if boost > 0 {
+		cq.SetBoost(boost)
+	}
+	return cq
+}
+
 func translateFreeText(n *FreeTextNode) query.Query {
+	if (n.Prefix || n.Fuzzy) && strings.Contains(n.Value, "_") {
+		return underscorePatternQuery("", n.Value, n.Prefix, n.Fuzzy, 0)
+	}
 	if n.Prefix {
 		return bleve.NewPrefixQuery(patternTerm(n.Value))
 	}

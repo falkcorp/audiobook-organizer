@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_per_user_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e3a7c1d9-4b2f-4a68-9c1e-5f8a2d3b7c40
-// last-edited: 2026-07-11
+// last-edited: 2026-09-25
 
 // Tests for the searchWithBleve per-user DSL filter fix (INIT-4 T2).
 // read_status / progress_pct / last_played filters are peeled off by
@@ -81,7 +81,7 @@ func TestSearchWithBleveAppliesReadStatusFilter(t *testing.T) {
 	mockStore.EXPECT().GetUserBookState("alice", "b3").Return(nil, nil)
 
 	svc := NewAudiobookService(mockStore)
-	svc.SetSearchIndex(idx)
+	svc.SetSearchIndex(completedIndex(t, idx))
 
 	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson read_status:finished", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
@@ -105,7 +105,7 @@ func TestSearchWithBleveNoFilterQueryUnchanged(t *testing.T) {
 	})
 
 	svc := NewAudiobookService(mockStore)
-	svc.SetSearchIndex(idx)
+	svc.SetSearchIndex(completedIndex(t, idx))
 
 	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
@@ -141,7 +141,7 @@ func TestSearchWithBlevePaginationAfterFilter(t *testing.T) {
 	mockStore.EXPECT().GetUserBookState("alice", "b5").Return(inProgress, nil)
 
 	svc := NewAudiobookService(mockStore)
-	svc.SetSearchIndex(idx)
+	svc.SetSearchIndex(completedIndex(t, idx))
 
 	got, err := svc.GetAudiobooks(context.Background(), 2, 2, "author:sanderson read_status:in_progress", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
@@ -168,7 +168,7 @@ func TestSearchWithBleveEmptyUserIDReturnsAllMatches(t *testing.T) {
 	buf := captureWarnLog(t)
 
 	svc := NewAudiobookService(mockStore)
-	svc.SetSearchIndex(idx)
+	svc.SetSearchIndex(completedIndex(t, idx))
 
 	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson read_status:finished", nil, nil, ListFilters{})
 	assert.NoError(t, err)
@@ -201,7 +201,7 @@ func TestSearchWithBleveStateErrorFailsOpen(t *testing.T) {
 	buf := captureWarnLog(t)
 
 	svc := NewAudiobookService(mockStore)
-	svc.SetSearchIndex(idx)
+	svc.SetSearchIndex(completedIndex(t, idx))
 
 	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson -read_status:finished", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
@@ -239,7 +239,7 @@ func TestSearchWithBleveWindowExhaustionWarns(t *testing.T) {
 	buf := captureWarnLog(t)
 
 	svc := NewAudiobookService(mockStore)
-	svc.SetSearchIndex(idx)
+	svc.SetSearchIndex(completedIndex(t, idx))
 
 	_, err := svc.GetAudiobooks(context.Background(), 10, 0, "author:sanderson -read_status:finished", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
@@ -271,11 +271,26 @@ func TestSearchWithBleveKillSwitchDrops(t *testing.T) {
 	buf := captureWarnLog(t)
 
 	svc := NewAudiobookService(mockStore)
-	svc.SetSearchIndex(idx)
+	svc.SetSearchIndex(completedIndex(t, idx))
 
 	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson read_status:finished", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
 	assert.Len(t, got, 3, "kill switch on -> today's unfiltered behavior restored")
 	assert.Contains(t, buf.String(), "per-user filters dropped, no user context")
 	assert.Contains(t, buf.String(), "disabled_by_config")
+}
+
+// completedIndex marks a test-built index as fully covering its library. A
+// freshly created index reports Rebuilding until the reconciler confirms
+// coverage, and the service answers searches from the substring path while
+// it does; a fixture that indexed every book itself is complete by
+// construction.
+func completedIndex(t testing.TB, idx *search.BleveIndex) *search.BleveIndex {
+	t.Helper()
+	if idx != nil {
+		if err := idx.MarkRebuilt(); err != nil {
+			t.Fatalf("MarkRebuilt: %v", err)
+		}
+	}
+	return idx
 }

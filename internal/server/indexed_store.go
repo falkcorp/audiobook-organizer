@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5d2e4f3a-7b5a-4a70-b8c5-3d7e0f1b9a79
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 //
 // indexedStore decorates a database.Store so that every successful
 // book mutation (create / update / delete) schedules an async
@@ -214,24 +214,64 @@ func (s *Server) closeIndexQueue() {
 	close(s.indexQueue)
 }
 
-// runIndexWorker drains the index queue. Designed as a single
-// long-lived goroutine so Bleve sees serialized writes and we don't
-// need to protect BookToDoc-style reads against concurrent DB state.
-// Exits when the queue is closed by Shutdown.
+// indexWorkerMaxBatch caps how many queued events one worker commit covers.
+const indexWorkerMaxBatch = 256
+
+// runIndexWorker drains the index queue in micro-batches. Designed as a
+// single long-lived goroutine so the live write path has one ordered writer.
+// Exits when the queue is closed by Shutdown, after flushing what it holds.
+//
+// It takes whatever is already queued (up to indexWorkerMaxBatch), dedups by
+// book ID, re-derives each book's index state from the store and commits the
+// lot as ONE bleve batch via applyIndexChunk. The previous one-event-one-
+// Index() shape wrote a single-document segment per event and waited for
+// persistence each time, so a bulk operation filled the 1024-deep queue and
+// every further event became a drop. The recorded delete flag is not needed:
+// applyIndexChunk removes a book that is gone or soft-deleted, which is
+// exactly when the decorator enqueued a delete.
+//
+// indexWorkerBusy is decremented by the number of events consumed and only
+// after the commit, so a waiter that sees 0 knows the index reflects them.
+// IDs the commit could not write go to the durable dirty set.
 func (s *Server) runIndexWorker() {
 	if s.indexQueue == nil {
 		return
 	}
-	for req := range s.indexQueue {
-		if req.delete {
-			if err := s.DeleteIndexedBook(req.bookID); err != nil {
-				slog.Warn("delete index", "req", req.bookID, "err", err)
-			}
-		} else {
-			if err := s.IndexBookByID(req.bookID); err != nil {
-				slog.Warn("index", "req", req.bookID, "err", err)
+	store, ok := s.Ops().(indexChunkStore)
+	for {
+		req, open := <-s.indexQueue
+		if !open {
+			return
+		}
+		ids := []string{req.bookID}
+		seen := map[string]struct{}{req.bookID: {}}
+		consumed := 1
+	collect:
+		for consumed < indexWorkerMaxBatch {
+			select {
+			case r, more := <-s.indexQueue:
+				if !more {
+					break collect
+				}
+				consumed++
+				if _, dup := seen[r.bookID]; !dup {
+					seen[r.bookID] = struct{}{}
+					ids = append(ids, r.bookID)
+				}
+			default:
+				break collect
 			}
 		}
-		atomic.AddInt32(&s.indexWorkerBusy, -1)
+		if ok {
+			res := s.applyIndexChunk(store, ids)
+			for _, id := range res.failed {
+				s.markIndexDirty(id)
+			}
+		} else {
+			for _, id := range ids {
+				s.markIndexDirty(id)
+			}
+		}
+		atomic.AddInt32(&s.indexWorkerBusy, -int32(consumed))
 	}
 }
