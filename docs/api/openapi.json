@@ -5110,6 +5110,76 @@
             "description": "Not found"
           }
         }
+      },
+      "post": {
+        "operationId": "enqueueManualDedupCandidates",
+        "summary": "Put hand-picked book pairs into the dedup review queue (layer/source \"manual\"). dry_run defaults to true; only an explicit false writes. Never merges.",
+        "tags": [
+          "dedup"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "pairs"
+                ],
+                "properties": {
+                  "pairs": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "book_a",
+                        "book_b"
+                      ],
+                      "properties": {
+                        "book_a": {
+                          "type": "string"
+                        },
+                        "book_b": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "dry_run": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-pair results: created | already_open | reopened | decided | rejected"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "One or more pairs failed to write; body lists per-pair results"
+          },
+          "503": {
+            "description": "Embedding store not available"
+          }
+        }
       }
     },
     "/dedup/candidates/bulk-merge": {

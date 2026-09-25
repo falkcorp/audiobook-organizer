@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 60d982e2-6836-4327-9ddf-9b55375f39ea
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package dedup — DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -209,6 +209,12 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 		for i := range page {
 			c := page[i]
 			result.Inspected++
+			// A pinned manual candidate keeps its scanner layer, so an exact row
+			// a human asked to review can land here. It stays in the queue.
+			if database.IsManualCandidate(c) {
+				result.Kept++
+				continue
+			}
 
 			a := lookup(c.EntityAID)
 			b := lookup(c.EntityBID)
