@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_playlist_import.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 7c4e91a3-58bd-42f6-9e0a-1d6b3f8c25e4
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -75,14 +75,16 @@ type itunesPlaylistImportParams struct {
 
 func (p *Plugin) itunesPlaylistImportDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              "maintenance.itunes-playlist-import",
+		ID: "itunes.playlist-import",
+		// Renamed 2026-09-25 (naming audit class 8): every iTunes op lives in itunes.*, whichever Go package implements it.
+		FormerIDs:       []string{"maintenance.itunes-playlist-import"},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Import iTunes smart (dynamic) playlists",
 		Description:     "Reads smart playlists from an iTunes Library.xml export (preferred) or a binary .itl, translates each Smart Criteria blob into our query DSL, and creates a matching smart UserPlaylist. Read-only with respect to iTunes — writes only to our own store. Idempotent: playlists already imported are skipped by iTunes persistent ID. Default dry-run reports what would be imported; set dryRun=false to apply.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.itunes-playlist-import",
+		ConcurrencyKey:  "itunes.playlist-import",
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         30 * time.Minute,

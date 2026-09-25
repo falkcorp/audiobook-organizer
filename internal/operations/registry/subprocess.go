@@ -1,7 +1,7 @@
 // file: internal/operations/registry/subprocess.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-06-22
+// last-edited: 2026-09-25
 
 // Package registry — subprocess runner for Isolate=true operations.
 //
@@ -114,9 +114,10 @@ func RunChildMode(r *Registry) {
 	}
 
 	// Look up def.
-	r.mu.RLock()
-	def, ok := r.defs[hs.DefID]
-	r.mu.RUnlock()
+	def, ok := r.lookupDef(hs.DefID)
+	if ok {
+		r.noteAliasUse(hs.DefID, aliasEntrySubprocess)
+	}
 	if !ok {
 		writeChildResult(conn, false, fmt.Sprintf("unknown def_id: %s", hs.DefID))
 		os.Exit(1)
