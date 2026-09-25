@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_capture_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b3d1f57-4c20-4e8a-bf16-2a7e9c5d013a
-// last-edited: 2026-06-18
+// last-edited: 2026-09-25
 
 package deduphandler_test
 
@@ -38,8 +38,8 @@ func TestDismissDedupCandidate_RecordsHumanNotDupLabel(t *testing.T) {
 	allowLabelCaptureReads(d)
 	id, _, _ := insertCandidate(t, d.es, "book-aaa", "book-bbb")
 
-	w := doReq(t, h.DismissDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/dismiss", nil,
+	w := doReq(t, h.RejectDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/reject", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
@@ -68,8 +68,8 @@ func TestMergeDedupCandidate_RecordsHumanTrueDupLabel(t *testing.T) {
 		Return(&merge.Result{PrimaryID: aID}, "dedup:automerge:key", nil).Once()
 	d.engine.EXPECT().CleanupCandidatesAfterMerge(mock.Anything).Return(0).Once()
 
-	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
+	w := doReq(t, h.LinkDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/link", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
@@ -96,8 +96,8 @@ func TestDismissDedupCandidate_LabelCaptureBestEffort(t *testing.T) {
 	d.store.EXPECT().GetBookFiles(mock.Anything).Return(nil, assertErr{}).Maybe()
 	id, _, _ := insertCandidate(t, d.es, "book-aaa", "book-bbb")
 
-	w := doReq(t, h.DismissDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/dismiss", nil,
+	w := doReq(t, h.RejectDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/reject", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200 even when capture fails; body=%s", w.Code, w.Body.String())

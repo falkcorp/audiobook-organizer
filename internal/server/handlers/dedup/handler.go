@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-09-25
 
@@ -853,21 +853,26 @@ func (h *Handler) ListDedupCandidateSeries(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"series": summary})
 }
 
-// MergeDedupCandidateSeries handles
-// POST /api/v1/dedup/candidates/merge-series.
+// LinkDedupCandidateSeries handles
+// POST /api/v1/dedup/candidates/link-series.
 //
 // Body: {"series_id": N}
 //
 // Finds every pending book candidate whose both sides belong to the
-// given series, builds clusters via union-find, and merges each
-// cluster with MergeService.MergeBooks. Returns a summary of how many
-// clusters were touched and how many books were merged in total.
+// given series, builds clusters via union-find, and links each
+// cluster into a version group with MergeService.MergeBooks (no files
+// move). Returns a summary of how many clusters were touched and how
+// many books were linked in total.
 //
 // Cross-series candidates (one side in this series, the other
 // somewhere else) are deliberately untouched — the series filter is
-// a scope, not a selector. If the user wants those pairs merged, they
-// can use the regular Merge Filtered action.
-func (h *Handler) MergeDedupCandidateSeries(c *gin.Context) {
+// a scope, not a selector. If the user wants those pairs linked, they
+// can use the regular Link Filtered action.
+//
+// Renamed from MergeDedupCandidateSeries (naming-audit class "merge vs link
+// verbs", docs/audits/2026-09-25-interface-naming-consistency.md class 2).
+// The old path/name is registered as a deprecated alias in wireDedupRoutes.
+func (h *Handler) LinkDedupCandidateSeries(c *gin.Context) {
 	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
@@ -1023,31 +1028,39 @@ func (h *Handler) GetDedupStats(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"stats": stats})
 }
 
-// BulkMergeDedupCandidates handles POST /api/v1/dedup/candidates/bulk-merge.
+// BulkLinkDedupCandidates handles POST /api/v1/dedup/candidates/bulk-link.
 //
 // Accepts the same filter params as listDedupCandidates in the JSON body
 // (entity_type, status, layer, min_similarity, max_similarity, band,
-// entity_id) and merges every matching candidate by calling
-// MergeService.MergeBooks. Returns a summary with counts of attempted,
-// merged, and failed candidates.
+// entity_id) and links every matching candidate's books into a version
+// group by calling MergeService.MergeBooks. Returns a summary with counts
+// of attempted, linked (reported as "merged" in the response body — field
+// names are unchanged in this pass), and failed candidates.
 //
 // Filter parity with the list endpoint is a SAFETY property, not a
-// convenience. The UI's bulk control is labelled "merge everything matching
+// convenience. The UI's bulk control is labelled "link everything matching
 // this filter", so any filter the reviewer can apply to the list and cannot
 // send here silently widens a destructive action to a larger set than the one
 // on screen. band was exactly that gap: the band bar is the dedup UI's primary
-// filter, so narrowing to REVIEW and pressing the button merged every pending
+// filter, so narrowing to REVIEW and pressing the button linked every pending
 // book candidate in the library. Anything added to listDedupCandidates'
 // filters belongs here too, or the caller must be refused.
 //
-// The endpoint is intended for the "Merge Filtered" bulk action in the
+// The endpoint is intended for the "Link Filtered" bulk action in the
 // Embedding Dedup UI. It only operates on book candidates; author
 // candidates are skipped (and counted as failed with a reason) since
 // they're merged through a different service.
 //
 // Safety: caller should confirm with the user before invoking, because
-// this is destructive and irreversible.
-func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
+// this soft-deletes the losing book rows and is not trivially reversible
+// from the UI (the undo journal covers it, but there is no confirmation
+// step here).
+//
+// Renamed from BulkMergeDedupCandidates (naming-audit class "merge vs link
+// verbs", docs/audits/2026-09-25-interface-naming-consistency.md class 2):
+// this links the winning side's version group, it does not move files. The
+// old path/name is registered as a deprecated alias in wireDedupRoutes.
+func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
@@ -1194,18 +1207,23 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 	})
 }
 
-// MergeDedupCluster handles POST /api/v1/dedup/candidates/merge-cluster.
+// LinkDedupCluster handles POST /api/v1/dedup/candidates/link-cluster.
 //
 // Body: {"book_ids": ["id1", "id2", "id3", ...]}
 //
-// Merges the supplied book IDs into a single version group with one call to
+// Links the supplied book IDs into a single version group with one call to
 // MergeService.MergeBooks, then marks every dedup_candidate row whose pair
 // is fully contained in the set as status=merged. This is the backend for
 // the Embedding tab's multi-book cluster card, where 3+ candidate books form
 // a connected component in the pairwise candidate graph and should be
-// merged together as one logical group rather than one pairwise merge at a
+// linked together as one logical group rather than one pairwise link at a
 // time (which would fight the version-group state mid-way).
-func (h *Handler) MergeDedupCluster(c *gin.Context) {
+//
+// Renamed from MergeDedupCluster (naming-audit class "merge vs link verbs",
+// docs/audits/2026-09-25-interface-naming-consistency.md class 2). The
+// persisted candidate status value "merged" is unchanged. The old
+// path/name is registered as a deprecated alias in wireDedupRoutes.
+func (h *Handler) LinkDedupCluster(c *gin.Context) {
 	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
@@ -1294,14 +1312,20 @@ func (h *Handler) MergeDedupCluster(c *gin.Context) {
 	})
 }
 
-// DismissDedupCluster handles POST /api/v1/dedup/candidates/dismiss-cluster.
+// RejectDedupCluster handles POST /api/v1/dedup/candidates/reject-cluster.
 //
 // Body: {"book_ids": ["id1", "id2", ...]}
 //
 // Marks every dedup_candidate row whose pair is fully contained in the set
 // as status=dismissed. No books are modified — this just removes the pair
 // from the pending queue.
-func (h *Handler) DismissDedupCluster(c *gin.Context) {
+//
+// Renamed from DismissDedupCluster (naming-audit class "dismiss vs reject
+// vs undo", docs/audits/2026-09-25-interface-naming-consistency.md class 3)
+// to match the review-queue/metadata-candidate "reject" vocabulary. The
+// persisted candidate status value "dismissed" is unchanged. The old
+// path/name is registered as a deprecated alias in wireDedupRoutes.
+func (h *Handler) RejectDedupCluster(c *gin.Context) {
 	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
@@ -1480,8 +1504,15 @@ func (h *Handler) RemoveFromDedupCluster(c *gin.Context) {
 	})
 }
 
-// MergeDedupCandidate handles POST /api/v1/dedup/candidates/:id/merge.
-func (h *Handler) MergeDedupCandidate(c *gin.Context) {
+// LinkDedupCandidate handles POST /api/v1/dedup/candidates/:id/link.
+//
+// Renamed from MergeDedupCandidate (naming-audit class "merge vs link
+// verbs", docs/audits/2026-09-25-interface-naming-consistency.md class 2):
+// this routes through the journaled MergeService.MergeBooks path, which
+// links the two books into a version group and soft-deletes the loser — no
+// files move. The persisted candidate status value "merged" is unchanged.
+// The old path/name is registered as a deprecated alias in wireDedupRoutes.
+func (h *Handler) LinkDedupCandidate(c *gin.Context) {
 	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
@@ -1624,8 +1655,14 @@ func (h *Handler) MergeDedupCandidate(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"status": "merged", "result": result, "keep_id": keepID})
 }
 
-// DismissDedupCandidate handles POST /api/v1/dedup/candidates/:id/dismiss.
-func (h *Handler) DismissDedupCandidate(c *gin.Context) {
+// RejectDedupCandidate handles POST /api/v1/dedup/candidates/:id/reject.
+//
+// Renamed from DismissDedupCandidate (naming-audit class "dismiss vs reject
+// vs undo", docs/audits/2026-09-25-interface-naming-consistency.md class 3)
+// to match the review-queue/metadata-candidate "reject" vocabulary. The
+// persisted candidate status value "dismissed" is unchanged. The old
+// path/name is registered as a deprecated alias in wireDedupRoutes.
+func (h *Handler) RejectDedupCandidate(c *gin.Context) {
 	es := h.embeddingStore
 	if es == nil {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")

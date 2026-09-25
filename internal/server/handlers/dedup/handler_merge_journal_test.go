@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_merge_journal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5f883c97-c8f7-4228-a0d0-6d5838ef6e7b
-// last-edited: 2026-09-10
+// last-edited: 2026-09-25
 
 // Regression tests for DA-02: the three bulk/manual merge endpoints
 // (merge-series, bulk-merge, merge-cluster) called MergeService.MergeBooks
@@ -36,7 +36,7 @@ func TestMergeDedupCandidateSeries_MergesThroughTheUndoJournal(t *testing.T) {
 		Return(&merge.Result{PrimaryID: "book-a"}, []string{"dedup:automerge:k1"}, nil).
 		Once()
 
-	w := doReq(t, h.MergeDedupCandidateSeries, http.MethodPost, "/api/v1/dedup/candidates/merge-series", map[string]int{"series_id": sid}, nil)
+	w := doReq(t, h.LinkDedupCandidateSeries, http.MethodPost, "/api/v1/dedup/candidates/link-series", map[string]int{"series_id": sid}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -44,7 +44,7 @@ func TestMergeDedupCandidateSeries_MergesThroughTheUndoJournal(t *testing.T) {
 
 func TestMergeDedupCandidateSeries_RefusesWithoutEngine(t *testing.T) {
 	h, _ := newHandler(t, noEngine)
-	w := doReq(t, h.MergeDedupCandidateSeries, http.MethodPost, "/api/v1/dedup/candidates/merge-series", map[string]int{"series_id": 1}, nil)
+	w := doReq(t, h.LinkDedupCandidateSeries, http.MethodPost, "/api/v1/dedup/candidates/link-series", map[string]int{"series_id": 1}, nil)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d want 503 (no engine means no undo journal); body=%s", w.Code, w.Body.String())
 	}
@@ -61,7 +61,7 @@ func TestBulkMergeDedupCandidates_MergesThroughTheUndoJournal(t *testing.T) {
 		Return(&merge.Result{PrimaryID: aID}, "dedup:automerge:k1", nil).
 		Once()
 
-	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-merge", map[string]any{}, nil)
+	w := doReq(t, h.BulkLinkDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-link", map[string]any{}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -69,7 +69,7 @@ func TestBulkMergeDedupCandidates_MergesThroughTheUndoJournal(t *testing.T) {
 
 func TestBulkMergeDedupCandidates_RefusesWithoutEngine(t *testing.T) {
 	h, _ := newHandler(t, noEngine)
-	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-merge", map[string]any{}, nil)
+	w := doReq(t, h.BulkLinkDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-link", map[string]any{}, nil)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d want 503 (no engine means no undo journal); body=%s", w.Code, w.Body.String())
 	}
@@ -82,7 +82,7 @@ func TestMergeDedupCluster_MergesThroughTheUndoJournal(t *testing.T) {
 		Return(&merge.Result{PrimaryID: "id2"}, []string{"dedup:automerge:k1", "dedup:automerge:k2"}, nil).
 		Once()
 
-	w := doReq(t, h.MergeDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/merge-cluster",
+	w := doReq(t, h.LinkDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/link-cluster",
 		map[string]any{"book_ids": []string{"id1", "id2", "id3"}, "primary_book_id": "id2"}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
@@ -91,7 +91,7 @@ func TestMergeDedupCluster_MergesThroughTheUndoJournal(t *testing.T) {
 
 func TestMergeDedupCluster_RefusesWithoutEngine(t *testing.T) {
 	h, _ := newHandler(t, noEngine)
-	w := doReq(t, h.MergeDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/merge-cluster",
+	w := doReq(t, h.LinkDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/link-cluster",
 		map[string][]string{"book_ids": {"id1", "id2"}}, nil)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d want 503 (no engine means no undo journal); body=%s", w.Code, w.Body.String())

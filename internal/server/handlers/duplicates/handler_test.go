@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // audiobook-service / metadata-fetch-service / operations-registry deps are
@@ -226,34 +226,34 @@ func TestScanBookDuplicates_NoRegistry(t *testing.T) {
 	}
 }
 
-// --- MergeBookDuplicatesAsVersions ---
+// --- LinkBookDuplicatesAsVersions ---
 
-func TestMergeBookDuplicatesAsVersions_OK(t *testing.T) {
+func TestLinkBookDuplicatesAsVersions_OK(t *testing.T) {
 	h, d := newHandler(t)
 	d.merge.EXPECT().MergeBooks([]string{"a", "b"}, "").Return(&merge.Result{
 		PrimaryID: "a", VersionGroupID: "vg1", MergedCount: 2,
 	}, nil)
 	d.dedupEng.EXPECT().CleanupCandidatesAfterMerge([]string{"b"}).Return(1)
-	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
+	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
 		map[string]any{"book_ids": []string{"a", "b"}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestMergeBookDuplicatesAsVersions_TooFew(t *testing.T) {
+func TestLinkBookDuplicatesAsVersions_TooFew(t *testing.T) {
 	h, _ := newHandler(t)
-	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
+	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
 		map[string]any{"book_ids": []string{"a"}})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", w.Code)
 	}
 }
 
-func TestMergeBookDuplicatesAsVersions_NotFound(t *testing.T) {
+func TestLinkBookDuplicatesAsVersions_NotFound(t *testing.T) {
 	h, d := newHandler(t)
 	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, &merge.BookNotFoundError{BookID: "b"})
-	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
+	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
 		map[string]any{"book_ids": []string{"a", "b"}})
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
@@ -267,10 +267,10 @@ func TestMergeBookDuplicatesAsVersions_NotFound(t *testing.T) {
 // 404: the handler maps the typed error, not the wording. Before 2026-09-02 a
 // store failure mentioning a not-found index would have been reported as a
 // missing book.
-func TestMergeBookDuplicatesAsVersions_UntypedNotFoundTextIs500(t *testing.T) {
+func TestLinkBookDuplicatesAsVersions_UntypedNotFoundTextIs500(t *testing.T) {
 	h, d := newHandler(t)
 	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, errString("index shard not found while loading"))
-	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
+	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
 		map[string]any{"book_ids": []string{"a", "b"}})
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
@@ -279,10 +279,10 @@ func TestMergeBookDuplicatesAsVersions_UntypedNotFoundTextIs500(t *testing.T) {
 
 // The service refusing the merge because a participant is soft-deleted is the
 // caller's problem to see, not a server fault: 409 with the service's reason.
-func TestMergeBookDuplicatesAsVersions_SoftDeletedInputIs409(t *testing.T) {
+func TestLinkBookDuplicatesAsVersions_SoftDeletedInputIs409(t *testing.T) {
 	h, d := newHandler(t)
 	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, &merge.SoftDeletedInputError{BookID: "b", AsPrimary: true})
-	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
+	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
 		map[string]any{"book_ids": []string{"a", "b"}})
 	if w.Code != http.StatusConflict {
 		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
@@ -292,10 +292,10 @@ func TestMergeBookDuplicatesAsVersions_SoftDeletedInputIs409(t *testing.T) {
 	}
 }
 
-func TestMergeBookDuplicatesAsVersions_ProvisionalIs409(t *testing.T) {
+func TestLinkBookDuplicatesAsVersions_ProvisionalIs409(t *testing.T) {
 	h, d := newHandler(t)
 	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, &merge.ProvisionalScanError{BookID: "b"})
-	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
+	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
 		map[string]any{"book_ids": []string{"a", "b"}})
 	if w.Code != http.StatusConflict {
 		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
@@ -356,11 +356,11 @@ func TestCombineBooks_FilelessPrimaryIs409WithReason(t *testing.T) {
 	}
 }
 
-// --- DismissBookDuplicateGroup ---
+// --- RejectBookDuplicateGroup ---
 
-func TestDismissBookDuplicateGroup_OK(t *testing.T) {
+func TestRejectBookDuplicateGroup_OK(t *testing.T) {
 	h, d := newHandler(t)
-	w := doReq(t, h.DismissBookDuplicateGroup, http.MethodPost, "/audiobooks/duplicates/dismiss",
+	w := doReq(t, h.RejectBookDuplicateGroup, http.MethodPost, "/audiobooks/duplicates/reject",
 		map[string]any{"group_key": "k1"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
@@ -370,13 +370,13 @@ func TestDismissBookDuplicateGroup_OK(t *testing.T) {
 	}
 }
 
-// --- MergeBooks ---
+// --- LinkBooks ---
 
-func TestMergeBooks_Enqueues202(t *testing.T) {
+func TestLinkBooks_Enqueues202(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("keep").Return(&database.Book{ID: "keep"}, nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.book-merge", mock.Anything).Return("rid", nil)
-	w := doReq(t, h.MergeBooks, http.MethodPost, "/audiobooks/merge",
+	w := doReq(t, h.LinkBooks, http.MethodPost, "/audiobooks/link",
 		map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
@@ -384,10 +384,10 @@ func TestMergeBooks_Enqueues202(t *testing.T) {
 	assertReturnsV2OpID(t, w)
 }
 
-func TestMergeBooks_KeepNotFound(t *testing.T) {
+func TestLinkBooks_KeepNotFound(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("keep").Return(nil, nil)
-	w := doReq(t, h.MergeBooks, http.MethodPost, "/audiobooks/merge",
+	w := doReq(t, h.LinkBooks, http.MethodPost, "/audiobooks/link",
 		map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
@@ -396,10 +396,10 @@ func TestMergeBooks_KeepNotFound(t *testing.T) {
 
 // A store failure loading keep_id is not "the book is gone": the store returns
 // (nil, nil) for a missing row and an error only for I/O or corruption.
-func TestMergeBooks_KeepLoadFailureIs500(t *testing.T) {
+func TestLinkBooks_KeepLoadFailureIs500(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("keep").Return(nil, errors.New("sstable block not found"))
-	w := doReq(t, h.MergeBooks, http.MethodPost, "/audiobooks/merge",
+	w := doReq(t, h.LinkBooks, http.MethodPost, "/audiobooks/link",
 		map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())

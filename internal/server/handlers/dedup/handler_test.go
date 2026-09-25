@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
-// last-edited: 2026-09-10
+// last-edited: 2026-09-25
 
 // Tests for the dedup-domain handlers. The embedding store is exercised through
 // a REAL pebble-backed *database.EmbeddingStore (it is a concrete db type the
@@ -394,14 +394,14 @@ func TestListDedupCandidateSeries(t *testing.T) {
 	}
 }
 
-func TestMergeDedupCandidateSeries(t *testing.T) {
+func TestLinkDedupCandidateSeries(t *testing.T) {
 	h, d := newHandler(t)
 	insertCandidate(t, d.es, "book-a", "book-b")
 	sid := 7
 	d.store.EXPECT().GetBookByID(mock.Anything).Return(&database.Book{ID: "x", SeriesID: &sid}, nil).Maybe()
 	d.engine.EXPECT().MergeBooksJournaled(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(&merge.Result{PrimaryID: "book-a"}, []string{"dedup:automerge:k"}, nil).Maybe()
-	w := doReq(t, h.MergeDedupCandidateSeries, http.MethodPost, "/api/v1/dedup/candidates/merge-series", map[string]int{"series_id": sid}, nil)
+	w := doReq(t, h.LinkDedupCandidateSeries, http.MethodPost, "/api/v1/dedup/candidates/link-series", map[string]int{"series_id": sid}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -409,7 +409,7 @@ func TestMergeDedupCandidateSeries(t *testing.T) {
 
 func TestMergeDedupCandidateSeries_BadSeriesID(t *testing.T) {
 	h, _ := newHandler(t)
-	w := doReq(t, h.MergeDedupCandidateSeries, http.MethodPost, "/api/v1/dedup/candidates/merge-series", map[string]int{"series_id": 0}, nil)
+	w := doReq(t, h.LinkDedupCandidateSeries, http.MethodPost, "/api/v1/dedup/candidates/link-series", map[string]int{"series_id": 0}, nil)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", w.Code, w.Body.String())
 	}
@@ -417,7 +417,7 @@ func TestMergeDedupCandidateSeries_BadSeriesID(t *testing.T) {
 
 func TestMergeDedupCandidateSeries_NoMergeSvc(t *testing.T) {
 	h, _ := newHandler(t, noMerge)
-	w := doReq(t, h.MergeDedupCandidateSeries, http.MethodPost, "/api/v1/dedup/candidates/merge-series", map[string]int{"series_id": 1}, nil)
+	w := doReq(t, h.LinkDedupCandidateSeries, http.MethodPost, "/api/v1/dedup/candidates/link-series", map[string]int{"series_id": 1}, nil)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d want 503; body=%s", w.Code, w.Body.String())
 	}
@@ -425,13 +425,13 @@ func TestMergeDedupCandidateSeries_NoMergeSvc(t *testing.T) {
 
 // ───────────────────────── bulk / cluster merges ─────────────────────────
 
-func TestBulkMergeDedupCandidates(t *testing.T) {
+func TestBulkLinkDedupCandidates(t *testing.T) {
 	h, d := newHandler(t)
 	allowLabelCaptureReads(d)
 	insertCandidate(t, d.es, "book-a", "book-b")
 	d.engine.EXPECT().MergeJournaled(mock.Anything, mock.Anything, mock.Anything, "", mock.Anything).
 		Return(&merge.Result{PrimaryID: "book-a"}, "dedup:automerge:k", nil).Once()
-	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-merge", map[string]any{}, nil)
+	w := doReq(t, h.BulkLinkDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-link", map[string]any{}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -457,8 +457,8 @@ func TestBulkMergeDedupCandidates_ScopedByBand(t *testing.T) {
 		Return(&merge.Result{PrimaryID: "rev-a"}, "dedup:automerge:k", nil).
 		Once()
 
-	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost,
-		"/api/v1/dedup/candidates/bulk-merge", map[string]any{"band": "REVIEW"}, nil)
+	w := doReq(t, h.BulkLinkDedupCandidates, http.MethodPost,
+		"/api/v1/dedup/candidates/bulk-link", map[string]any{"band": "REVIEW"}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -482,7 +482,7 @@ func TestBulkMergeDedupCandidates_ScopedByBand(t *testing.T) {
 
 func TestBulkMergeDedupCandidates_NonBookRejected(t *testing.T) {
 	h, _ := newHandler(t)
-	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-merge", map[string]string{"entity_type": "author"}, nil)
+	w := doReq(t, h.BulkLinkDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-link", map[string]string{"entity_type": "author"}, nil)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", w.Code, w.Body.String())
 	}
@@ -490,17 +490,17 @@ func TestBulkMergeDedupCandidates_NonBookRejected(t *testing.T) {
 
 func TestBulkMergeDedupCandidates_NoMergeSvc(t *testing.T) {
 	h, _ := newHandler(t, noMerge)
-	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-merge", map[string]any{}, nil)
+	w := doReq(t, h.BulkLinkDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-link", map[string]any{}, nil)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d want 503; body=%s", w.Code, w.Body.String())
 	}
 }
 
-func TestMergeDedupCluster(t *testing.T) {
+func TestLinkDedupCluster(t *testing.T) {
 	h, d := newHandler(t)
 	d.engine.EXPECT().MergeBooksJournaled(int64(0), []string{"id1", "id2"}, "", mock.Anything).
 		Return(&merge.Result{PrimaryID: "id1"}, []string{"dedup:automerge:k"}, nil).Once()
-	w := doReq(t, h.MergeDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/merge-cluster",
+	w := doReq(t, h.LinkDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/link-cluster",
 		map[string][]string{"book_ids": {"id1", "id2"}}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
@@ -509,18 +509,18 @@ func TestMergeDedupCluster(t *testing.T) {
 
 func TestMergeDedupCluster_TooFew(t *testing.T) {
 	h, _ := newHandler(t)
-	w := doReq(t, h.MergeDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/merge-cluster",
+	w := doReq(t, h.LinkDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/link-cluster",
 		map[string][]string{"book_ids": {"id1"}}, nil)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", w.Code, w.Body.String())
 	}
 }
 
-func TestDismissDedupCluster(t *testing.T) {
+func TestRejectDedupCluster(t *testing.T) {
 	h, d := newHandler(t)
 	allowLabelCaptureReads(d)
 	insertCandidate(t, d.es, "id1", "id2")
-	w := doReq(t, h.DismissDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/dismiss-cluster",
+	w := doReq(t, h.RejectDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/reject-cluster",
 		map[string][]string{"book_ids": {"id1", "id2"}}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
@@ -553,7 +553,7 @@ func TestRemoveFromDedupCluster_NoRemoveSet(t *testing.T) {
 
 func TestMergeDedupCandidate_NotFound(t *testing.T) {
 	h, _ := newHandler(t)
-	w := doReq(t, h.MergeDedupCandidate, http.MethodPost, "/api/v1/dedup/candidates/999/merge", nil,
+	w := doReq(t, h.LinkDedupCandidate, http.MethodPost, "/api/v1/dedup/candidates/999/link", nil,
 		gin.Params{{Key: "id", Value: "999"}})
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status=%d want 404; body=%s", w.Code, w.Body.String())
@@ -563,8 +563,8 @@ func TestMergeDedupCandidate_NotFound(t *testing.T) {
 func TestMergeDedupCandidate_KeepIDInvalid(t *testing.T) {
 	h, d := newHandler(t)
 	id, _, _ := insertCandidate(t, d.es, "book-aaa", "book-bbb")
-	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge",
+	w := doReq(t, h.LinkDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/link",
 		map[string]string{"keep_id": "not-in-pair"},
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusBadRequest {
@@ -579,8 +579,8 @@ func TestMergeDedupCandidate_MergeSuccess(t *testing.T) {
 	d.engine.EXPECT().MergeJournaled(id, aID, bID, "", mock.Anything).
 		Return(&merge.Result{PrimaryID: aID}, "dedup:automerge:key", nil).Once()
 	d.engine.EXPECT().CleanupCandidatesAfterMerge(mock.Anything).Return(0).Once()
-	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
+	w := doReq(t, h.LinkDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/link", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
@@ -606,8 +606,8 @@ func TestMergeDedupCandidate_KeepIDEcho(t *testing.T) {
 			d.engine.EXPECT().MergeJournaled(id, aID, bID, keep, mock.Anything).
 				Return(&merge.Result{PrimaryID: keep}, "dedup:automerge:key", nil).Once()
 			d.engine.EXPECT().CleanupCandidatesAfterMerge(mock.Anything).Return(0).Once()
-			w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
-				"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge",
+			w := doReq(t, h.LinkDedupCandidate, http.MethodPost,
+				"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/link",
 				map[string]string{"keep_id": keep},
 				gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 			if w.Code != http.StatusOK {
@@ -638,8 +638,8 @@ func TestMergeDedupCandidate_AlreadyMergedConflict(t *testing.T) {
 	id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
 	d.engine.EXPECT().MergeJournaled(id, aID, bID, "", mock.Anything).
 		Return(nil, "", fmt.Errorf("merge-journaled: merge books: %w", &merge.BookNotFoundError{BookID: aID})).Once()
-	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
+	w := doReq(t, h.LinkDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/link", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status=%d want 409; body=%s", w.Code, w.Body.String())
@@ -662,8 +662,8 @@ func TestMergeDedupCandidate_UntypedNotFoundTextIs500_CandidateUntouched(t *test
 	id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
 	d.engine.EXPECT().MergeJournaled(id, aID, bID, "", mock.Anything).
 		Return(nil, "", errNotFoundText{}).Once()
-	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
+	w := doReq(t, h.LinkDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/link", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d want 500; body=%s", w.Code, w.Body.String())
@@ -687,8 +687,8 @@ func TestMergeDedupCandidate_RefusalIs409_CandidateUntouched(t *testing.T) {
 	d.engine.EXPECT().MergeJournaled(id, aID, bID, "", mock.Anything).
 		Return(nil, "", fmt.Errorf("merge-journaled: merge books: %w",
 			&merge.FilelessPrimaryError{PrimaryID: aID, FileBearing: []string{bID}})).Once()
-	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
+	w := doReq(t, h.LinkDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/link", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status=%d want 409; body=%s", w.Code, w.Body.String())
@@ -712,12 +712,12 @@ type errNotFoundText struct{}
 
 func (errNotFoundText) Error() string { return "load book book-aaa: sstable block not found" }
 
-func TestDismissDedupCandidate(t *testing.T) {
+func TestRejectDedupCandidate(t *testing.T) {
 	h, d := newHandler(t)
 	allowLabelCaptureReads(d)
 	id, _, _ := insertCandidate(t, d.es, "book-aaa", "book-bbb")
-	w := doReq(t, h.DismissDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/dismiss", nil,
+	w := doReq(t, h.RejectDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/reject", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
@@ -729,7 +729,7 @@ func TestDismissDedupCandidate(t *testing.T) {
 
 func TestDismissDedupCandidate_BadID(t *testing.T) {
 	h, _ := newHandler(t)
-	w := doReq(t, h.DismissDedupCandidate, http.MethodPost, "/api/v1/dedup/candidates/abc/dismiss", nil,
+	w := doReq(t, h.RejectDedupCandidate, http.MethodPost, "/api/v1/dedup/candidates/abc/reject", nil,
 		gin.Params{{Key: "id", Value: "abc"}})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", w.Code, w.Body.String())
@@ -1136,8 +1136,8 @@ func TestMergeDedupCandidateRefusesWhenTheUndoJournalCannotBeWritten(t *testing.
 	allowLabelCaptureReads(d)
 	id, _, _ := insertCandidate(t, d.es, "book-aaa", "book-bbb")
 
-	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
+	w := doReq(t, h.LinkDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/link", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 
 	if w.Code != http.StatusServiceUnavailable {
@@ -1160,8 +1160,8 @@ func TestMergeDedupCandidateUsesTheJournaledMergePath(t *testing.T) {
 		Return(&merge.Result{PrimaryID: aID}, "dedup:automerge:0000", nil).Once()
 	d.engine.EXPECT().CleanupCandidatesAfterMerge(mock.Anything).Return(0).Once()
 
-	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
+	w := doReq(t, h.LinkDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/link", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())

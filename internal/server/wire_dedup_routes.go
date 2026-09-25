@@ -1,5 +1,5 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
 // last-edited: 2026-09-25
 
@@ -32,11 +32,22 @@ func (s *Server) wireDedupRoutes(
 	protected.GET("/dedup/candidates/:id/breakdown", s.perm(auth.PermLibraryView), dedupH.GetDedupCandidateBreakdown)
 	protected.POST("/dedup/rescore", s.perm(auth.PermScanTrigger), dedupH.RescoreDedupCandidates)
 	protected.POST("/dedup/purge-acoustid-conflicts", s.perm(auth.PermScanTrigger), dedupH.PurgeAcoustIDConflicts)
-	protected.POST("/dedup/candidates/:id/merge", s.perm(auth.PermLibraryEditMetadata), dedupH.MergeDedupCandidate)
-	protected.POST("/dedup/candidates/:id/dismiss", s.perm(auth.PermLibraryEditMetadata), dedupH.DismissDedupCandidate)
-	protected.POST("/dedup/candidates/bulk-merge", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkMergeDedupCandidates)
-	protected.POST("/dedup/candidates/merge-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.MergeDedupCluster)
-	protected.POST("/dedup/candidates/dismiss-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.DismissDedupCluster)
+	// naming-audit classes "merge vs link verbs" and "dismiss vs reject vs
+	// undo" (docs/audits/2026-09-25-interface-naming-consistency.md classes
+	// 2/3): these "merge"/"dismiss" endpoints link books into a version group
+	// or reject a candidate, never move a file — renamed to say so. The old
+	// paths are kept registered as DEPRECATED aliases pointing at the same
+	// handlers, matching the /rescan alias pattern in wire_audiobooks_routes.go.
+	protected.POST("/dedup/candidates/:id/link", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCandidate)
+	protected.POST("/dedup/candidates/:id/merge", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCandidate) // DEPRECATED alias for /link
+	protected.POST("/dedup/candidates/:id/reject", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCandidate)
+	protected.POST("/dedup/candidates/:id/dismiss", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCandidate) // DEPRECATED alias for /reject
+	protected.POST("/dedup/candidates/bulk-link", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkLinkDedupCandidates)
+	protected.POST("/dedup/candidates/bulk-merge", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkLinkDedupCandidates) // DEPRECATED alias for /bulk-link
+	protected.POST("/dedup/candidates/link-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCluster)
+	protected.POST("/dedup/candidates/merge-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCluster) // DEPRECATED alias for /link-cluster
+	protected.POST("/dedup/candidates/reject-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCluster)
+	protected.POST("/dedup/candidates/dismiss-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCluster) // DEPRECATED alias for /reject-cluster
 	protected.POST("/dedup/candidates/remove-from-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.RemoveFromDedupCluster)
 	protected.GET("/dedup/candidates/series-summary", s.perm(auth.PermLibraryView), dedupH.ListDedupCandidateSeries)
 	// C6 — gold-dataset review (the dedup feedback-loop labels).
@@ -45,7 +56,8 @@ func (s *Server) wireDedupRoutes(
 	protected.GET("/dedup/labels/export", s.perm(auth.PermLibraryView), dedupH.ExportLabeledExamples)         // C7 — JSONL export of the labeled dataset.
 	protected.GET("/dedup/labels/suspicious", s.perm(auth.PermLibraryView), dedupH.ListSuspiciousDedupLabels) // INIT-1 T4 — read-only suspicious-label review queue.
 	protected.POST("/dedup/labels/:id/override", s.perm(auth.PermLibraryEditMetadata), dedupH.OverrideDedupLabel)
-	protected.POST("/dedup/candidates/merge-series", s.perm(auth.PermLibraryEditMetadata), dedupH.MergeDedupCandidateSeries)
+	protected.POST("/dedup/candidates/link-series", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCandidateSeries)
+	protected.POST("/dedup/candidates/merge-series", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCandidateSeries) // DEPRECATED alias for /link-series
 	protected.POST("/dedup/scan", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupScan)
 	protected.POST("/dedup/scan-llm", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupLLM)
 	protected.POST("/dedup/scan-acoustid", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupAcoustID)
@@ -69,11 +81,19 @@ func (s *Server) wireDedupRoutes(
 	protected.GET("/audiobooks/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListDuplicateAudiobooks)
 	protected.GET("/audiobooks/duplicates/scan-results", s.perm(auth.PermLibraryView), duplicatesH.ListBookDuplicateScanResults)
 	protected.POST("/audiobooks/duplicates/scan", s.perm(auth.PermLibraryEditMetadata), duplicatesH.ScanBookDuplicates)
-	protected.POST("/audiobooks/duplicates/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesH.MergeBookDuplicatesAsVersions)
-	protected.POST("/audiobooks/duplicates/dismiss", s.perm(auth.PermLibraryEditMetadata), duplicatesH.DismissBookDuplicateGroup)
+	// naming-audit classes "merge vs link verbs" and "dismiss vs reject vs
+	// undo" (docs/audits/2026-09-25-interface-naming-consistency.md classes
+	// 2/3): despite the old verb "merge", this links the duplicates as
+	// versions — it never moves a file. The old paths are kept registered as
+	// DEPRECATED aliases pointing at the same handlers.
+	protected.POST("/audiobooks/duplicates/link", s.perm(auth.PermLibraryEditMetadata), duplicatesH.LinkBookDuplicatesAsVersions)
+	protected.POST("/audiobooks/duplicates/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesH.LinkBookDuplicatesAsVersions) // DEPRECATED alias for /link
+	protected.POST("/audiobooks/duplicates/reject", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RejectBookDuplicateGroup)
+	protected.POST("/audiobooks/duplicates/dismiss", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RejectBookDuplicateGroup) // DEPRECATED alias for /reject
 	protected.GET("/authors/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListDuplicateAuthors)
 	protected.POST("/authors/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshDuplicateAuthors)
-	protected.POST("/audiobooks/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesH.MergeBooks)
+	protected.POST("/audiobooks/link", s.perm(auth.PermLibraryEditMetadata), duplicatesH.LinkBooks)
+	protected.POST("/audiobooks/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesH.LinkBooks) // DEPRECATED alias for /link
 	protected.POST("/audiobooks/combine", s.perm(auth.PermLibraryEditMetadata), duplicatesH.CombineBooks)
 	// Combine undo: every combine (manual or review-queue combine/duplicate-of)
 	// is journaled; these list the journals and reverse one.
