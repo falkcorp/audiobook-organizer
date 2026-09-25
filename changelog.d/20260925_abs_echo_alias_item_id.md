@@ -1,0 +1,3 @@
+### Fixed
+
+- ABS API: "mark as finished" no longer appears to undo itself when AudioBooth opened the book through an old (merged-away) library item id. `GET /api/me/progress/:id`, `GET /api/items/:id` and `POST /api/items/:id/play` now answer with the id the client asked for instead of the surviving book's id. The client-facing `mediaProgress` list (`/api/me`, `/api/me/progress`, login, token refresh, authorize) also carries one extra row for each merged-away id of a book that has progress, holding the surviving book's values, so AudioBooth's sync no longer deletes the row it saved under the old id. Progress is still stored once, under the surviving book.

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/userdata_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7ac71a7b-e1cb-4416-a393-1fa38af8871f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package abs_test
 
@@ -43,6 +43,10 @@ type udFake struct {
 	stateErr     map[string]error
 	filesErr     map[string]error
 	syncErr      map[string]error
+
+	// aliases: syncID -> the merge-loser syncIDs ListSyncAliases reports.
+	aliases  map[string][]string
+	aliasErr error
 
 	mints int
 }
@@ -187,6 +191,15 @@ func (f *udFake) GetSyncIDForBook(bookID string) (string, bool, error) {
 	}
 	id, ok := f.syncIDs[bookID]
 	return id, ok, nil
+}
+
+func (f *udFake) ListSyncAliases(syncID string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.aliasErr != nil {
+		return nil, f.aliasErr
+	}
+	return f.aliases[syncID], nil
 }
 
 func (f *udFake) MintOrGetSyncID(bookID string) (string, error) {

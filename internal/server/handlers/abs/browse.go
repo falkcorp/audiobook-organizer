@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.28.1
+// version: 1.29.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-25
 
@@ -2781,30 +2781,41 @@ func (h *Handler) searchSeriesHits(ctx context.Context, lower string, limit int)
 //
 // It writes the 404 itself and returns nil so callers can simply return.
 func (h *Handler) resolveItem(c *gin.Context) *database.Book {
+	book, _ := h.resolveItemAs(c)
+	return book
+}
+
+// resolveItemAs is resolveItem plus the libraryItemId the client addressed,
+// which differs from the book's canonical syncID when the client holds a merge
+// loser's id. Handlers whose body the client files under the id it asked with
+// (GET /api/items/:id, POST /api/items/:id/play) render with requestedID, not
+// the canonical id: AudioBooth keys its item page and local progress row by the
+// id it opened, and a body naming another id never reaches them.
+func (h *Handler) resolveItemAs(c *gin.Context) (book *database.Book, requestedID string) {
 	syncID := strings.TrimSpace(c.Param("id"))
 	if syncID == "" {
 		respondError(c, http.StatusNotFound, "library item not found")
-		return nil
+		return nil, ""
 	}
 	item, err := h.identity.ResolveSyncItem(syncID)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not resolve library item")
-		return nil
+		return nil, ""
 	}
 	if item == nil || item.CurrentBookID == "" {
 		respondError(c, http.StatusNotFound, "library item not found")
-		return nil
+		return nil, ""
 	}
-	book, err := h.library.GetBookByID(item.CurrentBookID)
+	book, err = h.library.GetBookByID(item.CurrentBookID)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not load library item")
-		return nil
+		return nil, ""
 	}
 	if book == nil {
 		respondError(c, http.StatusNotFound, "library item not found")
-		return nil
+		return nil, ""
 	}
-	return book
+	return book, syncID
 }
 
 // WarmContributors builds the author/narrator cache ahead of the first request.

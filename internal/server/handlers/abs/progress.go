@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
 // last-edited: 2026-09-25
 
@@ -98,7 +98,7 @@ func (h *Handler) MediaProgressList(c *gin.Context) {
 // reset-progress flow. Real ABS answers a BARE mediaProgress object (not wrapped)
 // when a row exists and a plain-text 404 when it does not.
 func (h *Handler) MediaProgressGet(c *gin.Context) {
-	user, bookID, ok := h.resolveProgressTarget(c)
+	user, bookID, requestedID, ok := h.resolveProgressTarget(c)
 	if !ok {
 		return
 	}
@@ -106,7 +106,12 @@ func (h *Handler) MediaProgressGet(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "progress is unavailable")
 		return
 	}
-	row, found, err := h.userData.MediaProgressFor(user.ID, bookID)
+	// The row is READ from the canonical book but RENDERED under the id the
+	// client asked with. AudioBooth keys its local progress row by the id of
+	// the page it opened, so a body naming the canonical id after the client
+	// asked with a merge loser's id lands on a row that page never reads, and
+	// "marked finished" reads unfinished on the next visit (owner, 2026-09-25).
+	row, found, err := h.userData.MediaProgressFor(user.ID, bookID, requestedID)
 	if err != nil {
 		// 5xx, never a 404: a 404 we are not sure about reads to the client as
 		// "you have no progress in this book", and acting on that costs a place.
@@ -128,7 +133,7 @@ func (h *Handler) MediaProgressGet(c *gin.Context) {
 // than a JSON body — matched to the oracle capture rather than "improved", because
 // neither client reads the body and deviating buys nothing.
 func (h *Handler) MediaProgressPatch(c *gin.Context) {
-	user, bookID, ok := h.resolveProgressTarget(c)
+	user, bookID, _, ok := h.resolveProgressTarget(c)
 	if !ok {
 		return
 	}
@@ -196,7 +201,7 @@ func (h *Handler) MediaProgressBatchUpdate(c *gin.Context) {
 	}
 
 	for _, item := range batch {
-		bookID, _, ok := h.resolveBookID(user.ID, item.LibraryItemID)
+		bookID, _, _, ok := h.resolveBookID(user.ID, item.LibraryItemID)
 		if !ok {
 			continue
 		}
@@ -218,7 +223,7 @@ func (h *Handler) MediaProgressBatchUpdate(c *gin.Context) {
 // book to unstarted and leaving it hidden would make it invisible everywhere with no
 // way to get it back from the client UI.
 func (h *Handler) MediaProgressDelete(c *gin.Context) {
-	user, bookID, ok := h.resolveProgressTarget(c)
+	user, bookID, _, ok := h.resolveProgressTarget(c)
 	if !ok {
 		return
 	}
@@ -305,7 +310,7 @@ func appendResetPosition(positions []float64, discarded float64) []float64 {
 // 🔴 The body must be NON-EMPTY (§1.8.6 / spec:318) — an empty 200 is fatal to these
 // decoders — so it answers `{}` rather than a bare 200 or a plain-text "OK".
 func (h *Handler) RemoveFromContinueListening(c *gin.Context) {
-	user, bookID, ok := h.resolveProgressTarget(c)
+	user, bookID, _, ok := h.resolveProgressTarget(c)
 	if !ok {
 		return
 	}
@@ -527,26 +532,38 @@ func (h *Handler) durationBoundsForBook(bookID string, clientDuration *float64) 
 // own sake: it makes the parse independent of whether a user id can ever contain the
 // separator, and it means one user can never address another user's row by
 // constructing an id — the prefix that gets stripped is always their own.
-func (h *Handler) resolveProgressTarget(c *gin.Context) (*database.User, string, bool) {
-	user, _, bookID, ok := h.resolveTarget(c)
-	return user, bookID, ok
+//
+// requestedID is the libraryItemId the client addressed (the row-id prefix
+// stripped). It differs from the canonical syncID when the client holds a merge
+// loser's id; a handler that renders a body the client correlates by that id must
+// echo requestedID, never the canonical one (see MediaProgressGet).
+func (h *Handler) resolveProgressTarget(c *gin.Context) (user *database.User, bookID, requestedID string, ok bool) {
+	user, _, bookID, requestedID, ok = h.resolveTargetIDs(c)
+	return user, bookID, requestedID, ok
 }
 
 // resolveTarget is resolveProgressTarget plus the canonical syncID, which the
 // bookmark handlers need because the bookmark keyspace is keyed by the
 // CLIENT-VISIBLE libraryItemId rather than by the internal book id.
 func (h *Handler) resolveTarget(c *gin.Context) (user *database.User, syncID, bookID string, ok bool) {
+	user, syncID, bookID, _, ok = h.resolveTargetIDs(c)
+	return user, syncID, bookID, ok
+}
+
+// resolveTargetIDs is the shared body of resolveTarget and
+// resolveProgressTarget, returning every id resolveBookID produces.
+func (h *Handler) resolveTargetIDs(c *gin.Context) (user *database.User, syncID, bookID, requestedID string, ok bool) {
 	u, found := servermiddleware.CurrentUser(c)
 	if !found || u == nil {
 		respondError(c, http.StatusUnauthorized, "authentication required")
-		return nil, "", "", false
+		return nil, "", "", "", false
 	}
-	bookID, syncID, found = h.resolveBookID(u.ID, c.Param("id"))
+	bookID, syncID, requestedID, found = h.resolveBookID(u.ID, c.Param("id"))
 	if !found {
 		respondNotFoundPlain(c)
-		return nil, "", "", false
+		return nil, "", "", "", false
 	}
-	return u, syncID, bookID, true
+	return u, syncID, bookID, requestedID, true
 }
 
 // resolveBookID maps a client-visible id to an internal Book id AND the canonical
@@ -557,10 +574,14 @@ func (h *Handler) resolveTarget(c *gin.Context) (user *database.User, syncID, bo
 // redirects, spec §4.2), not the one the client sent. Callers that key storage by it
 // therefore converge on one id per book even when a client is still holding the
 // syncID of a book that has since lost a dedup merge.
-func (h *Handler) resolveBookID(userID, raw string) (bookID, syncID string, ok bool) {
+//
+// requestedID is the candidate that resolved: the libraryItemId the client
+// addressed, before redirects. Storage keys by bookID/syncID; response bodies the
+// client correlates by the id it sent echo requestedID.
+func (h *Handler) resolveBookID(userID, raw string) (bookID, syncID, requestedID string, ok bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || h.identity == nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	candidates := []string{raw}
 	if prefix := userID + "-"; userID != "" && strings.HasPrefix(raw, prefix) {
@@ -578,10 +599,10 @@ func (h *Handler) resolveBookID(userID, raw string) (bookID, syncID string, ok b
 			if id == "" {
 				id = candidate
 			}
-			return item.CurrentBookID, id, true
+			return item.CurrentBookID, id, candidate, true
 		}
 	}
-	return "", "", false
+	return "", "", "", false
 }
 
 // errNoProgressStore is returned by the shared write path when the server booted

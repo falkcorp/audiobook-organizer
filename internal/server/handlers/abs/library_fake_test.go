@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.19.1
+// version: 1.20.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-25
 
@@ -827,7 +827,43 @@ func (f *fakeLibrary) mergeLoser(t *testing.T, loserBookID, winnerBookID string)
 	it := f.syncItems[loserSync]
 	it.CurrentBookID = ""
 	it.RedirectTo = winnerSync
+	if w := f.syncItems[winnerSync]; w != nil && !slices.Contains(w.MergedFrom, loserSync) {
+		w.MergedFrom = append(w.MergedFrom, loserSync)
+	}
 	return loserSync, winnerSync
+}
+
+// ListSyncAliases mirrors PebbleStore.ListSyncAliases: the transitive
+// MergedFrom walk, trusting an entry only while the loser still redirects to
+// the record listing it, and nil for a syncID that is itself a redirect.
+func (f *fakeLibrary) ListSyncAliases(syncID string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.resolveErr[syncID]; err != nil {
+		return nil, err
+	}
+	if it := f.syncItems[syncID]; it == nil || it.RedirectTo != "" {
+		return nil, nil
+	}
+	visited := map[string]bool{syncID: true}
+	var out []string
+	queue := []string{syncID}
+	for len(queue) > 0 {
+		parent := queue[0]
+		queue = queue[1:]
+		for _, loser := range f.syncItems[parent].MergedFrom {
+			if visited[loser] {
+				continue
+			}
+			visited[loser] = true
+			if li := f.syncItems[loser]; li != nil && li.RedirectTo == parent {
+				out = append(out, loser)
+				queue = append(queue, loser)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // SearchBooksFiltered mirrors the store: the visibility filter is applied

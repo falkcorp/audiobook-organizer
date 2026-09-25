@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/item.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c8a2f60-1d75-4b38-a0e4-7f21b5c96d13
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package abs
 
@@ -43,7 +43,7 @@ const absProgressSegmentID = "abs"
 //     ?include=progress. §1.6 item 3: some clients ignore the gate, and an
 //     absent-but-known progress is indistinguishable from "never started".
 func (h *Handler) Item(c *gin.Context) {
-	book := h.resolveItem(c)
+	book, requestedID := h.resolveItemAs(c)
 	if book == nil {
 		return
 	}
@@ -56,6 +56,11 @@ func (h *Handler) Item(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "could not load library item")
 		return
 	}
+	// Render under the id the client asked with (resolveItemAs). The view is
+	// this request's own copy; the book and its storage stay canonical, and
+	// every URL built from the id (tracks, cover) resolves back through the
+	// same redirect.
+	view.SyncID = requestedID
 
 	out := itemWithProgressDTO{libraryItemExpandedDTO: h.expandedItem(view)}
 	if user, ok := servermiddleware.CurrentUser(c); ok && user != nil {
