@@ -1,5 +1,5 @@
 // file: internal/database/book_own_folder.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: 83d7e159-50f7-47e5-8303-8d8212c3bd8e
 // last-edited: 2026-09-25
 
@@ -7,18 +7,25 @@ package database
 
 import (
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
-// Out-of-folder copies.
+// Copies of a book's files.
 //
 // WHY this exists: a book's book_file rows can point at several copies of the
-// same content — the iTunes copy, the organized library copy, and chapter
-// files left behind by an older layout. Every consumer that sums the rows
-// (the ABS mapper, the ABS progress/userdata duration, RecomputeBookAggregates)
-// then counts that content once per copy.
+// same content — the iTunes copy, the organized library copy, chapter files
+// left behind by an older layout, and `_copyN` twins that organize minted
+// beside an occupant (nextAvailableTargetPath) inside the book's own folder.
+// Every consumer that sums the rows (the ABS mapper, the ABS progress/userdata
+// duration, RecomputeBookAggregates, zero_rows_only) then counts that content
+// once per copy. Measured 2026-09-25: "Awaken Online: Flame" has `_copy1`
+// twins and zero-duration rows all inside its own folder; filling its zero
+// rows would have taken it to about 26.4 h against a true 21.85 h.
 //
 // No existing BookFile field can mark the extra copies out of the sum:
 //   - Missing is ignored by the ABS mapper (it sums every row), and
@@ -28,45 +35,63 @@ import (
 //   - SkipScan and VersionID are honoured by neither sum; there is no
 //     superseded / role / kind field.
 //
-// Rows outside the book's own folder are NOT all copies, though: a merge
-// moves the loser's rows to the winner, and they stay in the loser's folder
-// until organize runs. They are real content and must count (the owner's
-// decision of 2026-09-25, "skip only copies";
-// TestMoveBookFilesToBookRecomputesBothBooks pins it).
+// Not every row outside the book's own folder is a copy: a merge moves the
+// loser's rows to the winner, and they stay in the loser's folder until
+// organize runs. They are real content and must count (the owner's decision
+// of 2026-09-25, "skip only copies"; TestMoveBookFilesToBookRecomputesBothBooks
+// pins it). And not every `_copyN` name is a copy: organize also suffixes a
+// DIFFERENT file that collided with an occupant, so prod has distinct chapters
+// named "... - 02_copy1.m4a" with their own sizes. Those must count.
 //
-// So the rule is: when a book's rows span its own folder and somewhere else,
-// a row outside the own folder is excluded from the sums ONLY when it is a
-// copy of a present own-folder row (IsBookFileCopy). Every other row counts.
-// With no present own-folder row there is no basis to call anything a copy,
-// and every row counts. The rows are never deleted or rewritten — the copies
-// are simply not summed.
+// So the rule is evidence, not location: rows that are copies of each other
+// (IsBookFileCopy) form one cluster, and exactly one row per cluster counts —
+// wherever the rows sit (one folder, own folder vs elsewhere, or two folders
+// that are both elsewhere). A row that is a copy of no other row counts. The
+// row a cluster counts is chosen by keeperLess. The rows are never deleted or
+// rewritten — the copies are simply not summed.
+//
+// One limit, kept from #3552: rows in DIFFERENT directories are matched only
+// when the book has a present row in its own folder (HasOwnBasis). Without
+// one, Book.FilePath may be the stale one and the rows may be a merge's moved
+// rows from several losers, which the owner's "skip only copies" decision says
+// must count; so only same-directory copies (a `_copyN` twin beside its
+// original) are found there. That evidence does not depend on which folder is
+// the book's.
 
 // OwnFolderSplit partitions a book's rows by the book's own folder (the
-// directory of Book.FilePath) and marks the out-of-folder copies.
+// directory of Book.FilePath) and marks the copies.
 type OwnFolderSplit struct {
 	// Dir is the book's own folder, or "" when Book.FilePath gives none.
 	Dir string
-	// Own are the rows inside Dir (recursively: CD1/, CD2/ subfolders count).
+	// Own are the rows inside Dir (recursively: CD1/, CD2/ subfolders count),
+	// copies included.
 	Own []BookFile
-	// Copies are the rows outside Dir that are copies of a present Own row
-	// (IsBookFileCopy). They are the only rows excluded from the sums.
+	// Copies are the rows excluded from the sums: every row of a copy cluster
+	// except its keeper, inside or outside Dir.
 	Copies []BookFile
 	// Others are the rows outside Dir that are not copies. They count.
 	Others []BookFile
 
+	// outside is how many rows lie outside Dir, copies included (0 when Dir
+	// is "").
+	outside int
 	// copyIdx are the Copies' indexes in the files slice that was split.
 	copyIdx []int
 }
 
 // Spans reports whether the rows lie both inside the own folder and outside it.
 func (s OwnFolderSplit) Spans() bool {
-	return len(s.Own) > 0 && len(s.Copies)+len(s.Others) > 0
+	return len(s.Own) > 0 && s.outside > 0
 }
 
-// HasOwnBasis reports whether at least one own-folder row is present on disk:
-// the only rows a copy is matched against. Without one Book.FilePath may be
-// the stale one (book.file_path is known to lag the active book_file rows),
-// and nothing is called a copy.
+// HasOutside reports whether any row lies outside the own folder.
+func (s OwnFolderSplit) HasOutside() bool {
+	return s.outside > 0
+}
+
+// HasOwnBasis reports whether at least one own-folder row is present on disk.
+// Without one Book.FilePath may be the stale one (book.file_path is known to
+// lag the active book_file rows).
 func (s OwnFolderSplit) HasOwnBasis() bool {
 	for i := range s.Own {
 		if !s.Own[i].Missing {
@@ -97,35 +122,31 @@ func (s OwnFolderSplit) Counted(files []BookFile) []BookFile {
 }
 
 // SplitOwnFolderFiles partitions files by the book's own folder and marks the
-// out-of-folder copies. It keeps the order of files within each part.
+// copies. It keeps the order of files within each part. book may be nil: the
+// copies are still found, there is only no own folder to prefer a keeper in.
 func SplitOwnFolderFiles(book *Book, files []BookFile) OwnFolderSplit {
 	var s OwnFolderSplit
-	if book == nil {
-		return s
+	if book != nil {
+		s.Dir = bookOwnFolder(book.FilePath, files)
 	}
-	s.Dir = bookOwnFolder(book.FilePath, files)
-	if s.Dir == "" {
-		return s
-	}
-	var outIdx []int
+	inside := make([]bool, len(files))
 	for i := range files {
-		if pathutil.IsWithin(files[i].FilePath, s.Dir) {
+		switch {
+		case s.Dir == "":
+		case pathutil.IsWithin(files[i].FilePath, s.Dir):
+			inside[i] = true
 			s.Own = append(s.Own, files[i])
-		} else {
-			outIdx = append(outIdx, i)
+		default:
+			s.outside++
 		}
 	}
-	var present []BookFile
-	for i := range s.Own {
-		if !s.Own[i].Missing {
-			present = append(present, s.Own[i])
-		}
-	}
-	for _, i := range outIdx {
-		if isCopyOfAny(files[i], present) {
+	isCopy := markBookFileCopies(files, inside, s.HasOwnBasis())
+	for i := range files {
+		switch {
+		case isCopy[i]:
 			s.Copies = append(s.Copies, files[i])
 			s.copyIdx = append(s.copyIdx, i)
-		} else {
+		case s.Dir != "" && !inside[i]:
 			s.Others = append(s.Others, files[i])
 		}
 	}
@@ -138,12 +159,114 @@ func OwnFolderFiles(book *Book, files []BookFile) []BookFile {
 	return SplitOwnFolderFiles(book, files).Counted(files)
 }
 
+// markBookFileCopies clusters files by IsBookFileCopy and marks every row of a
+// cluster except its keeper. Rows are visited in keeper order and a row is a
+// copy when it is a copy of a row already kept, so each cluster keeps its best
+// row. Candidates come from two buckets (hash; copy-normalized name + size)
+// rather than every pair: the ABS item view runs this for every book it
+// renders, and some books hold ~1,500 rows. crossDir false restricts matches
+// to rows in the same directory.
+func markBookFileCopies(files []BookFile, inside []bool, crossDir bool) []bool {
+	isCopy := make([]bool, len(files))
+	if len(files) < 2 {
+		return isCopy
+	}
+	order := make([]int, len(files))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		return keeperLess(files, inside, order[a], order[b])
+	})
+
+	type nameSize struct {
+		name string
+		size int64
+	}
+	byHash := map[string][]int{}
+	byName := map[nameSize][]int{}
+	copyOfKept := func(f BookFile, kept []int) bool {
+		for _, j := range kept {
+			if !crossDir && filepath.Dir(f.FilePath) != filepath.Dir(files[j].FilePath) {
+				continue
+			}
+			if IsBookFileCopy(f, files[j]) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, i := range order {
+		f := files[i]
+		var names []string
+		if f.FileSize > 0 { // an unmeasured size is no name evidence
+			names = bookFileNames(f)
+		}
+		matched := f.FileHash != "" && copyOfKept(f, byHash[f.FileHash])
+		for n := 0; !matched && n < len(names); n++ {
+			matched = copyOfKept(f, byName[nameSize{names[n], f.FileSize}])
+		}
+		if matched {
+			isCopy[i] = true
+			continue
+		}
+		if f.FileHash != "" {
+			byHash[f.FileHash] = append(byHash[f.FileHash], i)
+		}
+		for _, n := range names {
+			k := nameSize{n, f.FileSize}
+			byName[k] = append(byName[k], i)
+		}
+	}
+	return isCopy
+}
+
+// keeperLess orders rows by how strongly each should be the row its copy
+// cluster counts:
+//  1. a known duration (> 0), so excluding a copy never drops a duration the
+//     cluster knew: the counted sum loses a copy's runtime, never the
+//     content's;
+//  2. present on disk, so ABS streams a file that exists;
+//  3. inside the book's own folder;
+//  4. a name without organize's `_copyN` suffix (the original);
+//  5. original row order.
+func keeperLess(files []BookFile, inside []bool, a, b int) bool {
+	fa, fb := &files[a], &files[b]
+	if ka, kb := fa.Duration > 0, fb.Duration > 0; ka != kb {
+		return ka
+	}
+	if fa.Missing != fb.Missing {
+		return !fa.Missing
+	}
+	if inside[a] != inside[b] {
+		return inside[a]
+	}
+	if ca, cb := hasCopySuffix(fa.FilePath), hasCopySuffix(fb.FilePath); ca != cb {
+		return !ca
+	}
+	return a < b
+}
+
 // IsBookFileCopy reports whether a is a copy of b. It is a copy when EITHER:
 //   - both carry the same non-empty FileHash; OR
-//   - they share a file name (a non-empty OriginalFilename or the base name
-//     of FilePath, compared across both), have the same known FileSize
-//     (> 0: an unmeasured size is no evidence), and their Durations are
-//     within 1 s of each other.
+//   - they share a file name, have the same known FileSize (> 0: an
+//     unmeasured size is no evidence), and their durations agree.
+//
+// Names are a non-empty OriginalFilename or the base name of FilePath,
+// compared across both, with organize's `_copyN` collision suffix removed from
+// the stem ("01_copy1.m4a" is named "01.m4a"). A `_copyN` file of a DIFFERENT
+// size is still not a copy: organize suffixes distinct files too.
+//
+// Durations agree when both are known (> 0) and within 1 s, or both are
+// unknown. One known and one unknown agree only when both rows sit in the
+// same directory — where organize puts a `_copyN` twin — so across folders a
+// zero-duration row is never called a copy of a measured one on name and size
+// alone.
+//
+// Name evidence never counts between two rows in different "<Book> - N"
+// chapter folders of one book folder (internal/chaptershape): that layout
+// gives every chapter the same file name (`The Shining - 3/58.MP3`), so there
+// the shared name is the layout, not a copy. A shared hash still counts.
 func IsBookFileCopy(a, b BookFile) bool {
 	if a.FileHash != "" && a.FileHash == b.FileHash {
 		return true
@@ -151,7 +274,18 @@ func IsBookFileCopy(a, b BookFile) bool {
 	if a.FileSize <= 0 || a.FileSize != b.FileSize {
 		return false
 	}
-	if d := a.Duration - b.Duration; d > 1 || d < -1 {
+	sameDir := a.FilePath != "" && filepath.Dir(a.FilePath) == filepath.Dir(b.FilePath)
+	switch ka, kb := a.Duration > 0, b.Duration > 0; {
+	case ka && kb:
+		if d := a.Duration - b.Duration; d > 1 || d < -1 {
+			return false
+		}
+	case ka != kb:
+		if !sameDir {
+			return false
+		}
+	}
+	if !sameDir && chapterFolderSiblings(a.FilePath, b.FilePath) {
 		return false
 	}
 	for _, x := range bookFileNames(a) {
@@ -164,23 +298,52 @@ func IsBookFileCopy(a, b BookFile) bool {
 	return false
 }
 
-func isCopyOfAny(f BookFile, own []BookFile) bool {
-	for i := range own {
-		if IsBookFileCopy(f, own[i]) {
-			return true
-		}
+// copySuffixRe matches organize's collision suffix at the end of a file stem,
+// "<stem>_copy<N>" (nextAvailableTargetPath in internal/organizer).
+var copySuffixRe = regexp.MustCompile(`_copy\d+$`)
+
+// stripCopySuffix removes a `_copyN` suffix from name's stem. A stem that is
+// nothing but the suffix is left alone.
+func stripCopySuffix(name string) string {
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	if loc := copySuffixRe.FindStringIndex(stem); loc != nil && loc[0] > 0 {
+		return stem[:loc[0]] + ext
 	}
-	return false
+	return name
 }
 
-// bookFileNames are the non-empty names a row is known by.
+// hasCopySuffix reports whether path's file name carries a `_copyN` suffix.
+func hasCopySuffix(path string) bool {
+	if path == "" {
+		return false
+	}
+	base := filepath.Base(path)
+	return stripCopySuffix(base) != base
+}
+
+// chapterFolderSiblings reports whether a and b sit in chapter folders
+// ("<prefix> - N") of the same book folder with the same prefix.
+func chapterFolderSiblings(a, b string) bool {
+	pa, xa, ok := chaptershape.IsChapterFolderFile(a)
+	if !ok {
+		return false
+	}
+	pb, xb, ok := chaptershape.IsChapterFolderFile(b)
+	return ok && pa == pb && chaptershape.NormPrefix(xa) == chaptershape.NormPrefix(xb)
+}
+
+// bookFileNames are the distinct non-empty names a row is known by, with the
+// `_copyN` suffix removed.
 func bookFileNames(f BookFile) []string {
 	var out []string
 	if f.OriginalFilename != "" {
-		out = append(out, f.OriginalFilename)
+		out = append(out, stripCopySuffix(f.OriginalFilename))
 	}
 	if f.FilePath != "" {
-		out = append(out, filepath.Base(f.FilePath))
+		if n := stripCopySuffix(filepath.Base(f.FilePath)); len(out) == 0 || out[0] != n {
+			out = append(out, n)
+		}
 	}
 	return out
 }

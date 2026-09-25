@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_aggregates.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-09-25
 
@@ -36,8 +36,9 @@ import (
 const bookAggregatesBackfillKey = "system:backfill:book_aggregates_v1_done"
 
 // RecomputeBookAggregates sums Duration and FileSize from the BookFile records
-// for the given bookID — all of them, except the out-of-folder rows that are
-// copies of a present own-folder row (OwnFolderFiles / IsBookFileCopy) — and
+// for the given bookID — all of them, except the rows that are copies of a
+// counted row (OwnFolderFiles / IsBookFileCopy: `_copyN` twins, same-content
+// rows in another folder) — and
 // updates the parent Book atomically using a
 // read-modify-write under Pebble's own MVCC layer (same pattern as UpdateBook).
 //
@@ -54,9 +55,9 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 
 	// The sums are computed inside the ModifyBook closure below because they
 	// need the book: when its rows span its own folder and somewhere else
-	// (iTunes copy + library copy + old chapter files), an out-of-folder row
-	// that is a copy of a present own-folder row does not count
-	// (OwnFolderFiles); every other row, including a merge's moved rows that
+	// (iTunes copy + library copy + old chapter files) or holds `_copyN`
+	// twins, only one row of each set of copies counts (OwnFolderFiles);
+	// every other row, including a merge's moved rows that
 	// still sit in the loser's folder, does. Summing every copy inflated the
 	// total.
 	var (
