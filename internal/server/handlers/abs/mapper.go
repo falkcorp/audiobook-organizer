@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
 // last-edited: 2026-09-25
 
@@ -644,10 +644,10 @@ func firstNonEmpty(vals ...*string) *string {
 }
 
 // coverPath returns the media.coverPath value: the on-disk cover if one exists, else
-// null. Book.CoverURL is an API path, not a disk path, so it is deliberately not used
-// here.
-func (h *Handler) coverPath(bookID string) *string {
-	p := h.coverFile(bookID)
+// null. It resolves through coverFile, so it is non-null exactly when GET
+// /api/items/:id/cover would serve an image.
+func (h *Handler) coverPath(book *database.Book) *string {
+	p := h.coverFile(book)
 	if p == "" {
 		return nil
 	}
@@ -657,7 +657,7 @@ func (h *Handler) coverPath(bookID string) *string {
 // minifiedMedia renders the list-response media block.
 func (h *Handler) minifiedMedia(v *itemView) bookMediaDTO {
 	return bookMediaDTO{
-		CoverPath: h.coverPath(v.Book.ID),
+		CoverPath: h.coverPath(v.Book),
 		Duration:  v.DurationSec,
 		// media.id is the same 36-char sync id as the item. Keeping them equal means
 		// the `mediaItemId` a client stores against progress inherits the same
