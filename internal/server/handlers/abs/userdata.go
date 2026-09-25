@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
 // last-edited: 2026-09-25
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 	"golang.org/x/sync/errgroup"
 )
@@ -320,8 +321,14 @@ func withLibraryItemID(row mediaProgressDTO, userID, libraryItemID string) media
 // item with progress, the alias row replaces it: GET/PATCH /api/me/progress/<that
 // id> resolve to the live item, so the list must say what those endpoints serve.
 //
-// Complete-or-error like MediaProgress: an alias lookup failure fails the whole
-// list, because a short list is what makes the client delete rows.
+// Alias rows FAIL OPEN, canonical rows stay fail-closed. The complete-or-5xx
+// rule protects the CANONICAL rows: a short canonical list is what makes the
+// client delete progress, so a MediaProgress error still fails the list. An alias
+// row is an addition; leaving one out is exactly the behaviour before alias rows
+// existed. So an alias lookup error (store read, alias cap, an alias claimed by
+// two live items) is logged at Warn and only that book's alias rows are
+// omitted. Failing here instead would take /api/me, login, refresh and
+// authorize down over a row the client can live without.
 func (p *userDataProvider) ClientMediaProgress(userID string) ([]any, error) {
 	rows, err := p.MediaProgress(userID)
 	if err != nil {
@@ -329,6 +336,7 @@ func (p *userDataProvider) ClientMediaProgress(userID string) ([]any, error) {
 	}
 	// One ListSyncAliases per row (a point-get on the item plus one per alias),
 	// in the same bounded pool shape as MediaProgress's per-book follow-ups.
+	// Workers never return an error: a failed lookup leaves aliases[i] nil.
 	aliases := make([][]string, len(rows))
 	g := new(errgroup.Group)
 	g.SetLimit(p.concurrency)
@@ -340,24 +348,35 @@ func (p *userDataProvider) ClientMediaProgress(userID string) ([]any, error) {
 		g.Go(func() error {
 			ids, err := p.identity.ListSyncAliases(row.LibraryItemID)
 			if err != nil {
-				return fmt.Errorf("abs: userdata: list aliases of %s: %w", row.LibraryItemID, err)
+				progressLog.Warn("abs: userdata: alias lookup failed; omitting this book's alias rows, canonical row kept: user_id=%s book_id=%s library_item_id=%s: %v",
+					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.bookID),
+					logger.SanitizeLogValue(row.LibraryItemID), err)
+				return nil
 			}
 			aliases[i] = ids
 			return nil
 		})
 	}
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
+	_ = g.Wait() // workers only return nil
 
+	// An alias claimed by two live items is a data error (ListSyncAliases
+	// attributes each alias to one live item). Which item it belongs to is
+	// unknown, so it is emitted for neither and logged.
+	claims := map[string]int{}
+	for _, ids := range aliases {
+		for _, id := range ids {
+			claims[id]++
+		}
+	}
 	aliasRows := map[string]mediaProgressDTO{}
 	var aliasIDs []string
 	for i, ids := range aliases {
 		for _, id := range ids {
-			if _, dup := aliasRows[id]; dup {
-				// ListSyncAliases attributes an alias to one live item only;
-				// a second claim would mean two live items share a loser.
-				return nil, fmt.Errorf("abs: userdata: alias %s claimed by two live items", id)
+			if claims[id] > 1 {
+				progressLog.Warn("abs: userdata: alias claimed by %d live items; omitting it: user_id=%s alias=%s library_item_id=%s",
+					claims[id], logger.SanitizeLogValue(userID), logger.SanitizeLogValue(id),
+					logger.SanitizeLogValue(rows[i].(mediaProgressDTO).LibraryItemID))
+				continue
 			}
 			aliasRows[id] = withLibraryItemID(rows[i].(mediaProgressDTO), userID, id)
 			aliasIDs = append(aliasIDs, id)

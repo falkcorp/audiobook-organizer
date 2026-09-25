@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/alias_echo_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: de050482-2489-42a2-ad9d-bc151b672b20
 // last-edited: 2026-09-25
 
@@ -212,18 +212,31 @@ func TestAliasItem_EchoesRequestedID(t *testing.T) {
 
 // ── provider-level: the client list's alias rows ────────────────────────────
 
-// TestClientMediaProgress_AliasErrorFailsTheList: an alias read failure is an
-// error, never a list without the alias rows (the client deletes what is missing).
-func TestClientMediaProgress_AliasErrorFailsTheList(t *testing.T) {
+// TestClientMediaProgress_AliasErrorKeepsCanonicalRows: an alias lookup failure
+// omits only the alias rows. The canonical list is still returned, with no
+// error, because failing it would take /api/me and login down over rows the
+// client can live without (and leaving them out is the pre-alias behaviour).
+func TestClientMediaProgress_AliasErrorKeepsCanonicalRows(t *testing.T) {
 	f := newUDFake()
-	f.addBook("bk1", nil, 1800)
-	f.presetSyncID("bk1", udSyncID(1))
-	f.addPosition("u1", "bk1", "abs", 60, time.Now())
+	for i, id := range []string{"bk1", "bk2"} {
+		f.addBook(id, nil, 1800)
+		f.presetSyncID(id, udSyncID(i+1))
+		f.addPosition("u1", id, "abs", 60, time.Now())
+	}
+	f.aliases = map[string][]string{udSyncID(1): {udSyncID(9)}}
 	f.aliasErr = errors.New("disk on fire")
 
 	rows, err := udProvider(t, f).ClientMediaProgress("u1")
-	if err == nil || rows != nil {
-		t.Fatalf("ClientMediaProgress = %d rows, err %v; want nil rows and an error", len(rows), err)
+	if err != nil {
+		t.Fatalf("ClientMediaProgress err = %v, want nil — an alias failure must not fail the list", err)
+	}
+	decoded := udRows(t, rows)
+	got := map[string]bool{}
+	for i := range decoded {
+		got[udStr(t, decoded[i], "libraryItemId")] = true
+	}
+	if len(decoded) != 2 || !got[udSyncID(1)] || !got[udSyncID(2)] {
+		t.Fatalf("rows = %v, want exactly the 2 canonical rows and no alias row", got)
 	}
 }
 
