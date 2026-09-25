@@ -1,5 +1,5 @@
 // file: internal/dedup/manual_candidate_protection_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c81c949-8a0f-4c52-9f6b-839b956d087d
 // last-edited: 2026-09-25
 
@@ -72,6 +72,50 @@ func TestPurgeStaleCandidates_KeepsManualCandidate(t *testing.T) {
 	got := candByID(t, es, manual.Candidate.ID)
 	if got == nil || got.Status != "pending" {
 		t.Fatalf("manual candidate purged or moved: %+v", got)
+	}
+}
+
+// The same-directory rule (`filepath.Dir(a) == filepath.Dir(b)`) is trivially
+// true for two rows at the IDENTICAL path, so without an explicit carve-out
+// PurgeStaleCandidates purged the very same-path candidates the owner said
+// must survive in the review queue (CHAPTER-SUBFOLDER-NN-ROWS, 2026-09-25).
+// This pairs a same-path pair (must survive) with a same-DIRECTORY,
+// DIFFERENT-path control (must still be purged as a genuine chapter pair).
+func TestPurgeStaleCandidates_KeepsSamePathCandidate(t *testing.T) {
+	eng, store := newRescoreTestEngine(t)
+	es := eng.embedStore
+
+	path := "/lib/Author/Book/Book - NN/32.m4b"
+	rowA := mkBookAt(t, store, "Same Path Book", path, nil)
+	rowB := mkBookAt(t, store, "Same Path Book", path, nil)
+	// Control: genuinely different paths in the SAME directory — the exact
+	// chapter-file shape this rule exists to purge.
+	chapA := mkBookAt(t, store, "Chapter Book", "/lib/Author/Chapters/01.mp3", nil)
+	chapB := mkBookAt(t, store, "Chapter Book", "/lib/Author/Chapters/02.mp3", nil)
+
+	sim := 1.0
+	samePathID, _, err := es.UpsertCandidateNew(database.DedupCandidate{EntityType: "book", EntityAID: rowA.ID, EntityBID: rowB.ID, Layer: "exact", Similarity: &sim})
+	if err != nil {
+		t.Fatalf("upsert same-path candidate: %v", err)
+	}
+	ctlID, _, err := es.UpsertCandidateNew(database.DedupCandidate{EntityType: "book", EntityAID: chapA.ID, EntityBID: chapB.ID, Layer: "embedding", Similarity: &sim})
+	if err != nil {
+		t.Fatalf("upsert control: %v", err)
+	}
+
+	deleted, err := eng.PurgeStaleCandidates(context.Background())
+	if err != nil {
+		t.Fatalf("PurgeStaleCandidates: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1 (the same-directory chapter control only)", deleted)
+	}
+	if candByID(t, es, ctlID) != nil {
+		t.Fatal("control (same-directory chapter pair) survived: the fixture never reached the same-directory rule")
+	}
+	got := candByID(t, es, samePathID)
+	if got == nil || got.Status != "pending" {
+		t.Fatalf("same-path candidate purged or moved: %+v", got)
 	}
 }
 
