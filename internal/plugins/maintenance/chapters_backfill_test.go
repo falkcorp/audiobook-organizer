@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 8a41c0e6-52b7-4d93-9f18-7c3ea05b61d4
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -421,6 +421,54 @@ func TestChaptersBackfill_BookIDsRestrictsScope(t *testing.T) {
 	}
 	if got, _ := s.GetChaptersForBook(outOfScope); len(got) != 0 {
 		t.Fatalf("out-of-scope book got %d chapters; the BookIDs restriction leaked", len(got))
+	}
+}
+
+// TestChaptersBackfill_BookIDsCamelCaseAlias_StillDecodes covers the
+// 2026-09-25 snake_case naming sweep: BookIDs is now tagged `book_ids`, but a
+// caller sending the old `bookIds` key must still be honored.
+func TestChaptersBackfill_BookIDsCamelCaseAlias_StillDecodes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	spy := &chbfProbeSpy{result: chbfChapters()}
+	spy.install(t)
+
+	s := chbfStore(t)
+	inScope := chbfSeedBook(t, s, "In Cohort", 1)
+	outOfScope := chbfSeedBook(t, s, "Out Of Cohort", 1)
+
+	raw := json.RawMessage(fmt.Sprintf(`{"apply": true, "bookIds": [%q]}`, inScope))
+	p := &Plugin{deps: fakeDeps{store: &chbfDecorator{Store: s}}}
+	if err := p.runChaptersBackfill(context.Background(), raw, &fakeReporter{}); err != nil {
+		t.Fatalf("runChaptersBackfill: %v", err)
+	}
+
+	if got, _ := s.GetChaptersForBook(inScope); len(got) != 6 {
+		t.Fatalf("in-scope book got %d chapters, want 6", len(got))
+	}
+	if got, _ := s.GetChaptersForBook(outOfScope); len(got) != 0 {
+		t.Fatalf("out-of-scope book got %d chapters; the legacy bookIds alias leaked scope", len(got))
+	}
+}
+
+// TestChaptersBackfill_BookIDsConflictingAliases_Errors matches the
+// conflict-is-an-error contract established by parseAuthorOpDryRun in
+// author.go: sending both spellings with disagreeing values must fail
+// loudly rather than silently pick one.
+func TestChaptersBackfill_BookIDsConflictingAliases_Errors(t *testing.T) {
+	chbfStubFFprobe(t)
+	s := chbfStore(t)
+
+	raw := json.RawMessage(`{"apply": true, "book_ids": ["a"], "bookIds": ["b"]}`)
+	p := &Plugin{deps: fakeDeps{store: &chbfDecorator{Store: s}}}
+	err := p.runChaptersBackfill(context.Background(), raw, &fakeReporter{})
+	if err == nil {
+		t.Fatal("expected an error when book_ids and bookIds disagree, got nil")
+	}
+	if !strings.Contains(err.Error(), "book_ids and bookIds disagree") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

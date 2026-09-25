@@ -1,7 +1,7 @@
 // file: internal/server/server_extra_test.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 61a2d3c4-80ab-4f6f-8c39-15a2ac5b7f0c
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package server
 
@@ -243,7 +243,7 @@ func TestImportPathEndpoints(t *testing.T) {
 		Data map[string]any `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
-	importPath := response.Data["importPath"].(map[string]any)
+	importPath := response.Data["import_path"].(map[string]any)
 	importID := int(importPath["id"].(float64))
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/import-paths", nil)

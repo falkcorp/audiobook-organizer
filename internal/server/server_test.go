@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -584,7 +584,7 @@ func TestListImportPaths(t *testing.T) {
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
-	assert.NotNil(t, response.Data["importPaths"])
+	assert.NotNil(t, response.Data["import_paths"])
 }
 
 // TestGetOperationStatus tests getting operation status

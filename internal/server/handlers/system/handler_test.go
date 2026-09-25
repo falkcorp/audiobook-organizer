@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -716,7 +716,7 @@ func TestGetDashboard_OK(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, float64(3), resp["data"].(map[string]any)["totalBooks"])
+	assert.Equal(t, float64(3), resp["data"].(map[string]any)["total_books"])
 }
 
 func TestGetDashboard_StatsError(t *testing.T) {
