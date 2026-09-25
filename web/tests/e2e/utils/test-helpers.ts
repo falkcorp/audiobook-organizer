@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.18.2
+// version: 2.19.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-09-14
+// last-edited: 2026-09-25
 
 import { Page } from '@playwright/test';
 
@@ -770,8 +770,9 @@ export async function setupMockApiRoutes(
 
     // Import paths
     if (pathname === '/api/v1/import-paths' && method === 'GET') {
-      // api.getImportPaths reads `body.data.importPaths`.
-      const importPaths = { importPaths: mockState.importPaths };
+      // api.getImportPaths reads `body.data.import_paths` (2026-09-25
+      // snake_case naming sweep; the wire key used to be camelCase).
+      const importPaths = { import_paths: mockState.importPaths };
       return route.fulfill(
         jsonResponse({ ...importPaths, data: importPaths })
       );
@@ -792,9 +793,9 @@ export async function setupMockApiRoutes(
         book_count: 0,
       };
       mockState.importPaths.push(newPath);
-      // api.addImportPath reads `body.data.importPath ?? body.data`.
+      // api.addImportPath reads `body.data.import_path ?? body.data`.
       return route.fulfill(
-        jsonResponse({ ...newPath, data: { importPath: newPath } }, 201)
+        jsonResponse({ ...newPath, data: { import_path: newPath } }, 201)
       );
     }
 
