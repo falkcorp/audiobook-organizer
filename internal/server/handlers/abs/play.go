@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
 // last-edited: 2026-09-25
 
@@ -270,7 +270,7 @@ func (h *Handler) playSessionDTO(s *playSession, v *itemView, req *playRequest, 
 		BookID:   v.SyncID,
 		Chapters: chapterDTOs(v.Chapters),
 		// A cover PATH, not a URL: the client builds the URL from the item id.
-		CoverPath:     h.coverPath(v.Book.ID),
+		CoverPath:     h.coverPath(v.Book),
 		CurrentTime:   currentTime,
 		Date:          s.StartedAt.Format("2006-01-02"),
 		DayOfWeek:     s.StartedAt.Weekday().String(),
