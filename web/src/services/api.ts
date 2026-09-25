@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.122.0
+// version: 2.123.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-25
 
@@ -6691,8 +6691,8 @@ export async function runMaintenanceJob(
 }
 
 export async function startOptimize(): Promise<{ operation_id: string }> {
-  return wrapTrigger('library.optimize', async () => {
-    const { id } = await triggerOp('library.optimize', {}, 'Failed to start optimize operation');
+  return wrapTrigger('maintenance.library-optimize', async () => {
+    const { id } = await triggerOp('maintenance.library-optimize', {}, 'Failed to start optimize operation');
     return { operation_id: id };
   });
 }

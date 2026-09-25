@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/plugin.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 
 // Package itunes is the UOS plugin for iTunes/Music library operations.
 // It wraps the internal iTunes service and registers OperationDefs through
@@ -42,7 +42,7 @@ func (p *Plugin) Name() string { return "iTunes/Music Library" }
 // Version implements sdk.Plugin.
 func (p *Plugin) Version() string { return "1.0.0" }
 
-// registeredDefs is the whitelist of OperationDefs this plugin puts into the
+// OperationDefs is the whitelist of OperationDefs this plugin puts into the
 // registry.
 //
 // It is a whitelist, not "everything in this package", because registering a
@@ -64,7 +64,10 @@ func (p *Plugin) Version() string { return "1.0.0" }
 //
 // Split out of Register so the whitelist can be asserted in a test without an
 // enabled Service (Enabled() reads an unexported deps.Config).
-func (p *Plugin) registeredDefs() []sdk.OperationDef {
+//
+// Exported as OperationDefs so the op-ID ledger guard in internal/server can
+// enumerate these IDs without an enabled Service.
+func (p *Plugin) OperationDefs() []sdk.OperationDef {
 	return []sdk.OperationDef{
 		// EXCLUDED, all stubs whose real implementation lives in internal/server:
 		//   syncDef           -> server.RegisterITunesSyncOp (Importer.Sync)
@@ -90,7 +93,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		return nil
 	}
 
-	for _, def := range p.registeredDefs() {
+	for _, def := range p.OperationDefs() {
 		if err := r.RegisterOp(def); err != nil {
 			return fmt.Errorf("register %s: %w", def.ID, err)
 		}
