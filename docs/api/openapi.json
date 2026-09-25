@@ -4802,7 +4802,7 @@
         }
       ],
       "post": {
-        "operationId": "handleSetPosition",
+        "operationId": "handleSetPositionBooksAlias",
         "summary": "Set Position",
         "description": "Deprecated alias for POST /audiobooks/{id}/position. Kept for backward compatibility.",
         "deprecated": true,
@@ -4826,7 +4826,7 @@
         }
       },
       "get": {
-        "operationId": "handleGetPosition",
+        "operationId": "handleGetPositionBooksAlias",
         "summary": "Get Position",
         "description": "Deprecated alias for GET /audiobooks/{id}/position. Kept for backward compatibility.",
         "deprecated": true,
@@ -4898,7 +4898,7 @@
         }
       ],
       "get": {
-        "operationId": "handleGetBookState",
+        "operationId": "handleGetBookStateBooksAlias",
         "summary": "Get Book State",
         "description": "Deprecated alias for GET /audiobooks/{id}/state. Kept for backward compatibility.",
         "deprecated": true,
@@ -4992,7 +4992,7 @@
         }
       ],
       "patch": {
-        "operationId": "handleSetBookStatus",
+        "operationId": "handleSetBookStatusBooksAlias",
         "summary": "Set Book Status",
         "description": "Deprecated alias for PATCH /audiobooks/{id}/status. Kept for backward compatibility.",
         "deprecated": true,
@@ -5016,7 +5016,7 @@
         }
       },
       "delete": {
-        "operationId": "handleClearBookStatus",
+        "operationId": "handleClearBookStatusBooksAlias",
         "summary": "Clear Book Status",
         "description": "Deprecated alias for DELETE /audiobooks/{id}/status. Kept for backward compatibility.",
         "deprecated": true,
@@ -5110,7 +5110,7 @@
         }
       ],
       "delete": {
-        "operationId": "handleTrashVersion",
+        "operationId": "handleTrashVersionBooksAlias",
         "summary": "Trash Version",
         "description": "Deprecated alias for DELETE /audiobooks/{id}/versions/{vid}. Kept for backward compatibility.",
         "deprecated": true,
@@ -5208,7 +5208,7 @@
         }
       ],
       "post": {
-        "operationId": "handlePurgeVersion",
+        "operationId": "handlePurgeVersionBooksAlias",
         "summary": "Purge Version",
         "description": "Deprecated alias for POST /audiobooks/{id}/versions/{vid}/purge-now. Kept for backward compatibility.",
         "deprecated": true,
@@ -5306,7 +5306,7 @@
         }
       ],
       "post": {
-        "operationId": "handleRestoreVersion",
+        "operationId": "handleRestoreVersionBooksAlias",
         "summary": "Restore Version",
         "description": "Deprecated alias for POST /audiobooks/{id}/versions/{vid}/restore. Kept for backward compatibility.",
         "deprecated": true,
