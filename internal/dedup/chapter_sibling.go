@@ -1,5 +1,5 @@
 // file: internal/dedup/chapter_sibling.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c1d4e7a2-9b35-4f80-8e16-2a7c0d5b9f43
 // last-edited: 2026-09-25
 
@@ -24,8 +24,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 
 // chapterDirNameRe matches a chapter subdir basename like "Cage of Souls - 15":
@@ -73,11 +75,64 @@ func sameMultiFileBook(a, b *database.Book) bool {
 	if a.FilePath == "" || b.FilePath == "" {
 		return false
 	}
-	if filepath.Clean(a.FilePath) == filepath.Clean(b.FilePath) {
+	if SamePathPair(a, b) {
 		return false
 	}
 	if filepath.Dir(a.FilePath) == filepath.Dir(b.FilePath) {
 		return true
 	}
 	return chapterSiblings(a.FilePath, b.FilePath)
+}
+
+// SamePathPair reports whether a and b are two distinct book rows that
+// resolve to the SAME file-system path once cleaned (CHAPTER-SUBFOLDER-NN-ROWS,
+// 2026-09-25). sameMultiFileBook stopped suppressing such pairs on purpose —
+// they are a real duplicate shape, not chapters of one book — which means
+// they now reach every automated scoring/merge pass just like any other
+// candidate pair.
+//
+// Owner decision (2026-09-25): a same-path pair goes to the REVIEW QUEUE
+// ONLY. No automated path may merge, link, or resolve it — only a human
+// looking at the pair may decide. Every automated merge/auto-resolve/
+// auto-link/bulk-merge site must call this and skip the pair when it
+// reports true; every candidate-emitting site should tag the pair (e.g.
+// "same_path" in its reason/evidence) so the review UI can explain why the
+// pair is flagged. Emitting the candidate itself is intentional and must
+// NOT be skipped — only automated resolution of it.
+func SamePathPair(a, b *database.Book) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a.FilePath == "" || b.FilePath == "" {
+		return false
+	}
+	if a.ID != "" && b.ID != "" && a.ID == b.ID {
+		return false
+	}
+	return filepath.Clean(a.FilePath) == filepath.Clean(b.FilePath)
+}
+
+// samePathEvidence is the human-readable string every same_path signal /
+// candidate note carries, so grepping the review UI or logs for one string
+// finds every emitter that tagged this pair shape.
+const samePathEvidence = "same_path: two book rows resolve to the same cleaned file path — review queue only, no automated merge"
+
+// samePathScoreBreakdown builds a minimal UnifiedDedupScore carrying only the
+// non-scoring SigSamePath signal, for candidate-emitting call sites (like
+// upsertExactCandidate) that don't otherwise run the pair through
+// unified.ComposeScore. It never awards a Band — Confidence 0 and no
+// configured boost score to 0, same as an empty signal set — so this is
+// purely a UI/audit tag, not a scoring shortcut.
+func samePathScoreBreakdown(a, b *database.Book) *unified.UnifiedDedupScore {
+	return &unified.UnifiedDedupScore{
+		Pair: canonicalPairIDs(a.ID, b.ID),
+		Signals: []unified.Signal{{
+			Kind:       unified.SigSamePath,
+			Raw:        1,
+			Confidence: 0,
+			Evidence:   samePathEvidence,
+		}},
+		Formula:    unified.FormulaVersion,
+		ComputedAt: time.Now().UTC(),
+	}
 }
