@@ -867,7 +867,9 @@ func (h *Handler) ListDedupCandidateSeries(c *gin.Context) {
 // Cross-series candidates (one side in this series, the other
 // somewhere else) are deliberately untouched — the series filter is
 // a scope, not a selector. If the user wants those pairs linked, they
-// can use the regular Link Filtered action.
+// can use the regular "Merge Filtered" action (DedupEmbeddingTab.tsx's UI
+// label is unchanged by this rename — only the route/handler/client-function
+// names moved).
 //
 // Renamed from MergeDedupCandidateSeries (naming-audit class "merge vs link
 // verbs", docs/audits/2026-09-25-interface-naming-consistency.md class 2).
@@ -1038,23 +1040,23 @@ func (h *Handler) GetDedupStats(c *gin.Context) {
 // names are unchanged in this pass), and failed candidates.
 //
 // Filter parity with the list endpoint is a SAFETY property, not a
-// convenience. The UI's bulk control is labelled "link everything matching
-// this filter", so any filter the reviewer can apply to the list and cannot
-// send here silently widens a destructive action to a larger set than the one
-// on screen. band was exactly that gap: the band bar is the dedup UI's primary
-// filter, so narrowing to REVIEW and pressing the button linked every pending
-// book candidate in the library. Anything added to listDedupCandidates'
-// filters belongs here too, or the caller must be refused.
+// convenience. The UI's bulk control is labelled "Merge Filtered" (the
+// button copy is unchanged by this rename — only the route/handler/
+// client-function names moved), so any filter the reviewer can apply to the
+// list and cannot send here silently widens a destructive action to a
+// larger set than the one on screen. band was exactly that gap: the band
+// bar is the dedup UI's primary filter, so narrowing to REVIEW and pressing
+// the button linked every pending book candidate in the library. Anything
+// added to listDedupCandidates' filters belongs here too, or the caller
+// must be refused.
 //
-// The endpoint is intended for the "Link Filtered" bulk action in the
+// The endpoint is intended for the "Merge Filtered" bulk action in the
 // Embedding Dedup UI. It only operates on book candidates; author
 // candidates are skipped (and counted as failed with a reason) since
 // they're merged through a different service.
 //
 // Safety: caller should confirm with the user before invoking, because
-// this soft-deletes the losing book rows and is not trivially reversible
-// from the UI (the undo journal covers it, but there is no confirmation
-// step here).
+// this is destructive and irreversible.
 //
 // Renamed from BulkMergeDedupCandidates (naming-audit class "merge vs link
 // verbs", docs/audits/2026-09-25-interface-naming-consistency.md class 2):
