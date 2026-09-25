@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.28.0
+# version: 2.29.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-09-22
+# last-edited: 2026-09-25
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -621,7 +621,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck sdkguard bench-check fmt-check test-all-short coverage-check-short
+ci: mocks-check staticcheck sdkguard bench-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet
 	@echo "✅ All CI checks passed!"
 
 ## build-mtls-bridge: Build the mTLS bridge binary (macOS)
@@ -727,6 +727,9 @@ lint-errcheck: ## Run the Wave 0 errcheck config (exclusions applied)
 
 lint-errcheck-full: ## Same, with a count — use this to verify a new exclusion actually matched
 	@golangci-lint run --enable-only errcheck ./... 2>&1 | tail -3
+
+lint-errcheck-ratchet: ## Ratchet gate: fails if errcheck findings went up (or down without lowering .errcheck-baseline)
+	@bash scripts/check-errcheck-ratchet.sh
 
 lint-width: ## Interface-width gate (interfacebloat + nolintlint), same selector CI uses
 	golangci-lint run --enable-only interfacebloat,nolintlint ./...
