@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-09-25
 
@@ -76,6 +76,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -129,8 +130,17 @@ type durationReextractParams struct {
 	// BookIDs, when non-empty, limits the run to exactly these books (read by
 	// ID, no library walk) — the one-off repair of a single book that reads 0
 	// in ABS. Accepted as book_ids too.
-	BookIDs      []string `json:"bookIds,omitempty"`
-	BookIDsSnake []string `json:"book_ids,omitempty"`
+	BookIDs []string `json:"bookIds,omitempty"`
+	// ZeroRowsOnly is the narrow repair for books that read "0" in ABS: only
+	// books ABS lists (primary + organized) are examined, only file rows whose
+	// stored Duration is <= 0 are written, and a book whose rows span more than
+	// one directory is skipped (counted as multi-dir) — those carry duplicate
+	// rows (iTunes + library + old chapter files), and summing them after the
+	// write would inflate the book's total. Measured 2026-09-25: the full run
+	// would have taken "Awaken Online: Flame" from 17.6 h to 43.7 h.
+	ZeroRowsOnly      bool     `json:"zeroRowsOnly"`
+	ZeroRowsOnlySnake bool     `json:"zero_rows_only"`
+	BookIDsSnake      []string `json:"book_ids,omitempty"`
 }
 
 // durationChangeThresholds: a book is corrected only when the freshly extracted
@@ -222,6 +232,7 @@ func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 // processBookForReextract and consumed by the collector goroutine, which owns
 // all counter mutations and DB writes.
 type bookProcessResult struct {
+	multiDir      bool // zero-rows mode: rows span >1 directory, skipped
 	book          database.Book
 	segs          []database.BookFile // may be nil for virtual single-file books
 	newDur        int
@@ -253,6 +264,13 @@ type bookProcessResult struct {
 // be written. It never writes to the store. skipBefore is the age threshold:
 // books verified after skipBefore are returned with recentlyVerified=true.
 func processBookForReextract(ctx context.Context, store bookFileLister, book database.Book, skipBefore time.Time) bookProcessResult {
+	return processBookForReextractMode(ctx, store, book, skipBefore, false)
+}
+
+// processBookForReextractMode is processBookForReextract with the ZeroRowsOnly
+// scope: only rows stored as <= 0 become writes, the total alone never does,
+// and a book whose rows span several directories is refused (multiDir).
+func processBookForReextractMode(ctx context.Context, store bookFileLister, book database.Book, skipBefore time.Time, zeroRows bool) bookProcessResult {
 	res := bookProcessResult{book: book}
 	if !skipBefore.IsZero() && book.DurationVerifiedAt != nil && book.DurationVerifiedAt.After(skipBefore) {
 		res.recentlyVerified = true
@@ -261,6 +279,21 @@ func processBookForReextract(ctx context.Context, store bookFileLister, book dat
 
 	segs, _ := store.GetBookFiles(book.ID)
 	res.segs = segs
+	if zeroRows {
+		dirs := map[string]bool{}
+		hasZero := false
+		for i := range segs {
+			dirs[filepath.Dir(segs[i].FilePath)] = true
+			hasZero = hasZero || segs[i].Duration <= 0
+		}
+		if !hasZero {
+			return res // nothing stored as 0: out of scope
+		}
+		if len(dirs) > 1 {
+			res.multiDir = true
+			return res
+		}
+	}
 
 	var (
 		newDur      int
@@ -330,7 +363,7 @@ func processBookForReextract(ctx context.Context, store bookFileLister, book dat
 				continue
 			}
 			newDur += segDur
-			if durationDiffMeaningful(f.Duration, segDur) {
+			if durationDiffMeaningful(f.Duration, segDur) && (!zeroRows || f.Duration <= 0) {
 				nf := f
 				nf.Duration = segDur
 				changedBFs = append(changedBFs, nf)
@@ -373,6 +406,9 @@ func processBookForReextract(ctx context.Context, store bookFileLister, book dat
 	oldDur := 0
 	if book.Duration != nil {
 		oldDur = *book.Duration
+	}
+	if zeroRows && len(changedBFs) == 0 {
+		return res // the total alone is never written in zero-rows mode
 	}
 	if !durationDiffMeaningful(oldDur, newDur) && len(changedBFs) == 0 {
 		return res // already correct
@@ -431,8 +467,11 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		params.Workers = 16
 	}
 	// Compute skip threshold once; zero SkipAgeDays or Force disables age skipping.
+	// Zero-rows mode ignores the verified stamp: a stamp written before
+	// rescans zeroed the rows (fixed by 196f83c55) is exactly what hid them.
+	zeroRows := params.ZeroRowsOnly || params.ZeroRowsOnlySnake
 	var skipBefore time.Time
-	if !params.Force && params.SkipAgeDays > 0 {
+	if !params.Force && !zeroRows && params.SkipAgeDays > 0 {
 		skipBefore = time.Now().AddDate(0, 0, -params.SkipAgeDays)
 	}
 
@@ -467,6 +506,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		estimated      int
 		readErr        int
 		noPath         int
+		multiDir       int
 		fpBooks        int
 		ffprobeBooks   int
 		storedDurBooks int
@@ -509,7 +549,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	for i := 0; i < params.Workers; i++ {
 		wg.Go(func() {
 			for book := range jobCh {
-				res := processBookForReextract(ctx, store, book, skipBefore)
+				res := processBookForReextractMode(ctx, store, book, skipBefore, zeroRows)
 				select {
 				case resultCh <- res:
 				case <-ctx.Done():
@@ -534,6 +574,10 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		visit := func(book database.Book) error {
 			if params.Limit > 0 && dispatched >= params.Limit {
 				return errLimitReached
+			}
+			if zeroRows && !(book.IsPrimaryVersion != nil && *book.IsPrimaryVersion &&
+				book.LibraryState != nil && *book.LibraryState == "organized") {
+				return nil // zero-rows mode: only books ABS lists
 			}
 			if params.OnlyMissingDuration && book.Duration != nil && *book.Duration > 0 {
 				return nil // skip: duration already known, out of scope for this run
@@ -581,6 +625,10 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		}
 		if res.noPath {
 			noPath++
+			continue
+		}
+		if res.multiDir {
+			multiDir++
 			continue
 		}
 		// readErr / estimated are now PER-SEGMENT facts, not verdicts on the
@@ -751,8 +799,8 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		verb = fmt.Sprintf("corrected %d;", written)
 	}
 	summary := fmt.Sprintf(
-		"examined=%d eligible=%d (from-fingerprint=%d from-stored=%d from-ffprobe=%d) %s would-change=%d (~2x=%d) ms-corrected-rows=%d incomplete-books=%d estimated-segments=%d read-errors=%d no-filepath=%d | e.g. %s",
-		examined, eligible, fpBooks, storedDurBooks, ffprobeBooks, verb, wouldChange, roughlyDouble, msFixedRows, incomplete, estimated, readErr, noPath,
+		"examined=%d eligible=%d (from-fingerprint=%d from-stored=%d from-ffprobe=%d) %s would-change=%d (~2x=%d) ms-corrected-rows=%d incomplete-books=%d estimated-segments=%d read-errors=%d no-filepath=%d multi-dir-skipped=%d | e.g. %s",
+		examined, eligible, fpBooks, storedDurBooks, ffprobeBooks, verb, wouldChange, roughlyDouble, msFixedRows, incomplete, estimated, readErr, noPath, multiDir,
 		strings.Join(examples, ", "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	total := totalBooks
