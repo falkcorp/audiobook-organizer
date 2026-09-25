@@ -1382,10 +1382,68 @@
         }
       }
     },
+    "/audiobooks/duplicates/reject": {
+      "post": {
+        "operationId": "rejectBookDuplicateGroup",
+        "summary": "reject Book Duplicate Group",
+        "tags": [
+          "audiobooks"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/audiobooks/duplicates/dismiss": {
       "post": {
         "operationId": "dismissBookDuplicateGroup",
         "summary": "dismiss Book Duplicate Group",
+        "tags": [
+          "audiobooks"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        },
+        "deprecated": true,
+        "description": "Deprecated alias. Naming-audit class \"merge vs link verbs\" / \"dismiss vs reject vs undo\" (docs/audits/2026-09-25-interface-naming-consistency.md classes 2/3): use /audiobooks/duplicates/reject instead. This path remains registered and functional."
+      }
+    },
+    "/audiobooks/duplicates/link": {
+      "post": {
+        "operationId": "linkBookDuplicatesAsVersions",
+        "summary": "link Book Duplicates As Versions",
         "tags": [
           "audiobooks"
         ],
@@ -1435,7 +1493,9 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "deprecated": true,
+        "description": "Deprecated alias. Naming-audit class \"merge vs link verbs\" / \"dismiss vs reject vs undo\" (docs/audits/2026-09-25-interface-naming-consistency.md classes 2/3): use /audiobooks/duplicates/link instead. This path remains registered and functional."
       }
     },
     "/audiobooks/duplicates/scan": {
@@ -1494,6 +1554,34 @@
         }
       }
     },
+    "/audiobooks/link": {
+      "post": {
+        "operationId": "linkBooks",
+        "summary": "link Books",
+        "tags": [
+          "audiobooks"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/audiobooks/merge": {
       "post": {
         "operationId": "mergeBooks",
@@ -1519,7 +1607,9 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "deprecated": true,
+        "description": "Deprecated alias. Naming-audit class \"merge vs link verbs\" / \"dismiss vs reject vs undo\" (docs/audits/2026-09-25-interface-naming-consistency.md classes 2/3): use /audiobooks/link instead. This path remains registered and functional."
       }
     },
     "/audiobooks/purge-soft-deleted": {
@@ -5182,10 +5272,68 @@
         }
       }
     },
+    "/dedup/candidates/bulk-link": {
+      "post": {
+        "operationId": "bulkLinkDedupCandidates",
+        "summary": "bulk Link Dedup Candidates",
+        "tags": [
+          "dedup"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/dedup/candidates/bulk-merge": {
       "post": {
         "operationId": "bulkMergeDedupCandidates",
         "summary": "bulk Merge Dedup Candidates",
+        "tags": [
+          "dedup"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        },
+        "deprecated": true,
+        "description": "Deprecated alias. Naming-audit class \"merge vs link verbs\" / \"dismiss vs reject vs undo\" (docs/audits/2026-09-25-interface-naming-consistency.md classes 2/3): use /dedup/candidates/bulk-link instead. This path remains registered and functional."
+      }
+    },
+    "/dedup/candidates/reject-cluster": {
+      "post": {
+        "operationId": "rejectDedupCluster",
+        "summary": "reject Dedup Cluster",
         "tags": [
           "dedup"
         ],
@@ -5235,13 +5383,43 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "deprecated": true,
+        "description": "Deprecated alias. Naming-audit class \"merge vs link verbs\" / \"dismiss vs reject vs undo\" (docs/audits/2026-09-25-interface-naming-consistency.md classes 2/3): use /dedup/candidates/reject-cluster instead. This path remains registered and functional."
       }
     },
     "/dedup/candidates/export": {
       "get": {
         "operationId": "exportDedupCandidates",
         "summary": "export Dedup Candidates",
+        "tags": [
+          "dedup"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/dedup/candidates/link-cluster": {
+      "post": {
+        "operationId": "linkDedupCluster",
+        "summary": "link Dedup Cluster",
         "tags": [
           "dedup"
         ],
@@ -5291,6 +5469,36 @@
           "404": {
             "description": "Not found"
           }
+        },
+        "deprecated": true,
+        "description": "Deprecated alias. Naming-audit class \"merge vs link verbs\" / \"dismiss vs reject vs undo\" (docs/audits/2026-09-25-interface-naming-consistency.md classes 2/3): use /dedup/candidates/link-cluster instead. This path remains registered and functional."
+      }
+    },
+    "/dedup/candidates/link-series": {
+      "post": {
+        "operationId": "linkDedupCandidateSeries",
+        "summary": "link Dedup Candidate Series",
+        "tags": [
+          "dedup"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
         }
       }
     },
@@ -5319,7 +5527,9 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "deprecated": true,
+        "description": "Deprecated alias. Naming-audit class \"merge vs link verbs\" / \"dismiss vs reject vs undo\" (docs/audits/2026-09-25-interface-naming-consistency.md classes 2/3): use /dedup/candidates/link-series instead. This path remains registered and functional."
       }
     },
     "/dedup/candidates/remove-from-cluster": {
@@ -5378,6 +5588,45 @@
         }
       }
     },
+    "/dedup/candidates/{id}/reject": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "rejectDedupCandidate",
+        "summary": "reject Dedup Candidate",
+        "tags": [
+          "dedup"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/dedup/candidates/{id}/dismiss": {
       "parameters": [
         {
@@ -5393,6 +5642,47 @@
       "post": {
         "operationId": "dismissDedupCandidate",
         "summary": "dismiss Dedup Candidate",
+        "tags": [
+          "dedup"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        },
+        "deprecated": true,
+        "description": "Deprecated alias. Naming-audit class \"merge vs link verbs\" / \"dismiss vs reject vs undo\" (docs/audits/2026-09-25-interface-naming-consistency.md classes 2/3): use /dedup/candidates/{id}/reject instead. This path remains registered and functional."
+      }
+    },
+    "/dedup/candidates/{id}/link": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "linkDedupCandidate",
+        "summary": "link Dedup Candidate",
         "tags": [
           "dedup"
         ],
@@ -5453,7 +5743,9 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "deprecated": true,
+        "description": "Deprecated alias. Naming-audit class \"merge vs link verbs\" / \"dismiss vs reject vs undo\" (docs/audits/2026-09-25-interface-naming-consistency.md classes 2/3): use /dedup/candidates/{id}/link instead. This path remains registered and functional."
       }
     },
     "/dedup/refresh": {

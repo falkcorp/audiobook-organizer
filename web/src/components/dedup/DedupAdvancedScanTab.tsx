@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupAdvancedScanTab.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
@@ -87,7 +87,7 @@ export function BookDedupScanTab() {
     setError(null);
     try {
       const bookIds = group.books.map((b) => b.id);
-      const result = await api.mergeBookDuplicatesAsVersions(bookIds);
+      const result = await api.linkBookDuplicatesAsVersions(bookIds);
       setMergeSuccess(result.message);
       setGroups((prev) => prev.filter((g) => g.group_key !== group.group_key));
     } catch (err) {
@@ -98,7 +98,7 @@ export function BookDedupScanTab() {
   const handleDismiss = async (group: BookDedupGroup) => {
     setError(null);
     try {
-      await api.dismissBookDuplicateGroup(group.group_key);
+      await api.rejectBookDuplicateGroup(group.group_key);
       setGroups((prev) => prev.filter((g) => g.group_key !== group.group_key));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Dismiss failed');
