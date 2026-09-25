@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-25
 
@@ -9,7 +9,7 @@ package logger
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
 	slogRatchetFileCeiling = 320
-	slogRatchetCallCeiling = 1878
+	slogRatchetCallCeiling = 1876
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -50,7 +50,7 @@ var slogRatchet = map[string]int{
 	"internal/audiobooks/service.go":                             1,
 	"internal/audiobooks/service_filtering.go":                   3,
 	"internal/audiobooks/service_mutation.go":                    14,
-	"internal/audiobooks/service_query.go":                       16,
+	"internal/audiobooks/service_query.go":                       14,
 	"internal/audiobooks/service_single.go":                      8,
 	"internal/audiobooks/service_tags.go":                        2,
 	"internal/audioutil/duration.go":                             1,
