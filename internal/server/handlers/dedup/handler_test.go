@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
 // last-edited: 2026-09-25
 
@@ -481,12 +481,12 @@ func TestBulkMergeDedupCandidates_ScopedByBand(t *testing.T) {
 }
 
 // Two book rows at the same cleaned path (CHAPTER-SUBFOLDER-NN-ROWS,
-// 2026-09-25) are review-queue-only by owner decision. BulkMergeDedupCandidates
+// 2026-09-25) are review-queue-only by owner decision. BulkLinkDedupCandidates
 // is exactly the "bulk-merge without a human-selected band" shape the owner
 // worried about (an empty body merges every pending book candidate), so it
 // must refuse this pair — not merge it, not silently drop it, report it as a
 // failure — while a normal, distinct-path pair in the same batch still merges.
-func TestBulkMergeDedupCandidates_SamePathPairRefused(t *testing.T) {
+func TestBulkLinkDedupCandidates_SamePathPairRefused(t *testing.T) {
 	h, d := newHandler(t)
 	path := "/lib/Author/Book/Book - NN/32.m4b"
 	samePathID, spA, spB := insertCandidate(t, d.es, "samepath-a", "samepath-b")
@@ -504,7 +504,7 @@ func TestBulkMergeDedupCandidates_SamePathPairRefused(t *testing.T) {
 	d.engine.EXPECT().MergeJournaled(normalID, nA, nB, "", mock.Anything).
 		Return(&merge.Result{PrimaryID: nA}, "dedup:automerge:k", nil).Once()
 
-	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-merge", map[string]any{}, nil)
+	w := doReq(t, h.BulkLinkDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-link", map[string]any{}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
 	}
