@@ -1116,6 +1116,9 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * `GET /search/:search_id` until it reports done and then re-issues the original request,
  * which is then a cache hit. The caller's promise stays pending throughout, which is what
  * keeps the Library's loading spinner up. `onPending` reports progress while it waits.
+ *
+ * The server answers 202 only to a request that asks for it with `Prefer: respond-async`
+ * (RFC 7240), which this sends; any other client simply waits for its result.
  */
 async function fetchListWithSearchPoll(
   url: string,
@@ -1124,7 +1127,7 @@ async function fetchListWithSearchPoll(
 ): Promise<Response> {
   const deadline = Date.now() + SEARCH_POLL_TIMEOUT_MS;
   for (;;) {
-    const response = await apiFetch(url, { signal });
+    const response = await apiFetch(url, { signal, headers: { Prefer: 'respond-async' } });
     if (response.status !== 202) {
       return response;
     }
@@ -1280,37 +1283,65 @@ export async function getBook(id: string): Promise<Book> {
 /** Page size the quick search walks its results with. */
 export const SEARCH_PAGE_SIZE = 50;
 
+/** How many times the quick search restarts a walk whose result changed under it. */
+export const SEARCH_WALK_RESTARTS = 2;
+
 /**
  * Quick search: every primary-version match for `query`, in relevance order, fetched
  * SEARCH_PAGE_SIZE at a time. It used to stop at one page of 50. `maxResults` caps it for
  * pickers that only show a few; the default is every match. Each page after the first is a
  * slice of the server's cached result, so walking a long list costs one search.
+ *
+ * The server's list can change between two page fetches (a scan or an edit patches it), which
+ * would shift every later page by the number of books inserted or removed ahead of it: a
+ * repeated book, or a skipped one. So the walk never keeps a book twice, and when the match
+ * count changes mid-walk it starts over (at most SEARCH_WALK_RESTARTS times; after that it
+ * returns the de-duplicated walk it has).
  */
 export async function searchBooks(
   query: string,
   maxResults = Number.POSITIVE_INFINITY,
   showFailed = false
 ): Promise<Book[]> {
-  const out: Book[] = [];
-  let offset = 0;
+  let restarts = 0;
   for (;;) {
-    const pageSize = Math.min(SEARCH_PAGE_SIZE, maxResults - out.length);
-    if (pageSize <= 0) break;
-    let url = `${API_BASE}/audiobooks?search=${encodeURIComponent(query)}&limit=${pageSize}&offset=${offset}&is_primary_version=true`;
-    if (showFailed) url += '&show_quarantined=true';
-    const response = await fetchListWithSearchPoll(url);
-    if (!response.ok) {
-      throw await buildApiError(response, 'Failed to search books');
+    const out: Book[] = [];
+    const seen = new Set<string>();
+    let offset = 0;
+    let firstCount: number | undefined;
+    let changed = false;
+    for (;;) {
+      const pageSize = Math.min(SEARCH_PAGE_SIZE, maxResults - out.length);
+      if (pageSize <= 0) break;
+      let url = `${API_BASE}/audiobooks?search=${encodeURIComponent(query)}&limit=${pageSize}&offset=${offset}&is_primary_version=true`;
+      if (showFailed) url += '&show_quarantined=true';
+      const response = await fetchListWithSearchPoll(url);
+      if (!response.ok) {
+        throw await buildApiError(response, 'Failed to search books');
+      }
+      const body = await response.json();
+      const data = body.data ?? body;
+      const items: Book[] = data.items || [];
+      const count: number = typeof data.count === 'number' ? data.count : 0;
+      if (firstCount === undefined) {
+        firstCount = count;
+      } else if (count !== firstCount) {
+        changed = true;
+      }
+      for (const item of items) {
+        if (!seen.has(item.id)) {
+          seen.add(item.id);
+          out.push(item);
+        }
+      }
+      offset += pageSize;
+      if (changed || items.length === 0 || offset >= count) break;
     }
-    const body = await response.json();
-    const data = body.data ?? body;
-    const items: Book[] = data.items || [];
-    out.push(...items);
-    offset += pageSize;
-    const count: number = typeof data.count === 'number' ? data.count : 0;
-    if (items.length === 0 || offset >= count) break;
+    if (!changed || restarts >= SEARCH_WALK_RESTARTS) {
+      return out.slice(0, Number.isFinite(maxResults) ? maxResults : out.length);
+    }
+    restarts++;
   }
-  return out;
 }
 
 /**

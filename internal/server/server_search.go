@@ -1,5 +1,5 @@
 // file: internal/server/server_search.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
 // last-edited: 2026-09-14
 
@@ -252,6 +252,13 @@ func (s *Server) indexBookChunk(store searchBackfillStore, books []database.Book
 	}
 	err = s.searchIndex.IndexBookBatch(docs)
 	if err == nil {
+		ids := make([]string, len(docs))
+		for i := range docs {
+			ids[i] = docs[i].BookID
+		}
+		// Record the commit for the search result cache (see
+		// recordIndexCommit): every Bleve write goes through it.
+		s.recordIndexCommit(ids)
 		return int64(len(docs))
 	}
 	slog.Warn("search backfill batch index failed; retrying chunk per book",
@@ -262,6 +269,7 @@ func (s *Server) indexBookChunk(store searchBackfillStore, books []database.Book
 			slog.Warn("search backfill index", "bookID", docs[i].BookID, "err", err)
 			continue
 		}
+		s.recordIndexCommit([]string{docs[i].BookID})
 		ok++
 	}
 	return ok
@@ -280,7 +288,11 @@ func (s *Server) IndexBookByID(bookID string) error {
 	if err != nil || book == nil {
 		return err
 	}
-	return s.searchIndex.IndexBook(search.BookToDoc(s.Ops(), book))
+	if err := s.searchIndex.IndexBook(search.BookToDoc(s.Ops(), book)); err != nil {
+		return err
+	}
+	s.recordIndexCommit([]string{bookID})
+	return nil
 }
 
 // DeleteIndexedBook removes a book from the search index. Called
@@ -290,7 +302,11 @@ func (s *Server) DeleteIndexedBook(bookID string) error {
 	if s.searchIndex == nil || bookID == "" {
 		return nil
 	}
-	return s.searchIndex.DeleteBook(bookID)
+	if err := s.searchIndex.DeleteBook(bookID); err != nil {
+		return err
+	}
+	s.recordIndexCommit([]string{bookID})
+	return nil
 }
 
 func (h *serverScanHooks) OnBookScanned(bookID, title string) {

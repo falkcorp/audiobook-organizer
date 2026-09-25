@@ -1,5 +1,5 @@
 // file: internal/server/search_coverage.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: ee9cc3d9-3925-4f72-af8a-e9f25a943fb9
 // last-edited: 2026-09-25
 //
@@ -174,6 +174,10 @@ func (s *Server) reconcileSearchIndexCoverage() {
 			slog.Warn("search coverage: failed to delete stale doc", "bookID", chunk[0], "err", err)
 			continue
 		}
+		// Every Bleve write is a change the search result cache must see:
+		// an entry built while this stale doc was still indexed would keep
+		// its ID until that book was written again.
+		s.recordIndexCommit(chunk)
 		deleted += len(chunk)
 	}
 	s.searchCoverageSeeded.Store(true)

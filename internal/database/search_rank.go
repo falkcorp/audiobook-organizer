@@ -1,5 +1,5 @@
 // file: internal/database/search_rank.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a46bc2cf-3cc2-4402-b32f-c2fba2c7c95c
 // last-edited: 2026-09-25
 
@@ -107,6 +107,15 @@ func SubstringSearchRank(id, title string, narrator *string, authorID *int, auth
 //
 // Strings with no underscore and no double space are returned unchanged
 // without allocating, so the common case costs one scan.
+// SearchQueryKey is the form of a substring-search query that decides its
+// result: strings.ToLower, then searchFold. Two queries with the same key
+// match the same books in the same order on every substring path (memdb scan,
+// disk scan, scoped fallback), so a result cache may share one entry between
+// them; queries with different keys may not share. Nothing is trimmed:
+// searchFold keeps a leading or trailing space, and "rock " does not match
+// "Punk Rock".
+func SearchQueryKey(query string) string { return searchFold(strings.ToLower(query)) }
+
 func searchFold(s string) string {
 	if !strings.Contains(s, "_") && !strings.Contains(s, "  ") {
 		return s
