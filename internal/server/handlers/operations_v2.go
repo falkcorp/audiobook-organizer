@@ -886,6 +886,11 @@ type deprecatedDefIDNoter interface {
 	NoteDeprecatedDefIDUse(given, entry string)
 }
 
+// The production wiring (wire_handlers.go) passes s.opRegistry, a
+// *opsregistry.Registry. Pin that it satisfies the assertion above, so a
+// rename of the method cannot silently turn the timeline_filter count off.
+var _ deprecatedDefIDNoter = (*opsregistry.Registry)(nil)
+
 // canonicalDefID maps a former (renamed) def ID to its canonical ID via the
 // registry's alias table; any other ID, including an unregistered one, is
 // returned unchanged.
