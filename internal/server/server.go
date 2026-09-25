@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.63.0
+// version: 2.64.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package server
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -1401,6 +1402,13 @@ func (server *Server) ensureSingleFileBookFile(book *database.Book) (bool, error
 		FileSize:         info.Size(),
 		TrackNumber:      1,
 	}
+	// The one file IS the book, so book.Duration is this row's duration; with
+	// none, a header read. Never a 0 for a readable file: ABS sums row durations.
+	known := bookfileaudio.Known{SingleFileBook: true}
+	if book.Duration != nil {
+		known.BookDurationSec = *book.Duration
+	}
+	bookfileaudio.EnsureDuration(bf, known, nil)
 	if cerr := server.store.CreateBookFile(bf); cerr != nil {
 		return false, cerr
 	}

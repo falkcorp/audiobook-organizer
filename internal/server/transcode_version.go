@@ -1,7 +1,7 @@
 // file: internal/server/transcode_version.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e2b7c41-3d58-4a16-8f0e-6c1d4a7b2e93
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 package server
 
@@ -13,6 +13,7 @@ import (
 
 	ulid "github.com/oklog/ulid/v2"
 
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -160,6 +161,15 @@ func recordTranscodedVersion(ctx context.Context, store transcodeVersionStore, o
 	if fi, serr := os.Stat(outputPath); serr == nil {
 		bf.FileSize = fi.Size()
 	}
+	// The transcode output is the new book's only file, so its duration is
+	// the book's (copied from the original); failing that, a header read of
+	// the output. Without it the row carried Duration 0 and ABS, summing row
+	// durations, showed the transcoded version as a "0" book.
+	known := bookfileaudio.Known{SingleFileBook: true}
+	if nb.Duration != nil {
+		known.BookDurationSec = *nb.Duration
+	}
+	bookfileaudio.EnsureDuration(bf, known, transcodeLog)
 	if ferr := store.CreateBookFile(bf); ferr != nil {
 		// The output then has no active file, so the rule below keeps it
 		// from the primary; the next scan of its folder adds the row.

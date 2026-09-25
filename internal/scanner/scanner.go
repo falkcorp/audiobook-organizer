@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.106.0
+// version: 1.107.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 package scanner
 
@@ -29,12 +29,14 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
+	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -876,6 +878,12 @@ type Book struct {
 	SegmentHashes    map[string]string // filePath→hash written back by saveBookToDatabase dedup loop
 	LibraryState     string            // If set, overrides the default "imported" state in saveBookToDatabase
 	SourceImportPath string            // Top-level import path this file was discovered in; set by scan_service
+
+	// fileMediaInfo is the media info ProcessFile already read from FilePath
+	// (single-file books only; nil otherwise). createSingleFileBookFile hands
+	// it to the book_file row builder so the row gets the duration and codec
+	// this scan already paid for, instead of Duration 0 and no codec.
+	fileMediaInfo *mediainfo.MediaInfo
 }
 
 // ScanDirectory scans the given directory for audiobook files.
@@ -1650,6 +1658,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 						}
 					}
 					if mi != nil {
+						books[idx].fileMediaInfo = mi
 						if mi.Format != "" {
 							books[idx].Format = "." + strings.TrimPrefix(strings.ToLower(mi.Format), ".")
 						}
@@ -2207,7 +2216,14 @@ func createSingleFileBookFile(book *Book, scanLog logger.Logger) {
 	if len(segs) == 0 {
 		segs = []string{book.FilePath}
 	}
-	createBookFilesForBook(book.FilePath, segs, scanLog, keepFilePath, book.SegmentHashes)
+	// The media info ProcessFile read from book.FilePath is this row's audio:
+	// hand it over so the row is written with the duration and codec already
+	// in hand rather than Duration 0 (the 2026-09-23 "Monster Makers" row).
+	var knownInfo map[string]*mediainfo.MediaInfo
+	if book.fileMediaInfo != nil {
+		knownInfo = map[string]*mediainfo.MediaInfo{book.FilePath: book.fileMediaInfo}
+	}
+	createBookFilesForBookWithAudio(book.FilePath, segs, scanLog, keepFilePath, book.SegmentHashes, knownInfo)
 }
 
 // normalizeToDirectory / keepFilePath name createBookFilesForBook's
@@ -2297,6 +2313,21 @@ const (
 )
 
 func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog logger.Logger, normalizeBookPath bool, knownHashes ...map[string]string) string {
+	var hashes map[string]string
+	if len(knownHashes) > 0 {
+		hashes = knownHashes[0]
+	}
+	return createBookFilesForBookWithAudio(bookFilePath, segmentFiles, scanLog, normalizeBookPath, hashes, nil)
+}
+
+// createBookFilesForBookWithAudio is createBookFilesForBook plus knownInfo:
+// filePath → media info this scan ALREADY read for that file. A row whose file
+// is in knownInfo takes its duration and codec from there (see
+// bookfileaudio.EnsureDuration) instead of being probed again or written with
+// Duration 0. Only single-file books have such a value today: ProcessFile reads
+// the one file; a multi-file book's segments are not read until chapter
+// synthesis, which runs after the rows exist.
+func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string, scanLog logger.Logger, normalizeBookPath bool, knownHashes map[string]string, knownInfo map[string]*mediainfo.MediaInfo) string {
 	if getStore() == nil {
 		return ""
 	}
@@ -2341,11 +2372,7 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		// scanner upsert; unchanged files cost one stat. The rows are not
 		// rebuilt: tag positions were judged at import, and with a nil
 		// segment list the directory glob below could attach other files.
-		var known map[string]string
-		if len(knownHashes) > 0 {
-			known = knownHashes[0]
-		}
-		refreshReplacedSameBookFiles(existing, known, scanLog)
+		refreshReplacedSameBookFiles(existing, knownHashes, scanLog)
 		return ""
 	}
 
@@ -2446,11 +2473,7 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		// per-file "tag wins when present" rule is what let a rip tagged
 		// "track 1" on every chapter import with every file at track 1.
 		// A failed read leaves a zero placement, which refuses the book.
-		var preHash string
-		if len(knownHashes) > 0 && knownHashes[0] != nil {
-			preHash = knownHashes[0][filePath]
-		}
-		placement := readScannedFileTagsAndHash(bf, filePath, preHash, scanLog)
+		placement := readScannedFileTagsAndHash(bf, filePath, knownHashes[filePath], scanLog)
 
 		// The upsert below merges with whatever row already owns this PATH.
 		// This book has no rows of its own (its own rows are handled by
@@ -2459,10 +2482,34 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		// differs, the file was replaced (our own tag writes record the new
 		// digest): probe its real duration and codec so the merge can tell a
 		// re-tag from a different recording; see probeReplacedFileAudio.
-		if statErr == nil && bf.FileHash != "" {
-			if prevHash := storedFileHashAt(filePath, scanLog); prevHash != "" && prevHash != bf.FileHash {
-				probeReplacedFileAudio(bf, filePath, scanLog)
+		var stored *database.BookFile
+		if statErr == nil {
+			stored = storedBookFileAt(filePath, scanLog)
+		}
+		probedReplaced := false
+		if stored != nil && bf.FileHash != "" && stored.FileHash != "" && stored.FileHash != bf.FileHash {
+			probeReplacedFileAudio(bf, filePath, scanLog)
+			probedReplaced = true
+		}
+
+		// A new row must not be written with Duration 0 when the file is
+		// readable: ABS reports a book's duration as the sum of its rows, so a
+		// 0 here shows the book as "0" in the app. Skipped when:
+		//   - the replaced-file probe above already read this file;
+		//   - the stored row at this path holds the SAME bytes and a duration,
+		//     because the merge keeps that stored duration anyway;
+		//   - the file could not be stat'ed (nothing to read).
+		sameStoredWithDuration := stored != nil && stored.Duration > 0 &&
+			bf.FileHash != "" && stored.FileHash == bf.FileHash
+		if statErr == nil && !probedReplaced && !sameStoredWithDuration {
+			known := bookfileaudio.Known{
+				Info:           knownInfo[filePath],
+				SingleFileBook: len(segmentFiles) == 1,
 			}
+			if dbBook.Duration != nil {
+				known.BookDurationSec = *dbBook.Duration
+			}
+			bookfileaudio.EnsureDuration(bf, known, scanLog)
 		}
 
 		bfs = append(bfs, bf)

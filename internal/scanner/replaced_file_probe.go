@@ -1,7 +1,7 @@
 // file: internal/scanner/replaced_file_probe.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b2e9f41-8c37-4d05-a9e1-3f7d2c5b8a64
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package scanner
 
@@ -48,19 +48,18 @@ func probeReplacedFileAudio(bf *database.BookFile, filePath string, scanLog logg
 		logger.SanitizeLogValue(filePath), mi.DurationEstimated)
 }
 
-// storedFileHashAt is the FileHash of the stored row that owns filePath, the
-// row the scanner's upsert will merge with, or "" when there is none. It is a
-// point lookup on the book_file_path index.
-func storedFileHashAt(filePath string, scanLog logger.Logger) string {
+// storedBookFileAt is the stored row that owns filePath, the row the scanner's
+// upsert will merge with, or nil when there is none. It is a point lookup on
+// the book_file_path index. The caller reads its FileHash (was the file
+// replaced?) and its Duration (would the merge keep a stored duration anyway,
+// making a probe wasted work?).
+func storedBookFileAt(filePath string, scanLog logger.Logger) *database.BookFile {
 	row, err := getStore().GetBookFileByPath(filePath)
 	if err != nil {
-		// No stored hash means no probe. The merge then drops audio-derived
-		// data on a changed hash, the safe direction.
+		// No stored row means no replaced-file probe. The merge then drops
+		// audio-derived data on a changed hash, the safe direction.
 		scanLog.Debug("stored book file lookup failed for %s: %v (not probed)", logger.SanitizeLogValue(filePath), err)
-		return ""
+		return nil
 	}
-	if row == nil {
-		return ""
-	}
-	return row.FileHash
+	return row
 }

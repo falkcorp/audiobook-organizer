@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
-// last-edited: 2026-08-24
+// last-edited: 2026-09-25
 
 // Package maintenance — op maintenance.relink-unlinked-books.
 //
@@ -45,6 +45,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -360,10 +361,10 @@ func relinkOne(store folderRelinker, f linkintegrity.Finding) (int, error) {
 		// book owned any row, so there is nothing to match against.
 		bfs := make([]*database.BookFile, 0, len(audio))
 		for i, n := range audio {
-			// Per-file duration is unknown here; leave it 0 and let
-			// maintenance.duration-backfill fill it. Seeding the BOOK's total
-			// onto every track would be actively wrong (it would multiply the
-			// runtime by the track count).
+			// Per-file duration is unknown here, so pass 0 and let
+			// buildBookFileFor read it from the file's header. Seeding the
+			// BOOK's total onto every track would be actively wrong (it would
+			// multiply the runtime by the track count).
 			bfs = append(bfs, buildBookFileFor(b, filepath.Join(f.FilePath, n), 0, i+1))
 		}
 		if err := store.BatchCreateBookFiles(bfs); err != nil {
@@ -406,7 +407,7 @@ func buildBookFileFor(b *database.Book, path string, durationSec, track int) *da
 		slog.Warn("relink: stat failed; row will carry FileSize=0 and understate the book's total",
 			"book_id", b.ID, "path", path, "error", err)
 	}
-	return &database.BookFile{
+	bf := &database.BookFile{
 		BookID:           b.ID,
 		FilePath:         path,
 		OriginalFilename: filepath.Base(path),
@@ -415,6 +416,12 @@ func buildBookFileFor(b *database.Book, path string, durationSec, track int) *da
 		FileSize:         size,
 		Format:           strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), "."),
 	}
+	// No caller-supplied duration (the multi-track batch passes 0): read this
+	// file's header rather than write a readable file with Duration 0, which
+	// ABS, summing row durations, shows as a "0" book. Every caller runs in
+	// a RunItems worker pool, so the probe is not serialized over the library.
+	bookfileaudio.EnsureDuration(bf, bookfileaudio.Known{}, nil)
+	return bf
 }
 
 // sortFindingsByID keeps output deterministic across runs.

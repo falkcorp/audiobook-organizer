@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 package organizer
 
@@ -21,6 +21,7 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -2168,6 +2169,19 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 			}
 			if newBF.FilePath != "" {
 				newBF.ITunesPath = orgSvc.ComputeITunesPath(newBF.FilePath)
+			}
+			// `newBF := bf` copies the source row's Duration, so a source row
+			// created with 0 (the scanner's new-book path did this until
+			// 2026-09-25) handed the 0 to the organized copy, and ABS, which
+			// sums book_file durations, showed the book as "0". Fill it here
+			// from the NEW path: that is the file this row describes from now
+			// on. A single-file book may use book.Duration instead.
+			if newBF.Duration <= 0 && newBF.FilePath != "" {
+				known := bookfileaudio.Known{SingleFileBook: len(bookFiles) == 1}
+				if book.Duration != nil {
+					known.BookDurationSec = *book.Duration
+				}
+				bookfileaudio.EnsureDuration(&newBF, known, log)
 			}
 			newFiles = append(newFiles, &newBF)
 		}
