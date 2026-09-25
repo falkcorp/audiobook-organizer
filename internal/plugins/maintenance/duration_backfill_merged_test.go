@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_merged_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9b41e7c3-2d58-4a06-bf19-6e35c0d7a284
 // last-edited: 2026-09-25
 
@@ -236,29 +236,33 @@ func captureRowWrites(store *database.MockStore) *[]string {
 	return &written
 }
 
-// A book whose rows span its own folder and other folders gets its own-folder
-// zero rows filled (CD2/ subfolder included); the stray zero rows elsewhere
-// are left untouched, because the ABS duration and RecomputeBookAggregates
-// count only the own-folder rows of such a book.
-func TestDurationBackfill_ZeroRowsFillsOwnFolderOnly(t *testing.T) {
+// A book whose rows span its own folder and other folders gets its COUNTED
+// zero rows filled: own-folder rows (CD2/ subfolder included) and an
+// out-of-folder row that is not a copy (a merge's moved row). The
+// out-of-folder copies of a present own-folder row (hash-equal here, one of
+// them in the iTunes tree) are left untouched, because the ABS duration and
+// RecomputeBookAggregates never sum them — and an iTunes COPY does not block
+// the book, since it is not counted.
+func TestDurationBackfill_ZeroRowsFillsCountedRowsOnly(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "own1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "own2", BookID: "b1", FilePath: "/lib/B/CD2/02.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
-		{ID: "own3", BookID: "b1", FilePath: "/lib/B/03.m4b", Duration: 900, AcoustIDFingerprintDurationSec: 900.0},
-		{ID: "stray-old", BookID: "b1", FilePath: "/srv/old/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "stray-itunes", BookID: "b1", FilePath: "/srv/books/itunes/A/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "own1", BookID: "b1", FilePath: "/lib/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "own2", BookID: "b1", FilePath: "/lib/B/CD2/02.m4b", FileHash: "h2", FileSize: 200, Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "own3", BookID: "b1", FilePath: "/lib/B/03.m4b", FileHash: "h3", FileSize: 300, Duration: 900, AcoustIDFingerprintDurationSec: 900.0},
+		{ID: "copy-old", BookID: "b1", FilePath: "/srv/old/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "copy-itunes", BookID: "b1", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "moved", BookID: "b1", FilePath: "/lib/Loser/04.m4b", FileHash: "h4", FileSize: 400, Duration: 0, AcoustIDFingerprintDurationSec: 600.0},
 	}
 	store := zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites)
 	written := captureRowWrites(store)
 	runZeroRows(t, store)
-	if got := *written; len(got) != 2 || got[0] != "own1" || got[1] != "own2" {
-		t.Errorf("zero-rows mode must fill exactly the own-folder zero rows [own1 own2], wrote %v", got)
+	if got := *written; len(got) != 3 || got[0] != "own1" || got[1] != "own2" || got[2] != "moved" {
+		t.Errorf("zero-rows mode must fill exactly the counted zero rows [own1 own2 moved], wrote %v", got)
 	}
 }
 
-// A book with no row in its own folder has no row set ABS would count on its
-// own, so it is skipped rather than filled.
+// A book with no row in its own folder has no basis to call any row a copy, so
+// it is skipped rather than filled (its duplicate copies would all be filled).
 func TestDurationBackfill_ZeroRowsSkipsBookWithNoOwnFolderRows(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{

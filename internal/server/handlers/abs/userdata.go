@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
 // last-edited: 2026-09-25
 
@@ -579,7 +579,8 @@ func (p *userDataProvider) syncIDFor(bookID string) (string, error) {
 // IsWithinFinishedTolerance false, so no row can claim isFinished without a
 // duration to back it.
 func (p *userDataProvider) durationFor(bookID string) (float64, error) {
-	// countedBookFiles: the same own-folder rows the mapper lists.
+	// countedBookFiles: the same rows (out-of-folder copies excluded) the
+	// mapper lists.
 	book, files, err := countedBookFiles(p.library, bookID)
 	if err != nil {
 		return 0, fmt.Errorf("abs: userdata: load %w", err)
