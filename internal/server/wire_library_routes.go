@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package server
 
@@ -72,7 +72,18 @@ func (s *Server) wireLibraryRoutes(
 	protected.POST("/audiobooks/metadata/batch-apply-cached", s.perm(auth.PermLibraryEditMetadata), metaCacheH.BatchApplyFromCache)
 	protected.POST("/audiobooks/:id/clear-no-match", s.perm(auth.PermLibraryEditMetadata), metaCacheH.ClearMetadataNoMatch)
 
-	// Reading progress
+	// Reading progress. Canonical noun is /audiobooks/, matching every other
+	// per-book route; /books/:id/... is kept registered as a DEPRECATED alias
+	// to the same handlers so existing callers keep working (naming-audit
+	// 2026-09-25, class 1: docs/audits/2026-09-25-interface-naming-consistency.md).
+	protected.POST("/audiobooks/:id/position", readingH.SetPosition)
+	protected.GET("/audiobooks/:id/position", readingH.GetPosition)
+	protected.GET("/audiobooks/:id/state", readingH.GetBookState)
+	protected.PATCH("/audiobooks/:id/status", readingH.SetBookStatus)
+	protected.DELETE("/audiobooks/:id/status", readingH.ClearBookStatus)
+	protected.POST("/audiobooks/:id/status/repair", readingH.RepairBookStatus)
+	// Deprecated aliases — DO NOT remove without a deprecation window; kept
+	// for backward compatibility per naming-audit class 1.
 	protected.POST("/books/:id/position", readingH.SetPosition)
 	protected.GET("/books/:id/position", readingH.GetPosition)
 	protected.GET("/books/:id/state", readingH.GetBookState)
