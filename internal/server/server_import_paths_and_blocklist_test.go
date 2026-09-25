@@ -1,7 +1,7 @@
 // file: internal/server/server_import_paths_and_blocklist_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 2f4a6b8c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package server
 
@@ -88,7 +88,7 @@ func TestImportPaths_ListNilAndRemoveInvalidID(t *testing.T) {
 		Data map[string]any `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listResp))
-	paths, ok := listResp.Data["importPaths"].([]any)
+	paths, ok := listResp.Data["import_paths"].([]any)
 	require.True(t, ok)
 	assert.Len(t, paths, 0)
 

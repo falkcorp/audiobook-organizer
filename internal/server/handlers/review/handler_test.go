@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8e4a1c72-3d95-4b60-a7f1-9c2e6b0d5f83
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 // Tests for the universal review-queue handlers. The store is exercised through
 // a REAL pebble-backed *database.PebbleStore (which implements the ReviewStore
@@ -121,7 +121,7 @@ func TestGetReviewCount(t *testing.T) {
 	if data["count"].(float64) != 3 {
 		t.Fatalf("expected count 3, got %v", data["count"])
 	}
-	byKind := data["byKind"].(map[string]any)
+	byKind := data["by_kind"].(map[string]any)
 	if byKind["regroup.multidisc"].(float64) != 2 {
 		t.Fatalf("expected 2 multidisc, got %v", byKind["regroup.multidisc"])
 	}

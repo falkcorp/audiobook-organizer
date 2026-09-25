@@ -2117,7 +2117,7 @@ export async function getImportPaths(signal?: AbortSignal): Promise<ImportPath[]
   }
   const body = await response.json();
   const data = body.data;
-  return data.importPaths || [];
+  return data.import_paths || [];
 }
 
 export async function addImportPath(path: string, name: string): Promise<ImportPath> {
@@ -2130,9 +2130,9 @@ export async function addImportPath(path: string, name: string): Promise<ImportP
     throw await buildApiError(response, 'Failed to add import path');
   }
   const body = await response.json();
-  // Server returns { data: { importPath, scan_operation_id?: string } }
+  // Server returns { data: { import_path, scan_operation_id?: string } }
   const data = body.data;
-  return (data.importPath ? data.importPath : data) as ImportPath;
+  return (data.import_path ? data.import_path : data) as ImportPath;
 }
 
 // Detailed add returning scan operation id when auto-scan kicks off
@@ -2155,9 +2155,9 @@ export async function addImportPathDetailed(
   }
   const body = await response.json();
   const data = body.data;
-  if (data.importPath) {
+  if (data.import_path) {
     return {
-      importPath: data.importPath,
+      importPath: data.import_path,
       scan_operation_id: data.scan_operation_id,
     };
   }
