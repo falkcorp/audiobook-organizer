@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.5.1
+// version: 2.5.2
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -1099,6 +1099,7 @@ func TestFsRegroupXML_WriteSetExcludesBookFileWriters(t *testing.T) {
 	}
 	for _, def := range []sdk.OperationDef{
 		p.missingFileRepointDef(), p.recoverMissingFilesDef(), p.mergeSamePathDupesDef(), p.dedupeBookFileRowsDef(),
+		p.repointMissingToFolderAudioDef(),
 	} {
 		if !slices.Contains(def.Writes, sdk.ResBookFiles) {
 			t.Errorf("%s declares Writes %v, want book_files so it cannot run beside fs-regroup-xml", def.ID, def.Writes)
