@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_tags.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c2ad6d2b-75c3-446d-9f67-08cc517050e2
-// last-edited: 2026-09-11
+// last-edited: 2026-09-25
 
 package database
 
@@ -30,7 +30,13 @@ func (p *PebbleStore) AddBookTag(bookID, tag string) error {
 // Upserts when the row already exists — later writes overwrite the
 // source field so a user-claimed tag can promote to system or vice
 // versa without needing a delete-first step.
-func (p *PebbleStore) AddBookTagWithSource(bookID, tag, source string) error {
+func (p *PebbleStore) AddBookTagWithSource(bookID, tag, source string) (err error) {
+	defer func() {
+		if err == nil {
+			p.notifyBooksNeedReindex(bookID)
+		}
+	}()
+
 	tag = util.NormalizeString(tag)
 	if tag == "" {
 		return fmt.Errorf("tag cannot be empty")
@@ -62,7 +68,13 @@ func (p *PebbleStore) AddBookTagWithSource(bookID, tag, source string) error {
 }
 
 // RemoveBookTag removes a tag from a book regardless of source.
-func (p *PebbleStore) RemoveBookTag(bookID, tag string) error {
+func (p *PebbleStore) RemoveBookTag(bookID, tag string) (err error) {
+	defer func() {
+		if err == nil {
+			p.notifyBooksNeedReindex(bookID)
+		}
+	}()
+
 	tag = util.NormalizeString(tag)
 	if tag == "" {
 		return fmt.Errorf("tag cannot be empty")
@@ -89,7 +101,13 @@ func (p *PebbleStore) RemoveBookTag(bookID, tag string) error {
 // exactly one source tag at a time.
 //
 // If `source` is empty, all sources match.
-func (p *PebbleStore) RemoveBookTagsByPrefix(bookID, prefix, source string) error {
+func (p *PebbleStore) RemoveBookTagsByPrefix(bookID, prefix, source string) (err error) {
+	defer func() {
+		if err == nil {
+			p.notifyBooksNeedReindex(bookID)
+		}
+	}()
+
 	prefix = util.NormalizeString(prefix)
 	if prefix == "" {
 		return fmt.Errorf("prefix cannot be empty")
@@ -220,7 +238,13 @@ func (p *PebbleStore) GetBookTagsDetailed(bookID string) ([]BookTag, error) {
 // SetBookTags replaces all USER tags on a book with the given set.
 // System tags (dedup:*, metadata:source:*, ...) are preserved so the
 // user-facing bulk-replace doesn't clobber server-applied provenance.
-func (p *PebbleStore) SetBookTags(bookID string, tags []string) error {
+func (p *PebbleStore) SetBookTags(bookID string, tags []string) (err error) {
+	defer func() {
+		if err == nil {
+			p.notifyBooksNeedReindex(bookID)
+		}
+	}()
+
 	detailed, err := p.GetBookTagsDetailed(bookID)
 	if err != nil {
 		return err

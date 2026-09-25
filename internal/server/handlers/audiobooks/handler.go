@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-09-14
+// last-edited: 2026-09-25
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -49,6 +49,8 @@ package audiobookshandler
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"encoding/json"
 	"os"
 	"sort"
@@ -63,6 +65,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
+	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
@@ -105,6 +108,8 @@ type Handler struct {
 	// under heavy multi-method use, passed by pointer. The handlers nil-check
 	// them exactly where the originals did.
 	listCache    *cache.Cache[gin.H]
+	// searchCacheOn reports whether the search result cache is active.
+	searchCacheOn func() bool
 	facetsCache  *cache.Cache[gin.H]
 	authorsCache *cache.Cache[*audiobookspkg.AuthorWithCountListResponse]
 	seriesCache  *cache.Cache[*audiobookspkg.SeriesWithCountsResponse]
@@ -163,6 +168,16 @@ type Handler struct {
 // warmer would write entries no request could read — a silent cache-miss
 // regression rather than a visible failure, which is why both sides go through
 // Generation.Key instead of formatting keys by hand.
+// SetSearchResultCacheActive tells the handler whether searches are served
+// from the shared search result cache (see ListAudiobooks).
+func (h *Handler) SetSearchResultCacheActive(on func() bool) {
+	h.searchCacheOn = on
+}
+
+func (h *Handler) searchResultCacheOn() bool {
+	return h.searchCacheOn != nil && h.searchCacheOn()
+}
+
 func (h *Handler) libraryGeneration() *cache.Generation {
 	gen, _ := database.LibraryGenerationOf(h.store)
 	return gen
@@ -596,7 +611,15 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	// encode userID — a hit could leak User A's filtered list
 	// to User B.
 	cacheKey := h.libraryGeneration().Key("list:", c.Request.URL.RawQuery)
-	if len(filters.PerUserFilters) == 0 {
+	// The response cache is keyed on the library generation, which author and
+	// series renames, tag writes and the store's inner aggregate writes do not
+	// advance. A search is instead served from the search result cache, which
+	// is invalidated by all of them, so a search page never goes through this
+	// cache while that one is on. A per-user DSL query (read_status: and
+	// friends) is never cached here either: the key does not carry the user.
+	useListCache := len(filters.PerUserFilters) == 0 &&
+		!(params.Search != "" && (h.searchResultCacheOn() || audiobookspkg.SearchHasPerUserFilters(params.Search)))
+	if useListCache {
 		if cached, ok := h.listCache.Get(cacheKey); ok {
 			httputil.RespondWithOK(c, cached)
 			return
@@ -605,6 +628,18 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 
 	showQuarantined := c.Query("show_quarantined") == "true"
 	resp, err := h.buildListResponse(c.Request.Context(), params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
+	var pending *searchcache.PendingError
+	if errors.As(err, &pending) {
+		// The search is still running (detached from this request) and will
+		// land in the search result cache. The client polls
+		// GET /api/v1/search/:search_id and re-issues this request when done.
+		c.JSON(http.StatusAccepted, gin.H{
+			"search_id":      pending.SearchID,
+			"status":         "running",
+			"matches_so_far": pending.MatchesSoFar,
+		})
+		return
+	}
 	if err != nil {
 		httputil.InternalError(c, "failed to list audiobooks", err)
 		return
@@ -615,7 +650,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	// Always present, even when empty, so the frontend can tell "no filters
 	// were applied" apart from "the server didn't say."
 	resp["applied_filters"] = appliedFilters
-	if len(filters.PerUserFilters) == 0 {
+	if useListCache {
 		h.listCache.Set(cacheKey, resp)
 	}
 	httputil.RespondWithOK(c, resp)

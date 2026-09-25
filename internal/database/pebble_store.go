@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.179.2
+// version: 1.180.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-25
 
@@ -101,6 +101,8 @@ type PebbleStore struct {
 	// stores it once it completes. Use the mem() helper to read; never
 	// touch memPtr directly outside the warmup path.
 	memPtr atomic.Pointer[MemStore]
+	// changeObs is the search-cache change observer (change_observer.go).
+	changeObs atomic.Pointer[changeObserverBox]
 	// deepCoverageBusy admits one deep signal-coverage scan at a time; see
 	// GetBookFileSignalCoverage.
 	deepCoverageBusy atomic.Bool
@@ -4744,7 +4746,13 @@ func (p *PebbleStore) GetBookUserTags(bookID string) ([]string, error) {
 }
 
 // SetBookUserTags replaces all user-defined tags for a book.
-func (p *PebbleStore) SetBookUserTags(bookID string, tags []string) error {
+func (p *PebbleStore) SetBookUserTags(bookID string, tags []string) (err error) {
+	defer func() {
+		if err == nil {
+			p.notifyBooksNeedReindex(bookID)
+		}
+	}()
+
 	dbKey := []byte(fmt.Sprintf("user_tag:book:%s", bookID))
 	data, err := json.Marshal(tags)
 	if err != nil {

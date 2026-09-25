@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
-// last-edited: 2026-08-12
+// last-edited: 2026-09-25
 
 // Server-package helpers relocated out of audiobooks_handlers.go when the
 // audiobooks HTTP handlers were extracted into the handlers/audiobooks
@@ -58,8 +58,10 @@ func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset i
 		filters.ExcludeQuarantined = true
 	}
 
-	books, matchTotal, err := s.audiobookService.GetAudiobooksWithTotal(ctx, limit, offset, search, authorID, seriesID, filters)
+	books, matchTotal, meta, err := s.audiobookService.GetAudiobooksPage(ctx, limit, offset, search, authorID, seriesID, filters)
 	if err != nil {
+		// A *searchcache.PendingError passes through unwrapped: the handler
+		// answers it with 202 and a search ID to poll.
 		return nil, err
 	}
 
@@ -127,7 +129,13 @@ func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset i
 		}
 	}
 
-	return gin.H{"items": enriched, "count": totalCount, "limit": limit, "offset": offset}, nil
+	resp := gin.H{"items": enriched, "count": totalCount, "limit": limit, "offset": offset}
+	if meta.Stale {
+		// Served from a cached result that predates a bulk change; a rebuild
+		// is running and a later request will see it.
+		resp["stale"] = true
+	}
+	return resp, nil
 }
 
 const facetsCacheKey = "all"

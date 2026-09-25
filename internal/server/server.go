@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.65.1
+// version: 2.66.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-25
 
@@ -69,6 +69,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/fpworker"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
@@ -229,6 +230,11 @@ type Server struct {
 	// searchIndex is the Bleve library search index (spec DES-1).
 	// Opened at startup, nil if DB path isn't set yet.
 	searchIndex *search.BleveIndex
+	// searchChanges is the store-wide search change log and searchResults the
+	// shared search result cache (nil when search.result_cache.enabled is
+	// false); see search_result_cache.go.
+	searchChanges *searchcache.ChangeLog
+	searchResults *searchcache.Cache
 	// indexQueue feeds the single index worker goroutine. Allocated
 	// when searchIndex opens, closed in Shutdown. Bounded channel —
 	// a full queue drops events into the durable dirty set, which
@@ -661,6 +667,7 @@ func NewServer(store database.Store) *Server {
 		os.Exit(1)
 	}
 	wireServerFromContainer(server, regContainer)
+	server.initSearchResultCache()
 	server.container = regContainer
 
 	// Register batch poller handlers now that batchPoller is wired from container.

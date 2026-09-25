@@ -1,5 +1,5 @@
 // file: internal/server/search_reconciler.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7c2bb743-3521-45cf-8815-32a1bb927cca
 // last-edited: 2026-09-25
 //
@@ -267,6 +267,7 @@ func (s *Server) applyIndexChunk(store indexChunkStore, ids []string) indexChunk
 			res.removed++
 			res.done = append(res.done, id)
 		}
+		s.recordIndexCommit(res.done)
 		return res
 	}
 	res.upserted, res.removed = len(docs), len(deletes)
@@ -274,6 +275,7 @@ func (s *Server) applyIndexChunk(store indexChunkStore, ids []string) indexChunk
 		res.done = append(res.done, docs[i].BookID)
 	}
 	res.done = append(res.done, deletes...)
+	s.recordIndexCommit(res.done)
 	return res
 }
 
@@ -434,6 +436,11 @@ func (s *Server) forceMarkSearchIndexRebuilt() {
 	if err := s.searchIndex.MarkRebuilt(); err != nil {
 		searchIndexLog.Error("search index: rebuild finished but the marker could not be cleared: %v", err)
 		return
+	}
+	// Searches move from the substring fallback back to the index: every
+	// cached result was computed by the other engine.
+	if s.searchChanges != nil {
+		s.searchChanges.RecordAll()
 	}
 	searchIndexLog.Info("search index rebuild complete; library search is served by the index again")
 }

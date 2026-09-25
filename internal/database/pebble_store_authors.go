@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-09-25
 
@@ -324,6 +324,7 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 		return err
 	}
 	p.DeleteAuthorFromMemDB(id)
+	p.notifyAuthorRenamed(id)
 	p.DeleteAuthorAliasesByAuthorIDFromMemDB(id)
 	// Mirror the junction rewrites into memdb. Pebble is the source of truth,
 	// but the query layer reads memdb when it is enabled, so skipping this
@@ -455,6 +456,7 @@ func (p *PebbleStore) UpdateAuthorName(id int, name string) error {
 		return err
 	}
 	p.UpsertAuthorToMemDB(author)
+	p.notifyAuthorRenamed(id)
 	return nil
 }
 
