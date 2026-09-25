@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_filehash_stale_owner_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e7c1b9a-3d2f-4a86-b5e0-8c9d1f2a3b4c
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package dedup
 
@@ -157,5 +157,62 @@ func TestCheckExactFileHash_AutoMerge_ElectsOnMeritNotIndexOwnership(t *testing.
 	}
 	if o.MarkedForDeletion == nil || !*o.MarkedForDeletion {
 		t.Fatal("the file-less index owner must be the soft-deleted loser")
+	}
+}
+
+// Two book rows at the same cleaned path (CHAPTER-SUBFOLDER-NN-ROWS,
+// 2026-09-25) are review-queue-only by owner decision, even for an exact
+// file-hash match — the strongest auto-merge trigger in the engine. This pins
+// handleFileHashMatch's same-path guard: no merge, but the pair still becomes
+// a (tagged) review candidate rather than being dropped silently.
+func TestCheckExactFileHash_SamePath_NeverAutoMerges_StillBecomesCandidate(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+	engine.AutoMergeEnabled = true
+
+	hash := "HASH-SAMEPATH"
+	title := "Same Path Book"
+	path := "/lib/Author/Book/Book - NN/32.m4b"
+	scanned := database.Book{ID: "ROW1", Title: title, FileHash: &hash, FilePath: path}
+	other := database.Book{ID: "ROW2", Title: title, FileHash: &hash, FilePath: path}
+	rs := newMergeRaceStore([]database.Book{scanned, other})
+
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) { return rs.get(id), nil }
+	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) { return rs.update(id, b) }
+	mock.GetBookByFileHashFunc = func(h string) (*database.Book, error) { return rs.get("ROW2"), nil }
+	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) { return nil, nil }
+
+	merged, err := engine.checkExactFileHash(rs.get("ROW1"), "")
+	if err != nil {
+		t.Fatalf("checkExactFileHash: %v", err)
+	}
+	if merged {
+		t.Fatal("a same-cleaned-path pair must never be auto-merged, review queue only")
+	}
+	s, o := rs.get("ROW1"), rs.get("ROW2")
+	if s.MarkedForDeletion != nil && *s.MarkedForDeletion {
+		t.Fatal("ROW1 must not have been soft-deleted by a refused merge")
+	}
+	if o.MarkedForDeletion != nil && *o.MarkedForDeletion {
+		t.Fatal("ROW2 must not have been soft-deleted by a refused merge")
+	}
+	cands, _, err := es.ListCandidates(database.CandidateFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListCandidates: %v", err)
+	}
+	if len(cands) != 1 {
+		t.Fatalf("expected the same-path pair to land in the review queue as one candidate, got %d", len(cands))
+	}
+	sb := cands[0].ScoreBreakdown
+	if sb == nil || len(sb.Signals) == 0 {
+		t.Fatal("expected the candidate to carry a same_path signal for the review UI")
+	}
+	found := false
+	for _, sig := range sb.Signals {
+		if sig.Kind == "same_path" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a same_path signal in %v", sb.Signals)
 	}
 }

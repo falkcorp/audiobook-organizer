@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve_test.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 2f4b8c19-7a03-4d56-9e18-5c0d7f2a6b91
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 // Tests for the Tier-1 (Band CERTAIN) auto-resolution pass:
 // Engine.AutoResolveCertain, autoResolveEligible, and UnmergeAuto.
@@ -206,6 +206,39 @@ func TestAutoResolveEligible(t *testing.T) {
 		c.ScoreBreakdown = certainBreakdown("A", "B", unified.SigDuration, unified.SigFolderPath)
 		if ok, _ := engine.autoResolveEligible(c, bookA, bookB); ok {
 			t.Fatal("expected not eligible with only supporting signals")
+		}
+	})
+
+	// CHAPTER-SUBFOLDER-NN-ROWS / owner decision 2026-09-25: two book rows at
+	// the same cleaned path go to the review queue only, however strong their
+	// CERTAIN score — auto-resolve must never merge this shape.
+	t.Run("rejects a same-cleaned-path pair even with a CERTAIN score", func(t *testing.T) {
+		a := arPlausibleBook("A", "Same Book")
+		b := arPlausibleBook("B", "Same Book")
+		a.FilePath = "/lib/Author/Book/Book.m4b"
+		b.FilePath = "/lib/Author/Book//Book.m4b" // Clean-equal to a's path
+
+		c := base()
+		ok, reason := engine.autoResolveEligible(c, a, b)
+		if ok {
+			t.Fatal("expected not eligible: two book rows share the same cleaned path")
+		}
+		if !strings.Contains(reason, "same_path") {
+			t.Fatalf("expected same_path in the refusal reason, got %q", reason)
+		}
+	})
+
+	// A normal, distinct-path CERTAIN pair must still be eligible — the
+	// same-path guard must not over-fire on genuinely distinct books.
+	t.Run("still accepts a distinct-path CERTAIN pair", func(t *testing.T) {
+		a := arPlausibleBook("A", "Same Book")
+		b := arPlausibleBook("B", "Same Book")
+		a.FilePath = "/lib/Author/Book (Copy A)/Book.m4b"
+		b.FilePath = "/lib/Author/Book (Copy B)/Book.m4b"
+
+		ok, reason := engine.autoResolveEligible(base(), a, b)
+		if !ok {
+			t.Fatalf("expected eligible for a distinct-path pair, got: %s", reason)
 		}
 	})
 }
