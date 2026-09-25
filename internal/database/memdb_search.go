@@ -1,5 +1,5 @@
 // file: internal/database/memdb_search.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7b1d9c34-2e58-4a07-9f61-3c8ad5e0b742
 // last-edited: 2026-09-25
 
@@ -59,15 +59,16 @@ func (p *PebbleStore) getBookRowForSearch(id string) (*Book, error) {
 // SubstringSearchRank (search_rank.go) is the ranking form of this predicate;
 // it matches exactly when this does, and is what the store scans call.
 func SubstringSearchMatches(title string, narrator *string, authorID *int, authorNames map[int]string, lowerQuery string) bool {
-	if strings.Contains(strings.ToLower(title), lowerQuery) {
+	lowerQuery = searchFold(lowerQuery)
+	if strings.Contains(searchFold(strings.ToLower(title)), lowerQuery) {
 		return true
 	}
 	if authorID != nil {
-		if name, ok := authorNames[*authorID]; ok && strings.Contains(name, lowerQuery) {
+		if name, ok := authorNames[*authorID]; ok && strings.Contains(searchFold(name), lowerQuery) {
 			return true
 		}
 	}
-	return narrator != nil && strings.Contains(strings.ToLower(*narrator), lowerQuery)
+	return narrator != nil && strings.Contains(searchFold(strings.ToLower(*narrator)), lowerQuery)
 }
 
 // SearchBookIDs runs the library search predicate against the in-memory book

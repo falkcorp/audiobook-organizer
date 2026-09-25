@@ -1,5 +1,5 @@
 // file: internal/database/search_rank_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f7c1e0a-9b2d-4e65-8a14-6d0c2b9e7f53
 // last-edited: 2026-09-25
 
@@ -140,4 +140,25 @@ func BenchmarkMemSearchBookIDs_OneChar(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// TestSubstringSearch_UnderscoreReadsAsSpace: a title that came from a file
+// name with underscores for spaces must match a query typed with spaces, in
+// both the match predicate and the ranker, and a query typed with underscores
+// must still match a spaced title.
+func TestSubstringSearch_UnderscoreReadsAsSpace(t *testing.T) {
+	title := "Arcane_Chef_2__A_LitRPG_Adventure"
+	r, ok := SubstringSearchRank("b2", title, nil, nil, nil, "arcane chef")
+	require.True(t, ok, "spaced query must match an underscored title")
+	require.Equal(t, SearchTierTitlePrefix, r.Tier)
+	require.True(t, SubstringSearchMatches(title, nil, nil, nil, "arcane chef"))
+
+	require.True(t, SubstringSearchMatches("Arcane Chef 2", nil, nil, nil, "arcane_chef"))
+	_, ok = SubstringSearchRank("b1", "Arcane Chef 2", nil, nil, nil, "arcane_chef")
+	require.True(t, ok)
+
+	narr := "Some_Reader"
+	require.True(t, SubstringSearchMatches("x", &narr, nil, nil, "some reader"))
+	_, ok = SubstringSearchRank("b3", "x", &narr, nil, nil, "some reader")
+	require.True(t, ok)
 }
