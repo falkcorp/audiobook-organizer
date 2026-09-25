@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -233,7 +233,17 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 		}
 	}
 
-	defID := c.Query("def_id")
+	// A def_id filter matches the op, not the spelling: a former (renamed) ID
+	// and its canonical ID select the same rows, so a bookmark or script using
+	// the old ID keeps working and history written before a rename (whose rows
+	// keep the old def_id) is still found by the new one. scope echoes the
+	// canonical ID the filter actually used.
+	defID := h.canonicalDefID(c.Query("def_id"))
+	if asked := c.Query("def_id"); asked != "" && asked != defID && h.registry != nil {
+		if nr, ok := h.registry.(deprecatedDefIDNoter); ok {
+			nr.NoteDeprecatedDefIDUse(asked, opsregistry.AliasEntryTimelineFilter)
+		}
+	}
 
 	// status was accepted-and-dropped until 2026-09-09, the same way def_id and
 	// limit were until 2026-08-24 and by the same mechanism: Gin ignores query
@@ -318,7 +328,7 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	// rows are already in hand, so saying which statuses ARE present costs a map.
 	statusesPresent := make(map[string]struct{})
 	for _, r := range rows {
-		if defID != "" && r.DefID != defID {
+		if defID != "" && h.canonicalDefID(r.DefID) != defID {
 			continue
 		}
 		if status != "" && r.Status != status {
@@ -869,30 +879,49 @@ func (h *OperationsV2Handler) OperationsSSE(c *gin.Context) {
 
 // --- helpers ---
 
-// displayNameFor looks up the human-readable display name for a def ID.
-// Falls back to the ID itself if the def is not registered.
-func (h *OperationsV2Handler) displayNameFor(defID string) string {
-	if h.registry == nil {
+// deprecatedDefIDNoter is implemented by *opsregistry.Registry. It is asserted
+// rather than added to OperationsRegistry so the many test fakes of that
+// interface need not grow a method only the deprecation metric uses.
+type deprecatedDefIDNoter interface {
+	NoteDeprecatedDefIDUse(given, entry string)
+}
+
+// canonicalDefID maps a former (renamed) def ID to its canonical ID via the
+// registry's alias table; any other ID, including an unregistered one, is
+// returned unchanged.
+func (h *OperationsV2Handler) canonicalDefID(defID string) string {
+	if h.registry == nil || defID == "" {
 		return defID
 	}
-	for _, d := range h.registry.ActiveDefs() {
-		if d.ID == defID {
-			return d.DisplayName
-		}
+	if d, ok := h.registry.Def(defID); ok {
+		return d.ID
 	}
 	return defID
 }
 
-// notifyLevelFor looks up the NotifyLevel for a registered def ID.
-// Returns 0 (NotifyAlert) if the def is not found, preserving old behaviour.
+// displayNameFor looks up the human-readable display name for a def ID.
+// Falls back to the ID itself if the def is not registered. A stored row whose
+// def_id is a former (renamed) ID resolves through Def to the renamed op's
+// display name, so history written before a rename still displays.
+func (h *OperationsV2Handler) displayNameFor(defID string) string {
+	if h.registry == nil {
+		return defID
+	}
+	if d, ok := h.registry.Def(defID); ok {
+		return d.DisplayName
+	}
+	return defID
+}
+
+// notifyLevelFor looks up the NotifyLevel for a registered def ID, resolving a
+// former ID the same way displayNameFor does. Returns 0 (NotifyAlert) if the
+// def is not found, preserving old behaviour.
 func (h *OperationsV2Handler) notifyLevelFor(defID string) int {
 	if h.registry == nil {
 		return 0
 	}
-	for _, d := range h.registry.ActiveDefs() {
-		if d.ID == defID {
-			return int(d.NotifyLevel)
-		}
+	if d, ok := h.registry.Def(defID); ok {
+		return int(d.NotifyLevel)
 	}
 	return 0
 }

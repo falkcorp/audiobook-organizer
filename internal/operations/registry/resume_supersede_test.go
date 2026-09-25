@@ -187,6 +187,29 @@ func TestSupersedeStaleQuiesced_SetParameterizedDefSurvivesALiveRow(t *testing.T
 	}
 }
 
+// A rename must not split one op's runs into two groups. A quiesced run
+// persisted under the former ID and a quiesced run under the new ID are two
+// interrupted runs of the SAME op, so only the newest survives -- otherwise the
+// deploy that renames an op would restart both.
+func TestSupersedeStaleQuiesced_GroupsFormerAndCanonicalIDsTogether(t *testing.T) {
+	rows := []database.OperationV2Row{
+		quiesced("op-01", "old.scan"),
+		quiesced("op-02", "new.scan"),
+	}
+	canonical := func(id string) string {
+		if id == "old.scan" {
+			return "new.scan"
+		}
+		return id
+	}
+
+	keep, superseded := supersedeStaleQuiesced(rows, nil, canonical)
+
+	if !sameSet(ids(keep), "op-02") || !sameSet(ids(superseded), "op-01") {
+		t.Errorf("keep = %v, superseded = %v; want keep op-02, supersede op-01", ids(keep), ids(superseded))
+	}
+}
+
 // The exception must not reopen the pile-up. Even for a set-parameterized def,
 // several interrupted runs still collapse to the newest — restarting all of them
 // at once is the 21-concurrent-scans failure in a different costume.
