@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/audiobooth_fixtures_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e8a2c17-94b3-4d6f-a0e1-7c3b9f24d8a6
 // last-edited: 2026-09-25
 
@@ -46,7 +46,7 @@ import (
 const audioboothManifestDir = "../../../../tests/audiobooth-decode"
 
 type abManifest struct {
-	CallSites []string      `json:"callSites"`
+	CallSites []string       `json:"callSites"`
 	Requests  []abManifestRq `json:"requests"`
 }
 

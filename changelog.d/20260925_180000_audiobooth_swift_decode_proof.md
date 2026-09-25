@@ -15,6 +15,8 @@
   request the app makes against our ABS handlers, and decodes each response
   through the app's model types with `swift test`. No AudioBooth code is
   committed. The Go replay (`TestAudioBoothFixtures_ReplayEveryAppRequest`) also
-  runs in `make ci` without Swift. Coverage: 35 of 45 app call sites decoded,
-  6 of 45 checked for a 2xx where the app does not decode, 1 of 45 answered with
-  its designed error, and 3 of 45 podcast-only call sites not applicable.
+  runs in `make ci` without Swift. Coverage of the 45 app call sites: 32 decoded
+  with real data, 3 decoded but empty by design (listening sessions and podcast
+  episodes), 6 checked for a 2xx where the app does not decode, 1 answered with
+  its designed error, and 3 podcast-only call sites not applicable. 19 of the
+  app's 26 response models decoded with data.
