@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-25
 
@@ -93,6 +93,9 @@ type fakeLibrary struct {
 	badRows map[string]bool
 	// hydrateErr makes GetBooksForSearch fail as a storage read would.
 	hydrateErr error
+	// sigHydrations counts GetBooksForSearch calls that asked for the
+	// signature sidecar, which no ABS response carries.
+	sigHydrations int
 
 	// genreGate, when non-nil, blocks every genre scan until closed. Because
 	// GetDistinctGenres runs once per /filterdata build, holding it lets a test
@@ -916,6 +919,9 @@ func (f *fakeLibrary) SearchBookRanksFiltered(query string, ids []string, fl dat
 func (f *fakeLibrary) GetBooksForSearch(ids []string, withSig bool) ([]database.Book, []string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if withSig {
+		f.sigHydrations++
+	}
 	out := make([]database.Book, 0, len(ids))
 	var bad []string
 	for _, id := range ids {

@@ -1,5 +1,5 @@
 // file: internal/searchcache/changelog.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: dafe39f3-657a-4ae6-9e2a-0f9a18a774b5
 // last-edited: 2026-09-25
 
@@ -25,10 +25,10 @@ import (
 // keeps (owner decision 2026-09-25: 65,536, raised from 8,192). A bulk write
 // of more books than this between two reads of one entry forces that entry
 // onto the rebuild path. A deeper ring lets an entry survive a larger burst of
-// unrelated edits: re-evaluating the changed IDs is cheap, and the cache's
-// PatchLimit, not the ring, still caps how many insertions one patch makes.
-// Each record is a generation plus a string header, about 24 bytes, so the
-// ring costs about 1.5 MiB.
+// unrelated edits; the cache's PatchLimit, not the ring, still caps how many
+// insertions one patch makes. Each record is a generation plus a string header
+// (24 bytes) and the book ID it points at (a 26-byte ULID in a 32-byte
+// allocation), so a full ring holds about 3.5 MiB.
 const DefaultRingSize = 65536
 
 type changeRecord struct {
