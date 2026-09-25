@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler_action_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c1f0a83-6d47-4e29-b0a5-3f7c8e2d94b1
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 // Tests for ACTION-KEYED approve dispatch (owner item 2, 2026-08-06).
 //
@@ -105,8 +105,8 @@ func TestApprove_ExplicitActionOverridesRecommendation(t *testing.T) {
 		t.Fatalf("combine apply ran %d times — the override was ignored and books would have merged", c.combine)
 	}
 	data := body["data"].(map[string]any)
-	if data["chosenAction"] != itunesservice.ActionVersionGroup {
-		t.Fatalf("chosenAction = %v, want version-group", data["chosenAction"])
+	if data["chosen_action"] != itunesservice.ActionVersionGroup {
+		t.Fatalf("chosenAction = %v, want version-group", data["chosen_action"])
 	}
 }
 
@@ -123,8 +123,8 @@ func TestApprove_EmptyBodyUsesRecommendation(t *testing.T) {
 	if c.versionGroup != 1 || c.combine != 0 {
 		t.Fatalf("counters = %+v, want the recommendation (version-group) only", *c)
 	}
-	if data := body["data"].(map[string]any); data["chosenAction"] != itunesservice.ActionVersionGroup {
-		t.Fatalf("chosenAction = %v, want version-group", data["chosenAction"])
+	if data := body["data"].(map[string]any); data["chosen_action"] != itunesservice.ActionVersionGroup {
+		t.Fatalf("chosenAction = %v, want version-group", data["chosen_action"])
 	}
 }
 
@@ -223,8 +223,8 @@ func TestApprove_Separate_TransitionsWithoutApplying(t *testing.T) {
 		t.Fatalf("status = %q, want approved so re-scans leave the folder alone", got.Status)
 	}
 	data := body["data"].(map[string]any)
-	if data["chosenAction"] != itunesservice.ActionSeparate {
-		t.Fatalf("chosenAction = %v, want separate", data["chosenAction"])
+	if data["chosen_action"] != itunesservice.ActionSeparate {
+		t.Fatalf("chosenAction = %v, want separate", data["chosen_action"])
 	}
 	if data["note"] == nil {
 		t.Fatal("expected a note explaining that separate needs no apply step")
@@ -375,7 +375,7 @@ func TestApprove_EmptyBodyOnDecidedHold_KeepsThePersistedOverride(t *testing.T) 
 	// Someone hits Approve again without choosing anything.
 	if w, body := approveBody(t, h, it.ID, ""); w.Code != http.StatusOK {
 		t.Fatalf("re-approve: code %d", w.Code)
-	} else if got := body["data"].(map[string]any)["chosenAction"]; got != itunesservice.ActionSeparate {
+	} else if got := body["data"].(map[string]any)["chosen_action"]; got != itunesservice.ActionSeparate {
 		t.Fatalf("chosenAction = %v, want separate — the empty body reverted to the recommendation", got)
 	}
 	if c.combine != 0 {
