@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_sidecar_migrate.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c8f6a90-4b17-4e35-9d82-1a5e703c6f84
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -41,7 +42,11 @@ import (
 // bookSigSidecarMigrateParams controls the migration. DryRun defaults to true:
 // callers must explicitly pass dryRun=false to write anything.
 type bookSigSidecarMigrateParams struct {
-	DryRun bool `json:"dryRun"`
+	// DryRun defaults to TRUE when omitted (opmode.ResolveDryRun): a request
+	// that states no mode is a preview. dry_run is accepted as an alias, and
+	// sending both with different values is refused rather than guessed.
+	DryRun      *bool `json:"dryRun,omitempty"`
+	DryRunSnake *bool `json:"dry_run,omitempty"`
 	// Limit caps how many books are examined (0 = the whole library). It exists
 	// so the first apply can be a small canary — migrate 100 books, verify the
 	// pairing held, then run the rest — rather than an all-or-nothing 67,824-row
@@ -98,11 +103,15 @@ func (p *Plugin) bookSigSidecarMigrateDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	params := bookSigSidecarMigrateParams{DryRun: true} // safe default
+	var params bookSigSidecarMigrateParams
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
 		}
+	}
+	dryRun, err := opmode.ResolveDryRun("maintenance.booksig-sidecar-migrate", params.DryRunSnake, params.DryRun)
+	if err != nil {
+		return err
 	}
 	log := reporter.Logger()
 
@@ -123,7 +132,7 @@ func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessa
 			"this op requires a Pebble-backed store and must not report success without one", store)
 	}
 
-	if params.DryRun {
+	if dryRun {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — classifying only, no rows or sidecars will be written")
 	} else {
 		_ = reporter.Log(slog.LevelWarn, "APPLY MODE — rewriting book: rows and writing book_sig: sidecars (irreversible)")
@@ -163,7 +172,7 @@ func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessa
 				return ctx.Err()
 			}
 			examined.Add(1)
-			outcome, err := migrator.MigrateBookSigToSidecar(id, params.DryRun)
+			outcome, err := migrator.MigrateBookSigToSidecar(id, dryRun)
 			if err != nil {
 				// One unreadable or malformed row must not abort a
 				// whole-library pass; it is counted and reported, and the row
@@ -201,7 +210,7 @@ func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessa
 
 	mode := "DRY RUN"
 	verb := "would migrate"
-	if !params.DryRun {
+	if !dryRun {
 		mode = "APPLY MODE"
 		verb = "migrated"
 	}
@@ -213,7 +222,7 @@ func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessa
 		notCandidate.Load(), skippedRaced.Load(), errCount.Load(), impliedMB)
 
 	log.Info("booksig-sidecar-migrate: complete",
-		"dry_run", params.DryRun,
+		"dry_run", dryRun,
 		"examined", examined.Load(),
 		"library_total", libraryTotal,
 		"migrated", migrated.Load(),

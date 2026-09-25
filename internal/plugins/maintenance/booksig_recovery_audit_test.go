@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8a1d3f27-6c04-4e59-b2a7-9f5e1c8d0b46
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -54,7 +54,7 @@ func newAuditPlugin(
 
 func auditParams(t *testing.T, dryRun bool) json.RawMessage {
 	t.Helper()
-	b, err := json.Marshal(bookSigRecoveryAuditParams{DryRun: dryRun})
+	b, err := json.Marshal(bookSigRecoveryAuditParams{DryRun: boolPtr(dryRun)})
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}

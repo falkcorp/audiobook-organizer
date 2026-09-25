@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/split_book_bulk_merge.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8eb2e1-b4b7-4d83-b176-fc427cc5d98c
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package dedup
 
@@ -14,6 +14,7 @@ import (
 
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -41,6 +42,10 @@ func (p *Plugin) runSplitBookBulkMerge(ctx context.Context, raw json.RawMessage,
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return fmt.Errorf("split-book bulk merge params: %w", err)
 	}
+	dryRun, err := opmode.ResolveDryRun("dedup.split-book-bulk-merge", params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return err
+	}
 	if len(params.Items) == 0 {
 		return fmt.Errorf("split-book bulk merge: no candidate snapshots")
 	}
@@ -48,7 +53,7 @@ func (p *Plugin) runSplitBookBulkMerge(ctx context.Context, raw json.RawMessage,
 		return fmt.Errorf("split-book bulk merge: store unavailable")
 	}
 	var candidateStore *dedupengine.SplitBookStore
-	if !params.DryRun {
+	if !dryRun {
 		if p.embeddingStore == nil || p.embeddingStore.PebbleDB() == nil {
 			return fmt.Errorf("split-book bulk merge: candidate store unavailable")
 		}
@@ -62,7 +67,7 @@ func (p *Plugin) runSplitBookBulkMerge(ctx context.Context, raw json.RawMessage,
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if params.DryRun {
+		if dryRun {
 			reporter.Logger().Info("split-book merge dry-run ready", "candidate_id", item.CandidateID, "book_count", len(item.BookIDs))
 			progress.StepN(1, fmt.Sprintf("Dry-run ready: %d / %d", i+1, len(params.Items)))
 			continue

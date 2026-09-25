@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-15
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -14,12 +14,17 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/titleutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 type titleBackfillParams struct {
-	DryRun bool `json:"dryRun"`
+	// DryRun defaults to TRUE when omitted (opmode.ResolveDryRun): a request
+	// that states no mode is a preview. dry_run is accepted as an alias, and
+	// sending both with different values is refused rather than guessed.
+	DryRun      *bool `json:"dryRun,omitempty"`
+	DryRunSnake *bool `json:"dry_run,omitempty"`
 }
 
 // pendingUpdate holds a book whose title needs stripping. book is Core (slim)
@@ -51,11 +56,15 @@ func (p *Plugin) titleBackfillDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	params := titleBackfillParams{DryRun: true} // safe default
+	var params titleBackfillParams
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
 		}
+	}
+	dryRun, err := opmode.ResolveDryRun("maintenance.title-backfill", params.DryRunSnake, params.DryRun)
+	if err != nil {
+		return err
 	}
 
 	store := p.deps.OpsStore()
@@ -63,7 +72,7 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 		return fmt.Errorf("database not initialized")
 	}
 
-	if params.DryRun {
+	if dryRun {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 
@@ -117,7 +126,7 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 	toChange := len(toUpdate)
 	if toChange == 0 {
 		suffix := ""
-		if params.DryRun {
+		if dryRun {
 			suffix = " (dry run)"
 		}
 		result := fmt.Sprintf("Scanned %d books: 0 titles need updating, %d skipped%s", scanned, skipped, suffix)
@@ -138,7 +147,7 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
 			"book %s: %q → %q", u.book.ID, u.book.Title, u.newTitle))
 
-		if !params.DryRun {
+		if !dryRun {
 			// u.book is Core (slim); retitleBook re-reads the full row and
 			// writes only Title, so nothing else on the row is disturbed.
 			if err := retitleBook(store, u.book.ID, u.book.Title, u.newTitle); err != nil {
@@ -161,7 +170,7 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 	}
 
 	suffix := ""
-	if params.DryRun {
+	if dryRun {
 		suffix = " (dry run — no writes)"
 	}
 	result := fmt.Sprintf("Scanned %d books: %d titles updated, %d skipped, %d changed underneath, %d errors%s",

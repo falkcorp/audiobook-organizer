@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -46,7 +47,11 @@ import (
 // bookSigRecoveryAuditParams controls the audit/restore. DryRun defaults to
 // true (safe default); callers must explicitly pass dryRun=false to write.
 type bookSigRecoveryAuditParams struct {
-	DryRun bool `json:"dryRun"`
+	// DryRun defaults to TRUE when omitted (opmode.ResolveDryRun): a request
+	// that states no mode is a preview. dry_run is accepted as an alias, and
+	// sending both with different values is refused rather than guessed.
+	DryRun      *bool `json:"dryRun,omitempty"`
+	DryRunSnake *bool `json:"dry_run,omitempty"`
 }
 
 // auditExample is one concrete finding surfaced in the report.
@@ -123,13 +128,17 @@ func newestSnapshotBookWithField(snaps []database.BookSnapshot, field string) (*
 }
 
 func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	params := bookSigRecoveryAuditParams{DryRun: true} // safe default
+	var params bookSigRecoveryAuditParams
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	if params.DryRun {
+	dryRun, err := opmode.ResolveDryRun("maintenance.booksig-recovery-audit", params.DryRunSnake, params.DryRun)
+	if err != nil {
+		return err
+	}
+	if dryRun {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — read-only audit, no changes will be written")
 	} else {
 		_ = reporter.Log(slog.LevelInfo, "APPLY MODE — restoring recoverable fields from book_ver: snapshots (owner-greenlit)")
@@ -196,7 +205,7 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 		}
 		msg := fmt.Sprintf("Audited %d/%d — desc missing %d (rec %d), sig missing %d (rec %d)",
 			scanned, total, descMissing, descRecoverable, sigMissing, sigRecoverable)
-		if !params.DryRun {
+		if !dryRun {
 			msg += fmt.Sprintf(" — restored %d, skipped-nonempty %d, restore errors %d",
 				restoredCount, skippedNonEmpty, restoreErrorCount)
 		}
@@ -284,7 +293,7 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 		// This is the memdb-round-trip-footgun guard: we never construct a
 		// Book from scratch or from a memdb projection, only mutate a row we
 		// just read Pebble-direct.
-		if !params.DryRun && (descSnapBook != nil || sigSnapBook != nil) {
+		if !dryRun && (descSnapBook != nil || sigSnapBook != nil) {
 			restored, skipped, rerr := restoreRecoverableFields(store, id, descSnapBook, sigSnapBook, reporter)
 			restoredCount += restored
 			skippedNonEmpty += skipped
@@ -300,7 +309,7 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 	heartbeat(true)
 
 	mode := "DRY RUN"
-	if !params.DryRun {
+	if !dryRun {
 		mode = "APPLY MODE"
 	}
 	report := fmt.Sprintf(
@@ -310,7 +319,7 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 		mode, scanned, booksWithSnapshotLookup, errCount,
 		descMissing, descRecoverable, descNotRecoverable,
 		sigMissing, sigRecoverable, sigNotRecoverable)
-	if !params.DryRun {
+	if !dryRun {
 		report += fmt.Sprintf(" Restored %d, skipped-nonempty %d, restore errors %d.",
 			restoredCount, skippedNonEmpty, restoreErrorCount)
 	}
