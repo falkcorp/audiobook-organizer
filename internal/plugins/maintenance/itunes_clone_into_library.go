@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-09-24
 
@@ -92,11 +92,18 @@ const (
 	icOutcomeFailed  = "failed"
 	icOutcomeNoUndo  = "applied_without_rollback_record"
 	icOutcomeRolled  = "rolled_back"
+	icOutcomeFixed   = "repaired"
 )
 
 type icParams struct {
-	Apply    bool     `json:"apply"`
-	Rollback bool     `json:"rollback"`
+	Apply    bool `json:"apply"`
+	Rollback bool `json:"rollback"`
+	// Repair re-runs, on groups already cloned (they have a record), the two
+	// steps the first apply lacked before 2026-09-24 21:00: copy the source's
+	// chapter table onto a version clone that has none, then the primary
+	// hand-off. It fills the record's PriorPrimaries (as they stand before
+	// the hand-off) when missing, so rollback can still restore them.
+	Repair   bool     `json:"repair"`
 	GroupIDs []string `json:"group_ids"`
 }
 
@@ -114,15 +121,20 @@ type icPair struct {
 
 // icRecord is the durable undo record of one group's clone.
 type icRecord struct {
-	GroupID            string    `json:"group_id"`
-	Kind               string    `json:"kind"`
-	SourceBookID       string    `json:"source_book_id"`
-	CloneBookID        string    `json:"clone_book_id,omitempty"`
-	SourcePriorState   string    `json:"source_prior_state"`
-	SourcePriorPrimary string    `json:"source_prior_primary"`
-	Pairs              []icPair  `json:"pairs"`
-	OpID               string    `json:"op_id"`
-	At                 time.Time `json:"at"`
+	GroupID            string `json:"group_id"`
+	Kind               string `json:"kind"`
+	SourceBookID       string `json:"source_book_id"`
+	CloneBookID        string `json:"clone_book_id,omitempty"`
+	SourcePriorState   string `json:"source_prior_state"`
+	SourcePriorPrimary string `json:"source_prior_primary"`
+	// PriorPrimaries is every planned member's stored primary flag ("true",
+	// "false", "nil") before the clone. The post-clone hand-off can crown the
+	// clone over an ineligible incumbent (files missing), demoting it; undo
+	// puts each flag back. Records written before 2026-09-24 21:00 have none.
+	PriorPrimaries map[string]string `json:"prior_primaries,omitempty"`
+	Pairs          []icPair          `json:"pairs"`
+	OpID           string            `json:"op_id"`
+	At             time.Time         `json:"at"`
 }
 
 type icGroupReport struct {
@@ -175,7 +187,9 @@ func (p *Plugin) itunesCloneIntoLibraryDef() sdk.OperationDef {
 			"files into the library root (reflink only: never a copy or hardlink; iTunes files are never " +
 			"modified) and makes the library copy primary. Books with some files already in the library get " +
 			"only the iTunes-side files cloned into that folder. DRY-RUN BY DEFAULT: apply=true needs group_ids " +
-			"and refuses while library.scan runs; rollback=true with group_ids reverses a clone from its record.",
+			"and refuses while library.scan runs; rollback=true with group_ids reverses a clone from its record; " +
+			"repair=true with group_ids copies a missing chapter table onto an existing clone and re-runs the " +
+			"primary hand-off.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.itunes-clone-into-library",
@@ -216,6 +230,11 @@ type icRunner struct {
 	opID    string
 	apply   bool
 	library *icLibraryIndex
+	// chapters copies the source's chapter table onto a version clone and
+	// removes it on undo. Resolved with database.AsCapability: the chapter
+	// methods are not on database.Store, so a bare assertion fails on the
+	// production indexedStore decorator (see chapters_backfill.go).
+	chapters chapterPersister
 }
 
 func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, rootDir string, reporter sdk.Reporter) (*icReport, error) {
@@ -224,26 +243,39 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 		return nil, fmt.Errorf("database not initialized")
 	}
 	requested := normalizeGroupIDs(params.GroupIDs)
-	report := &icReport{DryRun: !params.Apply && !params.Rollback, Rollback: params.Rollback,
+	report := &icReport{DryRun: !params.Apply && !params.Rollback && !params.Repair, Rollback: params.Rollback,
 		ByDecision: map[string]int{}, ByKind: map[string]int{}, BySkip: map[string]int{}, ByOutcome: map[string]int{}}
-	if params.Apply && params.Rollback {
-		return report, fmt.Errorf("itunes-clone-into-library: apply and rollback are exclusive")
+	modes := 0
+	for _, m := range []bool{params.Apply, params.Rollback, params.Repair} {
+		if m {
+			modes++
+		}
 	}
-	if (params.Apply || params.Rollback) && len(requested) == 0 {
-		return report, fmt.Errorf("itunes-clone-into-library: apply and rollback need explicit group_ids; pick them from the dry run")
+	if modes > 1 {
+		return report, fmt.Errorf("itunes-clone-into-library: apply, rollback and repair are exclusive")
+	}
+	if modes == 1 && len(requested) == 0 {
+		return report, fmt.Errorf("itunes-clone-into-library: apply, rollback and repair need explicit group_ids; pick them from the dry run")
 	}
 	if rootDir == "" {
 		return report, fmt.Errorf("itunes-clone-into-library: root_dir is not set")
 	}
 	opID := registry.ReporterOpID(reporter)
-	writes := params.Apply || params.Rollback
+	writes := modes == 1
 	if writes && opID == "" {
 		return report, fmt.Errorf("itunes-clone-into-library: no operation id; refusing to write")
 	}
 	run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, cloner: p.deps, rootDir: rootDir, opID: opID, apply: params.Apply}
+	if writes {
+		cp, ok := database.AsCapability[chapterPersister](ops)
+		if !ok {
+			return report, fmt.Errorf("itunes-clone-into-library: store cannot write chapter tables; refusing to write")
+		}
+		run.chapters = cp
+	}
 
 	work := requested
-	if !params.Rollback {
+	if !params.Rollback && !params.Repair {
 		books, err := ops.GetAllBooksCoreComplete(0, 0)
 		if err != nil {
 			return report, fmt.Errorf("list books: %w", err)
@@ -289,9 +321,12 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 			return nil
 		}
 		var g icGroupReport
-		if params.Rollback {
+		switch {
+		case params.Rollback:
 			g = run.rollback(gctx, gid)
-		} else {
+		case params.Repair:
+			g = run.repair(gctx, gid)
+		default:
 			g = run.planAndApply(gctx, gid)
 		}
 		mu.Lock()
@@ -742,13 +777,21 @@ func (r *icRunner) planAndApply(ctx context.Context, gid string) icGroupReport {
 	if p.kind == icKindMixed {
 		return r.applyMixed(ctx, g, p)
 	}
-	return r.applyVersion(g, p)
+	return r.applyVersion(ctx, g, p)
 }
 
-func (r *icRunner) applyVersion(g icGroupReport, p *icPlan) icGroupReport {
+func priorPrimaryFlags(members []database.Book) map[string]string {
+	out := make(map[string]string, len(members))
+	for i := range members {
+		out[members[i].ID] = storedPrimaryFlag(members[i].IsPrimaryVersion)
+	}
+	return out
+}
+
+func (r *icRunner) applyVersion(ctx context.Context, g icGroupReport, p *icPlan) icGroupReport {
 	rec := icRecord{GroupID: g.GroupID, Kind: icKindVersion, SourceBookID: p.source.ID,
 		SourcePriorState: derefString(p.source.LibraryState), SourcePriorPrimary: storedPrimaryFlag(p.source.IsPrimaryVersion),
-		OpID: r.opID, At: time.Now()}
+		PriorPrimaries: priorPrimaryFlags(p.members), OpID: r.opID, At: time.Now()}
 	byPID := map[string]database.BookFile{}
 	for _, f := range p.files {
 		if f.ITunesPersistentID != "" {
@@ -793,6 +836,23 @@ func (r *icRunner) applyVersion(g icGroupReport, p *icPlan) icGroupReport {
 		g.Outcome, g.Error = icOutcomeFailed, "landed off plan; rolled back: "+rb.Outcome+" "+rb.Error
 		return g
 	}
+	// The clone's files are the source's bytes, so its chapter table is the
+	// source's. Without it the clone ranks m4b_without_chapters, the election
+	// holds the group (better_copy_not_in_library: the iTunes source, with
+	// chapters, outranks it) and a clone whose source was not the primary is
+	// never crowned: 67 of the 240 clones on 2026-09-24, invisible in ABS.
+	// Copy the table, then hand off again now that the clone ranks fairly.
+	// Errors are reported on an applied group; rollback still reverses it.
+	if chs, err := r.chapters.GetChaptersForBook(p.source.ID); err != nil {
+		g.Error = "read source chapters: " + err.Error()
+	} else if len(chs) > 0 {
+		if err := r.chapters.SaveChaptersForBook(newID, chs); err != nil {
+			g.Error = "copy chapters: " + err.Error()
+		}
+	}
+	if _, err := versionprimary.EnsureSinglePrimary(ctx, r.store, g.GroupID, versionprimary.Env{RootDir: r.rootDir}); err != nil {
+		g.Error = strings.TrimSpace(g.Error + " hand-off: " + err.Error())
+	}
 	g.Outcome = icOutcomeApplied
 	return g
 }
@@ -800,7 +860,7 @@ func (r *icRunner) applyVersion(g icGroupReport, p *icPlan) icGroupReport {
 func (r *icRunner) applyMixed(ctx context.Context, g icGroupReport, p *icPlan) icGroupReport {
 	rec := icRecord{GroupID: g.GroupID, Kind: icKindMixed, SourceBookID: p.source.ID,
 		SourcePriorState: derefString(p.source.LibraryState), SourcePriorPrimary: storedPrimaryFlag(p.source.IsPrimaryVersion),
-		OpID: r.opID, At: time.Now()}
+		PriorPrimaries: priorPrimaryFlags(p.members), OpID: r.opID, At: time.Now()}
 	var made []string
 	cleanup := func() {
 		for _, m := range made {
@@ -844,7 +904,7 @@ func (r *icRunner) applyMixed(ctx context.Context, g icGroupReport, p *icPlan) i
 		}
 	}
 	if _, err := versionprimary.EnsureSinglePrimary(ctx, r.store, g.GroupID, versionprimary.Env{RootDir: r.rootDir}); err != nil {
-		g.Error = "hand-off: " + err.Error()
+		g.Error = strings.TrimSpace(g.Error + " hand-off: " + err.Error())
 	}
 	g.Outcome = icOutcomeApplied
 	return g
@@ -873,6 +933,62 @@ func (r *icRunner) loadRecord(gid string) (*icRecord, error) {
 		}
 	}
 	return nil, nil
+}
+
+// repair finishes a clone applied before the chapter copy and the post-clone
+// hand-off existed: see icParams.Repair.
+func (r *icRunner) repair(ctx context.Context, gid string) icGroupReport {
+	g := icGroupReport{GroupID: gid, Decision: "repair"}
+	rec, err := r.loadRecord(gid)
+	switch {
+	case err != nil:
+		g.Outcome, g.Error = icOutcomeFailed, err.Error()
+		return g
+	case rec == nil:
+		g.Outcome, g.Reason = icOutcomeFailed, "no_clone_record"
+		return g
+	}
+	g.Kind, g.SourceBookID, g.CloneBookID = rec.Kind, rec.SourceBookID, rec.CloneBookID
+	if rec.PriorPrimaries == nil {
+		members, err := r.store.GetBooksByVersionGroup(gid)
+		if err != nil {
+			g.Outcome, g.Error = icOutcomeFailed, "read group: "+err.Error()
+			return g
+		}
+		rec.PriorPrimaries = priorPrimaryFlags(members)
+		// Before any write: a record that cannot remember the flags would
+		// leave the hand-off's demotions irreversible.
+		if err := r.saveRecord(rec); err != nil {
+			g.Outcome, g.Error = icOutcomeFailed, "record not updated: "+err.Error()
+			return g
+		}
+	}
+	if rec.Kind == icKindVersion && rec.CloneBookID != "" {
+		have, err := r.chapters.GetChaptersForBook(rec.CloneBookID)
+		if err != nil {
+			g.Outcome, g.Error = icOutcomeFailed, "read clone chapters: "+err.Error()
+			return g
+		}
+		if len(have) == 0 {
+			chs, err := r.chapters.GetChaptersForBook(rec.SourceBookID)
+			if err != nil {
+				g.Outcome, g.Error = icOutcomeFailed, "read source chapters: "+err.Error()
+				return g
+			}
+			if len(chs) > 0 {
+				if err := r.chapters.SaveChaptersForBook(rec.CloneBookID, chs); err != nil {
+					g.Outcome, g.Error = icOutcomeFailed, "copy chapters: "+err.Error()
+					return g
+				}
+			}
+		}
+	}
+	if _, err := versionprimary.EnsureSinglePrimary(ctx, r.store, gid, versionprimary.Env{RootDir: r.rootDir}); err != nil {
+		g.Outcome, g.Error = icOutcomeFailed, "hand-off: "+err.Error()
+		return g
+	}
+	g.Outcome = icOutcomeFixed
+	return g
 }
 
 func (r *icRunner) rollback(ctx context.Context, gid string) icGroupReport {
@@ -936,6 +1052,10 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 		if err := r.store.DeleteBook(rec.CloneBookID); err != nil {
 			return fail("delete clone book %s: %v", rec.CloneBookID, err)
 		}
+		// Saving nil deletes the table; a clone with none is a no-op.
+		if err := r.chapters.SaveChaptersForBook(rec.CloneBookID, nil); err != nil {
+			g.Error = strings.TrimSpace(g.Error + " clone chapters not removed: " + err.Error())
+		}
 		if _, err := r.store.ModifyBook(rec.SourceBookID, func(b *database.Book) error {
 			st := rec.SourcePriorState
 			b.LibraryState = &st
@@ -982,6 +1102,11 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 			_ = os.Remove(filepath.Dir(pr.ClonePath)) // only if now empty
 		}
 	}
+	// Reported, not fatal: the rows and files are already reversed, and a
+	// second rollback could not redo them.
+	if err := r.restorePriorPrimaries(rec); err != nil {
+		g.Error = strings.TrimSpace(g.Error + " restore primary flags: " + err.Error())
+	}
 	if _, err := versionprimary.EnsureSinglePrimary(ctx, r.store, rec.GroupID, versionprimary.Env{RootDir: r.rootDir}); err != nil {
 		g.Error = strings.TrimSpace(g.Error + " hand-off: " + err.Error())
 	}
@@ -990,6 +1115,43 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 	}
 	g.Outcome = icOutcomeRolled
 	return g
+}
+
+// restorePriorPrimaries puts back each member's stored primary flag from the
+// record. A member that is gone or has left the group is skipped: its flag
+// no longer decides this group.
+func (r *icRunner) restorePriorPrimaries(rec *icRecord) error {
+	ids := make([]string, 0, len(rec.PriorPrimaries))
+	for id := range rec.PriorPrimaries {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		flag := rec.PriorPrimaries[id]
+		b, err := r.store.GetBookByID(id)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", id, err)
+		}
+		if b == nil || b.IsSoftDeleted() || b.VersionGroupID == nil || *b.VersionGroupID != rec.GroupID {
+			continue
+		}
+		if storedPrimaryFlag(b.IsPrimaryVersion) == flag {
+			continue
+		}
+		if _, err := r.store.ModifyBook(id, func(row *database.Book) error {
+			switch flag {
+			case "true", "false":
+				v := flag == "true"
+				row.IsPrimaryVersion = &v
+			default:
+				row.IsPrimaryVersion = nil
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("write %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 func derefString(s *string) string {
