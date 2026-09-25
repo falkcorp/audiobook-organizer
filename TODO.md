@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.14 -->
+<!-- version: 10.73.15 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-21 -->
+<!-- last-edited: 2026-09-25 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,9 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] Fold the 216 held "suspicious" version groups (chapter fragments, owner 2026-09-24) into the parked chapter-consolidation work; leave them held until then. Also list the truncated m4bs found there (Neverwhere, the 10 Bobiverse 2 `_copyN` files).
+- [ ] Decide the `leftover_merged_elsewhere` groups from `maintenance.version-group-primary-repair` (organized copy merged into another group's book); the op only labels them.
 
 - [ ] **`metadata.batch-apply-cached` re-picks books whose refusal can never change.**
       Measured 2026-09-20 over 4 completed batches: 359 gate refusals across only
