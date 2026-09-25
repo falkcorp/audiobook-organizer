@@ -318,7 +318,7 @@ func withLibraryItemID(row mediaProgressDTO, userID, libraryItemID string) media
 }
 
 // aliasSeedSince bounds the one-time seed of a user's alias-use record
-// (seedAliasUses). #3558 (deployed 2026-09-25) sent an alias row for EVERY
+// (seedAliasUses). #3558 (merged 2026-09-25) sent an alias row for EVERY
 // alias of every item with progress, and AudioBooth stored a local row for
 // each. Tracking starts with this change, so without a seed every alias
 // becomes untracked at once and the client deletes those rows, including the

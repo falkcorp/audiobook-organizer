@@ -29,8 +29,8 @@ import (
 //
 //  1. Storage keys by the CANONICAL item: ref.BookID and ref.SyncID. A write
 //     through an alias lands on the survivor's record, never on a second one.
-//  2. Response bodies the client files under the id it asked with echo
-//     ref.RequestedID (ref.echo). AudioBooth keys its item page, its local
+//  2. Response bodies the client files under the id it asked with render
+//     ref.RequestedID. AudioBooth keys its item page, its local
 //     progress row and its bookmark list by the id it opened; a body naming
 //     another id never reaches that page.
 //  3. The use is RECORDED per user (noteAliasUse). /api/me carries alias
@@ -55,15 +55,6 @@ type itemRef struct {
 
 // isAlias reports whether the client addressed a merge loser's id.
 func (r itemRef) isAlias() bool { return r.RequestedID != "" && r.RequestedID != r.SyncID }
-
-// echo maps an item id about to be rendered: the canonical id becomes the id
-// the client asked with; any other id is returned unchanged.
-func (r itemRef) echo(id string) string {
-	if r.isAlias() && id == r.SyncID {
-		return r.RequestedID
-	}
-	return id
-}
 
 // errItemNotFound: no candidate id names a live item.
 var errItemNotFound = errors.New("abs: library item not found")
@@ -104,6 +95,15 @@ func (h *Handler) lookupItemRef(userID, raw string, allowRowID bool) (itemRef, e
 			continue
 		}
 		item, err := h.identity.ResolveSyncItem(candidate)
+		if errors.Is(err, database.ErrSyncRedirectChainBroken) {
+			// PERMANENT, not transient: a stale merge-loser id whose chain is
+			// dangling or cyclic names no item. Treating it as retryable would
+			// 5xx every request that carries it forever, and wedge a batch or
+			// replay queue on it. Logged so the chain can be repaired.
+			progressLog.Warn("abs: treating an item id with a broken redirect chain as not found: id=%s: %v",
+				logger.SanitizeLogValue(candidate), err)
+			continue
+		}
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err

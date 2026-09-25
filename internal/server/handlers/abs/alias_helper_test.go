@@ -11,8 +11,39 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )
+
+// TestAliasResolve_BrokenRedirectChainIsNotFound: an id whose merge redirect
+// chain is broken names no item, permanently. A batch skips it and applies the
+// rest (a 5xx would make the client retry the whole batch forever), and the
+// per-item routes answer the plain 404 real ABS gives an unknown id.
+func TestAliasResolve_BrokenRedirectChainIsNotFound(t *testing.T) {
+	w, _ := seededAliasHarness(t)
+	const broken = "00000000-dead-4000-8000-000000000000"
+	w.seed.lib.mu.Lock()
+	if w.seed.lib.resolveErr == nil {
+		w.seed.lib.resolveErr = map[string]error{}
+	}
+	w.seed.lib.resolveErr[broken] = fmt.Errorf("%w: starting at %s", database.ErrSyncRedirectChainBroken, broken)
+	w.seed.lib.mu.Unlock()
+
+	code, _, raw := w.req(t, http.MethodPatch, "/api/me/progress/batch/update", []map[string]any{
+		{"libraryItemId": broken, "currentTime": 10.0},
+		{"libraryItemId": w.syncID, "currentTime": 77.0},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("batch with a broken-chain id = %d %s; want 200 with the good element applied", code, raw)
+	}
+	if got := num(t, getProgress(t, w, w.syncID), "currentTime"); got != 77 {
+		t.Fatalf("good element currentTime = %v, want 77", got)
+	}
+	rec, _ := w.do(t, request{method: http.MethodGet, path: "/api/me/progress/" + broken, headers: bearer(w.token)})
+	if rec.Code != http.StatusNotFound || rec.Body.String() != "Not Found" {
+		t.Fatalf("GET progress for a broken-chain id = %d %q; want the plain 404", rec.Code, rec.Body.String())
+	}
+}
 
 // ABS-ALIAS-HELPER (2026-09-25): every item-addressed route resolves through
 // one helper (item_ref.go) that keys storage by the canonical item, echoes the

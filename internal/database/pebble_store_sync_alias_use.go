@@ -113,8 +113,9 @@ func (p *PebbleStore) RecordSyncAliasUse(userID, aliasSyncID string) error {
 	return p.db.Set(key, value, pebble.Sync)
 }
 
-// ListSyncAliasUses implements SyncAliasUseStore. An undecodable record is an
-// error, not a skip: the caller's alias rows must reflect every recorded use.
+// ListSyncAliasUses implements SyncAliasUseStore. The alias id is the key and
+// the value holds only a diagnostic timestamp, so the value is not decoded: a
+// corrupt one cannot hide a recorded use.
 func (p *PebbleStore) ListSyncAliasUses(userID string) ([]string, bool, error) {
 	if userID == "" || strings.Contains(userID, ":") {
 		return nil, false, fmt.Errorf("sync alias use: invalid user id %q", userID)
@@ -126,11 +127,6 @@ func (p *PebbleStore) ListSyncAliasUses(userID string) ([]string, bool, error) {
 	}
 	var aliases []string
 	for iter.First(); iter.Valid(); iter.Next() {
-		var rec syncAliasUse
-		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
-			_ = iter.Close()
-			return nil, false, fmt.Errorf("sync alias use: decode %q: %w", iter.Key(), err)
-		}
 		aliases = append(aliases, string(iter.Key()[len(prefix):]))
 	}
 	if err := iter.Close(); err != nil {
