@@ -1,6 +1,6 @@
 // file: internal/server/reading_handlers_test.go
-// version: 1.2.1
-// last-edited: 2026-09-02
+// version: 1.3.0
+// last-edited: 2026-09-25
 // guid: 4f9a2c1d-5b8e-4f70-a7d6-2e8c0f1b9a57
 
 package server
@@ -163,6 +163,78 @@ func TestReading_PatchInvalidStatus(t *testing.T) {
 	srv.router.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 on invalid status, got %d", w.Code)
+	}
+}
+
+// TestReading_CanonicalAudiobooksPaths proves the /audiobooks/:id/... routes
+// (naming-audit 2026-09-25, class 1) answer the same as the deprecated
+// /books/:id/... aliases exercised by the tests above.
+func TestReading_CanonicalAudiobooksPaths(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	srv := setupReadingTestServer(t)
+
+	// POST position
+	body, _ := json.Marshal(map[string]any{
+		"segment_id": "s1", "position_seconds": 300,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/position", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST position: %d %s", w.Code, w.Body.String())
+	}
+
+	// GET position
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/b1/position", nil)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET position: %d", w.Code)
+	}
+	var posResp struct {
+		Data *database.UserPosition `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &posResp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if posResp.Data == nil || posResp.Data.SegmentID != "s1" {
+		t.Errorf("got position %+v", posResp.Data)
+	}
+
+	// GET state
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/b1/state", nil)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET state: %d %s", w.Code, w.Body.String())
+	}
+
+	// PATCH status
+	statusBody, _ := json.Marshal(map[string]string{"status": database.UserBookStatusAbandoned})
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/audiobooks/b1/status", bytes.NewReader(statusBody))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PATCH status: %d %s", w.Code, w.Body.String())
+	}
+
+	// DELETE status
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/b1/status", nil)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE status: %d %s", w.Code, w.Body.String())
+	}
+
+	// POST status/repair (dry run, no unreadable row here, just proves the route resolves)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/status/repair", bytes.NewReader([]byte("")))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST status/repair: %d %s", w.Code, w.Body.String())
 	}
 }
 

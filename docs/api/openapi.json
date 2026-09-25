@@ -4732,7 +4732,7 @@
         }
       }
     },
-    "/books/{id}/position": {
+    "/audiobooks/{id}/position": {
       "parameters": [
         {
           "name": "id",
@@ -4789,7 +4789,68 @@
         }
       }
     },
-    "/books/{id}/state": {
+    "/books/{id}/position": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "handleSetPosition",
+        "summary": "Set Position",
+        "description": "Deprecated alias for POST /audiobooks/{id}/position. Kept for backward compatibility.",
+        "deprecated": true,
+        "tags": [
+          "reading"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "get": {
+        "operationId": "handleGetPosition",
+        "summary": "Get Position",
+        "description": "Deprecated alias for GET /audiobooks/{id}/position. Kept for backward compatibility.",
+        "deprecated": true,
+        "tags": [
+          "reading"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/audiobooks/{id}/state": {
       "parameters": [
         {
           "name": "id",
@@ -4824,7 +4885,44 @@
         }
       }
     },
-    "/books/{id}/status": {
+    "/books/{id}/state": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "handleGetBookState",
+        "summary": "Get Book State",
+        "description": "Deprecated alias for GET /audiobooks/{id}/state. Kept for backward compatibility.",
+        "deprecated": true,
+        "tags": [
+          "reading"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/audiobooks/{id}/status": {
       "parameters": [
         {
           "name": "id",
@@ -4881,6 +4979,115 @@
         }
       }
     },
+    "/books/{id}/status": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "handleSetBookStatus",
+        "summary": "Set Book Status",
+        "description": "Deprecated alias for PATCH /audiobooks/{id}/status. Kept for backward compatibility.",
+        "deprecated": true,
+        "tags": [
+          "reading"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "handleClearBookStatus",
+        "summary": "Clear Book Status",
+        "description": "Deprecated alias for DELETE /audiobooks/{id}/status. Kept for backward compatibility.",
+        "deprecated": true,
+        "tags": [
+          "reading"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/audiobooks/{id}/versions/{vid}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "vid",
+          "in": "path",
+          "required": true,
+          "description": "The vid path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "handleTrashVersion",
+        "summary": "Trash Version",
+        "tags": [
+          "reading"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/books/{id}/versions/{vid}": {
       "parameters": [
         {
@@ -4905,6 +5112,56 @@
       "delete": {
         "operationId": "handleTrashVersion",
         "summary": "Trash Version",
+        "description": "Deprecated alias for DELETE /audiobooks/{id}/versions/{vid}. Kept for backward compatibility.",
+        "deprecated": true,
+        "tags": [
+          "reading"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/audiobooks/{id}/versions/{vid}/purge-now": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "vid",
+          "in": "path",
+          "required": true,
+          "description": "The vid path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "handlePurgeVersion",
+        "summary": "Purge Version",
         "tags": [
           "reading"
         ],
@@ -4953,6 +5210,56 @@
       "post": {
         "operationId": "handlePurgeVersion",
         "summary": "Purge Version",
+        "description": "Deprecated alias for POST /audiobooks/{id}/versions/{vid}/purge-now. Kept for backward compatibility.",
+        "deprecated": true,
+        "tags": [
+          "reading"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/audiobooks/{id}/versions/{vid}/restore": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "vid",
+          "in": "path",
+          "required": true,
+          "description": "The vid path parameter.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "handleRestoreVersion",
+        "summary": "Restore Version",
         "tags": [
           "reading"
         ],
@@ -5001,6 +5308,8 @@
       "post": {
         "operationId": "handleRestoreVersion",
         "summary": "Restore Version",
+        "description": "Deprecated alias for POST /audiobooks/{id}/versions/{vid}/restore. Kept for backward compatibility.",
+        "deprecated": true,
         "tags": [
           "reading"
         ],
