@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.123.0
+// version: 1.124.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package config
 
@@ -1580,6 +1580,9 @@ type Config struct {
 	// (spec Decision 11); NOT a feature flag. Default false = filters ON.
 	DisablePerUserSearchFilters bool `json:"disable_per_user_search_filters"`
 
+	// Search holds library search settings (search.* keys).
+	Search SearchConfig `json:"search" mapstructure:"search"`
+
 	// EnabledSortIndexes names the library sort fields that get a memdb
 	// sorted secondary index, turning "sort by X" from a
 	// materialise-the-whole-filtered-set-and-sort into a streaming walk.
@@ -2163,6 +2166,9 @@ func InitConfig() {
 	// Leaving it here would print an "unknown entry ignored" warning on every
 	// startup, for a value the application itself shipped.
 	viper.SetDefault("enabled_sort_indexes", []string{"year"})
+	viper.SetDefault("search.result_cache.enabled", true)
+	viper.SetDefault("search.result_cache.max_bytes", int64(128<<20))
+	viper.SetDefault("search.result_cache.wait_seconds", 20)
 	viper.SetDefault("setup_complete", false)
 
 	// Set library organization defaults
@@ -3014,6 +3020,14 @@ func InitConfig() {
 				ParseBatchWorkers:        viper.GetInt("ai_backend.parse_batch_workers"),
 			},
 
+			Search: SearchConfig{
+				ResultCache: SearchResultCacheConfig{
+					Enabled:     viper.GetBool("search.result_cache.enabled"),
+					MaxBytes:    viper.GetInt64("search.result_cache.max_bytes"),
+					WaitSeconds: viper.GetInt("search.result_cache.wait_seconds"),
+				},
+			},
+
 			// Scheduled background tasks (nested sub-struct)
 			Scheduled: ScheduledTasksConfig{
 				LibraryScan: ScheduledTaskConfig{
@@ -3809,4 +3823,24 @@ func ResetToDefaults() {
 			},
 		}
 	}) // end Mutate
+}
+
+// SearchConfig groups the search.* settings.
+type SearchConfig struct {
+	ResultCache SearchResultCacheConfig `json:"result_cache" mapstructure:"result_cache"`
+}
+
+// SearchResultCacheConfig sizes the shared search result cache
+// (internal/searchcache): the full ranked ID list per distinct search, served
+// as page slices and kept current by the store-wide change generation.
+//
+// search.result_cache.enabled (default true) is the rollback switch: false
+// restores the per-request search. max_bytes (default 128 MiB) caps the IDs
+// held, least recently used first. wait_seconds (default 20) is how long a web
+// request waits for a new search before it is answered 202 with a search ID to
+// poll.
+type SearchResultCacheConfig struct {
+	Enabled     bool  `json:"enabled" mapstructure:"enabled"`
+	MaxBytes    int64 `json:"max_bytes" mapstructure:"max_bytes"`
+	WaitSeconds int   `json:"wait_seconds" mapstructure:"wait_seconds"`
 }

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )
 
 // The seven interfaces below are the measured dependency surface of
@@ -187,6 +188,9 @@ type AudiobookService struct {
 	// Wired in by the Server after Bleve opens in Start(), which is
 	// after NewAudiobookService runs in NewServer.
 	searchIndex *search.BleveIndex
+	// resultCache is the shared search result cache (service_search_cache.go);
+	// nil disables it.
+	resultCache *searchcache.Cache
 	// itunesEnqueuer is wired by the Server after the WriteBackBatcher
 	// is constructed. Nil-safe — when nil the delete/purge paths skip
 	// the iTunes side-effect (e.g. tests, iTunes disabled in config).

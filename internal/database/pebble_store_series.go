@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package database
 
@@ -208,6 +208,7 @@ func (p *PebbleStore) DeleteSeries(id int) error {
 		return err
 	}
 	p.DeleteSeriesFromMemDB(id)
+	p.notifySeriesRenamed(id)
 	return nil
 }
 
@@ -332,6 +333,7 @@ func (p *PebbleStore) renameSeriesLocked(id int, series *Series, name string) er
 	if updated, err := p.GetSeriesByID(id); err == nil && updated != nil {
 		p.UpsertSeriesToMemDB(updated)
 	}
+	p.notifySeriesRenamed(id)
 	return nil
 }
 

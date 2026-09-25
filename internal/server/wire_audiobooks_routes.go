@@ -1,7 +1,7 @@
 // file: internal/server/wire_audiobooks_routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-08-24
+// last-edited: 2026-09-25
 
 package server
 
@@ -23,6 +23,8 @@ func (s *Server) wireAudiobooksRoutes(
 	// sample, organize/rename, versions, metadata, itunes, parse-with-ai, the
 	// batch-write-back/bulk-write-back endpoints) stay in server_lifecycle.go.
 	protected.GET("/audiobooks", s.perm(auth.PermLibraryView), audiobooksH.ListAudiobooks)
+	// Status of a list search that outlived its request (the 202 path).
+	protected.GET("/search/:search_id", s.perm(auth.PermLibraryView), s.getSearchJob)
 	protected.GET("/audiobooks/count", s.perm(auth.PermLibraryView), audiobooksH.CountAudiobooks)
 	protected.GET("/audiobooks/facets", s.perm(auth.PermLibraryView), audiobooksH.AudiobookFacets)
 	protected.GET("/audiobooks/soft-deleted", s.perm(auth.PermLibraryView), audiobooksH.ListSoftDeletedAudiobooks)
