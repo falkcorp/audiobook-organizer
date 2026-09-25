@@ -355,3 +355,125 @@ func TestITunesClone_SkipsBookAlreadyInLibrary(t *testing.T) {
 		require.Equal(t, icOutcomeApplied, g.Outcome, gid+" "+g.Reason+g.Error)
 	}
 }
+
+// A held group whose primary's files are gone and whose iTunes source is NOT
+// the primary: the clone must still be crowned (ABS lists only a primary),
+// and rollback must give the old primary its flag back.
+func TestITunesClone_CrownsCloneOverDeadPrimary(t *testing.T) {
+	f := newICFixture(t)
+	dead := filepath.Join(f.root, "Author", "Old Copy", "Old.m4b")
+	f.book(t, "P", "vg-p", "Book P", []string{dead})
+	require.NoError(t, os.Remove(dead))
+	_, err := f.s.ModifyBookFile("P", "P-f0", func(bf *database.BookFile) error {
+		bf.Missing = true
+		return nil
+	})
+	require.NoError(t, err)
+	f.book(t, "S", "vg-p", "Book P", []string{f.itunes("Book P.m4b")})
+	_, err = f.s.ModifyBook("S", func(b *database.Book) error {
+		no := false
+		b.IsPrimaryVersion = &no
+		return nil
+	})
+	require.NoError(t, err)
+	// The source has a chapter table, as the prod sources did: without the
+	// copy the clone ranks below it and the election holds the group.
+	chs := []database.Chapter{{ID: 0, StartSec: 0, EndSec: 60, Title: "One"}, {ID: 1, StartSec: 60, EndSec: 120, Title: "Two"}}
+	require.NoError(t, f.s.SaveChaptersForBook("S", chs))
+
+	rep := f.run(t, icParams{Apply: true, GroupIDs: []string{"vg-p"}})
+	g := icGroup(t, rep, "vg-p")
+	require.Equal(t, icOutcomeApplied, g.Outcome, g.Reason+g.Error)
+	clone, err := f.s.GetBookByID(g.CloneBookID)
+	require.NoError(t, err)
+	require.True(t, clone.IsPrimaryVersion != nil && *clone.IsPrimaryVersion, "the clone is crowned")
+	p, err := f.s.GetBookByID("P")
+	require.NoError(t, err)
+	require.False(t, *p.IsPrimaryVersion, "the dead primary is demoted")
+	got, err := f.s.GetChaptersForBook(g.CloneBookID)
+	require.NoError(t, err)
+	require.Equal(t, chs, got, "the clone carries the source's chapters")
+	cloneID := g.CloneBookID
+
+	rep = f.run(t, icParams{Rollback: true, GroupIDs: []string{"vg-p"}})
+	require.Equal(t, icOutcomeRolled, icGroup(t, rep, "vg-p").Outcome, icGroup(t, rep, "vg-p").Error)
+	p, err = f.s.GetBookByID("P")
+	require.NoError(t, err)
+	require.True(t, *p.IsPrimaryVersion, "rollback restores the old primary's flag")
+	s, err := f.s.GetBookByID("S")
+	require.NoError(t, err)
+	require.False(t, *s.IsPrimaryVersion)
+	require.Equal(t, "organized", *s.LibraryState)
+	got, err = f.s.GetChaptersForBook(cloneID)
+	require.NoError(t, err)
+	require.Empty(t, got, "rollback removes the clone's chapters")
+}
+
+// repair finishes a clone applied before the chapter copy existed: the
+// clone has no chapters, is not primary, and its record has no prior flags
+// (the prod state of 67 groups on 2026-09-24). Repair copies the chapters,
+// crowns the clone, and records the flags so rollback still restores them.
+func TestITunesClone_RepairFinishesAnOldClone(t *testing.T) {
+	f := newICFixture(t)
+	dead := filepath.Join(f.root, "Author", "Old Copy", "Old.m4b")
+	f.book(t, "P", "vg-p", "Book P", []string{dead})
+	require.NoError(t, os.Remove(dead))
+	_, err := f.s.ModifyBookFile("P", "P-f0", func(bf *database.BookFile) error {
+		bf.Missing = true
+		return nil
+	})
+	require.NoError(t, err)
+	f.book(t, "S", "vg-p", "Book P", []string{f.itunes("Book P.m4b")})
+	setPrimary := func(id string, v bool) {
+		_, err := f.s.ModifyBook(id, func(b *database.Book) error {
+			b.IsPrimaryVersion = &v
+			return nil
+		})
+		require.NoError(t, err)
+	}
+	setPrimary("S", false)
+	chs := []database.Chapter{{ID: 0, StartSec: 0, EndSec: 60, Title: "One"}}
+	require.NoError(t, f.s.SaveChaptersForBook("S", chs))
+
+	g := icGroup(t, f.run(t, icParams{Apply: true, GroupIDs: []string{"vg-p"}}), "vg-p")
+	require.Equal(t, icOutcomeApplied, g.Outcome, g.Error)
+	cloneID := g.CloneBookID
+
+	// Rewind to the pre-fix state.
+	require.NoError(t, f.s.SaveChaptersForBook(cloneID, nil))
+	setPrimary(cloneID, false)
+	setPrimary("P", true)
+	run := &icRunner{store: icStore{OpsStore: f.s, ChapterReader: f.s}}
+	rec, err := run.loadRecord("vg-p")
+	require.NoError(t, err)
+	rec.PriorPrimaries = nil
+	require.NoError(t, run.saveRecord(rec))
+
+	g = icGroup(t, f.run(t, icParams{Repair: true, GroupIDs: []string{"vg-p"}}), "vg-p")
+	require.Equal(t, icOutcomeFixed, g.Outcome, g.Error)
+	clone, err := f.s.GetBookByID(cloneID)
+	require.NoError(t, err)
+	require.True(t, *clone.IsPrimaryVersion, "repair crowns the clone")
+	got, err := f.s.GetChaptersForBook(cloneID)
+	require.NoError(t, err)
+	require.Equal(t, chs, got)
+	rec, err = run.loadRecord("vg-p")
+	require.NoError(t, err)
+	require.Equal(t, "true", rec.PriorPrimaries["P"], "flags recorded as they stood before the hand-off")
+
+	// A second repair is a no-op that still succeeds.
+	require.Equal(t, icOutcomeFixed, icGroup(t, f.run(t, icParams{Repair: true, GroupIDs: []string{"vg-p"}}), "vg-p").Outcome)
+
+	g = icGroup(t, f.run(t, icParams{Rollback: true, GroupIDs: []string{"vg-p"}}), "vg-p")
+	require.Equal(t, icOutcomeRolled, g.Outcome, g.Error)
+	p, err := f.s.GetBookByID("P")
+	require.NoError(t, err)
+	require.True(t, *p.IsPrimaryVersion, "rollback restores the old primary")
+
+	// Repair without ids refuses; repair and apply are exclusive.
+	pl := &Plugin{deps: f.deps}
+	_, err = pl.itunesCloneIntoLibrary(context.Background(), icParams{Repair: true}, f.root, &opIDReporter{id: "x"})
+	require.ErrorContains(t, err, "group_ids")
+	_, err = pl.itunesCloneIntoLibrary(context.Background(), icParams{Repair: true, Apply: true, GroupIDs: []string{"vg-p"}}, f.root, &opIDReporter{id: "x"})
+	require.ErrorContains(t, err, "exclusive")
+}
