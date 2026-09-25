@@ -44,7 +44,7 @@ describe('review count poll -> re-render cascade', () => {
     const counts = { count: 4, by_kind: { 'regroup.multidisc': 4 } };
     vi.mocked(api.getReviewCount).mockImplementation(() =>
       // A fresh object every call, exactly as JSON.parse would produce.
-      Promise.resolve({ count: counts.count, by_kind: { ...counts.byKind } })
+      Promise.resolve({ count: counts.count, by_kind: { ...counts.by_kind } })
     );
 
     let renders = 0;
