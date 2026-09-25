@@ -42,10 +42,10 @@ func absBookSearchKey(query string) string {
 // costs one hydration of limit books.
 //
 // ABS clients cannot poll, so there is no 202 here: the request waits for the
-// build. If the build outlives the wait, the request is answered by the
-// direct limited search, exactly what it got before the cache existed, and
-// complete=false keeps that document out of the document cache. The build
-// keeps running and a later request is a hit.
+// build (the cache's configured wait). If the build outlives it, the request
+// is answered with the hits it has (none yet), complete=false keeps that
+// document out of the document cache, and the build keeps running so a later
+// request is a hit.
 func (h *Handler) searchBookHits(ctx context.Context, query string, limit int) (books []database.Book, complete bool, err error) {
 	direct := func() ([]database.Book, bool, error) {
 		b, err := h.library.SearchBooksFiltered(query, limit, 0, absItemFilterBase())
@@ -55,12 +55,15 @@ func (h *Handler) searchBookHits(ctx context.Context, query string, limit int) (
 		return direct()
 	}
 	ev := &absBookSearchEvaluator{lib: h.library, query: query}
-	res, err := h.bookSearch.Lookup(ctx, absBookSearchKey(query), ev, 0)
+	res, err := h.bookSearch.Lookup(ctx, absBookSearchKey(query), ev, h.bookSearch.DefaultWait())
 	var pending *searchcache.PendingError
 	if errors.As(err, &pending) {
-		absSearchLog.Warn("abs: search %s outlived the wait; answering with the direct search", pending.SearchID)
-		b, _, dErr := direct()
-		return b, false, dErr
+		// Return what we have, which on a miss is nothing yet, rather than
+		// re-running the same full-cost scan at the moment the server is
+		// slowest. complete=false keeps the document out of the cache; the
+		// build continues and the next search is a hit.
+		absSearchLog.Warn("abs: search %s outlived the wait; answering with no book hits while it finishes", pending.SearchID)
+		return []database.Book{}, false, nil
 	}
 	if err != nil {
 		return nil, false, err

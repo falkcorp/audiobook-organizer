@@ -77,7 +77,7 @@ func (svc *AudiobookService) GetAudiobooksPage(ctx context.Context, limit int, o
 // cachedSearchPage serves one page of a cacheable search from the cache.
 func (svc *AudiobookService) cachedSearchPage(ctx context.Context, key string, limit, offset int, search string, authorID, seriesID *int, f ListFilters) ([]database.Book, int, SearchMeta, error) {
 	ev := &listSearchEvaluator{svc: svc, search: search, authorID: authorID, seriesID: seriesID, f: f, substring: !svc.bleveSearchable()}
-	res, err := svc.resultCache.Lookup(ctx, key, ev, svc.searchWait())
+	res, err := svc.resultCache.Lookup(ctx, key, ev, svc.searchWait(ctx))
 	if err != nil {
 		return nil, 0, SearchMeta{}, err
 	}
@@ -97,13 +97,32 @@ func (svc *AudiobookService) cachedSearchPage(ctx context.Context, key string, l
 	return page, len(res.IDs), SearchMeta{Cached: true, Stale: res.Stale}, nil
 }
 
-// searchWait is how long a request waits for a new search: the configured
-// search.result_cache.wait_seconds, or the cache's default.
-func (svc *AudiobookService) searchWait() time.Duration {
+type pendingOKKey struct{}
+
+// WithPendingSearchResponse marks ctx as belonging to a caller that can
+// handle *searchcache.PendingError (the web list handler, which answers 202).
+// Every other caller of GetAudiobooksPage/GetAudiobooks blocks until the
+// search finishes or its ctx ends, as it always did: a batch op or the
+// metadata tools must never receive "still running" instead of results.
+func WithPendingSearchResponse(ctx context.Context) context.Context {
+	return context.WithValue(ctx, pendingOKKey{}, true)
+}
+
+// blockForever is the wait for callers that cannot handle a pending search:
+// they wait for the build or for their own ctx.
+const blockForever = time.Duration(1<<63 - 1)
+
+// searchWait is how long a request waits for a new search: for a caller that
+// accepts a pending answer, search.result_cache.wait_seconds (or the cache's
+// default); for everyone else, until the build finishes or ctx ends.
+func (svc *AudiobookService) searchWait(ctx context.Context) time.Duration {
+	if ok, _ := ctx.Value(pendingOKKey{}).(bool); !ok {
+		return blockForever
+	}
 	if s := config.AppConfig.Search.ResultCache.WaitSeconds; s > 0 {
 		return time.Duration(s) * time.Second
 	}
-	return 0
+	return svc.resultCache.DefaultWait()
 }
 
 // searchCacheKey returns the cache key for a search request, or false when the

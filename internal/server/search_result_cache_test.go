@@ -214,6 +214,14 @@ func TestSearchResultCache_CaseFoldSharesEntry(t *testing.T) {
 	if fx.srv.searchResults.Stats().Misses != misses {
 		t.Fatal("folded query did not share the cached entry")
 	}
+	// Evidence for NOT folding '_' into Bleve keys: log whether the uncached
+	// ranked lists of "alpha_bravo" and "alpha bravo" agree.
+	cache := fx.srv.searchResults
+	fx.srv.audiobookService.SetSearchResultCache(nil)
+	u := fx.ids(t, "alpha_bravo", primaryOnly())
+	s := fx.ids(t, "alpha bravo", primaryOnly())
+	fx.srv.audiobookService.SetSearchResultCache(cache)
+	t.Logf("underscore fold: alpha_bravo=%d ids, alpha bravo=%d ids, identical=%v", len(u), len(s), fmt.Sprint(u) == fmt.Sprint(s))
 }
 
 // setupRenameTarget gives one primary book a unique title word, author and
@@ -350,7 +358,11 @@ func TestSearchResultCache_DisconnectStillCaches(t *testing.T) {
 // too short for any search, and polls the search ID to completion.
 func TestSearchResultCache_PendingReturns202(t *testing.T) {
 	fx := newSearchCacheServer(t, 200, 0, searchcache.Config{Wait: time.Nanosecond})
-	_, _, _, err := fx.srv.audiobookService.GetAudiobooksPage(context.Background(), 10, 0, "bravo", nil, nil, primaryOnly())
+	// A caller that has not opted in blocks instead of getting a 202.
+	if _, _, _, err := fx.srv.audiobookService.GetAudiobooksPage(context.Background(), 10, 0, "charlie", nil, nil, primaryOnly()); err != nil {
+		t.Fatalf("non-handler caller got %v, want results", err)
+	}
+	_, _, _, err := fx.srv.audiobookService.GetAudiobooksPage(audiobookspkg.WithPendingSearchResponse(context.Background()), 10, 0, "bravo", nil, nil, primaryOnly())
 	var pe *searchcache.PendingError
 	if !errors.As(err, &pe) {
 		t.Fatalf("err = %v, want *searchcache.PendingError", err)

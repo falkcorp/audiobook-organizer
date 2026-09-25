@@ -627,7 +627,9 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	}
 
 	showQuarantined := c.Query("show_quarantined") == "true"
-	resp, err := h.buildListResponse(c.Request.Context(), params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
+	// This handler can answer a long search with 202, so it opts in to the
+	// pending answer; every other caller of the list pipeline blocks.
+	resp, err := h.buildListResponse(audiobookspkg.WithPendingSearchResponse(c.Request.Context()), params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
 	var pending *searchcache.PendingError
 	if errors.As(err, &pending) {
 		// The search is still running (detached from this request) and will
