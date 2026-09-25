@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/search_book_cache_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e10f4fe-7e2d-4948-a417-4c262f7ac2f4
 // last-edited: 2026-09-25
 
@@ -87,4 +87,50 @@ func TestSearch_SharedResultCache(t *testing.T) {
 	if st := cache.Stats(); st.Patches == 0 {
 		t.Fatalf("the rename was not applied by a patch: %+v", st)
 	}
+	// Review findings 2/25: the patch ranked the changed book by point
+	// lookups; neither Match nor the order comparator rescanned the library.
+	if seed.lib.searchCalls() != scans {
+		t.Fatalf("the patch ran full library scans (%d -> %d)", scans, seed.lib.searchCalls())
+	}
+}
+
+// Review finding 19: one unreadable book row costs that hit only. The search
+// still answers 200 with every other hit, and the partial answer is not pinned
+// into the document cache.
+func TestSearch_UnreadableRowIsSkipped(t *testing.T) {
+	seed := seedOracleLibrary(t)
+	changes := searchcache.NewChangeLog(0)
+	cache := searchcache.New(changes, searchcache.Config{})
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()), withSearchResults(cache))
+	h.seedUser(t, "u1", "oracle", "", "pw-pw-pw-pw")
+	tok := str(t, userObj(t, h.login(t, "oracle", "pw-pw-pw-pw")), "accessToken")
+
+	seed.lib.mu.Lock()
+	seed.lib.badRows = map[string]bool{seed.singleID: true}
+	seed.lib.mu.Unlock()
+	if _, n := searchBooks(t, h, tok, "odyssey"); n != 1 {
+		t.Fatalf("with one unreadable match the search returned %d books, want 1", n)
+	}
+	// The row becomes readable again: the next search must see both hits, so
+	// the partial list above was not cached as a complete document.
+	seed.lib.mu.Lock()
+	seed.lib.badRows = nil
+	seed.lib.mu.Unlock()
+	if _, n := searchBooks(t, h, tok, "odyssey"); n != 2 {
+		t.Fatalf("after the row recovered the search returned %d books, want 2", n)
+	}
+}
+
+// Review finding 19 (storage error): a failed hydration read degrades to an
+// empty book section, never a 500.
+func TestSearch_HydrationErrorIsNot500(t *testing.T) {
+	seed := seedOracleLibrary(t)
+	cache := searchcache.New(searchcache.NewChangeLog(0), searchcache.Config{})
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()), withSearchResults(cache))
+	h.seedUser(t, "u1", "oracle", "", "pw-pw-pw-pw")
+	tok := str(t, userObj(t, h.login(t, "oracle", "pw-pw-pw-pw")), "accessToken")
+	seed.lib.mu.Lock()
+	seed.lib.hydrateErr = fmt.Errorf("disk read failed")
+	seed.lib.mu.Unlock()
+	searchBooks(t, h, tok, "odyssey") // fails the test on any status but 200
 }

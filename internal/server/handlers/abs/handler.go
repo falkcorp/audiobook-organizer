@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-09-25
 
@@ -165,6 +165,11 @@ type LibrarySearchReader interface {
 	// same order; limit 0 means every match. The shared search result cache
 	// builds its ranked lists with it (search_book_cache.go).
 	SearchBookIDsFiltered(query string, limit, offset int, f database.BookSummaryFilter) ([]string, error)
+	// SearchBookRanksFiltered and GetBooksForSearch: see
+	// database.SearchResultStore. The result cache patches an entry through
+	// point-lookup ranks and hydrates hits skipping unreadable rows singly.
+	SearchBookRanksFiltered(query string, ids []string, f database.BookSummaryFilter) (map[string]database.SearchRank, error)
+	GetBooksForSearch(ids []string, withSig bool) ([]database.Book, []string, error)
 	GetDistinctGenres() ([]string, error)
 	// GetGenreCounts feeds /filterdata's genre list AND the per-genre numItems
 	// that a /search genre hit must carry (AudioBooth decodes search genres as

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-25
 
@@ -2557,9 +2557,16 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 		// Read BEFORE the build: a write during it leaves the document older
 		// than the generation, so it is not replayed.
 		gen := h.searchGeneration()
-		resp, complete, err := h.buildSearch(context.WithoutCancel(c.Request.Context()), query, limit)
+		resp, complete, hitsGen, err := h.buildSearch(context.WithoutCancel(c.Request.Context()), query, limit)
 		if err != nil {
 			return nil, err
+		}
+		// The book hits may be current only to an OLDER generation than the
+		// one read above (a build this request joined started before a
+		// write): stamp the document with the older one, so that write
+		// invalidates it.
+		if h.bookSearch != nil && hitsGen < gen {
+			gen = hitsGen
 		}
 		// 🔴 A DEGRADED DOCUMENT IS NEVER CACHED. buildSearch serves a list
 		// empty rather than failing the request when one of its optional
@@ -2594,7 +2601,7 @@ func emptySearchResponse() *searchResponse {
 //
 // complete is false when any optional source degraded to an empty list; the
 // document is still served, but the caller must not cache it.
-func (h *Handler) buildSearch(ctx context.Context, query string, limit int) (resp *searchResponse, complete bool, err error) {
+func (h *Handler) buildSearch(ctx context.Context, query string, limit int) (resp *searchResponse, complete bool, hitsGen uint64, err error) {
 	resp = emptySearchResponse()
 	complete = true
 	degraded := func(what string, err error) {
@@ -2616,16 +2623,16 @@ func (h *Handler) buildSearch(ctx context.Context, query string, limit int) (res
 	// The hits come from the shared search result cache when it is wired
 	// (searchBookHits); a hit list served stale or by the timeout fallback
 	// marks the document incomplete so it is not pinned.
-	books, booksComplete, err := h.searchBookHits(ctx, query, limit)
+	books, booksComplete, hitsGen, err := h.searchBookHits(ctx, query, limit)
 	if err != nil {
-		return nil, false, err
+		return nil, false, 0, err
 	}
 	if !booksComplete {
 		complete = false
 	}
 	views, err := h.loadItemViews(ctx, books)
 	if err != nil {
-		return nil, false, err
+		return nil, false, 0, err
 	}
 	for i := range views {
 		// Search hits carry the EXPANDED item, which is what real ABS returns and
@@ -2708,7 +2715,7 @@ func (h *Handler) buildSearch(ctx context.Context, query string, limit int) (res
 			resp.Genres = append(resp.Genres, searchGenreDTO{Name: g, NumItems: fd.genreCounts[g]})
 		}
 	}
-	return resp, complete, nil
+	return resp, complete, hitsGen, nil
 }
 
 // searchSeriesHits returns the series whose name contains the (lowercased)
