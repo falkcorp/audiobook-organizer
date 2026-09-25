@@ -1,5 +1,5 @@
 // file: internal/search/bleve_index.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
 // last-edited: 2026-09-25
 //
@@ -512,9 +512,6 @@ func (b *BleveIndex) Search(queryString string, from, size int) ([]SearchResult,
 	return out, res.Total, nil
 }
 
-// SearchNative runs a pre-built query.Query (typically produced by
-// the AST → Bleve translator) against the index. Used by smart
-// playlists and the library search path after DSL translation.
 // SearchNativeIDs is SearchNative without highlighting: the hits carry IDs
 // and scores only. The library list search reads nothing else, and
 // highlighting every hit of a 10,000-hit post-filter window is pure cost.
@@ -523,6 +520,9 @@ func (b *BleveIndex) SearchNativeIDs(q query.Query, from, size int) ([]SearchRes
 	return b.searchNative(q, from, size, false)
 }
 
+// SearchNative runs a pre-built query.Query (typically produced by
+// the AST → Bleve translator) against the index. Used by smart
+// playlists and the library search path after DSL translation.
 func (b *BleveIndex) SearchNative(q query.Query, from, size int) ([]SearchResult, uint64, error) {
 	return b.searchNative(q, from, size, true)
 }
@@ -540,6 +540,13 @@ func (b *BleveIndex) searchNative(q query.Query, from, size int, highlight bool)
 		size = 20
 	}
 	req := bleve.NewSearchRequestOptions(q, size, from, false)
+	// Break score ties by book ID. Score alone leaves tied hits in internal
+	// doc-number order, and scorch's background merger renumbers documents,
+	// so the same query could order ties differently from one call to the
+	// next: page 2 could repeat or skip a book from page 1, and a cached
+	// ranked list could disagree with a fresh one. With the ID tie-break the
+	// order is a total order that only changes when scores do.
+	req.SortBy([]string{"-_score", "_id"})
 	if highlight {
 		req.Highlight = bleve.NewHighlight()
 	}

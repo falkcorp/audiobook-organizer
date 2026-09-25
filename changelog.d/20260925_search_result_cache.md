@@ -3,3 +3,4 @@
 - The quick search returns every match instead of stopping at 50.
 - Audiobookshelf-app search results use the same cache, and a book edit shows up on the next search instead of up to 2 minutes later.
 - Renaming an author or series, changing a book's tags, and file changes that update a book's duration now refresh library search. Before, search kept finding the book under the old values until a later edit to that book.
+- Library search pages no longer repeat or skip a book when several results score the same: ties are now ordered by book ID.
