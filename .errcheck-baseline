@@ -1,0 +1,29 @@
+# file: .errcheck-baseline
+# version: 1.0.0
+# guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
+# last-edited: 2026-09-25
+
+# The number of `errcheck` findings tolerated in the tree. This is a RATCHET,
+# exactly like .interface-width-baseline: CI fails if the count goes UP, and
+# also fails if it goes DOWN without this number being lowered in the same PR.
+#
+# Why this exists. Wave 0 of the silent-failure sweep
+# (docs/audits/2026-08-11-silent-failure-error-discards.md) wired errcheck into
+# .golangci.yml with the bucket-(f) exclude list, but the config was never
+# actually gated anywhere -- `make ci` does not run it, and
+# .github/workflows/ci.yml's `golangci-lint-args: '--enable-only nolintlint'`
+# deliberately leaves errcheck out, with a comment reading "When Wave 0 closes,
+# add errcheck here". Wave 0 never closed the backlog to zero (waves 4-13 pay it
+# down file by file), so a bare pass/fail gate on errcheck is permanently red at
+# this baseline and would get switched off by whoever saw it next -- the exact
+# failure mode .golangci.yml's own header warns about for the un-exempted case.
+# A ratchet answers "did the count go UP", which can gate from day one, same
+# shape as the interface-width ratchet solved for interfacebloat.
+#
+# Baseline measured 2026-09-25 with a freshly scoped golangci-lint cache
+# (scripts/check-errcheck-ratchet.sh's own GOLANGCI_LINT_CACHE scoping), on
+# origin/proposed-main plus Wave 0's already-landed primitives (bed1db5a2). This
+# is the pre-existing backlog `make lint-errcheck` already reported red; nothing
+# in this PR fixes any of it. Lower this number in the same PR as any fix that
+# closes findings, exactly as the interface-width baseline instructs.
+834

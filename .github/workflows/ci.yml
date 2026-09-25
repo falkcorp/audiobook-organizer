@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.13.0
+# version: 3.14.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-09-22
+# last-edited: 2026-09-25
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -52,21 +52,29 @@ jobs:
       go-lint: true
       # --enable-only OVERRIDES .golangci.yml's enable list, and it is load-bearing,
       # not a tidiness flag. That config also enables errcheck, which currently has
-      # 927 open findings held as Wave 0's backlog (see the header in .golangci.yml
-      # and docs/audits/2026-08-11-silent-failure-error-discards.md). A bare
-      # `golangci-lint run ./...` would exit non-zero on those 927 -- this job would
-      # be red on day one and switched off by whoever saw it next.
+      # 834 open findings held as Wave 0's backlog (see the header in .golangci.yml,
+      # .errcheck-baseline, and docs/audits/2026-08-11-silent-failure-error-discards.md).
+      # A bare `golangci-lint run ./...` would exit non-zero on those 834 -- this
+      # job would be red on day one and switched off by whoever saw it next.
       #
-      # interfacebloat is deliberately NOT in this selector even though it is the
-      # linter this whole effort is about. golangci-lint exits non-zero on ANY
-      # finding, and the tree legitimately holds 5 (see .interface-width-baseline),
-      # so listing it here reproduces the exact errcheck failure described above:
-      # permanently red, for findings that are known and accepted. It runs in the
-      # interface-width job below instead, which compares against the baseline and
-      # is what actually enforces the ratchet. Measured 2026-08-18 on this tree:
-      # nolintlint 0 issues (exit 0), interfacebloat 5 (exit 1).
+      # interfacebloat and errcheck are deliberately NOT in this selector even
+      # though interfacebloat is the linter this whole effort is about and
+      # errcheck is the silent-failure sweep's own gate. golangci-lint exits
+      # non-zero on ANY finding, and the tree legitimately holds accepted
+      # findings for both (5 for interfacebloat, see .interface-width-baseline;
+      # 834 for errcheck, see .errcheck-baseline), so listing either here
+      # reproduces the same permanently-red failure. Each runs in its own ratchet
+      # job below instead (Interface Width Ratchet, Errcheck Ratchet), which
+      # compares against its baseline and is what actually enforces the gate.
+      # Measured 2026-08-18 on this tree: nolintlint 0 issues (exit 0),
+      # interfacebloat 5 (exit 1); errcheck 834 (exit 1), measured 2026-09-25.
       #
-      # When Wave 0 closes, add errcheck here rather than removing the selector.
+      # interfacebloat's own baseline reached 0 on 2026-08-19 and it STILL runs
+      # only via its ratchet job, not this selector -- a 0 baseline means no
+      # UNSUPPRESSED finding exceeds the threshold, not that every future one
+      # will be caught the instant it appears without a full ./... run, and the
+      # ratchet job already does that. Treat errcheck the same way: paying its
+      # backlog to 0 does not by itself justify moving it into this selector.
       golangci-lint-args: '--enable-only nolintlint'
       # Advisory only: reports, never blocks. See super-linter-pr.env.
       super-linter: true
@@ -140,6 +148,66 @@ jobs:
 
       - name: Check interface width against baseline
         run: bash scripts/check-interface-width.sh
+
+  # Project-specific: the errcheck ratchet, Wave 0 of the silent-failure sweep
+  # closing its own gap.
+  #
+  # Same shape as interface-width above, for the same reason: .golangci.yml has
+  # enabled errcheck (with the bucket-(f) exclude list) since Wave 0 landed in
+  # bed1db5a2, but nothing ever ran it as a gate. The `ci` job above deliberately
+  # passes `--enable-only nolintlint` -- its own comment says errcheck currently
+  # has ~927 open findings held as Wave 0's backlog and a bare
+  # `golangci-lint run ./...` would be red on day one -- and that comment ends
+  # "When Wave 0 closes, add errcheck here rather than removing the selector."
+  # Wave 0's helper package and lint config landed; the backlog itself (834
+  # findings, measured 2026-09-25, see .errcheck-baseline) is paid down file by
+  # file across waves 4-13, exactly like interfacebloat's 28-finding backlog was
+  # paid down to 0 before it could be a hard gate. Until it reaches 0 the
+  # question this job can answer is "did the count go UP", not "are there any
+  # findings" -- so it ratchets instead of gating outright, and reports rather
+  # than blocks pre-merge for the same reason interface-width does: main has no
+  # required status checks, and auto-revert.yml is what makes a red run here
+  # consequential.
+  errcheck-ratchet:
+    name: Errcheck Ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+          cache: false
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y libtag1-dev
+
+      # Pinned to the version the baseline was measured with, matching
+      # interface-width's own reasoning: a version bump can change the finding
+      # count on its own and trip the ratchet as if code had changed.
+      - name: Install golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Check errcheck findings against baseline
+        run: bash scripts/check-errcheck-ratchet.sh
 
   # Project-specific: the checks that nothing was running.
   #
