@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d4a7e21-05c8-4b63-a19f-3e8b2c60d475
-// last-edited: 2026-08-20
+// last-edited: 2026-09-25
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -100,7 +100,7 @@ describe('lane id types', () => {
   it('keeps dedup ids numeric and the other lanes string, at the type level', () => {
     // This test is mostly a compile-time assertion; the runtime expectations are
     // incidental. The failure it guards is a metadata book id reaching
-    // `mergeDedupCandidate(id: number)` -- which a shared `string | number` id
+    // `linkDedupCandidate(id: number)` -- which a shared `string | number` id
     // would allow, and which no runtime test would catch until it 404s.
     const dupes: ReviewAction = { lane: 'dupes', type: 'merge', id: 42 };
     const metadata: ReviewAction = { lane: 'metadata', type: 'apply', id: 'book-42' };

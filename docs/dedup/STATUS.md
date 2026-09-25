@@ -1,7 +1,7 @@
 <!-- file: docs/dedup/STATUS.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 09dc17af-0c96-4f15-bc27-e5f48edb9e74 -->
-<!-- last-edited: 2026-08-22 -->
+<!-- last-edited: 2026-09-25 -->
 
 # Dedup — Status & Architecture (single source of truth)
 
@@ -281,11 +281,14 @@ Known label-quality caveat (2026-07-08 finding): the `not_dup` gold labels were
 100% rule-mined, which contaminated the precision floor — precision measurements
 must exclude or re-source them (fix belongs at the mining layer).
 
-### Merge/dismiss capture
+### Link/reject capture
 
-Human-label capture on `POST /dedup/candidates/:id/{merge,dismiss}` (+ bulk /
-cluster) snapshots features **before** merge (merge deletes one side); capture
-failure never blocks the merge
+Human-label capture on `POST /dedup/candidates/:id/{link,reject}` (+ bulk /
+cluster; the old `{merge,dismiss}` names are deprecated aliases for the same
+routes — naming-audit class "merge vs link verbs" / "dismiss vs reject vs
+undo", `docs/audits/2026-09-25-interface-naming-consistency.md` classes 2/3)
+snapshots features **before** the link (linking soft-deletes the losing
+side's book row); capture failure never blocks the link
 (`internal/server/handlers/dedup/label_capture.go`).
 
 ### Operations & endpoints
@@ -302,7 +305,7 @@ failure never blocks the merge
 | Rule-negative labels | `dedup.dataset-backfill` |
 | Auto gold positives | `dedup.mine-gold-labels` |
 | Exact-backlog triage | `maintenance.dedup-exact-triage` |
-| Human labels | `POST /dedup/candidates/:id/{merge,dismiss}` + bulk/cluster |
+| Human labels | `POST /dedup/candidates/:id/{link,reject}` + bulk/cluster |
 | Generic op trigger | `POST /operations/v2` `{"def_id":"…","params":{…}}` |
 
 ## Related docs

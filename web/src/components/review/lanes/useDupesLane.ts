@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
-// last-edited: 2026-09-01
+// last-edited: 2026-09-25
 
 import {
   startTransition,
@@ -793,7 +793,7 @@ export function useDupesLane(
           void (async () => {
             setBusy(true);
             try {
-              await api.mergeDedupCandidate(action.id, action.keepId);
+              await api.linkDedupCandidate(action.id, action.keepId);
               toast('Merged', 'success');
               refresh();
             } catch (err) {
@@ -810,7 +810,7 @@ export function useDupesLane(
           void (async () => {
             setBusy(true);
             try {
-              await api.dismissDedupCandidate(action.id);
+              await api.rejectDedupCandidate(action.id);
               toast('Dismissed', 'success');
               refresh();
             } catch (err) {
@@ -824,12 +824,12 @@ export function useDupesLane(
 
         case 'mergeSelected':
           if (action.ids.length === 0) return;
-          void runSequential(action.ids, (id) => api.mergeDedupCandidate(id), 'Merged');
+          void runSequential(action.ids, (id) => api.linkDedupCandidate(id), 'Merged');
           return;
 
         case 'dismissSelected':
           if (action.ids.length === 0) return;
-          void runSequential(action.ids, (id) => api.dismissDedupCandidate(id), 'Dismissed');
+          void runSequential(action.ids, (id) => api.rejectDedupCandidate(id), 'Dismissed');
           return;
 
         case 'mergeAllFiltered':
@@ -845,7 +845,7 @@ export function useDupesLane(
           void (async () => {
             setBusy(true);
             try {
-              const result = await api.bulkMergeDedupCandidates({
+              const result = await api.bulkLinkDedupCandidates({
                 entity_type: 'book',
                 status: filters.status || 'pending',
                 // Filter parity with what is on screen. Omitting either of these

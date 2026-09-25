@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupEmbeddingTab.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567891
 // last-edited: 2026-09-25
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -324,7 +324,7 @@ export function EmbeddingDedupTab() {
   const handleMergeSeries = async (seriesId: number) => {
     setSeriesMergeRunning(seriesId);
     try {
-      const result = await api.mergeDedupCandidateSeries(seriesId);
+      const result = await api.linkDedupCandidateSeries(seriesId);
       setScanMsg(
         `Series merge complete: ${result.clusters_merged} cluster(s) merged, ${result.books_merged} books`
       );
@@ -360,7 +360,7 @@ export function EmbeddingDedupTab() {
   const handleMergeCluster = async (cluster: BookCluster, primaryBookId?: string) => {
     setActionLoading(primaryBookId ? `${cluster.key}:primary:${primaryBookId}` : cluster.key);
     try {
-      await api.mergeDedupCluster(cluster.bookIds, primaryBookId);
+      await api.linkDedupCluster(cluster.bookIds, primaryBookId);
       loadCandidates();
       loadStats();
     } catch (err) {
@@ -373,7 +373,7 @@ export function EmbeddingDedupTab() {
   const handleDismissCluster = async (cluster: BookCluster) => {
     setActionLoading(cluster.key);
     try {
-      await api.dismissDedupCluster(cluster.bookIds);
+      await api.rejectDedupCluster(cluster.bookIds);
       loadCandidates();
       loadStats();
     } catch (err) {
@@ -585,7 +585,7 @@ export function EmbeddingDedupTab() {
     setBulkMergeOpen(false);
     setScanMsg(null);
     try {
-      const result = await api.bulkMergeDedupCandidates({
+      const result = await api.bulkLinkDedupCandidates({
         entity_type: 'book',
         status: statusFilter || 'pending',
         layer: layerFilter || undefined,
@@ -606,7 +606,7 @@ export function EmbeddingDedupTab() {
   // incremental-review path: the user skims what's on-screen, trusts the
   // lot, and wants to commit just those without also merging every
   // off-page candidate the filter matches. Iterates buildClusters
-  // output and calls mergeDedupCluster serially — for a 25-item page
+  // output and calls linkDedupCluster serially — for a 25-item page
   // that's typically 5-15 clusters, well under a second each.
   const handleMergePage = async () => {
     setPageMerging(true);
@@ -618,7 +618,7 @@ export function EmbeddingDedupTab() {
     for (const cluster of clusters) {
       if (!cluster.hasPending) continue;
       try {
-        await api.mergeDedupCluster(cluster.bookIds);
+        await api.linkDedupCluster(cluster.bookIds);
         merged++;
       } catch (err) {
         failed++;
