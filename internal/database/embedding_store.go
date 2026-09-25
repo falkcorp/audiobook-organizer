@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.16.0
-// last-edited: 2026-09-02
+// version: 2.17.0
+// last-edited: 2026-09-25
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -123,6 +123,12 @@ type candRec struct {
 	ScoreBreakdown *models.UnifiedDedupScore `json:"sb,omitempty"`
 	Band           string                    `json:"band,omitempty"`
 	FormulaVersion string                    `json:"fv,omitempty"`
+
+	// Source / SourceNote mark a candidate a human put in the review queue by
+	// hand (POST /api/v1/dedup/candidates). omitempty so scanner rows keep
+	// their stored size. See CandidateSourceManual for what the mark protects.
+	Source     string `json:"src,omitempty"`
+	SourceNote string `json:"srcn,omitempty"`
 }
 
 // Embedding holds a vector embedding for a single entity.
@@ -164,6 +170,12 @@ type DedupCandidate struct {
 	ScoreBreakdown *models.UnifiedDedupScore `json:"score_breakdown,omitempty"`
 	Band           string                    `json:"band,omitempty"`
 	FormulaVersion string                    `json:"formula_version,omitempty"`
+
+	// Source is CandidateSourceManual for a pair a human enqueued by hand, and
+	// empty for every scanner-produced row. SourceNote is the reason the
+	// human gave. See IsManualCandidate.
+	Source     string `json:"source,omitempty"`
+	SourceNote string `json:"source_note,omitempty"`
 }
 
 // CandidateFilter controls ListCandidates queries.
@@ -185,8 +197,13 @@ type CandidateFilter struct {
 	// itself, so pagination totals stay accurate.
 	EntityID string
 
+	// Source restricts results to candidates with this Source ("manual" lists
+	// the hand-enqueued ones, including scanner rows a human pinned). Empty
+	// means no source filter.
+	Source string
+
 	// Search is a case-insensitive substring matched against the fields that
-	// live ON the candidate row itself: Layer, Band, and either entity ID.
+	// live ON the candidate row itself: Layer, Band, Source, and either entity ID.
 	// Empty means no text search.
 	//
 	// The book-derived fields the UI also searches (title, author, file path)
@@ -719,7 +736,14 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 	// it was scored by the unified pipeline) is never downgraded by a legacy
 	// writer that lacks a FormulaVersion — formula-versioned data is always
 	// more trustworthy than pre-unified segment-era scores.
-	protected := existing.Layer == "exact" ||
+	//
+	// A "manual" layer (a pair a human enqueued, CandidateLayerManual) is
+	// protected like "exact": the tag is how the review UI tells the row apart,
+	// and losing it to the first scanner re-upsert would also drop the row back
+	// into every purge that manual candidates are exempt from. The Source mark
+	// itself needs no clause here — this branch updates `existing` in place, so
+	// fields the incoming scanner write does not carry are preserved.
+	protected := existing.Layer == "exact" || existing.Layer == CandidateLayerManual ||
 		(existing.Layer == "llm" && c.Layer != "exact") ||
 		(existing.FormulaVersion != "" && c.FormulaVersion == "")
 	if !protected {
@@ -1054,6 +1078,9 @@ func matchesCandidateFilter(c DedupCandidate, f CandidateFilter, checkStatus boo
 	if f.Band != "" && c.Band != f.Band {
 		return false
 	}
+	if f.Source != "" && c.Source != f.Source {
+		return false
+	}
 	// Either side matches: a candidate is a duplicate OF this entity whichever
 	// position the pair-ordering happened to put it in.
 	if f.EntityID != "" && c.EntityAID != f.EntityID && c.EntityBID != f.EntityID {
@@ -1093,7 +1120,9 @@ func candidateMatchesSearch(c DedupCandidate, f CandidateFilter) bool {
 	// Layer and Band are the two the UI exposes as its own dropdowns, but they
 	// are searchable as free text too -- dropping them would silently stop
 	// matching what the old client-side filter matched, with no error surface.
-	for _, field := range []string{c.Layer, c.Band} {
+	// Source rides along so "manual" also finds scanner rows a human pinned,
+	// which keep their scanner Layer.
+	for _, field := range []string{c.Layer, c.Band, c.Source} {
 		if field != "" && strings.Contains(strings.ToLower(field), f.Search) {
 			return true
 		}
@@ -1458,6 +1487,16 @@ func (s *EmbeddingStore) DeleteCandidate(id int64) error {
 		return fmt.Errorf("delete candidate unmarshal %d: %w", id, err)
 	}
 	closer.Close()
+	// Backstop: every DeleteCandidate caller is an automated pass (unified
+	// scoring's suppression, purge-stale, the acoustid veto, acoustid reset).
+	// Each one skips manual candidates itself; this refuses the ones that
+	// slip past so a human's review request cannot vanish silently. A human
+	// ends a manual candidate by dismissing or merging it (a status change),
+	// and a deleted book's candidates go through the cascade in
+	// deleteDedupCandidatesForBook, which does not come through here.
+	if rec.Source == CandidateSourceManual {
+		return fmt.Errorf("delete candidate %d: %w", id, ErrManualCandidateProtected)
+	}
 
 	b := s.db.NewBatch()
 	defer b.Close()
@@ -1915,6 +1954,8 @@ func candRecToCandidate(id int64, rec candRec) DedupCandidate {
 		ScoreBreakdown: rec.ScoreBreakdown,
 		Band:           rec.Band,
 		FormulaVersion: rec.FormulaVersion,
+		Source:         rec.Source,
+		SourceNote:     rec.SourceNote,
 	}
 }
 

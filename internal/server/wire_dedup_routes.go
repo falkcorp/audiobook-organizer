@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package server
 
@@ -24,6 +24,8 @@ func (s *Server) wireDedupRoutes(
 	// The split-book /dedup/* routes (registered in wireLibraryRoutes) and the
 	// /dedup/fingerprint-rescan + /dedup/validate survivors stay where they are.
 	protected.GET("/dedup/candidates", s.perm(auth.PermLibraryView), dedupH.ListDedupCandidates)
+	// Hand-picked pairs into the review queue (layer/source "manual"); dry_run defaults true.
+	protected.POST("/dedup/candidates", s.perm(auth.PermLibraryEditMetadata), dedupH.EnqueueManualDedupCandidates)
 	protected.GET("/dedup/candidates/export", s.perm(auth.PermLibraryView), dedupH.ExportDedupCandidates)
 	protected.GET("/dedup/stats", s.perm(auth.PermLibraryView), dedupH.GetDedupStats)
 	// T016: breakdown and rescore endpoints (frozen API contract for T017).

@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.84.0
+// version: 1.85.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 package dedup
 
@@ -919,6 +919,15 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	}
 	var embeddingCandIDs []candRef
 	for _, c := range bookCandidates {
+		// A manual candidate (a pair a human enqueued for review) is not this
+		// pass's to judge. The suppression branches below would DELETE it —
+		// the same-version-group and identifier-conflict shapes are exactly
+		// the pairs a human enqueues to look at — and re-scoring would hand it
+		// a band, which is what auto-resolve and band-scoped bulk merge select
+		// on. Leave it exactly as the human filed it.
+		if database.IsManualCandidate(c) {
+			continue
+		}
 		otherID := c.EntityBID
 		if c.EntityBID == book.ID {
 			otherID = c.EntityAID
@@ -2197,6 +2206,9 @@ func (de *Engine) ReevaluateAcoustIDConflicts(ctx context.Context, dryRun bool) 
 		}
 		if c.Layer == "acoustid" || c.Layer == "book_signature" {
 			continue // audio-positive layers: never vetoed by audio
+		}
+		if database.IsManualCandidate(c) {
+			continue // a human asked for this pair to be reviewed; not vetoed by a scanner rule
 		}
 		res.Checked++
 		a := lookup(c.EntityAID)
@@ -3699,6 +3711,14 @@ func (de *Engine) PurgeStaleCandidates(ctx context.Context) (int, error) {
 		default:
 		}
 
+		// Manual candidates are exempt: the rules below judge whether a
+		// SCANNER would still emit the pair, and a hand-enqueued pair has no
+		// scanner. The same-directory rule alone matches the shape a human
+		// most often enqueues (a shell book sitting in another book's folder).
+		if database.IsManualCandidate(c) {
+			continue
+		}
+
 		a := lookup(c.EntityAID)
 		b := lookup(c.EntityBID)
 
@@ -3935,7 +3955,20 @@ func (de *Engine) listAmbiguousCandidates(entityType string, low, high float64) 
 		Limit: 10000,
 	}
 	candidates, _, err := de.embedStore.ListCandidates(filter)
-	return candidates, err
+	if err != nil {
+		return nil, err
+	}
+	// A manual candidate that pins a scanner embedding row keeps the
+	// "embedding" layer, so the filter above can return it. The LLM review
+	// can auto-merge what it reviews; a human asked to review this one
+	// themselves.
+	kept := candidates[:0]
+	for _, c := range candidates {
+		if !database.IsManualCandidate(c) {
+			kept = append(kept, c)
+		}
+	}
+	return kept, nil
 }
 
 // buildPairInput enriches a stored candidate with entity details suitable for
