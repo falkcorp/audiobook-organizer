@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/malformed_body_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c4f0b62-19ae-4d37-95e1-7f2a6d0c3b84
-// last-edited: 2026-08-11
+// last-edited: 2026-09-25
 
 package deduphandler_test
 
@@ -64,7 +64,7 @@ func TestBulkMerge_MalformedBodyIsRefused(t *testing.T) {
 	for name, body := range w2malformedBodies() {
 		t.Run(name, func(t *testing.T) {
 			h, _ := newHandler(t)
-			w := w2rawReq(t, h.BulkMergeDedupCandidates, "/api/v1/dedup/candidates/bulk-merge", body, true)
+			w := w2rawReq(t, h.BulkLinkDedupCandidates, "/api/v1/dedup/candidates/bulk-link", body, true)
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("status=%d want 400 — an unreadable filter must NOT widen to every pending candidate; body=%s",
 					w.Code, w.Body.String())
@@ -81,7 +81,7 @@ func TestBulkMerge_MalformedBodyIsRefused(t *testing.T) {
 // behaviour and must keep working.
 func TestBulkMerge_EmptyBodyStillAccepted(t *testing.T) {
 	h, _ := newHandler(t)
-	w := w2rawReq(t, h.BulkMergeDedupCandidates, "/api/v1/dedup/candidates/bulk-merge", "", false)
+	w := w2rawReq(t, h.BulkLinkDedupCandidates, "/api/v1/dedup/candidates/bulk-link", "", false)
 	if w.Code == http.StatusBadRequest && strings.Contains(w.Body.String(), "invalid request body") {
 		t.Fatalf("empty body was rejected at the parse; io.EOF must stay valid. body=%s", w.Body.String())
 	}

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_freshness_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d7a2c81-6e39-4b05-9f28-1a3c7e0d5b62
-// last-edited: 2026-07-13
+// last-edited: 2026-09-25
 
 // Tests for the label-write freshness refresh: dismissing / relabeling a pair
 // (re)snapshots its ScoreBreakdown onto the LabeledExample via the engine's
@@ -56,8 +56,8 @@ func TestDismiss_PersistsBelowBandBreakdown(t *testing.T) {
 	d.engine.EXPECT().ScorePairsForBook(mock.Anything, aID, mock.Anything).
 		Return([]dedupengine.RescorePairResult{{OtherID: bID, Score: belowBand, NumSignals: 1}}, nil).Once()
 
-	w := doReq(t, h.DismissDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/dismiss", nil,
+	w := doReq(t, h.RejectDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/reject", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
@@ -132,8 +132,8 @@ func TestDismiss_ScoringFailureIsBestEffort(t *testing.T) {
 	d.engine.EXPECT().ScorePairsForBook(mock.Anything, aID, mock.Anything).
 		Return(nil, assertErr{}).Once()
 
-	w := doReq(t, h.DismissDedupCandidate, http.MethodPost,
-		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/dismiss", nil,
+	w := doReq(t, h.RejectDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/reject", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200 even when rescoring fails; body=%s", w.Code, w.Body.String())
