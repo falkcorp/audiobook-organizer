@@ -91,11 +91,11 @@ func TestDeprecatedMergeDismissAliases_StillRoute(t *testing.T) {
 			wantStatus: http.StatusServiceUnavailable, // no embedding store wired in setupTestServer
 		},
 		{
-			name:       "dedup candidates merge-cluster->link-cluster",
-			method:     http.MethodPost,
-			oldPath:    "/api/v1/dedup/candidates/merge-cluster",
-			newPath:    "/api/v1/dedup/candidates/link-cluster",
-			body:       `{}`,
+			name:    "dedup candidates merge-cluster->link-cluster",
+			method:  http.MethodPost,
+			oldPath: "/api/v1/dedup/candidates/merge-cluster",
+			newPath: "/api/v1/dedup/candidates/link-cluster",
+			body:    `{}`,
 			// setupTestServer wires no dedup engine, and MergeDedupCluster
 			// checks h.dedupEngine before parsing book_ids.
 			wantStatus: http.StatusServiceUnavailable,
@@ -109,11 +109,11 @@ func TestDeprecatedMergeDismissAliases_StillRoute(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "dedup candidates merge-series->link-series",
-			method:     http.MethodPost,
-			oldPath:    "/api/v1/dedup/candidates/merge-series",
-			newPath:    "/api/v1/dedup/candidates/link-series",
-			body:       `{}`,
+			name:    "dedup candidates merge-series->link-series",
+			method:  http.MethodPost,
+			oldPath: "/api/v1/dedup/candidates/merge-series",
+			newPath: "/api/v1/dedup/candidates/link-series",
+			body:    `{}`,
 			// setupTestServer wires no dedup engine, and
 			// LinkDedupCandidateSeries checks h.dedupEngine before parsing
 			// series_id.
