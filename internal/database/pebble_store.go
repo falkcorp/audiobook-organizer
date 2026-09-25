@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.180.0
+// version: 1.180.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-25
 
@@ -3569,11 +3569,11 @@ func (p *PebbleStore) SearchBookIDsFiltered(query string, limit, offset int, f B
 		return []string{}, nil
 	}
 	if p.UseMemDB && p.mem() != nil {
-		ids, err := p.mem().SearchBookIDsFiltered(query, limit, offset, f)
-		if err == nil {
+		if ids, err := p.mem().SearchBookIDsFiltered(query, limit, offset, f); err == nil {
 			return ids, nil
 		}
-		slog.Warn("memdb search failed, falling back to pebble scan", "error", err)
+		// No log here: SearchBooksFiltered below retries memdb and logs
+		// the failure itself before its disk scan.
 	}
 	books, err := p.SearchBooksFiltered(query, limit, offset, f)
 	if err != nil {
