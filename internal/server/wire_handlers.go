@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.34.0
+// version: 2.35.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-09-25
 
@@ -585,6 +585,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		},
 		s.publishEvent,
 	)
+	audiobooksH.SetSearchResultCacheActive(func() bool { return s.searchResults != nil })
 
 	// ── Metadata domain (handlers/metadata) ──────────────────────────────────
 	// The 19 metadata HTTP handlers (batch-update / validate / export / import,

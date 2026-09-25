@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sync.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package database
 
@@ -150,6 +150,7 @@ func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 	}
 	// Snapshot NOW — the closure may run much later, on another goroutine.
 	snapshot := *book
+	p.notifyBooksChanged(snapshot.ID)
 
 	// Fetch the relationship rows BEFORE entering memSync (C816). The closure
 	// runs inside go-memdb's single global writer mutex (Txn(true) takes
@@ -254,6 +255,7 @@ func (p *PebbleStore) DeleteBookFromMemDB(ctx context.Context, bookID string) {
 	if bookID == "" {
 		return
 	}
+	p.notifyBooksChanged(bookID)
 	p.memSync("DeleteBook", func(txn memTxn) error {
 		// Look up existing book object so we can call Delete with the same struct.
 		obj, err := txn.First(memTableBooks, memIdxID, bookID)
@@ -408,6 +410,7 @@ func (p *PebbleStore) ReplaceBookAuthorsInMemDB(bookID string, authors []BookAut
 	if bookID == "" {
 		return
 	}
+	p.notifyBooksChanged(bookID)
 	// Copy the slice at enqueue — the closure iterates it much later during
 	// warmup replay, and the caller may reuse/mutate the backing array.
 	authors = append([]BookAuthor(nil), authors...)
@@ -452,6 +455,7 @@ func (p *PebbleStore) ReplaceBookNarratorsInMemDB(bookID string, narrators []Boo
 	if bookID == "" {
 		return
 	}
+	p.notifyBooksChanged(bookID)
 	// Copy the slice at enqueue — see ReplaceBookAuthorsInMemDB.
 	narrators = append([]BookNarrator(nil), narrators...)
 	// Same primary-index rule as book_authors: {BookID, NarratorID}, not

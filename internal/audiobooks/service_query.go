@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-09-25
 
@@ -54,22 +54,20 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 // limit follows the same contract as every other path: <=0 (or >100000)
 // means the default 50, never "all".
 func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, filters ...ListFilters) ([]database.Book, int, error) {
-	if svc.store == nil {
-		return nil, 0, fmt.Errorf("database not initialized")
-	}
+	books, total, _, err := svc.GetAudiobooksPage(ctx, limit, offset, search, authorID, seriesID, filters...)
+	return books, total, err
+}
 
-	// Normalize limit and offset
-	if limit <= 0 || limit > 100000 {
-		limit = 50
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	var f ListFilters
-	if len(filters) > 0 {
-		f = filters[0]
-	}
+// queryAudiobooks is the uncached pipeline behind GetAudiobooksPage: every
+// branch described on GetAudiobooksWithTotal. limit and offset arrive already
+// normalized (the search result cache passes searchFullLimit to take the whole
+// match set in one call).
+//
+// restrict, when non-nil, confines a SEARCH to those book IDs, intersected
+// with any author_id/series_id membership. The search result cache uses it to
+// re-evaluate only the books that changed since an entry was built, through
+// exactly the DSL, filters and ordering an unrestricted request applies.
+func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, f ListFilters, restrict map[string]struct{}) ([]database.Book, int, error) {
 
 	// A bare series listing with no sort defaults to reading order. Set here,
 	// before hasSorting/heavySorting below read SortBy, so the default takes
@@ -204,6 +202,20 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 		idMembership, err = svc.resolveIDMembership(memberAuthorID, memberSeriesID)
 		if err != nil {
 			return nil, 0, err
+		}
+		hasPostFilters = true
+	}
+	if restrict != nil && search != "" {
+		if idMembership == nil {
+			idMembership = restrict
+		} else {
+			both := make(map[string]struct{}, min(len(idMembership), len(restrict)))
+			for id := range restrict {
+				if _, ok := idMembership[id]; ok {
+					both[id] = struct{}{}
+				}
+			}
+			idMembership = both
 		}
 		hasPostFilters = true
 	}
@@ -1108,7 +1120,7 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 	}
 
 	if len(perUser) > 0 && userID != "" && !config.AppConfig.DisablePerUserSearchFilters {
-		hits, _, err := svc.searchIndex.SearchNative(bleveQ, 0, window)
+		hits, _, err := svc.searchIndex.SearchNativeIDs(bleveQ, 0, window)
 		if err != nil {
 			return nil, 0, fmt.Errorf("bleve search: %w", err)
 		}
@@ -1181,7 +1193,7 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 	// bleveTotal is the match count for the whole query, independent of the
 	// offset/limit page requested. This value was previously discarded with
 	// `_`, and the HTTP layer reported len(page) in its place.
-	hits, bleveTotal, err := svc.searchIndex.SearchNative(bleveQ, offset, limit)
+	hits, bleveTotal, err := svc.searchIndex.SearchNativeIDs(bleveQ, offset, limit)
 	if err != nil {
 		return nil, 0, fmt.Errorf("bleve search: %w", err)
 	}

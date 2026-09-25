@@ -1,5 +1,5 @@
 // file: internal/search/bleve_index.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
 // last-edited: 2026-09-25
 //
@@ -515,7 +515,19 @@ func (b *BleveIndex) Search(queryString string, from, size int) ([]SearchResult,
 // SearchNative runs a pre-built query.Query (typically produced by
 // the AST → Bleve translator) against the index. Used by smart
 // playlists and the library search path after DSL translation.
+// SearchNativeIDs is SearchNative without highlighting: the hits carry IDs
+// and scores only. The library list search reads nothing else, and
+// highlighting every hit of a 10,000-hit post-filter window is pure cost.
+// Ordering is identical to SearchNative's.
+func (b *BleveIndex) SearchNativeIDs(q query.Query, from, size int) ([]SearchResult, uint64, error) {
+	return b.searchNative(q, from, size, false)
+}
+
 func (b *BleveIndex) SearchNative(q query.Query, from, size int) ([]SearchResult, uint64, error) {
+	return b.searchNative(q, from, size, true)
+}
+
+func (b *BleveIndex) searchNative(q query.Query, from, size int, highlight bool) ([]SearchResult, uint64, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.idx == nil {
@@ -528,7 +540,9 @@ func (b *BleveIndex) SearchNative(q query.Query, from, size int) ([]SearchResult
 		size = 20
 	}
 	req := bleve.NewSearchRequestOptions(q, size, from, false)
-	req.Highlight = bleve.NewHighlight()
+	if highlight {
+		req.Highlight = bleve.NewHighlight()
+	}
 	res, err := b.idx.Search(req)
 	if err != nil {
 		return nil, 0, err
