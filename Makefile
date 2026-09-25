@@ -94,6 +94,7 @@ help:
 	@echo "  make bench-check    - Typecheck the //go:build bench code"
 	@echo "  make fmt-check      - Assert every Go file is gofmt-clean"
 	@echo "  make ci             - Fast CI: short tests + coverage (prop tests skipped)"
+	@echo "  make audiobooth-decode - AudioBooth Swift decode proof (macOS, needs swift)"
 	@echo ""
 	@echo "Docker:"
 	@echo "  make docker         - Build Docker image"
@@ -206,6 +207,20 @@ fixtures:
 
 fixtures-check:
 	@python3 scripts/fetch_fixtures.py --check
+
+## audiobooth-decode: AudioBooth decode proof. Fetches the AudioBooth commit pinned in
+## tests/audiobooth-decode/audiobooth.pin into the gitignored .cache/audiobooth, replays
+## every app request against our ABS handlers to regenerate the fixtures, then decodes
+## them through the app's own Swift models with `swift test`. Needs Swift 6.2+ (macOS);
+## the Go half alone runs in `make test` / `make ci` without writing fixtures.
+AUDIOBOOTH_DIR := $(ROOT_DIR)/tests/audiobooth-decode
+audiobooth-decode:
+	@command -v swift >/dev/null || { echo "❌ swift not found: the decode proof needs a Swift 6.2+ toolchain"; exit 1; }
+	@swift --version 2>&1 | head -1
+	@python3 scripts/audiobooth_decode_prep.py
+	@rm -rf "$(AUDIOBOOTH_DIR)/fixtures" && mkdir -p "$(AUDIOBOOTH_DIR)/fixtures"
+	@AUDIOBOOTH_FIXTURES_DIR="$(AUDIOBOOTH_DIR)/fixtures" go test ./internal/server/handlers/abs/ -run 'TestAudioBooth' -count=1
+	@cd "$(AUDIOBOOTH_DIR)" && swift test
 
 test: vet
 	@echo "🧪 Running backend tests (full suite)..."
@@ -482,7 +497,7 @@ test-frontend: web-test
 
 ## test-everything: Every test surface in ONE run, continuing past failures, ending in a matrix
 ##                  (local pre-PR sweep; replaces the retired scripts/run-all-tests.sh)
-.PHONY: fixtures fixtures-check
+.PHONY: fixtures fixtures-check audiobooth-decode
 .PHONY: test-everything
 test-everything:
 	@echo "🧪 Running every test surface: backend, frontend, e2e."

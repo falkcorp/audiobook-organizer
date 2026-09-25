@@ -59,6 +59,14 @@
   ],
   "requests": [
     {
+      "id": "status",
+      "extra": true,
+      "callSite": "/status",
+      "source": "Services/NetworkDiscoveryService.swift:14 -> ServerStatus (sent before login, no token)",
+      "method": "GET", "path": "/status", "auth": false,
+      "decode": "ServerStatus"
+    },
+    {
       "id": "login",
       "extra": true,
       "callSite": "/login",
