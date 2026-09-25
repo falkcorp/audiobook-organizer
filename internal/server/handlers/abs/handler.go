@@ -758,7 +758,7 @@ func (h *Handler) Register(r gin.IRouter) {
 	// tap 404'd before reaching a handler — which is exactly why the owner reported
 	// this as still broken after the Phase 6 write half shipped.
 	//
-	// :id is the mediaProgress ROW id; resolveBookID accepts that and the bare
+	// :id is the mediaProgress ROW id; lookupItemRef (item_ref.go) accepts that and the bare
 	// libraryItemId. The response must be a NON-EMPTY JSON object: the client
 	// decodes into an empty `struct Response: Codable {}` and NetworkService treats
 	// an empty body as a decoding error (§1.8.6).
