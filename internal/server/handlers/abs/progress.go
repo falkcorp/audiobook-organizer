@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
 // last-edited: 2026-09-25
 
@@ -8,7 +8,6 @@ package abs
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -146,9 +145,10 @@ func (h *Handler) MediaProgressPatch(c *gin.Context) {
 	// returns nil when the stored record wins the merge. The owner's "mark as
 	// finished doesn't stick" (2026-09-25) could not be diagnosed without the
 	// body the app actually sent.
-	slog.Info("abs: progress patch", "user", user.ID, "item", c.Param("id"), "book", bookID,
-		"currentTime", fptr(req.CurrentTime), "duration", fptr(req.Duration), "isFinished", bptr(req.IsFinished),
-		"progress", fptr(req.Progress), "hide", bptr(req.HideFromContinueListening))
+	progressLog.Info("abs: progress patch: user=%s item=%s book=%s currentTime=%v duration=%v isFinished=%v progress=%v hide=%v",
+		logger.SanitizeLogValue(user.ID), logger.SanitizeLogValue(c.Param("id")), logger.SanitizeLogValue(bookID),
+		fptr(req.CurrentTime), fptr(req.Duration), bptr(req.IsFinished),
+		fptr(req.Progress), bptr(req.HideFromContinueListening))
 	if err := h.applyProgressUpdate(user.ID, bookID, req); err != nil {
 		respondProgressWriteError(c, "PATCH progress", user.ID, bookID, err, "could not save progress")
 		return
@@ -403,9 +403,10 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 
 	merged, accepted := progress.MergeExplicit(stored, incoming)
 	if !accepted {
-		slog.Info("abs: progress patch not applied, stored record wins", "user", userID, "book", bookID,
-			"stored_time", stored.CurrentTime, "stored_finished", stored.IsFinished, "stored_updated_ms", stored.UpdatedAtMs,
-			"incoming_time", incoming.CurrentTime, "incoming_finished", incoming.IsFinished, "incoming_updated_ms", incoming.UpdatedAtMs)
+		progressLog.Info("abs: progress patch not applied, stored record wins: user=%s book=%s stored_time=%v stored_finished=%v stored_updated_ms=%v incoming_time=%v incoming_finished=%v incoming_updated_ms=%v",
+			logger.SanitizeLogValue(userID), logger.SanitizeLogValue(bookID),
+			stored.CurrentTime, stored.IsFinished, stored.UpdatedAtMs,
+			incoming.CurrentTime, incoming.IsFinished, incoming.UpdatedAtMs)
 		// The stored record already wins. Reporting success is correct: the client's
 		// intent ("this book is at position X") is satisfied by a server value that
 		// is at or ahead of X.

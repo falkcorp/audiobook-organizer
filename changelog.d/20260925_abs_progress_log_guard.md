@@ -1,0 +1,1 @@
+- ABS progress PATCH logging now goes through the sanitizing logger, fixing the log-injection guard test on main.
