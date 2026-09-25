@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-25
 
@@ -220,14 +220,13 @@ const absItemsCountTTL = 60 * time.Second
 // Sorting is honoured here too. The client always sends sort=media.metadata.title and
 // we previously IGNORED it, so the library was never actually title-sorted. SortBy
 // "title" is backed by a sorted radix index — O(offset+limit), not a full sort.
+//
+// The three row predicates come from database.ABSLibraryFilter so that
+// maintenance ops repairing "books ABS lists" select exactly this set.
 func absItemFilterBase() database.BookSummaryFilter {
-	primary := true
-	return database.BookSummaryFilter{
-		IsPrimaryVersion:   &primary,
-		LibraryState:       "organized",
-		ExcludeQuarantined: true,
-		SortAscending:      true,
-	}
+	f := database.ABSLibraryFilter()
+	f.SortAscending = true
+	return f
 }
 
 // absSortFields maps the dotted sort keys Audiobookshelf clients send to the

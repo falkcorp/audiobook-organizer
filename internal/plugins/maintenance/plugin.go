@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -178,6 +178,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// folder (1,019 of them). This op re-runs the same classifier over just
 		// that flagged set with real ffprobe durations filled in.
 		p.probeDirectoryBooksDef(),
+		// build-folder-book-files builds rows for rowless books ABS lists from
+		// their folder, without the classifier gate probe-directory-books applies.
+		p.buildFolderBookFilesDef(),
 		p.chaptersBackfillDef(),
 		p.itunesHealDef(),
 		p.introTranscribeDef(),
