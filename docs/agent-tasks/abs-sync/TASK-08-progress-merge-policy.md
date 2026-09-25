@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/abs-sync/TASK-08-progress-merge-policy.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ab744439-38c6-4f9c-9202-fbe0e3295da1 -->
-<!-- last-edited: 2026-07-30 -->
+<!-- last-edited: 2026-09-25 -->
 
 # TASK-08 — Pure progress-merge policy package (ABS-SYNC, Phase 6 foundation)
 
@@ -45,10 +45,15 @@ explicitly out of scope here.
   TotalListenedSeconds, ProgressPct, UpdatedAt}` with statuses
   `unstarted|in_progress|finished|abandoned` — see `internal/database/store.go:798-818`
   for the exact struct and the `UserBookStatus*` constants). HTTP routes for it already
-  exist at `internal/server/wire_library_routes.go:69-74` (`POST/GET
-  /books/:id/position`, `GET /books/:id/state`, `PATCH/DELETE /books/:id/status`,
-  `GET /me/:status`). **This task does not touch any of those files.** It produces a
-  standalone decision function; a later task wires it in.
+  exist at `internal/server/wire_library_routes.go` (`POST/GET
+  /audiobooks/:id/position`, `GET /audiobooks/:id/state`, `PATCH/DELETE
+  /audiobooks/:id/status`, `GET /me/:status`). As of the 2026-09-25 naming-audit
+  fix (class 1: `docs/audits/2026-09-25-interface-naming-consistency.md`), these
+  live under `/audiobooks/:id/...`; the old `/books/:id/...` paths still answer
+  as deprecated aliases to the same handlers, so either can be used for
+  reference, but a later task wiring this policy in should target the
+  `/audiobooks/:id/...` routes. **This task does not touch any of those files.**
+  It produces a standalone decision function; a later task wires it in.
 - **Re-verify these anchors before editing** — line numbers drift:
   ```bash
   grep -n "SetUserPosition\|GetUserPosition\|SetUserBookState\|GetUserBookState" internal/database/pebble_store_playback.go
