@@ -1,5 +1,5 @@
 // file: internal/server/handlers/admindebug/handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 64d11bf2-1597-4007-b152-e2803366a922
 // last-edited: 2026-09-25
 
@@ -36,17 +36,38 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Store is the slice of database.Store this handler uses.
+// Store is the slice of database.Store this handler uses, composed from the
+// focused pieces below so no single interface exceeds the width ratchet.
 type Store interface {
+	bookStore
+	bookFileStore
+	pathIndex
+	rawKV
+}
+
+// bookStore reads and edits book rows.
+type bookStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+}
+
+// bookFileStore reads and edits book_file rows.
+type bookFileStore interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
-	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+}
+
+// pathIndex answers which live rows and books own a path.
+type pathIndex interface {
 	BookFilesAtPath(path string) ([]database.BookFile, error)
 	LiveBookIDsAtPath(path string) ([]string, error)
 	BookAtPathIndexBuilt() (bool, error)
+}
+
+// rawKV is the key-value access the edit ledger uses.
+type rawKV interface {
 	SetRaw(key string, value []byte) error
 	GetRaw(key string) ([]byte, error)
 	ScanPrefixPage(prefix, after string, limit int) (pairs []database.KVPair, next string, err error)

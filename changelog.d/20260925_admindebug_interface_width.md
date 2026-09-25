@@ -1,0 +1,1 @@
+- The admin debug API store interface is split into focused pieces, which fixes the interface-width ratchet on main.
