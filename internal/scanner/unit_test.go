@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package scanner
 
@@ -1426,7 +1426,7 @@ func TestSaveBookToDatabaseNewBook(t *testing.T) {
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
 
-	store.EXPECT().GetAuthorByName("Author").Return(&database.Author{ID: 1, Name: "Author"}, nil)
+	store.EXPECT().GetAuthorByName("Jane Author").Return(&database.Author{ID: 1, Name: "Jane Author"}, nil)
 	store.EXPECT().GetSeriesByName(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	store.EXPECT().CreateSeries(mock.Anything, mock.Anything).Return(&database.Series{ID: 1}, nil).Maybe()
 	store.EXPECT().GetAllWorks().Return(nil, nil)
@@ -1443,7 +1443,7 @@ func TestSaveBookToDatabaseNewBook(t *testing.T) {
 	fpath := filepath.Join(tmp, "test.m4b")
 	require.NoError(t, os.WriteFile(fpath, []byte("audio data"), 0o644))
 
-	book := &Book{Title: "Test Book", Author: "Author", FilePath: fpath, Format: ".m4b"}
+	book := &Book{Title: "Test Book", Author: "Jane Author", FilePath: fpath, Format: ".m4b"}
 	err := saveBookToDatabase(context.Background(), book)
 	assert.NoError(t, err)
 }
@@ -1459,7 +1459,7 @@ func TestSaveBookToDatabaseExistingBook(t *testing.T) {
 	fpath := filepath.Join(tmp, "test.m4b")
 	require.NoError(t, os.WriteFile(fpath, []byte("audio data"), 0o644))
 
-	store.EXPECT().GetAuthorByName("Author").Return(&database.Author{ID: 1, Name: "Author"}, nil)
+	store.EXPECT().GetAuthorByName("Jane Author").Return(&database.Author{ID: 1, Name: "Jane Author"}, nil)
 	store.EXPECT().GetAllWorks().Return(nil, nil)
 	store.EXPECT().CreateWork(mock.Anything).Return(&database.Work{ID: "w1"}, nil)
 	store.EXPECT().IsHashBlocked(mock.Anything).Return(false, nil).Maybe()
@@ -1481,7 +1481,7 @@ func TestSaveBookToDatabaseExistingBook(t *testing.T) {
 			return existingBook, nil
 		})
 
-	book := &Book{Title: "Test Book", Author: "Author", FilePath: fpath, Format: ".m4b", FileHash: "abc123"}
+	book := &Book{Title: "Test Book", Author: "Jane Author", FilePath: fpath, Format: ".m4b", FileHash: "abc123"}
 	err := saveBookToDatabase(context.Background(), book)
 	assert.NoError(t, err)
 }

@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package metadata
 
@@ -20,7 +20,9 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
@@ -310,8 +312,21 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 		//   - store ERROR on lookup/create → FAIL-OPEN: log, leave AuthorID
 		//     unset, and still persist the other applied fields (a store hiccup
 		//     never aborts the whole apply; only UpdateBook stays fatal-to-item).
+		//   - junk name (fails personname.PrepareAuthorNameForCreation) → no
+		//     change, same as an empty name; checked BEFORE the lookup so an
+		//     existing junk row is not linked either.
 		// resolveMu makes the check-then-create atomic across workers.
-		if name, ok := update.Updates["author"].(string); ok && name != "" {
+		authorName, _ := update.Updates["author"].(string)
+		if authorName != "" {
+			if cleaned, why := personname.PrepareAuthorNameForCreation(authorName); why != "" {
+				logger.New("metadata").Warn("BatchUpdateMetadata: book %s: refusing implausible author name %q (%s); leaving AuthorID unchanged",
+					logger.SanitizeLogValue(update.BookID), logger.SanitizeLogValue(authorName), why)
+				authorName = ""
+			} else {
+				authorName = cleaned
+			}
+		}
+		if name := authorName; name != "" {
 			resolveMu.Lock()
 			author, aerr := store.GetAuthorByName(name)
 			if aerr == nil && author == nil {

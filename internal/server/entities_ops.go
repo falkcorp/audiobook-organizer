@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-09-14
+// last-edited: 2026-09-25
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -294,10 +295,16 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 						parsed, aiErr := aiParser.ParseCoverArt(ctx, imgData, mime)
 						if aiErr == nil && parsed != nil && parsed.Author != "" && parsed.Confidence != "low" {
 							_ = progress.Log("info", fmt.Sprintf("AI cover analysis for %q found author: %q (confidence: %s)", book.Title, parsed.Author, parsed.Confidence), nil)
-							// Look up or create the discovered author
-							existing, _ := store.GetAuthorByName(parsed.Author)
-							if existing == nil {
-								existing, _ = store.CreateAuthor(parsed.Author)
+							// Look up or create the discovered author. The
+							// shared creation gate runs first: a junk AI
+							// answer is no answer, and an existing junk row
+							// must not be linked either.
+							var existing *database.Author
+							if aiAuthor, why := personname.PrepareAuthorNameForCreation(parsed.Author); why == "" {
+								existing, _ = store.GetAuthorByName(aiAuthor)
+								if existing == nil {
+									existing, _ = store.CreateAuthor(aiAuthor)
+								}
 							}
 							if existing != nil {
 								// Assign the discovered author. Hydrate the full

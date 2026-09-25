@@ -1,7 +1,7 @@
 // file: internal/dedup/author.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-09-03
+// last-edited: 2026-09-25
 
 package dedup
 
@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -89,7 +88,26 @@ func extractBaseAuthor(name string) string {
 
 // SplitCompositeAuthorName splits "Author1 / Author2" or "Author1, Author2" into parts.
 // Returns nil or single-element slice if the name doesn't look composite.
+//
+// Every part it returns passes personname.IsPlausibleAuthorName, the shared
+// author creation gate. The callers create an author row per part and then
+// delete the composite, so a part that fails the gate would be a junk row the
+// split itself minted; when any part fails, the whole split is refused and the
+// composite stays visibly wrong for repair (the C414 rule below).
 func SplitCompositeAuthorName(name string) []string {
+	parts := splitCompositeAuthorName(name)
+	if len(parts) < 2 {
+		return parts
+	}
+	for _, p := range parts {
+		if ok, _ := personname.IsPlausibleAuthorName(p); !ok {
+			return nil
+		}
+	}
+	return parts
+}
+
+func splitCompositeAuthorName(name string) []string {
 	// Don't split AKA patterns
 	if authorAkaRe.MatchString(name) {
 		return nil
@@ -255,236 +273,23 @@ func SplitCompositeAuthorName(name string) []string {
 		}
 	}
 
-	// Try space-concatenated full names: "R.A. Mejia Charles Dean"
-	// Heuristic: try splitting at each word boundary and check if both halves
-	// look like valid author names (each has at least first+last).
-	// Only attempt this for names with 4+ words (minimum for two "First Last" names).
-	// A comma-bearing name already had its chance in the comma branch above;
-	// reaching here means its clauses FAILED the person-shape gate, and
-	// re-splitting them on spaces would launder the same title fragments the
-	// gate just refused (C414).
-	words := strings.Fields(name)
-	if len(words) >= 4 && !strings.Contains(name, ",") {
-		result := trySplitConcatenatedAuthors(name, words)
-		if len(result) > 1 {
-			return result
-		}
-	}
+	// There is deliberately NO space-concatenation branch. Until 2026-09-25 a
+	// word-run heuristic (trySplitConcatenatedAuthors) split any 4+ word string
+	// whose halves were each person-SHAPED: "R.A. Mejia Charles Dean" ->
+	// ["R. A. Mejia" "Charles Dean"]. Person shape cannot tell a name from a
+	// title-case phrase, and run over all 15,055 production author names it
+	// split 349 strings, of which about 8 were real two-person credits. The rest
+	// were titles and fragments ("Wraith Knight Three Worlds" -> ["Wraith
+	// Knight" "Three Worlds"], "A Memory Called Empire" -> ["A Memory" "Called
+	// Empire"], "Ch02 The Kasari Nexus"), and it split one real person:
+	// "Joseph Sheridan Le Fanu" -> ["Joseph Sheridan" "Le Fanu"]. The split ops
+	// create a row per part and delete the composite, so each wrong split minted
+	// junk authors. No gate on the parts can fix this -- "Wraith Knight" is
+	// shaped exactly like "Charles Dean" -- so the heuristic was removed rather
+	// than tuned. A space-joined credit list now stays one row, visibly wrong,
+	// for the manual split endpoint.
 
 	return nil
-}
-
-// trySplitConcatenatedAuthors tries to find a split point in a space-concatenated
-// string of author names like "R.A. Mejia Charles Dean" → ["R.A. Mejia", "Charles Dean"].
-// It tries each possible split point and checks if both halves look like valid names.
-func trySplitConcatenatedAuthors(name string, words []string) []string {
-	type candidate struct {
-		parts []string
-		score int
-	}
-	var candidates []candidate
-
-	// Try splitting into 2 authors at each word boundary
-	for i := 2; i <= len(words)-2; i++ {
-		left := strings.Join(words[:i], " ")
-		right := strings.Join(words[i:], " ")
-		if looksLikeAuthorName(left) && looksLikeAuthorName(right) {
-			score := scoreAuthorSplit(left, right)
-			candidates = append(candidates, candidate{
-				parts: []string{NormalizeAuthorName(left), NormalizeAuthorName(right)},
-				score: score,
-			})
-		}
-	}
-
-	// Try splitting into 3 authors (for 6+ words)
-	if len(words) >= 6 {
-		for i := 2; i <= len(words)-4; i++ {
-			for j := i + 2; j <= len(words)-2; j++ {
-				left := strings.Join(words[:i], " ")
-				mid := strings.Join(words[i:j], " ")
-				right := strings.Join(words[j:], " ")
-				if looksLikeAuthorName(left) && looksLikeAuthorName(mid) && looksLikeAuthorName(right) {
-					score := scoreAuthorSplit(left, mid, right)
-					candidates = append(candidates, candidate{
-						parts: []string{NormalizeAuthorName(left), NormalizeAuthorName(mid), NormalizeAuthorName(right)},
-						score: score,
-					})
-				}
-			}
-		}
-	}
-
-	if len(candidates) == 0 {
-		return nil
-	}
-
-	// Pick highest-scoring split
-	best := candidates[0]
-	for _, c := range candidates[1:] {
-		if c.score > best.score {
-			best = c
-		}
-	}
-	return best.parts
-}
-
-// looksLikeAuthorName returns true if the string looks like a plausible author name.
-// Must have at least 2 parts (first+last), start with uppercase, and have a
-// real surname (not just an initial like "A." which is likely a middle initial).
-func looksLikeAuthorName(s string) bool {
-	s = strings.TrimSpace(s)
-	// This was a FIFTH copy of the person-name heuristic, and it carried the
-	// ASCII byte test (r < 'A' || r > 'Z') that this package's unification exists
-	// to delete -- so trySplitConcatenatedAuthors silently refused to split any
-	// name whose first letter is non-ASCII (Émile Zola, Åsa Larsson, 村上 春樹)
-	// while accepting title fragments the shared predicate rejects. Found by
-	// TestSplitCompositeNeverMintsANonPersonPart, which caught
-	// "One Two Three Four Five (Bob Jones)" being split into
-	// ["One Two" "Three Four" "Five (Bob Jones)"].
-	//
-	// It is composed rather than replaced: the surname rule below is a genuine
-	// extra constraint this branch needs and the shared predicate does not have.
-	if !personname.LooksLikePersonName(s) {
-		return false
-	}
-	// The ORIGINAL carried TWO constraints past the ASCII test, and composing it
-	// from LooksLikePersonName preserved only the length one. The dropped
-	// constraint was "the last word must start with an uppercase letter", and
-	// losing it is not cosmetic: LooksLikePersonName deliberately PERMITS
-	// interior lowercase name particles, so every particle of >=3 runes (van,
-	// von, del, della, dos, den, ter, bin, ibn, mac) began qualifying as a
-	// SURNAME. That admits "Ludwig van" as a name, which unlocks the 3-way split
-	// below and -- through scoreAuthorSplit -- makes it OUTSCORE the right answer:
-	//
-	//   "Ludwig van Beethoven Wolfgang Amadeus Mozart"
-	//     was  ["Ludwig van Beethoven" "Wolfgang Amadeus Mozart"]   (score 22)
-	//     became ["Ludwig van" "Beethoven Wolfgang" "Amadeus Mozart"] (score 36)
-	//
-	// The <=2-rune particles (de, di, du, da, la, le, al, el) were shielded by the
-	// length rule, which is why "Simone de Beauvoir Jean Paul Sartre" survived and
-	// hid this. Restored below in the unicode-correct form -- "must not be
-	// LOWERCASE", never "must be uppercase", since unicode.IsUpper is false for
-	// every caseless script.
-	parts := strings.Fields(s)
-	lastWord := parts[len(parts)-1]
-	// A name particle is never a surname, in any casing: "Ludwig van" and
-	// "Volker Le" are both non-names, and admitting either unlocks a 3-way split
-	// that scoreAuthorSplit then ranks ABOVE the correct 2-way one.
-	//
-	// This was written as `unicode.IsLower(first rune) || IsNameParticle(...)`
-	// with a comment claiming both halves were needed. The IsLower half was DEAD:
-	// LooksLikePersonName has already run above, and it rejects any word starting
-	// lowercase UNLESS it is a listed particle -- so by this line a lowercase last
-	// word is necessarily a particle that IsNameParticle catches. Mutation-verified
-	// (neutralizing that half leaves the suite green). The claim was asserted, not
-	// controlled.
-	//
-	// KNOWN WEAKNESS, stated plainly rather than implied: this is a CLOSED LIST.
-	// Der, Ten, Abu, Ben, Bint, Op, Zu, Zur, Dem, Af, Av, Nic and Ap are all real
-	// particles that are not in it. The length rule below is what currently keeps
-	// most of them out, which means the two rules are entangled -- relaxing the
-	// length rule re-exposes exactly this gap.
-	if personname.IsNameParticle(lastWord) {
-		return false
-	}
-	// And it must not be a bare INITIAL: "A." and "B" are initials. This is what
-	// keeps "R.A. Mejia Charles Dean" splitting at the right boundary instead of
-	// stranding "R.A." as a surname.
-	//
-	// The original said `len(lastTrimmed) < 3` -- a BYTE count standing in for the
-	// question "is this an abbreviation?", and the proxy is wrong in both
-	// directions once non-ASCII is admitted:
-	//   - as BYTES it is meaningless for CJK ("春樹" is 6 bytes, so it passed by
-	//     accident and only the ASCII test above was rejecting it);
-	//   - rewritten as a flat RUNE count >= 2 it admits two-letter LATIN tokens,
-	//     which re-opens the particle gap above: "Jane St Clair Wolfgang Amadeus
-	//     Mozart" split as ["Jane St" "Clair Wolfgang" "Amadeus Mozart"], and the
-	//     same for "Klaus Zu Guttenberg" and "Jane Ph D". St/Zu/Ph are not in the
-	//     particle list and at >= 3 could never reach it.
-	//
-	// The discriminator is SCRIPT, not length: a two-character surname is ordinary
-	// in Han/Hiragana/Katakana/Hangul and is almost always an abbreviation
-	// elsewhere. So the threshold is script-conditional, and expressed as an
-	// allow-list so an unenumerated script fails CLOSED -- see below.
-	//
-	// COST, accepted deliberately: romanized two-letter surnames written in Latin
-	// (Wang Li, Chen Yu, Ng, Wu, Ho) are refused, so "Wang Li Chen Yu" does not
-	// split. That is a MISS. The alternative is the three silent WRONG splits
-	// above, and this file's own C414 rule is that refusing beats laundering:
-	// a missed split leaves the composite visibly wrong for repair, a wrong split
-	// does not.
-	trimmed := []rune(strings.TrimRight(lastWord, "."))
-	if len(trimmed) == 0 {
-		return false
-	}
-	if isSyllabicOrLogographic(trimmed[0]) {
-		// No length floor at all. "Is this a bare initial?" is a LATIN
-		// orthographic question -- "J.", "R.A." -- and Han/Hiragana/Katakana/
-		// Hangul have no initial form, so the rule simply does not apply. A
-		// single character is an ordinary given name there: 田中 翼 (Tanaka
-		// Tsubasa), 山田 誠. Holding them to a Latin minimum is the same category
-		// error as the byte count this rule replaced.
-		return len(trimmed) >= 1
-	}
-	return len(trimmed) >= 3
-}
-
-// isSyllabicOrLogographic reports whether r belongs to a script where a
-// TWO-CHARACTER word is an ordinary whole word rather than an abbreviation, so
-// the surname threshold may safely drop to 2.
-//
-// This is an ALLOW-LIST, and the direction is the point. It was first written as
-// its complement -- a deny-list naming Latin, Cyrillic and Greek, with every
-// other script falling through to the permissive >= 2 branch. That is fail-OPEN
-// for every script nobody enumerated, and the scripts nobody enumerated had the
-// exact bug the threshold exists to prevent:
-//
-//	"محمد بن سلمان أحمد"      -> ["محمد بن" "سلمان أحمد"]     Arabic bin, 2 letters
-//	"דוד בן גוריון משה"       -> ["דוד בן" "גוריון משה"]      Hebrew ben -- that is
-//	                                                          David Ben-Gurion, split
-//	                                                          with "ben" as the surname
-//	"عبد ال فهد محمد"         -> ["عبد ال" "فهد محمد"]        Arabic article al
-//	"Արամ Բա Սարգսյան Պետրոս" -> ["Արամ Բա" "Սարգսյան Պետրոս"] Armenian
-//	"राम बा शर्मा विष्णु"      -> ["राम बा" "शर्मा विष्णु"]     Devanagari
-//
-// personname.IsNameParticle can never catch those -- it is a romanized ASCII
-// list. Inverted, the same four scripts in the corpus behave identically and the
-// next script nobody thought of lands on the STRICT side, which is what this
-// file's refuse-beats-launder rule requires of an unknown case.
-func isSyllabicOrLogographic(r rune) bool {
-	return unicode.Is(unicode.Han, r) ||
-		unicode.Is(unicode.Hiragana, r) ||
-		unicode.Is(unicode.Katakana, r) ||
-		unicode.Is(unicode.Hangul, r)
-}
-
-// scoreAuthorSplit scores a split of names. Higher = more likely correct.
-// Prefers splits where each part has a typical name structure.
-func scoreAuthorSplit(parts ...string) int {
-	score := 0
-	for _, p := range parts {
-		words := strings.Fields(p)
-		// Prefer 2-3 word names (First Last, First Middle Last)
-		if len(words) == 2 {
-			score += 10
-		} else if len(words) == 3 {
-			score += 8
-		} else {
-			score += 3
-		}
-		// Bonus for initials (common in author names like "R.A.")
-		for _, w := range words[:len(words)-1] { // skip last name
-			if len(strings.TrimRight(w, ".")) <= 2 {
-				score += 2 // initial like "R." or "J.K."
-			}
-		}
-		// Bonus if last word (surname) has >3 chars
-		if len(words[len(words)-1]) > 3 {
-			score += 3
-		}
-	}
-	return score
 }
 
 // isCompositeAuthorName returns true if the name contains multiple real authors

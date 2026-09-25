@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.0.1
+// version: 1.1.1
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
 // last-edited: 2026-09-25
 
@@ -106,7 +106,10 @@ func TestMergeAuthorInto_MovesTrashedBookCredit(t *testing.T) {
 // is removed and the surviving co-author is promoted to the legacy primary.
 func TestUnlinkAndDeleteAuthor_PromotesSurvivorOnTrashedBook(t *testing.T) {
 	s := newRelinkTrashedStore(t)
-	junk, err := s.CreateAuthor("Track 01")
+	// The delete branch does not look at the name. A real junk name ("Track
+	// 01") can no longer be minted -- CreateAuthor refuses it -- so the row
+	// stands in for one that predates the creation gate.
+	junk, err := s.CreateAuthor("Relink Junk")
 	require.NoError(t, err)
 	keep, err := s.CreateAuthor("Relink Survivor")
 	require.NoError(t, err)

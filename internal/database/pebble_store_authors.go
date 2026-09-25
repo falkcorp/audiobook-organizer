@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-09-14
+// last-edited: 2026-09-25
 
 package database
 
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -110,7 +111,51 @@ func (p *PebbleStore) GetAuthorByName(name string) (*Author, error) {
 	return p.GetAuthorByID(id)
 }
 
+// ErrImplausibleAuthorName is the sentinel every *ImplausibleAuthorNameError
+// matches under errors.Is. Callers treat it as "this source carries no author":
+// they leave the book's author unset, or fall back to UnknownAuthorName, exactly
+// as they already do for an empty name.
+var ErrImplausibleAuthorName = errors.New("implausible author name")
+
+// ImplausibleAuthorNameError is returned by CreateAuthor when the name fails the
+// shared creation gate, personname.IsPlausibleAuthorName. Reason names the rule.
+type ImplausibleAuthorNameError struct {
+	Name   string
+	Reason personname.AuthorNameRejection
+}
+
+func (e *ImplausibleAuthorNameError) Error() string {
+	return fmt.Sprintf("implausible author name %q: %s", e.Name, e.Reason)
+}
+
+// Is makes errors.Is(err, ErrImplausibleAuthorName) true for this type.
+func (e *ImplausibleAuthorNameError) Is(target error) bool {
+	return target == ErrImplausibleAuthorName
+}
+
+// CheckAuthorNameForCreation applies the creation gate CreateAuthor enforces,
+// including its one exemption: the canonical UnknownAuthorName placeholder, which
+// the repair paths mint on purpose. It returns nil when the name may be stored.
+func CheckAuthorNameForCreation(name string) error {
+	if strings.EqualFold(strings.TrimSpace(name), UnknownAuthorName) {
+		return nil
+	}
+	if ok, why := personname.IsPlausibleAuthorName(name); !ok {
+		return &ImplausibleAuthorNameError{Name: name, Reason: why}
+	}
+	return nil
+}
+
 // CreateAuthor returns the author with this name, creating it if absent.
+//
+// It refuses a name that fails CheckAuthorNameForCreation with an
+// *ImplausibleAuthorNameError, and it refuses BEFORE the existing-row lookup, not
+// only before minting. That ordering is deliberate: prod already holds junk rows
+// ("read by narrator" with 452 credits, "14 BBY", "Epigraph"), and a gate that
+// only guarded the insert would keep handing those rows back to every caller
+// that resolves a junk name, which is how one junk row turns into hundreds of
+// junk credits. This is the last line of defence; the creation paths also gate
+// up front (personname.PrepareAuthorNameForCreation) so they can log why.
 //
 // The lookup and the insert are serialized, because they used to not be and the
 // window was not narrow: measured on 2026-08-25, 24 concurrent calls with an
@@ -134,6 +179,9 @@ func (p *PebbleStore) GetAuthorByName(name string) (*Author, error) {
 // DeleteAuthor too), so a create can also not interleave with a rename or a
 // delete of the same key; see nameIndexLocks for the lock order.
 func (p *PebbleStore) CreateAuthor(name string) (*Author, error) {
+	if err := CheckAuthorNameForCreation(name); err != nil {
+		return nil, err
+	}
 	// Fast path: an existing author needs no lock. This is the overwhelmingly
 	// common case -- authors are resolved once per book but created once per
 	// author -- so the lock must not sit on every resolve.

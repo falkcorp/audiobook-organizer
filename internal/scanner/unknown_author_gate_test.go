@@ -1,7 +1,7 @@
 // file: internal/scanner/unknown_author_gate_test.go
-// version: 2.1.2
+// version: 2.2.0
 // guid: 3d9a5f71-2e84-4c06-b1f3-6a05e97c2db4
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package scanner
 
@@ -235,9 +235,13 @@ func TestScanNominatesABookWhoseOnlyAuthorIsThePlaceholder(t *testing.T) {
 	}
 
 	// The book under test: a title, and an author that is ONLY the placeholder.
-	placeholderID, err := resolveAuthorID(authorname.Placeholder)
+	// Created through the store, not resolveAuthorID: the scanner's creation
+	// gate refuses a PARSED "Unknown Author" (it is no author), while the store
+	// still mints the canonical placeholder that the repair paths fall back to.
+	placeholder, err := store.CreateAuthor(authorname.Placeholder)
 	require.NoError(t, err)
-	require.NotNil(t, placeholderID)
+	require.NotNil(t, placeholder)
+	placeholderID := &placeholder.ID
 	_, err = store.CreateBook(&database.Book{
 		FilePath: segs[0],
 		Title:    "A Book Whose Author Is Unknown",

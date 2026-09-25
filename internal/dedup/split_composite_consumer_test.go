@@ -1,7 +1,7 @@
 // file: internal/dedup/split_composite_consumer_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f7c1a94-8d02-4e6b-b5a1-2c9e07f4d813
-// last-edited: 2026-09-01
+// last-edited: 2026-09-25
 
 package dedup
 
@@ -140,6 +140,46 @@ func TestSplitCompositeRefusesRatherThanLaunders(t *testing.T) {
 	}
 }
 
+// TestSplitCompositeRefusesSpaceJoinedRuns pins the removal of the word-run
+// splitter (2026-09-25). A space-joined run carries no separator, and person
+// shape cannot tell "Charles Dean" from "Three Worlds", so every one of these
+// stays a single string -- including the real two-person credits the heuristic
+// used to get right. The cost is deliberate; see the note in
+// splitCompositeAuthorName.
+func TestSplitCompositeRefusesSpaceJoinedRuns(t *testing.T) {
+	for _, in := range []string{
+		"Wraith Knight Three Worlds",
+		"A Memory Called Empire",
+		"Joseph Sheridan Le Fanu",
+		"Ch02 The Kasari Nexus",
+		"Logan Jacobs Backyard Dungeon",
+		"R.A. Mejia Charles Dean",
+		"John Smith Jane Doe",
+		"Ludwig van Beethoven Wolfgang Amadeus Mozart",
+		"Émile Zola Wolfgang Amadeus Mozart",
+		"村上 春樹 Wolfgang Amadeus Mozart",
+	} {
+		if got := SplitCompositeAuthorName(in); len(got) > 1 {
+			t.Errorf("SplitCompositeAuthorName(%q) = %q; want no split", in, got)
+		}
+	}
+}
+
+// TestSplitCompositeRefusesAPartThatFailsTheCreationGate: the split ops create a
+// row per part, so no branch may return a part the author creation gate refuses.
+func TestSplitCompositeRefusesAPartThatFailsTheCreationGate(t *testing.T) {
+	for _, in := range []string{
+		"Jane Smith; Read by Bob Jones",
+		"Jane Smith / 14 BBY",
+		"Jane Smith, Book 1 (Unabridged)",
+		"Jane Smith and Various Artists",
+	} {
+		if got := SplitCompositeAuthorName(in); len(got) > 1 {
+			t.Errorf("SplitCompositeAuthorName(%q) = %q; want no split", in, got)
+		}
+	}
+}
+
 // TestSplitCompositeStillSplitsLegitimateComposites is the known-good twin: a
 // guard that refuses everything would pass the two tests above. These must split.
 func TestSplitCompositeStillSplitsLegitimateComposites(t *testing.T) {
@@ -157,29 +197,8 @@ func TestSplitCompositeStillSplitsLegitimateComposites(t *testing.T) {
 		// comma branch's `break` into `return nil`.
 		{"Smith, John; Doe, Jane", "Smith, John|Doe, Jane"},
 		{"Jane Smith / Bob Jones", "Jane Smith|Bob Jones"},
-		// Regression: a >=3-rune name particle must never count as a surname, or
-		// this splits into ["Ludwig van" "Beethoven Wolfgang" "Amadeus Mozart"].
-		{"Ludwig van Beethoven Wolfgang Amadeus Mozart", "Ludwig van Beethoven|Wolfgang Amadeus Mozart"},
-		{"Vincent van Gogh Pablo Diego Picasso", "Vincent van Gogh|Pablo Diego Picasso"},
-		{"Simone de Beauvoir Jean Paul Sartre", "Simone de Beauvoir|Jean Paul Sartre"},
-		// A CAPITALIZED particle. unicode.IsLower is false for "Le", so the
-		// lowercase test alone misses it and this splits as
-		// ["Volker Le" "Guin Wolfgang" "Amadeus Mozart"].
-		{"Volker Le Guin Wolfgang Amadeus Mozart", "Volker Le Guin|Wolfgang Amadeus Mozart"},
-		{"Ursula Le Guin Wolfgang Amadeus Mozart", "Ursula Le Guin|Wolfgang Amadeus Mozart"},
-		// Non-ASCII authors. origin/main refused BOTH of these outright -- the
-		// concatenated splitter's ASCII byte test meant a two-author string was
-		// never split if either name started with a non-ASCII letter.
-		{"Émile Zola Wolfgang Amadeus Mozart", "Émile Zola|Wolfgang Amadeus Mozart"},
-		{"村上 春樹 Wolfgang Amadeus Mozart", "村上 春樹|Wolfgang Amadeus Mozart"},
-		// A two-rune CJK surname: the rune-count rule must reject INITIALS, not
-		// short names, or this package drops the very authors it exists to keep.
-		{"R.A. Mejia Charles Dean", "R. A. Mejia|Charles Dean"},
-		// Two-rune LATIN trailing tokens. These are abbreviations/particles absent
-		// from the closed particle list, and a flat >=2-rune surname rule let them
-		// qualify as surnames -- the Beethoven bug again, unshielded.
-		{"Jane St Clair Wolfgang Amadeus Mozart", "Jane St Clair|Wolfgang Amadeus Mozart"},
-		{"Klaus Zu Guttenberg Wolfgang Amadeus Mozart", "Klaus Zu Guttenberg|Wolfgang Amadeus Mozart"},
+		{"Émile Zola; Wolfgang Amadeus Mozart", "Émile Zola|Wolfgang Amadeus Mozart"},
+		{"Simone de Beauvoir, Jean Paul Sartre", "Simone de Beauvoir|Jean Paul Sartre"},
 	} {
 		got := strings.Join(SplitCompositeAuthorName(tc.in), "|")
 		if got != tc.want {

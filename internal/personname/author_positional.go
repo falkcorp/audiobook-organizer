@@ -1,7 +1,7 @@
 // file: internal/personname/author_positional.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1b54b5ba-45b5-4f3a-8674-43ad240b4c53
-// last-edited: 2026-09-03
+// last-edited: 2026-09-25
 
 package personname
 
@@ -146,33 +146,67 @@ func IsPositionalArtifactName(name string) bool {
 // CleanAuthorNameForCreation resolves a raw artist tag to the author name that
 // should be stored, reporting false when the tag carries no usable name.
 //
-// A book with NO author is honest; an author row named "Track 01" is a repair
+// A book with NO author is correct; an author row named "Track 01" is a repair
 // job. That is the same judgement C413 made for copyright shrapnel, applied to
 // the positional class.
+//
+// It is PrepareAuthorNameForCreation plus IsDirtyAuthorName, which also refuses
+// publisher names and "Name - translator" style role credits. The iTunes
+// importer and the merge service use this stricter form; the scanner, metadata
+// and provider paths use PrepareAuthorNameForCreation, because their existing
+// behaviour keeps publisher and role-suffixed credits (Big Finish Productions is
+// the owner's own curation) and dropping those would be a new behaviour change,
+// not a junk fix.
 func CleanAuthorNameForCreation(raw string) (string, bool) {
 	s := NormalizeAuthorName(strings.TrimSpace(raw))
-	if s == "" {
+	if s == "" || IsDirtyAuthorName(s) {
 		return "", false
 	}
-	if IsPositionalArtifactName(s) || IsDirtyAuthorName(s) {
+	cleaned, why := PrepareAuthorNameForCreation(s)
+	if why != "" || IsDirtyAuthorName(cleaned) {
 		return "", false
+	}
+	return cleaned, true
+}
+
+// PrepareAuthorNameForCreation salvages a raw artist tag or parse result and
+// applies the shared creation gate, IsPlausibleAuthorName, to what is left.
+// It returns the name to store, or a non-empty rejection reason.
+//
+// Salvage strips positional numbering ("001-147 Kevin J Anderson") only. A
+// leading dash or plus is NOT salvaged: of the 147 production author rows that
+// open with "- " on 2026-09-25, almost all are book titles ("- Carrie",
+// "- The Stand", "- Bag of Bones (read by Stephen King)"), so stripping the
+// dash would trade "- The Green Mile" for an author named "The Green Mile".
+// Refusing leaves the book authorless, which the repair ops can see.
+//
+// Until 2026-09-25 the creation gate stopped at the positional checks, so
+// "14 BBY", "13 short stories", "(c) 2001 Stephen Hawking", "- Epigraph",
+// "read by narrator" and "Book 1 (Unabridged)" all passed it.
+func PrepareAuthorNameForCreation(raw string) (string, AuthorNameRejection) {
+	s := NormalizeAuthorName(strings.TrimSpace(raw))
+	if s == "" {
+		return "", RejectEmpty
+	}
+	if IsPositionalArtifactName(s) {
+		return "", RejectPositional
 	}
 	stripped := NormalizeAuthorName(StripPositionalPrefix(s))
 	if stripped == "" {
-		return "", false
+		return "", RejectPositional
 	}
-	if IsPositionalArtifactName(stripped) || IsDirtyAuthorName(stripped) {
-		return "", false
+	if ok, why := IsPlausibleAuthorName(stripped); !ok {
+		return "", why
 	}
 	// A salvage is only trustworthy when the residue looks like a name. When a
-	// positional prefix was actually removed and one bare word is left, that
-	// word is overwhelmingly a chapter or book title rather than a person:
+	// prefix was actually removed and one bare word is left, that word is
+	// overwhelmingly a chapter or book title rather than a person:
 	// "001_Celestia", "001-119 Treason", "0 ABY". Real single-name authors
 	// (Homer, Voltaire) do not arrive carrying track numbering, so requiring a
-	// second token here costs nothing and stops the guard from trading one
-	// junk row for another.
+	// second token here costs nothing and stops the guard from trading one junk
+	// row for another.
 	if stripped != s && !strings.ContainsAny(stripped, " \t") {
-		return "", false
+		return "", RejectPositional
 	}
-	return stripped, true
+	return stripped, ""
 }

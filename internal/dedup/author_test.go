@@ -1,6 +1,7 @@
 // file: internal/dedup/author_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
+// last-edited: 2026-09-25
 
 package dedup
 
@@ -126,8 +127,6 @@ func TestIsCompositeAuthorName(t *testing.T) {
 		"Mark Tufo, Sean Runnette",
 		"Author One (Author Two)",
 		"Author One [Author Two]",
-		"R.A. Mejia Charles Dean",
-		"John Smith Jane Doe",
 		"Author One; Author Two",
 	}
 	for _, name := range composite {
@@ -144,6 +143,10 @@ func TestIsCompositeAuthorName(t *testing.T) {
 		"James S. A. Corey",
 		"Brandon Sanderson",
 		"Robert Jordan",
+		// Space-joined runs are no longer split (word-run heuristic removed
+		// 2026-09-25): shape cannot tell these from "Wraith Knight Three Worlds".
+		"R.A. Mejia Charles Dean",
+		"John Smith Jane Doe",
 	}
 	for _, name := range single {
 		if isCompositeAuthorName(name) {
@@ -157,12 +160,13 @@ func TestSplitCompositeAuthorName_NewPatterns(t *testing.T) {
 		name   string
 		expect []string
 	}{
-		{"R.A. Mejia Charles Dean", []string{"R. A. Mejia", "Charles Dean"}},
 		{"Author One (Author Two)", []string{"Author One", "Author Two"}},
 		{"Author One [Author Two]", []string{"Author One", "Author Two"}},
-		{"John Smith Jane Doe", []string{"John Smith", "Jane Doe"}},
 		{"Author One; Author Two", []string{"Author One", "Author Two"}},
 		// Should NOT split
+		{"R.A. Mejia Charles Dean", nil},
+		{"John Smith Jane Doe", nil},
+		{"Wraith Knight Three Worlds", nil},
 		{"James S. A. Corey", nil},
 		{"Brandon Sanderson", nil},
 		{"J. K. Rowling", nil},

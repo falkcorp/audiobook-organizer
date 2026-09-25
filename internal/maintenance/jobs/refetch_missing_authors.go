@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-09-15
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -13,8 +13,10 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
 func init() { maintenance.Register(&refetchMissingAuthorsJob{}) }
@@ -151,6 +153,17 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 			skipped++
 			continue
 		}
+		// A junk tag ("read by narrator", "Track01", "14 BBY") is no author,
+		// the same as an empty one. Gated before the lookup so an existing
+		// junk row is not linked either.
+		cleaned, why := personname.PrepareAuthorNameForCreation(authorName)
+		if why != "" {
+			logger.New("refetch-missing-authors").Warn("book %s: tag author %q is not a plausible name (%s); leaving it authorless",
+				b.ID, logger.SanitizeLogValue(authorName), why)
+			skipped++
+			continue
+		}
+		authorName = cleaned
 
 		if dryRun {
 			slog.Info("[dry] would set author for book", "authorName", authorName, "bookID", b.ID, "bookTitle", b.Title)
