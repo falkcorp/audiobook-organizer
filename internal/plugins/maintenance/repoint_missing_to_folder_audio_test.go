@@ -34,6 +34,9 @@ type rfFakeStore struct {
 	updates       []database.BookFile
 	// failOnWrite makes UpdateBookFiles fail the test (dry-run guard).
 	failOnWrite *testing.T
+	// onApplyLoad edits the rows GetBookFiles returns (the apply's re-read),
+	// simulating a change between plan and write.
+	onApplyLoad func([]database.BookFile)
 }
 
 func (s *rfFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
@@ -59,7 +62,11 @@ func (s *rfFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, e
 func (s *rfFakeStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]database.BookFile(nil), s.rows[bookID]...), nil
+	out := append([]database.BookFile(nil), s.rows[bookID]...)
+	if s.onApplyLoad != nil {
+		s.onApplyLoad(out)
+	}
+	return out, nil
 }
 
 func (s *rfFakeStore) BookFilesAtPath(path string) ([]database.BookFile, error) {
@@ -346,6 +353,48 @@ func TestRepointFolderAudio_ITunesNeverWritten(t *testing.T) {
 		require.Empty(t, store.updates)
 		require.Empty(t, wb.ids())
 	})
+}
+
+// A linked row whose recorded path is under books/itunes is refused even when
+// the book's folder (and so the target) is in the organizer library: the row
+// check itself holds, not only the folder check.
+func TestRepointFolderAudio_ITunesRootRowRefusedEvenWithLibraryFolder(t *testing.T) {
+	root := t.TempDir()
+	rfStubProbe(t, 60)
+	folder := filepath.Join(root, "Author", "Book")
+	writeFile(t, filepath.Join(folder, "Book.m4b"), 250)
+	store := &rfFakeStore{books: []database.BookCore{rfBookCore("b1", folder)},
+		rows: map[string][]database.BookFile{"b1": {{ID: "r1", BookID: "b1",
+			FilePath: filepath.Join(root, "books", "itunes", "gone", "Book - 01.mp3"), FileSize: 200,
+			ITunesPersistentID: "ABCDEF0123456789", ITunesPath: "file://localhost/W:/itunes/Book%20-%2001.mp3"}}}}
+	wb := &rfWriteBacks{}
+	got := rfOnly(t, rfRunEnv(t, rfEnv{store: store, rootDir: root, queue: fsQueue{},
+		itunesPathFor: rfTestMapping(root), enqueueWriteBack: wb.add}, false))
+	require.Equal(t, "itunes-path", got.Reason, got.Detail)
+	require.Empty(t, store.updates)
+	require.Empty(t, wb.ids())
+}
+
+// A row whose iTunes link changed between the plan and the write (an iTunes
+// import re-linked it) is not written.
+func TestRepointFolderAudio_ITunesLinkChangedSincePlanIsSkipped(t *testing.T) {
+	root := t.TempDir()
+	rfStubProbe(t, 3600)
+	store, _ := seedITunesConsolidated(t, root)
+	store.onApplyLoad = func(rows []database.BookFile) {
+		for i := range rows {
+			if rows[i].ID == "fb" {
+				rows[i].ITunesPersistentID = "PID-relinked"
+			}
+		}
+	}
+	wb := &rfWriteBacks{}
+	got := rfOnly(t, rfRunEnv(t, rfEnv{store: store, rootDir: root, queue: fsQueue{},
+		itunesPathFor: rfTestMapping(root), enqueueWriteBack: wb.add}, false))
+	require.Equal(t, rfOutcomeChanged, got.Outcome, got.Error)
+	require.Contains(t, got.Error, "iTunes link changed")
+	require.Empty(t, store.updates)
+	require.Empty(t, wb.ids())
 }
 
 // rfWriteBacks records EnqueueWriteBack calls; the write phase calls it from
