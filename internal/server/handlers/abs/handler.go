@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -84,6 +84,11 @@ type Store interface {
 // rather than a lying 200.
 type UserDataProvider interface {
 	MediaProgress(userID string) ([]any, error)
+	// ClientMediaProgress is MediaProgress plus one row per merge-loser alias
+	// id of each item with progress: the list every CLIENT-FACING response
+	// carries (userPayload). Server-side consumers (browse filters, sorts) use
+	// MediaProgress, which has exactly one row per stored book.
+	ClientMediaProgress(userID string) ([]any, error)
 	Bookmarks(userID string) ([]any, error)
 
 	// MediaProgressFor renders the single (user, book) row that GET
@@ -95,7 +100,11 @@ type UserDataProvider interface {
 	// book — AudioBooth resolves conflicts on `lastUpdate` with strict `>` after
 	// truncating to whole seconds — so two renderers that drift by a field or a
 	// rounding step turn into a book that will not stop re-syncing.
-	MediaProgressFor(userID, bookID string) (any, bool, error)
+	//
+	// libraryItemID is the id the client addressed; the row is rendered under
+	// it (a merge loser's id echoes back, not the canonical one). "" renders
+	// the canonical id.
+	MediaProgressFor(userID, bookID, libraryItemID string) (any, bool, error)
 
 	// ListenedSeconds is the user's total listened time across every book they
 	// have touched. It backs GET /api/me/listening-stats.
@@ -780,7 +789,7 @@ func (h *Handler) userPayload(userID string) (progress, bookmarks []any, err err
 		// complete list. Phase 6 wires a real provider.
 		return []any{}, []any{}, nil
 	}
-	progress, err = h.userData.MediaProgress(userID)
+	progress, err = h.userData.ClientMediaProgress(userID)
 	if err != nil {
 		return nil, nil, err
 	}

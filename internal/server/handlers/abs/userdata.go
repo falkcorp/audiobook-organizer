@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 package abs
 
@@ -76,6 +76,9 @@ type BookmarkListStore interface {
 type SyncIDStore interface {
 	GetSyncIDForBook(bookID string) (string, bool, error)
 	MintOrGetSyncID(bookID string) (string, error)
+	// ListSyncAliases names the merge losers' syncIDs that still resolve to a
+	// live syncID. ClientMediaProgress emits one extra row per alias.
+	ListSyncAliases(syncID string) ([]string, error)
 }
 
 // UserDataLibraryStore is the two-method duration slice. LibraryStore already
@@ -247,7 +250,11 @@ func (p *userDataProvider) MediaProgress(userID string) ([]any, error) {
 // into the 404 real ABS answers there. An error means we could not tell, which
 // becomes a 5xx: a 404 we are not sure about reads to the client as "no progress",
 // and that is the one answer that can cost a position.
-func (p *userDataProvider) MediaProgressFor(userID, bookID string) (any, bool, error) {
+//
+// libraryItemID is the id the client addressed. When it is a merge loser's id
+// (it resolved to bookID through a redirect) the row is rendered under it; see
+// withLibraryItemID. "" keeps the book's canonical id.
+func (p *userDataProvider) MediaProgressFor(userID, bookID, libraryItemID string) (any, bool, error) {
 	if userID == "" || bookID == "" {
 		return nil, false, errors.New("abs: userdata: userID and bookID are required")
 	}
@@ -267,7 +274,112 @@ func (p *userDataProvider) MediaProgressFor(userID, bookID string) (any, bool, e
 	if err != nil {
 		return nil, false, err
 	}
+	if libraryItemID != "" {
+		row = withLibraryItemID(row, userID, libraryItemID)
+	}
 	return row, true, nil
+}
+
+// withLibraryItemID re-renders a progress row under another client-visible id
+// of the SAME book (a merge loser's syncID that redirects to it). Only the three
+// id fields change; every value is the canonical record's, so a row read through
+// an alias and one read through the canonical id always agree.
+//
+// Why echo at all: AudioBooth keys its local MediaProgress by libraryItemId
+// (MediaProgress.swift: `bookID: apiProgress.episodeId ??
+// apiProgress.libraryItemId`, `@Attribute(.unique) bookID`) and its item page
+// reads the row for the id the page was opened with. A body naming the
+// canonical id never reaches that row.
+func withLibraryItemID(row mediaProgressDTO, userID, libraryItemID string) mediaProgressDTO {
+	row.ID = userID + "-" + libraryItemID
+	row.LibraryItemID = libraryItemID
+	row.MediaItemID = libraryItemID
+	return row
+}
+
+// ClientMediaProgress is the mediaProgress array SENT TO CLIENTS (GET /api/me,
+// GET /api/me/progress, login, refresh, authorize): MediaProgress plus one row
+// per merge-loser alias of each live item that has progress.
+//
+// 🔴 Why the alias rows exist. AudioBooth's MediaProgress.syncFromAPI upserts
+// its local rows by libraryItemId and DELETES every local row whose id is absent
+// from this list (§1.8.1). A client that opened a book through an alias id (a
+// cached page, a download, a playlist entry from before a dedup merge) and marked
+// it finished holds a local row under the ALIAS. With only the canonical row
+// here, the next home refresh deletes that row and the alias page reads
+// unfinished again — the owner's "marked finished, left, came back, not marked"
+// (2026-09-25). An alias row with the canonical record's values keeps the
+// client's row and keeps it current.
+//
+// Storage is untouched: every alias row is a copy of the canonical row, and a
+// write through either id lands on the canonical book. Browse filters and sorts
+// call MediaProgress, not this, so they never see duplicates.
+//
+// A stored position under a merge LOSER's book (progress the merge did not move)
+// renders under that loser's syncID. When the same id is also an alias of a live
+// item with progress, the alias row replaces it: GET/PATCH /api/me/progress/<that
+// id> resolve to the live item, so the list must say what those endpoints serve.
+//
+// Complete-or-error like MediaProgress: an alias lookup failure fails the whole
+// list, because a short list is what makes the client delete rows.
+func (p *userDataProvider) ClientMediaProgress(userID string) ([]any, error) {
+	rows, err := p.MediaProgress(userID)
+	if err != nil {
+		return nil, err
+	}
+	// One ListSyncAliases per row (a point-get on the item plus one per alias),
+	// in the same bounded pool shape as MediaProgress's per-book follow-ups.
+	aliases := make([][]string, len(rows))
+	g := new(errgroup.Group)
+	g.SetLimit(p.concurrency)
+	for i := range rows {
+		row, ok := rows[i].(mediaProgressDTO)
+		if !ok || row.LibraryItemID == "" {
+			continue
+		}
+		g.Go(func() error {
+			ids, err := p.identity.ListSyncAliases(row.LibraryItemID)
+			if err != nil {
+				return fmt.Errorf("abs: userdata: list aliases of %s: %w", row.LibraryItemID, err)
+			}
+			aliases[i] = ids
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	aliasRows := map[string]mediaProgressDTO{}
+	var aliasIDs []string
+	for i, ids := range aliases {
+		for _, id := range ids {
+			if _, dup := aliasRows[id]; dup {
+				// ListSyncAliases attributes an alias to one live item only;
+				// a second claim would mean two live items share a loser.
+				return nil, fmt.Errorf("abs: userdata: alias %s claimed by two live items", id)
+			}
+			aliasRows[id] = withLibraryItemID(rows[i].(mediaProgressDTO), userID, id)
+			aliasIDs = append(aliasIDs, id)
+		}
+	}
+	if len(aliasIDs) == 0 {
+		return rows, nil
+	}
+	sort.Strings(aliasIDs)
+	out := make([]any, 0, len(rows)+len(aliasIDs))
+	for _, r := range rows {
+		if dto, ok := r.(mediaProgressDTO); ok {
+			if _, shadowed := aliasRows[dto.LibraryItemID]; shadowed {
+				continue
+			}
+		}
+		out = append(out, r)
+	}
+	for _, id := range aliasIDs {
+		out = append(out, aliasRows[id])
+	}
+	return out, nil
 }
 
 // betterPosition decides which of two position rows for the SAME book wins.

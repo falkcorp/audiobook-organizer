@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.5.6
+// version: 1.5.7
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package abs_test
 
@@ -267,7 +267,10 @@ type fakeUserData struct {
 }
 
 func (f *fakeUserData) MediaProgress(string) ([]any, error) { return f.progress, f.err }
-func (f *fakeUserData) Bookmarks(string) ([]any, error)     { return f.bookmarks, f.err }
+
+// ClientMediaProgress: the fake has no aliases, so the client list is the list.
+func (f *fakeUserData) ClientMediaProgress(u string) ([]any, error) { return f.MediaProgress(u) }
+func (f *fakeUserData) Bookmarks(string) ([]any, error)             { return f.bookmarks, f.err }
 
 // MediaProgressFor mirrors the real provider closely enough for handler tests: the
 // SAME error is reported (so a broken provider still yields a 5xx rather than a 404,
@@ -282,7 +285,7 @@ func (f *fakeUserData) ListenedSeconds(string) (float64, error) {
 	return f.listenedSeconds, nil
 }
 
-func (f *fakeUserData) MediaProgressFor(_, bookID string) (any, bool, error) {
+func (f *fakeUserData) MediaProgressFor(_, bookID, _ string) (any, bool, error) {
 	if f.err != nil {
 		return nil, false, f.err
 	}

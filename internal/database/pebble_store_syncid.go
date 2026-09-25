@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package database: sync_item keyspace — durable ABS `libraryItemId` identity.
 //
@@ -66,6 +66,9 @@ type SyncIdentityStore interface {
 	ResolveSyncItem(syncID string) (*SyncItem, error)
 	RepointSyncItem(oldBookID, newBookID string) error
 	RecordSyncMerge(loserBookID, winnerBookID string) error
+	// ListSyncAliases returns every syncID that still resolves to syncID
+	// through a merge redirect (see the method for the walk and its limits).
+	ListSyncAliases(syncID string) ([]string, error)
 }
 
 // AsSyncIdentityStore returns s as a SyncIdentityStore if it implements the
@@ -264,6 +267,72 @@ func (p *PebbleStore) ResolveSyncItem(syncID string) (*SyncItem, error) {
 		current = item.RedirectTo
 	}
 	return nil, fmt.Errorf("%w: starting at %s", ErrSyncRedirectChainBroken, syncID)
+}
+
+// maxSyncAliases caps ListSyncAliases. A book absorbs a handful of merge
+// losers in practice; the cap exists so a corrupt MergedFrom graph cannot turn
+// one GET /api/me into an unbounded walk. Hitting it is an ERROR, not a
+// truncation: the caller's list must be complete or fail (abs/userdata.go).
+const maxSyncAliases = 256
+
+// ErrSyncAliasLimit is returned by ListSyncAliases when the alias graph under
+// one syncID exceeds maxSyncAliases.
+var ErrSyncAliasLimit = errors.New("sync item alias graph exceeds the alias cap")
+
+// ListSyncAliases returns the syncIDs of every merge loser that currently
+// redirects, directly or through a chain, to syncID -- the ids a client may
+// still hold for this item. syncID itself is not included. The result is
+// sorted, and is nil when syncID has no aliases or does not exist.
+//
+// Only a LIVE item has aliases: when syncID itself redirects, it is an alias
+// of something else and the answer is nil, so a caller expanding a list of rows
+// attributes each alias to exactly one live item.
+//
+// It walks MergedFrom transitively (A merged into B, B merged into C: C's
+// aliases are B and A; ResolveSyncItem cannot reach A from C because it only
+// follows redirects forward). A MergedFrom entry is trusted only when that
+// loser's RedirectTo still points back at the record that lists it:
+// ClearSyncMerge removes both halves together, but a loser merged again
+// elsewhere after the entry was written must not be reported as an alias of
+// an item it no longer resolves to.
+func (p *PebbleStore) ListSyncAliases(syncID string) ([]string, error) {
+	visited := map[string]bool{syncID: true}
+	var aliases []string
+	queue := []string{syncID}
+	for len(queue) > 0 {
+		parent := queue[0]
+		queue = queue[1:]
+		item, err := p.getSyncItem(parent)
+		if err != nil {
+			return nil, err
+		}
+		if item == nil {
+			continue
+		}
+		if parent == syncID && item.RedirectTo != "" {
+			return nil, nil
+		}
+		for _, loser := range item.MergedFrom {
+			if loser == "" || visited[loser] {
+				continue
+			}
+			visited[loser] = true
+			loserItem, err := p.getSyncItem(loser)
+			if err != nil {
+				return nil, err
+			}
+			if loserItem == nil || loserItem.RedirectTo != parent {
+				continue
+			}
+			if len(aliases) >= maxSyncAliases {
+				return nil, fmt.Errorf("%w: starting at %s", ErrSyncAliasLimit, syncID)
+			}
+			aliases = append(aliases, loser)
+			queue = append(queue, loser)
+		}
+	}
+	slices.Sort(aliases)
+	return aliases, nil
 }
 
 // RepointSyncItem moves the reverse index from oldBookID to newBookID and

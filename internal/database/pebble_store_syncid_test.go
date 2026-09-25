@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid_test.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: c4877e93-ba6a-468d-b428-30be15fdfa27
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 // Tests for the sync_item:/sync_item:book: keyspace (durable ABS libraryItemId
 // identity). Covers: mint-on-first-encounter idempotency, distinct IDs per book,
@@ -14,6 +14,7 @@ package database
 import (
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -364,5 +365,52 @@ func TestSyncID_ClearSyncMerge(t *testing.T) {
 	winner2, _ := store.ResolveSyncItem(ids["winner"])
 	if len(winner2.MergedFrom) != 1 {
 		t.Fatalf("repeat changed MergedFrom: %v", winner2.MergedFrom)
+	}
+}
+
+// TestSyncID_ListSyncAliases walks MergedFrom transitively (B->A->C: C's
+// aliases are A and B), returns nil for an id that is itself a redirect, and
+// drops an alias once its merge is cleared.
+func TestSyncID_ListSyncAliases(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+	ids := map[string]string{}
+	for _, b := range []string{"a", "b", "c", "lone"} {
+		id, err := store.MintOrGetSyncID("book-" + b)
+		if err != nil {
+			t.Fatalf("mint %s: %v", b, err)
+		}
+		ids[b] = id
+	}
+	if err := store.RecordSyncMerge("book-b", "book-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSyncMerge("book-a", "book-c"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.ListSyncAliases(ids["c"])
+	if err != nil {
+		t.Fatalf("ListSyncAliases(c): %v", err)
+	}
+	want := []string{ids["a"], ids["b"]}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("ListSyncAliases(c) = %v, want %v (transitive through A)", got, want)
+	}
+	if got, err := store.ListSyncAliases(ids["a"]); err != nil || got != nil {
+		t.Fatalf("ListSyncAliases(a) = %v, %v; want nil — a is itself a redirect", got, err)
+	}
+	if got, err := store.ListSyncAliases(ids["lone"]); err != nil || got != nil {
+		t.Fatalf("ListSyncAliases(lone) = %v, %v; want nil", got, err)
+	}
+
+	if err := store.ClearSyncMerge("book-a", "book-c"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.ListSyncAliases(ids["c"]); err != nil || got != nil {
+		t.Fatalf("after ClearSyncMerge(a, c): ListSyncAliases(c) = %v, %v; want nil", got, err)
+	}
+	if got, err := store.ListSyncAliases(ids["a"]); err != nil || !slices.Equal(got, []string{ids["b"]}) {
+		t.Fatalf("after ClearSyncMerge(a, c): ListSyncAliases(a) = %v, %v; want [b]", got, err)
 	}
 }
