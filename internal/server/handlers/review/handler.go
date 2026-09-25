@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 // Package reviewhandler hosts the universal review-queue HTTP handlers (PR-A1).
 //
@@ -257,8 +257,8 @@ func rejectf(status int, code, msg string) *actionRejection {
 
 // GetReviewCount handles GET /api/v1/review/count.
 //
-// Response: { "count": N, "byKind": { "<kind>": n, ... } } where count and the
-// byKind breakdown both cover PENDING items only (decision #1: the badge counts
+// Response: { "count": N, "by_kind": { "<kind>": n, ... } } where count and the
+// by_kind breakdown both cover PENDING items only (decision #1: the badge counts
 // intentional holds awaiting a decision, never decided items).
 func (h *Handler) GetReviewCount(c *gin.Context) {
 	if h.store == nil {
@@ -281,7 +281,7 @@ func (h *Handler) GetReviewCount(c *gin.Context) {
 			byKind[s.Kind] = s.Count
 		}
 	}
-	httputil.RespondWithOK(c, gin.H{"count": count, "byKind": byKind})
+	httputil.RespondWithOK(c, gin.H{"count": count, "by_kind": byKind})
 }
 
 // ListReviewItems handles GET /api/v1/review/items.
@@ -376,9 +376,9 @@ func (h *Handler) ApproveReviewItem(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "review item", id)
 		return
 	}
-	// chosenAction is echoed so the caller can see WHICH action ran — with an empty
+	// chosen_action is echoed so the caller can see WHICH action ran — with an empty
 	// body that is the recommendation, which the caller may not have read.
-	resp := gin.H{"item": updated, "chosenAction": chosen}
+	resp := gin.H{"item": updated, "chosen_action": chosen}
 	if note != "" {
 		resp["note"] = note
 	}

@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRegroupLane.payloadIndex.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2e7a4c19-5d80-4b36-91af-6c3e08d5b724
-// last-edited: 2026-09-01
+// last-edited: 2026-09-25
 //
 // A regroup row's `payload` arrives as a JSON STRING, and three places want it
 // parsed: the lane's search index, the lane's actionFor, and the spine's row
@@ -61,7 +61,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   toast.mockReset();
   useReviewStore.setState({ byKind: {}, count: 0 });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ count: 0, byKind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({ count: 0, by_kind: {} });
   // 🔴 ONE ROW'S PAYLOAD DOES NOT PARSE, on purpose. Every fixture here used to
   // be valid JSON, which made two deliberately-commented decisions in the lane
   // unobservable: `payloadIndex.has(id)` rather than `?? parsePayload(...)`, and

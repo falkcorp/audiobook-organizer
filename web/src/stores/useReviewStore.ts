@@ -1,7 +1,7 @@
 // file: web/src/stores/useReviewStore.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1e9d4c72-8a36-4f50-b1c7-3d2e6a9b7c81
-// last-edited: 2026-09-01
+// last-edited: 2026-09-25
 
 import { create } from 'zustand';
 import * as api from '../services/api';
@@ -63,7 +63,7 @@ export const useReviewStore = create<ReviewState>()((set, get) => ({
 
   loadCount: async () => {
     try {
-      const { count, byKind } = await api.getReviewCount();
+      const { count, by_kind: byKind } = await api.getReviewCount();
       // Publish a NEW `byKind` object only when the numbers actually moved.
       //
       // This poller ticks every 30s for the life of the session. A freshly

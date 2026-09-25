@@ -1,7 +1,7 @@
 // file: web/src/stores/useReviewStore.rerender.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c2a7e41-9b38-4d6f-8a10-3e7b4c9d2a51
-// last-edited: 2026-09-01
+// last-edited: 2026-09-25
 //
 // Counts ACTUAL React renders caused by the review count poller.
 //
@@ -41,10 +41,10 @@ describe('review count poll -> re-render cascade', () => {
   }
 
   it('an unchanged poll tick causes ZERO extra renders', async () => {
-    const counts = { count: 4, byKind: { 'regroup.multidisc': 4 } };
+    const counts = { count: 4, by_kind: { 'regroup.multidisc': 4 } };
     vi.mocked(api.getReviewCount).mockImplementation(() =>
       // A fresh object every call, exactly as JSON.parse would produce.
-      Promise.resolve({ count: counts.count, byKind: { ...counts.byKind } })
+      Promise.resolve({ count: counts.count, by_kind: { ...counts.byKind } })
     );
 
     let renders = 0;
@@ -66,7 +66,7 @@ describe('review count poll -> re-render cascade', () => {
   it('a tick that changes the counts DOES re-render exactly once', async () => {
     vi.mocked(api.getReviewCount).mockResolvedValue({
       count: 4,
-      byKind: { 'regroup.multidisc': 4 },
+      by_kind: { 'regroup.multidisc': 4 },
     });
 
     let renders = 0;
@@ -78,7 +78,7 @@ describe('review count poll -> re-render cascade', () => {
 
     vi.mocked(api.getReviewCount).mockResolvedValue({
       count: 6,
-      byKind: { 'regroup.multidisc': 6 },
+      by_kind: { 'regroup.multidisc': 6 },
     });
     await useReviewStore.getState().loadCount();
     await waitFor(() => expect(useReviewStore.getState().count).toBe(6));
