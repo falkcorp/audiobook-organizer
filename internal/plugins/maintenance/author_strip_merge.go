@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
 // last-edited: 2026-09-25
 
@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,6 +107,118 @@ func isTrackOrTimecodeArtifact(name string) bool {
 	return trackArtifactRe.MatchString(name) || embeddedTimecodeRe.MatchString(name)
 }
 
+// 🔴 TITLE-AS-AUTHOR (2026-09-25, TODO JUNK-TITLE-AUTHORS). A different
+// defect than the numbering shrapnel above: the author ROW is well-formed —
+// "Arcane Chef 2" looks like an ordinary name and CleanAuthorNameForCreation
+// accepts it — but every book it credits is titled after it: "Arcane Chef 2:
+// A LitRPG Adventure" carries author "Arcane Chef 2". The importer filed the
+// title where the artist tag was empty or missing, the same class of bug
+// PR #3550's parseFilenameForAuthor fix closed at the source (see the
+// personname change in that commit) for the filename-parse path; this branch
+// repairs the rows that path, or an importer before it, already created.
+//
+// The guard against false positives is the SECOND half of the rule: an
+// author is only flagged when EVERY live book it credits matches the
+// title-as-author pattern. A real person who happens to have titled one book
+// after themselves keeps other, differently-titled books, and that
+// difference is exactly what keeps them off this list — see
+// classifyTitleAsAuthor.
+var (
+	titleAsAuthorPunctRe = regexp.MustCompile(`[^a-z0-9 ]+`)
+	titleAsAuthorSpaceRe = regexp.MustCompile(`\s+`)
+)
+
+// normalizeForTitleAuthorCompare folds case, maps '_' to a space (a common
+// filename-tag separator), drops every other punctuation rune, and collapses
+// whitespace — a looser comparison than dedup.NormalizeAuthorName, which
+// preserves punctuation and case because it is used to key a name INDEX.
+// This one exists only to answer "do these two strings name the same thing",
+// per the TODO's explicit "case, punctuation, `_`->space, whitespace" rule.
+func normalizeForTitleAuthorCompare(s string) string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "_", " ")
+	s = titleAsAuthorPunctRe.ReplaceAllString(s, " ")
+	s = titleAsAuthorSpaceRe.ReplaceAllString(s, " ")
+	return strings.TrimSpace(s)
+}
+
+// seriesPositionLabel returns the book's series-sequence number as text,
+// preferring the typed SeriesSequence over the raw string so "2" and "2.0"
+// both read as "2" wherever the typed field is populated.
+func seriesPositionLabel(b database.BookCore) string {
+	if b.SeriesSequence != nil {
+		return strconv.Itoa(*b.SeriesSequence)
+	}
+	if b.SeriesPositionRaw != nil {
+		return strings.TrimSpace(*b.SeriesPositionRaw)
+	}
+	return ""
+}
+
+// titleAsAuthorCandidates lists the strings a book's title could plausibly
+// have been copied from into the author field: the whole title, the title's
+// leading segment before ":" or " - " (subtitle separators — "Arcane Chef 2:
+// A LitRPG Adventure" -> "Arcane Chef 2"), and "<series name> <position>"
+// when the book belongs to a series ("Arcane Chef" #2 -> "Arcane Chef 2").
+func titleAsAuthorCandidates(b database.BookCore, seriesByID map[int]database.Series) []string {
+	var cands []string
+	if title := strings.TrimSpace(b.Title); title != "" {
+		cands = append(cands, title)
+		if i := strings.Index(title, ":"); i > 0 {
+			cands = append(cands, title[:i])
+		}
+		if i := strings.Index(title, " - "); i > 0 {
+			cands = append(cands, title[:i])
+		}
+	}
+	if b.SeriesID != nil {
+		if s, ok := seriesByID[*b.SeriesID]; ok && strings.TrimSpace(s.Name) != "" {
+			if pos := seriesPositionLabel(b); pos != "" {
+				cands = append(cands, s.Name+" "+pos)
+			}
+		}
+	}
+	return cands
+}
+
+// bookTitleNamesAuthor reports whether name (normalized) matches any of the
+// book's title-as-author candidates (also normalized).
+func bookTitleNamesAuthor(name string, b database.BookCore, seriesByID map[int]database.Series) bool {
+	norm := normalizeForTitleAuthorCompare(name)
+	if norm == "" {
+		return false
+	}
+	for _, c := range titleAsAuthorCandidates(b, seriesByID) {
+		if normalizeForTitleAuthorCompare(c) == norm {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyTitleAsAuthor reports whether author a's name is its books' title
+// masquerading as a credit. True only when a has at least one live (not
+// soft-deleted) book AND every live book it credits matches the
+// title-as-author pattern — one differently-titled live book is proof a is a
+// real, distinct credit and takes a out of scope entirely (TODO
+// JUNK-TITLE-AUTHORS: "only when the author has no other books whose titles
+// differ"). Soft-deleted books are skipped rather than counted either way:
+// their titles are neither evidence of a real author nor part of what a
+// repair would touch.
+func classifyTitleAsAuthor(a database.Author, books []database.BookCore, seriesByID map[int]database.Series) bool {
+	matched := 0
+	for i := range books {
+		if books[i].IsSoftDeleted() {
+			continue
+		}
+		if !bookTitleNamesAuthor(a.Name, books[i], seriesByID) {
+			return false
+		}
+		matched++
+	}
+	return matched > 0
+}
+
 // authorStripMergeSampleLimit bounds how many per-row decisions are surfaced in
 // the report, so a reviewer can eyeball the plan without the report becoming the
 // size of the change.
@@ -147,7 +260,14 @@ func (p authorStripMergeParams) deleteJunk() bool {
 type authorStripMergeReport struct {
 	TotalAuthors int
 	Junk         int
-	Mergeable    int
+	// TitleAsAuthor counts rows whose name is one of their OWN books' title
+	// (or the title's leading segment, or "<series> <position>") and where
+	// every live book that row credits matches — see classifyTitleAsAuthor.
+	// Deleted under the same delete_junk gate as the Junk bucket above; the
+	// books keep existing and lose a bogus credit, same as any other junk
+	// author (see the file comment on that bucket).
+	TitleAsAuthor int
+	Mergeable     int
 	// Ambiguous are rows whose stripped name matches MORE THAN ONE existing
 	// author. Reported rather than merged: a name index resolves to one row and
 	// silently hides the duplicates, so picking one here would be a guess.
@@ -195,8 +315,8 @@ type authorStripMergeReport struct {
 
 func (r authorStripMergeReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d junk=%d mergeable=%d ambiguous=%d target-is-junk=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d",
-		r.TotalAuthors, r.Junk, r.Mergeable, r.Ambiguous, r.TargetIsJunk,
+		"authors=%d junk=%d title-as-author=%d mergeable=%d ambiguous=%d target-is-junk=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d",
+		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.Mergeable, r.Ambiguous, r.TargetIsJunk,
 		r.StrippedNoTarget, r.OutOfScope, r.Placeholders, r.PlaceholdersNoCanonical,
 		r.CanonicalUnknownID, r.Merged, r.Deleted, r.BooksTouched,
 		r.BooksLeftAuthorless, r.Failed)
@@ -212,7 +332,9 @@ func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
 			"'Track 01', '000m_00s__056m_16s_43h'). Strips the numbering; when the residue names " +
 			"an existing author the row is MERGED into it ('001-147 Kevin J Anderson'), and rows " +
 			"that carry no usable name are DELETED. Rows whose residue matches nothing are left " +
-			"alone rather than renamed. Placeholder rows ('Unknown', 'Various', 'n/a', a duplicate " +
+			"alone rather than renamed. Also deletes TITLE-AS-AUTHOR rows: a name matching every " +
+			"live book it credits ('Arcane Chef 2' crediting 'Arcane Chef 2: A LitRPG Adventure'), " +
+			"never a row that also credits a differently-titled book. Placeholder rows ('Unknown', 'Various', 'n/a', a duplicate " +
 			"'Unknown Author') are MERGED INTO the canonical Unknown Author row, which is never " +
 			"deleted. Pass delete_unmatched=true to delete those too (review " +
 			"the dry run first: 812 on this library, chapter and book titles). Measured 2,793 " +
@@ -286,6 +408,32 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		byName[key] = append(byName[key], a)
 	}
 
+	// booksByAuthorID and seriesByID back the title-as-author check below.
+	// One full-library read each, same pattern maintenance.repair-junk-titles
+	// uses for its own book-title sweep, rather than a per-author query: with
+	// ~20k author rows a per-author fetch is the "2,793 round trips" this op's
+	// byName index above already exists to avoid, just on the books side.
+	allBooksCore, err := store.GetAllBooksCore(0, 0)
+	if err != nil {
+		return fmt.Errorf("list books: %w", err)
+	}
+	booksByAuthorID := make(map[int][]database.BookCore, len(authors))
+	for i := range allBooksCore {
+		if allBooksCore[i].AuthorID == nil {
+			continue
+		}
+		id := *allBooksCore[i].AuthorID
+		booksByAuthorID[id] = append(booksByAuthorID[id], allBooksCore[i])
+	}
+	allSeries, err := store.GetAllSeries()
+	if err != nil {
+		return fmt.Errorf("list series: %w", err)
+	}
+	seriesByID := make(map[int]database.Series, len(allSeries))
+	for _, s := range allSeries {
+		seriesByID[s.ID] = s
+	}
+
 	report := authorStripMergeReport{TotalAuthors: len(authors)}
 	var plans []authorStripPlan
 	tombstoneWarned := false
@@ -315,6 +463,13 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 			report.Placeholders++
 			into := *canonicalUnknown
 			plans = append(plans, authorStripPlan{from: a, into: &into, reason: "placeholder"})
+			continue
+		}
+		if classifyTitleAsAuthor(a, booksByAuthorID[a.ID], seriesByID) {
+			report.TitleAsAuthor++
+			if params.deleteJunk() {
+				plans = append(plans, authorStripPlan{from: a, reason: "title-as-author"})
+			}
 			continue
 		}
 		cleaned, ok := dedup.CleanAuthorNameForCreation(a.Name)
