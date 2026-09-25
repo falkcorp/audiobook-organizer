@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_merged_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b41e7c3-2d58-4a06-bf19-6e35c0d7a284
 // last-edited: 2026-09-25
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -165,5 +166,70 @@ func TestDurationBackfill_BookIDsReadsOnlyThoseBooks(t *testing.T) {
 	}
 	if segWrites != 1 {
 		t.Errorf("the zero-duration file row must be corrected: segment writes = %d, want 1", segWrites)
+	}
+}
+
+// zeroRowsStore is bookWithSegs for one book with the given visibility.
+func zeroRowsStore(t *testing.T, segs []database.BookFile, primary bool, state string, segWrites, bookWrites *int) *database.MockStore {
+	t.Helper()
+	store := bookWithSegs(t, segs, segWrites, bookWrites)
+	book := database.Book{ID: "b1", Title: "B", FilePath: "/lib/B", Duration: new(3000),
+		IsPrimaryVersion: &primary, LibraryState: &state, DurationVerifiedAt: new(time.Now())}
+	store.GetAllBooksFullFromFunc = pageBooksFullFrom([]database.Book{book})
+	return store
+}
+
+func runZeroRows(t *testing.T, store *database.MockStore) {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"dry_run": false, "zero_rows_only": true})
+	if err := New(fakeDeps{store: store}).runDurationBackfill(context.Background(), raw, &fakeReporter{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// Zero-rows mode fills a row stored as 0 on a visible single-folder book,
+// even though the book was stamped verified, and leaves a drifted non-zero
+// row alone.
+func TestDurationBackfill_ZeroRowsFillsOnlyZeroRows(t *testing.T) {
+	var segWrites, bookWrites int
+	var written []string
+	segs := []database.BookFile{
+		{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "s2", BookID: "b1", FilePath: "/lib/B/02.m4b", Duration: 50, AcoustIDFingerprintDurationSec: 1200.0},
+	}
+	store := zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites)
+	store.UpdateBookFilesFunc = func(_ context.Context, files []*database.BookFile, after func(int, bool)) (int, error) {
+		for _, f := range files {
+			written = append(written, f.ID)
+		}
+		return len(files), nil
+	}
+	runZeroRows(t, store)
+	if len(written) != 1 || written[0] != "s1" {
+		t.Errorf("zero-rows mode must write only the zero row s1, wrote %v", written)
+	}
+}
+
+// A book whose rows span two folders (duplicate rows) is skipped: summing
+// them after the write is what inflated totals in the full run.
+func TestDurationBackfill_ZeroRowsSkipsMultiDirBooks(t *testing.T) {
+	var segWrites, bookWrites int
+	segs := []database.BookFile{
+		{ID: "s1", BookID: "b1", FilePath: "/itunes/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "s2", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 1800, AcoustIDFingerprintDurationSec: 1800.0},
+	}
+	runZeroRows(t, zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites))
+	if segWrites != 0 || bookWrites != 0 {
+		t.Errorf("multi-dir book must be skipped: segment writes=%d book writes=%d", segWrites, bookWrites)
+	}
+}
+
+// A book ABS does not list (not primary) is out of scope.
+func TestDurationBackfill_ZeroRowsIgnoresHiddenBooks(t *testing.T) {
+	var segWrites, bookWrites int
+	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0}}
+	runZeroRows(t, zeroRowsStore(t, segs, false, "organized", &segWrites, &bookWrites))
+	if segWrites != 0 {
+		t.Errorf("non-primary book must not be touched: segment writes=%d", segWrites)
 	}
 }
