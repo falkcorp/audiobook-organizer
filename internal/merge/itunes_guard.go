@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_guard.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a35388d-79af-4a1e-a553-a61d6dfcf4ae
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package merge
 
@@ -201,6 +201,20 @@ func guardITunesProtected(store ITunesGuardStore, bookIDs []string, roots []stri
 // not-exist is a fail-closed refusal.
 func checkITunesPath(bookID, p string, roots []string) error {
 	return checkITunesPathResolved(bookID, p, resolveProtectedRoots(roots))
+}
+
+// CheckPathOutsideITunes applies the same per-path check as the merge guard
+// (frozen books/itunes/ tree, configured iTunes roots, symlinks resolved) to one
+// path, using the live config's roots. nil means p is provably outside every
+// iTunes root; an empty p is nil. The error wraps ErrITunesProtected, and a
+// roots-configuration error (sync on, no root set) is returned as-is so the
+// caller fails closed on it.
+func CheckPathOutsideITunes(p string) error {
+	roots, err := ITunesProtectedRoots(config.Snapshot().ITunes)
+	if err != nil {
+		return err
+	}
+	return checkITunesPath("", p, roots)
 }
 
 // protectedRoot is a configured root and its symlink-resolved form. Roots are
