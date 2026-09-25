@@ -1,5 +1,5 @@
 // file: internal/server/search_result_cache_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 220a3f36-7c10-426f-a8ee-c3fefa2ee20e
 // last-edited: 2026-09-25
 
@@ -643,6 +643,25 @@ func TestSearchResultCache_EveryIndexWriteIsRecorded(t *testing.T) {
 		changed, _, ok := fx.srv.searchChanges.ChangedSince(g)
 		if !ok || !containsID(changed, id) {
 			t.Fatalf("%s did not record %s: %v ok=%v", name, id, changed, ok)
+		}
+	}
+	// The backfill's batch path (indexBookChunk) records every book it indexed.
+	var books []database.Book
+	for _, id := range fx.bookIDs[5:8] {
+		b, err := fx.pebble.GetBookByID(id)
+		if err != nil || b == nil {
+			t.Fatalf("read %s: %v", id, err)
+		}
+		books = append(books, *b)
+	}
+	g := fx.srv.searchChanges.Generation()
+	if n := fx.srv.indexBookChunk(fx.pebble, books); n != int64(len(books)) {
+		t.Fatalf("indexBookChunk indexed %d of %d", n, len(books))
+	}
+	changed, _, ok := fx.srv.searchChanges.ChangedSince(g)
+	for _, b := range books {
+		if !ok || !containsID(changed, b.ID) {
+			t.Fatalf("indexBookChunk did not record %s: %v ok=%v", b.ID, changed, ok)
 		}
 	}
 }
