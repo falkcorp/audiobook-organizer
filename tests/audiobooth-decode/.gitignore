@@ -1,0 +1,11 @@
+# file: tests/audiobooth-decode/.gitignore
+# version: 1.0.0
+# guid: 0b6d3f82-1c4e-4a97-8e25-d7f1a9c4b063
+# last-edited: 2026-09-25
+#
+# Upstream AudioBooth sources are staged here at test time by
+# scripts/audiobooth_decode_prep.py and must never be committed.
+Sources/AudioBoothModels/Upstream/
+.build/
+.swiftpm/
+Package.resolved

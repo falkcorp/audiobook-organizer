@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-25
 
@@ -2864,6 +2864,13 @@ func absFilterGroup(raw string) (group, value string, ok bool) {
 		return "", "", false
 	}
 	group, enc := raw[:dot], raw[dot+1:]
+	// AudioBooth builds its query with URLComponents.queryItems, which leaves '+'
+	// literal, and the query parser reads a literal '+' as a space. So a value whose
+	// base64 contains '+' ("Seán O’Brien" -> "U2XDoW4gT+KAmUJyaWVu") arrives with a
+	// space in it, failed every alphabet below, and served an empty page. A space
+	// is never valid base64, so mapping it back to '+' cannot misread a real token.
+	// Found by the AudioBooth decode proof (tests/audiobooth-decode), 2026-09-25.
+	enc = strings.ReplaceAll(enc, " ", "+")
 	for _, dec := range []*base64.Encoding{
 		base64.StdEncoding, base64.RawStdEncoding,
 		base64.URLEncoding, base64.RawURLEncoding,
