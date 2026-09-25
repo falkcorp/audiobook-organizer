@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_metadata_source_hash.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1000015-0000-0000-0000-000000000015
-// last-edited: 2026-09-15
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -26,7 +26,7 @@ func (j *backfillMetadataSourceHashJob) Category() string { return "files" }
 func (j *backfillMetadataSourceHashJob) DefaultParams() any {
 	return struct {
 		DryRun bool `json:"dry_run"`
-	}{DryRun: false}
+	}{DryRun: true} // preview by default (owner 2026-09-25); send dry_run=false to apply
 }
 func (j *backfillMetadataSourceHashJob) Description() string {
 	return "Compute MetadataSourceHash for books that have one missing"
