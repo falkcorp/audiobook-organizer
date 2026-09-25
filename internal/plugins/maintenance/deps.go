@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -528,8 +528,6 @@ type WriteBackOps interface {
 
 // DedupRunners runs the dedup review and triage operations.
 type DedupRunners interface {
-	// DedupLLMReview runs the LLM review of ambiguous dedup candidates.
-	DedupLLMReview(ctx context.Context) error
 	// DedupTriageExactPending scans all pending book dedup candidates,
 	// classifies each into one of five populations (genuine / stub / fragment /
 	// title_leak / unknown), and returns a TriageReport. When apply is false

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume_supersede_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e1a4c92-6b3d-4f58-9a07-2d5e8b1c4f60
-// last-edited: 2026-09-07
+// last-edited: 2026-09-25
 
 package registry
 
@@ -58,7 +58,7 @@ func TestSupersedeStaleQuiesced_KeepsOnlyTheNewestPerDef(t *testing.T) {
 		quiesced("op-02", "library.scan"),
 	}
 
-	keep, superseded := supersedeStaleQuiesced(rows, nil)
+	keep, superseded := supersedeStaleQuiesced(rows, nil, nil)
 
 	if !sameSet(ids(keep), "op-03") {
 		t.Errorf("keep = %v, want only the newest (op-03). Keeping more than one "+
@@ -78,7 +78,7 @@ func TestSupersedeStaleQuiesced_IsPerDefNotGlobal(t *testing.T) {
 		quiesced("op-02", "maintenance.dedupe-book-file-rows"),
 	}
 
-	keep, superseded := supersedeStaleQuiesced(rows, nil)
+	keep, superseded := supersedeStaleQuiesced(rows, nil, nil)
 
 	if !sameSet(ids(keep), "op-01", "op-02") {
 		t.Errorf("keep = %v, want both: they are different defs and neither "+
@@ -99,7 +99,7 @@ func TestSupersedeStaleQuiesced_ALiveRowBeatsEveryQuiescedRow(t *testing.T) {
 				{ID: "op-01", DefID: "library.scan", Status: liveStatus},
 			}
 
-			keep, superseded := supersedeStaleQuiesced(rows, nil)
+			keep, superseded := supersedeStaleQuiesced(rows, nil, nil)
 
 			// ...and still loses, because "newest" only decides between quiesced
 			// rows. A live request outranks any interrupted history.
@@ -125,7 +125,7 @@ func TestSupersedeStaleQuiesced_NeverSupersedesALiveRow(t *testing.T) {
 		{ID: "op-03", DefID: "other.op", Status: "queued"},
 	}
 
-	keep, superseded := supersedeStaleQuiesced(rows, nil)
+	keep, superseded := supersedeStaleQuiesced(rows, nil, nil)
 
 	if !sameSet(ids(keep), "op-01", "op-02", "op-03") {
 		t.Errorf("keep = %v, want all three untouched: this function must only "+
@@ -142,7 +142,7 @@ func TestSupersedeStaleQuiesced_NeverSupersedesALiveRow(t *testing.T) {
 func TestSupersedeStaleQuiesced_KeepsALoneQuiescedRow(t *testing.T) {
 	rows := []database.OperationV2Row{quiesced("op-01", "library.scan")}
 
-	keep, superseded := supersedeStaleQuiesced(rows, nil)
+	keep, superseded := supersedeStaleQuiesced(rows, nil, nil)
 
 	if !sameSet(ids(keep), "op-01") {
 		t.Errorf("keep = %v, want op-01: dropping the only interrupted run is "+
@@ -167,7 +167,7 @@ func TestSupersedeStaleQuiesced_SetParameterizedDefSurvivesALiveRow(t *testing.T
 	}
 	merges := func(defID string) bool { return defID == setDef }
 
-	keep, superseded := supersedeStaleQuiesced(rows, merges)
+	keep, superseded := supersedeStaleQuiesced(rows, merges, nil)
 
 	if !sameSet(ids(keep), "op-01", "op-02") {
 		t.Errorf("keep = %v, want both: dropping op-01 abandons the books its "+
@@ -180,10 +180,33 @@ func TestSupersedeStaleQuiesced_SetParameterizedDefSurvivesALiveRow(t *testing.T
 	// The SAME rows, for a def that does NOT declare MergeQueuedParams, must
 	// still collapse. This is what proves the exception is scoped to the
 	// declaration rather than quietly disabling the guard for everyone.
-	keep, superseded = supersedeStaleQuiesced(rows, func(string) bool { return false })
+	keep, superseded = supersedeStaleQuiesced(rows, func(string) bool { return false }, nil)
 	if !sameSet(ids(keep), "op-02") || !sameSet(ids(superseded), "op-01") {
 		t.Errorf("one-run-per-def behaviour changed: keep = %v, superseded = %v; "+
 			"want keep op-02, supersede op-01", ids(keep), ids(superseded))
+	}
+}
+
+// A rename must not split one op's runs into two groups. A quiesced run
+// persisted under the former ID and a quiesced run under the new ID are two
+// interrupted runs of the SAME op, so only the newest survives -- otherwise the
+// deploy that renames an op would restart both.
+func TestSupersedeStaleQuiesced_GroupsFormerAndCanonicalIDsTogether(t *testing.T) {
+	rows := []database.OperationV2Row{
+		quiesced("op-01", "old.scan"),
+		quiesced("op-02", "new.scan"),
+	}
+	canonical := func(id string) string {
+		if id == "old.scan" {
+			return "new.scan"
+		}
+		return id
+	}
+
+	keep, superseded := supersedeStaleQuiesced(rows, nil, canonical)
+
+	if !sameSet(ids(keep), "op-02") || !sameSet(ids(superseded), "op-01") {
+		t.Errorf("keep = %v, superseded = %v; want keep op-02, supersede op-01", ids(keep), ids(superseded))
 	}
 }
 
@@ -198,7 +221,7 @@ func TestSupersedeStaleQuiesced_SetParameterizedDefStillCollapsesItsOwnBacklog(t
 		quiesced("op-02", setDef),
 	}
 
-	keep, superseded := supersedeStaleQuiesced(rows, func(string) bool { return true })
+	keep, superseded := supersedeStaleQuiesced(rows, func(string) bool { return true }, nil)
 
 	if !sameSet(ids(keep), "op-03") {
 		t.Errorf("keep = %v, want only the newest op-03", ids(keep))

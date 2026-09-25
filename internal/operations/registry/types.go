@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-09
+// last-edited: 2026-09-25
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See the spec at
@@ -24,6 +24,24 @@ type OperationDef struct {
 	Plugin      string // owning plugin, e.g. "acoustid"
 	DisplayName string // human-readable, shown in UI
 	Description string // 1-2 sentences for the plugin detail panel
+
+	// FormerIDs lists every ID this def was registered under before a rename.
+	// Optional; a def that was never renamed leaves it nil.
+	//
+	// An op ID is not only a code identifier: it is persisted in operations_v2
+	// rows (which resume and retry look up on restart), in op_definitions_v2,
+	// in activity-log attrs, and it is typed by hand into POST
+	// /operations/v2 {def_id}, scripts and bookmarks. Renaming ID alone would
+	// orphan every one of those. RegisterOp records each former ID as an alias,
+	// and every place an ID enters the registry resolves aliases to this def
+	// (see aliases.go), so the old spelling keeps working everywhere while new
+	// rows are written under ID.
+	//
+	// Keep the rename and its FormerIDs entry in the same change: the guard
+	// test in internal/server (TestOpIDs_NoRenameWithoutAlias) fails when an ID
+	// that used to be registered stops resolving. Never remove an entry that
+	// may still appear in a stored row.
+	FormerIDs []string
 
 	// Execution. Required.
 	Run             func(ctx context.Context, params json.RawMessage, reporter Reporter) error

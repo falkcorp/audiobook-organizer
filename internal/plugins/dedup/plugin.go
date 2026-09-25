@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 // Package dedup is the UOS plugin for deduplication operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -55,7 +55,23 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		return nil
 	}
 
-	ops := []sdk.OperationDef{
+	ops := p.OperationDefs()
+
+	for _, op := range ops {
+		if err := r.RegisterOp(op); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// OperationDefs returns every OperationDef this plugin registers, independent
+// of whether its dependencies are wired. Register gates on those dependencies;
+// this does not, so the op-ID ledger guard (internal/server
+// TestOpIDs_NoRenameWithoutAlias) can enumerate the plugin's IDs and FormerIDs
+// from a zero-value Plugin. Keep Register's list and this one the same list.
+func (p *Plugin) OperationDefs() []sdk.OperationDef {
+	return []sdk.OperationDef{
 		p.embedScanDef(),
 		p.embedAsyncDef(),
 		p.fullScanDef(),
@@ -86,13 +102,6 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.breakdownBackfillDef(),             // backfill ScoreBreakdowns onto pre-T015 nil-breakdown pending candidates (unblocks Rescore + exact-triage)
 		p.rescoreDef(),                       // D4: re-band pending candidates under the current ladder; queued by the config-PUT dedup sink
 	}
-
-	for _, op := range ops {
-		if err := r.RegisterOp(op); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // pluginStore is what this plugin reads and writes, measured with an

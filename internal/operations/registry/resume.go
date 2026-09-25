@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-09-18
+// last-edited: 2026-09-25
 
 package registry
 
@@ -64,7 +64,7 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 		r.clearScanStandDown()
 	}
 
-	rows, superseded := supersedeStaleQuiesced(rows, r.defDeclaresMergeQueuedParams)
+	rows, superseded := supersedeStaleQuiesced(rows, r.defDeclaresMergeQueuedParams, r.canonicalDefID)
 	for _, sup := range superseded {
 		r.resumeDrop(sup.ID, "superseded: a newer run of this op exists")
 	}
@@ -86,14 +86,15 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 		}
 
 		// Always drop reconcile_scan.
-		if row.DefID == reconcileScanDefID {
+		if r.canonicalDefID(row.DefID) == reconcileScanDefID {
 			r.resumeDrop(row.ID, "reconcile_scan always dropped on restart")
 			continue
 		}
 
-		r.mu.RLock()
-		def, defOK := r.defs[row.DefID]
-		r.mu.RUnlock()
+		def, defOK := r.lookupDef(row.DefID)
+		if defOK {
+			r.noteAliasUse(row.DefID, aliasEntryStoredRow)
+		}
 
 		if !defOK {
 			// Unknown def — treat as drop.
@@ -163,18 +164,29 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 func supersedeStaleQuiesced(
 	rows []database.OperationV2Row,
 	defMerges func(defID string) bool,
+	canonical func(defID string) string,
 ) (keep, superseded []database.OperationV2Row) {
+	// Rows are grouped by CANONICAL def ID: a quiesced row persisted under a
+	// former (renamed) ID and a live row under the new ID are runs of the same
+	// op and must compete for the same slot. A nil canonical is the identity.
+	defKey := func(id string) string {
+		if canonical == nil {
+			return id
+		}
+		return canonical(id)
+	}
 	// Winner per def among the quiesced rows, and whether the def has a live row.
 	hasLive := make(map[string]bool, len(rows))
 	newestQuiesced := make(map[string]string, len(rows))
 	for _, row := range rows {
+		k := defKey(row.DefID)
 		if row.Status == "interrupted_quiesced" {
-			if row.ID > newestQuiesced[row.DefID] {
-				newestQuiesced[row.DefID] = row.ID
+			if row.ID > newestQuiesced[k] {
+				newestQuiesced[k] = row.ID
 			}
 			continue
 		}
-		hasLive[row.DefID] = true
+		hasLive[k] = true
 	}
 
 	for _, row := range rows {
@@ -187,8 +199,9 @@ func supersedeStaleQuiesced(
 		// applies: two interrupted runs of the same def are still stale relative
 		// to each other in the same way, and letting them all restart is the
 		// pile-up this function exists to prevent.
-		setParameterized := defMerges != nil && defMerges(row.DefID)
-		if (hasLive[row.DefID] && !setParameterized) || row.ID != newestQuiesced[row.DefID] {
+		k := defKey(row.DefID)
+		setParameterized := defMerges != nil && defMerges(k)
+		if (hasLive[k] && !setParameterized) || row.ID != newestQuiesced[k] {
 			superseded = append(superseded, row)
 			continue
 		}
@@ -203,7 +216,7 @@ func supersedeStaleQuiesced(
 func (r *Registry) defDeclaresMergeQueuedParams(defID string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	def, ok := r.defs[defID]
+	def, ok := r.lookupDefLocked(defID)
 	return ok && def.MergeQueuedParams != nil
 }
 
@@ -415,9 +428,10 @@ func (r *Registry) resumeQuiescedOp(opID string) {
 			"op_id", opID, "status", row.Status)
 		return
 	}
-	r.mu.RLock()
-	def, ok := r.defs[row.DefID]
-	r.mu.RUnlock()
+	def, ok := r.lookupDef(row.DefID)
+	if ok {
+		r.noteAliasUse(row.DefID, aliasEntryStoredRow)
+	}
 	if !ok {
 		r.logger.Warn("registry: resumeQuiescedOp: unknown def, cannot resume",
 			"op_id", opID, "def_id", row.DefID)
@@ -482,9 +496,11 @@ func (r *Registry) resumeRequeue(ctx context.Context, row database.OperationV2Ro
 	// Insert a fresh queued row with a new ULID.
 	newID := ulid.Make().String()
 	newRow := database.OperationV2Row{
-		ID:       newID,
-		DefID:    row.DefID,
-		Plugin:   row.Plugin,
+		ID: newID,
+		// The replacement is a NEW row, so it is written under the canonical
+		// def: a row persisted under a former ID does not propagate the alias.
+		DefID:    def.ID,
+		Plugin:   def.Plugin,
 		TraceID:  ulid.Make().String(),
 		SpanID:   ulid.Make().String(),
 		Status:   "queued",

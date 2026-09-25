@@ -1,7 +1,7 @@
 // file: internal/operations/registry/retry.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b6f3d2e-9a41-4c7e-8f25-6d1e7a3c9b58
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package registry
 
@@ -84,13 +84,16 @@ func (r *Registry) RetryInterrupted(ctx context.Context, opID, actor string) err
 	}
 
 	r.mu.RLock()
-	def, defOK := r.defs[row.DefID]
+	def, defOK := r.lookupDefLocked(row.DefID)
 	_, live := r.running[opID]
 	_, runaway := r.abandonedAlive[opID]
 	r.mu.RUnlock()
 	if !defOK {
 		return fmt.Errorf("%w: op %s's definition %q is not registered", ErrOpNotRetryable, opID, row.DefID)
 	}
+	// Retry is in place: the row keeps its stored def_id, which may be a
+	// former ID. The dispatcher resolves it again when it picks the row up.
+	r.noteAliasUse(row.DefID, aliasEntryRetry)
 	if live {
 		return fmt.Errorf("%w: op %s still has a live run handle", ErrOpActive, opID)
 	}
@@ -151,7 +154,7 @@ func (r *Registry) activeRunOfDef(def OperationDef, excludeID string) (string, e
 		return "", err
 	}
 	for _, op := range active {
-		if op.DefID != def.ID || op.ID == excludeID {
+		if r.canonicalDefID(op.DefID) != def.ID || op.ID == excludeID {
 			continue
 		}
 		if op.Status == "running" && !r.hasLiveHandle(op.ID) {

@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-09-11 -->
+<!-- last-edited: 2026-09-25 -->
 
 # HTTP API
 
@@ -162,13 +162,24 @@ sequenceDiagram
 | `maintenance.transcribe-book-intros` (reparse_only) | Re-parse stored transcripts only (no GPU/ffmpeg) |
 | `maintenance.dedup-exact-triage` | Classify dedup candidates (read-only, dry-run) |
 | `maintenance.dedup-auto-purge` | Purge confirmed purgeable dedup candidates |
-| `maintenance.itunes-heal` | Heal stale iTunes file paths after organize |
+| `itunes.heal` | Heal stale iTunes file paths after organize (former ID `maintenance.itunes-heal` still resolves) |
 | `maintenance.reconcile-scan` | Reconcile library paths vs. filesystem |
 | `maintenance.author-dedup-scan` | Scan for author near-duplicates |
 | `maintenance.window` | Nightly maintenance window (dispatches sub-ops) |
 | `library.bulk-write-back` | Bulk tag write-back to audio files |
 | `ai.author-review` | AI-assisted author dedup review |
 | `ai.author-merge-apply` | Apply AI author merge recommendations |
+
+**Renamed def_ids.** A renamed op keeps its old ID as an alias
+(`OperationDef.FormerIDs`). The old ID is accepted by `POST /operations/v2`,
+`?def_id=` timeline filters, resume and retry, and it resolves to the new op.
+Stored rows keep the ID they were written under. The metric
+`audiobook_organizer_operation_deprecated_def_id_total{alias,entry}` counts
+how often each old ID is still used. The 2026-09-25 renames are
+`maintenance.itunes-{regroup,playlist-import,heal,clone-into-library}` →
+`itunes.{regroup,playlist-import,heal,clone-into-library}`, `library.optimize`
+→ `maintenance.library-optimize`, and `maintenance.dedup-llm-review` →
+`dedup.llm-review`.
 
 ## Response Conventions
 

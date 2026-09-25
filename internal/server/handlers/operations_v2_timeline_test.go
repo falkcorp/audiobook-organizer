@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_timeline_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f3c1a94-2e6b-4d58-9a71-c0d4e8b52f36
-// last-edited: 2026-09-09
+// last-edited: 2026-09-25
 
 // Behaviour tests for GET /api/v1/operations/timeline's def_id and limit
 // parameters, and for the scope fields the response reports about itself.
@@ -61,12 +61,32 @@ func timelineRows(defID string, n int) []database.OperationV2Row {
 	return rows
 }
 
+// expectRegisteredDefs models a registry holding defs. The handlers resolve a
+// single ID through Def (which maps former, renamed IDs to the canonical def)
+// and list through ActiveDefs, so both are wired and both are optional.
+func expectRegisteredDefs(registry *handlersmocks.MockOperationsRegistry, defs []opsregistry.OperationDef) {
+	registry.EXPECT().ActiveDefs().Return(defs).Maybe()
+	registry.EXPECT().Def(mock.Anything).RunAndReturn(func(id string) (opsregistry.OperationDef, bool) {
+		for _, d := range defs {
+			if d.ID == id {
+				return d, true
+			}
+			for _, old := range d.FormerIDs {
+				if old == id {
+					return d, true
+				}
+			}
+		}
+		return opsregistry.OperationDef{}, false
+	}).Maybe()
+}
+
 func timelineHandler(t *testing.T, rows []database.OperationV2Row) *handlers.OperationsV2Handler {
 	t.Helper()
 	store := databasemocks.NewMockOpsV2Store(t)
 	registry := handlersmocks.NewMockOperationsRegistry(t)
 	store.EXPECT().ListOperationsV2Since(mock.Anything, 5000).Return(rows, nil)
-	registry.EXPECT().ActiveDefs().Return([]opsregistry.OperationDef{}).Maybe()
+	expectRegisteredDefs(registry, []opsregistry.OperationDef{})
 	return handlers.NewOperationsV2Handler(store, registry, nil, false)
 }
 
@@ -104,6 +124,46 @@ func TestGetOperationTimeline_DefIDFiltersTheWholeWindowNotJustTheFirstPage(t *t
 	assert.Equal(t, float64(3), data["matched"])
 	assert.Equal(t, false, data["truncated"])
 	assert.Equal(t, "target.op", data["def_id"])
+}
+
+// A renamed op: history rows keep the former def_id, new rows carry the
+// canonical one. A filter by EITHER spelling must return both, scope must echo
+// the canonical ID, and an old row must display under the renamed op's name
+// while still reporting the def_id it was stored with.
+func TestGetOperationTimeline_DefIDFilterSeesThroughRenames(t *testing.T) {
+	rows := append(timelineRows("old.op", 2), timelineRows("new.op", 3)...)
+	rows = append(rows, timelineRows("other.op", 4)...)
+
+	for _, asked := range []string{"old.op", "new.op"} {
+		t.Run(asked, func(t *testing.T) {
+			store := databasemocks.NewMockOpsV2Store(t)
+			registry := handlersmocks.NewMockOperationsRegistry(t)
+			store.EXPECT().ListOperationsV2Since(mock.Anything, 5000).Return(rows, nil)
+			registry.EXPECT().GetCurrentItem(mock.Anything).Return("").Maybe()
+			expectRegisteredDefs(registry, []opsregistry.OperationDef{
+				{ID: "new.op", DisplayName: "New Op", FormerIDs: []string{"old.op"}},
+			})
+			h := handlers.NewOperationsV2Handler(store, registry, nil, false)
+
+			c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=168h&def_id="+asked, "", nil)
+			h.GetOperationTimeline(c)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			data := timelineBody(t, w.Body.Bytes())
+			assert.Equal(t, float64(5), data["matched"], "rows under both spellings are one op")
+			assert.Equal(t, "new.op", data["def_id"], "scope echoes the canonical ID the filter used")
+
+			var sawOld bool
+			for _, raw := range data["operations"].([]any) {
+				op := raw.(map[string]any)
+				assert.Equal(t, "New Op", op["display_name"])
+				if op["def_id"] == "old.op" {
+					sawOld = true
+				}
+			}
+			assert.True(t, sawOld, "stored rows keep the def_id they were written with")
+		})
+	}
 }
 
 // An empty def_id must mean "every def", not "no def" — the inverted-predicate
@@ -215,7 +275,7 @@ func TestGetOperationTimeline_CountsInFlightRowsThatPredateTheWindow(t *testing.
 	store := databasemocks.NewMockOpsV2Store(t)
 	registry := handlersmocks.NewMockOperationsRegistry(t)
 	store.EXPECT().ListOperationsV2Since(mock.Anything, 5000).Return(rows, nil)
-	registry.EXPECT().ActiveDefs().Return([]opsregistry.OperationDef{}).Maybe()
+	expectRegisteredDefs(registry, []opsregistry.OperationDef{})
 	registry.EXPECT().GetCurrentItem(mock.Anything).Return("").Maybe()
 	h := handlers.NewOperationsV2Handler(store, registry, nil, false)
 
@@ -242,7 +302,7 @@ func TestGetOperationTimeline_DoesNotCountInWindowRowsAsPredatingIt(t *testing.T
 	store := databasemocks.NewMockOpsV2Store(t)
 	registry := handlersmocks.NewMockOperationsRegistry(t)
 	store.EXPECT().ListOperationsV2Since(mock.Anything, 5000).Return(rows, nil)
-	registry.EXPECT().ActiveDefs().Return([]opsregistry.OperationDef{}).Maybe()
+	expectRegisteredDefs(registry, []opsregistry.OperationDef{})
 	registry.EXPECT().GetCurrentItem(mock.Anything).Return("").Maybe()
 	h := handlers.NewOperationsV2Handler(store, registry, nil, false)
 

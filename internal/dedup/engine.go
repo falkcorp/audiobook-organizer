@@ -4311,7 +4311,7 @@ var normalizeTitleQuoteStripper = regexp.MustCompile("[\u0027\u2018\u2019\u201C\
 // of any title comparison so the folding never produces false positives on
 // its own — the caller still has to decide how close is close enough.
 // NormalizeTitle is normalizeTitle for callers outside the package that must
-// fold titles exactly as dedup does (maintenance.itunes-clone-into-library's
+// fold titles exactly as dedup does (itunes.clone-into-library's
 // already-in-library check), so the two never drift apart.
 func NormalizeTitle(title string) string { return normalizeTitle(title) }
 

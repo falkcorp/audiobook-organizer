@@ -6865,8 +6865,8 @@ export async function runMaintenanceJob(
 }
 
 export async function startOptimize(): Promise<{ operation_id: string }> {
-  return wrapTrigger('library.optimize', async () => {
-    const { id } = await triggerOp('library.optimize', {}, 'Failed to start optimize operation');
+  return wrapTrigger('maintenance.library-optimize', async () => {
+    const { id } = await triggerOp('maintenance.library-optimize', {}, 'Failed to start optimize operation');
     return { operation_id: id };
   });
 }
