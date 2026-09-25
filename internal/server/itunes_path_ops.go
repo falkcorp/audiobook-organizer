@@ -1,7 +1,7 @@
 // file: internal/server/itunes_path_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c4e9b2a-1f3d-4e5a-8b6c-0d2e4f6a8c0e
-// last-edited: 2026-08-22
+// last-edited: 2026-09-25
 //
 // itunes_path_ops registers the v2 OperationDefs for iTunes path-reconcile
 // and path-repair operations, and provides the HTTP handlers that replace
@@ -24,14 +24,23 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
 )
 
 type itunesPathReconcileOpParams struct{}
 
+// itunesPathRepairOpParams is the params shape of itunes.path-repair.
+//
+// DryRun is a *bool and defaults to TRUE when omitted (opmode.ResolveDryRun).
+// Until 2026-09-25 it was a plain bool, so an enqueue with no dry_run key -- a
+// POST /operations/trigger with {} or a retry of a row saved with empty
+// params -- REWROTE locations in the live iTunes library. dryRun is accepted
+// as an alias; both with different values is refused.
 type itunesPathRepairOpParams struct {
-	DryRun bool `json:"dry_run"`
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 }
 
 // itunesPathOpResponse is what both path handlers return. They used to respond
@@ -75,7 +84,7 @@ func (s *Server) handleITunesPathRepair(c *gin.Context) {
 	apply := strings.ToLower(c.Query("apply"))
 	dryRun := apply != "true" && apply != "1"
 
-	opID, enqErr := s.opRegistry.EnqueueOp(c.Request.Context(), "itunes.path-repair", itunesPathRepairOpParams{DryRun: dryRun})
+	opID, enqErr := s.opRegistry.EnqueueOp(c.Request.Context(), "itunes.path-repair", itunesPathRepairOpParams{DryRun: &dryRun})
 	if enqErr != nil {
 		slog.Error("handleITunesPathRepair enqueue", "enqErr", enqErr)
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
@@ -161,11 +170,15 @@ func (s *Server) RegisterITunesPathRepairOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("itunes.path-repair: decode params: %w", err)
 				}
 			}
+			dryRun, err := opmode.ResolveDryRun("itunes.path-repair", p.DryRun, p.DryRunCamel)
+			if err != nil {
+				return err
+			}
 			if s.itunesSvc == nil || s.itunesSvc.Repair == nil {
 				return fmt.Errorf("iTunes service not initialized")
 			}
 			progress := registryProgressAdapter{r: reporter}
-			return s.itunesSvc.Repair.Repair(ctx, opsregistry.ReporterOpID(reporter), p.DryRun, progress)
+			return s.itunesSvc.Repair.Repair(ctx, opsregistry.ReporterOpID(reporter), dryRun, progress)
 		},
 	})
 }

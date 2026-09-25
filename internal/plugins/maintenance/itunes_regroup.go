@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -34,8 +35,12 @@ import (
 // split. Version-entangled groups are skipped in v1 (conservative).
 
 type itunesRegroupParams struct {
-	DryRun  bool   `json:"dryRun"`
-	XMLPath string `json:"xmlPath"`
+	// DryRun defaults to TRUE when omitted (opmode.ResolveDryRun): a request
+	// that states no mode is a preview. dry_run is accepted as an alias, and
+	// sending both with different values is refused rather than guessed.
+	DryRun      *bool  `json:"dryRun,omitempty"`
+	DryRunSnake *bool  `json:"dry_run,omitempty"`
+	XMLPath     string `json:"xmlPath"`
 }
 
 func (p *Plugin) itunesRegroupDef() sdk.OperationDef {
@@ -58,11 +63,15 @@ func (p *Plugin) itunesRegroupDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	params := itunesRegroupParams{DryRun: true} // safe default
+	var params itunesRegroupParams
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
 		}
+	}
+	dryRun, err := opmode.ResolveDryRun("maintenance.itunes-regroup", params.DryRunSnake, params.DryRun)
+	if err != nil {
+		return err
 	}
 	store := p.deps.OpsStore()
 	if store == nil {
@@ -75,7 +84,7 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	if xmlPath == "" {
 		return fmt.Errorf("no iTunes XML path: set params.xmlPath or itunes.library_read_path")
 	}
-	if params.DryRun {
+	if dryRun {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 
@@ -107,7 +116,7 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 		"SINGLE-FILE BY DURATION: <15min(true chapter/clip)=%d  15-90min(ambiguous)=%d  >=90min(COMPLETE book, false alarm)=%d | short examples: %s",
 		plan.SFCShort, plan.SFCMid, plan.SFCLong, strings.Join(plan.SFCExamples, "; ")))
 
-	if params.DryRun {
+	if dryRun {
 		examples := regroupExamples(plan, 8)
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN examples: "+strings.Join(examples, " | "))
 		_ = reporter.UpdateProgress(4, 4, "DRY RUN — "+summary)

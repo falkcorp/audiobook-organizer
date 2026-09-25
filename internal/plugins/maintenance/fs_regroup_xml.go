@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-09-25
 
@@ -64,6 +64,7 @@ import (
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
@@ -110,7 +111,11 @@ const fsLayoutApplyRefusal = "fs-regroup-xml: chapter_folder_layout apply is not
 
 type fsRegroupParams struct {
 	// DryRun defaults true (safe). Set false to apply the plan and mutate the library.
-	DryRun bool `json:"dryRun"`
+	// DryRun defaults to TRUE when omitted (opmode.ResolveDryRun): a request
+	// that states no mode is a preview. dry_run is accepted as an alias, and
+	// sending both with different values is refused rather than guessed.
+	DryRun      *bool `json:"dryRun,omitempty"`
+	DryRunSnake *bool `json:"dry_run,omitempty"`
 	// Limit caps how many groups the apply path repairs in one run (0 = no cap).
 	// Use limit=1 for the first canary apply before batching.
 	Limit int `json:"limit"`
@@ -197,11 +202,15 @@ func (p *Plugin) fsRegroupXMLDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	params := fsRegroupParams{DryRun: true}
+	var params fsRegroupParams
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
 		}
+	}
+	dryRun, err := opmode.ResolveDryRun("maintenance.fs-regroup-xml", params.DryRunSnake, params.DryRun)
+	if err != nil {
+		return err
 	}
 	if _, err := params.categorySet(); err != nil {
 		return err
@@ -220,8 +229,8 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 	if err != nil {
 		return err
 	}
-	reportFSRepairPlan(plan, params.DryRun, reporter)
-	if params.DryRun {
+	reportFSRepairPlan(plan, dryRun, reporter)
+	if dryRun {
 		_ = reporter.UpdateProgress(3, 3, "DRY RUN — "+plan.summary())
 		return nil
 	}

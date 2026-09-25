@@ -1,7 +1,7 @@
 // file: internal/server/legacy_backfill_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e2b7f04-6c31-4a58-b0d9-52f81c6ae374
-// last-edited: 2026-08-22
+// last-edited: 2026-09-25
 
 // legacy_backfill_op registers operations.backfill-legacy-status, the supervised
 // repair for v1 operation rows that never left a non-terminal status because the
@@ -17,16 +17,22 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
 // legacyBackfillOpParams controls one backfill pass.
 //
-// DryRun defaults to TRUE via DefaultParams below, and that default is the whole
+// DryRun defaults to TRUE when omitted, and that default is the whole
 // safety story: this op rewrites historical prod rows, so an operator who
 // triggers it with no body gets a plan, not a write.
+//
+// It is a *bool resolved by opmode.ResolveDryRun rather than a plain bool
+// pre-filled with true: the pre-fill was correct, but it was one refactor away
+// from Go's zero value, and a plain bool is what opmode's guard test forbids.
 type legacyBackfillOpParams struct {
-	DryRun bool `json:"dry_run"`
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 }
 
 // RegisterLegacyStatusBackfillOp registers "operations.backfill-legacy-status".
@@ -55,11 +61,15 @@ func (s *Server) RegisterLegacyStatusBackfillOp(reg *opsregistry.Registry) error
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			// Absent params means dry run. Note this is the opposite of Go's zero
 			// value, so the decode has to be explicit rather than relying on it.
-			p := legacyBackfillOpParams{DryRun: true}
+			var p legacyBackfillOpParams
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
 					return fmt.Errorf("backfill-legacy-status: decode params: %w", err)
 				}
+			}
+			dryRun, err := opmode.ResolveDryRun("operations.backfill-legacy-status", p.DryRun, p.DryRunCamel)
+			if err != nil {
+				return err
 			}
 
 			if s.opRegistry == nil {
@@ -67,13 +77,13 @@ func (s *Server) RegisterLegacyStatusBackfillOp(reg *opsregistry.Registry) error
 			}
 
 			_ = reporter.UpdateProgress(0, 100, "Scanning operation rows...")
-			report, err := s.opRegistry.BackfillLegacyOpStatus(ctx, p.DryRun)
+			report, err := s.opRegistry.BackfillLegacyOpStatus(ctx, dryRun)
 			if err != nil {
 				return err
 			}
 
 			mode := "DRY RUN — nothing written"
-			if !p.DryRun {
+			if !dryRun {
 				mode = "APPLIED"
 			}
 			_ = reporter.Log(slog.LevelInfo, "legacy status backfill: "+mode,

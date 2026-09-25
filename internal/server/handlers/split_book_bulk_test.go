@@ -1,7 +1,7 @@
 // file: internal/server/handlers/split_book_bulk_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2a04b4ca-b833-41e1-99da-0c198846a34b
-// last-edited: 2026-08-28
+// last-edited: 2026-09-25
 
 package handlers
 
@@ -86,7 +86,7 @@ func TestBulkMergeSplitBookCandidatesSnapshotsResolvedCandidate(t *testing.T) {
 		t.Fatalf("unexpected enqueue: called=%v def=%q", enqueuer.called, enqueuer.defID)
 	}
 	params, ok := enqueuer.params.(dedup.BulkSplitBookMergeParams)
-	if !ok || !params.DryRun || len(params.Items) != 1 {
+	if !ok || params.DryRun == nil || !*params.DryRun || len(params.Items) != 1 {
 		t.Fatalf("want one dry-run snapshot, got %#v", enqueuer.params)
 	}
 	item := params.Items[0]

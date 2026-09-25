@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_playlist_import.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 7c4e91a3-58bd-42f6-9e0a-1d6b3f8c25e4
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -37,7 +38,11 @@ import (
 
 type itunesPlaylistImportParams struct {
 	// DryRun reports what would be imported without creating rows.
-	DryRun bool `json:"dryRun"`
+	// DryRun defaults to TRUE when omitted (opmode.ResolveDryRun): a request
+	// that states no mode is a preview. dry_run is accepted as an alias, and
+	// sending both with different values is refused rather than guessed.
+	DryRun      *bool `json:"dryRun,omitempty"`
+	DryRunSnake *bool `json:"dry_run,omitempty"`
 	// LibraryPath is the iTunes library to read: either an `iTunes
 	// Library.xml` export or a binary `iTunes Library.itl`. The reader is
 	// chosen by extension.
@@ -93,11 +98,15 @@ func (p *Plugin) itunesPlaylistImportDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	params := itunesPlaylistImportParams{DryRun: true} // safe default
+	var params itunesPlaylistImportParams
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("itunes-playlist-import: bad params: %w", err)
 		}
+	}
+	dryRun, err := opmode.ResolveDryRun("maintenance.itunes-playlist-import", params.DryRunSnake, params.DryRun)
+	if err != nil {
+		return err
 	}
 
 	libPath := strings.TrimSpace(params.LibraryPath)
@@ -209,7 +218,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 		slog.Warn("itunes-playlist-import: empty translated queries",
 			"empty", empties, "importable", probe.Imported)
 
-		if !params.DryRun && !params.AllowEmptyQueries {
+		if !dryRun && !params.AllowEmptyQueries {
 			return fmt.Errorf("itunes-playlist-import: refusing to apply — %d of %d "+
 				"playlists would be created with an empty query. Fix the Smart Criteria "+
 				"parser first, or pass allowEmptyQueries=true to import them as empty "+
@@ -219,7 +228,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	}
 
 	res := probe
-	if !params.DryRun {
+	if !dryRun {
 		res = importer.MigrateSmartPlaylists(lib, itunesservice.PlaylistImportOptions{
 			OwnerUserID: strings.TrimSpace(params.OwnerUserID),
 			DryRun:      false,
@@ -230,7 +239,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	// On an apply run the authoritative number is how many smart playlists
 	// actually exist afterwards.
 	verified := -1
-	if !params.DryRun {
+	if !dryRun {
 		if _, total, lerr := p.deps.OpsStore().ListUserPlaylists("smart", 1, 0); lerr == nil {
 			verified = total
 		} else {
@@ -239,7 +248,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	}
 
 	mode := "APPLY"
-	if params.DryRun {
+	if dryRun {
 		mode = "DRY-RUN"
 	}
 	slog.Info("itunes-playlist-import complete",

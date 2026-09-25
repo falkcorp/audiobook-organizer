@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-09-24
+// last-edited: 2026-09-25
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -63,11 +63,17 @@ type BulkSplitBookMergeItem struct {
 	SuggestedTitle string   `json:"suggested_title"`
 }
 
-// BulkSplitBookMergeParams controls one queued batch. DryRun deliberately
-// defaults to true in the HTTP handler; an apply requires an explicit false.
+// BulkSplitBookMergeParams controls one queued batch.
+//
+// DryRun defaults to TRUE when omitted, in the op itself and not only in the
+// HTTP handler (opmode.ResolveDryRun). It was a plain bool until 2026-09-25, so
+// a body that reached the op without dry_run -- POST /operations/trigger, or a
+// retry of a row saved without the key -- merged and soft-deleted books for
+// real. dryRun is accepted as an alias; both with different values is refused.
 type BulkSplitBookMergeParams struct {
-	Items  []BulkSplitBookMergeItem `json:"items"`
-	DryRun bool                     `json:"dry_run"`
+	Items       []BulkSplitBookMergeItem `json:"items"`
+	DryRun      *bool                    `json:"dry_run,omitempty"`
+	DryRunCamel *bool                    `json:"dryRun,omitempty"`
 }
 
 // splitSrcPlan is one src as read before the first write.

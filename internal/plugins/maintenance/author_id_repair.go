@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
-// last-edited: 2026-09-15
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -18,6 +18,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -175,8 +176,8 @@ func (p *Plugin) runAuthorIDRepair(ctx context.Context, rawParams json.RawMessag
 			return fmt.Errorf("maintenance.author-id-repair: decode params: %w", err)
 		}
 	}
-	if params.DryRun != nil && params.DryRunCamel != nil && *params.DryRun != *params.DryRunCamel {
-		return fmt.Errorf("maintenance.author-id-repair: dry_run=%v and dryRun=%v disagree; send one", *params.DryRun, *params.DryRunCamel)
+	if _, err := opmode.ResolveDryRun("maintenance.author-id-repair", params.DryRun, params.DryRunCamel); err != nil {
+		return err
 	}
 	result, err := p.authorIDRepair(ctx, params, reporter)
 	if result != nil {
@@ -192,12 +193,8 @@ func (p *Plugin) authorIDRepair(ctx context.Context, params authorIDRepairParams
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	dryRun := true
-	if params.DryRun != nil {
-		dryRun = *params.DryRun
-	} else if params.DryRunCamel != nil {
-		dryRun = *params.DryRunCamel
-	}
+	// Disagreement was refused in runAuthorIDRepair; on error this is true.
+	dryRun, _ := opmode.ResolveDryRun("maintenance.author-id-repair", params.DryRun, params.DryRunCamel)
 	sample := params.SampleLimit
 	if sample <= 0 {
 		sample = authorIDRepairDefaultSample

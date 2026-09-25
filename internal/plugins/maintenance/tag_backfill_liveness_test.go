@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill_liveness_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4c8f0282-d1ad-446a-af3d-d36cea86888b
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 package maintenance
 
@@ -98,7 +98,7 @@ func TestTagBackfill_HungReadCountsAsReadErrAndBookFinishes(t *testing.T) {
 
 	rep := &livenessReporter{}
 	start := time.Now()
-	if err := runWith(t, fx, rep, tagBackfillParams{DryRun: true}); err != nil {
+	if err := runWith(t, fx, rep, tagBackfillParams{DryRun: boolPtr(true)}); err != nil {
 		t.Fatalf("op failed: %v", err)
 	}
 	if d := time.Since(start); d > 5*time.Second {
@@ -131,7 +131,7 @@ func TestTagBackfill_TooManyHungReadsFailsOp(t *testing.T) {
 	installBlockingExtractor(t, fx, 20*time.Millisecond, "x1.mp3", "x2.mp3", "x3.mp3")
 	tagReadMaxAbandoned = 2
 
-	err := runWith(t, fx, &livenessReporter{}, tagBackfillParams{DryRun: true})
+	err := runWith(t, fx, &livenessReporter{}, tagBackfillParams{DryRun: boolPtr(true)})
 	if err == nil || !strings.Contains(err.Error(), "of this run's timed-out tag reads are still running") {
 		t.Fatalf("err = %v, want the abandoned-read cap error", err)
 	}
@@ -161,7 +161,7 @@ func TestTagBackfill_TouchesLivenessWithinABook(t *testing.T) {
 		progressAtRead = append(progressAtRead, rep.progress.Load())
 		mu.Unlock()
 	}
-	if err := runWith(t, fx, rep, tagBackfillParams{DryRun: true}); err != nil {
+	if err := runWith(t, fx, rep, tagBackfillParams{DryRun: boolPtr(true)}); err != nil {
 		t.Fatalf("op failed: %v", err)
 	}
 	if len(touchesAtRead) != n {
@@ -198,7 +198,7 @@ func TestTagBackfill_EarlierStuckReadsDoNotPoisonLaterRuns(t *testing.T) {
 	t.Cleanup(func() { tagReadsAbandoned.Add(-leftover) })
 
 	rep := &livenessReporter{}
-	if err := runWith(t, fx, rep, tagBackfillParams{DryRun: true}); err != nil {
+	if err := runWith(t, fx, rep, tagBackfillParams{DryRun: boolPtr(true)}); err != nil {
 		t.Fatalf("a run failed on reads abandoned by earlier runs: %v", err)
 	}
 	assertSummaryHas(t, rep.logs[len(rep.logs)-1], "read-errors=1")
@@ -227,7 +227,7 @@ func TestTagBackfill_HungStatCountsAsReadErr(t *testing.T) {
 	t.Cleanup(func() { close(release); tagStat = oldStat })
 
 	rep := &livenessReporter{}
-	if err := runWith(t, fx, rep, tagBackfillParams{DryRun: true}); err != nil {
+	if err := runWith(t, fx, rep, tagBackfillParams{DryRun: boolPtr(true)}); err != nil {
 		t.Fatalf("op failed: %v", err)
 	}
 	assertSummaryHas(t, rep.logs[len(rep.logs)-1], "read-errors=1", "missing-on-disk=0", "judged-rows=1")

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
 // last-edited: 2026-09-25
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -388,9 +389,8 @@ func (p *Plugin) runAuthorPathLink(ctx context.Context, rawParams json.RawMessag
 			return fmt.Errorf("maintenance.author-path-link: decode params: %w", err)
 		}
 	}
-	if params.DryRun != nil && params.DryRunCamel != nil && *params.DryRun != *params.DryRunCamel {
-		return fmt.Errorf("maintenance.author-path-link: dry_run=%v and dryRun=%v disagree; send one",
-			*params.DryRun, *params.DryRunCamel)
+	if _, err := opmode.ResolveDryRun("maintenance.author-path-link", params.DryRun, params.DryRunCamel); err != nil {
+		return err
 	}
 	if len(params.BookIDs) > 0 && len(params.BookIDsSnake) > 0 {
 		return fmt.Errorf("maintenance.author-path-link: bookIds and book_ids both sent; send one")
@@ -780,12 +780,8 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	dryRun := true
-	if params.DryRun != nil {
-		dryRun = *params.DryRun
-	} else if params.DryRunCamel != nil {
-		dryRun = *params.DryRunCamel
-	}
+	// Disagreement was refused in the Run wrapper; on error this is true.
+	dryRun, _ := opmode.ResolveDryRun("maintenance.author-path-link", params.DryRun, params.DryRunCamel)
 	createMissing := true
 	if params.CreateMissing != nil {
 		createMissing = *params.CreateMissing

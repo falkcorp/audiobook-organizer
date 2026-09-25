@@ -1,7 +1,7 @@
 // file: internal/server/handlers/split_book.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-08-28
+// last-edited: 2026-09-25
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. SplitBookHandler covers the split-book deduplication
@@ -233,7 +233,7 @@ func (h *SplitBookHandler) BulkMergeSplitBookCandidates(c *gin.Context) {
 	if body.DryRun != nil {
 		dryRun = *body.DryRun
 	}
-	opID, err := h.opEnqueuer.EnqueueOp(c.Request.Context(), "dedup.split-book-bulk-merge", dedup.BulkSplitBookMergeParams{Items: items, DryRun: dryRun})
+	opID, err := h.opEnqueuer.EnqueueOp(c.Request.Context(), "dedup.split-book-bulk-merge", dedup.BulkSplitBookMergeParams{Items: items, DryRun: &dryRun})
 	if err != nil {
 		httputil.InternalError(c, "failed to enqueue split-book bulk merge", err)
 		return

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package maintenance — op maintenance.tag-backfill.
 //
@@ -41,6 +41,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -98,7 +99,11 @@ var tagStat = os.Stat
 var errTagFileMissing = errors.New("file missing on disk")
 
 type tagBackfillParams struct {
-	DryRun bool `json:"dryRun"`
+	// DryRun defaults to TRUE when omitted (opmode.ResolveDryRun): a request
+	// that states no mode is a preview. dry_run is accepted as an alias, and
+	// sending both with different values is refused rather than guessed.
+	DryRun      *bool `json:"dryRun,omitempty"`
+	DryRunSnake *bool `json:"dry_run,omitempty"`
 	// Force re-reads tags even for files that already have RawTags (e.g. after a
 	// capture-logic change). Default false: only files missing RawTags are touched.
 	Force bool `json:"force"`
@@ -170,17 +175,21 @@ func (p *Plugin) tagBackfillDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	params := tagBackfillParams{DryRun: true}
+	var params tagBackfillParams
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
+	dryRun, err := opmode.ResolveDryRun("maintenance.tag-backfill", params.DryRunSnake, params.DryRun)
+	if err != nil {
+		return err
+	}
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	if params.DryRun {
+	if dryRun {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 	if n := tagReadsAbandoned.Load(); n > 0 {
@@ -505,7 +514,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		}
 		mu.Unlock()
 
-		if params.DryRun || len(updates) == 0 {
+		if dryRun || len(updates) == 0 {
 			return nil
 		}
 		return enqueue(updates)
@@ -529,7 +538,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 	// are counted in notWritten (by flushLocked/enqueue), so the note and summary
 	// account for every judged row: written + notWritten == judged-rows.
 	stopNote := ""
-	if !params.DryRun {
+	if !dryRun {
 		wmu.Lock()
 		n := len(pending)
 		ferr := flushLocked()
@@ -560,7 +569,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 	wmu.Unlock()
 	mu.Lock()
 	verb := "would backfill"
-	if !params.DryRun {
+	if !dryRun {
 		verb = fmt.Sprintf("wrote %d rows; not-written=%d", writtenTotal, notWrittenTotal)
 	}
 	judgedRows := readTagTracks + readRawOnly + siblingsRenumbered
