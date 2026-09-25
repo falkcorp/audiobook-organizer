@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.86.0
+// version: 1.86.1
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-25
 
@@ -4197,7 +4197,7 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 		// is still an automated decision, so it may never merge this shape,
 		// no matter how confident.
 		if SamePathPair(bookA, bookB) {
-			slog.Info("dedup LLM auto-merge skipped — same cleaned path, review queue only", "candidate", candidate.ID, "a", candidate.EntityAID, "b", candidate.EntityBID)
+			verdictLog.Info("LLM auto-merge for candidate %d skipped: %s and %s share a cleaned path, review queue only", candidate.ID, candidate.EntityAID, candidate.EntityBID)
 			continue
 		}
 
