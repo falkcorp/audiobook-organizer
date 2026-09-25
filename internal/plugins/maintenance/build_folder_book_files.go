@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/build_folder_book_files.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 92622b6c-f340-42c4-b6b1-2fdba32b770f
 // last-edited: 2026-09-25
 
@@ -121,6 +121,17 @@ type folderBuildStore interface {
 	BookAtPathIndexBuilt() (bool, error)
 }
 
+// The run reaches folderBuildStore by type assertion on the ops store, and the
+// production ops store is a wrapper that embeds database.Store. A method that
+// is not on database.Store would make that assertion fail only in production,
+// so this fails the build instead.
+var _ folderBuildStore = database.Store(nil)
+
+// fbOwnedListCap bounds the owned paths listed per book. The count
+// (OwnedSkippedCount) stays exact; the list is evidence, not a census, and a
+// 142-file folder owned elsewhere would otherwise put 142 paths in the result.
+const fbOwnedListCap = 10
+
 // folderBuildOwned is one audio file the op left alone because another live
 // book already references it.
 type folderBuildOwned struct {
@@ -141,8 +152,11 @@ type folderBuildBook struct {
 	// UnprobedFiles is how many of those rows carry Duration 0 because the
 	// header could not be read. The row is still built, so
 	// maintenance.duration-backfill can retry it later.
-	UnprobedFiles int                `json:"unprobed_files,omitempty"`
-	OwnedSkipped  []folderBuildOwned `json:"owned_skipped,omitempty"`
+	UnprobedFiles int `json:"unprobed_files,omitempty"`
+	// OwnedSkippedCount is every file skipped as owned by another live book;
+	// OwnedSkipped lists the first fbOwnedListCap of them.
+	OwnedSkippedCount int                `json:"owned_skipped_count,omitempty"`
+	OwnedSkipped      []folderBuildOwned `json:"owned_skipped,omitempty"`
 	// Classifier is ClassifyDirProbed's reading of the folder. Information
 	// only: LooksMultiWork flags folders that may hold several works, for the
 	// owner to review in the dry run.
@@ -421,9 +435,9 @@ func buildFolderBookFiles(ctx context.Context, store folderBuildStore, params fo
 			report.TotalDurationSec += int64(e.TotalDurationSec)
 			report.UnprobedFiles += e.UnprobedFiles
 		}
-		if len(e.OwnedSkipped) > 0 {
+		if e.OwnedSkippedCount > 0 {
 			report.BooksWithOwnedFiles++
-			report.OwnedFilesSkipped += len(e.OwnedSkipped)
+			report.OwnedFilesSkipped += e.OwnedSkippedCount
 		}
 		if e.LooksMultiWork {
 			report.LooksMultiWork++
@@ -496,7 +510,10 @@ func buildOneFolder(ctx context.Context, store folderBuildStore, c *fbCandidate,
 			return err
 		}
 		if len(owners) > 0 {
-			res.OwnedSkipped = append(res.OwnedSkipped, folderBuildOwned{Path: path, OwnerBookIDs: owners})
+			res.OwnedSkippedCount++
+			if len(res.OwnedSkipped) < fbOwnedListCap {
+				res.OwnedSkipped = append(res.OwnedSkipped, folderBuildOwned{Path: path, OwnerBookIDs: owners})
+			}
 			continue
 		}
 		// Track number = position among the rows built, in natural filename

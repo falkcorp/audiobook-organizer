@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/build_folder_book_files_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b1896d34-1538-4a3f-a3f0-469871f9ca8c
 // last-edited: 2026-09-25
 
@@ -148,7 +148,7 @@ func TestBuildFolderBookFiles_SkipsFilesAnotherLiveBookOwns(t *testing.T) {
 	if e.Decision != fbBuilt || e.FileCount != 2 {
 		t.Fatalf("entry = %+v, want built with 2 files", e)
 	}
-	if len(e.OwnedSkipped) != 1 || e.OwnedSkipped[0].Path != owned ||
+	if e.OwnedSkippedCount != 1 || len(e.OwnedSkipped) != 1 || e.OwnedSkipped[0].Path != owned ||
 		len(e.OwnedSkipped[0].OwnerBookIDs) != 1 || e.OwnedSkipped[0].OwnerBookIDs[0] != owner.ID {
 		t.Fatalf("owned_skipped = %+v, want %s owned by %s", e.OwnedSkipped, owned, owner.ID)
 	}
