@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
-// last-edited: 2026-09-10
+// last-edited: 2026-09-25
 
 // Tests for the dedup-domain handlers. The embedding store is exercised through
 // a REAL pebble-backed *database.EmbeddingStore (it is a concrete db type the
@@ -477,6 +477,60 @@ func TestBulkMergeDedupCandidates_ScopedByBand(t *testing.T) {
 	}
 	if resp.Data.Merged != 1 {
 		t.Fatalf("merged=%d want 1; body=%s", resp.Data.Merged, w.Body.String())
+	}
+}
+
+// Two book rows at the same cleaned path (CHAPTER-SUBFOLDER-NN-ROWS,
+// 2026-09-25) are review-queue-only by owner decision. BulkMergeDedupCandidates
+// is exactly the "bulk-merge without a human-selected band" shape the owner
+// worried about (an empty body merges every pending book candidate), so it
+// must refuse this pair — not merge it, not silently drop it, report it as a
+// failure — while a normal, distinct-path pair in the same batch still merges.
+func TestBulkMergeDedupCandidates_SamePathPairRefused(t *testing.T) {
+	h, d := newHandler(t)
+	path := "/lib/Author/Book/Book - NN/32.m4b"
+	samePathID, spA, spB := insertCandidate(t, d.es, "samepath-a", "samepath-b")
+	normalID, nA, nB := insertCandidate(t, d.es, "normal-a", "normal-b")
+
+	d.store.EXPECT().GetBookByID(spA).Return(&database.Book{ID: spA, FilePath: path}, nil).Maybe()
+	d.store.EXPECT().GetBookByID(spB).Return(&database.Book{ID: spB, FilePath: path}, nil).Maybe()
+	d.store.EXPECT().GetBookByID(nA).Return(&database.Book{ID: nA, FilePath: "/lib/A/book.m4b"}, nil).Maybe()
+	d.store.EXPECT().GetBookByID(nB).Return(&database.Book{ID: nB, FilePath: "/lib/B/book.m4b"}, nil).Maybe()
+	d.store.EXPECT().GetBookFiles(mock.Anything).
+		Return([]database.BookFile{{FilePath: "/lib/a.m4b", FileSize: 5 << 20, Duration: 3600}}, nil).Maybe()
+	d.engine.EXPECT().ScorePairsForBook(mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, nil).Maybe()
+
+	d.engine.EXPECT().MergeJournaled(normalID, nA, nB, "", mock.Anything).
+		Return(&merge.Result{PrimaryID: nA}, "dedup:automerge:k", nil).Once()
+
+	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-merge", map[string]any{}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Attempted int `json:"attempted"`
+			Merged    int `json:"merged"`
+			Failed    int `json:"failed"`
+			Failures  []struct {
+				CandidateID int64  `json:"candidate_id"`
+				Reason      string `json:"reason"`
+			} `json:"failures"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+	}
+	if resp.Data.Merged != 1 {
+		t.Fatalf("merged=%d want 1 (the normal pair only); body=%s", resp.Data.Merged, w.Body.String())
+	}
+	if resp.Data.Failed != 1 {
+		t.Fatalf("failed=%d want 1 (the same-path pair refused); body=%s", resp.Data.Failed, w.Body.String())
+	}
+	if len(resp.Data.Failures) != 1 || resp.Data.Failures[0].CandidateID != samePathID ||
+		!strings.Contains(resp.Data.Failures[0].Reason, "same_path") {
+		t.Fatalf("expected the same-path candidate %d refused with a same_path reason, got %+v", samePathID, resp.Data.Failures)
 	}
 }
 

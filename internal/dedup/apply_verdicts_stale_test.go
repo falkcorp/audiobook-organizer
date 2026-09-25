@@ -1,7 +1,7 @@
 // file: internal/dedup/apply_verdicts_stale_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f1e7f635-5dfb-46da-b1e4-fc3f63f6cacc
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package dedup
 
@@ -96,6 +96,49 @@ func TestApplyVerdicts_ReplayIsNoOp(t *testing.T) {
 	assert.Equal(t, "merged", got.Status)
 	assert.Equal(t, verdict, got.LLMVerdict)
 	assert.Equal(t, reason, got.LLMReason)
+}
+
+// Two book rows at the same cleaned path (CHAPTER-SUBFOLDER-NN-ROWS,
+// 2026-09-25) are review-queue-only by owner decision: even a high-confidence
+// LLM "duplicate" verdict with auto-merge enabled must never merge this pair.
+// The verdict itself is still recorded (a human reviewing the pair should see
+// what the LLM thought), just never acted on.
+func TestApplyVerdicts_SamePathPair_VerdictRecordedButNeverAutoMerged(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+	prev := config.AppConfig.Dedup.LLMAutoMergeHighConfidence
+	config.AppConfig.Dedup.LLMAutoMergeHighConfidence = true
+	t.Cleanup(func() { config.AppConfig.Dedup.LLMAutoMergeHighConfidence = prev })
+
+	authorID := 1
+	path := "/lib/Author/Book/Book - NN/32.m4b"
+	books := map[string]*database.Book{
+		"ROW1": {ID: "ROW1", Title: "Same Path Book", AuthorID: &authorID, FilePath: path},
+		"ROW2": {ID: "ROW2", Title: "Same Path Book", AuthorID: &authorID, FilePath: path},
+	}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) { return books[id], nil }
+	updates := &atomic.Int32{}
+	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		updates.Add(1)
+		books[id] = b
+		return b, nil
+	}
+	sim := 1.0
+	require.NoError(t, es.UpsertCandidate(database.DedupCandidate{
+		EntityType: "book", EntityAID: "ROW1", EntityBID: "ROW2",
+		Layer: "exact", Similarity: &sim, Status: "pending",
+	}))
+	cands, _, err := es.ListCandidates(database.CandidateFilter{EntityType: "book"})
+	require.NoError(t, err)
+	require.Len(t, cands, 1)
+
+	res := engine.ApplyVerdicts(highDup, map[int]database.DedupCandidate{0: cands[0]})
+
+	assert.Equal(t, 1, res.Applied, "the verdict should still be recorded")
+	assert.Equal(t, int32(0), updates.Load(), "a same-path pair must never be auto-merged")
+	got, err := es.GetCandidateByID(cands[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", got.Status, "an un-mergeable pair stays pending for a human")
+	assert.Equal(t, "duplicate", got.LLMVerdict)
 }
 
 // lostAppliedMarkStore is a real PebbleStore (as the AIJobsStore) whose next
