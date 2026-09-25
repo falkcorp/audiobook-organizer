@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.29.1
+// version: 1.30.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-25
 
@@ -2318,6 +2318,10 @@ const absSearchCacheMax = 256
 type searchCacheEntry struct {
 	resp    *searchResponse
 	builtAt time.Time
+	// gen is the store change generation the document was built at. A
+	// document older than the current generation is not replayed: a book
+	// edit is visible to the next search instead of after the TTL.
+	gen uint64
 }
 
 // searchCacheKey folds case and surrounding space so "Primal Hunter" and
@@ -2333,13 +2337,13 @@ func (h *Handler) searchCached(key string) (*searchResponse, bool) {
 	h.searchCacheMu.Lock()
 	defer h.searchCacheMu.Unlock()
 	e, ok := h.searchCache[key]
-	if !ok || h.now().Sub(e.builtAt) >= absSearchCacheTTL {
+	if !ok || h.now().Sub(e.builtAt) >= absSearchCacheTTL || e.gen < h.searchGeneration() {
 		return nil, false
 	}
 	return e.resp, true
 }
 
-func (h *Handler) searchStore(key string, resp *searchResponse) {
+func (h *Handler) searchStore(key string, resp *searchResponse, gen uint64) {
 	h.searchCacheMu.Lock()
 	defer h.searchCacheMu.Unlock()
 	if h.searchCache == nil {
@@ -2367,7 +2371,7 @@ func (h *Handler) searchStore(key string, resp *searchResponse) {
 			delete(h.searchCache, oldestKey)
 		}
 	}
-	h.searchCache[key] = searchCacheEntry{resp: resp, builtAt: now}
+	h.searchCache[key] = searchCacheEntry{resp: resp, builtAt: now, gen: gen}
 }
 
 // stripArticle drops one leading sort article ("the ", "a ", "an ") from an
@@ -2550,6 +2554,9 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 		if resp, ok := h.searchCached(key); ok {
 			return resp, nil
 		}
+		// Read BEFORE the build: a write during it leaves the document older
+		// than the generation, so it is not replayed.
+		gen := h.searchGeneration()
 		resp, complete, err := h.buildSearch(context.WithoutCancel(c.Request.Context()), query, limit)
 		if err != nil {
 			return nil, err
@@ -2560,7 +2567,7 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 		// pin for two minutes: the phone would retry into the same quietly
 		// empty list with nothing in the log. Same rule as filterDataCached.
 		if complete {
-			h.searchStore(key, resp)
+			h.searchStore(key, resp, gen)
 		}
 		return resp, nil
 	})
@@ -2605,9 +2612,16 @@ func (h *Handler) buildSearch(ctx context.Context, query string, limit int) (res
 	// predicate /items uses, and it runs before a match counts toward limit: a
 	// post-filtered limit-capped result would return fewer hits than limit, often
 	// none, while visible matches exist.
-	books, err := h.library.SearchBooksFiltered(query, limit, 0, absItemFilterBase())
+	//
+	// The hits come from the shared search result cache when it is wired
+	// (searchBookHits); a hit list served stale or by the timeout fallback
+	// marks the document incomplete so it is not pinned.
+	books, booksComplete, err := h.searchBookHits(ctx, query, limit)
 	if err != nil {
 		return nil, false, err
+	}
+	if !booksComplete {
+		complete = false
 	}
 	views, err := h.loadItemViews(ctx, books)
 	if err != nil {

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-25
 
@@ -871,6 +871,19 @@ func (f *fakeLibrary) ListSyncAliases(syncID string) ([]string, error) {
 // relevance order (database.SubstringSearchRank) before offset and limit cut.
 // The fake passes no author map, so it matches title and narrator (the store
 // also matches the primary author's name).
+// SearchBookIDsFiltered is SearchBooksFiltered's IDs, as the store's is.
+func (f *fakeLibrary) SearchBookIDsFiltered(query string, limit, offset int, fl database.BookSummaryFilter) ([]string, error) {
+	books, err := f.SearchBooksFiltered(query, limit, offset, fl)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(books))
+	for i := range books {
+		ids[i] = books[i].ID
+	}
+	return ids, nil
+}
+
 func (f *fakeLibrary) SearchBooksFiltered(query string, limit, offset int, fl database.BookSummaryFilter) ([]database.Book, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -890,6 +903,12 @@ func (f *fakeLibrary) SearchBooksFiltered(query string, limit, offset int, fl da
 		b := f.books[id]
 		if !f.matchesFilter(b, database.BookSummary{}, fl) {
 			continue
+		}
+		// The store's scan honours RestrictToIDs (bookMatchesSummaryFilter).
+		if fl.RestrictToIDs != nil {
+			if _, ok := fl.RestrictToIDs[id]; !ok {
+				continue
+			}
 		}
 		if r, ok := database.SubstringSearchRank(b.ID, b.Title, b.Narrator, b.AuthorID, nil, q); ok {
 			r.ID = fmt.Sprintf("%010d", pos)
