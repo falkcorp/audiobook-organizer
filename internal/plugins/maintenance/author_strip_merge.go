@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
 // last-edited: 2026-09-25
 
@@ -198,25 +198,31 @@ func bookTitleNamesAuthor(name string, b database.BookCore, seriesByID map[int]d
 
 // classifyTitleAsAuthor reports whether author a's name is its books' title
 // masquerading as a credit. True only when a has at least one live (not
-// soft-deleted) book AND every live book it credits matches the
-// title-as-author pattern — one differently-titled live book is proof a is a
-// real, distinct credit and takes a out of scope entirely (TODO
+// soft-deleted) book AND every book it credits, trashed ones included,
+// matches the title-as-author pattern — one differently-titled book is proof a
+// is a real, distinct credit and takes a out of scope entirely (TODO
 // JUNK-TITLE-AUTHORS: "only when the author has no other books whose titles
-// differ"). Soft-deleted books are skipped rather than counted either way:
-// their titles are neither evidence of a real author nor part of what a
-// repair would touch.
+// differ"). Trashed books count as evidence against but not for: the delete
+// (unlinkAndDeleteAuthor) unlinks a from trashed books too, so a trashed
+// "The Stand" protects the row exactly like a live one would.
+//
+// books must be the SAME credit set the delete acts on
+// (GetBooksByAuthorIDForRelinkCore: junction ∪ legacy AuthorID, trash
+// included). Judging on primary-AuthorID books alone would let a real person
+// who is primary only on a self-titled book, and co-author elsewhere, pass
+// the gate and then be unlinked from every book (push security review,
+// 2026-09-25).
 func classifyTitleAsAuthor(a database.Author, books []database.BookCore, seriesByID map[int]database.Series) bool {
-	matched := 0
+	live := 0
 	for i := range books {
-		if books[i].IsSoftDeleted() {
-			continue
-		}
 		if !bookTitleNamesAuthor(a.Name, books[i], seriesByID) {
 			return false
 		}
-		matched++
+		if !books[i].IsSoftDeleted() {
+			live++
+		}
 	}
-	return matched > 0
+	return live > 0
 }
 
 // authorStripMergeSampleLimit bounds how many per-row decisions are surfaced in
@@ -250,6 +256,13 @@ type authorStripMergeParams struct {
 	// be a person; run apply=false with this set and read the list first.
 	// Renaming those rows stays off the table (see the file comment).
 	DeleteUnmatched bool `json:"delete_unmatched"`
+
+	// DeleteTitleAsAuthor, when true (default FALSE), deletes the rows
+	// classifyTitleAsAuthor flags. Off by default, separately from delete_junk:
+	// this class judges a person's name by their book titles, which can be
+	// wrong for a real author whose only book is self-titled, so an apply must
+	// opt in after reading the report's list.
+	DeleteTitleAsAuthor bool `json:"delete_title_as_author"`
 }
 
 // deleteJunk resolves the tri-state pointer to its default of TRUE.
@@ -263,10 +276,13 @@ type authorStripMergeReport struct {
 	// TitleAsAuthor counts rows whose name is one of their OWN books' title
 	// (or the title's leading segment, or "<series> <position>") and where
 	// every live book that row credits matches — see classifyTitleAsAuthor.
-	// Deleted under the same delete_junk gate as the Junk bucket above; the
-	// books keep existing and lose a bogus credit, same as any other junk
-	// author (see the file comment on that bucket).
+	// Deleted only with delete_title_as_author=true; the books keep existing
+	// and lose a bogus credit, same as any other junk author (see the file
+	// comment on that bucket).
 	TitleAsAuthor int
+	// TitleAsAuthorUnverified are rows that matched on their primary-author
+	// books but whose full credit set could not be read; never deleted.
+	TitleAsAuthorUnverified int
 	Mergeable     int
 	// Ambiguous are rows whose stripped name matches MORE THAN ONE existing
 	// author. Reported rather than merged: a name index resolves to one row and
@@ -315,8 +331,8 @@ type authorStripMergeReport struct {
 
 func (r authorStripMergeReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d junk=%d title-as-author=%d mergeable=%d ambiguous=%d target-is-junk=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d",
-		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.Mergeable, r.Ambiguous, r.TargetIsJunk,
+		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d",
+		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.TitleAsAuthorUnverified, r.Mergeable, r.Ambiguous, r.TargetIsJunk,
 		r.StrippedNoTarget, r.OutOfScope, r.Placeholders, r.PlaceholdersNoCanonical,
 		r.CanonicalUnknownID, r.Merged, r.Deleted, r.BooksTouched,
 		r.BooksLeftAuthorless, r.Failed)
@@ -465,12 +481,23 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 			plans = append(plans, authorStripPlan{from: a, into: &into, reason: "placeholder"})
 			continue
 		}
+		// Cheap prefilter on the primary-AuthorID index, then confirm on the
+		// full credit set the delete would act on (see classifyTitleAsAuthor).
 		if classifyTitleAsAuthor(a, booksByAuthorID[a.ID], seriesByID) {
-			report.TitleAsAuthor++
-			if params.deleteJunk() {
-				plans = append(plans, authorStripPlan{from: a, reason: "title-as-author"})
+			credits, cErr := store.GetBooksByAuthorIDForRelinkCore(a.ID)
+			if cErr != nil {
+				report.TitleAsAuthorUnverified++
+				log.Warn("author-strip-merge: cannot read credits for title-as-author candidate; leaving it",
+					"author_id", a.ID, "err", cErr)
+				continue
 			}
-			continue
+			if classifyTitleAsAuthor(a, credits, seriesByID) {
+				report.TitleAsAuthor++
+				if params.DeleteTitleAsAuthor {
+					plans = append(plans, authorStripPlan{from: a, reason: "title-as-author"})
+				}
+				continue
+			}
 		}
 		cleaned, ok := dedup.CleanAuthorNameForCreation(a.Name)
 		if ok && isTrackOrTimecodeArtifact(a.Name) {

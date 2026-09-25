@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8f5723a5-46b7-409b-901e-e791fdd71228
 // last-edited: 2026-09-25
 
@@ -682,8 +682,8 @@ func TestBookTitleNamesAuthor(t *testing.T) {
 }
 
 // TestClassifyTitleAsAuthor covers the "no OTHER books whose titles differ"
-// guard: an author is flagged only when every LIVE book it credits matches,
-// and never flagged when it has zero live books.
+// guard: an author is flagged only when every book it credits (trashed ones
+// included) matches, and never flagged when it has zero live books.
 func TestClassifyTitleAsAuthor(t *testing.T) {
 	trashed := true
 	cases := []struct {
@@ -725,12 +725,12 @@ func TestClassifyTitleAsAuthor(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "soft-deleted mismatch is ignored, live match still counts",
+			name: "a soft-deleted differently-titled book still protects the author",
 			books: []database.BookCore{
 				{ID: "b1", Title: "Arcane Chef 2"},
 				{ID: "b2", Title: "Completely Different", MarkedForDeletion: &trashed},
 			},
-			want: true,
+			want: false,
 		},
 	}
 	seriesByID := map[int]database.Series{}
@@ -750,13 +750,17 @@ func TestClassifyTitleAsAuthor(t *testing.T) {
 // AND "The Stand" — a real person who must never be flagged just because one
 // of their books shares their name. Author 102 "Solo Title" has exactly one
 // book, also self-titled. Author 103 "Broken Circle 3" is matched only
-// through its series name + position, on a book titled "Prologue".
+// through its series name + position, on a book titled "Prologue". Author 104
+// "Co Writer" is PRIMARY only on a self-titled book but is credited through
+// the junction on "Other Book" too: the primary-only prefilter matches it, and
+// the full-credit confirmation must reject it.
 func titleAsAuthorFixture() []database.Author {
 	return []database.Author{
 		{ID: 100, Name: "Arcane Chef 2"},
 		{ID: 101, Name: "Stephen King"},
 		{ID: 102, Name: "Solo Title"},
 		{ID: 103, Name: "Broken Circle 3"},
+		{ID: 104, Name: "Co Writer"},
 	}
 }
 
@@ -771,6 +775,8 @@ func newTitleAsAuthorPlugin(calls *stripMergeCalls) *Plugin {
 		{ID: "bk-king-stand", Title: "The Stand", AuthorID: titleAsAuthorIntPtr(101)},
 		{ID: "bk-solo", Title: "Solo Title", AuthorID: titleAsAuthorIntPtr(102)},
 		{ID: "bk-broken-circle", Title: "Prologue", AuthorID: titleAsAuthorIntPtr(103), SeriesID: titleAsAuthorIntPtr(1), SeriesSequence: titleAsAuthorIntPtr(3)},
+		{ID: "bk-cowriter-self", Title: "Co Writer", AuthorID: titleAsAuthorIntPtr(104)},
+		{ID: "bk-cowriter-other", Title: "Other Book", AuthorID: titleAsAuthorIntPtr(101)},
 	}
 	store.GetAllBooksCoreFunc = func(limit, offset int) ([]database.BookCore, error) { return books, nil }
 	store.GetAllSeriesFunc = func() ([]database.Series, error) {
@@ -785,6 +791,8 @@ func newTitleAsAuthorPlugin(calls *stripMergeCalls) *Plugin {
 	for _, b := range books {
 		byAuthor[*b.AuthorID] = append(byAuthor[*b.AuthorID], b)
 	}
+	// Junction-only credit: 104 co-wrote "Other Book" (primary is 101).
+	byAuthor[104] = append(byAuthor[104], byID["bk-cowriter-other"])
 	// relinkAwareBooks makes the post-delete VerifyAuthorUnlinked re-read see
 	// the SetBookAuthors/UpdateBook writes this run makes, exactly as
 	// newStripPlugin's own fixture does — a static byAuthor snapshot would
@@ -844,7 +852,7 @@ func runTitleAsAuthorStripMerge(t *testing.T, params string) (*stripMergeCalls, 
 // hand on 2026-09-25 (author id 64477). It, and the series-matched author
 // 103, must be deleted as junk; the legitimate Stephen King row must survive.
 func TestAuthorStripMerge_TitleAsAuthorDeletesSelfTitledRow(t *testing.T) {
-	calls, summary := runTitleAsAuthorStripMerge(t, `{"apply":true}`)
+	calls, summary := runTitleAsAuthorStripMerge(t, `{"apply":true,"delete_title_as_author":true}`)
 	for _, id := range []int{100, 102, 103} {
 		if !containsInt(calls.deleted, id) {
 			t.Errorf("title-as-author row %d was not deleted; deleted=%v", id, calls.deleted)
@@ -862,7 +870,7 @@ func TestAuthorStripMerge_TitleAsAuthorDeletesSelfTitledRow(t *testing.T) {
 // (Stephen King crediting both "Stephen King" and "The Stand") must never be
 // flagged: the differing title is exactly the protection the TODO calls for.
 func TestAuthorStripMerge_LegitimateSameTitleAuthorIsNotFlagged(t *testing.T) {
-	calls, summary := runTitleAsAuthorStripMerge(t, `{"apply":true}`)
+	calls, summary := runTitleAsAuthorStripMerge(t, `{"apply":true,"delete_title_as_author":true}`)
 	if containsInt(calls.deleted, 101) {
 		t.Fatalf("Stephen King (row 101) was deleted; deleted=%v", calls.deleted)
 	}
@@ -885,16 +893,33 @@ func TestAuthorStripMerge_TitleAsAuthorDryRunWritesNothing(t *testing.T) {
 	}
 }
 
-// delete_junk=false must hold back title-as-author deletes the same way it
-// holds back the numbering-junk bucket — it is the same gate, not a new one.
-func TestAuthorStripMerge_TitleAsAuthorRespectsDeleteJunkFalse(t *testing.T) {
-	calls, summary := runTitleAsAuthorStripMerge(t, `{"apply":true,"delete_junk":false}`)
+// Title-as-author deletes are opt-in: apply=true alone (delete_junk defaults
+// to true) must count the rows but delete none of them.
+func TestAuthorStripMerge_TitleAsAuthorRequiresOptIn(t *testing.T) {
+	calls, summary := runTitleAsAuthorStripMerge(t, `{"apply":true}`)
 	for _, id := range []int{100, 102, 103} {
 		if containsInt(calls.deleted, id) {
-			t.Errorf("row %d was deleted despite delete_junk=false; deleted=%v", id, calls.deleted)
+			t.Errorf("row %d was deleted without delete_title_as_author; deleted=%v", id, calls.deleted)
 		}
 	}
 	if !strings.Contains(summary, "title-as-author=3") {
 		t.Errorf("summary should still count the 3 rows even when not deleting: %s", summary)
+	}
+}
+
+// 🔴 Push security review 2026-09-25: the gate judged only primary-AuthorID
+// books while the delete unlinks every credit. Author 104 is primary only on a
+// self-titled book but co-wrote "Other Book"; it must survive and "Other Book"
+// must keep its credit.
+func TestAuthorStripMerge_TitleAsAuthorChecksEveryCredit(t *testing.T) {
+	calls, summary := runTitleAsAuthorStripMerge(t, `{"apply":true,"delete_title_as_author":true}`)
+	if containsInt(calls.deleted, 104) {
+		t.Fatalf("co-author row 104 was deleted; deleted=%v", calls.deleted)
+	}
+	if _, touched := calls.setAuthors["bk-cowriter-other"]; touched {
+		t.Errorf("Other Book's credits were rewritten: %v", calls.setAuthors["bk-cowriter-other"])
+	}
+	if !strings.Contains(summary, "title-as-author=3 ") {
+		t.Errorf("row 104 must not be counted as title-as-author: %s", summary)
 	}
 }
