@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
 // last-edited: 2026-09-25
 
@@ -61,7 +61,25 @@
 //     the book would read the chapters' time PLUS the consolidated file's.
 //   - target-collision: two books plan the same target. Decided in a serial
 //     pass over every book's plan, so the outcome never depends on scheduling.
-//   - itunes-linked / itunes-path: iTunes rows and paths are never written.
+//   - itunes-path: a row, folder or target under an iTunes root is never
+//     written (books/itunes/** is the live iTunes library).
+//   - itunes-path-unmappable: a repointed row carries an iTunes link, and the
+//     configured library -> iTunes path mapping (metafetch.ComputeITunesPath,
+//     the one organize, path-reconcile and recompute-itunes-paths use) gives
+//     no path for its new file. An empty or guessed itunes_path is never
+//     written.
+//
+// ITUNES-LINKED ROWS (owner decision 2026-09-25, "Repoint + fix iTunes path"):
+// a repointed row that carries an iTunes link (itunes_path or a persistent ID)
+// gets itunes_path rewritten to its NEW file's mapped path; the persistent ID
+// is kept, so the same iTunes track now points at the new file. Only repointed
+// rows change: a consolidation's superseded rows (Missing=true) keep their
+// itunes_path and PID, and a row with no link is not given one. After a book
+// with a changed itunes_path is written it is enqueued for iTunes write-back,
+// whose batcher emits a location update for every PID whose itunes_path
+// differs from the ITL's current location. The book-level itunes_sync_status
+// "dirty" value is NOT set: nothing reads it (GetITunesDirtyBooks has no
+// production caller), so the enqueue is the only thing that moves the track.
 //
 // CONCURRENCY: three phases, like missing-file-repoint. (1) a parallel stat of
 // every scoped book's active rows; (2) a parallel per-book plan (directory
@@ -88,6 +106,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -178,6 +197,10 @@ type rfChange struct {
 	Action  string `json:"action"`
 	OldPath string `json:"old_path"`
 	NewPath string `json:"new_path,omitempty"`
+	// OldITunesPath / NewITunesPath are set only on a repointed row that
+	// carries an iTunes link: the itunes_path it had and the one written.
+	OldITunesPath string `json:"old_itunes_path,omitempty"`
+	NewITunesPath string `json:"new_itunes_path,omitempty"`
 }
 
 // rfBookResult is one book's decision, in the op result's "books" list.
@@ -270,7 +293,21 @@ type rfPlan struct {
 	ResetContent bool
 	// Probes holds the header read of each target, keyed by path.
 	Probes map[string]mediainfo.MediaInfo
+	// ITunesNew maps a repointed, iTunes-linked row ID to the itunes_path
+	// written with it (never ""). ITunesOld holds that row's itunes_path and
+	// persistent ID as planned, so the write can refuse a row an iTunes
+	// import touched since.
+	ITunesNew map[string]string
+	ITunesOld map[string]rfITunesLink
 }
+
+// rfITunesLink is a row's iTunes link as the plan saw it.
+type rfITunesLink struct {
+	Path string
+	PID  string
+}
+
+func (l rfITunesLink) linked() bool { return l.Path != "" || l.PID != "" }
 
 // rfStore is the narrow store the op needs. Every method is on
 // database.Store, so the production indexedStore satisfies it.
@@ -293,6 +330,12 @@ type rfEnv struct {
 	itunesRoots []string
 	scan        ScanController
 	queue       OpQueueReader
+	// itunesPathFor maps a library file path to the iTunes location recorded
+	// in itunes_path, or "" when no mapping covers it. nil means no mapping.
+	itunesPathFor func(string) string
+	// enqueueWriteBack queues a book for iTunes write-back after its
+	// itunes_path changed. May be nil (tests, no batcher).
+	enqueueWriteBack func(bookID string)
 }
 
 func (p *Plugin) repointMissingToFolderAudioDef() sdk.OperationDef {
@@ -302,8 +345,10 @@ func (p *Plugin) repointMissingToFolderAudioDef() sdk.OperationDef {
 		Description: "For primary + organized books whose active book_file rows point at files that no longer exist, " +
 			"repoints them at the audio actually in the book's folder: N chapter rows collapsed into one file keep ONE " +
 			"row (repointed) and mark the rest missing; rows with an exact size match each repoint 1:1. Anything " +
-			"ambiguous (several candidates, none, a file another book references, iTunes) is reported and left alone. " +
-			"Never deletes a row. Fills Duration with a header read. DRY-RUN BY DEFAULT: {\"dryRun\":false} to write; " +
+			"ambiguous (several candidates, none, a file another book references, anything under an iTunes root, an " +
+			"iTunes-linked row whose new file has no mapped iTunes path) is reported and left alone. A repointed row " +
+			"with an iTunes link gets itunes_path rewritten to the new file's mapped path (persistent ID kept) and the " +
+			"book is enqueued for iTunes write-back. Never deletes a row. Fills Duration with a header read. DRY-RUN BY DEFAULT: {\"dryRun\":false} to write; " +
 			"optional book_ids and limit.",
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.repoint-missing-to-folder-audio",
@@ -348,7 +393,11 @@ func (p *Plugin) runRepointMissingToFolderAudio(ctx context.Context, raw json.Ra
 		return fmt.Errorf("%s: %w", rfOpName, err)
 	}
 	env := rfEnv{store: store, rootDir: p.deps.RootDir(), itunesRoots: roots,
-		scan: p.deps, queue: p.deps.OperationQueueStore()}
+		scan: p.deps, queue: p.deps.OperationQueueStore(),
+		// The same mapping organize, path-reconcile, path-repair and
+		// recompute-itunes-paths write itunes_path with.
+		itunesPathFor:    rfProductionITunesPathFor(),
+		enqueueWriteBack: p.deps.EnqueueWriteBack}
 	report, runErr := repointMissingToFolderAudio(ctx, env, params, reporter)
 	if report != nil {
 		if len(report.Books) > 0 {
@@ -365,6 +414,13 @@ func (p *Plugin) runRepointMissingToFolderAudio(ctx context.Context, raw json.Ra
 	}
 	return runErr
 }
+
+// rfProductionITunesPathFor is the library -> iTunes path mapping the op runs
+// with: metafetch.ComputeITunesPath over the configured iTunes path mappings,
+// the function organize, path-reconcile, path-repair and
+// recompute-itunes-paths all write itunes_path with. "" = no mapping covers
+// the path.
+func rfProductionITunesPathFor() func(string) string { return metafetch.ComputeITunesPath }
 
 // rfBook is one scoped book and its active rows.
 type rfBook struct {
@@ -685,9 +741,6 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 	}
 	for i := range b.rows {
 		f := &b.rows[i]
-		if f.ITunesPath != "" || f.ITunesPersistentID != "" {
-			return amb("itunes-linked", "row "+f.ID+" carries an iTunes link")
-		}
 		if underITunes(f.FilePath, env.itunesRoots) {
 			return amb("itunes-path", f.FilePath)
 		}
@@ -758,7 +811,8 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 	}
 
 	allMissing := r.MissingRows == r.ActiveRows
-	plan := &rfPlan{Repoints: map[string]string{}, OldPaths: map[string]string{}, Probes: map[string]mediainfo.MediaInfo{}}
+	plan := &rfPlan{Repoints: map[string]string{}, OldPaths: map[string]string{}, Probes: map[string]mediainfo.MediaInfo{},
+		ITunesNew: map[string]string{}, ITunesOld: map[string]rfITunesLink{}}
 
 	switch {
 	case allMissing && len(cands) == 1:
@@ -797,6 +851,7 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 		r.Reason = fmt.Sprintf("%d row(s) -> 1 file", len(rows))
 		plan.Repoints[keep.ID] = target.path
 		plan.OldPaths[keep.ID] = keep.FilePath
+		rfNoteITunes(plan, keep)
 		// Reset whenever rows collapse: the kept row described ONE chapter,
 		// so even an equal size is a coincidence, and a chapter duration left
 		// in place would survive EnsureDuration (it never overwrites > 0).
@@ -805,6 +860,7 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 		for _, f := range rows[1:] {
 			plan.MarkMissing = append(plan.MarkMissing, f.ID)
 			plan.OldPaths[f.ID] = f.FilePath
+			rfNoteITunes(plan, f)
 			r.Changes = append(r.Changes, rfChange{FileID: f.ID, Action: rfActionMarkMissing, OldPath: f.FilePath})
 		}
 		r.NewPaths = []string{target.path}
@@ -838,6 +894,7 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 			used[match[0]] = f.ID
 			plan.Repoints[f.ID] = match[0]
 			plan.OldPaths[f.ID] = f.FilePath
+			rfNoteITunes(plan, f)
 			r.Changes = append(r.Changes, rfChange{FileID: f.ID, Action: rfActionRepoint, OldPath: f.FilePath, NewPath: match[0]})
 			r.NewPaths = append(r.NewPaths, match[0])
 		}
@@ -847,6 +904,27 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 	for _, target := range r.NewPaths {
 		if underITunes(target, env.itunesRoots) {
 			return amb("itunes-path", target)
+		}
+	}
+	// An iTunes-linked row that is repointed gets its new file's mapped
+	// iTunes path. No mapping, no write: the book is ambiguous.
+	for id, target := range plan.Repoints {
+		if !plan.ITunesOld[id].linked() {
+			continue
+		}
+		want := ""
+		if env.itunesPathFor != nil {
+			want = env.itunesPathFor(target)
+		}
+		if want == "" {
+			return amb("itunes-path-unmappable", "row "+id+" carries an iTunes link and no iTunes path mapping covers "+target)
+		}
+		plan.ITunesNew[id] = want
+	}
+	for i := range r.Changes {
+		if want, ok := plan.ITunesNew[r.Changes[i].FileID]; ok {
+			r.Changes[i].OldITunesPath = plan.ITunesOld[r.Changes[i].FileID].Path
+			r.Changes[i].NewITunesPath = want
 		}
 	}
 
@@ -874,6 +952,11 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 	r.ChangeCount = len(r.Changes)
 	r.plan = plan
 	return r
+}
+
+// rfNoteITunes records f's iTunes link as the plan saw it.
+func rfNoteITunes(plan *rfPlan, f database.BookFileCore) {
+	plan.ITunesOld[f.ID] = rfITunesLink{Path: f.ITunesPath, PID: f.ITunesPersistentID}
 }
 
 // rfFolder picks the book's folder: the one existing directory of its missing
@@ -988,6 +1071,9 @@ func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rf
 		if f == nil || f.Missing || f.FilePath != old {
 			return rfOutcomeChanged, "row " + id + " changed since the plan"
 		}
+		if (rfITunesLink{Path: f.ITunesPath, PID: f.ITunesPersistentID}) != plan.ITunesOld[id] {
+			return rfOutcomeChanged, "row " + id + "'s iTunes link changed since the plan"
+		}
 		if _, serr := os.Stat(old); !os.IsNotExist(serr) {
 			return rfOutcomeChanged, "row " + id + "'s old path is present again"
 		}
@@ -1013,6 +1099,11 @@ func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rf
 		}
 		probe := plan.Probes[target]
 		bookfileaudio.EnsureDuration(f, bookfileaudio.Known{Info: &probe}, nil)
+		if want, ok := plan.ITunesNew[id]; ok {
+			// The persistent ID is untouched: the same iTunes track now
+			// points at the new file.
+			f.ITunesPath = want
+		}
 		out = append(out, f)
 	}
 	for _, id := range plan.MarkMissing {
@@ -1021,6 +1112,13 @@ func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rf
 		out = append(out, f)
 	}
 	res := writeBookFileBatch(ctx, env.store, out, bookFileBatchOpts{Reporter: reporter, Abort: abort})
+	if res.Applied > 0 && len(plan.ITunesNew) > 0 && env.enqueueWriteBack != nil {
+		// Repointed rows are written first, so any applied row means a new
+		// itunes_path may be stored. The batcher re-reads the rows at flush and
+		// emits a location update only for a PID whose ITL location differs,
+		// so enqueueing after a partial write is safe and never stale.
+		env.enqueueWriteBack(r.BookID)
+	}
 	switch {
 	case res.RowErrs > 0:
 		return rfOutcomeFailed, fmt.Sprintf("%d of %d row writes failed", res.RowErrs, len(out))
@@ -1101,10 +1199,10 @@ func writeRFReport(path string, books []rfBookResult) error {
 	}
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 	var b strings.Builder
-	b.WriteString("book_id\tdecision\treason\toutcome\tfile_id\taction\told_path\tnew_path\n")
+	b.WriteString("book_id\tdecision\treason\toutcome\tfile_id\taction\told_path\tnew_path\told_itunes_path\tnew_itunes_path\n")
 	for _, r := range books {
 		if r.plan == nil {
-			fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t\t\t%s\t\n", r.BookID, r.Decision, clean(r.Reason), r.Outcome, clean(r.Folder))
+			fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t\t\t%s\t\t\t\n", r.BookID, r.Decision, clean(r.Reason), r.Outcome, clean(r.Folder))
 			continue
 		}
 		ids := make([]string, 0, len(r.plan.OldPaths))
@@ -1118,8 +1216,12 @@ func writeRFReport(path string, books []rfBookResult) error {
 			if t, ok := r.plan.Repoints[id]; ok {
 				action, newPath = rfActionRepoint, t
 			}
-			fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.BookID, r.Decision, clean(r.Reason), r.Outcome,
-				id, action, clean(old), clean(newPath))
+			oldIT, newIT := "", ""
+			if want, ok := r.plan.ITunesNew[id]; ok {
+				oldIT, newIT = r.plan.ITunesOld[id].Path, want
+			}
+			fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.BookID, r.Decision, clean(r.Reason), r.Outcome,
+				id, action, clean(old), clean(newPath), clean(oldIT), clean(newIT))
 		}
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o664)
