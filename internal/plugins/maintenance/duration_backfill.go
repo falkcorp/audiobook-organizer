@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-09-21
+// last-edited: 2026-09-25
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -126,6 +126,11 @@ type durationReextractParams struct {
 	// re-checking the whole library. Default false (preserves existing
 	// whole-library behavior for all current callers/schedules).
 	OnlyMissingDuration bool `json:"onlyMissingDuration"`
+	// BookIDs, when non-empty, limits the run to exactly these books (read by
+	// ID, no library walk) — the one-off repair of a single book that reads 0
+	// in ABS. Accepted as book_ids too.
+	BookIDs      []string `json:"bookIds,omitempty"`
+	BookIDsSnake []string `json:"book_ids,omitempty"`
 }
 
 // durationChangeThresholds: a book is corrected only when the freshly extracted
@@ -526,7 +531,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	producerErr := make(chan error, 1)
 	go func() {
 		dispatched := 0
-		err := sdk.PageBooks(ctx, store, reporter, pageSize, func(book database.Book) error {
+		visit := func(book database.Book) error {
 			if params.Limit > 0 && dispatched >= params.Limit {
 				return errLimitReached
 			}
@@ -540,7 +545,22 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 				return ctx.Err()
 			}
 			return nil
-		})
+		}
+		var err error
+		if ids := append(append([]string(nil), params.BookIDs...), params.BookIDsSnake...); len(ids) > 0 {
+			for _, id := range ids {
+				book, gErr := store.GetBookByID(id)
+				if gErr != nil || book == nil {
+					err = fmt.Errorf("book %s: not found: %v", id, gErr)
+					break
+				}
+				if err = visit(*book); err != nil {
+					break
+				}
+			}
+		} else {
+			err = sdk.PageBooks(ctx, store, reporter, pageSize, visit)
+		}
 		close(jobCh)
 		producerErr <- err
 	}()

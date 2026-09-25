@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/duration_backfill_merged_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b41e7c3-2d58-4a06-bf19-6e35c0d7a284
-// last-edited: 2026-09-21
+// last-edited: 2026-09-25
 
 package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -136,5 +137,33 @@ func TestDurationBackfill_CompleteBookIsWritten(t *testing.T) {
 	}
 	if bookWrites == 0 {
 		t.Error("a fully resolved book must have its total written and be stamped verified, got no book writes")
+	}
+}
+
+// TestDurationBackfill_BookIDsReadsOnlyThoseBooks: with book_ids the op reads
+// the named books by ID and never walks the library, and a file row stored as
+// 0 under a correct book total is still corrected (the ABS "duration 0" case).
+func TestDurationBackfill_BookIDsReadsOnlyThoseBooks(t *testing.T) {
+	var segWrites, bookWrites int
+	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 120.0}}
+	store := bookWithSegs(t, segs, &segWrites, &bookWrites)
+	store.GetAllBooksFullFromFunc = nil
+	store.GetAllBooksFunc = func(int, int) ([]database.Book, error) {
+		t.Fatal("book_ids run must not walk the library")
+		return nil, nil
+	}
+	store.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		if id != "b1" {
+			return nil, nil
+		}
+		return &database.Book{ID: "b1", Title: "B", FilePath: "/lib/B", Duration: new(120)}, nil
+	}
+	raw, _ := json.Marshal(map[string]any{"dry_run": false, "force": true, "book_ids": []string{"b1"}})
+	p := New(fakeDeps{store: store})
+	if err := p.runDurationBackfill(context.Background(), raw, &fakeReporter{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if segWrites != 1 {
+		t.Errorf("the zero-duration file row must be corrected: segment writes = %d, want 1", segWrites)
 	}
 }
