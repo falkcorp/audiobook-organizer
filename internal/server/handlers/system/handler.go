@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -792,7 +792,7 @@ func (h *Handler) GetDashboard(c *gin.Context) {
 	// 2026-08-16 to 2026-08-21 with nothing to say they were stale.
 	//
 	// Repointed rather than removed even though no frontend code reads
-	// `recentOperations` from this endpoint (grepped 2026-09-07) — it is a public
+	// `recent_operations` from this endpoint (grepped 2026-09-07) — it is a public
 	// response field, and serving correct data costs one call.
 	recentOps := []database.Operation{}
 	if rows, err := store.ListOperationsV2Since(time.Time{}, 5); err == nil {
@@ -812,20 +812,20 @@ func (h *Handler) GetDashboard(c *gin.Context) {
 	}
 
 	httputil.RespondWithOK(c, gin.H{
-		"formatDistribution": stats.FormatDistribution,
-		"stateDistribution":  stats.StateDistribution,
-		"recentOperations":   recentOps,
-		"totalSize":          stats.TotalSize,
-		"totalBooks":         stats.TotalBooks,
-		"totalDuration":      stats.TotalDuration,
-		"organizedBooks":     stats.OrganizedBooks,
-		"unorganizedBooks":   stats.UnorganizedBooks,
-		"broken_file_count":  brokenFileCount,
+		"format_distribution": stats.FormatDistribution,
+		"state_distribution":  stats.StateDistribution,
+		"recent_operations":   recentOps,
+		"total_size":          stats.TotalSize,
+		"total_books":         stats.TotalBooks,
+		"total_duration":      stats.TotalDuration,
+		"organized_books":     stats.OrganizedBooks,
+		"unorganized_books":   stats.UnorganizedBooks,
+		"broken_file_count":   brokenFileCount,
 
-		"fingerprintedBooks":          stats.FingerprintedBooks,
-		"partiallyFingerprintedBooks": stats.PartiallyFingerprintedBooks,
-		"unfingerprintedBooks":        stats.UnfingerprintedBooks,
-		"fingerprintCoveragePercent":  stats.FingerprintCoveragePercent,
+		"fingerprinted_books":           stats.FingerprintedBooks,
+		"partially_fingerprinted_books": stats.PartiallyFingerprintedBooks,
+		"unfingerprinted_books":         stats.UnfingerprintedBooks,
+		"fingerprint_coverage_percent":  stats.FingerprintCoveragePercent,
 	})
 }
 

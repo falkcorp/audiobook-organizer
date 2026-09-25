@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
-// last-edited: 2026-09-01
+// last-edited: 2026-09-25
 
 /**
  * Tests for the regroup lane's data layer.
@@ -110,14 +110,14 @@ function mockItems(items: api.ReviewItem[], total?: number) {
 function setByKind(byKind: Record<string, number>) {
   const count = Object.values(byKind).reduce((a, b) => a + b, 0);
   useReviewStore.setState({ byKind, count });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ count, byKind });
+  vi.mocked(api.getReviewCount).mockResolvedValue({ count, by_kind: byKind });
 }
 
 beforeEach(() => {
   vi.resetAllMocks();
   toast.mockReset();
   setByKind({});
-  vi.mocked(api.getReviewCount).mockResolvedValue({ count: 0, byKind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({ count: 0, by_kind: {} });
   mockItems([makeItem('a1', 'regroup.ambiguous'), makeItem('m1', 'regroup.multidisc')]);
 });
 
