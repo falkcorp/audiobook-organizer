@@ -1,0 +1,11 @@
+# file: tests/audiobooth-decode/audiobooth.pin
+# version: 1.0.0
+# guid: 4d0c9b8e-2f61-4a7e-9c35-8e1f07b6a2d4
+# last-edited: 2026-09-25
+#
+# The AudioBooth commit whose Swift models are the decode oracle. It is fetched at
+# test time into the gitignored .cache/audiobooth/src; no upstream code is committed.
+# Bump sha deliberately, then re-run `make audiobooth-decode` and re-read every call
+# site listed in manifest.json against the new commit.
+repo=https://github.com/AudioBooth/AudioBooth
+sha=849eac04ed92c6f0c75d977ee6bf17e01b3b2b77
