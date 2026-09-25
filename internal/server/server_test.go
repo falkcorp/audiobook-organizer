@@ -1064,12 +1064,12 @@ func TestDashboardSizeFormat(t *testing.T) {
 	response := wrapper.Data
 
 	// Verify formatDistribution exists
-	formatDistribution, ok := response["formatDistribution"].(map[string]any)
+	formatDistribution, ok := response["format_distribution"].(map[string]any)
 	assert.True(t, ok, "formatDistribution should exist")
 	assert.NotNil(t, formatDistribution)
 
 	// Verify stateDistribution exists
-	stateDistribution, ok := response["stateDistribution"].(map[string]any)
+	stateDistribution, ok := response["state_distribution"].(map[string]any)
 	assert.True(t, ok, "stateDistribution should exist")
 	assert.NotNil(t, stateDistribution)
 
@@ -1101,7 +1101,7 @@ func TestSizeCalculationAccuracy(t *testing.T) {
 	response = response["data"].(map[string]any)
 
 	// Verify totalSize is a number
-	totalSize, ok := response["totalSize"].(float64)
+	totalSize, ok := response["total_size"].(float64)
 	assert.True(t, ok, "totalSize should be a number")
 	assert.GreaterOrEqual(t, totalSize, float64(0), "totalSize should be non-negative")
 }
@@ -1152,9 +1152,9 @@ func TestSizeBucketDistribution(t *testing.T) {
 	response = response["data"].(map[string]any)
 
 	// totalBooks and totalSize should be present
-	_, ok := response["totalBooks"]
+	_, ok := response["total_books"]
 	assert.True(t, ok, "totalBooks should exist")
-	_, ok = response["totalSize"]
+	_, ok = response["total_size"]
 	assert.True(t, ok, "totalSize should exist")
 }
 
@@ -1178,11 +1178,11 @@ func TestEmptyDashboardSizeFormat(t *testing.T) {
 	response := wrapper.Data
 
 	// Even with no audiobooks, distributions should exist
-	formatDistribution, ok := response["formatDistribution"].(map[string]any)
+	formatDistribution, ok := response["format_distribution"].(map[string]any)
 	assert.True(t, ok, "formatDistribution should exist even when empty")
 	assert.NotNil(t, formatDistribution)
 
-	stateDistribution, ok := response["stateDistribution"].(map[string]any)
+	stateDistribution, ok := response["state_distribution"].(map[string]any)
 	assert.True(t, ok, "stateDistribution should exist even when empty")
 	assert.NotNil(t, stateDistribution)
 }
@@ -2227,12 +2227,12 @@ func TestGetDashboardWithData(t *testing.T) {
 	response := wrapper.Data
 
 	// Verify dashboard response structure with data
-	assert.NotNil(t, response["totalBooks"])
-	assert.NotNil(t, response["totalSize"])
-	assert.NotNil(t, response["stateDistribution"])
-	assert.NotNil(t, response["formatDistribution"])
+	assert.NotNil(t, response["total_books"])
+	assert.NotNil(t, response["total_size"])
+	assert.NotNil(t, response["state_distribution"])
+	assert.NotNil(t, response["format_distribution"])
 
-	totalBooks, ok := response["totalBooks"].(float64)
+	totalBooks, ok := response["total_books"].(float64)
 	require.True(t, ok, "totalBooks should be a number")
 	assert.Equal(t, float64(1), totalBooks)
 }

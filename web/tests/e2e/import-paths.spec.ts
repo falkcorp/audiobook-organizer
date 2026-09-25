@@ -1,7 +1,7 @@
 // file: tests/e2e/import-paths.spec.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: e3f4a5b6-c7d8-9e0f-1a2b-3c4d5e6f7a8b
-// last-edited: 2026-08-09
+// last-edited: 2026-09-25
 
 import { test, expect } from '@playwright/test';
 import { setupMockApi } from './utils/test-helpers';
@@ -31,10 +31,11 @@ test.describe('Import paths workflows', () => {
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
-          // api.getImportPaths reads body.data.importPaths (api.ts:1764), so an
-          // un-enveloped body made body.data undefined and the call threw —
-          // the list stayed empty however many paths had been added.
-          body: JSON.stringify({ importPaths, data: { importPaths } }),
+          // api.getImportPaths reads body.data.import_paths (2026-09-25
+          // snake_case naming sweep), so an un-enveloped body made
+          // body.data undefined and the call threw — the list stayed empty
+          // however many paths had been added.
+          body: JSON.stringify({ import_paths: importPaths, data: { import_paths: importPaths } }),
         });
       }
       if (route.request().method() === 'POST') {
@@ -54,8 +55,8 @@ test.describe('Import paths workflows', () => {
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
-          // api.addImportPath reads body.data.importPath (api.ts:1779).
-          body: JSON.stringify({ importPath: created, data: { importPath: created } }),
+          // api.addImportPath reads body.data.import_path.
+          body: JSON.stringify({ import_path: created, data: { import_path: created } }),
         });
       }
       if (route.request().method() === 'DELETE') {
