@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.11.2
+// version: 1.12.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-09-13
+// last-edited: 2026-09-25
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -323,9 +323,16 @@ func (h *Handler) ListCombineJournals(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"journals": journals, "count": len(journals)})
 }
 
-// MergeBookDuplicatesAsVersions merges a group of duplicate books into a version
-// group. POST /audiobooks/duplicates/merge.
-func (h *Handler) MergeBookDuplicatesAsVersions(c *gin.Context) {
+// LinkBookDuplicatesAsVersions links a group of duplicate books into a version
+// group (no files move; losers are soft-deleted book rows only).
+// POST /audiobooks/duplicates/link.
+//
+// Renamed from MergeBookDuplicatesAsVersions (naming-audit class "merge vs
+// link verbs", docs/audits/2026-09-25-interface-naming-consistency.md class
+// 2): despite the old verb "merge", this always performed a version-group
+// LINK, never a file-moving merge. The old path/name is registered as a
+// deprecated alias in wireDedupRoutes.
+func (h *Handler) LinkBookDuplicatesAsVersions(c *gin.Context) {
 	var req struct {
 		BookIDs []string `json:"book_ids" binding:"required"`
 	}
@@ -378,9 +385,16 @@ func mergedAwayIDs(ids []string, primaryID string) []string {
 	return out
 }
 
-// DismissBookDuplicateGroup marks a book duplicate group as not-duplicates.
-// POST /audiobooks/duplicates/dismiss.
-func (h *Handler) DismissBookDuplicateGroup(c *gin.Context) {
+// RejectBookDuplicateGroup marks a book duplicate group as not-duplicates.
+// POST /audiobooks/duplicates/reject.
+//
+// Renamed from DismissBookDuplicateGroup (naming-audit class "dismiss vs
+// reject vs undo", docs/audits/2026-09-25-interface-naming-consistency.md
+// class 3) to match the review-queue and metadata-candidate vocabulary
+// ("reject"). The persisted "dismissed" group-key value is unchanged — only
+// the route/handler name moves. The old path/name is registered as a
+// deprecated alias in wireDedupRoutes.
+func (h *Handler) RejectBookDuplicateGroup(c *gin.Context) {
 	var req struct {
 		GroupKey string `json:"group_key" binding:"required"`
 	}
@@ -406,8 +420,20 @@ func (h *Handler) DismissBookDuplicateGroup(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"message": "Group dismissed"})
 }
 
-// MergeBooks enqueues an async book-merge operation. POST /audiobooks/merge.
-func (h *Handler) MergeBooks(c *gin.Context) {
+// LinkBooks enqueues an async book-link operation (books become version-group
+// members; no files move). POST /audiobooks/link.
+//
+// Renamed from MergeBooks (naming-audit class "merge vs link verbs",
+// docs/audits/2026-09-25-interface-naming-consistency.md class 2): the
+// underlying "dedup.book-merge" op routes through merge.Service.MergeBooks,
+// which links the losers into the winner's version group and soft-deletes
+// their book rows without touching any files on disk — the same operation
+// LinkBookDuplicatesAsVersions performs synchronously. The internal
+// merge.Service.MergeBooks method name and the "dedup.book-merge" op ID are
+// unchanged (op IDs are a separate audit class with their own resumability
+// constraints). The old path/name is registered as a deprecated alias in
+// wireDedupRoutes.
+func (h *Handler) LinkBooks(c *gin.Context) {
 	var req struct {
 		KeepID   string   `json:"keep_id" binding:"required"`
 		MergeIDs []string `json:"merge_ids" binding:"required"`
@@ -442,7 +468,7 @@ func (h *Handler) MergeBooks(c *gin.Context) {
 
 // CombineBooks combines several single-file books into ONE multi-file book on the
 // survivor (keep_id) and soft-deletes the absorbed shells, returning the undo
-// journal id. Distinct from MergeBooks, which links them as alternate VERSIONS
+// journal id. Distinct from LinkBooks, which links them as alternate VERSIONS
 // in a version group. Synchronous — combine is a fast DB-only operation.
 // POST /audiobooks/combine.
 func (h *Handler) CombineBooks(c *gin.Context) {
