@@ -1,7 +1,7 @@
 // file: web/tests/e2e/scan-import-organize.spec.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -89,7 +89,7 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
       }
 
       if (pathname === '/api/v1/import-paths' && method === 'GET') {
-        return Promise.resolve(jsonResponse({ importPaths }));
+        return Promise.resolve(jsonResponse({ import_paths: importPaths }));
       }
       if (pathname === '/api/v1/import-paths' && method === 'POST') {
         const newPath = {
@@ -102,7 +102,7 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
         };
         importPaths = [...importPaths, newPath];
         saveState();
-        return Promise.resolve(jsonResponse({ importPath: newPath }));
+        return Promise.resolve(jsonResponse({ import_path: newPath }));
       }
       if (
         pathname.startsWith('/api/v1/import-paths/') &&

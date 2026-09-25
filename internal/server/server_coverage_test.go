@@ -510,10 +510,10 @@ func TestCoverageDashboardStats(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		var resp struct{ Data map[string]any }
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.NotNil(t, resp.Data["formatDistribution"])
-		assert.NotNil(t, resp.Data["stateDistribution"])
-		assert.NotNil(t, resp.Data["totalBooks"])
-		assert.NotNil(t, resp.Data["totalSize"])
+		assert.NotNil(t, resp.Data["format_distribution"])
+		assert.NotNil(t, resp.Data["state_distribution"])
+		assert.NotNil(t, resp.Data["total_books"])
+		assert.NotNil(t, resp.Data["total_size"])
 	})
 
 	t.Run("with books", func(t *testing.T) {
@@ -545,7 +545,7 @@ func TestCoverageDashboardStats(t *testing.T) {
 			require.Equal(t, http.StatusOK, w.Code)
 			var resp struct{ Data map[string]any }
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-			totalBooks = resp.Data["totalBooks"].(float64)
+			totalBooks = resp.Data["total_books"].(float64)
 			if totalBooks >= 2 {
 				break
 			}
