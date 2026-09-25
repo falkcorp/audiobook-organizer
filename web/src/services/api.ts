@@ -1079,6 +1079,83 @@ export interface AuthSession {
 export interface BooksPage {
   items: Book[];
   count: number;
+  /** True when the server answered from a cached search predating a bulk change; a rebuild is running. */
+  stale?: boolean;
+}
+
+/** How often a long-running list search (HTTP 202) is polled. */
+export const SEARCH_POLL_INTERVAL_MS = 1000;
+
+/** Give up polling a 202 search after this long. */
+export const SEARCH_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(new DOMException('Aborted', 'AbortError'));
+      },
+      { once: true }
+    );
+  });
+}
+
+/**
+ * GETs a list URL, riding out the server's long-search path.
+ *
+ * A search the server cannot finish within its wait (search.result_cache.wait_seconds,
+ * default 20 s) is answered `202 {search_id, status, matches_so_far}`. The search keeps
+ * running server-side and lands in the result cache, so this polls
+ * `GET /search/:search_id` until it reports done and then re-issues the original request,
+ * which is then a cache hit. The caller's promise stays pending throughout, which is what
+ * keeps the Library's loading spinner up. `onPending` reports progress while it waits.
+ */
+async function fetchListWithSearchPoll(
+  url: string,
+  signal?: AbortSignal,
+  onPending?: (matchesSoFar: number) => void
+): Promise<Response> {
+  const deadline = Date.now() + SEARCH_POLL_TIMEOUT_MS;
+  for (;;) {
+    const response = await apiFetch(url, { signal });
+    if (response.status !== 202) {
+      return response;
+    }
+    const body = await response.json();
+    const pending = body.data ?? body;
+    const searchId: string | undefined = pending.search_id;
+    if (!searchId) {
+      return response;
+    }
+    onPending?.(pending.matches_so_far ?? 0);
+    for (;;) {
+      if (Date.now() > deadline) {
+        throw new Error('Search is still running; try again shortly');
+      }
+      await sleep(SEARCH_POLL_INTERVAL_MS, signal);
+      const poll = await apiFetch(`${API_BASE}/search/${encodeURIComponent(searchId)}`, { signal });
+      if (!poll.ok) {
+        // Unknown/expired id (e.g. server restart): re-issue the request.
+        break;
+      }
+      const pb = await poll.json();
+      const st = pb.data ?? pb;
+      onPending?.(st.matches_so_far ?? 0);
+      if (st.status === 'error') {
+        throw new Error(st.error || 'Search failed');
+      }
+      if (st.status === 'done') {
+        break;
+      }
+    }
+  }
 }
 
 export async function getBooks(
@@ -1127,6 +1204,8 @@ export async function getBooks(
      */
     seriesId?: number;
     signal?: AbortSignal;
+    /** Called while a long search (HTTP 202) is polled, with the matches found so far. */
+    onSearchPending?: (matchesSoFar: number) => void;
   }
 ): Promise<BooksPage> {
   const params = new URLSearchParams();
@@ -1154,13 +1233,19 @@ export async function getBooks(
   if (options?.isPrimaryVersion !== false) params.set('is_primary_version', 'true');
   if (options?.seriesId !== undefined) params.set('series_id', String(options.seriesId));
 
-  const response = await apiFetch(`${API_BASE}/audiobooks?${params}`, { signal: options?.signal });
+  const response = await fetchListWithSearchPoll(
+    `${API_BASE}/audiobooks?${params}`,
+    options?.signal,
+    options?.onSearchPending
+  );
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch books');
   }
   const body = await response.json();
   const data = body.data ?? body;
-  return { items: data.items ?? [], count: data.count ?? 0 };
+  const page: BooksPage = { items: data.items ?? [], count: data.count ?? 0 };
+  if (data.stale) page.stale = true;
+  return page;
 }
 
 export interface BookFacets {
@@ -1192,15 +1277,40 @@ export async function getBook(id: string): Promise<Book> {
   return body.data;
 }
 
-export async function searchBooks(query: string, limit = 50, showFailed = false): Promise<Book[]> {
-  let url = `${API_BASE}/audiobooks?search=${encodeURIComponent(query)}&limit=${limit}&is_primary_version=true`;
-  if (showFailed) url += '&show_quarantined=true';
-  const response = await apiFetch(url);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to search books');
+/** Page size the quick search walks its results with. */
+export const SEARCH_PAGE_SIZE = 50;
+
+/**
+ * Quick search: every primary-version match for `query`, in relevance order, fetched
+ * SEARCH_PAGE_SIZE at a time. It used to stop at one page of 50. `maxResults` caps it for
+ * pickers that only show a few; the default is every match. Each page after the first is a
+ * slice of the server's cached result, so walking a long list costs one search.
+ */
+export async function searchBooks(
+  query: string,
+  maxResults = Number.POSITIVE_INFINITY,
+  showFailed = false
+): Promise<Book[]> {
+  const out: Book[] = [];
+  let offset = 0;
+  for (;;) {
+    const pageSize = Math.min(SEARCH_PAGE_SIZE, maxResults - out.length);
+    if (pageSize <= 0) break;
+    let url = `${API_BASE}/audiobooks?search=${encodeURIComponent(query)}&limit=${pageSize}&offset=${offset}&is_primary_version=true`;
+    if (showFailed) url += '&show_quarantined=true';
+    const response = await fetchListWithSearchPoll(url);
+    if (!response.ok) {
+      throw await buildApiError(response, 'Failed to search books');
+    }
+    const body = await response.json();
+    const data = body.data ?? body;
+    const items: Book[] = data.items || [];
+    out.push(...items);
+    offset += pageSize;
+    const count: number = typeof data.count === 'number' ? data.count : 0;
+    if (items.length === 0 || offset >= count) break;
   }
-  const data = await response.json();
-  return data.items || [];
+  return out;
 }
 
 /**

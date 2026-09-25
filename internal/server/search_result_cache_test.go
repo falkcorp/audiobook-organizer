@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -441,4 +442,63 @@ func waitUntil(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition not met within 10s")
+}
+
+// TestSearchResultCache_Timing measures uncached vs cached pages on a ~100k
+// synthetic library. Opt-in (SEARCH_CACHE_BENCH=1): it seeds 100k books.
+func TestSearchResultCache_Timing(t *testing.T) {
+	if os.Getenv("SEARCH_CACHE_BENCH") == "" {
+		t.Skip("set SEARCH_CACHE_BENCH=1 to run the 100k timing")
+	}
+	start := time.Now()
+	fx := newSearchCacheServer(t, 100000, 0, searchcache.Config{})
+	t.Logf("seeded 100000 books + index in %v", time.Since(start).Round(time.Millisecond))
+	cache := fx.srv.searchResults
+	f := primaryOnly()
+	f.ExcludeQuarantined = true
+	timeIt := func(q string, offset int) time.Duration {
+		t0 := time.Now()
+		fx.list(t, q, 50, offset, primaryOnly())
+		return time.Since(t0)
+	}
+	for _, q := range []string{"alpha", "alpha bravo", "writer3"} {
+		fx.srv.audiobookService.SetSearchResultCache(nil)
+		_, n, err := fx.srv.audiobookService.GetAudiobooksWithTotal(context.Background(), 1, 0, q, nil, nil, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deep := max(0, (n/50-1)*50)
+		u1, uN := timeIt(q, 0), timeIt(q, deep)
+		fx.srv.audiobookService.SetSearchResultCache(cache)
+		c1miss := timeIt(q, 0)
+		c1, cN := timeIt(q, 0), timeIt(q, deep)
+		t.Logf("q=%-13q matches=%-6d uncached p1=%-10v pN(offset %d)=%-10v | cached first(miss)=%-10v p1 hit=%-10v pN hit=%v",
+			q, n, u1.Round(time.Microsecond), deep, uN.Round(time.Microsecond), c1miss.Round(time.Microsecond), c1.Round(time.Microsecond), cN.Round(time.Microsecond))
+	}
+}
+
+// TestSearchResultCache_IndexLagIsRepatched: a read that lands between a book
+// write and its Bleve commit re-evaluates against the old document and is
+// stamped current. The commit must record the book again so the next read
+// re-patches it. Simulated by writing through the inner store (recorded at
+// write time, not re-indexed) and re-indexing afterwards.
+func TestSearchResultCache_IndexLagIsRepatched(t *testing.T) {
+	fx := newSearchCacheServer(t, 60, 0, searchcache.Config{})
+	id, _, _ := setupRenameTarget(t, fx)
+	if !containsID(fx.ids(t, "zulutitle", primaryOnly()), id) {
+		t.Fatal("target missing before the rename")
+	}
+	inner := fx.srv.store.(*indexedStore).Store
+	if _, err := inner.ModifyBook(id, func(b *database.Book) error { b.Title = "Yankeetitle Story"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// Bleve still holds the old title: the patch keeps the target.
+	if !containsID(fx.ids(t, "zulutitle", primaryOnly()), id) {
+		t.Fatal("index was updated before the simulated commit")
+	}
+	fx.srv.enqueueIndex(id, false)
+	drainQueue(t, fx.srv)
+	if containsID(fx.ids(t, "zulutitle", primaryOnly()), id) {
+		t.Fatal("the index commit did not re-patch an entry read during the lag")
+	}
 }
