@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/preview_default_wiring_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f1a9c3d-2b84-4e57-a0d9-3c5e7b8f1a26
 // last-edited: 2026-09-25
 
@@ -32,8 +32,8 @@ func TestOps_DryRunRoutesThroughOpmode(t *testing.T) {
 		id  string
 		run func(context.Context, json.RawMessage, sdk.Reporter) error
 	}{
-		{"maintenance.itunes-regroup", p.runITunesRegroup},
-		{"maintenance.itunes-playlist-import", p.runITunesPlaylistImport},
+		{"itunes.regroup", p.runITunesRegroup},
+		{"itunes.playlist-import", p.runITunesPlaylistImport},
 		{"maintenance.tag-backfill", p.runTagBackfill},
 		{"maintenance.booksig-sidecar-migrate", p.runBookSigSidecarMigrate},
 		{"maintenance.fs-regroup-xml", p.runFSRegroupXML},

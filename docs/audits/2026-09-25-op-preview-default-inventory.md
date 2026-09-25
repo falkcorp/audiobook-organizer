@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-09-25-op-preview-default-inventory.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 7b3e9d51-4a2c-4f86-b1d7-6e0a8c2f5d93 -->
 <!-- last-edited: 2026-09-25 -->
 
@@ -59,8 +59,8 @@ No caller sends it to these ops today (grep of `internal/`, `web/src`, `scripts/
 
 | Op | Pre-fill that made `{}` safe (proposed-main before this change) |
 |---|---|
-| `maintenance.itunes-regroup` | `itunes_regroup.go:61` |
-| `maintenance.itunes-playlist-import` | `itunes_playlist_import.go:96` |
+| `itunes.regroup` | `itunes_regroup.go:61` |
+| `itunes.playlist-import` | `itunes_playlist_import.go:96` |
 | `maintenance.tag-backfill` | `tag_backfill.go:173` |
 | `maintenance.booksig-sidecar-migrate` | `booksig_sidecar_migrate.go:101` |
 | `maintenance.fs-regroup-xml` | `fs_regroup_xml.go:200` |
@@ -98,7 +98,7 @@ No caller sends it to these ops today (grep of `internal/`, `web/src`, `scripts/
 
 ### `apply bool` -- omitted = preview (field name kept)
 
-`dedup.auto-resolve`, `dedup.bookfile-seg-drop`, `dedup.breakdown-backfill`, `dedup.build-isbn-index`, `dedup.calibrate-composite`, `dedup.cleanup-orphan-author-embeddings`, `dedup.cleanup-orphan-embeddings`, `dedup.dataset-backfill`, `dedup.drain-stale`, `dedup.emb-reencode`, `dedup.mine-gold-labels`, `dedup.purge-legacy-fp-candidates`, `dedup.quarantine-chapter-artifacts`, `dedup.rebuild-gold-labels`, `dedup.reembed-embeddings`, `dedup.rescore`, `dedup.rescore-labeled-examples`, `maintenance.author-strip-merge`, `maintenance.build-folder-book-files`, `maintenance.chapters-backfill`, `maintenance.clear-apply-rename-failures`, `maintenance.dedup-exact-triage`, `maintenance.dedupe-book-file-rows`, `maintenance.file-provenance-capture`, `maintenance.file-provenance-export`, `maintenance.itunes-clone-into-library`, `maintenance.mark-missing-files`, `maintenance.merge-same-path-dupes`, `maintenance.metadata-cache-reap`, `maintenance.missing-file-repair`, `maintenance.missing-file-repoint`, `maintenance.probe-directory-books`, `maintenance.purge-empty-authors`, `maintenance.purge-empty-narrators`, `maintenance.recover-missing-files`, `maintenance.relink-unlinked-books`, `maintenance.repair-junk-titles`, `maintenance.repoint-unrecorded-renames`, `maintenance.review-status-index-repair`, `maintenance.series-denumber`, `maintenance.split-joined-narrators`, `maintenance.title-repair`, `maintenance.version-group-primary-repair`.
+`dedup.auto-resolve`, `dedup.bookfile-seg-drop`, `dedup.breakdown-backfill`, `dedup.build-isbn-index`, `dedup.calibrate-composite`, `dedup.cleanup-orphan-author-embeddings`, `dedup.cleanup-orphan-embeddings`, `dedup.dataset-backfill`, `dedup.drain-stale`, `dedup.emb-reencode`, `dedup.mine-gold-labels`, `dedup.purge-legacy-fp-candidates`, `dedup.quarantine-chapter-artifacts`, `dedup.rebuild-gold-labels`, `dedup.reembed-embeddings`, `dedup.rescore`, `dedup.rescore-labeled-examples`, `maintenance.author-strip-merge`, `maintenance.build-folder-book-files`, `maintenance.chapters-backfill`, `maintenance.clear-apply-rename-failures`, `maintenance.dedup-exact-triage`, `maintenance.dedupe-book-file-rows`, `maintenance.file-provenance-capture`, `maintenance.file-provenance-export`, `itunes.clone-into-library`, `maintenance.mark-missing-files`, `maintenance.merge-same-path-dupes`, `maintenance.metadata-cache-reap`, `maintenance.missing-file-repair`, `maintenance.missing-file-repoint`, `maintenance.probe-directory-books`, `maintenance.purge-empty-authors`, `maintenance.purge-empty-narrators`, `maintenance.recover-missing-files`, `maintenance.relink-unlinked-books`, `maintenance.repair-junk-titles`, `maintenance.repoint-unrecorded-renames`, `maintenance.review-status-index-repair`, `maintenance.series-denumber`, `maintenance.split-joined-narrators`, `maintenance.title-repair`, `maintenance.version-group-primary-repair`.
 
 43 ops.
 
@@ -185,7 +185,7 @@ conversion, so none were changed here. **This is the larger remaining gap agains
 | `library.bulk-write-back` | yes |
 | `library.folder-auto-scan` | yes |
 | `library.import` | yes |
-| `library.optimize` | yes |
+| `maintenance.library-optimize` | yes |
 | `library.organize` | yes |
 | `library.scan` | yes |
 | `library.size-refresh` | no |
@@ -204,13 +204,13 @@ conversion, so none were changed here. **This is the larger remaining gap agains
 | `maintenance.cleanup-old-backups` | no |
 | `maintenance.compact-activity-log` | yes |
 | `maintenance.db-optimize` | yes |
-| `maintenance.dedup-llm-review` | no |
+| `dedup.llm-review` | no |
 | `maintenance.external-id-backfill` | yes |
 | `maintenance.extract-wav-clips` | no |
 | `maintenance.file-integrity-check` | no |
 | `maintenance.filepath-collision-report` | no |
 | `maintenance.isbn-enrichment` | yes |
-| `maintenance.itunes-heal` | no |
+| `itunes.heal` | no |
 | `maintenance.malformed-m4b-remux` | no |
 | `maintenance.malformed-m4b-transcode` | no |
 | `maintenance.metadata-refresh` | yes |
