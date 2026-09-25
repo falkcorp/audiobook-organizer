@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.180.1
+// version: 1.181.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-25
 
@@ -3560,30 +3560,23 @@ func (p *PebbleStore) SearchBooksFiltered(query string, limit, offset int, f Boo
 }
 
 // SearchBookIDsFiltered is SearchBooksFiltered returning only the matching
-// IDs, in the same order, without reading any book row: memdb answers it
-// directly when warm, and the disk scan is the fallback. limit 0 means every
-// match. The shared search result cache builds the ABS ranked lists with it, so
-// a broad query does not re-read tens of thousands of rows to keep their IDs.
+// IDs, in the same order, without keeping any book row: memdb answers it
+// directly when warm, and an IDs-only disk scan is the fallback (before memdb
+// warmup). limit 0 means every match. The shared search result cache builds
+// the ABS ranked lists with it, so a broad query holds IDs, never decoded
+// Books, whichever path answers.
 func (p *PebbleStore) SearchBookIDsFiltered(query string, limit, offset int, f BookSummaryFilter) ([]string, error) {
 	if f.RestrictToIDs != nil && len(f.RestrictToIDs) == 0 {
 		return []string{}, nil
 	}
 	if p.UseMemDB && p.mem() != nil {
-		if ids, err := p.mem().SearchBookIDsFiltered(query, limit, offset, f); err == nil {
+		ids, err := p.mem().SearchBookIDsFiltered(query, limit, offset, f)
+		if err == nil {
 			return ids, nil
 		}
-		// No log here: SearchBooksFiltered below retries memdb and logs
-		// the failure itself before its disk scan.
+		searchHydrateLog.Warn("memdb id search failed, falling back to pebble scan: %v", err)
 	}
-	books, err := p.SearchBooksFiltered(query, limit, offset, f)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, len(books))
-	for i := range books {
-		ids[i] = books[i].ID
-	}
-	return ids, nil
+	return p.searchBookIDsDisk(query, limit, offset, &f)
 }
 
 // searchBooks is the shared body; f == nil means unfiltered.
@@ -3620,24 +3613,7 @@ func (p *PebbleStore) searchBooks(query string, limit, offset int, f *BookSummar
 
 	// Scan book:* index directly instead of loading all books into memory
 	// Pre-load author names for author field matching during iteration
-	authorNames := make(map[int]string)
-	authIter, authErr := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("author:0"),
-		UpperBound: []byte("author:;"),
-	})
-	if authErr == nil {
-		defer authIter.Close()
-		for authIter.First(); authIter.Valid(); authIter.Next() {
-			key := string(authIter.Key())
-			if strings.Contains(key, ":name:") || strings.Contains(key, ":book:") {
-				continue
-			}
-			var a Author
-			if err := json.Unmarshal(authIter.Value(), &a); err == nil {
-				authorNames[a.ID] = util.NormalizeAuthor(a.Name)
-			}
-		}
-	}
+	authorNames := p.diskAuthorNames()
 
 	lowerQuery := strings.ToLower(query)
 	// Ranked exactly as the memdb scan ranks (SubstringSearchRank + the shared

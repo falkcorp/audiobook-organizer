@@ -1,5 +1,5 @@
 // file: internal/server/search_result_cache_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 220a3f36-7c10-426f-a8ee-c3fefa2ee20e
 // last-edited: 2026-09-25
 
@@ -15,6 +15,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,6 +32,7 @@ import (
 
 type searchCacheFixture struct {
 	srv     *Server
+	pebble  *database.PebbleStore
 	authors []*database.Author
 	series  []*database.Series
 	bookIDs []string
@@ -68,7 +71,7 @@ func newSearchCacheServer(t testing.TB, n, ringSize int, cfg searchcache.Config)
 	}
 	srv.enableSearchResultCache(cfg)
 
-	fx := &searchCacheFixture{srv: srv}
+	fx := &searchCacheFixture{srv: srv, pebble: store}
 	rng := rand.New(rand.NewSource(7))
 	for i := 0; i < 12; i++ {
 		a, err := srv.store.CreateAuthor(fmt.Sprintf("%s Writer%d", fixtureWords[i%len(fixtureWords)], i))
@@ -115,7 +118,9 @@ func primaryOnly() audiobookspkg.ListFilters {
 // reads (items and count), plus whether it was stale.
 func (fx *searchCacheFixture) list(t testing.TB, q string, limit, offset int, f audiobookspkg.ListFilters) (string, bool) {
 	t.Helper()
-	resp, err := fx.srv.buildAudiobookListResponse(context.Background(), limit, offset, q, nil, nil, f, false)
+	// The web list request as the current client sends it: opted in to the
+	// 202 and stale answers (Prefer: respond-async).
+	resp, err := fx.srv.buildAudiobookListResponse(audiobookspkg.WithPendingSearchResponse(context.Background()), limit, offset, q, nil, nil, f, false)
 	if err != nil {
 		t.Fatalf("list %q: %v", q, err)
 	}
@@ -512,5 +517,147 @@ func TestSearchResultCache_IndexLagIsRepatched(t *testing.T) {
 	drainQueue(t, fx.srv)
 	if containsID(fx.ids(t, "zulutitle", primaryOnly()), id) {
 		t.Fatal("the index commit did not re-patch an entry read during the lag")
+	}
+}
+
+// uncachedIDs is the per-request pipeline's answer for q, with the cache off.
+func (fx *searchCacheFixture) uncachedIDs(t *testing.T, q string, f audiobookspkg.ListFilters) []string {
+	t.Helper()
+	fx.srv.audiobookService.SetSearchResultCache(nil)
+	defer fx.srv.audiobookService.SetSearchResultCache(fx.srv.searchResults)
+	return fx.ids(t, q, f)
+}
+
+// Review findings 8/17: a caller that did not opt in (a batch op, a script, an
+// old client) never receives the pre-change list, even when the change ring
+// has overflowed and the cache can only serve its entry stale.
+func TestSearchResultCache_ExactCallerNeverStale(t *testing.T) {
+	fx := newSearchCacheServer(t, 200, 8, searchcache.Config{})
+	fx.list(t, "alpha", 50, 0, primaryOnly()) // warm the entry (web client)
+	var target string
+	for _, id := range fx.bookIDs {
+		b, _ := fx.srv.store.GetBookByID(id)
+		if b != nil && !strings.Contains(b.Title, "alpha") && (b.IsPrimaryVersion == nil || *b.IsPrimaryVersion) {
+			target = id
+			break
+		}
+	}
+	if _, err := fx.srv.store.ModifyBook(target, func(b *database.Book) error { b.Title = "alpha kilo"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ { // overflow the 8-record ring
+		if _, err := fx.srv.store.ModifyBook(fx.bookIDs[i], func(b *database.Book) error { b.Title += " x"; return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drainTB(t, fx.srv)
+	if !containsID(fx.ids(t, "alpha", primaryOnly()), target) {
+		t.Fatal("an exact caller got the pre-change list")
+	}
+	resp, err := fx.srv.buildAudiobookListResponse(context.Background(), 50, 0, "alpha", nil, nil, primaryOnly(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, stale := resp["stale"]; stale {
+		t.Fatal("a request without Prefer: respond-async was served a stale list")
+	}
+}
+
+// Review finding 9: a build never truncates at an unreadable row. The row is
+// skipped by itself and every match after it is still in the cached list.
+func TestSearchResultCache_UnreadableRowIsSkippedNotTruncating(t *testing.T) {
+	fx := newSearchCacheServer(t, 200, 0, searchcache.Config{})
+	truth := fx.uncachedIDs(t, "bravo", primaryOnly())
+	if len(truth) < 6 {
+		t.Fatalf("fixture too small: %d matches", len(truth))
+	}
+	bad := truth[2]
+	if err := fx.pebble.DB().Set([]byte("book:"+bad), []byte("{not json"), nil); err != nil {
+		t.Fatal(err)
+	}
+	got := fx.ids(t, "bravo", primaryOnly())
+	var want []string
+	for _, id := range truth {
+		if id != bad {
+			want = append(want, id)
+		}
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("cached list after an unreadable row:\n got %v\nwant %v", got, want)
+	}
+}
+
+// Review findings 3/23: a cache build sees every match, not the per-request
+// post-filter window, so its count is exact and a patch (which re-evaluates
+// with no window) agrees with a rebuild.
+func TestSearchResultCache_BuildIsNotWindowed(t *testing.T) {
+	fx := newSearchCacheServer(t, 200, 0, searchcache.Config{})
+	truth := fx.uncachedIDs(t, "charlie", primaryOnly()) // window 10000: complete
+	restore := audiobookspkg.SetSearchPostFilterWindowForTesting(5)
+	defer restore()
+	if len(truth) <= 5 {
+		t.Fatalf("fixture too small: %d matches", len(truth))
+	}
+	got := fx.ids(t, "charlie", primaryOnly())
+	if fmt.Sprint(got) != fmt.Sprint(truth) {
+		t.Fatalf("cached build was windowed: got %d ids, want %d", len(got), len(truth))
+	}
+	// A far-ranked edit is patched in; the list still equals a fresh truth.
+	var target string
+	for _, id := range fx.bookIDs {
+		if !containsID(truth, id) {
+			b, _ := fx.srv.store.GetBookByID(id)
+			if b != nil && (b.IsPrimaryVersion == nil || *b.IsPrimaryVersion) {
+				target = id
+				break
+			}
+		}
+	}
+	if _, err := fx.srv.store.ModifyBook(target, func(b *database.Book) error { b.Title += " charlie"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	drainTB(t, fx.srv)
+	got = fx.ids(t, "charlie", primaryOnly())
+	restore()
+	truth = fx.uncachedIDs(t, "charlie", primaryOnly())
+	sort.Strings(got)
+	sort.Strings(truth)
+	if fmt.Sprint(got) != fmt.Sprint(truth) {
+		t.Fatalf("patched membership differs from a fresh search: got %d, want %d", len(got), len(truth))
+	}
+}
+
+// Review finding 27: every Bleve write is recorded in the change log, not
+// only the reconciler's commits.
+func TestSearchResultCache_EveryIndexWriteIsRecorded(t *testing.T) {
+	fx := newSearchCacheServer(t, 20, 0, searchcache.Config{})
+	for name, write := range map[string]func(id string) error{
+		"IndexBookByID":     fx.srv.IndexBookByID,
+		"DeleteIndexedBook": fx.srv.DeleteIndexedBook,
+	} {
+		g := fx.srv.searchChanges.Generation()
+		id := fx.bookIDs[3]
+		if err := write(id); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		changed, _, ok := fx.srv.searchChanges.ChangedSince(g)
+		if !ok || !containsID(changed, id) {
+			t.Fatalf("%s did not record %s: %v ok=%v", name, id, changed, ok)
+		}
+	}
+}
+
+// Review finding 7: only requests the result cache actually serves skip the
+// list response cache.
+func TestSearchResultCache_SearchIsCached(t *testing.T) {
+	fx := newSearchCacheServer(t, 5, 0, searchcache.Config{})
+	svc := fx.srv.audiobookService
+	if !svc.SearchIsCached("alpha", nil, nil, primaryOnly()) {
+		t.Fatal("a plain search is not reported as cached")
+	}
+	f := primaryOnly()
+	f.RestrictToIDs = map[string]struct{}{"x": {}}
+	if svc.SearchIsCached("alpha", nil, nil, f) {
+		t.Fatal("a has_file_errors search is reported as cached")
 	}
 }

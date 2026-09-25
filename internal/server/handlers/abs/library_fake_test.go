@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-25
 
@@ -89,6 +89,10 @@ type fakeLibrary struct {
 	// searchScans counts SearchBooks calls, so a test can prove a repeated
 	// query inside absSearchCacheTTL is answered from the cache.
 	searchScans int
+	// badRows makes GetBooksForSearch report these IDs as unreadable rows.
+	badRows map[string]bool
+	// hydrateErr makes GetBooksForSearch fail as a storage read would.
+	hydrateErr error
 
 	// genreGate, when non-nil, blocks every genre scan until closed. Because
 	// GetDistinctGenres runs once per /filterdata build, holding it lets a test
@@ -882,6 +886,51 @@ func (f *fakeLibrary) SearchBookIDsFiltered(query string, limit, offset int, fl 
 		ids[i] = books[i].ID
 	}
 	return ids, nil
+}
+
+// SearchBookRanksFiltered ranks exactly as SearchBooksFiltered does (same
+// predicate, same insertion-position tie-break), by lookup of the given IDs
+// only: it does not count as a scan.
+func (f *fakeLibrary) SearchBookRanksFiltered(query string, ids []string, fl database.BookSummaryFilter) (map[string]database.SearchRank, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	pos := make(map[string]int, len(f.order))
+	for i, id := range f.order {
+		pos[id] = i
+	}
+	q := strings.ToLower(query)
+	out := map[string]database.SearchRank{}
+	for _, id := range ids {
+		b, ok := f.books[id]
+		if !ok || !f.matchesFilter(b, database.BookSummary{}, fl) {
+			continue
+		}
+		if r, ok := database.SubstringSearchRank(b.ID, b.Title, b.Narrator, b.AuthorID, nil, q); ok {
+			r.ID = fmt.Sprintf("%010d", pos[id])
+			out[id] = r
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeLibrary) GetBooksForSearch(ids []string, withSig bool) ([]database.Book, []string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]database.Book, 0, len(ids))
+	var bad []string
+	for _, id := range ids {
+		if f.hydrateErr != nil {
+			return out, bad, f.hydrateErr
+		}
+		if f.badRows[id] {
+			bad = append(bad, id)
+			continue
+		}
+		if b, ok := f.books[id]; ok {
+			out = append(out, *b)
+		}
+	}
+	return out, bad, nil
 }
 
 func (f *fakeLibrary) SearchBooksFiltered(query string, limit, offset int, fl database.BookSummaryFilter) ([]database.Book, error) {

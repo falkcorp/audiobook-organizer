@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
 // last-edited: 2026-09-25
 
@@ -8,6 +8,7 @@ package audiobooks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,9 +27,105 @@ var searchCacheLog = logger.New("search-cache")
 // searchFullLimit is the "whole match set" limit the result cache builds with.
 // It is past the 100000 clamp GetAudiobooksPage applies to callers, which is
 // why the cache calls queryAudiobooks directly. Every search branch is bounded
-// by the library (and the post-filter branch by searchPostFilterWindow), so
-// this is a ceiling, never an allocation size.
+// by the library, so this is a ceiling, never an allocation size.
 const searchFullLimit = 1 << 30
+
+// searchWindow is the over-fetch the post-filter search branches take: the
+// searchPostFilterWindow cap per request, and no cap for a cache build (see
+// queryAudiobooks' build parameter).
+func searchWindow(build bool) int {
+	if build {
+		return searchFullLimit
+	}
+	return searchPostFilterWindow
+}
+
+// SetSearchPostFilterWindowForTesting sets the per-request post-filter
+// over-fetch window and returns a func restoring the old value. Tests use it
+// to reach the windowed branch without seeding 10,000 books; it must not be
+// called while searches run.
+func SetSearchPostFilterWindowForTesting(n int) (restore func()) {
+	old := searchPostFilterWindow
+	searchPostFilterWindow = n
+	return func() { searchPostFilterWindow = old }
+}
+
+// hydrateMode says how a search turns its hit IDs into books.
+type hydrateMode int
+
+const (
+	// hydratePage is the per-request read: GetBooksByIDs, fail-open (a read
+	// error serves the rows read so far, with a warning).
+	hydratePage hydrateMode = iota
+	// hydrateBuild is a cache build or re-evaluation: every row is read, an
+	// undecodable row is skipped by itself (it cannot be shown by any path),
+	// and a storage read error FAILS the build, because what it returned
+	// would be cached as the complete list.
+	hydrateBuild
+	// hydrateIDsOnly returns the hit IDs as bare books without reading them:
+	// a cache build with no post-filter, whose served pages are hydrated
+	// exactly like the per-request page.
+	hydrateIDsOnly
+)
+
+// hydrateSearchHits reads ids for a search in the given mode.
+func (svc *AudiobookService) hydrateSearchHits(ids []string, mode hydrateMode) ([]database.Book, error) {
+	switch mode {
+	case hydrateIDsOnly:
+		books := make([]database.Book, len(ids))
+		for i, id := range ids {
+			books[i].ID = id
+		}
+		return books, nil
+	case hydrateBuild:
+		if rs := database.AsSearchResultStore(svc.store); rs != nil {
+			books, bad, err := rs.GetBooksForSearch(ids, false)
+			if err != nil {
+				return nil, fmt.Errorf("search build: hydrate: %w", err)
+			}
+			if len(bad) > 0 {
+				searchCacheLog.Warn("search build: skipped %d unreadable book rows (first %s)", len(bad), bad[0])
+			}
+			return books, nil
+		}
+		books, err := svc.store.GetBooksByIDs(ids)
+		if err != nil {
+			return nil, fmt.Errorf("search build: hydrate: %w", err)
+		}
+		return books, nil
+	default:
+		// FAIL-OPEN at the call site (spec §C3): a non-nil error from
+		// GetBooksByIDs must not fail the whole search page — warn and keep
+		// serving the rows hydrated so far.
+		books, err := svc.store.GetBooksByIDs(ids)
+		if err != nil {
+			searchCacheLog.Warn("search: batch hydrate failed; serving partial page hydrated=%d err=%v", len(books), err)
+		}
+		return books, nil
+	}
+}
+
+// pageBooks hydrates one served page of a cached list with the same fields
+// the per-request search page carries (the signature sidecar included: the
+// list shows book_sig_coverage_pct), skipping each unreadable row by itself
+// rather than truncating the page at the first one.
+func (svc *AudiobookService) pageBooks(ids []string) []database.Book {
+	if rs := database.AsSearchResultStore(svc.store); rs != nil {
+		books, bad, err := rs.GetBooksForSearch(ids, true)
+		if len(bad) > 0 {
+			searchCacheLog.Warn("search cache: skipped %d unreadable rows on a page (first %s)", len(bad), bad[0])
+		}
+		if err != nil {
+			searchCacheLog.Warn("search cache: page hydrate failed; serving partial page: %v", err)
+		}
+		return books
+	}
+	books, err := svc.store.GetBooksByIDs(ids)
+	if err != nil {
+		searchCacheLog.Warn("search cache: page hydrate failed; serving partial page: %v", err)
+	}
+	return books
+}
 
 // SearchMeta describes how a page was produced.
 type SearchMeta struct {
@@ -68,28 +165,38 @@ func (svc *AudiobookService) GetAudiobooksPage(ctx context.Context, limit int, o
 		f = filters[0]
 	}
 	if key, ok := svc.searchCacheKey(search, authorID, seriesID, f); ok {
-		return svc.cachedSearchPage(ctx, key, limit, offset, search, authorID, seriesID, f)
+		books, total, meta, err := svc.cachedSearchPage(ctx, key, limit, offset, search, authorID, seriesID, f)
+		if !errors.Is(err, searchcache.ErrNotCurrent) && !errors.Is(err, searchcache.ErrBusy) {
+			return books, total, meta, err
+		}
+		// The cache has no current list for a caller that must see every
+		// change, or its build queue is full: run the search as it always
+		// ran. A rebuild has been queued for later lookups where possible.
 	}
-	books, total, err := svc.queryAudiobooks(ctx, limit, offset, search, authorID, seriesID, f, nil)
+	books, total, err := svc.queryAudiobooks(ctx, limit, offset, search, authorID, seriesID, f, nil, false)
 	return books, total, SearchMeta{}, err
+}
+
+// SearchIsCached reports whether this request is served by the search result
+// cache. The list handler's response cache defers to it: a request the result
+// cache serves must not ALSO be answered from the response cache, which renames
+// and tag writes do not invalidate; every other request keeps it.
+func (svc *AudiobookService) SearchIsCached(search string, authorID, seriesID *int, f ListFilters) bool {
+	_, ok := svc.searchCacheKey(search, authorID, seriesID, f)
+	return ok
 }
 
 // cachedSearchPage serves one page of a cacheable search from the cache.
 func (svc *AudiobookService) cachedSearchPage(ctx context.Context, key string, limit, offset int, search string, authorID, seriesID *int, f ListFilters) ([]database.Book, int, SearchMeta, error) {
 	ev := &listSearchEvaluator{svc: svc, search: search, authorID: authorID, seriesID: seriesID, f: f, substring: !svc.bleveSearchable()}
-	res, err := svc.resultCache.Lookup(ctx, key, ev, svc.searchWait(ctx))
+	res, err := svc.resultCache.Lookup(ctx, key, ev, svc.lookupOptions(ctx))
 	if err != nil {
 		return nil, 0, SearchMeta{}, err
 	}
 	page := []database.Book{}
 	if offset < len(res.IDs) {
 		end := min(offset+limit, len(res.IDs))
-		books, hErr := svc.store.GetBooksByIDs(res.IDs[offset:end])
-		if hErr != nil {
-			// Same fail-open contract as the uncached search hydration.
-			searchCacheLog.Warn("search cache: page hydrate failed; serving partial page: %v", hErr)
-		}
-		if books != nil {
+		if books := svc.pageBooks(res.IDs[offset:end]); books != nil {
 			page = books
 		}
 	}
@@ -99,30 +206,32 @@ func (svc *AudiobookService) cachedSearchPage(ctx context.Context, key string, l
 
 type pendingOKKey struct{}
 
-// WithPendingSearchResponse marks ctx as belonging to a caller that can
-// handle *searchcache.PendingError (the web list handler, which answers 202).
-// Every other caller of GetAudiobooksPage/GetAudiobooks blocks until the
-// search finishes or its ctx ends, as it always did: a batch op or the
-// metadata tools must never receive "still running" instead of results.
+// WithPendingSearchResponse marks ctx as belonging to an interactive caller
+// that asked for, and can handle, the two answers a batch caller must never
+// get: a *searchcache.PendingError when a new search outlives the wait (the
+// web list handler answers 202 and the client polls), and a list flagged
+// Stale while a rebuild runs (the page says so). The handler sets it only
+// when the request itself opted in (Prefer: respond-async).
+//
+// Every other caller of GetAudiobooksPage/GetAudiobooks — batch operations,
+// metadata tools, an HTTP client that did not opt in — gets a result that
+// reflects every change recorded before its call, waiting as long as that
+// takes (or its ctx allows), or the uncached search when the cache cannot
+// produce one.
 func WithPendingSearchResponse(ctx context.Context) context.Context {
 	return context.WithValue(ctx, pendingOKKey{}, true)
 }
 
-// blockForever is the wait for callers that cannot handle a pending search:
-// they wait for the build or for their own ctx.
-const blockForever = time.Duration(1<<63 - 1)
-
-// searchWait is how long a request waits for a new search: for a caller that
-// accepts a pending answer, search.result_cache.wait_seconds (or the cache's
-// default); for everyone else, until the build finishes or ctx ends.
-func (svc *AudiobookService) searchWait(ctx context.Context) time.Duration {
+// lookupOptions is what this caller accepts from the result cache.
+func (svc *AudiobookService) lookupOptions(ctx context.Context) searchcache.LookupOptions {
 	if ok, _ := ctx.Value(pendingOKKey{}).(bool); !ok {
-		return blockForever
+		return searchcache.LookupOptions{}
 	}
+	wait := svc.resultCache.DefaultWait()
 	if s := config.AppConfig.Search.ResultCache.WaitSeconds; s > 0 {
-		return time.Duration(s) * time.Second
+		wait = time.Duration(s) * time.Second
 	}
-	return svc.resultCache.DefaultWait()
+	return searchcache.LookupOptions{Wait: wait, AllowPending: true, AllowStale: true}
 }
 
 // searchCacheKey returns the cache key for a search request, or false when the
@@ -144,15 +253,15 @@ func (svc *AudiobookService) searchCacheKey(search string, authorID, seriesID *i
 	if svc.resultCache == nil {
 		return "", false
 	}
-	q := strings.TrimSpace(search)
-	if q == "" {
+	if strings.TrimSpace(search) == "" {
 		return "", false
 	}
+	q := search
 	if len(f.PerUserFilters) > 0 || f.RestrictToIDs != nil ||
 		f.FingerprintStatus != "" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil {
 		return "", false
 	}
-	if SearchHasPerUserFilters(q) {
+	if SearchHasPerUserFilters(strings.TrimSpace(q)) {
 		return "", false
 	}
 	// Apply the same sort normalization queryAudiobooks does, so two requests
@@ -209,51 +318,40 @@ func SearchHasPerUserFilters(q string) bool {
 // under. It folds ONLY what the search path itself folds, so a shared key can
 // never merge two queries that return different results:
 //
-//   - substring engine (store.SearchBooks and friends): the full
-//     database.searchFold semantics — lowercase, '_' to space, runs of spaces
-//     collapsed. That path applies exactly that fold to the query.
-//   - Bleve engine, plain queries (letters, digits and spaces only, and no
-//     upper-case AND/OR/NOT operator): lowercase and whitespace collapse. Each
-//     word becomes analyzed match queries, and the analyzer lowercases.
-//   - Bleve engine, anything else: the trimmed query as sent. DSL field names,
-//     quoted values, wildcards and operators are case- or spacing-sensitive in
-//     places, and '_' is NOT folded for Bleve: a token containing '_' is
-//     translated differently from the same words separated by spaces
-//     (underscorePatternQuery vs separate ANDed terms), so the scores and
-//     therefore the order can differ.
+//   - substring engine (store.SearchBooks and friends): database.SearchQueryKey,
+//     exactly the fold that path applies — lowercase, '_' to space, runs of
+//     spaces collapsed, and NOTHING trimmed ("rock " matches fewer books than
+//     "rock", so they must not share).
+//   - Bleve engine, plain queries (letters, digits, ' ' and '\t' only, and no
+//     upper-case AND/OR/NOT operator): lowercase and ' '/'\t' runs collapsed,
+//     ends trimmed. Those are the only separators the DSL parser splits on;
+//     each word becomes analyzed match queries ANDed together, and the
+//     analyzer lowercases. Any other whitespace (a pasted no-break space, a
+//     newline) is NOT a separator to the parser — "primal\u00a0hunter" is one
+//     token, an OR of its analyzed terms — so such a query is not plain.
+//   - Bleve engine, anything else: the query exactly as sent. DSL field
+//     names, quoted values, wildcards and operators are case- or
+//     spacing-sensitive in places, and a query that fails to parse falls back
+//     to the untrimmed substring search. '_' is NOT folded for Bleve: a token
+//     containing '_' is translated differently from the same words separated
+//     by spaces (underscorePatternQuery vs separate ANDed terms).
 func NormalizeSearchKey(q string, substring bool) string {
-	q = strings.TrimSpace(q)
 	if substring {
-		return collapseSpaces(strings.ReplaceAll(strings.ToLower(q), "_", " "))
+		return database.SearchQueryKey(q)
 	}
+	isSep := func(r rune) bool { return r == ' ' || r == '\t' }
 	for _, r := range q {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.IsSpace(r) {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && !isSep(r) {
 			return q
 		}
 	}
-	for _, w := range strings.Fields(q) {
+	words := strings.FieldsFunc(q, isSep)
+	for _, w := range words {
 		if w == "AND" || w == "OR" || w == "NOT" {
 			return q
 		}
 	}
-	return strings.ToLower(strings.Join(strings.Fields(q), " "))
-}
-
-func collapseSpaces(s string) string {
-	var b strings.Builder
-	prev := false
-	for _, r := range s {
-		if r == ' ' {
-			if prev {
-				continue
-			}
-			prev = true
-		} else {
-			prev = false
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
+	return strings.ToLower(strings.Join(words, " "))
 }
 
 // listSearchEvaluator computes and maintains one web list search entry through
@@ -271,7 +369,7 @@ type listSearchEvaluator struct {
 }
 
 func (e *listSearchEvaluator) run(ctx context.Context, limit int, restrict map[string]struct{}) ([]string, error) {
-	books, _, err := e.svc.queryAudiobooks(ctx, limit, 0, e.search, e.authorID, e.seriesID, e.f, restrict)
+	books, _, err := e.svc.queryAudiobooks(ctx, limit, 0, e.search, e.authorID, e.seriesID, e.f, restrict, true)
 	if err != nil {
 		return nil, err
 	}
@@ -302,11 +400,22 @@ func (e *listSearchEvaluator) Match(ctx context.Context, ids []string) ([]string
 	return out, err == nil, err
 }
 
-// Less orders two matching books exactly as the full result does. With a
-// sort_by it is the pipeline's own comparator on the pair; in relevance order
-// it is the same search confined to the two books, whose relative order is
-// the one the full search gives them (both scores come from the same query
-// over the same index statistics).
+// OrderDriftsOnPatch is true for a relevance-ordered Bleve entry. Bleve
+// scores with corpus-wide statistics (TF-IDF: every write moves docCount and
+// docFreq), so after any write the fresh order of UNCHANGED books can differ
+// from the cached one, and a patch only re-places the changed books. The
+// cache therefore serves the patched list (its membership is exact) and
+// rebuilds it in the background to restore the fresh order. A sort_by order
+// and the substring engine's rank are per-book and do not drift.
+func (e *listSearchEvaluator) OrderDriftsOnPatch() bool {
+	return !e.substring && e.f.SortBy == ""
+}
+
+// Less orders two matching books. With a sort_by it is the pipeline's own
+// comparator on the pair, which is exact. In relevance order it is the same
+// search confined to the two books: exact for the pair under the CURRENT
+// index statistics, but the rest of a patched list keeps its build-time
+// order, which is why OrderDriftsOnPatch schedules a rebuild.
 func (e *listSearchEvaluator) Less(ctx context.Context, a, b string) (bool, error) {
 	if e.f.SortBy != "" && CanSortBy(e.f.SortBy) {
 		pair, err := e.svc.store.GetBooksByIDs([]string{a, b})

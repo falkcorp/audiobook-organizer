@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-09-25
 
@@ -108,11 +108,12 @@ type Handler struct {
 	// under heavy multi-method use, passed by pointer. The handlers nil-check
 	// them exactly where the originals did.
 	listCache *cache.Cache[gin.H]
-	// searchCacheOn reports whether the search result cache is active.
-	searchCacheOn func() bool
-	facetsCache   *cache.Cache[gin.H]
-	authorsCache  *cache.Cache[*audiobookspkg.AuthorWithCountListResponse]
-	seriesCache   *cache.Cache[*audiobookspkg.SeriesWithCountsResponse]
+	// searchCached reports whether a search request is served by the shared
+	// search result cache (AudiobookService.SearchIsCached).
+	searchCached func(search string, authorID, seriesID *int, f audiobookspkg.ListFilters) bool
+	facetsCache  *cache.Cache[gin.H]
+	authorsCache *cache.Cache[*audiobookspkg.AuthorWithCountListResponse]
+	seriesCache  *cache.Cache[*audiobookspkg.SeriesWithCountsResponse]
 
 	// --- injected funcs wrapping behavior that stays in package server ---
 
@@ -154,6 +155,32 @@ type Handler struct {
 	publishEvent func(ctx context.Context, event plugin.Event)
 }
 
+// SetSearchResultCached tells the handler which search requests are served
+// from the shared search result cache (see ListAudiobooks).
+func (h *Handler) SetSearchResultCached(fn func(search string, authorID, seriesID *int, f audiobookspkg.ListFilters) bool) {
+	h.searchCached = fn
+}
+
+func (h *Handler) searchServedByResultCache(search string, authorID, seriesID *int, f audiobookspkg.ListFilters) bool {
+	return h.searchCached != nil && h.searchCached(search, authorID, seriesID, f)
+}
+
+// wantsAsyncSearch reports whether the request opted in to a 202 for a search
+// that outlives the wait (RFC 7240 "Prefer: respond-async", sent by the web
+// client's poller). Without it the request waits for its result as it always
+// did: a client that cannot poll — an older bundle still open in a tab, a
+// script — must never read a 202 body as an empty page.
+func wantsAsyncSearch(c *gin.Context) bool {
+	for _, v := range c.Request.Header.Values("Prefer") {
+		for _, part := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), "respond-async") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // libraryGeneration resolves the store's book-mutation counter, which scopes
 // every library-list cache key.
 //
@@ -168,16 +195,6 @@ type Handler struct {
 // warmer would write entries no request could read — a silent cache-miss
 // regression rather than a visible failure, which is why both sides go through
 // Generation.Key instead of formatting keys by hand.
-// SetSearchResultCacheActive tells the handler whether searches are served
-// from the shared search result cache (see ListAudiobooks).
-func (h *Handler) SetSearchResultCacheActive(on func() bool) {
-	h.searchCacheOn = on
-}
-
-func (h *Handler) searchResultCacheOn() bool {
-	return h.searchCacheOn != nil && h.searchCacheOn()
-}
-
 func (h *Handler) libraryGeneration() *cache.Generation {
 	gen, _ := database.LibraryGenerationOf(h.store)
 	return gen
@@ -618,7 +635,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	// cache while that one is on. A per-user DSL query (read_status: and
 	// friends) is never cached here either: the key does not carry the user.
 	useListCache := len(filters.PerUserFilters) == 0 &&
-		!(params.Search != "" && (h.searchResultCacheOn() || audiobookspkg.SearchHasPerUserFilters(params.Search)))
+		!(params.Search != "" && (h.searchServedByResultCache(params.Search, authorID, seriesID, filters) || audiobookspkg.SearchHasPerUserFilters(params.Search)))
 	if useListCache {
 		if cached, ok := h.listCache.Get(cacheKey); ok {
 			httputil.RespondWithOK(c, cached)
@@ -627,9 +644,14 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	}
 
 	showQuarantined := c.Query("show_quarantined") == "true"
-	// This handler can answer a long search with 202, so it opts in to the
-	// pending answer; every other caller of the list pipeline blocks.
-	resp, err := h.buildListResponse(audiobookspkg.WithPendingSearchResponse(c.Request.Context()), params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
+	// A request that asked for it (Prefer: respond-async) can be answered
+	// with 202 while a long search runs, and with a list flagged stale while
+	// a rebuild runs; every other request gets a current, complete result.
+	reqCtx := c.Request.Context()
+	if wantsAsyncSearch(c) {
+		reqCtx = audiobookspkg.WithPendingSearchResponse(reqCtx)
+	}
+	resp, err := h.buildListResponse(reqCtx, params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
 	var pending *searchcache.PendingError
 	if errors.As(err, &pending) {
 		// The search is still running (detached from this request) and will

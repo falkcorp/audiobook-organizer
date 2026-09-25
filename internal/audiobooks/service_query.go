@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-09-25
 
@@ -67,7 +67,14 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 // with any author_id/series_id membership. The search result cache uses it to
 // re-evaluate only the books that changed since an entry was built, through
 // exactly the DSL, filters and ordering an unrestricted request applies.
-func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, f ListFilters, restrict map[string]struct{}) ([]database.Book, int, error) {
+//
+// build is true for the search result cache's full-list builds and
+// re-evaluations. It lifts the searchPostFilterWindow over-fetch cap (a cached
+// list is served as the COMPLETE match set with an exact count, and a patch
+// re-evaluates changed books with no window, so a capped build would disagree
+// with its own patches), and it hydrates hits fail-closed (see hydrateBuild):
+// a list that silently lost rows to a read error must not be cached.
+func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, f ListFilters, restrict map[string]struct{}, build bool) ([]database.Book, int, error) {
 
 	// A bare series listing with no sort defaults to reading order. Set here,
 	// before hasSorting/heavySorting below read SortBy, so the default takes
@@ -236,7 +243,11 @@ func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, off
 		if idMembership != nil {
 			// Scoped search: every match inside the author/series set, with no
 			// window. The post-filter block below counts and paginates it.
-			books, resultTotal, err = svc.searchWithinIDs(search, idMembership, f.UserID)
+			mode := hydratePage
+			if build {
+				mode = hydrateBuild
+			}
+			books, resultTotal, err = svc.searchWithinIDs(search, idMembership, f.UserID, mode)
 		} else if svc.bleveSearchable() {
 			// When post-filters will run below, the index must hand back the
 			// whole candidate set, NOT one page.
@@ -262,10 +273,21 @@ func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, off
 			// first, then let the existing post-filter block paginate it.
 			fetchLimit, fetchOffset := limit, offset
 			if hasPostFilters {
-				fetchLimit, fetchOffset = searchPostFilterWindow, 0
+				fetchLimit, fetchOffset = searchWindow(build), 0
 			}
-			books, resultTotal, err = svc.searchWithBleve(search, fetchLimit, fetchOffset, f.UserID, nil)
-			if hasPostFilters && len(books) >= searchPostFilterWindow {
+			// A cache build with no post-filter keeps the hit IDs as they
+			// come: the page is hydrated when it is served, exactly as the
+			// per-request path hydrates its one page, and nothing here reads
+			// a book field.
+			mode := hydratePage
+			if build {
+				mode = hydrateBuild
+				if !hasPostFilters {
+					mode = hydrateIDsOnly
+				}
+			}
+			books, resultTotal, err = svc.searchWithBleve(search, fetchLimit, fetchOffset, f.UserID, nil, mode)
+			if hasPostFilters && !build && len(books) >= searchPostFilterWindow {
 				// Truncated: rows past the window were never considered, so any
 				// count derived below is a lower bound. Say so rather than
 				// reporting a confident wrong number.
@@ -285,10 +307,10 @@ func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, off
 			// candidate set rather than one page of it.
 			fbLimit, fbOffset := limit, offset
 			if hasPostFilters {
-				fbLimit, fbOffset = searchPostFilterWindow, 0
+				fbLimit, fbOffset = searchWindow(build), 0
 			}
 			books, err = svc.store.SearchBooks(search, fbLimit, fbOffset)
-			if hasPostFilters && len(books) >= searchPostFilterWindow {
+			if hasPostFilters && !build && len(books) >= searchPostFilterWindow {
 				slog.Warn("search: post-filter over-fetch window exhausted; count is a lower bound",
 					"window", searchPostFilterWindow, "query", search, "fallback", "store.SearchBooks")
 			}
@@ -789,7 +811,7 @@ func (svc *AudiobookService) resolveIDMembership(authorID, seriesID *int) (map[s
 // conjunction, so ranking and the DSL (including per-user filters) behave as
 // for an unscoped search. With no index it runs the SearchBooks substring
 // predicate over just the scoped books; see substringSearchWithin.
-func (svc *AudiobookService) searchWithinIDs(query string, set map[string]struct{}, userID string) ([]database.Book, int, error) {
+func (svc *AudiobookService) searchWithinIDs(query string, set map[string]struct{}, userID string, mode hydrateMode) ([]database.Book, int, error) {
 	if len(set) == 0 {
 		return []database.Book{}, 0, nil
 	}
@@ -803,7 +825,7 @@ func (svc *AudiobookService) searchWithinIDs(query string, set map[string]struct
 			"query", query, "scope", len(ids), "fallback", "database.SubstringSearchMatches")
 		return svc.substringSearchWithin(query, ids)
 	}
-	return svc.searchWithBleve(query, len(ids), 0, userID, ids)
+	return svc.searchWithBleve(query, len(ids), 0, userID, ids, mode)
 }
 
 // substringSearchWithin applies the store.SearchBooks predicate
@@ -1073,7 +1095,7 @@ func (svc *AudiobookService) bleveSearchable() bool {
 // IDs, see BleveIndex.IndexBook), every in-scope hit is fetched rather than
 // searchPostFilterWindow of them, and the substring fallbacks match only those
 // books. Callers pass limit=len(restrictIDs), offset=0.
-func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, userID string, restrictIDs []string) ([]database.Book, int, error) {
+func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, userID string, restrictIDs []string, mode hydrateMode) ([]database.Book, int, error) {
 	ast, err := search.ParseQuery(query)
 	if err != nil {
 		// Parser failure: fall back to the substring search path so
@@ -1137,10 +1159,9 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		// GetBooksByIDs must not fail the whole search page — warn and
 		// keep serving the rows hydrated so far, mirroring the old
 		// per-hit loop's silent-skip-on-error semantics.
-		hydrated, hydrateErr := svc.store.GetBooksByIDs(ids)
+		hydrated, hydrateErr := svc.hydrateSearchHits(ids, mode)
 		if hydrateErr != nil {
-			slog.Warn("search: batch hydrate failed; serving partial page",
-				"err", hydrateErr, "hydrated", len(hydrated))
+			return nil, 0, hydrateErr
 		}
 		filtered := make([]database.Book, 0, len(hydrated))
 		for _, b := range hydrated {
@@ -1206,10 +1227,9 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 	// GetBooksByIDs must not fail the whole search page — warn and keep
 	// serving the rows hydrated so far, mirroring the old per-hit loop's
 	// silent-skip-on-error semantics.
-	books, hydrateErr := svc.store.GetBooksByIDs(ids)
+	books, hydrateErr := svc.hydrateSearchHits(ids, mode)
 	if hydrateErr != nil {
-		slog.Warn("search: batch hydrate failed; serving partial page",
-			"err", hydrateErr, "hydrated", len(books))
+		return nil, 0, hydrateErr
 	}
 	if books == nil {
 		books = []database.Book{}

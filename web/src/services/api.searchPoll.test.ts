@@ -1,5 +1,5 @@
 // file: web/src/services/api.searchPoll.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 51875e2c-533f-4b08-beaf-f758cf4d4b54
 // last-edited: 2026-09-25
 
@@ -109,5 +109,35 @@ describe('quick search paging', () => {
     const got = await searchBooks('odyssey');
     expect(got).toEqual([]);
     expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  // Review finding 24: the list can change between two page fetches. A walk
+  // never keeps a book twice, and restarts when the count changes mid-walk.
+  it('restarts a walk whose count changed and never returns a book twice', async () => {
+    const before = Array.from({ length: SEARCH_PAGE_SIZE * 2 }, (_, i) => book(`b${String(i).padStart(3, '0')}`));
+    // One book inserted at the front after the first page was served: page 2
+    // would start with page 1's last book.
+    const after = [book('new'), ...before];
+    let calls = 0;
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      calls++;
+      const url = new URL(String(input), 'http://x');
+      const limit = Number(url.searchParams.get('limit'));
+      const offset = Number(url.searchParams.get('offset'));
+      const list = calls === 1 ? before : after;
+      return json({ data: { items: list.slice(offset, offset + limit), count: list.length } });
+    });
+    const got = await searchBooks('odyssey');
+    const ids = got.map((b) => b.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual(after.map((b) => b.id));
+  });
+
+  // Review finding 18: the 202 path is opt-in per request.
+  it('asks the server for the 202 path with Prefer: respond-async', async () => {
+    mockFetch.mockResolvedValueOnce(json({ data: { items: [book('a')], count: 1 } }));
+    await getBooks(10, 0, { search: 'x' });
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get('Prefer')).toBe('respond-async');
   });
 });
