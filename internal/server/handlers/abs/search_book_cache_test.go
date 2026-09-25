@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
+	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 
 func withSearchResults(c *searchcache.Cache) harnessOpt {
