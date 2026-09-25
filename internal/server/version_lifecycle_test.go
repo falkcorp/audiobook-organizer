@@ -126,6 +126,56 @@ func TestHandleRestoreVersion_NotInTrash(t *testing.T) {
 	}
 }
 
+// TestHandleTrashRestoreVersion_CanonicalAudiobooksPath proves the
+// /audiobooks/:id/versions/:vid... routes (naming-audit 2026-09-25, class 1)
+// answer the same as the deprecated /books/:id/versions/:vid... aliases
+// exercised by TestHandleTrashVersion / TestHandleRestoreVersion above.
+func TestHandleTrashRestoreVersion_CanonicalAudiobooksPath(t *testing.T) {
+	srv, store := setupVersionLifecycleServer(t)
+
+	_, err := store.CreateBook(&database.Book{
+		ID: "b1", Title: "Test Book", FilePath: "/tmp/b1.m4b", Format: "m4b",
+	})
+	if err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+	ver, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: "b1", Status: database.BookVersionStatusActive, Format: "m4b", Source: "imported",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/b1/versions/"+ver.ID, nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE versions: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	updated, _ := store.GetBookVersion(ver.ID)
+	if updated.Status != database.BookVersionStatusTrash {
+		t.Errorf("expected status trash, got %s", updated.Status)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/restore", nil)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST restore: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	updated, _ = store.GetBookVersion(ver.ID)
+	if updated.Status != database.BookVersionStatusAlt {
+		t.Errorf("expected status alt, got %s", updated.Status)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/purge-now", nil)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST purge-now: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestAutoPromoteAlt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

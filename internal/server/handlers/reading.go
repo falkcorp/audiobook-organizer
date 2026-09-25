@@ -1,7 +1,7 @@
 // file: internal/server/handlers/reading.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b8c9d0e1-f2a3-4567-bcde-567890123456
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package handlers
 
@@ -19,13 +19,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SetPositionRequest is the JSON body for POST /api/v1/books/:id/position.
+// SetPositionRequest is the JSON body for POST /api/v1/audiobooks/:id/position
+// (also reachable via the deprecated alias /api/v1/books/:id/position).
 type SetPositionRequest struct {
 	SegmentID       string  `json:"segment_id" binding:"required"`
 	PositionSeconds float64 `json:"position_seconds"`
 }
 
-// PatchStatusRequest is the JSON body for PATCH /api/v1/books/:id/status.
+// PatchStatusRequest is the JSON body for PATCH /api/v1/audiobooks/:id/status
+// (also reachable via the deprecated alias /api/v1/books/:id/status).
 type PatchStatusRequest struct {
 	Status string `json:"status" binding:"required"`
 }
@@ -74,7 +76,7 @@ func CallingUserID(c *gin.Context) string {
 }
 
 // SetPosition records one position heartbeat and recomputes derived UserBookState.
-// POST /api/v1/books/:id/position
+// POST /api/v1/audiobooks/:id/position (deprecated alias: /api/v1/books/:id/position)
 func (h *ReadingHandler) SetPosition(c *gin.Context) {
 	bookID := c.Param("id")
 	if bookID == "" {
@@ -100,7 +102,7 @@ func (h *ReadingHandler) SetPosition(c *gin.Context) {
 }
 
 // GetPosition returns the latest position for the calling user.
-// GET /api/v1/books/:id/position
+// GET /api/v1/audiobooks/:id/position (deprecated alias: /api/v1/books/:id/position)
 func (h *ReadingHandler) GetPosition(c *gin.Context) {
 	bookID := c.Param("id")
 	if bookID == "" {
@@ -116,7 +118,7 @@ func (h *ReadingHandler) GetPosition(c *gin.Context) {
 }
 
 // GetBookState returns the derived UserBookState for the calling user.
-// GET /api/v1/books/:id/state
+// GET /api/v1/audiobooks/:id/state (deprecated alias: /api/v1/books/:id/state)
 func (h *ReadingHandler) GetBookState(c *gin.Context) {
 	bookID := c.Param("id")
 	if bookID == "" {
@@ -132,7 +134,7 @@ func (h *ReadingHandler) GetBookState(c *gin.Context) {
 }
 
 // SetBookStatus sets a manual status override.
-// PATCH /api/v1/books/:id/status
+// PATCH /api/v1/audiobooks/:id/status (deprecated alias: /api/v1/books/:id/status)
 func (h *ReadingHandler) SetBookStatus(c *gin.Context) {
 	bookID := c.Param("id")
 	if bookID == "" {
@@ -163,7 +165,7 @@ func (h *ReadingHandler) SetBookStatus(c *gin.Context) {
 }
 
 // ClearBookStatus clears the manual override.
-// DELETE /api/v1/books/:id/status
+// DELETE /api/v1/audiobooks/:id/status (deprecated alias: /api/v1/books/:id/status)
 func (h *ReadingHandler) ClearBookStatus(c *gin.Context) {
 	bookID := c.Param("id")
 	if bookID == "" {
@@ -204,7 +206,8 @@ func respondReadStatusError(c *gin.Context, msg string, err error) {
 }
 
 // RepairStatusRequest is the optional JSON body for POST
-// /api/v1/books/:id/status/repair. Apply defaults to false: a dry run.
+// /api/v1/audiobooks/:id/status/repair (deprecated alias: /api/v1/books/:id/status/repair).
+// Apply defaults to false: a dry run.
 type RepairStatusRequest struct {
 	Apply bool `json:"apply"`
 }
@@ -216,7 +219,7 @@ type RepairStatusRequest struct {
 // rebuild from the positions (readstatus.RebuildUserBookState). With
 // {"apply":true} it writes that state over the bad row. A readable row is
 // never touched.
-// POST /api/v1/books/:id/status/repair
+// POST /api/v1/audiobooks/:id/status/repair (deprecated alias: /api/v1/books/:id/status/repair)
 func (h *ReadingHandler) RepairBookStatus(c *gin.Context) {
 	bookID := c.Param("id")
 	if bookID == "" {

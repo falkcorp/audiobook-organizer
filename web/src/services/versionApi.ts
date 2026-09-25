@@ -1,7 +1,7 @@
 // file: web/src/services/versionApi.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9e7f8a3b-0c1d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 import type { RevertOperationResult } from './api';
 
@@ -60,17 +60,17 @@ async function jsonFetch(url: string, opts?: RequestInit) {
 }
 
 export async function trashVersion(bookId: string, versionId: string): Promise<BookVersion> {
-  const resp = await jsonFetch(`${API_BASE}/books/${bookId}/versions/${versionId}`, { method: 'DELETE' });
+  const resp = await jsonFetch(`${API_BASE}/audiobooks/${bookId}/versions/${versionId}`, { method: 'DELETE' });
   return resp.version;
 }
 
 export async function restoreVersion(bookId: string, versionId: string): Promise<BookVersion> {
-  const resp = await jsonFetch(`${API_BASE}/books/${bookId}/versions/${versionId}/restore`, { method: 'POST' });
+  const resp = await jsonFetch(`${API_BASE}/audiobooks/${bookId}/versions/${versionId}/restore`, { method: 'POST' });
   return resp.version;
 }
 
 export async function purgeVersion(bookId: string, versionId: string): Promise<BookVersion> {
-  const resp = await jsonFetch(`${API_BASE}/books/${bookId}/versions/${versionId}/purge-now`, { method: 'POST' });
+  const resp = await jsonFetch(`${API_BASE}/audiobooks/${bookId}/versions/${versionId}/purge-now`, { method: 'POST' });
   return resp.version;
 }
 
