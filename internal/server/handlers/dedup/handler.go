@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-09-25
 
@@ -45,6 +45,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -1161,6 +1162,19 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 	merged := 0
 
 	for _, cand := range candidates {
+		// Two book rows at the same cleaned path (CHAPTER-SUBFOLDER-NN-ROWS,
+		// 2026-09-25) are review-queue-only by owner decision. This endpoint
+		// resolves a whole filtered set with no per-pair human look (an empty
+		// body merges every pending book candidate, band included or not), so
+		// it is exactly the "bulk-merge without a human-selected band" shape
+		// that must never touch this pair — skip it and count it as a
+		// failure so the caller sees it was refused, not silently dropped.
+		bookA, errA := h.store.GetBookByID(cand.EntityAID)
+		bookB, errB := h.store.GetBookByID(cand.EntityBID)
+		if errA == nil && errB == nil && dedup.SamePathPair(bookA, bookB) {
+			failures = append(failures, failure{CandidateID: cand.ID, Reason: "same_path: review queue only, no automated merge"})
+			continue
+		}
 		// Snapshot features before the merge absorbs one side (best-effort).
 		labelExample := h.snapshotCandidateExample(&cand)
 		// Journaled (DA-02). This lane merges one candidate PAIR at a time, so

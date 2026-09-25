@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.85.0
+// version: 1.86.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-25
 
@@ -1083,6 +1083,22 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 			continue
 		}
 
+		// Tag same-cleaned-path pairs (CHAPTER-SUBFOLDER-NN-ROWS, 2026-09-25)
+		// with the non-scoring SigSamePath signal, purely for the review UI —
+		// it never changes the composed score or band. Whatever band the real
+		// signals earn (routinely CERTAIN for two rows pointing at identical
+		// file content) is still gated out of every automated merge path by
+		// SamePathPair — see autoResolveEligible, handleFileHashMatch,
+		// ApplyVerdicts, and PurgeStaleCandidates' same-dir rule.
+		if SamePathPair(book, otherBook) {
+			signals = append(signals, unified.Signal{
+				Kind:       unified.SigSamePath,
+				Raw:        1,
+				Confidence: 0,
+				Evidence:   samePathEvidence,
+			})
+		}
+
 		// 3. Compose score.
 		canonicalPair := canonicalPairIDs(book.ID, candID)
 		composed := unified.ComposeScore(signals, nil, cfg, canonicalPair)
@@ -1366,6 +1382,15 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 
 	sameAuthor := NormalizeAuthorName(authorName) == NormalizeAuthorName(otherAuthorName)
 	sameTitle := normalizeTitle(book.Title) == normalizeTitle(other.Title)
+
+	// Two book rows at the same cleaned path (CHAPTER-SUBFOLDER-NN-ROWS,
+	// 2026-09-25) are review-queue-only by owner decision, however strong the
+	// exact-hash match: route straight to a tagged candidate and never
+	// auto-merge, even though this path is otherwise the most confident
+	// auto-merge trigger in the engine (identical file content).
+	if SamePathPair(book, other) {
+		return false, de.upsertExactCandidate(book, other, "exact", 1.0)
+	}
 
 	if sameAuthor && sameTitle && de.AutoMergeEnabled && de.mergeService != nil {
 		// Refuse to auto-merge when there is nowhere to write the undo key.
@@ -1954,14 +1979,22 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 	// this data. The helper + the /dedup/purge-acoustid-conflicts endpoint are
 	// kept as diagnostics; a real veto needs measured dup-vs-nondup separation
 	// (and fingerprint coverage) first.
-	return de.upsertCandidateWithLiveLabel(database.DedupCandidate{
+	cand := database.DedupCandidate{
 		EntityType: "book",
 		EntityAID:  a.ID,
 		EntityBID:  b.ID,
 		Layer:      layer,
 		Similarity: &sim,
 		Status:     "pending",
-	})
+	}
+	// Tag same-cleaned-path pairs (CHAPTER-SUBFOLDER-NN-ROWS, 2026-09-25) with
+	// the non-scoring SigSamePath signal so the review UI can explain why an
+	// automated pass will never resolve this pair — see SamePathPair.
+	if SamePathPair(a, b) {
+		sb := samePathScoreBreakdown(a, b)
+		cand.ScoreBreakdown = sb
+	}
+	return de.upsertCandidateWithLiveLabel(cand)
 }
 
 // identifiersConflict reports whether a and b have a definitive, both-present
@@ -3745,9 +3778,20 @@ func (de *Engine) PurgeStaleCandidates(ctx context.Context) (int, error) {
 			// the explicit regex didn't match. "Reclaiming Honor bk 6"
 			// vs "Reclaiming Honor bk 7" is the canonical example.
 			stale = true
-		case a.filePath != "" && b.filePath != "" && filepath.Dir(a.filePath) == filepath.Dir(b.filePath):
+		case a.filePath != "" && b.filePath != "" &&
+			filepath.Clean(a.filePath) != filepath.Clean(b.filePath) &&
+			filepath.Dir(a.filePath) == filepath.Dir(b.filePath):
 			// Both books reside in the same directory — they are chapter-files
 			// of the same multi-file audiobook, not independent duplicates.
+			//
+			// EXCLUDES the same-cleaned-path shape (CHAPTER-SUBFOLDER-NN-ROWS,
+			// 2026-09-25): filepath.Dir of two IDENTICAL paths is trivially
+			// equal, so without this exclusion this rule purged the exact
+			// same-path candidates the owner said must stay in the review
+			// queue, on every purge-stale run. Two rows at one path are never
+			// chapters — they still fall through the other case arms and stay
+			// pending for a human, tagged same_path by upsertExactCandidate /
+			// runUnifiedScoringForBook.
 			stale = true
 		}
 		if !stale {
@@ -4146,6 +4190,14 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 		}
 		if bookSoftDeleted(bookA) || bookSoftDeleted(bookB) {
 			slog.Info("dedup LLM auto-merge skipped — a side was already soft-deleted (merged away earlier in this batch)", "candidate", candidate.ID, "a", candidate.EntityAID, "b", candidate.EntityBID)
+			continue
+		}
+		// Two book rows at the same cleaned path (CHAPTER-SUBFOLDER-NN-ROWS,
+		// 2026-09-25) are review-queue-only by owner decision: an LLM verdict
+		// is still an automated decision, so it may never merge this shape,
+		// no matter how confident.
+		if SamePathPair(bookA, bookB) {
+			slog.Info("dedup LLM auto-merge skipped — same cleaned path, review queue only", "candidate", candidate.ID, "a", candidate.EntityAID, "b", candidate.EntityBID)
 			continue
 		}
 

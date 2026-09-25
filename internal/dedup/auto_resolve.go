@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
 // last-edited: 2026-09-25
 
@@ -226,6 +226,12 @@ func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *d
 	// A human enqueued (or pinned) this pair so that a human decides it.
 	if database.IsManualCandidate(c) {
 		return false, "manual candidate: enqueued for human review"
+	}
+	// Two book rows at the same cleaned path (CHAPTER-SUBFOLDER-NN-ROWS,
+	// 2026-09-25) are a review-queue-only shape by owner decision: no
+	// automated path may merge them, however strong the score.
+	if SamePathPair(bookA, bookB) {
+		return false, "same_path: two book rows at one path, review queue only"
 	}
 	if c.Band != unified.BandCertain {
 		return false, "band is not CERTAIN"
