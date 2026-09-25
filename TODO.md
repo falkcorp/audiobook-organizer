@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.15 -->
+<!-- version: 10.73.16 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-25 -->
 
@@ -8958,7 +8958,11 @@ step 4 propagates to the server package with no edit there.
   operator-initiated, not fired on every page load) but it is the same shape of
   defect and the same fix.
 
-- [ ] **SEARCH-CACHE** Search results are not cached anywhere on the server.
+- [x] **SEARCH-CACHE** Search results are not cached anywhere on the server.
+      ✅ 2026-09-25 (#3563): shared server-side result cache for web list search and ABS
+      `/search` (`internal/searchcache`), invalidated by a store change generation + ring of
+      changed IDs. Per-user filtered searches (read status / progress / last played) are
+      deliberately NOT cached — user-state writes do not advance the change log.
       Every keystroke-debounced query re-runs the full Bleve search plus the
       book hydration behind it.
 
