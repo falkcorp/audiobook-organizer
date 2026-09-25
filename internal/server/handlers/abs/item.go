@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/item.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c8a2f60-1d75-4b38-a0e4-7f21b5c96d13
 // last-edited: 2026-09-25
 
@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/covers"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -143,14 +144,58 @@ func (h *Handler) mediaProgress(userID string, v *itemView) *mediaProgressDTO {
 
 // ── GET /api/items/:id/cover ────────────────────────────────────────────────
 
+// localCoverURLPrefix is the API path the app records in Book.CoverURL for a
+// cover stored on this server (server/covers.go handleLocalCover serves it).
+const localCoverURLPrefix = "/api/v1/covers/local/"
+
 // coverFile resolves the on-disk cover for a book, or "" when there is none.
-// Book.CoverURL is an API path, not a disk path, so metadata.CoverPathForBook is the
-// only correct resolver.
-func (h *Handler) coverFile(bookID string) string {
-	if h.coverRoot == "" {
+//
+// Two places hold a book's cover on disk, and the web UI reads both:
+//
+//  1. {root}/covers/<bookID>.<ext>, where a downloaded or uploaded cover is
+//     written (metadata.CoverPathForBook). Tried first.
+//  2. The file Book.CoverURL names when it is a LOCAL cover URL,
+//     "/api/v1/covers/local/<name>". Embedded art extracted at import is stored
+//     as {root}/.covers/<sha256>.<ext> (metadata.ExtractCoverArt), and a merged
+//     or relinked book can point at another book's id-named file. Neither is at
+//     step 1's path, so before this fallback ABS answered coverPath=null and a
+//     404 for a book the web UI showed with a cover (ABS-COVER-LOCAL,
+//     2026-09-25). The name is resolved exactly as handleLocalCover resolves
+//     it: covers.FindCoverFile under .covers then covers, after the same
+//     separator and ".." rejection.
+//
+// A remote CoverURL (http...) is not a disk file and is never used here.
+func (h *Handler) coverFile(book *database.Book) string {
+	if h.coverRoot == "" || book == nil {
 		return ""
 	}
-	return metadata.CoverPathForBook(h.coverRoot, bookID)
+	if p := metadata.CoverPathForBook(h.coverRoot, book.ID); p != "" {
+		return p
+	}
+	name, ok := localCoverName(book.CoverURL)
+	if !ok {
+		return ""
+	}
+	p, err := covers.FindCoverFile(name, h.coverRoot)
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+// localCoverName extracts the file name from a local cover URL, reporting
+// ok=false for anything else: nil, a remote URL, a query string, or a name
+// that could leave the covers directory.
+func localCoverName(coverURL *string) (string, bool) {
+	if coverURL == nil {
+		return "", false
+	}
+	name, found := strings.CutPrefix(strings.TrimSpace(*coverURL), localCoverURLPrefix)
+	if !found || name == "" || name == "." ||
+		strings.ContainsAny(name, "/\\?#") || strings.Contains(name, "..") {
+		return "", false
+	}
+	return name, true
 }
 
 // coverContentType maps a cover file extension to its MIME type. A cover served as
@@ -190,7 +235,7 @@ func (h *Handler) ItemCover(c *gin.Context) {
 	if book == nil {
 		return
 	}
-	path := h.coverFile(book.ID)
+	path := h.coverFile(book)
 	if path == "" {
 		// A 404 here is correct and harmless: both clients fall back to a placeholder.
 		respondError(c, http.StatusNotFound, "cover not found")
