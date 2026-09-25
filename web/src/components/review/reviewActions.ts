@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
-// last-edited: 2026-08-20
+// last-edited: 2026-09-25
 //
 // Every action a reviewer can take, across all three lanes, as one discriminated
 // union.
@@ -17,7 +17,7 @@
 // flatten away by accident:
 //
 //   1. THE LANES DISAGREE ON ID TYPE. Dedup candidates are numbers
-//      (`mergeDedupCandidate(id: number)`); metadata rows and review items are
+//      (`linkDedupCandidate(id: number)`); metadata rows and review items are
 //      strings. Modelling ids as `string | number` everywhere would compile and
 //      would let a metadata id reach a dedup endpoint. The union keeps them
 //      apart per lane, so that mistake does not typecheck.

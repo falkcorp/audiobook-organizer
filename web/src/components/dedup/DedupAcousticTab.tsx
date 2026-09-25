@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupAcousticTab.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import {
@@ -657,10 +657,11 @@ export function AcousticDedupTab() {
   };
 
   const handleMerge = async (candidateId: number, keepId?: string) => {
-    // The sync /dedup/candidates/:id/merge endpoint performs the merge,
-    // updates candidate status, publishes the event, and cleans up orphan
-    // candidates (PR #1167). Previously we also fired /audiobooks/merge
-    // (async) here, which caused a race + UI flicker + spurious 409 from
+    // The sync /dedup/candidates/:id/link endpoint (formerly /merge; the old
+    // path is a deprecated alias) performs the link, updates candidate
+    // status, publishes the event, and cleans up orphan candidates (PR
+    // #1167). Previously we also fired /audiobooks/link (formerly /merge,
+    // async) here, which caused a race + UI flicker + spurious 409 from
     // the sync call when the async one won. (B1)
     //
     // keepId, when provided, tells the backend which side of the pair to
@@ -669,7 +670,7 @@ export function AcousticDedupTab() {
     // Keep A / Keep B click.
     setResolving((s) => new Set(s).add(candidateId));
     try {
-      await api.mergeDedupCandidate(candidateId, keepId);
+      await api.linkDedupCandidate(candidateId, keepId);
       setCandidates((prev) => prev.filter((c) => c.id !== candidateId));
     } catch (err) {
       setStatusSeverity('error');
@@ -686,7 +687,7 @@ export function AcousticDedupTab() {
   const handleDismiss = async (candidateId: number) => {
     setResolving((s) => new Set(s).add(candidateId));
     try {
-      await api.dismissDedupCandidate(candidateId);
+      await api.rejectDedupCandidate(candidateId);
       setCandidates((prev) => prev.filter((c) => c.id !== candidateId));
     } catch (err) {
       setStatusSeverity('error');
@@ -825,11 +826,11 @@ export function AcousticDedupTab() {
           if (!c) return;
           try {
             if (action === 'dismiss') {
-              await api.dismissDedupCandidate(id);
+              await api.rejectDedupCandidate(id);
             } else if (action === 'keep-a') {
-              await api.mergeDedupCandidate(id, c.entity_a_id);
+              await api.linkDedupCandidate(id, c.entity_a_id);
             } else {
-              await api.mergeDedupCandidate(id, c.entity_b_id);
+              await api.linkDedupCandidate(id, c.entity_b_id);
             }
           } catch {
             failed.push(id);

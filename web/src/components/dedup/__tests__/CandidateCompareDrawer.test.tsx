@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/__tests__/CandidateCompareDrawer.test.tsx
-// version: 2.0.0
+// version: 2.1.0
 // guid: c4d5e6f7-a8b9-0123-cdef-cd4567890123
-// last-edited: 2026-09-01
+// last-edited: 2026-09-25
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -12,10 +12,10 @@ import type { DedupCandidateBreakdownResponse } from '../../../services/api';
 
 vi.mock('../../../services/api', () => ({
   compareAcoustID: vi.fn(),
-  dismissDedupCandidate: vi.fn(),
+  rejectDedupCandidate: vi.fn(),
   getConfig: vi.fn().mockResolvedValue({ root_dir: '/library' }),
   getDedupCandidateBreakdown: vi.fn(),
-  mergeDedupCandidate: vi.fn(),
+  linkDedupCandidate: vi.fn(),
 }));
 
 const breakdown: DedupCandidateBreakdownResponse = {

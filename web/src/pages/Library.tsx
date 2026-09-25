@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.92.0
+// version: 1.93.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -1331,7 +1331,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     try {
       const keepId = mergePrimaryId || selectedAudiobooks[0].id;
       const mergeIds = selectedAudiobooks.filter((b) => b.id !== keepId).map((b) => b.id);
-      await api.mergeBooks(keepId, mergeIds);
+      await api.linkBooks(keepId, mergeIds);
       toast(`Merged ${selectedAudiobooks.length} books as versions.`, 'success');
       setSelectedAudiobooks([]);
       setCrossPageFilter(null);

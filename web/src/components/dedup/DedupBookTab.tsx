@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupBookTab.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 71F51230-1BB6-4864-A1EB-120EE776D673
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 import { useState, useEffect, useCallback } from 'react';
 import {
@@ -119,7 +119,7 @@ export function DedupBookTab() {
     setMergeSuccess(null);
     setMergeReport(null);
     await runOperationWithPolling(
-      () => api.mergeBooks(keepId, mergeIds),
+      () => api.linkBooks(keepId, mergeIds),
       setActiveOp,
       (final) => {
         if (!isMergeSuccess(final)) {
@@ -165,7 +165,7 @@ export function DedupBookTab() {
       const title = cleanDisplayTitle(group[0]?.title || 'Unknown');
       attempted++;
       try {
-        const initial = await api.mergeBooks(keepId, mergeIds);
+        const initial = await api.linkBooks(keepId, mergeIds);
         setActiveOp(initial);
         const final = await api.pollOperation(initial.id, (update) => setActiveOp(update));
         if (isMergeSuccess(final)) {

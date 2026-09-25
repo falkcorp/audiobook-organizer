@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/__tests__/DedupBookTab.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 57376ab7-3c03-4bea-92fc-da54bfa8e9ac
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -17,7 +17,7 @@ vi.mock('../../../services/api', async (importOriginal) => {
   return {
     ...actual,
     getBookDuplicates: vi.fn(),
-    mergeBooks: vi.fn(),
+    linkBooks: vi.fn(),
     pollOperation: vi.fn(),
   };
 });
@@ -59,7 +59,7 @@ function op(id: string, status: string, error_message?: string): Operation {
 type Outcome = 'ok' | 'reject' | 'failed' | 'canceled' | 'interrupted';
 
 function wireMerges(outcomes: Record<string, Outcome>) {
-  vi.mocked(api.mergeBooks).mockImplementation(async (keepId: string) => {
+  vi.mocked(api.linkBooks).mockImplementation(async (keepId: string) => {
     if (outcomes[keepId] === 'reject') {
       throw new Error(`409: refused for ${keepId}`);
     }
@@ -118,7 +118,7 @@ describe('DedupBookTab bulk merge outcome reporting', () => {
     await clickMergeAll();
     await waitForRefetchSettled();
 
-    expect(api.mergeBooks).toHaveBeenCalledTimes(3);
+    expect(api.linkBooks).toHaveBeenCalledTimes(3);
     expect(screen.getByText('Merged 3 of 3 group(s)')).toBeInTheDocument();
     expect(screen.queryByTestId('bulk-merge-report')).not.toBeInTheDocument();
   });
@@ -176,7 +176,7 @@ describe('DedupBookTab bulk merge outcome reporting', () => {
     fireEvent.click(screen.getByRole('button', { name: /merge selected \(2\)/i }));
     await waitForRefetchSettled();
 
-    expect(api.mergeBooks).toHaveBeenCalledTimes(2);
+    expect(api.linkBooks).toHaveBeenCalledTimes(2);
     const report = screen.getByTestId('bulk-merge-report');
     expect(report).toHaveTextContent('Merged 1 of 2 group(s); 1 failed');
     expect(report).toHaveTextContent('Charlie Book');

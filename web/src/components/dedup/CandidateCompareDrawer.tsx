@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.8.2
+// version: 1.9.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
 // It fetches the breakdown data on open via GET /api/v1/dedup/candidates/:id/breakdown.
@@ -381,7 +381,7 @@ export function CandidateCompareDrawer({
     const key = keepId ? `merge:${keepId}` : 'merge';
     setActionLoading(key);
     try {
-      await api.mergeDedupCandidate(candidateId, keepId);
+      await api.linkDedupCandidate(candidateId, keepId);
       onMerged?.(candidateId, keepId);
       onClose();
     } catch (err) {
@@ -395,7 +395,7 @@ export function CandidateCompareDrawer({
     if (!candidateId) return;
     setActionLoading('dismiss');
     try {
-      await api.dismissDedupCandidate(candidateId);
+      await api.rejectDedupCandidate(candidateId);
       onDismissed?.(candidateId);
       onClose();
     } catch (err) {
