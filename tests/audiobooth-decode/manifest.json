@@ -1,0 +1,537 @@
+{
+  "_about": [
+    "AudioBooth decode proof manifest. One row per app request, in the order the Go generator issues them.",
+    "callSite is the literal path string from the pinned AudioBooth source; the 45 strings in callSites are the coverage denominator.",
+    "decode is the type the call site passes to NetworkRequest<T>. 'Data' means the app skips decoding and any 2xx succeeds.",
+    "Placeholders {name} are filled from values captured out of earlier responses, the way the app chains ids.",
+    "A string value that is exactly '{name}' is replaced by the captured value with its JSON type (number stays a number).",
+    "Every request carries Content-Type: application/json and Authorization: Bearer <token> (NetworkService.buildURLRequest) unless auth is false.",
+    "Query values are strings, as the app builds [String: String] queries.",
+    "nonEmpty lists dotted JSON paths (numeric segments index arrays) that must be non-empty arrays or strings, checked by the key the app reads. An empty path means the body itself.",
+    "Every captured value X also yields XB64, its base64 encoding, which is how the app builds filter=<group>.<base64> values."
+  ],
+  "callSites": [
+    "/api/authorize",
+    "/api/authors/\\(authorID)",
+    "/api/collections",
+    "/api/collections/\\(collectionID)",
+    "/api/collections/\\(collectionID)/batch/add",
+    "/api/collections/\\(collectionID)/batch/remove",
+    "/api/collections/\\(collectionID)/book/\\(libraryItemID)",
+    "/api/collections/\\(id)",
+    "/api/emails/send-ebook-to-device",
+    "/api/items/\\(id)",
+    "/api/items/\\(itemID)/play",
+    "/api/libraries",
+    "/api/libraries/\\(library.id)",
+    "/api/libraries/\\(library.id)/authors",
+    "/api/libraries/\\(library.id)/collections",
+    "/api/libraries/\\(library.id)/items",
+    "/api/libraries/\\(library.id)/narrators",
+    "/api/libraries/\\(library.id)/personalized",
+    "/api/libraries/\\(library.id)/playlists",
+    "/api/libraries/\\(library.id)/search",
+    "/api/libraries/\\(library.id)/series",
+    "/api/libraries/\\(library)/items",
+    "/api/libraries/\\(libraryID)/recent-episodes",
+    "/api/me/item/\\(bookID)/bookmark",
+    "/api/me/item/\\(bookID)/bookmark/\\(time)",
+    "/api/me/item/\\(bookmark.bookID)/bookmark",
+    "/api/me/item/listening-sessions/\\(itemID)",
+    "/api/me/listening-sessions",
+    "/api/me/listening-stats",
+    "/api/me/progress/\\(bookID)",
+    "/api/me/progress/\\(progressID)",
+    "/api/me/progress/\\(progressID)/remove-from-continue-listening",
+    "/api/me/stats/year/\\(year)",
+    "/api/playlists",
+    "/api/playlists/\\(id)",
+    "/api/playlists/\\(playlistID)",
+    "/api/playlists/\\(playlistID)/batch/add",
+    "/api/playlists/\\(playlistID)/batch/remove",
+    "/api/playlists/\\(playlistID)/item/\\(libraryItemID)",
+    "/api/podcasts/\\(podcastID)/download-episodes",
+    "/api/podcasts/feed",
+    "/api/session/\\(id)/close",
+    "/api/session/\\(id)/sync",
+    "/api/session/local-all",
+    "/api/session/local"
+  ],
+  "requests": [
+    {
+      "id": "login",
+      "extra": true,
+      "callSite": "/login",
+      "source": "Services/AuthenticationService.swift login(serverURL:username:password:)",
+      "method": "POST", "path": "/login", "auth": false,
+      "headers": {"x-return-tokens": "true"},
+      "body": {"username": "{username}", "password": "{password}"},
+      "decode": "Authorize"
+    },
+    {
+      "id": "authorize",
+      "callSite": "/api/authorize",
+      "source": "Services/AuthenticationService.swift:336 (also :201 alt-URL probe, :453 API-key validation; same request, body nil)",
+      "method": "POST", "path": "/api/authorize",
+      "decode": "Authorize",
+      "nonEmpty": ["user.mediaProgress"]
+    },
+    {
+      "id": "libraries",
+      "callSite": "/api/libraries",
+      "source": "Services/LibrariesService.swift fetch(serverID:) -> struct Response { libraries }",
+      "method": "GET", "path": "/api/libraries",
+      "decode": "LibrariesResponse",
+      "nonEmpty": ["libraries"],
+      "capture": {"libraryId": "libraries.0.id"}
+    },
+    {
+      "id": "library_filterdata",
+      "callSite": "/api/libraries/\\(library.id)",
+      "source": "Services/FilterDataService.swift performFetch -> struct Response { filterdata }",
+      "method": "GET", "path": "/api/libraries/{libraryId}", "query": {"include": "filterdata"},
+      "decode": "FilterDataResponse",
+      "nonEmpty": ["filterdata.authors", "filterdata.genres", "filterdata.series", "filterdata.narrators"],
+      "capture": {"filterSeriesId": "filterdata.series.0.id", "narratorName": "filterdata.narrators.0", "genreName": "filterdata.genres.0"}
+    },
+    {
+      "id": "personalized",
+      "callSite": "/api/libraries/\\(library.id)/personalized",
+      "source": "Services/LibrariesService.swift fetchPersonalized -> [Personalized.Section]",
+      "method": "GET", "path": "/api/libraries/{libraryId}/personalized",
+      "decode": "[Personalized.Section]",
+      "nonEmpty": [""]
+    },
+    {
+      "id": "items_title",
+      "callSite": "/api/libraries/\\(library)/items",
+      "source": "Services/BooksService.swift fetch(limit:page:sortBy:...) from Screens/Library/Library/LibraryPageModel.swift:338 (itemsPerPage 100, default sort .title)",
+      "method": "GET", "path": "/api/libraries/{libraryId}/items",
+      "query": {"minified": "1", "limit": "100", "page": "0", "sort": "media.metadata.title"},
+      "decode": "Page<Book>",
+      "nonEmpty": ["results", "results.0.media.metadata.narratorName", "results.0.media.metadata.seriesName"],
+      "capture": {"itemId": "results.0.id", "itemId2": "results.1.id"}
+    },
+    {
+      "id": "items_collapse_series",
+      "callSite": "/api/libraries/\\(library)/items",
+      "source": "LibraryPageModel.swift:338 with preferences.collapseSeriesInLibrary",
+      "method": "GET", "path": "/api/libraries/{libraryId}/items",
+      "query": {"minified": "1", "limit": "100", "page": "0", "sort": "media.metadata.title", "collapseseries": "1"},
+      "decode": "Page<Book>", "nonEmpty": ["results"]
+    },
+    {
+      "id": "items_filter_series",
+      "callSite": "/api/libraries/\\(library)/items",
+      "source": "LibraryPageModel.swift:338 non-root (sortBy nil) with FilterPicker .series -> series.<base64 id>",
+      "method": "GET", "path": "/api/libraries/{libraryId}/items",
+      "query": {"minified": "1", "limit": "100", "page": "0", "filter": "series.{filterSeriesIdB64}"},
+      "decode": "Page<Book>", "nonEmpty": ["results"]
+    },
+    {
+      "id": "items_filter_narrator",
+      "callSite": "/api/libraries/\\(library)/items",
+      "source": "LibraryPageModel.swift:338 non-root with FilterPicker .narrators -> narrators.<base64 name>",
+      "method": "GET", "path": "/api/libraries/{libraryId}/items",
+      "query": {"minified": "1", "limit": "100", "page": "0", "filter": "narrators.{narratorNameB64}"},
+      "decode": "Page<Book>", "nonEmpty": ["results"]
+    },
+    {
+      "id": "items_filter_genre",
+      "callSite": "/api/libraries/\\(library)/items",
+      "source": "Library filter picker .genres -> genres.<base64 name>",
+      "method": "GET", "path": "/api/libraries/{libraryId}/items",
+      "query": {"minified": "1", "limit": "100", "page": "0", "sort": "media.metadata.title", "filter": "genres.{genreNameB64}"},
+      "decode": "Page<Book>", "nonEmpty": ["results"]
+    },
+    {"id": "items_sort_authorName", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.authorName", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "media.metadata.authorName"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_authorNameLF", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.authorNameLF", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "media.metadata.authorNameLF"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_author", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.author", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "media.metadata.author"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_publishedYear", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.publishedYear", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "media.metadata.publishedYear"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_addedAt_desc", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.addedAt, ascending false", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "addedAt", "desc": "1"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_size", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.size", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "size"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_duration", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.duration", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "media.duration"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_numTracks", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.numEpisodes", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "media.numTracks"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_updatedAt", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.updatedAt", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "updatedAt"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_progress", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.progress", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "progress"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_progressFinishedAt", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.progressFinishedAt", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "progress.finishedAt"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_progressCreatedAt", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.progressCreatedAt", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "progress.createdAt"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_birthtime", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.birthtime", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "birthtimeMs"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_modified", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.modified", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "mtimeMs"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {"id": "items_sort_random", "callSite": "/api/libraries/\\(library)/items", "source": "SortBy.random", "method": "GET", "path": "/api/libraries/{libraryId}/items", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "random"}, "decode": "Page<Book>", "nonEmpty": ["results"]},
+    {
+      "id": "item_detail",
+      "callSite": "/api/items/\\(id)",
+      "source": "Services/BooksService.swift fetch(id:) from PlayerManager.swift:262 / DownloadManager.swift:1336",
+      "method": "GET", "path": "/api/items/{itemId}", "query": {"expanded": "1"},
+      "decode": "Book",
+      "nonEmpty": ["media.audioFiles", "media.chapters", "media.tracks", "media.metadata.narrators", "media.metadata.series", "media.metadata.genres"]
+    },
+    {
+      "id": "search_title",
+      "callSite": "/api/libraries/\\(library.id)/search",
+      "source": "Services/SearchService.swift search(query:limit: 100) from Screens/Search/SearchViewModel.swift:55",
+      "method": "GET", "path": "/api/libraries/{libraryId}/search", "query": {"q": "odyssey", "limit": "100"},
+      "decode": "SearchResponse", "nonEmpty": ["book"]
+    },
+    {"id": "search_series", "callSite": "/api/libraries/\\(library.id)/search", "source": "SearchService.search", "method": "GET", "path": "/api/libraries/{libraryId}/search", "query": {"q": "epics", "limit": "100"}, "decode": "SearchResponse", "nonEmpty": ["series", "series.0.books"]},
+    {"id": "search_author", "callSite": "/api/libraries/\\(library.id)/search", "source": "SearchService.search", "method": "GET", "path": "/api/libraries/{libraryId}/search", "query": {"q": "homer", "limit": "100"}, "decode": "SearchResponse", "nonEmpty": ["authors"]},
+    {"id": "search_narrator", "callSite": "/api/libraries/\\(library.id)/search", "source": "SearchService.search", "method": "GET", "path": "/api/libraries/{libraryId}/search", "query": {"q": "{narratorName}", "limit": "100"}, "decode": "SearchResponse", "nonEmpty": ["narrators"]},
+    {"id": "search_genre", "callSite": "/api/libraries/\\(library.id)/search", "source": "SearchService.search", "method": "GET", "path": "/api/libraries/{libraryId}/search", "query": {"q": "{genreName}", "limit": "100"}, "decode": "SearchResponse", "nonEmpty": ["genres"]},
+    {
+      "id": "series_name",
+      "callSite": "/api/libraries/\\(library.id)/series",
+      "source": "Services/SeriesService.swift fetch from Screens/Collections/Series/SeriesPageModel.swift:82 (itemsPerPage 50, sort .name)",
+      "method": "GET", "path": "/api/libraries/{libraryId}/series", "query": {"limit": "50", "page": "0", "sort": "name"},
+      "decode": "Page<Series>", "nonEmpty": ["results", "results.0.books"],
+      "capture": {"seriesId": "results.0.id"}
+    },
+    {"id": "series_numBooks_desc", "callSite": "/api/libraries/\\(library.id)/series", "source": "SeriesService.SortBy.numBooks", "method": "GET", "path": "/api/libraries/{libraryId}/series", "query": {"limit": "50", "page": "0", "sort": "numBooks", "desc": "1"}, "decode": "Page<Series>", "nonEmpty": ["results"]},
+    {"id": "series_addedAt", "callSite": "/api/libraries/\\(library.id)/series", "source": "SeriesService.SortBy.addedAt", "method": "GET", "path": "/api/libraries/{libraryId}/series", "query": {"limit": "50", "page": "0", "sort": "addedAt"}, "decode": "Page<Series>", "nonEmpty": ["results"]},
+    {"id": "series_lastBookAdded", "callSite": "/api/libraries/\\(library.id)/series", "source": "SeriesService.SortBy.lastBookAdded", "method": "GET", "path": "/api/libraries/{libraryId}/series", "query": {"limit": "50", "page": "0", "sort": "lastBookAdded"}, "decode": "Page<Series>", "nonEmpty": ["results"]},
+    {"id": "series_lastBookUpdated", "callSite": "/api/libraries/\\(library.id)/series", "source": "SeriesService.SortBy.lastBookUpdated", "method": "GET", "path": "/api/libraries/{libraryId}/series", "query": {"limit": "50", "page": "0", "sort": "lastBookUpdated"}, "decode": "Page<Series>", "nonEmpty": ["results"]},
+    {"id": "series_totalDuration", "callSite": "/api/libraries/\\(library.id)/series", "source": "SeriesService.SortBy.totalDuration", "method": "GET", "path": "/api/libraries/{libraryId}/series", "query": {"limit": "50", "page": "0", "sort": "totalDuration"}, "decode": "Page<Series>", "nonEmpty": ["results"]},
+    {"id": "series_random", "callSite": "/api/libraries/\\(library.id)/series", "source": "SeriesService.SortBy.random", "method": "GET", "path": "/api/libraries/{libraryId}/series", "query": {"limit": "50", "page": "0", "sort": "random"}, "decode": "Page<Series>", "nonEmpty": ["results"]},
+    {
+      "id": "authors_page",
+      "callSite": "/api/libraries/\\(library.id)/authors",
+      "source": "Services/AuthorsService.swift fetch from Screens/Library/Authors/AuthorsPageModel.swift:50 (itemsPerPage 100, sort .name)",
+      "method": "GET", "path": "/api/libraries/{libraryId}/authors",
+      "query": {"minified": "1", "limit": "100", "page": "0", "sort": "name"},
+      "decode": "Page<Author>", "nonEmpty": ["results"],
+      "capture": {"authorId": "results.0.id"}
+    },
+    {"id": "authors_lastFirst_desc", "callSite": "/api/libraries/\\(library.id)/authors", "source": "AuthorsService.SortBy.lastFirst", "method": "GET", "path": "/api/libraries/{libraryId}/authors", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "lastFirst", "desc": "1"}, "decode": "Page<Author>", "nonEmpty": ["results"]},
+    {"id": "authors_numBooks", "callSite": "/api/libraries/\\(library.id)/authors", "source": "AuthorsService.SortBy.numBooks", "method": "GET", "path": "/api/libraries/{libraryId}/authors", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "numBooks"}, "decode": "Page<Author>", "nonEmpty": ["results"]},
+    {"id": "authors_addedAt", "callSite": "/api/libraries/\\(library.id)/authors", "source": "AuthorsService.SortBy.addedAt", "method": "GET", "path": "/api/libraries/{libraryId}/authors", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "addedAt"}, "decode": "Page<Author>", "nonEmpty": ["results"]},
+    {"id": "authors_updatedAt", "callSite": "/api/libraries/\\(library.id)/authors", "source": "AuthorsService.SortBy.updatedAt", "method": "GET", "path": "/api/libraries/{libraryId}/authors", "query": {"minified": "1", "limit": "100", "page": "0", "sort": "updatedAt"}, "decode": "Page<Author>", "nonEmpty": ["results"]},
+    {
+      "id": "author_detail",
+      "callSite": "/api/authors/\\(authorID)",
+      "source": "Services/AuthorsService.swift fetchDetails(authorID:)",
+      "method": "GET", "path": "/api/authors/{authorId}", "query": {"include": "items,series"},
+      "decode": "AuthorDetails", "nonEmpty": ["libraryItems"]
+    },
+    {
+      "id": "narrators",
+      "callSite": "/api/libraries/\\(library.id)/narrators",
+      "source": "Services/NarratorsService.swift fetch -> struct Response { narrators }",
+      "method": "GET", "path": "/api/libraries/{libraryId}/narrators",
+      "decode": "NarratorsResponse", "nonEmpty": ["narrators"]
+    },
+    {
+      "id": "recent_episodes",
+      "callSite": "/api/libraries/\\(libraryID)/recent-episodes",
+      "source": "Services/LibrariesService.swift fetchRecentEpisodes(limit: 50, page: 0) -> struct Response { episodes }",
+      "method": "GET", "path": "/api/libraries/{libraryId}/recent-episodes", "query": {"limit": "50", "page": "0"},
+      "decode": "RecentEpisodesResponse",
+      "vacuous": "podcast-only data; a book library has no episodes, so [] is the correct answer"
+    },
+    {
+      "id": "progress_get",
+      "callSite": "/api/me/progress/\\(bookID)",
+      "source": "Services/ProgressService.swift fetch(bookID:) from Services/BookActionable.swift:35",
+      "method": "GET", "path": "/api/me/progress/{itemId}",
+      "decode": "User.MediaProgress",
+      "capture": {"progressId": "id"}
+    },
+    {
+      "id": "progress_patch",
+      "callSite": "/api/me/progress/\\(bookID)",
+      "source": "Services/ProgressService.swift update(bookID:currentTime:duration:...) (nil optionals are omitted by the synthesized Encodable)",
+      "method": "PATCH", "path": "/api/me/progress/{itemId}",
+      "body": {"currentTime": 600, "duration": 9975, "progress": 0.06015037593984962, "isFinished": false},
+      "decode": "Data"
+    },
+    {
+      "id": "play",
+      "callSite": "/api/items/\\(itemID)/play",
+      "source": "Services/SessionService.swift start(itemID:...) PlayRequest",
+      "method": "POST", "path": "/api/items/{itemId}/play",
+      "body": {
+        "forceDirectPlay": true, "forceTranscode": false,
+        "supportedMimeTypes": ["audio/flac", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/aac", "audio/x-aiff", "audio/webm"],
+        "mediaPlayer": "ios",
+        "deviceInfo": {"clientName": "AudioBooth iOS", "clientVersion": "1.0 (1)", "deviceId": "6B1E2F0A-3C4D-4E5F-8A9B-0C1D2E3F4A5B"}
+      },
+      "decode": "PlaySession", "nonEmpty": ["audioTracks", "chapters"],
+      "capture": {"sessionId": "id"}
+    },
+    {
+      "id": "session_sync",
+      "callSite": "/api/session/\\(id)/sync",
+      "source": "Services/SessionService.swift sync(_:timeListened:currentTime:)",
+      "method": "POST", "path": "/api/session/{sessionId}/sync",
+      "body": {"timeListened": 15, "currentTime": 615},
+      "decode": "Data"
+    },
+    {
+      "id": "session_close",
+      "callSite": "/api/session/\\(id)/close",
+      "source": "Services/SessionService.swift close(_:)",
+      "method": "POST", "path": "/api/session/{sessionId}/close",
+      "decode": "Data"
+    },
+    {
+      "id": "session_local",
+      "callSite": "/api/session/local",
+      "source": "Services/SessionService.swift syncLocalSession(_:) body SessionSync",
+      "method": "POST", "path": "/api/session/local",
+      "body": {
+        "id": "0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F1", "libraryItemId": "{itemId}", "mediaType": "book",
+        "duration": 9975, "startTime": 615, "currentTime": 700, "timeListening": 85, "playMethod": 3,
+        "mediaPlayer": "ios", "deviceInfo": {"deviceId": "6B1E2F0A-3C4D-4E5F-8A9B-0C1D2E3F4A5B", "clientVersion": "1.0 (1)", "clientName": "AudioBooth iOS"},
+        "startedAt": 1785370300000, "updatedAt": 1785370385000
+      },
+      "decode": "Data"
+    },
+    {
+      "id": "session_local_all",
+      "callSite": "/api/session/local-all",
+      "source": "Services/SessionService.swift syncLocalSessions(_:) BulkSyncRequest from WatchConnectivityManager.swift:649",
+      "method": "POST", "path": "/api/session/local-all",
+      "body": {
+        "sessions": [{
+          "id": "1A2B3C4D-5E6F-4071-8293-A4B5C6D7E8F9", "libraryItemId": "{itemId}", "mediaType": "book",
+          "duration": 9975, "startTime": 700, "currentTime": 760, "timeListening": 60, "playMethod": 3,
+          "mediaPlayer": "ios", "deviceInfo": {"deviceId": "6B1E2F0A-3C4D-4E5F-8A9B-0C1D2E3F4A5B-watch", "clientVersion": "1.0 (1)", "clientName": "AudioBooth Watch"},
+          "startedAt": 1785370400000, "updatedAt": 1785370460000
+        }],
+        "deviceInfo": {"deviceId": "6B1E2F0A-3C4D-4E5F-8A9B-0C1D2E3F4A5B-watch", "clientVersion": "1.0 (1)", "clientName": "AudioBooth Watch"}
+      },
+      "decode": "Data"
+    },
+    {
+      "id": "bookmark_create",
+      "callSite": "/api/me/item/\\(bookID)/bookmark",
+      "source": "Services/BookmarksService.swift create(bookID:title:time:) from BookmarkSyncQueue.swift:51",
+      "method": "POST", "path": "/api/me/item/{itemId}/bookmark",
+      "body": {"title": "Cyclops", "time": 1234},
+      "decode": "User.Bookmark",
+      "capture": {"bookmarkTime": "time", "bookmarkCreatedAt": "createdAt"}
+    },
+    {
+      "id": "bookmark_update",
+      "callSite": "/api/me/item/\\(bookmark.bookID)/bookmark",
+      "source": "Services/BookmarksService.swift update(bookmark:) body User.Bookmark (bookID encodes as libraryItemId)",
+      "method": "PATCH", "path": "/api/me/item/{itemId}/bookmark",
+      "body": {"libraryItemId": "{itemId}", "time": "{bookmarkTime}", "title": "Cyclops (renamed)", "createdAt": "{bookmarkCreatedAt}"},
+      "decode": "User.Bookmark"
+    },
+    {
+      "id": "authorize_after_writes",
+      "callSite": "/api/authorize",
+      "source": "Services/AuthenticationService.swift:336 again, after progress and bookmark writes",
+      "method": "POST", "path": "/api/authorize",
+      "decode": "Authorize",
+      "nonEmpty": ["user.mediaProgress", "user.bookmarks"]
+    },
+    {
+      "id": "listening_sessions",
+      "callSite": "/api/me/listening-sessions",
+      "source": "Services/AuthenticationService.swift fetchListeningHistory from Screens/StatsPage/StatsPageViewModel.swift:50 (page 0, itemsPerPage 20)",
+      "method": "GET", "path": "/api/me/listening-sessions", "query": {"page": "0", "itemsPerPage": "20"},
+      "decode": "ListeningHistoryResponse",
+      "vacuous": "sessions are not persisted server-side (stats.go), so the page is always empty"
+    },
+    {
+      "id": "item_listening_sessions",
+      "callSite": "/api/me/item/listening-sessions/\\(itemID)",
+      "source": "Services/SessionService.swift getListeningSessions(itemID:) from BookDetailsViewModel.swift:232 (no limit, no page)",
+      "method": "GET", "path": "/api/me/item/listening-sessions/{itemId}",
+      "decode": "ItemListeningSessionsResponse",
+      "vacuous": "sessions are not persisted server-side (stats.go), so the page is always empty"
+    },
+    {
+      "id": "listening_stats",
+      "callSite": "/api/me/listening-stats",
+      "source": "Services/AuthenticationService.swift fetchListeningStats",
+      "method": "GET", "path": "/api/me/listening-stats",
+      "decode": "ListeningStats"
+    },
+    {
+      "id": "year_stats",
+      "callSite": "/api/me/stats/year/\\(year)",
+      "source": "Services/AuthenticationService.swift fetchYearStats(year:) from Screens/StatsPage/YearInReviewCardModel.swift:41",
+      "method": "GET", "path": "/api/me/stats/year/2026",
+      "decode": "YearStats"
+    },
+    {
+      "id": "collection_create",
+      "callSite": "/api/collections",
+      "source": "Services/CollectionsService.swift create(name:items:) (description nil is omitted)",
+      "method": "POST", "path": "/api/collections",
+      "body": {"books": ["{itemId}"], "libraryId": "{libraryId}", "name": "Epics"},
+      "decode": "Collection", "nonEmpty": ["books"],
+      "capture": {"collectionId": "id"}
+    },
+    {
+      "id": "collection_batch_add",
+      "callSite": "/api/collections/\\(collectionID)/batch/add",
+      "source": "Services/CollectionsService.swift addItems(collectionID:items:)",
+      "method": "POST", "path": "/api/collections/{collectionId}/batch/add",
+      "body": {"books": ["{itemId2}"]},
+      "decode": "Collection", "nonEmpty": ["books"]
+    },
+    {
+      "id": "collections_page",
+      "callSite": "/api/libraries/\\(library.id)/collections",
+      "source": "Services/CollectionsService.swift fetch(limit:page:) from Screens/Collections/Collection/CollectionsPageModel.swift:121 (itemsPerPage 20)",
+      "method": "GET", "path": "/api/libraries/{libraryId}/collections", "query": {"limit": "20", "page": "0"},
+      "decode": "Page<Collection>", "nonEmpty": ["results", "results.0.books"]
+    },
+    {
+      "id": "collection_get",
+      "callSite": "/api/collections/\\(id)",
+      "source": "Services/CollectionsService.swift fetch(id:)",
+      "method": "GET", "path": "/api/collections/{collectionId}",
+      "decode": "Collection", "nonEmpty": ["books"]
+    },
+    {
+      "id": "collection_update",
+      "callSite": "/api/collections/\\(collectionID)",
+      "source": "Services/CollectionsService.swift update(collectionID:name:description:items:) from CollectionDetailPageModel.swift:89",
+      "method": "PATCH", "path": "/api/collections/{collectionId}",
+      "body": {"name": "Greek Epics", "description": "Homer, twice"},
+      "decode": "Collection", "nonEmpty": ["books"]
+    },
+    {
+      "id": "collection_batch_remove",
+      "callSite": "/api/collections/\\(collectionID)/batch/remove",
+      "source": "Services/CollectionsService.swift removeItems(collectionID:items:)",
+      "method": "POST", "path": "/api/collections/{collectionId}/batch/remove",
+      "body": {"books": ["{itemId2}"]},
+      "decode": "Collection", "nonEmpty": ["books"]
+    },
+    {
+      "id": "collection_remove_book",
+      "callSite": "/api/collections/\\(collectionID)/book/\\(libraryItemID)",
+      "source": "Services/CollectionsService.swift removeItem(collectionID:libraryItemID:)",
+      "method": "DELETE", "path": "/api/collections/{collectionId}/book/{itemId}",
+      "decode": "Collection"
+    },
+    {
+      "id": "collection_delete",
+      "callSite": "/api/collections/\\(collectionID)",
+      "source": "Services/CollectionsService.swift delete(collectionID:)",
+      "method": "DELETE", "path": "/api/collections/{collectionId}",
+      "decode": "Data"
+    },
+    {
+      "id": "playlist_create",
+      "callSite": "/api/playlists",
+      "source": "Services/PlaylistsService.swift create(name:items:episodeID: nil) (episodeId nil is omitted)",
+      "method": "POST", "path": "/api/playlists",
+      "body": {"items": [{"libraryItemId": "{itemId}"}], "libraryId": "{libraryId}", "name": "Commute"},
+      "decode": "Playlist", "nonEmpty": ["items"],
+      "capture": {"playlistId": "id"}
+    },
+    {
+      "id": "playlist_batch_add",
+      "callSite": "/api/playlists/\\(playlistID)/batch/add",
+      "source": "Services/PlaylistsService.swift addItems(playlistID:items:episodeID: nil)",
+      "method": "POST", "path": "/api/playlists/{playlistId}/batch/add",
+      "body": {"items": [{"libraryItemId": "{itemId2}"}]},
+      "decode": "Playlist", "nonEmpty": ["items"]
+    },
+    {
+      "id": "playlists_page",
+      "callSite": "/api/libraries/\\(library.id)/playlists",
+      "source": "Services/PlaylistsService.swift fetch(limit:page:) from CollectionsPageModel.swift:102 (itemsPerPage 20)",
+      "method": "GET", "path": "/api/libraries/{libraryId}/playlists", "query": {"limit": "20", "page": "0"},
+      "decode": "Page<Playlist>", "nonEmpty": ["results", "results.0.items"]
+    },
+    {
+      "id": "playlist_get",
+      "callSite": "/api/playlists/\\(id)",
+      "source": "Services/PlaylistsService.swift fetch(id:)",
+      "method": "GET", "path": "/api/playlists/{playlistId}",
+      "decode": "Playlist", "nonEmpty": ["items"]
+    },
+    {
+      "id": "playlist_update",
+      "callSite": "/api/playlists/\\(playlistID)",
+      "source": "Services/PlaylistsService.swift update(playlistID:name:description:items:) from CollectionDetailPageModel.swift:81",
+      "method": "PATCH", "path": "/api/playlists/{playlistId}",
+      "body": {"name": "Long Commute", "description": "Both Odysseys"},
+      "decode": "Playlist", "nonEmpty": ["items"]
+    },
+    {
+      "id": "playlist_batch_remove",
+      "callSite": "/api/playlists/\\(playlistID)/batch/remove",
+      "source": "Services/PlaylistsService.swift removeItems(playlistID:items:)",
+      "method": "POST", "path": "/api/playlists/{playlistId}/batch/remove",
+      "body": {"items": [{"libraryItemId": "{itemId2}"}]},
+      "decode": "Playlist", "nonEmpty": ["items"]
+    },
+    {
+      "id": "playlist_remove_item",
+      "callSite": "/api/playlists/\\(playlistID)/item/\\(libraryItemID)",
+      "source": "Services/PlaylistsService.swift removeItem(playlistID:libraryItemID:)",
+      "method": "DELETE", "path": "/api/playlists/{playlistId}/item/{itemId}",
+      "decode": "Playlist"
+    },
+    {
+      "id": "playlist_delete",
+      "callSite": "/api/playlists/\\(playlistID)",
+      "source": "Services/PlaylistsService.swift delete(playlistID:)",
+      "method": "DELETE", "path": "/api/playlists/{playlistId}",
+      "decode": "Data"
+    },
+    {
+      "id": "remove_from_continue_listening",
+      "callSite": "/api/me/progress/\\(progressID)/remove-from-continue-listening",
+      "source": "Services/ProgressService.swift removeFromContinueListening(_:) -> struct Response: Codable {}",
+      "method": "GET", "path": "/api/me/progress/{progressId}/remove-from-continue-listening",
+      "decode": "EmptyResponse"
+    },
+    {
+      "id": "bookmark_delete",
+      "callSite": "/api/me/item/\\(bookID)/bookmark/\\(time)",
+      "source": "Services/BookmarksService.swift delete(bookID:time:) from BookmarkSyncQueue.swift:139",
+      "method": "DELETE", "path": "/api/me/item/{itemId}/bookmark/{bookmarkTime}",
+      "decode": "Data"
+    },
+    {
+      "id": "progress_delete",
+      "callSite": "/api/me/progress/\\(progressID)",
+      "source": "Services/ProgressService.swift reset(progressID:) from BookActionable.swift:41 (progressID from progress_get)",
+      "method": "DELETE", "path": "/api/me/progress/{progressId}",
+      "decode": "Data"
+    },
+    {
+      "id": "send_ebook",
+      "callSite": "/api/emails/send-ebook-to-device",
+      "source": "Services/MiscService.swift sendEbookToDevice(itemID:deviceName:)",
+      "method": "POST", "path": "/api/emails/send-ebook-to-device",
+      "body": {"libraryItemId": "{itemId}", "deviceName": "Kindle"},
+      "decode": "Data",
+      "expectStatus": 400,
+      "vacuous": "no e-reader devices or outbound email exist on this server (unsupported.go); the app surfaces the 400 message"
+    },
+    {
+      "id": "podcast_items",
+      "callSite": "/api/libraries/\\(library.id)/items",
+      "source": "Services/PodcastsService.swift fetch -> Page<Podcast>",
+      "na": "podcast libraries only; this server exposes a single book library (mediaType book)"
+    },
+    {
+      "id": "podcast_detail",
+      "callSite": "/api/items/\\(id)",
+      "source": "Services/PodcastsService.swift fetch(id:) -> Podcast",
+      "na": "podcast libraries only"
+    },
+    {
+      "id": "podcast_feed",
+      "callSite": "/api/podcasts/feed",
+      "source": "Services/PodcastsService.swift fetchFeed(rssURL:)",
+      "na": "podcast libraries only"
+    },
+    {
+      "id": "podcast_download_episodes",
+      "callSite": "/api/podcasts/\\(podcastID)/download-episodes",
+      "source": "Services/PodcastsService.swift downloadEpisodes(podcastID:episodes:)",
+      "na": "podcast libraries only"
+    }
+  ]
+}
