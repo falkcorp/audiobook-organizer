@@ -1,7 +1,7 @@
 // file: internal/database/memdb_search.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7b1d9c34-2e58-4a07-9f61-3c8ad5e0b742
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package database
 
@@ -14,10 +14,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
-
-// searchIDsPreallocMax bounds the result slice's initial capacity. It is a
-// hint, not a cap on results: a no-limit query appends past it.
-const searchIDsPreallocMax = 64
 
 // getBookRowForSearch reads one book: row and decodes it, with no book_sig:
 // hydration and no memdb involvement.
@@ -59,6 +55,9 @@ func (p *PebbleStore) getBookRowForSearch(id string) (*Book, error) {
 // lowerQuery is strings.ToLower(query). Title and narrator compare against a
 // bare strings.ToLower. That asymmetry is pre-existing and kept on purpose —
 // see the quirk list on SearchBookIDs.
+//
+// SubstringSearchRank (search_rank.go) is the ranking form of this predicate;
+// it matches exactly when this does, and is what the store scans call.
 func SubstringSearchMatches(title string, narrator *string, authorID *int, authorNames map[int]string, lowerQuery string) bool {
 	if strings.Contains(strings.ToLower(title), lowerQuery) {
 		return true
@@ -96,8 +95,10 @@ func SubstringSearchMatches(title string, narrator *string, authorID *int, autho
 //     while Title and Narrator compare against a bare strings.ToLower. The
 //     query itself is only lowercased. That asymmetry is pre-existing; it is
 //     reproduced rather than fixed so this change stays a pure speed-up.
-//   - `count` increments only inside the match branch, so `offset` skips the
-//     first N *matches*, not the first N books.
+//   - `offset` skips the first N *matches* in ranked order (see
+//     SubstringSearchRank / SearchRank), not the first N books. Results are
+//     ranked by relevance tier, then title length, then ID — not ULID order —
+//     and the order is total, so offset paging is stable.
 //   - Soft-deleted books are NOT excluded. The disk scan does not filter them,
 //     so neither does this. (Worth revisiting — separately.)
 func (m *MemStore) SearchBookIDs(query string, limit, offset int) ([]string, error) {
@@ -137,9 +138,10 @@ func (m *MemStore) searchBookIDs(query string, limit, offset int, keep func(*Boo
 		authorNames[a.ID] = util.NormalizeAuthor(a.Name)
 	}
 
-	// memIdxID orders by the book's ULID, the same lexicographic order the
-	// Pebble book: keyspace iterates in. That equivalence is what makes the
-	// limit early-exit below select the same rows as the disk scan.
+	// Iteration order no longer decides which rows survive the limit: results
+	// are ordered by SearchRank (tier, title length, ID), a total order the
+	// Pebble disk scan applies identically, so both paths select the same rows
+	// in the same order regardless of how their tables iterate.
 	iter, err := txn.Get(memTableBooks, memIdxID)
 	if err != nil {
 		return nil, fmt.Errorf("memdb search: books: %w", err)
@@ -147,24 +149,18 @@ func (m *MemStore) searchBookIDs(query string, limit, offset int, keep func(*Boo
 
 	lowerQuery := strings.ToLower(query)
 
-	// A CONSTANT capacity — deliberately not derived from `limit`.
+	// Every admitted match is ranked (SubstringSearchRank) and the ranker
+	// applies offset and limit AFTER ranking, so the cut keeps the most
+	// relevant rows instead of the oldest. There is no early exit any more: a
+	// ULID-order early exit is exactly what dropped an exact-title match behind
+	// `limit` older substring hits. The ranker keeps at most offset+limit items
+	// in a bounded heap, so a broad query does not hold every match.
 	//
-	// The first cut sized this from limit, which is wrong twice over. `limit`
-	// reaches SearchBooks from three call sites and is not validated at all of
-	// them, and a negative value makes make([]string, 0, limit) panic with
-	// "makeslice: cap out of range" — the Pebble scan never preallocated, so the
-	// fast path introduced that. Clamping it fixed the panic but kept the
-	// allocation size flowing from request input, which CodeQL still flags
-	// (go/uncontrolled-allocation-size) and which is a fair reading: the clamp is
-	// one edit away from being wrong again.
-	//
-	// There is nothing to trade off. The win in this function is not allocating
-	// the result slice once instead of a few times — it is not unmarshalling
-	// ~121K book rows off disk. A fixed hint gets the same speed with no
-	// user-controlled size anywhere; append grows past it when a no-limit query
-	// matches more.
-	ids := make([]string, 0, searchIDsPreallocMax)
-	var count int
+	// Nothing here is sized from `limit`: it is request input and not
+	// validated at every call site (a negative value once panicked a
+	// make([]string, 0, limit) here, and CodeQL flags
+	// go/uncontrolled-allocation-size). The ranker grows by append only.
+	ranker := newSearchRanker[string](limit, offset)
 
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b, ok := obj.(*Book)
@@ -175,17 +171,10 @@ func (m *MemStore) searchBookIDs(query string, limit, offset int, keep func(*Boo
 		if keep != nil && !keep(b) {
 			continue
 		}
-		if SubstringSearchMatches(b.Title, b.Narrator, b.AuthorID, authorNames, lowerQuery) {
-			// limit == 0 means "no limit" (return all matches).
-			if count >= offset && (limit == 0 || len(ids) < limit) {
-				ids = append(ids, b.ID)
-			}
-			count++
-			if limit > 0 && len(ids) >= limit {
-				break
-			}
+		if rank, ok := SubstringSearchRank(b.ID, b.Title, b.Narrator, b.AuthorID, authorNames, lowerQuery); ok {
+			ranker.Add(rank, b.ID)
 		}
 	}
 
-	return ids, nil
+	return ranker.Result(offset), nil
 }

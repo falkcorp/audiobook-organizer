@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.179.1
+// version: 1.179.2
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-23
+// last-edited: 2026-09-25
 
 package database
 
@@ -3519,11 +3519,13 @@ func deleteKeysWithPrefix(db *pebble.DB, batch *pebble.Batch, prefix []byte, onK
 }
 
 // SearchBooks returns books whose title, author name or narrator contains the
-// query, in book-ID order.
+// query, ranked by relevance (SubstringSearchRank: exact title, title prefix,
+// whole word in title, title substring, author, narrator; ties by shorter title
+// then ID). offset and limit apply AFTER ranking.
 //
 // The Pebble path below is a full-library scan: it iterates every author row to
-// build a name map, then every book row, json.Unmarshal-ing each one, and it can
-// only stop early once it has `limit` matches. A query that matches nothing
+// build a name map, then every book row, json.Unmarshal-ing each one, and since
+// results are ranked it never stops early. A query that matches nothing
 // therefore costs the whole library. Measured on production 2026-09-08 at ~121K
 // books: 5.35s for a zero-match query, against 0.6s for a common word that
 // filled the limit early — and because the cost is Pebble block reads, it lands
@@ -3543,7 +3545,7 @@ func (p *PebbleStore) SearchBooks(query string, limit, offset int) ([]Book, erro
 // BookSummaryFilter visibility predicate — see bookMatchesSummaryFilter),
 // applied inside the scan on both the memdb and the Pebble path so only
 // admitted matches count toward offset and limit. f's sort fields are ignored:
-// results are in book-ID order like SearchBooks.
+// results are in relevance order like SearchBooks.
 //
 // SearchBooks itself stays unfiltered on purpose: the iTunes handler overfetches
 // through it and relies on seeing every row.
@@ -3609,17 +3611,16 @@ func (p *PebbleStore) searchBooks(query string, limit, offset int, f *BookSummar
 	}
 
 	lowerQuery := strings.ToLower(query)
-	var filtered []Book
-	var count int
-
-	// Scan book:* index and filter during iteration
+	// Ranked exactly as the memdb scan ranks (SubstringSearchRank + the shared
+	// searchRanker), so both paths return the same rows in the same order.
+	// There is no early exit: stopping at `limit` matches in key order is what
+	// dropped exact-title hits behind older substring matches. The ranker holds
+	// at most offset+limit decoded Books.
+	ranker := newSearchRanker[Book](limit, offset)
 
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
-
-		// Check title match first (cheapest operation)
-		value := rowValue
 		var book Book
-		if err := json.Unmarshal(value, &book); err != nil {
+		if err := json.Unmarshal(rowValue, &book); err != nil {
 			return nil
 		}
 
@@ -3628,23 +3629,15 @@ func (p *PebbleStore) searchBooks(query string, limit, offset int, f *BookSummar
 		}
 		// Shared with the memdb scan and the scoped service fallback; see
 		// SubstringSearchMatches in memdb_search.go.
-		if SubstringSearchMatches(book.Title, book.Narrator, book.AuthorID, authorNames, lowerQuery) {
-			// Apply pagination: only collect results in the requested range.
-			// limit == 0 means "no limit" (return all matches).
-			if count >= offset && (limit == 0 || len(filtered) < limit) {
-				filtered = append(filtered, book)
-			}
-			count++
-			if limit > 0 && len(filtered) >= limit {
-				return errStopScan
-			}
+		if rank, ok := SubstringSearchRank(book.ID, book.Title, book.Narrator, book.AuthorID, authorNames, lowerQuery); ok {
+			ranker.Add(rank, book)
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 
-	return filtered, nil
+	return ranker.Result(offset), nil
 }
 
 // CountPrimaryBooks returns the number of primary, non-deleted books.

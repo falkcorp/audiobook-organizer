@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package abs_test
 
@@ -831,28 +831,30 @@ func (f *fakeLibrary) mergeLoser(t *testing.T, loserBookID, winnerBookID string)
 }
 
 // SearchBooksFiltered mirrors the store: the visibility filter is applied
-// BEFORE a match counts toward limit.
+// BEFORE a match counts toward limit, and matches are put in the store's
+// relevance order (database.RankSubstringMatches) before offset and limit cut.
+// The fake matches on title only (no author map), as before.
 func (f *fakeLibrary) SearchBooksFiltered(query string, limit, offset int, fl database.BookSummaryFilter) ([]database.Book, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.searchScans++
-	q := strings.ToLower(query)
-	out := []database.Book{}
-	count := 0
+	admitted := []database.Book{}
 	for _, id := range f.order {
 		b := f.books[id]
-		if !f.matchesFilter(b, database.BookSummary{}, fl) || !strings.Contains(strings.ToLower(b.Title), q) {
-			continue
-		}
-		if count >= offset && (limit <= 0 || len(out) < limit) {
-			out = append(out, *b)
-		}
-		count++
-		if limit > 0 && len(out) >= limit {
-			break
+		if f.matchesFilter(b, database.BookSummary{}, fl) {
+			admitted = append(admitted, *b)
 		}
 	}
-	return out, nil
+	ranked := database.RankSubstringMatches(admitted, nil, strings.ToLower(query))
+	offset = max(offset, 0)
+	if offset > len(ranked) {
+		offset = len(ranked)
+	}
+	ranked = ranked[offset:]
+	if limit > 0 && len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	return ranked, nil
 }
 
 // MintOrGetSyncFileIDs mirrors the real store's batch form. It delegates to the
