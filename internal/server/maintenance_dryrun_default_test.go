@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dryrun_default_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 6c1d84af-97b2-4e30-8f55-2b70e9c14d63
-// last-edited: 2026-09-10
+// last-edited: 2026-09-25
 
 package server
 
@@ -224,7 +224,11 @@ func TestAdvertisedDryRunDefault_PinnedRealJobs(t *testing.T) {
 		// on production are genuinely distinct real series, and series names
 		// are not recoverable once deleted.
 		{"cleanup-series", true},
-		{"backfill-file-hashes", false},
+		// backfill-file-hashes held this slot until 2026-09-25, when it and 7
+		// other writing jobs were flipped to preview by default. relink-report
+		// still advertises false because its Run ignores dryRun (read-only).
+		{"backfill-file-hashes", true},
+		{"relink-report", false},
 	} {
 		job, err := maintenance.Get(tc.jobID)
 		if err != nil {
