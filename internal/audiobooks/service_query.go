@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package audiobooks
 
@@ -796,8 +796,9 @@ func (svc *AudiobookService) searchWithinIDs(query string, set map[string]struct
 
 // substringSearchWithin applies the store.SearchBooks predicate
 // (database.SubstringSearchMatches — the same single copy the Pebble and memdb
-// scans call) to the given books only, returning every match in book-ID order,
-// which is the order SearchBooks' scans iterate in.
+// scans call) to the given books only, returning every match in the same
+// relevance order SearchBooks returns (database.RankSubstringMatches — the
+// ranking the store scans share: tier, then shorter title, then ID).
 //
 // Matching the scoped books directly, instead of calling SearchBooks and
 // filtering its output, is what removes the window: SearchBooks walks the
@@ -833,15 +834,7 @@ func (svc *AudiobookService) substringSearchWithin(query string, ids []string) (
 			}
 		}
 	}
-	lowerQuery := strings.ToLower(query)
-	matched := make([]database.Book, 0, len(candidates))
-	for i := range candidates {
-		b := &candidates[i]
-		if database.SubstringSearchMatches(b.Title, b.Narrator, b.AuthorID, authorNames, lowerQuery) {
-			matched = append(matched, *b)
-		}
-	}
-	sort.Slice(matched, func(i, j int) bool { return matched[i].ID < matched[j].ID })
+	matched := database.RankSubstringMatches(candidates, authorNames, strings.ToLower(query))
 	return matched, len(matched), nil
 }
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package abs
 
@@ -2284,7 +2284,15 @@ const searchResultLimit = 12
 
 // searchResultLimitMax bounds what a caller may ask for, so `?limit=100000`
 // cannot ask the server to expand the whole library.
-const searchResultLimitMax = 25
+//
+// Raised 25 -> 50 on 2026-09-25 (owner-approved, with relevance ranking in
+// SearchBooks). Clients DO send limit: prod logs over 14 days show limit=25
+// (464 requests), limit=50 (250), limit=200 (24) and no limit (83), so the
+// limit=50 and limit=200 callers were being clamped to 25. The cost above is
+// real and was accepted: each hit still carries the expanded item, so a
+// 50-hit page of large multi-file books can be roughly twice the measured
+// 25-hit 5.1 MB.
+const searchResultLimitMax = 50
 
 // parseSearchLimit reads the ABS `limit` parameter. Absent, unparseable or <= 0
 // means the default; anything above the ceiling is clamped rather than rejected,

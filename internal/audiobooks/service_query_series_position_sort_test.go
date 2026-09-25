@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_series_position_sort_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b1e9c3a-7d42-4f8e-a0c6-3e9d18b27f45
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 // Regression tests for the series_position sort key (TODO: "No sort key for
 // position within a series").
@@ -126,8 +126,9 @@ func TestSeriesPositionPagesAreStableAcrossCalls(t *testing.T) {
 
 // TestSeriesIDSearchWithoutSortKeepsMatchOrder pins a deliberate limit on the
 // default: a series_id request that also carries a search and no sort_by
-// keeps the search's own order (book-ID order on the no-index path, relevance
-// with an index) rather than being switched to series_position. The web UI
+// keeps the search's own order (the store's substring relevance order on the
+// no-index path — database.RankSubstringMatches, the same ranking SearchBooks
+// uses — and Bleve relevance with an index) rather than being switched to series_position. The web UI
 // always sends an explicit sort, so this governs API callers only.
 func TestSeriesIDSearchWithoutSortKeepsMatchOrder(t *testing.T) {
 	seriesID := 11
@@ -147,7 +148,7 @@ func TestSeriesIDSearchWithoutSortKeepsMatchOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 7, total)
 	require.Equal(t, []string{
-		"b-interlude", "b-none-beta", "b-ten", "b-ten-dup", "b-three", "b-two", "b-two-a",
+		"b-ten", "b-ten-dup", "b-two", "b-three", "b-none-beta", "b-interlude", "b-two-a",
 	}, idsInOrder(got))
 }
 
