@@ -267,6 +267,15 @@ func (c *Cache) patch(ctx context.Context, ids, changed []string, ev Evaluator) 
 		drop[id] = struct{}{}
 	}
 	out := make([]string, 0, len(ids)+len(matching))
+	// Only changed IDs may be inserted: an evaluator that answered with a book
+	// it was not asked about would otherwise duplicate it in the list.
+	kept := matching[:0:0]
+	for _, m := range matching {
+		if _, asked := drop[m]; asked {
+			kept = append(kept, m)
+		}
+	}
+	matching = kept
 	for _, id := range ids {
 		if _, gone := drop[id]; !gone {
 			out = append(out, id)

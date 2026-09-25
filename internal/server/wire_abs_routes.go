@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package server
 
@@ -523,8 +523,10 @@ func (s *Server) wireABSRoutes() {
 		// see the fail-closed block above and internal/server/handlers/abs/userdata.go.
 		UserData: userData,
 
-		Library:  libraryStore,
-		Identity: absIdentityAdapter{SyncIdentityStore: syncIdentity, SyncFileStore: syncFiles},
+		Library: libraryStore,
+		// Book hits come from the shared search result cache (nil = direct).
+		SearchResults: s.searchResults,
+		Identity:      absIdentityAdapter{SyncIdentityStore: syncIdentity, SyncFileStore: syncFiles},
 		// Chapters and Progress are OPTIONAL by design: without chapters the mapper
 		// synthesizes one per track (what real ABS does for a multi-file book anyway),
 		// and without progress a session still plays, it just starts at 0.

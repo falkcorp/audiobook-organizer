@@ -3559,6 +3559,33 @@ func (p *PebbleStore) SearchBooksFiltered(query string, limit, offset int, f Boo
 	return p.searchBooks(query, limit, offset, &fc)
 }
 
+// SearchBookIDsFiltered is SearchBooksFiltered returning only the matching
+// IDs, in the same order, without reading any book row: memdb answers it
+// directly when warm, and the disk scan is the fallback. limit 0 means every
+// match. The shared search result cache builds the ABS ranked lists with it, so
+// a broad query does not re-read tens of thousands of rows to keep their IDs.
+func (p *PebbleStore) SearchBookIDsFiltered(query string, limit, offset int, f BookSummaryFilter) ([]string, error) {
+	if f.RestrictToIDs != nil && len(f.RestrictToIDs) == 0 {
+		return []string{}, nil
+	}
+	if p.UseMemDB && p.mem() != nil {
+		ids, err := p.mem().SearchBookIDsFiltered(query, limit, offset, f)
+		if err == nil {
+			return ids, nil
+		}
+		slog.Warn("memdb search failed, falling back to pebble scan", "error", err)
+	}
+	books, err := p.SearchBooksFiltered(query, limit, offset, f)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(books))
+	for i := range books {
+		ids[i] = books[i].ID
+	}
+	return ids, nil
+}
+
 // searchBooks is the shared body; f == nil means unfiltered.
 func (p *PebbleStore) searchBooks(query string, limit, offset int, f *BookSummaryFilter) ([]Book, error) {
 	if p.UseMemDB && p.mem() != nil {
