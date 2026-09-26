@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.3.4
+// version: 1.4.0
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
 // last-edited: 2026-09-25
 
@@ -8,8 +8,8 @@ package abs
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"runtime"
+	"slices"
 	"sort"
 	"time"
 
@@ -77,9 +77,20 @@ type BookmarkListStore interface {
 type SyncIDStore interface {
 	GetSyncIDForBook(bookID string) (string, bool, error)
 	MintOrGetSyncID(bookID string) (string, error)
+	// ResolveSyncItem follows merge redirects to the live item. The client
+	// lists use it to tell an alias id from a canonical one.
+	ResolveSyncItem(syncID string) (*database.SyncItem, error)
 	// ListSyncAliases names the merge losers' syncIDs that still resolve to a
-	// live syncID. ClientMediaProgress emits one extra row per alias.
+	// live syncID. Used once per user, to seed the alias-use record
+	// (seedAliasUses).
 	ListSyncAliases(syncID string) ([]string, error)
+}
+
+// AliasUseStore is the per-user record of alias item ids the user's client has
+// addressed (database.SyncAliasUseStore; written by item_ref.go noteAliasUse).
+type AliasUseStore interface {
+	ListSyncAliasUses(userID string) (aliases []string, seeded bool, err error)
+	SeedSyncAliasUses(userID string, aliases []string) error
 }
 
 // UserDataLibraryStore is the two-method duration slice. LibraryStore already
@@ -98,6 +109,8 @@ type UserDataOptions struct {
 	Bookmarks BookmarkListStore
 	Identity  SyncIDStore
 	Library   UserDataLibraryStore
+	// AliasUses decides which alias ids get a client row (ClientMediaProgress).
+	AliasUses AliasUseStore
 
 	// Concurrency bounds the per-book follow-up reads. Zero means
 	// runtime.NumCPU(). Never unbounded: the collection is user-scoped but a
@@ -125,6 +138,7 @@ type userDataProvider struct {
 	bookmarks   BookmarkListStore
 	identity    SyncIDStore
 	library     UserDataLibraryStore
+	aliasUses   AliasUseStore
 	concurrency int
 }
 
@@ -150,6 +164,9 @@ func NewUserData(o UserDataOptions) (UserDataProvider, error) {
 	if o.Library == nil {
 		return nil, errors.New("abs: userdata: a library store is required (isFinished with a zero duration zeroes the client's position)")
 	}
+	if o.AliasUses == nil {
+		return nil, errors.New("abs: userdata: an alias-use store is required (without it a client that opened a merged book by its old id loses that book's progress row)")
+	}
 	limit := o.Concurrency
 	if limit <= 0 {
 		limit = runtime.NumCPU()
@@ -159,6 +176,7 @@ func NewUserData(o UserDataOptions) (UserDataProvider, error) {
 		bookmarks:   o.Bookmarks,
 		identity:    o.Identity,
 		library:     o.Library,
+		aliasUses:   o.AliasUses,
 		concurrency: limit,
 	}, nil
 }
@@ -195,7 +213,8 @@ func (p *userDataProvider) MediaProgress(userID string) ([]any, error) {
 			// A row with no book cannot be named with a libraryItemId, so no client
 			// can have it either — skipping it drops nothing the client could
 			// delete. Logged because it means a corrupt write happened somewhere.
-			slog.Warn("abs: userdata: skipping a stored position with no book id", "user_id", userID, "segment_id", pos.SegmentID)
+			progressLog.Warn("abs: userdata: skipping a stored position with no book id: user_id=%s segment_id=%s",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(pos.SegmentID))
 			continue
 		}
 		cur, seen := latest[pos.BookID]
@@ -298,46 +317,64 @@ func withLibraryItemID(row mediaProgressDTO, userID, libraryItemID string) media
 	return row
 }
 
+// aliasSeedSince bounds the one-time seed of a user's alias-use record
+// (seedAliasUses). #3558 (merged 2026-09-25) sent an alias row for EVERY
+// alias of every item with progress, and AudioBooth stored a local row for
+// each. Tracking starts with this change, so without a seed every alias
+// becomes untracked at once and the client deletes those rows, including the
+// ones for books the user marked finished through an alias that same day:
+// the owner's bug, back. The seed keeps the aliases of items the user's
+// progress touched since #3558 shipped; an item untouched since then cannot
+// be one the user was acting on through an alias.
+var aliasSeedSince = time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
+
 // ClientMediaProgress is the mediaProgress array SENT TO CLIENTS (GET /api/me,
 // GET /api/me/progress, login, refresh, authorize): MediaProgress plus one row
-// per merge-loser alias of each live item that has progress.
+// per alias id the user's client has used, for each live item with progress.
 //
-// 🔴 Why the alias rows exist. AudioBooth's MediaProgress.syncFromAPI upserts
-// its local rows by libraryItemId and DELETES every local row whose id is absent
+// 🔴 Why alias rows exist. AudioBooth's MediaProgress.syncFromAPI upserts its
+// local rows by libraryItemId and DELETES every local row whose id is absent
 // from this list (§1.8.1). A client that opened a book through an alias id (a
-// cached page, a download, a playlist entry from before a dedup merge) and marked
-// it finished holds a local row under the ALIAS. With only the canonical row
-// here, the next home refresh deletes that row and the alias page reads
-// unfinished again — the owner's "marked finished, left, came back, not marked"
-// (2026-09-25). An alias row with the canonical record's values keeps the
-// client's row and keeps it current.
+// merge loser's id that redirects to the survivor: a cached page, a download,
+// a playlist entry from before a dedup merge) and marked it finished holds a
+// local row under the ALIAS. With only the canonical row here, the next home
+// refresh deletes that row and the alias page reads unfinished again: the
+// owner's "marked finished, left, came back, not marked" (2026-09-25).
+//
+// 🔴 Why only USED aliases (ABS-ALIAS-HELPER). Each row counts in the client's
+// Stats: a finished merged book with a row per id is "finished" once per id.
+// So an alias gets a row only when the user's client has addressed it
+// (item_ref.go records every use; seedAliasUses covers the switch-over). An
+// alias the client never addressed is one it holds no page for.
+//
+// A stored position under a merge LOSER's book (progress the merge did not
+// move) renders under that loser's syncID, which now redirects. When the live
+// item has a row, that stale row is dropped: GET/PATCH /api/me/progress/<that
+// id> resolve to the live item, so the list must not say something else, and
+// it would be a second "finished" in the client's stats. If the client uses
+// that id, the alias row carries the live item's values in its place. When
+// the live item has no row, the stale row is the only record and is kept.
 //
 // Storage is untouched: every alias row is a copy of the canonical row, and a
 // write through either id lands on the canonical book. Browse filters and sorts
-// call MediaProgress, not this, so they never see duplicates.
+// call MediaProgress, not this, so they never see alias rows.
 //
-// A stored position under a merge LOSER's book (progress the merge did not move)
-// renders under that loser's syncID. When the same id is also an alias of a live
-// item with progress, the alias row replaces it: GET/PATCH /api/me/progress/<that
-// id> resolve to the live item, so the list must say what those endpoints serve.
-//
-// Alias rows FAIL OPEN, canonical rows stay fail-closed. The complete-or-5xx
-// rule protects the CANONICAL rows: a short canonical list is what makes the
-// client delete progress, so a MediaProgress error still fails the list. An alias
-// row is an addition; leaving one out is exactly the behaviour before alias rows
-// existed. So an alias lookup error (store read, alias cap, an alias claimed by
-// two live items) is logged at Warn and only that book's alias rows are
-// omitted. Failing here instead would take /api/me, login, refresh and
+// Alias handling FAILS OPEN, canonical rows stay fail-closed. The complete-or-
+// 5xx rule protects the CANONICAL rows: a short canonical list is what makes
+// the client delete progress, so a MediaProgress error still fails the list.
+// An alias row is an addition and a stale-row drop is a cleanup; a lookup
+// error on either is logged at Warn and that row is left as MediaProgress
+// rendered it. Failing here instead would take /api/me, login, refresh and
 // authorize down over a row the client can live without.
 func (p *userDataProvider) ClientMediaProgress(userID string) ([]any, error) {
 	rows, err := p.MediaProgress(userID)
 	if err != nil {
 		return nil, err
 	}
-	// One ListSyncAliases per row (a point-get on the item plus one per alias),
-	// in the same bounded pool shape as MediaProgress's per-book follow-ups.
-	// Workers never return an error: a failed lookup leaves aliases[i] nil.
-	aliases := make([][]string, len(rows))
+	used := p.usedAliases(userID, rows)
+
+	// The live item each row's id resolves to, when that id is an alias.
+	redirects := make([]string, len(rows))
 	g := new(errgroup.Group)
 	g.SetLimit(p.concurrency)
 	for i := range rows {
@@ -346,59 +383,136 @@ func (p *userDataProvider) ClientMediaProgress(userID string) ([]any, error) {
 			continue
 		}
 		g.Go(func() error {
-			ids, err := p.identity.ListSyncAliases(row.LibraryItemID)
+			item, err := p.identity.ResolveSyncItem(row.LibraryItemID)
 			if err != nil {
-				progressLog.Warn("abs: userdata: alias lookup failed; omitting this book's alias rows, canonical row kept: user_id=%s book_id=%s library_item_id=%s: %v",
+				progressLog.Warn("abs: userdata: could not resolve a progress row's item id; row sent as stored: user_id=%s book_id=%s library_item_id=%s: %v",
 					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.bookID),
 					logger.SanitizeLogValue(row.LibraryItemID), err)
 				return nil
 			}
-			aliases[i] = ids
+			if item != nil && item.SyncID != "" && item.SyncID != row.LibraryItemID {
+				redirects[i] = item.SyncID
+			}
 			return nil
 		})
 	}
 	_ = g.Wait() // workers only return nil
 
-	// An alias claimed by two live items is a data error (ListSyncAliases
-	// attributes each alias to one live item). Which item it belongs to is
-	// unknown, so it is emitted for neither and logged.
-	claims := map[string]int{}
-	for _, ids := range aliases {
-		for _, id := range ids {
-			claims[id]++
+	canonical := make(map[string]mediaProgressDTO, len(rows))
+	for i, r := range rows {
+		if dto, ok := r.(mediaProgressDTO); ok && redirects[i] == "" {
+			canonical[dto.LibraryItemID] = dto
 		}
 	}
-	aliasRows := map[string]mediaProgressDTO{}
-	var aliasIDs []string
-	for i, ids := range aliases {
-		for _, id := range ids {
-			if claims[id] > 1 {
-				progressLog.Warn("abs: userdata: alias claimed by %d live items; omitting it: user_id=%s alias=%s library_item_id=%s",
-					claims[id], logger.SanitizeLogValue(userID), logger.SanitizeLogValue(id),
-					logger.SanitizeLogValue(rows[i].(mediaProgressDTO).LibraryItemID))
-				continue
-			}
-			aliasRows[id] = withLibraryItemID(rows[i].(mediaProgressDTO), userID, id)
-			aliasIDs = append(aliasIDs, id)
-		}
-	}
-	if len(aliasIDs) == 0 {
-		return rows, nil
-	}
-	sort.Strings(aliasIDs)
-	out := make([]any, 0, len(rows)+len(aliasIDs))
-	for _, r := range rows {
-		if dto, ok := r.(mediaProgressDTO); ok {
-			if _, shadowed := aliasRows[dto.LibraryItemID]; shadowed {
-				continue
-			}
+
+	out := make([]any, 0, len(rows)+len(used))
+	for i, r := range rows {
+		if _, live := canonical[redirects[i]]; redirects[i] != "" && live {
+			continue // stale loser row shadowed by the live item's row
 		}
 		out = append(out, r)
 	}
-	for _, id := range aliasIDs {
-		out = append(out, aliasRows[id])
+	aliasIDs := make([]string, 0, len(used))
+	for alias := range used {
+		aliasIDs = append(aliasIDs, alias)
+	}
+	sort.Strings(aliasIDs)
+	for _, alias := range aliasIDs {
+		if row, ok := canonical[used[alias]]; ok {
+			out = append(out, withLibraryItemID(row, userID, alias))
+		}
 	}
 	return out, nil
+}
+
+// usedAliases returns the aliases userID's client has addressed, each mapped
+// to the live syncID it resolves to now. An alias whose merge was undone (it
+// resolves to itself) or that no longer resolves is left out.
+//
+// rows is the user's MediaProgress list, used only to seed the record on the
+// user's first list after the switch-over (seedAliasUses); nil skips seeding.
+// Fail-open throughout: an error omits alias rows, never the canonical list.
+func (p *userDataProvider) usedAliases(userID string, rows []any) map[string]string {
+	ids, seeded, err := p.aliasUses.ListSyncAliasUses(userID)
+	if err != nil {
+		progressLog.Warn("abs: userdata: could not read the user's alias-use record; sending no alias rows: user_id=%s: %v",
+			logger.SanitizeLogValue(userID), err)
+		return nil
+	}
+	if !seeded && rows != nil {
+		ids = append(ids, p.seedAliasUses(userID, rows)...)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+
+	resolved := make([]string, len(ids))
+	g := new(errgroup.Group)
+	g.SetLimit(p.concurrency)
+	for i := range ids {
+		g.Go(func() error {
+			item, err := p.identity.ResolveSyncItem(ids[i])
+			if err != nil {
+				progressLog.Warn("abs: userdata: could not resolve a used alias; omitting its row: user_id=%s alias=%s: %v",
+					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(ids[i]), err)
+				return nil
+			}
+			if item != nil && item.CurrentBookID != "" && item.SyncID != "" && item.SyncID != ids[i] {
+				resolved[i] = item.SyncID
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // workers only return nil
+
+	out := make(map[string]string, len(ids))
+	for i, id := range ids {
+		if resolved[i] != "" {
+			out[id] = resolved[i]
+		}
+	}
+	return out
+}
+
+// seedAliasUses runs once per user: it records the aliases of every item whose
+// progress row changed since aliasSeedSince (see there for why), marks the
+// user seeded, and returns the aliases. A lookup failure leaves that item out;
+// a write failure leaves the user unseeded so the next list tries again, and
+// the aliases are still returned so this response carries them.
+func (p *userDataProvider) seedAliasUses(userID string, rows []any) []string {
+	since := aliasSeedSince.UnixMilli()
+	found := make([][]string, len(rows))
+	g := new(errgroup.Group)
+	g.SetLimit(p.concurrency)
+	for i := range rows {
+		row, ok := rows[i].(mediaProgressDTO)
+		if !ok || row.LibraryItemID == "" || row.LastUpdate < since {
+			continue
+		}
+		g.Go(func() error {
+			ids, err := p.identity.ListSyncAliases(row.LibraryItemID)
+			if err != nil {
+				progressLog.Warn("abs: userdata: alias seed: could not list aliases; leaving this item out: user_id=%s library_item_id=%s: %v",
+					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.LibraryItemID), err)
+				return nil
+			}
+			found[i] = ids
+			return nil
+		})
+	}
+	_ = g.Wait() // workers only return nil
+
+	var seed []string
+	for _, ids := range found {
+		seed = append(seed, ids...)
+	}
+	if err := p.aliasUses.SeedSyncAliasUses(userID, seed); err != nil {
+		progressLog.Warn("abs: userdata: alias seed: could not record the seed; will retry on the next list: user_id=%s aliases=%d: %v",
+			logger.SanitizeLogValue(userID), len(seed), err)
+	}
+	return seed
 }
 
 // betterPosition decides which of two position rows for the SAME book wins.
@@ -501,9 +615,9 @@ func (p *userDataProvider) progressRow(userID string, pos database.UserPosition)
 		CurrentTime: row.CurrentTime, Duration: row.Duration,
 		IsFinished: row.IsFinished, UpdatedAtMs: row.LastUpdate,
 	}); err != nil {
-		slog.Warn("abs: userdata: clearing isFinished for a book with no known duration — "+
-			"reporting it would zero the client's saved position",
-			"user_id", userID, "book_id", pos.BookID, "library_item_id", syncID, "err", err)
+		progressLog.Warn("abs: userdata: clearing isFinished for a book with no known duration — "+
+			"reporting it would zero the client's saved position: user_id=%s book_id=%s library_item_id=%s: %v",
+			logger.SanitizeLogValue(userID), logger.SanitizeLogValue(pos.BookID), logger.SanitizeLogValue(syncID), err)
 		row.IsFinished = false
 		row.FinishedAt = nil
 		row.Progress = 0
@@ -656,9 +770,19 @@ func (p *userDataProvider) ListenedSeconds(userID string) (float64, error) {
 
 // Bookmarks returns the user's COMPLETE bookmark list, or an error.
 //
-// One user-keyed prefix scan, no per-item work, no library access — which is why
+// One user-keyed prefix scan, no library access — which is why
 // ListBookmarksForUser exists. Same error discipline as MediaProgress: a read
 // failure is an error, never a short list.
+//
+// The keyspace is keyed by libraryItemId, and a dedup merge does not move
+// bookmarks, so some are stored under a merge loser's id. Each bookmark is
+// listed under the LIVE id its stored id resolves to (what the item page the
+// client opens from browse is keyed by) and again under every alias id the
+// user's client has used for that item (see ClientMediaProgress for why only
+// used aliases). Two bookmarks at the same instant of one item, one under the
+// canonical id and one under an alias, are listed once, as the item routes
+// show them (bookmarks.go bookmarkDTOs). Resolution fails open: a stored id
+// that cannot be resolved is listed as stored.
 func (p *userDataProvider) Bookmarks(userID string) ([]any, error) {
 	if userID == "" {
 		return nil, errors.New("abs: userdata: userID is required")
@@ -668,28 +792,82 @@ func (p *userDataProvider) Bookmarks(userID string) ([]any, error) {
 		return nil, fmt.Errorf("abs: userdata: list bookmarks for user %s: %w", userID, err)
 	}
 
-	out := make([]any, 0, len(stored))
+	// The live id for every distinct stored item id.
+	var itemIDs []string
 	for _, b := range stored {
-		if b.ItemID == "" {
-			// Unnameable, exactly like a position row with no book: no client can
-			// hold it, so skipping it deletes nothing.
-			slog.Warn("abs: userdata: skipping a stored bookmark with no item id", "user_id", userID, "time_sec", b.TimeSec)
-			continue
+		if b.ItemID != "" {
+			itemIDs = append(itemIDs, b.ItemID)
 		}
-		// ItemID is ALREADY the client-visible libraryItemId — the bookmark keyspace
-		// is keyed by (userID, libraryItemId, time), mirroring real ABS, whose
-		// create/delete surface addresses a bookmark by the item id and the time
-		// value in the URL path. It is not translated here.
+	}
+	slices.Sort(itemIDs)
+	itemIDs = slices.Compact(itemIDs)
+	live := make([]string, len(itemIDs))
+	g := new(errgroup.Group)
+	g.SetLimit(p.concurrency)
+	for i := range itemIDs {
+		g.Go(func() error {
+			live[i] = itemIDs[i]
+			item, err := p.identity.ResolveSyncItem(itemIDs[i])
+			if err != nil {
+				progressLog.Warn("abs: userdata: could not resolve a bookmark's item id; listing it as stored: user_id=%s library_item_id=%s: %v",
+					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(itemIDs[i]), err)
+				return nil
+			}
+			if item != nil && item.CurrentBookID != "" && item.SyncID != "" {
+				live[i] = item.SyncID
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // workers only return nil
+	liveOf := make(map[string]string, len(itemIDs))
+	for i, id := range itemIDs {
+		liveOf[id] = live[i]
+	}
+
+	// Aliases the client uses, grouped by the live id they resolve to. No seed
+	// here: ClientMediaProgress owns it (it has the progress rows it needs).
+	aliasesOf := map[string][]string{}
+	for alias, canon := range p.usedAliases(userID, nil) {
+		aliasesOf[canon] = append(aliasesOf[canon], alias)
+	}
+
+	// Bookmarks stored under the live id first, so they win an instant shared
+	// with one stored under an alias.
+	sort.SliceStable(stored, func(i, j int) bool {
+		return stored[i].ItemID == liveOf[stored[i].ItemID] && stored[j].ItemID != liveOf[stored[j].ItemID]
+	})
+	seen := map[string]bool{}
+	out := make([]any, 0, len(stored))
+	emit := func(itemID string, b progress.Bookmark) {
+		key := itemID + "\x00" + progress.CanonicalTimeKey(b.TimeSec)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
 		out = append(out, bookmarkDTO{
 			CreatedAt:     b.CreatedAt,
-			LibraryItemID: b.ItemID,
+			LibraryItemID: itemID,
 			Time:          b.TimeSec,
 			Title:         b.Title,
 		})
 	}
+	for _, b := range stored {
+		if b.ItemID == "" {
+			// Unnameable, exactly like a position row with no book: no client can
+			// hold it, so skipping it deletes nothing.
+			progressLog.Warn("abs: userdata: skipping a stored bookmark with no item id: user_id=%s time_sec=%v",
+				logger.SanitizeLogValue(userID), b.TimeSec)
+			continue
+		}
+		canon := liveOf[b.ItemID]
+		emit(canon, b)
+		for _, alias := range aliasesOf[canon] {
+			emit(alias, b)
+		}
+	}
 	// Deterministic ordering (item, then time) so the body is byte-stable across
-	// refreshes: the store's scan order is already sorted per item, but the slice
-	// crosses items and a client that diffs bodies should see no churn.
+	// refreshes: a client that diffs bodies should see no churn.
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i].(bookmarkDTO), out[j].(bookmarkDTO)
 		if a.LibraryItemID != b.LibraryItemID {

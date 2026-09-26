@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-09-25
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
@@ -499,6 +500,16 @@ func (s *Server) wireABSRoutes() {
 			"could only ever report an EMPTY bookmarks list.")
 		os.Exit(1)
 	}
+	// Which merge-loser item ids each user's client has addressed. Required: the
+	// client-facing progress list carries a row for exactly those ids, and
+	// without the record a client that opened a merged book by its old id loses
+	// that book's progress row on its next refresh (abs/item_ref.go).
+	aliasUses := database.AsSyncAliasUseStore(s.Ops())
+	if aliasUses == nil {
+		logger.New("abs").Error("abs: refusing to start — the configured store lacks the sync_alias_use keyspace, so progress " +
+			"rows for merged books opened by an old item id could not be kept.")
+		os.Exit(1)
+	}
 	userData, err := abshandler.NewUserData(abshandler.UserDataOptions{
 		Progress:  progressList,
 		Bookmarks: bookmarkStore,
@@ -507,7 +518,8 @@ func (s *Server) wireABSRoutes() {
 		Identity: syncIdentity,
 		// libraryStore is the duration source (sum-of-tracks, §5b). `isFinished:true`
 		// with a zero duration sets the client's currentTime to 0.
-		Library: libraryStore,
+		Library:   libraryStore,
+		AliasUses: aliasUses,
 	})
 	if err != nil {
 		slog.Error("abs: refusing to start — the media-progress provider could not be built", "err", err)
@@ -537,6 +549,7 @@ func (s *Server) wireABSRoutes() {
 		// Phase 6 write half. Already asserted non-nil above (bookmarkStore), so
 		// the CRUD routes always register on the supported backend.
 		Bookmarks:   bookmarkStore,
+		AliasUses:   aliasUses,
 		CoverRoot:   config.AppConfig.RootDir,
 		LibraryName: "Books",
 	})

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/progress_write_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2b7f4e91-8a05-4c63-b1d8-70e396a5cf42
-// last-edited: 2026-08-12
+// last-edited: 2026-09-25
 
 package abs_test
 
@@ -148,7 +148,7 @@ func newWriteHarness(t *testing.T) *writeHarness {
 	seed := seedOracleLibrary(t)
 	bm := newFakeBookmarks()
 	provider, err := abshandler.NewUserData(abshandler.UserDataOptions{
-		Progress: seed.lib, Bookmarks: bm, Identity: seed.lib, Library: seed.lib,
+		Progress: seed.lib, Bookmarks: bm, Identity: seed.lib, Library: seed.lib, AliasUses: seed.lib,
 	})
 	if err != nil {
 		t.Fatalf("NewUserData: %v", err)
