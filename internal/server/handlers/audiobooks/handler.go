@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-09-25
 
@@ -171,9 +171,22 @@ func (h *Handler) searchServedByResultCache(search string, authorID, seriesID *i
 // did: a client that cannot poll — an older bundle still open in a tab, a
 // script — must never read a 202 body as an empty page.
 func wantsAsyncSearch(c *gin.Context) bool {
+	return hasPreference(c, "respond-async")
+}
+
+// wantsStaleSearch reports whether the request accepts a search list that
+// may predate a bulk change while the cache rebuilds it ("Prefer:
+// allow-stale"). The web client sends it only from its quick-search pickers;
+// the Library list never does, because bulk actions run on its rows.
+func wantsStaleSearch(c *gin.Context) bool {
+	return hasPreference(c, "allow-stale")
+}
+
+// hasPreference reports whether any Prefer header carries token.
+func hasPreference(c *gin.Context, token string) bool {
 	for _, v := range c.Request.Header.Values("Prefer") {
 		for _, part := range strings.Split(v, ",") {
-			if strings.EqualFold(strings.TrimSpace(part), "respond-async") {
+			if strings.EqualFold(strings.TrimSpace(part), token) {
 				return true
 			}
 		}
@@ -645,11 +658,15 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 
 	showQuarantined := c.Query("show_quarantined") == "true"
 	// A request that asked for it (Prefer: respond-async) can be answered
-	// with 202 while a long search runs, and with a list flagged stale while
-	// a rebuild runs; every other request gets a current, complete result.
+	// with 202 while a long search runs; one that also asked for it
+	// (Prefer: allow-stale) with a list flagged stale while a rebuild runs.
+	// Every other request gets a current, complete result.
 	reqCtx := c.Request.Context()
 	if wantsAsyncSearch(c) {
 		reqCtx = audiobookspkg.WithPendingSearchResponse(reqCtx)
+	}
+	if wantsStaleSearch(c) {
+		reqCtx = audiobookspkg.WithStaleSearchResponse(reqCtx)
 	}
 	resp, err := h.buildListResponse(reqCtx, params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
 	var pending *searchcache.PendingError
