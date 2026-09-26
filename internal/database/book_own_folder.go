@@ -1,5 +1,5 @@
 // file: internal/database/book_own_folder.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: 83d7e159-50f7-47e5-8303-8d8212c3bd8e
 // last-edited: 2026-09-25
 
@@ -226,11 +226,20 @@ func markBookFileCopies(files []BookFile, inside []bool, crossDir bool) []bool {
 //  1. present on disk, so ABS lists and streams a file that exists. A
 //     missing keeper would also exclude its present twin for good, since
 //     nothing re-admits a copy;
-//  2. a known duration (> 0), so among present rows excluding a copy never
-//     drops a measured duration. (A present unmeasured row beats a missing
-//     measured twin: the book reads short until the next duration backfill
-//     fills that counted zero row, rather than listing a dead track.);
-//  3. inside the book's own folder;
+//  2. inside the book's own folder, so ABS lists the library copy and the
+//     book's sums are judged on its own rows. This ranks above a measured
+//     duration on purpose: an own row that is still unmeasured, beside an
+//     out-of-folder twin that is measured (typically the iTunes copy under
+//     books/itunes/**), must stay the counted row. Keeping the twin instead
+//     made zero_rows_only skip the whole book as "itunes" (a counted row
+//     under the frozen tree), left the own zero rows unfilled on every run,
+//     and made ABS stream the iTunes file. The book reads short until the
+//     duration backfill fills the counted own row;
+//  3. a known duration (> 0), so among present rows on the same side of the
+//     own folder excluding a copy never drops a measured duration. (A
+//     present unmeasured row beats a missing measured twin: the book reads
+//     short until the next duration backfill fills that counted zero row,
+//     rather than listing a dead track.);
 //  4. a name without organize's `_copyN` suffix (the original);
 //  5. original row order.
 func keeperLess(files []BookFile, inside []bool, a, b int) bool {
@@ -238,11 +247,11 @@ func keeperLess(files []BookFile, inside []bool, a, b int) bool {
 	if fa.Missing != fb.Missing {
 		return !fa.Missing
 	}
-	if ka, kb := fa.Duration > 0, fb.Duration > 0; ka != kb {
-		return ka
-	}
 	if inside[a] != inside[b] {
 		return inside[a]
+	}
+	if ka, kb := fa.Duration > 0, fb.Duration > 0; ka != kb {
+		return ka
 	}
 	if ca, cb := hasCopySuffix(fa.FilePath), hasCopySuffix(fb.FilePath); ca != cb {
 		return !ca
@@ -251,9 +260,25 @@ func keeperLess(files []BookFile, inside []bool, a, b int) bool {
 }
 
 // IsBookFileCopy reports whether a is a copy of b. It is a copy when EITHER:
-//   - both carry the same non-empty FileHash; OR
+//   - both carry the same non-empty FileHash and their sizes do not
+//     conflict; OR
 //   - they share a file name, have the same known FileSize (> 0: an
 //     unmeasured size is no evidence), and their durations agree.
+//
+// A shared hash is not enough on its own: legacy rows carry
+// scanner.ComputeSegmentFileHash, a SHA-256 of the first 1 MB only, so
+// distinct tracks that share an opening (identical album-only tags and a large
+// embedded cover) share a hash. Such tracks almost always differ in size, so
+// sizes that are both known (> 0) and differ veto the hash. An unknown size
+// does not veto: some hash writers (SetBookFileHash, extract-wav-clips) set
+// the hash without the size. The canonical chunked hash digests the size, so
+// for current rows the veto never fires on a true copy.
+//
+// Durations deliberately do NOT veto a hash match: the two rows' durations
+// can come from different measurements (iTunes' Total Time on the iTunes
+// twin, the fingerprint or ffprobe duration the backfill writes on the own
+// row), which drift by more than 1 s on VBR files. A duration veto would
+// split a byte-identical pair and count that track twice.
 //
 // Names are a non-empty OriginalFilename or the base name of FilePath,
 // compared across both, with organize's `_copyN` collision suffix removed from
@@ -272,21 +297,17 @@ func keeperLess(files []BookFile, inside []bool, a, b int) bool {
 // the shared name is the layout, not a copy. A shared hash still counts.
 func IsBookFileCopy(a, b BookFile) bool {
 	if a.FileHash != "" && a.FileHash == b.FileHash {
-		return true
+		return !knownSizesConflict(a, b)
 	}
 	if a.FileSize <= 0 || a.FileSize != b.FileSize {
 		return false
 	}
 	sameDir := a.FilePath != "" && filepath.Dir(a.FilePath) == filepath.Dir(b.FilePath)
-	switch ka, kb := a.Duration > 0, b.Duration > 0; {
-	case ka && kb:
-		if d := a.Duration - b.Duration; d > 1 || d < -1 {
-			return false
-		}
-	case ka != kb:
-		if !sameDir {
-			return false
-		}
+	if knownDurationsConflict(a, b) {
+		return false
+	}
+	if (a.Duration > 0) != (b.Duration > 0) && !sameDir {
+		return false
 	}
 	if !sameDir && chapterFolderSiblings(a.FilePath, b.FilePath) {
 		return false
@@ -299,6 +320,22 @@ func IsBookFileCopy(a, b BookFile) bool {
 		}
 	}
 	return false
+}
+
+// knownSizesConflict reports whether both rows carry a known size (> 0) and
+// the sizes differ.
+func knownSizesConflict(a, b BookFile) bool {
+	return a.FileSize > 0 && b.FileSize > 0 && a.FileSize != b.FileSize
+}
+
+// knownDurationsConflict reports whether both rows carry a known duration
+// (> 0) more than 1 s apart.
+func knownDurationsConflict(a, b BookFile) bool {
+	if a.Duration <= 0 || b.Duration <= 0 {
+		return false
+	}
+	d := a.Duration - b.Duration
+	return d > 1 || d < -1
 }
 
 // copySuffixRe matches organize's collision suffix at the end of a file stem,

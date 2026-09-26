@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
 // last-edited: 2026-09-25
 
@@ -302,6 +302,10 @@ type authorStripMergeReport struct {
 	// diverge — it is NOT what makes the merge safe, and should not be cited
 	// as though it were.
 	TargetIsJunk int
+	// MergeTargetRemoved are merges dropped because their target is itself
+	// deleted or merged away by this same run (dropMergesIntoRemovedRows).
+	// Not counted in Mergeable. The source row is left alone.
+	MergeTargetRemoved int
 
 	// OutOfScope are rows rejected by the name predicate for a reason that is
 	// NOT numbering — publisher and copyright shrapnel. Counted, never touched.
@@ -331,8 +335,8 @@ type authorStripMergeReport struct {
 
 func (r authorStripMergeReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d",
-		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.TitleAsAuthorUnverified, r.Mergeable, r.Ambiguous, r.TargetIsJunk,
+		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d",
+		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.TitleAsAuthorUnverified, r.Mergeable, r.Ambiguous, r.TargetIsJunk, r.MergeTargetRemoved,
 		r.StrippedNoTarget, r.OutOfScope, r.Placeholders, r.PlaceholdersNoCanonical,
 		r.CanonicalUnknownID, r.Merged, r.Deleted, r.BooksTouched,
 		r.BooksLeftAuthorless, r.Failed)
@@ -557,6 +561,8 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		}
 	}
 
+	plans = dropMergesIntoRemovedRows(plans, &report, log)
+
 	// Deterministic order so a limited run is reproducible and a dry run
 	// describes the same prefix the apply will take.
 	sort.Slice(plans, func(i, j int) bool { return plans[i].from.ID < plans[j].from.ID })
@@ -687,6 +693,51 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		log.Info("author-strip-merge: REPORT ONLY — pass apply=true to write these changes")
 	}
 	return nil
+}
+
+// dropMergesIntoRemovedRows removes every merge whose target is itself the
+// source of another plan in this run, and counts it in
+// report.MergeTargetRemoved (and out of report.Mergeable).
+//
+// 🔴 WHY. Every plan removes its `from` row: a delete drops it, a merge folds
+// it into its target and then drops it. A merge into such a row cannot be
+// made safe by ordering. With the target deleted first, mergeAuthorInto
+// (which never checks that `into` still exists) writes the deleted row's ID
+// into book.AuthorID and the junction: the 2026-08-24 dangling-AuthorID
+// incident. With the merge first, the target's delete re-reads its credits
+// and unlinks the merged-in books too, which the title-as-author gate never
+// judged (it judged the target's credits before the merge). The concrete
+// shape: "01 Arcane Chef 2" strips to "Arcane Chef 2", a row the same run
+// deletes as title-as-author. So the delete set and the merge-target set are
+// made disjoint here, at planning time and before Limit, which keeps the dry
+// run's plan and counts identical to the apply's.
+//
+// One pass on purpose: a merge dropped here leaves its source alive, which
+// could in principle re-admit a merge into that source, but that source still
+// carries the numbering this op exists to remove, so merging into it would be
+// junk into junk. The dropped rows are reported and left for a later run.
+func dropMergesIntoRemovedRows(plans []authorStripPlan, report *authorStripMergeReport, log *slog.Logger) []authorStripPlan {
+	removed := make(map[int]string, len(plans))
+	for _, pl := range plans {
+		removed[pl.from.ID] = pl.reason
+	}
+	kept := plans[:0]
+	for _, pl := range plans {
+		if pl.into != nil {
+			if reason, gone := removed[pl.into.ID]; gone {
+				report.MergeTargetRemoved++
+				if pl.reason == "merge" {
+					report.Mergeable--
+				}
+				log.Info("author-strip-merge: not merging into a row this run removes",
+					"from_id", pl.from.ID, "from", pl.from.Name,
+					"into_id", pl.into.ID, "into", pl.into.Name, "into_reason", reason)
+				continue
+			}
+		}
+		kept = append(kept, pl)
+	}
+	return kept
 }
 
 // unlinkAndDeleteAuthor removes a junk author from every book that credits it
