@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.31.0
+# version: 2.31.1
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-09-26
 
@@ -584,7 +584,7 @@ coverage:
 	@go tool cover -html=coverage.out -o coverage.html
 	@echo ""
 	@echo "Coverage summary:"
-	@go tool cover -func=coverage.out | grep total | awk '{printf "  Total: %s\n", $$3}'
+	@go tool cover -func=coverage.out | grep '^total:' | awk '{printf "  Total: %s\n", $$3}'
 	@echo ""
 	@echo "📄 Detailed report: coverage.html"
 
@@ -592,7 +592,8 @@ coverage:
 coverage-check:
 	@echo "🎯 Checking coverage threshold..."
 	@go test ./... -coverprofile=coverage.out -covermode=atomic -timeout 25m >/dev/null 2>&1
-	@coverage=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
+	@coverage=$$(go tool cover -func=coverage.out | grep '^total:' | awk '{print $$3}' | sed 's/%//'); \
+	case "$$coverage" in ''|*[!0-9.]*) echo "❌ could not read total coverage (got '$$coverage'); refusing to pass"; exit 1;; esac; \
 	echo "Coverage: $$coverage%"; \
 	if [ $$(echo "$$coverage < 30" | bc -l) -eq 1 ]; then \
 		echo "❌ Coverage $$coverage% is below 30% threshold"; \
@@ -610,8 +611,9 @@ coverage-check-short:
 		exit 1; \
 	fi
 	@echo "Per-package coverage:"
-	@go tool cover -func=coverage.out | grep -v total
-	@coverage=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
+	@go tool cover -func=coverage.out | grep -v '^total:'
+	@coverage=$$(go tool cover -func=coverage.out | grep '^total:' | awk '{print $$3}' | sed 's/%//'); \
+	case "$$coverage" in ''|*[!0-9.]*) echo "❌ could not read total coverage (got '$$coverage'); refusing to pass"; exit 1;; esac; \
 	echo ""; \
 	echo "Total coverage: $$coverage%"; \
 	floor_file=".ci/coverage-floor.txt"; \
