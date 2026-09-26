@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
 // last-edited: 2026-09-26
 
@@ -178,6 +178,9 @@ func (p *Plugin) moveBookFileRowsDef() sdk.OperationDef {
 		// refused as a self-move.
 		ResumePolicy: sdk.ResumeDrop,
 		Cancellable:  true,
+		// The move list is small and walked by hand; each plan step and each
+		// target's apply reports progress (mbfProgress).
+		Liveness:     sdk.LivenessManual,
 		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:          p.runMoveBookFileRows,
 	}
@@ -274,10 +277,11 @@ func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporte
 		}
 	}
 
-	for _, mv := range params.Moves {
+	for i, mv := range params.Moves {
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
+		mbfProgress(reporter, i, len(params.Moves), "planning row "+mv.RowID)
 		r, planErr := mbfPlanOne(env, mv, owners[mv.RowID], seenRow, claimed, getBook, getTargetRows)
 		if planErr != nil {
 			return report, planErr
@@ -317,8 +321,9 @@ func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporte
 		}
 		byTarget[r.ToBookID] = append(byTarget[r.ToBookID], i)
 	}
-	for _, target := range targets {
+	for ti, target := range targets {
 		idx := byTarget[target]
+		mbfProgress(reporter, ti, len(targets), "moving rows to book "+target)
 		if ctx.Err() != nil || scanStandDownLostForApply(env.scan, holderID, held) {
 			for _, i := range idx {
 				report.Moves[i].Status = mbfStatusNotAttempt
@@ -366,6 +371,17 @@ func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporte
 	}
 	report.After = mbfBookStates(touched, after)
 	return report, nil
+}
+
+// mbfProgress stamps liveness. A failed progress write is logged, not fatal:
+// it loses a progress line, never a row.
+func mbfProgress(reporter sdk.Reporter, done, total int, msg string) {
+	if reporter == nil {
+		return
+	}
+	if err := reporter.UpdateProgress(done, total, msg); err != nil {
+		reporter.Logger().Warn(mbfOpName+": progress not recorded", "err", err)
+	}
 }
 
 // mbfRegroup builds the per-source move list for one target's planned moves.
