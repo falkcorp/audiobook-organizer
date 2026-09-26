@@ -25,3 +25,19 @@ own.
 - When no node is usable, it falls back to local `make ci`.
 
 Setup and troubleshooting are in `docs/process/ci-remote.md`.
+
+#### Woodpecker CI install runbook
+
+`docs/ci/woodpecker.md` is the owner's runbook for a self-hosted Woodpecker CI.
+It covers:
+
+- the server on the prod host, listening on localhost only, with its data on
+  the NVMe app-data area;
+- the GitHub OAuth app, with callback `https://coke.jdfalk.com/authorize`;
+- the Cloudflare tunnel and Access design: Access covers the whole hostname,
+  a bypass exempts only `/api/hook`, and a WAF rule allows GitHub's hook IP
+  ranges;
+- the agents, which are labelled `host=u0|llm1|mac`, with the prod agent
+  capped at one workflow inside a CPU- and memory-limited systemd slice;
+- the planned workflow split, in which `internal/database` runs alone with a
+  50m timeout.
