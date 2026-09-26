@@ -1,7 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package database
 
@@ -1009,7 +1009,7 @@ func matchesFilter(e ActivityEntry, f ActivityFilter) bool {
 	if f.Tier != "" && e.Tier != f.Tier {
 		return false
 	}
-	if f.Type != "" && e.Type != f.Type {
+	if !f.acceptsType(e.Type) {
 		return false
 	}
 	if f.Level != "" && e.Level != f.Level {

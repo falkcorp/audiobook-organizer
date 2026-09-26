@@ -1,5 +1,5 @@
 // file: internal/operations/registry/aliases_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b4e2d71-3f6a-4c85-b1d0-6e8a5c3f2b97
 // last-edited: 2026-09-25
 
@@ -64,6 +64,13 @@ func TestAliases_DefResolvesFormerIDToCanonicalDef(t *testing.T) {
 	}
 	if def.ID != "test.new-name" {
 		t.Fatalf("Def(former ID).ID = %q, want the canonical test.new-name", def.ID)
+	}
+	// The activity-log ?type= filter builds its spelling set from the returned
+	// def's FormerIDs, so Def must hand them back, whichever ID it was asked by.
+	for _, asked := range []string{"old.name", "test.new-name"} {
+		if d, _ := r.Def(asked); len(d.FormerIDs) != 1 || d.FormerIDs[0] != "old.name" {
+			t.Fatalf("Def(%q).FormerIDs = %v, want [old.name]", asked, d.FormerIDs)
+		}
 	}
 	if got := r.CanonicalDefID("old.name"); got != "test.new-name" {
 		t.Fatalf("CanonicalDefID(former) = %q", got)
