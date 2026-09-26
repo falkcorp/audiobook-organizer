@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.18 -->
+<!-- version: 10.73.19 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-26 -->
 
@@ -40,8 +40,8 @@ into one of the curated sections below, is a normal direct edit.
       shape the app decodes (`id`, `name`, `numBooks`, `libraryItemIds` required),
       then drop the manifest row's `vacuous` note and add a `nonEmpty` check.
 
-- [ ] **STRIP-MERGE-TITLE-TARGET-FLAG-OFF** Owner decision: with `delete_title_as_author=false`, `maintenance.author-strip-merge` still merges a numbered twin ("01 Arcane Chef 2") into a row it classifies as title-as-author ("Arcane Chef 2"). Nothing dangles, but it consolidates junk into junk. Option: treat a title-as-author-classified target as `target-is-junk` whatever the flag. Cost: one credit read per such merge candidate; the twin is then left alone instead of merged.
-- [ ] **COPY-KEEPER-NON-ITUNES-OUTSIDE** When a book has no own-folder row for a copy cluster, `keeperLess` does not prefer a non-iTunes row over a `books/itunes/**` row among out-of-folder rows, so `zero_rows_only` can still skip such a book as iTunes. Decide whether the database package should know the frozen-tree rule.
+- [x] **STRIP-MERGE-TITLE-TARGET-FLAG-OFF** Owner decision: with `delete_title_as_author=false`, `maintenance.author-strip-merge` still merges a numbered twin ("01 Arcane Chef 2") into a row it classifies as title-as-author ("Arcane Chef 2"). Nothing dangles, but it consolidates junk into junk. Option: treat a title-as-author-classified target as `target-is-junk` whatever the flag. Cost: one credit read per such merge candidate; the twin is then left alone instead of merged.
+- [x] **COPY-KEEPER-NON-ITUNES-OUTSIDE** When a book has no own-folder row for a copy cluster, `keeperLess` does not prefer a non-iTunes row over a `books/itunes/**` row among out-of-folder rows, so `zero_rows_only` can still skip such a book as iTunes. Decide whether the database package should know the frozen-tree rule.
 
 - [ ] **BUILD-FOLDER-HELD-75** The `build-folder-book-files` dry run (2026-09-25) found 106 books; 31 clean ones were applied (1,010 rows). Of the other 75, 58 share folder files with another live book (building would show a truncated book, e.g. Warforged Sorcerer 10/52), and 54 look multi-work. Owner chose "report, then decide": list who owns the shared files. Doctor Who (Farewell, Great Macedon) and The Forsaken God stay excluded.
 - [ ] **REPOINT-FOLDER-AUDIO-RUN** Dry-run then apply `maintenance.repoint-missing-to-folder-audio` (#3551, deployed 2026-09-25) for ABS books reading duration 0.

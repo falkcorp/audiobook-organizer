@@ -392,7 +392,12 @@ func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
 			"that carry no usable name are DELETED. Rows whose residue matches nothing are left " +
 			"alone rather than renamed. Also deletes TITLE-AS-AUTHOR rows: a name matching every " +
 			"live book it credits ('Arcane Chef 2' crediting 'Arcane Chef 2: A LitRPG Adventure'), " +
-			"never a row that also credits a differently-titled book. Placeholder rows ('Unknown', 'Various', 'n/a', a duplicate " +
+			"never a row that also credits a differently-titled book (delete_title_as_author=true). A numbered row is " +
+			"never merged into a title-as-author row. relink_title_as_author=true credits each such book to its REAL " +
+			"author when the library's own evidence (provider value, other versions, file artist tags, series " +
+			"siblings) names exactly one, creating the author through the creation gate; conflicts and no-evidence " +
+			"books are listed and left alone, and books/itunes/** and Doctor Who / Big Finish / Torchwood are never " +
+			"touched. Placeholder rows ('Unknown', 'Various', 'n/a', a duplicate " +
 			"'Unknown Author') are MERGED INTO the canonical Unknown Author row, which is never " +
 			"deleted. Pass delete_unmatched=true to delete those too (review " +
 			"the dry run first: 812 on this library, chapter and book titles). Measured 2,793 " +
