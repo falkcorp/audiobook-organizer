@@ -1,7 +1,7 @@
 // file: internal/dedup/unified/score.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e12361d1-96ea-4301-919d-3fdb51e12f8f
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package unified provides the scoring core for the unified deduplication
 // pipeline (SPEC 1, fable5). It is intentionally pure: no I/O, no storage
@@ -92,6 +92,18 @@ const (
 	// pair is flagged — owner decision: this pair shape goes to the review
 	// queue only, and no automated path may merge it.
 	SigSamePath SignalKind = "same_path"
+
+	// SigCoverText is the text a vision model read off a book's cover image
+	// (title, subtitle, authors, narrators, series and number, publisher and
+	// any other printed line), stored per image hash by internal/covertext
+	// and read with covertext.ForBook. Registered 2026-09-26 as EVIDENCE for
+	// the identification and dedup code to read; it is deliberately
+	// non-scoring for now, exactly like SigSamePath: no configured boost,
+	// Confidence 0, and it is a supporting kind, so it can never make or
+	// change a candidate. Scoring it (agreement between two books' cover
+	// text, or between cover text and a candidate's metadata) is a tracked
+	// TODO, not an omission.
+	SigCoverText SignalKind = "cover_text"
 )
 
 // Signal is a single piece of evidence from one collector for one candidate
@@ -124,5 +136,5 @@ const (
 // These signals must never be the sole reason a candidate reaches
 // persistence (score ≥ 60), which is enforced by ComposeScore.
 func isSupportingKind(k SignalKind) bool {
-	return k == SigDuration || k == SigFolderPath || k == SigSamePath
+	return k == SigDuration || k == SigFolderPath || k == SigSamePath || k == SigCoverText
 }

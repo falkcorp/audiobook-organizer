@@ -184,6 +184,62 @@ func sharedStems(dir string, own map[string]bool, audio []string) (map[string]bo
 	return stems, nil
 }
 
+var errNoFolder = errors.New("book has no folder")
+
+// BestFolderImage returns the image in the book's folder(s) that the rule
+// above selects, or nil when there is none. It applies the shared-folder rule
+// but none of the cover/lock/embedded checks: it answers "which folder image
+// is this book's", which the cover-text reader needs for books that already
+// have a cover. It writes nothing.
+func BestFolderImage(store Store, book *database.Book) (*metadata.FolderCover, error) {
+	best, _, err := bestFolderImage(store, book)
+	if errors.Is(err, errNoFolder) {
+		return nil, nil
+	}
+	return best, err
+}
+
+func bestFolderImage(store Store, book *database.Book) (*metadata.FolderCover, []string, error) {
+	audio, err := bookAudio(store, book)
+	if err != nil {
+		return nil, nil, err
+	}
+	dirs := bookFolders(book, audio)
+	if len(dirs) == 0 {
+		return nil, audio, errNoFolder
+	}
+	own := make(map[string]bool, len(audio))
+	for _, p := range audio {
+		own[p] = true
+	}
+	var best *metadata.FolderCover
+	for _, dir := range dirs {
+		stems, err := sharedStems(dir, own, audio)
+		if err != nil {
+			return nil, audio, fmt.Errorf("read folder %s: %w", dir, err)
+		}
+		c, err := metadata.FindFolderCover(dir, metadata.FolderCoverFilter{OnlyStems: stems})
+		if err != nil {
+			return nil, audio, err
+		}
+		if c != nil && (best == nil || c.NameRank < best.NameRank ||
+			(c.NameRank == best.NameRank && c.Area() > best.Area())) {
+			best = c
+		}
+	}
+	return best, audio, nil
+}
+
+// FirstAudio returns the book's first present audio file ("" when none): the
+// file whose embedded picture counts as the book's embedded cover.
+func FirstAudio(store Store, book *database.Book) (string, error) {
+	audio, err := bookAudio(store, book)
+	if err != nil || len(audio) == 0 {
+		return "", err
+	}
+	return audio[0], nil
+}
+
 // Evaluate decides, without writing anything, whether book should take a
 // folder cover. It reads the folder and, when a candidate exists, the first
 // audio file's tags. rootDir is the app root ({root}/covers, {root}/.covers).
@@ -202,38 +258,15 @@ func Evaluate(store Store, book *database.Book, rootDir string) Plan {
 		plan.Outcome = OutcomeLocked
 		return plan
 	}
-	audio, err := bookAudio(store, book)
-	if err != nil {
-		plan.Outcome, plan.Err = OutcomeError, err
-		return plan
-	}
-	dirs := bookFolders(book, audio)
-	if len(dirs) == 0 {
+	best, audio, err := bestFolderImage(store, book)
+	switch {
+	case errors.Is(err, errNoFolder):
 		plan.Outcome = OutcomeNoFolder
 		return plan
-	}
-	own := make(map[string]bool, len(audio))
-	for _, p := range audio {
-		own[p] = true
-	}
-	var best *metadata.FolderCover
-	for _, dir := range dirs {
-		stems, err := sharedStems(dir, own, audio)
-		if err != nil {
-			plan.Outcome, plan.Err = OutcomeError, fmt.Errorf("read folder %s: %w", dir, err)
-			return plan
-		}
-		c, err := metadata.FindFolderCover(dir, metadata.FolderCoverFilter{OnlyStems: stems})
-		if err != nil {
-			plan.Outcome, plan.Err = OutcomeError, err
-			return plan
-		}
-		if c != nil && (best == nil || c.NameRank < best.NameRank ||
-			(c.NameRank == best.NameRank && c.Area() > best.Area())) {
-			best = c
-		}
-	}
-	if best == nil {
+	case err != nil:
+		plan.Outcome, plan.Err = OutcomeError, err
+		return plan
+	case best == nil:
 		plan.Outcome = OutcomeNoCandidate
 		return plan
 	}
