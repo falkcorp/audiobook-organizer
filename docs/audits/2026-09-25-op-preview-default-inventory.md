@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-09-25-op-preview-default-inventory.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7b3e9d51-4a2c-4f86-b1d7-6e0a8c2f5d93 -->
 <!-- last-edited: 2026-09-25 -->
 
@@ -9,6 +9,11 @@ Owner decision, 2026-09-25: *"Operations make two modes available: preview way a
 automated jobs ... so preview and dry run by default."* Every operation that writes runs as a PREVIEW
 when its request does not state a mode; a LIVE run needs the explicit flag (`dry_run: false`, or the
 camelCase alias `dryRun: false`). Automated callers that must stay live pass the flag themselves.
+
+Revised 2026-09-25 after an adversarial review of the first pass (branch `fix/ops-preview-review-2`):
+three more ops were live on omission (section 1, last three rows), the maintenance-job family did not
+honor `dryRun` or refuse a disagreement (now it does, through `opmode.ResolveDryRunDefault`), and the
+guards in section 8 could not fail for most new writing ops (now three more guards).
 
 Branch `fix/ops-preview-by-default`. Shared resolver: `internal/operations/opmode`
 (`ResolveDryRun`, `ParseDryRun`; the generalization of `parseAuthorOpDryRun`).
@@ -48,8 +53,13 @@ refactor from Go's zero value. The ops that really ran live on `{}` are in secti
 | `maintenance.enrich-book-files` | LIVE -- `DefaultParams` advertised `dry_run:false`, which the dispatcher and v2 Run closure apply on omission | preview (advertises `dry_run:true`) | `internal/maintenance/jobs/enrich_book_files.go` |
 | `maintenance.recompute-itunes-paths` | LIVE -- `DefaultParams` advertised `dry_run:false`, which the dispatcher and v2 Run closure apply on omission | preview (advertises `dry_run:true`) | `internal/maintenance/jobs/recompute_itunes_paths.go` |
 | `maintenance.sweep-pebble-metrics-ttl` | LIVE -- `DefaultParams` advertised `dry_run:false`, which the dispatcher and v2 Run closure apply on omission | preview (advertises `dry_run:true`) | `internal/maintenance/jobs/sweep_pebble_metrics_ttl.go` |
+| `dedup.rescore` | LIVE -- pre-filled `RescoreParams{Apply: true}` before decode, so `{}`, `null` and a requeue re-banded every pending candidate (the first pass listed it wrongly under `apply bool` -- omitted = preview) | preview | `internal/plugins/dedup/rescore_op.go` |
+| `maintenance.revert-metadata-fetch` | LIVE -- no `dry_run` key advertised, so a request naming `fetch_op_ids` without `dry_run` reverted via `ModifyBook` (the first pass listed it wrongly as having no preview mode) | preview (advertises `dry_run:true`) | `internal/maintenance/jobs/revert_metadata_fetch.go` |
+| `maintenance.generate-itl-tests` | LIVE -- no key advertised; a live run `RemoveAll`s its output dir (the first pass listed it wrongly as having no preview mode) | preview (advertises `dry_run:true`) | `internal/maintenance/jobs/generate_itl_tests.go` |
 
-10 ops. Each of the 8 jobs honors `dryRun` in `Run` (checked: every write is behind `!dryRun`).
+13 ops. Each of the 10 jobs honors `dryRun` in `Run` (checked: every write is behind `!dryRun`).
+The only automated caller of `dedup.rescore` (the config-PUT sink, `dedupScoreSink`) already enqueues
+`Apply: true`; the two jobs have no automated caller.
 
 ## 2. Converted for spelling and the guard: `{}` already previewed
 
@@ -98,9 +108,11 @@ No caller sends it to these ops today (grep of `internal/`, `web/src`, `scripts/
 
 ### `apply bool` -- omitted = preview (field name kept)
 
-`dedup.auto-resolve`, `dedup.bookfile-seg-drop`, `dedup.breakdown-backfill`, `dedup.build-isbn-index`, `dedup.calibrate-composite`, `dedup.cleanup-orphan-author-embeddings`, `dedup.cleanup-orphan-embeddings`, `dedup.dataset-backfill`, `dedup.drain-stale`, `dedup.emb-reencode`, `dedup.mine-gold-labels`, `dedup.purge-legacy-fp-candidates`, `dedup.quarantine-chapter-artifacts`, `dedup.rebuild-gold-labels`, `dedup.reembed-embeddings`, `dedup.rescore`, `dedup.rescore-labeled-examples`, `maintenance.author-strip-merge`, `maintenance.build-folder-book-files`, `maintenance.chapters-backfill`, `maintenance.clear-apply-rename-failures`, `maintenance.dedup-exact-triage`, `maintenance.dedupe-book-file-rows`, `maintenance.file-provenance-capture`, `maintenance.file-provenance-export`, `itunes.clone-into-library`, `maintenance.mark-missing-files`, `maintenance.merge-same-path-dupes`, `maintenance.metadata-cache-reap`, `maintenance.missing-file-repair`, `maintenance.missing-file-repoint`, `maintenance.probe-directory-books`, `maintenance.purge-empty-authors`, `maintenance.purge-empty-narrators`, `maintenance.recover-missing-files`, `maintenance.relink-unlinked-books`, `maintenance.repair-junk-titles`, `maintenance.repoint-unrecorded-renames`, `maintenance.review-status-index-repair`, `maintenance.series-denumber`, `maintenance.split-joined-narrators`, `maintenance.title-repair`, `maintenance.version-group-primary-repair`.
+`dedup.auto-resolve`, `dedup.bookfile-seg-drop`, `dedup.breakdown-backfill`, `dedup.build-isbn-index`, `dedup.calibrate-composite`, `dedup.cleanup-orphan-author-embeddings`, `dedup.cleanup-orphan-embeddings`, `dedup.dataset-backfill`, `dedup.drain-stale`, `dedup.emb-reencode`, `dedup.mine-gold-labels`, `dedup.purge-legacy-fp-candidates`, `dedup.quarantine-chapter-artifacts`, `dedup.rebuild-gold-labels`, `dedup.reembed-embeddings`, `dedup.rescore-labeled-examples`, `maintenance.author-strip-merge`, `maintenance.build-folder-book-files`, `maintenance.chapters-backfill`, `maintenance.clear-apply-rename-failures`, `maintenance.dedup-exact-triage`, `maintenance.dedupe-book-file-rows`, `maintenance.file-provenance-capture`, `maintenance.file-provenance-export`, `itunes.clone-into-library`, `maintenance.mark-missing-files`, `maintenance.merge-same-path-dupes`, `maintenance.metadata-cache-reap`, `maintenance.missing-file-repair`, `maintenance.missing-file-repoint`, `maintenance.probe-directory-books`, `maintenance.purge-empty-authors`, `maintenance.purge-empty-narrators`, `maintenance.recover-missing-files`, `maintenance.relink-unlinked-books`, `maintenance.repair-junk-titles`, `maintenance.repoint-unrecorded-renames`, `maintenance.review-status-index-repair`, `maintenance.series-denumber`, `maintenance.split-joined-narrators`, `maintenance.title-repair`, `maintenance.version-group-primary-repair`.
 
-43 ops.
+42 ops. (`dedup.rescore` was listed here in the first pass; it pre-filled `Apply: true` and is now in
+section 1. `TestGuard_NoLiveDefaultPrefill` checks the rest of this list for the same pre-fill and
+found none.)
 
 ### Maintenance jobs advertising `dry_run:true` before this change
 
@@ -109,7 +121,7 @@ No caller sends it to these ops today (grep of `internal/`, `web/src`, `scripts/
 `fix-version-groups`, `merge-chapter-groups`, `normalize-primary-flags`, `prune-book-snapshots`,
 `purge-unknown-author-duplicates`, `recompute-book-aggregates`, `refetch-missing-authors`,
 `relink-missing-to-itunes`, `repair-missing-files`, `repoint-version-primary`, `retention-and-hygiene`,
-`scan-composer-tags` (22). With section 1, 30 of 38 jobs now preview on omission.
+`scan-composer-tags` (22). With section 1, 32 of 38 jobs now preview on omission.
 
 ### HTTP entry resolves the mode before choosing an op
 
@@ -121,6 +133,8 @@ No caller sends it to these ops today (grep of `internal/`, `web/src`, `scripts/
 
 Advertising `dry_run:true` for a job whose `Run` ignores it would be worse than false: the UI would offer
 a "preview" that writes. Listed in `noPreviewMode` in `internal/maintenance/jobs/preview_default_guard_test.go`.
+Every job here has a `Run` that never reads its `dryRun` parameter;
+`TestMaintenanceJobs_NoPreviewModeJobsIgnoreDryRun` parses the package and fails if one starts to.
 
 | Job | Advertises | Why |
 |---|---|---|
@@ -128,10 +142,11 @@ a "preview" that writes. Listed in `noPreviewMode` in `internal/maintenance/jobs
 | `scan-duplicate-files` | `dry_run:false` | read-only scan; `Run(..., _ bool)` |
 | `scan-duration-mismatch` | `dry_run:false` | read-only scan; `Run(..., _ bool)` |
 | `scan-metadata-hash-dups` | `dry_run:false` | read-only scan; `Run(..., _ bool)` |
-| `bulk-fetch-metadata` | no key | fetches and applies metadata; no preview implemented |
-| `generate-itl-tests` | no key | writes test fixtures |
-| `revert-metadata-fetch` | no key | reverts only the `fetch_op_ids` it is given |
-| `scan-chapter-groups` | no key | read-only; its writing twin merge-chapter-groups previews by default |
+| `bulk-fetch-metadata` | no key | fetches and applies metadata; `Run` names `dryRun` but never reads it |
+| `scan-chapter-groups` | no key | read-only; `Run(..., _ bool)`; its writing twin merge-chapter-groups previews by default |
+
+`generate-itl-tests` and `revert-metadata-fetch` were listed here in the first pass. Both `Run` bodies
+branch on `dryRun`, so both had a working preview and defaulted live; they are in section 1 now.
 
 ## 5. Ops with no mode flag at all
 
@@ -318,8 +333,30 @@ allowlisted in `internal/operations/opmode/guard_test.go`, and not changed.
   `TestSplitBookBulkMerge_ModeRoutesThroughOpmode`: a body with disagreeing `dry_run`/`dryRun` is refused at the
   mode check, proving both spellings reach the resolver. `opmode` unit tests pin `{}` -> preview.
 
-The registry cannot be iterated for this generically: `OperationDef.Run` takes raw JSON and each op decodes
-its own struct, and the test boot does not enable every plugin. The source scan covers every op regardless.
+Added by the review pass:
+
+- `TestGuard_NoPlainBoolDryRunParams` now also checks `dryrun`, `dry`, `preview`, `preview_only` and
+  `previewOnly`, so a plain bool cannot pass by using another spelling of the preview flag.
+- `internal/operations/opmode/guard_test.go` `TestGuard_NoLiveDefaultPrefill`: AST scan for a params value
+  pre-filled live before `json.Unmarshal`/`Decode` into it (`Apply`/`Live`/`Commit`/`Execute: true`, or
+  `DryRun`/`DryRunCamel`/`DryRunSnake`/`Preview: false` or a `Live()` pointer). Mutation check:
+  `rescore_op.go` pre-fill restored -> FAIL naming `rescore_op.go:143 func runRescore pre-fills Apply`;
+  reverted -> PASS.
+- `internal/maintenance/jobs/preview_default_guard_test.go` `TestMaintenanceJobs_NoPreviewModeJobsIgnoreDryRun`:
+  every `noPreviewMode` job's `Run` must not read `dryRun`. Mutation check: `revert-metadata-fetch` re-added
+  -> FAIL; removed -> PASS.
+- `internal/server/write_op_modes_test.go` `TestWriteOps_EveryWriteOpHasARecordedMode`: every registered op
+  that declares `library.write`, `files.write` or `db.migrate` (or no capabilities) must be recorded in
+  `internal/server/testdata/write_op_modes.golden` as `preview` or `no-mode`. There is no `live` class, so a
+  new writing op fails until its author gives it a preview mode or records it as a known gap in review.
+  Maintenance-job ops are left to the jobs guard. Mutation check: `dedup.rescore` line removed -> FAIL; restored -> PASS.
+- Maintenance-job family: `TestRunMaintenanceJob_CamelDryRunIsHonored`,
+  `TestRunMaintenanceJob_ConflictingDryRunSpellingsAreRefused`, `TestMaintenanceJobOp_CamelDryRunIsHonored`,
+  `TestMaintenanceJobOp_ConflictingDryRunSpellingsFail` (`internal/server/maintenance_dryrun_alias_test.go`).
+
+What the guards still cannot prove: that an op recorded as `preview` really previews on `{}` when it has no
+params struct the source scans can read. That is a behavioural property; the ledger makes it a reviewed
+decision rather than a default.
 
 ## 9. Follow-ups
 
