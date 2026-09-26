@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package handlers
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/errgroup"
 )
@@ -96,13 +97,61 @@ type operationActivityEntry = OperationActivityEntry
 // ActivityHandler handles activity-log HTTP endpoints.
 type ActivityHandler struct {
 	svc      ActivityService
-	opsStore ActivityOpsStore // may be nil
+	opsStore ActivityOpsStore    // may be nil
+	opDefs   ActivityOpDefLookup // may be nil: ?type= is then matched literally
+}
+
+// ActivityOpDefLookup resolves an operation def ID -- canonical or a former ID
+// of a renamed op -- to its def. *opsregistry.Registry implements it.
+type ActivityOpDefLookup interface {
+	Def(id string) (opsregistry.OperationDef, bool)
+}
+
+var _ ActivityOpDefLookup = (*opsregistry.Registry)(nil)
+
+// ActivityHandlerOption configures an ActivityHandler.
+type ActivityHandlerOption func(*ActivityHandler)
+
+// WithActivityOpDefs makes the ?type= filter alias-aware: a type that names an
+// operation def matches the def's canonical ID and every former ID. Pass nil
+// (or omit the option) to match ?type= literally.
+func WithActivityOpDefs(defs ActivityOpDefLookup) ActivityHandlerOption {
+	return func(h *ActivityHandler) { h.opDefs = defs }
 }
 
 // NewActivityHandler constructs an ActivityHandler.
 // opsStore may be nil when the backing store does not implement OpsV2.
-func NewActivityHandler(svc ActivityService, opsStore ActivityOpsStore) *ActivityHandler {
-	return &ActivityHandler{svc: svc, opsStore: opsStore}
+func NewActivityHandler(svc ActivityService, opsStore ActivityOpsStore, opts ...ActivityHandlerOption) *ActivityHandler {
+	h := &ActivityHandler{svc: svc, opsStore: opsStore}
+	for _, o := range opts {
+		o(h)
+	}
+	return h
+}
+
+// activityTypeSpellings returns the type filter for a ?type= value. An op's
+// activity entries carry the def ID they were recorded under
+// (reporter_db.go writes Type: defID), and rows are never rewritten, so a
+// renamed op's history is split: rows from before the rename carry a former
+// ID, rows after it the canonical one. When asked names a registered def --
+// by either spelling -- the filter is the canonical ID plus every former ID, so
+// both spellings return the whole history, as GET /operations/timeline?def_id=
+// already does. Anything else (a non-op type, or no registry) is matched
+// literally.
+func (h *ActivityHandler) activityTypeSpellings(asked string) (typ string, aliases []string) {
+	if asked == "" || h.opDefs == nil {
+		return asked, nil
+	}
+	def, ok := h.opDefs.Def(asked)
+	if !ok {
+		return asked, nil
+	}
+	if asked != def.ID {
+		if nr, ok := h.opDefs.(deprecatedDefIDNoter); ok {
+			nr.NoteDeprecatedDefIDUse(asked, opsregistry.AliasEntryActivityFilter)
+		}
+	}
+	return def.ID, append([]string(nil), def.FormerIDs...)
 }
 
 // ListActivity handles GET /api/v1/activity.
@@ -111,7 +160,8 @@ func NewActivityHandler(svc ActivityService, opsStore ActivityOpsStore) *Activit
 //
 //	limit            – max entries to return (default 50)
 //	offset           – pagination offset
-//	type             – filter by entry type
+//	type             – filter by entry type; an operation def ID also matches
+//	                   the op's former (pre-rename) IDs, in either direction
 //	tier             – filter by tier (realtime|background|debug|audit)
 //	level            – filter by level (info|warn|error|debug)
 //	operation_id     – filter by operation ID
@@ -134,7 +184,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	filter.Limit = params.Limit
 	filter.Offset = params.Offset
 
-	filter.Type = c.Query("type")
+	filter.Type, filter.TypeAliases = h.activityTypeSpellings(c.Query("type"))
 	filter.Tier = c.Query("tier")
 	filter.Level = c.Query("level")
 	filter.OperationID = c.Query("operation_id")

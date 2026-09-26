@@ -1,7 +1,7 @@
 // file: internal/database/activity_types.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package database — activity log types and helpers previously defined in
 // activity_store.go (the legacy SQLite backend). Extracted here in fable5
@@ -12,6 +12,7 @@ package database
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -79,9 +80,17 @@ func clampActivitySummary(s string) string {
 
 // ActivityFilter controls which entries Query returns.
 type ActivityFilter struct {
-	Limit          int
-	Offset         int
-	Type           string
+	Limit  int
+	Offset int
+	Type   string
+	// TypeAliases are further type values that match exactly as Type does:
+	// the former IDs of a renamed operation, whose activity rows keep the
+	// spelling they were written under. Without them a ?type= filter splits a
+	// renamed op's history in two -- the old spelling finds only rows from
+	// before the rename, the new one only rows from after it. Ignored when Type
+	// is empty. Stores read the set through TypeValues / acceptsType, never
+	// Type alone.
+	TypeAliases    []string
 	Tier           string
 	Level          string
 	OperationID    string
@@ -94,6 +103,30 @@ type ActivityFilter struct {
 	ExcludeSources []string // hide these sources
 	ExcludeTiers   []string // hide these tiers
 	ExcludeTags    []string // hide entries that carry any of these tags
+}
+
+// TypeValues returns every type value f accepts: Type followed by TypeAliases,
+// without empty strings or duplicates. Nil means f has no type predicate.
+func (f ActivityFilter) TypeValues() []string {
+	if f.Type == "" {
+		return nil
+	}
+	out := []string{f.Type}
+	for _, a := range f.TypeAliases {
+		if a != "" && !slices.Contains(out, a) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// acceptsType reports whether an entry of type t passes f's type predicate.
+// Same set as TypeValues, without allocating per row.
+func (f ActivityFilter) acceptsType(t string) bool {
+	if f.Type == "" || t == f.Type {
+		return true
+	}
+	return t != "" && slices.Contains(f.TypeAliases, t)
 }
 
 // CompactResult holds the outcome of a CompactByDay operation.

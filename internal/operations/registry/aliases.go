@@ -1,5 +1,5 @@
 // file: internal/operations/registry/aliases.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8b1f47-6c2a-4d95-a0e3-7b5f9c2d8e14
 // last-edited: 2026-09-25
 
@@ -45,7 +45,7 @@ import (
 // queued old-ID row on every cycle, which would flood the log. The counter is
 // cheap, bounded (the alias table is a fixed, code-defined set) and survives in
 // Prometheus history. The entry label (enqueue | stored_row | retry |
-// subprocess | timeline_filter) recovers the one thing a log line would have
+// subprocess | timeline_filter | activity_filter) recovers the one thing a log line would have
 // added -- which door the old ID came through. For stored_row the count is
 // lookups, not rows: a queued row waiting behind a gate is re-counted each
 // dispatch cycle. Zero versus non-zero is the signal, not the magnitude.
@@ -61,6 +61,10 @@ const (
 	// AliasEntryTimelineFilter is used by the HTTP timeline handler, which
 	// resolves a ?def_id= filter outside this package.
 	AliasEntryTimelineFilter = "timeline_filter"
+
+	// AliasEntryActivityFilter is used by the HTTP activity-log handler, which
+	// resolves a ?type= filter naming a former def ID outside this package.
+	AliasEntryActivityFilter = "activity_filter"
 )
 
 // aliasTable maps a former def ID to its canonical def ID. A published table is
@@ -139,7 +143,7 @@ func (r *Registry) noteAliasUse(given, entry string) {
 }
 
 // NoteDeprecatedDefIDUse lets a caller outside the registry (the HTTP timeline
-// filter) record that it resolved a former ID. entry must be one of the
+// and activity-log filters) record that it resolved a former ID. entry must be one of the
 // exported AliasEntry* constants.
 func (r *Registry) NoteDeprecatedDefIDUse(given, entry string) {
 	r.noteAliasUse(given, entry)

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_index_pushdown_contract_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7c1a55f2-4d9e-4a21-9f31-8e0b6a2c1d40
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 // Contract tests for the activity index limit pushdown.
 //
@@ -520,7 +520,7 @@ func TestIndexPushdownPrunedRowDoesNotConsumeAPageSlot(t *testing.T) {
 // Since or Until (or push the bounds into the index scan). This comment is the
 // only place that dependency is written down.
 func TestActivityFilterFieldCountIsPinned(t *testing.T) {
-	const classified = 15
+	const classified = 16
 	got := reflect.TypeFor[ActivityFilter]().NumField()
 	require.Equal(t, classified, got,
 		"ActivityFilter gained or lost a field. pactIndexPushdownEligible is an ALLOW-LIST "+
@@ -538,7 +538,7 @@ func TestActivityFilterFieldCountIsPinned(t *testing.T) {
 	}
 	assert.Equal(t, []string{
 		"Limit", "Offset", // pagination, handled explicitly (negatives refuse)
-		"Type", "Tier", "Level", // refused: not in the index key
+		"Type", "TypeAliases", "Tier", "Level", // refused: not in the index key
 		"OperationID", "BookID", // the id predicates — the ONLY ones pushed down
 		"Since", "Until", // in pactPushdownDecidable ONLY because both paths ignore them
 		"Tags", "Search", "Source", // refused: not in the index key
