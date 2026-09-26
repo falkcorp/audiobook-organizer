@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
 // last-edited: 2026-09-25
 
@@ -166,12 +166,26 @@ func (svc *AudiobookService) GetAudiobooksPage(ctx context.Context, limit int, o
 	}
 	if key, ok := svc.searchCacheKey(search, authorID, seriesID, f); ok {
 		books, total, meta, err := svc.cachedSearchPage(ctx, key, limit, offset, search, authorID, seriesID, f)
-		if !errors.Is(err, searchcache.ErrNotCurrent) && !errors.Is(err, searchcache.ErrBusy) {
+		var pending *searchcache.PendingError
+		switch {
+		case err == nil, errors.As(err, &pending):
 			return books, total, meta, err
+		case ctx.Err() != nil:
+			// The caller has gone; running the search again helps nobody.
+			return nil, 0, SearchMeta{}, err
+		case errors.Is(err, searchcache.ErrNotCurrent), errors.Is(err, searchcache.ErrBusy):
+			// The cache has no current list for a caller that must see every
+			// change, or its build queue is full. A rebuild has been queued
+			// for later lookups where possible.
+		default:
+			// The shared build failed: a storage read error in its fail-closed
+			// hydration, a recovered panic, or an abandoned job. That error
+			// reaches every caller joined on the key, and none of them asked
+			// for the cache: they asked for a search, which the per-request
+			// pipeline below can still answer (fail-open, as it always did).
+			searchCacheLog.Warn("search cache: shared search failed, running it uncached: %v", err)
 		}
-		// The cache has no current list for a caller that must see every
-		// change, or its build queue is full: run the search as it always
-		// ran. A rebuild has been queued for later lookups where possible.
+		// Run the search as it always ran.
 	}
 	books, total, err := svc.queryAudiobooks(ctx, limit, offset, search, authorID, seriesID, f, nil, false)
 	return books, total, SearchMeta{}, err
@@ -206,12 +220,14 @@ func (svc *AudiobookService) cachedSearchPage(ctx context.Context, key string, l
 
 type pendingOKKey struct{}
 
+type staleOKKey struct{}
+
 // WithPendingSearchResponse marks ctx as belonging to an interactive caller
-// that asked for, and can handle, the two answers a batch caller must never
-// get: a *searchcache.PendingError when a new search outlives the wait (the
-// web list handler answers 202 and the client polls), and a list flagged
-// Stale while a rebuild runs (the page says so). The handler sets it only
-// when the request itself opted in (Prefer: respond-async).
+// that asked for, and can handle, a *searchcache.PendingError when a new
+// search outlives the wait: the web list handler answers 202 and the client
+// polls. The handler sets it only when the request itself opted in
+// (Prefer: respond-async). It does NOT admit a stale list: see
+// WithStaleSearchResponse.
 //
 // Every other caller of GetAudiobooksPage/GetAudiobooks — batch operations,
 // metadata tools, an HTTP client that did not opt in — gets a result that
@@ -222,16 +238,29 @@ func WithPendingSearchResponse(ctx context.Context) context.Context {
 	return context.WithValue(ctx, pendingOKKey{}, true)
 }
 
+// WithStaleSearchResponse additionally admits a list flagged Stale while a
+// rebuild runs: its membership can predate a bulk change the cache could not
+// patch. The handler sets it only for a request that asked for it
+// (Prefer: allow-stale), which the web client sends only from its quick-search
+// pickers, where the user picks one freshly read row. The Library list never
+// sends it: its rows feed bulk actions, which must never act on membership
+// that predates a change.
+func WithStaleSearchResponse(ctx context.Context) context.Context {
+	return context.WithValue(ctx, staleOKKey{}, true)
+}
+
 // lookupOptions is what this caller accepts from the result cache.
 func (svc *AudiobookService) lookupOptions(ctx context.Context) searchcache.LookupOptions {
-	if ok, _ := ctx.Value(pendingOKKey{}).(bool); !ok {
+	pending, _ := ctx.Value(pendingOKKey{}).(bool)
+	stale, _ := ctx.Value(staleOKKey{}).(bool)
+	if !pending && !stale {
 		return searchcache.LookupOptions{}
 	}
 	wait := svc.resultCache.DefaultWait()
 	if s := config.AppConfig.Search.ResultCache.WaitSeconds; s > 0 {
 		wait = time.Duration(s) * time.Second
 	}
-	return searchcache.LookupOptions{Wait: wait, AllowPending: true, AllowStale: true}
+	return searchcache.LookupOptions{Wait: wait, AllowPending: pending, AllowStale: stale}
 }
 
 // searchCacheKey returns the cache key for a search request, or false when the
