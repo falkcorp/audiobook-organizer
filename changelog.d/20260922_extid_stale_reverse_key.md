@@ -1,3 +1,0 @@
-### Fixed
-
-- A merge could remove the surviving book's own iTunes track. When an external ID was re-created under a different book, the previous book's reverse-index key was never deleted, so `GetExternalIDsForBook` kept reporting the ID for the old book and a merge that retired that book queued an iTunes removal for a track the survivor owned. `CreateExternalIDMapping` now deletes the previous owner's reverse key, `GetExternalIDsForBook` skips reverse keys whose forward record names another book, `ReassignExternalIDs` drops those stale keys instead of carrying them, `BulkCreateExternalIDMappings` ignores repeats within one call, and the merge only removes PIDs the loser itself owns.

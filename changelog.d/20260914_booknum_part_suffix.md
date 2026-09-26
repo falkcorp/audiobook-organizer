@@ -1,3 +1,0 @@
-### Fixed
-
-- The bulk-apply certainty gate no longer refuses standalone books titled like "Rogue Lawyer - 001" as "book is #1" when the candidate carries no number. A trailing three-digit zero-padded " - 00N" (a multi-part rip's part number) on a title with no other number, in the title, file name or folder name, and a series position that only repeats it, are set aside in that one case. A candidate with a different number still refuses, because a real series title such as "Wheel of Time - 003" has the same shape; so do books with a real series name or an independent source for the number. The series-number-lost check applies the same rule only when the candidate gives no series position.

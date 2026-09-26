@@ -1,4 +1,0 @@
-### Fixed
-
-- A book whose file rows span its own library folder and other folders no longer counts a copy twice. An out-of-folder row is left out of the book's duration and size only when it is a copy of a present row in the book's own folder: same non-empty file hash, or same file name plus same file size plus a duration within 1 s. Every other row still counts, including rows a merge moved in that still sit in the other book's folder. The rule applies in ABS (item, play timeline, progress/finished math) and in the stored book aggregate. A book with no present row in its own folder counts every row. No rows are deleted or rewritten.
-- `maintenance.duration-backfill` with `zero_rows_only` no longer skips these books: it fills the zero rows that are counted, reports the out-of-folder copies and leaves them untouched, still skips a book with no present own-folder row, and never writes a book whose counted rows lie in the iTunes tree.

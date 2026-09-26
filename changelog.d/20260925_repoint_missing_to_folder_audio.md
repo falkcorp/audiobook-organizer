@@ -1,3 +1,0 @@
-### Added
-
-- New maintenance op `maintenance.repoint-missing-to-folder-audio` for primary, organized books whose `book_file` rows point at audio that is no longer on disk (about 7,000 books that ABS shows as duration 0). It looks at the audio actually in the book's folder. When a book's chapters were consolidated into one file, one row is repointed to that file and the other rows are marked missing (never deleted). When a missing row has exactly one same-size file, that row is repointed. The duration is filled from a header read. Anything ambiguous (several candidates, none, a file another book uses, a folder shared with another book, an implausible size, iTunes) is reported with a reason and left alone. Dry run by default; accepts `book_ids` and `limit`.

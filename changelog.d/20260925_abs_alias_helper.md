@@ -1,4 +1,0 @@
-### Fixed
-
-- ABS API: a merged book's old library item ids are now handled in one place for every item route, including bookmarks. Bookmarks made before a merge show on the book again through either id, a bookmark saved through an old id is stored with the surviving book, and each bookmark is returned under the id the app asked with. An old id whose merge record is broken is treated as unknown instead of failing the request, so a batch progress update skips it and applies the rest.
-- ABS API: the progress list in `/api/me` (and login, token refresh, authorize) now carries an extra row for a merged book's old item id only when this user's app has opened the book through that id, instead of for every old id. AudioBooth's "items finished" no longer counts those merged books twice. A book the app did open through an old id still has two rows. A leftover progress row stored under the old book is no longer sent alongside the surviving book's row.

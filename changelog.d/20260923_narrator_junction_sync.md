@@ -1,3 +1,0 @@
-### Fixed
-
-- A book's narrator list now follows its narrator text on every write. Only 3 of the 17 code paths that save a book's narrator (metadata apply, scanner, iTunes import, batch edit, merge and combine undo, AI parse, maintenance jobs, ...) also updated the `book_narrators` junction, so a whole cast was stored as one narrator named "A, B, C" and ABS showed one chip for it. `CreateBook`, `UpdateBook` and `ModifyBook` now split a changed narrator credit with `util.SplitCreditNames` (which keeps "Surname, Given" whole) and replace the junction to match, after the book commit and outside the book lock. A write that leaves the narrator unchanged, or clears it, does not touch the junction. File tag write-back still joins the list into one `narrator`/`composer` tag.

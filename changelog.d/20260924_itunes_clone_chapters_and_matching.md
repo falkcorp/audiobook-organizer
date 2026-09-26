@@ -1,4 +1,0 @@
-### Fixed
-
-- `maintenance.itunes-clone-into-library` copies the source's chapter table onto a version clone and re-runs the primary hand-off. Without the chapters the clone ranked below its own iTunes source, the election held the group, and a clone whose source was not the primary was never crowned: 67 of the 240 clones applied on 2026-09-24 were organized but not primary, so ABS never listed them. The rollback record now keeps every member's prior primary flag and rollback restores them and removes the clone's chapters. New `repair=true` mode (with `group_ids`) finishes clones applied before this fix.
-- The already-in-library check also matches a copy filed under "Unknown Author" or with no author, on title alone, and skips the group as `possibly_in_library`. Titles sharing a base but carrying different colon subtitles ("The Land: Founding" / "The Land: Predators") no longer match.
