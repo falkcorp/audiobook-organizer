@@ -227,24 +227,33 @@ func (ci CoverImage) SHA256() string {
 // an uncompressed bitmap is many times the size of the same cover as JPEG.
 // The format is re-detected from the bytes read, never taken from c.
 func LoadFolderCover(c FolderCover) (CoverImage, error) {
-	f, err := os.Open(c.Path)
+	data, err := ReadCoverFile(c.Path)
 	if err != nil {
 		return CoverImage{}, err
+	}
+	return NormalizeCoverBytes(data)
+}
+
+// ReadCoverFile reads an image file of at most FolderCoverMaxBytes.
+func ReadCoverFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, FolderCoverMaxBytes+1))
 	if err != nil {
-		return CoverImage{}, fmt.Errorf("read %s: %w", c.Path, err)
+		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	if len(data) > FolderCoverMaxBytes {
-		return CoverImage{}, fmt.Errorf("%s is larger than %d bytes", c.Path, FolderCoverMaxBytes)
+		return nil, fmt.Errorf("%s is larger than %d bytes", path, FolderCoverMaxBytes)
 	}
-	return normalizeCoverBytes(data)
+	return data, nil
 }
 
-// normalizeCoverBytes detects the image format of data and returns it in
+// NormalizeCoverBytes detects the image format of data and returns it in
 // stored form, converting BMP to JPEG.
-func normalizeCoverBytes(data []byte) (CoverImage, error) {
+func NormalizeCoverBytes(data []byte) (CoverImage, error) {
 	_, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return CoverImage{}, fmt.Errorf("not a readable image: %w", err)

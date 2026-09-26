@@ -1,7 +1,7 @@
 # file: internal/server/testdata/op_ids.golden
-# version: 1.0.0
+# version: 1.1.0
 # guid: 6d1f8a42-9c3e-4b75-a2d6-0e7b4c9f3a18
-# last-edited: 2026-09-25
+# last-edited: 2026-09-26
 #
 # Ledger of every operation def ID this server has registered, canonical IDs
 # and FormerIDs (aliases) alike. APPEND-ONLY. Read by
@@ -129,6 +129,7 @@ maintenance.cleanup-organize-mess
 maintenance.cleanup-series
 maintenance.clear-apply-rename-failures
 maintenance.compact-activity-log
+maintenance.cover-text-read
 maintenance.db-optimize
 maintenance.dedup-books
 maintenance.dedup-exact-triage
@@ -147,6 +148,7 @@ maintenance.fix-book-file-paths
 maintenance.fix-file-modes
 maintenance.fix-read-by-narrator
 maintenance.fix-version-groups
+maintenance.folder-cover-backfill
 maintenance.fs-regroup-xml
 maintenance.generate-itl-tests
 maintenance.intro-migrate-single-file
