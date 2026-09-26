@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-09-26-searchcache-ring-memory.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 51b02350-8472-4bea-b151-3e430c2c0b06 -->
 <!-- last-edited: 2026-09-26 -->
 
@@ -93,9 +93,17 @@ the old linear walk, for every generation and several limits, over random
 histories that include wrap-around, eviction, multi-ID records, no-op records
 and `RecordAll`.
 
-Measured on darwin/arm64 (M1 Max), `-count 6`, medians. Before is 068315747, and
-the contended benchmarks were first committed alone at 0f43a46d9 so they could
-be run against the old code.
+Measured on darwin/arm64 (M1 Max). Every figure is a median. Before is
+068315747. The contended benchmarks (`RepeatHeavy`, `RecordWhileChangedSince`)
+were first committed alone at 0f43a46d9, so they could be run against the old
+code.
+
+- Before, the `FullRing` and `WholeRing` rows use `-count 3`.
+- Before, the `RepeatHeavy` and `Record` p99.9 rows use `-count 6`. The p99.9
+  figures come from a 4-run pass made after p99.9 replaced p99.
+- Every "after" figure uses `-count 6`.
+- The before "mutex hold" row is the whole `WholeRing` call, because the old
+  code held the mutex for all of it.
 
 ```
 go test ./internal/searchcache -run '^$' -bench 'ChangedSince|RecordWhileChangedSince' -benchmem -count 6
