@@ -1,7 +1,7 @@
 // file: internal/ai/resultjournal/journal_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c28e392-3a6b-4bf2-9949-6f7efc1aedd2
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package resultjournal
 
@@ -115,7 +115,8 @@ func TestContentKey_LengthPrefixed(t *testing.T) {
 	if ContentKey("ab", "c") == ContentKey("a", "bc") {
 		t.Fatal("part boundaries collide")
 	}
-	if ContentKey("a", "b") != ContentKey("a", "b") {
+	first, second := ContentKey("a", "b"), ContentKey("a", "b")
+	if first == "" || first != second {
 		t.Fatal("not deterministic")
 	}
 }

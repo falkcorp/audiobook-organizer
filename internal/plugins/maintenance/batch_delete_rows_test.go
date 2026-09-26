@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_delete_rows_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6c1f9b2e-7a04-4d38-95e6-1b8d3f0a2c57
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -232,8 +231,4 @@ func TestOrphanBookFilesCleanup_DeleteModeIsRefusedAndDeletesNothing(t *testing.
 	if deletes != 0 {
 		t.Fatalf("%d book_file row(s) deleted", deletes)
 	}
-}
-
-func containsID(ids []string, want string) bool {
-	return slices.Contains(ids, want)
 }

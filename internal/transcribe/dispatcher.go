@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package transcribe
 
@@ -83,7 +83,7 @@ func endpointInCooldown(url string) bool {
 //
 // Round loop: healthy endpoints (not in cooldown) are filled in priority
 // order via allocateJobs, each endpoint's share is sent through
-// transcribeRemote concurrently, failures bench the endpoint and leave its
+// transcribeRemoteWithHealth concurrently, failures bench the endpoint and leave its
 // jobs in the remaining set to be re-queued to the survivors on the next
 // round. A *TransportError (naming every endpoint in the pool) is returned
 // ONLY when jobs remain and no healthy endpoint is left — per the locked

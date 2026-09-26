@@ -1,7 +1,7 @@
 // file: internal/dedup/book_runtime.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1c5335bc-2f9e-4f1a-829a-f8ed1a96ebc5
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package dedup
 
@@ -39,13 +39,6 @@ type memoEntry struct {
 
 func newBookRuntimeMemo() *bookRuntimeMemo {
 	return &bookRuntimeMemo{byID: make(map[string]memoEntry)}
-}
-
-// size is the number of books cached.
-func (m *bookRuntimeMemo) size() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.byID)
 }
 
 // runtimeAndRows is the canonical runtime of book and its file-row count.

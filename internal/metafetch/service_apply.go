@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.39.0
+// version: 1.39.1
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package metafetch
 
@@ -340,12 +340,9 @@ func displayOrNone(s string) string {
 	return s
 }
 
-// applyMarkerLog and historyLog replace direct slog calls in this file
-// (logger.New printf-style is the repo's logging API).
-var (
-	applyMarkerLog = logger.New("metafetch.apply")
-	historyLog     = logger.New("metafetch.history")
-)
+// applyMarkerLog replaces direct slog calls in this file (logger.New
+// printf-style is the repo's logging API).
+var applyMarkerLog = logger.New("metafetch.apply")
 
 // audioConfirmedMarker decides the apply's audio_confirmed marker.
 //

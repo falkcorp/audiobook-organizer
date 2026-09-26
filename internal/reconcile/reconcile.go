@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.16.1
+// version: 1.16.2
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-24
+// last-edited: 2026-09-26
 
 package reconcile
 
@@ -822,13 +822,14 @@ func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryR
 			continue // normal: 1 original + 1 organized
 		}
 
-		// Separate into originals (non-primary, outside library) and organized copies (in library)
-		var originals, libraryCopies []database.BookCore
+		// Only the organized copies (in library) are pruning candidates. The
+		// originals outside the library used to be collected here so they
+		// could be demoted by hand; EnsureSinglePrimary below now owns the
+		// group's primary flag, so they need no list of their own.
+		var libraryCopies []database.BookCore
 		for _, m := range members {
 			if rootDir != "" && pathutil.IsWithin(m.FilePath, rootDir) {
 				libraryCopies = append(libraryCopies, m)
-			} else {
-				originals = append(originals, m)
 			}
 		}
 

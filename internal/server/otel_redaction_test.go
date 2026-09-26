@@ -1,7 +1,7 @@
 // file: internal/server/otel_redaction_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c57d8b27-c4fa-4a32-8074-be746f84c425
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package server
 
@@ -42,8 +42,8 @@ func TestOtelginSpansCarryNoQueryCredentials(t *testing.T) {
 	}
 	for _, s := range spans {
 		for _, kv := range s.Attributes() {
-			if strings.Contains(kv.Value.Emit(), "span-secret") {
-				t.Fatalf("span %q attribute %s carries the query credential: %s", s.Name(), kv.Key, kv.Value.Emit())
+			if strings.Contains(kv.Value.String(), "span-secret") {
+				t.Fatalf("span %q attribute %s carries the query credential: %s", s.Name(), kv.Key, kv.Value.String())
 			}
 		}
 	}

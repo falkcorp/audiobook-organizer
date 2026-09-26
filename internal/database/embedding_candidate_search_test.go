@@ -1,7 +1,7 @@
 // file: internal/database/embedding_candidate_search_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7c1f4a9e-2b83-4d15-9e6a-0f8c3d7b45a2
-// last-edited: 2026-09-02
+// last-edited: 2026-09-26
 
 package database
 
@@ -12,16 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// seedSearchCandidates writes a fixed corpus used by the search tests. The
-// entity IDs are deliberately human-readable so a test can assert on which
-// rows came back rather than just how many.
-func seedSearchCandidates(t *testing.T) *EmbeddingStore {
-	t.Helper()
-	return seedSearchCandidatesIndexed(t, false)
-}
-
-// seedSearchCandidatesIndexed seeds the same corpus and optionally marks the
-// candidate status index built.
+// seedSearchCandidatesIndexed writes a fixed corpus used by the search tests
+// and optionally marks the candidate status index built. The entity IDs are
+// deliberately human-readable so a test can assert on which rows came back
+// rather than just how many.
 //
 // This distinction is the whole reason the suite runs twice. ListCandidates has
 // TWO read paths: a full "dedup:r:" scan, and listCandidatesByStatusIndex,

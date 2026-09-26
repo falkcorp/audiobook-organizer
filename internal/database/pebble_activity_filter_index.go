@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Pebble activity store — secondary indexes for the source, type and level
 // filters, the query planner that uses them, and the backfill that builds them
@@ -699,13 +699,6 @@ func pactFilterIndexFamilies(f ActivityFilter) []pactFilterFamily {
 		}
 	}
 	return fams
-}
-
-// pactHasResidualPredicates reports whether f carries a predicate no index
-// decides — so candidates can fail matchesFilter and the walk needs its decode
-// budget. Search is a substring match and cannot be indexed by a key range.
-func pactHasResidualPredicates(f ActivityFilter) bool {
-	return f.Search != "" || len(f.Tags) > 0 || len(f.ExcludeSources) > 0 || len(f.ExcludeTags) > 0
 }
 
 // pickFilterFamily chooses the family to range-scan: the one whose ranges over

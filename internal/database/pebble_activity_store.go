@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -208,14 +208,14 @@ func (s *PebbleActivityStore) DB() *pebble.DB { return s.db }
 
 // ── Key construction ──────────────────────────────────────────────────────────
 
-// pactErrPreEpochTimestamp is returned by prepareEntry for an entry whose
+// errPactPreEpochTimestamp is returned by prepareEntry for an entry whose
 // timestamp cannot be rendered as a sortable fixed-width key.
 //
 // It covers both ends of the same defect, because both produce a negative
 // UnixNano: an instant genuinely before 1970-01-01, and one so far in the future
 // that UnixNano overflows int64 (beyond ~2262-04-11). Either way %020d emits a
 // leading '-' and the key sorts wrongly, so both are refused by one check.
-var pactErrPreEpochTimestamp = errors.New("pebble_activity_store: timestamp outside the representable key range (UnixNano must be >= 0)")
+var errPactPreEpochTimestamp = errors.New("pebble_activity_store: timestamp outside the representable key range (UnixNano must be >= 0)")
 
 // pactPrimaryKey builds the primary key for a tier entry:
 //
@@ -636,7 +636,7 @@ func normalizeActivityEntry(e ActivityEntry) (ActivityEntry, error) {
 		// single entry — RecordBatch's error semantics rest on that split, so a
 		// per-entry rejection lands exactly where this file already puts per-entry
 		// failures, and a batch is not doomed by one bad row.
-		return ActivityEntry{}, fmt.Errorf("%w: %s", pactErrPreEpochTimestamp, e.Timestamp.UTC().Format(time.RFC3339Nano))
+		return ActivityEntry{}, fmt.Errorf("%w: %s", errPactPreEpochTimestamp, e.Timestamp.UTC().Format(time.RFC3339Nano))
 	}
 	if e.Level == "" {
 		e.Level = "info"
@@ -2837,7 +2837,7 @@ func (sc *pactIndexScan) len() int { return len(sc.ends) }
 // (0x2D, below '0'), which sorts every negative before every positive AND
 // reverses the order among negatives. prepareEntry rejects pre-epoch timestamps
 // at write time precisely so this scan's premise cannot be violated by a row on
-// disk; see pactErrPreEpochTimestamp.
+// disk; see errPactPreEpochTimestamp.
 func (s *PebbleActivityStore) scanIndexRefs(ctx context.Context, prefix string) (*pactIndexScan, error) {
 	// Upper bound: replace trailing ':' with ';' to cover the entire id sub-namespace.
 	upperPrefix := prefix[:len(prefix)-1] + ";"

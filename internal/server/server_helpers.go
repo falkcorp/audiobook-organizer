@@ -1,7 +1,7 @@
 // file: internal/server/server_helpers.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 8a40b808-2bf2-4a35-893c-ad5e3351dbae
-// last-edited: 2026-09-12
+// last-edited: 2026-09-26
 
 package server
 
@@ -15,7 +15,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
@@ -54,12 +53,6 @@ func intVal(p *int) any {
 	}
 	return *p
 }
-
-// nonEmpty is metafetch.NonEmpty. This package held a byte-identical copy until
-// 2026-09-01; the implementation is canonical there because
-// BuildMetadataProvenance -- which used to live in this file too -- depends on
-// it. An alias rather than a rename keeps all 9 call sites unchanged.
-var nonEmpty = metafetch.NonEmpty
 
 // warmLibrarySizes runs calculateLibrarySizes once at startup so the
 // filesystem-walk path (Sonarr/Radarr-style refresh of physical-on-disk

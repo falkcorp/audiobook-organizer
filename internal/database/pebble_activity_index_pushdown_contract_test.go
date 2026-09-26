@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_index_pushdown_contract_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7c1a55f2-4d9e-4a21-9f31-8e0b6a2c1d40
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Contract tests for the activity index limit pushdown.
 //
@@ -368,7 +368,7 @@ func TestPreEpochTimestampIsRefusedAtWrite(t *testing.T) {
 			OperationID: "op-preepoch",
 			Summary:     "should not be stored",
 		})
-		require.ErrorIs(t, err, pactErrPreEpochTimestamp, "pre-epoch instant %s must be refused", ts)
+		require.ErrorIs(t, err, errPactPreEpochTimestamp, "pre-epoch instant %s must be refused", ts)
 	}
 
 	// The epoch itself is representable and must still be accepted.

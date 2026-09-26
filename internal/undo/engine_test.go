@@ -1,7 +1,7 @@
 // file: internal/undo/engine_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3f8b0e2d-4c5e-4f9g-b2d6-8e0f3g5c9d4b
-// last-edited: 2026-09-12
+// last-edited: 2026-09-26
 
 package undo
 
@@ -122,14 +122,6 @@ func writeTestFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-}
-
-func readTestFile(t *testing.T, path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read file: %v", err)
-	}
-	return string(data)
 }
 
 // Preflight and revert use one classifier: record-only rows (author_delete,
