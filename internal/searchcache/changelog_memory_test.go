@@ -1,5 +1,5 @@
 // file: internal/searchcache/changelog_memory_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c8e2a17-4b6d-4f93-a1d0-9e7b3c6f2d48
 // last-edited: 2026-09-26
 
@@ -8,7 +8,9 @@ package searchcache
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -163,5 +165,85 @@ func TestChangeLogRingPatchWindow(t *testing.T) {
 			t.Errorf("ring=%d distinct=%d repeats=%d: %d changed IDs, want %d (deduped)",
 				tc.ring, tc.distinct, tc.repeats, len(changed), tc.distinct)
 		}
+	}
+}
+
+// BenchmarkChangedSinceRepeatHeavy is a whole-ring lookup whose change set
+// stays under MaxPatchChanged: 1,024 distinct books written 64 times fill a
+// 65,536 ring. No early stop can fire, so this is the case where only
+// shortening the lock hold (not the limit) helps a concurrent writer.
+//
+// Run: go test ./internal/searchcache -run '^$' -bench ChangedSinceRepeatHeavy -benchmem
+func BenchmarkChangedSinceRepeatHeavy(b *testing.B) {
+	const size, distinct = 65536, 1024
+	cl := NewChangeLog(size)
+	since := cl.Generation()
+	ids := ulidLikeIDs(distinct)
+	for range size / distinct {
+		for _, id := range ids {
+			cl.Record(id)
+		}
+	}
+	b.ResetTimer()
+	for range b.N {
+		if got, _, ok := changedSinceCapped(cl, since); !ok || len(got) != distinct {
+			b.Fatalf("ChangedSince = %d ids, ok=%v; want %d, true", len(got), ok, distinct)
+		}
+	}
+}
+
+// BenchmarkRecordWhileChangedSince times Record, the call every book write
+// makes on its own goroutine, while another goroutine looks up a whole-ring
+// change set in a loop. Record waits for the ChangeLog mutex, so its time per
+// op is dominated by how long ChangedSince holds that mutex.
+//
+// Run: go test ./internal/searchcache -run '^$' -bench RecordWhileChangedSince
+func BenchmarkRecordWhileChangedSince(b *testing.B) {
+	for _, shape := range []struct {
+		name     string
+		distinct int
+	}{
+		{"distinct", 65536}, // every record a different book: past the cap
+		{"repeats", 1024},   // 64 writes per book: under the cap
+	} {
+		b.Run(shape.name, func(b *testing.B) {
+			const size = 65536
+			cl := NewChangeLog(size)
+			ids := ulidLikeIDs(shape.distinct)
+			for i := range size {
+				cl.Record(ids[i%len(ids)])
+			}
+			stop := make(chan struct{})
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					// A lookup at the oldest live generation walks the
+					// whole ring without tripping the overflow check.
+					cl.mu.Lock()
+					oldest := cl.floor
+					cl.mu.Unlock()
+					changedSinceCapped(cl, oldest)
+				}
+			}()
+			waits := make([]time.Duration, b.N)
+			b.ResetTimer()
+			for i := range b.N {
+				t0 := time.Now()
+				cl.Record(ids[i%len(ids)])
+				waits[i] = time.Since(t0)
+			}
+			b.StopTimer()
+			close(stop)
+			<-done
+			slices.Sort(waits)
+			b.ReportMetric(float64(waits[len(waits)*999/1000].Microseconds()), "p99.9-µs")
+			b.ReportMetric(float64(waits[len(waits)-1].Microseconds()), "max-µs")
+		})
 	}
 }
