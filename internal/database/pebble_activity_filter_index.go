@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Pebble activity store — secondary indexes for the source, type and level
 // filters, the query planner that uses them, and the backfill that builds them
@@ -88,7 +88,18 @@ type pactFilterFamily struct {
 	name   string // for logs and plans
 	prefix string // "act:<token>:"
 	value  func(ActivityEntry) string
-	filter func(ActivityFilter) string
+	// values is the set of index values f accepts for this family (any-of);
+	// nil when f does not constrain it. Only type can carry more than one
+	// value today: a renamed op's Type plus its former IDs (TypeAliases).
+	values func(ActivityFilter) []string
+}
+
+// pactOneValue is the values function of a single-valued predicate.
+func pactOneValue(v string) []string {
+	if v == "" {
+		return nil
+	}
+	return []string{v}
 }
 
 // pactFilterFamilies is every indexed ActivityFilter predicate, in the planner's
@@ -100,17 +111,17 @@ var pactFilterFamilies = []pactFilterFamily{
 	{
 		name: "source", prefix: "act:src:",
 		value:  func(e ActivityEntry) string { return e.Source },
-		filter: func(f ActivityFilter) string { return f.Source },
+		values: func(f ActivityFilter) []string { return pactOneValue(f.Source) },
 	},
 	{
 		name: "type", prefix: "act:typ:",
 		value:  func(e ActivityEntry) string { return e.Type },
-		filter: func(f ActivityFilter) string { return f.Type },
+		values: func(f ActivityFilter) []string { return f.TypeValues() },
 	},
 	{
 		name: "level", prefix: "act:lvl:",
 		value:  func(e ActivityEntry) string { return e.Level },
-		filter: func(f ActivityFilter) string { return f.Level },
+		values: func(f ActivityFilter) []string { return pactOneValue(f.Level) },
 	},
 }
 
@@ -683,7 +694,7 @@ func (s *PebbleActivityStore) QueryWithPartial(ctx context.Context, f ActivityFi
 func pactFilterIndexFamilies(f ActivityFilter) []pactFilterFamily {
 	var fams []pactFilterFamily
 	for _, fam := range pactFilterFamilies {
-		if fam.filter(f) != "" {
+		if len(fam.values(f)) > 0 {
 			fams = append(fams, fam)
 		}
 	}
@@ -708,11 +719,13 @@ func (s *PebbleActivityStore) pickFilterFamily(fams []pactFilterFamily, f Activi
 	var bestSize uint64
 	for i, fam := range fams {
 		var size uint64
-		for _, tier := range tiers {
-			p := pactFilterRangePrefix(fam, fam.filter(f), tier)
-			n, err := s.db.EstimateDiskUsage([]byte(p), []byte(p[:len(p)-1]+";"))
-			if err == nil {
-				size += n
+		for _, value := range fam.values(f) {
+			for _, tier := range tiers {
+				p := pactFilterRangePrefix(fam, value, tier)
+				n, err := s.db.EstimateDiskUsage([]byte(p), []byte(p[:len(p)-1]+";"))
+				if err == nil {
+					size += n
+				}
 			}
 		}
 		if best < 0 || size < bestSize {
@@ -837,7 +850,7 @@ type pactFilterWalk struct {
 	decodeBudget, keyBudget int
 	decoded, keys           int
 
-	probeIters map[string]*pebble.Iterator // "<family prefix>|<tier>" → iterator
+	probeIters map[string]*pebble.Iterator // "<family prefix><value>:<tier>:" → iterator
 	tally      pactDecodeTally
 }
 
@@ -848,12 +861,25 @@ func (w *pactFilterWalk) close() {
 	w.tally.log("query filter index")
 }
 
-// probe reports whether the index key for (fam, f's value, tier, suffix)
-// exists — i.e. whether the row also satisfies that family's predicate —
-// without reading the row.
+// probe reports whether the row at (tier, suffix) also satisfies fam's
+// predicate -- whether an index key exists for ANY of the values f accepts for
+// fam -- without reading the row. Each (family, value, tier) gets its own
+// iterator, bounded to that value's range: an iterator bounded to one value
+// can never see another value's keys.
 func (w *pactFilterWalk) probe(fam pactFilterFamily, tier string, suffix []byte) (bool, error) {
-	prefix := pactFilterRangePrefix(fam, fam.filter(w.f), tier)
-	id := fam.prefix + "|" + tier
+	for _, value := range fam.values(w.f) {
+		ok, err := w.probeValue(fam, value, tier, suffix)
+		if err != nil || ok {
+			return ok, err
+		}
+	}
+	return false, nil
+}
+
+// probeValue is probe for one value of fam.
+func (w *pactFilterWalk) probeValue(fam pactFilterFamily, value, tier string, suffix []byte) (bool, error) {
+	prefix := pactFilterRangePrefix(fam, value, tier)
+	id := prefix // "<family prefix><escaped value>:<tier>:" names exactly one range
 	it := w.probeIters[id]
 	if it == nil {
 		var err error
@@ -910,9 +936,20 @@ func (w *pactFilterWalk) walk(ctx context.Context, tiers []string) (exhausted bo
 			}
 		}
 	}()
-	value := w.chosen.filter(w.f)
-	for _, tier := range tiers {
-		prefix := pactFilterRangePrefix(w.chosen, value, tier)
+	// One cursor per (value, tier). A row carries exactly one value per family,
+	// so the ranges of different values are disjoint and the merge below never
+	// sees the same row twice.
+	type valueTier struct{ value, tier string }
+	var ranges []valueTier
+	for _, value := range w.chosen.values(w.f) {
+		for _, tier := range tiers {
+			ranges = append(ranges, valueTier{value, tier})
+		}
+	}
+	cursors = slices.Grow(cursors, len(ranges))
+	for _, r := range ranges {
+		tier := r.tier
+		prefix := pactFilterRangePrefix(w.chosen, r.value, tier)
 		lower, upper := []byte(prefix), []byte(prefix[:len(prefix)-1]+";")
 		// The same Since/Until semantics as pactTierBounds, applied to the
 		// "<20d-nanos>:<ulid>" suffix this range shares with the primary key.
