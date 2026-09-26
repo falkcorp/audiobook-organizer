@@ -1,11 +1,12 @@
 // file: internal/server/handlers/abs/session_local_all.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: fcff98d1-5709-4c26-a345-d79231c02527
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package abs
 
 import (
+	"errors"
 	"math"
 	"net/http"
 	"slices"
@@ -188,16 +189,22 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 		res.Error = "podcast episodes are not supported"
 		return res
 	}
-	bookID, rerr := h.bookIDForSyncID(strings.TrimSpace(s.LibraryItemID))
-	if rerr != nil {
+	// Resolved through the one item resolver (item_ref.go), which also records
+	// the use when the session was played through a merge loser's id.
+	ref, rerr := h.resolveBodyItem(userID, s.LibraryItemID, false)
+	switch {
+	case errors.Is(rerr, errItemNotFound), errors.Is(rerr, database.ErrSyncRedirectChainBroken):
+		// A broken redirect chain is PERMANENT, not transient: marking it
+		// retryable would wedge the client's replay queue on it forever
+		// (collections.go bookIDForSyncID says the same for playlists).
+		res.Error = "library item not found"
+		return res
+	case rerr != nil:
 		res.Error = "could not resolve library item; retry"
 		res.transient = true
 		return res
 	}
-	if bookID == "" {
-		res.Error = "library item not found"
-		return res
-	}
+	bookID := ref.BookID
 	if h.progress == nil || s.CurrentTime == nil || *s.CurrentTime == 0 {
 		// Nothing positional to apply (or nowhere to apply it). The session is
 		// accepted; there is simply no progress change.

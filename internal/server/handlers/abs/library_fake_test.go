@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-25
 
@@ -137,6 +137,13 @@ type fakeLibrary struct {
 
 	// resolveErr injects a ResolveSyncItem failure for a sync id.
 	resolveErr map[string]error
+
+	// aliasUses is the database.SyncAliasUseStore double: user -> alias ids
+	// recorded; aliasSeeded marks users whose one-time seed ran.
+	aliasUses   map[string]map[string]bool
+	aliasSeeded map[string]bool
+	// aliasUseErr fails every alias-use read and write.
+	aliasUseErr error
 
 	// gen is the library-generation counter (LibraryGeneration).
 	gen cache.Generation
@@ -1413,6 +1420,7 @@ func withLibrary(s *oracleSeed) harnessOpt {
 		o.Chapters = s.lib
 		o.Progress = s.lib
 		o.CoverRoot = s.root
+		o.AliasUses = s.lib
 	}
 }
 
@@ -1769,4 +1777,70 @@ func (h *harness) doAny(t *testing.T, req request) (int, any) {
 		}
 	}
 	return w.Code, decoded
+}
+
+// ── database.SyncAliasUseStore double ───────────────────────────────────────
+
+func (f *fakeLibrary) RecordSyncAliasUse(userID, alias string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.aliasUseErr != nil {
+		return f.aliasUseErr
+	}
+	if f.aliasUses == nil {
+		f.aliasUses = map[string]map[string]bool{}
+	}
+	if f.aliasUses[userID] == nil {
+		f.aliasUses[userID] = map[string]bool{}
+	}
+	f.aliasUses[userID][alias] = true
+	return nil
+}
+
+func (f *fakeLibrary) ListSyncAliasUses(userID string) ([]string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.aliasUseErr != nil {
+		return nil, false, f.aliasUseErr
+	}
+	var out []string
+	for a := range f.aliasUses[userID] {
+		out = append(out, a)
+	}
+	slices.Sort(out)
+	return out, f.aliasSeeded[userID], nil
+}
+
+func (f *fakeLibrary) SeedSyncAliasUses(userID string, aliases []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.aliasUseErr != nil {
+		return f.aliasUseErr
+	}
+	if f.aliasUses == nil {
+		f.aliasUses = map[string]map[string]bool{}
+	}
+	if f.aliasUses[userID] == nil {
+		f.aliasUses[userID] = map[string]bool{}
+	}
+	for _, a := range aliases {
+		f.aliasUses[userID][a] = true
+	}
+	if f.aliasSeeded == nil {
+		f.aliasSeeded = map[string]bool{}
+	}
+	f.aliasSeeded[userID] = true
+	return nil
+}
+
+// usedAliases is the recorded alias set for userID (test assertions).
+func (f *fakeLibrary) usedAliases(userID string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for a := range f.aliasUses[userID] {
+		out = append(out, a)
+	}
+	slices.Sort(out)
+	return out
 }

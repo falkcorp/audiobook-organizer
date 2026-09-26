@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package abs
 
@@ -15,7 +15,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -795,51 +794,24 @@ func (h *Handler) resolveSyncIDs(syncIDs []string) ([]string, error) {
 // errResolveSyncID wraps a sync-keyspace read failure during id translation.
 var errResolveSyncID = errors.New("could not resolve library item ids")
 
-// bookIDForSyncID resolves one sync id to a book id, following a single merge
-// redirect. ("", nil) means the id names no book; an error means we could not
+// bookIDForSyncID resolves one sync id to a book id through the one item
+// resolver (item_ref.go lookupItemRef), which follows merge redirects. ("", nil)
+// means the id names no book, including a stale id whose redirect chain is
+// broken (permanent: the ABS playlist/collection bodies have no per-id error
+// field, so it is skipped like an unknown id); an error means we could not
 // tell, and callers must fail rather than guess.
 //
-// A sync item whose book was merged into another carries RedirectTo rather than
-// a CurrentBookID. Not following it would silently drop books the user picked —
-// they exist, they are reachable in the app under the id the client is holding,
-// and only this lookup would disagree. One hop, not a loop: a redirect chain
-// would mean the merge bookkeeping is itself broken, and spinning here would
-// turn that into a hung request instead of a dropped book.
+// No alias use is recorded here: playlists and collections render the
+// surviving item, so the client never files anything under the alias it sent.
 func (h *Handler) bookIDForSyncID(syncID string) (string, error) {
-	item, err := h.identity.ResolveSyncItem(syncID)
-	if errors.Is(err, database.ErrSyncRedirectChainBroken) {
-		// PERMANENT, not transient: a stale merge-loser id whose chain is
-		// dangling or cyclic names no book, and treating it as retryable would
-		// 503 every request that carries it, forever. Skip it like an unknown
-		// id (the ABS playlist/collection bodies have no per-id error field),
-		// and log it so the broken chain can be repaired at the source.
-		playlistsLog.Warn("abs: skipping a sync id with a broken redirect chain: sync_id=%s err=%v",
-			logger.SanitizeLogValue(syncID), err)
+	ref, err := h.lookupItemRef("", syncID, false)
+	if errors.Is(err, errItemNotFound) {
 		return "", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("%w: %s: %v", errResolveSyncID, syncID, err)
 	}
-	if item == nil {
-		return "", nil
-	}
-	if item.CurrentBookID != "" {
-		return item.CurrentBookID, nil
-	}
-	if item.RedirectTo == "" || item.RedirectTo == syncID {
-		return "", nil
-	}
-	next, err := h.identity.ResolveSyncItem(item.RedirectTo)
-	if errors.Is(err, database.ErrSyncRedirectChainBroken) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("%w: %s: %v", errResolveSyncID, item.RedirectTo, err)
-	}
-	if next == nil {
-		return "", nil
-	}
-	return next.CurrentBookID, nil
+	return ref.BookID, nil
 }
 
 // respondResolveError answers a failed id translation: 503, retryable, and

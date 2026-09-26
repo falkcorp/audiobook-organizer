@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store_capability_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package server
 
@@ -49,6 +49,10 @@ func TestIndexedStorePreservesCapabilityLookups(t *testing.T) {
 	if database.AsBookmarkStore(wrapped) == nil {
 		t.Error("AsBookmarkStore through indexedStore == nil; " +
 			"/api/me would report an empty bookmark list")
+	}
+	if database.AsSyncAliasUseStore(wrapped) == nil {
+		t.Error("AsSyncAliasUseStore through indexedStore == nil; " +
+			"the ABS surface refuses to start")
 	}
 }
 
