@@ -1,5 +1,5 @@
 // file: internal/operations/opmode/dryrun_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 84883e45-012b-49ee-b0c3-871398fbcd21
 // last-edited: 2026-09-25
 
@@ -75,5 +75,36 @@ func TestLiveAndPreviewPointers(t *testing.T) {
 	*a = true
 	if *b {
 		t.Fatal("Live() must return a fresh pointer each call")
+	}
+}
+
+// TestResolveDryRunDefault: an omitted mode takes the caller's default in
+// either direction, a stated mode wins over it, and a disagreement is refused
+// toward preview even when the default is live.
+func TestResolveDryRunDefault(t *testing.T) {
+	tr, fa := true, false
+	cases := []struct {
+		name         string
+		snake, camel *bool
+		omitted      bool
+		want         bool
+		wantErr      bool
+	}{
+		{"omitted, default live", nil, nil, false, false, false},
+		{"omitted, default preview", nil, nil, true, true, false},
+		{"camel false beats preview default", nil, &fa, true, false, false},
+		{"snake true beats live default", &tr, nil, false, true, false},
+		{"conflict with live default", &fa, &tr, false, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResolveDryRunDefault("test.op", tc.snake, tc.camel, tc.omitted)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

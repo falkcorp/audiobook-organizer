@@ -1,5 +1,5 @@
 // file: internal/operations/opmode/dryrun.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ea2e7a99-5038-479b-a7f2-19a6153feecd
 // last-edited: 2026-09-25
 
@@ -51,6 +51,19 @@ type DryRunParams struct {
 // The error return is always paired with true, so a caller that ignores the
 // error still fails toward preview.
 func ResolveDryRun(opID string, snake, camel *bool) (bool, error) {
+	return ResolveDryRunDefault(opID, snake, camel, true)
+}
+
+// ResolveDryRunDefault is ResolveDryRun with the omitted-mode value supplied by
+// the caller. It exists for the maintenance-job family, whose fallback is the
+// dry_run each job ADVERTISES in DefaultParams: true for every job with a
+// preview mode, false only for the read-only jobs whose Run ignores the flag
+// (internal/maintenance/jobs/preview_default_guard_test.go names them). Every
+// other op uses ResolveDryRun.
+//
+// A disagreement is an error paired with true, as in ResolveDryRun, whatever
+// the default: a caller that ignores the error still fails toward preview.
+func ResolveDryRunDefault(opID string, snake, camel *bool, omitted bool) (bool, error) {
 	if snake != nil && camel != nil && *snake != *camel {
 		return true, fmt.Errorf("%s: dry_run=%v and dryRun=%v disagree; send one", opID, *snake, *camel)
 	}
@@ -60,7 +73,7 @@ func ResolveDryRun(opID string, snake, camel *bool) (bool, error) {
 	case camel != nil:
 		return *camel, nil
 	}
-	return true, nil
+	return omitted, nil
 }
 
 // ParseDryRun decodes raw as DryRunParams and resolves it with ResolveDryRun.
