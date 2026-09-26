@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-09-26 -->
 
@@ -127,63 +127,75 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
    "Service Auth" policy that allows that token. The webhook does not use it.
    The `coverage` workflow uses the same three values (see Secrets).
 
-## 4. Agents
+## 4. Agents (as deployed 2026-09-26)
 
-| agent | host | backend | labels | capacity |
-|---|---|---|---|---|
-| U0 | 192.0.2.10 | docker | `host=u0,heavy=true` | `WOODPECKER_MAX_WORKFLOWS=1` |
-| llm1 | 192.0.2.20 | local | `host=llm1` | 1 |
-| Mac | 192.0.2.30 | local | `host=mac` | 1 |
+| agent | host | backend | labels | parallel workflows | runs as |
+|---|---|---|---|---|---|
+| U0 | 192.0.2.10 | docker | `host=u0` | 2 | swarm service `woodpecker_woodpecker-agent` |
+| llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 2 | LaunchDaemon, `UserName` = the CI user |
+| Mac | 192.0.2.30 (macOS arm64) | local | `host=mac,heavy=true` | 2 | LaunchAgent (user) |
 
-All agents share these settings:
+All agents use `WOODPECKER_SERVER=192.0.2.10:18734` and the same
+`WOODPECKER_AGENT_SECRET` as the server.
+
+### U0 (prod): the server stack
+
+The server and the U0 agent run as one Docker swarm stack,
+`~/ai/woodpecker/woodpecker-compose.yaml`, deployed with
+`docker stack deploy -c woodpecker-compose.yaml woodpecker`. Secrets are in
+`~/ai/woodpecker/woodpecker.env` (mode 600): `WOODPECKER_GITHUB_CLIENT`,
+`WOODPECKER_GITHUB_SECRET`, `WOODPECKER_AGENT_SECRET`, `WOODPECKER_ADMIN`.
+Images are pinned by digest. The server publishes 18733 (HTTP) and 18734
+(gRPC) in host mode.
+
+U0 is the production host, so its agent is capped:
 
 ```
-WOODPECKER_SERVER=192.0.2.10:18734
-WOODPECKER_AGENT_SECRET=<same as server>
-WOODPECKER_AGENT_LABELS=host=<u0|llm1|mac>[,heavy=true]
+WOODPECKER_MAX_WORKFLOWS=2
+WOODPECKER_BACKEND_DOCKER_LIMIT_CPU_QUOTA=800000     # 8 CPUs per step container
+WOODPECKER_BACKEND_DOCKER_LIMIT_MEM=17179869184      # 16 GiB per step container
 ```
 
-### U0 (prod): capped and sliced
-
-U0 is the production host, so its agent runs one workflow at a time, inside a
-systemd slice that limits CPU and memory for everything the agent starts.
-
-```ini
-# /etc/systemd/system/woodpecker-ci.slice
-[Slice]
-CPUQuota=2400%        # at most 24 of 48 cores
-MemoryMax=24G
-CPUWeight=20          # lose to the app and to Ollama under contention
-IOWeight=20
-```
-
-Run the agent as a systemd service with `Slice=woodpecker-ci.slice`. The step
-containers are started by dockerd rather than by the agent, so they are not
-children of the agent's cgroup. Put them in the same slice too. The cleanest
-way is a second Docker daemon for CI, or `"cgroup-parent":
-"woodpecker-ci.slice"` in a dedicated daemon's `daemon.json`. Do not set that
-on the daemon that runs the app. Before relying on the limits, check with
-`systemd-cgls` during a run that the step containers are under the slice.
-Also set `WOODPECKER_MAX_WORKFLOWS=1`. The test and checks
-workflows run in the `golang` image, which has no ffmpeg. That keeps the
-host's no-decode rule, and a container's localhost is not the host's, so tests
-that dial `localhost:8112` or `:8484` never reach the real services.
+That bounds CI at about 16 CPUs and 32 GiB of the host's 48 cores. The
+`checks` and `test-database` workflows run in the `golang` image, which has no
+ffmpeg, so the host's no-decode rule holds. A container's localhost is not the
+host's, so tests that dial `localhost:8112` or `:8484` never reach the real
+services.
 
 ### llm1 and the Mac: local backend
 
 These agents run steps directly on macOS (`WOODPECKER_BACKEND=local`). The
-decode tests need the host's ffmpeg, ffprobe and fpcalc, and macOS cannot run
-the pinned Linux images natively. The agent's environment must put the pinned
-toolchains first on PATH:
+decode tests need the host's ffmpeg, ffprobe and fpcalc, and macOS has no
+Docker backend.
 
-```
-PATH=$HOME/ci/opt/go/bin:$HOME/ci/opt/node/bin:$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
-GOTOOLCHAIN=go1.27.1
-```
+- **Install layout:** `~/ci/woodpecker/bin/{woodpecker-agent,plugin-git}`. The agent is v3.18.1 darwin/arm64 from the woodpecker releases; plugin-git is 2.10.1.
+- **Logs:** `~/ci/woodpecker/agent.log`.
+- **Step workspaces:** `~/ci/woodpecker/work`.
 
-The local backend also needs the `plugin-git` binary on PATH for the clone
-step. Get it from the woodpecker-ci/plugin-git releases, the version matching
-the pinned image (2.10.1). Run the agent as a launchd user agent, not as root.
+The plist puts the pinned toolchains first on PATH. `GOTOOLCHAIN=go1.27.1` is
+set per step, so a host with an older go fetches the exact version.
+
+**On the local backend, a step's `image:` is the shell that runs its
+`commands` (use `image: bash`), not a container image.** A container image name
+there makes the agent try to exec it: `exec: "golang:...": executable file not
+found in $PATH`.
+
+**macOS Local Network privacy.** A launchd-started agent that runs as a
+normal user gets `dial tcp ...:18734: connect: no route to host` until it is
+allowed under System Settings → Privacy & Security → Local Network →
+`woodpecker-agent`. This also applies to a LaunchDaemon with `UserName` set. The
+same binary started from an ssh session connects fine, which is how to tell
+this apart from a firewall. Do not run the agent as root to avoid the prompt:
+pipelines would run as root.
+
+### Running CI from a workstation
+
+`make ci-woodpecker` pushes HEAD, starts a manual pipeline for the branch
+through the API, waits, prints every step (with the tail of each failed step's
+log), and exits non-zero unless the pipeline succeeded. It reads
+`WOODPECKER_URL` (the server's LAN address; the public host is behind Access)
+and `WOODPECKER_TOKEN` from the environment or from the gitignored
+`.claude/.credentials/woodpecker-api.env`.
 
 ## 5. Secrets
 
@@ -198,8 +210,7 @@ Set these on the repo in the Woodpecker UI:
 ## Troubleshooting
 
 - **A workflow sits in "pending".** No online agent has matching labels. Check
-  the Agents page. The U0 agent runs only one workflow at a time, so `checks`
-  and `coverage` queue behind `test-database`.
+  the Agents page. Each agent runs at most 2 workflows at a time.
 - **The coverage gate fails with "no CI-COVERAGE line".** That test workflow
   failed or never ran. Its own log shows why.
 - **Webhooks fail with 403.** The GitHub `hooks` IP list in the WAF rule is
