@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
 // last-edited: 2026-09-25
 
@@ -780,8 +780,10 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	// Disagreement was refused in the Run wrapper; on error this is true.
-	dryRun, _ := opmode.ResolveDryRun("maintenance.author-path-link", params.DryRun, params.DryRunCamel)
+	dryRun, err := opmode.ResolveDryRun("maintenance.author-path-link", params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return nil, err
+	}
 	createMissing := true
 	if params.CreateMissing != nil {
 		createMissing = *params.CreateMissing
