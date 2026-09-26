@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
 // last-edited: 2026-09-25
 
@@ -193,8 +193,10 @@ func (p *Plugin) authorIDRepair(ctx context.Context, params authorIDRepairParams
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	// Disagreement was refused in runAuthorIDRepair; on error this is true.
-	dryRun, _ := opmode.ResolveDryRun("maintenance.author-id-repair", params.DryRun, params.DryRunCamel)
+	dryRun, err := opmode.ResolveDryRun("maintenance.author-id-repair", params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return nil, err
+	}
 	sample := params.SampleLimit
 	if sample <= 0 {
 		sample = authorIDRepairDefaultSample
