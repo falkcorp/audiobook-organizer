@@ -90,6 +90,15 @@ func CompletePendingUserStateRepair(db UserProgressMerger, rec PendingUserStateR
 	if err != nil {
 		return fmt.Errorf("resolve survivor of %s: %w", rec.WinnerBookID, err)
 	}
+	// A loser that is still live was not retired (the merge failed after the
+	// follow, or was undone): draining it now would strip state off a book
+	// the user can still see. The record stays; a re-run of the merge or an
+	// undo resolves it.
+	if loser, err := db.GetBookByID(rec.LoserBookID); err != nil {
+		return fmt.Errorf("read loser %s: %w", rec.LoserBookID, err)
+	} else if loser != nil && !loser.IsSoftDeleted() {
+		return fmt.Errorf("loser %s is still live; record kept until the merge completes", rec.LoserBookID)
+	}
 	follower := asFollower(db)
 	if moveErr := moveLoserState(db, follower, winner, rec.LoserBookID, nil, rec.Slice); moveErr != nil {
 		return moveErr

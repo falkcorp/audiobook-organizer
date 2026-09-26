@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -364,6 +365,12 @@ type StoreProvider interface {
 	// implements it; the op reports that as "not supported" rather than
 	// panicking.
 	ReviewStatusIndexStore() database.ReviewStatusIndexRepairer
+	// MergeUserStateStore serves repair-merged-user-state: finding and moving
+	// user state (ubs, upos, bookmarks) stranded under merged-away books. Every
+	// method it needs is on database.Store, so a plain `return s.store` is
+	// correct; the capabilities it probes (sync identity, bookmarks) are
+	// resolved with database.AsCapability inside internal/merge.
+	MergeUserStateStore() merge.UserStateRepairStore
 	// OperationQueueStore serves the dedupe-book-file-rows scan guard: an apply
 	// run must refuse while library.scan is queued or running, because a scan
 	// concurrently rewrites the same book_file rows that op deletes.

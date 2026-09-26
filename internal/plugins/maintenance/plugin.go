@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.54.0
+// version: 1.55.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -189,6 +189,8 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.introTranscribeDef(),
 		p.repairTranscribeStatusDef(),
 		p.clearApplyRenameFailuresDef(),
+		p.repairMergedUserStateDef(),
+		p.repairMergedUserStateSweepDef(),
 		p.repointUnrecordedRenamesDef(),
 		p.introMigrateSingleFileDef(),
 		p.extractWAVClipsDef(),
