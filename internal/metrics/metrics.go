@@ -1,5 +1,5 @@
 // file: internal/metrics/metrics.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
 // last-edited: 2026-09-26
 
@@ -110,6 +110,20 @@ var (
 		Namespace: "audiobook_organizer",
 		Name:      "search_cache_patch_cap_rebuilds_total",
 		Help:      "Search result cache patches abandoned for a rebuild because the changed-book set exceeded MaxPatchChanged (process lifetime)",
+	})
+	// searchCacheRebuildsTotal mirrors searchcache Stats().Rebuilds: every
+	// build the search-result cache STARTS, whatever the cause -- the first
+	// build of a key after a miss, a rebuild of an out-of-date entry (ring
+	// overflow, the MaxPatchChanged cap, PatchLimit, an evaluator that cannot
+	// patch), and the drift-correcting rebuild after a patch. A lookup that
+	// joins a build already in flight starts nothing and is not counted.
+	// Compare its rate with search_cache_patch_cap_rebuilds_total during a
+	// backfill to see which limit forces rebuilds. No labels: one cache per
+	// process.
+	searchCacheRebuildsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "search_cache_rebuilds_total",
+		Help:      "Search result cache builds started: first builds after a miss plus rebuilds of out-of-date entries; joining an in-flight build is not counted (process lifetime)",
 	})
 	// searchIndexDirtyBacklogGauge is the size of that dirty set, sampled at
 	// each reconcile tick, so a backlog that is not draining is visible.
@@ -250,7 +264,7 @@ var (
 func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
-			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, searchCachePatchCapRebuildsTotal, foldersGauge, memoryAllocGauge, goroutinesGauge,
+			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, searchCachePatchCapRebuildsTotal, searchCacheRebuildsTotal, foldersGauge, memoryAllocGauge, goroutinesGauge,
 			opActivityMirrorDroppedTotal, sortByRequestedTotal, operationDeprecatedDefIDTotal,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
 			itunesLocationUnmappable, organizeTargetPathCollision, aiBackendAvailable,
@@ -315,6 +329,10 @@ func IncSearchIndexDropped() { searchIndexDroppedTotal.Inc() }
 // IncSearchCachePatchCapRebuild counts one search-result cache patch abandoned
 // for a rebuild because the changed set exceeded MaxPatchChanged.
 func IncSearchCachePatchCapRebuild() { searchCachePatchCapRebuildsTotal.Inc() }
+
+// IncSearchCacheRebuild counts one build started by the search-result cache
+// (the Prometheus side of searchcache Stats().Rebuilds).
+func IncSearchCacheRebuild() { searchCacheRebuildsTotal.Inc() }
 
 // IncOpActivityMirrorDropped counts one operation log line the registry's
 // Activity Log mirror discarded rather than block the op.

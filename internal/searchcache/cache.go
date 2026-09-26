@@ -173,15 +173,21 @@ type JobStatus struct {
 
 // Stats is a point-in-time counter snapshot.
 type Stats struct {
-	Entries  int
-	Bytes    int64
-	Hits     int64
-	Misses   int64
-	Patches  int64
+	Entries int
+	Bytes   int64
+	Hits    int64
+	Misses  int64
+	Patches int64
+	// Rebuilds counts builds started, whatever the cause: a first build after
+	// a miss, a rebuild of an out-of-date entry, or a drift-correcting rerun.
+	// A lookup that joins a build already in flight is not counted. Exported
+	// as audiobook_organizer_search_cache_rebuilds_total.
 	Rebuilds int64
 	// PatchCapRebuilds counts patches abandoned for a rebuild because the
-	// changed set exceeded MaxPatchChanged (a subset of the causes that lead
-	// to Rebuilds; ring overflow and PatchLimit are not counted here).
+	// changed set exceeded MaxPatchChanged. Ring overflow and PatchLimit are
+	// not counted here. It is counted even when the rebuild it asks for joins
+	// one already in flight, which Rebuilds does not count, so it is not a
+	// strict subset of Rebuilds.
 	PatchCapRebuilds int64
 	Evicted          int64
 	Jobs             int
@@ -596,6 +602,7 @@ func (c *Cache) startBuildLocked(key string, ev Evaluator) (*job, error) {
 	c.building[key] = j
 	c.jobs[j.id] = j
 	c.rebuilds.Add(1)
+	metrics.IncSearchCacheRebuild()
 	go c.run(j, ev)
 	return j, nil
 }

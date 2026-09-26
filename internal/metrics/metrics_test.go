@@ -1,5 +1,5 @@
 // file: internal/metrics/metrics_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-26
 
@@ -376,5 +376,16 @@ func TestIncSearchCachePatchCapRebuild(t *testing.T) {
 	IncSearchCachePatchCapRebuild()
 	if got := testutil.ToFloat64(searchCachePatchCapRebuildsTotal) - before; got != 1 {
 		t.Fatalf("search_cache_patch_cap_rebuilds_total rose by %v; want 1", got)
+	}
+}
+
+// TestIncSearchCacheRebuild checks the helper moves the counter the /metrics
+// scrape reads.
+func TestIncSearchCacheRebuild(t *testing.T) {
+	Register()
+	before := testutil.ToFloat64(searchCacheRebuildsTotal)
+	IncSearchCacheRebuild()
+	if got := testutil.ToFloat64(searchCacheRebuildsTotal) - before; got != 1 {
+		t.Fatalf("search_cache_rebuilds_total rose by %v; want 1", got)
 	}
 }
