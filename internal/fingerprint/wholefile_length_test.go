@@ -1,7 +1,7 @@
 // file: internal/fingerprint/wholefile_length_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c8ba97ba-1386-4b67-a268-646c1f52286d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-25
 
 package fingerprint
 
@@ -27,6 +27,21 @@ func TestFpcalcArgs_DefaultIsFpcalcsOwn120(t *testing.T) {
 	whole := fpcalcArgs("/a/b.mp3", WholeFileAnalysisLength)
 	if !reflect.DeepEqual(whole, []string{"-json", "-length", "0", "/a/b.mp3"}) {
 		t.Errorf("fpcalcArgs whole-file = %v, want -length 0", whole)
+	}
+}
+
+// TestFpcalcHeadArgs_PinsSegmentWindow pins the head-segment invocation the
+// way TestFpcalcArgs_DefaultIsFpcalcsOwn120 pins the head-print one. Without
+// -length, fpcalc falls back to its own 120 s default and every stored head
+// segment silently covers 120 s instead of SegmentSeconds.
+func TestFpcalcHeadArgs_PinsSegmentWindow(t *testing.T) {
+	if SegmentSeconds != 300 {
+		t.Fatalf("SegmentSeconds = %d; stored head segments were written with 300", SegmentSeconds)
+	}
+	got := fpcalcHeadArgs("/a/b.mp3")
+	want := []string{"-json", "-length", "300", "/a/b.mp3"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("fpcalcHeadArgs = %v, want %v", got, want)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/fingerprint/fpcalc.go
-// version: 3.8.0
+// version: 3.8.1
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package fingerprint generates AcoustID-compatible acoustic fingerprints for
 // audio files. It supports two backends:
@@ -260,9 +260,18 @@ func fingerprintAt(path string, offset float64) (string, error) {
 const segmentTimeout = 2 * DefaultWindowTimeout
 
 // fpcalcHead runs fpcalc on the file directly for the first SegmentSeconds.
+// fpcalcHeadArgs is fpcalcHead's argument vector: the first SegmentSeconds
+// of the file, with -length always explicit. Split out so a CI test can pin it
+// (TestFpcalcHeadArgs_PinsSegmentWindow): the live decode test that would
+// otherwise notice a dropped or changed -length only runs where fpcalc and
+// ffmpeg are installed, which excludes CI.
+func fpcalcHeadArgs(path string) []string {
+	return fpcalcArgs(path, SegmentSeconds)
+}
+
 func fpcalcHead(fpcalc, path string) (string, error) {
 	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(fpcalc, "-json", "-length", fmt.Sprintf("%d", SegmentSeconds), path)
+	cmd := exec.Command(fpcalc, fpcalcHeadArgs(path)...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
