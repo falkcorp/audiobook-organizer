@@ -1,7 +1,7 @@
 // file: internal/database/book_sort.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c1f7a52-9d84-4e6b-b0a7-2f5c8e1d4a93
-// last-edited: 2026-08-25
+// last-edited: 2026-09-26
 //
 // The single ordering authority for a []Book.
 //
@@ -94,6 +94,18 @@ func bookTitleSortValue(b *Book) string {
 	}
 	return key
 }
+
+// TitleSortKey is the key the title sort orders a book by (bookTitleSortValue,
+// which mirrors the memdb title index), for callers holding a title and an
+// original filename rather than a Book. The ABS collapsed library list uses it
+// to file a series under its name in the same order the store files books.
+func TitleSortKey(title string, originalFilename *string) string {
+	return bookTitleSortValue(&Book{Title: title, OriginalFilename: originalFilename})
+}
+
+// CompareSortStrings is the string sort comparison every string sort field
+// uses: normalised, a missing (empty) value after every present one.
+func CompareSortStrings(a, b string) int { return compareSortStrings(a, b) }
 
 func derefSortStr(s *string) string {
 	if s == nil {

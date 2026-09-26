@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package abs
 
@@ -501,11 +501,14 @@ func (h *Handler) LibraryItems(c *gin.Context) {
 	p := parsePageParams(c)
 
 	resp := itemsPageResponse{
-		Include:   strings.TrimSpace(c.Query("include")),
-		Limit:     p.Limit,
-		MediaType: "book",
-		Offset:    p.Offset,
-		Page:      p.Page,
+		// Echoed as asked, like real ABS's payload.collapseseries, including on a
+		// series filter where the collapse itself is not applied.
+		CollapseSeries: wantsCollapseSeries(c),
+		Include:        strings.TrimSpace(c.Query("include")),
+		Limit:          p.Limit,
+		MediaType:      "book",
+		Offset:         p.Offset,
+		Page:           p.Page,
 		// Never nil: a null results array fails the decode.
 		Results: []any{},
 		Total:   0,
@@ -542,6 +545,13 @@ func (h *Handler) LibraryItems(c *gin.Context) {
 	// the 28 captures carry a filter — so the log was the only oracle available.
 	if raw := strings.TrimSpace(c.Query("filter")); raw != "" {
 		h.filteredItems(c, raw, p, &resp)
+		return
+	}
+
+	// collapseseries=1 (AudioBooth's "Collapse series") needs the whole ordered
+	// set before it can page, so it takes its own path; see collapse_series.go.
+	if wantsCollapseSeries(c) {
+		h.collapsedLibraryItems(c, p, &resp)
 		return
 	}
 
@@ -1094,6 +1104,10 @@ type seriesBooksBuilt struct {
 	// is not just cheaper: it guarantees the series tile and the series drill-down
 	// agree about which books are in the series, which is the whole complaint.
 	bookIDs []string
+	// syncIDs[i] is bookIDs[i]'s client-visible id, resolved while the grouping
+	// was built. The collapsed library list (collapse_series.go) renders a
+	// series' libraryItemIds from it without one store read per member.
+	syncIDs []string
 }
 
 func (h *Handler) seriesBooksCached() (map[int]seriesBooksBuilt, error) {
@@ -1175,13 +1189,17 @@ func (h *Handler) buildSeriesBooks() (map[int]seriesBooksBuilt, error) {
 		built := seriesBooksBuilt{}
 		for i := range list {
 			// Books with no resolvable sync id are dropped here, before they can
-			// reach the response. The client splits compound ids at a fixed byte
+			// reach the response. The check must happen while the grouping is
+			// built so bookIDs and the served list cannot disagree (it replaced
+			// seriesBookEntry, whose ad-hoc book object no client could decode). The client splits compound ids at a fixed byte
 			// offset of 36, so a 26-char ULID does not merely look wrong, it
 			// mis-parses -- the rule #2366 established for playlist items.
-			if !h.hasSyncID(list[i].ID) {
+			syncID, err := h.identity.MintOrGetSyncID(list[i].ID)
+			if err != nil || syncID == "" {
 				continue
 			}
 			built.bookIDs = append(built.bookIDs, list[i].ID)
+			built.syncIDs = append(built.syncIDs, syncID)
 			// Summed over the books actually SERVED, not over every row in the
 			// series: a duration counting books the client cannot see would
 			// disagree with the list printed right next to it.
@@ -1213,18 +1231,6 @@ func msOrNow(ms int64, now time.Time) int64 {
 		return ms
 	}
 	return msEpoch(now)
-}
-
-// hasSyncID reports whether a book has a resolvable client-visible sync id.
-//
-// This replaced seriesBookEntry, which built a six-field ad-hoc book object
-// that no ABS client could decode (see the note in LibrarySeries). The
-// filtering it did was the part worth keeping: the id check decides which books
-// can be served at all, and it must happen while the series grouping is built
-// so bookIDs and the served list cannot disagree.
-func (h *Handler) hasSyncID(bookID string) bool {
-	sid, err := h.identity.MintOrGetSyncID(bookID)
-	return err == nil && sid != ""
 }
 
 // absAuthorsCacheTTL bounds how long the built author list is reused.
@@ -2887,6 +2893,13 @@ func (h *Handler) filteredItems(c *gin.Context, raw string, p pageParams, resp *
 	if status != filterResolved {
 		logUnresolvedFilter("items", group, value, status)
 		respondJSON(c, http.StatusOK, resp)
+		return
+	}
+
+	// collapseseries=1 applies to every filter EXCEPT a series drill-down, where
+	// real ABS turns it off (getFilteredLibraryItems: filterGroup 'series').
+	if group != "series" && wantsCollapseSeries(c) {
+		h.collapsedFilteredItems(c, ids, p, resp)
 		return
 	}
 
