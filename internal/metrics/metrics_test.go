@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-11
+// last-edited: 2026-09-26
 
 package metrics
 
@@ -365,5 +365,16 @@ func TestSearchIndexDroppedAndBacklog(t *testing.T) {
 		if got := testutil.ToFloat64(searchIndexDirtyBacklogGauge); got != float64(val) {
 			t.Errorf("SetSearchIndexDirtyBacklog(%d): gauge reads %v, want %v", val, got, val)
 		}
+	}
+}
+
+// TestIncSearchCachePatchCapRebuild checks the helper moves the counter the
+// /metrics scrape reads.
+func TestIncSearchCachePatchCapRebuild(t *testing.T) {
+	Register()
+	before := testutil.ToFloat64(searchCachePatchCapRebuildsTotal)
+	IncSearchCachePatchCapRebuild()
+	if got := testutil.ToFloat64(searchCachePatchCapRebuildsTotal) - before; got != 1 {
+		t.Fatalf("search_cache_patch_cap_rebuilds_total rose by %v; want 1", got)
 	}
 }

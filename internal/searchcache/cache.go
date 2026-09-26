@@ -1,7 +1,7 @@
 // file: internal/searchcache/cache.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: bcadc16f-696c-468a-a3e4-afea4c81bc5c
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package searchcache
 
@@ -21,6 +21,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
 var cacheLog = logger.New("searchcache")
@@ -178,9 +179,13 @@ type Stats struct {
 	Misses   int64
 	Patches  int64
 	Rebuilds int64
-	Evicted  int64
-	Jobs     int
-	Building int
+	// PatchCapRebuilds counts patches abandoned for a rebuild because the
+	// changed set exceeded MaxPatchChanged (a subset of the causes that lead
+	// to Rebuilds; ring overflow and PatchLimit are not counted here).
+	PatchCapRebuilds int64
+	Evicted          int64
+	Jobs             int
+	Building         int
 }
 
 type entry struct {
@@ -233,6 +238,7 @@ type Cache struct {
 	patchSF singleflight.Group
 
 	hits, misses, patches, rebuilds, evicted atomic.Int64
+	patchCapRebuilds                         atomic.Int64
 }
 
 // New returns a cache that invalidates against changes.
@@ -514,6 +520,8 @@ func (c *Cache) patch(waitCtx, ctx context.Context, ids, changed []string, ev Ev
 	if len(changed) > c.cfg.MaxPatchChanged {
 		// Too many changes to re-evaluate cheaply: rebuild instead, without
 		// first doing (and discarding) a near-full query.
+		c.patchCapRebuilds.Add(1)
+		metrics.IncSearchCachePatchCapRebuild()
 		return nil, false, nil
 	}
 	if err := c.acquireSlot(waitCtx); err != nil {
@@ -828,8 +836,9 @@ func (c *Cache) Stats() Stats {
 	return Stats{
 		Entries: n, Bytes: b,
 		Hits: c.hits.Load(), Misses: c.misses.Load(), Patches: c.patches.Load(),
-		Rebuilds: c.rebuilds.Load(), Evicted: c.evicted.Load(),
-		Jobs: nj, Building: nb,
+		Rebuilds: c.rebuilds.Load(), PatchCapRebuilds: c.patchCapRebuilds.Load(),
+		Evicted: c.evicted.Load(),
+		Jobs:    nj, Building: nb,
 	}
 }
 
