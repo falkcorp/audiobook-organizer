@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-09-26-searchcache-ring-memory.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 51b02350-8472-4bea-b151-3e430c2c0b06 -->
 <!-- last-edited: 2026-09-26 -->
 
@@ -46,8 +46,8 @@ go test ./internal/searchcache -run '^$' -bench ChangeLogRingMemory -benchtime 3
 
 ## CPU and lock cost: this, not memory, is the real cost of a bigger ring
 
-`ChangedSince` walks every live record while holding the `ChangeLog` mutex. It
-does not stop early. `Record` takes the same mutex. Store writes call `Record`
+Before the fix described below, `ChangedSince` walked every live record while holding the `ChangeLog` mutex. It
+did not stop early. `Record` takes the same mutex. Store writes call `Record`
 synchronously on the writer's goroutine: `PebbleStore` defers
 `notifyBooksChanged` in its book write paths (`memdb_sync.go`), which calls
 `searchChangeObserver.BooksChanged`. Bleve commits call it too, through
@@ -74,11 +74,52 @@ grows with the ring, not with the cap. At 262,144 records, one stale lookup hold
 the mutex for about 29 ms, blocks every book write for that time, and allocates
 about 50 MB of garbage.
 
-**Possible fix (not made, outside this task's scope):** give `ChangedSince` a
-`limit` argument and have it return "too many" once it has seen
-`MaxPatchChanged+1` distinct IDs. Every existing call site is in `cache.go`. The
-fix would put a bound on both the lock hold and the garbage for any ring size,
-and it would make a bigger ring much cheaper.
+**Fixed (follow-up on the same day, branch `feat/searchcache-changedsince-limit`).**
+The numbers above are the state before the fix. Two changes were made:
+
+- `ChangedSince(since, limit)` stops once it has `limit` distinct IDs.
+  `cache.go` passes `MaxPatchChanged+1`, so a change set past the cap comes back
+  at exactly one past the cap, and `patch()` rebuilds (and counts a patch-cap
+  rebuild) exactly as before. `limit <= 0` keeps the old unbounded answer.
+- The mutex now covers only a binary search for the first record newer than
+  `since`, plus a copy of that window's IDs into a pooled buffer. The dedupe
+  runs after the mutex is released. Records are in non-decreasing generation
+  order from `head`, so the search is exact. Record, eviction and `RecordAll`
+  all keep that order. The copy is safe because IDs are immutable strings and
+  `current`/`floor` are read under the same lock hold as the copy.
+
+`TestChangedSince_MatchesReferenceWalk` checks the new code against a copy of
+the old linear walk, for every generation and several limits, over random
+histories that include wrap-around, eviction, multi-ID records, no-op records
+and `RecordAll`.
+
+Measured on darwin/arm64 (M1 Max), `-count 6`, medians. Before is 068315747, and
+the contended benchmarks were first committed alone at 0f43a46d9 so they could
+be run against the old code.
+
+```
+go test ./internal/searchcache -run '^$' -bench 'ChangedSince|RecordWhileChangedSince' -benchmem -count 6
+```
+
+| Benchmark (ring 65,536 unless named) | Before | After |
+|---|---|---|
+| Entry 1 gen old (`FullRing`), 8,192 / 65,536 / 262,144 | 8.5 µs / 79 µs / 252 µs | 68 ns / 75 ns / 92 ns |
+| Entry as old as the ring, as `cache.go` calls it (limit 2,049) | 7.45 ms, 12.5 MB, 556 allocs | **165 µs, 210 KB, 20 allocs** |
+| Same, ring 262,144 | 30.6 ms, 50.5 MB | 334 µs, 211 KB |
+| Same, no limit (old full answer), 65,536 / 262,144 | 7.45 ms / 30.6 ms | 4.5 ms / 22.7 ms (off the lock) |
+| Mutex hold for a whole-ring lookup (`LockHold`), 8,192 / 65,536 / 262,144 | the whole call: 0.67 ms / 7.45 ms / 30.6 ms | 5.8 µs / 50 µs / 190 µs, 0 allocs |
+| 1,024 books × 64 writes, whole ring (`RepeatHeavy`, under the cap, no early stop) | 826 µs, all under the mutex | 764 µs, 50 µs of it under the mutex |
+| `Record` p99.9 while another goroutine loops whole-ring lookups, 65,536 distinct | 13.1 ms | **62 µs** |
+| Same, 1,024 books × 64 writes | 2.32 ms | < 1 µs |
+
+- The mutex hold still grows with the window, since it is a copy of the window.
+  But it is a copy of 16-byte string headers at about 0.75 ns per record,
+  instead of a map insert per record. The pooled buffer makes it allocation
+  free.
+- The `max-µs` metric of `BenchmarkRecordWhileChangedSince` is not in the
+  table. It swung from 0.6 ms to 138 ms between runs, both before and after.
+  It is dominated by GC and scheduler pauses caused by the lookup loop's own
+  garbage, not by the mutex. p99.9 was stable to within 10% across runs.
 
 ## What a bigger ring changes in behaviour
 
@@ -134,10 +175,22 @@ The new counter `audiobook_organizer_search_cache_patch_cap_rebuilds_total` (als
 `Stats.PatchCapRebuilds`) counts rebuilds forced by the 2,048 cap, and only those.
 Rebuilds forced by ring overflow or by `PatchLimit` are not counted.
 
-The cache's total rebuild count (`Stats().Rebuilds`) is not exported anywhere
-today: no metric, and no endpoint. Only tests read it. So the comparison below
-needs a follow-up that exports it, for example as a sibling counter. Once both
-are exported, compare them during a backfill:
+The cache's total build count (`Stats().Rebuilds`) is now exported too, as
+`audiobook_organizer_search_cache_rebuilds_total`. Read it with two caveats:
+
+- It counts every build the cache **starts**: the first build of a key after a
+  miss, a rebuild of an out-of-date entry for any reason, and the
+  drift-correcting rebuild after a patch. The miss count (`Stats().Misses`) is
+  still not exported, so first builds cannot be subtracted. Compare the two
+  counters' rates **during** a backfill, when misses on already-warm entries
+  are rare, rather than over the whole process lifetime.
+- A lookup whose rebuild joins a build already in flight starts nothing and is
+  not counted in `Rebuilds`. The patch-cap counter counts every abandoned patch,
+  including one that then joins an in-flight build. So cap rebuilds are not a
+  strict subset of `Rebuilds`, and in a busy burst the cap counter can run ahead
+  of it.
+
+With both exported, compare them during a backfill:
 
 - If most rebuilds are cap rebuilds, a deeper ring buys nothing.
 - If cap rebuilds are few while rebuilds climb, the ring (or `PatchLimit`) is what
@@ -145,7 +198,8 @@ are exported, compare them during a backfill:
 
 ## Recommendation
 
-Keep 65,536 unless the counters show that ring overflow dominates. Before any
-further raise, bound `ChangedSince` at `MaxPatchChanged+1`. Without that bound, a
-4× ring means 4× longer write stalls on every stale lookup (about 29 ms at
-262,144), and that costs more than the 10.5 MiB of extra memory.
+Keep 65,536 unless the counters show that ring overflow dominates. The bound
+this section used to ask for is now in place. A stale lookup now holds the mutex
+for about 50 µs at 65,536, or 190 µs at 262,144, instead of 7.3 ms or 29 ms. So
+a further raise now costs mainly its memory (about 10.5 MiB more at 262,144) and
+a linear increase in that copy.
