@@ -1,0 +1,44 @@
+# file: .woodpecker/test-server-scanner.yaml
+# version: 1.0.0
+# guid: 7a2d4e81-0c63-4f9b-b5e2-9d1f3a6c8e27
+# last-edited: 2026-09-26
+#
+# `make ci` test-short, part 2 of 3: internal/server, internal/scanner and
+# internal/server/handlers/abs.
+#
+# Measured on the macOS runner node, 2026-09-26: abs 620 s, scanner 265-285 s,
+# server 190-230 s. `go test` runs the three packages in parallel (-p), so the
+# workflow takes about as long as abs alone. abs does not need a decoder, but
+# it is here rather than in test-rest because it is the second-longest package.
+# Next to applygate (about 450 s) and the rest of test-rest it would make that
+# workflow the long pole.
+#
+# server and scanner decode audio in their tests (exec.LookPath("ffmpeg") and
+# similar), so this workflow must run on an agent that has ffmpeg, ffprobe and
+# fpcalc: the llm1 node (local backend on macOS). It must never run on the prod
+# host.
+
+labels:
+  host: llm1
+
+when:
+  - event: [push, pull_request, manual]
+
+clone:
+  - name: clone
+    image: woodpeckerci/plugin-git:2.10.1@sha256:550075c844fcec0af41d9d28f9860aa5d8c43e1e9419be4b9266dc02c2f29804
+    settings:
+      lfs: false  # GitHub's LFS budget is exhausted; no test reads LFS content
+      depth: 50
+
+steps:
+  - name: test
+    # Local backend: the image is not pulled. The step runs on the host with
+    # the agent's PATH (docs/ci/woodpecker.md, "Mac agents").
+    image: golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+    environment:
+      GOTOOLCHAIN: go1.27.1
+    commands:
+      - command -v ffmpeg && command -v ffprobe && command -v fpcalc
+      - go test ./internal/server ./internal/scanner ./internal/server/handlers/abs -short -race -covermode=atomic -coverprofile=cover.out -timeout 25m
+      - awk -v wf=test-server-scanner 'NR>1{t+=$$2; if($$3>0)c+=$$2} END{printf "CI-COVERAGE workflow=%s covered=%d total=%d\n", wf, c, t}' cover.out

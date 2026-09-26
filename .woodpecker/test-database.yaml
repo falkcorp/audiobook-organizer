@@ -1,0 +1,47 @@
+# file: .woodpecker/test-database.yaml
+# version: 1.0.1
+# guid: 3f1c9a52-8e47-4b0d-a6c1-5d2e7f9b0c14
+# last-edited: 2026-09-26
+#
+# `make ci` test-short, part 1 of 3: internal/database ALONE.
+#
+# It is the slowest package by far: 300 s on the Linux server, 1500-2200 s on a
+# loaded Mac, where it blew make ci's 25m -timeout on 2026-09-26. So it gets
+# its own workflow, a 50m timeout, and the Linux agent on the prod host (the only
+# Linux agent; the heavy=true agents are the Macs, where it is 5-7x slower). The other two test
+# workflows run at the same time on the Mac agents.
+#
+# Runs on the prod host's agent (docker backend). The golang image has no
+# ffmpeg/ffprobe/fpcalc, which keeps the prod host's no-decode rule, and the
+# container's localhost is not the host's, so tests that dial fixed localhost
+# ports (Deluge on 8112, the app, the Ollama tunnel) cannot reach real services.
+# internal/database needs no decoder.
+#
+# Coverage: the last command prints this workflow's statement counts. The
+# `coverage` workflow sums them across the three test workflows (see
+# scripts/ci_coverage_gate.py).
+
+labels:
+  host: u0
+
+when:
+  - event: [push, pull_request, manual]
+
+clone:
+  - name: clone
+    image: woodpeckerci/plugin-git:2.10.1@sha256:550075c844fcec0af41d9d28f9860aa5d8c43e1e9419be4b9266dc02c2f29804
+    settings:
+      lfs: false  # GitHub's LFS budget is exhausted; no test reads LFS content
+      depth: 50
+
+steps:
+  - name: test
+    image: golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+    environment:
+      GOTOOLCHAIN: go1.27.1
+      GOFLAGS: -buildvcs=false
+      GOCACHE: /woodpecker/cache/go-build
+      GOMODCACHE: /woodpecker/cache/gomod
+    commands:
+      - go test ./internal/database -short -race -covermode=atomic -coverprofile=cover.out -timeout 50m
+      - awk -v wf=test-database 'NR>1{t+=$$2; if($$3>0)c+=$$2} END{printf "CI-COVERAGE workflow=%s covered=%d total=%d\n", wf, c, t}' cover.out

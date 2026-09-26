@@ -1,0 +1,102 @@
+# file: .woodpecker/checks.yaml
+# version: 1.0.0
+# guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
+# last-edited: 2026-09-26
+#
+# The non-test gates of `make ci`, each as its own step so one failure does not
+# hide the others: vet (test-short's prerequisite), staticcheck, the errcheck
+# ratchet, mocks-check, fmt-check, sdkguard, bench-check, and the web tests.
+# Each step runs the same make target `make ci` runs.
+#
+# Runs on the prod host's agent (docker backend, capped at one workflow at a
+# time), so it queues behind test-database. Measured on Linux: vet about 20 s,
+# staticcheck about 105 s, errcheck ratchet about 90 s, bench-check about 60 s,
+# web tests about 50 s, plus about 2 min to install the pinned tools. The
+# workflow finishes in roughly the time the Mac test workflows take.
+#
+# Tool versions match the runner nodes and scripts/setup-mockery.sh. Binaries,
+# the Go build cache and the module cache live under /woodpecker/cache, which
+# every step of this workflow shares and which lies outside the source tree
+# (fmt-check runs `gofmt -l .` on the tree).
+
+labels:
+  host: u0
+
+when:
+  - event: [push, pull_request, manual]
+
+clone:
+  - name: clone
+    image: woodpeckerci/plugin-git:2.10.1@sha256:550075c844fcec0af41d9d28f9860aa5d8c43e1e9419be4b9266dc02c2f29804
+    settings:
+      lfs: false  # GitHub's LFS budget is exhausted; no check reads LFS content
+      depth: 50
+
+variables:
+  - &go_image golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+  - &go_env
+    GOTOOLCHAIN: go1.27.1
+    GOFLAGS: -buildvcs=false
+    GOCACHE: /woodpecker/cache/go-build
+    GOMODCACHE: /woodpecker/cache/gomod
+    GOBIN: /woodpecker/cache/bin
+    GOLANGCI_LINT_CACHE: /woodpecker/cache/golangci-lint
+    XDG_CACHE_HOME: /woodpecker/cache/xdg
+
+steps:
+  - name: tools
+    image: *go_image
+    environment: *go_env
+    commands:
+      - go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+      - go install github.com/vektra/mockery/v3@v3.7.4
+
+  - name: vet
+    image: *go_image
+    environment: *go_env
+    depends_on: [tools]
+    commands:
+      - make --no-print-directory vet
+
+  - name: staticcheck
+    image: *go_image
+    environment: *go_env
+    depends_on: [tools]
+    commands:
+      - export PATH="$$GOBIN:$$PATH"
+      - make --no-print-directory staticcheck
+
+  - name: errcheck-ratchet
+    image: *go_image
+    environment: *go_env
+    depends_on: [tools]
+    commands:
+      - export PATH="$$GOBIN:$$PATH"
+      - make --no-print-directory lint-errcheck-ratchet
+
+  - name: mocks-check
+    image: *go_image
+    environment: *go_env
+    depends_on: [tools]
+    commands:
+      - export PATH="$$GOBIN:$$PATH"
+      - make --no-print-directory mocks-check
+
+  - name: fmt-sdkguard-bench
+    image: *go_image
+    environment: *go_env
+    depends_on: [tools]
+    commands:
+      - make --no-print-directory fmt-check
+      - make --no-print-directory sdkguard
+      - make --no-print-directory bench-check
+
+  - name: web-test
+    image: node:26-alpine@sha256:dbaa92e5758cbbcf85d65d5403fdb530fe3442cbe8c6dbfb7ef23365450d5070
+    depends_on: []
+    environment:
+      npm_config_cache: /woodpecker/cache/npm
+    commands:
+      - npm ci --prefix web --no-audit --no-fund
+      - cd web && npm run test -- --run
