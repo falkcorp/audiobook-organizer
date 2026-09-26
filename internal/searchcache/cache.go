@@ -1,5 +1,5 @@
 // file: internal/searchcache/cache.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: bcadc16f-696c-468a-a3e4-afea4c81bc5c
 // last-edited: 2026-09-25
 
@@ -37,6 +37,15 @@ const DefaultWait = 20 * time.Second
 // insert. Each insertion is a binary search whose probes may each cost a small
 // query, so past this a rebuild is cheaper.
 const DefaultPatchLimit = 64
+
+// DefaultMaxPatchChanged caps how many changed books one patch will
+// re-evaluate. Re-evaluation runs the entry's query confined to the changed
+// set and hydrates every hit in it, so its cost grows with the changed set,
+// not with PatchLimit; a bulk write past this is answered by a rebuild, which
+// costs about the same and does not also throw its work away. A cost
+// heuristic, not an exact bound: whether the matches would fit PatchLimit is
+// only known after the re-evaluation it is meant to avoid.
+const DefaultMaxPatchChanged = 2048
 
 // entryOverheadBytes approximates an entry's fixed cost (struct, list element,
 // map slot).
@@ -88,6 +97,9 @@ type Config struct {
 	MaxBytes   int64
 	Wait       time.Duration
 	PatchLimit int
+	// MaxPatchChanged caps how many changed books a patch re-evaluates before
+	// giving up for a rebuild (default DefaultMaxPatchChanged).
+	MaxPatchChanged int
 	// JobTTL is how long a finished build stays pollable by its search ID.
 	JobTTL time.Duration
 	// MaxJobs bounds the pollable job table; the key is user input.
@@ -191,7 +203,11 @@ type job struct {
 	started  atomic.Bool
 
 	// Guarded by Cache.mu.
-	gen      uint64 // generation read just before Build ran
+	gen      uint64 // generation read just before Build ran (set with started)
+	// rerunEv, when set, queues a fresh build of key as soon as this one
+	// ends: a caller needed a build that reflects a generation newer than
+	// the one this build read (see queueRebuildAfter).
+	rerunEv Evaluator
 	ids      []string
 	err      error
 	finished time.Time
@@ -229,6 +245,12 @@ func New(changes *ChangeLog, cfg Config) *Cache {
 	}
 	if cfg.PatchLimit <= 0 {
 		cfg.PatchLimit = DefaultPatchLimit
+	}
+	if cfg.MaxPatchChanged <= 0 {
+		cfg.MaxPatchChanged = DefaultMaxPatchChanged
+	}
+	if cfg.MaxPatchChanged < cfg.PatchLimit {
+		cfg.MaxPatchChanged = cfg.PatchLimit
 	}
 	if cfg.JobTTL <= 0 {
 		cfg.JobTTL = 10 * time.Minute
@@ -379,10 +401,16 @@ func (c *Cache) refresh(ctx context.Context, key string, ev Evaluator, opts Look
 func (c *Cache) bringForward(ctx context.Context, key string, ev Evaluator, opts LookupOptions, res Result) (Result, error) {
 	changed, current, ok := c.changes.ChangedSince(res.Gen)
 	if ok {
-		if ids, patched := c.patch(context.WithoutCancel(ctx), res.IDs, changed, ev); patched {
+		// This runs on the caller's goroutine, so waiting for a build slot
+		// ends with the caller; the patch itself is detached once it runs.
+		ids, patched, err := c.patch(ctx, context.WithoutCancel(ctx), res.IDs, changed, ev)
+		if err != nil {
+			return Result{}, err
+		}
+		if patched {
 			c.patches.Add(1)
 			c.store(key, ids, current)
-			c.afterPatch(key, ev)
+			c.afterPatch(key, ev, current)
 			return Result{IDs: ids, Gen: current}, nil
 		}
 	}
@@ -414,10 +442,10 @@ func (c *Cache) patchEntry(key string, ev Evaluator) patchResult {
 	}
 	changed, current, ok := c.changes.ChangedSince(e.gen)
 	if ok {
-		if ids, patched := c.patch(context.Background(), e.ids, changed, ev); patched {
+		if ids, patched, _ := c.patch(context.Background(), context.Background(), e.ids, changed, ev); patched {
 			c.patches.Add(1)
 			c.store(key, ids, current)
-			c.afterPatch(key, ev)
+			c.afterPatch(key, ev, current)
 			return patchResult{res: Result{IDs: ids, Gen: current}}
 		}
 	}
@@ -427,10 +455,13 @@ func (c *Cache) patchEntry(key string, ev Evaluator) patchResult {
 	return patchResult{res: Result{IDs: e.ids, Gen: e.gen}}
 }
 
-// afterPatch schedules the drift-correcting rebuild for an OrderDrifter.
-func (c *Cache) afterPatch(key string, ev Evaluator) {
+// afterPatch schedules the drift-correcting rebuild for an OrderDrifter. The
+// rebuild must reflect gen, the generation the patched list was stored at: a
+// build already in flight that read an older generation would be refused by
+// store (the patched entry is newer), so it is told to run again when it ends.
+func (c *Cache) afterPatch(key string, ev Evaluator, gen uint64) {
 	if d, ok := ev.(OrderDrifter); ok && d.OrderDriftsOnPatch() {
-		c.queueRebuild(key, ev)
+		c.queueRebuildAfter(key, ev, gen)
 	}
 }
 
@@ -439,24 +470,61 @@ func (c *Cache) afterPatch(key string, ev Evaluator) {
 // then stays as it is, and the next lookup that finds it out of date asks
 // again, so nothing is lost; it is logged so a saturated queue is visible.
 func (c *Cache) queueRebuild(key string, ev Evaluator) {
+	c.queueRebuildAfter(key, ev, 0)
+}
+
+// queueRebuildAfter is queueRebuild for a caller that needs the rebuild to
+// read generation `after` or newer. A queued build reads the generation when
+// it starts, which is already late enough; a RUNNING build that read an older
+// one is flagged to be followed by a fresh build when it ends.
+func (c *Cache) queueRebuildAfter(key string, ev Evaluator, after uint64) {
 	c.mu.Lock()
-	_, err := c.startBuildLocked(key, ev)
+	j, err := c.startBuildLocked(key, ev)
+	if err == nil && after > 0 && j.started.Load() && j.gen < after {
+		j.rerunEv = ev
+	}
 	c.mu.Unlock()
 	if err != nil {
 		cacheLog.Warn("search cache: background rebuild not queued: %v", err)
 	}
 }
 
+// acquireSlot takes one of the MaxConcurrentBuilds slots, or gives up when
+// ctx ends.
+func (c *Cache) acquireSlot(ctx context.Context) error {
+	select {
+	case c.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // patch removes every changed ID from ids and binary-inserts the ones that
 // still match. false means the patch was not possible (the caller rebuilds).
-func (c *Cache) patch(ctx context.Context, ids, changed []string, ev Evaluator) ([]string, bool) {
+//
+// A patch is query work of the same kind as a build (a re-evaluation of the
+// changed set, then up to PatchLimit x log2(len(ids)) ordering probes), so it
+// holds a build slot for all of it: MaxConcurrentBuilds bounds patches and
+// builds together. waitCtx bounds only the wait for the slot; the work runs
+// under ctx. The only error is waitCtx's.
+func (c *Cache) patch(waitCtx, ctx context.Context, ids, changed []string, ev Evaluator) ([]string, bool, error) {
+	if len(changed) > c.cfg.MaxPatchChanged {
+		// Too many changes to re-evaluate cheaply: rebuild instead, without
+		// first doing (and discarding) a near-full query.
+		return nil, false, nil
+	}
+	if err := c.acquireSlot(waitCtx); err != nil {
+		return nil, false, err
+	}
+	defer func() { <-c.sem }()
 	matching, ok, err := ev.Match(ctx, changed)
 	if err != nil {
 		cacheLog.Warn("search cache: patch re-evaluation failed, rebuilding instead: %v", err)
-		return nil, false
+		return nil, false, nil
 	}
 	if !ok || len(matching) > c.cfg.PatchLimit {
-		return nil, false
+		return nil, false, nil
 	}
 	drop := make(map[string]struct{}, len(changed))
 	for _, id := range changed {
@@ -492,13 +560,13 @@ func (c *Cache) patch(ctx context.Context, ids, changed []string, ev Evaluator) 
 		})
 		if lessErr != nil {
 			cacheLog.Warn("search cache: patch ordering failed, rebuilding instead: %v", lessErr)
-			return nil, false
+			return nil, false, nil
 		}
 		out = append(out, "")
 		copy(out[pos+1:], out[pos:])
 		out[pos] = m
 	}
-	return out, true
+	return out, true, nil
 }
 
 // startBuildLocked joins the in-flight build for key or queues one. c.mu held.
@@ -522,57 +590,79 @@ func (c *Cache) startBuildLocked(key string, ev Evaluator) (*job, error) {
 
 func (c *Cache) addWaiterLocked(j *job) { j.waiters++ }
 
+// testHookAbandoned, when set, runs after a queued build was abandoned and
+// retired. Tests use it to look the key up at the moment of abandonment.
+var testHookAbandoned func(key string)
+
 func (c *Cache) run(j *job, ev Evaluator) {
 	c.sem <- struct{}{}
-	defer func() { <-c.sem }()
 
 	c.mu.Lock()
-	idle := j.waiters == 0 && time.Since(time.Unix(0, j.interest.Load())) > c.cfg.AbandonAfter
-	c.mu.Unlock()
-	var (
-		ids []string
-		err error
-		gen uint64
-	)
-	if idle {
+	if j.waiters == 0 && time.Since(time.Unix(0, j.interest.Load())) > c.cfg.AbandonAfter {
 		// Queued past AbandonAfter with nobody blocked on it and nobody polling:
-		// whoever asked has gone, and the next lookup of the key queues a
-		// fresh build.
-		err = errAbandoned
-	} else {
-		j.started.Store(true)
-		// The generation is read BEFORE the build starts, so any write that
-		// lands while it runs leaves the entry older than the log and gets
-		// patched on the next read.
-		gen = c.changes.Generation()
-		ids, err = func() (ids []string, err error) {
-			defer func() {
-				if r := recover(); r != nil {
-					err = fmt.Errorf("search build panicked: %v", r)
-				}
-			}()
-			return ev.Build(context.Background(), func(n int) { j.matches.Store(int64(n)) })
-		}()
-		if err == nil {
-			if ids == nil {
-				ids = []string{}
-			}
-			j.matches.Store(int64(len(ids)))
-			c.store(j.key, ids, gen)
-		} else {
-			cacheLog.Warn("search cache: build failed: %v", err)
+		// whoever asked has gone. The decision and retiring the job from
+		// c.building happen in ONE critical section, so no lookup can join
+		// the job after it was judged idle and be handed errAbandoned; the
+		// next lookup of the key queues a fresh build.
+		j.err, j.finished = errAbandoned, time.Now()
+		if c.building[j.key] == j {
+			delete(c.building, j.key)
 		}
+		c.mu.Unlock()
+		<-c.sem
+		close(j.done)
+		if h := testHookAbandoned; h != nil {
+			h(j.key)
+		}
+		return
+	}
+	// The generation is read BEFORE the build starts, so any write that lands
+	// while it runs leaves the entry older than the log and gets patched on
+	// the next read. It is published with started under c.mu, which is what
+	// lets queueRebuildAfter tell whether a running build is too old.
+	gen := c.changes.Generation()
+	j.gen = gen
+	j.started.Store(true)
+	c.mu.Unlock()
+
+	ids, err := func() (ids []string, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("search build panicked: %v", r)
+			}
+		}()
+		return ev.Build(context.Background(), func(n int) { j.matches.Store(int64(n)) })
+	}()
+	if err == nil {
+		if ids == nil {
+			ids = []string{}
+		}
+		j.matches.Store(int64(len(ids)))
+		c.store(j.key, ids, gen)
+	} else {
+		cacheLog.Warn("search cache: build failed: %v", err)
 	}
 	c.mu.Lock()
-	j.gen, j.err, j.finished = gen, err, time.Now()
+	j.err, j.finished = err, time.Now()
 	if j.waiters > 0 {
 		j.ids = ids
 	}
 	if c.building[j.key] == j {
 		delete(c.building, j.key)
 	}
+	var rerunErr error
+	if j.rerunEv != nil {
+		// A caller needed a build newer than this one; this build's result
+		// may have been refused by store for the same reason.
+		_, rerunErr = c.startBuildLocked(j.key, j.rerunEv)
+		j.rerunEv = nil
+	}
 	c.mu.Unlock()
+	<-c.sem
 	close(j.done)
+	if rerunErr != nil {
+		cacheLog.Warn("search cache: follow-up rebuild not queued: %v", rerunErr)
+	}
 }
 
 // await waits for j under opts. The caller registered as a waiter.
