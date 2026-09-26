@@ -1,5 +1,5 @@
 // file: internal/database/book_own_folder_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: f45fb918-35b5-4c10-871a-1cd0b11c8805
 // last-edited: 2026-09-25
 
@@ -28,7 +28,13 @@ func TestIsBookFileCopy(t *testing.T) {
 		b    BookFile
 		want bool
 	}{
-		{"same non-empty hash", BookFile{FilePath: "/x/other.mp3", FileHash: "h1", FileSize: 5, Duration: 9}, true},
+		{"same non-empty hash", BookFile{FilePath: "/x/other.mp3", FileHash: "h1", FileSize: 1000, Duration: 600}, true},
+		{"same hash, size and duration unknown", BookFile{FilePath: "/x/other.mp3", FileHash: "h1"}, true},
+		// Legacy 1 MB-prefix hashes collide across distinct tracks.
+		{"same legacy hash, different size", BookFile{FilePath: "/x/other.mp3", FileHash: "h1", FileSize: 5, Duration: 600}, false},
+		// Durations from different measurement sources drift; they never
+		// veto a hash match with agreeing sizes.
+		{"same hash and size, durations 2 s apart", BookFile{FilePath: "/x/other.mp3", FileHash: "h1", FileSize: 1000, Duration: 602}, true},
 		{"empty hashes never match", BookFile{FilePath: "/x/other.mp3", FileSize: 1000, Duration: 600}, false},
 		{"same base name, size, duration", BookFile{FilePath: "/x/01.mp3", FileHash: "h2", FileSize: 1000, Duration: 600}, true},
 		{"original filename matches base name", BookFile{FilePath: "/x/01 Book.mp3", FileHash: "h2", FileSize: 1000, Duration: 600}, true},

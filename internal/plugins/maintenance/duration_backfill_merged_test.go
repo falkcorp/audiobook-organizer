@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_merged_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9b41e7c3-2d58-4a06-bf19-6e35c0d7a284
 // last-edited: 2026-09-25
 
@@ -258,6 +258,26 @@ func TestDurationBackfill_ZeroRowsFillsCountedRowsOnly(t *testing.T) {
 	runZeroRows(t, store)
 	if got := *written; len(got) != 3 || got[0] != "own1" || got[1] != "own2" || got[2] != "moved" {
 		t.Errorf("zero-rows mode must fill exactly the counted zero rows [own1 own2 moved], wrote %v", got)
+	}
+}
+
+// Review finding (2026-09-25): an own-folder row that is still unmeasured
+// stays the counted row even when its iTunes twin is measured. Keeping the
+// measured iTunes twin put a books/itunes/** row in the counted set, so the
+// whole book was skipped as "itunes" and own zero rows were never filled.
+// The iTunes row itself is never written.
+func TestDurationBackfill_ZeroRowsKeepsOwnRowOverMeasuredITunesTwin(t *testing.T) {
+	var segWrites, bookWrites int
+	segs := []database.BookFile{
+		{ID: "own1", BookID: "b1", FilePath: "/lib/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "own2", BookID: "b1", FilePath: "/lib/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "itunes1", BookID: "b1", FilePath: "/srv/books/itunes/A/B/01 Track.m4b", FileHash: "h1", FileSize: 100, Duration: 1800, AcoustIDFingerprintDurationSec: 1800.0},
+	}
+	store := zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites)
+	written := captureRowWrites(store)
+	runZeroRows(t, store)
+	if got := *written; len(got) != 2 || got[0] != "own1" || got[1] != "own2" {
+		t.Errorf("zero-rows mode must fill the own rows [own1 own2] and never the iTunes twin, wrote %v", got)
 	}
 }
 
