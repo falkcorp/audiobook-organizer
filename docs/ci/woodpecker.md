@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-09-26 -->
 
@@ -43,7 +43,10 @@ exhausted and no test reads LFS content. Every image is pinned by digest.
 
 ## 1. Server on U0
 
-The server runs with Docker Compose. It listens on localhost only for HTTP.
+The server runs with Docker Compose. It listens for HTTP on the CI host's LAN
+address, because the Cloudflare tunnel connectors run on three separate,
+load-balanced tunnel nodes, not on the CI host; they reach it over the LAN,
+the same way they reach the audiobook server.
 gRPC for agents is on the LAN address, and its data lives on the NVMe app-data
 area.
 
@@ -54,7 +57,7 @@ services:
     image: woodpeckerci/woodpecker-server:v3    # pin by digest when installing
     restart: unless-stopped
     ports:
-      - "127.0.0.1:18733:8000"      # HTTP: localhost only; cloudflared connects here
+      - "192.0.2.10:18733:8000"     # HTTP: LAN; the three tunnel nodes connect here
       - "192.0.2.10:18734:9000"     # gRPC: LAN only, for agents; never tunnelled
     volumes:
       - /srv/appdata/woodpecker/data:/var/lib/woodpecker
@@ -87,8 +90,11 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
 ## 3. Ingress: Cloudflare tunnel and Access
 
 1. **One public hostname.** Add `coke.jdfalk.com` to the existing Cloudflare
-   tunnel, with service `http://localhost:18733`. The server listens on
-   localhost only, so the tunnel is the only way in from outside.
+   tunnel, with service `http://192.0.2.10:18733` (the CI host's LAN address).
+   The tunnel has three connector nodes that load-balance, none of them on the
+   CI host, so every connector must be able to reach that LAN address. The
+   port is open to the LAN like the audiobook server's; from outside, the
+   tunnel (behind Access) is the only way in.
 2. **The Access app covers the whole hostname.** Create a Cloudflare Access
    self-hosted application for `coke.jdfalk.com`, with the owner's identity as
    the Allow policy. It protects the UI, the API and the OAuth login and
