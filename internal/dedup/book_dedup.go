@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-24
+// last-edited: 2026-09-26
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -640,7 +640,15 @@ func MergeBooks(
 		// but before this follow. We already hold the process-wide
 		// merge.LockMergeRMW taken at the top of this function, so this is
 		// exactly-once w.r.t. every other merge-family path.
-		merge.FollowMergeWithStore(store, keepID, []string{mergeID})
+		//
+		// A follow error means the move failed AND no pending-repair record
+		// holds it: the loser is then NOT retired, so its state stays
+		// reachable on a live book and a re-run of the merge retries it.
+		if ferr := merge.FollowMergeWithStore(store, keepID, []string{mergeID}); ferr != nil {
+			bookMergeLog.Error("book merge left loser live: user state not carried loser_id=%s keep_id=%s: %v", mergeID, keepID, ferr)
+			result.Errors = append(result.Errors, fmt.Sprintf("book %s left live: user state not carried: %v", mergeID, ferr))
+			continue
+		}
 
 		// Already soft-deleted: collapsed by an earlier heal, or deleted by the
 		// user. Leave the row exactly as it is — re-marking it would restart

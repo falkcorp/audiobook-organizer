@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package merge
 
@@ -100,6 +100,12 @@ type Result struct {
 	// per-loser error. On a fully successful clean-group merge it is
 	// len(participants)-1.
 	SoftDeleted int `json:"soft_deleted"`
+	// ElectedWithoutUserState is set when the automatic election kept a
+	// different book than the pre-2026-09-26 rule would have, because that
+	// book was the only candidate a user had client-visible state on
+	// (PreferUserStateSurvivor). It names the book the old rule picked, so the
+	// flip is visible in the merge output.
+	ElectedWithoutUserState string `json:"elected_without_user_state,omitempty"`
 }
 
 // NewService creates a new Service. The sync-identity follower is wired
@@ -494,8 +500,15 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// purge clock. Merging books that ALL lack file rows is still allowed —
 	// there is no audio to lose, and refusing would make the file-less ghost
 	// class impossible to tidy until it is repaired.
+	electedWithoutUserState := ""
 	if bestIdx < 0 {
 		bestIdx = ElectPrimary(books, filesByID)
+		if bestIdx >= 0 {
+			if pref := ms.preferUserStateSurvivor(books, filesByID, bestIdx); pref != bestIdx {
+				electedWithoutUserState = books[bestIdx].ID
+				bestIdx = pref
+			}
+		}
 		if bestIdx < 0 {
 			// Unreachable after the guard above (a live participant always
 			// exists once any soft-deleted one was admitted), kept so a future
@@ -822,16 +835,44 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			losers = append(losers, book.ID)
 		}
 	}
-	FollowMerge(ms.db, ms.syncFollower, resolvedPrimaryID, losers)
+	// The losers are already soft-deleted here, so a follow error (a move that
+	// failed with NO pending-repair record to hold it) cannot stop the retire;
+	// it fails the merge instead, after the group hand-off still runs.
+	followErr := FollowMerge(ms.db, ms.syncFollower, resolvedPrimaryID, losers)
 
 	handOffLeftGroups(ms.db, leftGroups)
 
+	if followErr != nil {
+		return nil, fmt.Errorf("merge into %s applied but users' listening state could not be carried and no repair record was written: %w",
+			resolvedPrimaryID, followErr)
+	}
+
 	return &Result{
-		PrimaryID:      resolvedPrimaryID,
-		VersionGroupID: versionGroupID,
-		MergedCount:    len(books),
-		SoftDeleted:    softDeleted,
+		PrimaryID:               resolvedPrimaryID,
+		VersionGroupID:          versionGroupID,
+		MergedCount:             len(books),
+		SoftDeleted:             softDeleted,
+		ElectedWithoutUserState: electedWithoutUserState,
 	}, nil
+}
+
+// preferUserStateSurvivor applies PreferUserStateSurvivor to an automatic
+// election. A failure to read user state keeps the elected book: the state
+// move reconciles whatever the survivor turns out to be, so an unknown answer
+// must not block or skew the merge.
+func (ms *Service) preferUserStateSurvivor(books []*database.Book, filesByID map[string][]database.BookFile, electedIdx int) int {
+	ids := make([]string, 0, len(books))
+	for _, b := range books {
+		if !b.IsSoftDeleted() {
+			ids = append(ids, b.ID)
+		}
+	}
+	stateful, err := BooksWithClientVisibleState(ms.db, ids)
+	if err != nil {
+		mlog.Warn("merge: user-state survivor preference skipped, state unreadable: %s", logger.SanitizeLogValue(fmt.Sprint(err)))
+		return electedIdx
+	}
+	return PreferUserStateSurvivor(books, filesByID, stateful, electedIdx)
 }
 
 // handOffLeftGroups runs versionprimary.EnsureSinglePrimary on each group a
@@ -1124,13 +1165,16 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 		// followed, so no progress moves without its undo journal.
 		if ms.syncFollower != nil {
 			before, followable, skipped := snapshotPair(ms.db, users, id, survivor.ID)
-			ms.reportSkippedProgress(journal, id, "not journaled or followed; their rows stay on the absorbed book", skipped)
-			FollowMergeUsers(ms.db, ms.syncFollower, survivor.ID, []string{id}, followable)
+			ms.reportSkippedProgress(journal, id, "not journaled or followed; a pending-repair record holds their move", skipped)
+			if err := FollowMergeUsers(ms.db, ms.syncFollower, survivor.ID, []string{id}, followable, len(skipped) > 0); err != nil {
+				return nil, fmt.Errorf("carry user state of %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
+			}
 			after, _, afterSkipped := snapshotPair(ms.db, followable, id, survivor.ID)
 			ms.reportSkippedProgress(journal, id, "followed, but the after-snapshot failed; undo leaves their survivor progress as is", afterSkipped)
 			a.Progress = buildProgressJournal(before, after)
-		} else {
-			FollowMerge(ms.db, ms.syncFollower, survivor.ID, []string{id})
+		} else if err := FollowMerge(ms.db, ms.syncFollower, survivor.ID, []string{id}); err != nil {
+			// Not retired: the absorbed book keeps its state and stays live.
+			return nil, fmt.Errorf("carry user state of %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
 		}
 
 		// Guard (mirrors applyFSRegroup): never retire a book that still owns

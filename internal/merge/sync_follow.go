@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 // Package merge: sync-identity follow hooks.
 //
@@ -32,11 +32,14 @@
 package merge
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // SyncFollower is satisfied by anything that can record a merge in the
@@ -60,84 +63,145 @@ type SyncFollower interface {
 // subsystems.
 var syncRepointMu sync.Mutex
 
-// FollowMerge carries sync identity and per-user progress from every loser
-// onto the winner of a merge. Call it while still holding whatever lock
-// guards the merge's read-modify-write, BEFORE any hard delete of a loser row.
+// FollowMerge carries sync identity and every user's state (upos, ubs,
+// bookmarks) from every loser onto the winner of a merge. Call it while still
+// holding whatever lock guards the merge's read-modify-write, BEFORE any hard
+// delete of a loser row.
 //
-// Best-effort by design, matching this package's convention for optional
-// side-effects (eidStore, writeBackBatcher): a sync-identity hiccup must never
-// fail a merge that would otherwise succeed. Every failure is logged at
-// ERROR with both book IDs, because a silent failure here loses a user's
-// listening position with no trace.
+// Never silently lossy (owner requirement 2026-09-26). For each loser a
+// durable pending-repair record is written BEFORE anything moves and deleted
+// only after everything moved (pending_repair.go). A failure to move leaves
+// the record for maintenance.repair-merged-user-state to complete, and the
+// merge may proceed. The returned error is non-nil only when a move failed
+// AND its record could not be written: nothing then holds the owed move, and
+// the caller must not retire the loser (or, when it already has, must report
+// the merge as failed).
+//
+// User state no longer depends on sync identity: a store without the
+// capability, or a failure to mint the winner's syncID, used to skip every
+// user's progress along with the redirect.
 //
 // Exactly-once: the store primitives it calls are idempotent
 // (MintOrGetSyncID returns the existing id; RecordSyncMerge returns early when
-// the redirect is already recorded and de-duplicates MergedFrom), so a retried
-// or concurrently repeated merge cannot double-redirect or grow a chain.
-func FollowMerge(db UserProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string) {
-	followMerge(db, follower, winnerBookID, loserBookIDs, nil)
+// the redirect is already recorded; a drained loser row is not carryable,
+// hasCarryableState), so a retried or replayed merge moves nothing twice.
+func FollowMerge(db UserProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string) error {
+	return followMerge(db, follower, winnerBookID, loserBookIDs, nil, false)
 }
 
-// FollowMergeUsers is FollowMerge restricted to the given users' progress.
-// Journaled callers pass only the users they could snapshot, so progress is
-// never moved without the journal undo needs to move it back. A nil or empty
-// list follows NO user's progress (the redirect is still recorded).
-func FollowMergeUsers(db UserProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string, users []database.User) {
+// FollowMergeUsers is FollowMerge restricted to the given users' state.
+// Journaled callers pass only the users they could snapshot, so state is never
+// moved without the journal undo needs to move it back. incomplete says some
+// users were left out (their rows could not be read): the pending-repair
+// record is then KEPT, so the sweep moves them once they read cleanly. A nil
+// or empty list follows NO user's state (the redirect is still recorded).
+func FollowMergeUsers(db UserProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string, users []database.User, incomplete bool) error {
 	if users == nil {
 		users = []database.User{}
 	}
-	followMerge(db, follower, winnerBookID, loserBookIDs, users)
+	return followMerge(db, follower, winnerBookID, loserBookIDs, users, incomplete)
 }
 
 // followMerge: users == nil means "every user" (ListUsers).
-func followMerge(db UserProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string, users []database.User) {
-	if follower == nil || db == nil || winnerBookID == "" {
-		return
+func followMerge(db UserProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string, users []database.User, incomplete bool) error {
+	if db == nil || winnerBookID == "" {
+		return nil
 	}
-
-	// Ensure the winner has a client-visible identity before redirecting
-	// anything at it. If this fails, redirecting a loser would point at
-	// nothing, so stop here rather than record a dangling redirect.
-	if _, err := follower.MintOrGetSyncID(winnerBookID); err != nil {
-		slog.Error("sync-identity merge-follow: could not mint winner syncID; losers NOT redirected",
-			"winner", winnerBookID, "losers", loserBookIDs, "err", err)
-		return
-	}
-
+	var errs []error
 	for _, loserID := range loserBookIDs {
 		if loserID == "" || loserID == winnerBookID {
 			continue
 		}
-		if err := follower.RecordSyncMerge(loserID, winnerBookID); err != nil {
-			slog.Error("sync-identity merge-follow: redirect NOT recorded; a client holding the loser's id will not resolve",
-				"loser", loserID, "winner", winnerBookID, "err", err)
-		}
-		var err error
-		if users == nil {
-			err = mergeUserProgress(db, loserID, winnerBookID)
-		} else {
-			err = mergeUserProgressUsers(db, users, loserID, winnerBookID)
-		}
-		if err != nil {
-			slog.Error("sync-identity merge-follow: progress NOT merged onto winner",
-				"loser", loserID, "winner", winnerBookID, "err", err)
+		if err := followOneLoser(db, follower, winnerBookID, loserID, users, nil, incomplete); err != nil {
+			errs = append(errs, err)
 		}
 	}
+	return errors.Join(errs...)
+}
+
+// errUsersSkipped is the cause recorded when a journaled follow left out
+// users whose rows could not be read.
+var errUsersSkipped = errors.New("some users' state could not be read and was not moved")
+
+// followOneLoser is the record -> move -> clear sequence for one loser. See
+// FollowMerge for the error contract.
+func followOneLoser(db UserProgressMerger, follower SyncFollower, winnerBookID, loserBookID string, users []database.User, slice *SliceMapping, incomplete bool) error {
+	recErr := putPendingRepair(db, PendingUserStateRepair{
+		LoserBookID: loserBookID, WinnerBookID: winnerBookID, RecordedAt: time.Now().UTC(), Slice: slice,
+	})
+	moveErr := moveLoserState(db, follower, winnerBookID, loserBookID, users, slice)
+	if moveErr == nil && !incomplete {
+		if err := db.DeleteRaw(pendingRepairKey(loserBookID, winnerBookID)); err != nil {
+			// Harmless: the sweep re-runs an idempotent follow and deletes it.
+			mlog.Warn("merge-follow: state moved but pending record for loser=%s not deleted: %s",
+				logger.SanitizeLogValue(loserBookID), logger.SanitizeLogValue(fmt.Sprint(err)))
+		}
+		return nil
+	}
+	cause := moveErr
+	if cause == nil {
+		cause = errUsersSkipped
+	}
+	if recErr == nil {
+		logPendingLeft(loserBookID, winnerBookID, cause)
+		return nil
+	}
+	mlog.Error("merge-follow: user state of loser=%s NOT moved to winner=%s and NO pending-repair record could be written: move: %s; record: %s",
+		logger.SanitizeLogValue(loserBookID), logger.SanitizeLogValue(winnerBookID),
+		logger.SanitizeLogValue(fmt.Sprint(cause)), logger.SanitizeLogValue(fmt.Sprint(recErr)))
+	return fmt.Errorf("user state of %s not moved to %s (%w) and no repair record written: %w", loserBookID, winnerBookID, cause, recErr)
+}
+
+// moveLoserState does the moves: identity redirect, each user's upos/ubs
+// under the conflict rule (user_state_merge.go) or the slice rule, then
+// bookmarks. Every step runs even when an earlier one failed; the joined
+// error names each failure. users == nil means every user.
+func moveLoserState(db UserProgressMerger, follower SyncFollower, winnerBookID, loserBookID string, users []database.User, slice *SliceMapping) error {
+	var errs []error
+	if follower != nil {
+		if _, err := follower.MintOrGetSyncID(winnerBookID); err != nil {
+			errs = append(errs, fmt.Errorf("mint winner syncID: %w", err))
+		} else if err := follower.RecordSyncMerge(loserBookID, winnerBookID); err != nil {
+			errs = append(errs, fmt.Errorf("record sync redirect: %w", err))
+		}
+	}
+	all, listErr := db.ListUsers()
+	if listErr != nil {
+		errs = append(errs, fmt.Errorf("list users: %w", listErr))
+	}
+	if users == nil {
+		users = all
+	}
+	for _, u := range users {
+		if u.ID == "" {
+			continue
+		}
+		var err error
+		if slice != nil {
+			err = followSliceFor(db, u.ID, winnerBookID, loserBookID, *slice)
+		} else {
+			err = mergeUserProgressFor(db, u.ID, loserBookID, winnerBookID)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("user %s: %w", u.ID, err))
+		}
+	}
+	// Bookmarks for every user, not just the followed ones: a copy is
+	// non-destructive and needs no journal.
+	if follower != nil && listErr == nil {
+		if err := copyBookmarksForMerge(db, all, loserBookID, winnerBookID); err != nil {
+			errs = append(errs, fmt.Errorf("bookmarks: %w", err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // FollowMergeWithStore is FollowMerge for callers that hold only a store and
-// cannot reach a *Service (dedup.MergeBooks). It derives
-// the follower by type assertion; a store that does not implement
-// SyncIdentityStore yields a nil follower and the whole call is a no-op.
-func FollowMergeWithStore(db UserProgressMerger, winnerBookID string, loserBookIDs []string) {
-	follower := database.AsSyncIdentityStore(db)
-	if follower == nil {
-		// Warn, not debug: the only in-tree caller is a HARD-delete merge, so
-		// a silently-skipped follow there is unrecoverable.
-		slog.Warn("sync-identity merge-follow: store does not implement SyncIdentityStore; this merge will NOT carry identity or progress",
-			"winner", winnerBookID, "losers", loserBookIDs)
-	}
-	FollowMerge(db, follower, winnerBookID, loserBookIDs)
+// cannot reach a *Service (dedup.MergeBooks). It derives the follower by
+// capability; a store without sync identity still has every user's upos/ubs
+// moved (only the redirect and bookmarks need identity).
+func FollowMergeWithStore(db UserProgressMerger, winnerBookID string, loserBookIDs []string) error {
+	return FollowMerge(db, asFollower(db), winnerBookID, loserBookIDs)
 }
 
 // FollowFileMove carries each moved file's sync_file identity (its durable
@@ -342,24 +406,19 @@ func mergeUserProgressUsers(db UserProgressMerger, users []database.User, loserB
 	return firstErr
 }
 
-// mergeUserProgressFor merges one user's progress from loser onto winner.
+// mergeUserProgressFor merges one user's state from loser onto winner under
+// the conflict rule documented in user_state_merge.go (finished sticky,
+// newest lastUpdate wins the position, last played = max, hide = OR).
 //
-// "Furthest position" rule (deliberately narrower than §5's full live-PATCH
-// policy, which resolves two updates to the SAME item): compare
-// UserBookState.ProgressPct, an already-normalized 0-100 value that is
-// comparable across two different-length books -- raw PositionSeconds is not,
-// since two books have unrelated segment schemes and durations. Ties go to the
-// more recent LastActivityAt.
+// The loser side is drained ONLY after a successful write, so a mid-way store
+// failure can never destroy the state it was supposed to carry forward. A
+// loser with no carryable state (never had any, or drained by an earlier
+// follow) is a no-op, which is what makes a replayed follow safe.
 //
-// The loser side is drained ONLY after a successful copy, so a mid-way store
-// failure can never destroy the position it was supposed to carry forward.
-//
-// A carried Finished state also carries the loser book's
-// ITunesPlayCountBumpedAt onto the winner when it is later than the winner's
-// own. The rule: one listen is one iTunes play-count bump across a merge,
-// not one per iTunes track that ever held it. Without the mark, the winner's
-// track would see the carried finish as newer than anything it had counted
-// and add a play for a listen the loser's track already counted.
+// When the loser was Finished, its book's ITunesPlayCountBumpedAt is carried
+// onto the winner when later than the winner's own. The rule: one listen is
+// one iTunes play-count bump across a merge, not one per iTunes track that
+// ever held it.
 func mergeUserProgressFor(db userPositionStore, userID, loserBookID, winnerBookID string) error {
 	loserState, err := db.GetUserBookState(userID, loserBookID)
 	if err != nil {
@@ -369,7 +428,7 @@ func mergeUserProgressFor(db userPositionStore, userID, loserBookID, winnerBookI
 	if err != nil {
 		return fmt.Errorf("list loser positions: %w", err)
 	}
-	if loserState == nil && len(loserPositions) == 0 {
+	if !hasCarryableState(loserState, loserPositions) {
 		return nil // nothing to merge for this user
 	}
 
@@ -377,73 +436,46 @@ func mergeUserProgressFor(db userPositionStore, userID, loserBookID, winnerBookI
 	if err != nil {
 		return fmt.Errorf("get winner state: %w", err)
 	}
+	winnerPositions, err := db.ListUserPositionsForBook(userID, winnerBookID)
+	if err != nil {
+		return fmt.Errorf("list winner positions: %w", err)
+	}
 
-	if loserIsFurther(loserState, winnerState) {
-		if loserState != nil {
-			carried := *loserState
-			carried.BookID = winnerBookID
-			if err := db.SetUserBookState(&carried); err != nil {
-				return fmt.Errorf("carry state onto winner: %w", err)
-			}
-			if carried.Status == database.UserBookStatusFinished {
-				// The carried state keeps its FinishedAt (the store keeps a
-				// caller's stamp). Carry the loser's count of that finish too,
-				// or the winner's iTunes track counts one listen a second time.
-				// Best-effort like the rest of the follow: logged, and the
-				// positions are still carried.
-				if err := carryPlayCountMark(db, loserBookID, winnerBookID); err != nil {
-					mlog.Warn("merge-follow: play-count mark NOT carried from %s to %s: %v", loserBookID, winnerBookID, err)
-				}
-			}
+	plan := planUserStateMerge(userID, winnerBookID,
+		userStateSide{state: loserState, positions: loserPositions},
+		userStateSide{state: winnerState, positions: winnerPositions})
+
+	if plan.state != nil {
+		if err := db.SetUserBookState(plan.state); err != nil {
+			return fmt.Errorf("write merged state onto winner: %w", err)
 		}
-		// Segment IDs are opaque per-user bookkeeping, not meaningfully
-		// comparable across books either way, so they are carried as-is.
-		for _, pos := range loserPositions {
+	}
+	if plan.loserFinished {
+		if err := carryPlayCountMark(db, loserBookID, winnerBookID); err != nil {
+			return fmt.Errorf("carry play-count mark: %w", err)
+		}
+	}
+	if plan.loserPositionsWin {
+		// Segment IDs are opaque per-user bookkeeping, carried as-is, oldest
+		// first so the loser's latest stays the winner's latest.
+		for _, pos := range sortPositionsOldestFirst(loserPositions) {
 			if err := db.SetUserPosition(userID, winnerBookID, pos.SegmentID, pos.PositionSeconds); err != nil {
 				return fmt.Errorf("carry position %s onto winner: %w", pos.SegmentID, err)
 			}
 		}
 	}
 
-	// Drain the loser regardless of which side won: its book is merged away,
-	// and progress that is only resolvable under a retired book id is a leak
-	// (it can still surface in a per-status listing for a book that no longer
-	// exists).
+	// Drain the loser whichever side won: its book is merged away, and state
+	// only resolvable under a retired id is a leak.
 	if len(loserPositions) > 0 {
 		if err := db.ClearUserPositions(userID, loserBookID); err != nil {
 			return fmt.Errorf("clear loser positions: %w", err)
 		}
 	}
 	if loserState != nil {
-		// There is no DeleteUserBookState in the database layer, so the row is
-		// neutralized in place. An empty Status also removes it from the
-		// ubs status index (see PebbleStore.SetUserBookState), which is what
-		// keeps a merged-away book out of "in progress" listings.
-		drained := *loserState
-		drained.Status = ""
-		drained.StatusManual = false
-		drained.ProgressPct = 0
-		drained.TotalListenedSeconds = 0
-		drained.LastSegmentID = ""
-		if err := db.SetUserBookState(&drained); err != nil {
+		if err := db.SetUserBookState(drainedUserState(*loserState)); err != nil {
 			return fmt.Errorf("drain loser state: %w", err)
 		}
 	}
 	return nil
-}
-
-// loserIsFurther reports whether the losing book's state should win. A winner
-// with no state at all always loses (nothing to preserve on that side); two
-// nil states mean there is only position data to carry.
-func loserIsFurther(loserState, winnerState *database.UserBookState) bool {
-	if winnerState == nil {
-		return true
-	}
-	if loserState == nil {
-		return false
-	}
-	if loserState.ProgressPct != winnerState.ProgressPct {
-		return loserState.ProgressPct > winnerState.ProgressPct
-	}
-	return loserState.LastActivityAt.After(winnerState.LastActivityAt)
 }

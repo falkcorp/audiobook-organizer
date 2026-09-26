@@ -1,7 +1,7 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
-// last-edited: 2026-09-13
+// last-edited: 2026-09-26
 
 package dedup
 
@@ -234,6 +234,12 @@ func (de *Engine) predictPrimary(ids []string) (string, error) {
 		filesByID[id] = files
 	}
 	if best := merge.ElectPrimary(books, filesByID); best >= 0 {
+		// Same user-state preference MergeBooks applies to an automatic
+		// election, so the prediction names the book it will keep. An
+		// unreadable answer keeps the plain election, as MergeBooks does.
+		if stateful, err := merge.BooksWithClientVisibleState(de.bookStore, ids); err == nil {
+			best = merge.PreferUserStateSurvivor(books, filesByID, stateful, best)
+		}
 		return books[best].ID, nil
 	}
 	// -1 means every participant is soft-deleted, so MergeBooks is about to

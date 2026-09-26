@@ -1,7 +1,7 @@
 // file: internal/merge/service_unit_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f8a2c1d-7e4b-4d9a-b6c5-0e1f2a3b4c5d
-// last-edited: 2026-09-14
+// last-edited: 2026-09-26
 
 package merge
 
@@ -32,6 +32,17 @@ func newBook(id, title, format, path string) *database.Book {
 // expectModifyBook stubs the version-group write, which goes through
 // ModifyBook (not a full-row UpdateBook of the row read at the top of the
 // merge): it runs the merge's mutation against b and returns b.
+// expectUserStateFollow allows the merge's user-state follow against a mock
+// store with no users: the pending-repair record is written, nothing moves,
+// and the record is deleted. ListUsers also serves the survivor election's
+// user-state probe.
+func expectUserStateFollow(m *mocks.MockStore, loserID, winnerID string) {
+	key := PendingUserStateRepairPrefix + loserID + ":" + winnerID
+	m.EXPECT().SetRaw(key, mock.Anything).Return(nil)
+	m.EXPECT().DeleteRaw(key).Return(nil)
+	m.EXPECT().ListUsers().Return(nil, nil).Maybe()
+}
+
 func expectModifyBook(m *mocks.MockStore, b *database.Book) {
 	expectModifyBookTimes(m, b, 1)
 }
@@ -109,6 +120,9 @@ func TestUnit_MergeBooks_VersionGroupWriteFails(t *testing.T) {
 	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 	mockStore.EXPECT().GetBookFiles("book-2").Return(nil, nil)
 
+	// The automatic election probes users for client-visible state.
+	mockStore.EXPECT().ListUsers().Return(nil, nil).Maybe()
+
 	// The loop iterates in order: book-1 then book-2. Fail on the first.
 	mockStore.EXPECT().ModifyBook("book-1", mock.Anything).Return(nil, fmt.Errorf("disk full"))
 
@@ -140,6 +154,7 @@ func TestUnit_MergeBooks_AutoSelectM4B(t *testing.T) {
 	// Loser cleanup: GetExternalIDsForBook, ReassignExternalIDs, then SoftDeleteBook
 	mockStore.EXPECT().GetExternalIDsForBook("book-1").Return(nil, nil)
 	mockStore.EXPECT().ReassignExternalIDs("book-1", "book-2").Return(nil)
+	expectUserStateFollow(mockStore, "book-1", "book-2")
 
 	result, err := svc.MergeBooks([]string{"book-1", "book-2"}, "")
 	require.NoError(t, err)
@@ -169,6 +184,7 @@ func TestUnit_MergeBooks_ExplicitPrimaryOverridesAuto(t *testing.T) {
 	// Loser is book-2 (explicit override)
 	mockStore.EXPECT().GetExternalIDsForBook("book-2").Return(nil, nil)
 	mockStore.EXPECT().ReassignExternalIDs("book-2", "book-1").Return(nil)
+	expectUserStateFollow(mockStore, "book-2", "book-1")
 
 	result, err := svc.MergeBooks([]string{"book-1", "book-2"}, "book-1")
 	require.NoError(t, err)
