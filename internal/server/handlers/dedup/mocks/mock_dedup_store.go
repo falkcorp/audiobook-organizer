@@ -345,6 +345,68 @@ func (_c *MockDedupStore_GetBookFiles_Call) RunAndReturn(run func(bookID string)
 	return _c
 }
 
+// GetBooksByVersionGroup provides a mock function for the type MockDedupStore
+func (_mock *MockDedupStore) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
+	ret := _mock.Called(groupID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBooksByVersionGroup")
+	}
+
+	var r0 []database.Book
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]database.Book, error)); ok {
+		return returnFunc(groupID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []database.Book); ok {
+		r0 = returnFunc(groupID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.Book)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(groupID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockDedupStore_GetBooksByVersionGroup_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBooksByVersionGroup'
+type MockDedupStore_GetBooksByVersionGroup_Call struct {
+	*mock.Call
+}
+
+// GetBooksByVersionGroup is a helper method to define mock.On call
+//   - groupID string
+func (_e *MockDedupStore_Expecter) GetBooksByVersionGroup(groupID any) *MockDedupStore_GetBooksByVersionGroup_Call {
+	return &MockDedupStore_GetBooksByVersionGroup_Call{Call: _e.mock.On("GetBooksByVersionGroup", groupID)}
+}
+
+func (_c *MockDedupStore_GetBooksByVersionGroup_Call) Run(run func(groupID string)) *MockDedupStore_GetBooksByVersionGroup_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockDedupStore_GetBooksByVersionGroup_Call) Return(books []database.Book, err error) *MockDedupStore_GetBooksByVersionGroup_Call {
+	_c.Call.Return(books, err)
+	return _c
+}
+
+func (_c *MockDedupStore_GetBooksByVersionGroup_Call) RunAndReturn(run func(groupID string) ([]database.Book, error)) *MockDedupStore_GetBooksByVersionGroup_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetSeriesByID provides a mock function for the type MockDedupStore
 func (_mock *MockDedupStore) GetSeriesByID(id int) (*database.Series, error) {
 	ret := _mock.Called(id)

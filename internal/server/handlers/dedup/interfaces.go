@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/interfaces.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e84f746d-28e9-4c8a-9520-66191e582881
-// last-edited: 2026-09-10
+// last-edited: 2026-09-26
 
 // Narrow dependency interfaces for the dedup-domain HTTP handlers (candidate /
 // cluster / series listing, merge / dismiss / remove, bulk merge, stats,
@@ -42,6 +42,9 @@ type DedupStore interface {
 	GetAuthorByID(id int) (*database.Author, error)          // AuthorStore
 	GetSeriesByID(id int) (*database.Series, error)          // SeriesStore
 	GetBookFiles(bookID string) ([]database.BookFile, error) // BookFileStore
+	// GetBooksByVersionGroup is linkGuard's: linking into an existing version
+	// group joins its members, so the review-queue-only guard checks them too.
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error) // BookVersionStore
 
 	// Bulk readers, used only by resolveBookIDsMatching to turn a search
 	// needle into the set of book IDs the Dupes panel's text search must

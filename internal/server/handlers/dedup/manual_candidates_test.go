@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/manual_candidates_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f2b9c1e-6a47-4d8e-b5c0-9e1d7a4f2c68
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package deduphandler_test
 
@@ -132,6 +132,18 @@ func TestEnqueueManual_ApplyCreatesReviewableCandidate(t *testing.T) {
 	require.Len(t, list.Data.Candidates, 1)
 	require.Equal(t, "manual", list.Data.Candidates[0]["layer"])
 	require.Equal(t, "manual", list.Data.Candidates[0]["source"])
+	require.Equal(t, "", list.Data.Candidates[0]["ai_advice_verdict"], "no advice before the LLM reviews it")
+
+	// LLM advice recorded on the pinned row reaches the review list.
+	require.NoError(t, d.es.RecordCandidateLLMAdvice(c.ID, "duplicate", "[high] same book"))
+	lw = doReq(t, h.ListDedupCandidates, http.MethodGet, "/api/v1/dedup/candidates?status=pending&source=manual", nil, nil)
+	require.Equal(t, http.StatusOK, lw.Code, lw.Body.String())
+	require.NoError(t, json.Unmarshal(lw.Body.Bytes(), &list), lw.Body.String())
+	require.Len(t, list.Data.Candidates, 1)
+	require.Equal(t, "duplicate", list.Data.Candidates[0]["ai_advice_verdict"])
+	require.Equal(t, "[high] same book", list.Data.Candidates[0]["ai_advice_reason"])
+	require.NotNil(t, list.Data.Candidates[0]["ai_advice_at"])
+	require.Equal(t, "pending", list.Data.Candidates[0]["status"])
 }
 
 func TestEnqueueManual_Idempotent(t *testing.T) {

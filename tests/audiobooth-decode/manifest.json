@@ -126,8 +126,8 @@
       "source": "LibraryPageModel.swift:338 with preferences.collapseSeriesInLibrary",
       "method": "GET", "path": "/api/libraries/{libraryId}/items",
       "query": {"minified": "1", "limit": "100", "page": "0", "sort": "media.metadata.title", "collapseseries": "1"},
-      "decode": "Page<Book>", "nonEmpty": ["results"],
-      "vacuous": "the server ignores collapseseries: both books of 'Homeric Epics' come back uncollapsed and no collapsedSeries element is emitted, so Book.CollapsedSeries is never exercised (behaviour gap, not a decode failure)"
+      "decode": "Page<Book>",
+      "nonEmpty": ["results", "results.0.collapsedSeries.id", "results.0.collapsedSeries.name", "results.0.collapsedSeries.libraryItemIds"]
     },
     {
       "id": "items_filter_series",

@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.18.0
-// last-edited: 2026-09-25
+// version: 2.19.0
+// last-edited: 2026-09-26
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -129,6 +129,13 @@ type candRec struct {
 	// their stored size. See CandidateSourceManual for what the mark protects.
 	Source     string `json:"src,omitempty"`
 	SourceNote string `json:"srcn,omitempty"`
+
+	// AI advice on a manual (pinned) row: the LLM verdict and reason that
+	// UpdateCandidateLLM refuses to write onto it. Advisory only; see
+	// RecordCandidateLLMAdvice. omitempty so every other row keeps its size.
+	AdviceVerdict string `json:"av,omitempty"`
+	AdviceReason  string `json:"ar,omitempty"`
+	AdviceAt      int64  `json:"aa,omitempty"` // Unix nanoseconds
 }
 
 // Embedding holds a vector embedding for a single entity.
@@ -176,6 +183,14 @@ type DedupCandidate struct {
 	// human gave. See IsManualCandidate.
 	Source     string `json:"source,omitempty"`
 	SourceNote string `json:"source_note,omitempty"`
+
+	// AIAdviceVerdict / AIAdviceReason / AIAdviceAt hold the LLM's verdict on
+	// a manual (pinned) candidate. The LLM review may not act on a pinned row
+	// (no status, band, score or layer change, no merge), so its opinion is
+	// kept here for the human reviewer to read. Empty on every other row.
+	AIAdviceVerdict string     `json:"ai_advice_verdict,omitempty"`
+	AIAdviceReason  string     `json:"ai_advice_reason,omitempty"`
+	AIAdviceAt      *time.Time `json:"ai_advice_at,omitempty"`
 }
 
 // CandidateFilter controls ListCandidates queries.
@@ -746,9 +761,22 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 	protected := existing.Layer == "exact" || existing.Layer == CandidateLayerManual ||
 		(existing.Layer == "llm" && c.Layer != "exact") ||
 		(existing.FormulaVersion != "" && c.FormulaVersion == "")
+	// A pin freezes the score (owner decision 2026-09-26). A manual row,
+	// including a scanner row a human pinned (Source manual, scanner layer),
+	// keeps the ScoreBreakdown, Band and FormulaVersion it had when it was
+	// pinned; the rescan may still refresh the evidence fields (Layer and
+	// Similarity, subject to the precedence rules above). The whole breakdown
+	// is frozen, not only its Score and Band: the breakdown embeds Score,
+	// Band and Formula, and fresh Signals under a frozen Score would show the
+	// reviewer signals that do not add up to the score beside them. A pinned
+	// row with no band never gains one here either. UpdateCandidateScore and
+	// UpdateCandidateScores apply the same rule to the rescore paths.
+	scoreFrozen := existing.Source == CandidateSourceManual
 	if !protected {
 		existing.Layer = c.Layer
 		existing.Similarity = c.Similarity
+	}
+	if !protected && !scoreFrozen {
 		// Carry forward unified-scoring fields when the incoming write has them.
 		if c.ScoreBreakdown != nil {
 			existing.ScoreBreakdown = c.ScoreBreakdown
@@ -760,11 +788,20 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 			existing.FormulaVersion = c.FormulaVersion
 		}
 	}
-	if c.LLMVerdict != "" {
-		existing.LLMVerdict = c.LLMVerdict
-	}
-	if c.LLMReason != "" {
-		existing.LLMReason = c.LLMReason
+	switch {
+	case scoreFrozen && c.LLMVerdict != "":
+		// An LLM verdict on a pinned row is advice, never the row's verdict
+		// (see RecordCandidateLLMAdvice).
+		existing.AdviceVerdict = c.LLMVerdict
+		existing.AdviceReason = c.LLMReason
+		existing.AdviceAt = now
+	case !scoreFrozen:
+		if c.LLMVerdict != "" {
+			existing.LLMVerdict = c.LLMVerdict
+		}
+		if c.LLMReason != "" {
+			existing.LLMReason = c.LLMReason
+		}
 	}
 	oldStatus := existing.Status
 	// Status is a VERDICT, not derived data: "dismissed" and "merged" record a
@@ -1264,7 +1301,7 @@ func (s *EmbeddingStore) BackfillEntityIndex() (int, error) {
 
 // UpdateCandidateStatus updates the status of a single candidate by ID.
 //
-// Unlike updateCandidate (used by UpdateCandidateScore/UpdateCandidateLLM,
+// Unlike updateCandidateIf (used by UpdateCandidateScore/UpdateCandidateLLM,
 // neither of which touches Status), this maintains the "dedup:s:" status
 // secondary index (INIT-2 T4): the old-status row is deleted and the
 // new-status row is set in the SAME pebble.Batch as the record write, using
@@ -1337,15 +1374,31 @@ func (s *EmbeddingStore) writeCandidateStatusLocked(id int64, rec candRec, statu
 }
 
 // UpdateCandidateScore persists a new ScoreBreakdown, Band, and
-// FormulaVersion onto an existing candidate. Called by Engine.Rescore
-// when apply=true to commit re-computed scores without re-collecting signals.
+// FormulaVersion onto an existing candidate.
+//
+// A manual (pinned) row is refused with ErrManualCandidateProtected and left
+// untouched: a pin freezes the score, as in UpdateCandidateScores and
+// UpsertCandidateNew. The check runs under s.mu, the lock
+// EnqueueManualCandidate holds, so a pin landing after the caller listed the
+// row is still honoured. A missing row is a no-op, as before. Bulk callers
+// should use UpdateCandidateScores + SyncCandidateWrites instead.
 func (s *EmbeddingStore) UpdateCandidateScore(id int64, score *models.UnifiedDedupScore, band, formulaVersion string) error {
-	return s.updateCandidate(id, func(rec *candRec) {
+	var guardErr error
+	err := s.updateCandidateIf(id, func(rec *candRec) bool {
+		if rec.Source == CandidateSourceManual {
+			guardErr = fmt.Errorf("update score on candidate %d: %w", id, ErrManualCandidateProtected)
+			return false
+		}
 		rec.ScoreBreakdown = score
 		rec.Band = band
 		rec.FormulaVersion = formulaVersion
 		rec.UpdatedAt = time.Now().UnixNano()
+		return true
 	})
+	if err != nil {
+		return err
+	}
+	return guardErr
 }
 
 // UpdateCandidateLLM stores the LLM verdict and reason for a candidate and
@@ -1484,22 +1537,14 @@ func (s *EmbeddingStore) SyncCandidateWrites() error {
 	return s.db.LogData(nil, pebble.Sync)
 }
 
-// updateCandidate is the single-row read-modify-write behind
-// UpdateCandidateScore / UpdateCandidateLLM. It holds s.mu across the
-// read-modify-write for the same reason UpdateCandidateScores does: without
-// it a concurrent UpsertCandidateNew on the same row is a lost update. The
-// per-row pebble.Sync stays — these are one-off writes, not the whole-backlog
-// loop; bulk callers use UpdateCandidateScores + SyncCandidateWrites.
-func (s *EmbeddingStore) updateCandidate(id int64, mutFn func(*candRec)) error {
-	return s.updateCandidateIf(id, func(rec *candRec) bool {
-		mutFn(rec)
-		return true
-	})
-}
-
-// updateCandidateIf is updateCandidate with a veto: mutFn returns false to
-// leave the row unwritten. The check and the write happen under s.mu, so a
-// guard in mutFn sees the row as it is at write time.
+// updateCandidateIf is the single-row read-modify-write behind
+// UpdateCandidateScore, UpdateCandidateLLM and RecordCandidateLLMAdvice.
+// mutFn returns false to leave the row unwritten. The check and the write
+// happen under s.mu, so a guard in mutFn sees the row as it is at write time,
+// and a concurrent UpsertCandidateNew on the same row cannot be a lost update.
+// The per-row pebble.Sync stays — these are one-off writes, not the
+// whole-backlog loop; bulk callers use UpdateCandidateScores +
+// SyncCandidateWrites.
 func (s *EmbeddingStore) updateCandidateIf(id int64, mutFn func(*candRec) bool) error {
 	s.closeMu.RLock()
 	defer s.closeMu.RUnlock()
@@ -2008,23 +2053,35 @@ func (s *EmbeddingStore) setJSON(key []byte, v any) error {
 
 func candRecToCandidate(id int64, rec candRec) DedupCandidate {
 	return DedupCandidate{
-		ID:             id,
-		EntityType:     rec.EntityType,
-		EntityAID:      rec.EntityAID,
-		EntityBID:      rec.EntityBID,
-		Layer:          rec.Layer,
-		Similarity:     rec.Similarity,
-		LLMVerdict:     rec.LLMVerdict,
-		LLMReason:      rec.LLMReason,
-		Status:         rec.Status,
-		CreatedAt:      time.Unix(0, rec.CreatedAt),
-		UpdatedAt:      time.Unix(0, rec.UpdatedAt),
-		ScoreBreakdown: rec.ScoreBreakdown,
-		Band:           rec.Band,
-		FormulaVersion: rec.FormulaVersion,
-		Source:         rec.Source,
-		SourceNote:     rec.SourceNote,
+		ID:              id,
+		EntityType:      rec.EntityType,
+		EntityAID:       rec.EntityAID,
+		EntityBID:       rec.EntityBID,
+		Layer:           rec.Layer,
+		Similarity:      rec.Similarity,
+		LLMVerdict:      rec.LLMVerdict,
+		LLMReason:       rec.LLMReason,
+		Status:          rec.Status,
+		CreatedAt:       time.Unix(0, rec.CreatedAt),
+		UpdatedAt:       time.Unix(0, rec.UpdatedAt),
+		ScoreBreakdown:  rec.ScoreBreakdown,
+		Band:            rec.Band,
+		FormulaVersion:  rec.FormulaVersion,
+		Source:          rec.Source,
+		SourceNote:      rec.SourceNote,
+		AIAdviceVerdict: rec.AdviceVerdict,
+		AIAdviceReason:  rec.AdviceReason,
+		AIAdviceAt:      adviceTime(rec.AdviceAt),
 	}
+}
+
+// adviceTime converts a stored AdviceAt to the API's optional timestamp.
+func adviceTime(ns int64) *time.Time {
+	if ns == 0 {
+		return nil
+	}
+	t := time.Unix(0, ns)
+	return &t
 }
 
 // prefixUpperBound returns the smallest key strictly greater than all keys with

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3b7a2e9f-c1d4-4f8b-a5e0-6d3c8b2f1e47
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package dedup — op dedup.purge-legacy-fp-candidates (T015, SPEC 1 §8 step 2).
 //
@@ -20,6 +20,12 @@
 // Exclusion: the `acoustid` layer (2,591 pending rows from post-cutover May 31)
 // represents CURRENT data and must never be touched by this op.
 //
+// Review-queue-only pairs (dedup/automated_guard.go) are never marked either:
+// a manual (human-pinned) candidate, and a same-path pair (two book rows at one
+// cleaned file path, dedup.SamePathPair). The same-path check needs the books'
+// paths, which the op loads once, in bulk, for the candidates that pass every
+// other gate.
+//
 // The op defaults to dry-run; pass `{"apply":true}` in the params JSON to mark rows.
 // A versioned flag `dedup_fp_purge_v1_done` prevents double-runs after completion.
 
@@ -33,6 +39,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -147,16 +154,19 @@ func (p *Plugin) runPurgeLegacyFP(ctx context.Context, rawParams json.RawMessage
 	}
 
 	var (
-		examined    int
-		staleCount  int
-		keptHash    int
-		keptLayer   int
-		keptCutover int
-		keptManual  int
+		examined     int
+		staleCount   int
+		keptHash     int
+		keptLayer    int
+		keptCutover  int
+		keptManual   int
+		keptSamePath int
 	)
 
-	// Collect IDs to mark in one pass, so we don't interleave reads and writes.
-	var toMark []int64
+	// Collect the rows that pass every per-row gate in one pass, so we don't
+	// interleave reads and writes. The same-path gate runs after, on this
+	// set only, because it needs the books' paths.
+	var stale []database.DedupCandidate
 
 	for _, cand := range candidates {
 		if reporter.IsCanceled() {
@@ -211,10 +221,32 @@ func (p *Plugin) runPurgeLegacyFP(ctx context.Context, rawParams json.RawMessage
 			continue
 		}
 
-		// Candidate is stale.
-		staleCount++
-		toMark = append(toMark, cand.ID)
+		stale = append(stale, cand)
 	}
+
+	// 5. A same-path pair (two book rows at one cleaned file path) is
+	//    review-queue-only by owner decision (dedup.AutomatedResolutionRefusal),
+	//    whatever its layer or similarity.
+	var toMark []int64
+	if len(stale) > 0 {
+		need := make(map[string]struct{}, len(stale)*2)
+		for _, c := range stale {
+			need[c.EntityAID] = struct{}{}
+			need[c.EntityBID] = struct{}{}
+		}
+		books, err := p.loadBooksForPathCheck(ctx, reporter, need)
+		if err != nil {
+			return fmt.Errorf("load books for the same-path check: %w", err)
+		}
+		for _, c := range stale {
+			if _, refused := dedupengine.AutomatedResolutionRefusal(c, books[c.EntityAID], books[c.EntityBID]); refused {
+				keptSamePath++
+				continue
+			}
+			toMark = append(toMark, c.ID)
+		}
+	}
+	staleCount = len(toMark)
 
 	reporter.Logger().Info("purge-legacy-fp: scan complete",
 		"examined", examined,
@@ -223,11 +255,12 @@ func (p *Plugin) runPurgeLegacyFP(ctx context.Context, rawParams json.RawMessage
 		"kept_wrong_layer", keptLayer,
 		"kept_post_cutover", keptCutover,
 		"kept_manual", keptManual,
+		"kept_same_path", keptSamePath,
 		"apply", params.Apply)
 
 	summary := fmt.Sprintf(
-		"Scan: %d examined, %d stale-fp, %d kept (genuine hash), %d kept (other layer), %d kept (post-cutover), %d kept (manual)",
-		examined, staleCount, keptHash, keptLayer, keptCutover, keptManual,
+		"Scan: %d examined, %d stale-fp, %d kept (genuine hash), %d kept (other layer), %d kept (post-cutover), %d kept (manual), %d kept (same path)",
+		examined, staleCount, keptHash, keptLayer, keptCutover, keptManual, keptSamePath,
 	)
 
 	if !params.Apply {
@@ -276,6 +309,50 @@ func (p *Plugin) runPurgeLegacyFP(ctx context.Context, rawParams json.RawMessage
 		fmt.Sprintf("Complete — %d/%d marked stale-fp (%d changed since the scan, left alone). %s", marked, staleCount, skippedAtWrite, summary))
 	reporter.Logger().Info("purge-legacy-fp: complete", "marked", marked, "intended", staleCount, "skipped_at_write", skippedAtWrite)
 	return nil
+}
+
+// purgeLegacyFPBookPage is the GetAllBooksCore page size for the same-path
+// check's bulk path load.
+const purgeLegacyFPBookPage = 5000
+
+// loadBooksForPathCheck returns the books in need, keyed by ID, carrying only
+// what dedup.SamePathPair reads (ID and FilePath). It pages GetAllBooksCore
+// once rather than issuing one GetBookByID per candidate; an ID the bulk read
+// did not return (a memdb gap, or a book deleted since) falls back to one
+// GetBookByID, and a book that cannot be loaded at all stays absent, which
+// SamePathPair treats as "not same-path", as the other guards do.
+func (p *Plugin) loadBooksForPathCheck(ctx context.Context, reporter sdk.Reporter, need map[string]struct{}) (map[string]*database.Book, error) {
+	out := make(map[string]*database.Book, len(need))
+	for offset := 0; ; offset += purgeLegacyFPBookPage {
+		if reporter.IsCanceled() {
+			return nil, context.Canceled
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		page, err := p.store.GetAllBooksCore(purgeLegacyFPBookPage, offset)
+		if err != nil {
+			return nil, fmt.Errorf("get all books at offset %d: %w", offset, err)
+		}
+		for i := range page {
+			if _, ok := need[page[i].ID]; ok {
+				out[page[i].ID] = &database.Book{ID: page[i].ID, FilePath: page[i].FilePath}
+			}
+		}
+		if len(page) < purgeLegacyFPBookPage || len(out) == len(need) {
+			break
+		}
+	}
+	for id := range need {
+		if _, ok := out[id]; ok {
+			continue
+		}
+		b, err := p.store.GetBookByID(id)
+		if err == nil && b != nil {
+			out[id] = b
+		}
+	}
+	return out, nil
 }
 
 // buildFileHashIndex returns a map from bookID → set of non-empty file hashes

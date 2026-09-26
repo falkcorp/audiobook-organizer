@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/__tests__/CandidateCompareDrawer.test.tsx
-// version: 2.1.0
+// version: 2.2.0
 // guid: c4d5e6f7-a8b9-0123-cdef-cd4567890123
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -109,6 +109,49 @@ describe('CandidateCompareDrawer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getDedupCandidateBreakdown).mockResolvedValue(breakdown);
+  });
+
+  it('shows the LLM verdict on a pinned row as advice only', async () => {
+    vi.mocked(api.getDedupCandidateBreakdown).mockResolvedValue({
+      ...breakdown,
+      candidate: {
+        ...breakdown.candidate,
+        source: 'manual',
+        source_note: 'shell of the other book',
+        ai_advice_verdict: 'duplicate',
+        ai_advice_reason: '[high] same narrator and runtime',
+        ai_advice_at: '2026-09-26T00:00:00Z',
+      },
+    });
+    renderDrawer();
+
+    const notice = await screen.findByTestId('drawer-pinned-notice');
+    expect(
+      within(notice).getByText(/Pinned for human review: shell of the other book/)
+    ).toBeInTheDocument();
+    const advice = within(notice).getByTestId('drawer-ai-advice');
+    expect(advice).toHaveTextContent(
+      'AI advice (not applied): duplicate — [high] same narrator and runtime'
+    );
+    // The advice does not replace the stored band or score shown in the header.
+    expect(screen.getByTestId('drawer-merge-btn')).toBeInTheDocument();
+  });
+
+  it('shows no pinned notice or advice on a scanner row', async () => {
+    renderDrawer();
+    expect(await screen.findByTestId('drawer-tab-metadata')).toBeInTheDocument();
+    expect(screen.queryByTestId('drawer-pinned-notice')).toBeNull();
+    expect(screen.queryByTestId('drawer-ai-advice')).toBeNull();
+  });
+
+  it('shows the pinned notice without advice when the LLM has not reviewed it', async () => {
+    vi.mocked(api.getDedupCandidateBreakdown).mockResolvedValue({
+      ...breakdown,
+      candidate: { ...breakdown.candidate, source: 'manual' },
+    });
+    renderDrawer();
+    expect(await screen.findByTestId('drawer-pinned-notice')).toBeInTheDocument();
+    expect(screen.queryByTestId('drawer-ai-advice')).toBeNull();
   });
 
   it('renders a Metadata tab with side-by-side metadata and primary signals', async () => {

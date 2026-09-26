@@ -1,7 +1,7 @@
 // file: internal/database/activity_types.go
-// version: 1.6.0
+// version: 1.8.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package database — activity log types and helpers previously defined in
 // activity_store.go (the legacy SQLite backend). Extracted here in fable5
@@ -90,19 +90,33 @@ type ActivityFilter struct {
 	// before the rename, the new one only rows from after it. Ignored when Type
 	// is empty. Stores read the set through TypeValues / acceptsType, never
 	// Type alone.
-	TypeAliases    []string
-	Tier           string
-	Level          string
-	OperationID    string
-	BookID         string
-	Since          *time.Time
-	Until          *time.Time
-	Tags           []string
+	TypeAliases []string
+	Tier        string
+	Level       string
+	OperationID string
+	BookID      string
+	Since       *time.Time
+	Until       *time.Time
+	Tags        []string
+	// TagAliases makes one Tags entry an any-of group: an entry satisfies the
+	// AND term for tag T when it carries T or any of TagAliases[T]. It exists
+	// for def:<id> tags, which reporter_db.go writes with the op ID the run
+	// used and never rewrites, so a renamed op's history carries two
+	// spellings. A key that is not also in Tags is ignored. Stores read Tags
+	// through TagTerms / acceptsTags, never Tags alone.
+	TagAliases     map[string][]string
 	Search         string   // LIKE %search% on summary
 	Source         string   // show only this source
 	ExcludeSources []string // hide these sources
 	ExcludeTiers   []string // hide these tiers
 	ExcludeTags    []string // hide entries that carry any of these tags
+	// ExcludeTagAliases widens ExcludeTags the way TagAliases widens Tags: an
+	// entry is hidden when it carries an ExcludeTags entry T or any of
+	// ExcludeTagAliases[T]. It exists for def:<id> tags, so hiding a renamed
+	// op hides both halves of its history. A key that is not also in
+	// ExcludeTags is ignored. Stores read the set through ExcludeTagValues /
+	// rejectsTags, never ExcludeTags alone.
+	ExcludeTagAliases map[string][]string
 }
 
 // TypeValues returns every type value f accepts: Type followed by TypeAliases,
@@ -127,6 +141,86 @@ func (f ActivityFilter) acceptsType(t string) bool {
 		return true
 	}
 	return t != "" && slices.Contains(f.TypeAliases, t)
+}
+
+// TagTerms returns f's required-tag predicate as AND-ed any-of groups: one
+// group per Tags entry, holding that tag followed by its TagAliases, without
+// empty aliases or duplicates. Group order follows Tags, so the result is
+// deterministic. Nil means f requires no tag.
+func (f ActivityFilter) TagTerms() [][]string {
+	if len(f.Tags) == 0 {
+		return nil
+	}
+	out := make([][]string, 0, len(f.Tags))
+	for _, tag := range f.Tags {
+		group := []string{tag}
+		for _, a := range f.TagAliases[tag] {
+			if a != "" && !slices.Contains(group, a) {
+				group = append(group, a)
+			}
+		}
+		out = append(out, group)
+	}
+	return out
+}
+
+// acceptsTags reports whether an entry carrying tags passes f's required-tag
+// predicate: for every Tags entry, the entry carries it or one of its aliases.
+// Same predicate as TagTerms, without allocating per row.
+func (f ActivityFilter) acceptsTags(tags []string) bool {
+	for _, tag := range f.Tags {
+		if slices.Contains(tags, tag) {
+			continue
+		}
+		if !slices.ContainsFunc(f.TagAliases[tag], func(a string) bool {
+			return a != "" && slices.Contains(tags, a)
+		}) {
+			return false
+		}
+	}
+	return true
+}
+
+// ExcludeTagValues returns every tag value f's exclusion hides: each
+// ExcludeTags entry followed by its ExcludeTagAliases, without empty aliases
+// or duplicates. Order follows ExcludeTags, so the result is deterministic.
+// Exclusion is one any-of set (a row carrying ANY value is hidden), so the
+// flat list is the whole predicate. Nil means f excludes no tag.
+func (f ActivityFilter) ExcludeTagValues() []string {
+	if len(f.ExcludeTags) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(f.ExcludeTags))
+	for _, tag := range f.ExcludeTags {
+		// The literal tag is kept even when empty, as ExcludeTags always
+		// was; only empty ALIASES are dropped.
+		if !slices.Contains(out, tag) {
+			out = append(out, tag)
+		}
+		for _, a := range f.ExcludeTagAliases[tag] {
+			if a != "" && !slices.Contains(out, a) {
+				out = append(out, a)
+			}
+		}
+	}
+	return out
+}
+
+// rejectsTags reports whether an entry carrying tags is hidden by f's
+// exclusion: it carries some ExcludeTags entry or one of that entry's aliases.
+// Same predicate as ExcludeTagValues, without allocating per row.
+func (f ActivityFilter) rejectsTags(tags []string) bool {
+	for _, tag := range f.ExcludeTags {
+		if slices.Contains(tags, tag) {
+			return true
+		}
+		if slices.ContainsFunc(f.ExcludeTagAliases[tag], func(a string) bool {
+			return a != "" && slices.Contains(tags, a)
+		}) {
+			return true
+		}
+	}
+	return false
 }
 
 // CompactResult holds the outcome of a CompactByDay operation.
