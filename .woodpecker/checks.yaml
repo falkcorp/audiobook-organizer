@@ -1,5 +1,5 @@
 # file: .woodpecker/checks.yaml
-# version: 1.0.0
+# version: 1.0.1
 # guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
 # last-edited: 2026-09-26
 #
@@ -8,8 +8,8 @@
 # ratchet, mocks-check, fmt-check, sdkguard, bench-check, and the web tests.
 # Each step runs the same make target `make ci` runs.
 #
-# Runs on the prod host's agent (docker backend, capped at one workflow at a
-# time), so it queues behind test-database. Measured on Linux: vet about 20 s,
+# Runs on the prod host's agent (docker backend, 2 workflows at a time, 8 CPU /
+# 16 GiB per step container), alongside test-database. Measured on Linux: vet about 20 s,
 # staticcheck about 105 s, errcheck ratchet about 90 s, bench-check about 60 s,
 # web tests about 50 s, plus about 2 min to install the pinned tools. The
 # workflow finishes in roughly the time the Mac test workflows take.
