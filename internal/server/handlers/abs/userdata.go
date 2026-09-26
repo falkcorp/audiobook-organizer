@@ -81,8 +81,8 @@ type SyncIDStore interface {
 	// lists use it to tell an alias id from a canonical one.
 	ResolveSyncItem(syncID string) (*database.SyncItem, error)
 	// ListSyncAliases names the merge losers' syncIDs that still resolve to a
-	// live syncID. Used once per user, to seed the alias-use record
-	// (seedAliasUses).
+	// live syncID. Used only to seed a user's alias-use record, until that
+	// seed completes (seedAliasUses).
 	ListSyncAliases(syncID string) ([]string, error)
 }
 
@@ -448,8 +448,10 @@ func (p *userDataProvider) ClientMediaProgress(userID string) ([]any, error) {
 // to the live syncID it resolves to now. An alias whose merge was undone (it
 // resolves to itself) or that no longer resolves is left out.
 //
-// rows is the user's MediaProgress list, used only to seed the record on the
-// user's first list after the switch-over (seedAliasUses); nil skips seeding.
+// rows is the user's MediaProgress list, used only to seed the record on each
+// list until the user's seed completes (seedAliasUses; usually the first list
+// after the switch-over, later when a lookup or write failed); nil skips
+// seeding.
 // Fail-open throughout: an error omits alias rows, never the canonical list.
 func (p *userDataProvider) usedAliases(userID string, rows []any) map[string]string {
 	ids, seeded, err := p.aliasUses.ListSyncAliasUses(userID)
@@ -512,8 +514,8 @@ func (p *userDataProvider) usedAliases(userID string, rows []any) map[string]str
 // ErrSyncAliasLimit does NOT hold the seed open. It is deterministic (the
 // alias graph exceeds maxSyncAliases), so a retry cannot succeed and every
 // list would redo the seed forever. And nothing is lost: the pre-change list
-// (#3558) failed on the same error, so the client never received, and holds
-// no local row for, any alias of that item.
+// (#3558) omitted that item's alias rows on the same error, on every list, so
+// the client never received, and holds no local row for, any alias of it.
 //
 // A write failure also leaves the user unseeded, so the next list tries
 // again. In every case the aliases found are returned, so this response

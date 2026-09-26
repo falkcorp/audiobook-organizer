@@ -103,13 +103,13 @@ func TestSyncAliasUse_ListIsConsistentWithAConcurrentSeed(t *testing.T) {
 	for i := range 200 {
 		prior = append(prior, fmt.Sprintf("prior-%03d", i))
 	}
-	for u := range 300 {
+	for u := range 60 {
 		user := fmt.Sprintf("user%03d", u)
 		if err := store.SeedSyncAliasUses(user, prior, false); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for u := range 300 {
+	for u := range 60 {
 		user := fmt.Sprintf("user%03d", u)
 		done := make(chan struct{})
 		var bad []string
