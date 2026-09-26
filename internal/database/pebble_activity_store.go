@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-09-26
 
@@ -1207,7 +1207,10 @@ func pactSourcesCacheKey(f ActivityFilter) string {
 		pactTagTermsCacheKey(f),
 		strings.Join(f.ExcludeSources, ","),
 		strings.Join(f.ExcludeTiers, ","),
-		strings.Join(f.ExcludeTags, ","),
+		// With aliases: an exclusion that resolved to several def: spellings
+		// never shares a slot with the literal single-spelling one. Flat,
+		// because exclusion is one any-of set.
+		strings.Join(f.ExcludeTagValues(), "\x01"),
 	}, "\x00")
 }
 

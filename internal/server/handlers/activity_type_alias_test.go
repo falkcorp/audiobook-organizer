@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity_type_alias_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c7e9b53-8a14-4f6d-b3e0-5d91a7c4e826
 // last-edited: 2026-09-26
 
@@ -168,4 +168,61 @@ func TestListActivity_DefTagFilterIsAliasAware(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, []string{"def:library.optimize"}, svc.got.Tags)
 	assert.Nil(t, svc.got.TagAliases)
+}
+
+// TestListActivity_DefExcludeTagFilterIsAliasAware: ?exclude_tags=def:<id> by
+// EITHER spelling hides the op's rows under both, resolved exactly as ?tags=
+// is; other excluded tags stay literal.
+func TestListActivity_DefExcludeTagFilterIsAliasAware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	defs := &fakeOpDefs{defs: []opsregistry.OperationDef{
+		{ID: "maintenance.library-optimize", FormerIDs: []string{"library.optimize"}},
+	}}
+	const canonical = "def:maintenance.library-optimize"
+	aliased := map[string][]string{canonical: {"def:library.optimize"}}
+
+	cases := []struct {
+		name, exclude string
+		wantTags      []string
+		wantAliases   map[string][]string
+		wantNotedUses []string
+	}{
+		{"former ID", "def:library.optimize", []string{canonical}, aliased,
+			[]string{"library.optimize|" + opsregistry.AliasEntryActivityFilter}},
+		{"canonical ID", canonical, []string{canonical}, aliased, nil},
+		{"with another tag", "noisy, def:maintenance.library-optimize", []string{"noisy", canonical}, aliased, nil},
+		{"both spellings", "def:library.optimize,def:maintenance.library-optimize", []string{canonical}, aliased,
+			[]string{"library.optimize|" + opsregistry.AliasEntryActivityFilter}},
+		{"unknown def", "def:nope", []string{"def:nope"}, nil, nil},
+		{"not a def tag", "library.optimize", []string{"library.optimize"}, nil, nil},
+		{"absent", "", nil, nil, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defs.noted = nil
+			svc := &filterCapture{MockActivityService: handlersmocks.NewMockActivityService(t)}
+			h := handlers.NewActivityHandler(svc, nil, handlers.WithActivityOpDefs(defs))
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/activity?exclude_tags="+url.QueryEscape(tc.exclude), nil)
+			h.ListActivity(c)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, tc.wantTags, svc.got.ExcludeTags)
+			assert.Equal(t, tc.wantAliases, svc.got.ExcludeTagAliases)
+			assert.Nil(t, svc.got.Tags, "exclude_tags must not leak into the required tags")
+			assert.Equal(t, tc.wantNotedUses, defs.noted)
+		})
+	}
+
+	// Without the option def: exclusions stay literal.
+	svc := &filterCapture{MockActivityService: handlersmocks.NewMockActivityService(t)}
+	h := handlers.NewActivityHandler(svc, nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/activity?exclude_tags=def:library.optimize", nil)
+	h.ListActivity(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, []string{"def:library.optimize"}, svc.got.ExcludeTags)
+	assert.Nil(t, svc.got.ExcludeTagAliases)
 }

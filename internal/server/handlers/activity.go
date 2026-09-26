@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-09-26
 
@@ -205,6 +205,9 @@ func (h *ActivityHandler) activityTagSpellings(asked string) (tag string, aliase
 //	search           – substring match on summary
 //	source           – show only entries from this source
 //	exclude_sources  – comma-separated list of sources to hide
+//	exclude_tiers    – comma-separated list of tiers to hide
+//	exclude_tags     – comma-separated list of tags to hide (ANY semantics);
+//	                   a def:<op id> tag also hides the op's former IDs
 func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	if h.svc == nil {
 		httputil.RespondWithInternalError(c, "activity log not available")
@@ -282,8 +285,21 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	if v := c.Query("exclude_tags"); v != "" {
 		for tag := range strings.SplitSeq(v, ",") {
 			tag = strings.TrimSpace(tag)
-			if tag != "" {
-				filter.ExcludeTags = append(filter.ExcludeTags, tag)
+			if tag == "" {
+				continue
+			}
+			// Same resolution as ?tags=: hiding def:<id> hides the op's rows
+			// under every spelling it ran under.
+			tag, aliases := h.activityTagSpellings(tag)
+			if slices.Contains(filter.ExcludeTags, tag) {
+				continue // both spellings of one op asked for: one entry
+			}
+			filter.ExcludeTags = append(filter.ExcludeTags, tag)
+			if len(aliases) > 0 {
+				if filter.ExcludeTagAliases == nil {
+					filter.ExcludeTagAliases = make(map[string][]string)
+				}
+				filter.ExcludeTagAliases[tag] = aliases
 			}
 		}
 	}

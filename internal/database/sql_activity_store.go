@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-09-26
 
@@ -604,10 +604,14 @@ func (s *SQLActivityStore) buildFilter(f ActivityFilter) (string, []any) {
 			args = append(args, v)
 		}
 	}
-	// ExcludeTags: hide entries carrying ANY of these tags.
-	for _, tag := range f.ExcludeTags {
-		conds = append(conds, "NOT "+s.dialect.jsonArrayContains("tags"))
-		args = append(args, tag)
+	// ExcludeTags: hide entries carrying ANY of these tags or their
+	// ExcludeTagAliases (a renamed op's def: spellings). Exclusion is one
+	// any-of set, so a single json_each pass tests all of it.
+	if vals := f.ExcludeTagValues(); len(vals) > 0 {
+		conds = append(conds, "NOT "+s.dialect.jsonArrayContainsAny("tags", len(vals)))
+		for _, v := range vals {
+			args = append(args, v)
+		}
 	}
 
 	if len(conds) == 0 {

@@ -1,5 +1,5 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
 // last-edited: 2026-09-26
 
@@ -1037,16 +1037,8 @@ func matchesFilter(e ActivityEntry, f ActivityFilter) bool {
 	if slices.Contains(f.ExcludeTiers, e.Tier) {
 		return false
 	}
-	for _, tag := range f.ExcludeTags {
-		if containsTag(e.Tags, tag) {
-			return false
-		}
-	}
-	return true
-}
-
-func containsTag(tags []string, tag string) bool {
-	return slices.Contains(tags, tag)
+	// Any excluded tag, or any of its aliases (ExcludeTagAliases), hides it.
+	return !f.rejectsTags(e.Tags)
 }
 
 func boolInt(b bool) int {
