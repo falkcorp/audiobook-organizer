@@ -440,6 +440,50 @@ func TestClientMediaProgress_SeedAliasLimitStillSeeds(t *testing.T) {
 	}
 }
 
+// TestClientMediaProgress_SeedWindowBounds: the one-time seed records the
+// aliases of items whose progress changed in [aliasSeedSince, cutoff), where
+// the cutoff is the moment this server first ran with alias-use tracking.
+// Before aliasSeedSince the client never received alias rows (#3558 had not
+// shipped); from the cutoff on, every alias use is recorded as it happens,
+// so seeding a row touched after it would re-create the stats double count
+// for an alias the client never held. Edges are exact to the millisecond.
+func TestClientMediaProgress_SeedWindowBounds(t *testing.T) {
+	since := time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
+	cutoff := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		at     time.Time
+		seeded bool
+	}{
+		{"1ms before since", since.Add(-time.Millisecond), false},
+		{"at since", since, true},
+		{"1ms before cutoff", cutoff.Add(-time.Millisecond), true},
+		{"at cutoff", cutoff, false},
+		{"weeks after cutoff", cutoff.Add(21 * 24 * time.Hour), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newUDFake()
+			f.addBook("bk", nil, 1800)
+			f.presetSyncID("bk", udSyncID(1))
+			f.addPosition("u1", "bk", "abs", 900, tc.at)
+			f.aliases = map[string][]string{udSyncID(1): {udSyncID(8)}}
+
+			if _, err := udProviderWithCutoff(t, f, cutoff).ClientMediaProgress("u1"); err != nil {
+				t.Fatalf("ClientMediaProgress: %v", err)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if got := slices.Contains(f.used["u1"], udSyncID(8)); got != tc.seeded {
+				t.Fatalf("lastUpdate %s: alias seeded = %v, want %v (window [%s, %s))",
+					tc.at.Format(time.RFC3339Nano), got, tc.seeded, since.Format(time.RFC3339), cutoff.Format(time.RFC3339))
+			}
+			if !f.seeded["u1"] {
+				t.Fatal("the user must be marked seeded either way")
+			}
+		})
+	}
+}
+
 // TestClientMediaProgress_AliasUseReadFailureFailsOpen: an unreadable alias
 // record sends the canonical list with no alias rows.
 func TestClientMediaProgress_AliasUseReadFailureFailsOpen(t *testing.T) {

@@ -111,6 +111,12 @@ type UserDataOptions struct {
 	Library   UserDataLibraryStore
 	// AliasUses decides which alias ids get a client row (ClientMediaProgress).
 	AliasUses AliasUseStore
+	// AliasSeedCutoff is the upper bound of the one-time alias seed window
+	// (seedAliasUses): the moment this server first ran with alias-use
+	// tracking, persisted once and never moved
+	// (database.SyncAliasUseStore.SyncAliasUseSeedCutoff). Required: without
+	// it the window would stay open forever.
+	AliasSeedCutoff time.Time
 
 	// Concurrency bounds the per-book follow-up reads. Zero means
 	// runtime.NumCPU(). Never unbounded: the collection is user-scoped but a
@@ -139,6 +145,7 @@ type userDataProvider struct {
 	identity    SyncIDStore
 	library     UserDataLibraryStore
 	aliasUses   AliasUseStore
+	seedCutoff  time.Time
 	concurrency int
 }
 
@@ -167,6 +174,9 @@ func NewUserData(o UserDataOptions) (UserDataProvider, error) {
 	if o.AliasUses == nil {
 		return nil, errors.New("abs: userdata: an alias-use store is required (without it a client that opened a merged book by its old id loses that book's progress row)")
 	}
+	if o.AliasSeedCutoff.IsZero() {
+		return nil, errors.New("abs: userdata: an alias seed cutoff is required (without it the one-time alias seed would record aliases the client never held)")
+	}
 	limit := o.Concurrency
 	if limit <= 0 {
 		limit = runtime.NumCPU()
@@ -177,6 +187,7 @@ func NewUserData(o UserDataOptions) (UserDataProvider, error) {
 		identity:    o.Identity,
 		library:     o.Library,
 		aliasUses:   o.AliasUses,
+		seedCutoff:  o.AliasSeedCutoff,
 		concurrency: limit,
 	}, nil
 }
@@ -317,15 +328,23 @@ func withLibraryItemID(row mediaProgressDTO, userID, libraryItemID string) media
 	return row
 }
 
-// aliasSeedSince bounds the one-time seed of a user's alias-use record
-// (seedAliasUses). #3558 (merged 2026-09-25) sent an alias row for EVERY
-// alias of every item with progress, and AudioBooth stored a local row for
-// each. Tracking starts with this change, so without a seed every alias
-// becomes untracked at once and the client deletes those rows, including the
-// ones for books the user marked finished through an alias that same day:
-// the owner's bug, back. The seed keeps the aliases of items the user's
-// progress touched since #3558 shipped; an item untouched since then cannot
-// be one the user was acting on through an alias.
+// aliasSeedSince is the lower bound of the one-time seed of a user's
+// alias-use record (seedAliasUses). #3558 (merged 2026-09-25) sent an alias
+// row for EVERY alias of every item with progress, and AudioBooth stored a
+// local row for each. Tracking starts with this change, so without a seed
+// every alias becomes untracked at once and the client deletes those rows,
+// including the ones for books the user marked finished through an alias that
+// same day: the owner's bug, back. The seed keeps the aliases of items the
+// user's progress touched since #3558 shipped; an item untouched since then
+// cannot be one the user was acting on through an alias.
+//
+// The upper bound is the provider's seedCutoff (UserDataOptions.
+// AliasSeedCutoff): the moment this server first ran with tracking. From then
+// on every alias use is recorded as it happens (item_ref.go), so a row touched
+// after the cutoff says nothing about aliases the client got from #3558's
+// list. Without that bound a user who first lists weeks later would have the
+// aliases of everything they touched since recorded, and the stats double
+// count comes back for ids the client never held.
 var aliasSeedSince = time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
 
 // ClientMediaProgress is the mediaProgress array SENT TO CLIENTS (GET /api/me,
@@ -477,8 +496,9 @@ func (p *userDataProvider) usedAliases(userID string, rows []any) map[string]str
 }
 
 // seedAliasUses runs until it completes once per user: it records the aliases
-// of every item whose progress row changed since aliasSeedSince (see there for
-// why), marks the user seeded, and returns the aliases.
+// of every item whose progress row changed in [aliasSeedSince, seedCutoff)
+// (see aliasSeedSince for why), marks the user seeded, and returns the
+// aliases.
 //
 // The seeded mark is written only when every lookup answered. A lookup that
 // failed leaves that item out of this pass, and marking the user seeded then
@@ -499,7 +519,7 @@ func (p *userDataProvider) usedAliases(userID string, rows []any) map[string]str
 // again. In every case the aliases found are returned, so this response
 // carries their rows.
 func (p *userDataProvider) seedAliasUses(userID string, rows []any) []string {
-	since := aliasSeedSince.UnixMilli()
+	since, until := aliasSeedSince.UnixMilli(), p.seedCutoff.UnixMilli()
 	found := make([][]string, len(rows))
 	// failed[i] marks a transient lookup failure for rows[i]. Per-index, like
 	// found, so the workers share no written state.
@@ -508,7 +528,7 @@ func (p *userDataProvider) seedAliasUses(userID string, rows []any) []string {
 	g.SetLimit(p.concurrency)
 	for i := range rows {
 		row, ok := rows[i].(mediaProgressDTO)
-		if !ok || row.LibraryItemID == "" || row.LastUpdate < since {
+		if !ok || row.LibraryItemID == "" || row.LastUpdate < since || row.LastUpdate >= until {
 			continue
 		}
 		g.Go(func() error {
