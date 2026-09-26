@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/move_book_file_rows_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ec59dece-f7b5-45f6-83e1-f69b95f45340
 // last-edited: 2026-09-26
 
@@ -81,6 +81,9 @@ func TestMoveBookFileRows_OmittedDryRunPreviews(t *testing.T) {
 	require.Equal(t, 5, r.OldTrack)
 	require.Equal(t, 1, r.NewTrack)
 	require.True(t, r.SameFolderAsTarget)
+	// The fixture's two books share one folder as file_path, as on prod.
+	require.Len(t, r.Warnings, 1)
+	require.Contains(t, r.Warnings[0], "source book's file_path is this row's folder")
 
 	row, err := f.s.GetBookFileByID(f.src, f.ch01)
 	require.NoError(t, err)

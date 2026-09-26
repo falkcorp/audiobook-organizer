@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
 // last-edited: 2026-09-26
 
@@ -526,8 +526,13 @@ func mbfPlanOne(env mbfEnv, mv mbfMove, owner string, seenRow map[string]bool, c
 	if !r.SameFolderAsTarget {
 		r.Warnings = append(r.Warnings, "none of the target's rows are in this row's folder")
 	}
-	if src.FilePath == row.FilePath {
+	switch {
+	case src.FilePath == row.FilePath:
 		r.Warnings = append(r.Warnings, "source book's file_path is this file; it is left unchanged")
+	case src.FilePath == dir || src.FilePath == dst.FilePath:
+		// Both Warforged Sorcerer primaries had one folder as file_path: after
+		// the move the source still claims a folder it may own no row in.
+		r.Warnings = append(r.Warnings, "source book's file_path is this row's folder or the target's file_path; it is left unchanged")
 	}
 	r.Status = mbfStatusPlanned
 	return r, nil
