@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-09-26 -->
 
@@ -54,8 +54,8 @@ services:
     image: woodpeckerci/woodpecker-server:v3    # pin by digest when installing
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8000:8000"       # HTTP: localhost only; cloudflared connects here
-      - "192.0.2.10:9000:9000"      # gRPC: LAN only, for agents; never tunnelled
+      - "127.0.0.1:18733:8000"      # HTTP: localhost only; cloudflared connects here
+      - "192.0.2.10:18734:9000"     # gRPC: LAN only, for agents; never tunnelled
     volumes:
       - /srv/appdata/woodpecker/data:/var/lib/woodpecker
     environment:
@@ -87,7 +87,7 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
 ## 3. Ingress: Cloudflare tunnel and Access
 
 1. **One public hostname.** Add `coke.jdfalk.com` to the existing Cloudflare
-   tunnel, with service `http://localhost:8000`. The server listens on
+   tunnel, with service `http://localhost:18733`. The server listens on
    localhost only, so the tunnel is the only way in from outside.
 2. **The Access app covers the whole hostname.** Create a Cloudflare Access
    self-hosted application for `coke.jdfalk.com`, with the owner's identity as
@@ -112,7 +112,7 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
    Woodpecker's signed per-repo hook token: a request from an allowed IP
    without a valid signature is still rejected.
 5. **Agents never use the tunnel.** Agents connect to the gRPC port
-   `192.0.2.10:9000` over the LAN only. Do not add a tunnel route for 9000.
+   `192.0.2.10:18734` over the LAN only. Do not add a tunnel route for 18734.
 6. **Automation from outside the LAN.** Create a Cloudflare Access service
    token and a Woodpecker personal API token. Send
    `CF-Access-Client-Id` / `CF-Access-Client-Secret` together with
@@ -132,7 +132,7 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
 All agents share these settings:
 
 ```
-WOODPECKER_SERVER=192.0.2.10:9000
+WOODPECKER_SERVER=192.0.2.10:18734
 WOODPECKER_AGENT_SECRET=<same as server>
 WOODPECKER_AGENT_LABELS=host=<u0|llm1|mac>[,heavy=true]
 ```
