@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 771dc90a-8f91-40e6-93bc-60611ebe58b5
 // last-edited: 2026-09-26
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -70,8 +71,10 @@ import (
 // journal cannot undo. The row is written BEFORE the change it describes, so
 // a failure between the two leaves a journal row for a change that did not
 // happen; replaying it restores credits the book still has, a no-op.
-// replayTitleRelinkJournal is that replay. These change types are not wired
-// into the undo engine (internal/undo), which counts them not-restorable.
+// The normal undo path restores both (internal/undo and
+// audiobooks.RevertService): credits and primary back to the journaled value
+// under a compare-and-set, and a created author deleted only once nothing
+// credits it.
 //
 // Sequential on purpose: the population is the books credited to
 // title-as-author rows (tens to hundreds on this library, not the library),
@@ -100,23 +103,12 @@ const (
 	titleRelinkOutcomeDeferred = "deferred-limit"
 )
 
-// Journal change types (see the file comment).
+// Journal change types (see the file comment). Defined in internal/undo,
+// which also restores them.
 const (
-	ChangeTypeTitleRelinkCredits      = "title_relink_credits"
-	ChangeTypeTitleRelinkAuthorCreate = "title_relink_author_create"
+	ChangeTypeTitleRelinkCredits      = undo.ChangeTypeTitleRelinkCredits
+	ChangeTypeTitleRelinkAuthorCreate = undo.ChangeTypeTitleRelinkAuthorCreate
 )
-
-// titleRelinkCreditsSnapshot is a book's credits as the journal stores them.
-type titleRelinkCreditsSnapshot struct {
-	AuthorID *int                  `json:"author_id"`
-	Credits  []database.BookAuthor `json:"credits"`
-}
-
-// titleRelinkCreditsChange is NewValue of a credits journal row.
-type titleRelinkCreditsChange struct {
-	FromAuthorID int `json:"from_author_id"`
-	IntoAuthorID int `json:"into_author_id"`
-}
 
 // titleRelinkFileTagKeys are the raw tag keys, lower-cased, that name a
 // file's artist or album artist across the tag readers (normalized names,
@@ -306,62 +298,16 @@ func (j *titleRelinkJournal) journalCredits(bookID string, from, into int) error
 	if full == nil {
 		return fmt.Errorf("read book for journal: %s not found", bookID)
 	}
-	snap := titleRelinkCreditsSnapshot{AuthorID: full.AuthorID, Credits: credits}
+	snap := undo.TitleRelinkCreditsSnapshot{AuthorID: full.AuthorID, Credits: credits}
 	oldJSON, err := json.Marshal(snap)
 	if err != nil {
 		return err
 	}
-	newJSON, err := json.Marshal(titleRelinkCreditsChange{FromAuthorID: from, IntoAuthorID: into})
+	newJSON, err := json.Marshal(undo.TitleRelinkCreditsMove{FromAuthorID: from, IntoAuthorID: into})
 	if err != nil {
 		return err
 	}
 	return j.write(bookID, ChangeTypeTitleRelinkCredits, "book_authors", string(oldJSON), string(newJSON))
-}
-
-// replayTitleRelinkJournal puts a book's credits back to the OldValue of a
-// ChangeTypeTitleRelinkCredits journal row: the junction exactly as recorded
-// (order, roles, co-authors), then the primary AuthorID under the book's
-// write lock.
-func replayTitleRelinkJournal(store interface {
-	SetBookAuthors(bookID string, authors []database.BookAuthor) error
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
-	GetAuthorByID(id int) (*database.Author, error)
-}, c *database.OperationChange) error {
-	if c.ChangeType != ChangeTypeTitleRelinkCredits {
-		return fmt.Errorf("change %s is %q, not a title relink credits row", c.ID, c.ChangeType)
-	}
-	var snap titleRelinkCreditsSnapshot
-	if err := json.Unmarshal([]byte(c.OldValue), &snap); err != nil {
-		return fmt.Errorf("decode journal %s: %w", c.ID, err)
-	}
-	var primary *database.Author
-	if snap.AuthorID != nil {
-		a, err := store.GetAuthorByID(*snap.AuthorID)
-		if err != nil {
-			return fmt.Errorf("load primary author %d: %w", *snap.AuthorID, err)
-		}
-		primary = a
-	}
-	if err := store.SetBookAuthors(c.BookID, snap.Credits); err != nil {
-		return fmt.Errorf("restore credits of %s: %w", c.BookID, err)
-	}
-	written, err := store.ModifyBook(c.BookID, func(full *database.Book) error {
-		full.AuthorID = nil
-		full.Author = nil
-		if snap.AuthorID != nil {
-			id := *snap.AuthorID
-			full.AuthorID = &id
-			full.Author = primary
-		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("restore primary of %s: %w", c.BookID, err)
-	}
-	if written == nil {
-		return fmt.Errorf("restore primary of %s: book not found", c.BookID)
-	}
-	return nil
 }
 
 // titleRelinkResult is the relink step's outcome for the whole run.

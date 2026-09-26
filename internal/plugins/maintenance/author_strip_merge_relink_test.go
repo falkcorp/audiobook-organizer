@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
 // last-edited: 2026-09-26
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
@@ -327,7 +328,7 @@ func TestAuthorStripMerge_RelinkJournalFailureSkipsBook(t *testing.T) {
 	}
 }
 
-// The journal's old value replays to the original credits: order, roles and
+// The journal's old value replays (through audiobooks.RevertService) to the original credits: order, roles and
 // the co-author included, and the primary.
 func TestAuthorStripMerge_RelinkJournalReplaysOriginalCredits(t *testing.T) {
 	f := newRelinkFixture()
@@ -352,8 +353,19 @@ func TestAuthorStripMerge_RelinkJournalReplaysOriginalCredits(t *testing.T) {
 	if row == nil {
 		t.Fatalf("no credits journal row; journal=%v", f.journal)
 	}
-	if err := replayTitleRelinkJournal(f.store, row); err != nil {
-		t.Fatalf("replay: %v", err)
+	// Replay through the normal undo path.
+	var rows []*database.OperationChange
+	for i := range f.journal {
+		rows = append(rows, &f.journal[i])
+	}
+	f.store.GetOperationChangesFunc = func(string) ([]*database.OperationChange, error) { return rows, nil }
+	f.store.MarkOperationChangesRevertedFunc = func(string, []string) error { return nil }
+	res, err := audiobooks.NewRevertService(f.store).RevertOperation("op")
+	if err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	if res.Restored != 1 {
+		t.Errorf("restored %d rows, want 1: %+v", res.Restored, res)
 	}
 	if got := calls.setAuthors["bk-t"]; !reflect.DeepEqual(got, original) {
 		t.Errorf("replayed credits = %+v, want %+v", got, original)
