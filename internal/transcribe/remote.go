@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.10.0
+// version: 2.10.1
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package transcribe
 
@@ -112,24 +112,10 @@ func probeRemoteHealth(ctx context.Context, remoteURL string) (remoteHealth, boo
 	return h, true
 }
 
-// supportsRemoteBatch checks whether the server exposes /transcribe-batch by
-// hitting /health and looking for "batch_pipeline" in the response. A plain
-// connection error is treated as unsupported (server may be older version).
-func supportsRemoteBatch(ctx context.Context, remoteURL string) bool {
-	h, ok := probeRemoteHealth(ctx, remoteURL)
-	return ok && h.supportsBatch()
-}
-
-// transcribeRemote sends WAV jobs to the remote faster-whisper server.
-// It probes for /transcribe-batch support first (faster-whisper >=1.0.0 server)
-// and falls back to the original per-file worker pool on 404 or probe failure.
-func transcribeRemote(ctx context.Context, remoteURL string, limit int, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
-	h, ok := probeRemoteHealth(ctx, remoteURL)
-	return transcribeRemoteWithHealth(ctx, remoteURL, h, ok, limit, jobs, onProgress, nil)
-}
-
-// transcribeRemoteWithHealth is transcribeRemote for a caller that has ALREADY
-// probed /health -- the pool gate does, to decide require_gpu -- so the batch
+// transcribeRemoteWithHealth sends WAV jobs to the remote faster-whisper
+// server, using /transcribe-batch when the health response advertises it
+// (faster-whisper >=1.0.0 server) and the per-file worker pool otherwise. The
+// caller has ALREADY probed /health -- the pool gate does, to decide require_gpu -- so the batch
 // decision reuses that same response instead of issuing a second one.
 //
 // With a journal, this is also where the journal is consulted, because this is

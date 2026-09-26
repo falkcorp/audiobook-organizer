@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_journal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b62c07fa-91e5-4d38-8c74-3a19de5b20f7
-// last-edited: 2026-09-20
+// last-edited: 2026-09-26
 
 package scanner
 
@@ -254,7 +254,8 @@ func TestAIParseContentKey_PromptVersionIsInTheKey(t *testing.T) {
 // Two books whose basenames are identical are sent identical input, so sharing
 // one entry is correct rather than an approximation.
 func TestAIParseContentKey_SharesOnIdenticalBasenames(t *testing.T) {
-	if aiParseContentKey("01.mp3") != aiParseContentKey("01.mp3") {
+	first, second := aiParseContentKey("01.mp3"), aiParseContentKey("01.mp3")
+	if first == "" || first != second {
 		t.Fatal("identical inputs must share a key")
 	}
 	if aiParseContentKey("01.mp3") == aiParseContentKey("02.mp3") {

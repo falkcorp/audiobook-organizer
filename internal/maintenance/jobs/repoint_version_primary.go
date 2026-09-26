@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
-// last-edited: 2026-09-20
+// last-edited: 2026-09-26
 
 package jobs
 
@@ -399,10 +399,9 @@ func (j *repointVersionPrimaryJob) Run(ctx context.Context, store maintenance.Jo
 // detection itself ran on, indexed by id and by version group, plus the set of
 // books that are members of ANY detected chapter run.
 type repointIndex struct {
-	byID     map[string]*database.BookCore
-	byGroup  map[string][]*database.BookCore
-	inRun    map[string]bool
-	selected map[string]bool
+	byID    map[string]*database.BookCore
+	byGroup map[string][]*database.BookCore
+	inRun   map[string]bool
 }
 
 func newRepointIndex(books []database.BookCore, det scanner.ChapterDetection) *repointIndex {

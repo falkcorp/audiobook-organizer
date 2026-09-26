@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.13.0
+// version: 4.13.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package server
 
@@ -39,7 +39,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/quic-go/quic-go/http3"
-	"golang.org/x/net/http2"
 )
 
 // opRegistrationGate reports whether the operations registry came up whole.
@@ -799,10 +798,12 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 		}
 		s.httpServer.TLSConfig = tlsConfig
 
-		// Explicitly configure HTTP/2
-		if err := http2.ConfigureServer(s.httpServer, &http2.Server{}); err != nil {
-			return fmt.Errorf("failed to configure HTTP/2: %w", err)
-		}
+		// Explicitly enable HTTP/1.1 and HTTP/2 over TLS on the stdlib server
+		// (replaces the deprecated x/net http2.ConfigureServer).
+		protocols := new(http.Protocols)
+		protocols.SetHTTP1(true)
+		protocols.SetHTTP2(true)
+		s.httpServer.Protocols = protocols
 
 		// Add Alt-Svc header to advertise HTTP/3 if enabled
 		if cfg.HTTP3Port != "" {

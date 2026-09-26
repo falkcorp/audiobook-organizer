@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_mock_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e7f1a2b3-4c5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-07-16
+// last-edited: 2026-09-26
 
 package itunesservice
 
@@ -116,7 +116,6 @@ func TestCollectITLUpdatesWithBookIDs_Empty(t *testing.T) {
 
 func TestCollectITLUpdatesWithBookIDs_SkipsNonPrimary(t *testing.T) {
 	pid := "AABBCCDDEEFF0011"
-	path := "/mnt/books/book.m4b"
 	notPrimary := false
 
 	book := database.Book{
@@ -124,7 +123,6 @@ func TestCollectITLUpdatesWithBookIDs_SkipsNonPrimary(t *testing.T) {
 		Title:              "Non-Primary Book",
 		IsPrimaryVersion:   &notPrimary,
 		ITunesPersistentID: &pid,
-		ITunesPath:         &path,
 	}
 
 	m := dbmocks.NewMockStore(t)
@@ -138,10 +136,10 @@ func TestCollectITLUpdatesWithBookIDs_SkipsNonPrimary(t *testing.T) {
 }
 
 func TestCollectITLUpdatesWithBookIDs_BookLevel(t *testing.T) {
-	// Books without BookFiles produce no location updates now that
-	// Book.ITunesPath is deprecated; location is tracked on BookFile.
+	// A book with a persistent ID but no BookFiles produces no location
+	// updates: the iTunes location lives only on book_files.itunes_path, so a
+	// book-level row alone has nothing to write back.
 	pid := "DEADBEEFCAFEBABE"
-	path := "/mnt/books/greatbook.m4b"
 	isPrimary := true
 
 	book := database.Book{
@@ -149,7 +147,6 @@ func TestCollectITLUpdatesWithBookIDs_BookLevel(t *testing.T) {
 		Title:              "Great Book",
 		IsPrimaryVersion:   &isPrimary,
 		ITunesPersistentID: &pid,
-		ITunesPath:         &path,
 	}
 
 	m := dbmocks.NewMockStore(t)
@@ -159,7 +156,7 @@ func TestCollectITLUpdatesWithBookIDs_BookLevel(t *testing.T) {
 	imp := newMockImporter(m)
 	updates, bookIDs := imp.CollectITLUpdatesWithBookIDs()
 
-	// No BookFiles → no location updates (deprecated Book.ITunesPath not used).
+	// No BookFiles → no location updates.
 	assert.Empty(t, updates)
 	assert.Empty(t, bookIDs)
 }
@@ -167,14 +164,12 @@ func TestCollectITLUpdatesWithBookIDs_BookLevel(t *testing.T) {
 func TestCollectITLUpdatesWithBookIDs_FileLevel(t *testing.T) {
 	isPrimary := true
 	emptyPID := ""
-	emptyPath := ""
 
 	book := database.Book{
 		ID:                 "book-3",
 		Title:              "Multi-File Book",
 		IsPrimaryVersion:   &isPrimary,
 		ITunesPersistentID: &emptyPID,
-		ITunesPath:         &emptyPath,
 	}
 
 	files := []database.BookFile{

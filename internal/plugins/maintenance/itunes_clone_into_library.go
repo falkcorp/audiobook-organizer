@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -1110,6 +1110,9 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 		if rec.Kind == icKindVersion {
 			_ = os.Remove(filepath.Dir(pr.ClonePath)) // only if now empty
 		}
+	}
+	if len(leftover) > 0 {
+		g.Error = strings.TrimSpace(g.Error + " clone files left on disk: " + strings.Join(leftover, "; "))
 	}
 	// Reported, not fatal: the rows and files are already reversed, and a
 	// second rollback could not redo them.
