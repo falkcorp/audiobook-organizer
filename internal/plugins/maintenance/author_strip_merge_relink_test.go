@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
 // last-edited: 2026-09-26
 
@@ -8,6 +8,8 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,6 +27,15 @@ type relinkFixture struct {
 	fetched map[string]string // book ID -> provider author_name
 	created []string
 	extra   []database.Author
+	// journal, events and journalErr observe the undo journal: every
+	// journal row, the order of journal rows vs writes, and a forced
+	// journal failure.
+	journal    []database.OperationChange
+	events     []string
+	journalErr error
+	// coCredits adds junction credits to a book beside its primary.
+	coCredits map[string][]database.BookAuthor
+	store     *database.MockStore
 }
 
 func newRelinkFixture() *relinkFixture {
@@ -69,7 +80,35 @@ func (f *relinkFixture) run(t *testing.T, params string) (*stripMergeCalls, stri
 		}
 		return nil, nil
 	}
+	if len(f.coCredits) > 0 {
+		inner := store.GetBookAuthorsFunc
+		store.GetBookAuthorsFunc = func(bookID string) ([]database.BookAuthor, error) {
+			if w, ok := calls.setAuthors[bookID]; ok {
+				return w, nil
+			}
+			base, err := inner(bookID)
+			if err != nil {
+				return nil, err
+			}
+			return append(base, f.coCredits[bookID]...), nil
+		}
+	}
+	innerSet := store.SetBookAuthorsFunc
+	store.SetBookAuthorsFunc = func(bookID string, as []database.BookAuthor) error {
+		f.events = append(f.events, "write:"+bookID)
+		return innerSet(bookID, as)
+	}
+	store.CreateOperationChangeFunc = func(c *database.OperationChange) error {
+		if f.journalErr != nil {
+			return f.journalErr
+		}
+		f.events = append(f.events, "journal:"+c.ChangeType+":"+c.BookID)
+		f.journal = append(f.journal, *c)
+		return nil
+	}
+	f.store = store
 	store.CreateAuthorFunc = func(name string) (*database.Author, error) {
+		f.events = append(f.events, "create:"+name)
 		f.created = append(f.created, name)
 		a := database.Author{ID: 900 + len(f.created), Name: name}
 		authors = append(authors, a)
@@ -188,7 +227,7 @@ func TestAuthorStripMerge_RelinkPreviewWritesNothing(t *testing.T) {
 	strip := func(s string) string {
 		var keep []string
 		for _, f := range strings.Fields(planOnlySummary(s)) {
-			if !strings.HasPrefix(f, "relinked=") {
+			if !strings.HasPrefix(f, "relinked=") && !strings.HasPrefix(f, "relink-journal-rows=") {
 				keep = append(keep, f)
 			}
 		}
@@ -250,4 +289,76 @@ func TestAuthorStripMerge_RelinkHonoursLimit(t *testing.T) {
 		t.Errorf("twin deleted although its book was deferred; deleted=%v", calls.deleted)
 	}
 	wantSummary(t, summary, "relinked=1 ", "relink-deferred=1 ", "twin-deletes=0")
+}
+
+// Every write is preceded by its journal row: the author creation by a
+// title_relink_author_create row, the credit move by a title_relink_credits
+// row whose OldValue holds the credits read just before it.
+func TestAuthorStripMerge_RelinkJournalsBeforeEachWrite(t *testing.T) {
+	f := newRelinkFixture()
+	f.fetched["bk-t"] = "Brand New Writer"
+	_, summary := f.run(t, `{"apply":true,"relink_title_as_author":true}`)
+	want := []string{
+		"journal:" + ChangeTypeTitleRelinkAuthorCreate + ":bk-t",
+		"create:Brand New Writer",
+		"journal:" + ChangeTypeTitleRelinkCredits + ":bk-t",
+		"write:bk-t",
+	}
+	if strings.Join(f.events, " | ") != strings.Join(want, " | ") {
+		t.Errorf("event order:\n got  %v\n want %v", f.events, want)
+	}
+	wantSummary(t, summary, "relinked=1 ", "relink-journal-rows=2 ")
+}
+
+// A journal write that fails skips the book: no author row is created and
+// no credit is moved.
+func TestAuthorStripMerge_RelinkJournalFailureSkipsBook(t *testing.T) {
+	for name, fetched := range map[string]string{"existing author": "T.J. Ward", "new author": "Brand New Writer"} {
+		t.Run(name, func(t *testing.T) {
+			f := newRelinkFixture()
+			f.fetched["bk-t"] = fetched
+			f.journalErr = errors.New("journal down")
+			calls, summary := f.run(t, `{"apply":true,"relink_title_as_author":true}`)
+			if len(calls.setAuthors) != 0 || len(calls.updated) != 0 || len(f.created) != 0 {
+				t.Errorf("wrote without a journal: setAuthors=%v updated=%v created=%v", calls.setAuthors, calls.updated, f.created)
+			}
+			wantSummary(t, summary, "relinked=0 ", "relink-failed=1 ", "relink-journal-rows=0 ")
+		})
+	}
+}
+
+// The journal's old value replays to the original credits: order, roles and
+// the co-author included, and the primary.
+func TestAuthorStripMerge_RelinkJournalReplaysOriginalCredits(t *testing.T) {
+	f := newRelinkFixture()
+	f.fetched["bk-t"] = "T.J. Ward"
+	f.coCredits = map[string][]database.BookAuthor{
+		"bk-t": {{BookID: "bk-t", AuthorID: 400, Role: "co-author", Position: 1}},
+	}
+	original := []database.BookAuthor{
+		{BookID: "bk-t", AuthorID: 100, Role: "author"},
+		{BookID: "bk-t", AuthorID: 400, Role: "co-author", Position: 1},
+	}
+	calls, _ := f.run(t, `{"apply":true,"relink_title_as_author":true}`)
+	if got := credits(calls, "bk-t"); !containsInt(got, 300) || containsInt(got, 100) || !containsInt(got, 400) {
+		t.Fatalf("relink did not move the credit while keeping the co-author: %v", got)
+	}
+	var row *database.OperationChange
+	for i := range f.journal {
+		if f.journal[i].ChangeType == ChangeTypeTitleRelinkCredits && f.journal[i].BookID == "bk-t" {
+			row = &f.journal[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("no credits journal row; journal=%v", f.journal)
+	}
+	if err := replayTitleRelinkJournal(f.store, row); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if got := calls.setAuthors["bk-t"]; !reflect.DeepEqual(got, original) {
+		t.Errorf("replayed credits = %+v, want %+v", got, original)
+	}
+	if b := calls.updated["bk-t"]; b == nil || b.AuthorID == nil || *b.AuthorID != 100 {
+		t.Errorf("replayed primary = %+v, want 100", b)
+	}
 }
