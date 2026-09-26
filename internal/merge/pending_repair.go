@@ -23,7 +23,7 @@ import (
 // after the follow moved everything, so a crash, a store error, or a user
 // whose rows could not be read (and so was not journaled or moved) leaves it
 // behind. maintenance.repair-merged-user-state completes it on a schedule
-// (CompletePendingUserStateRepairs). Until 2026-09-26 a failed move was only
+// (CompletePendingUserStateRepair). Until 2026-09-26 a failed move was only
 // logged: the state stayed under the merged-away id, GET progress on the
 // survivor answered 404, and nothing ever came back for it.
 const PendingUserStateRepairPrefix = "merge_user_state_pending:"

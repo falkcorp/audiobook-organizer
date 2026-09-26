@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_merged_user_state.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d4b2f67-1a9e-4c35-b7d0-9e6f3a2c1b58
 // last-edited: 2026-09-26
 
@@ -14,14 +14,14 @@
 // a durable pending-repair record on failure (internal/merge/pending_repair.go);
 // this op completes those records and also finds rows stranded before the fix.
 //
-// Two ops:
-//   - maintenance.repair-merged-user-state: manual, PREVIEW BY DEFAULT. Scans
-//     every user's ubs/upos rows and bookmarks, resolves each dead book to its
-//     live survivor (sync redirect chain, then merged_into_book_id) and, with
-//     apply=true, moves the state under the merge conflict rule.
-//   - maintenance.repair-merged-user-state-sweep: scheduled, applies ONLY the
-//     explicit pending records (loser -> survivor pairs a merge wrote), so a
-//     failed move is completed without anyone having to run anything.
+// maintenance.repair-merged-user-state is PREVIEW BY DEFAULT ({} writes
+// nothing). It completes the pending records, scans every user's ubs/upos
+// rows and bookmarks, resolves each dead book to its live survivor (sync
+// redirect chain, then merged_into_book_id) and, with apply=true, moves the
+// state under the merge conflict rule. There is deliberately no scheduled
+// variant: a scheduled op always runs with {}, which must be a preview (owner
+// rule 2026-09-25, testdata/write_op_modes.golden), so an automatic sweep of
+// the pending records needs a non-op trigger.
 package maintenance
 
 import (
@@ -59,30 +59,6 @@ func (p *Plugin) repairMergedUserStateDef() sdk.OperationDef {
 		Timeout:         30 * time.Minute,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runRepairMergedUserState,
-	}
-}
-
-func (p *Plugin) repairMergedUserStateSweepDef() sdk.OperationDef {
-	sched := "17 * * * *" // hourly
-	return sdk.OperationDef{
-		ID:              "maintenance.repair-merged-user-state-sweep",
-		Liveness:        sdk.LivenessNone,
-		ProgressTimeout: 10 * time.Minute,
-		Plugin:          "maintenance",
-		DisplayName:     "Complete pending merge user-state moves",
-		Description:     "Completes the pending-repair records a merge leaves when it could not move every user's listening state onto the surviving book. Applies only those explicit loser-to-survivor records; the broad scan is the manual repair-merged-user-state op.",
-		ResumePolicy:    sdk.ResumeDrop,
-		DefaultPriority: sdk.PriorityLow,
-		// Same key as the manual op: the two must never run at once.
-		ConcurrencyKey: "maintenance.repair-merged-user-state",
-		Cancellable:    true,
-		Isolate:        false,
-		Timeout:        10 * time.Minute,
-		Schedule:       &sched,
-		Capabilities:   []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		Run: func(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-			return p.repairMergedUserState(ctx, repairMergedUserStateParams{Apply: true, PendingOnly: true}, reporter)
-		},
 	}
 }
 

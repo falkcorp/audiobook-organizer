@@ -1,7 +1,7 @@
 # file: internal/server/testdata/op_ids.golden
-# version: 1.0.0
+# version: 1.1.0
 # guid: 6d1f8a42-9c3e-4b75-a2d6-0e7b4c9f3a18
-# last-edited: 2026-09-25
+# last-edited: 2026-09-26
 #
 # Ledger of every operation def ID this server has registered, canonical IDs
 # and FormerIDs (aliases) alike. APPEND-ONLY. Read by
@@ -248,3 +248,4 @@ scheduler.resolve-production-authors
 scheduler.temp-file-cleanup
 scheduler.tombstone-cleanup
 scheduler.trash-cleanup
+maintenance.repair-merged-user-state

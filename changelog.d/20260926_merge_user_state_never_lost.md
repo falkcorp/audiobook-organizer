@@ -29,14 +29,14 @@ also skipped any user whose rows could not be read.
 
 ### Added
 
-#### `maintenance.repair-merged-user-state` and its hourly sweep
+#### `maintenance.repair-merged-user-state`
 
 The manual op (preview by default, `{"apply": true}` to move) finds ubs, upos
 and bookmark rows still stored under merged-away, soft-deleted or purged books
 whose live survivor is known (sync redirect chain, then
 `merged_into_book_id`) and moves them with the same rule. Books with no known
-survivor are counted, not guessed. `maintenance.repair-merged-user-state-sweep`
-runs hourly and completes only the explicit pending-repair records.
+survivor are counted, not guessed. It also completes the pending-repair
+records; nothing runs it on a schedule yet.
 
 #### Automatic survivor election prefers the book a listener uses
 
