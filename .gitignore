@@ -1,7 +1,7 @@
 # file: .gitignore
-# version: 1.0.2
+# version: 1.0.3
 # guid: f7d7af3c-a1f1-4d89-87ef-4a8dc9faea8a
-# last-edited: 2026-09-11
+# last-edited: 2026-09-26
 
 # Local overrides
 Makefile.local
@@ -367,3 +367,6 @@ testdata/abs-oracle/library/
 # 2026-09-22). See testdata/audio/manifest.json + `make fixtures`.
 # testdata/fixtures/test_sample.* are NOT ignored: 11.6 KB, committed.
 /testdata/audio/librivox/
+
+# `make ci-remote` per-commit logs, plan and merged coverage (scripts/ci_remote.py).
+/.ci-remote/

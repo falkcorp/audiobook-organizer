@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.29.0
+# version: 2.30.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-09-25
+# last-edited: 2026-09-26
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -638,6 +638,14 @@ coverage-check-short:
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
 ci: mocks-check staticcheck sdkguard bench-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet
 	@echo "✅ All CI checks passed!"
+
+## ci-remote: Same gates as `make ci`, sharded across the CI_NODES runner pool
+## (scripts/ci_remote.py; docs/process/ci-remote.md). CI_NODES comes from the
+## environment or Makefile.local (never committed). Falls back to `make ci`
+## when no node is usable. Extra flags: CI_REMOTE_ARGS="--allow-dirty --quiet".
+.PHONY: ci-remote
+ci-remote:
+	@CI_NODES="$(CI_NODES)" python3 scripts/ci_remote.py $(CI_REMOTE_ARGS)
 
 ## build-mtls-bridge: Build the mTLS bridge binary (macOS)
 build-mtls-bridge:
