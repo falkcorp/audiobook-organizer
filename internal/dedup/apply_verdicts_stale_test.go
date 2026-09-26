@@ -1,5 +1,5 @@
 // file: internal/dedup/apply_verdicts_stale_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f1e7f635-5dfb-46da-b1e4-fc3f63f6cacc
 // last-edited: 2026-09-25
 
@@ -139,6 +139,75 @@ func TestApplyVerdicts_SamePathPair_VerdictRecordedButNeverAutoMerged(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, "pending", got.Status, "an un-mergeable pair stays pending for a human")
 	assert.Equal(t, "duplicate", got.LLMVerdict)
+}
+
+// A human pins the pair while the OpenAI batch is still running. The verdict
+// that arrives afterwards must neither merge the pair nor rewrite the pinned
+// row (its Layer would become "llm").
+func TestApplyVerdicts_PinnedAfterSubmit_NotMergedOrRewritten(t *testing.T) {
+	engine, es, cand, updates := autoMergeFixture(t)
+	snapshot := cand // captured at submit time, before the pin
+	pin, err := es.EnqueueManualCandidate("book", "BOOK_A", "BOOK_B", "")
+	require.NoError(t, err)
+	require.True(t, pin.Pinned)
+
+	res := engine.ApplyVerdicts(highDup, map[int]database.DedupCandidate{0: snapshot})
+
+	assert.Equal(t, 0, res.Applied)
+	assert.Equal(t, 1, res.SkippedStale)
+	assert.Equal(t, int32(0), updates.Load(), "a pinned pair was merged")
+	got, err := es.GetCandidateByID(cand.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", got.Status)
+	assert.Equal(t, "embedding", got.Layer, "the pinned row's layer was rewritten")
+	assert.Empty(t, got.LLMVerdict)
+	assert.True(t, database.IsManualCandidate(*got))
+}
+
+// The pin lands after the verdict write but before the merge (here: while
+// the auto-merge path loads the books). The merge-time re-check must catch it.
+func TestApplyVerdicts_PinnedBeforeMerge_NotMerged(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+	prev := config.AppConfig.Dedup.LLMAutoMergeHighConfidence
+	config.AppConfig.Dedup.LLMAutoMergeHighConfidence = true
+	t.Cleanup(func() { config.AppConfig.Dedup.LLMAutoMergeHighConfidence = prev })
+
+	authorID := 1
+	books := map[string]*database.Book{
+		"BOOK_A": {ID: "BOOK_A", Title: "Foundation", AuthorID: &authorID, Format: "mp3"},
+		"BOOK_B": {ID: "BOOK_B", Title: "Foundation", AuthorID: &authorID, Format: "m4b"},
+	}
+	var pinned atomic.Bool
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		if pinned.CompareAndSwap(false, true) {
+			_, err := es.EnqueueManualCandidate("book", "BOOK_A", "BOOK_B", "")
+			require.NoError(t, err)
+		}
+		return books[id], nil
+	}
+	updates := &atomic.Int32{}
+	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		updates.Add(1)
+		books[id] = b
+		return b, nil
+	}
+	sim := 0.88
+	require.NoError(t, es.UpsertCandidate(database.DedupCandidate{
+		EntityType: "book", EntityAID: "BOOK_A", EntityBID: "BOOK_B",
+		Layer: "embedding", Similarity: &sim, Status: "pending",
+	}))
+	cands, _, err := es.ListCandidates(database.CandidateFilter{EntityType: "book"})
+	require.NoError(t, err)
+	require.Len(t, cands, 1)
+
+	res := engine.ApplyVerdicts(highDup, map[int]database.DedupCandidate{0: cands[0]})
+
+	require.True(t, pinned.Load(), "fixture never reached the merge path")
+	assert.Equal(t, 1, res.Applied, "the verdict was written before the pin")
+	assert.Equal(t, int32(0), updates.Load(), "a pair pinned before the merge was merged")
+	got, err := es.GetCandidateByID(cands[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", got.Status)
 }
 
 // lostAppliedMarkStore is a real PebbleStore (as the AIJobsStore) whose next

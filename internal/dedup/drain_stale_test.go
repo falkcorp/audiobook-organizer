@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 6b8c9a6c-b168-4fb9-ba23-99937427b562
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 // Tests for Engine.DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -27,6 +27,7 @@ type drainBook struct {
 	isbn13           *string
 	files            []database.BookFile
 	isPrimaryVersion *bool // nil = unknown/conservative (never non-primary)
+	filePath         string
 }
 
 // setupDrainTest wires an Engine whose GetBookByID / GetBookFiles resolve from
@@ -51,6 +52,7 @@ func setupDrainTest(t *testing.T, books []drainBook) (*Engine, *database.Embeddi
 			Duration:         b.duration,
 			ISBN13:           b.isbn13,
 			IsPrimaryVersion: b.isPrimaryVersion,
+			FilePath:         b.filePath,
 		}, nil
 	}
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
@@ -412,5 +414,81 @@ func TestDrainStale_DryRunIgnoresCheckpoint(t *testing.T) {
 	}
 	if saveCalled {
 		t.Fatalf("dry run must not write checkpoints")
+	}
+}
+
+// A human pins a would-purge pair while phase 1 is still scanning (here: on
+// the first book lookup, after the page snapshot was read). Phase 2 must not
+// move it to stale-drain, and its manual mark must survive.
+func TestDrainStale_PinDuringScanIsNotReclassified(t *testing.T) {
+	engine, es := setupDrainTest(t, []drainBook{
+		{id: "BOOK_A", title: "Opening Credits", duration: new(3600)}, // boilerplate → purge
+		{id: "BOOK_B", title: "A Real Book", duration: new(3600)},
+	})
+	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
+	mock := engine.bookStore.(*database.MockStore)
+	inner := mock.GetBookByIDFunc
+	pinned := false
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		if !pinned {
+			pinned = true
+			if _, err := es.EnqueueManualCandidate("book", "BOOK_A", "BOOK_B", ""); err != nil {
+				t.Fatalf("pin: %v", err)
+			}
+		}
+		return inner(id)
+	}
+
+	res, err := engine.DrainStaleCandidates(context.Background(), "", true)
+	if err != nil {
+		t.Fatalf("DrainStaleCandidates apply: %v", err)
+	}
+	if !pinned {
+		t.Fatal("fixture never looked a book up")
+	}
+	if res.WouldPurge != 1 || res.SkippedAtWrite != 1 {
+		t.Fatalf("want wouldPurge 1 (scan snapshot) and skippedAtWrite 1; got %d / %d", res.WouldPurge, res.SkippedAtWrite)
+	}
+	cands, _, err := es.ListCandidates(database.CandidateFilter{Limit: 10})
+	if err != nil || len(cands) != 1 {
+		t.Fatalf("ListCandidates: %v (%d rows)", err, len(cands))
+	}
+	if cands[0].Status != "pending" || !database.IsManualCandidate(cands[0]) {
+		t.Fatalf("pinned row was reclassified or lost its mark: %+v", cands[0])
+	}
+}
+
+// Two book rows at one cleaned path are review-queue-only: drain-stale keeps
+// them even when a guard would otherwise drain the pair. The second pair is
+// the positive control: same guard, different paths, drained.
+func TestDrainStale_SamePathPairKept(t *testing.T) {
+	engine, es := setupDrainTest(t, []drainBook{
+		{id: "BOOK_A", title: "Opening Credits", duration: new(3600), filePath: "/lib/x/book.m4b"},
+		{id: "BOOK_B", title: "A Real Book", duration: new(3600), filePath: "/lib/x/book.m4b"},
+		{id: "BOOK_C", title: "Opening Credits", duration: new(3600), filePath: "/lib/c/c.m4b"},
+		{id: "BOOK_D", title: "A Real Book", duration: new(3600), filePath: "/lib/d/d.m4b"},
+	})
+	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
+	seedDrainCandidate(t, es, "BOOK_C", "BOOK_D")
+
+	res, err := engine.DrainStaleCandidates(context.Background(), "", true)
+	if err != nil {
+		t.Fatalf("DrainStaleCandidates apply: %v", err)
+	}
+	if res.WouldPurge != 1 || res.Kept != 1 {
+		t.Fatalf("want wouldPurge 1 / kept 1; got %d / %d", res.WouldPurge, res.Kept)
+	}
+	cands, _, err := es.ListCandidates(database.CandidateFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListCandidates: %v", err)
+	}
+	for _, c := range cands {
+		samePath := c.EntityAID == "BOOK_A" || c.EntityBID == "BOOK_A"
+		if samePath && c.Status != "pending" {
+			t.Fatalf("same-path pair was drained: %+v", c)
+		}
+		if !samePath && c.Status != staleDrainStatus {
+			t.Fatalf("control pair not drained: %+v", c)
+		}
 	}
 }

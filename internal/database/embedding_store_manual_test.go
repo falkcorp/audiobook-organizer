@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store_manual_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4966ec42-ef03-41a0-8800-98ea0ff24c76
 // last-edited: 2026-09-25
 
@@ -170,4 +170,99 @@ func TestManualCandidate_RejectsSelfPair(t *testing.T) {
 	s := newTestEmbeddingStore(t)
 	_, err := s.EnqueueManualCandidate("book", "b1", "b1", "")
 	require.Error(t, err)
+}
+
+// ReclassifyCandidate is the automated status write: it refuses a manual row
+// and a row whose status moved since the pass read it, and moves an ordinary
+// pending row (the positive control).
+func TestReclassifyCandidate_GuardsManualAndChangedStatus(t *testing.T) {
+	s := newTestEmbeddingStore(t)
+
+	pinned, _, err := s.UpsertCandidateNew(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "exact"})
+	require.NoError(t, err)
+	_, err = s.EnqueueManualCandidate("book", "b1", "b2", "")
+	require.NoError(t, err)
+	err = s.ReclassifyCandidate(pinned, "pending", "stale-drain")
+	require.True(t, errors.Is(err, ErrManualCandidateProtected), "got %v", err)
+	got, err := s.GetCandidateByID(pinned)
+	require.NoError(t, err)
+	require.Equal(t, "pending", got.Status)
+
+	decided, _, err := s.UpsertCandidateNew(DedupCandidate{EntityType: "book", EntityAID: "c1", EntityBID: "c2", Layer: "exact"})
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateCandidateStatus(decided, "dismissed"))
+	err = s.ReclassifyCandidate(decided, "pending", "stale-fp")
+	require.True(t, errors.Is(err, ErrCandidateStatusChanged), "got %v", err)
+	got, err = s.GetCandidateByID(decided)
+	require.NoError(t, err)
+	require.Equal(t, "dismissed", got.Status)
+
+	err = s.ReclassifyCandidate(99999, "pending", "stale-fp")
+	require.True(t, errors.Is(err, ErrCandidateStatusChanged), "missing row: got %v", err)
+
+	plain, _, err := s.UpsertCandidateNew(DedupCandidate{EntityType: "book", EntityAID: "d1", EntityBID: "d2", Layer: "exact"})
+	require.NoError(t, err)
+	require.NoError(t, s.ReclassifyCandidate(plain, "pending", "stale-drain"))
+	got, err = s.GetCandidateByID(plain)
+	require.NoError(t, err)
+	require.Equal(t, "stale-drain", got.Status)
+	moved, _, err := s.ListCandidates(CandidateFilter{Status: "stale-drain", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, moved, 1, "status index moved with the row")
+}
+
+// An LLM verdict must not rewrite a pinned row (Layer would become "llm" and
+// the reviewer loses the scanner layer) nor a row a human already decided.
+func TestUpdateCandidateLLM_RefusesManualAndDecidedRows(t *testing.T) {
+	s := newTestEmbeddingStore(t)
+
+	pinned, _, err := s.UpsertCandidateNew(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding"})
+	require.NoError(t, err)
+	_, err = s.EnqueueManualCandidate("book", "b1", "b2", "")
+	require.NoError(t, err)
+	err = s.UpdateCandidateLLM(pinned, "duplicate", "[high] same")
+	require.True(t, errors.Is(err, ErrManualCandidateProtected), "got %v", err)
+	got, err := s.GetCandidateByID(pinned)
+	require.NoError(t, err)
+	require.Equal(t, "embedding", got.Layer)
+	require.Empty(t, got.LLMVerdict)
+
+	decided, _, err := s.UpsertCandidateNew(DedupCandidate{EntityType: "book", EntityAID: "c1", EntityBID: "c2", Layer: "embedding"})
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateCandidateStatus(decided, "dismissed"))
+	err = s.UpdateCandidateLLM(decided, "duplicate", "x")
+	require.True(t, errors.Is(err, ErrCandidateStatusChanged), "got %v", err)
+
+	plain, _, err := s.UpsertCandidateNew(DedupCandidate{EntityType: "book", EntityAID: "d1", EntityBID: "d2", Layer: "embedding"})
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateCandidateLLM(plain, "duplicate", "x"))
+	got, err = s.GetCandidateByID(plain)
+	require.NoError(t, err)
+	require.Equal(t, "llm", got.Layer)
+	require.Equal(t, "duplicate", got.LLMVerdict)
+}
+
+// A pin landing after Rescore listed the backlog must still stop the re-band.
+func TestUpdateCandidateScores_SkipsManualRow(t *testing.T) {
+	s := newTestEmbeddingStore(t)
+	pinned, _, err := s.UpsertCandidateNew(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding", Band: "REVIEW"})
+	require.NoError(t, err)
+	_, err = s.EnqueueManualCandidate("book", "b1", "b2", "")
+	require.NoError(t, err)
+	plain, _, err := s.UpsertCandidateNew(DedupCandidate{EntityType: "book", EntityAID: "c1", EntityBID: "c2", Layer: "embedding", Band: "REVIEW"})
+	require.NoError(t, err)
+
+	applied, failed, err := s.UpdateCandidateScores([]CandidateScoreUpdate{
+		{ID: pinned, Band: "CERTAIN"},
+		{ID: plain, Band: "CERTAIN"},
+	})
+	require.NoError(t, err)
+	require.Empty(t, failed)
+	require.Equal(t, 1, applied)
+	got, err := s.GetCandidateByID(pinned)
+	require.NoError(t, err)
+	require.Equal(t, "REVIEW", got.Band)
+	got, err = s.GetCandidateByID(plain)
+	require.NoError(t, err)
+	require.Equal(t, "CERTAIN", got.Band)
 }

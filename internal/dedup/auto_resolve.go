@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.7.0
+// version: 1.9.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
 // last-edited: 2026-09-25
 
@@ -193,6 +193,15 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 			continue
 		}
 
+		// The candidate list is a snapshot taken at the start of the pass; a
+		// human may have pinned or decided this pair since. Re-check the row
+		// as it stands now (automated_guard.go).
+		if why, refused := RecheckAutomatedMerge(de.embedStore, c.ID, "pending", bookA, bookB); refused {
+			logging.Info(ctx, "dedup auto-resolve skipped a pair at merge time",
+				"candidate", c.ID, "reason", why)
+			continue
+		}
+
 		winnerID, mergeErr := de.autoMergeCertain(c)
 		if errors.Is(mergeErr, merge.ErrITunesProtected) {
 			res.RefusedITunes++
@@ -223,15 +232,11 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 // Returns (true, humanReason) only when EVERY guard holds. The reason string is
 // surfaced in the audit sample so an operator can see why each pair qualified.
 func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *database.Book) (bool, string) {
-	// A human enqueued (or pinned) this pair so that a human decides it.
-	if database.IsManualCandidate(c) {
-		return false, "manual candidate: enqueued for human review"
-	}
-	// Two book rows at the same cleaned path (CHAPTER-SUBFOLDER-NN-ROWS,
-	// 2026-09-25) are a review-queue-only shape by owner decision: no
-	// automated path may merge them, however strong the score.
-	if SamePathPair(bookA, bookB) {
-		return false, "same_path: two book rows at one path, review queue only"
+	// A pair a human enqueued or pinned, and two book rows at the same
+	// cleaned path, are review-queue-only by owner decision: no automated
+	// path may merge them, however strong the score (automated_guard.go).
+	if why, refused := AutomatedResolutionRefusal(c, bookA, bookB); refused {
+		return false, why
 	}
 	if c.Band != unified.BandCertain {
 		return false, "band is not CERTAIN"

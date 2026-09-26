@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 9e4b7f3a-2c1d-4e8b-b6a5-0d7c9e2f5b8a
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 // Table-driven tests for the dedup.purge-legacy-fp-candidates op (T015).
 //
@@ -300,4 +300,91 @@ func TestPurgeLegacyFP_FlagSkip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, candidates, 1)
 	assert.Equal(t, "pending", candidates[0].Status, "flag-skipped run must not mark rows")
+}
+
+// hookReporter is mockReporter with a callback on UpdateProgress, so a test
+// can act between the scan and the apply loop (the op reports step 2 right
+// before it starts writing).
+type hookReporter struct {
+	mockReporter
+	onProgress func(current int)
+}
+
+func (h *hookReporter) UpdateProgress(current, total int, message string) error {
+	if h.onProgress != nil {
+		h.onProgress(current)
+	}
+	return nil
+}
+
+// plantLegacyFP writes a pending legacy exact sim=1.0 row for the pair and
+// returns its ID. With the 2099 cutover used below it is pre-cutover.
+func plantLegacyFP(t *testing.T, es *database.EmbeddingStore, a, b string) int64 {
+	t.Helper()
+	sim := 1.0
+	id, _, err := es.UpsertCandidateNew(database.DedupCandidate{
+		EntityType: "book", EntityAID: a, EntityBID: b,
+		Layer: "exact", Similarity: &sim, Status: "pending",
+	})
+	require.NoError(t, err)
+	return id
+}
+
+func purgeFPStore() *database.MockStore {
+	return &database.MockStore{
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return nil, nil },
+		GetSettingFunc:          func(key string) (*database.Setting, error) { return nil, nil },
+		SetSettingFunc:          func(key, value, typ string, isSecret bool) error { return nil },
+	}
+}
+
+func runPurgeApply(t *testing.T, p *Plugin, rep sdk.Reporter) {
+	t.Helper()
+	params, err := json.Marshal(purgeLegacyFPParams{Apply: true, CutoverDate: "2099-01-01T00:00:00Z"})
+	require.NoError(t, err)
+	require.NoError(t, p.runPurgeLegacyFP(context.Background(), params, rep))
+}
+
+// A pinned manual row keeps its legacy layer, similarity and CreatedAt, so it
+// passes every legacy gate. It must stay pending. The unpinned row of the same
+// shape is the control and must be marked.
+func TestPurgeLegacyFP_KeepsPinnedManualCandidate(t *testing.T) {
+	es := newTestEmbeddingStorePurge(t)
+	pinned := plantLegacyFP(t, es, "book-a", "book-b")
+	control := plantLegacyFP(t, es, "book-c", "book-d")
+	_, err := es.EnqueueManualCandidate("book", "book-a", "book-b", "")
+	require.NoError(t, err)
+
+	runPurgeApply(t, buildPlugin(t, es, purgeFPStore()), &mockReporter{})
+
+	got, err := es.GetCandidateByID(pinned)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", got.Status, "a pinned manual candidate was reclassified")
+	assert.True(t, database.IsManualCandidate(*got))
+	got, err = es.GetCandidateByID(control)
+	require.NoError(t, err)
+	assert.Equal(t, "stale-fp", got.Status, "control row not marked: the fixture never reached the write")
+}
+
+// The pin lands after the scan collected the row and before the write.
+func TestPurgeLegacyFP_PinDuringScanIsNotReclassified(t *testing.T) {
+	es := newTestEmbeddingStorePurge(t)
+	pinned := plantLegacyFP(t, es, "book-a", "book-b")
+	control := plantLegacyFP(t, es, "book-c", "book-d")
+	rep := &hookReporter{onProgress: func(current int) {
+		if current == 2 { // "Marking N candidates stale-fp…"
+			_, err := es.EnqueueManualCandidate("book", "book-a", "book-b", "")
+			require.NoError(t, err)
+		}
+	}}
+
+	runPurgeApply(t, buildPlugin(t, es, purgeFPStore()), rep)
+
+	got, err := es.GetCandidateByID(pinned)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", got.Status, "a row pinned during the scan was reclassified")
+	assert.True(t, database.IsManualCandidate(*got))
+	got, err = es.GetCandidateByID(control)
+	require.NoError(t, err)
+	assert.Equal(t, "stale-fp", got.Status)
 }

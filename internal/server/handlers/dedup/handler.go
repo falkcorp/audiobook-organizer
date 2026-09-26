@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-09-25
 
@@ -45,7 +45,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -927,9 +926,24 @@ func (h *Handler) LinkDedupCandidateSeries(c *gin.Context) {
 		bookSeries[id] = *book.SeriesID
 		return *book.SeriesID
 	}
+	// Same-path pairs and manual (human-pinned) candidates are
+	// review-queue-only by owner decision, and this endpoint links whole
+	// clusters with no per-pair human look. A guarded pair is kept out of the
+	// union-find, and a cluster that would still join one through other links
+	// (A–C plus B–C) is refused below. See linkGuard.
+	guard, gerr := newLinkGuard(es, store)
+	if gerr != nil {
+		httputil.InternalError(c, "failed to load the review-queue-only guard for series link", gerr)
+		return
+	}
 	var inScope []database.DedupCandidate
+	var failures []string
 	for _, cand := range cands {
 		if lookup(cand.EntityAID) == body.SeriesID && lookup(cand.EntityBID) == body.SeriesID {
+			if why, refused := guard.pairRefusal(cand); refused {
+				failures = append(failures, fmt.Sprintf("candidate %d: %s", cand.ID, why))
+				continue
+			}
 			inScope = append(inScope, cand)
 		}
 	}
@@ -969,9 +983,12 @@ func (h *Handler) LinkDedupCandidateSeries(c *gin.Context) {
 	mergedClusters := 0
 	mergedBooks := 0
 	candidatesUpdated := 0
-	var failures []string
 	for _, bookIDs := range clusters {
 		if len(bookIDs) < 2 {
+			continue
+		}
+		if why, refused := guard.setRefusal(bookIDs); refused {
+			failures = append(failures, fmt.Sprintf("cluster of %d: %s", len(bookIDs), why))
 			continue
 		}
 		// Journaled (DA-02): a union-find cluster has no single candidate row
@@ -1107,9 +1124,26 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 		// the library instead of the handful on screen -- the same failure band
 		// caused, and merges are the hardest operation here to undo.
 		Q string `json:"q"`
+		// Source is the list endpoint's source filter (source=manual). It was
+		// added to the list without being added here, so a posted
+		// {"source":"manual"} was dropped by the JSON binding and the link
+		// covered every pending book candidate instead. With the manual guard
+		// below a source=manual link now links nothing; the filter is still
+		// honoured so the set it resolves is the set the list showed.
+		Source string `json:"source"`
+		// BothUnmatched is the list's both_unmatched view. It is a property of
+		// the two BOOKS behind a candidate, not of the candidate row, so this
+		// endpoint cannot express it. The UI refuses the bulk action while it
+		// is on (useDupesLane's MERGE_ALL_BLOCKED_REASON); the server refuses
+		// too, rather than silently linking the wider set.
+		BothUnmatched bool `json:"both_unmatched"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
 		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
+	if body.BothUnmatched {
+		httputil.RespondWithBadRequest(c, "bulk link cannot apply the both_unmatched filter; link those pairs individually")
 		return
 	}
 
@@ -1135,6 +1169,7 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 		MaxSimilarity: body.MaxSimilarity,
 		Band:          body.Band,
 		EntityID:      body.EntityID,
+		Source:        body.Source,
 		Limit:         100000,
 	}
 
@@ -1176,18 +1211,32 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 	var failures []failure
 	merged := 0
 
+	// Same-path pairs and manual (human-pinned) candidates are
+	// review-queue-only by owner decision. This endpoint links a whole
+	// filtered set with no per-pair human look (an empty body links every
+	// pending book candidate), so it refuses them, directly and through a
+	// chain of other links (see linkGuard), and reports each refusal as a
+	// failure rather than dropping it silently.
+	guard, gerr := newLinkGuard(es, h.store)
+	if gerr != nil {
+		httputil.InternalError(c, "failed to load the review-queue-only guard for bulk link", gerr)
+		return
+	}
+	linked := newLinkComponents()
+
 	for _, cand := range candidates {
-		// Two book rows at the same cleaned path (CHAPTER-SUBFOLDER-NN-ROWS,
-		// 2026-09-25) are review-queue-only by owner decision. This endpoint
-		// resolves a whole filtered set with no per-pair human look (an empty
-		// body merges every pending book candidate, band included or not), so
-		// it is exactly the "bulk-merge without a human-selected band" shape
-		// that must never touch this pair — skip it and count it as a
-		// failure so the caller sees it was refused, not silently dropped.
-		bookA, errA := h.store.GetBookByID(cand.EntityAID)
-		bookB, errB := h.store.GetBookByID(cand.EntityBID)
-		if errA == nil && errB == nil && dedup.SamePathPair(bookA, bookB) {
-			failures = append(failures, failure{CandidateID: cand.ID, Reason: "same_path: review queue only, no automated merge"})
+		if why, refused := guard.pairRefusal(cand); refused {
+			failures = append(failures, failure{CandidateID: cand.ID, Reason: why})
+			continue
+		}
+		if why, refused := guard.setRefusal(linked.joined(cand.EntityAID, cand.EntityBID)); refused {
+			failures = append(failures, failure{CandidateID: cand.ID, Reason: why})
+			continue
+		}
+		// The list above is a snapshot; a human may have pinned or decided
+		// this pair since. Re-read it right before the merge.
+		if why, refused := guard.recheck(cand); refused {
+			failures = append(failures, failure{CandidateID: cand.ID, Reason: why})
 			continue
 		}
 		// Snapshot features before the merge absorbs one side (best-effort).
@@ -1202,6 +1251,7 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 			slog.Info("dedup bulk merge candidate failed", "cand", cand.ID, "mergeErr", mergeErr)
 			continue
 		}
+		linked.union(cand.EntityAID, cand.EntityBID)
 		if err := es.UpdateCandidateStatus(cand.ID, "merged"); err != nil {
 			// The books were merged on the server side, but we couldn't
 			// update the candidate row — log it and count as merged
