@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_sync_alias_use.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d69a8939-cf20-4007-a46e-2e439f5957e1
 // last-edited: 2026-09-25
 
@@ -17,9 +17,9 @@
 //
 // Keys:
 //   - sync_alias_use:<userID>:<aliasSyncID> -> JSON syncAliasUse
-//   - sync_alias_use_seeded:<userID>        -> "1": the one-time seed ran
-//     (SeedSyncAliasUses). A different prefix, so the per-user scan of
-//     sync_alias_use:<userID>: never sees it.
+//   - sync_alias_use_seeded:<userID>        -> "1": the one-time seed ran to
+//     completion (SeedSyncAliasUses with complete=true). A different prefix,
+//     so the per-user scan of sync_alias_use:<userID>: never sees it.
 package database
 
 import (
@@ -42,9 +42,11 @@ type SyncAliasUseStore interface {
 	// ListSyncAliasUses returns every alias recorded for userID, sorted, and
 	// whether the one-time seed has run for that user.
 	ListSyncAliasUses(userID string) (aliases []string, seeded bool, err error)
-	// SeedSyncAliasUses records aliases and marks userID as seeded in one
-	// batch. Aliases already recorded are left as they are.
-	SeedSyncAliasUses(userID string, aliases []string) error
+	// SeedSyncAliasUses records aliases and, when complete, marks userID as
+	// seeded, in one batch. complete=false records the aliases only, so the
+	// caller's next attempt runs the seed again (a partial seed: some
+	// lookups failed). Aliases already recorded are left as they are.
+	SeedSyncAliasUses(userID string, aliases []string, complete bool) error
 }
 
 // AsSyncAliasUseStore returns s as a SyncAliasUseStore, looking through the
@@ -147,7 +149,7 @@ func (p *PebbleStore) ListSyncAliasUses(userID string) ([]string, bool, error) {
 }
 
 // SeedSyncAliasUses implements SyncAliasUseStore.
-func (p *PebbleStore) SeedSyncAliasUses(userID string, aliases []string) error {
+func (p *PebbleStore) SeedSyncAliasUses(userID string, aliases []string, complete bool) error {
 	if userID == "" || strings.Contains(userID, ":") {
 		return fmt.Errorf("sync alias use: invalid user id %q", userID)
 	}
@@ -175,8 +177,13 @@ func (p *PebbleStore) SeedSyncAliasUses(userID string, aliases []string) error {
 			return err
 		}
 	}
-	if err := batch.Set(syncAliasUseSeededKey(userID), []byte("1"), nil); err != nil {
-		return err
+	if complete {
+		if err := batch.Set(syncAliasUseSeededKey(userID), []byte("1"), nil); err != nil {
+			return err
+		}
+	}
+	if batch.Empty() {
+		return nil
 	}
 	return batch.Commit(pebble.Sync)
 }

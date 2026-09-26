@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/alias_helper_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e2d8b61-7a93-4c05-b1f8-2d6e9c47a3b5
 // last-edited: 2026-09-25
 
@@ -56,7 +56,7 @@ func TestAliasResolve_BrokenRedirectChainIsNotFound(t *testing.T) {
 func seededAliasHarness(t *testing.T) (*writeHarness, string) {
 	t.Helper()
 	w, alias := newAliasHarness(t)
-	if err := w.seed.lib.SeedSyncAliasUses(w.userID, nil); err != nil {
+	if err := w.seed.lib.SeedSyncAliasUses(w.userID, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	return w, alias

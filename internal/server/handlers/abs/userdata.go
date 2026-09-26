@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
 // last-edited: 2026-09-25
 
@@ -90,7 +90,7 @@ type SyncIDStore interface {
 // addressed (database.SyncAliasUseStore; written by item_ref.go noteAliasUse).
 type AliasUseStore interface {
 	ListSyncAliasUses(userID string) (aliases []string, seeded bool, err error)
-	SeedSyncAliasUses(userID string, aliases []string) error
+	SeedSyncAliasUses(userID string, aliases []string, complete bool) error
 }
 
 // UserDataLibraryStore is the two-method duration slice. LibraryStore already
@@ -476,14 +476,34 @@ func (p *userDataProvider) usedAliases(userID string, rows []any) map[string]str
 	return out
 }
 
-// seedAliasUses runs once per user: it records the aliases of every item whose
-// progress row changed since aliasSeedSince (see there for why), marks the
-// user seeded, and returns the aliases. A lookup failure leaves that item out;
-// a write failure leaves the user unseeded so the next list tries again, and
-// the aliases are still returned so this response carries them.
+// seedAliasUses runs until it completes once per user: it records the aliases
+// of every item whose progress row changed since aliasSeedSince (see there for
+// why), marks the user seeded, and returns the aliases.
+//
+// The seeded mark is written only when every lookup answered. A lookup that
+// failed leaves that item out of this pass, and marking the user seeded then
+// would lose that item's aliases for good: the client would delete the local
+// row it holds under one. So a failed lookup records the aliases found so far
+// WITHOUT the mark, and the next list runs the seed again. The retry costs one
+// ListSyncAliases per in-window row per list until it succeeds; a lookup that
+// fails on every attempt (a corrupt sync item record) keeps retrying and logs
+// a Warn each time, which is the signal to repair that record.
+//
+// ErrSyncAliasLimit does NOT hold the seed open. It is deterministic (the
+// alias graph exceeds maxSyncAliases), so a retry cannot succeed and every
+// list would redo the seed forever. And nothing is lost: the pre-change list
+// (#3558) failed on the same error, so the client never received, and holds
+// no local row for, any alias of that item.
+//
+// A write failure also leaves the user unseeded, so the next list tries
+// again. In every case the aliases found are returned, so this response
+// carries their rows.
 func (p *userDataProvider) seedAliasUses(userID string, rows []any) []string {
 	since := aliasSeedSince.UnixMilli()
 	found := make([][]string, len(rows))
+	// failed[i] marks a transient lookup failure for rows[i]. Per-index, like
+	// found, so the workers share no written state.
+	failed := make([]bool, len(rows))
 	g := new(errgroup.Group)
 	g.SetLimit(p.concurrency)
 	for i := range rows {
@@ -493,9 +513,15 @@ func (p *userDataProvider) seedAliasUses(userID string, rows []any) []string {
 		}
 		g.Go(func() error {
 			ids, err := p.identity.ListSyncAliases(row.LibraryItemID)
-			if err != nil {
-				progressLog.Warn("abs: userdata: alias seed: could not list aliases; leaving this item out: user_id=%s library_item_id=%s: %v",
+			if errors.Is(err, database.ErrSyncAliasLimit) {
+				progressLog.Warn("abs: userdata: alias seed: alias graph over the cap; leaving this item out for good: user_id=%s library_item_id=%s: %v",
 					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.LibraryItemID), err)
+				return nil
+			}
+			if err != nil {
+				progressLog.Warn("abs: userdata: alias seed: could not list aliases; leaving this item out and retrying on the next list: user_id=%s library_item_id=%s: %v",
+					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.LibraryItemID), err)
+				failed[i] = true
 				return nil
 			}
 			found[i] = ids
@@ -508,7 +534,8 @@ func (p *userDataProvider) seedAliasUses(userID string, rows []any) []string {
 	for _, ids := range found {
 		seed = append(seed, ids...)
 	}
-	if err := p.aliasUses.SeedSyncAliasUses(userID, seed); err != nil {
+	complete := !slices.Contains(failed, true)
+	if err := p.aliasUses.SeedSyncAliasUses(userID, seed, complete); err != nil {
 		progressLog.Warn("abs: userdata: alias seed: could not record the seed; will retry on the next list: user_id=%s aliases=%d: %v",
 			logger.SanitizeLogValue(userID), len(seed), err)
 	}

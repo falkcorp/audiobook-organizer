@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/userdata_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7ac71a7b-e1cb-4416-a393-1fa38af8871f
 // last-edited: 2026-09-25
 
@@ -49,6 +49,8 @@ type udFake struct {
 	// ResolveSyncItem resolves each of them to that syncID.
 	aliases  map[string][]string
 	aliasErr error
+	// aliasErrFor fails ListSyncAliases for one syncID only.
+	aliasErrFor map[string]error
 
 	// used: user -> alias ids the client has addressed (AliasUseStore).
 	used       map[string][]string
@@ -208,6 +210,9 @@ func (f *udFake) ListSyncAliases(syncID string) ([]string, error) {
 	if f.aliasErr != nil {
 		return nil, f.aliasErr
 	}
+	if err := f.aliasErrFor[syncID]; err != nil {
+		return nil, err
+	}
 	return f.aliases[syncID], nil
 }
 
@@ -239,7 +244,7 @@ func (f *udFake) ListSyncAliasUses(userID string) ([]string, bool, error) {
 	return slices.Clone(f.used[userID]), f.seeded[userID], nil
 }
 
-func (f *udFake) SeedSyncAliasUses(userID string, aliases []string) error {
+func (f *udFake) SeedSyncAliasUses(userID string, aliases []string, complete bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seedWrites++
@@ -252,8 +257,14 @@ func (f *udFake) SeedSyncAliasUses(userID string, aliases []string) error {
 	if f.seeded == nil {
 		f.seeded = map[string]bool{}
 	}
-	f.used[userID] = append(f.used[userID], aliases...)
-	f.seeded[userID] = true
+	for _, a := range aliases {
+		if !slices.Contains(f.used[userID], a) {
+			f.used[userID] = append(f.used[userID], a)
+		}
+	}
+	if complete {
+		f.seeded[userID] = true
+	}
 	return nil
 }
 
