@@ -1,5 +1,5 @@
 # file: internal/server/testdata/op_ids.golden
-# version: 1.0.1
+# version: 1.0.2
 # guid: 6d1f8a42-9c3e-4b75-a2d6-0e7b4c9f3a18
 # last-edited: 2026-09-26
 #
@@ -197,6 +197,7 @@ maintenance.repair-junk-titles
 maintenance.repair-library-state
 maintenance.repair-missing-files
 maintenance.repair-transcribe-status
+maintenance.repoint-book-file-rows
 maintenance.repoint-missing-to-folder-audio
 maintenance.repoint-unrecorded-renames
 maintenance.repoint-version-primary
