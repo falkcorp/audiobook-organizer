@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.30.0
+# version: 2.31.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-09-26
 
@@ -644,6 +644,11 @@ ci: mocks-check staticcheck sdkguard bench-check fmt-check test-all-short covera
 ## environment or Makefile.local (never committed). Falls back to `make ci`
 ## when no node is usable. Extra flags: CI_REMOTE_ARGS="--allow-dirty --quiet".
 .PHONY: ci-remote
+## ci-woodpecker: Push HEAD and run it through Woodpecker CI on the CI agents; waits for the verdict.
+## Offloads make ci from this machine. Needs .claude/.credentials/woodpecker-api.env (see docs/ci/woodpecker.md).
+ci-woodpecker:
+	@python3 scripts/ci_woodpecker.py $(CI_WOODPECKER_ARGS)
+
 ci-remote:
 	@CI_NODES="$(CI_NODES)" python3 scripts/ci_remote.py $(CI_REMOTE_ARGS)
 
