@@ -1,0 +1,3 @@
+### Fixed
+
+- Database package tests: a timed-out bounded wait (`waitGroupOrFatal`, `waitOrFatal`, `recvOrFatal` in `internal/database/test_deadline_test.go`) no longer fails the test while the awaited goroutines are still running. Failing at once ran the test's deferred and `t.Cleanup` store closes under live workers, which died with `panic: pebble: closed` and killed the whole test binary, hiding the real message. The helper now writes its diagnosis and a goroutine dump to stderr, waits a grace period for the workers to exit before failing, and exits the test binary with an explicit reason if they never do. A wait whose bound was cut short by the package `-timeout` now reports "package -timeout nearly exhausted" instead of calling it a deadlock.
