@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store.go
-// version: 2.17.0
+// version: 2.18.0
 // last-edited: 2026-09-25
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
@@ -1276,20 +1276,41 @@ func (s *EmbeddingStore) UpdateCandidateStatus(id int64, status string) error {
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
+	// s.mu is the lock UpsertCandidateNew and EnqueueManualCandidate hold.
+	// Without it a pin landing between this read and this write is a lost
+	// update: the write puts back a record read before the pin, erasing the
+	// manual Source mark.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, found, err := s.readCandRecForUpdate(id)
+	if err != nil || !found {
+		return err
+	}
+	return s.writeCandidateStatusLocked(id, rec, status)
+}
+
+// readCandRecForUpdate reads candidate id for a read-modify-write. found is
+// false (with a nil error) when the row does not exist.
+func (s *EmbeddingStore) readCandRecForUpdate(id int64) (candRec, bool, error) {
 	val, closer, err := s.db.Get(dedupRecKey(id))
 	if err == pebble.ErrNotFound {
-		return nil
+		return candRec{}, false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("update candidate status read %d: %w", id, err)
+		return candRec{}, false, fmt.Errorf("update candidate status read %d: %w", id, err)
 	}
 	var rec candRec
 	if err := json.Unmarshal(val, &rec); err != nil {
 		closer.Close()
-		return fmt.Errorf("update candidate status unmarshal %d: %w", id, err)
+		return candRec{}, false, fmt.Errorf("update candidate status unmarshal %d: %w", id, err)
 	}
 	closer.Close()
+	return rec, true, nil
+}
 
+// writeCandidateStatusLocked writes rec with its status set to status and
+// moves the status index row. s.mu must be held.
+func (s *EmbeddingStore) writeCandidateStatusLocked(id int64, rec candRec, status string) error {
 	oldStatus := rec.Status
 	rec.Status = status
 	rec.UpdatedAt = time.Now().UnixNano()
@@ -1329,13 +1350,35 @@ func (s *EmbeddingStore) UpdateCandidateScore(id int64, score *models.UnifiedDed
 
 // UpdateCandidateLLM stores the LLM verdict and reason for a candidate and
 // sets the layer to 'llm'.
+//
+// An LLM verdict is an automated write, so it is guarded like
+// ReclassifyCandidate, under the same lock EnqueueManualCandidate holds: a
+// manual (human-pinned) row returns ErrManualCandidateProtected and a row that
+// is no longer pending returns ErrCandidateStatusChanged, and neither is
+// touched. An OpenAI batch can run for hours, so a pair a human pinned or
+// decided after the batch was submitted must be re-checked here, at write
+// time, not at submit time. A missing row is a no-op, as before.
 func (s *EmbeddingStore) UpdateCandidateLLM(id int64, verdict, reason string) error {
-	return s.updateCandidate(id, func(rec *candRec) {
+	var guardErr error
+	err := s.updateCandidateIf(id, func(rec *candRec) bool {
+		if rec.Source == CandidateSourceManual {
+			guardErr = fmt.Errorf("record LLM verdict on candidate %d: %w", id, ErrManualCandidateProtected)
+			return false
+		}
+		if rec.Status != "pending" {
+			guardErr = fmt.Errorf("record LLM verdict on candidate %d (status %q): %w", id, rec.Status, ErrCandidateStatusChanged)
+			return false
+		}
 		rec.LLMVerdict = verdict
 		rec.LLMReason = reason
 		rec.Layer = "llm"
 		rec.UpdatedAt = time.Now().UnixNano()
+		return true
 	})
+	if err != nil {
+		return err
+	}
+	return guardErr
 }
 
 // CandidateScoreUpdate is one row's re-computed score for UpdateCandidateScores.
@@ -1396,6 +1439,14 @@ func (s *EmbeddingStore) UpdateCandidateScores(updates []CandidateScoreUpdate) (
 			continue
 		}
 		closer.Close()
+		// A manual (human-pinned) row is never re-banded by an automated
+		// pass. Engine.Rescore skips them when it lists; this catches a pin
+		// that landed after the list, since s.mu is the lock
+		// EnqueueManualCandidate holds. The row is counted neither applied
+		// nor failed.
+		if rec.Source == CandidateSourceManual {
+			continue
+		}
 		rec.ScoreBreakdown = u.Score
 		rec.Band = u.Band
 		rec.FormulaVersion = u.FormulaVersion
@@ -1440,6 +1491,16 @@ func (s *EmbeddingStore) SyncCandidateWrites() error {
 // per-row pebble.Sync stays — these are one-off writes, not the whole-backlog
 // loop; bulk callers use UpdateCandidateScores + SyncCandidateWrites.
 func (s *EmbeddingStore) updateCandidate(id int64, mutFn func(*candRec)) error {
+	return s.updateCandidateIf(id, func(rec *candRec) bool {
+		mutFn(rec)
+		return true
+	})
+}
+
+// updateCandidateIf is updateCandidate with a veto: mutFn returns false to
+// leave the row unwritten. The check and the write happen under s.mu, so a
+// guard in mutFn sees the row as it is at write time.
+func (s *EmbeddingStore) updateCandidateIf(id int64, mutFn func(*candRec) bool) error {
 	s.closeMu.RLock()
 	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
@@ -1461,7 +1522,9 @@ func (s *EmbeddingStore) updateCandidate(id int64, mutFn func(*candRec)) error {
 	}
 	closer.Close()
 
-	mutFn(&rec)
+	if !mutFn(&rec) {
+		return nil
+	}
 
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -1474,6 +1537,11 @@ func (s *EmbeddingStore) updateCandidate(id int64, mutFn func(*candRec)) error {
 func (s *EmbeddingStore) DeleteCandidate(id int64) error {
 	s.closeMu.RLock()
 	defer s.closeMu.RUnlock()
+	// Under s.mu (the lock EnqueueManualCandidate holds) so the manual
+	// backstop below checks the row as it is at delete time: without it a pin
+	// landing between this read and the delete is lost with the row.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	val, closer, err := s.db.Get(dedupRecKey(id))
 	if err == pebble.ErrNotFound {
 		return nil

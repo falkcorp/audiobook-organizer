@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store_manual.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e91eddf1-7da1-4f28-a63f-8fe992e52838
 // last-edited: 2026-09-25
 
@@ -35,6 +35,53 @@ const CandidateLayerManual = "manual"
 // ErrManualCandidateProtected is returned by DeleteCandidate for a manual
 // candidate. Automated passes must skip those rows before calling it.
 var ErrManualCandidateProtected = errors.New("candidate was enqueued by hand and is not deleted by automated passes")
+
+// ErrCandidateStatusChanged is returned by the guarded automated writes
+// (ReclassifyCandidate, UpdateCandidateLLM) when the row's status is no longer
+// the one the pass read: a human decided it, or another pass moved it, or it
+// was deleted. The row is left alone.
+var ErrCandidateStatusChanged = errors.New("candidate status changed since it was read")
+
+// ReclassifyCandidate is the status write every automated pass (drain-stale,
+// purge-legacy-fp, triage and dataset-backfill dismissals) uses instead of
+// UpdateCandidateStatus. Under s.mu, the lock EnqueueManualCandidate holds,
+// it re-reads the row and moves it from fromStatus to toStatus only if:
+//
+//   - the row is not a manual candidate (else ErrManualCandidateProtected), and
+//   - its status is still fromStatus (else ErrCandidateStatusChanged; a
+//     missing row reports the same).
+//
+// Automated passes list the backlog first and write later, sometimes much
+// later. Checking IsManualCandidate on the listed snapshot alone leaves the
+// whole scan as a window in which a human can pin the row, and the pass then
+// reclassifies it after the human was told it was pinned. Doing the check
+// here, at write time and under the pin's own lock, closes that window.
+//
+// UpdateCandidateStatus stays unguarded on purpose: it is also how a human's
+// dismiss or merge verdict ends a manual candidate.
+func (s *EmbeddingStore) ReclassifyCandidate(id int64, fromStatus, toStatus string) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, found, err := s.readCandRecForUpdate(id)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("reclassify candidate %d: row no longer exists: %w", id, ErrCandidateStatusChanged)
+	}
+	if rec.Source == CandidateSourceManual {
+		return fmt.Errorf("reclassify candidate %d to %q: %w", id, toStatus, ErrManualCandidateProtected)
+	}
+	if rec.Status != fromStatus {
+		return fmt.Errorf("reclassify candidate %d: status is %q, expected %q: %w", id, rec.Status, fromStatus, ErrCandidateStatusChanged)
+	}
+	return s.writeCandidateStatusLocked(id, rec, toStatus)
+}
 
 // IsManualCandidate reports whether c was enqueued or pinned by a human. It is
 // the one predicate every automated purge / dismiss / merge path checks.

@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/dataset_backfill.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2d6f8a13-7c40-4e92-8b15-9a3e5c7d2f64
 // last-edited: 2026-09-25
 
@@ -26,6 +26,7 @@ package dedup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 	"sync"
@@ -139,7 +140,9 @@ func (m *memoizedBuilderAdapter) GetBookFiles(id string) ([]database.BookFile, e
 type datasetBackfillEmbeddingStore interface {
 	ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error)
 	UpsertLabeledExample(ex database.LabeledExample) error
-	UpdateCandidateStatus(id int64, status string) error
+	// ReclassifyCandidate is the guarded automated status write: it re-checks
+	// the row under the manual-pin lock (see its doc).
+	ReclassifyCandidate(id int64, fromStatus, toStatus string) error
 }
 
 // runDatasetBackfill implements the dedup.dataset-backfill op.
@@ -274,10 +277,17 @@ func runDatasetBackfillWith(
 			// A manual candidate is never dismissed by a catcher: a human
 			// enqueued it to decide it. Its example is still labeled above.
 			if upsertOK && ex.Label == "not_dup" && !database.IsManualCandidate(c) {
-				if err := embStore.UpdateCandidateStatus(c.ID, "dismissed"); err != nil {
+				// ReclassifyCandidate re-checks at write time: a pair a human
+				// pinned or decided since the list was read is left alone.
+				err := embStore.ReclassifyCandidate(c.ID, "pending", "dismissed")
+				switch {
+				case errors.Is(err, database.ErrManualCandidateProtected), errors.Is(err, database.ErrCandidateStatusChanged):
+					reporter.Logger().Info("dataset-backfill: left a row changed since the list",
+						"candidate_id", c.ID, "reason", err)
+				case err != nil:
 					reporter.Logger().Error("dataset-backfill: suppress error",
 						"candidate_id", c.ID, "error", err)
-				} else {
+				default:
 					statsMu.Lock()
 					suppressed++
 					statsMu.Unlock()

@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-25
 
@@ -22,7 +22,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -573,8 +575,17 @@ func (s *Server) DedupTriageExactPending(ctx context.Context, apply bool) (*main
 		// A manual candidate is classified and reported like any other but
 		// never dismissed: a rowless shell book classifies as a stub, which is
 		// exactly the pair a human enqueues to look at.
-		if apply && maintenanceplugin.IsPurgeable(cls) && !database.IsManualCandidate(c) {
-			if derr := s.embeddingStore.UpdateCandidateStatus(c.ID, "dismissed"); derr != nil {
+		//
+		// A same-path pair is review-queue-only as well (dedup.SamePathPair),
+		// and the write goes through ReclassifyCandidate, which re-checks the
+		// row at write time: a pair a human pinned or decided after this pass
+		// listed it is left alone and not counted as an error.
+		_, reviewOnly := dedup.AutomatedResolutionRefusal(c, a, b)
+		if apply && maintenanceplugin.IsPurgeable(cls) && !reviewOnly {
+			derr := s.embeddingStore.ReclassifyCandidate(c.ID, "pending", "dismissed")
+			if errors.Is(derr, database.ErrManualCandidateProtected) || errors.Is(derr, database.ErrCandidateStatusChanged) {
+				logging.Info(ctx, "dedup triage: left a row changed since the list", "candidate_id", c.ID, "reason", derr)
+			} else if derr != nil {
 				dismissErrs++
 				if firstDismissErr == nil {
 					firstDismissErr = fmt.Errorf("dismiss candidate %d: %w", c.ID, derr)
