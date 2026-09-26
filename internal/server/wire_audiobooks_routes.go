@@ -1,7 +1,7 @@
 // file: internal/server/wire_audiobooks_routes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package server
 
@@ -44,6 +44,7 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.PUT("/audiobooks/:id", s.perm(auth.PermLibraryEditMetadata), audiobooksH.UpdateAudiobook)
 	protected.DELETE("/audiobooks/:id", s.perm(auth.PermLibraryDelete), audiobooksH.DeleteAudiobook)
 	protected.GET("/audiobooks/:id/cover", s.perm(auth.PermLibraryView), audiobooksH.ServeAudiobookCover)
+	protected.GET("/audiobooks/:id/cover-text", s.perm(auth.PermLibraryView), s.handleGetCoverText)
 	protected.GET("/audiobooks/:id/segments", s.perm(auth.PermLibraryView), audiobooksH.ListAudiobookSegments)
 	protected.GET("/audiobooks/:id/segments/:segmentId/tags", s.perm(auth.PermLibraryView), audiobooksH.GetSegmentTags)
 	protected.GET("/audiobooks/:id/files", s.perm(auth.PermLibraryView), audiobooksH.ListBookFiles)

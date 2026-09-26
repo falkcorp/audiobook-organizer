@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailInfoTab.authorlink.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6b0c4a12-9f7d-4e35-8c61-2a0d9e4f7b58
-// last-edited: 2026-09-12
+// last-edited: 2026-09-26
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -13,6 +13,7 @@ import { BookDetailInfoTab } from './BookDetailInfoTab';
 vi.mock('../../services/api', () => ({
   getBookRating: vi.fn().mockResolvedValue(null),
   setBookRating: vi.fn(),
+  getCoverText: vi.fn().mockResolvedValue({ book_id: '', images: [] }),
 }));
 
 // A book with two credited authors, both carrying ids: the fixture has to be

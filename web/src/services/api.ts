@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.124.0
+// version: 2.125.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -1720,6 +1720,46 @@ export async function getSegmentTags(bookId: string, segmentId: string): Promise
   const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/segments/${segmentId}/tags`);
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch segment tags');
+  }
+  const body = await response.json();
+  return body.data;
+}
+
+// Cover text: what a vision model read off each of a book's cover images
+// (maintenance.cover-text-read). Stored per image; never applied to metadata.
+export interface CoverTextFields {
+  title?: string;
+  subtitle?: string;
+  authors?: string[];
+  narrators?: string[];
+  series?: string;
+  series_number?: string;
+  publisher?: string;
+  other_text?: string[];
+}
+
+export interface CoverTextImage {
+  hash: string;
+  source: 'local' | 'embedded' | 'folder';
+  status?: 'ok' | 'error';
+  text?: CoverTextFields;
+  error?: string;
+  model?: string;
+  prompt_version?: string;
+  read_at?: string;
+}
+
+export interface CoverTextResponse {
+  book_id: string;
+  images: CoverTextImage[];
+}
+
+export async function getCoverText(bookId: string): Promise<CoverTextResponse> {
+  const response = await apiFetch(
+    `${API_BASE}/audiobooks/${encodeURIComponent(bookId)}/cover-text`
+  );
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to fetch cover text');
   }
   const body = await response.json();
   return body.data;
