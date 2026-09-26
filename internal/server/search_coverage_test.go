@@ -1,7 +1,7 @@
 // file: internal/server/search_coverage_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 000a3aed-48a5-49fd-b36a-d52d7d4de58e
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 //
 // Regression tests for a PARTIALLY built search index.
 //
@@ -216,7 +216,7 @@ func TestSearchCoverage_StaleDocsAreDeleted(t *testing.T) {
 
 	srv.reconcileSearchIndexCoverage()
 
-	changed, _, ok := srv.searchChanges.ChangedSince(gen)
+	changed, _, ok := srv.searchChanges.ChangedSince(gen, 0)
 	if !ok {
 		t.Fatal("change log cannot answer since the pre-sweep generation")
 	}

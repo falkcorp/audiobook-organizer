@@ -1,5 +1,5 @@
 // file: internal/searchcache/cache.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: bcadc16f-696c-468a-a3e4-afea4c81bc5c
 // last-edited: 2026-09-26
 
@@ -405,7 +405,7 @@ func (c *Cache) refresh(ctx context.Context, key string, ev Evaluator, opts Look
 // current generation. Used when a lookup joined a build that started before a change the
 // lookup must reflect.
 func (c *Cache) bringForward(ctx context.Context, key string, ev Evaluator, opts LookupOptions, res Result) (Result, error) {
-	changed, current, ok := c.changes.ChangedSince(res.Gen)
+	changed, current, ok := c.changes.ChangedSince(res.Gen, c.cfg.MaxPatchChanged+1)
 	if ok {
 		// This runs on the caller's goroutine, so waiting for a build slot
 		// ends with the caller; the patch itself is detached once it runs.
@@ -446,7 +446,7 @@ func (c *Cache) patchEntry(key string, ev Evaluator) patchResult {
 	if e.gen >= c.changes.Generation() {
 		return patchResult{res: Result{IDs: e.ids, Hit: true, Gen: e.gen}}
 	}
-	changed, current, ok := c.changes.ChangedSince(e.gen)
+	changed, current, ok := c.changes.ChangedSince(e.gen, c.cfg.MaxPatchChanged+1)
 	if ok {
 		// The slot wait is unbounded here (the patch is shared and detached),
 		// so err is always nil; a non-nil one would fall through to a rebuild.
@@ -519,7 +519,9 @@ func (c *Cache) acquireSlot(ctx context.Context) error {
 func (c *Cache) patch(waitCtx, ctx context.Context, ids, changed []string, ev Evaluator) ([]string, bool, error) {
 	if len(changed) > c.cfg.MaxPatchChanged {
 		// Too many changes to re-evaluate cheaply: rebuild instead, without
-		// first doing (and discarding) a near-full query.
+		// first doing (and discarding) a near-full query. Callers fetch
+		// changed with ChangedSince(gen, MaxPatchChanged+1), so this is the
+		// "limit reached" answer: the walk stopped at one past the cap.
 		c.patchCapRebuilds.Add(1)
 		metrics.IncSearchCachePatchCapRebuild()
 		return nil, false, nil

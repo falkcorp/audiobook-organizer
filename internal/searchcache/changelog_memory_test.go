@@ -1,5 +1,5 @@
 // file: internal/searchcache/changelog_memory_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c8e2a17-4b6d-4f93-a1d0-9e7b3c6f2d48
 // last-edited: 2026-09-26
 
@@ -93,7 +93,7 @@ func BenchmarkChangedSinceFullRing(b *testing.B) {
 			since := cl.Generation() - 1
 			b.ResetTimer()
 			for range b.N {
-				if _, _, ok := cl.ChangedSince(since); !ok {
+				if _, _, ok := changedSinceCapped(cl, since); !ok {
 					b.Fatal("ring should cover the last generation")
 				}
 			}
@@ -102,13 +102,47 @@ func BenchmarkChangedSinceFullRing(b *testing.B) {
 }
 
 // BenchmarkChangedSinceWholeRing is the worst case: an entry as old as the
-// oldest record, so every record is new to it and ChangedSince builds the
-// deduped set of ALL of them -- which patch() then discards whenever it is
-// larger than MaxPatchChanged (2048). ChangedSince does not stop early at
-// that cap, so this cost grows with the ring, not with the cap.
+// oldest record, so every record is new to it. "limit=none" builds the
+// deduped set of ALL of them, which is what every lookup paid before
+// ChangedSince took a limit (patch() then discarded it as larger than
+// MaxPatchChanged). "limit=2049" is what cache.go asks for now: the walk stops
+// at one past the cap, so the dedupe no longer grows with the ring.
 //
 // Run: go test ./internal/searchcache -run '^$' -bench ChangedSinceWholeRing -benchmem
 func BenchmarkChangedSinceWholeRing(b *testing.B) {
+	for _, size := range ringMemorySizes {
+		for _, limit := range []int{0, DefaultMaxPatchChanged + 1} {
+			name := fmt.Sprintf("ring=%d/limit=%d", size, limit)
+			want := size
+			if limit == 0 {
+				name = fmt.Sprintf("ring=%d/limit=none", size)
+			} else {
+				want = limit
+			}
+			b.Run(name, func(b *testing.B) {
+				cl := NewChangeLog(size)
+				since := cl.Generation()
+				for _, id := range ulidLikeIDs(size) {
+					cl.Record(id)
+				}
+				b.ResetTimer()
+				for range b.N {
+					if ids, _, ok := cl.ChangedSince(since, limit); !ok || len(ids) != want {
+						b.Fatalf("ChangedSince = %d ids, ok=%v; want %d, true", len(ids), ok, want)
+					}
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkChangedSinceLockHold times only the part of ChangedSince that holds
+// the mutex (the window copy), for a whole-ring lookup. Before the copy-out,
+// the whole of ChangedSince ran under the mutex, so its full time (the
+// limit=none rows of BenchmarkChangedSinceWholeRing) was the lock hold.
+//
+// Run: go test ./internal/searchcache -run '^$' -bench ChangedSinceLockHold -benchmem
+func BenchmarkChangedSinceLockHold(b *testing.B) {
 	for _, size := range ringMemorySizes {
 		b.Run(fmt.Sprintf("ring=%d", size), func(b *testing.B) {
 			cl := NewChangeLog(size)
@@ -116,10 +150,12 @@ func BenchmarkChangedSinceWholeRing(b *testing.B) {
 			for _, id := range ulidLikeIDs(size) {
 				cl.Record(id)
 			}
+			buf := make([]string, 0, size)
 			b.ResetTimer()
 			for range b.N {
-				if ids, _, ok := cl.ChangedSince(since); !ok || len(ids) != size {
-					b.Fatalf("ChangedSince = %d ids, ok=%v; want %d, true", len(ids), ok, size)
+				w, _, ok := cl.window(since, buf[:0])
+				if !ok || len(w) != size {
+					b.Fatalf("window = %d ids, ok=%v; want %d", len(w), ok, size)
 				}
 			}
 		})
@@ -156,7 +192,7 @@ func TestChangeLogRingPatchWindow(t *testing.T) {
 				cl.Record(id)
 			}
 		}
-		changed, _, ok := cl.ChangedSince(since)
+		changed, _, ok := cl.ChangedSince(since, 0)
 		if ok != tc.wantPatchable {
 			t.Errorf("ring=%d distinct=%d repeats=%d: ChangedSince ok=%v, want %v",
 				tc.ring, tc.distinct, tc.repeats, ok, tc.wantPatchable)
