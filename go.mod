@@ -35,6 +35,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.46.0
 	go.senan.xyz/taglib v0.14.0
 	golang.org/x/crypto v0.57.0
+	golang.org/x/image v0.46.0
 	golang.org/x/net v0.59.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.23.0

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-09-15
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -316,78 +316,18 @@ func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author
 			return relinked, ctx.Err()
 		}
 
-		bookAuthors, err := store.GetBookAuthors(book.ID)
+		primaryErr, err := relinkBookCredit(store, book, from, into, dryRun)
 		if err != nil {
 			// Do NOT fall through to DeleteAuthor after this: dropping the row
 			// while a book still points at it orphans that book's author
 			// reference. Same failure H8 documented on the split scan.
-			return relinked, fmt.Errorf("get book authors for %s: %w", book.ID, err)
+			return relinked, err
 		}
-
-		// Preserve the role the stranded row carried, and note whether the
-		// target is already on this book — a credit list can name both.
-		role := "author"
-		targetAlreadyLinked := false
-		for _, ba := range bookAuthors {
-			if ba.AuthorID == from.ID {
-				role = ba.Role
-			}
-			if ba.AuthorID == into.ID {
-				targetAlreadyLinked = true
-			}
-		}
-
-		var updated []database.BookAuthor
-		for _, ba := range bookAuthors {
-			if ba.AuthorID == from.ID {
-				continue
-			}
-			updated = append(updated, ba)
-		}
-		if !targetAlreadyLinked {
-			updated = append(updated, database.BookAuthor{
-				BookID:   book.ID,
-				AuthorID: into.ID,
-				Role:     role,
-				Position: len(updated),
-			})
-		}
-
-		if dryRun {
-			relinked++
-			continue
-		}
-
-		if err := store.SetBookAuthors(book.ID, updated); err != nil {
-			return relinked, fmt.Errorf("set book authors for %s: %w", book.ID, err)
-		}
-
-		// If the stranded row was somehow also the denormalized primary, move
-		// that too. Hydrate the full row rather than writing the BookCore
-		// projection: BookCore has heavy fields nil, and its guard-preserved
-		// Author would still name the row being deleted (STOREFID W5d-1).
-		if book.AuthorID != nil && *book.AuthorID == from.ID {
-			// Rewrite only AuthorID/Author, under the book's write lock
-			// (ModifyBook), so a column another writer commits meanwhile is
-			// not reverted (audit A1#15); a primary already moved off the
-			// stranded row meanwhile is left alone.
-			target := into
-			written, err := store.ModifyBook(book.ID, func(full *database.Book) error {
-				if full.AuthorID == nil || *full.AuthorID != from.ID {
-					return database.ErrSkipBookWrite
-				}
-				full.AuthorID = &target.ID
-				full.Author = &target
-				return nil
-			})
-			switch {
-			case err != nil:
-				log.Warn("author-conjunction-repair: primary author rewrite failed",
-					"book_id", book.ID, "err", err)
-			case written == nil:
-				log.Warn("author-conjunction-repair: book gone, primary author left stale",
-					"book_id", book.ID)
-			}
+		if primaryErr != nil {
+			// Logged, not returned: VerifyAuthorUnlinked below still refuses
+			// the delete while the primary names the row.
+			log.Warn("author-conjunction-repair: primary author rewrite failed",
+				"book_id", book.ID, "err", primaryErr)
 		}
 		relinked++
 	}
@@ -402,4 +342,91 @@ func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author
 		return relinked, fmt.Errorf("delete author %d: %w", from.ID, err)
 	}
 	return relinked, nil
+}
+
+// relinkBookCredit moves one book's credit from `from` to `into`: the
+// book_authors junction (keeping the role the from row carried, and not
+// duplicating into when the book already credits it) and, when it named from,
+// the denormalized primary AuthorID.
+//
+// The link that matters is the junction, not Book.AuthorID (see
+// mergeAuthorInto). The primary is rewritten under the book's write lock
+// (ModifyBook, audit A1#15) on the hydrated row, not the BookCore projection
+// (STOREFID W5d-1), and a primary already moved off from meanwhile is left
+// alone.
+//
+// dryRun reads the junction and writes nothing.
+//
+// err is a junction failure: nothing about the credit changed that a re-run
+// would not redo. primaryErr is a failed primary rewrite AFTER the junction
+// was written; the caller decides whether that is fatal. Shared by
+// mergeAuthorInto (every book of a row) and author-strip-merge's
+// title-as-author relink (one book at a time), so both write a credit move
+// the same way.
+func relinkBookCredit(store interface {
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+}, book database.BookCore, from, into database.Author, dryRun bool) (primaryErr, err error) {
+	bookAuthors, err := store.GetBookAuthors(book.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get book authors for %s: %w", book.ID, err)
+	}
+
+	// Preserve the role the from row carried, and note whether the target is
+	// already on this book — a credit list can name both.
+	role := "author"
+	targetAlreadyLinked := false
+	for _, ba := range bookAuthors {
+		if ba.AuthorID == from.ID {
+			role = ba.Role
+		}
+		if ba.AuthorID == into.ID {
+			targetAlreadyLinked = true
+		}
+	}
+
+	var updated []database.BookAuthor
+	for _, ba := range bookAuthors {
+		if ba.AuthorID == from.ID {
+			continue
+		}
+		updated = append(updated, ba)
+	}
+	if !targetAlreadyLinked {
+		updated = append(updated, database.BookAuthor{
+			BookID:   book.ID,
+			AuthorID: into.ID,
+			Role:     role,
+			Position: len(updated),
+		})
+	}
+	if dryRun {
+		// The junction read above still ran, so a dry run surfaces the same
+		// read failure the apply would hit.
+		return nil, nil
+	}
+	if err := store.SetBookAuthors(book.ID, updated); err != nil {
+		return nil, fmt.Errorf("set book authors for %s: %w", book.ID, err)
+	}
+
+	if book.AuthorID == nil || *book.AuthorID != from.ID {
+		return nil, nil
+	}
+	target := into
+	written, mErr := store.ModifyBook(book.ID, func(full *database.Book) error {
+		if full.AuthorID == nil || *full.AuthorID != from.ID {
+			return database.ErrSkipBookWrite
+		}
+		full.AuthorID = &target.ID
+		full.Author = &target
+		return nil
+	})
+	switch {
+	case mErr != nil:
+		return fmt.Errorf("rewrite primary author of %s: %w", book.ID, mErr), nil
+	case written == nil:
+		return fmt.Errorf("rewrite primary author of %s: book gone", book.ID), nil
+	}
+	return nil, nil
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e4b7f3a-2c1d-4e8b-b6a5-0d7c9e2f5b8a
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Table-driven tests for the dedup.purge-legacy-fp-candidates op (T015).
 //
@@ -387,4 +387,42 @@ func TestPurgeLegacyFP_PinDuringScanIsNotReclassified(t *testing.T) {
 	got, err = es.GetCandidateByID(control)
 	require.NoError(t, err)
 	assert.Equal(t, "stale-fp", got.Status)
+}
+
+// A same-path pair (two book rows at one cleaned file path) is
+// review-queue-only: it passes every legacy gate but must stay pending. The
+// control pair at different paths is marked. book-b is reachable only through
+// GetBookByID (missing from the bulk read, as in a memdb gap) to cover the
+// fallback.
+func TestPurgeLegacyFP_KeepsSamePathPair(t *testing.T) {
+	es := newTestEmbeddingStorePurge(t)
+	samePath := plantLegacyFP(t, es, "book-a", "book-b")
+	control := plantLegacyFP(t, es, "book-c", "book-d")
+
+	store := purgeFPStore()
+	store.GetAllBooksCoreFunc = func(limit, offset int) ([]database.BookCore, error) {
+		if offset > 0 {
+			return nil, nil
+		}
+		return []database.BookCore{
+			{ID: "book-a", FilePath: "/lib/Author/Book/"},
+			{ID: "book-c", FilePath: "/lib/Author/One"},
+			{ID: "book-d", FilePath: "/lib/Author/Two"},
+		}, nil
+	}
+	store.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		if id == "book-b" {
+			return &database.Book{ID: "book-b", FilePath: "/lib/Author/Book"}, nil
+		}
+		return nil, nil
+	}
+
+	runPurgeApply(t, buildPlugin(t, es, store), &mockReporter{})
+
+	got, err := es.GetCandidateByID(samePath)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", got.Status, "a same-path pair was reclassified")
+	got, err = es.GetCandidateByID(control)
+	require.NoError(t, err)
+	assert.Equal(t, "stale-fp", got.Status, "control row not marked: the fixture never reached the write")
 }

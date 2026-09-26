@@ -1,7 +1,7 @@
 // file: internal/merge/provisional_guard_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 51f8f6c7-7a87-45e9-b9fa-cecc30246566
-// last-edited: 2026-09-14
+// last-edited: 2026-09-26
 
 package merge
 
@@ -130,6 +130,7 @@ func TestMergeBooks_AllowsFullyScannedBooks(t *testing.T) {
 	expectModifyBookTimes(mockStore, book2, 2)
 	mockStore.EXPECT().GetExternalIDsForBook("book-2").Return(nil, nil)
 	mockStore.EXPECT().ReassignExternalIDs("book-2", "book-1").Return(nil)
+	expectUserStateFollow(mockStore, "book-2", "book-1")
 
 	result, err := svc.MergeBooks([]string{"book-1", "book-2"}, "book-1")
 	require.NoError(t, err, "a fully scanned pair must still merge")

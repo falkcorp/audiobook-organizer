@@ -1,12 +1,11 @@
 // file: internal/metadata/metadata.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
-// last-edited: 2026-09-14
+// last-edited: 2026-09-26
 
 package metadata
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -887,23 +886,12 @@ func ExtractCoverArt(filePath string) (string, error) {
 		ext = ".webp"
 	}
 
-	// Hash the image data for dedup
-	hash := fmt.Sprintf("%x", sha256.Sum256(pic.Data))
-
-	coverDir := filepath.Join(config.AppConfig.RootDir, ".covers")
-	if err := os.MkdirAll(coverDir, 0775); err != nil {
-		return "", fmt.Errorf("failed to create covers directory: %w", err)
-	}
-
-	coverPath := filepath.Join(coverDir, hash+ext)
-
-	// Skip if already cached
-	if _, err := os.Stat(coverPath); err == nil {
-		return coverPath, nil
-	}
-
-	if err := os.WriteFile(coverPath, pic.Data, 0664); err != nil {
-		return "", fmt.Errorf("failed to write cover: %w", err)
+	// Content-addressed and written atomically by the same helper folder
+	// covers use (StoreCoverImage), so two books sharing one embedded image
+	// share one file and a concurrent extract never leaves a partial one.
+	coverPath, err := StoreCoverImage(config.AppConfig.RootDir, CoverImage{Data: pic.Data, Ext: ext, MIMEType: pic.MIMEType})
+	if err != nil {
+		return "", err
 	}
 
 	// Cover art extraction log — use a default logger since this function

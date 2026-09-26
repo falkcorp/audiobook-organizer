@@ -1,7 +1,7 @@
 // file: internal/searchcache/cache_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 88a06138-3f42-4544-a283-88594317ab8b
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package searchcache
 
@@ -23,7 +23,7 @@ func TestChangeLog_ChangedSinceAndOverflow(t *testing.T) {
 	g0 := c.Generation()
 	c.Record("a")
 	c.Record("b", "a")
-	ids, cur, ok := c.ChangedSince(g0)
+	ids, cur, ok := c.ChangedSince(g0, 0)
 	if !ok || cur != g0+2 {
 		t.Fatalf("ChangedSince: ok=%v cur=%d", ok, cur)
 	}
@@ -32,15 +32,15 @@ func TestChangeLog_ChangedSinceAndOverflow(t *testing.T) {
 		t.Fatalf("ids = %v, want [a b]", ids)
 	}
 	// Nothing changed since the current generation.
-	if ids, _, ok := c.ChangedSince(cur); !ok || len(ids) != 0 {
+	if ids, _, ok := c.ChangedSince(cur, 0); !ok || len(ids) != 0 {
 		t.Fatalf("since current: ids=%v ok=%v", ids, ok)
 	}
 	// Two more records overflow the 4-slot ring: g0+1's record is evicted.
 	c.Record("c", "d")
-	if _, _, ok := c.ChangedSince(g0); ok {
+	if _, _, ok := c.ChangedSince(g0, 0); ok {
 		t.Fatal("ChangedSince(g0) after overflow reported ok")
 	}
-	if ids, _, ok := c.ChangedSince(g0 + 1); !ok || len(ids) != 4 {
+	if ids, _, ok := c.ChangedSince(g0+1, 0); !ok || len(ids) != 4 {
 		t.Fatalf("ChangedSince(g0+1) = %v ok=%v, want 4 ids", ids, ok)
 	}
 	// Empty IDs change nothing.
@@ -50,10 +50,10 @@ func TestChangeLog_ChangedSinceAndOverflow(t *testing.T) {
 		t.Fatal("Record of empty IDs advanced the generation")
 	}
 	g := c.RecordAll()
-	if _, _, ok := c.ChangedSince(g - 1); ok {
+	if _, _, ok := c.ChangedSince(g-1, 0); ok {
 		t.Fatal("RecordAll left an older generation patchable")
 	}
-	if _, _, ok := c.ChangedSince(g); !ok {
+	if _, _, ok := c.ChangedSince(g, 0); !ok {
 		t.Fatal("ChangedSince(RecordAll gen) not ok")
 	}
 }

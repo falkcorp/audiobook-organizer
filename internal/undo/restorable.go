@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-09-14
+// last-edited: 2026-09-26
 
 package undo
 
@@ -510,6 +510,16 @@ func NotRestorableLabel(c *database.OperationChange) string {
 		}
 		return c.ChangeType + ":(no book_file id)"
 	case ChangeTypeBookPathUpdate, ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote:
+		return ""
+	case ChangeTypeTitleRelinkCredits:
+		if _, _, err := DecodeTitleRelinkCredits(c); err != nil {
+			return ChangeTypeTitleRelinkCredits + ":(unparsable)"
+		}
+		return ""
+	case ChangeTypeTitleRelinkAuthorCreate:
+		if c.NewValue == "" {
+			return ChangeTypeTitleRelinkAuthorCreate + ":(no name)"
+		}
 		return ""
 	case ChangeTypeExternalIDReassign:
 		if _, _, ok := ExternalIDFromField(c.FieldName); ok {

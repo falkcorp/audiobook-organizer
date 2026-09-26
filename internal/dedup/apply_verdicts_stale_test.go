@@ -1,7 +1,7 @@
 // file: internal/dedup/apply_verdicts_stale_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f1e7f635-5dfb-46da-b1e4-fc3f63f6cacc
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package dedup
 
@@ -143,25 +143,52 @@ func TestApplyVerdicts_SamePathPair_VerdictRecordedButNeverAutoMerged(t *testing
 
 // A human pins the pair while the OpenAI batch is still running. The verdict
 // that arrives afterwards must neither merge the pair nor rewrite the pinned
-// row (its Layer would become "llm").
-func TestApplyVerdicts_PinnedAfterSubmit_NotMergedOrRewritten(t *testing.T) {
+// row (its Layer would become "llm", its status, band or score change). It is
+// kept on the row as advice for the reviewer (owner decision 2026-09-26).
+func TestApplyVerdicts_PinnedAfterSubmit_RecordedAsAdviceOnly(t *testing.T) {
 	engine, es, cand, updates := autoMergeFixture(t)
 	snapshot := cand // captured at submit time, before the pin
 	pin, err := es.EnqueueManualCandidate("book", "BOOK_A", "BOOK_B", "")
 	require.NoError(t, err)
 	require.True(t, pin.Pinned)
+	before, err := es.GetCandidateByID(cand.ID)
+	require.NoError(t, err)
 
 	res := engine.ApplyVerdicts(highDup, map[int]database.DedupCandidate{0: snapshot})
 
 	assert.Equal(t, 0, res.Applied)
-	assert.Equal(t, 1, res.SkippedStale)
+	assert.Equal(t, 0, res.SkippedStale)
+	assert.Equal(t, 1, res.Advised)
 	assert.Equal(t, int32(0), updates.Load(), "a pinned pair was merged")
 	got, err := es.GetCandidateByID(cand.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "pending", got.Status)
 	assert.Equal(t, "embedding", got.Layer, "the pinned row's layer was rewritten")
+	assert.Equal(t, before.Band, got.Band)
+	assert.Equal(t, before.ScoreBreakdown, got.ScoreBreakdown)
 	assert.Empty(t, got.LLMVerdict)
 	assert.True(t, database.IsManualCandidate(*got))
+	assert.Equal(t, "duplicate", got.AIAdviceVerdict)
+	assert.Equal(t, "[high] identical", got.AIAdviceReason)
+	assert.NotNil(t, got.AIAdviceAt)
+}
+
+// A pinned row a human then dismisses gets no advice from a late verdict.
+func TestApplyVerdicts_PinnedThenDismissed_NoAdvice(t *testing.T) {
+	engine, es, cand, updates := autoMergeFixture(t)
+	_, err := es.EnqueueManualCandidate("book", "BOOK_A", "BOOK_B", "")
+	require.NoError(t, err)
+	require.NoError(t, es.UpdateCandidateStatus(cand.ID, "dismissed"))
+
+	res := engine.ApplyVerdicts(highDup, map[int]database.DedupCandidate{0: cand})
+
+	assert.Equal(t, 0, res.Advised)
+	assert.Equal(t, 1, res.SkippedStale)
+	assert.Equal(t, int32(0), updates.Load())
+	got, err := es.GetCandidateByID(cand.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "dismissed", got.Status)
+	assert.Empty(t, got.AIAdviceVerdict)
 }
 
 // The pin lands after the verdict write but before the merge (here: while

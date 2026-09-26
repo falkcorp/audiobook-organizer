@@ -1,7 +1,7 @@
 // file: internal/aidispatch/dispatch.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7e784d44-f9f1-4637-919b-c5cf3aa6ac53
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package aidispatch
 
@@ -98,6 +98,7 @@ type Dispatcher struct {
 	pinnedModel    map[string]string
 	attribution    *Attribution
 	localOnly      bool
+	cloudOnly      bool
 
 	logMu      sync.Mutex
 	lastNoCape map[string]time.Time
@@ -202,6 +203,9 @@ func (d *Dispatcher) refuse(ep Endpoint, spec Spec) string {
 	}
 	if d.localOnly && EndpointLocality(ep) == LocalityCloud {
 		return "cloud endpoint excluded: this call is local-only"
+	}
+	if d.cloudOnly && EndpointLocality(ep) != LocalityCloud {
+		return "local endpoint excluded: this call is cloud-only"
 	}
 	if !slices.Contains(ep.Capabilities, id) {
 		if slices.ContainsFunc(ep.Capabilities, func(s string) bool { return strings.Contains(s, "*") }) {

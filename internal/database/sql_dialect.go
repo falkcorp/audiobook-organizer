@@ -1,7 +1,7 @@
 // file: internal/database/sql_dialect.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7d2f1a90-4c8b-4e23-9f61-2b7c5d0e8a44
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 // Package database — SQL dialect seam for the backend-agnostic activity store.
 //
@@ -45,6 +45,9 @@ type sqlDialect interface {
 	// jsonArrayContains returns a "the JSON-array column col contains value ?"
 	// predicate, one '?' placeholder bound to the tag value.
 	jsonArrayContains(col string) string
+	// jsonArrayContainsAny is jsonArrayContains for any of n values: the
+	// array contains at least one of the n placeholders' values. n >= 1.
+	jsonArrayContainsAny(col string, n int) string
 	// indexHint returns the FROM-clause suffix that pins a query to index, or
 	// "" for a dialect without one. The caller must know the index exists.
 	indexHint(index string) string
@@ -120,6 +123,14 @@ func (sqliteDialect) substringMatch(col string) string {
 // portable-across-SQLite-versions way to test membership.
 func (sqliteDialect) jsonArrayContains(col string) string {
 	return fmt.Sprintf("EXISTS (SELECT 1 FROM json_each(%s) WHERE value = ?)", col)
+}
+
+// jsonArrayContainsAny: one json_each pass testing membership in the value set.
+func (d sqliteDialect) jsonArrayContainsAny(col string, n int) string {
+	if n <= 1 {
+		return d.jsonArrayContains(col)
+	}
+	return fmt.Sprintf("EXISTS (SELECT 1 FROM json_each(%s) WHERE value IN (%s))", col, placeholders(n))
 }
 
 func (sqliteDialect) indexHint(index string) string { return " INDEXED BY " + index }

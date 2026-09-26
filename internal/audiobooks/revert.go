@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-09-24
+// last-edited: 2026-09-26
 
 package audiobooks
 
@@ -39,6 +39,7 @@ type revertServiceStore interface {
 	revertLedgerStore
 	revertSeriesStore
 	revertBookFileStore
+	revertAuthorStore
 	// revertBookPrimaryDemote re-crowns a restored primary and demotes the
 	// rest of its group (versionprimary.Crown).
 	versionprimary.EnsureStore
@@ -58,6 +59,17 @@ type revertLedgerStore interface {
 	// Needed by the embedded isProtectedPath call in revertTagWrite
 	// (SERVER-GLOBAL-STORE-AUDIT phase 6).
 	GetAllImportPaths() ([]database.ImportPath, error)
+}
+
+// revertAuthorStore restores a book's author credits and removes an author
+// row a title-as-author relink created (revertTitleRelinkCredits,
+// revertTitleRelinkAuthorCreate).
+type revertAuthorStore interface {
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
+	DeleteAuthor(id int) error
 }
 
 // revertSeriesStore is needed by undo.CheckRestoreReferent
@@ -414,6 +426,10 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 		return rs.revertBookPrimaryDemote(c)
 	case undo.ChangeTypeExternalIDReassign:
 		return rs.revertExternalIDReassign(c)
+	case undo.ChangeTypeTitleRelinkCredits:
+		return rs.revertTitleRelinkCredits(c)
+	case undo.ChangeTypeTitleRelinkAuthorCreate:
+		return rs.revertTitleRelinkAuthorCreate(c)
 	case "organize_failed", "organize_skipped", "organize_summary":
 		// No filesystem or DB mutation recorded; nothing to reverse.
 		return nil
@@ -945,4 +961,115 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 		return fmt.Errorf("failed to write tag %s back to %s: %w", tag, target, err)
 	}
 	return nil
+}
+
+// revertTitleRelinkCredits puts back a book's author credits as they were
+// before author-strip-merge's title-as-author relink moved them: the junction
+// exactly as journaled (order, roles, co-authors) and the primary AuthorID.
+//
+// Compare-and-set on both: the junction is replaced only while it still
+// carries the real author the relink wrote and not the junk row it removed
+// (undo.CheckTitleRelinkCreditsCurrent, under the book's author lock via
+// ModifyBookAuthors), and the primary only while it names that real author or
+// is already the journaled value. Anything else is a later change and fails
+// the row as changed-since.
+//
+// The junk author row itself may have been deleted by the same run; its
+// credit is restored regardless (the row id is what the book had), and
+// author-id-repair / a re-run of the op handle a credit to a deleted row.
+func (rs *RevertService) revertTitleRelinkCredits(c *database.OperationChange) error {
+	snap, move, err := undo.DecodeTitleRelinkCredits(c)
+	if err != nil {
+		return err
+	}
+	if _, err := rs.loadBook(c.BookID); err != nil {
+		return err
+	}
+	var primary *database.Author
+	if snap.AuthorID != nil {
+		a, err := rs.db.GetAuthorByID(*snap.AuthorID)
+		if err != nil {
+			return fmt.Errorf("load journaled primary author %d: %w", *snap.AuthorID, err)
+		}
+		primary = a
+	}
+
+	if _, err := rs.db.ModifyBookAuthors(c.BookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+		if sameCredits(cur, snap.Credits) {
+			return nil, database.ErrSkipBookAuthorsWrite // an earlier revert got this far
+		}
+		if err := undo.CheckTitleRelinkCreditsCurrent(c.BookID, cur, move); err != nil {
+			return nil, err
+		}
+
+		out := make([]database.BookAuthor, len(snap.Credits))
+		copy(out, snap.Credits)
+		return out, nil
+	}); err != nil && !errors.Is(err, database.ErrSkipBookAuthorsWrite) {
+		return err
+	}
+	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+		switch {
+		case sameIntPtr(book.AuthorID, snap.AuthorID):
+			return database.ErrSkipBookWrite
+		case book.AuthorID == nil || *book.AuthorID != move.IntoAuthorID:
+			return driftRefusal("book %s primary author changed since the relink", book.ID)
+		}
+		book.AuthorID = nil
+		book.Author = nil
+		if snap.AuthorID != nil {
+			id := *snap.AuthorID
+			book.AuthorID = &id
+			book.Author = primary
+		}
+		return nil
+	})
+}
+
+// revertTitleRelinkAuthorCreate removes an author row the relink created,
+// only when nothing credits it any more. Rows are reverted newest first, so
+// the credit rows the relink wrote for this author are put back before this
+// runs; an author still credited (a later link, or a book whose credit revert
+// was refused) is KEPT, and the row counts restored because there is nothing
+// safe left to undo. The row carries the name, not the id (the id did not
+// exist when it was journaled), so the author is found by name.
+func (rs *RevertService) revertTitleRelinkAuthorCreate(c *database.OperationChange) error {
+	a, err := rs.db.GetAuthorByName(c.NewValue)
+	if err != nil {
+		return fmt.Errorf("look up created author %q: %w", c.NewValue, err)
+	}
+	if a == nil || a.ID <= 0 {
+		return nil // already gone
+	}
+	books, err := rs.db.GetBooksByAuthorIDForRelinkCore(a.ID)
+	if err != nil {
+		return fmt.Errorf("read credits of created author %d: %w", a.ID, err)
+	}
+	if len(books) > 0 {
+		revertLog.Info("revert kept author %d %q: still credited on %d books", a.ID, logger.SanitizeLogValue(a.Name), len(books))
+		return nil
+	}
+	if err := rs.db.DeleteAuthor(a.ID); err != nil {
+		return fmt.Errorf("delete created author %d: %w", a.ID, err)
+	}
+	return nil
+}
+
+func sameCredits(a, b []database.BookAuthor) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].AuthorID != b[i].AuthorID || a[i].Role != b[i].Role || a[i].Position != b[i].Position {
+			return false
+		}
+	}
+	return true
+}
+
+func sameIntPtr(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

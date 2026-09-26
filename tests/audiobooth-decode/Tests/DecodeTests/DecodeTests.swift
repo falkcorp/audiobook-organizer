@@ -1,7 +1,7 @@
 // file: tests/audiobooth-decode/Tests/DecodeTests/DecodeTests.swift
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1e5c8f36-2a9d-4b71-a4c0-9f3d6b2e7a85
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 import Foundation
 import XCTest
@@ -266,6 +266,20 @@ final class DecodeTests: XCTestCase {
         failedSites.insert(row.callSite)
         lines.append("  FAIL     \(row.id): \(error)")
         continue
+      }
+
+      // collapseseries=1: the page must carry at least one series tile, decoded
+      // through the app's own Book.CollapsedSeries, with the fields SeriesCardModel
+      // builds the card from. A page of plain books would decode fine and prove
+      // nothing about the collapse.
+      if row.id == "items_collapse_series" {
+        let collapsed = tally.books[before...].compactMap(\.collapsedSeries)
+        XCTAssertFalse(collapsed.isEmpty, "\(row.id): no item decoded a collapsedSeries")
+        for s in collapsed {
+          XCTAssertFalse(s.id.isEmpty, "\(row.id): collapsedSeries.id is empty")
+          XCTAssertGreaterThan(s.numBooks, 0, "\(row.id): collapsedSeries.numBooks")
+          XCTAssertFalse(s.libraryItemIds.isEmpty, "\(row.id): collapsedSeries.libraryItemIds is empty")
+        }
       }
 
       if row.decode != "Data", let raw = try? JSONSerialization.jsonObject(with: body) {

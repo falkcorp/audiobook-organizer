@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookmarks.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 35844383-1823-4889-9735-b64bceb2ab17
-// last-edited: 2026-07-31
+// last-edited: 2026-09-26
 
 // Package database: named-bookmark keyspace.
 //
@@ -231,4 +231,65 @@ func (p *PebbleStore) UpdateBookmarkTitle(userID, itemID string, timeSec float64
 // DeleteBookmark removes the bookmark at (userID, itemID, timeSec), if any.
 func (p *PebbleStore) DeleteBookmark(userID, itemID string, timeSec float64) error {
 	return p.db.Delete(bookmarkKey(userID, itemID, timeSec), pebble.NoSync)
+}
+
+// BookmarkCopier copies a bookmark onto another item without disturbing one
+// already there. A merge uses it to put a merged-away item's bookmarks onto
+// the surviving item (internal/merge/bookmark_copy.go). It is its own
+// capability rather than a sixth BookmarkStore method so the handler fakes
+// that implement BookmarkStore are not forced to grow a method they never call.
+type BookmarkCopier interface {
+	CopyBookmarkIfAbsent(b progress.Bookmark) (bool, error)
+}
+
+// AsBookmarkCopier returns s as a BookmarkCopier, looking through the
+// indexedStore decorator, or nil.
+func AsBookmarkCopier(s any) BookmarkCopier {
+	if s == nil {
+		return nil
+	}
+	if bc, ok := AsCapability[BookmarkCopier](s); ok {
+		return bc
+	}
+	return nil
+}
+
+var _ BookmarkCopier = (*PebbleStore)(nil)
+
+// CopyBookmarkIfAbsent writes b at (b.UserID, b.ItemID, canonical time) only
+// when no bookmark exists there, and reports whether it wrote. Unlike
+// CreateBookmark it keeps b's CreatedAt/UpdatedAt: a copied bookmark is the
+// same bookmark the user made, not a new one. An existing bookmark at that
+// time wins untouched -- de-duplication by time, the key real ABS uses.
+func (p *PebbleStore) CopyBookmarkIfAbsent(b progress.Bookmark) (bool, error) {
+	if err := progress.ValidateBookmark(b); err != nil {
+		return false, err
+	}
+	createBookmarkMu.Lock()
+	defer createBookmarkMu.Unlock()
+
+	key := bookmarkKey(b.UserID, b.ItemID, b.TimeSec)
+	_, closer, err := p.db.Get(key)
+	switch {
+	case err == nil:
+		closer.Close()
+		return false, nil
+	case err != pebble.ErrNotFound:
+		return false, err
+	}
+	nowMs := time.Now().UnixMilli()
+	if b.CreatedAt == 0 {
+		b.CreatedAt = nowMs
+	}
+	if b.UpdatedAt == 0 {
+		b.UpdatedAt = b.CreatedAt
+	}
+	data, err := json.Marshal(b)
+	if err != nil {
+		return false, err
+	}
+	if err := p.db.Set(key, data, pebble.Sync); err != nil {
+		return false, err
+	}
+	return true, nil
 }

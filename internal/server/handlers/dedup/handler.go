@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -321,6 +321,11 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 			"formula_version": cand.FormulaVersion,
 			"source":          cand.Source,
 			"source_note":     cand.SourceNote,
+			// LLM advice on a pinned (manual) row: shown to the reviewer,
+			// never acted on. Empty on every other row.
+			"ai_advice_verdict": cand.AIAdviceVerdict,
+			"ai_advice_reason":  cand.AIAdviceReason,
+			"ai_advice_at":      cand.AIAdviceAt,
 		}
 		// Surface top-level score (avoids T017 having to unpack score_breakdown).
 		if cand.ScoreBreakdown != nil {

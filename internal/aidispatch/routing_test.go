@@ -1,7 +1,7 @@
 // file: internal/aidispatch/routing_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: bcb13a89-88a9-4712-96a9-77be75c40ec3
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package aidispatch
 
@@ -199,6 +199,19 @@ func TestCall_LocalOnlyRefusesCloud(t *testing.T) {
 	d := isolated([]Endpoint{cloud, local}, WithLocalOnly())
 	cands, refusals, _ := d.Candidates(LLMFilenameParse)
 	if len(cands) != 1 || cands[0].ID != "local" || len(refusals) != 1 || !strings.Contains(refusals[0].Reason, "local-only") {
+		t.Fatalf("cands %v refusals %+v", ids(cands), refusals)
+	}
+}
+
+func TestCall_CloudOnlyRefusesLocal(t *testing.T) {
+	fp := LLMFilenameParse.ID()
+	cloud := chatEP("cloud", 5, fp)
+	cloud.URL, cloud.AuthRef = "https://api.openai.com/v1", "openai_api_key"
+	local := chatEP("local", 1, fp)
+	local.URL = "http://127.0.0.1:11434/v1"
+	d := isolated([]Endpoint{cloud, local}, WithCloudOnly())
+	cands, refusals, _ := d.Candidates(LLMFilenameParse)
+	if len(cands) != 1 || cands[0].ID != "cloud" || len(refusals) != 1 || !strings.Contains(refusals[0].Reason, "cloud-only") {
 		t.Fatalf("cands %v refusals %+v", ids(cands), refusals)
 	}
 }

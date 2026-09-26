@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_index_pushdown_contract_test.go
-// version: 1.3.3
+// version: 1.5.1
 // guid: 7c1a55f2-4d9e-4a21-9f31-8e0b6a2c1d40
 // last-edited: 2026-09-26
 
@@ -520,7 +520,7 @@ func TestIndexPushdownPrunedRowDoesNotConsumeAPageSlot(t *testing.T) {
 // Since or Until (or push the bounds into the index scan). This comment is the
 // only place that dependency is written down.
 func TestActivityFilterFieldCountIsPinned(t *testing.T) {
-	const classified = 16
+	const classified = 18
 	got := reflect.TypeFor[ActivityFilter]().NumField()
 	require.Equal(t, classified, got,
 		"ActivityFilter gained or lost a field. pactIndexPushdownEligible is an ALLOW-LIST "+
@@ -541,8 +541,8 @@ func TestActivityFilterFieldCountIsPinned(t *testing.T) {
 		"Type", "TypeAliases", "Tier", "Level", // refused: not in the index key
 		"OperationID", "BookID", // the id predicates — the ONLY ones pushed down
 		"Since", "Until", // in pactPushdownDecidable ONLY because both paths ignore them
-		"Tags", "Search", "Source", // refused: not in the index key
-		"ExcludeSources", "ExcludeTiers", "ExcludeTags", // refused: not in the index key
+		"Tags", "TagAliases", "Search", "Source", // refused: not in the index key
+		"ExcludeSources", "ExcludeTiers", "ExcludeTags", "ExcludeTagAliases", // refused: not in the index key
 	}, names, "ActivityFilter's fields changed; re-read pactIndexPushdownEligible")
 
 	// The gate's ALLOW-LIST is pinned too, symmetric with the field list above.
@@ -650,6 +650,14 @@ func nonZeroFilterValue(t reflect.Type) reflect.Value {
 		return s
 	case reflect.Pointer:
 		return reflect.New(t.Elem())
+	case reflect.Map:
+		m := reflect.MakeMapWithSize(t, 1)
+		k, v := nonZeroFilterValue(t.Key()), nonZeroFilterValue(t.Elem())
+		if !k.IsValid() || !v.IsValid() {
+			return reflect.Value{}
+		}
+		m.SetMapIndex(k, v)
+		return m
 	default:
 		return reflect.Value{}
 	}

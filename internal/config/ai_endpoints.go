@@ -1,7 +1,7 @@
 // file: internal/config/ai_endpoints.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f0b6c2e-8a41-4d7e-9b15-6e2c7a9d4f10
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package config
 
@@ -444,7 +444,15 @@ func buildMigratedAIEndpoints(cfg *Config, hasOpenAIKey bool) []AIEndpoint {
 		// whenever a key exists, regardless of llm_mode.
 		tick(&row, aidispatch.LLMFilenameParse)
 		tick(&row, aidispatch.LLMAudiobookParse)
-		tick(&row, aidispatch.LLMCoverArtVision) // owner decision 5: cloud only
+		// Owner decision 5 ("vision is cloud only") was REVERSED on
+		// 2026-09-26: vision runs on the local LLM pool rows, which an
+		// operator ticks for llm.cover_art_vision together with the "vision"
+		// feature and a capability_models entry. The local row above is not
+		// ticked here because the migration cannot know its model can see.
+		// This cloud tick is kept so an install that already relied on it
+		// keeps working; with a higher priority number than the local rows it
+		// is only a fallback, and unticking it makes vision local-only.
+		tick(&row, aidispatch.LLMCoverArtVision)
 		tick(&row, aidispatch.LLMAuthorReview)
 		tick(&row, aidispatch.LLMAuthorDiscovery)
 		tick(&row, aidispatch.LLMAuthorDedupBatch)

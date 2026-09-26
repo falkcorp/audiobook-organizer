@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-09-12
+// last-edited: 2026-09-26
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -196,6 +196,15 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 		case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
 			ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign:
 			if refusal := checkFsRegroupRow(store, c); refusal != nil {
+				report.addReferentConflict(c, refusal)
+			} else {
+				report.Safe++
+			}
+		case ChangeTypeTitleRelinkCredits:
+			// The revert reads the book first; the credit compare-and-set
+			// needs the junction, which the preflight store does not read,
+			// so a later credit change is refused by the revert itself.
+			if _, refusal := CheckRestoreBook(store, c.BookID); refusal != nil {
 				report.addReferentConflict(c, refusal)
 			} else {
 				report.Safe++

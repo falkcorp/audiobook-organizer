@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/link_guard.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a7c81b3-f45d-4156-a464-2cae0ff48561
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package deduphandler
 
@@ -21,13 +21,18 @@ import (
 // is transitive: bulk-link links (A,C) and then (B,C), and link-series unions
 // A–C and B–C into one cluster, and either way A and B end up in one version
 // group although the A–B pair itself was refused. So the guard also checks
-// whole book SETS: a set is refused when any two of its members are at the
-// same cleaned path or have a pending manual candidate between them.
+// whole book SETS: a set is refused when linking it would put two books at
+// the same cleaned path, or two books with a pending manual candidate between
+// them, into one version group.
 //
-// Scope: the guard sees the manual candidates pending when it was built and
-// the books involved in this request. It does not see members a book's
-// existing version group already has; linking into a group can still join a
-// same-path twin that was grouped earlier.
+// Linking a book links its whole existing version group: a merge into a book
+// that is already grouped joins every member of that group. So a set is
+// expanded to the members of each book's existing group before it is checked,
+// and a pair is checked whenever its two books come from different units (a
+// book's existing group, or the book alone when it has none). A pair already
+// in one group together is not re-checked: linking does not join it, and
+// refusing it would block every later link into a group that holds a
+// same-path pair a human grouped earlier.
 //
 // link-cluster, reject-cluster and remove-from-cluster do not use this guard:
 // they act on a book-ID list a human selected on a cluster card, which is a
@@ -36,6 +41,8 @@ type linkGuard struct {
 	es    EmbeddingStore
 	store DedupStore
 	books map[string]*database.Book
+	// groups caches each version group's live members by group ID.
+	groups map[string][]database.Book
 	// manualPairs holds every pending manual book candidate's pair, keyed
 	// with the lower ID first.
 	manualPairs map[[2]string]struct{}
@@ -55,6 +62,7 @@ func newLinkGuard(es EmbeddingStore, store DedupStore) (*linkGuard, error) {
 		es:          es,
 		store:       store,
 		books:       make(map[string]*database.Book),
+		groups:      make(map[string][]database.Book),
 		manualPairs: make(map[[2]string]struct{}, len(manual)),
 	}
 	for _, c := range manual {
@@ -99,14 +107,75 @@ func (g *linkGuard) recheck(c database.DedupCandidate) (string, bool) {
 	return dedup.RecheckAutomatedMerge(g.es, c.ID, c.Status, g.book(c.EntityAID), g.book(c.EntityBID))
 }
 
+// groupMembers returns the live members of version group id, cached. A group
+// that cannot be read is an error: without its members the guard cannot say
+// what the link would join, so the caller refuses rather than links blind.
+func (g *linkGuard) groupMembers(id string) ([]database.Book, error) {
+	if m, ok := g.groups[id]; ok {
+		return m, nil
+	}
+	m, err := g.store.GetBooksByVersionGroup(id)
+	if err != nil {
+		return nil, err
+	}
+	g.groups[id] = m
+	return m, nil
+}
+
+// expand maps every book that linking ids together would put in one version
+// group to its unit: the existing version group it is already in, or its own
+// ID when it has none. Every request book is included, grouped or not.
+func (g *linkGuard) expand(ids []string) (map[string]string, error) {
+	unitOf := make(map[string]string, len(ids))
+	for _, id := range ids {
+		if _, seen := unitOf[id]; seen {
+			continue
+		}
+		b := g.book(id)
+		if b == nil || b.VersionGroupID == nil || *b.VersionGroupID == "" {
+			unitOf[id] = id
+			continue
+		}
+		gid := *b.VersionGroupID
+		unit := "group:" + gid
+		unitOf[id] = unit
+		members, err := g.groupMembers(gid)
+		if err != nil {
+			return nil, fmt.Errorf("read version group %s of %s: %w", gid, id, err)
+		}
+		for i := range members {
+			m := &members[i]
+			if _, seen := unitOf[m.ID]; seen {
+				continue
+			}
+			unitOf[m.ID] = unit
+			if _, cached := g.books[m.ID]; !cached {
+				g.books[m.ID] = m
+			}
+		}
+	}
+	return unitOf, nil
+}
+
 // setRefusal reports whether linking every book in ids together would join a
-// review-queue-only pair.
+// review-queue-only pair, counting the members each book's existing version
+// group brings along (see linkGuard).
 func (g *linkGuard) setRefusal(ids []string) (string, bool) {
-	sorted := append([]string(nil), ids...)
-	sort.Strings(sorted)
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			a, b := sorted[i], sorted[j]
+	unitOf, err := g.expand(ids)
+	if err != nil {
+		return fmt.Sprintf("cannot check the existing version groups this link would join: %v", err), true
+	}
+	all := make([]string, 0, len(unitOf))
+	for id := range unitOf {
+		all = append(all, id)
+	}
+	sort.Strings(all)
+	for i := 0; i < len(all); i++ {
+		for j := i + 1; j < len(all); j++ {
+			a, b := all[i], all[j]
+			if unitOf[a] == unitOf[b] {
+				continue // already in one version group; this link does not join them
+			}
 			if _, ok := g.manualPairs[pairKey(a, b)]; ok {
 				return fmt.Sprintf("manual: %s and %s are pinned for human review; linking this set would link them", a, b), true
 			}

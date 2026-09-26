@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -80,10 +80,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -309,7 +309,7 @@ func processBookForReextractMode(ctx context.Context, store bookFileLister, book
 		counted := split.Counted(segs)
 		hasZero := false
 		for i := range counted {
-			if config.UnderFrozenITunesTree(counted[i].FilePath) {
+			if pathutil.UnderFrozenITunesTree(counted[i].FilePath) {
 				// books/itunes/** is hands-off: never write its rows, and
 				// never leave the book half-filled around them.
 				res.itunes = true

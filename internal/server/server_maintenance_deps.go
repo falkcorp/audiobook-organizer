@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -110,6 +110,9 @@ func (s *Server) FileProvenanceStore() database.FileProvenanceStore {
 // gives: the decorator installed by NewServer hides every capability from a bare
 // assertion. TestMaintenanceStoreAccessorsResolveThroughIndexedStore holds both
 // accessors to that.
+// MergeUserStateStore returns the store for repair-merged-user-state.
+func (s *Server) MergeUserStateStore() merge.UserStateRepairStore { return s.store }
+
 func (s *Server) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
 	if r, ok := database.AsCapability[database.ReviewStatusIndexRepairer](s.store); ok {
 		return r

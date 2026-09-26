@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-08-19
+// last-edited: 2026-09-26
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -44,10 +44,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -210,7 +210,7 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 		// A proposal we cannot carry out is noise in a human's queue at best, and an
 		// invitation to destroy a series at worst. Excluded at the SOURCE so no
 		// downstream classifier heuristic has to re-derive the policy.
-		if config.UnderFrozenITunesTree(v.FilePath) || config.UnderFrozenITunesTree(v.ITunesPath) {
+		if pathutil.UnderFrozenITunesTree(v.FilePath) || pathutil.UnderFrozenITunesTree(v.ITunesPath) {
 			skippedFrozen.Add(1)
 			return nil
 		}

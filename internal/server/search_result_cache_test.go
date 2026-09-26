@@ -1,7 +1,7 @@
 // file: internal/server/search_result_cache_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 220a3f36-7c10-426f-a8ee-c3fefa2ee20e
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package server
 
@@ -683,7 +683,7 @@ func TestSearchResultCache_EveryIndexWriteIsRecorded(t *testing.T) {
 		if err := write(id); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		changed, _, ok := fx.srv.searchChanges.ChangedSince(g)
+		changed, _, ok := fx.srv.searchChanges.ChangedSince(g, 0)
 		if !ok || !containsID(changed, id) {
 			t.Fatalf("%s did not record %s: %v ok=%v", name, id, changed, ok)
 		}
@@ -701,7 +701,7 @@ func TestSearchResultCache_EveryIndexWriteIsRecorded(t *testing.T) {
 	if n := fx.srv.indexBookChunk(fx.pebble, books); n != int64(len(books)) {
 		t.Fatalf("indexBookChunk indexed %d of %d", n, len(books))
 	}
-	changed, _, ok := fx.srv.searchChanges.ChangedSince(g)
+	changed, _, ok := fx.srv.searchChanges.ChangedSince(g, 0)
 	for _, b := range books {
 		if !ok || !containsID(changed, b.ID) {
 			t.Fatalf("indexBookChunk did not record %s: %v ok=%v", b.ID, changed, ok)

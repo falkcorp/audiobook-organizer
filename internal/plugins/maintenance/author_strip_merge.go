@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.7.0
+// version: 1.9.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -263,6 +264,19 @@ type authorStripMergeParams struct {
 	// wrong for a real author whose only book is self-titled, so an apply must
 	// opt in after reading the report's list.
 	DeleteTitleAsAuthor bool `json:"delete_title_as_author"`
+
+	// RelinkTitleAsAuthor, when true (default FALSE) with apply=true,
+	// replaces the credit of every book credited to a title-as-author row (or
+	// to its numbered twin) with the book's real author, when the library's
+	// own evidence names exactly one (see author_strip_merge_relink.go).
+	// Preview first: apply=false with this set lists every relink (book,
+	// junk author, chosen author, sources) and writes nothing, with the
+	// same counts the apply reports. With this AND
+	// delete_title_as_author set, a numbered twin all of whose books were
+	// relinked is deleted too. Limit caps the relinks separately from the
+	// author-row plans: the first Limit books in junk-row-ID, book-ID order
+	// are relinked and the rest reported as deferred.
+	RelinkTitleAsAuthor bool `json:"relink_title_as_author"`
 }
 
 // deleteJunk resolves the tri-state pointer to its default of TRUE.
@@ -293,15 +307,24 @@ type authorStripMergeReport struct {
 	StrippedNoTarget int
 	// TargetIsJunk are rows whose stripped name matches an existing author that
 	// is ITSELF junk. Merging those would consolidate junk into junk and report
-	// it as a success.
-	//
-	// Measured 0 on the live library, and that is expected rather than lucky:
-	// a row whose residue is junk is already rejected by the SOURCE check
-	// above, so "00 Prologue" is deleted as junk and never reaches a merge.
-	// The branch is kept as cheap insurance in case the two predicates ever
-	// diverge — it is NOT what makes the merge safe, and should not be cited
-	// as though it were.
+	// it as a success. The source row is left alone. A target is junk when
+	// either:
+	//   - the name predicate rejects it (dedup.CleanAuthorNameForCreation).
+	//     Measured 0 on the live library, and expected to stay so: a row
+	//     whose residue is junk is already rejected by the SOURCE check, so
+	//     "00 Prologue" is deleted as junk and never reaches a merge; or
+	//   - it is title-as-author (classifyTitleAsAuthor on its full credit
+	//     set, the same gate the delete path uses), WHATEVER
+	//     delete_title_as_author says. "01 Arcane Chef 2" strips to "Arcane
+	//     Chef 2", a row whose only book is "Arcane Chef 2: A LitRPG
+	//     Adventure"; with the flag off that twin was merged into it, which
+	//     consolidated junk into junk (TODO
+	//     STRIP-MERGE-TITLE-TARGET-FLAG-OFF, owner decision 2026-09-26).
 	TargetIsJunk int
+	// TargetUnverified are merges skipped because the target's full credit
+	// set could not be read, so whether it is title-as-author is unknown.
+	// Fail closed: the source row is left alone.
+	TargetUnverified int
 	// MergeTargetRemoved are merges dropped because their target is itself
 	// deleted or merged away by this same run (dropMergesIntoRemovedRows).
 	// Not counted in Mergeable. The source row is left alone.
@@ -331,15 +354,40 @@ type authorStripMergeReport struct {
 	BooksLeftAuthorless int
 	Failed              int
 	Sample              []string
+
+	// Title-as-author relink (author_strip_merge_relink.go). RelinkPlanned
+	// books have exactly one real author; RelinkNoCandidate and
+	// RelinkConflict books are left alone; the Skipped buckets are the
+	// iTunes tree and owner-manual books; RelinkFailed are read or write
+	// failures. Relinked counts books written (apply). RelinkNewAuthors is
+	// how many distinct author rows the relink created (or would create).
+	// TwinDeletes are numbered twins deleted after all their books relinked.
+	RelinkPlanned            int
+	RelinkNoCandidate        int
+	RelinkConflict           int
+	RelinkSkippedITunes      int
+	RelinkSkippedOwnerManual int
+	RelinkFailed             int
+	// RelinkAmbiguous: the one answer names 2+ existing rows (duplicate
+	// names); RelinkDeferred: relinks past limit, left for a later run.
+	RelinkAmbiguous int
+	RelinkDeferred  int
+	// RelinkJournalRows are the undo-journal rows the relink wrote, one
+	// before each author creation and each book's credit move.
+	RelinkJournalRows int
+	Relinked          int
+	RelinkNewAuthors  int
+	TwinDeletes       int
 }
 
 func (r authorStripMergeReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d",
-		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.TitleAsAuthorUnverified, r.Mergeable, r.Ambiguous, r.TargetIsJunk, r.MergeTargetRemoved,
+		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d target-unverified=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d relink-planned=%d relink-no-candidate=%d relink-conflict=%d relink-skipped-itunes=%d relink-skipped-owner-manual=%d relink-failed=%d relink-ambiguous=%d relink-deferred=%d relinked=%d relink-new-authors=%d relink-journal-rows=%d twin-deletes=%d",
+		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.TitleAsAuthorUnverified, r.Mergeable, r.Ambiguous, r.TargetIsJunk, r.TargetUnverified, r.MergeTargetRemoved,
 		r.StrippedNoTarget, r.OutOfScope, r.Placeholders, r.PlaceholdersNoCanonical,
 		r.CanonicalUnknownID, r.Merged, r.Deleted, r.BooksTouched,
-		r.BooksLeftAuthorless, r.Failed)
+		r.BooksLeftAuthorless, r.Failed,
+		r.RelinkPlanned, r.RelinkNoCandidate, r.RelinkConflict, r.RelinkSkippedITunes, r.RelinkSkippedOwnerManual, r.RelinkFailed, r.RelinkAmbiguous, r.RelinkDeferred, r.Relinked, r.RelinkNewAuthors, r.RelinkJournalRows, r.TwinDeletes)
 }
 
 func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
@@ -354,7 +402,12 @@ func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
 			"that carry no usable name are DELETED. Rows whose residue matches nothing are left " +
 			"alone rather than renamed. Also deletes TITLE-AS-AUTHOR rows: a name matching every " +
 			"live book it credits ('Arcane Chef 2' crediting 'Arcane Chef 2: A LitRPG Adventure'), " +
-			"never a row that also credits a differently-titled book. Placeholder rows ('Unknown', 'Various', 'n/a', a duplicate " +
+			"never a row that also credits a differently-titled book (delete_title_as_author=true). A numbered row is " +
+			"never merged into a title-as-author row. relink_title_as_author=true credits each such book to its REAL " +
+			"author when the library's own evidence (provider value, other versions, file artist tags, series " +
+			"siblings) names exactly one, creating the author through the creation gate; conflicts and no-evidence " +
+			"books are listed and left alone, and books/itunes/** and Doctor Who / Big Finish / Torchwood are never " +
+			"touched. Placeholder rows ('Unknown', 'Various', 'n/a', a duplicate " +
 			"'Unknown Author') are MERGED INTO the canonical Unknown Author row, which is never " +
 			"deleted. Pass delete_unmatched=true to delete those too (review " +
 			"the dry run first: 812 on this library, chapter and book titles). Measured 2,793 " +
@@ -406,7 +459,8 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 	log := reporter.Logger()
 	log.Info("author-strip-merge start",
 		"apply", params.Apply, "delete_junk", params.deleteJunk(),
-		"delete_unmatched", params.DeleteUnmatched, "limit", params.Limit)
+		"delete_unmatched", params.DeleteUnmatched, "delete_title_as_author", params.DeleteTitleAsAuthor,
+		"relink_title_as_author", params.RelinkTitleAsAuthor, "limit", params.Limit)
 
 	_ = reporter.UpdateProgress(0, 2, "Listing authors…")
 	authors, err := store.GetAllAuthors()
@@ -454,8 +508,42 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		seriesByID[s.ID] = s
 	}
 
+	// isTitleAsAuthor is THE title-as-author gate, used both to classify a
+	// row for deletion and to refuse it as a merge target, so the two can
+	// never judge one row differently. A cheap prefilter on the
+	// primary-AuthorID index, then confirmation on the full credit set the
+	// delete would act on (see classifyTitleAsAuthor). A credit-read error is
+	// returned: the caller must not act on the row. Memoized by author ID,
+	// because a row can be judged once as a source and again as the target
+	// of every numbered twin that strips to its name.
+	type titleVerdict struct {
+		yes bool
+		err error
+	}
+	titleVerdicts := map[int]titleVerdict{}
+	isTitleAsAuthor := func(a database.Author) (bool, error) {
+		if v, ok := titleVerdicts[a.ID]; ok {
+			return v.yes, v.err
+		}
+		var v titleVerdict
+		if classifyTitleAsAuthor(a, booksByAuthorID[a.ID], seriesByID) {
+			credits, cErr := store.GetBooksByAuthorIDForRelinkCore(a.ID)
+			if cErr != nil {
+				v.err = cErr
+			} else {
+				v.yes = classifyTitleAsAuthor(a, credits, seriesByID)
+			}
+		}
+		titleVerdicts[a.ID] = v
+		return v.yes, v.err
+	}
+
 	report := authorStripMergeReport{TotalAuthors: len(authors)}
 	var plans []authorStripPlan
+	// titleRows are the rows classified title-as-author; twins are numbered
+	// rows refused a merge because their target is one. Both are relink
+	// sources below.
+	var titleRows, twins []database.Author
 	tombstoneWarned := false
 
 	// The canonical placeholder, resolved the same way author-id-repair
@@ -485,23 +573,18 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 			plans = append(plans, authorStripPlan{from: a, into: &into, reason: "placeholder"})
 			continue
 		}
-		// Cheap prefilter on the primary-AuthorID index, then confirm on the
-		// full credit set the delete would act on (see classifyTitleAsAuthor).
-		if classifyTitleAsAuthor(a, booksByAuthorID[a.ID], seriesByID) {
-			credits, cErr := store.GetBooksByAuthorIDForRelinkCore(a.ID)
-			if cErr != nil {
-				report.TitleAsAuthorUnverified++
-				log.Warn("author-strip-merge: cannot read credits for title-as-author candidate; leaving it",
-					"author_id", a.ID, "err", cErr)
-				continue
+		if isTitle, cErr := isTitleAsAuthor(a); cErr != nil {
+			report.TitleAsAuthorUnverified++
+			log.Warn("author-strip-merge: cannot read credits for title-as-author candidate; leaving it",
+				"author_id", a.ID, "err", cErr)
+			continue
+		} else if isTitle {
+			report.TitleAsAuthor++
+			titleRows = append(titleRows, a)
+			if params.DeleteTitleAsAuthor {
+				plans = append(plans, authorStripPlan{from: a, reason: "title-as-author"})
 			}
-			if classifyTitleAsAuthor(a, credits, seriesByID) {
-				report.TitleAsAuthor++
-				if params.DeleteTitleAsAuthor {
-					plans = append(plans, authorStripPlan{from: a, reason: "title-as-author"})
-				}
-				continue
-			}
+			continue
 		}
 		cleaned, ok := dedup.CleanAuthorNameForCreation(a.Name)
 		if ok && isTrackOrTimecodeArtifact(a.Name) {
@@ -555,9 +638,90 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 				report.TargetIsJunk++
 				continue
 			}
+			// A title-as-author target is junk too, whatever
+			// delete_title_as_author says: with the flag off the target
+			// survives this run, and merging the numbered twin into it
+			// would consolidate junk into junk (see TargetIsJunk).
+			if isTitle, cErr := isTitleAsAuthor(targets[0]); cErr != nil {
+				report.TargetUnverified++
+				log.Warn("author-strip-merge: cannot read merge target's credits; not merging",
+					"from_id", a.ID, "from", a.Name, "into_id", targets[0].ID, "err", cErr)
+				continue
+			} else if isTitle {
+				report.TargetIsJunk++
+				twins = append(twins, a)
+				log.Info("author-strip-merge: not merging into a title-as-author row",
+					"from_id", a.ID, "from", a.Name, "into_id", targets[0].ID, "into", targets[0].Name)
+				continue
+			}
 			report.Mergeable++
 			t := targets[0]
 			plans = append(plans, authorStripPlan{from: a, into: &t, reason: "merge"})
+		}
+	}
+
+	// Title-as-author relink. Runs before any delete so a relinked book
+	// carries its real author when the junk row's delete re-reads its
+	// credits; a report-only run with the flag set computes the same
+	// decisions without writing, so its plan and counts match the apply's.
+	relinkWrite := params.Apply && params.RelinkTitleAsAuthor
+	var relinkedBooks map[string]bool
+	if params.RelinkTitleAsAuthor && len(titleRows)+len(twins) > 0 {
+		_ = reporter.UpdateProgress(1, 2, "Relinking title-as-author books…")
+		junkIDs := make(map[int]bool, len(titleRows)+len(twins))
+		junkRows := append(append([]database.Author{}, titleRows...), twins...)
+		for _, a := range junkRows {
+			junkIDs[a.ID] = true
+		}
+		idx := newTitleRelinkIndex(allBooksCore, authors, byName, seriesByID, junkIDs)
+		creator := newAuthorPathLinkCreator(store, !relinkWrite)
+		rel, rErr := relinkTitleAsAuthorBooks(ctx, store, creator, junkRows, &idx, relinkWrite, params.Limit, registry.ReporterOpID(reporter), log)
+		if rErr != nil {
+			return rErr
+		}
+		for _, r := range rel.Relinks {
+			switch r.Outcome {
+			case titleRelinkOutcomeRelink:
+				report.RelinkPlanned++
+				if relinkWrite {
+					report.Relinked++
+				}
+			case titleRelinkOutcomeNoCandidate:
+				report.RelinkNoCandidate++
+			case titleRelinkOutcomeConflict:
+				report.RelinkConflict++
+			case titleRelinkOutcomeITunes:
+				report.RelinkSkippedITunes++
+			case titleRelinkOutcomeOwnerManual:
+				report.RelinkSkippedOwnerManual++
+			case titleRelinkOutcomeFailed:
+				report.RelinkFailed++
+			case titleRelinkOutcomeAmbiguous:
+				report.RelinkAmbiguous++
+			case titleRelinkOutcomeDeferred:
+				report.RelinkDeferred++
+			}
+		}
+		report.RelinkNewAuthors = len(rel.NewAuthors)
+		report.RelinkJournalRows = rel.JournalRows
+		for _, na := range rel.NewAuthors {
+			log.Info("author-strip-merge relink author row", "author_id", na.AuthorID, "name", na.Name, "books", na.Books, "created", relinkWrite)
+		}
+		if params.RelinkTitleAsAuthor {
+			relinkedBooks = rel.RelinkedBooks
+			// A numbered twin whose every book now carries its real author
+			// holds no credit worth keeping: delete it with the title rows.
+			// Only then: its books' titles were never judged, so deleting it
+			// with any book still credited would strip a credit no gate
+			// checked.
+			if params.DeleteTitleAsAuthor {
+				for _, tw := range twins {
+					if rel.AllRelinked[tw.ID] {
+						report.TwinDeletes++
+						plans = append(plans, authorStripPlan{from: tw, reason: "title-as-author-twin"})
+					}
+				}
+			}
 		}
 	}
 
@@ -667,6 +831,11 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		// failed on its third book did rewrite two, and the report must not
 		// shrink because of it.
 		for _, id := range authorless {
+			if relinkedBooks[id] {
+				// Relinked to its real author (in a report-only run, will
+				// be), so the delete does not leave it authorless.
+				continue
+			}
 			authorlessBooks[id] = struct{}{}
 		}
 		if params.Apply {
@@ -706,11 +875,17 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 // into book.AuthorID and the junction: the 2026-08-24 dangling-AuthorID
 // incident. With the merge first, the target's delete re-reads its credits
 // and unlinks the merged-in books too, which the title-as-author gate never
-// judged (it judged the target's credits before the merge). The concrete
-// shape: "01 Arcane Chef 2" strips to "Arcane Chef 2", a row the same run
-// deletes as title-as-author. So the delete set and the merge-target set are
-// made disjoint here, at planning time and before Limit, which keeps the dry
-// run's plan and counts identical to the apply's.
+// judged (it judged the target's credits before the merge). So the delete
+// set and the merge-target set are made disjoint here, at planning time and
+// before Limit, which keeps the dry run's plan and counts identical to the
+// apply's.
+//
+// The shape this was written for, "01 Arcane Chef 2" stripping to "Arcane
+// Chef 2" (a row the same run deletes as title-as-author), no longer reaches
+// here: the planner refuses a title-as-author target as target-is-junk
+// before a merge is planned, flag on or off. This remains the backstop for
+// any other plan that removes a merge's target (a junk or unmatched delete,
+// a placeholder merge).
 //
 // One pass on purpose: a merge dropped here leaves its source alive, which
 // could in principle re-admit a merge into that source, but that source still

@@ -1,7 +1,7 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.2.0
+// version: 1.3.2
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package merge
 
@@ -37,6 +37,7 @@ func FollowAbsorbedJournaled(db UserProgressMerger, survivorID, absorbedID strin
 	if err != nil {
 		return nil, false, fmt.Errorf("list users: %w", err)
 	}
+	completePendingInvolving(db, []string{survivorID, absorbedID})
 	// Per user (snapshotPair): a user whose progress cannot be read is
 	// skipped and logged, their rows left where they are, and only the users
 	// in the before-snapshot are followed, so no progress moves unjournaled.
@@ -50,12 +51,15 @@ func FollowAbsorbedJournaled(db UserProgressMerger, survivorID, absorbedID strin
 			return nil, false, fmt.Errorf("journal progress before follow: %w", err)
 		}
 	}
-	if slice == nil {
-		FollowMergeUsers(db, follower, survivorID, []string{absorbedID}, followable)
-	} else {
-		if err := followSlice(db, follower, followable, survivorID, absorbedID, *slice); err != nil {
-			return buildProgressJournal(before, progressSnap{}), true, err
-		}
+	// followOneLoser writes the pending-repair record first; users skipped
+	// above keep it alive so the sweep moves them once they read cleanly. An
+	// error here means the move failed AND no record holds it: the caller
+	// must not retire the absorbed book.
+	if followable == nil {
+		followable = []database.User{} // nil would mean every user
+	}
+	if err := followOneLoser(db, follower, survivorID, absorbedID, followable, slice, len(skipped) > 0); err != nil {
+		return buildProgressJournal(before, progressSnap{}), true, err
 	}
 	after, _, afterSkipped := snapshotPair(db, followable, absorbedID, survivorID)
 	// A user whose after-snapshot failed has no after-state in the journal;
@@ -74,7 +78,7 @@ type SliceMapping struct {
 	Mappable bool
 }
 
-// followSlice is FollowMerge for an absorbed book that is a SLICE of the
+// followSliceFor is mergeUserProgressFor for an absorbed book that is a SLICE of the
 // survivor (a chapter / split part). Whole-book dedup merges compare
 // ProgressPct across two different-length copies of one book and carry the
 // further one's state, Finished and its iTunes play-count mark included. For a
@@ -87,29 +91,15 @@ type SliceMapping struct {
 //   - no play-count mark is carried;
 //   - the absorbed book's latest position is mapped into the survivor's
 //     timeline (slice offset + position) and written only when it is further
-//     than the survivor's own latest position, and only when Mappable.
+//     than the survivor's own latest position, and only when Mappable;
+//   - the rest of the whole-book rule still applies (user_state_merge.go):
+//     last played (LastActivityAt) is the later of the two and
+//     HideFromContinueListening is kept if either side has it. Bookmarks are
+//     copied by moveLoserState like any merge.
 //
 // The absorbed side is drained as FollowMerge does. Nothing is lost: the
 // caller journaled the absorbed book's state and positions beforehand, and
 // UndoCombine writes them back.
-func followSlice(db UserProgressMerger, follower database.SyncIdentityStore, users []database.User, survivorID, absorbedID string, slice SliceMapping) error {
-	if _, err := follower.MintOrGetSyncID(survivorID); err != nil {
-		return fmt.Errorf("mint survivor sync id: %w", err)
-	}
-	if err := follower.RecordSyncMerge(absorbedID, survivorID); err != nil {
-		return fmt.Errorf("record sync redirect: %w", err)
-	}
-	for _, u := range users {
-		if u.ID == "" {
-			continue
-		}
-		if err := followSliceFor(db, u.ID, survivorID, absorbedID, slice); err != nil {
-			return fmt.Errorf("user %s: %w", u.ID, err)
-		}
-	}
-	return nil
-}
-
 func followSliceFor(db userPositionStore, userID, survivorID, absorbedID string, slice SliceMapping) error {
 	loserState, err := db.GetUserBookState(userID, absorbedID)
 	if err != nil {
@@ -119,7 +109,7 @@ func followSliceFor(db userPositionStore, userID, survivorID, absorbedID string,
 	if err != nil {
 		return fmt.Errorf("list absorbed positions: %w", err)
 	}
-	if loserState == nil && len(loserPositions) == 0 {
+	if !hasCarryableState(loserState, loserPositions) {
 		return nil
 	}
 	var loserLatest *database.UserPosition
@@ -145,7 +135,7 @@ func followSliceFor(db userPositionStore, userID, survivorID, absorbedID string,
 			if survLatest != nil {
 				seg = survLatest.SegmentID
 			}
-			if err := db.SetUserPosition(userID, survivorID, seg, mapped); err != nil {
+			if err := carryPosition(db, userID, survivorID, database.UserPosition{SegmentID: seg, PositionSeconds: mapped, UpdatedAt: loserLatest.UpdatedAt}); err != nil {
 				return fmt.Errorf("carry mapped position: %w", err)
 			}
 		}
@@ -153,6 +143,25 @@ func followSliceFor(db userPositionStore, userID, survivorID, absorbedID string,
 	survState, err := db.GetUserBookState(userID, survivorID)
 	if err != nil {
 		return fmt.Errorf("get survivor state: %w", err)
+	}
+	if survState != nil && loserState != nil {
+		// Last played = max, hide = OR (the parts of the whole-book rule a
+		// slice keeps). Status, FinishedAt and progress stay the survivor's.
+		upd := *survState
+		changed := false
+		if loserState.LastActivityAt.After(upd.LastActivityAt) {
+			upd.LastActivityAt = loserState.LastActivityAt
+			changed = true
+		}
+		if loserState.HideFromContinueListening && !upd.HideFromContinueListening {
+			upd.HideFromContinueListening = true
+			changed = true
+		}
+		if changed {
+			if err := db.SetUserBookState(&upd); err != nil {
+				return fmt.Errorf("carry last-played/hide onto survivor: %w", err)
+			}
+		}
 	}
 	if survState == nil && loserState != nil && loserState.Status != "" {
 		started := *loserState
@@ -173,13 +182,7 @@ func followSliceFor(db userPositionStore, userID, survivorID, absorbedID string,
 		}
 	}
 	if loserState != nil {
-		drained := *loserState
-		drained.Status = ""
-		drained.StatusManual = false
-		drained.ProgressPct = 0
-		drained.TotalListenedSeconds = 0
-		drained.LastSegmentID = ""
-		if err := db.SetUserBookState(&drained); err != nil {
+		if err := db.SetUserBookState(drainedUserState(*loserState)); err != nil {
 			return fmt.Errorf("drain absorbed state: %w", err)
 		}
 	}

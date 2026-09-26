@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8f5723a5-46b7-409b-901e-e791fdd71228
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -941,8 +942,12 @@ func TestAuthorStripMerge_TitleAsAuthorChecksEveryCredit(t *testing.T) {
 // bug with a track prefix, strips to "Arcane Chef 2" and would be merged into
 // T. With T first, the merge wrote T's deleted ID into S's book (dangling
 // AuthorID); with S first, T's delete unlinked S's book, which the gate never
-// judged. Both orderings: the merge is dropped, S and its book are untouched,
-// T is deleted, and the dry run reports the same plan.
+// judged. Both orderings: the merge is never planned, S and its book are
+// untouched, T is deleted, and the dry run reports the same plan.
+//
+// Since STRIP-MERGE-TITLE-TARGET-FLAG-OFF (2026-09-26) the planner refuses a
+// title-as-author target up front, so this is reported as target-is-junk,
+// not merge-target-removed (dropMergesIntoRemovedRows is now the backstop).
 func TestAuthorStripMerge_TitleAsAuthorRowIsNeverAMergeTarget(t *testing.T) {
 	for _, ids := range []struct {
 		name string
@@ -997,7 +1002,7 @@ func TestAuthorStripMerge_TitleAsAuthorRowIsNeverAMergeTarget(t *testing.T) {
 					}
 				}
 			}
-			for _, want := range []string{"merge-target-removed=1 ", "mergeable=0 ", "title-as-author=1 "} {
+			for _, want := range []string{"target-is-junk=1 ", "merge-target-removed=0 ", "mergeable=0 ", "title-as-author=1 "} {
 				if !strings.Contains(summary, want) {
 					t.Errorf("apply summary missing %q: %s", want, summary)
 				}
@@ -1027,4 +1032,108 @@ func planOnlySummary(line string) string {
 		keep = append(keep, f)
 	}
 	return strings.Join(keep, " ")
+}
+
+// titleTwinRun runs the op over the Arcane Chef twin shape: T "Arcane Chef 2"
+// credits only its self-titled book, S "01 Arcane Chef 2" strips to T's name.
+// creditErr, when set, makes T's full credit read fail.
+func titleTwinRun(t *testing.T, params string, extra []database.Author, extraBooks []database.BookCore, creditErr error) (*stripMergeCalls, string) {
+	t.Helper()
+	calls := &stripMergeCalls{}
+	authors := append([]database.Author{
+		{ID: 100, Name: "Arcane Chef 2"},
+		{ID: 200, Name: "01 Arcane Chef 2"},
+	}, extra...)
+	books := append([]database.BookCore{
+		{ID: "bk-t", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: titleAsAuthorIntPtr(100)},
+		{ID: "bk-s", Title: "Fish Tales", AuthorID: titleAsAuthorIntPtr(200)},
+	}, extraBooks...)
+	p := newTitleAsAuthorPluginWith(calls, authors, books, nil)
+	if creditErr != nil {
+		store := p.deps.(*fakeDeps).store.(*database.MockStore)
+		inner := store.GetBooksByAuthorIDForRelinkFunc
+		store.GetBooksByAuthorIDForRelinkFunc = func(authorID int) ([]database.BookCore, error) {
+			if authorID == 100 {
+				return nil, creditErr
+			}
+			return inner(authorID)
+		}
+	}
+	rep := &summaryReporter{}
+	if err := p.runAuthorStripMerge(context.Background(), json.RawMessage(params), rep); err != nil {
+		t.Fatalf("runAuthorStripMerge: %v", err)
+	}
+	return calls, rep.summary(t)
+}
+
+// 🔴 STRIP-MERGE-TITLE-TARGET-FLAG-OFF (owner decision 2026-09-26). With
+// delete_title_as_author=false, T survives the run, so the old planner merged
+// S into it: junk consolidated into junk and reported as a success. A
+// title-as-author target is target-is-junk whatever the flag says: nothing is
+// merged, deleted or rewritten, and T is still counted as title-as-author.
+func TestAuthorStripMerge_FlagOffNeverMergesIntoTitleAsAuthorTarget(t *testing.T) {
+	for _, params := range []string{`{"apply":true}`, `{"apply":true,"delete_title_as_author":false}`, `{}`} {
+		t.Run(params, func(t *testing.T) {
+			calls, summary := titleTwinRun(t, params, nil, nil, nil)
+			if len(calls.deleted) != 0 {
+				t.Errorf("rows deleted with the flag off: %v", calls.deleted)
+			}
+			if len(calls.tombstones) != 0 {
+				t.Errorf("a merge ran (tombstones %v)", calls.tombstones)
+			}
+			if len(calls.setAuthors) != 0 || len(calls.updated) != 0 {
+				t.Errorf("books rewritten: setAuthors=%v updated=%v", calls.setAuthors, calls.updated)
+			}
+			for _, want := range []string{"target-is-junk=1 ", "mergeable=0 ", "merged=0 ", "title-as-author=1 ", "merge-target-removed=0 "} {
+				if !strings.Contains(summary, want) {
+					t.Errorf("summary missing %q: %s", want, summary)
+				}
+			}
+		})
+	}
+}
+
+// The target gate does not stop ordinary merges: "01 Stephen King" still
+// merges into Stephen King, whose self-titled book passes the primary-author
+// prefilter but whose full credit set includes "The Stand".
+func TestAuthorStripMerge_FlagOffStillMergesIntoRealAuthor(t *testing.T) {
+	calls, summary := titleTwinRun(t, `{"apply":true}`,
+		[]database.Author{{ID: 101, Name: "Stephen King"}, {ID: 201, Name: "01 Stephen King"}},
+		[]database.BookCore{
+			{ID: "bk-king-self", Title: "Stephen King", AuthorID: titleAsAuthorIntPtr(101)},
+			{ID: "bk-king-stand", Title: "The Stand", AuthorID: titleAsAuthorIntPtr(101)},
+			{ID: "bk-king-numbered", Title: "Carrie", AuthorID: titleAsAuthorIntPtr(201)},
+		}, nil)
+	if !containsInt(calls.deleted, 201) {
+		t.Errorf("numbered row 201 was not merged away; deleted=%v", calls.deleted)
+	}
+	if containsInt(calls.deleted, 200) || containsInt(calls.deleted, 100) {
+		t.Errorf("the Arcane Chef rows were touched; deleted=%v", calls.deleted)
+	}
+	merged := false
+	for _, ts := range calls.tombstones {
+		merged = merged || (ts[0] == 201 && ts[1] == 101)
+	}
+	if !merged {
+		t.Errorf("no 201 -> 101 merge tombstone; tombstones=%v", calls.tombstones)
+	}
+	for _, want := range []string{"mergeable=1 ", "merged=1 ", "target-is-junk=1 "} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary missing %q: %s", want, summary)
+		}
+	}
+}
+
+// Fail closed: when the target's full credit set cannot be read, its
+// title-as-author status is unknown, so the twin is not merged into it.
+func TestAuthorStripMerge_UnreadableTargetCreditsBlockMerge(t *testing.T) {
+	calls, summary := titleTwinRun(t, `{"apply":true}`, nil, nil, errors.New("credit read failed"))
+	if len(calls.deleted) != 0 || len(calls.tombstones) != 0 || len(calls.setAuthors) != 0 {
+		t.Errorf("wrote with unverified target: deleted=%v tombstones=%v setAuthors=%v", calls.deleted, calls.tombstones, calls.setAuthors)
+	}
+	for _, want := range []string{"target-unverified=1 ", "title-as-author-unverified=1 ", "mergeable=0 ", "target-is-junk=0 "} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary missing %q: %s", want, summary)
+		}
+	}
 }

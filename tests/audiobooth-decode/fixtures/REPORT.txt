@@ -8,7 +8,7 @@ Models: 19 of 26 decoded with data
   decoded  library_filterdata as FilterDataResponse
   decoded  personalized as [Personalized.Section]
   decoded  items_title as Page<Book>
-  decoded  items_collapse_series as Page<Book> (vacuous, see below)
+  decoded  items_collapse_series as Page<Book>
   decoded  items_filter_series as Page<Book>
   decoded  items_filter_narrator as Page<Book>
   decoded  items_filter_genre as Page<Book>
@@ -91,7 +91,7 @@ Models:
   decoded  Author x14
   decoded  AuthorDetails x1
   decoded  Authorize x3
-  decoded  Book x85
+  decoded  Book x84
   decoded  Collection x7
   N/A      Connection: app state (Keychain), never a response
   EMPTY    EreaderDevice: only ever decoded as an empty array (vacuous)
@@ -114,7 +114,6 @@ Models:
   decoded  User x3
   decoded  YearStats x1
 Vacuous rows (decoded, but proves nothing about populated data):
-  items_collapse_series: the server ignores collapseseries: both books of 'Homeric Epics' come back uncollapsed and no collapsedSeries element is emitted, so Book.CollapsedSeries is never exercised (behaviour gap, not a decode failure)
   recent_episodes: podcast-only data; a book library has no episodes, so [] is the correct answer
   listening_sessions: sessions are not persisted server-side (stats.go), so the page is always empty
   item_listening_sessions: sessions are not persisted server-side (stats.go), so the page is always empty

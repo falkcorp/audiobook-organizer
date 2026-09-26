@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_junk_titles.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9c4e7a12-3b58-4d06-8f21-7ae5c0d94b63
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -115,7 +115,7 @@ func (p *Plugin) runRepairJunkTitles(ctx context.Context, raw json.RawMessage, r
 			skipOwnerManual.Add(1)
 			continue
 		}
-		if config.UnderFrozenITunesTree(all[i].FilePath) {
+		if pathutil.UnderFrozenITunesTree(all[i].FilePath) {
 			skipITunes.Add(1)
 			continue
 		}
@@ -199,7 +199,7 @@ func (p *Plugin) runRepairJunkTitles(ctx context.Context, raw json.RawMessage, r
 				skipOwnerManual.Add(1)
 				return nil
 			}
-			if config.UnderFrozenITunesTree(fp) {
+			if pathutil.UnderFrozenITunesTree(fp) {
 				skipITunes.Add(1)
 				return nil
 			}
