@@ -1,0 +1,46 @@
+# file: .woodpecker/test-rest.yaml
+# version: 1.0.0
+# guid: c84e1b3d-2f9a-4c57-8d06-e3a1b7f5d942
+# last-edited: 2026-09-26
+#
+# `make ci` test-short, part 3 of 3: every other package in `go list ./...`.
+# That includes internal/plugins/maintenance (65-110 s), internal/operations/
+# registry (about 95 s), internal/applygate (about 450 s on Linux) and the
+# remaining decode packages: audiobooks, audioutil, fingerprint, mediainfo,
+# metadata, metafetch, organizer, plugins/acoustid, remux, transcode and
+# server/handlers/audiobooks.
+#
+# The exclusion list below must stay the exact complement of the other two test
+# workflows, so each package runs exactly once and the coverage sum counts it
+# once. `go list` runs on a fresh clone, where web/node_modules does not exist.
+# That keeps the third-party Go package vendored inside it out of the list.
+#
+# The decode packages need ffmpeg, ffprobe and fpcalc, so this runs on the Mac
+# agent (local backend), never on the prod host.
+
+labels:
+  host: mac
+
+when:
+  - event: [push, pull_request, manual]
+
+clone:
+  - name: clone
+    image: woodpeckerci/plugin-git:2.10.1@sha256:550075c844fcec0af41d9d28f9860aa5d8c43e1e9419be4b9266dc02c2f29804
+    settings:
+      lfs: false  # GitHub's LFS budget is exhausted; no test reads LFS content
+      depth: 50
+
+steps:
+  - name: test
+    # Local backend: the image is not pulled (see test-server-scanner.yaml).
+    image: golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+    environment:
+      GOTOOLCHAIN: go1.27.1
+    commands:
+      - command -v ffmpeg && command -v ffprobe && command -v fpcalc
+      - >-
+        PKGS=$$(go list ./... | grep -v /node_modules/ |
+        grep -vxE 'github.com/falkcorp/audiobook-organizer/internal/(database|server|scanner|server/handlers/abs)')
+        && go test $$PKGS -short -race -covermode=atomic -coverprofile=cover.out -timeout 25m
+      - awk -v wf=test-rest 'NR>1{t+=$$2; if($$3>0)c+=$$2} END{printf "CI-COVERAGE workflow=%s covered=%d total=%d\n", wf, c, t}' cover.out
