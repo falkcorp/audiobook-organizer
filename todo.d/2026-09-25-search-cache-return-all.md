@@ -1,1 +1,0 @@
-- [ ] **SEARCH-INFINITE-SCROLL** Later, not now (owner 2026-09-25): an infinite-scroll results model backed by a long-lived result cache, prewarmed in the background on startup.

@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.16 -->
+<!-- version: 10.73.17 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-25 -->
+<!-- last-edited: 2026-09-26 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,82 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [x] **ABS-ALIAS-HELPER** Owner 2026-09-25: "fix that better in the future and just create some helper to handle all that." #3558 fixed mark-as-finished for old (merged-away) item IDs endpoint by endpoint: GET progress, GET item and play echo the requested ID, and `/api/me` lists an extra progress row per old ID. Replace that with ONE helper that every ABS handler goes through: resolve requested ID → canonical book, and on response rewrite item-ID fields back to the requested ID. It must cover bookmarks, which #3558 did not. It must also stop the side effect #3558 accepted: AudioBooth's Stats "items finished" counts each alias row, so a finished merged book counts twice. Options: send `/api/me` alias rows only for IDs the client has actually used (track per user), or retire aliases once the client has re-fetched under the canonical ID. Done 2026-09-25 (fix/abs-alias-helper-cover-local): `abs/item_ref.go` is the one resolver (item, play, cover, file, progress, batch, bookmarks, offline replay); uses are recorded per user in the new `sync_alias_use` keyspace and `/api/me` sends alias rows only for used ids; bookmarks read and write across the item's alias set. Retirement was not built; see ABS-ALIAS-RETIRE.
+- [ ] **ABS-ALIAS-RETIRE** Follow-up to ABS-ALIAS-HELPER. A merged book the user really opened through its old id still gets two `/api/me` rows (canonical + alias), so it still counts twice in AudioBooth's "items finished". Retiring an alias once the client re-fetches under the canonical id would end that, but only if AudioBooth does not re-read its local alias-keyed row after we stop sending it. Check AudioBooth's item page and download code before building it. Also: the one-time seed (`aliasSeedSince` in `abs/userdata.go`) records the aliases of every item touched between 2026-09-25 and the user's first list after deploy, so a late deploy seeds more aliases than needed.
+
+- [x] **ABS-COVER-LOCAL** ABS shows no cover for books whose organizer cover is a local cover (`cover_url=/api/v1/covers/local/<hash>.jpg`). Example: Arcane Chef book 1 (01KZRBPK913Y3HKS3TQB8JQJKJ). The web UI shows the cover; ABS item `coverPath` is null and `/api/items/:id/cover` returns 404. Find the mapper gap and count affected books. Done 2026-09-25 (fix/abs-alias-helper-cover-local): the ABS cover resolver only looked for `covers/<bookID>.<ext>`, but extracted art lives at `.covers/<sha256>.<ext>`. It now falls back to the file a local `cover_url` names. The count was not taken because it needs a prod read; see ABS-COVER-LOCAL-COUNT.
+- [ ] **ABS-COVER-LOCAL-COUNT** Count the books the ABS-COVER-LOCAL fix affected: primary, organized books whose `cover_url` starts with `/api/v1/covers/local/`, whose file stem is not the book id, and which have no `covers/<bookID>.*` file. Needs a read-only prod query.
+
+- [ ] **ACTIVITY-DEF-TAG-ALIAS** `GET /api/v1/activity?tags=def:<id>` still splits a renamed op's history. `reporter_db.go` tags every op activity row `def:<defID>` with the ID it ran under, and rows are never rewritten, so `tags=def:library.optimize` misses runs after the rename and `tags=def:maintenance.library-optimize` misses runs before it. The `?type=` filter was made alias-aware on 2026-09-25 (`ActivityFilter.TypeAliases`), but `Tags` is AND semantics: a `def:` tag needs an any-of group inside one AND term. The cost is a new filter shape in all three stores (nuts `matchesFilter`, SQL `buildFilter` with `json_each`, Pebble residual predicate) plus handler resolution of `def:` tags through the registry the way `activityTypeSpellings` does it. Low severity: the UI filters on free-form types, and no code hard-codes a `def:` tag for a renamed op.
+
+- [ ] **AUDIOBOOTH-DECODE-CI** Wire `make audiobooth-decode` into CI. The Go half
+      (`TestAudioBoothFixtures_ReplayEveryAppRequest`) already runs in `make ci`,
+      but the Swift decode only runs on a Mac with Swift 6.2+. Options: a macOS
+      runner, or a `swift:6.2` Linux container. The Linux option is untested:
+      swift-corelibs-foundation must compile the staged AudioBooth models, and its
+      `URLComponents` must encode queries the way the Go replay assumes (it leaves
+      `+` literal). Also decide whether CI should fail when the regenerated
+      fixtures differ from the committed ones. They churn today, because session
+      ids and timestamps are per-run.
+- [ ] **ABS-COLLAPSESERIES** `GET /api/libraries/:id/items?collapseseries=1` is
+      ignored: two books in one series come back as two rows and no
+      `collapsedSeries` element is emitted (found by the AudioBooth decode proof,
+      fixture `tests/audiobooth-decode/fixtures/items_collapse_series.json`).
+      AudioBooth sends it when "Collapse series in library" is on
+      (`LibraryPageModel.swift:338`). Implement it with the `Book.CollapsedSeries`
+      shape the app decodes (`id`, `name`, `numBooks`, `libraryItemIds` required),
+      then drop the manifest row's `vacuous` note and add a `nonEmpty` check.
+
+- [ ] **STRIP-MERGE-TITLE-TARGET-FLAG-OFF** Owner decision: with `delete_title_as_author=false`, `maintenance.author-strip-merge` still merges a numbered twin ("01 Arcane Chef 2") into a row it classifies as title-as-author ("Arcane Chef 2"). Nothing dangles, but it consolidates junk into junk. Option: treat a title-as-author-classified target as `target-is-junk` whatever the flag. Cost: one credit read per such merge candidate; the twin is then left alone instead of merged.
+- [ ] **COPY-KEEPER-NON-ITUNES-OUTSIDE** When a book has no own-folder row for a copy cluster, `keeperLess` does not prefer a non-iTunes row over a `books/itunes/**` row among out-of-folder rows, so `zero_rows_only` can still skip such a book as iTunes. Decide whether the database package should know the frozen-tree rule.
+
+- [ ] **BUILD-FOLDER-HELD-75** The `build-folder-book-files` dry run (2026-09-25) found 106 books; 31 clean ones were applied (1,010 rows). Of the other 75, 58 share folder files with another live book (building would show a truncated book, e.g. Warforged Sorcerer 10/52), and 54 look multi-work. Owner chose "report, then decide": list who owns the shared files. Doctor Who (Farewell, Great Macedon) and The Forsaken God stay excluded.
+- [ ] **REPOINT-FOLDER-AUDIO-RUN** Dry-run then apply `maintenance.repoint-missing-to-folder-audio` (#3551, deployed 2026-09-25) for ABS books reading duration 0.
+- [ ] **C2B-SEVEN-GROUPS** Re-ask the owner about the 7 parked C2b clone groups (parked 2026-09-24 night).
+- [ ] **CLONE-LINK-PROMOTE** Build the approved link mode (~1,030 identical groups) and promote mode (~420 tag-edited groups) for the iTunes clone op.
+- [ ] **TWO-PRIMARIES-COUNT** Read-only count of version groups with two primaries; send the Bern Dean missed duplicate to dedup review; investigate wrong-author folders via DB metadata + organize.
+
+- [ ] **DEDUP-REVIEW-ONLY-FOLLOWUPS** Leftovers from the fix/dedup-review-2 guard work (manual and same-path candidates are review-queue-only). (1) Bulk-link and link-series check the books in the request, but linking into an EXISTING version group can still join a same-path twin grouped earlier; `linkGuard` in `internal/server/handlers/dedup/link_guard.go` documents the gap. (2) `dedup.purge-legacy-fp-candidates` does not check same-path pairs, because it loads no books. (3) `breakdown_backfill.go` skips manual rows only on its snapshot, and its `UpdateCandidateScore` write is unguarded; route it through a guarded write like `UpdateCandidateScores`. (4) Owner question: a scanner re-upsert (`UpsertCandidateNew`) still rewrites band/score on a pinned scanner row. That is the same shape as the rescore finding. Should a pin freeze the score too?
+
+- [ ] **FP-REFINGERPRINT-ROUTE** (owner decision) Legacy-era head prints (pre-2026-09-19 misdecode) are only replaced by `acoustid.backfill`, which runs fpcalc locally, but decoding on U0 is banned. Pick one: add a Mac remote-worker mode for head prints (like #3477 did for `acoustid.window-backfill`), allow a one-off U0 exception, or retire head prints as a fuzzy signal in favour of windowed prints. Gate: `legacy_era` in `GET /api/v1/signals/coverage`. Plan: `docs/audio-fingerprint/threshold-recalibration-plan.md`.
+- [ ] **FP-FPIDX-LEGACY-PURGE** `fpidx:`/`fpidx_meta:` rows written from legacy-era prints are never removed. `dedup.lsh-index-build` skips legacy rows and does not delete them, and `LSHIndexVersion` was not bumped. `PebbleStore.LSHProbe` ranks by band hits and applies `MaxCandidates` (200) before `CollectLSHAcoustID` drops legacy candidates, so garbage rows can take a real candidate's slot. About 66k missing-file rows will never be re-fingerprinted, so theirs are permanent. Add a purge (delete where `!HasCurrentPrint()`), then rebuild and check that the `fpidx_meta` count equals the number of current-era prints. Plan: `docs/audio-fingerprint/threshold-recalibration-plan.md`.
+- [ ] **FP-THRESHOLD-RECALIBRATE** After re-fingerprinting and the fpidx purge, measure the Group A/B fingerprint thresholds on current-era prod pairs, computing on the Mac. Group A: `FuzzyMinSimilarity` 0.80, LSH `MinHamming` 0.85, `LSHMinBandHits` 2, `sameRecordingMinSimilarity` 0.90, the iTunes-heal literal 0.9. Group B: veto 0.50, dataset 0.95/0.90. Stratify the negatives by publisher intro. Change the constants only with a precision/recall table, then re-run `dedup.book-signature-scan`, `dedup.full-scan` and `acoustid.lookup-online`. Method: `docs/audio-fingerprint/threshold-recalibration-plan.md`.
+
+- [ ] **LLM-NODES-REMOTE-CI** Use the LLM nodes as a remote runner pool for local
+      CI, so `make ci` no longer runs entirely on the Mac. More LLM nodes are
+      coming, so no single host is hard-coded: the pool is whatever list of nodes
+      is configured. On 2026-09-25 several agents ran `make ci` and `go test -race`
+      in parallel on the Mac. Load hit about 150, and `internal/database` and
+      `internal/server/handlers/abs` blew the 25-minute `test-short` timeout even
+      though each passes on its own, so every agent's local gate read red for
+      reasons unrelated to its change. Proposal: a `make ci-remote` that reads the
+      node list (`CI_NODES` in `Makefile.local` or the environment; never committed,
+      the repo is public) and syncs the worktree's commit to each node, by `git
+      push` to a bare repo there or by `rsync`. It then shards the heavy legs across
+      whichever nodes are free: split the Go `test-short -race` packages by
+      measured runtime, while staticcheck, vet and frontend run on the Mac or a
+      spare node. It streams each log back and returns a combined exit code. When
+      no node is reachable it falls back to plain local `make ci`. Needs per node:
+      the pinned Go toolchain (`go1.27.1`) and Node, a per-worktree checkout and
+      build cache so parallel agents don't collide, and a lock or queue so two
+      agents don't pile onto the same node. Must NOT starve a node's Ollama/GPU
+      work: run at low priority (`nice`/`ionice`), skip or de-weight a node that
+      is serving AI jobs, and check that AI throughput holds while it runs. New
+      nodes should join by adding them to the list, with no code change.
+
+- [ ] **OP-ID-ALIAS-FOLLOWUPS** Follow-ups from the op-ID alias layer (`OperationDef.FormerIDs`, naming audit class 8, 2026-09-25):
+  - **Persisted-ID census.** The guard ledger `internal/server/testdata/op_ids.golden` was seeded from HEAD, so it cannot contain IDs retired earlier without an alias (known: `maintenance.job`, 2026-08-19). A complete list is in prod's `opv2:def:` keyspace, which every boot upserts, and in `operations_v2.def_id`. `OpsV2Store` has no reader for either. Add `ListOpDefinitionV2IDs()`. At startup, WARN once for each stored def ID that is neither registered nor an alias. Seed any real misses into the ledger as FormerIDs.
+  - **Third duplicate LLM review op.** `scheduler.dedup-llm-review` (`internal/scheduler/extra_ops.go`) calls the same `dedupEngine.RunLLMReview` as `dedup.llm-review`. It has its own ConcurrencyKey, so the two ops can still overlap. Fold it in the same way `maintenance.dedup-llm-review` was folded (make it a FormerID and point the `dedup_llm_review` task at `dedup.llm-review`). This is also namespace drift, because the `scheduler.*` family names the trigger, not the domain.
+  - **Class 9 (op-ID grammar).** The audit lists about 30 `maintenance.*` IDs with mixed verb order and mixed `-scan`/`-report`/`-audit` suffixes. The alias layer makes these renames safe; each one needs a FormerIDs entry and a ledger line.
+  - **`/dedup/purge-legacy-fp` route vs op `dedup.purge-legacy-fp-candidates`.** The audit flags the mismatch under class 8. It is a route-name question, not an op ID, so it was left alone.
+  - **Alias removal.** Delete a FormerID only after `audiobook_organizer_operation_deprecated_def_id_total{alias=...}` has stayed flat for a long window AND no stored row can still carry the ID.
+
+- [ ] **OPS-PREVIEW-HTTP-ENDPOINTS** Owner decision needed: five HTTP endpoints outside the op registry write on an omitted `dry_run` (`POST /discovery/import` defaults LIVE and swallows bind errors; `POST /audiobooks/bulk-write-back` enqueues `library.bulk-write-back`; `POST /itunes/pid-repair`; `POST /itunes/rebuild` and `/rebuild-full` read `?dry_run` only). The 2026-09-25 preview-by-default rule was stated for operations; flipping these changes what existing UI buttons do. List + evidence: `docs/audits/2026-09-25-op-preview-default-inventory.md` section 7. They are allowlisted in `internal/operations/opmode/guard_test.go`; remove each entry when its endpoint is converted.
+- [ ] **OPS-WITHOUT-PREVIEW-MODE** 112 registered ops have no mode flag at all and run their only mode on `{}`; many declare `library.write` (library.organize, library.scan, reconcile.apply, entities.author-merge, dedup.book-merge, the scheduler.* cleanups, ...). Decide which need a preview mode. Inventory section 5.
+- [ ] **DURATION-BACKFILL-ONTO-OPMODE** Move `maintenance.duration-backfill`'s inline dry_run/dryRun resolution (`internal/plugins/maintenance/duration_backfill.go` ~:482-494) onto `opmode.ResolveDryRun` and add it to `TestOps_DryRunRoutesThroughOpmode`. Skipped on 2026-09-25 because another agent was editing the duration files on proposed-main.
+
+- [ ] **SEARCH-INFINITE-SCROLL** Later, not now (owner 2026-09-25): an infinite-scroll results model backed by a long-lived result cache, prewarmed in the background on startup.
 
 - [ ] Fold the 216 held "suspicious" version groups (chapter fragments, owner 2026-09-24) into the parked chapter-consolidation work; leave them held until then. Also list the truncated m4bs found there (Neverwhere, the 10 Bobiverse 2 `_copyN` files).
 - [ ] Decide the `leftover_merged_elsewhere` groups from `maintenance.version-group-primary-repair` (organized copy merged into another group's book); the op only labels them.
