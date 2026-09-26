@@ -1,10 +1,16 @@
 // file: web/src/services/api.searchPoll.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 51875e2c-533f-4b08-beaf-f758cf4d4b54
 // last-edited: 2026-09-25
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getBooks, searchBooks, SEARCH_PAGE_SIZE, SEARCH_POLL_INTERVAL_MS } from './api';
+import {
+  getBooks,
+  searchBooks,
+  SEARCH_ERROR_REISSUES,
+  SEARCH_PAGE_SIZE,
+  SEARCH_POLL_INTERVAL_MS,
+} from './api';
 
 // A list search the server cannot finish within its wait answers
 // 202 {search_id, status, matches_so_far}; the client polls
@@ -53,20 +59,32 @@ describe('list search 202 polling', () => {
     expect(urls[3]).toBe(urls[0]);
   });
 
-  it('surfaces a failed search instead of polling forever', async () => {
+  // Review 2, finding 2: a failed shared search does not fail the page. The
+  // request is re-issued, and the server answers it with the uncached search.
+  it('re-issues the request when the polled search fails', async () => {
     mockFetch
-      .mockResolvedValueOnce(json({ search_id: 's2', status: 'running', matches_so_far: 0 }, 202))
-      .mockResolvedValueOnce(json({ data: { search_id: 's2', status: 'error', error: 'boom' } }));
+      .mockResolvedValueOnce(json({ search_id: 's3', status: 'running', matches_so_far: 0 }, 202))
+      .mockResolvedValueOnce(json({ data: { search_id: 's3', status: 'error', error: 'boom' } }))
+      .mockResolvedValueOnce(json({ data: { items: [book('a')], count: 1 } }));
     const p = getBooks(10, 0, { search: 'x' });
-    const assertion = expect(p).rejects.toThrow('boom');
     await vi.advanceTimersByTimeAsync(SEARCH_POLL_INTERVAL_MS);
-    await assertion;
+    const page = await p;
+    expect(page.items.map((b) => b.id)).toEqual(['a']);
+    const urls = mockFetch.mock.calls.map((c) => String(c[0]));
+    expect(urls[2]).toBe(urls[0]);
   });
 
-  it('reports stale results', async () => {
-    mockFetch.mockResolvedValueOnce(json({ data: { items: [], count: 0, stale: true } }));
-    const page = await getBooks(10, 0, { search: 'x' });
-    expect(page.stale).toBe(true);
+  it('surfaces a search that keeps failing instead of polling forever', async () => {
+    for (let i = 0; i <= SEARCH_ERROR_REISSUES; i++) {
+      mockFetch
+        .mockResolvedValueOnce(json({ search_id: `e${i}`, status: 'running', matches_so_far: 0 }, 202))
+        .mockResolvedValueOnce(json({ data: { search_id: `e${i}`, status: 'error', error: 'boom' } }));
+    }
+    const p = getBooks(10, 0, { search: 'x' });
+    const assertion = expect(p).rejects.toThrow('boom');
+    await vi.advanceTimersByTimeAsync(SEARCH_POLL_INTERVAL_MS * (SEARCH_ERROR_REISSUES + 1));
+    await assertion;
+    expect(mockFetch).toHaveBeenCalledTimes(2 * (SEARCH_ERROR_REISSUES + 1));
   });
 });
 
@@ -134,10 +152,19 @@ describe('quick search paging', () => {
   });
 
   // Review finding 18: the 202 path is opt-in per request.
-  it('asks the server for the 202 path with Prefer: respond-async', async () => {
+  // Review 2, finding 3: the Library list (getBooks) never opts in to stale
+  // lists, because bulk actions run on its rows; only the picker does.
+  it('asks the server for the 202 path with Prefer: respond-async, and never for stale lists', async () => {
     mockFetch.mockResolvedValueOnce(json({ data: { items: [book('a')], count: 1 } }));
     await getBooks(10, 0, { search: 'x' });
     const init = mockFetch.mock.calls[0][1] as RequestInit;
     expect(new Headers(init.headers).get('Prefer')).toBe('respond-async');
+  });
+
+  it('lets only the quick-search picker accept a stale list', async () => {
+    mockFetch.mockResolvedValueOnce(json({ data: { items: [book('a')], count: 1 } }));
+    await searchBooks('x', 10);
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get('Prefer')).toBe('respond-async, allow-stale');
   });
 });

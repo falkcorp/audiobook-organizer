@@ -1,5 +1,5 @@
 // file: internal/server/search_result_cache_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 220a3f36-7c10-426f-a8ee-c3fefa2ee20e
 // last-edited: 2026-09-25
 
@@ -118,9 +118,10 @@ func primaryOnly() audiobookspkg.ListFilters {
 // reads (items and count), plus whether it was stale.
 func (fx *searchCacheFixture) list(t testing.TB, q string, limit, offset int, f audiobookspkg.ListFilters) (string, bool) {
 	t.Helper()
-	// The web list request as the current client sends it: opted in to the
-	// 202 and stale answers (Prefer: respond-async).
-	resp, err := fx.srv.buildAudiobookListResponse(audiobookspkg.WithPendingSearchResponse(context.Background()), limit, offset, q, nil, nil, f, false)
+	// The quick-search picker request as the web client sends it: opted in
+	// to the 202 and stale answers (Prefer: respond-async, allow-stale).
+	ctx := audiobookspkg.WithStaleSearchResponse(audiobookspkg.WithPendingSearchResponse(context.Background()))
+	resp, err := fx.srv.buildAudiobookListResponse(ctx, limit, offset, q, nil, nil, f, false)
 	if err != nil {
 		t.Fatalf("list %q: %v", q, err)
 	}
@@ -559,7 +560,49 @@ func TestSearchResultCache_ExactCallerNeverStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, stale := resp["stale"]; stale {
-		t.Fatal("a request without Prefer: respond-async was served a stale list")
+		t.Fatal("a request without Prefer: allow-stale was served a stale list")
+	}
+}
+
+// Review 2, finding 3: the Library list opts in to the 202 (Prefer:
+// respond-async) but not to stale lists, because bulk actions run on its rows.
+// After a change the cache cannot patch, it gets the current membership, not
+// the pre-change list flagged stale. Before the fix respond-async alone
+// admitted stale lists.
+func TestSearchResultCache_LibraryListNeverStale(t *testing.T) {
+	fx := newSearchCacheServer(t, 200, 8, searchcache.Config{})
+	fx.list(t, "alpha", 50, 0, primaryOnly()) // warm the entry
+	var target string
+	for _, id := range fx.bookIDs {
+		b, _ := fx.srv.store.GetBookByID(id)
+		if b != nil && !strings.Contains(b.Title, "alpha") && (b.IsPrimaryVersion == nil || *b.IsPrimaryVersion) {
+			target = id
+			break
+		}
+	}
+	if _, err := fx.srv.store.ModifyBook(target, func(b *database.Book) error { b.Title = "alpha kilo"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ { // overflow the 8-record ring: the entry cannot be patched
+		if _, err := fx.srv.store.ModifyBook(fx.bookIDs[i], func(b *database.Book) error { b.Title += " x"; return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drainTB(t, fx.srv)
+	ctx := audiobookspkg.WithPendingSearchResponse(context.Background())
+	resp, err := fx.srv.buildAudiobookListResponse(ctx, 100000, 0, "alpha", nil, nil, primaryOnly(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, stale := resp["stale"]; stale {
+		t.Fatal("the Library list (Prefer: respond-async only) was served a stale list")
+	}
+	b, err := json.Marshal(resp["items"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"`+target+`"`) {
+		t.Fatal("the Library list is missing a book that matches since a change")
 	}
 }
 

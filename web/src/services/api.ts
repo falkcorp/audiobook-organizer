@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.123.0
+// version: 2.124.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-25
 
@@ -1079,8 +1079,6 @@ export interface AuthSession {
 export interface BooksPage {
   items: Book[];
   count: number;
-  /** True when the server answered from a cached search predating a bulk change; a rebuild is running. */
-  stale?: boolean;
 }
 
 /** How often a long-running list search (HTTP 202) is polled. */
@@ -1088,6 +1086,13 @@ export const SEARCH_POLL_INTERVAL_MS = 1000;
 
 /** Give up polling a 202 search after this long. */
 export const SEARCH_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * How many times a list request is re-issued after its polled search reports an error.
+ * The server answers a re-issued request with the uncached search when the shared one
+ * fails, so one failed shared search does not fail the page.
+ */
+export const SEARCH_ERROR_REISSUES = 2;
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -1119,15 +1124,27 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  *
  * The server answers 202 only to a request that asks for it with `Prefer: respond-async`
  * (RFC 7240), which this sends; any other client simply waits for its result.
+ *
+ * `allowStale` also sends `Prefer: allow-stale`, which lets the server answer from a cached
+ * list that predates a bulk change while it rebuilds. Only the quick-search pickers pass it
+ * (the user picks one freshly read row). The Library list never does: bulk actions run on
+ * its rows, and must never act on membership that predates a change.
+ *
+ * A polled search that reports an error is re-issued (up to SEARCH_ERROR_REISSUES times):
+ * the server answers the re-issued request with the uncached search when the shared one
+ * fails.
  */
 async function fetchListWithSearchPoll(
   url: string,
   signal?: AbortSignal,
-  onPending?: (matchesSoFar: number) => void
+  onPending?: (matchesSoFar: number) => void,
+  allowStale = false
 ): Promise<Response> {
   const deadline = Date.now() + SEARCH_POLL_TIMEOUT_MS;
+  const prefer = allowStale ? 'respond-async, allow-stale' : 'respond-async';
+  let errorReissues = 0;
   for (;;) {
-    const response = await apiFetch(url, { signal, headers: { Prefer: 'respond-async' } });
+    const response = await apiFetch(url, { signal, headers: { Prefer: prefer } });
     if (response.status !== 202) {
       return response;
     }
@@ -1152,7 +1169,12 @@ async function fetchListWithSearchPoll(
       const st = pb.data ?? pb;
       onPending?.(st.matches_so_far ?? 0);
       if (st.status === 'error') {
-        throw new Error(st.error || 'Search failed');
+        if (errorReissues >= SEARCH_ERROR_REISSUES) {
+          throw new Error(st.error || 'Search failed');
+        }
+        // Re-issue: the server falls back to the uncached search.
+        errorReissues++;
+        break;
       }
       if (st.status === 'done') {
         break;
@@ -1246,9 +1268,7 @@ export async function getBooks(
   }
   const body = await response.json();
   const data = body.data ?? body;
-  const page: BooksPage = { items: data.items ?? [], count: data.count ?? 0 };
-  if (data.stale) page.stale = true;
-  return page;
+  return { items: data.items ?? [], count: data.count ?? 0 };
 }
 
 export interface BookFacets {
@@ -1315,7 +1335,9 @@ export async function searchBooks(
       if (pageSize <= 0) break;
       let url = `${API_BASE}/audiobooks?search=${encodeURIComponent(query)}&limit=${pageSize}&offset=${offset}&is_primary_version=true`;
       if (showFailed) url += '&show_quarantined=true';
-      const response = await fetchListWithSearchPoll(url);
+      // A picker: the user chooses one freshly read row, so a list that
+      // predates a bulk change while the server rebuilds it is harmless here.
+      const response = await fetchListWithSearchPoll(url, undefined, undefined, true);
       if (!response.ok) {
         throw await buildApiError(response, 'Failed to search books');
       }
