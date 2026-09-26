@@ -1,5 +1,5 @@
 # file: .woodpecker/test-rest.yaml
-# version: 1.0.0
+# version: 1.0.1
 # guid: c84e1b3d-2f9a-4c57-8d06-e3a1b7f5d942
 # last-edited: 2026-09-26
 #
@@ -33,8 +33,9 @@ clone:
 
 steps:
   - name: test
-    # Local backend: the image is not pulled (see test-server-scanner.yaml).
-    image: golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+    # Local backend: `image` names the SHELL that runs the commands, not a
+    # container image; the step runs on the host with the agent's PATH.
+    image: bash
     environment:
       GOTOOLCHAIN: go1.27.1
     commands:
