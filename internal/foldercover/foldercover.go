@@ -102,10 +102,27 @@ func bookAudio(store Store, book *database.Book) ([]string, error) {
 		paths = append(paths, f.FilePath)
 	}
 	if len(paths) == 0 && book.FilePath != "" {
-		// A book whose rows are not written yet (the scanner's create path) or
-		// a virtual single-file book: its own path is the audio.
-		if fi, err := os.Stat(book.FilePath); err == nil && !fi.IsDir() {
+		// A book whose rows are not written yet (the scanner's create path), a
+		// virtual single-file book, or a rowless folder book. A file path is
+		// the audio; a directory path means the audio directly in that folder
+		// is this book's own (without this, the folder would look shared with
+		// "someone else's" audio and no image could ever be chosen).
+		fi, err := os.Stat(book.FilePath)
+		switch {
+		case err != nil:
+		case !fi.IsDir():
 			paths = append(paths, book.FilePath)
+		default:
+			entries, rerr := os.ReadDir(book.FilePath)
+			if rerr != nil {
+				return nil, fmt.Errorf("read book folder %s: %w", book.FilePath, rerr)
+			}
+			exts := audioext.DefaultSet()
+			for _, e := range entries {
+				if e.Type().IsRegular() && !strings.HasPrefix(e.Name(), ".") && exts.MatchPath(e.Name()) {
+					paths = append(paths, filepath.Join(book.FilePath, e.Name()))
+				}
+			}
 		}
 	}
 	sort.Strings(paths)

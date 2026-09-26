@@ -26,7 +26,7 @@ func TestNoUnmarkedChatCompletionCallers(t *testing.T) {
 		"reviewAuthorBatch":   "Task 2.3", // Out-of-scope — existing author-dedup flow
 		"discoverAuthorBatch": "Task 2.3", // Out-of-scope — existing author-dedup flow
 		"scoreMetadataBatch":  "",         // PRIORITY: Interactive — user-waiting metadata search, stays sync
-		"ReadCoverText":       "",         // background: maintenance.cover-text-read (PriorityLow), bounded by the pool's llm.cover_art_vision slots
+		"coverTextAttempt":    "",         // background: maintenance.cover-text-read (PriorityLow), bounded by the pool's llm.cover_art_vision slots
 	}
 
 	// Walk the current directory (package ai) for .go files.

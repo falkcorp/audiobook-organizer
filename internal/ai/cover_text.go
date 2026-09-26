@@ -33,8 +33,8 @@ import (
 // ticks llm.cover_art_vision AND declares the "vision" feature; the model sent
 // is the row's capability_models["llm.cover_art_vision"] (falling back to its
 // chat_model). A cloud row is used only when the configuration ticks it, and
-// then in priority order like any other row -- so it is a fallback exactly when
-// the operator gave it a larger priority number than the local rows.
+// then only as a FALLBACK: local rows are always tried first, whatever the
+// priorities say (see ReadCoverText).
 //
 // The measured local model (a 7B vision model on Ollama's OpenAI-compatible
 // /v1) takes 15-33 s per cover including a cold load, and wraps its JSON in a
@@ -84,8 +84,14 @@ func NewRoutedCoverTextReader(pool *PoolSource) *RoutedCoverTextReader {
 	return &RoutedCoverTextReader{pool: pool, timeout: CoverTextAttemptTimeout}
 }
 
-func (r *RoutedCoverTextReader) dispatcher() *aidispatch.Dispatcher {
-	return r.pool.dispatcher(aidispatch.WithAttemptTimeout(aidispatch.LLMCoverArtVision, r.timeout))
+// dispatcher builds the dispatcher for one pass. localOnly restricts it to
+// rows aidispatch.EndpointLocality classifies as local.
+func (r *RoutedCoverTextReader) dispatcher(localOnly bool) *aidispatch.Dispatcher {
+	opts := []aidispatch.Option{aidispatch.WithAttemptTimeout(aidispatch.LLMCoverArtVision, r.timeout)}
+	if localOnly {
+		opts = append(opts, aidispatch.WithLocalOnly())
+	}
+	return r.pool.dispatcher(opts...)
 }
 
 // Capacity is how many reads the pool can run at once right now, 0 when
@@ -94,7 +100,12 @@ func (r *RoutedCoverTextReader) Capacity() int {
 	if r == nil || !r.pool.IsActive() {
 		return 0
 	}
-	return r.dispatcher().Capacity(aidispatch.LLMCoverArtVision)
+	// Local rows are tried first (ReadCoverText), so size to them; the
+	// cloud's slots count only when no local row can serve at all.
+	if c := r.dispatcher(true).Capacity(aidispatch.LLMCoverArtVision); c > 0 {
+		return c
+	}
+	return r.dispatcher(false).Capacity(aidispatch.LLMCoverArtVision)
 }
 
 // ReadCoverText sends one image and returns what the model read. A reply that arrived
@@ -110,7 +121,26 @@ func (r *RoutedCoverTextReader) ReadCoverText(ctx context.Context, image []byte,
 		mimeType = "image/jpeg"
 	}
 	dataURL := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(image)
-	return aidispatch.Call(ctx, r.dispatcher(), aidispatch.LLMCoverArtVision, func(ctx context.Context, t aidispatch.Target) (*CoverTextResult, error) {
+	// Local first, ALWAYS, whatever the rows' priorities say: a migrated
+	// OpenAI row can carry a better priority than the local row
+	// (llm_mode openai-fallback-local) and is pre-ticked for vision, so
+	// priority alone would send covers to the cloud first. The cloud is only
+	// a FALLBACK: tried when no local row can serve or every local attempt
+	// failed at the endpoint. A reply that arrived but did not parse
+	// (Quality) is never re-asked of the cloud.
+	res, err := aidispatch.Call(ctx, r.dispatcher(true), aidispatch.LLMCoverArtVision, r.coverTextAttempt(dataURL))
+	if err == nil || ctx.Err() != nil {
+		return res, err
+	}
+	if _, ok := errors.AsType[*aidispatch.QualityError](err); ok {
+		return nil, err
+	}
+	return aidispatch.Call(ctx, r.dispatcher(false), aidispatch.LLMCoverArtVision, r.coverTextAttempt(dataURL))
+}
+
+// coverTextAttempt is one request to one chosen endpoint.
+func (r *RoutedCoverTextReader) coverTextAttempt(dataURL string) func(context.Context, aidispatch.Target) (*CoverTextResult, error) {
+	return func(ctx context.Context, t aidispatch.Target) (*CoverTextResult, error) {
 		key, err := r.pool.apiKeyFor(t.Endpoint)
 		if err != nil {
 			return nil, err
@@ -145,7 +175,7 @@ func (r *RoutedCoverTextReader) ReadCoverText(ctx context.Context, image []byte,
 			return nil, aidispatch.Quality(err)
 		}
 		return &CoverTextResult{Text: text, Raw: raw, Model: t.Model, EndpointID: t.Endpoint.ID}, nil
-	})
+	}
 }
 
 // stripJSONFence removes a surrounding Markdown code fence (```json ... ```)

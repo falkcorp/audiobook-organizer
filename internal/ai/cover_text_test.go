@@ -163,6 +163,37 @@ func TestCoverTextFailsOverToListedCloudRow(t *testing.T) {
 	}
 }
 
+// A cloud row with a BETTER priority than the local row (the migrated OpenAI
+// row under llm_mode openai-fallback-local) is still only a fallback.
+func TestCoverTextLocalFirstDespiteCloudPriority(t *testing.T) {
+	local := newVisionServer(t, `{"title":"Local"}`)
+	cloud := newVisionServer(t, `{"title":"Cloud"}`)
+	cl := visionEP("cloud", cloud.url(), 5)
+	cl.AuthRef = "openai_api_key"
+	tp := newTestPool(cl, visionEP("pool-node", local.url(), 10))
+	tp.Secret = func(string) string { return "sk-test" }
+	res, err := NewRoutedCoverTextReader(tp.PoolSource).ReadCoverText(context.Background(), []byte{1}, "image/jpeg")
+	if err != nil || res.EndpointID != "pool-node" || cloud.count() != 0 {
+		t.Fatalf("got %+v %v, cloud calls %d; want the local row", res, err, cloud.count())
+	}
+}
+
+// An unparsable local reply is a quality failure: it is not re-asked of the cloud.
+func TestCoverTextQualityFailureDoesNotFallBackToCloud(t *testing.T) {
+	local := newVisionServer(t, "I cannot read this.")
+	cloud := newVisionServer(t, `{"title":"Cloud"}`)
+	cl := visionEP("cloud", cloud.url(), 50)
+	cl.AuthRef = "openai_api_key"
+	tp := newTestPool(visionEP("pool-node", local.url(), 10), cl)
+	tp.Secret = func(string) string { return "sk-test" }
+	if _, err := NewRoutedCoverTextReader(tp.PoolSource).ReadCoverText(context.Background(), []byte{1}, "image/jpeg"); err == nil {
+		t.Fatal("want the parse error")
+	}
+	if cloud.count() != 0 {
+		t.Fatalf("cloud called %d times after a local quality failure", cloud.count())
+	}
+}
+
 func TestCoverTextRoutingOff(t *testing.T) {
 	srv := newVisionServer(t, `{}`)
 	tp := newTestPool(visionEP("n", srv.url(), 10))

@@ -226,3 +226,27 @@ func TestDiscSubfoldersSearchParent(t *testing.T) {
 		t.Fatalf("disc subfolders: %s %+v", plan.Outcome, plan.Candidate)
 	}
 }
+
+// A rowless folder book (FilePath is the directory, no book_file rows): the
+// folder's audio is the book's own, so the folder is not "shared" and the
+// embedded check still has a first file.
+func TestRowlessFolderBook(t *testing.T) {
+	root := t.TempDir()
+	dir := t.TempDir()
+	for _, n := range []string{"01.mp3", "02.mp3", "03.MP3"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("a"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writePNG(t, filepath.Join(dir, "cover.jpg"), 400, 400)
+	book := &database.Book{ID: "b3", FilePath: dir}
+	st := &fakeStore{books: map[string]*database.Book{"b3": book}}
+	stubEmbedded(t, nil)
+	if plan := Evaluate(st, book, root); plan.Outcome != OutcomeWouldApply {
+		t.Fatalf("rowless folder book: %s %v", plan.Outcome, plan.Err)
+	}
+	stubEmbedded(t, []byte{0xFF, 0xD8})
+	if plan := Evaluate(st, book, root); plan.Outcome != OutcomeHasEmbedded {
+		t.Fatalf("rowless folder book with embedded art: %s", plan.Outcome)
+	}
+}
