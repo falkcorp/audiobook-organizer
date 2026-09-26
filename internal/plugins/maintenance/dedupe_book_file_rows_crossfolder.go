@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_crossfolder.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 65b43ad1-649a-4077-856f-593cb93f5cbd
 // last-edited: 2026-09-26
 
@@ -43,6 +43,10 @@ import (
 const (
 	decisionModeCrossFolder = "cross_folder"
 	decisionModeRemoveRow   = "remove_row"
+	// The op's older deletion shapes, recorded alongside cross_folder so a
+	// tracked preview lists every row the apply would delete.
+	decisionModeExactDuplicate = "exact_duplicate"
+	decisionModeSameFolder     = "same_folder"
 
 	decisionWouldDelete = "would_delete"
 	decisionDeleted     = "deleted"
@@ -419,12 +423,15 @@ func removeNamedBookFileRows(store OpsStore, params DedupeBookFileRowsParams, co
 			}
 			// Hash twin: another row, NOT itself named for removal (two copies
 			// both listed must not remove each other's justification), with an
-			// identical non-empty hash, whose file is present.
+			// identical non-empty hash AND an identical recorded size, whose file
+			// is present. The size check is belt and braces: the current digest
+			// (filehash.BookFileHash) already folds the size in, but rows hashed
+			// under an older, unrecorded kind may not have.
 			var twin *database.BookFile
 			if h := strings.TrimSpace(f.FileHash); h != "" {
 				cands := make([]database.BookFile, 0, 2)
 				for _, g := range files {
-					if g.ID == f.ID || targets[g.ID] || strings.TrimSpace(g.FileHash) != h {
+					if g.ID == f.ID || targets[g.ID] || strings.TrimSpace(g.FileHash) != h || g.FileSize != f.FileSize {
 						continue
 					}
 					if fi, serr := os.Stat(g.FilePath); serr == nil && fi.Mode().IsRegular() {
@@ -445,7 +452,7 @@ func removeNamedBookFileRows(store OpsStore, params DedupeBookFileRowsParams, co
 				d.Reason = "confirmed_duplicate"
 			default:
 				d.Action = decisionSkip
-				d.Reason = "no other present row has an identical file hash; pass confirmed_duplicate:true only if a human has confirmed the duplicate"
+				d.Reason = "no other present row has an identical file hash and size; pass confirmed_duplicate:true only if a human has confirmed the duplicate"
 				res.decisions = append(res.decisions, d)
 				continue
 			}

@@ -440,8 +440,14 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		}
 	}
 
+	// A scoped run visits EVERY scoped book that has rows, not only those the
+	// cheap candidate filters above picked out: an owner who names a book is
+	// owed a decision (and a skip reason) for each missing row in it, which a
+	// book with no candidate shape would otherwise never get.
+	//
 	// A scoped book that holds no book_file rows at all is almost certainly a
 	// typo in the request; say so rather than let it vanish into "0 affected".
+	scopedOnly := 0
 	if len(scope) > 0 {
 		hasRows := map[string]bool{}
 		for key := range byBookPath {
@@ -450,6 +456,11 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		for _, id := range scope {
 			if !hasRows[id] {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("dedupe-book-file-rows: book_ids entry %s has no book_file rows with a path", id))
+				continue
+			}
+			if _, ok := affected[id]; !ok {
+				affected[id] = nil
+				scopedOnly++
 			}
 		}
 	}
@@ -469,8 +480,9 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		"redundant_rows", dupRows)
 
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"%d book(s) hold duplicate book_file rows (%d redundant rows); %d more visited for superseded-row folding; %d more for cross-folder purging",
-		len(affected)-supersededCandidates-crossFolderCandidates, dupRows, supersededCandidates, crossFolderCandidates))
+		"%d book(s) hold duplicate book_file rows (%d redundant rows); %d more visited for superseded-row folding; %d more for cross-folder purging; %d more because book_ids named them",
+		len(affected)-supersededCandidates-crossFolderCandidates-scopedOnly, dupRows, supersededCandidates,
+		crossFolderCandidates, scopedOnly))
 
 	// 🔒 Counters are touched by every worker — see the pool below. A single mutex
 	// is right here: contention is negligible against per-book DB work, and the
@@ -488,6 +500,10 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	// Per-row cross-folder decisions (would delete, skipped, deleted, failed):
 	// appended by every worker, always under mu.
 	var decisions []bookFileRowDecision
+	// Per-row decisions are tracked for a cross-folder or a scoped run: those
+	// are the runs an owner approves row by row. A library-wide exact-duplicate
+	// sweep keeps its per-book report only, rather than logging every row.
+	trackRows := params.CrossFolder || len(scope) > 0
 
 	// PASS 2 — per affected book only, so the expensive full-fidelity read is paid
 	// for the handful of books that need it rather than the whole library.
@@ -624,9 +640,10 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 				mu.Unlock()
 			}
 		}
-		// Cross-folder rows actually queued for deletion in this book, so their
-		// outcome is reported once the batched delete has run.
-		var crossQueued []bookFileRowDecision
+		// Decisions for every row queued for deletion in this book (when rows
+		// are tracked), so each outcome is reported once the batched delete has
+		// run.
+		var queuedDecisions []bookFileRowDecision
 
 		distinct := len(byPath)
 		dupHasFP := false
@@ -672,17 +689,17 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			// a donor whose evidence no longer holds. Filtering happens before
 			// the salvage, so a dropped donor contributes nothing to the keeper.
 			// A group whose salvage or window carry-over fails is left intact;
-			// its cross-folder donors, already queued below, are then reported
+			// its donors' decisions, already queued below, are then reported
 			// as failed and un-queued so the book's outcome stays truthful.
-			groupCrossStart := len(crossQueued)
-			failGroupCross := func(reason string) {
+			groupQueuedStart := len(queuedDecisions)
+			failGroupQueued := func(reason string) {
 				mu.Lock()
-				for _, d := range crossQueued[groupCrossStart:] {
+				for _, d := range queuedDecisions[groupQueuedStart:] {
 					d.Action, d.Reason = decisionFailed, reason
 					decisions = append(decisions, d)
 				}
 				mu.Unlock()
-				crossQueued = crossQueued[:groupCrossStart]
+				queuedDecisions = queuedDecisions[:groupQueuedStart]
 			}
 			if len(crossRows) > 0 {
 				var kept []database.BookFile
@@ -705,12 +722,36 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 							continue
 						}
 						kept = append(kept, r)
-						crossQueued = append(crossQueued, d)
+						queuedDecisions = append(queuedDecisions, d)
 					}
 				}
 				redundant = kept
 				if len(redundant) == 0 {
 					continue
+				}
+			}
+			// Every OTHER redundant row — an exact duplicate of the keeper's
+			// path, or a same-folder fold — gets a decision too when rows are
+			// tracked, so a scoped or cross-folder preview is the complete list
+			// of what the matching apply deletes, not just the cross-folder part.
+			if trackRows {
+				for _, r := range redundant {
+					if _, isCross := crossRows[r.ID]; isCross {
+						continue
+					}
+					d := bookFileRowDecision{Mode: decisionModeSameFolder, Action: decisionWouldDelete,
+						BookID: bookID, RowID: r.ID, Path: r.FilePath, Size: r.FileSize,
+						TwinRowID: keeper.ID, TwinPath: keeper.FilePath}
+					if r.FilePath == keeper.FilePath {
+						d.Mode = decisionModeExactDuplicate
+					}
+					if params.Apply {
+						queuedDecisions = append(queuedDecisions, d)
+					} else {
+						mu.Lock()
+						decisions = append(decisions, d)
+						mu.Unlock()
+					}
 				}
 			}
 			// Read BEFORE mergeMissingFields, which may copy a twin's fingerprint
@@ -767,7 +808,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 					mu.Unlock()
 					log.Warn("dedupe-book-file-rows: could not persist salvaged fields; leaving this group intact",
 						"book_id", bookID, "keeper", keeper.ID, "err", uerr)
-					failGroupCross("could not persist salvaged fields: " + uerr.Error())
+					failGroupQueued("could not persist salvaged fields: " + uerr.Error())
 					continue
 				}
 				mu.Lock()
@@ -797,7 +838,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 				mu.Unlock()
 				log.Warn("dedupe-book-file-rows: could not carry fingerprint windows to the keeper; leaving this group intact",
 					"book_id", bookID, "keeper", keeper.ID, "donors", len(redundant), "err", cerr)
-				failGroupCross("could not carry fingerprint windows to the twin: " + cerr.Error())
+				failGroupQueued("could not carry fingerprint windows to the twin: " + cerr.Error())
 				continue
 			}
 
@@ -840,7 +881,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			if derr := journalAndDeleteBookFiles(store, opID, bookID, pendingRows); derr != nil {
 				mu.Lock()
 				failed++
-				for _, d := range crossQueued {
+				for _, d := range queuedDecisions {
 					d.Action, d.Reason = decisionFailed, derr.Error()
 					decisions = append(decisions, d)
 				}
@@ -850,7 +891,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			} else {
 				mu.Lock()
 				deleted += len(pendingDeletes)
-				for _, d := range crossQueued {
+				for _, d := range queuedDecisions {
 					d.Action = decisionDeleted
 					decisions = append(decisions, d)
 				}
@@ -928,8 +969,8 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		reportNote += fmt.Sprintf(", limit %d of %d affected books", len(bookIDs), len(affected))
 	}
 	crossNote := ""
-	if params.CrossFolder {
-		crossNote = " | cross_folder: " + p.emitRowDecisions(decisions, decisionsReportPath(reportPath), reporter)
+	if trackRows {
+		crossNote = " | rows: " + p.emitRowDecisions(decisions, decisionsReportPath(reportPath), reporter)
 	}
 
 	verb := fmt.Sprintf("would delete %d (would salvage fields on %d keepers)", wouldDelete, salvaged)

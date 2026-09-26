@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_crossfolder_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5bb37ed8-73c4-429c-8168-cc4e2fb52f0e
 // last-edited: 2026-09-26
 
@@ -471,5 +471,55 @@ func TestRemoveRowIDs_HashTwinAndNeverEmptiesABook(t *testing.T) {
 	cfRunDedupe(t, s, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{aID}, ConfirmedDuplicate: true, ReportPath: report})
 	if !cfRowIDs(t, s, book)[aID] {
 		t.Fatal("the book's last row was removed")
+	}
+}
+
+// A scoped book is visited even when no candidate filter would pick it, so a
+// missing row with no same-name row anywhere still gets its skip reason; and a
+// scoped preview lists the exact-duplicate rows the same apply would delete,
+// not only the cross-folder ones.
+func TestCrossFolder_ScopedPreviewListsEveryDecision(t *testing.T) {
+	s := newDupeReportStore(t)
+	dir := t.TempDir()
+	report := filepath.Join(t.TempDir(), "r.tsv")
+	present := filepath.Join(dir, "new", "Ch 01.mp3")
+	cfWrite(t, present, 10)
+	book := cfSeedBook(t, s, "Scoped", filepath.Join(dir, "new"))
+	cfSeedRow(t, s, book, present, 10, 60, "")
+	cfSeedRow(t, s, book, present, 10, 60, "") // exact duplicate path
+	lonely := cfSeedRow(t, s, book, filepath.Join(dir, "old", "Renamed.mp3"), 10, 60, "")
+
+	off := false
+	rep := cfRunDedupe(t, s, DedupeBookFileRowsParams{
+		CrossFolder: true, PruneSuperseded: &off, BookIDs: []string{book}, ReportPath: report,
+	})
+	logs := rep.loggedText()
+	if !strings.Contains(logs, "cross_folder skip: book="+book+" row="+lonely) ||
+		!strings.Contains(logs, "no present row in the book has the same basename") {
+		t.Fatalf("no zero-twin skip for the scoped book's missing row:\n%s", logs)
+	}
+	if !strings.Contains(logs, "exact_duplicate would_delete") {
+		t.Fatalf("the preview does not list the exact-duplicate row it would delete:\n%s", logs)
+	}
+	if n := len(cfRowIDs(t, s, book)); n != 3 {
+		t.Fatalf("preview changed the row count to %d", n)
+	}
+}
+
+// Identical hash but a different recorded size is not a hash twin.
+func TestRemoveRowIDs_HashTwinNeedsSameSize(t *testing.T) {
+	s := newDupeReportStore(t)
+	dir := t.TempDir()
+	report := filepath.Join(t.TempDir(), "r.tsv")
+	a := filepath.Join(dir, "a.mp3")
+	b := filepath.Join(dir, "b.mp3")
+	cfWrite(t, a, 10)
+	cfWrite(t, b, 11)
+	book := cfSeedBook(t, s, "Size Differs", dir)
+	cfSeedRow(t, s, book, a, 10, 60, "same")
+	bID := cfSeedRow(t, s, book, b, 11, 60, "same")
+	cfRunDedupe(t, s, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{bID}, ReportPath: report})
+	if !cfRowIDs(t, s, book)[bID] {
+		t.Fatal("a row was removed on a hash match with a different size")
 	}
 }
