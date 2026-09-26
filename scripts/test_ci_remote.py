@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/test_ci_remote.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: b886cb9e-2020-4cfc-806d-6002504520df
 # last-edited: 2026-09-26
 
@@ -156,7 +156,8 @@ class ShardingTest(unittest.TestCase):
         p = _pkg("slow", size=0)
         self.assertAlmostEqual(cr.package_weight(p, t, ["darwin"]), 501.0)
         self.assertAlmostEqual(cr.package_weight(p, t, ["linux"]), 31.0)
-        self.assertAlmostEqual(cr.package_weight(p, t, ["darwin", "linux"]), 266.0)
+        # mixed pool: the slowest GOOS wins (the shard may land on either)
+        self.assertAlmostEqual(cr.package_weight(p, t, ["darwin", "linux"]), 501.0)
         # unmeasured: size heuristic
         q = _pkg("new", size=40000)
         self.assertAlmostEqual(cr.package_weight(q, t, ["linux"]), 3.0 + cr.heuristic_seconds(40000))
@@ -182,6 +183,96 @@ class ShardingTest(unittest.TestCase):
                      "fmt-check", "web-test", "mocks-check"):
             self.assertIn(want, names)
         self.assertTrue(next(l for l in legs if l.name == "mocks-check").local_only)
+
+
+class HeavyPackageTest(unittest.TestCase):
+    MOD = "example.com/m/"
+
+    def pkgs(self):
+        return [
+            _pkg(self.MOD + "internal/database", size=100),  # seeded 1800s
+            _pkg(self.MOD + "internal/server", size=100, decode=True),  # seeded 500s
+            _pkg(self.MOD + "internal/plugins/maintenance", size=100, decode=True),  # 360s
+            _pkg(self.MOD + "internal/operations/registry", size=100),  # 96s
+        ] + [_pkg(self.MOD + f"internal/small{i}", size=4000) for i in range(12)]
+
+    def test_seeded_slow_packages_get_their_own_shard(self):
+        legs = cr.build_shards(self.pkgs(), cr.Timings(None), ["darwin"], ["darwin", "linux"], 2, 4)
+        heavy = [l for l in legs if l.heavy]
+        self.assertEqual(
+            [l.packages[0].removeprefix(self.MOD) for l in heavy],
+            ["internal/database", "internal/server", "internal/plugins/maintenance", "internal/operations/registry"],
+        )
+        self.assertTrue(all(len(l.packages) == 1 for l in heavy))
+        self.assertEqual([l.needs_decode for l in heavy], [False, True, True, False])
+        self.assertFalse(any(p.endswith(("database", "server", "maintenance", "registry"))
+                             for l in legs if not l.heavy for p in l.packages))
+
+    def test_database_timeout_at_least_50m(self):
+        legs = cr.build_shards(self.pkgs(), cr.Timings(None), ["darwin"], ["darwin"], 1, 2)
+        db = next(l for l in legs if l.packages == (self.MOD + "internal/database",))
+        self.assertGreaterEqual(db.timeout_min, 50)
+        self.assertIn("-timeout 50m", cr.go_test_command(db.packages, "c.out", 4, db.timeout_min))
+        small = next(l for l in legs if not l.heavy)
+        self.assertEqual(small.timeout_min, 25)
+
+    def test_timeout_scales_with_measured_time(self):
+        t = cr.Timings(None)
+        t.record_pkg("darwin", self.MOD + "internal/slowpoke", 1000.0)  # 2x = 2000s -> 34m
+        self.assertEqual(cr.shard_timeout_minutes([self.MOD + "internal/slowpoke"], t, ["darwin"]), 34)
+
+
+class SpreadTest(unittest.TestCase):
+    """Slow packages start first and land on different hosts."""
+
+    def setUp(self):
+        self.a = cr.parse_ci_nodes("u@node-a.example:max=2")[0]
+        self.b = cr.parse_ci_nodes("u@node-b.example:prod,nodecode,max=2")[0]
+        self.a1 = cr.Worker("node-a#1", self.a, True, 5)
+        self.a2 = cr.Worker("node-a#2", self.a, True, 5)
+        self.b1 = cr.Worker("node-b#1", self.b, False, 12, 12)
+        self.b2 = cr.Worker("node-b#2", self.b, False, 12, 12)
+        self.workers = [self.a1, self.a2, self.b1, self.b2]
+
+    def queue(self):
+        return [
+            cr.Leg("test-database", "", 1800, packages=("db",), heavy=True),
+            cr.Leg("test-registry", "", 96, packages=("reg",), heavy=True),
+            cr.Leg("test-server", "", 500, needs_decode=True, packages=("srv",), heavy=True),
+            cr.Leg("test-go-01", "", 700, packages=("x", "y")),
+            cr.Leg("staticcheck", "make staticcheck", 900),
+        ]
+
+    def simulate(self):
+        q, running, placed = self.queue(), {}, {}
+        for w in self.workers:
+            leg = cr.pick_leg(q, w, self.workers, 0, -1, running)
+            q.remove(leg)
+            placed[leg.name] = w.host
+            if leg.heavy:
+                running[w.host] = running.get(w.host, 0) + 1
+        return placed
+
+    def test_heavy_first_and_spread(self):
+        placed = self.simulate()
+        # the decode-capable node takes the heavy decode package no one else may run
+        self.assertEqual(placed["test-server"], "node-a.example")
+        # the heaviest package goes to the other host, not stacked on node-a
+        self.assertEqual(placed["test-database"], "node-b.example")
+        # every heavy leg starts in the first wave; node-a's second slot passes on
+        # registry (node-b has no heavy leg yet), so node-b takes it
+        self.assertEqual(placed["test-registry"], "node-b.example")
+        self.assertEqual(placed["staticcheck"], "node-a.example")
+        self.assertNotIn("test-go-01", placed)
+
+    def test_heavy_before_bigger_ordinary_leg(self):
+        leg = cr.pick_leg(self.queue(), self.b1, self.workers, 0, -1, {})
+        self.assertEqual(leg.name, "test-database")
+
+    def test_prod_without_netns_gets_no_test_legs(self):
+        self.b1.tests_ok = False
+        leg = cr.pick_leg(self.queue(), self.b1, self.workers, 0, -1, {})
+        self.assertEqual(leg.name, "staticcheck")
 
 
 class CapacityTest(unittest.TestCase):
@@ -333,6 +424,12 @@ class RemoteScriptTest(unittest.TestCase):
     def test_scripts_parse(self):
         self.bash_n(cr.setup_script("$HOME/ci/jobs/abc-1", "a" * 40, nodecode=True))
         self.bash_n(cr.setup_script("$HOME/ci/jobs/abc-1", "a" * 40, nodecode=False))
+        self.bash_n(cr.setup_script("$HOME/ci/jobs/abc-1", "a" * 40, nodecode=True, prod=True))
+        iso = cr.leg_script("$HOME/ci/jobs/j", "$HOME/ci/locks/slots", 2, "me", "go test ./x", True, True, 12,
+                            "c.out", isolate_net=True)
+        self.bash_n(iso)
+        self.assertIn("unshare -rn", iso)
+        self.assertIn("GOPROXY=off", iso)
         self.bash_n(cr.leg_script("$HOME/ci/jobs/j", "$HOME/ci/locks/slots", 2, "me", "go test ./x", True, True, 12, "c.out"))
         self.bash_n(cr.cleanup_script("$HOME/ci/jobs/j", "refs/ci-jobs/1", failed=True))
         self.bash_n(cr.cleanup_script("$HOME/ci/jobs/j", "refs/ci-jobs/1", failed=False))

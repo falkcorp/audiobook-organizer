@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci_remote.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 4a04a3b5-d6a8-4802-b193-28b78d787636
 # last-edited: 2026-09-26
 
@@ -242,7 +242,7 @@ def ollama_busy(probe: Probe) -> bool:
     A loaded model alone means nothing: keep-alive keeps it resident for hours.
     Busy means the model's expiry moved between two samples a few seconds apart
     (a request finished in between) or the Ollama processes are burning CPU.
-    A remote Ollama reached through a tunnel on the same port (the prod server
+    A remote Ollama reached through a tunnel on the same port (a node that
     forwards 11434 to another host) is not this node's load, so it is ignored.
     """
     if not probe.ollama_local:
@@ -350,6 +350,48 @@ def heuristic_seconds(test_bytes: int) -> float:
     return 2.0 + test_bytes / 4000.0
 
 
+# Prior runtimes (seconds, module-relative path) for packages known to be slow,
+# used only until they have been measured on one of the pool's GOOS. Without
+# them a first run sizes internal/database by its test-file bytes and packs it
+# into an ordinary bin next to other slow packages. The numbers are 2026-09-26
+# observations on a loaded Mac.
+SEED_SECONDS = {
+    "internal/database": 1800.0,
+    "internal/server/handlers/abs": 620.0,
+    "internal/server": 500.0,
+    "internal/applygate": 420.0,
+    "internal/plugins/maintenance": 360.0,
+    "internal/scanner": 280.0,
+    "internal/operations/registry": 96.0,
+}
+
+# A package at or above this many seconds gets a shard of its own, and the
+# scheduler starts those first and spreads them over different hosts.
+HEAVY_SECONDS = 90.0
+
+# Per-package floors for `go test -timeout`, in minutes. make ci uses 25m for
+# the whole run; internal/database alone has taken 1500-2200s on a loaded Mac,
+# so a shard holding it gets at least 50m. Every shard also gets at least 2x
+# the slowest measured time of any package in it.
+PACKAGE_TIMEOUT_MIN = {"internal/database": 50}
+
+
+def rel_pkg(pkg: str) -> str:
+    """Module-relative form of an import path (`.../internal/x` -> `internal/x`)."""
+    i = pkg.find("/internal/")
+    return pkg[i + 1 :] if i >= 0 else pkg
+
+
+def shard_timeout_minutes(packages: Iterable[str], timings: "Timings", goos_list: list[str]) -> int:
+    minutes = int(TEST_SHORT_TIMEOUT.rstrip("m"))
+    for pkg in packages:
+        minutes = max(minutes, PACKAGE_TIMEOUT_MIN.get(rel_pkg(pkg), 0))
+        measured = timings.pkg_max(goos_list, pkg)
+        if measured is not None:
+            minutes = max(minutes, -(-int(measured * 2) // 60))
+    return minutes
+
+
 class Timings:
     """Measured durations, keyed by GOOS (a Mac's temp FS is ~15x slower for
     internal/server than Linux, so one number per package would misbalance).
@@ -372,6 +414,11 @@ class Timings:
         vals = [self.data["packages"].get(g, {}).get(pkg) for g in goos_list]
         vals = [v for v in vals if v is not None]
         return sum(vals) / len(vals) if vals else None
+
+    def pkg_max(self, goos_list: Iterable[str], pkg: str) -> float | None:
+        vals = [self.data["packages"].get(g, {}).get(pkg) for g in goos_list]
+        vals = [v for v in vals if v is not None]
+        return max(vals) if vals else None
 
     def leg(self, goos_list: Iterable[str], leg: str) -> float | None:
         vals = [self.data["legs"].get(g, {}).get(leg) for g in goos_list]
@@ -403,7 +450,14 @@ class Timings:
 
 
 def package_weight(p: Package, timings: Timings, goos_list: list[str]) -> float:
-    measured = timings.pkg(goos_list, p.path)
+    """Estimated seconds: the SLOWEST measured GOOS among the pool's (the shard
+    may land on any node), else the seed table, else the size heuristic."""
+    measured = timings.pkg_max(goos_list, p.path)
+    seed = SEED_SECONDS.get(rel_pkg(p.path))
+    if seed is not None and any(timings.pkg([g], p.path) is None for g in goos_list):
+        # Unmeasured on part of the pool (e.g. only Linux has run it so far):
+        # the seed stands in for the missing GOOS, which may be the slow one.
+        measured = seed if measured is None else max(measured, seed)
     # A per-package constant covers compiling and linking the -race test binary,
     # which the `ok pkg 1.2s` line does not include.
     compile_cost = 3.0 if p.test_bytes else 1.0
@@ -441,6 +495,8 @@ class Leg:
     packages: tuple[str, ...] = ()
     queued_at: float = 0.0
     attempts: int = 0
+    heavy: bool = False  # one slow package on its own; started first, spread across hosts
+    timeout_min: int = 25  # go test -timeout for a shard
 
 
 # The non-test legs of `make ci`, as make targets. test-short's own `vet`
@@ -461,11 +517,11 @@ MAKE_LEGS = (
 )
 
 
-def go_test_command(packages: Iterable[str], cover_file: str, par: int) -> str:
+def go_test_command(packages: Iterable[str], cover_file: str, par: int, timeout_min: int = 25) -> str:
     pkgs = " ".join(shlex.quote(p) for p in packages)
     return (
         f"go test -short -race -coverprofile={shlex.quote(cover_file)} -covermode=atomic "
-        f"-timeout {TEST_SHORT_TIMEOUT} -p {par} {pkgs}"
+        f"-timeout {timeout_min}m -p {par} {pkgs}"
     )
 
 
@@ -480,9 +536,26 @@ def build_shards(
     """Split packages into go-test legs. Decode packages form their own shards
     (weighted with the decode-capable nodes' GOOS timings) so they can only be
     picked up by a node that may decode."""
-    decode = [(p.path, package_weight(p, timings, decode_goos or all_goos)) for p in packages if p.decode]
-    plain = [(p.path, package_weight(p, timings, all_goos)) for p in packages if not p.decode]
+    weights = {
+        p.path: package_weight(p, timings, decode_goos or all_goos) if p.decode else package_weight(p, timings, all_goos)
+        for p in packages
+    }
     legs: list[Leg] = []
+    heavy = {p.path for p in packages if weights[p.path] >= HEAVY_SECONDS}
+    for p in sorted((p for p in packages if p.path in heavy), key=lambda p: -weights[p.path]):
+        legs.append(
+            Leg(
+                name="test-" + rel_pkg(p.path).removeprefix("internal/").replace("/", "-"),
+                command="",
+                est=weights[p.path],
+                needs_decode=p.decode,
+                packages=(p.path,),
+                heavy=True,
+                timeout_min=shard_timeout_minutes([p.path], timings, all_goos),
+            )
+        )
+    decode = [(p.path, weights[p.path]) for p in packages if p.decode and p.path not in heavy]
+    plain = [(p.path, weights[p.path]) for p in packages if not p.decode and p.path not in heavy]
     for tag, items, k, needs in (("decode", decode, decode_bins, True), ("go", plain, plain_bins, False)):
         for i, b in enumerate(partition_lpt(items, k)):
             legs.append(
@@ -492,6 +565,7 @@ def build_shards(
                     est=sum(w for _, w in b),
                     needs_decode=needs,
                     packages=tuple(sorted(n for n, _ in b)),
+                    timeout_min=shard_timeout_minutes([n for n, _ in b], timings, all_goos),
                 )
             )
     return legs
@@ -580,10 +654,15 @@ class Worker:
     par: int
     gomaxprocs: int | None = None
     alive: bool = True
+    tests_ok: bool = True  # False: prod node that cannot isolate test networking
 
     @property
     def is_local(self) -> bool:
         return self.node is None
+
+    @property
+    def host(self) -> str:
+        return self.node.name if self.node else "local"
 
 
 def pick_leg(
@@ -592,12 +671,19 @@ def pick_leg(
     remote_workers: list[Worker],
     now: float,
     local_after: float,
+    heavy_running: dict[str, int] | None = None,
 ) -> Leg | None:
     """Choose the next leg for `worker`, or None.
 
     Remote: never a local-only leg, never a decode leg on a nodecode node.
-    A decode-capable node takes decode shards first (they cannot go anywhere
-    else), then the heaviest remaining leg.
+    1. Heavy legs (one slow package each) come before everything else, so the
+       long poles start first. A decode-capable node takes the heavy DECODE
+       legs first, since no other node may run them. A host that is already
+       running a heavy leg passes on another one while some other live host
+       that could run it has none running, so the slow packages spread across
+       hosts instead of stacking on one.
+    2. Then a decode-capable node takes decode shards, then the heaviest
+       remaining leg.
     Local: local-only legs; any leg no live remote worker can run; and, after
     `local_after` seconds in the queue, anything (the Mac as the last resort).
     """
@@ -609,16 +695,36 @@ def pick_leg(
         for leg in queue:
             if leg.remote_only:
                 continue
-            if not any(w.decode_ok or not leg.needs_decode for w in live):
+            if not any((w.decode_ok or not leg.needs_decode) and (w.tests_ok or not leg.packages) for w in live):
                 return leg
         if local_after >= 0:
             for leg in queue:
                 if not leg.remote_only and now - leg.queued_at >= local_after:
                     return leg
         return None
-    runnable = [l for l in queue if not l.local_only and (worker.decode_ok or not l.needs_decode)]
+    runnable = [
+        l for l in queue
+        if not l.local_only and (worker.decode_ok or not l.needs_decode) and (worker.tests_ok or not l.packages)
+    ]
     if not runnable:
         return None
+    running = heavy_running or {}
+
+    def free_elsewhere(leg: Leg) -> bool:
+        return any(
+            w.alive and w.host != worker.host and running.get(w.host, 0) == 0
+            and (w.decode_ok or not leg.needs_decode) and (w.tests_ok or not leg.packages)
+            for w in remote_workers
+        )
+
+    heavy = sorted(
+        (l for l in runnable if l.heavy),
+        key=lambda l: (not (worker.decode_ok and l.needs_decode), -l.est, l.name),
+    )
+    for leg in heavy:
+        if running.get(worker.host, 0) == 0 or not free_elsewhere(leg):
+            return leg
+    runnable = [l for l in runnable if not l.heavy] or runnable
     if worker.decode_ok:
         decode = [l for l in runnable if l.needs_decode]
         if decode:
@@ -640,6 +746,7 @@ tools=""
 for t in go make git npm staticcheck golangci-lint mockery ffmpeg ffprobe fpcalc; do command -v "$t" >/dev/null 2>&1 && tools="$tools $t"; done
 echo "tools=$tools"
 test -d "$HOME/__BARE__" && echo "bare=1" || echo "bare=0"
+if command -v unshare >/dev/null 2>&1 && unshare -rn sh -c 'ip link set lo up && exec unshare --map-user=0 --map-group=0 true' >/dev/null 2>&1; then echo "netns=1"; else echo "netns=0"; fi
 if pgrep -x ollama >/dev/null 2>&1 || pgrep -f 'ollama serve' >/dev/null 2>&1; then
   echo "ollama_local=1"
   echo "ps1=$(curl -s -m3 127.0.0.1:11434/api/ps | tr -d '\n')"
@@ -670,16 +777,20 @@ def parse_probe(out: str) -> Probe:
         ncpu=int(kv.get("ncpu", "1") or 1),
         load1=float(kv.get("load1", "0") or 0),
         mem_avail_gb=memkb / 1048576.0 if memkb >= 0 else -1.0,
-        tools=frozenset(kv.get("tools", "").split()) | ({"bare"} if kv.get("bare") == "1" else set()),
+        tools=frozenset(kv.get("tools", "").split())
+        | ({"bare"} if kv.get("bare") == "1" else set())
+        | ({"netns"} if kv.get("netns") == "1" else set()),
         ollama_local=kv.get("ollama_local") == "1",
         ollama_ps=(kv.get("ps1", ""), kv.get("ps2", "")),
         ollama_cpu=float(kv.get("ollama_cpu", "0") or 0),
     )
 
 
-def setup_script(job: str, sha: str, nodecode: bool) -> str:
+def setup_script(job: str, sha: str, nodecode: bool, prod: bool = False) -> str:
     """Check the commit out into the job dir; on a nodecode node, build a PATH
-    with ffmpeg/ffprobe/fpcalc filtered out and save it next to the job."""
+    with ffmpeg/ffprobe/fpcalc filtered out and save it next to the job; on a
+    prod node, download modules now, because its test legs run without a
+    network."""
     lines = [
         "set -eu",
         f'export PATH="{REMOTE_PATH_PREFIX}:$PATH"',
@@ -689,6 +800,12 @@ def setup_script(job: str, sha: str, nodecode: bool) -> str:
         f'git worktree add --detach --force "{job}" {sha} >/dev/null',
         f'echo "checked out {sha[:12]} into {job}"',
     ]
+    if prod:
+        lines += [
+            f"export GOTOOLCHAIN={GO_TOOLCHAIN}",
+            f'export GOCACHE="$HOME/{REMOTE_ROOT}/cache/go-build" GOMODCACHE="$HOME/{REMOTE_ROOT}/cache/gomod"',
+            f'(cd "{job}" && nice -n 19 go mod download)',
+        ]
     if nodecode:
         tools = " ".join(DECODE_TOOLS)
         lines += [
@@ -720,6 +837,7 @@ def leg_script(
     prod: bool,
     gomaxprocs: int | None,
     cover_file: str | None,
+    isolate_net: bool = False,
 ) -> str:
     """The script one leg runs on a node: take a slot lock (or exit 75), keep
     it alive with a heartbeat, set the CI environment, run the command at low
@@ -766,7 +884,26 @@ def leg_script(
     ]
     if prod:
         s.append('echo "ci-remote: prod node, running under: $PRIO GOMAXPROCS=${GOMAXPROCS:-unset}"')
-    s += [f"$PRIO bash -c {q(command)}", "rc=$?"]
+    if isolate_net:
+        # A test that dials localhost must not reach the node's own services
+        # (on the prod host: the app, Deluge on 8112, the Ollama tunnel). Run
+        # it in a fresh network namespace with only loopback up. `unshare -r`
+        # maps us to root so `ip` may raise lo; the inner unshare maps back to
+        # our own uid with no capabilities, so file-permission tests behave as
+        # they do for a normal user. GOPROXY=off: modules were downloaded at
+        # setup, and a miss should fail fast rather than hang on no network.
+        inner = (
+            'ip link set lo up && exec unshare --map-user="$CI_UID" --map-group="$CI_GID" '
+            f"env GOPROXY=off bash -c {q(command)}"
+        )
+        s += [
+            "export CI_UID=$(id -u) CI_GID=$(id -g)",
+            'echo "ci-remote: test leg runs in an isolated network namespace (loopback only)"',
+            f"$PRIO unshare -rn sh -c {q(inner)}",
+            "rc=$?",
+        ]
+    else:
+        s += [f"$PRIO bash -c {q(command)}", "rc=$?"]
     if cover_file:
         s += [
             f'if [ -f {q(cover_file)} ]; then echo "{COVERAGE_BEGIN}"; cat {q(cover_file)}; echo "{COVERAGE_END}"; rm -f {q(cover_file)}; fi'
@@ -836,6 +973,7 @@ class Runner:
         self.cond = threading.Condition()
         self.queue: list[Leg] = []
         self.in_flight = 0
+        self.heavy_running: dict[str, int] = {}  # host -> heavy legs running now
         self.results: list[LegResult] = []
         self.pkg_results: dict[str, tuple[str, str]] = {}  # pkg -> (status, where)
         self.coverage: list[str] = []
@@ -881,7 +1019,7 @@ class Runner:
         prefix = f"{leg.name}@{where}"
         log_path = self.out_dir / f"{leg.name}.log"
         cover_file = f".ci-remote-{leg.name}.cover.out" if leg.packages else None
-        command = leg.command or go_test_command(leg.packages, cover_file or "", w.par)
+        command = leg.command or go_test_command(leg.packages, cover_file or "", w.par, leg.timeout_min)
         start = time.monotonic()
         goos = self.node_goos.get(where, "")
         with open(log_path, "a") as log:
@@ -902,6 +1040,7 @@ class Runner:
                 script = leg_script(
                     self.job, f"$HOME/{REMOTE_ROOT}/locks/slots", w.node.max_jobs, owner, command,
                     w.node.nodecode, w.node.prod, w.gomaxprocs, cover_file,
+                    isolate_net=bool(leg.packages) and w.node.prod,
                 )
                 proc = subprocess.Popen(
                     ["ssh", *SSH_OPTS, w.node.target, "bash", "-s"], text=True,
@@ -912,7 +1051,7 @@ class Runner:
                 proc.stdin.close()
             with self.cond:
                 self.procs.add(proc)
-            timer = threading.Timer(LEG_TIMEOUT_S, proc.kill)
+            timer = threading.Timer(max(LEG_TIMEOUT_S, (leg.timeout_min + 10) * 60), proc.kill)
             timer.start()
             try:
                 cover = self._stream(proc, prefix, log, leg, goos)
@@ -939,10 +1078,14 @@ class Runner:
                         return
                     if not w.alive:
                         return
-                    leg = pick_leg(self.queue, w, remote_workers, time.monotonic(), self.args.local_after)
+                    leg = pick_leg(
+                        self.queue, w, remote_workers, time.monotonic(), self.args.local_after, self.heavy_running
+                    )
                     if leg:
                         self.queue.remove(leg)
                         self.in_flight += 1
+                        if leg.heavy:
+                            self.heavy_running[w.host] = self.heavy_running.get(w.host, 0) + 1
                         break
                     self.cond.wait(timeout=5)
             try:
@@ -952,6 +1095,8 @@ class Runner:
             requeue_after = 0.0
             with self.cond:
                 self.in_flight -= 1
+                if leg.heavy:
+                    self.heavy_running[w.host] -= 1
                 if not w.is_local and res.rc == LOCK_BUSY_RC:
                     self.say(f"[{leg.name}@{w.label}] all {w.node.max_jobs} slots held by other runs; requeued")
                     leg.queued_at = leg.queued_at or time.monotonic()
@@ -1167,8 +1312,9 @@ def _main_inner(args, repo: Path, primary: Path | None, tree: Path, sha: str, ou
         print("ci-remote: no decode-capable node; decode shards run on this machine", flush=True)
     print(fmt_table(
         [(l.name, f"{l.est:.0f}s", str(len(l.packages)) if l.packages else "-",
-          "decode-only" if l.needs_decode else ("local" if l.local_only else "any")) for l in legs],
-        ("leg", "est", "pkgs", "placement"),
+          "decode-only" if l.needs_decode else ("local" if l.local_only else "any"),
+          f"{l.timeout_min}m" if l.packages else "-") for l in legs],
+        ("leg", "est", "pkgs", "placement", "timeout"),
     ), flush=True)
     (out_dir / "plan.json").write_text(json.dumps({
         "sha": sha, "decode_packages": dec,
@@ -1193,7 +1339,7 @@ def _main_inner(args, repo: Path, primary: Path | None, tree: Path, sha: str, ou
         if p.returncode != 0:
             runner.say(f"ci-remote: push to {n.name} failed: {p.stderr.strip()[:300]}")
             return
-        s = ssh_script(n, setup_script(runner.job, sha, n.nodecode), timeout=600)
+        s = ssh_script(n, setup_script(runner.job, sha, n.nodecode, n.prod), timeout=900)
         if s.returncode != 0:
             runner.say(f"ci-remote: checkout on {n.name} failed: {(s.stderr or s.stdout).strip()[:300]}")
             return
@@ -1213,7 +1359,8 @@ def _main_inner(args, repo: Path, primary: Path | None, tree: Path, sha: str, ou
 
     remote_workers = [
         Worker(f"{n.name}" + (f"#{i + 1}" if caps[n].slots > 1 else ""), n,
-               can_decode(n, probes[n]), caps[n].par, caps[n].gomaxprocs)
+               can_decode(n, probes[n]), caps[n].par, caps[n].gomaxprocs,
+               tests_ok=(not n.prod) or ("netns" in probes[n].tools))
         for n in ready for i in range(caps[n].slots)
     ]
     for w in remote_workers:
