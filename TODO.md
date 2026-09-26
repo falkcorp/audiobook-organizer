@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.17 -->
+<!-- version: 10.73.18 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-26 -->
 
@@ -55,7 +55,7 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **FP-FPIDX-LEGACY-PURGE** `fpidx:`/`fpidx_meta:` rows written from legacy-era prints are never removed. `dedup.lsh-index-build` skips legacy rows and does not delete them, and `LSHIndexVersion` was not bumped. `PebbleStore.LSHProbe` ranks by band hits and applies `MaxCandidates` (200) before `CollectLSHAcoustID` drops legacy candidates, so garbage rows can take a real candidate's slot. About 66k missing-file rows will never be re-fingerprinted, so theirs are permanent. Add a purge (delete where `!HasCurrentPrint()`), then rebuild and check that the `fpidx_meta` count equals the number of current-era prints. Plan: `docs/audio-fingerprint/threshold-recalibration-plan.md`.
 - [ ] **FP-THRESHOLD-RECALIBRATE** After re-fingerprinting and the fpidx purge, measure the Group A/B fingerprint thresholds on current-era prod pairs, computing on the Mac. Group A: `FuzzyMinSimilarity` 0.80, LSH `MinHamming` 0.85, `LSHMinBandHits` 2, `sameRecordingMinSimilarity` 0.90, the iTunes-heal literal 0.9. Group B: veto 0.50, dataset 0.95/0.90. Stratify the negatives by publisher intro. Change the constants only with a precision/recall table, then re-run `dedup.book-signature-scan`, `dedup.full-scan` and `acoustid.lookup-online`. Method: `docs/audio-fingerprint/threshold-recalibration-plan.md`.
 
-- [ ] **LLM-NODES-REMOTE-CI** Use the LLM nodes as a remote runner pool for local
+- [x] **LLM-NODES-REMOTE-CI** (done 2026-09-26: `make ci-remote`, `scripts/ci_remote.py`, setup in `docs/process/ci-remote.md`) Use the LLM nodes as a remote runner pool for local
       CI, so `make ci` no longer runs entirely on the Mac. More LLM nodes are
       coming, so no single host is hard-coded: the pool is whatever list of nodes
       is configured. On 2026-09-25 several agents ran `make ci` and `go test -race`
