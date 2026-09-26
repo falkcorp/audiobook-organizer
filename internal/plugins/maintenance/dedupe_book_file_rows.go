@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-09-21
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -17,8 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	ulid "github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -54,6 +52,44 @@ type DedupeBookFileRowsParams struct {
 	// rows — it does not guess. A pointer of nil means enabled; send false to
 	// restrict the run to exact duplicate paths.
 	PruneSuperseded *bool `json:"pruneSuperseded,omitempty"`
+	// BookIDs scopes the run: when non-empty, ONLY these books are visited, by
+	// every mode, and Limit caps within them. Empty means the whole library.
+	BookIDs []string `json:"book_ids,omitempty"`
+	// CrossFolder enables the cross-folder purge, off by default: a row whose
+	// file is MISSING is deleted when EXACTLY ONE present row in the same book
+	// has the same basename (case-sensitive) and the same size_bytes, neither
+	// path is under books/itunes/**, and an os.Stat at apply time confirms the
+	// row's path is still absent and the twin's path still exists at that size.
+	// It rides the ordinary keeper path, so the twin is salvaged from the row,
+	// inherits its fingerprint windows, and the book's aggregates are
+	// recomputed. See dedupe_book_file_rows_crossfolder.go.
+	CrossFolder bool `json:"cross_folder,omitempty"`
+	// RemoveRowIDs switches the op to remove-named-rows mode INSTEAD of the
+	// sweep: each named row is removed when another present row in its book has
+	// an identical file hash, or when ConfirmedDuplicate is set. Only the row is
+	// removed; the file on disk is never touched. Preview unless Apply.
+	RemoveRowIDs []string `json:"remove_row_ids,omitempty"`
+	// ConfirmedDuplicate lets RemoveRowIDs remove a row with no hash twin. It
+	// asserts a human has established the row is a duplicate (e.g. by
+	// transcription); the op cannot check that claim, so it is never a default.
+	ConfirmedDuplicate bool `json:"confirmed_duplicate,omitempty"`
+}
+
+// bookScope returns the trimmed, de-duplicated, sorted book_ids scope, or nil
+// when the run is library-wide.
+func (p DedupeBookFileRowsParams) bookScope() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range p.BookIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // pruneSupersededEnabled reports the PruneSuperseded setting, default true.
@@ -67,7 +103,7 @@ func (p *Plugin) dedupeBookFileRowsDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "De-duplicate book_file rows",
-		Description:     "Finds books holding MORE THAN ONE book_file row for the same file_path and removes the redundant rows, then recomputes the book's aggregates. Duplicated rows inflate a book's total duration and file size by the duplication factor. Dry-run by default — pass {\"apply\": true} to delete.",
+		Description:     "Finds books holding MORE THAN ONE book_file row for the same file_path and removes the redundant rows, then recomputes the book's aggregates. Duplicated rows inflate a book's total duration and file size by the duplication factor. Optional: book_ids scopes the run; cross_folder:true also deletes a missing row whose basename and size match exactly one present row in the same book; remove_row_ids removes named rows that have an identical-hash present twin (or confirmed_duplicate:true). Dry-run by default — pass {\"apply\": true} to delete.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.dedupe-book-file-rows",
@@ -253,7 +289,9 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		return fmt.Errorf("dedupe-book-file-rows: %w", rpErr)
 	}
 	log := reporter.Logger()
-	log.Info("dedupe-book-file-rows: starting", "apply", params.Apply, "limit", params.Limit)
+	scope := params.bookScope()
+	log.Info("dedupe-book-file-rows: starting", "apply", params.Apply, "limit", params.Limit,
+		"book_ids", len(scope), "cross_folder", params.CrossFolder, "remove_row_ids", len(params.RemoveRowIDs))
 
 	// 🔴 FAIL CLOSED. A library.scan rewrites the same book_file rows this op
 	// deletes, so a concurrent scan can resurrect a row we just collapsed or
@@ -297,11 +335,34 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	if err != nil {
 		return fmt.Errorf("scan book_files: %w", err)
 	}
+	// Captured ONCE, outside any worker: every journal row this run writes is
+	// tagged with the same operation id so GetOperationChanges(opID) returns the
+	// whole deletion set. ReporterOpID degrades to "" for a reporter that cannot
+	// say (a fake, by design) — that is a WARN, never a refusal: the rows still
+	// carry the full BookFile in OldValue and stay reachable via GetBookChanges.
+	opID := registry.ReporterOpID(reporter)
+	if opID == "" {
+		log.Warn("dedupe-book-file-rows: no operation id; journal rows will be uncorrelated")
+	}
+
+	// remove_row_ids runs INSTEAD of the sweep: it is an explicit, named-row
+	// removal and must not quietly bring a library-wide dedupe along with it.
+	if len(params.RemoveRowIDs) > 0 {
+		return p.finishRemoveNamedRows(store, params, cores, opID, reportPath, reporter)
+	}
+
+	inScope := make(map[string]bool, len(scope))
+	for _, id := range scope {
+		inScope[id] = true
+	}
 	byBookPath := map[string][]string{}
 	for i := range cores {
 		c := cores[i]
 		if c.BookID == "" || strings.TrimSpace(c.FilePath) == "" {
 			continue // orphan / pathless rows belong to orphan-book-files-cleanup
+		}
+		if len(inScope) > 0 && !inScope[c.BookID] {
+			continue // book_ids scope: nothing outside it is even counted
 		}
 		key := c.BookID + "\x00" + c.FilePath
 		byBookPath[key] = append(byBookPath[key], c.ID)
@@ -353,6 +414,57 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		}
 	}
 
+	// Cross-folder candidates: a book where one basename sits at two or more
+	// distinct paths — the only shape a cross-folder twin can take. Like the
+	// same-folder candidates above this costs no extra read; which of those
+	// paths is actually absent is decided by a stat per book in the pool.
+	crossFolderCandidates := 0
+	if params.CrossFolder {
+		perBookBase := map[string]int{}
+		for key := range byBookPath {
+			parts := strings.SplitN(key, "\x00", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			perBookBase[parts[0]+"\x00"+filepath.Base(parts[1])]++
+		}
+		for key, n := range perBookBase {
+			if n < 2 {
+				continue
+			}
+			bookID := strings.SplitN(key, "\x00", 2)[0]
+			if _, ok := affected[bookID]; !ok {
+				affected[bookID] = nil // visited for cross-folder purging only
+				crossFolderCandidates++
+			}
+		}
+	}
+
+	// A scoped run visits EVERY scoped book that has rows, not only those the
+	// cheap candidate filters above picked out: an owner who names a book is
+	// owed a decision (and a skip reason) for each missing row in it, which a
+	// book with no candidate shape would otherwise never get.
+	//
+	// A scoped book that holds no book_file rows at all is almost certainly a
+	// typo in the request; say so rather than let it vanish into "0 affected".
+	scopedOnly := 0
+	if len(scope) > 0 {
+		hasRows := map[string]bool{}
+		for key := range byBookPath {
+			hasRows[strings.SplitN(key, "\x00", 2)[0]] = true
+		}
+		for _, id := range scope {
+			if !hasRows[id] {
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("dedupe-book-file-rows: book_ids entry %s has no book_file rows with a path", id))
+				continue
+			}
+			if _, ok := affected[id]; !ok {
+				affected[id] = nil
+				scopedOnly++
+			}
+		}
+	}
+
 	bookIDs := make([]string, 0, len(affected))
 	for id := range affected {
 		bookIDs = append(bookIDs, id)
@@ -368,8 +480,9 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		"redundant_rows", dupRows)
 
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"%d book(s) hold duplicate book_file rows (%d redundant rows); %d more visited for superseded-row folding",
-		len(affected)-supersededCandidates, dupRows, supersededCandidates))
+		"%d book(s) hold duplicate book_file rows (%d redundant rows); %d more visited for superseded-row folding; %d more for cross-folder purging; %d more because book_ids named them",
+		len(affected)-supersededCandidates-crossFolderCandidates-scopedOnly, dupRows, supersededCandidates,
+		crossFolderCandidates, scopedOnly))
 
 	// 🔒 Counters are touched by every worker — see the pool below. A single mutex
 	// is right here: contention is negligible against per-book DB work, and the
@@ -384,6 +497,13 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	var supersededRows, supersededBooks int
 	var examples []string
 	var reportRows []dupeReportRow // appended by every worker: always under mu
+	// Per-row cross-folder decisions (would delete, skipped, deleted, failed):
+	// appended by every worker, always under mu.
+	var decisions []bookFileRowDecision
+	// Per-row decisions are tracked for a cross-folder or a scoped run: those
+	// are the runs an owner approves row by row. A library-wide exact-duplicate
+	// sweep keeps its per-book report only, rather than logging every row.
+	trackRows := params.CrossFolder || len(scope) > 0
 
 	// PASS 2 — per affected book only, so the expensive full-fidelity read is paid
 	// for the handful of books that need it rather than the whole library.
@@ -407,16 +527,8 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	log.Info("dedupe-book-file-rows: processing books in parallel",
 		"books", len(bookIDs), "workers", workers)
 
-	// Captured ONCE, outside the workers: every journal row this run writes is
-	// tagged with the same operation id so GetOperationChanges(opID) returns the
-	// whole deletion set. ReporterOpID degrades to "" for a reporter that cannot
-	// say (a fake, by design) — that is a WARN, never a refusal: the rows still
-	// carry the full BookFile in OldValue and stay reachable via GetBookChanges.
-	opID := registry.ReporterOpID(reporter)
-	if opID == "" {
-		log.Warn("dedupe-book-file-rows: no operation id; journal rows will be uncorrelated")
-	}
-
+	// opID was captured once, before PASS 1, so every worker tags its journal
+	// rows with the same operation id.
 	runErr := registry.RunItems(ctx, reporter, bookIDs, func(ctx context.Context, bookID string) error {
 		// GetBookFiles reads Pebble directly (raw prefix iteration), NOT memdb, so
 		// AcoustIDFingerprint is present and un-stripped here. That is exactly why
@@ -490,6 +602,49 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			mu.Unlock()
 		}
 
+		// Cross-folder purge: a MISSING row left after the same-folder fold is
+		// moved into the group of its ONE present same-basename, same-size twin,
+		// so the ordinary keeper path below handles it exactly like any other
+		// redundant row — present outranks absent (the twin keeps), salvage,
+		// window carry-over, journal, batched delete, recompute. crossRows
+		// remembers which donors arrived this way, because those alone need the
+		// apply-time re-stat.
+		crossRows := map[string]bookFileRowDecision{}
+		if params.CrossFolder {
+			var candidates []database.BookFile
+			for path, rows := range byPath {
+				if !present[path] {
+					candidates = append(candidates, rows...)
+				}
+			}
+			purges, skips := planCrossFolderPurges(bookID, candidates, files, present)
+			for _, d := range purges {
+				var stay []database.BookFile
+				for _, r := range byPath[d.Path] {
+					if r.ID == d.RowID {
+						byPath[d.TwinPath] = append(byPath[d.TwinPath], r)
+					} else {
+						stay = append(stay, r)
+					}
+				}
+				if len(stay) == 0 {
+					delete(byPath, d.Path)
+				} else {
+					byPath[d.Path] = stay
+				}
+				crossRows[d.RowID] = d
+			}
+			if len(skips) > 0 {
+				mu.Lock()
+				decisions = append(decisions, skips...)
+				mu.Unlock()
+			}
+		}
+		// Decisions for every row queued for deletion in this book (when rows
+		// are tracked), so each outcome is reported once the batched delete has
+		// run.
+		var queuedDecisions []bookFileRowDecision
+
 		distinct := len(byPath)
 		dupHasFP := false
 
@@ -528,6 +683,77 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			}
 			ranked := rankKeeper(rows, present)
 			keeper, redundant := ranked[0], ranked[1:]
+
+			// Cross-folder donors: a preview records them; an apply re-stats both
+			// paths NOW, immediately before any write for this group, and drops
+			// a donor whose evidence no longer holds. Filtering happens before
+			// the salvage, so a dropped donor contributes nothing to the keeper.
+			// A group whose salvage or window carry-over fails is left intact;
+			// its donors' decisions, already queued below, are then reported
+			// as failed and un-queued so the book's outcome stays truthful.
+			groupQueuedStart := len(queuedDecisions)
+			failGroupQueued := func(reason string) {
+				mu.Lock()
+				for _, d := range queuedDecisions[groupQueuedStart:] {
+					d.Action, d.Reason = decisionFailed, reason
+					decisions = append(decisions, d)
+				}
+				mu.Unlock()
+				queuedDecisions = queuedDecisions[:groupQueuedStart]
+			}
+			if len(crossRows) > 0 {
+				var kept []database.BookFile
+				for _, r := range redundant {
+					d, isCross := crossRows[r.ID]
+					switch {
+					case !isCross:
+						kept = append(kept, r)
+					case !params.Apply:
+						mu.Lock()
+						decisions = append(decisions, d)
+						mu.Unlock()
+						kept = append(kept, r)
+					default:
+						if ok, why := verifyCrossFolderPurge(d, crossFolderApplyStat); !ok {
+							d.Action, d.Reason = decisionSkip, why
+							mu.Lock()
+							decisions = append(decisions, d)
+							mu.Unlock()
+							continue
+						}
+						kept = append(kept, r)
+						queuedDecisions = append(queuedDecisions, d)
+					}
+				}
+				redundant = kept
+				if len(redundant) == 0 {
+					continue
+				}
+			}
+			// Every OTHER redundant row — an exact duplicate of the keeper's
+			// path, or a same-folder fold — gets a decision too when rows are
+			// tracked, so a scoped or cross-folder preview is the complete list
+			// of what the matching apply deletes, not just the cross-folder part.
+			if trackRows {
+				for _, r := range redundant {
+					if _, isCross := crossRows[r.ID]; isCross {
+						continue
+					}
+					d := bookFileRowDecision{Mode: decisionModeSameFolder, Action: decisionWouldDelete,
+						BookID: bookID, RowID: r.ID, Path: r.FilePath, Size: r.FileSize,
+						TwinRowID: keeper.ID, TwinPath: keeper.FilePath}
+					if r.FilePath == keeper.FilePath {
+						d.Mode = decisionModeExactDuplicate
+					}
+					if params.Apply {
+						queuedDecisions = append(queuedDecisions, d)
+					} else {
+						mu.Lock()
+						decisions = append(decisions, d)
+						mu.Unlock()
+					}
+				}
+			}
 			// Read BEFORE mergeMissingFields, which may copy a twin's fingerprint
 			// onto the keeper: the report column is about the rows being removed.
 			for ri := 0; ri < len(redundant) && !dupHasFP; ri++ {
@@ -582,6 +808,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 					mu.Unlock()
 					log.Warn("dedupe-book-file-rows: could not persist salvaged fields; leaving this group intact",
 						"book_id", bookID, "keeper", keeper.ID, "err", uerr)
+					failGroupQueued("could not persist salvaged fields: " + uerr.Error())
 					continue
 				}
 				mu.Lock()
@@ -611,6 +838,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 				mu.Unlock()
 				log.Warn("dedupe-book-file-rows: could not carry fingerprint windows to the keeper; leaving this group intact",
 					"book_id", bookID, "keeper", keeper.ID, "donors", len(redundant), "err", cerr)
+				failGroupQueued("could not carry fingerprint windows to the twin: " + cerr.Error())
 				continue
 			}
 
@@ -646,58 +874,27 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		// of this op re-reads them and collapses them again, so the failure costs a
 		// re-run and nothing else.
 		if len(pendingDeletes) > 0 {
-			// 🔴 JOURNAL FIRST. The ledger row must exist BEFORE the delete
-			// commits: a journal written afterwards is lost in exactly the case it
-			// exists for — the process dying between the two. A journal write that
-			// FAILS aborts this book's delete entirely; an unreplayable deletion is
-			// worse than a duplicate row that survives to the next run, and this op
-			// is idempotent, so the cost of skipping is one more run.
-			//
-			// The full row goes into OldValue as JSON, not just its id: an id
-			// cannot be replayed back into a row, and replay is the only rollback
-			// this path has (`git revert` restores code, never data).
-			journalOK := true
-			for ri := range pendingRows {
-				blob, merr := json.Marshal(pendingRows[ri])
-				if merr != nil {
-					// A row we cannot serialize is a row we cannot replay. Same
-					// verdict as a failed write: do not delete it.
-					log.Warn("dedupe-book-file-rows: could not serialize row for the undo ledger; leaving this book's rows intact",
-						"book_id", bookID, "row", pendingRows[ri].ID, "err", merr)
-					journalOK = false
-					break
-				}
-				if jerr := store.CreateOperationChange(&database.OperationChange{
-					ID:          ulid.Make().String(),
-					OperationID: opID,
-					BookID:      bookID,
-					ChangeType:  "book_file_delete",
-					FieldName:   pendingRows[ri].ID,
-					OldValue:    string(blob), // the ENTIRE row, so the deletion can be replayed back
-					NewValue:    "",
-				}); jerr != nil {
-					log.Warn("dedupe-book-file-rows: journal write failed; leaving this book's rows intact",
-						"book_id", bookID, "row", pendingRows[ri].ID, "err", jerr)
-					journalOK = false
-					break
-				}
-			}
-
-			if !journalOK {
-				// Counted as a failure, but the sweep continues: one book's
-				// unwritable ledger must not abandon the other 175.
+			// Journal first, then one batched delete — journalAndDeleteBookFiles
+			// holds the ordering rationale. A failure leaves every queued row of
+			// this book intact; the op is idempotent, so the cost is one more
+			// run, and one book's failure must not abandon the others.
+			if derr := journalAndDeleteBookFiles(store, opID, bookID, pendingRows); derr != nil {
 				mu.Lock()
 				failed++
+				for _, d := range queuedDecisions {
+					d.Action, d.Reason = decisionFailed, derr.Error()
+					decisions = append(decisions, d)
+				}
 				mu.Unlock()
-			} else if derr := store.DeleteBookFilesByIDs(pendingDeletes); derr != nil {
-				mu.Lock()
-				failed++
-				mu.Unlock()
-				log.Warn("dedupe-book-file-rows: batched delete failed; leaving this book's rows intact",
+				log.Warn("dedupe-book-file-rows: journal or batched delete failed; leaving this book's rows intact",
 					"book_id", bookID, "rows", len(pendingDeletes), "err", derr)
 			} else {
 				mu.Lock()
 				deleted += len(pendingDeletes)
+				for _, d := range queuedDecisions {
+					d.Action = decisionDeleted
+					decisions = append(decisions, d)
+				}
 				mu.Unlock()
 				changedThisBook = true
 			}
@@ -771,6 +968,10 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	if limited {
 		reportNote += fmt.Sprintf(", limit %d of %d affected books", len(bookIDs), len(affected))
 	}
+	crossNote := ""
+	if trackRows {
+		crossNote = " | rows: " + p.emitRowDecisions(decisions, decisionsReportPath(reportPath), reporter)
+	}
 
 	verb := fmt.Sprintf("would delete %d (would salvage fields on %d keepers)", wouldDelete, salvaged)
 	if params.Apply {
@@ -785,8 +986,8 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	summary := fmt.Sprintf(
 		"dedupe-book-file-rows: %d rows scanned, %d books affected, %d redundant rows, "+
 			"%d superseded rows in %d books (file gone, one present sibling in the same folder), %s, failed %d "+
-			"| %s | NOTE: corrected totals may not appear until memdb refreshes (restart) | e.g. %s",
-		len(cores), len(affected), dupRows, supersededRows, supersededBooks, verb, failed, reportNote,
+			"| %s%s | NOTE: corrected totals may not appear until memdb refreshes (restart) | e.g. %s",
+		len(cores), len(affected), dupRows, supersededRows, supersededBooks, verb, failed, reportNote, crossNote,
 		strings.Join(examples, "; "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	_ = reporter.UpdateProgress(len(bookIDs), len(bookIDs), summary)
