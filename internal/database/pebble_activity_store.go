@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -967,6 +967,7 @@ func (s *PebbleActivityStore) query(ctx context.Context, f ActivityFilter) (_ []
 			"offset", f.Offset,
 			"tier", f.Tier,
 			"type", f.Type,
+			"type_aliases", f.TypeAliases,
 			"level", f.Level,
 			"source", f.Source,
 			"search", f.Search)
@@ -1188,7 +1189,7 @@ func pactSourcesCacheKey(f ActivityFilter) string {
 		until = fmt.Sprintf("%d", pactBucketTime(*f.Until).UnixNano())
 	}
 	return strings.Join([]string{
-		f.Tier, f.Type, f.Level, f.Source, f.OperationID, f.BookID, f.Search,
+		f.Tier, strings.Join(f.TypeValues(), "\x01"), f.Level, f.Source, f.OperationID, f.BookID, f.Search,
 		since, until,
 		strings.Join(f.Tags, ","),
 		strings.Join(f.ExcludeSources, ","),

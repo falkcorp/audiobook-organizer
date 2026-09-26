@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -541,7 +541,17 @@ func (s *SQLActivityStore) buildFilter(f ActivityFilter) (string, []any) {
 		}
 	}
 	eq("tier", f.Tier)
-	eq("type", f.Type)
+	// Type plus the former IDs of a renamed op (ActivityFilter.TypeAliases).
+	switch types := f.TypeValues(); len(types) {
+	case 0:
+	case 1:
+		eq("type", types[0])
+	default:
+		conds = append(conds, "type IN (?"+strings.Repeat(", ?", len(types)-1)+")")
+		for _, t := range types {
+			args = append(args, t)
+		}
+	}
 	eq("level", f.Level)
 	eq("source", f.Source)
 	if f.OperationID != "" {

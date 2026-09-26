@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.36.0
+// version: 2.36.1
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-09-25
 
@@ -48,7 +48,13 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 
 	// ── Instantiate Phase 2 handlers ─────────────────────────────────────────
 	cacheH := handlers.NewCacheHandler(s.metricsStore, s.storeForWiring())
-	activityH := handlers.NewActivityHandler(s.activityService, s.storeForWiring())
+	// Typed-nil guard as for compactEnqueuer below: a nil *Registry boxed into
+	// the interface would pass the handler's nil check and then panic.
+	var activityOpts []handlers.ActivityHandlerOption
+	if s.opRegistry != nil {
+		activityOpts = append(activityOpts, handlers.WithActivityOpDefs(s.opRegistry))
+	}
+	activityH := handlers.NewActivityHandler(s.activityService, s.storeForWiring(), activityOpts...)
 	// Typed-nil guard, as for mcFileIOPool below: s.opRegistry is a concrete
 	// pointer and a nil one boxed into the interface would pass the handler's
 	// nil check and then panic.
