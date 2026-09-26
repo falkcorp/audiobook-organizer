@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -71,6 +72,13 @@ const (
 	titleRelinkOutcomeITunes      = "skipped-itunes"
 	titleRelinkOutcomeOwnerManual = "skipped-owner-manual"
 	titleRelinkOutcomeFailed      = "failed"
+	// titleRelinkOutcomeAmbiguous: the one answer names two or more existing
+	// author rows (duplicate rows normalize to one name). Picking one would
+	// be a guess, the same reason the op reports an ambiguous merge.
+	titleRelinkOutcomeAmbiguous = "ambiguous"
+	// titleRelinkOutcomeDeferred: a relink past the run's limit; left for a
+	// later run.
+	titleRelinkOutcomeDeferred = "deferred-limit"
 )
 
 // titleRelinkFileTagKeys are the raw tag keys, lower-cased, that name a
@@ -104,13 +112,17 @@ type titleRelinkIndex struct {
 	bySeries       map[int][]database.BookCore
 	authorsByID    map[int]database.Author
 	seriesByID     map[int]database.Series
+	// byName is the op's own author index, keyed by dedup.NormalizeAuthorName,
+	// with every row of a duplicated name.
+	byName map[string][]database.Author
 	// junk are rows that are never an answer: this run's title-as-author rows
 	// and their numbered twins.
 	junk map[int]bool
 }
 
-func newTitleRelinkIndex(books []database.BookCore, authors []database.Author, seriesByID map[int]database.Series, junk map[int]bool) titleRelinkIndex {
+func newTitleRelinkIndex(books []database.BookCore, authors []database.Author, byName map[string][]database.Author, seriesByID map[int]database.Series, junk map[int]bool) titleRelinkIndex {
 	idx := titleRelinkIndex{
+		byName:         byName,
 		byVersionGroup: map[string][]database.BookCore{},
 		bySeries:       map[int][]database.BookCore{},
 		authorsByID:    make(map[int]database.Author, len(authors)),
@@ -233,9 +245,15 @@ type titleRelinkResult struct {
 }
 
 // relinkTitleAsAuthorBooks decides, and with write set performs, the relink
-// of every live book credited to a row in junkRows.
-func relinkTitleAsAuthorBooks(ctx context.Context, store titleRelinkStore, creator *authorPathLinkCreator, junkRows []database.Author, idx *titleRelinkIndex, write bool, log *slog.Logger) (titleRelinkResult, error) {
+// of every live book credited to a row in junkRows. limit > 0 caps the
+// relinks (decided, and with write set, written) at the first limit books in
+// junk-row-ID then book-ID order, so a limited preview lists exactly the
+// prefix a limited apply writes; the rest are reported as deferred.
+func relinkTitleAsAuthorBooks(ctx context.Context, store titleRelinkStore, creator *authorPathLinkCreator, junkRows []database.Author, idx *titleRelinkIndex, write bool, limit int, log *slog.Logger) (titleRelinkResult, error) {
 	res := titleRelinkResult{AllRelinked: map[int]bool{}, RelinkedBooks: map[string]bool{}}
+	junkRows = append([]database.Author{}, junkRows...)
+	sort.Slice(junkRows, func(i, j int) bool { return junkRows[i].ID < junkRows[j].ID })
+	decided := 0
 	for _, junk := range junkRows {
 		books, err := store.GetBooksByAuthorIDForRelinkCore(junk.ID)
 		if err != nil {
@@ -243,6 +261,7 @@ func relinkTitleAsAuthorBooks(ctx context.Context, store titleRelinkStore, creat
 				"author_id", junk.ID, "err", err)
 			continue
 		}
+		sort.Slice(books, func(i, j int) bool { return books[i].ID < books[j].ID })
 		live, relinked := 0, 0
 		for i := range books {
 			if ctx.Err() != nil {
@@ -252,7 +271,18 @@ func relinkTitleAsAuthorBooks(ctx context.Context, store titleRelinkStore, creat
 				continue // the delete path unlinks trashed books; nothing to credit
 			}
 			live++
-			r := relinkOneTitleBook(store, creator, books[i], junk, idx, write, log)
+			bookWrite, over := write, limit > 0 && decided >= limit
+			if over {
+				bookWrite = false
+			}
+			r := relinkOneTitleBook(store, creator, books[i], junk, idx, bookWrite, !over, log)
+			if r.Outcome == titleRelinkOutcomeRelink {
+				if over {
+					r.Outcome = titleRelinkOutcomeDeferred
+				} else {
+					decided++
+				}
+			}
 			res.Relinks = append(res.Relinks, r)
 			if r.Outcome == titleRelinkOutcomeRelink {
 				relinked++
@@ -267,7 +297,9 @@ func relinkTitleAsAuthorBooks(ctx context.Context, store titleRelinkStore, creat
 	return res, nil
 }
 
-func relinkOneTitleBook(store titleRelinkStore, creator *authorPathLinkCreator, book database.BookCore, junk database.Author, idx *titleRelinkIndex, write bool, log *slog.Logger) titleAuthorRelink {
+// write performs the relink; allowCreate lets the creator mint (or, in a
+// preview, count) a missing author row. A book past the limit has neither.
+func relinkOneTitleBook(store titleRelinkStore, creator *authorPathLinkCreator, book database.BookCore, junk database.Author, idx *titleRelinkIndex, write, allowCreate bool, log *slog.Logger) titleAuthorRelink {
 	r := titleAuthorRelink{BookID: book.ID, Title: book.Title, Junk: junk}
 	defer func() {
 		log.Info("author-strip-merge relink",
@@ -357,13 +389,29 @@ func relinkOneTitleBook(store titleRelinkStore, creator *authorPathLinkCreator, 
 	r.Chosen = chosen.name
 	r.Sources = sortedKeys(chosen.sources)
 
-	// With write unset the creator is in dry-run mode: an existing row is
-	// resolved, a missing one is counted as would-create and returns ID 0.
-	author, _, err := creator.resolveOrCreate(chosen.name, true)
-	if err != nil {
-		r.Outcome = titleRelinkOutcomeFailed
-		log.Warn("author-strip-merge relink: resolve author failed", "book_id", book.ID, "name", chosen.name, "err", err)
+	// Resolve against the op's own name index first: it keeps every row of a
+	// duplicated name, where GetAuthorByName would silently pick one.
+	var author database.Author
+	switch rows := idx.byName[dedup.NormalizeAuthorName(chosen.name)]; {
+	case len(rows) > 1:
+		for _, a := range rows {
+			r.Candidates = append(r.Candidates, fmt.Sprintf("%s [id %d]", a.Name, a.ID))
+		}
+		r.Outcome = titleRelinkOutcomeAmbiguous
 		return r
+	case len(rows) == 1:
+		author = rows[0]
+	default:
+		// No row yet: resolve-or-create through the creation gate. The
+		// creator is in dry-run mode for a preview (and for a book past the
+		// limit): a missing row is counted as would-create and returns ID 0.
+		a, _, err := creator.resolveOrCreate(chosen.name, allowCreate)
+		if err != nil {
+			r.Outcome = titleRelinkOutcomeFailed
+			log.Warn("author-strip-merge relink: resolve author failed", "book_id", book.ID, "name", chosen.name, "err", err)
+			return r
+		}
+		author = a
 	}
 	if author.ID > 0 && idx.junk[author.ID] {
 		// The name resolves to one of this run's junk rows: not an answer.

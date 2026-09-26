@@ -272,7 +272,9 @@ type authorStripMergeParams struct {
 	// junk author, chosen author, sources) and writes nothing, with the
 	// same counts the apply reports. With this AND
 	// delete_title_as_author set, a numbered twin all of whose books were
-	// relinked is deleted too. Limit does not cap the relinks.
+	// relinked is deleted too. Limit caps the relinks separately from the
+	// author-row plans: the first Limit books in junk-row-ID, book-ID order
+	// are relinked and the rest reported as deferred.
 	RelinkTitleAsAuthor bool `json:"relink_title_as_author"`
 }
 
@@ -365,19 +367,23 @@ type authorStripMergeReport struct {
 	RelinkSkippedITunes      int
 	RelinkSkippedOwnerManual int
 	RelinkFailed             int
-	Relinked                 int
-	RelinkNewAuthors         int
-	TwinDeletes              int
+	// RelinkAmbiguous: the one answer names 2+ existing rows (duplicate
+	// names); RelinkDeferred: relinks past limit, left for a later run.
+	RelinkAmbiguous  int
+	RelinkDeferred   int
+	Relinked         int
+	RelinkNewAuthors int
+	TwinDeletes      int
 }
 
 func (r authorStripMergeReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d target-unverified=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d relink-planned=%d relink-no-candidate=%d relink-conflict=%d relink-skipped-itunes=%d relink-skipped-owner-manual=%d relink-failed=%d relinked=%d relink-new-authors=%d twin-deletes=%d",
+		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d target-unverified=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d relink-planned=%d relink-no-candidate=%d relink-conflict=%d relink-skipped-itunes=%d relink-skipped-owner-manual=%d relink-failed=%d relink-ambiguous=%d relink-deferred=%d relinked=%d relink-new-authors=%d twin-deletes=%d",
 		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.TitleAsAuthorUnverified, r.Mergeable, r.Ambiguous, r.TargetIsJunk, r.TargetUnverified, r.MergeTargetRemoved,
 		r.StrippedNoTarget, r.OutOfScope, r.Placeholders, r.PlaceholdersNoCanonical,
 		r.CanonicalUnknownID, r.Merged, r.Deleted, r.BooksTouched,
 		r.BooksLeftAuthorless, r.Failed,
-		r.RelinkPlanned, r.RelinkNoCandidate, r.RelinkConflict, r.RelinkSkippedITunes, r.RelinkSkippedOwnerManual, r.RelinkFailed, r.Relinked, r.RelinkNewAuthors, r.TwinDeletes)
+		r.RelinkPlanned, r.RelinkNoCandidate, r.RelinkConflict, r.RelinkSkippedITunes, r.RelinkSkippedOwnerManual, r.RelinkFailed, r.RelinkAmbiguous, r.RelinkDeferred, r.Relinked, r.RelinkNewAuthors, r.TwinDeletes)
 }
 
 func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
@@ -663,9 +669,9 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		for _, a := range junkRows {
 			junkIDs[a.ID] = true
 		}
-		idx := newTitleRelinkIndex(allBooksCore, authors, seriesByID, junkIDs)
+		idx := newTitleRelinkIndex(allBooksCore, authors, byName, seriesByID, junkIDs)
 		creator := newAuthorPathLinkCreator(store, !relinkWrite)
-		rel, rErr := relinkTitleAsAuthorBooks(ctx, store, creator, junkRows, &idx, relinkWrite, log)
+		rel, rErr := relinkTitleAsAuthorBooks(ctx, store, creator, junkRows, &idx, relinkWrite, params.Limit, log)
 		if rErr != nil {
 			return rErr
 		}
@@ -686,6 +692,10 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 				report.RelinkSkippedOwnerManual++
 			case titleRelinkOutcomeFailed:
 				report.RelinkFailed++
+			case titleRelinkOutcomeAmbiguous:
+				report.RelinkAmbiguous++
+			case titleRelinkOutcomeDeferred:
+				report.RelinkDeferred++
 			}
 		}
 		report.RelinkNewAuthors = len(rel.NewAuthors)

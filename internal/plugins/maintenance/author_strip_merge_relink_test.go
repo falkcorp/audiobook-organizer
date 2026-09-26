@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
 // last-edited: 2026-09-26
 
@@ -24,6 +24,7 @@ type relinkFixture struct {
 	files   map[string][]database.BookFile
 	fetched map[string]string // book ID -> provider author_name
 	created []string
+	extra   []database.Author
 }
 
 func newRelinkFixture() *relinkFixture {
@@ -46,6 +47,7 @@ func (f *relinkFixture) run(t *testing.T, params string) (*stripMergeCalls, stri
 		{ID: 200, Name: "01 Arcane Chef 2"},
 		{ID: 300, Name: "T.J. Ward"},
 	}
+	authors = append(authors, f.extra...)
 	p := newTitleAsAuthorPluginWith(calls, authors, f.books, nil)
 	store := p.deps.(*fakeDeps).store.(*database.MockStore)
 	store.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) { return f.files[bookID], nil }
@@ -214,4 +216,38 @@ func TestAuthorStripMerge_RelinkNeverTouchesITunesOrOwnerManual(t *testing.T) {
 		t.Errorf("twin 200 deleted although its book was never relinked; deleted=%v", calls.deleted)
 	}
 	wantSummary(t, summary, "relink-skipped-itunes=1 ", "relink-skipped-owner-manual=1 ", "relinked=0 ", "twin-deletes=0")
+}
+
+// Two existing rows carry the chosen name (this library has duplicate author
+// rows). Picking one would be a guess: the book is left alone and reported as
+// ambiguous, the same rule the op applies to merges.
+func TestAuthorStripMerge_RelinkDuplicateAuthorRowsIsAmbiguous(t *testing.T) {
+	f := newRelinkFixture()
+	f.extra = []database.Author{{ID: 301, Name: "T.J. Ward"}}
+	f.fetched["bk-t"] = "T.J. Ward"
+	calls, summary := f.run(t, `{"apply":true,"relink_title_as_author":true}`)
+	if len(calls.setAuthors) != 0 || len(calls.updated) != 0 || len(f.created) != 0 {
+		t.Errorf("ambiguous relink wrote: setAuthors=%v updated=%v created=%v", calls.setAuthors, calls.updated, f.created)
+	}
+	wantSummary(t, summary, "relink-ambiguous=1 ", "relinked=0 ")
+}
+
+// limit caps the relinks: with limit=1 only the first book (junk row 100's
+// bk-t) is written, the other is deferred, and the twin keeps its book, so it
+// is not deleted.
+func TestAuthorStripMerge_RelinkHonoursLimit(t *testing.T) {
+	f := newRelinkFixture()
+	f.fetched["bk-t"] = "T.J. Ward"
+	f.fetched["bk-s"] = "T.J. Ward"
+	calls, summary := f.run(t, `{"apply":true,"relink_title_as_author":true,"delete_title_as_author":true,"limit":1}`)
+	if got := credits(calls, "bk-t"); len(got) != 1 || got[0] != 300 {
+		t.Errorf("bk-t credits = %v, want [300]", got)
+	}
+	if got := credits(calls, "bk-s"); got != nil {
+		t.Errorf("bk-s past the limit was rewritten: %v", got)
+	}
+	if containsInt(calls.deleted, 200) {
+		t.Errorf("twin deleted although its book was deferred; deleted=%v", calls.deleted)
+	}
+	wantSummary(t, summary, "relinked=1 ", "relink-deferred=1 ", "twin-deletes=0")
 }
