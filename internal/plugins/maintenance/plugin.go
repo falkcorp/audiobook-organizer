@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.54.0
+// version: 1.55.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -110,6 +110,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// missing-file-repoint (a row whose chapter file was consolidated into one
 		// file in the same folder). Dry run by default; never deletes a row.
 		p.repointMissingToFolderAudioDef(),
+		// move-book-file-rows: hand-picked row -> book reassignment for rows
+		// attached to the wrong primary. Dry run by default; never deletes.
+		p.moveBookFileRowsDef(),
 		// rewrite-path-prefix is the repoint op's complement: repoint repairs a
 		// row whose bytes moved WITHIN its own recorded directory, which is the
 		// only shape it can derive. A renamed PARENT directory is invisible to it
