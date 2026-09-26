@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
 // last-edited: 2026-09-26
 
@@ -263,6 +263,17 @@ type authorStripMergeParams struct {
 	// wrong for a real author whose only book is self-titled, so an apply must
 	// opt in after reading the report's list.
 	DeleteTitleAsAuthor bool `json:"delete_title_as_author"`
+
+	// RelinkTitleAsAuthor, when true (default FALSE) with apply=true,
+	// replaces the credit of every book credited to a title-as-author row (or
+	// to its numbered twin) with the book's real author, when the library's
+	// own evidence names exactly one (see author_strip_merge_relink.go).
+	// Preview first: apply=false with this set lists every relink (book,
+	// junk author, chosen author, sources) and writes nothing, with the
+	// same counts the apply reports. With this AND
+	// delete_title_as_author set, a numbered twin all of whose books were
+	// relinked is deleted too. Limit does not cap the relinks.
+	RelinkTitleAsAuthor bool `json:"relink_title_as_author"`
 }
 
 // deleteJunk resolves the tri-state pointer to its default of TRUE.
@@ -340,15 +351,33 @@ type authorStripMergeReport struct {
 	BooksLeftAuthorless int
 	Failed              int
 	Sample              []string
+
+	// Title-as-author relink (author_strip_merge_relink.go). RelinkPlanned
+	// books have exactly one real author; RelinkNoCandidate and
+	// RelinkConflict books are left alone; the Skipped buckets are the
+	// iTunes tree and owner-manual books; RelinkFailed are read or write
+	// failures. Relinked counts books written (apply). RelinkNewAuthors is
+	// how many distinct author rows the relink created (or would create).
+	// TwinDeletes are numbered twins deleted after all their books relinked.
+	RelinkPlanned            int
+	RelinkNoCandidate        int
+	RelinkConflict           int
+	RelinkSkippedITunes      int
+	RelinkSkippedOwnerManual int
+	RelinkFailed             int
+	Relinked                 int
+	RelinkNewAuthors         int
+	TwinDeletes              int
 }
 
 func (r authorStripMergeReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d target-unverified=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d",
+		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d target-unverified=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d relink-planned=%d relink-no-candidate=%d relink-conflict=%d relink-skipped-itunes=%d relink-skipped-owner-manual=%d relink-failed=%d relinked=%d relink-new-authors=%d twin-deletes=%d",
 		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.TitleAsAuthorUnverified, r.Mergeable, r.Ambiguous, r.TargetIsJunk, r.TargetUnverified, r.MergeTargetRemoved,
 		r.StrippedNoTarget, r.OutOfScope, r.Placeholders, r.PlaceholdersNoCanonical,
 		r.CanonicalUnknownID, r.Merged, r.Deleted, r.BooksTouched,
-		r.BooksLeftAuthorless, r.Failed)
+		r.BooksLeftAuthorless, r.Failed,
+		r.RelinkPlanned, r.RelinkNoCandidate, r.RelinkConflict, r.RelinkSkippedITunes, r.RelinkSkippedOwnerManual, r.RelinkFailed, r.Relinked, r.RelinkNewAuthors, r.TwinDeletes)
 }
 
 func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
@@ -415,7 +444,8 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 	log := reporter.Logger()
 	log.Info("author-strip-merge start",
 		"apply", params.Apply, "delete_junk", params.deleteJunk(),
-		"delete_unmatched", params.DeleteUnmatched, "limit", params.Limit)
+		"delete_unmatched", params.DeleteUnmatched, "delete_title_as_author", params.DeleteTitleAsAuthor,
+		"relink_title_as_author", params.RelinkTitleAsAuthor, "limit", params.Limit)
 
 	_ = reporter.UpdateProgress(0, 2, "Listing authors…")
 	authors, err := store.GetAllAuthors()
@@ -495,6 +525,10 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 
 	report := authorStripMergeReport{TotalAuthors: len(authors)}
 	var plans []authorStripPlan
+	// titleRows are the rows classified title-as-author; twins are numbered
+	// rows refused a merge because their target is one. Both are relink
+	// sources below.
+	var titleRows, twins []database.Author
 	tombstoneWarned := false
 
 	// The canonical placeholder, resolved the same way author-id-repair
@@ -531,6 +565,7 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 			continue
 		} else if isTitle {
 			report.TitleAsAuthor++
+			titleRows = append(titleRows, a)
 			if params.DeleteTitleAsAuthor {
 				plans = append(plans, authorStripPlan{from: a, reason: "title-as-author"})
 			}
@@ -599,6 +634,7 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 				continue
 			} else if isTitle {
 				report.TargetIsJunk++
+				twins = append(twins, a)
 				log.Info("author-strip-merge: not merging into a title-as-author row",
 					"from_id", a.ID, "from", a.Name, "into_id", targets[0].ID, "into", targets[0].Name)
 				continue
@@ -606,6 +642,66 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 			report.Mergeable++
 			t := targets[0]
 			plans = append(plans, authorStripPlan{from: a, into: &t, reason: "merge"})
+		}
+	}
+
+	// Title-as-author relink. Runs before any delete so a relinked book
+	// carries its real author when the junk row's delete re-reads its
+	// credits; a report-only run with the flag set computes the same
+	// decisions without writing, so its plan and counts match the apply's.
+	relinkWrite := params.Apply && params.RelinkTitleAsAuthor
+	var relinkedBooks map[string]bool
+	if params.RelinkTitleAsAuthor && len(titleRows)+len(twins) > 0 {
+		_ = reporter.UpdateProgress(1, 2, "Relinking title-as-author books…")
+		junkIDs := make(map[int]bool, len(titleRows)+len(twins))
+		junkRows := append(append([]database.Author{}, titleRows...), twins...)
+		for _, a := range junkRows {
+			junkIDs[a.ID] = true
+		}
+		idx := newTitleRelinkIndex(allBooksCore, authors, seriesByID, junkIDs)
+		creator := newAuthorPathLinkCreator(store, !relinkWrite)
+		rel, rErr := relinkTitleAsAuthorBooks(ctx, store, creator, junkRows, &idx, relinkWrite, log)
+		if rErr != nil {
+			return rErr
+		}
+		for _, r := range rel.Relinks {
+			switch r.Outcome {
+			case titleRelinkOutcomeRelink:
+				report.RelinkPlanned++
+				if relinkWrite {
+					report.Relinked++
+				}
+			case titleRelinkOutcomeNoCandidate:
+				report.RelinkNoCandidate++
+			case titleRelinkOutcomeConflict:
+				report.RelinkConflict++
+			case titleRelinkOutcomeITunes:
+				report.RelinkSkippedITunes++
+			case titleRelinkOutcomeOwnerManual:
+				report.RelinkSkippedOwnerManual++
+			case titleRelinkOutcomeFailed:
+				report.RelinkFailed++
+			}
+		}
+		report.RelinkNewAuthors = len(rel.NewAuthors)
+		for _, na := range rel.NewAuthors {
+			log.Info("author-strip-merge relink author row", "author_id", na.AuthorID, "name", na.Name, "books", na.Books, "created", relinkWrite)
+		}
+		if params.RelinkTitleAsAuthor {
+			relinkedBooks = rel.RelinkedBooks
+			// A numbered twin whose every book now carries its real author
+			// holds no credit worth keeping: delete it with the title rows.
+			// Only then: its books' titles were never judged, so deleting it
+			// with any book still credited would strip a credit no gate
+			// checked.
+			if params.DeleteTitleAsAuthor {
+				for _, tw := range twins {
+					if rel.AllRelinked[tw.ID] {
+						report.TwinDeletes++
+						plans = append(plans, authorStripPlan{from: tw, reason: "title-as-author-twin"})
+					}
+				}
+			}
 		}
 	}
 
@@ -715,6 +811,11 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		// failed on its third book did rewrite two, and the report must not
 		// shrink because of it.
 		for _, id := range authorless {
+			if relinkedBooks[id] {
+				// Relinked to its real author (in a report-only run, will
+				// be), so the delete does not leave it authorless.
+				continue
+			}
 			authorlessBooks[id] = struct{}{}
 		}
 		if params.Apply {
