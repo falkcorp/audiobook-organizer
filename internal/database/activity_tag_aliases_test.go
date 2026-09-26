@@ -1,5 +1,5 @@
 // file: internal/database/activity_tag_aliases_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e4a7c12-5f38-4d6b-b0e1-3a8d2c7f6b95
 // last-edited: 2026-09-26
 
@@ -81,6 +81,17 @@ func assertTagAliasQueries(t *testing.T, s typeAliasActivityStore) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"new 2", "old 2", "old 1"}, typeAliasSummaries(got))
+
+	// With an indexed predicate (Source) alongside: on the Pebble filter-index
+	// path the act:src: family is walked and the tag groups are decided by the
+	// residual matchesFilter check on each candidate.
+	got, total, err = s.Query(ctx, ActivityFilter{Source: "src", Tags: []string{canonical}, TagAliases: aliases, Limit: 50})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"new 2", "new 1", "old 2", "old 1"}, typeAliasSummaries(got))
+	assert.Equal(t, 4, total)
+	got, _, err = s.Query(ctx, ActivityFilter{Source: "src", Tags: []string{canonical, "failed"}, TagAliases: aliases, Limit: 50})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"new 2", "old 2"}, typeAliasSummaries(got))
 
 	// Empty and duplicate aliases change nothing.
 	got, _, err = s.Query(ctx, ActivityFilter{

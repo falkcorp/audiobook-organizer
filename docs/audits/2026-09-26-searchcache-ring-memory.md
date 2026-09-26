@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-09-26-searchcache-ring-memory.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 51b02350-8472-4bea-b151-3e430c2c0b06 -->
 <!-- last-edited: 2026-09-26 -->
 
@@ -47,9 +47,12 @@ go test ./internal/searchcache -run '^$' -bench ChangeLogRingMemory -benchtime 3
 ## CPU and lock cost: this, not memory, is the real cost of a bigger ring
 
 `ChangedSince` walks every live record while holding the `ChangeLog` mutex. It
-does not stop early. `Record` takes the same mutex, and store writes call `Record`
-(through `searchChangeObserver.BooksChanged` and `recordIndexCommit`), so a writer
-waits for as long as a walk takes.
+does not stop early. `Record` takes the same mutex. Store writes call `Record`
+synchronously on the writer's goroutine: `PebbleStore` defers
+`notifyBooksChanged` in its book write paths (`memdb_sync.go`), which calls
+`searchChangeObserver.BooksChanged`. Bleve commits call it too, through
+`recordIndexCommit`. So a book write, or an index commit, waits for as long as
+a walk takes.
 
 Two benchmarks cover this:
 
@@ -86,6 +89,9 @@ to be rebuilt rather than patched:
 1. **Ring overflow:** since the entry was built, more records were written than
    the ring holds. `ChangedSince` then returns `ok=false`.
 2. **Patch cap:** the entry has more than 2,048 distinct changed books.
+3. **PatchLimit:** more than 64 of the changed books still match the query
+   (`DefaultPatchLimit`). The cache checks this after re-evaluating the changed
+   set, at every ring size.
 
 A burst of D distinct books, each written R times, overflows a ring of size S
 when D×R > S. It hits the cap when D > 2,048, whatever S is. So a deeper ring
@@ -105,6 +111,19 @@ avoids rebuilds only for bursts that **repeat the same books**:
 - 1,000 books × 10 writes overflows 8,192 but patches at 65,536.
 - 2,000 books × 40 writes overflows 65,536 but patches at 262,144.
 
+The window an entry can be patched across is therefore the smallest of three
+limits:
+
+- the ring size divided by the writes per book;
+- 2,048 distinct books;
+- 64 divided by the fraction of changed books the query matches.
+
+For a broad query, where nearly every changed book matches, PatchLimit binds at
+about 64 distinct books. A deeper ring then buys nothing. The ring cases in
+`TestChangeLogRingPatchWindow` only prove that `ChangedSince` can still answer.
+They do not prove that the cache patches, because PatchLimit is applied after
+`ChangedSince`.
+
 **Effect of raising the ring:** fewer stale results and fewer rebuild events
 during bursts that are heavy on repeats. There is no change for bursts of many
 distinct books, because the cap forces a rebuild there.
@@ -113,8 +132,12 @@ distinct books, because the cap forces a rebuild there.
 
 The new counter `audiobook_organizer_search_cache_patch_cap_rebuilds_total` (also
 `Stats.PatchCapRebuilds`) counts rebuilds forced by the 2,048 cap, and only those.
-Rebuilds forced by ring overflow or by `PatchLimit` are not counted. Graph it
-against the cache's total rebuild count during a backfill:
+Rebuilds forced by ring overflow or by `PatchLimit` are not counted.
+
+The cache's total rebuild count (`Stats().Rebuilds`) is not exported anywhere
+today: no metric, and no endpoint. Only tests read it. So the comparison below
+needs a follow-up that exports it, for example as a sibling counter. Once both
+are exported, compare them during a backfill:
 
 - If most rebuilds are cap rebuilds, a deeper ring buys nothing.
 - If cap rebuilds are few while rebuilds climb, the ring (or `PatchLimit`) is what
@@ -122,7 +145,7 @@ against the cache's total rebuild count during a backfill:
 
 ## Recommendation
 
-Keep 65,536 unless the counter shows that ring overflow dominates. Before any
+Keep 65,536 unless the counters show that ring overflow dominates. Before any
 further raise, bound `ChangedSince` at `MaxPatchChanged+1`. Without that bound, a
 4× ring means 4× longer write stalls on every stale lookup (about 29 ms at
 262,144), and that costs more than the 10.5 MiB of extra memory.
