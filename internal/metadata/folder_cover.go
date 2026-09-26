@@ -197,12 +197,12 @@ func FindFolderCover(dir string, filter FolderCoverFilter) (*FolderCover, error)
 	return &c[0], nil
 }
 
-func decodeImageConfigFile(path string) (image.Config, string, error) {
+func decodeImageConfigFile(path string) (cfg image.Config, format string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return image.Config{}, "", err
 	}
-	defer f.Close()
+	defer func() { err = errors.Join(err, f.Close()) }()
 	return image.DecodeConfig(f)
 }
 
@@ -235,13 +235,17 @@ func LoadFolderCover(c FolderCover) (CoverImage, error) {
 }
 
 // ReadCoverFile reads an image file of at most FolderCoverMaxBytes.
-func ReadCoverFile(path string) ([]byte, error) {
+func ReadCoverFile(path string) (data []byte, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, FolderCoverMaxBytes+1))
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			data, err = nil, fmt.Errorf("close %s: %w", path, cerr)
+		}
+	}()
+	data, err = io.ReadAll(io.LimitReader(f, FolderCoverMaxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
