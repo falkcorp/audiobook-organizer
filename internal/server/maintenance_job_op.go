@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
-// last-edited: 2026-09-19
+// last-edited: 2026-09-25
 
 package server
 
@@ -14,6 +14,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
@@ -163,10 +164,14 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 			// here, so any path that reached this closure without the
 			// dispatcher's resolved params (a requeue, a resume, a direct
 			// enqueue) ran a dry-run-default job for real.
+			//
+			// Both spellings are read, as the opmode contract promises every op:
+			// a direct enqueue carrying {"dryRun":false} used to fall to the
+			// advertised default (true for 32 of 38 jobs) and silently preview.
+			// A request that sends both with different values fails here and the
+			// job never runs.
 			var p maintenanceJobOpParams
-			var dry struct {
-				DryRun *bool `json:"dry_run"`
-			}
+			var dry opmode.DryRunParams
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
 					return fmt.Errorf("%s: decode params: %w", maintenanceOpID(jobID), err)
@@ -175,10 +180,11 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 					return fmt.Errorf("%s: decode params: %w", maintenanceOpID(jobID), err)
 				}
 			}
-			p.DryRun = advertisedDryRunDefault(job)
-			if dry.DryRun != nil {
-				p.DryRun = *dry.DryRun
+			resolved, err := opmode.ResolveDryRunDefault(maintenanceOpID(jobID), dry.DryRun, dry.DryRunCamel, advertisedDryRunDefault(job))
+			if err != nil {
+				return err
 			}
+			p.DryRun = resolved
 
 			store := s.storeForWiring()
 

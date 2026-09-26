@@ -1,0 +1,180 @@
+# file: internal/server/testdata/write_op_modes.golden
+# version: 1.0.0
+# guid: 656b77a9-3e50-456c-9945-dbbebbd7e041
+# last-edited: 2026-09-25
+#
+# What `{}` does for every registered operation that can write (declares
+# library.write, files.write or db.migrate, or declares no capabilities at all).
+# Read by internal/server/write_op_modes_test.go
+# (TestWriteOps_EveryWriteOpHasARecordedMode): every such op must have exactly
+# one line here, and every line must name a registered op.
+#
+# Classes:
+#   preview  omitted mode is a preview (owner rule 2026-09-25)
+#   no-mode  the op has no preview mode at all; it always runs for real.
+#            Known gap, docs/audits/2026-09-25-op-preview-default-inventory.md
+#            section 5. Do NOT add a new op here to make the test pass: give it
+#            a preview mode (opmode.ResolveDryRun) and list it as preview.
+#
+# There is no "live" class on purpose. A writing op whose omitted mode is live
+# violates the owner rule; it gets a preview mode, not a ledger entry.
+#
+# Maintenance-job ops (maintenance.<job id> from internal/maintenance/jobs) are
+# not listed: TestMaintenanceJobs_PreviewByDefault checks their advertised
+# default against the job registry directly.
+#
+# Seeded 2026-09-25 from the inventory doc's sections 1-5.
+
+acoustid.backfill	no-mode
+acoustid.fingerprint-duration-repair	preview
+acoustid.fingerprint-rescan	no-mode
+acoustid.lookup-online	no-mode
+acoustid.lsh-backfill	no-mode
+acoustid.reset-all	no-mode
+acoustid.window-backfill	preview
+ai.author-merge-apply	no-mode
+ai.author-review	no-mode
+dedup.auto-resolve	preview
+dedup.book-merge	no-mode
+dedup.book-signature-scan	no-mode
+dedup.bookfile-seg-drop	preview
+dedup.breakdown-backfill	preview
+dedup.build-candidate-status-index	no-mode
+dedup.build-isbn-index	preview
+dedup.calibrate-composite	preview
+dedup.check-book	no-mode
+dedup.cleanup-orphan-author-embeddings	preview
+dedup.cleanup-orphan-embeddings	preview
+dedup.dataset-backfill	preview
+dedup.drain-stale	preview
+dedup.emb-reencode	preview
+dedup.embed-async	no-mode
+dedup.embed-scan	no-mode
+dedup.full-scan	no-mode
+dedup.llm-review	no-mode
+dedup.lsh-index-build	no-mode
+dedup.mine-gold-labels	preview
+dedup.purge-legacy-fp-candidates	preview
+dedup.purge-stale	no-mode
+dedup.quarantine-chapter-artifacts	preview
+dedup.rebuild-gold-labels	preview
+dedup.reembed-embeddings	preview
+dedup.rescore	preview
+dedup.rescore-labeled-examples	preview
+dedup.series-dedup	preview
+dedup.series-merge	no-mode
+dedup.series-normalize	no-mode
+dedup.series-prune	no-mode
+dedup.split-book-bulk-merge	preview
+deluge.centralize	no-mode
+deluge.protected-paths-sync	no-mode
+entities.author-merge	no-mode
+entities.resolve-production-author	no-mode
+entities.series-rename	no-mode
+itunes.clone-into-library	preview
+itunes.heal	no-mode
+itunes.import	no-mode
+itunes.path-reconcile	no-mode
+itunes.path-repair	preview
+itunes.position-sync	no-mode
+itunes.regroup	preview
+itunes.sync	no-mode
+library.ai-parse	no-mode
+library.bulk-write-back	no-mode
+library.folder-auto-scan	no-mode
+library.import	no-mode
+library.organize	no-mode
+library.scan	no-mode
+library.transcode	no-mode
+maintenance.activity-filter-index-backfill	no-mode
+maintenance.activity-reclaim	preview
+maintenance.ai-dedup-batch	no-mode
+maintenance.author-conjunction-repair	preview
+maintenance.author-duplicate-merge	preview
+maintenance.author-id-repair	preview
+maintenance.author-path-link	preview
+maintenance.author-split-scan	preview
+maintenance.author-strip-merge	preview
+maintenance.auto-match-transcribed	preview
+maintenance.batch-poller	no-mode
+maintenance.book-atpath-index-backfill	no-mode
+maintenance.booksig-recovery-audit	preview
+maintenance.booksig-sidecar-migrate	preview
+maintenance.build-folder-book-files	preview
+maintenance.bulk-write-back	no-mode
+maintenance.chapters-backfill	preview
+maintenance.cleanup-activity-log	no-mode
+maintenance.cleanup-old-backups	no-mode
+maintenance.clear-apply-rename-failures	preview
+maintenance.compact-activity-log	no-mode
+maintenance.db-optimize	no-mode
+maintenance.dedup-exact-triage	preview
+maintenance.dedupe-book-file-rows	preview
+maintenance.duration-backfill	preview
+maintenance.external-id-backfill	no-mode
+maintenance.extract-wav-clips	no-mode
+maintenance.file-provenance-capture	preview
+maintenance.fs-regroup-xml	preview
+maintenance.intro-migrate-single-file	preview
+maintenance.isbn-enrichment	no-mode
+maintenance.library-optimize	no-mode
+maintenance.malformed-m4b-remux	no-mode
+maintenance.malformed-m4b-transcode	no-mode
+maintenance.mark-missing-files	preview
+maintenance.merge-same-path-dupes	preview
+maintenance.metadata-cache-reap	preview
+maintenance.metadata-refresh	no-mode
+maintenance.metadata-upgrade	no-mode
+maintenance.missing-file-repoint	preview
+maintenance.movement-atom-cleanup	no-mode
+maintenance.nightly-compact-activity-log	no-mode
+maintenance.optimize-activity-db	no-mode
+maintenance.probe-directory-books	preview
+maintenance.prune-ai-journal	no-mode
+maintenance.purge-deleted	no-mode
+maintenance.purge-empty-authors	preview
+maintenance.purge-empty-narrators	preview
+maintenance.purge-old-logs	no-mode
+maintenance.recompact-activity-digests	no-mode
+maintenance.recover-missing-files	preview
+maintenance.relink-unlinked-books	preview
+maintenance.repair-junk-titles	preview
+maintenance.repair-library-state	preview
+maintenance.repair-transcribe-status	preview
+maintenance.repoint-missing-to-folder-audio	preview
+maintenance.repoint-unrecorded-renames	preview
+maintenance.resolve-production-authors	preview
+maintenance.review-status-index-repair	preview
+maintenance.rewrite-path-prefix	preview
+maintenance.series-denumber	preview
+maintenance.series-normalize	no-mode
+maintenance.series-phantom-repair	preview
+maintenance.series-prune	no-mode
+maintenance.split-joined-narrators	preview
+maintenance.tag-backfill	preview
+maintenance.temp-file-cleanup	no-mode
+maintenance.title-backfill	preview
+maintenance.title-repair	preview
+maintenance.tombstone-cleanup	no-mode
+maintenance.trash-cleanup	no-mode
+maintenance.version-group-primary-repair	preview
+maintenance.window	no-mode
+metadata.batch-apply-cached	preview
+metadata.batch-save	no-mode
+metadata.candidate-fetch	preview
+openlibrary.download	no-mode
+openlibrary.import	no-mode
+operations.backfill-legacy-status	preview
+reconcile.apply	no-mode
+scheduler.author-split-scan	preview
+scheduler.cleanup-old-backups	no-mode
+scheduler.db-optimize	no-mode
+scheduler.dedup-llm-review	no-mode
+scheduler.isbn-enrichment	no-mode
+scheduler.metadata-refresh	no-mode
+scheduler.metadata-upgrade	no-mode
+scheduler.purge-deleted	no-mode
+scheduler.resolve-production-authors	preview
+scheduler.temp-file-cleanup	no-mode
+scheduler.tombstone-cleanup	no-mode
+scheduler.trash-cleanup	no-mode
