@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_merged_user_state.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d4b2f67-1a9e-4c35-b7d0-9e6f3a2c1b58
 // last-edited: 2026-09-26
 
@@ -20,8 +20,14 @@
 // redirect chain, then merged_into_book_id) and, with apply=true, moves the
 // state under the merge conflict rule. There is deliberately no scheduled
 // variant: a scheduled op always runs with {}, which must be a preview (owner
-// rule 2026-09-25, testdata/write_op_modes.golden), so an automatic sweep of
-// the pending records needs a non-op trigger.
+// rule 2026-09-25, testdata/write_op_modes.golden), so pending records are
+// completed automatically by a server ticker (merge.PendingRepairLoop, started
+// in server_lifecycle.go) and at the start of every merge of the same books.
+//
+// Trigger: POST /api/v1/operations/v2 with
+//
+//	{"def_id":"maintenance.repair-merged-user-state","params":{}}              preview
+//	{"def_id":"maintenance.repair-merged-user-state","params":{"apply":true}}  move
 package maintenance
 
 import (

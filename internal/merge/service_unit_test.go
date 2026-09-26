@@ -41,6 +41,7 @@ func expectUserStateFollow(m *mocks.MockStore, loserID, winnerID string) {
 	m.EXPECT().SetRaw(key, mock.Anything).Return(nil)
 	m.EXPECT().DeleteRaw(key).Return(nil)
 	m.EXPECT().ListUsers().Return(nil, nil).Maybe()
+	m.EXPECT().ScanPrefix(PendingUserStateRepairPrefix).Return(nil, nil).Maybe()
 }
 
 func expectModifyBook(m *mocks.MockStore, b *database.Book) {

@@ -1,5 +1,5 @@
 // file: internal/merge/store.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
 // last-edited: 2026-09-26
 
@@ -89,6 +89,9 @@ type UserProgressMerger interface {
 	// would turn a failed move back into a silent loss.
 	SetRaw(key string, value []byte) error
 	DeleteRaw(key string) error
+	// ScanPrefix lists the pending records, so a merge can first complete
+	// any left by an earlier merge of the same books.
+	ScanPrefix(prefix string) ([]database.KVPair, error)
 }
 
 type mergeExternalIDReader interface {

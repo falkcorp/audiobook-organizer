@@ -36,7 +36,19 @@ and bookmark rows still stored under merged-away, soft-deleted or purged books
 whose live survivor is known (sync redirect chain, then
 `merged_into_book_id`) and moves them with the same rule. Books with no known
 survivor are counted, not guessed. It also completes the pending-repair
-records; nothing runs it on a schedule yet.
+records. Trigger with `POST /api/v1/operations/v2` and
+`{"def_id": "maintenance.repair-merged-user-state", "params": {"apply": true}}`
+(`"params": {}` previews).
+
+#### Pending user-state moves complete on their own
+
+A server ticker (every 15 minutes, outside the op system, stopped on shutdown)
+completes pending-repair records older than 5 minutes, one at a time under the
+merge lock, and every merge first completes records involving its own books.
+A record whose merged-away book is live again is deferred. The gauge
+`audiobook_organizer_merge_user_state_pending` reports how many remain. The
+scanner's version-link path (`FollowBookIDChange`) now writes the same record,
+and undoing a combine restores positions with their original timestamps.
 
 #### Automatic survivor election prefers the book a listener uses
 

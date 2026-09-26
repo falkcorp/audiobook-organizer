@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.13.0
+// version: 4.13.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package server
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -100,6 +101,7 @@ func (s *Server) startSearchIndexing() {
 	s.bgWG.Go("search-index-watchdog", func() {
 		s.runSearchIndexWatchdog()
 	})
+	s.startMergeUserStateRepair()
 	// Route the /audiobooks?search= path through Bleve.
 	if s.audiobookService != nil {
 		s.audiobookService.SetSearchIndex(s.searchIndex)
@@ -1739,4 +1741,28 @@ func newHTTPSRedirectHandler(cfgHost, httpsPort string) http.HandlerFunc {
 			"target", logger.SanitizeLogValue(servermiddleware.RedactQueryCredentials(target)))
 		http.Redirect(w, r, target, http.StatusMovedPermanently)
 	}
+}
+
+// Pending user-state repair ticker cadence (internal/merge/pending_repair.go).
+// A record younger than mergeUserStateRepairMinAge is left alone: its merge
+// may still be running and will delete it itself.
+const (
+	mergeUserStateRepairInterval = 15 * time.Minute
+	mergeUserStateRepairMinAge   = 5 * time.Minute
+)
+
+// startMergeUserStateRepair runs merge.PendingRepairLoop on bgWG, gated on
+// bgCtx, so Shutdown stops it before Pebble closes. It is deliberately not an
+// operation: a scheduled op runs with {} and {} must be a preview, while this
+// must write. It completes only the explicit loser -> survivor records merges
+// left, each under the merge lock.
+func (s *Server) startMergeUserStateRepair() {
+	db := s.storeForWiring()
+	if db == nil {
+		return
+	}
+	s.bgWG.Go("merge-user-state-repair", func() {
+		merge.PendingRepairLoop(s.bgCtx, db, mergeUserStateRepairInterval, mergeUserStateRepairMinAge,
+			func(r merge.PendingSweepResult) { metrics.SetMergeUserStatePending(r.Remaining) })
+	})
 }

@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-09-26
 
@@ -444,8 +444,11 @@ func writeProgress(db userPositionStore, userID, bookID string, st *database.Use
 	if err := db.ClearUserPositions(userID, bookID); err != nil {
 		return fmt.Errorf("clear positions user=%s book=%s: %w", userID, bookID, err)
 	}
-	for _, p := range pos {
-		if err := db.SetUserPosition(userID, bookID, p.SegmentID, p.PositionSeconds); err != nil {
+	// carryPosition keeps each row's original UpdatedAt (the ABS lastUpdate):
+	// restoring with SetUserPosition stamped the undo time, so an undone book
+	// looked freshly listened and won the next merge's newest-wins rule.
+	for _, p := range sortPositionsOldestFirst(pos) {
+		if err := carryPosition(db, userID, bookID, p); err != nil {
 			return fmt.Errorf("restore position %s user=%s book=%s: %w", p.SegmentID, userID, bookID, err)
 		}
 	}
@@ -458,13 +461,7 @@ func writeProgress(db userPositionStore, userID, bookID string, st *database.Use
 			return fmt.Errorf("restore state user=%s book=%s: %w", userID, bookID, err)
 		}
 	case current != nil:
-		drained := *current
-		drained.Status = ""
-		drained.StatusManual = false
-		drained.ProgressPct = 0
-		drained.TotalListenedSeconds = 0
-		drained.LastSegmentID = ""
-		if err := db.SetUserBookState(&drained); err != nil {
+		if err := db.SetUserBookState(drainedUserState(*current)); err != nil {
 			return fmt.Errorf("neutralize state user=%s book=%s: %w", userID, bookID, err)
 		}
 	}

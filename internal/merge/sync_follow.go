@@ -1,5 +1,5 @@
 // file: internal/merge/sync_follow.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
 // last-edited: 2026-09-26
 
@@ -107,6 +107,7 @@ func followMerge(db UserProgressMerger, follower SyncFollower, winnerBookID stri
 	if db == nil || winnerBookID == "" {
 		return nil
 	}
+	completePendingInvolving(db, append([]string{winnerBookID}, loserBookIDs...))
 	var errs []error
 	for _, loserID := range loserBookIDs {
 		if loserID == "" || loserID == winnerBookID {
@@ -334,12 +335,28 @@ func FollowBookIDChange(db UserProgressMerger, oldBookID, newBookID string) {
 	followSyncFilesForBookChange(db, oldBookID, newBookID)
 
 	// The identity now resolves to newBookID, so progress keyed to oldBookID
-	// would look lost to a client. It is still on disk under the old id (this
-	// only fails forward, never destroys), but it must be logged loudly.
+	// would look lost to a client. Same durability as a merge: the pending
+	// record is written first and deleted only after every user's state moved,
+	// so a failure is completed by the repair ticker instead of only logged.
+	// BookIDChange marks it: the old row stays live after a version-link, and
+	// the live-loser deferral that protects merges must not apply.
+	rec := PendingUserStateRepair{LoserBookID: oldBookID, WinnerBookID: newBookID, RecordedAt: time.Now().UTC(), BookIDChange: true}
+	recErr := putPendingRepair(db, rec)
 	if err := mergeUserProgress(db, oldBookID, newBookID); err != nil {
-		slog.Error("sync-identity follow: identity repointed but progress NOT migrated; positions still keyed to the old book id",
-			"sync_id", syncID, "old_book", oldBookID, "new_book", newBookID, "err", err)
+		if recErr == nil {
+			logPendingLeft(oldBookID, newBookID, err)
+		} else {
+			mlog.Error("sync-identity follow: identity of %s repointed to %s but progress NOT migrated and NO pending record written: %s; record: %s",
+				logger.SanitizeLogValue(oldBookID), logger.SanitizeLogValue(newBookID),
+				logger.SanitizeLogValue(fmt.Sprint(err)), logger.SanitizeLogValue(fmt.Sprint(recErr)))
+		}
 		return
+	}
+	if recErr == nil {
+		if err := db.DeleteRaw(pendingRepairKey(oldBookID, newBookID)); err != nil {
+			mlog.Warn("sync-identity follow: progress moved but pending record for %s not deleted: %s",
+				logger.SanitizeLogValue(oldBookID), logger.SanitizeLogValue(fmt.Sprint(err)))
+		}
 	}
 	slog.Info("sync-identity followed a book id change",
 		"sync_id", syncID, "old_book", oldBookID, "new_book", newBookID)

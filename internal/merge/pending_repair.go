@@ -1,11 +1,12 @@
 // file: internal/merge/pending_repair.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4c8a2e71-9f3d-4b06-8e5a-1d7c3b9f2e84
 // last-edited: 2026-09-26
 
 package merge
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,10 @@ type PendingUserStateRepair struct {
 	// Slice is set for a chapter / split-part merge: the sweep must apply the
 	// slice rule (followSliceFor), not the whole-book rule.
 	Slice *SliceMapping `json:"slice,omitempty"`
+	// BookIDChange is set by FollowBookIDChange (a version-link, not a
+	// merge): the old row stays live by design, so completion does not defer
+	// on a live loser and records no sync redirect (the identity was repointed).
+	BookIDChange bool `json:"book_id_change,omitempty"`
 }
 
 func pendingRepairKey(loserBookID, winnerBookID string) string {
@@ -88,6 +93,15 @@ func CompletePendingUserStateRepair(db UserProgressMerger, rec PendingUserStateR
 	winner, err := ResolveSurvivor(db, rec.WinnerBookID)
 	if err != nil {
 		return fmt.Errorf("resolve survivor of %s: %w", rec.WinnerBookID, err)
+	}
+	if rec.BookIDChange {
+		if err := mergeUserProgress(db, rec.LoserBookID, winner); err != nil {
+			return err
+		}
+		if err := db.DeleteRaw(pendingRepairKey(rec.LoserBookID, rec.WinnerBookID)); err != nil {
+			return fmt.Errorf("state moved but pending record not deleted (a re-run is a no-op): %w", err)
+		}
+		return nil
 	}
 	// A loser that is still live was not retired (the merge failed after the
 	// follow, or was undone): draining it now would strip state off a book
@@ -178,4 +192,100 @@ func logPendingLeft(loserBookID, winnerBookID string, cause error) {
 		logger.SanitizeLogValue(loserBookID), logger.SanitizeLogValue(winnerBookID),
 		logger.SanitizeLogValue(pendingRepairKey(loserBookID, winnerBookID)),
 		logger.SanitizeLogValue(fmt.Sprint(cause)))
+}
+
+// PendingSweepResult counts one pass over the pending records.
+type PendingSweepResult struct {
+	Completed, Deferred, Failed, Skipped, Undecodable int
+	// Remaining is the number of records left after the pass.
+	Remaining int
+}
+
+// CompletePendingUserStateRepairs completes every pending record accepted by
+// keep, one at a time. The caller holds LockMergeRMW (a merge in progress)
+// or takes it per record via lock (the ticker). A record whose loser is live
+// again is deferred and kept; any other failure is logged and kept.
+func CompletePendingUserStateRepairs(db UserProgressMerger, keep func(PendingUserStateRepair) bool, lock func() func()) (PendingSweepResult, error) {
+	var res PendingSweepResult
+	recs, undecodable, err := ListPendingUserStateRepairs(db)
+	if err != nil {
+		return res, err
+	}
+	res.Undecodable = len(undecodable)
+	for _, rec := range recs {
+		if keep != nil && !keep(rec) {
+			res.Skipped++
+			continue
+		}
+		unlock := func() {}
+		if lock != nil {
+			unlock = lock()
+		}
+		err := CompletePendingUserStateRepair(db, rec)
+		unlock()
+		switch {
+		case err == nil:
+			res.Completed++
+		case errors.Is(err, ErrPendingLoserLive):
+			res.Deferred++
+		default:
+			res.Failed++
+			mlog.Warn("merge user-state repair: record %s -> %s not completed: %s",
+				logger.SanitizeLogValue(rec.LoserBookID), logger.SanitizeLogValue(rec.WinnerBookID), logger.SanitizeLogValue(fmt.Sprint(err)))
+		}
+	}
+	res.Remaining = res.Undecodable + res.Skipped + res.Deferred + res.Failed
+	return res, nil
+}
+
+// completePendingInvolving completes, before a merge moves anything, the
+// pending records left by earlier merges of the same books, so a merge never
+// builds on top of a move that is still owed. Runs under the caller's merge
+// lock. Best-effort: whatever it cannot complete stays recorded for the ticker.
+func completePendingInvolving(db UserProgressMerger, bookIDs []string) {
+	involved := make(map[string]bool, len(bookIDs))
+	for _, id := range bookIDs {
+		if id != "" {
+			involved[id] = true
+		}
+	}
+	if _, err := CompletePendingUserStateRepairs(db, func(r PendingUserStateRepair) bool {
+		return involved[r.LoserBookID] || involved[r.WinnerBookID]
+	}, nil); err != nil {
+		mlog.Warn("merge: could not list pending user-state repairs before the merge: %s", logger.SanitizeLogValue(fmt.Sprint(err)))
+	}
+}
+
+// PendingRepairLoop completes pending records older than minAge every
+// interval until ctx is done, each record under the merge lock. onPass, when
+// set, gets each pass's result (the server feeds the pending-count gauge).
+// It returns when ctx is cancelled.
+func PendingRepairLoop(ctx context.Context, db UserProgressMerger, interval, minAge time.Duration, onPass func(PendingSweepResult)) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	pass := func() {
+		cutoff := time.Now().Add(-minAge)
+		res, err := CompletePendingUserStateRepairs(db,
+			func(r PendingUserStateRepair) bool { return !r.RecordedAt.After(cutoff) },
+			func() func() { LockMergeRMW(); return UnlockMergeRMW })
+		if err != nil {
+			mlog.Warn("merge user-state repair ticker: %s", logger.SanitizeLogValue(fmt.Sprint(err)))
+			return
+		}
+		if res.Completed+res.Deferred+res.Failed > 0 {
+			mlog.Info("merge user-state repair ticker: completed=%d deferred=%d failed=%d remaining=%d",
+				res.Completed, res.Deferred, res.Failed, res.Remaining)
+		}
+		if onPass != nil {
+			onPass(res)
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			pass()
+		}
+	}
 }

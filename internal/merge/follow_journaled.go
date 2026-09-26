@@ -1,5 +1,5 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
 // last-edited: 2026-09-26
 
@@ -37,6 +37,7 @@ func FollowAbsorbedJournaled(db UserProgressMerger, survivorID, absorbedID strin
 	if err != nil {
 		return nil, false, fmt.Errorf("list users: %w", err)
 	}
+	completePendingInvolving(db, []string{survivorID, absorbedID})
 	// Per user (snapshotPair): a user whose progress cannot be read is
 	// skipped and logged, their rows left where they are, and only the users
 	// in the before-snapshot are followed, so no progress moves unjournaled.

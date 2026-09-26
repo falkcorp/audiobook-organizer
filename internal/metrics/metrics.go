@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package metrics
 
@@ -106,6 +106,14 @@ var (
 		Namespace: "audiobook_organizer",
 		Name:      "search_index_dirty_backlog",
 		Help:      "Books in the durable search-index dirty set still waiting for the reconciler, sampled at each reconcile tick",
+	})
+	// mergeUserStatePendingGauge is the number of pending user-state repair
+	// records (moves a merge still owes), sampled by the repair ticker. A
+	// value that does not fall means users' state is stuck on merged-away books.
+	mergeUserStatePendingGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "merge_user_state_pending",
+		Help:      "Pending user-state repair records a merge left (moves still owed), sampled by the repair ticker every 15 minutes",
 	})
 	foldersGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "audiobook_organizer",
@@ -239,7 +247,7 @@ var (
 func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
-			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
+			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, mergeUserStatePendingGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
 			opActivityMirrorDroppedTotal, sortByRequestedTotal, operationDeprecatedDefIDTotal,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
 			itunesLocationUnmappable, organizeTargetPathCollision, aiBackendAvailable,
@@ -312,6 +320,7 @@ func IncSortByRequested(field string) { sortByRequestedTotal.WithLabelValues(fie
 
 // SetSearchIndexDirtyBacklog records the dirty-set size at a reconcile tick (TASK-130).
 func SetSearchIndexDirtyBacklog(n int) { searchIndexDirtyBacklogGauge.Set(float64(n)) }
+func SetMergeUserStatePending(n int)   { mergeUserStatePendingGauge.Set(float64(n)) }
 func SetFolders(n int)                 { foldersGauge.Set(float64(n)) }
 func SetMemoryAlloc(b uint64)          { memoryAllocGauge.Set(float64(b)) }
 func SetGoroutines(n int)              { goroutinesGauge.Set(float64(n)) }
