@@ -1,5 +1,5 @@
 // file: internal/fingerprint/fpcalc_live_decode_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8a1c6e-94b2-4d7a-8e05-b6c2d9f14a73
 // last-edited: 2026-09-25
 
@@ -9,22 +9,38 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
 )
 
-// liveClip synthesises a 40 s MP3 (pink noise under a tremolo tone, so the
-// print has both smooth and busy frames and the decompressor's 5-bit
-// exceptional stream is exercised) and returns its path. It skips when
-// ffmpeg or fpcalc is missing, and pins lookupFpcalc to PATH for the test.
-// No recorded audio is involved: the clip is generated from lavfi sources.
+// liveClipSeconds is longer than every window the production paths pass to
+// fpcalc (DefaultAnalysisLengthSec = 120, SegmentSeconds = 300). A clip shorter
+// than a window is analysed whole whatever -length says, so a dropped or
+// changed -length would produce the same frames on both sides and pass. At
+// 330 s, dropping -length from the segment path (fpcalc's default is 120 s)
+// changes the frame count, and so does any head-print window other than 120.
+const liveClipSeconds = 330
+
+// liveClip synthesises a liveClipSeconds MP3 (pink noise under a tremolo
+// tone, so the print has both smooth and busy frames and the decompressor's
+// 5-bit exceptional stream is exercised) and returns its path. It pins
+// lookupFpcalc to PATH for the test. No recorded audio is involved: the clip
+// is generated from lavfi sources.
+//
+// LOCAL-ONLY BY DESIGN: no CI workflow installs ffmpeg or fpcalc, so these
+// tests skip in CI. CI coverage of the decoder comes from the frozen golden
+// fixtures (fpcalc 1.6.1), and the invocations are pinned by
+// TestFpcalcArgs_DefaultIsFpcalcsOwn120 and TestFpcalcHeadArgs_PinsSegmentWindow.
+// These tests add a check against whichever fpcalc build is installed locally.
 func liveClip(t *testing.T) string {
 	t.Helper()
 	for _, bin := range []string{"ffmpeg", "fpcalc"} {
 		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not on PATH — skipping live fpcalc decode test", bin)
+			t.Skipf("%s not on PATH: live fpcalc decode tests are local-only by design (CI installs no ffmpeg/fpcalc; "+
+				"decoder coverage there comes from the golden fixtures and the argv pin tests)", bin)
 		}
 	}
 	prev := resolvedFpcalcPath
@@ -33,8 +49,8 @@ func liveClip(t *testing.T) string {
 
 	path := filepath.Join(t.TempDir(), "live.mp3")
 	out, err := exec.Command("ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-		"-f", "lavfi", "-i", "anoisesrc=color=pink:duration=40:amplitude=0.25:seed=7",
-		"-f", "lavfi", "-i", "sine=frequency=330:duration=40",
+		"-f", "lavfi", "-i", fmt.Sprintf("anoisesrc=color=pink:duration=%d:amplitude=0.25:seed=7", liveClipSeconds),
+		"-f", "lavfi", "-i", fmt.Sprintf("sine=frequency=330:duration=%d", liveClipSeconds),
 		"-filter_complex", "[1:a]tremolo=f=3:d=0.8[t];[0:a][t]amix=inputs=2:duration=shortest",
 		"-ac", "1", "-ar", "44100", "-c:a", "libmp3lame", "-b:a", "96k", path,
 	).CombinedOutput()
