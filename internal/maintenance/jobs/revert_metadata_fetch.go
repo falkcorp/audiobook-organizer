@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/revert_metadata_fetch.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c8d4e2b3-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-09-15
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -105,7 +105,16 @@ func (j *revertMetadataFetchJob) Category() string { return "Metadata" }
 func (j *revertMetadataFetchJob) Description() string {
 	return "Rolls back DB changes made by one or more bulk-fetch-metadata operations"
 }
-func (j *revertMetadataFetchJob) DefaultParams() any { return &rmf_params{OperationIDs: []string{}} }
+// DefaultParams advertises dry_run:true: Run has a working preview (it counts
+// "would revert" without calling ModifyBook), so an empty request must take it.
+// Until 2026-09-25 no dry_run key was advertised, the dispatcher fell to false,
+// and a request naming fetch_op_ids without dry_run reverted live.
+func (j *revertMetadataFetchJob) DefaultParams() any {
+	return &struct {
+		OperationIDs []string `json:"fetch_op_ids"`
+		DryRun       bool     `json:"dry_run"`
+	}{OperationIDs: []string{}, DryRun: true}
+}
 func (j *revertMetadataFetchJob) CanResume() bool    { return false }
 
 func (j *revertMetadataFetchJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/generate_itl_tests.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b7e3f1a2-4c5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-08-17
+// last-edited: 2026-09-25
 
 package jobs
 
@@ -30,7 +30,14 @@ func (j *generateITLTestsJob) Category() string { return "Dev" }
 func (j *generateITLTestsJob) Description() string {
 	return "Generates a suite of .itl test files for iTunes parser testing"
 }
-func (j *generateITLTestsJob) DefaultParams() any { return nil }
+// DefaultParams advertises dry_run:true: a live run RemoveAll's the output
+// directory and regenerates it, and Run has a preview branch that does neither.
+// Until 2026-09-25 it advertised nothing, so an empty request ran live.
+func (j *generateITLTestsJob) DefaultParams() any {
+	return struct {
+		DryRun bool `json:"dry_run"`
+	}{DryRun: true}
+}
 func (j *generateITLTestsJob) CanResume() bool    { return false }
 
 func (j *generateITLTestsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {

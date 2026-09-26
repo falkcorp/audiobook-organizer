@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_op.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5c1a9f38-7b62-4d0e-9a15-6e3b8c07d24f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-25
 
 // dedup.rescore — re-band every pending dedup candidate under the CURRENT
 // score ladder, and the config-PUT sink that queues it.
@@ -35,7 +35,10 @@ import (
 )
 
 // RescoreParams is the op's payload. Apply=false is a dry run: bands are
-// computed and counted but nothing is written.
+// computed and counted but nothing is written. An omitted apply is a dry run
+// too (owner decision 2026-09-25: a writing op previews unless the request
+// says otherwise), so Go's zero value is the safe one here. The config-PUT
+// sink below sets Apply:true explicitly.
 type RescoreParams struct {
 	Apply bool `json:"apply"`
 	// Reason is free text recorded in the op log so an operator can tell a
@@ -134,7 +137,10 @@ func (p *Plugin) runRescore(ctx context.Context, raw json.RawMessage, reporter s
 	if p.engine == nil {
 		return fmt.Errorf("dedup engine not available")
 	}
-	params := RescoreParams{Apply: true}
+	// No pre-fill: an omitted apply previews. This used to start from
+	// RescoreParams{Apply: true}, so `{}`, `null` and a requeue's empty params
+	// re-banded every pending candidate live.
+	var params RescoreParams
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("dedup.rescore: parse params: %w", err)
