@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.108.0
+// version: 1.109.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package scanner
 
@@ -3543,6 +3543,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					// After both stripes are released: the hand-off takes the
 					// group lock and then each member's write stripe.
 					handOffLinkedGroup(ctx, linkedVersionGroup, rootDir)
+					// Also after the stripes: folder-cover IO stays out of the
+					// locked span (see fillFolderCover).
+					fillFolderCover(dbBook)
 					followSyncIdentityOnVersionLink(supersededBookID, supersededBookPath, dbBook.ID)
 					// Check for metadata hash duplicates
 					detectMetadataHashDuplicate(dbBook, defaultLog)

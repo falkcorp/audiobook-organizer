@@ -1,7 +1,7 @@
 // file: internal/database/metadata_field_locks.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0d1a2cd0-a75c-4990-bb1f-bac01864e50c
-// last-edited: 2026-09-02
+// last-edited: 2026-09-26
 
 package database
 
@@ -52,6 +52,14 @@ const (
 	FieldKeyGenre                = "genre"
 	FieldKeyDescription          = "description"
 )
+
+// FieldKeyCoverURL is the lock key a cover guard consults. It is NOT in
+// UserLockableFields: no writer stores a cover lock today (the edit form has
+// no cover field), so the conformance tests that prove every lockable key is
+// written would fail on it. Guards that set a cover without a human asking --
+// the folder-cover fill (internal/foldercover) -- still check it, so the
+// day a cover lock is written it is honoured without a second change.
+const FieldKeyCoverURL = "cover_url"
 
 // UserLockableField maps one lock key to the Book column it protects. Column is
 // the Go field name on Book (TestUserLockableFieldsNameRealBookColumns pins that
