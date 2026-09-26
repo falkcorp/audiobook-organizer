@@ -1,5 +1,5 @@
 // file: internal/ai/priority_marker_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8f370c63-462a-4dfa-b899-a5e715e210b0
 
 package ai
@@ -26,7 +26,7 @@ func TestNoUnmarkedChatCompletionCallers(t *testing.T) {
 		"reviewAuthorBatch":   "Task 2.3", // Out-of-scope — existing author-dedup flow
 		"discoverAuthorBatch": "Task 2.3", // Out-of-scope — existing author-dedup flow
 		"scoreMetadataBatch":  "",         // PRIORITY: Interactive — user-waiting metadata search, stays sync
-		"coverTextAttempt":    "",         // background: maintenance.cover-text-read (PriorityLow), bounded by the pool's llm.cover_art_vision slots
+		"readCoverTextImage":  "",         // background: maintenance.cover-text-read (PriorityLow), bounded by the pool's llm.cover_art_vision slots
 	}
 
 	// Walk the current directory (package ai) for .go files.

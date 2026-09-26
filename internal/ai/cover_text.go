@@ -1,5 +1,5 @@
 // file: internal/ai/cover_text.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4c2e71-3b8d-4f16-a5e0-8d7c1b6f2e93
 // last-edited: 2026-09-26
 
@@ -13,12 +13,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/packages/param"
-	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 	"github.com/falkcorp/audiobook-organizer/internal/covertext"
@@ -49,6 +45,10 @@ const CoverTextAttemptTimeout = 180 * time.Second
 // is no legacy path for cover text: the legacy vision call is cloud-only.
 var ErrCoverTextRoutingOff = errors.New("cover text needs ai_endpoints_routing on: llm.cover_art_vision is served only by pool rows")
 
+// errNoCoverTextChoices is a reply with no choices: the endpoint answered, so
+// it is a quality failure, not an endpoint failure.
+var errNoCoverTextChoices = errors.New("cover text: no choices in reply")
+
 const coverTextSystemPrompt = `You read the text printed on audiobook cover images.
 
 Transcribe ONLY text that is visible on the image. Never guess or add anything that is not printed.
@@ -77,19 +77,43 @@ type CoverTextResult struct {
 type RoutedCoverTextReader struct {
 	pool    *PoolSource
 	timeout time.Duration
+
+	mu      sync.Mutex
+	parsers map[string]*OpenAIParser
 }
 
 // NewRoutedCoverTextReader returns a reader routed through pool.
 func NewRoutedCoverTextReader(pool *PoolSource) *RoutedCoverTextReader {
-	return &RoutedCoverTextReader{pool: pool, timeout: CoverTextAttemptTimeout}
+	return &RoutedCoverTextReader{pool: pool, timeout: CoverTextAttemptTimeout, parsers: map[string]*OpenAIParser{}}
 }
 
-// dispatcher builds the dispatcher for one pass. localOnly restricts it to
-// rows aidispatch.EndpointLocality classifies as local.
-func (r *RoutedCoverTextReader) dispatcher(localOnly bool) *aidispatch.Dispatcher {
+// parserFor returns the cached single-endpoint client for one target, built
+// with the target's model (the row's capability_models override or its
+// chat_model) and no retries, as RoutedFilenameParser.parserFor does.
+func (r *RoutedCoverTextReader) parserFor(t aidispatch.Target) (*OpenAIParser, error) {
+	key, err := r.pool.apiKeyFor(t.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+	cacheKey := t.Endpoint.ID + "\x00" + t.Endpoint.URL + "\x00" + t.Model + "\x00" + key
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if p := r.parsers[cacheKey]; p != nil {
+		return p, nil
+	}
+	p := newRoutedEndpointParser(key, t.Endpoint.URL, t.Model)
+	r.parsers[cacheKey] = p
+	return p, nil
+}
+
+// dispatcher builds the dispatcher for one pass: local rows only, or cloud
+// rows only (the fallback pass never re-tries a local row).
+func (r *RoutedCoverTextReader) dispatcher(local bool) *aidispatch.Dispatcher {
 	opts := []aidispatch.Option{aidispatch.WithAttemptTimeout(aidispatch.LLMCoverArtVision, r.timeout)}
-	if localOnly {
+	if local {
 		opts = append(opts, aidispatch.WithLocalOnly())
+	} else {
+		opts = append(opts, aidispatch.WithCloudOnly())
 	}
 	return r.pool.dispatcher(opts...)
 }
@@ -101,7 +125,7 @@ func (r *RoutedCoverTextReader) Capacity() int {
 		return 0
 	}
 	// Local rows are tried first (ReadCoverText), so size to them; the
-	// cloud's slots count only when no local row can serve at all.
+	// cloud rows' slots count only when no local row can serve at all.
 	if c := r.dispatcher(true).Capacity(aidispatch.LLMCoverArtVision); c > 0 {
 		return c
 	}
@@ -126,13 +150,16 @@ func (r *RoutedCoverTextReader) ReadCoverText(ctx context.Context, image []byte,
 	// (llm_mode openai-fallback-local) and is pre-ticked for vision, so
 	// priority alone would send covers to the cloud first. The cloud is only
 	// a FALLBACK: tried when no local row can serve or every local attempt
-	// failed at the endpoint. A reply that arrived but did not parse
-	// (Quality) is never re-asked of the cloud.
+	// failed at the endpoint, and that pass is cloud-only so a hung local
+	// node is not waited on twice. A reply that arrived but did not parse
+	// (Quality) is never re-asked of the cloud. A busy local pool does not
+	// fall back either: Call waits for a slot and errors only on ctx.
 	res, err := aidispatch.Call(ctx, r.dispatcher(true), aidispatch.LLMCoverArtVision, r.coverTextAttempt(dataURL))
 	if err == nil || ctx.Err() != nil {
 		return res, err
 	}
-	if _, ok := errors.AsType[*aidispatch.QualityError](err); ok {
+	var quality *aidispatch.QualityError
+	if errors.As(err, &quality) {
 		return nil, err
 	}
 	return aidispatch.Call(ctx, r.dispatcher(false), aidispatch.LLMCoverArtVision, r.coverTextAttempt(dataURL))
@@ -141,35 +168,17 @@ func (r *RoutedCoverTextReader) ReadCoverText(ctx context.Context, image []byte,
 // coverTextAttempt is one request to one chosen endpoint.
 func (r *RoutedCoverTextReader) coverTextAttempt(dataURL string) func(context.Context, aidispatch.Target) (*CoverTextResult, error) {
 	return func(ctx context.Context, t aidispatch.Target) (*CoverTextResult, error) {
-		key, err := r.pool.apiKeyFor(t.Endpoint)
+		p, err := r.parserFor(t)
 		if err != nil {
 			return nil, err
 		}
-		client := openai.NewClient(
-			option.WithAPIKey(key),
-			option.WithBaseURL(t.Endpoint.URL),
-			option.WithMaxRetries(0),
-			option.WithRequestTimeout(r.timeout),
-		)
-		completion, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Model: shared.ChatModel(t.Model),
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				openai.SystemMessage(coverTextSystemPrompt),
-				openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
-					openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),
-					openai.TextContentPart("Read the text on this audiobook cover."),
-				}),
-			},
-			Temperature:         param.NewOpt(0.0),
-			MaxCompletionTokens: param.NewOpt[int64](800),
-		})
+		raw, err := p.readCoverTextImage(ctx, dataURL)
+		if errors.Is(err, errNoCoverTextChoices) {
+			return nil, aidispatch.Quality(fmt.Errorf("cover text on %s: %w", t.Endpoint.ID, err))
+		}
 		if err != nil {
 			return nil, fmt.Errorf("cover text on %s: %w", t.Endpoint.ID, err)
 		}
-		if len(completion.Choices) == 0 {
-			return nil, aidispatch.Quality(fmt.Errorf("cover text on %s: no choices in reply", t.Endpoint.ID))
-		}
-		raw := completion.Choices[0].Message.Content
 		text, err := ParseCoverTextReply(raw)
 		if err != nil {
 			return nil, aidispatch.Quality(err)

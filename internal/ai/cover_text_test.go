@@ -1,5 +1,5 @@
 // file: internal/ai/cover_text_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e7b1c93-6a2f-4d58-b0e9-2c5f8a1d7b36
 // last-edited: 2026-09-26
 
@@ -17,7 +17,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 )
@@ -160,6 +162,37 @@ func TestCoverTextFailsOverToListedCloudRow(t *testing.T) {
 	res, err := NewRoutedCoverTextReader(tp.PoolSource).ReadCoverText(context.Background(), []byte{1}, "image/jpeg")
 	if err != nil || res.EndpointID != "cloud" {
 		t.Fatalf("failover: %+v %v", res, err)
+	}
+}
+
+// A local row that HANGS is attempted once; the fallback pass goes straight to
+// the cloud row instead of waiting on the local node a second time.
+func TestCoverTextHungLocalTriedOnceThenCloud(t *testing.T) {
+	var hits atomic.Int32
+	release := make(chan struct{})
+	hung := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	// Cleanups run LIFO: unblock the handler, then Close (which waits for it).
+	t.Cleanup(hung.Close)
+	t.Cleanup(func() { close(release) })
+	cloud := newVisionServer(t, `{"title":"From Cloud"}`)
+	cl := visionEP("cloud", cloud.url(), 50)
+	cl.AuthRef = "openai_api_key"
+	tp := newTestPool(visionEP("hung", hung.URL+"/v1", 10), cl)
+	tp.Secret = func(string) string { return "sk-test" }
+	r := NewRoutedCoverTextReader(tp.PoolSource)
+	r.timeout = 300 * time.Millisecond
+	res, err := r.ReadCoverText(context.Background(), []byte{1}, "image/jpeg")
+	if err != nil || res.EndpointID != "cloud" {
+		t.Fatalf("got %+v %v; want the cloud row", res, err)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("hung local row attempted %d times, want 1", n)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser.go
-// version: 13.22.0
+// version: 13.23.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package ai
 
@@ -404,6 +404,38 @@ func (p *OpenAIParser) InvalidateCache() {
 // IsEnabled returns whether the parser is enabled
 func (p *OpenAIParser) IsEnabled() bool {
 	return p.enabled
+}
+
+// readCoverTextImage sends one cover image (a data: URI) with the cover-text
+// prompt to this parser's endpoint and model, and returns the raw reply. It is
+// the backend half of RoutedCoverTextReader (cover_text.go), which owns the
+// routing, failover and reply parsing and must not touch the backend client
+// itself (aidispatch TestGuard_NoAIBackendCallsOutsideTheDispatcher). No
+// retries: the parser is built by newRoutedEndpointParser, and the dispatcher's
+// per-attempt deadline on ctx bounds the request.
+func (p *OpenAIParser) readCoverTextImage(ctx context.Context, dataURL string) (string, error) {
+	if !p.enabled || p.client == nil {
+		return "", errors.New("cover text: endpoint parser is disabled")
+	}
+	completion, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Model: shared.ChatModel(p.defaultModelOverride),
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(coverTextSystemPrompt),
+			openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
+				openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),
+				openai.TextContentPart("Read the text on this audiobook cover."),
+			}),
+		},
+		Temperature:         param.NewOpt(0.0),
+		MaxCompletionTokens: param.NewOpt[int64](800),
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(completion.Choices) == 0 {
+		return "", errNoCoverTextChoices
+	}
+	return completion.Choices[0].Message.Content, nil
 }
 
 // ParseFilename uses OpenAI to parse a filename into structured metadata.
