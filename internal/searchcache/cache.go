@@ -442,7 +442,9 @@ func (c *Cache) patchEntry(key string, ev Evaluator) patchResult {
 	}
 	changed, current, ok := c.changes.ChangedSince(e.gen)
 	if ok {
-		if ids, patched, _ := c.patch(context.Background(), context.Background(), e.ids, changed, ev); patched {
+		// The slot wait is unbounded here (the patch is shared and detached),
+		// so err is always nil; a non-nil one would fall through to a rebuild.
+		if ids, patched, err := c.patch(context.Background(), context.Background(), e.ids, changed, ev); err == nil && patched {
 			c.patches.Add(1)
 			c.store(key, ids, current)
 			c.afterPatch(key, ev, current)
