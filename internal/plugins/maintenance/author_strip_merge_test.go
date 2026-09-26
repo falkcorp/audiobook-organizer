@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8f5723a5-46b7-409b-901e-e791fdd71228
 // last-edited: 2026-09-25
 
@@ -765,10 +765,6 @@ func titleAsAuthorFixture() []database.Author {
 }
 
 func newTitleAsAuthorPlugin(calls *stripMergeCalls) *Plugin {
-	authors := titleAsAuthorFixture()
-	p := newStripPlugin(authors, calls)
-	store := p.deps.(*fakeDeps).store.(*database.MockStore)
-
 	books := []database.BookCore{
 		{ID: "bk-arcane", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: titleAsAuthorIntPtr(100)},
 		{ID: "bk-king-self", Title: "Stephen King", AuthorID: titleAsAuthorIntPtr(101)},
@@ -778,6 +774,18 @@ func newTitleAsAuthorPlugin(calls *stripMergeCalls) *Plugin {
 		{ID: "bk-cowriter-self", Title: "Co Writer", AuthorID: titleAsAuthorIntPtr(104)},
 		{ID: "bk-cowriter-other", Title: "Other Book", AuthorID: titleAsAuthorIntPtr(101)},
 	}
+	// Junction-only credit: 104 co-wrote "Other Book" (primary is 101).
+	return newTitleAsAuthorPluginWith(calls, titleAsAuthorFixture(), books,
+		map[int][]string{104: {"bk-cowriter-other"}})
+}
+
+// newTitleAsAuthorPluginWith builds the title-as-author store from the given
+// authors and books; junctionOnly adds credits (author ID -> book IDs) that
+// are not the book's primary.
+func newTitleAsAuthorPluginWith(calls *stripMergeCalls, authors []database.Author, books []database.BookCore, junctionOnly map[int][]string) *Plugin {
+	p := newStripPlugin(authors, calls)
+	store := p.deps.(*fakeDeps).store.(*database.MockStore)
+
 	store.GetAllBooksCoreFunc = func(limit, offset int) ([]database.BookCore, error) { return books, nil }
 	store.GetAllSeriesFunc = func() ([]database.Series, error) {
 		return []database.Series{{ID: 1, Name: "Broken Circle"}}, nil
@@ -791,8 +799,11 @@ func newTitleAsAuthorPlugin(calls *stripMergeCalls) *Plugin {
 	for _, b := range books {
 		byAuthor[*b.AuthorID] = append(byAuthor[*b.AuthorID], b)
 	}
-	// Junction-only credit: 104 co-wrote "Other Book" (primary is 101).
-	byAuthor[104] = append(byAuthor[104], byID["bk-cowriter-other"])
+	for authorID, ids := range junctionOnly {
+		for _, id := range ids {
+			byAuthor[authorID] = append(byAuthor[authorID], byID[id])
+		}
+	}
 	// relinkAwareBooks makes the post-delete VerifyAuthorUnlinked re-read see
 	// the SetBookAuthors/UpdateBook writes this run makes, exactly as
 	// newStripPlugin's own fixture does — a static byAuthor snapshot would
@@ -922,4 +933,98 @@ func TestAuthorStripMerge_TitleAsAuthorChecksEveryCredit(t *testing.T) {
 	if !strings.Contains(summary, "title-as-author=3 ") {
 		t.Errorf("row 104 must not be counted as title-as-author: %s", summary)
 	}
+}
+
+// 🔴 Review finding 2026-09-25: a title-as-author row can also be a merge
+// target in the same run. T "Arcane Chef 2" credits only its self-titled book
+// and is deleted as title-as-author; S "01 Arcane Chef 2" is the same import
+// bug with a track prefix, strips to "Arcane Chef 2" and would be merged into
+// T. With T first, the merge wrote T's deleted ID into S's book (dangling
+// AuthorID); with S first, T's delete unlinked S's book, which the gate never
+// judged. Both orderings: the merge is dropped, S and its book are untouched,
+// T is deleted, and the dry run reports the same plan.
+func TestAuthorStripMerge_TitleAsAuthorRowIsNeverAMergeTarget(t *testing.T) {
+	for _, ids := range []struct {
+		name string
+		t, s int
+	}{
+		{"title-as-author row first", 100, 200},
+		{"numbered twin first", 300, 200},
+	} {
+		t.Run(ids.name, func(t *testing.T) {
+			run := func(params string) (*stripMergeCalls, string) {
+				calls := &stripMergeCalls{}
+				authors := []database.Author{
+					{ID: ids.t, Name: "Arcane Chef 2"},
+					{ID: ids.s, Name: "01 Arcane Chef 2"},
+				}
+				books := []database.BookCore{
+					{ID: "bk-t", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: titleAsAuthorIntPtr(ids.t)},
+					{ID: "bk-s", Title: "Fish Tales", AuthorID: titleAsAuthorIntPtr(ids.s)},
+				}
+				p := newTitleAsAuthorPluginWith(calls, authors, books, nil)
+				rep := &summaryReporter{}
+				if err := p.runAuthorStripMerge(context.Background(), json.RawMessage(params), rep); err != nil {
+					t.Fatalf("runAuthorStripMerge: %v", err)
+				}
+				return calls, rep.summary(t)
+			}
+
+			calls, summary := run(`{"apply":true,"delete_title_as_author":true}`)
+			if !containsInt(calls.deleted, ids.t) {
+				t.Errorf("title-as-author row %d was not deleted; deleted=%v", ids.t, calls.deleted)
+			}
+			if containsInt(calls.deleted, ids.s) {
+				t.Errorf("numbered row %d was removed although its merge target is gone; deleted=%v", ids.s, calls.deleted)
+			}
+			for _, ts := range calls.tombstones {
+				if ts[1] == ids.t {
+					t.Errorf("tombstone %v redirects to the deleted row %d", ts, ids.t)
+				}
+			}
+			if as, ok := calls.setAuthors["bk-s"]; ok {
+				t.Errorf("S's book credits were rewritten (%v); the gate never judged it", as)
+			}
+			for id, b := range calls.updated {
+				if b.AuthorID != nil && *b.AuthorID == ids.t {
+					t.Errorf("book %s now names the deleted author %d", id, ids.t)
+				}
+			}
+			for id, as := range calls.setAuthors {
+				for _, a := range as {
+					if a.AuthorID == ids.t {
+						t.Errorf("book %s junction names the deleted author %d", id, ids.t)
+					}
+				}
+			}
+			for _, want := range []string{"merge-target-removed=1 ", "mergeable=0 ", "title-as-author=1 "} {
+				if !strings.Contains(summary, want) {
+					t.Errorf("apply summary missing %q: %s", want, summary)
+				}
+			}
+
+			dryCalls, drySummary := run(`{"delete_title_as_author":true}`)
+			if len(dryCalls.deleted) != 0 || len(dryCalls.setAuthors) != 0 || len(dryCalls.updated) != 0 {
+				t.Errorf("dry run wrote: deleted=%v setAuthors=%v updated=%v", dryCalls.deleted, dryCalls.setAuthors, dryCalls.updated)
+			}
+			if got, want := planOnlySummary(drySummary), planOnlySummary(summary); got != want {
+				t.Errorf("dry run plan differs from apply plan:\n dry:   %s\n apply: %s", got, want)
+			}
+		})
+	}
+}
+
+// planOnlySummary drops the summary fields only an apply fills (and the log
+// line's time prefix), leaving the plan counts a dry run must match.
+func planOnlySummary(line string) string {
+	var keep []string
+	for _, f := range strings.Fields(line) {
+		switch {
+		case strings.HasPrefix(f, "time="), strings.HasPrefix(f, "merged="),
+			strings.HasPrefix(f, "deleted="), strings.HasPrefix(f, "books-touched="):
+			continue
+		}
+		keep = append(keep, f)
+	}
+	return strings.Join(keep, " ")
 }
