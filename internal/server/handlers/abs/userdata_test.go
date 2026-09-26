@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/userdata_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7ac71a7b-e1cb-4416-a393-1fa38af8871f
 // last-edited: 2026-09-25
 
@@ -49,6 +49,8 @@ type udFake struct {
 	// ResolveSyncItem resolves each of them to that syncID.
 	aliases  map[string][]string
 	aliasErr error
+	// aliasErrFor fails ListSyncAliases for one syncID only.
+	aliasErrFor map[string]error
 
 	// used: user -> alias ids the client has addressed (AliasUseStore).
 	used       map[string][]string
@@ -208,6 +210,9 @@ func (f *udFake) ListSyncAliases(syncID string) ([]string, error) {
 	if f.aliasErr != nil {
 		return nil, f.aliasErr
 	}
+	if err := f.aliasErrFor[syncID]; err != nil {
+		return nil, err
+	}
 	return f.aliases[syncID], nil
 }
 
@@ -239,7 +244,7 @@ func (f *udFake) ListSyncAliasUses(userID string) ([]string, bool, error) {
 	return slices.Clone(f.used[userID]), f.seeded[userID], nil
 }
 
-func (f *udFake) SeedSyncAliasUses(userID string, aliases []string) error {
+func (f *udFake) SeedSyncAliasUses(userID string, aliases []string, complete bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seedWrites++
@@ -252,8 +257,14 @@ func (f *udFake) SeedSyncAliasUses(userID string, aliases []string) error {
 	if f.seeded == nil {
 		f.seeded = map[string]bool{}
 	}
-	f.used[userID] = append(f.used[userID], aliases...)
-	f.seeded[userID] = true
+	for _, a := range aliases {
+		if !slices.Contains(f.used[userID], a) {
+			f.used[userID] = append(f.used[userID], a)
+		}
+	}
+	if complete {
+		f.seeded[userID] = true
+	}
 	return nil
 }
 
@@ -306,6 +317,22 @@ func (f *udFake) GetBookFiles(bookID string) ([]database.BookFile, error) {
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
+// testAliasSeedCutoff is the alias seed window's upper bound for tests that do
+// not exercise it: far enough ahead that a row written "now" is inside it.
+var testAliasSeedCutoff = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// udProviderWithCutoff is udProvider with a chosen alias seed cutoff.
+func udProviderWithCutoff(t *testing.T, f *udFake, cutoff time.Time) abshandler.UserDataProvider {
+	t.Helper()
+	p, err := abshandler.NewUserData(abshandler.UserDataOptions{
+		Progress: f, Bookmarks: f, Identity: f, Library: f, AliasUses: f, AliasSeedCutoff: cutoff,
+	})
+	if err != nil {
+		t.Fatalf("NewUserData: %v", err)
+	}
+	return p
+}
+
 func udProvider(t *testing.T, f *udFake) abshandler.UserDataProvider {
 	t.Helper()
 	p, err := abshandler.NewUserData(abshandler.UserDataOptions{
@@ -314,6 +341,9 @@ func udProvider(t *testing.T, f *udFake) abshandler.UserDataProvider {
 		Identity:  f,
 		Library:   f,
 		AliasUses: f,
+		// Tests whose seed window must include "now" build through
+		// udProviderWithCutoff instead.
+		AliasSeedCutoff: testAliasSeedCutoff,
 	})
 	if err != nil {
 		t.Fatalf("NewUserData: %v", err)
@@ -421,14 +451,15 @@ func udBool(t *testing.T, row map[string]json.Number, key string) bool {
 // Refusing to build is the only safe outcome; the caller exits on the error.
 func TestUserDataProviderRefusesMissingDependencies(t *testing.T) {
 	f := newUDFake()
-	full := abshandler.UserDataOptions{Progress: f, Bookmarks: f, Identity: f, Library: f, AliasUses: f}
+	full := abshandler.UserDataOptions{Progress: f, Bookmarks: f, Identity: f, Library: f, AliasUses: f, AliasSeedCutoff: testAliasSeedCutoff}
 
 	cases := map[string]func(o *abshandler.UserDataOptions){
-		"progress":  func(o *abshandler.UserDataOptions) { o.Progress = nil },
-		"bookmarks": func(o *abshandler.UserDataOptions) { o.Bookmarks = nil },
-		"identity":  func(o *abshandler.UserDataOptions) { o.Identity = nil },
-		"library":   func(o *abshandler.UserDataOptions) { o.Library = nil },
-		"aliasUses": func(o *abshandler.UserDataOptions) { o.AliasUses = nil },
+		"progress":        func(o *abshandler.UserDataOptions) { o.Progress = nil },
+		"bookmarks":       func(o *abshandler.UserDataOptions) { o.Bookmarks = nil },
+		"identity":        func(o *abshandler.UserDataOptions) { o.Identity = nil },
+		"library":         func(o *abshandler.UserDataOptions) { o.Library = nil },
+		"aliasUses":       func(o *abshandler.UserDataOptions) { o.AliasUses = nil },
+		"aliasSeedCutoff": func(o *abshandler.UserDataOptions) { o.AliasSeedCutoff = time.Time{} },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-25
 
@@ -1811,7 +1811,7 @@ func (f *fakeLibrary) ListSyncAliasUses(userID string) ([]string, bool, error) {
 	return out, f.aliasSeeded[userID], nil
 }
 
-func (f *fakeLibrary) SeedSyncAliasUses(userID string, aliases []string) error {
+func (f *fakeLibrary) SeedSyncAliasUses(userID string, aliases []string, complete bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.aliasUseErr != nil {
@@ -1825,6 +1825,9 @@ func (f *fakeLibrary) SeedSyncAliasUses(userID string, aliases []string) error {
 	}
 	for _, a := range aliases {
 		f.aliasUses[userID][a] = true
+	}
+	if !complete {
+		return nil
 	}
 	if f.aliasSeeded == nil {
 		f.aliasSeeded = map[string]bool{}

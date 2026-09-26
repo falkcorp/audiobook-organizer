@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/audiobooth_browse_gaps_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 21a537e2-8789-4517-9ef9-576957a6fe05
 // last-edited: 2026-09-25
 
@@ -65,6 +65,7 @@ func newBrowseGapsFixture(t *testing.T) *browseGapsFixture {
 
 	provider, err := abshandler.NewUserData(abshandler.UserDataOptions{
 		Progress: lib, Bookmarks: newFakeBookmarks(), Identity: lib, Library: lib, AliasUses: lib,
+		AliasSeedCutoff: testAliasSeedCutoff,
 	})
 	if err != nil {
 		t.Fatal(err)

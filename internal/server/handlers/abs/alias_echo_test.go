@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/alias_echo_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: de050482-2489-42a2-ad9d-bc151b672b20
 // last-edited: 2026-09-25
 
@@ -7,12 +7,14 @@ package abs_test
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )
 
@@ -351,6 +353,134 @@ func TestClientMediaProgress_SeedWriteFailureRetries(t *testing.T) {
 	}
 	if f.seedWrites != 2 || f.seeded["u1"] {
 		t.Fatalf("seed writes=%d seeded=%v; want a retry per list and no seeded mark", f.seedWrites, f.seeded["u1"])
+	}
+}
+
+// TestClientMediaProgress_SeedLookupFailureRetries: one item's alias lookup
+// failing must not mark the user seeded. The aliases that were found are
+// recorded and sent, and the next list retries the seed, so the failed item's
+// aliases are recorded once the lookup works. Marking the user seeded here
+// would drop that item's alias rows forever, and the client would delete the
+// local row it holds under the alias (the 2026-09-25 bug).
+func TestClientMediaProgress_SeedLookupFailureRetries(t *testing.T) {
+	f := newUDFake()
+	f.addBook("good", nil, 1800)
+	f.addBook("flaky", nil, 1800)
+	f.presetSyncID("good", udSyncID(1))
+	f.presetSyncID("flaky", udSyncID(2))
+	f.addPosition("u1", "good", "abs", 900, time.Now())
+	f.addPosition("u1", "flaky", "abs", 900, time.Now())
+	f.aliases = map[string][]string{udSyncID(1): {udSyncID(8)}, udSyncID(2): {udSyncID(9)}}
+	f.aliasErrFor = map[string]error{udSyncID(2): errors.New("disk hiccup")}
+
+	p := udProvider(t, f)
+	listIDs := func(call int) []string {
+		t.Helper()
+		rows, err := p.ClientMediaProgress("u1")
+		if err != nil {
+			t.Fatalf("call %d: %v", call, err)
+		}
+		var ids []string
+		for _, r := range udRows(t, rows) {
+			ids = append(ids, udStr(t, r, "libraryItemId"))
+		}
+		slices.Sort(ids)
+		return ids
+	}
+
+	if got, want := listIDs(1), []string{udSyncID(1), udSyncID(2), udSyncID(8)}; !slices.Equal(got, want) {
+		t.Fatalf("call 1: rows = %v, want %v (the good item's alias; the failed item's is unknown yet)", got, want)
+	}
+	f.mu.Lock()
+	seeded, used := f.seeded["u1"], slices.Clone(f.used["u1"])
+	f.mu.Unlock()
+	if seeded || !slices.Contains(used, udSyncID(8)) {
+		t.Fatalf("after a failed lookup: seeded=%v used=%v; want %s recorded and the user NOT seeded", seeded, used, udSyncID(8))
+	}
+
+	f.mu.Lock()
+	f.aliasErrFor = nil
+	f.mu.Unlock()
+	if got, want := listIDs(2), []string{udSyncID(1), udSyncID(2), udSyncID(8), udSyncID(9)}; !slices.Equal(got, want) {
+		t.Fatalf("call 2: rows = %v, want %v (the retry finds the failed item's alias)", got, want)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.seeded["u1"] || !slices.Contains(f.used["u1"], udSyncID(9)) {
+		t.Fatalf("after the retry: seeded=%v used=%v; want %s recorded and the user seeded", f.seeded["u1"], f.used["u1"], udSyncID(9))
+	}
+}
+
+// TestClientMediaProgress_SeedAliasLimitStillSeeds: ErrSyncAliasLimit is
+// deterministic, so it must not hold the seed open (a retry cannot succeed,
+// and every list would redo the seed forever). The other items' aliases are
+// recorded and the user is seeded.
+func TestClientMediaProgress_SeedAliasLimitStillSeeds(t *testing.T) {
+	f := newUDFake()
+	f.addBook("good", nil, 1800)
+	f.addBook("huge", nil, 1800)
+	f.presetSyncID("good", udSyncID(1))
+	f.presetSyncID("huge", udSyncID(2))
+	f.addPosition("u1", "good", "abs", 900, time.Now())
+	f.addPosition("u1", "huge", "abs", 900, time.Now())
+	f.aliases = map[string][]string{udSyncID(1): {udSyncID(8)}}
+	f.aliasErrFor = map[string]error{udSyncID(2): fmt.Errorf("%w: starting at %s", database.ErrSyncAliasLimit, udSyncID(2))}
+
+	p := udProvider(t, f)
+	for call := 1; call <= 2; call++ {
+		if _, err := p.ClientMediaProgress("u1"); err != nil {
+			t.Fatalf("call %d: %v", call, err)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.seedWrites != 1 || !f.seeded["u1"] || !slices.Equal(f.used["u1"], []string{udSyncID(8)}) {
+		t.Fatalf("seed writes=%d seeded=%v used=%v; want one seed recording %s and the user seeded",
+			f.seedWrites, f.seeded["u1"], f.used["u1"], udSyncID(8))
+	}
+}
+
+// TestClientMediaProgress_SeedWindowBounds: the one-time seed records the
+// aliases of items whose progress changed in [aliasSeedSince, cutoff), where
+// the cutoff is the moment this server first ran with alias-use tracking.
+// Before aliasSeedSince the client never received alias rows (#3558 had not
+// shipped); from the cutoff on, every alias use is recorded as it happens,
+// so seeding a row touched after it would re-create the stats double count
+// for an alias the client never held. Edges are exact to the millisecond.
+func TestClientMediaProgress_SeedWindowBounds(t *testing.T) {
+	since := time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
+	cutoff := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		at     time.Time
+		seeded bool
+	}{
+		{"1ms before since", since.Add(-time.Millisecond), false},
+		{"at since", since, true},
+		{"1ms before cutoff", cutoff.Add(-time.Millisecond), true},
+		{"at cutoff", cutoff, false},
+		{"weeks after cutoff", cutoff.Add(21 * 24 * time.Hour), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newUDFake()
+			f.addBook("bk", nil, 1800)
+			f.presetSyncID("bk", udSyncID(1))
+			f.addPosition("u1", "bk", "abs", 900, tc.at)
+			f.aliases = map[string][]string{udSyncID(1): {udSyncID(8)}}
+
+			if _, err := udProviderWithCutoff(t, f, cutoff).ClientMediaProgress("u1"); err != nil {
+				t.Fatalf("ClientMediaProgress: %v", err)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if got := slices.Contains(f.used["u1"], udSyncID(8)); got != tc.seeded {
+				t.Fatalf("lastUpdate %s: alias seeded = %v, want %v (window [%s, %s))",
+					tc.at.Format(time.RFC3339Nano), got, tc.seeded, since.Format(time.RFC3339), cutoff.Format(time.RFC3339))
+			}
+			if !f.seeded["u1"] {
+				t.Fatal("the user must be marked seeded either way")
+			}
+		})
 	}
 }
 
