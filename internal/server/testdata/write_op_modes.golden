@@ -1,7 +1,7 @@
 # file: internal/server/testdata/write_op_modes.golden
-# version: 1.0.0
+# version: 1.0.1
 # guid: 656b77a9-3e50-456c-9945-dbbebbd7e041
-# last-edited: 2026-09-25
+# last-edited: 2026-09-26
 #
 # What `{}` does for every registered operation that can write (declares
 # library.write, files.write or db.migrate, or declares no capabilities at all).
@@ -126,6 +126,7 @@ maintenance.metadata-cache-reap	preview
 maintenance.metadata-refresh	no-mode
 maintenance.metadata-upgrade	no-mode
 maintenance.missing-file-repoint	preview
+maintenance.move-book-file-rows	preview
 maintenance.movement-atom-cleanup	no-mode
 maintenance.nightly-compact-activity-log	no-mode
 maintenance.optimize-activity-db	no-mode
