@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_revive.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e9fda51-d134-40e9-a8f9-cf9377034a24
-// last-edited: 2026-09-24
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
@@ -67,7 +68,7 @@ func vgReviveCandidates(ms []versionprimary.Member, files map[string][]database.
 		}
 		itunes := false
 		for _, f := range files[b.ID] {
-			if !f.Missing && authorPathLinkIsITunes(f.FilePath) {
+			if !f.Missing && pathutil.UnderFrozenITunesTree(f.FilePath) {
 				itunes = true
 			}
 		}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -403,7 +403,7 @@ func discoverITunesCloneGroups(books []database.BookCore) []string {
 			continue
 		}
 		linked := (b.ITunesPersistentID != nil && *b.ITunesPersistentID != "") ||
-			(b.ITunesImportSource != nil && *b.ITunesImportSource != "") || authorPathLinkIsITunes(b.FilePath)
+			(b.ITunesImportSource != nil && *b.ITunesImportSource != "") || pathutil.UnderFrozenITunesTree(b.FilePath)
 		if linked {
 			seen[*b.VersionGroupID] = true
 			out = append(out, *b.VersionGroupID)
@@ -606,7 +606,7 @@ func (r *icRunner) libraryCopies(book *database.Book, gid string) ([]string, boo
 			return nil, false, fmt.Errorf("read files of %s: %w", id, err)
 		}
 		for _, f := range files {
-			if !f.Missing && !authorPathLinkIsITunes(f.FilePath) && pathutil.IsWithin(f.FilePath, r.rootDir) {
+			if !f.Missing && !pathutil.UnderFrozenITunesTree(f.FilePath) && pathutil.IsWithin(f.FilePath, r.rootDir) {
 				out = append(out, id)
 				strong = strong || cands[id] == icMatchStrong
 				break
@@ -703,7 +703,7 @@ func (r *icRunner) plan(ctx context.Context, gid string) (icGroupReport, *icPlan
 		}
 		active = append(active, f)
 		switch {
-		case authorPathLinkIsITunes(f.FilePath):
+		case pathutil.UnderFrozenITunesTree(f.FilePath):
 			nITunes++
 		case pathutil.IsWithin(f.FilePath, r.rootDir):
 			nRoot++
@@ -727,7 +727,7 @@ func (r *icRunner) plan(ctx context.Context, gid string) (icGroupReport, *icPlan
 	}
 	g.Kind, g.Files, g.Destinations = p.kind, len(active), dests
 	for i, f := range active {
-		if !authorPathLinkIsITunes(f.FilePath) {
+		if !pathutil.UnderFrozenITunesTree(f.FilePath) {
 			continue
 		}
 		if !pathutil.IsWithin(dests[i], r.rootDir) {
@@ -749,7 +749,7 @@ func (r *icRunner) plan(ctx context.Context, gid string) (icGroupReport, *icPlan
 func mixedConflict(files []database.BookFile, dests []string, root string) string {
 	dir := ""
 	for i, f := range files {
-		if authorPathLinkIsITunes(f.FilePath) {
+		if pathutil.UnderFrozenITunesTree(f.FilePath) {
 			continue
 		}
 		if filepath.Clean(dests[i]) != filepath.Clean(f.FilePath) {
@@ -762,7 +762,7 @@ func mixedConflict(files []database.BookFile, dests []string, root string) strin
 		dir = d
 	}
 	for i, f := range files {
-		if authorPathLinkIsITunes(f.FilePath) && filepath.Dir(dests[i]) != dir {
+		if pathutil.UnderFrozenITunesTree(f.FilePath) && filepath.Dir(dests[i]) != dir {
 			return "mixed_itunes_files_planned_elsewhere"
 		}
 	}
@@ -877,7 +877,7 @@ func (r *icRunner) applyMixed(ctx context.Context, g icGroupReport, p *icPlan) i
 		}
 	}
 	for i, f := range p.files {
-		if !authorPathLinkIsITunes(f.FilePath) {
+		if !pathutil.UnderFrozenITunesTree(f.FilePath) {
 			continue
 		}
 		if err := fileops.Reflink(f.FilePath, p.dests[i]); err != nil {
