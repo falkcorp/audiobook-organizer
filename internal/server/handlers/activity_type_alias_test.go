@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_type_alias_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c7e9b53-8a14-4f6d-b3e0-5d91a7c4e826
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package handlers_test
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -108,4 +109,63 @@ func TestListActivity_TypeFilterIsAliasAware(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "library.optimize", svc.got.Type)
 	assert.Nil(t, svc.got.TypeAliases)
+}
+
+// TestListActivity_DefTagFilterIsAliasAware: reporter_db.go tags op rows
+// def:<the def ID the run used> and never rewrites them, so ?tags=def:<id> by
+// EITHER spelling of a renamed op must ask the store for one AND term that
+// both spellings satisfy. Other tags, unknown defs, and a handler without a
+// registry stay literal.
+func TestListActivity_DefTagFilterIsAliasAware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	defs := &fakeOpDefs{defs: []opsregistry.OperationDef{
+		{ID: "maintenance.library-optimize", FormerIDs: []string{"library.optimize"}},
+	}}
+	const canonical = "def:maintenance.library-optimize"
+	aliased := map[string][]string{canonical: {"def:library.optimize"}}
+
+	cases := []struct {
+		name, tags    string
+		wantTags      []string
+		wantAliases   map[string][]string
+		wantNotedUses []string
+	}{
+		{"former ID", "def:library.optimize", []string{canonical}, aliased,
+			[]string{"library.optimize|" + opsregistry.AliasEntryActivityFilter}},
+		{"canonical ID", canonical, []string{canonical}, aliased, nil},
+		{"with another tag", "failed, def:maintenance.library-optimize", []string{"failed", canonical}, aliased, nil},
+		{"both spellings", "def:library.optimize,def:maintenance.library-optimize", []string{canonical}, aliased,
+			[]string{"library.optimize|" + opsregistry.AliasEntryActivityFilter}},
+		{"unknown def", "def:nope", []string{"def:nope"}, nil, nil},
+		{"empty def", "def:", []string{"def:"}, nil, nil},
+		{"not a def tag", "library.optimize", []string{"library.optimize"}, nil, nil},
+		{"absent", "", nil, nil, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defs.noted = nil
+			svc := &filterCapture{MockActivityService: handlersmocks.NewMockActivityService(t)}
+			h := handlers.NewActivityHandler(svc, nil, handlers.WithActivityOpDefs(defs))
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/activity?tags="+url.QueryEscape(tc.tags), nil)
+			h.ListActivity(c)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, tc.wantTags, svc.got.Tags)
+			assert.Equal(t, tc.wantAliases, svc.got.TagAliases)
+			assert.Equal(t, tc.wantNotedUses, defs.noted)
+		})
+	}
+
+	// Without the option def: tags stay literal.
+	svc := &filterCapture{MockActivityService: handlersmocks.NewMockActivityService(t)}
+	h := handlers.NewActivityHandler(svc, nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/activity?tags=def:library.optimize", nil)
+	h.ListActivity(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, []string{"def:library.optimize"}, svc.got.Tags)
+	assert.Nil(t, svc.got.TagAliases)
 }

@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -583,10 +583,13 @@ func (s *SQLActivityStore) buildFilter(f ActivityFilter) (string, []any) {
 		args = append(args, f.Search)
 	}
 
-	// Tags: entry must contain ALL requested tags (AND).
-	for _, tag := range f.Tags {
-		conds = append(conds, s.dialect.jsonArrayContains("tags"))
-		args = append(args, tag)
+	// Tags: entry must satisfy ALL requested tags (AND); each tag is an any-of
+	// group of itself plus its TagAliases (a renamed op's def: spellings).
+	for _, group := range f.TagTerms() {
+		conds = append(conds, s.dialect.jsonArrayContainsAny("tags", len(group)))
+		for _, tag := range group {
+			args = append(args, tag)
+		}
 	}
 
 	if len(f.ExcludeSources) > 0 {

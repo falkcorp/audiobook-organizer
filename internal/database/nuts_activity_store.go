@@ -1,7 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package database
 
@@ -1027,10 +1027,9 @@ func matchesFilter(e ActivityEntry, f ActivityFilter) bool {
 	if f.Search != "" && !strings.Contains(e.Summary, f.Search) {
 		return false
 	}
-	for _, tag := range f.Tags {
-		if !containsTag(e.Tags, tag) {
-			return false
-		}
+	// Every required tag, each satisfied by any of its aliases (TagAliases).
+	if !f.acceptsTags(e.Tags) {
+		return false
 	}
 	if slices.Contains(f.ExcludeSources, e.Source) {
 		return false
