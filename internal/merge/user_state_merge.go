@@ -1,5 +1,5 @@
 // file: internal/merge/user_state_merge.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b1f6c2e-4d7a-4e83-a5c9-2f8e0d3b7a61
 // last-edited: 2026-09-26
 
@@ -25,7 +25,8 @@ import (
 //     upos rows, LastSegmentID, TotalListenedSeconds, ProgressPct and status.
 //     lastUpdate is what the ABS surface reports (item.go: the latest upos
 //     UpdatedAt), falling back to the state's LastActivityAt for a side with
-//     no position rows. A tie goes to the survivor;
+//     no position rows. A tie goes to the survivor, and a side with no
+//     position rows never takes the position from one that has them;
 //   - last played (LastActivityAt) is the later of the two;
 //   - HideFromContinueListening is kept if either side has it;
 //   - the reset tombstone (ProgressResetAt) is the later of the two and the
@@ -113,11 +114,20 @@ func planUserStateMerge(userID, winnerBookID string, loser, winner userStateSide
 		return plan
 	}
 
+	// The position and every position-linked field (status, progress %,
+	// segment, listened seconds) come from ONE side, so the result never pairs
+	// one copy's progress with the other copy's currentTime. That side is the
+	// newer one, except that a side with no upos rows cannot take the position
+	// from a side that has them (a state-only row, e.g. after a reset on that
+	// copy, carries no currentTime to win with; its reset tombstone is still
+	// unioned below, which is what keeps offline replay from resurrecting the
+	// discarded position).
 	loserNewer := lastUpdate(loser.state, loser.positions).After(lastUpdate(winner.state, winner.positions))
-	plan.loserPositionsWin = loserNewer && len(loser.positions) > 0
+	loserWins := loserNewer && (len(loser.positions) > 0 || len(winner.positions) == 0)
+	plan.loserPositionsWin = loserWins && len(loser.positions) > 0
 
 	newer, older := winner.state, loser.state
-	if loserNewer {
+	if loserWins {
 		newer, older = loser.state, winner.state
 	}
 	if newer == nil && older == nil {
@@ -218,6 +228,16 @@ func drainedUserState(st database.UserBookState) *database.UserBookState {
 	st.LastSegmentID = ""
 	st.HideFromContinueListening = false
 	return &st
+}
+
+// carryPosition writes one carried position onto bookID keeping its
+// UpdatedAt when the store can (database.UserPositionTimestampWriter), so the
+// survivor's lastUpdate stays the user's real last listen, not the merge time.
+func carryPosition(db userPositionStore, userID, bookID string, p database.UserPosition) error {
+	if w, ok := database.AsCapability[database.UserPositionTimestampWriter](db); ok {
+		return w.SetUserPositionAt(userID, bookID, p.SegmentID, p.PositionSeconds, p.UpdatedAt)
+	}
+	return db.SetUserPosition(userID, bookID, p.SegmentID, p.PositionSeconds)
 }
 
 // sortPositionsOldestFirst orders positions so that writing them in order

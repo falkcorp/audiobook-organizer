@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package merge
 
@@ -856,6 +856,12 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 			} else if err := clearer.ClearSyncMerge(a.BookID, j.SurvivorID); err != nil {
 				return res, fmt.Errorf("clear sync redirect %s -> %s: %w", a.BookID, j.SurvivorID, err)
 			}
+		}
+		// The absorbed book is coming back: a pending-repair record for it
+		// (left when some user's state could not be moved) must go too, or the
+		// sweep would later drain the restored book onto the survivor.
+		if err := ms.db.DeleteRaw(pendingRepairKey(a.BookID, j.SurvivorID)); err != nil {
+			return res, fmt.Errorf("drop pending user-state repair %s -> %s: %w", a.BookID, j.SurvivorID, err)
 		}
 		for _, p := range a.Progress {
 			curAbs, err := ms.db.GetUserBookState(p.UserID, a.BookID)

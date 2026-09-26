@@ -1,5 +1,5 @@
 // file: internal/merge/repair_user_state.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f3c1a92-8e5b-4d07-b4a1-3c9e7f2d5b18
 // last-edited: 2026-09-26
 
@@ -8,6 +8,7 @@ package merge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 	"sort"
@@ -51,6 +52,7 @@ type UserStateRepairItem struct {
 	Positions  int    `json:"positions,omitempty"`
 	Bookmarks  int    `json:"bookmarks,omitempty"`
 	Moved      bool   `json:"moved"`
+	Deferred   bool   `json:"deferred,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 
@@ -67,6 +69,7 @@ type UserStateRepairReport struct {
 	PendingRecords     int                   `json:"pending_records"`
 	PendingCompleted   int                   `json:"pending_completed"`
 	PendingUndecodable int                   `json:"pending_undecodable"`
+	PendingDeferred    int                   `json:"pending_deferred"`
 	StrandedBooks      int                   `json:"stranded_books"`
 	StateRows          int                   `json:"state_rows"`
 	PositionRows       int                   `json:"position_rows"`
@@ -130,9 +133,13 @@ func RepairMergedUserState(ctx context.Context, db UserStateRepairStore, opts Us
 			LockMergeRMW()
 			err := CompletePendingUserStateRepair(db, rec)
 			UnlockMergeRMW()
-			if err != nil {
+			switch {
+			case errors.Is(err, ErrPendingLoserLive):
+				it.Deferred = true
+				rep.PendingDeferred++
+			case err != nil:
 				it.Error = err.Error()
-			} else {
+			default:
 				it.Moved = true
 				rep.PendingCompleted++
 			}
@@ -244,7 +251,12 @@ func userStateRefs(db UserStateRepairStore, userID string) ([]strandedRef, int, 
 	}
 	positions, err := db.ListUserPositionsSince(userID, time.Time{})
 	if err != nil {
-		return nil, 0, err
+		readable, skipped, ok := database.ReadablePositionsDespite(err)
+		if !ok {
+			return nil, 0, err
+		}
+		positions = readable // read-only census: count what decodes, report the rest
+		bad += skipped
 	}
 	for _, p := range positions {
 		r := byBook[p.BookID]

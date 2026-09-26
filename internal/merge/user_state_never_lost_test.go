@@ -96,6 +96,14 @@ func TestPlanUserStateMerge_Rule(t *testing.T) {
 		require.Equal(t, 33, p.state.ProgressPct)
 		require.True(t, p.loserPositionsWin)
 	})
+	t.Run("a newer state-only loser does not pair its progress with the survivor's position", func(t *testing.T) {
+		l := st(database.UserBookStatusInProgress, 5, newer) // e.g. reset on that copy: no upos rows
+		w := st(database.UserBookStatusInProgress, 60, older)
+		p := planUserStateMerge("u", "W", userStateSide{l, nil}, userStateSide{w, pos("b", older)})
+		require.False(t, p.loserPositionsWin)
+		require.Equal(t, 60, p.state.ProgressPct, "progress % comes from the side whose position stands")
+		require.Equal(t, newer, p.state.LastActivityAt, "last played is still the max")
+	})
 	t.Run("a drained row is not carryable", func(t *testing.T) {
 		require.False(t, hasCarryableState(drainedUserState(*st(database.UserBookStatusFinished, 100, newer)), nil))
 	})
@@ -384,4 +392,33 @@ func TestMergeBooks_UserStateSurvivor(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 30, got.ProgressPct, "the state move carries it instead")
 	})
+}
+
+// A -> B then B -> C: B's carried position must keep A's real timestamp, so
+// C's later real listen still wins. With carried rows stamped "now" (the old
+// SetUserPosition carry) last week's position on A would beat yesterday's on C.
+func TestFollowMerge_ChainedMergeKeepsRealTimestamps(t *testing.T) {
+	store := setupTestStore(t)
+	user := seedSyncUser(t, store)
+	bID, aID := seedSyncBooks(t, store)
+	_, cID := seedSyncBooks(t, store)
+	pw := database.AsCapability[database.UserPositionTimestampWriter]
+	w, ok := pw(store)
+	require.True(t, ok)
+	weekAgo, yesterday := time.Now().Add(-7*24*time.Hour), time.Now().Add(-24*time.Hour)
+	require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: user.ID, BookID: aID, Status: database.UserBookStatusInProgress, ProgressPct: 80, LastActivityAt: weekAgo}))
+	require.NoError(t, w.SetUserPositionAt(user.ID, aID, "sa", 800, weekAgo))
+	require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: user.ID, BookID: cID, Status: database.UserBookStatusInProgress, ProgressPct: 20, LastActivityAt: yesterday}))
+	require.NoError(t, w.SetUserPositionAt(user.ID, cID, "sc", 200, yesterday))
+
+	f := asFollower(store)
+	require.NoError(t, FollowMerge(store, f, bID, []string{aID}))
+	require.NoError(t, FollowMerge(store, f, cID, []string{bID}))
+
+	got, err := store.GetUserBookState(user.ID, cID)
+	require.NoError(t, err)
+	require.Equal(t, 20, got.ProgressPct, "C's real, later listen wins")
+	latest, err := store.GetUserPosition(user.ID, cID)
+	require.NoError(t, err)
+	require.Equal(t, "sc", latest.SegmentID)
 }

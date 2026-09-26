@@ -1,5 +1,5 @@
 // file: internal/merge/pending_repair.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c8a2e71-9f3d-4b06-8e5a-1d7c3b9f2e84
 // last-edited: 2026-09-26
 
@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -97,7 +96,7 @@ func CompletePendingUserStateRepair(db UserProgressMerger, rec PendingUserStateR
 	if loser, err := db.GetBookByID(rec.LoserBookID); err != nil {
 		return fmt.Errorf("read loser %s: %w", rec.LoserBookID, err)
 	} else if loser != nil && !loser.IsSoftDeleted() {
-		return fmt.Errorf("loser %s is still live; record kept until the merge completes", rec.LoserBookID)
+		return fmt.Errorf("%w: %s", ErrPendingLoserLive, rec.LoserBookID)
 	}
 	follower := asFollower(db)
 	if moveErr := moveLoserState(db, follower, winner, rec.LoserBookID, nil, rec.Slice); moveErr != nil {
@@ -117,6 +116,11 @@ func asFollower(db any) SyncFollower {
 	}
 	return nil
 }
+
+// ErrPendingLoserLive: the record's loser is live again (the merge failed
+// after the follow). The record is kept and the item reported as deferred,
+// not as a failure.
+var ErrPendingLoserLive = errors.New("loser is still live; record kept until the merge completes")
 
 // ErrNoLiveSurvivor is returned by ResolveSurvivor when the chain from a book
 // does not end at a live (not soft-deleted) book.
@@ -172,6 +176,6 @@ func ResolveSurvivor(db interface {
 func logPendingLeft(loserBookID, winnerBookID string, cause error) {
 	mlog.Error("merge-follow: user state of loser=%s NOT fully moved to winner=%s; pending-repair record %s holds it for maintenance.repair-merged-user-state: %s",
 		logger.SanitizeLogValue(loserBookID), logger.SanitizeLogValue(winnerBookID),
-		logger.SanitizeLogValue(strings.TrimSpace(pendingRepairKey(loserBookID, winnerBookID))),
+		logger.SanitizeLogValue(pendingRepairKey(loserBookID, winnerBookID)),
 		logger.SanitizeLogValue(fmt.Sprint(cause)))
 }

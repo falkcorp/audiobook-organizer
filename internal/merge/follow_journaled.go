@@ -1,5 +1,5 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
 // last-edited: 2026-09-26
 
@@ -134,7 +134,7 @@ func followSliceFor(db userPositionStore, userID, survivorID, absorbedID string,
 			if survLatest != nil {
 				seg = survLatest.SegmentID
 			}
-			if err := db.SetUserPosition(userID, survivorID, seg, mapped); err != nil {
+			if err := carryPosition(db, userID, survivorID, database.UserPosition{SegmentID: seg, PositionSeconds: mapped, UpdatedAt: loserLatest.UpdatedAt}); err != nil {
 				return fmt.Errorf("carry mapped position: %w", err)
 			}
 		}

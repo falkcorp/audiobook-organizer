@@ -1,5 +1,5 @@
 // file: internal/merge/sync_follow.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
 // last-edited: 2026-09-26
 
@@ -459,7 +459,7 @@ func mergeUserProgressFor(db userPositionStore, userID, loserBookID, winnerBookI
 		// Segment IDs are opaque per-user bookkeeping, carried as-is, oldest
 		// first so the loser's latest stays the winner's latest.
 		for _, pos := range sortPositionsOldestFirst(loserPositions) {
-			if err := db.SetUserPosition(userID, winnerBookID, pos.SegmentID, pos.PositionSeconds); err != nil {
+			if err := carryPosition(db, userID, winnerBookID, pos); err != nil {
 				return fmt.Errorf("carry position %s onto winner: %w", pos.SegmentID, err)
 			}
 		}
