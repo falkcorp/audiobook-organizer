@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_crossfolder.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 65b43ad1-649a-4077-856f-593cb93f5cbd
 // last-edited: 2026-09-26
 
@@ -16,8 +16,8 @@ import (
 
 	ulid "github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -87,15 +87,6 @@ func (d bookFileRowDecision) line() string {
 // production never reassigns it.
 var crossFolderApplyStat = os.Stat
 
-// underITunesTree reports whether a path runs through the hands-off iTunes
-// library (books/itunes/**). Two checks, deliberately: config's segment match
-// is the repo-wide definition, and authorPathLinkIsITunes adds the
-// case-insensitive segment form so "Books/iTunes/..." cannot slip past the
-// lowercase substring.
-func underITunesTree(path string) bool {
-	return config.UnderFrozenITunesTree(path) || authorPathLinkIsITunes(path)
-}
-
 // planCrossFolderPurges decides, for each MISSING row in candidates, whether it
 // may be deleted as a superseded copy of a present row elsewhere in the book.
 //
@@ -122,7 +113,7 @@ func planCrossFolderPurges(bookID string, candidates, all []database.BookFile, p
 			d.Action, d.Reason = decisionSkip, reason
 			skips = append(skips, d)
 		}
-		if underITunesTree(f.FilePath) {
+		if pathutil.UnderFrozenITunesTree(f.FilePath) {
 			skip("row is under the iTunes tree (books/itunes/**), which is never mutated")
 			continue
 		}
@@ -163,7 +154,7 @@ func planCrossFolderPurges(bookID string, candidates, all []database.BookFile, p
 		}
 		twin := twins[0]
 		d.TwinRowID, d.TwinPath = twin.ID, twin.FilePath
-		if underITunesTree(twin.FilePath) {
+		if pathutil.UnderFrozenITunesTree(twin.FilePath) {
 			skip("twin is under the iTunes tree (books/itunes/**), which is never mutated")
 			continue
 		}
@@ -416,7 +407,7 @@ func removeNamedBookFileRows(store OpsStore, params DedupeBookFileRowsParams, co
 				continue
 			}
 			d.Path, d.Size = f.FilePath, f.FileSize
-			if underITunesTree(f.FilePath) {
+			if pathutil.UnderFrozenITunesTree(f.FilePath) {
 				d.Action, d.Reason = decisionSkip, "row is under the iTunes tree (books/itunes/**), which is never mutated"
 				res.decisions = append(res.decisions, d)
 				continue
