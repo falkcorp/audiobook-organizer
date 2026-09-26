@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/async_search_internal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a1c8e3f-2b7d-4d90-9e45-0f3b6a8c2d17
 // last-edited: 2026-09-25
 
@@ -34,6 +34,30 @@ func TestWantsAsyncSearch(t *testing.T) {
 		}
 		if got := wantsAsyncSearch(c); got != tc.want {
 			t.Errorf("Prefer %v: wantsAsyncSearch = %v, want %v", tc.prefer, got, tc.want)
+		}
+	}
+}
+
+// Review 2, finding 3: a stale list is a separate opt-in. respond-async alone
+// (the Library list, whose rows feed bulk actions) does not admit one.
+func TestWantsStaleSearch(t *testing.T) {
+	cases := []struct {
+		prefer []string
+		want   bool
+	}{
+		{nil, false},
+		{[]string{"respond-async"}, false},
+		{[]string{"respond-async, allow-stale"}, true},
+		{[]string{"respond-async", "Allow-Stale"}, true},
+	}
+	for _, tc := range cases {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("GET", "/api/v1/audiobooks?search=x", nil)
+		for _, v := range tc.prefer {
+			c.Request.Header.Add("Prefer", v)
+		}
+		if got := wantsStaleSearch(c); got != tc.want {
+			t.Errorf("Prefer %v: wantsStaleSearch = %v, want %v", tc.prefer, got, tc.want)
 		}
 	}
 }
