@@ -260,21 +260,25 @@ func keeperLess(files []BookFile, inside []bool, a, b int) bool {
 }
 
 // IsBookFileCopy reports whether a is a copy of b. It is a copy when EITHER:
-//   - both carry the same non-empty FileHash, and neither their sizes nor
-//     their durations conflict; OR
+//   - both carry the same non-empty FileHash and their sizes do not
+//     conflict; OR
 //   - they share a file name, have the same known FileSize (> 0: an
 //     unmeasured size is no evidence), and their durations agree.
 //
 // A shared hash is not enough on its own: legacy rows carry
 // scanner.ComputeSegmentFileHash, a SHA-256 of the first 1 MB only, so
 // distinct tracks that share an opening (identical album-only tags and a large
-// embedded cover) share a hash. Sizes conflict when both are known (> 0) and
-// differ; durations conflict when both are known and more than 1 s apart. An
-// unknown size or duration does not veto: some hash writers (SetBookFileHash,
-// extract-wav-clips) set the hash without the size, and an unmeasured own row
-// beside its measured iTunes twin must still be recognised as that twin. The
-// canonical chunked hash digests the size, so for current rows the veto never
-// fires on a true copy.
+// embedded cover) share a hash. Such tracks almost always differ in size, so
+// sizes that are both known (> 0) and differ veto the hash. An unknown size
+// does not veto: some hash writers (SetBookFileHash, extract-wav-clips) set
+// the hash without the size. The canonical chunked hash digests the size, so
+// for current rows the veto never fires on a true copy.
+//
+// Durations deliberately do NOT veto a hash match: the two rows' durations
+// can come from different measurements (iTunes' Total Time on the iTunes
+// twin, the fingerprint or ffprobe duration the backfill writes on the own
+// row), which drift by more than 1 s on VBR files. A duration veto would
+// split a byte-identical pair and count that track twice.
 //
 // Names are a non-empty OriginalFilename or the base name of FilePath,
 // compared across both, with organize's `_copyN` collision suffix removed from
@@ -293,7 +297,7 @@ func keeperLess(files []BookFile, inside []bool, a, b int) bool {
 // the shared name is the layout, not a copy. A shared hash still counts.
 func IsBookFileCopy(a, b BookFile) bool {
 	if a.FileHash != "" && a.FileHash == b.FileHash {
-		return !knownSizesConflict(a, b) && !knownDurationsConflict(a, b)
+		return !knownSizesConflict(a, b)
 	}
 	if a.FileSize <= 0 || a.FileSize != b.FileSize {
 		return false

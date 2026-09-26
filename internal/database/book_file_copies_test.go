@@ -284,7 +284,7 @@ func TestRecomputeBookAggregates_SameFolderCopiesCorrectDown(t *testing.T) {
 // Review finding (2026-09-25): legacy scanner.ComputeSegmentFileHash values
 // hash only the first 1 MB, so distinct tracks that share an opening (the same
 // album-only tags and a large embedded cover) carry one FileHash. A hash match
-// between rows whose known sizes or known durations disagree is that
+// between rows whose known sizes disagree is that
 // collision, not a copy: the tracks of one book must all count.
 func TestSplitOwnFolderFiles_LegacyPrefixHashCollision(t *testing.T) {
 	const dir = "/lib/A/Prefix"
@@ -298,11 +298,13 @@ func TestSplitOwnFolderFiles_LegacyPrefixHashCollision(t *testing.T) {
 	assert.Empty(t, ownFolderIDs(s.Copies), "distinct tracks sharing a 1 MB-prefix hash are not copies")
 	assert.Len(t, OwnFolderFiles(book, rows), 3)
 
-	t.Run("equal sizes, durations 2 s apart", func(t *testing.T) {
-		a := BookFile{FilePath: dir + "/01.mp3", FileHash: "prefix", FileSize: 5000, Duration: 1800}
-		b := BookFile{FilePath: dir + "/02.mp3", FileHash: "prefix", FileSize: 5000, Duration: 1802}
-		assert.False(t, IsBookFileCopy(a, b))
-		assert.False(t, IsBookFileCopy(b, a))
+	t.Run("equal sizes, durations apart: still a copy", func(t *testing.T) {
+		// The two durations can come from different measurements (iTunes'
+		// Total Time vs the backfill's), so they never veto a hash match.
+		a := BookFile{FilePath: "/srv/books/itunes/A/Prefix/01.mp3", FileHash: "prefix", FileSize: 5000, Duration: 1800}
+		b := BookFile{FilePath: dir + "/01.mp3", FileHash: "prefix", FileSize: 5000, Duration: 1805}
+		assert.True(t, IsBookFileCopy(a, b))
+		assert.True(t, IsBookFileCopy(b, a))
 	})
 	t.Run("an unknown size or duration does not veto a shared hash", func(t *testing.T) {
 		a := BookFile{FilePath: dir + "/01.mp3", FileHash: "h", FileSize: 5000, Duration: 1800}

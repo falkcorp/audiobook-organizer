@@ -11,12 +11,13 @@ drops any merge whose target is itself deleted or merged away in the same run,
 before `limit` applies, so the dry run and the apply show the same plan. The
 dropped merges are counted as `merge-target-removed` in the summary.
 
-#### Book duration copy detection: shared hash needs agreeing size and duration
+#### Book duration copy detection: a shared hash needs agreeing sizes
 
 Legacy `book_files.file_hash` values hash only the first 1 MB, so distinct
 tracks with an identical opening shared a hash and were collapsed into one
 counted track. A shared hash no longer makes two rows copies when both sizes
-are known and differ, or both durations are known and more than 1 s apart.
+are known and differ. Durations do not veto a hash match, because the two rows'
+durations can come from different measurements that drift on VBR files.
 
 #### Book duration copy keeper prefers the book's own-folder row
 
