@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_merged_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9b41e7c3-2d58-4a06-bf19-6e35c0d7a284
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -278,6 +278,26 @@ func TestDurationBackfill_ZeroRowsKeepsOwnRowOverMeasuredITunesTwin(t *testing.T
 	runZeroRows(t, store)
 	if got := *written; len(got) != 2 || got[0] != "own1" || got[1] != "own2" {
 		t.Errorf("zero-rows mode must fill the own rows [own1 own2] and never the iTunes twin, wrote %v", got)
+	}
+}
+
+// COPY-KEEPER-NON-ITUNES-OUTSIDE (2026-09-26): a copy cluster with no
+// own-folder row keeps its non-iTunes row over a measured books/itunes/**
+// twin, even when the iTunes row comes first. Keeping the iTunes row put a
+// frozen row in the counted set, so the whole book was skipped as "itunes".
+// Now the non-iTunes zero row is filled and the iTunes row is never written.
+func TestDurationBackfill_ZeroRowsKeepsNonITunesRowOutsideOwnFolder(t *testing.T) {
+	var segWrites, bookWrites int
+	segs := []database.BookFile{
+		{ID: "own1", BookID: "b1", FilePath: "/lib/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "itunes2", BookID: "b1", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 1200, AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "old2", BookID: "b1", FilePath: "/srv/old/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
+	}
+	store := zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites)
+	written := captureRowWrites(store)
+	runZeroRows(t, store)
+	if got := *written; len(got) != 2 || got[0] != "own1" || got[1] != "old2" {
+		t.Errorf("zero-rows mode must fill [own1 old2] and never the iTunes twin, wrote %v", got)
 	}
 }
 
