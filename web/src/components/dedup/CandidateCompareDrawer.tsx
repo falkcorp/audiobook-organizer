@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.9.0
+// version: 1.10.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
 // It fetches the breakdown data on open via GET /api/v1/dedup/candidates/:id/breakdown.
@@ -465,6 +465,30 @@ export function CandidateCompareDrawer({
 
         {data && !loading && (
           <>
+            {candidate?.source === 'manual' && (
+              <Alert severity="info" sx={{ mb: 2 }} data-testid="drawer-pinned-notice">
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                  Pinned for human review
+                  {candidate.source_note ? `: ${candidate.source_note}` : ''}
+                </Typography>
+                <Typography variant="body2">
+                  Automated passes do not merge, dismiss or re-score this pair.
+                </Typography>
+                {candidate.ai_advice_verdict && (
+                  <Typography variant="body2" sx={{ mt: 1 }} data-testid="drawer-ai-advice">
+                    AI advice (not applied):{' '}
+                    <strong>
+                      {candidate.ai_advice_verdict === 'duplicate'
+                        ? 'duplicate'
+                        : candidate.ai_advice_verdict === 'not_duplicate'
+                          ? 'not a duplicate'
+                          : candidate.ai_advice_verdict}
+                    </strong>
+                    {candidate.ai_advice_reason ? ` — ${candidate.ai_advice_reason}` : ''}
+                  </Typography>
+                )}
+              </Alert>
+            )}
             {/* Action bar */}
             <Stack
               direction="row"

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/breakdown_backfill.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ec0f5e9d-2f6d-485d-9f24-ad3d917d1834
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package dedup — op dedup.breakdown-backfill.
 //
@@ -19,7 +19,8 @@
 // and composed score with the engine's EXISTING scorer
 // (Engine.ScorePairsForBook → the same collectors + unified.ComposeScore the
 // operational scan uses via the shared collectPairSignals helper — no scorer
-// fork) and persists it onto the candidate via UpdateCandidateScore.
+// fork) and persists it onto the candidate via UpdateCandidateScores, one
+// batch per A-group, with one SyncCandidateWrites at the end.
 //
 // # Deliberate divergences from the operational scan
 //
@@ -60,7 +61,7 @@
 // accepts a "0"/"1" row outright when the pair carries a whole-book-signature
 // true_dup label (which would grow it). None of those inputs are reachable
 // from this op: its entire store surface is ListCandidates +
-// UpdateCandidateScore, and widening it to tighten a reported number is a
+// UpdateCandidateScores/SyncCandidateWrites, and widening it to tighten a reported number is a
 // worse trade than reporting the number with its scope stated.
 //
 // Note also that the rescore path composes with NIL suppressors
@@ -95,7 +96,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -171,35 +171,46 @@ func signalSetKey(signals []unified.Signal) string {
 // breakdownBackfillParams are the JSON parameters accepted by the op.
 type breakdownBackfillParams struct {
 	// Apply, if true, persists each recomputed breakdown via
-	// UpdateCandidateScore. Default false (dry-run) — reports counts and 10
+	// UpdateCandidateScores. Default false (dry-run) — reports counts and 10
 	// sample pairs, writes nothing.
 	Apply bool `json:"apply"`
 }
 
 // candidateBackfillStore is the narrow store surface the op needs
 // (database.EmbeddingStore satisfies it).
+//
+// The write is UpdateCandidateScores, the guarded bulk write Engine.Rescore
+// uses: it re-reads each row under the lock EnqueueManualCandidate holds and
+// skips a manual (pinned) row, so a pin that lands after this op listed the
+// backlog still keeps the row unscored. The partition below skips manual rows
+// on the listed snapshot; that check alone leaves the whole scoring pass as a
+// window for a pin.
 type candidateBackfillStore interface {
 	ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error)
-	UpdateCandidateScore(id int64, score *models.UnifiedDedupScore, band, formulaVersion string) error
+	UpdateCandidateScores(updates []database.CandidateScoreUpdate) (applied int, failed []int64, err error)
+	SyncCandidateWrites() error
 }
 
 // breakdownBackfillReport is the op's result payload, logged as JSON at the
 // end of the run so a sandbox run can be measured mechanically.
 type breakdownBackfillReport struct {
-	Apply               bool           `json:"apply"`
-	TotalPending        int            `json:"total_pending"`
-	SkippedHasBreakdown int            `json:"skipped_has_breakdown"`
-	SkippedManual       int            `json:"skipped_manual"`
-	Targets             int            `json:"targets"`
-	Processed           int            `json:"processed"`
-	Backfilled          int            `json:"backfilled"`
-	WouldBackfill       int            `json:"would_backfill"`
-	ZeroSignal          int            `json:"zero_signal"`
-	SkippedNoBook       int            `json:"skipped_no_book"`
-	ScoreErrs           int            `json:"score_errs"`
-	UpdateErrs          int            `json:"update_errs"`
-	MissingSignalCounts map[string]int `json:"missing_signal_counts"`
-	SignalKindCounts    map[string]int `json:"signal_kind_counts"`
+	Apply               bool `json:"apply"`
+	TotalPending        int  `json:"total_pending"`
+	SkippedHasBreakdown int  `json:"skipped_has_breakdown"`
+	SkippedManual       int  `json:"skipped_manual"`
+	// SkippedManualAtWrite counts rows pinned for human review after the
+	// list: UpdateCandidateScores left them unscored at write time.
+	SkippedManualAtWrite int            `json:"skipped_manual_at_write"`
+	Targets              int            `json:"targets"`
+	Processed            int            `json:"processed"`
+	Backfilled           int            `json:"backfilled"`
+	WouldBackfill        int            `json:"would_backfill"`
+	ZeroSignal           int            `json:"zero_signal"`
+	SkippedNoBook        int            `json:"skipped_no_book"`
+	ScoreErrs            int            `json:"score_errs"`
+	UpdateErrs           int            `json:"update_errs"`
+	MissingSignalCounts  map[string]int `json:"missing_signal_counts"`
+	SignalKindCounts     map[string]int `json:"signal_kind_counts"`
 
 	// BandCounts is the band histogram over every SCORED pair (zero-signal
 	// pairs are excluded — they are counted by ZeroSignal and have no band).
@@ -236,7 +247,7 @@ func (p *Plugin) breakdownBackfillDef() sdk.OperationDef {
 		DisplayName: "Backfill ScoreBreakdowns onto pre-T015 pending candidates",
 		Description: "Recomputes the unified signal set + composed score for every pending dedup " +
 			"candidate with no ScoreBreakdown (pre-T015 rows) using the engine's existing scorer, " +
-			"and persists it via UpdateCandidateScore so Engine.Rescore and " +
+			"and persists it via UpdateCandidateScores so Engine.Rescore and " +
 			"maintenance.dedup-exact-triage can act on the whole backlog. Writes ONLY " +
 			"ScoreBreakdown/Band/FormulaVersion — never status, layer, or similarity. " +
 			"Dry-run by default; apply=true writes.",
@@ -274,7 +285,7 @@ type backfillRef struct {
 // backfillGroup bundles all target candidates sharing an A book so book A's
 // per-book precompute (inside ScorePairsForBook) runs once per group. Groups
 // are disjoint by A; each candidate row is keyed by a distinct candID, so
-// parallel UpdateCandidateScore writes never collide.
+// parallel UpdateCandidateScores batches never write the same row.
 type backfillGroup struct {
 	aID  string
 	refs []backfillRef
@@ -284,8 +295,9 @@ type backfillGroup struct {
 // keeps the nil/empty-breakdown ones, groups them by EntityAID, scores each
 // group through the engine's real scorer in a bounded worker pool
 // (registry.RunItems, NumCPU workers — DB-read + CPU scoring over ~10K+
-// pairs), and (apply=true) persists each recomputed breakdown via
-// UpdateCandidateScore.
+// pairs), and (apply=true) persists each group's recomputed breakdowns via
+// one UpdateCandidateScores batch, then makes them durable with one
+// SyncCandidateWrites.
 func runBreakdownBackfillWith(
 	ctx context.Context,
 	scorer pairScorer,
@@ -391,6 +403,7 @@ func runBreakdownBackfillWith(
 		skippedNoBook    int
 		scoreErrs        int
 		updateErrs       int
+		skippedAtWrite   int
 		signalKindCounts = map[string]int{}
 		bandCounts       = map[string]int{}
 		certainSigsEq1   int
@@ -430,6 +443,7 @@ func runBreakdownBackfillWith(
 			mu.Unlock()
 		}
 
+		var updates []database.CandidateScoreUpdate
 		for i := range results {
 			res := results[i]
 			ref := g.refs[i]
@@ -498,17 +512,35 @@ func runBreakdownBackfillWith(
 
 			// Persist ONLY ScoreBreakdown/Band/FormulaVersion (below-band
 			// breakdowns included — the band gate is deliberately bypassed).
-			if uErr := store.UpdateCandidateScore(ref.candID, res.Score, res.Score.Band, res.Score.Formula); uErr != nil {
-				mu.Lock()
-				updateErrs++
-				mu.Unlock()
-				log.Error("breakdown-backfill: update candidate score error",
-					"candidate_id", ref.candID, "error", uErr)
-				continue
-			}
+			updates = append(updates, database.CandidateScoreUpdate{
+				ID: ref.candID, Score: res.Score, Band: res.Score.Band, FormulaVersion: res.Score.Formula,
+			})
+		}
+		if len(updates) == 0 {
+			return nil
+		}
+		applied, failed, uErr := store.UpdateCandidateScores(updates)
+		if uErr != nil {
 			mu.Lock()
-			backfilled++
+			updateErrs += len(updates)
 			mu.Unlock()
+			log.Error("breakdown-backfill: update candidate scores error",
+				"a_id", g.aID, "rows", len(updates), "error", uErr)
+			return nil // partial progress beats aborting the whole op
+		}
+		for _, id := range failed {
+			log.Error("breakdown-backfill: candidate row missing or unreadable at write time", "candidate_id", id)
+		}
+		// Rows neither applied nor failed were pinned for human review
+		// after the list (see candidateBackfillStore).
+		pinned := len(updates) - applied - len(failed)
+		mu.Lock()
+		backfilled += applied
+		updateErrs += len(failed)
+		skippedAtWrite += pinned
+		mu.Unlock()
+		if pinned > 0 {
+			log.Info("breakdown-backfill: left rows pinned since the list unscored", "a_id", g.aID, "rows", pinned)
 		}
 		return nil
 	}, registry.RunItemsOptions{
@@ -520,6 +552,13 @@ func runBreakdownBackfillWith(
 	if err != nil {
 		return err
 	}
+	// The batches above commit NoSync (candidateWriteOpts); one WAL fsync
+	// makes all of them durable.
+	if params.Apply && backfilled > 0 {
+		if sErr := store.SyncCandidateWrites(); sErr != nil {
+			return fmt.Errorf("sync candidate writes after %d backfilled rows: %w", backfilled, sErr)
+		}
+	}
 
 	// --- Report ---
 	_ = reporter.UpdateProgress(2, 3, "Summarizing…")
@@ -528,20 +567,21 @@ func runBreakdownBackfillWith(
 	}
 
 	report := breakdownBackfillReport{
-		Apply:               params.Apply,
-		TotalPending:        len(cands),
-		SkippedHasBreakdown: skippedHasBreakdown,
-		SkippedManual:       skippedManual,
-		Targets:             targets,
-		Processed:           processed,
-		Backfilled:          backfilled,
-		WouldBackfill:       wouldBackfill,
-		ZeroSignal:          zeroSignal,
-		SkippedNoBook:       skippedNoBook,
-		ScoreErrs:           scoreErrs,
-		UpdateErrs:          updateErrs,
-		MissingSignalCounts: missingSignalCounts,
-		SignalKindCounts:    signalKindCounts,
+		Apply:                params.Apply,
+		TotalPending:         len(cands),
+		SkippedHasBreakdown:  skippedHasBreakdown,
+		SkippedManual:        skippedManual,
+		SkippedManualAtWrite: skippedAtWrite,
+		Targets:              targets,
+		Processed:            processed,
+		Backfilled:           backfilled,
+		WouldBackfill:        wouldBackfill,
+		ZeroSignal:           zeroSignal,
+		SkippedNoBook:        skippedNoBook,
+		ScoreErrs:            scoreErrs,
+		UpdateErrs:           updateErrs,
+		MissingSignalCounts:  missingSignalCounts,
+		SignalKindCounts:     signalKindCounts,
 
 		BandCounts:               bandCounts,
 		CertainSignalsEq1:        certainSigsEq1,
@@ -562,6 +602,7 @@ func runBreakdownBackfillWith(
 		"skipped_no_book", skippedNoBook,
 		"score_errs", scoreErrs,
 		"update_errs", updateErrs,
+		"skipped_manual_at_write", skippedAtWrite,
 		"missing_signal_counts", missingSignalCounts,
 		"signal_kind_counts", signalKindCounts,
 		"band_counts", bandCounts,
@@ -577,8 +618,8 @@ func runBreakdownBackfillWith(
 
 	var summary strings.Builder
 	summary.WriteString(fmt.Sprintf(
-		"targets=%d processed=%d backfilled=%d would_backfill=%d skipped_has_breakdown=%d zero_signal=%d skipped_no_book=%d score_errs=%d update_errs=%d",
-		targets, processed, backfilled, wouldBackfill, skippedHasBreakdown, zeroSignal, skippedNoBook, scoreErrs, updateErrs))
+		"targets=%d processed=%d backfilled=%d would_backfill=%d skipped_has_breakdown=%d zero_signal=%d skipped_no_book=%d score_errs=%d update_errs=%d skipped_manual_at_write=%d",
+		targets, processed, backfilled, wouldBackfill, skippedHasBreakdown, zeroSignal, skippedNoBook, scoreErrs, updateErrs, skippedAtWrite))
 	for k, v := range missingSignalCounts {
 		summary.WriteString(fmt.Sprintf(" missing[%s]=%d", k, v))
 	}

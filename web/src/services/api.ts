@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.124.0
+// version: 2.125.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -5873,6 +5873,12 @@ export interface DedupCandidate {
   // reason they gave.
   source?: string;
   source_note?: string;
+  // The LLM review's verdict on a pinned (source 'manual') row, kept as
+  // advice for the human reviewer. It never changes the row's status, band
+  // or score and never merges or dismisses. Empty on every other row.
+  ai_advice_verdict?: string;
+  ai_advice_reason?: string;
+  ai_advice_at?: string;
   // Inline book enrichment, populated only when getDedupCandidates is called
   // with include_books=true. Lets the unified UI render rich cards
   // (title/author/path/metadata-quality) without per-book getBook() fetches.

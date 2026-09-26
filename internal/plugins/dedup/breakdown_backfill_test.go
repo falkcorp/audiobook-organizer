@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/breakdown_backfill_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: db53792e-6046-4acd-ba6c-1857084924cc
-// last-edited: 2026-09-02
+// last-edited: 2026-09-26
 
 // Tests for dedup.breakdown-backfill. A fake pairScorer (shared with the
 // rescore-labeled-examples tests) stands in for the real Engine so the op's
@@ -42,18 +42,80 @@ func seedCandidate(t *testing.T, es *database.EmbeddingStore, c database.DedupCa
 }
 
 // failingUpdateScoreStore wraps a real *database.EmbeddingStore but forces
-// UpdateCandidateScore to fail for a chosen set of candidate IDs, so the test
-// can assert the op counts (rather than swallows) persist failures.
+// UpdateCandidateScores to report a chosen set of candidate IDs as failed, so
+// the test can assert the op counts (rather than swallows) persist failures.
 type failingUpdateScoreStore struct {
 	*database.EmbeddingStore
 	failIDs map[int64]bool
 }
 
-func (f *failingUpdateScoreStore) UpdateCandidateScore(id int64, score *models.UnifiedDedupScore, band, formulaVersion string) error {
-	if f.failIDs[id] {
-		return fmt.Errorf("simulated update failure")
+func (f *failingUpdateScoreStore) UpdateCandidateScores(updates []database.CandidateScoreUpdate) (int, []int64, error) {
+	var keep []database.CandidateScoreUpdate
+	var failed []int64
+	for _, u := range updates {
+		if f.failIDs[u.ID] {
+			failed = append(failed, u.ID)
+			continue
+		}
+		keep = append(keep, u)
 	}
-	return f.EmbeddingStore.UpdateCandidateScore(id, score, band, formulaVersion)
+	applied, moreFailed, err := f.EmbeddingStore.UpdateCandidateScores(keep)
+	return applied, append(failed, moreFailed...), err
+}
+
+// pinAfterListStore wraps a real store and pins the given pair right after
+// ListCandidates returns: the op's snapshot shows a scanner row, but by the
+// time it writes, a human has pinned it for review.
+type pinAfterListStore struct {
+	*database.EmbeddingStore
+	t    *testing.T
+	a, b string
+}
+
+func (p *pinAfterListStore) ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error) {
+	cands, n, err := p.EmbeddingStore.ListCandidates(f)
+	if err == nil {
+		if _, perr := p.EmbeddingStore.EnqueueManualCandidate("book", p.a, p.b, "pinned mid-run"); perr != nil {
+			p.t.Fatalf("pin: %v", perr)
+		}
+	}
+	return cands, n, err
+}
+
+// TestBreakdownBackfill_PinAfterList_LeavesRowUnscored proves the write is
+// guarded at write time, not only on the listed snapshot: a row pinned after
+// the list stays unscored and is counted as skipped_manual_at_write, while an
+// unpinned row in the same A-group is still backfilled.
+func TestBreakdownBackfill_PinAfterList_LeavesRowUnscored(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+	pinnedID := seedCandidate(t, es, database.DedupCandidate{EntityAID: "pinA", EntityBID: "pinB", Layer: "exact"})
+	plainID := seedCandidate(t, es, database.DedupCandidate{EntityAID: "pinA", EntityBID: "pinC", Layer: "exact"})
+
+	wrapped := &pinAfterListStore{EmbeddingStore: es, t: t, a: "pinA", b: "pinB"}
+	rep := &capturingReporter{}
+	if err := runBreakdownBackfillWith(context.Background(), belowBandScorer(), wrapped,
+		json.RawMessage(`{"apply":true}`), rep); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	got, err := es.GetCandidateByID(pinnedID)
+	if err != nil || got == nil {
+		t.Fatalf("GetCandidateByID(pinned): %v %+v", err, got)
+	}
+	if !database.IsManualCandidate(*got) {
+		t.Fatalf("fixture did not pin the row: %+v", got)
+	}
+	if got.ScoreBreakdown != nil || got.Band != "" || got.FormulaVersion != "" {
+		t.Fatalf("a row pinned after the list was scored: breakdown=%+v band=%q fv=%q", got.ScoreBreakdown, got.Band, got.FormulaVersion)
+	}
+	plain, err := es.GetCandidateByID(plainID)
+	if err != nil || plain == nil || plain.ScoreBreakdown == nil {
+		t.Fatalf("the unpinned row should be backfilled: %v %+v", err, plain)
+	}
+	if !strings.Contains(rep.last(), "skipped_manual_at_write=1") || !strings.Contains(rep.last(), "backfilled=1") {
+		t.Fatalf("summary should report backfilled=1 skipped_manual_at_write=1, got %q", rep.last())
+	}
 }
 
 // TestBreakdownBackfill_SkipsHasBreakdown proves a candidate that already has a
