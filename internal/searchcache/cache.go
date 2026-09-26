@@ -203,11 +203,11 @@ type job struct {
 	started  atomic.Bool
 
 	// Guarded by Cache.mu.
-	gen      uint64 // generation read just before Build ran (set with started)
+	gen uint64 // generation read just before Build ran (set with started)
 	// rerunEv, when set, queues a fresh build of key as soon as this one
 	// ends: a caller needed a build that reflects a generation newer than
 	// the one this build read (see queueRebuildAfter).
-	rerunEv Evaluator
+	rerunEv  Evaluator
 	ids      []string
 	err      error
 	finished time.Time
