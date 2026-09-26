@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
 // last-edited: 2026-09-25
 
@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -81,8 +82,8 @@ type SyncIDStore interface {
 	// lists use it to tell an alias id from a canonical one.
 	ResolveSyncItem(syncID string) (*database.SyncItem, error)
 	// ListSyncAliases names the merge losers' syncIDs that still resolve to a
-	// live syncID. Used once per user, to seed the alias-use record
-	// (seedAliasUses).
+	// live syncID. Used only to seed a user's alias-use record, until that
+	// seed completes (seedAliasUses).
 	ListSyncAliases(syncID string) ([]string, error)
 }
 
@@ -90,7 +91,7 @@ type SyncIDStore interface {
 // addressed (database.SyncAliasUseStore; written by item_ref.go noteAliasUse).
 type AliasUseStore interface {
 	ListSyncAliasUses(userID string) (aliases []string, seeded bool, err error)
-	SeedSyncAliasUses(userID string, aliases []string) error
+	SeedSyncAliasUses(userID string, aliases []string, complete bool) error
 }
 
 // UserDataLibraryStore is the two-method duration slice. LibraryStore already
@@ -111,6 +112,12 @@ type UserDataOptions struct {
 	Library   UserDataLibraryStore
 	// AliasUses decides which alias ids get a client row (ClientMediaProgress).
 	AliasUses AliasUseStore
+	// AliasSeedCutoff is the upper bound of the one-time alias seed window
+	// (seedAliasUses): the moment this server first ran with alias-use
+	// tracking, persisted once and never moved
+	// (database.SyncAliasUseStore.SyncAliasUseSeedCutoff). Required: without
+	// it the window would stay open forever.
+	AliasSeedCutoff time.Time
 
 	// Concurrency bounds the per-book follow-up reads. Zero means
 	// runtime.NumCPU(). Never unbounded: the collection is user-scoped but a
@@ -139,6 +146,7 @@ type userDataProvider struct {
 	identity    SyncIDStore
 	library     UserDataLibraryStore
 	aliasUses   AliasUseStore
+	seedCutoff  time.Time
 	concurrency int
 }
 
@@ -167,6 +175,9 @@ func NewUserData(o UserDataOptions) (UserDataProvider, error) {
 	if o.AliasUses == nil {
 		return nil, errors.New("abs: userdata: an alias-use store is required (without it a client that opened a merged book by its old id loses that book's progress row)")
 	}
+	if o.AliasSeedCutoff.IsZero() {
+		return nil, errors.New("abs: userdata: an alias seed cutoff is required (without it the one-time alias seed would record aliases the client never held)")
+	}
 	limit := o.Concurrency
 	if limit <= 0 {
 		limit = runtime.NumCPU()
@@ -177,6 +188,7 @@ func NewUserData(o UserDataOptions) (UserDataProvider, error) {
 		identity:    o.Identity,
 		library:     o.Library,
 		aliasUses:   o.AliasUses,
+		seedCutoff:  o.AliasSeedCutoff,
 		concurrency: limit,
 	}, nil
 }
@@ -317,15 +329,23 @@ func withLibraryItemID(row mediaProgressDTO, userID, libraryItemID string) media
 	return row
 }
 
-// aliasSeedSince bounds the one-time seed of a user's alias-use record
-// (seedAliasUses). #3558 (merged 2026-09-25) sent an alias row for EVERY
-// alias of every item with progress, and AudioBooth stored a local row for
-// each. Tracking starts with this change, so without a seed every alias
-// becomes untracked at once and the client deletes those rows, including the
-// ones for books the user marked finished through an alias that same day:
-// the owner's bug, back. The seed keeps the aliases of items the user's
-// progress touched since #3558 shipped; an item untouched since then cannot
-// be one the user was acting on through an alias.
+// aliasSeedSince is the lower bound of the one-time seed of a user's
+// alias-use record (seedAliasUses). #3558 (merged 2026-09-25) sent an alias
+// row for EVERY alias of every item with progress, and AudioBooth stored a
+// local row for each. Tracking starts with this change, so without a seed
+// every alias becomes untracked at once and the client deletes those rows,
+// including the ones for books the user marked finished through an alias that
+// same day: the owner's bug, back. The seed keeps the aliases of items the
+// user's progress touched since #3558 shipped; an item untouched since then
+// cannot be one the user was acting on through an alias.
+//
+// The upper bound is the provider's seedCutoff (UserDataOptions.
+// AliasSeedCutoff): the moment this server first ran with tracking. From then
+// on every alias use is recorded as it happens (item_ref.go), so a row touched
+// after the cutoff says nothing about aliases the client got from #3558's
+// list. Without that bound a user who first lists weeks later would have the
+// aliases of everything they touched since recorded, and the stats double
+// count comes back for ids the client never held.
 var aliasSeedSince = time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
 
 // ClientMediaProgress is the mediaProgress array SENT TO CLIENTS (GET /api/me,
@@ -375,28 +395,22 @@ func (p *userDataProvider) ClientMediaProgress(userID string) ([]any, error) {
 
 	// The live item each row's id resolves to, when that id is an alias.
 	redirects := make([]string, len(rows))
-	g := new(errgroup.Group)
-	g.SetLimit(p.concurrency)
-	for i := range rows {
+	forEachBounded(len(rows), p.concurrency, func(i int) {
 		row, ok := rows[i].(mediaProgressDTO)
 		if !ok || row.LibraryItemID == "" {
-			continue
+			return
 		}
-		g.Go(func() error {
-			item, err := p.identity.ResolveSyncItem(row.LibraryItemID)
-			if err != nil {
-				progressLog.Warn("abs: userdata: could not resolve a progress row's item id; row sent as stored: user_id=%s book_id=%s library_item_id=%s: %v",
-					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.bookID),
-					logger.SanitizeLogValue(row.LibraryItemID), err)
-				return nil
-			}
-			if item != nil && item.SyncID != "" && item.SyncID != row.LibraryItemID {
-				redirects[i] = item.SyncID
-			}
-			return nil
-		})
-	}
-	_ = g.Wait() // workers only return nil
+		item, err := p.identity.ResolveSyncItem(row.LibraryItemID)
+		if err != nil {
+			progressLog.Warn("abs: userdata: could not resolve a progress row's item id; row sent as stored: user_id=%s book_id=%s library_item_id=%s: %v",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.bookID),
+				logger.SanitizeLogValue(row.LibraryItemID), err)
+			return
+		}
+		if item != nil && item.SyncID != "" && item.SyncID != row.LibraryItemID {
+			redirects[i] = item.SyncID
+		}
+	})
 
 	canonical := make(map[string]mediaProgressDTO, len(rows))
 	for i, r := range rows {
@@ -429,8 +443,10 @@ func (p *userDataProvider) ClientMediaProgress(userID string) ([]any, error) {
 // to the live syncID it resolves to now. An alias whose merge was undone (it
 // resolves to itself) or that no longer resolves is left out.
 //
-// rows is the user's MediaProgress list, used only to seed the record on the
-// user's first list after the switch-over (seedAliasUses); nil skips seeding.
+// rows is the user's MediaProgress list, used only to seed the record on each
+// list until the user's seed completes (seedAliasUses; usually the first list
+// after the switch-over, later when a lookup or write failed); nil skips
+// seeding.
 // Fail-open throughout: an error omits alias rows, never the canonical list.
 func (p *userDataProvider) usedAliases(userID string, rows []any) map[string]string {
 	ids, seeded, err := p.aliasUses.ListSyncAliasUses(userID)
@@ -449,23 +465,17 @@ func (p *userDataProvider) usedAliases(userID string, rows []any) map[string]str
 	ids = slices.Compact(ids)
 
 	resolved := make([]string, len(ids))
-	g := new(errgroup.Group)
-	g.SetLimit(p.concurrency)
-	for i := range ids {
-		g.Go(func() error {
-			item, err := p.identity.ResolveSyncItem(ids[i])
-			if err != nil {
-				progressLog.Warn("abs: userdata: could not resolve a used alias; omitting its row: user_id=%s alias=%s: %v",
-					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(ids[i]), err)
-				return nil
-			}
-			if item != nil && item.CurrentBookID != "" && item.SyncID != "" && item.SyncID != ids[i] {
-				resolved[i] = item.SyncID
-			}
-			return nil
-		})
-	}
-	_ = g.Wait() // workers only return nil
+	forEachBounded(len(ids), p.concurrency, func(i int) {
+		item, err := p.identity.ResolveSyncItem(ids[i])
+		if err != nil {
+			progressLog.Warn("abs: userdata: could not resolve a used alias; omitting its row: user_id=%s alias=%s: %v",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(ids[i]), err)
+			return
+		}
+		if item != nil && item.CurrentBookID != "" && item.SyncID != "" && item.SyncID != ids[i] {
+			resolved[i] = item.SyncID
+		}
+	})
 
 	out := make(map[string]string, len(ids))
 	for i, id := range ids {
@@ -476,39 +486,81 @@ func (p *userDataProvider) usedAliases(userID string, rows []any) map[string]str
 	return out
 }
 
-// seedAliasUses runs once per user: it records the aliases of every item whose
-// progress row changed since aliasSeedSince (see there for why), marks the
-// user seeded, and returns the aliases. A lookup failure leaves that item out;
-// a write failure leaves the user unseeded so the next list tries again, and
-// the aliases are still returned so this response carries them.
-func (p *userDataProvider) seedAliasUses(userID string, rows []any) []string {
-	since := aliasSeedSince.UnixMilli()
-	found := make([][]string, len(rows))
-	g := new(errgroup.Group)
-	g.SetLimit(p.concurrency)
-	for i := range rows {
-		row, ok := rows[i].(mediaProgressDTO)
-		if !ok || row.LibraryItemID == "" || row.LastUpdate < since {
-			continue
-		}
-		g.Go(func() error {
-			ids, err := p.identity.ListSyncAliases(row.LibraryItemID)
-			if err != nil {
-				progressLog.Warn("abs: userdata: alias seed: could not list aliases; leaving this item out: user_id=%s library_item_id=%s: %v",
-					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.LibraryItemID), err)
-				return nil
-			}
-			found[i] = ids
-			return nil
+// forEachBounded calls fn(i) for every i in [0, n) on at most limit
+// goroutines at once (limit < 1 means 1) and returns when every call has
+// returned. fn reports no error on purpose: the client-list follow-ups that use
+// it FAIL OPEN per item (log at Warn, leave that item's slot empty), so there
+// is nothing to collect. An errgroup here only produced an always-nil error
+// that each caller had to discard. Each call writes only its own index of the
+// caller's result slices, so the calls share no written state.
+func forEachBounded(n, limit int, fn func(i int)) {
+	sem := make(chan struct{}, max(limit, 1))
+	var wg sync.WaitGroup
+	for i := range n {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			fn(i)
 		})
 	}
-	_ = g.Wait() // workers only return nil
+	wg.Wait()
+}
+
+// seedAliasUses runs until it completes once per user: it records the aliases
+// of every item whose progress row changed in [aliasSeedSince, seedCutoff)
+// (see aliasSeedSince for why), marks the user seeded, and returns the
+// aliases.
+//
+// The seeded mark is written only when every lookup answered. A lookup that
+// failed leaves that item out of this pass, and marking the user seeded then
+// would lose that item's aliases for good: the client would delete the local
+// row it holds under one. So a failed lookup records the aliases found so far
+// WITHOUT the mark, and the next list runs the seed again. The retry costs one
+// ListSyncAliases per in-window row per list until it succeeds; a lookup that
+// fails on every attempt (a corrupt sync item record) keeps retrying and logs
+// a Warn each time, which is the signal to repair that record.
+//
+// ErrSyncAliasLimit does NOT hold the seed open. It is deterministic (the
+// alias graph exceeds maxSyncAliases), so a retry cannot succeed and every
+// list would redo the seed forever. And nothing is lost: the pre-change list
+// (#3558) omitted that item's alias rows on the same error, on every list, so
+// the client never received, and holds no local row for, any alias of it.
+//
+// A write failure also leaves the user unseeded, so the next list tries
+// again. In every case the aliases found are returned, so this response
+// carries their rows.
+func (p *userDataProvider) seedAliasUses(userID string, rows []any) []string {
+	since, until := aliasSeedSince.UnixMilli(), p.seedCutoff.UnixMilli()
+	found := make([][]string, len(rows))
+	// failed[i] marks a transient lookup failure for rows[i]. Per-index, like
+	// found, so the workers share no written state.
+	failed := make([]bool, len(rows))
+	forEachBounded(len(rows), p.concurrency, func(i int) {
+		row, ok := rows[i].(mediaProgressDTO)
+		if !ok || row.LibraryItemID == "" || row.LastUpdate < since || row.LastUpdate >= until {
+			return
+		}
+		ids, err := p.identity.ListSyncAliases(row.LibraryItemID)
+		if errors.Is(err, database.ErrSyncAliasLimit) {
+			progressLog.Warn("abs: userdata: alias seed: alias graph over the cap; leaving this item out for good: user_id=%s library_item_id=%s: %v",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.LibraryItemID), err)
+			return
+		}
+		if err != nil {
+			progressLog.Warn("abs: userdata: alias seed: could not list aliases; leaving this item out and retrying on the next list: user_id=%s library_item_id=%s: %v",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.LibraryItemID), err)
+			failed[i] = true
+			return
+		}
+		found[i] = ids
+	})
 
 	var seed []string
 	for _, ids := range found {
 		seed = append(seed, ids...)
 	}
-	if err := p.aliasUses.SeedSyncAliasUses(userID, seed); err != nil {
+	complete := !slices.Contains(failed, true)
+	if err := p.aliasUses.SeedSyncAliasUses(userID, seed, complete); err != nil {
 		progressLog.Warn("abs: userdata: alias seed: could not record the seed; will retry on the next list: user_id=%s aliases=%d: %v",
 			logger.SanitizeLogValue(userID), len(seed), err)
 	}

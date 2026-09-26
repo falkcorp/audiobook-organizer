@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-09-25
 
@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -510,6 +511,19 @@ func (s *Server) wireABSRoutes() {
 			"rows for merged books opened by an old item id could not be kept.")
 		os.Exit(1)
 	}
+	// The upper bound of the one-time per-user alias seed (abs/userdata.go
+	// aliasSeedSince): the moment this server first ran with alias-use
+	// tracking. Written once, on this first start, and read back unchanged on
+	// every later one; from then on every alias use is recorded as it
+	// happens, so seeding rows touched after it would record aliases the
+	// client never held. Unreadable means refuse to start: a guessed cutoff
+	// would either drop aliases the client holds or re-create the stats
+	// double count.
+	aliasSeedCutoff, err := aliasUses.SyncAliasUseSeedCutoff(time.Now())
+	if err != nil {
+		logger.New("abs").Error("abs: refusing to start — the alias seed cutoff could not be read or recorded: %v", err)
+		os.Exit(1)
+	}
 	userData, err := abshandler.NewUserData(abshandler.UserDataOptions{
 		Progress:  progressList,
 		Bookmarks: bookmarkStore,
@@ -518,8 +532,9 @@ func (s *Server) wireABSRoutes() {
 		Identity: syncIdentity,
 		// libraryStore is the duration source (sum-of-tracks, §5b). `isFinished:true`
 		// with a zero duration sets the client's currentTime to 0.
-		Library:   libraryStore,
-		AliasUses: aliasUses,
+		Library:         libraryStore,
+		AliasUses:       aliasUses,
+		AliasSeedCutoff: aliasSeedCutoff,
 	})
 	if err != nil {
 		slog.Error("abs: refusing to start — the media-progress provider could not be built", "err", err)
