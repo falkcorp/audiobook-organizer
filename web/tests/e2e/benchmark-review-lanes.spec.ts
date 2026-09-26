@@ -1,7 +1,7 @@
 // file: web/tests/e2e/benchmark-review-lanes.spec.ts
-// version: 1.5.0
+// version: 1.5.1
 // guid: e0d8440c-7578-4a92-9f69-4d05bae4b33e
-// last-edited: 2026-09-01
+// last-edited: 2026-09-25
 
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { setupPhase2Interactive } from './utils/test-helpers';
@@ -404,7 +404,8 @@ async function stubReviewCount(page: Page, byKind: Record<string, number> = {}) 
       body: JSON.stringify({
         data: {
           count: Object.values(byKind).reduce((a, b) => a + b, 0),
-          byKind,
+          // snake_case: api.getReviewCount reads data.by_kind only.
+          by_kind: byKind,
         },
       }),
     }),

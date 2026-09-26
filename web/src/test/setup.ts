@@ -1,7 +1,7 @@
 // file: web/src/test/setup.ts
-// version: 1.0.6
+// version: 1.0.7
 // guid: 8f9a0b1c-2d3e-4f5a-6b7c-8d9e0f1a2b3c
-// last-edited: 2026-07-13
+// last-edited: 2026-09-25
 
 import '@testing-library/jest-dom';
 import { cleanup } from '@testing-library/react';
@@ -125,7 +125,7 @@ global.fetch = (input: Parameters<typeof fetch>[0]) => {
   }
 
   if (url.includes('/api/v1/import-paths')) {
-    return okJson({ importPaths: [] });
+    return okJson({ import_paths: [] });
   }
 
   // Default empty response
