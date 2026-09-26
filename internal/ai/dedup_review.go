@@ -1,7 +1,7 @@
 // file: internal/ai/dedup_review.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: b2e7c3d1-4a58-4f96-9e0b-7d3a1c8f5b24
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package ai
 
@@ -91,6 +91,10 @@ type ApplyVerdictsResult struct {
 	// dismissed it, it was merged, or an earlier apply of this same batch
 	// already resolved it). Nothing is written for these and nothing is merged.
 	SkippedStale int
+	// Advised counts verdicts on a pinned (manual) candidate, recorded as
+	// advice for the human reviewer only. They change no status, band, score
+	// or layer and never merge.
+	Advised int
 }
 
 // dedupReviewPayload is the serialized state persisted with each aijobs batch.
@@ -229,7 +233,7 @@ func dedupReviewCallback(ctx context.Context, itemsJSON []byte, results []aijobs
 	}
 
 	res := dedupVerdictApplier.ApplyVerdicts(allVerdicts, byIndex)
-	slog.Info("dedup_review callback applied verdicts (from successful rows, errors)", "applied", res.Applied, "skippedStale", res.SkippedStale, "successCount", successCount, "errorCount", errorCount)
+	slog.Info("dedup_review callback applied verdicts (from successful rows, errors)", "applied", res.Applied, "skippedStale", res.SkippedStale, "advised", res.Advised, "successCount", successCount, "errorCount", errorCount)
 
 	return successCount, errorCount, rowErrors, nil
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/preview_default_wiring_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6f1a9c3d-2b84-4e57-a0d9-3c5e7b8f1a26
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -35,6 +35,8 @@ func TestOps_DryRunRoutesThroughOpmode(t *testing.T) {
 		{"itunes.regroup", p.runITunesRegroup},
 		{"itunes.playlist-import", p.runITunesPlaylistImport},
 		{"maintenance.tag-backfill", p.runTagBackfill},
+		{"maintenance.folder-cover-backfill", p.runFolderCoverBackfill},
+		{"maintenance.cover-text-read", p.runCoverTextRead},
 		{"maintenance.booksig-sidecar-migrate", p.runBookSigSidecarMigrate},
 		{"maintenance.fs-regroup-xml", p.runFSRegroupXML},
 		{"maintenance.booksig-recovery-audit", p.runBookSigRecoveryAudit},

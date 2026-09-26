@@ -1,7 +1,7 @@
 // file: internal/aidispatch/locality.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a662f5a8-9d5f-4cfb-9f74-51e8e591662f
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package aidispatch
 
@@ -75,3 +75,10 @@ func EndpointLocality(ep Endpoint) Locality {
 // embedding_mode local) must never reach a hosted API: legacy local mode
 // never contacts one, and spillover or failover must not change that.
 func WithLocalOnly() Option { return func(d *Dispatcher) { d.localOnly = true } }
+
+// WithCloudOnly refuses every endpoint EndpointLocality classifies as local.
+// It is the second half of a local-first call: after a WithLocalOnly pass
+// failed at the endpoint, the cloud fallback pass must not try the same local
+// rows again (a hung local node would cost a second attempt timeout and can
+// push the whole call past the caller's budget before the cloud is reached).
+func WithCloudOnly() Option { return func(d *Dispatcher) { d.cloudOnly = true } }

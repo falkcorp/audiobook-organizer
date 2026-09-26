@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.8.7
+// version: 1.8.8
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package logger
 
@@ -9,7 +9,7 @@ package logger
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
 	slogRatchetFileCeiling = 319
-	slogRatchetCallCeiling = 1872
+	slogRatchetCallCeiling = 1867
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -167,7 +167,7 @@ var slogRatchet = map[string]int{
 	"internal/maintenance/jobs/scan_metadata_hash_dups.go":       2,
 	"internal/maintenance/jobs/sweep_pebble_metrics_ttl.go":      4,
 	"internal/merge/service.go":                                  19,
-	"internal/merge/sync_follow.go":                              15,
+	"internal/merge/sync_follow.go":                              10,
 	"internal/metabatch/upgrade.go":                              5,
 	"internal/metadata/audible.go":                               2,
 	"internal/metadata/audnexus.go":                              1,

@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailInfoTab.serieslink.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: b04f6783-b12c-4e4f-b95c-ce44143815d5
-// last-edited: 2026-09-12
+// last-edited: 2026-09-26
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -13,6 +13,7 @@ import { BookDetailInfoTab } from './BookDetailInfoTab';
 vi.mock('../../services/api', () => ({
   getBookRating: vi.fn().mockResolvedValue(null),
   setBookRating: vi.fn(),
+  getCoverText: vi.fn().mockResolvedValue({ book_id: '', images: [] }),
 }));
 
 // Renders the query string the link actually delivered. MemoryRouter never

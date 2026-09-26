@@ -1,7 +1,7 @@
 // file: internal/database/embedding_store_manual.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e91eddf1-7da1-4f28-a63f-8fe992e52838
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package database
 
@@ -82,6 +82,54 @@ func (s *EmbeddingStore) ReclassifyCandidate(id int64, fromStatus, toStatus stri
 	}
 	return s.writeCandidateStatusLocked(id, rec, toStatus)
 }
+
+// RecordCandidateLLMAdvice stores an LLM verdict on a manual (pinned)
+// candidate as advice for the human reviewer (owner decision 2026-09-26).
+//
+// UpdateCandidateLLM refuses a pinned row, because an LLM verdict there
+// rewrites Layer to "llm" and can lead to an auto-merge. This write touches
+// only the advisory fields (AdviceVerdict, AdviceReason, AdviceAt): never
+// Status, Band, ScoreBreakdown, FormulaVersion, Layer or LLMVerdict, so the
+// advice can never move the row out of the review queue or change what the
+// band-scoped passes select.
+//
+// Under s.mu it re-reads the row and records the advice only if it is still a
+// manual candidate (else ErrCandidateNotManual: an unpinned row takes a real
+// verdict through UpdateCandidateLLM instead) and still pending (else
+// ErrCandidateStatusChanged: a human decided it; a missing row reports the
+// same). The status index is untouched, so the per-row write needs no batch.
+func (s *EmbeddingStore) RecordCandidateLLMAdvice(id int64, verdict, reason string) error {
+	var guardErr error
+	found := false
+	err := s.updateCandidateIf(id, func(rec *candRec) bool {
+		found = true
+		if rec.Source != CandidateSourceManual {
+			guardErr = fmt.Errorf("record LLM advice on candidate %d: %w", id, ErrCandidateNotManual)
+			return false
+		}
+		if rec.Status != "pending" {
+			guardErr = fmt.Errorf("record LLM advice on candidate %d (status %q): %w", id, rec.Status, ErrCandidateStatusChanged)
+			return false
+		}
+		now := time.Now().UnixNano()
+		rec.AdviceVerdict = verdict
+		rec.AdviceReason = reason
+		rec.AdviceAt = now
+		rec.UpdatedAt = now
+		return true
+	})
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("record LLM advice on candidate %d: row no longer exists: %w", id, ErrCandidateStatusChanged)
+	}
+	return guardErr
+}
+
+// ErrCandidateNotManual is returned by RecordCandidateLLMAdvice for a row that
+// is not a manual candidate.
+var ErrCandidateNotManual = errors.New("candidate is not a manual candidate")
 
 // IsManualCandidate reports whether c was enqueued or pinned by a human. It is
 // the one predicate every automated purge / dismiss / merge path checks.

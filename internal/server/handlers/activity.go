@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.8.0
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package handlers
 
@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -154,6 +155,37 @@ func (h *ActivityHandler) activityTypeSpellings(asked string) (typ string, alias
 	return def.ID, append([]string(nil), def.FormerIDs...)
 }
 
+// activityDefTagPrefix is the tag reporter_db.go puts on every op activity row:
+// "def:" + the def ID the run was recorded under.
+const activityDefTagPrefix = "def:"
+
+// activityTagSpellings is activityTypeSpellings for one ?tags= value. A
+// def:<id> tag names the op ID a row ran under, which is never rewritten, so a
+// renamed op's rows carry def:<former ID> before the rename and def:<canonical
+// ID> after it. When asked is def:<id> and id names a registered def -- by
+// either spelling -- the tag becomes def:<canonical> with every def:<former>
+// as an alias, so the one AND term matches both halves of the history.
+// Anything else (a non-def tag, an unknown def, or no registry) is literal.
+func (h *ActivityHandler) activityTagSpellings(asked string) (tag string, aliases []string) {
+	id, isDef := strings.CutPrefix(asked, activityDefTagPrefix)
+	if !isDef || id == "" || h.opDefs == nil {
+		return asked, nil
+	}
+	def, ok := h.opDefs.Def(id)
+	if !ok {
+		return asked, nil
+	}
+	if id != def.ID {
+		if nr, ok := h.opDefs.(deprecatedDefIDNoter); ok {
+			nr.NoteDeprecatedDefIDUse(id, opsregistry.AliasEntryActivityFilter)
+		}
+	}
+	for _, former := range def.FormerIDs {
+		aliases = append(aliases, activityDefTagPrefix+former)
+	}
+	return activityDefTagPrefix + def.ID, aliases
+}
+
 // ListActivity handles GET /api/v1/activity.
 //
 // Supported query parameters:
@@ -168,10 +200,14 @@ func (h *ActivityHandler) activityTypeSpellings(asked string) (typ string, alias
 //	book_id          – filter by book ID
 //	since            – RFC3339 lower-bound timestamp (inclusive)
 //	until            – RFC3339 upper-bound timestamp (inclusive)
-//	tags             – comma-separated list of required tags (AND semantics)
+//	tags             – comma-separated list of required tags (AND semantics);
+//	                   a def:<op id> tag also matches the op's former IDs
 //	search           – substring match on summary
 //	source           – show only entries from this source
 //	exclude_sources  – comma-separated list of sources to hide
+//	exclude_tiers    – comma-separated list of tiers to hide
+//	exclude_tags     – comma-separated list of tags to hide (ANY semantics);
+//	                   a def:<op id> tag also hides the op's former IDs
 func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	if h.svc == nil {
 		httputil.RespondWithInternalError(c, "activity log not available")
@@ -211,8 +247,19 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	if v := c.Query("tags"); v != "" {
 		for tag := range strings.SplitSeq(v, ",") {
 			tag = strings.TrimSpace(tag)
-			if tag != "" {
-				filter.Tags = append(filter.Tags, tag)
+			if tag == "" {
+				continue
+			}
+			tag, aliases := h.activityTagSpellings(tag)
+			if slices.Contains(filter.Tags, tag) {
+				continue // both spellings of one op asked for: one term
+			}
+			filter.Tags = append(filter.Tags, tag)
+			if len(aliases) > 0 {
+				if filter.TagAliases == nil {
+					filter.TagAliases = make(map[string][]string)
+				}
+				filter.TagAliases[tag] = aliases
 			}
 		}
 	}
@@ -238,8 +285,21 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	if v := c.Query("exclude_tags"); v != "" {
 		for tag := range strings.SplitSeq(v, ",") {
 			tag = strings.TrimSpace(tag)
-			if tag != "" {
-				filter.ExcludeTags = append(filter.ExcludeTags, tag)
+			if tag == "" {
+				continue
+			}
+			// Same resolution as ?tags=: hiding def:<id> hides the op's rows
+			// under every spelling it ran under.
+			tag, aliases := h.activityTagSpellings(tag)
+			if slices.Contains(filter.ExcludeTags, tag) {
+				continue // both spellings of one op asked for: one entry
+			}
+			filter.ExcludeTags = append(filter.ExcludeTags, tag)
+			if len(aliases) > 0 {
+				if filter.ExcludeTagAliases == nil {
+					filter.ExcludeTagAliases = make(map[string][]string)
+				}
+				filter.ExcludeTagAliases[tag] = aliases
 			}
 		}
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/book_own_folder.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: 83d7e159-50f7-47e5-8303-8d8212c3bd8e
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package database
 
@@ -172,11 +172,15 @@ func markBookFileCopies(files []BookFile, inside []bool, crossDir bool) []bool {
 		return isCopy
 	}
 	order := make([]int, len(files))
+	// frozen is computed once here, not in the comparator: the sort compares
+	// each row O(log n) times and the predicate allocates.
+	frozen := make([]bool, len(files))
 	for i := range order {
 		order[i] = i
+		frozen[i] = pathutil.UnderFrozenITunesTree(files[i].FilePath)
 	}
 	sort.SliceStable(order, func(a, b int) bool {
-		return keeperLess(files, inside, order[a], order[b])
+		return keeperLess(files, inside, frozen, order[a], order[b])
 	})
 
 	type nameSize struct {
@@ -235,20 +239,33 @@ func markBookFileCopies(files []BookFile, inside []bool, crossDir bool) []bool {
 //     under the frozen tree), left the own zero rows unfilled on every run,
 //     and made ABS stream the iTunes file. The book reads short until the
 //     duration backfill fills the counted own row;
-//  3. a known duration (> 0), so among present rows on the same side of the
-//     own folder excluding a copy never drops a measured duration. (A
-//     present unmeasured row beats a missing measured twin: the book reads
-//     short until the next duration backfill fills that counted zero row,
-//     rather than listing a dead track.);
-//  4. a name without organize's `_copyN` suffix (the original);
-//  5. original row order.
-func keeperLess(files []BookFile, inside []bool, a, b int) bool {
+//  3. outside the frozen iTunes tree (pathutil.UnderFrozenITunesTree), for
+//     the same reason as rule 2, in the case rule 2 cannot decide: a cluster
+//     with no own-folder row, whose rows all lie elsewhere. Keeping a
+//     books/itunes/** row there when a non-iTunes twin exists made
+//     zero_rows_only skip the whole book as "itunes" all the same. The frozen
+//     rule is the one shared predicate, so this choice and the duration
+//     job's iTunes skip can never disagree about which rows are frozen;
+//  4. a known duration (> 0), so among present rows on the same side of the
+//     own folder and of the iTunes tree, excluding a copy never drops a
+//     measured duration. (A present unmeasured row beats a missing measured
+//     twin: the book reads short until the next duration backfill fills that
+//     counted zero row, rather than listing a dead track.);
+//  5. a name without organize's `_copyN` suffix (the original);
+//  6. original row order.
+//
+// frozen[i] is pathutil.UnderFrozenITunesTree(files[i].FilePath), computed
+// once by the caller.
+func keeperLess(files []BookFile, inside, frozen []bool, a, b int) bool {
 	fa, fb := &files[a], &files[b]
 	if fa.Missing != fb.Missing {
 		return !fa.Missing
 	}
 	if inside[a] != inside[b] {
 		return inside[a]
+	}
+	if frozen[a] != frozen[b] {
+		return !frozen[a]
 	}
 	if ka, kb := fa.Duration > 0, fb.Duration > 0; ka != kb {
 		return ka

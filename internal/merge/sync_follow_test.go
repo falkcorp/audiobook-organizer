@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e424f3c3-3b6c-4345-b703-20ca6809ec0f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-26
 
 package merge
 
@@ -126,7 +126,11 @@ func TestMergeBooks_SyncIdentity_ProgressLoserFurtherWins(t *testing.T) {
 	assertLoserProgressDrained(t, store, user.ID, loserID)
 }
 
-func TestMergeBooks_SyncIdentity_ProgressWinnerFurtherWins(t *testing.T) {
+// Newest wins, not furthest (owner rule 2026-09-26): the loser is further
+// along (90%) but the winner was listened to more recently, so the winner's
+// 10% position stands. Under the old furthest-wins rule the stale 90% would
+// have overwritten where the user actually is.
+func TestMergeBooks_SyncIdentity_ProgressNewestWinsOverFurthest(t *testing.T) {
 	store := setupTestStore(t)
 	ids := database.AsSyncIdentityStore(store)
 	user := seedSyncUser(t, store)
@@ -134,16 +138,17 @@ func TestMergeBooks_SyncIdentity_ProgressWinnerFurtherWins(t *testing.T) {
 	_, err := ids.MintOrGetSyncID(loserID)
 	require.NoError(t, err)
 
-	require.NoError(t, store.SetUserBookState(&database.UserBookState{
-		UserID: user.ID, BookID: winnerID, Status: database.UserBookStatusInProgress,
-		ProgressPct: 90, LastActivityAt: time.Now(),
-	}))
-	require.NoError(t, store.SetUserPosition(user.ID, winnerID, "seg-w", 900))
+	// Loser first: its position row is stamped earlier than the winner's.
 	require.NoError(t, store.SetUserBookState(&database.UserBookState{
 		UserID: user.ID, BookID: loserID, Status: database.UserBookStatusInProgress,
-		ProgressPct: 10, LastActivityAt: time.Now().Add(-time.Hour),
+		ProgressPct: 90, LastActivityAt: time.Now().Add(-time.Hour),
 	}))
-	require.NoError(t, store.SetUserPosition(user.ID, loserID, "seg-l", 100))
+	require.NoError(t, store.SetUserPosition(user.ID, loserID, "seg-l", 900))
+	require.NoError(t, store.SetUserBookState(&database.UserBookState{
+		UserID: user.ID, BookID: winnerID, Status: database.UserBookStatusInProgress,
+		ProgressPct: 10, LastActivityAt: time.Now(),
+	}))
+	require.NoError(t, store.SetUserPosition(user.ID, winnerID, "seg-w", 100))
 
 	ms := NewService(store)
 	_, err = ms.MergeBooks([]string{winnerID, loserID}, winnerID)
@@ -152,11 +157,11 @@ func TestMergeBooks_SyncIdentity_ProgressWinnerFurtherWins(t *testing.T) {
 	got, err := store.GetUserBookState(user.ID, winnerID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	require.Equal(t, 90, got.ProgressPct, "winner state must not be rewound by a behind loser")
+	require.Equal(t, 10, got.ProgressPct, "the newer position wins, not the further one")
 
 	positions, err := store.ListUserPositionsForBook(user.ID, winnerID)
 	require.NoError(t, err)
-	require.Len(t, positions, 1, "the behind loser's positions must not be copied over")
+	require.Len(t, positions, 1, "the older loser's positions must not be copied over")
 	require.Equal(t, "seg-w", positions[0].SegmentID)
 
 	assertLoserProgressDrained(t, store, user.ID, loserID)

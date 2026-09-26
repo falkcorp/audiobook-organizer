@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 package database
 
@@ -28,6 +28,36 @@ func (p *PebbleStore) SetUserPosition(userID, bookID, segmentID string, position
 		PositionSeconds: positionSeconds, UpdatedAt: time.Now(),
 	}
 	data, err := json.Marshal(pos)
+	if err != nil {
+		return err
+	}
+	return p.db.Set([]byte("upos:"+userID+":"+bookID+":"+segmentID), data, pebble.NoSync)
+}
+
+// UserPositionTimestampWriter writes a position row with a given UpdatedAt.
+// A merge carries positions with it (internal/merge): SetUserPosition would
+// stamp them "now", which is also the ABS lastUpdate, so a carried position
+// would look like a fresh listen and win the next merge's newest-wins
+// comparison against a real, later listen. A capability, not a Store method,
+// so the mocks and fakes are not forced to grow it.
+type UserPositionTimestampWriter interface {
+	SetUserPositionAt(userID, bookID, segmentID string, positionSeconds float64, updatedAt time.Time) error
+}
+
+var _ UserPositionTimestampWriter = (*PebbleStore)(nil)
+
+// SetUserPositionAt is SetUserPosition with the caller's UpdatedAt kept.
+func (p *PebbleStore) SetUserPositionAt(userID, bookID, segmentID string, positionSeconds float64, updatedAt time.Time) error {
+	if userID == "" || bookID == "" || segmentID == "" {
+		return fmt.Errorf("user/book/segment required")
+	}
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
+	data, err := json.Marshal(UserPosition{
+		UserID: userID, BookID: bookID, SegmentID: segmentID,
+		PositionSeconds: positionSeconds, UpdatedAt: updatedAt,
+	})
 	if err != nil {
 		return err
 	}

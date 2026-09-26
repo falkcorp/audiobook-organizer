@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.88.0
+// version: 1.89.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package dedup
 
@@ -4150,6 +4150,7 @@ func (de *Engine) loadAuthorEntity(entityID string) (ai.DedupEntity, bool) {
 func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]database.DedupCandidate) ai.ApplyVerdictsResult {
 	applied := 0
 	skippedStale := 0
+	advised := 0
 	autoMerged := 0
 	refusedITunes := 0
 	for _, v := range verdicts {
@@ -4171,15 +4172,6 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 			skippedStale++
 			continue
 		}
-		// A human may have pinned the pair after the batch was submitted
-		// (listAmbiguousCandidates only filters manual rows at submit time,
-		// and a batch can run for hours). A pinned row gets neither the
-		// verdict write (it would rewrite Layer to "llm") nor a merge.
-		if database.IsManualCandidate(*current) {
-			verdictLog.Info("LLM verdict for candidate %d skipped: pinned for human review after submission", current.ID)
-			skippedStale++
-			continue
-		}
 		candidate := *current
 		verdict := "not_duplicate"
 		if v.IsDuplicate {
@@ -4189,10 +4181,32 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 		if v.Confidence != "" {
 			reason = fmt.Sprintf("[%s] %s", v.Confidence, reason)
 		}
+		// A human may have pinned the pair after the batch was submitted
+		// (listAmbiguousCandidates only filters manual rows at submit time,
+		// and a batch can run for hours). A pinned row gets neither the
+		// verdict write (it would rewrite Layer to "llm") nor a merge; the
+		// verdict is kept as advice for the reviewer instead (owner decision
+		// 2026-09-26), which changes no status, band, score or layer.
+		if database.IsManualCandidate(candidate) {
+			if de.recordLLMAdvice(candidate.ID, verdict, reason) {
+				advised++
+			} else {
+				skippedStale++
+			}
+			continue
+		}
 		if err := de.embedStore.UpdateCandidateLLM(candidate.ID, verdict, reason); err != nil {
 			// The store re-checks under the pin's own lock, so a pin or a
 			// human verdict landing since the re-read above ends up here.
-			if errors.Is(err, database.ErrManualCandidateProtected) || errors.Is(err, database.ErrCandidateStatusChanged) {
+			if errors.Is(err, database.ErrManualCandidateProtected) {
+				if de.recordLLMAdvice(candidate.ID, verdict, reason) {
+					advised++
+				} else {
+					skippedStale++
+				}
+				continue
+			}
+			if errors.Is(err, database.ErrCandidateStatusChanged) {
 				verdictLog.Info("LLM verdict for candidate %d skipped at write time: %v", candidate.ID, err)
 				skippedStale++
 				continue
@@ -4313,7 +4327,29 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 	if autoMerged > 0 {
 		slog.Info("dedup LLM auto-merge fired on high-confidence pair(s)", "autoMerged", autoMerged)
 	}
-	return ai.ApplyVerdictsResult{Applied: applied, SkippedStale: skippedStale}
+	if advised > 0 {
+		verdictLog.Info("LLM verdicts recorded as advice on %d pinned candidate(s)", advised)
+	}
+	return ai.ApplyVerdictsResult{Applied: applied, SkippedStale: skippedStale, Advised: advised}
+}
+
+// recordLLMAdvice stores an LLM verdict on a pinned (manual) candidate as
+// advice (database.EmbeddingStore.RecordCandidateLLMAdvice). It never touches
+// the row's status, band, score or layer and never merges. It reports whether
+// the advice was written; a row a human decided or unpinned since the re-read
+// is left alone and reported as not written.
+func (de *Engine) recordLLMAdvice(id int64, verdict, reason string) bool {
+	err := de.embedStore.RecordCandidateLLMAdvice(id, verdict, reason)
+	switch {
+	case err == nil:
+		verdictLog.Info("LLM verdict for pinned candidate %d recorded as advice only", id)
+		return true
+	case errors.Is(err, database.ErrCandidateStatusChanged), errors.Is(err, database.ErrCandidateNotManual):
+		verdictLog.Info("LLM advice for candidate %d skipped at write time: %v", id, err)
+	default:
+		verdictLog.Error("LLM advice for candidate %d could not be written: %v", id, err)
+	}
+	return false
 }
 
 var verdictLog = logger.New("dedup.llm-verdict")

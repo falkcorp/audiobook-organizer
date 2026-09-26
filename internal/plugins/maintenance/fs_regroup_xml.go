@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -66,6 +66,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -313,7 +314,7 @@ func fsRegroupProtectedPath(p string) bool {
 	if p == "" {
 		return false
 	}
-	if config.UnderFrozenITunesTree(p) {
+	if pathutil.UnderFrozenITunesTree(p) {
 		return true
 	}
 	clean := strings.ReplaceAll(p, "\\", "/")

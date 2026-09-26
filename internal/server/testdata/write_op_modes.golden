@@ -1,5 +1,5 @@
 # file: internal/server/testdata/write_op_modes.golden
-# version: 1.0.1
+# version: 1.1.2
 # guid: 656b77a9-3e50-456c-9945-dbbebbd7e041
 # last-edited: 2026-09-26
 #
@@ -106,6 +106,7 @@ maintenance.chapters-backfill	preview
 maintenance.cleanup-activity-log	no-mode
 maintenance.cleanup-old-backups	no-mode
 maintenance.clear-apply-rename-failures	preview
+maintenance.repair-merged-user-state	preview
 maintenance.compact-activity-log	no-mode
 maintenance.db-optimize	no-mode
 maintenance.dedup-exact-triage	preview
@@ -114,6 +115,7 @@ maintenance.duration-backfill	preview
 maintenance.external-id-backfill	no-mode
 maintenance.extract-wav-clips	no-mode
 maintenance.file-provenance-capture	preview
+maintenance.folder-cover-backfill	preview
 maintenance.fs-regroup-xml	preview
 maintenance.intro-migrate-single-file	preview
 maintenance.isbn-enrichment	no-mode
@@ -142,6 +144,7 @@ maintenance.relink-unlinked-books	preview
 maintenance.repair-junk-titles	preview
 maintenance.repair-library-state	preview
 maintenance.repair-transcribe-status	preview
+maintenance.repoint-book-file-rows	preview
 maintenance.repoint-missing-to-folder-audio	preview
 maintenance.repoint-unrecorded-renames	preview
 maintenance.resolve-production-authors	preview

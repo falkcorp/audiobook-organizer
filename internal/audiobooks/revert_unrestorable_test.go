@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
-// last-edited: 2026-09-24
+// last-edited: 2026-09-26
 
 package audiobooks
 
@@ -92,6 +92,20 @@ func (s *ledgerStub) MarkOperationChangesReverted(_ string, ids []string) error 
 	return nil
 }
 func (s *ledgerStub) GetAllImportPaths() ([]database.ImportPath, error) { return nil, nil }
+
+// revertAuthorStore: the title-relink rows are exercised with a MockStore in
+// revert_title_relink_test.go; these rows never reach these methods here.
+func (s *ledgerStub) ModifyBookAuthors(string, func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error) {
+	return nil, errors.New("ledgerStub: ModifyBookAuthors not stubbed")
+}
+func (s *ledgerStub) GetAuthorByID(int) (*database.Author, error)      { return nil, nil }
+func (s *ledgerStub) GetAuthorByName(string) (*database.Author, error) { return nil, nil }
+func (s *ledgerStub) GetBooksByAuthorIDForRelinkCore(int) ([]database.BookCore, error) {
+	return nil, nil
+}
+func (s *ledgerStub) DeleteAuthor(int) error {
+	return errors.New("ledgerStub: DeleteAuthor not stubbed")
+}
 
 // GetSeriesByID answers from s.series; a missing id is (nil, nil), as the
 // Pebble store reports ErrNotFound. seriesErr makes every series read fail.

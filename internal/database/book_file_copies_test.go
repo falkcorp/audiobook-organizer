@@ -1,7 +1,7 @@
 // file: internal/database/book_file_copies_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b7e9c41-5d06-4f38-a1c2-8e4d7f0b3a95
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package database
 
@@ -157,13 +157,41 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 		},
 		{
 			// DUR "pairs of out-of-folder rows": two copies of one file, both
-			// outside the own folder and neither a copy of an own row.
+			// outside the own folder and neither a copy of an own row. The
+			// non-iTunes row is kept although the iTunes row comes first
+			// (COPY-KEEPER-NON-ITUNES-OUTSIDE; see keeperLess rule 3).
 			name:     "two out-of-folder copies of each other count once",
 			bookPath: "/lib/A/B",
 			rows: []BookFile{
 				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 60},
 				{ID: "itunes", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 70},
 				{ID: "old", FilePath: "/srv/old/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 70},
+			},
+			copies: []string{"itunes"},
+		},
+		{
+			// COPY-KEEPER-NON-ITUNES-OUTSIDE: the cluster has no own-folder
+			// row, so rule 2 cannot decide. The unmeasured non-iTunes row is
+			// kept over the measured books/itunes/** twin, so zero_rows_only
+			// fills it instead of skipping the whole book as "itunes".
+			name:     "no own row in the cluster: non-iTunes row kept over measured iTunes twin",
+			bookPath: "/lib/A/B",
+			rows: []BookFile{
+				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 60},
+				{ID: "itunes", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 70},
+				{ID: "old", FilePath: "/srv/old/B/02.m4b", FileHash: "h2", FileSize: 200},
+			},
+			copies: []string{"itunes"},
+		},
+		{
+			// Presence still ranks above the frozen rule: a missing
+			// non-iTunes row does not displace a present iTunes twin.
+			name:     "present iTunes row kept over a missing non-iTunes twin",
+			bookPath: "/lib/A/B",
+			rows: []BookFile{
+				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 60},
+				{ID: "old", FilePath: "/srv/old/B/02.m4b", FileHash: "h2", FileSize: 200, Missing: true},
+				{ID: "itunes", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 70},
 			},
 			copies: []string{"old"},
 		},
@@ -228,12 +256,14 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			assert.Len(t, counted, len(c.rows)-len(c.copies))
 
 			// Excluding a PRESENT copy never loses a duration on its own
-			// side of the own folder: a present, measured copy always has a
-			// counted twin of its size that is measured or sits inside the
-			// own folder. (An unmeasured own row is kept over a measured
-			// out-of-folder twin, and a missing measured copy may give way
-			// to a present unmeasured twin; the backfill fills both. See
-			// keeperLess.)
+			// side of the own folder and of the iTunes tree: a present,
+			// measured copy always has a counted twin of its size that is
+			// measured, sits inside the own folder, or is a non-iTunes row
+			// kept over an iTunes copy. (An unmeasured own row is kept over
+			// a measured out-of-folder twin, an unmeasured non-iTunes row
+			// over a measured books/itunes/** twin, and a missing measured
+			// copy may give way to a present unmeasured twin; the backfill
+			// fills all three. See keeperLess.)
 			for _, cp := range s.Copies {
 				if cp.Duration <= 0 || cp.Missing {
 					continue
@@ -241,7 +271,8 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 				found := false
 				for _, k := range counted {
 					ownRow := s.Dir != "" && pathutil.IsWithin(k.FilePath, s.Dir)
-					found = found || (k.FileSize == cp.FileSize && (k.Duration > 0 || ownRow))
+					overITunes := pathutil.UnderFrozenITunesTree(cp.FilePath) && !pathutil.UnderFrozenITunesTree(k.FilePath)
+					found = found || (k.FileSize == cp.FileSize && (k.Duration > 0 || ownRow || overITunes))
 				}
 				assert.True(t, found, "copy %s carried a duration no counted twin has", cp.ID)
 			}

@@ -1,7 +1,7 @@
 // file: internal/searchcache/changelog.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: dafe39f3-657a-4ae6-9e2a-0f9a18a774b5
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package searchcache holds the shared search result cache: the full ranked
 // list of matching book IDs per (query, filter set), served as page slices,
@@ -17,6 +17,8 @@
 package searchcache
 
 import (
+	"slices"
+	"sort"
 	"sync"
 	"sync/atomic"
 )
@@ -130,33 +132,107 @@ func (c *ChangeLog) RecordAll() uint64 {
 }
 
 // ChangedSince returns the distinct book IDs changed after generation since,
-// together with the generation the answer is current to. ok is false when the
-// ring no longer covers since (overflow, or a RecordAll after it): the caller
-// must rebuild rather than patch.
-func (c *ChangeLog) ChangedSince(since uint64) (ids []string, current uint64, ok bool) {
+// in the order they were first recorded, together with the generation the
+// answer is current to. ok is false when the ring no longer covers since
+// (overflow, or a RecordAll after it): the caller must rebuild rather than
+// patch.
+//
+// limit > 0 bounds the answer: the walk stops as soon as it has limit distinct
+// IDs, so a result of exactly limit IDs means "limit or more changed" and the
+// rest are not reported. A caller that can use at most N IDs passes N+1 and
+// treats len(ids) > N as too many. limit <= 0 returns every changed ID.
+//
+// Only the window of records newer than since is copied under the mutex; the
+// dedupe runs after it is released. Record takes the same mutex on every book
+// write, so the time a writer can wait here is one binary search plus one copy
+// of that window, not a map insert per record.
+func (c *ChangeLog) ChangedSince(since uint64, limit int) (ids []string, current uint64, ok bool) {
 	if c == nil {
 		return nil, 0, true
 	}
+	bufp := windowPool.Get().(*[]string)
+	defer func() {
+		// Drop the string references before pooling the buffer, so a pooled
+		// buffer never keeps evicted book IDs alive. Only [0, len) was
+		// written; the rest was cleared when an earlier call returned it.
+		clear(*bufp)
+		*bufp = (*bufp)[:0]
+		windowPool.Put(bufp)
+	}()
+	var window []string
+	window, current, ok = c.window(since, (*bufp)[:0])
+	*bufp = window
+	if !ok || len(window) == 0 {
+		return nil, current, ok
+	}
+	return dedupeIDs(window, limit), current, true
+}
+
+// windowPool holds the buffers ChangedSince copies a window of the ring into.
+// A whole-ring window at DefaultRingSize is 1 MiB of string headers; pooling
+// it keeps a stale lookup from turning that into garbage on every call.
+var windowPool = sync.Pool{New: func() any { return new([]string) }}
+
+// window appends to buf the IDs of every record newer than since, oldest
+// first, and reports the current generation and whether the ring covers since.
+// It is the only part of ChangedSince that holds the mutex.
+func (c *ChangeLog) window(since uint64, buf []string) (_ []string, current uint64, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	current = c.gen.Load()
 	if since >= current {
-		return nil, current, true
+		return buf, current, true
 	}
 	if since < c.floor {
-		return nil, current, false
+		return buf, current, false
 	}
-	seen := make(map[string]struct{})
-	for i := 0; i < c.size; i++ {
-		r := c.ring[(c.head+i)%len(c.ring)]
-		if r.gen <= since {
+	// Records sit in the ring in non-decreasing generation order from head:
+	// Record appends under a generation newer than every live record,
+	// eviction removes from head, and RecordAll empties the ring. So the
+	// first record newer than since is found by binary search.
+	n := len(c.ring)
+	start := sort.Search(c.size, func(i int) bool { return c.ring[(c.head+i)%n].gen > since })
+	if start == c.size {
+		return buf, current, true
+	}
+	buf = slices.Grow(buf, c.size-start)
+	// The logical window [start, size) is at most two physical runs.
+	first := (c.head + start) % n
+	last := first + (c.size - start) // exclusive, may run past n
+	if last <= n {
+		buf = appendIDs(buf, c.ring[first:last])
+	} else {
+		buf = appendIDs(buf, c.ring[first:])
+		buf = appendIDs(buf, c.ring[:last-n])
+	}
+	return buf, current, true
+}
+
+func appendIDs(buf []string, recs []changeRecord) []string {
+	for _, r := range recs {
+		buf = append(buf, r.id)
+	}
+	return buf
+}
+
+// dedupeIDs returns the distinct IDs of window in first-seen order, stopping
+// once it has limit of them (limit <= 0: no bound).
+func dedupeIDs(window []string, limit int) []string {
+	hint := len(window)
+	if limit > 0 && limit < hint {
+		hint = limit
+	}
+	seen := make(map[string]struct{}, hint)
+	var ids []string
+	for _, id := range window {
+		if _, dup := seen[id]; dup {
 			continue
 		}
-		if _, dup := seen[r.id]; dup {
-			continue
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+		if limit > 0 && len(ids) >= limit {
+			break
 		}
-		seen[r.id] = struct{}{}
-		ids = append(ids, r.id)
 	}
-	return ids, current, true
+	return ids
 }

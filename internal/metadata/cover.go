@@ -1,7 +1,7 @@
 // file: internal/metadata/cover.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 4efaa7b8-e29a-47f3-84f7-39b46bfc9a01
-// last-edited: 2026-09-12
+// last-edited: 2026-09-26
 
 package metadata
 
@@ -356,39 +356,6 @@ func CoverPathForBook(destDir string, bookID string) string {
 		return ""
 	}
 	return findExistingCover(filepath.Join(destDir, "covers"), safeID)
-}
-
-// HasExistingCoverArt checks if an audio file already has cover art, either
-// embedded in the file or as a common image file in the same directory
-// (e.g., cover.jpg, folder.jpg, etc.).
-func HasExistingCoverArt(audioPath string) bool {
-	// Check for embedded cover art
-	if audioPath != "" {
-		if coverPath, err := ExtractCoverArt(audioPath); err == nil && coverPath != "" {
-			return true
-		}
-	}
-
-	// Check for common cover image files in the same directory
-	dir := filepath.Dir(audioPath)
-	coverNames := []string{
-		"cover", "folder", "front", "album", "artwork",
-	}
-	imageExts := []string{".jpg", ".jpeg", ".png", ".webp", ".gif"}
-	for _, name := range coverNames {
-		for _, ext := range imageExts {
-			candidate := filepath.Join(dir, name+ext)
-			if _, err := os.Stat(candidate); err == nil {
-				return true
-			}
-			// Also check uppercase
-			candidate = filepath.Join(dir, strings.ToUpper(name)+ext)
-			if _, err := os.Stat(candidate); err == nil {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func extensionFromContentType(ct string) string {

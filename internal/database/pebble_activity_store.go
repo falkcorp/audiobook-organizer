@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.28.1
+// version: 1.30.1
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-09-26
 
@@ -1180,6 +1180,19 @@ func pactBucketTime(t time.Time) time.Time {
 // their native nanosecond precision — see that var for why the unquantised key
 // made the cache unreachable for the UI's rolling 24h window. Every other field
 // is matched exactly.
+// pactTagTermsCacheKey renders f's required tags WITH their aliases, so a
+// def: tag filter that resolved to several spellings never shares a cache slot
+// with the literal single-spelling filter. Built from TagTerms (Tags order),
+// never from map iteration.
+func pactTagTermsCacheKey(f ActivityFilter) string {
+	terms := f.TagTerms()
+	parts := make([]string, len(terms))
+	for i, group := range terms {
+		parts[i] = strings.Join(group, "\x01")
+	}
+	return strings.Join(parts, ",")
+}
+
 func pactSourcesCacheKey(f ActivityFilter) string {
 	since, until := "", ""
 	if f.Since != nil {
@@ -1191,10 +1204,13 @@ func pactSourcesCacheKey(f ActivityFilter) string {
 	return strings.Join([]string{
 		f.Tier, strings.Join(f.TypeValues(), "\x01"), f.Level, f.Source, f.OperationID, f.BookID, f.Search,
 		since, until,
-		strings.Join(f.Tags, ","),
+		pactTagTermsCacheKey(f),
 		strings.Join(f.ExcludeSources, ","),
 		strings.Join(f.ExcludeTiers, ","),
-		strings.Join(f.ExcludeTags, ","),
+		// With aliases: an exclusion that resolved to several def: spellings
+		// never shares a slot with the literal single-spelling one. Flat,
+		// because exclusion is one any-of set.
+		strings.Join(f.ExcludeTagValues(), "\x01"),
 	}, "\x00")
 }
 

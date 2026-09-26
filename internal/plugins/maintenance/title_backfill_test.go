@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.26.1
+// version: 1.27.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -94,6 +95,9 @@ func (d fakeDeps) MetadataCacheStore() database.MetadataCacheStore {
 // answers (nil, nil) — "no active ops" — so mock-backed tests see an idle queue
 // and the dedupe scan guard lets them through.
 func (d fakeDeps) OperationQueueStore() OpQueueReader { return d.store }
+
+// MergeUserStateStore hands back the store unchanged, as Server's does.
+func (d fakeDeps) MergeUserStateStore() merge.UserStateRepairStore { return d.store }
 
 // VersionPrimaryStore hands back the store unchanged, as Server's does.
 func (d fakeDeps) VersionPrimaryStore() VersionPrimaryStore { return d.store }

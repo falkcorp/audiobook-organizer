@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -663,7 +664,7 @@ func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex) auth
 		ch.AuthorID = *b.AuthorID
 		return ch
 	}
-	if authorPathLinkIsITunes(b.FilePath) {
+	if pathutil.UnderFrozenITunesTree(b.FilePath) {
 		ch.Outcome = authorPathLinkITunesHandsOff
 		return ch
 	}
@@ -755,24 +756,6 @@ func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex) auth
 	}
 	ch.Outcome = authorPathLinkWouldCreate
 	return ch
-}
-
-// authorPathLinkIsITunes reports whether the path runs through the live iTunes
-// library, which is hands-off by standing owner rule. Segment equality, not
-// substring: a title with "itunes" in it must not match.
-//
-// It matches "<...>/books/itunes/<...>" specifically -- the ONE iTunes root
-// this library has -- rather than any segment named "itunes", because an
-// audiobook whose own folder is called "iTunes" would otherwise be excluded
-// from a repair it belongs in. A second iTunes root would need adding here.
-func authorPathLinkIsITunes(path string) bool {
-	segs := strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
-	for i, s := range segs {
-		if strings.EqualFold(strings.TrimSpace(s), "itunes") && i > 0 && strings.EqualFold(strings.TrimSpace(segs[i-1]), "books") {
-			return true
-		}
-	}
-	return false
 }
 
 func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams, reporter sdk.Reporter) (*authorPathLinkResult, error) {
