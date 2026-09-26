@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.86.1
+// version: 1.88.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-25
 
@@ -1415,6 +1415,15 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 		if de.bookStore == nil {
 			slog.Warn("dedup exact-file-hash: auto-merge skipped; undo journal unavailable, queued for review",
 				"book", book.ID, "other", other.ID)
+			return false, de.upsertExactCandidate(book, other, "exact", 1.0)
+		}
+		// A pair a human pinned for review is never auto-merged, even on an
+		// exact file-hash match (automated_guard.go). A lookup error fails
+		// closed: the pair is queued, not merged.
+		if pinned, perr := de.pairPinnedForReview(book.ID, other.ID); pinned {
+			if perr != nil {
+				verdictLog.Warn("exact-file-hash auto-merge of %s and %s skipped: manual-candidate lookup failed: %v", book.ID, other.ID, perr)
+			}
 			return false, de.upsertExactCandidate(book, other, "exact", 1.0)
 		}
 		// MergeBooks serializes its own read-modify-write internally (a mutex
@@ -3486,6 +3495,10 @@ type RescoreResult struct {
 	// Skipped is the count of candidates with no stored signal set
 	// (pre-T015 rows; re-scoring without signals is impossible).
 	Skipped int `json:"skipped"`
+	// SkippedManual is the count of manual (human-pinned) candidates left
+	// un-rescored. A pinned row is review-queue-only: no automated pass
+	// re-bands it (automated_guard.go).
+	SkippedManual int `json:"skipped_manual"`
 	// Changed is the count of candidates whose band or score changed.
 	Changed int `json:"changed"`
 	// Written is the count of changed candidates the store CONFIRMED it wrote
@@ -3602,6 +3615,14 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 			return result, err
 		}
 		result.Inspected++
+		// A pinned scanner row keeps its stored breakdown, so it would be
+		// re-banded like any other. It is left alone. A pin that lands after
+		// this list is caught by UpdateCandidateScores, which re-checks under
+		// the pin's own lock.
+		if database.IsManualCandidate(cand) {
+			result.SkippedManual++
+			continue
+		}
 		if cand.ScoreBreakdown == nil || len(cand.ScoreBreakdown.Signals) == 0 {
 			result.Skipped++
 			continue
@@ -3643,6 +3664,7 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 	logging.Info(ctx, "dedup rescore",
 		"inspected", result.Inspected,
 		"skipped", result.Skipped,
+		"skipped_manual", result.SkippedManual,
 		"changed", result.Changed,
 		"applied", result.Applied,
 		"written", result.Written,
@@ -3754,6 +3776,16 @@ func (de *Engine) PurgeStaleCandidates(ctx context.Context) (int, error) {
 
 		a := lookup(c.EntityAID)
 		b := lookup(c.EntityBID)
+
+		// Two live book rows at one cleaned path are review-queue-only by
+		// owner decision (automated_guard.go): no purge rule below may
+		// delete the pair, not only the same-directory one. A shared
+		// version group is the likeliest way this shape would otherwise be
+		// purged. A pair with a missing side still falls through.
+		if !a.missing && !b.missing && a.filePath != "" && b.filePath != "" &&
+			filepath.Clean(a.filePath) == filepath.Clean(b.filePath) {
+			continue
+		}
 
 		stale := false
 		switch {
@@ -4139,6 +4171,15 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 			skippedStale++
 			continue
 		}
+		// A human may have pinned the pair after the batch was submitted
+		// (listAmbiguousCandidates only filters manual rows at submit time,
+		// and a batch can run for hours). A pinned row gets neither the
+		// verdict write (it would rewrite Layer to "llm") nor a merge.
+		if database.IsManualCandidate(*current) {
+			verdictLog.Info("LLM verdict for candidate %d skipped: pinned for human review after submission", current.ID)
+			skippedStale++
+			continue
+		}
 		candidate := *current
 		verdict := "not_duplicate"
 		if v.IsDuplicate {
@@ -4149,7 +4190,14 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 			reason = fmt.Sprintf("[%s] %s", v.Confidence, reason)
 		}
 		if err := de.embedStore.UpdateCandidateLLM(candidate.ID, verdict, reason); err != nil {
-			slog.Error("dedup failed to update candidate", "candidate", candidate.ID, "err", err)
+			// The store re-checks under the pin's own lock, so a pin or a
+			// human verdict landing since the re-read above ends up here.
+			if errors.Is(err, database.ErrManualCandidateProtected) || errors.Is(err, database.ErrCandidateStatusChanged) {
+				verdictLog.Info("LLM verdict for candidate %d skipped at write time: %v", candidate.ID, err)
+				skippedStale++
+				continue
+			}
+			verdictLog.Error("LLM verdict for candidate %d could not be written: %v", candidate.ID, err)
 			continue
 		}
 		applied++
@@ -4192,12 +4240,13 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 			slog.Info("dedup LLM auto-merge skipped — a side was already soft-deleted (merged away earlier in this batch)", "candidate", candidate.ID, "a", candidate.EntityAID, "b", candidate.EntityBID)
 			continue
 		}
-		// Two book rows at the same cleaned path (CHAPTER-SUBFOLDER-NN-ROWS,
-		// 2026-09-25) are review-queue-only by owner decision: an LLM verdict
-		// is still an automated decision, so it may never merge this shape,
-		// no matter how confident.
-		if SamePathPair(bookA, bookB) {
-			verdictLog.Info("LLM auto-merge for candidate %d skipped: %s and %s share a cleaned path, review queue only", candidate.ID, candidate.EntityAID, candidate.EntityBID)
+		// Review-queue-only pairs (same cleaned path, or pinned by a human)
+		// are never merged by an LLM verdict, however confident. Re-read the
+		// row now rather than trusting `candidate`: the book loads above take
+		// time, and a pin can land after the verdict write. See
+		// automated_guard.go.
+		if why, refused := RecheckAutomatedMerge(de.embedStore, candidate.ID, "pending", bookA, bookB); refused {
+			verdictLog.Info("LLM auto-merge for candidate %d (%s, %s) skipped: %s", candidate.ID, candidate.EntityAID, candidate.EntityBID, why)
 			continue
 		}
 

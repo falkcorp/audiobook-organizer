@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps_triage_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 858930a2-ded4-48a8-9404-abc75c5bd103
 // last-edited: 2026-09-25
 
@@ -245,6 +245,57 @@ func TestDedupTriageExactPending_Apply_KeepsManualStub(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "dismissed", ctl.Status)
 	got, err := embStore.GetCandidateByID(manual.Candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", got.Status)
+}
+
+// TestDedupTriageExactPending_Apply_KeepsSamePathStub: two book rows at one
+// cleaned path are review-queue-only, so triage never dismisses the pair even
+// when it classifies as a purgeable stub. The distinct-path control of the
+// same shape is dismissed.
+func TestDedupTriageExactPending_Apply_KeepsSamePathStub(t *testing.T) {
+	embStore := newTriageTestEmbeddingStore(t)
+	books := map[string]database.Book{
+		"s-a": t03TriageBook("s-a", "Shell Pair", 10*1024*1024, 3600, ""),
+		"s-b": t03TriageBook("s-b", "Shell Pair", 100, 1, ""),
+		"c-a": t03TriageBook("c-a", "Stub Pair A", 10*1024*1024, 3600, ""),
+		"c-b": t03TriageBook("c-b", "Stub Pair B", 100, 1, ""),
+	}
+	for _, id := range []string{"s-a", "s-b"} {
+		b := books[id]
+		b.FilePath = "/lib/Author/Book/32.m4b"
+		books[id] = b
+	}
+	srv := &Server{store: &database.MockStore{
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			b, ok := books[id]
+			if !ok {
+				return nil, nil
+			}
+			return &b, nil
+		},
+	}, embeddingStore: embStore}
+
+	spID, _, err := embStore.UpsertCandidateNew(database.DedupCandidate{
+		EntityType: "book", EntityAID: "s-a", EntityBID: "s-b",
+		Layer: "exact", ScoreBreakdown: t03SoftSignalBreakdown(),
+	})
+	require.NoError(t, err)
+	ctlID, _, err := embStore.UpsertCandidateNew(database.DedupCandidate{
+		EntityType: "book", EntityAID: "c-a", EntityBID: "c-b",
+		Layer: "exact", ScoreBreakdown: t03SoftSignalBreakdown(),
+	})
+	require.NoError(t, err)
+
+	report, err := srv.DedupTriageExactPending(context.Background(), true)
+	require.NoError(t, err)
+	require.Equal(t, 2, report.PurgeableCount, "both pairs classify purgeable")
+	require.Equal(t, 1, report.DismissedCount, "only the distinct-path control is dismissed")
+
+	ctl, err := embStore.GetCandidateByID(ctlID)
+	require.NoError(t, err)
+	require.Equal(t, "dismissed", ctl.Status)
+	got, err := embStore.GetCandidateByID(spID)
 	require.NoError(t, err)
 	require.Equal(t, "pending", got.Status)
 }

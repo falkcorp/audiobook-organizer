@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b7a2e9f-c1d4-4f8b-a5e0-6d3c8b2f1e47
-// last-edited: 2026-08-19
+// last-edited: 2026-09-25
 
 // Package dedup — op dedup.purge-legacy-fp-candidates (T015, SPEC 1 §8 step 2).
 //
@@ -28,6 +28,7 @@ package dedup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -151,6 +152,7 @@ func (p *Plugin) runPurgeLegacyFP(ctx context.Context, rawParams json.RawMessage
 		keptHash    int
 		keptLayer   int
 		keptCutover int
+		keptManual  int
 	)
 
 	// Collect IDs to mark in one pass, so we don't interleave reads and writes.
@@ -169,6 +171,16 @@ func (p *Plugin) runPurgeLegacyFP(ctx context.Context, rawParams json.RawMessage
 		examined++
 
 		// --- Criteria gate ---
+
+		// 0. A manual (human-pinned) candidate keeps its scanner layer and
+		//    similarity, so a pinned legacy row passes every gate below. It
+		//    is review-queue-only and stays pending. The apply loop re-checks
+		//    at write time too (ReclassifyCandidate), for a pin that lands
+		//    between this scan and the write.
+		if database.IsManualCandidate(cand) {
+			keptManual++
+			continue
+		}
 
 		// 1. Only exact and embedding layers are legacy segment-era candidates.
 		//    The acoustid layer is CURRENT data (post-cutover) and must not be touched.
@@ -210,11 +222,12 @@ func (p *Plugin) runPurgeLegacyFP(ctx context.Context, rawParams json.RawMessage
 		"kept_genuine_hash", keptHash,
 		"kept_wrong_layer", keptLayer,
 		"kept_post_cutover", keptCutover,
+		"kept_manual", keptManual,
 		"apply", params.Apply)
 
 	summary := fmt.Sprintf(
-		"Scan: %d examined, %d stale-fp, %d kept (genuine hash), %d kept (other layer), %d kept (post-cutover)",
-		examined, staleCount, keptHash, keptLayer, keptCutover,
+		"Scan: %d examined, %d stale-fp, %d kept (genuine hash), %d kept (other layer), %d kept (post-cutover), %d kept (manual)",
+		examined, staleCount, keptHash, keptLayer, keptCutover, keptManual,
 	)
 
 	if !params.Apply {
@@ -227,7 +240,7 @@ func (p *Plugin) runPurgeLegacyFP(ctx context.Context, rawParams json.RawMessage
 	// --- Apply: mark stale rows ---
 	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf("Marking %d candidates stale-fp…", len(toMark)))
 
-	var marked int
+	var marked, skippedAtWrite int
 	for _, id := range toMark {
 		if reporter.IsCanceled() {
 			break
@@ -237,11 +250,18 @@ func (p *Plugin) runPurgeLegacyFP(ctx context.Context, rawParams json.RawMessage
 			return ctx.Err()
 		default:
 		}
-		if err := p.embeddingStore.UpdateCandidateStatus(id, "stale-fp"); err != nil {
+		// ReclassifyCandidate refuses a row a human pinned or decided since
+		// the scan read it (see its doc); those are counted, not errors.
+		err := p.embeddingStore.ReclassifyCandidate(id, "pending", "stale-fp")
+		switch {
+		case err == nil:
+			marked++
+		case errors.Is(err, database.ErrManualCandidateProtected), errors.Is(err, database.ErrCandidateStatusChanged):
+			skippedAtWrite++
+			reporter.Logger().Info("purge-legacy-fp: left a row changed since the scan", "candidate_id", id, "reason", err)
+		default:
 			reporter.Logger().Error("purge-legacy-fp: mark stale-fp error", "candidate_id", id, "error", err)
 			// Continue — partial progress is better than aborting; the op is idempotent.
-		} else {
-			marked++
 		}
 	}
 
@@ -253,8 +273,8 @@ func (p *Plugin) runPurgeLegacyFP(ctx context.Context, rawParams json.RawMessage
 	}
 
 	_ = reporter.UpdateProgress(3, 3,
-		fmt.Sprintf("Complete — %d/%d marked stale-fp. %s", marked, staleCount, summary))
-	reporter.Logger().Info("purge-legacy-fp: complete", "marked", marked, "intended", staleCount)
+		fmt.Sprintf("Complete — %d/%d marked stale-fp (%d changed since the scan, left alone). %s", marked, staleCount, skippedAtWrite, summary))
+	reporter.Logger().Info("purge-legacy-fp: complete", "marked", marked, "intended", staleCount, "skipped_at_write", skippedAtWrite)
 	return nil
 }
 

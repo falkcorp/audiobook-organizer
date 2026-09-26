@@ -1,5 +1,5 @@
 // file: internal/dedup/drain_stale.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 60d982e2-6836-4327-9ddf-9b55375f39ea
 // last-edited: 2026-09-25
 
@@ -30,6 +30,7 @@ package dedup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 
@@ -67,6 +68,11 @@ type DrainStaleResult struct {
 	Inspected  int
 	WouldPurge int
 	Kept       int
+	// SkippedAtWrite counts apply-mode rows phase 1 selected but phase 2 left
+	// alone because, by the time of the write, a human had pinned or decided
+	// the pair (see EmbeddingStore.ReclassifyCandidate). They are included in
+	// WouldPurge, which describes the scan.
+	SkippedAtWrite int
 	// ReasonCounts buckets WouldPurge by the first gate that rejected the pair.
 	ReasonCounts map[string]int
 	// Samples holds up to drainStaleSampleCap examples per reason for the report.
@@ -133,6 +139,7 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 			m.stub = &database.Book{
 				ID:               b.ID,
 				Title:            b.Title,
+				FilePath:         b.FilePath, // for SamePathPair
 				Duration:         b.Duration,
 				ISBN10:           b.ISBN10,
 				ISBN13:           b.ISBN13,
@@ -210,7 +217,8 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 			c := page[i]
 			result.Inspected++
 			// A pinned manual candidate keeps its scanner layer, so an exact row
-			// a human asked to review can land here. It stays in the queue.
+			// a human asked to review can land here, and a same-path pair is
+			// review-queue-only too. Both stay in the queue (automated_guard.go).
 			if database.IsManualCandidate(c) {
 				result.Kept++
 				continue
@@ -218,6 +226,10 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 
 			a := lookup(c.EntityAID)
 			b := lookup(c.EntityBID)
+			if _, refused := AutomatedResolutionRefusal(c, a.stub, b.stub); refused {
+				result.Kept++
+				continue
+			}
 
 			reason, purge := de.classifyStaleCandidate(a, b)
 			if !purge {
@@ -252,7 +264,11 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 	}
 
 	// Phase 2 (apply only): soft-reclassify the collected would-purge rows by ID.
-	// UpdateCandidateStatus is idempotent, so a re-run over the same IDs is safe.
+	// ReclassifyCandidate re-checks each row under the lock a manual pin takes:
+	// phase 1 can run for a long time, and a pair a human pinned (or dismissed,
+	// or merged) since it was read must not be moved to stale-drain. Rows it
+	// refuses are counted in SkippedAtWrite. A re-run over the same IDs is safe:
+	// an already-drained row is refused as no longer pending.
 	//
 	// KNOWN LIMITATION (apply-resume): marking is deferred to this phase, so an
 	// apply interrupted mid-scan marks nothing, and a resumed run (starting at the
@@ -268,7 +284,13 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 				return result, ctx.Err()
 			default:
 			}
-			if uerr := de.embedStore.UpdateCandidateStatus(id, staleDrainStatus); uerr != nil {
+			uerr := de.embedStore.ReclassifyCandidate(id, "pending", staleDrainStatus)
+			switch {
+			case uerr == nil:
+			case errors.Is(uerr, database.ErrManualCandidateProtected), errors.Is(uerr, database.ErrCandidateStatusChanged):
+				result.SkippedAtWrite++
+				logging.Info(ctx, "drain-stale: left a row changed since the scan", "candidate_id", id, "reason", uerr)
+			default:
 				logging.Error(ctx, "drain-stale: reclassify failed", "candidate_id", id, "error", uerr)
 			}
 		}
@@ -285,6 +307,7 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 		"inspected", result.Inspected,
 		"would_purge", result.WouldPurge,
 		"kept", result.Kept,
+		"skipped_at_write", result.SkippedAtWrite,
 		"apply", apply,
 		"reason_counts", fmt.Sprintf("%v", result.ReasonCounts))
 
