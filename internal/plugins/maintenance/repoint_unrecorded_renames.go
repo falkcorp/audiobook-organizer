@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5a0e7c38-2d94-4b1f-8e63-c4f9b2a17d05
-// last-edited: 2026-09-14
+// last-edited: 2026-09-26
 
 // Repoints rows whose file a rename MOVED ON DISK but whose new path the
 // rename could not write to the database, even after retrying.
@@ -281,7 +281,7 @@ func underITunes(p string, roots []string) bool {
 	if p == "" {
 		return false
 	}
-	if config.UnderFrozenITunesTree(p) {
+	if pathutil.UnderFrozenITunesTree(p) {
 		return true
 	}
 	clean := filepath.Clean(p)

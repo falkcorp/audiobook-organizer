@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
-// last-edited: 2026-09-19
+// last-edited: 2026-09-26
 
 // Package maintenance — REWRITE a stored path PREFIX across every row that
 // records a location under it, after a directory was renamed or moved on disk.
@@ -441,7 +441,7 @@ func prefixTouchesITunes(p string, roots []string) bool {
 		return true
 	}
 	clean := filepath.Clean(p)
-	if config.UnderFrozenITunesTree(clean) {
+	if pathutil.UnderFrozenITunesTree(clean) {
 		return true
 	}
 	for _, root := range roots {

@@ -1,9 +1,9 @@
-// file: internal/config/frozen_itunes_test.go
-// version: 1.0.0
+// file: internal/pathutil/itunes_test.go
+// version: 1.1.0
 // guid: 5b1f8c47-2a93-4e06-bd75-8f2c4a1e903d
-// last-edited: 2026-08-05
+// last-edited: 2026-09-26
 
-package config
+package pathutil
 
 import "testing"
 

@@ -1,7 +1,7 @@
 // file: internal/config/itunes_libraries.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5b2e9c47-1a08-4d63-8f92-3c7a0e6b1d54
-// last-edited: 2026-09-12
+// last-edited: 2026-09-26
 //
 // The 4-state iTunes library model + its config-load Resolve/Validate. Two physical
 // libraries (Original = the real hands-off tree under books/itunes/**; AO = the
@@ -82,30 +82,9 @@ func (c *ITunesConfig) Resolve() {
 	}
 }
 
-// booksItunesSegment matches the hands-off Original tree by path segment, so it
-// catches the real library regardless of the absolute mount prefix.
-const booksItunesSegment = "books/itunes/"
-
-// UnderFrozenITunesTree reports whether a path lives in the hands-off Original
-// iTunes tree (books/itunes/**).
-//
-// That tree is externally managed by iTunes itself and is marked Frozen —
-// read-only, never reorganised by us. Callers that PROPOSE structural changes
-// (regroup holds, merges, moves) must consult this and skip such paths, because a
-// proposal we are not permitted to carry out is noise in a human's queue at best
-// and a data-loss invitation at worst.
-//
-// Exported for producers outside this package; underBooksItunes remains the
-// internal spelling used by validation.
-func UnderFrozenITunesTree(p string) bool { return underBooksItunes(p) }
-
-func underBooksItunes(p string) bool {
-	if p == "" {
-		return false
-	}
-	clean := strings.ReplaceAll(p, "\\", "/")
-	return strings.Contains(clean+"/", booksItunesSegment)
-}
+// The frozen-tree predicate (books/itunes/**) lives in
+// pathutil.UnderFrozenITunesTree, the one spelling every caller shares,
+// including internal/database, which cannot import this package.
 
 func pathCoveredByProtected(p string, protected []string) bool {
 	if p == "" {
@@ -145,7 +124,7 @@ func (c *ITunesConfig) ValidateLibraries(protectedPaths []string) []string {
 	}
 
 	// 2. The AO write target must NEVER resolve under books/itunes/**.
-	if underBooksItunes(L.AO.ITLPath) {
+	if pathutil.UnderFrozenITunesTree(L.AO.ITLPath) {
 		errs = append(errs, fmt.Sprintf("itunes.libraries.ao.itl_path %q resolves under books/itunes/** — the writeback target must never point at the Original library", L.AO.ITLPath))
 	}
 

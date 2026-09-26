@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
-// last-edited: 2026-09-22
+// last-edited: 2026-09-26
 
 package acoustid
 
@@ -63,7 +63,7 @@ import (
 // standing "hands off iTunes" rule -- but that rule is about MUTATION, and
 // fingerprinting only reads. Excluding it denied an acoustic signal to
 // ~143,766 files, 19% of the corpus, for no benefit. Every iTunes mutation
-// guard (config.UnderFrozenITunesTree in internal/merge and the maintenance
+// guard (pathutil.UnderFrozenITunesTree in internal/merge and the maintenance
 // ops) is untouched, and this op has never written to an audio file.
 //
 // Dry-run is the default: {"live": true} writes. A dry run builds the full

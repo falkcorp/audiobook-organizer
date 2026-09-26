@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_guard.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7a35388d-79af-4a1e-a553-a61d6dfcf4ae
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package merge
 
@@ -84,7 +84,7 @@ type ITunesGuardStore interface {
 
 // frozenITunesSegmentRoot labels refusals that came from the config-independent
 // books/itunes/ segment match rather than a configured root.
-const frozenITunesSegmentRoot = "books/itunes/"
+const frozenITunesSegmentRoot = pathutil.FrozenITunesSegment
 
 // ITunesProtectedRoots returns the cleaned protected roots for cfg: the folder
 // holding itunes.library_read_path (the library file and, in the standard
@@ -237,7 +237,7 @@ func checkITunesPathResolved(bookID, p string, roots []protectedRoot) error {
 	if p == "" {
 		return nil
 	}
-	if config.UnderFrozenITunesTree(p) {
+	if pathutil.UnderFrozenITunesTree(p) {
 		return &ITunesProtectedError{BookID: bookID, Path: p, Root: frozenITunesSegmentRoot}
 	}
 	if !filepath.IsAbs(p) {
@@ -253,7 +253,7 @@ func checkITunesPathResolved(bookID, p string, roots []protectedRoot) error {
 	if err != nil {
 		return &ITunesProtectedError{BookID: bookID, Path: p, Reason: "cannot resolve symlinks to verify the path is outside the iTunes library", Cause: err}
 	}
-	if resolved != clean && config.UnderFrozenITunesTree(resolved) {
+	if resolved != clean && pathutil.UnderFrozenITunesTree(resolved) {
 		return &ITunesProtectedError{BookID: bookID, Path: p, Root: frozenITunesSegmentRoot, Reason: "resolves to " + resolved}
 	}
 	for _, root := range roots {

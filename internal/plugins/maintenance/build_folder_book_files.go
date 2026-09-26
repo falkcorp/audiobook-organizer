@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 92622b6c-f340-42c4-b6b1-2fdba32b770f
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 // Package maintenance — op maintenance.build-folder-book-files.
 //
@@ -66,6 +66,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -330,7 +331,7 @@ func buildFolderBookFiles(ctx context.Context, store folderBuildStore, params fo
 			e.Decision = fbNoPath
 			record(e, false)
 			return nil
-		case config.UnderFrozenITunesTree(path):
+		case pathutil.UnderFrozenITunesTree(path):
 			e.Decision, e.Reason = fbITunesRoot, "file_path is under the iTunes tree, which is never written"
 			record(e, true)
 			return nil
@@ -501,7 +502,7 @@ func buildOneFolder(ctx context.Context, store folderBuildStore, c *fbCandidate,
 		if onFile != nil {
 			onFile(i, len(audio), name)
 		}
-		if config.UnderFrozenITunesTree(path) {
+		if pathutil.UnderFrozenITunesTree(path) {
 			res.Decision, res.Reason = fbITunesRoot, "an audio file resolves under the iTunes tree"
 			return nil
 		}
