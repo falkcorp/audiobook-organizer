@@ -1,5 +1,5 @@
 <!-- file: docs/process/ci-remote.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 64ab6c3c-1ce6-48a4-8e4a-0c95ada9ab46 -->
 <!-- last-edited: 2026-09-26 -->
 
@@ -44,13 +44,49 @@ packages, and the merge concatenates them into `coverage.out` before
 `coverage-check-short` runs. A `package-census` row turns red if any listed
 package printed no result line.
 
+There is one deliberate difference. A local `go test ./...` run after
+`npm ci` also tests a third-party Go package that ships inside
+`web/node_modules` (`flatted/golang/pkg/flatted`), and adds its roughly 114
+profile lines to the coverage total. ci-remote leaves `node_modules` out of
+the package list. Whether that package is present in a local run depends on
+whether `web/node_modules` happens to exist at the time, so it is not part of
+this repo's gate either way.
+
 The nodes can differ from your machine, and from each other, in GOOS. The
 build-tagged files (`*_linux.go` and `*_darwin.go`) then differ as well, so the
 merged coverage total can move by a small amount depending on which OS ran
 which package. Pass/fail is not affected.
 
-Legs run from one shared queue. A node's workers take the heaviest leg that
-node may run. A decode-capable node takes the decode shards first, because no
+Slow packages come first and are spread across nodes. A package estimated
+at 90 s or more (`HEAVY_SECONDS`) gets a shard of its own. In practice that is
+`internal/database`, `internal/server/handlers/abs`, `internal/applygate`,
+`internal/scanner`, `internal/server`, `internal/plugins/maintenance` and
+`internal/operations/registry`. The scheduler starts those shards before any
+other leg. A host that is already running a slow shard passes on the next one
+whenever another host that could run it has none, so the long poles run in
+parallel on different machines instead of queueing behind each other on one.
+Until a package has been measured on every OS in the pool,
+`SEED_SECONDS` supplies its expected time, using the owner's 2026-09-26
+figures from a loaded Mac, for example `internal/database` at about 1800 s.
+
+Each shard gets `go test -timeout` of at least 25m, the same as `make ci`.
+A shard containing `internal/database` gets at least 50m
+(`PACKAGE_TIMEOUT_MIN`), and every shard gets at least twice the slowest
+measured time of any package in it. `internal/database` has run for
+1500–2200 s on a loaded Mac, so 25m is not enough for it there.
+
+Test shards on a `prod` node run in a separate network namespace with only
+loopback up. Some tests dial fixed localhost ports, for example
+`internal/download`'s Deluge test on `localhost:8112`. On the production host
+those ports belong to real services, and the test fails or talks to them. The
+node runs `unshare -rn`, raises `lo`, and then runs a second `unshare` that
+maps back to the node user with no capabilities, so file-permission tests
+still behave as they do for a normal user. Modules are downloaded during setup,
+and the test runs with `GOPROXY=off`. A `prod` node that cannot create a user
+namespace gets no test shards, only the analysis legs.
+
+Legs run from one shared queue. After the slow shards, a node's workers take
+the heaviest leg that node may run. A decode-capable node takes the decode shards first, because no
 other node can run them. Shards are balanced by measured runtime using
 longest-processing-time-first. The timings are kept per GOOS in
 `<primary checkout>/.git/ci-remote/timings.json`, because `internal/server` is
