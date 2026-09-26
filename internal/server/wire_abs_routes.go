@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-09-25
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
@@ -505,7 +506,7 @@ func (s *Server) wireABSRoutes() {
 	// that book's progress row on its next refresh (abs/item_ref.go).
 	aliasUses := database.AsSyncAliasUseStore(s.Ops())
 	if aliasUses == nil {
-		slog.Error("abs: refusing to start — the configured store lacks the sync_alias_use keyspace, so progress " +
+		logger.New("abs").Error("abs: refusing to start — the configured store lacks the sync_alias_use keyspace, so progress " +
 			"rows for merged books opened by an old item id could not be kept.")
 		os.Exit(1)
 	}
