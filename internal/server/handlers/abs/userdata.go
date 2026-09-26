@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -394,28 +395,22 @@ func (p *userDataProvider) ClientMediaProgress(userID string) ([]any, error) {
 
 	// The live item each row's id resolves to, when that id is an alias.
 	redirects := make([]string, len(rows))
-	g := new(errgroup.Group)
-	g.SetLimit(p.concurrency)
-	for i := range rows {
+	forEachBounded(len(rows), p.concurrency, func(i int) {
 		row, ok := rows[i].(mediaProgressDTO)
 		if !ok || row.LibraryItemID == "" {
-			continue
+			return
 		}
-		g.Go(func() error {
-			item, err := p.identity.ResolveSyncItem(row.LibraryItemID)
-			if err != nil {
-				progressLog.Warn("abs: userdata: could not resolve a progress row's item id; row sent as stored: user_id=%s book_id=%s library_item_id=%s: %v",
-					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.bookID),
-					logger.SanitizeLogValue(row.LibraryItemID), err)
-				return nil
-			}
-			if item != nil && item.SyncID != "" && item.SyncID != row.LibraryItemID {
-				redirects[i] = item.SyncID
-			}
-			return nil
-		})
-	}
-	_ = g.Wait() // workers only return nil
+		item, err := p.identity.ResolveSyncItem(row.LibraryItemID)
+		if err != nil {
+			progressLog.Warn("abs: userdata: could not resolve a progress row's item id; row sent as stored: user_id=%s book_id=%s library_item_id=%s: %v",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.bookID),
+				logger.SanitizeLogValue(row.LibraryItemID), err)
+			return
+		}
+		if item != nil && item.SyncID != "" && item.SyncID != row.LibraryItemID {
+			redirects[i] = item.SyncID
+		}
+	})
 
 	canonical := make(map[string]mediaProgressDTO, len(rows))
 	for i, r := range rows {
@@ -470,23 +465,17 @@ func (p *userDataProvider) usedAliases(userID string, rows []any) map[string]str
 	ids = slices.Compact(ids)
 
 	resolved := make([]string, len(ids))
-	g := new(errgroup.Group)
-	g.SetLimit(p.concurrency)
-	for i := range ids {
-		g.Go(func() error {
-			item, err := p.identity.ResolveSyncItem(ids[i])
-			if err != nil {
-				progressLog.Warn("abs: userdata: could not resolve a used alias; omitting its row: user_id=%s alias=%s: %v",
-					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(ids[i]), err)
-				return nil
-			}
-			if item != nil && item.CurrentBookID != "" && item.SyncID != "" && item.SyncID != ids[i] {
-				resolved[i] = item.SyncID
-			}
-			return nil
-		})
-	}
-	_ = g.Wait() // workers only return nil
+	forEachBounded(len(ids), p.concurrency, func(i int) {
+		item, err := p.identity.ResolveSyncItem(ids[i])
+		if err != nil {
+			progressLog.Warn("abs: userdata: could not resolve a used alias; omitting its row: user_id=%s alias=%s: %v",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(ids[i]), err)
+			return
+		}
+		if item != nil && item.CurrentBookID != "" && item.SyncID != "" && item.SyncID != ids[i] {
+			resolved[i] = item.SyncID
+		}
+	})
 
 	out := make(map[string]string, len(ids))
 	for i, id := range ids {
@@ -495,6 +484,26 @@ func (p *userDataProvider) usedAliases(userID string, rows []any) map[string]str
 		}
 	}
 	return out
+}
+
+// forEachBounded calls fn(i) for every i in [0, n) on at most limit
+// goroutines at once (limit < 1 means 1) and returns when every call has
+// returned. fn reports no error on purpose: the client-list follow-ups that use
+// it FAIL OPEN per item (log at Warn, leave that item's slot empty), so there
+// is nothing to collect. An errgroup here only produced an always-nil error
+// that each caller had to discard. Each call writes only its own index of the
+// caller's result slices, so the calls share no written state.
+func forEachBounded(n, limit int, fn func(i int)) {
+	sem := make(chan struct{}, max(limit, 1))
+	var wg sync.WaitGroup
+	for i := range n {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			fn(i)
+		})
+	}
+	wg.Wait()
 }
 
 // seedAliasUses runs until it completes once per user: it records the aliases
@@ -526,31 +535,25 @@ func (p *userDataProvider) seedAliasUses(userID string, rows []any) []string {
 	// failed[i] marks a transient lookup failure for rows[i]. Per-index, like
 	// found, so the workers share no written state.
 	failed := make([]bool, len(rows))
-	g := new(errgroup.Group)
-	g.SetLimit(p.concurrency)
-	for i := range rows {
+	forEachBounded(len(rows), p.concurrency, func(i int) {
 		row, ok := rows[i].(mediaProgressDTO)
 		if !ok || row.LibraryItemID == "" || row.LastUpdate < since || row.LastUpdate >= until {
-			continue
+			return
 		}
-		g.Go(func() error {
-			ids, err := p.identity.ListSyncAliases(row.LibraryItemID)
-			if errors.Is(err, database.ErrSyncAliasLimit) {
-				progressLog.Warn("abs: userdata: alias seed: alias graph over the cap; leaving this item out for good: user_id=%s library_item_id=%s: %v",
-					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.LibraryItemID), err)
-				return nil
-			}
-			if err != nil {
-				progressLog.Warn("abs: userdata: alias seed: could not list aliases; leaving this item out and retrying on the next list: user_id=%s library_item_id=%s: %v",
-					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.LibraryItemID), err)
-				failed[i] = true
-				return nil
-			}
-			found[i] = ids
-			return nil
-		})
-	}
-	_ = g.Wait() // workers only return nil
+		ids, err := p.identity.ListSyncAliases(row.LibraryItemID)
+		if errors.Is(err, database.ErrSyncAliasLimit) {
+			progressLog.Warn("abs: userdata: alias seed: alias graph over the cap; leaving this item out for good: user_id=%s library_item_id=%s: %v",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.LibraryItemID), err)
+			return
+		}
+		if err != nil {
+			progressLog.Warn("abs: userdata: alias seed: could not list aliases; leaving this item out and retrying on the next list: user_id=%s library_item_id=%s: %v",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.LibraryItemID), err)
+			failed[i] = true
+			return
+		}
+		found[i] = ids
+	})
 
 	var seed []string
 	for _, ids := range found {
