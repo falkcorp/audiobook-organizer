@@ -105,6 +105,7 @@ func (j *revertMetadataFetchJob) Category() string { return "Metadata" }
 func (j *revertMetadataFetchJob) Description() string {
 	return "Rolls back DB changes made by one or more bulk-fetch-metadata operations"
 }
+
 // DefaultParams advertises dry_run:true: Run has a working preview (it counts
 // "would revert" without calling ModifyBook), so an empty request must take it.
 // Until 2026-09-25 no dry_run key was advertised, the dispatcher fell to false,
@@ -115,7 +116,7 @@ func (j *revertMetadataFetchJob) DefaultParams() any {
 		DryRun       bool     `json:"dry_run"`
 	}{OperationIDs: []string{}, DryRun: true}
 }
-func (j *revertMetadataFetchJob) CanResume() bool    { return false }
+func (j *revertMetadataFetchJob) CanResume() bool { return false }
 
 func (j *revertMetadataFetchJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	// fetch_op_ids arrives on the run's own params blob, via the context.

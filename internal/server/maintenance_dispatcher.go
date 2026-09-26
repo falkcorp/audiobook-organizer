@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 2.4.1
+// version: 2.5.0
 // guid: 55555555-5555-5555-5555-555555555555
 // last-edited: 2026-09-25
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/gin-gonic/gin"
 )
 
@@ -166,10 +167,20 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// 400 — the whole point of the *bool is that a malformed dry_run must not
 	// collapse to false and silently mutate. An explicit null is treated as
 	// omitted, matching what ShouldBindJSON did with it.
-	var reqDryRun *bool
+	//
+	// Both spellings are read, as the opmode contract promises every op. This
+	// route read only dry_run until 2026-09-25, so {"dryRun":false} fell to the
+	// advertised default and silently previewed.
+	var reqDryRun, reqDryRunCamel *bool
 	if raw, ok := params["dry_run"]; ok {
 		if err := json.Unmarshal(raw, &reqDryRun); err != nil {
 			httputil.RespondWithBadRequest(c, "invalid request body: dry_run must be a boolean")
+			return
+		}
+	}
+	if raw, ok := params["dryRun"]; ok {
+		if err := json.Unmarshal(raw, &reqDryRunCamel); err != nil {
+			httputil.RespondWithBadRequest(c, "invalid request body: dryRun must be a boolean")
 			return
 		}
 	}
@@ -200,15 +211,21 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// jobs advertising false are unaffected. An explicit "dry_run": false still
 	// applies — callers that mean it say so.
 	//
-	// Update 2026-09-25 (owner: preview by default for every writing op): the 8
-	// jobs that advertised false but DO honor dryRun now advertise true, so 30 of
-	// 38 preview on omission. The 4 that still advertise false (relink-report and
-	// the three scan-* reports) ignore dryRun, and 4 advertise no dry_run key at
-	// all; TestMaintenanceJobs_PreviewByDefault in internal/maintenance/jobs
-	// names each of the 8 with its reason and fails on any new one.
-	dryRun := advertisedDryRunDefault(job)
-	if reqDryRun != nil {
-		dryRun = *reqDryRun
+	// Update 2026-09-25 (owner: preview by default for every writing op): the
+	// 10 jobs that advertised false or nothing but DO honor dryRun now advertise
+	// true, so 32 of 38 preview on omission. The 4 that still advertise false
+	// (relink-report and the three scan-* reports) ignore dryRun, and 2
+	// (bulk-fetch-metadata, scan-chapter-groups) advertise no dry_run key and
+	// also ignore it. TestMaintenanceJobs_PreviewByDefault in
+	// internal/maintenance/jobs names each of the 6 with its reason and fails on
+	// any new one; TestMaintenanceJobs_NoPreviewModeJobsIgnoreDryRun fails if an
+	// exempt job's Run starts reading dryRun.
+	//
+	// A body that sends dry_run and dryRun with different values is a 400.
+	dryRun, modeErr := opmode.ResolveDryRunDefault(maintenanceOpID(jobID), reqDryRun, reqDryRunCamel, advertisedDryRunDefault(job))
+	if modeErr != nil {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+modeErr.Error())
+		return
 	}
 
 	// A job that can tell a request is unsafe before it runs says so here,
@@ -261,6 +278,11 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// route ENCODES, which is what made it a filter.
 	params["job_id"], _ = json.Marshal(jobID)
 	params["dry_run"], _ = json.Marshal(dryRun)
+	// The camelCase alias has been folded into the resolved dry_run above.
+	// Dropping it keeps one canonical key on the persisted row, so a resume or
+	// requeue reads exactly one mode and two requests that differ only in
+	// spelling dedupe as the same run.
+	delete(params, "dryRun")
 
 	// encoding/json marshals map keys in sorted order, so this byte shape is
 	// deterministic run to run — which EnqueueOp's dedupe requires, since

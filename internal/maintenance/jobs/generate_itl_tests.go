@@ -30,6 +30,7 @@ func (j *generateITLTestsJob) Category() string { return "Dev" }
 func (j *generateITLTestsJob) Description() string {
 	return "Generates a suite of .itl test files for iTunes parser testing"
 }
+
 // DefaultParams advertises dry_run:true: a live run RemoveAll's the output
 // directory and regenerates it, and Run has a preview branch that does neither.
 // Until 2026-09-25 it advertised nothing, so an empty request ran live.
@@ -38,7 +39,7 @@ func (j *generateITLTestsJob) DefaultParams() any {
 		DryRun bool `json:"dry_run"`
 	}{DryRun: true}
 }
-func (j *generateITLTestsJob) CanResume() bool    { return false }
+func (j *generateITLTestsJob) CanResume() bool { return false }
 
 func (j *generateITLTestsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	if config.AppConfig.RootDir == "" {
