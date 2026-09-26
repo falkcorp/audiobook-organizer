@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-25
 
@@ -2789,54 +2789,6 @@ func (h *Handler) searchSeriesHits(ctx context.Context, lower string, limit int)
 		out = append(out, hit)
 	}
 	return out, complete
-}
-
-// ── shared item resolution ──────────────────────────────────────────────────
-
-// resolveItem turns a client-supplied libraryItemId into the live Book.
-//
-// It goes through ResolveSyncItem, which FOLLOWS MERGE REDIRECTS: a client that
-// still holds the syncID of a book that later lost a dedup merge resolves to the
-// surviving book instead of 404'ing and losing the user's place (spec §4.2). That
-// redirect-following is the entire reason libraryItemId is not the Book ULID.
-//
-// It writes the 404 itself and returns nil so callers can simply return.
-func (h *Handler) resolveItem(c *gin.Context) *database.Book {
-	book, _ := h.resolveItemAs(c)
-	return book
-}
-
-// resolveItemAs is resolveItem plus the libraryItemId the client addressed,
-// which differs from the book's canonical syncID when the client holds a merge
-// loser's id. Handlers whose body the client files under the id it asked with
-// (GET /api/items/:id, POST /api/items/:id/play) render with requestedID, not
-// the canonical id: AudioBooth keys its item page and local progress row by the
-// id it opened, and a body naming another id never reaches them.
-func (h *Handler) resolveItemAs(c *gin.Context) (book *database.Book, requestedID string) {
-	syncID := strings.TrimSpace(c.Param("id"))
-	if syncID == "" {
-		respondError(c, http.StatusNotFound, "library item not found")
-		return nil, ""
-	}
-	item, err := h.identity.ResolveSyncItem(syncID)
-	if err != nil {
-		respondError(c, http.StatusInternalServerError, "could not resolve library item")
-		return nil, ""
-	}
-	if item == nil || item.CurrentBookID == "" {
-		respondError(c, http.StatusNotFound, "library item not found")
-		return nil, ""
-	}
-	book, err = h.library.GetBookByID(item.CurrentBookID)
-	if err != nil {
-		respondError(c, http.StatusInternalServerError, "could not load library item")
-		return nil, ""
-	}
-	if book == nil {
-		respondError(c, http.StatusNotFound, "library item not found")
-		return nil, ""
-	}
-	return book, syncID
 }
 
 // WarmContributors builds the author/narrator cache ahead of the first request.

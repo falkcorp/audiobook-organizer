@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/alias_echo_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: de050482-2489-42a2-ad9d-bc151b672b20
 // last-edited: 2026-09-25
 
@@ -8,9 +8,12 @@ package abs_test
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )
 
 // Owner report 2026-09-25: "marked finished, left the page, came back, not
@@ -240,41 +243,172 @@ func TestClientMediaProgress_AliasErrorKeepsCanonicalRows(t *testing.T) {
 	}
 }
 
-// TestClientMediaProgress_AliasRowShadowsAStaleLoserRow: a position left under
-// the merge loser's book renders under the loser's syncID; when that id is an
-// alias of a live item with progress, the list carries the live item's values
-// for it (what GET /api/me/progress/<id> serves), once.
-func TestClientMediaProgress_AliasRowShadowsAStaleLoserRow(t *testing.T) {
-	f := newUDFake()
-	f.addBook("winner", nil, 1800)
-	f.addBook("loser", nil, 1800)
-	f.presetSyncID("winner", udSyncID(1))
-	f.presetSyncID("loser", udSyncID(2))
-	now := time.Now()
-	f.addPosition("u1", "winner", "abs", 900, now)
-	f.addPosition("u1", "loser", "abs", 10, now.Add(-time.Hour))
-	f.aliases = map[string][]string{udSyncID(1): {udSyncID(2)}}
+// TestClientMediaProgress_StaleLoserRow: a position left under the merge
+// loser's book renders under the loser's syncID, which now redirects to a live
+// item with its own row. GET/PATCH /api/me/progress/<that id> serve the live
+// item, so the stale row is never sent as stored: when the client has used
+// the alias it is replaced by the live item's values, and when it has not it
+// is dropped (it would be a second "finished" in the client's stats).
+func TestClientMediaProgress_StaleLoserRow(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		used    []string
+		wantIDs []string
+	}{
+		{"alias used: live values under the alias", []string{udSyncID(2)}, []string{udSyncID(1), udSyncID(2)}},
+		{"alias unused: stale row dropped", nil, []string{udSyncID(1)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newUDFake()
+			f.addBook("winner", nil, 1800)
+			f.addBook("loser", nil, 1800)
+			f.presetSyncID("winner", udSyncID(1))
+			f.presetSyncID("loser", udSyncID(2))
+			now := time.Now()
+			f.addPosition("u1", "winner", "abs", 900, now)
+			f.addPosition("u1", "loser", "abs", 10, now.Add(-time.Hour))
+			f.aliases = map[string][]string{udSyncID(1): {udSyncID(2)}}
+			f.markUsed("u1", tc.used...)
 
-	rows, err := udProvider(t, f).ClientMediaProgress("u1")
-	if err != nil {
-		t.Fatalf("ClientMediaProgress: %v", err)
-	}
-	decoded := udRows(t, rows)
-	if len(decoded) != 2 {
-		t.Fatalf("got %d rows, want 2 (canonical + one alias row)", len(decoded))
-	}
-	for i := range decoded {
-		if udStr(t, decoded[i], "libraryItemId") == udSyncID(2) {
-			if got := decoded[i]["currentTime"].String(); got != "900" {
-				t.Fatalf("alias row currentTime = %s, want 900 (the live item's record, not the stale loser row)", got)
+			rows, err := udProvider(t, f).ClientMediaProgress("u1")
+			if err != nil {
+				t.Fatalf("ClientMediaProgress: %v", err)
 			}
+			decoded := udRows(t, rows)
+			var ids []string
+			for i := range decoded {
+				ids = append(ids, udStr(t, decoded[i], "libraryItemId"))
+				if got := decoded[i]["currentTime"].String(); got != "900" {
+					t.Fatalf("row %s currentTime = %s, want 900 (the live item's record, never the stale loser row)",
+						ids[len(ids)-1], got)
+				}
+			}
+			slices.Sort(ids)
+			if !slices.Equal(ids, tc.wantIDs) {
+				t.Fatalf("rows = %v, want %v", ids, tc.wantIDs)
+			}
+
+			// MediaProgress (browse filters, sorts) is untouched: one row per stored book.
+			plain, err := udProvider(t, f).MediaProgress("u1")
+			if err != nil || len(plain) != 2 {
+				t.Fatalf("MediaProgress = %d rows, err %v; want the 2 stored books", len(plain), err)
+			}
+		})
+	}
+}
+
+// TestClientMediaProgress_SeedKeepsAliasesOfRecentlyTouchedItems: on a user's
+// first list after the switch to tracked aliases, the aliases of items whose
+// progress changed since #3558 shipped are recorded (the client may hold rows
+// for them from #3558's list); older items' aliases are not. The seed runs once.
+func TestClientMediaProgress_SeedKeepsAliasesOfRecentlyTouchedItems(t *testing.T) {
+	f := newUDFake()
+	f.addBook("recent", nil, 1800)
+	f.addBook("old", nil, 1800)
+	f.presetSyncID("recent", udSyncID(1))
+	f.presetSyncID("old", udSyncID(2))
+	f.addPosition("u1", "recent", "abs", 900, time.Now())
+	f.addPosition("u1", "old", "abs", 900, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	f.aliases = map[string][]string{udSyncID(1): {udSyncID(8)}, udSyncID(2): {udSyncID(9)}}
+
+	p := udProvider(t, f)
+	for call := 1; call <= 2; call++ {
+		rows, err := p.ClientMediaProgress("u1")
+		if err != nil {
+			t.Fatalf("call %d: %v", call, err)
+		}
+		var ids []string
+		for _, r := range udRows(t, rows) {
+			ids = append(ids, udStr(t, r, "libraryItemId"))
+		}
+		slices.Sort(ids)
+		if want := []string{udSyncID(1), udSyncID(2), udSyncID(8)}; !slices.Equal(ids, want) {
+			t.Fatalf("call %d: rows = %v, want %v (the recent item's alias only)", call, ids, want)
 		}
 	}
+	if f.seedWrites != 1 || !f.seeded["u1"] || !slices.Equal(f.used["u1"], []string{udSyncID(8)}) {
+		t.Fatalf("seed writes=%d seeded=%v used=%v; want one seed recording only %s",
+			f.seedWrites, f.seeded["u1"], f.used["u1"], udSyncID(8))
+	}
+}
 
-	// MediaProgress (browse filters, sorts) is untouched: one row per stored book.
-	plain, err := udProvider(t, f).MediaProgress("u1")
-	if err != nil || len(plain) != 2 {
-		t.Fatalf("MediaProgress = %d rows, err %v; want the 2 stored books", len(plain), err)
+// TestClientMediaProgress_SeedWriteFailureRetries: a failed seed write still
+// sends the seeded rows and leaves the user unseeded, so the next list retries.
+func TestClientMediaProgress_SeedWriteFailureRetries(t *testing.T) {
+	f := newUDFake()
+	f.addBook("bk", nil, 1800)
+	f.presetSyncID("bk", udSyncID(1))
+	f.addPosition("u1", "bk", "abs", 900, time.Now())
+	f.aliases = map[string][]string{udSyncID(1): {udSyncID(8)}}
+	f.seedErr = errors.New("disk on fire")
+
+	p := udProvider(t, f)
+	for call := 1; call <= 2; call++ {
+		rows, err := p.ClientMediaProgress("u1")
+		if err != nil || len(rows) != 2 {
+			t.Fatalf("call %d: %d rows, err %v; want canonical + seeded alias row", call, len(rows), err)
+		}
+	}
+	if f.seedWrites != 2 || f.seeded["u1"] {
+		t.Fatalf("seed writes=%d seeded=%v; want a retry per list and no seeded mark", f.seedWrites, f.seeded["u1"])
+	}
+}
+
+// TestClientMediaProgress_AliasUseReadFailureFailsOpen: an unreadable alias
+// record sends the canonical list with no alias rows.
+func TestClientMediaProgress_AliasUseReadFailureFailsOpen(t *testing.T) {
+	f := newUDFake()
+	f.addBook("bk", nil, 1800)
+	f.presetSyncID("bk", udSyncID(1))
+	f.addPosition("u1", "bk", "abs", 900, time.Now())
+	f.aliases = map[string][]string{udSyncID(1): {udSyncID(8)}}
+	f.usedErr = errors.New("disk on fire")
+
+	rows, err := udProvider(t, f).ClientMediaProgress("u1")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("got %d rows, err %v; want the canonical row alone", len(rows), err)
+	}
+}
+
+// TestBookmarks_ListedUnderLiveAndUsedAliasIDs: /api/me bookmarks stored under
+// a merge loser's id are listed under the live id and under each alias the
+// client has used; a same-instant pair is listed once per id, canonical title.
+func TestBookmarks_ListedUnderLiveAndUsedAliasIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		used []string
+		want []string
+	}{
+		{"alias unused", nil, []string{
+			udSyncID(1) + "@10=pre", udSyncID(1) + "@30=new",
+		}},
+		{"alias used", []string{udSyncID(2)}, []string{
+			udSyncID(1) + "@10=pre", udSyncID(1) + "@30=new",
+			udSyncID(2) + "@10=pre", udSyncID(2) + "@30=new",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newUDFake()
+			f.addBook("winner", nil, 1800)
+			f.presetSyncID("winner", udSyncID(1))
+			f.aliases = map[string][]string{udSyncID(1): {udSyncID(2)}}
+			f.markUsed("u1", tc.used...)
+			f.addBookmark(progress.Bookmark{UserID: "u1", ItemID: udSyncID(2), TimeSec: 10, Title: "pre"})
+			f.addBookmark(progress.Bookmark{UserID: "u1", ItemID: udSyncID(2), TimeSec: 30, Title: "old"})
+			f.addBookmark(progress.Bookmark{UserID: "u1", ItemID: udSyncID(1), TimeSec: 30, Title: "new"})
+
+			rows, err := udProvider(t, f).Bookmarks("u1")
+			if err != nil {
+				t.Fatalf("Bookmarks: %v", err)
+			}
+			var got []string
+			for _, r := range udRows(t, rows) {
+				got = append(got, udStr(t, r, "libraryItemId")+"@"+r["time"].String()+"="+udStr(t, r, "title"))
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("bookmarks = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

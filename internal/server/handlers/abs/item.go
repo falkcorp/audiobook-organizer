@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/item.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9c8a2f60-1d75-4b38-a0e4-7f21b5c96d13
 // last-edited: 2026-09-25
 
@@ -44,7 +44,7 @@ const absProgressSegmentID = "abs"
 //     ?include=progress. §1.6 item 3: some clients ignore the gate, and an
 //     absent-but-known progress is indistinguishable from "never started".
 func (h *Handler) Item(c *gin.Context) {
-	book, requestedID := h.resolveItemAs(c)
+	book, ref := h.resolveItemAs(c)
 	if book == nil {
 		return
 	}
@@ -61,7 +61,7 @@ func (h *Handler) Item(c *gin.Context) {
 	// this request's own copy; the book and its storage stay canonical, and
 	// every URL built from the id (tracks, cover) resolves back through the
 	// same redirect.
-	view.SyncID = requestedID
+	view.SyncID = ref.RequestedID
 
 	out := itemWithProgressDTO{libraryItemExpandedDTO: h.expandedItem(view)}
 	if user, ok := servermiddleware.CurrentUser(c); ok && user != nil {

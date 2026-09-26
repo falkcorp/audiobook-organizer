@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/audiobooth_fixtures_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e8a2c17-94b3-4d6f-a0e1-7c3b9f24d8a6
 // last-edited: 2026-09-25
 
@@ -178,7 +178,7 @@ func newAudioBoothRun(t *testing.T) *audioboothRun {
 	seed := seedAudioBoothLibrary(t)
 	bm := newFakeBookmarks()
 	provider, err := abshandler.NewUserData(abshandler.UserDataOptions{
-		Progress: seed.lib, Bookmarks: bm, Identity: seed.lib, Library: seed.lib,
+		Progress: seed.lib, Bookmarks: bm, Identity: seed.lib, Library: seed.lib, AliasUses: seed.lib,
 	})
 	if err != nil {
 		t.Fatalf("NewUserData: %v", err)

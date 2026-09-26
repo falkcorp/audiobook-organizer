@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/remove_continue_listening_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c07d13a-b284-4e59-90f7-1a53e2c8b046
-// last-edited: 2026-08-02
+// last-edited: 2026-09-25
 
 package abs_test
 
@@ -61,7 +61,7 @@ func TestRemoveFromContinueListening_ClientsExactCall(t *testing.T) {
 
 // TestRemoveFromContinueListening_AcceptsTheLibraryItemIDToo — the client sends the
 // row id, but the bare libraryItemId is the other id a client can plausibly hold,
-// and resolveBookID accepts both. Pinned so the tolerance is not lost.
+// and lookupItemRef (item_ref.go) accepts both. Pinned so the tolerance is not lost.
 func TestRemoveFromContinueListening_AcceptsTheLibraryItemIDToo(t *testing.T) {
 	w := newWriteHarness(t)
 	w.patch(t, map[string]any{"currentTime": 600.0})
