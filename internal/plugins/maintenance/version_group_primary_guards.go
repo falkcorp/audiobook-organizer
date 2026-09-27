@@ -1,16 +1,15 @@
 // file: internal/plugins/maintenance/version_group_primary_guards.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5b0f3e7a-9c41-4d2e-8f6a-2d7c1e4b9a63
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 package maintenance
 
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
 // Group-level refusals of version-group-primary-repair. A group carrying one
@@ -22,11 +21,11 @@ const (
 	// hands-off). The whole group is skipped, not just that member, because
 	// demoting or crowning a sibling changes what ABS shows for the iTunes
 	// copy too.
-	vgDecisionSkipITunes = "skipped_itunes"
+	vgDecisionSkipITunes = repairs.SkipITunes
 	// vgDecisionSkipOwnerManual: some member's path or series is Doctor Who /
 	// Big Finish / Torchwood, which the owner applies by hand
 	// (applygate.IsOwnerManualOnly).
-	vgDecisionSkipOwnerManual = "skipped_owner_manual"
+	vgDecisionSkipOwnerManual = repairs.SkipOwnerManual
 	// vgDecisionRefuseNotOrganized: a writable decision whose winner is not
 	// an organized book. Elect and the revive path never produce one; this is
 	// the belt-and-braces check behind "never demote an organized member in
@@ -39,7 +38,9 @@ const (
 // checked, live or not: a merge loser's files are still on disk and still
 // part of what the group shows. Paths come from every book_file row, missing
 // ones included; Book.FilePath is checked as well because it is what older
-// rows carry, and a false positive here only skips a group.
+// rows carry, and a false positive here only skips a group. The per-book
+// check is repairs.GuardBookPaths, the same one the Repairs framework runs on
+// every row, so the two can never disagree about a book.
 func vgGroupGuard(store OpsStore, seriesNames map[int]string, members []database.Book) (kind, reason string, err error) {
 	for i := range members {
 		b := &members[i]
@@ -56,19 +57,12 @@ func vgGroupGuard(store OpsStore, seriesNames map[int]string, members []database
 		for _, f := range files {
 			paths = append(paths, f.FilePath)
 		}
-		for _, p := range paths {
-			if p != "" && pathutil.UnderFrozenITunesTree(p) {
-				return vgDecisionSkipITunes, fmt.Sprintf("member %s has a file under books/itunes/** (hands-off): %s", b.ID, p), nil
-			}
-		}
 		series := ""
 		if b.SeriesID != nil {
 			series = seriesNames[*b.SeriesID]
 		}
-		for _, p := range paths {
-			if applygate.IsOwnerManualOnly(p, series) {
-				return vgDecisionSkipOwnerManual, fmt.Sprintf("member %s is Doctor Who / Big Finish / Torchwood (path %q, series %q); owner applies these by hand", b.ID, p, series), nil
-			}
+		if kind, why := repairs.GuardBookPaths(b.ID, paths, series); kind != "" {
+			return kind, why, nil
 		}
 	}
 	return "", "", nil

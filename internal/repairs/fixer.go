@@ -29,6 +29,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
 // Risk values of a Row.
@@ -95,11 +97,11 @@ type Fixer interface {
 	// Plan returns every row of the whole-library plan, applicable and
 	// skipped alike, with no cap: the rows endpoint pages them. params are
 	// the fixer's own (the plan op passes them through).
-	Plan(ctx context.Context, params json.RawMessage) ([]Row, error)
+	Plan(ctx context.Context, params json.RawMessage, reporter registry.Reporter) ([]Row, error)
 	// Replan re-reads the state of one planned row and returns the row as a
 	// plan made now would produce it (same RowID). An error fails that row,
 	// not the run.
-	Replan(ctx context.Context, params json.RawMessage, planned Row) (Row, error)
+	Replan(ctx context.Context, params json.RawMessage, planned Row, reporter registry.Reporter) (Row, error)
 	// Apply writes one fresh row, through w only. Returning
 	// ErrChangedSincePlan (wrapped or not) marks the row changed_since_plan.
 	Apply(ctx context.Context, w *Writer, fresh Row) error
