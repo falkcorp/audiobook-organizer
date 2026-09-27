@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
 // last-edited: 2026-09-27
 
@@ -485,7 +485,7 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 	a := &vgApplier{store: store, reporter: reporter, apply: params.Apply, seriesNames: seriesNames}
 	holderID, held := "", false
 	if params.Apply {
-		a.writer = repairs.NewWriter(store, vps, vgRepairSource, vgRepairChangeType, vgRepairBatchPrefix, log)
+		a.writer = repairs.NewWriter(store, vps, vgRepairSource, vgRepairChangeType, vgRepairBatchPrefix)
 		// Never refused for a running scan (owner ruling 2026-09-27): the
 		// stand-down pauses it, and a scan that will not park yet is waited
 		// out, not treated as a failure. Only the op's own cancel/timeout

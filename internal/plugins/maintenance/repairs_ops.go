@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
 // last-edited: 2026-09-27
 
@@ -148,7 +148,7 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 		StandDown: p.deps, OpID: opID, Wait: p.standDownWait,
 	}
 	if !dryRun {
-		deps.Writer = repairs.NewWriter(store, vps, f.ID(), "bulk_update", "repairs-", reporter.Logger())
+		deps.Writer = repairs.NewWriter(store, vps, f.ID(), "bulk_update", "repairs-")
 	}
 	res, runErr := repairs.RunApply(ctx, f, plan, params.PlanOpID, params.RowIDs, dryRun, deps, reporter)
 	// The per-row report is written before any error returns, the lost-lease

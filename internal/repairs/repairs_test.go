@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-09-27
 
@@ -249,7 +249,7 @@ func planFor(t *testing.T, s *memStore, f Fixer) *PlanResult {
 
 func deps(s *memStore, sd StandDown) ApplyDeps {
 	return ApplyDeps{Guard: s, Series: seriesNamer, StandDown: sd, OpID: "op-apply",
-		Writer: NewWriter(s, s, "trim-titles", "bulk_update", "rp-", nil), Wait: immediate, Concurrency: 3}
+		Writer: NewWriter(s, s, "trim-titles", "bulk_update", "rp-"), Wait: immediate, Concurrency: 3}
 }
 
 // ---- plan + guards ----
@@ -654,7 +654,7 @@ func TestWriter_HistoryFailureWritesIncompleteMarker(t *testing.T) {
 	s := newMemStore()
 	s.add("b1", "Old", "/lib/a.m4b", nil)
 	s.failHistory = "title"
-	w := NewWriter(s, s, "src", "bulk_update", "rp-", nil)
+	w := NewWriter(s, s, "src", "bulk_update", "rp-")
 	changed, err := w.Modify("b1", func(b *database.Book) error {
 		b.Title = "New"
 		n := "Narr"

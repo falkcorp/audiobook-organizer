@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
 // last-edited: 2026-09-27
 
@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -29,6 +28,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
@@ -315,7 +315,8 @@ func (h *Handler) enqueue(c *gin.Context, defID, fixerID, lastKey string, params
 	}
 	if h.ops != nil {
 		if err := h.ops.SetSetting(lastKey, opID, "string", false); err != nil {
-			slog.Warn("repairs: last-run pointer not recorded", "key", lastKey, "op_id", opID, "err", err)
+			logger.New("repairs").Warn("repairs: last-run pointer not recorded: key=%s op_id=%s err=%s",
+				logger.SanitizeLogValue(lastKey), logger.SanitizeLogValue(opID), logger.SanitizeLogValue(err.Error()))
 		}
 	}
 	c.JSON(http.StatusAccepted, gin.H{"data": resp})
