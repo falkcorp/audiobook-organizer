@@ -1,5 +1,5 @@
 // file: internal/ai/cover_text.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a4c2e71-3b8d-4f16-a5e0-8d7c1b6f2e93
 // last-edited: 2026-09-26
 
@@ -270,7 +270,15 @@ func ParseCoverTextReply(content string) (*covertext.Text, error) {
 	body := stripJSONFence(content)
 	var w coverTextReply
 	if err := json.Unmarshal([]byte(body), &w); err != nil {
-		return nil, newReplyParseError(fmt.Errorf("cover text reply is not a JSON object: %w", err), content)
+		// Covers often carry quoted review blurbs, and the vision model copies
+		// their quote marks into the JSON unescaped. Retry once with those
+		// escaped before giving up.
+		if rerr := json.Unmarshal([]byte(escapeStrayQuotes(body)), &w); rerr == nil {
+			err = nil
+		}
+		if err != nil {
+			return nil, newReplyParseError(fmt.Errorf("cover text reply is not a JSON object: %w", err), content)
+		}
 	}
 	authors, err := lenientStrings(w.Authors, w.Author)
 	if err != nil {
@@ -298,4 +306,49 @@ func ParseCoverTextReply(content string) (*covertext.Text, error) {
 		Publisher:    strings.TrimSpace(w.Publisher),
 		OtherText:    other,
 	}, nil
+}
+
+// escapeStrayQuotes escapes double quotes that sit inside a JSON string but
+// cannot be its closing quote: a quote closes the string only when the next
+// non-space character is one of , : ] } or the end of input. Any other quote
+// is treated as literal text, as in ["\"GREAT BOOK!\" -Reviewer"] written
+// by the model as [""GREAT BOOK!" -Reviewer"]. Valid JSON is returned
+// unchanged, because in valid JSON every closing quote is followed by one of
+// those characters.
+func escapeStrayQuotes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	inString := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !inString {
+			if c == '"' {
+				inString = true
+			}
+			b.WriteByte(c)
+			continue
+		}
+		switch c {
+		case '\\':
+			b.WriteByte(c)
+			if i+1 < len(s) {
+				i++
+				b.WriteByte(s[i])
+			}
+		case '"':
+			j := i + 1
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+				j++
+			}
+			if j == len(s) || strings.IndexByte(",:]}", s[j]) >= 0 {
+				inString = false
+				b.WriteByte(c)
+			} else {
+				b.WriteString(`\"`)
+			}
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
