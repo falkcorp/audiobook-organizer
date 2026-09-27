@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_guards.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0f3e7a-9c41-4d2e-8f6a-2d7c1e4b9a63
 // last-edited: 2026-09-26
 
@@ -37,9 +37,9 @@ const (
 // vgGroupGuard returns a skip decision and its reason for a group that must
 // not be touched, or "" when the group may be planned. Every member is
 // checked, live or not: a merge loser's files are still on disk and still
-// part of what the group shows. Paths come from the active book_file rows;
-// Book.FilePath is checked as well because it is what older rows carry, and a
-// false positive here only skips a group.
+// part of what the group shows. Paths come from every book_file row, missing
+// ones included; Book.FilePath is checked as well because it is what older
+// rows carry, and a false positive here only skips a group.
 func vgGroupGuard(store OpsStore, seriesNames map[int]string, members []database.Book) (kind, reason string, err error) {
 	for i := range members {
 		b := &members[i]
@@ -51,10 +51,10 @@ func vgGroupGuard(store OpsStore, seriesNames map[int]string, members []database
 			return "", "", fmt.Errorf("read files of %s: %w", b.ID, ferr)
 		}
 		paths := []string{b.FilePath}
+		// Missing rows count too: the hands-off rules are about where the
+		// book lives, not whether its file is on disk right now.
 		for _, f := range files {
-			if !f.Missing {
-				paths = append(paths, f.FilePath)
-			}
+			paths = append(paths, f.FilePath)
 		}
 		for _, p := range paths {
 			if p != "" && pathutil.UnderFrozenITunesTree(p) {

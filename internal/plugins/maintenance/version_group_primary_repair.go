@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
 // last-edited: 2026-09-26
 
@@ -432,10 +432,6 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 		}
 		sort.Strings(work)
 	}
-	if params.Limit > 0 && len(work) > params.Limit {
-		report.Limit, report.LimitedOut = params.Limit, len(work)-params.Limit
-		work = work[:params.Limit]
-	}
 	report.Candidates = len(work)
 	for _, gid := range work {
 		switch c := counts[gid]; {
@@ -450,6 +446,12 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 		}
 	}
 	report.MultiPrimary, report.NoPrimary = report.MultiExplicit, report.ZeroExplicit
+	// The limit applies after the census above, so candidates and the
+	// multi/no-primary counts stay whole-library totals in a limited run.
+	if params.Limit > 0 && len(work) > params.Limit {
+		report.Limit, report.LimitedOut = params.Limit, len(work)-params.Limit
+		work = work[:params.Limit]
+	}
 	log.Info("version-group-primary-repair candidates", "apply", params.Apply, "candidates", len(work),
 		"requested", len(requested), "unmatched", len(report.RequestedUnmatched), "not_candidate", len(report.RequestedNotCandidate))
 	if len(work) == 0 {
