@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_applycap_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2c9d5e71-8f4b-4a3e-b6d0-7e1c3a5f9d24
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 package metabatch
 

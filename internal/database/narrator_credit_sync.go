@@ -1,7 +1,7 @@
 // file: internal/database/narrator_credit_sync.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 77463a64-b525-48cd-ae77-98e41f13a135
-// last-edited: 2026-09-23
+// last-edited: 2026-09-27
 
 package database
 

@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.17.0
+// version: 1.18.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-09-13
+// last-edited: 2026-09-27
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -568,7 +568,9 @@ describe('dispatch', () => {
 
   it('pins the candidate the row showed when Apply was clicked, not the one after a refresh', async () => {
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('a', { candidate_hash: 'h-shown' }, { title: 'Shown', asin: 'B001' })])
+      reviewPayload([
+        makeResult('a', { candidate_hash: 'h-shown' }, { title: 'Shown', asin: 'B001' }),
+      ])
     );
     vi.mocked(api.batchApplyFromCache).mockResolvedValue({
       op_id: 'op-pin',
@@ -624,9 +626,11 @@ describe('dispatch', () => {
   });
 
   // Bulk buttons (Apply page, Apply high confidence, group Apply All, Apply
-  // selected) all dispatch applySelected. Nobody looked at each row, so they
-  // send NO pins and every book gets the full certainty gate.
-  it('sends no pins for a selected batch, even for rows that carry a hash', async () => {
+  // selected) all dispatch applySelected. Owner ruling 2026-09-27: every
+  // review-page apply button is the owner's manual apply, so each book is
+  // pinned ('review_bulk') and the server lifts the same certainty refusals a
+  // single-row Apply lifts.
+  it('pins every book of a selected batch with the candidate its row shows', async () => {
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(
       reviewPayload([
         makeResult('a', { candidate_hash: 'h-a' }, { isbn13: '9780000000001' }),
@@ -647,7 +651,61 @@ describe('dispatch', () => {
       result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a', 'b'] });
     });
 
-    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, undefined);
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {
+      a: {
+        origin: 'review_bulk',
+        content_hash: 'h-a',
+        source: 'audible',
+        title: 'Cand a',
+        author: 'A',
+        isbn13: '9780000000001',
+      },
+      b: {
+        origin: 'review_bulk',
+        content_hash: 'h-b',
+        source: 'audible',
+        title: 'Cand b',
+        author: 'A',
+      },
+    });
+  });
+
+  // A bulk button can apply a book the lane holds no candidate hash for: the
+  // row came without one, or the selection outlived a refresh that dropped
+  // the row. It still goes as the owner's apply, with the hashless marker.
+  it('sends the owner marker for a bulk-applied book with no loaded hash', async () => {
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload([makeResult('a', { candidate_hash: 'h-a' }), makeResult('b')])
+    );
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op-marker',
+    } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.filteredResults).toHaveLength(2));
+
+    await act(async () => {
+      result.current.dispatch({
+        lane: 'metadata',
+        type: 'applySelected',
+        ids: ['a', 'b', 'gone'],
+      });
+    });
+
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b', 'gone'], undefined, {
+      a: {
+        origin: 'review_bulk',
+        content_hash: 'h-a',
+        source: 'audible',
+        title: 'Cand a',
+        author: 'A',
+      },
+      b: { origin: 'review_bulk' },
+      gone: { origin: 'review_bulk' },
+    });
   });
 
   it('hides a dispatched selected batch immediately', async () => {
@@ -669,7 +727,10 @@ describe('dispatch', () => {
     );
 
     await waitFor(() =>
-      expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, undefined)
+      expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {
+        a: { origin: 'review_bulk' },
+        b: { origin: 'review_bulk' },
+      })
     );
     // The server accepted the operation, so the default "Hide applied" filter
     // must remove it immediately; waiting for the worker to finish leaves stale

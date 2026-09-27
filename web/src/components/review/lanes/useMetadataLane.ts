@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.16.0
+// version: 1.17.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-09-13
+// last-edited: 2026-09-27
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -35,7 +35,12 @@
 // deliberate drop rather than leaving the row to rot.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CandidatePin, CandidateResult, MetadataCandidate } from '../../../services/api';
+import type {
+  ApplyPin,
+  CandidatePin,
+  CandidateResult,
+  MetadataCandidate,
+} from '../../../services/api';
 import * as api from '../../../services/api';
 import { isAuthRedirectError } from '../../../utils/apiFetch';
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
@@ -48,15 +53,20 @@ import type { MetadataAction } from '../reviewActions';
 const APPLY_INFLIGHT_MAX_MS = 60 * 60 * 1000;
 
 /**
- * The pin for the candidate ONE row is showing. Clicking Apply on a single row
- * IS the owner's review of that candidate, and the pin is how the server knows
- * the candidate it applies is the one that was reviewed (see api.CandidatePin).
- * contentHash is the row's server-issued candidate_hash; the identity fields
- * ride along so a refusal can name what changed. Bulk buttons never pin.
+ * The pin for the candidate a row is showing. Every apply button on the review
+ * page IS the owner's review (owner ruling 2026-09-27), and the pin is how the
+ * server knows the candidate it applies is the one that was shown (see
+ * api.CandidatePin). contentHash is the row's server-issued candidate_hash;
+ * the identity fields ride along so a refusal can name what changed. origin
+ * is 'row' for the single-row Apply and 'review_bulk' for the bulk buttons.
  */
-export function pinOfCandidate(c: MetadataCandidate, contentHash: string): CandidatePin {
+export function pinOfCandidate(
+  c: MetadataCandidate,
+  contentHash: string,
+  origin: CandidatePin['origin'] = 'row'
+): CandidatePin {
   const pin: CandidatePin = {
-    origin: 'row',
+    origin,
     content_hash: contentHash,
     source: c.source,
     title: c.title,
@@ -919,13 +929,36 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const applyPinsRef = useRef<Map<string, CandidatePin>>(new Map());
 
   // The pin for the candidate one row is showing right now. A row with no
-  // candidate, or no server-issued candidate_hash, gets no pin, and the server
-  // hard-gates it.
+  // candidate, or no server-issued candidate_hash, gets no pin from the
+  // single-row Apply, and the server hard-gates it.
   const rowPinFor = useCallback(
     (id: string): CandidatePin | undefined => {
       const r = results.find((x) => x.book.id === id);
       if (!r?.candidate || !r.candidate_hash) return undefined;
       return pinOfCandidate(r.candidate, r.candidate_hash);
+    },
+    [results]
+  );
+
+  // The pins a bulk button sends: every book it applies is the owner's manual
+  // apply (owner ruling 2026-09-27). A book whose row is loaded with a
+  // candidate_hash gets a 'review_bulk' pin of the candidate it shows, so a
+  // cache refetched since the page loaded is still refused as stale. A book
+  // the lane holds no hash for (the selection outlived a refresh that dropped
+  // its row, or the row came without a hash) gets the hashless owner marker:
+  // still owner-reviewed, on whatever the server's top candidate is.
+  const bulkPinsFor = useCallback(
+    (ids: string[]): Record<string, ApplyPin> => {
+      const byId = new Map(results.map((r) => [r.book.id, r]));
+      const pins: Record<string, ApplyPin> = {};
+      for (const id of ids) {
+        const r = byId.get(id);
+        pins[id] =
+          r?.candidate && r.candidate_hash
+            ? pinOfCandidate(r.candidate, r.candidate_hash, 'review_bulk')
+            : { origin: 'review_bulk' };
+      }
+      return pins;
     },
     [results]
   );
@@ -976,7 +1009,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const runApplyOp = useCallback(
     async (
       requestedIds: string[],
-      pins?: Record<string, CandidatePin>,
+      pins?: Record<string, ApplyPin>,
       writeBack?: boolean
     ): Promise<void> => {
       const dispatched = await api.batchApplyFromCache(requestedIds, writeBack, pins);
@@ -1029,7 +1062,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     const ids = [...applyQueueRef.current];
     applyQueueRef.current = [];
     if (ids.length === 0) return;
-    const pins: Record<string, CandidatePin> = {};
+    const pins: Record<string, ApplyPin> = {};
     for (const id of ids) {
       const pin = applyPinsRef.current.get(id);
       if (pin) pins[id] = pin;
@@ -1072,10 +1105,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       retainInFlight(bookIds);
       clearServerDerived(bookIds);
       try {
-        // NO pins. Apply page, Apply high confidence, group Apply All and Apply
-        // selected are bulk actions: nobody looked at each row, so every book
-        // gets the server's full certainty gate, exactly as before pins existed.
-        await runApplyOp(bookIds);
+        // Apply page, Apply high confidence, group Apply All and Apply
+        // selected are the owner's manual apply too (owner ruling
+        // 2026-09-27): every book is pinned, so the server lifts the same
+        // certainty refusals a single-row Apply lifts. Pins are captured now,
+        // at the click, from the rows the owner is looking at.
+        await runApplyOp(bookIds, bulkPinsFor(bookIds));
         // Dispatch acceptance is the point at which this batch belongs to the
         // background worker. Mark each row now so the default Hide applied
         // filter clears it immediately; the terminal poll then refreshes and
@@ -1100,7 +1135,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         setApplying(false);
       }
     },
-    [runApplyOp, handleApplyError, retainInFlight, clearServerDerived]
+    [runApplyOp, handleApplyError, retainInFlight, clearServerDerived, bulkPinsFor]
   );
 
   const reject = useCallback(

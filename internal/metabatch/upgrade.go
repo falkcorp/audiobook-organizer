@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 //
 // Background job that upgrades metadata from lower-quality sources
 // (primarily Google Books) to richer ones (Hardcover, Audible/Audnexus)

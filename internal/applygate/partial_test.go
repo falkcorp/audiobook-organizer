@@ -1,7 +1,7 @@
 // file: internal/applygate/partial_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6a2d8f31-0b9e-4c74-8e15-c3f7a9d02b86
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 package applygate
 
