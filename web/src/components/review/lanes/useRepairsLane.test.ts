@@ -11,7 +11,7 @@
 // services/api.repairs.test.ts, where the real client builds it.
 
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import * as api from '../../../services/api';
 import type {
   OperationV2,
@@ -107,7 +107,7 @@ function applyResult(extra: Partial<RepairApplyResult> = {}): RepairApplyResult 
   };
 }
 
-let toast: ReturnType<typeof vi.fn>;
+let toast: Mock<(message: string, severity?: 'success' | 'error' | 'warning' | 'info') => void>;
 let confirmSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
