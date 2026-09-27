@@ -1,18 +1,21 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.11.0
+// version: 2.0.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-27
 //
 // Background job that upgrades metadata from lower-quality sources
-// (primarily Google Books) to richer ones (Hardcover, Audible/Audnexus)
-// when a high-confidence match is available. Backlog 7.4.
+// (Open Library, Google Books, Wikipedia) to richer ones (Hardcover,
+// Audible/Audnexus) when a high-confidence match is available. Backlog 7.4.
 //
-// The upgrade targets books tagged with `metadata:source:google_books`
-// (or any other source considered "lower quality"). For each candidate,
-// the job re-runs the full metadata search pipeline against ALL
-// configured sources. If the best result comes from a source OTHER
-// than the current one and its confidence score exceeds a threshold,
-// the upgrade is applied automatically.
+// The upgrade targets books tagged `metadata:source:<slug>` for every slug
+// ranked at or below metafetch.LowQualitySourceMaxRank; the rank table in
+// internal/metafetch/source_rank.go is the only list. For each book, the job
+// re-runs the full metadata search pipeline against ALL configured sources.
+// A candidate may replace the book's metadata only when its source ranks
+// strictly higher than the book's current source (metafetch.SourceOutranks)
+// and it passes the shared bulk-apply gate (internal/applygate). Owner
+// decision 2026-09-27: such an upgrade REPLACES filled fields (user-locked
+// fields are still kept); see tryUpgradeBook.
 //
 // The job leverages the metadata fetch cache (PR #250) so re-fetches
 // for already-queried sources are free. Only sources that returned
@@ -22,9 +25,12 @@ package metabatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 
@@ -37,28 +43,58 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
 
+// UpgradeFetcher is the part of *metafetch.Service the upgrade uses: the
+// search and the apply. Tests substitute the search while keeping the real
+// apply.
+type UpgradeFetcher interface {
+	SearchMetadataForBook(id string, query string, authorHint ...string) (*metafetch.SearchMetadataResponse, error)
+	ApplyMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)
+}
+
 // MetadataUpgradeService finds books with low-quality metadata
 // sources and attempts to upgrade them to richer sources.
 type MetadataUpgradeService struct {
 	DB      Store
-	Fetcher *metafetch.Service
+	Fetcher UpgradeFetcher
 }
 
 // NewMetadataUpgradeService creates an upgrade service. The fetcher
 // provides the search + apply pipeline; the db provides the tag
-// lookup for finding eligible books.
+// lookup for finding eligible books. A nil fetcher leaves Fetcher nil (not a
+// typed nil inside the interface), so RunUpgrade reports it unconfigured.
 func NewMetadataUpgradeService(db Store, fetcher *metafetch.Service) *MetadataUpgradeService {
-	return &MetadataUpgradeService{DB: db, Fetcher: fetcher}
+	svc := &MetadataUpgradeService{DB: db}
+	if fetcher != nil {
+		svc.Fetcher = fetcher
+	}
+	return svc
 }
 
-// LowQualitySources lists the metadata sources that are considered
-// "lower quality" — books whose metadata came from these sources
-// are candidates for upgrade. The tag namespace is
-// metadata:source:<slug> (all lowercase, spaces → underscores).
-var LowQualitySources = []string{
-	"google_books",
-	"wikipedia",
-}
+// LowQualitySources lists the metadata source slugs whose books are
+// candidates for upgrade, in the order they are visited. It is derived from
+// the rank table (metafetch.LowQualitySourceSlugs: open_library,
+// google_books, wikipedia); there is no second list. The tag namespace is
+// metadata:source:<slug> (metafetch.MetadataSourceSlug).
+var LowQualitySources = metafetch.LowQualitySourceSlugs()
+
+// upgradeWorkers bounds how many books are searched and applied at once. The
+// work is network-bound (a metadata search per book), so a small fixed pool:
+// enough to overlap provider latency, few enough to stay inside the
+// providers' own rate limits. The book IDs are de-duplicated before dispatch
+// (and a book carries one metadata:source tag), so no two workers ever apply
+// to the same book.
+//
+// An apply also touches rows other than its own book: it resolves or creates
+// author/series rows, and when two books end up sharing a source hash it runs
+// the MATCH-4 primary election (checkMetadataSourceHashDuplicates) over every
+// book carrying that hash. Concurrent applies through that same path already
+// run in production at the same width: batch-apply-cached drives
+// ApplyMetadataCandidateWithOptions from registry.RunItems with
+// writeBackWorkers() (default 4). The election re-reads every book sharing
+// the hash and picks the survivor from their stored signals, so two books
+// upgraded to one record at once converge on the same primary whichever
+// commits last.
+const upgradeWorkers = 4
 
 // UpgradeResult summarizes what the upgrade job did.
 type UpgradeResult struct {
@@ -102,9 +138,15 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 		return nil, err
 	}
 
-	result := &UpgradeResult{}
-
+	// Collect up to limit distinct books, weakest-source lists in
+	// LowQualitySources order, before dispatching any work.
+	type item struct{ bookID, sourceSlug string }
+	var items []item
+	seen := map[string]bool{}
 	for _, sourceSlug := range LowQualitySources {
+		if len(items) >= limit {
+			break
+		}
 		tag := "metadata:source:" + sourceSlug
 		bookIDs, err := s.DB.GetBooksByTag(tag)
 		if err != nil {
@@ -112,38 +154,66 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 			continue
 		}
 		slog.Info("metadata-upgrade found books tagged", "count", len(bookIDs), "tag", tag)
-
 		for _, bookID := range bookIDs {
-			// Per-book stand-down beat: tryUpgradeBook is a network call, so the
-			// scan hold must be renewed per book, not per 25-book progress stamp.
-			if err := opsregistry.ScanStandDownCheckpoint(ctx); err != nil {
-				return result, err
-			}
-			if result.Checked >= limit {
+			if len(items) >= limit {
 				break
 			}
-			result.Checked++
-
-			upgraded, upgradeErr := s.tryUpgradeBook(ctx, bookID, sourceSlug)
-			if upgradeErr != nil {
-				slog.Warn("metadata-upgrade book", "id", bookID, "err", upgradeErr)
-				result.Errors++
+			if seen[bookID] {
 				continue
 			}
-			if upgraded {
-				result.Upgraded++
-			} else {
-				result.Skipped++
-			}
-
-			if progress != nil && (result.Checked%25 == 0 || result.Checked >= limit) {
-				_ = progress.UpdateProgress(result.Checked, limit, fmt.Sprintf(
-					"metadata upgrade: %d/%d books checked (%d upgraded, %d skipped, %d errors)",
-					result.Checked, limit, result.Upgraded, result.Skipped, result.Errors))
-			}
+			seen[bookID] = true
+			items = append(items, item{bookID, sourceSlug})
 		}
 	}
 
+	result := &UpgradeResult{}
+	total := len(items)
+	var mu sync.Mutex // guards result and the progress stamp
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(upgradeWorkers)
+	var stopErr error
+	for _, it := range items {
+		// Stop dispatching once the hold is lost or the op is canceled; the
+		// workers already running see the same through gctx.
+		if err := opsregistry.ScanStandDownCheckpoint(gctx); err != nil {
+			stopErr = err
+			break
+		}
+		g.Go(func() error {
+			// Per-book stand-down beat: tryUpgradeBook is a network call, so
+			// the scan hold must be renewed per book, right before its write,
+			// not per 25-book progress stamp. Safe for concurrent use.
+			if err := opsregistry.ScanStandDownCheckpoint(gctx); err != nil {
+				return err
+			}
+			upgraded, upgradeErr := s.tryUpgradeBook(gctx, it.bookID, it.sourceSlug)
+
+			mu.Lock()
+			defer mu.Unlock()
+			result.Checked++
+			switch {
+			case upgradeErr != nil:
+				slog.Warn("metadata-upgrade book", "id", it.bookID, "err", upgradeErr)
+				result.Errors++
+			case upgraded:
+				result.Upgraded++
+			default:
+				result.Skipped++
+			}
+			if progress != nil && (result.Checked%25 == 0 || result.Checked >= total) {
+				_ = progress.UpdateProgress(result.Checked, total, fmt.Sprintf(
+					"metadata upgrade: %d/%d books checked (%d upgraded, %d skipped, %d errors)",
+					result.Checked, total, result.Upgraded, result.Skipped, result.Errors))
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return result, err
+	}
+	if stopErr != nil {
+		return result, stopErr
+	}
 	return result, nil
 }
 
@@ -154,17 +224,24 @@ func transcriptionConfirmsCandidate(book *database.Book, c *metafetch.MetadataCa
 	return applygate.TranscriptionConfirms(book, c)
 }
 
-// tryUpgradeBook re-searches metadata for a single book and
-// applies the best non-current-source result if it's confident
-// enough. Returns true if an upgrade was applied.
+// tryUpgradeBook re-searches metadata for a single book and applies the best
+// candidate from a strictly higher-ranked source if the gate passes it.
+// Returns true if an upgrade was applied.
 func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, currentSourceSlug string) (bool, error) {
+	// An unranked current source is never replaced (metafetch.SourceOutranks
+	// refuses every candidate for it); skip before spending a search on it.
+	currentRank, ranked := metafetch.SourceRank(currentSourceSlug)
+	if !ranked {
+		return false, nil
+	}
 	book, err := s.DB.GetBookByID(bookID)
 	if err != nil || book == nil {
 		return false, fmt.Errorf("book not found: %s", bookID)
 	}
 	// The owner marked this book "no match": skip before the search so no
 	// provider quota is spent on a match that the apply would refuse anyway
-	// (ApplyMetadataCandidateWithOptions returns ErrMarkedNoMatch for FillOnly).
+	// (ApplyMetadataCandidateWithOptions returns ErrMarkedNoMatch for an
+	// automatic apply, which this is: UnseenCandidate below).
 	if metafetch.IsMarkedNoMatch(book.MetadataReviewStatus) {
 		return false, nil
 	}
@@ -200,45 +277,55 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		return false, fmt.Errorf("read authors: %w", aerr)
 	}
 
-	// Find the best candidate from a source OTHER than the current one.
+	// Find the best candidate from a source that strictly OUTRANKS the
+	// current one (metafetch.SourceOutranks): the same or a lower rank is
+	// never an upgrade, so an Audible book is never "upgraded" to Open
+	// Library, and Audible and Audnexus never replace each other. Among the
+	// ones the gate passes, the highest rank wins and score breaks ties, so
+	// an Open Library book lands on Audible rather than on a better-scoring
+	// Hardcover candidate that a later run would never revisit (hardcover is
+	// not a low-quality source).
 	var bestCandidate *metafetch.MetadataCandidate
+	bestRank := currentRank
+	bestSlug := ""
 	for i := range resp.Results {
 		c := &resp.Results[i]
-		candidateSlug := strings.ToLower(strings.ReplaceAll(c.Source, " ", "_"))
-		if strings.HasPrefix(candidateSlug, "audnexus") {
-			candidateSlug = "audnexus"
-		}
-		// Skip candidates from the same source we're trying to upgrade FROM.
-		if candidateSlug == currentSourceSlug {
+		candidateSlug := metafetch.MetadataSourceSlug(c.Source)
+		if !metafetch.SourceOutranks(candidateSlug, currentSourceSlug) {
 			continue
 		}
+		candidateRank, _ := metafetch.SourceRank(candidateSlug)
 
-		// The shared bulk-apply gate (internal/applygate): the transcription
-		// hard gate (a book with a transcribed title never takes a candidate
-		// that does not match it), the 0.90 / 0.85-with-audio score floor, and
-		// the sequence-number guard, so "Big Cats 3" can never upgrade
-		// "Big Cats 1" however well it scores. There is no cache-identity leg
-		// here: the candidates were searched a moment ago from the book's
-		// current fields, so nothing can have drifted.
+		// The shared bulk-apply gate (internal/applygate), unchanged by the
+		// replace mode: the transcription hard gate (a book with a transcribed
+		// title never takes a candidate that does not match it), the 0.90 /
+		// 0.85-with-audio score floor, and the sequence-number guard, so
+		// "Big Cats 3" can never upgrade "Big Cats 1" however well it scores.
+		// There is no owner override here: this is an automatic apply. There
+		// is no cache-identity leg either: the candidates were searched a
+		// moment ago from the book's current fields, so nothing can have
+		// drifted.
 		v := applygate.Evaluate(book, authors, rt, c, nil)
-		slog.Debug("upgrade gate", "id", bookID, "score", c.Score, "gate", v.ScoreFloor,
+		slog.Debug("upgrade gate", "id", bookID, "source", candidateSlug, "score", c.Score, "gate", v.ScoreFloor,
 			"transcription_confirms", v.AudioConfirmed, "allowed", v.Allowed, "reason", v.Reason, "detail", v.Detail)
 		if !v.Allowed {
 			continue
 		}
-		if bestCandidate == nil || c.Score > bestCandidate.Score {
-			bestCandidate = c
+		if bestCandidate == nil || candidateRank > bestRank || (candidateRank == bestRank && c.Score > bestCandidate.Score) {
+			bestCandidate, bestRank, bestSlug = c, candidateRank, candidateSlug
 		}
 	}
 
 	if bestCandidate == nil {
-		return false, nil // no better source found above threshold
+		return false, nil // no higher-ranked source passed the gate
 	}
 
-	// Apply the upgrade. ApplyMetadataCandidate handles:
+	// Apply the upgrade. ApplyMetadataCandidateWithOptions handles:
 	// - change history recording
 	// - metadata field application
-	// - provenance tagging (metadata:source:*, metadata:language:*)
+	// - provenance tagging (metadata:source:*, metadata:language:*), so the
+	//   book's source tag becomes the candidate's and the next run does not
+	//   visit it again
 	// - ISBN enrichment queueing
 	//
 	// It does NOT queue any file I/O. This comment said it queued "cover embed,
@@ -252,12 +339,48 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 	// never runs. The files keep their names until a later write-back or
 	// organize, which runs its own rename. If this op ever queues file work,
 	// add the preflight, gated the same way, before this call.
-	// Automatic apply: fill-only (owner decision A3#3).
-	_, applyErr := s.Fetcher.ApplyMetadataCandidateWithOptions(bookID, *bestCandidate, nil, metafetch.ApplyOptions{FillOnly: true})
+	//
+	// Replace, not fill. Until 2026-09-27 this apply was fill-only (owner
+	// decision A3#3: every automatic apply only fills empty fields), which
+	// made the job a no-op for its own purpose: a book whose description,
+	// publisher and so on came from Open Library kept them, and Audible's
+	// better values were dropped. The owner changed that on 2026-09-27 for
+	// rank upgrades only: a candidate from a strictly higher-ranked source
+	// that passes the gate REPLACES filled fields. This is the same apply path
+	// as the review page's bulk "Replace existing" (#3580: FillOnly false),
+	// with these differences:
+	//   - UnseenCandidate: nobody picked this candidate, so the apply keeps
+	//     the automatic guards: a book marked "no match" is refused (before
+	//     the apply and again under the write lock), and the match (review
+	//     status, MetadataSource, source hash) is recorded only when the book
+	//     ends up holding the candidate's title.
+	//   - RankUpgrade instead of OwnerReplace: history is labeled with the
+	//     rank upgrade, not an owner action, and a failed history write is
+	//     still an error because it is the only way to revert the overwrite.
+	// User-locked fields are kept on every apply, fill or replace:
+	// guardedApply strips them before anything is written.
+	opts := metafetch.ApplyOptions{
+		FillOnly:        false,
+		UnseenCandidate: true,
+		RankUpgrade:     fmt.Sprintf("rank upgrade: %s -> %s", currentSourceSlug, bestSlug),
+	}
+	_, applyErr := s.Fetcher.ApplyMetadataCandidateWithOptions(bookID, *bestCandidate, nil, opts)
 	if applyErr != nil {
+		// The owner marked the book "no match" while this run searched it:
+		// a skip, not a failure.
+		if errors.Is(applyErr, metafetch.ErrMarkedNoMatch) {
+			return false, nil
+		}
+		// The write committed but its change history did not: the overwrite
+		// stands and cannot be undone. Counted as an error, and said so.
+		if errors.Is(applyErr, metafetch.ErrApplyHistoryIncomplete) {
+			return false, fmt.Errorf("applied %s -> %s but change history was not recorded (not undoable): %w",
+				currentSourceSlug, bestSlug, applyErr)
+		}
 		return false, fmt.Errorf("apply failed: %w", applyErr)
 	}
 
-	slog.Info("metadata-upgrade upgraded", "id", bookID, "from", currentSourceSlug, "to", bestCandidate.Source, "score", bestCandidate.Score, "title", bestCandidate.Title)
+	slog.Info("metadata-upgrade upgraded", "id", bookID, "from", currentSourceSlug, "to", bestSlug,
+		"score", bestCandidate.Score, "title", bestCandidate.Title)
 	return true, nil
 }

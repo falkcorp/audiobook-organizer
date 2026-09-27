@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.57.1
+// version: 1.57.2
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-27
 
@@ -190,7 +190,6 @@ func (p *Plugin) Register(r sdk.Registry) error {
 
 		// --- metadata ---
 		p.metadataRefreshDef(),
-		p.metadataUpgradeDef(),
 		p.isbnEnrichmentDef(),
 		p.autoMatchTranscribedDef(),
 

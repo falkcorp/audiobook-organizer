@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.16.1
+// version: 1.17.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -644,7 +644,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 
 	ts.registerTask(TaskDefinition{
 		Name:        "metadata_upgrade",
-		Description: "Upgrade metadata from lower-quality sources (Google Books, Wikipedia) to richer ones (Hardcover, Audible) when a high-confidence match is available",
+		Description: "Replace metadata from lower-ranked sources (Open Library, Google Books, Wikipedia) with a higher-ranked source's (Hardcover, Audible) when its match passes the bulk-apply gate; user-locked fields are kept",
 		Category:    "maintenance",
 		TriggerFn: func(source string) (*database.Operation, error) {
 			store := ts.deps.Store()
@@ -657,10 +657,26 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "metadata-upgrade"), nil
 		},
-		IsEnabled:              func() bool { return ts.deps.HasMetadataFetchSvc() },
-		GetInterval:            func() time.Duration { return 0 },
-		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.MetadataRefresh },
+		// Its own interval, independent of the maintenance window (owner
+		// 2026-09-27). Until then it had no interval (GetInterval 0) and ran
+		// only in the window, gated on maintenance.metadata_refresh -- a
+		// different task's toggle, off in production -- so it never ran. It
+		// is scheduled whenever scheduled.metadata_upgrade.interval > 0, which
+		// PUT /api/v1/tasks/metadata_upgrade {"interval_minutes":N} sets; there
+		// is no separate enabled switch (see ScheduledTasksConfig.MetadataUpgrade).
+		// It is no longer in maintenanceOrder, so the window never runs it.
+		IsEnabled: func() bool {
+			return ts.deps.HasMetadataFetchSvc() && config.AppConfig.Scheduled.MetadataUpgrade.Interval > 0
+		},
+		GetInterval: func() time.Duration {
+			mins := config.AppConfig.Scheduled.MetadataUpgrade.Interval
+			if mins <= 0 {
+				return 0
+			}
+			return time.Duration(mins) * time.Minute
+		},
+		RunOnStart:             func() bool { return config.AppConfig.Scheduled.MetadataUpgrade.OnStartup },
+		RunInMaintenanceWindow: func() bool { return false },
 	})
 
 	ts.registerTask(TaskDefinition{

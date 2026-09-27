@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -242,18 +242,6 @@ func (s *Server) InvalidateSeriesCache() {
 	if s.seriesCache != nil {
 		s.seriesCache.InvalidateAll()
 	}
-}
-
-func (s *Server) MetadataUpgradeRun(ctx context.Context, limit int, progress operations.ProgressReporter) (checked, upgraded, skipped, errs int, err error) {
-	if s.metadataFetchService == nil {
-		return 0, 0, 0, 0, fmt.Errorf("metadata fetch service not initialized")
-	}
-	svc := NewMetadataUpgradeService(s.storeForWiring(), s.metadataFetchService)
-	result, err := svc.RunUpgrade(ctx, limit, progress)
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-	return result.Checked, result.Upgraded, result.Skipped, result.Errors, nil
 }
 
 func (s *Server) OptimizeAIScanStore(ctx context.Context) error {

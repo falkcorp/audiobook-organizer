@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c8cffbf7-1356-4211-ad0e-28307563161b
-// last-edited: 2026-09-13
+// last-edited: 2026-09-27
 
 // TODO.md scheduler-config item (was line 4563 as of commit 46628240): the
 // task-scheduler endpoints (list/run/configure tasks) and the
@@ -313,6 +313,22 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 				"interval_minutes":          "runs daily at 00:10 server-local time; the cutoff is local midnight whenever it runs",
 				"run_on_startup":            fixedScheduleHint,
 				"run_in_maintenance_window": "kept out of the window on purpose — a catch-up run can take 6h",
+			},
+		}, true
+	case "metadata_upgrade":
+		// Scheduled on its own interval, independent of the maintenance
+		// window (owner 2026-09-27). The task is scheduled whenever the
+		// interval is > 0, so interval_minutes alone turns it on (1440 =
+		// nightly) and 0 turns it off; there is no enabled switch to forget
+		// (see config.ScheduledTasksConfig.MetadataUpgrade).
+		return taskConfigBinding{
+			interval:  &sched.MetadataUpgrade.Interval,
+			onStartup: &sched.MetadataUpgrade.OnStartup,
+			hints: map[string]string{
+				"enabled": "metadata_upgrade is scheduled whenever interval_minutes > 0; " +
+					"set interval_minutes to 0 to stop it",
+				"run_in_maintenance_window": "metadata_upgrade runs on its own interval, " +
+					"not in the maintenance window",
 			},
 		}, true
 	case "library_organize":
