@@ -1,17 +1,21 @@
 // file: internal/applygate/owner_review.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e7b2c14-8d95-4f06-a1c3-6b9e0d4f7a28
-// last-edited: 2026-09-13
+// last-edited: 2026-09-27
 
 package applygate
 
 import "strings"
 
-// An OWNER-REVIEWED apply is one where the owner clicked Apply in the review
-// lane on the exact candidate the server would apply (the request pins it, and
-// the server checks the pin against the cache). The gate exists so that
-// UNREVIEWED bulk applies cannot corrupt data; on a reviewed apply the owner is
-// the review, so the certainty legs report but do not refuse.
+// An OWNER-REVIEWED apply is one the owner started from an apply button on the
+// review page: a single row or a bulk button (owner ruling 2026-09-27, every
+// review-page apply button is the owner's manual apply). The request pins the
+// candidate each book showed and the server checks the pin against the cache;
+// a book the lane held no candidate hash for carries a hashless owner marker
+// instead (metafetch.CandidatePin.IsUnseenOwnerReview). The gate exists so
+// that UNREVIEWED applies (scripts, API callers, the metadata upgrade,
+// scheduled ops) cannot corrupt data; on a reviewed apply the owner is the
+// review, so the certainty legs report but do not refuse.
 //
 // Overridden (they are judgements about how sure the match is):
 //   - score: score_below_floor and transcription_mismatch;

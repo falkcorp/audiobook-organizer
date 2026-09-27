@@ -25,7 +25,7 @@ func snap(b *database.Book) Authors {
 	}
 	return Authors{b.Author.Name}
 }
-func intp(i int) *int       { return &i }
+func intp(i int) *int { return &i }
 
 // TestCheckSequence is the table for the guard's decision rule. The Big Cats
 // rows are the owner's reported failure: every cross pairing of 1/2/3 must

@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 package server
 
@@ -136,8 +136,10 @@ const (
 	applySkipStaleCandidate = "stale_candidate"
 	// applySkipMarkedNoMatch: the owner marked the book "no match" and nobody
 	// picked this candidate, so an automatic apply leaves it alone. A
-	// review-lane approval (row pin) overrides the mark, as the single-book
-	// dialog does. The preview drops these books (excludedFromPreview).
+	// review-lane approval of the candidate (a hash-checked owner-review pin)
+	// overrides the mark, as the single-book dialog does; the hashless owner
+	// marker does not, since nobody was shown a candidate for that book. The
+	// preview drops these books (excludedFromPreview).
 	applySkipMarkedNoMatch = "marked_no_match"
 	// applySkipAuthorsUnreadable: the book's live author credits (AuthorID
 	// and the book_authors join) could not be read, so the certainty gate has
@@ -160,13 +162,14 @@ type cachedApplyPlan struct {
 	// OwnerReviewed: the gate refused, the request's pin matched, and every
 	// refusing leg is one an owner review overrides. Reason is then "".
 	OwnerReviewed bool
-	// ReviewApproved: the owner clicked Apply on this row in the review lane
-	// (a pin with origin "row" that matched the top cached candidate), whether
-	// the gate then passed or refused it. It is what makes the apply overwrite
-	// (owner ruling 2026-09-14, "any row I approve overwrites"). It is kept
-	// apart from OwnerReviewed on purpose: OwnerReviewed records a GATE
-	// OVERRIDE in the change history, and a row the gate passed overrode
-	// nothing.
+	// ReviewApproved: the owner applied this book from a review-page apply
+	// button (an owner-review pin: a single row or a bulk button, see
+	// metafetch.PinOriginRow / PinOriginReviewBulk), whether the gate then
+	// passed or refused it. It is what makes the apply overwrite (owner
+	// ruling 2026-09-14, "any row I approve overwrites"; 2026-09-27, every
+	// review-page apply button is the owner's manual apply). It is kept apart
+	// from OwnerReviewed on purpose: OwnerReviewed records a GATE OVERRIDE in
+	// the change history, and a row the gate passed overrode nothing.
 	ReviewApproved bool
 	// Pinnable: the plan came from a path that accepts an owner-review pin
 	// (planCachedApply). The op-results path (planOpResultApply) takes none,
@@ -222,14 +225,22 @@ func (p cachedApplyPlan) applyOptions() metafetch.ApplyOptions {
 // second one: choosing among candidates is what manual review is for.
 // claims is the batch's buildClaimIndex result (nil = no batch context).
 //
-// pin is the candidate the owner was looking at when they clicked Apply in the
-// review lane, nil for every other caller (scripts, API clients, the dry run).
-// The lane shows the same top cached candidate this applies, so a pin that no
-// longer matches means the cache was refetched since: stale_candidate, nothing
-// written. A matching pin makes the apply owner-reviewed: the gate still runs
-// and its verdict is reported, but a refusal from a certainty leg does not
-// block (applygate.OwnerReviewOverridable lists which legs still do). No pin
-// means the ordinary hard gate.
+// pin is the candidate the owner was looking at when they clicked an apply
+// button on the review page, nil for every other caller (scripts, API
+// clients, the dry run). The lane shows the same top cached candidate this
+// applies, so a pin that no longer matches means the cache was refetched
+// since: stale_candidate, nothing written. A matching owner-review pin (a
+// single row or a bulk button, owner ruling 2026-09-27) makes the apply
+// owner-reviewed: the gate still runs and its verdict is reported, but a
+// refusal from a certainty leg does not block
+// (applygate.OwnerReviewOverridable lists which legs still do).
+//
+// The one pin that is not matched is the hashless owner marker
+// (CandidatePin.IsUnseenOwnerReview): a bulk button applied a book the lane
+// held no candidate hash for. There is nothing to check for staleness, so it
+// is owner-reviewed on the top cached candidate as it stands, and it does not
+// lift a "no match" mark. No pin, or a pin of any other origin, means the
+// ordinary hard gate.
 func planCachedApply(svc cachedApplyService, books bookReader, id string, claims *applygate.ClaimIndex, pin *metafetch.CandidatePin) cachedApplyPlan {
 	entry, _, err := svc.GetCachedCandidates(id)
 	if err != nil || entry == nil || len(entry.Candidates) == 0 {
@@ -246,14 +257,16 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 		}
 		return cachedApplyPlan{Candidate: &cand, Reason: applySkipBookNotFound, Err: berr}
 	}
-	if pin != nil && !pin.Matches(cand) {
+	unseen := pin != nil && pin.IsUnseenOwnerReview()
+	if pin != nil && !unseen && !pin.Matches(cand) {
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipStaleCandidate,
 			Err: fmt.Errorf("reviewed candidate %q (%s) is no longer the top cached candidate %q (%s)", pin.Title, pin.Source, cand.Title, cand.Source)}
 	}
-	// A no-match book is left alone unless the owner approved this row in the
-	// review lane, which overrides their own mark (the apply then records the
-	// match, replacing no_match, like the single-book dialog).
-	if metafetch.IsMarkedNoMatch(book.MetadataReviewStatus) && (pin == nil || !pin.IsRowReview()) {
+	// A no-match book is left alone unless the owner approved this candidate
+	// in the review lane, which overrides their own mark (the apply then
+	// records the match, replacing no_match, like the single-book dialog).
+	// The hashless marker does not: nobody was shown this book's candidate.
+	if metafetch.IsMarkedNoMatch(book.MetadataReviewStatus) && (pin == nil || !pin.IsOwnerReview() || unseen) {
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipMarkedNoMatch,
 			Err: fmt.Errorf("book %s: %w", id, metafetch.ErrMarkedNoMatch)}
 	}
@@ -262,13 +275,14 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipAuthorsUnreadable, Err: aerr}
 	}
 	v := applygate.EvaluateInBatch(book, authors, gateRuntime(books, book), &cand, svc.ValidateCachedIdentityForBook(entry, book, authors), claims)
-	// A matching pin from a review row is the owner's approval of this row:
-	// its apply overwrites whether or not the gate needed lifting. A stale
-	// pin never gets here (stale_candidate above, nothing written).
-	approved := pin != nil && pin.IsRowReview()
+	// An owner-review pin (matched, or the hashless marker) is the owner's
+	// approval of this book: its apply overwrites whether or not the gate
+	// needed lifting. A stale pin never gets here (stale_candidate above,
+	// nothing written).
+	approved := pin != nil && pin.IsOwnerReview()
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true, ReviewApproved: approved}
 	if !v.Allowed {
-		// Only a single-row review earns the override. A pin of any other
+		// Only an owner-review pin earns the override. A pin of any other
 		// origin was still checked for staleness above, and gets the hard gate.
 		if approved && v.OwnerReviewOverridable() {
 			plan.OwnerReviewed = true

@@ -1,7 +1,7 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
-// last-edited: 2026-09-14
+// last-edited: 2026-09-27
 
 package metafetch
 
@@ -13,12 +13,25 @@ import (
 	"strings"
 )
 
-// PinOriginRow is the only pin origin that earns an owner-review override:
-// the owner clicked Apply on ONE review row, looking at that row's candidate.
-// Bulk buttons (Apply page, Apply high confidence, group Apply All, Apply
-// selected) send no pins at all, and a pin with any other origin is checked
-// for staleness but gets the ordinary hard gate.
-const PinOriginRow = "row"
+// Pin origins that earn an owner-review override. Owner ruling 2026-09-27:
+// EVERY apply button on the /review page is the owner's manual apply and
+// overrides the certainty gate the same way, not only the single-row Apply.
+// Scripts and API callers without one of these origins, and automatic applies
+// (the metadata upgrade, scheduled ops), stay fully gated. A pin with any
+// other origin is checked for staleness but gets the ordinary hard gate.
+const (
+	// PinOriginRow: the owner clicked Apply on ONE review row, looking at
+	// that row's candidate. Always carries the row's candidate_hash.
+	PinOriginRow = "row"
+	// PinOriginReviewBulk: a review-page bulk button (Apply selected, Apply
+	// page, Apply high confidence, group Apply All). For a book whose row the
+	// lane has loaded it carries that row's candidate_hash and identity, and
+	// is then checked for staleness exactly like a row pin. For a book the
+	// lane has no loaded row or hash for (the selection outlived a refresh
+	// that dropped the row, or the row was served without a hash) it is the
+	// hashless OWNER MARKER: IsUnseenOwnerReview.
+	PinOriginReviewBulk = "review_bulk"
+)
 
 // CandidatePin identifies the cached candidate a reviewer was LOOKING AT when
 // they clicked Apply. The review lane shows the top cached candidate
@@ -61,14 +74,35 @@ func CandidateHash(c MetadataCandidate) string {
 }
 
 // PinOf is the pin that identifies c, content hash included. Origin is left
-// empty: only the review lane's single-row Apply sets PinOriginRow.
+// empty: only the review lane sets an owner-review origin.
 func PinOf(c MetadataCandidate) CandidatePin {
 	return CandidatePin{ContentHash: CandidateHash(c), Source: c.Source, Title: c.Title, Author: c.Author,
 		ASIN: c.ASIN, ISBN: c.ISBN, ISBN10: c.ISBN10, ISBN13: c.ISBN13}
 }
 
-// IsRowReview reports whether p records a single-row owner review.
-func (p CandidatePin) IsRowReview() bool { return p.Origin == PinOriginRow }
+// IsOwnerReview reports whether p comes from an apply button on the review
+// page (any origin above), and so makes the apply owner-reviewed.
+func (p CandidatePin) IsOwnerReview() bool {
+	return p.Origin == PinOriginRow || p.Origin == PinOriginReviewBulk
+}
+
+// IsUnseenOwnerReview reports whether p is the hashless owner marker: a
+// review-page bulk button applied this book, but the lane held no candidate
+// hash for it, so there is no candidate to check for staleness. It still
+// makes the apply owner-reviewed (owner ruling 2026-09-27: every review-page
+// apply button overrides the gate), with two limits, both enforced by the
+// batch apply's planner (server.planCachedApply):
+//
+//   - it never lifts the owner's own "no match" mark: that mark is overridden
+//     only by an owner who was looking at the candidate (a hash-checked pin);
+//   - it is honoured only by the cached apply. The dry-run preview enqueues
+//     no pins at all, and the op-results apply (planOpResultApply) takes none.
+//
+// A hashless pin of any other origin is not a marker: it never Matches, so it
+// is refused as stale_candidate as before.
+func (p CandidatePin) IsUnseenOwnerReview() bool {
+	return p.Origin == PinOriginReviewBulk && p.ContentHash == ""
+}
 
 // Matches reports whether c is the candidate p was taken from: the content
 // hash must be present and equal, and so must every identity field

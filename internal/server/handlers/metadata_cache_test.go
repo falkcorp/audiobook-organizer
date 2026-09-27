@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.5.1
+// version: 2.6.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-09-13
+// last-edited: 2026-09-27
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //
@@ -893,4 +893,29 @@ func TestScanActiveLogAttrs(t *testing.T) {
 	t.Run("not scanning", func(t *testing.T) {
 		assert.Equal(t, []any{"library_scan_active", false}, handlers.ScanActiveLogAttrs(func() bool { return false }))
 	})
+}
+
+// TestBatchApplyFromCache_DryRunNeverForwardsOwnerPins pins that the preview
+// cannot be made owner-reviewed: a dry-run request carrying a row pin and the
+// hashless review_bulk owner marker enqueues the preview op WITHOUT them, so
+// every preview row is judged by the hard gate. The real apply forwards both.
+func TestBatchApplyFromCache_DryRunNeverForwardsOwnerPins(t *testing.T) {
+	body := `{"book_ids":["b1","b2"],%s"pins":{"b1":{"origin":"row","content_hash":"h1","source":"Audible","title":"T"},"b2":{"origin":"review_bulk"}}}`
+
+	ops := &capturingEnqueuer{}
+	c, _ := batchApplyCtx(fmt.Sprintf(body, `"dry_run":true,`))
+	newDispatchHandler(t, ops).BatchApplyFromCache(c)
+	require.Equal(t, 1, ops.calls)
+	assert.Equal(t, "metadata.bulk-apply-preview", ops.defID)
+	assert.NotContains(t, paramsMap(t, ops.params), "pins", "the preview must never receive owner pins")
+
+	ops = &capturingEnqueuer{}
+	c, _ = batchApplyCtx(fmt.Sprintf(body, `"dry_run":false,`))
+	newDispatchHandler(t, ops).BatchApplyFromCache(c)
+	require.Equal(t, 1, ops.calls)
+	assert.Equal(t, "metadata.batch-apply-cached", ops.defID)
+	pins, ok := paramsMap(t, ops.params)["pins"].(map[string]any)
+	require.True(t, ok, "the apply must forward the pins")
+	assert.Equal(t, map[string]any{"origin": "review_bulk", "source": "", "title": ""}, pins["b2"],
+		"the hashless owner marker reaches the op as sent")
 }

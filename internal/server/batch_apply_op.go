@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-09-14
+// last-edited: 2026-09-27
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -53,8 +53,9 @@ type batchApplyOpParams struct {
 	// books, which reads as the op having silently lost work.
 	OriginalTotal int `json:"original_total,omitempty"`
 	// Pins maps book id -> the candidate the owner was looking at when they
-	// clicked Apply in the review lane (see planCachedApply). Books without a
-	// pin get the hard certainty gate. Carried by the checkpoint and by the
+	// clicked an apply button on the review page, or the hashless owner
+	// marker (see planCachedApply). Books without a pin get the hard
+	// certainty gate. Carried by the checkpoint and by the
 	// queued-run merge: dropping it there would silently turn a reviewed
 	// apply back into a gated one that refuses everything.
 	Pins map[string]metafetch.CandidatePin `json:"pins,omitempty"`
@@ -203,9 +204,11 @@ func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMe
 	merged := batchApplyOpParams{WriteBack: current.WriteBack}
 	// Pins union too, the newer request deciding for every book it names: its
 	// pin (the candidate the owner looked at most recently) replaces the older
-	// one, and a book it names WITHOUT a pin loses the older pin. That second
-	// case is a bulk button pressed after a row review; the bulk request is
-	// the owner's latest word on that book, and it asked for the hard gate.
+	// one, and a book it names WITHOUT a pin loses the older pin. Every
+	// review-page button pins every book it applies (owner ruling
+	// 2026-09-27), so a pinless book in the newer request comes from a script
+	// or API caller; that request is the latest word on the book, and it asked
+	// for the hard gate.
 	if len(current.Pins)+len(next.Pins) > 0 {
 		merged.Pins = make(map[string]metafetch.CandidatePin, len(current.Pins)+len(next.Pins))
 		for id, pin := range current.Pins {
