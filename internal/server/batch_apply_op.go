@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-27
 //
@@ -59,6 +59,15 @@ type batchApplyOpParams struct {
 	// queued-run merge: dropping it there would silently turn a reviewed
 	// apply back into a gated one that refuses everything.
 	Pins map[string]metafetch.CandidatePin `json:"pins,omitempty"`
+	// Mode is the review page's bulk toggle (owner ruling 2026-09-27): ""
+	// fills empty fields (the default; "fill" is normalized to "" by the
+	// handler so a fill request stays byte-identical to one that named no
+	// mode), metafetch.BulkApplyModeReplace makes every book carrying a
+	// review_bulk pin overwrite. It changes nothing for any other book (see
+	// cachedApplyPlan.withBulkMode). Carried by the checkpoint, and a queued
+	// run never merges with a request of a different mode, so a fill request
+	// is never silently upgraded to replace.
+	Mode string `json:"mode,omitempty"`
 }
 
 // pinsFor keeps the pins of the books in ids, nil when none remain.
@@ -127,7 +136,8 @@ func summarizeBatchApplyQueued(params json.RawMessage) (int, int, string) {
 // re-deriving the slice arithmetic and proving only that the copy agrees with
 // itself.
 //
-// bookIDs is this attempt's work; watermark indexes into it.
+// bookIDs is this attempt's work; watermark indexes into it. pins and mode
+// are the run's own (batchApplyOpParams.Pins and .Mode).
 //
 // deferred is the books the write-back gate never let through. They sit BELOW
 // the watermark — runOne returned nil for them so the loop could keep going —
@@ -139,6 +149,8 @@ func batchApplyCheckpointState(
 	writeBack bool,
 	originalTotal, watermark int,
 	deferred []string,
+	pins map[string]metafetch.CandidatePin,
+	mode string,
 ) batchApplyOpParams {
 	watermark = min(max(watermark, 0), len(bookIDs))
 	remaining := bookIDs[watermark:]
@@ -161,10 +173,15 @@ func batchApplyCheckpointState(
 		}
 		remaining = owed
 	}
+	// The owner's pins travel with the books still owed (a resumed run
+	// without them would hard-gate every one), and so does the bulk mode (a
+	// resumed replace run without it would quietly fall back to fill).
 	return batchApplyOpParams{
 		BookIDs:       remaining,
 		WriteBack:     writeBack,
 		OriginalTotal: originalTotal,
+		Pins:          pinsFor(remaining, pins),
+		Mode:          mode,
 	}
 }
 
@@ -200,8 +217,19 @@ func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMe
 	if current.WriteBack != next.WriteBack {
 		return nil, false, nil
 	}
+	// A different bulk mode is a different request: merging a replace into a
+	// queued fill run (or the reverse) would change what the earlier click
+	// asked for. Declining is safe for the same reason as the cap below: the
+	// second request queues and runs on its own. Compared normalized, so a
+	// hand-written "fill" still merges with a queued run that named no mode;
+	// an unknown mode is not merged, and Run refuses it.
+	curMode, curOK := metafetch.NormalizeBulkApplyMode(current.Mode)
+	nextMode, nextOK := metafetch.NormalizeBulkApplyMode(next.Mode)
+	if !curOK || !nextOK || curMode != nextMode {
+		return nil, false, nil
+	}
 	seen := make(map[string]struct{}, len(current.BookIDs)+len(next.BookIDs))
-	merged := batchApplyOpParams{WriteBack: current.WriteBack}
+	merged := batchApplyOpParams{WriteBack: current.WriteBack, Mode: curMode}
 	// Pins union too, the newer request deciding for every book it names: its
 	// pin (the candidate the owner looked at most recently) replaces the older
 	// one, and a book it names WITHOUT a pin loses the older pin. Every
@@ -308,6 +336,14 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			if err := applycap.Check("metadata.batch-apply-cached", len(p.BookIDs), config.AppConfig.BulkApplyMaxItems); err != nil {
 				return err
 			}
+			// The bulk mode is params validation too: an unknown value (a
+			// hand-written /operations/v2 call) is refused before any write
+			// rather than guessed at.
+			mode, modeOK := metafetch.NormalizeBulkApplyMode(p.Mode)
+			if !modeOK {
+				return fmt.Errorf("batch-apply-cached: unknown mode %q (want %q or %q)", p.Mode, metafetch.BulkApplyModeFill, metafetch.BulkApplyModeReplace)
+			}
+			p.Mode = mode
 
 			// Metadata is never applied during a library scan: hold the scan stand-down
 			// before the first write (fails the op if the scan does not park).
@@ -346,6 +382,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// refusing gate; staleCandidate counts pinned books whose cached
 			// candidate changed after the owner looked at it.
 			var ownerReviewed, staleCandidate atomic.Int64
+			// ownerReplaced counts books APPLIED with the bulk toggle on
+			// "Replace existing" that overwrote (Mode replace + review_bulk pin).
+			var ownerReplaced atomic.Int64
 			// markedNoMatch counts books left alone because their owner
 			// marked them "no match" and did not approve this row.
 			var markedNoMatch atomic.Int64
@@ -465,7 +504,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					defer releaseFileWrite()
 				}
 				out := applyCachedCandidateForBookTimed(svc, s.store, itunes, id, p.WriteBack,
-					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) }, pt, claims, p.pinOf(id))
+					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) }, pt, claims, p.pinOf(id), p.Mode)
 
 				if out.OwnerReviewed && out.Gate != nil {
 					// The gate refused and the owner's review overrode it. The
@@ -526,6 +565,11 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				applied.Add(1)
 				if out.OwnerReviewed {
 					ownerReviewed.Add(1)
+				}
+				if out.OwnerReplace {
+					ownerReplaced.Add(1)
+					reporter.Log(slog.LevelInfo, "owner replace: bulk apply replaced existing values",
+						slog.String("book_id", id))
 				}
 				if len(out.SkippedLocked) > 0 {
 					skippedLocked.Add(1)
@@ -628,10 +672,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				CheckpointStateFn: func(_ context.Context, watermark int) error {
 					st := batchApplyCheckpointState(
 						bookIDs, p.WriteBack, originalTotal, watermark,
-						snapshotGateDeferred())
-					// The owner's pins travel with the books still owed; a
-					// resumed run without them would hard-gate every one.
-					st.Pins = pinsFor(st.BookIDs, p.Pins)
+						snapshotGateDeferred(), p.Pins, p.Mode)
 					return reporter.Checkpoint(st)
 				},
 			})
@@ -701,6 +742,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), markedNoMatch.Load(), authorsUnreadable.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
 				applyFailed.Load(), writeFailed.Load(), historyFailed.Load(), stillDeferred,
 				skippedLocked.Load(), claims.Unreadable())
+			if p.Mode == metafetch.BulkApplyModeReplace {
+				summary = fmt.Sprintf("%s; replace mode: owner replace overwrote existing values on %d", summary, ownerReplaced.Load())
+			}
 			if priorDone > 0 {
 				// State the known ambiguity rather than implying a clean count.
 				// The watermark is the contiguous completed PREFIX, so a resumed

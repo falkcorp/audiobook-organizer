@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-27
 
@@ -756,9 +756,21 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// pin of another origin, gets the ordinary hard gate. The dry run
 		// ignores pins: it never forwards them to the preview op.
 		Pins map[string]metafetch.CandidatePin `json:"pins"`
+		// Mode is the review page's bulk toggle (owner ruling 2026-09-27):
+		// "fill" (the default, also "") or "replace". Replace makes a book
+		// carrying a "review_bulk" pin overwrite filled fields; it changes
+		// nothing for a row pin (which already overwrites) or for a book
+		// without an owner-review pin (still fill-only and fully gated). Any
+		// other value is a 400. The dry run ignores it, like pins.
+		Mode string `json:"mode"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
+		return
+	}
+	mode, modeOK := metafetch.NormalizeBulkApplyMode(body.Mode)
+	if !modeOK {
+		httputil.RespondWithBadRequest(c, `invalid mode: want "fill" or "replace"`)
 		return
 	}
 
@@ -803,6 +815,12 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	}
 	if len(body.Pins) > 0 {
 		params["pins"] = body.Pins
+	}
+	// Only replace is forwarded: fill is the op's default, and leaving it out
+	// keeps a fill request byte-identical to one queued before the toggle
+	// existed, so the two still merge.
+	if mode == metafetch.BulkApplyModeReplace {
+		params["mode"] = mode
 	}
 	opID, err := h.ops.EnqueueOp(c.Request.Context(), "metadata.batch-apply-cached", params)
 	if err != nil {

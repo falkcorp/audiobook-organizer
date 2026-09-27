@@ -1,5 +1,5 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-09-27
 
@@ -32,6 +32,36 @@ const (
 	// hashless OWNER MARKER: IsUnseenOwnerReview.
 	PinOriginReviewBulk = "review_bulk"
 )
+
+// Bulk apply modes for the review page's bulk buttons (owner ruling
+// 2026-09-27: a toggle next to the bulk buttons). The mode is a property of
+// the REQUEST (server.batchApplyOpParams.Mode), and it acts only on books
+// carrying a PinOriginReviewBulk pin: a single-row pin already overwrites,
+// and a book with no owner-review pin (a script, an API caller, an automatic
+// apply) stays fill-only and fully gated whatever mode the request names.
+// The dry-run preview never receives a mode.
+const (
+	// BulkApplyModeFill: fill empty fields only (owner decision A3#3). The
+	// default; the empty string means the same.
+	BulkApplyModeFill = "fill"
+	// BulkApplyModeReplace: a review_bulk-pinned book overwrites filled
+	// descriptive fields, and its change history records the owner replace.
+	BulkApplyModeReplace = "replace"
+)
+
+// NormalizeBulkApplyMode maps a requested mode to its canonical form: "" for
+// fill (so a fill request stays byte-identical to one that named no mode) and
+// BulkApplyModeReplace for replace. ok is false for any other value, which a
+// caller must refuse rather than guess at.
+func NormalizeBulkApplyMode(mode string) (normalized string, ok bool) {
+	switch mode {
+	case "", BulkApplyModeFill:
+		return "", true
+	case BulkApplyModeReplace:
+		return BulkApplyModeReplace, true
+	}
+	return "", false
+}
 
 // CandidatePin identifies the cached candidate a reviewer was LOOKING AT when
 // they clicked Apply. The review lane shows the top cached candidate
@@ -173,7 +203,27 @@ type ApplyOptions struct {
 	// a column. That apply proceeds and commits (with history, so undo can
 	// remove the credit) rather than reporting nothing to apply.
 	RefuseEmptyWrite bool
+	// OwnerReplace says the owner asked a review-page BULK button to replace
+	// existing values (BulkApplyModeReplace) and this apply overwrites: the
+	// caller sets FillOnly false with it. Like OwnerReviewed it changes no
+	// field by itself; it labels the change history ("owner replace") and
+	// makes a failed history write an error, since that history is the only
+	// way to revert the overwrite.
+	OwnerReplace bool
+	// UnseenCandidate says nobody was shown this candidate (the review page's
+	// hashless bulk marker, CandidatePin.IsUnseenOwnerReview). An apply with
+	// FillOnly false normally counts as HAND-PICKED: it overrides a "no
+	// match" mark and records the match whatever title the book keeps.
+	// UnseenCandidate keeps both of those automatic behaviours (see
+	// automatic) while still letting the apply overwrite.
+	UnseenCandidate bool
 }
+
+// automatic reports whether nobody picked this candidate: a fill-only apply,
+// or an overwriting one of a candidate nobody was shown. An automatic apply
+// refuses a book marked "no match" (at the start and again at commit) and
+// records the match only when the book ends up holding the candidate's title.
+func (o ApplyOptions) automatic() bool { return o.FillOnly || o.UnseenCandidate }
 
 // ErrNothingToApply is returned by an apply with RefuseEmptyWrite when no
 // field would change. Nothing was written.
@@ -205,14 +255,32 @@ func (o ApplyOptions) overrideLabel() string {
 // not import applygate.
 const ownerReviewedLabel = "owner_reviewed"
 
+// ownerReplaceLabel is what change history records for an OwnerReplace apply.
+const ownerReplaceLabel = "owner replace: review bulk apply replaced existing values"
+
 // historySource is the source label change history records for an apply.
 func (o ApplyOptions) historySource(candidateSource string) string {
-	if !o.OwnerReviewed {
+	if !o.OwnerReviewed && !o.OwnerReplace {
 		return candidateSource
 	}
 	src := candidateSource
 	if src == "" {
 		src = "unknown source"
 	}
-	return src + " (owner-reviewed; certainty gate overridden: " + o.overrideLabel() + ")"
+	var notes []string
+	if o.OwnerReviewed {
+		notes = append(notes, "owner-reviewed; certainty gate overridden: "+o.overrideLabel())
+	}
+	if o.OwnerReplace {
+		notes = append(notes, ownerReplaceLabel)
+	}
+	return src + " (" + strings.Join(notes, "; ") + ")"
+}
+
+// historyKind names the apply in a failed-history error.
+func (o ApplyOptions) historyKind() string {
+	if o.OwnerReviewed {
+		return "owner-reviewed"
+	}
+	return "owner-replace"
 }
