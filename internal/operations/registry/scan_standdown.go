@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c1f2e6a-4b73-4d5e-9a12-7f0c3d94b6e1
-// last-edited: 2026-09-13
+// last-edited: 2026-09-26
 
 package registry
 
@@ -136,7 +136,7 @@ func (r *Registry) AcquireScanStandDown(ctx context.Context, holderOpID, reason 
 		return nil, fmt.Errorf("scan stand-down: empty holder opID")
 	}
 	lease := r.leaseTTL()
-	expiry := time.Now().Add(lease)
+	expiry := r.standDownNow().Add(lease)
 
 	// 1. Register the holder and persist the marker BEFORE quiescing, so a reboot
 	//    during the quiesce is visible to the boot resume sweep. The marker names
@@ -190,6 +190,14 @@ func (r *Registry) AcquireScanStandDown(ctx context.Context, holderOpID, reason 
 	return func() { once.Do(func() { r.releaseScanStandDown(holderOpID) }) }, nil
 }
 
+// standDownNow is the clock for lease expiry (see Options.ScanStandDownNow).
+func (r *Registry) standDownNow() time.Time {
+	if r.scanStandDownNow != nil {
+		return r.scanStandDownNow()
+	}
+	return time.Now()
+}
+
 // leaseTTL returns the configured stand-down lease, or the default when unset.
 func (r *Registry) leaseTTL() time.Duration {
 	if r.scanStandDownLease > 0 {
@@ -229,12 +237,12 @@ func (r *Registry) RenewScanStandDown(holderOpID string) bool {
 	// A lapsed lease is lost even if nothing has reaped it yet: the dispatcher
 	// may already have started a scan on the strength of that expiry, so a
 	// late renewal must not resurrect it.
-	if time.Now().After(prev) {
+	if r.standDownNow().After(prev) {
 		delete(r.scanGate.holders, holderOpID)
 		r.scanGate.mu.Unlock()
 		return false
 	}
-	expiry := time.Now().Add(r.leaseTTL())
+	expiry := r.standDownNow().Add(r.leaseTTL())
 	r.scanGate.holders[holderOpID] = expiry
 	// Refresh the persisted lease so a reboot after a renewal carries the newer
 	// expiry (best-effort; marker persistence is a hardening, not the hot path).
@@ -242,7 +250,7 @@ func (r *Registry) RenewScanStandDown(holderOpID string) bool {
 	// behind a 5m lease loses nothing. Written after mu is released.
 	var mw scanStandDownMarkerWrite
 	persist := false
-	if now := time.Now(); now.Sub(r.scanGate.lastPersist) >= time.Second {
+	if now := r.standDownNow(); now.Sub(r.scanGate.lastPersist) >= time.Second {
 		r.scanGate.lastPersist = now
 		mw = r.markerWriteLocked(false, holderOpID, r.scanGate.scanOpID, expiry)
 		persist = true
@@ -261,7 +269,7 @@ func (r *Registry) ScanStandDownValid(holderOpID string) bool {
 	r.scanGate.mu.Lock()
 	defer r.scanGate.mu.Unlock()
 	expiry, ok := r.scanGate.holders[holderOpID]
-	return ok && time.Now().Before(expiry)
+	return ok && r.standDownNow().Before(expiry)
 }
 
 // releaseScanStandDown removes a holder. When it was the last live holder it
@@ -445,7 +453,7 @@ func (r *Registry) scanStandDownActive() bool {
 // liveHoldersLocked returns the number of holders with unexpired leases, reaping
 // expired ones. Caller must hold r.scanGate.mu.
 func (r *Registry) liveHoldersLocked() int {
-	now := time.Now()
+	now := r.standDownNow()
 	n := 0
 	for holder, expiry := range r.scanGate.holders {
 		if now.After(expiry) {
