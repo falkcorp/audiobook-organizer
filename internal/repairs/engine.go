@@ -80,7 +80,7 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 	if deps.Guard == nil {
 		return nil, fmt.Errorf("repairs: plan %s: no guard reader", f.ID())
 	}
-	rows, err := f.Plan(ctx, params)
+	rows, err := f.Plan(ctx, params, reporter)
 	if err != nil {
 		return nil, fmt.Errorf("repairs: plan %s: %w", f.ID(), err)
 	}
@@ -369,7 +369,7 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	}
 	runErr := registry.RunItems(ctx, reporter, parts, func(pctx context.Context, part []Row) error {
 		for _, planned := range part {
-			record(applyOne(pctx, f, plan.Params, planned, dryRun, deps, holder, held, &lost))
+			record(applyOne(pctx, f, plan.Params, planned, dryRun, deps, holder, held, &lost, reporter))
 			done.Add(1)
 		}
 		return nil
@@ -409,7 +409,7 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 }
 
 func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row, dryRun bool,
-	deps ApplyDeps, holder string, held bool, lost *atomic.Bool) RowResult {
+	deps ApplyDeps, holder string, held bool, lost *atomic.Bool, reporter registry.Reporter) RowResult {
 	out := RowResult{RowID: planned.RowID}
 	abort := func() RowResult {
 		out.Outcome = OutcomeAborted
@@ -430,7 +430,7 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 		out.Outcome, out.Skipped, out.Error = OutcomeGuarded, kind, why
 		return out
 	}
-	fresh, err := f.Replan(ctx, params, planned)
+	fresh, err := f.Replan(ctx, params, planned, reporter)
 	if err != nil {
 		out.Outcome, out.Error = OutcomeFailed, "replan: "+err.Error()
 		return out

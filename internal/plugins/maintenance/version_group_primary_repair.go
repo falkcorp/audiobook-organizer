@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 package maintenance
 
@@ -17,11 +17,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/oklog/ulid/v2"
-
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -56,8 +55,12 @@ import (
 //     member's state, tier and where its chapter count came from, metadata
 //     score, files present or missing, merge target; the decision and its
 //     reason; the fields carry-over would fill and the conflicts it would not.
-//   - Apply needs explicit group_ids. It refuses while a library.scan is
-//     queued or running, then holds the scan stand-down.
+//   - Apply needs explicit group_ids. It is never refused because a
+//     library.scan is running (owner ruling 2026-09-27): it holds the scan
+//     stand-down, which pauses a running scan at a checkpoint and resumes it
+//     on release, waiting and retrying while the scan has not parked
+//     (repairs.AcquireStandDownWaiting). A lapsed lease hard-aborts the
+//     remaining groups. A dry run takes no stand-down.
 //   - Held groups are never written.
 //   - Each group's members are re-read right before the writes. If the member
 //     set, a flag, a merge target or a library state changed since the group
@@ -73,7 +76,9 @@ import (
 //     history row AFTER the write it describes, one batch id per book, so
 //     "undo last apply" on a book reverts this op's change to it. If a row
 //     cannot be recorded, an apply_incomplete marker is written so undo
-//     refuses the batch rather than half-reverting it.
+//     refuses the batch rather than half-reverting it. The writes and the
+//     history go through repairs.Writer, the same writer the Repairs lane's
+//     adapter of this op (version_group_primary_fixer.go) uses.
 //   - No file I/O except a stat of each active file and an ffprobe header
 //     read of single m4b/m4a files. No tags are written, nothing is moved,
 //     no book_file row is touched.
@@ -91,10 +96,8 @@ const (
 	vgRepairSource      = "version-group-primary-repair"
 	// vgRepairChangeType is the history change_type of this op's rows.
 	vgRepairChangeType = "bulk_update"
-	// vgRepairIncompleteType matches metafetch.ChangeTypeApplyIncomplete:
-	// UndoLastApply refuses a batch carrying it. Spelled out rather than
-	// imported so this plugin does not depend on the metafetch service.
-	vgRepairIncompleteType = "apply_incomplete"
+	// vgRepairBatchPrefix starts every history batch id this op writes.
+	vgRepairBatchPrefix = "vgpr-"
 )
 
 // Apply outcomes.
@@ -121,6 +124,10 @@ type vgPrimaryRepairParams struct {
 	// Limit caps how many candidate groups are planned (after sorting by
 	// group id, so a limited run is repeatable). 0 means no cap.
 	Limit int `json:"limit,omitempty"`
+	// noDetailCap keeps every group in the report instead of the first
+	// vgRepairDetailLimit. Set only by the Repairs-lane adapter, whose plan
+	// must hold every row for paging. Unexported: not an op param.
+	noDetailCap bool
 }
 
 // resolveWrite folds dry_run and apply into one answer.
@@ -163,6 +170,10 @@ type vgRepairGroupReport struct {
 	// DemoteNonLive are merge losers still flagged primary that apply sets
 	// explicit false, after the group's live primary is written.
 	DemoteNonLive []string `json:"demote_nonlive,omitempty"`
+	// planned is the member rows the group was planned from, for the
+	// adapter's row fields and fingerprint and for write's changed check.
+	// Not serialized.
+	planned []database.Book
 	// NonLiveKept are merge losers still flagged primary in a group with no
 	// live primary to hand over to (held / leftover). They are left: ABS
 	// does not filter merge losers, so demoting one could hide the only copy
@@ -265,8 +276,9 @@ func (p *Plugin) versionGroupPrimaryRepairDef() sdk.OperationDef {
 			"outside the library, or with no such copy, are held and never written. The winner's EMPTY fields " +
 			"are filled from the best-metadata copy; nothing is overwritten. Groups touching books/itunes/** or " +
 			"Doctor Who / Big Finish / Torchwood are skipped and reported. DRY-RUN BY DEFAULT: only dry_run=false " +
-			"(or apply=true) writes; a write needs group_ids, refuses while library.scan runs, and records metadata " +
-			"history after each write. limit caps the groups planned.",
+			"(or apply=true) writes; a write needs group_ids, pauses a running library.scan through the scan " +
+			"stand-down (waiting until it parks) instead of refusing, and records metadata history after each " +
+			"write. limit caps the groups planned.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.version-group-primary-repair",
@@ -470,19 +482,21 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 	for _, s := range allSeries {
 		seriesNames[s.ID] = s.Name
 	}
-	a := &vgApplier{store: store, history: vps, reporter: reporter, apply: params.Apply, seriesNames: seriesNames}
+	a := &vgApplier{store: store, reporter: reporter, apply: params.Apply, seriesNames: seriesNames}
 	holderID, held := "", false
 	if params.Apply {
-		if err := refuseWhileLibraryScanActive(p.deps.OperationQueueStore(), "version-group-primary-repair"); err != nil {
-			return report, err
-		}
-		var release func()
-		var sdErr error
-		holderID, held, release, sdErr = acquireScanStandDownForApply(ctx, p.deps, reporter, "version-group-primary-repair apply")
+		a.writer = repairs.NewWriter(store, vps, vgRepairSource, vgRepairChangeType, vgRepairBatchPrefix, log)
+		// Never refused for a running scan (owner ruling 2026-09-27): the
+		// stand-down pauses it, and a scan that will not park yet is waited
+		// out, not treated as a failure. Only the op's own cancel/timeout
+		// ends the wait.
+		release, h, sdErr := repairs.AcquireStandDownWaiting(ctx, p.deps, opID, "version-group-primary-repair apply",
+			reporter, p.standDownWait)
 		if sdErr != nil {
-			return report, fmt.Errorf("version-group-primary-repair: could not acquire scan stand-down; refusing to write: %w", sdErr)
+			return report, fmt.Errorf("version-group-primary-repair: no scan stand-down; nothing written: %w", sdErr)
 		}
 		defer release()
+		holderID, held = opID, h
 	}
 
 	loader := versionprimary.Loader{Files: store, Chapters: vps, RootDir: rootDir, Probe: prober}
@@ -521,12 +535,14 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 	for i := range groups {
 		report.tally(&groups[i])
 	}
-	if len(groups) > vgRepairDetailLimit {
+	if len(groups) > vgRepairDetailLimit && !params.noDetailCap {
 		groups, report.GroupsTruncated = groups[:vgRepairDetailLimit], true
 	}
 	report.Groups = groups
 	report.FieldsFilled = int(a.fieldsFilled.Load())
-	report.HistoryFailed = int(a.historyFailed.Load())
+	if a.writer != nil {
+		report.HistoryFailed = a.writer.HistoryFailed()
+	}
 	if lost.Load() {
 		report.Aborted = errVGRepairStandDownLost.Error()
 		_ = reporter.UpdateProgress(3, 3, report.summary())
@@ -592,15 +608,15 @@ func (r *vgRepairReport) tally(g *vgRepairGroupReport) {
 // its counters are atomics and it holds no per-group state.
 type vgApplier struct {
 	store    OpsStore
-	history  VersionPrimaryStore
 	reporter sdk.Reporter
 	apply    bool
+	// writer is the one write path (ModifyBook + history). Nil on a dry run.
+	writer *repairs.Writer
 	// seriesNames resolves SeriesID for the owner-manual guard. Read-only
 	// after construction.
 	seriesNames map[int]string
 
-	fieldsFilled  atomic.Int64
-	historyFailed atomic.Int64
+	fieldsFilled atomic.Int64
 }
 
 // vgMemberKey is what must not change between planning and writing.
@@ -640,13 +656,27 @@ func sameVGKeys(a, b map[string]vgMemberKey) bool {
 	return true
 }
 
+// planAndApply plans one group and, on an apply run, writes a writable
+// decision. The op calls it per group; the Repairs-lane adapter calls
+// planGroup and write separately, around the framework's fingerprint check.
 func (a *vgApplier) planAndApply(ctx context.Context, loader versionprimary.Loader, gid string) vgRepairGroupReport {
+	g := a.planGroup(ctx, loader, gid)
+	if !a.apply || g.Error != "" || !vgWritable(g.Kind) {
+		return g
+	}
+	a.write(gid, g.planned, &g)
+	return g
+}
+
+// planGroup reads one group and decides it. Read-only.
+func (a *vgApplier) planGroup(ctx context.Context, loader versionprimary.Loader, gid string) vgRepairGroupReport {
 	g := vgRepairGroupReport{GroupID: gid}
 	members, err := a.store.GetBooksByVersionGroup(gid)
 	if err != nil {
 		g.Error = "read group: " + err.Error()
 		return g
 	}
+	g.planned = members
 	if kind, why, gerr := vgGroupGuard(a.store, a.seriesNames, members); gerr != nil {
 		g.Error = "guard: " + gerr.Error()
 		return g
@@ -711,10 +741,6 @@ func (a *vgApplier) planAndApply(ctx context.Context, loader versionprimary.Load
 		}
 		g.DemotedIDs = append(g.DemotedIDs, g.DemoteNonLive...)
 	}
-	if !a.apply || !vgWritable(g.Kind) {
-		return g
-	}
-	a.write(gid, members, &g)
 	return g
 }
 
@@ -789,27 +815,20 @@ func (a *vgApplier) write(gid string, planned []database.Book, g *vgRepairGroupR
 	g.Outcome = vgOutcomeApplied
 }
 
-// vgHistoryFields is every column this op can change, in history order.
-var vgHistoryFields = []string{
-	"is_primary_version", "merged_into_book_id", "description", "narrator", "publisher", "language", "genre",
-	"cover_url", "isbn10", "isbn13", "asin", "subtitle", "edition",
-}
-
 // modify sets one member's flag (and, for the winner, fills its empty fields
-// from donor) inside ModifyBook, then records history for what changed.
+// from donor) through the repairs.Writer, which runs the change inside
+// ModifyBook and records a history row for every field it changed.
 // clearMerge sets merged_into_book_id to nil, not "": the MATCH-4 hash index
 // (memdb_metadata_hash.go) treats any non-nil value as merged. The vgKeyOf
 // check has already confirmed it still names the planned survivor.
 // Returns the number of carried fields written.
 func (a *vgApplier) modify(bookID string, want vgMemberKey, primary bool, donor *database.Book, clearMerge bool) (int, error) {
-	var before, after *database.Book
-	written, err := a.store.ModifyBook(bookID, func(row *database.Book) error {
+	if a.writer == nil {
+		return 0, fmt.Errorf("version-group-primary-repair: no writer; refusing to write %s", bookID)
+	}
+	changed, err := a.writer.Modify(bookID, func(row *database.Book) error {
 		if vgKeyOf(row) != want {
 			return errVGChangedSincePlan
-		}
-		snap, serr := database.SnapshotBook(row)
-		if serr != nil {
-			return serr
 		}
 		if donor != nil {
 			if _, lerr := database.ApplyRespectingLocks(a.store, row, func(b *database.Book) {
@@ -823,71 +842,16 @@ func (a *vgApplier) modify(bookID string, want vgMemberKey, primary bool, donor 
 		if clearMerge {
 			row.MergedIntoBookID = nil
 		}
-		post, perr := database.SnapshotBook(row)
-		if perr != nil {
-			return perr
-		}
-		// Captured on every invocation, so a retried callback leaves the
-		// values of the attempt that committed.
-		before, after = snap, post
 		return nil
 	})
 	if err != nil {
 		return 0, err
 	}
-	if written == nil {
-		return 0, fmt.Errorf("book %s vanished before the write", bookID)
-	}
-	return a.recordHistory(bookID, before, after), nil
-}
-
-// recordHistory writes one metadata-history row per changed field, AFTER the
-// write it describes, all under one batch id so undo-last-apply reverts them
-// together. A failed row marks the batch incomplete so undo refuses it.
-// Returns how many carried (non-flag) fields changed.
-func (a *vgApplier) recordHistory(bookID string, before, after *database.Book) int {
-	batchID := "vgpr-" + ulid.Make().String()
-	now := time.Now()
-	carried, failed := 0, 0
-	for _, field := range vgHistoryFields {
-		oldV, oerr := database.RenderBookField(before, field)
-		newV, nerr := database.RenderBookField(after, field)
-		if oerr != nil || nerr != nil || oldV == newV {
-			continue
-		}
-		if field != "is_primary_version" && field != "merged_into_book_id" {
+	carried := 0
+	for _, f := range changed {
+		if f != "is_primary_version" && f != "merged_into_book_id" {
 			carried++
 		}
-		oldJSON, newJSON := vgJSONString(oldV), vgJSONString(newV)
-		if err := a.history.RecordMetadataChange(&database.MetadataChangeRecord{
-			BookID:        bookID,
-			Field:         field,
-			PreviousValue: &oldJSON,
-			NewValue:      &newJSON,
-			ChangeType:    vgRepairChangeType,
-			Source:        vgRepairSource,
-			ChangedAt:     now,
-			BatchID:       batchID,
-		}); err != nil {
-			failed++
-			a.reporter.Logger().Warn("version-group-primary-repair: history row not recorded (the write itself committed)",
-				"book_id", bookID, "field", field, "err", err)
-		}
 	}
-	if failed > 0 {
-		a.historyFailed.Add(int64(failed))
-		if err := a.history.RecordMetadataChange(&database.MetadataChangeRecord{
-			BookID: bookID, Field: "apply", ChangeType: vgRepairIncompleteType,
-			Source: vgRepairSource, ChangedAt: now, BatchID: batchID,
-		}); err != nil {
-			a.reporter.Logger().Error("version-group-primary-repair: neither the history nor the incomplete marker was recorded",
-				"book_id", bookID, "batch_id", batchID, "err", err)
-		}
-	}
-	return carried
-}
-
-func vgJSONString(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
+	return carried, nil
 }

@@ -1,17 +1,41 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.56.1
+// version: 1.57.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 package maintenance
 
-import "github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+import (
+	"sync"
+
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+)
 
 // Plugin is the UOS maintenance plugin. It holds a reference to a ServerDeps
 // implementation (provided by *server.Server at startup) so that Run functions
 // can call server methods without an import cycle.
 type Plugin struct {
 	deps ServerDeps
+	// standDownWait tunes how an apply waits for the library scan to stand
+	// down (repairs.AcquireStandDownWaiting). Zero means the defaults; tests
+	// set an immediate Sleep.
+	standDownWait repairs.WaitOptions
+
+	repairsOnce sync.Once
+	repairsReg  *repairs.Registry
+}
+
+// Repairs returns the fixers this plugin offers in the Repairs lane of
+// /review, built once. The repairs.plan / repairs.apply ops and the
+// /api/v1/repairs handlers read the same registry.
+func (p *Plugin) Repairs() *repairs.Registry {
+	p.repairsOnce.Do(func() {
+		p.repairsReg = repairs.NewRegistry()
+		// Registration of a fixed, distinct id cannot fail.
+		_ = p.repairsReg.Register(newVGPrimaryFixer(p))
+	})
+	return p.repairsReg
 }
 
 // New constructs a maintenance Plugin. deps must not be nil.
@@ -68,6 +92,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// with versionprimary's rule. Dry run by default; apply needs
 		// explicit group_ids and refuses while library.scan runs.
 		p.versionGroupPrimaryRepairDef(),
+		// --- Repairs lane of /review (internal/repairs) ---
+		p.repairsPlanDef(),
+		p.repairsApplyDef(),
 		p.itunesCloneIntoLibraryDef(),
 
 		// --- author/series ---
