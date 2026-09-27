@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_repair_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b6c88f6f-930b-4ea7-bded-52290d5a52aa
-// last-edited: 2026-09-24
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -461,7 +461,8 @@ func TestVGPrimaryRepair_ReviveRefusesITunes(t *testing.T) {
 	require.NoError(t, f.s.FlagMetadataHashDuplicate("SRC", "ORG"))
 	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Apply: true, GroupIDs: []string{"vg-rev"}})
 	require.NoError(t, err)
-	require.Equal(t, versionprimary.DecisionHeld, findGroup(t, rep, "vg-rev").Kind)
+	// Since 2026-09-26 the whole group is skipped before ranking.
+	require.Equal(t, vgDecisionSkipITunes, findGroup(t, rep, "vg-rev").Kind)
 	require.Zero(t, rep.Applied)
 	require.Equal(t, "false", f.flag(t, "ORG"))
 }
