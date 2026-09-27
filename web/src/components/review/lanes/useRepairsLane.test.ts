@@ -405,7 +405,12 @@ describe('useRepairsLane: selection and apply', () => {
         rowIds: ['g1'],
       })
     );
-    await waitFor(() => expect(result.current.applyError).toBe('plan not completed'));
+    await waitFor(() =>
+      expect(result.current.applyError).toEqual({
+        severity: 'error',
+        message: 'Apply failed: plan not completed',
+      })
+    );
     expect(result.current.applying).toBe(false);
     expect(result.current.applyResult).toBeNull();
     expect(toast).toHaveBeenCalledWith('Apply failed: plan not completed', 'error');
@@ -423,7 +428,12 @@ describe('useRepairsLane: selection and apply', () => {
         rowIds: ['g1'],
       })
     );
-    await waitFor(() => expect(result.current.applyError).toBe('repairs: plan not completed'));
+    await waitFor(() =>
+      expect(result.current.applyError).toEqual({
+        severity: 'error',
+        message: 'Apply not started: repairs: plan not completed',
+      })
+    );
     expect(api.pollOperationV2).not.toHaveBeenCalled();
   });
 
@@ -454,5 +464,76 @@ describe('useRepairsLane: selection and apply', () => {
     await waitFor(() => expect(result.current.applyResult).not.toBeNull());
     expect(toast).toHaveBeenCalledWith('Applied 0 · changed since trial 1 · failed 1', 'warning');
     expect(result.current.rowOutcomes.get('g2')?.error).toBe('write refused');
+  });
+
+  it('does not call an apply it lost sight of a failed apply', async () => {
+    // The op was enqueued and may be writing; a poll that times out knows
+    // nothing about its outcome. Calling it "failed" invites a second apply.
+    const { result } = await renderLane();
+    vi.mocked(api.startRepairApply).mockResolvedValue({
+      operation_id: 'apply-1',
+      def_id: 'repairs.apply',
+      fixer_id: 'vg-primary',
+      status: 'queued',
+    });
+    vi.mocked(api.pollOperationV2).mockRejectedValue(new Error('Request timed out after 30000ms'));
+    const listCalls = vi.mocked(api.listRepairFixers).mock.calls.length;
+    act(() =>
+      result.current.dispatch({
+        lane: 'repairs',
+        type: 'applyRows',
+        fixerId: 'vg-primary',
+        planOpId: 'plan-1',
+        rowIds: ['g1'],
+      })
+    );
+    await waitFor(() => expect(result.current.applyError).not.toBeNull());
+    expect(result.current.applyError?.severity).toBe('warning');
+    expect(result.current.applyError?.message).toMatch(/Lost track of apply apply-1/);
+    expect(result.current.applyError?.message).toMatch(/may still be writing/);
+    expect(result.current.applyError?.message).not.toMatch(/failed/i);
+    // The rail reloads so its last-apply summary can show what really happened.
+    await waitFor(() =>
+      expect(vi.mocked(api.listRepairFixers).mock.calls.length).toBe(listCalls + 1)
+    );
+  });
+
+  it('does not re-send rows an earlier apply settled, and keeps both applies\' badges', async () => {
+    const { result } = await renderLane();
+    stubApply(applyResult({ rows: [{ row_id: 'g1', outcome: 'applied' }] }));
+    act(() =>
+      result.current.dispatch({
+        lane: 'repairs',
+        type: 'applyRows',
+        fixerId: 'vg-primary',
+        planOpId: 'plan-1',
+        rowIds: ['g1'],
+      })
+    );
+    await waitFor(() => expect(result.current.settledRowIds.has('g1')).toBe(true));
+    expect(result.current.remainingApplicable).toBe(1);
+
+    // select page skips the settled row
+    act(() => result.current.selectPage());
+    expect([...result.current.selectedRowIds]).toEqual(['g2']);
+    act(() => result.current.clearSelection());
+
+    stubApply(applyResult({ rows: [{ row_id: 'g2', outcome: 'failed', error: 'x' }], failed: 1, applied: 0 }));
+    confirmSpy.mockClear();
+    act(() =>
+      result.current.dispatch({
+        lane: 'repairs',
+        type: 'applyAllApplicable',
+        fixerId: 'vg-primary',
+        planOpId: 'plan-1',
+      })
+    );
+    await waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(2));
+    expect(confirmSpy).toHaveBeenCalledWith(repairApplyConfirmMessage(1, 'Version group primary'));
+    expect(vi.mocked(api.startRepairApply).mock.calls[1][2]).toEqual(['g2']);
+    await waitFor(() => expect(result.current.rowOutcomes.get('g2')?.outcome).toBe('failed'));
+    expect(result.current.rowOutcomes.get('g1')?.outcome).toBe('applied');
+    // A failed row stays retryable.
+    expect(result.current.settledRowIds.has('g2')).toBe(false);
   });
 });

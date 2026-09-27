@@ -35,7 +35,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../../../services/api';
 import type {
+  OperationV2,
   RepairApplyResult,
+  RepairOpStarted,
   RepairFixer,
   RepairRow,
   RepairRowResult,
@@ -148,6 +150,24 @@ function withNewerPlan(
   return { ...prev, [fixerId]: plan };
 }
 
+/**
+ * Outcomes after which a row is not re-sent from the same plan: it was written
+ * (in full or in part), or the server refused it as changed or not applicable
+ * and will again until a new trial. Failed, aborted and guard-skipped rows
+ * stay selectable: a retry can succeed.
+ */
+export const SETTLED_OUTCOMES: ReadonlySet<string> = new Set([
+  'applied',
+  'partially_applied',
+  'changed_since_plan',
+  'not_applicable',
+]);
+
+export interface RepairApplyProblem {
+  severity: 'error' | 'warning';
+  message: string;
+}
+
 /** A trial the lane is following (or that ended without a usable plan). */
 export interface RepairTrialState {
   opId: string;
@@ -197,9 +217,15 @@ export interface RepairsLane {
 
   /** An apply is in flight for the selected fixer. */
   applying: boolean;
-  applyError: string | null;
+  /** The last apply went wrong (error) or out of sight (warning). */
+  applyError: RepairApplyProblem | null;
+  /** Rows of the plan on screen that an apply already settled; not re-sent. */
+  settledRowIds: ReadonlySet<string>;
+  /** The plan's applicable count less the settled rows (null: no page yet). */
+  remainingApplicable: number | null;
   /** The newest apply result for the plan on screen. */
   applyResult: RepairApplyResult | null;
+  /** Every outcome reported for the plan on screen, across applies. */
   rowOutcomes: ReadonlyMap<string, RepairRowResult>;
 
   dispatch: (action: RepairsAction) => void;
@@ -227,8 +253,13 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(() => new Set());
   const [applyingFor, setApplyingFor] = useState<string | null>(null);
-  const [applyErrors, setApplyErrors] = useState<Record<string, string>>({});
+  const [applyErrors, setApplyErrors] = useState<Record<string, RepairApplyProblem>>({});
   const [applyResults, setApplyResults] = useState<Record<string, RepairApplyResult>>({});
+  // Every row outcome reported for a plan, merged across applies, so a second
+  // apply does not wipe the first one's badges.
+  const [outcomesByPlan, setOutcomesByPlan] = useState<
+    Record<string, Record<string, RepairRowResult>>
+  >({});
 
   const selectedFixer = useMemo(
     () => fixers.find((f) => f.id === selectedFixerId) ?? null,
@@ -356,6 +387,8 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
           }
           const message = `Lost track of the trial: ${errorMessage(err, 'unknown error')}`;
           setTrials((prev) => ({ ...prev, [fixerId]: { opId, phase: 'failed', message } }));
+          // If it is still running, the reload's auto-follow picks it back up.
+          setFixersNonce((n) => n + 1);
         })
         .finally(() => {
           if (trialPolls.current.get(opId) === ctrl) trialPolls.current.delete(opId);
@@ -444,13 +477,25 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     });
   }, []);
 
+  const planOutcomes = useMemo(
+    () => (planOpId ? (outcomesByPlan[planOpId] ?? {}) : {}),
+    [outcomesByPlan, planOpId]
+  );
+  const settledRowIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of Object.values(planOutcomes)) {
+      if (SETTLED_OUTCOMES.has(r.outcome)) set.add(r.row_id);
+    }
+    return set;
+  }, [planOutcomes]);
+
   const selectPage = useCallback(() => {
     setSelectedRowIds((prev) => {
       const next = new Set(prev);
-      for (const r of rows) if (!r.skipped) next.add(r.row_id);
+      for (const r of rows) if (!r.skipped && !settledRowIds.has(r.row_id)) next.add(r.row_id);
       return next;
     });
-  }, [rows]);
+  }, [rows, settledRowIds]);
 
   const clearSelection = useCallback(() => setSelectedRowIds(new Set()), []);
 
@@ -489,8 +534,9 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     [followTrial, toast]
   );
 
+  /** Every applicable row id of the stored plan, less the rows already settled. */
   const collectApplicableIds = useCallback(
-    async (fixerId: string, plan: string): Promise<string[]> => {
+    async (fixerId: string, plan: string, settled: ReadonlySet<string>): Promise<string[]> => {
       const ids: string[] = [];
       for (let off = 0; ; ) {
         const p = await api.getRepairPlanRows(fixerId, plan, {
@@ -498,7 +544,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
           offset: off,
           limit: api.REPAIRS_ROWS_MAX_LIMIT,
         });
-        for (const r of p.rows) if (!r.skipped) ids.push(r.row_id);
+        for (const r of p.rows) if (!r.skipped && !settled.has(r.row_id)) ids.push(r.row_id);
         off += p.rows.length;
         if (p.rows.length === 0 || off >= p.total) return ids;
       }
@@ -516,39 +562,85 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
         delete next[fixerId];
         return next;
       });
+      const report = (problem: RepairApplyProblem) => {
+        setApplyErrors((prev) => ({ ...prev, [fixerId]: problem }));
+        toast(problem.message, problem.severity);
+      };
       try {
-        const rowIds = await resolveIds();
-        if (rowIds.length === 0) {
-          toast('No applicable rows left to apply.', 'info');
+        // 1. Start. A failure here means nothing was enqueued.
+        let started: RepairOpStarted;
+        try {
+          const rowIds = await resolveIds();
+          if (rowIds.length === 0) {
+            toast('No rows left to apply from this trial.', 'info');
+            return;
+          }
+          started = await api.startRepairApply(fixerId, plan, rowIds);
+        } catch (err) {
+          report({
+            severity: 'error',
+            message: `Apply not started: ${errorMessage(err, 'unknown error')}`,
+          });
           return;
         }
-        const started = await api.startRepairApply(fixerId, plan, rowIds);
-        const op = await api.pollOperationV2(
-          started.operation_id,
-          undefined,
-          REPAIRS_POLL_INTERVAL_MS,
-          { signal: ctrl.signal, requestTimeoutMs: api.REPAIRS_FETCH_TIMEOUT_MS }
-        );
+
+        // 2. Follow. From here the op exists on the server and may be
+        // writing, so losing sight of it is NOT a failed apply: saying so
+        // would invite a second apply of the same rows.
+        let op: OperationV2;
+        try {
+          op = await api.pollOperationV2(started.operation_id, undefined, REPAIRS_POLL_INTERVAL_MS, {
+            signal: ctrl.signal,
+            requestTimeoutMs: api.REPAIRS_FETCH_TIMEOUT_MS,
+          });
+        } catch (err) {
+          if (ctrl.signal.aborted || isAbort(err)) return;
+          report({
+            severity: 'warning',
+            message:
+              `Lost track of apply ${started.operation_id} (${errorMessage(err, 'unknown error')}); ` +
+              'it may still be writing. Check the operations list before applying again.',
+          });
+          setFixersNonce((n) => n + 1);
+          return;
+        }
+
+        // 3. Read the result. A failed op may have stored none; its own error
+        // then says why. A completed op whose result cannot be read DID run:
+        // report that, not a failure.
         let result: RepairApplyResult | null = null;
         try {
           result = await api.getRepairApplyResult(started.operation_id);
         } catch (err) {
-          // A failed op may have stored no result; its own error says why.
-          if (op.status === 'completed') throw err;
+          if (op.status === 'completed') {
+            report({
+              severity: 'warning',
+              message:
+                `Apply ${started.operation_id} finished, but its result could not be read ` +
+                `(${errorMessage(err, 'unknown error')}). Re-run the trial to see what changed.`,
+            });
+            setFixersNonce((n) => n + 1);
+            return;
+          }
         }
         if (!result) {
-          throw new Error(op.error_message || `The apply ended with status "${op.status}".`);
+          report({
+            severity: 'error',
+            message: `Apply failed: ${op.error_message || `the operation ended with status "${op.status}".`}`,
+          });
+          setFixersNonce((n) => n + 1);
+          return;
         }
         const r = result;
         setApplyResults((prev) => ({ ...prev, [fixerId]: r }));
+        setOutcomesByPlan((prev) => {
+          const merged = { ...(prev[r.plan_op_id] ?? {}) };
+          for (const row of r.rows) merged[row.row_id] = row;
+          return { ...prev, [r.plan_op_id]: merged };
+        });
         setSelectedRowIds(new Set());
         toast(summarizeApply(r), applySeverity(r));
         setFixersNonce((n) => n + 1);
-      } catch (err) {
-        if (ctrl.signal.aborted || isAbort(err)) return;
-        const message = errorMessage(err, 'The apply failed.');
-        setApplyErrors((prev) => ({ ...prev, [fixerId]: message }));
-        toast(`Apply failed: ${message}`, 'error');
       } finally {
         applyPolls.current.delete(ctrl);
         if (!ctrl.signal.aborted) setApplyingFor((cur) => (cur === fixerId ? null : cur));
@@ -562,7 +654,11 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     [fixers]
   );
 
-  const planApplicable = currentPage?.applicable ?? null;
+  // Rows of this plan still worth sending. The stored plan never changes, so
+  // without the subtraction a second "apply all" would re-send rows already
+  // applied and the server would report them as changed since the trial.
+  const remainingApplicable =
+    currentPage !== null ? Math.max(0, currentPage.applicable - settledRowIds.size) : null;
 
   const dispatch = useCallback(
     (action: RepairsAction) => {
@@ -571,7 +667,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
           void runTrial(action.fixerId);
           return;
         case 'applyRows': {
-          const ids = [...action.rowIds];
+          const ids = action.rowIds.filter((id) => !settledRowIds.has(id));
           if (ids.length === 0) return;
           if (!window.confirm(repairApplyConfirmMessage(ids.length, fixerTitle(action.fixerId)))) {
             return;
@@ -580,20 +676,22 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
           return;
         }
         case 'applyAllApplicable': {
-          // The count is the stored plan's own tally, which does not change:
-          // exact before a single id is fetched, so the confirm comes first and
-          // a cancel sends nothing at all.
-          const n = planApplicable ?? 0;
+          // The count is the stored plan's own tally (which does not change)
+          // less the rows this session already settled: exact before a single
+          // id is fetched, so the confirm comes first and a cancel sends
+          // nothing at all.
+          const n = remainingApplicable ?? 0;
           if (n === 0) return;
           if (!window.confirm(repairApplyConfirmMessage(n, fixerTitle(action.fixerId)))) return;
+          const settled = new Set(settledRowIds);
           void runApply(action.fixerId, action.planOpId, () =>
-            collectApplicableIds(action.fixerId, action.planOpId)
+            collectApplicableIds(action.fixerId, action.planOpId, settled)
           );
           return;
         }
       }
     },
-    [collectApplicableIds, fixerTitle, planApplicable, runApply, runTrial]
+    [collectApplicableIds, fixerTitle, remainingApplicable, runApply, runTrial, settledRowIds]
   );
 
   const applyResult =
@@ -601,11 +699,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
       ? applyResults[selectedFixerId]
       : null;
 
-  const rowOutcomes = useMemo(() => {
-    const m = new Map<string, RepairRowResult>();
-    for (const r of applyResult?.rows ?? []) m.set(r.row_id, r);
-    return m;
-  }, [applyResult]);
+  const rowOutcomes = useMemo(() => new Map(Object.entries(planOutcomes)), [planOutcomes]);
 
   const trial = selectedFixerId ? (trials[selectedFixerId] ?? null) : null;
 
@@ -640,6 +734,8 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     clearSelection,
     applying: applyingFor !== null && applyingFor === selectedFixerId,
     applyError: selectedFixerId ? (applyErrors[selectedFixerId] ?? null) : null,
+    settledRowIds,
+    remainingApplicable,
     applyResult,
     rowOutcomes,
     dispatch,
