@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.19 -->
+<!-- version: 10.73.20 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-26 -->
+<!-- last-edited: 2026-09-27 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,19 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **COVER-TEXT-SCORING** Score the stored cover text. `unified.SigCoverText`
+      (`cover_text`) is registered but non-scoring (supporting kind, no boost),
+      and `covertext.ForBook` is its reader. Decide and calibrate: (1) dedup —
+      two books whose covers read the same title+author (normalized) as a
+      supporting boost, never a primary on its own; (2) identification — cover
+      title/author/series agreeing with a provider candidate as evidence in
+      the candidate ranking. Measure on the prod store after
+      `maintenance.cover-text-read` has run, before picking weights.
+- [ ] **COVER-VISION-LEGACY-SITE** `entities_ops.go` still calls the legacy
+      cloud `ParseCoverArt` for its cover-art AI pass. Move it onto
+      `ai.RoutedCoverTextReader` (or read the stored cover text) so every
+      vision call goes through the pool routing.
 
 - [x] **ABS-ALIAS-HELPER** Owner 2026-09-25: "fix that better in the future and just create some helper to handle all that." #3558 fixed mark-as-finished for old (merged-away) item IDs endpoint by endpoint: GET progress, GET item and play echo the requested ID, and `/api/me` lists an extra progress row per old ID. Replace that with ONE helper that every ABS handler goes through: resolve requested ID → canonical book, and on response rewrite item-ID fields back to the requested ID. It must cover bookmarks, which #3558 did not. It must also stop the side effect #3558 accepted: AudioBooth's Stats "items finished" counts each alias row, so a finished merged book counts twice. Options: send `/api/me` alias rows only for IDs the client has actually used (track per user), or retire aliases once the client has re-fetched under the canonical ID. Done 2026-09-25 (fix/abs-alias-helper-cover-local): `abs/item_ref.go` is the one resolver (item, play, cover, file, progress, batch, bookmarks, offline replay); uses are recorded per user in the new `sync_alias_use` keyspace and `/api/me` sends alias rows only for used ids; bookmarks read and write across the item's alias set. Retirement was not built; see ABS-ALIAS-RETIRE.
 - [x] **ABS-ALIAS-RETIRE** Follow-up to ABS-ALIAS-HELPER. A merged book the user really opened through its old id still gets two `/api/me` rows (canonical + alias), so it still counts twice in AudioBooth's "items finished". Retiring an alias once the client re-fetches under the canonical id would end that, but only if AudioBooth does not re-read its local alias-keyed row after we stop sending it. Check AudioBooth's item page and download code before building it. Also: the one-time seed (`aliasSeedSince` in `abs/userdata.go`) records the aliases of every item touched between 2026-09-25 and the user's first list after deploy, so a late deploy seeds more aliases than needed. Closed 2026-09-26, not built: AudioBooth deletes its local progress row when the server stops sending an id (`MediaProgress.syncFromAPI`), so retiring aliases would lose state. The owner accepted the small "items finished" double count. New aliases are prevented instead: merges now prefer a survivor that already has user state.
