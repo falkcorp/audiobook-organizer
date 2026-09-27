@@ -850,6 +850,10 @@
           },
           "status": {
             "type": "string"
+          },
+          "deduped": {
+            "type": "boolean",
+            "description": "An identical request was already queued or running; operation_id is that run."
           }
         }
       },
@@ -11680,7 +11684,7 @@
             "session": []
           }
         ],
-        "description": "Every fixer with its newest plan and apply run (last 30 days).",
+        "description": "Every fixer with its newest plan and apply started from the Repairs lane (recorded when enqueued).",
         "responses": {
           "200": {
             "description": "Fixers",

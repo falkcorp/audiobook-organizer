@@ -36,10 +36,14 @@ const (
 	OutcomeApplied          = "applied"
 	OutcomeWouldApply       = "would_apply"
 	OutcomeChangedSincePlan = "changed_since_plan"
-	OutcomeGuarded          = "skipped_guard"
-	OutcomeNotApplicable    = "not_applicable"
-	OutcomeFailed           = "failed"
-	OutcomeAborted          = "aborted_standdown_lost"
+	// OutcomePartial: the fixer wrote part of the row before finding a
+	// change (for the vg fixer: the winner is crowned, some demotions are
+	// not). The row is NOT unchanged; re-plan it.
+	OutcomePartial       = "partially_applied"
+	OutcomeGuarded       = "skipped_guard"
+	OutcomeNotApplicable = "not_applicable"
+	OutcomeFailed        = "failed"
+	OutcomeAborted       = "aborted_standdown_lost"
 )
 
 // ErrStandDownLost aborts an apply whose scan stand-down lease lapsed: the
@@ -259,6 +263,7 @@ type ApplyResult struct {
 	ByOutcome        map[string]int `json:"by_outcome"`
 	Applied          int            `json:"applied"`
 	ChangedSincePlan int            `json:"changed_since_plan"`
+	Partial          int            `json:"partially_applied"`
 	Failed           int            `json:"failed"`
 	BookWrites       int            `json:"book_writes"`
 	HistoryRows      int            `json:"history_rows"`
@@ -389,6 +394,8 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 			res.Applied++
 		case OutcomeChangedSincePlan:
 			res.ChangedSincePlan++
+		case OutcomePartial:
+			res.Partial++
 		case OutcomeFailed:
 			res.Failed++
 		}
@@ -467,11 +474,15 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 		return abort()
 	}
 	if err := f.Apply(ctx, deps.Writer, fresh); err != nil {
-		if errors.Is(err, ErrChangedSincePlan) {
+		out.Error = err.Error()
+		switch {
+		case errors.Is(err, ErrPartiallyApplied):
+			out.Outcome = OutcomePartial
+		case errors.Is(err, ErrChangedSincePlan):
 			out.Outcome = OutcomeChangedSincePlan
-			return out
+		default:
+			out.Outcome = OutcomeFailed
 		}
-		out.Outcome, out.Error = OutcomeFailed, err.Error()
 		return out
 	}
 	out.Outcome = OutcomeApplied

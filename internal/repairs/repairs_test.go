@@ -479,6 +479,87 @@ func TestRunApply_AcquireWaitEndsOnlyWithTheContext(t *testing.T) {
 	require.Equal(t, " One ", s.title("b1"))
 }
 
+// touchReporter counts liveness stamps.
+type touchReporter struct {
+	nopReporter
+	mu      sync.Mutex
+	touches int
+}
+
+func (r *touchReporter) TouchLiveness() {
+	r.mu.Lock()
+	r.touches++
+	r.mu.Unlock()
+}
+
+func (r *touchReporter) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.touches
+}
+
+// blockingStandDown's acquire blocks until the test lets the scan park.
+type blockingStandDown struct {
+	fakeStandDown
+	park chan struct{}
+}
+
+func (s *blockingStandDown) AcquireScanStandDown(ctx context.Context, holder, reason string) (func(), error) {
+	select {
+	case <-s.park:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return s.fakeStandDown.AcquireScanStandDown(ctx, holder, reason)
+}
+
+// A scan that takes long to park is waited out in ONE attempt (no per-attempt
+// timeout re-queueing it), with liveness stamped while the attempt blocks.
+func TestAcquireStandDownWaiting_OneLongAttemptKeepsTheOpAlive(t *testing.T) {
+	sd := &blockingStandDown{fakeStandDown: fakeStandDown{renewsLeft: -1, scanRunning: true}, park: make(chan struct{})}
+	rep := &touchReporter{}
+	done := make(chan error, 1)
+	go func() {
+		rel, held, err := AcquireStandDownWaiting(context.Background(), sd, "op-1", "test", rep,
+			WaitOptions{TouchEvery: time.Millisecond, Sleep: immediate.Sleep})
+		if err == nil && held {
+			rel()
+		}
+		done <- err
+	}()
+	require.Eventually(t, func() bool { return rep.count() >= 3 }, 5*time.Second, time.Millisecond,
+		"liveness is stamped while the acquire blocks")
+	close(sd.park)
+	require.NoError(t, <-done)
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	require.Equal(t, 1, sd.acquires, "exactly one attempt")
+	require.True(t, sd.scanWasPaused)
+}
+
+// partialFixer writes, then reports the row only partly applied.
+type partialFixer struct{ trimFixer }
+
+func (f *partialFixer) Apply(ctx context.Context, w *Writer, fresh Row) error {
+	if err := f.trimFixer.Apply(ctx, w, fresh); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: second half hit a change", ErrPartiallyApplied)
+}
+
+func TestRunApply_PartialIsNotReportedAsUnchanged(t *testing.T) {
+	s := newMemStore()
+	seed(s)
+	f := &partialFixer{trimFixer{s: s}}
+	plan := planFor(t, s, f)
+	res, err := RunApply(context.Background(), f, plan, "op-plan", []string{"b1"}, false, deps(s, &fakeStandDown{renewsLeft: -1}), nopReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Partial)
+	require.Zero(t, res.ChangedSincePlan)
+	require.Equal(t, OutcomePartial, res.Rows[0].Outcome)
+	require.Contains(t, res.Rows[0].Error, "second half")
+}
+
 func TestRunApply_LeaseLapseAbortsRemainingRows(t *testing.T) {
 	s := newMemStore()
 	for i := 0; i < 5; i++ {
