@@ -125,6 +125,29 @@ function applySeverity(r: RepairApplyResult): 'success' | 'warning' {
   return r.failed > 0 || r.partially_applied > 0 || r.aborted || r.dry_run ? 'warning' : 'success';
 }
 
+/** The newest completed plan the lane has seen for a fixer. */
+interface KnownPlan {
+  opId: string;
+  completedAt: string;
+}
+
+/**
+ * Records `plan` unless the lane already holds a NEWER completed plan for the
+ * fixer. A fixer list fetched before a trial finished (or one whose last-run
+ * pointer the server failed to record) must not take the table back to an
+ * older plan.
+ */
+function withNewerPlan(
+  prev: Record<string, KnownPlan>,
+  fixerId: string,
+  plan: KnownPlan
+): Record<string, KnownPlan> {
+  const cur = prev[fixerId];
+  if (cur?.opId === plan.opId) return prev;
+  if (cur && Date.parse(cur.completedAt) > Date.parse(plan.completedAt)) return prev;
+  return { ...prev, [fixerId]: plan };
+}
+
 /** A trial the lane is following (or that ended without a usable plan). */
 export interface RepairTrialState {
   opId: string;
@@ -191,7 +214,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
   const [selectedFixerId, setSelectedFixerId] = useState<string | null>(() =>
     readStored(REPAIRS_FIXER_STORAGE_KEY)
   );
-  const [knownPlans, setKnownPlans] = useState<Record<string, string>>({});
+  const [knownPlans, setKnownPlans] = useState<Record<string, KnownPlan>>({});
   const [trials, setTrials] = useState<Record<string, RepairTrialState>>({});
 
   const [filter, setFilterState] = useState<RepairRowsFilter>('applicable');
@@ -211,7 +234,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     () => fixers.find((f) => f.id === selectedFixerId) ?? null,
     [fixers, selectedFixerId]
   );
-  const planOpId = selectedFixerId ? (knownPlans[selectedFixerId] ?? null) : null;
+  const planOpId = selectedFixerId ? (knownPlans[selectedFixerId]?.opId ?? null) : null;
 
   // Offset and selection belong to one plan of one fixer. Reset them during
   // render when that changes (React's derived-state pattern), not in an effect:
@@ -236,9 +259,14 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
         if (ctrl.signal.aborted) return;
         setFixers(list);
         setKnownPlans((prev) => {
-          const next = { ...prev };
+          let next = prev;
           for (const f of list) {
-            if (f.last_plan?.status === 'completed') next[f.id] = f.last_plan.operation_id;
+            const lp = f.last_plan;
+            if (lp?.status !== 'completed') continue;
+            next = withNewerPlan(next, f.id, {
+              opId: lp.operation_id,
+              completedAt: lp.completed_at ?? lp.queued_at,
+            });
           }
           return next;
         });
@@ -294,7 +322,12 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
         .then((op) => {
           if (ctrl.signal.aborted) return;
           if (op.status === 'completed') {
-            setKnownPlans((prev) => ({ ...prev, [fixerId]: opId }));
+            setKnownPlans((prev) =>
+              withNewerPlan(prev, fixerId, {
+                opId,
+                completedAt: op.completed_at ?? new Date().toISOString(),
+              })
+            );
             setTrials((prev) => {
               if (prev[fixerId]?.opId !== opId) return prev;
               const next = { ...prev };

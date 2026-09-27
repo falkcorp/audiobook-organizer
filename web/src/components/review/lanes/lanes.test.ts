@@ -1,10 +1,10 @@
 // file: web/src/components/review/lanes/lanes.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: b6d29a04-8f35-4c71-90e2-3a5f7c1b8046
-// last-edited: 2026-09-01
+// last-edited: 2026-09-27
 
 import { describe, expect, it } from 'vitest';
-import { LANES, LANE_ORDER, dupesLane, metadataLane, regroupLane } from './index';
+import { LANES, LANE_ORDER, dupesLane, metadataLane, regroupLane, repairsLane } from './index';
 import type { LaneDescriptor } from './types';
 import type { ActionForLane, ReviewAction, ReviewLane } from '../reviewActions';
 
@@ -13,7 +13,7 @@ describe('lane registry', () => {
     // LANES is typed as Record<ReviewLane, ...>, so a missing lane is a compile
     // error. This checks the runtime side of the same claim -- that the object
     // literal was not satisfied by a cast somewhere.
-    const lanes: ReviewLane[] = ['dupes', 'metadata', 'regroup'];
+    const lanes: ReviewLane[] = ['dupes', 'metadata', 'regroup', 'repairs'];
     for (const lane of lanes) {
       expect(LANES[lane], `no descriptor for lane "${lane}"`).toBeDefined();
       expect(LANES[lane].lane).toBe(lane);
@@ -50,6 +50,7 @@ describe('action vocabulary is total', () => {
       ],
     },
     { lane: 'regroup', types: ['approve', 'reject', 'bulk'] },
+    { lane: 'repairs', types: ['runTrial', 'applyRows', 'applyAllApplicable'] },
   ];
 
   for (const { lane, types } of cases) {
@@ -106,6 +107,7 @@ describe('evidence kind matches the lane arithmetic', () => {
     expect(dupesLane.evidenceKind).toBe('confidence'); // noisy-OR product + boosts
     expect(metadataLane.evidenceKind).toBe('waterfall'); // product + terms
     expect(regroupLane.evidenceKind).toBe('facts'); // no score at all
+    expect(repairsLane.evidenceKind).toBe('facts'); // rules over stored state
   });
 });
 
