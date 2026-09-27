@@ -619,8 +619,17 @@ export async function getOperationTimeline(
   return body?.data?.operations ?? [];
 }
 
-export async function getOperationV2(id: string): Promise<OperationV2> {
-  const response = await apiFetch(`${API_BASE}/operations/v2/${encodeURIComponent(id)}`);
+export async function getOperationV2(
+  id: string,
+  // Optional: a poller that can be abandoned (a lane switched away, a
+  // component unmounted) passes its signal, and a per-request deadline so one
+  // hung read cannot stall the loop forever. Omitted, behaviour is unchanged.
+  opts?: { signal?: AbortSignal; timeoutMs?: number }
+): Promise<OperationV2> {
+  const response = await apiFetch(`${API_BASE}/operations/v2/${encodeURIComponent(id)}`, {
+    signal: opts?.signal,
+    timeoutMs: opts?.timeoutMs,
+  });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch operation');
   }
@@ -4645,16 +4654,34 @@ export async function batchApplyFromCache(
 // hardcoded OP_V2_TERMINAL list that omitted 'interrupted_quiesced' — the
 // status three of the four resume policies produce — so it hung on the common
 // interruption just as pollOperation hung on every cancellation.
+//
+// `opts.signal` stops the loop: an aborted poll rejects with an AbortError
+// (DOMException) instead of polling on after its caller has gone. Without it a
+// poll of a long operation outlives the component that started it.
 export async function pollOperationV2(
   id: string,
   onProgress?: (op: OperationV2) => void,
-  intervalMs = 1000
+  intervalMs = 1000,
+  opts?: { signal?: AbortSignal; requestTimeoutMs?: number }
 ): Promise<OperationV2> {
+  const signal = opts?.signal;
+  const aborted = () => new DOMException('Operation poll aborted', 'AbortError');
   for (;;) {
-    const op = await getOperationV2(id);
+    if (signal?.aborted) throw aborted();
+    const op = await getOperationV2(id, { signal, timeoutMs: opts?.requestTimeoutMs });
     onProgress?.(op);
     if (isOperationTerminal(op.status)) return op;
-    await new Promise((r) => setTimeout(r, intervalMs));
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, intervalMs);
+      const onAbort = () => {
+        clearTimeout(t);
+        reject(aborted());
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
 }
 
@@ -7354,4 +7381,223 @@ export async function bulkReviewAction(req: ReviewBulkRequest): Promise<ReviewBu
   }
   const body = await response.json();
   return body.data;
+}
+
+// ---------------------------------------------------------------------------
+// Repairs (the /review "Repairs" lane) -- /api/v1/repairs/*
+//
+// A fixer proposes per-row changes in a PLAN (an operation, repairs.plan); the
+// reviewer picks rows and APPLIES them (repairs.apply). Both run as operations,
+// so the POSTs answer 202 with an operation id and the caller polls it.
+//
+// 🔴 The apply endpoint is a PREVIEW unless the body carries `dry_run: false`
+// (owner rule 2026-09-25: an omitted mode is a preview). startRepairApply
+// therefore always sends the flag explicitly, in one spelling only.
+// ---------------------------------------------------------------------------
+
+/** Deadline on the repairs lane's own reads (fixer list, plan rows, op polls). */
+export const REPAIRS_FETCH_TIMEOUT_MS = 30_000;
+
+/** Server cap on one page of plan rows (the handler's MaxLimit). */
+export const REPAIRS_ROWS_MAX_LIMIT = 500;
+
+/** A pointer to a fixer's newest plan or apply run, with its summary. */
+export interface RepairOpRef {
+  operation_id: string;
+  status: OperationV2Status;
+  queued_at: string;
+  completed_at?: string;
+  /** Plan summary (completed plans only). */
+  total?: number;
+  applicable?: number;
+  skipped_by_kind?: Record<string, number>;
+  /** Apply summary (applies with a stored result). */
+  dry_run?: boolean;
+  by_outcome?: Record<string, number>;
+  error?: string;
+}
+
+export interface RepairFixer {
+  id: string;
+  title: string;
+  description: string;
+  last_plan?: RepairOpRef;
+  last_apply?: RepairOpRef;
+}
+
+/** Plan-row risk. The server writes `low` or `review`; anything else is shown as-is. */
+export type RepairRisk = 'low' | 'review';
+
+/** One unit a fixer proposes to change. */
+export interface RepairRow {
+  row_id: string;
+  book_ids: string[];
+  title: string;
+  author?: string;
+  current?: Record<string, string>;
+  proposed?: Record<string, string>;
+  reason: string;
+  risk: string;
+  fingerprint: string;
+  /** Skip kind; set on a row apply will never write. */
+  skipped?: string;
+  skip_reason?: string;
+}
+
+export type RepairRowsFilter = 'applicable' | 'skipped';
+
+export interface RepairRowsPage {
+  plan_op_id: string;
+  fixer_id: string;
+  planned_at: string;
+  filter?: string;
+  offset: number;
+  limit: number;
+  /** Rows matching the filter. */
+  total: number;
+  /** The whole plan's applicable count, whatever the filter. */
+  applicable: number;
+  skipped_by_kind: Record<string, number>;
+  rows: RepairRow[];
+}
+
+export interface RepairOpStarted {
+  operation_id: string;
+  def_id: string;
+  fixer_id: string;
+  status: string;
+  /** An identical request was already queued or running; this is that run. */
+  deduped?: boolean;
+}
+
+export type RepairOutcome =
+  | 'applied'
+  | 'would_apply'
+  | 'changed_since_plan'
+  | 'partially_applied'
+  | 'skipped_guard'
+  | 'not_applicable'
+  | 'failed'
+  | 'aborted_standdown_lost';
+
+export interface RepairRowResult {
+  row_id: string;
+  outcome: string;
+  skipped?: string;
+  error?: string;
+}
+
+/** The stored result of a repairs.apply operation. */
+export interface RepairApplyResult {
+  fixer_id: string;
+  plan_op_id: string;
+  dry_run: boolean;
+  requested: number;
+  not_in_plan?: string[];
+  by_outcome: Record<string, number>;
+  applied: number;
+  changed_since_plan: number;
+  partially_applied: number;
+  failed: number;
+  book_writes?: number;
+  history_rows?: number;
+  history_rows_failed?: number;
+  standdown_held: boolean;
+  aborted?: string;
+  rows: RepairRowResult[];
+}
+
+export async function listRepairFixers(opts?: {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}): Promise<RepairFixer[]> {
+  const response = await apiFetch(`${API_BASE}/repairs`, {
+    signal: opts?.signal,
+    timeoutMs: opts?.timeoutMs ?? REPAIRS_FETCH_TIMEOUT_MS,
+  });
+  if (!response.ok) throw await buildApiError(response, 'Failed to list repair fixers');
+  const body = await response.json();
+  const fixers = body?.data?.fixers;
+  if (!Array.isArray(fixers)) {
+    throw new Error('Unexpected response shape from GET /api/v1/repairs');
+  }
+  return fixers as RepairFixer[];
+}
+
+async function readRepairStarted(response: Response, what: string): Promise<RepairOpStarted> {
+  if (!response.ok) throw await buildApiError(response, `Failed to start the ${what}`);
+  const body = await response.json();
+  const data = body?.data;
+  if (!data?.operation_id) {
+    throw new Error(`Server did not return an operation id for the ${what}`);
+  }
+  return data as RepairOpStarted;
+}
+
+/** POST /repairs/:fixer/plan -- start a trial (a plan). `params` are the fixer's own. */
+export async function startRepairPlan(
+  fixerId: string,
+  params?: Record<string, unknown>
+): Promise<RepairOpStarted> {
+  const response = await apiFetch(`${API_BASE}/repairs/${encodeURIComponent(fixerId)}/plan`, {
+    method: 'POST',
+    ...(params
+      ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) }
+      : {}),
+  });
+  return readRepairStarted(response, 'repair trial');
+}
+
+/** GET /repairs/:fixer/plan/:op_id/rows -- one page of a completed plan. */
+export async function getRepairPlanRows(
+  fixerId: string,
+  planOpId: string,
+  query: { filter: RepairRowsFilter; offset: number; limit: number },
+  opts?: { signal?: AbortSignal; timeoutMs?: number }
+): Promise<RepairRowsPage> {
+  const params = new URLSearchParams({
+    filter: query.filter,
+    offset: String(query.offset),
+    limit: String(Math.min(query.limit, REPAIRS_ROWS_MAX_LIMIT)),
+  });
+  const response = await apiFetch(
+    `${API_BASE}/repairs/${encodeURIComponent(fixerId)}/plan/${encodeURIComponent(planOpId)}/rows?${params.toString()}`,
+    { signal: opts?.signal, timeoutMs: opts?.timeoutMs ?? REPAIRS_FETCH_TIMEOUT_MS }
+  );
+  if (!response.ok) throw await buildApiError(response, 'Failed to load the repair plan rows');
+  const body = await response.json();
+  const page = body?.data;
+  if (!page || !Array.isArray(page.rows)) {
+    throw new Error('Unexpected response shape from the repair plan rows endpoint');
+  }
+  return page as RepairRowsPage;
+}
+
+/**
+ * POST /repairs/:fixer/apply -- WRITE the chosen rows of a plan.
+ *
+ * Always sends `dry_run: false`: this is the lane's Apply button, and the server
+ * treats an omitted flag as a preview that writes nothing.
+ */
+export async function startRepairApply(
+  fixerId: string,
+  planOpId: string,
+  rowIds: string[]
+): Promise<RepairOpStarted> {
+  const response = await apiFetch(`${API_BASE}/repairs/${encodeURIComponent(fixerId)}/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan_op_id: planOpId, row_ids: rowIds, dry_run: false }),
+  });
+  return readRepairStarted(response, 'repair apply');
+}
+
+/** Reads a finished repairs.apply operation's stored result. */
+export async function getRepairApplyResult(opId: string): Promise<RepairApplyResult> {
+  const { result_data } = await getOperationResult(opId);
+  const r = result_data as Partial<RepairApplyResult> | string | null;
+  if (!r || typeof r !== 'object' || !Array.isArray(r.rows) || typeof r.by_outcome !== 'object') {
+    throw new Error('The repair apply finished but its result could not be read');
+  }
+  return r as RepairApplyResult;
 }

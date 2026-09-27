@@ -3,8 +3,8 @@
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-09-27
 //
-// The unified review workspace: one screen for dedup, metadata apply, and the
-// review queue.
+// The unified review workspace: one screen for dedup, metadata apply, the
+// review queue, and library repairs.
 //
 // WHICH LANE OPENS
 //
@@ -64,10 +64,12 @@ import { CommandBar, type CommandMenu } from './CommandBar';
 import type { SpineViewMode } from './spine/CompareSpine';
 import { DupesPanel } from './DupesPanel';
 import { RegroupPanel } from './RegroupPanel';
+import { RepairsPanel } from './RepairsPanel';
 import { MetadataPanel } from './MetadataPanel';
 import { useDupesLane } from './lanes/useDupesLane';
 import { useMetadataLane } from './lanes/useMetadataLane';
 import { useRegroupLane } from './lanes/useRegroupLane';
+import { useRepairsLane } from './lanes/useRepairsLane';
 import { LANES, LANE_ORDER } from './lanes';
 import type { ReviewLane } from './reviewActions';
 
@@ -185,6 +187,8 @@ export function ReviewWorkspace() {
   const [rescoreConfirmOpen, setRescoreConfirmOpen] = useState(false);
   const [confirmRefetchStale, setConfirmRefetchStale] = useState(false);
   const regroup = useRegroupLane(toast, lane === 'regroup');
+  // Gated like the others: no fixer list, rows or trial polls unless visible.
+  const repairs = useRepairsLane(toast, lane === 'repairs');
 
   const unmatchedCount = useMemo(
     () => metadata.results.filter((r) => r.status === 'no_match' || r.status === 'error').length,
@@ -455,7 +459,11 @@ export function ReviewWorkspace() {
         </ToggleButtonGroup>
       </Box>
 
-      {lane === 'regroup' ? (
+      {/* Every lane has an explicit branch: the last one falls through to
+          metadata, so a lane missing here would silently show metadata. */}
+      {lane === 'repairs' ? (
+        <RepairsPanel repairs={repairs} />
+      ) : lane === 'regroup' ? (
         <RegroupPanel regroup={regroup} />
       ) : lane === 'dupes' ? (
         <DupesPanel
