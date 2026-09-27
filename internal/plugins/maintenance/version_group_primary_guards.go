@@ -1,0 +1,90 @@
+// file: internal/plugins/maintenance/version_group_primary_guards.go
+// version: 1.0.0
+// guid: 5b0f3e7a-9c41-4d2e-8f6a-2d7c1e4b9a63
+// last-edited: 2026-09-26
+
+package maintenance
+
+import (
+	"fmt"
+
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+)
+
+// Group-level refusals of version-group-primary-repair. A group carrying one
+// of these decisions is reported and never written, whatever the params say:
+// dry_run:false and group_ids narrow a run, they do not unlock a refusal.
+const (
+	// vgDecisionSkipITunes: some member has an active file under
+	// books/itunes/** (standing owner rule: the live iTunes library is
+	// hands-off). The whole group is skipped, not just that member, because
+	// demoting or crowning a sibling changes what ABS shows for the iTunes
+	// copy too.
+	vgDecisionSkipITunes = "skipped_itunes"
+	// vgDecisionSkipOwnerManual: some member's path or series is Doctor Who /
+	// Big Finish / Torchwood, which the owner applies by hand
+	// (applygate.IsOwnerManualOnly).
+	vgDecisionSkipOwnerManual = "skipped_owner_manual"
+	// vgDecisionRefuseNotOrganized: a writable decision whose winner is not
+	// an organized book. Elect and the revive path never produce one; this is
+	// the belt-and-braces check behind "never demote an organized member in
+	// favour of a non-organized one".
+	vgDecisionRefuseNotOrganized = "refused_winner_not_organized"
+)
+
+// vgGroupGuard returns a skip decision and its reason for a group that must
+// not be touched, or "" when the group may be planned. Every member is
+// checked, live or not: a merge loser's files are still on disk and still
+// part of what the group shows. Paths come from the active book_file rows;
+// Book.FilePath is checked as well because it is what older rows carry, and a
+// false positive here only skips a group.
+func vgGroupGuard(store OpsStore, seriesNames map[int]string, members []database.Book) (kind, reason string, err error) {
+	for i := range members {
+		b := &members[i]
+		if b.IsSoftDeleted() {
+			continue
+		}
+		files, ferr := store.GetBookFiles(b.ID)
+		if ferr != nil {
+			return "", "", fmt.Errorf("read files of %s: %w", b.ID, ferr)
+		}
+		paths := []string{b.FilePath}
+		for _, f := range files {
+			if !f.Missing {
+				paths = append(paths, f.FilePath)
+			}
+		}
+		for _, p := range paths {
+			if p != "" && pathutil.UnderFrozenITunesTree(p) {
+				return vgDecisionSkipITunes, fmt.Sprintf("member %s has a file under books/itunes/** (hands-off): %s", b.ID, p), nil
+			}
+		}
+		series := ""
+		if b.SeriesID != nil {
+			series = seriesNames[*b.SeriesID]
+		}
+		for _, p := range paths {
+			if applygate.IsOwnerManualOnly(p, series) {
+				return vgDecisionSkipOwnerManual, fmt.Sprintf("member %s is Doctor Who / Big Finish / Torchwood (path %q, series %q); owner applies these by hand", b.ID, p, series), nil
+			}
+		}
+	}
+	return "", "", nil
+}
+
+// vgSkipKey is the skipped_by_reason key of a group apply will not write, or
+// "" for a writable one.
+func vgSkipKey(g *vgRepairGroupReport) string {
+	switch {
+	case g.Error != "" && g.Kind == "":
+		return "error"
+	case vgWritable(g.Kind):
+		return ""
+	case g.HoldReason != "":
+		return g.HoldReason
+	default:
+		return g.Kind
+	}
+}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
-// last-edited: 2026-09-24
+// last-edited: 2026-09-26
 
 package maintenance
 
@@ -48,7 +48,11 @@ import (
 // not read.
 //
 // Guards:
-//   - DRY RUN by default. The report lists every candidate group: each
+//   - Groups with a member under books/itunes/**, or a member whose path or
+//     series is Doctor Who / Big Finish / Torchwood, are skipped whole and
+//     reported (skipped_itunes / skipped_owner_manual), before any ranking.
+//   - DRY RUN by default. Only an explicit dry_run:false (or the older
+//     apply:true) writes; omitting both previews. The report lists every candidate group: each
 //     member's state, tier and where its chapter count came from, metadata
 //     score, files present or missing, merge target; the decision and its
 //     reason; the fields carry-over would fill and the conflicts it would not.
@@ -107,10 +111,24 @@ var (
 )
 
 type vgPrimaryRepairParams struct {
-	// Apply writes. Default false: report only.
+	// DryRun: only an explicit false writes. Omitted or true previews.
+	DryRun *bool `json:"dry_run,omitempty"`
+	// Apply is the older spelling of dry_run:false, kept for callers that
+	// already send it. apply:true with dry_run:true is refused.
 	Apply bool `json:"apply"`
-	// GroupIDs limits the run to these version groups. Required for apply.
+	// GroupIDs limits the run to these version groups. Required for a write.
 	GroupIDs []string `json:"group_ids"`
+	// Limit caps how many candidate groups are planned (after sorting by
+	// group id, so a limited run is repeatable). 0 means no cap.
+	Limit int `json:"limit,omitempty"`
+}
+
+// resolveWrite folds dry_run and apply into one answer.
+func (p vgPrimaryRepairParams) resolveWrite() (bool, error) {
+	if p.DryRun != nil && *p.DryRun && p.Apply {
+		return false, fmt.Errorf("version-group-primary-repair: apply:true contradicts dry_run:true; send one")
+	}
+	return p.Apply || (p.DryRun != nil && !*p.DryRun), nil
 }
 
 type vgRepairGroupReport struct {
@@ -121,6 +139,12 @@ type vgRepairGroupReport struct {
 	ExplicitTrue       int                       `json:"explicit_true"`
 	EffectivePrimaries int                       `json:"effective_primaries"`
 	CarryOver          *versionprimary.CarryPlan `json:"carry_over,omitempty"`
+	// DemotedIDs are the members a write sets explicit false: every other
+	// live member not already false, then DemoteNonLive. Filled at plan time
+	// so the dry run shows them.
+	DemotedIDs []string `json:"demoted_ids,omitempty"`
+	// SkipReason explains a skipped_* / refused_* decision.
+	SkipReason string `json:"skip_reason,omitempty"`
 	// MergedLoserAmongPrimaries: two or more members are explicit true and
 	// one of them carries a merge target (a merge LOSER). A merge survivor
 	// carries no marker on its row, so a double caused by a survivor is not
@@ -162,6 +186,19 @@ type vgRepairReport struct {
 	// MergeOnly are candidates whose live members are already right; only a
 	// merge loser (same-group, or still counted primary) makes them one.
 	MergeOnly int `json:"candidates_merge_only"`
+	// MultiPrimary / NoPrimary restate MultiExplicit / ZeroExplicit under the
+	// names version-group-primary-report uses. The report counts every
+	// non-deleted member; this op counts live members only, and also takes
+	// nil-only and merge-only groups, so the totals differ from it.
+	MultiPrimary int `json:"multi_primary"`
+	NoPrimary    int `json:"no_primary"`
+	// Limit / LimitedOut: candidates past params.limit were not planned.
+	Limit      int `json:"limit,omitempty"`
+	LimitedOut int `json:"limited_out,omitempty"`
+	// Planned counts groups a write would change (writable decisions);
+	// SkippedByReason counts the rest by hold reason or decision kind.
+	Planned         int            `json:"planned"`
+	SkippedByReason map[string]int `json:"skipped_by_reason"`
 	// Requested ids that named no group, or a group that is not a candidate.
 	RequestedUnmatched     []string       `json:"requested_unmatched,omitempty"`
 	RequestedNotCandidate  []string       `json:"requested_not_candidate,omitempty"`
@@ -226,8 +263,10 @@ func (p *Plugin) versionGroupPrimaryRepairDef() sdk.OperationDef {
 			"only a live, organized copy with all its files present under the library root can be primary, " +
 			"ranked m4b with chapters > m4b without > metadata > other formats. Groups whose better copy is " +
 			"outside the library, or with no such copy, are held and never written. The winner's EMPTY fields " +
-			"are filled from the best-metadata copy; nothing is overwritten. DRY-RUN BY DEFAULT: apply=true " +
-			"needs group_ids, refuses while library.scan runs, and records metadata history after each write.",
+			"are filled from the best-metadata copy; nothing is overwritten. Groups touching books/itunes/** or " +
+			"Doctor Who / Big Finish / Torchwood are skipped and reported. DRY-RUN BY DEFAULT: only dry_run=false " +
+			"(or apply=true) writes; a write needs group_ids, refuses while library.scan runs, and records metadata " +
+			"history after each write. limit caps the groups planned.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.version-group-primary-repair",
@@ -295,8 +334,14 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 	if store == nil || vps == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
+	write, werr := params.resolveWrite()
+	if werr != nil {
+		return nil, werr
+	}
+	params.Apply = write
 	requested := normalizeGroupIDs(params.GroupIDs)
-	report := &vgRepairReport{DryRun: !params.Apply, ByDecision: map[string]int{}, ByHoldReason: map[string]int{}}
+	report := &vgRepairReport{DryRun: !params.Apply, ByDecision: map[string]int{}, ByHoldReason: map[string]int{},
+		SkippedByReason: map[string]int{}}
 	if params.Apply && len(requested) == 0 {
 		return report, fmt.Errorf("version-group-primary-repair: apply needs explicit group_ids; run the dry run and pick them from its report")
 	}
@@ -387,6 +432,10 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 		}
 		sort.Strings(work)
 	}
+	if params.Limit > 0 && len(work) > params.Limit {
+		report.Limit, report.LimitedOut = params.Limit, len(work)-params.Limit
+		work = work[:params.Limit]
+	}
 	report.Candidates = len(work)
 	for _, gid := range work {
 		switch c := counts[gid]; {
@@ -400,6 +449,7 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 			report.NilOnly++
 		}
 	}
+	report.MultiPrimary, report.NoPrimary = report.MultiExplicit, report.ZeroExplicit
 	log.Info("version-group-primary-repair candidates", "apply", params.Apply, "candidates", len(work),
 		"requested", len(requested), "unmatched", len(report.RequestedUnmatched), "not_candidate", len(report.RequestedNotCandidate))
 	if len(work) == 0 {
@@ -407,7 +457,18 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 		return report, nil
 	}
 
-	a := &vgApplier{store: store, history: vps, reporter: reporter, apply: params.Apply}
+	// Series names for the Doctor Who / Big Finish / Torchwood guard. A read
+	// failure stops the run: without the names the guard cannot see a
+	// manual-only book whose path does not say so.
+	allSeries, err := store.GetAllSeries()
+	if err != nil {
+		return report, fmt.Errorf("list series: %w", err)
+	}
+	seriesNames := make(map[int]string, len(allSeries))
+	for _, s := range allSeries {
+		seriesNames[s.ID] = s.Name
+	}
+	a := &vgApplier{store: store, history: vps, reporter: reporter, apply: params.Apply, seriesNames: seriesNames}
 	holderID, held := "", false
 	if params.Apply {
 		if err := refuseWhileLibraryScanActive(p.deps.OperationQueueStore(), "version-group-primary-repair"); err != nil {
@@ -484,9 +545,15 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 func (r *vgRepairReport) tally(g *vgRepairGroupReport) {
 	if g.Error != "" && g.Kind == "" {
 		r.Errors++
+		r.SkippedByReason["error"]++
 		return
 	}
 	r.ByDecision[g.Kind]++
+	if k := vgSkipKey(g); k != "" {
+		r.SkippedByReason[k]++
+	} else {
+		r.Planned++
+	}
 	if g.HoldReason != "" {
 		r.ByHoldReason[g.HoldReason]++
 	}
@@ -526,6 +593,9 @@ type vgApplier struct {
 	history  VersionPrimaryStore
 	reporter sdk.Reporter
 	apply    bool
+	// seriesNames resolves SeriesID for the owner-manual guard. Read-only
+	// after construction.
+	seriesNames map[int]string
 
 	fieldsFilled  atomic.Int64
 	historyFailed atomic.Int64
@@ -575,6 +645,13 @@ func (a *vgApplier) planAndApply(ctx context.Context, loader versionprimary.Load
 		g.Error = "read group: " + err.Error()
 		return g
 	}
+	if kind, why, gerr := vgGroupGuard(a.store, a.seriesNames, members); gerr != nil {
+		g.Error = "guard: " + gerr.Error()
+		return g
+	} else if kind != "" {
+		g.Kind, g.SkipReason, g.Reason = kind, why, why
+		return g
+	}
 	alive := vgStoreAlive(a.store)
 	ms, err := loader.LoadMembers(ctx, members, alive)
 	if err != nil {
@@ -616,6 +693,21 @@ func (a *vgApplier) planAndApply(ctx context.Context, loader versionprimary.Load
 	if g.WinnerID != "" && g.MetadataBestID != "" && g.MetadataBestID != g.WinnerID {
 		cp := versionprimary.PlanCarryOver(byID[g.WinnerID], byID[g.MetadataBestID])
 		g.CarryOver = &cp
+	}
+	if vgWritable(g.Kind) && g.Kind != vgDecisionDemoteNonLive {
+		if w := byID[g.WinnerID]; w == nil || w.LibraryState == nil || *w.LibraryState != "organized" {
+			g.SkipReason = fmt.Sprintf("winner %s is not an organized book; refusing to demote organized members for it", g.WinnerID)
+			g.Kind, g.Reason, g.CarryOver = vgDecisionRefuseNotOrganized, g.SkipReason, nil
+			return g
+		}
+	}
+	if vgWritable(g.Kind) {
+		for _, m := range g.Members {
+			if m.BookID != g.WinnerID && m.Live && m.StoredPrimary != "false" {
+				g.DemotedIDs = append(g.DemotedIDs, m.BookID)
+			}
+		}
+		g.DemotedIDs = append(g.DemotedIDs, g.DemoteNonLive...)
 	}
 	if !a.apply || !vgWritable(g.Kind) {
 		return g
@@ -679,14 +771,7 @@ func (a *vgApplier) write(gid string, planned []database.Book, g *vgRepairGroupR
 
 	// Every other live member, then every non-live one still counted
 	// primary: explicit false.
-	var demote []string
-	for _, m := range g.Members {
-		if m.BookID != g.WinnerID && m.Live && m.StoredPrimary != "false" {
-			demote = append(demote, m.BookID)
-		}
-	}
-	demote = append(demote, g.DemoteNonLive...)
-	for i, id := range demote {
+	for i, id := range g.DemotedIDs {
 		if _, err := a.modify(id, plannedKeys[id], false, nil, false); err != nil {
 			switch {
 			case errors.Is(err, errVGChangedSincePlan) && i == 0 && g.Kind == vgDecisionDemoteNonLive:
