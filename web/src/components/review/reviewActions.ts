@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 //
 // Every action a reviewer can take, across all three lanes, as one discriminated
 // union.
@@ -28,8 +28,8 @@
 //      that offers undo uniformly would promise something it cannot deliver, so
 //      reversibility is declared per action rather than assumed.
 
-/** The three review lanes. */
-export type ReviewLane = 'dupes' | 'metadata' | 'regroup';
+/** The four review lanes. */
+export type ReviewLane = 'dupes' | 'metadata' | 'regroup' | 'repairs';
 
 // ---------------------------------------------------------------------------
 // Actions
@@ -83,7 +83,24 @@ export type RegroupAction =
   | { lane: 'regroup'; type: 'reject'; id: string }
   | { lane: 'regroup'; type: 'bulk'; kind: string; decision: 'approve' | 'reject' };
 
-export type ReviewAction = DupesAction | MetadataAction | RegroupAction;
+/**
+ * Repairs lane. Ids are plan-row ids (a fixer's stable unit: a version group, a
+ * book), scoped to one fixer and one stored plan.
+ *
+ * Both applies carry the plan they were chosen from: a row id means something
+ * only inside the plan that proposed it, and an apply against a newer plan than
+ * the reviewer looked at would write rows they never saw.
+ *
+ * `applyAllApplicable` is NOT `applyRows` over the visible page: it names every
+ * applicable row of the plan, including pages not loaded, and the lane resolves
+ * the ids from the stored plan after the confirm.
+ */
+export type RepairsAction =
+  | { lane: 'repairs'; type: 'runTrial'; fixerId: string }
+  | { lane: 'repairs'; type: 'applyRows'; fixerId: string; planOpId: string; rowIds: string[] }
+  | { lane: 'repairs'; type: 'applyAllApplicable'; fixerId: string; planOpId: string };
+
+export type ReviewAction = DupesAction | MetadataAction | RegroupAction | RepairsAction;
 
 /** Narrow a ReviewAction to one lane's actions. */
 export type ActionForLane<L extends ReviewLane> = Extract<ReviewAction, { lane: L }>;
@@ -146,6 +163,12 @@ export function needsConfirmation(action: ReviewAction): boolean {
       return action.ids.length > 1;
     case 'bulk':
       return true;
+    // The repairs applies DO confirm, but inside the lane's own dispatch (like
+    // the metadata lane's Replace mode), so every entry point asks exactly once.
+    // Returning true here would stack an ActionBar dialog on top of that one.
+    case 'applyRows':
+    case 'applyAllApplicable':
+      return false;
     default:
       return false;
   }
@@ -168,9 +191,15 @@ export function affectedCount(action: ReviewAction): number | null {
     case 'applySelected':
     case 'rejectGroup':
       return action.ids.length;
+    case 'applyRows':
+      return action.rowIds.length;
     case 'mergeAllFiltered':
     case 'skipAllUnmatched':
     case 'bulk':
+    case 'applyAllApplicable':
+      return null;
+    case 'runTrial':
+      // A trial writes nothing; the rows it will find are not known yet.
       return null;
     default:
       return 1;
