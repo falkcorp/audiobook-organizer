@@ -1,7 +1,7 @@
 // file: internal/database/book_field_render.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c1e4b2a-93d5-4f60-8a1b-5e2d9c0f7a34
-// last-edited: 2026-09-13
+// last-edited: 2026-09-27
 
 package database
 
@@ -44,6 +44,24 @@ func bookFieldJSONName(f reflect.StructField) string {
 		return f.Name
 	}
 	return name
+}
+
+// TrackedBookFields returns the JSON name of every history-tracked Book field
+// (every field RenderBookField accepts), in struct order. A writer that diffs
+// a before/after snapshot over this list records a history row for whatever
+// its callback changed, so no changed column can go unrecorded because a
+// hand-kept field list missed it (internal/repairs.Writer).
+func TrackedBookFields() []string {
+	t := reflect.TypeOf(Book{})
+	out := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if bookFieldSkip(f) || bookFieldJSONName(f) == "-" {
+			continue
+		}
+		out = append(out, bookFieldJSONName(f))
+	}
+	return out
 }
 
 // bookFieldByJSON returns the addressable Book field with that JSON name.
