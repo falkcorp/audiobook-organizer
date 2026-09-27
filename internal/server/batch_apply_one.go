@@ -135,6 +135,12 @@ const (
 	// review-lane approval (row pin) overrides the mark, as the single-book
 	// dialog does. The preview drops these books (excludedFromPreview).
 	applySkipMarkedNoMatch = "marked_no_match"
+	// applySkipAuthorsUnreadable: the book's live author credits (AuthorID
+	// and the book_authors join) could not be read, so the certainty gate has
+	// nothing true to judge the candidate's author against. Judging it as
+	// authorless would LOOSEN the gate (no author to overwrite, so an unknown
+	// runtime no longer blocks), so the book is refused and nothing written.
+	applySkipAuthorsUnreadable = "authors_unreadable"
 )
 
 // cachedApplyPlan is the decision for one book, made BEFORE anything is
