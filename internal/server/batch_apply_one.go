@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-27
 
@@ -162,14 +162,15 @@ type cachedApplyPlan struct {
 	// OwnerReviewed: the gate refused, the request's pin matched, and every
 	// refusing leg is one an owner review overrides. Reason is then "".
 	OwnerReviewed bool
-	// ReviewApproved: the owner applied this book from a review-page apply
-	// button (an owner-review pin: a single row or a bulk button, see
-	// metafetch.PinOriginRow / PinOriginReviewBulk), whether the gate then
-	// passed or refused it. It is what makes the apply overwrite (owner
-	// ruling 2026-09-14, "any row I approve overwrites"; 2026-09-27, every
-	// review-page apply button is the owner's manual apply). It is kept apart
-	// from OwnerReviewed on purpose: OwnerReviewed records a GATE OVERRIDE in
-	// the change history, and a row the gate passed overrode nothing.
+	// ReviewApproved: the owner clicked Apply on this ONE row in the review
+	// lane (a pin with origin "row" that matched the top cached candidate),
+	// whether the gate then passed or refused it. It alone makes the apply
+	// overwrite (owner ruling 2026-09-14, "any row I approve overwrites").
+	// A review-page BULK button (origin "review_bulk") lifts the gate like a
+	// row (owner ruling 2026-09-27) but does NOT overwrite: bulk applies stay
+	// fill-only (owner decision A3#3, not reversed). It is kept apart from
+	// OwnerReviewed on purpose: OwnerReviewed records a GATE OVERRIDE in the
+	// change history, and a row the gate passed overrode nothing.
 	ReviewApproved bool
 	// Pinnable: the plan came from a path that accepts an owner-review pin
 	// (planCachedApply). The op-results path (planOpResultApply) takes none,
@@ -189,26 +190,27 @@ func (p cachedApplyPlan) reviewOnly() bool {
 // preflight and the dry-run preview alike, so no two of them can disagree
 // about a row.
 //
-// Apply (a request's plan): a book applied from any review-page apply button
-// (ReviewApproved: a single row or a bulk button, owner rulings 2026-09-14
-// and 2026-09-27) is the owner's manual apply, so it may overwrite filled
-// descriptive fields like the single-book apply, whether the gate passed it
-// or an owner review lifted a refusal. Every other batch row (no pin, or a
-// pin of no owner-review origin: scripts and API callers) is fill-only
-// (owner decision A3#3). Only a lifted refusal (OwnerReviewed) is labelled as
-// a gate override.
+// Overwriting is keyed on the pin ORIGIN, never on whether the gate was
+// lifted: only a single-row approval (ReviewApproved, origin "row", owner
+// ruling 2026-09-14) may overwrite filled descriptive fields. Every other
+// batch row is fill-only (owner decision A3#3): no pin, a script's pin, and a
+// review-page bulk button's "review_bulk" pin or hashless marker. A bulk
+// button lifts the certainty gate like a row (owner ruling 2026-09-27) and
+// that lift is recorded (OwnerReviewed + GateOverride), but it writes only
+// into empty fields.
 //
-// Preview (the pinless dry run): a gate-passed row previews fill-only, which
-// is what a pinless (script or API) apply of it writes. A row only a review
-// can land (reviewOnly) previews with the options its review-page apply would
-// carry: overwrite, and the override labels. What the preview cannot know is
-// whether the book will be applied from the review page instead: since
-// 2026-09-27 every review-page button, bulk ones included, overwrites, so for
-// such an apply a gate-passed row overwrites where this preview showed a
-// fill.
+// Preview (the pinless dry run, which knows no button): a gate-passed row
+// previews fill-only, which is what a pinless (script or API) apply or a
+// review-page bulk apply writes. A row only a review can land (reviewOnly)
+// previews as its single-row approval would apply it: overwrite, with the
+// override labels (unchanged since 2026-09-14). The same row applied from a
+// review-page BULK button gets the same override labels but stays fill-only,
+// so it fills where this preview showed an overwrite; and a gate-passed row
+// the owner approves with the single-row Apply overwrites where this showed
+// a fill.
 func (p cachedApplyPlan) applyOptions() metafetch.ApplyOptions {
 	overridden := p.OwnerReviewed || p.reviewOnly()
-	opts := metafetch.ApplyOptions{FillOnly: !(p.ReviewApproved || overridden)}
+	opts := metafetch.ApplyOptions{FillOnly: !(p.ReviewApproved || p.reviewOnly())}
 	if overridden {
 		// OwnerReviewed, not a non-empty summary, is what makes the apply
 		// record the override and require its history: an empty
@@ -278,16 +280,16 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipAuthorsUnreadable, Err: aerr}
 	}
 	v := applygate.EvaluateInBatch(book, authors, gateRuntime(books, book), &cand, svc.ValidateCachedIdentityForBook(entry, book, authors), claims)
-	// An owner-review pin (matched, or the hashless marker) is the owner's
-	// approval of this book: its apply overwrites whether or not the gate
-	// needed lifting. A stale pin never gets here (stale_candidate above,
-	// nothing written).
-	approved := pin != nil && pin.IsOwnerReview()
-	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true, ReviewApproved: approved}
+	// Any owner-review pin (row, bulk, or the hashless marker) lifts the
+	// certainty gate. Only a single-row pin is an approval that overwrites
+	// (ReviewApproved); a bulk button stays fill-only. A stale pin never gets
+	// here (stale_candidate above, nothing written).
+	ownerReview := pin != nil && pin.IsOwnerReview()
+	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true, ReviewApproved: pin != nil && pin.IsRowReview()}
 	if !v.Allowed {
 		// Only an owner-review pin earns the override. A pin of any other
 		// origin was still checked for staleness above, and gets the hard gate.
-		if approved && v.OwnerReviewOverridable() {
+		if ownerReview && v.OwnerReviewOverridable() {
 			plan.OwnerReviewed = true
 			return plan
 		}

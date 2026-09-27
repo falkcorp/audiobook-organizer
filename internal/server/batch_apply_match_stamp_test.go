@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_match_stamp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 118151c9-2974-4fad-96ae-08925b5c5f9f
-// last-edited: 2026-09-14
+// last-edited: 2026-09-27
 //
 // A batch row's options decide whether a kept (locked) title blocks the match
 // record: a row the owner approved in the review lane records it, an
@@ -24,7 +24,11 @@ func TestBatchApplyOptions_LockedTitleMatchRecord(t *testing.T) {
 		wantStamped bool
 	}{
 		{"review-lane approval", cachedApplyPlan{Pinnable: true, ReviewApproved: true}, true},
-		{"gate lifted by owner review", cachedApplyPlan{Pinnable: true, OwnerReviewed: true}, true},
+		{"gate lifted by a row review", cachedApplyPlan{Pinnable: true, ReviewApproved: true, OwnerReviewed: true}, true},
+		// A review-page bulk button lifts the gate but stays fill-only (A3#3),
+		// and fill-only is what marks an apply as automatic: it records the
+		// match only when the book ends up holding the candidate's title.
+		{"gate lifted by a bulk review", cachedApplyPlan{Pinnable: true, OwnerReviewed: true}, false},
 		{"automatic batch row", cachedApplyPlan{Pinnable: true}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

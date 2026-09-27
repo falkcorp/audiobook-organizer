@@ -1,5 +1,5 @@
 // file: internal/metafetch/fill_only.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9b4e2c71-5a3d-4f08-b6e1-2d7c8a90f513
 // last-edited: 2026-09-27
 
@@ -19,14 +19,14 @@ import (
 // After the owner rulings of 2026-09-14 and 2026-09-27, the paths that may
 // OVERWRITE are:
 //   - the single-book apply (hand-picked in the apply dialog);
-//   - a batch row applied from any review-page apply button (single row,
-//     Apply selected, Apply page, Apply high confidence, group Apply All: an
-//     owner-review pin or the hashless owner marker, CandidatePin
-//     .IsOwnerReview), whether the gate passed it or the approval lifted a
-//     refusal.
+//   - a batch row the owner approved with the review lane's single-row Apply
+//     (a matching "row" pin, CandidatePin.IsRowReview), whether the gate
+//     passed it or the approval lifted a refusal.
 //
-// The paths that stay FILL-ONLY are: batch rows with no pin or a pin of no
-// owner-review origin (scripts, API callers),
+// The paths that stay FILL-ONLY are: batch rows with no pin, a pin of no
+// owner-review origin (scripts, API callers), or a review-page BULK button's
+// "review_bulk" pin or marker (it lifts the gate since 2026-09-27 but does
+// not overwrite),
 // /metadata/batch-apply-candidates, auto-fetch, the upgrade job, and
 // maintenance.auto-match-transcribed. That last one writes only title and
 // author, which this function does not strip; it drops each filled one from

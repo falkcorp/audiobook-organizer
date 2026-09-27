@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-09-27
 //
@@ -191,12 +191,12 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 
 	// The options the apply of this row would use (cachedApplyPlan.applyOptions
 	// states the rule): fill-only for a row the gate passes, which a pinless
-	// (script or API) apply of the preview's rows writes; for a row only a
-	// review-page approval can land, the overwriting options that apply (and
-	// its rename preflight) runs with. Changes and the rename check below
-	// therefore describe the apply that would happen. A gate-passed row
-	// applied from any review-page button (single row or bulk, since
-	// 2026-09-27) overwrites where this shows a fill.
+	// (script or API) apply or a review-page bulk apply writes; for a row only
+	// a review can land, the options its single-row approval runs with
+	// (overwrite plus the override labels). A review-page bulk button lifts
+	// the same refusal but stays fill-only, so it fills where this shows an
+	// overwrite; a gate-passed row approved with the single-row Apply
+	// overwrites where this shows a fill.
 	pv, err := svc.PreviewMetadataCandidateWithOptions(id, *plan.Candidate, writeBack, plan.applyOptions())
 	switch {
 	case errors.Is(err, metafetch.ErrApplyPolicyBlocked):
