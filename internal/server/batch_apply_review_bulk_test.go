@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_review_bulk_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5f2c8a91-3d6e-4b17-9a40-c7e1b5d3f820
 // last-edited: 2026-09-27
 //
