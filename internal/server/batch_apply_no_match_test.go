@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_no_match_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d4f2a61-0c7b-4e93-b5a2-6f1e9d3c7a08
-// last-edited: 2026-09-14
+// last-edited: 2026-09-27
 
 package server
 

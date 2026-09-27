@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
 // last-edited: 2026-09-27
 
@@ -918,4 +918,42 @@ func TestBatchApplyFromCache_DryRunNeverForwardsOwnerPins(t *testing.T) {
 	require.True(t, ok, "the apply must forward the pins")
 	assert.Equal(t, map[string]any{"origin": "review_bulk", "source": "", "title": ""}, pins["b2"],
 		"the hashless owner marker reaches the op as sent")
+}
+
+// The review page's bulk toggle (owner ruling 2026-09-27): only "replace" is
+// forwarded to the op; "fill" and an absent mode enqueue identical params (so
+// a fill request still merges with a queued run from before the toggle); the
+// dry run never forwards a mode; any other value is a 400 and enqueues nothing.
+func TestBatchApplyFromCache_BulkMode(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     string
+		wantMode any // nil = no "mode" key in the enqueued params
+	}{
+		{"absent", `{"book_ids":["b1"],"dry_run":false}`, nil},
+		{"fill", `{"book_ids":["b1"],"dry_run":false,"mode":"fill"}`, nil},
+		{"replace", `{"book_ids":["b1"],"dry_run":false,"mode":"replace"}`, "replace"},
+		{"dry run replace", `{"book_ids":["b1"],"dry_run":true,"mode":"replace"}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ops := &capturingEnqueuer{}
+			c, w := batchApplyCtx(tc.body)
+			newDispatchHandler(t, ops).BatchApplyFromCache(c)
+			require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+			require.Equal(t, 1, ops.calls)
+			p := paramsMap(t, ops.params)
+			mode, has := p["mode"]
+			if tc.wantMode == nil {
+				assert.False(t, has, "params %v must carry no mode", p)
+			} else {
+				assert.Equal(t, tc.wantMode, mode)
+			}
+		})
+	}
+
+	ops := &capturingEnqueuer{}
+	c, w := batchApplyCtx(`{"book_ids":["b1"],"dry_run":false,"mode":"overwrite"}`)
+	newDispatchHandler(t, ops).BatchApplyFromCache(c)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Zero(t, ops.calls, "an invalid mode enqueues nothing")
 }

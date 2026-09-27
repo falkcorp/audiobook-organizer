@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-09-27
 //

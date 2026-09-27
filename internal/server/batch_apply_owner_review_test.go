@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
 // last-edited: 2026-09-27
 //

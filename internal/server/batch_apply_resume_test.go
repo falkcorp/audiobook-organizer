@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_resume_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2f6b81c4-7d05-4e39-b1a8-93c05e7d264f
-// last-edited: 2026-09-07
+// last-edited: 2026-09-27
 
 package server
 
