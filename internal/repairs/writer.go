@@ -1,5 +1,5 @@
 // file: internal/repairs/writer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
 // last-edited: 2026-09-27
 
@@ -8,7 +8,6 @@ package repairs
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // ChangeTypeApplyIncomplete matches metafetch.ChangeTypeApplyIncomplete:
@@ -49,20 +49,18 @@ type Writer struct {
 	// Source / ChangeType go on every history row; BatchPrefix starts every
 	// batch id.
 	source, changeType, batchPrefix string
-	logger                          *slog.Logger
+	log                             logger.LevelLogger
 
 	writes        atomic.Int64
 	historyRows   atomic.Int64
 	historyFailed atomic.Int64
 }
 
-// NewWriter builds a Writer. logger may be nil.
-func NewWriter(store BookModifier, history HistoryRecorder, source, changeType, batchPrefix string, logger *slog.Logger) *Writer {
-	if logger == nil {
-		logger = slog.Default()
-	}
+// NewWriter builds a Writer. Its warnings go to the "repairs" subsystem
+// logger (printf-style, values sanitized).
+func NewWriter(store BookModifier, history HistoryRecorder, source, changeType, batchPrefix string) *Writer {
 	return &Writer{store: store, history: history, source: source, changeType: changeType,
-		batchPrefix: batchPrefix, logger: logger}
+		batchPrefix: batchPrefix, log: logger.New("repairs")}
 }
 
 // Modify runs fn on the book row inside ModifyBook (so a check fn makes and
@@ -123,8 +121,8 @@ func (w *Writer) recordHistory(bookID string, before, after *database.Book) []st
 			BatchID:       batchID,
 		}); err != nil {
 			failed++
-			w.logger.Warn(w.source+": history row not recorded (the write itself committed)",
-				"book_id", bookID, "field", field, "err", err)
+			w.log.Warn("%s: history row not recorded (the write itself committed): book_id=%s field=%s err=%s",
+				w.source, logger.SanitizeLogValue(bookID), field, logger.SanitizeLogValue(err.Error()))
 			continue
 		}
 		w.historyRows.Add(1)
@@ -135,8 +133,8 @@ func (w *Writer) recordHistory(bookID string, before, after *database.Book) []st
 			BookID: bookID, Field: "apply", ChangeType: ChangeTypeApplyIncomplete,
 			Source: w.source, ChangedAt: now, BatchID: batchID,
 		}); err != nil {
-			w.logger.Error(w.source+": neither the history nor the incomplete marker was recorded",
-				"book_id", bookID, "batch_id", batchID, "err", err)
+			w.log.Error("%s: neither the history nor the incomplete marker was recorded: book_id=%s batch_id=%s err=%s",
+				w.source, logger.SanitizeLogValue(bookID), batchID, logger.SanitizeLogValue(err.Error()))
 		}
 	}
 	return changed

@@ -1,14 +1,14 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.57.0
+// version: 1.57.1
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-27
 
 package maintenance
 
 import (
-	"log/slog"
 	"sync"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -34,7 +34,7 @@ func (p *Plugin) Repairs() *repairs.Registry {
 	p.repairsOnce.Do(func() {
 		p.repairsReg = repairs.NewRegistry()
 		if err := p.repairsReg.Register(newVGPrimaryFixer(p)); err != nil {
-			slog.Error("repairs: fixer not registered", "err", err)
+			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 	})
 	return p.repairsReg
