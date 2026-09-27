@@ -120,12 +120,12 @@ func (mfs *Service) ValidateCachedIdentity(entry *MetadataCandidateCache, bookID
 // with no hash keeps ValidateCachedIdentity's fail-open.
 //
 // "The book's current author" is any form a writer could have hashed
-// (CurrentAuthorForms): the Book.Author snapshot, which the batch fetch uses,
-// and the live author (liveAuthors, database.LiveBookAuthorNames), which the
-// UI's search sends as the book's author_name. Until 2026-09-27 only the
-// snapshot was tried, so a UI-fetched row on a book whose snapshot is nil or
-// stale failed as identity_stale although nothing had changed. Accepting the
-// snapshot keeps every row that passed before passing.
+// (CurrentAuthorForms): the Book.Author snapshot, which the batch fetch hashes
+// today, and the live author (liveAuthors, database.LiveBookAuthorNames), the
+// author the book actually has and the one the certainty gate now judges by.
+// A row fetched for the live author was fetched for the book as it is, so it
+// is not stale. Accepting the snapshot keeps every row that passed before
+// passing.
 func (mfs *Service) ValidateCachedIdentityForBook(entry *MetadataCandidateCache, book *database.Book, liveAuthors []string) error {
 	if entry == nil {
 		return nil

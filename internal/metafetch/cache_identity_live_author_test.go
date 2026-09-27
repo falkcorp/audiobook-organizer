@@ -13,9 +13,9 @@ import (
 )
 
 // The identity leg accepts a row hashed from ANY form of the book's current
-// author: the Book.Author snapshot (the batch fetch) or the live author (the
-// UI search, which sends the API's author_name). A row hashed from an author
-// the book does not have still fails closed.
+// author: the Book.Author snapshot (what the batch fetch hashes) or the live
+// author. A row hashed from an author the book does not have still fails
+// closed.
 func TestValidateCachedIdentityForBook_LiveAuthorForms(t *testing.T) {
 	mfs := &Service{}
 	book := &database.Book{ID: "valis", Title: "Valis"} // nil snapshot
@@ -29,7 +29,6 @@ func TestValidateCachedIdentityForBook_LiveAuthorForms(t *testing.T) {
 	}{
 		{"batch shape, snapshot author (nil)", hashSearchInputs("valis", "Valis", "", "", ""), live, true},
 		{"batch shape, live author", hashSearchInputs("valis", "Valis", "Philip K. Dick", "", ""), live, true},
-		{"UI shape, live author", hashSearchInputs("valis", "Valis", "Philip K. Dick", "", ""), live, true},
 		{"live author row, no live authors given", hashSearchInputs("valis", "Valis", "Philip K. Dick", "", ""), nil, false},
 		{"another author", hashSearchInputs("valis", "Valis", "Stephen King", "", ""), live, false},
 		{"another title", hashSearchInputs("valis", "Ubik", "Philip K. Dick", "", ""), live, false},
@@ -60,5 +59,22 @@ func TestValidateCachedIdentityForBook_JoinedLiveAuthors(t *testing.T) {
 	entry.SourceHash = hashSearchInputs("go", "Good Omens", "Unknown Author", "", "")
 	if err := mfs.ValidateCachedIdentityForBook(entry, book, []string{"Terry Pratchett", "Neil Gaiman"}); err != nil {
 		t.Fatalf("snapshot row: %v", err)
+	}
+}
+
+// The full shape (title, author, narrator, series) with the live author: the
+// second identity branch, reached only when the batch shape does not match.
+func TestValidateCachedIdentityForBook_FullShapeLiveAuthor(t *testing.T) {
+	mfs := &Service{}
+	narr := "Tom Parker"
+	book := &database.Book{ID: "valis", Title: "Valis", Narrator: &narr, Series: &database.Series{Name: "VALIS Trilogy"}}
+	live := []string{"Philip K. Dick"}
+	entry := &MetadataCandidateCache{BookID: "valis", SourceHash: hashSearchInputs("valis", "Valis", "Philip K. Dick", "Tom Parker", "VALIS Trilogy")}
+	if err := mfs.ValidateCachedIdentityForBook(entry, book, live); err != nil {
+		t.Fatalf("full shape, live author: %v", err)
+	}
+	entry.SourceHash = hashSearchInputs("valis", "Valis", "Philip K. Dick", "Someone Else", "VALIS Trilogy")
+	if err := mfs.ValidateCachedIdentityForBook(entry, book, live); !errors.Is(err, ErrStaleMetadataCache) {
+		t.Fatalf("full shape, different narrator: %v, want ErrStaleMetadataCache", err)
 	}
 }
