@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.18.0
+// version: 1.19.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-27
 //
@@ -180,6 +180,21 @@ export function loadBulkApplyMode(): BulkApplyMode {
     // Storage blocked (private mode, sandboxed frame): the safe default.
     return 'fill';
   }
+}
+
+/**
+ * The one prompt a Replace-mode bulk apply shows, whichever entry point sent
+ * it (action bar buttons, group Apply All, the workspace's Apply selected /
+ * all fields): every one of them dispatches applySelected, and the lane asks
+ * there, once.
+ */
+export function replaceConfirmMessage(count: number): string {
+  return (
+    `Apply metadata to ${count.toLocaleString()} book(s) and REPLACE existing values? ` +
+    'Filled fields (description, narrator, publisher, cover and the rest) will be ' +
+    "overwritten with the candidate's values; each overwrite is recorded in the " +
+    'change history as an owner replace.'
+  );
 }
 
 export function saveBulkApplyMode(mode: BulkApplyMode): void {
@@ -1243,6 +1258,17 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           applyOne(action.id);
           return;
         case 'applySelected':
+          // Replace overwrites values the owner may have curated, on every
+          // book in the batch, so it asks first -- here, not in each button,
+          // so every bulk entry point confirms exactly once. Fill applies as
+          // before, without a prompt.
+          if (
+            bulkApplyMode === 'replace' &&
+            action.ids.length > 0 &&
+            !window.confirm(replaceConfirmMessage(action.ids.length))
+          ) {
+            return;
+          }
           void applyMany(action.ids);
           return;
         case 'reject':
@@ -1296,7 +1322,17 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           return;
       }
     },
-    [applyOne, applyMany, reject, unreject, results, toast, requestedPage, clearServerDerived]
+    [
+      applyOne,
+      applyMany,
+      reject,
+      unreject,
+      results,
+      toast,
+      requestedPage,
+      clearServerDerived,
+      bulkApplyMode,
+    ]
   );
 
   const toggleSelect = useCallback((bookId: string) => {
