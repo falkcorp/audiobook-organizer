@@ -517,6 +517,11 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 			return nil
 		}
 		g := a.planAndApply(gctx, loader, gid)
+		if !params.noDetailCap {
+			// The op's report never uses the member rows; drop them so a
+			// whole-library dry run does not hold every book until it ends.
+			g.planned = nil
+		}
 		mu.Lock()
 		groups = append(groups, g)
 		mu.Unlock()

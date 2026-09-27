@@ -47,6 +47,8 @@ type enqueued struct {
 type fakeEnqueuer struct {
 	mu    sync.Mutex
 	calls []enqueued
+	// fixedID, when set, is returned instead of a new id (registry dedupe).
+	fixedID string
 }
 
 func (e *fakeEnqueuer) EnqueueOp(_ context.Context, defID string, params any, _ ...opsregistry.EnqueueOption) (string, error) {
@@ -57,20 +59,48 @@ func (e *fakeEnqueuer) EnqueueOp(_ context.Context, defID string, params any, _ 
 		return "", err
 	}
 	e.calls = append(e.calls, enqueued{defID: defID, params: data})
+	if e.fixedID != "" {
+		return e.fixedID, nil
+	}
 	return fmt.Sprintf("op-new-%d", len(e.calls)), nil
 }
 
 type fakeOps struct {
-	rows map[string]*database.OperationV2Row
+	mu       sync.Mutex
+	rows     map[string]*database.OperationV2Row
+	settings map[string]string
 }
 
-func (o *fakeOps) GetOperationV2(id string) (*database.OperationV2Row, error) { return o.rows[id], nil }
-func (o *fakeOps) ListOperationsV2Since(_ time.Time, _ int) ([]database.OperationV2Row, error) {
+func (o *fakeOps) GetOperationV2(id string) (*database.OperationV2Row, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.rows[id], nil
+}
+func (o *fakeOps) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	var out []database.OperationV2Row
 	for _, r := range o.rows {
-		out = append(out, *r)
+		if r.Status == "queued" || r.Status == "running" {
+			out = append(out, *r)
+		}
 	}
 	return out, nil
+}
+func (o *fakeOps) GetSetting(key string) (*database.Setting, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	v, ok := o.settings[key]
+	if !ok {
+		return nil, database.ErrSettingNotFound
+	}
+	return &database.Setting{Key: key, Value: v}, nil
+}
+func (o *fakeOps) SetSetting(key, value, _ string, _ bool) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.settings[key] = value
+	return nil
 }
 
 func planRows(n int) []repairs.Row {
@@ -118,9 +148,11 @@ func setup(t *testing.T) (*gin.Engine, *fakeEnqueuer, *fakeOps) {
 		"op-running": {ID: "op-running", DefID: repairs.PlanOpID, Status: "running", QueuedAt: queued.Add(-2 * time.Hour),
 			Params: `{"fixer_id":"other"}`},
 		"op-scan": {ID: "op-scan", DefID: "library.scan", Status: "completed", QueuedAt: queued},
+	}, settings: map[string]string{
+		"repairs_last_plan_op:version-group-primary-repair": "op-plan",
+		"repairs_last_plan_op:other":                        "op-running",
 	}}
 	h := New(reg, enq, ops)
-	h.now = func() time.Time { return queued.Add(time.Hour) }
 	r := gin.New()
 	g := r.Group("/api/v1")
 	g.GET("/repairs", h.ListFixers)
@@ -170,6 +202,34 @@ func TestListFixers_WithLastPlanSummary(t *testing.T) {
 	require.Equal(t, 8, *vg.LastPlan.Applicable)
 	require.Equal(t, map[string]int{repairs.SkipITunes: 2}, vg.LastPlan.SkippedByKind)
 	require.Nil(t, vg.LastApply)
+}
+
+func TestEnqueue_RecordsLastRunAndReportsDedupe(t *testing.T) {
+	r, enq, ops := setup(t)
+	w := do(r, http.MethodPost, "/api/v1/repairs/version-group-primary-repair/apply",
+		`{"plan_op_id":"op-plan","row_ids":["vg-000"],"dry_run":false}`)
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	require.False(t, data[StartedResponse](t, w).Deduped)
+	require.Equal(t, "op-new-1", ops.settings["repairs_last_apply_op:version-group-primary-repair"])
+	require.Len(t, enq.calls, 1)
+
+	// The registry answers an identical request with the run already queued.
+	ops.rows["op-new-1"] = &database.OperationV2Row{ID: "op-new-1", DefID: repairs.ApplyOpID, Status: "running",
+		Params: `{"fixer_id":"version-group-primary-repair"}`}
+	enq.fixedID = "op-new-1"
+	w = do(r, http.MethodPost, "/api/v1/repairs/version-group-primary-repair/apply",
+		`{"plan_op_id":"op-plan","row_ids":["vg-000"],"dry_run":false}`)
+	require.Equal(t, http.StatusAccepted, w.Code)
+	got := data[StartedResponse](t, w)
+	require.True(t, got.Deduped)
+	require.Equal(t, "running", got.Status)
+
+	w = do(r, http.MethodGet, "/api/v1/repairs", "")
+	fixers := data[struct {
+		Fixers []FixerInfo `json:"fixers"`
+	}](t, w).Fixers
+	require.Equal(t, "op-new-1", fixers[1].LastApply.OperationID)
+	require.Equal(t, "running", fixers[1].LastApply.Status)
 }
 
 func TestStartPlan(t *testing.T) {
@@ -272,7 +332,7 @@ func TestStartApply(t *testing.T) {
 func TestPlanAndApply_NoRegistryIs503(t *testing.T) {
 	reg := repairs.NewRegistry()
 	require.NoError(t, reg.Register(stubFixer{id: "x"}))
-	h := New(reg, nil, &fakeOps{rows: map[string]*database.OperationV2Row{}})
+	h := New(reg, nil, &fakeOps{rows: map[string]*database.OperationV2Row{}, settings: map[string]string{}})
 	r := gin.New()
 	r.POST("/repairs/:fixer/plan", h.StartPlan)
 	r.POST("/repairs/:fixer/apply", h.StartApply)

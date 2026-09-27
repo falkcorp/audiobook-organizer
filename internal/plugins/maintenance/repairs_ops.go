@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -22,6 +23,11 @@ import (
 // every fixer in p.Repairs() runs through them, and the framework in
 // internal/repairs owns the guards, the fingerprint check, the history writer
 // and the scan stand-down, so a fixer cannot skip them.
+
+// The apply op reads the plan through a type assertion on the queue store.
+// Production hands it a database.Store, so pin that database.Store has the
+// method: an assertion whose method is missing there would fail only in prod.
+var _ repairs.OpReader = database.Store(nil)
 
 func (p *Plugin) repairsPlanDef() sdk.OperationDef {
 	return sdk.OperationDef{

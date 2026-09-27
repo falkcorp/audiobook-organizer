@@ -106,7 +106,11 @@ func (f *vgPrimaryFixer) Plan(ctx context.Context, raw json.RawMessage, rep regi
 	}
 	rows := make([]repairs.Row, 0, len(report.Groups))
 	for i := range report.Groups {
-		rows = append(rows, f.row(&report.Groups[i]))
+		r := f.row(&report.Groups[i])
+		// Detail carries a group from Replan to Apply; a stored plan never
+		// needs it, and dropping it lets each group's member rows go.
+		r.Detail = nil
+		rows = append(rows, r)
 	}
 	return rows, nil
 }
@@ -150,8 +154,8 @@ func (f *vgPrimaryFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 	case vgOutcomeChangedSincePlan:
 		return repairs.ErrChangedSincePlan
 	case vgOutcomePartial:
-		return fmt.Errorf("%w: part of group %s was written before a member changed (winner in place, some demotions not)",
-			repairs.ErrChangedSincePlan, g.GroupID)
+		return fmt.Errorf("%w: group %s: the winner is in place but a member changed before every demotion was written",
+			repairs.ErrPartiallyApplied, g.GroupID)
 	default:
 		if g.Error == "" {
 			return errors.New("write failed")
@@ -268,6 +272,12 @@ func (f *vgPrimaryFixer) authorName(b *database.Book) string {
 // decision, the winner, the demotions, the revive and the carried fields.
 // Elect also reads file presence and chapter counts, which no member key
 // holds; they reach the fingerprint through the decision they produce.
+func sortedCopy(ids []string) []string {
+	out := append([]string(nil), ids...)
+	sort.Strings(out)
+	return out
+}
+
 func vgFingerprint(g *vgRepairGroupReport) string {
 	var b strings.Builder
 	keys := vgKeys(g.planned)
@@ -281,8 +291,8 @@ func vgFingerprint(g *vgRepairGroupReport) string {
 		b.WriteString(fmt.Sprintf("m|%s|%s|%s|%s|%v\n", id, k.primary, k.mergedInto, k.state, k.softDeleted))
 	}
 	b.WriteString(fmt.Sprintf("d|%s|%s|%s|%s|%s\n", g.Kind, g.HoldReason, g.WinnerID, g.MetadataBestID, g.RevivedID))
-	b.WriteString("x|" + strings.Join(g.DemotedIDs, ",") + "\n")
-	b.WriteString("n|" + strings.Join(g.DemoteNonLive, ",") + "\n")
+	b.WriteString("x|" + strings.Join(sortedCopy(g.DemotedIDs), ",") + "\n")
+	b.WriteString("n|" + strings.Join(sortedCopy(g.DemoteNonLive), ",") + "\n")
 	if g.CarryOver != nil {
 		for _, fl := range g.CarryOver.Fills {
 			b.WriteString("f|" + fl.Field + "=" + fl.Value + "\n")

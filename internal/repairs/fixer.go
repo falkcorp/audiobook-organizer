@@ -47,6 +47,11 @@ const (
 // differs from the stored plan's.
 var ErrChangedSincePlan = errors.New("repairs: row changed since it was planned")
 
+// ErrPartiallyApplied is returned (wrapped) by a fixer's Apply that wrote
+// part of a row before finding a change. It is checked before
+// ErrChangedSincePlan, so the row reports partially_applied, not unchanged.
+var ErrPartiallyApplied = errors.New("repairs: row partially applied")
+
 // Row is one unit a fixer proposes to change. Rows are what the plan op
 // stores, the rows endpoint pages and the apply op selects by RowID.
 type Row struct {

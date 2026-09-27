@@ -174,11 +174,36 @@ func TestVGPrimaryFixer_PlanMatchesTheOpDryRun(t *testing.T) {
 		fromOp[g.GroupID] = viewOf(g)
 	}
 	for _, r := range rows {
-		g, ok := r.Detail.(*vgRepairGroupReport)
-		require.True(t, ok)
-		require.Equal(t, fromOp[r.RowID], viewOf(g), "group %s", r.RowID)
-		require.Equal(t, vgWritable(g.Kind), r.Applicable(), "group %s", r.RowID)
+		require.Nil(t, r.Detail, "a stored plan row carries no in-memory detail")
+		op := fromOp[r.RowID]
 		require.NotEmpty(t, r.Fingerprint)
+		if !vgWritable(op.kind) {
+			require.False(t, r.Applicable(), "group %s", r.RowID)
+			continue
+		}
+		require.True(t, r.Applicable(), "group %s", r.RowID)
+		require.Equal(t, op.kind, r.Proposed["decision"], "group %s", r.RowID)
+		require.Equal(t, op.winner, r.Proposed["primary"], "group %s", r.RowID)
+		require.Equal(t, op.demoted, strings.ReplaceAll(r.Proposed["demote"], ", ", ","), "group %s", r.RowID)
+		var fillFields []string
+		for _, kv := range strings.Split(op.fills, ";") {
+			if kv != "" {
+				fillFields = append(fillFields, strings.SplitN(kv, "=", 2)[0])
+			}
+		}
+		var rowFill []string
+		for k, v := range r.Proposed {
+			if strings.HasPrefix(k, "fill_from_") {
+				rowFill = strings.Split(v, ", ")
+			}
+		}
+		require.ElementsMatch(t, fillFields, rowFill, "group %s", r.RowID)
+	}
+	// Replan reproduces the stored fingerprint on unchanged state.
+	for _, r := range rows {
+		fresh, err := f.fixer(p).Replan(context.Background(), nil, r, &opIDReporter{id: "op-plan"})
+		require.NoError(t, err)
+		require.Equal(t, r.Fingerprint, fresh.Fingerprint, "group %s", r.RowID)
 	}
 
 	byID := map[string]repairs.Row{}

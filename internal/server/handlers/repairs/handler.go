@@ -20,8 +20,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
-	"sort"
 	"strconv"
 	"time"
 
@@ -37,10 +37,6 @@ import (
 const (
 	DefaultLimit = 100
 	MaxLimit     = 500
-	// recentWindow bounds the op history GET /repairs reads for each fixer's
-	// last plan and apply.
-	recentWindow = 30 * 24 * time.Hour
-	recentLimit  = 5000
 )
 
 // Enqueuer starts an operation.
@@ -48,10 +44,12 @@ type Enqueuer interface {
 	EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error)
 }
 
-// OpStore reads stored operation rows.
+// OpStore reads stored operation rows and the lane's last-run pointers.
 type OpStore interface {
 	GetOperationV2(id string) (*database.OperationV2Row, error)
-	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error)
+	ListActiveOperationsV2() ([]database.OperationV2Row, error)
+	GetSetting(key string) (*database.Setting, error)
+	SetSetting(key, value, typ string, isSecret bool) error
 }
 
 // Handler serves the repairs routes.
@@ -59,12 +57,11 @@ type Handler struct {
 	fixers   *repairs.Registry
 	enqueuer Enqueuer // nil when the registry is not initialised
 	ops      OpStore
-	now      func() time.Time
 }
 
 // New builds the handler. enqueuer may be nil: plan/apply then answer 503.
 func New(fixers *repairs.Registry, enqueuer Enqueuer, ops OpStore) *Handler {
-	return &Handler{fixers: fixers, enqueuer: enqueuer, ops: ops, now: time.Now}
+	return &Handler{fixers: fixers, enqueuer: enqueuer, ops: ops}
 }
 
 // OpRef is a pointer to a plan or apply run.
@@ -98,6 +95,9 @@ type StartedResponse struct {
 	DefID       string `json:"def_id"`
 	FixerID     string `json:"fixer_id"`
 	Status      string `json:"status"`
+	// Deduped: an identical request (same fixer, params and rows) was
+	// already queued or running, and OperationID is that run.
+	Deduped bool `json:"deduped,omitempty"`
 }
 
 // ApplyRequest is the body of POST /repairs/:fixer/apply.
@@ -113,48 +113,37 @@ type ApplyRequest struct {
 // ListFixers implements GET /repairs.
 func (h *Handler) ListFixers(c *gin.Context) {
 	fixers := h.fixers.List()
-	lastPlan, lastApply := h.recentRuns()
 	out := make([]FixerInfo, 0, len(fixers))
 	for _, f := range fixers {
 		out = append(out, FixerInfo{ID: f.ID(), Title: f.Title(), Description: f.Description(),
-			LastPlan: lastPlan[f.ID()], LastApply: lastApply[f.ID()]})
+			LastPlan: h.lastRun(lastPlanKey(f.ID())), LastApply: h.lastRun(lastApplyKey(f.ID()))})
 	}
 	httputil.RespondWithOK(c, gin.H{"fixers": out})
 }
 
-// recentRuns finds each fixer's newest plan and apply in the recent op
-// history. Best effort: a read failure leaves them unset.
-func (h *Handler) recentRuns() (plan, apply map[string]*OpRef) {
-	plan, apply = map[string]*OpRef{}, map[string]*OpRef{}
+// Each fixer's newest plan and apply started from this lane are recorded
+// under a settings key when they are enqueued, so GET /repairs is two point
+// reads per fixer. (Scanning the op history instead would decode every op
+// row and its result blob on every tab open.) A run started some other way,
+// e.g. POST /operations/v2, is not recorded here.
+func lastPlanKey(fixerID string) string  { return "repairs_last_plan_op:" + fixerID }
+func lastApplyKey(fixerID string) string { return "repairs_last_apply_op:" + fixerID }
+
+// lastRun resolves a recorded op id. Best effort: a missing setting or op
+// row leaves it unset.
+func (h *Handler) lastRun(key string) *OpRef {
 	if h.ops == nil {
-		return plan, apply
+		return nil
 	}
-	rows, err := h.ops.ListOperationsV2Since(h.now().Add(-recentWindow), recentLimit)
-	if err != nil {
-		return plan, apply
+	st, err := h.ops.GetSetting(key)
+	if err != nil || st == nil || st.Value == "" {
+		return nil
 	}
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].QueuedAt.After(rows[j].QueuedAt) })
-	for i := range rows {
-		r := &rows[i]
-		if r.DefID != repairs.PlanOpID && r.DefID != repairs.ApplyOpID {
-			continue
-		}
-		var p struct {
-			FixerID string `json:"fixer_id"`
-		}
-		if json.Unmarshal([]byte(r.Params), &p) != nil || p.FixerID == "" {
-			continue
-		}
-		target := plan
-		if r.DefID == repairs.ApplyOpID {
-			target = apply
-		}
-		if _, seen := target[p.FixerID]; seen {
-			continue
-		}
-		target[p.FixerID] = opRef(r)
+	row, err := h.ops.GetOperationV2(st.Value)
+	if err != nil || row == nil {
+		return nil
 	}
-	return plan, apply
+	return opRef(row)
 }
 
 func opRef(r *database.OperationV2Row) *OpRef {
@@ -215,7 +204,7 @@ func (h *Handler) StartPlan(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "body must be a JSON object of fixer params")
 		return
 	}
-	h.enqueue(c, repairs.PlanOpID, f.ID(), repairs.PlanParams{FixerID: f.ID(), Params: params})
+	h.enqueue(c, repairs.PlanOpID, f.ID(), lastPlanKey(f.ID()), repairs.PlanParams{FixerID: f.ID(), Params: params})
 }
 
 // ListPlanRows implements GET /repairs/:fixer/plan/:op_id/rows
@@ -282,7 +271,7 @@ func (h *Handler) StartApply(c *gin.Context) {
 	if req.DryRun != nil {
 		dry = *req.DryRun
 	}
-	h.enqueue(c, repairs.ApplyOpID, f.ID(), repairs.ApplyParams{
+	h.enqueue(c, repairs.ApplyOpID, f.ID(), lastApplyKey(f.ID()), repairs.ApplyParams{
 		FixerID: f.ID(), PlanOpID: req.PlanOpID, RowIDs: req.RowIDs, DryRun: &dry,
 	})
 }
@@ -308,15 +297,46 @@ func (h *Handler) loadPlan(c *gin.Context, opID, fixerID string) (*repairs.PlanR
 	return nil, false
 }
 
-func (h *Handler) enqueue(c *gin.Context, defID, fixerID string, params any) {
+// enqueue starts defID. The registry returns the id of an already queued or
+// running run when the request is byte-identical to it (same fixer, params
+// and rows); that is reported as deduped with the run's status rather than
+// as a new queued run. Otherwise the new id is recorded as the fixer's last
+// plan/apply.
+func (h *Handler) enqueue(c *gin.Context, defID, fixerID, lastKey string, params any) {
+	before := h.activeOps(defID)
 	opID, err := h.enqueuer.EnqueueOp(c.Request.Context(), defID, params)
 	if err != nil {
 		httputil.InternalError(c, "enqueue "+defID+" failed", err)
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"data": StartedResponse{
-		OperationID: opID, DefID: defID, FixerID: fixerID, Status: "queued",
-	}})
+	resp := StartedResponse{OperationID: opID, DefID: defID, FixerID: fixerID, Status: "queued"}
+	if status, seen := before[opID]; seen {
+		resp.Status, resp.Deduped = status, true
+	}
+	if h.ops != nil {
+		if err := h.ops.SetSetting(lastKey, opID, "string", false); err != nil {
+			slog.Warn("repairs: last-run pointer not recorded", "key", lastKey, "op_id", opID, "err", err)
+		}
+	}
+	c.JSON(http.StatusAccepted, gin.H{"data": resp})
+}
+
+// activeOps returns id -> status of every queued/running run of defID.
+func (h *Handler) activeOps(defID string) map[string]string {
+	out := map[string]string{}
+	if h.ops == nil {
+		return out
+	}
+	rows, err := h.ops.ListActiveOperationsV2()
+	if err != nil {
+		return out
+	}
+	for _, r := range rows {
+		if r.DefID == defID {
+			out[r.ID] = r.Status
+		}
+	}
+	return out
 }
 
 func intQuery(c *gin.Context, key string, def int) (int, error) {

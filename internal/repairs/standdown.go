@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -27,10 +28,18 @@ type StandDown interface {
 
 // WaitOptions tunes AcquireStandDownWaiting. Zero values take the defaults.
 type WaitOptions struct {
-	// AttemptTimeout bounds one acquire attempt. The registry lease (and the
-	// op watchdog's progress timeout) is 5 minutes and an acquire blocks
-	// without stamping progress, so an attempt must end well inside it.
+	// AttemptTimeout bounds one acquire attempt. Zero (the default) leaves
+	// the bound to the registry, which gives up after its own lease. A short
+	// per-attempt timeout is harmful: the registry releases a timed-out
+	// holder, and release RE-QUEUES the scan it just cancelled, so retrying
+	// every minute against a scan that takes longer to park would cancel and
+	// re-queue it over and over (resume_count climbing toward the restart
+	// guard). Tests may set it.
 	AttemptTimeout time.Duration
+	// TouchEvery is how often liveness is stamped while an attempt blocks,
+	// so the op watchdog (whose progress timeout equals the lease) never
+	// reaps an op that is only waiting for the scan to park.
+	TouchEvery time.Duration
 	// RetryInterval is the wait between attempts.
 	RetryInterval time.Duration
 	// Sleep waits d or until ctx ends; tests inject an immediate one.
@@ -38,8 +47,8 @@ type WaitOptions struct {
 }
 
 const (
-	defaultAttemptTimeout = 60 * time.Second
-	defaultRetryInterval  = 30 * time.Second
+	defaultRetryInterval = 30 * time.Second
+	defaultTouchEvery    = 30 * time.Second
 )
 
 // ErrNoHolderID: apply was asked to run without an operation id. The
@@ -52,7 +61,8 @@ var ErrNoHolderID = errors.New("repairs: no operation id to hold the scan stand-
 //
 // Owner ruling 2026-09-27: a repair apply is never rejected because a
 // library.scan is running. It pauses the scan instead. If an attempt fails
-// (the scan did not park within AttemptTimeout, or the registry refused), the
+// (the scan did not park within the registry's lease, or the registry
+// refused), the
 // apply waits RetryInterval and tries again, stamping liveness and logging
 // each attempt so the op shows "waiting for the scan" and the watchdog does
 // not reap it. It gives up only when ctx ends (cancel, or the op Timeout),
@@ -76,8 +86,8 @@ func AcquireStandDownWaiting(ctx context.Context, sd StandDown, holderOpID, reas
 	if holderOpID == "" {
 		return noop, false, ErrNoHolderID
 	}
-	if opts.AttemptTimeout <= 0 {
-		opts.AttemptTimeout = defaultAttemptTimeout
+	if opts.TouchEvery <= 0 {
+		opts.TouchEvery = defaultTouchEvery
 	}
 	if opts.RetryInterval <= 0 {
 		opts.RetryInterval = defaultRetryInterval
@@ -89,9 +99,7 @@ func AcquireStandDownWaiting(ctx context.Context, sd StandDown, holderOpID, reas
 		if err := ctx.Err(); err != nil {
 			return noop, false, fmt.Errorf("%s: gave up waiting for the library scan to stand down: %w", reason, err)
 		}
-		actx, cancel := context.WithTimeout(ctx, opts.AttemptTimeout)
-		rel, aerr := sd.AcquireScanStandDown(actx, holderOpID, reason)
-		cancel()
+		rel, aerr := acquireOnce(ctx, sd, holderOpID, reason, reporter, opts)
 		if aerr == nil {
 			if rel == nil {
 				rel = noop
@@ -112,6 +120,40 @@ func AcquireStandDownWaiting(ctx context.Context, sd StandDown, holderOpID, reas
 			registry.TouchLiveness(reporter)
 		}
 	}
+}
+
+// acquireOnce makes one acquire attempt, stamping liveness every TouchEvery
+// while it blocks.
+func acquireOnce(ctx context.Context, sd StandDown, holderOpID, reason string,
+	reporter registry.Reporter, opts WaitOptions) (func(), error) {
+	actx := ctx
+	if opts.AttemptTimeout > 0 {
+		var cancel context.CancelFunc
+		actx, cancel = context.WithTimeout(ctx, opts.AttemptTimeout)
+		defer cancel()
+	}
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	if reporter != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t := time.NewTicker(opts.TouchEvery)
+			defer t.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-t.C:
+					registry.TouchLiveness(reporter)
+				}
+			}
+		}()
+	}
+	rel, err := sd.AcquireScanStandDown(actx, holderOpID, reason)
+	close(done)
+	wg.Wait()
+	return rel, err
 }
 
 // StandDownLost renews the lease (the per-item heartbeat) and reports whether
