@@ -177,7 +177,7 @@ func TestCheckEvidence_OwnerExamples(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			v := CheckEvidence(&c.book, database.ComputeBookRuntime(&c.book, nil), &c.cand, false)
+			v := CheckEvidence(&c.book, snap(&c.book), database.ComputeBookRuntime(&c.book, nil), &c.cand, false)
 			if c.want == "" {
 				if !v.Pass {
 					t.Fatalf("refused: %s (%s); checks %+v", v.Reason, v.Detail, v.Checks)
@@ -228,10 +228,10 @@ func TestTitleSim_NumberOnlyOverlap(t *testing.T) {
 // TestOverwrites_ExtendIsNotReplace pins that only losing a token is an overwrite.
 func TestOverwrites_ExtendIsNotReplace(t *testing.T) {
 	book := &database.Book{Title: "A New Dawn: Star Wars", Author: &database.Author{Name: "John Jackson Miller"}}
-	if got := overwrites(book, &metafetch.MetadataCandidate{Title: "Star Wars", Author: "Miller, John Jackson"}); len(got) != 1 || got[0] != "title" {
+	if got := overwrites(book, snap(book), &metafetch.MetadataCandidate{Title: "Star Wars", Author: "Miller, John Jackson"}); len(got) != 1 || got[0] != "title" {
 		t.Fatalf("overwrites = %v, want [title]", got)
 	}
-	if got := overwrites(book, &metafetch.MetadataCandidate{Title: "Star Wars", Subtitle: "A New Dawn", Author: "John Jackson Miller"}); len(got) != 0 {
+	if got := overwrites(book, snap(book), &metafetch.MetadataCandidate{Title: "Star Wars", Subtitle: "A New Dawn", Author: "John Jackson Miller"}); len(got) != 0 {
 		t.Fatalf("overwrites = %v, want none", got)
 	}
 }

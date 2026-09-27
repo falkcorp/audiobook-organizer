@@ -31,30 +31,7 @@ type narratorCreditStore interface {
 // author names from a credit, and an incomplete list would turn an author into
 // a narrator.
 func bookAuthorNames(s narratorCreditStore, bookID string, primary *int) ([]string, error) {
-	ids := make(map[int]bool)
-	if primary != nil && *primary > 0 {
-		ids[*primary] = true
-	}
-	links, err := s.GetBookAuthors(bookID)
-	if err != nil {
-		return nil, fmt.Errorf("read book authors: %w", err)
-	}
-	for _, l := range links {
-		if l.AuthorID > 0 {
-			ids[l.AuthorID] = true
-		}
-	}
-	names := make([]string, 0, len(ids))
-	for id := range ids {
-		a, err := s.GetAuthorByID(id)
-		if err != nil {
-			return nil, fmt.Errorf("read author %d: %w", id, err)
-		}
-		if a != nil {
-			names = append(names, a.Name)
-		}
-	}
-	return names, nil
+	return LiveBookAuthorNames(s, &Book{ID: bookID, AuthorID: primary})
 }
 
 // resolveNarratorCredit turns a credit into junction rows, creating narrator

@@ -19,6 +19,12 @@ import (
 // nothing says a book's files are gone.
 func (f fakeBooks) GetBookFiles(string) ([]database.BookFile, error) { return nil, nil }
 
+// GetBookAuthors and GetAuthorByID give fakeBooks the gate's live author read:
+// no credits, so every fixture book is authorless unless a test uses
+// liveAuthorBooks (batch_apply_live_author_test.go).
+func (f fakeBooks) GetBookAuthors(string) ([]database.BookAuthor, error) { return nil, nil }
+func (f fakeBooks) GetAuthorByID(int) (*database.Author, error)          { return nil, nil }
+
 // filesBooks is fakeBooks with per-book file rows and read errors.
 type filesBooks struct {
 	fakeBooks

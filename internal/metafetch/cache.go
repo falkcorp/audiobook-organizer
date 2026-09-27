@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -117,27 +118,74 @@ func (mfs *Service) ValidateCachedIdentity(entry *MetadataCandidateCache, bookID
 // fields"; a row matching neither was fetched for a title or author the book
 // no longer has, and fails closed with ErrStaleMetadataCache. A legacy row
 // with no hash keeps ValidateCachedIdentity's fail-open.
-func (mfs *Service) ValidateCachedIdentityForBook(entry *MetadataCandidateCache, book *database.Book) error {
+//
+// "The book's current author" is any form a writer could have hashed
+// (CurrentAuthorForms): the Book.Author snapshot, which the batch fetch uses,
+// and the live author (liveAuthors, database.LiveBookAuthorNames), which the
+// UI's search sends as the book's author_name. Until 2026-09-27 only the
+// snapshot was tried, so a UI-fetched row on a book whose snapshot is nil or
+// stale failed as identity_stale although nothing had changed. Accepting the
+// snapshot keeps every row that passed before passing.
+func (mfs *Service) ValidateCachedIdentityForBook(entry *MetadataCandidateCache, book *database.Book, liveAuthors []string) error {
 	if entry == nil {
 		return nil
 	}
 	if book == nil {
 		return fmt.Errorf("%w: book %s no longer exists", ErrStaleMetadataCache, entry.BookID)
 	}
-	author, narrator, series := "", "", ""
-	if book.Author != nil {
-		author = book.Author.Name
-	}
+	narrator, series := "", ""
 	if book.Narrator != nil {
 		narrator = *book.Narrator
 	}
 	if book.Series != nil {
 		series = book.Series.Name
 	}
-	if entry.SourceHash != "" && entry.SourceHash == hashSearchInputs(book.ID, book.Title, author, "", "") {
-		return nil
+	forms := CurrentAuthorForms(book, liveAuthors)
+	if entry.SourceHash != "" {
+		for _, author := range forms {
+			if entry.SourceHash == hashSearchInputs(book.ID, book.Title, author, "", "") {
+				return nil
+			}
+		}
+		for _, author := range forms[1:] {
+			if mfs.ValidateCachedIdentity(entry, book.ID, book.Title, author, narrator, series) == nil {
+				return nil
+			}
+		}
 	}
-	return mfs.ValidateCachedIdentity(entry, book.ID, book.Title, author, narrator, series)
+	// The first form's error is the one reported: it names the snapshot, the
+	// input every earlier refusal named.
+	return mfs.ValidateCachedIdentity(entry, book.ID, book.Title, forms[0], narrator, series)
+}
+
+// CurrentAuthorForms lists every string a cache writer could have recorded as
+// book's author, first the Book.Author snapshot ("" when nil), then the live
+// primary author and all live authors joined with " & " (the API's
+// author_name), without repeats. It is never empty.
+//
+// It exists for the identity checks only: they compare a recorded input with
+// the book NOW, and the recorded input came from whichever form its writer
+// read. Judging the book by its author (the certainty gate) uses the live
+// authors alone.
+func CurrentAuthorForms(book *database.Book, liveAuthors []string) []string {
+	snapshot := ""
+	if book != nil && book.Author != nil {
+		snapshot = book.Author.Name
+	}
+	forms := []string{snapshot}
+	add := func(a string) {
+		for _, f := range forms {
+			if f == a {
+				return
+			}
+		}
+		forms = append(forms, a)
+	}
+	if len(liveAuthors) > 0 {
+		add(liveAuthors[0])
+		add(strings.Join(liveAuthors, " & "))
+	}
+	return forms
 }
 
 // FetchAndCache runs the existing search pipeline, writes top-N to
@@ -370,7 +418,12 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 	if err != nil || entry == nil || entry.SourceHash == "" || entry.SearchFingerprint == "" {
 		return entry, BatchVerdictNone, nil
 	}
-	if mfs.ValidateCachedIdentityForBook(entry, book) != nil {
+	// No live authors: the batch fetch searches by the Book.Author snapshot
+	// (fetchCandidateForBook's author hint), so the row it may reuse is one
+	// hashed from that snapshot, and the search fingerprint below binds the
+	// same author. Accepting a live-author row here would serve a search the
+	// fetch is not about to ask.
+	if mfs.ValidateCachedIdentityForBook(entry, book, nil) != nil {
 		return entry, BatchVerdictNone, nil
 	}
 	if entry.SearchFingerprint != mfs.SearchFingerprintFor(book, query, author, "") {

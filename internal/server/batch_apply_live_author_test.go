@@ -183,3 +183,19 @@ func TestGateUsesLiveAuthor_ReadFailureRefuses(t *testing.T) {
 		})
 	}
 }
+
+// fetchTimeIdentity accepts the author the fetch recorded in any form the
+// book's current author takes (snapshot, live primary, live joined), and
+// still refuses an author the book no longer has.
+func TestFetchTimeIdentity_LiveAuthorForms(t *testing.T) {
+	book := &database.Book{ID: "valis", Title: "Valis"}
+	live := []string{"Philip K. Dick"}
+	for _, recorded := range []string{"", "Philip K. Dick"} {
+		if err := fetchTimeIdentity("Valis", recorded, book, live); err != nil {
+			t.Errorf("recorded %q: %v, want nil", recorded, err)
+		}
+	}
+	if err := fetchTimeIdentity("Valis", "Stephen King", book, live); !errors.Is(err, metafetch.ErrStaleMetadataCache) {
+		t.Errorf("recorded Stephen King: %v, want ErrStaleMetadataCache", err)
+	}
+}

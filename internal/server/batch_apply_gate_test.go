@@ -224,7 +224,7 @@ func hasChange(changes []metafetch.FieldChange, field, newV string) bool {
 // A preview error must never be reported as "apply".
 func TestPreviewBulkApplyRow_PreviewErrorIsNotApply(t *testing.T) {
 	cand := metafetch.MetadataCandidate{Title: "Dune", Score: 0.95}
-	v := applygate.Evaluate(&database.Book{Title: "Dune"}, database.ComputeBookRuntime(&database.Book{Title: "Dune"}, nil), &cand, nil)
+	v := applygate.Evaluate(&database.Book{Title: "Dune"}, nil, database.ComputeBookRuntime(&database.Book{Title: "Dune"}, nil), &cand, nil)
 	plan := cachedApplyPlan{Book: &database.Book{ID: "b", Title: "Dune"}, Candidate: &cand, Gate: &v}
 	row := previewBulkApplyRow(erroringPreview{&fakeApplySvc{}}, "b", plan, true)
 	if row.Verdict != previewVerdictBlocked || row.Reason != "preview_failed" {

@@ -12,7 +12,8 @@ import (
 )
 
 // Measured with an empty-interface compiler probe under -gcflags=-e: four
-// methods, no forwarding constraints. Was database.Store -- 398 methods --
+// methods, no forwarding constraints (six since 2026-09-27: the gate's live
+// author read). Was database.Store -- 398 methods --
 // until 2026-08-19.
 
 // operationResultReader is all LatestMatchedBookIDs reads.
@@ -35,4 +36,7 @@ type Store interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBooksByTag(tag string) ([]string, error)
+	// The author credits the certainty gate judges a candidate's author
+	// against (database.LiveBookAuthorNames), never the Book.Author snapshot.
+	database.BookAuthorReader
 }

@@ -35,7 +35,8 @@ type cachedApplyService interface {
 	GetCachedCandidates(bookID string) (*metafetch.MetadataCandidateCache, bool, error)
 	// ValidateCachedIdentityForBook is the identity leg of the bulk-apply gate:
 	// the cache row must have been fetched for the book's current title/author.
-	ValidateCachedIdentityForBook(entry *metafetch.MetadataCandidateCache, book *database.Book) error
+	// liveAuthors is database.LiveBookAuthorNames for the book.
+	ValidateCachedIdentityForBook(entry *metafetch.MetadataCandidateCache, book *database.Book, liveAuthors []string) error
 	// ApplyMetadataCandidateWithOptions is ApplyMetadataCandidate; opts records
 	// an owner-reviewed override of the certainty gate in the change history.
 	ApplyMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)
@@ -54,12 +55,15 @@ type cachedApplyService interface {
 	RenamePreflightWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) error
 }
 
-// bookReader reads the book the gate judges the candidate against, and its
-// file rows: the gate's runtime check compares the canonical runtime
-// (database.LoadBookRuntime, the sum over the files), never Book.Duration.
+// bookReader reads the book the gate judges the candidate against, its file
+// rows and its author credits: the gate's runtime check compares the
+// canonical runtime (database.LoadBookRuntime, the sum over the files), never
+// Book.Duration, and its author checks compare the LIVE authors
+// (database.LiveBookAuthorNames), never the Book.Author snapshot.
 type bookReader interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	database.BookAuthorReader
 }
 
 // itunesEnqueuer mirrors handlers.WriteBackEnqueuer: the iTunes library sync
@@ -253,7 +257,11 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipMarkedNoMatch,
 			Err: fmt.Errorf("book %s: %w", id, metafetch.ErrMarkedNoMatch)}
 	}
-	v := applygate.EvaluateInBatch(book, gateRuntime(books, book), &cand, svc.ValidateCachedIdentityForBook(entry, book), claims)
+	authors, aerr := database.LiveBookAuthorNames(books, book)
+	if aerr != nil {
+		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipAuthorsUnreadable, Err: aerr}
+	}
+	v := applygate.EvaluateInBatch(book, authors, gateRuntime(books, book), &cand, svc.ValidateCachedIdentityForBook(entry, book, authors), claims)
 	// A matching pin from a review row is the owner's approval of this row:
 	// its apply overwrites whether or not the gate needed lifting. A stale
 	// pin never gets here (stale_candidate above, nothing written).
@@ -296,7 +304,11 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipMarkedNoMatch,
 			Err: fmt.Errorf("book %s: %w", id, metafetch.ErrMarkedNoMatch)}
 	}
-	v := applygate.EvaluateInBatch(book, gateRuntime(books, book), &cand, fetchTimeIdentity(cr.Book.Title, cr.Book.Author, book), claims)
+	authors, aerr := database.LiveBookAuthorNames(books, book)
+	if aerr != nil {
+		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipAuthorsUnreadable, Err: aerr}
+	}
+	v := applygate.EvaluateInBatch(book, authors, gateRuntime(books, book), &cand, fetchTimeIdentity(cr.Book.Title, cr.Book.Author, book, authors), claims)
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v}
 	if !v.Allowed {
 		plan.Reason = applySkipGateBlocked
@@ -313,21 +325,28 @@ func excludedFromPreview(plan cachedApplyPlan) bool {
 
 // fetchTimeIdentity fails closed when the book's current title or author is
 // not the one recorded when its candidates were fetched.
-func fetchTimeIdentity(fetchedTitle, fetchedAuthor string, book *database.Book) error {
+//
+// The fetch recorded CandidateBookInfo.Author, which is the Book.Author
+// snapshot (metabatch.BuildCandidateBookInfo), not the live author. So the
+// recorded author is accepted when it is the book's author in any form a
+// fetch could have recorded: the snapshot (what the batch fetch records
+// today, so no row that passed before fails now), the live primary author, or
+// every live author joined as the API's author_name joins them. Anything else
+// was fetched for an author the book no longer has.
+func fetchTimeIdentity(fetchedTitle, fetchedAuthor string, book *database.Book, liveAuthors []string) error {
 	if strings.TrimSpace(fetchedTitle) == "" {
 		return fmt.Errorf("%w: fetch result for book %s recorded no title", metafetch.ErrStaleMetadataCache, book.ID)
 	}
 	if util.NormalizeTitle(fetchedTitle) != util.NormalizeTitle(book.Title) {
 		return fmt.Errorf("%w: book %s title changed since the fetch (%q -> %q)", metafetch.ErrStaleMetadataCache, book.ID, fetchedTitle, book.Title)
 	}
-	curAuthor := ""
-	if book.Author != nil {
-		curAuthor = book.Author.Name
+	forms := metafetch.CurrentAuthorForms(book, liveAuthors)
+	for _, cur := range forms {
+		if util.NormalizeAuthor(fetchedAuthor) == util.NormalizeAuthor(cur) {
+			return nil
+		}
 	}
-	if util.NormalizeAuthor(fetchedAuthor) != util.NormalizeAuthor(curAuthor) {
-		return fmt.Errorf("%w: book %s author changed since the fetch (%q -> %q)", metafetch.ErrStaleMetadataCache, book.ID, fetchedAuthor, curAuthor)
-	}
-	return nil
+	return fmt.Errorf("%w: book %s author changed since the fetch (%q -> %q)", metafetch.ErrStaleMetadataCache, book.ID, fetchedAuthor, strings.Join(forms, " | "))
 }
 
 // applyCachedCandidateForBook applies the highest-scored cached candidate for

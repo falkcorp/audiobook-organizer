@@ -191,6 +191,15 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		logging.Warn(ctx, "upgrade: book files unreadable; runtime treated as unknown", "id", bookID, "err", rtErr)
 	}
 
+	// The gate judges each candidate's author against the book's LIVE
+	// authors, never the Book.Author snapshot (applygate.Authors). A failed
+	// read fails the book rather than judging it authorless, which would
+	// loosen the gate.
+	authors, aerr := database.LiveBookAuthorNames(s.DB, book)
+	if aerr != nil {
+		return false, fmt.Errorf("read authors: %w", aerr)
+	}
+
 	// Find the best candidate from a source OTHER than the current one.
 	var bestCandidate *metafetch.MetadataCandidate
 	for i := range resp.Results {
@@ -211,7 +220,7 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		// "Big Cats 1" however well it scores. There is no cache-identity leg
 		// here: the candidates were searched a moment ago from the book's
 		// current fields, so nothing can have drifted.
-		v := applygate.Evaluate(book, rt, c, nil)
+		v := applygate.Evaluate(book, authors, rt, c, nil)
 		slog.Debug("upgrade gate", "id", bookID, "score", c.Score, "gate", v.ScoreFloor,
 			"transcription_confirms", v.AudioConfirmed, "allowed", v.Allowed, "reason", v.Reason, "detail", v.Detail)
 		if !v.Allowed {
