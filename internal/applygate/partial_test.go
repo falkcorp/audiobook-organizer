@@ -157,10 +157,10 @@ func TestEvaluateInBatch_SiblingPart(t *testing.T) {
 	if claims.Len() != 2 {
 		t.Fatalf("Len = %d, want 2", claims.Len())
 	}
-	if v := EvaluateInBatch(book, database.ComputeBookRuntime(book, nil), &cand, nil, claims); v.Allowed || v.Evidence.Reason != ReasonPartialBook {
+	if v := EvaluateInBatch(book, snap(book), database.ComputeBookRuntime(book, nil), &cand, nil, claims); v.Allowed || v.Evidence.Reason != ReasonPartialBook {
 		t.Fatalf("with claims: allowed=%v evidence reason %q (%s)", v.Allowed, v.Evidence.Reason, v.Evidence.Detail)
 	}
-	if v := Evaluate(book, database.ComputeBookRuntime(book, nil), &cand, nil); v.Evidence.Reason == ReasonPartialBook {
+	if v := Evaluate(book, snap(book), database.ComputeBookRuntime(book, nil), &cand, nil); v.Evidence.Reason == ReasonPartialBook {
 		t.Fatalf("without claims the sibling test must be skipped: %+v", v.Evidence)
 	}
 }

@@ -37,6 +37,12 @@ func (s *capStubStore) GetBookByID(string) (*database.Book, error) {
 func (s *capStubStore) GetBookFiles(string) ([]database.BookFile, error) {
 	return nil, errors.New("must not be reached")
 }
+func (s *capStubStore) GetBookAuthors(string) ([]database.BookAuthor, error) {
+	return nil, errors.New("must not be reached")
+}
+func (s *capStubStore) GetAuthorByID(int) (*database.Author, error) {
+	return nil, errors.New("must not be reached")
+}
 func (s *capStubStore) GetBooksByTag(string) ([]string, error) {
 	s.tagLookups++
 	return nil, nil

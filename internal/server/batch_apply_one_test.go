@@ -139,7 +139,7 @@ func TestApplyCachedCandidate_PassingPreflightApplies(t *testing.T) {
 	}
 }
 
-func (f *fakeApplySvc) ValidateCachedIdentityForBook(*metafetch.MetadataCandidateCache, *database.Book) error {
+func (f *fakeApplySvc) ValidateCachedIdentityForBook(*metafetch.MetadataCandidateCache, *database.Book, []string) error {
 	return f.identityErr
 }
 

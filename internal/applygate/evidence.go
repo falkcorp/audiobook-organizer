@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence.go
-// version: 1.4.3
+// version: 1.5.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 package applygate
 
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"golang.org/x/text/unicode/norm"
@@ -93,30 +94,33 @@ var titleStop = map[string]bool{
 //
 // rt is the book's canonical runtime (database.LoadBookRuntime); the runtime
 // check compares only a Complete one and reads anything else as unknown.
-func CheckEvidence(book *database.Book, rt database.BookRuntime, c *metafetch.MetadataCandidate, audioConfirmed bool) EvidenceVerdict {
-	return CheckEvidenceInBatch(book, rt, c, audioConfirmed, nil)
+//
+// authors is the book's live author credit (see Authors).
+func CheckEvidence(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, audioConfirmed bool) EvidenceVerdict {
+	return CheckEvidenceInBatch(book, authors, rt, c, audioConfirmed, nil)
 }
 
 // CheckEvidenceInBatch is CheckEvidence with the batch's ClaimIndex, which
 // the partial_book check reads to see sibling parts. nil skips that test.
-func CheckEvidenceInBatch(book *database.Book, rt database.BookRuntime, c *metafetch.MetadataCandidate, audioConfirmed bool, claims *ClaimIndex) EvidenceVerdict {
+func CheckEvidenceInBatch(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, audioConfirmed bool, claims *ClaimIndex) EvidenceVerdict {
 	var v EvidenceVerdict
 	if book == nil || c == nil {
 		v.Reason, v.Detail = ReasonInsufficientEvidence, "no book or candidate"
 		return v
 	}
-	v.Overwrites = overwrites(book, c)
+	authors = authors.real()
+	v.Overwrites = overwrites(book, authors, c)
 
 	runtime := checkRuntime(rt, c, len(v.Overwrites) > 0)
 	narratorArmed := narratorVetoArmed(rt, c, runtime.Outcome)
 	v.Checks = append(v.Checks,
 		runtime,
 		checkAuthorRole(c),
-		checkAuthorPath(book, c),
+		checkAuthorPath(book, authors, c),
 		checkTitle(book, c),
 		checkNarrator(book, c, narratorArmed),
 		checkASIN(book, c),
-		checkCastInAuthor(&nameSource{author: bookAuthor(book), narrator: bookNarrator(book)}, c.Author, c.Narrator),
+		checkCastInAuthor(&nameSource{author: authors.credit(), narrator: bookNarrator(book)}, c.Author, c.Narrator),
 		checkSeriesNumberLost(book, c, v.Overwrites),
 		checkPartialBook(book, c, runtime.Outcome, claims),
 	)
@@ -157,12 +161,16 @@ func CheckEvidenceInBatch(book *database.Book, rt database.BookRuntime, c *metaf
 // candidate drops. "The Hobbit" -> "The Hobbit: Or There and Back Again" and
 // "J.R.R. Tolkien" -> "J. R. R. Tolkien" keep everything and are not overwrites;
 // "A New Dawn: Star Wars" -> "Star Wars" loses "new" and "dawn" and is one.
-func overwrites(book *database.Book, c *metafetch.MetadataCandidate) []string {
+//
+// The author side is every live credit (authors): a candidate that drops a
+// credited co-author replaces the credit as surely as one that drops the
+// primary.
+func overwrites(book *database.Book, authors Authors, c *metafetch.MetadataCandidate) []string {
 	var out []string
 	if strings.TrimSpace(c.Title) != "" && loses(tokens(book.Title, true), tokens(c.Title+" "+c.Subtitle, true)) {
 		out = append(out, "title")
 	}
-	if strings.TrimSpace(c.Author) != "" && loses(set(surnames(bookAuthor(book))), set(surnames(c.Author))) {
+	if strings.TrimSpace(c.Author) != "" && loses(set(authors.surnames()), set(surnames(c.Author))) {
 		out = append(out, "author")
 	}
 	if strings.TrimSpace(c.Series) != "" && loses(tokens(seriesName(book), true), tokens(c.Series, true)) {
@@ -257,8 +265,12 @@ func checkAuthorRole(c *metafetch.MetadataCandidate) CheckResult {
 }
 
 // checkAuthorPath asks whether anything we hold about the files names the
-// candidate's author: the path segments, or the book's current author.
-func checkAuthorPath(book *database.Book, c *metafetch.MetadataCandidate) CheckResult {
+// candidate's author: the path segments, or the book's current (live)
+// authors. Until 2026-09-27 "current author" was the Book.Author snapshot
+// embedded in the book row, which nothing refreshes when AuthorID or the
+// book_authors join changes: 27/27 prod refusals had a live author equal to
+// the candidate's and a nil or placeholder snapshot.
+func checkAuthorPath(book *database.Book, authors Authors, c *metafetch.MetadataCandidate) CheckResult {
 	r := CheckResult{Name: "author_evidence"}
 	names := surnames(c.Author)
 	if len(names) == 0 {
@@ -269,7 +281,7 @@ func checkAuthorPath(book *database.Book, c *metafetch.MetadataCandidate) CheckR
 	// current author: a shared first name ("Stephen" King vs Baxter, Stephen)
 	// is not evidence.
 	have := tokens(book.FilePath, false)
-	for _, n := range surnames(bookAuthor(book)) {
+	for _, n := range authors.surnames() {
 		have[n] = true
 	}
 	for _, n := range names {
@@ -278,10 +290,12 @@ func checkAuthorPath(book *database.Book, c *metafetch.MetadataCandidate) CheckR
 			return r
 		}
 	}
-	cur := bookAuthor(book)
-	if cur == "" || normText(cur) != normText(c.Author) {
+	if !authors.equals(c.Author) {
 		r.Outcome, r.Reason = OutcomeBlock, ReasonAuthorNotInPath
 		r.Detail = "no surname of " + strconv.Quote(c.Author) + " appears in the path or current author"
+		if cur := authors.credit(); cur != "" {
+			r.Detail += " (" + strconv.Quote(cur) + ")"
+		}
 		return r
 	}
 	r.Outcome = OutcomeNeutral
@@ -575,11 +589,58 @@ func nameWords(s string) []string {
 	return words
 }
 
-func bookAuthor(book *database.Book) string {
-	if book.Author != nil {
-		return strings.TrimSpace(book.Author.Name)
+// Authors is a book's LIVE author credit, primary first: the names behind
+// Book.AuthorID and the book_authors join, as database.LiveBookAuthorNames
+// resolves them. Every caller resolves it; the gate never reads Book.Author,
+// the denormalized snapshot persisted inside the book row, because nothing
+// refreshes that snapshot when the author changes (the metadata apply itself
+// writes AuthorID and the join and leaves it alone), so it is nil on most
+// books and stale on others. A nil Authors means the book has no author.
+//
+// The organizer's "Unknown Author" placeholder is not an author: the gate
+// drops it (real), so a book filed under the placeholder has nothing to
+// protect, exactly like a book with no author row.
+type Authors []string
+
+// real is authors without blanks and the placeholder.
+func (a Authors) real() Authors {
+	var out Authors
+	for _, n := range a {
+		if n = strings.TrimSpace(n); n != "" && !authorname.IsPlaceholder(n) {
+			out = append(out, n)
+		}
 	}
-	return ""
+	return out
+}
+
+// credit is the authors as one display credit ("A & B").
+func (a Authors) credit() string { return strings.Join(a, " & ") }
+
+// surnames is the surname of every author, in order.
+func (a Authors) surnames() []string {
+	var out []string
+	for _, n := range a {
+		out = append(out, surnames(n)...)
+	}
+	return out
+}
+
+// equals reports whether the candidate credit is, as normalized text, one of
+// the authors or all of them joined.
+func (a Authors) equals(credit string) bool {
+	want := normText(credit)
+	if want == "" || len(a) == 0 {
+		return false
+	}
+	if normText(a.credit()) == want {
+		return true
+	}
+	for _, n := range a {
+		if normText(n) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func bookNarrator(book *database.Book) string {

@@ -129,7 +129,7 @@ func TestCheckCastInAuthor(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r := checkCastInAuthor(&nameSource{author: bookAuthor(&c.book), narrator: bookNarrator(&c.book)}, c.cand.Author, c.cand.Narrator)
+			r := checkCastInAuthor(&nameSource{author: snap(&c.book).credit(), narrator: bookNarrator(&c.book)}, c.cand.Author, c.cand.Narrator)
 			if r.Outcome == OutcomeAgree {
 				t.Fatalf("cast_in_author must never agree: %+v", r)
 			}
@@ -147,7 +147,7 @@ func TestCheckEvidence_SelfReadIsNotCast(t *testing.T) {
 	book := database.Book{Title: "A Promised Land", Duration: intp(104400), Narrator: strp("Barack Obama"),
 		FilePath: "/lib/Barack Obama/A Promised Land/A Promised Land.m4b"}
 	cand := metafetch.MetadataCandidate{Title: "A Promised Land", Author: "Barack Obama", DurationSec: 104400}
-	v := CheckEvidence(&book, database.ComputeBookRuntime(&book, nil), &cand, false)
+	v := CheckEvidence(&book, snap(&book), database.ComputeBookRuntime(&book, nil), &cand, false)
 	if v.Reason == ReasonCastInAuthor {
 		t.Fatalf("self-read blocked as cast: %+v", v)
 	}
@@ -167,7 +167,7 @@ func TestCheckEvidence_CastInAuthorBlocks(t *testing.T) {
 	book := database.Book{Title: "Old Soldiers", Duration: intp(4789), Narrator: strp("James Swallow"),
 		FilePath: "/lib/James Swallow/Old Soldiers/Old Soldiers.m4b"}
 	cand := metafetch.MetadataCandidate{Title: "Old Soldiers", Author: "James Swallow, Nicholas Courtney, Toby Longworth", DurationSec: 4789}
-	v := CheckEvidence(&book, database.ComputeBookRuntime(&book, nil), &cand, false)
+	v := CheckEvidence(&book, snap(&book), database.ComputeBookRuntime(&book, nil), &cand, false)
 	if v.Pass || v.Reason != ReasonCastInAuthor {
 		t.Fatalf("pass=%v reason=%q (%s), want %q", v.Pass, v.Reason, v.Detail, ReasonCastInAuthor)
 	}

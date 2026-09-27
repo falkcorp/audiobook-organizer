@@ -70,7 +70,7 @@ func TestCheckEvidence_PartialRuntimeDoesNotBlock(t *testing.T) {
 	book := &database.Book{ID: "b", Title: "Shadow Rising", Duration: intp(2400)}
 	rt := database.ComputeBookRuntime(book, chapters(30, 1200, 2))
 	c := &metafetch.MetadataCandidate{Title: "Shadow Rising", DurationSec: 36000}
-	v := CheckEvidence(book, rt, c, false)
+	v := CheckEvidence(book, snap(book), rt, c, false)
 	if v.Reason == ReasonRuntimeMismatch {
 		t.Fatalf("partial runtime blocked the apply: %+v", v)
 	}
@@ -93,7 +93,7 @@ func TestCheckEvidence_PartialLowerBoundAboveCandidateStillBlocks(t *testing.T) 
 	book := probeBook("", 36000)
 	rt := database.ComputeBookRuntime(book, chapters(30, 1800, 20))
 	c := &metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", DurationSec: 18000}
-	v := CheckEvidence(book, rt, c, false)
+	v := CheckEvidence(book, snap(book), rt, c, false)
 	if v.Pass || v.Reason != ReasonRuntimeMismatch {
 		t.Fatalf("10h+ book vs 5h candidate: pass=%v reason=%s, want runtime_mismatch block", v.Pass, v.Reason)
 	}
@@ -108,7 +108,7 @@ func TestCheckEvidence_PartialRuntimeKeepsNarratorVeto(t *testing.T) {
 	book := probeBook("Kate Reading", 33600)
 	rt := database.ComputeBookRuntime(book, chapters(30, 1200, 28))
 	c := &metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", Narrator: "Michael Kramer", DurationSec: 36000}
-	v := CheckEvidence(book, rt, c, false)
+	v := CheckEvidence(book, snap(book), rt, c, false)
 	if v.Pass || v.Reason != ReasonNarratorMismatch {
 		t.Fatalf("partial runtime, different narrator: pass=%v reason=%s, want narrator_mismatch block", v.Pass, v.Reason)
 	}
@@ -120,11 +120,11 @@ func TestCheckEvidence_CompleteRuntimeContradictionsStillBlock(t *testing.T) {
 	book := probeBook("Kate Reading", 1200)
 	rt := database.ComputeBookRuntime(book, chapters(30, 1200, 30)) // 10 h
 	short := &metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", DurationSec: 18000}
-	if v := CheckEvidence(book, rt, short, false); v.Pass || v.Reason != ReasonRuntimeMismatch {
+	if v := CheckEvidence(book, snap(book), rt, short, false); v.Pass || v.Reason != ReasonRuntimeMismatch {
 		t.Fatalf("10h vs 5h: pass=%v reason=%s, want runtime_mismatch", v.Pass, v.Reason)
 	}
 	other := &metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", Narrator: "Michael Kramer", DurationSec: 38500}
-	if v := CheckEvidence(book, rt, other, false); v.Pass || v.Reason != ReasonNarratorMismatch {
+	if v := CheckEvidence(book, snap(book), rt, other, false); v.Pass || v.Reason != ReasonNarratorMismatch {
 		t.Fatalf("10h vs 10.7h other narrator: pass=%v reason=%s, want narrator_mismatch", v.Pass, v.Reason)
 	}
 }
@@ -195,8 +195,8 @@ func TestCheckEvidence_IncompleteRuntimeNeverLooserThanMain(t *testing.T) {
 					}
 					rt := database.ComputeBookRuntime(book, sh.files)
 					c := &metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", Narrator: narr[1], DurationSec: candMin * 60}
-					mainV := CheckEvidence(book, database.BookRuntime{Seconds: sh.mainBook, Source: database.RuntimeSourceBook}, c, false)
-					newV := CheckEvidence(book, rt, c, false)
+					mainV := CheckEvidence(book, snap(book), database.BookRuntime{Seconds: sh.mainBook, Source: database.RuntimeSourceBook}, c, false)
+					newV := CheckEvidence(book, snap(book), rt, c, false)
 					if mainV.Pass || !newV.Pass {
 						continue
 					}
@@ -227,14 +227,14 @@ func TestCheckEvidence_StaleStoredDurationStillBlocks(t *testing.T) {
 	book := probeBook("", 36000)
 	rt := database.ComputeBookRuntime(book, chapters(30, 1200, 2))
 	c := &metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", DurationSec: 72000}
-	if v := CheckEvidence(book, rt, c, false); v.Pass || v.Reason != ReasonRuntimeMismatch {
+	if v := CheckEvidence(book, snap(book), rt, c, false); v.Pass || v.Reason != ReasonRuntimeMismatch {
 		t.Fatalf("stored 10h vs 20h candidate: pass=%v reason=%s, want runtime_mismatch", v.Pass, v.Reason)
 	}
 	// The fix stays: stored == the partial sum is not compared as a total.
 	book = probeBook("", 2400)
 	rt = database.ComputeBookRuntime(book, chapters(30, 1200, 2))
 	c.DurationSec = 36000
-	if v := CheckEvidence(book, rt, c, false); v.Reason == ReasonRuntimeMismatch {
+	if v := CheckEvidence(book, snap(book), rt, c, false); v.Reason == ReasonRuntimeMismatch {
 		t.Fatalf("partial-sum Book.Duration vetoed the 10h candidate again: %+v", v)
 	}
 }
