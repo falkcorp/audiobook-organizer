@@ -1,11 +1,13 @@
 // file: web/src/components/review/ActionBar.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0445b6ce-9e24-4bb7-8c7f-a94ade2d66b7
 // last-edited: 2026-09-27
 //
 // The bulk-apply toggle (owner ruling 2026-09-27): "Fill empty fields" is the
-// default and applies without a prompt as before; "Replace existing" relabels
-// every bulk button and asks before overwriting.
+// default; "Replace existing" relabels every bulk button. The Replace prompt
+// lives in the lane's applySelected dispatch (useMetadataLane), shared by every
+// bulk entry point, so the bar itself never asks for it
+// (ReviewWorkspace.replaceConfirm.test.tsx covers the prompt end to end).
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -13,9 +15,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BulkApplyMode } from '../../services/api';
 import { ActionBar } from './ActionBar';
 
-function renderBar(mode: BulkApplyMode, confirmResult = true) {
+function renderBar(mode: BulkApplyMode) {
   const dispatch = vi.fn();
-  const confirm = vi.fn().mockResolvedValue(confirmResult);
+  const confirm = vi.fn().mockResolvedValue(true);
   const onBulkApplyModeChange = vi.fn();
   render(
     <ActionBar
@@ -54,7 +56,7 @@ describe('ActionBar bulk apply mode', () => {
     expect(onBulkApplyModeChange).toHaveBeenCalledWith('replace');
   });
 
-  it('replace: every bulk label says so and the click asks first', async () => {
+  it('replace: every bulk label says so and the bar itself does not prompt', async () => {
     const { dispatch, confirm } = renderBar('replace');
     expect(screen.getByTestId('apply-page')).toHaveTextContent('Apply page, replace existing (2)');
     expect(screen.getByTestId('apply-high-confidence')).toHaveTextContent(
@@ -64,13 +66,6 @@ describe('ActionBar bulk apply mode', () => {
 
     await userEvent.click(screen.getByTestId('apply-selected'));
     await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('REPLACE existing values'));
-  });
-
-  it('replace: a declined prompt dispatches nothing', async () => {
-    const { dispatch, confirm } = renderBar('replace', false);
-    await userEvent.click(screen.getByTestId('apply-page'));
-    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
   });
 });

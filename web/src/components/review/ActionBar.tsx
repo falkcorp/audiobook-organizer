@@ -1,5 +1,5 @@
 // file: web/src/components/review/ActionBar.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a91c73e-2d48-4b06-9f15-8c3e0a7b6d29
 // last-edited: 2026-09-27
 //
@@ -93,17 +93,10 @@ export function ActionBar({
 
   const run = (action: MetadataAction, count: number) => {
     startTransition(async () => {
-      // A replace always asks first: it overwrites values the owner may have
-      // curated, on every book in the batch.
-      if (replacing) {
-        const ok = await confirm(
-          `Apply metadata to ${count.toLocaleString()} book(s) and REPLACE existing values? ` +
-            'Filled fields (description, narrator, publisher, cover and the rest) will be ' +
-            "overwritten with the candidate's values; each overwrite is recorded in the " +
-            'change history as an owner replace.'
-        );
-        if (!ok) return;
-      } else if (needsConfirmation(action)) {
+      // Replace mode is confirmed by the lane's applySelected dispatch
+      // (useMetadataLane), once for every bulk entry point, so it is not
+      // asked again here.
+      if (needsConfirmation(action)) {
         const ok = await confirm(`Apply metadata to ${count.toLocaleString()} book(s)?`);
         if (!ok) return;
       }

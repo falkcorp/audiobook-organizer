@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.19.0
+// version: 1.20.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-09-27
 //
@@ -818,10 +818,15 @@ describe('dispatch', () => {
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.results).toHaveLength(2));
     act(() => result.current.setBulkApplyMode('replace'));
+    // Replace asks once, in the dispatch (every bulk entry point goes through it).
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     await act(async () => {
       result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a'] });
     });
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('1 book(s)'));
+    confirmSpy.mockRestore();
     expect(api.batchApplyFromCache).toHaveBeenLastCalledWith(
       ['a'],
       undefined,
