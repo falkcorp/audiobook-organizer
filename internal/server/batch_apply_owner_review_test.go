@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
-// last-edited: 2026-09-14
+// last-edited: 2026-09-27
 //
 // An owner-reviewed apply: the review lane pins the candidate it showed, and
 // a matching pin lifts the certainty legs of the gate. A stale pin, no pin,
@@ -46,8 +46,9 @@ func rowPin(c metafetch.MetadataCandidate) *metafetch.CandidatePin {
 	return &p
 }
 
-// A pin that is not from a single-row review (a script, a future bulk path)
-// is checked for staleness but earns no override.
+// A pin with no owner-review origin (a script, an API caller) is checked for
+// staleness but earns no override. "bulk" is not the review page's bulk
+// origin (metafetch.PinOriginReviewBulk, batch_apply_review_bulk_test.go).
 func TestOwnerReview_NonRowPinIsHardGated(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}

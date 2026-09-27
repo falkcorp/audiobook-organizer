@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-14
+// last-edited: 2026-09-27
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -617,8 +617,8 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			Status:    page[i].status,
 			FetchedAt: &fetchedAt,
 			IsFresh:   &isFresh,
-			// The same hash the apply recomputes from the same cache row: a
-			// single-row Apply echoes it back in its pin.
+			// The same hash the apply recomputes from the same cache row:
+			// every review-page apply button echoes it back in its pin.
 			CandidateHash: metafetch.CandidateHash(cand),
 		})
 	}
@@ -744,13 +744,17 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// applied. The web UI's Apply button sends dry_run:false.
 		DryRun *bool `json:"dry_run"`
 		// Pins maps book id -> the candidate the reviewer was looking at when
-		// they clicked Apply. Only the review lane's single-row Apply sends
-		// one (origin "row", with the candidate_hash the review list served);
-		// bulk buttons send none. A row pin that still matches the top cached
-		// candidate is applied as owner-reviewed; any pin that no longer
-		// matches is refused as stale_candidate; a book with no pin, or a pin
-		// of another origin, gets the ordinary hard gate. The dry run ignores
-		// pins.
+		// they clicked Apply. Every apply button on the review page sends
+		// them (owner ruling 2026-09-27): the single-row Apply with origin
+		// "row", the bulk buttons with origin "review_bulk", each with the
+		// candidate_hash the review list served. An owner-review pin that
+		// still matches the top cached candidate is applied as owner-reviewed;
+		// any pin that no longer matches is refused as stale_candidate. A bulk
+		// button's book the lane had no hash for carries the hashless
+		// "review_bulk" marker (metafetch.CandidatePin.IsUnseenOwnerReview),
+		// owner-reviewed without a staleness check. A book with no pin, or a
+		// pin of another origin, gets the ordinary hard gate. The dry run
+		// ignores pins: it never forwards them to the preview op.
 		Pins map[string]metafetch.CandidatePin `json:"pins"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
