@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -68,6 +68,7 @@ beforeEach(() => {
   // 'then')" -- vi.fn() with no configured return resolves to undefined, not
   // a Promise.
   vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '' } as api.Config);
+  vi.mocked(api.listRepairFixers).mockResolvedValue([]);
 });
 
 describe('lane default', () => {
@@ -143,6 +144,23 @@ describe('the lane comes from the URL', () => {
   it('opens the lane named by ?lane=', async () => {
     renderWorkspace(['/review?lane=regroup']);
     expect(await screen.findByTestId('regroup-rail')).toBeInTheDocument();
+  });
+
+  it('opens the repairs lane from ?lane=repairs, and only it fetches', async () => {
+    renderWorkspace(['/review?lane=repairs']);
+    expect(await screen.findByTestId('repairs-panel')).toBeInTheDocument();
+    await waitFor(() => expect(api.listRepairFixers).toHaveBeenCalledTimes(1));
+    // The metadata lane is the fallback render branch; it must not be what
+    // shows, and it must not have fetched on the way past.
+    expect(screen.queryByTestId('compare-spine')).not.toBeInTheDocument();
+    expect(api.getCachedReviewResults).not.toHaveBeenCalled();
+  });
+
+  it('keeps the repairs lane silent while another lane is showing', async () => {
+    renderWorkspace(['/review?lane=metadata']);
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+    expect(api.listRepairFixers).not.toHaveBeenCalled();
+    expect(api.getRepairPlanRows).not.toHaveBeenCalled();
   });
 
   it('infers dupes from a ?book= deep link, with no ?lane= at all', async () => {

@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d4a7e21-05c8-4b63-a19f-3e8b2c60d475
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -123,5 +123,40 @@ describe('lane id types', () => {
     // @ts-expect-error -- 'merge' is not in the metadata vocabulary
     const crossed: ReviewAction = { lane: 'metadata', type: 'merge', id: 'b1' };
     expect(crossed).toBeDefined();
+  });
+});
+
+describe('repairs lane actions', () => {
+  const rows: ReviewAction = {
+    lane: 'repairs',
+    type: 'applyRows',
+    fixerId: 'vg',
+    planOpId: 'plan-1',
+    rowIds: ['a', 'b', 'c'],
+  };
+  const all: ReviewAction = {
+    lane: 'repairs',
+    type: 'applyAllApplicable',
+    fixerId: 'vg',
+    planOpId: 'plan-1',
+  };
+  const trial: ReviewAction = { lane: 'repairs', type: 'runTrial', fixerId: 'vg' };
+
+  it('counts selected rows and does not guess the plan-wide count', () => {
+    expect(affectedCount(rows)).toBe(3);
+    expect(affectedCount(all)).toBeNull();
+    expect(affectedCount(trial)).toBeNull();
+  });
+
+  it('leaves confirmation to the lane dispatch, so nothing asks twice', () => {
+    // The lane confirms every apply itself (useRepairsLane's dispatch). An
+    // ActionBar confirm on top would be a second prompt for one click.
+    expect(needsConfirmation(rows)).toBe(false);
+    expect(needsConfirmation(all)).toBe(false);
+  });
+
+  it('is irreversible from this screen', () => {
+    expect(inverseOf(rows)).toBeNull();
+    expect(inverseOf(all)).toBeNull();
   });
 });
