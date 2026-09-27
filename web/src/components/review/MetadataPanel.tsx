@@ -1,7 +1,7 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
-// last-edited: 2026-09-01
+// last-edited: 2026-09-27
 //
 // The metadata lane's full surface: queue rail, comparison spine, action bar.
 //
@@ -157,6 +157,8 @@ export function MetadataPanel({
         applying={metadata.applying}
         dispatch={metadata.dispatch}
         confirm={(message) => Promise.resolve(window.confirm(message))}
+        bulkApplyMode={metadata.bulkApplyMode}
+        onBulkApplyModeChange={metadata.setBulkApplyMode}
       />
 
       {/*

@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.8.2
+// version: 1.9.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 //
 // The shared comparison spine: the surface that shows a reviewer what they are
 // deciding between.
@@ -59,7 +59,12 @@ import {
 } from '@mui/material';
 import { memo, useMemo } from 'react';
 import CloseIcon from '@mui/icons-material/Close';
-import type { CandidateResult, MetadataCandidate, PathAlias } from '../../../services/api';
+import type {
+  BulkApplyMode,
+  CandidateResult,
+  MetadataCandidate,
+  PathAlias,
+} from '../../../services/api';
 import type { MetadataAction } from '../reviewActions';
 import { EvidencePanel } from '../evidence/EvidencePanel';
 import { metadataEvidence } from '../evidence/adapters';
@@ -154,6 +159,11 @@ export interface SpineContext {
   /** Compact mode only. Single-open: opening one closes the other. */
   expandedId: string | null;
   onToggleExpand: (id: string) => void;
+  /**
+   * The lane's bulk-apply toggle, so a group's Apply All can say when it will
+   * replace existing values. Absent reads as 'fill'.
+   */
+  bulkApplyMode?: BulkApplyMode;
 }
 
 /**
@@ -391,12 +401,13 @@ function GroupedCard({
                   <Button
                     size="small"
                     variant="contained"
-                    color="success"
+                    color={ctx.bulkApplyMode === 'replace' ? 'warning' : 'success'}
+                    data-testid="group-apply-all"
                     onClick={() =>
                       ctx.onAction({ lane: 'metadata', type: 'applySelected', ids: actionableIds })
                     }
                   >
-                    Apply All ({actionableIds.length})
+                    {`${ctx.bulkApplyMode === 'replace' ? 'Apply All, replace existing' : 'Apply All'} (${actionableIds.length})`}
                   </Button>
                   <Button
                     size="small"

@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.126.0
+// version: 2.127.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-27
 
@@ -4591,16 +4591,29 @@ export interface OwnerReviewMarker {
 /** What a review-page apply sends per book: a candidate pin, or the marker. */
 export type ApplyPin = CandidatePin | OwnerReviewMarker;
 
+/**
+ * The review page's bulk-apply toggle (owner ruling 2026-09-27; server:
+ * metafetch.BulkApplyModeFill / BulkApplyModeReplace). 'fill' (the default)
+ * writes only into empty fields; 'replace' lets every book carrying a
+ * 'review_bulk' pin overwrite filled fields, recorded in its change history as
+ * an owner replace. It changes nothing for a single-row Apply (which already
+ * overwrites) or for a book without an owner-review pin. Only the bulk buttons
+ * send it.
+ */
+export type BulkApplyMode = 'fill' | 'replace';
+
 export async function batchApplyFromCache(
   bookIds: string[],
   writeBack?: boolean,
-  pins?: Record<string, ApplyPin>
+  pins?: Record<string, ApplyPin>,
+  mode?: BulkApplyMode
 ): Promise<BatchApplyDispatch> {
   // dry_run:false is explicit: absent, the server enqueues a preview
   // (metadata.bulk-apply-preview) and applies nothing.
   const body: Record<string, unknown> = { book_ids: bookIds, dry_run: false };
   if (writeBack !== undefined) body.write_back = writeBack;
   if (pins && Object.keys(pins).length > 0) body.pins = pins;
+  if (mode !== undefined) body.mode = mode;
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/batch-apply-cached`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
