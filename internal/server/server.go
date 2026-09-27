@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.66.0
+// version: 2.67.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 package server
 
@@ -65,6 +65,7 @@ import (
 	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/quarantine"
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -266,6 +267,9 @@ type Server struct {
 	// here; the registry owns dispatch and worker pool lifecycle.
 	// No plugins are registered until their own bot-tasks wire them in.
 	opRegistry *opsregistry.Registry
+	// repairFixers is the Repairs lane's fixer registry (internal/repairs),
+	// owned by the maintenance plugin.
+	repairFixers *repairs.Registry
 	// scanStandDownGateOverride replaces the scan stand-down gate in tests; nil
 	// in production (see scanGate in metadata_scan_standdown.go).
 	scanStandDownGateOverride metadataScanGate
@@ -715,7 +719,12 @@ func NewServer(store database.Store) *Server {
 	// opRegistrars — a server with no operations at all, still reporting
 	// healthy. The tests now set up the expectation instead; see
 	// expectOpDefinitionUpserts in the server test helpers.
-	if err := maintenanceplugin.New(server).Register(server.opRegistry); err != nil {
+	maintPlugin := maintenanceplugin.New(server)
+	// The Repairs lane's fixers live in the maintenance plugin; the
+	// /api/v1/repairs handlers read the same registry the repairs.plan /
+	// repairs.apply ops run.
+	server.repairFixers = maintPlugin.Repairs()
+	if err := maintPlugin.Register(server.opRegistry); err != nil {
 		slog.Error("maintenance plugin register", "err", err)
 		server.opRegistrationErrs = append(server.opRegistrationErrs,
 			fmt.Errorf("maintenance plugin register: %w", err))

@@ -1,7 +1,7 @@
 # file: internal/server/testdata/op_ids.golden
-# version: 1.1.2
+# version: 1.2.0
 # guid: 6d1f8a42-9c3e-4b75-a2d6-0e7b4c9f3a18
-# last-edited: 2026-09-26
+# last-edited: 2026-09-27
 #
 # Ledger of every operation def ID this server has registered, canonical IDs
 # and FormerIDs (aliases) alike. APPEND-ONLY. Read by
@@ -240,6 +240,8 @@ openlibrary.import
 operations.backfill-legacy-status
 reconcile.apply
 reconcile.scan
+repairs.apply
+repairs.plan
 scheduler.author-split-scan
 scheduler.cleanup-old-backups
 scheduler.db-optimize
