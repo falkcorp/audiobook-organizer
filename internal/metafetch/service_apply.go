@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.39.1
+// version: 1.40.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 package metafetch
 
@@ -672,8 +672,10 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// choke point every bulk apply shares (batch-apply-candidates, the cached
 	// batch apply, metadata upgrade, auto-match-transcribed). A person-picked
 	// apply is the owner overriding their own mark and goes through; it records
-	// the match below, which replaces the no_match status.
-	if opts.FillOnly && IsMarkedNoMatch(book.MetadataReviewStatus) {
+	// the match below, which replaces the no_match status. An overwriting
+	// apply of a candidate nobody was shown (UnseenCandidate) is still
+	// automatic here: opts.automatic(), not FillOnly.
+	if opts.automatic() && IsMarkedNoMatch(book.MetadataReviewStatus) {
 		return nil, fmt.Errorf("book %s: %w", id, ErrMarkedNoMatch)
 	}
 
@@ -795,7 +797,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	//     a book that does not hold the record is a false duplicate claim.
 	// The fields that were written keep their own provenance: the change
 	// history (historySource) and persistFetchedMetadata below.
-	humanPicked := !opts.FillOnly
+	humanPicked := !opts.automatic()
 	if humanPicked || util.NormalizeTitle(book.Title) == util.NormalizeTitle(candidate.Title) {
 		matched := "matched"
 		book.MetadataReviewStatus = &matched
@@ -829,7 +831,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// error means the write stands and its history did not land; CommitApply
 	// logged it at Error and undo refuses that apply.
 	var commitGuard func(*database.Book) error
-	if opts.FillOnly {
+	if opts.automatic() {
 		// The no_match check above read the row this apply loaded; re-check
 		// the row as it stands under the write lock, so a "no match" the
 		// owner set while this apply ran is not overwritten.
@@ -850,9 +852,11 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// response (below) so the op reports and counts it. History is written
 	// after the commit, so the write itself stands; the rest of this apply
 	// still runs so the book is not left half-applied.
+	// An owner replace (OwnerReplace) overwrote filled fields, and its history
+	// is likewise the only way to revert it, so it gets the same guarantee.
 	var historyErr error
-	if opts.OwnerReviewed && updateErr != nil {
-		historyErr = fmt.Errorf("owner-reviewed apply of %s: change history not recorded: %w", id, updateErr)
+	if (opts.OwnerReviewed || opts.OwnerReplace) && updateErr != nil {
+		historyErr = fmt.Errorf("%s apply of %s: change history not recorded: %w", opts.historyKind(), id, updateErr)
 	}
 
 	// Check whether any other book already carries the same hash — if so,

@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.22.1
+// version: 1.23.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-27
 
@@ -88,6 +88,11 @@ type applyOutcome struct {
 	// review overrode it (see applygate.OwnerReviewOverridable). Set on the
 	// plan, so it is true whether or not a later step then refused the book.
 	OwnerReviewed bool
+	// OwnerReplace is true when the request asked a review-page bulk button
+	// to replace existing values (metafetch.BulkApplyModeReplace) and this
+	// book's review_bulk pin let it overwrite. Set only on an applied
+	// outcome: a book that was not applied replaced nothing.
+	OwnerReplace bool
 	// WriteBackFailed is true when the metadata WAS applied to the database but
 	// writing it into the audio files failed. Deliberately separate from
 	// !Applied: the database change is real and durable, and reporting the book
@@ -172,6 +177,17 @@ type cachedApplyPlan struct {
 	// OwnerReviewed on purpose: OwnerReviewed records a GATE OVERRIDE in the
 	// change history, and a row the gate passed overrode nothing.
 	ReviewApproved bool
+	// BulkReplace: the owner switched the review page's bulk toggle to
+	// "Replace existing" (owner ruling 2026-09-27) and this book carries a
+	// review_bulk pin (hash-checked or the hashless marker), so the bulk
+	// apply overwrites filled fields and records an owner replace. Set only
+	// by withBulkMode, which only the cached apply calls: the dry-run preview
+	// and planOpResultApply never see a mode, so they never set it.
+	BulkReplace bool
+	// UnseenBulk: BulkReplace on the hashless marker. Nobody was shown the
+	// candidate, so the overwrite keeps the automatic-apply guards
+	// (metafetch.ApplyOptions.UnseenCandidate).
+	UnseenBulk bool
 	// Pinnable: the plan came from a path that accepts an owner-review pin
 	// (planCachedApply). The op-results path (planOpResultApply) takes none,
 	// so its dry run must never claim an owner review would apply a book.
@@ -186,6 +202,21 @@ func (p cachedApplyPlan) reviewOnly() bool {
 	return p.Pinnable && p.Reason == applySkipGateBlocked && p.Gate != nil && p.Gate.OwnerReviewOverridable()
 }
 
+// withBulkMode applies the request's bulk mode to a plan planCachedApply made
+// for pin. Only replace changes anything, and only on a plan that will apply
+// (Reason "") for a book whose pin is a review-page BULK pin: a row pin
+// already overwrites, and a book without an owner-review pin (script, API,
+// another origin) stays fill-only and fully gated whatever the mode. mode is
+// the normalized value (metafetch.NormalizeBulkApplyMode).
+func (p cachedApplyPlan) withBulkMode(pin *metafetch.CandidatePin, mode string) cachedApplyPlan {
+	if mode != metafetch.BulkApplyModeReplace || p.Reason != "" || pin == nil || !pin.IsOwnerReview() || pin.IsRowReview() {
+		return p
+	}
+	p.BulkReplace = true
+	p.UnseenBulk = pin.IsUnseenOwnerReview()
+	return p
+}
+
 // applyOptions is the ApplyOptions for plan, used by the apply, its rename
 // preflight and the dry-run preview alike, so no two of them can disagree
 // about a row.
@@ -197,7 +228,9 @@ func (p cachedApplyPlan) reviewOnly() bool {
 // review-page bulk button's "review_bulk" pin or hashless marker. A bulk
 // button lifts the certainty gate like a row (owner ruling 2026-09-27) and
 // that lift is recorded (OwnerReviewed + GateOverride), but it writes only
-// into empty fields.
+// into empty fields, unless the owner switched the bulk toggle to "Replace
+// existing" (BulkReplace, owner ruling 2026-09-27): then it overwrites and
+// records an owner replace (OwnerReplace).
 //
 // Preview (the pinless dry run, which knows no button): a gate-passed row
 // previews fill-only, which is what a pinless (script or API) apply or a
@@ -210,7 +243,11 @@ func (p cachedApplyPlan) reviewOnly() bool {
 // a fill.
 func (p cachedApplyPlan) applyOptions() metafetch.ApplyOptions {
 	overridden := p.OwnerReviewed || p.reviewOnly()
-	opts := metafetch.ApplyOptions{FillOnly: !(p.ReviewApproved || p.reviewOnly())}
+	opts := metafetch.ApplyOptions{FillOnly: !(p.ReviewApproved || p.BulkReplace || p.reviewOnly())}
+	if p.BulkReplace {
+		opts.OwnerReplace = true
+		opts.UnseenCandidate = p.UnseenBulk
+	}
 	if overridden {
 		// OwnerReviewed, not a non-empty summary, is what makes the apply
 		// record the override and require its history: an empty
@@ -398,13 +435,17 @@ func applyCachedCandidateForBook(
 	writeBack bool,
 	checkpoint func() error,
 ) applyOutcome {
-	return applyCachedCandidateForBookTimed(svc, books, itunes, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings(), nil, nil)
+	return applyCachedCandidateForBookTimed(svc, books, itunes, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings(), nil, nil, "")
 }
 
 // applyCachedCandidateForBookTimed is applyCachedCandidateForBook recording
 // its phases into pt (which the caller may already have started, e.g. with the
 // write-back gate wait). The file-side sequel logs the one per-book
 // "apply phase durations" line; a book that is not applied logs none.
+//
+// mode is the request's normalized bulk mode (metafetch.NormalizeBulkApplyMode;
+// "" is fill). It reaches the plan through withBulkMode only, so the dry-run
+// preview, which calls planCachedApply directly, can never honour it.
 func applyCachedCandidateForBookTimed(
 	svc cachedApplyService,
 	books bookReader,
@@ -415,9 +456,10 @@ func applyCachedCandidateForBookTimed(
 	pt *metafetch.ApplyPhaseTimings,
 	claims *applygate.ClaimIndex,
 	pin *metafetch.CandidatePin,
+	mode string,
 ) applyOutcome {
 	applyStart := time.Now()
-	plan := planCachedApply(svc, books, id, claims, pin)
+	plan := planCachedApply(svc, books, id, claims, pin).withBulkMode(pin, mode)
 	if plan.Reason != "" {
 		return applyOutcome{Reason: plan.Reason, Err: plan.Err, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
 	}
@@ -467,7 +509,7 @@ func applyCachedCandidateForBookTimed(
 	// of them. resp is non-nil on a nil error (ApplyMetadataCandidate's
 	// contract), but the mocks in this package's tests return (nil, nil), and a
 	// nil deref here would turn "no response" into a crashed op.
-	out := applyOutcome{Applied: true, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
+	out := applyOutcome{Applied: true, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed, OwnerReplace: plan.BulkReplace}
 	// Err is always errors.Join(HistoryErr, WriteBackErr): a later failure
 	// must never replace an earlier one, and errors.Is still finds either.
 	failWriteBack := func(err error) {

@@ -173,7 +173,7 @@ func TestGateUsesLiveAuthor_ReadFailureRefuses(t *testing.T) {
 			books, cand := valisFixture(nil)
 			mut(&books)
 			svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-			out := applyCachedCandidateForBookTimed(svc, books, nil, "valis", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+			out := applyCachedCandidateForBookTimed(svc, books, nil, "valis", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 			if out.Applied || out.Reason != applySkipAuthorsUnreadable {
 				t.Fatalf("outcome %+v, want %s", out, applySkipAuthorsUnreadable)
 			}

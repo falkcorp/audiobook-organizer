@@ -107,7 +107,7 @@ func TestBatchApplyCheckpoint_OutOfOrderCompletionKeepsTheGap(t *testing.T) {
 			ErrMode:         opsregistry.ErrModeCollect,
 			CheckpointEvery: 1,
 			CheckpointStateFn: func(_ context.Context, watermark int) error {
-				st := batchApplyCheckpointState(ids, true, len(ids), watermark, nil)
+				st := batchApplyCheckpointState(ids, true, len(ids), watermark, nil, nil, "")
 				mu.Lock()
 				dropped := ids[:len(ids)-len(st.BookIDs)]
 				for _, d := range dropped {
@@ -223,7 +223,7 @@ func TestBatchApplyCheckpoint_FailedBookStillLeavesTheSet(t *testing.T) {
 				ErrMode:         opsregistry.ErrModeCollect,
 				CheckpointEvery: 1,
 				CheckpointStateFn: func(_ context.Context, watermark int) error {
-					return rec.Checkpoint(batchApplyCheckpointState(ids, true, len(ids), watermark, nil))
+					return rec.Checkpoint(batchApplyCheckpointState(ids, true, len(ids), watermark, nil, nil, ""))
 				},
 			})
 		if itemErr == nil && err != nil {
@@ -371,7 +371,7 @@ func TestBatchApplyCheckpointState_IsAlwaysAValidResumePoint(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := batchApplyCheckpointState(ids, true, 3, tc.watermark, nil)
+			got := batchApplyCheckpointState(ids, true, 3, tc.watermark, nil, nil, "")
 			if len(got.BookIDs) != tc.wantLeft {
 				t.Fatalf("remaining = %v, want %d ids", got.BookIDs, tc.wantLeft)
 			}
@@ -393,7 +393,7 @@ func TestBatchApplyCheckpointState_GateDeferredBooksStayOwed(t *testing.T) {
 
 	t.Run("a deferred book below the watermark is carried", func(t *testing.T) {
 		// Watermark 3 means a, b and c left the set; b was deferred.
-		got := batchApplyCheckpointState(ids, true, 4, 3, []string{"b"})
+		got := batchApplyCheckpointState(ids, true, 4, 3, []string{"b"}, nil, "")
 		want := []string{"d", "b"}
 		if !slices.Equal(got.BookIDs, want) {
 			t.Fatalf("remaining = %v, want %v", got.BookIDs, want)
@@ -404,7 +404,7 @@ func TestBatchApplyCheckpointState_GateDeferredBooksStayOwed(t *testing.T) {
 		// A gap can hold the watermark behind a book that was deferred, so the
 		// same id arrives from both sources. Carrying it twice would apply it
 		// twice on resume.
-		got := batchApplyCheckpointState(ids, true, 4, 1, []string{"c"})
+		got := batchApplyCheckpointState(ids, true, 4, 1, []string{"c"}, nil, "")
 		want := []string{"b", "c", "d"}
 		if !slices.Equal(got.BookIDs, want) {
 			t.Fatalf("remaining = %v, want %v", got.BookIDs, want)
@@ -417,7 +417,7 @@ func TestBatchApplyCheckpointState_GateDeferredBooksStayOwed(t *testing.T) {
 		// downstream would report that; the corruption would just show up as a
 		// wrong resume set on the next checkpoint.
 		src := []string{"a", "b", "c", "d"}
-		_ = batchApplyCheckpointState(src[:3], true, 4, 2, []string{"a"})
+		_ = batchApplyCheckpointState(src[:3], true, 4, 2, []string{"a"}, nil, "")
 		if src[3] != "d" {
 			t.Fatalf("caller's slice was written through: src = %v", src)
 		}

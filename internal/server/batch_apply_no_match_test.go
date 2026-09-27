@@ -57,7 +57,7 @@ func TestApplyCachedCandidate_ReviewApprovalOverridesNoMatch(t *testing.T) {
 	}
 	pin := rowPin(cand)
 	out := applyCachedCandidateForBookTimed(svc, noMatchBooks(), &fakeITunes{}, "b1", false, nil,
-		metafetch.NewApplyPhaseTimings(), nil, pin)
+		metafetch.NewApplyPhaseTimings(), nil, pin, "")
 	if !out.Applied || len(svc.appliedIDs) != 1 {
 		t.Fatalf("the owner's approval was refused: outcome %+v", out)
 	}

@@ -184,7 +184,7 @@ func TestApplyCachedCandidate_HistoryIncompleteIsAppliedAndFlagged(t *testing.T)
 		candidates: candidateJSON(t, cand),
 		historyErr: errors.Join(errors.New("change history not recorded: disk full"), metafetch.ErrApplyHistoryIncomplete),
 	}
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if !out.Applied || !out.OwnerReviewed || !out.HistoryFailed || !errors.Is(out.Err, metafetch.ErrApplyHistoryIncomplete) {
 		t.Fatalf("outcome %+v, want applied, owner-reviewed, history failed", out)
 	}
@@ -194,7 +194,7 @@ func TestApplyCachedCandidate_HistoryIncompleteIsAppliedAndFlagged(t *testing.T)
 
 	// Any other apply error is still a failed apply.
 	svc = &fakeApplySvc{candidates: candidateJSON(t, cand), applyErr: errors.New("boom")}
-	out = applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+	out = applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if out.Applied || out.HistoryFailed || out.Reason != applySkipApplyFailed {
 		t.Fatalf("plain apply error: outcome %+v, want %s", out, applySkipApplyFailed)
 	}
@@ -212,7 +212,7 @@ func TestApplyCachedCandidate_HistoryAndWriteBackFailuresBothSurface(t *testing.
 			historyErr: errors.Join(errors.New("change history not recorded: disk full"), metafetch.ErrApplyHistoryIncomplete),
 			finishErr:  errors.New("rename files: cross-device link"),
 		}
-		out := applyCachedCandidateForBookTimed(svc, books, &fakeITunes{}, "b1", writeBack, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+		out := applyCachedCandidateForBookTimed(svc, books, &fakeITunes{}, "b1", writeBack, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 		if !out.Applied || !out.HistoryFailed || !out.WriteBackFailed {
 			t.Fatalf("writeBack=%v: outcome %+v, want applied with history AND write-back flagged", writeBack, out)
 		}
