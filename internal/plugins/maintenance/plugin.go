@@ -92,7 +92,8 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.versionGroupPrimaryReportDef(),
 		// version-group-primary-repair fixes zero- and double-primary groups
 		// with versionprimary's rule. Dry run by default; apply needs
-		// explicit group_ids and refuses while library.scan runs.
+		// explicit group_ids and pauses a running library.scan through the
+		// scan stand-down (waiting until it parks) instead of refusing.
 		p.versionGroupPrimaryRepairDef(),
 		// --- Repairs lane of /review (internal/repairs) ---
 		p.repairsPlanDef(),
