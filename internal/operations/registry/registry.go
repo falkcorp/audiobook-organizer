@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.30.0
+// version: 3.31.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-25
+// last-edited: 2026-09-26
 
 package registry
 
@@ -140,6 +140,10 @@ type Registry struct {
 	// scanStandDownLease overrides the scan stand-down lease TTL. Zero means use
 	// defaultScanStandDownLease. Set via Options; tunable for tests.
 	scanStandDownLease time.Duration
+	// scanStandDownNow is the clock for stand-down lease expiry. Nil means
+	// time.Now; tests inject a fake so lease tests do not depend on how
+	// quickly a loaded CI runner wakes from a sleep.
+	scanStandDownNow func() time.Time
 	// scanStandDownGrace is the static re-queue grace from Options (see
 	// scanStandDownGraceFor). scanStandDownGraceFn, when set, overrides it
 	// with a live value (the server wires the config setting through it).
@@ -196,6 +200,9 @@ type Options struct {
 	// the scan between each one. Zero (the default here) re-queues at once;
 	// production sets it through SetScanStandDownGraceFunc from config.
 	ScanStandDownGrace time.Duration
+	// ScanStandDownNow overrides the clock used for stand-down lease expiry.
+	// Nil = time.Now. Tests only.
+	ScanStandDownNow func() time.Time
 }
 
 // SetScanStandDownGraceFunc installs a live source for the scan stand-down
@@ -243,6 +250,7 @@ func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int,
 		batch:              newBatchManager(),
 		scanGate:           scanStandDown{holders: make(map[string]time.Time)},
 		scanStandDownLease: opts.ScanStandDownLease,
+		scanStandDownNow:   opts.ScanStandDownNow,
 		scanStandDownGrace: opts.ScanStandDownGrace,
 	}
 }

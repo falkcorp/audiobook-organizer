@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b4e7c9a1-2d63-4f85-9c07-1a6e8d2f5b3c
-// last-edited: 2026-09-06
+// last-edited: 2026-09-26
 
 package registry_test
 
@@ -185,24 +185,39 @@ func TestScanStandDown_LeaseExpiryInvalidatesHolder(t *testing.T) {
 }
 
 func TestScanStandDown_RenewExtendsLeaseAndFailsAfterRelease(t *testing.T) {
+	// A fake clock: the previous version slept 70ms against a 100ms lease and
+	// failed on a loaded CI runner (Woodpecker pipeline #8, 2026-09-26).
+	var mu sync.Mutex
+	now := time.Unix(1_800_000_000, 0)
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 4,
-		registry.Options{ScanStandDownLease: 100 * time.Millisecond})
+		registry.Options{ScanStandDownLease: 100 * time.Millisecond, ScanStandDownNow: clock})
 
 	release, err := r.AcquireScanStandDown(t.Context(), "holder-1", "apply")
 	if err != nil {
 		t.Fatalf("AcquireScanStandDown: %v", err)
 	}
-	// Renew a few times across most of a lease each time; the holder must stay
-	// valid throughout, proving renewal actually extends the lease.
+	// Renew three times, each after most of a lease; 210ms in total is past
+	// the original expiry, so staying valid proves renewal extends the lease.
 	for i := 0; i < 3; i++ {
-		time.Sleep(70 * time.Millisecond)
+		advance(70 * time.Millisecond)
 		if !r.RenewScanStandDown("holder-1") {
 			t.Fatalf("renew %d returned false while still held", i)
 		}
 	}
 	if !r.ScanStandDownValid("holder-1") {
 		t.Fatal("expected valid after renewals")
+	}
+	// Without a renewal the lease lapses.
+	advance(101 * time.Millisecond)
+	if r.ScanStandDownValid("holder-1") {
+		t.Fatal("expected lease to lapse without renewal")
+	}
+	if r.RenewScanStandDown("holder-1") {
+		t.Fatal("expected renew to fail after the lease lapsed")
 	}
 	release()
 	if r.RenewScanStandDown("holder-1") {
