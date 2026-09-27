@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -150,7 +151,13 @@ func (w *Writer) HistoryRows() int { return int(w.historyRows.Load()) }
 // HistoryFailed is how many history rows could not be recorded.
 func (w *Writer) HistoryFailed() int { return int(w.historyFailed.Load()) }
 
+// jsonString encodes s as a JSON string, the shape every history value has.
+// Marshalling a Go string cannot fail; the fallback only keeps the linter
+// honest.
 func jsonString(s string) string {
-	b, _ := json.Marshal(s)
+	b, err := json.Marshal(s)
+	if err != nil {
+		return strconv.Quote(s)
+	}
 	return string(b)
 }

@@ -269,7 +269,7 @@ func (f *vgPrimaryFixer) authorName(b *database.Book) string {
 // Elect also reads file presence and chapter counts, which no member key
 // holds; they reach the fingerprint through the decision they produce.
 func vgFingerprint(g *vgRepairGroupReport) string {
-	h := sha256.New()
+	var b strings.Builder
 	keys := vgKeys(g.planned)
 	ids := make([]string, 0, len(keys))
 	for id := range keys {
@@ -278,16 +278,17 @@ func vgFingerprint(g *vgRepairGroupReport) string {
 	sort.Strings(ids)
 	for _, id := range ids {
 		k := keys[id]
-		fmt.Fprintf(h, "m|%s|%s|%s|%s|%v\n", id, k.primary, k.mergedInto, k.state, k.softDeleted)
+		b.WriteString(fmt.Sprintf("m|%s|%s|%s|%s|%v\n", id, k.primary, k.mergedInto, k.state, k.softDeleted))
 	}
-	fmt.Fprintf(h, "d|%s|%s|%s|%s|%s\n", g.Kind, g.HoldReason, g.WinnerID, g.MetadataBestID, g.RevivedID)
-	fmt.Fprintf(h, "x|%s\n", strings.Join(g.DemotedIDs, ","))
-	fmt.Fprintf(h, "n|%s\n", strings.Join(g.DemoteNonLive, ","))
+	b.WriteString(fmt.Sprintf("d|%s|%s|%s|%s|%s\n", g.Kind, g.HoldReason, g.WinnerID, g.MetadataBestID, g.RevivedID))
+	b.WriteString("x|" + strings.Join(g.DemotedIDs, ",") + "\n")
+	b.WriteString("n|" + strings.Join(g.DemoteNonLive, ",") + "\n")
 	if g.CarryOver != nil {
 		for _, fl := range g.CarryOver.Fills {
-			fmt.Fprintf(h, "f|%s=%s\n", fl.Field, fl.Value)
+			b.WriteString("f|" + fl.Field + "=" + fl.Value + "\n")
 		}
 	}
-	fmt.Fprintf(h, "e|%s\n", g.Error)
-	return hex.EncodeToString(h.Sum(nil))[:32]
+	b.WriteString("e|" + g.Error + "\n")
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])[:32]
 }
