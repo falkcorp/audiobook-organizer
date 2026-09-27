@@ -169,11 +169,12 @@ type cachedApplyPlan struct {
 	OwnerReviewed bool
 	// ReviewApproved: the owner clicked Apply on this ONE row in the review
 	// lane (a pin with origin "row" that matched the top cached candidate),
-	// whether the gate then passed or refused it. It alone makes the apply
+	// whether the gate then passed or refused it. It makes the apply
 	// overwrite (owner ruling 2026-09-14, "any row I approve overwrites").
 	// A review-page BULK button (origin "review_bulk") lifts the gate like a
-	// row (owner ruling 2026-09-27) but does NOT overwrite: bulk applies stay
-	// fill-only (owner decision A3#3, not reversed). It is kept apart from
+	// row (owner ruling 2026-09-27) but overwrites only when the request asks
+	// for replace (BulkReplace); otherwise bulk applies stay fill-only (owner
+	// decision A3#3). It is kept apart from
 	// OwnerReviewed on purpose: OwnerReviewed records a GATE OVERRIDE in the
 	// change history, and a row the gate passed overrode nothing.
 	ReviewApproved bool
@@ -222,10 +223,11 @@ func (p cachedApplyPlan) withBulkMode(pin *metafetch.CandidatePin, mode string) 
 // about a row.
 //
 // Overwriting is keyed on the pin ORIGIN, never on whether the gate was
-// lifted: only a single-row approval (ReviewApproved, origin "row", owner
-// ruling 2026-09-14) may overwrite filled descriptive fields. Every other
-// batch row is fill-only (owner decision A3#3): no pin, a script's pin, and a
-// review-page bulk button's "review_bulk" pin or hashless marker. A bulk
+// lifted: a single-row approval (ReviewApproved, origin "row", owner ruling
+// 2026-09-14) overwrites filled descriptive fields, and so does a review-page
+// bulk pin in replace mode (BulkReplace, below). Every other batch row is
+// fill-only (owner decision A3#3): no pin, a script's pin, and a review-page
+// bulk button's "review_bulk" pin or hashless marker in fill mode. A bulk
 // button lifts the certainty gate like a row (owner ruling 2026-09-27) and
 // that lift is recorded (OwnerReviewed + GateOverride), but it writes only
 // into empty fields, unless the owner switched the bulk toggle to "Replace
@@ -318,8 +320,9 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	}
 	v := applygate.EvaluateInBatch(book, authors, gateRuntime(books, book), &cand, svc.ValidateCachedIdentityForBook(entry, book, authors), claims)
 	// Any owner-review pin (row, bulk, or the hashless marker) lifts the
-	// certainty gate. Only a single-row pin is an approval that overwrites
-	// (ReviewApproved); a bulk button stays fill-only. A stale pin never gets
+	// certainty gate. A single-row pin is an approval that overwrites
+	// (ReviewApproved); a bulk button stays fill-only unless the request asks
+	// for replace (withBulkMode, applied by the caller). A stale pin never gets
 	// here (stale_candidate above, nothing written).
 	ownerReview := pin != nil && pin.IsOwnerReview()
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true, ReviewApproved: pin != nil && pin.IsRowReview()}
