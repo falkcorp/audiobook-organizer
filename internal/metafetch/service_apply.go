@@ -774,7 +774,8 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// asserted the book IS its record, so the match is recorded whatever
 	// title the book keeps: a deselected or locked title must not leave a
 	// hand-picked book in the review lane forever. Those applies are exactly
-	// the ones with FillOnly false (see ApplyOptions.FillOnly).
+	// the ones that are not opts.automatic(): FillOnly false and not
+	// UnseenCandidate (see ApplyOptions.FillOnly).
 	//
 	// An automatic apply (FillOnly: nobody picked this candidate) records it
 	// only when the book now holds the candidate's title. The status says the

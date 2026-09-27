@@ -110,9 +110,10 @@ func PinOf(c MetadataCandidate) CandidatePin {
 		ASIN: c.ASIN, ISBN: c.ISBN, ISBN10: c.ISBN10, ISBN13: c.ISBN13}
 }
 
-// IsRowReview reports whether p records a single-row approval: the only pin
-// whose apply may OVERWRITE filled fields (owner ruling 2026-09-14). Bulk
-// pins lift the gate (IsOwnerReview) but stay fill-only (A3#3).
+// IsRowReview reports whether p records a single-row approval, whose apply
+// always OVERWRITES filled fields (owner ruling 2026-09-14). Bulk pins lift
+// the gate (IsOwnerReview) and stay fill-only (A3#3) unless the request asks
+// for BulkApplyModeReplace (owner ruling 2026-09-27).
 func (p CandidatePin) IsRowReview() bool { return p.Origin == PinOriginRow }
 
 // IsOwnerReview reports whether p comes from an apply button on the review
@@ -171,17 +172,21 @@ type ApplyOptions struct {
 	// batch and automatic apply sets it (owner decision A3#3) except a
 	// hand-picked one: the single-book apply, and a batch row the owner
 	// approved in the review lane, whether the gate passed or refused it
-	// (owner ruling 2026-09-14), leave it false and may overwrite. The rename
+	// (owner ruling 2026-09-14), and a review-page bulk apply in
+	// BulkApplyModeReplace (OwnerReplace, owner ruling 2026-09-27), leave it
+	// false and may overwrite. The rename
 	// preflight and the bulk-apply preview must get the same value the apply
 	// does. It is independent of OwnerReviewed, which only labels a lifted
 	// gate refusal.
 	//
-	// It is also what marks an apply as AUTOMATIC (nobody picked this
-	// candidate): a FillOnly apply records the match (review status,
-	// MetadataSource, MetadataSourceHash) only when the book ends up holding
-	// the candidate's title, while a hand-picked apply (FillOnly false)
-	// records it whatever title the book keeps, because the person asserted
-	// the match. A new automatic caller must set FillOnly.
+	// With UnseenCandidate it is also what marks an apply as AUTOMATIC
+	// (nobody picked this candidate, ApplyOptions.automatic): an automatic
+	// apply records the match (review status, MetadataSource,
+	// MetadataSourceHash) only when the book ends up holding the candidate's
+	// title, while a hand-picked apply (FillOnly false, UnseenCandidate
+	// false) records it whatever title the book keeps, because the person
+	// asserted the match. A new automatic caller must set FillOnly, or
+	// UnseenCandidate if it overwrites.
 	//
 	// It covers the DESCRIPTIVE fields only (StripFilledFields leaves the
 	// identity fields alone), so it does not stop a title overwrite: a caller
