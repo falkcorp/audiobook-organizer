@@ -1,7 +1,7 @@
 // file: internal/applygate/runtime_canonical_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: ab7beb30-e82f-4592-8e09-9527424f2aed
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 package applygate
 

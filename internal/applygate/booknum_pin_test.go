@@ -1,7 +1,7 @@
 // file: internal/applygate/booknum_pin_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5e8a1c47-9d20-4b36-a7f1-2c6d0b93e815
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 package applygate
 

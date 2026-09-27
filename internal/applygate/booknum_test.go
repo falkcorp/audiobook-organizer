@@ -1,7 +1,7 @@
 // file: internal/applygate/booknum_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5e8a0b17-4c3d-4f92-a6e1-2d9c7b0f8e35
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 package applygate
 

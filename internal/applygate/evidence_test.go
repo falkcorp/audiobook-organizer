@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 1b7e3d52-9c4a-4f18-a26d-5e0f8b3c7a91
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 package applygate
 

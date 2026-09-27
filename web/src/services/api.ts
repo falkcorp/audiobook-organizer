@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.125.0
+// version: 2.126.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -4552,17 +4552,20 @@ export interface BatchApplyDispatch {
 // is the only description of what happened that cannot go stale.
 /**
  * Identifies the cached candidate a reviewer was LOOKING AT when they clicked
- * Apply on ONE review row (server: metafetch.CandidatePin). Only the lane's
- * single-row Apply sends pins; bulk buttons send none and stay fully gated.
- * The server applies the top cached candidate; a row pin whose content_hash
- * (CandidateResult.candidate_hash, served by the review list) and identity
- * fields still match it makes the apply owner-reviewed (the certainty gate
- * reports but does not refuse on its certainty legs), and a pin that no longer
- * matches -- the cache was refetched after the page loaded -- is refused as
- * stale_candidate.
+ * an apply button on the review page (server: metafetch.CandidatePin). Owner
+ * ruling 2026-09-27: EVERY review-page apply button is the owner's manual
+ * apply, so every one of them pins -- the single-row Apply with origin 'row',
+ * the bulk buttons (Apply selected, Apply page, Apply high confidence, group
+ * Apply All) with origin 'review_bulk'. The server applies the top cached
+ * candidate; a pin whose content_hash (CandidateResult.candidate_hash, served
+ * by the review list) and identity fields still match it makes the apply
+ * owner-reviewed (the certainty gate reports but does not refuse on its
+ * certainty legs), and a pin that no longer matches -- the cache was
+ * refetched after the page loaded -- is refused as stale_candidate. Scripts
+ * and API callers that send no pin stay fully gated.
  */
 export interface CandidatePin {
-  origin: 'row';
+  origin: 'row' | 'review_bulk';
   content_hash: string;
   source: string;
   title: string;
@@ -4573,10 +4576,25 @@ export interface CandidatePin {
   isbn13?: string;
 }
 
+/**
+ * The hashless owner marker (server: CandidatePin.IsUnseenOwnerReview): a
+ * review-page bulk button applied a book the lane holds no candidate hash for
+ * (a selection that outlived a refresh, or a row served without a hash). The
+ * apply is still owner-reviewed, on the top cached candidate as it stands,
+ * with no staleness check -- there is no shown candidate to check against --
+ * and it never overrides the book's "no match" mark.
+ */
+export interface OwnerReviewMarker {
+  origin: 'review_bulk';
+}
+
+/** What a review-page apply sends per book: a candidate pin, or the marker. */
+export type ApplyPin = CandidatePin | OwnerReviewMarker;
+
 export async function batchApplyFromCache(
   bookIds: string[],
   writeBack?: boolean,
-  pins?: Record<string, CandidatePin>
+  pins?: Record<string, ApplyPin>
 ): Promise<BatchApplyDispatch> {
   // dry_run:false is explicit: absent, the server enqueues a preview
   // (metadata.bulk-apply-preview) and applies nothing.

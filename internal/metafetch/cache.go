@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
