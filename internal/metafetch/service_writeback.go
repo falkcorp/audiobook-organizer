@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-09-14
+// last-edited: 2026-09-27
 
 package metafetch
 
@@ -60,22 +60,13 @@ func sortedKeys(m map[string]any) []string {
 //	"Audnexus (Audible)" → "metadata:source:audnexus"
 //	"Audible"            → "metadata:source:audible"
 func MetadataSourceTag(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
+	// The slug rules live in MetadataSourceSlug (source_rank.go) so the tag
+	// this writes and the rank table the metadata upgrade reads it back with
+	// can never disagree on a spelling.
+	slug := MetadataSourceSlug(name)
+	if slug == "" {
 		return ""
 	}
-	// Special case: drop the "(Audible)" parenthetical on Audnexus
-	// so the tag cleanly identifies the source provider, not its
-	// upstream. We still have metadata:source:audible for the
-	// direct Audible path.
-	if strings.HasPrefix(name, "Audnexus") {
-		return "metadata:source:audnexus"
-	}
-	slug := strings.ToLower(name)
-	slug = strings.ReplaceAll(slug, " ", "_")
-	slug = strings.ReplaceAll(slug, "(", "")
-	slug = strings.ReplaceAll(slug, ")", "")
-	slug = strings.ReplaceAll(slug, "-", "_")
 	return "metadata:source:" + slug
 }
 

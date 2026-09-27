@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -211,13 +211,21 @@ func (r *ExtraOpsRegistrar) RegisterTrashCleanupOp(reg *opsregistry.Registry) er
 // --- metadata-upgrade ---
 
 // RegisterMetadataUpgradeOp registers the scheduler.metadata-upgrade OperationDef.
+//
+// It is the ONLY registration of the metadata upgrade (2026-09-27). Until then
+// the same job was also registered as maintenance.metadata-upgrade by the
+// maintenance plugin, a second def with its own ConcurrencyKey, so the two
+// could run at once over the same books. Nothing in web/src or the handlers
+// named the maintenance ID; it stays reachable as a FormerID, so an old
+// operations_v2 row or an API enqueue by that ID resolves to this def.
 func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.metadata-upgrade",
+		FormerIDs:       []string{"maintenance.metadata-upgrade"},
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "scheduler",
 		DisplayName:     "Metadata Upgrade",
-		Description:     "Upgrade metadata from lower-quality sources to richer ones when a high-confidence match is available.",
+		Description:     "Replace metadata from lower-ranked sources (Open Library, Google Books, Wikipedia) with a higher-ranked source's (Hardcover, Audible) when its match passes the bulk-apply gate. User-locked fields are kept.",
 		DefaultPriority: opsregistry.PriorityLow,
 		Cancellable:     true,
 		Isolate:         false,
@@ -225,10 +233,17 @@ func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry)
 		ResumePolicy:    opsregistry.ResumeDrop,
 		ConcurrencyKey:  "scheduler.metadata-upgrade",
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkOpenAI},
+		// Audible and generic network: the search queries every metadata
+		// provider. OpenAI: the search may LLM-rerank its candidates.
+		Capabilities: []opsregistry.Capability{
+			opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite,
+			opsregistry.CapNetworkAudible, opsregistry.CapNetworkGeneric, opsregistry.CapNetworkOpenAI,
+		},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
-			// Metadata is never applied during a library scan: hold the scan stand-down
-			// before the first write (fails the op if the scan does not park).
+			// Metadata is never applied during a library scan: hold the scan
+			// stand-down before the first write. A running scan does not make
+			// the op refuse: the acquire quiesces it and waits for it to park
+			// (bounded by the lease), and the op fails only if it never parks.
 			hold, sdErr := opsregistry.HoldScanStandDown(ctx, r.Deps.ScanStandDown, reporter, "scheduler.metadata-upgrade apply")
 			if sdErr != nil {
 				return sdErr

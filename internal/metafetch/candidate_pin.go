@@ -1,5 +1,5 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-09-27
 
@@ -173,7 +173,9 @@ type ApplyOptions struct {
 	// hand-picked one: the single-book apply, and a batch row the owner
 	// approved in the review lane, whether the gate passed or refused it
 	// (owner ruling 2026-09-14), and a review-page bulk apply in
-	// BulkApplyModeReplace (OwnerReplace, owner ruling 2026-09-27), leave it
+	// BulkApplyModeReplace (OwnerReplace, owner ruling 2026-09-27), and the
+	// nightly metadata upgrade when a higher-ranked source replaces a
+	// lower-ranked one (RankUpgrade, owner ruling 2026-09-27), leave it
 	// false and may overwrite. The rename
 	// preflight and the bulk-apply preview must get the same value the apply
 	// does. It is independent of OwnerReviewed, which only labels a lifted
@@ -215,6 +217,18 @@ type ApplyOptions struct {
 	// makes a failed history write an error, since that history is the only
 	// way to revert the overwrite.
 	OwnerReplace bool
+	// RankUpgrade labels an AUTOMATIC overwrite by the nightly metadata
+	// upgrade (internal/metabatch): the book's metadata came from a
+	// lower-ranked source (SourceOutranks) and a higher-ranked source's
+	// candidate passed the bulk-apply gate, so the owner ruled on 2026-09-27
+	// that it replaces existing values. The value is the reason recorded in
+	// change history, e.g. "rank upgrade: open_library -> audible". Like
+	// OwnerReplace it changes no field by itself: the caller sets FillOnly
+	// false (and UnseenCandidate, since nobody picked the candidate), and a
+	// failed history write is an error, since that history is the only way to
+	// revert the overwrite. It is not OwnerReplace because no person pressed
+	// anything, and history must not say one did.
+	RankUpgrade string
 	// UnseenCandidate says nobody was shown this candidate (the review page's
 	// hashless bulk marker, CandidatePin.IsUnseenOwnerReview). An apply with
 	// FillOnly false normally counts as HAND-PICKED: it overrides a "no
@@ -265,7 +279,7 @@ const ownerReplaceLabel = "owner replace: review bulk apply replaced existing va
 
 // historySource is the source label change history records for an apply.
 func (o ApplyOptions) historySource(candidateSource string) string {
-	if !o.OwnerReviewed && !o.OwnerReplace {
+	if !o.OwnerReviewed && !o.OwnerReplace && o.RankUpgrade == "" {
 		return candidateSource
 	}
 	src := candidateSource
@@ -279,7 +293,17 @@ func (o ApplyOptions) historySource(candidateSource string) string {
 	if o.OwnerReplace {
 		notes = append(notes, ownerReplaceLabel)
 	}
+	if o.RankUpgrade != "" {
+		notes = append(notes, o.RankUpgrade)
+	}
 	return src + " (" + strings.Join(notes, "; ") + ")"
+}
+
+// requiresHistory reports whether a failed change-history write must be
+// returned to the caller: the apply lifted a gate refusal or overwrote filled
+// fields, and its history is the only record to audit or revert it from.
+func (o ApplyOptions) requiresHistory() bool {
+	return o.OwnerReviewed || o.OwnerReplace || o.RankUpgrade != ""
 }
 
 // historyKind names the apply in a failed-history error.
@@ -287,5 +311,8 @@ func (o ApplyOptions) historyKind() string {
 	if o.OwnerReviewed {
 		return "owner-reviewed"
 	}
-	return "owner-replace"
+	if o.OwnerReplace {
+		return "owner-replace"
+	}
+	return "rank-upgrade"
 }

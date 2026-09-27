@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -189,7 +189,9 @@ func NewTaskScheduler(deps SchedulerDeps) *TaskScheduler {
 		"author_split_scan",
 		"series_prune",
 		"isbn_enrichment",
-		"metadata_upgrade",
+		// metadata_upgrade left this list on 2026-09-27: it runs on its own
+		// interval (scheduled.metadata_upgrade.interval), independent of the
+		// window, and declares RunInMaintenanceWindow false.
 		"tombstone_cleanup",
 		"purge_deleted",
 		"purge_old_logs",

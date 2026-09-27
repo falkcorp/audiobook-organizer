@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.124.1
+// version: 1.125.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 package config
 
@@ -998,6 +998,16 @@ type ScheduledTasksConfig struct {
 	SeriesPrune              ScheduledTaskConfig `json:"series_prune"                mapstructure:"series_prune"`
 	AIDedupBatch             ScheduledTaskConfig `json:"ai_dedup_batch"              mapstructure:"ai_dedup_batch"`
 	Reconcile                ScheduledTaskConfig `json:"reconcile"                   mapstructure:"reconcile"`
+	// MetadataUpgrade schedules the metadata_upgrade task
+	// (scheduler.metadata-upgrade) on its own interval, independent of the
+	// maintenance window. Only Interval and OnStartup are read: the task is
+	// scheduled whenever Interval > 0 (and a metadata fetch service exists),
+	// so PUT /api/v1/tasks/metadata_upgrade {"interval_minutes":1440} alone
+	// turns it on and 0 turns it off. Enabled is NOT read, on purpose: a blob
+	// saved before this field existed decodes it as false, and a second
+	// switch would leave the owner's interval write silently inert. Ships at
+	// 0 (off); scheduling it is an owner decision.
+	MetadataUpgrade ScheduledTaskConfig `json:"metadata_upgrade" mapstructure:"metadata_upgrade"`
 }
 
 // Config holds application configuration
@@ -2363,6 +2373,10 @@ func InitConfig() {
 	viper.SetDefault("scheduled.acoustid_backfill.enabled", false)
 	viper.SetDefault("scheduled.acoustid_backfill.interval", 1440)
 	viper.SetDefault("scheduled.acoustid_backfill.on_startup", false)
+	// metadata_upgrade: scheduled whenever interval > 0 (Enabled is not read,
+	// see ScheduledTasksConfig.MetadataUpgrade). Ships off.
+	viper.SetDefault("scheduled.metadata_upgrade.interval", 0)
+	viper.SetDefault("scheduled.metadata_upgrade.on_startup", false)
 	// label_refinement ships DISABLED (INIT-1 T6): the scheduled dry-run chain
 	// (dedup.rebuild-gold-labels → dedup.calibrate-composite) only runs when an
 	// owner flips enabled=true. Interval is weekly (10080 min).
@@ -2402,6 +2416,8 @@ func InitConfig() {
 	viper.BindEnv("scheduled.acoustid_backfill.enabled", "SCHEDULED_ACOUSTID_BACKFILL_ENABLED")                     //nolint:errcheck
 	viper.BindEnv("scheduled.acoustid_backfill.interval", "SCHEDULED_ACOUSTID_BACKFILL_INTERVAL")                   //nolint:errcheck
 	viper.BindEnv("scheduled.acoustid_backfill.on_startup", "SCHEDULED_ACOUSTID_BACKFILL_ON_STARTUP")               //nolint:errcheck
+	viper.BindEnv("scheduled.metadata_upgrade.interval", "SCHEDULED_METADATA_UPGRADE_INTERVAL")                     //nolint:errcheck
+	viper.BindEnv("scheduled.metadata_upgrade.on_startup", "SCHEDULED_METADATA_UPGRADE_ON_STARTUP")                 //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.enabled", "SCHEDULED_LABEL_REFINEMENT_ENABLED")                       //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.interval", "SCHEDULED_LABEL_REFINEMENT_INTERVAL")                     //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.on_startup", "SCHEDULED_LABEL_REFINEMENT_ON_STARTUP")                 //nolint:errcheck
@@ -3049,6 +3065,10 @@ func InitConfig() {
 					Enabled:   viper.GetBool("scheduled.acoustid_backfill.enabled"),
 					Interval:  viper.GetInt("scheduled.acoustid_backfill.interval"),
 					OnStartup: viper.GetBool("scheduled.acoustid_backfill.on_startup"),
+				},
+				MetadataUpgrade: ScheduledTaskConfig{
+					Interval:  viper.GetInt("scheduled.metadata_upgrade.interval"),
+					OnStartup: viper.GetBool("scheduled.metadata_upgrade.on_startup"),
 				},
 				LabelRefinement: ScheduledTaskConfig{
 					Enabled:   viper.GetBool("scheduled.label_refinement.enabled"),

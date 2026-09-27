@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-27
 
@@ -853,10 +853,11 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// response (below) so the op reports and counts it. History is written
 	// after the commit, so the write itself stands; the rest of this apply
 	// still runs so the book is not left half-applied.
-	// An owner replace (OwnerReplace) overwrote filled fields, and its history
+	// An owner replace (OwnerReplace) or a nightly rank upgrade (RankUpgrade)
+	// overwrote filled fields, and its history
 	// is likewise the only way to revert it, so it gets the same guarantee.
 	var historyErr error
-	if (opts.OwnerReviewed || opts.OwnerReplace) && updateErr != nil {
+	if opts.requiresHistory() && updateErr != nil {
 		historyErr = fmt.Errorf("%s apply of %s: change history not recorded: %w", opts.historyKind(), id, updateErr)
 	}
 

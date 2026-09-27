@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b86925c-8469-4216-83f5-c7733c9ff488
-// last-edited: 2026-08-22
+// last-edited: 2026-09-27
 
 // Unit tests for the task-scheduler and maintenance-window HTTP handlers,
 // moved verbatim (renamed to the SchedulerHandler receiver and its own
@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -236,6 +237,7 @@ func acceptedBoolFields() []taskBoolField {
 		{"purge_old_logs", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.PurgeOldLogs }},
 		{"tombstone_cleanup", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.TombstoneCleanup }},
 		{"library_organize", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.LibraryOrganize }},
+		{"metadata_upgrade", "run_on_startup", func() bool { return config.AppConfig.Scheduled.MetadataUpgrade.OnStartup }},
 	}
 }
 
@@ -249,6 +251,7 @@ func acceptedIntFields() []taskIntField {
 		{"library_scan", "interval_minutes", func() int { return config.AppConfig.Scheduled.LibraryScan.Interval }},
 		{"reconcile_scan", "interval_minutes", func() int { return config.AppConfig.Scheduled.Reconcile.Interval }},
 		{"itunes_sync", "interval_minutes", func() int { return config.AppConfig.ITunes.SyncInterval }},
+		{"metadata_upgrade", "interval_minutes", func() int { return config.AppConfig.Scheduled.MetadataUpgrade.Interval }},
 	}
 }
 
@@ -272,6 +275,8 @@ func rejectedFields() []struct{ task, field string } {
 		{"library_organize", "run_on_startup"},
 		{"itunes_sync", "run_on_startup"},
 		{"itunes_sync", "run_in_maintenance_window"},
+		{"metadata_upgrade", "enabled"},
+		{"metadata_upgrade", "run_in_maintenance_window"},
 	}
 }
 
@@ -452,4 +457,47 @@ func TestUpdateTaskConfig_LibraryScanRunOnStartupOffKeepsTaskEnabled(t *testing.
 	require.False(t, after.RunOnStartup, "run_on_startup=false must take effect")
 	require.True(t, after.Enabled,
 		"clearing the startup run must not silently disable the task; scan_on_startup had it enabled")
+}
+
+// The exact command the owner will send (2026-09-27): interval_minutes alone
+// schedules metadata_upgrade on its own interval, with no enabled switch and
+// no maintenance window involved, and 0 turns it off again.
+func TestUpdateTaskConfig_MetadataUpgradeIntervalAloneSchedulesIt(t *testing.T) {
+	restoreAppConfig(t)
+	// Production has both off; the task must be schedulable without either.
+	config.AppConfig.Maintenance.Enabled = false
+	config.AppConfig.Maintenance.MetadataRefresh = false
+	view := func() scheduler.TaskInfo {
+		t.Helper()
+		ts := scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
+			Store:               func() scheduler.SchedulerStore { return nil },
+			HasDedupEngine:      func() bool { return false },
+			HasMetadataFetchSvc: func() bool { return true },
+			HasActivitySvc:      func() bool { return false },
+			HasBatchPoller:      func() bool { return false },
+		})
+		task, ok := ts.GetTask("metadata_upgrade")
+		require.True(t, ok)
+		info := scheduler.TaskInfo{
+			Enabled:                task.IsEnabled(),
+			IntervalMinutes:        int(task.GetInterval() / time.Minute),
+			RunInMaintenanceWindow: task.RunInMaintenanceWindow(),
+		}
+		return info
+	}
+
+	before := view()
+	require.False(t, before.Enabled, "ships unscheduled")
+	require.Zero(t, before.IntervalMinutes)
+
+	w := putTaskConfig(t, "metadata_upgrade", "interval_minutes", 1440)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	after := view()
+	require.True(t, after.Enabled, "interval_minutes alone must schedule the task")
+	require.Equal(t, 1440, after.IntervalMinutes)
+	require.False(t, after.RunInMaintenanceWindow, "it runs on its own interval, not in the window")
+
+	w = putTaskConfig(t, "metadata_upgrade", "interval_minutes", 0)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.False(t, view().Enabled, "interval 0 turns it off")
 }

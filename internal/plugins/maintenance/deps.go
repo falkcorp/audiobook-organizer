@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -423,12 +423,6 @@ type MetadataRunners interface {
 	// error so a fatal setup failure or persistence error can fail the op
 	// instead of being silently swallowed (C2/H7). progress may be nil.
 	BackfillExternalIDs(progress func(processed, total int, msg string)) error
-	// MetadataUpgradeRun runs the metadata upgrade scan up to limit books.
-	// progress may be nil; when non-nil it is updated every 25 books checked
-	// (M7, 2026-07 error-correction sweep — this is a 120-minute,
-	// network-bound op that previously reported nothing between start and
-	// result).
-	MetadataUpgradeRun(ctx context.Context, limit int, progress operations.ProgressReporter) (checked, upgraded, skipped, errs int, err error)
 }
 
 // SeriesRunners runs the series maintenance operations.

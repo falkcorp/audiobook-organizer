@@ -1,14 +1,13 @@
 // file: internal/plugins/maintenance/metadata.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: a7b8c9d0-e1f2-3456-0123-678901234567
-// last-edited: 2026-09-12
+// last-edited: 2026-09-27
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"log/slog"
 	"time"
@@ -51,58 +50,9 @@ func (p *Plugin) runMetadataRefresh(ctx context.Context, _ json.RawMessage, repo
 }
 
 // --- metadata-upgrade ---
-
-func (p *Plugin) metadataUpgradeDef() sdk.OperationDef {
-	return sdk.OperationDef{
-		ID:              "maintenance.metadata-upgrade",
-		Liveness:        sdk.LivenessManual,
-		Plugin:          "maintenance",
-		DisplayName:     "Metadata source upgrade",
-		Description:     "Upgrades metadata from lower-quality sources (Google Books) to richer ones (Hardcover, Audible) where a high-confidence match is available.",
-		ResumePolicy:    sdk.ResumeRequeue,
-		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.metadata-upgrade",
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         120 * time.Minute,
-		Schedule:        nil,
-		Capabilities: []sdk.Capability{
-			sdk.CapLibraryRead, sdk.CapLibraryWrite,
-			sdk.CapNetworkAudible, sdk.CapNetworkGeneric,
-		},
-		Run: p.runMetadataUpgrade,
-	}
-}
-
-func (p *Plugin) runMetadataUpgrade(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) (retErr error) {
-	// Metadata is never applied during a library scan: hold the scan stand-down
-	// before the first write (fails the op if the scan does not park).
-	hold, sdErr := registry.HoldScanStandDown(ctx, p.deps, reporter, "maintenance.metadata-upgrade apply")
-	if sdErr != nil {
-		return sdErr
-	}
-	defer func() { retErr = hold.Finish(retErr) }()
-	ctx, reporter = hold.Context(), hold.Reporter()
-	if !p.deps.HasMetadataFetchService() {
-		return fmt.Errorf("metadata fetch service not initialized")
-	}
-	prog := sdk.NewProgress(reporter, 0)
-	prog.Start("Scanning for books with upgradeable metadata sources...")
-	_ = reporter.Log(slog.LevelInfo, "Scanning for books with upgradeable metadata sources...")
-	// M7 (2026-07 error-correction sweep): thread the reporter through as a
-	// progress sink so the 120-minute network-bound scan reports books
-	// processed/total every 25 books instead of going silent between start
-	// and result.
-	checked, upgraded, skipped, errs, err := p.deps.MetadataUpgradeRun(ctx, 200, newOpsAdapter(reporter))
-	if err != nil {
-		return err
-	}
-	msg := fmt.Sprintf("Metadata upgrade complete: checked %d, upgraded %d, skipped %d, errors %d",
-		checked, upgraded, skipped, errs)
-	_ = reporter.Log(slog.LevelInfo, msg)
-	prog.Done(msg)
-	return nil
-}
+// Removed 2026-09-27: maintenance.metadata-upgrade duplicated
+// scheduler.metadata-upgrade (internal/scheduler/extra_ops.go), which now
+// lists this ID as a FormerID so old rows and enqueues still resolve.
 
 // --- isbn-enrichment ---
 // Hard rule: ResumeRestart. The resume position is NOT a reporter checkpoint;
