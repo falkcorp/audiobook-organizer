@@ -269,7 +269,7 @@ function FixerRail({ repairs }: RepairsPanelProps) {
 }
 
 function RowsTable({ repairs }: RepairsPanelProps) {
-  const { rows, filter, selectedRowIds, rowOutcomes } = repairs;
+  const { rows, filter, selectedRowIds, rowOutcomes, settledRowIds } = repairs;
   const skippedTab = filter === 'skipped';
   return (
     <Table size="small" stickyHeader data-testid="repairs-rows">
@@ -292,8 +292,11 @@ function RowsTable({ repairs }: RepairsPanelProps) {
               {!skippedTab && (
                 <TableCell padding="checkbox">
                   {/* Skipped rows never reach this tab's checkbox column; the
-                      guard is here too so a mixed page cannot offer one. */}
-                  {!row.skipped && (
+                      guard is here too so a mixed page cannot offer one. A row
+                      an apply already settled is not offered again either:
+                      the stored trial still lists it, the library no longer
+                      matches it. */}
+                  {!row.skipped && !settledRowIds.has(row.row_id) && (
                     <Checkbox
                       size="small"
                       checked={selectedRowIds.has(row.row_id)}
@@ -366,6 +369,7 @@ function PlanView({ repairs }: RepairsPanelProps) {
   const skippedTotal = sumCounts(page?.skipped_by_kind);
   const selectedCount = repairs.selectedRowIds.size;
   const applicable = page?.applicable ?? 0;
+  const remaining = repairs.remainingApplicable ?? 0;
   const applyDisabled = repairs.applying || running;
 
   return (
@@ -495,7 +499,7 @@ function PlanView({ repairs }: RepairsPanelProps) {
                 size="small"
                 variant="outlined"
                 color="warning"
-                disabled={applyDisabled || !page || applicable === 0}
+                disabled={applyDisabled || !page || remaining === 0}
                 data-testid="repairs-apply-all"
                 onClick={() =>
                   repairs.dispatch({
@@ -506,7 +510,7 @@ function PlanView({ repairs }: RepairsPanelProps) {
                   })
                 }
               >
-                Apply all applicable ({applicable})
+                Apply all applicable ({remaining})
               </Button>
             </Stack>
           )}
@@ -517,8 +521,12 @@ function PlanView({ repairs }: RepairsPanelProps) {
             </Alert>
           )}
           {repairs.applyError && (
-            <Alert severity="error" sx={{ mx: 2 }} data-testid="repairs-apply-error">
-              Apply failed: {repairs.applyError}
+            <Alert
+              severity={repairs.applyError.severity}
+              sx={{ mx: 2 }}
+              data-testid="repairs-apply-error"
+            >
+              {repairs.applyError.message}
             </Alert>
           )}
           {repairs.applyResult && (
