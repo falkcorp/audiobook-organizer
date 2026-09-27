@@ -1,5 +1,5 @@
 // file: internal/ai/cover_text_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e7b1c93-6a2f-4d58-b0e9-2c5f8a1d7b36
 // last-edited: 2026-09-26
 
@@ -274,5 +274,47 @@ func TestParseCoverTextReply(t *testing.T) {
 				t.Fatalf("got %+v %v", got, err)
 			}
 		})
+	}
+}
+
+// TestParseCoverTextReply_UnescapedBlurbQuotes covers the three prod failures
+// from 2026-09-26: the model copied a cover blurb's quote marks into a JSON
+// string without escaping them.
+func TestParseCoverTextReply_UnescapedBlurbQuotes(t *testing.T) {
+	cases := []struct {
+		name, reply, wantTitle, wantOther0 string
+	}{
+		{"leading quote", `{"title": "BLADES VR", "authors": ["TERRY SCHOTT"], "other_text": [""ANOTHER WINNER FROM TERRY!!!", "R.A. HERMELIN. AMAZON CUSTOMER"]}`,
+			"BLADES VR", `"ANOTHER WINNER FROM TERRY!!!`},
+		{"quoted blurb with attribution", `{"title": "INK BLOOD SISTER SCRIBE", "other_text": [""SIMPLY A DELIGHT FROM START TO FINISH." -AMAL EL-MOHTAR", "The New York Times Book Review"]}`,
+			"INK BLOOD SISTER SCRIBE", `"SIMPLY A DELIGHT FROM START TO FINISH." -AMAL EL-MOHTAR`},
+		{"quote then dash", `{"title": "Blood Rites", "other_text": ["National Bestselling Series", "[An] excellent series... Everything works." — SF Site"]}`,
+			"Blood Rites", "National Bestselling Series"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseCoverTextReply(tc.reply)
+			if err != nil {
+				t.Fatalf("ParseCoverTextReply: %v", err)
+			}
+			if got.Title != tc.wantTitle {
+				t.Errorf("Title = %q, want %q", got.Title, tc.wantTitle)
+			}
+			if len(got.OtherText) == 0 || got.OtherText[0] != tc.wantOther0 {
+				t.Errorf("OtherText = %q, want first %q", got.OtherText, tc.wantOther0)
+			}
+		})
+	}
+}
+
+func TestEscapeStrayQuotes_ValidJSONUnchanged(t *testing.T) {
+	for _, s := range []string{
+		`{"title": "A \"quoted\" title", "authors": ["X", "Y"], "series_number": 3}`,
+		`{"a": "", "b": [""], "c": {"d": "e"}}`,
+		"{\n  \"title\": \"T\"\n}",
+	} {
+		if got := escapeStrayQuotes(s); got != s {
+			t.Errorf("escapeStrayQuotes changed valid JSON:\n in: %s\nout: %s", s, got)
+		}
 	}
 }
