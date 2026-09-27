@@ -1,7 +1,7 @@
 # file: internal/server/testdata/write_op_modes.golden
-# version: 1.1.2
+# version: 1.2.0
 # guid: 656b77a9-3e50-456c-9945-dbbebbd7e041
-# last-edited: 2026-09-26
+# last-edited: 2026-09-27
 #
 # What `{}` does for every registered operation that can write (declares
 # library.write, files.write or db.migrate, or declares no capabilities at all).
@@ -170,6 +170,7 @@ openlibrary.download	no-mode
 openlibrary.import	no-mode
 operations.backfill-legacy-status	preview
 reconcile.apply	no-mode
+repairs.apply	preview
 scheduler.author-split-scan	preview
 scheduler.cleanup-old-backups	no-mode
 scheduler.db-optimize	no-mode
