@@ -81,7 +81,7 @@ type Row struct {
 }
 
 // Applicable reports whether apply may write this row.
-func (r *Row) Applicable() bool { return r.Skipped == "" }
+func (r Row) Applicable() bool { return r.Skipped == "" }
 
 // Fixer is one library repair offered in the Repairs lane.
 //
