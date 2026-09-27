@@ -38,6 +38,8 @@ const vgPrimaryFixerID = vgRepairSource
 // op's own writer (vgApplier.write). The op keeps working unchanged beside it.
 type vgPrimaryFixer struct {
 	p *Plugin
+	// probe replaces ffprobe when set (tests).
+	probe versionprimary.ChapterProber
 
 	// seriesMu guards a short-lived series-name cache for Replan, which runs
 	// once per applied row: re-listing every series per row would be the
@@ -77,6 +79,9 @@ func decodeVGFixerParams(raw json.RawMessage) (vgFixerParams, error) {
 }
 
 func (f *vgPrimaryFixer) prober(log func(string)) versionprimary.ChapterProber {
+	if f.probe != nil {
+		return f.probe
+	}
 	prober, perr := versionprimary.FFprobeChapterCounter()
 	if perr != nil {
 		log(fmt.Sprintf("%s: ffprobe unavailable (%v); chapter counts come from the chapter table", vgPrimaryFixerID, perr))
