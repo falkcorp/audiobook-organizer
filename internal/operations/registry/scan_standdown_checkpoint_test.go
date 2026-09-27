@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown_checkpoint_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1f6a9c3e-8b27-4d05-9e41-7c2d0a5b8f63
-// last-edited: 2026-09-12
+// last-edited: 2026-09-26
 
 package registry_test
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,21 +22,30 @@ import (
 // Checkpoint renews it. No ticker is involved, so the loop's own pace is the
 // only thing keeping the scanner parked.
 func TestScanStandDownCheckpoint_SlowLoopLongerThanLeaseKeepsHold(t *testing.T) {
+	// A fake clock (as in TestScanStandDown_RenewExtendsLeaseAndFailsAfterRelease):
+	// sleeping lease/3 per item against a real 150ms lease failed on loaded
+	// CI runners whenever one sleep overshot by a full lease.
+	var mu sync.Mutex
+	now := time.Unix(1_800_000_000, 0)
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+
 	const lease = 150 * time.Millisecond
-	r := registry.NewWithOptions(newFakeStore(), slog.Default(), 1, registry.Options{ScanStandDownLease: lease})
+	r := registry.NewWithOptions(newFakeStore(), slog.Default(), 1,
+		registry.Options{ScanStandDownLease: lease, ScanStandDownNow: clock})
 	rep := &opReporter{id: "op-slow"}
 	hold, err := registry.HoldScanStandDown(t.Context(), r, rep, "slow apply")
 	if err != nil {
 		t.Fatalf("HoldScanStandDown: %v", err)
 	}
-	began := time.Now()
+	began := clock()
 	for i := range 8 {
 		if err := registry.ScanStandDownCheckpoint(hold.Context()); err != nil {
-			t.Fatalf("item %d: checkpoint failed after %s: %v", i, time.Since(began), err)
+			t.Fatalf("item %d: checkpoint failed after %s: %v", i, clock().Sub(began), err)
 		}
-		time.Sleep(lease / 3) // slow per-item network work
+		advance(lease / 3) // slow per-item network work
 	}
-	if total := time.Since(began); total < 2*lease {
+	if total := clock().Sub(began); total < 2*lease {
 		t.Fatalf("loop ran %s; it must outlast the %s lease to prove anything", total, lease)
 	}
 	if !r.ScanStandDownValid("op-slow") {

@@ -1,5 +1,5 @@
 // file: internal/searchcache/cache_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 88a06138-3f42-4544-a283-88594317ab8b
 // last-edited: 2026-09-26
 
@@ -403,34 +403,51 @@ func TestCache_EvictedDuringRefreshKeepsCallerOptions(t *testing.T) {
 func TestCache_SlowPatchIsBoundedByWait(t *testing.T) {
 	changes := NewChangeLog(8)
 	c := New(changes, Config{})
-	ev := &slowLessEval{fakeEval: newFake(map[string]string{"b1": "red", "b3": "red"}, "red"), delay: 30 * time.Millisecond}
+	ev := &slowLessEval{fakeEval: newFake(map[string]string{"b1": "red", "b3": "red"}, "red")}
 	ctx := context.Background()
 	if _, err := c.Lookup(ctx, "k", ev, webOpts(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	ev.set("b2", "red")
 	changes.Record("b2")
-	start := time.Now()
+	// The patch's Less blocks until released, so the patch cannot finish
+	// inside the 5ms wait however the scheduler behaves. Lookup returning
+	// at all while the patch is parked is what proves the wait bounds it;
+	// the old version timed the lookup against a 30ms sleeping Less and
+	// failed on loaded CI runners.
+	gate := make(chan struct{})
+	ev.gate.Store(&gate)
 	res, err := c.Lookup(ctx, "k", ev, webOpts(5*time.Millisecond))
 	if err != nil || !res.Stale || len(res.IDs) != 2 {
 		t.Fatalf("slow patch = %+v, %v; want the old list, stale", res, err)
 	}
-	if d := time.Since(start); d > 25*time.Millisecond {
-		t.Fatalf("lookup took %v, want about the 5ms wait", d)
-	}
+	// The lookup may return before the patch goroutine is even scheduled;
+	// it must still reach Less (and park there) to have been a slow patch.
+	waitFor(t, func() bool { return ev.entered.Load() > 0 })
+	close(gate)
 	waitFor(t, func() bool {
 		r, err := c.Lookup(ctx, "k", ev, webOpts(time.Second))
 		return err == nil && r.Hit && reflect.DeepEqual(r.IDs, []string{"b1", "b2", "b3"})
 	})
 }
 
+// slowLessEval's Less blocks on gate once one is set, standing in for a slow
+// comparison without depending on wall-clock time.
 type slowLessEval struct {
 	*fakeEval
-	delay time.Duration
+	gate    atomic.Pointer[chan struct{}]
+	entered atomic.Int32
 }
 
 func (s *slowLessEval) Less(ctx context.Context, a, b string) (bool, error) {
-	time.Sleep(s.delay)
+	if g := s.gate.Load(); g != nil {
+		s.entered.Add(1)
+		select {
+		case <-*g:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
 	return a < b, nil
 }
 
