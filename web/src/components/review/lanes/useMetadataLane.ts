@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.17.1
+// version: 1.18.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-27
 //
@@ -37,6 +37,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ApplyPin,
+  BulkApplyMode,
   CandidatePin,
   CandidateResult,
   MetadataCandidate,
@@ -161,6 +162,32 @@ export function saveStrictPreset(on: boolean): void {
     window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET, String(on));
   } catch {
     // Private-mode / quota failure: the preset still applies this session.
+  }
+}
+
+/**
+ * The bulk-apply toggle (owner ruling 2026-09-27), per viewer. Anything but
+ * an exact stored 'replace' reads as 'fill', the default: an overwrite must
+ * never come from a missing, cleared or unreadable key.
+ */
+export function loadBulkApplyMode(): BulkApplyMode {
+  if (typeof window === 'undefined') return 'fill';
+  try {
+    return window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_BULK_APPLY_MODE) === 'replace'
+      ? 'replace'
+      : 'fill';
+  } catch {
+    // Storage blocked (private mode, sandboxed frame): the safe default.
+    return 'fill';
+  }
+}
+
+export function saveBulkApplyMode(mode: BulkApplyMode): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_BULK_APPLY_MODE, mode);
+  } catch {
+    // Private-mode / quota failure: the toggle still applies this session.
   }
 }
 
@@ -408,6 +435,14 @@ export interface MetadataLane {
   setFilters: (patch: Partial<MetadataFilters>) => void;
   strictPreset: boolean;
   setStrictPreset: (on: boolean) => void;
+  /**
+   * The bulk buttons' toggle: 'fill' writes only empty fields (the default),
+   * 'replace' overwrites filled ones. Read by every applySelected dispatch
+   * (Apply selected, Apply page, Apply high confidence, group Apply All);
+   * never by the single-row Apply.
+   */
+  bulkApplyMode: BulkApplyMode;
+  setBulkApplyMode: (mode: BulkApplyMode) => void;
 
   selectedIds: Set<string>;
   applying: boolean;
@@ -468,6 +503,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filters, setFiltersState] = useState<MetadataFilters>(initialFilters);
   const [strictPreset, setStrictPresetState] = useState(loadStrictPreset);
+  const [bulkApplyMode, setBulkApplyModeState] = useState<BulkApplyMode>(loadBulkApplyMode);
   const [requestedPage, setPage] = useState(1);
   const [pageSize, setPageSizeState] = useState<number>(loadReviewPageSize);
   const [applying, setApplying] = useState(false);
@@ -720,6 +756,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       return next;
     });
     setPage(1); // a filter change always returns to the first page of results
+  }, []);
+
+  const setBulkApplyMode = useCallback((mode: BulkApplyMode) => {
+    setBulkApplyModeState(mode);
+    saveBulkApplyMode(mode);
   }, []);
 
   const setStrictPreset = useCallback((on: boolean) => {
@@ -1010,9 +1051,15 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     async (
       requestedIds: string[],
       pins?: Record<string, ApplyPin>,
+      mode?: BulkApplyMode,
       writeBack?: boolean
     ): Promise<void> => {
-      const dispatched = await api.batchApplyFromCache(requestedIds, writeBack, pins);
+      // mode is passed only by the bulk path (applyMany); the single-row
+      // flush sends none, so the server never reads a toggle into it.
+      const dispatched =
+        mode === undefined
+          ? await api.batchApplyFromCache(requestedIds, writeBack, pins)
+          : await api.batchApplyFromCache(requestedIds, writeBack, pins, mode);
       toast(
         `Metadata apply queued for ${requestedIds.length.toLocaleString()} book(s) — watch the bell for progress.`,
         'success'
@@ -1109,10 +1156,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         // selected are the owner's manual apply too (owner ruling
         // 2026-09-27): every book is pinned, so the server lifts the same
         // certainty refusals a single-row Apply lifts. Unlike a single row,
-        // a bulk apply stays fill-only (A3#3): it never overwrites a filled
-        // field. Pins are captured now, at the click, from the rows the owner
-        // is looking at.
-        await runApplyOp(bookIds, bulkPinsFor(bookIds));
+        // a bulk apply is fill-only (A3#3) unless the owner switched the
+        // bulk toggle to 'replace' (owner ruling 2026-09-27), which is sent
+        // with every bulk request. Pins are captured now, at the click, from
+        // the rows the owner is looking at.
+        await runApplyOp(bookIds, bulkPinsFor(bookIds), bulkApplyMode);
         // Dispatch acceptance is the point at which this batch belongs to the
         // background worker. Mark each row now so the default Hide applied
         // filter clears it immediately; the terminal poll then refreshes and
@@ -1137,7 +1185,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         setApplying(false);
       }
     },
-    [runApplyOp, handleApplyError, retainInFlight, clearServerDerived, bulkPinsFor]
+    [runApplyOp, handleApplyError, retainInFlight, clearServerDerived, bulkPinsFor, bulkApplyMode]
   );
 
   const reject = useCallback(
@@ -1274,8 +1322,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       onAction: dispatch,
       expandedId,
       onToggleExpand: toggleExpand,
+      bulkApplyMode,
     }),
-    [rowStates, selectedIds, toggleSelect, dispatch, expandedId, toggleExpand]
+    [rowStates, selectedIds, toggleSelect, dispatch, expandedId, toggleExpand, bulkApplyMode]
   );
 
   // Explicitly `=== false`, not falsy: a row the server sent no age for is not
@@ -1340,6 +1389,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     setFilters,
     strictPreset,
     setStrictPreset,
+    bulkApplyMode,
+    setBulkApplyMode,
     selectedIds,
     applying,
     highConfidenceIds,

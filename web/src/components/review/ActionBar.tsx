@@ -1,7 +1,7 @@
 // file: web/src/components/review/ActionBar.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a91c73e-2d48-4b06-9f15-8c3e0a7b6d29
-// last-edited: 2026-08-20
+// last-edited: 2026-09-27
 //
 // The bulk-action footer: Apply Selected, Apply High Confidence, Apply Page,
 // Skip All Unmatched.
@@ -34,7 +34,17 @@
 // so a lane that gains an action without naming it fails to compile.
 
 import { useTransition } from 'react';
-import { Box, Button, CircularProgress, Stack, Tooltip, Typography } from '@mui/material';
+import {
+  Box,
+  Button,
+  CircularProgress,
+  Stack,
+  ToggleButton,
+  ToggleButtonGroup,
+  Tooltip,
+  Typography,
+} from '@mui/material';
+import type { BulkApplyMode } from '../../services/api';
 import type { MetadataAction } from './reviewActions';
 import { needsConfirmation } from './reviewActions';
 import { metadataLane } from './lanes';
@@ -52,6 +62,14 @@ export interface ActionBarProps {
    * dialog host, and so a future confirm UI does not mean editing this file.
    */
   confirm: (message: string) => Promise<boolean>;
+  /**
+   * The bulk buttons' toggle (owner ruling 2026-09-27): 'fill' writes only
+   * empty fields, 'replace' overwrites filled ones. It governs the three bulk
+   * buttons here (and the lane's other applySelected entry points); a
+   * single-row Apply is unaffected.
+   */
+  bulkApplyMode: BulkApplyMode;
+  onBulkApplyModeChange: (mode: BulkApplyMode) => void;
 }
 
 export function ActionBar({
@@ -62,14 +80,30 @@ export function ActionBar({
   applying,
   dispatch,
   confirm,
+  bulkApplyMode,
+  onBulkApplyModeChange,
 }: ActionBarProps) {
   const [pending, startTransition] = useTransition();
   const verbs = metadataLane.verbs;
   const busy = pending || applying;
+  const replacing = bulkApplyMode === 'replace';
+  // Suffix on every bulk button's label while the toggle is on Replace, so the
+  // button that overwrites says so itself.
+  const modeSuffix = replacing ? ', replace existing' : '';
 
   const run = (action: MetadataAction, count: number) => {
     startTransition(async () => {
-      if (needsConfirmation(action)) {
+      // A replace always asks first: it overwrites values the owner may have
+      // curated, on every book in the batch.
+      if (replacing) {
+        const ok = await confirm(
+          `Apply metadata to ${count.toLocaleString()} book(s) and REPLACE existing values? ` +
+            'Filled fields (description, narrator, publisher, cover and the rest) will be ' +
+            "overwritten with the candidate's values; each overwrite is recorded in the " +
+            'change history as an owner replace.'
+        );
+        if (!ok) return;
+      } else if (needsConfirmation(action)) {
         const ok = await confirm(`Apply metadata to ${count.toLocaleString()} book(s)?`);
         if (!ok) return;
       }
@@ -101,6 +135,29 @@ export function ActionBar({
 
       {busy && <CircularProgress size={18} aria-label="Applying" />}
 
+      <Tooltip title="What the bulk Apply buttons do to fields a book already has. Fill leaves them alone; Replace overwrites them. A single-row Apply always replaces.">
+        <ToggleButtonGroup
+          size="small"
+          exclusive
+          value={bulkApplyMode}
+          disabled={busy}
+          aria-label="Bulk apply mode"
+          data-testid="bulk-apply-mode"
+          onChange={(_, next: BulkApplyMode | null) => {
+            // Exclusive groups report null when the active button is
+            // clicked again; keep the current mode rather than clearing it.
+            if (next) onBulkApplyModeChange(next);
+          }}
+        >
+          <ToggleButton value="fill" data-testid="bulk-apply-mode-fill">
+            Fill empty fields
+          </ToggleButton>
+          <ToggleButton value="replace" color="warning" data-testid="bulk-apply-mode-replace">
+            Replace existing
+          </ToggleButton>
+        </ToggleButtonGroup>
+      </Tooltip>
+
       <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
         <Tooltip title="Skip every row the providers could not match. Skipped rows stay actionable.">
           <span>
@@ -129,7 +186,7 @@ export function ActionBar({
                 )
               }
             >
-              Apply high confidence ({highConfidenceIds.length})
+              Apply high confidence{modeSuffix} ({highConfidenceIds.length})
             </Button>
           </span>
         </Tooltip>
@@ -148,7 +205,7 @@ export function ActionBar({
                 )
               }
             >
-              Apply page ({allVisiblePendingIds.length})
+              Apply page{modeSuffix} ({allVisiblePendingIds.length})
             </Button>
           </span>
         </Tooltip>
@@ -162,7 +219,8 @@ export function ActionBar({
             run({ lane: 'metadata', type: 'applySelected', ids: selected }, selected.length)
           }
         >
-          {verbs.applySelected} ({selected.length})
+          {verbs.applySelected}
+          {modeSuffix} ({selected.length})
         </Button>
       </Stack>
     </Box>

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.18.0
+// version: 1.19.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-09-27
 //
@@ -12,7 +12,9 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../../services/api';
 import {
+  loadBulkApplyMode,
   loadReviewPageSize,
+  saveBulkApplyMode,
   useMetadataLane,
   PAGE_SIZE_FALLBACK,
   STRICT_PRESET,
@@ -651,23 +653,28 @@ describe('dispatch', () => {
       result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a', 'b'] });
     });
 
-    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {
-      a: {
-        origin: 'review_bulk',
-        content_hash: 'h-a',
-        source: 'audible',
-        title: 'Cand a',
-        author: 'A',
-        isbn13: '9780000000001',
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(
+      ['a', 'b'],
+      undefined,
+      {
+        a: {
+          origin: 'review_bulk',
+          content_hash: 'h-a',
+          source: 'audible',
+          title: 'Cand a',
+          author: 'A',
+          isbn13: '9780000000001',
+        },
+        b: {
+          origin: 'review_bulk',
+          content_hash: 'h-b',
+          source: 'audible',
+          title: 'Cand b',
+          author: 'A',
+        },
       },
-      b: {
-        origin: 'review_bulk',
-        content_hash: 'h-b',
-        source: 'audible',
-        title: 'Cand b',
-        author: 'A',
-      },
-    });
+      'fill'
+    );
   });
 
   // A bulk button can apply a book the lane holds no candidate hash for: the
@@ -695,17 +702,22 @@ describe('dispatch', () => {
       });
     });
 
-    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b', 'gone'], undefined, {
-      a: {
-        origin: 'review_bulk',
-        content_hash: 'h-a',
-        source: 'audible',
-        title: 'Cand a',
-        author: 'A',
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(
+      ['a', 'b', 'gone'],
+      undefined,
+      {
+        a: {
+          origin: 'review_bulk',
+          content_hash: 'h-a',
+          source: 'audible',
+          title: 'Cand a',
+          author: 'A',
+        },
+        b: { origin: 'review_bulk' },
+        gone: { origin: 'review_bulk' },
       },
-      b: { origin: 'review_bulk' },
-      gone: { origin: 'review_bulk' },
-    });
+      'fill'
+    );
   });
 
   it('hides a dispatched selected batch immediately', async () => {
@@ -727,10 +739,15 @@ describe('dispatch', () => {
     );
 
     await waitFor(() =>
-      expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {
-        a: { origin: 'review_bulk' },
-        b: { origin: 'review_bulk' },
-      })
+      expect(api.batchApplyFromCache).toHaveBeenCalledWith(
+        ['a', 'b'],
+        undefined,
+        {
+          a: { origin: 'review_bulk' },
+          b: { origin: 'review_bulk' },
+        },
+        'fill'
+      )
     );
     // The server accepted the operation, so the default "Hide applied" filter
     // must remove it immediately; waiting for the worker to finish leaves stale
@@ -740,6 +757,103 @@ describe('dispatch', () => {
     await waitFor(() => expect(result.current.spineCtx.rowState('a')).toBe('applied'));
     expect(result.current.spineCtx.rowState('b')).toBe('applied');
     expect(result.current.filteredResults).toHaveLength(0);
+  });
+
+  // The bulk toggle (owner ruling 2026-09-27): 'fill' by default, persisted
+  // per viewer, sent with every bulk request and never with a single-row one.
+  it('defaults the bulk mode to fill and persists a change', async () => {
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('a')]));
+    const { result, unmount } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(1));
+    expect(result.current.bulkApplyMode).toBe('fill');
+
+    act(() => result.current.setBulkApplyMode('replace'));
+    expect(result.current.bulkApplyMode).toBe('replace');
+    expect(result.current.spineCtx.bulkApplyMode).toBe('replace');
+    expect(window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_BULK_APPLY_MODE)).toBe(
+      'replace'
+    );
+    unmount();
+
+    const again = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(again.result.current.results).toHaveLength(1));
+    expect(again.result.current.bulkApplyMode).toBe('replace');
+  });
+
+  it('reads an unknown stored bulk mode as fill', async () => {
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_BULK_APPLY_MODE, 'REPLACE');
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('a')]));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(1));
+    expect(result.current.bulkApplyMode).toBe('fill');
+  });
+
+  it('keeps working when localStorage throws', async () => {
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    try {
+      expect(loadBulkApplyMode()).toBe('fill');
+      expect(() => saveBulkApplyMode('replace')).not.toThrow();
+    } finally {
+      get.mockRestore();
+      set.mockRestore();
+    }
+  });
+
+  it('sends replace from the bulk buttons and no mode from a single-row Apply', async () => {
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload(['a', 'b'].map((id) => makeResult(id, { candidate_hash: `h-${id}` })))
+    );
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op-mode',
+    } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(2));
+    act(() => result.current.setBulkApplyMode('replace'));
+
+    await act(async () => {
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a'] });
+    });
+    expect(api.batchApplyFromCache).toHaveBeenLastCalledWith(
+      ['a'],
+      undefined,
+      {
+        a: {
+          origin: 'review_bulk',
+          content_hash: 'h-a',
+          source: 'audible',
+          title: 'Cand a',
+          author: 'A',
+        },
+      },
+      'replace'
+    );
+
+    vi.useFakeTimers();
+    act(() => {
+      result.current.dispatch({ lane: 'metadata', type: 'apply', id: 'b' });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    vi.useRealTimers();
+    // Exactly three arguments: the single-row path never sends a mode, even
+    // with the toggle on Replace.
+    expect(vi.mocked(api.batchApplyFromCache).mock.calls.at(-1)).toEqual([
+      ['b'],
+      undefined,
+      {
+        b: { origin: 'row', content_hash: 'h-b', source: 'audible', title: 'Cand b', author: 'A' },
+      },
+    ]);
   });
 
   it('skipAllUnmatched touches no_match and error rows only', async () => {
