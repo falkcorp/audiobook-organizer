@@ -654,6 +654,227 @@
             }
           }
         }
+      },
+      "RepairRow": {
+        "type": "object",
+        "description": "One unit a Repairs-lane fixer proposes to change.",
+        "required": [
+          "row_id",
+          "book_ids",
+          "title",
+          "reason",
+          "risk",
+          "fingerprint"
+        ],
+        "properties": {
+          "row_id": {
+            "type": "string",
+            "description": "Stable id (a version group id, a book id)."
+          },
+          "book_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every book the row reads or may write; the framework guards run over all of them."
+          },
+          "title": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "current": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Display values the row has now (fixer-defined keys)."
+          },
+          "proposed": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Display values apply would leave (fixer-defined keys). Absent on a skipped row."
+          },
+          "reason": {
+            "type": "string"
+          },
+          "risk": {
+            "type": "string",
+            "enum": [
+              "low",
+              "review"
+            ]
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "Hash of the state the row was planned from; apply refuses the row as changed_since_plan when it moved."
+          },
+          "skipped": {
+            "type": "string",
+            "description": "Set when apply will never write the row: skipped_itunes, skipped_owner_manual, skipped_guard_unreadable, or the fixer's own hold kind."
+          },
+          "skip_reason": {
+            "type": "string"
+          }
+        }
+      },
+      "RepairRowsPage": {
+        "type": "object",
+        "properties": {
+          "plan_op_id": {
+            "type": "string"
+          },
+          "fixer_id": {
+            "type": "string"
+          },
+          "planned_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "filter": {
+            "type": "string",
+            "enum": [
+              "applicable",
+              "skipped"
+            ]
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter."
+          },
+          "applicable": {
+            "type": "integer",
+            "description": "Applicable rows in the whole plan."
+          },
+          "skipped_by_kind": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairRow"
+            }
+          }
+        }
+      },
+      "RepairOpRef": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "queued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "applicable": {
+            "type": "integer"
+          },
+          "skipped_by_kind": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "by_outcome": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "RepairFixer": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "last_plan": {
+            "$ref": "#/components/schemas/RepairOpRef"
+          },
+          "last_apply": {
+            "$ref": "#/components/schemas/RepairOpRef"
+          }
+        }
+      },
+      "RepairStarted": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "def_id": {
+            "type": "string",
+            "enum": [
+              "repairs.plan",
+              "repairs.apply"
+            ]
+          },
+          "fixer_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RepairApplyRequest": {
+        "type": "object",
+        "required": [
+          "plan_op_id",
+          "row_ids"
+        ],
+        "properties": {
+          "plan_op_id": {
+            "type": "string"
+          },
+          "row_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Only an explicit false writes; omitted or true re-checks the rows and reports would_apply."
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -11443,6 +11664,291 @@
           },
           "404": {
             "description": "Not found"
+          }
+        }
+      }
+    },
+    "/repairs": {
+      "get": {
+        "operationId": "listRepairFixers",
+        "summary": "List Repairs-lane fixers",
+        "tags": [
+          "maintenance"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "description": "Every fixer with its newest plan and apply run (last 30 days).",
+        "responses": {
+          "200": {
+            "description": "Fixers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "fixers": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/RepairFixer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/repairs/{fixer}/plan": {
+      "parameters": [
+        {
+          "name": "fixer",
+          "in": "path",
+          "required": true,
+          "description": "Fixer id, e.g. version-group-primary-repair.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "startRepairPlan",
+        "summary": "Start a Repairs plan",
+        "tags": [
+          "maintenance"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "description": "Enqueues repairs.plan. The optional body is the fixer's own params object, passed through. Read-only; runs during a library scan.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Plan enqueued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RepairStarted"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Body is not a JSON object"
+          },
+          "404": {
+            "description": "Unknown fixer"
+          },
+          "503": {
+            "description": "No operations registry"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/repairs/{fixer}/plan/{op_id}/rows": {
+      "parameters": [
+        {
+          "name": "fixer",
+          "in": "path",
+          "required": true,
+          "description": "Fixer id, e.g. version-group-primary-repair.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "op_id",
+          "in": "path",
+          "required": true,
+          "description": "The repairs.plan operation id.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listRepairPlanRows",
+        "summary": "Page a stored Repairs plan",
+        "tags": [
+          "maintenance"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            },
+            "description": "Clamped to 500."
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "applicable",
+                "skipped"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RepairRowsPage"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad paging/filter, or the op is not a plan of this fixer"
+          },
+          "404": {
+            "description": "Unknown fixer or plan op"
+          },
+          "409": {
+            "description": "The plan op has not completed"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/repairs/{fixer}/apply": {
+      "parameters": [
+        {
+          "name": "fixer",
+          "in": "path",
+          "required": true,
+          "description": "Fixer id, e.g. version-group-primary-repair.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "startRepairApply",
+        "summary": "Apply chosen rows of a Repairs plan",
+        "tags": [
+          "maintenance"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "description": "Enqueues repairs.apply for explicit row_ids of a completed plan. Each row is re-planned and refused as changed_since_plan when its fingerprint moved; hands-off rows are refused on fresh reads; a running library scan is paused through the scan stand-down, never a refusal; every changed field gets a history row.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Apply enqueued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RepairStarted"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing plan_op_id/row_ids, or the op is not a plan of this fixer"
+          },
+          "404": {
+            "description": "Unknown fixer or plan op"
+          },
+          "409": {
+            "description": "The plan op has not completed"
+          },
+          "503": {
+            "description": "No operations registry"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
           }
         }
       }

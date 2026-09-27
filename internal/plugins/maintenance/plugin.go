@@ -6,6 +6,7 @@
 package maintenance
 
 import (
+	"log/slog"
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -32,8 +33,9 @@ type Plugin struct {
 func (p *Plugin) Repairs() *repairs.Registry {
 	p.repairsOnce.Do(func() {
 		p.repairsReg = repairs.NewRegistry()
-		// Registration of a fixed, distinct id cannot fail.
-		_ = p.repairsReg.Register(newVGPrimaryFixer(p))
+		if err := p.repairsReg.Register(newVGPrimaryFixer(p)); err != nil {
+			slog.Error("repairs: fixer not registered", "err", err)
+		}
 	})
 	return p.repairsReg
 }
