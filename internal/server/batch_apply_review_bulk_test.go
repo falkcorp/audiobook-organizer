@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_review_bulk_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f2c8a91-3d6e-4b17-9a40-c7e1b5d3f820
 // last-edited: 2026-09-27
 //
@@ -15,10 +15,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
@@ -78,12 +80,18 @@ func TestReviewBulk_FixtureRefusesAndPinlessIsGated(t *testing.T) {
 // A bulk pin and the hashless marker both lift author_not_in_path and
 // transcription_mismatch, and the apply records the override in the change
 // history exactly like a row override (OwnerReviewed + every refusing reason).
+// Only the row pin overwrites; bulk stays fill-only (A3#3).
 func TestReviewBulk_OverridesCertaintyLegsAndRecordsIt(t *testing.T) {
-	for name, pin := range map[string]func(metafetch.MetadataCandidate) *metafetch.CandidatePin{
-		"bulk pin":     bulkPin,
-		"owner marker": func(metafetch.MetadataCandidate) *metafetch.CandidatePin { return ownerMarker() },
-		"row pin":      rowPin,
+	for _, tc := range []struct {
+		name         string
+		pin          func(metafetch.MetadataCandidate) *metafetch.CandidatePin
+		wantFillOnly bool
+	}{
+		{"bulk pin", bulkPin, true},
+		{"owner marker", func(metafetch.MetadataCandidate) *metafetch.CandidatePin { return ownerMarker() }, true},
+		{"row pin", rowPin, false},
 	} {
+		name, pin := tc.name, tc.pin
 		t.Run(name, func(t *testing.T) {
 			books, cand := refusedByAuthorAndTranscription()
 			svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
@@ -99,9 +107,8 @@ func TestReviewBulk_OverridesCertaintyLegsAndRecordsIt(t *testing.T) {
 					t.Errorf("GateOverride %q does not record %s", svc.applyOpts[0].GateOverride, want)
 				}
 			}
-			// The owner's manual apply overwrites, like a row approval.
-			if svc.applyOpts[0].FillOnly {
-				t.Errorf("owner-reviewed apply sent FillOnly")
+			if svc.applyOpts[0].FillOnly != tc.wantFillOnly {
+				t.Errorf("FillOnly = %v, want %v", svc.applyOpts[0].FillOnly, tc.wantFillOnly)
 			}
 		})
 	}
@@ -193,5 +200,51 @@ func TestReviewBulk_OpResultPathIsNeverOwnerReviewed(t *testing.T) {
 	plan := planOpResultApply(books, "b1", CandidateResult{Candidate: &cand, Book: CandidateBookInfo{ID: "b1", Title: "Moon Book"}}, nil)
 	if plan.OwnerReviewed || plan.ReviewApproved || plan.Pinnable || plan.Reason != applySkipGateBlocked {
 		t.Fatalf("op-results plan %+v, want hard gate_blocked and not pinnable", plan)
+	}
+}
+
+// The same book with a filled description: a review_bulk apply (pin or
+// marker) lifts the gate but leaves the filled description; a row apply
+// replaces it. Driven through the real metafetch apply.
+func TestReviewBulk_FillOnlyKeepsFilledDescription(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		pin      func(metafetch.MetadataCandidate) *metafetch.CandidatePin
+		wantDesc string
+	}{
+		{"bulk pin", bulkPin, "Owner's description"},
+		{"owner marker", func(metafetch.MetadataCandidate) *metafetch.CandidatePin { return ownerMarker() }, "Owner's description"},
+		{"row pin", rowPin, "Provider description"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			books, cand := refusedByAuthorAndTranscription()
+			cand.Description = "Provider description"
+			plan := planCachedApply(&fakeApplySvc{candidates: candidateJSON(t, cand)}, books, "b1", nil, tc.pin(cand))
+			if !plan.OwnerReviewed || plan.Reason != "" {
+				t.Fatalf("plan reason %q owner %v, want the gate lifted", plan.Reason, plan.OwnerReviewed)
+			}
+			desc := "Owner's description"
+			book := *books["b1"]
+			book.Description = &desc
+			var updated *database.Book
+			store := &database.MockStore{
+				GetBookByIDFunc: func(string) (*database.Book, error) { c := book; return &c, nil },
+				UpdateBookFunc: func(_ string, b *database.Book) (*database.Book, error) {
+					c := *b
+					updated = &c
+					return &c, nil
+				},
+			}
+			_, err := metafetch.NewService(store).ApplyMetadataCandidateWithOptions("b1", cand, nil, plan.applyOptions())
+			if err != nil && !errors.Is(err, metafetch.ErrApplyHistoryIncomplete) {
+				t.Fatalf("apply: %v", err)
+			}
+			if updated == nil || updated.Description == nil {
+				t.Fatalf("no row committed or description cleared: %+v", updated)
+			}
+			if *updated.Description != tc.wantDesc {
+				t.Fatalf("description = %q, want %q", *updated.Description, tc.wantDesc)
+			}
+		})
 	}
 }

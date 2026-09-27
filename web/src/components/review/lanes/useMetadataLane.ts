@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.17.0
+// version: 1.17.1
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-27
 //
@@ -1108,8 +1108,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         // Apply page, Apply high confidence, group Apply All and Apply
         // selected are the owner's manual apply too (owner ruling
         // 2026-09-27): every book is pinned, so the server lifts the same
-        // certainty refusals a single-row Apply lifts. Pins are captured now,
-        // at the click, from the rows the owner is looking at.
+        // certainty refusals a single-row Apply lifts. Unlike a single row,
+        // a bulk apply stays fill-only (A3#3): it never overwrites a filled
+        // field. Pins are captured now, at the click, from the rows the owner
+        // is looking at.
         await runApplyOp(bookIds, bulkPinsFor(bookIds));
         // Dispatch acceptance is the point at which this batch belongs to the
         // background worker. Mark each row now so the default Hide applied

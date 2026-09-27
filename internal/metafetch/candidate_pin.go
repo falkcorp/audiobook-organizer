@@ -1,5 +1,5 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-09-27
 
@@ -79,6 +79,11 @@ func PinOf(c MetadataCandidate) CandidatePin {
 	return CandidatePin{ContentHash: CandidateHash(c), Source: c.Source, Title: c.Title, Author: c.Author,
 		ASIN: c.ASIN, ISBN: c.ISBN, ISBN10: c.ISBN10, ISBN13: c.ISBN13}
 }
+
+// IsRowReview reports whether p records a single-row approval: the only pin
+// whose apply may OVERWRITE filled fields (owner ruling 2026-09-14). Bulk
+// pins lift the gate (IsOwnerReview) but stay fill-only (A3#3).
+func (p CandidatePin) IsRowReview() bool { return p.Origin == PinOriginRow }
 
 // IsOwnerReview reports whether p comes from an apply button on the review
 // page (any origin above), and so makes the apply owner-reviewed.
