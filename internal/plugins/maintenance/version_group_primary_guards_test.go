@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_guards_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e2c4a61-7b3d-4f58-a0c2-6d1e8b5f3a47
 // last-edited: 2026-09-26
 
@@ -166,8 +166,21 @@ func TestVGPrimaryRepair_LimitCapsPlannedGroups(t *testing.T) {
 	f.seed(t)
 	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Limit: 1})
 	require.NoError(t, err)
-	require.Equal(t, 1, rep.Candidates)
+	require.Equal(t, 2, rep.Candidates, "candidates is the whole-library count, not the limited one")
+	require.Equal(t, 1, rep.MultiPrimary)
 	require.Equal(t, 1, rep.LimitedOut)
 	require.Len(t, rep.Groups, 1)
 	require.Equal(t, "vg-double", rep.Groups[0].GroupID, "limit keeps the first groups by id")
+}
+
+func TestVGPrimaryRepair_SkipsITunesGroupEvenWhenRowIsMissing(t *testing.T) {
+	f := newVGRepairFixture(t)
+	f.seedDouble(t, "vg-itm", nil)
+	it := filepath.Join(f.root, "books", "itunes", "Author", "Y.m4b")
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{ID: "bf-itm", BookID: "vg-itm-Y", FilePath: it, Missing: true}))
+
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: vgBoolPtr(false), GroupIDs: []string{"vg-itm"}})
+	require.NoError(t, err)
+	require.Equal(t, vgDecisionSkipITunes, vgGroupReportOf(t, rep, "vg-itm").Kind)
+	require.Equal(t, "true", f.flag(t, "vg-itm-Y"))
 }
