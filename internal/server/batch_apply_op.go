@@ -349,6 +349,10 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// markedNoMatch counts books left alone because their owner
 			// marked them "no match" and did not approve this row.
 			var markedNoMatch atomic.Int64
+			// authorsUnreadable counts books refused because their live
+			// author credits could not be read (the gate would otherwise have
+			// judged them authorless, which loosens it).
+			var authorsUnreadable atomic.Int64
 			// historyFailed counts owner-reviewed books written without their
 			// change history (the only record of the override).
 			var historyFailed atomic.Int64
@@ -503,6 +507,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					case applySkipMarkedNoMatch:
 						// The owner rejected every match; nothing was written.
 						markedNoMatch.Add(1)
+					case applySkipAuthorsUnreadable:
+						// The live author read failed; nothing was written.
+						authorsUnreadable.Add(1)
 					}
 					attrs := []slog.Attr{
 						slog.String("book_id", id),
@@ -690,8 +697,8 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// not books that merely waited once.
 			stillDeferred := len(snapshotGateDeferred())
 			summary := fmt.Sprintf(
-				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, marked no match %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, owner-reviewed change history not recorded %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
-				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), markedNoMatch.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
+				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, marked no match %d, authors unreadable %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, owner-reviewed change history not recorded %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
+				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), markedNoMatch.Load(), authorsUnreadable.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
 				applyFailed.Load(), writeFailed.Load(), historyFailed.Load(), stillDeferred,
 				skippedLocked.Load(), claims.Unreadable())
 			if priorDone > 0 {

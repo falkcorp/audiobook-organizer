@@ -1,7 +1,7 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
-// last-edited: 2026-09-14
+// last-edited: 2026-09-27
 //
 // The bulk-apply DRY RUN: "metadata.bulk-apply-preview".
 //
@@ -173,6 +173,14 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 	case applySkipGateBlocked:
 		row.Verdict, row.Reason = previewVerdictBlocked, plan.Gate.Reason
 		row.Detail = plan.Gate.Detail
+	case applySkipAuthorsUnreadable:
+		// Not "nothing to apply": the apply would refuse this book, and a
+		// retry may succeed. Blocked, so it is not read as settled.
+		row.Verdict, row.Reason = previewVerdictBlocked, plan.Reason
+		if plan.Err != nil {
+			row.Detail = plan.Err.Error()
+		}
+		return row
 	default:
 		row.Verdict, row.Reason = previewVerdictSkipped, plan.Reason
 		if plan.Err != nil {
@@ -183,11 +191,12 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 
 	// The options the apply of this row would use (cachedApplyPlan.applyOptions
 	// states the rule): fill-only for a row the gate passes, which a pinless
-	// bulk apply of the preview's rows writes; for a row only a review-lane
-	// approval can land, the overwriting options that apply (and its rename
-	// preflight) runs with. Changes and the rename check below therefore
-	// describe the apply that would happen. A gate-passed row the owner later
-	// approves in the review lane overwrites where this shows a fill.
+	// (script or API) apply of the preview's rows writes; for a row only a
+	// review-page approval can land, the overwriting options that apply (and
+	// its rename preflight) runs with. Changes and the rename check below
+	// therefore describe the apply that would happen. A gate-passed row
+	// applied from any review-page button (single row or bulk, since
+	// 2026-09-27) overwrites where this shows a fill.
 	pv, err := svc.PreviewMetadataCandidateWithOptions(id, *plan.Candidate, writeBack, plan.applyOptions())
 	switch {
 	case errors.Is(err, metafetch.ErrApplyPolicyBlocked):

@@ -178,8 +178,8 @@ type cachedApplyPlan struct {
 }
 
 // reviewOnly reports whether a pinless plan refused the book on legs a
-// review-lane approval lifts, on a path that accepts a pin: the book can land
-// only as a review-lane apply. Gate is nil on the early skip plans, so it is
+// review-page approval lifts, on a path that accepts a pin: the book can land
+// only as a review-page apply. Gate is nil on the early skip plans, so it is
 // checked explicitly rather than trusted to Reason.
 func (p cachedApplyPlan) reviewOnly() bool {
 	return p.Pinnable && p.Reason == applySkipGateBlocked && p.Gate != nil && p.Gate.OwnerReviewOverridable()
@@ -189,20 +189,23 @@ func (p cachedApplyPlan) reviewOnly() bool {
 // preflight and the dry-run preview alike, so no two of them can disagree
 // about a row.
 //
-// Apply (a request's plan): a row approved in the review lane
-// (ReviewApproved) is hand-picked, so it may overwrite filled descriptive
-// fields like the single-book apply (owner ruling 2026-09-14), whether the
-// gate passed it or an owner review lifted a refusal. Every other batch row
-// (no pin, or a pin not from a review row) is fill-only (owner decision
-// A3#3). Only a lifted refusal (OwnerReviewed) is labelled as a gate override.
+// Apply (a request's plan): a book applied from any review-page apply button
+// (ReviewApproved: a single row or a bulk button, owner rulings 2026-09-14
+// and 2026-09-27) is the owner's manual apply, so it may overwrite filled
+// descriptive fields like the single-book apply, whether the gate passed it
+// or an owner review lifted a refusal. Every other batch row (no pin, or a
+// pin of no owner-review origin: scripts and API callers) is fill-only
+// (owner decision A3#3). Only a lifted refusal (OwnerReviewed) is labelled as
+// a gate override.
 //
-// Preview (the pinless dry run): the preview's rows are applied by a pinless
-// bulk request, so a row the gate passes previews fill-only, exactly what
-// that request writes. A row only a review can land (reviewOnly) previews
-// with the options its review-lane apply would carry: overwrite, and the
-// override labels. What the preview cannot know is whether the owner will
-// later approve a gate-passed row in the review lane; that apply overwrites
-// where this preview showed a fill.
+// Preview (the pinless dry run): a gate-passed row previews fill-only, which
+// is what a pinless (script or API) apply of it writes. A row only a review
+// can land (reviewOnly) previews with the options its review-page apply would
+// carry: overwrite, and the override labels. What the preview cannot know is
+// whether the book will be applied from the review page instead: since
+// 2026-09-27 every review-page button, bulk ones included, overwrites, so for
+// such an apply a gate-passed row overwrites where this preview showed a
+// fill.
 func (p cachedApplyPlan) applyOptions() metafetch.ApplyOptions {
 	overridden := p.OwnerReviewed || p.reviewOnly()
 	opts := metafetch.ApplyOptions{FillOnly: !(p.ReviewApproved || overridden)}

@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -81,8 +81,9 @@ type CandidateResult struct {
 	FetchedAt *time.Time `json:"fetched_at,omitempty"`
 	IsFresh   *bool      `json:"is_fresh,omitempty"`
 	// CandidateHash is metafetch.CandidateHash(*Candidate), served by the
-	// cache review list so a single-row Apply can pin exactly the record the
-	// owner looked at (metafetch.CandidatePin.ContentHash). Empty elsewhere.
+	// cache review list so every review-page apply button can pin exactly the
+	// record the owner looked at (metafetch.CandidatePin.ContentHash). Empty
+	// elsewhere.
 	CandidateHash string `json:"candidate_hash,omitempty"`
 	// Cached is set when the batch fetch answered this book from the
 	// candidate cache instead of asking the providers: "candidates" for a

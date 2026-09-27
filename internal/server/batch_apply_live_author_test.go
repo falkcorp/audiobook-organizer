@@ -199,3 +199,15 @@ func TestFetchTimeIdentity_LiveAuthorForms(t *testing.T) {
 		t.Errorf("recorded Stephen King: %v, want ErrStaleMetadataCache", err)
 	}
 }
+
+// The dry run reports an unreadable author as blocked, not as "nothing to
+// apply": the apply would refuse the book and a retry may succeed.
+func TestPreviewBulkApplyRow_AuthorsUnreadableIsBlocked(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "Valis", Score: 0.95}
+	plan := cachedApplyPlan{Book: &database.Book{ID: "valis", Title: "Valis"}, Candidate: &cand,
+		Reason: applySkipAuthorsUnreadable, Err: errors.New("read author 101 of valis: pebble: closed")}
+	row := previewBulkApplyRow(blockingPreview{&fakeApplySvc{}}, "valis", plan, true)
+	if row.Verdict != previewVerdictBlocked || row.Reason != applySkipAuthorsUnreadable {
+		t.Fatalf("verdict %q reason %q, want blocked/%s", row.Verdict, row.Reason, applySkipAuthorsUnreadable)
+	}
+}
