@@ -172,7 +172,7 @@ func TestDurationMatch_NoFileReadForTitleMismatches(t *testing.T) {
 		reads[id]++
 		return chapterRows(id, 1, 36000, 1), nil
 	}
-	if err := engine.checkDurationMatch(book); err != nil {
+	if err := engine.checkDurationMatch(book, ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(reads) != 1 || reads["A"] != 1 {
@@ -227,7 +227,7 @@ func TestUpsertExactCandidate_ReadsEachBookOnce(t *testing.T) {
 	}
 	a := &database.Book{ID: "A", Title: "Foundation"}
 	b := &database.Book{ID: "B", Title: "Foundation"}
-	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatal(err)
 	}
 	if reads["A"] != 1 || reads["B"] != 1 {

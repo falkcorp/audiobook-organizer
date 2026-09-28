@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.24.0
+// version: 1.24.1
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -328,7 +328,10 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 			"ai_advice_at":      cand.AIAdviceAt,
 		}
 		// Surface top-level score (avoids T017 having to unpack score_breakdown).
-		if cand.ScoreBreakdown != nil {
+		// A provenance-only breakdown (an exact rule's record of why the row
+		// exists) has no score; surfacing its 0 would show "0" beside a pair
+		// the exact layer calls 100% similar.
+		if cand.ScoreBreakdown != nil && !cand.ScoreBreakdown.IsProvenanceOnly() {
 			row["score"] = cand.ScoreBreakdown.Score
 		}
 		if includeBreakdown {

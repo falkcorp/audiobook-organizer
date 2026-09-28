@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 60d982e2-6836-4327-9ddf-9b55375f39ea
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 // Package dedup — DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -35,6 +35,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
 
@@ -61,6 +62,15 @@ const (
 	drainReasonBoilerplateTitle   = "boilerplate_title"
 	drainReasonShortDuration      = "short_duration"
 	drainReasonPartVsWhole        = "part_vs_whole"
+	// drainReasonPlaceholderTitle (2026-09-27): the pair's only evidence is a
+	// placeholder title ("Unknown Title", "read by narrator", ...) or a title
+	// shared under placeholder authors on both sides — the pairs the title
+	// rules no longer emit (titleEvidenceRefusal). A pair that ALSO shares
+	// content (a file hash, an ISBN/ASIN, a metadata source record, or a
+	// recorded content rule / scoring signal) is kept: its title was never the
+	// evidence. The reclassification is to stale-drain, a machine status, not
+	// a human "not a duplicate" verdict.
+	drainReasonPlaceholderTitle = "placeholder_title"
 )
 
 // DrainStaleResult is the report produced by a DrainStaleCandidates run.
@@ -99,6 +109,11 @@ type drainBookMeta struct {
 	runtime  database.BookRuntime
 	fileRows int
 	filesOK  bool
+	// authorName is the resolved author name ("" when unresolved) and
+	// hashes the book's content hashes (book-level plus every file row's),
+	// both for the placeholder-title gate's content-evidence check.
+	authorName string
+	hashes     map[string]struct{}
 }
 
 // DrainStaleCandidates re-evaluates pending exact-layer candidates against the
@@ -127,6 +142,23 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 	// set the gates read is retained; the full row fetched by GetBookByID is
 	// transient and discarded.
 	cache := make(map[string]drainBookMeta)
+	// Author names are cached by author ID: the placeholder authors this
+	// gate exists for hang hundreds of books off one row.
+	authorNames := make(map[int]string)
+	authorName := func(authorID *int) string {
+		if authorID == nil {
+			return ""
+		}
+		if n, ok := authorNames[*authorID]; ok {
+			return n
+		}
+		n := ""
+		if a, err := de.bookStore.GetAuthorByID(*authorID); err == nil && a != nil {
+			n = a.Name
+		}
+		authorNames[*authorID] = n
+		return n
+	}
 	lookup := func(id string) drainBookMeta {
 		if m, ok := cache[id]; ok {
 			return m
@@ -137,16 +169,23 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 			m.missing = true
 		} else {
 			m.stub = &database.Book{
-				ID:               b.ID,
-				Title:            b.Title,
-				FilePath:         b.FilePath, // for SamePathPair
-				Duration:         b.Duration,
-				ISBN10:           b.ISBN10,
-				ISBN13:           b.ISBN13,
-				ASIN:             b.ASIN,
-				IsPrimaryVersion: b.IsPrimaryVersion,
+				ID:                 b.ID,
+				Title:              b.Title,
+				FilePath:           b.FilePath, // for SamePathPair
+				Duration:           b.Duration,
+				ISBN10:             b.ISBN10,
+				ISBN13:             b.ISBN13,
+				ASIN:               b.ASIN,
+				IsPrimaryVersion:   b.IsPrimaryVersion,
+				AuthorID:           b.AuthorID,
+				MetadataSourceHash: b.MetadataSourceHash,
 			}
-			m.runtime, m.fileRows, m.filesOK = runtimeAndRows(de.bookStore, nil, b)
+			// One file-row read serves both the runtime gates and the
+			// content-evidence check.
+			files, ferr := de.bookStore.GetBookFiles(b.ID)
+			m.runtime, m.fileRows, m.filesOK = runtimeFromFiles(b, files, ferr)
+			m.authorName = authorName(b.AuthorID)
+			m.hashes = bookContentHashes(b, files)
 		}
 		cache[id] = m
 		return m
@@ -231,7 +270,7 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 				continue
 			}
 
-			reason, purge := de.classifyStaleCandidate(a, b)
+			reason, purge := de.classifyStaleCandidate(c, a, b)
 			if !purge {
 				result.Kept++
 				continue
@@ -337,7 +376,10 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 // soft-reclassify (never delete) semantics keep this idempotent alongside
 // PurgeStaleCandidates' separate hard-delete sweep — a row either path
 // already removed simply never appears in this scan again.
-func (de *Engine) classifyStaleCandidate(a, b drainBookMeta) (string, bool) {
+//
+// placeholder_title runs LAST, after every chokepoint twin, so a pair an
+// existing gate already rejects keeps its existing reason in the report.
+func (de *Engine) classifyStaleCandidate(c database.DedupCandidate, a, b drainBookMeta) (string, bool) {
 	// A missing book on either side means the candidate can't be actioned — the
 	// same conservative treatment PurgeStaleCandidates gives missing books.
 	// This check has no chokepoint twin (upsertExactCandidate always receives
@@ -364,5 +406,90 @@ func (de *Engine) classifyStaleCandidate(a, b drainBookMeta) (string, bool) {
 		partVsWholeRuntime(a.runtime, a.fileRows, b.runtime, b.fileRows) {
 		return drainReasonPartVsWhole, true
 	}
+	if placeholderOnlyEvidence(c, a, b) {
+		return drainReasonPlaceholderTitle, true
+	}
 	return "", false
+}
+
+// placeholderOnlyEvidence reports whether a pending exact pair rests on
+// nothing but a placeholder title (titleEvidenceRefusal) with no content
+// evidence beside it. Most such rows predate provenance and carry no
+// breakdown, so the check re-derives the content evidence from the books'
+// CURRENT data; a row whose breakdown records a content rule or a scoring
+// non-title signal is kept even if that evidence has since changed, because
+// the drain must err toward keeping a pair a human can still look at.
+func placeholderOnlyEvidence(c database.DedupCandidate, a, b drainBookMeta) bool {
+	if titleEvidenceRefusal(a.stub.Title, b.stub.Title, a.authorName, b.authorName) == "" {
+		return false
+	}
+	if recordsContentEvidence(c) {
+		return false
+	}
+	return !sharesContentEvidence(a, b)
+}
+
+// titleOnlyScoringKinds are the scoring signals whose evidence is the title
+// (text similarity). Every other scoring kind is content evidence.
+var titleOnlyScoringKinds = map[unified.SignalKind]bool{
+	unified.SigMetaFuzzy:   true,
+	unified.SigEmbedHigh:   true,
+	unified.SigEmbedMedium: true,
+}
+
+// recordsContentEvidence reports whether the candidate's stored breakdown
+// names a content rule, or a scoring signal whose evidence is not the title.
+func recordsContentEvidence(c database.DedupCandidate) bool {
+	if c.ScoreBreakdown == nil {
+		return false
+	}
+	for _, s := range c.ScoreBreakdown.Signals {
+		if s.Kind == unified.SigExactRule {
+			switch s.Rule {
+			case ExactRuleFileHash, ExactRuleISBNASIN, ExactRuleMetadataHash, ExactRuleOrganizeCollision:
+				return true
+			}
+			continue
+		}
+		if s.Confidence > 0 && !titleOnlyScoringKinds[s.Kind] {
+			return true
+		}
+	}
+	return false
+}
+
+// sharesContentEvidence reports whether two books share any content-level
+// identity the exact content rules pair on: a file hash, an ISBN/ASIN, or a
+// metadata source record.
+func sharesContentEvidence(a, b drainBookMeta) bool {
+	for h := range a.hashes {
+		if _, ok := b.hashes[h]; ok {
+			return true
+		}
+	}
+	if len(isbnASINEvidenceShared(a.stub, b.stub)) > 0 {
+		return true
+	}
+	ma, mb := derefStr(a.stub.MetadataSourceHash), derefStr(b.stub.MetadataSourceHash)
+	return ma != "" && ma == mb
+}
+
+// bookContentHashes is every content hash a book carries: the book-level
+// file_hash / original / organized hashes and each file row's hash.
+func bookContentHashes(b *database.Book, files []database.BookFile) map[string]struct{} {
+	out := make(map[string]struct{}, len(files)+3)
+	for _, h := range []*string{b.FileHash, b.OriginalFileHash, b.OrganizedFileHash} {
+		if h != nil && *h != "" {
+			out[*h] = struct{}{}
+		}
+	}
+	for i := range files {
+		if files[i].FileHash != "" {
+			out[files[i].FileHash] = struct{}{}
+		}
+		if files[i].OriginalFileHash != "" {
+			out[files[i].OriginalFileHash] = struct{}{}
+		}
+	}
+	return out
 }

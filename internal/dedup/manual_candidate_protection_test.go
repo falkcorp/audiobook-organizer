@@ -272,7 +272,7 @@ func TestHandleFileHashMatch_PinnedPairNotAutoMerged(t *testing.T) {
 		t.Fatalf("pin: %v", err)
 	}
 
-	merged, err := engine.handleFileHashMatch(a, b, "")
+	merged, err := engine.handleFileHashMatch(a, b, "", fileHashMatch{hash: "test-hash"})
 	if err != nil {
 		t.Fatalf("handleFileHashMatch: %v", err)
 	}

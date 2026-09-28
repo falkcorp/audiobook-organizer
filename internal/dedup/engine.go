@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.89.0
+// version: 1.90.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 package dedup
 
@@ -836,7 +836,7 @@ func (de *Engine) CheckBook(ctx context.Context, bookID string) (bool, error) {
 		logging.Error(ctx, "dedup title check error for", "bookID", bookID, "err", err)
 	}
 
-	if err := de.checkDurationMatch(book); err != nil {
+	if err := de.checkDurationMatch(book, authorName); err != nil {
 		logging.Error(ctx, "dedup duration check error for", "bookID", bookID, "err", err)
 	}
 
@@ -1311,7 +1311,7 @@ func (de *Engine) checkExactFileHash(book *database.Book, authorName string) (bo
 			return false, err
 		}
 		if other != nil && other.ID != book.ID {
-			return de.handleFileHashMatch(book, other, authorName)
+			return de.handleFileHashMatch(book, other, authorName, fileHashMatch{hash: *book.FileHash})
 		}
 	}
 
@@ -1335,7 +1335,7 @@ func (de *Engine) checkExactFileHash(book *database.Book, authorName string) (bo
 			continue
 		}
 		if other != nil && other.ID != book.ID {
-			merged, err := de.handleFileHashMatch(book, other, authorName)
+			merged, err := de.handleFileHashMatch(book, other, authorName, fileHashMatch{hash: f.FileHash, fileID: f.ID})
 			if err != nil {
 				return false, err
 			}
@@ -1352,7 +1352,9 @@ func (de *Engine) checkExactFileHash(book *database.Book, authorName string) (bo
 }
 
 // handleFileHashMatch decides whether to auto-merge or create a candidate for a file hash match.
-func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName string) (bool, error) {
+// match names the hash the two books share; it is recorded on the candidate
+// as the reason the pair exists.
+func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName string, match fileHashMatch) (bool, error) {
 	otherAuthorName := ""
 	if other.AuthorID != nil {
 		otherAuthor, err := de.bookStore.GetAuthorByID(*other.AuthorID)
@@ -1389,7 +1391,7 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 	// auto-merge, even though this path is otherwise the most confident
 	// auto-merge trigger in the engine (identical file content).
 	if SamePathPair(book, other) {
-		return false, de.upsertExactCandidate(book, other, "exact", 1.0)
+		return false, de.upsertExactCandidate(book, other, "exact", 1.0, fileHashEvidence(book, other, match))
 	}
 
 	if sameAuthor && sameTitle && de.AutoMergeEnabled && de.mergeService != nil {
@@ -1415,7 +1417,7 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 		if de.bookStore == nil {
 			slog.Warn("dedup exact-file-hash: auto-merge skipped; undo journal unavailable, queued for review",
 				"book", book.ID, "other", other.ID)
-			return false, de.upsertExactCandidate(book, other, "exact", 1.0)
+			return false, de.upsertExactCandidate(book, other, "exact", 1.0, fileHashEvidence(book, other, match))
 		}
 		// A pair a human pinned for review is never auto-merged, even on an
 		// exact file-hash match (automated_guard.go). A lookup error fails
@@ -1424,7 +1426,7 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 			if perr != nil {
 				verdictLog.Warn("exact-file-hash auto-merge of %s and %s skipped: manual-candidate lookup failed: %v", book.ID, other.ID, perr)
 			}
-			return false, de.upsertExactCandidate(book, other, "exact", 1.0)
+			return false, de.upsertExactCandidate(book, other, "exact", 1.0, fileHashEvidence(book, other, match))
 		}
 		// MergeBooks serializes its own read-modify-write internally (a mutex
 		// on the singleton merge.Service), so two FullScan Layer-1 workers
@@ -1457,7 +1459,7 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 	}
 
 	// Create candidate even if we don't auto-merge
-	return false, de.upsertExactCandidate(book, other, "exact", 1.0)
+	return false, de.upsertExactCandidate(book, other, "exact", 1.0, fileHashEvidence(book, other, match))
 }
 
 // checkExactISBN finds all other books with a matching ISBN10, ISBN13, or ASIN
@@ -1522,7 +1524,7 @@ func (de *Engine) checkExactISBNIndexed(book *database.Book, bookISBN10, bookISB
 		if !hasPlausibleAudio(other) {
 			continue // stub / unscanned shell on the other side
 		}
-		if err := de.upsertExactCandidate(book, other, "exact", 1.0); err != nil {
+		if err := de.upsertExactCandidate(book, other, "exact", 1.0, isbnASINEvidence(book, other)); err != nil {
 			slog.Error("dedup upsert ISBN candidate error", "err", err)
 		}
 	}
@@ -1563,7 +1565,7 @@ func (de *Engine) checkExactISBNScan(book *database.Book, bookISBN10, bookISBN13
 			}
 			if matched {
 				otherBook := other.ToBook()
-				if err := de.upsertExactCandidate(book, &otherBook, "exact", 1.0); err != nil {
+				if err := de.upsertExactCandidate(book, &otherBook, "exact", 1.0, isbnASINEvidence(book, &otherBook)); err != nil {
 					slog.Error("dedup upsert ISBN candidate error", "err", err)
 				}
 			}
@@ -1599,7 +1601,7 @@ func (de *Engine) checkExactMetadataSourceHash(book *database.Book) error {
 		if other.ID == book.ID {
 			continue
 		}
-		if err := de.upsertExactCandidate(book, other, "metadata_hash", 0.99); err != nil {
+		if err := de.upsertExactCandidate(book, other, "metadata_hash", 0.99, metadataHashEvidence(book, other)); err != nil {
 			slog.Error("dedup upsert metadata-hash candidate error (book ↔ )", "book", book.ID, "other", other.ID, "err", err)
 		}
 	}
@@ -1646,11 +1648,20 @@ func booksFromCore(cores []database.BookCore) []database.Book {
 // Books with empty or near-empty titles are also rejected here — a pair
 // of empty strings has a Levenshtein distance of 0 and would otherwise
 // match every other empty-titled book by the same author.
+//
+// Placeholder guard (2026-09-27): a placeholder title ("Unknown Title",
+// "read by narrator", ...) or a placeholder author name never pairs here —
+// both sides share the author by construction, so a placeholder author means
+// the title is the only evidence. See exact_provenance.go for the production
+// pairs that motivated it.
 func (de *Engine) checkExactTitle(book *database.Book, authorName string) error {
 	if book.AuthorID == nil {
 		return nil
 	}
 	if !hasUsableTitle(book.Title) {
+		return nil
+	}
+	if titleEvidenceRefusal(book.Title, book.Title, authorName, authorName) != "" {
 		return nil
 	}
 	if !hasPlausibleAudio(book) {
@@ -1719,7 +1730,12 @@ func (de *Engine) checkExactTitle(book *database.Book, authorName string) error 
 		if titlesDifferOnlyInDigits(normTitle, otherNormTitle) {
 			continue
 		}
-		if err := de.upsertExactCandidate(book, other, "exact", 1.0); err != nil {
+		// Same author row on both sides (GetBooksByAuthorIDCore), so the
+		// author half of the refusal was already checked above.
+		if titleEvidenceRefusal(book.Title, other.Title, authorName, authorName) != "" {
+			continue
+		}
+		if err := de.upsertExactCandidate(book, other, "exact", 1.0, titleAuthorEvidence(book, other, authorName, dist)); err != nil {
 			slog.Error("dedup upsert title candidate error", "err", err)
 		}
 	}
@@ -1766,11 +1782,19 @@ const durationLevenshteinMax = 6
 // signal fires first; duration is the "I know these are the same
 // book but the title encoding differs enough that the strict
 // check missed it" fallback.
-func (de *Engine) checkDurationMatch(book *database.Book) error {
+//
+// authorName is the book's resolved author name (the other side shares the
+// author row). The placeholder guard is the same as checkExactTitle's: a
+// placeholder title or a placeholder author name never pairs here, because
+// the title is then the only identity evidence left beside a runtime.
+func (de *Engine) checkDurationMatch(book *database.Book, authorName string) error {
 	if book.AuthorID == nil {
 		return nil
 	}
 	if !hasUsableTitle(book.Title) {
+		return nil
+	}
+	if titleEvidenceRefusal(book.Title, book.Title, authorName, authorName) != "" {
 		return nil
 	}
 	// Canonical runtime, complete only (see knownRuntimeSec). The memo lives
@@ -1803,6 +1827,9 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 			continue
 		}
 		if !hasUsableTitle(other.Title) {
+			continue
+		}
+		if titleEvidenceRefusal(book.Title, other.Title, authorName, authorName) != "" {
 			continue
 		}
 		// Prevention: chapters of ONE multi-file book share near-identical
@@ -1858,7 +1885,8 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 		// threshold (6 vs 3 in checkExactTitle) is OK here
 		// because duration is the strong signal.
 		if pct <= durationMatchTolerance && titleDist <= durationLevenshteinMax {
-			if err := de.upsertExactCandidate(book, other, "exact", 1.0); err != nil {
+			ev := durationTitleEvidence(book, other, authorName, bookDur, otherDur, pct, titleDist)
+			if err := de.upsertExactCandidate(book, other, "exact", 1.0, ev); err != nil {
 				slog.Error("dedup duration candidate upsert error", "err", err)
 				continue
 			}
@@ -1949,7 +1977,15 @@ func isNonPrimaryVersionCore(b *database.BookCore) bool {
 // lives in exactly one place — a future emitter cannot reintroduce the balloon
 // without going through this guard. Returns the store error so callers that
 // propagate it keep their contract.
-func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim float64) error {
+//
+// ev names the rule that fired and what it matched. It is stored on the row
+// as a provenance-only breakdown (ExactRuleBreakdown) so the review panel can
+// say why the pair exists; a call without a rule is a programming error and
+// is refused rather than written unexplained.
+func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim float64, ev exactEvidence) error {
+	if ev.rule == "" {
+		return fmt.Errorf("dedup: exact candidate %s/%s (layer %s) emitted without a rule", a.ID, b.ID, layer)
+	}
 	if isNonPrimaryVersion(a) || isNonPrimaryVersion(b) {
 		return nil
 	}
@@ -1995,13 +2031,11 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 		Layer:      layer,
 		Similarity: &sim,
 		Status:     "pending",
-	}
-	// Tag same-cleaned-path pairs (CHAPTER-SUBFOLDER-NN-ROWS, 2026-09-25) with
-	// the non-scoring SigSamePath signal so the review UI can explain why an
-	// automated pass will never resolve this pair — see SamePathPair.
-	if SamePathPair(a, b) {
-		sb := samePathScoreBreakdown(a, b)
-		cand.ScoreBreakdown = sb
+		// The rule signal, plus the non-scoring SigSamePath tag for
+		// same-cleaned-path pairs (CHAPTER-SUBFOLDER-NN-ROWS, 2026-09-25) so
+		// the review UI can also explain why no automated pass will resolve
+		// the pair — see SamePathPair.
+		ScoreBreakdown: exactBreakdownFor(a, b, ev),
 	}
 	return de.upsertCandidateWithLiveLabel(cand)
 }
@@ -2453,6 +2487,13 @@ func (de *Engine) findSimilarBooks(ctx context.Context, bookID string) error {
 	if queryBook != nil && !hasUsableTitle(queryBook.Title) {
 		return nil
 	}
+	// A placeholder title embeds as the placeholder, so every placeholder
+	// book is every other one's nearest neighbour (2026-09-27, see
+	// exact_provenance.go). Same guard as the exact title rules.
+	queryAuthor := de.authorNameFor(queryBook)
+	if queryBook != nil && titleEvidenceRefusal(queryBook.Title, queryBook.Title, "", "") != "" {
+		return nil
+	}
 
 	querySeriesNum := ""
 	if queryBook != nil {
@@ -2515,6 +2556,9 @@ func (de *Engine) findSimilarBooks(ctx context.Context, bookID string) error {
 		// Drop candidates with no usable title on the other side. Their
 		// embedding is noise (same reason as the query-side guard above).
 		if !hasUsableTitle(otherBook.Title) {
+			continue
+		}
+		if queryBook != nil && titleEvidenceRefusal(queryBook.Title, otherBook.Title, queryAuthor, de.authorNameFor(otherBook)) != "" {
 			continue
 		}
 		// Drop candidates that are already siblings in the same version
@@ -3285,7 +3329,7 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 			if err := de.checkExactTitle(&bFull, authorName); err != nil {
 				logging.Error(ctx, "dedup full scan title check error for", "book", book.ID, "err", err)
 			}
-			if err := de.checkDurationMatch(&bFull); err != nil {
+			if err := de.checkDurationMatch(&bFull, authorName); err != nil {
 				logging.Error(ctx, "dedup full scan duration check error for", "book", book.ID, "err", err)
 			}
 			return nil
@@ -3623,7 +3667,10 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 			result.SkippedManual++
 			continue
 		}
-		if cand.ScoreBreakdown == nil || len(cand.ScoreBreakdown.Signals) == 0 {
+		// A provenance-only breakdown (an exact rule's record of why the row
+		// exists, no score) is not a scoring result: there is nothing to
+		// re-band, and composing it would only report a score of 0.
+		if cand.ScoreBreakdown == nil || len(cand.ScoreBreakdown.Signals) == 0 || cand.ScoreBreakdown.IsProvenanceOnly() {
 			result.Skipped++
 			continue
 		}

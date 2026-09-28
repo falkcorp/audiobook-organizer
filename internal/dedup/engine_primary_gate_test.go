@@ -142,13 +142,13 @@ func TestUpsertExactCandidate_GateUnit(t *testing.T) {
 	p2 := primaryBook("P2", "T")
 	np := nonPrimaryBook("NP", "T")
 
-	if err := engine.upsertExactCandidate(p1, np, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(p1, np, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsert p1↔np: %v", err)
 	}
-	if err := engine.upsertExactCandidate(np, p1, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(np, p1, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsert np↔p1: %v", err)
 	}
-	if err := engine.upsertExactCandidate(p1, p2, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(p1, p2, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsert p1↔p2: %v", err)
 	}
 

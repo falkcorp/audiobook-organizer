@@ -116,7 +116,7 @@ func runFullScanLayer1AndScoreSerially(t *testing.T, engine *Engine, books []dat
 		if err := engine.checkExactTitle(book, authorName); err != nil {
 			t.Fatalf("checkExactTitle(%s): %v", book.ID, err)
 		}
-		if err := engine.checkDurationMatch(book); err != nil {
+		if err := engine.checkDurationMatch(book, authorName); err != nil {
 			t.Fatalf("checkDurationMatch(%s): %v", book.ID, err)
 		}
 	}

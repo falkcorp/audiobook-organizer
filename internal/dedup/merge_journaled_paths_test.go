@@ -40,7 +40,7 @@ func TestHandleFileHashMatch_AutoMergeWritesJournalEntry(t *testing.T) {
 		t.Fatalf("CreateBook b: %v", err)
 	}
 
-	merged, err := engine.handleFileHashMatch(a, b, "")
+	merged, err := engine.handleFileHashMatch(a, b, "", fileHashMatch{hash: "test-hash"})
 	if err != nil {
 		t.Fatalf("handleFileHashMatch: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestHandleFileHashMatch_SkipsAutoMergeWithoutJournalStore(t *testing.T) {
 		}
 	}
 
-	merged, err := engine.handleFileHashMatch(a, b, "")
+	merged, err := engine.handleFileHashMatch(a, b, "", fileHashMatch{hash: "test-hash"})
 	if err != nil {
 		t.Fatalf("a missing undo journal must not abort the scan, got err: %v", err)
 	}

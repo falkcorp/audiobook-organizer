@@ -36,7 +36,7 @@ func TestRunUnifiedScoringForBook_StopsPromptlyOnCancel(t *testing.T) {
 	// runUnifiedScoringForBook has multiple candidates to iterate for this
 	// one book.
 	for id, other := range others {
-		if err := engine.upsertExactCandidate(book, other, "exact", 1.0); err != nil {
+		if err := engine.upsertExactCandidate(book, other, "exact", 1.0, testExactEvidence); err != nil {
 			t.Fatalf("seed candidate %s: %v", id, err)
 		}
 	}

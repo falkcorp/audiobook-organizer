@@ -1,7 +1,7 @@
 // file: internal/dedup/unified/score.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e12361d1-96ea-4301-919d-3fdb51e12f8f
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 // Package unified provides the scoring core for the unified deduplication
 // pipeline (SPEC 1, fable5). It is intentionally pure: no I/O, no storage
@@ -91,7 +91,7 @@ const (
 	// string into the persisted candidate so the review UI can show why the
 	// pair is flagged — owner decision: this pair shape goes to the review
 	// queue only, and no automated path may merge it.
-	SigSamePath SignalKind = "same_path"
+	SigSamePath SignalKind = models.SignalKindSamePath
 
 	// SigCoverText is the text a vision model read off a book's cover image
 	// (title, subtitle, authors, narrators, series and number, publisher and
@@ -104,6 +104,15 @@ const (
 	// text, or between cover text and a candidate's metadata) is a tracked
 	// TODO, not an omission.
 	SigCoverText SignalKind = "cover_text"
+
+	// SigExactRule is a non-scoring PROVENANCE signal (2026-09-27): it names
+	// the exact-layer rule that emitted a candidate (Signal.Rule —
+	// "file_hash", "isbn_asin", "title_author", ...) and the values that rule
+	// matched on (Signal.Evidence). Confidence 0, no configured boost, so it
+	// never changes a score; it exists so every exact candidate can say WHY it
+	// exists. Before it, every exact-layer row carried no breakdown at all and
+	// the review panel said "No score breakdown recorded." for all of them.
+	SigExactRule SignalKind = models.SignalKindExactRule
 )
 
 // Signal is a single piece of evidence from one collector for one candidate
@@ -136,5 +145,5 @@ const (
 // These signals must never be the sole reason a candidate reaches
 // persistence (score ≥ 60), which is enforced by ComposeScore.
 func isSupportingKind(k SignalKind) bool {
-	return k == SigDuration || k == SigFolderPath || k == SigSamePath || k == SigCoverText
+	return k == SigDuration || k == SigFolderPath || k == SigSamePath || k == SigCoverText || k == SigExactRule
 }

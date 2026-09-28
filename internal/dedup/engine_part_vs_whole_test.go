@@ -40,7 +40,7 @@ func TestUpsertExactCandidate_PartVsWholeGuard(t *testing.T) {
 		return nil, nil
 	}
 
-	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsertExactCandidate: %v", err)
 	}
 
@@ -66,7 +66,7 @@ func TestUpsertExactCandidate_ComparableSingleFilesStillPersisted(t *testing.T) 
 		return nil, nil
 	}
 
-	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsertExactCandidate: %v", err)
 	}
 
