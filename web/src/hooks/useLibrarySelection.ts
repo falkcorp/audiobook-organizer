@@ -1,9 +1,9 @@
 // file: web/src/hooks/useLibrarySelection.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1234-ef01-234567890104
-// last-edited: 2026-06-22
+// last-edited: 2026-09-27
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import React from 'react';
 import * as api from '../services/api';
 import type { Audiobook } from '../types';
@@ -27,6 +27,38 @@ interface UseLibrarySelectionParams {
   buildFieldFilters: () => Array<{ field: string; value: string; negated: boolean }>;
 }
 
+/**
+ * sessionStorage key for the Library's multi-select. Selection is by book id
+ * (the rows are kept so bulk actions can read their state) and survives
+ * clicking into a book and back, a browser reload, and page/filter changes
+ * (owner request 2026-09-27: "hold my selections when I mistakenly click an
+ * icon"). sessionStorage, not localStorage: a selection is a working state of
+ * this tab, not a preference.
+ */
+export const LIBRARY_SELECTION_STORAGE_KEY = 'library-selection-v1';
+
+function readStoredSelection(): Audiobook[] {
+  try {
+    const raw = sessionStorage.getItem(LIBRARY_SELECTION_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? (parsed.filter((b) => b && typeof (b as Audiobook).id === 'string') as Audiobook[])
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredSelection(books: Audiobook[]) {
+  try {
+    if (books.length === 0) sessionStorage.removeItem(LIBRARY_SELECTION_STORAGE_KEY);
+    else sessionStorage.setItem(LIBRARY_SELECTION_STORAGE_KEY, JSON.stringify(books));
+  } catch {
+    // Blocked or full storage: the selection still works for this visit.
+  }
+}
+
 export function useLibrarySelection({
   audiobooks,
   totalCount,
@@ -36,7 +68,19 @@ export function useLibrarySelection({
   selectedTags,
   buildFieldFilters,
 }: UseLibrarySelectionParams) {
-  const [selectedAudiobooks, setSelectedAudiobooks] = useState<Audiobook[]>([]);
+  const [storedSelection, setSelectedAudiobooks] = useState<Audiobook[]>(readStoredSelection);
+  useEffect(() => {
+    writeStoredSelection(storedSelection);
+  }, [storedSelection]);
+
+  // Selected rows as they are NOW: a row that is on screen reads from the
+  // current page (a live update may have patched it), so bulk-action guards
+  // (selectedHasDeleted, ...) never act on a stale copy.
+  const selectedAudiobooks = useMemo(() => {
+    if (audiobooks.length === 0) return storedSelection;
+    const onScreen = new Map(audiobooks.map((b) => [b.id, b]));
+    return storedSelection.map((b) => onScreen.get(b.id) ?? b);
+  }, [storedSelection, audiobooks]);
   const [crossPageFilter, setCrossPageFilter] = useState<api.SelectionSpec['filter'] | null>(null);
 
   const lastSelectedIndexRef = useRef<number>(-1);
@@ -114,6 +158,15 @@ export function useLibrarySelection({
     setSelectedAudiobooks([]);
   };
 
+  /** Drop ids of books that no longer exist (a books.changed "deleted" event). */
+  const dropSelectedIds = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    const gone = new Set(ids);
+    setSelectedAudiobooks((prev) =>
+      prev.some((b) => gone.has(b.id)) ? prev.filter((b) => !gone.has(b.id)) : prev
+    );
+  }, []);
+
   const handleSelectAllItems = useCallback(() => {
     const fieldFilters = buildFieldFilters();
     const searchText = parsedSearch ? parsedSearch.freeText : debouncedSearch;
@@ -159,6 +212,7 @@ export function useLibrarySelection({
     handleSelectAllOnPage,
     handleToggleSelectAllOnPage,
     handleClearSelection,
+    dropSelectedIds,
     handleSelectAllItems,
   };
 }

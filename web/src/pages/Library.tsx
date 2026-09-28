@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.93.0
+// version: 1.94.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -13,6 +13,9 @@ import {
   DialogContent,
   DialogActions,
   TextField,
+  Chip,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CachedIcon from '@mui/icons-material/Cached';
@@ -26,7 +29,8 @@ import {
 } from '../hooks/useLibraryFilters';
 import { scopeColumnSorts } from '../config/columnDefinitions';
 import { FilterTagBar } from '../components/common/FilterTagBar';
-import { useLibraryQuery } from '../hooks/useLibraryQuery';
+import { useLibraryQuery, type BooksChangedEvent } from '../hooks/useLibraryQuery';
+import { useLibraryScrollKeeper } from '../hooks/useLibraryScrollKeeper';
 import { useLibrarySelection } from '../hooks/useLibrarySelection';
 import { useToast } from '../components/toast/ToastProvider';
 import type { Audiobook } from '../types';
@@ -871,6 +875,9 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     loadSoftDeleted,
     clearLibraryCache,
     cancelLoad,
+    applyBooksChanged,
+    newBooksCount,
+    showNewBooks,
   } = useLibraryQuery({
     page,
     itemsPerPage,
@@ -919,6 +926,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     handleToggleSelectAllOnPage,
     handleClearSelection,
     handleSelectAllItems,
+    dropSelectedIds,
   } = useLibrarySelection({
     audiobooks,
     totalCount,
@@ -929,6 +937,25 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     filters,
     selectedTags,
     buildFieldFilters,
+  });
+
+  // Live row updates: the server broadcasts books.changed {kind, ids} for
+  // every committed book write (coalesced to 250 ms batches). Patch the rows
+  // on screen instead of reloading the page, so nothing moves under the user.
+  useEffect(() => {
+    return eventSourceManager.subscribe((evt: EventSourceEvent) => {
+      if (evt?.type !== 'books.changed' || !evt.data) return;
+      const change = evt.data as unknown as BooksChangedEvent;
+      if (!Array.isArray(change.ids)) return;
+      void applyBooksChanged(change);
+      if (change.kind === 'deleted') dropSelectedIds(change.ids);
+    });
+  }, [applyBooksChanged, dropSelectedIds]);
+
+  // Return the user to where they were after a reload or a trip to a book.
+  useLibraryScrollKeeper({
+    viewKey: searchParams.toString(),
+    ready: !loading && audiobooks.length > 0,
   });
 
   const handleManualImport = () => {
@@ -2208,6 +2235,29 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           </Box>
         )}
 
+        {newBooksCount > 0 && (
+          <Box sx={{ display: 'flex', justifyContent: 'center', mb: 1 }}>
+            <Chip
+              color="info"
+              label={`${newBooksCount.toLocaleString()} new book${newBooksCount === 1 ? '' : 's'} — show`}
+              onClick={showNewBooks}
+            />
+          </Box>
+        )}
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: -1 }}>
+          <Tooltip title="Refresh list">
+            <IconButton
+              size="small"
+              aria-label="Refresh list"
+              onClick={() => {
+                clearLibraryCache();
+                void loadAudiobooks();
+              }}
+            >
+              <RefreshIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
         <LibraryBookGrid
           audiobooks={audiobooks}
           loading={loading}

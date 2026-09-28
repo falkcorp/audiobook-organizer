@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-09-12
+// last-edited: 2026-09-27
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -11,6 +11,12 @@ import { SortField, SortOrder } from '../types';
 import type { Audiobook } from '../types';
 import type { ParsedSearch } from '../utils/searchParser';
 import type { ImportPath } from '../pages/libraryTypes';
+
+/** Payload of the server's `books.changed` SSE event (internal/realtime/book_changes.go). */
+export interface BooksChangedEvent {
+  kind: 'created' | 'updated' | 'deleted';
+  ids: string[];
+}
 
 /** First retry delay after a failed load. Doubles per consecutive failure. */
 const RETRY_BASE_DELAY_MS = 500;
@@ -119,6 +125,22 @@ export function useLibraryQuery({
   // UnifiedDedupTab.tsx / CandidateCompareDrawer.tsx.
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // The cache key of the rows currently on screen. A load for the SAME key is a
+  // refresh of what the user is looking at (after an action, a retry, a manual
+  // refresh): it keeps the rows mounted and swaps them when the response lands.
+  // Only a load for a DIFFERENT key (page, filter, sort, search changed) shows
+  // the spinner. Before 2026-09-27 every reload rendered the spinner in place of
+  // the list, the page collapsed to the spinner's height, and the scroll
+  // position was lost — "return me to where I was on the page".
+  const displayedKeyRef = useRef<string | null>(null);
+  const audiobooksRef = useRef<Audiobook[]>([]);
+  useEffect(() => {
+    audiobooksRef.current = audiobooks;
+  }, [audiobooks]);
+  // Books created since the list was loaded. Shown as a chip rather than
+  // inserted, so rows never move under the user.
+  const [newBooksCount, setNewBooksCount] = useState(0);
+
   /**
    * Load the soft-deleted panel's data.
    *
@@ -202,7 +224,6 @@ export function useLibraryQuery({
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    setLoading(true);
     try {
       const offset = (page - 1) * itemsPerPage;
       const fieldFilters = buildFieldFilters();
@@ -230,12 +251,15 @@ export function useLibraryQuery({
       // said 1. It only appeared to work from a cold cache.
       const filterStr = JSON.stringify({ fieldFilters, tagsParam, libraryState: filters.libraryState, showFailed: filters.showFailed, hasFileErrors: filters.hasFileErrors, fingerprintStatus: filters.fingerprintStatus, coveragePercentMin: filters.coveragePercentMin, coveragePercentMax: filters.coveragePercentMax, isPrimaryVersion: filters.isPrimaryVersion, seriesId: filters.seriesId });
       const cacheKey = buildCacheKey(page, itemsPerPage, searchText, filterStr, sortBy, sortOrder);
+      const isRefresh = displayedKeyRef.current === cacheKey && audiobooksRef.current.length > 0;
+      if (!isRefresh) setLoading(true);
       const cached = useLibraryCache.getState().getCached(cacheKey);
       if (cached) {
         setAudiobooks(cached.audiobooks);
         setTotalCount(cached.totalCount);
         setTotalPages(cached.totalPages);
         setImportPaths(cached.importPaths);
+        displayedKeyRef.current = cacheKey;
         setLoading(false);
         // A cache hit is a resolved load, so any prior failure is over.
         clearLoadFailure();
@@ -313,6 +337,8 @@ export function useLibraryQuery({
       setTotalCount(total);
       setTotalPages(totalPages);
       setImportPaths(importPathsData);
+      if (displayedKeyRef.current !== cacheKey) setNewBooksCount(0);
+      displayedKeyRef.current = cacheKey;
       // Success: this result is authoritative, so an empty list here really
       // does mean an empty library and the empty state may render.
       clearLoadFailure();
@@ -378,36 +404,60 @@ export function useLibraryQuery({
     loadAudiobooksRef.current = loadAudiobooks;
   }, [loadAudiobooks]);
 
-  // Reload books when scan/organize completes
-  useEffect(() => {
-    if (activeScanOp?.status === 'completed' || activeScanOp?.status === 'failed') {
-      loadAudiobooks();
-    }
-  }, [activeScanOp?.status, loadAudiobooks]);
+  // No reload when a scan/organize finishes and no 10 s polling while a scan
+  // runs (both removed 2026-09-27). Every book write now arrives as a
+  // books.changed event (applyBooksChanged below), which patches exactly the
+  // affected rows; reloading the page on top of that only moved the list
+  // under the user. activeScanOp/activeOrganizeOp stay in the signature for
+  // the callers that still pass them.
+  void activeScanOp;
+  void activeOrganizeOp;
 
-  useEffect(() => {
-    if (activeOrganizeOp?.status === 'completed' || activeOrganizeOp?.status === 'failed') {
-      loadAudiobooks();
-    }
-  }, [activeOrganizeOp?.status, loadAudiobooks]);
-
-  // Auto-refresh books every 10s while a scan is active
-  const isUnmountedRef = useRef(false);
-  useEffect(() => {
-    isUnmountedRef.current = false;
-    if (!activeScanOp || activeScanOp.status === 'completed' || activeScanOp.status === 'failed') {
-      return;
-    }
-    const interval = window.setInterval(() => {
-      if (!isUnmountedRef.current) {
-        loadAudiobooks();
+  /**
+   * Apply one `books.changed` event without reloading the list:
+   *  - updated: refetch ONLY the ids that are on screen and patch those rows
+   *    in place (same position — a row that no longer matches the filter stays
+   *    until the next manual refresh rather than vanishing under the pointer);
+   *  - deleted: drop those rows and decrement the count;
+   *  - created: count them for the "N new books" chip.
+   * Every kind drops the page cache so the next navigation is fresh.
+   */
+  const applyBooksChanged = useCallback(
+    async (evt: BooksChangedEvent) => {
+      const ids = Array.isArray(evt.ids) ? evt.ids.filter((id) => typeof id === 'string') : [];
+      if (ids.length === 0) return;
+      useLibraryCache.getState().clear();
+      if (evt.kind === 'created') {
+        setNewBooksCount((n) => n + ids.length);
+        return;
       }
-    }, 10000);
-    return () => {
-      isUnmountedRef.current = true;
-      window.clearInterval(interval);
-    };
-  }, [activeScanOp, loadAudiobooks]);
+      const idSet = new Set(ids);
+      if (evt.kind === 'deleted') {
+        const onScreen = audiobooksRef.current.filter((b) => idSet.has(b.id)).length;
+        if (onScreen === 0) return;
+        setAudiobooks((prev) => prev.filter((b) => !idSet.has(b.id)));
+        setTotalCount((c) => Math.max(0, c - onScreen));
+        return;
+      }
+      const visible = audiobooksRef.current.filter((b) => idSet.has(b.id)).map((b) => b.id);
+      if (visible.length === 0) return;
+      try {
+        const fresh = await api.getBooksByIds(visible);
+        const byId = new Map(fresh.map((b) => [b.id, convertBook(b)]));
+        setAudiobooks((prev) => prev.map((b) => byId.get(b.id) ?? b));
+      } catch (e) {
+        console.error('books.changed: failed to refetch changed rows', e);
+      }
+    },
+    [convertBook]
+  );
+
+  /** Show the books created since the list loaded (the chip's action). */
+  const showNewBooks = useCallback(() => {
+    setNewBooksCount(0);
+    useLibraryCache.getState().clear();
+    void loadAudiobooks();
+  }, [loadAudiobooks]);
 
   // clearLibraryCache drops every cached page. Call before loadAudiobooks()
   // after any mutation that hard/soft-deletes, merges, or combines books —
@@ -451,5 +501,8 @@ export function useLibraryQuery({
     loadSoftDeleted,
     clearLibraryCache,
     cancelLoad,
+    applyBooksChanged,
+    newBooksCount,
+    showNewBooks,
   };
 }

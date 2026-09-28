@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/AudiobookList.tsx
-// version: 2.9.2
+// version: 2.9.3
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-19
+// last-edited: 2026-09-27
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Table,
@@ -605,6 +605,7 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
               <React.Fragment key={audiobook.id}>
                 <TableRow
                   hover
+                  data-book-id={audiobook.id}
                   onClick={() => handleRowClick(audiobook)}
                   sx={[
                     {

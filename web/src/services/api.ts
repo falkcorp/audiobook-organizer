@@ -1280,6 +1280,34 @@ export async function getBooks(
   return { items: data.items ?? [], count: data.count ?? 0 };
 }
 
+/**
+ * Fetch specific books by id (GET /audiobooks?ids=...), for patching rows in
+ * place after a `books.changed` event. Deliberately sends no
+ * is_primary_version or filters: the caller already shows these rows and only
+ * wants their current state. The server caps a request at 500 ids.
+ */
+export async function getBooksByIds(ids: string[], signal?: AbortSignal): Promise<Book[]> {
+  if (ids.length === 0) return [];
+  const out: Book[] = [];
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const params = new URLSearchParams();
+    params.set('ids', chunk.join(','));
+    params.set('limit', String(chunk.length));
+    const response = await apiFetch(`${API_BASE}/audiobooks?${params}`, {
+      credentials: 'include',
+      signal,
+    });
+    if (!response.ok) {
+      throw await buildApiError(response, 'Failed to fetch books');
+    }
+    const body = await response.json();
+    const data = body.data ?? body;
+    out.push(...((data.items ?? []) as Book[]));
+  }
+  return out;
+}
+
 export interface BookFacets {
   genres: string[];
   languages: string[];
