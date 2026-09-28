@@ -1,7 +1,7 @@
 // file: internal/scanner/raced_row_primary_handoff_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 00e57d28-b1fc-410b-8ab8-557e1e5fe233
-// last-edited: 2026-09-24
+// last-edited: 2026-09-28
 
 package scanner
 
@@ -15,25 +15,33 @@ import (
 )
 
 // racedRowStore makes the create of target lose a race, deterministically: the
-// FIRST lookup of target reports "no row" (which sends saveBookToDatabase down
-// the create path) and runs create as it returns, so the re-read under the
+// upsert's lookup of target reports "no row" (which sends saveBookToDatabase
+// down the create path) and runs create as it returns, so the re-read under the
 // path stripe finds the other writer's row and takes the raced-row branch.
+//
+// The upsert's lookup is the SECOND lookup of target (upsertLookupOfTarget):
+// the first is checkFileOwnership's, which runs before anything is created.
 type racedRowStore struct {
 	scannerStore
-	target string
-	create func() string
-	once   sync.Once
-	rowID  string
+	target  string
+	create  func() string
+	mu      sync.Mutex
+	lookups int
+	rowID   string
 }
+
+// upsertLookupOfTarget is which GetBookByFilePath(target) call inside
+// saveBookToDatabase is the upsert's create-or-update lookup.
+const upsertLookupOfTarget = 2
 
 func (s *racedRowStore) GetBookByFilePath(path string) (*database.Book, error) {
 	if path == s.target {
-		fired := false
-		s.once.Do(func() {
+		s.mu.Lock()
+		s.lookups++
+		fire := s.lookups == upsertLookupOfTarget
+		s.mu.Unlock()
+		if fire {
 			s.rowID = s.create()
-			fired = true
-		})
-		if fired {
 			return nil, nil
 		}
 	}

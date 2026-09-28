@@ -1,7 +1,7 @@
 // file: internal/scanner/directory_book_bounds_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6b1d0f83-2c47-4a91-95ea-0d4b7e6c1a52
-// last-edited: 2026-09-20
+// last-edited: 2026-09-28
 
 package scanner
 
@@ -399,28 +399,30 @@ func TestProcessBooksParallel_RescanOfAnOversizedFolderDoesNotGrowTheRowCount(t 
 			"goes on to own its own full set of book_file rows", after1, after2)
 }
 
-// racedCreateStore simulates the other writer deterministically: the FIRST
-// lookup of the target path reports "no row" (which is what sends
-// saveBookToDatabase down the create path) and creates the row as it returns,
+// racedCreateStore simulates the other writer deterministically: the upsert's
+// lookup of the target path (the second one, upsertLookupOfTarget -- the first
+// is checkFileOwnership's) reports "no row", which is what sends
+// saveBookToDatabase down the create path, and creates the row as it returns,
 // so the re-read under the stripe finds it. No sleeps, no goroutines.
 type racedCreateStore struct {
 	scannerStore
-	target string
-	once   sync.Once
-	rowID  string
+	target  string
+	mu      sync.Mutex
+	lookups int
+	rowID   string
 }
 
 func (s *racedCreateStore) GetBookByFilePath(path string) (*database.Book, error) {
 	if path == s.target {
-		created := false
-		s.once.Do(func() {
+		s.mu.Lock()
+		s.lookups++
+		fire := s.lookups == upsertLookupOfTarget
+		s.mu.Unlock()
+		if fire {
 			row, err := s.scannerStore.CreateBook(&database.Book{FilePath: path, Title: "Raced Copy"})
 			if err == nil {
 				s.rowID = row.ID
 			}
-			created = true
-		})
-		if created {
 			return nil, nil
 		}
 	}

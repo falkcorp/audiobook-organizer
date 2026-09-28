@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 package scanner
 
@@ -1425,6 +1425,7 @@ func TestSaveBookToDatabaseNewBook(t *testing.T) {
 	database.SetGlobalStore(store)
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
+	expectNoFileOwners(store)
 
 	store.EXPECT().GetAuthorByName("Jane Author").Return(&database.Author{ID: 1, Name: "Jane Author"}, nil)
 	store.EXPECT().GetSeriesByName(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
@@ -1492,6 +1493,8 @@ func TestSaveBookToDatabaseAuthorResolveError(t *testing.T) {
 	database.SetGlobalStore(store)
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
+	expectNoFileOwners(store)
+	store.EXPECT().GetBookByFilePath(mock.Anything).Return(nil, nil).Maybe()
 
 	store.EXPECT().GetAuthorByName("Bad Author").Return(nil, fmt.Errorf("db error"))
 
@@ -1506,10 +1509,11 @@ func TestSaveBookToDatabaseBookLookupError(t *testing.T) {
 	database.SetGlobalStore(store)
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
+	expectNoFileOwners(store)
 
 	store.EXPECT().GetAuthorByName(mock.Anything).Return(nil, nil).Maybe()
-	store.EXPECT().GetAllWorks().Return(nil, nil)
-	store.EXPECT().CreateWork(mock.Anything).Return(&database.Work{ID: "w1"}, nil)
+	store.EXPECT().GetAllWorks().Return(nil, nil).Maybe()
+	store.EXPECT().CreateWork(mock.Anything).Return(&database.Work{ID: "w1"}, nil).Maybe()
 	store.EXPECT().IsHashBlocked(mock.Anything).Return(false, nil).Maybe()
 	store.EXPECT().GetBookByFilePath(mock.Anything).Return(nil, fmt.Errorf("lookup failed"))
 
@@ -1520,7 +1524,9 @@ func TestSaveBookToDatabaseBookLookupError(t *testing.T) {
 	book := &Book{Title: "Test", FilePath: fpath, Format: ".m4b"}
 	err := saveBookToDatabase(context.Background(), book)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "book lookup failed")
+	// The ownership check (checkFileOwnership) reads the path first, so the
+	// store error surfaces there and nothing is created.
+	assert.Contains(t, err.Error(), "lookup failed")
 }
 
 func TestSaveBookToDatabaseBlockedHash(t *testing.T) {
@@ -1529,6 +1535,8 @@ func TestSaveBookToDatabaseBlockedHash(t *testing.T) {
 	database.SetGlobalStore(store)
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
+	expectNoFileOwners(store)
+	store.EXPECT().GetBookByFilePath(mock.Anything).Return(nil, nil).Maybe()
 
 	store.EXPECT().GetAuthorByName(mock.Anything).Return(nil, nil).Maybe()
 	store.EXPECT().GetAllWorks().Return(nil, nil).Maybe()
@@ -1670,6 +1678,8 @@ func TestSaveBookToDatabaseRelinkByOrgID(t *testing.T) {
 	database.SetGlobalStore(store)
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
+	expectNoFileOwners(store)
+	store.EXPECT().GetBookByFilePath(mock.Anything).Return(nil, nil).Maybe()
 
 	store.EXPECT().GetAuthorByName(mock.Anything).Return(nil, nil).Maybe()
 	store.EXPECT().GetAllWorks().Return(nil, nil).Maybe()
@@ -1712,6 +1722,7 @@ func TestSaveBookToDatabaseHashDedupAlreadyLinked(t *testing.T) {
 	database.SetGlobalStore(store)
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
+	expectNoFileOwners(store)
 
 	store.EXPECT().GetAuthorByName(mock.Anything).Return(nil, nil).Maybe()
 	store.EXPECT().GetAllWorks().Return(nil, nil)
@@ -2012,4 +2023,10 @@ func TestIsValidAuthorExtraEdgeCases(t *testing.T) {
 			assert.Equal(t, tt.want, personname.IsValidAuthor(tt.input))
 		})
 	}
+}
+
+// expectNoFileOwners stubs the book_file path lookup the ownership check
+// (checkFileOwnership) makes before a save: no row claims the scanned file.
+func expectNoFileOwners(store *dbmocks.MockStore) {
+	store.EXPECT().BookFilesAtPath(mock.Anything).Return(nil, nil).Maybe()
 }
