@@ -1,5 +1,5 @@
 // file: web/src/components/review/CommandBar.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b9e2c41-8f07-4a3d-9c6e-0d4f7a1b8e23
 // last-edited: 2026-09-27
 
@@ -9,6 +9,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { CommandBar, type CommandMenu } from './CommandBar';
 import { useAdvancedSettings } from '../../hooks/useAdvancedSettings';
+import { MemoryRouter } from 'react-router-dom';
+import type { ReactElement } from 'react';
+
+// The advanced hint is a router link, so the bar needs a router.
+const renderInRouter = (ui: ReactElement) => render(ui, { wrapper: MemoryRouter });
 
 function sectionedMenu(run = vi.fn()): CommandMenu {
   return {
@@ -59,7 +64,7 @@ beforeEach(() => localStorage.clear());
 describe('sectioned command menu', () => {
   it('always shows the simple section, and hides advanced behind a hint by default', async () => {
     const user = userEvent.setup();
-    render(<CommandBar menus={[sectionedMenu()]} />);
+    renderInRouter(<CommandBar menus={[sectionedMenu()]} />);
     await user.click(screen.getByTestId('command-menu-dedup'));
 
     expect(await screen.findByTestId('command-do-everything')).toBeInTheDocument();
@@ -74,7 +79,7 @@ describe('sectioned command menu', () => {
   it('shows labelled advanced groups with descriptions when the setting is on', async () => {
     localStorage.setItem('settings.showAdvanced', 'true');
     const user = userEvent.setup();
-    render(<CommandBar menus={[sectionedMenu()]} />);
+    renderInRouter(<CommandBar menus={[sectionedMenu()]} />);
     await user.click(screen.getByTestId('command-menu-dedup'));
 
     expect(await screen.findByTestId('command-section-dedup-advanced')).toHaveTextContent(
@@ -97,7 +102,7 @@ describe('sectioned command menu', () => {
 
   it('follows the setting live, without a reload', async () => {
     const user = userEvent.setup();
-    render(<CommandBar menus={[sectionedMenu()]} />);
+    renderInRouter(<CommandBar menus={[sectionedMenu()]} />);
     const settings = renderHook(() => useAdvancedSettings());
     await user.click(screen.getByTestId('command-menu-dedup'));
     expect(screen.queryByTestId('command-score')).not.toBeInTheDocument();
@@ -110,7 +115,7 @@ describe('sectioned command menu', () => {
   it('runs the picked command and closes the menu', async () => {
     const run = vi.fn();
     const user = userEvent.setup();
-    render(<CommandBar menus={[sectionedMenu(run)]} />);
+    renderInRouter(<CommandBar menus={[sectionedMenu(run)]} />);
     await user.click(screen.getByTestId('command-menu-dedup'));
     await user.click(await screen.findByTestId('command-do-everything'));
     expect(run).toHaveBeenCalledTimes(1);
@@ -118,7 +123,7 @@ describe('sectioned command menu', () => {
 
   it('keeps the scope subtitle on a flat menu that has no descriptions', async () => {
     const user = userEvent.setup();
-    render(
+    renderInRouter(
       <CommandBar
         menus={[
           {

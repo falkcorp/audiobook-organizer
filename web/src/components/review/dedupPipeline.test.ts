@@ -1,5 +1,5 @@
 // file: web/src/components/review/dedupPipeline.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d1a8f35-2c94-4e7b-b3f0-9a5e4c2d7b18
 // last-edited: 2026-09-27
 
@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as api from '../../services/api';
 import {
   DEDUP_PIPELINE_STEPS,
+  MAX_CONSECUTIVE_POLL_FAILURES,
   PipelineStepError,
   PipelineStoppedError,
   autoMergeRisks,
@@ -23,8 +24,11 @@ function done(id: string, status = 'completed', error_message?: string): api.Ope
 
 let calls: string[];
 
+const actualApi = await vi.importActual<typeof api>('../../services/api');
+
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(api.isOperationTerminal).mockImplementation(actualApi.isOperationTerminal);
   calls = [];
   const trigger = (name: string, id: string) => async () => {
     calls.push(name);
@@ -34,7 +38,7 @@ beforeEach(() => {
   vi.mocked(api.triggerDedupAcoustID).mockImplementation(trigger('acoustic', 'op-acoustic'));
   vi.mocked(api.triggerDedupScan).mockImplementation(trigger('find', 'op-find'));
   vi.mocked(api.triggerDedupLLM).mockImplementation(trigger('llm', 'op-llm'));
-  vi.mocked(api.pollOperation).mockImplementation(async (id: string) => {
+  vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => {
     calls.push(`wait:${id}`);
     return done(id);
   });
@@ -75,7 +79,7 @@ describe('runDedupPipeline', () => {
   });
 
   it('stops at a step whose operation fails, and runs nothing after it', async () => {
-    vi.mocked(api.pollOperation).mockImplementation(async (id: string) => {
+    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => {
       calls.push(`wait:${id}`);
       return id === 'op-acoustic' ? done(id, 'failed', 'fpcalc missing') : done(id);
     });
@@ -91,7 +95,7 @@ describe('runDedupPipeline', () => {
   });
 
   it('treats a cancelled step as a stop, not a success', async () => {
-    vi.mocked(api.pollOperation).mockImplementation(async (id: string) =>
+    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) =>
       id === 'op-embed' ? done(id, 'canceled') : done(id)
     );
     await expect(runDedupPipeline({ pollIntervalMs: 0 })).rejects.toBeInstanceOf(PipelineStepError);
@@ -110,9 +114,52 @@ describe('runDedupPipeline', () => {
     expect(api.triggerDedupAcoustID).not.toHaveBeenCalled();
   });
 
+  it('waits while an operation is still running, then moves on', async () => {
+    let reads = 0;
+    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => {
+      if (id === 'op-embed' && reads++ < 2) return done(id, 'running');
+      return done(id);
+    });
+    await runDedupPipeline({ pollIntervalMs: 0 });
+    expect(reads).toBe(3);
+    expect(api.triggerDedupAcoustID).toHaveBeenCalled();
+  });
+
+  it('rides out a couple of failed status reads instead of ending the run', async () => {
+    let failures = 0;
+    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => {
+      if (id === 'op-find' && failures < MAX_CONSECUTIVE_POLL_FAILURES - 1) {
+        failures++;
+        throw new Error('network blip');
+      }
+      return done(id);
+    });
+    await expect(runDedupPipeline({ pollIntervalMs: 0 })).resolves.toEqual(RESCORE);
+    expect(api.triggerDedupLLM).toHaveBeenCalled();
+  });
+
+  it('gives up on a step when its status stays unreadable', async () => {
+    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => {
+      if (id === 'op-find') throw new Error('server gone');
+      return done(id);
+    });
+    const err = await runDedupPipeline({ pollIntervalMs: 0 }).catch((e) => e);
+    expect(err).toBeInstanceOf(PipelineStepError);
+    expect((err as PipelineStepError).step.id).toBe('find');
+    expect(api.getOperationStatus).toHaveBeenCalledTimes(2 + MAX_CONSECUTIVE_POLL_FAILURES);
+    expect(api.triggerDedupLLM).not.toHaveBeenCalled();
+  });
+
+  it('leaves out skipped steps and still runs the rest in order', async () => {
+    await runDedupPipeline({ pollIntervalMs: 0, skip: ['embeddings'] });
+    expect(api.triggerEmbedScan).not.toHaveBeenCalled();
+    expect(calls[0]).toBe('acoustic');
+    expect(calls.at(-1)).toBe('rescore:false');
+  });
+
   it('stops before the next step when asked to', async () => {
     let stop = false;
-    vi.mocked(api.pollOperation).mockImplementation(async (id: string) => {
+    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => {
       stop = true;
       return done(id);
     });

@@ -3,15 +3,17 @@
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-09-27
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
+import { resetDedupPipelineForTests } from './useDedupPipeline';
 
 vi.mock('../../services/api');
+const actualApi = await vi.importActual<typeof api>('../../services/api');
 
 function makeResult(id: string, overrides: Partial<api.CandidateResult> = {}) {
   return {
@@ -45,6 +47,8 @@ function renderWorkspace(initialEntries: string[] = ['/review']) {
 beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
+  resetDedupPipelineForTests();
+  vi.mocked(api.isOperationTerminal).mockImplementation(actualApi.isOperationTerminal);
   vi.mocked(api.getCachedReviewResults).mockResolvedValue({
     results: [makeResult('a'), makeResult('b')],
     total_count: 2,
@@ -492,7 +496,7 @@ describe('one-button dedup run', () => {
     vi.mocked(api.triggerDedupAcoustID).mockImplementation(op('op-acoustic'));
     vi.mocked(api.triggerDedupScan).mockImplementation(op('op-find'));
     vi.mocked(api.triggerDedupLLM).mockImplementation(op('op-llm'));
-    vi.mocked(api.pollOperation).mockImplementation(
+    vi.mocked(api.getOperationStatus).mockImplementation(
       async (id: string) => ({ id, status: 'completed', progress: 1, total: 1 }) as api.Operation
     );
     vi.mocked(api.rescoreDedupCandidates).mockResolvedValue({
@@ -557,9 +561,55 @@ describe('one-button dedup run', () => {
     expect(api.triggerEmbedScan).not.toHaveBeenCalled();
   });
 
+  it('keeps running, and stays disabled, across leaving and returning to the page', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue(safeConfig);
+    // Hold the first step open so the run is mid-flight when we navigate away.
+    let finishEmbed: () => void = () => {};
+    const embedDone = new Promise<void>((r) => (finishEmbed = r));
+    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => {
+      if (id === 'op-embed') await embedDone;
+      return { id, status: 'completed', progress: 1, total: 1 } as api.Operation;
+    });
+    const user = userEvent.setup();
+    await clickRunAll(user);
+    await screen.findByTestId('dedup-pipeline-progress');
+
+    cleanup();
+    renderWorkspace();
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+
+    expect(screen.getByTestId('dedup-pipeline-progress')).toBeInTheDocument();
+    await user.click(screen.getByTestId('command-menu-dedup'));
+    expect(await screen.findByTestId('command-find-all-duplicates')).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    expect(api.triggerEmbedScan).toHaveBeenCalledTimes(1);
+
+    finishEmbed();
+    expect(await screen.findByTestId('dedup-pipeline-done')).toBeInTheDocument();
+  });
+
+  it('skips the similarity-data step when embeddings are turned off', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({
+      root_dir: '',
+      dedup: {
+        auto_merge_enabled: false,
+        llm_auto_merge_high_confidence: false,
+        embeddings_enabled: false,
+      },
+    } as unknown as api.Config);
+    const user = userEvent.setup();
+    await clickRunAll(user);
+
+    await waitFor(() => expect(api.rescoreDedupCandidates).toHaveBeenCalledWith(false));
+    expect(api.triggerEmbedScan).not.toHaveBeenCalled();
+    expect(api.triggerDedupScan).toHaveBeenCalled();
+  });
+
   it('stops at a failed step and says which one', async () => {
     vi.mocked(api.getConfig).mockResolvedValue(safeConfig);
-    vi.mocked(api.pollOperation).mockImplementation(
+    vi.mocked(api.getOperationStatus).mockImplementation(
       async (id: string) =>
         ({ id, status: id === 'op-find' ? 'failed' : 'completed', progress: 1, total: 1 }) as api.Operation
     );
