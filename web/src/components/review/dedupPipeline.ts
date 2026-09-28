@@ -1,127 +1,105 @@
 // file: web/src/components/review/dedupPipeline.ts
-// version: 1.1.0
+// version: 2.0.0
 // guid: 3f6b1d82-7a4e-4c90-b5d1-2e8f0a9c6d47
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
-// The Dedup menu's one-button run: every duplicate check, in order, ending in
-// a score preview. Owner request 2026-09-27: "make an easy section where the
-// user only has to press 1 button and everything is automatic for them."
+// The Dedup menu's two whole-library runs, both SERVER-SIDE operations that the
+// browser only starts and follows:
 //
-// ORDER, AND WHY
+//  - 'all'    "Find all duplicates" -> dedup.run-all. One registry op that runs
+//             every duplicate check in order as child ops and ends in a
+//             no-write score preview (internal/plugins/dedup/run_all.go has the
+//             order and why). Until 2026-09-28 this file chained those steps
+//             itself; that chain died with the tab and did not survive a
+//             deploy. The server op checkpoints the step it is on and resumes
+//             there after a restart.
+//  - 'rescan' "Force full rescan" -> dedup.full-scan, the scan that writes the
+//             candidate queue the Dupes tab reads. It used to start
+//             dedup.book-scan, a DIFFERENT pipeline: hash/folder/fuzzy-title
+//             GROUPS kept for 30 minutes in an in-memory server cache and shown
+//             only on the /dedup page's Duplicate Scan tab. Nothing it found
+//             ever reached the Dupes tab.
 //
-//  1. Embeddings   (dedup.embed-scan)   -- the similarity data step 3 compares.
-//                                          Full scan re-embeds stale books too,
-//                                          but only one at a time inside its
-//                                          own pass; doing it first is cheaper.
-//  2. Acoustic     (acoustid.scan)      -- emits audio-match pairs from the
-//                                          fingerprints already stored. Placed
-//                                          before step 3 so its pairs exist
-//                                          when step 3 scores (whether that
-//                                          pass re-scores them was NOT verified;
-//                                          step 5's preview reports any drift).
-//                                          Step 3's stale-candidate purge only
-//                                          drops pairs whose books went
-//                                          non-primary/missing, not fresh ones.
-//  3. Find dupes   (dedup.full-scan)    -- exact + similarity checks, then the
-//                                          unified score for every book.
-//  4. AI review    (dedup.llm-review)   -- reads the ambiguous pairs step 3
-//                                          just scored, so it must follow it.
-//  5. Rescore preview (POST /dedup/rescore apply=false) -- synchronous, writes
-//                                          nothing, returns the counts shown at
-//                                          the end.
-//
-// Each op step is started and then polled to a terminal status before the next
-// starts. Anything other than `completed` stops the run: a later step built on
-// a failed earlier one would report results that are not real.
-//
-// WHAT THIS DOES NOT DO
-//
-// It never calls an apply/merge route. Two server settings can still make a
-// step merge on its own (auto_merge_enabled for step 3's identical-file pairs,
-// llm_auto_merge_high_confidence for step 4); the caller checks them first and
-// asks -- see `autoMergeRisks`. The server has no per-run "never merge" switch,
-// so the check is the best the client can do; a server-side chain op taking
-// such a flag would be the robust fix, and would also survive the tab closing,
-// which this client-side sequence does not.
+// Both can link or merge books on their own when a server setting allows it,
+// so the caller checks `autoMergeRisks` first and asks.
 
 import * as api from '../../services/api';
-import type { Config, DedupRescoreResult, Operation } from '../../services/api';
+import type { Config, DedupRunAllResult, Operation } from '../../services/api';
 
-export type PipelineStepId = 'embeddings' | 'acoustic' | 'find' | 'ai-review' | 'rescore-preview';
+export type DedupRunKind = 'all' | 'rescan';
 
-export interface PipelineStep {
-  id: PipelineStepId;
-  /** Plain-language name shown in the progress banner. */
+export interface DedupRunInfo {
+  /** Plain-language name for banners and toasts. */
   label: string;
+  /** Operation def the run enqueues (for tests and the Operations page). */
+  defId: string;
 }
 
-export const DEDUP_PIPELINE_STEPS: readonly PipelineStep[] = [
-  { id: 'embeddings', label: 'Preparing similarity data' },
-  { id: 'acoustic', label: 'Comparing audio fingerprints' },
-  { id: 'find', label: 'Finding and scoring duplicates' },
-  { id: 'ai-review', label: 'AI review of unclear pairs' },
-  { id: 'rescore-preview', label: 'Checking scores' },
-];
-
-/** The op-starting steps, keyed so tests can see exactly which route each hits. */
-const START: Record<Exclude<PipelineStepId, 'rescore-preview'>, () => Promise<Operation>> = {
-  embeddings: () => api.triggerEmbedScan(),
-  acoustic: () => api.triggerDedupAcoustID(),
-  find: () => api.triggerDedupScan(),
-  'ai-review': () => api.triggerDedupLLM(),
+export const DEDUP_RUNS: Record<DedupRunKind, DedupRunInfo> = {
+  all: { label: 'Finding duplicates', defId: 'dedup.run-all' },
+  rescan: { label: 'Full rescan', defId: 'dedup.full-scan' },
 };
 
-export interface PipelineProgress {
-  stepIndex: number;
-  step: PipelineStep;
-  /** Latest poll of the step's operation; absent for the synchronous last step. */
-  op?: Operation;
-}
-
-export class PipelineStepError extends Error {
-  constructor(
-    public readonly step: PipelineStep,
-    message: string
-  ) {
-    super(message);
-    this.name = 'PipelineStepError';
+/** Starts the run's server op and returns its id. */
+export async function startDedupRun(kind: DedupRunKind): Promise<string> {
+  const op = kind === 'all' ? await api.startDedupRunAll() : await api.triggerDedupScan();
+  if (!op?.id) {
+    // Without an id there is nothing to follow.
+    throw new Error('the server did not return an operation id');
   }
-}
-
-export class PipelineStoppedError extends Error {
-  constructor(public readonly step: PipelineStep) {
-    super(`Stopped before "${step.label}".`);
-    this.name = 'PipelineStoppedError';
-  }
-}
-
-export interface RunDedupPipelineOptions {
-  onProgress?: (p: PipelineProgress) => void;
-  /** Checked between steps; true stops the run before the next one starts. */
-  shouldStop?: () => boolean;
-  /** These ops run for minutes to hours, so polling is deliberately slow. */
-  pollIntervalMs?: number;
-  /**
-   * Steps to leave out, e.g. `embeddings` on an install with embeddings turned
-   * off, where the step can only fail and would block every later one.
-   */
-  skip?: readonly PipelineStepId[];
+  return op.id;
 }
 
 /**
- * How many status reads in a row may fail before the run gives up on a step.
- * One network blip over a two-hour op must not end the chain while the server
- * op keeps going; a server that stays unreachable still stops it.
+ * Longest wait between status reads while the server cannot be reached. The
+ * follower never gives up on an unreachable server: the run lives there, and a
+ * deploy (server down, then warming up) is the normal reason reads fail. It
+ * stops only when the op itself is gone (404).
  */
-export const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+export const MAX_RETRY_BACKOFF_MS = 60_000;
+
+/** The op id no longer exists on the server: nothing left to follow. */
+export class OperationGoneError extends Error {
+  constructor(public readonly opId: string) {
+    super(`operation ${opId} no longer exists on the server`);
+    this.name = 'OperationGoneError';
+  }
+}
+
+function isNotFound(err: unknown): boolean {
+  // Duck-typed: ApiError carries `status`, and a structural check keeps this
+  // working when the api module is mocked in tests.
+  return (err as { status?: unknown } | null)?.status === 404;
+}
+
+/**
+ * `interrupted_quiesced` is how a resumable op reads while the server restarts
+ * (a deploy): the registry puts it back in the queue at boot under the SAME id.
+ * isOperationTerminal counts every interrupted_* status as final, so the
+ * follower special-cases this one and keeps polling.
+ */
+export function isPausedForRestart(status: string): boolean {
+  return status === 'interrupted_quiesced';
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function waitForOperation(
-  id: string,
-  onOp: (op: Operation) => void,
-  intervalMs: number
-): Promise<Operation> {
+export interface FollowOptions {
+  onUpdate?: (op: Operation) => void;
+  pollIntervalMs?: number;
+  /** Checked between polls; true stops FOLLOWING (not the server op). */
+  shouldStopFollowing?: () => boolean;
+  /** Called on each failed read with the consecutive-failure count. */
+  onUnreachable?: (failures: number) => void;
+}
+
+/**
+ * Polls the op until it is terminal and returns its final row. Failed reads are
+ * retried forever with a capped backoff (see MAX_RETRY_BACKOFF_MS); a 404
+ * throws OperationGoneError.
+ */
+export async function followOperation(id: string, opts: FollowOptions = {}): Promise<Operation> {
+  const { onUpdate, pollIntervalMs = 5000, shouldStopFollowing, onUnreachable } = opts;
   let failures = 0;
   while (true) {
     let op: Operation;
@@ -129,78 +107,49 @@ async function waitForOperation(
       op = await api.getOperationStatus(id);
       failures = 0;
     } catch (err) {
+      if (isNotFound(err)) throw new OperationGoneError(id);
       failures++;
-      if (failures >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
-      await sleep(intervalMs * failures);
+      onUnreachable?.(failures);
+      if (shouldStopFollowing?.()) throw err;
+      const backoff = Math.min(pollIntervalMs * 2 ** Math.min(failures, 6), MAX_RETRY_BACKOFF_MS);
+      await sleep(Math.max(backoff, pollIntervalMs));
       continue;
     }
-    onOp(op);
-    if (api.isOperationTerminal(op.status)) return op;
-    await sleep(intervalMs);
+    onUpdate?.(op);
+    if (api.isOperationTerminal(op.status) && !isPausedForRestart(op.status)) return op;
+    if (shouldStopFollowing?.()) return op;
+    await sleep(pollIntervalMs);
   }
 }
 
-export async function runDedupPipeline(
-  opts: RunDedupPipelineOptions = {}
-): Promise<DedupRescoreResult> {
-  const { onProgress, shouldStop, pollIntervalMs = 5000, skip = [] } = opts;
-
-  for (let i = 0; i < DEDUP_PIPELINE_STEPS.length; i++) {
-    const step = DEDUP_PIPELINE_STEPS[i];
-    if (skip.includes(step.id)) continue;
-    if (shouldStop?.()) throw new PipelineStoppedError(step);
-    onProgress?.({ stepIndex: i, step });
-
-    if (step.id === 'rescore-preview') {
-      try {
-        return await api.rescoreDedupCandidates(false);
-      } catch (err) {
-        throw new PipelineStepError(step, errorText(err, 'could not check scores'));
-      }
-    }
-
-    let started: Operation;
-    try {
-      started = await START[step.id]();
-    } catch (err) {
-      throw new PipelineStepError(step, errorText(err, 'could not start'));
-    }
-    if (!started?.id) {
-      // Without an id there is nothing to wait on, and running the next step
-      // without knowing this one finished is exactly what the ordering forbids.
-      throw new PipelineStepError(step, 'the server did not return an operation id');
-    }
-
-    let final: Operation;
-    try {
-      final = await waitForOperation(
-        started.id,
-        (op) => onProgress?.({ stepIndex: i, step, op }),
-        pollIntervalMs
-      );
-    } catch (err) {
-      throw new PipelineStepError(step, errorText(err, 'lost track of its progress'));
-    }
-    if (final.status !== 'completed') {
-      const why = final.error_message ? `: ${final.error_message}` : '';
-      throw new PipelineStepError(step, `ended as "${final.status}"${why}`);
-    }
+/** Reads a finished dedup.run-all's result; null if it cannot be read. */
+export async function readRunAllResult(id: string): Promise<DedupRunAllResult | null> {
+  try {
+    const { result_data } = await api.getOperationResult(id);
+    if (result_data && typeof result_data === 'object') return result_data as DedupRunAllResult;
+  } catch {
+    // The run itself succeeded; a missing summary is not a failure.
   }
-  // Reached only if the score check itself was skipped.
-  throw new Error('dedup pipeline ended without a score check');
+  return null;
 }
 
 /**
- * The server settings that let a pipeline step merge books without a review.
- * Empty means the run cannot merge anything on its own.
+ * The server settings that let the run link or merge books without a review.
+ * Empty means the run cannot merge anything on its own. The rescan is only the
+ * find step, so only the identical-copy auto-link applies to it.
  */
-export function autoMergeRisks(config: Pick<Config, 'dedup'>): string[] {
+export function autoMergeRisks(
+  config: Pick<Config, 'dedup'>,
+  kind: DedupRunKind = 'all'
+): string[] {
   const risks: string[] = [];
   if (!config.dedup) {
     // The server's own default for auto_merge_enabled is TRUE, so a missing
     // block is not "off" -- say we could not tell.
     return [
-      'The server did not report its automatic-merge settings, so the scan may link identical copies and the AI review may merge pairs it is sure about.',
+      kind === 'all'
+        ? 'The server did not report its automatic-merge settings, so the scan may link identical copies and the AI review may merge pairs it is sure about.'
+        : 'The server did not report its automatic-merge settings, so the scan may link identical copies.',
     ];
   }
   if (config.dedup.auto_merge_enabled) {
@@ -208,14 +157,10 @@ export function autoMergeRisks(config: Pick<Config, 'dedup'>): string[] {
       'Automatic merge is on: books with the same author, the same title and an identical audio file will be linked as versions during the scan.'
     );
   }
-  if (config.dedup.llm_auto_merge_high_confidence) {
+  if (kind === 'all' && config.dedup.llm_auto_merge_high_confidence) {
     risks.push(
       'AI auto-merge is on: pairs the AI is highly confident about will be merged during the AI review.'
     );
   }
   return risks;
-}
-
-function errorText(err: unknown, fallback: string): string {
-  return err instanceof Error && err.message ? err.message : fallback;
 }

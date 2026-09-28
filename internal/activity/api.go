@@ -1,7 +1,7 @@
 // file: internal/activity/api.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 9a4f2e1b-3c7d-4b8e-a6f0-5d2c8e1b7a3f
-// last-edited: 2026-08-22
+// last-edited: 2026-09-28
 
 package activity
 
@@ -150,7 +150,7 @@ func typeToAction(typeStr string) string {
 		return "acoustid-lookup"
 	case "acoustid.reset-all":
 		return "fingerprint-reset"
-	case "dedup.full-scan", "dedup.llm-review", "dedup.split-book-scan", "dedup.book-signature-scan":
+	case "dedup.full-scan", "dedup.llm-review", "dedup.split-book-scan", "dedup.book-signature-scan", "dedup.run-all":
 		return "dedup"
 	case "library.scan":
 		return "scan"

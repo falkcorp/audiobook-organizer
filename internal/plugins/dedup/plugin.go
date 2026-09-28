@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 // Package dedup is the UOS plugin for deduplication operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -9,6 +9,9 @@
 package dedup
 
 import (
+	"context"
+	"time"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -22,6 +25,17 @@ type Plugin struct {
 	embeddingStore *database.EmbeddingStore
 	registry       sdk.Registry                        // set in Register; used by ops that enqueue follow-on work
 	toolRegistry   interface{ Available(string) bool } // optional; guards ops that require external binaries
+
+	// opStatus lets dedup.run-all follow the child ops it enqueues. Wired in
+	// register.go from the plugin store; nil makes that op fail with a clear
+	// error rather than run blind.
+	opStatus opStatusReader
+	// runAllPollInterval, rescorePreviewFn and operationsPausedFn are test seams for dedup.run-all;
+	// zero/nil mean the production poll cadence, Engine.Rescore(apply=false)
+	// and registry.OperationsPaused.
+	runAllPollInterval time.Duration
+	rescorePreviewFn   func(context.Context) (dedupengine.RescoreResult, error)
+	operationsPausedFn func() bool
 }
 
 // SetToolRegistry wires the tool registry for Ollama availability checks.
@@ -101,6 +115,7 @@ func (p *Plugin) OperationDefs() []sdk.OperationDef {
 		p.rescoreLabeledExamplesDef(),        // recompute ScoreBreakdowns onto labeled examples (incl. below-band/dismissed) for calibration coverage
 		p.breakdownBackfillDef(),             // backfill ScoreBreakdowns onto pre-T015 nil-breakdown pending candidates (unblocks Rescore + exact-triage)
 		p.rescoreDef(),                       // D4: re-band pending candidates under the current ladder; queued by the config-PUT dedup sink
+		p.runAllDef(),                        // Review page one-button run: every dedup step in order as child ops, resumable
 	}
 }
 

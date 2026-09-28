@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-09-28
 //
@@ -253,15 +253,22 @@ export function ReviewWorkspace() {
                 disabledReason: dedupPipeline.busy
                   ? 'Already running — progress is shown above the list.'
                   : undefined,
-                run: () => void dedupPipeline.request(),
+                run: () => void dedupPipeline.request('all'),
               },
               {
+                // dedup.full-scan, the scan that fills the Dupes tab's queue.
+                // It used to start dedup.book-scan, whose groups lived only in
+                // a 30-minute server cache shown on the /dedup page; see
+                // dedupPipeline.ts.
                 id: 'full-rescan',
                 label: 'Force full rescan',
                 scope: 'library',
                 description:
-                  'Rechecks every book for copies by identical files, shared folders and matching titles. Results appear on the Dedup page under Duplicate Scan, not here.',
-                run: startJob('Full rescan', api.scanBookDuplicates),
+                  'Rechecks every book for copies by identical files, matching titles and similar title and author, and rescores every pair. Only the find step: it does not refresh audio or AI evidence. Results appear in the Dupes tab.',
+                disabledReason: dedupPipeline.busy
+                  ? 'A duplicate check is already running — progress is shown above the list.'
+                  : undefined,
+                run: () => void dedupPipeline.request('rescan'),
               },
             ],
           },

@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.130.2
+// version: 2.131.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -6471,6 +6471,32 @@ export async function triggerDedupScan(): Promise<Operation> {
     if (!response.ok) throw await buildApiError(response, 'Failed to trigger dedup scan');
     return normalizeOpIdResponse((await response.json()).data);
   });
+}
+
+// startDedupRunAll enqueues dedup.run-all: the Review page's one-button
+// "Find all duplicates" run, executed server-side as one resumable operation
+// (internal/plugins/dedup/run_all.go). Goes through the generic
+// POST /operations/v2, which never refuses because a library scan is running.
+// A press while a run is already active returns that run's id (the def dedupes
+// queued/running runs), so the caller simply follows it.
+export async function startDedupRunAll(): Promise<Operation> {
+  return wrapTrigger('dedup.run-all', async () => {
+    const response = await apiFetch(`${API_BASE}/operations/v2`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ def_id: 'dedup.run-all', params: {} }),
+    });
+    if (!response.ok) throw await buildApiError(response, 'Failed to start the duplicate check');
+    const body = await response.json();
+    return normalizeOpIdResponse(body?.data ?? body);
+  });
+}
+
+/** Result payload of a finished dedup.run-all (GET /operations/:id/result). */
+export interface DedupRunAllResult {
+  steps: { id: string; label: string; child_op_id: string }[];
+  skipped: string[] | null;
+  rescore_preview: DedupRescoreResult | null;
 }
 
 export async function triggerDedupLLM(): Promise<Operation> {
