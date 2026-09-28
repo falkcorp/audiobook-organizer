@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.replaceConfirm.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 510b281d-e333-4300-8b36-49e93cd8a7aa
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // Owner decision on #3580: with the bulk toggle on "Replace existing", EVERY
 // bulk entry point -- the action bar's buttons, a group's Apply All, and the
@@ -89,6 +89,17 @@ async function renderWorkspace() {
 
 type User = ReturnType<typeof userEvent.setup>;
 
+/**
+ * Clicks "Apply page" once it is enabled. The button stays disabled until the
+ * cached rows load; under a loaded CI runner a click that lands first is a
+ * silent no-op, and the next assertion then times out looking for a dialog.
+ */
+async function clickApplyPage(user: User) {
+  const button = await screen.findByTestId('apply-page');
+  await waitFor(() => expect(button).toBeEnabled());
+  await user.click(button);
+}
+
 /** Each entry point: the rows it needs, and how to click it. Every one sends 2 books. */
 const entryPoints: Array<{
   name: string;
@@ -98,7 +109,7 @@ const entryPoints: Array<{
   {
     name: 'action bar Apply page',
     results: () => [makeResult('a'), makeResult('b')],
-    click: async (user) => user.click(await screen.findByTestId('apply-page')),
+    click: async (user) => clickApplyPage(user),
   },
   {
     name: 'group Apply All',
@@ -231,7 +242,7 @@ describe("Replace prompt: Don't ask me again", () => {
     view.unmount();
     vi.mocked(api.batchApplyFromCache).mockClear();
     await renderWorkspace();
-    await user.click(await screen.findByTestId('apply-page'));
+    await clickApplyPage(user);
     await waitFor(() => expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1));
     expect(dialog()).not.toBeInTheDocument();
     expect(vi.mocked(api.batchApplyFromCache).mock.calls[0][3]).toBe('replace');
@@ -241,13 +252,13 @@ describe("Replace prompt: Don't ask me again", () => {
     const user = userEvent.setup();
     await openWorkspace('replace', [makeResult('a'), makeResult('b')]);
 
-    await user.click(await screen.findByTestId('apply-page'));
+    await clickApplyPage(user);
     await answer(user, 'cancel', true);
     expect(api.batchApplyFromCache).not.toHaveBeenCalled();
     expect(skipFlag()).toBeNull();
     expect(screen.queryByTestId('reset-replace-confirm')).not.toBeInTheDocument();
 
-    await user.click(screen.getByTestId('apply-page'));
+    await clickApplyPage(user);
     expect(await screen.findByTestId('replace-confirm-dialog')).toBeInTheDocument();
     expect(api.batchApplyFromCache).not.toHaveBeenCalled();
   });
@@ -261,7 +272,7 @@ describe("Replace prompt: Don't ask me again", () => {
     expect(screen.queryByTestId('reset-replace-confirm')).not.toBeInTheDocument();
     expect(skipFlag()).toBeNull();
 
-    await user.click(screen.getByTestId('apply-page'));
+    await clickApplyPage(user);
     expect(await screen.findByTestId('replace-confirm-dialog')).toBeInTheDocument();
     expect(api.batchApplyFromCache).not.toHaveBeenCalled();
   });
