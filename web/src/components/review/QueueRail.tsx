@@ -171,6 +171,12 @@ export interface QueueRailProps {
   rowState: (id: string) => RowState | undefined;
   isSelected: (id: string) => boolean;
   onToggleSelect: (id: string) => void;
+  /**
+   * Select or deselect every row on this page at once. Optional: without it
+   * the list has no select-all box. Selecting thousands of no-candidate books
+   * one checkbox at a time is not a workflow.
+   */
+  onSelectPage?: (ids: string[], selected: boolean) => void;
   onRefresh: () => void;
   /**
    * Refetch every stale row in the library, not just the ones on this page.
@@ -304,6 +310,7 @@ export function QueueRail({
   rowState,
   isSelected,
   onToggleSelect,
+  onSelectPage,
   onRefresh,
   onRefetchStale,
   onRefetchRow,
@@ -628,13 +635,25 @@ export function QueueRail({
 
       {/* The queue itself. */}
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        <Typography
-          variant="caption"
-          sx={{ px: 1.5, py: 1, display: 'block' }}
-          color="text.secondary"
-        >
-          {loading ? 'Loading…' : `${filteredCount} shown`}
-        </Typography>
+        <Box sx={{ px: 1.5, py: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          {onSelectPage && rows.length > 0 && (
+            <input
+              type="checkbox"
+              data-testid="select-page"
+              aria-label={`Select all ${rows.length} on this page`}
+              checked={rows.every((r) => isSelected(r.book.id))}
+              onChange={(e) =>
+                onSelectPage(
+                  rows.map((r) => r.book.id),
+                  e.target.checked
+                )
+              }
+            />
+          )}
+          <Typography variant="caption" color="text.secondary">
+            {loading ? 'Loading…' : `${filteredCount} shown`}
+          </Typography>
+        </Box>
         <Box
           component="ul"
           data-testid="queue-list"

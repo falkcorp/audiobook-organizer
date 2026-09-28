@@ -272,6 +272,37 @@ describe('Search again on the no-candidate books', () => {
     );
   });
 
+  it('Cancel still searches the books that are not marked no-match', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await openWorkspace();
+    await user.click(screen.getByTestId('chip-total'));
+    await waitFor(() => expect(listedIds()).toEqual(['m1', 'm2', 'n1']));
+    await user.click(screen.getByLabelText('Select Book m1'));
+    await user.click(screen.getByLabelText('Select Book n1')); // no_match == marked
+
+    await user.click(screen.getByTestId('search-selected'));
+
+    await waitFor(() =>
+      expect(api.batchFetchCandidates).toHaveBeenCalledWith({ book_ids: ['m1'], force: true })
+    );
+    expect(api.clearMetadataNoMatch).not.toHaveBeenCalled();
+  });
+
+  it('selects every row on the page with one box', async () => {
+    const user = userEvent.setup();
+    await openWorkspace();
+    await user.click(screen.getByTestId('chip-no_candidates'));
+    await waitFor(() => expect(listedIds()).toHaveLength(2));
+
+    await user.click(screen.getByTestId('select-page'));
+    expect(screen.getByTestId('search-selected')).toHaveTextContent('Search again (2)');
+    expect(screen.getByTestId('select-page')).toBeChecked();
+
+    await user.click(screen.getByTestId('select-page'));
+    expect(screen.getByTestId('search-selected')).toHaveTextContent('Search again (0)');
+  });
+
   it('leaves Apply selected unchanged for ordinary rows', async () => {
     const user = userEvent.setup();
     await openWorkspace();
