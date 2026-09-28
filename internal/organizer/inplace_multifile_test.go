@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_multifile_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6c2a9e4d-7b13-4f58-a0d2-3e9b1c5f8a47
 // last-edited: 2026-09-28
 
@@ -354,5 +354,37 @@ func TestLinkMoveExclusive_TakesBackTheNewNameWhenTheSourceStays(t *testing.T) {
 	mustContent(t, src, filled(10, 1))
 	if _, err := os.Lstat(dst); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("the new name was left behind (stat err %v)", err)
+	}
+}
+
+// TestReOrganizeInPlaceRecorded_MultiFileMoveIsUndoable is the series-normalize
+// half of S-6: its re-organizes go through ReOrganizeInPlaceRecorded, which
+// commits the landing under the operation, so a multi-file move leaves the
+// per-file undo rows ReOrganizeInPlace never wrote.
+func TestReOrganizeInPlaceRecorded_MultiFileMoveIsUndoable(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	b, _, _ := multiFileBook(t, store, root, "Normalized")
+	target := targetDirFor(t, svc, b)
+	const opID = "op-series-normalize"
+	path, err := svc.ReOrganizeInPlaceRecorded(b, opID, &noopLogger{})
+	if err != nil {
+		t.Fatalf("ReOrganizeInPlaceRecorded: %v", err)
+	}
+	if path != target {
+		t.Fatalf("path %q, want the target folder %q", path, target)
+	}
+	changes, err := store.GetOperationChanges(opID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, c := range changes {
+		counts[c.ChangeType]++
+	}
+	if counts["book_file_move"] != 2 || counts["book_path_update"] != 1 {
+		t.Fatalf("recorded %v; want 2 book_file_move + 1 book_path_update", counts)
+	}
+	if changes[0].ChangeType != "book_path_update" {
+		t.Fatalf("first stored change is %s; the path update must be first so an undo restores it last", changes[0].ChangeType)
 	}
 }
