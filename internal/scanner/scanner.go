@@ -884,6 +884,14 @@ type Book struct {
 	// it to the book_file row builder so the row gets the duration and codec
 	// this scan already paid for, instead of Duration 0 and no codec.
 	fileMediaInfo *mediainfo.MediaInfo
+
+	// sharesDirectory marks a multi-file book that is one of SEVERAL books
+	// carved out of the same directory (the oversized-directory sub-grouping
+	// in groupFilesIntoBooks). Such a book keeps its FilePath on its first
+	// file instead of being normalized to the directory: normalizing would
+	// give every sub-group the same FilePath, and a directory path claimed by
+	// several books is one the organizer would move wholesale.
+	sharesDirectory bool
 }
 
 // ScanDirectory scans the given directory for audiobook files.
@@ -1738,7 +1746,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					// does NOT yet make the next scan SKIP the book -- see the
 					// SCOPE paragraph on createBookFilesForBook for the two
 					// grain mismatches that still defeat that.
-					if moved := createBookFilesForBook(books[idx].FilePath, books[idx].SegmentFiles, scanLog, normalizeToDirectory, books[idx].SegmentHashes); moved != "" {
+					pathMode := normalizeToDirectory
+					if books[idx].sharesDirectory {
+						pathMode = keepFilePath
+					}
+					if moved := createBookFilesForBook(books[idx].FilePath, books[idx].SegmentFiles, scanLog, pathMode, books[idx].SegmentHashes); moved != "" {
 						books[idx].FilePath = moved
 					}
 				} else {
@@ -2985,22 +2997,12 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 		// FilePath is a file rather than the directory. Refusing in one place
 		// and not the other is not a bound at all.
 		//
-		// One book per file is the fallback, because that is what the evidence
-		// supports: a shared ALBUM tag across this many files in one flat
-		// folder is a publisher's author name, not a claim that they are one
-		// work, and there is nothing else here to group on.
+		// The group is not one book, but it is not one book per file either:
+		// until 2026-09-28 it was, and a flat 1,188-file Bible folder became
+		// 1,188 books. subGroupOversizedAlbum sub-groups it by filename stem
+		// instead. See there for what an author shelf still gets.
 		if len(albumFiles) > maxDirectoryBookFiles {
-			logging.Warn(ctx, "scanner refusing album group: too many files for one book",
-				"dir", filepath.Dir(albumFiles[0]),
-				"count", len(albumFiles),
-				"limit", maxDirectoryBookFiles,
-			)
-			for _, f := range albumFiles {
-				books = append(books, Book{
-					FilePath: f,
-					Format:   strings.ToLower(filepath.Ext(f)),
-				})
-			}
+			books = append(books, subGroupOversizedAlbum(ctx, albumFiles)...)
 			continue
 		}
 		if len(albumFiles) > 1 {
