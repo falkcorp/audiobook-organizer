@@ -1,5 +1,5 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
 // last-edited: 2026-09-27
 //
@@ -159,6 +159,8 @@ export function MetadataPanel({
         confirm={(message) => Promise.resolve(window.confirm(message))}
         bulkApplyMode={metadata.bulkApplyMode}
         onBulkApplyModeChange={metadata.setBulkApplyMode}
+        replaceConfirmSkipped={metadata.skipReplaceConfirm}
+        onResetReplaceConfirm={metadata.resetReplaceConfirm}
       />
 
       {/*

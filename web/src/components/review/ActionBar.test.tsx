@@ -1,5 +1,5 @@
 // file: web/src/components/review/ActionBar.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0445b6ce-9e24-4bb7-8c7f-a94ade2d66b7
 // last-edited: 2026-09-27
 //
@@ -15,7 +15,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BulkApplyMode } from '../../services/api';
 import { ActionBar } from './ActionBar';
 
-function renderBar(mode: BulkApplyMode) {
+function renderBar(
+  mode: BulkApplyMode,
+  replaceConfirmSkipped = false,
+  onResetReplaceConfirm: (() => void) | undefined = vi.fn()
+) {
   const dispatch = vi.fn();
   const confirm = vi.fn().mockResolvedValue(true);
   const onBulkApplyModeChange = vi.fn();
@@ -30,6 +34,8 @@ function renderBar(mode: BulkApplyMode) {
       confirm={confirm}
       bulkApplyMode={mode}
       onBulkApplyModeChange={onBulkApplyModeChange}
+      replaceConfirmSkipped={replaceConfirmSkipped}
+      onResetReplaceConfirm={onResetReplaceConfirm}
     />
   );
   return { dispatch, confirm, onBulkApplyModeChange };
@@ -67,5 +73,19 @@ describe('ActionBar bulk apply mode', () => {
     await userEvent.click(screen.getByTestId('apply-selected'));
     await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
     expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('hides "Ask before replacing again" while the Replace prompt is still on', () => {
+    renderBar('replace', false);
+    expect(screen.queryByTestId('reset-replace-confirm')).not.toBeInTheDocument();
+  });
+
+  it('shows "Ask before replacing again" once the prompt is skipped, and it calls the reset', async () => {
+    const onReset = vi.fn();
+    renderBar('fill', true, onReset);
+    const reset = screen.getByTestId('reset-replace-confirm');
+    expect(reset).toHaveTextContent('Ask before replacing again');
+    await userEvent.click(reset);
+    expect(onReset).toHaveBeenCalledTimes(1);
   });
 });

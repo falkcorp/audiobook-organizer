@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.19.0
+// version: 1.20.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-27
 //
@@ -204,6 +204,51 @@ export function saveBulkApplyMode(mode: BulkApplyMode): void {
   } catch {
     // Private-mode / quota failure: the toggle still applies this session.
   }
+}
+
+/**
+ * The Replace prompt's "Don't ask me again" (owner request 2026-09-27), per
+ * viewer. Only an exact stored 'true' skips the prompt; a missing, cleared or
+ * unreadable key means ask, because the prompt is the safe side to fail to.
+ */
+export function loadSkipReplaceConfirm(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_SKIP_REPLACE_CONFIRM) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Persist (or clear) the skip flag. Returns whether storage accepted the
+ * write: the caller only stops asking when it did, so blocked storage keeps
+ * the prompt rather than skipping it for a session the owner cannot see end.
+ */
+export function saveSkipReplaceConfirm(skip: boolean): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (skip) {
+      window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_SKIP_REPLACE_CONFIRM, 'true');
+    } else {
+      window.localStorage.removeItem(STORAGE_KEYS.METADATA_REVIEW_SKIP_REPLACE_CONFIRM);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A Replace bulk apply waiting on the prompt. Captured at the click, pins and
+ * mode included: unlike `window.confirm` a dialog does not block, so a
+ * poll-triggered refresh can land before the owner answers, and the apply must
+ * still pin the rows the owner was looking at when they clicked.
+ */
+export interface PendingReplace {
+  ids: string[];
+  pins: Record<string, ApplyPin>;
+  mode: BulkApplyMode;
 }
 
 export function loadReviewPageSize(): number {
@@ -459,6 +504,22 @@ export interface MetadataLane {
   bulkApplyMode: BulkApplyMode;
   setBulkApplyMode: (mode: BulkApplyMode) => void;
 
+  /**
+   * The Replace bulk apply waiting on the owner's answer, or null. Every
+   * applySelected dispatch in Replace mode parks here instead of sending
+   * (unless `skipReplaceConfirm`), so every bulk entry point asks exactly once;
+   * the workspace renders the dialog from it.
+   */
+  pendingReplace: PendingReplace | null;
+  /** Send the parked apply. `dontAskAgain` persists the skip flag. */
+  confirmReplace: (dontAskAgain: boolean) => void;
+  /** Drop the parked apply. Never persists the skip flag. */
+  cancelReplace: () => void;
+  /** True once the owner ticked "Don't ask me again" and storage kept it. */
+  skipReplaceConfirm: boolean;
+  /** Clears the skip flag so the Replace prompt shows again. */
+  resetReplaceConfirm: () => void;
+
   selectedIds: Set<string>;
   applying: boolean;
 
@@ -519,6 +580,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const [filters, setFiltersState] = useState<MetadataFilters>(initialFilters);
   const [strictPreset, setStrictPresetState] = useState(loadStrictPreset);
   const [bulkApplyMode, setBulkApplyModeState] = useState<BulkApplyMode>(loadBulkApplyMode);
+  const [skipReplaceConfirm, setSkipReplaceConfirm] = useState<boolean>(loadSkipReplaceConfirm);
+  const [pendingReplace, setPendingReplace] = useState<PendingReplace | null>(null);
   const [requestedPage, setPage] = useState(1);
   const [pageSize, setPageSizeState] = useState<number>(loadReviewPageSize);
   const [applying, setApplying] = useState(false);
@@ -1161,7 +1224,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   );
 
   const applyMany = useCallback(
-    async (bookIds: string[]) => {
+    async (
+      bookIds: string[],
+      // A confirmed Replace passes what it captured at the click (see
+      // PendingReplace); every other bulk apply captures them here, now.
+      captured?: { pins: Record<string, ApplyPin>; mode: BulkApplyMode }
+    ) => {
       if (bookIds.length === 0) return;
       setApplying(true);
       retainInFlight(bookIds);
@@ -1175,7 +1243,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         // bulk toggle to 'replace' (owner ruling 2026-09-27), which is sent
         // with every bulk request. Pins are captured now, at the click, from
         // the rows the owner is looking at.
-        await runApplyOp(bookIds, bulkPinsFor(bookIds), bulkApplyMode);
+        await runApplyOp(
+          bookIds,
+          captured?.pins ?? bulkPinsFor(bookIds),
+          captured?.mode ?? bulkApplyMode
+        );
         // Dispatch acceptance is the point at which this batch belongs to the
         // background worker. Mark each row now so the default Hide applied
         // filter clears it immediately; the terminal poll then refreshes and
@@ -1260,13 +1332,16 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         case 'applySelected':
           // Replace overwrites values the owner may have curated, on every
           // book in the batch, so it asks first -- here, not in each button,
-          // so every bulk entry point confirms exactly once. Fill applies as
-          // before, without a prompt.
-          if (
-            bulkApplyMode === 'replace' &&
-            action.ids.length > 0 &&
-            !window.confirm(replaceConfirmMessage(action.ids.length))
-          ) {
+          // so every bulk entry point confirms exactly once. The request is
+          // parked for the workspace's dialog; confirmReplace sends it. Fill
+          // applies as before, without a prompt, and so does Replace once the
+          // owner has ticked "Don't ask me again".
+          if (bulkApplyMode === 'replace' && action.ids.length > 0 && !skipReplaceConfirm) {
+            setPendingReplace({
+              ids: action.ids,
+              pins: bulkPinsFor(action.ids),
+              mode: bulkApplyMode,
+            });
             return;
           }
           void applyMany(action.ids);
@@ -1332,8 +1407,30 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       requestedPage,
       clearServerDerived,
       bulkApplyMode,
+      skipReplaceConfirm,
+      bulkPinsFor,
     ]
   );
+
+  const confirmReplace = useCallback(
+    (dontAskAgain: boolean) => {
+      const pending = pendingReplace;
+      setPendingReplace(null);
+      if (!pending) return;
+      // Only stop asking when storage kept the flag: blocked storage means
+      // the prompt stays, the safe default.
+      if (dontAskAgain && saveSkipReplaceConfirm(true)) setSkipReplaceConfirm(true);
+      void applyMany(pending.ids, { pins: pending.pins, mode: pending.mode });
+    },
+    [pendingReplace, applyMany]
+  );
+
+  const cancelReplace = useCallback(() => setPendingReplace(null), []);
+
+  const resetReplaceConfirm = useCallback(() => {
+    saveSkipReplaceConfirm(false);
+    setSkipReplaceConfirm(false);
+  }, []);
 
   const toggleSelect = useCallback((bookId: string) => {
     setSelectedIds((prev) => {
@@ -1427,6 +1524,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     setStrictPreset,
     bulkApplyMode,
     setBulkApplyMode,
+    pendingReplace,
+    confirmReplace,
+    cancelReplace,
+    skipReplaceConfirm,
+    resetReplaceConfirm,
     selectedIds,
     applying,
     highConfidenceIds,

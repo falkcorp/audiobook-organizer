@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.20.0
+// version: 1.21.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-09-27
 //
@@ -15,6 +15,8 @@ import {
   loadBulkApplyMode,
   loadReviewPageSize,
   saveBulkApplyMode,
+  loadSkipReplaceConfirm,
+  saveSkipReplaceConfirm,
   useMetadataLane,
   PAGE_SIZE_FALLBACK,
   STRICT_PRESET,
@@ -804,6 +806,93 @@ describe('dispatch', () => {
     }
   });
 
+  it('skip-replace-confirm: only an exact stored "true" skips, and clearing removes it', () => {
+    const key = STORAGE_KEYS.METADATA_REVIEW_SKIP_REPLACE_CONFIRM;
+    expect(loadSkipReplaceConfirm()).toBe(false);
+    window.localStorage.setItem(key, 'TRUE');
+    expect(loadSkipReplaceConfirm()).toBe(false);
+    expect(saveSkipReplaceConfirm(true)).toBe(true);
+    expect(window.localStorage.getItem(key)).toBe('true');
+    expect(loadSkipReplaceConfirm()).toBe(true);
+    expect(saveSkipReplaceConfirm(false)).toBe(true);
+    expect(window.localStorage.getItem(key)).toBeNull();
+    expect(loadSkipReplaceConfirm()).toBe(false);
+  });
+
+  it('skip-replace-confirm: blocked storage reads as ask and reports the failed write', () => {
+    // On the instance: test/setup.ts installs a plain-object localStorage, so
+    // a Storage.prototype spy would never be reached.
+    const store = window.localStorage;
+    const get = vi.spyOn(store, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    const set = vi.spyOn(store, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    const remove = vi.spyOn(store, 'removeItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    try {
+      expect(loadSkipReplaceConfirm()).toBe(false);
+      expect(saveSkipReplaceConfirm(true)).toBe(false);
+      expect(saveSkipReplaceConfirm(false)).toBe(false);
+      expect(get).toHaveBeenCalled();
+      expect(set).toHaveBeenCalled();
+      expect(remove).toHaveBeenCalled();
+    } finally {
+      get.mockRestore();
+      set.mockRestore();
+      remove.mockRestore();
+    }
+  });
+
+  it('a parked Replace pins the candidate shown at the click, even if a refresh lands before confirm', async () => {
+    // window.confirm blocked the event loop; the dialog does not, so a refresh
+    // can replace the rows while the owner is still reading the prompt.
+    vi.mocked(api.getCachedReviewResults).mockResolvedValueOnce(
+      reviewPayload([makeResult('a', { candidate_hash: 'h-shown' }, { title: 'Shown' })])
+    );
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op-parked',
+    } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(1));
+    act(() => result.current.setBulkApplyMode('replace'));
+    act(() => {
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a'] });
+    });
+    expect(result.current.pendingReplace?.ids).toEqual(['a']);
+
+    vi.mocked(api.getCachedReviewResults).mockResolvedValueOnce(
+      reviewPayload([makeResult('a', { candidate_hash: 'h-later' }, { title: 'Later' })])
+    );
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.results[0].candidate?.title).toBe('Later'));
+
+    await act(async () => {
+      result.current.confirmReplace(false);
+    });
+    expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
+    expect(api.batchApplyFromCache).toHaveBeenLastCalledWith(
+      ['a'],
+      undefined,
+      {
+        a: {
+          origin: 'review_bulk',
+          content_hash: 'h-shown',
+          source: 'audible',
+          title: 'Shown',
+          author: 'A',
+        },
+      },
+      'replace'
+    );
+  });
+
   it('sends replace from the bulk buttons and no mode from a single-row Apply', async () => {
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(
       reviewPayload(['a', 'b'].map((id) => makeResult(id, { candidate_hash: `h-${id}` })))
@@ -818,15 +907,20 @@ describe('dispatch', () => {
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.results).toHaveLength(2));
     act(() => result.current.setBulkApplyMode('replace'));
-    // Replace asks once, in the dispatch (every bulk entry point goes through it).
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
-    await act(async () => {
+    // Replace asks once, in the dispatch (every bulk entry point goes through
+    // it): the request is parked for the workspace's dialog, not sent.
+    act(() => {
       result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a'] });
     });
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('1 book(s)'));
-    confirmSpy.mockRestore();
+    expect(result.current.pendingReplace?.ids).toEqual(['a']);
+    expect(result.current.pendingReplace?.mode).toBe('replace');
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
+
+    await act(async () => {
+      result.current.confirmReplace(false);
+    });
+    expect(result.current.pendingReplace).toBeNull();
+    expect(result.current.skipReplaceConfirm).toBe(false);
     expect(api.batchApplyFromCache).toHaveBeenLastCalledWith(
       ['a'],
       undefined,
