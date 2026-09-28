@@ -385,9 +385,9 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	if bookNarrator == "" && book.Narrator != nil && *book.Narrator != "" {
 		bookNarrator = *book.Narrator
 	}
-	if IsGarbageValue(bookNarrator) {
-		bookNarrator = ""
-	}
+	// The narrator is sent as an author too (the narrator-as-author rung), so
+	// it gets the author's placeholder rule: "read by narrator" is never a hint.
+	bookNarrator = SearchAuthorHint(bookNarrator)
 	// With no usable author, the book's own ASIN (when it has one) is looked
 	// up directly, so a title-only search is not the only question asked.
 	// Only then: a book with a real author is searched as it always was.
