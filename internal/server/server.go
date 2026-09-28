@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.67.0
+// version: 2.68.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-27
 
@@ -902,6 +902,14 @@ func NewServer(store database.Store) *Server {
 	// Create hub, batcher, and file I/O pool as Server fields
 	server.hub = realtime.NewEventHub()
 	realtime.SetGlobalHub(server.hub)
+
+	// books.changed: every committed book write (the store's library-generation
+	// funnel) is coalesced into 250 ms batches and broadcast, so the Library
+	// patches the affected rows in place instead of reloading the page.
+	bookChanges := realtime.NewBookChangeCoalescer(250*time.Millisecond, server.hub.Broadcast)
+	database.SetBookChangeObserver(func(kind database.BookChangeKind, id string) {
+		bookChanges.Add(string(kind), id)
+	})
 
 	// The batcher moved under itunesservice.Service in Phase 2 M1 step 2.
 	// Server still keeps a typed field for back-compat with the many call
