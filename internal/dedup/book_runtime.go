@@ -1,7 +1,7 @@
 // file: internal/dedup/book_runtime.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 1c5335bc-2f9e-4f1a-829a-f8ed1a96ebc5
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 package dedup
 
@@ -68,12 +68,7 @@ func runtimeAndRows(store database.BookFilesGetter, memo *bookRuntimeMemo, book 
 			memo.reads.Add(1)
 		}
 	}
-	rt := database.ComputeBookRuntime(book, files)
-	if err != nil {
-		logging.Warn(context.Background(), "dedup: book files unreadable; runtime treated as unknown",
-			"book_id", book.ID, "err", err)
-		rt = database.BookRuntime{Source: database.RuntimeSourceNone, BookAggregateSec: rt.BookAggregateSec}
-	}
+	rt, _, _ := runtimeFromFiles(book, files, err)
 	if memo != nil {
 		memo.mu.Lock()
 		memo.byID[book.ID] = memoEntry{updatedAt: stamp, rt: rt, rows: len(files), err: err}
@@ -83,6 +78,20 @@ func runtimeAndRows(store database.BookFilesGetter, memo *bookRuntimeMemo, book 
 }
 
 var errNoRuntimeStore = errors.New("no book file store")
+
+// runtimeFromFiles is the compute half of runtimeAndRows, for a caller that
+// already holds the book's file rows (and the error reading them) because it
+// needs the rows for something else too — DrainStaleCandidates reads them once
+// for both the runtime gates and the content-evidence check.
+func runtimeFromFiles(book *database.Book, files []database.BookFile, err error) (database.BookRuntime, int, bool) {
+	rt := database.ComputeBookRuntime(book, files)
+	if err != nil {
+		logging.Warn(context.Background(), "dedup: book files unreadable; runtime treated as unknown",
+			"book_id", book.ID, "err", err)
+		rt = database.BookRuntime{Source: database.RuntimeSourceNone, BookAggregateSec: rt.BookAggregateSec}
+	}
+	return rt, len(files), err == nil
+}
 
 // knownRuntimeSec is the book's canonical runtime in seconds, and whether it
 // is COMPLETE. The duration collectors compare only complete runtimes:

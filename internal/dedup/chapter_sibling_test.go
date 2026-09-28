@@ -135,7 +135,7 @@ func TestUnifiedPass_DeletesSuppressedChapterSiblingCandidate(t *testing.T) {
 
 	// Seed a pending candidate for the sibling pair (upsert does not apply the
 	// emit-time same-dir guard, so it inserts — exactly the residual we must purge).
-	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("seed candidate: %v", err)
 	}
 	if len(pendingCandidates(t, es)) != 1 {

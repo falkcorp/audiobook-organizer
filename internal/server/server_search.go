@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-09-14
+// last-edited: 2026-09-27
 
 package server
 
@@ -18,6 +18,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
@@ -349,6 +350,9 @@ func (h *serverOrganizeHooks) OnCollision(currentBookID, occupantPath string) {
 			Layer:      "exact",
 			Similarity: &sim,
 			Status:     "pending",
+			// Record why the pair exists, like every other exact emitter.
+			ScoreBreakdown: dedup.ExactRuleBreakdown(currentBookID, occupant.ID, dedup.ExactRuleOrganizeCollision,
+				fmt.Sprintf("Organizing this book collided with a file another book already owns at its destination: %s", occupantPath), 1),
 		}); err != nil {
 			slog.Warn("organize-collision hook upsert candidate / failed", "currentBookID", currentBookID, "occupant", occupant.ID, "err", err)
 			return

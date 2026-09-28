@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 // Package dedup — metadata-based collector family (fable5 T014).
 //
@@ -170,6 +170,13 @@ func collectDuration(
 	if !hasUsableTitle(book.Title) {
 		return nil, nil
 	}
+	// Placeholder titles carry no identity (exact_provenance.go). The author
+	// half of titleEvidenceRefusal is not applied here: this collector only
+	// ever emits the SUPPORTING duration signal, which cannot make a
+	// candidate on its own, and it has no author store to resolve names.
+	if titleEvidenceRefusal(book.Title, book.Title, "", "") != "" {
+		return nil, nil
+	}
 	// Canonical runtime, complete only: a partial or unknown runtime is no
 	// duration evidence at all.
 	bookDur, known := knownRuntimeSec(store, memo, book)
@@ -200,6 +207,9 @@ func collectDuration(
 			continue
 		}
 		if !hasUsableTitle(other.Title) {
+			continue
+		}
+		if titleEvidenceRefusal(book.Title, other.Title, "", "") != "" {
 			continue
 		}
 		if !prefilterOtherDuration(bookDur, other, cfg.AbridgedThreshold) {
@@ -459,6 +469,12 @@ func CollectMetaFuzzy(
 			}
 		}
 
+		// Title+author similarity is title evidence: a placeholder title, or
+		// placeholder authors on both sides (whose "similarity" is the
+		// placeholder matching itself), is no evidence at all.
+		if titleEvidenceRefusal(book.Title, other.Title, bookAuthorName, otherAuthorName) != "" {
+			continue
+		}
 		otherTitleForms := allNormalizedTitleFormsForStore(store, other)
 		sim := metaTitleAuthorSimilarity(
 			bookTitleForms, bookAuthorName,

@@ -35,7 +35,7 @@ func TestUpsertExactCandidate_BoilerplateTitleGuard(t *testing.T) {
 	a := primaryBook("A", "This is Audible")
 	b := primaryBook("B", "This is Audible")
 
-	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsertExactCandidate: %v", err)
 	}
 
@@ -53,7 +53,7 @@ func TestUpsertExactCandidate_MinDurationGuard(t *testing.T) {
 	a.Duration = &shortDur
 	b := primaryBook("B", "Real Book Title")
 
-	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsertExactCandidate: %v", err)
 	}
 
@@ -71,7 +71,7 @@ func TestUpsertExactCandidate_UnknownDurationNotSuppressed(t *testing.T) {
 	b := primaryBook("B", "Real Book Title")
 	b.Duration = nil
 
-	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsertExactCandidate: %v", err)
 	}
 
@@ -87,7 +87,7 @@ func TestUpsertExactCandidate_GenuineDuplicateStillPersisted(t *testing.T) {
 	a := primaryBook("A", "Genuine Duplicate Book")
 	b := primaryBook("B", "Genuine Duplicate Book")
 
-	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsertExactCandidate: %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestUpsertExactCandidate_ZeroDurationNotSuppressed(t *testing.T) {
 	a.Duration = &zero
 	b := primaryBook("B", "Real Book Title")
 
-	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsertExactCandidate: %v", err)
 	}
 
@@ -208,7 +208,7 @@ func TestUpsertExactCandidateGateParityWithDrain(t *testing.T) {
 					return tc.files[bookID], nil
 				}
 			}
-			if err := engine.upsertExactCandidate(tc.a, tc.b, "exact", 1.0); err != nil {
+			if err := engine.upsertExactCandidate(tc.a, tc.b, "exact", 1.0, testExactEvidence); err != nil {
 				t.Fatalf("upsertExactCandidate: %v", err)
 			}
 			chokepointCands := pendingCandidates(t, es)
@@ -333,12 +333,12 @@ func TestUpsertExactCandidate_PairDedupeConfirmed(t *testing.T) {
 	a := primaryBook("A", "Genuine Duplicate Book")
 	b := primaryBook("B", "Genuine Duplicate Book")
 
-	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsertExactCandidate(a,b): %v", err)
 	}
 	// Reversed argument order — UpsertCandidateNew canonicalizes A/B so this
 	// must still land on the SAME pair key, not a second row.
-	if err := engine.upsertExactCandidate(b, a, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(b, a, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsertExactCandidate(b,a): %v", err)
 	}
 
@@ -370,7 +370,7 @@ func TestUpsertExactCandidate_NilDurationConservativeBothGates(t *testing.T) {
 	}
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) { return files[bookID], nil }
 
-	if err := engine.upsertExactCandidate(a, b, "exact", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(a, b, "exact", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsertExactCandidate: %v", err)
 	}
 	cands := pendingCandidates(t, es)

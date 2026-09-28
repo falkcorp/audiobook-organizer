@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/drain_stale.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: a6103a90-d68c-4db5-ace4-e2a9fb2a51e1
-// last-edited: 2026-09-02
+// last-edited: 2026-09-27
 
 // Package dedup — op dedup.drain-stale (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -13,7 +13,7 @@
 //
 // Dry-run by default. Pass {"apply":true} to soft-reclassify would-purge rows
 // to "stale-drain" (never a hard delete). The apply path is gated behind a
-// versioned Settings done-flag (dedup_stale_drain_v2_done) so a second apply
+// versioned Settings done-flag (dedup_stale_drain_v3_done) so a second apply
 // run after completion is a safe no-op — the M0 purge_legacy_fp precedent.
 // (v1 -> v2, INIT-2 T3: DrainStaleCandidates' gate chain gained a
 // non_primary_version twin so it now mirrors upsertExactCandidate
@@ -44,7 +44,13 @@ import (
 // non_primary_version gate twin (drain-gate parity with upsertExactCandidate)
 // — bumped so a v1 "done" apply does not silently block the re-run needed to
 // apply the corrected criteria against the ~387k backlog.
-const drainStaleDoneFlag = "dedup_stale_drain_v2_done"
+//
+// v2 -> v3 (2026-09-27): the placeholder_title reason — pending exact pairs
+// whose only evidence is a placeholder title ("Unknown Title", "read by
+// narrator") or a title shared under placeholder authors, which the title
+// rules no longer emit. Bumped so a v2 "done" apply cannot no-op the run that
+// clears them.
+const drainStaleDoneFlag = "dedup_stale_drain_v3_done"
 
 // drainStaleCheckpointID is the stable checkpoint key for the op's resumable
 // scan. A constant is safe because ConcurrencyKey serialises runs, so no two
@@ -63,9 +69,10 @@ func (p *Plugin) drainStaleDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Drain stale exact candidates",
-		Description: "Re-evaluates pending exact-layer dedup candidates emitted before the CONS-16 " +
-			"(duration-ms) and CONS-17 (title-leak) importer bugs were fixed against today's emission " +
-			"gates, and reports counts/samples by rejection reason. Dry-run by default; pass apply=true " +
+		Description: "Re-evaluates pending exact-layer dedup candidates against today's emission " +
+			"gates (CONS-16 duration-ms, CONS-17 title-leak, and pairs resting only on a placeholder " +
+			"title such as \"Unknown Title\" or \"read by narrator\"), and reports counts/samples by " +
+			"rejection reason. Dry-run by default; pass apply=true " +
 			"to soft-reclassify would-purge rows to stale-drain. Idempotent: a versioned flag prevents " +
 			"re-running after apply.",
 		ResumePolicy:    sdk.ResumeDrop,

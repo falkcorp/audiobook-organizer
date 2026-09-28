@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.42.1
+// version: 1.42.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-12
+// last-edited: 2026-09-27
 
 package organizer
 
@@ -72,7 +72,7 @@ func (o *Organizer) SetStore(s OrganizerStore) {
 }
 
 const (
-	defaultTitle   = "Unknown Title"
+	defaultTitle   = authorname.PlaceholderTitle
 	tempFileSuffix = ".tmp"
 
 	// patternSegmentSep is the delimiter that separates naming-pattern

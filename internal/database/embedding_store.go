@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.19.0
-// last-edited: 2026-09-26
+// version: 2.20.0
+// last-edited: 2026-09-27
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -776,10 +776,22 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 		existing.Layer = c.Layer
 		existing.Similarity = c.Similarity
 	}
+	// A provenance-only breakdown (the exact-layer rules' record of WHY a pair
+	// exists, models.UnifiedDedupScore.IsProvenanceOnly) is MERGED rather than
+	// written over the row, and even into a protected row: it carries no score,
+	// so folding it in cannot change what the row scores, and "exact" rows are
+	// protected, so replacing-only would leave every pre-existing exact row
+	// unexplained forever. A pinned row's breakdown stays frozen, as for every
+	// other writer.
+	incomingProvenance := c.ScoreBreakdown.IsProvenanceOnly()
+	if incomingProvenance && !scoreFrozen {
+		existing.ScoreBreakdown = models.MergeProvenance(existing.ScoreBreakdown, c.ScoreBreakdown)
+	}
 	if !protected && !scoreFrozen {
 		// Carry forward unified-scoring fields when the incoming write has them.
-		if c.ScoreBreakdown != nil {
-			existing.ScoreBreakdown = c.ScoreBreakdown
+		// A replacement keeps the provenance signals the old breakdown had.
+		if c.ScoreBreakdown != nil && !incomingProvenance {
+			existing.ScoreBreakdown = models.CarryProvenance(existing.ScoreBreakdown, c.ScoreBreakdown)
 		}
 		if c.Band != "" {
 			existing.Band = c.Band
@@ -1389,7 +1401,9 @@ func (s *EmbeddingStore) UpdateCandidateScore(id int64, score *models.UnifiedDed
 			guardErr = fmt.Errorf("update score on candidate %d: %w", id, ErrManualCandidateProtected)
 			return false
 		}
-		rec.ScoreBreakdown = score
+		// A new score replaces the old one, but never the record of which
+		// exact rule created the row (models.CarryProvenance).
+		rec.ScoreBreakdown = models.CarryProvenance(rec.ScoreBreakdown, score)
 		rec.Band = band
 		rec.FormulaVersion = formulaVersion
 		rec.UpdatedAt = time.Now().UnixNano()
@@ -1500,7 +1514,7 @@ func (s *EmbeddingStore) UpdateCandidateScores(updates []CandidateScoreUpdate) (
 		if rec.Source == CandidateSourceManual {
 			continue
 		}
-		rec.ScoreBreakdown = u.Score
+		rec.ScoreBreakdown = models.CarryProvenance(rec.ScoreBreakdown, u.Score)
 		rec.Band = u.Band
 		rec.FormulaVersion = u.FormulaVersion
 		rec.UpdatedAt = now

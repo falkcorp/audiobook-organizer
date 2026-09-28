@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/breakdown_backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: ec0f5e9d-2f6d-485d-9f24-ad3d917d1834
-// last-edited: 2026-09-26
+// last-edited: 2026-09-27
 
 // Package dedup — op dedup.breakdown-backfill.
 //
@@ -343,7 +343,11 @@ func runBreakdownBackfillWith(
 	missingSignalCounts := map[string]int{}
 	for i := range cands {
 		c := &cands[i]
-		if c.ScoreBreakdown != nil && len(c.ScoreBreakdown.Signals) > 0 {
+		// A provenance-only breakdown (the exact rule that created the row,
+		// no score) is not a score: the row is still a target. The store keeps
+		// its provenance signals when the composed score is written
+		// (models.CarryProvenance in UpdateCandidateScores).
+		if c.ScoreBreakdown != nil && len(c.ScoreBreakdown.Signals) > 0 && !c.ScoreBreakdown.IsProvenanceOnly() {
 			skippedHasBreakdown++
 			continue
 		}

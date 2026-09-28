@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: df0b8ccd-c8b3-4b73-b9ab-89836b0d4c37
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 // Destination-conflict resolution for ReOrganizeInPlace.
 //
@@ -169,27 +169,16 @@ func lockInPlaceDestination(target string) func() {
 	return mu.Unlock
 }
 
-// narratorPlaceholderTitles are titles that are really a narrator placeholder
-// that leaked into the title field. "read by narrator" is the tail the old
-// default pattern wrote into filenames (see the NOTE beside defaultTitle);
-// maintenance's junk-title repair counts 1,595 such books.
-var narratorPlaceholderTitles = map[string]struct{}{
-	"narrator":         {},
-	"read by narrator": {},
-	"unknown narrator": {},
-}
-
 // IsPlaceholderTitle reports whether title is empty or one of the system's own
 // placeholders rather than a real title. Organizing such a book bakes the
 // placeholder into a path that every other placeholder book computes too — the
 // 2026-08-11 "848 books onto one path" collapse.
+//
+// The predicate itself lives in internal/authorname so internal/dedup can use
+// the same one (dedup must not pair two books on a placeholder title); this
+// wrapper keeps the organizer's exported name.
 func IsPlaceholderTitle(title string) bool {
-	t := strings.TrimSpace(title)
-	if t == "" || strings.EqualFold(t, defaultTitle) || authorname.IsPlaceholder(t) {
-		return true
-	}
-	_, ok := narratorPlaceholderTitles[strings.ToLower(t)]
-	return ok
+	return authorname.IsPlaceholderTitle(title)
 }
 
 // resolveOccupiedInPlace decides what to do about a destination that already

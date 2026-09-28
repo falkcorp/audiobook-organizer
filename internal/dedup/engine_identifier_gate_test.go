@@ -81,13 +81,13 @@ func TestUpsertExactCandidate_DropsConflictingIdentifiers(t *testing.T) {
 	missingA.ISBN13 = new("9780000000042")
 	missingB := primaryBook("MISSING_B", "Shared Intro")
 
-	if err := engine.upsertExactCandidate(conflictA, conflictB, "acoustid", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(conflictA, conflictB, "acoustid", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsert conflict pair: %v", err)
 	}
-	if err := engine.upsertExactCandidate(sameA, sameB, "acoustid", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(sameA, sameB, "acoustid", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsert same-id pair: %v", err)
 	}
-	if err := engine.upsertExactCandidate(missingA, missingB, "acoustid", 1.0); err != nil {
+	if err := engine.upsertExactCandidate(missingA, missingB, "acoustid", 1.0, testExactEvidence); err != nil {
 		t.Fatalf("upsert missing-id pair: %v", err)
 	}
 
