@@ -1,7 +1,7 @@
 # file: .woodpecker/test-rest.yaml
-# version: 1.0.1
+# version: 1.1.0
 # guid: c84e1b3d-2f9a-4c57-8d06-e3a1b7f5d942
-# last-edited: 2026-09-26
+# last-edited: 2026-09-28
 #
 # `make ci` test-short, part 3 of 3: every other package in `go list ./...`.
 # That includes internal/plugins/maintenance (65-110 s), internal/operations/
@@ -38,6 +38,14 @@ steps:
     image: bash
     environment:
       GOTOOLCHAIN: go1.27.1
+      # The local backend gives every pipeline a fresh HOME, so Go's default
+      # caches ($HOME/go/pkg/mod, which also holds the downloaded toolchain, and
+      # $HOME/Library/Caches/go-build) were re-created per run and never removed:
+      # 107 leftover workdirs held 117 GB on 2026-09-28 and filled the disk.
+      # One host-wide cache is shared instead; Go locks both, so concurrent
+      # pipelines are safe.
+      GOMODCACHE: /Users/jdfalk/ci/cache/gomod
+      GOCACHE: /Users/jdfalk/ci/cache/go-build
     commands:
       - command -v ffmpeg && command -v ffprobe && command -v fpcalc
       - >-
@@ -45,3 +53,13 @@ steps:
         grep -vxE 'github.com/falkcorp/audiobook-organizer/internal/(database|server|scanner|server/handlers/abs)')
         && go test $$PKGS -short -race -covermode=atomic -coverprofile=cover.out -timeout 25m
       - awk -v wf=test-rest 'NR>1{t+=$$2; if($$3>0)c+=$$2} END{printf "CI-COVERAGE workflow=%s covered=%d total=%d\n", wf, c, t}' cover.out
+
+  - name: cleanup
+    # Runs on success and failure: the local backend never deletes a pipeline's
+    # workdir, so clear this clone and anything left in the per-run HOME.
+    image: bash
+    when:
+      - status: [success, failure]
+    commands:
+      - '[ -n "$${CI_WORKSPACE}" ] && [ "$${CI_WORKSPACE}" != / ] && find "$${CI_WORKSPACE}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true'
+      - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
