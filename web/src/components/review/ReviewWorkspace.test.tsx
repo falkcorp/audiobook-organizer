@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-09-28
 
@@ -523,7 +523,9 @@ describe('one-button dedup run', () => {
     await clickRunAll(user);
 
     expect(await screen.findByTestId('dedup-pipeline-done')).toHaveTextContent(/4 of 12 pairs/);
+    // No risky setting, so no preview: one live run, mode stated explicitly.
     expect(api.startDedupRunAll).toHaveBeenCalledTimes(1);
+    expect(api.startDedupRunAll).toHaveBeenCalledWith(false);
     expect(api.getOperationStatus).toHaveBeenCalledWith('run-1');
     expect(api.getOperationResult).toHaveBeenCalledWith('run-1');
     // The steps run on the server now; the browser starts none of them.
@@ -546,16 +548,57 @@ describe('one-button dedup run', () => {
       root_dir: '',
       dedup: { auto_merge_enabled: true, llm_auto_merge_high_confidence: false },
     } as unknown as api.Config);
+    vi.mocked(api.startDedupRunAll).mockImplementation(
+      async (dryRun: boolean) => ({ id: dryRun ? 'preview-1' : 'run-1' }) as api.Operation
+    );
+    vi.mocked(api.getOperationResult).mockResolvedValue({
+      result_data: {
+        dry_run: true,
+        preview_skipped: [
+          { id: 'find', label: 'Finding and scoring duplicates', def_id: 'dedup.full-scan', reason: '' },
+        ],
+        steps: [],
+        skipped: null,
+        rescore_preview: { inspected: 30, skipped: 0, changed: 7, applied: false, band_deltas: {} },
+      },
+    });
     const user = userEvent.setup();
     await clickRunAll(user);
 
     expect(await screen.findByTestId('dedup-pipeline-confirm')).toHaveTextContent(
       /identical audio file/i
     );
-    expect(api.startDedupRunAll).not.toHaveBeenCalled();
+    // The prompt carries the preview's counts; the preview is the only run so far.
+    expect(await screen.findByTestId('dedup-pipeline-preview')).toHaveTextContent(
+      /30 pairs are waiting.*7 would score differently/
+    );
+    expect(screen.getByTestId('dedup-pipeline-preview')).toHaveTextContent(
+      /Finding and scoring duplicates/
+    );
+    expect(api.startDedupRunAll).toHaveBeenCalledTimes(1);
+    expect(api.startDedupRunAll).toHaveBeenCalledWith(true);
 
     await user.click(screen.getByTestId('dedup-pipeline-confirm-run'));
-    await waitFor(() => expect(api.startDedupRunAll).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.startDedupRunAll).toHaveBeenLastCalledWith(false));
+    expect(api.startDedupRunAll).toHaveBeenCalledTimes(2);
+  });
+
+  it('still offers the prompt when the preview cannot run', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({
+      root_dir: '',
+      dedup: { auto_merge_enabled: true, llm_auto_merge_high_confidence: false },
+    } as unknown as api.Config);
+    vi.mocked(api.startDedupRunAll).mockImplementation(async (dryRun: boolean) => {
+      if (dryRun) throw new Error('offline');
+      return { id: 'run-1' } as api.Operation;
+    });
+    const user = userEvent.setup();
+    await clickRunAll(user);
+
+    await screen.findByTestId('dedup-pipeline-confirm');
+    await waitFor(() => expect(screen.queryByTestId('dedup-pipeline-preview')).not.toBeInTheDocument());
+    await user.click(screen.getByTestId('dedup-pipeline-confirm-run'));
+    await waitFor(() => expect(api.startDedupRunAll).toHaveBeenLastCalledWith(false));
   });
 
   it('does not start when the settings cannot be read', async () => {

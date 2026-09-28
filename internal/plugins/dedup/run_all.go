@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/run_all.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 428d4a76-207e-4f6e-8b0a-5f4d939690f2
 // last-edited: 2026-09-28
 
@@ -76,10 +76,31 @@
 //     behind one. Striking the parent there would kill a healthy run. The run's
 //     24h Timeout still bounds a dispatcher that never picks the child up.
 //
-// CAPABILITIES. Declares library.read only, deliberately: this op's own Run
-// writes nothing but its op state. Every write happens inside a child op, and
-// each child carries its own capabilities and its own line in
-// internal/server/testdata/write_op_modes.golden.
+// MODE (owner rule 2026-09-25: a writing op previews unless told otherwise).
+// The run writes through its children (full-scan writes candidates and may
+// auto-link identical copies; llm-review may auto-merge; embed-scan writes
+// embeddings), so it declares library.write and has a preview mode, resolved
+// with opmode.ResolveDryRun: `{}` is a PREVIEW, `{"dry_run":false}` is live.
+//
+//   - Preview enqueues NO child. None of the four child ops has a preview mode
+//     of its own (each is `no-mode` in write_op_modes.golden), so none of them
+//     can run without writing; each is listed in the result's preview_skipped
+//     with that reason. The only step that runs is the rescore preview, which
+//     is read-only, so its counts (waiting pairs, and how many would score
+//     differently) are what a preview can honestly offer. The Review page shows
+//     them in its confirmation prompt.
+//   - Live passes dry_run=false to every child explicitly. The children ignore
+//     the key today; passing it means a child that later gains a preview mode
+//     (and with it the preview-by-default rule) is still run live by a live
+//     run, instead of silently turning the whole chain into a no-op.
+//
+// DEDUPE. A second request while a run is active returns that run only when its
+// params are byte-identical (the registry default). DedupeQueuedRuns would
+// collapse a live press onto a running PREVIEW, so it is off. The cost: once a
+// live run has resumed after a restart its params carry the merged checkpoint,
+// so a second live press queues a second run behind it (serialized by the
+// ConcurrencyKey). The Review page remembers the run it started and does not
+// press again while following it.
 //
 // CANCEL. Canceling this op stops the chain; it does NOT cancel the child that
 // is running at that moment (the registry has no parent->child cancel cascade).
@@ -98,6 +119,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -162,10 +184,27 @@ type runAllState struct {
 	StepIndex int                `json:"step_index"`
 	ChildOpID string             `json:"child_op_id"`
 	Finished  []RunAllStepRecord `json:"finished"`
+
+	// Mode, as sent. *bool so an omitted key stays distinguishable from false
+	// (opmode). Never rewritten by a checkpoint, so a resume keeps the mode.
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
+}
+
+// RunAllPreviewSkip is a step a preview did not run, and why.
+type RunAllPreviewSkip struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	DefID  string `json:"def_id"`
+	Reason string `json:"reason"`
 }
 
 // RunAllResult is the op's result payload (GET /operations/:id/result).
 type RunAllResult struct {
+	DryRun bool `json:"dry_run"`
+	// PreviewSkipped lists the steps a preview left out (every child op; see
+	// MODE in the file comment). Empty on a live run.
+	PreviewSkipped []RunAllPreviewSkip        `json:"preview_skipped"`
 	Steps          []RunAllStepRecord         `json:"steps"`
 	Skipped        []string                   `json:"skipped"`
 	RescorePreview *dedupengine.RescoreResult `json:"rescore_preview"`
@@ -200,23 +239,20 @@ func (p *Plugin) runAllDef() sdk.OperationDef {
 		Liveness:     sdk.LivenessManual,
 		Plugin:       "dedup",
 		DisplayName:  "Find all duplicates",
-		Description:  "Runs every duplicate check in order (similarity data, audio fingerprints, find and score, AI review) as child operations, then previews how many waiting pairs would score differently. Resumes at the step it was on after a restart.",
+		Description:  "Runs every duplicate check in order (similarity data, audio fingerprints, find and score, AI review) as child operations, then previews how many waiting pairs would score differently. Preview by default: {} runs only the read-only score check and lists the steps a live run ({\"dry_run\":false}) would start. Resumes at the step it was on after a restart.",
 		ResumePolicy: sdk.ResumeRestart,
-		// One run at a time, and a second press while one is active returns
-		// that run instead of queueing another. DedupeQueuedRuns rather than the
-		// default byte-equal params check, because a resumed row's params carry
-		// the merged checkpoint and would never byte-match a fresh `{}`.
-		ConcurrencyKey:   RunAllDefID,
-		DedupeQueuedRuns: true,
-		DefaultPriority:  sdk.PriorityLow,
-		Cancellable:      true,
-		Isolate:          false,
+		// One run at a time. No DedupeQueuedRuns: see DEDUPE in the file comment.
+		ConcurrencyKey:  RunAllDefID,
+		DefaultPriority: sdk.PriorityLow,
+		Cancellable:     true,
+		Isolate:         false,
 		// Sum of the children's own timeouts (2h + 6h + 2h + 2h) plus time
 		// queued behind other work on their concurrency keys.
 		Timeout:         24 * time.Hour,
 		ProgressTimeout: 15 * time.Minute,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead},
-		Run:             p.runRunAll,
+		// Writes through its children; see MODE in the file comment.
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Run:          p.runRunAll,
 	}
 }
 
@@ -266,6 +302,13 @@ func (p *Plugin) runRunAll(ctx context.Context, raw json.RawMessage, reporter sd
 	}
 	if err := validateRunAllPlan(st); err != nil {
 		return err
+	}
+	dryRun, err := opmode.ResolveDryRun(RunAllDefID, st.DryRun, st.DryRunCamel)
+	if err != nil {
+		return err
+	}
+	if dryRun {
+		return p.previewRunAll(ctx, st, reporter)
 	}
 
 	opID := opsregistry.ReporterOpID(reporter)
@@ -330,7 +373,7 @@ func (p *Plugin) runRunAll(ctx context.Context, raw json.RawMessage, reporter sd
 		}
 	}
 
-	result := RunAllResult{Steps: st.Finished, Skipped: st.Skipped, RescorePreview: preview}
+	result := RunAllResult{PreviewSkipped: []RunAllPreviewSkip{}, Steps: st.Finished, Skipped: st.Skipped, RescorePreview: preview}
 	if st.Finished == nil {
 		result.Steps = []RunAllStepRecord{}
 	}
@@ -343,6 +386,46 @@ func (p *Plugin) runRunAll(ctx context.Context, raw json.RawMessage, reporter sd
 	}
 	_ = reporter.UpdateProgress(total, total, done)
 	_ = reporter.Log(slog.LevelInfo, done)
+	return nil
+}
+
+// previewRunAll is the dry run: no child op is enqueued, the read-only rescore
+// preview runs if it is in the plan, and every op step is reported as skipped.
+// Writes nothing but the op's own state and result.
+func (p *Plugin) previewRunAll(ctx context.Context, st runAllState, reporter sdk.Reporter) error {
+	total := len(st.Plan)
+	result := RunAllResult{DryRun: true, PreviewSkipped: []RunAllPreviewSkip{}, Steps: []RunAllStepRecord{}, Skipped: st.Skipped}
+	_ = reporter.UpdateProgress(0, total, "Preview: nothing will be changed")
+	for i, id := range st.Plan {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		step, _ := lookupRunAllStep(id)
+		if step.DefID != "" {
+			result.PreviewSkipped = append(result.PreviewSkipped, RunAllPreviewSkip{
+				ID: step.ID, Label: step.Label, DefID: step.DefID,
+				Reason: "has no preview mode, so a preview cannot run it without writing; a live run starts it",
+			})
+			_ = reporter.UpdateProgress(i+1, total, fmt.Sprintf("Preview: %s would run %s (skipped)", step.Label, step.DefID))
+			continue
+		}
+		res, err := p.rescorePreview(ctx)
+		if err != nil {
+			return fmt.Errorf("%s: %w", step.Label, err)
+		}
+		result.RescorePreview = &res
+		result.Steps = append(result.Steps, RunAllStepRecord{ID: step.ID, Label: step.Label})
+		_ = reporter.UpdateProgress(i+1, total, fmt.Sprintf("Preview: %s done", step.Label))
+	}
+	if err := opsregistry.ReporterSetResult(reporter, result); err != nil {
+		reporter.Logger().Warn("dedup.run-all: could not store preview result", "error", err)
+	}
+	msg := fmt.Sprintf("Preview finished: %d step(s) would start child operations; nothing was changed", len(result.PreviewSkipped))
+	if result.RescorePreview != nil {
+		msg += fmt.Sprintf("; %d of %d waiting pairs would score differently", result.RescorePreview.Changed, result.RescorePreview.Inspected)
+	}
+	_ = reporter.UpdateProgress(total, total, msg)
+	_ = reporter.Log(slog.LevelInfo, msg)
 	return nil
 }
 
@@ -397,7 +480,8 @@ func (p *Plugin) runAllChild(ctx context.Context, rep sdk.Reporter, st *runAllSt
 			// Lineage only: children show under this run in Operations.
 			opts = append(opts, sdk.WithParent(parentID))
 		}
-		childID, err := p.registry.EnqueueOp(ctx, step.DefID, nil, opts...)
+		// Live, explicitly: see MODE in the file comment.
+		childID, err := p.registry.EnqueueOp(ctx, step.DefID, opmode.DryRunParams{DryRun: opmode.Live()}, opts...)
 		if err != nil {
 			return fmt.Errorf("%s: could not start %s: %w", step.Label, step.DefID, err)
 		}

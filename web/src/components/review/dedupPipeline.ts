@@ -1,5 +1,5 @@
 // file: web/src/components/review/dedupPipeline.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: 3f6b1d82-7a4e-4c90-b5d1-2e8f0a9c6d47
 // last-edited: 2026-09-28
 //
@@ -40,9 +40,12 @@ export const DEDUP_RUNS: Record<DedupRunKind, DedupRunInfo> = {
   rescan: { label: 'Full rescan', defId: 'dedup.full-scan' },
 };
 
-/** Starts the run's server op and returns its id. */
+/**
+ * Starts the run's server op for real and returns its id. 'all' sends
+ * dry_run=false explicitly: dedup.run-all previews when the mode is omitted.
+ */
 export async function startDedupRun(kind: DedupRunKind): Promise<string> {
-  const op = kind === 'all' ? await api.startDedupRunAll() : await api.triggerDedupScan();
+  const op = kind === 'all' ? await api.startDedupRunAll(false) : await api.triggerDedupScan();
   if (!op?.id) {
     // Without an id there is nothing to follow.
     throw new Error('the server did not return an operation id');
@@ -119,6 +122,29 @@ export async function followOperation(id: string, opts: FollowOptions = {}): Pro
     if (api.isOperationTerminal(op.status) && !isPausedForRestart(op.status)) return op;
     if (shouldStopFollowing?.()) return op;
     await sleep(pollIntervalMs);
+  }
+}
+
+/**
+ * Runs dedup.run-all as a PREVIEW (writes nothing: no child op starts, only the
+ * read-only score check runs) and returns its result, or null if it could not
+ * be run or read. Used to put numbers in the confirmation prompt; a failure
+ * here never blocks the prompt.
+ */
+export async function previewRunAll(
+  opts: { pollIntervalMs?: number; shouldStop?: () => boolean } = {}
+): Promise<DedupRunAllResult | null> {
+  try {
+    const op = await api.startDedupRunAll(true);
+    if (!op?.id) return null;
+    const final = await followOperation(op.id, {
+      pollIntervalMs: opts.pollIntervalMs,
+      shouldStopFollowing: opts.shouldStop,
+    });
+    if (final.status !== 'completed') return null;
+    return await readRunAllResult(op.id);
+  } catch {
+    return null;
   }
 }
 

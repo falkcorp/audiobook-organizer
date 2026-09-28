@@ -1,5 +1,5 @@
 // file: web/src/components/review/useDedupPipeline.tsx
-// version: 2.0.0
+// version: 2.1.0
 // guid: 8c2e5a17-4d93-4f6b-a0e8-71b3d9c4f25e
 // last-edited: 2026-09-28
 //
@@ -39,6 +39,7 @@ import {
   DEDUP_RUNS,
   autoMergeRisks,
   followOperation,
+  previewRunAll,
   OperationGoneError,
   isPausedForRestart,
   readRunAllResult,
@@ -51,7 +52,17 @@ type Toast = (message: string, severity?: 'success' | 'error' | 'info' | 'warnin
 type RunState =
   | { kind: 'idle' }
   | { kind: 'checking'; run: DedupRunKind }
-  | { kind: 'confirm'; run: DedupRunKind; risks: string[] }
+  | {
+      kind: 'confirm';
+      run: DedupRunKind;
+      risks: string[];
+      /**
+       * The dedup.run-all PREVIEW shown in the prompt: 'loading' while it
+       * runs, null when there is none (the rescan, whose op has no preview
+       * mode) or it could not be read. Never blocks "Run anyway".
+       */
+      preview: DedupRunAllResult | 'loading' | null;
+    }
   | {
       kind: 'running';
       run: DedupRunKind;
@@ -89,6 +100,7 @@ let runState: RunState = { kind: 'idle' };
 const runListeners = new Set<() => void>();
 let bindings: UseDedupPipelineOptions | null = null;
 let followGeneration = 0;
+let previewGeneration = 0;
 
 const STORAGE_KEY = 'review.dedupRun';
 
@@ -131,6 +143,7 @@ export function resetDedupPipelineForTests() {
   runState = { kind: 'idle' };
   bindings = null;
   followGeneration++;
+  previewGeneration++;
 }
 
 async function follow(run: DedupRunKind, opId: string) {
@@ -223,7 +236,19 @@ async function requestRun(run: DedupRunKind) {
   }
   const risks = autoMergeRisks(config ?? {}, run);
   if (risks.length > 0) {
-    setRunState({ kind: 'confirm', run, risks });
+    if (run !== 'all') {
+      setRunState({ kind: 'confirm', run, risks, preview: null });
+      return;
+    }
+    // Put real numbers in the prompt: run the op as a preview (writes
+    // nothing) while the dialog is open.
+    const gen = ++previewGeneration;
+    setRunState({ kind: 'confirm', run, risks, preview: 'loading' });
+    const preview = await previewRunAll({
+      pollIntervalMs: bindings?.pollIntervalMs,
+      shouldStop: () => gen !== previewGeneration || runState.kind !== 'confirm',
+    });
+    setRunState((s) => (s.kind === 'confirm' && gen === previewGeneration ? { ...s, preview } : s));
     return;
   }
   void startRun(run);
@@ -255,6 +280,28 @@ function resumeRemembered() {
     unreachable: false,
   });
   void follow(r.run, r.opId);
+}
+
+/** The preview's counts inside the confirmation prompt. */
+function previewSummary(preview: DedupRunAllResult | 'loading' | null): ReactNode {
+  if (preview === null) return null;
+  if (preview === 'loading') {
+    return (
+      <Typography variant="body2" component="p" sx={{ mb: 1 }} data-testid="dedup-pipeline-preview">
+        Checking what is waiting now (this changes nothing)…
+      </Typography>
+    );
+  }
+  const r = preview.rescore_preview;
+  const steps = (preview.preview_skipped ?? []).map((s) => s.label);
+  return (
+    <Typography variant="body2" component="p" sx={{ mb: 1 }} data-testid="dedup-pipeline-preview">
+      {r
+        ? `Right now ${(r.inspected ?? 0).toLocaleString()} pairs are waiting for review, and ${(r.changed ?? 0).toLocaleString()} would score differently under the latest rules. `
+        : ''}
+      {steps.length > 0 ? `Running it will: ${steps.join(', ')}.` : ''}
+    </Typography>
+  );
 }
 
 export function useDedupPipeline(options: UseDedupPipelineOptions) {
@@ -291,6 +338,7 @@ export function useDedupPipeline(options: UseDedupPipelineOptions) {
                 <li key={r}>{r}</li>
               ))}
             </ul>
+            {previewSummary(state.preview)}
             To review everything yourself instead, turn these off in{' '}
             <Link component={RouterLink} to={{ pathname: '/settings', hash: '#dedup' }}>
               Settings → Dedup

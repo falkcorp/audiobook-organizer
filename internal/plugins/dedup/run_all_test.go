@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/run_all_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ef555d0e-38d5-4c56-ae25-d1de6f868f64
 // last-edited: 2026-09-28
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -100,13 +101,14 @@ func (r *runAllReporter) lastCheckpoint(t *testing.T) runAllState {
 type runAllRegistry struct {
 	mu       sync.Mutex
 	defs     []string
+	params   []string // marshalled params of each enqueue
 	parents  []string
 	failDef  string
 	children *runAllOps
 }
 
 func (r *runAllRegistry) RegisterOp(sdk.OperationDef) error { return nil }
-func (r *runAllRegistry) EnqueueOp(_ context.Context, defID string, _ any, opts ...sdk.EnqueueOption) (string, error) {
+func (r *runAllRegistry) EnqueueOp(_ context.Context, defID string, params any, opts ...sdk.EnqueueOption) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if defID == r.failDef {
@@ -117,6 +119,8 @@ func (r *runAllRegistry) EnqueueOp(_ context.Context, defID string, _ any, opts 
 		f(&o)
 	}
 	r.defs = append(r.defs, defID)
+	b, _ := json.Marshal(params)
+	r.params = append(r.params, string(b))
 	r.parents = append(r.parents, o.ParentID)
 	id := fmt.Sprintf("child-%d-%s", len(r.defs), defID)
 	if r.children != nil {
@@ -194,6 +198,9 @@ func newRunAllPlugin(t *testing.T, embeddings bool) (*Plugin, *runAllRegistry, *
 	return p, reg, ops, &previews
 }
 
+// liveJSON is an explicit live request; `{}` is a preview.
+var liveJSON = json.RawMessage(`{"dry_run":false}`)
+
 func mustJSON(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -212,10 +219,20 @@ func TestRunAll_Def(t *testing.T) {
 	if def.ID != RunAllDefID || def.ResumePolicy != sdk.ResumeRestart || def.Liveness != sdk.LivenessManual {
 		t.Fatalf("def = %s resume=%v liveness=%v", def.ID, def.ResumePolicy, def.Liveness)
 	}
-	// A resumed row's params carry the checkpoint, so only a def-level dedupe
-	// can collapse a second button press onto the running run.
-	if !def.DedupeQueuedRuns || def.ConcurrencyKey == "" {
-		t.Fatalf("want DedupeQueuedRuns with a ConcurrencyKey, got %v / %q", def.DedupeQueuedRuns, def.ConcurrencyKey)
+	// DedupeQueuedRuns would collapse a live press onto a running preview.
+	if def.DedupeQueuedRuns || def.ConcurrencyKey == "" {
+		t.Fatalf("want a ConcurrencyKey and no DedupeQueuedRuns, got %v / %q", def.DedupeQueuedRuns, def.ConcurrencyKey)
+	}
+	// It writes through its children, so it must declare the write (which puts
+	// it under the write_op_modes.golden preview rule).
+	writes := false
+	for _, c := range def.Capabilities {
+		if c == sdk.CapLibraryWrite {
+			writes = true
+		}
+	}
+	if !writes {
+		t.Fatal("dedup.run-all must declare library.write")
 	}
 	found := false
 	for _, d := range (&Plugin{}).OperationDefs() {
@@ -232,7 +249,7 @@ func TestRunAll_FreshRunsStepsInOrder(t *testing.T) {
 	p, reg, _, previews := newRunAllPlugin(t, true)
 	rep := &runAllReporter{}
 
-	if err := p.runRunAll(context.Background(), json.RawMessage(`{}`), rep); err != nil {
+	if err := p.runRunAll(context.Background(), liveJSON, rep); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if got := reg.enqueuedDefs(); strings.Join(got, ",") != strings.Join(allChildDefs, ",") {
@@ -284,7 +301,7 @@ func TestRunAll_FreshRunsStepsInOrder(t *testing.T) {
 func TestRunAll_EmbeddingsOffSkipsThatStep(t *testing.T) {
 	p, reg, _, _ := newRunAllPlugin(t, false)
 	rep := &runAllReporter{}
-	if err := p.runRunAll(context.Background(), nil, rep); err != nil {
+	if err := p.runRunAll(context.Background(), liveJSON, rep); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	want := allChildDefs[1:]
@@ -301,7 +318,7 @@ func TestRunAll_EmbeddingsOffSkipsThatStep(t *testing.T) {
 func TestRunAll_CheckpointsCarryEveryKey(t *testing.T) {
 	p, _, _, _ := newRunAllPlugin(t, true)
 	rep := &runAllReporter{}
-	if err := p.runRunAll(context.Background(), nil, rep); err != nil {
+	if err := p.runRunAll(context.Background(), liveJSON, rep); err != nil {
 		t.Fatal(err)
 	}
 	sawChild := false
@@ -326,7 +343,7 @@ func TestRunAll_ResumeFollowsRecordedChild(t *testing.T) {
 		{Status: "running", ProgressCurrent: 10, ProgressTotal: 100},
 		{Status: "completed"},
 	}
-	params := mustJSON(t, runAllState{
+	params := mustJSON(t, runAllState{DryRun: opmode.Live(),
 		Plan:      []string{"embeddings", "acoustic", "find", "ai-review", "rescore-preview"},
 		StepIndex: 2,
 		ChildOpID: "old-find",
@@ -357,7 +374,7 @@ func TestRunAll_ResumeFollowsRecordedChild(t *testing.T) {
 
 func TestRunAll_ResumeCompletedChildAdvances(t *testing.T) {
 	p, reg, _, _ := newRunAllPlugin(t, true)
-	params := mustJSON(t, runAllState{
+	params := mustJSON(t, runAllState{DryRun: opmode.Live(),
 		Plan: []string{"find", "ai-review"}, StepIndex: 0, ChildOpID: "done-find",
 	})
 	if err := p.runRunAll(context.Background(), params, &runAllReporter{}); err != nil {
@@ -371,7 +388,7 @@ func TestRunAll_ResumeCompletedChildAdvances(t *testing.T) {
 func TestRunAll_ResumeInterruptedChildReEnqueues(t *testing.T) {
 	p, reg, ops, _ := newRunAllPlugin(t, true)
 	ops.scripts["requeued-away"] = []database.OperationV2Row{{Status: "interrupted_dropped"}}
-	params := mustJSON(t, runAllState{
+	params := mustJSON(t, runAllState{DryRun: opmode.Live(),
 		Plan: []string{"find", "ai-review"}, StepIndex: 0, ChildOpID: "requeued-away",
 	})
 	if err := p.runRunAll(context.Background(), params, &runAllReporter{}); err != nil {
@@ -386,7 +403,7 @@ func TestRunAll_ResumeFailedChildStops(t *testing.T) {
 	p, reg, ops, previews := newRunAllPlugin(t, true)
 	msg := "boom"
 	ops.scripts["bad"] = []database.OperationV2Row{{Status: "failed", ErrorMessage: &msg}}
-	params := mustJSON(t, runAllState{Plan: []string{"find", "rescore-preview"}, ChildOpID: "bad"})
+	params := mustJSON(t, runAllState{DryRun: opmode.Live(), Plan: []string{"find", "rescore-preview"}, ChildOpID: "bad"})
 	err := p.runRunAll(context.Background(), params, &runAllReporter{})
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v, want the child's failure", err)
@@ -399,7 +416,7 @@ func TestRunAll_ResumeFailedChildStops(t *testing.T) {
 func TestRunAll_ChildFailureStopsLaterSteps(t *testing.T) {
 	p, reg, ops, previews := newRunAllPlugin(t, true)
 	ops.byDef["acoustid.scan"] = []database.OperationV2Row{{Status: "running"}, {Status: "canceled"}}
-	err := p.runRunAll(context.Background(), nil, &runAllReporter{})
+	err := p.runRunAll(context.Background(), liveJSON, &runAllReporter{})
 	if err == nil || !strings.Contains(err.Error(), "Comparing audio fingerprints") {
 		t.Fatalf("err = %v", err)
 	}
@@ -414,7 +431,7 @@ func TestRunAll_ChildFailureStopsLaterSteps(t *testing.T) {
 func TestRunAll_EnqueueErrorStops(t *testing.T) {
 	p, reg, _, _ := newRunAllPlugin(t, true)
 	reg.failDef = "acoustid.scan"
-	if err := p.runRunAll(context.Background(), nil, &runAllReporter{}); err == nil {
+	if err := p.runRunAll(context.Background(), liveJSON, &runAllReporter{}); err == nil {
 		t.Fatal("want an error when a step cannot be enqueued")
 	}
 	if got := reg.enqueuedDefs(); strings.Join(got, ",") != "dedup.embed-scan" {
@@ -431,7 +448,7 @@ func TestRunAll_MirrorsChildProgress(t *testing.T) {
 		{Status: "completed"},
 	}
 	rep := &runAllReporter{}
-	params := mustJSON(t, runAllState{Plan: []string{"find"}})
+	params := mustJSON(t, runAllState{DryRun: opmode.Live(), Plan: []string{"find"}})
 	if err := p.runRunAll(context.Background(), params, rep); err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +490,7 @@ func TestRunAll_CancelDuringWaitReturnsContextError(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		cancel()
 	}()
-	err := p.runRunAll(ctx, mustJSON(t, runAllState{Plan: []string{"find", "ai-review"}}), rep)
+	err := p.runRunAll(ctx, mustJSON(t, runAllState{DryRun: opmode.Live(), Plan: []string{"find", "ai-review"}}), rep)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -493,7 +510,7 @@ func TestRunAll_QueuedFirstStepCheckpointsNonZeroHighWater(t *testing.T) {
 		{Status: "queued"}, {Status: "queued"}, {Status: "completed"},
 	}
 	rep := &runAllReporter{}
-	if err := p.runRunAll(context.Background(), mustJSON(t, runAllState{Plan: []string{"acoustic", "find"}}), rep); err != nil {
+	if err := p.runRunAll(context.Background(), mustJSON(t, runAllState{DryRun: opmode.Live(), Plan: []string{"acoustic", "find"}}), rep); err != nil {
 		t.Fatal(err)
 	}
 	// Find a checkpoint taken while step 0 was still in flight.
@@ -513,7 +530,7 @@ func TestRunAll_OperatorPauseKeepsParentAlive(t *testing.T) {
 	same := database.OperationV2Row{Status: "running", ProgressCurrent: 3, ProgressTotal: 10}
 	ops.byDef["dedup.full-scan"] = []database.OperationV2Row{same, same, same, {Status: "completed"}}
 	rep := &runAllReporter{}
-	if err := p.runRunAll(context.Background(), mustJSON(t, runAllState{Plan: []string{"find"}}), rep); err != nil {
+	if err := p.runRunAll(context.Background(), mustJSON(t, runAllState{DryRun: opmode.Live(), Plan: []string{"find"}}), rep); err != nil {
 		t.Fatal(err)
 	}
 	paused := 0
@@ -528,9 +545,65 @@ func TestRunAll_OperatorPauseKeepsParentAlive(t *testing.T) {
 	}
 }
 
+// Preview (the default for `{}`) must write nothing: no child op is enqueued,
+// no checkpoint names a child, and only the read-only rescore preview runs.
+func TestRunAll_PreviewWritesNothing(t *testing.T) {
+	for _, raw := range []json.RawMessage{nil, json.RawMessage(`{}`), json.RawMessage(`{"dry_run":true}`)} {
+		p, reg, _, previews := newRunAllPlugin(t, true)
+		rep := &runAllReporter{}
+		if err := p.runRunAll(context.Background(), raw, rep); err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if got := reg.enqueuedDefs(); len(got) != 0 {
+			t.Fatalf("%s: preview enqueued %v", raw, got)
+		}
+		if *previews != 1 {
+			t.Fatalf("%s: rescore preview ran %d times, want 1", raw, *previews)
+		}
+		for _, c := range rep.checkpoints {
+			if !strings.Contains(c, `"child_op_id":""`) {
+				t.Fatalf("%s: preview checkpoint names a child: %s", raw, c)
+			}
+		}
+		res, ok := rep.result.(RunAllResult)
+		if !ok || !res.DryRun || res.RescorePreview == nil {
+			t.Fatalf("%s: result = %+v", raw, rep.result)
+		}
+		var skipped []string
+		for _, s := range res.PreviewSkipped {
+			skipped = append(skipped, s.DefID)
+		}
+		if strings.Join(skipped, ",") != strings.Join(allChildDefs, ",") {
+			t.Fatalf("%s: preview_skipped = %v, want every child %v", raw, skipped, allChildDefs)
+		}
+	}
+}
+
+// A live run starts every child with an explicit dry_run=false, so a child
+// that later gains a preview-by-default mode still runs for real.
+func TestRunAll_LiveRunsChildrenInApplyMode(t *testing.T) {
+	p, reg, _, _ := newRunAllPlugin(t, true)
+	rep := &runAllReporter{}
+	if err := p.runRunAll(context.Background(), liveJSON, rep); err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.params) != len(allChildDefs) {
+		t.Fatalf("enqueued %d children, want %d", len(reg.params), len(allChildDefs))
+	}
+	for i, prm := range reg.params {
+		dry, err := opmode.ParseDryRun(reg.defs[i], json.RawMessage(prm))
+		if err != nil || dry {
+			t.Fatalf("child %s params %s resolve to dry_run=%v (err %v), want live", reg.defs[i], prm, dry, err)
+		}
+	}
+	if res := rep.result.(RunAllResult); res.DryRun || len(res.PreviewSkipped) != 0 {
+		t.Fatalf("live result = %+v", res)
+	}
+}
+
 func TestRunAll_NoOpStoreFailsClearly(t *testing.T) {
 	p := &Plugin{registry: &runAllRegistry{}}
-	if err := p.runRunAll(context.Background(), nil, &runAllReporter{}); err == nil ||
+	if err := p.runRunAll(context.Background(), liveJSON, &runAllReporter{}); err == nil ||
 		!strings.Contains(err.Error(), "operation store") {
 		t.Fatalf("err = %v", err)
 	}
