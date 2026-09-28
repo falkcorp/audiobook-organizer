@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_identifier_gate_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6e6934a1-44e9-45a5-b789-c71b541d7f74
-// last-edited: 2026-09-02
+// last-edited: 2026-09-27
 
 package dedup
 

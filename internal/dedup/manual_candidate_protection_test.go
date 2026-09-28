@@ -1,7 +1,7 @@
 // file: internal/dedup/manual_candidate_protection_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8c81c949-8a0f-4c52-9f6b-839b956d087d
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 package dedup
 

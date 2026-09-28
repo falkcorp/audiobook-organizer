@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_primary_gate_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2f7b4c19-6d83-4e50-9a12-7c5e0a8b3d46
-// last-edited: 2026-07-05
+// last-edited: 2026-09-27
 
 // Regression guard for DEDUP-CANDIDATE-EXPLOSION-2026-06-18: the exact-family
 // emitters must never produce a candidate that involves a NON-primary version-group

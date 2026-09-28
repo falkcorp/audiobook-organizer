@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
-// last-edited: 2026-09-01
+// last-edited: 2026-09-27
 //
 // The duplicate-candidate renderer: book against book.
 //
@@ -424,7 +424,7 @@ const CandidateRow = memo(function CandidateRow({
           <Typography variant="subtitle2" gutterBottom>
             How this score was reached
           </Typography>
-          <EvidencePanel evidence={dedupEvidence(candidate.score_breakdown)} />
+          <EvidencePanel evidence={dedupEvidence(candidate.score_breakdown, candidate.layer)} />
         </Box>
       )}
     </Box>

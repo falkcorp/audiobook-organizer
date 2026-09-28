@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/adapters.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: e21a8c47-3f60-4b95-8d1e-7a4c0b6f2953
-// last-edited: 2026-09-01
+// last-edited: 2026-09-27
 //
 // Lane payload -> Evidence. One adapter per lane, each choosing the evidence
 // kind that matches how that lane's number was actually computed.
@@ -16,7 +16,7 @@ import type { DedupScoreBreakdown, MetadataCandidate } from '../../../services/a
 import type { RecommendationEvidence } from '../../../lib/reviewPayload';
 import { evidenceFacts } from '../../../lib/reviewPayload';
 import type { ConfidenceEvidence, FactsEvidence, WaterfallEvidence } from './types';
-import { isPrimaryKind, signalLabel } from './signalLabels';
+import { exactRuleLabel, isPrimaryKind, signalLabel } from './signalLabels';
 
 /**
  * Dedup -> confidence rows, NO bar.
@@ -40,32 +40,49 @@ import { isPrimaryKind, signalLabel } from './signalLabels';
  * show a cosine distance where a probability belongs.
  */
 export function dedupEvidence(
-  breakdown: DedupScoreBreakdown | null | undefined
+  breakdown: DedupScoreBreakdown | null | undefined,
+  layer?: string
 ): ConfidenceEvidence {
   if (!breakdown) {
     return {
       kind: 'confidence',
       score: 0,
       signals: [],
-      emptyReason: 'No score breakdown recorded.',
+      // Every exact candidate written since 2026-09-27 records the rule that
+      // created it. One without a breakdown predates that; saying so beats a
+      // generic "nothing recorded" that reads like the pair has no reason.
+      emptyReason:
+        layer === 'exact'
+          ? 'Older exact-match candidate: the rule that matched it was not recorded. The next dedup scan records it.'
+          : 'No score breakdown recorded.',
     };
   }
+  const all = breakdown.signals ?? [];
+  // exact_rule signals are the provenance record of WHY the pair exists (see
+  // ExactRuleMatch); they carry no confidence, so they are split out of the
+  // confidence rows and shown as text.
+  const rules = all
+    .filter((s) => s.kind === 'exact_rule')
+    .map((s) => ({ rule: s.rule ?? '', label: exactRuleLabel(s.rule), detail: s.evidence }));
   return {
     kind: 'confidence',
     score: breakdown.score,
     band: breakdown.band,
     formula: breakdown.formula,
     emptyReason: breakdown.skipped_reason,
-    signals: (breakdown.signals ?? []).map((s) => ({
-      id: s.kind,
-      label: signalLabel(s.kind),
-      confidence: s.confidence,
-      raw: s.raw,
-      detail: s.evidence,
-      // Re-derived from the kind: the wire format does not carry it. See
-      // isPrimaryKind for why that is a stopgap.
-      primary: isPrimaryKind(s.kind),
-    })),
+    rules: rules.length > 0 ? rules : undefined,
+    signals: all
+      .filter((s) => s.kind !== 'exact_rule')
+      .map((s) => ({
+        id: s.kind,
+        label: signalLabel(s.kind),
+        confidence: s.confidence,
+        raw: s.raw,
+        detail: s.evidence,
+        // Re-derived from the kind: the wire format does not carry it. See
+        // isPrimaryKind for why that is a stopgap.
+        primary: isPrimaryKind(s.kind),
+      })),
   };
 }
 

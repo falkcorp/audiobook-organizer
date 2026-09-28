@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/signalLabels.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6d8b3f51-2a94-4c07-ae63-5f10c7d92b48
-// last-edited: 2026-09-01
+// last-edited: 2026-09-27
 //
 // Reviewer-facing names for dedup signal kinds, and the primary/supporting
 // rule, so the dupes rows can say WHY a pair is on screen without the reviewer
@@ -40,7 +40,30 @@ export const SIGNAL_LABELS: Record<string, string> = {
   embedding_med: 'Embedding (medium)',
   duration: 'Duration match',
   folder_path: 'Folder path',
+  same_path: 'Same path',
+  cover_text: 'Cover text',
+  exact_rule: 'Exact rule',
 };
+
+/**
+ * Exact-layer rule -> reviewer-facing name. The rule is `Signal.rule` on an
+ * `exact_rule` signal; the Go names are the ExactRule* constants in
+ * internal/dedup/exact_provenance.go. Unknown rules fall through to the raw
+ * name, like unknown kinds.
+ */
+export const EXACT_RULE_LABELS: Record<string, string> = {
+  file_hash: 'Identical file content',
+  isbn_asin: 'Shared ISBN/ASIN',
+  metadata_hash: 'Same metadata source record',
+  title_author: 'Same author and title',
+  duration_title: 'Same runtime and similar title',
+  organize_collision: 'Organize destination collision',
+};
+
+export function exactRuleLabel(rule: string | undefined): string {
+  if (!rule) return 'Exact rule';
+  return EXACT_RULE_LABELS[rule] ?? rule;
+}
 
 export function signalLabel(kind: string): string {
   return SIGNAL_LABELS[kind] ?? kind;
@@ -51,7 +74,8 @@ export function signalLabel(kind: string): string {
  * only a bounded additive boost after it.
  *
  * SOURCE OF TRUTH IS GO: `isSupportingKind` in internal/dedup/unified/score.go
- * (`k == SigDuration || k == SigFolderPath`). This is a DUPLICATE of that rule,
+ * (`k == SigDuration || k == SigFolderPath || k == SigSamePath || k == SigCoverText
+ * || k == SigExactRule`). This is a DUPLICATE of that rule,
  * and duplicating it is not the design -- it is a stopgap. The wire format
  * (models.Signal in internal/models/dedup_score.go) does not serialize the
  * primary/supporting classification at all, so the frontend cannot read the
@@ -61,7 +85,18 @@ export function signalLabel(kind: string): string {
  * Until then: if a kind is added to `isSupportingKind` in Go and not here, its
  * chip silently starts claiming to be the reason a pair exists.
  */
-const SUPPORTING_KINDS: ReadonlySet<string> = new Set(['duration', 'folder_path']);
+//
+// same_path, cover_text and exact_rule were added on 2026-09-27 to catch up with
+// Go (same_path and cover_text had already drifted out of this list, exactly as
+// warned above). exact_rule is a non-scoring provenance record -- the panel
+// renders it as the "why this pair exists" block, not as a confidence row.
+const SUPPORTING_KINDS: ReadonlySet<string> = new Set([
+  'duration',
+  'folder_path',
+  'same_path',
+  'cover_text',
+  'exact_rule',
+]);
 
 /**
  * Whether a signal kind can, on its own, be the reason a pair is a candidate.
@@ -92,9 +127,7 @@ export interface PrimarySignal {
  * visual weight in the exact glance this is meant to make reliable. The full
  * set, supporting included, is still in the evidence panel.
  */
-export function primarySignals(
-  breakdown: DedupScoreBreakdown | null | undefined
-): PrimarySignal[] {
+export function primarySignals(breakdown: DedupScoreBreakdown | null | undefined): PrimarySignal[] {
   if (!breakdown?.signals) return [];
   return breakdown.signals
     .filter((s) => isPrimaryKind(s.kind))

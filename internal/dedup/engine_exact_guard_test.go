@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_exact_guard_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4a1e6d3f-9c72-4a0b-8e35-1f6b2c7d9e40
-// last-edited: 2026-08-19
+// last-edited: 2026-09-27
 
 // Regression guard for DEDUP-INTRO-1 (residual): upsertExactCandidate is the
 // shared chokepoint for every exact-family emitter. It must reject pairs

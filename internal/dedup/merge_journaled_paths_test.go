@@ -1,7 +1,7 @@
 // file: internal/dedup/merge_journaled_paths_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8a4b1b59-2071-4042-bc11-03f0520916dd
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 // Regression tests for DA-02: the two UNATTENDED auto-merge triggers inside the
 // engine (exact-file-hash auto-merge on the FullScan Layer-1 pass, and

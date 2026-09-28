@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/EvidencePanel.tsx
-// version: 2.0.0
+// version: 2.1.0
 // guid: c07f4b91-8d23-4e56-a1b8-5f2c9d0e3a74
-// last-edited: 2026-09-01
+// last-edited: 2026-09-27
 //
 // The shared "why did it conclude that" panel, promoted out of the dedup lane
 // so all three review lanes explain themselves the same way.
@@ -132,8 +132,48 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
  * not a sum, and so has no decomposition into shares to draw. Restoring the bar
  * requires changing the scorer first, not the renderer.
  */
+/**
+ * The exact-layer rule(s) that created a pair, as visible text. This is the
+ * answer to "why is this pair here?" for every exact candidate, so it is never
+ * tucked into a hover tooltip: a reviewer who cannot see it cannot use it.
+ */
+function ExactRules({ rules }: { rules: NonNullable<ConfidenceEvidence['rules']> }) {
+  return (
+    <Box data-testid="evidence-exact-rules" sx={{ mb: 1.5 }}>
+      <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
+        Matched by exact rule
+      </Typography>
+      <Stack spacing={0.75}>
+        {rules.map((r, i) => (
+          <Box key={`${r.rule}-${i}`} data-testid={`exact-rule-${r.rule || 'unknown'}`}>
+            <Typography variant="body2" sx={{ fontWeight: 700 }}>
+              {r.label}
+            </Typography>
+            <Typography variant="body2" sx={{ color: 'text.secondary', overflowWrap: 'anywhere' }}>
+              {r.detail}
+            </Typography>
+          </Box>
+        ))}
+      </Stack>
+    </Box>
+  );
+}
+
 function ConfidenceView({ evidence }: { evidence: ConfidenceEvidence }) {
+  const rules = evidence.rules ?? [];
   if (evidence.signals.length === 0) {
+    if (rules.length > 0) {
+      // An exact-rule-only pair has no composed score; printing "Score: 0"
+      // beside a pair the exact layer calls a 100% match would be false.
+      return (
+        <Box data-testid="evidence-confidence">
+          <ExactRules rules={rules} />
+          <Typography variant="caption" sx={{ color: 'text.disabled' }}>
+            Not scored: exact-rule matches skip the composite score.
+          </Typography>
+        </Box>
+      );
+    }
     return (
       <EmptyNote>
         {evidence.emptyReason ?? 'No signal data available (pre-pipeline candidate).'}
@@ -143,6 +183,7 @@ function ConfidenceView({ evidence }: { evidence: ConfidenceEvidence }) {
 
   return (
     <Box data-testid="evidence-confidence">
+      {rules.length > 0 && <ExactRules rules={rules} />}
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1.5 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
           Score: {num(evidence.score, 1)}

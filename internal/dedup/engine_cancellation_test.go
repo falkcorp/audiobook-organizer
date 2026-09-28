@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_cancellation_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6a1d4c8e-9b32-4f71-8e05-3c9a7d2b5f16
-// last-edited: 2026-09-02
+// last-edited: 2026-09-27
 
 // Regression guard for the 2026-07-05 unresponsive-cancel incident: a
 // dedup.full-scan op cancellation took 90+ seconds to take effect and

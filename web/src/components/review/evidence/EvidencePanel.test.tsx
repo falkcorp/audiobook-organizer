@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/EvidencePanel.test.tsx
-// version: 2.0.0
+// version: 2.1.0
 // guid: 4f8b0d13-97a2-4c65-b83e-1e6a5c9f0d27
-// last-edited: 2026-09-01
+// last-edited: 2026-09-27
 
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -449,5 +449,86 @@ describe('score row zebra striping', () => {
     const bg = (el: HTMLElement) => getComputedStyle(el).backgroundColor;
     expect(bg(rows[0])).not.toBe(bg(rows[1]));
     expect(bg(rows[0])).toBe(bg(rows[2]));
+  });
+});
+
+// 2026-09-27: every exact candidate records the rule that created it as a
+// non-scoring `exact_rule` signal. The panel said "No score breakdown
+// recorded." for every exact pair before this, so nobody could tell why two
+// books titled "read by narrator" were on screen.
+describe('exact-rule provenance', () => {
+  const ruleOnly: DedupScoreBreakdown = {
+    score: 0,
+    band: '',
+    formula: 'v2',
+    signals: [
+      {
+        kind: 'exact_rule',
+        rule: 'title_author',
+        raw: 0,
+        confidence: 0,
+        evidence:
+          'Same author "Jae" (author id 2) and near-identical titles: "departure from the script" vs "departure from the script" (normalized; edit distance 0, limit 2).',
+      },
+    ],
+  };
+
+  it('shows the rule and its evidence as visible text, not a tooltip', () => {
+    renderPanel(dedupEvidence(ruleOnly, 'exact'));
+    const block = screen.getByTestId('exact-rule-title_author');
+    expect(block).toHaveTextContent('Same author and title');
+    expect(block).toHaveTextContent('near-identical titles');
+    expect(block).toHaveTextContent('edit distance 0');
+    expect(screen.queryByText(/No score breakdown recorded/i)).not.toBeInTheDocument();
+  });
+
+  it('does not claim a score of 0 for a rule-only pair', () => {
+    renderPanel(dedupEvidence(ruleOnly, 'exact'));
+    expect(screen.queryByText(/Score:/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Not scored/i)).toBeInTheDocument();
+    // The rule is not a confidence row.
+    expect(screen.queryAllByTestId('evidence-signal-row')).toHaveLength(0);
+  });
+
+  it('says a content rule paired a placeholder-titled pair', () => {
+    renderPanel(
+      dedupEvidence(
+        {
+          ...ruleOnly,
+          signals: [
+            {
+              kind: 'exact_rule',
+              rule: 'file_hash',
+              raw: 1,
+              confidence: 0,
+              evidence:
+                'Identical file content: sha256 4d0fb53d88268abd… (file f-1). Title "read by narrator" / "read by narrator" is a placeholder and was NOT used as evidence.',
+            },
+          ],
+        },
+        'exact'
+      )
+    );
+    const block = screen.getByTestId('exact-rule-file_hash');
+    expect(block).toHaveTextContent('Identical file content');
+    expect(block).toHaveTextContent('was NOT used as evidence');
+  });
+
+  it('shows the rule above the confidence rows of a scored pair', () => {
+    renderPanel(
+      dedupEvidence({
+        ...dedupBreakdown,
+        signals: [...dedupBreakdown.signals, ...ruleOnly.signals],
+      })
+    );
+    expect(screen.getByTestId('exact-rule-title_author')).toBeInTheDocument();
+    expect(screen.getByText(/Score: 97.5/)).toBeInTheDocument();
+    expect(screen.getAllByTestId('evidence-signal-row')).toHaveLength(3);
+  });
+
+  it('explains an older exact candidate with no breakdown', () => {
+    renderPanel(dedupEvidence(null, 'exact'));
+    expect(screen.getByText(/Older exact-match candidate/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No score breakdown recorded/i)).not.toBeInTheDocument();
   });
 });
