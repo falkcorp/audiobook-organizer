@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 package metafetch
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
@@ -436,6 +437,21 @@ func (mfs *Service) searchMetadataForBook(
 
 	in := mfs.resolveSearchInputs(book, query, author, narrator)
 	searchTitle, searchAuthor, bookAuthor, bookNarrator := in.title, in.author, in.bookAuthor, in.narrator
+
+	// A book whose own title is empty or a placeholder ("", "Unknown Title")
+	// is searched by a stand-in query (the batch fetch passes its transcribed
+	// title, metabatch.ResolveCandidateSearchQuery). The raw title must then
+	// play NO part in the search: it is not sent to a provider as a second
+	// query (a "" search answers with whatever the catalog ranks first -- two
+	// books titled "" "matched" Audible's "Bad in Bed" that way), it adds no
+	// words to the scorer, and it seeds no title variants. The per-provider
+	// fetch cache is keyed on the stand-in too: keyed on the row's "" title it
+	// would replay the junk an earlier "" search cached for this book.
+	rawTitle := book.Title
+	if organizer.IsPlaceholderTitle(rawTitle) && !organizer.IsPlaceholderTitle(searchTitle) {
+		rawTitle = searchTitle
+		searchIdentity = mfs.fetchCacheIdentityForTitle(book, searchTitle)
+	}
 	searchSeries := strings.TrimSpace(series)
 
 	var sources []metadata.MetadataSource
@@ -467,8 +483,8 @@ func (mfs *Service) searchMetadataForBook(
 	}
 
 	searchWords := SignificantWords(searchTitle)
-	if book.Title != searchTitle {
-		for w := range SignificantWords(book.Title) {
+	if rawTitle != searchTitle {
+		for w := range SignificantWords(rawTitle) {
 			searchWords[w] = true
 		}
 	}
@@ -622,9 +638,9 @@ func (mfs *Service) searchMetadataForBook(
 					}
 				}
 				// SearchByTitle with original title if different
-				if open() && searchTitle != book.Title {
+				if open() && searchTitle != rawTitle {
 					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-						return src.SearchByTitle(c, book.Title)
+						return src.SearchByTitle(c, rawTitle)
 					}); serr == nil {
 						allResults = append(allResults, results...)
 					} else {
@@ -642,7 +658,7 @@ func (mfs *Service) searchMetadataForBook(
 				// narrator-as-author retry. A book the literal queries found
 				// pays nothing here.
 				if len(allResults) == 0 {
-					for _, v := range extraTitleVariants(book.Title, searchTitle) {
+					for _, v := range extraTitleVariants(rawTitle, searchTitle) {
 						if !open() {
 							break
 						}

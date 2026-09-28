@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"golang.org/x/time/rate"
@@ -186,14 +187,35 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	// one place every trigger passes through. The previous arrangement put it
 	// in resumeInterruptedMetadataFetch, which only the startup path called,
 	// so any other resume trigger silently refetched.
+	// Running outcome counts: matched / no match / skipped / errors, plus how
+	// many books were answered from the candidate cache without a provider
+	// call. Until 2026-09-27 the op log carried only "fetched 880/44647 (from
+	// cache: 0, known empty: 0)" per book, so a run that matched 1,088 of
+	// 1,165 books looked identical to one that matched none; the per-book
+	// outcomes existed only as result rows nobody reads while the op runs.
+	// Every book now also gets its own outcome line (logCandidateOutcome) and
+	// the progress line carries the counts.
+	//
+	// Seeded below from this op's existing result rows, so a resumed run's
+	// "fetched N/M" and its counts describe the same books; counting only
+	// this attempt would read "fetched 900/1000 — matched 40" as 860 lost.
+	tally := &candidateFetchTally{}
+
 	if existing, rerr := store.GetOperationResults(opID); rerr == nil && len(existing) > 0 {
+		for _, row := range existing {
+			var prior CandidateResult
+			if json.Unmarshal([]byte(row.ResultJSON), &prior) != nil {
+				prior.Status = row.Status
+			}
+			tally.record(prior)
+		}
 		remaining := metabatch.RemainingBooksToFetch(existing, p.BookIDs)
 		skipped := len(p.BookIDs) - len(remaining)
 		alreadyDone += skipped
 		p.BookIDs = remaining
 		if skipped > 0 {
-			slog.Info("metadata-candidate-fetch resuming, skipping already-fetched books",
-				"opID", opID, "skipped", skipped, "remaining", len(p.BookIDs))
+			candidateFetchLog.Info("resuming, skipping already-fetched books: opID=%s skipped=%d remaining=%d",
+				logger.SanitizeLogValue(opID), skipped, len(p.BookIDs))
 		}
 		if len(p.BookIDs) == 0 {
 			_ = progress.UpdateProgress(totalBooks, totalBooks, "completed")
@@ -213,15 +235,6 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	close(workCh)
 
 	var completed int64 = int64(alreadyDone)
-	// How many books this attempt answered from the candidate cache without a
-	// provider call, split by why (see fetchCandidateForBook). Reported in the
-	// progress line and the finish log so "fetched 11,105" can no longer hide
-	// whether that meant 11,105 provider ladders or none.
-	var skippedCached, skippedKnownEmpty int64
-	progressLine := func(finished int64) string {
-		return fmt.Sprintf("fetched %d/%d (from cache: %d, known empty: %d)", finished, totalBooks,
-			atomic.LoadInt64(&skippedCached), atomic.LoadInt64(&skippedKnownEmpty))
-	}
 	var wg sync.WaitGroup
 	numWorkers := min(8, len(p.BookIDs))
 
@@ -238,7 +251,8 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 		ckptMu.Lock()
 		defer ckptMu.Unlock()
 		if err := reporter.Checkpoint(candidateFetchCheckpointState(p.BookIDs, done, totalBooks)); err != nil {
-			slog.Warn("metadata-candidate-fetch checkpoint failed", "opID", opID, "err", err)
+			candidateFetchLog.Warn("checkpoint failed: opID=%s err=%s",
+				logger.SanitizeLogValue(opID), logger.SanitizeLogValue(err.Error()))
 		}
 	}
 
@@ -249,27 +263,34 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 					return
 				}
 				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force)
-				switch result.Cached {
-				case candidateCachedCandidates:
-					atomic.AddInt64(&skippedCached, 1)
-				case candidateCachedKnownEmpty:
-					atomic.AddInt64(&skippedKnownEmpty, 1)
-				}
 				resultJSON, err := json.Marshal(result)
 				if err != nil {
-					slog.Warn("metadata-candidate-fetch marshal result for book", "bookID", bookID, "err", err)
+					// No result row, so the book stays owed (not marked done)
+					// and is retried on resume -- but it is an error for this
+					// attempt, and it is counted and logged as one.
+					tally.errored.Add(1)
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("error: %s — could not record the result: %s",
+						opLogBookRef(result.Book.Title, result.Book.Author, bookID, result.Book.FilePath), logger.SanitizeLogValue(err.Error())),
+						slog.String("book_id", logger.SanitizeLogValue(bookID)), slog.String("outcome", "error"))
 					continue
 				}
+				tally.record(result)
+				logCandidateOutcome(reporter, result)
 				if err := store.CreateOperationResult(&database.OperationResult{
 					OperationID: opID,
 					BookID:      bookID,
 					ResultJSON:  string(resultJSON),
 					Status:      result.Status,
 				}); err != nil {
-					slog.Warn("metadata-candidate-fetch store result for book", "bookID", bookID, "err", err)
+					// The outcome line above already went out; this says the
+					// row behind it was not persisted, so the review page will
+					// not show it.
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("error: %s — result row not saved: %s",
+						opLogBookRef(result.Book.Title, result.Book.Author, bookID, result.Book.FilePath), logger.SanitizeLogValue(err.Error())),
+						slog.String("book_id", logger.SanitizeLogValue(bookID)))
 				}
 				finished := atomic.AddInt64(&completed, 1)
-				_ = progress.UpdateProgress(int(finished), totalBooks, progressLine(finished))
+				_ = progress.UpdateProgress(int(finished), totalBooks, tally.progressLine(finished, totalBooks))
 				if done.mark(bookID) {
 					writeCheckpoint()
 				}
@@ -295,17 +316,22 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 		// last periodic one are not re-owed. The store does not take ctx, so
 		// this write succeeds under a cancelled context.
 		writeCheckpoint()
-		slog.Info("metadata-candidate-fetch canceled",
-			"opID", opID, "finalCount", finalCount, "totalBooks", totalBooks,
-			"skippedCached", atomic.LoadInt64(&skippedCached), "skippedKnownEmpty", atomic.LoadInt64(&skippedKnownEmpty))
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("canceled after %d/%d books — %s",
+			finalCount, totalBooks, tally.counts()))
+		candidateFetchLog.Info("canceled: opID=%s finalCount=%d totalBooks=%d %s",
+			logger.SanitizeLogValue(opID), finalCount, totalBooks, tally.counts())
 		return ctx.Err()
 	}
-	_ = progress.UpdateProgress(int(finalCount), totalBooks, "completed: "+progressLine(finalCount))
-	slog.Info("metadata-candidate-fetch done",
-		"opID", opID, "finalCount", finalCount, "totalBooks", totalBooks, "force", p.Force,
-		"skippedCached", atomic.LoadInt64(&skippedCached), "skippedKnownEmpty", atomic.LoadInt64(&skippedKnownEmpty))
+	summary := fmt.Sprintf("completed %d/%d books — %s", finalCount, totalBooks, tally.counts())
+	_ = progress.UpdateProgress(int(finalCount), totalBooks, summary)
+	candidateFetchLog.Info("done: opID=%s force=%v %s", logger.SanitizeLogValue(opID), p.Force, summary)
 	return nil
 }
+
+// candidateFetchLog is the process-log side of metadata.candidate-fetch
+// (internal/logger, printf-style); the per-book lines go to the op log through
+// the reporter.
+var candidateFetchLog = logger.New("metadata-candidate-fetch")
 
 func init() {
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {

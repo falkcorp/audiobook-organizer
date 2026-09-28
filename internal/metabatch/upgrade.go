@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // Background job that upgrades metadata from lower-quality sources
 // (Open Library, Google Books, Wikipedia) to richer ones (Hardcover,
@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -122,6 +123,31 @@ type UpgradeResult struct {
 	CursorEnd   string `json:"cursor_end"`
 	Wrapped     bool   `json:"wrapped"`
 }
+
+// upgradeOutcome is what tryUpgradeBook did with one book, for the op log.
+// Reason is set whenever Upgraded is false and no error was returned: it is
+// the "why not" that used to be a silent `false`.
+type upgradeOutcome struct {
+	Upgraded bool
+	Reason   string
+	// BookTitle is the book's title when it was read ("" before that).
+	BookTitle string
+	// From and To are the source slugs of an upgrade; CandidateTitle and
+	// Score describe the candidate that replaced the metadata.
+	From, To       string
+	CandidateTitle string
+	Score          float64
+}
+
+// Skip reasons reported on upgradeOutcome.Reason.
+const (
+	upgradeSkipUnranked         = "current source is unranked; it is never replaced"
+	upgradeSkipMarkedNoMatch    = "owner marked the book no match"
+	upgradeSkipNoResults        = "search returned no candidates"
+	upgradeSkipNoneOutrank      = "no candidate from a higher-ranked source"
+	upgradeSkipGateRefused      = "every higher-ranked candidate was refused by the gate"
+	upgradeSkipMarkedDuringDone = "owner marked the book no match while it was being searched"
+)
 
 // errOwnerManualOnly is tryUpgradeBook's skip for an owner-manual-only book.
 var errOwnerManualOnly = errors.New("owner-manual-only book (Doctor Who / Big Finish / Torchwood)")
@@ -274,7 +300,7 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 			if err := opsregistry.ScanStandDownCheckpoint(gctx); err != nil {
 				return err
 			}
-			upgraded, upgradeErr := s.tryUpgradeBook(gctx, it.bookID, it.sourceSlug)
+			outcome, upgradeErr := s.tryUpgradeBook(gctx, it.bookID, it.sourceSlug)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -286,10 +312,17 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 			case upgradeErr != nil:
 				upgradeLog.Warn("book failed: id=%s err=%s", logger.SanitizeLogValue(it.bookID), logger.SanitizeLogValue(upgradeErr.Error()))
 				result.Errors++
-			case upgraded:
+			case outcome.Upgraded:
 				result.Upgraded++
 			default:
 				result.Skipped++
+			}
+			// One op-log line per book: upgraded (from -> to, candidate,
+			// score), skipped (why) or error. Before 2026-09-28 only the
+			// process log saw upgrades and a skip was a silent `false`.
+			if progress != nil {
+				level, line := upgradeOutcomeLine(it.bookID, it.sourceSlug, outcome, upgradeErr)
+				_ = progress.Log(level, line, nil)
 			}
 			if progress != nil && (result.Checked%25 == 0 || result.Checked >= total) {
 				_ = progress.UpdateProgress(result.Checked, total, fmt.Sprintf(
@@ -358,35 +391,41 @@ func (s *MetadataUpgradeService) isOwnerManualOnly(book *database.Book) (bool, e
 }
 
 // tryUpgradeBook re-searches metadata for a single book and applies the best
-// candidate from a strictly higher-ranked source if the gate passes it.
-// Returns true if an upgrade was applied.
-func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, currentSourceSlug string) (bool, error) {
+// candidate from a strictly higher-ranked source if the gate passes it. The
+// outcome says whether an upgrade was applied and, when not, why.
+func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, currentSourceSlug string) (upgradeOutcome, error) {
+	var out upgradeOutcome
+	skip := func(reason string) (upgradeOutcome, error) {
+		out.Reason = reason
+		return out, nil
+	}
 	// An unranked current source is never replaced (metafetch.SourceOutranks
 	// refuses every candidate for it); skip before spending a search on it.
 	currentRank, ranked := metafetch.SourceRank(currentSourceSlug)
 	if !ranked {
-		return false, nil
+		return skip(upgradeSkipUnranked)
 	}
 	book, err := s.DB.GetBookByID(bookID)
 	if err != nil || book == nil {
-		return false, fmt.Errorf("book not found: %s", bookID)
+		return out, fmt.Errorf("book not found: %s", bookID)
 	}
+	out.BookTitle = book.Title
 	// The owner marked this book "no match": skip before the search so no
 	// provider quota is spent on a match that the apply would refuse anyway
 	// (ApplyMetadataCandidateWithOptions returns ErrMarkedNoMatch for an
 	// automatic apply, which this is: UnseenCandidate below).
 	if metafetch.IsMarkedNoMatch(book.MetadataReviewStatus) {
-		return false, nil
+		return skip(upgradeSkipMarkedNoMatch)
 	}
 	// Standing owner rule: Doctor Who / Big Finish / Torchwood are never
 	// touched by a bulk or automatic apply; the owner applies them by hand.
 	// Checked before the search so no provider quota is spent on them.
 	manual, merr := s.isOwnerManualOnly(book)
 	if merr != nil {
-		return false, merr
+		return out, merr
 	}
 	if manual {
-		return false, errOwnerManualOnly
+		return out, errOwnerManualOnly
 	}
 
 	// Run the full search pipeline — this goes through the
@@ -396,10 +435,10 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 	// cache only stores non-empty results.
 	resp, err := s.Fetcher.SearchMetadataForBook(bookID, book.Title)
 	if err != nil {
-		return false, fmt.Errorf("search failed: %w", err)
+		return out, fmt.Errorf("search failed: %w", err)
 	}
 	if resp == nil || len(resp.Results) == 0 {
-		return false, nil // no results at all
+		return skip(upgradeSkipNoResults)
 	}
 
 	// The gate's runtime check compares the canonical runtime (sum over the
@@ -417,7 +456,7 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 	// loosen the gate.
 	authors, aerr := database.LiveBookAuthorNames(s.DB, book)
 	if aerr != nil {
-		return false, fmt.Errorf("read authors: %w", aerr)
+		return out, fmt.Errorf("read authors: %w", aerr)
 	}
 
 	// Find the best candidate from a source that strictly OUTRANKS the
@@ -431,6 +470,11 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 	var bestCandidate *metafetch.MetadataCandidate
 	bestRank := currentRank
 	bestSlug := ""
+	// outranking counts candidates from a higher-ranked source, and
+	// refusals keeps the gate's reason for each one it refused, so a skip
+	// can say whether nothing outranked the book or the gate said no.
+	outranking := 0
+	var refusals []string
 	for i := range resp.Results {
 		c := &resp.Results[i]
 		candidateSlug := metafetch.MetadataSourceSlug(c.Source)
@@ -438,6 +482,7 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 			continue
 		}
 		candidateRank, _ := metafetch.SourceRank(candidateSlug)
+		outranking++
 
 		// The shared bulk-apply gate (internal/applygate), unchanged by the
 		// replace mode: the transcription hard gate (a book with a transcribed
@@ -453,6 +498,7 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 			logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(candidateSlug), c.Score, v.ScoreFloor,
 			v.AudioConfirmed, v.Allowed, v.Reason, logger.SanitizeLogValue(v.Detail))
 		if !v.Allowed {
+			refusals = append(refusals, fmt.Sprintf("%s %.2f: %s", candidateSlug, c.Score, v.Reason))
 			continue
 		}
 		if bestCandidate == nil || candidateRank > bestRank || (candidateRank == bestRank && c.Score > bestCandidate.Score) {
@@ -461,7 +507,10 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 	}
 
 	if bestCandidate == nil {
-		return false, nil // no higher-ranked source passed the gate
+		if outranking == 0 {
+			return skip(upgradeSkipNoneOutrank)
+		}
+		return skip(fmt.Sprintf("%s (%s)", upgradeSkipGateRefused, strings.Join(refusals, "; ")))
 	}
 
 	// Apply the upgrade. ApplyMetadataCandidateWithOptions handles:
@@ -513,19 +562,44 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		// The owner marked the book "no match" while this run searched it:
 		// a skip, not a failure.
 		if errors.Is(applyErr, metafetch.ErrMarkedNoMatch) {
-			return false, nil
+			return skip(upgradeSkipMarkedDuringDone)
 		}
 		// The write committed but its change history did not: the overwrite
 		// stands and cannot be undone. Counted as an error, and said so.
 		if errors.Is(applyErr, metafetch.ErrApplyHistoryIncomplete) {
-			return false, fmt.Errorf("applied %s -> %s but change history was not recorded (not undoable): %w",
+			return out, fmt.Errorf("applied %s -> %s but change history was not recorded (not undoable): %w",
 				currentSourceSlug, bestSlug, applyErr)
 		}
-		return false, fmt.Errorf("apply failed: %w", applyErr)
+		return out, fmt.Errorf("apply failed: %w", applyErr)
 	}
 
 	upgradeLog.Info("upgraded: id=%s from=%s to=%s score=%.3f title=%s",
 		logger.SanitizeLogValue(bookID), currentSourceSlug, logger.SanitizeLogValue(bestSlug),
 		bestCandidate.Score, logger.SanitizeLogValue(bestCandidate.Title))
-	return true, nil
+	out.Upgraded = true
+	out.From, out.To = currentSourceSlug, bestSlug
+	out.CandidateTitle, out.Score = bestCandidate.Title, bestCandidate.Score
+	return out, nil
+}
+
+// upgradeOutcomeLine renders one book's upgrade outcome for the op log and
+// returns its operations.ProgressReporter level.
+func upgradeOutcomeLine(bookID, currentSourceSlug string, out upgradeOutcome, err error) (level, msg string) {
+	book := fmt.Sprintf("%q", logger.SanitizeLogValue(bookID))
+	if out.BookTitle != "" {
+		book = fmt.Sprintf("%q", logger.SanitizeLogValue(out.BookTitle))
+	}
+	switch {
+	case errors.Is(err, errOwnerManualOnly):
+		return "info", fmt.Sprintf("skipped: %s — %s", book, errOwnerManualOnly.Error())
+	case err != nil:
+		return "warn", fmt.Sprintf("error: %s — %s", book, logger.SanitizeLogValue(err.Error()))
+	case out.Upgraded:
+		return "info", fmt.Sprintf("upgraded: %s — %s → %s, now %q (score %.2f)",
+			book, logger.SanitizeLogValue(out.From), logger.SanitizeLogValue(out.To),
+			logger.SanitizeLogValue(out.CandidateTitle), out.Score)
+	default:
+		return "info", fmt.Sprintf("skipped: %s (source %s) — %s",
+			book, logger.SanitizeLogValue(currentSourceSlug), logger.SanitizeLogValue(out.Reason))
+	}
 }

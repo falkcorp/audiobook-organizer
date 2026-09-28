@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.12.0
+// version: 4.13.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -228,17 +228,39 @@ func (s *Server) fetchCandidateForBook(
 		}
 	}
 
+	// An empty or placeholder title is never searched as-is: the catalogs
+	// answer "" with whatever they rank first (two books titled "" matched
+	// Audible's "Bad in Bed" while their intro said "Marvel's Planet Hulk").
+	// The transcribed title stands in when there is one; otherwise the book
+	// is skipped. The resolved query is used for EVERY step below -- the
+	// cache verdict, the fetch and the result -- because the cache verdict is
+	// keyed on the query: checking it with the raw title would re-serve the
+	// junk row an earlier "" search cached.
+	query := metabatch.ResolveCandidateSearchQuery(store, book)
+	if !query.Usable {
+		return CandidateResult{
+			Book:   bookInfo,
+			Status: "skipped",
+			Error:  "skipped: " + metabatch.SkipReasonNoUsableTitle,
+		}
+	}
+	withQuery := func(r CandidateResult) CandidateResult {
+		r.SearchQuery = query.Title
+		r.SearchQuerySource = query.Source
+		return r
+	}
+
 	// Skip obvious chapter fragments of shattered audiobooks (e.g. a book
 	// titled "06 Chapter 6"). Searching a catalog for these matches a random
 	// entry at ~100%+ confidence and writes garbage onto every chapter, so we
 	// short-circuit BEFORE any external search and surface a clear skipped
 	// status instead of a bogus "matched" candidate.
-	if metadata.IsLikelyChapterFragment(book.Title) {
-		return CandidateResult{
+	if metadata.IsLikelyChapterFragment(query.Title) {
+		return withQuery(CandidateResult{
 			Book:   bookInfo,
 			Status: "skipped",
 			Error:  "skipped: chapter fragment",
-		}
+		})
 	}
 
 	var authorHint []string
@@ -265,37 +287,37 @@ func (s *Server) fetchCandidateForBook(
 	// into every run); nil asks every provider.
 	var askOnly []string
 	if !force {
-		cached, verdict, ask := mfs.CachedBatchVerdict(book, book.Title, authorForHash)
+		cached, verdict, ask := mfs.CachedBatchVerdict(book, query.Title, authorForHash)
 		askOnly = ask
 		switch verdict {
 		case metafetch.BatchVerdictFreshCandidates:
-			result := candidateResultFromEntry(store, bookInfo, bookID, book.Title, cached)
+			result := candidateResultFromEntry(store, bookInfo, bookID, query.Title, cached)
 			result.Cached = candidateCachedCandidates
-			return result
+			return withQuery(result)
 		case metafetch.BatchVerdictKnownEmpty:
 			checked := "earlier"
 			if cached.LastEmptyFetchAt != nil {
 				checked = cached.LastEmptyFetchAt.UTC().Format("2006-01-02")
 			}
-			return CandidateResult{
+			return withQuery(CandidateResult{
 				Book:   bookInfo,
 				Status: "no_match",
 				Error: fmt.Sprintf("not refetched: every enabled provider returned nothing for this title/author (last checked %s); "+
 					"edit the title or author, enable another provider, or force a refetch to ask again", checked),
 				Cached: candidateCachedKnownEmpty,
-			}
+			})
 		}
 	}
 
-	entry, err := mfs.FetchAndCacheLimited(ctx, limiter, bookID, book.Title, authorForHash, "", "", metafetch.SearchOptions{OnlySources: askOnly})
+	entry, err := mfs.FetchAndCacheLimited(ctx, limiter, bookID, query.Title, authorForHash, "", "", metafetch.SearchOptions{OnlySources: askOnly})
 	if err != nil {
-		return CandidateResult{
+		return withQuery(CandidateResult{
 			Book:   bookInfo,
 			Status: "error",
 			Error:  fmt.Sprintf("search failed: %v", err),
-		}
+		})
 	}
-	return candidateResultFromEntry(store, bookInfo, bookID, book.Title, entry)
+	return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))
 }
 
 // candidateResultFromEntry turns a candidate-cache entry into the op's result

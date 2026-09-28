@@ -100,6 +100,12 @@ type CandidateResult struct {
 	// fresh cached candidate list, "known_empty" for a durable verdict that
 	// every enabled provider already answered these inputs with nothing.
 	Cached string `json:"cached,omitempty"`
+	// SearchQuery is the title the fetch searched by, and SearchQuerySource
+	// where it came from (SearchQuerySource* constants: the book's title, or
+	// its transcribed title when the title is empty or a placeholder). Empty
+	// when no search was attempted.
+	SearchQuery       string `json:"search_query,omitempty"`
+	SearchQuerySource string `json:"search_query_source,omitempty"`
 }
 
 // BatchFetchRequest is the JSON body for the batch candidate fetch handler.

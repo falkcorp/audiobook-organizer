@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package server
 
@@ -117,6 +117,25 @@ type applyOutcome struct {
 	// that said "applied" while a locked title was silently dropped would be
 	// lying by omission, so the op counts and logs these.
 	SkippedLocked []string
+	// BookTitle / BookAuthor are the book as it was when the plan read it,
+	// and Candidate the cached candidate the plan chose (nil when none was
+	// reached). Carried only so the op log can say WHICH book got WHAT --
+	// "book not applied" with a bare id was the whole trail before.
+	BookTitle  string
+	BookAuthor string
+	Candidate  *metafetch.MetadataCandidate
+}
+
+// withPlan stamps the plan's book and candidate onto an outcome.
+func (o applyOutcome) withPlan(plan cachedApplyPlan) applyOutcome {
+	if plan.Book != nil {
+		o.BookTitle = plan.Book.Title
+		if plan.Book.Author != nil {
+			o.BookAuthor = plan.Book.Author.Name
+		}
+	}
+	o.Candidate = plan.Candidate
+	return o
 }
 
 // Skip reason vocabulary, shared with the HTTP response shape in
@@ -464,7 +483,7 @@ func applyCachedCandidateForBookTimed(
 	applyStart := time.Now()
 	plan := planCachedApply(svc, books, id, claims, pin).withBulkMode(pin, mode)
 	if plan.Reason != "" {
-		return applyOutcome{Reason: plan.Reason, Err: plan.Err, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
+		return applyOutcome{Reason: plan.Reason, Err: plan.Err, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}.withPlan(plan)
 	}
 
 	// The apply below writes the database first and the files after. On
@@ -479,7 +498,7 @@ func applyCachedCandidateForBookTimed(
 	opts := plan.applyOptions()
 	if writeBack {
 		if err := svc.RenamePreflightWithOptions(id, *plan.Candidate, nil, opts); err != nil {
-			return applyOutcome{Reason: applySkipFileWorkWouldFail, Err: err, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
+			return applyOutcome{Reason: applySkipFileWorkWouldFail, Err: err, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}.withPlan(plan)
 		}
 	}
 
@@ -500,10 +519,10 @@ func applyCachedCandidateForBookTimed(
 	if aerr != nil && errors.Is(aerr, metafetch.ErrMarkedNoMatch) {
 		// Marked "no match" between the plan and the apply: nothing written,
 		// reported as the skip it is rather than a failure.
-		return applyOutcome{Reason: applySkipMarkedNoMatch, Err: aerr, Gate: plan.Gate}
+		return applyOutcome{Reason: applySkipMarkedNoMatch, Err: aerr, Gate: plan.Gate}.withPlan(plan)
 	}
 	if aerr != nil {
-		return applyOutcome{Reason: applySkipApplyFailed, Err: aerr, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
+		return applyOutcome{Reason: applySkipApplyFailed, Err: aerr, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}.withPlan(plan)
 	}
 	_ = svc.InvalidateCachedCandidates(id)
 	pt.Since(metafetch.PhaseApplyDB, applyStart)
@@ -512,7 +531,7 @@ func applyCachedCandidateForBookTimed(
 	// of them. resp is non-nil on a nil error (ApplyMetadataCandidate's
 	// contract), but the mocks in this package's tests return (nil, nil), and a
 	// nil deref here would turn "no response" into a crashed op.
-	out := applyOutcome{Applied: true, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed, OwnerReplace: plan.BulkReplace}
+	out := applyOutcome{Applied: true, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed, OwnerReplace: plan.BulkReplace}.withPlan(plan)
 	// Err is always errors.Join(HistoryErr, WriteBackErr): a later failure
 	// must never replace an earlier one, and errors.Is still finds either.
 	failWriteBack := func(err error) {
