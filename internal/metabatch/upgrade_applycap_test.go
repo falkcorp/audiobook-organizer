@@ -1,5 +1,5 @@
 // file: internal/metabatch/upgrade_applycap_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 2c9d5e71-8f4b-4a3e-b6d0-7e1c3a5f9d24
 // last-edited: 2026-09-27
 
@@ -43,6 +43,11 @@ func (s *capStubStore) GetBookAuthors(string) ([]database.BookAuthor, error) {
 func (s *capStubStore) GetAuthorByID(int) (*database.Author, error) {
 	return nil, errors.New("must not be reached")
 }
+func (s *capStubStore) GetSeriesByID(int) (*database.Series, error) {
+	return nil, errors.New("must not be reached")
+}
+func (s *capStubStore) GetOperationState(string) ([]byte, error) { return nil, nil }
+func (s *capStubStore) SaveOperationState(string, []byte) error  { return nil }
 func (s *capStubStore) GetBooksByTag(string) ([]string, error) {
 	s.tagLookups++
 	return nil, nil

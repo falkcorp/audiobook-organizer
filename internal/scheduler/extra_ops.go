@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-09-27
 
@@ -266,8 +266,10 @@ func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry)
 			if err != nil {
 				return err
 			}
-			msg := fmt.Sprintf("Metadata upgrade complete: checked %d, upgraded %d, skipped %d, errors %d",
-				result.Checked, result.Upgraded, result.Skipped, result.Errors)
+			msg := fmt.Sprintf("Metadata upgrade complete: checked %d, upgraded %d, skipped %d, "+
+				"owner-manual-only %d (Doctor Who / Big Finish / Torchwood), errors %d; sweep after %q -> %q (wrapped %v)",
+				result.Checked, result.Upgraded, result.Skipped, result.OwnerManualOnly, result.Errors,
+				result.CursorStart, result.CursorEnd, result.Wrapped)
 			_ = progress.Log("info", msg, nil)
 			p.Done(msg)
 			return nil
