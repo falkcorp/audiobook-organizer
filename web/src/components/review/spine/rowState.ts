@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d17c69b-0e83-4a25-91f6-7b2c8a034e51
-// last-edited: 2026-08-20
+// last-edited: 2026-09-27
 //
 // Row-state derivations and formatting, lifted verbatim from
 // MetadataReviewDialog so CompareSpine can reuse them rather than reimplement
@@ -134,4 +134,50 @@ export const RUNTIME_WARN_THRESHOLD_SEC = 600;
 
 export function runtimeDiffers(deltaSec: number | undefined | null): boolean {
   return Math.abs(deltaSec ?? 0) > RUNTIME_WARN_THRESHOLD_SEC;
+}
+
+/**
+ * The apply gate's runtime tolerance: `internal/applygate/evidence.go`
+ * RuntimeBlockRatio. A candidate more than 10% off the book's runtime is a
+ * runtime_mismatch there, and the gate refuses it; hiding the same rows here
+ * keeps the review list from offering what the gate would refuse.
+ *
+ * Mirrors the gate's rule, not RUNTIME_WARN_THRESHOLD_SEC above: that flat
+ * ten minutes is the spine's warning chip, and on a 40-hour book it flags a
+ * 2% difference the gate calls agreement.
+ */
+export const RUNTIME_BLOCK_RATIO = 0.1;
+
+/** The runtime inputs `runtimeDiffersFromBook` reads off a review row. */
+export interface RuntimeRow {
+  book: { duration_seconds?: number; runtime_lower_bound_seconds?: number };
+  candidate?: { duration_sec?: number } | null;
+}
+
+/**
+ * Whether a review row's candidate runtime is KNOWN to differ from the book's
+ * beyond the apply gate's tolerance (applygate checkRuntime).
+ *
+ *  - Complete book runtime (`duration_seconds`) and a candidate runtime:
+ *    |book - candidate| / book > 10%, strictly greater, as in the gate.
+ *  - Partial runtime (`runtime_lower_bound_seconds`): the true length is at
+ *    least the lower bound, so it proves a mismatch in one direction only --
+ *    the bound exceeds the candidate by more than 10% of the bound
+ *    (applygate lowerBoundContradicts).
+ *  - Anything else -- no candidate, no candidate runtime, no book runtime --
+ *    is unknown, and unknown is never hidden: it is not evidence of a
+ *    mismatch.
+ */
+export function runtimeDiffersFromBook(r: RuntimeRow): boolean {
+  const cand = r.candidate?.duration_sec ?? 0;
+  if (cand <= 0) return false;
+  const book = r.book.duration_seconds ?? 0;
+  if (book > 0) {
+    return Math.abs(book - cand) / book > RUNTIME_BLOCK_RATIO;
+  }
+  const lb = r.book.runtime_lower_bound_seconds ?? 0;
+  if (lb > cand) {
+    return (lb - cand) / lb > RUNTIME_BLOCK_RATIO;
+  }
+  return false;
 }

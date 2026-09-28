@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.21.0
+// version: 1.23.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-09-27
 //
@@ -19,8 +19,14 @@ import {
   saveSkipReplaceConfirm,
   useMetadataLane,
   PAGE_SIZE_FALLBACK,
-  STRICT_PRESET,
+  NORMAL_PRESET,
   DEFAULT_CONFIDENCE,
+  DEFAULT_REVIEW_LEVEL,
+  REVIEW_LEVELS,
+  loadReviewLevel,
+  loadLanguageFilter,
+  reviewLevelFilters,
+  type ReviewLevel,
 } from './useMetadataLane';
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
 
@@ -175,6 +181,11 @@ describe('summary reflects what the server says is reviewable', () => {
 beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
+  // The default review level (In-depth) hides skipped, multi-book and
+  // runtime-mismatched rows. The suites below test the lane's other behaviour
+  // and were written against no preset, so they start at Off; the review-level
+  // and runtime suites clear this again to test the default itself.
+  window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_LEVEL, 'off');
   toast.mockReset();
 });
 
@@ -328,30 +339,140 @@ describe('persisted page size', () => {
   });
 });
 
-describe('strict preset', () => {
-  it('sets all three members together and persists', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.loading).toBe(false));
+describe('review level slider', () => {
+  beforeEach(() => window.localStorage.clear());
+  // Owner ruling 2026-09-27: Off -> Normal (the old Strict review preset) ->
+  // In-depth (+ hide runtime differences) -> Strict (+ both transcription
+  // filters). Cumulative, and every level writes every filter it owns.
+  const expected: Record<ReviewLevel, ReturnType<typeof reviewLevelFilters>> = {
+    off: {
+      hideSkipped: false,
+      hideMultiBook: false,
+      confidenceThreshold: DEFAULT_CONFIDENCE,
+      hideRuntimeDifferences: false,
+      onlyWithTranscription: false,
+      onlyTranscriptionMatched: false,
+    },
+    normal: {
+      hideSkipped: NORMAL_PRESET.hideSkipped,
+      hideMultiBook: NORMAL_PRESET.hideMultiBook,
+      confidenceThreshold: NORMAL_PRESET.confidenceThreshold,
+      hideRuntimeDifferences: false,
+      onlyWithTranscription: false,
+      onlyTranscriptionMatched: false,
+    },
+    indepth: {
+      hideSkipped: true,
+      hideMultiBook: true,
+      confidenceThreshold: 190,
+      hideRuntimeDifferences: true,
+      onlyWithTranscription: false,
+      onlyTranscriptionMatched: false,
+    },
+    strict: {
+      hideSkipped: true,
+      hideMultiBook: true,
+      confidenceThreshold: 190,
+      hideRuntimeDifferences: true,
+      onlyWithTranscription: true,
+      onlyTranscriptionMatched: true,
+    },
+  };
 
-    act(() => result.current.setStrictPreset(true));
-
-    expect(result.current.filters.hideSkipped).toBe(STRICT_PRESET.hideSkipped);
-    expect(result.current.filters.hideMultiBook).toBe(STRICT_PRESET.hideMultiBook);
-    expect(result.current.filters.confidenceThreshold).toBe(STRICT_PRESET.confidenceThreshold);
-    expect(window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET)).toBe('true');
+  it.each(REVIEW_LEVELS.map((l) => [l]))('%s sets exactly its filters', (level) => {
+    expect(reviewLevelFilters(level)).toEqual(expected[level]);
   });
 
-  it('returns the threshold to the default when switched off', async () => {
+  it('is cumulative: every filter a level turns on stays on above it', () => {
+    for (let i = 1; i < REVIEW_LEVELS.length; i++) {
+      const lower = reviewLevelFilters(REVIEW_LEVELS[i - 1]);
+      const upper = reviewLevelFilters(REVIEW_LEVELS[i]);
+      for (const [k, v] of Object.entries(lower)) {
+        if (v === true) expect(upper[k as keyof typeof upper]).toBe(true);
+      }
+      expect(upper.confidenceThreshold).toBeGreaterThanOrEqual(lower.confidenceThreshold);
+    }
+  });
+
+  it('defaults to In-depth with nothing stored', async () => {
+    expect(DEFAULT_REVIEW_LEVEL).toBe('indepth');
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.reviewLevel).toBe('indepth');
+    expect(result.current.filters.hideRuntimeDifferences).toBe(true);
+    expect(result.current.filters.confidenceThreshold).toBe(190);
+    expect(result.current.levelCustomised).toBe(false);
+  });
+
+  it('writes every owned filter when moving down, and persists the level', async () => {
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    act(() => result.current.setStrictPreset(true));
-    act(() => result.current.setStrictPreset(false));
+    act(() => result.current.setReviewLevel('strict'));
+    expect(result.current.filters.onlyWithTranscription).toBe(true);
+    expect(result.current.filters.onlyTranscriptionMatched).toBe(true);
 
-    expect(result.current.filters.confidenceThreshold).toBe(DEFAULT_CONFIDENCE);
-    expect(result.current.filters.hideMultiBook).toBe(false);
+    act(() => result.current.setReviewLevel('indepth'));
+    expect(result.current.filters.onlyWithTranscription).toBe(false);
+    expect(result.current.filters.onlyTranscriptionMatched).toBe(false);
+    expect(result.current.filters.hideRuntimeDifferences).toBe(true);
+
+    act(() => result.current.setReviewLevel('off'));
+    expect(result.current.filters).toMatchObject(expected.off);
+    expect(window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_LEVEL)).toBe('off');
+  });
+
+  it('keeps the level when a switch is flipped by hand, and says it is customised', async () => {
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => result.current.setFilters({ hideRuntimeDifferences: false }));
+    expect(result.current.reviewLevel).toBe('indepth');
+    expect(result.current.levelCustomised).toBe(true);
+  });
+
+  it('migrates the old Strict review boolean', () => {
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET, 'true');
+    expect(loadReviewLevel()).toBe('normal');
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET, 'false');
+    expect(loadReviewLevel()).toBe('off');
+    window.localStorage.removeItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET);
+    expect(loadReviewLevel()).toBe('indepth');
+    // The new key wins over the legacy one.
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET, 'true');
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_LEVEL, 'strict');
+    expect(loadReviewLevel()).toBe('strict');
+  });
+
+  it('saving the level retires the legacy key', async () => {
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET, 'true');
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.reviewLevel).toBe('normal');
+    act(() => result.current.setReviewLevel('indepth'));
+    expect(window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET)).toBeNull();
+    expect(window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_LEVEL)).toBe('indepth');
+  });
+
+  it('survives blocked storage: In-depth, and the lane still loads', async () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('blocked', 'SecurityError');
+    });
+    try {
+      expect(loadReviewLevel()).toBe('indepth');
+      expect(loadLanguageFilter()).toBe(true);
+      expect(loadReviewPageSize()).toBe(25);
+      vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
+      const { result } = renderHook(() => useMetadataLane(toast));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.reviewLevel).toBe('indepth');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -411,32 +532,44 @@ describe('hideMultiBook', () => {
 });
 
 describe('hideRuntimeDifferences', () => {
-  it('defaults off, then hides only rows whose known runtime differs', async () => {
-    // A missing duration is unknown, not a mismatch. This is deliberately
-    // tested alongside both threshold cases so the switch cannot become a
-    // blanket "only rows with duration" filter during a later refactor.
+  beforeEach(() => window.localStorage.clear());
+  // Mirrors the apply gate (applygate checkRuntime): hidden only when the
+  // candidate is more than 10% off a KNOWN book runtime. Unknown on either
+  // side is kept -- not evidence of a mismatch.
+  function withRuntime(
+    id: string,
+    book: Partial<api.CandidateBookInfo>,
+    durationSec: number | undefined
+  ) {
+    const r = makeResult(id, {}, durationSec === undefined ? {} : { duration_sec: durationSec });
+    return { ...r, book: { ...r.book, ...book } } as api.CandidateResult;
+  }
+
+  it('is on by default (In-depth), and hides only known >10% differences', async () => {
     const rows = [
-      makeResult('same', {}, { duration_delta_sec: 600 }),
-      makeResult('different', {}, { duration_delta_sec: 601 }),
-      makeResult('unknown', {}, {}),
+      withRuntime('ten-percent', { duration_seconds: 36000 }, 32400), // exactly 10%: kept
+      withRuntime('eleven-percent', { duration_seconds: 36000 }, 32000), // >10%: hidden
+      withRuntime('no-cand-runtime', { duration_seconds: 36000 }, undefined),
+      withRuntime('no-book-runtime', {}, 32000),
+      // Partial: lower bound 10 h proves a 5 h candidate wrong.
+      withRuntime('partial-proves', { runtime_lower_bound_seconds: 36000 }, 18000),
+      // Partial: the candidate is LONGER than the bound -- nothing proven.
+      withRuntime('partial-unknown', { runtime_lower_bound_seconds: 18000 }, 36000),
     ];
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload(rows));
 
     const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(3));
+    await waitFor(() => expect(result.current.results).toHaveLength(6));
 
-    expect(result.current.filters.hideRuntimeDifferences).toBe(false);
-    expect(result.current.filteredResults.map((r) => r.book.id)).toEqual([
-      'same',
-      'different',
-      'unknown',
-    ]);
-
-    act(() => result.current.setFilters({ hideRuntimeDifferences: true }));
-
-    await waitFor(() =>
-      expect(result.current.filteredResults.map((r) => r.book.id)).toEqual(['same', 'unknown'])
+    expect(result.current.filters.hideRuntimeDifferences).toBe(true);
+    expect(result.current.filteredResults.map((r) => r.book.id).sort()).toEqual(
+      ['no-book-runtime', 'no-cand-runtime', 'partial-unknown', 'ten-percent'].sort()
     );
+    expect(result.current.runtimeHiddenCount).toBe(2);
+
+    act(() => result.current.setFilters({ hideRuntimeDifferences: false }));
+    await waitFor(() => expect(result.current.filteredResults).toHaveLength(6));
+    expect(result.current.runtimeHiddenCount).toBe(0);
   });
 });
 

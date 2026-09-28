@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.9.0
+// version: 1.10.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-09-27
 //
@@ -310,12 +310,14 @@ export function ReviewWorkspace() {
             scope: 'selection',
             startsGroup: true,
             disabledReason:
-              metadata.selectedIds.size === 0 ? 'Select one or more books first.' : undefined,
+              metadata.applicableSelectedIds.length === 0
+                ? 'Select one or more books with a candidate first.'
+                : undefined,
             run: () =>
               metadata.dispatch({
                 lane: 'metadata',
                 type: 'applySelected',
-                ids: [...metadata.selectedIds],
+                ids: metadata.applicableSelectedIds,
               }),
           },
           {
@@ -399,6 +401,7 @@ export function ReviewWorkspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       metadata.selectedIds,
+      metadata.applicableSelectedIds,
       metadata.allVisiblePendingIds,
       metadata.filteredResults,
       metadata.dispatch,

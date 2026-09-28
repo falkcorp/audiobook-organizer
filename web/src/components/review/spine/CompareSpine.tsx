@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.9.0
+// version: 1.10.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
 // last-edited: 2026-09-27
 //
@@ -506,6 +506,10 @@ const CompactRow = memo(function CompactRow({
               <Chip label="No match" size="small" sx={{ ml: 1 }} />
             ) : r.status === 'error' ? (
               <Chip label="Error" size="small" color="error" sx={{ ml: 1 }} />
+            ) : r.status === 'decode_error' ? (
+              <Chip label="Candidate will not decode" size="small" color="error" sx={{ ml: 1 }} />
+            ) : r.status === 'no_candidates' || r.status === 'resolved_no_candidates' ? (
+              <Chip label="No candidate" size="small" sx={{ ml: 1 }} />
             ) : null}
           </Typography>
         </Box>

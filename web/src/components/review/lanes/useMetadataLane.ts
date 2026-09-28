@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.20.0
+// version: 1.21.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-27
 //
@@ -46,7 +46,7 @@ import * as api from '../../../services/api';
 import { isAuthRedirectError } from '../../../utils/apiFetch';
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
 import type { CandidateGroup, SpineContext } from '../spine/CompareSpine';
-import { runtimeDiffers, type RowState } from '../spine/rowState';
+import { runtimeDiffersFromBook, type RowState } from '../spine/rowState';
 import type { MetadataAction } from '../reviewActions';
 
 // Upper bound on how long a dispatched apply keeps its rows protected from
@@ -123,23 +123,129 @@ export const PAGE_SIZE_OPTIONS = [25, 50, 100];
 export const PAGE_SIZE_FALLBACK = 50;
 
 /**
- * The "Strict review" preset: three filters that were always being set together
- * by hand. 190 is above 100 on purpose -- candidate scores are sums that
- * routinely exceed 100%, so 190 means "several strong signals agree".
+ * The "Normal review" preset: three filters that were always being set together
+ * by hand. It was called "Strict review" until 2026-09-27, when the owner made
+ * the switch a four-stop slider and renamed this level. 190 is above 100 on
+ * purpose -- candidate scores are sums that routinely exceed 100%, so 190 means
+ * "several strong signals agree".
  */
-export const STRICT_PRESET = {
+export const NORMAL_PRESET = {
   hideSkipped: true,
   hideMultiBook: true,
   confidenceThreshold: 190,
 } as const;
 
-/** Default min-confidence when the preset is OFF. */
+/** Default min-confidence when no review level is on. */
 export const DEFAULT_CONFIDENCE = 85;
+
+/**
+ * The review-level slider (owner ruling 2026-09-27). The levels are
+ * CUMULATIVE -- each turns on everything the level below it does:
+ *
+ *   off      no preset
+ *   normal   NORMAL_PRESET (the old "Strict review" switch, unchanged)
+ *   indepth  normal + Hide runtime differences
+ *   strict   indepth + Has transcription + Transcription matched
+ */
+export type ReviewLevel = 'off' | 'normal' | 'indepth' | 'strict';
+export const REVIEW_LEVELS: readonly ReviewLevel[] = ['off', 'normal', 'indepth', 'strict'];
+/** In-depth: the owner asked for runtime differences hidden by default. */
+export const DEFAULT_REVIEW_LEVEL: ReviewLevel = 'indepth';
+
+export const REVIEW_LEVEL_LABELS: Record<ReviewLevel, string> = {
+  off: 'Off',
+  normal: 'Normal review',
+  indepth: 'In-depth review',
+  strict: 'Strict review',
+};
+
+/** The filters a review level owns. */
+export type ReviewLevelFilters = Pick<
+  MetadataFilters,
+  | 'hideSkipped'
+  | 'hideMultiBook'
+  | 'confidenceThreshold'
+  | 'hideRuntimeDifferences'
+  | 'onlyWithTranscription'
+  | 'onlyTranscriptionMatched'
+>;
+
+/**
+ * Every filter a level owns, with its value at that level -- including the
+ * ones the level leaves OFF. Setting a level writes all six, so moving from
+ * Strict down to In-depth turns the transcription filters back off instead of
+ * leaving them behind.
+ */
+export function reviewLevelFilters(level: ReviewLevel): ReviewLevelFilters {
+  const rank = REVIEW_LEVELS.indexOf(level);
+  const normal = rank >= 1;
+  const indepth = rank >= 2;
+  const strict = rank >= 3;
+  return {
+    hideSkipped: normal && NORMAL_PRESET.hideSkipped,
+    hideMultiBook: normal && NORMAL_PRESET.hideMultiBook,
+    confidenceThreshold: normal ? NORMAL_PRESET.confidenceThreshold : DEFAULT_CONFIDENCE,
+    hideRuntimeDifferences: indepth,
+    onlyWithTranscription: strict,
+    onlyTranscriptionMatched: strict,
+  };
+}
+
+/** Whether the filters still hold exactly what `level` sets. */
+export function filtersMatchLevel(filters: MetadataFilters, level: ReviewLevel): boolean {
+  const want = reviewLevelFilters(level);
+  return (Object.keys(want) as Array<keyof ReviewLevelFilters>).every(
+    (k) => filters[k] === want[k]
+  );
+}
+
+function isReviewLevel(v: string | null): v is ReviewLevel {
+  return v !== null && (REVIEW_LEVELS as readonly string[]).includes(v);
+}
+
+/**
+ * The persisted level, per browser. Migrates the old Strict review boolean:
+ * a stored 'true' becomes Normal (the same filters under the new name), a
+ * stored 'false' -- only ever written when someone turned the switch off --
+ * becomes Off. Nothing stored, an unrecognised value, or blocked storage reads
+ * as the default, In-depth.
+ */
+export function loadReviewLevel(): ReviewLevel {
+  if (typeof window === 'undefined') return DEFAULT_REVIEW_LEVEL;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_LEVEL);
+    if (isReviewLevel(raw)) return raw;
+    const legacy = window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET);
+    if (legacy === 'true') return 'normal';
+    if (legacy === 'false') return 'off';
+    return DEFAULT_REVIEW_LEVEL;
+  } catch {
+    // Storage blocked (private mode, sandboxed frame): the default.
+    return DEFAULT_REVIEW_LEVEL;
+  }
+}
+
+export function saveReviewLevel(level: ReviewLevel): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_LEVEL, level);
+    // Migrated: the level key is authoritative from now on.
+    window.localStorage.removeItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET);
+  } catch {
+    // Private-mode / quota failure: the level still applies this session.
+  }
+}
 
 export function loadLanguageFilter(): boolean {
   if (typeof window === 'undefined') return true;
-  const raw = window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_LANGUAGE_FILTER);
-  return raw === null ? true : raw === 'true';
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_LANGUAGE_FILTER);
+    return raw === null ? true : raw === 'true';
+  } catch {
+    // Storage blocked: the default (on). Reading used to throw here and take
+    // the whole lane down with it.
+    return true;
+  }
 }
 
 export function saveLanguageFilter(on: boolean): void {
@@ -148,20 +254,6 @@ export function saveLanguageFilter(on: boolean): void {
     window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_LANGUAGE_FILTER, String(on));
   } catch {
     // Private-mode / quota failure: the filter still applies this session.
-  }
-}
-
-export function loadStrictPreset(): boolean {
-  if (typeof window === 'undefined') return false;
-  return window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET) === 'true';
-}
-
-export function saveStrictPreset(on: boolean): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET, String(on));
-  } catch {
-    // Private-mode / quota failure: the preset still applies this session.
   }
 }
 
@@ -253,7 +345,13 @@ export interface PendingReplace {
 
 export function loadReviewPageSize(): number {
   if (typeof window === 'undefined') return 25;
-  const raw = window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE);
+  let raw: string | null;
+  try {
+    raw = window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE);
+  } catch {
+    // Storage blocked: the default rather than a crashed lane.
+    return 25;
+  }
   if (raw === null) return 25;
 
   const n = Number(raw);
@@ -414,6 +512,57 @@ export interface MetadataLaneSummary {
   resolved_no_candidates?: number;
 }
 
+/**
+ * A summary chip the reviewer clicked to see exactly the books it counts.
+ * While one is active the list is those books and nothing else -- every other
+ * filter is paused -- so the number on the chip is the number of rows shown.
+ *
+ *   matched / no_match / total    reviewable rows (status matched / no_match / all)
+ *   errors                        candidates that will not decode
+ *   no_candidates                 nobody has ruled on it, no candidate stored
+ *   resolved_no_candidates        ruled on, candidate gone
+ *   stale                         every non-orphaned row past the cache TTL
+ *
+ * The last four need the server's unreviewable bucket, loaded on first use.
+ */
+export type ChipFilter =
+  | 'matched'
+  | 'no_match'
+  | 'total'
+  | 'errors'
+  | 'no_candidates'
+  | 'resolved_no_candidates'
+  | 'stale';
+
+const CHIPS_NEEDING_UNREVIEWABLE: ReadonlySet<ChipFilter> = new Set<ChipFilter>([
+  'errors',
+  'no_candidates',
+  'resolved_no_candidates',
+  'stale',
+]);
+
+/** Whether a row came from the unreviewable bucket (it has no candidate). */
+export function isUnreviewableRow(r: CandidateResult): boolean {
+  return (
+    r.status === 'no_candidates' ||
+    r.status === 'resolved_no_candidates' ||
+    r.status === 'decode_error'
+  );
+}
+
+/**
+ * Whether "Search again" would be skipped for this book because it is marked
+ * no-match: the fetch op never searches for a book the owner ruled has no
+ * match, force or not. A reviewable `no_match` row IS that mark (the server
+ * derives the status from it); an unreviewable row carries it in
+ * review_status; and a row rejected in this session carries it in row state.
+ */
+export function isMarkedNoMatch(r: CandidateResult | undefined, state?: RowState): boolean {
+  if (state === 'rejected') return true;
+  if (!r) return false;
+  return r.status === 'no_match' || r.review_status === 'no_match';
+}
+
 export interface MetadataFilters {
   sourceFilter: string | null;
   confidenceThreshold: number;
@@ -436,21 +585,17 @@ export interface MetadataFilters {
   onlyTranscriptionMatched: boolean;
 }
 
-function initialFilters(): MetadataFilters {
-  const strict = loadStrictPreset();
+function initialFilters(level: ReviewLevel): MetadataFilters {
   return {
     sourceFilter: null,
-    confidenceThreshold: strict ? STRICT_PRESET.confidenceThreshold : DEFAULT_CONFIDENCE,
     titleFilter: '',
     hideApplied: true,
     hideRejected: true,
-    hideSkipped: strict && STRICT_PRESET.hideSkipped,
     hideNoMatch: true,
-    hideRuntimeDifferences: false,
-    hideMultiBook: strict && STRICT_PRESET.hideMultiBook,
     matchLanguage: loadLanguageFilter(),
-    onlyWithTranscription: false,
-    onlyTranscriptionMatched: false,
+    // hideSkipped, hideMultiBook, confidenceThreshold, hideRuntimeDifferences
+    // and the two transcription filters all come from the level.
+    ...reviewLevelFilters(level),
   };
 }
 
@@ -493,8 +638,52 @@ export interface MetadataLane {
 
   filters: MetadataFilters;
   setFilters: (patch: Partial<MetadataFilters>) => void;
-  strictPreset: boolean;
-  setStrictPreset: (on: boolean) => void;
+  /**
+   * The review-level slider. Picking a level writes every filter it owns (see
+   * reviewLevelFilters). Flipping one of those switches by hand afterwards
+   * leaves the level where it is; `levelCustomised` then says the switches no
+   * longer match it.
+   */
+  reviewLevel: ReviewLevel;
+  setReviewLevel: (level: ReviewLevel) => void;
+  levelCustomised: boolean;
+  /**
+   * Rows the Hide runtime differences filter is hiding right now: rows that
+   * pass every earlier filter and are dropped by that one. 0 when it is off.
+   */
+  runtimeHiddenCount: number;
+
+  /** The summary chip whose books the list is showing, or null. */
+  chipFilter: ChipFilter | null;
+  /** Show exactly the books a chip counts; the same chip again clears it. */
+  toggleChipFilter: (chip: ChipFilter) => void;
+  clearChipFilter: () => void;
+  /** Rows from the server's unreviewable bucket, once loaded. */
+  unreviewableResults: CandidateResult[];
+  unreviewableLoading: boolean;
+  unreviewableError: string | null;
+
+  /**
+   * The selection minus the books known to have no candidate (unreviewable
+   * rows). Apply selected sends these; a selection with no unreviewable rows
+   * in it is the selection unchanged.
+   */
+  applicableSelectedIds: string[];
+  /** True while a Search again request (and its no-match clears) is in flight. */
+  searching: boolean;
+  /**
+   * Search again for these books using each book's current title and author:
+   * one forced metadata fetch op for all of them (the server runs it with a
+   * bounded worker pool and a provider rate limit). Books marked no-match are
+   * never searched by that op, so when some are included `confirm` is asked
+   * first and, on yes, their no-match marks are cleared (4 at a time) before
+   * the fetch. When the op finishes the lane reloads and the new candidates
+   * appear as ordinary rows to review. Resolves to the op id, or null.
+   */
+  searchAgain: (
+    ids: string[],
+    confirm: (message: string) => Promise<boolean>
+  ) => Promise<string | null>;
   /**
    * The bulk buttons' toggle: 'fill' writes only empty fields (the default),
    * 'replace' overwrites filled ones. Read by every applySelected dispatch
@@ -577,8 +766,20 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   }, [toast]);
   const [rowStates, setRowStates] = useState<Map<string, RowState>>(new Map());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [filters, setFiltersState] = useState<MetadataFilters>(initialFilters);
-  const [strictPreset, setStrictPresetState] = useState(loadStrictPreset);
+  // Read once: the level seeds the filters, and a lazy initializer per piece
+  // of state would read storage twice.
+  const [initialLevel] = useState(loadReviewLevel);
+  const [filters, setFiltersState] = useState<MetadataFilters>(() => initialFilters(initialLevel));
+  const [reviewLevel, setReviewLevelState] = useState<ReviewLevel>(initialLevel);
+  const [chipFilter, setChipFilter] = useState<ChipFilter | null>(null);
+  const [unreviewableResults, setUnreviewableResults] = useState<CandidateResult[]>([]);
+  const [unreviewableLoading, setUnreviewableLoading] = useState(false);
+  const [unreviewableError, setUnreviewableError] = useState<string | null>(null);
+  // The refreshKey the loaded bucket belongs to, or -1 for "never loaded". A
+  // refresh invalidates it, and the load effect fetches again only if a chip
+  // still needs it.
+  const [unreviewableFor, setUnreviewableFor] = useState(-1);
+  const [searching, setSearching] = useState(false);
   const [bulkApplyMode, setBulkApplyModeState] = useState<BulkApplyMode>(loadBulkApplyMode);
   const [skipReplaceConfirm, setSkipReplaceConfirm] = useState<boolean>(loadSkipReplaceConfirm);
   const [pendingReplace, setPendingReplace] = useState<PendingReplace | null>(null);
@@ -841,17 +1042,58 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     saveBulkApplyMode(mode);
   }, []);
 
-  const setStrictPreset = useCallback((on: boolean) => {
-    setStrictPresetState(on);
-    saveStrictPreset(on);
-    setFiltersState((prev) => ({
-      ...prev,
-      hideSkipped: on ? STRICT_PRESET.hideSkipped : false,
-      hideMultiBook: on ? STRICT_PRESET.hideMultiBook : false,
-      confidenceThreshold: on ? STRICT_PRESET.confidenceThreshold : DEFAULT_CONFIDENCE,
-    }));
+  const setReviewLevel = useCallback((level: ReviewLevel) => {
+    setReviewLevelState(level);
+    saveReviewLevel(level);
+    setFiltersState((prev) => ({ ...prev, ...reviewLevelFilters(level) }));
     setPage(1);
   }, []);
+
+  const levelCustomised = useMemo(
+    () => !filtersMatchLevel(filters, reviewLevel),
+    [filters, reviewLevel]
+  );
+
+  const toggleChipFilter = useCallback((chip: ChipFilter) => {
+    setChipFilter((prev) => (prev === chip ? null : chip));
+    setPage(1);
+  }, []);
+  const clearChipFilter = useCallback(() => {
+    setChipFilter(null);
+    setPage(1);
+  }, []);
+
+  // The unreviewable bucket is fetched only when a chip needs it: it is
+  // thousands of rows the review queue itself never shows, so the default load
+  // does not pay for it.
+  const needUnreviewable = chipFilter !== null && CHIPS_NEEDING_UNREVIEWABLE.has(chipFilter);
+  const unreviewableFetchRef = useRef(0);
+  useEffect(() => {
+    if (!active || !needUnreviewable || unreviewableFor === refreshKey) return;
+    const fetchId = ++unreviewableFetchRef.current;
+    setUnreviewableLoading(true);
+    setUnreviewableError(null);
+    api
+      .getCachedReviewResults(0, 0, true, 'unreviewable')
+      .then((data) => {
+        if (fetchId !== unreviewableFetchRef.current) return;
+        setUnreviewableResults(data.results || []);
+        setUnreviewableFor(refreshKey);
+        setUnreviewableLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (fetchId !== unreviewableFetchRef.current) return;
+        // Marked loaded so the effect does not retry in a loop; the rail
+        // shows the error and the refresh button tries again.
+        setUnreviewableFor(refreshKey);
+        setUnreviewableError(
+          err instanceof Error && err.message
+            ? err.message
+            : 'Could not load the books with no candidate.'
+        );
+        setUnreviewableLoading(false);
+      });
+  }, [active, needUnreviewable, unreviewableFor, refreshKey]);
 
   const setPageSize = useCallback((n: number) => {
     setPageSizeState(n);
@@ -881,7 +1123,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     }
   }, [filters.titleFilter]);
 
-  const preGroupFiltered = useMemo(
+  // Split at the runtime filter so the rail can say how many rows that one
+  // filter is hiding: `beforeRuntime` is every row the earlier filters keep.
+  const beforeRuntime = useMemo(
     () =>
       results
         .filter((r) => !titleRegex || titleRegex.test(r.book.title || ''))
@@ -899,12 +1143,26 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         .filter((r) => !filters.hideApplied || rowStates.get(r.book.id) !== 'applied')
         .filter((r) => !filters.hideRejected || rowStates.get(r.book.id) !== 'rejected')
         .filter((r) => !filters.hideSkipped || rowStates.get(r.book.id) !== 'skipped')
-        .filter((r) => !filters.hideNoMatch || (r.status !== 'no_match' && r.status !== 'error'))
-        // runtimeDiffers deliberately returns false for absent deltas. Unknown
-        // duration is not evidence of a match, so those rows stay reviewable.
-        .filter(
-          (r) => !filters.hideRuntimeDifferences || !runtimeDiffers(r.candidate?.duration_delta_sec)
-        )
+        .filter((r) => !filters.hideNoMatch || (r.status !== 'no_match' && r.status !== 'error')),
+    [results, rowStates, titleRegex, filters]
+  );
+
+  const runtimeHidden = useMemo(
+    () =>
+      filters.hideRuntimeDifferences
+        ? new Set(beforeRuntime.filter((r) => runtimeDiffersFromBook(r)).map((r) => r.book.id))
+        : new Set<string>(),
+    [beforeRuntime, filters.hideRuntimeDifferences]
+  );
+
+  const preGroupFiltered = useMemo(
+    () =>
+      beforeRuntime
+        // Mirrors the apply gate's runtime rule (runtimeDiffersFromBook): a
+        // candidate more than 10% off the book's known runtime. An unknown
+        // runtime on either side is not evidence of a mismatch, so those rows
+        // stay reviewable.
+        .filter((r) => !runtimeHidden.has(r.book.id))
         .filter((r) => {
           // An unknown language on EITHER side is a no-op, not a hide: a book
           // with no language set must still be offered its candidates.
@@ -917,8 +1175,31 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         })
         .filter((r) => !filters.onlyWithTranscription || !!r.book.transcribed_title)
         .filter((r) => !filters.onlyTranscriptionMatched || !!r.candidate?.transcription_boosted),
-    [results, rowStates, titleRegex, filters]
+    [beforeRuntime, runtimeHidden, filters]
   );
+
+  // The rows a chip counts, when one is active: exactly those, with every
+  // other filter paused, so the chip's number is the number of rows shown.
+  const chipRows = useMemo((): CandidateResult[] | null => {
+    if (chipFilter === null) return null;
+    switch (chipFilter) {
+      case 'matched':
+        return results.filter((r) => r.status === 'matched');
+      case 'no_match':
+        return results.filter((r) => r.status === 'no_match');
+      case 'total':
+        return results;
+      case 'errors':
+        return unreviewableResults.filter((r) => r.status === 'decode_error');
+      case 'no_candidates':
+        return unreviewableResults.filter((r) => r.status === 'no_candidates');
+      case 'resolved_no_candidates':
+        return unreviewableResults.filter((r) => r.status === 'resolved_no_candidates');
+      case 'stale':
+        // Explicitly false, as everywhere else: no age is not stale.
+        return [...results, ...unreviewableResults].filter((r) => r.is_fresh === false);
+    }
+  }, [chipFilter, results, unreviewableResults]);
 
   // Book ids sharing a candidate with at least one other book.
   //
@@ -927,7 +1208,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // a page boundary each look like a singleton to a per-page pass and would
   // survive the hide, which is the exact case this toggle exists to remove.
   const multiBookIds = useMemo(() => {
-    if (!filters.hideMultiBook) return new Set<string>();
+    // A chip view pauses every filter, this one included.
+    if (!filters.hideMultiBook || chipRows !== null) return new Set<string>();
     const byKey = new Map<string, string[]>();
     for (const r of preGroupFiltered) {
       if (!r.candidate || r.status !== 'matched' || ungroupedIds.has(r.book.id)) continue;
@@ -941,14 +1223,15 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       if (ids.length > 1) ids.forEach((id) => out.add(id));
     }
     return out;
-  }, [filters.hideMultiBook, preGroupFiltered, ungroupedIds]);
+  }, [filters.hideMultiBook, preGroupFiltered, ungroupedIds, chipRows]);
 
   const filteredResults = useMemo(
     () =>
-      filters.hideMultiBook
+      chipRows ??
+      (filters.hideMultiBook
         ? preGroupFiltered.filter((r) => !multiBookIds.has(r.book.id))
-        : preGroupFiltered,
-    [filters.hideMultiBook, preGroupFiltered, multiBookIds]
+        : preGroupFiltered),
+    [chipRows, filters.hideMultiBook, preGroupFiltered, multiBookIds]
   );
 
   // Deselect anything the multi-book filter has hidden. `selectedIds` is built
@@ -958,6 +1241,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // button's count would disagree with what it does.
   const multiBookKey = useMemo(() => [...multiBookIds].sort().join(','), [multiBookIds]);
   useEffect(() => {
+    // multiBookIds is empty in a chip view, so this is already a no-op there.
     if (!filters.hideMultiBook || multiBookIds.size === 0) return;
     setSelectedIds((prev) => {
       const next = new Set([...prev].filter((id) => !multiBookIds.has(id)));
@@ -1502,6 +1786,101 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     [toast]
   );
 
+  // Books known to have no candidate: the unreviewable bucket's rows. Apply
+  // has nothing to send for them, so they are kept out of Apply selected.
+  const unreviewableIds = useMemo(
+    () => new Set(unreviewableResults.map((r) => r.book.id)),
+    [unreviewableResults]
+  );
+  const applicableSelectedIds = useMemo(
+    () => [...selectedIds].filter((id) => !unreviewableIds.has(id)),
+    [selectedIds, unreviewableIds]
+  );
+
+  const searchAgain = useCallback(
+    async (
+      ids: string[],
+      confirm: (message: string) => Promise<boolean>
+    ): Promise<string | null> => {
+      if (!ids.length) return null;
+      const byId = new Map<string, CandidateResult>();
+      for (const r of results) byId.set(r.book.id, r);
+      for (const r of unreviewableResults) byId.set(r.book.id, r);
+      const marked = ids.filter((id) => isMarkedNoMatch(byId.get(id), rowStates.get(id)));
+      if (marked.length > 0) {
+        const ok = await confirm(
+          `${marked.length.toLocaleString()} of the ${ids.length.toLocaleString()} selected ` +
+            `book${ids.length !== 1 ? 's are' : ' is'} marked no-match, and a search skips ` +
+            'those. Clear the no-match mark on them and search them too?'
+        );
+        if (!ok) return null;
+      }
+      setSearching(true);
+      try {
+        // Cleared four at a time: one request per book, and the owner may have
+        // selected hundreds.
+        const failed: string[] = [];
+        for (let i = 0; i < marked.length; i += 4) {
+          const batch = marked.slice(i, i + 4);
+          const settled = await Promise.allSettled(
+            batch.map((id) => api.clearMetadataNoMatch(id))
+          );
+          settled.forEach((s, j) => {
+            if (s.status === 'rejected') failed.push(batch[j]);
+          });
+        }
+        if (marked.length > 0) {
+          clearServerDerived(marked);
+          setRowStates((prev) => {
+            const next = new Map(prev);
+            marked.forEach((id) => {
+              if (!failed.includes(id)) next.delete(id);
+            });
+            return next;
+          });
+        }
+        if (failed.length > 0) {
+          toast(
+            `Could not clear the no-match mark on ${failed.length.toLocaleString()} book(s); ` +
+              'the search will skip them.',
+            'warning'
+          );
+        }
+        const resp = await api.batchFetchCandidates({ book_ids: ids, force: true });
+        if (!resp.operation_id) {
+          toast(resp.message ?? 'Those books are already being searched.', 'info');
+          return null;
+        }
+        toast(
+          `Searching again for ${ids.length.toLocaleString()} book${ids.length !== 1 ? 's' : ''} ` +
+            "with each book's title and author — watch the bell for progress. " +
+            'The list reloads when the search finishes.',
+          'info'
+        );
+        setSelectedIds(new Set());
+        const opId = resp.operation_id;
+        void api
+          .pollOperationV2(opId)
+          .catch(() => undefined)
+          .finally(() => {
+            if (!aliveRef.current) return;
+            refresh();
+          });
+        return opId;
+      } catch (err) {
+        if (isAuthRedirectError(err)) {
+          toast('Session expired — sign in again, then search again.', 'error');
+        } else {
+          toast('Failed to start the search.', 'error');
+        }
+        return null;
+      } finally {
+        setSearching(false);
+      }
+    },
+    [results, unreviewableResults, rowStates, toast, refresh, clearServerDerived]
+  );
+
   return {
     loading,
     error,
@@ -1520,8 +1899,19 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     setPageSize,
     filters,
     setFilters,
-    strictPreset,
-    setStrictPreset,
+    reviewLevel,
+    setReviewLevel,
+    levelCustomised,
+    runtimeHiddenCount: runtimeHidden.size,
+    chipFilter,
+    toggleChipFilter,
+    clearChipFilter,
+    unreviewableResults,
+    unreviewableLoading,
+    unreviewableError,
+    applicableSelectedIds,
+    searching,
+    searchAgain,
     bulkApplyMode,
     setBulkApplyMode,
     pendingReplace,

@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.replaceConfirm.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 510b281d-e333-4300-8b36-49e93cd8a7aa
 // last-edited: 2026-09-27
 //
@@ -151,6 +151,9 @@ const skipFlag = () =>
 beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
+  // Review level Off: the default (In-depth) hides multi-book matches, which
+  // is exactly the group the 'group Apply All' entry point needs on screen.
+  window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_LEVEL, 'off');
 });
 
 afterEach(() => {

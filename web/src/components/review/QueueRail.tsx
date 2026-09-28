@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-09-08
+// last-edited: 2026-09-27
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -24,10 +24,21 @@
 // state in a class name. jsdom does not evaluate `:has()`, so the test asserts
 // the rule is emitted; whether it paints is a visual-harness question -- the
 // same split used for the spine's container query.
+//
+// EVERY SUMMARY CHIP IS A FILTER (owner request 2026-09-27)
+//
+// A chip used to be a read-out: "11324 unreviewable" with no way to see which
+// books those were. Clicking a chip now shows exactly the books it counts --
+// the lane pauses every other filter while one is active, so the number on the
+// chip is the number of rows in the list. Clicking it again, or "Show all",
+// clears it. Orphaned rows (the book is gone) stay count-only: there is no
+// book to show.
 
 import {
+  Alert,
   Badge,
   Box,
+  Button,
   Chip,
   Divider,
   FormControlLabel,
@@ -47,7 +58,16 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import HistoryIcon from '@mui/icons-material/History';
 import SearchIcon from '@mui/icons-material/Search';
 import type { CandidateResult } from '../../services/api';
-import { PAGE_SIZE_OPTIONS, type MetadataFilters } from './lanes/useMetadataLane';
+import {
+  PAGE_SIZE_OPTIONS,
+  REVIEW_LEVELS,
+  REVIEW_LEVEL_LABELS,
+  isUnreviewableRow,
+  reviewLevelFilters,
+  type ChipFilter,
+  type MetadataFilters,
+  type ReviewLevel,
+} from './lanes/useMetadataLane';
 import { isDecided, scoreColor, type RowState } from './spine/rowState';
 
 /** Provider chips, in the inventory's order. */
@@ -77,8 +97,9 @@ const SWITCHES: Array<{ key: keyof MetadataFilters; label: string; help?: string
     key: 'hideRuntimeDifferences',
     label: 'Hide runtime differences',
     help:
-      'Hide candidates whose known runtime differs materially from the book. ' +
-      'Rows with an unknown runtime stay visible.',
+      "Hide candidates whose runtime is more than 10% off the book's -- the same " +
+      'tolerance the apply gate refuses at. Rows with an unknown runtime on either ' +
+      'side stay visible. Part of In-depth and Strict review.',
   },
   {
     key: 'hideMultiBook',
@@ -127,8 +148,20 @@ export interface QueueRailProps {
   sourceCounts: Record<string, number>;
   filters: MetadataFilters;
   setFilters: (patch: Partial<MetadataFilters>) => void;
-  strictPreset: boolean;
-  setStrictPreset: (on: boolean) => void;
+  reviewLevel: ReviewLevel;
+  setReviewLevel: (level: ReviewLevel) => void;
+  /** True when a switch was flipped by hand after the level was picked. */
+  levelCustomised?: boolean;
+  /** How many rows Hide runtime differences is hiding right now. */
+  runtimeHiddenCount?: number;
+  /** The chip whose books the list is showing, or null. */
+  chipFilter?: ChipFilter | null;
+  /** Toggle a chip's filter. Optional: without it the chips are read-outs. */
+  onToggleChip?: (chip: ChipFilter) => void;
+  onClearChip?: () => void;
+  /** The unreviewable bucket (no candidate / decode error) is loading. */
+  unreviewableLoading?: boolean;
+  unreviewableError?: string | null;
   page: number;
   totalPages: number;
   pageSize: number;
@@ -220,6 +253,32 @@ export function unreviewableReason(byCause?: {
   return `Nothing here can be reviewed: ${parts.join('; ')}.`;
 }
 
+/** What turning on this level does, for the slider stop's tooltip. */
+export function reviewLevelDescription(level: ReviewLevel): string {
+  if (level === 'off') return 'No preset: minimum confidence 85%, nothing extra hidden.';
+  const f = reviewLevelFilters(level);
+  const parts = [
+    `Minimum confidence ${f.confidenceThreshold}%`,
+    'hide skipped',
+    'hide multi-book matches',
+  ];
+  if (f.hideRuntimeDifferences) parts.push('hide runtime differences');
+  if (f.onlyWithTranscription) parts.push('only books with a transcription');
+  if (f.onlyTranscriptionMatched) parts.push('only transcription-matched');
+  return `${REVIEW_LEVEL_LABELS[level]}: ${parts.join(', ')}.`;
+}
+
+/** Human label for the active chip, for the "showing" banner. */
+const CHIP_LABELS: Record<ChipFilter, string> = {
+  matched: 'matched',
+  no_match: 'no match',
+  total: 'reviewable',
+  errors: 'error',
+  no_candidates: 'no-candidate',
+  resolved_no_candidates: 'resolved, no-candidate',
+  stale: 'stale',
+};
+
 export function QueueRail({
   loading,
   rows,
@@ -227,8 +286,15 @@ export function QueueRail({
   sourceCounts,
   filters,
   setFilters,
-  strictPreset,
-  setStrictPreset,
+  reviewLevel,
+  setReviewLevel,
+  levelCustomised = false,
+  runtimeHiddenCount = 0,
+  chipFilter = null,
+  onToggleChip,
+  onClearChip,
+  unreviewableLoading = false,
+  unreviewableError = null,
   page,
   totalPages,
   pageSize,
@@ -244,6 +310,22 @@ export function QueueRail({
   onSearchRow,
   refetching = false,
 }: QueueRailProps) {
+  // A chip's props when it filters: clickable, highlighted while active, and
+  // pressed-state exposed to assistive tech. Without onToggleChip the chips
+  // stay read-outs, which is what they were.
+  const chipProps = (chip: ChipFilter, count: number) =>
+    onToggleChip
+      ? {
+          clickable: true,
+          onClick: () => onToggleChip(chip),
+          variant: chipFilter === chip ? ('filled' as const) : ('outlined' as const),
+          'aria-pressed': chipFilter === chip,
+          'aria-label': `Show the ${count.toLocaleString()} ${CHIP_LABELS[chip]} books`,
+          'data-testid': `chip-${chip}`,
+        }
+      : { variant: 'outlined' as const, 'data-testid': `chip-${chip}` };
+  const byCause = summary.unreviewable_by_cause;
+  const levelIndex = Math.max(0, REVIEW_LEVELS.indexOf(reviewLevel));
   return (
     <Box
       data-testid="queue-rail"
@@ -259,50 +341,57 @@ export function QueueRail({
       }}
     >
       <Stack spacing={1.5} sx={{ p: 1.5, overflowY: 'auto' }}>
-        {/* Summary chips — matched / no match / errors, against total. */}
+        {/* Summary chips. Every one with books behind it is a filter. */}
         <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: 'wrap' }}>
-          <Chip size="small" color="success" label={`${summary.matched} matched`} />
-          <Chip size="small" label={`${summary.no_match} no match`} />
-          {summary.errors > 0 && (
-            <Chip size="small" color="error" label={`${summary.errors} errors`} />
-          )}
-          <Chip size="small" variant="outlined" label={`${summary.total} total`} />
+          <Chip
+            size="small"
+            color="success"
+            label={`${summary.matched.toLocaleString()} matched`}
+            {...chipProps('matched', summary.matched)}
+          />
+          <Chip
+            size="small"
+            label={`${summary.no_match.toLocaleString()} no match`}
+            {...chipProps('no_match', summary.no_match)}
+          />
+          <Chip
+            size="small"
+            label={`${summary.total.toLocaleString()} total`}
+            {...chipProps('total', summary.total)}
+          />
           {summary.stale > 0 && (
-            // Stale rows ARE reviewable and are counted in `total` -- this is
-            // not a shortfall, it is a caveat on what is already in the list.
-            // MetadataCacheTTL's contract says stale entries stay readable and
-            // the UI flags them; before this the review surface received no age
-            // at all, so month-old candidates looked freshly fetched.
-            // The tooltip has always ended "refetch to be sure", which named a
-            // remedy the workspace had no way to reach -- the only fetch entry
-            // point was a dialog on the Library page. Clicking the chip is now
-            // that path, so the sentence stops being a suggestion the UI cannot
-            // honour.
+            // Stale rows ARE reviewable (and the no-candidate ones refetchable)
+            // -- this is a caveat on age, not a shortfall. The chip shows the
+            // stale books; refetching them all is the button beside it, so
+            // looking at them no longer starts thousands of provider calls.
             <Tooltip
               title={
-                `${summary.stale.toLocaleString()} of these were fetched more than 30 days ago. ` +
-                'They are still reviewable, but the source may have changed since' +
-                (onRefetchStale ? ' — click to refetch them all.' : ' — refetch to be sure.')
+                `${summary.stale.toLocaleString()} books were last searched more than 30 days ago. ` +
+                'They are still reviewable, but the source may have changed since. Click to see them.'
               }
             >
-              {/* A disabled Chip does not fire the events Tooltip needs, so the
-                  span keeps the tooltip alive while a request is in flight. */}
+              <Chip
+                size="small"
+                color="warning"
+                icon={<HistoryIcon fontSize="small" />}
+                label={`${summary.stale.toLocaleString()} stale`}
+                {...chipProps('stale', summary.stale)}
+              />
+            </Tooltip>
+          )}
+          {summary.stale > 0 && onRefetchStale && (
+            <Tooltip title="Refetch every stale book from the providers.">
+              {/* A disabled button does not fire the events Tooltip needs. */}
               <Box component="span" sx={{ display: 'inline-flex' }}>
-                <Chip
+                <IconButton
                   size="small"
-                  variant="outlined"
                   color="warning"
-                  icon={<HistoryIcon fontSize="small" />}
-                  label={`${summary.stale.toLocaleString()} stale`}
-                  clickable={Boolean(onRefetchStale)}
-                  disabled={Boolean(onRefetchStale) && refetching}
+                  disabled={refetching}
                   onClick={onRefetchStale}
-                  aria-label={
-                    onRefetchStale
-                      ? `Refetch ${summary.stale.toLocaleString()} stale books`
-                      : undefined
-                  }
-                />
+                  aria-label={`Refetch ${summary.stale.toLocaleString()} stale books`}
+                >
+                  <RefreshIcon fontSize="small" />
+                </IconButton>
               </Box>
             </Tooltip>
           )}
@@ -310,15 +399,23 @@ export function QueueRail({
             // Errors get their OWN chip, not a line buried in the unreviewable
             // tooltip. A stored candidate that will not decode is a broken row
             // someone has to repair; a book the providers simply have nothing
-            // for is normal and needs no attention at all. Folding the two into
-            // one warning-coloured total meant a real corruption problem could
-            // only be found by hovering, and read identically to a backlog.
-            <Tooltip title="Cache rows whose stored candidate will not decode. These are broken, not merely unmatched — a refetch is the usual repair.">
+            // for is normal and needs no attention at all.
+            <Tooltip title="Cache rows whose stored candidate will not decode. These are broken, not merely unmatched — a search again is the usual repair.">
               <Chip
                 size="small"
-                variant="outlined"
                 color="error"
                 label={`${summary.errors.toLocaleString()} errors`}
+                {...chipProps('errors', summary.errors)}
+              />
+            </Tooltip>
+          )}
+          {byCause && byCause.no_candidates > 0 && (
+            <Tooltip title="Nobody has ruled on these books and no candidate is stored for them. Select them and use Search again to ask the providers with each book's title and author.">
+              <Chip
+                size="small"
+                color="warning"
+                label={`${byCause.no_candidates.toLocaleString()} no candidates`}
+                {...chipProps('no_candidates', byCause.no_candidates)}
               />
             </Tooltip>
           )}
@@ -328,15 +425,26 @@ export function QueueRail({
             >
               <Chip
                 size="small"
-                variant="outlined"
                 label={`${(summary.resolved_no_candidates ?? 0).toLocaleString()} resolved, no candidate`}
+                {...chipProps('resolved_no_candidates', summary.resolved_no_candidates ?? 0)}
               />
             </Tooltip>
           )}
-          {summary.unreviewable > 0 && (
-            // `total` counts only what a reviewer can act on. This says what the
-            // cache holds that they cannot, so the difference is stated rather
-            // than left as a silent shortfall.
+          {byCause && byCause.orphaned > 0 && (
+            // Count-only on purpose: the book these rows point at no longer
+            // exists, so there is nothing to list.
+            <Tooltip title="Cache rows whose book no longer exists. There is no book to show — only a cleanup pass clears these.">
+              <Chip
+                size="small"
+                variant="outlined"
+                label={`${byCause.orphaned.toLocaleString()} orphaned`}
+                data-testid="chip-orphaned"
+              />
+            </Tooltip>
+          )}
+          {!byCause && summary.unreviewable > 0 && (
+            // An older server sends no per-cause split, so there is no bucket
+            // to filter by: the total stays a read-out.
             <Tooltip title={unreviewableReason(summary.unreviewable_by_cause)}>
               <Chip
                 size="small"
@@ -353,17 +461,63 @@ export function QueueRail({
           </Tooltip>
         </Stack>
 
-        <FormControlLabel
-          control={
-            <Switch
-              size="small"
-              checked={strictPreset}
-              onChange={(e) => setStrictPreset(e.target.checked)}
-              slotProps={{ input: { 'aria-label': 'Strict review preset' } }}
-            />
-          }
-          label={<Typography variant="body2">Strict review</Typography>}
-        />
+        {chipFilter && (
+          <Alert
+            severity="info"
+            data-testid="chip-filter-banner"
+            action={
+              onClearChip && (
+                <Button color="inherit" size="small" onClick={onClearChip}>
+                  Show all
+                </Button>
+              )
+            }
+          >
+            {unreviewableLoading
+              ? `Loading the ${CHIP_LABELS[chipFilter]} books…`
+              : `Showing the ${filteredCount.toLocaleString()} ${CHIP_LABELS[chipFilter]} books. Other filters are paused.`}
+          </Alert>
+        )}
+        {chipFilter && unreviewableError && (
+          <Alert severity="error" data-testid="unreviewable-error">
+            {unreviewableError}
+          </Alert>
+        )}
+
+        {/* Review level: four cumulative stops (owner ruling 2026-09-27). */}
+        <Box sx={{ px: 1 }}>
+          <Typography variant="caption" color="text.secondary" id="review-level-label">
+            Review level: {REVIEW_LEVEL_LABELS[reviewLevel]}
+            {levelCustomised ? ' (switches changed)' : ''}
+          </Typography>
+          <Slider
+            size="small"
+            min={0}
+            max={REVIEW_LEVELS.length - 1}
+            step={1}
+            value={levelIndex}
+            marks={REVIEW_LEVELS.map((l, i) => ({
+              value: i,
+              label: (
+                <Tooltip title={reviewLevelDescription(l)}>
+                  <span>{l === 'off' ? 'Off' : REVIEW_LEVEL_LABELS[l].replace(' review', '')}</span>
+                </Tooltip>
+              ),
+            }))}
+            onChange={(_, v) => {
+              const next = REVIEW_LEVELS[v as number];
+              if (next && next !== reviewLevel) setReviewLevel(next);
+            }}
+            getAriaValueText={(v) => REVIEW_LEVEL_LABELS[REVIEW_LEVELS[v] ?? 'off']}
+            aria-labelledby="review-level-label"
+            slotProps={{ input: { 'aria-label': 'Review level' } }}
+          />
+          {filters.hideRuntimeDifferences && runtimeHiddenCount > 0 && !chipFilter && (
+            <Typography variant="caption" color="text.secondary" data-testid="runtime-hidden-count">
+              {runtimeHiddenCount.toLocaleString()} hidden by runtime differences
+            </Typography>
+          )}
+        </Box>
 
         <TextField
           size="small"
@@ -523,17 +677,22 @@ export function QueueRail({
                   <Typography variant="body2" noWrap title={r.book.title}>
                     {r.book.title}
                   </Typography>
-                  {r.candidate && (
+                  {r.candidate ? (
                     <Typography variant="caption" color="text.secondary" noWrap>
                       {r.candidate.title}
                     </Typography>
-                  )}
+                  ) : isUnreviewableRow(r) ? (
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+                      {r.status === 'decode_error' ? 'candidate will not decode' : 'no candidate'}
+                      {r.book.author ? ` \u00b7 ${r.book.author}` : ''}
+                    </Typography>
+                  ) : null}
                 </Box>
                 {/* Only on rows the automatic fetch could not match. A
                     matched row already has a candidate to review, and offering
                     a manual search there invites re-litigating a decision the
                     reviewer has not made yet. */}
-                {r.status === 'no_match' && onSearchRow && (
+                {(r.status === 'no_match' || isUnreviewableRow(r)) && onSearchRow && (
                   <Tooltip title="No match was found automatically. Search with your own title and author.">
                     <IconButton
                       size="small"

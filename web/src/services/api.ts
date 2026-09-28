@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.128.1
+// version: 2.129.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-27
 
@@ -4253,7 +4253,22 @@ export interface CandidateBookInfo {
   // transcription data was available when candidates were scored.
   // Lets the review dialog filter to "only books with transcription data".
   transcribed_title?: string;
+  /**
+   * Book.Duration as stored, NOT the canonical runtime. Served only on the
+   * review list's unreviewable bucket, whose rows are built without reading
+   * the book's files, so no canonical runtime exists for them.
+   */
+  stored_duration_seconds?: number;
 }
+
+/**
+ * Statuses of the review list's unreviewable bucket
+ * (`GET /metadata/cache/review?bucket=unreviewable`). Each names the summary
+ * counter the row is counted under: `no_candidates` ->
+ * `unreviewable_by_cause.no_candidates`, `resolved_no_candidates` ->
+ * `resolved_no_candidates`, `decode_error` -> `errors`.
+ */
+export type UnreviewableStatus = 'no_candidates' | 'resolved_no_candidates' | 'decode_error';
 
 export interface CandidateResult {
   book: CandidateBookInfo;
@@ -4264,7 +4279,12 @@ export interface CandidateResult {
    * tell the reviewed record from any other. Absent on non-cache paths.
    */
   candidate_hash?: string;
-  status: 'matched' | 'no_match' | 'error' | 'rejected' | 'applied';
+  status: 'matched' | 'no_match' | 'error' | 'rejected' | 'applied' | UnreviewableStatus;
+  /**
+   * The book's raw metadata_review_status ('' or absent when nobody has ruled
+   * on it). Served on the unreviewable bucket, where `status` names the bucket.
+   */
+  review_status?: string;
   error_message?: string;
   /** When the cached candidate was written. Absent on paths not served from cache. */
   fetched_at?: string;
@@ -4302,6 +4322,14 @@ export interface BatchFetchRequest {
     };
   };
   only_unmatched?: boolean;
+  /**
+   * Re-ask the providers even when the candidate cache already has an answer
+   * for the book's current title/author (fresh candidates, or a durable
+   * "providers have nothing" verdict). Without it those books are served from
+   * the cache and cost no provider call -- which for a book with no candidates
+   * means nothing changes. Books marked no-match are skipped either way.
+   */
+  force?: boolean;
 }
 
 /**
@@ -4452,10 +4480,20 @@ export async function listCachedCandidates(
 // genuinely needs every reviewable row in one response -- useMetadataLane does,
 // because its filters, grouping and stale set span the whole library. The
 // response's `truncated` says whether the rows returned are the whole set.
+/**
+ * Which rows `getCachedReviewResults` returns. 'reviewable' (the default) is
+ * the review queue; 'unreviewable' is the books the summary counts but the
+ * queue cannot hold -- no candidate stored, or one that will not decode --
+ * with `status` set to an UnreviewableStatus. The summary counts are the same
+ * either way; `total_count` is the size of the bucket asked for.
+ */
+export type ReviewBucket = 'reviewable' | 'unreviewable';
+
 export async function getCachedReviewResults(
   limit: number,
   offset: number,
-  all = false
+  all = false,
+  bucket: ReviewBucket = 'reviewable'
 ): Promise<{
   results: CandidateResult[];
   total_count: number;
@@ -4511,6 +4549,9 @@ export async function getCachedReviewResults(
 }> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (all) params.set('all', 'true');
+  // Sent only when it changes something, so the default request is byte-for-
+  // byte what it was.
+  if (bucket !== 'reviewable') params.set('bucket', bucket);
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/cache/review?${params}`, {
     timeoutMs: CACHED_REVIEW_TIMEOUT_MS,
   });
