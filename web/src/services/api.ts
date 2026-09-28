@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.130.1
+// version: 2.130.2
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-27
 
@@ -6421,6 +6421,16 @@ export async function queueBulkSplitBookMerge(
   return responseData.data as BulkSplitBookMergeResponse;
 }
 
+// The /dedup/scan, /dedup/scan-llm and /dedup/embed handlers answer
+// `{op_id}`, not an Operation row, so `.id` was undefined on all three: the
+// optimistic bell entry (wrapTrigger reads `id`) never registered, and any
+// caller polling the result asked for GET /operations/v2/undefined. Normalise
+// the way triggerDedupAcoustID already did.
+function normalizeOpIdResponse(raw: unknown): Operation {
+  const body = (raw ?? {}) as Partial<Operation> & { op_id?: string };
+  return { ...body, id: body.id ?? body.op_id ?? '' } as Operation;
+}
+
 // All trigger* dedup endpoints return the full Operation row (id, type,
 // status, progress, ...). Returning the bare Operation lets callers
 // register the op with useOperationsStore.startPolling immediately so the
@@ -6431,7 +6441,7 @@ export async function triggerDedupScan(): Promise<Operation> {
   return wrapTrigger('dedup.scan', async () => {
     const response = await apiFetch(`${API_BASE}/dedup/scan`, { method: 'POST' });
     if (!response.ok) throw await buildApiError(response, 'Failed to trigger dedup scan');
-    return (await response.json()).data;
+    return normalizeOpIdResponse((await response.json()).data);
   });
 }
 
@@ -6439,7 +6449,7 @@ export async function triggerDedupLLM(): Promise<Operation> {
   return wrapTrigger('dedup.scan-llm', async () => {
     const response = await apiFetch(`${API_BASE}/dedup/scan-llm`, { method: 'POST' });
     if (!response.ok) throw await buildApiError(response, 'Failed to trigger dedup LLM scan');
-    return (await response.json()).data;
+    return normalizeOpIdResponse((await response.json()).data);
   });
 }
 
@@ -6541,7 +6551,7 @@ export async function triggerEmbedScan(): Promise<Operation> {
   return wrapTrigger('dedup.embed', async () => {
     const response = await apiFetch(`${API_BASE}/dedup/embed`, { method: 'POST' });
     if (!response.ok) throw await buildApiError(response, 'Failed to trigger embedding scan');
-    return (await response.json()).data;
+    return normalizeOpIdResponse((await response.json()).data);
   });
 }
 
