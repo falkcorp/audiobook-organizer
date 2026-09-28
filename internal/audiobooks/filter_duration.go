@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
@@ -94,23 +93,6 @@ func parseDurationExpr(expr string) (durationExpr, error) {
 		return durationExpr{}, err
 	}
 	return durationExpr{op: op, a: v, parsed: true}, nil
-}
-
-// durationExprCache memoizes parsed expressions: the matcher runs once per
-// row over the whole library, and re-parsing the same value 100k times was
-// most of the query's cost. Keys are the handful of distinct values users
-// type, so the map stays tiny.
-var durationExprCache sync.Map // string -> durationExpr (only successful parses)
-
-func parseDurationExprCached(expr string) (durationExpr, error) {
-	if v, ok := durationExprCache.Load(expr); ok {
-		return v.(durationExpr), nil
-	}
-	e, err := parseDurationExpr(expr)
-	if err == nil {
-		durationExprCache.Store(expr, e)
-	}
-	return e, err
 }
 
 // ValidateFilterValue reports an error for a filter value the matcher cannot
@@ -216,7 +198,7 @@ func storedRuntime(b *database.Book) (int, bool) {
 // — so an unprobed file is neither hidden by duration:>20m nor listed by
 // duration:<20m. Find those with has_duration:no.
 func durationMatches(b *database.Book, expr string, rt runtimeFunc) bool {
-	e, err := parseDurationExprCached(expr)
+	e, err := parseDurationExpr(expr)
 	if err != nil {
 		return false
 	}

@@ -186,7 +186,7 @@ describe('SearchBar', () => {
       await waitFor(() => {
         expect(screen.getByText('Search Syntax')).toBeInTheDocument();
       });
-      const first = screen.getByText('-metadata:applied duration:>20m');
+      const first = screen.getByText('-metadata:applied -duration:<20m');
       const authorExample = screen.getByText('author:"Brandon Sanderson"');
       // Listed above the previous first example.
       expect(
@@ -194,6 +194,9 @@ describe('SearchBar', () => {
       ).toBeTruthy();
       expect(screen.getByText(/hides chapter\/track files under 20 minutes/)).toBeInTheDocument();
       fireEvent.click(first);
+      expect(onChange).toHaveBeenCalledWith('-metadata:applied -duration:<20m');
+
+      fireEvent.click(screen.getByText('-metadata:applied duration:>20m'));
       expect(onChange).toHaveBeenCalledWith('-metadata:applied duration:>20m');
 
       fireEvent.click(screen.getByText('duration:<20m'));

@@ -55,7 +55,13 @@ function writeStoredSelection(books: Audiobook[]) {
     if (books.length === 0) sessionStorage.removeItem(LIBRARY_SELECTION_STORAGE_KEY);
     else sessionStorage.setItem(LIBRARY_SELECTION_STORAGE_KEY, JSON.stringify(books));
   } catch {
-    // Blocked or full storage: the selection still works for this visit.
+    // Blocked or full storage: the selection still works for this visit, but
+    // an OLDER stored selection must not survive to be restored later.
+    try {
+      sessionStorage.removeItem(LIBRARY_SELECTION_STORAGE_KEY);
+    } catch {
+      // storage unavailable entirely
+    }
   }
 }
 

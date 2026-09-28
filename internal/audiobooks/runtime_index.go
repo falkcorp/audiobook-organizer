@@ -40,8 +40,10 @@ type runtimeIndex struct {
 	mu      sync.RWMutex
 	byBook  map[string]runtimeEntry
 	builtAt time.Time
-	// building guards against concurrent (re)builds.
+	// building guards against concurrent background rebuilds.
 	building atomic.Bool
+	// firstBuild serialises the inline first build.
+	firstBuild sync.Mutex
 	// now is injectable for tests.
 	now func() time.Time
 	ttl time.Duration
@@ -58,7 +60,13 @@ const runtimeIndexTTL = 5 * time.Minute
 
 var runtimeIndexLog = logger.New("audiobooks.runtime_index")
 
-// allBookFilesCoreGetter is the store capability the index needs.
+// bookFileVisitor is the preferred store capability: walk every book_file row
+// without copying (database.PebbleStore.VisitBookFiles).
+type bookFileVisitor interface {
+	VisitBookFiles(fn func(*database.BookFile)) error
+}
+
+// allBookFilesCoreGetter is the fallback capability (copies every row).
 type allBookFilesCoreGetter interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 }
@@ -67,33 +75,73 @@ func newRuntimeIndex() *runtimeIndex {
 	return &runtimeIndex{now: time.Now, ttl: runtimeIndexTTL}
 }
 
-// buildRuntimeEntries groups file rows by book and computes each book's
-// runtime. The per-book compute is sharded across NumCPU workers over
-// disjoint book-ID chunks, so no two workers write the same key; each worker
-// fills its own map and the maps are merged afterwards.
-func buildRuntimeEntries(files []database.BookFileCore) map[string]runtimeEntry {
-	byBook := make(map[string][]database.BookFile, len(files)/4+1)
-	for i := range files {
-		c := &files[i]
-		byBook[c.BookID] = append(byBook[c.BookID], database.BookFile{
-			BookID:                         c.BookID,
-			Duration:                       c.Duration,
-			FileSize:                       c.FileSize,
-			Missing:                        c.Missing,
-			FileHash:                       c.FileHash,
-			OriginalFileHash:               c.OriginalFileHash,
-			OriginalFilename:               c.OriginalFilename,
-			AcoustIDFingerprintDurationSec: c.AcoustIDFingerprintDurationSec,
-		})
+// runtimeRow is the part of a book_file row ComputeBookRuntime reads. Strings
+// share the stored row's backing memory, so a row costs ~100 bytes, not the
+// 792 of a BookFile (~742k rows on prod).
+type runtimeRow struct {
+	bookID, fileHash, origHash, origName string
+	size                                 int64
+	dur                                  int
+	acoustid                             float64
+	missing                              bool
+}
+
+func rowFromBookFile(f *database.BookFile) runtimeRow {
+	return runtimeRow{
+		bookID: f.BookID, fileHash: f.FileHash, origHash: f.OriginalFileHash, origName: f.OriginalFilename,
+		size: f.FileSize, dur: f.Duration, acoustid: f.AcoustIDFingerprintDurationSec, missing: f.Missing,
+	}
+}
+
+func rowFromCore(c *database.BookFileCore) runtimeRow {
+	return runtimeRow{
+		bookID: c.BookID, fileHash: c.FileHash, origHash: c.OriginalFileHash, origName: c.OriginalFilename,
+		size: c.FileSize, dur: c.Duration, acoustid: c.AcoustIDFingerprintDurationSec, missing: c.Missing,
+	}
+}
+
+// runtimeRowSource returns a loader for the store's rows, or nil when the
+// store can supply none. Decorators are unwrapped via AsCapability.
+func runtimeRowSource(store any) func() ([]runtimeRow, error) {
+	if v, ok := database.AsCapability[bookFileVisitor](store); ok {
+		return func() ([]runtimeRow, error) {
+			var rows []runtimeRow
+			err := v.VisitBookFiles(func(f *database.BookFile) { rows = append(rows, rowFromBookFile(f)) })
+			return rows, err
+		}
+	}
+	if g, ok := database.AsCapability[allBookFilesCoreGetter](store); ok {
+		return func() ([]runtimeRow, error) {
+			core, err := g.GetAllBookFilesCore()
+			if err != nil {
+				return nil, err
+			}
+			rows := make([]runtimeRow, len(core))
+			for i := range core {
+				rows[i] = rowFromCore(&core[i])
+			}
+			return rows, nil
+		}
+	}
+	return nil
+}
+
+// buildRuntimeEntries groups rows by book and computes each book's runtime
+// with database.ComputeBookRuntime. The per-book compute is sharded across
+// NumCPU workers over disjoint book-ID chunks, so no two workers write the
+// same key; each worker fills its own map and they are merged afterwards.
+// Each worker converts one book's rows into a reused []BookFile buffer just
+// before computing it, so a full BookFile never exists for every row at once.
+func buildRuntimeEntries(rows []runtimeRow) map[string]runtimeEntry {
+	byBook := make(map[string][]int32, len(rows)/4+1)
+	for i := range rows {
+		byBook[rows[i].bookID] = append(byBook[rows[i].bookID], int32(i))
 	}
 	ids := make([]string, 0, len(byBook))
 	for id := range byBook {
 		ids = append(ids, id)
 	}
-	workers := runtime.NumCPU()
-	if workers < 1 {
-		workers = 1
-	}
+	workers := max(runtime.NumCPU(), 1)
 	chunk := (len(ids) + workers - 1) / workers
 	parts := make([]map[string]runtimeEntry, workers)
 	var wg sync.WaitGroup
@@ -105,8 +153,18 @@ func buildRuntimeEntries(files []database.BookFileCore) map[string]runtimeEntry 
 		hi := min(lo+chunk, len(ids))
 		wg.Go(func() {
 			m := make(map[string]runtimeEntry, hi-lo)
+			var buf []database.BookFile
 			for _, id := range ids[lo:hi] {
-				rt := database.ComputeBookRuntime(nil, byBook[id])
+				buf = buf[:0]
+				for _, i := range byBook[id] {
+					r := &rows[i]
+					buf = append(buf, database.BookFile{
+						BookID: r.bookID, Duration: r.dur, FileSize: r.size, Missing: r.missing,
+						FileHash: r.fileHash, OriginalFileHash: r.origHash, OriginalFilename: r.origName,
+						AcoustIDFingerprintDurationSec: r.acoustid,
+					})
+				}
+				rt := database.ComputeBookRuntime(nil, buf)
 				m[id] = runtimeEntry{
 					seconds:      int32(min(rt.Seconds, 1<<31-1)),
 					filesCounted: int32(rt.FilesCounted),
@@ -130,8 +188,8 @@ func buildRuntimeEntries(files []database.BookFileCore) map[string]runtimeEntry 
 // built, a background rebuild when it is older than the TTL. Returns false
 // when the store cannot supply file rows (the caller then uses Book.Duration).
 func (ri *runtimeIndex) ensure(store any) bool {
-	getter, ok := store.(allBookFilesCoreGetter)
-	if !ok {
+	load := runtimeRowSource(store)
+	if load == nil {
 		return false
 	}
 	ri.mu.RLock()
@@ -143,22 +201,30 @@ func (ri *runtimeIndex) ensure(store any) bool {
 	}
 	if !built {
 		// First use: build inline so the very first duration query is right.
-		// Concurrent first callers each build; the last write wins and all are
-		// equivalent, which beats making them wait on a lock around I/O.
-		return ri.rebuild(getter)
+		// Serialised so N concurrent cold requests run ONE whole-library build
+		// (the rest wait for it and then find it built), not N.
+		ri.firstBuild.Lock()
+		defer ri.firstBuild.Unlock()
+		ri.mu.RLock()
+		built = !ri.builtAt.IsZero()
+		ri.mu.RUnlock()
+		if built {
+			return true
+		}
+		return ri.rebuild(load)
 	}
 	if ri.building.CompareAndSwap(false, true) {
 		go func() {
 			defer ri.building.Store(false)
-			ri.rebuild(getter)
+			ri.rebuild(load)
 		}()
 	}
 	return true
 }
 
-func (ri *runtimeIndex) rebuild(getter allBookFilesCoreGetter) bool {
+func (ri *runtimeIndex) rebuild(load func() ([]runtimeRow, error)) bool {
 	start := ri.now()
-	files, err := getter.GetAllBookFilesCore()
+	rows, err := load()
 	if err != nil {
 		runtimeIndexLog.Warn("runtime index build failed; duration filters fall back to stored Book.Duration: %v", err)
 		ri.mu.RLock()
@@ -166,12 +232,12 @@ func (ri *runtimeIndex) rebuild(getter allBookFilesCoreGetter) bool {
 		ri.mu.RUnlock()
 		return built
 	}
-	entries := buildRuntimeEntries(files)
+	entries := buildRuntimeEntries(rows)
 	ri.mu.Lock()
 	ri.byBook = entries
 	ri.builtAt = ri.now()
 	ri.mu.Unlock()
-	runtimeIndexLog.Debug("runtime index built: books=%d files=%d elapsed=%s", len(entries), len(files), ri.now().Sub(start))
+	runtimeIndexLog.Debug("runtime index built: books=%d files=%d elapsed=%s", len(entries), len(rows), ri.now().Sub(start))
 	return true
 }
 
