@@ -1,5 +1,5 @@
 // file: internal/organizer/landing.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5c1e9a3b-7d42-4f6e-9b8a-2e0c4d7f1a35
 // last-edited: 2026-09-28
 
@@ -62,6 +62,14 @@ type Landing struct {
 	// then the unchanged source) or moved to a _copyN name. nil when the
 	// target was free.
 	Resolution *InPlaceResolution
+
+	// MultiFile reports an in-place landing that moved a multi-file book whose
+	// path was one of its files (reOrganizeMultiFileInPlace): Path is the new
+	// directory, SourcePath the old first file, and FileMoves each file that
+	// moved. CommitLanding records those as per-file moves, never as one
+	// organize_rename.
+	MultiFile bool
+	FileMoves []BookFileMove
 }
 
 // IsDir reports whether the landing describes a multi-file (directory) book.

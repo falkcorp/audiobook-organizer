@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_ownership_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e5bf761-ee82-4110-865a-948c137494ee
 // last-edited: 2026-09-28
 
@@ -54,20 +54,22 @@ func TestReOrganizeInPlace_RefusesUnsafeMoves(t *testing.T) {
 			wantCategory: OutcomeFrozenITunes,
 		},
 		{
-			name: "multi-file book whose path is one of its files",
+			// S5: a soft-deleted book still holding a row at this book's own
+			// file does not block the move -- this live book's claim is the
+			// one that matters.
+			name: "soft-deleted co-owner of the book's own file does not block",
 			setup: func(t *testing.T, store *database.PebbleStore, root string) (*database.Book, []string) {
-				dir := filepath.Join(root, "incoming", "Scattered Suns")
-				b := addInPlaceBook(t, store, "multi", "Scattered Suns", filepath.Join(dir, "01.mp3"), filled(130, 4), nil, 0)
-				second := filepath.Join(dir, "02.mp3")
-				if err := os.WriteFile(second, filled(140, 5), 0o644); err != nil {
+				p := filepath.Join(root, "incoming", "solo.m4b")
+				b := addInPlaceBook(t, store, "solo", "Solo", p, filled(150, 6), nil, 0)
+				marked := true
+				if _, err := store.CreateBook(&database.Book{ID: "gone", Title: "Gone", FilePath: p + ".old", MarkedForDeletion: &marked}); err != nil {
 					t.Fatal(err)
 				}
-				if err := store.CreateBookFile(&database.BookFile{ID: "multi-2", BookID: b.ID, FilePath: second}); err != nil {
+				if err := store.CreateBookFile(&database.BookFile{ID: "gone-f", BookID: "gone", FilePath: p}); err != nil {
 					t.Fatal(err)
 				}
-				return b, []string{b.FilePath, second}
+				return b, nil
 			},
-			wantCategory: OutcomePartialMultiFile,
 		},
 		{
 			name: "single-file book nobody else owns still moves",
@@ -185,4 +187,126 @@ func TestCommitLanding_InPlaceMoveRecordsTheRealOldPath(t *testing.T) {
 	if !found || !stateFound {
 		t.Fatalf("organize_rename recorded=%v, library_state recorded=%v; changes: %+v", found, stateFound, changes)
 	}
+}
+
+// TestReOrganizeInPlace_MultiFileBookMovesEveryFile is S3 of the 2026-09-28
+// review: a multi-file book whose path is one of its files (the scanner's
+// sub-grouped books keep FilePath on their first file) used to be refused as
+// partial_multi_file forever, so it stayed library_state=imported and ABS hid
+// it. Every present file now moves into the book's target directory, every
+// row follows its file, a Missing row stays where it was, and no row is lost.
+func TestReOrganizeInPlace_MultiFileBookMovesEveryFile(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	dir := filepath.Join(root, "incoming", "Scattered Suns")
+	b := addInPlaceBook(t, store, "multi", "Scattered Suns", filepath.Join(dir, "01.mp3"), filled(130, 4), nil, 0)
+	second := filepath.Join(dir, "02.mp3")
+	if err := os.WriteFile(second, filled(140, 5), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateBookFile(&database.BookFile{ID: "multi-2", BookID: b.ID, FilePath: second}); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(dir, "03.mp3")
+	if err := store.CreateBookFile(&database.BookFile{ID: "multi-3", BookID: b.ID, FilePath: gone, Missing: true}); err != nil {
+		t.Fatal(err)
+	}
+	// A different book in the same shared folder must not move.
+	other := addInPlaceBook(t, store, "other", "Other", filepath.Join(dir, "Other.mp3"), filled(90, 7), nil, 0)
+	imported := "imported"
+	b.LibraryState = &imported
+
+	landing, err := svc.OrganizeOneBook(svc.newOrganizer(), b, &noopLogger{})
+	if err != nil {
+		t.Fatalf("OrganizeOneBook: %v", err)
+	}
+	if !landing.MultiFile || len(landing.FileMoves) != 2 {
+		t.Fatalf("landing = %+v, want a multi-file landing with 2 moves", landing)
+	}
+	targetDir := landing.Path
+	mustContent(t, filepath.Join(targetDir, "01.mp3"), filled(130, 4))
+	mustContent(t, filepath.Join(targetDir, "02.mp3"), filled(140, 5))
+	mustContent(t, other.FilePath, filled(90, 7))
+
+	got := getInPlaceBook(t, store, b.ID)
+	if got.FilePath != targetDir || got.LibraryState == nil || *got.LibraryState != "organized" {
+		t.Fatalf("book path=%q state=%v, want %q organized", got.FilePath, got.LibraryState, targetDir)
+	}
+	rows, err := store.GetBookFiles(b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{}
+	for _, r := range rows {
+		paths[r.ID] = r.FilePath
+	}
+	want := map[string]string{
+		"multi-f": filepath.Join(targetDir, "01.mp3"),
+		"multi-2": filepath.Join(targetDir, "02.mp3"),
+		"multi-3": gone,
+	}
+	if len(paths) != len(want) {
+		t.Fatalf("rows = %v, want %v (a row was lost or added)", paths, want)
+	}
+	for id, p := range want {
+		if paths[id] != p {
+			t.Fatalf("row %s at %q, want %q", id, paths[id], p)
+		}
+	}
+
+	const opID = "op-multi"
+	if outcome, _, err := svc.CommitLanding(b, landing, opID, &noopLogger{}); err != nil || outcome != LandingRenamed {
+		t.Fatalf("CommitLanding = %v, %v", outcome, err)
+	}
+	changes, err := store.GetOperationChanges(opID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, c := range changes {
+		counts[c.ChangeType]++
+	}
+	if counts["organize_rename"] != 0 || counts["book_file_move"] != 2 || counts["book_path_update"] != 1 {
+		t.Fatalf("recorded %v; want 2 book_file_move + 1 book_path_update and no organize_rename", counts)
+	}
+}
+
+// TestReOrganizeInPlace_MultiFileRefusesBeforeMovingAnything: one file of
+// the book owned by a different book refuses the WHOLE move, before any file
+// moves.
+func TestReOrganizeInPlace_MultiFileRefusesBeforeMovingAnything(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	dir := filepath.Join(root, "incoming", "Eldest")
+	b := addInPlaceBook(t, store, "multi", "Eldest", filepath.Join(dir, "01.mp3"), filled(130, 4), nil, 0)
+	second := filepath.Join(dir, "02.mp3")
+	if err := os.WriteFile(second, filled(140, 5), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateBookFile(&database.BookFile{ID: "multi-2", BookID: b.ID, FilePath: second}); err != nil {
+		t.Fatal(err)
+	}
+	addInPlaceBook(t, store, "frag", "02", second, nil, nil, 0)
+
+	_, err := svc.ReOrganizeInPlace(b, &noopLogger{})
+	var conflict *DestinationConflictError
+	if !errors.As(err, &conflict) || conflict.Category != OutcomeOwnedByOtherBook {
+		t.Fatalf("err = %v, want owned_by_other_book", err)
+	}
+	mustContent(t, b.FilePath, filled(130, 4))
+	mustContent(t, second, filled(140, 5))
+}
+
+// TestReOrganizeInPlace_OwnershipUnverifiedDuringWarmup is S4: while the
+// complete ownership index is unavailable the organizer must not act on the
+// single-row fallback. The move is skipped (retried later), never made.
+func TestReOrganizeInPlace_OwnershipUnverifiedDuringWarmup(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	src := filepath.Join(root, "incoming", "solo.m4b")
+	b := addInPlaceBook(t, store, "solo", "Solo", src, filled(150, 6), nil, 0)
+	store.UseMemDB = false // memdb not serving: the warmup window
+
+	stats := svc.organizeBooks(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "")
+	if stats.Collisions[OutcomeOwnershipUnverified] != 1 || stats.Failed != 0 || stats.Skipped != 1 {
+		t.Fatalf("want one ownership_unverified skip, got %+v", stats)
+	}
+	mustContent(t, src, filled(150, 6))
 }

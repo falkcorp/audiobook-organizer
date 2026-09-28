@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -194,7 +194,8 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 				report.Safe++
 			}
 		case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
-			ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign:
+			ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
+			ChangeTypeBookFileMove:
 			if refusal := checkFsRegroupRow(store, c); refusal != nil {
 				report.addReferentConflict(c, refusal)
 			} else {
@@ -294,6 +295,20 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange) error
 		return checkFsRegroupRowOn(store, c, func(f *database.BookFile) bool {
 			return strconv.Itoa(f.TrackNumber) == c.NewValue
 		})
+	case ChangeTypeBookFileMove:
+		// The revert moves the file back only while the row still names
+		// NewValue, the file is there and OldValue is free.
+		if err := checkFsRegroupRowOn(store, c, func(f *database.BookFile) bool {
+			return f.FilePath == c.NewValue
+		}); err != nil {
+			return err
+		}
+		if _, err := os.Lstat(c.NewValue); err != nil {
+			return refuse(ReasonChangedSince, "file is no longer at %s", c.NewValue)
+		}
+		if _, err := os.Lstat(c.OldValue); err == nil {
+			return refuse(ReasonChangedSince, "%s is occupied again", c.OldValue)
+		}
 	case ChangeTypeBookPathUpdate:
 		if book.FilePath != c.NewValue {
 			return refuse(ReasonChangedSince, "book %s path changed since the operation", c.BookID)

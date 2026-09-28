@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-09-14
+// last-edited: 2026-09-28
 
 // Package handlers — OrganizeHandler covers the rename-preview, rename-apply,
 // organize-preview, and single-book organize HTTP endpoints.
@@ -15,8 +15,10 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -256,6 +258,22 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 	// then also given a second book row at the same path.
 	landing, err := h.organizeSvc.OrganizeOneBook(org, book, log2)
 	if err != nil {
+		// A declined move -- a file another book owns, the iTunes tree, an
+		// occupied destination -- is the organizer's deliberate refusal, not a
+		// server fault. Answer 409 with its category and reason so the client
+		// can say WHY; it used to surface as a bare 500.
+		var conflict *organizer.DestinationConflictError
+		if errors.As(err, &conflict) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":    "organize declined: " + conflict.Reason,
+				"category": conflict.Category,
+				"reason":   conflict.Reason,
+				"source":   conflict.Source,
+				"target":   conflict.Target,
+				"book_id":  book.ID,
+			})
+			return
+		}
 		httputil.InternalError(c, "failed to organize book", err)
 		return
 	}
@@ -289,15 +307,9 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		case stamped == nil:
 			log2.Warn("organize failed to stamp book %s: row no longer exists", book.ID)
 		}
-		_ = h.store.CreateOperationChange(&database.OperationChange{
-			ID:          ulid.Make().String(),
-			OperationID: opID,
-			BookID:      book.ID,
-			ChangeType:  "organize_rename",
-			FieldName:   "file_path",
-			OldValue:    oldPath,
-			NewValue:    newPath,
-		})
+		// Same record CommitLanding writes: organize_rename for one rename,
+		// per-file moves for a multi-file book.
+		organizer.RecordInPlaceMove(h.store, book.ID, landing, oldPath, opID)
 		if h.publisher != nil {
 			h.publisher.Publish(c.Request.Context(), plugin.NewEvent(plugin.EventFileOrganized, book.ID, map[string]any{
 				"old_path":     oldPath,

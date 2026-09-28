@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 99027475-b084-4603-adf4-4061987f30b0
-// last-edited: 2026-09-19
+// last-edited: 2026-09-28
 
 package organizer
 
@@ -41,6 +41,11 @@ func setupInPlace(t *testing.T) (*Service, *database.PebbleStore, string) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	// In-place moves ask the COMPLETE ownership index (memdb) who owns a file
+	// and refuse when it is not serving (OutcomeOwnershipUnverified), as prod
+	// does during warmup. Serve it, as prod does after warmup.
+	store.WaitForWarmup()
+	store.UseMemDB = true
 	return NewService(store), store, root
 }
 

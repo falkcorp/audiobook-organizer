@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 
 package audiobooks
 
@@ -420,6 +420,8 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 		return rs.revertBookFileTrack(c)
 	case undo.ChangeTypeBookPathUpdate:
 		return rs.revertBookPathUpdate(c)
+	case undo.ChangeTypeBookFileMove:
+		return rs.revertBookFileMove(c)
 	case undo.ChangeTypeBookSoftDelete:
 		return rs.revertBookSoftDelete(c)
 	case undo.ChangeTypeBookPrimaryDemote:
@@ -688,6 +690,59 @@ func (rs *RevertService) revertBookPathUpdate(c *database.OperationChange) error
 		book.FilePath = c.OldValue
 		return nil
 	})
+}
+
+// revertBookFileMove moves one file of a multi-file in-place organize back
+// from NewValue to OldValue and repoints its book_file row. Compare-and-set on
+// every side: the row must still name NewValue, the file must be there, and
+// OldValue must be free; otherwise nothing moves and the row is refused. A
+// failed row write moves the file forward again, so the row and the disk never
+// disagree. Nothing is deleted.
+func (rs *RevertService) revertBookFileMove(c *database.OperationChange) error {
+	fileID, ok := undo.BookFileIDFromField(c.FieldName)
+	if !ok {
+		return fmt.Errorf("no book_file id in field %q", c.FieldName)
+	}
+	release := rs.lockPaths(c.NewValue, c.OldValue)
+	defer release()
+	if _, err := rs.loadBook(c.BookID); err != nil {
+		return err
+	}
+	bf, err := rs.db.GetBookFileByID(c.BookID, fileID)
+	if err != nil || bf == nil {
+		return driftRefusal("book_file %s is no longer on book %s", fileID, c.BookID)
+	}
+	if bf.FilePath != c.NewValue {
+		if bf.FilePath == c.OldValue {
+			return nil // already moved back
+		}
+		return driftRefusal("book_file %s path is %q, not %q as the operation left it", fileID, bf.FilePath, c.NewValue)
+	}
+	if _, err := os.Lstat(c.NewValue); err != nil {
+		return fmt.Errorf("file is no longer at %s; nothing moved back", c.NewValue)
+	}
+	if _, err := os.Lstat(c.OldValue); err == nil {
+		return fmt.Errorf("%s is occupied again; refusing to move %s over it", c.OldValue, c.NewValue)
+	}
+	if err := os.MkdirAll(filepath.Dir(c.OldValue), 0o775); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(c.OldValue), err)
+	}
+	if err := os.Rename(c.NewValue, c.OldValue); err != nil {
+		return fmt.Errorf("failed to move file back from %s to %s: %w", c.NewValue, c.OldValue, err)
+	}
+	bf.FilePath = c.OldValue
+	if bf.ITunesPath != "" && rs.ComputeITunesPath != nil {
+		if ip := rs.ComputeITunesPath(c.OldValue); ip != "" {
+			bf.ITunesPath = ip
+		}
+	}
+	if err := rs.db.UpdateBookFile(bf.ID, bf); err != nil {
+		if rbErr := os.Rename(c.OldValue, c.NewValue); rbErr != nil {
+			return fmt.Errorf("repoint book_file %s: %w; moving the file forward again also failed: %v", bf.ID, err, rbErr)
+		}
+		return fmt.Errorf("repoint book_file %s: %w", bf.ID, err)
+	}
+	return nil
 }
 
 // revertBookSoftDelete clears a book's deletion mark. A book purged since is
