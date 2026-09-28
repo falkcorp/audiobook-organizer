@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op_log.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 17ed77c1-1759-4abb-947e-4de2acc4000c
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // Per-book outcome lines and running outcome counts for the
 // metadata.candidate-fetch op log.
@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -171,13 +172,27 @@ func candidateOutcomeLine(r CandidateResult) (slog.Level, string, []slog.Attr) {
 		if src == "" {
 			src = metabatch.SearchQuerySourceTitle
 		}
-		return slog.LevelInfo, fmt.Sprintf("no match: %s — searched %s %s, author %s: %s%s",
-			book, src, opLogQuoted(searched), opLogQuoted(r.Book.Author), logger.SanitizeLogValue(reason), cache), attrs
+		return slog.LevelInfo, fmt.Sprintf("no match: %s — searched %s %s, %s: %s%s",
+			book, src, opLogQuoted(searched), searchedAuthorPhrase(r), logger.SanitizeLogValue(reason), cache), attrs
 	case "skipped":
 		return slog.LevelInfo, fmt.Sprintf("skipped: %s — %s", book, logger.SanitizeLogValue(reason)), attrs
 	default:
 		return slog.LevelWarn, fmt.Sprintf("error: %s — %s%s", book, logger.SanitizeLogValue(r.Error), query), attrs
 	}
+}
+
+// searchedAuthorPhrase names the author a no-match search actually asked
+// with (CandidateResult.SearchAuthor), not the book's stored author: a
+// placeholder author is never sent, and a line saying "author \"Unknown
+// Author\"" would claim a search that did not happen.
+func searchedAuthorPhrase(r CandidateResult) string {
+	if r.SearchAuthor != "" {
+		return "author " + opLogQuoted(r.SearchAuthor)
+	}
+	if authorname.IsPlaceholderAuthor(r.Book.Author) && strings.TrimSpace(r.Book.Author) != "" {
+		return "no author hint (placeholder " + opLogQuoted(r.Book.Author) + " not sent)"
+	}
+	return "no author hint"
 }
 
 // logCandidateOutcome writes one book's outcome line to the op log.
