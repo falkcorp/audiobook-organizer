@@ -1,5 +1,5 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
 // last-edited: 2026-09-28
 
@@ -15,25 +15,20 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/oklog/ulid/v2"
 )
 
-var (
-	// ownershipLookupErrCount counts scanned books whose ownership could not
-	// be determined because a store read failed. Distinct from
-	// dupLookupSkipCount, whose summary line is about the hash lookup.
-	ownershipLookupErrCount atomic.Int64
-	// stagedAppendCount counts files appended to an existing book because
-	// they arrived after the book was imported (a staged download).
-	stagedAppendCount atomic.Int64
-)
+// errAppendFrozenITunes: a staged arrival whose owner (or whose new files) are
+// in the hands-off iTunes tree. iTunes owns that tree and the book's track
+// list; the scanner does not grow it.
+var errAppendFrozenITunes = errors.New("the book's files are in the iTunes-managed tree; nothing is appended there")
 
 // errFileOwnedByOtherBook is what saveBookToDatabase returns, wrapped in an
 // *ownershipSkipError, when the scanned book was NOT saved because its files
@@ -182,7 +177,7 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 	// A segment list is the one shape whose FilePath is merely its first file;
 	// every other shape's FilePath names the whole book.
 	if !segmentList && atPath != nil {
-		return fileOwnershipVerdict{}, nil
+		return directoryBookArrivals(store, book, atPath)
 	}
 	files, err := scannedFilesOf(book)
 	if err != nil {
@@ -319,6 +314,56 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 		reason: "some files are owned by another book and some are not"}, nil
 }
 
+// directoryBookArrivals handles a single-file or directory-shaped scanned book
+// that is already at its path: an update of that book, which proceeds -- except
+// that for a DIRECTORY book, audio files in its folder that no book has a row
+// for are a staged arrival (checkFileOwnership step 4, directory shape).
+// createBookFilesForBook returns as soon as the book has any rows, so without
+// this those files never got rows. Files another book claims are left to it.
+func directoryBookArrivals(store scannerStore, book *Book, atPath *database.Book) (fileOwnershipVerdict, error) {
+	if atPath.IsSoftDeleted() {
+		return fileOwnershipVerdict{}, nil
+	}
+	info, err := os.Stat(book.FilePath)
+	if err != nil || !info.IsDir() {
+		return fileOwnershipVerdict{}, nil
+	}
+	rows, err := store.GetBookFiles(atPath.ID)
+	if err != nil {
+		return fileOwnershipVerdict{}, fmt.Errorf("book_files of %s: %w", atPath.ID, err)
+	}
+	if len(rows) == 0 {
+		return fileOwnershipVerdict{}, nil // createBookFilesForBook mints them all
+	}
+	have := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		have[r.FilePath] = true
+	}
+	files, err := scannedFilesOf(book)
+	if err != nil {
+		return fileOwnershipVerdict{}, err
+	}
+	var unowned []string
+	for _, f := range files {
+		if have[f] {
+			continue
+		}
+		owners, err := database.BookFileRowsAtPath(store, f)
+		if err != nil {
+			return fileOwnershipVerdict{}, fmt.Errorf("book_file lookup for %s: %w", f, err)
+		}
+		if len(owners) == 0 {
+			unowned = append(unowned, f)
+		}
+	}
+	if len(unowned) == 0 {
+		return fileOwnershipVerdict{}, nil
+	}
+	slices.SortFunc(unowned, util.CompareNatural)
+	return fileOwnershipVerdict{skip: true, owners: []string{atPath.ID}, appendTo: atPath.ID, unowned: unowned,
+		reason: fmt.Sprintf("%d new file(s) arrived in the folder of an already-imported book; appending them to it", len(unowned))}, nil
+}
+
 // appendScannedFilesToOwner writes book_file rows for files that arrived after
 // ownerID was imported. createBookFilesForBook cannot do this: it returns as
 // soon as the book has ANY rows (a rescan must not rebuild rows whose tag
@@ -335,7 +380,7 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 // The caller then re-synthesizes the owner's chapters from all its rows
 // (resynthesizeChaptersAfterAppend) and re-arms its NeedsRescan so the next
 // scan re-reads the grown book. The totals are recomputed by the upsert.
-func appendScannedFilesToOwner(ownerID string, files []string, knownHashes map[string]string, scanLog logger.Logger) (int, error) {
+func appendScannedFilesToOwner(ctx context.Context, ownerID string, files []string, knownHashes map[string]string, scanLog logger.Logger) (int, error) {
 	store := getStore()
 	if store == nil || len(files) == 0 {
 		return 0, nil
@@ -343,6 +388,16 @@ func appendScannedFilesToOwner(ownerID string, files []string, knownHashes map[s
 	existing, err := store.GetBookFiles(ownerID)
 	if err != nil {
 		return 0, fmt.Errorf("book_files of %s: %w", ownerID, err)
+	}
+	for _, f := range files {
+		if pathutil.UnderFrozenITunesTree(f) {
+			return 0, errAppendFrozenITunes
+		}
+	}
+	for _, r := range existing {
+		if pathutil.UnderFrozenITunesTree(r.FilePath) {
+			return 0, errAppendFrozenITunes
+		}
 	}
 	type slot struct{ disc, track int }
 	taken := make(map[slot]bool, len(existing))
@@ -394,7 +449,7 @@ func appendScannedFilesToOwner(ownerID string, files []string, knownHashes map[s
 	if err := store.BatchUpsertScannedBookFiles(rows); err != nil {
 		return 0, fmt.Errorf("append %d file(s) to %s: %w", len(rows), ownerID, err)
 	}
-	stagedAppendCount.Add(int64(len(rows)))
+	scanRunCountersFrom(ctx).stagedAppended.Add(int64(len(rows)))
 	return len(rows), nil
 }
 
@@ -459,18 +514,34 @@ func (c *OwnershipSkips) ReportSummary(scanLog logger.Logger) {
 // handles it as a failure). For a skip it performs the staged-arrival append
 // when the verdict asked for one, records the skip, and returns true: the
 // caller must then run NOTHING else for this book.
-func handleOwnershipSkip(ctx context.Context, err error, skips *OwnershipSkips, knownHashes map[string]string, scanLog logger.Logger) bool {
+//
+// A failed append is a failure of this book, not a skip: it is counted for the
+// run summary and recorded in failures (the op's file-failure list), because
+// the new files stay unimported until a later scan manages it.
+func handleOwnershipSkip(ctx context.Context, err error, skips *OwnershipSkips, failures *FileFailures, knownHashes map[string]string, scanLog logger.Logger) bool {
 	var se *ownershipSkipError
 	if !errors.As(err, &se) {
 		return false
 	}
 	if se.AppendTo != "" {
-		n, aerr := appendScannedFilesToOwner(se.AppendTo, se.Unowned, knownHashes, scanLog)
-		if aerr != nil {
-			scanLog.Warn("scan: could not append %d new file(s) to book %s: %v", len(se.Unowned), se.AppendTo, aerr)
-		} else {
+		n, aerr := appendScannedFilesToOwner(ctx, se.AppendTo, se.Unowned, knownHashes, scanLog)
+		switch {
+		case errors.Is(aerr, errAppendFrozenITunes):
+			se.Reason = fmt.Sprintf("%d new file(s) arrived for an already-imported book in the iTunes-managed tree; they are not appended (iTunes owns that tree)", len(se.Unowned))
+			if skips != nil {
+				skips.Record(scanLog, se)
+			}
+		case aerr != nil:
+			scanRunCountersFrom(ctx).appendFailed.Add(1)
+			reason := fmt.Sprintf("could not append %d newly arrived file(s) to book %s: %v", len(se.Unowned), se.AppendTo, aerr)
+			if failures != nil {
+				failures.Record(scanLog, FileFailure{Path: se.Path, Stage: FileFailureStageSave, Reason: reason})
+			} else {
+				scanLog.Warn("scan: %s", reason)
+			}
+		default:
 			scanLog.Info("scan: appended %d newly arrived file(s) to book %s (%s)", n, se.AppendTo, logger.SanitizeLogValue(se.Path))
-			resynthesizeChaptersAfterAppend(ctx, se.AppendTo, scanLog)
+			resynthesizeChaptersAfterAppend(ctx, se.AppendTo, se.Unowned, scanLog)
 			rearmOwnerForRescan(se.AppendTo, scanLog)
 		}
 		return true
@@ -512,12 +583,17 @@ func ownershipSkipsFrom(ctx context.Context) *OwnershipSkips {
 // its rows. PersistChaptersForBook is idempotent -- it returns as soon as a
 // book has any chapters -- so without this a book first imported with 20 of
 // its 40 files kept 20 files' worth of chapters after the other 20 were
-// appended: the truncation moved from the rows into the chapter list. A
-// multi-file book's chapters are always one per file (see
-// synthesizeMultiFileChapters), so rebuilding them is exact, not a guess. If
-// synthesis yields nothing the stale list is cleared rather than kept, so the
-// next scan's PersistChaptersForBook derives it afresh.
-func resynthesizeChaptersAfterAppend(ctx context.Context, bookID string, scanLog logger.Logger) {
+// appended: the truncation moved from the rows into the chapter list.
+//
+// It only replaces a list that was itself synthesized from the files: one
+// chapter per pre-append file, in order, each titled with that file's title or
+// name (chaptersAreOnePerFile). A list from a metadata provider or edited by
+// the user has other titles or another count, and is kept as it is -- the new
+// files are then simply not in it, which is recoverable; overwriting someone's
+// chapter list is not. If synthesis yields nothing the stale synthesized list
+// is cleared rather than kept, so the next scan's PersistChaptersForBook
+// derives it afresh.
+func resynthesizeChaptersAfterAppend(ctx context.Context, bookID string, appended []string, scanLog logger.Logger) {
 	store := getStore()
 	if store == nil {
 		return
@@ -534,6 +610,27 @@ func resynthesizeChaptersAfterAppend(ctx context.Context, bookID string, scanLog
 	if len(files) <= 1 {
 		return
 	}
+	existing, err := ps.GetChaptersForBook(bookID)
+	if err != nil {
+		scanLog.Warn("scan: could not read the chapters of book %s after appending files; leaving them as they are: %v", bookID, err)
+		return
+	}
+	if len(existing) > 0 {
+		isNew := make(map[string]bool, len(appended))
+		for _, f := range appended {
+			isNew[f] = true
+		}
+		before := make([]database.BookFile, 0, len(files))
+		for _, f := range files {
+			if !isNew[f.FilePath] {
+				before = append(before, f)
+			}
+		}
+		if !chaptersAreOnePerFile(existing, before) {
+			scanLog.Info("scan: kept the chapters of book %s after appending files: they were not synthesized from its files (provider- or user-supplied), so the new files are not in them", bookID)
+			return
+		}
+	}
 	chapters := synthesizeMultiFileChapters(ctx, files, scanLog)
 	dbChapters := make([]database.Chapter, len(chapters))
 	for i, c := range chapters {
@@ -542,4 +639,22 @@ func resynthesizeChaptersAfterAppend(ctx context.Context, bookID string, scanLog
 	if err := ps.SaveChaptersForBook(bookID, dbChapters); err != nil {
 		scanLog.Warn("scan: could not rebuild chapters of book %s after appending files: %v", bookID, err)
 	}
+}
+
+// chaptersAreOnePerFile reports whether chapters is the list
+// synthesizeMultiFileChapters builds from files: one chapter per file, in the
+// rows' order, titled with the row's title or the file's name (with or without
+// its extension).
+func chaptersAreOnePerFile(chapters []database.Chapter, files []database.BookFile) bool {
+	if len(chapters) != len(files) {
+		return false
+	}
+	for i, f := range files {
+		base := filepath.Base(f.FilePath)
+		t := chapters[i].Title
+		if t != base && t != strings.TrimSuffix(base, filepath.Ext(base)) && (f.Title == "" || t != f.Title) {
+			return false
+		}
+	}
+	return true
 }

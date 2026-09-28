@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.111.0
+// version: 1.112.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-28
 
@@ -1031,13 +1031,14 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 
 	scanLog.Info("Scanning for audiobook files (using %d workers)...", workers)
 
-	oversizedGroupRefusedStart := oversizedGroupRefusedCount.Load()
-	oversizedFilesRefusedStart := oversizedFilesRefusedCount.Load()
+	// Counted on this call's own counters, not package globals: a concurrent
+	// walk must not add its refusals to this one's summary.
+	ctx, walkCounts := withScanRunCounters(ctx)
 	defer func() {
-		if d := oversizedGroupRefusedCount.Load() - oversizedGroupRefusedStart; d > 0 {
+		if d := walkCounts.oversizedGroups.Load(); d > 0 {
 			scanLog.Warn("scan walk summary: %d same-title group(s) in oversized directories were not imported (%d files): "+
 				"neither a proven single book (every file short) nor a proven shelf (every file long); see the per-group warnings",
-				d, oversizedFilesRefusedCount.Load()-oversizedFilesRefusedStart)
+				d, walkCounts.oversizedFiles.Load())
 		}
 	}()
 
@@ -1348,9 +1349,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// report this run's delta (audit 2026-07-17 H5).
 	dupLookupErrStart := dupLookupErrCount.Load()
 	dupLookupSkipStart := dupLookupSkipCount.Load()
-	ownershipLookupErrStart := ownershipLookupErrCount.Load()
-	bookFileCeilingRefusedStart := bookFileCeilingRefusedCount.Load()
-	stagedAppendStart := stagedAppendCount.Load()
+	// This run's own ownership/ceiling/append outcomes (see scanRunCounters):
+	// every worker below uses this ctx.
+	ctx, runCounts := withScanRunCounters(ctx)
 	scanCacheErrStart := scanCacheUpdateErrCount.Load()
 	scanFailCountErrStart := scanFailCountErrCount.Load()
 	scanCacheStatErrStart := scanCacheStatErrCount.Load()
@@ -1493,7 +1494,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					extractInfoFromPath(&books[idx])
 					books[idx].LibraryState = "suspicious"
 					if saveErr := saveBook(ctx, &books[idx]); saveErr != nil {
-						if handleOwnershipSkip(ctx, saveErr, skips, books[idx].SegmentHashes, scanLog) {
+						if handleOwnershipSkip(ctx, saveErr, skips, failures, books[idx].SegmentHashes, scanLog) {
 							return // another book's file: nothing of this book to stamp
 						}
 						scanLog.Warn("failed to save suspicious book %s: %v", filePath, saveErr)
@@ -1556,7 +1557,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				}
 				// Save the book and create segments
 				if err := saveBook(ctx, &books[idx]); err != nil {
-					if handleOwnershipSkip(ctx, err, skips, books[idx].SegmentHashes, scanLog) {
+					if handleOwnershipSkip(ctx, err, skips, failures, books[idx].SegmentHashes, scanLog) {
 						return // not this book's files: no rows, chapters or stamp
 					}
 					failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageSave, Reason: err.Error()})
@@ -1570,7 +1571,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					// call is ever changed to pass a FILE the discard becomes a
 					// silent bug. TestProcessBooksParallelDirectoryBookKeepsItsPath
 					// pins the current behaviour.
-					_ = createBookFilesForBook(dirPath, nil, scanLog, normalizeToDirectory)
+					_ = createBookFilesForBookLimited(dirPath, nil, scanLog, normalizeToDirectory, nil, maxDirectoryBookFiles, runCounts)
 					// Chapters must be persisted AFTER the book files exist —
 					// the multi-file synthesis path reads BookFile durations to
 					// build the cumulative timeline. Never fatal to the scan.
@@ -1758,7 +1759,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 			// Save to database (database operations are thread-safe)
 			if err := saveBook(ctx, &books[idx]); err != nil {
-				if handleOwnershipSkip(ctx, err, skips, books[idx].SegmentHashes, scanLog) {
+				if handleOwnershipSkip(ctx, err, skips, failures, books[idx].SegmentHashes, scanLog) {
 					// Not this book's files. Nothing below may run: every step
 					// resolves the book BY PATH and would land on the owner --
 					// clearing its NeedsRescan, rewriting its chapters -- and a
@@ -1796,7 +1797,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					if books[idx].chapterSequence {
 						fileLimit = noBookFileLimit
 					}
-					if moved := createBookFilesForBookLimited(books[idx].FilePath, books[idx].SegmentFiles, scanLog, pathMode, books[idx].SegmentHashes, fileLimit); moved != "" {
+					if moved := createBookFilesForBookLimited(books[idx].FilePath, books[idx].SegmentFiles, scanLog, pathMode, books[idx].SegmentHashes, fileLimit, runCounts); moved != "" {
 						books[idx].FilePath = moved
 					}
 				} else {
@@ -1884,15 +1885,18 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	if d := dupLookupSkipCount.Load() - dupLookupSkipStart; d > 0 {
 		scanLog.Warn("scan summary: %d files skipped because duplicate status was undeterminable (store errors during hash lookup)", d)
 	}
-	if d := ownershipLookupErrCount.Load() - ownershipLookupErrStart; d > 0 {
+	if d := runCounts.ownershipLookupErr.Load(); d > 0 {
 		scanLog.Warn("scan summary: %d scanned books not imported because file ownership was undeterminable (store errors during the book_file ownership lookup)", d)
 	}
-	if d := bookFileCeilingRefusedCount.Load() - bookFileCeilingRefusedStart; d > 0 {
+	if d := runCounts.ceilingRefused.Load(); d > 0 {
 		scanLog.Warn("scan summary: %d book(s) got NO book_file rows because they claimed more than %d files from one flat directory "+
 			"(their files are not imported; see the per-book warnings above)", d, maxDirectoryBookFiles)
 	}
-	if d := stagedAppendCount.Load() - stagedAppendStart; d > 0 {
+	if d := runCounts.stagedAppended.Load(); d > 0 {
 		scanLog.Info("scan summary: %d newly arrived file(s) appended to already-imported books", d)
+	}
+	if d := runCounts.appendFailed.Load(); d > 0 {
+		scanLog.Warn("scan summary: %d append(s) of newly arrived files to an already-imported book failed; the files stay unimported until a later scan succeeds (listed with the file failures)", d)
 	}
 	if d := scanCacheUpdateErrCount.Load() - scanCacheErrStart; d > 0 {
 		scanLog.Warn("scan summary: %d scan-cache updates failed (affected files will be re-hashed next scan)", d)
@@ -2313,7 +2317,7 @@ func createSingleFileBookFile(book *Book, scanLog logger.Logger) {
 	if book.fileMediaInfo != nil {
 		knownInfo = map[string]*mediainfo.MediaInfo{book.FilePath: book.fileMediaInfo}
 	}
-	createBookFilesForBookWithAudio(book.FilePath, segs, scanLog, keepFilePath, book.SegmentHashes, knownInfo, maxDirectoryBookFiles)
+	createBookFilesForBookWithAudio(book.FilePath, segs, scanLog, keepFilePath, book.SegmentHashes, knownInfo, maxDirectoryBookFiles, nil)
 }
 
 // normalizeToDirectory / keepFilePath name createBookFilesForBook's
@@ -2407,7 +2411,7 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 	if len(knownHashes) > 0 {
 		hashes = knownHashes[0]
 	}
-	return createBookFilesForBookWithAudio(bookFilePath, segmentFiles, scanLog, normalizeBookPath, hashes, nil, maxDirectoryBookFiles)
+	return createBookFilesForBookWithAudio(bookFilePath, segmentFiles, scanLog, normalizeBookPath, hashes, nil, maxDirectoryBookFiles, nil)
 }
 
 // noBookFileLimit lifts createBookFilesForBook's maxDirectoryBookFiles
@@ -2415,15 +2419,11 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 const noBookFileLimit = -1
 
 // createBookFilesForBookLimited is createBookFilesForBook with an explicit
-// file ceiling (noBookFileLimit for none).
-func createBookFilesForBookLimited(bookFilePath string, segmentFiles []string, scanLog logger.Logger, normalizeBookPath bool, knownHashes map[string]string, maxFiles int) string {
-	return createBookFilesForBookWithAudio(bookFilePath, segmentFiles, scanLog, normalizeBookPath, knownHashes, nil, maxFiles)
+// file ceiling (noBookFileLimit for none) and the run's counters, which count
+// a ceiling refusal for the run summary (nil: not counted).
+func createBookFilesForBookLimited(bookFilePath string, segmentFiles []string, scanLog logger.Logger, normalizeBookPath bool, knownHashes map[string]string, maxFiles int, rc *scanRunCounters) string {
+	return createBookFilesForBookWithAudio(bookFilePath, segmentFiles, scanLog, normalizeBookPath, knownHashes, nil, maxFiles, rc)
 }
-
-// bookFileCeilingRefusedCount counts books createBookFilesForBook refused to
-// give rows because they exceeded the file ceiling. Reported once per
-// ProcessBooksParallel run.
-var bookFileCeilingRefusedCount atomic.Int64
 
 // createBookFilesForBookWithAudio is createBookFilesForBook plus knownInfo:
 // filePath → media info this scan ALREADY read for that file. A row whose file
@@ -2432,7 +2432,7 @@ var bookFileCeilingRefusedCount atomic.Int64
 // Duration 0. Only single-file books have such a value today: ProcessFile reads
 // the one file; a multi-file book's segments are not read until chapter
 // synthesis, which runs after the rows exist.
-func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string, scanLog logger.Logger, normalizeBookPath bool, knownHashes map[string]string, knownInfo map[string]*mediainfo.MediaInfo, maxFiles int) string {
+func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string, scanLog logger.Logger, normalizeBookPath bool, knownHashes map[string]string, knownInfo map[string]*mediainfo.MediaInfo, maxFiles int, rc *scanRunCounters) string {
 	if getStore() == nil {
 		return ""
 	}
@@ -2538,7 +2538,9 @@ func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string,
 	// passed maxFiles = noBookFileLimit: the ceiling is a stand-in for that
 	// proof, not a limit on how long a book may be.
 	if maxFiles >= 0 && len(segmentFiles) > maxFiles {
-		bookFileCeilingRefusedCount.Add(1)
+		if rc != nil {
+			rc.ceilingRefused.Add(1)
+		}
 		scanLog.Warn("refusing to give book %s %d book_file rows from %s (limit %d): "+
 			"a single flat directory holding this many audio files is an author shelf, not one book; "+
 			"no book_file rows were created for it",
@@ -3158,7 +3160,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// the path lookups found -- the owner.
 		verdict, ownErr := checkFileOwnership(book)
 		if ownErr != nil {
-			ownershipLookupErrCount.Add(1)
+			scanRunCountersFrom(ctx).ownershipLookupErr.Add(1)
 			return fmt.Errorf("skipping import of %s: file ownership undeterminable: %w", book.FilePath, ownErr)
 		}
 		if verdict.skip {

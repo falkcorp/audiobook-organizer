@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_multifile_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c2a9e4d-7b13-4f58-a0d2-3e9b1c5f8a47
 // last-edited: 2026-09-28
 
@@ -149,7 +149,7 @@ func TestReOrganizeInPlace_MultiFileTargetDirSharedRefuses(t *testing.T) {
 // its own first file instead of both claiming the folder.
 func TestReOrganizeInPlace_SubGroupsAlreadyInPlaceKeepTheirFirstFile(t *testing.T) {
 	svc, store, _ := setupInPlace(t)
-	probe :=&database.Book{Title: "Bible", Author: &database.Author{Name: "Some Author"}}
+	probe := &database.Book{Title: "Bible", Author: &database.Author{Name: "Some Author"}}
 	target := targetDirFor(t, svc, probe)
 	mk := func(id, a, bname string, fill byte) (*database.Book, string) {
 		p1, p2 := filepath.Join(target, a), filepath.Join(target, bname)
