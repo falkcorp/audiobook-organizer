@@ -1,5 +1,5 @@
 // file: internal/metabatch/upgrade.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-27
 //
@@ -25,10 +25,13 @@ package metabatch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -71,7 +74,8 @@ func NewMetadataUpgradeService(db Store, fetcher *metafetch.Service) *MetadataUp
 }
 
 // LowQualitySources lists the metadata source slugs whose books are
-// candidates for upgrade, in the order they are visited. It is derived from
+// candidates for upgrade (visited in book-ID order from the sweep cursor,
+// upgradeCursorKey, not source by source). It is derived from
 // the rank table (metafetch.LowQualitySourceSlugs: open_library,
 // google_books, wikipedia); there is no second list. The tag namespace is
 // metadata:source:<slug> (metafetch.MetadataSourceSlug).
@@ -102,6 +106,67 @@ type UpgradeResult struct {
 	Upgraded int `json:"upgraded"`
 	Skipped  int `json:"skipped"`
 	Errors   int `json:"errors"`
+	// OwnerManualOnly counts books left alone because they are Doctor Who /
+	// Big Finish / Torchwood (applygate.IsOwnerManualOnly). They are counted
+	// in Checked, not in Skipped.
+	OwnerManualOnly int `json:"owner_manual_only"`
+	// CursorStart and CursorEnd are the sweep positions this run started
+	// after and stopped at ("" is the start of the list); Wrapped says the
+	// run reached the end of the list and continued from its start.
+	CursorStart string `json:"cursor_start"`
+	CursorEnd   string `json:"cursor_end"`
+	Wrapped     bool   `json:"wrapped"`
+}
+
+// errOwnerManualOnly is tryUpgradeBook's skip for an owner-manual-only book.
+var errOwnerManualOnly = errors.New("owner-manual-only book (Doctor Who / Big Finish / Torchwood)")
+
+// upgradeCursorKey is the STABLE operation-state key of the upgrade's sweep
+// position, carried from one run to the next (the isbn-enrichment pattern,
+// metafetch.isbnEnrichCursorKey). Without it every run walked the eligible
+// books from the top and stopped at the cap, so books that never upgrade
+// (no higher-ranked candidate, or a gate refusal) were re-searched every
+// night and the rest of the list was never reached.
+const upgradeCursorKey = "metabatch:metadata-upgrade-cursor"
+
+// upgradeCursor is the persisted sweep position: the ID of the last book a
+// run dispatched. The next run resumes strictly after it in book-ID order
+// and wraps to the start once the end is reached.
+type upgradeCursor struct {
+	AfterID   string    `json:"after_id"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// loadUpgradeCursor reads the sweep position. Fail-open: an error or a
+// malformed blob starts from the top.
+func (s *MetadataUpgradeService) loadUpgradeCursor() string {
+	data, err := s.DB.GetOperationState(upgradeCursorKey)
+	if err != nil {
+		slog.Warn("metadata-upgrade: reading sweep cursor failed; starting from the top", "err", err)
+		return ""
+	}
+	if len(data) == 0 {
+		return ""
+	}
+	var cur upgradeCursor
+	if err := json.Unmarshal(data, &cur); err != nil {
+		slog.Warn("metadata-upgrade: sweep cursor is malformed; starting from the top", "err", err)
+		return ""
+	}
+	return cur.AfterID
+}
+
+// saveUpgradeCursor persists the sweep position. A write error is logged,
+// never returned: failing to checkpoint must not fail the run.
+func (s *MetadataUpgradeService) saveUpgradeCursor(afterID string) {
+	data, err := json.Marshal(upgradeCursor{AfterID: afterID, UpdatedAt: time.Now()})
+	if err != nil {
+		slog.Warn("metadata-upgrade: marshalling sweep cursor failed", "err", err)
+		return
+	}
+	if err := s.DB.SaveOperationState(upgradeCursorKey, data); err != nil {
+		slog.Warn("metadata-upgrade: persisting sweep cursor failed", "err", err)
+	}
 }
 
 // MinUpgradeConfidence is the minimum score a non-current-source
@@ -138,15 +203,14 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 		return nil, err
 	}
 
-	// Collect up to limit distinct books, weakest-source lists in
-	// LowQualitySources order, before dispatching any work.
+	// Every eligible book (tagged with a low-quality source), de-duplicated
+	// and sorted by book ID so the persisted sweep cursor has a stable order.
+	// A book carries one metadata:source tag; should one ever carry two, the
+	// first source in LowQualitySources order is kept.
 	type item struct{ bookID, sourceSlug string }
-	var items []item
+	var all []item
 	seen := map[string]bool{}
 	for _, sourceSlug := range LowQualitySources {
-		if len(items) >= limit {
-			break
-		}
 		tag := "metadata:source:" + sourceSlug
 		bookIDs, err := s.DB.GetBooksByTag(tag)
 		if err != nil {
@@ -155,23 +219,41 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 		}
 		slog.Info("metadata-upgrade found books tagged", "count", len(bookIDs), "tag", tag)
 		for _, bookID := range bookIDs {
-			if len(items) >= limit {
-				break
-			}
 			if seen[bookID] {
 				continue
 			}
 			seen[bookID] = true
-			items = append(items, item{bookID, sourceSlug})
+			all = append(all, item{bookID, sourceSlug})
 		}
 	}
+	sort.Slice(all, func(i, j int) bool { return all[i].bookID < all[j].bookID })
 
+	// Take up to limit books starting strictly after the cursor, wrapping to
+	// the start of the list, never taking a book twice in one run.
 	result := &UpgradeResult{}
+	afterID := s.loadUpgradeCursor()
+	result.CursorStart = afterID
+	start := sort.Search(len(all), func(i int) bool { return all[i].bookID > afterID })
+	var items []item
+	for k := 0; k < len(all) && len(items) < limit; k++ {
+		idx := start + k
+		if idx >= len(all) {
+			idx -= len(all)
+			if afterID != "" {
+				result.Wrapped = true
+			}
+		}
+		items = append(items, all[idx])
+	}
+	slog.Info("metadata-upgrade sweep", "eligible", len(all), "this_run", len(items),
+		"after", afterID, "wrapped", result.Wrapped)
+
 	total := len(items)
 	var mu sync.Mutex // guards result and the progress stamp
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(upgradeWorkers)
 	var stopErr error
+	lastDispatched := ""
 	for _, it := range items {
 		// Stop dispatching once the hold is lost or the op is canceled; the
 		// workers already running see the same through gctx.
@@ -179,6 +261,7 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 			stopErr = err
 			break
 		}
+		lastDispatched = it.bookID
 		g.Go(func() error {
 			// Per-book stand-down beat: tryUpgradeBook is a network call, so
 			// the scan hold must be renewed per book, right before its write,
@@ -192,6 +275,9 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 			defer mu.Unlock()
 			result.Checked++
 			switch {
+			case errors.Is(upgradeErr, errOwnerManualOnly):
+				slog.Info("metadata-upgrade skipped owner-manual-only book", "id", it.bookID)
+				result.OwnerManualOnly++
 			case upgradeErr != nil:
 				slog.Warn("metadata-upgrade book", "id", it.bookID, "err", upgradeErr)
 				result.Errors++
@@ -208,8 +294,18 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 			return nil
 		})
 	}
-	if err := g.Wait(); err != nil {
-		return result, err
+	waitErr := g.Wait()
+	// Advance the cursor past every book this run dispatched, whatever its
+	// outcome: a book that did not upgrade leaves the front of the queue
+	// until the sweep comes round again, so it cannot starve the rest.
+	if lastDispatched != "" {
+		s.saveUpgradeCursor(lastDispatched)
+		result.CursorEnd = lastDispatched
+	} else {
+		result.CursorEnd = afterID
+	}
+	if waitErr != nil {
+		return result, waitErr
 	}
 	if stopErr != nil {
 		return result, stopErr
@@ -222,6 +318,38 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 // The rule lives in internal/applygate so every bulk-apply path shares it.
 func transcriptionConfirmsCandidate(book *database.Book, c *metafetch.MetadataCandidate) bool {
 	return applygate.TranscriptionConfirms(book, c)
+}
+
+// isOwnerManualOnly reports whether the book belongs to a library the owner
+// curates by hand (applygate.IsOwnerManualOnly: Doctor Who / Big Finish /
+// Torchwood), judged on the book's path, title, series name and every file
+// row's path, the same inputs the maintenance ops check. A read failure is
+// returned rather than read as "not manual-only", which would loosen the
+// rule.
+func (s *MetadataUpgradeService) isOwnerManualOnly(book *database.Book) (bool, error) {
+	series := ""
+	if book.SeriesID != nil {
+		sr, err := s.DB.GetSeriesByID(*book.SeriesID)
+		if err != nil {
+			return false, fmt.Errorf("read series for the owner-manual check: %w", err)
+		}
+		if sr != nil {
+			series = sr.Name
+		}
+	}
+	if applygate.IsOwnerManualOnly(book.FilePath, series) || applygate.IsOwnerManualOnly(book.Title, "") {
+		return true, nil
+	}
+	files, err := s.DB.GetBookFiles(book.ID)
+	if err != nil {
+		return false, fmt.Errorf("read files for the owner-manual check: %w", err)
+	}
+	for _, f := range files {
+		if applygate.IsOwnerManualOnly(f.FilePath, "") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // tryUpgradeBook re-searches metadata for a single book and applies the best
@@ -244,6 +372,16 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 	// automatic apply, which this is: UnseenCandidate below).
 	if metafetch.IsMarkedNoMatch(book.MetadataReviewStatus) {
 		return false, nil
+	}
+	// Standing owner rule: Doctor Who / Big Finish / Torchwood are never
+	// touched by a bulk or automatic apply; the owner applies them by hand.
+	// Checked before the search so no provider quota is spent on them.
+	manual, merr := s.isOwnerManualOnly(book)
+	if merr != nil {
+		return false, merr
+	}
+	if manual {
+		return false, errOwnerManualOnly
 	}
 
 	// Run the full search pipeline — this goes through the

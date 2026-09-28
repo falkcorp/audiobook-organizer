@@ -1,5 +1,5 @@
 // file: internal/metabatch/upgrade_rank_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e0b7c3a-91d4-4f6e-8a2b-c7d1e9f40a63
 // last-edited: 2026-09-27
 //
@@ -32,13 +32,15 @@ type rankFetcher struct {
 	results  []metafetch.MetadataCandidate
 	mu       sync.Mutex
 	searches int
+	ids      []string
 	applied  []metafetch.ApplyOptions
 	sources  []string
 }
 
-func (f *rankFetcher) SearchMetadataForBook(string, string, ...string) (*metafetch.SearchMetadataResponse, error) {
+func (f *rankFetcher) SearchMetadataForBook(id string, _ string, _ ...string) (*metafetch.SearchMetadataResponse, error) {
 	f.mu.Lock()
 	f.searches++
+	f.ids = append(f.ids, id)
 	f.mu.Unlock()
 	return &metafetch.SearchMetadataResponse{Results: f.results}, nil
 }
@@ -63,6 +65,9 @@ type rankFixture struct {
 	// sourceTag is the book's metadata:source:* system tag, as the apply's
 	// EnsureSingletonBookTag leaves it.
 	sourceTag string
+	// seriesName and files feed the owner-manual-only check.
+	seriesName string
+	files      []string
 }
 
 func (f *rankFixture) tag() string {
@@ -120,6 +125,16 @@ func newRankFixture() *rankFixture {
 				f.sourceTag = tag
 			}
 			return nil
+		},
+		GetSeriesByIDFunc: func(id int) (*database.Series, error) {
+			return &database.Series{ID: id, Name: f.seriesName}, nil
+		},
+		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+			var out []database.BookFile
+			for _, p := range f.files {
+				out = append(out, database.BookFile{BookID: bookID, FilePath: p})
+			}
+			return out, nil
 		},
 		GetBooksByTagFunc: func(tag string) ([]string, error) {
 			if tag == "metadata:source:open_library" {
@@ -211,7 +226,7 @@ func TestRunUpgrade_VisitsOpenLibraryBooks(t *testing.T) {
 
 	res, err := svc.RunUpgrade(context.Background(), 200, nil)
 	require.NoError(t, err)
-	require.Equal(t, UpgradeResult{Checked: 1, Upgraded: 1}, *res)
+	require.Equal(t, [2]int{1, 1}, [2]int{res.Checked, res.Upgraded})
 	require.Equal(t, "Audnexus (Audible)'s description", *f.written().Description)
 }
 
@@ -234,7 +249,7 @@ func TestRunUpgrade_PoolCountsEveryBook(t *testing.T) {
 	svc, fetcher := f.service(candidate("Audible", 0.95))
 	res, err := svc.RunUpgrade(context.Background(), 200, nil)
 	require.NoError(t, err)
-	require.Equal(t, UpgradeResult{Checked: 30, Upgraded: 30}, *res)
+	require.Equal(t, [3]int{30, 30, 0}, [3]int{res.Checked, res.Upgraded, res.Errors})
 	require.Len(t, fetcher.applied, 30)
 }
 

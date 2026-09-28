@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_rank.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c2618c2e-2a64-4761-bc76-c9bbd65b3792
 // last-edited: 2026-09-27
 //
@@ -109,9 +109,10 @@ func SourceOutranks(candidateSource, currentSource string) bool {
 
 // LowQualitySourceSlugs returns the slugs ranked at or below
 // LowQualitySourceMaxRank, highest rank first (open_library, google_books,
-// wikipedia). Derived from sourceRanks; there is no second list. The order is
-// the order the metadata upgrade visits them in: its per-run cap is shared, so
-// the owner's case (Open Library books) is reached before the rest.
+// wikipedia). Derived from sourceRanks; there is no second list. The order
+// only decides which source a book is attributed to should it ever carry two
+// tags; the metadata upgrade visits books in book-ID order from a persisted
+// sweep cursor, not source by source.
 func LowQualitySourceSlugs() []string {
 	var out []string
 	for slug, r := range sourceRanks {
