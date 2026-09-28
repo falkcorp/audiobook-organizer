@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_grouping_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 950c3ace-c8d3-4885-9a1d-d90682d41415
 // last-edited: 2026-09-28
 
@@ -153,20 +153,130 @@ func TestConsolidateChapterGroups_SegmentsInNaturalOrder(t *testing.T) {
 	require.Equal(t, pathsIn("/lib/W", "Chapter 1.mp3", "Chapter 2.mp3", "Chapter 10.mp3"), books[0].SegmentFiles)
 }
 
-// TestConsolidateChapterGroups_OversizedGroupRefused: a qualifying group above
-// the ceiling produces no book at all -- not one oversized book (whose rows
-// createBookFilesForBook would refuse, leaving an empty book) and not one book
-// per file.
-func TestConsolidateChapterGroups_OversizedGroupRefused(t *testing.T) {
-	stubChapterDurations(t, 300, nil)
+// willNames is one title's chapters, n of them, all under one trailing-number
+// key.
+func willNames(n int) []string {
 	var names []string
-	for i := 1; i <= maxDirectoryBookFiles+1; i++ {
+	for i := 1; i <= n; i++ {
 		names = append(names, fmt.Sprintf("Will of the Empress %03d.mp3", i))
 	}
-	names = append(names, "Readme Standalone.mp3")
-	books := consolidateChapterGroups(context.Background(), pathsIn("/lib/W", names...))
-	require.Len(t, books, 1, "only the standalone file may come out")
-	require.Equal(t, "Readme Standalone.mp3", filepath.Base(books[0].FilePath))
+	return names
+}
+
+// TestConsolidateChapterGroups_ProvenSequenceHasNoCeiling is S1 of the
+// 2026-09-28 review: a group that passed "one key, 3+ files, every file short"
+// cannot be an author shelf, so it becomes one book however many files it
+// has. Refusing it (the first version of this change) imported nothing and
+// said so only in a slog line.
+func TestConsolidateChapterGroups_ProvenSequenceHasNoCeiling(t *testing.T) {
+	stubChapterDurations(t, 300, nil)
+	names := append(willNames(maxDirectoryBookFiles+50), "Readme Standalone.mp3")
+	for _, mode := range []consolidateMode{consolidateUntagged, consolidateOversized} {
+		books := consolidateChapterGroupsMode(context.Background(), pathsIn("/lib/W", names...), mode)
+		require.Len(t, books, 2, "mode %d: one book for the sequence, one for the standalone file", mode)
+		require.Len(t, books[0].SegmentFiles, maxDirectoryBookFiles+50)
+		require.True(t, books[0].chapterSequence, "the sequence must carry its exemption from the row backstop")
+		require.False(t, books[1].chapterSequence)
+	}
+}
+
+// TestConsolidateOversized_NeverShattersASameTitleGroup is S2: in the
+// oversized-directory path a same-key group becomes one book, stays per-file
+// only when EVERY file is a whole book (a shelf), and is otherwise refused and
+// counted -- including when untagged consolidation is switched off and when a
+// single long file sits among hundreds of short chapters.
+func TestConsolidateOversized_NeverShattersASameTitleGroup(t *testing.T) {
+	files := pathsIn("/lib/W", willNames(maxDirectoryBookFiles+10)...)
+	t.Run("consolidation switched off still groups", func(t *testing.T) {
+		stubChapterDurations(t, 300, nil)
+		config.AppConfig.ChapterConsolidationThresholdMin = 0
+		books := consolidateChapterGroupsMode(context.Background(), files, consolidateOversized)
+		require.Len(t, books, 1)
+		require.Len(t, books[0].SegmentFiles, len(files))
+		// The untagged path keeps honouring the switch.
+		require.Len(t, consolidateChapterGroups(context.Background(), files), len(files))
+	})
+	t.Run("one long chapter among short ones is refused, not shattered", func(t *testing.T) {
+		stubChapterDurations(t, 300, map[string]int{files[7]: 3 * 3600})
+		groups, refusedFiles := oversizedGroupRefusedCount.Load(), oversizedFilesRefusedCount.Load()
+		books := consolidateChapterGroupsMode(context.Background(), files, consolidateOversized)
+		require.Empty(t, books)
+		require.Equal(t, int64(1), oversizedGroupRefusedCount.Load()-groups)
+		require.Equal(t, int64(len(files)), oversizedFilesRefusedCount.Load()-refusedFiles)
+		// The untagged path still stands such a group per file, as before.
+		require.Len(t, consolidateChapterGroups(context.Background(), files), len(files))
+	})
+	t.Run("unreadable durations are refused, not shattered", func(t *testing.T) {
+		stubChapterDurations(t, 0, nil)
+		groups := oversizedGroupRefusedCount.Load()
+		require.Empty(t, consolidateChapterGroupsMode(context.Background(), files, consolidateOversized))
+		require.Equal(t, int64(1), oversizedGroupRefusedCount.Load()-groups)
+	})
+	t.Run("every file a whole book is a shelf", func(t *testing.T) {
+		stubChapterDurations(t, 9*3600, nil)
+		books := consolidateChapterGroupsMode(context.Background(), files, consolidateOversized)
+		require.Len(t, books, len(files))
+	})
+}
+
+// TestGroupFileDurationSec_UsesTheStoredRowDuration is N1: a file whose
+// present book_file row already records a duration for the same size is not
+// probed again on every rescan.
+func TestGroupFileDurationSec_UsesTheStoredRowDuration(t *testing.T) {
+	f := newOwnershipFixture(t)
+	useScannerStore(t, f.store)
+	probes := 0
+	prev := chapterFileDurationSec
+	t.Cleanup(func() { chapterFileDurationSec = prev })
+	chapterFileDurationSec = func(string) int { probes++; return 42 }
+
+	rows, err := f.store.GetBookFiles(f.parent.ID)
+	require.NoError(t, err)
+	var known, stale string
+	for i, r := range rows {
+		r.Duration = 777
+		r.FileSize = 1 // every fixture file is one byte
+		if i == 1 {
+			r.FileSize = 99 // the file changed since the row was written
+			stale = r.FilePath
+		} else {
+			known = r.FilePath
+		}
+		require.NoError(t, f.store.UpdateBookFile(r.ID, &r))
+	}
+	require.Equal(t, 777, groupFileDurationSec(known))
+	require.Zero(t, probes, "a stored duration for the same file was probed again")
+	require.Equal(t, 42, groupFileDurationSec(stale))
+	require.Equal(t, 42, groupFileDurationSec(f.loose[0]))
+	require.Equal(t, 2, probes)
+}
+
+// TestProcessBooksParallel_ProvenSequenceOverCeilingGetsAllItsRows is S1 end
+// to end: the createBookFilesForBook backstop must not refuse the rows of a
+// book the grouping already proved to be one chapter sequence.
+func TestProcessBooksParallel_ProvenSequenceOverCeilingGetsAllItsRows(t *testing.T) {
+	SetScanner(nil)
+	t.Cleanup(func() { SetScanner(nil) })
+	stubChapterDurations(t, 240, nil)
+	store, cleanup := setupPebbleStore(t)
+	defer cleanup()
+	SetStore(store)
+	defer SetStore(nil)
+	oldExts := config.AppConfig.SupportedExtensions
+	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
+
+	dir := t.TempDir()
+	files := writeDirFixture(t, dir, willNames(maxDirectoryBookFiles+20), "Will of the Empress", func(int) bool { return true })
+	books := groupFilesIntoBooks(context.Background(), files)
+	require.Len(t, books, 1)
+	require.NoError(t, ProcessBooksParallel(context.Background(), books, 2, nil, logger.New("test")))
+	all, err := store.GetAllBooksCore(0, 0)
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	rows, err := store.GetBookFiles(all[0].ID)
+	require.NoError(t, err)
+	require.Len(t, rows, maxDirectoryBookFiles+20, "the row backstop refused a proven chapter sequence")
 }
 
 // bibleNames is a flat single-work folder: three biblical books, chapters
@@ -188,8 +298,7 @@ func bibleNames() []string {
 // TestGroupFilesIntoBooks_OversizedFlatWorkIsSubGrouped is task C: a flat
 // directory over the ceiling whose files all share one album tag used to fall
 // back to one book per file (a 1,188-file Bible became 1,188 books). It must
-// now sub-group by filename stem, each group within the ceiling, each marked
-// as sharing its directory.
+// now sub-group by filename stem, each marked as sharing its directory.
 func TestGroupFilesIntoBooks_OversizedFlatWorkIsSubGrouped(t *testing.T) {
 	stubChapterDurations(t, 240, nil)
 	dir := t.TempDir()
@@ -201,7 +310,6 @@ func TestGroupFilesIntoBooks_OversizedFlatWorkIsSubGrouped(t *testing.T) {
 	sizes := map[string]int{}
 	for _, b := range books {
 		require.True(t, b.sharesDirectory, "%s must keep its own path", b.FilePath)
-		require.LessOrEqual(t, len(b.SegmentFiles), maxDirectoryBookFiles)
 		first := filepath.Base(b.SegmentFiles[0])
 		sizes[strings.Fields(first)[1]] = len(b.SegmentFiles)
 	}

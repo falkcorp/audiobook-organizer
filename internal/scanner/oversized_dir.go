@@ -1,5 +1,5 @@
 // file: internal/scanner/oversized_dir.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f7c8efaa-7942-41b9-b42d-5a5bb1e2d51f
 // last-edited: 2026-09-28
 
@@ -24,14 +24,21 @@ import (
 // chapter-sequence grouping the untagged files get (consolidateChapterGroups):
 //
 //   - a flat single work ("01 Genesis 001" … "66 Revelation 022", "Title 001" …)
-//     groups by its filename stem into one book per stem, each ≤ the ceiling;
+//     groups by its filename stem into one book per stem;
+//
 //   - an author shelf ("Mistborn 1", "Mistborn 2", "Elantris" -- whole books,
 //     each long) is NOT merged: consolidation requires every file in a group to
 //     be short, so each file still stands alone, which is what a shelf is;
-//   - a single stem still over the ceiling is refused outright with a warning
-//     and no book, rather than shattered or truncated.
 //
-// Every multi-file book returned is marked sharesDirectory: several books now
+//   - a group that is neither -- mixed short and long files, or durations that
+//     cannot be read -- is refused and counted (see oversizedGroupRefusedCount
+//     and ScanDirectoryParallel's summary), never shattered into per-file books.
+//
+// A same-title group that passes (one key, three or more files, every file
+// short) becomes ONE book however many files it has: that evidence is what the
+// ceiling stands in for, so it does not apply (see consolidateChapterGroups).
+//
+// Every multi-file book returned is marked sharesDirectory: several books may
 // come out of one folder, and normalizing each one's FilePath to that folder
 // would give them all the same path.
 func subGroupOversizedAlbum(ctx context.Context, files []string) []Book {
@@ -40,7 +47,7 @@ func subGroupOversizedAlbum(ctx context.Context, files []string) []Book {
 		"count", len(files),
 		"limit", maxDirectoryBookFiles,
 	)
-	books := consolidateChapterGroups(ctx, files)
+	books := consolidateChapterGroupsMode(ctx, files, consolidateOversized)
 	for i := range books {
 		if len(books[i].SegmentFiles) > 1 {
 			books[i].sharesDirectory = true
