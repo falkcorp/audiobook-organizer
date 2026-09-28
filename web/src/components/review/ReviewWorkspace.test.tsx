@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-09-27
 
@@ -77,12 +77,13 @@ describe('lane default', () => {
     renderWorkspace();
     await screen.findByTestId('compare-spine');
 
+    // On by default: the default review level is In-depth (owner 2026-09-27).
     const control = screen.getByRole('switch', { name: 'Hide runtime differences' });
-    expect(control).not.toBeChecked();
+    expect(control).toBeChecked();
 
     await user.hover(control);
     expect(
-      await screen.findByText(/unknown runtime stay visible/i)
+      await screen.findByText(/unknown runtime on either side stay visible/i)
     ).toBeInTheDocument();
   });
 

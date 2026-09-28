@@ -1,5 +1,5 @@
 // file: web/src/lib/storageKeys.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5c8a3d7b-2e1f-4a9c-b3d5-1e8f2a9c7d4b
 // last-edited: 2026-09-27
 
@@ -17,7 +17,10 @@ export const STORAGE_KEYS = {
   LIBRARY_RECENT_SEARCHES: 'library_recent_searches',
   METADATA_REVIEW_LANGUAGE_FILTER: 'metadata-review-language-filter',
   METADATA_REVIEW_PAGE_SIZE: 'metadata-review-page-size',
+  /** Legacy boolean (the old Strict review switch). Read once to migrate into METADATA_REVIEW_LEVEL, then removed. */
   METADATA_REVIEW_STRICT_PRESET: 'metadata-review-strict-preset',
+  /** The review-level slider: off | normal | indepth | strict. */
+  METADATA_REVIEW_LEVEL: 'metadata-review-level',
   METADATA_REVIEW_BULK_APPLY_MODE: 'metadata-review-bulk-apply-mode',
   METADATA_REVIEW_SKIP_REPLACE_CONFIRM: 'metadata-review-skip-replace-confirm',
   DEDUP_PAGE_SIZE: 'dedup-page-size',

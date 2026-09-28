@@ -1,5 +1,5 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
 // last-edited: 2026-09-27
 //
@@ -93,8 +93,15 @@ export function MetadataPanel({
           sourceCounts={metadata.sourceCounts}
           filters={metadata.filters}
           setFilters={metadata.setFilters}
-          strictPreset={metadata.strictPreset}
-          setStrictPreset={metadata.setStrictPreset}
+          reviewLevel={metadata.reviewLevel}
+          setReviewLevel={metadata.setReviewLevel}
+          levelCustomised={metadata.levelCustomised}
+          runtimeHiddenCount={metadata.runtimeHiddenCount}
+          chipFilter={metadata.chipFilter}
+          onToggleChip={metadata.toggleChipFilter}
+          onClearChip={metadata.clearChipFilter}
+          unreviewableLoading={metadata.unreviewableLoading}
+          unreviewableError={metadata.unreviewableError}
           page={metadata.page}
           totalPages={metadata.totalPages}
           pageSize={metadata.pageSize}
@@ -151,6 +158,11 @@ export function MetadataPanel({
 
       <ActionBar
         selectedIds={metadata.selectedIds}
+        applicableSelectedIds={metadata.applicableSelectedIds}
+        searching={metadata.searching}
+        onSearchSelected={(ids) =>
+          void metadata.searchAgain(ids, (message) => Promise.resolve(window.confirm(message)))
+        }
         highConfidenceIds={metadata.highConfidenceIds}
         allVisiblePendingIds={metadata.allVisiblePendingIds}
         unmatchedCount={unmatchedCount}

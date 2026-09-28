@@ -1,5 +1,5 @@
 // file: web/src/components/review/ActionBar.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5a91c73e-2d48-4b06-9f15-8c3e0a7b6d29
 // last-edited: 2026-09-27
 //
@@ -51,6 +51,19 @@ import { metadataLane } from './lanes';
 
 export interface ActionBarProps {
   selectedIds: Set<string>;
+  /**
+   * The part of the selection Apply selected can act on: the selection minus
+   * books known to have no candidate. Defaults to the whole selection, which
+   * is what it is whenever no candidate-less row is selected.
+   */
+  applicableSelectedIds?: string[];
+  /**
+   * Search again for every selected book with its own title and author. When
+   * absent the button is not rendered.
+   */
+  onSearchSelected?: (ids: string[]) => void;
+  /** A Search again request is in flight. */
+  searching?: boolean;
   highConfidenceIds: string[];
   allVisiblePendingIds: string[];
   unmatchedCount: number;
@@ -81,6 +94,9 @@ export interface ActionBarProps {
 
 export function ActionBar({
   selectedIds,
+  applicableSelectedIds,
+  onSearchSelected,
+  searching = false,
   highConfidenceIds,
   allVisiblePendingIds,
   unmatchedCount,
@@ -114,6 +130,7 @@ export function ActionBar({
   };
 
   const selected = [...selectedIds];
+  const applicable = applicableSelectedIds ?? selected;
 
   return (
     <Box
@@ -227,17 +244,33 @@ export function ActionBar({
           </span>
         </Tooltip>
 
+        {onSearchSelected && (
+          <Tooltip title="Ask the providers again for every selected book, using each book's current title and author. Runs as one background search (watch the bell); the new candidates appear here to review when it finishes.">
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={searching || selected.length === 0}
+                data-testid="search-selected"
+                onClick={() => onSearchSelected(selected)}
+              >
+                Search again ({selected.length})
+              </Button>
+            </span>
+          </Tooltip>
+        )}
+
         <Button
           size="small"
           variant="contained"
-          disabled={busy || selected.length === 0}
+          disabled={busy || applicable.length === 0}
           data-testid="apply-selected"
           onClick={() =>
-            run({ lane: 'metadata', type: 'applySelected', ids: selected }, selected.length)
+            run({ lane: 'metadata', type: 'applySelected', ids: applicable }, applicable.length)
           }
         >
           {verbs.applySelected}
-          {modeSuffix} ({selected.length})
+          {modeSuffix} ({applicable.length})
         </Button>
       </Stack>
     </Box>
