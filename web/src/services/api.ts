@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.129.1
+// version: 2.130.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-27
 
@@ -4546,6 +4546,12 @@ export async function getCachedReviewResults(
    * unless the server says so.
    */
   resolved_no_candidates?: number;
+  /**
+   * The server's bulk apply fail-safe (setting bulk_apply_max_items, applycap).
+   * The review page refuses an Apply selected larger than this up front rather
+   * than chunking around it.
+   */
+  bulk_apply_max_items?: number;
 }> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (all) params.set('all', 'true');
