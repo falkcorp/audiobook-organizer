@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op_log_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 42f7956b-7f83-42cb-adf4-96b00b38786d
 // last-edited: 2026-09-28
 
@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -143,7 +144,7 @@ func TestCandidateFetch_LogsEveryOutcomeAndCounts(t *testing.T) {
 		database.MetadataSearchIdentity("", "", nil, nil, nil), junk, 0.9); err != nil {
 		t.Fatalf("seed junk fetch cache: %v", err)
 	}
-	placeholder := mk(&database.Book{Title: "Unknown Title", FilePath: "/lib/ph/book.m4b"})
+	placeholder := mk(&database.Book{Title: "Unknown Title", FilePath: "/library/Unknown Author/Unknown Title/book.m4b"})
 	fileLevel := mk(&database.Book{Title: "", FilePath: "/lib/fl/book.m4b"})
 	fileTitle := "File Level Title"
 	if err := store.CreateBookFile(&database.BookFile{
@@ -227,7 +228,7 @@ func TestCandidateFetch_LogsEveryOutcomeAndCounts(t *testing.T) {
 	if !hulkLine {
 		t.Errorf("no matched line names the transcribed query and the candidate: %v", rec.linesWithPrefix("matched: "))
 	}
-	if got := rec.linesWithPrefix("skipped: "); len(got) == 1 && (!strings.Contains(got[0].msg, "no usable title") || !strings.Contains(got[0].msg, `"/lib/ph/book.m4b"`)) {
+	if got := rec.linesWithPrefix("skipped: "); len(got) == 1 && (!strings.Contains(got[0].msg, "no usable title") || !strings.Contains(got[0].msg, `"/library/Unknown Author/Unknown Title/book.m4b"`)) {
 		t.Errorf("skipped line lacks its reason or the book's path: %s", got[0].msg)
 	}
 	if got := rec.linesWithPrefix("no match: "); len(got) == 1 && !strings.Contains(got[0].msg, `searched title "Nobody Catalogued This"`) {
@@ -274,6 +275,81 @@ func TestCandidateFetch_TranscribedEmptyBookIsNotRefetched(t *testing.T) {
 	}
 	if r := second[book.ID]; r.Status != "no_match" || r.Cached != candidateCachedKnownEmpty {
 		t.Fatalf("second run = {status %q, cached %q}, want {no_match, %q}", r.Status, r.Cached, candidateCachedKnownEmpty)
+	}
+}
+
+// A chapter-number or chapter-fragment title is searched by its transcribed
+// title, then its folder name, never verbatim; the book's own title is left
+// alone, and each path's outcome line names the query it used.
+func TestCandidateFetch_ChapterTitleFallbacks(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	store := s.storeForWiring()
+
+	src := &querySource{hits: map[string]metadata.BookMetadata{
+		"Eldest":         {Title: "Eldest", Author: "Christopher Paolini"},
+		"World War Hulk": {Title: "World War Hulk", Author: "Greg Pak"},
+	}}
+	mfs := metafetch.NewService(store)
+	mfs.SetOverrideSources([]metadata.MetadataSource{src})
+	s.metadataFetchService = mfs
+
+	wwh := "World War Hulk"
+	cases := []struct {
+		name, title, path string
+		transcribed       *string
+		wantStatus        string
+		wantSource        string
+		wantQuery         string
+		wantLine          string
+	}{
+		{name: "chapter number via transcription", title: "Chapter 3", path: "/library/x/y/03.mp3", transcribed: &wwh,
+			wantStatus: "matched", wantSource: metabatch.SearchQuerySourceTranscribedTitle, wantQuery: wwh,
+			wantLine: `[searched transcribed_title by "World War Hulk"]`},
+		{name: "bare number via folder", title: "98", path: "/library/Paolini/Eldest/98.mp3",
+			wantStatus: "matched", wantSource: metabatch.SearchQuerySourceFolderTitle, wantQuery: "Eldest",
+			wantLine: `[searched folder_title by "Eldest"]`},
+		{name: "fragment with nothing usable", title: "06 Chapter 6", path: "/library/06 Chapter 6.mp3",
+			wantStatus: "skipped", wantLine: "chapter fragment, no usable title"},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := store.CreateBook(&database.Book{Title: tc.title, FilePath: tc.path, TranscribedTitle: tc.transcribed})
+			if err != nil {
+				t.Fatalf("CreateBook: %v", err)
+			}
+			rec := newOutcomeRecorder(fmt.Sprintf("op-chapter-%d", i))
+			params, _ := json.Marshal(metadataCandidateFetchOpParams{BookIDs: []string{b.ID}})
+			if err := s.runMetadataCandidateFetchOp(context.Background(), params, rec); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			rows, _ := store.GetOperationResults(fmt.Sprintf("op-chapter-%d", i))
+			if len(rows) != 1 {
+				t.Fatalf("rows = %d, want 1", len(rows))
+			}
+			var cr CandidateResult
+			_ = json.Unmarshal([]byte(rows[0].ResultJSON), &cr)
+			if cr.Status != tc.wantStatus || cr.SearchQuerySource != tc.wantSource || cr.SearchQuery != tc.wantQuery {
+				t.Errorf("result = {%s %s %q}, want {%s %s %q}", cr.Status, cr.SearchQuerySource, cr.SearchQuery,
+					tc.wantStatus, tc.wantSource, tc.wantQuery)
+			}
+			found := false
+			for _, l := range rec.linesWithPrefix("") {
+				found = found || strings.Contains(l.msg, tc.wantLine)
+			}
+			if !found {
+				t.Errorf("no op log line contains %q: %v", tc.wantLine, rec.linesWithPrefix(""))
+			}
+			got, _ := store.GetBookByID(b.ID)
+			if got == nil || got.Title != tc.title {
+				t.Errorf("book title changed to %v; the fallback is only a query", got)
+			}
+		})
+	}
+	for _, q := range src.asked() {
+		if q == "Chapter 3" || q == "98" || q == "06 Chapter 6" {
+			t.Errorf("a provider was asked for the raw chapter title %q (all: %q)", q, src.asked())
+		}
 	}
 }
 

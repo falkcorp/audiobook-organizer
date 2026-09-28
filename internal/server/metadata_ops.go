@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-28
 //
@@ -44,7 +44,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	ulid "github.com/oklog/ulid/v2"
@@ -234,21 +233,23 @@ func (s *Server) runBulkMetadataFetchAll(
 		identity   string
 	}
 	var work []bookWork
-	// untitled counts books left out because their title is empty or a
-	// placeholder: searching one matches whatever the catalog ranks first.
-	untitled := 0
 	for i := range allBooks {
 		b := &allBooks[i]
 		if done[b.ID] {
 			continue
 		}
-		if organizer.IsPlaceholderTitle(b.Title) {
-			untitled++
-			continue
-		}
 		author := ""
 		if b.AuthorID != nil {
 			author = authorByID[*b.AuthorID]
+		}
+		// A book with no searchable title of its own (empty, placeholder,
+		// chapter number) is NOT left out: a worker resolves a stand-in
+		// title for it (resolveBulkFetchQuery) and its identity with it, so
+		// there is no identity to probe the cache with here. WalkSourceChain
+		// still serves a fresh cached row for the stand-in without a call.
+		if metadata.IsUnsearchableTitle(b.Title) {
+			work = append(work, bookWork{book: *b, authorName: author})
+			continue
 		}
 		// Resolved before the skip_cached probe: the probe must ask for the
 		// book's CURRENT search identity, or a row fetched for an older
@@ -274,9 +275,6 @@ func (s *Server) runBulkMetadataFetchAll(
 	totalBooks := len(existingResults) + len(work)
 	alreadyDone := len(existingResults)
 	logging.Info(ctx, "bulk-metadata-fetch books total, already cached, to fetch", "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
-	if untitled > 0 {
-		_ = progress.Log("info", bulkFetchUntitledLine(untitled), nil)
-	}
 
 	// Track affected books in operation context
 	for i := range work {
@@ -367,19 +365,23 @@ func (s *Server) runBulkMetadataFetchAll(
 		bookID := w.book.ID
 		currentAuthor := w.authorName
 
-		// Skip obvious chapter fragments of shattered audiobooks (e.g. a book
-		// titled "06 Chapter 6"). Searching the catalog for these confidently
-		// matches a random entry, so we record a skipped status and never hit
-		// the API or cache a bogus result.
-		if metadata.IsLikelyChapterFragment(w.book.Title) {
+		// A title that is empty, a placeholder, a chapter number or a
+		// chapter fragment ("06 Chapter 6") is never searched as-is: a
+		// catalog answers it with a random entry at ~100% confidence. The
+		// book is searched by its transcribed title or folder name instead,
+		// and skipped -- with a ledger row and its own line -- only when
+		// neither is usable. See resolveBulkFetchQuery.
+		q := resolveBulkFetchQuery(store, bookID, w.book.Title, w.book.FilePath, currentAuthor, w.identity, nil)
+		ref := bulkFetchBook{id: bookID, title: w.book.Title, author: currentAuthor, path: w.book.FilePath, query: q.query}
+		if !q.query.Usable {
 			_ = store.CreateOperationResult(&database.OperationResult{
 				OperationID: opID,
 				BookID:      bookID,
-				ResultJSON:  `{"status":"skipped_fragment","source":""}`,
-				Status:      metafetch.FetchStatusSkippedFragment,
+				ResultJSON:  metafetch.LedgerResultJSON(q.skipStatus, "", ""),
+				Status:      q.skipStatus,
 			})
 			skipped.Add(1)
-			reportOutcome(bookID, "info", bulkFetchSkippedFragmentLine(w.book.Title, w.authorName))
+			reportOutcome(bookID, "info", bulkFetchSkippedNoTitleLine(ref, q.skipKind))
 			n := atomic.AddInt64(&completed, 1)
 			if n%50 == 0 || int(n) == totalBooks {
 				reportProgress(int(n), totalBooks,
@@ -388,7 +390,7 @@ func (s *Server) runBulkMetadataFetchAll(
 			return nil
 		}
 
-		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, metafetch.SearchAuthorHint(currentAuthor), w.identity, maxAge)
+		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, q.query.Title, metafetch.SearchAuthorHint(currentAuthor), q.identity, maxAge)
 		if werr != nil {
 			return werr
 		}
@@ -427,7 +429,7 @@ func (s *Server) runBulkMetadataFetchAll(
 			ResultJSON:  metafetch.LedgerResultJSON(resultStatus, sourceName, out.Variant),
 			Status:      resultStatus,
 		})
-		outcomeLevel, outcomeMsg := bulkFetchOutcomeLine(w.book.Title, w.authorName, out, resultStatus)
+		outcomeLevel, outcomeMsg := bulkFetchOutcomeLine(ref, out, resultStatus)
 		reportOutcome(bookID, outcomeLevel, outcomeMsg)
 
 		n := atomic.AddInt64(&completed, 1)
@@ -744,18 +746,12 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		identity   string
 	}
 	var work []bookWork
-	// untitled: see runBulkMetadataFetchAll.
-	untitled := 0
 	for _, id := range bookIDs {
 		if done[id] {
 			continue
 		}
 		b, err := store.GetBookByID(id)
 		if err != nil || b == nil {
-			continue
-		}
-		if organizer.IsPlaceholderTitle(b.Title) {
-			untitled++
 			continue
 		}
 		author := ""
@@ -765,6 +761,12 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 			} else if a, aerr := store.GetAuthorByID(*b.AuthorID); aerr == nil && a != nil {
 				author = a.Name
 			}
+		}
+		// No searchable title of its own: a worker resolves a stand-in (see
+		// runBulkMetadataFetchAll and resolveBulkFetchQuery).
+		if metadata.IsUnsearchableTitle(b.Title) {
+			work = append(work, bookWork{book: *b, authorName: author})
+			continue
 		}
 		// Resolved before the skip_cached probe: the probe must ask for the
 		// book's CURRENT search identity, or a row fetched for an older
@@ -788,9 +790,6 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	alreadyDone := len(existingResults)
 	totalBooks := alreadyDone + len(work)
 	logging.Info(ctx, "bulk-metadata-fetch-ids total, done, to fetch", "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
-	if untitled > 0 {
-		_ = progress.Log("info", bulkFetchUntitledLine(untitled), nil)
-	}
 	_ = progress.UpdateProgress(alreadyDone, totalBooks,
 		fmt.Sprintf("resuming: %d/%d already done", alreadyDone, totalBooks))
 
@@ -864,18 +863,20 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		w := work[i]
 		bookID := w.book.ID
 
-		// Skip obvious chapter fragments of shattered audiobooks (see
-		// runBulkMetadataFetchAll for the rationale): never search or cache a
-		// bogus catalog match for a title like "06 Chapter 6".
-		if metadata.IsLikelyChapterFragment(w.book.Title) {
+		// A title not worth searching is replaced by a stand-in, or the book
+		// is skipped with its own line (see runBulkMetadataFetchAll). The full
+		// book is already in hand here, so only its files are read.
+		q := resolveBulkFetchQuery(store, bookID, w.book.Title, w.book.FilePath, w.authorName, w.identity, &w.book)
+		ref := bulkFetchBook{id: bookID, title: w.book.Title, author: w.authorName, path: w.book.FilePath, query: q.query}
+		if !q.query.Usable {
 			_ = store.CreateOperationResult(&database.OperationResult{
 				OperationID: opID,
 				BookID:      bookID,
-				ResultJSON:  `{"status":"skipped_fragment","source":""}`,
-				Status:      metafetch.FetchStatusSkippedFragment,
+				ResultJSON:  metafetch.LedgerResultJSON(q.skipStatus, "", ""),
+				Status:      q.skipStatus,
 			})
 			skipped.Add(1)
-			reportOutcome(bookID, "info", bulkFetchSkippedFragmentLine(w.book.Title, w.authorName))
+			reportOutcome(bookID, "info", bulkFetchSkippedNoTitleLine(ref, q.skipKind))
 			n := atomic.AddInt64(&completed, 1)
 			if n%50 == 0 || int(n) == totalBooks {
 				reportProgress(int(n), totalBooks,
@@ -884,7 +885,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 			return nil
 		}
 
-		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, metafetch.SearchAuthorHint(w.authorName), w.identity, maxAge)
+		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, q.query.Title, metafetch.SearchAuthorHint(w.authorName), q.identity, maxAge)
 		if werr != nil {
 			return werr
 		}
@@ -923,7 +924,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 			ResultJSON:  metafetch.LedgerResultJSON(resultStatus, sourceName, out.Variant),
 			Status:      resultStatus,
 		})
-		outcomeLevel, outcomeMsg := bulkFetchOutcomeLine(w.book.Title, w.authorName, out, resultStatus)
+		outcomeLevel, outcomeMsg := bulkFetchOutcomeLine(ref, out, resultStatus)
 		reportOutcome(bookID, outcomeLevel, outcomeMsg)
 
 		n := atomic.AddInt64(&completed, 1)
