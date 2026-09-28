@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-09-28
 
@@ -23,7 +23,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
-	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
@@ -466,9 +465,11 @@ func (mfs *Service) searchMetadataForBook(
 	in := mfs.resolveSearchInputs(book, query, author, narrator)
 	searchTitle, searchAuthor, bookAuthor, bookNarrator := in.title, in.author, in.bookAuthor, in.narrator
 
-	// A book whose own title is empty or a placeholder ("", "Unknown Title")
-	// is searched by a stand-in query (the batch fetch passes its transcribed
-	// title, metabatch.ResolveCandidateSearchQuery). The raw title must then
+	// A book whose own title is not worth searching ("", "Unknown Title",
+	// "Chapter 3", "06 Chapter 6": metadata.IsUnsearchableTitle, the one
+	// predicate the batch and bulk fetches use too) is searched by a stand-in
+	// query (its transcribed title or folder name,
+	// metabatch.ResolveCandidateSearchQuery). The raw title must then
 	// play NO part in the search: it is not sent to a provider as a second
 	// query (a "" search answers with whatever the catalog ranks first -- two
 	// books titled "" "matched" Audible's "Bad in Bed" that way), it adds no
@@ -476,7 +477,7 @@ func (mfs *Service) searchMetadataForBook(
 	// fetch cache is keyed on the stand-in too: keyed on the row's "" title it
 	// would replay the junk an earlier "" search cached for this book.
 	rawTitle := book.Title
-	if organizer.IsPlaceholderTitle(rawTitle) && !organizer.IsPlaceholderTitle(searchTitle) {
+	if metadata.IsUnsearchableTitle(rawTitle) && !metadata.IsUnsearchableTitle(searchTitle) {
 		rawTitle = searchTitle
 		searchIdentity = mfs.fetchCacheIdentityForTitle(book, searchTitle)
 	}

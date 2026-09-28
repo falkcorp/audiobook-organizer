@@ -1,7 +1,7 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
-// last-edited: 2026-09-14
+// last-edited: 2026-09-28
 
 package metafetch
 
@@ -111,6 +111,11 @@ const (
 	FetchStatusNotFound        = "not_found"
 	FetchStatusFetchError      = "fetch_error"
 	FetchStatusSkippedFragment = "skipped_fragment"
+	// FetchStatusSkippedNoTitle: the book's title is empty or a placeholder
+	// and no fallback (transcribed title, folder name) offered a usable one,
+	// so nothing was searched. A chapter-number or fragment title with no
+	// fallback keeps FetchStatusSkippedFragment.
+	FetchStatusSkippedNoTitle = "skipped_no_title"
 )
 
 // ChainOutcome is the result of walking the metadata source chain for one book.

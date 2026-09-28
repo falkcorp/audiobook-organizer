@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c962e504-746a-454a-996f-1020803a8cab
 // last-edited: 2026-09-28
 
@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 )
 
 // chapterOnlyTitleRe matches a filename-derived "title" that is nothing but a
@@ -32,6 +34,21 @@ func IsChapterOnlyTitle(title string) bool {
 		return false
 	}
 	return t == "" || chapterOnlyTitleRe.MatchString(t)
+}
+
+// IsUnsearchableTitle reports whether a book's title is no title to search a
+// catalog by: empty or one of the system's placeholders ("Unknown Title",
+// "read by narrator"; authorname.IsPlaceholderTitle), a bare chapter
+// position ("Chapter 3", "03"; IsChapterOnlyTitle), or a chapter fragment of
+// a shattered book ("06 Chapter 6"; IsLikelyChapterFragment). A catalog
+// answers any of these with whatever it ranks first.
+//
+// It is the ONE predicate the metadata search paths share (the batch
+// candidate fetch's query resolver, the bulk metadata fetch, and the search
+// ladder's rule that such a title plays no part in the search), so a title
+// one path refuses to search cannot be searched verbatim by another.
+func IsUnsearchableTitle(title string) bool {
+	return authorname.IsPlaceholderTitle(title) || IsChapterOnlyTitle(title) || IsLikelyChapterFragment(title)
 }
 
 // genericDirNames are folder names that say nothing about the work: a disc or

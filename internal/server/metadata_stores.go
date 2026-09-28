@@ -1,7 +1,7 @@
 // file: internal/server/metadata_stores.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
-// last-edited: 2026-09-14
+// last-edited: 2026-09-28
 
 package server
 
@@ -28,6 +28,9 @@ type bulkMetadataFetchStore interface {
 	bulkMetadataFetchCommon
 
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	// For a book with no searchable title of its own: the full row (BookCore
+	// carries no transcription) and its files (resolveBulkFetchQuery).
+	bulkFetchTitleStore
 }
 
 // bulkMetadataFetchCommon is what both bulk-fetch entry points share: the
@@ -47,6 +50,9 @@ type bulkMetadataFetchByIDStore interface {
 
 	GetBookByID(id string) (*database.Book, error)
 	GetAuthorByID(id int) (*database.Author, error)
+	// A book with no searchable title of its own reads its files for a
+	// stand-in title (resolveBulkFetchQuery).
+	metabatch.BookFilesGetter
 }
 
 // candidateFetchStore: fetchCandidateForBook. Note the helpers it forwards into

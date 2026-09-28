@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.14.0
+// version: 4.15.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-28
 //
@@ -27,7 +27,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
@@ -228,20 +227,29 @@ func (s *Server) fetchCandidateForBook(
 		}
 	}
 
-	// An empty or placeholder title is never searched as-is: the catalogs
-	// answer "" with whatever they rank first (two books titled "" matched
-	// Audible's "Bad in Bed" while their intro said "Marvel's Planet Hulk").
-	// The transcribed title stands in when there is one; otherwise the book
-	// is skipped. The resolved query is used for EVERY step below -- the
-	// cache verdict, the fetch and the result -- because the cache verdict is
-	// keyed on the query: checking it with the raw title would re-serve the
-	// junk row an earlier "" search cached.
+	// A title not worth searching -- empty, a placeholder, a chapter number
+	// or a chapter fragment of a shattered book ("06 Chapter 6";
+	// metadata.IsUnsearchableTitle) -- is never searched as-is: the catalogs
+	// answer it with whatever they rank first (two books titled "" matched
+	// Audible's "Bad in Bed" while their intro said "Marvel's Planet Hulk";
+	// "06 Chapter 6" matched a random entry at ~100%). The transcribed title
+	// stands in when there is one, then the folder name; otherwise the book
+	// is skipped. The stand-in is only a query: it is never written onto the
+	// book. The resolved query is used for EVERY step below -- the cache
+	// verdict, the fetch and the result -- because the cache verdict is keyed
+	// on the query: checking it with the raw title would re-serve the junk
+	// row an earlier "" search cached.
+	//
+	// This replaced a separate chapter-fragment skip here: every fragment is
+	// unsearchable, and the resolver never returns one as a stand-in, so a
+	// fragment with no fallback is now this skip, named by kind.
 	query := metabatch.ResolveCandidateSearchQuery(store, book)
 	if !query.Usable {
+		kind, _ := unsearchableTitleKind(book.Title)
 		return CandidateResult{
 			Book:   bookInfo,
 			Status: "skipped",
-			Error:  "skipped: " + metabatch.SkipReasonNoUsableTitle,
+			Error:  "skipped: " + kind + ", " + metabatch.SkipDetailNoUsableTitle,
 		}
 	}
 	// searchAuthor is the author the ladder narrows by (set below, once the
@@ -252,19 +260,6 @@ func (s *Server) fetchCandidateForBook(
 		r.SearchQuerySource = query.Source
 		r.SearchAuthor = searchAuthor
 		return r
-	}
-
-	// Skip obvious chapter fragments of shattered audiobooks (e.g. a book
-	// titled "06 Chapter 6"). Searching a catalog for these matches a random
-	// entry at ~100%+ confidence and writes garbage onto every chapter, so we
-	// short-circuit BEFORE any external search and surface a clear skipped
-	// status instead of a bogus "matched" candidate.
-	if metadata.IsLikelyChapterFragment(query.Title) {
-		return withQuery(CandidateResult{
-			Book:   bookInfo,
-			Status: "skipped",
-			Error:  "skipped: chapter fragment",
-		})
 	}
 
 	// A placeholder author ("Unknown Author", "read by narrator") is not a

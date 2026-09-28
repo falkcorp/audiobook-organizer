@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8966af00-704c-4a19-99e8-b832e27d9f7c
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package server
 
@@ -67,47 +67,116 @@ var _ operations.ProgressReporter = (*recordingProgress)(nil)
 
 // TestBulkFetchByIDs_LogsPerBookOutcomes runs the by-ID bulk fetch with no
 // providers (every searched book is "not found") over one book per path and
-// checks the op log: a line per searched or skipped book, one summary line
-// for the untitled books it refused to search, and counts by outcome in the
-// final progress message. Chapter fragments are "skipped", no longer folded
-// into "not found".
+// checks the op log and the ledger: a book with no usable title of its own is
+// searched by its transcribed title, then its folder name, and is skipped --
+// with its own line and a ledger row naming why -- only when neither is
+// usable. The fallback is a query only: no book's title changes.
 func TestBulkFetchByIDs_LogsPerBookOutcomes(t *testing.T) {
 	disableMetadataSourcesForTest(t)
 
 	books := map[string]*database.Book{
-		"b-real":  {ID: "b-real", Title: "Book One"},
-		"b-frag":  {ID: "b-frag", Title: "06 Chapter 6"},
-		"b-empty": {ID: "b-empty", Title: ""},
-		"b-ph":    {ID: "b-ph", Title: "Unknown Title"},
+		"b-real":   {ID: "b-real", Title: "Book One"},
+		"b-frag":   {ID: "b-frag", Title: "06 Chapter 6"},
+		"b-empty":  {ID: "b-empty", Title: ""},
+		"b-ph":     {ID: "b-ph", Title: "Unknown Title", FilePath: "/library/Unknown Author/Unknown Title/book.m4b"},
+		"b-trans":  {ID: "b-trans", Title: "", TranscribedTitle: strPtr("Marvel's Planet Hulk")},
+		"b-folder": {ID: "b-folder", Title: "Chapter 3", FilePath: "/library/Paolini/Eldest/03.mp3"},
 	}
 	store, _, _ := newFastpathMockStore(books, nil)
+	var ledgerMu sync.Mutex
+	ledger := map[string]string{}
+	store.CreateOperationResultFunc = func(r *database.OperationResult) error {
+		ledgerMu.Lock()
+		ledger[r.BookID] = r.Status
+		ledgerMu.Unlock()
+		return nil
+	}
 	srv := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
 	rec := &recordingProgress{}
 
+	ids := []string{"b-real", "b-frag", "b-empty", "b-ph", "b-trans", "b-folder"}
 	if _, err := srv.runBulkMetadataFetchForBookIDs(context.Background(), "op-bulk-log",
-		[]string{"b-real", "b-frag", "b-empty", "b-ph"}, operations.BulkMetadataFetchParams{}, store, rec); err != nil {
+		ids, operations.BulkMetadataFetchParams{}, store, rec); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
-	if got := rec.withPrefix("no match: "); len(got) != 1 || got[0].level != "info" ||
-		!strings.Contains(got[0].msg, `"Book One"`) {
-		t.Errorf("no-match lines = %v, want one info line for \"Book One\"", got)
+	noMatch := rec.withPrefix("no match: ")
+	if len(noMatch) != 3 {
+		t.Fatalf("no-match lines = %v, want 3", noMatch)
 	}
-	if got := rec.withPrefix("skipped: "); len(got) != 1 || !strings.Contains(got[0].msg, "chapter fragment") {
-		t.Errorf("skipped lines = %v, want one chapter-fragment line", got)
+	for _, want := range []string{
+		`"Book One"`,
+		`searched transcribed_title "Marvel's Planet Hulk"`,
+		`searched folder_title "Eldest"`,
+	} {
+		found := false
+		for _, l := range noMatch {
+			found = found || strings.Contains(l.msg, want)
+		}
+		if !found {
+			t.Errorf("no no-match line contains %q: %v", want, noMatch)
+		}
 	}
-	if got := rec.withPrefix("skipped 2 book(s) with an empty or placeholder title"); len(got) != 1 {
-		t.Errorf("untitled summary lines = %d, want 1 (lines: %v)", len(got), rec.lines)
+	skipped := rec.withPrefix("skipped: ")
+	if len(skipped) != 3 {
+		t.Fatalf("skipped lines = %v, want 3 (fragment, empty, placeholder)", skipped)
 	}
-	if want := "complete 2/2 — found 0, not found 1, skipped 1, errors 0"; rec.last() != want {
+	for _, want := range []string{"chapter fragment", "empty title", "placeholder title"} {
+		found := false
+		for _, l := range skipped {
+			found = found || (strings.Contains(l.msg, want) && strings.Contains(l.msg, "no usable title"))
+		}
+		if !found {
+			t.Errorf("no skipped line names %q with its reason: %v", want, skipped)
+		}
+	}
+	wantLedger := map[string]string{
+		"b-real": metafetch.FetchStatusNotFound, "b-trans": metafetch.FetchStatusNotFound, "b-folder": metafetch.FetchStatusNotFound,
+		"b-frag": metafetch.FetchStatusSkippedFragment, "b-empty": metafetch.FetchStatusSkippedNoTitle, "b-ph": metafetch.FetchStatusSkippedNoTitle,
+	}
+	for id, want := range wantLedger {
+		if ledger[id] != want {
+			t.Errorf("ledger[%s] = %q, want %q", id, ledger[id], want)
+		}
+	}
+	if want := "complete 6/6 — found 0, not found 3, skipped 3, errors 0"; rec.last() != want {
 		t.Errorf("final progress = %q, want %q", rec.last(), want)
+	}
+	for id, title := range map[string]string{"b-trans": "", "b-folder": "Chapter 3", "b-ph": "Unknown Title"} {
+		if books[id].Title != title {
+			t.Errorf("book %s title changed to %q; the fallback is only a query", id, books[id].Title)
+		}
+	}
+}
+
+// resolveBulkFetchQuery keys the fetch cache on the stand-in title (the same
+// identity metafetch's per-book search writes), and leaves a book with a real
+// title on the identity the pre-loop computed.
+func TestResolveBulkFetchQuery_IdentityFollowsStandIn(t *testing.T) {
+	asin := "B00TESTASN"
+	books := map[string]*database.Book{
+		"b-trans": {ID: "b-trans", Title: "Unknown Title", TranscribedTitle: strPtr("Planet Hulk"), ASIN: &asin},
+	}
+	store, _, _ := newFastpathMockStore(books, nil)
+
+	q := resolveBulkFetchQuery(store, "b-trans", "Unknown Title", "", "Unknown Author", "", nil)
+	if !q.query.Usable || q.query.Title != "Planet Hulk" {
+		t.Fatalf("query = %+v, want Planet Hulk", q.query)
+	}
+	if want := database.MetadataSearchIdentity("Planet Hulk", "Unknown Author", &asin, nil, nil); q.identity != want {
+		t.Errorf("identity = %q, want the stand-in's %q", q.identity, want)
+	}
+
+	q = resolveBulkFetchQuery(store, "b-real", "Eldest", "", "Christopher Paolini", "pre-loop-identity", nil)
+	if q.query.Title != "Eldest" || q.identity != "pre-loop-identity" {
+		t.Errorf("real title: %+v identity %q, want unchanged", q.query, q.identity)
 	}
 }
 
 // TestBulkFetchOutcomeLine_FoundAndError covers the two outcomes the
 // provider-less run above cannot reach.
 func TestBulkFetchOutcomeLine_FoundAndError(t *testing.T) {
-	level, msg := bulkFetchOutcomeLine("Dune", "Frank Herbert", metafetch.ChainOutcome{
+	level, msg := bulkFetchOutcomeLine(bulkFetchBook{title: "Dune", author: "Frank Herbert"}, metafetch.ChainOutcome{
 		Results:    []metadata.BookMetadata{{Title: "Dune", Author: "Frank Herbert"}, {Title: "Dune Messiah"}},
 		SourceName: "Audible",
 		Variant:    "Dune",
@@ -117,7 +186,7 @@ func TestBulkFetchOutcomeLine_FoundAndError(t *testing.T) {
 		t.Errorf("found line = (%s) %q, want (info) %q", level, msg, want)
 	}
 
-	level, msg = bulkFetchOutcomeLine("Dune", "", metafetch.ChainOutcome{
+	level, msg = bulkFetchOutcomeLine(bulkFetchBook{title: "Dune"}, metafetch.ChainOutcome{
 		Err:       errors.New("429 too many requests\nforged"),
 		ErrSource: "Google Books",
 	}, metafetch.FetchStatusFetchError)
@@ -128,3 +197,5 @@ func TestBulkFetchOutcomeLine_FoundAndError(t *testing.T) {
 		t.Errorf("error line carries a raw newline: %q", msg)
 	}
 }
+
+func strPtr(s string) *string { return &s }
