@@ -23,6 +23,9 @@ func TestChapterTitleFromDirectory(t *testing.T) {
 		// A generic parent offers nothing better.
 		{"/lib/A/Work/Disc 2/07.mp3", "07", "", false},
 		{"/downloads/07.mp3", "07", "", false},
+		// An author-folder layout: the parent is the author, not a work.
+		{"/books/itunes/iTunes Media/Audiobooks/Bruce Sentar/01.mp3", "01", "", false},
+		{"/books/Audiobooks/Bruce Sentar/01.mp3", "01", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {

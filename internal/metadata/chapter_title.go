@@ -45,15 +45,26 @@ var genericDirNames = map[string]bool{
 // for every chapter of every multi-file book the scanner mistook for a set of
 // separate books.
 //
-// It returns ("", false) when title is a real title, or when the parent is
-// itself generic (a "CD1"/"Disc 2" folder, a library root): there is then no
+// It returns ("", false) when title is a real title, when the parent is itself
+// generic (a "CD1"/"Disc 2" folder, a library root), or when the grandparent is
+// a library root (the parent is then an author folder, not a work): there is no
 // better title to offer, and the caller keeps what it had.
 func ChapterTitleFromDirectory(filePath, title string) (string, bool) {
 	if !IsChapterOnlyTitle(title) {
 		return "", false
 	}
-	parent := strings.TrimSpace(filepath.Base(filepath.Dir(filePath)))
+	parentDir := filepath.Dir(filePath)
+	parent := strings.TrimSpace(filepath.Base(parentDir))
 	if genericDirNames[strings.ToLower(parent)] || IsChapterOnlyTitle(parent) {
+		return "", false
+	}
+	// The folder is only a title when it sits UNDER an author folder. In an
+	// author-folder layout ("iTunes Media/Audiobooks/Bruce Sentar/01.mp3") the
+	// parent is the author and the grandparent a library root; taking the
+	// author's name as the title would trade recognisable junk ("01") for junk
+	// nothing can recognise.
+	grand := strings.TrimSpace(filepath.Base(filepath.Dir(parentDir)))
+	if genericDirNames[strings.ToLower(grand)] || strings.EqualFold(grand, "iTunes Media") {
 		return "", false
 	}
 	return parent, true

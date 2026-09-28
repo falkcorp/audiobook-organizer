@@ -1401,6 +1401,11 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 			if book.LibraryState != nil {
 				oldState = *book.LibraryState
 			}
+			if landing.SourcePath != "" {
+				// The in-memory book was already stamped "organized" by the
+				// move; the landing carries what it was before.
+				oldState = landing.SourceLibraryState
+			}
 			_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
 				ID:          ulid.Make().String(),
 				OperationID: operationID,
@@ -1725,13 +1730,18 @@ func (orgSvc *Service) OrganizeOneBook(org *Organizer, book *database.Book, log 
 	}
 	oldPath := book.FilePath
 	if config.AppConfig.RootDir != "" && pathutil.IsWithin(oldPath, config.AppConfig.RootDir) {
+		oldState := ""
+		if book.LibraryState != nil {
+			oldState = *book.LibraryState
+		}
 		newPath, res, err := orgSvc.reOrganizeInPlace(book, log)
 		if err != nil {
 			return nil, err
 		}
-		// SourcePath is captured BEFORE reOrganizeInPlace, which rewrites
-		// book.FilePath to the new path as it moves the file.
-		return &Landing{Path: newPath, SourcePath: oldPath, InPlace: true, Resolution: res}, nil
+		// SourcePath and SourceLibraryState are captured BEFORE
+		// reOrganizeInPlace, which rewrites book.FilePath and
+		// book.LibraryState on this same pointer as it moves the file.
+		return &Landing{Path: newPath, SourcePath: oldPath, SourceLibraryState: oldState, InPlace: true, Resolution: res}, nil
 	}
 	bookFiles, err := orgSvc.db.GetBookFiles(book.ID)
 	if err != nil {

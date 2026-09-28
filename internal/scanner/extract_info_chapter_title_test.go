@@ -25,6 +25,9 @@ func TestExtractInfoFromPath_ChapterFilesAndNoSeriesFromPrefix(t *testing.T) {
 		{"/lib/x/the lost city - a tale of old.mp3", "a tale of old", ""},
 		// A real title is untouched.
 		{"/lib/Frank Herbert/Dune/Dune.mp3", "Dune", ""},
+		// An author-folder layout: the parent is the author, so it must not
+		// become the title. The scanner strips the bare number, leaving "".
+		{"/books/itunes/iTunes Media/Audiobooks/Bruce Sentar/01.mp3", "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
