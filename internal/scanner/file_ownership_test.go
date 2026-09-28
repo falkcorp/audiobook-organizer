@@ -459,6 +459,15 @@ func TestProcessBooksParallel_StagedArrivalAppendsToTheOwner(t *testing.T) {
 	config.AppConfig.EnableAIParsing = false
 	config.AppConfig.MinBookSizeBytes = 0
 
+	// The partial import left the owner with one chapter per file it had.
+	// PersistChaptersForBook never touches a book that has chapters, so the
+	// append itself must rebuild them over every file.
+	require.NoError(t, f.store.SaveChaptersForBook(f.parent.ID, []database.Chapter{
+		{ID: 1, StartSec: 0, EndSec: 600, Title: "97"},
+		{ID: 2, StartSec: 600, EndSec: 1200, Title: "98"},
+		{ID: 3, StartSec: 1200, EndSec: 1800, Title: "99"},
+	}))
+
 	all := append(slices.Clone(f.chapters), f.loose...)
 	books := []Book{{FilePath: f.chapters[0], SegmentFiles: all, Format: ".mp3",
 		Title: "Eldest", Author: "Christopher Paolini", Series: "Inheritance"}}
@@ -479,6 +488,9 @@ func TestProcessBooksParallel_StagedArrivalAppendsToTheOwner(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, owner.NeedsRescan)
 	require.True(t, *owner.NeedsRescan, "the grown owner was not re-armed for a full re-read")
+	chapters, err := f.store.GetChaptersForBook(f.parent.ID)
+	require.NoError(t, err)
+	require.NotEqual(t, 3, len(chapters), "the owner kept the partial import's chapter list after growing to %d files", len(all))
 
 	// And the next scan of the whole folder is an ordinary rescan of the owner.
 	v, err := checkFileOwnership(&Book{FilePath: f.chapters[0], SegmentFiles: all})

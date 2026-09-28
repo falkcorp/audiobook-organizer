@@ -279,6 +279,38 @@ func TestProcessBooksParallel_ProvenSequenceOverCeilingGetsAllItsRows(t *testing
 	require.Len(t, rows, maxDirectoryBookFiles+20, "the row backstop refused a proven chapter sequence")
 }
 
+// TestProcessBooksParallel_UntaggedProvenSequenceOverCeiling is S1 on the
+// UNTAGGED path the review cited (the consolidation refusal at
+// chapter_consolidation.go:267): a flat single-title folder of short,
+// untagged chapter files over the ceiling must import as one book with every
+// file, not import nothing.
+func TestProcessBooksParallel_UntaggedProvenSequenceOverCeiling(t *testing.T) {
+	SetScanner(nil)
+	t.Cleanup(func() { SetScanner(nil) })
+	stubChapterDurations(t, 240, nil)
+	store, cleanup := setupPebbleStore(t)
+	defer cleanup()
+	SetStore(store)
+	defer SetStore(nil)
+	oldExts := config.AppConfig.SupportedExtensions
+	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
+
+	dir := t.TempDir()
+	n := maxDirectoryBookFiles + 20
+	files := writeDirFixture(t, dir, willNames(n), "", func(int) bool { return false })
+	books := groupFilesIntoBooks(context.Background(), files)
+	require.Len(t, books, 1, "the untagged sequence must group into one book")
+	require.Len(t, books[0].SegmentFiles, n)
+	require.NoError(t, ProcessBooksParallel(context.Background(), books, 2, nil, logger.New("test")))
+	all, err := store.GetAllBooksCore(0, 0)
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	rows, err := store.GetBookFiles(all[0].ID)
+	require.NoError(t, err)
+	require.Len(t, rows, n, "the untagged proven sequence lost rows to the ceiling")
+}
+
 // bibleNames is a flat single-work folder: three biblical books, chapters
 // numbered per book, 300 files in all -- over the ceiling as one folder.
 func bibleNames() []string {
