@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -106,6 +106,10 @@ type CandidateResult struct {
 	// when no search was attempted.
 	SearchQuery       string `json:"search_query,omitempty"`
 	SearchQuerySource string `json:"search_query_source,omitempty"`
+	// SearchAuthor is the author the search narrowed providers by
+	// (metafetch.Service.SearchAuthorFor). Empty when it searched with no
+	// author: the book has none, or only a placeholder, which is never sent.
+	SearchAuthor string `json:"search_author,omitempty"`
 }
 
 // BatchFetchRequest is the JSON body for the batch candidate fetch handler.

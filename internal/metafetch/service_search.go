@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package metafetch
 
@@ -330,6 +330,9 @@ type searchInputs struct {
 	author     string // searchAuthor: the hint, else the book's resolved author
 	bookAuthor string // the book's own author for scoring ("" if garbage)
 	narrator   string // bookNarrator
+	// asin is the book's own ASIN, set only when there is no usable author
+	// (see resolveSearchInputs); the ladder then looks it up directly.
+	asin string
 }
 
 // resolveSearchInputs derives the ladder's query inputs from the book row and
@@ -343,19 +346,17 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	}
 	searchTitle = stripChapterFromTitle(searchTitle)
 
-	// If title is effectively empty but we have author/narrator hints,
-	// use the author name as search query to get results
-	if strings.TrimSpace(searchTitle) == "" || searchTitle == "-" {
-		if author != "" {
-			searchTitle = author
-		} else if book.AuthorID != nil {
-			if a, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil {
-				searchTitle = a.Name
-			}
-		}
-	}
-
-	searchAuthor := strings.TrimSpace(author)
+	// A placeholder author ("Unknown Author", "read by narrator") is never a
+	// search input: not as the author hint, not as the book's own author the
+	// ladder falls back to, and not as a stand-in title below. It is dropped
+	// here, in the one resolver every ladder and fingerprint goes through,
+	// because the hint is refilled from AuthorID further down: stripping it
+	// only at a caller would put it straight back. See SearchAuthorHint.
+	//
+	// No searchInputVersion bump: in.author is part of the fingerprint, so
+	// exactly the books whose author was a placeholder get a new fingerprint
+	// and are re-asked; every other book's cached verdict stays valid.
+	searchAuthor := SearchAuthorHint(author)
 	searchNarrator := strings.TrimSpace(narrator)
 
 	// Always resolve the book's own author and narrator for scoring tiebreaks,
@@ -363,11 +364,14 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	bookAuthor := searchAuthor
 	if bookAuthor == "" && book.AuthorID != nil {
 		if a, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil {
-			bookAuthor = a.Name
+			bookAuthor = SearchAuthorHint(a.Name)
 		}
 	}
-	if IsGarbageValue(bookAuthor) {
-		bookAuthor = ""
+
+	// If title is effectively empty but we have an author, use the author
+	// name as the search query to get results.
+	if strings.TrimSpace(searchTitle) == "" || searchTitle == "-" {
+		searchTitle = bookAuthor
 	}
 	// The provider ladder searches by the book's own author when no hint was
 	// passed. GetBookByID leaves book.Author unhydrated, so the batch
@@ -385,7 +389,14 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	if IsGarbageValue(bookNarrator) {
 		bookNarrator = ""
 	}
-	return searchInputs{title: searchTitle, author: searchAuthor, bookAuthor: bookAuthor, narrator: bookNarrator}
+	// With no usable author, the book's own ASIN (when it has one) is looked
+	// up directly, so a title-only search is not the only question asked.
+	// Only then: a book with a real author is searched as it always was.
+	asin := ""
+	if searchAuthor == "" && book.ASIN != nil && looksLikeASIN(*book.ASIN) {
+		asin = strings.TrimSpace(*book.ASIN)
+	}
+	return searchInputs{title: searchTitle, author: searchAuthor, bookAuthor: bookAuthor, narrator: bookNarrator, asin: asin}
 }
 
 // fingerprint hashes the questions the ladder asks for these inputs: the
@@ -395,7 +406,13 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 // from AuthorID, so renaming the author changes it.
 func (in searchInputs) fingerprint(bookTitle string) string {
 	h := sha256.New()
-	for _, part := range []string{searchInputVersion, bookTitle, in.title, in.author, in.narrator} {
+	parts := []string{searchInputVersion, bookTitle, in.title, in.author, in.narrator}
+	// Appended only when set, so a book whose ladder asks no ASIN question
+	// keeps the fingerprint it had before the ASIN rung existed.
+	if in.asin != "" {
+		parts = append(parts, "asin:"+in.asin)
+	}
+	for _, part := range parts {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}
@@ -409,6 +426,17 @@ func (mfs *Service) SearchFingerprintFor(book *database.Book, query, author, nar
 		return ""
 	}
 	return mfs.resolveSearchInputs(book, query, author, narrator).fingerprint(book.Title)
+}
+
+// SearchAuthorFor returns the author a search for book with this author hint
+// actually narrows providers by: the hint, else the book's own author, with a
+// placeholder dropped to "" (SearchAuthorHint). The batch fetch records it so
+// its op log names the author that was really asked, not the book's.
+func (mfs *Service) SearchAuthorFor(book *database.Book, query, author string) string {
+	if mfs == nil || mfs.db == nil || book == nil {
+		return SearchAuthorHint(author)
+	}
+	return mfs.resolveSearchInputs(book, query, author, "").author
 }
 
 func (mfs *Service) searchMetadataForBook(
@@ -895,6 +923,10 @@ func (mfs *Service) searchMetadataForBook(
 		asinToLookup = searchTitle
 	} else {
 		asinToLookup = extractASIN(searchTitle)
+	}
+	if asinToLookup == "" {
+		// No usable author: the book's own ASIN (resolveSearchInputs).
+		asinToLookup = in.asin
 	}
 	if asinToLookup != "" {
 		// Try Audible API first (more complete), fall back to Audnexus. Each is a

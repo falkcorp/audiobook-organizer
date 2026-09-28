@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.13.0
+// version: 4.14.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -244,9 +244,13 @@ func (s *Server) fetchCandidateForBook(
 			Error:  "skipped: " + metabatch.SkipReasonNoUsableTitle,
 		}
 	}
+	// searchAuthor is the author the ladder narrows by (set below, once the
+	// hint is known); "" when the book has none or only a placeholder.
+	searchAuthor := ""
 	withQuery := func(r CandidateResult) CandidateResult {
 		r.SearchQuery = query.Title
 		r.SearchQuerySource = query.Source
+		r.SearchAuthor = searchAuthor
 		return r
 	}
 
@@ -263,9 +267,15 @@ func (s *Server) fetchCandidateForBook(
 		})
 	}
 
+	// A placeholder author ("Unknown Author", "read by narrator") is not a
+	// hint: it is never sent, and the row is hashed without it
+	// (metafetch.SearchAuthorHint, which the ladder applies again to the
+	// author it resolves from AuthorID).
 	var authorHint []string
-	if book.Author != nil && book.Author.Name != "" {
-		authorHint = append(authorHint, book.Author.Name)
+	if book.Author != nil {
+		if a := metafetch.SearchAuthorHint(book.Author.Name); a != "" {
+			authorHint = append(authorHint, a)
+		}
 	}
 
 	// METADATA-CACHED-MATCHER: batch fetch always invalidates + writes
@@ -281,6 +291,7 @@ func (s *Server) fetchCandidateForBook(
 	if len(authorHint) > 0 {
 		authorForHash = authorHint[0]
 	}
+	searchAuthor = mfs.SearchAuthorFor(book, query.Title, authorForHash)
 	// askOnly: providers without a valid answer for these inputs. When the
 	// cache holds an empty result that some providers already answered, only
 	// the rest are asked (a quota-starved provider no longer drags the others

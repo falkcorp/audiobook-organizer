@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op_log_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 42f7956b-7f83-42cb-adf4-96b00b38786d
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package server
 
@@ -323,5 +323,41 @@ func TestCandidateOutcomeLine_SanitizesUserValues(t *testing.T) {
 	}
 	if !strings.HasPrefix(msg, "skipped: ") || !strings.Contains(msg, "chapter fragment") {
 		t.Errorf("unexpected skipped line: %q", msg)
+	}
+}
+
+// A no-match line names the author the search actually asked with, never a
+// placeholder that was not sent.
+func TestCandidateOutcomeLine_NoMatchNamesSearchedAuthor(t *testing.T) {
+	cases := []struct {
+		name         string
+		bookAuthor   string
+		searchAuthor string
+		want         string
+		notWant      string
+	}{
+		{name: "real author sent", bookAuthor: "Greg Pak", searchAuthor: "Greg Pak", want: `author "Greg Pak"`},
+		{name: "placeholder not sent", bookAuthor: "Unknown Author",
+			want: `no author hint (placeholder "Unknown Author" not sent)`, notWant: `author "Unknown Author":`},
+		{name: "narrator placeholder not sent", bookAuthor: "read by narrator",
+			want: `no author hint (placeholder "read by narrator" not sent)`},
+		{name: "no author at all", want: "no author hint"},
+		{name: "resolved author differs from snapshot", searchAuthor: "Andrzej Sapkowski", want: `author "Andrzej Sapkowski"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, msg, _ := candidateOutcomeLine(CandidateResult{
+				Book:         CandidateBookInfo{ID: "b1", Title: "Planet Hulk", Author: tc.bookAuthor},
+				Status:       "no_match",
+				SearchQuery:  "Planet Hulk",
+				SearchAuthor: tc.searchAuthor,
+			})
+			if !strings.Contains(msg, tc.want) {
+				t.Errorf("line %q lacks %q", msg, tc.want)
+			}
+			if tc.notWant != "" && strings.Contains(msg, tc.notWant) {
+				t.Errorf("line %q claims %q", msg, tc.notWant)
+			}
+		})
 	}
 }

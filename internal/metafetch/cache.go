@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -142,10 +142,8 @@ func (mfs *Service) ValidateCachedIdentityForBook(entry *MetadataCandidateCache,
 	}
 	forms := CurrentAuthorForms(book, liveAuthors)
 	if entry.SourceHash != "" {
-		for _, author := range forms {
-			if entry.SourceHash == hashSearchInputs(book.ID, book.Title, author, "", "") {
-				return nil
-			}
+		if cachedQueryMatches(entry, book, forms, book.Title) {
+			return nil
 		}
 		for _, author := range forms[1:] {
 			if mfs.ValidateCachedIdentity(entry, book.ID, book.Title, author, narrator, series) == nil {
@@ -156,6 +154,45 @@ func (mfs *Service) ValidateCachedIdentityForBook(entry *MetadataCandidateCache,
 	// The first form's error is the one reported: it names the snapshot, the
 	// input every earlier refusal named.
 	return mfs.ValidateCachedIdentity(entry, book.ID, book.Title, forms[0], narrator, series)
+}
+
+// CachedQueryMatchesIdentity reports whether entry was written by a batch
+// fetch that searched book by query, with the book's CURRENT author: its
+// SourceHash equals the batch shape (query, author, "", "") for some current
+// author form (CurrentAuthorForms, plus the stripped "" hint when a form is a
+// placeholder -- see SearchAuthorHint). A legacy row with no hash never
+// matches.
+//
+// It is the proof the certainty gate needs before it accepts a candidate
+// found by searching a stand-in title (the book's transcribed title): the
+// row's identity differs from the book's in the query ONLY. A row fetched for
+// another author, or for any other title, does not match and stays
+// identity_stale.
+func (mfs *Service) CachedQueryMatchesIdentity(entry *MetadataCandidateCache, book *database.Book, liveAuthors []string, query string) bool {
+	if entry == nil || book == nil || entry.SourceHash == "" || strings.TrimSpace(query) == "" {
+		return false
+	}
+	return cachedQueryMatches(entry, book, CurrentAuthorForms(book, liveAuthors), query)
+}
+
+// cachedQueryMatches is the hash comparison behind CachedQueryMatchesIdentity
+// and the batch-shape leg of ValidateCachedIdentityForBook. A placeholder
+// author form also matches as "": the batch fetch sends (and hashes) no author
+// hint for a placeholder author, so without this every such book's row would
+// read as identity drift at apply time. The "" is tried ONLY for a
+// placeholder form; a book with a real author still fails against a row
+// hashed with no author.
+func cachedQueryMatches(entry *MetadataCandidateCache, book *database.Book, forms []string, query string) bool {
+	for _, author := range forms {
+		if entry.SourceHash == hashSearchInputs(book.ID, query, author, "", "") {
+			return true
+		}
+		if author != "" && SearchAuthorHint(author) == "" &&
+			entry.SourceHash == hashSearchInputs(book.ID, query, "", "", "") {
+			return true
+		}
+	}
+	return false
 }
 
 // CurrentAuthorForms lists every string a cache writer could have recorded as

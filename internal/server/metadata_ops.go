@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -388,7 +388,7 @@ func (s *Server) runBulkMetadataFetchAll(
 			return nil
 		}
 
-		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, currentAuthor, w.identity, maxAge)
+		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, metafetch.SearchAuthorHint(currentAuthor), w.identity, maxAge)
 		if werr != nil {
 			return werr
 		}
@@ -884,7 +884,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 			return nil
 		}
 
-		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, w.authorName, w.identity, maxAge)
+		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, metafetch.SearchAuthorHint(w.authorName), w.identity, maxAge)
 		if werr != nil {
 			return werr
 		}
