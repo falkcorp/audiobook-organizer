@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/AudiobookGrid.tsx
-// version: 1.8.2
+// version: 1.8.3
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
-// last-edited: 2026-08-19
+// last-edited: 2026-09-27
 
 import React from 'react';
 import { Grid, Box, Typography } from '@mui/material';
@@ -82,6 +82,7 @@ export const AudiobookGrid: React.FC<AudiobookGridProps> = ({
       {audiobooks.map((audiobook) => (
         <Grid
           key={audiobook.id}
+          data-book-id={audiobook.id}
           sx={{ contentVisibility: 'auto', containIntrinsicSize: '1px 420px' }}
           size={{
             xs: 12,

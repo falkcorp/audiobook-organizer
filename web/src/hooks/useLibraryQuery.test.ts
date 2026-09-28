@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c8d9e0f-1a2b-4c5d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-27
 
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { vi, describe, test, expect, beforeEach } from 'vitest';
@@ -292,5 +292,100 @@ describe('useLibraryQuery series_id (TASK-167)', () => {
     });
     expect(vi.mocked(api.getBooks).mock.calls.length).toBeGreaterThan(callsWithSeries);
     expect(vi.mocked(api.getBooks).mock.calls.at(-1)?.[2]?.seriesId).toBeUndefined();
+  });
+});
+
+// Owner 2026-09-27: "why do we have to even refresh". Live books.changed events
+// patch the rows on screen; nothing reloads the list or shows the spinner.
+describe('useLibraryQuery live updates', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    useLibraryCache.getState().clear();
+    vi.mocked(api.getImportPaths).mockResolvedValue([]);
+    vi.mocked(api.getBooks).mockResolvedValue({
+      items: [makeBook('a', 'A'), makeBook('b', 'B'), makeBook('c', 'C')],
+      count: 3,
+    });
+  });
+
+  async function loaded() {
+    const hook = renderHook(() => useLibraryQuery(makeBaseProps()));
+    await act(async () => {
+      await hook.result.current.loadAudiobooks();
+    });
+    expect(hook.result.current.audiobooks.map((b) => b.id)).toEqual(['a', 'b', 'c']);
+    return hook;
+  }
+
+  test('an updated event patches that row in place without refetching the list', async () => {
+    const { result } = await loaded();
+    const listCalls = vi.mocked(api.getBooks).mock.calls.length;
+    vi.mocked(api.getBooksByIds).mockResolvedValue([makeBook('b', 'B renamed')]);
+    await act(async () => {
+      await result.current.applyBooksChanged({ kind: 'updated', ids: ['b', 'not-on-screen'] });
+    });
+    expect(vi.mocked(api.getBooksByIds)).toHaveBeenCalledWith(['b']);
+    expect(result.current.audiobooks.map((b) => b.title)).toEqual(['A', 'B renamed', 'C']);
+    expect(vi.mocked(api.getBooks).mock.calls.length).toBe(listCalls);
+    expect(result.current.loading).toBe(false);
+  });
+
+  test('a deleted event removes the row and decrements the count', async () => {
+    const { result } = await loaded();
+    await act(async () => {
+      await result.current.applyBooksChanged({ kind: 'deleted', ids: ['a'] });
+    });
+    expect(result.current.audiobooks.map((b) => b.id)).toEqual(['b', 'c']);
+    expect(result.current.totalCount).toBe(2);
+    expect(vi.mocked(api.getBooksByIds)).not.toHaveBeenCalled();
+  });
+
+  test('a created event only counts new books for the chip; rows do not move', async () => {
+    const { result } = await loaded();
+    await act(async () => {
+      await result.current.applyBooksChanged({ kind: 'created', ids: ['n1', 'n2'] });
+    });
+    expect(result.current.newBooksCount).toBe(2);
+    expect(result.current.audiobooks.map((b) => b.id)).toEqual(['a', 'b', 'c']);
+    await act(async () => {
+      result.current.showNewBooks();
+    });
+    await waitFor(() => expect(result.current.newBooksCount).toBe(0));
+  });
+
+  test('a same-query refresh keeps the rows mounted (no spinner, no scroll loss)', async () => {
+    const { result } = await loaded();
+    let resolve!: (v: api.BooksPage) => void;
+    vi.mocked(api.getBooks).mockImplementation(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        })
+    );
+    act(() => {
+      result.current.clearLibraryCache();
+      void result.current.loadAudiobooks();
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.audiobooks).toHaveLength(3);
+    await act(async () => {
+      resolve({ items: [makeBook('a', 'A2'), makeBook('b', 'B'), makeBook('c', 'C')], count: 3 });
+    });
+    await waitFor(() => expect(result.current.audiobooks[0].title).toBe('A2'));
+  });
+
+  test('a finished scan no longer reloads the list', async () => {
+    const { result, rerender } = renderHook(
+      (props: { scan: api.Operation | null }) =>
+        useLibraryQuery(makeBaseProps({ activeScanOp: props.scan })),
+      { initialProps: { scan: { id: 'op', status: 'running' } as api.Operation } }
+    );
+    await act(async () => {
+      await result.current.loadAudiobooks();
+    });
+    const calls = vi.mocked(api.getBooks).mock.calls.length;
+    rerender({ scan: { id: 'op', status: 'completed' } as api.Operation });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(vi.mocked(api.getBooks).mock.calls.length).toBe(calls);
   });
 });

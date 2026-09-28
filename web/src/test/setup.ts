@@ -1,7 +1,7 @@
 // file: web/src/test/setup.ts
-// version: 1.0.7
+// version: 1.0.8
 // guid: 8f9a0b1c-2d3e-4f5a-6b7c-8d9e0f1a2b3c
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 import '@testing-library/jest-dom';
 import { cleanup } from '@testing-library/react';
@@ -9,9 +9,16 @@ import { afterEach } from 'vitest';
 
 const ResponseCtor = globalThis.Response;
 
-// Cleanup after each test case
+// Cleanup after each test case. sessionStorage is per-tab working state (the
+// Library keeps its selection and scroll place there), so one test's leftovers
+// must not become the next test's starting state.
 afterEach(() => {
   cleanup();
+  try {
+    sessionStorage.clear();
+  } catch {
+    // no storage in this environment
+  }
 });
 
 // Mock window.matchMedia
