@@ -1,5 +1,6 @@
 // file: web/src/components/audiobooks/SearchBar.test.tsx
-// version: 1.1.1
+// version: 1.2.0
+// last-edited: 2026-09-27
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
@@ -176,6 +177,27 @@ describe('SearchBar', () => {
       // Click the first example
       fireEvent.click(screen.getByText('author:"Brandon Sanderson"'));
       expect(onChange).toHaveBeenCalledWith('author:"Brandon Sanderson"');
+    });
+
+    it('lists the metadata-backlog example first and clicking it inserts the query', async () => {
+      const onChange = vi.fn();
+      renderWithProviders(<SearchBar {...defaultProps({ onChange })} />);
+      fireEvent.click(screen.getByLabelText('Search help'));
+      await waitFor(() => {
+        expect(screen.getByText('Search Syntax')).toBeInTheDocument();
+      });
+      const first = screen.getByText('-metadata:applied duration:>20m');
+      const authorExample = screen.getByText('author:"Brandon Sanderson"');
+      // Listed above the previous first example.
+      expect(
+        first.compareDocumentPosition(authorExample) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(screen.getByText(/hides chapter\/track files under 20 minutes/)).toBeInTheDocument();
+      fireEvent.click(first);
+      expect(onChange).toHaveBeenCalledWith('-metadata:applied duration:>20m');
+
+      fireEvent.click(screen.getByText('duration:<20m'));
+      expect(onChange).toHaveBeenCalledWith('duration:<20m');
     });
 
     it('closes help panel when close button is clicked', async () => {
