@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-27
 
@@ -680,6 +680,11 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// metafetch.cacheSearchResponse no longer does that, so this count is
 		// now a fixed backlog of historical damage rather than a growing one.
 		"resolved_no_candidates": noCandidatesReviewed,
+		// The bulk apply fail-safe (applycap, setting bulk_apply_max_items),
+		// served so the review page can refuse an oversized "Apply selected"
+		// up front instead of splitting it into requests that each fit under
+		// the cap -- chunking must never be a way around it.
+		"bulk_apply_max_items": applycap.Effective(config.AppConfig.BulkApplyMaxItems),
 	}
 
 	if wantUnreviewable {

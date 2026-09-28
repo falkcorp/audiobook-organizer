@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.selectAll.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a3f0c52-e1d9-4b86-9f24-58c0d6a1b3e7
 // last-edited: 2026-09-27
 //
@@ -17,6 +17,7 @@ import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 import {
   APPLY_CHUNK_SIZE,
+  applyCapMessage,
   FETCH_CHUNK_SIZE,
   useMetadataLane,
 } from './lanes/useMetadataLane';
@@ -207,6 +208,51 @@ describe('lane: chunked apply and filter-change pruning', () => {
     expect(Object.keys(pins ?? {}).sort()).toEqual([...ids].sort());
     expect(mode).toBe('fill');
     await waitFor(() => expect(result.current.selectedIds.size).toBe(0));
+  });
+
+  it('refuses an apply above the 5,000 cap with no request, and sends 5,000 in chunks', async () => {
+    const big = Array.from({ length: 5001 }, (_, i) => matched(`c${i}`));
+    seed(big);
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(5001));
+
+    const all = big.map((r) => r.book.id);
+    act(() => result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: all }));
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(applyCapMessage(5000, 5001), 'error');
+    expect(applyCapMessage(5000, 5001)).toBe(
+      'Apply is limited to 5,000 books at a time (setting bulk_apply_max_items); ' +
+        '5,001 selected — narrow the selection or raise the limit in Settings.'
+    );
+
+    act(() =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: all.slice(0, 5000) })
+    );
+    await waitFor(() =>
+      expect(api.batchApplyFromCache).toHaveBeenCalledTimes(5000 / APPLY_CHUNK_SIZE)
+    );
+  });
+
+  it('uses the cap the server reports', async () => {
+    const rows = Array.from({ length: 101 }, (_, i) => matched(`s${i}`));
+    seed(rows);
+    const base = vi.mocked(api.getCachedReviewResults).getMockImplementation()!;
+    vi.mocked(api.getCachedReviewResults).mockImplementation(async (...args) => ({
+      ...(await base(...args)),
+      bulk_apply_max_items: 100,
+    }));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(101));
+
+    act(() =>
+      result.current.dispatch({
+        lane: 'metadata',
+        type: 'applySelected',
+        ids: rows.map((r) => r.book.id),
+      })
+    );
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(applyCapMessage(100, 101), 'error');
   });
 
   it('a filter change drops selected books the new filter no longer matches', async () => {

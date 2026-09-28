@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.22.0
+// version: 1.23.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-27
 //
@@ -92,6 +92,16 @@ export const APPLY_CHUNK_SIZE = 500;
 export const FETCH_CHUNK_SIZE = 1000;
 /** Concurrent per-book requests (reject, clear no-match): no bulk endpoint exists. */
 export const PER_BOOK_CONCURRENCY = 4;
+/** applycap.Default: used until (or unless) the server reports its setting. */
+export const DEFAULT_BULK_APPLY_MAX_ITEMS = 5000;
+
+/** The refusal shown when a bulk apply is larger than the server's cap. */
+export function applyCapMessage(cap: number, requested: number): string {
+  return (
+    `Apply is limited to ${cap.toLocaleString()} books at a time (setting bulk_apply_max_items); ` +
+    `${requested.toLocaleString()} selected — narrow the selection or raise the limit in Settings.`
+  );
+}
 
 export function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -821,6 +831,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // still needs it.
   const [unreviewableFor, setUnreviewableFor] = useState(-1);
   const [searching, setSearching] = useState(false);
+  const [applyCap, setApplyCap] = useState(DEFAULT_BULK_APPLY_MAX_ITEMS);
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
   const [bulkApplyMode, setBulkApplyModeState] = useState<BulkApplyMode>(loadBulkApplyMode);
   const [skipReplaceConfirm, setSkipReplaceConfirm] = useState<boolean>(loadSkipReplaceConfirm);
@@ -1054,6 +1065,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           unreviewable_by_cause: data.unreviewable_by_cause,
           resolved_no_candidates: data.resolved_no_candidates,
         });
+        if (typeof data.bulk_apply_max_items === 'number' && data.bulk_apply_max_items > 0) {
+          setApplyCap(data.bulk_apply_max_items);
+        }
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -1712,6 +1726,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           applyOne(action.id);
           return;
         case 'applySelected':
+          // The server's bulk apply fail-safe applies to the WHOLE apply, not
+          // to each request: applyMany chunks for the body limit, and that
+          // must never become a way around the cap. Refused here, before any
+          // request or Replace prompt, for every bulk entry point.
+          if (action.ids.length > applyCap) {
+            toast(applyCapMessage(applyCap, action.ids.length), 'error');
+            return;
+          }
           // Replace overwrites values the owner may have curated, on every
           // book in the batch, so it asks first -- here, not in each button,
           // so every bulk entry point confirms exactly once. The request is
@@ -1791,6 +1813,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       bulkApplyMode,
       skipReplaceConfirm,
       bulkPinsFor,
+      applyCap,
     ]
   );
 

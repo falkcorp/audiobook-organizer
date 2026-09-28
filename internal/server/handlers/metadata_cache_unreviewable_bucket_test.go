@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_unreviewable_bucket_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b7e91c4-58d2-4a6f-9e13-c0a4f27d8b95
 // last-edited: 2026-09-27
 
@@ -55,6 +55,7 @@ type unreviewableBody struct {
 		Stale                int                   `json:"stale"`
 		Unreviewable         int                   `json:"unreviewable"`
 		ResolvedNoCandidates int                   `json:"resolved_no_candidates"`
+		BulkApplyMaxItems    int                   `json:"bulk_apply_max_items"`
 		ByCause              struct {
 			Orphaned     int `json:"orphaned"`
 			NoCandidates int `json:"no_candidates"`
@@ -136,6 +137,7 @@ func TestGetCacheReviewResults_UnreviewableBucketMatchesTheChips(t *testing.T) {
 	d := body.Data
 
 	assert.Equal(t, "unreviewable", d.Bucket)
+	assert.Equal(t, 5000, d.BulkApplyMaxItems, "unset bulk_apply_max_items reports applycap.Default")
 	assert.False(t, d.Truncated)
 
 	byStatus := map[string][]unreviewableRowBody{}
