@@ -69,8 +69,7 @@ export function useDedupPipeline({ toast, onFinished, pollIntervalMs }: UseDedup
       const result = await runDedupPipeline({
         pollIntervalMs,
         shouldStop: () => stopRef.current,
-        onProgress: (progress) =>
-          setState((s) => (s.kind === 'running' ? { ...s, progress } : s)),
+        onProgress: (progress) => setState((s) => (s.kind === 'running' ? { ...s, progress } : s)),
       });
       setState({ kind: 'done', result });
       toast('Duplicate check finished — the results are in the Dupes tab.', 'success');
@@ -167,13 +166,17 @@ export function useDedupPipeline({ toast, onFinished, pollIntervalMs }: UseDedup
         }
       >
         <AlertTitle>
-          Finding duplicates — step {stepNo} of {total}: {p?.step.label ?? DEDUP_PIPELINE_STEPS[0].label}
+          Finding duplicates — step {stepNo} of {total}:{' '}
+          {p?.step.label ?? DEDUP_PIPELINE_STEPS[0].label}
         </AlertTitle>
         <Typography variant="body2">
           {op?.message || 'Working…'} Keep this tab open; closing it stops the remaining steps.
         </Typography>
         <Box sx={{ mt: 1 }}>
-          <LinearProgress variant={pct === undefined ? 'indeterminate' : 'determinate'} value={pct} />
+          <LinearProgress
+            variant={pct === undefined ? 'indeterminate' : 'determinate'}
+            value={pct}
+          />
         </Box>
       </Alert>
     );

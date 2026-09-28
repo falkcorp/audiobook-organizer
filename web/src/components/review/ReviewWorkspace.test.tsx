@@ -233,22 +233,35 @@ describe('rescore', () => {
   // where its two-button dialog went. Worth testing precisely because the
   // command bar had quietly collapsed both buttons into one that only dry-ran.
 
+  // Both rescore items live in the Dedup menu's Advanced section, which only
+  // renders while the global advanced setting is on.
+  beforeEach(() => window.localStorage.setItem('settings.showAdvanced', 'true'));
+
   async function openDedupMenu(user: ReturnType<typeof userEvent.setup>) {
     renderWorkspace();
     await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: /dedup/i }));
   }
 
-  it('dry run says it is a dry run, and writes nothing', async () => {
+  it('the preview says it changed nothing, and writes nothing', async () => {
     const user = userEvent.setup();
-    vi.mocked(api.rescoreDedupCandidates).mockResolvedValue({} as never);
+    vi.mocked(api.rescoreDedupCandidates).mockResolvedValue({
+      inspected: 40,
+      skipped: 2,
+      changed: 3,
+      applied: false,
+      band_deltas: {},
+    });
     await openDedupMenu(user);
 
-    await user.click(screen.getByRole('menuitem', { name: /rescore \(dry run\)/i }));
+    await user.click(await screen.findByTestId('command-rescore-dry-run'));
 
     // The label and the argument have to agree. They did not: the item read
     // "Rescore", passed apply=false, and toasted "Rescore started".
     expect(api.rescoreDedupCandidates).toHaveBeenCalledWith(false);
+    // The endpoint is synchronous; its counts are the result, not "started".
+    expect(await screen.findByText(/3 of 40 waiting pairs would change/i)).toBeInTheDocument();
+    expect(screen.getByText(/nothing was saved/i)).toBeInTheDocument();
   });
 
   it('does not apply until the confirmation is accepted', async () => {
@@ -256,7 +269,7 @@ describe('rescore', () => {
     vi.mocked(api.rescoreDedupCandidates).mockResolvedValue({} as never);
     await openDedupMenu(user);
 
-    await user.click(screen.getByRole('menuitem', { name: /rescore and apply/i }));
+    await user.click(await screen.findByTestId('command-rescore-apply'));
     // Choosing the menu item must not be the mutation.
     expect(api.rescoreDedupCandidates).not.toHaveBeenCalled();
 
@@ -268,7 +281,7 @@ describe('rescore', () => {
     const user = userEvent.setup();
     await openDedupMenu(user);
 
-    await user.click(screen.getByRole('menuitem', { name: /rescore and apply/i }));
+    await user.click(await screen.findByTestId('command-rescore-apply'));
     await user.click(screen.getByRole('button', { name: /cancel/i }));
 
     expect(api.rescoreDedupCandidates).not.toHaveBeenCalled();
@@ -435,21 +448,25 @@ describe('command bar', () => {
     expect(item).toHaveAttribute('aria-disabled', 'true');
   });
 
-  it('labels library-wide commands as library-wide', async () => {
-    // PLAN.md:390-394 -- most of these routes are library-wide, and silently
-    // firing one from a row-level control is the wrong kind of convenience.
+  it('says what a whole-library command acts on, in its description', async () => {
+    // PLAN.md:390-394 wanted library-wide jobs flagged so one is never
+    // mistaken for a per-row action. The owner (2026-09-27) dropped the
+    // "library-wide" subtitle because every item carried it; the description
+    // now names the scope in words instead.
     const user = userEvent.setup();
     renderWorkspace();
     await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
 
     await user.click(screen.getByTestId('command-menu-dedup'));
 
-    const item = await screen.findByTestId('command-find-duplicates');
-    expect(item).toHaveTextContent(/library-wide/i);
+    const item = await screen.findByTestId('command-full-rescan');
+    expect(item).toHaveTextContent(/every book/i);
+    expect(item).not.toHaveTextContent(/library-wide/i);
   });
 
   it('starts the job behind a command', async () => {
     const user = userEvent.setup();
+    window.localStorage.setItem('settings.showAdvanced', 'true');
     vi.mocked(api.triggerDedupScan).mockResolvedValue(
       {} as unknown as Awaited<ReturnType<typeof api.triggerDedupScan>>
     );
@@ -460,6 +477,100 @@ describe('command bar', () => {
     await user.click(await screen.findByTestId('command-find-duplicates'));
 
     await waitFor(() => expect(api.triggerDedupScan).toHaveBeenCalled());
+  });
+});
+
+describe('one-button dedup run', () => {
+  const safeConfig = {
+    root_dir: '',
+    dedup: { auto_merge_enabled: false, llm_auto_merge_high_confidence: false },
+  } as unknown as api.Config;
+
+  beforeEach(() => {
+    const op = (id: string) => async () => ({ id }) as api.Operation;
+    vi.mocked(api.triggerEmbedScan).mockImplementation(op('op-embed'));
+    vi.mocked(api.triggerDedupAcoustID).mockImplementation(op('op-acoustic'));
+    vi.mocked(api.triggerDedupScan).mockImplementation(op('op-find'));
+    vi.mocked(api.triggerDedupLLM).mockImplementation(op('op-llm'));
+    vi.mocked(api.pollOperation).mockImplementation(
+      async (id: string) => ({ id, status: 'completed', progress: 1, total: 1 }) as api.Operation
+    );
+    vi.mocked(api.rescoreDedupCandidates).mockResolvedValue({
+      inspected: 12,
+      skipped: 0,
+      changed: 0,
+      applied: false,
+      band_deltas: {},
+    });
+  });
+
+  async function clickRunAll(user: ReturnType<typeof userEvent.setup>) {
+    renderWorkspace();
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+    await user.click(screen.getByTestId('command-menu-dedup'));
+    await user.click(await screen.findByTestId('command-find-all-duplicates'));
+  }
+
+  it('is in the simple section with no advanced setting, and runs every step then opens Dupes', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue(safeConfig);
+    const user = userEvent.setup();
+    await clickRunAll(user);
+
+    await waitFor(() => expect(api.rescoreDedupCandidates).toHaveBeenCalledWith(false));
+    const order = [
+      api.triggerEmbedScan,
+      api.triggerDedupAcoustID,
+      api.triggerDedupScan,
+      api.triggerDedupLLM,
+    ].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(api.rescoreDedupCandidates).not.toHaveBeenCalledWith(true);
+    expect(await screen.findByTestId('dedup-pipeline-done')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId('lane-tab-dupes')).toHaveAttribute('aria-selected', 'true')
+    );
+  });
+
+  it('asks first when a setting would let the run merge books by itself', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({
+      root_dir: '',
+      dedup: { auto_merge_enabled: true, llm_auto_merge_high_confidence: false },
+    } as unknown as api.Config);
+    const user = userEvent.setup();
+    await clickRunAll(user);
+
+    expect(await screen.findByTestId('dedup-pipeline-confirm')).toHaveTextContent(
+      /identical audio file/i
+    );
+    expect(api.triggerEmbedScan).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('dedup-pipeline-confirm-run'));
+    await waitFor(() => expect(api.triggerEmbedScan).toHaveBeenCalled());
+  });
+
+  it('does not start when the settings cannot be read', async () => {
+    vi.mocked(api.getConfig).mockRejectedValue(new Error('offline'));
+    const user = userEvent.setup();
+    await clickRunAll(user);
+
+    expect(await screen.findByText(/did not start/i)).toBeInTheDocument();
+    expect(api.triggerEmbedScan).not.toHaveBeenCalled();
+  });
+
+  it('stops at a failed step and says which one', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue(safeConfig);
+    vi.mocked(api.pollOperation).mockImplementation(
+      async (id: string) =>
+        ({ id, status: id === 'op-find' ? 'failed' : 'completed', progress: 1, total: 1 }) as api.Operation
+    );
+    const user = userEvent.setup();
+    await clickRunAll(user);
+
+    expect(await screen.findByTestId('dedup-pipeline-failed')).toHaveTextContent(
+      /Finding and scoring duplicates/
+    );
+    expect(api.triggerDedupLLM).not.toHaveBeenCalled();
+    expect(api.rescoreDedupCandidates).not.toHaveBeenCalled();
   });
 });
 
