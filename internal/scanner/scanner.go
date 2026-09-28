@@ -2077,14 +2077,19 @@ func extractInfoFromPath(book *Book) {
 	baseName := filepath.Base(path)
 	baseName = strings.TrimSuffix(baseName, filepath.Ext(baseName))
 
-	// Remove leading track/chapter numbers
+	// Remove leading track/chapter numbers -- only when something follows.
+	// A name that is nothing BUT a number stays whole, so a title like "1984"
+	// survives to metadata.IsChapterOnlyTitle, which knows a year-like number
+	// is a title; a bare "98" is still recognised there as chapter-only.
 	parts := strings.Split(baseName, " ")
-	if len(parts) > 0 {
+	if len(parts) > 1 {
 		if _, err := strconv.Atoi(parts[0]); err == nil {
 			baseName = strings.Join(parts[1:], " ")
 		}
 	}
-	baseName = strings.TrimSpace(baseName)
+	// "02 - Eldest" leaves "- Eldest" once the number is gone: drop the
+	// separator the number was attached to.
+	baseName = strings.TrimLeft(strings.TrimSpace(baseName), "-_. ")
 
 	// Remove chapter info from end
 	re := regexp.MustCompile(`(?i)[-_]\d+\s+Chapter\s+\d+$`)
@@ -2117,12 +2122,15 @@ func extractInfoFromPath(book *Book) {
 			book.Author = author
 			book.Title = title
 		} else {
-			// No author could be determined: the last segment is the title.
-			// The first segment is NOT recorded as a series. It was, and for
-			// chapter files it is whatever precedes the number, so "02 - Eldest"
-			// filed one book per chapter under a series named "02".
+			// No author could be determined: the last segment is the title,
+			// and the first is the series unless either end is only a chapter
+			// position ("02 - Eldest" filed one book per chapter under a series
+			// named "02"). See metadata.SeriesFromTitlePrefix.
 			parts := strings.Split(baseName, " - ")
 			if len(parts) > 1 {
+				if series := metadata.SeriesFromTitlePrefix(parts); series != "" && book.Series == "" {
+					book.Series = series
+				}
 				book.Title = strings.TrimSpace(parts[len(parts)-1])
 			} else {
 				book.Title = baseName
@@ -2152,9 +2160,9 @@ func extractInfoFromPath(book *Book) {
 	// from the folder above it; otherwise this produced title "98", author
 	// "Eldest". See metadata.ChapterTitleFromDirectory.
 	authorProbe := path
-	if dirTitle, ok := metadata.ChapterTitleFromDirectory(path, book.Title); ok {
+	if dirTitle, titleDir, ok := metadata.ChapterTitleFromDirectory(path, book.Title); ok {
 		book.Title = dirTitle
-		authorProbe = metadata.AuthorProbePath(path, true)
+		authorProbe = titleDir
 	}
 
 	if book.Author == "" {
