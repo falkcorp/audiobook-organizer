@@ -111,6 +111,7 @@ export function MetadataPanel({
           rowState={metadata.spineCtx.rowState}
           isSelected={metadata.spineCtx.isSelected}
           onToggleSelect={metadata.spineCtx.onToggleSelect}
+          onSelectPage={metadata.setSelection}
           onRefresh={metadata.refresh}
           refetching={metadata.refetching}
           onRefetchStale={metadata.staleIds.length ? onRefetchStale : undefined}

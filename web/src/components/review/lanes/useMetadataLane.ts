@@ -669,6 +669,8 @@ export interface MetadataLane {
    * in it is the selection unchanged.
    */
   applicableSelectedIds: string[];
+  /** Select (or deselect) many books at once -- the rail's "select this page". */
+  setSelection: (ids: string[], selected: boolean) => void;
   /** True while a Search again request (and its no-match clears) is in flight. */
   searching: boolean;
   /**
@@ -1724,6 +1726,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     });
   }, []);
 
+  const setSelection = useCallback((ids: string[], selected: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => (selected ? next.add(id) : next.delete(id)));
+      return next;
+    });
+  }, []);
+
   const toggleExpand = useCallback(
     (bookId: string) => setExpandedId((prev) => (prev === bookId ? null : bookId)),
     []
@@ -1805,14 +1815,24 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       const byId = new Map<string, CandidateResult>();
       for (const r of results) byId.set(r.book.id, r);
       for (const r of unreviewableResults) byId.set(r.book.id, r);
-      const marked = ids.filter((id) => isMarkedNoMatch(byId.get(id), rowStates.get(id)));
+      let marked = ids.filter((id) => isMarkedNoMatch(byId.get(id), rowStates.get(id)));
       if (marked.length > 0) {
+        const others = ids.length - marked.length;
         const ok = await confirm(
           `${marked.length.toLocaleString()} of the ${ids.length.toLocaleString()} selected ` +
             `book${ids.length !== 1 ? 's are' : ' is'} marked no-match, and a search skips ` +
-            'those. Clear the no-match mark on them and search them too?'
+            'those.\n\n' +
+            `OK: clear their no-match mark and search all ${ids.length.toLocaleString()}.\n` +
+            (others > 0
+              ? `Cancel: search only the other ${others.toLocaleString()}.`
+              : 'Cancel: search nothing.')
         );
-        if (!ok) return null;
+        if (!ok) {
+          if (others === 0) return null;
+          const skip = new Set(marked);
+          ids = ids.filter((id) => !skip.has(id));
+          marked = [];
+        }
       }
       setSearching(true);
       try {
@@ -1909,6 +1929,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     unreviewableLoading,
     unreviewableError,
     applicableSelectedIds,
+    setSelection,
     searching,
     searchAgain,
     bulkApplyMode,
