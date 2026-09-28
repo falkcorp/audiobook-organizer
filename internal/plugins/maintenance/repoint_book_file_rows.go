@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 
 // Package maintenance — op maintenance.repoint-book-file-rows.
 //
@@ -200,13 +200,29 @@ func (r *rbfReport) summary() string {
 
 // rbfStore is the narrow store the op needs. Every method is on
 // database.Store, so the production indexedStore satisfies it.
+//
+// It is the composition of the op's read and write halves: the planner (dry
+// run included) only ever reads, and only rbfApplyOne writes. Split along that
+// line rather than grown past interfacebloat's cap of 8.
 type rbfStore interface {
+	rbfReader
+	rbfWriter
+}
+
+// rbfReader is what planning reads: the row and book under repair, the rows
+// already claiming the target path, and the before/after book states.
+type rbfReader interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	LiveBookIDsAtPath(path string) ([]string, error)
+}
+
+// rbfWriter is what a live apply writes: the repointed row, the book's
+// aggregates recomputed from it, and the undo journal entry.
+type rbfWriter interface {
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 	RecomputeBookAggregates(bookID string) error
 	CreateOperationChange(change *database.OperationChange) error

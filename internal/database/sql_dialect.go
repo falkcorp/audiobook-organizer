@@ -1,7 +1,7 @@
 // file: internal/database/sql_dialect.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7d2f1a90-4c8b-4e23-9f61-2b7c5d0e8a44
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 
 // Package database — SQL dialect seam for the backend-agnostic activity store.
 //
@@ -13,7 +13,7 @@
 // is a new dialect + driver import, not a rewrite of the store body.
 //
 // Only sqliteDialect is implemented today (modernc.org/sqlite, no cgo). MySQL
-// and Postgres dialects are additive: implement the four methods, add the
+// and Postgres dialects are additive: implement sqlDialect's methods, add the
 // driver import, and teach the factory in internal/activity to build one from a
 // DSN. Wiring a networked DB (credentials, connection limits, migrations) is a
 // deliberate operational decision, not part of the SQLite dark-launch.
@@ -28,8 +28,6 @@ import (
 // The store composes portable ANSI SQL around these; it never writes an
 // engine-specific string directly.
 type sqlDialect interface {
-	// name identifies the dialect for logging.
-	name() string
 	// driverName is the database/sql driver to open (e.g. "sqlite").
 	driverName() string
 	// ddl returns the ordered schema statements (table + indexes), each safe to
@@ -76,7 +74,6 @@ type sqlTimeIndexDDL struct {
 
 type sqliteDialect struct{}
 
-func (sqliteDialect) name() string       { return "sqlite" }
 func (sqliteDialect) driverName() string { return "sqlite" } // modernc.org/sqlite registers "sqlite"
 
 func (sqliteDialect) ddl() []string {
