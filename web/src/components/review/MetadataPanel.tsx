@@ -1,5 +1,5 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
 // last-edited: 2026-09-27
 //
@@ -112,6 +112,10 @@ export function MetadataPanel({
           isSelected={metadata.spineCtx.isSelected}
           onToggleSelect={metadata.spineCtx.onToggleSelect}
           onSelectPage={metadata.setSelection}
+          onSelectAllMatching={metadata.selectAllMatching}
+          onClearSelection={metadata.clearSelection}
+          allMatchingSelected={metadata.allMatchingSelected}
+          selectedCount={metadata.selectedIds.size}
           onRefresh={metadata.refresh}
           refetching={metadata.refetching}
           onRefetchStale={metadata.staleIds.length ? onRefetchStale : undefined}
@@ -161,6 +165,10 @@ export function MetadataPanel({
         selectedIds={metadata.selectedIds}
         applicableSelectedIds={metadata.applicableSelectedIds}
         searching={metadata.searching}
+        bulkProgress={metadata.bulkProgress}
+        onClearSelection={metadata.clearSelection}
+        onSkipSelected={metadata.skipSelected}
+        onRejectSelected={() => void metadata.rejectSelected()}
         onSearchSelected={(ids) =>
           void metadata.searchAgain(ids, (message) => Promise.resolve(window.confirm(message)))
         }

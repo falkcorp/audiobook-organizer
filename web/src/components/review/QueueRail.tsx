@@ -1,5 +1,5 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
 // last-edited: 2026-09-27
 //
@@ -177,6 +177,15 @@ export interface QueueRailProps {
    * one checkbox at a time is not a workflow.
    */
   onSelectPage?: (ids: string[], selected: boolean) => void;
+  /**
+   * Gmail's pattern: once the whole page is ticked, offer every book the view
+   * matches across all pages. The lane holds every matching row client-side
+   * (it loads with all=true), so this needs no request.
+   */
+  onSelectAllMatching?: () => void;
+  onClearSelection?: () => void;
+  allMatchingSelected?: boolean;
+  selectedCount?: number;
   onRefresh: () => void;
   /**
    * Refetch every stale row in the library, not just the ones on this page.
@@ -311,6 +320,10 @@ export function QueueRail({
   isSelected,
   onToggleSelect,
   onSelectPage,
+  onSelectAllMatching,
+  onClearSelection,
+  allMatchingSelected = false,
+  selectedCount = 0,
   onRefresh,
   onRefetchStale,
   onRefetchRow,
@@ -654,6 +667,31 @@ export function QueueRail({
             {loading ? 'Loading…' : `${filteredCount} shown`}
           </Typography>
         </Box>
+        {onSelectAllMatching &&
+          rows.length > 0 &&
+          filteredCount > rows.length &&
+          rows.every((r) => isSelected(r.book.id)) && (
+            <Alert severity="info" data-testid="select-all-matching-banner" sx={{ mx: 1, mb: 1 }}>
+              {allMatchingSelected ? (
+                <>
+                  All {filteredCount.toLocaleString()} matching selected.{' '}
+                  {onClearSelection && (
+                    <Button size="small" onClick={onClearSelection} data-testid="clear-selection-banner">
+                      Clear selection
+                    </Button>
+                  )}
+                </>
+              ) : (
+                <>
+                  All {rows.length.toLocaleString()} on this page selected
+                  {selectedCount > rows.length ? ` (${selectedCount.toLocaleString()} in all)` : ''}.{' '}
+                  <Button size="small" onClick={onSelectAllMatching} data-testid="select-all-matching">
+                    Select all {filteredCount.toLocaleString()} matching
+                  </Button>
+                </>
+              )}
+            </Alert>
+          )}
         <Box
           component="ul"
           data-testid="queue-list"
