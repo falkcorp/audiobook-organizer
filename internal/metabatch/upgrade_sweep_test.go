@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_sweep_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b2e9d14-83c5-4a7f-9e01-d4f8a2c5b736
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package metabatch
 
@@ -31,7 +31,8 @@ func TestTryUpgradeBook_SkipsOwnerManualOnlyBeforeSearch(t *testing.T) {
 			mutate(f)
 			svc, fetcher := f.service(candidate("Audible", 0.99))
 
-			upgraded, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+			outcome, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+			upgraded := outcome.Upgraded
 			require.ErrorIs(t, err, errOwnerManualOnly)
 			require.False(t, upgraded)
 			require.Zero(t, fetcher.searches, "no provider quota is spent on a manual-only book")

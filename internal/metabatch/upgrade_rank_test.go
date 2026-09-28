@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_rank_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e0b7c3a-91d4-4f6e-8a2b-c7d1e9f40a63
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // Owner decision 2026-09-27: the nightly metadata upgrade REPLACES a book's
 // metadata when it came from a lower-ranked source and a strictly
@@ -177,7 +177,8 @@ func TestTryUpgradeBook_OpenLibraryToAudibleReplacesFilledFields(t *testing.T) {
 	f := newRankFixture()
 	svc, fetcher := f.service(candidate("Audible", 0.95))
 
-	upgraded, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	outcome, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	upgraded := outcome.Upgraded
 	require.NoError(t, err)
 	require.True(t, upgraded, "an Audible candidate that passes the gate upgrades an Open Library book")
 
@@ -211,7 +212,8 @@ func TestTryUpgradeBook_LockedTitleStillRetagsSource(t *testing.T) {
 	c.Title = "Project Hail Mary: A Novel"
 	svc, _ := f.service(c)
 
-	upgraded, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	outcome, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	upgraded := outcome.Upgraded
 	require.NoError(t, err)
 	require.True(t, upgraded)
 	require.Equal(t, "Project Hail Mary", f.written().Title, "the locked title is kept")
@@ -268,7 +270,8 @@ func TestTryUpgradeBook_NeverDowngradesOrSideGrades(t *testing.T) {
 				candidate("Audible", 0.99),
 				candidate("Audnexus (Audible)", 0.99),
 			)
-			upgraded, err := svc.tryUpgradeBook(context.Background(), "rank-1", current)
+			outcome, err := svc.tryUpgradeBook(context.Background(), "rank-1", current)
+			upgraded := outcome.Upgraded
 			require.NoError(t, err)
 			require.False(t, upgraded)
 			require.Empty(t, fetcher.applied, "no candidate outranks %s", current)
@@ -286,7 +289,8 @@ func TestTryUpgradeBook_NeverDowngradesOrSideGrades(t *testing.T) {
 func TestTryUpgradeBook_HighestRankBeatsBetterScore(t *testing.T) {
 	f := newRankFixture()
 	svc, fetcher := f.service(candidate("Hardcover", 0.99), candidate("Audible", 0.92))
-	upgraded, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	outcome, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	upgraded := outcome.Upgraded
 	require.NoError(t, err)
 	require.True(t, upgraded)
 	require.Equal(t, []string{"Audible"}, fetcher.sources)
@@ -300,7 +304,8 @@ func TestTryUpgradeBook_ReplaceKeepsUserLockedFields(t *testing.T) {
 	f.locks = []database.MetadataFieldState{{Field: database.FieldKeyDescription, OverrideValue: &locked}}
 	svc, _ := f.service(candidate("Audible", 0.95))
 
-	upgraded, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	outcome, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	upgraded := outcome.Upgraded
 	require.NoError(t, err)
 	require.True(t, upgraded)
 	got := f.written()
@@ -315,7 +320,8 @@ func TestTryUpgradeBook_ReplaceKeepsUserLockedFields(t *testing.T) {
 func TestTryUpgradeBook_GateRefusalAppliesNothing(t *testing.T) {
 	f := newRankFixture()
 	svc, fetcher := f.service(candidate("Audible", 0.80))
-	upgraded, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	outcome, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	upgraded := outcome.Upgraded
 	require.NoError(t, err)
 	require.False(t, upgraded)
 	require.Empty(t, fetcher.applied)
@@ -327,7 +333,8 @@ func TestTryUpgradeBook_SkipsNoMatchBook(t *testing.T) {
 	f := newRankFixture()
 	f.book.MetadataReviewStatus = new("no_match")
 	svc, fetcher := f.service(candidate("Audible", 0.95))
-	upgraded, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	outcome, err := svc.tryUpgradeBook(context.Background(), "rank-1", "open_library")
+	upgraded := outcome.Upgraded
 	require.NoError(t, err)
 	require.False(t, upgraded)
 	require.Zero(t, fetcher.searches)
@@ -338,7 +345,8 @@ func TestTryUpgradeBook_SkipsNoMatchBook(t *testing.T) {
 func TestTryUpgradeBook_UnrankedCurrentSourceIsNotReplaced(t *testing.T) {
 	f := newRankFixture()
 	svc, fetcher := f.service(candidate("Audible", 0.99))
-	upgraded, err := svc.tryUpgradeBook(context.Background(), "rank-1", "some_new_provider")
+	outcome, err := svc.tryUpgradeBook(context.Background(), "rank-1", "some_new_provider")
+	upgraded := outcome.Upgraded
 	require.NoError(t, err)
 	require.False(t, upgraded)
 	require.Zero(t, fetcher.searches)

@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
@@ -431,6 +432,14 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// while 200 of those kept a curated title the user would otherwise
 			// go looking for in the op log.
 			var skippedLocked atomic.Int64
+			// notApplied counts every book this attempt examined and did not
+			// apply, whatever the reason; the progress label reports it next to
+			// applied and write-back failed.
+			var notApplied atomic.Int64
+			label := newBatchApplyLabel(func() string {
+				return fmt.Sprintf("applying cached metadata — applied %d, not applied %d, write-back failed %d",
+					applied.Load(), notApplied.Load(), writeFailed.Load())
+			})
 
 			// itunes may be a typed nil (*itunesservice.WriteBackBatcher)(nil), which
 			// is NOT == nil once boxed in an interface. Normalize to an untyped nil
@@ -495,10 +504,12 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 						// this per-item deadline cannot make a cancelled batch
 						// look like a completed one.
 						noteGateDeferred(id)
-						reporter.Log(slog.LevelWarn, "book not applied",
-							slog.String("book_id", id),
+						// Not read yet, so the book is named by its id.
+						_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("deferred: book %s — write-back gate unavailable, retried at the end of the run: %s",
+							opLogQuoted(id), logger.SanitizeLogValue(gateErr.Error())),
+							slog.String("book_id", logger.SanitizeLogValue(id)),
 							slog.String("reason", "write-back gate unavailable"),
-							slog.String("error", gateErr.Error()))
+							slog.String("error", logger.SanitizeLogValue(gateErr.Error())))
 						return nil
 					}
 					defer releaseFileWrite()
@@ -550,15 +561,16 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 						// The live author read failed; nothing was written.
 						authorsUnreadable.Add(1)
 					}
+					notApplied.Add(1)
 					attrs := []slog.Attr{
-						slog.String("book_id", id),
+						slog.String("book_id", logger.SanitizeLogValue(id)),
 						slog.String("reason", out.Reason),
-						slog.String("error", errText(out.Err)),
+						slog.String("error", logger.SanitizeLogValue(errText(out.Err))),
 					}
 					if out.Gate != nil {
 						attrs = append(attrs, slog.String("gate_reason", out.Gate.Reason), slog.Float64("score", out.Gate.Score))
 					}
-					reporter.Log(slog.LevelWarn, "book not applied", attrs...)
+					_ = reporter.Log(slog.LevelWarn, batchApplyRefusedLine(id, out), attrs...)
 					return nil
 				}
 
@@ -568,23 +580,26 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				}
 				if out.OwnerReplace {
 					ownerReplaced.Add(1)
-					reporter.Log(slog.LevelInfo, "owner replace: bulk apply replaced existing values",
-						slog.String("book_id", id))
 				}
 				if len(out.SkippedLocked) > 0 {
 					skippedLocked.Add(1)
-					reporter.Log(slog.LevelInfo, "applied; user-locked fields left unchanged",
-						slog.String("book_id", id),
-						slog.Any("skipped_locked", out.SkippedLocked))
 				}
+				// One line per applied book: which book took which candidate,
+				// plus the owner-replace and kept-locked-fields facts that used
+				// to be separate lines.
+				appliedAttrs := []slog.Attr{slog.String("book_id", logger.SanitizeLogValue(id))}
+				if len(out.SkippedLocked) > 0 {
+					appliedAttrs = append(appliedAttrs, slog.Any("skipped_locked", out.SkippedLocked))
+				}
+				_ = reporter.Log(slog.LevelInfo, batchApplyAppliedLine(id, out), appliedAttrs...)
 				// Each line logs its own error (HistoryErr / WriteBackErr), not
 				// the joined Err: a book can hit both, and each line should say
 				// exactly what it is about.
 				if out.HistoryFailed {
 					historyFailed.Add(1)
-					reporter.Log(slog.LevelError, "owner-reviewed apply written but change history not recorded",
-						slog.String("book_id", id),
-						slog.String("error", errText(out.HistoryErr)))
+					_ = reporter.Log(slog.LevelError, fmt.Sprintf("history not recorded: %s — owner-reviewed apply written but change history not recorded: %s",
+						batchApplyBookLabel(id, out), logger.SanitizeLogValue(errText(out.HistoryErr))),
+						slog.String("book_id", logger.SanitizeLogValue(id)))
 				}
 				if out.WriteBackFailed {
 					// Counted separately and logged, but NOT subtracted from
@@ -592,9 +607,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					// it as unapplied would send someone re-applying work that
 					// succeeded.
 					writeFailed.Add(1)
-					reporter.Log(slog.LevelWarn, "applied to database but write-back to files failed",
-						slog.String("book_id", id),
-						slog.String("error", errText(out.WriteBackErr)))
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("write-back failed: %s — applied to database but writing the files failed: %s",
+						batchApplyBookLabel(id, out), logger.SanitizeLogValue(errText(out.WriteBackErr))),
+						slog.String("book_id", logger.SanitizeLogValue(id)))
 				}
 				return nil
 			}
@@ -636,7 +651,11 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				Concurrency:    writeBackWorkers(),
 				PerItemTimeout: 3 * time.Minute,
 				ErrMode:        opsregistry.ErrModeCollect,
-				Label:          func(int, int) string { return "applying cached metadata" },
+				// Carries the running counts, rebuilt only every
+				// batchApplyLabelEvery books: reporter_db.go writes one op log
+				// row per DISTINCT progress message, and the per-book outcome
+				// lines above are the ones worth the rows.
+				Label: func(int, int) string { return label.get(applied.Load() + notApplied.Load()) },
 				// Absolute position in the batch the user started, not in this
 				// attempt's remainder.
 				ProgressOffset:  priorDone,

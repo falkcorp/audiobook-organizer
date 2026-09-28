@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-09-14
+// last-edited: 2026-09-27
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -37,12 +37,14 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	ulid "github.com/oklog/ulid/v2"
@@ -232,9 +234,16 @@ func (s *Server) runBulkMetadataFetchAll(
 		identity   string
 	}
 	var work []bookWork
+	// untitled counts books left out because their title is empty or a
+	// placeholder: searching one matches whatever the catalog ranks first.
+	untitled := 0
 	for i := range allBooks {
 		b := &allBooks[i]
-		if done[b.ID] || strings.TrimSpace(b.Title) == "" {
+		if done[b.ID] {
+			continue
+		}
+		if organizer.IsPlaceholderTitle(b.Title) {
+			untitled++
 			continue
 		}
 		author := ""
@@ -265,6 +274,9 @@ func (s *Server) runBulkMetadataFetchAll(
 	totalBooks := len(existingResults) + len(work)
 	alreadyDone := len(existingResults)
 	logging.Info(ctx, "bulk-metadata-fetch books total, already cached, to fetch", "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
+	if untitled > 0 {
+		_ = progress.Log("info", bulkFetchUntitledLine(untitled), nil)
+	}
 
 	// Track affected books in operation context
 	for i := range work {
@@ -310,7 +322,12 @@ func (s *Server) runBulkMetadataFetchAll(
 	// circuit-open) as distinct from books genuinely absent from every
 	// catalog. Folding the two together is what made a rate-limited run
 	// indistinguishable from a complete one.
-	var found, notFound, errored atomic.Int64
+	// skipped counts chapter fragments, which are not searched; they used to
+	// be folded into notFound.
+	var found, notFound, skipped, errored atomic.Int64
+	counts := func() string {
+		return bulkFetchCounts(found.Load(), notFound.Load(), skipped.Load(), errored.Load())
+	}
 
 	// Per-provider semaphore (fixed cap 2) shared by all workers so N pool workers
 	// can never stampede a single provider. Built from the read-only sourceChain.
@@ -322,6 +339,14 @@ func (s *Server) runBulkMetadataFetchAll(
 	reportProgress := func(current, total int, message string) {
 		progressMu.Lock()
 		_ = progress.UpdateProgress(current, total, message)
+		progressMu.Unlock()
+	}
+	// reportOutcome writes one book's outcome line to the op log, under the
+	// same lock as progress (the reporter is not assumed concurrency-safe).
+	reportOutcome := func(bookID, level, message string) {
+		details := "book_id=" + logger.SanitizeLogValue(bookID)
+		progressMu.Lock()
+		_ = progress.Log(level, message, &details)
 		progressMu.Unlock()
 	}
 
@@ -353,11 +378,12 @@ func (s *Server) runBulkMetadataFetchAll(
 				ResultJSON:  `{"status":"skipped_fragment","source":""}`,
 				Status:      metafetch.FetchStatusSkippedFragment,
 			})
-			notFound.Add(1)
+			skipped.Add(1)
+			reportOutcome(bookID, "info", bulkFetchSkippedFragmentLine(w.book.Title, w.authorName))
 			n := atomic.AddInt64(&completed, 1)
 			if n%50 == 0 || int(n) == totalBooks {
 				reportProgress(int(n), totalBooks,
-					fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d errors:%d", n, totalBooks, found.Load(), notFound.Load(), errored.Load()))
+					fmt.Sprintf("fetched %d/%d — %s", n, totalBooks, counts()))
 			}
 			return nil
 		}
@@ -401,11 +427,13 @@ func (s *Server) runBulkMetadataFetchAll(
 			ResultJSON:  metafetch.LedgerResultJSON(resultStatus, sourceName, out.Variant),
 			Status:      resultStatus,
 		})
+		outcomeLevel, outcomeMsg := bulkFetchOutcomeLine(w.book.Title, w.authorName, out, resultStatus)
+		reportOutcome(bookID, outcomeLevel, outcomeMsg)
 
 		n := atomic.AddInt64(&completed, 1)
 		if n%50 == 0 || int(n) == totalBooks {
 			reportProgress(int(n), totalBooks,
-				fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d errors:%d", n, totalBooks, found.Load(), notFound.Load(), errored.Load()))
+				fmt.Sprintf("fetched %d/%d — %s", n, totalBooks, counts()))
 		}
 
 		// Rate-limit live API calls; cache hits are instant so skip the delay.
@@ -431,7 +459,7 @@ func (s *Server) runBulkMetadataFetchAll(
 
 	finalCount := atomic.LoadInt64(&completed)
 	_ = progress.UpdateProgress(int(finalCount), totalBooks,
-		fmt.Sprintf("complete — cached:%d not_found:%d errors:%d", found.Load(), notFound.Load(), errored.Load()))
+		fmt.Sprintf("complete %d/%d — %s", finalCount, totalBooks, counts()))
 	op.SetStatus("success")
 	logging.Info(ctx, "bulk-metadata-fetch complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load(),
 		"errors", errored.Load(), "stopped_early", stoppedEarly.Load())
@@ -716,12 +744,18 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		identity   string
 	}
 	var work []bookWork
+	// untitled: see runBulkMetadataFetchAll.
+	untitled := 0
 	for _, id := range bookIDs {
 		if done[id] {
 			continue
 		}
 		b, err := store.GetBookByID(id)
-		if err != nil || b == nil || strings.TrimSpace(b.Title) == "" {
+		if err != nil || b == nil {
+			continue
+		}
+		if organizer.IsPlaceholderTitle(b.Title) {
+			untitled++
 			continue
 		}
 		author := ""
@@ -754,6 +788,9 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	alreadyDone := len(existingResults)
 	totalBooks := alreadyDone + len(work)
 	logging.Info(ctx, "bulk-metadata-fetch-ids total, done, to fetch", "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
+	if untitled > 0 {
+		_ = progress.Log("info", bulkFetchUntitledLine(untitled), nil)
+	}
 	_ = progress.UpdateProgress(alreadyDone, totalBooks,
 		fmt.Sprintf("resuming: %d/%d already done", alreadyDone, totalBooks))
 
@@ -785,7 +822,12 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	// circuit-open) as distinct from books genuinely absent from every
 	// catalog. Folding the two together is what made a rate-limited run
 	// indistinguishable from a complete one.
-	var found, notFound, errored atomic.Int64
+	// skipped counts chapter fragments, which are not searched; they used to
+	// be folded into notFound.
+	var found, notFound, skipped, errored atomic.Int64
+	counts := func() string {
+		return bulkFetchCounts(found.Load(), notFound.Load(), skipped.Load(), errored.Load())
+	}
 
 	// Per-provider semaphore (fixed cap 2) shared by all workers, built from the
 	// read-only sourceChain — see runBulkMetadataFetchAll.
@@ -795,6 +837,14 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	reportProgress := func(current, total int, message string) {
 		progressMu.Lock()
 		_ = progress.UpdateProgress(current, total, message)
+		progressMu.Unlock()
+	}
+	// reportOutcome writes one book's outcome line to the op log, under the
+	// same lock as progress (the reporter is not assumed concurrency-safe).
+	reportOutcome := func(bookID, level, message string) {
+		details := "book_id=" + logger.SanitizeLogValue(bookID)
+		progressMu.Lock()
+		_ = progress.Log(level, message, &details)
 		progressMu.Unlock()
 	}
 
@@ -824,11 +874,12 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 				ResultJSON:  `{"status":"skipped_fragment","source":""}`,
 				Status:      metafetch.FetchStatusSkippedFragment,
 			})
-			notFound.Add(1)
+			skipped.Add(1)
+			reportOutcome(bookID, "info", bulkFetchSkippedFragmentLine(w.book.Title, w.authorName))
 			n := atomic.AddInt64(&completed, 1)
 			if n%50 == 0 || int(n) == totalBooks {
 				reportProgress(int(n), totalBooks,
-					fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d errors:%d", n, totalBooks, found.Load(), notFound.Load(), errored.Load()))
+					fmt.Sprintf("fetched %d/%d — %s", n, totalBooks, counts()))
 			}
 			return nil
 		}
@@ -872,11 +923,13 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 			ResultJSON:  metafetch.LedgerResultJSON(resultStatus, sourceName, out.Variant),
 			Status:      resultStatus,
 		})
+		outcomeLevel, outcomeMsg := bulkFetchOutcomeLine(w.book.Title, w.authorName, out, resultStatus)
+		reportOutcome(bookID, outcomeLevel, outcomeMsg)
 
 		n := atomic.AddInt64(&completed, 1)
 		if n%50 == 0 || int(n) == totalBooks {
 			reportProgress(int(n), totalBooks,
-				fmt.Sprintf("fetched %d/%d — cached:%d not_found:%d errors:%d", n, totalBooks, found.Load(), notFound.Load(), errored.Load()))
+				fmt.Sprintf("fetched %d/%d — %s", n, totalBooks, counts()))
 		}
 		// The condition covers a FAILED live call too (sourceName is empty then):
 		// gating on success alone meant the pause was skipped exactly when a
@@ -900,7 +953,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 
 	finalCount := atomic.LoadInt64(&completed)
 	_ = progress.UpdateProgress(int(finalCount), totalBooks,
-		fmt.Sprintf("complete — cached:%d not_found:%d errors:%d", found.Load(), notFound.Load(), errored.Load()))
+		fmt.Sprintf("complete %d/%d — %s", finalCount, totalBooks, counts()))
 	op.SetStatus("success")
 	logging.Info(ctx, "bulk-metadata-fetch-ids complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load(),
 		"errors", errored.Load(), "stopped_early", stoppedEarly.Load())

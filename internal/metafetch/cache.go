@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-09-27
 //
@@ -423,7 +423,18 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 	// hashed from that snapshot, and the search fingerprint below binds the
 	// same author. Accepting a live-author row here would serve a search the
 	// fetch is not about to ask.
-	if mfs.ValidateCachedIdentityForBook(entry, book, nil) != nil {
+	//
+	// A row hashed with the query itself is accepted too. For a book with a
+	// real title the query IS the title, so this changes nothing; for a book
+	// whose title is blank or a placeholder the batch fetch searches a
+	// stand-in (its transcribed title) and hashes the row with that, which
+	// the book-title check can never match -- every run would re-ask every
+	// provider for it. The fingerprint check below still binds query and
+	// author. ValidateCachedIdentityForBook itself is NOT widened: the apply
+	// gate uses it, and whether a stand-in-title candidate may be
+	// bulk-applied is a separate decision.
+	if entry.SourceHash != hashSearchInputs(book.ID, query, author, "", "") &&
+		mfs.ValidateCachedIdentityForBook(entry, book, nil) != nil {
 		return entry, BatchVerdictNone, nil
 	}
 	if entry.SearchFingerprint != mfs.SearchFingerprintFor(book, query, author, "") {
@@ -526,6 +537,17 @@ func (mfs *Service) fetchCacheIdentity(book *database.Book) string {
 	if book == nil {
 		return ""
 	}
+	return mfs.fetchCacheIdentityForTitle(book, book.Title)
+}
+
+// fetchCacheIdentityForTitle is fetchCacheIdentity with the title replaced.
+// searchMetadataForBook uses it for a book whose own title is a placeholder
+// and is searched by a stand-in (its transcribed title): the cache row must
+// name the question actually asked, not the placeholder.
+func (mfs *Service) fetchCacheIdentityForTitle(book *database.Book, title string) string {
+	if book == nil {
+		return ""
+	}
 	author := ""
 	if book.Author != nil {
 		author = book.Author.Name
@@ -534,7 +556,7 @@ func (mfs *Service) fetchCacheIdentity(book *database.Book) string {
 			author = a.Name
 		}
 	}
-	return database.MetadataSearchIdentity(book.Title, author, book.ASIN, book.ISBN13, book.ISBN10)
+	return database.MetadataSearchIdentity(title, author, book.ASIN, book.ISBN13, book.ISBN10)
 }
 
 // hashSearchInputs builds a short stable digest of the search inputs
