@@ -773,7 +773,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const [reviewLevel, setReviewLevelState] = useState<ReviewLevel>(initialLevel);
   const [chipFilter, setChipFilter] = useState<ChipFilter | null>(null);
   const [unreviewableResults, setUnreviewableResults] = useState<CandidateResult[]>([]);
-  const [unreviewableLoading, setUnreviewableLoading] = useState(false);
   const [unreviewableError, setUnreviewableError] = useState<string | null>(null);
   // The refreshKey the loaded bucket belongs to, or -1 for "never loaded". A
   // refresh invalidates it, and the load effect fetches again only if a chip
@@ -1071,15 +1070,13 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   useEffect(() => {
     if (!active || !needUnreviewable || unreviewableFor === refreshKey) return;
     const fetchId = ++unreviewableFetchRef.current;
-    setUnreviewableLoading(true);
-    setUnreviewableError(null);
     api
       .getCachedReviewResults(0, 0, true, 'unreviewable')
       .then((data) => {
         if (fetchId !== unreviewableFetchRef.current) return;
         setUnreviewableResults(data.results || []);
+        setUnreviewableError(null);
         setUnreviewableFor(refreshKey);
-        setUnreviewableLoading(false);
       })
       .catch((err: unknown) => {
         if (fetchId !== unreviewableFetchRef.current) return;
@@ -1091,9 +1088,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             ? err.message
             : 'Could not load the books with no candidate.'
         );
-        setUnreviewableLoading(false);
       });
   }, [active, needUnreviewable, unreviewableFor, refreshKey]);
+  // Derived, not state: loading is exactly "a chip needs the bucket and the
+  // bucket held is not this refresh's".
+  const unreviewableLoading = active && needUnreviewable && unreviewableFor !== refreshKey;
 
   const setPageSize = useCallback((n: number) => {
     setPageSizeState(n);

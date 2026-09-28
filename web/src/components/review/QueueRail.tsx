@@ -254,7 +254,7 @@ export function unreviewableReason(byCause?: {
 }
 
 /** What turning on this level does, for the slider stop's tooltip. */
-export function reviewLevelDescription(level: ReviewLevel): string {
+function reviewLevelDescription(level: ReviewLevel): string {
   if (level === 'off') return 'No preset: minimum confidence 85%, nothing extra hidden.';
   const f = reviewLevelFilters(level);
   const parts = [
@@ -509,7 +509,6 @@ export function QueueRail({
               if (next && next !== reviewLevel) setReviewLevel(next);
             }}
             getAriaValueText={(v) => REVIEW_LEVEL_LABELS[REVIEW_LEVELS[v] ?? 'off']}
-            aria-labelledby="review-level-label"
             slotProps={{ input: { 'aria-label': 'Review level' } }}
           />
           {filters.hideRuntimeDifferences && runtimeHiddenCount > 0 && !chipFilter && (
