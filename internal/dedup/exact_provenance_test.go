@@ -445,6 +445,39 @@ func TestDrainStale_PlaceholderTitle(t *testing.T) {
 	}
 }
 
+// A backfilled breakdown on a placeholder pair (production candidate 509774:
+// metadata_fuzzy 0.85 on "read by narrator" + a duration signal) is still
+// title-only evidence. Supporting kinds never count as content, even with a
+// positive confidence.
+func TestDrainStale_PlaceholderWithTitleOnlyBreakdownIsDrained(t *testing.T) {
+	engine, es := setupProvenanceDrain(t,
+		map[int]string{57768: "read by narrator"},
+		provBook{id: "M1", title: "read by narrator", authorID: 57768, hash: "h-m1"},
+		provBook{id: "M2", title: "read by narrator", authorID: 57768, hash: "h-m2"},
+	)
+	if err := es.UpsertCandidate(database.DedupCandidate{
+		EntityType: "book", EntityAID: "M1", EntityBID: "M2", Layer: "exact", Status: "pending",
+		Band: "MEDIUM",
+		ScoreBreakdown: &unified.UnifiedDedupScore{
+			Pair: [2]string{"M1", "M2"}, Score: 89, Band: "MEDIUM",
+			Signals: []unified.Signal{
+				{Kind: unified.SigDuration, Raw: 0.83, Confidence: 0.35, Evidence: "duration match 0.34%"},
+				{Kind: unified.SigMetaFuzzy, Raw: 1, Confidence: 0.85, Evidence: "metadata fuzzy title+author sim 1.0"},
+				{Kind: unified.SigFolderPath, Raw: 1, Confidence: 0.2, Evidence: "folder"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ReasonCounts[drainReasonPlaceholderTitle] != 1 {
+		t.Fatalf("counts = %v, want placeholder_title=1", res.ReasonCounts)
+	}
+}
+
 // Rescore has nothing to re-band on a provenance-only row and must count it
 // as skipped rather than composing a score of 0 for it.
 func TestRescore_SkipsProvenanceOnly(t *testing.T) {

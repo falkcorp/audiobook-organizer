@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-09-27
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -201,8 +202,31 @@ func hasHardSignal(c database.DedupCandidate) bool {
 		case unified.SigExactFile, unified.SigISBNASIN, unified.SigMetaSrcHash, unified.SigExactAcoustID:
 			return true
 		}
+		if exactContentRuleName(sig) != "" {
+			return true
+		}
 	}
 	return false
+}
+
+// exactContentRuleName names a content-based exact rule recorded on the row
+// (dedup's exact_rule provenance signal), or "" for any other signal. A pair
+// the exact layer created on identical bytes, a shared ISBN/ASIN or a shared
+// metadata record is hard evidence even when it has no composed score, so it
+// must never fall through to the purgeable title_leak class.
+func exactContentRuleName(sig unified.Signal) string {
+	if sig.Kind != unified.SigExactRule {
+		return ""
+	}
+	switch sig.Rule {
+	case dedup.ExactRuleFileHash:
+		return "exact file-hash match"
+	case dedup.ExactRuleISBNASIN:
+		return "ISBN/ASIN match"
+	case dedup.ExactRuleMetadataHash:
+		return "same metadata source hash"
+	}
+	return ""
 }
 
 func hardSignalName(c database.DedupCandidate) string {
@@ -219,6 +243,9 @@ func hardSignalName(c database.DedupCandidate) string {
 			return "same metadata source hash"
 		case unified.SigExactAcoustID:
 			return "exact AcoustID match"
+		}
+		if name := exactContentRuleName(sig); name != "" {
+			return name
 		}
 	}
 	return ""

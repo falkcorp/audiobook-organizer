@@ -451,7 +451,11 @@ func recordsContentEvidence(c database.DedupCandidate) bool {
 			}
 			continue
 		}
-		if s.Confidence > 0 && !titleOnlyScoringKinds[s.Kind] {
+		// Supporting kinds (duration, folder_path, same_path, cover_text) can
+		// never be the reason a pair exists (unified.IsSupportingKind), so
+		// they are not content evidence either. An unknown kind counts as
+		// content — the direction that keeps a pair.
+		if s.Confidence > 0 && !titleOnlyScoringKinds[s.Kind] && !unified.IsSupportingKind(s.Kind) {
 			return true
 		}
 	}
