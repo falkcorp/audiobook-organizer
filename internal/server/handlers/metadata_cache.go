@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-27
 
@@ -41,6 +41,25 @@ const reviewListConcurrency = 8
 // caller that forgets to page (or a stray curl) must not pay for the whole cache.
 // A caller that genuinely needs the whole set sends all=true.
 const defaultReviewPageSize = 200
+
+// Values of `bucket` on GET /metadata/cache/review, and the per-row statuses
+// the unreviewable bucket serves. The statuses name WHY a row has nothing to
+// review, one per counter in the summary, so a client can filter the list by
+// the same cause the chip it clicked counts:
+//
+//	no_candidates          -> unreviewable_by_cause.no_candidates
+//	resolved_no_candidates -> resolved_no_candidates
+//	decode_error           -> errors (and unreviewable_by_cause.decode_errors)
+//
+// Orphaned rows (the book is gone) are never listed: there is no book to show.
+const (
+	reviewBucketReviewable   = "reviewable"
+	reviewBucketUnreviewable = "unreviewable"
+
+	unreviewableStatusNoCandidates         = "no_candidates"
+	unreviewableStatusResolvedNoCandidates = "resolved_no_candidates"
+	unreviewableStatusDecodeError          = "decode_error"
+)
 
 // slowReviewListing is the handler-time threshold past which
 // GetCacheReviewResults logs a WARN with enough context to correlate the slow
@@ -309,7 +328,7 @@ func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 // Returns a paginated list of CandidateResult items sourced from the
 // persistent metadata cache.
 //
-// Query params: limit, offset, all. A positive limit is honoured as sent. A
+// Query params: limit, offset, all, bucket. A positive limit is honoured as sent. A
 // zero or absent limit is capped to defaultReviewPageSize unless all=true, which
 // returns every reviewable row. The response reports `truncated` (the rows
 // returned are not the whole reviewable set) and the `limit` actually applied
@@ -320,6 +339,18 @@ func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 // truncated one, this cap is not silent: the response says it truncated, the
 // server logs when the default did it, and the one caller that needs every row
 // (useMetadataLane) sends all=true.
+//
+// bucket=unreviewable swaps what `results` holds: instead of the reviewable
+// rows it lists the books the summary counts but the default list drops --
+// no stored candidate (pending or already ruled on) and undecodable candidate
+// -- so the review rail's chips can show the individual books behind their
+// counts (owner request 2026-09-27, "the 11324 with no candidates"). Each row
+// carries the book, its review status and its age; its `status` names the
+// bucket (see unreviewableStatus*). The summary fields are identical to the
+// default response, total_count is the size of the bucket, and limit/offset/all
+// page it the same way. Book info comes from the one batched book read, with no
+// per-row file read (metabatch.BuildCandidateBookInfoNoFiles). The default
+// (absent or bucket=reviewable) response is unchanged.
 func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	if h.store == nil || h.svc == nil {
 		httputil.RespondWithInternalError(c, "metadata service not initialized")
@@ -336,6 +367,11 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		offset = 0
 	}
 	all := httputil.ParseQueryBool(c, "all", false)
+	bucket := c.DefaultQuery("bucket", reviewBucketReviewable)
+	if bucket != reviewBucketReviewable && bucket != reviewBucketUnreviewable {
+		httputil.RespondWithBadRequest(c, "bucket must be reviewable or unreviewable")
+		return
+	}
 	// defaulted records that the cap below, not the caller, chose the page size,
 	// so a truncation it causes can be logged as the caller's missing limit.
 	defaulted := false
@@ -514,6 +550,17 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	}
 
 	reviewable := make([]reviewableRow, 0, len(prepared))
+	// unreviewableRows is every non-orphaned row the reviewable list drops,
+	// with the cause it was counted under. Only collected when the caller asked
+	// for the bucket; the counters below are kept either way.
+	type unreviewableRow struct {
+		sum         metafetch.MetadataCacheSummary
+		status      string
+		errMsg      string
+		lastChecked time.Time
+	}
+	wantUnreviewable := bucket == reviewBucketUnreviewable
+	var unreviewableRows []unreviewableRow
 	var decodeErrors int
 	// The no-candidate rows split by whether the book has already been ruled on.
 	// They used to share one counter, and lumping them together is what put
@@ -536,10 +583,17 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		}
 		if entry == nil || len(entry.Candidates) == 0 {
 			// No cached candidate means nothing to review. Not an error.
+			st := unreviewableStatusNoCandidates
 			if p.reviewed {
 				noCandidatesReviewed++
+				st = unreviewableStatusResolvedNoCandidates
 			} else {
 				noCandidatesPending++
+			}
+			if wantUnreviewable {
+				unreviewableRows = append(unreviewableRows, unreviewableRow{
+					sum: p.sum, status: st, lastChecked: lastChecked(entry, p.sum.FetchedAt),
+				})
 			}
 			continue
 		}
@@ -547,6 +601,14 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		if err := json.Unmarshal(entry.Candidates[0], &cand); err != nil {
 			slog.Warn("GetCacheReviewResults decode candidate", "bookID", p.sum.BookID, "err", err)
 			decodeErrors++
+			if wantUnreviewable {
+				unreviewableRows = append(unreviewableRows, unreviewableRow{
+					sum:         p.sum,
+					status:      unreviewableStatusDecodeError,
+					errMsg:      "stored candidate will not decode: " + err.Error(),
+					lastChecked: lastChecked(entry, p.sum.FetchedAt),
+				})
+			}
 			continue
 		}
 		reviewable = append(reviewable, reviewableRow{
@@ -567,6 +629,96 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		default:
 			matched++
 		}
+	}
+
+	summary := gin.H{
+		"matched":  matched,
+		"no_match": noMatch,
+		// Real decode failures, not a hardcoded zero. A row counted here is one
+		// the cache holds but nobody can review until it is repaired.
+		"errors":        decodeErrors,
+		"total_applied": applied,
+		// Cache summaries that exist but are not reviewable. Surfaced so the gap
+		// between "the cache has 14,306 entries" and "you can review 5,774" is
+		// visible instead of being discovered by subtracting two numbers that
+		// never agreed.
+		//
+		// This is the same value `total - len(reviewable)` produced, since every
+		// dropped row passes through exactly one of these three counters -- but
+		// summed from the causes rather than inferred, so the causes can be
+		// reported alongside it. Knowing the number is 8,532 tells an operator
+		// nothing about what to DO; knowing 3,354 of it is rows whose book is
+		// gone points straight at a reaper, and the rest at a refetch.
+		//
+		// noCandidatesReviewed is deliberately NOT part of this sum. Those books
+		// have a verdict; there is nothing for a reviewer to do with them, so
+		// filing them under "unreviewable" reported settled work as a backlog.
+		// They are reported separately as `resolved_no_candidates`.
+		"unreviewable": orphaned + noCandidatesPending + decodeErrors,
+		// Rows whose last search is past MetadataCacheTTL, counted over every
+		// non-orphaned row (reviewable or not). Staleness is informational,
+		// per the TTL's contract -- but a reviewer applying month-old metadata
+		// should be told.
+		"stale": stale,
+		"unreviewable_by_cause": gin.H{
+			// The book the row points at no longer resolves. Only a cleanup
+			// pass fixes these; refetching cannot.
+			"orphaned": orphaned,
+			// The book is fine, nobody has ruled on it, and the cache holds no
+			// candidate for it. A refetch is the fix for these.
+			"no_candidates": noCandidatesPending,
+			// Stored, but the JSON would not decode. Also counted in `errors`;
+			// this repeats it so the three causes sum to `unreviewable`.
+			"decode_errors": decodeErrors,
+		},
+		// Books already ruled on that have no candidate left to show. Not a
+		// backlog and not an error -- reported so the number is visible rather
+		// than silently missing from every bucket.
+		//
+		// Before 2026-09-08 an empty refetch overwrote a book's candidates while
+		// leaving its verdict intact, which is how these are produced;
+		// metafetch.cacheSearchResponse no longer does that, so this count is
+		// now a fixed backlog of historical damage rather than a growing one.
+		"resolved_no_candidates": noCandidatesReviewed,
+	}
+
+	if wantUnreviewable {
+		start := min(offset, len(unreviewableRows))
+		end := len(unreviewableRows)
+		if limit > 0 {
+			end = min(start+limit, len(unreviewableRows))
+		}
+		rows := make([]metabatch.CandidateResult, 0, end-start)
+		for _, u := range unreviewableRows[start:end] {
+			book := lookupBook(u.sum.BookID)
+			if book == nil {
+				continue
+			}
+			fetchedAt := u.sum.FetchedAt
+			// The same predicate, and the same clock read, as the stale
+			// counter above, so the rows marked stale here plus the stale
+			// reviewable rows add up to `stale`.
+			isFresh := u.lastChecked.After(freshCutoff)
+			reviewStatus := ""
+			if book.MetadataReviewStatus != nil {
+				reviewStatus = *book.MetadataReviewStatus
+			}
+			rows = append(rows, metabatch.CandidateResult{
+				Book:         metabatch.BuildCandidateBookInfoNoFiles(book),
+				Status:       u.status,
+				Error:        u.errMsg,
+				FetchedAt:    &fetchedAt,
+				IsFresh:      &isFresh,
+				ReviewStatus: reviewStatus,
+			})
+		}
+		summary["results"] = rows
+		summary["bucket"] = reviewBucketUnreviewable
+		summary["total_count"] = len(unreviewableRows)
+		summary["truncated"] = end-start < len(unreviewableRows)
+		summary["limit"] = limit
+		httputil.RespondWithOK(c, summary)
+		return
 	}
 
 	start := min(offset, len(reviewable))
@@ -639,62 +791,14 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		slog.Warn("GetCacheReviewResults exceeded slow-request threshold", attrs...)
 	}
 
-	httputil.RespondWithOK(c, gin.H{
-		"results":     results,
-		"total_count": len(reviewable),
-		// Whether `results` is the whole reviewable set, and the page size that
-		// was applied (0 = all=true, no cap). A caller that sent no limit is
-		// capped to defaultReviewPageSize and must be able to tell.
-		"truncated": truncated,
-		"limit":     limit,
-		"matched":   matched,
-		"no_match":  noMatch,
-		// Real decode failures, not a hardcoded zero. A row counted here is one
-		// the cache holds but nobody can review until it is repaired.
-		"errors":        decodeErrors,
-		"total_applied": applied,
-		// Cache summaries that exist but are not reviewable. Surfaced so the gap
-		// between "the cache has 14,306 entries" and "you can review 5,774" is
-		// visible instead of being discovered by subtracting two numbers that
-		// never agreed.
-		//
-		// This is the same value `total - len(reviewable)` produced, since every
-		// dropped row passes through exactly one of these three counters -- but
-		// summed from the causes rather than inferred, so the causes can be
-		// reported alongside it. Knowing the number is 8,532 tells an operator
-		// nothing about what to DO; knowing 3,354 of it is rows whose book is
-		// gone points straight at a reaper, and the rest at a refetch.
-		//
-		// noCandidatesReviewed is deliberately NOT part of this sum. Those books
-		// have a verdict; there is nothing for a reviewer to do with them, so
-		// filing them under "unreviewable" reported settled work as a backlog.
-		// They are reported separately as `resolved_no_candidates`.
-		"unreviewable": orphaned + noCandidatesPending + decodeErrors,
-		// Reviewable rows whose cached candidate is past MetadataCacheTTL. They
-		// are still returned -- staleness is informational, per the TTL's
-		// contract -- but a reviewer applying month-old metadata should be told.
-		"stale": stale,
-		"unreviewable_by_cause": gin.H{
-			// The book the row points at no longer resolves. Only a cleanup
-			// pass fixes these; refetching cannot.
-			"orphaned": orphaned,
-			// The book is fine, nobody has ruled on it, and the cache holds no
-			// candidate for it. A refetch is the fix for these.
-			"no_candidates": noCandidatesPending,
-			// Stored, but the JSON would not decode. Also counted in `errors`;
-			// this repeats it so the three causes sum to `unreviewable`.
-			"decode_errors": decodeErrors,
-		},
-		// Books already ruled on that have no candidate left to show. Not a
-		// backlog and not an error -- reported so the number is visible rather
-		// than silently missing from every bucket.
-		//
-		// Before 2026-09-08 an empty refetch overwrote a book's candidates while
-		// leaving its verdict intact, which is how these are produced;
-		// metafetch.cacheSearchResponse no longer does that, so this count is
-		// now a fixed backlog of historical damage rather than a growing one.
-		"resolved_no_candidates": noCandidatesReviewed,
-	})
+	summary["results"] = results
+	summary["total_count"] = len(reviewable)
+	// Whether `results` is the whole reviewable set, and the page size that
+	// was applied (0 = all=true, no cap). A caller that sent no limit is
+	// capped to defaultReviewPageSize and must be able to tell.
+	summary["truncated"] = truncated
+	summary["limit"] = limit
+	httputil.RespondWithOK(c, summary)
 }
 
 // BatchApplyFromCache handles POST /api/v1/audiobooks/metadata/batch-apply-cached.

@@ -1,5 +1,5 @@
 // file: internal/metabatch/candidates.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-27
 //
@@ -63,6 +63,12 @@ type CandidateBookInfo struct {
 	// Lets the review UI offer a "has transcription" filter to focus on books
 	// where audio-derived metadata could confirm or reject the match.
 	TranscribedTitle string `json:"transcribed_title,omitempty"`
+	// StoredDurationSec is Book.Duration exactly as stored, served only on
+	// rows built by BuildCandidateBookInfoNoFiles. It is NOT the canonical
+	// runtime -- for a multi-file book it may be a partial sum -- which is
+	// why it does not share duration_seconds: those rows are built without
+	// reading the book's files, so no canonical runtime exists to report.
+	StoredDurationSec int `json:"stored_duration_seconds,omitempty"`
 }
 
 // CandidateResult holds the metadata candidate search result for a single book.
@@ -85,6 +91,10 @@ type CandidateResult struct {
 	// record the owner looked at (metafetch.CandidatePin.ContentHash). Empty
 	// elsewhere.
 	CandidateHash string `json:"candidate_hash,omitempty"`
+	// ReviewStatus is the book's raw MetadataReviewStatus ("" when nobody
+	// has ruled on it). Served on the review list's unreviewable bucket, where
+	// Status names the bucket rather than the verdict.
+	ReviewStatus string `json:"review_status,omitempty"`
 	// Cached is set when the batch fetch answered this book from the
 	// candidate cache instead of asking the providers: "candidates" for a
 	// fresh cached candidate list, "known_empty" for a durable verdict that
@@ -150,6 +160,35 @@ func LatestMatchedBookIDs(store operationResultReader) map[string]bool {
 // BuildCandidateBookInfo builds a CandidateBookInfo from a database.Book.
 // store is used to look up BookFile.ITunesPath (the authoritative field).
 func BuildCandidateBookInfo(store BookFilesGetter, book *database.Book) CandidateBookInfo {
+	info := bookRowInfo(book)
+	bfs, bfErr := store.GetBookFiles(book.ID)
+	if bfErr == nil && len(bfs) > 0 {
+		info.ITunesPath = bfs[0].ITunesPath
+	}
+	applyRuntimeInfo(&info, database.ComputeBookRuntime(book, bfs), bfErr)
+	return info
+}
+
+// BuildCandidateBookInfoNoFiles builds a CandidateBookInfo from the book row
+// alone, with no file read. It is for listings that span thousands of books
+// already fetched in one batch (the review list's unreviewable bucket), where
+// BuildCandidateBookInfo's per-book GetBookFiles would be an N+1.
+//
+// Without the files there is no canonical runtime, so duration_seconds and
+// runtime_status stay empty and the stored Book.Duration is reported as
+// StoredDurationSec instead -- labelled for what it is rather than passed off
+// as the book's length.
+func BuildCandidateBookInfoNoFiles(book *database.Book) CandidateBookInfo {
+	info := bookRowInfo(book)
+	if book.Duration != nil && *book.Duration > 0 {
+		info.StoredDurationSec = *book.Duration
+	}
+	return info
+}
+
+// bookRowInfo copies the fields of CandidateBookInfo that come from the book
+// row itself; the two builders above differ only in what they add after it.
+func bookRowInfo(book *database.Book) CandidateBookInfo {
 	info := CandidateBookInfo{
 		ID:       book.ID,
 		Title:    book.Title,
@@ -159,14 +198,9 @@ func BuildCandidateBookInfo(store BookFilesGetter, book *database.Book) Candidat
 	if book.Author != nil {
 		info.Author = book.Author.Name
 	}
-	bfs, bfErr := store.GetBookFiles(book.ID)
-	if bfErr == nil && len(bfs) > 0 {
-		info.ITunesPath = bfs[0].ITunesPath
-	}
 	if book.CoverURL != nil {
 		info.CoverURL = *book.CoverURL
 	}
-	applyRuntimeInfo(&info, database.ComputeBookRuntime(book, bfs), bfErr)
 	if book.FileSize != nil {
 		info.FileSize = *book.FileSize
 	}
