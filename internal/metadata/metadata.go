@@ -1,7 +1,7 @@
 // file: internal/metadata/metadata.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 
 package metadata
 
@@ -758,6 +758,15 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 	// own directory fallback. The two packages do not agree here; see
 	// todo.d/20260901_metadata_scanner_filename_parsers_still_diverge.md.
 	defer func() {
+		// A file named only by its chapter number ("Eldest/98.mp3") has no
+		// title in its name: take the folder's name as the title, and the
+		// author from the folder above it. See ChapterTitleFromDirectory.
+		authorProbe := filePath
+		if dirTitle, ok := ChapterTitleFromDirectory(filePath, metadata.Title); ok {
+			metadata.Title = dirTitle
+			authorProbe = AuthorProbePath(filePath, true)
+		}
+
 		// The organizer names an authorless book "<title> - Unknown Author.ext", so
 		// the parse above happily hands back the placeholder as the author. Recording
 		// it launders the system's own "we could not determine this" into a value
@@ -773,7 +782,7 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 
 		// If we still don't have an artist, try to get from parent directory
 		if metadata.Artist == "" {
-			metadata.Artist = authorname.ExtractAuthorFromDirectory(filePath)
+			metadata.Artist = authorname.ExtractAuthorFromDirectory(authorProbe)
 		}
 
 		// And the directory itself is usually literally "Unknown Author".
@@ -839,10 +848,13 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 			metadata.Title = title
 			metadata.Artist = author
 		} else {
-			// Fallback to old behavior if we can't determine author
+			// No author could be determined: the last segment is the title.
+			// The first segment is NOT a series. It used to be recorded as one,
+			// and for chapter files it is whatever precedes the number --
+			// "Eldest - 02" gave Series "Eldest" on one book per chapter, and
+			// "02 - Eldest" gave Series "02".
 			parts := strings.Split(filename, " - ")
 			if len(parts) >= 2 {
-				metadata.Series = parts[0]
 				metadata.Title = parts[len(parts)-1]
 			} else {
 				metadata.Title = filename

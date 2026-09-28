@@ -2061,13 +2061,13 @@ func extractInfoFromPath(book *Book) {
 			book.Author = author
 			book.Title = title
 		} else {
-			// Fallback to old behavior: treat as "Series - Title"
+			// No author could be determined: the last segment is the title.
+			// The first segment is NOT recorded as a series. It was, and for
+			// chapter files it is whatever precedes the number, so "02 - Eldest"
+			// filed one book per chapter under a series named "02".
 			parts := strings.Split(baseName, " - ")
 			if len(parts) > 1 {
 				book.Title = strings.TrimSpace(parts[len(parts)-1])
-				if book.Series == "" {
-					book.Series = strings.TrimSpace(parts[0])
-				}
 			} else {
 				book.Title = baseName
 			}
@@ -2091,8 +2091,18 @@ func extractInfoFromPath(book *Book) {
 	//
 	// The directory fallback becomes safe once
 	// todo.d/20260825-directory-fallback-reads-title-as-author.md is fixed.
+	// A file named only by its chapter number ("Eldest/98.mp3") has no title
+	// in its name. Take the folder's name as the title and read the author
+	// from the folder above it; otherwise this produced title "98", author
+	// "Eldest". See metadata.ChapterTitleFromDirectory.
+	authorProbe := path
+	if dirTitle, ok := metadata.ChapterTitleFromDirectory(path, book.Title); ok {
+		book.Title = dirTitle
+		authorProbe = metadata.AuthorProbePath(path, true)
+	}
+
 	if book.Author == "" {
-		book.Author = authorname.ExtractAuthorFromDirectory(path)
+		book.Author = authorname.ExtractAuthorFromDirectory(authorProbe)
 	}
 
 	if book.Position <= 0 {
