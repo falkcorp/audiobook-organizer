@@ -1,7 +1,7 @@
 // file: internal/organizer/landing.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c1e9a3b-7d42-4f6e-9b8a-2e0c4d7f1a35
-// last-edited: 2026-09-12
+// last-edited: 2026-09-28
 
 package organizer
 
@@ -43,6 +43,13 @@ type Landing struct {
 	// runtime root_dir change the two disagreed: the file was moved in place
 	// and then a second book row was created at the same path.
 	InPlace bool
+
+	// SourcePath is the book's path BEFORE this organize, set for an in-place
+	// landing. reOrganizeInPlace rewrites book.FilePath to the new path as it
+	// moves the file, so by the time CommitLanding runs the book no longer
+	// says where it came from; the move record's old value comes from here.
+	// Empty for a copy landing, whose book row is not touched.
+	SourcePath string
 
 	// Resolution is set when an in-place landing met an occupied destination
 	// and resolved it: adopted as a version of the occupant's book (Path is
