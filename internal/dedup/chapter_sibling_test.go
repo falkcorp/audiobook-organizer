@@ -1,7 +1,7 @@
 // file: internal/dedup/chapter_sibling_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e3a8c7d1-4b62-4f90-9a05-7c2e1d8b6f54
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 package dedup
 

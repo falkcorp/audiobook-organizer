@@ -1,11 +1,11 @@
 // file: web/src/components/review/evidence/signalLabels.test.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: 1f7a4c93-8b26-4d50-91ce-6a04b8d3e527
-// last-edited: 2026-09-01
+// last-edited: 2026-09-27
 
 import { describe, it, expect } from 'vitest';
 import type { DedupScoreBreakdown, DedupSignal } from '../../../services/api';
-import { isPrimaryKind, primarySignals, signalLabel } from './signalLabels';
+import { exactRuleLabel, isPrimaryKind, primarySignals, signalLabel } from './signalLabels';
 
 /**
  * Builds a breakdown from real `DedupSignal`s -- no cast.
@@ -49,9 +49,12 @@ describe('isPrimaryKind', () => {
   // classification. These assertions name every kind the scorer emits, so a
   // kind moving between the two groups in Go fails here rather than silently
   // changing what the chips claim.
-  it('treats exactly duration and folder_path as supporting', () => {
-    expect(isPrimaryKind('duration')).toBe(false);
-    expect(isPrimaryKind('folder_path')).toBe(false);
+  it('treats exactly the Go supporting kinds as supporting', () => {
+    // isSupportingKind: SigDuration, SigFolderPath, SigSamePath, SigCoverText,
+    // SigExactRule.
+    for (const kind of ['duration', 'folder_path', 'same_path', 'cover_text', 'exact_rule']) {
+      expect(isPrimaryKind(kind), `${kind} should be supporting`).toBe(false);
+    }
   });
 
   it('treats every other emitted kind as primary', () => {
@@ -110,5 +113,21 @@ describe('primarySignals', () => {
 
   it('is empty when every signal is supporting', () => {
     expect(primarySignals(breakdown([{ kind: 'duration' }]))).toEqual([]);
+  });
+});
+
+describe('exactRuleLabel', () => {
+  it('names every rule the Go emitters record', () => {
+    expect(exactRuleLabel('file_hash')).toBe('Identical file content');
+    expect(exactRuleLabel('isbn_asin')).toBe('Shared ISBN/ASIN');
+    expect(exactRuleLabel('metadata_hash')).toBe('Same metadata source record');
+    expect(exactRuleLabel('title_author')).toBe('Same author and title');
+    expect(exactRuleLabel('duration_title')).toBe('Same runtime and similar title');
+    expect(exactRuleLabel('organize_collision')).toBe('Organize destination collision');
+  });
+
+  it('falls through to the raw rule name, and names a missing rule', () => {
+    expect(exactRuleLabel('some_future_rule')).toBe('some_future_rule');
+    expect(exactRuleLabel(undefined)).toBe('Exact rule');
   });
 });

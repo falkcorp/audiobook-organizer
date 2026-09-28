@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.128.0
+// version: 2.128.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-27
 
@@ -5937,6 +5937,7 @@ export interface DedupSignal {
   confidence: number; // calibrated P(duplicate | this signal), 0–1; ComposeScore reads THIS
   evidence: string; // human-readable description for UI
   fp_version?: string; // fingerprint-algorithm version; omitted for non-acoustic signals
+  rule?: string; // exact-layer rule name on an `exact_rule` provenance signal (file_hash, title_author, ...)
 }
 
 // T016: composite score breakdown stored on each candidate.

@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/types.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: 8b3f1a94-6c02-4e7d-95a1-2f8e4d0c7b63
-// last-edited: 2026-09-01
+// last-edited: 2026-09-27
 //
 // The evidence model behind the unified EvidencePanel.
 //
@@ -88,8 +88,24 @@ export interface ConfidenceEvidence {
   /** Scoring algorithm version tag. */
   formula?: string;
   signals: ConfidenceSignal[];
+  /**
+   * The exact-layer rule(s) that created the pair, from `exact_rule` signals.
+   * Not a confidence: an exact rule is a yes/no match, recorded so the panel
+   * can say WHY the pair exists. Rendered as visible text, never hover-only.
+   */
+  rules?: ExactRuleMatch[];
   /** Why there are no signals, when the list is empty. */
   emptyReason?: string;
+}
+
+/** One exact-layer rule that matched the pair, and what it matched on. */
+export interface ExactRuleMatch {
+  /** Machine rule name (`file_hash`, `title_author`, ...). */
+  rule: string;
+  /** Reviewer-facing rule name. */
+  label: string;
+  /** The values the rule matched on, as recorded by the backend. */
+  detail: string;
 }
 
 // ---------------------------------------------------------------------------
