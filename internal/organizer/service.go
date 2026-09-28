@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.46.0
+// version: 1.47.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 package organizer
 
@@ -63,6 +63,11 @@ type OrganizerBookWriter interface {
 // at their new paths as it moves them.
 type OrganizerBookFileStore interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// GetBookFileByPath / BookFilesAtPath answer "which book owns this file?"
+	// before an in-place move (refuseUnsafeInPlaceMove, through
+	// database.BookFileRowsAtPath).
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	BookFilesAtPath(path string) ([]database.BookFile, error)
 	CreateBookFile(file *database.BookFile) error
 	UpdateBookFile(id string, file *database.BookFile) error
 	// BatchCreateBookFiles writes a book's copied file rows atomically, so a
@@ -978,6 +983,13 @@ func (orgSvc *Service) reOrganizeInPlace(book *database.Book, log logger.Logger)
 		return targetPath, res, nil
 	}
 
+	// Refusals that depend only on the source: the frozen iTunes tree, a file
+	// another book's book_file row owns, and a multi-file book whose path is
+	// one of its files. See refuseUnsafeInPlaceMove.
+	if err := orgSvc.refuseUnsafeInPlaceMove(book, oldPath, info, targetPath); err != nil {
+		return "", nil, err
+	}
+
 	// A file in a one-chapter-per-folder layout is declined from its SOURCE
 	// path, whether or not the target is free and before any collision logic,
 	// so the answer is the same whatever batch its siblings arrive in. See
@@ -1334,7 +1346,16 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 	if landing == nil || landing.Path == "" {
 		return LandingUnchanged, nil, fmt.Errorf("organize: no landing for %s (%s) — nothing to commit", book.Title, book.ID)
 	}
+	// The path the book had BEFORE the organize. An in-place landing has
+	// already moved the file and rewritten book.FilePath to the new path, so
+	// reading book.FilePath here made every in-place move look like a no-op:
+	// it was recorded as organize_skipped with old == new, counted as
+	// already-correct, and undo -- which reads the organize_rename record --
+	// could not see it. SourcePath carries the real old path.
 	oldPath := book.FilePath
+	if landing.SourcePath != "" {
+		oldPath = landing.SourcePath
+	}
 	newPath := landing.Path
 	now := time.Now()
 
@@ -1708,7 +1729,9 @@ func (orgSvc *Service) OrganizeOneBook(org *Organizer, book *database.Book, log 
 		if err != nil {
 			return nil, err
 		}
-		return &Landing{Path: newPath, InPlace: true, Resolution: res}, nil
+		// SourcePath is captured BEFORE reOrganizeInPlace, which rewrites
+		// book.FilePath to the new path as it moves the file.
+		return &Landing{Path: newPath, SourcePath: oldPath, InPlace: true, Resolution: res}, nil
 	}
 	bookFiles, err := orgSvc.db.GetBookFiles(book.ID)
 	if err != nil {

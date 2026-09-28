@@ -1,7 +1,7 @@
 // file: internal/organizer/mockstore_modifybook_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f6b1c2e-7d84-4b5a-9e01-c2a5d8f4b716
-// last-edited: 2026-09-14
+// last-edited: 2026-09-28
 
 package organizer
 
@@ -39,5 +39,10 @@ func newMockStore(t *testing.T) *mocks.MockStore {
 			}
 			return m.UpdateBook(id, b)
 		}).Maybe()
+	// No book_file row claims any path unless a test says otherwise: the
+	// in-place ownership refusal (refuseUnsafeInPlaceMove) asks before every
+	// move. A test that needs a claimed path should build its own
+	// mocks.NewMockStore, because this optional default matches first.
+	m.EXPECT().BookFilesAtPath(mock.Anything).Return(nil, nil).Maybe()
 	return m
 }
