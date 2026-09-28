@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.109.0
+// version: 1.110.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 
 package scanner
 
@@ -1319,6 +1319,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// report this run's delta (audit 2026-07-17 H5).
 	dupLookupErrStart := dupLookupErrCount.Load()
 	dupLookupSkipStart := dupLookupSkipCount.Load()
+	fragmentSkipStart := fragmentSkipCount.Load()
 	scanCacheErrStart := scanCacheUpdateErrCount.Load()
 	scanFailCountErrStart := scanFailCountErrCount.Load()
 	scanCacheStatErrStart := scanCacheStatErrCount.Load()
@@ -1821,6 +1822,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	}
 	if d := dupLookupSkipCount.Load() - dupLookupSkipStart; d > 0 {
 		scanLog.Warn("scan summary: %d files skipped because duplicate status was undeterminable (store errors during hash lookup)", d)
+	}
+	if d := fragmentSkipCount.Load() - fragmentSkipStart; d > 0 {
+		scanLog.Info("scan summary: %d scanned books not imported because their files already belong to another book", d)
 	}
 	if d := scanCacheUpdateErrCount.Load() - scanCacheErrStart; d > 0 {
 		scanLog.Warn("scan summary: %d scan-cache updates failed (affected files will be re-hashed next scan)", d)
@@ -3046,6 +3050,23 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 
 	// Prefer using the unified Store API when available
 	if getStore() != nil {
+		// Ownership first: before an author, series or work is created for this
+		// book, and before the organizer-ID relink below can repoint an owning
+		// book's FilePath at one of its own chapter files. A scanned "book"
+		// whose files already belong to another book's book_file rows is a
+		// fragment of that book, not a new one. See checkFileOwnership.
+		verdict, ownErr := checkFileOwnership(book)
+		if ownErr != nil {
+			dupLookupSkipCount.Add(1)
+			return fmt.Errorf("skipping import of %s: file ownership undeterminable: %w", book.FilePath, ownErr)
+		}
+		if verdict.skip {
+			fragmentSkipCount.Add(1)
+			defaultLog.Info("Skipping import of %s: %s (owning book(s): %s)",
+				logger.SanitizeLogValue(book.FilePath), verdict.reason, strings.Join(verdict.owners, ","))
+			return nil
+		}
+
 		// Resolve author/series with conflict-aware get-or-create semantics.
 		authorID, err := resolveAuthorID(book.Author)
 		if err != nil {
