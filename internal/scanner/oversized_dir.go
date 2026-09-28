@@ -1,5 +1,5 @@
 // file: internal/scanner/oversized_dir.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f7c8efaa-7942-41b9-b42d-5a5bb1e2d51f
 // last-edited: 2026-09-28
 
@@ -31,7 +31,7 @@ import (
 //     be short, so each file still stands alone, which is what a shelf is;
 //
 //   - a group that is neither -- mixed short and long files, or durations that
-//     cannot be read -- is refused and counted (see oversizedGroupRefusedCount
+//     cannot be read -- is refused and counted (see scanRunCounters.oversizedGroups
 //     and ScanDirectoryParallel's summary), never shattered into per-file books.
 //
 // A same-title group that passes (one key, three or more files, every file

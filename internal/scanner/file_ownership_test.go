@@ -1,5 +1,5 @@
 // file: internal/scanner/file_ownership_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c2a43e1-d6ec-4eae-8570-41c987062ce6
 // last-edited: 2026-09-28
 
@@ -137,8 +137,26 @@ func TestCheckFileOwnership(t *testing.T) {
 			wantSkip: true,
 		},
 		{
-			name: "a book already at the path is an update",
+			// Every audio file in the folder already has a row: a plain update.
+			name: "a directory book at its path with nothing new is an update",
 			book: func(f ownershipFixture) *Book { return &Book{FilePath: f.dir} },
+			wrap: func(f ownershipFixture) scannerStore {
+				for _, p := range f.loose {
+					if err := f.store.CreateBookFile(&database.BookFile{BookID: f.parent.ID, FilePath: p}); err != nil {
+						panic(err)
+					}
+				}
+				return f.store
+			},
+		},
+		{
+			// S-5 of the second 2026-09-28 review: audio files that arrived in
+			// the folder of a directory book after its import are its staged
+			// arrivals (createBookFilesForBook never adds to a book with rows).
+			name:       "a directory book at its path appends files new to its folder",
+			book:       func(f ownershipFixture) *Book { return &Book{FilePath: f.dir} },
+			wantSkip:   true,
+			wantAppend: []string{"new-1.mp3", "new-2.mp3"},
 		},
 		{
 			// A directory-shaped book with no row at the folder: its files are

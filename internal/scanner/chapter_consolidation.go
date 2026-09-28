@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_consolidation.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: f9a0b1c2-d3e4-5f60-a7b8-c9d0e1f2a3b4
 // last-edited: 2026-09-28
 
@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
 
@@ -170,20 +169,14 @@ func storedBookFileDurationSec(path string) int {
 		return 0
 	}
 	for _, r := range rows {
-		if !r.Missing && r.Duration > 0 && r.FileSize == fi.Size() {
+		// A legacy row whose "seconds" are really milliseconds would read as a
+		// 1000x-long chapter and push the group into the long/shelf branch.
+		if !r.Missing && r.Duration > 0 && r.FileSize == fi.Size() && !database.DurationLooksLikeMillis(r.FileSize, r.Duration) {
 			return r.Duration
 		}
 	}
 	return 0
 }
-
-// oversizedGroupRefusedCount / oversizedFilesRefusedCount count same-key groups
-// (and their files) the oversized-directory path refused to turn into books.
-// Reported once per discovery pass by ScanDirectoryParallel.
-var (
-	oversizedGroupRefusedCount atomic.Int64
-	oversizedFilesRefusedCount atomic.Int64
-)
 
 // consolidateMode selects how consolidateChapterGroups treats a same-key group
 // it cannot prove to be one book.
@@ -274,8 +267,11 @@ func consolidateChapterGroupsMode(ctx context.Context, files []string, mode cons
 		return books
 	}
 	refuse := func(group []candidate, key, why string) {
-		oversizedGroupRefusedCount.Add(1)
-		oversizedFilesRefusedCount.Add(int64(len(group)))
+		// Counted on the walk's own counters (scanRunCounters), reported once
+		// per discovery pass by ScanDirectoryParallel.
+		rc := scanRunCountersFrom(ctx)
+		rc.oversizedGroups.Add(1)
+		rc.oversizedFiles.Add(int64(len(group)))
 		logging.Warn(ctx, "scanner oversized directory: same-title group refused; no book created for these files",
 			"dir", filepath.Dir(group[0].path), "count", len(group), "key", key, "reason", why)
 	}

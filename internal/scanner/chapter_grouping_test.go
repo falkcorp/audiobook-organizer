@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_grouping_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 950c3ace-c8d3-4885-9a1d-d90682d41415
 // last-edited: 2026-09-28
 
@@ -198,19 +198,19 @@ func TestConsolidateOversized_NeverShattersASameTitleGroup(t *testing.T) {
 	})
 	t.Run("one long chapter among short ones is refused, not shattered", func(t *testing.T) {
 		stubChapterDurations(t, 300, map[string]int{files[7]: 3 * 3600})
-		groups, refusedFiles := oversizedGroupRefusedCount.Load(), oversizedFilesRefusedCount.Load()
-		books := consolidateChapterGroupsMode(context.Background(), files, consolidateOversized)
+		ctx, rc := withScanRunCounters(context.Background())
+		books := consolidateChapterGroupsMode(ctx, files, consolidateOversized)
 		require.Empty(t, books)
-		require.Equal(t, int64(1), oversizedGroupRefusedCount.Load()-groups)
-		require.Equal(t, int64(len(files)), oversizedFilesRefusedCount.Load()-refusedFiles)
+		require.Equal(t, int64(1), rc.oversizedGroups.Load())
+		require.Equal(t, int64(len(files)), rc.oversizedFiles.Load())
 		// The untagged path still stands such a group per file, as before.
 		require.Len(t, consolidateChapterGroups(context.Background(), files), len(files))
 	})
 	t.Run("unreadable durations are refused, not shattered", func(t *testing.T) {
 		stubChapterDurations(t, 0, nil)
-		groups := oversizedGroupRefusedCount.Load()
-		require.Empty(t, consolidateChapterGroupsMode(context.Background(), files, consolidateOversized))
-		require.Equal(t, int64(1), oversizedGroupRefusedCount.Load()-groups)
+		ctx, rc := withScanRunCounters(context.Background())
+		require.Empty(t, consolidateChapterGroupsMode(ctx, files, consolidateOversized))
+		require.Equal(t, int64(1), rc.oversizedGroups.Load())
 	})
 	t.Run("every file a whole book is a shelf", func(t *testing.T) {
 		stubChapterDurations(t, 9*3600, nil)
