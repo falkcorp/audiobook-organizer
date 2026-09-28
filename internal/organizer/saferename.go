@@ -1,7 +1,7 @@
 // file: internal/organizer/saferename.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2df18e44-98f0-407e-ab5f-daf158f22554
-// last-edited: 2026-09-24
+// last-edited: 2026-09-28
 
 package organizer
 
@@ -181,6 +181,11 @@ func moveExclusive(src, dst string) error {
 	return linkMoveExclusive(src, dst, false)
 }
 
+// MoveExclusive is moveExclusive for callers outside the package -- the undo
+// of an in-place move puts files back with the same no-overwrite guarantee
+// the move itself had.
+func MoveExclusive(src, dst string) error { return moveExclusive(src, dst) }
+
 // beforeEmptyDirRename runs between renameDirExclusive's emptiness check and
 // its rename(2). Tests set it to fill the destination in that window; it is
 // nil in production.
@@ -263,7 +268,14 @@ func linkMoveExclusive(src, dst string, srcIsScratch bool) error {
 	// dst is published; src is a second name for the same inode.
 	if err := os.Remove(src); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		if !srcIsScratch {
-			return fmt.Errorf("moved %s to %s but the source name could not be removed and both now name the same file: %w", src, dst, err)
+			// The move failed, and the caller will treat it as not having
+			// happened (a multi-file move does not count it as moved, so its
+			// rollback would never touch dst). Take the new name back so the
+			// failure leaves nothing behind: src still names the file.
+			if unErr := os.Remove(dst); unErr != nil && !errors.Is(unErr, fs.ErrNotExist) {
+				return fmt.Errorf("moved %s to %s but the source name could not be removed (%v), and removing the new name also failed, so both now name the same file: %w", src, dst, err, unErr)
+			}
+			return fmt.Errorf("could not move %s to %s: the source name could not be removed, so the new name was taken back: %w", src, dst, err)
 		}
 		slog.Warn("finalizeExclusive: published destination but could not remove temp name",
 			"tmp", src, "dst", dst, "error", err)

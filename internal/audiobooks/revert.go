@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-28
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
@@ -493,7 +494,9 @@ func (rs *RevertService) revertFileMove(c *database.OperationChange) error {
 	if err := os.MkdirAll(filepath.Dir(c.OldValue), 0o775); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(c.OldValue), err)
 	}
-	if err := os.Rename(c.NewValue, c.OldValue); err != nil {
+	// Exclusive, like the move it undoes: the Lstat above is a check, and a
+	// file landing at OldValue after it must not be overwritten.
+	if err := organizer.MoveExclusive(c.NewValue, c.OldValue); err != nil {
 		return fmt.Errorf("failed to move file back from %s to %s: %w", c.NewValue, c.OldValue, err)
 	}
 	if err := rs.modifyBook(c.BookID, func(b *database.Book) error {
@@ -719,6 +722,16 @@ func (rs *RevertService) revertBookFileMove(c *database.OperationChange) error {
 		return driftRefusal("book_file %s path is %q, not %q as the operation left it", fileID, bf.FilePath, c.NewValue)
 	}
 	if _, err := os.Lstat(c.NewValue); err != nil {
+		// Two rows at one path moved as one file. The first row's revert
+		// put the file back; this row only needs repointing, and only when
+		// a sibling row of the same book already names OldValue.
+		if rs.siblingRowAt(c.BookID, bf.ID, c.OldValue) {
+			bf.FilePath = c.OldValue
+			if err := rs.db.UpdateBookFile(bf.ID, bf); err != nil {
+				return fmt.Errorf("repoint duplicate book_file %s: %w", bf.ID, err)
+			}
+			return nil
+		}
 		return fmt.Errorf("file is no longer at %s; nothing moved back", c.NewValue)
 	}
 	if _, err := os.Lstat(c.OldValue); err == nil {
@@ -737,12 +750,27 @@ func (rs *RevertService) revertBookFileMove(c *database.OperationChange) error {
 		}
 	}
 	if err := rs.db.UpdateBookFile(bf.ID, bf); err != nil {
-		if rbErr := os.Rename(c.OldValue, c.NewValue); rbErr != nil {
+		if rbErr := organizer.MoveExclusive(c.OldValue, c.NewValue); rbErr != nil {
 			return fmt.Errorf("repoint book_file %s: %w; moving the file forward again also failed: %v", bf.ID, err, rbErr)
 		}
 		return fmt.Errorf("repoint book_file %s: %w", bf.ID, err)
 	}
 	return nil
+}
+
+// siblingRowAt reports whether book bookID has a book_file row other than
+// exceptID at path.
+func (rs *RevertService) siblingRowAt(bookID, exceptID, path string) bool {
+	rows, err := rs.db.GetBookFiles(bookID)
+	if err != nil {
+		return false
+	}
+	for _, r := range rows {
+		if r.ID != exceptID && r.FilePath == path {
+			return true
+		}
+	}
+	return false
 }
 
 // revertBookSoftDelete clears a book's deletion mark. A book purged since is

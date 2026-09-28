@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
 // last-edited: 2026-09-28
 
@@ -309,7 +309,9 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		}
 		// Same record CommitLanding writes: organize_rename for one rename,
 		// per-file moves for a multi-file book.
-		organizer.RecordInPlaceMove(h.store, book.ID, landing, oldPath, opID)
+		if recErr := organizer.RecordInPlaceMove(h.store, book.ID, landing, oldPath, opID); recErr != nil {
+			slog.Warn("organize: undo record incomplete", "book_id", book.ID, "error", recErr)
+		}
 		if h.publisher != nil {
 			h.publisher.Publish(c.Request.Context(), plugin.NewEvent(plugin.EventFileOrganized, book.ID, map[string]any{
 				"old_path":     oldPath,

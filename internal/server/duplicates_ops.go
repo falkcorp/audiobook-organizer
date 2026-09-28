@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.21.0
+// version: 2.22.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-09-14
+// last-edited: 2026-09-28
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -891,7 +891,10 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 							"case its series changed and its files were NOT moved", bookID), nil)
 					continue
 				}
-				if _, oErr := s.organizeService.ReOrganizeInPlace(book, log2); oErr != nil {
+				// Recorded under this operation (CommitLanding), so the move -- a
+				// multi-file book's per-file moves included -- can be undone.
+				// ReOrganizeInPlace wrote no undo rows at all.
+				if _, oErr := s.organizeService.ReOrganizeInPlaceRecorded(book, opID, log2); oErr != nil {
 					// A refused organize is NOT a failed organize.
 					//
 					// ErrAuthorUnresolved means the organizer deliberately declined:

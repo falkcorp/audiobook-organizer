@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-28
 
@@ -927,7 +927,9 @@ func (orgSvc *Service) bookNeedsReOrganize(book *database.Book, log logger.Logge
 }
 
 // ReOrganizeInPlace renames/moves a book that is already in RootDir to its
-// correct location based on current metadata. Returns the new path.
+// correct location based on current metadata. Returns the new path. It
+// records nothing: a caller running under an operation uses
+// ReOrganizeInPlaceRecorded so the move can be undone.
 func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger) (string, error) {
 	path, _, err := orgSvc.reOrganizeInPlace(book, log)
 	return path, err
@@ -1397,7 +1399,9 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 		}
 		log.Info("Re-organized %s: %s → %s", book.Title, oldPath, newPath)
 		if operationID != "" {
-			RecordInPlaceMove(orgSvc.db, book.ID, landing, oldPath, operationID)
+			if recErr := RecordInPlaceMove(orgSvc.db, book.ID, landing, oldPath, operationID); recErr != nil {
+				log.Warn("Organize: %s", recErr.Error())
+			}
 		}
 		if operationID != "" {
 			oldState := ""
@@ -1733,35 +1737,7 @@ func (orgSvc *Service) OrganizeOneBook(org *Organizer, book *database.Book, log 
 	}
 	oldPath := book.FilePath
 	if config.AppConfig.RootDir != "" && pathutil.IsWithin(oldPath, config.AppConfig.RootDir) {
-		oldState := ""
-		if book.LibraryState != nil {
-			oldState = *book.LibraryState
-		}
-		// A multi-file book whose path is one of its files: every file moves
-		// and the landing carries each move, which CommitLanding records row
-		// by row so an undo can put each file back.
-		if info, statErr := os.Stat(oldPath); statErr == nil {
-			present, ok, mfErr := orgSvc.multiFileInPlaceRows(book, info)
-			if mfErr != nil {
-				return nil, mfErr
-			}
-			if ok {
-				newPath, moves, err := orgSvc.reOrganizeMultiFileInPlace(book, present, log)
-				if err != nil {
-					return nil, err
-				}
-				return &Landing{Path: newPath, SourcePath: oldPath, SourceLibraryState: oldState, InPlace: true,
-					MultiFile: true, FileMoves: moves}, nil
-			}
-		}
-		newPath, res, err := orgSvc.reOrganizeInPlace(book, log)
-		if err != nil {
-			return nil, err
-		}
-		// SourcePath and SourceLibraryState are captured BEFORE
-		// reOrganizeInPlace, which rewrites book.FilePath and
-		// book.LibraryState on this same pointer as it moves the file.
-		return &Landing{Path: newPath, SourcePath: oldPath, SourceLibraryState: oldState, InPlace: true, Resolution: res}, nil
+		return orgSvc.inPlaceLanding(book, log)
 	}
 	bookFiles, err := orgSvc.db.GetBookFiles(book.ID)
 	if err != nil {
@@ -1777,6 +1753,61 @@ func (orgSvc *Service) OrganizeOneBook(org *Organizer, book *database.Book, log 
 		return orgSvc.organizeDirectoryBookRows(org, book, bookFiles, log)
 	}
 	return org.OrganizeSingleFile(book)
+}
+
+// inPlaceLanding moves a book already under RootDir to its target and returns
+// the Landing, without recording anything: the caller commits it
+// (CommitLanding), which writes the undo rows.
+func (orgSvc *Service) inPlaceLanding(book *database.Book, log logger.Logger) (*Landing, error) {
+	oldPath := book.FilePath
+	oldState := ""
+	if book.LibraryState != nil {
+		oldState = *book.LibraryState
+	}
+	// A multi-file book whose path is one of its files: every file moves
+	// and the landing carries each move, which CommitLanding records row
+	// by row so an undo can put each file back.
+	if info, statErr := os.Stat(oldPath); statErr == nil {
+		present, ok, mfErr := orgSvc.multiFileInPlaceRows(book, info)
+		if mfErr != nil {
+			return nil, mfErr
+		}
+		if ok {
+			newPath, moves, err := orgSvc.reOrganizeMultiFileInPlace(book, present, log)
+			if err != nil {
+				return nil, err
+			}
+			return &Landing{Path: newPath, SourcePath: oldPath, SourceLibraryState: oldState, InPlace: true,
+				MultiFile: true, FileMoves: moves}, nil
+		}
+	}
+	newPath, res, err := orgSvc.reOrganizeInPlace(book, log)
+	if err != nil {
+		return nil, err
+	}
+	// SourcePath and SourceLibraryState are captured BEFORE
+	// reOrganizeInPlace, which rewrites book.FilePath and
+	// book.LibraryState on this same pointer as it moves the file.
+	return &Landing{Path: newPath, SourcePath: oldPath, SourceLibraryState: oldState, InPlace: true, Resolution: res}, nil
+}
+
+// ReOrganizeInPlaceRecorded is ReOrganizeInPlace for a caller running under an
+// operation: the move is committed through CommitLanding, so it is recorded
+// (organize_rename, or per-file book_file_move rows for a multi-file book) and
+// can be undone. ReOrganizeInPlace records nothing; a multi-file move made
+// through it could never be put back.
+func (orgSvc *Service) ReOrganizeInPlaceRecorded(book *database.Book, operationID string, log logger.Logger) (string, error) {
+	if book == nil {
+		return "", fmt.Errorf("cannot organize: book is nil")
+	}
+	landing, err := orgSvc.inPlaceLanding(book, log)
+	if err != nil {
+		return "", err
+	}
+	if _, _, err := orgSvc.CommitLanding(book, landing, operationID, log); err != nil {
+		return landing.Path, err
+	}
+	return landing.Path, nil
 }
 
 // OrganizeDirectoryBook handles organizing a multi-file book where file_path is a directory.
