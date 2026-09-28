@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-09-27
 //
@@ -66,6 +66,7 @@ import { DupesPanel } from './DupesPanel';
 import { RegroupPanel } from './RegroupPanel';
 import { RepairsPanel } from './RepairsPanel';
 import { MetadataPanel } from './MetadataPanel';
+import { ReplaceConfirmDialog } from './ReplaceConfirmDialog';
 import { useDupesLane } from './lanes/useDupesLane';
 import { useMetadataLane } from './lanes/useMetadataLane';
 import { useRegroupLane } from './lanes/useRegroupLane';
@@ -490,6 +491,21 @@ export function ReviewWorkspace() {
           unmatchedCount={unmatchedCount}
           onRefetchStale={() => setConfirmRefetchStale(true)}
           toast={toast}
+        />
+      )}
+
+      {/*
+        The Replace bulk-apply prompt. The lane parks every Replace
+        applySelected dispatch (action bar, group Apply All, the command menu's
+        Apply selected / all fields) in `pendingReplace`, so this is the one
+        prompt for all of them. Mounted only while open so the "Don't ask me
+        again" box starts unticked each time.
+      */}
+      {metadata.pendingReplace && (
+        <ReplaceConfirmDialog
+          count={metadata.pendingReplace.ids.length}
+          onConfirm={metadata.confirmReplace}
+          onCancel={metadata.cancelReplace}
         />
       )}
 

@@ -1,5 +1,5 @@
 // file: web/src/components/review/ActionBar.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5a91c73e-2d48-4b06-9f15-8c3e0a7b6d29
 // last-edited: 2026-09-27
 //
@@ -70,6 +70,13 @@ export interface ActionBarProps {
    */
   bulkApplyMode: BulkApplyMode;
   onBulkApplyModeChange: (mode: BulkApplyMode) => void;
+  /**
+   * True once the owner ticked "Don't ask me again" on the Replace prompt.
+   * While set, a small "Ask before replacing again" control sits next to the
+   * toggle so the choice can be undone without clearing browser storage.
+   */
+  replaceConfirmSkipped?: boolean;
+  onResetReplaceConfirm?: () => void;
 }
 
 export function ActionBar({
@@ -82,6 +89,8 @@ export function ActionBar({
   confirm,
   bulkApplyMode,
   onBulkApplyModeChange,
+  replaceConfirmSkipped = false,
+  onResetReplaceConfirm,
 }: ActionBarProps) {
   const [pending, startTransition] = useTransition();
   const verbs = metadataLane.verbs;
@@ -150,6 +159,21 @@ export function ActionBar({
           </ToggleButton>
         </ToggleButtonGroup>
       </Tooltip>
+
+      {replaceConfirmSkipped && onResetReplaceConfirm && (
+        <Tooltip title="You chose not to be asked before a Replace bulk apply. Click to get the prompt back.">
+          <Button
+            size="small"
+            variant="text"
+            color="inherit"
+            data-testid="reset-replace-confirm"
+            sx={{ textTransform: 'none', color: 'text.secondary' }}
+            onClick={onResetReplaceConfirm}
+          >
+            Ask before replacing again
+          </Button>
+        </Tooltip>
+      )}
 
       <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
         <Tooltip title="Skip every row the providers could not match. Skipped rows stay actionable.">
