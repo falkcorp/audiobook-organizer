@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 package database
 
@@ -1186,6 +1186,24 @@ func (m *MemStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 		files = append(files, bf.Core())
 	}
 	return files, nil
+}
+
+// VisitBookFiles calls fn for every memdb book_file row, in id order, without
+// copying. fn must neither retain nor mutate the row. See
+// PebbleStore.VisitBookFiles.
+func (m *MemStore) VisitBookFiles(fn func(*BookFile)) error {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	iter, err := txn.Get(memTableBookFiles, memIdxID)
+	if err != nil {
+		return fmt.Errorf("memdb book_files scan: %w", err)
+	}
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		if bf, ok := obj.(*BookFile); ok {
+			fn(bf)
+		}
+	}
+	return nil
 }
 
 // GetBookFilesNeedingDelugeImportCore returns BookFileCores that have a

@@ -125,6 +125,20 @@ func TestOwnerQuery_NeedsMetadataHidesChapters(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{"needs", "nomatch"}, got)
+
+	// The help list's first example: -duration:<20m hides only KNOWN short
+	// files, so a real book whose runtime is unknown stays in the backlog.
+	negated := []FieldFilter{
+		{Field: "metadata", Value: "applied", Negated: true},
+		{Field: "duration", Value: "<20m", Negated: true},
+	}
+	got = nil
+	for _, b := range books {
+		if matchesFieldFilters(b, negated) {
+			got = append(got, b.ID)
+		}
+	}
+	assert.Equal(t, []string{"needs", "nomatch", "unknown"}, got)
 }
 
 func TestValidateFilterValue(t *testing.T) {
@@ -241,13 +255,44 @@ func BenchmarkOwnerQuery_100k(b *testing.B) {
 	}
 }
 
+func toRows(c coreFiles) []runtimeRow {
+	rows := make([]runtimeRow, len(c))
+	for i := range c {
+		rows[i] = rowFromCore(&c[i])
+	}
+	return rows
+}
+
+// BenchmarkRuntimeIndexBuild_742kFiles is the prod-size build: ~100k books
+// over ~742k book_file rows (the 2026-09 file count). Run with -benchmem.
+func BenchmarkRuntimeIndexBuild_742kFiles(b *testing.B) {
+	const books, nRows = 100_000, 742_000
+	files := make(coreFiles, nRows)
+	for i := range files {
+		files[i] = database.BookFileCore{
+			BookID:   fmt.Sprintf("book-%06d", i%books),
+			Duration: 600 + i%1200,
+			FileSize: int64(5_000_000 + i),
+		}
+	}
+	rows := toRows(files)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if m := buildRuntimeEntries(rows); len(m) != books {
+			b.Fatalf("got %d books", len(m))
+		}
+	}
+}
+
 // BenchmarkRuntimeIndexBuild_100k measures the (cached, TTL'd) index build
 // over 100k books / ~450k file rows.
 func BenchmarkRuntimeIndexBuild_100k(b *testing.B) {
 	_, files := syntheticLibrary(100_000)
+	rows := toRows(files)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if m := buildRuntimeEntries(files); len(m) == 0 {
+		if m := buildRuntimeEntries(rows); len(m) == 0 {
 			b.Fatal("empty")
 		}
 	}

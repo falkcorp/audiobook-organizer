@@ -88,8 +88,12 @@ function buildOptions(input: string, recent: string[]): string[] {
 const SEARCH_HELP = [
   // Metadata backlog triage (owner request 2026-09-27). Evaluated server-side.
   {
+    example: '-metadata:applied -duration:<20m',
+    desc: 'Needs metadata, hides chapter/track files under 20 minutes; books with an unknown runtime stay listed (change 20m to adjust: 45m, 1h30m, or seconds)',
+  },
+  {
     example: '-metadata:applied duration:>20m',
-    desc: 'Needs metadata, hides chapter/track files under 20 minutes (change 20m to adjust: 45m, 1h30m, or seconds)',
+    desc: 'Needs metadata AND runtime known to be over 20 minutes (also hides books whose runtime is unknown)',
   },
   {
     example: 'duration:<20m',

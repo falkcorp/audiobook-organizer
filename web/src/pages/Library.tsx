@@ -942,15 +942,36 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   // Live row updates: the server broadcasts books.changed {kind, ids} for
   // every committed book write (coalesced to 250 ms batches). Patch the rows
   // on screen instead of reloading the page, so nothing moves under the user.
+  // Events sent while the stream was down (a server restart, a network blip)
+  // are lost, so on RE-connect do one same-query refresh — which keeps the
+  // rows mounted and the scroll where it is (see useLibraryQuery).
+  const loadAudiobooksRef = useRef(loadAudiobooks);
   useEffect(() => {
-    return eventSourceManager.subscribe((evt: EventSourceEvent) => {
-      if (evt?.type !== 'books.changed' || !evt.data) return;
-      const change = evt.data as unknown as BooksChangedEvent;
-      if (!Array.isArray(change.ids)) return;
-      void applyBooksChanged(change);
-      if (change.kind === 'deleted') dropSelectedIds(change.ids);
-    });
-  }, [applyBooksChanged, dropSelectedIds]);
+    loadAudiobooksRef.current = loadAudiobooks;
+  }, [loadAudiobooks]);
+  useEffect(() => {
+    let wasDown = false;
+    return eventSourceManager.subscribe(
+      (evt: EventSourceEvent) => {
+        if (evt?.type !== 'books.changed' || !evt.data) return;
+        const change = evt.data as unknown as BooksChangedEvent;
+        if (!Array.isArray(change.ids)) return;
+        void applyBooksChanged(change);
+        if (change.kind === 'deleted') dropSelectedIds(change.ids);
+      },
+      (status: EventSourceStatus) => {
+        if (status.state === 'open') {
+          if (wasDown) {
+            clearLibraryCache();
+            void loadAudiobooksRef.current();
+          }
+          wasDown = false;
+        } else {
+          wasDown = true;
+        }
+      }
+    );
+  }, [applyBooksChanged, dropSelectedIds, clearLibraryCache]);
 
   // Return the user to where they were after a reload or a trip to a book.
   useLibraryScrollKeeper({

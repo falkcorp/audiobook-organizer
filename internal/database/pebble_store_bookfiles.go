@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.40.1
+// version: 1.41.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-09-19
+// last-edited: 2026-09-27
 
 package database
 
@@ -973,6 +973,26 @@ func (s *PebbleStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 		out[i] = full[i].Core()
 	}
 	return out, nil
+}
+
+// VisitBookFiles calls fn for every book_file row without building a slice of
+// copies. With memdb on it walks the in-memory table directly; fn receives the
+// stored row and must neither retain nor mutate it. Added for the library
+// runtime index (audiobooks/runtime_index.go), which needs a handful of fields
+// from every row: GetAllBookFilesCore would copy ~742k 624-byte structs
+// (~460 MB transient on prod) to read them.
+func (s *PebbleStore) VisitBookFiles(fn func(*BookFile)) error {
+	if s.UseMemDB && s.mem() != nil {
+		return s.mem().VisitBookFiles(fn)
+	}
+	full, err := s.getAllBookFilesPebbleScan()
+	if err != nil {
+		return err
+	}
+	for i := range full {
+		fn(&full[i])
+	}
+	return nil
 }
 
 func (s *PebbleStore) getAllBookFilesPebbleScan() ([]BookFile, error) {
