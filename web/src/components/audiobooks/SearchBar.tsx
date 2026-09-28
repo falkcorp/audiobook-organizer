@@ -1,5 +1,6 @@
 // file: web/src/components/audiobooks/SearchBar.tsx
-// version: 2.6.2
+// version: 2.7.0
+// last-edited: 2026-09-27
 // guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -85,6 +86,25 @@ function buildOptions(input: string, recent: string[]): string[] {
 }
 
 const SEARCH_HELP = [
+  // Metadata backlog triage (owner request 2026-09-27). Evaluated server-side.
+  {
+    example: '-metadata:applied duration:>20m',
+    desc: 'Needs metadata, hides chapter/track files under 20 minutes (change 20m to adjust: 45m, 1h30m, or seconds)',
+  },
+  {
+    example: 'duration:<20m',
+    desc: 'Short files — usually chapters/tracks imported as separate books',
+  },
+  { example: 'duration:[10m TO 2h]', desc: 'Runtime range (units: s, m, h; a bare number is seconds)' },
+  {
+    example: 'has_duration:no',
+    desc: 'Runtime unknown — never matched by duration:> or duration:<',
+  },
+  {
+    example: 'metadata:applied',
+    desc: 'Metadata applied: review status matched or audio_confirmed (manual or automatic apply)',
+  },
+  { example: '-metadata:applied -review:no_match', desc: 'Needs metadata, excluding books ruled "no match"' },
   { example: 'author:"Brandon Sanderson"', desc: 'Books by a specific author' },
   { example: 'series:Mistborn', desc: 'Books in a series' },
   { example: 'narrator:Kramer', desc: 'Books by narrator' },
@@ -111,17 +131,16 @@ const SEARCH_HELP = [
   // Common combinations
   { example: 'review:matched has_written:yes has_organized:yes', desc: 'Fully processed books' },
   {
-    example: '-review:matched library_state:organized -has_written:yes',
+    example: '-metadata:applied library_state:organized -has_written:yes',
     desc: 'Organized but needs metadata + file write',
   },
-  { example: '-review:matched', desc: 'Books still needing metadata' },
   { example: 'review:matched -has_written:yes', desc: 'Metadata applied but not written to files' },
   {
     example: 'review:matched has_written:yes -has_organized:yes',
     desc: 'Written but not organized',
   },
   { example: 'has_cover:no review:matched', desc: 'Matched but missing cover art' },
-  { example: 'library_state:imported -review:matched', desc: 'Imported books needing metadata' },
+  { example: 'library_state:imported -metadata:applied', desc: 'Imported books needing metadata' },
   // Read/unread tracking (per-user)
   { example: 'read_status:finished', desc: "Books you've finished" },
   { example: 'read_status:in_progress', desc: "Books you're reading" },

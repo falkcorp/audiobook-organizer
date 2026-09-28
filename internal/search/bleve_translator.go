@@ -1,7 +1,7 @@
 // file: internal/search/bleve_translator.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 //
 // AST → Bleve query translator (spec DES-1 v1.1). Walks the AST
 // produced by ParseQuery and emits a bleve/v2 query.Query suitable
@@ -228,6 +228,16 @@ func translateField(n *FieldNode, perUser *[]PerUserFilter, negated bool) (query
 		return nil, nil
 	}
 
+	// duration: human units (20m, 1h30m; bare = seconds) onto the indexed
+	// duration_seconds field. Before 2026-09-27 "duration" went to Bleve as-is,
+	// named no indexed field, and every comparison answered 0.
+	if target, ok := fieldAliases[n.Field]; ok && n.Field == "duration" {
+		return translateDuration(n, target)
+	}
+	if n.Field == "duration_seconds" {
+		return translateDuration(n, n.Field)
+	}
+
 	// Range queries.
 	if n.Op == "range" {
 		return buildNumericRange(n.Field, n.RangeMin, n.RangeMax, true, true)
@@ -306,6 +316,41 @@ func translateField(n *FieldNode, perUser *[]PerUserFilter, negated bool) (query
 		mq.SetBoost(n.Boost)
 	}
 	return mq, nil
+}
+
+// translateDuration builds a numeric range on the indexed seconds field from
+// a duration term. Equality (duration:20m) is the one-point range.
+func translateDuration(n *FieldNode, field string) (query.Query, error) {
+	if n.Op == "range" {
+		lo, err := durationBound(n.RangeMin)
+		if err != nil {
+			return nil, err
+		}
+		hi, err := durationBound(n.RangeMax)
+		if err != nil {
+			return nil, err
+		}
+		return buildNumericRange(field, lo, hi, true, true)
+	}
+	v, err := durationBound(n.Value)
+	if err != nil {
+		return nil, err
+	}
+	if v == "" {
+		return nil, fmt.Errorf("duration: empty value")
+	}
+	switch n.Op {
+	case ">":
+		return buildNumericRange(field, v, "", false, true)
+	case ">=":
+		return buildNumericRange(field, v, "", true, true)
+	case "<":
+		return buildNumericRange(field, "", v, true, false)
+	case "<=":
+		return buildNumericRange(field, "", v, true, true)
+	default:
+		return buildNumericRange(field, v, v, true, true)
+	}
 }
 
 func translateValueAlt(n *ValueAltNode, perUser *[]PerUserFilter, negated bool) (query.Query, error) {

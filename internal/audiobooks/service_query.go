@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.30.1
+// version: 1.31.1
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-09-28
 
@@ -657,10 +657,11 @@ func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, off
 			// buildAuthorSeriesNameMaps / hydrateAuthorSeriesNames in
 			// service_filtering.go (TODO 16b).
 			authorNames, seriesNames := svc.buildAuthorSeriesNameMaps(f.FieldFilters)
+			rtFn := svc.runtimeFuncFor(f.FieldFilters)
 			fieldFiltered := make([]database.Book, 0, len(filtered))
 			for i := range filtered {
 				b := filtered[i]
-				if matchesFieldFiltersWithStrippedFallback(&b, cheapFF, strippedFF, fetchFull, &pebbleLookups, warnFn, authorNames, seriesNames) {
+				if matchesFieldFiltersWithStrippedFallback(&b, cheapFF, strippedFF, fetchFull, &pebbleLookups, warnFn, authorNames, seriesNames, rtFn) {
 					fieldFiltered = append(fieldFiltered, b)
 				}
 			}

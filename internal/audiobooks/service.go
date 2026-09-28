@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -205,6 +205,10 @@ type AudiobookService struct {
 	// out of here, because InvalidateBookCaches skips listCache unless
 	// config.CacheInvalidateOnBookUpdate is on — and it is off by default.
 	libGen *cache.Generation
+	// runtimeIdx caches canonical book runtimes for the duration: list
+	// filter (runtime_index.go). Nil-safe: a nil index falls back to the
+	// stored Book.Duration aggregate.
+	runtimeIdx *runtimeIndex
 }
 
 // SetActivityService wires the activity service for snapshot fallback in GetAudiobookTags.
@@ -241,8 +245,9 @@ func NewAudiobookService(store audiobookStore) *AudiobookService {
 		// mutation already puts stale pages out of reach, so the TTL only has
 		// to bound mutation paths that bypass the store's three book-level
 		// writes. See listCacheTTL.
-		listCache: cache.NewWithLimit[[]database.Book]("audiobook_list", listCacheTTL, 500),
-		libGen:    libGen,
+		listCache:  cache.NewWithLimit[[]database.Book]("audiobook_list", listCacheTTL, 500),
+		libGen:     libGen,
+		runtimeIdx: newRuntimeIndex(),
 	}
 }
 

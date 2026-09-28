@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -65,6 +65,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
+	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -409,6 +410,25 @@ func sortByMetricLabel(sortBy string) string {
 	}
 }
 
+// searchNamesUnindexedFilterField reports the first field in a search query
+// that the library filter layer knows but the search index cannot answer.
+// A query that does not parse is left to the search path's own fallback.
+func searchNamesUnindexedFilterField(q string) (string, bool) {
+	if strings.TrimSpace(q) == "" || !strings.Contains(q, ":") {
+		return "", false
+	}
+	ast, err := search.ParseQuery(q)
+	if err != nil {
+		return "", false
+	}
+	for _, f := range search.FieldNames(ast) {
+		if audiobookspkg.FieldIsKnown(f) && !search.IsIndexedField(f) {
+			return f, true
+		}
+	}
+	return "", false
+}
+
 // ListAudiobooks handles GET /audiobooks. Mirrors the original listAudiobooks:
 // has_file_errors fast-path, quick-query (missing_covers / in_import_path /
 // no_isbn / duplicates_flagged) fast-path, then the filtered list pipeline with
@@ -444,6 +464,22 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 
 	// Parse pagination parameters
 	params := httputil.ParsePaginationParams(c)
+
+	// A library filter field inside `search` that the search index does not
+	// hold (review:, metadata:, has_duration:, has_written:, ...) is not a
+	// filter there: the term matches no document, so `-review:matched` became
+	// NOT(nothing) = the whole library -- measured on prod 2026-09-27 as
+	// count 100,856 for search=-review:matched. Those fields are evaluated by
+	// the `filters` parameter (the web search bar sends them there), so say so
+	// rather than answer a narrowing request with everything.
+	if field, bad := searchNamesUnindexedFilterField(params.Search); bad {
+		httputil.RespondWithBadRequest(c,
+			"\""+field+"\" is a library filter field that the search index does not hold, so "+
+				"inside the search parameter it would match nothing (and, negated, everything). "+
+				"Pass it in the filters parameter instead, e.g. "+
+				"filters=[{\"field\":\""+field+"\",\"value\":\"...\"}].")
+		return
+	}
 	authorID := httputil.ParseQueryIntPtr(c, "author_id")
 	seriesID := httputil.ParseQueryIntPtr(c, "series_id")
 
@@ -603,6 +639,13 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 					"filtering on it would match no books and report a count of 0, which reads "+
 					"as \"none exist\". Valid fields: "+
 					strings.Join(audiobookspkg.KnownFilterFields(), ", ")+".")
+			return
+		}
+		// Reject values the matcher cannot evaluate (duration:>abc,
+		// has_duration:maybe, metadata:whatever) for the same reason: a
+		// value that parses to nothing matches nothing and reads as "0 books".
+		if err := audiobookspkg.FirstInvalidFilterValue(fieldFilters); err != nil {
+			httputil.RespondWithBadRequest(c, "invalid filter value: "+err.Error())
 			return
 		}
 		for _, ff := range fieldFilters {

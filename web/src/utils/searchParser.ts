@@ -1,5 +1,6 @@
 // file: web/src/utils/searchParser.ts
-// version: 1.2.0
+// version: 1.3.0
+// last-edited: 2026-09-27
 // guid: ADC8CF65-5107-463A-891C-CABE8C1D74CF
 
 /**
@@ -36,6 +37,8 @@ export const SEARCH_FIELDS: readonly string[] = [
   'description',
   'format',
   'duration',
+  'has_duration',
+  'metadata',
   'file_size',
   'bitrate',
   'codec',
@@ -230,6 +233,21 @@ function tryMatchFieldValue(
       quoted: true,
       endPos: closeQuote + 1,
     };
+  }
+
+  // Bracketed range — `duration:[10m TO 2h]` contains spaces, so it runs to
+  // the closing bracket instead of the next space. Without this the value was
+  // "[10m" and "TO 2h]" leaked into the free text.
+  if (str[valueStart] === '[') {
+    const close = str.indexOf(']', valueStart + 1);
+    if (close !== -1) {
+      return {
+        field,
+        value: str.substring(valueStart, close + 1),
+        quoted: false,
+        endPos: close + 1,
+      };
+    }
   }
 
   // Unquoted value — up to next space

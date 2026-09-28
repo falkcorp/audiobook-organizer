@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-09-12
+// last-edited: 2026-09-27
 
 package audiobooks
 
@@ -257,6 +257,12 @@ func FirstEmptyFilterValue(filters []FieldFilter) (string, bool) {
 // matchesFieldFilters returns true if a book matches all the given field filters.
 // All filters are ANDed: every filter must match for the book to be included.
 func matchesFieldFilters(book database.Book, filters []FieldFilter) bool {
+	return matchesFieldFiltersRT(book, filters, nil)
+}
+
+// matchesFieldFiltersRT is matchesFieldFilters with the runtime source the
+// duration: filter compares against (nil = stored Book.Duration).
+func matchesFieldFiltersRT(book database.Book, filters []FieldFilter, rt runtimeFunc) bool {
 	for _, f := range filters {
 		// Fail CLOSED on an empty value. Falling through would reach
 		// strings.Contains(x, "") == true and match every book — see
@@ -271,7 +277,7 @@ func matchesFieldFilters(book database.Book, filters []FieldFilter) bool {
 		if f.Value == "" {
 			return false
 		}
-		matches := fieldMatchesValue(book, f.Field, f.Value)
+		matches := fieldMatchesValueRT(book, f.Field, f.Value, rt)
 		if f.Negated && matches {
 			return false // NOT filter: exclude if matches
 		}
@@ -313,6 +319,7 @@ func matchesFieldFiltersWithStrippedFallback(
 	pebbleLookups *int64,
 	warnOnce func(id string, err error),
 	authorNames, seriesNames map[int]string,
+	rt runtimeFunc,
 ) bool {
 	if len(cheap) > 0 {
 		cheapBook := memBook
@@ -320,7 +327,7 @@ func matchesFieldFiltersWithStrippedFallback(
 			hydrated := hydrateAuthorSeriesNames(*memBook, authorNames, seriesNames)
 			cheapBook = &hydrated
 		}
-		if !matchesFieldFilters(*cheapBook, cheap) {
+		if !matchesFieldFiltersRT(*cheapBook, cheap, rt) {
 			return false
 		}
 	}
@@ -337,7 +344,7 @@ func matchesFieldFiltersWithStrippedFallback(
 		}
 		return false
 	}
-	return matchesFieldFilters(*full, stripped)
+	return matchesFieldFiltersRT(*full, stripped, rt)
 }
 
 // hydrateAuthorSeriesNames returns a copy of book with Author/Series
@@ -402,6 +409,33 @@ func (svc *AudiobookService) buildAuthorSeriesNameMaps(filters []FieldFilter) (a
 // value is treated as an equality check.  All other fields use
 // case-insensitive substring matching.  Unknown fields return false.
 func fieldMatchesValue(book database.Book, field, value string) bool {
+	return fieldMatchesValueRT(book, field, value, nil)
+}
+
+// fieldMatchesValueRT is fieldMatchesValue with an explicit runtime source for
+// the duration fields (nil = stored Book.Duration). See filter_duration.go.
+func fieldMatchesValueRT(book database.Book, field, value string, rt runtimeFunc) bool {
+	// Fields with a grammar — never substring-matched.
+	switch {
+	case durationFilterFields[field]:
+		return durationMatches(&book, value, rt)
+	case field == "has_duration":
+		want, ok := parseYesNo(value)
+		if !ok {
+			return false
+		}
+		if rt == nil {
+			rt = storedRuntime
+		}
+		_, known := rt(&book)
+		return known == want
+	case field == "metadata":
+		want, ok := metadataFilterWantsApplied(value)
+		if !ok {
+			return false
+		}
+		return BookMetadataApplied(&book) == want
+	}
 	// Numeric rating fields — delegate to numericCompare.
 	switch field {
 	case "user_rating_overall":
@@ -511,8 +545,25 @@ func bookFieldValue(book database.Book, field string) (string, bool) {
 	// to the unknown-field default and answered "no books found". Measured on
 	// production 2026-08-14: duration:1 returned 0 while duration_seconds:1
 	// returned 25,090 — the same rows, under a name the UI never sends.
+	// Rendered for FieldIsKnown only: fieldMatchesValueRT evaluates duration
+	// as a numeric runtime comparison (filter_duration.go), never as the
+	// substring match that made duration:>1200 return 0 books.
 	case "duration", "duration_seconds":
 		bookValue = fmt.Sprintf("%d", derefInt(book.Duration))
+	case "has_duration":
+		if book.Duration != nil && *book.Duration > 0 {
+			bookValue = "yes"
+		} else {
+			bookValue = "no"
+		}
+	// metadata:applied — exact match in fieldMatchesValueRT, see
+	// BookMetadataApplied for the definition.
+	case "metadata":
+		if BookMetadataApplied(&book) {
+			bookValue = "applied"
+		} else {
+			bookValue = "none"
+		}
 	case "bitrate", "bitrate_kbps":
 		bookValue = fmt.Sprintf("%d", derefInt(book.Bitrate))
 	case "file_size", "file_size_bytes":
@@ -655,7 +706,8 @@ var allFilterFieldNames = []string{
 	"language", "publisher", "edition", "description", "format", "codec",
 	"quality", "library_state", "metadata_review_status", "review",
 	"has_cover", "has_written", "needs_writeback", "has_organized",
-	"itunes_sync_status", "duration", "duration_seconds", "bitrate",
+	"itunes_sync_status", "duration", "duration_seconds", "has_duration",
+	"metadata", "bitrate",
 	"bitrate_kbps", "file_size", "file_size_bytes", "sample_rate",
 	"sample_rate_hz", "channels", "bit_depth", "isbn10", "isbn13", "work_id",
 	"version_group_id",
@@ -1060,6 +1112,7 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 				"cheap_filter_count", len(cheapFF))
 		}
 		authorNames, seriesNames := svc.buildAuthorSeriesNameMaps(remainingFF)
+		rtFn := svc.runtimeFuncFor(remainingFF)
 		// Per-query Pebble-lookup counter + once-per-query warn for
 		// nil/err. The walker invokes the predicate row-by-row on the
 		// caller's goroutine, so a plain int64 + sync.Once captured in the
@@ -1078,7 +1131,7 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 		}
 		predicate = func(b *database.Book) bool {
 			if len(remainingFF) > 0 {
-				if !matchesFieldFiltersWithStrippedFallback(b, cheapFF, strippedFF, fetchFull, pebbleLookups, warnFn, authorNames, seriesNames) {
+				if !matchesFieldFiltersWithStrippedFallback(b, cheapFF, strippedFF, fetchFull, pebbleLookups, warnFn, authorNames, seriesNames, rtFn) {
 					return false
 				}
 			}
