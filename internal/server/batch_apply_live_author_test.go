@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_live_author_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6b0e3f27-94c1-4a8d-b2e5-1d7c9a4f0e63
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // The certainty gate must judge a candidate against the book's LIVE author
 // (AuthorID and the book_authors join), never the denormalized Book.Author
@@ -191,11 +191,11 @@ func TestFetchTimeIdentity_LiveAuthorForms(t *testing.T) {
 	book := &database.Book{ID: "valis", Title: "Valis"}
 	live := []string{"Philip K. Dick"}
 	for _, recorded := range []string{"", "Philip K. Dick"} {
-		if err := fetchTimeIdentity("Valis", recorded, book, live); err != nil {
+		if err := fetchTimeIdentity("Valis", recorded, "", book, live); err != nil {
 			t.Errorf("recorded %q: %v, want nil", recorded, err)
 		}
 	}
-	if err := fetchTimeIdentity("Valis", "Stephen King", book, live); !errors.Is(err, metafetch.ErrStaleMetadataCache) {
+	if err := fetchTimeIdentity("Valis", "Stephen King", "", book, live); !errors.Is(err, metafetch.ErrStaleMetadataCache) {
 		t.Errorf("recorded Stephen King: %v, want ErrStaleMetadataCache", err)
 	}
 }

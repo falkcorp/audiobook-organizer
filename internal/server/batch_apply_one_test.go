@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.15.2
+// version: 1.16.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // Regression tests for applying ONE book's cached metadata candidate.
 //
@@ -35,6 +35,7 @@ type finishCall struct {
 // fakeApplySvc records which of the file-side calls were made.
 type fakeApplySvc struct {
 	candidates    []json.RawMessage
+	queryMatches  map[string]bool
 	getErr        error
 	applyErr      error
 	finishErr     error
@@ -141,6 +142,12 @@ func TestApplyCachedCandidate_PassingPreflightApplies(t *testing.T) {
 
 func (f *fakeApplySvc) ValidateCachedIdentityForBook(*metafetch.MetadataCandidateCache, *database.Book, []string) error {
 	return f.identityErr
+}
+
+// CachedQueryMatchesIdentity answers from queryMatches: the stand-in queries
+// the fake's cache row counts as fetched for (nil: none).
+func (f *fakeApplySvc) CachedQueryMatchesIdentity(_ *metafetch.MetadataCandidateCache, _ *database.Book, _ []string, query string) bool {
+	return f.queryMatches[query]
 }
 
 // fakeBooks returns a numberless book for any id, so the fixtures' numberless

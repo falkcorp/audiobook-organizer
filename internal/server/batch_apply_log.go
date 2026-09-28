@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_log.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ca44bf85-18ad-4a64-96ce-f9f9d87aaf31
 // last-edited: 2026-09-28
 //
@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
 // batchApplyLabelEvery is how many examined books sit between rebuilds of the
@@ -77,6 +78,7 @@ func batchApplyAppliedLine(id string, out applyOutcome) string {
 		b.WriteString(" → ")
 		b.WriteString(c)
 	}
+	b.WriteString(batchApplyIdentityEvidence(out))
 	if out.OwnerReviewed {
 		b.WriteString("; owner-reviewed over the certainty gate")
 	}
@@ -88,6 +90,25 @@ func batchApplyAppliedLine(id string, out applyOutcome) string {
 		b.WriteString(logger.SanitizeLogValue(strings.Join(out.SkippedLocked, ", ")))
 	}
 	return b.String()
+}
+
+// batchApplyIdentityEvidence renders the identity evidence the certainty gate
+// accepted for the candidate (applygate.EvaluateTranscribed), e.g. `; identity:
+// found by searching the transcribed title "Planet Hulk", which the
+// candidate's title matches`, or "" when there was none. It is how an applied
+// book with a blank or chapter-number title says why it passed.
+func batchApplyIdentityEvidence(out applyOutcome) string {
+	var ev *metafetch.CandidateIdentityEvidence
+	if out.Gate != nil {
+		ev = out.Gate.IdentityEvidence
+	}
+	if ev == nil && out.Candidate != nil {
+		ev = out.Candidate.IdentityEvidence
+	}
+	if ev == nil {
+		return ""
+	}
+	return "; identity: " + logger.SanitizeLogValue(ev.Detail)
 }
 
 // batchApplyRefusedLine is the op-log line for a book that was not applied:
@@ -112,5 +133,6 @@ func batchApplyRefusedLine(id string, out applyOutcome) string {
 	if out.Err != nil {
 		fmt.Fprintf(&b, ": %s", logger.SanitizeLogValue(out.Err.Error()))
 	}
+	b.WriteString(batchApplyIdentityEvidence(out))
 	return b.String()
 }

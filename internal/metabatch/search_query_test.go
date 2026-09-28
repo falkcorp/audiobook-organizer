@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-09-28
 
@@ -74,25 +74,16 @@ func TestResolveCandidateSearchQuery_Fallbacks(t *testing.T) {
 	}
 }
 
-func TestTranscribedSearchQueries_Order(t *testing.T) {
-	book := &database.Book{ID: "b", TranscribedTitle: strp("Book Level")}
-	files := fakeBookFiles{files: []database.BookFile{
-		{TranscribedTitle: strp("File One")},
-		{Missing: true, TranscribedTitle: strp("Missing File")},
-		{TranscribedTitle: strp("Book Level")},
-		{TranscribedTitle: strp("Chapter 2")},
-	}}
-	got := TranscribedSearchQueries(files, book)
-	want := []CandidateSearchQuery{
-		{Title: "Book Level", Source: SearchQuerySourceTranscribedTitle, Usable: true},
-		{Title: "File One", Source: SearchQuerySourceFileTranscribedText, Usable: true},
-	}
-	if len(got) != len(want) {
-		t.Fatalf("got %+v, want %+v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("[%d] = %+v, want %+v", i, got[i], want[i])
+func TestIsTranscribedSource(t *testing.T) {
+	for src, want := range map[string]bool{
+		SearchQuerySourceTranscribedTitle:    true,
+		SearchQuerySourceFileTranscribedText: true,
+		SearchQuerySourceTitle:               false,
+		SearchQuerySourceFolderTitle:         false,
+		"":                                   false,
+	} {
+		if got := IsTranscribedSource(src); got != want {
+			t.Errorf("IsTranscribedSource(%q) = %v, want %v", src, got, want)
 		}
 	}
 }

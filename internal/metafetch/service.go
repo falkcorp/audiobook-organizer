@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.33.0
+// version: 5.34.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-24
+// last-edited: 2026-09-28
 
 package metafetch
 
@@ -345,6 +345,30 @@ type MetadataCandidate struct {
 	GoogleRatingAverage float64 `json:"google_rating_average,omitempty"`
 	// GoogleRatingCount is the number of Google Books ratings.
 	GoogleRatingCount int `json:"google_rating_count,omitempty"`
+	// IdentityEvidence records what vouched for this candidate's identity
+	// when the book's stored title could not: set by the certainty gate
+	// (internal/applygate) on the copy it judges, never by a provider and
+	// never written back into the candidate cache, so a review pin's content
+	// hash is unaffected. The review UI and the apply op log read it to show
+	// why the candidate passed.
+	IdentityEvidence *CandidateIdentityEvidence `json:"identity_evidence,omitempty"`
+}
+
+// IdentityEvidenceTranscribedTitle is CandidateIdentityEvidence.Kind for a
+// candidate found by searching the book's transcribed (audio intro) title,
+// whose own title matches that transcription.
+const IdentityEvidenceTranscribedTitle = "transcribed_title"
+
+// CandidateIdentityEvidence is one piece of identity evidence the certainty
+// gate accepted for a candidate (MetadataCandidate.IdentityEvidence).
+type CandidateIdentityEvidence struct {
+	Kind string `json:"kind"`
+	// Query is the text the candidate was found by (the transcribed title),
+	// and Source where it came from (a metabatch.SearchQuerySource* value).
+	Query  string `json:"query"`
+	Source string `json:"source,omitempty"`
+	// Detail is a one-line human explanation for the review UI and op log.
+	Detail string `json:"detail"`
 }
 
 // SearchMetadataResponse is returned by SearchMetadataForBook.

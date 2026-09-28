@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-09-28
 //
@@ -468,8 +468,9 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 	// the book-title check can never match -- every run would re-ask every
 	// provider for it. The fingerprint check below still binds query and
 	// author. ValidateCachedIdentityForBook itself is NOT widened: the apply
-	// gate uses it, and whether a stand-in-title candidate may be
-	// bulk-applied is a separate decision.
+	// gate uses it, and a stand-in-title candidate is bulk-applied only on
+	// the separate transcribed-title evidence (owner decision 2026-09-28:
+	// CachedQueryMatchesIdentity, applygate.EvaluateTranscribed).
 	if entry.SourceHash != hashSearchInputs(book.ID, query, author, "", "") &&
 		mfs.ValidateCachedIdentityForBook(entry, book, nil) != nil {
 		return entry, BatchVerdictNone, nil
