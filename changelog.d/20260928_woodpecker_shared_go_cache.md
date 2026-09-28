@@ -1,0 +1,1 @@
+- Woodpecker Mac pipelines (test-rest, test-server-scanner) share one host Go module and build cache and clean their own clone, so leftover per-run caches no longer fill the Mac disk.
