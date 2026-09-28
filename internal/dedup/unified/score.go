@@ -145,5 +145,12 @@ const (
 // These signals must never be the sole reason a candidate reaches
 // persistence (score ≥ 60), which is enforced by ComposeScore.
 func isSupportingKind(k SignalKind) bool {
+	return IsSupportingKind(k)
+}
+
+// IsSupportingKind is isSupportingKind for callers outside this package (the
+// drain's content-evidence check) that must agree with the scorer on which
+// kinds can never be the reason a pair exists.
+func IsSupportingKind(k SignalKind) bool {
 	return k == SigDuration || k == SigFolderPath || k == SigSamePath || k == SigCoverText || k == SigExactRule
 }

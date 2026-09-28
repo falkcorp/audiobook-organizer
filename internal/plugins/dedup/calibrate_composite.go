@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 4c2f7a91-8d3b-4e6a-9f10-5b7c2d1e8a34
-// last-edited: 2026-09-02
+// last-edited: 2026-09-27
 
 // Package dedup — op dedup.calibrate-composite (INIT-1 T5).
 //
@@ -758,7 +758,9 @@ func (p *Plugin) candidateBreakdownSignals(candidateID int64) ([]models.Signal, 
 	if err != nil || cand == nil || cand.ScoreBreakdown == nil {
 		return nil, false
 	}
-	if len(cand.ScoreBreakdown.Signals) == 0 {
+	// A provenance-only breakdown (an exact rule's record of why the row
+	// exists) is not a score; fitting it would feed a labeled pair in at 0.
+	if len(cand.ScoreBreakdown.Signals) == 0 || cand.ScoreBreakdown.IsProvenanceOnly() {
 		return nil, false
 	}
 	return cand.ScoreBreakdown.Signals, true
@@ -776,7 +778,7 @@ func parseBreakdownSignals(raw json.RawMessage) ([]models.Signal, bool) {
 	if err := json.Unmarshal(raw, &uds); err != nil {
 		return nil, false
 	}
-	if len(uds.Signals) == 0 {
+	if len(uds.Signals) == 0 || uds.IsProvenanceOnly() {
 		return nil, false
 	}
 	return uds.Signals, true

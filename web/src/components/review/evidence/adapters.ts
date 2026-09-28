@@ -53,7 +53,7 @@ export function dedupEvidence(
       // generic "nothing recorded" that reads like the pair has no reason.
       emptyReason:
         layer === 'exact'
-          ? 'Older exact-match candidate: the rule that matched it was not recorded. The next dedup scan records it.'
+          ? 'Older exact-match candidate: the rule that matched it was not recorded. A dedup rescan records it if the pair still matches; pairs that no longer qualify are cleared by dedup.drain-stale.'
           : 'No score breakdown recorded.',
     };
   }

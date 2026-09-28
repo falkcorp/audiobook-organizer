@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_triage_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8f9a0b1c-2d3e-4f50-a6b7-c8d9e0f12345
-// last-edited: 2026-07-17
+// last-edited: 2026-09-27
 
 package maintenance
 
@@ -9,8 +9,30 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
+
+// An exact row whose recorded rule is a content match (identical bytes, shared
+// ISBN/ASIN, shared metadata record) is genuine, never a purgeable title_leak,
+// even though its provenance signal carries no confidence.
+func TestClassifyCandidate_Genuine_ExactContentRule(t *testing.T) {
+	for _, rule := range []string{dedup.ExactRuleFileHash, dedup.ExactRuleISBNASIN, dedup.ExactRuleMetadataHash} {
+		a := makeBook("a", 5*1024*1024, 3600, "itunes-pid-a")
+		b := makeBook("b", 5*1024*1024, 3600, "itunes-pid-b")
+		c := database.DedupCandidate{Layer: "exact", ScoreBreakdown: dedup.ExactRuleBreakdown("a", "b", rule, "x", 1)}
+		if cls, reason := ClassifyCandidate(c, a, b); cls != TriageClassGenuine {
+			t.Errorf("rule %s: got %s (%s), want genuine", rule, cls, reason)
+		}
+	}
+	// A title rule is not hard evidence.
+	a := makeBook("a", 5*1024*1024, 3600, "itunes-pid-a")
+	b := makeBook("b", 5*1024*1024, 3600, "itunes-pid-b")
+	c := database.DedupCandidate{Layer: "exact", ScoreBreakdown: dedup.ExactRuleBreakdown("a", "b", dedup.ExactRuleTitleAuthor, "x", 0)}
+	if cls, _ := ClassifyCandidate(c, a, b); cls == TriageClassGenuine {
+		t.Errorf("title_author rule classified genuine")
+	}
+}
 
 func makeBook(id string, fileSize int64, duration int, itunesPID string) *database.Book {
 	b := &database.Book{ID: id, Title: "Book " + id}
