@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.20 -->
+<!-- version: 10.73.21 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-27 -->
+<!-- last-edited: 2026-09-28 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,50 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **AUTHOR-SNAPSHOT** The metadata apply never refreshes the `Book.Author`
+      snapshot stored in the book row. `internal/metafetch/service_apply.go`
+      (~line 306) writes `AuthorID` and the `book_authors` join but leaves the
+      snapshot alone. `UpdateBook` keeps the old snapshot when a write leaves
+      it nil, and its comment at `internal/database/pebble_store.go:2672` says
+      the snapshot is "recomputed on read"; that is false, since `GetBookByID`
+      does not recompute it. Result: the snapshot is nil or stale on most
+      books. The apply gate stopped reading it in PR #3578, but organize and
+      rename paths, quarantine, one cache-identity check, the fetch inputs and
+      the API `author_name` still prefer it (full list in #3578). Done means
+      one of two things: every author writer refreshes the snapshot, or the
+      snapshot is dropped from the row and hydrated from `AuthorID` on read.
+
+- [ ] **ITUNES-WB-STAGING** The iTunes write-back batch is repeatedly REJECTED
+      by `ITLSafetyContract`: a track location contains the staging marker
+      `.itunes-writeback/`, and the contract refuses to write any location
+      under that marker. The batch retries and is refused again on every
+      pass. Find which writer puts a staging path into a track's location
+      (a location recorded before the staged file was moved into place is the
+      likely cause). Fix it so a staging path never reaches the iTunes
+      location, and so one bad track does not reject the whole batch forever.
+      Done means a regression test plus a clean write-back pass.
+
+- [ ] **UI-SEARCH-IDENTITY** The per-book UI metadata search caches rows with
+      empty identity fields. `internal/server/handlers/metadata/handler.go:556`
+      calls `FetchAndCache` only on a plain fetch, where query, author,
+      narrator and series are all `""`. The cached row's `SourceHash` is
+      therefore `hashSearchInputs(id, "", "", "", "")`, which no
+      current-fields recompute ever matches. Every UI-fetched candidate then
+      fails the bulk apply's identity leg as `identity_stale`, which no owner
+      review can lift. Done means the plain fetch hashes the book's actual
+      title and author (the same shape the batch fetch records), with a test
+      that a UI-fetched row passes `ValidateCachedIdentityForBook`.
+
+- [ ] **WRITEBACK-STALE-PATHS** Tag write-back fails on stale `book_file`
+      paths of version-linked books. In op `01M3HX18SKGSV08MC7R6XFKR3D`, 10
+      books were applied to the database but their tag write-back failed
+      (e.g. Wyrd Sisters, Starred Tower). The write-back used `book_file`
+      rows whose paths no longer exist, because the rows belong to a
+      version-linked twin whose files moved. Find where the write-back
+      resolves file paths for a version-group member, make it use the book's
+      present active files, and re-run write-back for those 10 books. Done
+      means a test with a version-linked book whose sibling's rows are stale.
 
 - [ ] **COVER-TEXT-SCORING** Score the stored cover text. `unified.SigCoverText`
       (`cover_text`) is registered but non-scoring (supporting kind, no boost),
