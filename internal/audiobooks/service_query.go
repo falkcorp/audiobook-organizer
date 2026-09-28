@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 package audiobooks
 
@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	blevequery "github.com/blevesearch/bleve/v2/search/query"
 
@@ -271,9 +272,12 @@ func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, off
 			// path never got that guard. Over-fetching is the equivalent fix
 			// for a path that cannot push the filter down: filter the full set
 			// first, then let the existing post-filter block paginate it.
+			// One load of the window for the fetch and the truncation check
+			// below, so both agree even if a test changes the knob mid-search.
+			window := searchWindow(build)
 			fetchLimit, fetchOffset := limit, offset
 			if hasPostFilters {
-				fetchLimit, fetchOffset = searchWindow(build), 0
+				fetchLimit, fetchOffset = window, 0
 			}
 			// A cache build with no post-filter keeps the hit IDs as they
 			// come: the page is hydrated when it is served, exactly as the
@@ -287,12 +291,12 @@ func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, off
 				}
 			}
 			books, resultTotal, err = svc.searchWithBleve(search, fetchLimit, fetchOffset, f.UserID, nil, mode)
-			if hasPostFilters && !build && len(books) >= searchPostFilterWindow {
+			if hasPostFilters && !build && len(books) >= window {
 				// Truncated: rows past the window were never considered, so any
 				// count derived below is a lower bound. Say so rather than
 				// reporting a confident wrong number.
 				slog.Warn("search: post-filter over-fetch window exhausted; count is a lower bound",
-					"window", searchPostFilterWindow, "query", search)
+					"window", window, "query", search)
 			}
 		} else {
 			// No search index at all. store.SearchBooks is a *whole-query
@@ -305,14 +309,15 @@ func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, off
 			// Same over-fetch as the Bleve branch, for the same reason: the
 			// post-filter block below paginates, so it must be handed the
 			// candidate set rather than one page of it.
+			window := searchWindow(build)
 			fbLimit, fbOffset := limit, offset
 			if hasPostFilters {
-				fbLimit, fbOffset = searchWindow(build), 0
+				fbLimit, fbOffset = window, 0
 			}
 			books, err = svc.store.SearchBooks(search, fbLimit, fbOffset)
-			if hasPostFilters && !build && len(books) >= searchPostFilterWindow {
+			if hasPostFilters && !build && len(books) >= window {
 				slog.Warn("search: post-filter over-fetch window exhausted; count is a lower bound",
-					"window", searchPostFilterWindow, "query", search, "fallback", "store.SearchBooks")
+					"window", window, "query", search, "fallback", "store.SearchBooks")
 			}
 		}
 	} else if authorID != nil {
@@ -1055,10 +1060,26 @@ func (svc *AudiobookService) EnrichAudiobooksWithNamesAndFiles(books []database.
 // (internal/playlist/evaluator.go) — kept as a private, package-local
 // constant rather than importing the playlist one.
 //
-// A var rather than a const only so tests can shrink it to prove a code path
-// is (or is not) bounded by it without indexing 10,000 documents. Nothing in
-// production assigns it.
-var searchPostFilterWindow = 10000
+// A variable rather than a const only so tests can shrink it (through
+// SetSearchPostFilterWindowForTesting) to prove a code path is (or is not)
+// bounded by it without indexing 10,000 documents. Nothing in production
+// assigns it.
+//
+// It is an atomic, not a plain int, because it is read on goroutines the
+// test does not own: the search result cache runs builds, and the
+// drift-correcting rebuild it queues after a patch, on its own goroutines,
+// and every searchWithBleve call loads the window. A plain int assigned by a
+// test's restore func while such a build was still running was a data race
+// (Woodpecker -race, TestSearchResultCache_BuildIsNotWindowed, 2026-09-28).
+// Read it only through postFilterWindow.
+var searchPostFilterWindow = func() *atomic.Int64 {
+	v := new(atomic.Int64)
+	v.Store(10000)
+	return v
+}()
+
+// postFilterWindow is the current per-request post-filter over-fetch window.
+func postFilterWindow() int { return int(searchPostFilterWindow.Load()) }
 
 // bleveSearchable reports whether library search may be answered by the
 // Bleve index. A nil index cannot; neither can one that is still being
@@ -1133,7 +1154,8 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		return books, len(books), sErr
 	}
 
-	window := searchPostFilterWindow
+	window := postFilterWindow()
+	unscopedWindow := window
 	if restrictIDs != nil {
 		bleveQ = blevequery.NewConjunctionQuery([]blevequery.Query{bleveQ, blevequery.NewDocIDQuery(restrictIDs)})
 		// The scope bounds the hit count, so fetching len(restrictIDs) hits
@@ -1146,9 +1168,9 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		if err != nil {
 			return nil, 0, fmt.Errorf("bleve search: %w", err)
 		}
-		if restrictIDs == nil && len(hits) >= searchPostFilterWindow {
+		if restrictIDs == nil && len(hits) >= unscopedWindow {
 			slog.Warn("search: post-filter window exhausted; results beyond it are truncated",
-				"window", searchPostFilterWindow)
+				"window", unscopedWindow)
 		}
 		ids := make([]string, 0, len(hits))
 		for _, h := range hits {

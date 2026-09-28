@@ -1,7 +1,7 @@
 // file: internal/searchcache/cache.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: bcadc16f-696c-468a-a3e4-afea4c81bc5c
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 
 package searchcache
 
@@ -240,6 +240,11 @@ type Cache struct {
 	bytes    int64
 	building map[string]*job // key -> in-flight build (queued or running)
 	jobs     map[string]*job // search ID -> build (running or recently finished)
+	// inflight counts background work (queued or running builds, and shared
+	// patches) and idleCh is closed when it next reaches zero; nil while
+	// idle. See WaitIdle.
+	inflight int
+	idleCh   chan struct{}
 
 	patchSF singleflight.Group
 
@@ -345,7 +350,12 @@ func (c *Cache) Lookup(ctx context.Context, key string, ev Evaluator, opts Looku
 func (c *Cache) refresh(ctx context.Context, key string, ev Evaluator, opts LookupOptions, need uint64) (Result, error) {
 	ch := c.patchSF.DoChan(key, func() (any, error) {
 		// Detached: the patch is shared by every caller of this key and its
-		// result is stored, so no single caller's ctx may cancel it.
+		// result is stored, so no single caller's ctx may cancel it. It can
+		// outlive a stale or pending caller, so WaitIdle counts it.
+		c.mu.Lock()
+		c.beginWorkLocked()
+		c.mu.Unlock()
+		defer c.endWork()
 		return c.patchEntry(key, ev), nil
 	})
 	var timeout <-chan time.Time
@@ -603,8 +613,55 @@ func (c *Cache) startBuildLocked(key string, ev Evaluator) (*job, error) {
 	c.jobs[j.id] = j
 	c.rebuilds.Add(1)
 	metrics.IncSearchCacheRebuild()
+	c.beginWorkLocked()
 	go c.run(j, ev)
 	return j, nil
+}
+
+// beginWorkLocked counts one unit of background work. c.mu held.
+func (c *Cache) beginWorkLocked() {
+	if c.inflight == 0 {
+		c.idleCh = make(chan struct{})
+	}
+	c.inflight++
+}
+
+// endWork ends one unit of background work counted by beginWorkLocked.
+func (c *Cache) endWork() {
+	c.mu.Lock()
+	c.inflight--
+	if c.inflight == 0 {
+		close(c.idleCh)
+		c.idleCh = nil
+	}
+	c.mu.Unlock()
+}
+
+// WaitIdle blocks until no build is queued or running and no shared patch is
+// running, or ctx ends. Work started after it returns is not covered.
+//
+// Builds, the drift-correcting rebuild queued after a patch, and a patch that
+// outlived its caller's wait all run on the cache's own goroutines, so a
+// caller that got its answer can still have a search running on its behalf.
+// Tests call WaitIdle before they tear down or change what those searches
+// read (the store, the index, a package-level test knob): without it a
+// restore func raced a still-running rebuild (-race, 2026-09-28). A build
+// that queues a follow-up build counts the follow-up before it stops
+// counting itself, so the count never passes through zero between them.
+func (c *Cache) WaitIdle(ctx context.Context) error {
+	for {
+		c.mu.Lock()
+		ch := c.idleCh
+		c.mu.Unlock()
+		if ch == nil {
+			return nil
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 func (c *Cache) addWaiterLocked(j *job) { j.waiters++ }
@@ -614,6 +671,8 @@ func (c *Cache) addWaiterLocked(j *job) { j.waiters++ }
 var testHookAbandoned func(key string)
 
 func (c *Cache) run(j *job, ev Evaluator) {
+	// Counted by startBuildLocked; a rerun below is counted before this ends.
+	defer c.endWork()
 	c.sem <- struct{}{}
 
 	c.mu.Lock()

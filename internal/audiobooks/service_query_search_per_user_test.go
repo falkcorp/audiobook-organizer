@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_per_user_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e3a7c1d9-4b2f-4a68-9c1e-5f8a2d3b7c40
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 // Tests for the searchWithBleve per-user DSL filter fix (INIT-4 T2).
 // read_status / progress_pct / last_played filters are peeled off by
@@ -216,7 +216,7 @@ func TestSearchWithBleveStateErrorFailsOpen(t *testing.T) {
 // Decision 4 contract: when the pre-filter hit count reaches
 // searchPostFilterWindow, a truncation warning is logged.
 func TestSearchWithBleveWindowExhaustionWarns(t *testing.T) {
-	ids := make([]string, searchPostFilterWindow+5)
+	ids := make([]string, postFilterWindow()+5)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("book-%05d", i)
 	}

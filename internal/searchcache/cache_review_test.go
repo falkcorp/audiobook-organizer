@@ -1,7 +1,7 @@
 // file: internal/searchcache/cache_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 474e41ca-6072-44de-b9c3-da8b78639664
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 package searchcache
 
@@ -202,5 +202,34 @@ func TestCache_DriftRebuildIsNotLostToOlderBuild(t *testing.T) {
 	c.mu.Unlock()
 	if e == nil || e.gen < g2 || !reflect.DeepEqual(e.ids, []string{"b1", "b2", "b3", "b4"}) {
 		t.Fatalf("entry after follow-up rebuild = %+v", e)
+	}
+}
+
+// WaitIdle returns only once every background build has finished: a build a
+// lookup stopped waiting on (pending) is still running, and a test restoring
+// something that build reads must be able to wait for it (-race failure on
+// Woodpecker 2026-09-28, TestSearchResultCache_BuildIsNotWindowed).
+func TestCache_WaitIdleWaitsForDetachedBuild(t *testing.T) {
+	c := New(NewChangeLog(64), Config{})
+	if err := c.WaitIdle(context.Background()); err != nil {
+		t.Fatalf("WaitIdle on a fresh cache: %v", err)
+	}
+	blocker := newFake(map[string]string{"z": "blue"}, "blue")
+	blocker.block = make(chan struct{})
+	var pe *PendingError
+	if _, err := c.Lookup(context.Background(), "a", blocker, webOpts(time.Millisecond)); !errors.As(err, &pe) {
+		t.Fatalf("blocker lookup err = %v, want pending", err)
+	}
+	short, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := c.WaitIdle(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitIdle with a build blocked = %v, want deadline exceeded", err)
+	}
+	close(blocker.block)
+	if err := c.WaitIdle(context.Background()); err != nil {
+		t.Fatalf("WaitIdle after the build was released: %v", err)
+	}
+	if s := c.Stats(); s.Building != 0 {
+		t.Fatalf("WaitIdle returned with %d builds in flight", s.Building)
 	}
 }

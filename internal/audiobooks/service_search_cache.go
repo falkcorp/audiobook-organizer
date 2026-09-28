@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 package audiobooks
 
@@ -37,17 +37,22 @@ func searchWindow(build bool) int {
 	if build {
 		return searchFullLimit
 	}
-	return searchPostFilterWindow
+	return postFilterWindow()
 }
 
 // SetSearchPostFilterWindowForTesting sets the per-request post-filter
 // over-fetch window and returns a func restoring the old value. Tests use it
-// to reach the windowed branch without seeding 10,000 books; it must not be
-// called while searches run.
+// to reach the windowed branch without seeding 10,000 books.
+//
+// The store and the load are atomic, so calling it while searches run is not
+// a data race. It is still a semantic hazard: a search the result cache runs
+// in the background (a build, or the drift-correcting rebuild after a patch)
+// may read either value. A test that needs every search it started to have
+// seen one window must wait for the cache to go idle
+// (searchcache.Cache.WaitIdle) before calling restore.
 func SetSearchPostFilterWindowForTesting(n int) (restore func()) {
-	old := searchPostFilterWindow
-	searchPostFilterWindow = n
-	return func() { searchPostFilterWindow = old }
+	old := searchPostFilterWindow.Swap(int64(n))
+	return func() { searchPostFilterWindow.Store(old) }
 }
 
 // hydrateMode says how a search turns its hit IDs into books.

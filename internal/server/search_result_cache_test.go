@@ -1,7 +1,7 @@
 // file: internal/server/search_result_cache_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 220a3f36-7c10-426f-a8ee-c3fefa2ee20e
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 
 package server
 
@@ -70,6 +70,11 @@ func newSearchCacheServer(t testing.TB, n, ringSize int, cfg searchcache.Config)
 		srv.searchChanges = searchcache.NewChangeLog(ringSize)
 	}
 	srv.enableSearchResultCache(cfg)
+	// Registered after the store, index and index-worker cleanups, so it runs
+	// before them: a background build or drift rebuild still running when the
+	// test ends must finish before what it reads is closed, and before the
+	// next test changes a package knob it reads.
+	t.Cleanup(func() { waitCacheIdle(t, srv) })
 
 	fx := &searchCacheFixture{srv: srv, pebble: store}
 	rng := rand.New(rand.NewSource(7))
@@ -450,6 +455,20 @@ func drainTB(tb testing.TB, srv *Server) {
 	tb.Fatalf("index queue did not drain")
 }
 
+// waitCacheIdle waits for every background search the result cache is
+// running (builds, drift-correcting rebuilds, detached patches) to finish.
+func waitCacheIdle(tb testing.TB, srv *Server) {
+	tb.Helper()
+	if srv.searchResults == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := srv.searchResults.WaitIdle(ctx); err != nil {
+		tb.Fatalf("search result cache did not go idle: %v", err)
+	}
+}
+
 func waitUntil(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -661,6 +680,12 @@ func TestSearchResultCache_BuildIsNotWindowed(t *testing.T) {
 	}
 	drainTB(t, fx.srv)
 	got = fx.ids(t, "charlie", primaryOnly())
+	// The patch above queued a drift-correcting rebuild (relevance order is
+	// an OrderDrifter) that runs on the cache's goroutine and reads the
+	// window. Restoring it while that rebuild ran was the -race failure seen
+	// on Woodpecker 2026-09-28; the knob is atomic now, and waiting here also
+	// keeps the rebuild on the window this test set.
+	waitCacheIdle(t, fx.srv)
 	restore()
 	truth = fx.uncachedIDs(t, "charlie", primaryOnly())
 	sort.Strings(got)

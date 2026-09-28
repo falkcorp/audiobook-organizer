@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_id_filters_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: de1c4eca-5371-4c44-9c6e-8a7d61b37aeb
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 // Regression tests for author_id / series_id surviving a search, and for
 // author_id + series_id intersecting instead of author winning.
@@ -156,13 +156,11 @@ func bookIDsSorted(books []database.Book) []string {
 }
 
 // shrinkSearchWindow is the test seam for searchPostFilterWindow, restored on
-// cleanup. Tests in this package do not run in parallel, so the package var is
-// safe to swap.
+// cleanup. It goes through SetSearchPostFilterWindowForTesting so every write
+// is atomic like the reads.
 func shrinkSearchWindow(t *testing.T, n int) {
 	t.Helper()
-	prev := searchPostFilterWindow
-	searchPostFilterWindow = n
-	t.Cleanup(func() { searchPostFilterWindow = prev })
+	t.Cleanup(SetSearchPostFilterWindowForTesting(n))
 }
 
 // assertPagesExact walks every page at `limit` and asserts: each page but the
@@ -310,7 +308,7 @@ func TestSearchWithIDFilterIsNotBoundedByWindow(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			want := fx.want(tc.pick)
-			require.Greater(t, len(want), searchPostFilterWindow, "fixture: scoped set must exceed the shrunken window")
+			require.Greater(t, len(want), postFilterWindow(), "fixture: scoped set must exceed the shrunken window")
 			assertPagesExact(t, want, 5, func(offset int) ([]database.Book, int, error) {
 				return fx.svc.GetAudiobooksWithTotal(context.Background(), 5, offset, idFilterSearch, tc.authorID, tc.seriesID, tc.filters)
 			})
