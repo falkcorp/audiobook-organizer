@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.replaceConfirm.test.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: 510b281d-e333-4300-8b36-49e93cd8a7aa
 // last-edited: 2026-09-28
 //
@@ -177,7 +177,12 @@ describe.each(entryPoints)('$name', ({ results, click }) => {
     await openWorkspace('replace', results());
     await click(user);
 
-    const d = await screen.findByTestId('replace-confirm-dialog');
+    // The prompt is on screen when the click returns, not rendered later.
+    // The action bar used to dispatch inside startTransition, which demoted
+    // the prompt to a low-priority render; on a loaded CI runner the button
+    // sat disabled with no dialog for several seconds, past findBy's timeout.
+    // A synchronous query here fails on that shape with no load at all.
+    const d = screen.getByTestId('replace-confirm-dialog');
     expect(screen.getAllByTestId('replace-confirm-dialog')).toHaveLength(1);
     const message = within(d).getByTestId('replace-confirm-message');
     expect(message).toHaveTextContent('2 book(s)');
