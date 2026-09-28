@@ -1,7 +1,7 @@
 // file: web/src/components/review/ActionBar.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5a91c73e-2d48-4b06-9f15-8c3e0a7b6d29
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // The bulk-action footer: Apply Selected, Apply High Confidence, Apply Page,
 // Skip All Unmatched.
@@ -24,9 +24,12 @@
 //
 // So the optimistic update lives in the lane hook's `rowStates`, where it
 // persists until the server's own answer replaces it, and this component uses
-// `useTransition` for the part that IS bounded: keeping the button disabled and
-// showing a spinner while the dispatch request is in flight. That is the Actions
-// pattern doing the job it is actually suited to.
+// `useTransition` for the part that IS bounded: keeping the button disabled
+// while an ActionBar confirm is awaited. `dispatch` itself is fire-and-forget,
+// so the transition never tracked the apply request; the lane's `applying`
+// flag does that. An action with nothing to confirm dispatches outside the
+// transition (see `run`), so the updates it makes -- the Replace prompt among
+// them -- are not demoted to low priority.
 //
 // The vocabulary comes from the lane descriptor rather than from string literals
 // here, so the dedup lane's "Dismiss" and the metadata lane's "Reject match"
@@ -130,14 +133,29 @@ export function ActionBar({
   const modeSuffix = replacing ? ', replace existing' : '';
 
   const run = (action: MetadataAction, count: number) => {
+    // Replace mode is confirmed by the lane's applySelected dispatch
+    // (useMetadataLane), once for every bulk entry point, so it is not asked
+    // again here.
+    //
+    // An action with nothing to confirm dispatches right away, as an ordinary
+    // (urgent) update, the way group Apply All and the command menu already
+    // do. It used to go through startTransition too, which made everything
+    // the dispatch sets -- including the Replace prompt -- a low-priority
+    // update: React commits the button's pending state first and renders the
+    // prompt whenever it gets round to it, restarting that render each time
+    // an urgent update (the button's tooltip) lands. On a busy machine the
+    // button sat disabled with no prompt on screen for several seconds. The
+    // double-click guard there does not need the transition: applyMany sets
+    // `applying` before its first await, and the prompt is modal.
+    if (!needsConfirmation(action)) {
+      dispatch(action);
+      return;
+    }
+    // The transition only covers the wait for the answer, which is what it is
+    // for: the button stays disabled while the confirm dialog is open.
     startTransition(async () => {
-      // Replace mode is confirmed by the lane's applySelected dispatch
-      // (useMetadataLane), once for every bulk entry point, so it is not
-      // asked again here.
-      if (needsConfirmation(action)) {
-        const ok = await confirm(`Apply metadata to ${count.toLocaleString()} book(s)?`);
-        if (!ok) return;
-      }
+      const ok = await confirm(`Apply metadata to ${count.toLocaleString()} book(s)?`);
+      if (!ok) return;
       dispatch(action);
     });
   };

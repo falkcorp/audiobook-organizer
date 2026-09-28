@@ -1,7 +1,7 @@
 // file: internal/metafetch/reliability_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b8c1d2e-3f5a-4c6b-8d7e-9a0b1c2d3e4f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-28
 //
 // Regression tests for the metadata-reliability fixes:
 //   - Bug 3: BuildSourceChain memoizes the chain so the per-source circuit
@@ -14,6 +14,7 @@ package metafetch
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -123,13 +124,20 @@ func (c *countingSource) SearchByTitleAndAuthor(_ context.Context, _, _ string) 
 
 // TestSearchMetadataForBook_LimiterGatesPerRequest proves Bug 4's fix: the
 // limiter is consumed per LIVE source call, not once per book. With N sources
-// each issuing one SearchByTitle, a limiter permitting one call per interval
-// forces total elapsed ≈ (N-1)*interval. Under the old per-book behavior the
-// whole search consumed a single token and returned effectively instantly
-// regardless of how many outbound requests it made.
+// each issuing one SearchByTitle, the search must draw N tokens, and a limiter
+// holding only N-1 must stop the Nth outbound call. Under the old per-book
+// behavior the whole search consumed a single token.
+//
+// The test counts tokens instead of timing the search. It used to assert that
+// the unlimited run finished within one 40ms interval, and a loaded CI runner
+// took 88ms for work that involves no waiting at all. Here the limiter refills
+// once per hour, so its token count moves only when a call draws a token, and
+// a Wait that would need a refill fails at once against the context deadline
+// instead of sleeping. Nothing below depends on how fast the machine is.
 func TestSearchMetadataForBook_LimiterGatesPerRequest(t *testing.T) {
 	const nSources = 4
-	const interval = 40 * time.Millisecond
+	// Refill slowly enough that no token can come back during the test.
+	const refill = time.Hour
 
 	var calls int64
 	sources := make([]metadata.MetadataSource, 0, nSources)
@@ -146,36 +154,46 @@ func TestSearchMetadataForBook_LimiterGatesPerRequest(t *testing.T) {
 	svc := NewService(mock)
 	svc.SetOverrideSources(sources)
 
-	// Baseline: nil limiter → no throttling → fast, and N live calls.
+	// A deadline far below the refill interval: limiter.Wait returns an error
+	// at once when the next token would arrive after it, instead of blocking.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	// Baseline: nil limiter, no throttling, and N live calls.
 	atomic.StoreInt64(&calls, 0)
-	startNoLimit := time.Now()
-	if _, err := svc.searchMetadataForBook(context.Background(), nil, "b1", "", "", "", "", SearchOptions{}); err != nil {
+	if _, err := svc.searchMetadataForBook(ctx, nil, "b1", "", "", "", "", SearchOptions{}); err != nil {
 		t.Fatalf("unlimited search error: %v", err)
 	}
-	elapsedNoLimit := time.Since(startNoLimit)
 	if got := atomic.LoadInt64(&calls); got != nSources {
 		t.Fatalf("expected %d live source calls, got %d", nSources, got)
 	}
-	if elapsedNoLimit > interval {
-		t.Fatalf("unlimited search should be fast, took %v", elapsedNoLimit)
-	}
 
-	// Rate-limited: one call per interval, burst 1. N calls ⇒ ≈ (N-1)*interval.
+	// Enough tokens for every call: the search draws exactly one per live call.
+	const burst = 10 * nSources
 	atomic.StoreInt64(&calls, 0)
-	limiter := rate.NewLimiter(rate.Every(interval), 1)
-	startLimited := time.Now()
-	if _, err := svc.searchMetadataForBook(context.Background(), limiter, "b1", "", "", "", "", SearchOptions{}); err != nil {
+	plenty := rate.NewLimiter(rate.Every(refill), burst)
+	if _, err := svc.searchMetadataForBook(ctx, plenty, "b1", "", "", "", "", SearchOptions{}); err != nil {
 		t.Fatalf("limited search error: %v", err)
 	}
-	elapsedLimited := time.Since(startLimited)
 	if got := atomic.LoadInt64(&calls); got != nSources {
 		t.Fatalf("expected %d live source calls under limiter, got %d", nSources, got)
 	}
-	// (N-1) waits of `interval` each; allow slack for scheduler jitter but require
-	// clearly more than a single per-book token would have cost (~0).
-	minExpected := time.Duration(nSources-2) * interval
-	if elapsedLimited < minExpected {
-		t.Fatalf("limiter did not gate per request: %d calls took only %v (want ≥ %v)",
-			nSources, elapsedLimited, minExpected)
+	// Tokens() includes the refill since creation, millionths of a token at one
+	// per hour; rounding drops that without being able to hide a whole token.
+	if drawn := int(math.Round(burst - plenty.Tokens())); drawn != nSources {
+		t.Fatalf("limiter did not gate per request: %d live calls drew %d token(s), want %d",
+			nSources, drawn, nSources)
+	}
+
+	// One token short: the limiter must refuse exactly one live call, so it
+	// stands in front of each request rather than being charged once per book.
+	atomic.StoreInt64(&calls, 0)
+	short := rate.NewLimiter(rate.Every(refill), nSources-1)
+	// The refused source is recorded as a failed source; whether the search as
+	// a whole reports an error is not what this test is about.
+	_, _ = svc.searchMetadataForBook(ctx, short, "b1", "", "", "", "", SearchOptions{})
+	if got := atomic.LoadInt64(&calls); got != nSources-1 {
+		t.Fatalf("with %d tokens the limiter let %d live calls through, want %d",
+			nSources-1, got, nSources-1)
 	}
 }
