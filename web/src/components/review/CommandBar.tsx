@@ -179,7 +179,9 @@ function CommandMenuButton({ menu }: { menu: CommandMenu }) {
   const children: ReactNode[] = [];
   const pushGroup = (group: CommandGroup, sectionId: string) => {
     if (group.title) {
-      children.push(sectionHeader(`command-group-${menu.id}-${sectionId}-${group.id}`, group.title, 'group'));
+      children.push(
+        sectionHeader(`command-group-${menu.id}-${sectionId}-${group.id}`, group.title, 'group')
+      );
     }
     for (const cmd of group.commands) {
       children.push(<CommandItem key={cmd.id} cmd={cmd} onPicked={close} />);
@@ -196,7 +198,11 @@ function CommandMenuButton({ menu }: { menu: CommandMenu }) {
         menu.advanced.forEach((g) => pushGroup(g, 'advanced'));
       } else {
         children.push(
-          <Box key="advanced-hint" sx={{ px: 2, py: 1 }} data-testid={`command-advanced-hint-${menu.id}`}>
+          <Box
+            key="advanced-hint"
+            sx={{ px: 2, py: 1 }}
+            data-testid={`command-advanced-hint-${menu.id}`}
+          >
             <Typography variant="caption" color="text.secondary">
               More options:{' '}
               <Link href="/settings" underline="hover">
@@ -237,9 +243,7 @@ function CommandMenuButton({ menu }: { menu: CommandMenu }) {
           list: { 'aria-label': `${menu.label} commands` },
           // Wider than MUI's default so a sentence of description fits on two
           // lines; capped so it never overflows a phone screen.
-          paper: sectioned
-            ? { sx: { width: 400, maxWidth: 'calc(100vw - 32px)' } }
-            : undefined,
+          paper: sectioned ? { sx: { width: 400, maxWidth: 'calc(100vw - 32px)' } } : undefined,
         }}
       >
         {children}

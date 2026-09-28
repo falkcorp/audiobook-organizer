@@ -160,7 +160,7 @@ export function autoMergeRisks(config: Pick<Config, 'dedup'>): string[] {
     // The server's own default for auto_merge_enabled is TRUE, so a missing
     // block is not "off" -- say we could not tell.
     return [
-      "The server did not report its automatic-merge settings, so the scan may link identical copies and the AI review may merge pairs it is sure about.",
+      'The server did not report its automatic-merge settings, so the scan may link identical copies and the AI review may merge pairs it is sure about.',
     ];
   }
   if (config.dedup.auto_merge_enabled) {
