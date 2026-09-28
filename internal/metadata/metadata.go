@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 // last-edited: 2026-09-28
 
@@ -762,9 +762,9 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 		// title in its name: take the folder's name as the title, and the
 		// author from the folder above it. See ChapterTitleFromDirectory.
 		authorProbe := filePath
-		if dirTitle, ok := ChapterTitleFromDirectory(filePath, metadata.Title); ok {
+		if dirTitle, titleDir, ok := ChapterTitleFromDirectory(filePath, metadata.Title); ok {
 			metadata.Title = dirTitle
-			authorProbe = AuthorProbePath(filePath, true)
+			authorProbe = titleDir
 		}
 
 		// The organizer names an authorless book "<title> - Unknown Author.ext", so
@@ -848,13 +848,14 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 			metadata.Title = title
 			metadata.Artist = author
 		} else {
-			// No author could be determined: the last segment is the title.
-			// The first segment is NOT a series. It used to be recorded as one,
-			// and for chapter files it is whatever precedes the number --
-			// "Eldest - 02" gave Series "Eldest" on one book per chapter, and
-			// "02 - Eldest" gave Series "02".
+			// No author could be determined: the last segment is the title,
+			// and the first is the series unless either end is only a chapter
+			// position -- "Eldest - 02" gave Series "Eldest" on one book per
+			// chapter, and "02 - Eldest" gave Series "02". See
+			// SeriesFromTitlePrefix.
 			parts := strings.Split(filename, " - ")
 			if len(parts) >= 2 {
+				metadata.Series = SeriesFromTitlePrefix(parts)
 				metadata.Title = parts[len(parts)-1]
 			} else {
 				metadata.Title = filename
