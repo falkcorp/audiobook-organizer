@@ -395,8 +395,20 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipAuthorsUnreadable, Err: aerr}
 	}
 	idErr := fetchTimeIdentity(cr.Book.Title, cr.Book.Author, cr.SearchQuery, book, authors)
-	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims,
-		opResultTranscribedSearch(books, book, cr))
+	ts := opResultTranscribedSearch(books, book, cr)
+	if idErr == nil && searchedByStandIn(cr) {
+		// The book was searched by a stand-in, not its own title, so an
+		// unchanged title proves nothing about the candidate: the question the
+		// fetch asked was the stand-in. This is the op path's equivalent of the
+		// cached path's hash mismatch. Only a transcription the book still
+		// resolves to may explain it, and the gate lifts it only when the
+		// candidate's title matches that transcription; a folder-name search
+		// stays identity_stale.
+		idErr = fmt.Errorf("%w: book %s was searched by its %s %q, not its title",
+			metafetch.ErrStaleMetadataCache, book.ID, cr.SearchQuerySource, cr.SearchQuery)
+		ts.ExplainsStaleIdentity = ts.Query != ""
+	}
+	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims, ts)
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v}
 	if !v.Allowed {
 		plan.Reason = applySkipGateBlocked
@@ -434,12 +446,19 @@ func cachedTranscribedSearch(svc cachedApplyService, books bookReader, entry *me
 	return applygate.TranscribedSearch{Query: cur.Title, Source: cur.Source, ExplainsStaleIdentity: true}
 }
 
+// searchedByStandIn reports whether an op-result candidate's fetch searched a
+// stand-in for the book's title (a transcription or the folder name,
+// metabatch.ResolveCandidateSearchQuery) rather than the title itself.
+func searchedByStandIn(cr CandidateResult) bool {
+	return cr.SearchQuerySource != "" && cr.SearchQuerySource != metabatch.SearchQuerySourceTitle
+}
+
 // opResultTranscribedSearch is cachedTranscribedSearch for an op-result
 // candidate, whose fetch recorded the query it searched
 // (CandidateResult.SearchQuery). It names the transcribed query only when the
-// book would still be searched by exactly it; the identity leg there is
-// fetchTimeIdentity, which does not depend on the query, so nothing here
-// lifts identity_stale.
+// book would still be searched by exactly it. It does not set
+// ExplainsStaleIdentity: planOpResultApply does, and only when the stand-in
+// search is the sole reason the identity is stale.
 func opResultTranscribedSearch(books bookReader, book *database.Book, cr CandidateResult) applygate.TranscribedSearch {
 	if cr.SearchQuery == "" || !metabatch.IsTranscribedSource(cr.SearchQuerySource) {
 		return applygate.TranscribedSearch{}
@@ -472,7 +491,9 @@ func excludedFromPreview(plan cachedApplyPlan) bool {
 // A row with no title AND no query is a legacy row that recorded nothing and
 // fails closed; a row that recorded its query but no title is a book whose
 // stored title was blank when fetched (it was searched by a stand-in), and it
-// is judged like any other: is the title still what it was.
+// is judged like any other: is the title still what it was. Passing here is
+// not enough for a stand-in search: planOpResultApply then fails it as stale
+// unless a matching transcription explains it (searchedByStandIn).
 func fetchTimeIdentity(fetchedTitle, fetchedAuthor, searchQuery string, book *database.Book, liveAuthors []string) error {
 	if strings.TrimSpace(fetchedTitle) == "" && strings.TrimSpace(searchQuery) == "" {
 		return fmt.Errorf("%w: fetch result for book %s recorded no title", metafetch.ErrStaleMetadataCache, book.ID)

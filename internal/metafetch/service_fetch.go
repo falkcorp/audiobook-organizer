@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-09-14
+// last-edited: 2026-09-28
 
 package metafetch
 
@@ -82,12 +82,13 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			currentAuthor = author.Name
 		}
 	}
-	if IsGarbageValue(currentAuthor) {
-		currentAuthor = ""
-	}
+	// A placeholder ("Unknown Author", "read by narrator") is never sent as a
+	// search author or narrator (SearchAuthorHint): it narrows the query to
+	// nothing, or to books by an author literally named that.
+	currentAuthor = SearchAuthorHint(currentAuthor)
 	currentNarrator := ""
-	if book.Narrator != nil && *book.Narrator != "" && !IsGarbageValue(*book.Narrator) {
-		currentNarrator = *book.Narrator
+	if book.Narrator != nil {
+		currentNarrator = SearchAuthorHint(*book.Narrator)
 	}
 
 	// Transcription fallback: when the curated title/author/narrator is missing
@@ -101,11 +102,11 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			searchTitle = th.title
 		}
 	}
-	if currentAuthor == "" && th.author != "" {
-		currentAuthor = th.author
+	if currentAuthor == "" {
+		currentAuthor = SearchAuthorHint(th.author)
 	}
-	if currentNarrator == "" && th.narrator != "" {
-		currentNarrator = th.narrator
+	if currentNarrator == "" {
+		currentNarrator = SearchAuthorHint(th.narrator)
 	}
 
 	var lastErr error

@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_author_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bf7207f0-35f9-406d-8c06-9010e2079b36
 // last-edited: 2026-09-28
 
@@ -67,7 +67,9 @@ func TestSearchMetadataForBook_NeverSendsPlaceholderAuthor(t *testing.T) {
 		name       string
 		authorRow  string // "" = no AuthorID
 		hint       string
+		narrator   string // book.Narrator
 		wantAuthor string // "" = no title+author call at all
+		wantSent   string // author a title+author call carried when wantAuthor is "" (narrator-as-author rung)
 	}{
 		{name: "placeholder from AuthorID", authorRow: "Unknown Author"},
 		{name: "narrator placeholder hint", hint: "read by narrator"},
@@ -75,6 +77,9 @@ func TestSearchMetadataForBook_NeverSendsPlaceholderAuthor(t *testing.T) {
 		{name: "narrator placeholder hint over placeholder row", authorRow: "Unknown Author", hint: "read by narrator"},
 		{name: "real author from AuthorID", authorRow: "Greg Pak", wantAuthor: "Greg Pak"},
 		{name: "real hint", hint: "Greg Pak", wantAuthor: "Greg Pak"},
+		{name: "placeholder narrator is not sent as an author", authorRow: "Unknown Author", narrator: "read by narrator"},
+		{name: "unknown narrator is not sent as an author", narrator: "Unknown Narrator"},
+		{name: "real narrator is still tried as an author", authorRow: "Unknown Author", narrator: "Kim Mai Guest", wantSent: "Kim Mai Guest"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,6 +91,9 @@ func TestSearchMetadataForBook_NeverSendsPlaceholderAuthor(t *testing.T) {
 				a, err := store.CreateAuthor(tc.authorRow)
 				require.NoError(t, err)
 				b.AuthorID = &a.ID
+			}
+			if tc.narrator != "" {
+				b.Narrator = &tc.narrator
 			}
 			book, err := store.CreateBook(b)
 			require.NoError(t, err)
@@ -99,7 +107,9 @@ func TestSearchMetadataForBook_NeverSendsPlaceholderAuthor(t *testing.T) {
 			rec.mu.Lock()
 			defer rec.mu.Unlock()
 			assert.Contains(t, rec.titles, "Planet Hulk", "the title is always searched")
-			if tc.wantAuthor == "" {
+			if tc.wantSent != "" {
+				assert.Equal(t, []string{tc.wantSent}, rec.authors, "only the real narrator may be sent as an author")
+			} else if tc.wantAuthor == "" {
 				assert.Empty(t, rec.authors, "no title+author call may carry a placeholder")
 			} else {
 				assert.Contains(t, rec.authors, tc.wantAuthor)
