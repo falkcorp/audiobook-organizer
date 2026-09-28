@@ -410,6 +410,9 @@ func sortByMetricLabel(sortBy string) string {
 	}
 }
 
+// maxListIDs caps the ids= parameter of the library list.
+const maxListIDs = 500
+
 // searchNamesUnindexedFilterField reports the first field in a search query
 // that the library filter layer knows but the search index cannot answer.
 // A query that does not parse is left to the search path's own fallback.
@@ -560,6 +563,25 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 		// tested first while ignoring the other. Both are restrictions, so both
 		// have to apply.
 		restrictIDs = intersectIDSets(restrictIDs, idSetFrom(bookIDs))
+	}
+
+	// ids=a,b,c narrows the list to those books — the Library's live-update
+	// path refetches just the rows a books.changed event named instead of
+	// reloading the page. It is a restriction like the ones above, ANDed with
+	// everything else on the request, and capped so a client cannot turn it
+	// into an unbounded fan-out.
+	if raw := strings.TrimSpace(c.Query("ids")); raw != "" {
+		var ids []string
+		for _, id := range strings.Split(raw, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) > maxListIDs {
+			httputil.RespondWithBadRequest(c, "ids: at most "+strconv.Itoa(maxListIDs)+" book ids per request")
+			return
+		}
+		restrictIDs = intersectIDSets(restrictIDs, idSetFrom(ids))
 	}
 
 	// Parse optional filters

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.181.0
+// version: 1.182.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-25
+// last-edited: 2026-09-27
 
 package database
 
@@ -2569,6 +2569,8 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 
 	// memdb write-through (always on when initialized)
 	p.UpsertBookToMemDB(context.Background(), book)
+	// After the memdb write, so a client reacting to the event reads the row.
+	notifyBookChanged(BookChangeCreated, book.ID)
 
 	return book, nil
 }
@@ -2928,6 +2930,7 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 
 	// memdb write-through
 	p.UpsertBookToMemDB(context.Background(), book)
+	notifyBookChanged(BookChangeUpdated, id)
 
 	return book, nil
 }
@@ -3488,6 +3491,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 
 	// memdb write-through
 	p.DeleteBookFromMemDB(context.Background(), id)
+	notifyBookChanged(BookChangeDeleted, id)
 
 	return nil
 }

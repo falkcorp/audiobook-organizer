@@ -99,3 +99,21 @@ func TestListAudiobooks_DurationAndMetadataAppliedFilters(t *testing.T) {
 		assert.Equal(t, http.StatusOK, code, "a colon in ordinary text must still search")
 	})
 }
+
+// ids= is the Library's live-update refetch: exactly the named rows, with the
+// count of that set, whatever else is on the page.
+func TestListAudiobooks_IDsParam(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+	a := createTestBook(t, "IDs A")
+	b := createTestBook(t, "IDs B")
+	_ = createTestBook(t, "IDs C")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks?limit=50&ids="+a.ID+","+b.ID, nil)
+	w := httptest.NewRecorder()
+	server.router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	data := parseJSONResponse(t, w)["data"].(map[string]any)
+	assert.Len(t, data["items"].([]any), 2)
+	assert.Equal(t, float64(2), data["count"])
+}
