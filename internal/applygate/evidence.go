@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package applygate
 
@@ -129,7 +129,15 @@ func CheckEvidenceInBatch(book *database.Book, authors Authors, rt database.Book
 		audio.Outcome, audio.Detail = OutcomeAgree, "audio intro names this title/author"
 	}
 	v.Checks = append(v.Checks, audio)
+	v.tally()
+	return v
+}
 
+// tally derives Pass, Reason, Detail and Agreements from Checks: the first
+// block refuses; otherwise at least MinAgreements agreements pass. It is
+// re-run after a check is revised (applyTranscribedTitle).
+func (v *EvidenceVerdict) tally() {
+	v.Pass, v.Reason, v.Detail, v.Agreements = false, "", "", 0
 	for _, ch := range v.Checks {
 		switch ch.Outcome {
 		case OutcomeBlock:
@@ -141,15 +149,14 @@ func CheckEvidenceInBatch(book *database.Book, authors Authors, rt database.Book
 		}
 	}
 	if v.Reason != "" {
-		return v
+		return
 	}
 	if v.Agreements < MinAgreements {
 		v.Reason = ReasonInsufficientEvidence
 		v.Detail = strconv.Itoa(v.Agreements) + " independent signal(s) agree, need " + strconv.Itoa(MinAgreements)
-		return v
+		return
 	}
 	v.Pass = true
-	return v
 }
 
 // overwrites lists identity fields the candidate would REPLACE (not fill).

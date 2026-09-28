@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
 // last-edited: 2026-09-28
 //
@@ -113,35 +113,6 @@ func ResolveCandidateSearchQuery(files BookFilesGetter, book *database.Book) Can
 		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceFolderTitle, Usable: true}
 	}
 	return CandidateSearchQuery{}
-}
-
-// TranscribedSearchQueries lists every transcribed title the resolver could
-// have searched book by, in the resolver's order: the book-level one, then
-// each present file's. The apply gate's caller uses it to prove a cached
-// candidate row was fetched by one of them (see applygate.TranscribedSearch).
-func TranscribedSearchQueries(files BookFilesGetter, book *database.Book) []CandidateSearchQuery {
-	if book == nil {
-		return nil
-	}
-	var out []CandidateSearchQuery
-	seen := map[string]bool{}
-	add := func(t, src string) {
-		if t != "" && !seen[t] {
-			seen[t] = true
-			out = append(out, CandidateSearchQuery{Title: t, Source: src, Usable: true})
-		}
-	}
-	add(usableTitle(book.TranscribedTitle), SearchQuerySourceTranscribedTitle)
-	if files != nil {
-		if bookFiles, err := files.GetBookFiles(book.ID); err == nil {
-			for i := range bookFiles {
-				if !bookFiles[i].Missing {
-					add(usableTitle(bookFiles[i].TranscribedTitle), SearchQuerySourceFileTranscribedText)
-				}
-			}
-		}
-	}
-	return out
 }
 
 // usableTitle returns the trimmed title, or "" when it is absent or itself

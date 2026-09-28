@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-28
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
@@ -37,6 +38,11 @@ type cachedApplyService interface {
 	// the cache row must have been fetched for the book's current title/author.
 	// liveAuthors is database.LiveBookAuthorNames for the book.
 	ValidateCachedIdentityForBook(entry *metafetch.MetadataCandidateCache, book *database.Book, liveAuthors []string) error
+	// CachedQueryMatchesIdentity reports whether the row was fetched for
+	// query (a transcribed stand-in title) and the book's current author:
+	// the proof that lets the gate accept a transcription-found candidate
+	// (cachedTranscribedSearch).
+	CachedQueryMatchesIdentity(entry *metafetch.MetadataCandidateCache, book *database.Book, liveAuthors []string, query string) bool
 	// ApplyMetadataCandidateWithOptions is ApplyMetadataCandidate; opts records
 	// an owner-reviewed override of the certainty gate in the change history.
 	ApplyMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)
@@ -337,7 +343,9 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	if aerr != nil {
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipAuthorsUnreadable, Err: aerr}
 	}
-	v := applygate.EvaluateInBatch(book, authors, gateRuntime(books, book), &cand, svc.ValidateCachedIdentityForBook(entry, book, authors), claims)
+	idErr := svc.ValidateCachedIdentityForBook(entry, book, authors)
+	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims,
+		cachedTranscribedSearch(svc, books, entry, book, authors, idErr))
 	// Any owner-review pin (row, bulk, or the hashless marker) lifts the
 	// certainty gate. A single-row pin is an approval that overwrites
 	// (ReviewApproved); a bulk button stays fill-only unless the request asks
@@ -386,13 +394,61 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *
 	if aerr != nil {
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipAuthorsUnreadable, Err: aerr}
 	}
-	v := applygate.EvaluateInBatch(book, authors, gateRuntime(books, book), &cand, fetchTimeIdentity(cr.Book.Title, cr.Book.Author, book, authors), claims)
+	idErr := fetchTimeIdentity(cr.Book.Title, cr.Book.Author, cr.SearchQuery, book, authors)
+	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims,
+		opResultTranscribedSearch(books, book, cr))
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v}
 	if !v.Allowed {
 		plan.Reason = applySkipGateBlocked
 		plan.Err = fmt.Errorf("%s: %s", v.Reason, v.Detail)
 	}
 	return plan
+}
+
+// cachedTranscribedSearch tells the gate whether the cached candidate was
+// found by searching the book's transcribed title, with the proof
+// EvaluateTranscribed needs to lift identity_stale. It is consulted only when
+// the identity check failed as stale (a row matching the book's own title
+// was searched by that title, so there is nothing to explain).
+//
+// The proof is two facts, both about the book as it is NOW:
+//   - the batch fetch would search it by a transcribed title today
+//     (metabatch.ResolveCandidateSearchQuery: its stored title is still
+//     unsearchable and that transcription is still the first usable one);
+//   - the cache row was written for exactly that query and a current author
+//     (metafetch.Service.CachedQueryMatchesIdentity).
+//
+// A row fetched for another query, another author, or before the book got a
+// real title fails one of them, and the refusal stays identity_stale.
+func cachedTranscribedSearch(svc cachedApplyService, books bookReader, entry *metafetch.MetadataCandidateCache, book *database.Book, authors []string, idErr error) applygate.TranscribedSearch {
+	if idErr == nil || !errors.Is(idErr, metafetch.ErrStaleMetadataCache) {
+		return applygate.TranscribedSearch{}
+	}
+	cur := metabatch.ResolveCandidateSearchQuery(books, book)
+	if !cur.Usable || !metabatch.IsTranscribedSource(cur.Source) {
+		return applygate.TranscribedSearch{}
+	}
+	if !svc.CachedQueryMatchesIdentity(entry, book, authors, cur.Title) {
+		return applygate.TranscribedSearch{}
+	}
+	return applygate.TranscribedSearch{Query: cur.Title, Source: cur.Source, ExplainsStaleIdentity: true}
+}
+
+// opResultTranscribedSearch is cachedTranscribedSearch for an op-result
+// candidate, whose fetch recorded the query it searched
+// (CandidateResult.SearchQuery). It names the transcribed query only when the
+// book would still be searched by exactly it; the identity leg there is
+// fetchTimeIdentity, which does not depend on the query, so nothing here
+// lifts identity_stale.
+func opResultTranscribedSearch(books bookReader, book *database.Book, cr CandidateResult) applygate.TranscribedSearch {
+	if cr.SearchQuery == "" || !metabatch.IsTranscribedSource(cr.SearchQuerySource) {
+		return applygate.TranscribedSearch{}
+	}
+	cur := metabatch.ResolveCandidateSearchQuery(books, book)
+	if !cur.Usable || cur.Title != cr.SearchQuery || !metabatch.IsTranscribedSource(cur.Source) {
+		return applygate.TranscribedSearch{}
+	}
+	return applygate.TranscribedSearch{Query: cur.Title, Source: cur.Source}
 }
 
 // excludedFromPreview reports whether the bulk-apply preview leaves this book
@@ -411,8 +467,14 @@ func excludedFromPreview(plan cachedApplyPlan) bool {
 // today, so no row that passed before fails now), the live primary author, or
 // every live author joined as the API's author_name joins them. Anything else
 // was fetched for an author the book no longer has.
-func fetchTimeIdentity(fetchedTitle, fetchedAuthor string, book *database.Book, liveAuthors []string) error {
-	if strings.TrimSpace(fetchedTitle) == "" {
+//
+// searchQuery is the query the fetch recorded (CandidateResult.SearchQuery).
+// A row with no title AND no query is a legacy row that recorded nothing and
+// fails closed; a row that recorded its query but no title is a book whose
+// stored title was blank when fetched (it was searched by a stand-in), and it
+// is judged like any other: is the title still what it was.
+func fetchTimeIdentity(fetchedTitle, fetchedAuthor, searchQuery string, book *database.Book, liveAuthors []string) error {
+	if strings.TrimSpace(fetchedTitle) == "" && strings.TrimSpace(searchQuery) == "" {
 		return fmt.Errorf("%w: fetch result for book %s recorded no title", metafetch.ErrStaleMetadataCache, book.ID)
 	}
 	if util.NormalizeTitle(fetchedTitle) != util.NormalizeTitle(book.Title) {
