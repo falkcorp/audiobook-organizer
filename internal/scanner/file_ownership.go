@@ -8,9 +8,12 @@ package scanner
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -32,20 +35,39 @@ type fileOwnershipVerdict struct {
 }
 
 // scannedFilesOf returns the files a scanned Book would claim: its segment
-// list, or its own path for a single-file book. A directory-shaped book (no
-// segment list, FilePath is a folder) returns nil: its files are enumerated
-// only later, by createBookFilesForBook, and it is found by its directory path.
-func scannedFilesOf(book *Book) []string {
+// list, its own path for a single-file book, or -- for a directory-shaped book
+// (no segment list, FilePath is a folder) -- the audio files directly in that
+// folder, enumerated the way createBookFilesForBook will enumerate them when it
+// mints the book's rows.
+func scannedFilesOf(book *Book) ([]string, error) {
 	if len(book.SegmentFiles) > 0 {
-		return book.SegmentFiles
+		return book.SegmentFiles, nil
 	}
 	if book.FilePath == "" {
-		return nil
+		return nil, nil
 	}
-	if info, err := os.Stat(book.FilePath); err == nil && info.IsDir() {
-		return nil
+	info, err := os.Stat(book.FilePath)
+	if err != nil || !info.IsDir() {
+		return []string{book.FilePath}, nil
 	}
-	return []string{book.FilePath}
+	entries, err := os.ReadDir(book.FilePath)
+	if err != nil {
+		return nil, fmt.Errorf("list %s: %w", book.FilePath, err)
+	}
+	audioExts := make(map[string]bool, len(config.AppConfig.SupportedExtensions))
+	for _, ext := range config.AppConfig.SupportedExtensions {
+		audioExts[ext] = true
+	}
+	var files []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if audioExts[strings.ToLower(filepath.Ext(e.Name()))] {
+			files = append(files, filepath.Join(book.FilePath, e.Name()))
+		}
+	}
+	return files, nil
 }
 
 // checkFileOwnership decides whether saveBookToDatabase may treat book as a
@@ -62,16 +84,21 @@ func scannedFilesOf(book *Book) []string {
 //
 // The decision, in order:
 //
-//  1. A book already at book.FilePath is an UPDATE of that book: proceed, the
-//     upsert below handles it exactly as before.
-//  2. Otherwise collect the live owners of every scanned file. Proceed only if
-//     no file is owned (a genuinely new book), or the scanned files are
-//     exactly one owner's present (non-Missing) rows -- the rescan of a
-//     multi-file book whose row was normalized to its directory, which the
-//     hash lookup below re-finds.
+//  1. A single-file or directory-shaped book already at book.FilePath is an
+//     update of that book: proceed, the upsert below handles it exactly as
+//     before. A segment-list book gets no such shortcut, because its FilePath
+//     is only its first file: the hit can be fragment #1 of a folder whose
+//     chapters were imported as separate books, and the new grouping must not
+//     be overlaid onto it.
+//  2. Collect the live owners of every scanned file. Proceed only if no file is
+//     owned (a genuinely new book), or exactly one book owns every scanned file
+//     and all of that book's present (non-Missing) rows are among them -- the
+//     rescan of the same book, whether or not its row was normalized to its
+//     directory.
 //  3. Everything else is a fragment and is skipped: files owned by a
 //     different book, a mix of owned and unowned files, files owned by
-//     several books. Creating a book there is exactly the bleed.
+//     several books. Creating (or overlaying) a book there is exactly the
+//     bleed.
 //
 // A row whose book no longer exists is dangling, not an owner. A store error
 // is returned, never read as "unowned": the caller fails closed, the same way
@@ -81,13 +108,19 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 	if store == nil || book == nil {
 		return fileOwnershipVerdict{}, nil
 	}
-	if atPath, err := store.GetBookByFilePath(book.FilePath); err != nil {
-		return fileOwnershipVerdict{}, fmt.Errorf("book lookup for %s: %w", book.FilePath, err)
-	} else if atPath != nil {
-		return fileOwnershipVerdict{}, nil
+	// A segment list is the one shape whose FilePath is merely its first file;
+	// every other shape's FilePath names the whole book.
+	if len(book.SegmentFiles) <= 1 {
+		if atPath, err := store.GetBookByFilePath(book.FilePath); err != nil {
+			return fileOwnershipVerdict{}, fmt.Errorf("book lookup for %s: %w", book.FilePath, err)
+		} else if atPath != nil {
+			return fileOwnershipVerdict{}, nil
+		}
 	}
-
-	files := scannedFilesOf(book)
+	files, err := scannedFilesOf(book)
+	if err != nil {
+		return fileOwnershipVerdict{}, err
+	}
 	if len(files) == 0 {
 		return fileOwnershipVerdict{}, nil
 	}

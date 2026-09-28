@@ -8,6 +8,7 @@ package scanner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,6 +57,7 @@ func newOwnershipFixture(t *testing.T) ownershipFixture {
 	t.Cleanup(func() { config.AppConfig = prevConfig })
 	root := t.TempDir()
 	config.AppConfig.RootDir = root
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
 
 	dir := filepath.Join(root, "Christopher Paolini", "Eldest")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -129,6 +131,25 @@ func TestCheckFileOwnership(t *testing.T) {
 		{
 			name: "a book already at the path is an update",
 			book: func(f ownershipFixture) *Book { return &Book{FilePath: f.dir} },
+		},
+		{
+			// A directory-shaped book with no row at the folder: its files are
+			// the folder's audio files, and the parent owns three of them while
+			// two are loose -- a new directory book there would duplicate the
+			// parent's rows.
+			name: "new directory book over owned files is a fragment",
+			book: func(f ownershipFixture) *Book { return &Book{FilePath: f.dir} },
+			wrap: func(f ownershipFixture) scannerStore {
+				_, err := f.store.ModifyBook(f.parent.ID, func(b *database.Book) error {
+					b.FilePath = f.chapters[0] // not normalized: no row at the folder
+					return nil
+				})
+				if err != nil {
+					panic(err)
+				}
+				return f.store
+			},
+			wantSkip: true,
 		},
 		{
 			name: "dangling row whose book is gone owns nothing",
@@ -211,5 +232,44 @@ func TestSaveBookToDatabase_ChapterOfOwnedBookIsNotImported(t *testing.T) {
 	}
 	if got, _ := f.store.GetBookByFilePath(f.loose[0]); got == nil {
 		t.Fatalf("unowned file was not imported")
+	}
+}
+
+// TestSaveBookToDatabase_RegroupedFragmentFolderIsNotOverlaid is the first
+// rescan after the wider chapter grouping deploys: a folder whose chapters were
+// ALREADY imported as one single-file book each is now emitted as one
+// multi-file group whose FilePath is fragment #1's path. The path hit must not
+// be treated as "update fragment #1 with the group's values" -- the files
+// belong to several books, so the group is a fragment set and is skipped.
+func TestSaveBookToDatabase_RegroupedFragmentFolderIsNotOverlaid(t *testing.T) {
+	f := newOwnershipFixture(t)
+	useScannerStore(t, f.store)
+
+	var frags []*database.Book
+	for i, p := range f.loose {
+		b, err := f.store.CreateBook(&database.Book{Title: fmt.Sprintf("%02d", i+1), FilePath: p})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.store.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: p}); err != nil {
+			t.Fatal(err)
+		}
+		frags = append(frags, b)
+	}
+
+	group := &Book{FilePath: f.loose[0], SegmentFiles: f.loose, Title: "The Whole Book", Author: "Someone", Duration: 36000}
+	v, err := checkFileOwnership(group)
+	if err != nil || !v.skip || len(v.owners) != len(frags) {
+		t.Fatalf("verdict = %+v, err %v; want a skip naming %d owners", v, err, len(frags))
+	}
+	if err := saveBookToDatabase(context.Background(), group); err != nil {
+		t.Fatalf("saveBookToDatabase: %v", err)
+	}
+	got, err := f.store.GetBookByID(frags[0].ID)
+	if err != nil || got == nil {
+		t.Fatalf("fragment #1 lookup: %v", err)
+	}
+	if got.Title != "01" {
+		t.Fatalf("fragment #1 was overlaid with the group's values: title %q", got.Title)
 	}
 }

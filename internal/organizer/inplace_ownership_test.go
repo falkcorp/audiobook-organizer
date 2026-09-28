@@ -140,6 +140,8 @@ func TestCommitLanding_InPlaceMoveRecordsTheRealOldPath(t *testing.T) {
 	svc, store, root := setupInPlace(t)
 	src := filepath.Join(root, "incoming", "solo.m4b")
 	book := addInPlaceBook(t, store, "solo", "Solo", src, filled(150, 6), nil, 0)
+	imported := "imported"
+	book.LibraryState = &imported
 
 	landing, err := svc.OrganizeOneBook(svc.newOrganizer(), book, &noopLogger{})
 	if err != nil {
@@ -160,8 +162,16 @@ func TestCommitLanding_InPlaceMoveRecordsTheRealOldPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var found bool
+	var found, stateFound bool
 	for _, c := range changes {
+		if c.ChangeType == "metadata_update" && c.FieldName == "library_state" {
+			stateFound = true
+			// reOrganizeInPlace stamps the in-memory book "organized" as it
+			// moves it; the record must carry the state from before the move.
+			if c.OldValue != "imported" || c.NewValue != "organized" {
+				t.Fatalf("library_state record old=%q new=%q, want imported -> organized", c.OldValue, c.NewValue)
+			}
+		}
 		if c.ChangeType == "organize_skipped" {
 			t.Fatalf("a real move was recorded as organize_skipped: %+v", c)
 		}
@@ -172,7 +182,7 @@ func TestCommitLanding_InPlaceMoveRecordsTheRealOldPath(t *testing.T) {
 			}
 		}
 	}
-	if !found {
-		t.Fatalf("no organize_rename recorded; changes: %+v", changes)
+	if !found || !stateFound {
+		t.Fatalf("organize_rename recorded=%v, library_state recorded=%v; changes: %+v", found, stateFound, changes)
 	}
 }

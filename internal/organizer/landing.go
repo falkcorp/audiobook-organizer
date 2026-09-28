@@ -51,6 +51,12 @@ type Landing struct {
 	// Empty for a copy landing, whose book row is not touched.
 	SourcePath string
 
+	// SourceLibraryState is the book's library_state BEFORE this organize,
+	// set alongside SourcePath for the same reason: reOrganizeInPlace sets the
+	// in-memory book to "organized" as it moves it, so the state-change record
+	// read from the book would say organized -> organized.
+	SourceLibraryState string
+
 	// Resolution is set when an in-place landing met an occupied destination
 	// and resolved it: adopted as a version of the occupant's book (Path is
 	// then the unchanged source) or moved to a _copyN name. nil when the
