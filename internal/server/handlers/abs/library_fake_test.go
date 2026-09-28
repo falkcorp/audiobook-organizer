@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 package abs_test
 
@@ -77,7 +77,7 @@ type fakeLibrary struct {
 	countFiltered int
 	authorCounts  int
 
-	// genreScans counts GetDistinctGenres calls: the whole book:* keyspace,
+	// genreScans counts GetGenreCounts calls: the whole book:* keyspace,
 	// json.Unmarshalling every row to read one field.
 	//
 	// Since 2026-09-05 /search reads genres from the cached /filterdata
@@ -86,7 +86,7 @@ type fakeLibrary struct {
 	// that.
 	genreScans int
 
-	// searchScans counts SearchBooks calls, so a test can prove a repeated
+	// searchScans counts SearchBooksFiltered calls, so a test can prove a repeated
 	// query inside absSearchCacheTTL is answered from the cache.
 	searchScans int
 	// badRows makes GetBooksForSearch report these IDs as unreadable rows.
@@ -98,7 +98,7 @@ type fakeLibrary struct {
 	sigHydrations int
 
 	// genreGate, when non-nil, blocks every genre scan until closed. Because
-	// GetDistinctGenres runs once per /filterdata build, holding it lets a test
+	// GetGenreCounts runs once per /filterdata build, holding it lets a test
 	// see how many filterdata builds start at once.
 	genreGate chan struct{}
 
@@ -570,28 +570,6 @@ func (f *fakeLibrary) genreScanCalls() int {
 	return f.genreScans
 }
 
-func (f *fakeLibrary) SearchBooks(query string, limit, offset int) ([]database.Book, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.searchScans++
-	q := strings.ToLower(query)
-	out := []database.Book{}
-	for i, id := range f.order {
-		b := f.books[id]
-		if !strings.Contains(strings.ToLower(b.Title), q) {
-			continue
-		}
-		if i < offset {
-			continue
-		}
-		if limit > 0 && len(out) >= limit {
-			break
-		}
-		out = append(out, *b)
-	}
-	return out, nil
-}
-
 func (f *fakeLibrary) GetBookFiles(bookID string) ([]database.BookFile, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -701,21 +679,8 @@ func (f *fakeLibrary) ListNarrators() ([]database.Narrator, error) {
 	return append([]database.Narrator(nil), f.narrators...), nil
 }
 
-func (f *fakeLibrary) GetDistinctGenres() ([]string, error) {
-	counts, err := f.GetGenreCounts()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(counts))
-	for g := range counts {
-		out = append(out, g)
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-// GetGenreCounts is the scan GetDistinctGenres derives from; genreScans counts
-// it, so a /filterdata build still registers as exactly one scan.
+// GetGenreCounts is the genre scan; genreScans counts it, so a /filterdata
+// build registers as exactly one scan.
 func (f *fakeLibrary) GetGenreCounts() (map[string]int, error) {
 	f.mu.Lock()
 	f.genreScans++

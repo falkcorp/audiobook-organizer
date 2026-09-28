@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -155,8 +155,13 @@ type LibrarySummaryReader interface {
 }
 
 // LibrarySearchReader covers search and facets.
+//
+// There is deliberately no unfiltered SearchBooks and no GetDistinctGenres
+// here. Search goes through the filtered variants (see buildSearch), and the
+// genre facet through GetGenreCounts, which carries the per-genre numItems a
+// /search genre hit needs; both older methods had no caller left on this
+// surface when they were removed on 2026-09-28.
 type LibrarySearchReader interface {
-	SearchBooks(query string, limit, offset int) ([]database.Book, error)
 	// SearchBooksFiltered applies a BookSummaryFilter INSIDE the search scan, so
 	// only admitted books count toward limit. The ABS search uses it with
 	// absItemFilterBase(); see buildSearch for why SearchBooks alone was wrong.
@@ -170,7 +175,6 @@ type LibrarySearchReader interface {
 	// point-lookup ranks and hydrates hits skipping unreadable rows singly.
 	SearchBookRanksFiltered(query string, ids []string, f database.BookSummaryFilter) (map[string]database.SearchRank, error)
 	GetBooksForSearch(ids []string, withSig bool) ([]database.Book, []string, error)
-	GetDistinctGenres() ([]string, error)
 	// GetGenreCounts feeds /filterdata's genre list AND the per-genre numItems
 	// that a /search genre hit must carry (AudioBooth decodes search genres as
 	// {name, numItems} with both required).
@@ -465,9 +469,9 @@ type Handler struct {
 	// 🔴 IT WAS UNCACHED AND IT IS NOT CHEAP. Measured against production
 	// (68K rows) on 2026-08-25: 7.17s and 6.57s on two CONSECUTIVE calls — the
 	// second no faster than the first, which is what "no cache at all" looks
-	// like from outside. GetDistinctGenres and GetDistinctLanguages each walk
-	// the entire book:* keyspace and json.Unmarshal every row to read ONE
-	// field, and publishedDecades (then a 5000-row GetAllBooksCore projection,
+	// like from outside. GetDistinctGenres (now GetGenreCounts) and
+	// GetDistinctLanguages each walk the entire book:* keyspace and
+	// json.Unmarshal every row to read ONE field, and publishedDecades (then a 5000-row GetAllBooksCore projection,
 	// since 2026-09-11 a whole-library GetDistinctPublishedYears walk) is a
 	// third pass, so the endpoint pays three library scans per request on the
 	// page-load path.

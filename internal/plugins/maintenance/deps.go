@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.54.0
+// version: 1.54.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -330,15 +330,57 @@ type ReconcileStore interface {
 }
 
 // StoreProvider exposes the database handles the ops need. Store() used to hand
-// out all 398 methods; the two forwarding ops now take exactly what they pass on.
+// out all 398 methods; each op now gets an accessor returning exactly what it
+// uses.
+//
+// It is the composition of three accessor groups, split on 2026-09-28 when the
+// ninth accessor pushed the flat list past interfacebloat's cap of 8. The method
+// set is unchanged, so *server.Server and every test fake still satisfy it
+// untouched. A NEW accessor goes into whichever group it belongs to (or a new
+// group embedded here) -- never directly onto StoreProvider, and never by
+// widening OpsStore for one caller.
 type StoreProvider interface {
+	opsStoreProvider
+	forwardingStoreProvider
+	keyspaceStoreProvider
+}
+
+// opsStoreProvider is the common path, OpsStore, plus the single-purpose
+// accessors that exist only because OpsStore itself is at the embed cap.
+type opsStoreProvider interface {
 	// OpsStore is the common path: 53 methods, used by 39 of the 41 sites.
 	OpsStore() OpsStore
+	// OperationQueueStore serves the dedupe-book-file-rows scan guard: an apply
+	// run must refuse while library.scan is queued or running, because a scan
+	// concurrently rewrites the same book_file rows that op deletes.
+	OperationQueueStore() OpQueueReader
+	// VersionPrimaryStore serves version-group-primary-repair: the chapter
+	// table (the fallback when ffprobe cannot read a file) and the metadata
+	// history its apply records after each write.
+	VersionPrimaryStore() VersionPrimaryStore
+}
+
+// forwardingStoreProvider serves the ops that forward their store into
+// another package (internal/reconcile, internal/itunes/service,
+// internal/merge), each typed by that package's own requirement.
+type forwardingStoreProvider interface {
 	// ReconcileStore serves runITunesHeal, which forwards into internal/reconcile.
 	ReconcileStore() ReconcileStore
 	// PlaylistStore serves runITunesPlaylistImport, which forwards into
 	// internal/itunes/service.
 	PlaylistStore() database.UserPlaylistStore
+	// MergeUserStateStore serves repair-merged-user-state: finding and moving
+	// user state (ubs, upos, bookmarks) stranded under merged-away books. Every
+	// method it needs is on database.Store, so a plain `return s.store` is
+	// correct; the capabilities it probes (sync identity, bookmarks) are
+	// resolved with database.AsCapability inside internal/merge.
+	MergeUserStateStore() merge.UserStateRepairStore
+}
+
+// keyspaceStoreProvider serves the separate keyspaces that are deliberately
+// kept out of the wide Store interface. Two of the three are resolved as
+// capabilities; see FileProvenanceStore for the database.AsCapability rule.
+type keyspaceStoreProvider interface {
 	// MetadataCacheStore serves runMetadataCacheReap. The metadata-candidate
 	// cache is a separate keyspace ("metadata_cache:<book_id>") with its own
 	// four-method interface, and OpsStore names none of them -- so the reaper
@@ -365,20 +407,6 @@ type StoreProvider interface {
 	// implements it; the op reports that as "not supported" rather than
 	// panicking.
 	ReviewStatusIndexStore() database.ReviewStatusIndexRepairer
-	// MergeUserStateStore serves repair-merged-user-state: finding and moving
-	// user state (ubs, upos, bookmarks) stranded under merged-away books. Every
-	// method it needs is on database.Store, so a plain `return s.store` is
-	// correct; the capabilities it probes (sync identity, bookmarks) are
-	// resolved with database.AsCapability inside internal/merge.
-	MergeUserStateStore() merge.UserStateRepairStore
-	// OperationQueueStore serves the dedupe-book-file-rows scan guard: an apply
-	// run must refuse while library.scan is queued or running, because a scan
-	// concurrently rewrites the same book_file rows that op deletes.
-	OperationQueueStore() OpQueueReader
-	// VersionPrimaryStore serves version-group-primary-repair: the chapter
-	// table (the fallback when ffprobe cannot read a file) and the metadata
-	// history its apply records after each write.
-	VersionPrimaryStore() VersionPrimaryStore
 }
 
 // VersionPrimaryStore is what version-group-primary-repair needs beyond
