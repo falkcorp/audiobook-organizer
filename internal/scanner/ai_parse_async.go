@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-09-19
+// last-edited: 2026-09-28
 
 package scanner
 
@@ -713,6 +713,13 @@ func newAIParserUnjournalled(scanLog logger.Logger) (aiBatchParser, bool) {
 // FilePath is still the row's path and is the right thing to stamp.
 func saveBookAndReportPath(ctx context.Context, book *Book) (string, error) {
 	if err := saveBook(ctx, book); err != nil {
+		if errors.Is(err, errFileOwnedByOtherBook) {
+			// Not this book's files (the worker withdraws such books from the
+			// candidates, so this is the race where ownership changed between
+			// the two saves). Nothing was saved, so nothing may be stamped:
+			// the stamp would land on the owner.
+			return "", nil
+		}
 		return "", err
 	}
 	return book.FilePath, nil

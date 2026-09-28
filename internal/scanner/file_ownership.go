@@ -1,37 +1,86 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
 // last-edited: 2026-09-28
 
 package scanner
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/oklog/ulid/v2"
 )
 
-// fragmentSkipCount counts scanned books that were NOT saved because their
-// files already belong to another book's book_file rows. Reported once per run
-// in the scan summary.
-var fragmentSkipCount atomic.Int64
+var (
+	// ownershipLookupErrCount counts scanned books whose ownership could not
+	// be determined because a store read failed. Distinct from
+	// dupLookupSkipCount, whose summary line is about the hash lookup.
+	ownershipLookupErrCount atomic.Int64
+	// stagedAppendCount counts files appended to an existing book because
+	// they arrived after the book was imported (a staged download).
+	stagedAppendCount atomic.Int64
+)
+
+// errFileOwnedByOtherBook is what saveBookToDatabase returns, wrapped in an
+// *ownershipSkipError, when the scanned book was NOT saved because its files
+// belong to another book. It is not a failure: callers test for it with
+// errors.Is and then skip everything that would otherwise run against the
+// saved row -- book_file creation, chapters, the scan-cache stamp and AI
+// nomination. Until 2026-09-28 the skip returned nil, and every one of those
+// steps then ran against whatever book the path lookups resolved to, which was
+// the OWNER: its NeedsRescan was cleared, its chapters were rewritten and an AI
+// parse was queued for it on every scan.
+var errFileOwnedByOtherBook = errors.New("scanned files already belong to another book")
+
+// ownershipSkipError carries the per-book record of an ownership skip.
+type ownershipSkipError struct {
+	Path   string
+	Owners []string
+	Reason string
+	// AppendTo, when set, is the one book the scanned files belong to, and
+	// Unowned are the scanned files it does not have rows for yet: the caller
+	// appends them (appendScannedFilesToOwner) instead of creating a book.
+	AppendTo string
+	Unowned  []string
+}
+
+func (e *ownershipSkipError) Error() string {
+	return fmt.Sprintf("not importing %s: %s (owning book(s): %s)", e.Path, e.Reason, strings.Join(e.Owners, ","))
+}
+
+func (e *ownershipSkipError) Is(target error) bool { return target == errFileOwnedByOtherBook }
 
 // fileOwnershipVerdict is checkFileOwnership's answer.
 type fileOwnershipVerdict struct {
 	// skip is true when saving this scanned book would mint a NEW book over
-	// files another book already owns.
+	// files another book already owns, or overlay another book.
 	skip bool
 	// owners are the live books that own at least one scanned file, sorted,
 	// for the log line.
 	owners []string
 	// reason says which shape was refused.
 	reason string
+	// appendTo / unowned: a staged arrival. See checkFileOwnership step 3.
+	appendTo string
+	unowned  []string
+}
+
+func (v fileOwnershipVerdict) asError(path string) error {
+	return &ownershipSkipError{Path: path, Owners: v.owners, Reason: v.reason, AppendTo: v.appendTo, Unowned: v.unowned}
 }
 
 // scannedFilesOf returns the files a scanned Book would claim: its segment
@@ -70,6 +119,15 @@ func scannedFilesOf(book *Book) ([]string, error) {
 	return files, nil
 }
 
+// ownerState is what checkFileOwnership learned about one owning book ID.
+type ownerState int
+
+const (
+	ownerGone        ownerState = iota // dangling row: the book no longer exists
+	ownerLive                          // a live book
+	ownerSoftDeleted                   // soft-deleted (MarkedForDeletion), not yet purged
+)
+
 // checkFileOwnership decides whether saveBookToDatabase may treat book as a
 // book at all, by asking who already owns its files.
 //
@@ -90,32 +148,41 @@ func scannedFilesOf(book *Book) ([]string, error) {
 //     is only its first file: the hit can be fragment #1 of a folder whose
 //     chapters were imported as separate books, and the new grouping must not
 //     be overlaid onto it.
-//  2. Collect the live owners of every scanned file. Proceed only if no file is
-//     owned (a genuinely new book), or exactly one book owns every scanned file
-//     and all of that book's present (non-Missing) rows are among them -- the
-//     rescan of the same book, whether or not its row was normalized to its
-//     directory.
-//  3. Everything else is a fragment and is skipped: files owned by a
-//     different book, a mix of owned and unowned files, files owned by
-//     several books. Creating (or overlaying) a book there is exactly the
-//     bleed.
+//  2. Collect the owners of every scanned file. A row whose book no longer
+//     exists is dangling and owns nothing. A soft-deleted owner is ignored
+//     when any scanned file has a LIVE owner (the live book is the claim that
+//     matters; the soft-deleted one is on its way out), and counts otherwise
+//     (so a scan does not resurrect, as a new book, files the user deleted).
+//  3. Proceed when no file is owned (a genuinely new book) or exactly one book
+//     owns every scanned file and all of its present (non-Missing) rows are
+//     among them -- the rescan of the same book. In both cases the book the
+//     save would UPDATE, the one at book.FilePath, must be nil or that owner:
+//     otherwise the save would overlay the scanned grouping onto a different
+//     book (fragment #1 of a folder whose fragments never got rows).
+//  4. A staged arrival: exactly one live owner, every one of its present rows
+//     is among the scanned files, and the remaining scanned files have no
+//     rows at all. That is the owner, grown -- a download that was scanned
+//     half-written. The verdict names the owner and the new files, and the
+//     caller appends rows for them instead of creating a book.
+//  5. Everything else is a fragment and is skipped: files owned by a
+//     different book, owned files mixed with unowned ones in any other shape,
+//     files owned by several books.
 //
-// A row whose book no longer exists is dangling, not an owner. A store error
-// is returned, never read as "unowned": the caller fails closed, the same way
-// an undeterminable hash lookup does (H5).
+// A store error is returned, never read as "unowned": the caller fails closed.
 func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 	store := getStore()
 	if store == nil || book == nil {
 		return fileOwnershipVerdict{}, nil
 	}
+	segmentList := len(book.SegmentFiles) > 1
+	atPath, err := store.GetBookByFilePath(book.FilePath)
+	if err != nil {
+		return fileOwnershipVerdict{}, fmt.Errorf("book lookup for %s: %w", book.FilePath, err)
+	}
 	// A segment list is the one shape whose FilePath is merely its first file;
 	// every other shape's FilePath names the whole book.
-	if len(book.SegmentFiles) <= 1 {
-		if atPath, err := store.GetBookByFilePath(book.FilePath); err != nil {
-			return fileOwnershipVerdict{}, fmt.Errorf("book lookup for %s: %w", book.FilePath, err)
-		} else if atPath != nil {
-			return fileOwnershipVerdict{}, nil
-		}
+	if !segmentList && atPath != nil {
+		return fileOwnershipVerdict{}, nil
 	}
 	files, err := scannedFilesOf(book)
 	if err != nil {
@@ -130,42 +197,76 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 		scanned[f] = struct{}{}
 	}
 
-	live := make(map[string]bool) // bookID -> the book exists
-	owned := make(map[string]int) // bookID -> scanned files it owns
-	unowned := 0
+	state := make(map[string]ownerState)    // bookID -> what it is
+	fileOwners := make(map[string][]string) // scanned file -> owning book IDs (live or soft-deleted)
+	anyLive := false
 	for f := range scanned {
 		rows, err := database.BookFileRowsAtPath(store, f)
 		if err != nil {
 			return fileOwnershipVerdict{}, fmt.Errorf("book_file lookup for %s: %w", f, err)
 		}
-		fileOwners := 0
 		seen := make(map[string]struct{}, len(rows))
 		for _, r := range rows {
 			if _, dup := seen[r.BookID]; dup {
 				continue
 			}
 			seen[r.BookID] = struct{}{}
-			exists, known := live[r.BookID]
+			st, known := state[r.BookID]
 			if !known {
 				b, err := store.GetBookByID(r.BookID)
 				if err != nil {
 					return fileOwnershipVerdict{}, fmt.Errorf("owner lookup %s for %s: %w", r.BookID, f, err)
 				}
-				exists = b != nil
-				live[r.BookID] = exists
+				switch {
+				case b == nil:
+					st = ownerGone
+				case b.IsSoftDeleted():
+					st = ownerSoftDeleted
+				default:
+					st = ownerLive
+				}
+				state[r.BookID] = st
 			}
-			if !exists {
+			if st == ownerGone {
 				continue // dangling row: its book is gone, so it owns nothing
 			}
-			owned[r.BookID]++
-			fileOwners++
-		}
-		if fileOwners == 0 {
-			unowned++
+			if st == ownerLive {
+				anyLive = true
+			}
+			fileOwners[f] = append(fileOwners[f], r.BookID)
 		}
 	}
 
+	owned := make(map[string]int)
+	var unowned []string
+	softOnly := 0 // files whose only owners are soft-deleted books that are being ignored
+	for f := range scanned {
+		counted := 0
+		for _, id := range fileOwners[f] {
+			if anyLive && state[id] == ownerSoftDeleted {
+				continue
+			}
+			owned[id]++
+			counted++
+		}
+		if counted == 0 {
+			if len(fileOwners[f]) > 0 {
+				softOnly++
+			}
+			unowned = append(unowned, f)
+		}
+	}
+	slices.SortFunc(unowned, util.CompareNatural)
+
+	overlays := func(ownerID string) bool {
+		return segmentList && atPath != nil && atPath.ID != ownerID
+	}
+
 	if len(owned) == 0 {
+		if overlays("") {
+			return fileOwnershipVerdict{skip: true, owners: []string{atPath.ID},
+				reason: "another book already sits at this group's first file; the group would overwrite it"}, nil
+		}
 		return fileOwnershipVerdict{}, nil
 	}
 	owners := make([]string, 0, len(owned))
@@ -174,18 +275,15 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 	}
 	slices.Sort(owners)
 
-	switch {
-	case len(owners) > 1:
+	if len(owners) > 1 {
 		return fileOwnershipVerdict{skip: true, owners: owners, reason: "files are owned by several books"}, nil
-	case unowned > 0:
-		return fileOwnershipVerdict{skip: true, owners: owners, reason: "some files are owned by another book and some are not"}, nil
 	}
 
-	// One owner holds every scanned file. It is this same book only when every
-	// one of its PRESENT rows is among the scanned files: a row flagged Missing
-	// may be a file that has just reappeared, and one the scan did not emit at
-	// all is expected to be missing. Any present row outside the scanned set
-	// means the scanned files are a piece of a larger book.
+	// One owner. It is this same book only when every one of its PRESENT rows
+	// is among the scanned files: a row flagged Missing may be a file that has
+	// just reappeared, and one the scan did not emit at all is expected to be
+	// missing. Any present row outside the scanned set means the scanned files
+	// are a piece of a larger book.
 	ownerID := owners[0]
 	rows, err := store.GetBookFiles(ownerID)
 	if err != nil {
@@ -200,5 +298,210 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 				reason: "the files are part of a larger book that owns other files too"}, nil
 		}
 	}
-	return fileOwnershipVerdict{}, nil
+
+	if len(unowned) == 0 {
+		if overlays(ownerID) {
+			return fileOwnershipVerdict{skip: true, owners: []string{ownerID, atPath.ID},
+				reason: "a different book sits at this group's first file than the one owning its files"}, nil
+		}
+		return fileOwnershipVerdict{}, nil
+	}
+
+	// Staged arrival: the owner is whole inside the scanned set and the rest
+	// of the scanned files are new. Only files with NO rows qualify: a file
+	// held by a soft-deleted book is left to that book, not reassigned by an
+	// upsert, and a soft-deleted owner is never grown.
+	if softOnly == 0 && state[ownerID] == ownerLive {
+		return fileOwnershipVerdict{skip: true, owners: owners, appendTo: ownerID, unowned: unowned,
+			reason: fmt.Sprintf("%d new file(s) arrived for an already-imported book; appending them to it", len(unowned))}, nil
+	}
+	return fileOwnershipVerdict{skip: true, owners: owners,
+		reason: "some files are owned by another book and some are not"}, nil
+}
+
+// appendScannedFilesToOwner writes book_file rows for files that arrived after
+// ownerID was imported. createBookFilesForBook cannot do this: it returns as
+// soon as the book has ANY rows (a rescan must not rebuild rows whose tag
+// positions were judged at import), so without this a book first scanned
+// mid-download kept the first batch of files forever and every later scan
+// skipped the rest as fragments.
+//
+// Track numbering: the new files are judged on their own tags exactly as an
+// import is (applyTagPositionsIfTrusted). Tag positions are kept only when
+// none collides with a (disc, track) an existing row already holds; otherwise
+// every new file gets a positional number after the owner's highest track, in
+// natural filename order. Existing rows are never renumbered or rewritten.
+//
+// The owner's scan-cache entry is re-armed (NeedsRescan) so the next scan
+// re-reads the grown book and re-derives chapters and totals from all rows.
+func appendScannedFilesToOwner(ownerID string, files []string, knownHashes map[string]string, scanLog logger.Logger) (int, error) {
+	store := getStore()
+	if store == nil || len(files) == 0 {
+		return 0, nil
+	}
+	existing, err := store.GetBookFiles(ownerID)
+	if err != nil {
+		return 0, fmt.Errorf("book_files of %s: %w", ownerID, err)
+	}
+	type slot struct{ disc, track int }
+	taken := make(map[slot]bool, len(existing))
+	maxTrack := 0
+	for _, r := range existing {
+		taken[slot{r.DiscNumber, r.TrackNumber}] = true
+		maxTrack = max(maxTrack, r.TrackNumber)
+	}
+
+	bfs := make([]*database.BookFile, 0, len(files))
+	placements := make([]metadata.TagPlacement, 0, len(files))
+	present := make([]bool, 0, len(files))
+	for i, f := range files {
+		var size int64
+		fi, statErr := os.Stat(f)
+		if statErr == nil {
+			size = fi.Size()
+		}
+		bf := &database.BookFile{
+			ID:               ulid.Make().String(),
+			BookID:           ownerID,
+			FilePath:         f,
+			OriginalFilename: filepath.Base(f),
+			Format:           strings.TrimPrefix(strings.ToLower(filepath.Ext(f)), "."),
+			FileSize:         size,
+			TrackNumber:      maxTrack + i + 1,
+		}
+		placements = append(placements, readScannedFileTagsAndHash(bf, f, knownHashes[f], scanLog))
+		bfs = append(bfs, bf)
+		present = append(present, statErr == nil)
+	}
+	applyTagPositionsIfTrusted(bfs, placements, ownerID, scanLog)
+	collides := false
+	for _, bf := range bfs {
+		if taken[slot{bf.DiscNumber, bf.TrackNumber}] {
+			collides = true
+			break
+		}
+	}
+	if collides {
+		for i, bf := range bfs {
+			bf.TrackNumber, bf.DiscNumber, bf.TrackCount, bf.DiscCount = maxTrack+i+1, 0, 0, 0
+		}
+	}
+	rows := make([]database.ScannedBookFile, len(bfs))
+	for i, bf := range bfs {
+		rows[i] = database.ScannedBookFile{File: bf, Present: present[i]}
+	}
+	if err := store.BatchUpsertScannedBookFiles(rows); err != nil {
+		return 0, fmt.Errorf("append %d file(s) to %s: %w", len(rows), ownerID, err)
+	}
+	stagedAppendCount.Add(int64(len(rows)))
+	return len(rows), nil
+}
+
+// OwnershipSkips accumulates the scanned books one scan run did not import
+// because their files belong to another book. It is the durable per-book
+// record the Info-level process log used to be: the first
+// MaxFileFailureSamples are written to the OPERATION log at warn with the
+// path, the owners and the reason as structured attrs, and a summary line at
+// the end carries the total.
+type OwnershipSkips struct {
+	mu      sync.Mutex
+	total   int
+	samples []ownershipSkipError
+}
+
+// Record counts e and lists it in scanLog while under the sample cap.
+func (c *OwnershipSkips) Record(scanLog logger.Logger, e *ownershipSkipError) {
+	if scanLog == nil {
+		scanLog = logger.New("scanner")
+	}
+	c.mu.Lock()
+	c.total++
+	n := c.total
+	if n <= MaxFileFailureSamples {
+		c.samples = append(c.samples, *e)
+	}
+	c.mu.Unlock()
+	if n <= MaxFileFailureSamples {
+		logger.LogWithAttrs(scanLog, slog.LevelWarn, "scan: book not imported, files belong to another book",
+			slog.String("file_path", e.Path),
+			slog.String("owners", strings.Join(e.Owners, ",")),
+			slog.String("reason", e.Reason))
+		return
+	}
+	scanLog.Debug("scan: book not imported (not listed in the op log) %s: %s (owners %s)",
+		e.Path, e.Reason, strings.Join(e.Owners, ","))
+}
+
+// Total is the number of skips recorded, listed or not.
+func (c *OwnershipSkips) Total() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.total
+}
+
+// ReportSummary writes one warn line when any book was skipped.
+func (c *OwnershipSkips) ReportSummary(scanLog logger.Logger) {
+	c.mu.Lock()
+	total, listed := c.total, len(c.samples)
+	c.mu.Unlock()
+	if total == 0 {
+		return
+	}
+	logger.LogWithAttrs(scanLog, slog.LevelWarn,
+		fmt.Sprintf("scan summary: %d scanned book(s) not imported because their files already belong to another book; %d listed individually", total, listed),
+		slog.Int("books_skipped_owned", total),
+		slog.Int("books_listed", listed))
+}
+
+// handleOwnershipSkip is the one place a worker deals with a saveBook error
+// that is an ownership skip. It returns false for any other error (the caller
+// handles it as a failure). For a skip it performs the staged-arrival append
+// when the verdict asked for one, records the skip, and returns true: the
+// caller must then run NOTHING else for this book.
+func handleOwnershipSkip(err error, skips *OwnershipSkips, knownHashes map[string]string, scanLog logger.Logger) bool {
+	var se *ownershipSkipError
+	if !errors.As(err, &se) {
+		return false
+	}
+	if se.AppendTo != "" {
+		n, aerr := appendScannedFilesToOwner(se.AppendTo, se.Unowned, knownHashes, scanLog)
+		if aerr != nil {
+			scanLog.Warn("scan: could not append %d new file(s) to book %s: %v", len(se.Unowned), se.AppendTo, aerr)
+		} else {
+			scanLog.Info("scan: appended %d newly arrived file(s) to book %s (%s)", n, se.AppendTo, logger.SanitizeLogValue(se.Path))
+			rearmOwnerForRescan(se.AppendTo, scanLog)
+		}
+		return true
+	}
+	if skips != nil {
+		skips.Record(scanLog, se)
+	}
+	return true
+}
+
+// rearmOwnerForRescan flags a book whose rows just grew so the next scan
+// re-reads it instead of trusting a scan-cache stamp written before the new
+// files existed.
+func rearmOwnerForRescan(bookID string, scanLog logger.Logger) {
+	store := getStore()
+	if store == nil {
+		return
+	}
+	if err := store.MarkNeedsRescan(bookID); err != nil {
+		scanLog.Warn("scan: could not flag book %s for rescan after appending files: %v", bookID, err)
+	}
+}
+
+type ownershipSkipsKey struct{}
+
+// withOwnershipSkips attaches c to ctx so every ProcessBooksParallel call of a
+// run records into one collector.
+func withOwnershipSkips(ctx context.Context, c *OwnershipSkips) context.Context {
+	return context.WithValue(ctx, ownershipSkipsKey{}, c)
+}
+
+// ownershipSkipsFrom returns the collector attached to ctx, or nil.
+func ownershipSkipsFrom(ctx context.Context) *OwnershipSkips {
+	c, _ := ctx.Value(ownershipSkipsKey{}).(*OwnershipSkips)
+	return c
 }

@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-13
+// last-edited: 2026-09-28
 package scanner
 
 import (
@@ -212,6 +212,13 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 				req.OnFileFailures(failures.Total(), failures.Samples())
 			}
 		}()
+	}
+	// Same run-wide shape for books skipped because their files belong to
+	// another book: one warn summary for the whole run, not one per chunk.
+	if ownershipSkipsFrom(ctx) == nil {
+		skips := &OwnershipSkips{}
+		ctx = withOwnershipSkips(ctx, skips)
+		defer skips.ReportSummary(log)
 	}
 	if organizeTallyFrom(ctx) == nil {
 		tally := &OrganizeTally{}

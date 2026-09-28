@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.110.0
+// version: 1.111.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-28
 
@@ -1314,6 +1314,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// caller gets one of its own and the summary is reported here.
 	failures := fileFailuresFrom(ctx)
 	ownFailures := failures == nil
+	skips := ownershipSkipsFrom(ctx)
+	ownSkips := skips == nil
+	if ownSkips {
+		skips = &OwnershipSkips{}
+	}
 	if ownFailures {
 		failures = &FileFailures{}
 	}
@@ -1327,7 +1332,8 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// report this run's delta (audit 2026-07-17 H5).
 	dupLookupErrStart := dupLookupErrCount.Load()
 	dupLookupSkipStart := dupLookupSkipCount.Load()
-	fragmentSkipStart := fragmentSkipCount.Load()
+	ownershipLookupErrStart := ownershipLookupErrCount.Load()
+	stagedAppendStart := stagedAppendCount.Load()
 	scanCacheErrStart := scanCacheUpdateErrCount.Load()
 	scanFailCountErrStart := scanFailCountErrCount.Load()
 	scanCacheStatErrStart := scanCacheStatErrCount.Load()
@@ -1470,6 +1476,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					extractInfoFromPath(&books[idx])
 					books[idx].LibraryState = "suspicious"
 					if saveErr := saveBook(ctx, &books[idx]); saveErr != nil {
+						if handleOwnershipSkip(saveErr, skips, books[idx].SegmentHashes, scanLog) {
+							return // another book's file: nothing of this book to stamp
+						}
 						scanLog.Warn("failed to save suspicious book %s: %v", filePath, saveErr)
 					}
 					scanLog.Warn("suspicious file (%d bytes, threshold %d): %s", fi.Size(), threshold, filePath)
@@ -1530,6 +1539,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				}
 				// Save the book and create segments
 				if err := saveBook(ctx, &books[idx]); err != nil {
+					if handleOwnershipSkip(err, skips, books[idx].SegmentHashes, scanLog) {
+						return // not this book's files: no rows, chapters or stamp
+					}
 					failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageSave, Reason: err.Error()})
 					errChan <- fmt.Errorf("failed to save book %s: %w", books[idx].FilePath, err)
 				} else {
@@ -1729,6 +1741,19 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 			// Save to database (database operations are thread-safe)
 			if err := saveBook(ctx, &books[idx]); err != nil {
+				if handleOwnershipSkip(err, skips, books[idx].SegmentHashes, scanLog) {
+					// Not this book's files. Nothing below may run: every step
+					// resolves the book BY PATH and would land on the owner --
+					// clearing its NeedsRescan, rewriting its chapters -- and a
+					// nomination made above would queue an AI parse for the
+					// owner on every scan. Withdraw it.
+					if nominatedForAI {
+						aiCandidatesMu.Lock()
+						aiCandidates = slices.DeleteFunc(aiCandidates, func(i int) bool { return i == idx })
+						aiCandidatesMu.Unlock()
+					}
+					return
+				}
 				failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageSave, Reason: err.Error()})
 				errChan <- fmt.Errorf("failed to save book %s: %w", books[idx].FilePath, err)
 			} else {
@@ -1827,6 +1852,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	if ownFailures {
 		failures.ReportSummary(scanLog)
 	}
+	if ownSkips {
+		skips.ReportSummary(scanLog)
+	}
 
 	// Per-run store-failure summary (H5): once per run, not per file.
 	if d := dupLookupErrCount.Load() - dupLookupErrStart; d > 0 {
@@ -1835,8 +1863,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	if d := dupLookupSkipCount.Load() - dupLookupSkipStart; d > 0 {
 		scanLog.Warn("scan summary: %d files skipped because duplicate status was undeterminable (store errors during hash lookup)", d)
 	}
-	if d := fragmentSkipCount.Load() - fragmentSkipStart; d > 0 {
-		scanLog.Info("scan summary: %d scanned books not imported because their files already belong to another book", d)
+	if d := ownershipLookupErrCount.Load() - ownershipLookupErrStart; d > 0 {
+		scanLog.Warn("scan summary: %d scanned books not imported because file ownership was undeterminable (store errors during the book_file ownership lookup)", d)
+	}
+	if d := stagedAppendCount.Load() - stagedAppendStart; d > 0 {
+		scanLog.Info("scan summary: %d newly arrived file(s) appended to already-imported books", d)
 	}
 	if d := scanCacheUpdateErrCount.Load() - scanCacheErrStart; d > 0 {
 		scanLog.Warn("scan summary: %d scan-cache updates failed (affected files will be re-hashed next scan)", d)
@@ -3067,16 +3098,18 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// book's FilePath at one of its own chapter files. A scanned "book"
 		// whose files already belong to another book's book_file rows is a
 		// fragment of that book, not a new one. See checkFileOwnership.
+		//
+		// A skip is returned as an error matching errFileOwnedByOtherBook, not
+		// nil: nil told every caller the book was saved, and they then created
+		// book_file rows, chapters and a scan-cache stamp against whatever book
+		// the path lookups found -- the owner.
 		verdict, ownErr := checkFileOwnership(book)
 		if ownErr != nil {
-			dupLookupSkipCount.Add(1)
+			ownershipLookupErrCount.Add(1)
 			return fmt.Errorf("skipping import of %s: file ownership undeterminable: %w", book.FilePath, ownErr)
 		}
 		if verdict.skip {
-			fragmentSkipCount.Add(1)
-			defaultLog.Info("Skipping import of %s: %s (owning book(s): %s)",
-				logger.SanitizeLogValue(book.FilePath), verdict.reason, strings.Join(verdict.owners, ","))
-			return nil
+			return verdict.asError(book.FilePath)
 		}
 
 		// Resolve author/series with conflict-aware get-or-create semantics.
