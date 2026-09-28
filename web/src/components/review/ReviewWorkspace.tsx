@@ -34,7 +34,7 @@
 // old surfaces, which is gated on docs/port-inventory.md.
 
 import { useCallback, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   AlertTitle,
@@ -149,6 +149,7 @@ function initialLaneFrom(params: URLSearchParams): ReviewLane {
 export function ReviewWorkspace() {
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   // Seeded from the URL, not synced to it -- see the note at the top of the file.
   const [lane, setLane] = useState<ReviewLane>(() => initialLaneFrom(searchParams));
   const [viewMode, setViewMode] = useState<SpineViewMode>('compact');
@@ -351,7 +352,9 @@ export function ReviewWorkspace() {
                 description:
                   'Opens your past "duplicate / not a duplicate" decisions, which are used to check and tune the scoring.',
                 run: () => {
-                  window.location.assign('/dedup/labels');
+                  // Router navigation: a full page load would kill a
+                  // one-button run in progress.
+                  navigate('/dedup/labels');
                 },
               },
             ],
@@ -521,6 +524,7 @@ export function ReviewWorkspace() {
       metadata.bulkApplyMode,
       dedupPipeline.busy,
       dedupPipeline.request,
+      navigate,
       toast,
     ]
   );

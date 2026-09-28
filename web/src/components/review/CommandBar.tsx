@@ -1,5 +1,5 @@
 // file: web/src/components/review/CommandBar.tsx
-// version: 2.0.0
+// version: 2.0.1
 // guid: 9d3a7f21-5e64-4c08-b73f-2a915c8d0e47
 // last-edited: 2026-09-27
 //
@@ -56,6 +56,7 @@ import {
   Typography,
 } from '@mui/material';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
+import { Link as RouterLink } from 'react-router-dom';
 import { useAdvancedSettings } from '../../hooks/useAdvancedSettings';
 
 /**
@@ -205,7 +206,7 @@ function CommandMenuButton({ menu }: { menu: CommandMenu }) {
           >
             <Typography variant="caption" color="text.secondary">
               More options:{' '}
-              <Link href="/settings" underline="hover">
+              <Link component={RouterLink} to="/settings" underline="hover" onClick={close}>
                 Settings → Show advanced settings
               </Link>
             </Typography>

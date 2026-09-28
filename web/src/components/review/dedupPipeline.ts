@@ -1,5 +1,5 @@
 // file: web/src/components/review/dedupPipeline.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f6b1d82-7a4e-4c90-b5d1-2e8f0a9c6d47
 // last-edited: 2026-09-27
 //
@@ -14,8 +14,11 @@
 //                                          but only one at a time inside its
 //                                          own pass; doing it first is cheaper.
 //  2. Acoustic     (acoustid.scan)      -- emits audio-match pairs from the
-//                                          fingerprints already stored. Before
-//                                          step 3 so its scoring pass sees them.
+//                                          fingerprints already stored. Placed
+//                                          before step 3 so its pairs exist
+//                                          when step 3 scores (whether that
+//                                          pass re-scores them was NOT verified;
+//                                          step 5's preview reports any drift).
 //                                          Step 3's stale-candidate purge only
 //                                          drops pairs whose books went
 //                                          non-primary/missing, not fresh ones.
@@ -98,15 +101,53 @@ export interface RunDedupPipelineOptions {
   shouldStop?: () => boolean;
   /** These ops run for minutes to hours, so polling is deliberately slow. */
   pollIntervalMs?: number;
+  /**
+   * Steps to leave out, e.g. `embeddings` on an install with embeddings turned
+   * off, where the step can only fail and would block every later one.
+   */
+  skip?: readonly PipelineStepId[];
+}
+
+/**
+ * How many status reads in a row may fail before the run gives up on a step.
+ * One network blip over a two-hour op must not end the chain while the server
+ * op keeps going; a server that stays unreachable still stops it.
+ */
+export const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function waitForOperation(
+  id: string,
+  onOp: (op: Operation) => void,
+  intervalMs: number
+): Promise<Operation> {
+  let failures = 0;
+  while (true) {
+    let op: Operation;
+    try {
+      op = await api.getOperationStatus(id);
+      failures = 0;
+    } catch (err) {
+      failures++;
+      if (failures >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
+      await sleep(intervalMs * failures);
+      continue;
+    }
+    onOp(op);
+    if (api.isOperationTerminal(op.status)) return op;
+    await sleep(intervalMs);
+  }
 }
 
 export async function runDedupPipeline(
   opts: RunDedupPipelineOptions = {}
 ): Promise<DedupRescoreResult> {
-  const { onProgress, shouldStop, pollIntervalMs = 5000 } = opts;
+  const { onProgress, shouldStop, pollIntervalMs = 5000, skip = [] } = opts;
 
   for (let i = 0; i < DEDUP_PIPELINE_STEPS.length; i++) {
     const step = DEDUP_PIPELINE_STEPS[i];
+    if (skip.includes(step.id)) continue;
     if (shouldStop?.()) throw new PipelineStoppedError(step);
     onProgress?.({ stepIndex: i, step });
 
@@ -132,7 +173,7 @@ export async function runDedupPipeline(
 
     let final: Operation;
     try {
-      final = await api.pollOperation(
+      final = await waitForOperation(
         started.id,
         (op) => onProgress?.({ stepIndex: i, step, op }),
         pollIntervalMs
@@ -145,8 +186,7 @@ export async function runDedupPipeline(
       throw new PipelineStepError(step, `ended as "${final.status}"${why}`);
     }
   }
-  // Unreachable: the last step returns. Kept so the signature stays honest if
-  // the step list is ever reordered.
+  // Reached only if the score check itself was skipped.
   throw new Error('dedup pipeline ended without a score check');
 }
 
