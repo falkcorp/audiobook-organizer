@@ -1,7 +1,7 @@
 // file: internal/dedup/exact_provenance_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 29b011fa-6878-4516-b7f1-e680f303d4ea
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 // Tests for the placeholder-title guard and exact-rule provenance
 // (exact_provenance.go). The fixtures mirror the production pairs of
@@ -404,7 +404,7 @@ func TestDrainStale_PlaceholderTitle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func TestDrainStale_PlaceholderTitle(t *testing.T) {
 	}
 
 	// Apply reclassifies to stale-drain (a machine status), not "dismissed".
-	res, err = engine.DrainStaleCandidates(context.Background(), "", true)
+	res, err = engine.DrainStaleCandidates(context.Background(), "", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +469,7 @@ func TestDrainStale_PlaceholderWithTitleOnlyBreakdownIsDrained(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
