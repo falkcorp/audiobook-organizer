@@ -1,5 +1,5 @@
 // file: internal/metabatch/upgrade.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-27
 //
@@ -28,7 +28,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -41,6 +40,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -100,6 +100,11 @@ var LowQualitySources = metafetch.LowQualitySourceSlugs()
 // commits last.
 const upgradeWorkers = 4
 
+// upgradeLog is the upgrade's subsystem logger (internal/logger, printf-style).
+// Every book ID, title, source slug and error string it logs goes through
+// logger.SanitizeLogValue.
+var upgradeLog = logger.New("metadata-upgrade")
+
 // UpgradeResult summarizes what the upgrade job did.
 type UpgradeResult struct {
 	Checked  int `json:"checked"`
@@ -142,7 +147,7 @@ type upgradeCursor struct {
 func (s *MetadataUpgradeService) loadUpgradeCursor() string {
 	data, err := s.DB.GetOperationState(upgradeCursorKey)
 	if err != nil {
-		slog.Warn("metadata-upgrade: reading sweep cursor failed; starting from the top", "err", err)
+		upgradeLog.Warn("reading sweep cursor failed; starting from the top: err=%s", logger.SanitizeLogValue(err.Error()))
 		return ""
 	}
 	if len(data) == 0 {
@@ -150,7 +155,7 @@ func (s *MetadataUpgradeService) loadUpgradeCursor() string {
 	}
 	var cur upgradeCursor
 	if err := json.Unmarshal(data, &cur); err != nil {
-		slog.Warn("metadata-upgrade: sweep cursor is malformed; starting from the top", "err", err)
+		upgradeLog.Warn("sweep cursor is malformed; starting from the top: err=%s", logger.SanitizeLogValue(err.Error()))
 		return ""
 	}
 	return cur.AfterID
@@ -161,11 +166,11 @@ func (s *MetadataUpgradeService) loadUpgradeCursor() string {
 func (s *MetadataUpgradeService) saveUpgradeCursor(afterID string) {
 	data, err := json.Marshal(upgradeCursor{AfterID: afterID, UpdatedAt: time.Now()})
 	if err != nil {
-		slog.Warn("metadata-upgrade: marshalling sweep cursor failed", "err", err)
+		upgradeLog.Warn("marshalling sweep cursor failed: err=%s", logger.SanitizeLogValue(err.Error()))
 		return
 	}
 	if err := s.DB.SaveOperationState(upgradeCursorKey, data); err != nil {
-		slog.Warn("metadata-upgrade: persisting sweep cursor failed", "err", err)
+		upgradeLog.Warn("persisting sweep cursor failed: err=%s", logger.SanitizeLogValue(err.Error()))
 	}
 }
 
@@ -214,10 +219,10 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 		tag := "metadata:source:" + sourceSlug
 		bookIDs, err := s.DB.GetBooksByTag(tag)
 		if err != nil {
-			slog.Warn("metadata-upgrade GetBooksByTag", "tag", tag, "err", err)
+			upgradeLog.Warn("GetBooksByTag failed: tag=%s err=%s", tag, logger.SanitizeLogValue(err.Error()))
 			continue
 		}
-		slog.Info("metadata-upgrade found books tagged", "count", len(bookIDs), "tag", tag)
+		upgradeLog.Info("found books tagged: count=%d tag=%s", len(bookIDs), tag)
 		for _, bookID := range bookIDs {
 			if seen[bookID] {
 				continue
@@ -245,8 +250,8 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 		}
 		items = append(items, all[idx])
 	}
-	slog.Info("metadata-upgrade sweep", "eligible", len(all), "this_run", len(items),
-		"after", afterID, "wrapped", result.Wrapped)
+	upgradeLog.Info("sweep: eligible=%d this_run=%d after=%s wrapped=%v",
+		len(all), len(items), logger.SanitizeLogValue(afterID), result.Wrapped)
 
 	total := len(items)
 	var mu sync.Mutex // guards result and the progress stamp
@@ -276,10 +281,10 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 			result.Checked++
 			switch {
 			case errors.Is(upgradeErr, errOwnerManualOnly):
-				slog.Info("metadata-upgrade skipped owner-manual-only book", "id", it.bookID)
+				upgradeLog.Info("skipped owner-manual-only book (Doctor Who / Big Finish / Torchwood): id=%s", logger.SanitizeLogValue(it.bookID))
 				result.OwnerManualOnly++
 			case upgradeErr != nil:
-				slog.Warn("metadata-upgrade book", "id", it.bookID, "err", upgradeErr)
+				upgradeLog.Warn("book failed: id=%s err=%s", logger.SanitizeLogValue(it.bookID), logger.SanitizeLogValue(upgradeErr.Error()))
 				result.Errors++
 			case upgraded:
 				result.Upgraded++
@@ -444,8 +449,9 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		// moment ago from the book's current fields, so nothing can have
 		// drifted.
 		v := applygate.Evaluate(book, authors, rt, c, nil)
-		slog.Debug("upgrade gate", "id", bookID, "source", candidateSlug, "score", c.Score, "gate", v.ScoreFloor,
-			"transcription_confirms", v.AudioConfirmed, "allowed", v.Allowed, "reason", v.Reason, "detail", v.Detail)
+		upgradeLog.Debug("gate: id=%s source=%s score=%.3f floor=%.3f transcription_confirms=%v allowed=%v reason=%s detail=%s",
+			logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(candidateSlug), c.Score, v.ScoreFloor,
+			v.AudioConfirmed, v.Allowed, v.Reason, logger.SanitizeLogValue(v.Detail))
 		if !v.Allowed {
 			continue
 		}
@@ -518,7 +524,8 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		return false, fmt.Errorf("apply failed: %w", applyErr)
 	}
 
-	slog.Info("metadata-upgrade upgraded", "id", bookID, "from", currentSourceSlug, "to", bestSlug,
-		"score", bestCandidate.Score, "title", bestCandidate.Title)
+	upgradeLog.Info("upgraded: id=%s from=%s to=%s score=%.3f title=%s",
+		logger.SanitizeLogValue(bookID), currentSourceSlug, logger.SanitizeLogValue(bestSlug),
+		bestCandidate.Score, logger.SanitizeLogValue(bestCandidate.Title))
 	return true, nil
 }
