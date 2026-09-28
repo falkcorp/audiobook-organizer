@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.10.0
+// version: 1.11.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, and library repairs.
@@ -71,6 +71,7 @@ import { useDupesLane } from './lanes/useDupesLane';
 import { useMetadataLane } from './lanes/useMetadataLane';
 import { useRegroupLane } from './lanes/useRegroupLane';
 import { useRepairsLane } from './lanes/useRepairsLane';
+import { useDedupPipeline } from './useDedupPipeline';
 import { LANES, LANE_ORDER } from './lanes';
 import type { ReviewLane } from './reviewActions';
 
@@ -207,147 +208,257 @@ export function ReviewWorkspace() {
     }
   };
 
+  // POST /dedup/rescore is synchronous and returns counts, so it is not a
+  // "started, watch the bell" job: the counts ARE the result.
+  const rescoreSummary = (r: Partial<api.DedupRescoreResult>) =>
+    `${(r.changed ?? 0).toLocaleString()} of ${(r.inspected ?? 0).toLocaleString()} waiting pairs`;
+  const previewRescore = async () => {
+    try {
+      const r = await api.rescoreDedupCandidates(false);
+      toast(`Score preview: ${rescoreSummary(r)} would change confidence. Nothing was saved.`, 'info');
+    } catch {
+      toast('Failed to preview new scores.', 'error');
+    }
+  };
+
+  // The Dedup menu's one-button run. When it finishes, show its results.
+  const refreshDupes = dupes.refresh;
+  const showDupes = useCallback(() => {
+    setLane('dupes');
+    refreshDupes();
+  }, [refreshDupes]);
+  const dedupPipeline = useDedupPipeline({ toast, onFinished: showDupes });
+
   const menus: CommandMenu[] = useMemo(
     () => [
       {
         id: 'dedup',
         label: 'Dedup',
-        commands: [
+        // Owner, 2026-09-27: one button that does everything, then an Advanced
+        // section only for people who turned it on. Each description was
+        // checked against the op its item enqueues; dedupPipeline.ts has the
+        // one-button run's order and why.
+        simple: [
           {
-            id: 'find-duplicates',
-            label: 'Find duplicates',
-            scope: 'library',
-            run: startJob('Duplicate scan', api.triggerDedupScan),
+            id: 'simple',
+            commands: [
+              {
+                id: 'find-all-duplicates',
+                label: 'Find all duplicates',
+                scope: 'library',
+                primary: true,
+                description:
+                  'Runs every duplicate check in the right order, then shows what it found in the Dupes tab for you to review. Takes a while on a big library.',
+                disabledReason: dedupPipeline.busy
+                  ? 'Already running — progress is shown above the list.'
+                  : undefined,
+                run: () => void dedupPipeline.request(),
+              },
+              {
+                id: 'full-rescan',
+                label: 'Force full rescan',
+                scope: 'library',
+                description:
+                  'Rechecks every book for copies by identical files, shared folders and matching titles. Results appear on the Dedup page under Duplicate Scan, not here.',
+                run: startJob('Full rescan', api.scanBookDuplicates),
+              },
+            ],
           },
-          // Two commands, because there are two operations and they were being
-          // reported as one. This menu item passed `apply=false` while calling
-          // itself plain "Rescore", so it answered "Rescore started" and then
-          // wrote nothing -- a dry run announced as the real thing.
+        ],
+        advanced: [
           {
-            id: 'rescore-dry-run',
-            label: 'Rescore (dry run)',
-            scope: 'library',
-            run: startJob('Rescore dry run', () => api.rescoreDedupCandidates(false)),
+            id: 'scoring',
+            title: 'Find and score',
+            commands: [
+              {
+                id: 'find-duplicates',
+                label: 'Find duplicates',
+                scope: 'library',
+                description:
+                  'Compares every book by exact matches and by similar title and author, then scores each possible pair. Identical copies are linked automatically if that is on in Settings → Dedup.',
+                run: startJob('Duplicate scan', api.triggerDedupScan),
+              },
+              // Two commands, because there are two operations. This item used
+              // to be plain "Rescore" passing `apply=false`, and answered
+              // "Rescore started" while writing nothing.
+              {
+                id: 'rescore-dry-run',
+                label: 'Preview new scores',
+                scope: 'library',
+                description:
+                  'Works out how many waiting pairs would get a different confidence with the latest scoring rules. Changes nothing.',
+                run: previewRescore,
+              },
+              {
+                id: 'rescore-apply',
+                label: 'Recalculate scores…',
+                scope: 'library',
+                description:
+                  'Saves new confidence scores for every waiting pair from the evidence already collected. Asks first.',
+                // The surface this replaced put Apply behind a dialog next to a
+                // Dry Run button; one click from a menu would be a downgrade in
+                // safety, so the confirm step carries over.
+                run: () => setRescoreConfirmOpen(true),
+              },
+            ],
           },
           {
-            id: 'rescore-apply',
-            label: 'Rescore and apply…',
-            scope: 'library',
-            // The surface this replaces put Apply behind a dialog, in warning
-            // colour, next to a Dry Run button. Reachable in one click from a
-            // menu would be a downgrade in safety, not a port, so the confirm
-            // step carries over even though nothing else in this menu confirms.
-            run: () => setRescoreConfirmOpen(true),
+            id: 'evidence',
+            title: 'Collect evidence',
+            commands: [
+              {
+                id: 'embeddings',
+                label: 'Build similarity data',
+                scope: 'library',
+                description:
+                  'Creates the AI similarity data used to spot books with alike titles and authors, for every book missing an up-to-date copy. Run it before Find duplicates after adding many books.',
+                run: startJob('Embedding scan', api.triggerEmbedScan),
+              },
+              {
+                id: 'acoustic',
+                label: 'Compare audio fingerprints',
+                scope: 'library',
+                description:
+                  'Pairs up books whose audio matches, using the fingerprints already stored for their files. Does not create new fingerprints.',
+                run: startJob('AcoustID scan', api.triggerDedupAcoustID),
+              },
+              {
+                id: 'ai-review',
+                label: 'AI review of unclear pairs',
+                scope: 'library',
+                description:
+                  'Asks the AI to judge pairs whose score is neither clearly a match nor clearly not. May merge pairs it is sure about if AI auto-merge is on in Settings → Dedup.',
+                run: startJob('AI review', api.triggerDedupLLM),
+              },
+            ],
           },
           {
-            id: 'full-rescan',
-            label: 'Force full rescan…',
-            scope: 'library',
-            run: startJob('Full rescan', api.scanBookDuplicates),
-          },
-          {
-            id: 'embeddings',
-            label: 'Embeddings',
-            scope: 'library',
-            startsGroup: true,
-            run: startJob('Embedding scan', api.triggerEmbedScan),
-          },
-          {
-            id: 'acoustic',
-            label: 'Acoustic',
-            scope: 'library',
-            run: startJob('AcoustID scan', api.triggerDedupAcoustID),
-          },
-          {
-            id: 'ai-review',
-            label: 'AI review',
-            scope: 'library',
-            run: startJob('AI review', api.triggerDedupLLM),
-          },
-          {
-            id: 'reconcile',
-            label: 'Reconcile…',
-            scope: 'library',
-            startsGroup: true,
-            run: startJob('Reconcile scan', api.startReconcileScan),
-          },
-          {
-            id: 'manage-labels',
-            label: 'Manage labels…',
-            scope: 'view',
-            run: () => {
-              window.location.assign('/dedup/labels');
-            },
+            id: 'maintenance',
+            title: 'Maintenance',
+            commands: [
+              {
+                id: 'reconcile',
+                label: 'Match missing files',
+                scope: 'library',
+                description:
+                  'Looks for books whose files have gone missing and matches them to untracked files on disk. Review the matches on the Dedup page under Reconcile.',
+                run: startJob('Reconcile scan', api.startReconcileScan),
+              },
+              {
+                id: 'manage-labels',
+                label: 'Manage labels',
+                scope: 'view',
+                description:
+                  'Opens your past "duplicate / not a duplicate" decisions, which are used to check and tune the scoring.',
+                run: () => {
+                  window.location.assign('/dedup/labels');
+                },
+              },
+            ],
           },
         ],
       },
       {
         id: 'metadata',
         label: 'Metadata',
-        commands: [
+        simple: [
           {
-            id: 'search-providers',
-            label: 'Search providers…',
-            scope: 'library',
-            run: startJob('Provider search', () => api.batchFetchCandidates({ selection: { filter: { only_unmatched: true } } })),
+            id: 'simple',
+            commands: [
+              {
+                // Id kept from the old "Search providers…" item: same call.
+                id: 'search-providers',
+                label: 'Find metadata for unmatched books',
+                scope: 'library',
+                primary: true,
+                description:
+                  'Searches the metadata providers for every book that has no match yet and lists what they found here for review. Nothing changes on your books until you apply it.',
+                run: startJob('Provider search', () =>
+                  api.batchFetchCandidates({ selection: { filter: { only_unmatched: true } } })
+                ),
+              },
+            ],
           },
           {
-            id: 'bulk-search-selected',
-            label: 'Bulk search selected…',
-            scope: 'selection',
-            disabledReason:
-              metadata.selectedIds.size === 0 ? 'Select one or more books first.' : undefined,
-            run: startJob('Search for selected', () =>
-              api.batchFetchCandidates({ book_ids: [...metadata.selectedIds] })
-            ),
+            id: 'selected',
+            title: 'Books you have ticked',
+            commands: [
+              {
+                id: 'bulk-search-selected',
+                label: 'Search again for selected',
+                scope: 'selection',
+                description: 'Asks the providers for fresh results for just the books you have ticked.',
+                disabledReason:
+                  metadata.selectedIds.size === 0 ? 'Select one or more books first.' : undefined,
+                run: startJob('Search for selected', () =>
+                  api.batchFetchCandidates({ book_ids: [...metadata.selectedIds] })
+                ),
+              },
+              {
+                id: 'apply-selected-fields',
+                label:
+                  metadata.bulkApplyMode === 'replace'
+                    ? 'Apply selected fields, replace existing'
+                    : 'Apply selected fields',
+                scope: 'selection',
+                description:
+                  metadata.bulkApplyMode === 'replace'
+                    ? 'Saves the chosen match onto each ticked book, overwriting details it already has. Asks first unless you turned that off.'
+                    : 'Saves the chosen match onto each ticked book, filling in only details it is missing.',
+                disabledReason:
+                  metadata.applicableSelectedIds.length === 0
+                    ? 'Select one or more books with a candidate first.'
+                    : undefined,
+                run: () =>
+                  metadata.dispatch({
+                    lane: 'metadata',
+                    type: 'applySelected',
+                    ids: metadata.applicableSelectedIds,
+                  }),
+              },
+              {
+                id: 'apply-all-fields',
+                label:
+                  metadata.bulkApplyMode === 'replace'
+                    ? 'Apply all fields, replace existing'
+                    : 'Apply all fields',
+                scope: 'selection',
+                description:
+                  metadata.bulkApplyMode === 'replace'
+                    ? 'Saves the match for every undecided row on this page, overwriting existing details. Asks first unless you turned that off.'
+                    : 'Saves the match for every undecided row on this page, filling in only missing details.',
+                disabledReason:
+                  metadata.allVisiblePendingIds.length === 0
+                    ? 'No undecided matched rows on this page.'
+                    : undefined,
+                run: () =>
+                  metadata.dispatch({
+                    lane: 'metadata',
+                    type: 'applySelected',
+                    ids: metadata.allVisiblePendingIds,
+                  }),
+              },
+            ],
           },
+        ],
+        advanced: [
           {
-            id: 'apply-selected-fields',
-            label:
-              metadata.bulkApplyMode === 'replace'
-                ? 'Apply selected fields, replace existing'
-                : 'Apply selected fields',
-            scope: 'selection',
-            startsGroup: true,
-            disabledReason:
-              metadata.applicableSelectedIds.length === 0
-                ? 'Select one or more books with a candidate first.'
-                : undefined,
-            run: () =>
-              metadata.dispatch({
-                lane: 'metadata',
-                type: 'applySelected',
-                ids: metadata.applicableSelectedIds,
-              }),
-          },
-          {
-            id: 'apply-all-fields',
-            label:
-              metadata.bulkApplyMode === 'replace'
-                ? 'Apply all fields, replace existing'
-                : 'Apply all fields',
-            scope: 'selection',
-            disabledReason:
-              metadata.allVisiblePendingIds.length === 0
-                ? 'No undecided matched rows on this page.'
-                : undefined,
-            run: () =>
-              metadata.dispatch({
-                lane: 'metadata',
-                type: 'applySelected',
-                ids: metadata.allVisiblePendingIds,
-              }),
-          },
-          {
-            id: 'write-back',
-            label: 'Write back to files…',
-            scope: 'selection',
-            startsGroup: true,
-            disabledReason:
-              metadata.selectedIds.size === 0 ? 'Select one or more books first.' : undefined,
-            run: startJob('Tag write-back', () =>
-              api.batchWriteBackMetadata([...metadata.selectedIds])
-            ),
+            id: 'files',
+            title: 'Audio files',
+            commands: [
+              {
+                id: 'write-back',
+                label: 'Write details into audio files',
+                scope: 'selection',
+                description:
+                  "Copies each ticked book's saved title, author and other details into its audio files' tags. This changes the files themselves and can rename them.",
+                disabledReason:
+                  metadata.selectedIds.size === 0 ? 'Select one or more books first.' : undefined,
+                run: startJob('Tag write-back', () =>
+                  api.batchWriteBackMetadata([...metadata.selectedIds])
+                ),
+              },
+            ],
           },
         ],
       },
@@ -397,7 +508,9 @@ export function ReviewWorkspace() {
         ],
       },
     ],
-    // startJob closes over `toast` only, which is stable from the provider.
+    // startJob and previewRescore close over `toast` only, which is stable
+    // from the provider. bulkApplyMode was missing here, so the Apply labels
+    // could show the previous mode until something else changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       metadata.selectedIds,
@@ -405,6 +518,9 @@ export function ReviewWorkspace() {
       metadata.allVisiblePendingIds,
       metadata.filteredResults,
       metadata.dispatch,
+      metadata.bulkApplyMode,
+      dedupPipeline.busy,
+      dedupPipeline.request,
       toast,
     ]
   );
@@ -462,6 +578,9 @@ export function ReviewWorkspace() {
           </ToggleButton>
         </ToggleButtonGroup>
       </Box>
+
+      {/* The one-button dedup run's progress / merge prompt / result. */}
+      {dedupPipeline.ui}
 
       {/* Every lane has an explicit branch: the last one falls through to
           metadata, so a lane missing here would silently show metadata. */}
@@ -531,7 +650,11 @@ export function ReviewWorkspace() {
             data-testid="rescore-apply-confirm"
             onClick={() => {
               setRescoreConfirmOpen(false);
-              void startJob('Rescore', () => api.rescoreDedupCandidates(true))();
+              // Synchronous: report what it saved rather than "started".
+              void api.rescoreDedupCandidates(true).then(
+                (r) => toast(`Scores saved: ${rescoreSummary(r)} changed confidence.`, 'success'),
+                () => toast('Failed to recalculate scores.', 'error')
+              );
             }}
           >
             Rescore and apply

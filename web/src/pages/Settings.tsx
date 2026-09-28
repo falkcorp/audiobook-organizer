@@ -1,12 +1,13 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.60.0
+// version: 1.61.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-27
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useUnsavedChangesBlocker } from '../hooks/useUnsavedChangesBlocker';
 import { useSettingsHandlers } from '../hooks/useSettingsHandlers';
+import { useAdvancedSettings } from '../hooks/useAdvancedSettings';
 import type { ScanStatus, ScanErrorTarget } from '../hooks/useSettingsHandlers';
 import {
   Box,
@@ -169,6 +170,7 @@ export function Settings() {
   const navigate = useNavigate();
   const location = useLocation();
   const [tabValue, setTabValue] = useState(() => tabFromHash(location.hash));
+  const { showAdvanced, setShowAdvanced } = useAdvancedSettings();
   const [browserOpen, setBrowserOpen] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const scanIntervalsRef = useRef<Record<number, number>>({});
@@ -778,6 +780,28 @@ export function Settings() {
       <Typography variant="h4" gutterBottom sx={{ flexShrink: 0 }}>
         Settings
       </Typography>
+
+      {/*
+        Global, and deliberately outside the tabs and the Save flow: it only
+        changes what this browser shows (menus such as Review → Dedup), takes
+        effect immediately, and is stored locally rather than on the server.
+      */}
+      <Box sx={{ flexShrink: 0, mb: 1 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={showAdvanced}
+              onChange={(e) => setShowAdvanced(e.target.checked)}
+              slotProps={{ input: { 'data-testid': 'show-advanced-settings' } as object }}
+            />
+          }
+          label="Show advanced settings"
+        />
+        <Typography variant="caption" color="text.secondary" component="div" sx={{ ml: 6, mt: -0.5 }}>
+          Shows expert tools, such as the Advanced sections of the Review page's Dedup and
+          Metadata menus. Saved in this browser.
+        </Typography>
+      </Box>
 
       {saved && (
         <Alert severity="success" sx={{ mb: 2, flexShrink: 0 }}>
