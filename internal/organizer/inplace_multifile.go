@@ -8,9 +8,11 @@ package organizer
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -114,7 +116,12 @@ func (orgSvc *Service) reOrganizeMultiFileInPlace(book *database.Book, present [
 	// carries. This moves every present file of the book together, and two
 	// chapters whose base names would collide are refused above.
 
-	unlock := lockInPlaceDestination(targetDir)
+	// Files land INSIDE targetDir, which a single-file move into that folder
+	// locks (lockInPlaceDestination keys on the target's parent), and the
+	// directory itself is what a directory book moving to targetDir locks
+	// (keyed on targetDir's parent). Hold both so this move serializes with
+	// either kind.
+	unlock := lockInPlaceDestinations(filepath.Join(targetDir, "_"), targetDir)
 	defer unlock()
 	for _, m := range moves {
 		if _, err := os.Lstat(m.From); err != nil {
@@ -195,6 +202,30 @@ func (orgSvc *Service) reOrganizeMultiFileInPlace(book *database.Book, present [
 	}
 	log.Info("Re-organized multi-file book %s: %d file(s) %s → %s", book.ID, len(moved), filepath.Dir(src), targetDir)
 	return targetDir, moved, nil
+}
+
+// lockInPlaceDestinations takes the lockInPlaceDestination stripe of every
+// target, each stripe once and in index order so two callers holding
+// overlapping sets cannot deadlock.
+func lockInPlaceDestinations(targets ...string) func() {
+	var idx []uint32
+	for _, t := range targets {
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(filepath.Clean(filepath.Dir(t))))
+		i := h.Sum32() % inPlaceDestStripes
+		if !slices.Contains(idx, i) {
+			idx = append(idx, i)
+		}
+	}
+	slices.Sort(idx)
+	for _, i := range idx {
+		inPlaceDestLocks[i].Lock()
+	}
+	return func() {
+		for j := len(idx) - 1; j >= 0; j-- {
+			inPlaceDestLocks[idx[j]].Unlock()
+		}
+	}
 }
 
 // rollbackFileMoves puts already-moved files back, newest first.

@@ -332,8 +332,9 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 // every new file gets a positional number after the owner's highest track, in
 // natural filename order. Existing rows are never renumbered or rewritten.
 //
-// The owner's scan-cache entry is re-armed (NeedsRescan) so the next scan
-// re-reads the grown book and re-derives chapters and totals from all rows.
+// The caller then re-synthesizes the owner's chapters from all its rows
+// (resynthesizeChaptersAfterAppend) and re-arms its NeedsRescan so the next
+// scan re-reads the grown book. The totals are recomputed by the upsert.
 func appendScannedFilesToOwner(ownerID string, files []string, knownHashes map[string]string, scanLog logger.Logger) (int, error) {
 	store := getStore()
 	if store == nil || len(files) == 0 {
@@ -458,7 +459,7 @@ func (c *OwnershipSkips) ReportSummary(scanLog logger.Logger) {
 // handles it as a failure). For a skip it performs the staged-arrival append
 // when the verdict asked for one, records the skip, and returns true: the
 // caller must then run NOTHING else for this book.
-func handleOwnershipSkip(err error, skips *OwnershipSkips, knownHashes map[string]string, scanLog logger.Logger) bool {
+func handleOwnershipSkip(ctx context.Context, err error, skips *OwnershipSkips, knownHashes map[string]string, scanLog logger.Logger) bool {
 	var se *ownershipSkipError
 	if !errors.As(err, &se) {
 		return false
@@ -469,6 +470,7 @@ func handleOwnershipSkip(err error, skips *OwnershipSkips, knownHashes map[strin
 			scanLog.Warn("scan: could not append %d new file(s) to book %s: %v", len(se.Unowned), se.AppendTo, aerr)
 		} else {
 			scanLog.Info("scan: appended %d newly arrived file(s) to book %s (%s)", n, se.AppendTo, logger.SanitizeLogValue(se.Path))
+			resynthesizeChaptersAfterAppend(ctx, se.AppendTo, scanLog)
 			rearmOwnerForRescan(se.AppendTo, scanLog)
 		}
 		return true
@@ -504,4 +506,40 @@ func withOwnershipSkips(ctx context.Context, c *OwnershipSkips) context.Context 
 func ownershipSkipsFrom(ctx context.Context) *OwnershipSkips {
 	c, _ := ctx.Value(ownershipSkipsKey{}).(*OwnershipSkips)
 	return c
+}
+
+// resynthesizeChaptersAfterAppend rebuilds a grown book's chapters from ALL of
+// its rows. PersistChaptersForBook is idempotent -- it returns as soon as a
+// book has any chapters -- so without this a book first imported with 20 of
+// its 40 files kept 20 files' worth of chapters after the other 20 were
+// appended: the truncation moved from the rows into the chapter list. A
+// multi-file book's chapters are always one per file (see
+// synthesizeMultiFileChapters), so rebuilding them is exact, not a guess. If
+// synthesis yields nothing the stale list is cleared rather than kept, so the
+// next scan's PersistChaptersForBook derives it afresh.
+func resynthesizeChaptersAfterAppend(ctx context.Context, bookID string, scanLog logger.Logger) {
+	store := getStore()
+	if store == nil {
+		return
+	}
+	ps := resolveChapterStore(store)
+	if ps == nil {
+		return
+	}
+	files, err := store.GetBookFiles(bookID)
+	if err != nil {
+		scanLog.Warn("scan: could not re-read book %s to rebuild its chapters after appending files: %v", bookID, err)
+		return
+	}
+	if len(files) <= 1 {
+		return
+	}
+	chapters := synthesizeMultiFileChapters(ctx, files, scanLog)
+	dbChapters := make([]database.Chapter, len(chapters))
+	for i, c := range chapters {
+		dbChapters[i] = database.Chapter{ID: c.ID, StartSec: c.StartSec, EndSec: c.EndSec, Title: c.Title}
+	}
+	if err := ps.SaveChaptersForBook(bookID, dbChapters); err != nil {
+		scanLog.Warn("scan: could not rebuild chapters of book %s after appending files: %v", bookID, err)
+	}
 }

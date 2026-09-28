@@ -1493,7 +1493,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					extractInfoFromPath(&books[idx])
 					books[idx].LibraryState = "suspicious"
 					if saveErr := saveBook(ctx, &books[idx]); saveErr != nil {
-						if handleOwnershipSkip(saveErr, skips, books[idx].SegmentHashes, scanLog) {
+						if handleOwnershipSkip(ctx, saveErr, skips, books[idx].SegmentHashes, scanLog) {
 							return // another book's file: nothing of this book to stamp
 						}
 						scanLog.Warn("failed to save suspicious book %s: %v", filePath, saveErr)
@@ -1556,7 +1556,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				}
 				// Save the book and create segments
 				if err := saveBook(ctx, &books[idx]); err != nil {
-					if handleOwnershipSkip(err, skips, books[idx].SegmentHashes, scanLog) {
+					if handleOwnershipSkip(ctx, err, skips, books[idx].SegmentHashes, scanLog) {
 						return // not this book's files: no rows, chapters or stamp
 					}
 					failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageSave, Reason: err.Error()})
@@ -1758,7 +1758,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 			// Save to database (database operations are thread-safe)
 			if err := saveBook(ctx, &books[idx]); err != nil {
-				if handleOwnershipSkip(err, skips, books[idx].SegmentHashes, scanLog) {
+				if handleOwnershipSkip(ctx, err, skips, books[idx].SegmentHashes, scanLog) {
 					// Not this book's files. Nothing below may run: every step
 					// resolves the book BY PATH and would land on the owner --
 					// clearing its NeedsRescan, rewriting its chapters -- and a
