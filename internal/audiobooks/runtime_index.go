@@ -11,8 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
@@ -98,14 +96,14 @@ func buildRuntimeEntries(files []database.BookFileCore) map[string]runtimeEntry 
 	}
 	chunk := (len(ids) + workers - 1) / workers
 	parts := make([]map[string]runtimeEntry, workers)
-	var g errgroup.Group
+	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
 		lo := w * chunk
 		if lo >= len(ids) {
 			break
 		}
 		hi := min(lo+chunk, len(ids))
-		g.Go(func() error {
+		wg.Go(func() {
 			m := make(map[string]runtimeEntry, hi-lo)
 			for _, id := range ids[lo:hi] {
 				rt := database.ComputeBookRuntime(nil, byBook[id])
@@ -116,10 +114,9 @@ func buildRuntimeEntries(files []database.BookFileCore) map[string]runtimeEntry 
 				}
 			}
 			parts[w] = m
-			return nil
 		})
 	}
-	_ = g.Wait() // workers never return an error
+	wg.Wait()
 	out := make(map[string]runtimeEntry, len(ids))
 	for _, m := range parts {
 		for k, v := range m {
