@@ -1,5 +1,5 @@
 // file: internal/audiobooks/organize_inplace_undo_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d5e0c3a-2f41-4b7a-9e16-5a3c7b9d2e08
 // last-edited: 2026-09-28
 
@@ -169,6 +169,52 @@ func TestOrganizeInPlace_MultiFileMoveUndoRoundTrip(t *testing.T) {
 	}
 	if len(rows) != len(files) {
 		t.Fatalf("%d rows after undo, want %d", len(rows), len(files))
+	}
+	for _, r := range rows {
+		if filepath.Dir(r.FilePath) != dir {
+			t.Fatalf("row %s at %q after undo, want under %q", r.ID, r.FilePath, dir)
+		}
+	}
+}
+
+// TestOrganizeInPlace_DuplicateRowsUndoRoundTrip: two rows at one path move as
+// one file, and the undo puts the file back once and repoints both rows.
+func TestOrganizeInPlace_DuplicateRowsUndoRoundTrip(t *testing.T) {
+	store, svc, root := organizeUndoFixture(t)
+	dir := filepath.Join(root, "incoming", "Twice")
+	files := []string{filepath.Join(dir, "Brisingr 01.mp3"), filepath.Join(dir, "Brisingr 02.mp3")}
+	book, err := store.CreateBook(&database.Book{ID: "dup", Title: "Brisingr", FilePath: files[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, f := range files {
+		writeAudio(t, f, string(rune('a'+i)))
+		if err := store.CreateBookFile(&database.BookFile{ID: "dup-" + string(rune('1'+i)), BookID: book.ID, FilePath: f}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.CreateBookFile(&database.BookFile{ID: "dup-2b", BookID: book.ID, FilePath: files[1]}); err != nil {
+		t.Fatal(err)
+	}
+	book.Author = &database.Author{Name: "Christopher Paolini"}
+
+	organizeAndUndo(t, store, svc, book, func(l *organizer.Landing) {
+		if !l.MultiFile || len(l.FileMoves) != 3 {
+			t.Fatalf("landing = %+v, want three row moves", l)
+		}
+	})
+
+	for _, f := range files {
+		if _, err := os.Stat(f); err != nil {
+			t.Fatalf("%s not in place after undo: %v", f, err)
+		}
+	}
+	rows, err := store.GetBookFiles(book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("%d rows after undo, want 3", len(rows))
 	}
 	for _, r := range rows {
 		if filepath.Dir(r.FilePath) != dir {

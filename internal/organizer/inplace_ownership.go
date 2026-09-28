@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_ownership.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: febbcbf3-dd0e-4f14-b704-ef979dcf2873
 // last-edited: 2026-09-28
 
@@ -44,6 +44,15 @@ const (
 	// OutcomeMultiFileTargetOccupied: a file of a multi-file book would land
 	// on a path something else already occupies.
 	OutcomeMultiFileTargetOccupied = "multi_file_target_occupied"
+	// OutcomeOutsideLibraryRoot: a file of a multi-file book is outside
+	// RootDir -- typically a download or import folder a dedup merge
+	// (MoveBookFilesToBook) left the book owning. Moving it into the library
+	// would take it from the torrent client seeding it.
+	OutcomeOutsideLibraryRoot = "outside_library_root"
+	// OutcomeTargetDirShared: the book's target folder already holds another
+	// book's files. Moving in would leave one folder holding two books, which
+	// then neither can be moved out of. See reOrganizeMultiFileInPlace.
+	OutcomeTargetDirShared = "target_dir_shared"
 )
 
 // refuseUnsafeInPlaceMove returns a *DestinationConflictError when moving src
