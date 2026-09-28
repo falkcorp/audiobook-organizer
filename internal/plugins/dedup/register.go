@@ -1,6 +1,6 @@
 // file: internal/plugins/dedup/register.go
-// version: 1.4.0
-// last-edited: 2026-09-02
+// version: 1.5.0
+// last-edited: 2026-09-28
 
 // Service registry registration for the dedup UOS plugin (W5/W7).
 //
@@ -23,6 +23,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
@@ -39,7 +40,17 @@ func init() {
 				return (*Plugin)(nil), nil
 			}
 			store := serviceregistry.Get[pluginStore](c, serviceregistry.KeyStore)
-			return New(engine, store, embStore), nil
+			p := New(engine, store, embStore)
+			// dedup.run-all follows its child ops by reading their rows. The
+			// production store is one object behind every narrow interface, so
+			// the same value answers GetOperationV2.
+			if r, ok := store.(opStatusReader); ok {
+				p.opStatus = r
+			} else {
+				logging.Warn(context.Background(), "dedupplugin: store has no GetOperationV2; dedup.run-all will fail until it does",
+					"store_type", fmt.Sprintf("%T", store))
+			}
+			return p, nil
 		},
 	})
 }

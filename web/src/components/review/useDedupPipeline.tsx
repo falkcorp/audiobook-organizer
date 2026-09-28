@@ -1,18 +1,21 @@
 // file: web/src/components/review/useDedupPipeline.tsx
-// version: 1.1.0
+// version: 2.0.0
 // guid: 8c2e5a17-4d93-4f6b-a0e8-71b3d9c4f25e
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
-// State + UI for the Dedup menu's one-button run (see dedupPipeline.ts).
+// State + UI for the Dedup menu's two whole-library runs (see dedupPipeline.ts):
+// "Find all duplicates" (server op dedup.run-all) and "Force full rescan"
+// (dedup.full-scan). The browser only starts the op and follows it; the work
+// runs on the server and survives this tab closing.
 //
 // Returned as a hook with its own `ui` node so ReviewWorkspace only has to call
-// it, point a menu item at `request`, and render `ui` once -- the run's
-// progress banner, its merge-risk prompt and its result all live here.
+// it, point menu items at `request`, and render `ui` once -- the progress
+// banner, the merge-risk prompt and the result all live here.
 //
-// PREFLIGHT FAILS CLOSED. The run reads the dedup settings before it starts,
-// because two of them let steps merge books on their own. If the settings
-// cannot be read the run does not start: "we couldn't check" must not turn
-// into "we assumed it was safe".
+// PREFLIGHT FAILS CLOSED. Both runs can link or merge books on their own when a
+// server setting allows it, so the settings are read before starting. If they
+// cannot be read the run does not start: "we couldn't check" must not turn into
+// "we assumed it was safe".
 
 import { useCallback, useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
@@ -31,26 +34,35 @@ import {
   Typography,
 } from '@mui/material';
 import * as api from '../../services/api';
-import type { DedupRescoreResult } from '../../services/api';
+import type { DedupRunAllResult, Operation } from '../../services/api';
 import {
-  DEDUP_PIPELINE_STEPS,
-  PipelineStepError,
-  PipelineStoppedError,
+  DEDUP_RUNS,
   autoMergeRisks,
-  runDedupPipeline,
-  type PipelineProgress,
-  type PipelineStepId,
+  followOperation,
+  OperationGoneError,
+  isPausedForRestart,
+  readRunAllResult,
+  startDedupRun,
+  type DedupRunKind,
 } from './dedupPipeline';
 
 type Toast = (message: string, severity?: 'success' | 'error' | 'info' | 'warning') => void;
 
 type RunState =
   | { kind: 'idle' }
-  | { kind: 'checking' }
-  | { kind: 'confirm'; risks: string[] }
-  | { kind: 'running'; progress: PipelineProgress | null; stopRequested: boolean }
-  | { kind: 'done'; result: DedupRescoreResult }
-  | { kind: 'failed'; message: string };
+  | { kind: 'checking'; run: DedupRunKind }
+  | { kind: 'confirm'; run: DedupRunKind; risks: string[] }
+  | {
+      kind: 'running';
+      run: DedupRunKind;
+      opId: string | null;
+      op: Operation | null;
+      stopRequested: boolean;
+      /** Last status read failed; retrying (a deploy, a blip). */
+      unreachable: boolean;
+    }
+  | { kind: 'done'; run: DedupRunKind; result: DedupRunAllResult | null }
+  | { kind: 'failed'; run: DedupRunKind; message: string };
 
 export interface UseDedupPipelineOptions {
   toast: Toast;
@@ -62,21 +74,47 @@ export interface UseDedupPipelineOptions {
 
 // ── Module-level run store ──────────────────────────────────────────────────
 //
-// The run is a multi-hour client-side promise chain, so its state cannot live
-// in the component that started it: leave /review and come back and a
-// component-local `busy` would read idle while the first chain was still going,
-// re-enabling the button and letting a second chain start alongside it. The
-// state lives here instead, read through useSyncExternalStore, and the
-// component currently mounted supplies the toast / "open Dupes" callbacks via
-// `bindings` (null while no workspace is mounted -- the run carries on and its
-// result is waiting when one mounts again).
+// Following a multi-hour op cannot live in the component that started it:
+// leave /review and come back and a component-local `busy` would read idle
+// while the op was still going. The state lives here, read through
+// useSyncExternalStore; the mounted workspace supplies the toast / "open Dupes"
+// callbacks via `bindings`.
+//
+// The op id is also remembered in localStorage (a per-viewer convenience, not
+// state anything depends on) so a reload picks the banner back up. Losing it is
+// harmless: the op keeps running on the server, shows in Operations, and a
+// second press of "Find all duplicates" returns the same run.
 
 let runState: RunState = { kind: 'idle' };
-let stopRequested = false;
-/** Steps skipped by preflight (e.g. embeddings turned off). */
-let skipSteps: PipelineStepId[] = [];
 const runListeners = new Set<() => void>();
 let bindings: UseDedupPipelineOptions | null = null;
+let followGeneration = 0;
+
+const STORAGE_KEY = 'review.dedupRun';
+
+function remember(run: DedupRunKind, opId: string | null) {
+  try {
+    if (opId) window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ run, opId }));
+    else window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Storage blocked (private window, previews): the banner just won't come
+    // back after a reload.
+  }
+}
+
+function recall(): { run: DedupRunKind; opId: string } | null {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as { run?: string; opId?: string };
+    if ((v.run === 'all' || v.run === 'rescan') && typeof v.opId === 'string' && v.opId) {
+      return { run: v.run, opId: v.opId };
+    }
+  } catch {
+    // Unreadable or malformed: treat as nothing remembered.
+  }
+  return null;
+}
 
 function setRunState(next: RunState | ((s: RunState) => RunState)) {
   runState = typeof next === 'function' ? next(runState) : next;
@@ -91,41 +129,87 @@ const getRunState = () => runState;
 /** Test-only: forget any run left over from a previous test. */
 export function resetDedupPipelineForTests() {
   runState = { kind: 'idle' };
-  stopRequested = false;
-  skipSteps = [];
   bindings = null;
+  followGeneration++;
 }
 
-async function startRun() {
-  stopRequested = false;
-  setRunState({ kind: 'running', progress: null, stopRequested: false });
+async function follow(run: DedupRunKind, opId: string) {
+  const gen = ++followGeneration;
+  const label = DEDUP_RUNS[run].label;
+  let final: Operation;
   try {
-    const result = await runDedupPipeline({
+    final = await followOperation(opId, {
       pollIntervalMs: bindings?.pollIntervalMs,
-      skip: skipSteps,
-      shouldStop: () => stopRequested,
-      onProgress: (progress) => setRunState((s) => (s.kind === 'running' ? { ...s, progress } : s)),
+      shouldStopFollowing: () => gen !== followGeneration,
+      onUpdate: (op) =>
+        setRunState((s) =>
+          s.kind === 'running' && s.opId === opId ? { ...s, op, unreachable: false } : s
+        ),
+      onUnreachable: () =>
+        setRunState((s) =>
+          s.kind === 'running' && s.opId === opId ? { ...s, unreachable: true } : s
+        ),
     });
-    setRunState({ kind: 'done', result });
-    bindings?.toast('Duplicate check finished — the results are in the Dupes tab.', 'success');
-    bindings?.onFinished();
   } catch (err) {
-    let message: string;
-    if (err instanceof PipelineStoppedError) {
-      message = `Stopped. ${err.message} Steps already finished keep their results.`;
-    } else if (err instanceof PipelineStepError) {
-      message = `"${err.step.label}" failed — ${err.message}. Later steps were not run.`;
-    } else {
-      message = err instanceof Error ? err.message : 'The duplicate check failed.';
-    }
-    setRunState({ kind: 'failed', message });
-    bindings?.toast(message, err instanceof PipelineStoppedError ? 'info' : 'error');
+    if (gen !== followGeneration) return;
+    // Forget the id either way, or every later visit would re-follow a run
+    // that cannot be followed, with both buttons disabled while it fails.
+    // Pressing the button again is safe: an active run is returned, not
+    // duplicated.
+    remember(run, null);
+    const message =
+      err instanceof OperationGoneError
+        ? `"${label}" is no longer on the server (it may have been cleaned up). Start it again to check for duplicates.`
+        : `Lost track of "${label}" (${err instanceof Error ? err.message : 'no response'}). It may still be running — check Operations.`;
+    setRunState({ kind: 'failed', run, message });
+    bindings?.toast(message, 'error');
+    return;
   }
+  if (gen !== followGeneration) return;
+  remember(run, null);
+
+  if (final.status === 'completed') {
+    const result = run === 'all' ? await readRunAllResult(opId) : null;
+    setRunState({ kind: 'done', run, result });
+    bindings?.toast(`${label} finished — the results are in the Dupes tab.`, 'success');
+    bindings?.onFinished();
+    return;
+  }
+  const why = final.error_message ? `: ${final.error_message}` : '';
+  const message =
+    final.status === 'canceled'
+      ? `${label} stopped. Steps already finished keep their results.`
+      : `${label} ended as "${final.status}"${why}. Later steps were not run.`;
+  setRunState({ kind: 'failed', run, message });
+  bindings?.toast(message, final.status === 'canceled' ? 'info' : 'error');
 }
 
-async function requestRun() {
+async function startRun(run: DedupRunKind) {
+  setRunState({
+    kind: 'running',
+    run,
+    opId: null,
+    op: null,
+    stopRequested: false,
+    unreachable: false,
+  });
+  let opId: string;
+  try {
+    opId = await startDedupRun(run);
+  } catch (err) {
+    const message = `Could not start "${DEDUP_RUNS[run].label}": ${err instanceof Error ? err.message : 'unknown error'}.`;
+    setRunState({ kind: 'failed', run, message });
+    bindings?.toast(message, 'error');
+    return;
+  }
+  remember(run, opId);
+  setRunState((s) => (s.kind === 'running' ? { ...s, opId } : s));
+  void follow(run, opId);
+}
+
+async function requestRun(run: DedupRunKind) {
   if (runState.kind === 'checking' || runState.kind === 'running') return;
-  setRunState({ kind: 'checking' });
+  setRunState({ kind: 'checking', run });
   let config: api.Config;
   try {
     config = await api.getConfig();
@@ -137,15 +221,40 @@ async function requestRun() {
     );
     return;
   }
-  // With embeddings switched off the step can only fail, and a failed step
-  // stops every later one; leave it out rather than block the whole run.
-  skipSteps = config?.dedup?.embeddings_enabled === false ? ['embeddings'] : [];
-  const risks = autoMergeRisks(config ?? {});
+  const risks = autoMergeRisks(config ?? {}, run);
   if (risks.length > 0) {
-    setRunState({ kind: 'confirm', risks });
+    setRunState({ kind: 'confirm', run, risks });
     return;
   }
-  void startRun();
+  void startRun(run);
+}
+
+async function requestStop() {
+  if (runState.kind !== 'running' || !runState.opId || runState.stopRequested) return;
+  const { opId } = runState;
+  setRunState((s) => (s.kind === 'running' ? { ...s, stopRequested: true } : s));
+  try {
+    await api.cancelOperation(opId);
+  } catch {
+    setRunState((s) => (s.kind === 'running' ? { ...s, stopRequested: false } : s));
+    bindings?.toast('Could not stop it. Try again, or cancel it under Operations.', 'error');
+  }
+}
+
+/** On mount: pick a remembered run back up after a reload. */
+function resumeRemembered() {
+  if (runState.kind !== 'idle') return;
+  const r = recall();
+  if (!r) return;
+  setRunState({
+    kind: 'running',
+    run: r.run,
+    opId: r.opId,
+    op: null,
+    stopRequested: false,
+    unreachable: false,
+  });
+  void follow(r.run, r.opId);
 }
 
 export function useDedupPipeline(options: UseDedupPipelineOptions) {
@@ -159,17 +268,20 @@ export function useDedupPipeline(options: UseDedupPipelineOptions) {
       if (bindings === options) bindings = null;
     };
   });
+  useEffect(() => resumeRemembered(), []);
 
-  const setState = setRunState;
-  const start = useCallback(() => void startRun(), []);
-  const request = useCallback(() => requestRun(), []);
-
+  const request = useCallback((run: DedupRunKind = 'all') => requestRun(run), []);
   const busy = state.kind === 'checking' || state.kind === 'running';
 
   let ui: ReactNode = null;
   if (state.kind === 'confirm') {
+    const run = state.run;
     ui = (
-      <Dialog open onClose={() => setState({ kind: 'idle' })} data-testid="dedup-pipeline-confirm">
+      <Dialog
+        open
+        onClose={() => setRunState({ kind: 'idle' })}
+        data-testid="dedup-pipeline-confirm"
+      >
         <DialogTitle>Some duplicates may be merged automatically</DialogTitle>
         <DialogContent>
           <DialogContentText component="div">
@@ -180,8 +292,6 @@ export function useDedupPipeline(options: UseDedupPipelineOptions) {
               ))}
             </ul>
             To review everything yourself instead, turn these off in{' '}
-            {/* Router navigation, not href: a full page load would kill a
-                run in progress. */}
             <Link component={RouterLink} to={{ pathname: '/settings', hash: '#dedup' }}>
               Settings → Dedup
             </Link>{' '}
@@ -189,12 +299,12 @@ export function useDedupPipeline(options: UseDedupPipelineOptions) {
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setState({ kind: 'idle' })}>Cancel</Button>
+          <Button onClick={() => setRunState({ kind: 'idle' })}>Cancel</Button>
           <Button
             variant="contained"
             color="warning"
             data-testid="dedup-pipeline-confirm-run"
-            onClick={() => void start()}
+            onClick={() => void startRun(run)}
           >
             Run anyway
           </Button>
@@ -202,11 +312,10 @@ export function useDedupPipeline(options: UseDedupPipelineOptions) {
       </Dialog>
     );
   } else if (state.kind === 'running') {
-    const p = state.progress;
-    const stepNo = p ? p.stepIndex + 1 : 1;
-    const total = DEDUP_PIPELINE_STEPS.length;
-    const op = p?.op;
+    const op = state.op;
     const pct = op && op.total > 0 ? Math.min(100, (op.progress / op.total) * 100) : undefined;
+    const paused = op ? isPausedForRestart(op.status) : false;
+    const stopLabel = state.run === 'all' ? 'Stop after this step' : 'Stop';
     ui = (
       <Alert
         severity="info"
@@ -216,23 +325,25 @@ export function useDedupPipeline(options: UseDedupPipelineOptions) {
           <Button
             color="inherit"
             size="small"
-            disabled={state.stopRequested}
-            onClick={() => {
-              stopRequested = true;
-              setState((s) => (s.kind === 'running' ? { ...s, stopRequested: true } : s));
-            }}
+            data-testid="dedup-pipeline-stop"
+            disabled={!state.opId || state.stopRequested}
+            onClick={() => void requestStop()}
           >
-            {state.stopRequested ? 'Stopping after this step…' : 'Stop'}
+            {state.stopRequested ? 'Stopping…' : stopLabel}
           </Button>
         }
       >
-        <AlertTitle>
-          Finding duplicates — step {stepNo} of {total}:{' '}
-          {p?.step.label ?? DEDUP_PIPELINE_STEPS[0].label}
-        </AlertTitle>
-        <Typography variant="body2">
-          {op?.message || 'Working…'} You can use other pages meanwhile, but keep this browser tab
-          open: closing or reloading it stops the remaining steps.
+        <AlertTitle>{DEDUP_RUNS[state.run].label}</AlertTitle>
+        <Typography variant="body2" data-testid="dedup-pipeline-message">
+          {state.unreachable
+            ? "Can't reach the server right now — retrying. The run carries on there."
+            : paused
+              ? 'Paused while the server restarts — it will pick up at the step it was on.'
+              : op?.message || (state.opId ? 'Waiting to start…' : 'Starting…')}
+        </Typography>
+        <Typography variant="caption" component="p" sx={{ mt: 0.5 }}>
+          This runs on the server: you can leave this page or close the tab and it keeps going. Its
+          progress is also under Operations.
         </Typography>
         <Box sx={{ mt: 1 }}>
           <LinearProgress
@@ -243,18 +354,20 @@ export function useDedupPipeline(options: UseDedupPipelineOptions) {
       </Alert>
     );
   } else if (state.kind === 'done') {
-    const r = state.result;
+    const r = state.result?.rescore_preview;
     ui = (
       <Alert
         severity="success"
         data-testid="dedup-pipeline-done"
         sx={{ mx: 2, mt: 1 }}
-        onClose={() => setState({ kind: 'idle' })}
+        onClose={() => setRunState({ kind: 'idle' })}
       >
-        Duplicate check finished — the pairs it found are below for your review.
+        {DEDUP_RUNS[state.run].label} finished — the pairs it found are below for your review.
         {/* Deliberately no pointer to "Recalculate scores": saving new bands
             feeds automatic resolution, which is not a simple-user action. */}
-        {` Score check: ${(r.changed ?? 0).toLocaleString()} of ${(r.inspected ?? 0).toLocaleString()} pairs would score differently under the latest rules; nothing was changed.`}
+        {r
+          ? ` Score check: ${(r.changed ?? 0).toLocaleString()} of ${(r.inspected ?? 0).toLocaleString()} pairs would score differently under the latest rules; nothing was changed.`
+          : ''}
       </Alert>
     );
   } else if (state.kind === 'failed') {
@@ -263,7 +376,7 @@ export function useDedupPipeline(options: UseDedupPipelineOptions) {
         severity="error"
         data-testid="dedup-pipeline-failed"
         sx={{ mx: 2, mt: 1 }}
-        onClose={() => setState({ kind: 'idle' })}
+        onClose={() => setRunState({ kind: 'idle' })}
       >
         {state.message}
       </Alert>

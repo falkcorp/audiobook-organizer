@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -489,47 +489,53 @@ describe('one-button dedup run', () => {
     root_dir: '',
     dedup: { auto_merge_enabled: false, llm_auto_merge_high_confidence: false },
   } as unknown as api.Config;
+  const running = (id: string, message = 'Step 1 of 5: Preparing similarity data') =>
+    ({ id, status: 'running', progress: 100, total: 5000, message }) as api.Operation;
+  const completed = (id: string) =>
+    ({ id, status: 'completed', progress: 5000, total: 5000, message: '' }) as api.Operation;
 
   beforeEach(() => {
-    const op = (id: string) => async () => ({ id }) as api.Operation;
-    vi.mocked(api.triggerEmbedScan).mockImplementation(op('op-embed'));
-    vi.mocked(api.triggerDedupAcoustID).mockImplementation(op('op-acoustic'));
-    vi.mocked(api.triggerDedupScan).mockImplementation(op('op-find'));
-    vi.mocked(api.triggerDedupLLM).mockImplementation(op('op-llm'));
-    vi.mocked(api.getOperationStatus).mockImplementation(
-      async (id: string) => ({ id, status: 'completed', progress: 1, total: 1 }) as api.Operation
-    );
-    vi.mocked(api.rescoreDedupCandidates).mockResolvedValue({
-      inspected: 12,
-      skipped: 0,
-      changed: 0,
-      applied: false,
-      band_deltas: {},
+    vi.mocked(api.startDedupRunAll).mockResolvedValue({ id: 'run-1' } as api.Operation);
+    vi.mocked(api.triggerDedupScan).mockResolvedValue({ id: 'scan-1' } as api.Operation);
+    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => completed(id));
+    vi.mocked(api.getOperationResult).mockResolvedValue({
+      result_data: {
+        steps: [],
+        skipped: null,
+        rescore_preview: { inspected: 12, skipped: 0, changed: 4, applied: false, band_deltas: {} },
+      },
     });
+    vi.mocked(api.cancelOperation).mockResolvedValue(undefined);
   });
 
-  async function clickRunAll(user: ReturnType<typeof userEvent.setup>) {
+  async function clickCommand(user: ReturnType<typeof userEvent.setup>, id: string) {
     renderWorkspace();
     await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
     await user.click(screen.getByTestId('command-menu-dedup'));
-    await user.click(await screen.findByTestId('command-find-all-duplicates'));
+    await user.click(await screen.findByTestId(`command-${id}`));
   }
+  const clickRunAll = (user: ReturnType<typeof userEvent.setup>) =>
+    clickCommand(user, 'find-all-duplicates');
 
-  it('is in the simple section with no advanced setting, and runs every step then opens Dupes', async () => {
+  it('starts ONE server op, follows it, then shows its score check and opens Dupes', async () => {
     vi.mocked(api.getConfig).mockResolvedValue(safeConfig);
     const user = userEvent.setup();
     await clickRunAll(user);
 
-    await waitFor(() => expect(api.rescoreDedupCandidates).toHaveBeenCalledWith(false));
-    const order = [
+    expect(await screen.findByTestId('dedup-pipeline-done')).toHaveTextContent(/4 of 12 pairs/);
+    expect(api.startDedupRunAll).toHaveBeenCalledTimes(1);
+    expect(api.getOperationStatus).toHaveBeenCalledWith('run-1');
+    expect(api.getOperationResult).toHaveBeenCalledWith('run-1');
+    // The steps run on the server now; the browser starts none of them.
+    for (const fn of [
       api.triggerEmbedScan,
       api.triggerDedupAcoustID,
       api.triggerDedupScan,
       api.triggerDedupLLM,
-    ].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]);
-    expect(order).toEqual([...order].sort((a, b) => a - b));
-    expect(api.rescoreDedupCandidates).not.toHaveBeenCalledWith(true);
-    expect(await screen.findByTestId('dedup-pipeline-done')).toBeInTheDocument();
+      api.rescoreDedupCandidates,
+    ]) {
+      expect(fn).not.toHaveBeenCalled();
+    }
     await waitFor(() =>
       expect(screen.getByTestId('lane-tab-dupes')).toHaveAttribute('aria-selected', 'true')
     );
@@ -546,10 +552,10 @@ describe('one-button dedup run', () => {
     expect(await screen.findByTestId('dedup-pipeline-confirm')).toHaveTextContent(
       /identical audio file/i
     );
-    expect(api.triggerEmbedScan).not.toHaveBeenCalled();
+    expect(api.startDedupRunAll).not.toHaveBeenCalled();
 
     await user.click(screen.getByTestId('dedup-pipeline-confirm-run'));
-    await waitFor(() => expect(api.triggerEmbedScan).toHaveBeenCalled());
+    await waitFor(() => expect(api.startDedupRunAll).toHaveBeenCalledTimes(1));
   });
 
   it('does not start when the settings cannot be read', async () => {
@@ -558,21 +564,17 @@ describe('one-button dedup run', () => {
     await clickRunAll(user);
 
     expect(await screen.findByText(/did not start/i)).toBeInTheDocument();
-    expect(api.triggerEmbedScan).not.toHaveBeenCalled();
+    expect(api.startDedupRunAll).not.toHaveBeenCalled();
   });
 
-  it('keeps running, and stays disabled, across leaving and returning to the page', async () => {
+  it('shows the server op progress and stays disabled across leaving and returning', async () => {
     vi.mocked(api.getConfig).mockResolvedValue(safeConfig);
-    // Hold the first step open so the run is mid-flight when we navigate away.
-    let finishEmbed: () => void = () => {};
-    const embedDone = new Promise<void>((r) => (finishEmbed = r));
-    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => {
-      if (id === 'op-embed') await embedDone;
-      return { id, status: 'completed', progress: 1, total: 1 } as api.Operation;
-    });
+    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => running(id));
     const user = userEvent.setup();
     await clickRunAll(user);
-    await screen.findByTestId('dedup-pipeline-progress');
+    expect(await screen.findByTestId('dedup-pipeline-message')).toHaveTextContent(
+      'Step 1 of 5: Preparing similarity data'
+    );
 
     cleanup();
     renderWorkspace();
@@ -584,34 +586,59 @@ describe('one-button dedup run', () => {
       'aria-disabled',
       'true'
     );
-    expect(api.triggerEmbedScan).toHaveBeenCalledTimes(1);
-
-    finishEmbed();
-    expect(await screen.findByTestId('dedup-pipeline-done')).toBeInTheDocument();
+    expect(screen.getByTestId('command-full-rescan')).toHaveAttribute('aria-disabled', 'true');
+    expect(api.startDedupRunAll).toHaveBeenCalledTimes(1);
   });
 
-  it('skips the similarity-data step when embeddings are turned off', async () => {
-    vi.mocked(api.getConfig).mockResolvedValue({
-      root_dir: '',
-      dedup: {
-        auto_merge_enabled: false,
-        llm_auto_merge_high_confidence: false,
-        embeddings_enabled: false,
-      },
-    } as unknown as api.Config);
+  it('picks a run back up after a reload from the remembered op id', async () => {
+    window.localStorage.setItem('review.dedupRun', JSON.stringify({ run: 'all', opId: 'run-9' }));
+    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => running(id));
+    renderWorkspace();
+
+    expect(await screen.findByTestId('dedup-pipeline-progress')).toBeInTheDocument();
+    await waitFor(() => expect(api.getOperationStatus).toHaveBeenCalledWith('run-9'));
+    expect(api.startDedupRunAll).not.toHaveBeenCalled();
+  });
+
+  it('forgets a remembered run the server no longer has, so it is not re-followed', async () => {
+    window.localStorage.setItem('review.dedupRun', JSON.stringify({ run: 'all', opId: 'gone-1' }));
+    vi.mocked(api.getOperationStatus).mockRejectedValue(
+      Object.assign(new Error('not found'), { status: 404 })
+    );
+    renderWorkspace();
+
+    expect(await screen.findByTestId('dedup-pipeline-failed')).toHaveTextContent(
+      /no longer on the server/i
+    );
+    expect(window.localStorage.getItem('review.dedupRun')).toBeNull();
+  });
+
+  it('keeps following while the server restarts', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue(safeConfig);
+    vi.mocked(api.getOperationStatus).mockImplementation(
+      async (id: string) => ({ ...running(id), status: 'interrupted_quiesced' }) as api.Operation
+    );
     const user = userEvent.setup();
     await clickRunAll(user);
 
-    await waitFor(() => expect(api.rescoreDedupCandidates).toHaveBeenCalledWith(false));
-    expect(api.triggerEmbedScan).not.toHaveBeenCalled();
-    expect(api.triggerDedupScan).toHaveBeenCalled();
+    expect(await screen.findByTestId('dedup-pipeline-message')).toHaveTextContent(
+      /server restarts/i
+    );
+    expect(screen.queryByTestId('dedup-pipeline-failed')).not.toBeInTheDocument();
   });
 
-  it('stops at a failed step and says which one', async () => {
+  it('reports the failed step the server names', async () => {
     vi.mocked(api.getConfig).mockResolvedValue(safeConfig);
     vi.mocked(api.getOperationStatus).mockImplementation(
       async (id: string) =>
-        ({ id, status: id === 'op-find' ? 'failed' : 'completed', progress: 1, total: 1 }) as api.Operation
+        ({
+          id,
+          status: 'failed',
+          progress: 2000,
+          total: 5000,
+          message: '',
+          error_message: 'Finding and scoring duplicates (op-x) ended as "failed"',
+        }) as api.Operation
     );
     const user = userEvent.setup();
     await clickRunAll(user);
@@ -619,8 +646,48 @@ describe('one-button dedup run', () => {
     expect(await screen.findByTestId('dedup-pipeline-failed')).toHaveTextContent(
       /Finding and scoring duplicates/
     );
-    expect(api.triggerDedupLLM).not.toHaveBeenCalled();
-    expect(api.rescoreDedupCandidates).not.toHaveBeenCalled();
+  });
+
+  it('Stop cancels the server op', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue(safeConfig);
+    vi.mocked(api.getOperationStatus).mockImplementation(async (id: string) => running(id));
+    const user = userEvent.setup();
+    await clickRunAll(user);
+
+    const stop = await screen.findByTestId('dedup-pipeline-stop');
+    await waitFor(() => expect(stop).toBeEnabled());
+    await user.click(stop);
+    await waitFor(() => expect(api.cancelOperation).toHaveBeenCalledWith('run-1'));
+  });
+
+  it('Force full rescan runs the scan that fills the Dupes tab, then opens it', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue(safeConfig);
+    const user = userEvent.setup();
+    await clickCommand(user, 'full-rescan');
+
+    expect(await screen.findByTestId('dedup-pipeline-done')).toBeInTheDocument();
+    expect(api.triggerDedupScan).toHaveBeenCalledTimes(1);
+    expect(api.getOperationStatus).toHaveBeenCalledWith('scan-1');
+    // Not the /dedup page's in-memory group scan any more.
+    expect(api.scanBookDuplicates).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByTestId('lane-tab-dupes')).toHaveAttribute('aria-selected', 'true')
+    );
+  });
+
+  it('Force full rescan asks first when identical copies would be auto-linked', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({
+      root_dir: '',
+      dedup: { auto_merge_enabled: true, llm_auto_merge_high_confidence: true },
+    } as unknown as api.Config);
+    const user = userEvent.setup();
+    await clickCommand(user, 'full-rescan');
+
+    const dialog = await screen.findByTestId('dedup-pipeline-confirm');
+    expect(dialog).toHaveTextContent(/identical audio file/i);
+    // The rescan has no AI step, so the AI auto-merge is not a risk for it.
+    expect(dialog).not.toHaveTextContent(/AI auto-merge/i);
+    expect(api.triggerDedupScan).not.toHaveBeenCalled();
   });
 });
 
