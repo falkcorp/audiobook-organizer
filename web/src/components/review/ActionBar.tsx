@@ -1,5 +1,5 @@
 // file: web/src/components/review/ActionBar.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5a91c73e-2d48-4b06-9f15-8c3e0a7b6d29
 // last-edited: 2026-09-27
 //
@@ -45,6 +45,7 @@ import {
   Typography,
 } from '@mui/material';
 import type { BulkApplyMode } from '../../services/api';
+import type { BulkProgress } from './lanes/useMetadataLane';
 import type { MetadataAction } from './reviewActions';
 import { needsConfirmation } from './reviewActions';
 import { metadataLane } from './lanes';
@@ -64,6 +65,14 @@ export interface ActionBarProps {
   onSearchSelected?: (ids: string[]) => void;
   /** A Search again request is in flight. */
   searching?: boolean;
+  /** A chunked bulk action's progress, shown while it runs. */
+  bulkProgress?: BulkProgress | null;
+  /** Clear the whole selection (it can span every page). */
+  onClearSelection?: () => void;
+  /** Skip every selected book. Absent: no button. */
+  onSkipSelected?: () => void;
+  /** Mark every selected book no-match. Absent: no button. Asks first. */
+  onRejectSelected?: () => void;
   highConfidenceIds: string[];
   allVisiblePendingIds: string[];
   unmatchedCount: number;
@@ -97,6 +106,10 @@ export function ActionBar({
   applicableSelectedIds,
   onSearchSelected,
   searching = false,
+  bulkProgress = null,
+  onClearSelection,
+  onSkipSelected,
+  onRejectSelected,
   highConfidenceIds,
   allVisiblePendingIds,
   unmatchedCount,
@@ -148,9 +161,24 @@ export function ActionBar({
         flexWrap: 'wrap',
       }}
     >
-      <Typography variant="body2" color="text.secondary" sx={{ mr: 'auto' }}>
-        {selected.length > 0 ? `${selected.length} selected` : 'Nothing selected'}
-      </Typography>
+      <Box sx={{ mr: 'auto', display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography variant="body2" color="text.secondary" data-testid="selected-count">
+          {selected.length > 0
+            ? `${selected.length.toLocaleString()} selected`
+            : 'Nothing selected'}
+        </Typography>
+        {selected.length > 0 && onClearSelection && (
+          <Button size="small" data-testid="clear-selection" onClick={onClearSelection}>
+            Clear
+          </Button>
+        )}
+        {bulkProgress && (
+          <Typography variant="body2" color="text.secondary" data-testid="bulk-progress">
+            {bulkProgress.label}: {bulkProgress.done.toLocaleString()} /{' '}
+            {bulkProgress.total.toLocaleString()}
+          </Typography>
+        )}
+      </Box>
 
       {busy && <CircularProgress size={18} aria-label="Applying" />}
 
@@ -244,6 +272,33 @@ export function ActionBar({
           </span>
         </Tooltip>
 
+        {onSkipSelected && (
+          <Button
+            size="small"
+            disabled={busy || selected.length === 0}
+            data-testid="skip-selected"
+            onClick={onSkipSelected}
+          >
+            Skip selected ({selected.length.toLocaleString()})
+          </Button>
+        )}
+        {onRejectSelected && (
+          <Button
+            size="small"
+            color="warning"
+            disabled={busy || bulkProgress !== null || selected.length === 0}
+            data-testid="reject-selected"
+            onClick={() => {
+              void confirm(
+                `Mark ${selected.length.toLocaleString()} book(s) no-match? Future fetches will skip them.`
+              ).then((ok) => {
+                if (ok) onRejectSelected();
+              });
+            }}
+          >
+            Reject selected ({selected.length.toLocaleString()})
+          </Button>
+        )}
         {onSearchSelected && (
           <Tooltip title="Ask the providers again for every selected book, using each book's current title and author. Runs as one background search (watch the bell); the new candidates appear here to review when it finishes.">
             <span>

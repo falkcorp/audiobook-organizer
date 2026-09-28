@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.21.0
+// version: 1.22.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-27
 //
@@ -78,6 +78,32 @@ export function pinOfCandidate(
   if (c.isbn10) pin.isbn10 = c.isbn10;
   if (c.isbn13) pin.isbn13 = c.isbn13;
   return pin;
+}
+
+/**
+ * Ids per request when a bulk action spans more books than one request should
+ * carry. The server's JSON body limit defaults to 1 MB (json_body_limit_mb),
+ * and bulk apply is additionally refused above bulk_apply_max_items (default
+ * 5,000, applycap). An apply request carries a pin per book (a few hundred
+ * bytes each), so 500 keeps it far under both; a fetch request carries bare
+ * ids (~40 bytes), so 1,000 is ~40 KB.
+ */
+export const APPLY_CHUNK_SIZE = 500;
+export const FETCH_CHUNK_SIZE = 1000;
+/** Concurrent per-book requests (reject, clear no-match): no bulk endpoint exists. */
+export const PER_BOOK_CONCURRENCY = 4;
+
+export function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/** One bulk action's progress, shown in the action bar while it runs. */
+export interface BulkProgress {
+  label: string;
+  done: number;
+  total: number;
 }
 
 /** Stable identity for "no un-groupings on this page" -- see `ungroupedIds`. */
@@ -671,6 +697,20 @@ export interface MetadataLane {
   applicableSelectedIds: string[];
   /** Select (or deselect) many books at once -- the rail's "select this page". */
   setSelection: (ids: string[], selected: boolean) => void;
+  /** Select every book the current filters (or chip) match, across all pages. */
+  selectAllMatching: () => void;
+  clearSelection: () => void;
+  /** True when every book the current view matches is selected. */
+  allMatchingSelected: boolean;
+  /** Mark every selected book skipped (client-side, like the row Skip). */
+  skipSelected: () => void;
+  /**
+   * Mark every selected book no-match on the server, PER_BOOK_CONCURRENCY at
+   * a time (there is no bulk endpoint). Returns how many failed.
+   */
+  rejectSelected: () => Promise<number>;
+  /** The running bulk action's progress, or null. */
+  bulkProgress: BulkProgress | null;
   /** True while a Search again request (and its no-match clears) is in flight. */
   searching: boolean;
   /**
@@ -781,6 +821,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // still needs it.
   const [unreviewableFor, setUnreviewableFor] = useState(-1);
   const [searching, setSearching] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
   const [bulkApplyMode, setBulkApplyModeState] = useState<BulkApplyMode>(loadBulkApplyMode);
   const [skipReplaceConfirm, setSkipReplaceConfirm] = useState<boolean>(loadSkipReplaceConfirm);
   const [pendingReplace, setPendingReplace] = useState<PendingReplace | null>(null);
@@ -1415,7 +1456,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       requestedIds: string[],
       pins?: Record<string, ApplyPin>,
       mode?: BulkApplyMode,
-      writeBack?: boolean
+      writeBack?: boolean,
+      // False when applyMany sends one chunk of a larger apply and announces
+      // the whole batch itself, once.
+      announce = true
     ): Promise<void> => {
       // mode is passed only by the bulk path (applyMany); the single-row
       // flush sends none, so the server never reads a toggle into it.
@@ -1423,10 +1467,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         mode === undefined
           ? await api.batchApplyFromCache(requestedIds, writeBack, pins)
           : await api.batchApplyFromCache(requestedIds, writeBack, pins, mode);
-      toast(
-        `Metadata apply queued for ${requestedIds.length.toLocaleString()} book(s) — watch the bell for progress.`,
-        'success'
-      );
+      if (announce) {
+        toast(
+          `Metadata apply queued for ${requestedIds.length.toLocaleString()} book(s) — watch the bell for progress.`,
+          'success'
+        );
+      }
       // pollOperationV2 loops forever with no timeout, so an op that never
       // reaches a terminal status (a crashed worker, an unrecognised status)
       // would leave these ids retained permanently -- freezing their optimistic
@@ -1528,11 +1574,54 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         // bulk toggle to 'replace' (owner ruling 2026-09-27), which is sent
         // with every bulk request. Pins are captured now, at the click, from
         // the rows the owner is looking at.
-        await runApplyOp(
-          bookIds,
-          captured?.pins ?? bulkPinsFor(bookIds),
-          captured?.mode ?? bulkApplyMode
-        );
+        //
+        // Sent in APPLY_CHUNK_SIZE requests: "select all matching" can hand
+        // this thousands of books, past both the JSON body limit and the
+        // server's bulk apply cap. Each chunk is its own background op; the
+        // bar shows one progress count across them.
+        const pins = captured?.pins ?? bulkPinsFor(bookIds);
+        const mode = captured?.mode ?? bulkApplyMode;
+        const chunks = chunk(bookIds, APPLY_CHUNK_SIZE);
+        let sent = 0;
+        try {
+          for (const ids of chunks) {
+            if (chunks.length > 1) {
+              setBulkProgress({ label: 'Queuing apply', done: sent, total: bookIds.length });
+            }
+            const chunkPins: Record<string, ApplyPin> = {};
+            ids.forEach((id) => {
+              if (pins[id]) chunkPins[id] = pins[id];
+            });
+            await runApplyOp(ids, chunkPins, mode, undefined, chunks.length === 1);
+            sent += ids.length;
+          }
+        } catch (err) {
+          // The chunks already sent belong to their ops (each releases its own
+          // ids when it settles); only the unsent remainder is released here.
+          const unsent = bookIds.slice(sent);
+          if (sent > 0) {
+            setRowStates((prev) => {
+              const next = new Map(prev);
+              bookIds.slice(0, sent).forEach((id) => next.set(id, 'applied'));
+              return next;
+            });
+            toast(
+              `Queued ${sent.toLocaleString()} of ${bookIds.length.toLocaleString()} book(s) before a request failed.`,
+              'warning'
+            );
+          }
+          handleApplyError(err, unsent);
+          return;
+        } finally {
+          setBulkProgress(null);
+        }
+        if (chunks.length > 1) {
+          toast(
+            `Metadata apply queued for ${bookIds.length.toLocaleString()} book(s) in ` +
+              `${chunks.length} batches — watch the bell for progress.`,
+            'success'
+          );
+        }
         // Dispatch acceptance is the point at which this batch belongs to the
         // background worker. Mark each row now so the default Hide applied
         // filter clears it immediately; the terminal poll then refreshes and
@@ -1557,7 +1646,15 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         setApplying(false);
       }
     },
-    [runApplyOp, handleApplyError, retainInFlight, clearServerDerived, bulkPinsFor, bulkApplyMode]
+    [
+      runApplyOp,
+      handleApplyError,
+      retainInFlight,
+      clearServerDerived,
+      bulkPinsFor,
+      bulkApplyMode,
+      toast,
+    ]
   );
 
   const reject = useCallback(
@@ -1734,6 +1831,87 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     });
   }, []);
 
+  const selectAllMatching = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      filteredResults.forEach((r) => next.add(r.book.id));
+      return next;
+    });
+  }, [filteredResults]);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  const allMatchingSelected = useMemo(
+    () => filteredResults.length > 0 && filteredResults.every((r) => selectedIds.has(r.book.id)),
+    [filteredResults, selectedIds]
+  );
+
+  // SELECTION ACROSS FILTER CHANGES. The selection is a plain id set, so it
+  // survives page turns and chip toggles untouched (a chip is a view onto the
+  // lane, and "select in the no-candidates chip, then look at the stale chip"
+  // must not lose the first). When a FILTER changes -- a switch, the level,
+  // the title regex, the provider, the threshold -- ids the new filter no
+  // longer matches are dropped, so a bulk action never reaches books the
+  // reviewer can no longer see. That prune is skipped while a chip is active,
+  // because a chip pauses the filters and the rows shown do not change.
+  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
+  const prunedForKeyRef = useRef(filtersKey);
+  useEffect(() => {
+    if (prunedForKeyRef.current === filtersKey) return;
+    prunedForKeyRef.current = filtersKey;
+    if (chipFilter !== null) return;
+    const keep = new Set(filteredResults.map((r) => r.book.id));
+    setSelectedIds((prev) => {
+      const next = new Set([...prev].filter((id) => keep.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [filtersKey, chipFilter, filteredResults]);
+
+  const skipSelected = useCallback(() => {
+    const ids = [...selectedIds];
+    clearServerDerived(ids);
+    setRowStates((prev) => {
+      const next = new Map(prev);
+      ids.forEach((id) => next.set(id, 'skipped'));
+      return next;
+    });
+    setSelectedIds(new Set());
+  }, [selectedIds, clearServerDerived]);
+
+  const rejectSelected = useCallback(async (): Promise<number> => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return 0;
+    const failed: string[] = [];
+    let done = 0;
+    try {
+      for (const batch of chunk(ids, PER_BOOK_CONCURRENCY)) {
+        setBulkProgress({ label: 'Rejecting', done, total: ids.length });
+        const settled = await Promise.allSettled(batch.map((id) => api.markNoMatch(id)));
+        settled.forEach((s, j) => {
+          if (s.status === 'rejected') failed.push(batch[j]);
+        });
+        done += batch.length;
+      }
+    } finally {
+      setBulkProgress(null);
+    }
+    const ok = ids.filter((id) => !failed.includes(id));
+    clearServerDerived(ok);
+    setRowStates((prev) => {
+      const next = new Map(prev);
+      ok.forEach((id) => next.set(id, 'rejected'));
+      return next;
+    });
+    setSelectedIds(new Set(failed));
+    toast(
+      failed.length
+        ? `Rejected ${ok.length.toLocaleString()}; ${failed.length.toLocaleString()} failed and stay selected.`
+        : `Rejected ${ok.length.toLocaleString()} book(s).`,
+      failed.length ? 'warning' : 'info'
+    );
+    return failed.length;
+  }, [selectedIds, clearServerDerived, toast]);
+
   const toggleExpand = useCallback(
     (bookId: string) => setExpandedId((prev) => (prev === bookId ? null : bookId)),
     []
@@ -1839,14 +2017,16 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         // Cleared four at a time: one request per book, and the owner may have
         // selected hundreds.
         const failed: string[] = [];
-        for (let i = 0; i < marked.length; i += 4) {
-          const batch = marked.slice(i, i + 4);
+        let cleared = 0;
+        for (const batch of chunk(marked, PER_BOOK_CONCURRENCY)) {
+          setBulkProgress({ label: 'Clearing no-match marks', done: cleared, total: marked.length });
           const settled = await Promise.allSettled(
             batch.map((id) => api.clearMetadataNoMatch(id))
           );
           settled.forEach((s, j) => {
             if (s.status === 'rejected') failed.push(batch[j]);
           });
+          cleared += batch.length;
         }
         if (marked.length > 0) {
           clearServerDerived(marked);
@@ -1865,27 +2045,38 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             'warning'
           );
         }
-        const resp = await api.batchFetchCandidates({ book_ids: ids, force: true });
-        if (!resp.operation_id) {
-          toast(resp.message ?? 'Those books are already being searched.', 'info');
+        // FETCH_CHUNK_SIZE ids per request, one background op each; the
+        // list reloads once, after every op has settled.
+        const opIds: string[] = [];
+        const chunks = chunk(ids, FETCH_CHUNK_SIZE);
+        let sent = 0;
+        let lastMessage: string | undefined;
+        for (const part of chunks) {
+          if (chunks.length > 1) {
+            setBulkProgress({ label: 'Queuing search', done: sent, total: ids.length });
+          }
+          const resp = await api.batchFetchCandidates({ book_ids: part, force: true });
+          if (resp.operation_id) opIds.push(resp.operation_id);
+          else lastMessage = resp.message;
+          sent += part.length;
+        }
+        if (opIds.length === 0) {
+          toast(lastMessage ?? 'Those books are already being searched.', 'info');
           return null;
         }
         toast(
           `Searching again for ${ids.length.toLocaleString()} book${ids.length !== 1 ? 's' : ''} ` +
-            "with each book's title and author — watch the bell for progress. " +
-            'The list reloads when the search finishes.',
+            "with each book's title and author" +
+            (opIds.length > 1 ? ` in ${opIds.length} batches` : '') +
+            ' — watch the bell for progress. The list reloads when the search finishes.',
           'info'
         );
         setSelectedIds(new Set());
-        const opId = resp.operation_id;
-        void api
-          .pollOperationV2(opId)
-          .catch(() => undefined)
-          .finally(() => {
-            if (!aliveRef.current) return;
-            refresh();
-          });
-        return opId;
+        void Promise.allSettled(opIds.map((id) => api.pollOperationV2(id))).finally(() => {
+          if (!aliveRef.current) return;
+          refresh();
+        });
+        return opIds[0];
       } catch (err) {
         if (isAuthRedirectError(err)) {
           toast('Session expired — sign in again, then search again.', 'error');
@@ -1895,6 +2086,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         return null;
       } finally {
         setSearching(false);
+        setBulkProgress(null);
       }
     },
     [results, unreviewableResults, rowStates, toast, refresh, clearServerDerived]
@@ -1930,6 +2122,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     unreviewableError,
     applicableSelectedIds,
     setSelection,
+    selectAllMatching,
+    clearSelection,
+    allMatchingSelected,
+    skipSelected,
+    rejectSelected,
+    bulkProgress,
     searching,
     searchAgain,
     bulkApplyMode,
