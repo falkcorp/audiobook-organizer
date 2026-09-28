@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/drain_stale.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a6103a90-d68c-4db5-ace4-e2a9fb2a51e1
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 // Package dedup — op dedup.drain-stale (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -119,9 +119,16 @@ func (p *Plugin) runDrainStale(ctx context.Context, rawParams json.RawMessage, r
 		}
 	}
 
-	_ = reporter.UpdateProgress(0, 1, "Scanning pending exact candidates…")
+	// This first report covers the up-front count of pending exact
+	// candidates; from then on the engine reports after every scanned page
+	// and periodically while marking, so the registry watchdog (5 minutes
+	// without an UpdateProgress call) never sees a silent op.
+	_ = reporter.UpdateProgress(0, 1, "Counting pending exact candidates…")
 
-	result, err := p.engine.DrainStaleCandidates(ctx, drainStaleCheckpointID, params.Apply)
+	result, err := p.engine.DrainStaleCandidates(ctx, drainStaleCheckpointID, params.Apply,
+		func(done, total int, message string) {
+			_ = reporter.UpdateProgress(done, total, message)
+		})
 	if err != nil {
 		return fmt.Errorf("drain-stale: %w", err)
 	}
@@ -139,16 +146,31 @@ func (p *Plugin) runDrainStale(ctx context.Context, rawParams json.RawMessage, r
 		"inspected", result.Inspected,
 		"would_purge", result.WouldPurge,
 		"kept", result.Kept,
+		"lookup_errors", result.LookupErrors,
 		"apply", params.Apply)
 
-	summary := fmt.Sprintf("inspected=%d would_purge=%d kept=%d reasons=%s",
-		result.Inspected, result.WouldPurge, result.Kept, formatReasonCounts(result.ReasonCounts, reasons))
+	summary := fmt.Sprintf("inspected=%d would_purge=%d kept=%d lookup_errors=%d reasons=%s",
+		result.Inspected, result.WouldPurge, result.Kept, result.LookupErrors, formatReasonCounts(result.ReasonCounts, reasons))
 
 	if !params.Apply {
 		_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
 			"Dry-run — %d candidate(s) would be reclassified stale-drain. %s. Review counts/samples, then pass apply=true (owner greenlight required).",
 			result.WouldPurge, summary))
 		reporter.Logger().Info("drain-stale: dry-run only; nothing written", "would_purge", result.WouldPurge)
+		return nil
+	}
+
+	// Pairs kept because a book/file read FAILED were never evaluated. Setting
+	// the done-flag would make every later apply a no-op and strand them
+	// pending, so leave it unset: a re-run re-scans (phase 1 is read-only),
+	// drains what it now can, and an already-drained row is refused as no
+	// longer pending.
+	if result.LookupErrors > 0 {
+		reporter.Logger().Warn("drain-stale: not setting done flag; some pairs were kept on read errors and need a re-run",
+			"flag", drainStaleDoneFlag, "lookup_errors", result.LookupErrors)
+		_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
+			"Applied — %d candidate(s) reclassified stale-drain, but %d pair(s) were kept on book read errors; done flag NOT set, re-run apply to cover them. %s",
+			result.WouldPurge, result.LookupErrors, summary))
 		return nil
 	}
 

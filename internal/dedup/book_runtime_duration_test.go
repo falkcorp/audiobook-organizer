@@ -1,13 +1,14 @@
 // file: internal/dedup/book_runtime_duration_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 6ae0f0e7-3cf7-42c7-b2c5-88b2a24e8c27
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package dedup
 
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -116,7 +117,7 @@ func TestDrainStale_MissingChaptersAreNotAShortBook(t *testing.T) {
 		{id: "BOOK_B", title: "A Real Book", duration: new(36000), files: chapterRows("BOOK_B", 20, 1800, 20)},
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,18 +133,23 @@ func TestDrainStale_MissingChaptersAreNotAShortBook(t *testing.T) {
 // GetBookFiles per BOOK, not per candidate.
 func TestDrainStale_ReadsEachBooksFilesOnce(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)
+	// Book reads run on drain-stale's prefetch worker pool, so the counter
+	// map needs a lock.
+	var mu sync.Mutex
 	reads := map[string]int{}
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
 		return &database.Book{ID: id, Title: "Book " + id}, nil
 	}
 	mock.GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
+		mu.Lock()
 		reads[id]++
+		mu.Unlock()
 		return chapterRows(id, 3, 1200, 3), nil
 	}
 	for _, other := range []string{"B", "C", "D"} {
 		seedDrainCandidate(t, es, "A", other)
 	}
-	if _, err := engine.DrainStaleCandidates(context.Background(), "", false); err != nil {
+	if _, err := engine.DrainStaleCandidates(context.Background(), "", false, nil); err != nil {
 		t.Fatal(err)
 	}
 	for id, n := range reads {

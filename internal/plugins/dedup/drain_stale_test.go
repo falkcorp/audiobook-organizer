@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/drain_stale_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 84155b4f-53cc-4c81-be5e-7575dd040725
-// last-edited: 2026-09-02
+// last-edited: 2026-09-28
 
 // Tests for the dedup.drain-stale op wrapper (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -15,6 +15,7 @@ package dedup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -142,4 +143,63 @@ func TestDrainStaleOp_ApplyReclassifiesAndFlags(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "second apply after done-flag must be a no-op (row stays pending)")
+}
+
+// progressRecordingReporter records every UpdateProgress call.
+type progressRecordingReporter struct {
+	mockReporter
+	calls [][2]int
+	msgs  []string
+}
+
+func (r *progressRecordingReporter) UpdateProgress(current, total int, message string) error {
+	r.calls = append(r.calls, [2]int{current, total})
+	r.msgs = append(r.msgs, message)
+	return nil
+}
+
+// The engine's per-page progress must reach the op's reporter, so the
+// registry watchdog sees activity between the op's first and last report.
+func TestDrainStaleOp_EngineProgressReachesReporter(t *testing.T) {
+	es := newTestEmbeddingStorePurge(t)
+	ms := drainMockStore(nil)
+	planBoilerplateCandidate(t, es)
+
+	p := buildPluginWithEngine(t, es, ms)
+	rep := &progressRecordingReporter{}
+	require.NoError(t, p.runDrainStale(context.Background(), []byte(`{"apply":false}`), rep))
+
+	var scanned bool
+	for i, m := range rep.msgs {
+		if m == "Scanned 1 of 1 pending exact candidates (1 would purge, 0 kept)" {
+			scanned = true
+			assert.Equal(t, [2]int{1, 1}, rep.calls[i])
+		}
+	}
+	assert.True(t, scanned, "engine page progress never reached the reporter: %v", rep.msgs)
+}
+
+// An apply that kept pairs on book read errors must NOT set the done flag, or
+// every later apply would be a no-op and those pairs would never be drained.
+func TestDrainStaleOp_ApplyWithLookupErrorsLeavesFlagUnset(t *testing.T) {
+	es := newTestEmbeddingStorePurge(t)
+	flag := false
+	ms := drainMockStore(&flag)
+	inner := ms.GetBookByIDFunc
+	ms.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		if id == "book-b" {
+			return nil, errors.New("pebble: transient read failure")
+		}
+		return inner(id)
+	}
+	planBoilerplateCandidate(t, es)
+
+	p := buildPluginWithEngine(t, es, ms)
+	require.NoError(t, p.runDrainStale(context.Background(), []byte(`{"apply":true}`), &mockReporter{}))
+
+	assert.False(t, flag, "done flag set despite pairs kept on read errors")
+	cands, _, err := es.ListCandidates(database.CandidateFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, cands, 1)
+	assert.Equal(t, "pending", cands[0].Status, "a pair kept on a read error must stay pending")
 }

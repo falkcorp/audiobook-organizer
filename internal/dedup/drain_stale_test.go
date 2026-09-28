@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6b8c9a6c-b168-4fb9-ba23-99937427b562
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 // Tests for Engine.DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -14,9 +14,17 @@ package dedup
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
 
 // drainBook is a compact spec for a book fixture in these tests.
@@ -82,7 +90,7 @@ func TestDrainStale_BoilerplateTitle(t *testing.T) {
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
@@ -104,7 +112,7 @@ func TestDrainStale_ShortDuration(t *testing.T) {
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
@@ -120,7 +128,7 @@ func TestDrainStale_IdentifierConflict(t *testing.T) {
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
@@ -141,7 +149,7 @@ func TestDrainStale_PartVsWhole(t *testing.T) {
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
@@ -164,7 +172,7 @@ func TestDrainStale_NonPrimaryVersion(t *testing.T) {
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
@@ -187,7 +195,7 @@ func TestDrainStale_NonPrimaryVersion_ConservativeNilKept(t *testing.T) {
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
@@ -203,7 +211,7 @@ func TestDrainStale_MissingBook(t *testing.T) {
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_GONE")
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
@@ -219,7 +227,7 @@ func TestDrainStale_KeptWhenStillValid(t *testing.T) {
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
@@ -237,7 +245,7 @@ func TestDrainStale_DryRunWritesNothing(t *testing.T) {
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
-	if _, err := engine.DrainStaleCandidates(context.Background(), "", false); err != nil {
+	if _, err := engine.DrainStaleCandidates(context.Background(), "", false, nil); err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
 
@@ -262,7 +270,7 @@ func TestDrainStale_ApplyReclassifiesOnlyWouldPurge(t *testing.T) {
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 	seedDrainCandidate(t, es, "BOOK_C", "BOOK_D")
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", true)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", true, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates apply: %v", err)
 	}
@@ -312,7 +320,7 @@ func TestDrainStale_PagingAcrossBatches(t *testing.T) {
 		seedDrainCandidate(t, es, "PA"+string(rune('a'+i)), "PB"+string(rune('a'+i)))
 	}
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
@@ -354,7 +362,7 @@ func TestDrainStale_CheckpointResumeAndClear(t *testing.T) {
 	mock.GetOperationStateFunc = func(opID string) ([]byte, error) { return nil, nil } // start fresh
 	mock.DeleteOperationStateFunc = func(opID string) error { cleared = true; return nil }
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "op-123", true)
+	res, err := engine.DrainStaleCandidates(context.Background(), "op-123", true, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
@@ -368,20 +376,85 @@ func TestDrainStale_CheckpointResumeAndClear(t *testing.T) {
 		t.Fatalf("expected the checkpoint to be cleared on clean completion")
 	}
 
-	// Now resume from an offset past all rows → nothing inspected.
+	var cp operations.OperationState
+	if err := json.Unmarshal(saved, &cp); err != nil {
+		t.Fatalf("decode saved checkpoint: %v", err)
+	}
+	cands, _, err := es.ListCandidates(database.CandidateFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListCandidates: %v", err)
+	}
+	var maxID int64
+	for _, c := range cands {
+		maxID = max(maxID, c.ID)
+	}
+	if cp.Phase != drainStaleCheckpointPhase || int64(cp.PhaseIndex) != maxID || cp.PhaseTotal != 2 {
+		t.Fatalf("checkpoint = phase %q index %d total %d; want %q / last candidate ID %d / 2",
+			cp.Phase, cp.PhaseIndex, cp.PhaseTotal, drainStaleCheckpointPhase, maxID)
+	}
+
 	drainStaleBatchSizeOld := drainStaleBatchSize
 	drainStaleBatchSize = 1
 	t.Cleanup(func() { drainStaleBatchSize = drainStaleBatchSizeOld })
-	mock.GetOperationStateFunc = func(opID string) ([]byte, error) {
-		// Simulate an interrupted apply that already processed both rows.
-		return []byte(`{"operation_id":"op-123","type":"scan","phase":"scanning","phase_index":2,"phase_total":2,"status":"interrupted"}`), nil
+
+	// Resume after a cursor at the FIRST candidate → only the second is inspected.
+	var firstID int64 = maxID
+	for _, c := range cands {
+		firstID = min(firstID, c.ID)
 	}
-	res2, err := engine.DrainStaleCandidates(context.Background(), "op-123", true)
+	mock.GetOperationStateFunc = func(opID string) ([]byte, error) {
+		return fmt.Appendf(nil, `{"operation_id":"op-123","type":"dedup:drain-stale","phase":%q,"phase_index":%d,"phase_total":2,"status":"interrupted"}`,
+			drainStaleCheckpointPhase, firstID), nil
+	}
+	res2, err := engine.DrainStaleCandidates(context.Background(), "op-123", true, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates resume: %v", err)
 	}
-	if res2.Inspected != 0 {
-		t.Fatalf("resume from offset 2 should inspect 0 rows, inspected %d", res2.Inspected)
+	if res2.Inspected != 1 {
+		t.Fatalf("resume after the first candidate ID should inspect 1 row, inspected %d", res2.Inspected)
+	}
+
+	// Resume after the last candidate ID → nothing inspected.
+	mock.GetOperationStateFunc = func(opID string) ([]byte, error) {
+		return fmt.Appendf(nil, `{"operation_id":"op-123","phase":%q,"phase_index":%d,"phase_total":2}`,
+			drainStaleCheckpointPhase, maxID), nil
+	}
+	res3, err := engine.DrainStaleCandidates(context.Background(), "op-123", true, nil)
+	if err != nil {
+		t.Fatalf("DrainStaleCandidates resume: %v", err)
+	}
+	if res3.Inspected != 0 {
+		t.Fatalf("resume after the last candidate ID should inspect 0 rows, inspected %d", res3.Inspected)
+	}
+}
+
+// A checkpoint from the old offset-paged scan (phase "scanning", PhaseIndex =
+// a row offset) must not be read as a candidate-ID cursor: the apply restarts
+// from the beginning, which is safe because phase 1 writes nothing.
+func TestDrainStale_LegacyOffsetCheckpointRestartsFromBeginning(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+	byID := map[string]*database.Book{
+		"BOOK_A": {ID: "BOOK_A", Title: "A Real Book", Duration: new(3600)},
+		"BOOK_B": {ID: "BOOK_B", Title: "A Real Book", Duration: new(3600)},
+		"BOOK_C": {ID: "BOOK_C", Title: "A Real Book", Duration: new(3600)},
+		"BOOK_D": {ID: "BOOK_D", Title: "A Real Book", Duration: new(3600)},
+	}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) { return byID[id], nil }
+	mock.GetBookFilesFunc = func(string) ([]database.BookFile, error) { return nil, nil }
+	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
+	seedDrainCandidate(t, es, "BOOK_C", "BOOK_D")
+	mock.SaveOperationStateFunc = func(string, []byte) error { return nil }
+	mock.DeleteOperationStateFunc = func(string) error { return nil }
+	mock.GetOperationStateFunc = func(string) ([]byte, error) {
+		return []byte(`{"operation_id":"op-old","phase":"scanning","phase_index":1,"phase_total":2}`), nil
+	}
+
+	res, err := engine.DrainStaleCandidates(context.Background(), "op-old", true, nil)
+	if err != nil {
+		t.Fatalf("DrainStaleCandidates: %v", err)
+	}
+	if res.Inspected != 2 {
+		t.Fatalf("legacy offset checkpoint was honoured as a cursor: inspected %d; want 2", res.Inspected)
 	}
 }
 
@@ -405,7 +478,7 @@ func TestDrainStale_DryRunIgnoresCheckpoint(t *testing.T) {
 		return []byte(`{"operation_id":"op-x","phase":"scanning","phase_index":99,"phase_total":99}`), nil
 	}
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "op-x", false)
+	res, err := engine.DrainStaleCandidates(context.Background(), "op-x", false, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates: %v", err)
 	}
@@ -428,22 +501,26 @@ func TestDrainStale_PinDuringScanIsNotReclassified(t *testing.T) {
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 	mock := engine.bookStore.(*database.MockStore)
 	inner := mock.GetBookByIDFunc
-	pinned := false
+	// Book reads run on the prefetch worker pool, so the one-shot pin is a
+	// sync.Once and failures use t.Errorf (t.Fatalf is illegal off the test
+	// goroutine).
+	var pinOnce sync.Once
+	var pinned atomic.Bool
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
-		if !pinned {
-			pinned = true
+		pinOnce.Do(func() {
 			if _, err := es.EnqueueManualCandidate("book", "BOOK_A", "BOOK_B", ""); err != nil {
-				t.Fatalf("pin: %v", err)
+				t.Errorf("pin: %v", err)
 			}
-		}
+			pinned.Store(true)
+		})
 		return inner(id)
 	}
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", true)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", true, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates apply: %v", err)
 	}
-	if !pinned {
+	if !pinned.Load() {
 		t.Fatal("fixture never looked a book up")
 	}
 	if res.WouldPurge != 1 || res.SkippedAtWrite != 1 {
@@ -471,7 +548,7 @@ func TestDrainStale_SamePathPairKept(t *testing.T) {
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 	seedDrainCandidate(t, es, "BOOK_C", "BOOK_D")
 
-	res, err := engine.DrainStaleCandidates(context.Background(), "", true)
+	res, err := engine.DrainStaleCandidates(context.Background(), "", true, nil)
 	if err != nil {
 		t.Fatalf("DrainStaleCandidates apply: %v", err)
 	}
@@ -490,5 +567,193 @@ func TestDrainStale_SamePathPairKept(t *testing.T) {
 		if !samePath && c.Status != staleDrainStatus {
 			t.Fatalf("control pair not drained: %+v", c)
 		}
+	}
+}
+
+type drainProgressCall struct {
+	done, total int
+}
+
+// The progress callback fires once before the first page and once after every
+// page, with done = rows inspected so far and total = the pending-exact count
+// taken at the start; apply adds a phase-2 start and finish report.
+func TestDrainStale_ProgressReportedPerPage(t *testing.T) {
+	old := drainStaleBatchSize
+	drainStaleBatchSize = 2
+	t.Cleanup(func() { drainStaleBatchSize = old })
+
+	books := []drainBook{{id: "BOOK_B", title: "A Real Book", duration: new(3600)}}
+	for i := range 5 {
+		books = append(books, drainBook{id: fmt.Sprintf("P%d", i), title: "Opening Credits", duration: new(3600)})
+	}
+	engine, es := setupDrainTest(t, books)
+	for i := range 5 {
+		seedDrainCandidate(t, es, fmt.Sprintf("P%d", i), "BOOK_B")
+	}
+
+	var calls []drainProgressCall
+	var msgs []string
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, func(done, total int, msg string) {
+		calls = append(calls, drainProgressCall{done, total})
+		msgs = append(msgs, msg)
+	})
+	if err != nil {
+		t.Fatalf("DrainStaleCandidates: %v", err)
+	}
+	want := []drainProgressCall{{0, 5}, {2, 5}, {4, 5}, {5, 5}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("dry-run progress calls = %v; want %v", calls, want)
+	}
+	if res.Inspected != 5 || res.WouldPurge != 5 {
+		t.Fatalf("inspected %d wouldPurge %d; want 5/5", res.Inspected, res.WouldPurge)
+	}
+	if !strings.Contains(msgs[len(msgs)-1], "Scanned 5 of 5 pending exact candidates") {
+		t.Fatalf("last scan message = %q", msgs[len(msgs)-1])
+	}
+
+	calls = nil
+	if _, err := engine.DrainStaleCandidates(context.Background(), "", true, func(done, total int, _ string) {
+		calls = append(calls, drainProgressCall{done, total})
+	}); err != nil {
+		t.Fatalf("DrainStaleCandidates apply: %v", err)
+	}
+	// Scan: 0,2,4,5 of 5; then marking: 0 of 5, 5 of 5.
+	want = []drainProgressCall{{0, 5}, {2, 5}, {4, 5}, {5, 5}, {0, 5}, {5, 5}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("apply progress calls = %v; want %v", calls, want)
+	}
+}
+
+// seedDrainParallelFixture plants many candidates across several pages whose
+// books repeat across pairs (so the per-run cache and cross-page reuse are
+// exercised) and whose outcomes span every reason bucket plus kept rows.
+func seedDrainParallelFixture(t *testing.T, n int) *Engine {
+	t.Helper()
+	var books []drainBook
+	for i := range 40 {
+		id := fmt.Sprintf("BK%02d", i)
+		b := drainBook{id: id, title: "A Real Book", duration: new(3600)}
+		switch i % 8 {
+		case 1:
+			b.title = "Opening Credits" // boilerplate_title
+		case 2:
+			b.duration = new(30) // short_duration
+		case 3:
+			b.isbn13 = new(fmt.Sprintf("97811111111%02d", i)) // identifier_conflict vs case 4
+		case 4:
+			b.isbn13 = new(fmt.Sprintf("97822222222%02d", i))
+		case 5:
+			continue // missing_book: never registered
+		}
+		books = append(books, b)
+	}
+	engine, es := setupDrainTest(t, books)
+	// n DISTINCT pairs (the store dedups by pair), interleaved so books recur
+	// on many pages rather than clustering on one.
+	seeded := 0
+	for gap := 1; gap < 40 && seeded < n; gap++ {
+		for i := 0; i+gap < 40 && seeded < n; i++ {
+			seedDrainCandidate(t, es, fmt.Sprintf("BK%02d", i), fmt.Sprintf("BK%02d", i+gap))
+			seeded++
+		}
+	}
+	if seeded != n {
+		t.Fatalf("seeded %d pairs; want %d", seeded, n)
+	}
+	return engine
+}
+
+// The pooled prefetch must produce exactly the serial result: same counts,
+// same reason buckets, same samples in the same (candidate) order. Run under
+// -race this also proves the pool shares no unsynchronised state.
+func TestDrainStale_ParallelPrefetchMatchesSerial(t *testing.T) {
+	oldBatch, oldWorkers := drainStaleBatchSize, drainStaleWorkers
+	t.Cleanup(func() { drainStaleBatchSize, drainStaleWorkers = oldBatch, oldWorkers })
+	drainStaleBatchSize = 7
+
+	run := func(workers int, statusIndex bool) *DrainStaleResult {
+		drainStaleWorkers = workers
+		engine := seedDrainParallelFixture(t, 120)
+		if statusIndex {
+			// Prod reads through the dedup:s: status index; a fresh test store
+			// has the flag unset and takes the full dedup:r: scan.
+			if err := engine.embedStore.SetCandidateStatusIndexBuilt(); err != nil {
+				t.Fatalf("SetCandidateStatusIndexBuilt: %v", err)
+			}
+		}
+		res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
+		if err != nil {
+			t.Fatalf("DrainStaleCandidates(workers=%d): %v", workers, err)
+		}
+		return res
+	}
+
+	serial := run(1, false)
+	if serial.Inspected < 100 || serial.WouldPurge == 0 || serial.Kept == 0 {
+		t.Fatalf("fixture too thin: %+v", serial)
+	}
+	for _, reason := range []string{drainReasonMissingBook, drainReasonBoilerplateTitle, drainReasonShortDuration, drainReasonIdentifierConflict} {
+		if serial.ReasonCounts[reason] == 0 {
+			t.Fatalf("fixture never hits %s: %v", reason, serial.ReasonCounts)
+		}
+	}
+	for reason, samples := range serial.Samples {
+		for i := 1; i < len(samples); i++ {
+			if samples[i].CandidateID <= samples[i-1].CandidateID {
+				t.Fatalf("%s samples out of candidate order: %v", reason, samples)
+			}
+		}
+	}
+
+	for _, statusIndex := range []bool{false, true} {
+		for _, workers := range []int{1, 4, 16} {
+			for range 3 {
+				if got := run(workers, statusIndex); !reflect.DeepEqual(got, serial) {
+					t.Fatalf("workers=%d statusIndex=%v result differs from serial:\n got  %+v\n want %+v",
+						workers, statusIndex, got, serial)
+				}
+			}
+		}
+	}
+}
+
+// A book or book-file READ ERROR (not a missing book) keeps the pair and is
+// counted, instead of landing it in missing_book or stripping its content
+// evidence.
+func TestDrainStale_ReadErrorKeepsPair(t *testing.T) {
+	engine, es := setupDrainTest(t, []drainBook{
+		{id: "BOOK_B", title: "Opening Credits", duration: new(3600)}, // boilerplate → would purge
+		{id: "BOOK_FERR", title: "A Real Book", duration: new(3600)},
+		{id: "BOOK_C", title: "Opening Credits", duration: new(3600)}, // control → purge
+		{id: "BOOK_D", title: "A Real Book", duration: new(3600)},
+	})
+	mock := engine.bookStore.(*database.MockStore)
+	innerBook, innerFiles := mock.GetBookByIDFunc, mock.GetBookFilesFunc
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		if id == "BOOK_ERR" {
+			return nil, errors.New("pebble: transient read failure")
+		}
+		return innerBook(id)
+	}
+	mock.GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
+		if id == "BOOK_FERR" {
+			return nil, errors.New("pebble: transient read failure")
+		}
+		return innerFiles(id)
+	}
+	seedDrainCandidate(t, es, "BOOK_ERR", "BOOK_B")
+	seedDrainCandidate(t, es, "BOOK_FERR", "BOOK_B")
+	seedDrainCandidate(t, es, "BOOK_C", "BOOK_D")
+
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false, nil)
+	if err != nil {
+		t.Fatalf("DrainStaleCandidates: %v", err)
+	}
+	if res.Inspected != 3 || res.LookupErrors != 2 || res.Kept != 2 || res.WouldPurge != 1 {
+		t.Fatalf("inspected %d lookupErrors %d kept %d wouldPurge %d; want 3/2/2/1",
+			res.Inspected, res.LookupErrors, res.Kept, res.WouldPurge)
+	}
+	if res.ReasonCounts[drainReasonMissingBook] != 0 {
+		t.Fatalf("a read error was classified missing_book: %v", res.ReasonCounts)
 	}
 }

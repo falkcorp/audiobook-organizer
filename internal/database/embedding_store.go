@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.20.0
-// last-edited: 2026-09-27
+// version: 2.21.0
+// last-edited: 2026-09-28
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -1102,6 +1102,121 @@ func (s *EmbeddingStore) listCandidatesByStatusIndex(f CandidateFilter) ([]Dedup
 		return nil, fmt.Errorf("list candidates by status index scan: %w", err)
 	}
 	return all, nil
+}
+
+// ListCandidatesAfterID is the keyset-paged sibling of ListCandidates, for
+// callers that must stream a whole filtered backlog (dedup.drain-stale). It
+// returns up to limit candidates matching f whose ID is strictly greater than
+// afterID, in ASCENDING ID order. The caller passes the last returned row's ID
+// as the next afterID; an empty or short result means the scan is exhausted.
+// f.Limit and f.Offset are ignored.
+//
+// Why not ListCandidates + Offset: ListCandidates materialises, filters and
+// similarity-sorts the WHOLE matching set on every call and then slices out
+// [Offset, Offset+Limit), so paging an N-row backlog in pages of P costs
+// O(N) per page and O(N²/P) for the run — for ~384K pending exact rows in
+// 500-row pages that is ~768 full scans and ~295M record decodes. Offset
+// paging is also unstable against concurrent writers: a scanner inserting or
+// resolving rows mid-run shifts every later offset, and sort.Slice is not a
+// stable sort for the many rows that tie on similarity, so rows could be
+// skipped or seen twice. Seeking the Pebble iterator to the cursor key costs
+// O(P + non-matching rows skipped) per page instead, and a row inserted
+// mid-run gets a higher ID, so it is picked up at the end, never
+// double-counted.
+//
+// Read paths mirror ListCandidates exactly: the "dedup:s:<status>:" index
+// when f.Status is set and the index is built, otherwise the full "dedup:r:"
+// record range (fail-open, never dropping a row to an incomplete index).
+// Both key families encode the ID as %016x, so key order is ID order.
+func (s *EmbeddingStore) ListCandidatesAfterID(f CandidateFilter, afterID int64, limit int) ([]DedupCandidate, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("list candidates after id: limit must be positive, got %d", limit)
+	}
+	if afterID < 0 {
+		afterID = 0
+	}
+	f.Search = strings.ToLower(strings.TrimSpace(f.Search))
+
+	// The Locked variant: closeMu.RLock is already held (see its doc for why a
+	// recursive RLock deadlocks).
+	if f.Status != "" && s.isCandidateStatusIndexBuiltLocked() {
+		prefix := dedupStatusIdxKey(f.Status, 0)
+		prefix = prefix[:len(prefix)-16] // "dedup:s:<status>:"
+		iter, err := s.db.NewIter(&pebble.IterOptions{
+			LowerBound: dedupStatusIdxKey(f.Status, afterID+1),
+			UpperBound: prefixUpperBound(prefix),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list candidates after id (status index): %w", err)
+		}
+		defer iter.Close()
+
+		out := make([]DedupCandidate, 0, limit)
+		for iter.First(); iter.Valid() && len(out) < limit; iter.Next() {
+			id, err := strconv.ParseInt(string(iter.Key()[len(prefix):]), 16, 64)
+			if err != nil {
+				continue
+			}
+			val, closer, err := s.db.Get(dedupRecKey(id))
+			if err == pebble.ErrNotFound {
+				continue // dangling index row — tolerated, as in listCandidatesByStatusIndex.
+			}
+			if err != nil {
+				return nil, fmt.Errorf("list candidates after id fetch %d: %w", id, err)
+			}
+			var rec candRec
+			unmarshalErr := json.Unmarshal(val, &rec)
+			closer.Close()
+			if unmarshalErr != nil {
+				continue
+			}
+			c := candRecToCandidate(id, rec)
+			// A stale index row whose record has since changed status must not leak.
+			if c.Status != f.Status || !matchesCandidateFilter(c, f, false) {
+				continue
+			}
+			out = append(out, c)
+		}
+		if err := iter.Error(); err != nil {
+			return nil, fmt.Errorf("list candidates after id (status index) scan: %w", err)
+		}
+		return out, nil
+	}
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: dedupRecKey(afterID + 1),
+		UpperBound: prefixUpperBound([]byte(dedupRecPfx)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list candidates after id: %w", err)
+	}
+	defer iter.Close()
+
+	out := make([]DedupCandidate, 0, limit)
+	for iter.First(); iter.Valid() && len(out) < limit; iter.Next() {
+		id, err := strconv.ParseInt(string(iter.Key())[len(dedupRecPfx):], 16, 64)
+		if err != nil {
+			continue
+		}
+		var rec candRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			continue
+		}
+		c := candRecToCandidate(id, rec)
+		if !matchesCandidateFilter(c, f, true) {
+			continue
+		}
+		out = append(out, c)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("list candidates after id scan: %w", err)
+	}
+	return out, nil
 }
 
 // matchesCandidateFilter applies CandidateFilter's fields to c. When
