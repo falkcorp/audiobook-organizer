@@ -1,13 +1,14 @@
 // file: internal/server/handlers/organize_inplace_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a4c7e21-5d3b-4f80-b6e2-1c8d0a7f3e94
-// last-edited: 2026-09-14
+// last-edited: 2026-09-28
 
 package handlers_test
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -90,12 +91,13 @@ func (f *organizeStoreFake) ModifyBook(id string, fn func(*database.Book) error)
 // handler went on to create a version.
 type organizeSvcSpy struct {
 	landing     *organizer.Landing
+	err         error
 	createCalls int
 	created     *database.Book
 }
 
 func (s *organizeSvcSpy) OrganizeOneBook(_ *organizer.Organizer, _ *database.Book, _ logger.Logger) (*organizer.Landing, error) {
-	return s.landing, nil
+	return s.landing, s.err
 }
 
 func (s *organizeSvcSpy) CreateOrganizedVersion(book *database.Book, landing *organizer.Landing, opID string, _ logger.Logger) (*database.Book, error) {
@@ -191,5 +193,63 @@ func TestOrganizeBook_AlreadyOrganized_TouchesNothing(t *testing.T) {
 	}
 	if body["message"] != "already organized" {
 		t.Errorf("message: %v", body["message"])
+	}
+}
+
+// TestOrganizeBook_DeclinedMoveIs409WithCategory: the organizer's deliberate
+// refusals (a file another book owns, the iTunes tree, an occupied
+// destination) are DestinationConflictErrors. They answered 500 until
+// 2026-09-28; they are 409 with the category and reason the client can show.
+func TestOrganizeBook_DeclinedMoveIs409WithCategory(t *testing.T) {
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/02.mp3"}}
+	svc := &organizeSvcSpy{err: fmt.Errorf("wrapped: %w", &organizer.DestinationConflictError{
+		Category: organizer.OutcomeOwnedByOtherBook, Source: "/lib/Old/02.mp3", Target: "/lib/New/02.mp3",
+		Reason: "owned by another book",
+	})}
+
+	w, _ := organizeBook(t, store, svc)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["category"] != organizer.OutcomeOwnedByOtherBook || body["reason"] != "owned by another book" {
+		t.Fatalf("body = %v, want category and reason", body)
+	}
+	if len(store.changes) != 0 || len(store.updated) != 0 {
+		t.Fatalf("a declined move wrote changes=%d updates=%d", len(store.changes), len(store.updated))
+	}
+
+	// Any other error is still a 500.
+	svc.err = errors.New("disk on fire")
+	if w, _ := organizeBook(t, store, svc); w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500 for a plain error, got %d", w.Code)
+	}
+}
+
+// TestOrganizeBook_MultiFileLandingRecordsPerFileMoves: the handler records a
+// multi-file in-place landing the same way CommitLanding does, one
+// book_file_move per file and a book_path_update, never one organize_rename
+// (whose undo would rename the new directory onto the first file's path).
+func TestOrganizeBook_MultiFileLandingRecordsPerFileMoves(t *testing.T) {
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/in/01.mp3"}}
+	svc := &organizeSvcSpy{landing: &organizer.Landing{Path: "/lib/A/Book", InPlace: true, MultiFile: true,
+		FileMoves: []organizer.BookFileMove{
+			{BookFileID: "f1", From: "/lib/in/01.mp3", To: "/lib/A/Book/01.mp3"},
+			{BookFileID: "f2", From: "/lib/in/02.mp3", To: "/lib/A/Book/02.mp3"},
+		}}}
+
+	if w, _ := organizeBook(t, store, svc); w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	counts := map[string]int{}
+	for _, c := range store.changes {
+		counts[c.ChangeType]++
+	}
+	if counts["organize_rename"] != 0 || counts["book_file_move"] != 2 || counts["book_path_update"] != 1 {
+		t.Fatalf("recorded %v", counts)
 	}
 }

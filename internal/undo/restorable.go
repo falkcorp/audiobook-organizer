@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 
 package undo
 
@@ -85,6 +85,13 @@ const (
 	// where restoring the field alone would point the book at a file that is
 	// not there.
 	ChangeTypeBookPathUpdate = "book_path_update"
+	// ChangeTypeBookFileMove: the file of the book_file row named in
+	// FieldName ("book_file:<id>") was moved on disk from OldValue to
+	// NewValue and the row repointed with it -- one per file of a multi-file
+	// book the organizer moved in place (the book's own path change is a
+	// separate book_path_update). Restorable: the file moves back and the row
+	// is repointed, while the row still names NewValue and OldValue is free.
+	ChangeTypeBookFileMove = "book_file_move"
 	// ChangeTypeBookSoftDelete: the book was marked for deletion. Restorable:
 	// the mark is cleared.
 	ChangeTypeBookSoftDelete = "book_soft_delete"
@@ -504,7 +511,7 @@ func NotRestorableLabel(c *database.OperationChange) string {
 			return ""
 		}
 		return ChangeTypeSeriesRename + ":(no series id)"
-	case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack:
+	case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookFileMove:
 		if _, ok := BookFileIDFromField(c.FieldName); ok {
 			return ""
 		}

@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.47.0
+// version: 1.48.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-28
 
@@ -955,6 +955,15 @@ func (orgSvc *Service) reOrganizeInPlace(book *database.Book, log logger.Logger)
 		return "", nil, fmt.Errorf("cannot access source %s: %w", oldPath, err)
 	}
 
+	// A multi-file book whose path is ONE of its files moves as a whole:
+	// renaming its path would move one chapter and strand the rest.
+	if present, ok, mfErr := orgSvc.multiFileInPlaceRows(book, info); mfErr != nil {
+		return "", nil, mfErr
+	} else if ok {
+		path, _, err := orgSvc.reOrganizeMultiFileInPlace(book, present, log)
+		return path, nil, err
+	}
+
 	var targetPath string
 	if info.IsDir() {
 		targetPath, err = org.GenerateTargetDirPath(book)
@@ -1388,15 +1397,9 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 		}
 		log.Info("Re-organized %s: %s → %s", book.Title, oldPath, newPath)
 		if operationID != "" {
-			_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
-				ID:          ulid.Make().String(),
-				OperationID: operationID,
-				BookID:      book.ID,
-				ChangeType:  "organize_rename",
-				FieldName:   "file_path",
-				OldValue:    oldPath,
-				NewValue:    newPath,
-			})
+			RecordInPlaceMove(orgSvc.db, book.ID, landing, oldPath, operationID)
+		}
+		if operationID != "" {
 			oldState := ""
 			if book.LibraryState != nil {
 				oldState = *book.LibraryState
@@ -1733,6 +1736,23 @@ func (orgSvc *Service) OrganizeOneBook(org *Organizer, book *database.Book, log 
 		oldState := ""
 		if book.LibraryState != nil {
 			oldState = *book.LibraryState
+		}
+		// A multi-file book whose path is one of its files: every file moves
+		// and the landing carries each move, which CommitLanding records row
+		// by row so an undo can put each file back.
+		if info, statErr := os.Stat(oldPath); statErr == nil {
+			present, ok, mfErr := orgSvc.multiFileInPlaceRows(book, info)
+			if mfErr != nil {
+				return nil, mfErr
+			}
+			if ok {
+				newPath, moves, err := orgSvc.reOrganizeMultiFileInPlace(book, present, log)
+				if err != nil {
+					return nil, err
+				}
+				return &Landing{Path: newPath, SourcePath: oldPath, SourceLibraryState: oldState, InPlace: true,
+					MultiFile: true, FileMoves: moves}, nil
+			}
 		}
 		newPath, res, err := orgSvc.reOrganizeInPlace(book, log)
 		if err != nil {
