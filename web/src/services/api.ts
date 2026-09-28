@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.131.0
+// version: 2.132.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-28
 
@@ -6477,14 +6477,15 @@ export async function triggerDedupScan(): Promise<Operation> {
 // "Find all duplicates" run, executed server-side as one resumable operation
 // (internal/plugins/dedup/run_all.go). Goes through the generic
 // POST /operations/v2, which never refuses because a library scan is running.
-// A press while a run is already active returns that run's id (the def dedupes
-// queued/running runs), so the caller simply follows it.
-export async function startDedupRunAll(): Promise<Operation> {
+// The op previews unless told otherwise (owner rule 2026-09-25): dryRun=true
+// runs only the read-only score check and lists the steps a live run would
+// start; dryRun=false runs every step for real. The mode is always sent.
+export async function startDedupRunAll(dryRun: boolean): Promise<Operation> {
   return wrapTrigger('dedup.run-all', async () => {
     const response = await apiFetch(`${API_BASE}/operations/v2`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ def_id: 'dedup.run-all', params: {} }),
+      body: JSON.stringify({ def_id: 'dedup.run-all', params: { dry_run: dryRun } }),
     });
     if (!response.ok) throw await buildApiError(response, 'Failed to start the duplicate check');
     const body = await response.json();
@@ -6494,6 +6495,10 @@ export async function startDedupRunAll(): Promise<Operation> {
 
 /** Result payload of a finished dedup.run-all (GET /operations/:id/result). */
 export interface DedupRunAllResult {
+  /** True for a preview, which starts no child op and writes nothing. */
+  dry_run?: boolean;
+  /** Steps a preview left out because they cannot run without writing. */
+  preview_skipped?: { id: string; label: string; def_id: string; reason: string }[] | null;
   steps: { id: string; label: string; child_op_id: string }[];
   skipped: string[] | null;
   rescore_preview: DedupRescoreResult | null;

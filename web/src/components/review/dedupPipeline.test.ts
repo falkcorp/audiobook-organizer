@@ -1,5 +1,5 @@
 // file: web/src/components/review/dedupPipeline.test.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6d1a8f35-2c94-4e7b-b3f0-9a5e4c2d7b18
 // last-edited: 2026-09-28
 
@@ -9,6 +9,7 @@ import {
   OperationGoneError,
   autoMergeRisks,
   followOperation,
+  previewRunAll,
   readRunAllResult,
   startDedupRun,
 } from './dedupPipeline';
@@ -31,6 +32,8 @@ describe('startDedupRun', () => {
     vi.mocked(api.startDedupRunAll).mockResolvedValue(op('run-1', 'queued'));
     await expect(startDedupRun('all')).resolves.toBe('run-1');
     expect(api.startDedupRunAll).toHaveBeenCalledTimes(1);
+    // dedup.run-all previews when the mode is omitted, so a real run says so.
+    expect(api.startDedupRunAll).toHaveBeenCalledWith(false);
     // The browser no longer drives the individual steps.
     expect(api.triggerEmbedScan).not.toHaveBeenCalled();
     expect(api.triggerDedupAcoustID).not.toHaveBeenCalled();
@@ -112,6 +115,30 @@ describe('followOperation', () => {
       OperationGoneError
     );
     expect(api.getOperationStatus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('previewRunAll', () => {
+  it('runs dedup.run-all as a preview and returns its result', async () => {
+    const result = {
+      dry_run: true,
+      preview_skipped: [],
+      steps: [],
+      skipped: null,
+      rescore_preview: null,
+    };
+    vi.mocked(api.startDedupRunAll).mockResolvedValue(op('p-1', 'queued'));
+    vi.mocked(api.getOperationStatus).mockResolvedValue(op('p-1', 'completed'));
+    vi.mocked(api.getOperationResult).mockResolvedValue({ result_data: result });
+    await expect(previewRunAll({ pollIntervalMs: 0 })).resolves.toEqual(result);
+    expect(api.startDedupRunAll).toHaveBeenCalledWith(true);
+    expect(api.startDedupRunAll).not.toHaveBeenCalledWith(false);
+  });
+
+  it('returns null when the preview fails', async () => {
+    vi.mocked(api.startDedupRunAll).mockResolvedValue(op('p-1', 'queued'));
+    vi.mocked(api.getOperationStatus).mockResolvedValue(op('p-1', 'failed'));
+    await expect(previewRunAll({ pollIntervalMs: 0 })).resolves.toBeNull();
   });
 });
 
