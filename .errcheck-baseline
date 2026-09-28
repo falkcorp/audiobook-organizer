@@ -1,7 +1,7 @@
 # file: .errcheck-baseline
-# version: 1.1.1
+# version: 1.1.2
 # guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
-# last-edited: 2026-09-27
+# last-edited: 2026-09-28
 
 # The number of `errcheck` findings tolerated in the tree. This is a RATCHET,
 # exactly like .interface-width-baseline: CI fails if the count goes UP, and
@@ -40,4 +40,8 @@
 # count, and this baseline is set to that number rather than the one measured
 # on the machine that wrote it. If you add a new build-tagged file, measure
 # with GOOS=linux before trusting a local darwin count.
-837
+# 2026-09-28 (PR #3598): 837 -> 835, measured by the CI runner itself
+# (ubuntu, "baseline=837 actual=835"). The in-place multi-file move now checks
+# the MarkNeedsRescan error it used to drop, and RecordInPlaceMove returns the
+# CreateOperationChange errors it used to discard.
+835
