@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
 // last-edited: 2026-09-28
 
@@ -79,12 +79,23 @@ func newJunkLib(t *testing.T) *junkLib {
 	add("existing", "Existing Title", "/lib/Author A/Existing Title.m4b", a, nil, "/lib/Author A/Existing Title.m4b")
 	add("dup", "Intro", "/lib/Author A/Existing Title", a, nil,
 		"/lib/Author A/Existing Title/01.mp3", "/lib/Author A/Existing Title/02.mp3")
+	// The parent owns a.mp3; the fragment is imported LAST, so the
+	// single-slot path index names the fragment itself. Multi-file and not a
+	// chapter title, so only the ownership check can catch it.
+	add("parent", "Big Parent", "/lib/Parent/Big", a, nil, "/lib/Parent/Big/a.mp3", "/lib/Parent/Big/b.mp3")
+	add("owned", "Opening", "/lib/Moved/Opening", nil, nil, "/lib/Parent/Big/a.mp3", "/lib/Moved/Opening/x.mp3")
+	// The organizer-moved chapter: author "Eldest", title "98", alone.
+	eldest, err := st.CreateAuthor("Eldest")
+	require.NoError(t, err)
+	add("eldest98", "98", "/lib/Eldest/02/98/98.mp3", &eldest.ID, nil, "/lib/Eldest/02/98/98.mp3")
 	// ---- skipped for other reasons ----
 	locked := add("locked", "Unknown Title", "/lib/Author A/Locked Folder", a, nil,
 		"/lib/Author A/Locked Folder/01.mp3", "/lib/Author A/Locked Folder/02.mp3")
 	require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: locked, Field: "title",
 		OverrideLocked: true, UpdatedAt: time.Now()}))
 	add("manual", "read by narrator", "", nil, nil)
+	// The one-level climb above a junk-named folder lands on "Books": refused.
+	add("generic", "Unknown", "/lib/Books/Unknown/Unknown.mp3", nil, nil, "/lib/Books/Unknown/Unknown.mp3")
 	person := add("person", "read by narrator", "/lib/Someone/C. T. Phipps", nil, nil,
 		"/lib/Someone/C. T. Phipps/01.mp3", "/lib/Someone/C. T. Phipps/02.mp3")
 	require.NoError(t, st.SetBookAuthors(person, []database.BookAuthor{{BookID: person, AuthorID: phipps.ID, Role: "author"}}))
@@ -147,6 +158,9 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		"frag2":         junkSkipFragment,
 		"chapter-alone": junkSkipFragment,
 		"dup":           junkSkipFragment,
+		"owned":         junkSkipFragment,
+		"eldest98":      junkSkipFragment,
+		"generic":       junkSkipNeedsManual,
 		"locked":        junkSkipUserLocked,
 		"manual":        junkSkipNeedsManual,
 		"person":        junkSkipNeedsManual,
@@ -161,8 +175,9 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 	}
 	require.Contains(t, rows["frag1"].SkipReason, "fragment — use the consolidation fixer")
 	require.Contains(t, rows["person"].SkipReason, "names the author or narrator")
+	require.Contains(t, rows["owned"].SkipReason, "is also a file of book "+lib.ids["parent"])
 
-	for _, name := range []string{"robot", "etranger", "1984", "existing"} {
+	for _, name := range []string{"robot", "etranger", "1984", "existing", "parent"} {
 		_, ok := rows[name]
 		require.False(t, ok, "%s has a real title and must not be a row", name)
 	}
