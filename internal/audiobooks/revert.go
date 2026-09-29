@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-29
 
@@ -349,11 +349,12 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	if err != nil {
 		return nil, err
 	}
+	plan.NoteRevertedEarlier(changes)
 	for _, c := range plan.Order {
 		err := plan.Gate(c)
 		already := false
 		if err == nil {
-			err = rs.revertChangeIn(c, plan.Stamps)
+			err = rs.revertChangeIn(c, plan)
 			if errors.Is(err, undo.ErrAlreadyRestored) {
 				already, err = true, nil
 			}
@@ -368,7 +369,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			revertLog.Warn("revert of change %s restored in part: %s", c.ID, partial.detail)
 			err = nil
 		}
-		plan.Record(c, err)
+		plan.Record(c, err, already)
 		if err != nil {
 			result.Failed++
 			switch undo.RefusalReason(err) {
@@ -430,9 +431,14 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 	return rs.revertChangeIn(c, nil)
 }
 
-// revertChangeIn reverts one row of an operation whose soft-delete stamps are
-// stamps (undo.OpSoftDeleteStamps; nil: only the row's own).
-func (rs *RevertService) revertChangeIn(c *database.OperationChange, stamps undo.SoftDeleteStamps) error {
+// revertChangeIn reverts one row of the operation plan orders (nil: the row
+// alone, with only its own soft-delete stamp and no knowledge of what the
+// rest of the operation restored).
+func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.RevertPlan) error {
+	var stamps undo.SoftDeleteStamps
+	if plan != nil {
+		stamps = plan.Stamps
+	}
 	switch c.ChangeType {
 	case "file_move", "organize_rename":
 		// organize_rename writes the same (OldValue, NewValue) shape as
@@ -459,7 +465,7 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, stamps undo
 	case undo.ChangeTypeBookSoftDelete:
 		return rs.revertBookSoftDelete(c, stamps)
 	case undo.ChangeTypeBookPrimaryDemote:
-		return rs.revertBookPrimaryDemote(c)
+		return rs.revertBookPrimaryDemote(c, plan != nil && plan.Undeleted(c.BookID))
 	case undo.ChangeTypeExternalIDReassign:
 		return rs.revertExternalIDReassign(c)
 	case undo.ChangeTypeBookMergedInto:
@@ -938,7 +944,8 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 
 // revertBookPrimaryDemote restores a retired shell's primary flag ("" is nil,
 // the never-set shape) while it is still the false the operation wrote. An
-// already-restored true is crowned too.
+// already-restored true is crowned only when the operation's soft-delete of
+// the book was written and reverted (see undo.RevertPlan.Undeleted).
 //
 // Restoring an explicit true re-crowns the shell with versionprimary.Crown,
 // which also writes explicit false on every other live member: the operation
@@ -948,7 +955,7 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 // shell's own write, outside its ModifyBook callback, and only when the shell
 // is live again (the soft-delete row, later in the ledger, is reverted
 // first); otherwise the restored true on a deleted row competes with nobody.
-func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) error {
+func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, undeleted bool) error {
 	var restored *bool
 	switch c.OldValue {
 	case "":
@@ -972,12 +979,17 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) er
 		book.IsPrimaryVersion = restored
 		return nil
 	})
-	// An already-restored row (the demote's write never happened, or the
-	// flag is back already) still crowns: the operation may have handed the
-	// group's flag to a sibling since, and skipping Crown would leave two
-	// primaries.
+	// An already-restored row crowns only when this operation's soft-delete
+	// of the book was written and has been reverted (undeleted): then the
+	// retire did hand the group's flag to a sibling, and this is a retry
+	// whose earlier Crown failed after the flag write. Otherwise (a retire
+	// cut off before it wrote, or a flag a user set since) the group is not
+	// the operation's to change, and the row writes nothing.
 	already := errors.Is(err, undo.ErrAlreadyRestored)
 	if err != nil && !already {
+		return err
+	}
+	if already && !undeleted {
 		return err
 	}
 	if restored != nil && *restored && group != "" {
