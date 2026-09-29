@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
 // last-edited: 2026-09-28
 
@@ -553,7 +553,7 @@ func (h *Handler) metadata(v *itemView) bookMetadataDTO {
 		// requirement 14 — so it is emitted as an explicit null rather than dropped.
 		Subtitle:          nil,
 		Title:             title,
-		TitleIgnorePrefix: ignorePrefix(title),
+		TitleIgnorePrefix: titleIgnorePrefix(title),
 	}
 }
 
@@ -612,16 +612,35 @@ var ignorePrefixes = []string{"the ", "a ", "an "}
 
 // ignorePrefix renders titleIgnorePrefix: "The Odyssey" -> "Odyssey, The".
 //
-// A numbered-book title is first rewritten to its sort form
-// (util.NumberedBookSortForm), so "I Corinthians", "1 Corinthians", "First
-// Corinthians" and the glyph-confused "l Corinthians" all render
-// "Corinthians 1" and sort, and letter-jump, under C together instead of
-// under I, 1, F and L. The library's own title sort uses the same rewrite
-// (util.TitleSortKey).
-func ignorePrefix(title string) string {
+// It is the SERIES form (nameIgnorePrefix, the series sort): a series name is
+// rewritten to its numbered-book sort form only when the whole name is a
+// numbered book ("I Corinthians" → "Corinthians 1", util.SeriesSortForm), so
+// "1 John Study Series" keeps its ordinary handling. Book titles use
+// titleIgnorePrefix.
+func ignorePrefix(name string) string {
+	if form, ok := util.SeriesSortForm(name); ok {
+		return form
+	}
+	return articleIgnorePrefix(name)
+}
+
+// titleIgnorePrefix is a BOOK title's titleIgnorePrefix. A numbered-book
+// title is first rewritten to its sort form (util.NumberedBookSortForm), so
+// "I Corinthians", "1 Corinthians", "First Corinthians" and the
+// glyph-confused "l Corinthians" all render "Corinthians 1" and sort, and
+// letter-jump, under C together instead of under I, 1, F and L; "1 John:
+// Commentary" renders "John 1: Commentary". The library's own title sort
+// uses the same rewrite (util.TitleSortKey).
+func titleIgnorePrefix(title string) string {
 	if form, ok := util.NumberedBookSortForm(title); ok {
 		return form
 	}
+	return articleIgnorePrefix(title)
+}
+
+// articleIgnorePrefix moves a leading article to the end: "The Hobbit" →
+// "Hobbit, The".
+func articleIgnorePrefix(title string) string {
 	lower := strings.ToLower(title)
 	for _, p := range ignorePrefixes {
 		if strings.HasPrefix(lower, p) {

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collapse_series.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4d2e71-5c3b-4f86-b0e2-7d19c6a8f354
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 
 package abs
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -148,7 +149,9 @@ func sortCollapsedByTitle(ids []string, groups map[string]collapseGroup, titleKe
 	for _, id := range ids {
 		keys[id] = titleKeys[id]
 		if g, ok := groups[id]; ok {
-			if k := database.TitleSortKey(seriesNames[g.seriesID], nil); k != "" {
+			// A series name takes the numbered-book rewrite only when the
+			// whole name is one (util.SeriesSortKey), as nameIgnorePrefix does.
+			if k := util.SeriesSortKey(seriesNames[g.seriesID]); k != "" {
 				keys[id] = k
 			}
 		}

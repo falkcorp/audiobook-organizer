@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_timeline_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7f3c1a94-2e6b-4d58-9a71-c0d4e8b52f36
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 // Behaviour tests for GET /api/v1/operations/timeline's def_id and limit
 // parameters, and for the scope fields the response reports about itself.
@@ -164,6 +164,21 @@ func TestGetOperationTimeline_DefIDFilterSeesThroughRenames(t *testing.T) {
 			assert.True(t, sawOld, "stored rows keep the def_id they were written with")
 		})
 	}
+}
+
+// A retired op (no def, no alias: maintenance.repair-junk-titles, absorbed
+// into a Repairs fixer) keeps its history findable: the filter matches the
+// stored def_id verbatim and scope echoes it unchanged.
+func TestGetOperationTimeline_DefIDFilterFindsARetiredOpsRows(t *testing.T) {
+	rows := append(timelineRows("maintenance.repair-junk-titles", 2), timelineRows("repairs.plan", 3)...)
+	h := timelineHandler(t, rows)
+	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=168h&def_id=maintenance.repair-junk-titles", "", nil)
+	h.GetOperationTimeline(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	data := timelineBody(t, w.Body.Bytes())
+	assert.Equal(t, float64(2), data["matched"], "only the retired op's own rows")
+	assert.Equal(t, "maintenance.repair-junk-titles", data["def_id"])
 }
 
 // An empty def_id must mean "every def", not "no def" — the inverted-predicate

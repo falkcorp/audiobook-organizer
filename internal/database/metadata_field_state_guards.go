@@ -1,5 +1,5 @@
 // file: internal/database/metadata_field_state_guards.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 34bc346c-8d4e-4097-89a5-810dc4e9807d
 // last-edited: 2026-09-28
 
@@ -10,7 +10,9 @@ package database
 // Three call sites asked them inline and spelled them differently, which made a
 // deliberate difference look like a typo:
 //
-//   - plugins/maintenance/junk_title_fixer.go (was repair_junk_titles.go) tested locked || override || fetched
+//   - plugins/maintenance/junk_title_fixer.go (was repair_junk_titles.go) tests
+//     locked || override, then fetched separately (skipped_user_locked vs
+//     skipped_provider_title)
 //   - plugins/maintenance/title_repair.go       tested locked || override, then
 //     fetched separately so it could report a different skip reason
 //   - server/handlers/metadata/handler.go       tested locked || override only
