@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c7e5a19-8b43-4f06-9d21-4e8b0c6a3f75
-// last-edited: 2026-09-27
+// last-edited: 2026-09-29
 
 package maintenance
 
@@ -126,7 +126,7 @@ func (f *vgPrimaryFixer) Replan(ctx context.Context, _ json.RawMessage, planned 
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	a := &vgApplier{store: store, reporter: rep, seriesNames: names}
+	a := &vgApplier{store: store, reporter: rep, seriesNames: names, paths: repairs.NewPathResolver()}
 	loader := versionprimary.Loader{Files: store, Chapters: vps, RootDir: config.AppConfig.RootDir,
 		Probe: f.prober(func(msg string) { _ = rep.Log(slog.LevelWarn, msg) })}
 	g := a.planGroup(ctx, loader, planned.RowID)

@@ -1,7 +1,7 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package repairs
 
@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -287,6 +289,40 @@ func TestGuardBookPaths_TorchwoodAndDoctorWhoSeparators(t *testing.T) {
 	require.Equal(t, SkipOwnerManual, k, "series alone, no paths")
 	k, _ = GuardBookPaths("b", []string{"/lib/Author/Title/t.m4b"}, "Discworld")
 	require.Empty(t, k)
+}
+
+// TestPathResolver_SymlinksIntoITunes (N6): a folder link, a file link and a
+// missing file under a linked folder all resolve into books/itunes/**, and
+// the folder is resolved once for the whole run.
+func TestPathResolver_SymlinksIntoITunes(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	itunes := filepath.Join(root, "books", "itunes", "Real")
+	require.NoError(t, os.MkdirAll(itunes, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(itunes, "a.m4b"), []byte("x"), 0o644))
+	lib := filepath.Join(root, "lib")
+	require.NoError(t, os.MkdirAll(filepath.Join(lib, "Plain"), 0o755))
+	require.NoError(t, os.Symlink(itunes, filepath.Join(lib, "Link")))
+	require.NoError(t, os.Symlink(filepath.Join(itunes, "a.m4b"), filepath.Join(lib, "Plain", "file-link.m4b")))
+
+	res := NewPathResolver()
+	for _, p := range []string{
+		filepath.Join(lib, "Link", "a.m4b"),
+		filepath.Join(lib, "Link", "gone.m4b"), // missing, folder is a link
+		filepath.Join(lib, "Plain", "file-link.m4b"),
+	} {
+		k, why := GuardBookPathsWith(res, "b", []string{p}, "")
+		require.Equal(t, SkipITunes, k, "%s: %s", p, why)
+	}
+	k, _ := GuardBookPathsWith(res, "b", []string{filepath.Join(lib, "Plain", "own.m4b")}, "")
+	require.Empty(t, k, "a plain folder is not iTunes")
+	res.mu.Lock()
+	n := len(res.dirs)
+	res.mu.Unlock()
+	require.Equal(t, 2, n, "Link and Plain resolved once each")
+	// Unresolvable: checked lexically only.
+	k, _ = GuardBookPathsWith(res, "b", []string{"/nonexistent-192.0.2.1/books/itunes/x.m4b"}, "")
+	require.Equal(t, SkipITunes, k)
 }
 
 // ---- paging ----
