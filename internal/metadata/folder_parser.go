@@ -1,5 +1,5 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
 // last-edited: 2026-09-28
 
@@ -317,7 +317,7 @@ func tryParseAuthorSegment(seg string, fm *FolderMetadata) bool {
 	if strings.Contains(seg, " - ") {
 		parts := strings.SplitN(seg, " - ", 2)
 		candidate := strings.TrimSpace(parts[0])
-		if looksLikeAuthorSegment(candidate) {
+		if looksLikeFolderAuthor(candidate) {
 			fm.Authors = splitMultipleAuthors(candidate)
 			fm.AuthorConf = ConfidenceMedium
 			return true
@@ -326,7 +326,7 @@ func tryParseAuthorSegment(seg string, fm *FolderMetadata) bool {
 	}
 
 	// Plain segment: treat whole thing as author if it looks like one.
-	if looksLikeAuthorSegment(seg) {
+	if looksLikeFolderAuthor(seg) {
 		fm.Authors = splitMultipleAuthors(seg)
 		fm.AuthorConf = ConfidenceHigh
 		return true
@@ -349,11 +349,30 @@ func tryExtractAuthorFromDashSplit(seg string, fm *FolderMetadata) {
 	// parts = ["(Series) Title", "Author"]
 	if len(parts) >= 2 {
 		candidate := strings.TrimSpace(parts[len(parts)-1])
-		if looksLikeAuthorSegment(candidate) && fm.AuthorConf == ConfidenceNone {
+		if looksLikeFolderAuthor(candidate) && fm.AuthorConf == ConfidenceNone {
 			fm.Authors = splitMultipleAuthors(candidate)
 			fm.AuthorConf = ConfidenceMedium
 		}
 	}
+}
+
+// looksLikeFolderAuthor is the gate this parser's three author assignments
+// use: author-SHAPED (looksLikeAuthorSegment) and not work-NAMED
+// (personname.LooksLikeWorkTitle). The veto covers every accepting branch of
+// the shape test, including its early " & ", "." and "," returns, which skip
+// the word checks. In a <series>/<title>/<disc> layout the series folder sits
+// where Pass 3 looks for the author, so "The Stormlight Archive" was taken as
+// the author at HIGH confidence. It only removes authors; the wider predicate
+// divergence from personname is still tracked in
+// todo.d/20260901-folder-parser-shape-predicate-diverges.md.
+//
+// The veto is deliberately NOT inside looksLikeAuthorSegment: that function is
+// exported as LooksLikeAuthorSegment to maintenance.author-path-link, which
+// takes a shape-passing folder as a candidate and then classifies a
+// leading-article name ("The Messenger") as suspect-non-person for owner
+// review. Vetoing there would silently drop those rows from its report.
+func looksLikeFolderAuthor(s string) bool {
+	return looksLikeAuthorSegment(s) && !personname.LooksLikeWorkTitle(s)
 }
 
 // looksLikeAuthorSegment returns true when s looks like a person name or multi-author string.
@@ -365,16 +384,6 @@ func tryExtractAuthorFromDashSplit(seg string, fm *FolderMetadata) {
 //	"Tolkien, J. R. R."
 func looksLikeAuthorSegment(s string) bool {
 	if len(s) < 3 {
-		return false
-	}
-	// A work-named segment is never an author, whichever branch below would
-	// accept it -- including the early " & ", "." and "," returns, which skip
-	// the shape check. In a <series>/<title>/<disc> layout the series folder
-	// sits where Pass 3 looks for the author, so "The Stormlight Archive" was
-	// taken as the author at HIGH confidence. This veto only removes authors;
-	// the wider predicate divergence from personname is still tracked in
-	// todo.d/20260901-folder-parser-shape-predicate-diverges.md.
-	if personname.LooksLikeWorkTitle(s) {
 		return false
 	}
 	// Any multi-author " & " makes this very likely an author segment.
