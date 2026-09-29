@@ -25163,6 +25163,74 @@ func (_c *MockStore_MergeBookSegments_Call) RunAndReturn(run func(bookNumericID 
 	return _c
 }
 
+// MintAuthor provides a mock function for the type MockStore
+func (_mock *MockStore) MintAuthor(name string) (*database.Author, bool, error) {
+	ret := _mock.Called(name)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MintAuthor")
+	}
+
+	var r0 *database.Author
+	var r1 bool
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.Author, bool, error)); ok {
+		return returnFunc(name)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.Author); ok {
+		r0 = returnFunc(name)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Author)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) bool); ok {
+		r1 = returnFunc(name)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+	if returnFunc, ok := ret.Get(2).(func(string) error); ok {
+		r2 = returnFunc(name)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockStore_MintAuthor_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MintAuthor'
+type MockStore_MintAuthor_Call struct {
+	*mock.Call
+}
+
+// MintAuthor is a helper method to define mock.On call
+//   - name string
+func (_e *MockStore_Expecter) MintAuthor(name any) *MockStore_MintAuthor_Call {
+	return &MockStore_MintAuthor_Call{Call: _e.mock.On("MintAuthor", name)}
+}
+
+func (_c *MockStore_MintAuthor_Call) Run(run func(name string)) *MockStore_MintAuthor_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_MintAuthor_Call) Return(author *database.Author, b bool, err error) *MockStore_MintAuthor_Call {
+	_c.Call.Return(author, b, err)
+	return _c
+}
+
+func (_c *MockStore_MintAuthor_Call) RunAndReturn(run func(name string) (*database.Author, bool, error)) *MockStore_MintAuthor_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ModifyBook provides a mock function for the type MockStore
 func (_mock *MockStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
 	ret := _mock.Called(id, fn)

@@ -1,5 +1,5 @@
 // file: internal/repairs/writer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
 // last-edited: 2026-09-29
 
@@ -70,6 +70,10 @@ type Writer struct {
 	opID    string
 	index   *journalIndex
 	touch   func()
+
+	// credits is the book-credit surface (writer_credits.go); nil until
+	// WithCredits. Its rows go through journal above.
+	credits CreditStore
 
 	writes        atomic.Int64
 	historyRows   atomic.Int64

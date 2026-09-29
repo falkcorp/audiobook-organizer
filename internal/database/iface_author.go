@@ -1,7 +1,7 @@
 // file: internal/database/iface_author.go
-// version: 1.6.0
+// version: 1.7.1
 // guid: 2e3b78c0-c989-48c0-a324-b88ea52b1ccd
-// last-edited: 2026-09-14
+// last-edited: 2026-09-29
 
 package database
 
@@ -90,9 +90,19 @@ type BookAuthorModifier interface {
 	ModifyBookAuthors(bookID string, fn func([]BookAuthor) ([]BookAuthor, error)) ([]BookAuthor, error)
 }
 
+// AuthorMinter is CreateAuthor that reports whether THIS call wrote the row
+// (see PebbleStore.MintAuthor): an undo journal must record only a row its
+// caller minted. Its own interface because AuthorWriter is at
+// interfacebloat's limit of 8; composed into the same parent as
+// BookAuthorModifier.
+type AuthorMinter interface {
+	MintAuthor(name string) (*Author, bool, error)
+}
+
 // AuthorStore combines both halves.
 type AuthorStore interface {
 	AuthorReader
 	AuthorWriter
 	BookAuthorModifier
+	AuthorMinter
 }

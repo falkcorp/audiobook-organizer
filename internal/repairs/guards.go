@@ -1,5 +1,5 @@
 // file: internal/repairs/guards.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
 // last-edited: 2026-09-29
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"sync"
 
@@ -25,7 +26,7 @@ const (
 	// books/itunes/**, the live iTunes library, which is hands-off.
 	SkipITunes = "skipped_itunes"
 	// SkipOwnerManual: a book of the row is Doctor Who / Big Finish /
-	// Torchwood by path or series; the owner applies those by hand.
+	// Torchwood by path, series or title; the owner applies those by hand.
 	SkipOwnerManual = "skipped_owner_manual"
 )
 
@@ -136,6 +137,30 @@ func (r *PathResolver) withResolved(paths []string) []string {
 	return out
 }
 
+// manualOnlyTitleRe: see GuardBookTitle. Separators inside the names vary
+// across rips ("Doctor.Who", "DoctorWho") as in applygate's path pattern.
+var manualOnlyTitleRe = regexp.MustCompile(`(?i)` +
+	`^\s*(?:doctor[\s._-]*who|torchwood)\b` + // leading
+	`|[-–—:|(\[]\s*(?:doctor[\s._-]*who|torchwood)\s*[)\]]?\s*$` + // trailing tag
+	`|\bbig[\s._-]*finish[\s._-]*(?:productions|ident|audio)\b`) // the studio
+
+// GuardBookTitle is the owner-manual check on a book's title. Paths and
+// series miss a Doctor Who / Big Finish / Torchwood book whose files sit on a
+// neutral path with no series row; its title still names it.
+//
+// A title is prose, not a path: the path/series pattern would take "The
+// Doctor Who Fooled the World" or "Big Finish to the Season". So the title
+// must name the franchise as a franchise: leading ("Doctor Who: Apollo 23",
+// "Torchwood: ..."), as a separated tag ("Frontios - Doctor Who",
+// "Frontios (Doctor Who)"), or the studio by its full name ("Big Finish
+// Productions").
+func GuardBookTitle(bookID, title string) (kind, reason string) {
+	if manualOnlyTitleRe.MatchString(title) {
+		return SkipOwnerManual, fmt.Sprintf("member %s is Doctor Who / Big Finish / Torchwood (title %q); owner applies these by hand", bookID, title)
+	}
+	return "", ""
+}
+
 // GuardReader is what the framework guard reads.
 type GuardReader interface {
 	GetBookByID(id string) (*database.Book, error)
@@ -184,6 +209,11 @@ func GuardBooks(r GuardReader, series SeriesNamer, res *PathResolver, bookIDs []
 			name = series(*b.SeriesID)
 		}
 		if k, why := GuardBookPathsWith(res, id, paths, name); k != "" {
+			return k, why, nil
+		}
+		// The title is evidence too: "Doctor Who: Placebo Effect" on a
+		// neutral path with no series row is still a Doctor Who book.
+		if k, why := GuardBookTitle(id, b.Title); k != "" {
 			return k, why, nil
 		}
 	}

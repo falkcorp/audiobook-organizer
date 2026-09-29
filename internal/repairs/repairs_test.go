@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-09-29
 
@@ -325,6 +325,46 @@ func TestPathResolver_SymlinksIntoITunes(t *testing.T) {
 	// Unresolvable: checked lexically only.
 	k, _ = GuardBookPathsWith(res, "b", []string{"/nonexistent-192.0.2.1/books/itunes/x.m4b"}, "")
 	require.Equal(t, SkipITunes, k)
+}
+
+// A Doctor Who book on a neutral path with no series row is still guarded:
+// its title names it.
+func TestGuardBooks_OwnerManualByTitle(t *testing.T) {
+	s := newMemStore()
+	s.add("dw", "Doctor Who: Placebo Effect", "/lib/bbc/pe", nil)
+	s.add("ok", "Placebo Effect", "/lib/bbc/pe2", nil)
+	k, why, err := GuardBooks(s, nil, NewPathResolver(), []string{"dw"})
+	require.NoError(t, err)
+	require.Equal(t, SkipOwnerManual, k, why)
+	k, _, err = GuardBooks(s, nil, NewPathResolver(), []string{"ok"})
+	require.NoError(t, err)
+	require.Empty(t, k)
+}
+
+// The title check names the franchise, not the words: "The Doctor Who Fooled
+// the World" is not a Doctor Who book; "Frontios - Doctor Who" is.
+func TestGuardBookTitle_BothDirections(t *testing.T) {
+	for title, want := range map[string]bool{
+		"Doctor Who: Placebo Effect":         true,
+		"Doctor Who: Apollo 23":              true,
+		"Doctor Who - The Daleks":            true,
+		"Doctor Who":                         true,
+		"Frontios - Doctor Who":              true,
+		"Frontios (Doctor Who)":              true,
+		"Big Finish Productions Presents: X": true,
+		"Big Finish Ident":                   true,
+		"Torchwood: Aliens Among Us":         true,
+		"Torchwood":                          true,
+		"The Doctor Who Fooled the World":    false,
+		"A Doctor Who Cared":                 false,
+		"The Big Finish":                     false,
+		"Big Finish to the Season":           false,
+		"Secrets of the Torchwood Estate":    false,
+		"Placebo Effect":                     false,
+	} {
+		k, why := GuardBookTitle("b", title)
+		require.Equal(t, want, k == SkipOwnerManual, "%q: %s", title, why)
+	}
 }
 
 // ---- paging ----
@@ -753,7 +793,8 @@ func TestWriter_HasNoDeletePrimitive(t *testing.T) {
 	}
 	require.ElementsMatch(t, []string{"Modify", "Writes", "HistoryRows", "HistoryFailed",
 		"WithJournal", "WithLiveness", "Touch", "Journal", "Journaled", "Step",
-		"RepointBookFile", "MoveBookFiles", "SetTrackNumber", "Recompute"}, names)
+		"RepointBookFile", "MoveBookFiles", "SetTrackNumber", "Recompute",
+		"WithCredits", "ModifyCredits", "SetPrimaryAuthor", "RecordChange"}, names)
 }
 
 func TestWriter_HistoryFailureWritesIncompleteMarker(t *testing.T) {

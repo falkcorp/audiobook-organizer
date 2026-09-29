@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.133.0
+// version: 1.134.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-23
+// last-edited: 2026-09-29
 
 package database
 
@@ -134,6 +134,7 @@ type MockStore struct {
 	GetAuthorByIDFunc   func(id int) (*Author, error)
 	GetAuthorByNameFunc func(name string) (*Author, error)
 	CreateAuthorFunc    func(name string) (*Author, error)
+	MintAuthorFunc      func(name string) (*Author, bool, error)
 	DeleteAuthorFunc    func(id int) error
 	// Count overrides. Without these the getters below are hardcoded to empty
 	// maps, so a test asserting on "author has N books" cannot express its own
@@ -763,6 +764,14 @@ func (m *MockStore) GetAuthorByName(name string) (*Author, error) {
 		return m.GetAuthorByNameFunc(name)
 	}
 	return nil, nil
+}
+
+func (m *MockStore) MintAuthor(name string) (*Author, bool, error) {
+	if m.MintAuthorFunc != nil {
+		return m.MintAuthorFunc(name)
+	}
+	a, err := m.CreateAuthor(name)
+	return a, a != nil && err == nil, err
 }
 
 func (m *MockStore) CreateAuthor(name string) (*Author, error) {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package maintenance
 
@@ -159,7 +159,10 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 		// /operations/<id>/revert undoes the apply.
 		deps.Writer = repairs.NewWriter(store, vps, f.ID(), "bulk_update", "repairs-").
 			WithJournal(store, store, opID).
-			WithLiveness(func() { registry.TouchLiveness(reporter) })
+			WithLiveness(func() { registry.TouchLiveness(reporter) }).
+			// A fixer that moves author credits (junk authors) journals them
+			// through the same op journal, so the op revert undoes them.
+			WithCredits(store)
 		deps.Checkpoint = func(cp repairs.ApplyCheckpoint) error {
 			return reporter.Checkpoint(map[string]any{"resume": cp})
 		}

@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-29
 //
@@ -203,10 +203,15 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 			} else {
 				report.Safe++
 			}
-		case ChangeTypeTitleRelinkCredits:
-			// The revert reads the book first; the credit compare-and-set
-			// needs the junction, which the preflight store does not read,
-			// so a later credit change is refused by the revert itself.
+		case ChangeTypeTitleRelinkCredits, ChangeTypeJunkAuthorCredits:
+			// The preflight only proves the book is restorable: the credit
+			// compare-and-set needs the junction, which the preflight store
+			// does not read, so a row counted Safe here can still be refused
+			// by the revert. What the revert refuses differs by type:
+			// junk_author_credits requires the EXACT junction and primary the
+			// repair wrote (any later credit change is refused, nothing
+			// written); title_relink_credits checks only that its source
+			// credit is absent and its target present (revertTitleRelinkCredits).
 			if _, refusal := CheckRestoreBook(store, c.BookID); refusal != nil {
 				report.addReferentConflict(c, refusal)
 			} else {
