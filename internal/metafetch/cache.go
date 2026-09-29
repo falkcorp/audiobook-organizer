@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-09-28
 //
@@ -120,12 +120,21 @@ func (mfs *Service) ValidateCachedIdentity(entry *MetadataCandidateCache, bookID
 // with no hash keeps ValidateCachedIdentity's fail-open.
 //
 // "The book's current author" is any form a writer could have hashed
-// (CurrentAuthorForms): the Book.Author snapshot, which the batch fetch hashes
-// today, and the live author (liveAuthors, database.LiveBookAuthorNames), the
-// author the book actually has and the one the certainty gate now judges by.
-// A row fetched for the live author was fetched for the book as it is, so it
-// is not stale. Accepting the snapshot keeps every row that passed before
-// passing.
+// (CurrentAuthorForms): the Book.Author snapshot and the live author
+// (liveAuthors, database.LiveBookAuthorNames), which the batch fetch hashes
+// since 2026-09-28 and the certainty gate judges by. A row fetched for the
+// live author was fetched for the book as it is, so it is not stale.
+//
+// A row the batch fetch wrote BEFORE that change was hashed with no author:
+// GetBookByID leaves Book.Author unhydrated, so the hint was "" even for a
+// book with an author. Such a row passes only through cachedQueryMatches'
+// fingerprint leg -- its stored search fingerprint, which bound the author
+// resolved from AuthorID, must equal the fingerprint of a search for the
+// live author now. A no-author row with no fingerprint stays stale, and so
+// does one whose author has since changed.
+//
+// CachedBatchVerdict validates with this same function and the same live
+// authors, so a row the batch fetch reuses is a row the apply gate accepts.
 func (mfs *Service) ValidateCachedIdentityForBook(entry *MetadataCandidateCache, book *database.Book, liveAuthors []string) error {
 	if entry == nil {
 		return nil
@@ -142,7 +151,7 @@ func (mfs *Service) ValidateCachedIdentityForBook(entry *MetadataCandidateCache,
 	}
 	forms := CurrentAuthorForms(book, liveAuthors)
 	if entry.SourceHash != "" {
-		if cachedQueryMatches(entry, book, forms, book.Title) {
+		if mfs.cachedQueryMatches(entry, book, liveAuthors, forms, book.Title) {
 			return nil
 		}
 		for _, author := range forms[1:] {
@@ -160,8 +169,9 @@ func (mfs *Service) ValidateCachedIdentityForBook(entry *MetadataCandidateCache,
 // fetch that searched book by query, with the book's CURRENT author: its
 // SourceHash equals the batch shape (query, author, "", "") for some current
 // author form (CurrentAuthorForms, plus the stripped "" hint when a form is a
-// placeholder -- see SearchAuthorHint). A legacy row with no hash never
-// matches.
+// placeholder -- see SearchAuthorHint), or it is a pre-2026-09-28 no-author
+// row whose search fingerprint proves the live author (cachedQueryMatches). A
+// legacy row with no hash never matches.
 //
 // It is the proof the certainty gate needs before it accepts a candidate
 // found by searching a stand-in title (the book's transcribed title): the
@@ -172,27 +182,38 @@ func (mfs *Service) CachedQueryMatchesIdentity(entry *MetadataCandidateCache, bo
 	if entry == nil || book == nil || entry.SourceHash == "" || strings.TrimSpace(query) == "" {
 		return false
 	}
-	return cachedQueryMatches(entry, book, CurrentAuthorForms(book, liveAuthors), query)
+	return mfs.cachedQueryMatches(entry, book, liveAuthors, CurrentAuthorForms(book, liveAuthors), query)
 }
 
 // cachedQueryMatches is the hash comparison behind CachedQueryMatchesIdentity
 // and the batch-shape leg of ValidateCachedIdentityForBook. A placeholder
 // author form also matches as "": the batch fetch sends (and hashes) no author
 // hint for a placeholder author, so without this every such book's row would
-// read as identity drift at apply time. The "" is tried ONLY for a
-// placeholder form; a book with a real author still fails against a row
-// hashed with no author.
-func cachedQueryMatches(entry *MetadataCandidateCache, book *database.Book, forms []string, query string) bool {
+// read as identity drift at apply time.
+//
+// For a book with a real author, a row hashed with no author matches only by
+// its search fingerprint. The batch fetch hashed "" for every book until
+// 2026-09-28 (GetBookByID leaves Book.Author unhydrated), so the hash alone
+// says nothing about the author -- but the fingerprint it stored bound the
+// author the search resolved from AuthorID. When that fingerprint equals the
+// one a search by the live primary author would record now, the row asked
+// exactly the questions a fresh fetch would, and it is the book's. A row with
+// no fingerprint, or one fetched before the author changed, does not match.
+func (mfs *Service) cachedQueryMatches(entry *MetadataCandidateCache, book *database.Book, liveAuthors, forms []string, query string) bool {
+	noAuthor := hashSearchInputs(book.ID, query, "", "", "")
 	for _, author := range forms {
 		if entry.SourceHash == hashSearchInputs(book.ID, query, author, "", "") {
 			return true
 		}
-		if author != "" && SearchAuthorHint(author) == "" &&
-			entry.SourceHash == hashSearchInputs(book.ID, query, "", "", "") {
+		if author != "" && SearchAuthorHint(author) == "" && entry.SourceHash == noAuthor {
 			return true
 		}
 	}
-	return false
+	if entry.SourceHash != noAuthor || entry.SearchFingerprint == "" || len(liveAuthors) == 0 {
+		return false
+	}
+	want := mfs.SearchFingerprintFor(book, query, SearchAuthorHint(liveAuthors[0]), "")
+	return want != "" && entry.SearchFingerprint == want
 }
 
 // BatchSourceHash is the SourceHash the batch candidate fetch writes for a
@@ -463,9 +484,13 @@ const (
 // the only ones the fetch needs to ask. A nil list means "ask every provider".
 //
 // The entry is trusted only when BOTH identities hold: the cache's SourceHash
-// rule (ValidateCachedIdentityForBook, with a missing hash never trusted) and
-// the search fingerprint, which binds it to the questions actually asked
-// (resolved author included). An entry with no fingerprint predates
+// rule, checked with the book's live authors through the same functions the
+// apply planner uses (ValidateCachedIdentityForBook, and
+// CachedQueryMatchesIdentity for a stand-in query; a missing hash is never
+// trusted), and the search fingerprint, which binds it to the questions
+// actually asked (resolved author included). Sharing the check is the point:
+// a row served here as fresh is never refetched, so if the apply gate read it
+// as identity_stale the book would be stuck until the row expired. An entry with no fingerprint predates
 // 2026-09-19; the path that wrote it recorded an empty result even when every
 // provider had failed, so it proves nothing and is re-asked in full.
 func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string) (*MetadataCandidateCache, BatchVerdict, []string) {
@@ -476,24 +501,26 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 	if err != nil || entry == nil || entry.SourceHash == "" || entry.SearchFingerprint == "" {
 		return entry, BatchVerdictNone, nil
 	}
-	// No live authors: the batch fetch searches by the Book.Author snapshot
-	// (fetchCandidateForBook's author hint), so the row it may reuse is one
-	// hashed from that snapshot, and the search fingerprint below binds the
-	// same author. Accepting a live-author row here would serve a search the
-	// fetch is not about to ask.
+	// The batch fetch hashes the live primary author (fetchCandidateForBook's
+	// author hint), so the identity is checked against the live authors, the
+	// same input the apply planner passes. A read failure answers None: the
+	// book is re-asked rather than served on an identity nobody checked.
 	//
-	// A row hashed with the query itself is accepted too. For a book with a
-	// real title the query IS the title, so this changes nothing; for a book
-	// whose title is blank or a placeholder the batch fetch searches a
-	// stand-in (its transcribed title) and hashes the row with that, which
-	// the book-title check can never match -- every run would re-ask every
-	// provider for it. The fingerprint check below still binds query and
-	// author. ValidateCachedIdentityForBook itself is NOT widened: the apply
-	// gate uses it, and a stand-in-title candidate is bulk-applied only on
-	// the separate transcribed-title evidence (owner decision 2026-09-28:
-	// CachedQueryMatchesIdentity, applygate.EvaluateTranscribed).
-	if entry.SourceHash != hashSearchInputs(book.ID, query, author, "", "") &&
-		mfs.ValidateCachedIdentityForBook(entry, book, nil) != nil {
+	// A row hashed with the query itself is accepted too
+	// (CachedQueryMatchesIdentity). For a book with a real title the query IS
+	// the title, so this changes nothing; for a book whose title is blank or
+	// a placeholder the batch fetch searches a stand-in (its transcribed
+	// title) and hashes the row with that, which the book-title check can
+	// never match -- every run would re-ask every provider for it. The apply
+	// planner accepts that row the same way, and bulk-applies its candidate
+	// only on the separate transcribed-title evidence (owner decision
+	// 2026-09-28: applygate.EvaluateTranscribed).
+	live, lerr := database.LiveBookAuthorNames(mfs.db, book)
+	if lerr != nil {
+		return entry, BatchVerdictNone, nil
+	}
+	if mfs.ValidateCachedIdentityForBook(entry, book, live) != nil &&
+		!mfs.CachedQueryMatchesIdentity(entry, book, live, query) {
 		return entry, BatchVerdictNone, nil
 	}
 	if entry.SearchFingerprint != mfs.SearchFingerprintFor(book, query, author, "") {
