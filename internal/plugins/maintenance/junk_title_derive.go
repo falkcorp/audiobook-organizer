@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_derive.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6fb9129d-4c59-4097-979e-6cfe61bc6894
 // last-edited: 2026-09-28
 
@@ -202,8 +202,13 @@ func DeriveJunkTitleReplacement(storedTitle, author string, filePaths []string) 
 	//    the layout is not the shape this rescue understands, and climbing anyway
 	//    just returns whatever happens to sit above it (that is how "/lib/A/intro.mp3"
 	//    yielded "lib").
+	//    "Poisoned" means the EXACT junkTitles set, the folder names the organizer
+	//    itself wrote from a bad title — not the broad classifier: a folder that
+	//    merely looks like a chapter ("Chapter 1") or a credit is not the
+	//    organizer's doing, and climbing out of it lands on a library root.
 	const maxAncestorHops = 1
-	if !corroborated && dir != "" && IsJunkTitle(filepath.Base(dir)) {
+	_, poisoned := junkTitles[strings.ToLower(strings.TrimSpace(filepath.Base(dir)))]
+	if !corroborated && dir != "" && poisoned {
 		d := dir
 		for hop := 0; hop <= maxAncestorHops; hop++ {
 			if d == "" || d == "/" || d == "." {

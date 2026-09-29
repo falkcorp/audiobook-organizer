@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-09-28
 
@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -34,21 +35,32 @@ import (
 // book's history reads the same before and after the op was absorbed here.
 const junkTitlesFixerID = "maintenance.repair-junk-titles"
 
-// Skip kinds of the junk-title fixer's own rows. The framework adds
-// repairs.SkipITunes / repairs.SkipOwnerManual for hands-off books.
+// Skip kinds of the junk-title fixer's own rows, named like the framework's
+// (repairs.SkipITunes = "skipped_itunes") and the fragment-consolidation
+// fixer's ("skipped_ambiguous", ...), so the Repairs tab lists one family.
 const (
-	// junkSkipFragment: the book is a chapter file of a bigger book. It is
-	// not retitled; the fragment-consolidation fixer folds it back in.
-	junkSkipFragment = "fragment"
+	// junkSkipFragment: PROVEN to be a piece of another book — another live
+	// book has a book_file row at one of this book's paths. The
+	// fragment-consolidation fixer folds it back in; it is never retitled.
+	junkSkipFragment = "skipped_fragment"
+	// junkSkipPossibleFragment: the shape of a chapter file of a bigger book
+	// (a folder shared with other books, a lone chapter-titled file, the
+	// author named like the folder, a proposal that duplicates another book),
+	// but no parent is proven. Left for a person to decide.
+	junkSkipPossibleFragment = "skipped_possible_fragment"
 	// junkSkipNeedsManual: no trustworthy replacement title was found.
-	junkSkipNeedsManual = "needs_manual"
+	junkSkipNeedsManual = "skipped_needs_manual"
 	// junkSkipUserLocked: the title carries a user override; never touched.
-	junkSkipUserLocked = "user_locked"
+	junkSkipUserLocked = "skipped_user_locked"
+	// junkSkipProviderTitle: a metadata provider supplied the title. The
+	// fixer only repairs file-derived junk; a provider value is somebody's
+	// answer and is never overwritten from a folder or a prefix strip.
+	junkSkipProviderTitle = "skipped_provider_title"
 	// junkSkipNotJunk / junkSkipGone: what a re-plan reports for a book
 	// whose title stopped being junk, or that no longer exists. A plan never
 	// lists either.
-	junkSkipNotJunk = "not_junk"
-	junkSkipGone    = "gone"
+	junkSkipNotJunk = "skipped_not_junk"
+	junkSkipGone    = "skipped_gone"
 )
 
 // Sources of a proposed title, in priority order.
@@ -63,7 +75,7 @@ const (
 
 // junkCandidateMinScore is the lowest metafetch candidate score the fixer
 // takes a title from (scores are 0..1). The cached search ran on the junk
-// title, so a candidate must also agree on the author (junkCandidateTitle).
+// title, so a candidate must also agree on the author (candidateTitle).
 const junkCandidateMinScore = 0.5
 
 // junkIndexTTL bounds how long Replan reuses the library-wide index during an
@@ -74,23 +86,20 @@ const junkIndexTTL = 2 * time.Minute
 // number, a narrator credit, a track tag, a placeholder, a bare roman numeral,
 // a junk prefix) and proposes the real one. It absorbed the
 // maintenance.repair-junk-titles op, which matched an exact five-string set.
+//
+// It keeps no memory of its own writes: two rows that would propose the same
+// title for the same author are both refused at plan time, so an apply can
+// never write one title twice, and an undone row can be applied again.
 type junkTitleFixer struct {
 	p *Plugin
 
 	idxMu      sync.Mutex
 	idx        *junkIndex
 	idxBuiltAt time.Time
-
-	// applied remembers the titles this process wrote, by author, so a later
-	// row in the same apply that proposes the same title for the same author
-	// is refused as a fragment even though the cached index predates the
-	// first write.
-	appliedMu sync.Mutex
-	applied   map[string]bool
 }
 
 func newJunkTitleFixer(p *Plugin) *junkTitleFixer {
-	return &junkTitleFixer{p: p, applied: map[string]bool{}}
+	return &junkTitleFixer{p: p}
 }
 
 var _ repairs.Fixer = (*junkTitleFixer)(nil)
@@ -101,9 +110,10 @@ func (f *junkTitleFixer) Description() string {
 	return "Books titled with a chapter number (\"01\", \"Chapter 12\", \"Disc 2\"), a narrator credit " +
 		"(\"read by narrator\"), a track tag (\"Opening\", \"Intro\"), a placeholder (\"Unknown Title\"), a bare " +
 		"roman numeral, or a title behind a track-number or punctuation prefix. Proposes the real title from, in " +
-		"order: the intro transcription, a matching metadata candidate, the title without its prefix, the folder or " +
-		"filename, the series and number. Chapter files of a bigger book are listed as fragments for the " +
-		"consolidation fixer, never retitled. Writes the title only, never a user-locked one."
+		"order: the intro transcription, the title without its prefix, a matching metadata candidate, the folder or " +
+		"filename, the series and number. A book another book owns a file of is a fragment for the consolidation " +
+		"fixer; one that only looks like a chapter file is listed for a person. Writes the title only, never a " +
+		"user-locked or provider-supplied one."
 }
 
 // junkIndex is the library-wide state a decision reads besides the book
@@ -127,11 +137,16 @@ type junkIndex struct {
 	// is the fragment itself when the scanner imported a chapter the parent
 	// already owned.
 	owners map[string][]string
+	// roots are the library root and every import path, cleaned. A proposal
+	// that names one of their segments, or the folder right below one (the
+	// author folder of a root/Author/Title layout), is a path, not a title.
+	roots []string
 }
 
 // junkWorkDir is the folder that names the work a book path belongs to: the
-// book's folder (the file's folder for a file path), one level up when that
-// folder is a disc/part folder ("Eldest/CD1").
+// book's folder (the file's folder for a file path), climbing past up to two
+// disc/part/chapter-number folders ("Eldest/CD1", the organizer-moved
+// "Eldest/02/98/98.mp3").
 func junkWorkDir(p string) string {
 	if p == "" {
 		return ""
@@ -140,7 +155,10 @@ func junkWorkDir(p string) string {
 	if _, audio := audioExts[strings.ToLower(filepath.Ext(p))]; audio {
 		d = filepath.Dir(p)
 	}
-	if metadata.IsChapterOnlyTitle(filepath.Base(d)) {
+	for range 2 {
+		if !metadata.IsChapterOnlyTitle(filepath.Base(d)) {
+			break
+		}
 		d = filepath.Dir(d)
 	}
 	return d
@@ -152,6 +170,15 @@ func junkTitleKey(authorID *int, title string) string {
 		a = *authorID
 	}
 	return strconv.Itoa(a) + "|" + util.TitleSortKey(title)
+}
+
+// narratorsOf splits a book's denormalized narrator credit into names, for
+// ClassifyJunkTitleFor ("Read by Kate Reading" is junk only on her book).
+func narratorsOf(n *string) []string {
+	if n == nil || strings.TrimSpace(*n) == "" {
+		return nil
+	}
+	return splitCreditNames(*n)
 }
 
 // buildJunkIndex lists every book once (one consistent snapshot) and returns
@@ -169,8 +196,21 @@ func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, erro
 	if err != nil {
 		return nil, nil, fmt.Errorf("GetAllSeries: %w", err)
 	}
+	imports, err := store.GetAllImportPaths()
+	if err != nil {
+		// Fail closed: without the roots the path-segment refusal is blind.
+		return nil, nil, fmt.Errorf("GetAllImportPaths: %w", err)
+	}
 	idx := &junkIndex{dirBooks: map[string]int{}, dirChapters: map[string]int{}, titles: map[string]bool{},
 		authors: map[int]string{}, series: map[int]string{}, owners: map[string][]string{}}
+	if config.AppConfig.RootDir != "" {
+		idx.roots = append(idx.roots, filepath.Clean(config.AppConfig.RootDir))
+	}
+	for i := range imports {
+		if p := strings.TrimSpace(imports[i].Path); p != "" {
+			idx.roots = append(idx.roots, filepath.Clean(p))
+		}
+	}
 	for i := range allSeries {
 		idx.series[allSeries[i].ID] = allSeries[i].Name
 	}
@@ -182,7 +222,7 @@ func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, erro
 		if b.IsSoftDeleted() {
 			continue
 		}
-		kind := metadata.ClassifyJunkTitle(b.Title)
+		kind := metadata.ClassifyJunkTitleFor(b.Title, narratorsOf(b.Narrator))
 		if d := junkWorkDir(b.FilePath); d != "" {
 			idx.dirBooks[d]++
 			if kind.IsChapterKind() {
@@ -241,8 +281,8 @@ func (f *junkTitleFixer) cachedIndex() (*junkIndex, error) {
 }
 
 // Plan lists every junk-titled book as a row: applicable when a replacement
-// was found, skipped (fragment / needs_manual / user_locked / owner-manual)
-// otherwise.
+// was found, skipped (fragment / possible_fragment / needs_manual /
+// user_locked / provider_title / owner-manual) otherwise.
 func (f *junkTitleFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
 	idx, cands, err := f.buildJunkIndex()
 	if err != nil {
@@ -274,8 +314,9 @@ func (f *junkTitleFixer) Plan(ctx context.Context, _ json.RawMessage, rep regist
 	if runErr != nil && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	// Two junk rows proposing the same title for the same author are two
-	// pieces of one book: neither may be retitled into a duplicate.
+	// Two junk rows proposing the same title for the same author look like
+	// two pieces of one book, but nothing proves a parent: neither is
+	// retitled into a duplicate, and a person decides.
 	proposals := map[string][]int{}
 	for i := range rows {
 		if rows[i].Applicable() && rows[i].Proposed != nil {
@@ -288,9 +329,10 @@ func (f *junkTitleFixer) Plan(ctx context.Context, _ json.RawMessage, rep regist
 			continue
 		}
 		for _, i := range ix {
-			why := fmt.Sprintf("fragment — use the consolidation fixer: %d junk-titled books of this author would all be retitled %q",
+			why := fmt.Sprintf("possible fragment: %d junk-titled books of this author would all be retitled %q",
 				len(ix), rows[i].Proposed["title"])
-			rows[i].Skipped, rows[i].SkipReason, rows[i].Reason = junkSkipFragment, why, why
+			rows[i].Skipped, rows[i].SkipReason, rows[i].Reason = junkSkipPossibleFragment, why, why
+			rows[i].Detail = nil
 			rows[i].Fingerprint = junkFingerprint(rows[i], why)
 		}
 	}
@@ -329,55 +371,56 @@ func (f *junkTitleFixer) Replan(_ context.Context, _ json.RawMessage, planned re
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	r, err := f.evaluate(idx, b.Core())
-	if err != nil {
-		return repairs.Row{}, err
-	}
-	if r.Applicable() && f.wasApplied(b.AuthorID, r.Proposed["title"]) {
-		why := fmt.Sprintf("fragment — use the consolidation fixer: this apply already gave another book of this author the title %q",
-			r.Proposed["title"])
-		r.Skipped, r.SkipReason, r.Reason = junkSkipFragment, why, why
-		r.Fingerprint = junkFingerprint(r, why)
-	}
-	return r, nil
+	return f.evaluate(idx, b.Core())
 }
 
 // junkDecision travels from Replan to Apply in Row.Detail.
 type junkDecision struct {
 	bookID, oldTitle, newTitle string
-	authorID                   *int
 }
 
 // Apply writes the title, and only the title, while it is still the junk one
-// the replacement was derived from.
+// the replacement was derived from and no user lock has appeared.
 func (f *junkTitleFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*junkDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", junkTitlesFixerID, fresh.RowID)
 	}
-	if err := writeTitleOnly(w, d.bookID, d.oldTitle, d.newTitle); err != nil {
-		return err
-	}
-	f.appliedMu.Lock()
-	f.applied[junkTitleKey(d.authorID, d.newTitle)] = true
-	f.appliedMu.Unlock()
-	return nil
+	return writeTitleOnly(w, f.p.deps.OpsStore(), d.bookID, d.oldTitle, d.newTitle)
 }
 
-func (f *junkTitleFixer) wasApplied(authorID *int, title string) bool {
-	f.appliedMu.Lock()
-	defer f.appliedMu.Unlock()
-	return f.applied[junkTitleKey(authorID, title)]
+// titleStateReader reads a book's field provenance; writeTitleOnly re-checks
+// the user lock with it inside the write.
+type titleStateReader interface {
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
 }
 
 // writeTitleOnly sets Title through the framework writer, which records the
-// history row undo reverts. A title that moved since the re-plan is refused
-// as changed_since_plan: returning database.ErrSkipBookWrite here would make
-// Modify report success with nothing written.
-func writeTitleOnly(w *repairs.Writer, bookID, oldTitle, newTitle string) error {
+// history row undo reverts. A title that moved since the re-plan, or that a
+// user locked since, is refused as changed_since_plan: returning
+// database.ErrSkipBookWrite here would make Modify report success with
+// nothing written.
+//
+// The lock re-check runs inside the ModifyBook callback, so it is as late as
+// the write can make it. Field-state writes do not take the book stripe, so a
+// lock landing between this read and the commit still races; the window is
+// the width of one Pebble batch instead of a whole apply.
+func writeTitleOnly(w *repairs.Writer, states titleStateReader, bookID, oldTitle, newTitle string) error {
+	if states == nil {
+		return fmt.Errorf("book %s: no field-state reader to check the title lock with", bookID)
+	}
 	changed, err := w.Modify(bookID, func(cur *database.Book) error {
 		if cur.Title != oldTitle {
 			return fmt.Errorf("%w: title is now %q", repairs.ErrChangedSincePlan, cur.Title)
+		}
+		sts, err := states.GetMetadataFieldStates(bookID)
+		if err != nil {
+			return fmt.Errorf("read field states of %s: %w", bookID, err)
+		}
+		for i := range sts {
+			if sts[i].Field == "title" && sts[i].HasUserOverride() {
+				return fmt.Errorf("%w: the title is now user-locked", repairs.ErrChangedSincePlan)
+			}
 		}
 		cur.Title = newTitle
 		return nil
@@ -412,7 +455,13 @@ func (f *junkTitleFixer) authorName(idx *junkIndex, id *int) string {
 	return n
 }
 
-var trailingNumberRe = regexp.MustCompile(`(\d+)\s*$`)
+var (
+	trailingNumberRe = regexp.MustCompile(`(\d+)\s*$`)
+	// bareNumberRe is an unpadded number and nothing else ("13", "300"). It
+	// is as likely a real title as a chapter position, so it is never called
+	// a possible fragment on shape alone.
+	bareNumberRe = regexp.MustCompile(`^[1-9]\d*$`)
+)
 
 // evaluate decides one book. Plan and Replan both call it, so a row planned
 // and a row re-planned from the same state carry the same fingerprint.
@@ -433,7 +482,8 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		return r, nil
 	}
 
-	kind := metadata.ClassifyJunkTitle(b.Title)
+	narrators := narratorsOf(b.Narrator)
+	kind := metadata.ClassifyJunkTitleFor(b.Title, narrators)
 	if kind == metadata.JunkNone {
 		return finish(junkSkipNotJunk, "the title is no longer junk")
 	}
@@ -449,7 +499,6 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("read field states of %s: %w", b.ID, err)
 	}
-	providerTitle := false
 	for i := range states {
 		if states[i].Field != "title" {
 			continue
@@ -457,7 +506,10 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		if states[i].HasUserOverride() {
 			return finish(junkSkipUserLocked, "the title carries a user override; it is never rewritten")
 		}
-		providerTitle = states[i].HasProviderValue()
+		if states[i].HasProviderValue() {
+			return finish(junkSkipProviderTitle,
+				"a metadata provider supplied the title; this fixer only repairs file-derived titles")
+		}
 	}
 
 	files, err := store.GetBookFiles(b.ID)
@@ -482,18 +534,23 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		paths = []string{b.FilePath}
 	}
 
-	// ---- fragment: a chapter file of a bigger book is not retitled ----
-	if why, err := f.fragmentReason(idx, b, kind, author, paths); err != nil {
+	// ---- fragments: a chapter file of a bigger book is not retitled ----
+	skip, why, err := f.fragmentReason(idx, b, kind, author, paths)
+	if err != nil {
 		return repairs.Row{}, err
-	} else if why != "" {
-		return finish(junkSkipFragment, "fragment — use the consolidation fixer: "+why)
+	}
+	switch skip {
+	case junkSkipFragment:
+		return finish(skip, "fragment — use the consolidation fixer: "+why)
+	case junkSkipPossibleFragment:
+		return finish(skip, "possible fragment: "+why)
+	case junkSkipNeedsManual:
+		return finish(skip, why)
 	}
 
 	// ---- proposals, in priority order ----
 	people := []string{author}
-	if b.Narrator != nil {
-		people = append(people, splitCreditNames(*b.Narrator)...)
-	}
+	people = append(people, narrators...)
 	links, err := store.GetBookAuthors(b.ID)
 	if err != nil {
 		// Fail closed: without the linked names the person check is incomplete.
@@ -503,19 +560,21 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		id := l.AuthorID
 		people = append(people, f.authorName(idx, &id))
 	}
+	pc := junkProposalCheck{stored: b.Title, narrators: narrators, people: people, roots: idx.roots, paths: paths}
 	var refused []string
-	accept := func(cand string) (string, bool) {
+	ownerManual := ""
+	accept := func(cand, source string) (string, bool) {
 		c := strings.TrimSpace(cand)
-		switch {
-		case len([]rune(c)) < 2, strings.EqualFold(c, strings.TrimSpace(b.Title)):
+		if c != "" && junkTitleOwnerManual("", c, "") {
+			// The proposal itself says Doctor Who / Big Finish / Torchwood:
+			// the whole book is the owner's, not only this proposal.
+			ownerManual = c
 			return "", false
-		case metadata.ClassifyJunkTitle(c) != metadata.JunkNone, metadata.IsGenericDirName(c):
-			// A generic folder ("Books", "Audiobooks", a library root) is
-			// what the one-level climb in DeriveJunkTitleReplacement lands
-			// on above a junk-named folder; it is never a title.
-			return "", false
-		case titleNamesAPerson(c, people):
-			refused = append(refused, fmt.Sprintf("%q names the author or narrator", c))
+		}
+		if why := pc.refusal(c, source); why != "" {
+			if why != "-" {
+				refused = append(refused, why)
+			}
 			return "", false
 		}
 		return c, true
@@ -523,36 +582,55 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 
 	type proposal struct{ title, source, risk string }
 	var props []proposal
-	if t, ok := accept(transcribed); ok {
+	if t, ok := accept(transcribed, junkSrcTranscribed); ok {
 		props = append(props, proposal{t, junkSrcTranscribed, repairs.RiskReview})
 	}
-	if t, ok := f.candidateTitle(b.ID, author); ok {
-		if t, ok = accept(t); ok {
-			props = append(props, proposal{t, junkSrcCandidate, repairs.RiskReview})
-		}
-	}
+	// An embedded kind still carries (or sits in a folder that names) the
+	// real title; the cached candidate search ran on the junk title and its
+	// top hit is often the series' first book ("01 - Eldest" → "Eragon"), so
+	// the candidate must agree with that evidence to count.
+	embedded := kind.HasRealTitleInside() || kind.IsChapterKind()
+	var agreeWith []string
 	if kind.HasRealTitleInside() {
 		if t, ok := metadata.StripJunkTitlePrefix(b.Title); ok {
-			if t, ok = accept(t); ok {
+			agreeWith = append(agreeWith, t)
+			if t, ok = accept(t, junkSrcStripped); ok {
 				props = append(props, proposal{t, junkSrcStripped, repairs.RiskLow})
 			}
 		}
 	}
+	folderTitle, folderSrc := "", ""
 	if kind.IsChapterKind() && len(paths) > 0 {
 		// "" is chapter-only to ChapterTitleFromDirectory, which then reads
 		// the folder whatever the stored chapter spelling ("Part IV").
 		if t, _, ok := metadata.ChapterTitleFromDirectory(paths[0], ""); ok {
-			if t, ok = accept(t); ok {
-				props = append(props, proposal{t, junkSrcFolder, repairs.RiskReview})
-			}
+			folderTitle, folderSrc = t, junkSrcFolder
 		}
 	} else if t, method, ok := DeriveJunkTitleReplacement(b.Title, author, paths); ok {
-		if t, ok = accept(t); ok {
-			src := junkSrcFolder
-			if method == "filename" {
-				src = junkSrcFilename
+		folderTitle, folderSrc = t, junkSrcFolder
+		if method == "filename" {
+			folderSrc = junkSrcFilename
+		}
+	}
+	if folderSrc == junkSrcFolder {
+		agreeWith = append(agreeWith, folderTitle)
+	}
+	if len(paths) > 0 {
+		agreeWith = append(agreeWith, filepath.Base(junkWorkDir(paths[0])))
+	}
+	if t, score, ok := f.candidateTitle(b.ID, author); ok {
+		switch {
+		case embedded && !titleAgreesWithAny(t, agreeWith):
+			refused = append(refused, fmt.Sprintf("candidate %q (score %.2f) disagrees with the title's own evidence", t, score))
+		default:
+			if t, ok = accept(t, junkSrcCandidate); ok {
+				props = append(props, proposal{t, junkSrcCandidate, repairs.RiskReview})
 			}
-			props = append(props, proposal{t, src, repairs.RiskReview})
+		}
+	}
+	if folderSrc != "" {
+		if t, ok := accept(folderTitle, folderSrc); ok {
+			props = append(props, proposal{t, folderSrc, repairs.RiskReview})
 		}
 	}
 	if kind.IsChapterKind() && b.SeriesID != nil && idx.series[*b.SeriesID] != "" {
@@ -560,11 +638,15 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 			// A digits-only match cannot fail to parse except by overflow,
 			// which is no book number: no proposal then.
 			if n, perr := strconv.Atoi(m[1]); perr == nil {
-				if t, ok := accept(fmt.Sprintf("%s, Book %d", idx.series[*b.SeriesID], n)); ok {
+				if t, ok := accept(fmt.Sprintf("%s, Book %d", idx.series[*b.SeriesID], n), junkSrcSeriesNum); ok {
 					props = append(props, proposal{t, junkSrcSeriesNum, repairs.RiskReview})
 				}
 			}
 		}
+	}
+	if ownerManual != "" {
+		return finish(repairs.SkipOwnerManual, fmt.Sprintf(
+			"the proposed title %q marks Big Finish / Doctor Who / Torchwood content; owner applies these by hand", ownerManual))
 	}
 	if len(props) == 0 {
 		why := "no trustworthy replacement title (no transcription, matching candidate, usable folder or series)"
@@ -575,16 +657,11 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	}
 	best := props[0]
 	if idx.titles[junkTitleKey(b.AuthorID, best.title)] {
-		return finish(junkSkipFragment, fmt.Sprintf(
-			"fragment — use the consolidation fixer: this author already has a book titled %q; this one is most likely part of it",
-			best.title))
+		return finish(junkSkipPossibleFragment, fmt.Sprintf(
+			"possible fragment: this author already has a book titled %q; this one may be part of it", best.title))
 	}
 	r.Proposed = map[string]string{"title": best.title}
 	r.Risk = best.risk
-	if providerTitle {
-		// A metadata provider supplied the current title: read it first.
-		r.Risk = repairs.RiskReview
-	}
 	var also []string
 	for _, p := range props[1:] {
 		if p.title != best.title {
@@ -595,34 +672,182 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	if len(also) > 0 {
 		r.Reason += "; other evidence: " + strings.Join(also, ", ")
 	}
-	r.Detail = &junkDecision{bookID: b.ID, oldTitle: b.Title, newTitle: best.title, authorID: b.AuthorID}
-	r.Fingerprint = junkFingerprint(r, string(kind)+"|"+best.source+"|"+strconv.FormatBool(providerTitle))
+	r.Detail = &junkDecision{bookID: b.ID, oldTitle: b.Title, newTitle: best.title}
+	r.Fingerprint = junkFingerprint(r, string(kind)+"|"+best.source)
 	return r, nil
 }
 
-// fragmentReason says why a junk-titled book is a chapter file of a bigger
-// book, or "" when it stands on its own. Wrongly calling a book a fragment
-// only defers it to the consolidation fixer; wrongly retitling a fragment
-// makes a duplicate of its parent, so the default for a chapter title is
-// "fragment" unless the book is a whole multi-file folder of its own.
-func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kind metadata.JunkTitleKind, author string, paths []string) (string, error) {
+// titleAgreesWithAny reports whether a candidate title names the same work
+// as any of the evidence titles: equal sort keys, or one is the other plus a
+// subtitle after ":", " (", " - " or "," ("Eldest" vs "Eldest: Inheritance,
+// Book 2"). A longer title that merely starts with the word ("Eldest Son")
+// is a different work.
+func titleAgreesWithAny(cand string, evidence []string) bool {
+	c := util.TitleSortKey(cand)
+	if c == "" {
+		return false
+	}
+	lc := strings.ToLower(strings.TrimSpace(cand))
+	for _, e := range evidence {
+		k := util.TitleSortKey(e)
+		if k == "" {
+			continue
+		}
+		le := strings.ToLower(strings.TrimSpace(e))
+		if c == k || hasSubtitle(lc, le) || hasSubtitle(le, lc) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSubtitle: s is p followed by a subtitle separator.
+func hasSubtitle(s, p string) bool {
+	if p == "" || len(s) <= len(p) || !strings.HasPrefix(s, p) {
+		return false
+	}
+	rest := s[len(p):]
+	for _, sep := range []string{":", " (", " - ", ","} {
+		if strings.HasPrefix(rest, sep) {
+			return true
+		}
+	}
+	return false
+}
+
+// junkProposalCheck refuses a proposed title that is not a title.
+type junkProposalCheck struct {
+	stored    string
+	narrators []string
+	people    []string
+	roots     []string
+	paths     []string
+}
+
+var (
+	// formatWordRe: a container, format or edition word, a side/tape/disc
+	// position or range. A folder or filename carrying one names a rip, not
+	// a work ("Dune (Unabridged)", "Dune MP3", "Side A", "Tape 3", "CD01-02").
+	formatWordRe = regexp.MustCompile(`(?i)\b(?:mp3|m4b|m4a|aac|flac|ogg|opus|wma|unabridged|abridged|side\s+[a-d0-9]|tape\s*\d+|(?:cd|disc|disk)\s*\d+(?:\s*-\s*\d+)?)\b`)
+	// idCodeRe: an ASIN (B0 + 8), an ISBN-10/13, or a trailing bracketed
+	// 10-character id ("Dune [B002V1OF70]").
+	idCodeRe = regexp.MustCompile(`(?i)\bB0[0-9A-Z]{8}\b|\b(?:97[89][- ]?)?\d{9}[\dX]\b|\[[0-9A-Z]{10}\]\s*$`)
+	// genericStems are tool-output stems that name no work.
+	genericStems = map[string]bool{"merged": true, "output": true, "book": true, "audio": true, "audiobook": true,
+		"track": true, "untitled": true, "new folder": true}
+)
+
+// refusal returns why c is refused as a proposal from source, "-" for a
+// refusal not worth listing (empty, same as stored), or "" to accept it.
+func (pc junkProposalCheck) refusal(c, source string) string {
+	switch {
+	case len([]rune(c)) < 2, strings.EqualFold(c, strings.TrimSpace(pc.stored)):
+		return "-"
+	case metadata.ClassifyJunkTitleFor(c, pc.narrators) != metadata.JunkNone:
+		return fmt.Sprintf("%q is junk itself", c)
+	case metadata.IsGenericDirName(c), genericStems[strings.ToLower(c)]:
+		// A generic folder ("Books", "Audiobooks", a library root) is what
+		// the one-level climb in DeriveJunkTitleReplacement lands on above a
+		// junk-named folder; it is never a title.
+		return fmt.Sprintf("%q is a generic name", c)
+	case titleNamesAPerson(c, pc.people) || pc.namesAPersonNormalized(c):
+		return fmt.Sprintf("%q names the author or narrator", c)
+	case pc.isPathRoot(c):
+		return fmt.Sprintf("%q is a library or path root", c)
+	}
+	if source == junkSrcFolder || source == junkSrcFilename {
+		switch {
+		case formatWordRe.MatchString(c):
+			return fmt.Sprintf("%q carries a format, edition or disc marker", c)
+		case idCodeRe.MatchString(c):
+			return fmt.Sprintf("%q carries an ASIN or ISBN", c)
+		}
+		if head, _, ok := strings.Cut(c, " - "); ok && pc.namesAPersonNormalized(head) {
+			return fmt.Sprintf("%q starts with a person's name (an \"Author - …\" filename)", c)
+		}
+	}
+	return ""
+}
+
+// namesAPersonNormalized compares normalized names, and a "Last, First"
+// spelling in either position ("Herbert, Frank" is Frank Herbert).
+func (pc junkProposalCheck) namesAPersonNormalized(s string) bool {
+	forms := func(n string) []string {
+		out := []string{util.NormalizeAuthor(n)}
+		if last, first, ok := strings.Cut(n, ","); ok && !strings.Contains(first, ",") &&
+			strings.TrimSpace(first) != "" && strings.TrimSpace(last) != "" {
+			out = append(out, util.NormalizeAuthor(strings.TrimSpace(first)+" "+strings.TrimSpace(last)))
+		}
+		return out
+	}
+	mine := forms(s)
+	for _, p := range pc.people {
+		if p = strings.TrimSpace(p); p == "" {
+			continue
+		}
+		for _, a := range forms(p) {
+			for _, b := range mine {
+				if a != "" && a == b {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// isPathRoot: c is the first segment of one of the book's paths ("lib" of
+// "/lib/A/intro.mp3"), a segment of a configured library root or import
+// path, or the folder right below one (the author folder).
+func (pc junkProposalCheck) isPathRoot(c string) bool {
+	eq := func(seg string) bool { return seg != "" && strings.EqualFold(seg, c) }
+	for _, p := range pc.paths {
+		if first, _, _ := strings.Cut(strings.TrimPrefix(filepath.ToSlash(p), "/"), "/"); eq(first) {
+			return true
+		}
+	}
+	for _, root := range pc.roots {
+		for seg := range strings.SplitSeq(filepath.ToSlash(root), "/") {
+			if eq(seg) {
+				return true
+			}
+		}
+		for _, p := range pc.paths {
+			rel, err := filepath.Rel(root, p)
+			if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+				continue
+			}
+			if first, _, _ := strings.Cut(filepath.ToSlash(rel), "/"); first != filepath.ToSlash(rel) && eq(first) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// fragmentReason decides whether a junk-titled book is (or may be) a chapter
+// file of a bigger book. It returns junkSkipFragment only when another live
+// book owns one of its paths; junkSkipPossibleFragment for the shapes that
+// suggest it; junkSkipNeedsManual for a bare unpadded number, which is as
+// likely a real title ("13", "300"); "" when the book stands on its own.
+func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kind metadata.JunkTitleKind, author string, paths []string) (skip, why string, err error) {
 	store := f.p.deps.OpsStore()
 	for _, p := range paths {
 		owners := append([]string(nil), idx.owners[p]...)
 		sort.Strings(owners)
 		for _, o := range owners {
 			if o != b.ID {
-				return fmt.Sprintf("its file %s is also a file of book %s", p, o), nil
+				return junkSkipFragment, fmt.Sprintf("its file %s is also a file of book %s", p, o), nil
 			}
 		}
 	}
 	for _, p := range paths {
 		row, err := store.GetBookFileByPath(p)
 		if err != nil {
-			return "", fmt.Errorf("read owner of %s: %w", p, err)
+			return "", "", fmt.Errorf("read owner of %s: %w", p, err)
 		}
 		if row != nil && row.BookID != "" && row.BookID != b.ID {
-			return fmt.Sprintf("its file %s is also a file of book %s", p, row.BookID), nil
+			return junkSkipFragment, fmt.Sprintf("its file %s is also a file of book %s", p, row.BookID), nil
 		}
 	}
 	dirs := map[string]bool{}
@@ -634,17 +859,41 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 	}
 	keys := make([]string, 0, len(dirs))
 	for d := range dirs {
-		keys = append(keys, d)
+		if d != "" {
+			keys = append(keys, d)
+		}
 	}
 	sort.Strings(keys)
-	for _, d := range keys {
-		if d == "" {
-			continue
+	// The organizer-moved chapter: author "Eldest", filed at
+	// Eldest/02/98/98.mp3 (work folder "Eldest", junkWorkDir). The author
+	// named like the work folder is the shape a chapter file parsed as its
+	// own book gets. Only the work folder: the folder above it is the author
+	// folder of every correctly filed book. And not for a single file that
+	// sits directly in its folder: "/lib/Author A/13.m4b" is filed in the
+	// author folder by design.
+	if a := strings.TrimSpace(author); a != "" && !authorname.IsPlaceholderAuthor(a) {
+		for _, p := range append(slices.Clone(paths), b.FilePath) {
+			d := junkWorkDir(p)
+			if d == "" {
+				continue
+			}
+			if _, audio := audioExts[strings.ToLower(filepath.Ext(p))]; audio && d == filepath.Dir(p) {
+				continue
+			}
+			if strings.EqualFold(a, filepath.Base(d)) {
+				return junkSkipPossibleFragment, fmt.Sprintf(
+					"its author %q is the name of its folder %s, the shape a chapter file parsed as its own book gets", a, d), nil
+			}
 		}
-		// A chapter-titled book sharing its folder with any other book is a
-		// piece of it. Any other junk title ("Opening", "read by narrator")
-		// is a fragment only beside chapter-titled siblings: single-file
-		// books of different works often share an author folder.
+	}
+	if bareNumberRe.MatchString(strings.TrimSpace(b.Title)) {
+		return junkSkipNeedsManual, "the title is a bare number, which may be the real title; nothing proves it is a chapter", nil
+	}
+	for _, d := range keys {
+		// A chapter-titled book sharing its folder with any other book may be
+		// a piece of it. Any other junk title ("Opening", "read by narrator")
+		// is suspect only beside chapter-titled siblings: single-file books
+		// of different works often share an author folder.
 		others := idx.dirChapters[d]
 		// A track-number prefix beside other books is the tracks-of-one-book
 		// shape too ("01 - Chapter One", "02 - Chapter Two").
@@ -652,35 +901,34 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 			others = idx.dirBooks[d] - 1
 		}
 		if others >= 1 {
-			return fmt.Sprintf("%d books share the folder %s", idx.dirBooks[d], d), nil
-		}
-		if a := strings.TrimSpace(author); a != "" && !authorname.IsPlaceholderAuthor(a) && strings.EqualFold(a, filepath.Base(d)) {
-			return fmt.Sprintf("its author %q is the name of its folder, the shape a chapter file parsed as its own book gets", a), nil
+			return junkSkipPossibleFragment, fmt.Sprintf("%d books share the folder %s", idx.dirBooks[d], d), nil
 		}
 	}
 	if kind.IsChapterKind() && len(paths) < 2 {
-		return "a single file titled only by a chapter position", nil
+		return junkSkipPossibleFragment, "a single file titled only by a chapter position", nil
 	}
-	return "", nil
+	return "", "", nil
 }
 
-// candidateTitle returns the best cached metadata candidate's title when it
-// is trustworthy: score at least junkCandidateMinScore, no runtime mismatch,
-// and the same author as the book (the search ran on the junk title, so a
-// candidate that disagrees on the author is noise).
-func (f *junkTitleFixer) candidateTitle(bookID, author string) (string, bool) {
+// candidateTitle returns the highest-scoring cached metadata candidate's
+// title when it is trustworthy: score at least junkCandidateMinScore, no
+// runtime mismatch, and the same author as the book (the search ran on the
+// junk title, so a candidate that disagrees on the author is noise). Ties
+// keep the cache's order.
+func (f *junkTitleFixer) candidateTitle(bookID, author string) (string, float64, bool) {
 	cs := f.p.deps.MetadataCacheStore()
 	if cs == nil {
-		return "", false
+		return "", 0, false
 	}
 	entry, err := cs.GetMetadataCache(bookID)
 	if err != nil || entry == nil {
-		return "", false
+		return "", 0, false
 	}
 	a := strings.TrimSpace(author)
 	if a == "" || authorname.IsPlaceholderAuthor(a) {
-		return "", false
+		return "", 0, false
 	}
+	best, bestScore, found := "", 0.0, false
 	for _, raw := range entry.Candidates {
 		var c struct {
 			Title            string  `json:"title"`
@@ -694,9 +942,11 @@ func (f *junkTitleFixer) candidateTitle(bookID, author string) (string, bool) {
 		if !strings.EqualFold(util.NormalizeAuthor(c.Author), util.NormalizeAuthor(a)) {
 			continue
 		}
-		return c.Title, true
+		if !found || c.Score > bestScore {
+			best, bestScore, found = c.Title, c.Score, true
+		}
 	}
-	return "", false
+	return best, bestScore, found
 }
 
 // junkFingerprint hashes the decision's inputs and outputs.

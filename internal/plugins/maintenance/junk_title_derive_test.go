@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_derive_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 51758d2b-4a45-4c0b-9bd0-5b22cc579c19
-// last-edited: 2026-09-02
+// last-edited: 2026-09-28
 
 package maintenance
 
@@ -189,6 +189,20 @@ func TestIsJunkTitle(t *testing.T) {
 	for _, s := range []string{"Nocturne", "The Intro Files", ""} {
 		if IsJunkTitle(s) {
 			t.Errorf("IsJunkTitle(%q) = true, want false", s)
+		}
+	}
+}
+
+// The ancestor hop escapes only a folder the organizer poisoned (the exact
+// junkTitles set). A folder that merely classifies as junk ("Chapter 1") is
+// not one, and climbing out of it returned the library root "lib".
+func TestDeriveJunkTitleReplacement_NoHopOutOfAClassifierJunkFolder(t *testing.T) {
+	for _, paths := range [][]string{
+		{"/lib/Chapter 1/x.mp3"},
+		{"/lib/Read by Moonlight/x.mp3"},
+	} {
+		if got, method, ok := DeriveJunkTitleReplacement("intro", "", paths); ok {
+			t.Fatalf("%v: derived %q via %s, want nothing", paths, got, method)
 		}
 	}
 }
