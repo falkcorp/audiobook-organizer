@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-09-29
 
@@ -415,6 +415,115 @@ func TestGuardBookPaths_UnderscoreColon(t *testing.T) {
 	}
 	k, _ = GuardBookPaths("b", []string{"/x/Doctor Whoopsie/01.mp3"}, "")
 	require.Empty(t, k)
+}
+
+// itunesLinkRoot builds <root>/books/itunes/Real and <root>/lib, with
+// <root>/lib/Link a folder link into the iTunes folder.
+func itunesLinkRoot(t *testing.T) (root, itunes, lib string) {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	itunes = filepath.Join(root, "books", "itunes", "Real")
+	require.NoError(t, os.MkdirAll(itunes, 0o755))
+	lib = filepath.Join(root, "lib")
+	require.NoError(t, os.MkdirAll(filepath.Join(lib, "Plain"), 0o755))
+	require.NoError(t, os.Symlink(itunes, filepath.Join(lib, "Link")))
+	return root, itunes, lib
+}
+
+// TestGuard_DeadLinkIntoMissingSubfolderOfAnITunesLink (F2, review LC1): a
+// dead link whose text names a path two folders below a folder link into
+// books/itunes/** (the middle folder is gone) resolves through the longest
+// existing ancestor and is skipped.
+func TestGuard_DeadLinkIntoMissingSubfolderOfAnITunesLink(t *testing.T) {
+	_, _, lib := itunesLinkRoot(t)
+	require.NoError(t, os.Symlink(filepath.Join(lib, "Link", "GoneDisc", "gone.m4b"), filepath.Join(lib, "Plain", "dead-deep.m4b")))
+	k, why := GuardBookPathsWith(NewPathResolver(), "b", []string{filepath.Join(lib, "Plain", "dead-deep.m4b")}, "")
+	require.Equal(t, SkipITunes, k, why)
+}
+
+// TestGuard_MissingRowTwoBelowAnITunesFolderLink (F2, review LC2): a missing
+// row two folders below a folder link into iTunes, no link text involved.
+func TestGuard_MissingRowTwoBelowAnITunesFolderLink(t *testing.T) {
+	_, _, lib := itunesLinkRoot(t)
+	k, why := GuardBookPathsWith(NewPathResolver(), "b", []string{filepath.Join(lib, "Link", "GoneDisc", "gone.m4b")}, "")
+	require.Equal(t, SkipITunes, k, why)
+}
+
+// TestGuard_MissingRowBelowADanglingFolderLink (F2): the missing row's folder
+// is itself a dangling link whose text names the iTunes tree.
+func TestGuard_MissingRowBelowADanglingFolderLink(t *testing.T) {
+	_, itunes, lib := itunesLinkRoot(t)
+	require.NoError(t, os.Symlink(filepath.Join(itunes, "GoneFolder"), filepath.Join(lib, "DeadDir")))
+	k, why := GuardBookPathsWith(NewPathResolver(), "b", []string{filepath.Join(lib, "DeadDir", "Disc 1", "x.m4b")}, "")
+	require.Equal(t, SkipITunes, k, why)
+}
+
+// TestGuard_RelativeEscapeAndLoop (review LC3, control): a relative ".."
+// hop into a dead iTunes path is skipped; a link loop points nowhere and is
+// cleared, not doubted.
+func TestGuard_RelativeEscapeAndLoop(t *testing.T) {
+	root, itunes, _ := itunesLinkRoot(t)
+	lib := filepath.Join(root, "lib", "A", "B")
+	require.NoError(t, os.MkdirAll(lib, 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(itunes, "gone.m4b"), filepath.Join(root, "lib", "hop2.m4b")))
+	require.NoError(t, os.Symlink(filepath.Join("..", "..", "hop2.m4b"), filepath.Join(lib, "hop1.m4b")))
+	k, why := GuardBookPathsWith(NewPathResolver(), "b", []string{filepath.Join(lib, "hop1.m4b")}, "")
+	require.Equal(t, SkipITunes, k, why)
+
+	require.NoError(t, os.Symlink(filepath.Join(lib, "y.m4b"), filepath.Join(lib, "x.m4b")))
+	require.NoError(t, os.Symlink(filepath.Join(lib, "x.m4b"), filepath.Join(lib, "y.m4b")))
+	k, why = GuardBookPathsWith(NewPathResolver(), "b", []string{filepath.Join(lib, "x.m4b")}, "")
+	require.Empty(t, k, why)
+}
+
+// linkChain makes n links in dir, each naming the next, the last naming end;
+// it returns the first.
+func linkChain(t *testing.T, dir string, n int, end string) string {
+	t.Helper()
+	name := func(i int) string { return filepath.Join(dir, fmt.Sprintf("l%04d.m4b", i)) }
+	require.NoError(t, os.Symlink(end, name(n-1)))
+	for i := n - 2; i >= 0; i-- {
+		require.NoError(t, os.Symlink(name(i+1), name(i)))
+	}
+	return name(0)
+}
+
+// TestGuard_LongChainIntoITunes (F2, review LC4): a 41-link chain (past the
+// kernel's 40, so EvalSymlinks fails) whose last link names a dead iTunes
+// path is walked by hand and skipped.
+func TestGuard_LongChainIntoITunes(t *testing.T) {
+	_, itunes, lib := itunesLinkRoot(t)
+	first := linkChain(t, filepath.Join(lib, "Plain"), 41, filepath.Join(itunes, "gone.m4b"))
+	k, why := GuardBookPathsWith(NewPathResolver(), "b", []string{first}, "")
+	require.Equal(t, SkipITunes, k, why)
+}
+
+// TestGuard_HopExhaustionIsDoubt (F2): a chain longer than maxLinkHops is not
+// settled, so the row is skipped as unreadable, never cleared.
+func TestGuard_HopExhaustionIsDoubt(t *testing.T) {
+	_, _, lib := itunesLinkRoot(t)
+	first := linkChain(t, filepath.Join(lib, "Plain"), maxLinkHops+2, filepath.Join(lib, "Plain", "nowhere.m4b"))
+	k, why := GuardBookPathsWith(NewPathResolver(), "b", []string{first}, "")
+	require.Equal(t, SkipGuardUnreadable, k, why)
+}
+
+// TestGuard_UnreadableFolderIsDoubt (F2): a row in a folder the guard cannot
+// read could be anywhere; it is skipped as unreadable.
+func TestGuard_UnreadableFolderIsDoubt(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every folder")
+	}
+	_, _, lib := itunesLinkRoot(t)
+	locked := filepath.Join(lib, "Locked")
+	require.NoError(t, os.MkdirAll(locked, 0o755))
+	require.NoError(t, os.Chmod(locked, 0))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	k, why := GuardBookPathsWith(NewPathResolver(), "b", []string{filepath.Join(locked, "x.m4b")}, "")
+	require.Equal(t, SkipGuardUnreadable, k, why)
+	// A plain missing row is an answer, not doubt.
+	k, why = GuardBookPathsWith(NewPathResolver(), "b", []string{filepath.Join(lib, "Plain", "gone", "x.m4b")}, "")
+	require.Empty(t, k, why)
 }
 
 // ---- paging ----
