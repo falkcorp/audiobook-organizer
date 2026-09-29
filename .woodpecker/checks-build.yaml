@@ -1,0 +1,84 @@
+# file: .woodpecker/checks-build.yaml
+# version: 1.0.0
+# guid: 544e8a0d-e5d0-4952-8fb5-c05cde1dd245
+# last-edited: 2026-09-29
+#
+# The non-linter gates of `make ci`: vet (test-short's prerequisite),
+# fmt-check, sdkguard, bench-check, and the web tests, each step running the
+# same make target `make ci` runs. The linter gates (staticcheck, the errcheck
+# ratchet, mocks-check) are in checks-lint.yaml on U0; the two were one
+# `checks` workflow on U0 until 2026-09-29 and are split so they run on both
+# hosts at once. None of these steps needs the installed linters.
+#
+# Runs on the U1 agent (local backend, Linux amd64, 48 cores). `image` names
+# the shell that runs the commands. The caches are host directories on U1's
+# tank/ci dataset, shared with test-rest and test-database. Node is the
+# official v26 tarball under /tank/ci/tools/node (checksum-verified; see
+# docs/ci/woodpecker.md). PATH puts the pinned Go toolchain's own bin first so
+# fmt-check runs gofmt 1.27.1, not the older /usr/bin/gofmt from Ubuntu's Go.
+
+labels:
+  host: u1
+
+when:
+  - event: [push, pull_request, manual]
+
+clone:
+  - name: clone
+    image: woodpeckerci/plugin-git:2.10.1@sha256:550075c844fcec0af41d9d28f9860aa5d8c43e1e9419be4b9266dc02c2f29804
+    settings:
+      lfs: false  # GitHub's LFS budget is exhausted; no check reads LFS content
+      depth: 50
+
+variables:
+  - &go_env
+    GOTOOLCHAIN: go1.27.1
+    # -trimpath: every run clones into a new woodpecker-local-<n> workdir, and
+    # without it Go keys each package's cache entry on that directory, so the
+    # shared cache would never hit (see test-server-scanner.yaml).
+    GOFLAGS: -buildvcs=false -trimpath
+    GOCACHE: /tank/ci/cache/go-build
+    GOMODCACHE: /tank/ci/cache/gomod
+
+steps:
+  - name: vet
+    image: bash
+    environment: *go_env
+    commands:
+      - make --no-print-directory vet
+
+  - name: fmt-sdkguard-bench
+    image: bash
+    environment: *go_env
+    commands:
+      - export PATH="$$(go env GOROOT)/bin:$$PATH"
+      - command -v gofmt && go version
+      - make --no-print-directory fmt-check
+      - make --no-print-directory sdkguard
+      - make --no-print-directory bench-check
+
+  - name: web-test
+    image: bash
+    environment:
+      npm_config_cache: /tank/ci/cache/npm
+    commands:
+      - export PATH="/tank/ci/tools/node/bin:$$PATH"
+      - node --version
+      - npm ci --prefix web --no-audit --no-fund
+      - cd web && npm run test -- --run
+
+  - name: cleanup
+    # Same cleanup as test-rest.yaml: cap the shared GOCACHE, clear this clone
+    # and the per-run HOME, and sweep workdirs left by a crashed agent.
+    image: bash
+    depends_on: [vet, fmt-sdkguard-bench, web-test]
+    when:
+      - status: [success, failure]
+    environment:
+      GOCACHE: /tank/ci/cache/go-build
+    commands:
+      - '[ -n "$${GOCACHE}" ] && python3 scripts/ci/trim_go_cache.py "$${GOCACHE}" --max-gb 40 --target-gb 30 || true'
+      - '[ -n "$${CI_WORKSPACE}" ] && [ "$${CI_WORKSPACE}" != / ] && find "$${CI_WORKSPACE}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true'
+      - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
+      - 'find "$${TMPDIR:-/tmp}" -maxdepth 1 -name "go-build*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true'
+      - '[ -n "$${HOME}" ] && W=$$(dirname "$${HOME}") && R=$$(dirname "$$W") && case "$$(basename "$$W")" in woodpecker-local-*) find "$$R" -mindepth 1 -maxdepth 1 -name "woodpecker-local-*" -type d ! -path "$$W" -mmin +180 -exec sh -c "chmod -R u+w \"\$$@\" && rm -rf \"\$$@\"" _ {} + ;; esac || true'
