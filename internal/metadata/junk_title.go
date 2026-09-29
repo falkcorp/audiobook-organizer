@@ -1,5 +1,5 @@
 // file: internal/metadata/junk_title.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d7a2c91-3e6b-4f08-a1d5-8c2e9b7f4a13
 // last-edited: 2026-09-28
 
@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // JunkTitleKind says why a stored book title is not a title. The empty kind
@@ -66,18 +67,27 @@ var (
 	// spelledChapterRe is a chapter position spelled out: "Chapter One",
 	// "Part Twelve", "Disc Two".
 	spelledChapterRe = regexp.MustCompile(`(?i)^(?:chapter|part|disc|disk|track)\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)$`)
-	// narratorCreditRe: the title IS a narrator credit.
-	narratorCreditRe = regexp.MustCompile(`(?i)^(?:read|narrated|performed)\s+by(?:\s+.*)?$`)
+	// bareCreditRe: the title is a narrator credit with no name in it
+	// ("read by narrator", "Narrated by the author"). A credit naming someone
+	// is junk only when that someone is the book's narrator
+	// (ClassifyJunkTitleFor): "Read by Moonlight" is a title.
+	bareCreditRe = regexp.MustCompile(`(?i)^(?:read|narrated|performed)\s+by(?:\s+(?:the\s+)?(?:narrator|author|unknown(?:\s+narrator)?))?$`)
+	// namedCreditRe splits "Read by <name>" for the narrator comparison.
+	namedCreditRe = regexp.MustCompile(`(?i)^(?:read|narrated|performed)\s+by\s+(.+)$`)
 	// trackTagRe: a track tag that names a segment of an audiobook, never a
 	// book. "Introduction" is NOT here: it is the real title of some books.
 	trackTagRe = regexp.MustCompile(`(?i)^(?:intro|opening|opening\s+(?:credits|titles|music)|(?:end|closing)\s+credits|credits|big\s+finish\s+ident)(?:\s*\d+)?$`)
 	// placeholderRe: tagger and system placeholders.
 	placeholderRe = regexp.MustCompile(`(?i)^(?:unknown(?:\s+(?:title|book|album|audiobook|artist|author|narrator))?|untitled|no\s+title|\[?untitled\]?|\[?unknown\]?)$`)
 	// numberPrefixRe: 1-3 digits then a separator and the real title. The
-	// separator is required ("1 Corinthians" and "7 Habits" are titles), a
-	// colon is not one ("3:10 to Yuma"), a dot counts only before a space
-	// ("1.5"), and four digits never match ("2001: A Space Odyssey", "1984").
-	numberPrefixRe = regexp.MustCompile(`^#?\d{1,3}(?:\s*[-_)\]]+\s*|\.\s+)(\S.*)$`)
+	// separator is required ("1 Corinthians" and "7 Habits" are titles). A
+	// hyphen run counts only with whitespace on both sides, so "10-Minute
+	// Toughness", "1-2-3 Magic", "4-3-2-1" and "9-11" keep their number; a
+	// colon is not a separator ("3:10 to Yuma"); a dot counts only before a
+	// space ("1.5"); four digits never match ("2001: A Space Odyssey", "1984").
+	numberPrefixRe = regexp.MustCompile(`^#?\d{1,3}(?:\s+-+\s+|\s*[)\]]\s*|\.\s+)(\S.*)$`)
+	// underscorePrefixRe: digits, an underscore run, then a letter ("07_Dune").
+	underscorePrefixRe = regexp.MustCompile(`^\d{1,3}_+(\pL.*)$`)
 	// zeroPaddedPrefixRe: a zero-padded track number and a space ("01 Eldest").
 	// A leading zero is never part of a real title's number.
 	zeroPaddedPrefixRe = regexp.MustCompile(`^0\d{1,2}\s+(\S.*)$`)
@@ -86,6 +96,11 @@ var (
 	// and so are dots touching a letter ("...And Justice for All").
 	punctuationPrefixRe = regexp.MustCompile(`^(?:[-_~=+|/\\,;:*•·]+|\.+\s)\s*(\S.*)$`)
 )
+
+// romanWords are well-formed roman numerals that are also English words or
+// common abbreviations; as a whole title they are words.
+var romanWords = map[string]bool{"MIX": true, "DIV": true, "LIV": true, "MD": true, "DC": true, "CD": true,
+	"DIM": true, "MI": true, "CM": true, "MC": true, "XL": true, "CC": true, "CV": true}
 
 // isBareRoman reports whether t is only a roman numeral. It must be upper
 // case, or lower case made only of i, v and x: "Mix", "Dim", "Liv", "Civil"
@@ -123,14 +138,20 @@ func ClassifyJunkTitle(title string) JunkTitleKind {
 		return JunkChapterOnly
 	case spelledChapterRe.MatchString(t):
 		return JunkChapterOnly
-	case narratorCreditRe.MatchString(t):
+	case bareCreditRe.MatchString(t):
 		return JunkNarratorCredit
 	case trackTagRe.MatchString(t):
 		return JunkTrackTag
 	case placeholderRe.MatchString(t) || authorname.IsPlaceholderTitle(t):
 		return JunkPlaceholder
-	case isBareRoman(t):
+	case len(t) >= 2 && !romanWords[strings.ToUpper(t)] && isBareRoman(t):
+		// One letter ("I", "V", "X") is a title too often: Grafton's "X".
 		return JunkRomanNumeral
+	}
+	// "1. John", "2 - Kings", "2-Peter": the number is part of a numbered
+	// book's name, not a track prefix.
+	if _, ok := util.NumberedBookSortForm(t); ok {
+		return JunkNone
 	}
 	if _, ok := stripNumberPrefix(t); ok {
 		return JunkNumberPrefix
@@ -149,6 +170,9 @@ func stripNumberPrefix(t string) (string, bool) {
 	if m := numberPrefixRe.FindStringSubmatch(t); m != nil {
 		return strings.TrimSpace(m[1]), true
 	}
+	if m := underscorePrefixRe.FindStringSubmatch(t); m != nil {
+		return strings.TrimSpace(m[1]), true
+	}
 	if m := zeroPaddedPrefixRe.FindStringSubmatch(t); m != nil {
 		return strings.TrimSpace(m[1]), true
 	}
@@ -160,6 +184,9 @@ func stripNumberPrefix(t string) (string, bool) {
 // the title has no such prefix or the remainder is junk too ("01 - 02").
 func StripJunkTitlePrefix(title string) (string, bool) {
 	t := strings.TrimSpace(title)
+	if _, ok := util.NumberedBookSortForm(t); ok {
+		return "", false
+	}
 	for range 3 { // "01 - - Eldest": at most a few stacked prefixes
 		rest, ok := stripNumberPrefix(t)
 		if !ok {
@@ -176,4 +203,22 @@ func StripJunkTitlePrefix(title string) (string, bool) {
 		return "", false
 	}
 	return t, true
+}
+
+// ClassifyJunkTitleFor is ClassifyJunkTitle with the book's narrator names:
+// "Read by Kate Reading" is a credit only on a book Kate Reading narrates.
+func ClassifyJunkTitleFor(title string, narrators []string) JunkTitleKind {
+	if k := ClassifyJunkTitle(title); k != JunkNone {
+		return k
+	}
+	m := namedCreditRe.FindStringSubmatch(strings.TrimSpace(title))
+	if m == nil {
+		return JunkNone
+	}
+	for _, n := range narrators {
+		if n = strings.TrimSpace(n); n != "" && strings.EqualFold(n, strings.TrimSpace(m[1])) {
+			return JunkNarratorCredit
+		}
+	}
+	return JunkNone
 }

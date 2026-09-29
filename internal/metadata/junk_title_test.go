@@ -1,5 +1,5 @@
 // file: internal/metadata/junk_title_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b1e5f27-9c3a-4d60-b2e4-7f1a0c6d9e38
 // last-edited: 2026-09-28
 
@@ -27,8 +27,8 @@ func TestClassifyJunkTitle_Table(t *testing.T) {
 		{"Part Twelve", JunkChapterOnly},
 		// ---- narrator credits ----
 		{"read by narrator", JunkNarratorCredit},
-		{"Read by Kate Reading", JunkNarratorCredit},
-		{"Narrated by Stephen Fry", JunkNarratorCredit},
+		{"Narrated by the author", JunkNarratorCredit},
+		{"Read by", JunkNarratorCredit},
 		// ---- track tags ----
 		{"Opening", JunkTrackTag},
 		{"Intro", JunkTrackTag},
@@ -47,7 +47,7 @@ func TestClassifyJunkTitle_Table(t *testing.T) {
 		{"IV", JunkRomanNumeral},
 		{"XII", JunkRomanNumeral},
 		{"iii", JunkRomanNumeral},
-		{"I", JunkRomanNumeral},
+
 		// ---- prefixes ----
 		{"01 - Eldest", JunkNumberPrefix},
 		{"003. The Hobbit", JunkNumberPrefix},
@@ -88,6 +88,31 @@ func TestClassifyJunkTitle_Table(t *testing.T) {
 		{"The Way of Kings", JunkNone},
 		{"Vol 1.5", JunkNone},
 		{"1.5 Degrees", JunkNone},
+		// hyphenated numbers belong to the title
+		{"10-Minute Toughness", JunkNone},
+		{"21-Day Sugar Detox", JunkNone},
+		{"12-Step Recovery", JunkNone},
+		{"1-2-3 Magic", JunkNone},
+		{"4-3-2-1", JunkNone},
+		{"9-11", JunkNone},
+		// a numbered book's number is part of its name
+		{"1. John", JunkNone},
+		{"2 - Kings", JunkNone},
+		{"2-Peter", JunkNone},
+		// a credit naming someone is a title unless it names the narrator
+		{"Read by Moonlight", JunkNone},
+		{"Read by Kate Reading", JunkNone},
+		// one-letter and word-like roman numerals are titles
+		{"I", JunkNone},
+		{"X", JunkNone},
+		{"V", JunkNone},
+		{"MIX", JunkNone},
+		{"DIV", JunkNone},
+		{"LIV", JunkNone},
+		{"MD", JunkNone},
+		{"DC", JunkNone},
+		{"CD", JunkNone},
+		{"DIM", JunkNone},
 	}
 	for _, c := range cases {
 		if got := ClassifyJunkTitle(c.title); got != c.want {
@@ -110,13 +135,29 @@ func TestStripJunkTitlePrefix(t *testing.T) {
 		{"02 - Chapter Two", "", false},
 		{"Eldest", "", false},        // no prefix
 		{"1 Corinthians", "", false}, // no separator: a title
-		{"01 - X", "", false},        // single-rune remainder
+		{"1. John", "", false},       // numbered book
+		{"2 - Kings", "", false},     // numbered book
+		{"10-Minute Toughness", "", false},
+		{"07_Dune", "Dune", true}, // no separator: a title
+		{"01 - X", "", false},     // single-rune remainder
 	}
 	for _, c := range cases {
 		got, ok := StripJunkTitlePrefix(c.in)
 		if got != c.want || ok != c.ok {
 			t.Errorf("StripJunkTitlePrefix(%q) = (%q, %v), want (%q, %v)", c.in, got, ok, c.want, c.ok)
 		}
+	}
+}
+
+func TestClassifyJunkTitleFor_NamedCredit(t *testing.T) {
+	if got := ClassifyJunkTitleFor("Read by Kate Reading", []string{"Kate Reading"}); got != JunkNarratorCredit {
+		t.Errorf("credit naming the narrator = %q, want narrator_credit", got)
+	}
+	if got := ClassifyJunkTitleFor("Read by Moonlight", []string{"Kate Reading"}); got != JunkNone {
+		t.Errorf("Read by Moonlight = %q, want a title", got)
+	}
+	if got := ClassifyJunkTitleFor("read by narrator", nil); got != JunkNarratorCredit {
+		t.Errorf("bare credit = %q", got)
 	}
 }
 

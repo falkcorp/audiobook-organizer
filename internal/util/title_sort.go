@@ -1,5 +1,5 @@
 // file: internal/util/title_sort.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6c8a14-5d3b-4e97-b0a2-9e4d1c7f6b58
 // last-edited: 2026-09-28
 
@@ -32,12 +32,32 @@ var ordinalWords = map[string]int{
 	"4": 4, "iv": 4, "fourth": 4, "4th": 4,
 }
 
-// numberedBookRe: an ordinal token, an optional dot, whitespace, a numbered
-// book name, and a remainder that is empty or starts with something other
+// numberedBookRe: an ordinal token, a separator (a dot, a hyphen or
+// underscore run, or whitespace: "1. John", "2 - Kings", "2-Peter"), a
+// numbered book name, and a remainder that is empty or starts with something other
 // than a letter (a chapter number, " - ", "(") or the word chapter. The
 // remainder rule keeps "First Kings of England" a title of its own.
-var numberedBookRe = regexp.MustCompile(`(?i)^\s*([0-9a-z]+)\.?\s+(` + strings.Join(numberedBooks, "|") +
+//
+// Whitespace here is ASCII only (RE2's \s), and web/src/utils/titleSortKey.ts
+// uses the same explicit class, so the two cannot disagree on a NBSP.
+var numberedBookRe = regexp.MustCompile(`(?i)^\s*([0-9a-z]+)(?:\.\s*|\s*[-_]+\s*|\s+)(` + strings.Join(numberedBooks, "|") +
 	`)((?:\s*[^\pL\s].*)|(?:\s+(?:chapter|ch\.?)\b.*)|\s*)$`)
+
+// mayBeOrdinal is the fast path in front of numberedBookRe: the first token
+// (up to a space, dot, hyphen or underscore) must be an ordinal or made of
+// the letters l/I/i, or no numbered-book rewrite is possible.
+func mayBeOrdinal(title string) bool {
+	t := strings.TrimLeft(title, " \t")
+	end := strings.IndexAny(t, " \t.-_")
+	if end <= 0 {
+		return false
+	}
+	tok := strings.ToLower(t[:end])
+	if _, ok := ordinalWords[tok]; ok {
+		return true
+	}
+	return strings.Trim(tok, "li") == ""
+}
 
 // ordinalOf resolves a leading token to its number. letterL is true when the
 // token used the letter l for the digit 1 / roman I ("l", "ll", "lI"): a
@@ -58,6 +78,9 @@ func ordinalOf(tok string) (n int, letterL bool) {
 
 // matchNumberedBook parses a numbered-book title into its parts.
 func matchNumberedBook(title string) (n int, book, rest string, letterL, ok bool) {
+	if !mayBeOrdinal(title) {
+		return 0, "", "", false, false
+	}
 	m := numberedBookRe.FindStringSubmatch(title)
 	if m == nil {
 		return 0, "", "", false, false
@@ -79,11 +102,40 @@ func NumberedBookSortForm(title string) (string, bool) {
 	if !ok {
 		return title, false
 	}
+	return joinSortForm(book, n, rest), true
+}
+
+// joinSortForm renders "<Book> <n>[ <rest>]", with no space before a rest
+// that starts with punctuation: "John 1: Commentary", not "John 1 : …".
+func joinSortForm(book string, n int, rest string) string {
 	out := book + " " + strconv.Itoa(n)
-	if rest != "" {
+	switch {
+	case rest == "":
+	case strings.ContainsRune(":;,.!?)", rune(rest[0])):
+		out += rest
+	default:
 		out += " " + rest
 	}
-	return out, true
+	return out
+}
+
+// SeriesSortForm is the sort form of a SERIES name: the numbered-book
+// rewrite only when the whole name is a numbered book ("I Corinthians"), and
+// ok=false otherwise, so a series keeps its ordinary article handling.
+func SeriesSortForm(name string) (string, bool) {
+	n, book, rest, _, ok := matchNumberedBook(name)
+	if !ok || rest != "" {
+		return name, false
+	}
+	return joinSortForm(book, n, ""), true
+}
+
+// SeriesSortKey is TitleSortKey for a series name (SeriesSortForm).
+func SeriesSortKey(name string) string {
+	if form, ok := SeriesSortForm(name); ok {
+		return NormalizeTitle(form)
+	}
+	return NormalizeTitle(name)
 }
 
 // TitleSortKey is the library's title sort key: the normalised title
@@ -109,8 +161,7 @@ func NormalizeLetterLOrdinal(title string) (string, bool) {
 		return title, false
 	}
 	m := numberedBookRe.FindStringSubmatchIndex(title)
-	// m[2]:m[3] is the ordinal token; an optional dot after it goes too.
-	after := title[m[3]:]
-	after = strings.TrimPrefix(after, ".")
-	return strings.TrimLeft(title[:m[2]], " \t") + strconv.Itoa(n) + after, true
+	// m[2]:m[3] is the ordinal token; its separator is normalised to one
+	// space before the book name (m[4]).
+	return strings.TrimLeft(title[:m[2]], " \t") + strconv.Itoa(n) + " " + title[m[4]:], true
 }
