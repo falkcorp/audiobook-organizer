@@ -1,5 +1,5 @@
 // file: internal/server/transcription_identity_parity_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c9b742a-6fd1-4ae1-bd10-454a241b3df7
 // last-edited: 2026-09-28
 //
@@ -120,4 +120,31 @@ func TestApplyTranscriptionCandidate_IdentityParityWithPlanner_TranscribedQuery(
 	got, err := f.store.GetBookByID(b.ID)
 	require.NoError(t, err)
 	require.Equal(t, "Valis", got.Title)
+}
+
+// A multi-file book's FilePath is its work folder, a directory. A
+// "Guards! Guards!" intro heard in ".../Terry Pratchett/Mort" contradicts
+// the folder, so neither the planner nor the auto-match apply lifts the
+// stale identity on it. Both read the folder as a file path before: the
+// refusal never fired and the apply filled the title.
+func TestApplyTranscriptionCandidate_IdentityParityWithPlanner_DirectoryFolderContradicts(t *testing.T) {
+	for _, dir := range []string{"/library/Terry Pratchett/Mort", "/library/Unknown Author/Mort"} {
+		t.Run(dir, func(t *testing.T) {
+			f := newParityFixture(t, []metadata.BookMetadata{{Title: "Guards! Guards!", Author: "Terry Pratchett"}})
+			tp, err := f.store.CreateAuthor("Terry Pratchett")
+			require.NoError(t, err)
+			heard := "Guards! Guards!"
+			b, err := f.store.CreateBook(&database.Book{Title: "", FilePath: dir, AuthorID: &tp.ID, TranscribedTitle: &heard})
+			require.NoError(t, err)
+			_, err = f.mfs.FetchAndCacheLimited(context.Background(), nil, b.ID, heard, "Terry Pratchett", "", "", metafetch.SearchOptions{})
+			require.NoError(t, err)
+
+			plannerStale, applyStale, applyErr := f.verdicts(b.ID, heard, "Terry Pratchett")
+			require.True(t, plannerStale, "planner must not lift a transcription its folder contradicts")
+			require.True(t, applyStale, "apply must not lift it either (%v)", applyErr)
+			got, err := f.store.GetBookByID(b.ID)
+			require.NoError(t, err)
+			require.Equal(t, "", got.Title, "nothing written")
+		})
+	}
 }

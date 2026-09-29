@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c962e504-746a-454a-996f-1020803a8cab
 // last-edited: 2026-09-28
 
@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 )
@@ -158,6 +159,17 @@ func ChapterTitleFromDirectory(filePath, title string) (dirTitle, titleDir strin
 	if !IsChapterOnlyTitle(title) {
 		return "", "", false
 	}
+	return workFolder(filePath, false)
+}
+
+// workFolder is ChapterTitleFromDirectory's folder walk. placeholderAuthorAbove
+// decides one layout: a folder under a placeholder author folder
+// ("Unknown Author/Mort/01.mp3", the organizer's own layout for a book with no
+// author). ChapterTitleFromDirectory treats "Unknown Author" as a library root
+// there and offers nothing, which the scanner's title recovery has always
+// done; WorkFolderTitle, which only READS the folder as evidence of the work,
+// passes true and takes "Mort".
+func workFolder(filePath string, placeholderAuthorAbove bool) (dirTitle, titleDir string, ok bool) {
 	dir := filepath.Dir(filePath)
 	name := strings.TrimSpace(filepath.Base(dir))
 	if IsChapterOnlyTitle(name) && !genericDirNames[strings.ToLower(name)] {
@@ -174,10 +186,49 @@ func ChapterTitleFromDirectory(filePath, title string) (dirTitle, titleDir strin
 	// author's name as the title would trade recognisable junk ("01") for junk
 	// nothing can recognise.
 	above := strings.TrimSpace(filepath.Base(filepath.Dir(dir)))
+	if placeholderAuthorAbove && authorname.IsPlaceholderAuthor(above) {
+		return name, dir, true
+	}
 	if genericDirNames[strings.ToLower(above)] || strings.EqualFold(above, "iTunes Media") {
 		return "", "", false
 	}
 	return name, dir, true
+}
+
+// IsFileExt tells a real extension (".m4b", ".mp3") from a folder name that
+// merely contains a dot ("Book 1.5" -> ".5").
+func IsFileExt(ext string) bool {
+	if len(ext) < 2 || len(ext) > 5 {
+		return false
+	}
+	return strings.IndexFunc(ext[1:], unicode.IsLetter) >= 0
+}
+
+// WorkFolderTitle returns the name of the work folder holding path, or ok
+// false when there is none (ChapterTitleFromDirectory's rules: a library
+// root, an import folder or an author folder is no work folder). path may be
+// a file -- one chapter of a multi-file book, a single-file book -- or a
+// directory, which is what a multi-file book's own FilePath is.
+//
+// ChapterTitleFromDirectory reads the last path element as a FILE name, so a
+// directory is given a stand-in child first: ".../Terry Pratchett/Mort" is
+// asked about as ".../Terry Pratchett/Mort/_", and answers "Mort", not
+// "Terry Pratchett" (or nothing, when the parent is an author folder under a
+// library root). A path whose extension is not a real one (IsFileExt: "Book
+// 1.5") is a directory too. A work folder under a placeholder author folder
+// (".../Unknown Author/Mort", the organizer's layout for a book with no
+// author) is a work folder: see workFolder.
+func WorkFolderTitle(path string) (string, bool) {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return "", false
+	}
+	if !IsFileExt(filepath.Ext(p)) {
+		p = filepath.Join(p, "_")
+	}
+	t, _, ok := workFolder(p, true)
+	t = strings.TrimSpace(t)
+	return t, ok && t != ""
 }
 
 // SeriesFromTitlePrefix decides whether the "X" of an authorless "X - ... - Y"

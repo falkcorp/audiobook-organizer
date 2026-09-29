@@ -1,5 +1,5 @@
 // file: internal/applygate/transcribed_identity.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: fedfaa92-fca3-4c73-b38b-25f4b0426918
 // last-edited: 2026-09-28
 
@@ -44,6 +44,12 @@ type TranscribedSearch struct {
 	// book's own identity in the query ONLY. Without that proof an
 	// identity_stale error is never lifted.
 	ExplainsStaleIdentity bool
+	// FirstFilePath is the path of the book's first present file in play
+	// order (metabatch.FirstPresentFilePath), "" when the caller has none.
+	// The lift refusal reads the book's work folder from it; without it the
+	// book's own FilePath is used, which for a multi-file book is a
+	// directory (metadata.WorkFolderTitle handles both).
+	FirstFilePath string
 }
 
 // TranscribedSearchConfirms reports whether candidate c matches the
@@ -79,7 +85,7 @@ func TranscribedIdentityLifts(book *database.Book, authors Authors, c *metafetch
 	if !ts.ExplainsStaleIdentity || strings.TrimSpace(ts.Query) == "" || !TranscribedSearchConfirms(ts, c) {
 		return false
 	}
-	return transcribedLiftRefusal(book, authors, c, ts.Query) == ""
+	return transcribedLiftRefusal(book, authors, c, ts) == ""
 }
 
 // applyTranscribedTitle revises the evidence leg's title check for a
@@ -143,18 +149,25 @@ func applyTranscribedTitle(ev *EvidenceVerdict, query, refusal string, audioConf
 //     a mis-heard intro, and the gate cannot tell which. A folder that says
 //     nothing (a placeholder or chapter folder, metadata.IsUnsearchableTitle)
 //     or names one of the book's authors is no evidence either way.
-func transcribedLiftRefusal(book *database.Book, authors Authors, c *metafetch.MetadataCandidate, query string) string {
+//
+// The work folder is metadata.WorkFolderTitle of ts.FirstFilePath when the
+// caller read it, else of the book's own FilePath. A multi-file book's
+// FilePath is the work folder itself (".../Terry Pratchett/Mort"); read as a
+// file path it named "Terry Pratchett" or nothing, and the refusal never
+// fired for it.
+func transcribedLiftRefusal(book *database.Book, authors Authors, c *metafetch.MetadataCandidate, ts TranscribedSearch) string {
 	if candidateTitleIsSeriesName(book, c) {
 		return "the candidate's title " + strconv.Quote(c.Title) + " is the series name"
 	}
-	if book == nil || strings.TrimSpace(book.FilePath) == "" {
+	path := strings.TrimSpace(ts.FirstFilePath)
+	if path == "" && book != nil {
+		path = book.FilePath
+	}
+	folder, ok := metadata.WorkFolderTitle(path)
+	if !ok || metadata.IsUnsearchableTitle(folder) {
 		return ""
 	}
-	folder, _, ok := metadata.ChapterTitleFromDirectory(book.FilePath, "")
-	folder = strings.TrimSpace(folder)
-	if !ok || folder == "" || metadata.IsUnsearchableTitle(folder) {
-		return ""
-	}
+	query := ts.Query
 	for _, a := range authors {
 		if normText(a) == normText(folder) {
 			return ""
