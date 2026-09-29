@@ -1,7 +1,7 @@
 // file: internal/authorname/parse.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9f4c2a71-58d3-4e60-b19a-6c0e7d35f8b2
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package authorname
 
@@ -421,11 +421,22 @@ var innerFunctionWords = map[string]bool{
 func hasInnerFunctionWord(s string) bool {
 	fields := strings.Fields(s)
 	for i := 1; i < len(fields); i++ {
-		if innerFunctionWords[strings.Trim(fields[i], ",&")] {
-			return true
+		w := strings.Trim(fields[i], ",&")
+		if !innerFunctionWords[w] {
+			continue
 		}
+		// A bare "A" between two capitalised words is a middle initial
+		// ("Robert A Heinlein"), not the article.
+		if w == "A" && i+1 < len(fields) && startsUpper(fields[i-1]) && startsUpper(fields[i+1]) {
+			continue
+		}
+		return true
 	}
 	return false
+}
+
+func startsUpper(w string) bool {
+	return w != "" && w[0] >= 'A' && w[0] <= 'Z'
 }
 
 // initialRe is one initial or a run of them: "J", "S.", "J.R.R.", "J.R.R".
@@ -450,6 +461,10 @@ func isSurnameGiven(s string) bool {
 	}
 	surname, given := strings.Fields(parts[0]), strings.Fields(parts[1])
 	if len(surname) == 0 || len(surname) > 2 || len(given) == 0 {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])) {
+		// "Guards, Guards" is a title: a name does not repeat itself.
 		return false
 	}
 	for _, g := range given[1:] {
@@ -478,16 +493,27 @@ func isPersonList(s string) bool {
 	return true
 }
 
-// SameCredit reports whether two author strings name the same credit, up to
-// case, an edition suffix ("Andy Weir (Unabridged)"), initial punctuation
-// ("J.R.R." / "J R R"), the "Surname, Given" inversion, and the order and
-// joiner of a list ("Neil Gaiman, Terry Pratchett" / "Neil Gaiman & Terry
-// Pratchett"). It exists so a caller orienting a filename by a TAGGED author
-// does not read a spelling difference as a disagreement. It compares the SET
-// of names: "Douglas Preston & Lincoln Child" is not "Lincoln Child".
-func SameCredit(a, b string) bool {
-	na, nb := creditNames(a), creditNames(b)
-	return len(na) > 0 && slices.Equal(na, nb)
+// CreditIncludes reports whether side credits every name in tag, up to case,
+// an edition suffix ("Andy Weir (Unabridged)"), initial punctuation ("J.R.R."
+// / "J R R"), the "Surname, Given" inversion, and the order and joiner of a
+// list ("Neil Gaiman, Terry Pratchett" / "Neil Gaiman & Terry Pratchett"). It
+// exists so a caller orienting a filename by a TAGGED author does not read a
+// spelling difference, or a tag naming one of several credited authors, as a
+// disagreement: tag "Neil Gaiman" is included in "Neil Gaiman & Terry
+// Pratchett". It compares name SETS, not substrings: tag "Douglas Preston &
+// Lincoln Child" is not included in "Lincoln Child", and "S. King" is not
+// "Stephen King".
+func CreditIncludes(side, tag string) bool {
+	have, want := creditNames(side), creditNames(tag)
+	if len(want) == 0 {
+		return false
+	}
+	for _, n := range want {
+		if _, found := slices.BinarySearch(have, n); !found {
+			return false
+		}
+	}
+	return true
 }
 
 // creditNames normalises a credit to its sorted set of names. The comma swap
@@ -516,9 +542,21 @@ func creditNames(s string) []string {
 // fallbacks, where the caller has already recognised the file's own folder as
 // the title and passes that folder as the probe. The folder read is then
 // whatever shelves titles: an author, but just as often a series or a genre.
-// A series folder whose name OPENS the title ("Harry Potter" above "Harry
-// Potter and the Goblet of Fire") is refused here; genre folders are refused
-// by the shared gate. title == "" disables the prefix check.
+// A series folder whose name OPENS the title and runs on into it ("Harry
+// Potter" above "Harry Potter and the Goblet of Fire") is refused here; genre
+// folders are refused by the shared gate. title == "" disables the check.
+//
+// "Runs on" means the word after the folder name is lowercase or a joining
+// word (and, the, of, &, in, at, to, for; capitalised "The" excepted, see
+// titleRunsOn). An author's name opening the title
+// is ordinary shelving -- "Stephen King Short Stories", "Stephen King
+// Collection", "Brandon Sanderson Mistborn", "Stephen King - The Stand" -- and
+// refusing every prefix lost those authors. A " - " after the name is never
+// refused: that is the "<author> - <title>" credit form.
+//
+// COST of the narrower rule: a series folder followed by a capitalised word
+// ("Alex Cross/Alex Cross Must Die/", "Jack Reacher/Jack Reacher Killing
+// Floor/") is read as the author, as it was before this check existed.
 //
 // LIMIT: a series folder that does not prefix its titles ("Jack
 // Reacher/Killing Floor/") is person-shaped and still read as the author.
@@ -526,9 +564,41 @@ func ExtractAuthorAboveTitle(probe, title string) string {
 	if title != "" {
 		folder := strings.TrimSpace(filepath.Base(filepath.Dir(probe)))
 		t := strings.TrimSpace(title)
-		if folder != "" && len(t) > len(folder) && strings.EqualFold(t[:len(folder)], folder) && t[len(folder)] == ' ' {
+		if folder != "" && len(t) > len(folder) && strings.EqualFold(t[:len(folder)], folder) &&
+			t[len(folder)] == ' ' && titleRunsOn(t[len(folder):]) {
 			return ""
 		}
 	}
 	return ExtractAuthorFromDirectory(probe)
+}
+
+// joiningWords continue a phrase: a title folder whose name is a series name
+// followed by one of these ("Harry Potter and the ...") is a series title, not
+// an author's shelf.
+var joiningWords = map[string]bool{
+	"and": true, "the": true, "of": true, "&": true, "in": true, "at": true, "to": true, "for": true,
+}
+
+// titleRunsOn reports whether rest (the title after a folder-name prefix,
+// starting with a space) continues the prefix as one phrase: its first word is
+// lowercase or a joining word. A " - " separator is never a continuation.
+func titleRunsOn(rest string) bool {
+	if strings.HasPrefix(rest, " - ") {
+		return false
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return false
+	}
+	next := fields[0]
+	if next == "The" {
+		// Capitalised "The" after an author's name starts the work's own
+		// title ("Terry Pratchett The Colour of Magic", "Stephen King The
+		// Stand"); lowercase "the" is still caught below.
+		return false
+	}
+	if joiningWords[strings.ToLower(next)] {
+		return true
+	}
+	return next[0] >= 'a' && next[0] <= 'z'
 }

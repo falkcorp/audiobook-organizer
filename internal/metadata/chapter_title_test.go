@@ -1,7 +1,7 @@
 // file: internal/metadata/chapter_title_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 0cc97d6f-e2ee-42d6-8233-ed4cec61f5ab
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package metadata
 
@@ -174,6 +174,17 @@ func TestExtractFromFilename_SeriesTitleIsNotAnAuthor(t *testing.T) {
 		{"/lib/Leviathan Wakes/The Expanse 01 - Leviathan Wakes.mp3", "", "Leviathan Wakes", "The Expanse 01"},
 		{"/lib/import/The Book Thief - Markus Zusak.mp3", "Markus Zusak", "The Book Thief", ""},
 		{"/lib/Neil Gaiman/Good Omens/Good Omens.mp3", "Neil Gaiman", "Good Omens", ""},
+		// Round-5 review rows.
+		{"/lib/Stephen King/Stephen King - The Stand/01.mp3", "Stephen King", "Stephen King - The Stand", ""},
+		{"/lib/Stephen King/Stephen King Collection/01.mp3", "Stephen King", "Stephen King Collection", ""},
+		{"/lib/Stephen King/Stephen King Short Stories/01.mp3", "Stephen King", "Stephen King Short Stories", ""},
+		{"/lib/Stephen King/Stephen King Short Stories/Stephen King Short Stories.mp3", "Stephen King", "Stephen King Short Stories", ""},
+		{"/lib/Brandon Sanderson/Brandon Sanderson Mistborn/01.mp3", "Brandon Sanderson", "Brandon Sanderson Mistborn", ""},
+		{"/lib/Lee Child/Lee Child Jack Reacher 01 Killing Floor/01.mp3", "Lee Child", "Lee Child Jack Reacher 01 Killing Floor", ""},
+		{"/lib/import/Heinlein 01 - Robert A Heinlein.mp3", "Robert A Heinlein", "Heinlein 01", ""},
+		{"/lib/Stephen King/Stephen King The Stand/Stephen King The Stand.mp3", "Stephen King", "Stephen King The Stand", ""},
+		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/01.mp3", "", "Harry Potter and the Goblet of Fire", ""},
+		{"/lib/import/Discworld 08 - Guards, Guards.mp3", "", "Guards, Guards", "Discworld 08"},
 		// Round-4 review rows.
 		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/Harry Potter and the Goblet of Fire.mp3", "", "Harry Potter and the Goblet of Fire", ""},
 		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/01.mp3", "", "Harry Potter and the Goblet of Fire", ""},

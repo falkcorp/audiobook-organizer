@@ -1,7 +1,7 @@
 // file: internal/scanner/extract_info_chapter_title_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1887ad95-0bf8-4bb7-87f5-cf52026d1289
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package scanner
 
@@ -122,6 +122,17 @@ func TestExtractInfoFromPath_SeriesTitleIsNotAnAuthor(t *testing.T) {
 		{"/lib/Leviathan Wakes/The Expanse 01 - Leviathan Wakes.mp3", "", "Leviathan Wakes", "The Expanse 01", "The Expanse", 1},
 		{"/lib/import/The Book Thief - Markus Zusak.mp3", "Markus Zusak", "The Book Thief", "", "", 0},
 		{"/lib/Neil Gaiman/Good Omens/Good Omens.mp3", "Neil Gaiman", "Good Omens", "", "", 0},
+		// Round-5 review rows.
+		{"/lib/Stephen King/Stephen King - The Stand/01.mp3", "Stephen King", "Stephen King - The Stand", "", "", 0},
+		{"/lib/Stephen King/Stephen King Collection/01.mp3", "Stephen King", "Stephen King Collection", "", "", 0},
+		{"/lib/Stephen King/Stephen King Short Stories/01.mp3", "Stephen King", "Stephen King Short Stories", "", "", 0},
+		{"/lib/Stephen King/Stephen King Short Stories/Stephen King Short Stories.mp3", "Stephen King", "Stephen King Short Stories", "", "", 0},
+		{"/lib/Brandon Sanderson/Brandon Sanderson Mistborn/01.mp3", "Brandon Sanderson", "Brandon Sanderson Mistborn", "", "", 0},
+		{"/lib/Lee Child/Lee Child Jack Reacher 01 Killing Floor/01.mp3", "Lee Child", "Lee Child Jack Reacher 01 Killing Floor", "", "", 0},
+		{"/lib/import/Heinlein 01 - Robert A Heinlein.mp3", "Robert A Heinlein", "Heinlein 01", "", "", 0},
+		{"/lib/Stephen King/Stephen King The Stand/Stephen King The Stand.mp3", "Stephen King", "Stephen King The Stand", "", "", 0},
+		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/01.mp3", "", "Harry Potter and the Goblet of Fire", "", "", 0},
+		{"/lib/import/Discworld 08 - Guards, Guards.mp3", "", "Guards, Guards", "Discworld 08", "Discworld", 8},
 		// Round-4 review rows.
 		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/Harry Potter and the Goblet of Fire.mp3", "", "Harry Potter and the Goblet of Fire", "", "", 0},
 		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/01.mp3", "", "Harry Potter and the Goblet of Fire", "", "", 0},
@@ -186,6 +197,9 @@ func TestExtractInfoFromPath_TagOrientsTheSplit(t *testing.T) {
 		// Round-4: a list tag matches a list in any order and joiner.
 		{"Neil Gaiman, Terry Pratchett", "/lib/import/Good Omens - Neil Gaiman & Terry Pratchett.mp3", "Good Omens", ""},
 		{"Tolkien, J.R.R.", "/lib/import/The Hobbit - J.R.R. Tolkien.mp3", "The Hobbit", ""},
+		// Round-5: a tag naming one of several credited authors.
+		{"Neil Gaiman", "/lib/import/Good Omens - Neil Gaiman & Terry Pratchett.mp3", "Good Omens", ""},
+		{"Lincoln Child", "/lib/import/Douglas Preston & Lincoln Child - Relic.mp3", "Relic", ""},
 		{"Brandon Sanderson", "/lib/import/Stormlight 02 - Words Of Radiance.mp3", "Words Of Radiance", "Stormlight 02"},
 	}
 	for _, tc := range cases {
