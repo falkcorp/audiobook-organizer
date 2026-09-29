@@ -1,7 +1,7 @@
 # file: scripts/tests/test_check_toolchain_versions.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 741ea392-1f28-423c-ae7a-45e56620c26c
-# last-edited: 2026-09-12
+# last-edited: 2026-09-29
 """Tests for scripts/check_toolchain_versions.py (CI-04, CI-03).
 
 The inline shell check this replaced truncated go.mod to major.minor, read only
@@ -93,8 +93,17 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         self.mutate("Dockerfile.build-cgo", "FROM golang:1.27.1-alpine", "FROM golang:1.27.2-alpine")
         self.assertFails("golang:1.27.2 != Makefile pin")
 
+    def _dockerfile_digest(self) -> str:
+        """The golang stage's current digest, so mutations track dependabot bumps."""
+        text = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        found = re.findall(r"FROM golang:1\.27\.1-alpine@sha256:([0-9a-f]{64})", text)
+        self.assertEqual(len(found), 1, "fixture drifted: expected one digest-pinned golang stage in Dockerfile")
+        return found[0]
+
     def test_dockerfile_digest_mismatch_fails(self) -> None:
-        self.mutate("Dockerfile", "golang:1.27.1-alpine@sha256:c", "golang:1.27.1-alpine@sha256:0")
+        digest = self._dockerfile_digest()
+        other = ("1" if digest[0] == "0" else "0") + digest[1:]
+        self.mutate("Dockerfile", f"golang:1.27.1-alpine@sha256:{digest}", f"golang:1.27.1-alpine@sha256:{other}")
         self.assertFails("digests differ")
 
     def test_dockerfile_unpinned_golang_stage_fails(self) -> None:
@@ -125,7 +134,8 @@ class CheckToolchainVersionsTest(unittest.TestCase):
     def test_malformed_golang_reference_fails(self) -> None:
         # A stage whose reference the strict parser rejects must be an error,
         # not silently skipped (which would also skip its version check).
-        self.mutate("Dockerfile", "golang:1.27.1-alpine@sha256:c", "golang:1.27.1-alpine@sha256:Zc")
+        digest = self._dockerfile_digest()
+        self.mutate("Dockerfile", f"golang:1.27.1-alpine@sha256:{digest}", f"golang:1.27.1-alpine@sha256:Z{digest[1:]}")
         self.assertFails("is not 'golang:<version>[-<variant>]@sha256:<64 hex>'")
 
     def _line_of_first(self, rel: str, needle: str) -> int:

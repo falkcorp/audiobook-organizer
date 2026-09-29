@@ -1,0 +1,1 @@
+- CI: the toolchain-version check tests read the Dockerfile's current golang digest instead of assuming it starts with `c`, so a dependabot digest bump no longer turns Repo Guards red.
