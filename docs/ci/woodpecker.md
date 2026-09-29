@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-09-29 -->
 
@@ -17,6 +17,7 @@ Placeholders used throughout (never commit the real values; this repo is public)
 | `coke.jdfalk.com` | the public CI hostname (real; public DNS) on the existing Cloudflare tunnel |
 | `192.0.2.10` | the prod host (U0): Woodpecker server and the heavy Linux agent |
 | `192.0.2.20` | the llm1 node (macOS, arm64) |
+| `192.0.2.35` | the U1 node (Ubuntu, amd64) |
 | `/srv/appdata` | the NVMe app-data area on U0 (not `/var/lib`, which is on the HDD pool) |
 
 ## Pipeline layout
@@ -25,12 +26,12 @@ Placeholders used throughout (never commit the real values; this repo is public)
 |---|---|---|---|
 | `test-database` | `host=u0`, `heavy=true` | `internal/database` alone, `-timeout 50m` | about 300 s on Linux (1500–2200 s on a loaded Mac) |
 | `test-server-scanner` | `host=llm1` | `internal/server`, `internal/scanner`, `internal/server/handlers/abs` | about 620 s (abs); the packages run in parallel |
-| `test-rest` | `host=llm1` | every other package, including maintenance, registry and applygate | about 450–600 s |
+| `test-rest` | `host=u1` | every other package, including maintenance, registry and applygate | about 450–600 s |
 | `checks` | `host=u0` | vet, staticcheck, errcheck ratchet, mocks-check, fmt-check, sdkguard, bench-check, web tests | about 5 min including tool install |
 | `coverage` | `host=u0` | coverage floor across the three test workflows | seconds |
 
 Placement follows two rules. First, packages whose tests decode audio (server,
-scanner and the decode set in `test-rest`) run only on the llm1 agent. The prod
+scanner and the decode set in `test-rest`) run only on the llm1 and U1 agents. The prod
 host must not decode, and its Docker image has no ffmpeg. Second, the three
 test workflows start together, so the wall time is roughly the slowest of them.
 An ssh-based prototype (`scripts/ci_remote.py`) measured this layout at
@@ -126,12 +127,13 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
    "Service Auth" policy that allows that token. The webhook does not use it.
    The `coverage` workflow uses the same three values (see Secrets).
 
-## 4. Agents (as deployed 2026-09-26; developer-Mac agent removed 2026-09-29)
+## 4. Agents (as deployed 2026-09-26; developer-Mac agent removed and U1 added 2026-09-29)
 
 | agent | host | backend | labels | parallel workflows | runs as |
 |---|---|---|---|---|---|
 | U0 | 192.0.2.10 | docker | `host=u0` | 2 | swarm service `woodpecker_woodpecker-agent` |
 | llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 2 | LaunchDaemon, `UserName` = the CI user |
+| U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true` | 2 | systemd `woodpecker-agent.service`, `User=woodpecker` |
 
 All agents use `WOODPECKER_SERVER=192.0.2.10:18734` and the same
 `WOODPECKER_AGENT_SECRET` as the server.
@@ -185,6 +187,25 @@ allowed under System Settings → Privacy & Security → Local Network →
 same binary started from an ssh session connects fine, which is how to tell
 this apart from a firewall. Do not run the agent as root to avoid the prompt:
 pipelines would run as root.
+
+### U1: local backend on Linux
+
+U1 runs `test-rest` with the local backend, like llm1, so the decode tests use
+the host's ffmpeg, ffprobe and fpcalc (`apt install ffmpeg
+libchromaprint-tools`). `build-essential` supplies the C compiler `-race`
+needs, and `golang-go` is only a bootstrap: `GOTOOLCHAIN=go1.27.1` fetches the
+pinned version.
+
+- **Runs as:** the unprivileged system user `woodpecker` (no sudo). Pipelines
+  execute pull-request code, so the agent never runs as a login user.
+- **Install layout:** `/tank/ci/woodpecker/bin/{woodpecker-agent,plugin-git}`
+  (v3.18.1 and 2.10.1, linux/amd64). `/tank/ci` is its own ZFS dataset and the
+  user's HOME.
+- **Caches:** `/tank/ci/cache/{go-build,gomod}`, set in `test-rest.yaml`.
+- **Step workspaces:** `/tank/ci/woodpecker/work`.
+- **Service:** `/etc/systemd/system/woodpecker-agent.service`, with the agent
+  secret in the root-only `/etc/woodpecker-agent.env` (mode 600). Logs:
+  `journalctl -u woodpecker-agent`.
 
 ### Running CI from a workstation
 
