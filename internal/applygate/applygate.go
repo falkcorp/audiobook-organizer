@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-09-28
 
@@ -109,7 +109,8 @@ type Verdict struct {
 	TranscriptionAgreesOnReview bool `json:"transcription_agrees_on_review,omitempty"`
 	// IdentityEvidence is set when the candidate passed the title check or
 	// the identity leg on the transcribed title it was found by
-	// (EvaluateTranscribed); the same value is stamped on the candidate.
+	// (EvaluateTranscribed) and the verdict is not identity_stale or
+	// owner_manual_only; the same value is stamped on the candidate.
 	IdentityEvidence *metafetch.CandidateIdentityEvidence `json:"identity_evidence,omitempty"`
 }
 
@@ -197,13 +198,14 @@ func Evaluate(book *database.Book, authors Authors, rt database.BookRuntime, c *
 // evidence leg see a sibling folder holding another part of the same book.
 // nil is the single-book case and skips only that sibling test.
 func EvaluateInBatch(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, identityErr error, claims *ClaimIndex) Verdict {
-	return EvaluateTranscribed(book, authors, rt, c, identityErr, claims, TranscribedSearch{})
+	return EvaluateTranscribed(book, authors, rt, c, identityErr, claims, TranscribedSearch{}, ManualOnlyGuard{})
 }
 
 // EvaluateTranscribed is EvaluateInBatch for a candidate the caller knows was
 // found by searching the book's transcribed title (ts; the zero value is
 // EvaluateInBatch exactly). When the candidate's title matches that
-// transcription (TranscribedTitleMatches), the match is identity evidence:
+// transcription, title and heard author (TranscribedSearchConfirms), the
+// match is identity evidence:
 //
 //   - the title check, which compares the candidate with the book's stored
 //     title and path and so blocks a book titled "" or "Chapter 3", passes it
@@ -215,9 +217,17 @@ func EvaluateInBatch(book *database.Book, authors Authors, rt database.BookRunti
 //
 // Every other leg is unchanged: an ASIN conflict, a partial book, a runtime
 // or sequence mismatch still refuse. The evidence is recorded on the Verdict
-// and stamped onto c (MetadataCandidate.IdentityEvidence) whenever it was
-// used, so the review UI and the apply log can say why the candidate passed.
-func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, identityErr error, claims *ClaimIndex, ts TranscribedSearch) Verdict {
+// and stamped onto c (MetadataCandidate.IdentityEvidence) when it was used
+// and the verdict is not identity_stale or owner_manual_only, so the apply
+// log can say why the candidate passed (or which other leg refused it)
+// without an identity refusal reading as an accepted identity.
+//
+// guard is the bulk-apply owner-manual-only check (ManualOnlyGuard; the zero
+// value is a single-book caller and skips it). A Doctor Who / Big Finish /
+// Torchwood book, found by any of its fields, the query it was searched by
+// or the candidate's title or series, is refused as owner_manual_only before
+// every other leg, and no bulk owner-review pin lifts that.
+func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, identityErr error, claims *ClaimIndex, ts TranscribedSearch, guard ManualOnlyGuard) Verdict {
 	v := Verdict{Score: c.Score}
 	scoreOK, floor, audio, scoreReason := ScoreGate(book, c)
 	v.ScoreFloor, v.AudioConfirmed, v.ScoreReason = floor, audio, scoreReason
@@ -225,7 +235,7 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 	v.Sequence = CheckSequence(book, c)
 	v.Evidence = CheckEvidenceInBatch(book, authors, rt, c, audio, claims)
 
-	match := ts.Query != "" && TranscribedTitleMatches(ts.Query, c)
+	match := ts.Query != "" && TranscribedSearchConfirms(ts, c)
 	used := false
 	if match {
 		used = applyTranscribedTitle(&v.Evidence, ts.Query, audio)
@@ -234,23 +244,20 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 	if identityLifted {
 		used = true
 	}
-	if used {
-		ev := &metafetch.CandidateIdentityEvidence{
-			Kind:   metafetch.IdentityEvidenceTranscribedTitle,
-			Query:  ts.Query,
-			Source: ts.Source,
-			Detail: "found by searching the transcribed title " + strconv.Quote(ts.Query) + ", which the candidate's title matches",
-		}
-		v.IdentityEvidence = ev
-		c.IdentityEvidence = ev
-	}
+	manualOnly := ManualOnlyDetail(book, c, ts, guard)
 
 	switch {
+	case manualOnly != "":
+		v.Reason, v.Detail = ReasonOwnerManualOnly, manualOnly
 	case identityErr != nil && !identityLifted:
 		v.Reason, v.Detail = ReasonIdentityStale, identityErr.Error()
 		if ts.ExplainsStaleIdentity && !match {
-			v.Detail += "; the candidate's title " + strconv.Quote(c.Title) +
-				" does not match the transcribed title " + strconv.Quote(ts.Query) + " it was found by"
+			heard := strconv.Quote(ts.Query)
+			if a := strings.TrimSpace(ts.Author); a != "" {
+				heard += " by " + strconv.Quote(a)
+			}
+			v.Detail += "; the candidate " + strconv.Quote(c.Title) + " by " + strconv.Quote(c.Author) +
+				" does not match the transcription " + heard + " it was found by"
 		}
 	case !scoreOK:
 		v.Reason = scoreReason
@@ -265,6 +272,16 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 		v.Reason, v.Detail = v.Evidence.Reason, v.Evidence.Detail
 	default:
 		v.Allowed = true
+	}
+	if used && v.Reason != ReasonIdentityStale && v.Reason != ReasonOwnerManualOnly {
+		ev := &metafetch.CandidateIdentityEvidence{
+			Kind:   metafetch.IdentityEvidenceTranscribedTitle,
+			Query:  ts.Query,
+			Source: ts.Source,
+			Detail: "found by searching the transcribed title " + strconv.Quote(ts.Query) + ", which the candidate's title matches",
+		}
+		v.IdentityEvidence = ev
+		c.IdentityEvidence = ev
 	}
 	return v
 }

@@ -1,5 +1,5 @@
 // file: internal/applygate/transcribed_identity.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fedfaa92-fca3-4c73-b38b-25f4b0426918
 // last-edited: 2026-09-28
 
@@ -29,6 +29,11 @@ type TranscribedSearch struct {
 	// Query is the transcribed title the provider search asked. Empty: the
 	// candidate was not found by a transcribed-title search.
 	Query string
+	// Author is the author heard in the same transcription as Query
+	// (metabatch.CandidateSearchQuery.Author: the book's or its first file's
+	// TranscribedAuthor), "" when none was heard. A candidate must match it as
+	// well as the title (TranscribedSearchConfirms).
+	Author string
 	// Source is where Query came from (a metabatch.SearchQuerySource* value),
 	// carried into the recorded evidence.
 	Source string
@@ -39,19 +44,22 @@ type TranscribedSearch struct {
 	ExplainsStaleIdentity bool
 }
 
-// TranscribedTitleMatches reports whether candidate c's title matches the
-// transcribed title it was found by. It is the title half of the rule the
-// unattended score leg already uses (TranscriptionConfirms): normalized
-// equality, as origin/main required (util.MainTranscriptionConfirms), AND the
-// shared matcher (util.TitleAgrees with the candidate's series position), so
-// it is never looser than main. A provider's fuzzy answer to the query --
-// "Planet Hulk: Gladiator" for "Planet Hulk" -- does not match.
-func TranscribedTitleMatches(query string, c *metafetch.MetadataCandidate) bool {
-	q := strings.TrimSpace(query)
+// TranscribedSearchConfirms reports whether candidate c matches the
+// transcription it was found by, title AND author. It is the whole rule the
+// unattended score leg uses (TranscriptionConfirms), applied to ts instead of
+// the book's own transcribed fields: origin/main's util.MainTranscriptionConfirms
+// (normalized title equality; a heard author longer than 3 characters must
+// appear in the candidate's author) AND the shared title matcher
+// (util.TitleAgrees with the candidate's series position), so it is never
+// looser than main. A provider's fuzzy answer to the query -- "Planet Hulk:
+// Gladiator" for "Planet Hulk" -- does not match, and neither does the right
+// title by another author ("X, by A" heard, candidate "X" by B).
+func TranscribedSearchConfirms(ts TranscribedSearch, c *metafetch.MetadataCandidate) bool {
+	q := strings.TrimSpace(ts.Query)
 	if c == nil || q == "" || strings.TrimSpace(c.Title) == "" {
 		return false
 	}
-	if util.NormalizeTitle(c.Title) != util.NormalizeTitle(q) {
+	if !util.MainTranscriptionConfirms(c.Title, c.Author, q, strings.TrimSpace(ts.Author)) {
 		return false
 	}
 	return util.TitleAgrees(c.Title, c.SeriesPosition, q)

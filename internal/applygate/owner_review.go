@@ -1,7 +1,7 @@
 // file: internal/applygate/owner_review.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e7b2c14-8d95-4f06-a1c3-6b9e0d4f7a28
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package applygate
 
@@ -46,7 +46,7 @@ const ReasonOwnerReviewed = "owner_reviewed"
 // v refused, and every leg that refused is one an owner review overrides.
 // false for an allowed verdict: there is nothing to override.
 func (v Verdict) OwnerReviewOverridable() bool {
-	if v.Allowed || v.Reason == ReasonIdentityStale {
+	if v.Allowed || v.Reason == ReasonIdentityStale || v.Reason == ReasonOwnerManualOnly {
 		return false
 	}
 	for _, ch := range v.Evidence.Checks {

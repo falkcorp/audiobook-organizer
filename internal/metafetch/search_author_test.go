@@ -43,7 +43,7 @@ func TestSearchAuthorHint(t *testing.T) {
 func TestFetchCacheIdentity(t *testing.T) {
 	asin := "B000000001"
 	cases := []struct {
-		name, author string
+		name, author  string
 		wantSameAsRaw bool
 	}{
 		{"placeholder author is keyed as no author", "Unknown Author", false},

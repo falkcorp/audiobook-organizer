@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
 // last-edited: 2026-09-28
 //
@@ -9,6 +9,7 @@ package metabatch
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -55,6 +56,12 @@ const SkipDetailNoUsableTitle = SkipReasonNoUsableTitle +
 type CandidateSearchQuery struct {
 	Title  string
 	Source string
+	// Author is the author heard in the same transcription as Title (the
+	// book's or the first file's TranscribedAuthor), "" for any other
+	// source. The certainty gate requires a transcribed-title candidate to
+	// match it too (util.MainTranscriptionConfirms), so "X, by A" never
+	// vouches for a candidate "X" by B.
+	Author string
 	Usable bool
 }
 
@@ -73,11 +80,13 @@ type CandidateSearchQuery struct {
 // unsearchable:
 //
 //  1. the book-level transcribed title (the audio intro);
-//  2. the first present book_file carrying one (per-file transcription fills
-//     the file rows, not always the book);
+//  2. the transcribed title of the book's FIRST present file (lowest disc,
+//     then track; sortByPosition) -- that file only. A later file's
+//     transcription is mid-book narration or another work's intro on a
+//     mis-merged book, not the book's title, so there is no fall-through;
 //  3. the folder holding the book's files (metadata.ChapterTitleFromDirectory:
 //     "Eldest/98.mp3" -> "Eldest", one disc/part folder skipped), from the
-//     first present book_file, then from the book's own path.
+//     first present file, then from the book's own path.
 //
 // If none is usable the result is not Usable and the book must be skipped
 // with SkipReasonNoUsableTitle -- never searched.
@@ -92,7 +101,8 @@ func ResolveCandidateSearchQuery(files BookFilesGetter, book *database.Book) Can
 		return CandidateSearchQuery{Title: book.Title, Source: SearchQuerySourceTitle, Usable: true}
 	}
 	if t := usableTitle(book.TranscribedTitle); t != "" {
-		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceTranscribedTitle, Usable: true}
+		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceTranscribedTitle,
+			Author: trimmed(book.TranscribedAuthor), Usable: true}
 	}
 	var present []database.BookFile
 	if files != nil {
@@ -104,15 +114,42 @@ func ResolveCandidateSearchQuery(files BookFilesGetter, book *database.Book) Can
 			}
 		}
 	}
-	for i := range present {
-		if t := usableTitle(present[i].TranscribedTitle); t != "" {
-			return CandidateSearchQuery{Title: t, Source: SearchQuerySourceFileTranscribedText, Usable: true}
+	sortByPosition(present)
+	if len(present) > 0 {
+		if t := usableTitle(present[0].TranscribedTitle); t != "" {
+			return CandidateSearchQuery{Title: t, Source: SearchQuerySourceFileTranscribedText,
+				Author: trimmed(present[0].TranscribedAuthor), Usable: true}
 		}
 	}
 	if t := folderTitle(present, book.FilePath); t != "" {
 		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceFolderTitle, Usable: true}
 	}
 	return CandidateSearchQuery{}
+}
+
+// sortByPosition orders a book's files as they play: disc, then track, then
+// path. A file with no disc or track number sorts as 0 (first), where a
+// single-file book's only file belongs. Stable, so equal positions keep the
+// store's order.
+func sortByPosition(files []database.BookFile) {
+	sort.SliceStable(files, func(i, j int) bool {
+		a, b := files[i], files[j]
+		if a.DiscNumber != b.DiscNumber {
+			return a.DiscNumber < b.DiscNumber
+		}
+		if a.TrackNumber != b.TrackNumber {
+			return a.TrackNumber < b.TrackNumber
+		}
+		return a.FilePath < b.FilePath
+	})
+}
+
+// trimmed dereferences p and trims it, "" for nil.
+func trimmed(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return strings.TrimSpace(*p)
 }
 
 // usableTitle returns the trimmed title, or "" when it is absent or itself

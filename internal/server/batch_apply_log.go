@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_log.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ca44bf85-18ad-4a64-96ce-f9f9d87aaf31
 // last-edited: 2026-09-28
 //
@@ -78,7 +78,7 @@ func batchApplyAppliedLine(id string, out applyOutcome) string {
 		b.WriteString(" → ")
 		b.WriteString(c)
 	}
-	b.WriteString(batchApplyIdentityEvidence(out))
+	b.WriteString(batchApplyIdentityEvidence(out, "; identity: "))
 	if out.OwnerReviewed {
 		b.WriteString("; owner-reviewed over the certainty gate")
 	}
@@ -93,11 +93,15 @@ func batchApplyAppliedLine(id string, out applyOutcome) string {
 }
 
 // batchApplyIdentityEvidence renders the identity evidence the certainty gate
-// accepted for the candidate (applygate.EvaluateTranscribed), e.g. `; identity:
-// found by searching the transcribed title "Planet Hulk", which the
-// candidate's title matches`, or "" when there was none. It is how an applied
-// book with a blank or chapter-number title says why it passed.
-func batchApplyIdentityEvidence(out applyOutcome) string {
+// recorded for the candidate (applygate.EvaluateTranscribed) after prefix,
+// e.g. `; identity: found by searching the transcribed title "Planet Hulk",
+// which the candidate's title matches`, or "" when there was none. It is how
+// an applied book with a blank or chapter-number title says why it passed.
+//
+// The gate records it only when the verdict is not identity_stale or
+// owner_manual_only, and a refused line is worded so it never reads as an
+// accepted identity: the title matched, and another check refused.
+func batchApplyIdentityEvidence(out applyOutcome, prefix string) string {
 	var ev *metafetch.CandidateIdentityEvidence
 	if out.Gate != nil {
 		ev = out.Gate.IdentityEvidence
@@ -108,7 +112,7 @@ func batchApplyIdentityEvidence(out applyOutcome) string {
 	if ev == nil {
 		return ""
 	}
-	return "; identity: " + logger.SanitizeLogValue(ev.Detail)
+	return prefix + logger.SanitizeLogValue(ev.Detail)
 }
 
 // batchApplyRefusedLine is the op-log line for a book that was not applied:
@@ -133,6 +137,6 @@ func batchApplyRefusedLine(id string, out applyOutcome) string {
 	if out.Err != nil {
 		fmt.Fprintf(&b, ": %s", logger.SanitizeLogValue(out.Err.Error()))
 	}
-	b.WriteString(batchApplyIdentityEvidence(out))
+	b.WriteString(batchApplyIdentityEvidence(out, "; the title check passed on the transcription, but the refusal above stands: "))
 	return b.String()
 }

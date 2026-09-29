@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_claims_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: e4b9c7a2-1f36-4d80-b5c9-8a0d2e6f3b71
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package server
 
@@ -24,6 +24,10 @@ func (f fakeBooks) GetBookFiles(string) ([]database.BookFile, error) { return ni
 // liveAuthorBooks (batch_apply_live_author_test.go).
 func (f fakeBooks) GetBookAuthors(string) ([]database.BookAuthor, error) { return nil, nil }
 func (f fakeBooks) GetAuthorByID(int) (*database.Author, error)          { return nil, nil }
+
+// GetSeriesByID gives fakeBooks the owner-manual-only guard's series read:
+// no series rows.
+func (f fakeBooks) GetSeriesByID(int) (*database.Series, error) { return nil, nil }
 
 // filesBooks is fakeBooks with per-book file rows and read errors.
 type filesBooks struct {
