@@ -42,10 +42,8 @@ type activityFilterIndexBackfillParams struct {
 	// a rollback to a build that wrote rows without them, for instance).
 	Force bool `json:"force,omitempty"`
 
-	// Workers sizes the window worker pool; 0 means runtime.NumCPU(). The
-	// resume test pins it: with more workers than windows every window starts
-	// at once, completion order is arbitrary, and whether a checkpoint lands
-	// before a cancel depends on the host's core count.
+	// Workers sizes the window worker pool; 0 (the default) means
+	// runtime.NumCPU(). Lower it to leave cores free on a busy host.
 	Workers int `json:"workers,omitempty"`
 
 	PlanStartNanos int64 `json:"planStartNanos,omitempty"`

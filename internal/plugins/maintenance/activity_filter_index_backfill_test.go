@@ -132,7 +132,10 @@ func TestActivityFilterIndexBackfill_ResumesAfterCancelAndGatesPlanner(t *testin
 	require.Positive(t, last.ResumeFrom)
 	require.Less(t, last.ResumeFrom, last.PlanWindows)
 
-	// Resume with the checkpoint merged into params, as the registry does.
+	// Resume with the checkpoint merged into params, as the registry does, but
+	// with the pool back at its NumCPU default: only the cancelled leg needs
+	// the pin, and this leg's call count and row total don't depend on order.
+	last.Workers = 0
 	raw, err := json.Marshal(last)
 	require.NoError(t, err)
 	resumed := &afibCancelAfter{ActivityFilterIndexBackfiller: s}
