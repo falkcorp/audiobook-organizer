@@ -1,5 +1,5 @@
 // file: internal/server/metadata_bulk_fetch_title.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a88b51d9-3878-41d2-b50e-c04f1ff6793e
 // last-edited: 2026-09-28
 //
@@ -90,6 +90,8 @@ func unsearchableTitleKind(title string) (kind, status string) {
 		return "chapter fragment", metafetch.FetchStatusSkippedFragment
 	case metadata.IsChapterOnlyTitle(t):
 		return "chapter number only", metafetch.FetchStatusSkippedFragment
+	case metadata.IsSectionHeadingTitle(t):
+		return "section heading only", metafetch.FetchStatusSkippedFragment
 	default:
 		return "placeholder title", metafetch.FetchStatusSkippedNoTitle
 	}
