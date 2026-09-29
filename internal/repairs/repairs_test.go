@@ -296,31 +296,31 @@ func TestPlanResult_Page(t *testing.T) {
 	seed(s)
 	res := planFor(t, s, &trimFixer{s: s})
 
-	p, err := res.Page("op-plan", FilterAll, 0, 4)
+	p, err := res.Page("op-plan", FilterAll, "", 0, 4)
 	require.NoError(t, err)
 	require.Equal(t, 6, p.Total)
 	require.Len(t, p.Rows, 4)
 	require.Equal(t, "b1", p.Rows[0].RowID)
 
-	p, err = res.Page("op-plan", FilterAll, 4, 4)
+	p, err = res.Page("op-plan", FilterAll, "", 4, 4)
 	require.NoError(t, err)
 	require.Len(t, p.Rows, 2)
 	require.Equal(t, "b5", p.Rows[0].RowID)
 
-	p, err = res.Page("op-plan", FilterAll, 10, 4)
+	p, err = res.Page("op-plan", FilterAll, "", 10, 4)
 	require.NoError(t, err)
 	require.NotNil(t, p.Rows)
 	require.Empty(t, p.Rows)
 
-	p, err = res.Page("op-plan", FilterApplicable, 0, 50)
+	p, err = res.Page("op-plan", FilterApplicable, "", 0, 50)
 	require.NoError(t, err)
 	require.Equal(t, 2, p.Total)
-	p, err = res.Page("op-plan", FilterSkipped, 1, 50)
+	p, err = res.Page("op-plan", FilterSkipped, "", 1, 50)
 	require.NoError(t, err)
 	require.Equal(t, 4, p.Total)
 	require.Len(t, p.Rows, 3)
 
-	_, err = res.Page("op-plan", "bogus", 0, 1)
+	_, err = res.Page("op-plan", "bogus", "", 0, 1)
 	require.Error(t, err)
 }
 
@@ -647,7 +647,9 @@ func TestWriter_HasNoDeletePrimitive(t *testing.T) {
 		require.False(t, strings.Contains(lower, "delete") || strings.Contains(lower, "remove") ||
 			strings.Contains(lower, "purge"), "Writer exposes %s", n)
 	}
-	require.ElementsMatch(t, []string{"Modify", "Writes", "HistoryRows", "HistoryFailed"}, names)
+	require.ElementsMatch(t, []string{"Modify", "Writes", "HistoryRows", "HistoryFailed",
+		"WithJournal", "WithLiveness", "Touch", "Journal", "Journaled",
+		"RepointBookFile", "MoveBookFiles", "SetTrackNumber", "Recompute"}, names)
 }
 
 func TestWriter_HistoryFailureWritesIncompleteMarker(t *testing.T) {

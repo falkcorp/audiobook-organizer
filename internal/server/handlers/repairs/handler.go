@@ -232,7 +232,7 @@ func (h *Handler) ListPlanRows(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, err := plan.Page(opID, c.Query("filter"), offset, limit)
+	page, err := plan.Page(opID, c.Query("filter"), c.Query("class"), offset, limit)
 	if err != nil {
 		httputil.RespondWithValidationError(c, "filter", err.Error())
 		return

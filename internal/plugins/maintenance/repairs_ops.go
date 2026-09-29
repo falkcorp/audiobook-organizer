@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package maintenance
 
@@ -58,8 +58,14 @@ func (p *Plugin) repairsApplyDef() sdk.OperationDef {
 			"PREVIEW BY DEFAULT: only dry_run=false writes. Each row is re-planned and refused as " +
 			"changed_since_plan when its fingerprint moved; hands-off rows are refused again on fresh reads. " +
 			"A write pauses a running library.scan through the scan stand-down (waiting until it parks) " +
-			"instead of refusing, and records metadata history for every changed field. Nothing is deleted.",
-		ResumePolicy:    sdk.ResumeDrop,
+			"instead of refusing, and records metadata history for every changed field. Nothing is deleted. " +
+			"Resumable: settled rows are checkpointed, and a restart re-queues the run, which keeps their " +
+			"results and applies only the rest.",
+		// ResumeRestart: the run checkpoints every settled row (params
+		// "resume"), so a restart re-applies only the rows still open. A row
+		// cut off mid-write is re-planned; the fixers recognise their own
+		// finished steps, so it resumes rather than reporting changed.
+		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityNormal,
 		// One apply at a time: two applies of overlapping plans would race.
 		ConcurrencyKey: repairs.ApplyOpID,
@@ -146,9 +152,17 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 	deps := repairs.ApplyDeps{
 		Guard: store, Series: repairs.SeriesNamesFrom(all),
 		StandDown: p.deps, OpID: opID, Wait: p.standDownWait,
+		Resumed: params.Resume,
 	}
 	if !dryRun {
-		deps.Writer = repairs.NewWriter(store, vps, f.ID(), "bulk_update", "repairs-")
+		// Every book_file step is journaled under this op's id, so POST
+		// /operations/<id>/revert undoes the apply.
+		deps.Writer = repairs.NewWriter(store, vps, f.ID(), "bulk_update", "repairs-").
+			WithJournal(store, store, opID).
+			WithLiveness(func() { registry.TouchLiveness(reporter) })
+		deps.Checkpoint = func(cp repairs.ApplyCheckpoint) error {
+			return reporter.Checkpoint(map[string]any{"resume": cp})
+		}
 	}
 	res, runErr := repairs.RunApply(ctx, f, plan, params.PlanOpID, params.RowIDs, dryRun, deps, reporter)
 	// The per-row report is written before any error returns, the lost-lease
