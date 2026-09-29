@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package maintenance
 
@@ -11,11 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -982,4 +984,100 @@ func TestWriter_OpJournaledMarkerOnlyOnJournaledBooks(t *testing.T) {
 	got, err := f.s.GetBookByID(b)
 	require.NoError(t, err)
 	require.Equal(t, "01", got.Title)
+}
+
+// TestFragmentFixer_LeftoverSoftDeleteRowCannotUndeleteALaterDelete (N3): a
+// retire journaled its soft-delete and never wrote it; the user deleted the
+// book later. The revert must not un-delete it.
+func TestFragmentFixer_LeftoverSoftDeleteRowCannotUndeleteALaterDelete(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag := f.ids["fragF"]
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-left")
+	stamp := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(stamp)))
+	later := stamp.Add(time.Hour)
+	_, err := f.s.ModifyBook(frag, func(b *database.Book) error {
+		yes := true
+		b.MarkedForDeletion, b.MarkedForDeletionAt = &yes, &later
+		return nil
+	})
+	require.NoError(t, err)
+
+	_, err = audiobooks.NewRevertService(f.s).RevertOperation("op-left")
+	require.Error(t, err)
+	require.False(t, f.live(t, "fragF"), "the user's own delete stands")
+}
+
+// TestFragmentFixer_JournaledStepNeverWrittenIsAlreadyRestored (N5): a
+// retire cut off after journaling (nothing written) reverts as already
+// restored, not failed.
+func TestFragmentFixer_JournaledStepNeverWrittenIsAlreadyRestored(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag, parent := f.ids["fragF"], f.ids["parent"]
+	b, err := f.s.GetBookByID(frag)
+	require.NoError(t, err)
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookMergedInto, "merged_into_book_id", "", parent))
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPathUpdate, "file_path", b.FilePath, ""))
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(time.Now())))
+
+	report, err := undo.PreflightUndoConflicts(f.s, "op-cut")
+	require.NoError(t, err)
+	require.Empty(t, report.CheckFailed, "%+v", report.CheckFailed)
+
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-cut")
+	require.NoError(t, err)
+	require.Zero(t, rr.Failed, "%+v", rr)
+	require.Equal(t, 4, rr.AlreadyRestored)
+	require.Equal(t, 4, rr.Restored)
+	require.True(t, f.live(t, "fragF"))
+}
+
+// TestFragmentFixer_RetireRefusesBeforeFollowingProgress (N4): an iTunes id
+// found at retire time refuses the retire before any user state moves or is
+// journaled.
+func TestFragmentFixer_RetireRefusesBeforeFollowingProgress(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag, parent := f.ids["fragF"], f.ids["parent"]
+	u, err := f.s.CreateUser("reader", "reader@example.com", "bcrypt", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	require.NoError(t, f.s.SetUserPosition(u.ID, frag, f.rowIDs["f03"], 100))
+	require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "ABCDEF0123456789", BookID: frag}))
+
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-refuse")
+	steps, err := newFragmentFixer(f.p).retire(context.Background(), f.s, w, frag, parent, merge.SliceMapping{})
+	require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+	require.Zero(t, steps)
+	changes, err := f.s.GetOperationChanges("op-refuse")
+	require.NoError(t, err)
+	require.Empty(t, changes, "nothing journaled")
+	pos, err := f.s.ListUserPositionsForBook(u.ID, frag)
+	require.NoError(t, err)
+	require.Len(t, pos, 1, "the position stayed on the fragment")
+}
+
+// TestFragmentFixer_PendingFollowNeverDrainsALiveFragment (N4): a pending
+// user-state record left by a follow whose retire failed is deferred while
+// the fragment is live; its progress stays.
+func TestFragmentFixer_PendingFollowNeverDrainsALiveFragment(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag, parent := f.ids["fragF"], f.ids["parent"]
+	u, err := f.s.CreateUser("reader", "reader@example.com", "bcrypt", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	require.NoError(t, f.s.SetUserPosition(u.ID, frag, f.rowIDs["f03"], 100))
+	rec, err := json.Marshal(merge.PendingUserStateRepair{LoserBookID: frag, WinnerBookID: parent, RecordedAt: time.Now()})
+	require.NoError(t, err)
+	require.NoError(t, f.s.SetRaw(merge.PendingUserStateRepairPrefix+frag+":"+parent, rec))
+
+	res, err := merge.CompletePendingUserStateRepairs(f.s, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Deferred)
+	pos, err := f.s.ListUserPositionsForBook(u.ID, frag)
+	require.NoError(t, err)
+	require.Len(t, pos, 1)
 }
