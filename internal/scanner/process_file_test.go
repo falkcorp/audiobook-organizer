@@ -1,5 +1,5 @@
 // file: internal/scanner/process_file_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-29
 
@@ -19,15 +19,25 @@ import (
 // testdataDir returns the absolute path to the project testdata/fixtures directory.
 func testdataDir(t *testing.T) string {
 	t.Helper()
-	// The test binary runs with the package directory as cwd, and the path is
-	// taken from there, not from runtime.Caller: CI builds with -trimpath,
-	// which makes a source file's path module-relative.
-	cwd, err := os.Getwd()
+	// Walk up from the package directory (go test's working directory) to
+	// go.mod, not runtime.Caller: CI builds with -trimpath, which makes a
+	// source file's path module-relative. This used to join three ".." onto
+	// internal/scanner, which lands ABOVE the repo, so every fixture test
+	// skipped on a "missing" fixture.
+	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	repoRoot := filepath.Join(cwd, "..", "..", "..")
-	return filepath.Join(repoRoot, "testdata", "fixtures")
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return filepath.Join(dir, "testdata", "fixtures")
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no go.mod above the package directory")
+		}
+		dir = parent
+	}
 }
 
 func TestProcessFile_EmptyPath(t *testing.T) {

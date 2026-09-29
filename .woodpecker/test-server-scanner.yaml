@@ -1,5 +1,5 @@
 # file: .woodpecker/test-server-scanner.yaml
-# version: 1.3.0
+# version: 1.3.1
 # guid: 7a2d4e81-0c63-4f9b-b5e2-9d1f3a6c8e27
 # last-edited: 2026-09-29
 #
@@ -53,7 +53,8 @@ steps:
       # 2026-09-29). -trimpath drops the directory from the key.
       GOFLAGS: -trimpath
     commands:
-      - command -v ffmpeg && command -v ffprobe && command -v fpcalc
+      # python3 runs the cache cap in cleanup; fail here, loudly, if it is missing.
+      - command -v ffmpeg && command -v ffprobe && command -v fpcalc && python3 --version
       - go test ./internal/server ./internal/scanner ./internal/server/handlers/abs -short -race -covermode=atomic -coverprofile=cover.out -timeout 25m
       - awk -v wf=test-server-scanner 'NR>1{t+=$$2; if($$3>0)c+=$$2} END{printf "CI-COVERAGE workflow=%s covered=%d total=%d\n", wf, c, t}' cover.out
 
