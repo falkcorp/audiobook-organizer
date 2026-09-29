@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-09-29
 
@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -632,6 +633,12 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 			folderSrc = junkSrcFilename
 		}
 	}
+	// A folder named like the book's series ("The Stormlight Archive/") says
+	// which series, not which book: it is neither evidence nor a proposal.
+	if folderSrc == junkSrcFolder && b.SeriesID != nil && idx.series[*b.SeriesID] != "" &&
+		strings.EqualFold(strings.TrimSpace(folderTitle), strings.TrimSpace(idx.series[*b.SeriesID])) {
+		folderTitle, folderSrc, titleDir = "", "", ""
+	}
 	if folderSrc == junkSrcFolder {
 		agreeWith = append(agreeWith, folderTitle)
 	}
@@ -642,45 +649,68 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	if folderSrc != "" {
 		folder, _ = accept(folderTitle, folderSrc)
 	}
-	// pathEvidence is what the book's own path says its title is (the
-	// stripped title, the folder or filename). A transcription or candidate
-	// that disagrees with it ranks BELOW it: "Audible Studios presents" is
-	// the intro's first words, not the title of the book in "Excession/", and
-	// a "Dune" candidate for ".../Dune Messiah/Dune Messiah.m4b" is the
-	// search's first hit, not this book.
-	var pathEvidence []string
-	for _, e := range []string{stripped, folder} {
-		if e != "" {
-			pathEvidence = append(pathEvidence, e)
-		}
-	}
-	agrees := func(t string) bool { return len(pathEvidence) == 0 || titleAgreesWithAny(t, pathEvidence) }
-	var demoted []proposal
-	add := func(p proposal) {
-		if agrees(p.title) {
-			props = append(props, p)
-			return
-		}
-		demoted = append(demoted, p)
-	}
+	// weakFolder: a filename stem that looks like a rip's file name
+	// ("hp1", "dune_messiah_64kbps", "final", "audible_download_2019"), not a
+	// title. It never outranks a transcription or candidate.
+	weakFolder := folder != "" && folderSrc == junkSrcFilename && isWeakFileStem(folder)
+
 	spoken, _ := accept(transcribed, junkSrcTranscribed)
-	if spoken != "" {
-		add(proposal{spoken, junkSrcTranscribed, repairs.RiskReview})
-	}
-	if stripped != "" {
-		props = append(props, proposal{stripped, junkSrcStripped, repairs.RiskLow})
-	}
 	candidate := ""
 	if t, score, ok := f.candidateTitle(b.ID, author); ok {
 		switch {
 		case embedded && !titleAgreesWithAny(t, agreeWith):
 			refused = append(refused, fmt.Sprintf("candidate %q (score %.2f) disagrees with the title's own evidence", t, score))
 		default:
-			if t, ok = accept(t, junkSrcCandidate); ok {
-				candidate = t
-				add(proposal{t, junkSrcCandidate, repairs.RiskReview})
-			}
+			candidate, _ = accept(t, junkSrcCandidate)
 		}
+	}
+
+	// An owner-manual proposal decides the book before any conflict does.
+	if ownerManual != "" {
+		return finish(repairs.SkipOwnerManual, fmt.Sprintf(
+			"the proposed title %q marks Big Finish / Doctor Who / Torchwood content; owner applies these by hand", ownerManual))
+	}
+
+	// Path evidence is what the book's own path says its title is: the
+	// stripped title, the folder, a filename stem that reads like a title.
+	// When it and a transcription or candidate disagree, neither is
+	// proposed: each side has a known way to be wrong ("New Folder (2)",
+	// "Libation" vs "Audible Studios presents", a series' first book), and
+	// picking one would write the other's mistake half the time.
+	type evidence struct{ source, title string }
+	var pathEv []evidence
+	if stripped != "" {
+		pathEv = append(pathEv, evidence{junkSrcStripped, stripped})
+	}
+	if folder != "" && !weakFolder {
+		pathEv = append(pathEv, evidence{folderSrc, folder})
+	}
+	if len(pathEv) > 0 {
+		pathTitles := make([]string, len(pathEv))
+		for i := range pathEv {
+			pathTitles[i] = pathEv[i].title
+		}
+		for _, other := range []evidence{{junkSrcTranscribed, spoken}, {junkSrcCandidate, candidate}} {
+			if other.title == "" || titleAgreesWithAny(other.title, pathTitles) {
+				continue
+			}
+			var sides []string
+			for _, e := range pathEv {
+				sides = append(sides, fmt.Sprintf("%s %q", e.source, e.title))
+			}
+			return finish(junkSkipNeedsManual, fmt.Sprintf("conflicting evidence: %s vs %s %q",
+				strings.Join(sides, ", "), other.source, other.title))
+		}
+	}
+
+	if spoken != "" {
+		props = append(props, proposal{spoken, junkSrcTranscribed, repairs.RiskReview})
+	}
+	if stripped != "" {
+		props = append(props, proposal{stripped, junkSrcStripped, repairs.RiskLow})
+	}
+	if candidate != "" {
+		props = append(props, proposal{candidate, junkSrcCandidate, repairs.RiskReview})
 	}
 	if folder != "" {
 		// A folder reached by climbing past a chapter folder that sits right
@@ -703,8 +733,6 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		}
 		props = append(props, proposal{folder, folderSrc, repairs.RiskReview})
 	}
-	// Demoted evidence still shows as "other evidence" on the row.
-	props = append(props, demoted...)
 	if kind.IsChapterKind() && b.SeriesID != nil && idx.series[*b.SeriesID] != "" {
 		if m := trailingNumberRe.FindStringSubmatch(b.Title); m != nil {
 			// A digits-only match cannot fail to parse except by overflow,
@@ -753,20 +781,47 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 // as any of the evidence titles: equal sort keys, or one is the other plus a
 // subtitle after ":", " (", " - " or "," ("Eldest" vs "Eldest: Inheritance,
 // Book 2"). A longer title that merely starts with the word ("Eldest Son")
-// is a different work.
+// is a different work. Apostrophes are ignored: a folder cannot always hold
+// one ("Assassins Apprentice" is "Assassin's Apprentice").
 func titleAgreesWithAny(cand string, evidence []string) bool {
-	c := util.TitleSortKey(cand)
+	c := util.TitleSortKey(dropApostrophes(cand))
 	if c == "" {
 		return false
 	}
-	lc := strings.ToLower(strings.TrimSpace(cand))
+	lc := strings.ToLower(strings.TrimSpace(dropApostrophes(cand)))
 	for _, e := range evidence {
-		k := util.TitleSortKey(e)
+		k := util.TitleSortKey(dropApostrophes(e))
 		if k == "" {
 			continue
 		}
-		le := strings.ToLower(strings.TrimSpace(e))
+		le := strings.ToLower(strings.TrimSpace(dropApostrophes(e)))
 		if c == k || hasSubtitle(lc, le) || hasSubtitle(le, lc) {
+			return true
+		}
+	}
+	return false
+}
+
+var apostropheReplacer = strings.NewReplacer("'", "", "\u2019", "", "\u2018", "", "`", "")
+
+func dropApostrophes(s string) string { return apostropheReplacer.Replace(s) }
+
+// weakStemTokenRe: a filename token that marks a rip, not a title: a
+// bitrate, a download/final/merged/output marker.
+var weakStemTokenRe = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:\d+\s*kbps|kbps|bitrate|download|downloaded|final|merged|output)(?:$|[^a-z])`)
+
+// isWeakFileStem reports whether a filename stem reads like a file name
+// rather than a title: short (3 characters or fewer), underscore-joined, a
+// word mixing digits and letters ("hp1", "64kbps"), or a rip marker.
+func isWeakFileStem(stem string) bool {
+	s := strings.TrimSpace(stem)
+	if len([]rune(s)) <= 3 || strings.Contains(s, "_") || weakStemTokenRe.MatchString(s) {
+		return true
+	}
+	for _, w := range strings.Fields(s) {
+		hasDigit := strings.IndexFunc(w, unicode.IsDigit) >= 0
+		hasLetter := strings.IndexFunc(w, unicode.IsLetter) >= 0
+		if hasDigit && hasLetter {
 			return true
 		}
 	}

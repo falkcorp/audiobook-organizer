@@ -1,5 +1,5 @@
 // file: internal/metadata/junk_title_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8b1e5f27-9c3a-4d60-b2e4-7f1a0c6d9e38
 // last-edited: 2026-09-29
 
@@ -93,6 +93,7 @@ func TestClassifyJunkTitle_Table(t *testing.T) {
 		{"01-Eldest", JunkNumberPrefix},
 		{"3_Body", JunkNone},
 		{"1. Mose", JunkNone},
+		{"5. Mose", JunkNone},
 		{"21-Day Sugar Detox", JunkNone},
 		{"12-Step Recovery", JunkNone},
 		{"1-2-3 Magic", JunkNone},

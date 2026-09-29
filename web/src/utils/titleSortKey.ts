@@ -1,5 +1,5 @@
 // file: web/src/utils/titleSortKey.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8f2a6d31-4c7e-4b59-a0d3-1e9b5c7f2a64
 // last-edited: 2026-09-29
 
@@ -46,6 +46,12 @@ const ORDINALS: Record<string, number> = {
   iv: 4,
   fourth: 4,
   '4th': 4,
+  // Five for the German books of Moses ("5. Mose"); numberedBookSortForm
+  // accepts it for Mose only.
+  '5': 5,
+  v: 5,
+  fifth: 5,
+  '5th': 5,
 };
 
 // WS is Go RE2's \s: ASCII whitespace only. JavaScript's \s also matches
@@ -97,7 +103,8 @@ export function numberedBookSortForm(title: string): string | null {
   const m = NUMBERED_BOOK_RE.exec(title);
   if (!m) return null;
   const n = ordinalOf(m[1]);
-  if (n === 0) return null;
+  // Only the books of Moses go past four: "Fifth Corinthians" is no book.
+  if (n === 0 || (n > 4 && m[2].toLowerCase() !== 'mose')) return null;
   return joinSortForm(m[2], n, m[3].trim());
 }
 
