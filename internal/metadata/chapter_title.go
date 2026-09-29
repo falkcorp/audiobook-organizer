@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c962e504-746a-454a-996f-1020803a8cab
 // last-edited: 2026-09-29
 
@@ -128,6 +128,26 @@ func IsSectionHeadingTitle(title string) bool {
 // Generic folder names (library and import roots) are authorname.IsGenericFolder,
 // shared with the author-from-directory fallback.
 
+// placeholderDirNames are folder names someone left as they were or gave a
+// set of books: they name no work, but unlike authorname.IsGenericFolder they
+// are not a library root, so a work folder under one ("Complete
+// Collection/The Martian/01.mp3") still counts as a title.
+var placeholderDirNames = map[string]bool{"new folder": true, "collection": true, "complete collection": true}
+
+// newFolderRe: the file manager's default name, numbered ("New Folder (2)",
+// "New Folder 2").
+var newFolderRe = regexp.MustCompile(`^new folder(?: \(?\d+\)?)?$`)
+
+// IsGenericDirName reports whether a folder name says nothing about the
+// work: a library or import root, a generic "Books" folder
+// (authorname.IsGenericFolder), or a placeholder ("New Folder (2)",
+// "Complete Collection"). The junk-title fixer refuses such a name as a
+// proposed title and does not count it as evidence.
+func IsGenericDirName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	return authorname.IsGenericFolder(n) || placeholderDirNames[n] || newFolderRe.MatchString(n)
+}
+
 // ChapterTitleFromDirectory answers the filename fallback's worst case: a file
 // named only by its chapter number ("Eldest/98.mp3"). The number is not a
 // title, and the folder holding it usually is -- so it returns that folder's
@@ -166,12 +186,12 @@ func ChapterTitleFromDirectory(filePath, title string) (dirTitle, titleDir strin
 func workFolder(filePath string, placeholderAuthorAbove bool) (dirTitle, titleDir string, ok bool) {
 	dir := filepath.Dir(filePath)
 	name := strings.TrimSpace(filepath.Base(dir))
-	if IsChapterOnlyTitle(name) && !authorname.IsGenericFolder(name) {
+	if IsChapterOnlyTitle(name) && !IsGenericDirName(name) {
 		// A "CD1" / "Disc 2" / "Part 3" folder: the work is one level up.
 		dir = filepath.Dir(dir)
 		name = strings.TrimSpace(filepath.Base(dir))
 	}
-	if authorname.IsGenericFolder(name) || IsChapterOnlyTitle(name) {
+	if IsGenericDirName(name) || IsChapterOnlyTitle(name) {
 		return "", "", false
 	}
 	// The folder is only a title when it sits UNDER an author folder. In an

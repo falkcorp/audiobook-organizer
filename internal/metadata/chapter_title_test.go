@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 0cc97d6f-e2ee-42d6-8233-ed4cec61f5ab
 // last-edited: 2026-09-29
 
@@ -269,5 +269,26 @@ func TestExtractMetadataFromFolder_SeriesFolderIsNotAnAuthor(t *testing.T) {
 	}
 	if len(fm.Authors) != 1 || fm.Authors[0] != "Brandon Sanderson" {
 		t.Errorf("real author folder: authors = %q, want [Brandon Sanderson]", fm.Authors)
+	}
+}
+
+func TestIsGenericDirName_FileManagerAndCollectionNames(t *testing.T) {
+	for _, name := range []string{"New Folder", "new folder (2)", "New Folder (13)", "New Folder 2", "Collection", " Complete Collection "} {
+		if !IsGenericDirName(name) {
+			t.Errorf("IsGenericDirName(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"New Folder Of Poems", "The Collection Agency", "New Folder (x)", "Collected Stories"} {
+		if IsGenericDirName(name) {
+			t.Errorf("IsGenericDirName(%q) = true, want false", name)
+		}
+	}
+	// A placeholder is no title, but it is no library root either: the work
+	// folder under it still names the book.
+	if _, _, ok := ChapterTitleFromDirectory("/lib/Andy Weir/New Folder (2)/01.mp3", "01"); ok {
+		t.Error("New Folder (2) taken as a title")
+	}
+	if got, _, ok := ChapterTitleFromDirectory("/lib/Andy Weir/Complete Collection/The Martian/01.mp3", "01"); !ok || got != "The Martian" {
+		t.Errorf("under Complete Collection: got %q, %v; want \"The Martian\", true", got, ok)
 	}
 }
