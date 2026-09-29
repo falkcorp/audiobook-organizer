@@ -100,6 +100,10 @@ const (
 	fragClassAmbiguous = "ambiguous"
 )
 
+// fragRowCopyUnproven prefixes the row id of a parent's UNPROVEN copies, so
+// they never share a row (and a skip) with the proven ones.
+const fragRowCopyUnproven = "copy-unproven"
+
 // Skip kinds this fixer sets itself (the framework adds the guard kinds).
 const (
 	fragSkipAmbiguous       = "skipped_ambiguous"
@@ -598,6 +602,9 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 				continue
 			}
 		}
+		if class == fragClassCopy && !provenMatch(p.Evidence) {
+			class = fragRowCopyUnproven
+		}
 		k := parentKey{m.Row.BookID, class}
 		pairs[k] = append(pairs[k], p)
 	}
@@ -666,16 +673,24 @@ func (f *fragmentFixer) ambiguousRow(lib *fragLibrary, c *fragCandidate, why str
 	if k, _ := f.guard(lib, books, map[string][]string{c.Book.ID: {c.ImportPath}}); k != "" {
 		r.Class = fragClassManual
 	}
-	r.Fingerprint = fingerprint("ambiguous", c.Book.ID, why)
+	r.Fingerprint = fragFingerprint("ambiguous", c.Book.ID, why)
 	return r
 }
 
 // parentRow is a moved or copy row: one parent and every fragment matched to
 // it in that class.
-func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, class string, pairs []fragPair) repairs.Row {
+func provenMatch(evidence string) bool {
+	return evidence == fragEvImportPath || evidence == fragEvHash || evidence == fragEvDone
+}
+
+func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pairs []fragPair) repairs.Row {
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].Frag.Book.ID < pairs[j].Frag.Book.ID })
 	parent := lib.books[parentID]
-	r := repairs.Row{RowID: class + ":" + parentID, Class: class, Title: parent.Title,
+	class := rowKind
+	if rowKind == fragRowCopyUnproven {
+		class = fragClassCopy
+	}
+	r := repairs.Row{RowID: rowKind + ":" + parentID, Class: class, Title: parent.Title,
 		Author: lib.authorName(parent), Risk: repairs.RiskLow, Detail: pairs}
 	r.BookIDs = []string{parentID}
 	r.Members = []repairs.RowMember{member(lib, parent, "parent")}
@@ -691,7 +706,7 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, class string, pair
 		if p.Done {
 			done++
 		}
-		if p.Evidence == fragEvImportPath || p.Evidence == fragEvHash {
+		if provenMatch(p.Evidence) {
 			proven++
 		}
 		r.Evidence = append(r.Evidence, fmt.Sprintf("%s ← parent row %s (%s): %s",
@@ -726,7 +741,7 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, class string, pair
 	if k, why := f.guard(lib, books, extra); k != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
 	}
-	r.Fingerprint = fingerprint(append([]string{class, parentID}, fpParts...)...)
+	r.Fingerprint = fragFingerprint(append([]string{rowKind, parentID}, fpParts...)...)
 	return r
 }
 
@@ -886,11 +901,11 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	if k, why := f.guard(lib, books, extra); k != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
 	}
-	r.Fingerprint = fingerprint(append([]string{fragClassNoParent, dir, key, plan.SurvivorID, plan.Title}, fpParts...)...)
+	r.Fingerprint = fragFingerprint(append([]string{fragClassNoParent, dir, key, plan.SurvivorID, plan.Title}, fpParts...)...)
 	return r
 }
 
-func fingerprint(parts ...string) string {
+func fragFingerprint(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
 	return hex.EncodeToString(sum[:])[:32]
 }
@@ -942,7 +957,7 @@ func (f *fragmentFixer) Replan(ctx context.Context, _ json.RawMessage, planned r
 	}
 	class, rest, _ := strings.Cut(planned.RowID, ":")
 	switch class {
-	case fragClassMoved, fragClassCopy:
+	case fragClassMoved, fragClassCopy, fragRowCopyUnproven:
 		return f.replanParent(lib, hist, planned, rest)
 	case fragClassNoParent:
 		return f.replanGroup(lib, hist, planned)
@@ -1107,7 +1122,7 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	}
 	switch plan := fresh.Detail.(type) {
 	case []fragPair:
-		parentID := strings.TrimPrefix(strings.TrimPrefix(fresh.RowID, fragClassMoved+":"), fragClassCopy+":")
+		_, parentID, _ := strings.Cut(fresh.RowID, ":")
 		for _, p := range plan {
 			if err := ctx.Err(); err != nil {
 				return partial(err)
