@@ -1,31 +1,28 @@
-# file: .woodpecker/checks.yaml
-# version: 1.1.0
+# file: .woodpecker/checks-lint.yaml
+# version: 2.0.0
 # guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
 # last-edited: 2026-09-29
 #
-# The non-test gates of `make ci`, each as its own step so one failure does not
-# hide the others: vet (test-short's prerequisite), staticcheck, the errcheck
-# ratchet, mocks-check, fmt-check, sdkguard, bench-check, and the web tests.
-# Each step runs the same make target `make ci` runs.
+# The linter gates of `make ci`: staticcheck, the errcheck ratchet and
+# mocks-check, each as its own step so one failure does not hide the others.
+# Each step runs the same make target `make ci` runs. The other gates (vet,
+# fmt-check, sdkguard, bench-check, web tests) are in checks-build.yaml on U1;
+# the two were one `checks` workflow on U0 until 2026-09-29 and are split so
+# they run on both hosts at once.
 #
-# Runs on the prod host's agent (docker backend, 2 workflows at a time, 8 CPU /
-# 16 GiB per step container), alongside test-database. Measured on Linux: vet about 20 s,
-# staticcheck about 105 s, errcheck ratchet about 90 s, bench-check about 60 s,
-# web tests about 50 s, plus about 2 min to install the pinned tools. The
-# workflow finishes in roughly the time the Mac test workflows take.
+# These three stay on the prod host's docker agent (2 workflows at a time,
+# 8 CPU / 16 GiB per step container) because they share the installed
+# linters. Tool versions match scripts/setup-mockery.sh.
 #
-# Tool versions match the runner nodes and scripts/setup-mockery.sh. Binaries,
-# the Go build cache and the module cache live under /ci-cache, which lies
-# outside the source tree (fmt-check runs `gofmt -l .` on the tree).
-#
-# /ci-cache is a host directory the U0 agent mounts into every step container
-# (WOODPECKER_BACKEND_DOCKER_VOLUMES; see docs/ci/woodpecker.md). Until
-# 2026-09-29 the caches lived under /woodpecker/cache, but the docker backend
-# creates /woodpecker as a volume per workflow and deletes it at the end, so
-# every run re-downloaded and rebuilt the linters (89-131 s) and built the repo
-# cold: 566 s, the slowest workflow. The mount is set on the agent, not in this
-# file, so the repo does not need Woodpecker's Trusted flag (which would let
-# any pipeline file mount any host path on the prod host).
+# Caches: /ci-cache is a host directory the U0 agent mounts into every step
+# container (WOODPECKER_BACKEND_DOCKER_VOLUMES; see docs/ci/woodpecker.md), an
+# NVMe ZFS dataset with its own quota. Until 2026-09-29 the caches lived under
+# /woodpecker/cache, but the docker backend creates /woodpecker as a volume
+# per workflow and deletes it at the end, so every run re-downloaded and
+# rebuilt the linters (89-131 s) and built the repo cold: 566 s, the slowest
+# workflow. The mount is set on the agent, not here, so the repo does not need
+# Woodpecker's Trusted flag (which would let any pipeline file mount any host
+# path on the prod host). /ci-cache lies outside the source tree.
 
 labels:
   host: u0
@@ -66,13 +63,6 @@ steps:
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
       - go install github.com/vektra/mockery/v3@v3.7.4
 
-  - name: vet
-    image: *go_image
-    environment: *go_env
-    depends_on: [tools]
-    commands:
-      - make --no-print-directory vet
-
   - name: staticcheck
     image: *go_image
     environment: *go_env
@@ -97,31 +87,13 @@ steps:
       - export PATH="$$GOBIN:$$PATH"
       - make --no-print-directory mocks-check
 
-  - name: fmt-sdkguard-bench
-    image: *go_image
-    environment: *go_env
-    depends_on: [tools]
-    commands:
-      - make --no-print-directory fmt-check
-      - make --no-print-directory sdkguard
-      - make --no-print-directory bench-check
-
-  - name: web-test
-    image: node:26-alpine@sha256:dbaa92e5758cbbcf85d65d5403fdb530fe3442cbe8c6dbfb7ef23365450d5070
-    depends_on: []
-    environment:
-      npm_config_cache: /ci-cache/npm
-    commands:
-      - npm ci --prefix web --no-audit --no-fund
-      - cd web && npm run test -- --run
-
   - name: cache-trim
     # Keeps the shared build cache under its budget, least recently used
     # first. The dataset behind /ci-cache also has a hard ZFS quota; this step
     # keeps the cache well below it so builds never fail on a full cache.
     image: *go_image
     environment: *go_env
-    depends_on: [vet, staticcheck, errcheck-ratchet, mocks-check, fmt-sdkguard-bench]
+    depends_on: [staticcheck, errcheck-ratchet, mocks-check]
     when:
       - status: [success, failure]
     commands:
