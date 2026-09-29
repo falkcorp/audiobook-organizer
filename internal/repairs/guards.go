@@ -1,12 +1,13 @@
 // file: internal/repairs/guards.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package repairs
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
@@ -32,6 +33,7 @@ const (
 // is on disk right now. seriesName is the book's series name ("" for none).
 // It returns "" when the book may be touched.
 func GuardBookPaths(bookID string, paths []string, seriesName string) (kind, reason string) {
+	paths = withResolved(paths)
 	for _, p := range paths {
 		if p != "" && pathutil.UnderFrozenITunesTree(p) {
 			return SkipITunes, fmt.Sprintf("member %s has a file under books/itunes/** (hands-off): %s", bookID, p)
@@ -47,6 +49,33 @@ func GuardBookPaths(bookID string, paths []string, seriesName string) (kind, rea
 		return SkipOwnerManual, fmt.Sprintf("member %s is Doctor Who / Big Finish / Torchwood (series %q); owner applies these by hand", bookID, seriesName)
 	}
 	return "", ""
+}
+
+// withResolved adds, after each path, the path its symlinks resolve to when
+// that differs: a library symlink into books/itunes/** is under the frozen
+// tree however it is spelled. A path that cannot be resolved (it is gone,
+// or unreadable) is checked lexically only; for one that no longer exists,
+// its folder is resolved instead.
+func withResolved(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, p)
+		if p == "" {
+			continue
+		}
+		r, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			dir, derr := filepath.EvalSymlinks(filepath.Dir(p))
+			if derr != nil {
+				continue
+			}
+			r = filepath.Join(dir, filepath.Base(p))
+		}
+		if r != p {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // GuardReader is what the framework guard reads.
