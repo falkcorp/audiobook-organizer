@@ -180,29 +180,49 @@ WOODPECKER_BACKEND_DOCKER_LIMIT_MEM=17179869184      # 16 GiB per step container
 WOODPECKER_BACKEND_DOCKER_VOLUMES=/mnt/cache/woodpecker-cache:/ci-cache
 ```
 
-That bounds CI at about 16 CPUs and 32 GiB of the host's 48 cores. The only
-workflow here, `checks-lint`, runs in the `golang` image, which has no ffmpeg,
-so the host's no-decode rule holds.
+That bounds CI at about 16 CPUs and 32 GiB of the host's 48 cores.
+`checks-lint`, the only workflow file in `.woodpecker/` labelled `host=u0`,
+runs in the `golang` image, which has no ffmpeg, so the host's no-decode rule
+holds.
 
-**The CI cache.** The docker backend creates `/woodpecker` as a volume for each
-workflow and deletes it when the workflow ends, so caches kept there never
-outlived a run: the then-single `checks` workflow re-downloaded and rebuilt its linters and built the
-repo cold every time (566 s on 2026-09-29). The agent therefore mounts one
-host directory, `/mnt/cache/woodpecker-cache`, into every step container at
-`/ci-cache`, and `checks-lint.yaml` keeps GOCACHE, GOMODCACHE, GOBIN and the
-lint caches there.
+**The CI cache.** The docker backend creates `/woodpecker` as a volume for
+each workflow and deletes it when the workflow ends, so caches kept there
+never outlived a run: the then-single `checks` workflow re-downloaded and
+rebuilt its linters and built the repo cold every time (566 s on
+2026-09-29). The agent therefore mounts one host directory,
+`/mnt/cache/woodpecker-cache`, into every step container at `/ci-cache`, and
+`checks-lint.yaml` keeps GOCACHE, GOMODCACHE, GOBIN and the staticcheck and
+golangci-lint caches (under `XDG_CACHE_HOME`) there.
 
-- It is its own ZFS dataset on the NVMe pool, isolated from everything else
-  on the host: `zfs create -o quota=120G -o compression=zstd -o atime=off
-  -o mountpoint=/mnt/cache/woodpecker-cache nvmecache/woodpecker-cache`.
-  The quota is a hard ceiling; `checks-lint`'s `cache-trim` step keeps the Go build
-  cache near 30 GiB so the quota is never reached.
-- The mount is set on the agent, not in a pipeline file, so the repo does not
-  need Woodpecker's **Trusted** flag. Trusted volumes would let any pipeline
-  file, including one on a pull-request branch, mount any host path on the
-  prod host (`/`, `docker.sock`). Keep the flag off.
-- `checks-lint`'s first step fails if `/ci-cache` is not a mount point, so a missing
-  mount cannot quietly bring back cold builds.
+- **Isolated dataset.** It is its own ZFS dataset on the NVMe pool, with a
+  hard quota, and nothing else on the host uses it:
+
+  ```
+  zfs create -o quota=120G -o compression=zstd -o atime=off \
+    -o mountpoint=/mnt/cache/woodpecker-cache nvmecache/woodpecker-cache
+  # marker checked by checks-lint's first step (root-owned directory)
+  docker run --rm -v /mnt/cache/woodpecker-cache:/c <golang image> \
+    sh -c 'echo nvmecache/woodpecker-cache > /c/.woodpecker-cache-dataset'
+  ```
+
+  `checks-lint`'s `cache-trim` step keeps the Go build cache near 30 GiB, well
+  under the quota.
+- **Mount guard.** `checks-lint`'s first step fails unless
+  `/ci-cache/.woodpecker-cache-dataset` exists. A bind mount alone proves
+  nothing: if the dataset is not mounted, docker creates an empty directory
+  at the host path, on the root filesystem and outside the quota, and the
+  caches would grow there unnoticed.
+- **No Trusted flag.** The mount is set on the agent, not in a pipeline file,
+  so the repo does not need Woodpecker's Trusted flag. Trusted volumes would
+  let any pipeline file, including one on a pull-request branch, mount any
+  host path on the prod host (`/`, `docker.sock`). Keep the flag off.
+- **What a shared cache does expose.** The cache is writable and outlives the
+  run, so a pipeline can change what later pipelines run: the tool binaries
+  in `/ci-cache/bin` and the build cache entries. A pull-request pipeline
+  runs that branch's code, so this is only as safe as the rule on who can
+  start one. The repo has `require_approval: forks`: a pull request from a
+  fork waits for a maintainer's approval before any agent runs it. Keep that
+  setting. U1's shared `/tank/ci/cache` has the same exposure.
 
 ### llm1: local backend
 
@@ -232,11 +252,11 @@ pipelines would run as root.
 
 ### U1: local backend on Linux
 
-U1 runs `test-rest`, `test-database` and `checks-build` with the local backend, like llm1, so the decode tests use
-the host's ffmpeg, ffprobe and fpcalc (`apt install ffmpeg
-libchromaprint-tools`). `build-essential` supplies the C compiler `-race`
-needs, and `golang-go` is only a bootstrap: `GOTOOLCHAIN=go1.27.1` fetches the
-pinned version.
+U1 runs `test-rest`, `test-database` and `checks-build` with the local
+backend, like llm1, so the decode tests use the host's ffmpeg, ffprobe and
+fpcalc (`apt install ffmpeg libchromaprint-tools`). `build-essential` supplies
+the C compiler `-race` needs, and `golang-go` is only a bootstrap:
+`GOTOOLCHAIN=go1.27.1` fetches the pinned version.
 
 - **Runs as:** the unprivileged system user `woodpecker` (no sudo). Pipelines
   execute pull-request code, so the agent never runs as a login user.

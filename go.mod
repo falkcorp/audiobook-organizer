@@ -168,3 +168,10 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
+
+// web/ holds the React app. npm installs third-party packages under
+// web/node_modules, and some ship Go files (flatted/golang), so without this
+// `./...` picked them up once node_modules existed: vet, build and the test
+// package list depended on whether `npm ci` had run, or was mid-extraction in
+// a CI step running in parallel.
+ignore ./web

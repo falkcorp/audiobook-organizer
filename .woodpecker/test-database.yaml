@@ -1,5 +1,5 @@
 # file: .woodpecker/test-database.yaml
-# version: 1.1.0
+# version: 1.1.1
 # guid: 3f1c9a52-8e47-4b0d-a6c1-5d2e7f9b0c14
 # last-edited: 2026-09-29
 #
@@ -9,7 +9,7 @@
 # It runs as 8 shard processes (scripts/ci/go_test_shards.py) on the U1 agent
 # (local backend, Linux amd64, 48 cores). It ran on the prod host's docker
 # agent until 2026-09-29; moving it keeps CI load off prod, whose agent now
-# runs only `checks`.
+# runs only checks-lint.
 #
 # U1's localhost has none of the fixed-port services some tests dial (Deluge
 # on 8112, the app, the Ollama tunnel), as the prod container's did not.
