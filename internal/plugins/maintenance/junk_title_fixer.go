@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-09-29
 
@@ -851,8 +851,8 @@ var ripTokens = map[string]bool{"kbps": true, "bitrate": true, "download": true,
 var kbpsTokenRe = regexp.MustCompile(`(?i)^\d+kbps$`)
 
 // weakStemVeto decides whether a weak filename stem still names a work, and
-// returns it cleaned for the conflict check: underscores become spaces and
-// rip tokens are trimmed off both ends ("dune_messiah_64kbps" → "dune
+// returns it cleaned for the conflict check: underscores, dots and hyphens
+// become spaces ("The.Final.Empire", "dune-messiah-64kbps") and rip tokens are trimmed off both ends ("dune_messiah_64kbps" → "dune
 // messiah"; a bare year at an end goes too while another word remains).
 // Tokens inside the stem stay, so "The_Final_Empire" keeps its "Final".
 // It vetoes when the cleaned stem keeps a word of three or more letters
@@ -861,7 +861,9 @@ var kbpsTokenRe = regexp.MustCompile(`(?i)^\d+kbps$`)
 // with a letter ("1Q84"), not "hp1" or "zz". A stem of rip tokens only
 // ("final", "audible_download_2019") vetoes nothing.
 func weakStemVeto(stem string) (string, bool) {
-	words := strings.Fields(strings.ReplaceAll(stem, "_", " "))
+	words := strings.FieldsFunc(stem, func(r rune) bool {
+		return unicode.IsSpace(r) || r == '_' || r == '.' || r == '-'
+	})
 	noise := func(w string, others bool) bool {
 		lw := strings.ToLower(w)
 		if ripTokens[lw] || kbpsTokenRe.MatchString(lw) {
