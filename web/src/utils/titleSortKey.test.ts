@@ -1,5 +1,5 @@
 // file: web/src/utils/titleSortKey.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b9e1c62-7d3a-4f85-b2c0-6a8d3e5f1b97
 // last-edited: 2026-09-28
 
@@ -49,6 +49,12 @@ describe('titleSortKey', () => {
     ['Corinthians', 'corinthians'],
     ['Fifth Corinthians', 'fifth corinthians'],
     ['lll', 'lll'],
+    ['1. John', 'john 1'],
+    ['2 - Kings', 'kings 2'],
+    ['2-Peter', 'peter 2'],
+    ['1 John: Commentary', 'john 1: commentary'],
+    // NBSP is not whitespace to the server's regex: no rewrite either side
+    ['1\u00a0John', '1\u00a0john'],
   ])('%s -> %s', (input, want) => {
     expect(titleSortKey(input)).toBe(want);
   });

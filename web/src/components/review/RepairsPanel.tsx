@@ -330,9 +330,11 @@ function ClassChips({ repairs }: RepairsPanelProps) {
 
 /** Words for the skip kinds fixers report; an unknown kind shows as is. */
 export const SKIP_KIND_LABEL: Record<string, string> = {
-  fragment: 'Fragment — use the consolidation fixer',
-  needs_manual: 'Needs manual',
-  user_locked: 'User-locked title',
+  skipped_fragment: 'Fragment — use the consolidation fixer',
+  skipped_possible_fragment: 'Possible fragment (not proven)',
+  skipped_needs_manual: 'Needs manual',
+  skipped_user_locked: 'User-locked title',
+  skipped_provider_title: 'Title from a metadata provider',
   skipped_itunes: 'iTunes library (hands-off)',
   skipped_owner_manual: 'Doctor Who / Big Finish / Torchwood (manual)',
   skipped_guard_unreadable: 'Could not read for the guard',
