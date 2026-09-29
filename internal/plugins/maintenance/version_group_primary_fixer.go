@@ -146,7 +146,7 @@ func (f *vgPrimaryFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	a := &vgApplier{store: store, apply: true, writer: w}
+	a := &vgApplier{store: store, apply: true, writer: w, paths: repairs.NewPathResolver()}
 	a.write(g.GroupID, g.planned, g)
 	switch g.Outcome {
 	case vgOutcomeApplied:

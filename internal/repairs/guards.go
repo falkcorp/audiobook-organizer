@@ -105,8 +105,11 @@ func (r *PathResolver) dir(d string) (string, bool) {
 // its folder, or unreadable; the guard then checks it lexically only.
 func (r *PathResolver) Resolve(p string) (string, bool) {
 	if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		rp, err := filepath.EvalSymlinks(p)
-		return rp, err == nil
+		if rp, err := filepath.EvalSymlinks(p); err == nil {
+			return rp, true
+		}
+		// A dangling link: fall back to its folder's resolution, so a dead
+		// link inside a folder linked into books/itunes/** still guards.
 	}
 	d, ok := r.dir(filepath.Dir(p))
 	if !ok {
