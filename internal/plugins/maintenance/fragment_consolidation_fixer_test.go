@@ -822,3 +822,133 @@ func TestFragmentFixer_JournalDedupesOnResume(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, changes, 1)
 }
+
+// TestFragmentFixer_ReplanReformsAGroupCutMidRetire (M6): a run cut off
+// after every row moved and one member was retired re-forms the whole group
+// on a new plan (the retired member included), and the apply finishes it.
+func TestFragmentFixer_ReplanReformsAGroupCutMidRetire(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	res := f.plan(t, "op-plan")
+	id := noParentRowID(f.path("lib/Loose"), "loose")
+	survivor := findRow(t, res, id).Proposed["survivor"]
+	var others, otherRows []string
+	for _, n := range []string{"01", "02", "03"} {
+		if f.ids["loose"+n] != survivor {
+			others = append(others, f.ids["loose"+n])
+			otherRows = append(otherRows, f.rowIDs["l"+n])
+		}
+	}
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+	for i := range others {
+		require.NoError(t, w.MoveBookFiles([]string{otherRows[i]}, others[i], survivor))
+	}
+	// The first member was retired before the cut.
+	_, err := f.s.ModifyBook(others[0], func(b *database.Book) error {
+		yes := true
+		b.MarkedForDeletion = &yes
+		b.MergedIntoBookID = &survivor
+		b.FilePath = ""
+		return nil
+	})
+	require.NoError(t, err)
+
+	res2 := f.plan(t, "op-plan2")
+	r := findRow(t, res2, id)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.ElementsMatch(t, []string{survivor, others[0], others[1]}, r.BookIDs)
+	out := f.apply(t, "op-plan2", "op-apply", []string{id}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	rows, err := f.s.GetBookFiles(survivor)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+	for _, o := range others {
+		b, err := f.s.GetBookByID(o)
+		require.NoError(t, err)
+		require.True(t, b.IsSoftDeleted(), "%s retired, not stranded", o)
+	}
+}
+
+// TestFragmentFixer_StrandedMemberIsListed (M6): an emptied member whose
+// group no longer re-forms is listed as a held row, not dropped.
+func TestFragmentFixer_StrandedMemberIsListed(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	res := f.plan(t, "op-plan")
+	survivor := findRow(t, res, noParentRowID(f.path("lib/Loose"), "loose")).Proposed["survivor"]
+	var others, otherRows []string
+	for _, n := range []string{"01", "02", "03"} {
+		if f.ids["loose"+n] != survivor {
+			others = append(others, f.ids["loose"+n])
+			otherRows = append(otherRows, f.rowIDs["l"+n])
+		}
+	}
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+	require.NoError(t, w.MoveBookFiles([]string{otherRows[0]}, others[0], survivor))
+	// The third member left the group some other way: two are not a group.
+	_, err := f.s.ModifyBook(others[1], func(b *database.Book) error { yes := true; b.MarkedForDeletion = &yes; return nil })
+	require.NoError(t, err)
+
+	r := findRow(t, f.plan(t, "op-plan2"), "stranded:"+others[0])
+	require.Equal(t, fragClassHeld, r.Class)
+	require.Equal(t, fragSkipStranded, r.Skipped)
+}
+
+// TestFragmentFixer_CopyNeedsPathOrHash: a copy whose parent file is still on
+// disk is not retired on name, size and duration alone.
+func TestFragmentFixer_CopyNeedsPathOrHash(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	h, err := f.s.GetBookFileByID(f.ids["fragH"], f.rowIDs["h01"])
+	require.NoError(t, err)
+	h.Duration = 600 // now equal to the parent row's
+	require.NoError(t, f.s.UpdateBookFile(h.ID, h))
+	r := findRow(t, f.plan(t, "op-plan"), fragRowCopyUnproven+":"+f.ids["suns"])
+	require.Contains(t, r.BookIDs, f.ids["fragH"])
+	require.Equal(t, fragSkipCopyUnproven, r.Skipped)
+}
+
+// TestFragmentFixer_RevertCrownsARetiredPrimary (M7): the hand-off promoted a
+// sibling when the primary fragment retired; the revert crowns the fragment
+// again and demotes the sibling.
+func TestFragmentFixer_RevertCrownsARetiredPrimary(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag := f.ids["fragF"]
+	group := "vg-frag"
+	yes, no := true, false
+	_, err := f.s.ModifyBook(frag, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = &yes
+		return nil
+	})
+	require.NoError(t, err)
+	sibPath := f.file(t, "lib/Sibling/Sibling edition.m4b", 5000)
+	sib := f.book(t, "sibling", "Eldest, another edition", sibPath, nil)
+	f.row(t, "sib", sib, sibPath, "Sibling edition.m4b", 5000, 36000, 0)
+	f.organized(t, sib)
+	_, err = f.s.ModifyBook(sib, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = &no
+		return nil
+	})
+	require.NoError(t, err)
+
+	f.plan(t, "op-plan")
+	out := f.apply(t, "op-plan", "op-apply", []string{"moved:" + f.ids["parent"]}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	sb, err := f.s.GetBookByID(sib)
+	require.NoError(t, err)
+	require.True(t, sb.IsPrimaryVersion == nil || *sb.IsPrimaryVersion, "the hand-off promoted the sibling")
+
+	_, err = audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
+	require.NoError(t, err)
+	fb, err := f.s.GetBookByID(frag)
+	require.NoError(t, err)
+	require.NotNil(t, fb.IsPrimaryVersion)
+	require.True(t, *fb.IsPrimaryVersion, "crowned again")
+	sb, err = f.s.GetBookByID(sib)
+	require.NoError(t, err)
+	require.NotNil(t, sb.IsPrimaryVersion)
+	require.False(t, *sb.IsPrimaryVersion, "the promoted sibling is demoted again")
+}

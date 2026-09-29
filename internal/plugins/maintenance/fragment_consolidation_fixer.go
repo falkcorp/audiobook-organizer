@@ -149,6 +149,7 @@ const (
 	fragSkipUnreadable      = "skipped_unreadable"
 	fragSkipTrackOrder      = "skipped_track_order"
 	fragSkipNoSurvivor      = "skipped_no_survivor"
+	fragSkipStranded        = "skipped_stranded"
 )
 
 // Evidence kinds of a fragment-to-parent match, strongest first.
@@ -225,10 +226,16 @@ type fragBook struct {
 	Organized bool
 	Primary   bool
 	ITunesPID string // the book-level iTunes persistent id
+	// MergedInto is merged_into_book_id ("" unset): which book a retired
+	// fragment was folded into.
+	MergedInto string
 }
 
-func fragBookFrom(id, title, path string, author, series *int, softDeleted bool, state *string, primary *bool, pid *string) fragBook {
+func fragBookFrom(id, title, path string, author, series *int, softDeleted bool, state *string, primary *bool, pid, merged *string) fragBook {
 	b := fragBook{ID: id, Title: title, FilePath: path, AuthorID: author, SeriesID: series, SoftDeleted: softDeleted}
+	if merged != nil {
+		b.MergedInto = *merged
+	}
 	b.Organized = state != nil && *state == "organized"
 	b.Primary = primary == nil || *primary
 	if pid != nil {
@@ -239,7 +246,7 @@ func fragBookFrom(id, title, path string, author, series *int, softDeleted bool,
 
 func fragBookOf(b *database.Book) fragBook {
 	return fragBookFrom(b.ID, b.Title, b.FilePath, b.AuthorID, b.SeriesID, b.IsSoftDeleted(), b.LibraryState,
-		b.IsPrimaryVersion, b.ITunesPersistentID)
+		b.IsPrimaryVersion, b.ITunesPersistentID, b.MergedIntoBookID)
 }
 
 // fragFile is the part of a book_file row the fixer reads.
@@ -441,11 +448,17 @@ func hashesDisagree(a, b fragFile) bool {
 }
 
 // provenMatch: evidence strong enough to repoint a parent row or retire a
-// copy. A name-and-size match on its own is not.
-func provenMatch(evidence string) bool {
+// copy. A name-and-size match on its own never is. For a moved row a shared
+// import folder or an equal duration also proves it (the parent's file is
+// gone, so there is nothing else left to compare); a copy, whose parent file
+// is still on disk, is proven only by the import path (with an equal size on
+// disk) or a hash.
+func provenMatch(kind, evidence string) bool {
 	switch evidence {
-	case fragEvImportPath, fragEvHash, fragEvDone, fragEvNameSizeFolder, fragEvNameSizeDuration:
+	case fragEvImportPath, fragEvHash, fragEvDone:
 		return true
+	case fragEvNameSizeFolder, fragEvNameSizeDuration:
+		return kind == fragClassMoved
 	}
 	return false
 }
@@ -527,6 +540,8 @@ type fragLibrary struct {
 	files   map[string][]fragFile // by book id
 	series  map[int]string
 	authors map[int]string
+	// reattributed lists the books attributeEmptied gave a row back to.
+	reattributed []string
 }
 
 func newFragLibrary() *fragLibrary {
@@ -542,7 +557,7 @@ func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
 	for i := range books {
 		b := &books[i]
 		lib.books[b.ID] = fragBookFrom(b.ID, b.Title, b.FilePath, b.AuthorID, b.SeriesID, b.IsSoftDeleted(),
-			b.LibraryState, b.IsPrimaryVersion, b.ITunesPersistentID)
+			b.LibraryState, b.IsPrimaryVersion, b.ITunesPersistentID, b.MergedIntoBookID)
 	}
 	cores, err := store.GetAllBookFilesCore()
 	if err != nil {
@@ -596,14 +611,19 @@ func (lib *fragLibrary) moveRow(id, from, to string) bool {
 	return false
 }
 
+// fragReassign is one journaled, unreverted move of a book_file row onto
+// owner: the row and the book it came from.
+type fragReassign struct{ row, from string }
+
 // emptiedRowOn finds the row a partly applied consolidation moved off book z:
 // the row now owned by another live book at z's own path, whose move from z
-// is journaled (book_file_reassign, OldValue z) and not reverted. "" when
-// there is none.
-func emptiedRowOn(lib *fragLibrary, hist FragmentRepairReader, z fragBook) (owner, rowID string, err error) {
+// is journaled (book_file_reassign, OldValue z) and not reverted. It also
+// returns every other unreverted reassign onto that owner under the SAME
+// operation (the rest of the group's moves). owner is "" when there is none.
+func emptiedRowOn(lib *fragLibrary, hist FragmentRepairReader, z fragBook) (owner, rowID string, same []fragReassign, err error) {
 	owners, err := database.BookFileRowsAtPathStrict(hist, z.FilePath)
 	if err != nil {
-		return "", "", fmt.Errorf("who owns %s: %w", z.FilePath, err)
+		return "", "", nil, fmt.Errorf("who owns %s: %w", z.FilePath, err)
 	}
 	for _, o := range owners {
 		if o.BookID == z.ID {
@@ -615,16 +635,27 @@ func emptiedRowOn(lib *fragLibrary, hist FragmentRepairReader, z fragBook) (owne
 		}
 		changes, err := hist.GetBookChanges(o.BookID)
 		if err != nil {
-			return "", "", fmt.Errorf("changes of %s: %w", o.BookID, err)
+			return "", "", nil, fmt.Errorf("changes of %s: %w", o.BookID, err)
+		}
+		reassign := func(c *database.OperationChange) (string, bool) {
+			if c.ChangeType != undo.ChangeTypeBookFileReassign || c.BookID != o.BookID || c.RevertedAt != nil {
+				return "", false
+			}
+			return strings.CutPrefix(c.FieldName, "book_file:")
 		}
 		for _, c := range changes {
-			if c.ChangeType == undo.ChangeTypeBookFileReassign && c.FieldName == "book_file:"+o.ID &&
-				c.OldValue == z.ID && c.BookID == o.BookID && c.RevertedAt == nil {
-				return o.BookID, o.ID, nil
+			if id, ok := reassign(c); !ok || id != o.ID || c.OldValue != z.ID {
+				continue
 			}
+			for _, d := range changes {
+				if id, ok := reassign(d); ok && d.OperationID == c.OperationID && d.OldValue != z.ID {
+					same = append(same, fragReassign{row: id, from: d.OldValue})
+				}
+			}
+			return o.BookID, o.ID, same, nil
 		}
 	}
-	return "", "", nil
+	return "", "", nil, nil
 }
 
 // ---- plan -----------------------------------------------------------------
@@ -653,7 +684,7 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 	if err != nil {
 		return nil, err
 	}
-	if err := f.attributeEmptied(ctx, rep, lib, hist, only); err != nil {
+	if err := f.attributeEmptied(ctx, rep, lib, store, hist, only); err != nil {
 		return nil, err
 	}
 	ix := newFragIndex()
@@ -707,14 +738,43 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 			live = append(live, c)
 		}
 	}
-	return f.buildRows(lib, ix, live), nil
+	rows := f.buildRows(lib, ix, live)
+	return append(rows, strandedRows(lib, rows)...), nil
+}
+
+// strandedRows lists, as held rows, every book attributeEmptied gave a row
+// back to that no row of the plan includes: an emptied member of a partly
+// applied group that no longer re-forms. It is listed so the owner can see it,
+// never applied.
+func strandedRows(lib *fragLibrary, rows []repairs.Row) []repairs.Row {
+	in := map[string]bool{}
+	for _, r := range rows {
+		for _, id := range r.BookIDs {
+			in[id] = true
+		}
+	}
+	var out []repairs.Row
+	for _, id := range lib.reattributed {
+		if in[id] {
+			continue
+		}
+		in[id] = true
+		b := lib.books[id]
+		why := "an interrupted consolidation moved this book's file onto another book and did not finish; the group no longer re-forms"
+		out = append(out, repairs.Row{RowID: "stranded:" + id, Class: fragClassHeld, BookIDs: []string{id},
+			Title: b.Title, Author: lib.authorName(b), Risk: repairs.RiskReview,
+			Members: []repairs.RowMember{member(lib, b, "fragment")}, Reason: why,
+			Skipped: fragSkipStranded, SkipReason: why + "; revert that apply operation or resolve by hand",
+			Fingerprint: fragFingerprint("stranded", id)})
+	}
+	return out
 }
 
 // attributeEmptied puts back, in the snapshot only, each row a partly applied
 // no-parent group moved off a member it did not get to retire: that member is
 // then a single-file candidate again and the group re-forms with the same
 // survivor, instead of the member being stranded as a live empty book.
-func (f *fragmentFixer) attributeEmptied(ctx context.Context, rep registry.Reporter, lib *fragLibrary, hist FragmentRepairReader, only map[string]bool) error {
+func (f *fragmentFixer) attributeEmptied(ctx context.Context, rep registry.Reporter, lib *fragLibrary, store OpsStore, hist FragmentRepairReader, only map[string]bool) error {
 	var empties []fragBook
 	for id, b := range lib.books {
 		if !b.SoftDeleted && b.FilePath != "" && len(lib.files[id]) == 0 && (only == nil || only[id]) {
@@ -725,7 +785,14 @@ func (f *fragmentFixer) attributeEmptied(ctx context.Context, rep registry.Repor
 		return nil
 	}
 	sort.Slice(empties, func(i, j int) bool { return empties[i].ID < empties[j].ID })
-	type found struct{ owner, row string }
+	type retiredMember struct {
+		row  string
+		book fragBook
+	}
+	type found struct {
+		owner, row string
+		retired    []retiredMember
+	}
 	res := make([]found, len(empties))
 	idx := make([]int, len(empties))
 	for i := range idx {
@@ -735,11 +802,27 @@ func (f *fragmentFixer) attributeEmptied(ctx context.Context, rep registry.Repor
 	// Each worker writes only res[i]; the snapshot is changed afterwards.
 	if err := registry.RunItems(ctx, rep, idx, func(_ context.Context, i int) error {
 		defer done.Add(1)
-		owner, row, err := emptiedRowOn(lib, hist, empties[i])
+		owner, row, same, err := emptiedRowOn(lib, hist, empties[i])
 		if err != nil {
 			return err
 		}
-		res[i] = found{owner, row}
+		fd := found{owner: owner, row: row}
+		// The same run may already have retired other members into the
+		// owner. Only members that the SAME operation moved onto the owner
+		// and that name it as merged_into qualify, never a book some other
+		// merge folded into it. They are read one by one: the library listing
+		// leaves soft-deleted books out.
+		for _, m := range same {
+			b, err := store.GetBookByID(m.from)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", m.from, err)
+			}
+			if b == nil || !b.IsSoftDeleted() || b.MergedIntoBookID == nil || *b.MergedIntoBookID != owner {
+				continue
+			}
+			fd.retired = append(fd.retired, retiredMember{row: m.row, book: fragBookOf(b)})
+		}
+		res[i] = fd
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency: runtime.NumCPU(),
@@ -749,8 +832,19 @@ func (f *fragmentFixer) attributeEmptied(ctx context.Context, rep registry.Repor
 		return fmt.Errorf("%s: emptied books: %w", fragFixerID, err)
 	}
 	for i, r := range res {
-		if r.row != "" {
-			lib.moveRow(r.row, r.owner, empties[i].ID)
+		if r.row == "" {
+			continue
+		}
+		lib.moveRow(r.row, r.owner, empties[i].ID)
+		lib.reattributed = append(lib.reattributed, empties[i].ID)
+		// Members the same run already retired are put back too (in the
+		// snapshot only), so the group re-forms whole.
+		for _, m := range r.retired {
+			if lib.moveRow(m.row, r.owner, m.book.ID) {
+				m.book.SoftDeleted = false
+				lib.books[m.book.ID] = m.book
+				lib.reattributed = append(lib.reattributed, m.book.ID)
+			}
 		}
 	}
 	return nil
@@ -857,7 +951,7 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 				continue
 			}
 		}
-		if !provenMatch(p.Evidence) {
+		if !provenMatch(kind, p.Evidence) {
 			switch kind {
 			case fragClassCopy:
 				kind = fragRowCopyUnproven
@@ -981,7 +1075,7 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		// finished repoint turns "import path" into "already points at it"
 		// for the same decision.
 		fpParts = append(fpParts, strings.Join([]string{p.Frag.Book.ID, p.Frag.File.ID, p.Frag.File.Path, p.Parent.ID,
-			strconv.FormatBool(provenMatch(p.Evidence))}, "|"))
+			strconv.FormatBool(provenMatch(rowKind, p.Evidence))}, "|"))
 	}
 	sort.Strings(r.BookIDs)
 	n := len(pairs)
