@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-09-29
 
@@ -1333,10 +1333,10 @@ func (s *crownFailsOnce) GetBooksByVersionGroup(groupID string) ([]database.Book
 	return s.PebbleStore.GetBooksByVersionGroup(groupID)
 }
 
-// TestFragmentFixer_RetryCrownsAfterACrownFailure (F1): the first revert pass
-// restores the retired fragment and its flag, then Crown fails, leaving two
-// primaries. The retry finds the demote already restored and, because this
-// operation's soft-delete was written and reverted in the first pass, crowns.
+// TestFragmentFixer_RetryCrownsAfterACrownFailure (F1, F5): the first revert
+// pass restores the retired fragment and its flag, then Crown fails, leaving
+// two primaries. The retry finds the demote already restored and, because the
+// apply journaled its hand-off of the group (book_primary_handoff), crowns.
 func TestFragmentFixer_RetryCrownsAfterACrownFailure(t *testing.T) {
 	f := newFragFixture(t)
 	f.seed(t)
@@ -1362,6 +1362,17 @@ func TestFragmentFixer_RetryCrownsAfterACrownFailure(t *testing.T) {
 	f.plan(t, "op-plan")
 	out := f.apply(t, "op-plan", "op-apply", []string{"moved:" + f.ids["parent"]}, nil)
 	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	changes, err := f.s.GetOperationChanges("op-apply")
+	require.NoError(t, err)
+	handOffs := 0
+	for _, c := range changes {
+		if c.ChangeType == undo.ChangeTypeBookPrimaryHandoff {
+			handOffs++
+			require.Equal(t, frag, c.BookID)
+			require.Equal(t, group, c.NewValue)
+		}
+	}
+	require.Equal(t, 1, handOffs, "the apply journals its hand-off")
 
 	failing := &crownFailsOnce{PebbleStore: f.s, group: group}
 	failing.armed.Store(true)
@@ -1384,4 +1395,64 @@ func TestFragmentFixer_RetryCrownsAfterACrownFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sb.IsPrimaryVersion)
 	require.False(t, *sb.IsPrimaryVersion, "the retry crowned the fragment")
+}
+
+// TestFragmentFixer_RetryAfterCutOffRetireStillLeavesGroupAlone (F5, review
+// LD3): a retire cut off before it wrote anything. A first revert pass
+// counted its soft-delete (and every other row but the demote) already
+// restored and marked them reverted; the demote hit a transient error. The
+// retry finds the demote already restored, and with no hand-off row the
+// operation never changed the group's flags, so it crowns nothing.
+func TestFragmentFixer_RetryAfterCutOffRetireStillLeavesGroupAlone(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag, parent := f.ids["fragF"], f.ids["parent"]
+	group := "vg-cut-retry"
+	_, err := f.s.ModifyBook(frag, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = nil
+		return nil
+	})
+	require.NoError(t, err)
+	sibPath := f.file(t, "lib/Sibling/Sibling edition.m4b", 5000)
+	sib := f.book(t, "sibling", "Eldest, another edition", sibPath, nil)
+	f.row(t, "sib", sib, sibPath, "Sibling edition.m4b", 5000, 36000, 0)
+	f.organized(t, sib)
+	_, err = f.s.ModifyBook(sib, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = nil
+		return nil
+	})
+	require.NoError(t, err)
+	fb, err := f.s.GetBookByID(frag)
+	require.NoError(t, err)
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut-retry")
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookMergedInto, "merged_into_book_id", "", parent))
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPathUpdate, "file_path", fb.FilePath, ""))
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(time.Now())))
+
+	// The first pass's outcome: every row but the demote marked reverted.
+	changes, err := f.s.GetOperationChanges("op-cut-retry")
+	require.NoError(t, err)
+	var done []string
+	for _, c := range changes {
+		if c.ChangeType != undo.ChangeTypeBookPrimaryDemote {
+			done = append(done, c.ID)
+		}
+	}
+	require.NoError(t, f.s.MarkOperationChangesReverted("op-cut-retry", done))
+
+	report, err := undo.PreflightUndoConflicts(f.s, "op-cut-retry")
+	require.NoError(t, err)
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-cut-retry")
+	require.NoError(t, err)
+	require.Equal(t, 1, rr.AlreadyRestored, "%+v", rr)
+	require.Equal(t, rr.AlreadyRestored, report.AlreadyRestored)
+	sb, err := f.s.GetBookByID(sib)
+	require.NoError(t, err)
+	require.Nil(t, sb.IsPrimaryVersion, "the retry crowned a group the operation never touched")
+	fb, err = f.s.GetBookByID(frag)
+	require.NoError(t, err)
+	require.Nil(t, fb.IsPrimaryVersion, "the fragment's flag was written")
 }

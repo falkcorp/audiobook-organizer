@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-29
 
@@ -102,6 +102,15 @@ const (
 	// ChangeTypeBookPrimaryDemote: a retired book's is_primary_version went
 	// OldValue ("true", "false", or "" for unset) -> "false". Restorable.
 	ChangeTypeBookPrimaryDemote = "book_primary_demote"
+	// ChangeTypeBookPrimaryHandoff: after retiring BookID (a primary it
+	// demoted), the operation gave the book's version group (NewValue) a
+	// primary again (versionprimary.EnsureSinglePrimary). A ledger note,
+	// written only once the hand-off succeeded, so it is evidence the
+	// operation changed the group's flags: the primary demote's revert
+	// re-crowns BookID over an already-restored flag only when this row
+	// exists (undo.RevertPlan.HandedOff). Restorable with nothing to write:
+	// the demote row's revert (versionprimary.Crown) undoes the hand-off.
+	ChangeTypeBookPrimaryHandoff = "book_primary_handoff"
 	// ChangeTypeExternalIDReassign: one external id, named in FieldName as
 	// "external_id:<source>/<id>", moved from the book BookID (== OldValue) to
 	// the book NewValue. Restorable: it moves back while it still names
@@ -623,7 +632,8 @@ func NotRestorableLabel(c *database.OperationChange) string {
 			return ""
 		}
 		return c.ChangeType + ":(no book_file id)"
-	case ChangeTypeBookPathUpdate, ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote:
+	case ChangeTypeBookPathUpdate, ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote,
+		ChangeTypeBookPrimaryHandoff:
 		return ""
 	case ChangeTypeBookMergedInto:
 		if c.NewValue == "" {
