@@ -211,13 +211,13 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		"owner-proposal": repairs.SkipOwnerManual,
 		"bare13":         junkSkipNeedsManual,
 		"unabridged":     junkSkipNeedsManual,
-		"generic":       junkSkipNeedsManual,
-		"locked":        junkSkipUserLocked,
-		"manual":        junkSkipNeedsManual,
-		"person":        junkSkipNeedsManual,
-		"bf-title":      repairs.SkipOwnerManual,
-		"itunes":        repairs.SkipITunes,
-		"dw-series":     repairs.SkipOwnerManual,
+		"generic":        junkSkipNeedsManual,
+		"locked":         junkSkipUserLocked,
+		"manual":         junkSkipNeedsManual,
+		"person":         junkSkipNeedsManual,
+		"bf-title":       repairs.SkipOwnerManual,
+		"itunes":         repairs.SkipITunes,
+		"dw-series":      repairs.SkipOwnerManual,
 	}
 	for name, want := range skipped {
 		r, ok := rows[name]
