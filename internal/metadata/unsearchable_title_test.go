@@ -1,5 +1,5 @@
 // file: internal/metadata/unsearchable_title_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6da04422-761b-4fbf-a25d-fd032c6f3457
 // last-edited: 2026-09-28
 
@@ -86,6 +86,7 @@ func TestIsSectionHeadingTitle(t *testing.T) {
 		{"Episode IV", true},
 		{"Act One", true},
 		{"Episode Final", true},
+		{"Vol. Last", true},
 		{"Prologue", true},
 		{"Epilogue", true},
 		{"Introduction", true},
