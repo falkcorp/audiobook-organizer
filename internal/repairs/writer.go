@@ -1,7 +1,7 @@
 // file: internal/repairs/writer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package repairs
 
@@ -24,10 +24,13 @@ import (
 const ChangeTypeApplyIncomplete = "apply_incomplete"
 
 // ChangeTypeApplyOpJournaled matches metafetch.ChangeTypeApplyOpJournaled: a
-// Writer wired to an op journal (WithJournal) writes it into every history
-// batch, and UndoLastApply refuses such a batch. The book fields a Repairs
-// apply records are one part of a step whose other parts (book_file rows moved
-// or repointed, books retired) only the operation revert puts back.
+// Writer wired to an op journal (WithJournal) writes it into the history
+// batch of every book this writer has journaled an operation change for, and
+// UndoLastApply refuses such a batch. That book's fields are one part of a
+// step whose other parts (book_file rows moved or repointed, books retired)
+// only the operation revert puts back. A book the apply only Modify'd, with
+// nothing journaled (the version-group-primary fixer's flag writes), gets no
+// marker: its batch is undone field by field, as before.
 const ChangeTypeApplyOpJournaled = "apply_op_journaled"
 
 // BookModifier is the one book write primitive a fixer gets.
@@ -49,9 +52,9 @@ type HistoryRecorder interface {
 // write it describes, all under one batch id per call, so "undo last apply"
 // on a book reverts that call's change to it. If a row cannot be recorded, an
 // apply_incomplete marker is written so undo refuses the batch rather than
-// half-reverting it. A Writer wired to an op journal marks every batch
-// apply_op_journaled instead: that apply is undone from its operation, never
-// field by field. Safe for concurrent use.
+// half-reverting it. A batch on a book the Writer has journaled an operation
+// change for is also marked apply_op_journaled: that apply is undone from its
+// operation, never field by field. Safe for concurrent use.
 type Writer struct {
 	store   BookModifier
 	history HistoryRecorder
@@ -145,7 +148,7 @@ func (w *Writer) recordHistory(bookID string, before, after *database.Book) []st
 		}
 		w.historyRows.Add(1)
 	}
-	if len(changed) > 0 && w.journal != nil {
+	if len(changed) > 0 && w.journaledBook(bookID) {
 		if err := w.history.RecordMetadataChange(&database.MetadataChangeRecord{
 			BookID: bookID, Field: "apply", ChangeType: ChangeTypeApplyOpJournaled,
 			Source: w.source, ChangedAt: now, BatchID: batchID,

@@ -952,3 +952,28 @@ func TestFragmentFixer_RevertCrownsARetiredPrimary(t *testing.T) {
 	require.NotNil(t, sb.IsPrimaryVersion)
 	require.False(t, *sb.IsPrimaryVersion, "the promoted sibling is demoted again")
 }
+
+// TestWriter_OpJournaledMarkerOnlyOnJournaledBooks (N1): in one journaled
+// writer, a book with a journaled step gets the marker (undo refused), a book
+// that was only Modify'd does not (undo works).
+func TestWriter_OpJournaledMarkerOnlyOnJournaledBooks(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	a, b := f.ids["fragF"], f.ids["fragH"]
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-mixed")
+	require.NoError(t, w.Step(a, undo.ChangeTypeBookPathUpdate, "file_path", "x", "y", func() error {
+		_, err := w.Modify(a, func(bk *database.Book) error { bk.Title = "Journaled"; return nil })
+		return err
+	}))
+	_, err := w.Modify(b, func(bk *database.Book) error { bk.Title = "Plain"; return nil })
+	require.NoError(t, err)
+
+	svc := metafetch.NewService(f.s)
+	_, err = svc.UndoLastApply(a)
+	require.ErrorIs(t, err, metafetch.ErrApplyUndoneFromOperation)
+	_, err = svc.UndoLastApply(b)
+	require.NoError(t, err)
+	got, err := f.s.GetBookByID(b)
+	require.NoError(t, err)
+	require.Equal(t, "01", got.Title)
+}

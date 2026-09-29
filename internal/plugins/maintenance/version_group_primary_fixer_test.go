@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7b2d9e46-0c81-4a37-b5f9-1e6c3a8d4f20
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package maintenance
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
@@ -310,8 +311,8 @@ func TestRepairsOps_ApplyWritesThroughTheOpWriterWithHistory(t *testing.T) {
 	require.Equal(t, "donor description", *a.Description)
 	require.Equal(t, "Keep", *a.Narrator)
 
-	// Each journaled batch also carries one apply_op_journaled marker, which
-	// sends "undo last apply" to the operation revert.
+	// This fixer journals no operation change, so its batches carry no
+	// apply_op_journaled marker: "undo last apply" must keep working on them.
 	fieldRows := func(book string) (rows []database.MetadataChangeRecord, markers int) {
 		hist, err := f.s.GetBookChangeHistory(book, 100)
 		require.NoError(t, err)
@@ -326,15 +327,21 @@ func TestRepairsOps_ApplyWritesThroughTheOpWriterWithHistory(t *testing.T) {
 	}
 	hist, markers := fieldRows("B")
 	require.Len(t, hist, 1)
-	require.Equal(t, 1, markers)
+	require.Zero(t, markers)
 	require.Equal(t, "is_primary_version", hist[0].Field)
 	require.Equal(t, vgPrimaryFixerID, hist[0].Source)
 	require.True(t, strings.HasPrefix(hist[0].BatchID, "repairs-"))
 	histA, markers := fieldRows("A")
 	require.Len(t, histA, 3, "one row per carried field")
-	require.Equal(t, 1, markers)
+	require.Zero(t, markers)
 	// A: 3 carried fields; B: flag true→false; C: flag nil→false.
 	require.Equal(t, 5, res.HistoryRows)
+
+	// Per-book undo of the Repairs apply works (the batch is not marked).
+	undone, err := metafetch.NewService(f.s).UndoLastApply("B")
+	require.NoError(t, err)
+	require.NotEmpty(t, undone.Reverted)
+	require.Equal(t, "true", f.flag(t, "B"), "B's flag is back")
 }
 
 func TestRepairsOps_ApplyRefusesAGroupChangedSincePlan(t *testing.T) {
