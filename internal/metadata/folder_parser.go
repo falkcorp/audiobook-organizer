@@ -1,5 +1,5 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
 // last-edited: 2026-09-28
 
@@ -118,6 +118,21 @@ func ExtractMetadataFromFolder(dirPath string) (*FolderMetadata, error) {
 	for i := n - 3; i >= 0 && i >= n-5; i-- {
 		seg := segments[i]
 		if tryParseAuthorSegment(seg, fm) {
+			break
+		}
+		// A segment that is author-SHAPED but work-NAMED ("The Stormlight
+		// Archive") ends the walk. Walking past it took the next folder out,
+		// which in "/mnt/Science Fiction/The Stormlight Archive/The Way of
+		// Kings/Disc 1" is a GENRE, as the author -- and AssembleBookMetadata
+		// does not read AuthorConf, so a lower confidence would change nothing.
+		// COST, accepted: in "<author>/<series>/<title>/<disc>" the author
+		// folder is now not reached and the author comes from tags or AI
+		// instead. An absent author is recoverable; a wrong one is not.
+		if looksLikeAuthorSegment(seg) && personname.LooksLikeWorkTitle(seg) {
+			if fm.SeriesConf == ConfidenceNone && personname.HasSeriesMarker(seg) {
+				fm.SeriesName = seg
+				fm.SeriesConf = ConfidenceLow
+			}
 			break
 		}
 	}

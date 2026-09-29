@@ -1,5 +1,5 @@
 // file: internal/personname/author_credit_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3c1d3f97-1705-4519-a344-cc8eb9f0d038
 // last-edited: 2026-09-28
 
@@ -363,7 +363,6 @@ func TestLooksLikeWorkTitle(t *testing.T) {
 		{"An Ember in the Ashes", true},
 		// Series / volume words as whole words, anywhere.
 		{"Dune Chronicles", true},
-		{"Mistborn Saga", true},
 		{"Wheel of Time Book 1", true},
 		{"Expanse Series", true},
 		{"Earthsea Cycle", true},
@@ -379,6 +378,13 @@ func TestLooksLikeWorkTitle(t *testing.T) {
 		// Whole words, never prefixes: each contains a work word as a prefix.
 		{"Jeffrey Archer", false},
 		{"Carl Sagan", false},
+		// "saga" is a surname and is not a work word (measured; see workWords).
+		{"Junichi Saga", false},
+		// A padded volume number is a series marker; an unpadded one is not,
+		// because "Catch 22" and "Fahrenheit 451" are titles.
+		{"The Expanse 01", true},
+		{"Discworld #3", true},
+		{"Catch 22", false},
 		{"Booker T. Washington", false},
 		{"Volker Kutscher", false},
 		// "A" before a single letter is initials.
@@ -394,16 +400,25 @@ func TestLooksLikeWorkTitle(t *testing.T) {
 	}
 }
 
-// TestLooksLikeWorkTitleAcceptedCost pins the one real name the article rule
-// is known to refuse, so the cost is visible rather than discovered. "An Na" is
-// a Korean-American novelist; refusing her yields NO author (AI nomination gets
-// the book), never a wrong one.
+// TestLooksLikeWorkTitleAcceptedCost pins the known real names the article
+// rule refuses AS AUTHORS. Refusal as an author must not make them a series or
+// a title: that is the caller's contract, asserted where it is kept --
+// authorname.TestParseDashFilename and the extractFromFilename /
+// extractInfoFromPath end-to-end tables ("An Na - A Step from Heaven" gives
+// title "A Step from Heaven", no author, NO series).
 func TestLooksLikeWorkTitleAcceptedCost(t *testing.T) {
-	if !LooksLikeWorkTitle("An Na") {
-		t.Fatal(`"An Na" is no longer refused; update LooksLikeWorkTitle's KNOWN COST note`)
-	}
-	if _, author, ok := ChooseAuthorSide("An Na", "A Step from Heaven", PreferRightOnTie); ok || author != "" {
-		t.Errorf("ChooseAuthorSide(An Na, ...) = (%q, %v), want refusal", author, ok)
+	for _, name := range []string{"An Na", "A Johnston", "The Arbinger Institute"} {
+		if !LooksLikeWorkTitle(name) {
+			t.Errorf("%q is no longer refused; update the KNOWN COST notes", name)
+		}
+		// ...but it is still credit-SHAPED, which is what keeps it out of the
+		// series and title slots in the caller.
+		if !LooksLikeAuthorCreditShape(name) {
+			t.Errorf("LooksLikeAuthorCreditShape(%q) = false; the caller would file it as a series", name)
+		}
+		if HasSeriesMarker(name) {
+			t.Errorf("HasSeriesMarker(%q) = true; the caller would file it as a series", name)
+		}
 	}
 }
 

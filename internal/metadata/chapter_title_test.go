@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0cc97d6f-e2ee-42d6-8233-ed4cec61f5ab
 // last-edited: 2026-09-28
 
@@ -150,6 +150,18 @@ func TestExtractFromFilename_SeriesTitleIsNotAnAuthor(t *testing.T) {
 		{"/lib/import/J.R.R. Tolkien - The Hobbit.mp3", "J.R.R. Tolkien", "The Hobbit", ""},
 		{"/lib/import/Discworld 01 - The Colour of Magic.mp3", "", "The Colour of Magic", "Discworld 01"},
 		{"/lib/import/A J Finn - The Woman in the Window.mp3", "A J Finn", "The Woman in the Window", ""},
+		{"/lib/import/The Expanse 01 - Leviathan Wakes.mp3", "", "Leviathan Wakes", "The Expanse 01"},
+		{"/lib/import/Mistborn Book 1 - Brandon Sanderson.mp3", "Brandon Sanderson", "Mistborn Book 1", ""},
+		// Refused credits are neither series nor title.
+		{"/lib/import/An Na - A Step from Heaven.mp3", "", "A Step from Heaven", ""},
+		{"/lib/import/A Step from Heaven - An Na.mp3", "", "A Step from Heaven", ""},
+		{"/lib/import/The Arbinger Institute - Leadership and Self-Deception.mp3", "", "Leadership and Self-Deception", ""},
+		{"/lib/import/The Dark Tower - The Gunslinger.mp3", "", "The Dark Tower - The Gunslinger", ""},
+		// "Saga" is a surname, not a series word.
+		{"/lib/import/Memories of Silk and Straw - Junichi Saga.mp3", "Junichi Saga", "Memories of Silk and Straw", ""},
+		{"/lib/import/Junichi Saga - Memories of Silk and Straw.mp3", "Junichi Saga", "Memories of Silk and Straw", ""},
+		// KNOWN LIMIT: the same shape as "The Stand - Stephen King".
+		{"/lib/import/The Hunger Games - Catching Fire.mp3", "Catching Fire", "The Hunger Games", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -180,7 +192,25 @@ func TestExtractMetadataFromFolder_SeriesFolderIsNotAnAuthor(t *testing.T) {
 			t.Errorf("%s: authors = %q, want none", dir, fm.Authors)
 		}
 	}
-	fm, err := ExtractMetadataFromFolder("/lib/books/Brandon Sanderson/The Way of Kings/Disc 1")
+	// A work-named segment ENDS the author walk: going past it took a genre
+	// folder as the author. The series-marked segment is recorded as the series.
+	fm, err := ExtractMetadataFromFolder("/mnt/Science Fiction/The Stormlight Archive/The Way of Kings/Disc 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fm.Authors) != 0 || fm.SeriesName != "The Stormlight Archive" {
+		t.Errorf("genre folder: authors = %q series = %q, want none / The Stormlight Archive", fm.Authors, fm.SeriesName)
+	}
+	// COST, pinned: an author folder beyond a series folder is not reached.
+	fm, err = ExtractMetadataFromFolder("/lib/Brandon Sanderson/The Stormlight Archive/The Way of Kings/Disc 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fm.Authors) != 0 {
+		t.Errorf("author/series/title/disc: authors = %q, want none (walk stops at the series)", fm.Authors)
+	}
+
+	fm, err = ExtractMetadataFromFolder("/lib/books/Brandon Sanderson/The Way of Kings/Disc 1")
 	if err != nil {
 		t.Fatal(err)
 	}
