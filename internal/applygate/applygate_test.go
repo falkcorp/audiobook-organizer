@@ -1,12 +1,14 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
-// last-edited: 2026-09-27
+// last-edited: 2026-09-29
 
 package applygate
 
 import (
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -251,36 +253,55 @@ var mainRefusedCorpus = struct {
 // (the gate metadata.upgrade and an unpinned batch apply run) as
 // transcription_mismatch, and never earns the relaxed MinScoreAudioConfirmed
 // floor. A score of 0.99 keeps the score leg from being the reason.
+//
+// About 175k gate evaluations: 672 s on one core under -race, the long pole of
+// the whole CI test run. Each (candidate title, heard title) pair is its own
+// parallel subtest; the gate functions are pure, and the refused tally is an
+// atomic read after the group, once every subtest has finished.
 func TestUnreviewedPathsRefuseEveryPairMainRefused(t *testing.T) {
+	var refused atomic.Int64
+	t.Run("pairs", func(t *testing.T) {
+		for ci, ct := range mainRefusedCorpus.titles {
+			for hi, ht := range mainRefusedCorpus.titles {
+				t.Run(fmt.Sprintf("c%02d_h%02d", ci, hi), func(t *testing.T) {
+					t.Parallel()
+					refused.Add(int64(refusedPairsFor(t, ct, ht)))
+				})
+			}
+		}
+	})
+	if n := refused.Load(); n < 1000 {
+		t.Fatalf("corpus produced only %d refused pairs; it no longer exercises the rule", n)
+	}
+}
+
+// refusedPairsFor checks every author pair and series position for one
+// (candidate title, heard title) pair and returns how many origin/main refused.
+func refusedPairsFor(t *testing.T, ct, ht string) int {
+	t.Helper()
 	refused := 0
-	for _, ct := range mainRefusedCorpus.titles {
-		for _, ht := range mainRefusedCorpus.titles {
-			for _, ca := range mainRefusedCorpus.authors {
-				for _, ha := range mainRefusedCorpus.authors {
-					if util.MainTranscriptionConfirms(ct, ca, ht, ha) {
-						continue
-					}
-					for _, pos := range []string{"", "1", "2", "3"} {
-						refused++
-						book := &database.Book{TranscribedTitle: strp(ht), TranscribedAuthor: strp(ha)}
-						c := &metafetch.MetadataCandidate{Title: ct, Author: ca, SeriesPosition: pos, Score: 0.99}
-						if TranscriptionConfirms(book, c) {
-							t.Fatalf("TranscriptionConfirms accepted %q/%q (pos %q) ~ heard %q/%q, which origin/main refused", ct, ca, pos, ht, ha)
-						}
-						for _, v := range []Verdict{Evaluate(book, snap(book), database.ComputeBookRuntime(book, nil), c, nil), EvaluateInBatch(book, snap(book), database.ComputeBookRuntime(book, nil), c, nil, nil)} {
-							if v.Allowed || v.AudioConfirmed || v.ScoreFloor != MinScore || v.ScoreReason != ReasonTranscriptionMismatch {
-								t.Fatalf("gate on %q/%q (pos %q) ~ heard %q/%q: allowed=%v audio=%v floor=%v score_reason=%q; origin/main refused it",
-									ct, ca, pos, ht, ha, v.Allowed, v.AudioConfirmed, v.ScoreFloor, v.ScoreReason)
-							}
-						}
+	for _, ca := range mainRefusedCorpus.authors {
+		for _, ha := range mainRefusedCorpus.authors {
+			if util.MainTranscriptionConfirms(ct, ca, ht, ha) {
+				continue
+			}
+			for _, pos := range []string{"", "1", "2", "3"} {
+				refused++
+				book := &database.Book{TranscribedTitle: strp(ht), TranscribedAuthor: strp(ha)}
+				c := &metafetch.MetadataCandidate{Title: ct, Author: ca, SeriesPosition: pos, Score: 0.99}
+				if TranscriptionConfirms(book, c) {
+					t.Fatalf("TranscriptionConfirms accepted %q/%q (pos %q) ~ heard %q/%q, which origin/main refused", ct, ca, pos, ht, ha)
+				}
+				for _, v := range []Verdict{Evaluate(book, snap(book), database.ComputeBookRuntime(book, nil), c, nil), EvaluateInBatch(book, snap(book), database.ComputeBookRuntime(book, nil), c, nil, nil)} {
+					if v.Allowed || v.AudioConfirmed || v.ScoreFloor != MinScore || v.ScoreReason != ReasonTranscriptionMismatch {
+						t.Fatalf("gate on %q/%q (pos %q) ~ heard %q/%q: allowed=%v audio=%v floor=%v score_reason=%q; origin/main refused it",
+							ct, ca, pos, ht, ha, v.Allowed, v.AudioConfirmed, v.ScoreFloor, v.ScoreReason)
 					}
 				}
 			}
 		}
 	}
-	if refused < 1000 {
-		t.Fatalf("corpus produced only %d refused pairs; it no longer exercises the rule", refused)
-	}
+	return refused
 }
 
 // TestTranscriptionConfirms_ReviewerFalsePositivesRefuse: the pairs the
