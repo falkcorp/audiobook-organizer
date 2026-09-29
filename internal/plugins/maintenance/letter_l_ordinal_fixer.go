@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/letter_l_ordinal_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e4b7c21-6a3f-4d58-b1e0-2c8d5f9a3b47
 // last-edited: 2026-09-28
 
@@ -127,7 +127,7 @@ func (f *letterLOrdinalFixer) evaluate(b database.BookCore) (repairs.Row, error)
 	}
 	r.Proposed = map[string]string{"title": fixed}
 	r.Reason = "the ordinal is the letter l, not the digit 1 / roman I"
-	r.Detail = &junkDecision{bookID: b.ID, oldTitle: b.Title, newTitle: fixed, authorID: b.AuthorID}
+	r.Detail = &junkDecision{bookID: b.ID, oldTitle: b.Title, newTitle: fixed}
 	r.Fingerprint = junkFingerprint(r, "letter-l")
 	return r, nil
 }
@@ -138,5 +138,5 @@ func (f *letterLOrdinalFixer) Apply(_ context.Context, w *repairs.Writer, fresh 
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", letterLOrdinalFixerID, fresh.RowID)
 	}
-	return writeTitleOnly(w, d.bookID, d.oldTitle, d.newTitle)
+	return writeTitleOnly(w, f.p.deps.OpsStore(), d.bookID, d.oldTitle, d.newTitle)
 }

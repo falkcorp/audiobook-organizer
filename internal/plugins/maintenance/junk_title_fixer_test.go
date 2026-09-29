@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
 // last-edited: 2026-09-28
 
@@ -70,8 +70,27 @@ func newJunkLib(t *testing.T) *junkLib {
 		Candidates: []json.RawMessage{
 			json.RawMessage(`{"title":"Wrong Author Book","author":"Someone Else","score":0.95}`),
 			json.RawMessage(`{"title":"Low Score Book","author":"Author A","score":0.2}`),
+			json.RawMessage(`{"title":"Second Best","author":"Author A","score":0.6}`),
 			json.RawMessage(`{"title":"Candidate Title","author":"author a","score":0.8}`),
 		}}))
+	// The cached search ran on "01 - Eldest" and its top hit is the series'
+	// first book: the stripped title wins and Eragon is refused.
+	paolini, err := st.CreateAuthor("Christopher Paolini")
+	require.NoError(t, err)
+	el := add("eldest-prefix", "01 - Eldest", "/lib/Christopher Paolini/Eldest/01 - Eldest.mp3", &paolini.ID, nil,
+		"/lib/Christopher Paolini/Eldest/01 - Eldest.mp3")
+	require.NoError(t, st.PutMetadataCache(&database.MetadataCandidateCache{BookID: el, FetchedAt: time.Now(),
+		Candidates: []json.RawMessage{
+			json.RawMessage(`{"title":"Eragon","author":"Christopher Paolini","score":0.9}`),
+		}}))
+	kate := "Kate Reading"
+	named, err := st.CreateBook(&database.Book{Title: "Read by Kate Reading", FilePath: "/lib/Author A/Named Credit Book",
+		AuthorID: a, Narrator: &kate, Format: "mp3"})
+	require.NoError(t, err)
+	for _, fp := range []string{"/lib/Author A/Named Credit Book/01.mp3", "/lib/Author A/Named Credit Book/02.mp3"} {
+		require.NoError(t, st.CreateBookFile(&database.BookFile{BookID: named.ID, FilePath: fp, Format: "mp3"}))
+	}
+	lib.ids["named-credit"] = named.ID
 	// ---- fragments ----
 	add("frag1", "01", "/lib/Eldest/Eldest/01.mp3", nil, nil, "/lib/Eldest/Eldest/01.mp3")
 	add("frag2", "02", "/lib/Eldest/Eldest/02.mp3", nil, nil, "/lib/Eldest/Eldest/02.mp3")
@@ -105,6 +124,27 @@ func newJunkLib(t *testing.T) *junkLib {
 		"/mnt/data/books/itunes/Other/Title Here/01.mp3", "/mnt/data/books/itunes/Other/Title Here/02.mp3")
 	add("dw-series", "read by narrator", "/lib/Plain/Series Title", nil, &dw.ID,
 		"/lib/Plain/Series Title/01.mp3", "/lib/Plain/Series Title/02.mp3")
+	// The PROPOSAL marks Torchwood content; path, title and series do not.
+	tw := add("owner-proposal", "Opening", "/lib/Neutral/Plain Folder", nil, nil,
+		"/lib/Neutral/Plain Folder/01.mp3", "/lib/Neutral/Plain Folder/02.mp3")
+	_, err = st.ModifyBook(tw, func(b *database.Book) error {
+		s := "Torchwood: The Dead Line"
+		b.TranscribedTitle = &s
+		return nil
+	})
+	require.NoError(t, err)
+	fetched := `"read by narrator"`
+	prov := add("provider", "read by narrator", "/lib/Author A/Provider Folder", a, nil,
+		"/lib/Author A/Provider Folder/01.mp3", "/lib/Author A/Provider Folder/02.mp3")
+	require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: prov, Field: "title",
+		FetchedValue: &fetched, UpdatedAt: time.Now()}))
+	// A bare unpadded number beside other books of its author may be the
+	// real title: needs a person, never a (possible) fragment.
+	add("bare13", "13", "/lib/Author A/13.m4b", a, nil, "/lib/Author A/13.m4b")
+	add("unabridged", "read by narrator", "/lib/Author B/Dune (Unabridged)", nil, nil,
+		"/lib/Author B/Dune (Unabridged)/01.mp3", "/lib/Author B/Dune (Unabridged)/02.mp3")
+	// "Read by Moonlight" is a title, and nothing may climb to "lib" for it.
+	add("moonlight", "Read by Moonlight", "/lib/A/Read by Moonlight.m4b", nil, nil, "/lib/A/Read by Moonlight.m4b")
 	// ---- real titles: never rows ----
 	add("robot", "I, Robot", "/lib/Asimov/I, Robot.m4b", nil, nil, "/lib/Asimov/I, Robot.m4b")
 	add("etranger", "l'Étranger", "/lib/Camus/l'Étranger.m4b", nil, nil, "/lib/Camus/l'Étranger.m4b")
@@ -142,6 +182,9 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		"disc":        "Whole Work",
 		"transcribed": "The Spoken Name",
 		"candidate":   "Candidate Title",
+		// highest score among the trustworthy candidates, not the first
+		"eldest-prefix": "Eldest",
+		"named-credit":  "Named Credit Book",
 	}
 	for name, want := range applicable {
 		r, ok := rows[name]
@@ -152,14 +195,22 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 	}
 	require.Contains(t, rows["transcribed"].Reason, "transcription")
 	require.Equal(t, repairs.RiskLow, rows["prefix"].Risk)
+	require.Contains(t, rows["eldest-prefix"].Reason, "title_prefix_stripped")
+	require.NotContains(t, rows["eldest-prefix"].Reason, "Eragon")
 
 	skipped := map[string]string{
-		"frag1":         junkSkipFragment,
-		"frag2":         junkSkipFragment,
-		"chapter-alone": junkSkipFragment,
-		"dup":           junkSkipFragment,
-		"owned":         junkSkipFragment,
-		"eldest98":      junkSkipFragment,
+		// possible: only the shape says fragment
+		"frag1":         junkSkipPossibleFragment,
+		"frag2":         junkSkipPossibleFragment,
+		"chapter-alone": junkSkipPossibleFragment,
+		"dup":           junkSkipPossibleFragment,
+		"eldest98":      junkSkipPossibleFragment,
+		// proven: another book owns one of its files
+		"owned":          junkSkipFragment,
+		"provider":       junkSkipProviderTitle,
+		"owner-proposal": repairs.SkipOwnerManual,
+		"bare13":         junkSkipNeedsManual,
+		"unabridged":     junkSkipNeedsManual,
 		"generic":       junkSkipNeedsManual,
 		"locked":        junkSkipUserLocked,
 		"manual":        junkSkipNeedsManual,
@@ -173,11 +224,15 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		require.True(t, ok, "%s: no row", name)
 		require.Equal(t, want, r.Skipped, "%s: %s", name, r.SkipReason)
 	}
-	require.Contains(t, rows["frag1"].SkipReason, "fragment — use the consolidation fixer")
+	require.Contains(t, rows["frag1"].SkipReason, "possible fragment")
+	require.Contains(t, rows["owned"].SkipReason, "fragment — use the consolidation fixer")
+	require.Contains(t, rows["eldest98"].SkipReason, `its author "Eldest" is the name of its folder`)
+	require.Contains(t, rows["owner-proposal"].SkipReason, "Torchwood: The Dead Line")
+	require.Contains(t, rows["unabridged"].SkipReason, "format, edition or disc marker")
 	require.Contains(t, rows["person"].SkipReason, "names the author or narrator")
 	require.Contains(t, rows["owned"].SkipReason, "is also a file of book "+lib.ids["parent"])
 
-	for _, name := range []string{"robot", "etranger", "1984", "existing", "parent"} {
+	for _, name := range []string{"robot", "etranger", "1984", "existing", "parent", "moonlight"} {
 		_, ok := rows[name]
 		require.False(t, ok, "%s has a real title and must not be a row", name)
 	}
@@ -233,6 +288,25 @@ func TestJunkTitleFixer_ApplyWritesTitleOnlyAndUndoRestoresIt(t *testing.T) {
 	restored, err := lib.store.GetBookByID(lib.ids["folder"])
 	require.NoError(t, err)
 	require.Equal(t, "read by narrator", restored.Title)
+
+	// The fixer keeps no memory of its writes: after the undo, a fresh plan
+	// proposes the title again and the same fixer applies it again.
+	res2, err := repairs.RunPlan(context.Background(), f, nil,
+		repairs.PlanDeps{Guard: lib.store, Series: repairs.SeriesNamesFrom(series)}, &fakeReporter{})
+	require.NoError(t, err)
+	var row2 repairs.Row
+	for _, r := range res2.Rows {
+		if r.RowID == lib.ids["folder"] {
+			row2 = r
+		}
+	}
+	require.True(t, row2.Applicable(), "%s: %s", row2.Skipped, row2.SkipReason)
+	re, err := repairs.RunApply(context.Background(), f, res2, "plan-2", []string{row2.RowID}, false, deps, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, re.Applied, "outcomes %v", re.ByOutcome)
+	reapplied, err := lib.store.GetBookByID(lib.ids["folder"])
+	require.NoError(t, err)
+	require.Equal(t, "Good Book", reapplied.Title)
 }
 
 func TestJunkTitleFixer_TitleChangedAfterReplanIsRefused(t *testing.T) {
@@ -242,14 +316,78 @@ func TestJunkTitleFixer_TitleChangedAfterReplanIsRefused(t *testing.T) {
 	id := lib.ids["folder"]
 	_, err := lib.store.ModifyBook(id, func(b *database.Book) error { b.Title = "Hand Edited"; return nil })
 	require.NoError(t, err)
-	err = writeTitleOnly(w, id, rows["folder"].Current["title"], "Good Book")
+	err = writeTitleOnly(w, lib.store, id, rows["folder"].Current["title"], "Good Book")
 	require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
 	got, err := lib.store.GetBookByID(id)
 	require.NoError(t, err)
 	require.Equal(t, "Hand Edited", got.Title)
+
+	// A user lock that lands after the re-plan is re-checked inside the write.
+	pid := lib.ids["prefix"]
+	require.NoError(t, lib.store.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: pid, Field: "title",
+		OverrideLocked: true, UpdatedAt: time.Now()}))
+	err = writeTitleOnly(w, lib.store, pid, rows["prefix"].Current["title"], "Lonely Book")
+	require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+	got, err = lib.store.GetBookByID(pid)
+	require.NoError(t, err)
+	require.Equal(t, "01 - Lonely Book", got.Title)
 }
 
-func TestJunkTitleFixer_SameProposalTwiceIsAFragment(t *testing.T) {
+func TestJunkProposalCheck_Refusals(t *testing.T) {
+	pc := junkProposalCheck{stored: "read by narrator", people: []string{"Frank Herbert"},
+		roots: []string{"/mnt/data/audiobooks"},
+		paths: []string{"/mnt/data/audiobooks/Frank Herbert/Dune/01.mp3", "/lib/X/y.mp3"}}
+	refused := map[string]string{
+		"Dune MP3":                 "format",
+		"Dune (Unabridged)":        "format",
+		"Dune Abridged":            "format",
+		"Dune Side A":              "format",
+		"Dune Tape 3":              "format",
+		"Dune CD01-02":             "format",
+		"Dune [B002V1OF70]":        "ASIN",
+		"B002V1OF70":               "ASIN",
+		"Dune 9780441013593":       "ASIN",
+		"merged":                   "generic",
+		"Output":                   "generic",
+		"Book":                     "generic",
+		"audio":                    "generic",
+		"Frank Herbert - Dune":     "person",
+		"Herbert, Frank":           "author or narrator",
+		"lib":                      "root",
+		"mnt":                      "root",
+		"data":                     "root",
+		"Frank Herbert Collection": "",
+	}
+	for c, want := range refused {
+		got := pc.refusal(c, junkSrcFolder)
+		if want == "" {
+			require.Empty(t, got, c)
+			continue
+		}
+		require.NotEmpty(t, got, "%q must be refused", c)
+		require.Contains(t, got, want, c)
+	}
+	// The format list applies to folder and filename evidence only; the
+	// root, person and generic checks apply to every source.
+	require.Empty(t, pc.refusal("Dune Tape 3", junkSrcTranscribed))
+	require.NotEmpty(t, pc.refusal("lib", junkSrcCandidate))
+	require.Empty(t, pc.refusal("Dune", junkSrcFolder))
+	// The author folder directly below a configured root is a path.
+	pc2 := junkProposalCheck{stored: "x", roots: []string{"/mnt/data/audiobooks"},
+		paths: []string{"/mnt/data/audiobooks/Some Author/Real Work/01.mp3"}}
+	require.Contains(t, pc2.refusal("Some Author", junkSrcFolder), "root")
+	require.Empty(t, pc2.refusal("Real Work", junkSrcFolder))
+}
+
+func TestTitleAgreesWithAny(t *testing.T) {
+	require.True(t, titleAgreesWithAny("Eldest", []string{"Eldest"}))
+	require.True(t, titleAgreesWithAny("Eldest: Inheritance, Book 2", []string{"Eldest"}))
+	require.False(t, titleAgreesWithAny("Eragon", []string{"Eldest"}))
+	require.False(t, titleAgreesWithAny("Eldest Son", []string{"Eldest"}))
+	require.False(t, titleAgreesWithAny("Eldest", nil))
+}
+
+func TestJunkTitleFixer_SameProposalTwiceIsAPossibleFragment(t *testing.T) {
 	st, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
@@ -265,7 +403,7 @@ func TestJunkTitleFixer_SameProposalTwiceIsAFragment(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	for _, r := range rows {
-		require.Equal(t, junkSkipFragment, r.Skipped, r.SkipReason)
+		require.Equal(t, junkSkipPossibleFragment, r.Skipped, r.SkipReason)
 	}
 }
 
