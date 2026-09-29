@@ -1,7 +1,7 @@
 // file: internal/undo/restorable_test.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
-// last-edited: 2026-09-13
+// last-edited: 2026-09-28
 
 package undo
 
@@ -14,6 +14,27 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
+
+func TestNotRestorableLabel_BookFileRepoint(t *testing.T) {
+	loc := BookFileLocation{Path: "/lib/a/01.mp3", Missing: true, Size: 3}.Encode()
+	moved := BookFileLocation{Path: "/lib/a/01/01.mp3", Size: 3}.Encode()
+	cases := []struct{ field, oldV, newV, want string }{
+		{"book_file:f1", loc, moved, ""},
+		{"", loc, moved, ChangeTypeBookFileRepoint + ":(no book_file id)"},
+		{"book_file:f1", "not json", moved, ChangeTypeBookFileRepoint + ":(unparsable)"},
+		{"book_file:f1", loc, `{"missing":false}`, ChangeTypeBookFileRepoint + ":(unparsable)"},
+	}
+	for _, tc := range cases {
+		c := &database.OperationChange{ChangeType: ChangeTypeBookFileRepoint, FieldName: tc.field, OldValue: tc.oldV, NewValue: tc.newV}
+		if got := NotRestorableLabel(c); got != tc.want {
+			t.Errorf("NotRestorableLabel(%q, %q, %q) = %q, want %q", tc.field, tc.oldV, tc.newV, got, tc.want)
+		}
+	}
+	back, err := DecodeBookFileLocation(loc)
+	if err != nil || back.Path != "/lib/a/01.mp3" || !back.Missing || back.Size != 3 {
+		t.Fatalf("round trip: %+v, %v", back, err)
+	}
+}
 
 func TestNotRestorableLabel(t *testing.T) {
 	cases := []struct{ changeType, field, want string }{
