@@ -79,7 +79,9 @@
 // finds its members' rows by the row ids stored with the plan (Row.State),
 // wherever a cut-off run left them. A plan made after an abandoned group run
 // re-attributes each emptied member's row (journaled book_file_reassign) back
-// to it, so the group re-forms rather than strands its emptied books.
+// to it, together with the rows of the members that same run already retired
+// into the survivor, so the group re-forms rather than strands its emptied
+// books; one that still lands in no row is listed as a held "stranded" row.
 //
 // CONCURRENCY. Plan evaluates fragment candidates on a bounded RunItems pool
 // (point reads of path history, external ids and os.Stat). Apply runs through
