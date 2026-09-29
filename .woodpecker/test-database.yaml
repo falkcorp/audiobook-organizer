@@ -1,15 +1,15 @@
 # file: .woodpecker/test-database.yaml
-# version: 1.0.1
+# version: 1.0.2
 # guid: 3f1c9a52-8e47-4b0d-a6c1-5d2e7f9b0c14
-# last-edited: 2026-09-26
+# last-edited: 2026-09-29
 #
 # `make ci` test-short, part 1 of 3: internal/database ALONE.
 #
 # It is the slowest package by far: 300 s on the Linux server, 1500-2200 s on a
 # loaded Mac, where it blew make ci's 25m -timeout on 2026-09-26. So it gets
 # its own workflow, a 50m timeout, and the Linux agent on the prod host (the only
-# Linux agent; the heavy=true agents are the Macs, where it is 5-7x slower). The other two test
-# workflows run at the same time on the Mac agents.
+# Linux agent; the heavy=true agent is llm1, a Mac, where it is 5-7x slower). The other two test
+# workflows run at the same time on the llm1 agent.
 #
 # Runs on the prod host's agent (docker backend). The golang image has no
 # ffmpeg/ffprobe/fpcalc, which keeps the prod host's no-decode rule, and the
