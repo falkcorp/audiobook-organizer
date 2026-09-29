@@ -96,10 +96,8 @@ func TestExtractFromFilename_ChapterFilesAndNoSeriesFromPrefix(t *testing.T) {
 		// No author parses out of this name, so the fallback branch runs and
 		// the prefix is the series: neither end is a chapter position (S8).
 		{path: "/lib/x/the lost city - a tale of old.mp3", wantTitle: "a tale of old", wantSeries: "the lost city"},
-		// The review's "The Stormlight Archive - The Way of Kings" never reaches
-		// this branch: authorname.ParseFilenameForAuthor reads the capitalised
-		// left side as an author (on main as well). The lowercase name takes
-		// the no-author branch this rule governs.
+		// Lowercase form; the capitalised one is pinned in
+		// TestExtractFromFilename_SeriesTitleIsNotAnAuthor.
 		{path: "/lib/x/the stormlight archive - the way of kings.mp3", wantTitle: "the way of kings", wantSeries: "the stormlight archive"},
 		// ...and a chapter-only end still drops it.
 		{path: "/lib/x/02 - Eldest.mp3", wantTitle: "Eldest"},
@@ -130,5 +128,36 @@ func TestIsChapterOnlyTitle_YearLikeNumbersAreTitles(t *testing.T) {
 		if got := IsChapterOnlyTitle(title); got != want {
 			t.Errorf("IsChapterOnlyTitle(%q) = %v, want %v", title, got, want)
 		}
+	}
+}
+
+// TestExtractFromFilename_SeriesTitleIsNotAnAuthor is metadata's end-to-end pin
+// for "The Stormlight Archive - The Way of Kings": the capitalised left side was
+// read as the AUTHOR by authorname.ParseFilenameForAuthor, so the file got a
+// bogus artist and no series. A work-named side is now never an author, and the
+// directory fallback applies the same rule to a series-named folder.
+func TestExtractFromFilename_SeriesTitleIsNotAnAuthor(t *testing.T) {
+	cases := []struct {
+		path                              string
+		wantArtist, wantTitle, wantSeries string
+	}{
+		{"/lib/import/The Stormlight Archive - The Way of Kings.mp3", "", "The Way of Kings", "The Stormlight Archive"},
+		{"/lib/The Stormlight Archive/The Stormlight Archive - The Way of Kings.mp3", "", "The Way of Kings", "The Stormlight Archive"},
+		{"/lib/import/Brandon Sanderson - The Way of Kings.mp3", "Brandon Sanderson", "The Way of Kings", ""},
+		{"/lib/import/Sanderson, Brandon - Mistborn.mp3", "Sanderson, Brandon", "Mistborn", ""},
+		{"/lib/import/Wheel of Time 01 - The Eye of the World.mp3", "", "The Eye of the World", "Wheel of Time 01"},
+		{"/lib/import/A Song of Ice and Fire - A Game of Thrones.mp3", "", "A Game of Thrones", "A Song of Ice and Fire"},
+		{"/lib/import/J.R.R. Tolkien - The Hobbit.mp3", "J.R.R. Tolkien", "The Hobbit", ""},
+		{"/lib/import/Discworld 01 - The Colour of Magic.mp3", "", "The Colour of Magic", "Discworld 01"},
+		{"/lib/import/A J Finn - The Woman in the Window.mp3", "A J Finn", "The Woman in the Window", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			m := extractFromFilename(tc.path)
+			if m.Artist != tc.wantArtist || m.Title != tc.wantTitle || m.Series != tc.wantSeries {
+				t.Errorf("got (artist %q, title %q, series %q), want (%q, %q, %q)",
+					m.Artist, m.Title, m.Series, tc.wantArtist, tc.wantTitle, tc.wantSeries)
+			}
+		})
 	}
 }

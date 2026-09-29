@@ -1,7 +1,7 @@
 // file: internal/personname/author_credit_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3c1d3f97-1705-4519-a344-cc8eb9f0d038
-// last-edited: 2026-09-01
+// last-edited: 2026-09-28
 
 package personname
 
@@ -344,5 +344,87 @@ func TestAmpersandCreditRequiresEveryClauseAndHandlesPlus(t *testing.T) {
 	if _, author, ok := ChooseAuthorSide("Elora Bishop & Bridget Essex", "Under Her Spell (Unabridged, 2019)", PreferRightOnTie); !ok ||
 		author != "Elora Bishop & Bridget Essex" {
 		t.Errorf("decorated opposing side: author = %q, ok = %v; want the credit", author, ok)
+	}
+}
+
+// TestLooksLikeWorkTitle pins the work-name predicate that keeps a series or
+// title out of the author slot. "The Stormlight Archive" is person-SHAPED, so
+// the shape test alone filed it as the author of "The Way of Kings".
+func TestLooksLikeWorkTitle(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		// Article-led.
+		{"The Stormlight Archive", true},
+		{"The Hobbit", true},
+		{"The Hobbit (Unabridged)", true},
+		{"A Song of Ice and Fire", true},
+		{"An Ember in the Ashes", true},
+		// Series / volume words as whole words, anywhere.
+		{"Dune Chronicles", true},
+		{"Mistborn Saga", true},
+		{"Wheel of Time Book 1", true},
+		{"Expanse Series", true},
+		{"Earthsea Cycle", true},
+		{"Millennium Trilogy", true},
+		{"Complete Collection", true},
+		{"Discworld Vol. 3", true},
+
+		// People.
+		{"Brandon Sanderson", false},
+		{"Sanderson, Brandon", false},
+		{"J.R.R. Tolkien", false},
+		{"Stephen King", false},
+		// Whole words, never prefixes: each contains a work word as a prefix.
+		{"Jeffrey Archer", false},
+		{"Carl Sagan", false},
+		{"Booker T. Washington", false},
+		{"Volker Kutscher", false},
+		// "A" before a single letter is initials.
+		{"A J Finn", false},
+		{"A. J. Finn", false},
+		{"A E van Vogt", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := LooksLikeWorkTitle(tc.in); got != tc.want {
+			t.Errorf("LooksLikeWorkTitle(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestLooksLikeWorkTitleAcceptedCost pins the one real name the article rule
+// is known to refuse, so the cost is visible rather than discovered. "An Na" is
+// a Korean-American novelist; refusing her yields NO author (AI nomination gets
+// the book), never a wrong one.
+func TestLooksLikeWorkTitleAcceptedCost(t *testing.T) {
+	if !LooksLikeWorkTitle("An Na") {
+		t.Fatal(`"An Na" is no longer refused; update LooksLikeWorkTitle's KNOWN COST note`)
+	}
+	if _, author, ok := ChooseAuthorSide("An Na", "A Step from Heaven", PreferRightOnTie); ok || author != "" {
+		t.Errorf("ChooseAuthorSide(An Na, ...) = (%q, %v), want refusal", author, ok)
+	}
+}
+
+// TestChooseAuthorSideWorkNamedSideIsNeverTheAuthor covers the orientation
+// decision under both tie policies: a work-named side loses even when it is the
+// only person-shaped one, and two work-named sides refuse rather than resolving
+// a tie.
+func TestChooseAuthorSideWorkNamedSideIsNeverTheAuthor(t *testing.T) {
+	for _, p := range []TiePolicy{PreferRightOnTie, RefuseOnTie} {
+		for _, pair := range [][2]string{
+			{"The Stormlight Archive", "The Way of Kings"},
+			{"The Dark Tower", "The Gunslinger"},
+			{"Dune Chronicles", "Children of Dune"},
+		} {
+			if _, author, ok := ChooseAuthorSide(pair[0], pair[1], p); ok || author != "" {
+				t.Errorf("policy %d: ChooseAuthorSide(%q, %q) = (%q, %v), want refusal",
+					p, pair[0], pair[1], author, ok)
+			}
+		}
+		if _, author, ok := ChooseAuthorSide("The Stand", "Stephen King", p); !ok || author != "Stephen King" {
+			t.Errorf("policy %d: The Stand - Stephen King gave (%q, %v)", p, author, ok)
+		}
 	}
 }

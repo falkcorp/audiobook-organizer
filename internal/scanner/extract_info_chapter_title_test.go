@@ -1,11 +1,15 @@
 // file: internal/scanner/extract_info_chapter_title_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1887ad95-0bf8-4bb7-87f5-cf52026d1289
 // last-edited: 2026-09-28
 
 package scanner
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+)
 
 // TestExtractInfoFromPath_ChapterFilesAndNoSeriesFromPrefix is task E on the
 // scanner's own filename parser (it diverges from metadata's; both had the
@@ -28,9 +32,8 @@ func TestExtractInfoFromPath_ChapterFilesAndNoSeriesFromPrefix(t *testing.T) {
 		{"/lib/Christopher Paolini/Eldest/Eldest - 02.mp3", "Eldest", "Christopher Paolini", ""},
 		{"/lib/Christopher Paolini/Eldest/02 - Eldest.mp3", "Eldest", "", ""},
 		{"/lib/x/the lost city - a tale of old.mp3", "a tale of old", "", "the lost city"},
-		// "The Stormlight Archive - ..." is read as author-shaped on the left
-		// (authorname.ParseFilenameForAuthor, on main as well), so it never
-		// reaches the series rule; the lowercase name does.
+		// The lowercase form; the capitalised one is pinned in
+		// TestExtractInfoFromPath_SeriesTitleIsNotAnAuthor below.
 		{"/lib/x/the stormlight archive - the way of kings.mp3", "the way of kings", "", "the stormlight archive"},
 		// A real title is untouched.
 		{"/lib/Frank Herbert/Dune/Dune.mp3", "Dune", "", ""},
@@ -54,6 +57,59 @@ func TestExtractInfoFromPath_ChapterFilesAndNoSeriesFromPrefix(t *testing.T) {
 			}
 			if b.Series != tc.wantSeries {
 				t.Errorf("series = %q, want %q", b.Series, tc.wantSeries)
+			}
+		})
+	}
+}
+
+// TestExtractInfoFromPath_SeriesTitleIsNotAnAuthor is the end-to-end pin for
+// "The Stormlight Archive - The Way of Kings.mp3" in a folder that names no
+// author. authorname.ParseFilenameForAuthor used to read the capitalised left
+// side as the AUTHOR, so the book got a bogus author and no series; and when the
+// folder itself was the series, authorname.ExtractAuthorFromDirectory would
+// have handed the same bogus author back as the fallback.
+//
+// wantSeriesName/wantPosition are what resolveSeriesID persists: it runs
+// metadata.StripSeriesContamination over this series before writing, which is
+// where "Discworld 01" becomes series "Discworld" at position 1.
+func TestExtractInfoFromPath_SeriesTitleIsNotAnAuthor(t *testing.T) {
+	cases := []struct {
+		path                       string
+		wantAuthor, wantTitle      string
+		wantSeries, wantSeriesName string
+		wantPosition               string
+	}{
+		{"/lib/import/The Stormlight Archive - The Way of Kings.mp3", "", "The Way of Kings", "The Stormlight Archive", "The Stormlight Archive", ""},
+		// The folder is the series: the directory fallback must not take it.
+		{"/lib/The Stormlight Archive/The Stormlight Archive - The Way of Kings.mp3", "", "The Way of Kings", "The Stormlight Archive", "The Stormlight Archive", ""},
+		{"/lib/import/Brandon Sanderson - The Way of Kings.mp3", "Brandon Sanderson", "The Way of Kings", "", "", ""},
+		{"/lib/import/Sanderson, Brandon - Mistborn.mp3", "Sanderson, Brandon", "Mistborn", "", "", ""},
+		{"/lib/import/Wheel of Time 01 - The Eye of the World.mp3", "", "The Eye of the World", "Wheel of Time 01", "Wheel of Time", "1"},
+		{"/lib/import/A Song of Ice and Fire - A Game of Thrones.mp3", "", "A Game of Thrones", "A Song of Ice and Fire", "A Song of Ice and Fire", ""},
+		{"/lib/import/J.R.R. Tolkien - The Hobbit.mp3", "J.R.R. Tolkien", "The Hobbit", "", "", ""},
+		{"/lib/import/Discworld 01 - The Colour of Magic.mp3", "", "The Colour of Magic", "Discworld 01", "Discworld", "1"},
+		{"/lib/import/The Dark Tower - The Gunslinger.mp3", "", "The Gunslinger", "The Dark Tower", "The Dark Tower", ""},
+		{"/lib/import/A J Finn - The Woman in the Window.mp3", "A J Finn", "The Woman in the Window", "", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			b := &Book{FilePath: tc.path}
+			extractInfoFromPath(b)
+			if b.Author != tc.wantAuthor || b.Title != tc.wantTitle || b.Series != tc.wantSeries {
+				t.Errorf("got (author %q, title %q, series %q), want (%q, %q, %q)",
+					b.Author, b.Title, b.Series, tc.wantAuthor, tc.wantTitle, tc.wantSeries)
+			}
+			if b.Series == "" {
+				return
+			}
+			c := metadata.StripSeriesContamination(b.Series, "")
+			name := c.Name
+			if name == "" {
+				name = b.Series
+			}
+			if name != tc.wantSeriesName || c.Position != tc.wantPosition {
+				t.Errorf("persisted series = (%q, pos %q), want (%q, pos %q)",
+					name, c.Position, tc.wantSeriesName, tc.wantPosition)
 			}
 		})
 	}

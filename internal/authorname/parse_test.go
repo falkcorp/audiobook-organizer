@@ -1,7 +1,7 @@
 // file: internal/authorname/parse_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b8e5f27-14a9-4c03-9d6b-8e21f70a4c95
-// last-edited: 2026-09-01
+// last-edited: 2026-09-28
 
 package authorname
 
@@ -58,6 +58,14 @@ func TestExtractAuthorFromDirectoryCorpus(t *testing.T) {
 		{"Stephen Fry - narrated by - Mort", "Stephen Fry", "narrator credit, real name"},
 		{"Discworld - translator - Mort", "", "series name in the credit slot is refused"},
 		{"Unabridged - narrated by - Stephen Fry", "", "edition word in the credit slot is refused"},
+
+		// Work-named directories are person-SHAPED, so the shape gate alone
+		// took them as authors. A series or title folder names no author.
+		{"The Stormlight Archive", "", "series folder, article-led"},
+		{"The Hobbit", "", "title folder, article-led"},
+		{"Dune Chronicles", "", "series folder, series word"},
+		{"The Stormlight Archive - The Way of Kings", "", "Series - Title folder"},
+		{"A J Finn", "A J Finn", "initials, not an article"},
 
 		// Junk that reaches the "Author - Title" branch. These are the strings
 		// that make the shape gate on that branch necessary.
@@ -191,6 +199,30 @@ func TestParseFilenameForAuthor(t *testing.T) {
 		//
 		// Both sides are person-shaped, so the policy alone decides: right wins.
 		{"Stephen King - John Doe", "Stephen King", "John Doe"},
+
+		// A WORK-NAMED side is never the author (personname.LooksLikeWorkTitle).
+		// ("", "") is the signal both callers read as "series X, title Y";
+		// that end of it is pinned in internal/metadata and internal/scanner.
+		//
+		// The reported bug: the left side is person-SHAPED (three capitalised
+		// words), the right is not ("of"), so the series was filed as the author.
+		{"The Stormlight Archive - The Way of Kings", "", ""},
+		// Both sides article-led and both person-shaped: the old dash tie
+		// resolved "prefer right" and filed "The Gunslinger" as the author.
+		{"The Dark Tower - The Gunslinger", "", ""},
+		{"A Song of Ice and Fire - A Game of Thrones", "", ""},
+		{"Wheel of Time 01 - The Eye of the World", "", ""},
+		{"Discworld 01 - The Colour of Magic", "", ""},
+		// Series word without an article, against a person-shaped title.
+		{"Dune Chronicles - Children of Dune", "", ""},
+
+		// Real authors are unaffected, in either order and with initials.
+		{"Brandon Sanderson - The Way of Kings", "The Way of Kings", "Brandon Sanderson"},
+		{"The Way of Kings - Brandon Sanderson", "The Way of Kings", "Brandon Sanderson"},
+		{"Sanderson, Brandon - Mistborn", "Mistborn", "Sanderson, Brandon"},
+		{"J.R.R. Tolkien - The Hobbit", "The Hobbit", "J.R.R. Tolkien"},
+		// "A" before a single letter is initials, not an article.
+		{"A J Finn - The Woman in the Window", "The Woman in the Window", "A J Finn"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.filename, func(t *testing.T) {

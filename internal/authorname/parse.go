@@ -1,7 +1,7 @@
 // file: internal/authorname/parse.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9f4c2a71-58d3-4e60-b19a-6c0e7d35f8b2
-// last-edited: 2026-09-01
+// last-edited: 2026-09-28
 
 package authorname
 
@@ -68,12 +68,27 @@ var skipDirs = map[string]bool{
 	"bt": true, "incomplete": true, "data": true,
 }
 
+// looksLikeDirectoryAuthor is the gate every branch of ExtractAuthorFromDirectory
+// uses: person-SHAPED (personname.LooksLikePersonName) and not work-NAMED
+// (personname.LooksLikeWorkTitle).
+//
+// The second half was added 2026-09-28. The shape test alone accepts "The
+// Stormlight Archive" and "The Hobbit" -- two to four capitalised words -- so a
+// file in a series or title folder whose own name named no author took the
+// FOLDER as its author. That was also the scanner's fallback after
+// ParseFilenameForAuthor correctly refused "The Stormlight Archive - The Way of
+// Kings": fixing the filename parse alone would have moved the bogus author
+// one line down.
+func looksLikeDirectoryAuthor(s string) bool {
+	return personname.LooksLikePersonName(s) && !personname.LooksLikeWorkTitle(s)
+}
+
 var translatorCreditRe = regexp.MustCompile(`^([^-]+)\s*-\s*(?:translator|narrated by)\s*-`)
 
 // ExtractAuthorFromDirectory derives an author from the directory a file sits
 // in, or "" when the directory does not name one.
 //
-// Every branch gates on personname.LooksLikePersonName. That is deliberate and
+// Every branch gates on looksLikeDirectoryAuthor (a person-shaped, non-work name). That is deliberate and
 // it is the single most important property of this function: a WRONG author is
 // strictly worse than an ABSENT one on the paths that consume this. A wrong
 // author still closes the AI nomination gate and nothing downstream can
@@ -146,7 +161,7 @@ func ExtractAuthorFromDirectory(filePath string) string {
 			// way: the branches were gated one at a time by READING the
 			// function, and the first-tried one was not in the corpus that
 			// measured it.
-			if candidate := strings.TrimSpace(matches[1]); personname.LooksLikePersonName(candidate) {
+			if candidate := strings.TrimSpace(matches[1]); looksLikeDirectoryAuthor(candidate) {
 				return candidate
 			}
 		}
@@ -167,13 +182,13 @@ func ExtractAuthorFromDirectory(filePath string) string {
 		// -- so carrying it across would have imported into this package the
 		// pattern its sibling rejects.
 		author := strings.TrimSpace(strings.SplitN(dirName, " - ", 2)[0])
-		if personname.LooksLikePersonName(author) {
+		if looksLikeDirectoryAuthor(author) {
 			return author
 		}
 	}
 
 	// Use the directory name if it is person-SHAPED, not merely non-empty.
-	if personname.LooksLikePersonName(dirName) {
+	if looksLikeDirectoryAuthor(dirName) {
 		return dirName
 	}
 
@@ -187,6 +202,16 @@ func ExtractAuthorFromDirectory(filePath string) string {
 // The side-choosing decision itself is personname.ChooseAuthorSide, one shared
 // decision behind every call site; this function is only the split and the
 // tie-break policy.
+//
+// A side that names a WORK rather than a person -- article-led ("The Stormlight
+// Archive", "A Song of Ice and Fire") or carrying a series word ("Wheel of Time
+// Book 1", "Dune Chronicles") -- is never an author, however person-shaped it
+// is (personname.LooksLikeWorkTitle). When neither side can be the author this
+// returns ("", ""), and BOTH callers (metadata.extractFromFilename and
+// scanner.extractInfoFromPath) then read "X - Y" as series X, title Y via
+// metadata.SeriesFromTitlePrefix. Until 2026-09-28 "The Stormlight Archive -
+// The Way of Kings" came back with author "The Stormlight Archive" and never
+// reached that branch.
 func ParseFilenameForAuthor(filename string) (string, string) {
 	parts := strings.Split(filename, " - ")
 	if len(parts) != 2 {
