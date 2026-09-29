@@ -1,7 +1,7 @@
 // file: internal/server/metadata_stores.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package server
 
@@ -49,10 +49,11 @@ type bulkMetadataFetchByIDStore interface {
 	bulkMetadataFetchCommon
 
 	GetBookByID(id string) (*database.Book, error)
-	GetAuthorByID(id int) (*database.Author, error)
 	// A book with no searchable title of its own reads its files for a
-	// stand-in title (resolveBulkFetchQuery).
-	metabatch.BookFilesGetter
+	// stand-in title, and its authors to tell an author folder from a work
+	// folder (resolveBulkFetchQuery; metabatch.SearchQueryReader carries
+	// GetAuthorByID).
+	metabatch.SearchQueryReader
 }
 
 // candidateFetchStore: fetchCandidateForBook. Note the helpers it forwards into

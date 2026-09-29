@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_title.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a88b51d9-3878-41d2-b50e-c04f1ff6793e
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 //
 // The title the bulk metadata fetch searches a book by, for a book whose own
 // title is not worth searching.
@@ -19,10 +19,11 @@ import (
 )
 
 // bulkFetchTitleStore is what resolving a stand-in title reads: the full
-// book row (BookCore carries no transcription) and the book's files.
+// book row (BookCore carries no transcription), the book's files and its
+// authors (metabatch.SearchQueryReader).
 type bulkFetchTitleStore interface {
 	GetBookByID(id string) (*database.Book, error)
-	metabatch.BookFilesGetter
+	metabatch.SearchQueryReader
 }
 
 // bulkFetchQuery is the search a bulk-fetch worker runs for one book.

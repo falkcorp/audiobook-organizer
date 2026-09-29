@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 //
 // Resolves the title a metadata search asks providers for a book.
 
@@ -93,11 +93,11 @@ type CandidateSearchQuery struct {
 //
 // A GetBookFiles error is treated as "no file rows": the file-level steps are
 // skipped and only the book's own path is tried, which is the safe direction.
-func ResolveCandidateSearchQuery(files BookFilesGetter, book *database.Book) CandidateSearchQuery {
+func ResolveCandidateSearchQuery(files SearchQueryReader, book *database.Book) CandidateSearchQuery {
 	if book == nil {
 		return CandidateSearchQuery{}
 	}
-	j := &titleJudge{files: files, bookID: book.ID, bookPath: book.FilePath}
+	j := &titleJudge{files: files, book: book, bookID: book.ID, bookPath: book.FilePath}
 	if !j.unsearchable(book.Title) {
 		return CandidateSearchQuery{Title: book.Title, Source: SearchQuerySourceTitle, Usable: true}
 	}
@@ -126,11 +126,25 @@ func ResolveCandidateSearchQuery(files BookFilesGetter, book *database.Book) Can
 // it names a part (headingCorroborated). The files are read at most once,
 // and only when a title needs them or a file-level fallback is reached.
 type titleJudge struct {
-	files    BookFilesGetter
+	files    SearchQueryReader
+	book     *database.Book
 	bookID   string
 	bookPath string
 	loaded   bool
 	present  []database.BookFile
+	// authorsLoaded/authors: the book's live author names plus its snapshot
+	// Book.Author, read once and only when a heading reaches the folder test.
+	authorsLoaded bool
+	authorsErr    error
+	authors       []string
+}
+
+// SearchQueryReader is what ResolveCandidateSearchQuery reads: the book's
+// files (fallback titles, heading corroboration) and its authors (a folder
+// named for the author is not a work folder).
+type SearchQueryReader interface {
+	BookFilesGetter
+	database.BookAuthorReader
 }
 
 // presentFiles returns the book's present files in play order
@@ -192,7 +206,38 @@ func (j *titleJudge) unsearchable(t string) bool {
 	if metadata.IsUnsearchableTitle(t) {
 		return true
 	}
-	return metadata.IsSectionHeadingTitle(t) && headingCorroborated(j.presentFiles(), j.bookPath, t)
+	if !metadata.IsSectionHeadingTitle(t) {
+		return false
+	}
+	authors, err := j.bookAuthors()
+	if err != nil {
+		// Unknown authors: the folder might be the author's, so it is no
+		// evidence -- a real title is never refused on a read fault.
+		return false
+	}
+	return headingCorroborated(j.presentFiles(), j.bookPath, t, authors)
+}
+
+// bookAuthors returns the book's live author names (database.LiveBookAuthorNames)
+// plus its snapshot Book.Author name, read at most once.
+func (j *titleJudge) bookAuthors() ([]string, error) {
+	if j.authorsLoaded {
+		return j.authors, j.authorsErr
+	}
+	j.authorsLoaded = true
+	if j.files == nil || j.book == nil {
+		return nil, nil
+	}
+	live, err := database.LiveBookAuthorNames(j.files, j.book)
+	if err != nil {
+		j.authorsErr = err
+		return nil, err
+	}
+	j.authors = live
+	if j.book.Author != nil && strings.TrimSpace(j.book.Author.Name) != "" {
+		j.authors = append(j.authors, j.book.Author.Name)
+	}
+	return j.authors, nil
 }
 
 // headingCorroborated reports whether a book's files say a section-heading
@@ -208,8 +253,11 @@ func (j *titleJudge) unsearchable(t string) bool {
 // The number of files is NOT evidence: a multi-file "Act One" or "Forward"
 // in a folder of that name is a real book in chapters. A work folder that
 // names nothing (a placeholder or chapter folder, metadata.IsUnsearchableTitle)
-// is no evidence either way.
-func headingCorroborated(present []database.BookFile, bookPath, title string) bool {
+// is no evidence either way, and neither is a folder named for one of the
+// book's authors: ".../Anne Roiphe/Epilogue.m4b" is a book called Epilogue
+// filed under its author, whenever the author folder's own parent is not one
+// of the generic roots WorkFolderTitle already skips.
+func headingCorroborated(present []database.BookFile, bookPath, title string, authors []string) bool {
 	t := normTitle(title)
 	for _, f := range present {
 		if normTitle(f.Title) == t {
@@ -224,7 +272,13 @@ func headingCorroborated(present []database.BookFile, bookPath, title string) bo
 	if !ok || metadata.IsUnsearchableTitle(folder) {
 		return false
 	}
-	return normTitle(folder) != t
+	nf := normTitle(folder)
+	for _, a := range authors {
+		if normTitle(a) == nf {
+			return false
+		}
+	}
+	return nf != t
 }
 
 // normTitle lowercases a title and collapses its whitespace.
