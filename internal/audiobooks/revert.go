@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.26.1
+// version: 1.27.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package audiobooks
 
@@ -229,6 +229,11 @@ type RevertResult struct {
 	// series_rename): the revert left a later edit in place instead of
 	// overwriting it.
 	ChangedSince int `json:"changed_since,omitempty"`
+	// AlreadyRestored counts the Restored rows that needed no write: the
+	// target already held OldValue (undo.ErrAlreadyRestored). A Repairs apply
+	// journals each step BEFORE its write, so a step whose write never
+	// happened (a cut-off run, a failed write) lands here, not in Failed.
+	AlreadyRestored int `json:"already_restored,omitempty"`
 }
 
 // Partial reports whether any row of the operation was left un-reverted.
@@ -388,8 +393,12 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 				refusedBook[c.BookID] = true
 			}
 		}
+		already := false
 		if err == nil {
 			err = rs.revertChange(c)
+			if errors.Is(err, undo.ErrAlreadyRestored) {
+				already, err = true, nil
+			}
 		}
 		var partial *partialTagRestore
 		if errors.As(err, &partial) {
@@ -416,6 +425,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		}
 		restoredIDs = append(restoredIDs, c.ID)
 		restored[c.ID] = true
+		if already {
+			result.AlreadyRestored++
+		}
 		if result.RestoredTypes == nil {
 			result.RestoredTypes = map[string]int{}
 		}
@@ -711,6 +723,11 @@ func (rs *RevertService) revertBookFileReassign(c *database.OperationChange) err
 	if _, err := rs.loadBook(c.OldValue); err != nil {
 		return err
 	}
+	onTarget, _ := rs.db.GetBookFileByID(c.BookID, fileID)
+	onSource, _ := rs.db.GetBookFileByID(c.OldValue, fileID)
+	if err := undo.CheckReassignCurrent(onTarget != nil, onSource != nil, c); err != nil {
+		return err
+	}
 	if err := rs.db.MoveBookFilesToBook([]string{fileID}, c.BookID, c.OldValue); err != nil {
 		return fmt.Errorf("move book_file %s from %s back to %s: %w", fileID, c.BookID, c.OldValue, err)
 	}
@@ -791,7 +808,9 @@ func (rs *RevertService) revertBookFileTrack(c *database.OperationChange) error 
 		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
 	}
 	if f.TrackNumber != set {
-		return driftRefusal("book_file %s track is %d, not the %d the operation set", fileID, f.TrackNumber, set)
+		// Already the old number (a journaled step never written) is no
+		// drift; anything else is.
+		return undo.CheckTrackCurrent(f.TrackNumber, c)
 	}
 	f.TrackNumber = old
 	if err := rs.db.UpdateBookFile(f.ID, f); err != nil {
@@ -814,20 +833,17 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 	if err != nil {
 		return err
 	}
-	set, err := undo.DecodeBookFileLocation(c.NewValue)
-	if err != nil {
-		return err
-	}
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	f, err := rs.db.GetBookFileByID(c.BookID, fileID)
 	if err != nil || f == nil {
 		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
 	}
-	// Path and Missing only (undo.SameFileLocation): a hash or size a scan
-	// filled in since does not make the row someone else's.
-	if !undo.SameFileLocation(undo.LocationOf(f), set) {
-		return driftRefusal("book_file %s is now at %q, not where the operation pointed it (%q)", fileID, f.FilePath, set.Path)
+	// Path and Missing only (undo.CheckRepointCurrent): a hash or size a scan
+	// filled in since does not make the row someone else's; a row already back
+	// where it was (a journaled repoint never written) is already restored.
+	if err := undo.CheckRepointCurrent(f, c); err != nil {
+		return err
 	}
 	was.Apply(f)
 	if err := rs.db.UpdateBookFile(f.ID, f); err != nil {
@@ -842,8 +858,8 @@ func (rs *RevertService) revertBookMergedInto(c *database.OperationChange) error
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	return rs.modifyBook(c.BookID, func(book *database.Book) error {
-		if book.MergedIntoBookID == nil || *book.MergedIntoBookID != c.NewValue {
-			return driftRefusal("book %s merged_into changed since the operation", book.ID)
+		if err := undo.CheckMergedIntoCurrent(book, c); err != nil {
+			return err
 		}
 		if c.OldValue == "" {
 			book.MergedIntoBookID = nil
@@ -900,8 +916,8 @@ func (rs *RevertService) revertBookPathUpdate(c *database.OperationChange) error
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	return rs.modifyBook(c.BookID, func(book *database.Book) error {
-		if book.FilePath != c.NewValue {
-			return driftRefusal("book %s path changed since the operation", book.ID)
+		if err := undo.CheckPathUpdateCurrent(book, c); err != nil {
+			return err
 		}
 		book.FilePath = c.OldValue
 		return nil
@@ -992,8 +1008,10 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange) error
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	return rs.modifyBook(c.BookID, func(book *database.Book) error {
-		if !book.IsSoftDeleted() {
-			return database.ErrSkipBookWrite
+		// A live book is already restored; a stamped row is reverted only
+		// while the book carries that stamp (undo.CheckSoftDeleteCurrent).
+		if err := undo.CheckSoftDeleteCurrent(book, c); err != nil {
+			return err
 		}
 		notMarked := false
 		book.MarkedForDeletion = &notMarked
@@ -1027,8 +1045,8 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) er
 	defer merge.UnlockMergeRMW()
 	group := ""
 	if err := rs.modifyBook(c.BookID, func(book *database.Book) error {
-		if book.IsPrimaryVersion == nil || *book.IsPrimaryVersion {
-			return driftRefusal("book %s was made primary again since the operation", book.ID)
+		if err := undo.CheckPrimaryDemoteCurrent(book, c); err != nil {
+			return err
 		}
 		book.IsPrimaryVersion = restored
 		group = ""
@@ -1065,8 +1083,8 @@ func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) e
 	if err != nil {
 		return fmt.Errorf("look up external id %s/%s: %w", source, extID, err)
 	}
-	if owner != c.NewValue {
-		return driftRefusal("external id %s/%s now names %q, not %s", source, extID, owner, c.NewValue)
+	if err := undo.CheckExternalIDOwnerCurrent(owner, c); err != nil {
+		return err
 	}
 	if err := rs.db.ReassignExternalID(source, extID, c.OldValue); err != nil {
 		return fmt.Errorf("move external id %s/%s back to %s: %w", source, extID, c.OldValue, err)
