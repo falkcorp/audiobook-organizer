@@ -1,5 +1,5 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
 // last-edited: 2026-09-28
 
@@ -268,6 +268,12 @@ func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 		{name: "bulk: the store found a Doctor Who file", path: "/library/Unknown Author/Unknown Title/book.m4b",
 			transcribed: "Spare Parts", candTitle: "Spare Parts",
 			guard: ManualOnlyGuard{Bulk: true, StoreDetail: "file \"/library/Doctor Who/Spare Parts/01.mp3\""}, wantReason: ReasonOwnerManualOnly},
+		// A store read fault is its own reason: the check could not be done.
+		// It still refuses (fail closed), and no bulk pin lifts it.
+		{name: "bulk: the store read failed", path: "/library/Unknown Author/Unknown Title/book.m4b",
+			transcribed: "Marvel's Planet Hulk", candTitle: "Marvel's Planet Hulk",
+			guard:      ManualOnlyGuard{Bulk: true, ReadErr: "could not read the files for the owner-manual check: disk"},
+			wantReason: ReasonOwnerManualCheckFailed},
 		{name: "single-book caller: allowed", path: "/library/Unknown Author/Unknown Title/book.m4b",
 			transcribed: chimes, candTitle: chimes, wantAllowed: true},
 		{name: "bulk: an unrelated book is not caught", path: "/library/Unknown Author/Unknown Title/book.m4b",

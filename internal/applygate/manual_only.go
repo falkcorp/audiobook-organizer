@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
 // last-edited: 2026-09-28
 
@@ -32,6 +32,14 @@ func IsOwnerManualOnly(path, seriesName string) bool {
 // bulk button lifts it (OwnerReviewOverridable).
 const ReasonOwnerManualOnly = "owner_manual_only"
 
+// ReasonOwnerManualCheckFailed refuses a bulk apply whose owner-manual-only
+// check could not be completed (a store read of the book's series or files
+// failed). It is its own reason, not owner_manual_only, so a report does not
+// count a read fault as a Doctor Who book; like owner_manual_only it is hard
+// and no bulk owner-review pin lifts it, since reading the fault as "not
+// manual-only" would loosen the rule.
+const ReasonOwnerManualCheckFailed = "owner_manual_check_failed"
+
 // ManualOnlyGuard is the bulk-apply input to the owner-manual-only check in
 // EvaluateTranscribed. The zero value is a single-book caller (the apply
 // dialog, one review row the owner approved, metadata.upgrade which checks
@@ -41,25 +49,33 @@ type ManualOnlyGuard struct {
 	// (a bulk apply, including the review page's bulk buttons).
 	Bulk bool
 	// StoreDetail is the caller's store-backed finding ("" = none): what its
-	// read of the book's series name and every book_file path matched, or
-	// that the read failed (a failed read counts as manual-only, since reading
-	// it as "not manual-only" would loosen the rule).
+	// read of the book's series name and every book_file path matched.
 	StoreDetail string
+	// ReadErr is set instead of StoreDetail when the caller's store read
+	// failed: the check could not be done, and the gate refuses with
+	// ReasonOwnerManualCheckFailed.
+	ReadErr string
 }
 
 // ManualOnlyDetail reports why a bulk apply of candidate c onto book must be
-// refused as owner-manual-only, or "" when nothing marks it. It checks
+// refused, as a reason and detail, or two "" when nothing marks it. The
+// reason is ReasonOwnerManualCheckFailed when the caller's store read failed
+// (g.ReadErr: the check could not be done) and ReasonOwnerManualOnly when
+// something names the library. It checks
 // everything the gate holds without a store read: the book's path and title,
 // the query it was found by (ts.Query: a blank-titled Big Finish book whose
 // intro says "Doctor Who: The Chimes of Midnight"), and the candidate's own
 // title and series (Audible answering with a Doctor Who record). The caller's
 // store-backed finding (series row, book_file paths) comes in g.StoreDetail.
-func ManualOnlyDetail(book *database.Book, c *metafetch.MetadataCandidate, ts TranscribedSearch, g ManualOnlyGuard) string {
+func ManualOnlyDetail(book *database.Book, c *metafetch.MetadataCandidate, ts TranscribedSearch, g ManualOnlyGuard) (reason, detail string) {
 	if !g.Bulk {
-		return ""
+		return "", ""
+	}
+	if g.ReadErr != "" {
+		return ReasonOwnerManualCheckFailed, g.ReadErr
 	}
 	if g.StoreDetail != "" {
-		return g.StoreDetail
+		return ReasonOwnerManualOnly, g.StoreDetail
 	}
 	checks := []struct{ what, value string }{
 		{"path", book.FilePath},
@@ -74,9 +90,9 @@ func ManualOnlyDetail(book *database.Book, c *metafetch.MetadataCandidate, ts Tr
 	}
 	for _, ch := range checks {
 		if manualOnlyRe.MatchString(ch.value) {
-			return "Doctor Who / Big Finish / Torchwood are applied by hand, one book at a time; " +
+			return ReasonOwnerManualOnly, "Doctor Who / Big Finish / Torchwood are applied by hand, one book at a time; " +
 				ch.what + " " + strconv.Quote(ch.value)
 		}
 	}
-	return ""
+	return "", ""
 }

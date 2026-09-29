@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.35.0
+// version: 5.36.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-28
 
@@ -350,9 +350,9 @@ type MetadataCandidate struct {
 	// (internal/applygate) on the copy it judges, never by a provider and
 	// never written back into the candidate cache, so a review pin's content
 	// hash is unaffected. It is set only when the gate's verdict is not
-	// identity_stale or owner_manual_only. The bulk-apply op log reads it, and
-	// the API and bulk-apply preview JSON carry it; no web view renders it
-	// yet.
+	// identity_stale, owner_manual_only or owner_manual_check_failed. The
+	// bulk-apply op log reads it, and the API and bulk-apply preview JSON
+	// carry it; no web view renders it yet.
 	IdentityEvidence *CandidateIdentityEvidence `json:"identity_evidence,omitempty"`
 }
 

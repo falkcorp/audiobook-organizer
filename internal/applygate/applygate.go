@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-09-28
 
@@ -252,11 +252,11 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 	if identityLifted {
 		used = true
 	}
-	manualOnly := ManualOnlyDetail(book, c, ts, guard)
+	manualReason, manualDetail := ManualOnlyDetail(book, c, ts, guard)
 
 	switch {
-	case manualOnly != "":
-		v.Reason, v.Detail = ReasonOwnerManualOnly, manualOnly
+	case manualReason != "":
+		v.Reason, v.Detail = manualReason, manualDetail
 	case identityErr != nil && !identityLifted:
 		v.Reason, v.Detail = ReasonIdentityStale, identityErr.Error()
 		if ts.ExplainsStaleIdentity && !match {
@@ -281,7 +281,8 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 	default:
 		v.Allowed = true
 	}
-	if used && v.Reason != ReasonIdentityStale && v.Reason != ReasonOwnerManualOnly {
+	if used && v.Reason != ReasonIdentityStale && v.Reason != ReasonOwnerManualOnly &&
+		v.Reason != ReasonOwnerManualCheckFailed {
 		ev := &metafetch.CandidateIdentityEvidence{
 			Kind:   metafetch.IdentityEvidenceTranscribedTitle,
 			Query:  ts.Query,

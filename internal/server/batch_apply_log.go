@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_log.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ca44bf85-18ad-4a64-96ce-f9f9d87aaf31
 // last-edited: 2026-09-28
 //
@@ -98,9 +98,10 @@ func batchApplyAppliedLine(id string, out applyOutcome) string {
 // which the candidate's title matches`, or "" when there was none. It is how
 // an applied book with a blank or chapter-number title says why it passed.
 //
-// The gate records it only when the verdict is not identity_stale or
-// owner_manual_only, and a refused line is worded so it never reads as an
-// accepted identity: the title matched, and another check refused.
+// The gate records it only when the verdict is not identity_stale,
+// owner_manual_only or owner_manual_check_failed, and a refused line is
+// worded so it never reads as an accepted identity: the title matched, and
+// another check refused.
 func batchApplyIdentityEvidence(out applyOutcome, prefix string) string {
 	var ev *metafetch.CandidateIdentityEvidence
 	if out.Gate != nil {
