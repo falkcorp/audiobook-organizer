@@ -1,5 +1,5 @@
 // file: internal/authorname/parse_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3b8e5f27-14a9-4c03-9d6b-8e21f70a4c95
 // last-edited: 2026-09-28
 
@@ -279,6 +279,16 @@ func TestParseDashFilename(t *testing.T) {
 		{"The Dark Tower 01 - King, Stephen", "King, Stephen", "The Dark Tower 01", ""},
 		// ...a plain two-word one does not (documented cost).
 		{"The Dark Tower 01 - Stephen King", "", "Stephen King", "The Dark Tower 01"},
+		// Round-4 review rows: word count and a bare "." are not strong
+		// evidence; a function word inside vetoes; an edition suffix,
+		// initials and a list of names are.
+		{"Stormlight 02 - Words Of Radiance", "", "Words Of Radiance", "Stormlight 02"},
+		{"Dune 03 - Children Of Dune", "", "Children Of Dune", "Dune 03"},
+		{"Bill Hodges 01 - Mr. Mercedes", "", "Mr. Mercedes", "Bill Hodges 01"},
+		{"Stormlight 01 - Brandon Sanderson Jr", "", "Brandon Sanderson Jr", "Stormlight 01"},
+		{"Mistborn 01 - Brandon Sanderson (Unabridged)", "Brandon Sanderson (Unabridged)", "Mistborn 01", ""},
+		{"Discworld 01 - J. R. R. Tolkien", "J. R. R. Tolkien", "Discworld 01", ""},
+		{"Good Omens 01 - Neil Gaiman & Terry Pratchett", "Neil Gaiman & Terry Pratchett", "Good Omens 01", ""},
 	}
 	for _, tc := range cases {
 		got := ParseDashFilename(tc.in, "")
@@ -328,9 +338,65 @@ func TestSameCredit(t *testing.T) {
 		{"J.R.R. Tolkien", "J R R Tolkien", true},
 		{"Stephen King", "Suzanne Collins", false},
 		{"", "", false},
+		// Round-4: lists compare as name sets; the comma swap is only for
+		// "Surname, Given".
+		{"Neil Gaiman, Terry Pratchett", "Neil Gaiman & Terry Pratchett", true},
+		{"Terry Pratchett and Neil Gaiman", "Neil Gaiman & Terry Pratchett", true},
+		{"Neil Gaiman, Terry Pratchett", "Terry Pratchett Neil Gaiman", false},
+		{"Tolkien, J.R.R.", "J.R.R. Tolkien", true},
+		{"Le Guin, Ursula K.", "Ursula K. Le Guin", true},
+		{"Douglas Preston & Lincoln Child", "Lincoln Child", false},
 	} {
 		if got := SameCredit(tc.a, tc.b); got != tc.want {
 			t.Errorf("SameCredit(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+func TestLooksLikeStrongName(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want bool
+	}{
+		{"J. R. R. Tolkien", true},
+		{"James S. A. Corey", true},
+		{"King, Stephen", true},
+		{"Tolkien, J.R.R.", true},
+		{"Neil Gaiman & Terry Pratchett", true},
+		{"Neil Gaiman, Terry Pratchett", true},
+		{"Brandon Sanderson (Unabridged)", true},
+		{"Stephen King", false},
+		{"Brandon Sanderson Jr", false},
+		{"Words Of Radiance", false},
+		{"Children Of Dune", false},
+		{"Mr. Mercedes", false},
+		{"Oathbringer Part One", false},
+		{"Preston & Child", false},
+	} {
+		if got := looksLikeStrongName(tc.in); got != tc.want {
+			t.Errorf("looksLikeStrongName(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestExtractAuthorAboveTitle(t *testing.T) {
+	for _, tc := range []struct {
+		probe, title, want string
+	}{
+		// The probe is the title folder; its parent is the folder read.
+		{"/lib/Neil Gaiman/Good Omens", "Good Omens", "Neil Gaiman"},
+		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire", "Harry Potter and the Goblet of Fire", ""},
+		{"/lib/Science Fiction/Good Omens", "Good Omens", ""},
+		{"/lib/Audiobooks/Good Omens", "Good Omens", ""},
+		// Prefix means a whole-word prefix, not a shared first letters.
+		{"/lib/Stephen King/Stephen Kingdom", "Stephen Kingdom", "Stephen King"},
+		// LIMIT: not prefixing its titles, a series folder is person-shaped.
+		{"/lib/Jack Reacher/Killing Floor", "Killing Floor", "Jack Reacher"},
+		// title "" is the ordinary fallback.
+		{"/lib/Harry Potter/x.mp3", "", "Harry Potter"},
+	} {
+		if got := ExtractAuthorAboveTitle(tc.probe, tc.title); got != tc.want {
+			t.Errorf("ExtractAuthorAboveTitle(%q, %q) = %q, want %q", tc.probe, tc.title, got, tc.want)
 		}
 	}
 }

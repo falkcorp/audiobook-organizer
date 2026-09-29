@@ -1,5 +1,5 @@
 // file: internal/authorname/parse.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9f4c2a71-58d3-4e60-b19a-6c0e7d35f8b2
 // last-edited: 2026-09-28
 
@@ -8,6 +8,7 @@ package authorname
 import (
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
@@ -68,9 +69,51 @@ var skipDirs = map[string]bool{
 	"bt": true, "incomplete": true, "data": true,
 }
 
+// genericDirNames are folder names that say nothing about the work or its
+// author: a library or import root, or the "unknown" placeholder. They live
+// here, not in internal/metadata, so the directory fallback below and the
+// metadata folder parser refuse the SAME set (metadata imports this package;
+// the reverse would be a cycle). Read through IsGenericFolder.
+var genericDirNames = map[string]bool{
+	"": true, ".": true, "/": true,
+	"books": true, "audiobooks": true, "audiobook": true, "downloads": true, "import": true,
+	"imports": true, "incoming": true, "library": true, "media": true, "audio": true,
+	"unknown author": true, "unknown": true,
+}
+
+// genreDirNames are genre / category folder names that are person-SHAPED (two
+// capitalised words, or one) and would otherwise pass a shape test: a library
+// shelved "<genre>/<title>/<file>" handed the genre to the author fallback
+// ("/lib/Science Fiction/Good Omens/Good Omens.mp3" gave "Science Fiction").
+// No genre list existed in the repo to reuse: the provider genre data (Audible
+// category ladders, Google Books categories) is per-book API output, not a
+// lookup set. Read through IsGenreFolder.
+var genreDirNames = map[string]bool{
+	"science fiction": true, "sci-fi": true, "scifi": true, "fantasy": true,
+	"science fiction & fantasy": true, "science fiction and fantasy": true,
+	"mystery": true, "mysteries": true, "thriller": true, "thrillers": true,
+	"mystery & thriller": true, "horror": true, "romance": true,
+	"non-fiction": true, "nonfiction": true, "non fiction": true, "fiction": true,
+	"biography": true, "biographies": true, "history": true,
+	"young adult": true, "kids": true, "children": true, "childrens": true,
+	"children's": true, "classics": true, "literature": true,
+}
+
+// IsGenericFolder reports whether a folder name is a container (library or
+// import root, disc-less "unknown" placeholder), never a work or an author.
+func IsGenericFolder(name string) bool {
+	return genericDirNames[strings.ToLower(strings.TrimSpace(name))]
+}
+
+// IsGenreFolder reports whether a folder name is a genre or category shelf.
+func IsGenreFolder(name string) bool {
+	return genreDirNames[strings.ToLower(strings.TrimSpace(name))]
+}
+
 // looksLikeDirectoryAuthor is the gate every branch of ExtractAuthorFromDirectory
-// uses: person-SHAPED (personname.LooksLikePersonName) and not work-NAMED
-// (personname.LooksLikeWorkTitle).
+// uses: person-SHAPED (personname.LooksLikePersonName), not work-NAMED
+// (personname.LooksLikeWorkTitle), and not a genre or container folder
+// (IsGenreFolder / IsGenericFolder).
 //
 // The second half was added 2026-09-28. The shape test alone accepts "The
 // Stormlight Archive" and "The Hobbit" -- two to four capitalised words -- so a
@@ -80,6 +123,9 @@ var skipDirs = map[string]bool{
 // Kings": fixing the filename parse alone would have moved the bogus author
 // one line down.
 func looksLikeDirectoryAuthor(s string) bool {
+	if IsGenreFolder(s) || IsGenericFolder(s) {
+		return false
+	}
 	return personname.LooksLikePersonName(s) && !personname.LooksLikeWorkTitle(s)
 }
 
@@ -229,10 +275,13 @@ type DashParse struct {
 //     number ("Pratchett 036", "Discworld 01") arrives exactly so. Matching
 //     the right side against ANY ancestor was fooled by
 //     "<author>/<series>/<title>/<series NN> - <title>.ext" layouts;
-//     - a STRONG name on the right (looksLikeStrongName): initials, a
-//     "Surname, Given" comma form, a credit list, or three or more words.
-//     COST, accepted: a plain two-word name outside the organizer layout --
-//     "The Dark Tower 01 - Stephen King" -- gives title "Stephen King" and no
+//     - a STRONG name on the right (looksLikeStrongName): a single-letter
+//     initial, a "Surname, Given" comma form, a list of person-shaped names,
+//     or an edition suffix ("Brandon Sanderson (Unabridged)"); never with a
+//     capitalised function word inside ("Words Of Radiance").
+//     COST, accepted: a plain name outside the organizer layout -- "The Dark
+//     Tower 01 - Stephen King", "Red Rising 01 - Pierce Brown", "Stormlight
+//     01 - Brandon Sanderson Jr" -- gives that name as the title and no
 //     author. "Leviathan Wakes" and "Stephen King" have the same shape; this
 //     errs to an ABSENT author (tags or AI nomination fill it) rather than a
 //     wrong one.
@@ -336,34 +385,150 @@ func isOrganizerLayout(left, right, filePath string) bool {
 }
 
 // looksLikeStrongName reports whether s is a credit whose SHAPE, not just its
-// capitalisation, says person: initials ("J. R. R. Tolkien", "James S. A.
-// Corey"), a "Surname, Given" comma form, a list of names, or three or more
-// words. A plain two-capitalised-word string is not strong: "Leviathan Wakes"
-// and "Stephen King" cannot be told apart.
+// capitalisation, says person. A plain run of capitalised words is not strong:
+// "Leviathan Wakes" and "Stephen King" cannot be told apart, and neither can
+// "Words Of Radiance", "Children Of Dune" or "Mr. Mercedes" from a name by word
+// count or a "." alone -- each of those was credited as the author while this
+// accepted three or more words and any ".". Strong evidence is one of:
+//   - a single-letter initial ("J. R. R. Tolkien", "James S. A. Corey");
+//   - "Surname, Given" (isSurnameGiven);
+//   - a list joined by ",", "&" or "and" whose every part is person-shaped;
+//   - an edition suffix ("Brandon Sanderson (Unabridged)"): a title with a
+//     padded series number in front of it is not decorated that way.
+//
+// A capitalised function word inside the string (Of, The, And, In, To, At,
+// From, For, A, An) vetoes all of these.
 func looksLikeStrongName(s string) bool {
-	if !personname.LooksLikeAuthorCredit(s) {
+	trimmed := strings.TrimSpace(s)
+	bare := strings.TrimSpace(personname.StripEditionSuffix(trimmed))
+	if bare == "" || !personname.LooksLikeAuthorCredit(bare) || hasInnerFunctionWord(bare) {
 		return false
 	}
-	bare := personname.StripEditionSuffix(s)
-	return strings.ContainsAny(bare, ".,&+/") || len(strings.Fields(bare)) >= 3 ||
-		strings.Contains(strings.ToLower(bare), " and ")
+	if bare != trimmed {
+		return true
+	}
+	return hasInitial(bare) || isSurnameGiven(bare) || isPersonList(bare)
+}
+
+// innerFunctionWords are the capitalised function words that sit inside titles
+// ("Words Of Radiance", "Harry Potter And The ...") and not inside names.
+// Lowercase "and" is a list joiner and is not on it.
+var innerFunctionWords = map[string]bool{
+	"Of": true, "The": true, "And": true, "In": true, "To": true,
+	"At": true, "From": true, "For": true, "A": true, "An": true,
+}
+
+func hasInnerFunctionWord(s string) bool {
+	fields := strings.Fields(s)
+	for i := 1; i < len(fields); i++ {
+		if innerFunctionWords[strings.Trim(fields[i], ",&")] {
+			return true
+		}
+	}
+	return false
+}
+
+// initialRe is one initial or a run of them: "J", "S.", "J.R.R.", "J.R.R".
+var initialRe = regexp.MustCompile(`^(?:[A-Z]\.){1,4}[A-Z]?$|^[A-Z]$`)
+
+func isInitial(tok string) bool {
+	return initialRe.MatchString(strings.TrimRight(tok, ","))
+}
+
+func hasInitial(s string) bool {
+	return slices.ContainsFunc(strings.Fields(s), isInitial)
+}
+
+// isSurnameGiven reports the "Surname, Given" shape: exactly one comma, a
+// surname of one or two words, and a given part that is one word, or one word
+// or initial followed only by initials ("King, Stephen", "Tolkien, J.R.R.",
+// "Le Guin, Ursula K."). "Neil Gaiman, Terry Pratchett" is a list, not this.
+func isSurnameGiven(s string) bool {
+	parts := strings.Split(s, ",")
+	if len(parts) != 2 {
+		return false
+	}
+	surname, given := strings.Fields(parts[0]), strings.Fields(parts[1])
+	if len(surname) == 0 || len(surname) > 2 || len(given) == 0 {
+		return false
+	}
+	for _, g := range given[1:] {
+		if !isInitial(g) {
+			return false
+		}
+	}
+	return true
+}
+
+// creditListSepRe splits a credit list on ",", "&" or a standalone "and".
+var creditListSepRe = regexp.MustCompile(`(?i)\s*(?:,|&|\s+and\s+)\s*`)
+
+// isPersonList reports a list of two or more credits, each person-shaped.
+// "Preston & Child" is refused: its parts are single words.
+func isPersonList(s string) bool {
+	parts := creditListSepRe.Split(s, -1)
+	if len(parts) < 2 {
+		return false
+	}
+	for _, p := range parts {
+		if !personname.LooksLikePersonName(strings.TrimSpace(p)) {
+			return false
+		}
+	}
+	return true
 }
 
 // SameCredit reports whether two author strings name the same credit, up to
 // case, an edition suffix ("Andy Weir (Unabridged)"), initial punctuation
-// ("J.R.R." / "J R R") and the "Surname, Given" inversion. It exists so a
-// caller orienting a filename by a TAGGED author does not read a spelling
-// difference as a disagreement.
+// ("J.R.R." / "J R R"), the "Surname, Given" inversion, and the order and
+// joiner of a list ("Neil Gaiman, Terry Pratchett" / "Neil Gaiman & Terry
+// Pratchett"). It exists so a caller orienting a filename by a TAGGED author
+// does not read a spelling difference as a disagreement. It compares the SET
+// of names: "Douglas Preston & Lincoln Child" is not "Lincoln Child".
 func SameCredit(a, b string) bool {
-	na, nb := normalizeCredit(a), normalizeCredit(b)
-	return na != "" && na == nb
+	na, nb := creditNames(a), creditNames(b)
+	return len(na) > 0 && slices.Equal(na, nb)
 }
 
-func normalizeCredit(s string) string {
-	s = strings.ToLower(personname.StripEditionSuffix(s))
-	if parts := strings.Split(s, ","); len(parts) == 2 {
-		s = parts[1] + " " + parts[0]
+// creditNames normalises a credit to its sorted set of names. The comma swap
+// applies only to the "Surname, Given" shape; swapping any two-part comma
+// string turned "Neil Gaiman, Terry Pratchett" into "Terry Pratchett Neil
+// Gaiman".
+func creditNames(s string) []string {
+	s = strings.TrimSpace(personname.StripEditionSuffix(s))
+	if isSurnameGiven(s) {
+		parts := strings.SplitN(s, ",", 2)
+		s = strings.TrimSpace(parts[1]) + " " + strings.TrimSpace(parts[0])
 	}
-	s = strings.NewReplacer(".", " ", "_", " ").Replace(s)
-	return strings.Join(strings.Fields(s), " ")
+	var names []string
+	for _, p := range creditListSepRe.Split(s, -1) {
+		p = strings.ToLower(strings.NewReplacer(".", " ", "_", " ").Replace(p))
+		if p = strings.Join(strings.Fields(p), " "); p != "" {
+			names = append(names, p)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// ExtractAuthorAboveTitle is ExtractAuthorFromDirectory for a probe whose
+// parent folder sits directly above a TITLE folder -- the "<x>/<title>/<file>"
+// fallbacks, where the caller has already recognised the file's own folder as
+// the title and passes that folder as the probe. The folder read is then
+// whatever shelves titles: an author, but just as often a series or a genre.
+// A series folder whose name OPENS the title ("Harry Potter" above "Harry
+// Potter and the Goblet of Fire") is refused here; genre folders are refused
+// by the shared gate. title == "" disables the prefix check.
+//
+// LIMIT: a series folder that does not prefix its titles ("Jack
+// Reacher/Killing Floor/") is person-shaped and still read as the author.
+func ExtractAuthorAboveTitle(probe, title string) string {
+	if title != "" {
+		folder := strings.TrimSpace(filepath.Base(filepath.Dir(probe)))
+		t := strings.TrimSpace(title)
+		if folder != "" && len(t) > len(folder) && strings.EqualFold(t[:len(folder)], folder) && t[len(folder)] == ' ' {
+			return ""
+		}
+	}
+	return ExtractAuthorFromDirectory(probe)
 }

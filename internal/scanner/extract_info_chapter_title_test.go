@@ -1,5 +1,5 @@
 // file: internal/scanner/extract_info_chapter_title_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1887ad95-0bf8-4bb7-87f5-cf52026d1289
 // last-edited: 2026-09-28
 
@@ -122,6 +122,19 @@ func TestExtractInfoFromPath_SeriesTitleIsNotAnAuthor(t *testing.T) {
 		{"/lib/Leviathan Wakes/The Expanse 01 - Leviathan Wakes.mp3", "", "Leviathan Wakes", "The Expanse 01", "The Expanse", 1},
 		{"/lib/import/The Book Thief - Markus Zusak.mp3", "Markus Zusak", "The Book Thief", "", "", 0},
 		{"/lib/Neil Gaiman/Good Omens/Good Omens.mp3", "Neil Gaiman", "Good Omens", "", "", 0},
+		// Round-4 review rows.
+		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/Harry Potter and the Goblet of Fire.mp3", "", "Harry Potter and the Goblet of Fire", "", "", 0},
+		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/01.mp3", "", "Harry Potter and the Goblet of Fire", "", "", 0},
+		{"/lib/Science Fiction/Good Omens/Good Omens.mp3", "", "Good Omens", "", "", 0},
+		{"/lib/Lee Child/Killing Floor/Killing Floor.mp3", "Lee Child", "Killing Floor", "", "", 0},
+		{"/lib/Jack Reacher/Killing Floor/Killing Floor.mp3", "Jack Reacher", "Killing Floor", "", "", 0},
+		{"/lib/Stephen King/Stephen King.mp3", "", "Stephen King", "", "", 0},
+		{"/lib/import/Stormlight 02 - Words Of Radiance.mp3", "", "Words Of Radiance", "Stormlight 02", "Stormlight", 2},
+		{"/lib/import/Dune 03 - Children Of Dune.mp3", "", "Children Of Dune", "Dune 03", "Dune", 3},
+		{"/lib/import/Bill Hodges 01 - Mr. Mercedes.mp3", "", "Mr. Mercedes", "Bill Hodges 01", "Bill Hodges", 1},
+		{"/lib/import/Mistborn 01 - Brandon Sanderson (Unabridged).mp3", "Brandon Sanderson (Unabridged)", "Mistborn 01", "", "", 0},
+		{"/lib/import/Good Omens 01 - Neil Gaiman & Terry Pratchett.mp3", "Neil Gaiman & Terry Pratchett", "Good Omens 01", "", "", 0},
+		{"/lib/import/Discworld 01 - J. R. R. Tolkien.mp3", "J. R. R. Tolkien", "Discworld 01", "", "", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -170,6 +183,10 @@ func TestExtractInfoFromPath_TagOrientsTheSplit(t *testing.T) {
 		// A spelling difference is not a disagreement.
 		{"Andy Weir", "/lib/import/The Martian - Andy Weir (Unabridged).mp3", "The Martian", ""},
 		{"King, Stephen", "/lib/Stephen King/The Stand/The Stand - Stephen King.mp3", "The Stand", ""},
+		// Round-4: a list tag matches a list in any order and joiner.
+		{"Neil Gaiman, Terry Pratchett", "/lib/import/Good Omens - Neil Gaiman & Terry Pratchett.mp3", "Good Omens", ""},
+		{"Tolkien, J.R.R.", "/lib/import/The Hobbit - J.R.R. Tolkien.mp3", "The Hobbit", ""},
+		{"Brandon Sanderson", "/lib/import/Stormlight 02 - Words Of Radiance.mp3", "Words Of Radiance", "Stormlight 02"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {

@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0cc97d6f-e2ee-42d6-8233-ed4cec61f5ab
 // last-edited: 2026-09-28
 
@@ -174,6 +174,19 @@ func TestExtractFromFilename_SeriesTitleIsNotAnAuthor(t *testing.T) {
 		{"/lib/Leviathan Wakes/The Expanse 01 - Leviathan Wakes.mp3", "", "Leviathan Wakes", "The Expanse 01"},
 		{"/lib/import/The Book Thief - Markus Zusak.mp3", "Markus Zusak", "The Book Thief", ""},
 		{"/lib/Neil Gaiman/Good Omens/Good Omens.mp3", "Neil Gaiman", "Good Omens", ""},
+		// Round-4 review rows.
+		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/Harry Potter and the Goblet of Fire.mp3", "", "Harry Potter and the Goblet of Fire", ""},
+		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/01.mp3", "", "Harry Potter and the Goblet of Fire", ""},
+		{"/lib/Science Fiction/Good Omens/Good Omens.mp3", "", "Good Omens", ""},
+		{"/lib/Lee Child/Killing Floor/Killing Floor.mp3", "Lee Child", "Killing Floor", ""},
+		{"/lib/Jack Reacher/Killing Floor/Killing Floor.mp3", "Jack Reacher", "Killing Floor", ""},
+		{"/lib/Stephen King/Stephen King.mp3", "", "Stephen King", ""},
+		{"/lib/import/Stormlight 02 - Words Of Radiance.mp3", "", "Words Of Radiance", "Stormlight 02"},
+		{"/lib/import/Dune 03 - Children Of Dune.mp3", "", "Children Of Dune", "Dune 03"},
+		{"/lib/import/Bill Hodges 01 - Mr. Mercedes.mp3", "", "Mr. Mercedes", "Bill Hodges 01"},
+		{"/lib/import/Mistborn 01 - Brandon Sanderson (Unabridged).mp3", "Brandon Sanderson (Unabridged)", "Mistborn 01", ""},
+		{"/lib/import/Good Omens 01 - Neil Gaiman & Terry Pratchett.mp3", "Neil Gaiman & Terry Pratchett", "Good Omens 01", ""},
+		{"/lib/import/Discworld 01 - J. R. R. Tolkien.mp3", "J. R. R. Tolkien", "Discworld 01", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {

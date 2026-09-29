@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 // last-edited: 2026-09-28
 
@@ -761,14 +761,15 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 		// A file named only by its chapter number ("Eldest/98.mp3") has no
 		// title in its name: take the folder's name as the title, and the
 		// author from the folder above it. See ChapterTitleFromDirectory.
-		authorProbe := filePath
+		// aboveTitle: see the same variable in internal/scanner.
+		authorProbe, aboveTitle := filePath, ""
 		if dirTitle, titleDir, ok := ChapterTitleFromDirectory(filePath, metadata.Title); ok {
 			metadata.Title = dirTitle
-			authorProbe = titleDir
+			authorProbe, aboveTitle = titleDir, dirTitle
 		} else if ParentIsTitleFolder(filePath, metadata.Title) {
 			// "<author>/<title>/<title>.ext": the parent is the TITLE, so the
 			// author is read from the folder above it.
-			authorProbe = filepath.Dir(filePath)
+			authorProbe, aboveTitle = filepath.Dir(filePath), metadata.Title
 		}
 
 		// The organizer names an authorless book "<title> - Unknown Author.ext", so
@@ -786,7 +787,7 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 
 		// If we still don't have an artist, try to get from parent directory
 		if metadata.Artist == "" {
-			metadata.Artist = authorname.ExtractAuthorFromDirectory(authorProbe)
+			metadata.Artist = authorname.ExtractAuthorAboveTitle(authorProbe, aboveTitle)
 		}
 
 		// And the directory itself is usually literally "Unknown Author".
