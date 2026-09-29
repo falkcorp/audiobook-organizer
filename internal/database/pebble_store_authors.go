@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-09-25
+// last-edited: 2026-09-29
 
 package database
 
@@ -179,18 +179,29 @@ func CheckAuthorNameForCreation(name string) error {
 // DeleteAuthor too), so a create can also not interleave with a rename or a
 // delete of the same key; see nameIndexLocks for the lock order.
 func (p *PebbleStore) CreateAuthor(name string) (*Author, error) {
+	a, _, err := p.MintAuthor(name)
+	return a, err
+}
+
+// MintAuthor is CreateAuthor that also reports whether THIS call wrote the
+// row (created) or resolved one that already existed. A caller that journals
+// "I created this author" for its undo must journal only a row it minted:
+// CreateAuthor is resolve-or-create, so a row another writer made between the
+// caller's own lookup and the create would otherwise be journaled, and later
+// deleted by the undo, as this caller's.
+func (p *PebbleStore) MintAuthor(name string) (*Author, bool, error) {
 	if err := CheckAuthorNameForCreation(name); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	// Fast path: an existing author needs no lock. This is the overwhelmingly
 	// common case -- authors are resolved once per book but created once per
 	// author -- so the lock must not sit on every resolve.
 	existing, err := p.GetAuthorByName(name)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if existing != nil {
-		return existing, nil
+		return existing, false, nil
 	}
 
 	p.nameIdx.author.Lock()
@@ -204,21 +215,21 @@ func (p *PebbleStore) CreateAuthor(name string) (*Author, error) {
 	// released, a waiter observes both the durable row and the memdb projection.
 	existing, err = p.GetAuthorByName(name)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if existing != nil {
-		return existing, nil
+		return existing, false, nil
 	}
 
 	id, err := p.nextID("author")
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	author := &Author{ID: id, Name: name}
 	data, err := json.Marshal(author)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	batch := p.db.NewBatch()
@@ -228,19 +239,19 @@ func (p *PebbleStore) CreateAuthor(name string) (*Author, error) {
 
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
-		return nil, err
+		return nil, false, err
 	}
 	if err := batch.Set(indexKey, []byte(strconv.Itoa(id)), nil); err != nil {
 		batch.Close()
-		return nil, err
+		return nil, false, err
 	}
 
 	if err := batch.Commit(pebble.Sync); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	p.UpsertAuthorToMemDB(author)
-	return author, nil
+	return author, true, nil
 }
 
 // DeleteAuthor removes the author row, its name-index entry, its aliases and its

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.57.2
+// version: 1.58.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -162,6 +162,9 @@ type opsBookFileWriter interface {
 // opsAuthorStore reads and mutates authors.
 type opsAuthorStore interface {
 	CreateAuthor(name string) (*database.Author, error)
+	// MintAuthor: CreateAuthor reporting whether this call wrote the row
+	// (the junk-author fixer journals only a row it minted).
+	MintAuthor(name string) (*database.Author, bool, error)
 	DeleteAuthor(id int) error
 	GetAllAuthorBookCounts() (map[int]int, error)
 	// GetAllAuthorFileCounts is deliberately ABSENT. purge-empty-authors was its

@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-09-29
 
@@ -329,6 +329,9 @@ type ApplyResult struct {
 	BookWrites       int            `json:"book_writes"`
 	HistoryRows      int            `json:"history_rows"`
 	HistoryFailed    int            `json:"history_rows_failed"`
+	// JournalRows counts the operation-journal rows the apply recorded
+	// (book_file steps and credit writes alike); the op revert replays them.
+	JournalRows int `json:"journal_rows,omitempty"`
 	// StandDownHeld: the library-scan stand-down was held for the writes.
 	StandDownHeld bool        `json:"standdown_held"`
 	Aborted       string      `json:"aborted,omitempty"`
@@ -524,6 +527,7 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 		res.BookWrites = deps.Writer.Writes()
 		res.HistoryRows = deps.Writer.HistoryRows()
 		res.HistoryFailed = deps.Writer.HistoryFailed()
+		res.JournalRows = deps.Writer.Journaled()
 	}
 	if lost.Load() {
 		res.Aborted = ErrStandDownLost.Error()

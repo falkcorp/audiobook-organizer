@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-29
 
@@ -65,7 +65,7 @@ type revertLedgerStore interface {
 
 // revertAuthorStore restores a book's author credits and removes an author
 // row a title-as-author relink created (revertTitleRelinkCredits,
-// revertTitleRelinkAuthorCreate).
+// revertTitleRelinkAuthorCreate, revertJunkAuthorCredits).
 type revertAuthorStore interface {
 	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 	GetAuthorByID(id int) (*database.Author, error)
@@ -566,6 +566,10 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 		return rs.revertTitleRelinkCredits(c)
 	case undo.ChangeTypeTitleRelinkAuthorCreate:
 		return rs.revertTitleRelinkAuthorCreate(c)
+	case undo.ChangeTypeJunkAuthorCredits:
+		return rs.revertJunkAuthorCredits(c)
+	case undo.ChangeTypeJunkAuthorCreate:
+		return rs.revertJunkAuthorCreate(c)
 	case "organize_failed", "organize_skipped", "organize_summary":
 		// No filesystem or DB mutation recorded; nothing to reverse.
 		return nil
@@ -1345,6 +1349,113 @@ func (rs *RevertService) revertTitleRelinkCredits(c *database.OperationChange) e
 		}
 		return nil
 	})
+}
+
+// revertJunkAuthorCredits puts back the junction and primary a junk-author
+// repair replaced. Both are compare-and-set against EXACTLY what the repair
+// wrote (the row journals the post-write junction): a credit fixed by hand, a
+// co-author added or the junk row re-added since is a later change, and the
+// row is refused with nothing written. The primary is checked BEFORE the
+// junction is touched, so a changed primary never leaves a half-reverted
+// book; both writes then re-check under their own locks. A book already back
+// at the snapshot counts as restored.
+func (rs *RevertService) revertJunkAuthorCredits(c *database.OperationChange) error {
+	snap, move, err := undo.DecodeJunkAuthorCredits(c)
+	if err != nil {
+		return err
+	}
+	book, err := rs.loadBook(c.BookID)
+	if err != nil {
+		return err
+	}
+	var primary *database.Author
+	if snap.AuthorID != nil {
+		a, err := rs.db.GetAuthorByID(*snap.AuthorID)
+		if err != nil {
+			return fmt.Errorf("load journaled primary author %d: %w", *snap.AuthorID, err)
+		}
+		primary = a
+	}
+	primaryDone := false
+	if perr := undo.CheckJunkAuthorPrimaryCurrent(c.BookID, book.AuthorID, snap, move); perr != nil {
+		if !errors.Is(perr, undo.ErrAlreadyRestored) {
+			return perr
+		}
+		primaryDone = true
+	}
+	// The junction: exactly the repair's (or already the snapshot's), under
+	// the author lock. A primary already back with the junction still the
+	// repair's is a hand edit, not the revert's to finish.
+	if _, err := rs.db.ModifyBookAuthors(c.BookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+		if undo.SameJunction(cur, snap.Credits) {
+			return nil, database.ErrSkipBookAuthorsWrite
+		}
+		if err := undo.CheckJunkAuthorCreditsCurrent(c.BookID, cur, move); err != nil {
+			return nil, err
+		}
+		if primaryDone {
+			return nil, driftRefusal("book %s primary author changed since the junk-author repair", c.BookID)
+		}
+		out := make([]database.BookAuthor, len(snap.Credits))
+		copy(out, snap.Credits)
+		return out, nil
+	}); err != nil && !errors.Is(err, database.ErrSkipBookAuthorsWrite) {
+		return err
+	}
+	if !move.PrimaryChanged || primaryDone {
+		return nil
+	}
+	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+		if perr := undo.CheckJunkAuthorPrimaryCurrent(c.BookID, book.AuthorID, snap, move); perr != nil {
+			if errors.Is(perr, undo.ErrAlreadyRestored) {
+				return database.ErrSkipBookWrite
+			}
+			return perr
+		}
+		book.AuthorID = nil
+		book.Author = nil
+		if snap.AuthorID != nil {
+			id := *snap.AuthorID
+			book.AuthorID = &id
+			book.Author = primary
+		}
+		return nil
+	})
+}
+
+// revertJunkAuthorCreate removes the author row a junk-author repair created,
+// by the ID the row journaled -- never another row of the same name -- and
+// only while nothing credits it and it still has the name it was created
+// with (a renamed row is someone's since). Rows are reverted newest first, so
+// the credit rows that used it are put back before this runs.
+func (rs *RevertService) revertJunkAuthorCreate(c *database.OperationChange) error {
+	v, err := undo.DecodeJunkAuthorCreate(c)
+	if err != nil {
+		return err
+	}
+	a, err := rs.db.GetAuthorByID(v.AuthorID)
+	if err != nil {
+		return fmt.Errorf("look up created author %d: %w", v.AuthorID, err)
+	}
+	if a == nil || a.ID != v.AuthorID {
+		return nil // already gone (or merged away)
+	}
+	if a.Name != v.Name {
+		revertLog.Info("revert kept author %d: renamed since the repair created it", a.ID)
+		return nil
+	}
+	books, err := rs.db.GetBooksByAuthorIDForRelinkCore(a.ID)
+	if err != nil {
+		return fmt.Errorf("read credits of created author %d: %w", a.ID, err)
+	}
+	if len(books) > 0 {
+		revertLog.Info("revert kept author %d %q: still credited on %d books", a.ID, logger.SanitizeLogValue(a.Name), len(books))
+		return nil
+	}
+	if err := rs.db.DeleteAuthor(a.ID); err != nil {
+		return fmt.Errorf("delete created author %d: %w", a.ID, err)
+	}
+	return nil
 }
 
 // revertTitleRelinkAuthorCreate removes an author row the relink created,
