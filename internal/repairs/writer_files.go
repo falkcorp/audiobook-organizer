@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package repairs
 
@@ -60,11 +60,26 @@ type BookFileWriter interface {
 	RecomputeBookAggregates(bookID string) error
 }
 
-// journalIndex is the set of rows already in the op journal, loaded once.
+// journalIndex is the set of rows already in the op journal, loaded once,
+// and the books this writer has journaled a change for (books).
 type journalIndex struct {
 	mu     sync.Mutex
 	loaded bool
 	keys   map[string]bool
+	books  map[string]bool
+}
+
+// journaledBook reports whether this writer journaled (or, on a resume, found
+// already journaled) an operation change on bookID. Every Step journals before
+// it writes, so a Modify inside a Step sees its own book here.
+func (w *Writer) journaledBook(bookID string) bool {
+	ix := w.index
+	if ix == nil {
+		return false
+	}
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	return ix.books[bookID]
 }
 
 func journalKey(bookID, changeType, field, oldV, newV string) string {
@@ -110,6 +125,7 @@ func (w *Writer) Journal(bookID, changeType, field, oldV, newV string) error {
 			return fmt.Errorf("%w: read the op journal: %v", ErrNotJournaled, err)
 		}
 		ix.keys = map[string]bool{}
+		ix.books = map[string]bool{}
 		for _, r := range rows {
 			if r.RevertedAt == nil {
 				ix.keys[journalKey(r.BookID, r.ChangeType, r.FieldName, r.OldValue, r.NewValue)] = true
@@ -118,6 +134,7 @@ func (w *Writer) Journal(bookID, changeType, field, oldV, newV string) error {
 		ix.loaded = true
 	}
 	if ix.keys[key] {
+		ix.books[bookID] = true
 		return nil
 	}
 	if err := w.journal.CreateOperationChange(&database.OperationChange{
@@ -129,6 +146,7 @@ func (w *Writer) Journal(bookID, changeType, field, oldV, newV string) error {
 		return fmt.Errorf("%w: %s on %s: %v", ErrNotJournaled, changeType, bookID, err)
 	}
 	ix.keys[key] = true
+	ix.books[bookID] = true
 	w.journaled.Add(1)
 	return nil
 }
