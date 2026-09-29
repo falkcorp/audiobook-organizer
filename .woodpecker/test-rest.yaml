@@ -1,7 +1,7 @@
 # file: .woodpecker/test-rest.yaml
-# version: 1.1.0
+# version: 1.2.0
 # guid: c84e1b3d-2f9a-4c57-8d06-e3a1b7f5d942
-# last-edited: 2026-09-28
+# last-edited: 2026-09-29
 #
 # `make ci` test-short, part 3 of 3: every other package in `go list ./...`.
 # That includes internal/plugins/maintenance (65-110 s), internal/operations/
@@ -60,6 +60,13 @@ steps:
     image: bash
     when:
       - status: [success, failure]
+    environment:
+      GOCACHE: /Users/jdfalk/ci/cache/go-build
     commands:
       - '[ -n "$${CI_WORKSPACE}" ] && [ "$${CI_WORKSPACE}" != / ] && find "$${CI_WORKSPACE}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true'
       - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
+      # The shared GOCACHE has no size cap and race+cover builds grow it fast
+      # (94 GB on 2026-09-29, filling the disk). Drop entries unused for a day (go refreshes mtime on use).
+      - '[ -n "$${GOCACHE}" ] && find "$${GOCACHE}" -type f -mtime +1 -delete 2>/dev/null || true'
+      # A killed build leaves its go-build temp dir behind; clear any over an hour old.
+      - 'find "$${TMPDIR:-/tmp}" -maxdepth 1 -name "go-build*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true'
