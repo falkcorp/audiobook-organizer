@@ -1668,7 +1668,7 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 				}
 				steps++
 			}
-			did, err := f.retire(ctx, store, w, p.Frag.Book.ID, parentID, p.Slice, "fragment of "+parentID)
+			did, err := f.retire(ctx, store, w, p.Frag.Book.ID, parentID, p.Slice)
 			steps += did
 			if err != nil {
 				return partial(err)
@@ -1737,7 +1737,7 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 				return partial(fmt.Errorf("fragment %s still owns %d row(s) (err=%v); not retired", m.Frag.Book.ID, len(rows), err))
 			}
 			did, err := f.retire(ctx, store, w, m.Frag.Book.ID, plan.SurvivorID,
-				merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true}, "consolidated into "+plan.SurvivorID)
+				merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
 			steps += did
 			if err != nil {
 				return partial(err)
@@ -1826,9 +1826,19 @@ func (f *fragmentFixer) retitle(store OpsStore, w *repairs.Writer, id, was, titl
 //     (book_soft_delete).
 //
 // Its version group is then handed a primary. The fragment's book_file row,
-// if it still has one, is kept. The count is the steps written; a book
-// already soft-deleted counts none (the last step of an earlier run).
-func (f *fragmentFixer) retire(ctx context.Context, store OpsStore, w *repairs.Writer, id, target string, slice merge.SliceMapping, note string) (int, error) {
+// if it still has one, is kept.
+//
+// Every refusal (an iTunes id on the book, on one of its rows or among its
+// external ids) is checked BEFORE step 1, so a refused retire has written
+// nothing. The count is the steps written, a persisted follow snapshot
+// included, so a failure after it reports partially_applied; a book already
+// soft-deleted counts none (the last step of an earlier run).
+//
+// A follow that could not move every user leaves merge's pending-repair
+// record behind. Its sweep defers while the fragment is live
+// (merge.ErrPendingLoserLive), so it never drains progress off a fragment a
+// failed retire left live; the op revert drops the record.
+func (f *fragmentFixer) retire(ctx context.Context, store OpsStore, w *repairs.Writer, id, target string, slice merge.SliceMapping) (int, error) {
 	b, err := store.GetBookByID(id)
 	if err != nil {
 		return 0, fmt.Errorf("read %s: %w", id, err)
@@ -1839,26 +1849,36 @@ func (f *fragmentFixer) retire(ctx context.Context, store OpsStore, w *repairs.W
 	if b.IsSoftDeleted() {
 		return 0, nil
 	}
+	// Refusals first: nothing is written for a refused retire.
 	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
 		return 0, fmt.Errorf("%w: fragment %s now carries an iTunes id", repairs.ErrChangedSincePlan, id)
+	}
+	rows, err := store.GetBookFiles(id)
+	if err != nil {
+		return 0, fmt.Errorf("files of %s: %w", id, err)
+	}
+	for _, r := range rows {
+		if r.ITunesPersistentID != "" {
+			return 0, fmt.Errorf("%w: fragment %s row %s now carries an iTunes id", repairs.ErrChangedSincePlan, id, r.ID)
+		}
+	}
+	exts, err := store.GetExternalIDsForBook(id)
+	if err != nil {
+		return 0, fmt.Errorf("external ids of %s: %w", id, err)
+	}
+	for _, e := range exts {
+		if e.Source == "itunes" && !e.Tombstoned {
+			return 0, fmt.Errorf("%w: fragment %s now carries iTunes id %s", repairs.ErrChangedSincePlan, id, e.ExternalID)
+		}
 	}
 	steps := 0
 	// 1. listening state
 	did, err := f.followUserState(w, target, id, slice)
+	steps += did
 	if err != nil {
 		return steps, fmt.Errorf("carry listening state of %s: %w", id, err)
 	}
-	steps += did
 	// 2. external ids
-	exts, err := store.GetExternalIDsForBook(id)
-	if err != nil {
-		return steps, fmt.Errorf("external ids of %s: %w", id, err)
-	}
-	for _, e := range exts {
-		if e.Source == "itunes" && !e.Tombstoned {
-			return steps, fmt.Errorf("%w: fragment %s now carries iTunes id %s", repairs.ErrChangedSincePlan, id, e.ExternalID)
-		}
-	}
 	for _, e := range exts {
 		if err := w.Step(id, undo.ChangeTypeExternalIDReassign, "external_id:"+e.Source+"/"+e.ExternalID, id, target, func() error {
 			return store.ReassignExternalID(e.Source, e.ExternalID, target)
@@ -1898,8 +1918,13 @@ func (f *fragmentFixer) retire(ctx context.Context, store OpsStore, w *repairs.W
 			return steps, err
 		}
 	}
-	now := f.now()
-	if err := w.Step(id, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", note, func() error {
+	// The stamp is journaled as NewValue: the revert restores the book only
+	// while it still carries this stamp (undo.CheckSoftDeleteCurrent), so a
+	// row left by a retire that never wrote cannot un-delete a book the user
+	// deleted later. Truncated to the microsecond so the stamp compares equal
+	// after any store round trip.
+	now := f.now().UTC().Truncate(time.Microsecond)
+	if err := w.Step(id, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(now), func() error {
 		_, err := w.Modify(id, func(cur *database.Book) error {
 			if cur.FilePath != b.FilePath {
 				return fmt.Errorf("%w: fragment %s path changed during the retire", repairs.ErrChangedSincePlan, id)
@@ -1928,12 +1953,14 @@ func (f *fragmentFixer) retire(ctx context.Context, store OpsStore, w *repairs.W
 // before-and-after one after, both as user_state_follow rows; the revert of
 // the newer one restores everything and the older one then finds nothing
 // left to do. A store that cannot follow refuses only a fragment somebody has
-// listened to.
+// listened to. The count is the snapshots journaled, also on an error: a
+// persisted before-snapshot is a written step.
 func (f *fragmentFixer) followUserState(w *repairs.Writer, target, id string, slice merge.SliceMapping) (int, error) {
 	um := f.p.deps.MergeUserStateStore()
 	if um == nil {
 		return 0, errors.New("user-state store unavailable")
 	}
+	persisted := 0
 	record := func(progress []merge.CombineUserProgress) error {
 		if len(progress) == 0 {
 			return nil
@@ -1946,7 +1973,11 @@ func (f *fragmentFixer) followUserState(w *repairs.Writer, target, id string, sl
 		if err != nil {
 			return err
 		}
-		return w.Journal(id, undo.ChangeTypeUserStateFollow, undo.SurvivorField(target), "", string(v))
+		if err := w.Journal(id, undo.ChangeTypeUserStateFollow, undo.SurvivorField(target), "", string(v)); err != nil {
+			return err
+		}
+		persisted++
+		return nil
 	}
 	progress, _, err := merge.FollowAbsorbedJournaled(um, target, id, &slice, record)
 	if errors.Is(err, merge.ErrNoSyncFollower) {
@@ -1960,12 +1991,13 @@ func (f *fragmentFixer) followUserState(w *repairs.Writer, target, id string, sl
 		return 0, nil
 	}
 	if err != nil {
-		return 0, err
+		return persisted, err
 	}
 	if len(progress) == 0 {
-		return 0, nil
+		return persisted, nil
 	}
-	return 1, record(progress)
+	err = record(progress)
+	return persisted, err
 }
 
 // handOff gives a retired fragment's version group a primary again, as
