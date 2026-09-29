@@ -1,11 +1,14 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-09-29
 
 package authorjunk
 
-import "testing"
+import (
+	"testing"
+	"unicode"
+)
 
 // TestClassifyName_Positives: names the owner listed, plus the shapes
 // measured on the production author table on 2026-09-29.
@@ -461,5 +464,27 @@ func TestVerdict_RelinkOnly(t *testing.T) {
 	// A verdict rebuilt from a stored row's rule answers the same.
 	if !(Verdict{Class: ClassWorkTitle, Strength: Weak, Rule: RuleArticleThe}).RelinkOnly() {
 		t.Error("RelinkOnly must read the rule")
+	}
+}
+
+// A credit list with a clause only the added rules flag stays a credit list,
+// exactly as before those rules: clauses are judged by the base rules.
+func TestIsCompositeCredit_AddedRulesDoNotJudgeClauses(t *testing.T) {
+	for _, n := range []string{
+		"The Dalai Lama, Howard C. Cutler", "The Dalai Lama & Desmond Tutu", "The Dalai Lama; Howard Cutler",
+		"50 Cent, Robert Greene", "The Beatles, Hunter Davies", "Jackson 5 & Fred Bronson",
+	} {
+		// "50 Cent" starts with a digit, so that one was never a composite
+		// (IsCompositeCredit wants each clause to start with a letter); it
+		// was not junk either, and still is not.
+		if unicode.IsLetter([]rune(n)[0]) && !IsCompositeCredit(n) {
+			t.Errorf("IsCompositeCredit(%q) = false, want true", n)
+		}
+		if v := ClassifyName(n); v.Junk() {
+			t.Errorf("ClassifyName(%q) = %+v, want not junk (a credit list)", n, v)
+		}
+		if v := Classify(n, Evidence{}); v.Junk() {
+			t.Errorf("Classify(%q) = %+v, want not junk", n, v)
+		}
 	}
 }

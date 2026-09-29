@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
 // last-edited: 2026-09-29
 
@@ -39,20 +39,29 @@ import (
 // The Diary of River Song, Bernice Summerfield, Counter-Measures, The
 // Paternoster Gang, Missy, and Blake's 7 (Big Finish produces it). "Missy"
 // is also a given name; holding a book by a Missy costs a manual apply,
-// missing a Doctor Who book breaks the owner rule. UNIT counts only in its
+// missing a Doctor Who book breaks the owner rule. Counter-Measures counts
+// only with its separator (counterMeasuresRe). UNIT counts only in its
 // series forms, which manualOnlyUnitRe matches case-sensitively. "Class" is
 // left out: too generic.
 var manualOnlyRe = regexp.MustCompile(`(?i)\b(doctor[\s._-]*who|dr\.?[\s._-]*who|big[\s._-]*finish|torchwood|` +
 	`(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|` +
 	`[1-9](?:st|nd|rd|th)|1[0-5]th|war|fugitive)[\s._-]*doctor|` +
 	`gallifrey(?:an)?|daleks?|jago[\s._-]*(?:&|and)[\s._-]*litefoot|diary[\s._-]*of[\s._-]*river[\s._-]*song|` +
-	`bernice[\s._-]*summerfield|counter[\s._-]*measures|paternoster[\s._-]*gang|missy|blake[\x{2019}']?s[\s._-]*7)\b`)
+	`bernice[\s._-]*summerfield|paternoster[\s._-]*gang|missy|blake[\x{2019}']?s[\s._-]*7)\b`)
 
 // manualOnlyUnitRe matches Big Finish's UNIT range in its series forms only:
-// "UNIT: Dominion", "UNIT - Extinction", or all-caps "UNIT" opening a path
-// segment or the name ("UNIT Silenced", "UNIT_ Assembled" once folded). The
-// word "unit" ("Unit Operations", "The Unit") is not matched.
-var manualOnlyUnitRe = regexp.MustCompile(`(?:^|[/\\])\s*(?:(?i:unit)\s*[:\x{2013}\x{2014}-]|UNIT\s)`)
+// all-caps "UNIT" opening a path segment or the name, then a separator or a
+// space ("UNIT: Dominion", "UNIT - Extinction", "UNIT Silenced", "UNIT_
+// Assembled" once folded). The word "unit" in any other case ("Unit
+// Operations", "The Unit", "/lib/Unit - 01/") is not matched.
+var manualOnlyUnitRe = regexp.MustCompile(`(?:^|[/\\])\s*UNIT(?:\s*[:\x{2013}\x{2014}-]|\s)`)
+
+// counterMeasuresRe matches Big Finish's Counter-Measures range with its
+// separator ("Counter-Measures", "Counter_Measures", "Counter.Measures"),
+// never the word "countermeasures" or the phrase "counter measures". It reads
+// the UNFOLDED text: FoldUnderscores would make "Counter_Measures" the
+// phrase.
+var counterMeasuresRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}])counter[._-]+measures(?:$|[^\p{L}\p{N}])`)
 
 // FoldUnderscores turns every "_" into a space so a \b pattern sees a word
 // boundary there. "_" is a regexp word character, so \b never fires next to
@@ -67,7 +76,7 @@ func FoldUnderscores(s string) string {
 // matchesManualOnly is manualOnlyRe on the folded text.
 func matchesManualOnly(s string) bool {
 	f := FoldUnderscores(s)
-	return manualOnlyRe.MatchString(f) || manualOnlyUnitRe.MatchString(f)
+	return manualOnlyRe.MatchString(f) || manualOnlyUnitRe.MatchString(f) || counterMeasuresRe.MatchString(s)
 }
 
 // IsOwnerManualOnly reports whether a book with this path or series name

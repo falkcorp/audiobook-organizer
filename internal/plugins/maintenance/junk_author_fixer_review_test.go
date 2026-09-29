@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
 // last-edited: 2026-09-29
 
@@ -782,10 +782,25 @@ func TestJunkAuthorFixer_RelinkOnlyRulesNeverUnlink(t *testing.T) {
 	// with no evidence it is still never unlinked.
 	f.mkSeries("Luke Daniels", "Someone Else")
 	kh := f.book(junkBookSpec{title: "Hounded", path: "/lib/kh/h", author: "Kevin Hearne (Luke Daniels)"})
-	// Evidence names a real author: relinked.
-	f.book(junkBookSpec{title: "The Spook's Apprentice", path: "/lib/jd/sa", author: "Joseph Delaney"})
-	tc := f.book(junkBookSpec{title: "The Spook's Curse", path: "/lib/tc/sc", author: "The Complete",
+	// Two sources name a real author (file tag + a same-folder sibling):
+	// relinked.
+	f.book(junkBookSpec{title: "The Spook's Apprentice", path: "/lib/tc/sa.m4b", author: "Joseph Delaney"})
+	tc := f.book(junkBookSpec{title: "The Spook's Curse", path: "/lib/tc/sc.m4b", author: "The Complete",
 		tags: map[string]string{"artist": "Joseph Delaney"}})
+	// One file tag naming a co-author is not enough: kept, whether the
+	// co-author has a row or would be minted.
+	f.book(junkBookSpec{title: "Ethics for a New Millennium", path: "/lib/hc/em", author: "Howard Cutler"})
+	one := f.book(junkBookSpec{title: "The Art of Happiness", path: "/lib/dl/ah", author: "The Dalai Lama",
+		tags: map[string]string{"artist": "Howard Cutler"}})
+	mint := f.book(junkBookSpec{title: "The Book of Joy", path: "/lib/dl2/bj", author: "The Dalai Lama",
+		tags: map[string]string{"artist": "Douglas Abrams"}})
+	// Credit lists with a clause only the added rules flag are not junk rows.
+	composites := []string{"The Dalai Lama, Howard C. Cutler", "The Dalai Lama & Desmond Tutu", "The Dalai Lama; Howard Cutler",
+		"50 Cent, Robert Greene", "The Beatles, Hunter Davies", "Jackson 5 & Fred Bronson"}
+	compBooks := map[string]string{}
+	for i, n := range composites {
+		compBooks[n] = f.book(junkBookSpec{title: "Joint Book " + strconv.Itoa(i), path: "/lib/comp/" + strconv.Itoa(i), author: n})
+	}
 	plan := f.plan()
 
 	for _, n := range append(names, "Kevin Hearne (Luke Daniels)") {
@@ -797,6 +812,15 @@ func TestJunkAuthorFixer_RelinkOnlyRulesNeverUnlink(t *testing.T) {
 		require.NotNil(t, r, n)
 		require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%s: %s / %s", n, r.Reason, r.SkipReason)
 		require.Contains(t, r.SkipReason, "the credit is kept", n)
+	}
+	for _, id := range []string{one, mint} {
+		r := f.row(plan, "The Dalai Lama", id)
+		require.NotNil(t, r)
+		require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%s / %s", r.Reason, r.SkipReason)
+		require.Contains(t, r.SkipReason, "uncorroborated", r.SkipReason)
+	}
+	for _, n := range composites {
+		noRowsFor(t, f, plan, n)
 	}
 	r := f.row(plan, "The Complete", tc)
 	require.NotNil(t, r)
@@ -810,6 +834,14 @@ func TestJunkAuthorFixer_RelinkOnlyRulesNeverUnlink(t *testing.T) {
 	}
 	require.Equal(t, []int{f.authors["Kevin Hearne (Luke Daniels)"]}, f.credits(kh))
 	require.Equal(t, []int{f.authors["Joseph Delaney"]}, f.credits(tc))
+	require.Equal(t, []int{f.authors["The Dalai Lama"]}, f.credits(one))
+	require.Equal(t, []int{f.authors["The Dalai Lama"]}, f.credits(mint))
+	for n, id := range compBooks {
+		require.Equal(t, []int{f.authors[n]}, f.credits(id), "%s keeps its credit", n)
+	}
+	abrams, err := f.s.GetAuthorByName("Douglas Abrams")
+	require.NoError(t, err)
+	require.Nil(t, abrams, "never minted from one tag on a relink-only verdict")
 }
 
 // "The Thirteenth Doctor Adventures" is four capitalized words, so the

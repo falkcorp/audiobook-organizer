@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ed721904-7696-436b-95ae-8ef5a85c91aa
 // last-edited: 2026-09-29
 
@@ -78,9 +78,9 @@ func TestIsOwnerManualOnly_DrWhoAndSpinOffs(t *testing.T) {
 		"Dr Who", "Dr. Who and the Daleks", "Dr_Who", "DrWho", "Dr.Who - The Crusade",
 		"Gallifrey", "Gallifrey_ Time War", "The Gallifreyan Chronicles", "Dalek Empire", "Daleks!",
 		"Jago & Litefoot", "Jago and Litefoot Series 3", "Jago_and_Litefoot", "The Diary of River Song",
-		"Bernice Summerfield", "Counter-Measures", "Counter Measures Series 2", "The Paternoster Gang",
+		"Bernice Summerfield", "Counter-Measures", "Counter_Measures", "Counter.Measures Series 2", "/lib/Counter-Measures/01.mp3", "The Paternoster Gang",
 		"Missy", "Missy Series 2", "Blake's 7", "Blakes 7", "Blake’s 7", "Blakes_7",
-		"UNIT: Dominion", "UNIT - Extinction", "UNIT Silenced", "UNIT_ Assembled", "Unit: Shutdown",
+		"UNIT: Dominion", "UNIT - Extinction", "UNIT Silenced", "UNIT_ Assembled",
 		"/lib/UNIT - Nemesis/01.mp3", "/lib/UNIT Encounters/01.mp3",
 	} {
 		if !IsOwnerManualOnly("", s) || !IsOwnerManualOnly(s, "") {
@@ -89,7 +89,8 @@ func TestIsOwnerManualOnly_DrWhoAndSpinOffs(t *testing.T) {
 	}
 	for _, s := range []string{
 		"Dr. Seuss", "Dr. Seuss - Green Eggs and Ham", "Unit Operations", "The Unit", "Community Unit Plans",
-		"Blake's 70", "Countermeasure", "Jago", "River Song", "/lib/Unit Operations/01.mp3", "Commonwealth",
+		"Blake's 70", "Countermeasure", "Countermeasures", "Counter Measures", "Jago", "River Song", "/lib/Unit Operations/01.mp3", "Commonwealth",
+		"/lib/Unit - 01/01.mp3", "Unit: Shutdown", "Unit - 01",
 	} {
 		if IsOwnerManualOnly("", s) || IsOwnerManualOnly(s, "") {
 			t.Errorf("IsOwnerManualOnly(%q) = true, want false", s)
