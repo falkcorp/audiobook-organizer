@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
 // last-edited: 2026-09-29
 
@@ -515,15 +515,9 @@ func TestJunkTitleFixer_ConflictingEvidenceProposesNeither(t *testing.T) {
 	id = addJunkBook(t, st, "read by narrator", banks, two("/lib/Iain M. Banks/Excession")...)
 	transcribe(id, "Audible Studios presents")
 	conflicts[id] = [2]string{"Excession", "Audible Studios presents"}
-	id = addJunkBook(t, st, "Opening", rowling, two("/lib/J.K. Rowling/New Folder (2)")...)
-	transcribe(id, "Harry Potter and the Chamber of Secrets")
-	conflicts[id] = [2]string{"New Folder (2)", "Harry Potter and the Chamber of Secrets"}
 	id = addJunkBook(t, st, "Opening", sanderson, two("/lib/Brandon Sanderson/Libation")...)
 	transcribe(id, "Mistborn: The Final Empire")
 	conflicts[id] = [2]string{"Libation", "Mistborn: The Final Empire"}
-	id = addJunkBook(t, st, "Unknown Title", weir, two("/lib/Andy Weir/Complete Collection")...)
-	cache(id, "The Martian", "Andy Weir", 0.8)
-	conflicts[id] = [2]string{"Complete Collection", "The Martian"}
 
 	proposed := map[string]string{} // id -> the title the row must propose
 	stormlight, err := st.CreateSeries("The Stormlight Archive", sanderson)
@@ -533,6 +527,14 @@ func TestJunkTitleFixer_ConflictingEvidenceProposesNeither(t *testing.T) {
 	require.NoError(t, err)
 	cache(id, "Words of Radiance", "Brandon Sanderson", 0.8)
 	proposed[id] = "Words of Radiance"
+	// A generic folder ("New Folder (2)", "Complete Collection") is no
+	// evidence and no proposal.
+	id = addJunkBook(t, st, "Opening", rowling, two("/lib/J.K. Rowling/New Folder (2)")...)
+	transcribe(id, "Harry Potter and the Chamber of Secrets")
+	proposed[id] = "Harry Potter and the Chamber of Secrets"
+	id = addJunkBook(t, st, "Unknown Title", weir, two("/lib/Andy Weir/Complete Collection")...)
+	cache(id, "The Martian", "Andy Weir", 0.8)
+	proposed[id] = "The Martian"
 	for stem, want := range map[string]string{
 		"hp1":                   "Harry Potter and the Philosopher's Stone",
 		"dune_messiah_64kbps":   "Dune Messiah",
@@ -632,5 +634,44 @@ func TestJunkTitleFixer_WeakStemAloneNeedsManual(t *testing.T) {
 		r := rows[id]
 		require.Equal(t, junkSkipNeedsManual, r.Skipped, "%s: %s", stem, r.SkipReason)
 		require.Equal(t, "only a weak filename stem: "+stem, r.SkipReason)
+	}
+}
+
+func TestJunkTitleFixer_WeakStemStillVetoesDisagreeingEvidence(t *testing.T) {
+	st, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	a, err := st.CreateAuthor("Some Author")
+	require.NoError(t, err)
+	spoken := func(id, s string) {
+		_, err := st.ModifyBook(id, func(b *database.Book) error { b.TranscribedTitle = &s; return nil })
+		require.NoError(t, err)
+	}
+	q84 := addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/A/1Q84.m4b")
+	spoken(q84, "Audible Studios presents")
+	it := addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/B/It.m4b")
+	spoken(it, "This is Audible")
+	fe := addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/C/The_Final_Empire.m4b")
+	require.NoError(t, st.PutMetadataCache(&database.MetadataCandidateCache{BookID: fe, FetchedAt: time.Now(),
+		Candidates: []json.RawMessage{json.RawMessage(`{"title":"Elantris","author":"Some Author","score":0.9}`)}}))
+	rows := planRows(t, st)
+	for name, id := range map[string]string{"1Q84": q84, "It": it, "The_Final_Empire": fe} {
+		r := rows[id]
+		require.False(t, r.Applicable(), "%s: proposed %q over its own filename", name, r.Proposed["title"])
+		require.Equal(t, junkSkipNeedsManual, r.Skipped, "%s: %s", name, r.SkipReason)
+	}
+}
+
+func TestWeakStemVeto(t *testing.T) {
+	vetoes := map[string]string{"The_Final_Empire": "The Final Empire", "It": "It", "1Q84": "1Q84",
+		"dune_messiah_64kbps": "dune messiah"}
+	for stem, want := range vetoes {
+		got, ok := weakStemVeto(stem)
+		require.True(t, ok, stem)
+		require.Equal(t, want, got, stem)
+	}
+	for _, stem := range []string{"hp1", "zz", "final", "merged", "audible_download_2019"} {
+		_, ok := weakStemVeto(stem)
+		require.False(t, ok, stem)
 	}
 }
