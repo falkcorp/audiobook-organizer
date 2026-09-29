@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.56.0
+// version: 1.57.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-28
 
@@ -589,19 +589,32 @@ type CacheInvalidator interface {
 	InvalidateSeriesCache()
 }
 
+// TranscriptionCandidate is the top cached candidate
+// SearchTranscriptionCandidate returns: what the op gates on.
+type TranscriptionCandidate struct {
+	Title  string
+	Author string
+	// Series is the candidate's series name. The op's owner-manual pre-check
+	// reads it, so a candidate marked only by its series (Audible answering
+	// with a "Big Finish Main Range" record) is skipped in a dry run exactly
+	// as the apply's own check refuses it.
+	Series string
+	// Score may exceed 1.0 (uncapped scale with transcription boosts applied).
+	Score float64
+}
+
 // TranscriptionRunners covers transcription candidate search and apply.
 type TranscriptionRunners interface {
 	// SearchTranscriptionCandidate finds the top-scoring metadata candidate for
-	// bookID using transTitle as the query. The returned score may exceed 1.0
-	// (uncapped scale with transcription boosts applied). Returns found=false
-	// when no candidates exist or the service is unavailable. The caller is
+	// bookID using transTitle as the query. Returns found=false when no
+	// candidates exist or the service is unavailable. The caller is
 	// responsible for applying score/title/author gates on the returned values.
 	SearchTranscriptionCandidate(
 		ctx context.Context,
 		bookID string,
 		transTitle string,
 		transAuthor string,
-	) (title string, author string, score float64, found bool, err error)
+	) (cand TranscriptionCandidate, found bool, err error)
 	// ApplyTranscriptionCandidate applies the top metadata candidate whose
 	// title matches candTitle to the given book, re-fetching via the cached
 	// search path. Relies on TASK-02 audio-confirm logic to set

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-28
 
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -123,6 +124,20 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 	// deliberate re-dispatch continue from there under a fresh cap.
 	capCounter := applycap.NewCounter("maintenance.auto-match-transcribed", config.AppConfig.BulkApplyMaxItems)
 
+	// Series names for the owner-manual pre-check, read once per run: the
+	// op's store has no per-id series read, and a book marked only by its
+	// series row ("Big Finish Main Range") must be skipped in a dry run as
+	// the apply's check refuses it. A failed read stops the op (fail closed):
+	// without it the pre-check cannot see that marker.
+	allSeries, err := store.GetAllSeries()
+	if err != nil {
+		return fmt.Errorf("list series for the owner-manual check: %w", err)
+	}
+	seriesNames := make(seriesNameIndex, len(allSeries))
+	for _, s := range allSeries {
+		seriesNames[s.ID] = s.Name
+	}
+
 	// lastID tracks the most-recently visited book for checkpoint writes.
 	lastID := params.LastBookID
 
@@ -160,9 +175,10 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 			transAuthor = *b.TranscribedAuthor
 		}
 
-		candTitle, candAuthor, score, found, searchErr := p.deps.SearchTranscriptionCandidate(
+		top, found, searchErr := p.deps.SearchTranscriptionCandidate(
 			ctx, id, transTitle, transAuthor,
 		)
+		candTitle, candAuthor, score := top.Title, top.Author, top.Score
 		if searchErr != nil {
 			log.Warn("auto-match-transcribed: search failed",
 				"book_id", id, "err", searchErr)
@@ -200,16 +216,16 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		// Finish / Torchwood are applied by hand, one book at a time, and this
 		// op is a bulk apply: such a book is never written, found by its path,
 		// title, transcribed title, the matched candidate, or any book_file
-		// path. A blank-titled Big Finish book whose intro names it is exactly
-		// the book the transcription match would otherwise fill. A failed
-		// book_file read refuses too (fail closed). The op's store cannot read
-		// series rows, so the series is checked where it can be: the server's
-		// ApplyTranscriptionCandidate re-runs the full guard (series and the
-		// full candidate included) and refuses with
-		// ErrTranscriptionOwnerManualOnly, counted below.
-		guard := applygate.BulkManualOnlyGuard(store, nil, b, transTitle)
+		// path, series row or the candidate's series. A blank-titled Big
+		// Finish book whose intro names it is exactly the book the
+		// transcription match would otherwise fill. A failed book_file read
+		// refuses too (fail closed). It is the same check the server's
+		// ApplyTranscriptionCandidate re-runs before it writes, so a dry run
+		// and a real run skip the same books; a refusal there (the cache
+		// changed since this read) is still counted below.
+		guard := applygate.BulkManualOnlyGuard(store, seriesNames, b, transTitle)
 		if reason, detail := applygate.ManualOnlyDetail(b,
-			&metafetch.MetadataCandidate{Title: candTitle, Author: candAuthor},
+			&metafetch.MetadataCandidate{Title: candTitle, Author: candAuthor, Series: top.Series},
 			applygate.TranscribedSearch{Query: transTitle}, guard); reason != "" {
 			manualOnly++
 			log.Info("auto-match-transcribed: skipped, owner applies this book by hand",
@@ -245,8 +261,8 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 			return nil
 		}
 		if errors.Is(applyErr, ErrTranscriptionOwnerManualOnly) {
-			// The server's full guard found what the pre-check could not (the
-			// series row, or the candidate's series): a skip, not a failure.
+			// The server's guard refused what the pre-check passed (the cache
+			// or a series changed in between): a skip, not a failure.
 			eligible--
 			manualOnly++
 			log.Info("auto-match-transcribed: skipped, owner applies this book by hand",
@@ -298,4 +314,19 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 	log.Info(summary)
 	_ = reporter.UpdateProgress(total, total, summary)
 	return nil
+}
+
+// seriesNameIndex is the run's series id -> name map, read once
+// (GetAllSeries), as the applygate.ManualOnlySeriesReader the owner-manual
+// pre-check needs. An id it does not hold is a series created after the read:
+// nil, as the store answers for a missing row.
+type seriesNameIndex map[int]string
+
+// GetSeriesByID implements applygate.ManualOnlySeriesReader.
+func (idx seriesNameIndex) GetSeriesByID(id int) (*database.Series, error) {
+	name, ok := idx[id]
+	if !ok {
+		return nil, nil
+	}
+	return &database.Series{ID: id, Name: name}, nil
 }

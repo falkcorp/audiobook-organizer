@@ -1,5 +1,5 @@
 // file: internal/applygate/transcribed_identity.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fedfaa92-fca3-4c73-b38b-25f4b0426918
 // last-edited: 2026-09-28
 
@@ -65,6 +65,21 @@ func TranscribedSearchConfirms(ts TranscribedSearch, c *metafetch.MetadataCandid
 		return false
 	}
 	return util.TitleAgrees(c.Title, c.SeriesPosition, q)
+}
+
+// TranscribedIdentityLifts reports whether ts lifts an identity_stale error
+// for candidate c on book: the caller proved the cache row differs from the
+// book in its query only (ts.ExplainsStaleIdentity), c matches the
+// transcription (TranscribedSearchConfirms), and nothing on the book
+// contradicts it (transcribedLiftRefusal). It is exactly the identity lift
+// EvaluateTranscribed applies, exported for a caller that checks the cache
+// identity without running the whole gate (the auto-match-transcribed apply),
+// so the two can never disagree about a row.
+func TranscribedIdentityLifts(book *database.Book, authors Authors, c *metafetch.MetadataCandidate, ts TranscribedSearch) bool {
+	if !ts.ExplainsStaleIdentity || strings.TrimSpace(ts.Query) == "" || !TranscribedSearchConfirms(ts, c) {
+		return false
+	}
+	return transcribedLiftRefusal(book, authors, c, ts.Query) == ""
 }
 
 // applyTranscribedTitle revises the evidence leg's title check for a

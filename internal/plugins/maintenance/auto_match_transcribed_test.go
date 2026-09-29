@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/auto_match_transcribed_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f7e9b2a-5c8d-4e1f-a0b3-6d9c2e5f8a1b
 // last-edited: 2026-09-28
 
@@ -120,18 +120,22 @@ func TestAutoMatchTranscribed_ServerManualOnlyRefusalIsASkip(t *testing.T) {
 type autoMatchDeps struct {
 	fakeDeps
 	searchFn func(ctx context.Context, bookID, transTitle, transAuthor string) (string, string, float64, bool, error)
-	applyFn  func(ctx context.Context, bookID, candTitle, candAuthor string) error
+	// candSeries is the series SearchTranscriptionCandidate reports for the
+	// candidate searchFn returns.
+	candSeries string
+	applyFn    func(ctx context.Context, bookID, candTitle, candAuthor string) error
 	// call counters
 	searchCalled int
 	applyCalled  int
 }
 
-func (d *autoMatchDeps) SearchTranscriptionCandidate(ctx context.Context, bookID, transTitle, transAuthor string) (string, string, float64, bool, error) {
+func (d *autoMatchDeps) SearchTranscriptionCandidate(ctx context.Context, bookID, transTitle, transAuthor string) (TranscriptionCandidate, bool, error) {
 	d.searchCalled++
 	if d.searchFn != nil {
-		return d.searchFn(ctx, bookID, transTitle, transAuthor)
+		title, author, score, found, err := d.searchFn(ctx, bookID, transTitle, transAuthor)
+		return TranscriptionCandidate{Title: title, Author: author, Series: d.candSeries, Score: score}, found, err
 	}
-	return "", "", 0, false, nil
+	return TranscriptionCandidate{}, false, nil
 }
 
 func (d *autoMatchDeps) ApplyTranscriptionCandidate(ctx context.Context, bookID, candTitle, candAuthor string) error {
@@ -323,4 +327,69 @@ func TestAutoMatchTranscribed_FilledTitleAndAuthorSkipped(t *testing.T) {
 	if deps.searchCalled != 0 || deps.applyCalled != 0 {
 		t.Fatalf("filled book: search %d apply %d, want 0/0", deps.searchCalled, deps.applyCalled)
 	}
+}
+
+// A book marked only by its series row, and a book marked only by the
+// candidate's series, are skipped by the pre-check -- so a dry run counts the
+// same books a real run applies. The series are read once per run
+// (GetAllSeries); a failed read stops the op rather than running blind.
+func TestAutoMatchTranscribed_SeriesMarkersSkippedInDryRun(t *testing.T) {
+	const chimes = "The Chimes of Midnight"
+	const unknown = "/library/Unknown Author/Unknown Title/book.m4b"
+	seriesID := 11
+	cases := []struct {
+		name       string
+		seriesID   *int
+		candSeries string
+	}{
+		{name: "series row names Big Finish", seriesID: &seriesID},
+		{name: "candidate series names Big Finish", candSeries: "Big Finish Main Range"},
+	}
+	for _, tc := range cases {
+		for _, dryRun := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/dry_run=%v", tc.name, dryRun), func(t *testing.T) {
+				books := []database.Book{{ID: "b1", Title: "", FilePath: unknown, SeriesID: tc.seriesID, TranscribedTitle: new(chimes)}}
+				deps := &autoMatchDeps{
+					searchFn: func(_ context.Context, _, _, _ string) (string, string, float64, bool, error) {
+						return chimes, "Robert Shearman", 1.8, true, nil
+					},
+					candSeries: tc.candSeries,
+				}
+				p := newAutoMatchPlugin(books, deps)
+				seriesReads := 0
+				deps.store.(*database.MockStore).GetAllSeriesFunc = func() ([]database.Series, error) {
+					seriesReads++
+					return []database.Series{{ID: seriesID, Name: "Big Finish Main Range"}, {ID: 12, Name: "Discworld"}}, nil
+				}
+				rep := &progressReporter{}
+				if err := p.runAutoMatchTranscribed(context.Background(), autoMatchParams(dryRun, 0), rep); err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if deps.applyCalled != 0 {
+					t.Fatalf("apply called %d times, want 0", deps.applyCalled)
+				}
+				if !strings.Contains(rep.lastMsg, "eligible 0") || !strings.Contains(rep.lastMsg, "owner-manual skipped 1") {
+					t.Errorf("summary %q does not report the skip", rep.lastMsg)
+				}
+				if seriesReads != 1 {
+					t.Errorf("series read %d times, want once per run", seriesReads)
+				}
+			})
+		}
+	}
+
+	t.Run("series read fails: the op stops", func(t *testing.T) {
+		books := []database.Book{{ID: "b1", Title: "", FilePath: unknown, TranscribedTitle: new(chimes)}}
+		deps := &autoMatchDeps{}
+		p := newAutoMatchPlugin(books, deps)
+		deps.store.(*database.MockStore).GetAllSeriesFunc = func() ([]database.Series, error) {
+			return nil, errors.New("pebble: closed")
+		}
+		if err := p.runAutoMatchTranscribed(context.Background(), autoMatchParams(true, 0), &progressReporter{}); err == nil {
+			t.Fatal("op ran without the series it needs for the owner-manual check")
+		}
+		if deps.searchCalled != 0 {
+			t.Errorf("searched %d books, want 0", deps.searchCalled)
+		}
+	})
 }

@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9c1e4f6a-2b7d-4a3e-8f5c-6d1a9b2e4c7f
 // last-edited: 2026-09-28
 
@@ -90,7 +90,8 @@ func TestApplyTranscriptionCandidate_TOCTOU_CacheChangedBetweenGateAndApply(t *t
 	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
 	ctx := context.Background()
 
-	candTitle, candAuthor, _, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	top, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	candTitle, candAuthor := top.Title, top.Author
 	if err != nil || !found {
 		t.Fatalf("SearchTranscriptionCandidate() = (found=%v, err=%v), want found=true, err=nil", found, err)
 	}
@@ -124,7 +125,8 @@ func TestApplyTranscriptionCandidate_NoRegression_SameCandidateBothReads(t *test
 	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
 	ctx := context.Background()
 
-	candTitle, candAuthor, _, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	top, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	candTitle, candAuthor := top.Title, top.Author
 	if err != nil || !found {
 		t.Fatalf("SearchTranscriptionCandidate() = (found=%v, err=%v), want found=true, err=nil", found, err)
 	}
@@ -158,7 +160,8 @@ func TestApplyTranscriptionCandidateSourceHashDriftRefused(t *testing.T) {
 	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
 	ctx := context.Background()
 
-	candTitle, candAuthor, _, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	top, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	candTitle, candAuthor := top.Title, top.Author
 	if err != nil || !found {
 		t.Fatalf("SearchTranscriptionCandidate() = (found=%v, err=%v), want found=true, err=nil", found, err)
 	}
@@ -196,7 +199,8 @@ func TestApplyTranscriptionCandidateUnchangedStillApplies(t *testing.T) {
 	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
 	ctx := context.Background()
 
-	candTitle, candAuthor, _, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	top, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	candTitle, candAuthor := top.Title, top.Author
 	if err != nil || !found {
 		t.Fatalf("SearchTranscriptionCandidate() = (found=%v, err=%v), want found=true, err=nil", found, err)
 	}
