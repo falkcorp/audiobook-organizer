@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 package maintenance
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -34,6 +35,13 @@ func (p *Plugin) optimizeDef() sdk.OperationDef {
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         36 * time.Hour,
+		// The sweep reports progress only by relaying what its running child
+		// writes (see relayChildProgress), so its own watchdog budget must be at
+		// least the longest silence a child is allowed. maintenance.temp-file-
+		// cleanup is LivenessNone with a 20-minute budget; 25 minutes covers it
+		// plus a poll interval. The acoustid children report on the 5-minute
+		// default. A hung child is still caught by its own watchdog first.
+		ProgressTimeout: optimizeProgressTimeout,
 		Capabilities: []sdk.Capability{
 			sdk.CapLibraryRead,
 			sdk.CapLibraryWrite,
@@ -43,6 +51,36 @@ func (p *Plugin) optimizeDef() sdk.OperationDef {
 			sdk.CapSubprocessSpawn,
 		},
 		Run: p.runOptimize,
+	}
+}
+
+// optimizeProgressTimeout is maintenance.library-optimize's watchdog budget.
+const optimizeProgressTimeout = 25 * time.Minute
+
+// relayChildProgress returns the WaitForOp callback that feeds this op's
+// watchdog from what it observes of child i. Before 2026-09-28 the sweep
+// reported nothing between enqueueing a child and the child finishing, so any
+// child running longer than the 5-minute default ProgressTimeout (a fingerprint
+// rescan or acoustid.scan routinely does) got the SWEEP reaped while the child
+// was healthy -- the same bug class as dedup.drain-stale (#3600).
+func relayChildProgress(prog *sdk.Progress, i, total int, name string) func(childop.Observation) {
+	head := fmt.Sprintf("Running child op %d/%d: %s", i+1, total, name)
+	return func(o childop.Observation) {
+		switch o.Event {
+		case childop.EventQueued:
+			prog.StepN(i, head+" — waiting to start (queued behind other work)")
+		case childop.EventPaused:
+			prog.StepN(i, head+" — paused by an operator")
+		default:
+			msg := head
+			if o.Row.ProgressMessage != "" {
+				msg += " — " + o.Row.ProgressMessage
+			}
+			if o.Row.ProgressTotal > 0 {
+				msg += fmt.Sprintf(" [child %d%%]", childop.Percent(o.Row))
+			}
+			prog.StepN(i, msg)
+		}
 	}
 }
 
@@ -170,8 +208,9 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 			"child_id", childID,
 		)
 
-		// Wait for the child to reach a terminal state.
-		if waitErr := p.deps.WaitForOp(ctx, childID); waitErr != nil {
+		// Wait for the child to reach a terminal state, relaying its progress so
+		// this op's watchdog sees the child working.
+		if waitErr := p.deps.WaitForOp(ctx, childID, relayChildProgress(prog, i, total, ch.name)); waitErr != nil {
 			elapsed := time.Since(childStart)
 			logging.Warn(ctx, "maintenance.library-optimize: child failed or timed out",
 				"operation_id", opID,

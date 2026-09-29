@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -198,7 +199,9 @@ func (d fakeDeps) BackupRetentionDays() int                  { return 30 }
 func (d fakeDeps) EnqueueOp(_ context.Context, _ string, _ any) (string, error) {
 	return "", nil
 }
-func (d fakeDeps) WaitForOp(_ context.Context, _ string) error { return nil }
+func (d fakeDeps) WaitForOp(_ context.Context, _ string, _ func(childop.Observation)) error {
+	return nil
+}
 func (d fakeDeps) SearchTranscriptionCandidate(_ context.Context, _, _, _ string) (string, string, float64, bool, error) {
 	return "", "", 0, false, nil
 }
