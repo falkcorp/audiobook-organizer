@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-09-28
 
@@ -121,6 +121,12 @@ type junkIndex struct {
 	titles  map[string]bool
 	authors map[int]string
 	series  map[int]string
+	// owners maps each file path of a junk-titled book to every live book
+	// with a book_file row at that path. GetBookFileByPath cannot answer
+	// this: its index holds one id per path and the last writer wins, which
+	// is the fragment itself when the scanner imported a chapter the parent
+	// already owned.
+	owners map[string][]string
 }
 
 // junkWorkDir is the folder that names the work a book path belongs to: the
@@ -163,7 +169,8 @@ func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, erro
 	if err != nil {
 		return nil, nil, fmt.Errorf("GetAllSeries: %w", err)
 	}
-	idx := &junkIndex{dirBooks: map[string]int{}, dirChapters: map[string]int{}, titles: map[string]bool{}, authors: map[int]string{}, series: map[int]string{}}
+	idx := &junkIndex{dirBooks: map[string]int{}, dirChapters: map[string]int{}, titles: map[string]bool{},
+		authors: map[int]string{}, series: map[int]string{}, owners: map[string][]string{}}
 	for i := range allSeries {
 		idx.series[allSeries[i].ID] = allSeries[i].Name
 	}
@@ -187,6 +194,34 @@ func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, erro
 			continue
 		}
 		cands = append(cands, *b)
+	}
+
+	// File ownership: two passes over one listing of every book_file row.
+	// The first keeps the paths of junk-titled books, the second collects
+	// every live owner of those paths. Both are plain map lookups per row.
+	live := make(map[string]bool, len(all))
+	for i := range all {
+		if !all[i].IsSoftDeleted() {
+			live[all[i].ID] = true
+		}
+	}
+	candIDs := make(map[string]bool, len(cands))
+	for i := range cands {
+		candIDs[cands[i].ID] = true
+	}
+	files, err := store.GetAllBookFilesCore()
+	if err != nil {
+		return nil, nil, fmt.Errorf("GetAllBookFilesCore: %w", err)
+	}
+	for i := range files {
+		if candIDs[files[i].BookID] && files[i].FilePath != "" {
+			idx.owners[files[i].FilePath] = nil
+		}
+	}
+	for i := range files {
+		if _, want := idx.owners[files[i].FilePath]; want && live[files[i].BookID] {
+			idx.owners[files[i].FilePath] = append(idx.owners[files[i].FilePath], files[i].BookID)
+		}
 	}
 	return idx, cands, nil
 }
@@ -474,7 +509,10 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		switch {
 		case len([]rune(c)) < 2, strings.EqualFold(c, strings.TrimSpace(b.Title)):
 			return "", false
-		case metadata.ClassifyJunkTitle(c) != metadata.JunkNone:
+		case metadata.ClassifyJunkTitle(c) != metadata.JunkNone, metadata.IsGenericDirName(c):
+			// A generic folder ("Books", "Audiobooks", a library root) is
+			// what the one-level climb in DeriveJunkTitleReplacement lands
+			// on above a junk-named folder; it is never a title.
 			return "", false
 		case titleNamesAPerson(c, people):
 			refused = append(refused, fmt.Sprintf("%q names the author or narrator", c))
@@ -569,6 +607,15 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 // "fragment" unless the book is a whole multi-file folder of its own.
 func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kind metadata.JunkTitleKind, author string, paths []string) (string, error) {
 	store := f.p.deps.OpsStore()
+	for _, p := range paths {
+		owners := append([]string(nil), idx.owners[p]...)
+		sort.Strings(owners)
+		for _, o := range owners {
+			if o != b.ID {
+				return fmt.Sprintf("its file %s is also a file of book %s", p, o), nil
+			}
+		}
+	}
 	for _, p := range paths {
 		row, err := store.GetBookFileByPath(p)
 		if err != nil {
