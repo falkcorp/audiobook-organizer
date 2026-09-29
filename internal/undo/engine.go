@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-28
 //
@@ -195,7 +195,7 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 			}
 		case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
 			ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
-			ChangeTypeBookFileMove:
+			ChangeTypeBookFileMove, ChangeTypeBookFileRepoint:
 			if refusal := checkFsRegroupRow(store, c); refusal != nil {
 				report.addReferentConflict(c, refusal)
 			} else {
@@ -309,6 +309,16 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange) error
 		if _, err := os.Lstat(c.OldValue); err == nil {
 			return refuse(ReasonChangedSince, "%s is occupied again", c.OldValue)
 		}
+	case ChangeTypeBookFileRepoint:
+		// The revert puts the row back only while it still holds exactly the
+		// location the repoint wrote.
+		want, err := DecodeBookFileLocation(c.NewValue)
+		if err != nil {
+			return refuse(ReasonOldValueUnparsable, "%v", err)
+		}
+		return checkFsRegroupRowOn(store, c, func(f *database.BookFile) bool {
+			return LocationOf(f) == want
+		})
 	case ChangeTypeBookPathUpdate:
 		if book.FilePath != c.NewValue {
 			return refuse(ReasonChangedSince, "book %s path changed since the operation", c.BookID)

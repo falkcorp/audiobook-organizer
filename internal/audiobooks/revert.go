@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-28
 
@@ -417,6 +417,8 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 		return rs.revertSeriesRename(c)
 	case undo.ChangeTypeBookFileReassign:
 		return rs.revertBookFileReassign(c)
+	case undo.ChangeTypeBookFileRepoint:
+		return rs.revertBookFileRepoint(c)
 	case undo.ChangeTypeBookFileTrack:
 		return rs.revertBookFileTrack(c)
 	case undo.ChangeTypeBookPathUpdate:
@@ -675,6 +677,40 @@ func (rs *RevertService) revertBookFileTrack(c *database.OperationChange) error 
 	f.TrackNumber = old
 	if err := rs.db.UpdateBookFile(f.ID, f); err != nil {
 		return fmt.Errorf("restore track of book_file %s: %w", fileID, err)
+	}
+	return nil
+}
+
+// revertBookFileRepoint puts a book_file row back at the location it had
+// before a repoint that moved nothing on disk: path, Missing flag, hash and
+// size, exactly as recorded. Compare-and-set: the row must still hold every
+// field of the location the repoint wrote, or the revert is refused as drift.
+// No file is touched.
+func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) error {
+	fileID, ok := undo.BookFileIDFromField(c.FieldName)
+	if !ok {
+		return fmt.Errorf("no book_file id in field %q", c.FieldName)
+	}
+	was, err := undo.DecodeBookFileLocation(c.OldValue)
+	if err != nil {
+		return err
+	}
+	set, err := undo.DecodeBookFileLocation(c.NewValue)
+	if err != nil {
+		return err
+	}
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
+	f, err := rs.db.GetBookFileByID(c.BookID, fileID)
+	if err != nil || f == nil {
+		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
+	}
+	if undo.LocationOf(f) != set {
+		return driftRefusal("book_file %s is now at %q, not where the operation pointed it (%q)", fileID, f.FilePath, set.Path)
+	}
+	was.Apply(f)
+	if err := rs.db.UpdateBookFile(f.ID, f); err != nil {
+		return fmt.Errorf("restore location of book_file %s: %w", fileID, err)
 	}
 	return nil
 }
