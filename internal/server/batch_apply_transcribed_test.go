@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_transcribed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a7c9ec1-ca94-4bd5-b088-7920aaeb18af
 // last-edited: 2026-09-28
 
@@ -17,6 +17,63 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
+
+// A Doctor Who book with a blank title, whose intro transcription names it
+// and whose top candidate is exactly that title -- the case the
+// transcribed-title lift would otherwise pass -- is refused on both bulk
+// paths, including the review page's bulk button, and still applies from a
+// single review row the owner approved.
+func TestBulkApplyPlanners_OwnerManualOnly(t *testing.T) {
+	const chimes = "Doctor Who: The Chimes of Midnight"
+	dur := 36000
+	book := &database.Book{ID: "b1", Title: "", TranscribedTitle: strPtr(chimes),
+		FilePath: "/lib/Unknown Author/Unknown Title/book.m4b", Duration: &dur}
+	cand := metafetch.MetadataCandidate{Title: chimes, Author: "Robert Shearman", Score: 0.95, DurationSec: 36000, Source: "Audible"}
+	stale := fmt.Errorf("%w: book b1 (stored a, current b)", metafetch.ErrStaleMetadataCache)
+	bulkPin := metafetch.PinOf(cand)
+	bulkPin.Origin = metafetch.PinOriginReviewBulk
+
+	cases := []struct {
+		name        string
+		opResult    bool
+		pin         *metafetch.CandidatePin
+		wantAllowed bool
+	}{
+		{name: "cached, no pin (script / preview)"},
+		{name: "cached, review-page bulk button", pin: &bulkPin},
+		{name: "op result", opResult: true},
+		{name: "cached, single review row approved", pin: rowPin(cand), wantAllowed: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			books := fakeBooks{"b1": book}
+			var plan cachedApplyPlan
+			if tc.opResult {
+				c := cand
+				plan = planOpResultApply(books, "b1", CandidateResult{Book: CandidateBookInfo{ID: "b1"}, Candidate: &c,
+					SearchQuery: chimes, SearchQuerySource: metabatch.SearchQuerySourceTranscribedTitle}, nil)
+			} else {
+				blob, err := json.Marshal(cand)
+				if err != nil {
+					t.Fatal(err)
+				}
+				svc := &fakeApplySvc{candidates: []json.RawMessage{blob}, identityErr: stale, queryMatches: map[string]bool{chimes: true}}
+				plan = planCachedApply(svc, books, "b1", nil, tc.pin)
+			}
+			if plan.Gate == nil {
+				t.Fatalf("gate did not run: %+v", plan)
+			}
+			applies := plan.Gate.Allowed || plan.OwnerReviewed
+			if applies != tc.wantAllowed {
+				t.Fatalf("applies = %v (reason %q: %s, owner-reviewed %v), want %v",
+					applies, plan.Gate.Reason, plan.Gate.Detail, plan.OwnerReviewed, tc.wantAllowed)
+			}
+			if !tc.wantAllowed && plan.Gate.Reason != applygate.ReasonOwnerManualOnly {
+				t.Errorf("reason = %q (%s), want %q", plan.Gate.Reason, plan.Gate.Detail, applygate.ReasonOwnerManualOnly)
+			}
+		})
+	}
+}
 
 // The bulk apply's two planners hand the gate a transcribed search only when
 // the book as it is NOW would be searched by exactly that transcription and
@@ -89,6 +146,10 @@ func TestBulkApplyPlanners_TranscribedTitleEvidence(t *testing.T) {
 			opResult: &CandidateResult{Book: CandidateBookInfo{ID: "b1"}, SearchQuery: "Planet Hulk",
 				SearchQuerySource: metabatch.SearchQuerySourceFolderTitle},
 			wantReason: applygate.ReasonIdentityStale},
+		{name: "cached: heard \"X, by A\", candidate X by B stays stale",
+			book:        book(func(b *database.Book) { b.TranscribedAuthor = strPtr("Greg Pak") }),
+			cand:        cand(func(c *metafetch.MetadataCandidate) { c.Author = "Someone Else" }),
+			identityErr: stale, queryMatches: map[string]bool{hulk: true}, wantReason: applygate.ReasonIdentityStale},
 		{name: "op result: legacy row with no title and no query stays stale", book: book(nil), cand: cand(nil),
 			opResult:   &CandidateResult{Book: CandidateBookInfo{ID: "b1"}},
 			wantReason: applygate.ReasonIdentityStale},
@@ -118,6 +179,21 @@ func TestBulkApplyPlanners_TranscribedTitleEvidence(t *testing.T) {
 			}
 			if tc.wantReason != "" && plan.Gate.Reason != tc.wantReason {
 				t.Errorf("reason = %q (%s), want %q", plan.Gate.Reason, plan.Gate.Detail, tc.wantReason)
+			}
+			if !tc.wantAllowed {
+				// A refusal never reads as an accepted identity: no evidence
+				// at all on identity_stale, and on any other refusal the
+				// wording says another check refused.
+				line := batchApplyRefusedLine("b1", applyOutcome{Reason: plan.Reason, Gate: plan.Gate}.withPlan(plan))
+				if strings.Contains(line, "; identity: ") {
+					t.Errorf("refused line reads as an accepted identity: %s", line)
+				}
+				if plan.Gate.Reason == applygate.ReasonIdentityStale && plan.Candidate.IdentityEvidence != nil {
+					t.Errorf("evidence stamped on an identity_stale refusal: %+v", plan.Candidate.IdentityEvidence)
+				}
+				if plan.Candidate.IdentityEvidence != nil && !strings.Contains(line, "but the refusal above stands") {
+					t.Errorf("refused line with evidence does not say the refusal stands: %s", line)
+				}
 			}
 			if tc.wantAllowed {
 				ev := plan.Candidate.IdentityEvidence
