@@ -1,5 +1,5 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
 // last-edited: 2026-09-28
 
@@ -136,8 +136,7 @@ func ExtractMetadataFromFolder(dirPath string) (*FolderMetadata, error) {
 			}
 			if i-1 >= 0 {
 				outer := strings.TrimSpace(segments[i-1])
-				lower := strings.ToLower(outer)
-				if looksLikeFolderAuthor(outer) && !genreDirNames[lower] && !genericDirNames[lower] {
+				if looksLikeFolderAuthor(outer) {
 					fm.Authors = splitMultipleAuthors(outer)
 					fm.AuthorConf = ConfidenceMedium
 				}
@@ -381,9 +380,9 @@ func tryExtractAuthorFromDashSplit(seg string, fm *FolderMetadata) {
 }
 
 // genreDirNames are genre / category folder names that are person-SHAPED (two
-// capitalised words, or one) and so pass looksLikeFolderAuthor. They are
-// checked only on the one step the author walk takes past a series folder;
-// container names ("Audiobooks", "Books", "Media", "Library", "Downloads")
+// capitalised words, or one) and would otherwise pass the shape test.
+// looksLikeFolderAuthor refuses them on every author assignment; container
+// names ("Audiobooks", "Books", "Media", "Library", "Downloads")
 // are already in genericDirNames and are checked alongside. No genre list
 // existed in the repo to reuse: the provider genre data (Audible category
 // ladders, Google Books categories) is per-book API output, not a lookup set.
@@ -414,6 +413,13 @@ var genreDirNames = map[string]bool{
 // leading-article name ("The Messenger") as suspect-non-person for owner
 // review. Vetoing there would silently drop those rows from its report.
 func looksLikeFolderAuthor(s string) bool {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	if genreDirNames[lower] || genericDirNames[lower] {
+		// "/srv/Science Fiction/Mistborn/The Final Empire" credited the genre
+		// folder at HIGH confidence on the ordinary walk, not only past a
+		// series folder.
+		return false
+	}
 	return looksLikeAuthorSegment(s) && !personname.LooksLikeWorkTitle(s)
 }
 

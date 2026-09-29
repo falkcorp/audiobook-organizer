@@ -1,5 +1,5 @@
 // file: internal/scanner/extract_info_chapter_title_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1887ad95-0bf8-4bb7-87f5-cf52026d1289
 // last-edited: 2026-09-28
 
@@ -110,6 +110,18 @@ func TestExtractInfoFromPath_SeriesTitleIsNotAnAuthor(t *testing.T) {
 		// KNOWN LIMIT, pinned so a change is noticed: this is the same shape as
 		// "The Stand - Stephen King" and the text cannot separate them.
 		{"/lib/import/The Hunger Games - Catching Fire.mp3", "Catching Fire", "The Hunger Games", "", "", 0},
+		// Round-3 review rows.
+		{"/lib/import/Mistborn Book 1 - The Final Empire.mp3", "", "The Final Empire", "Mistborn Book 1", "Mistborn", 1},
+		{"/lib/import/The Hobbit - Chapter 01.mp3", "", "The Hobbit", "", "", 0},
+		{"/lib/import/The Hobbit - Part 1.mp3", "", "The Hobbit", "", "", 0},
+		{"/lib/import/The Hobbit - 01.mp3", "", "The Hobbit", "", "", 0},
+		{"/lib/import/The Dark Tower 01 - Stephen King.mp3", "", "Stephen King", "The Dark Tower 01", "The Dark Tower", 1},
+		{"/lib/import/The Dark Tower 01 - King, Stephen.mp3", "King, Stephen", "The Dark Tower 01", "", "", 0},
+		{"/lib/Terry Pratchett/Discworld 01/Discworld 01 - Terry Pratchett.mp3", "Terry Pratchett", "Discworld 01", "", "", 0},
+		{"/lib/James S. A. Corey/The Expanse/Leviathan Wakes/The Expanse 01 - Leviathan Wakes.mp3", "", "Leviathan Wakes", "The Expanse 01", "The Expanse", 1},
+		{"/lib/Leviathan Wakes/The Expanse 01 - Leviathan Wakes.mp3", "", "Leviathan Wakes", "The Expanse 01", "The Expanse", 1},
+		{"/lib/import/The Book Thief - Markus Zusak.mp3", "Markus Zusak", "The Book Thief", "", "", 0},
+		{"/lib/Neil Gaiman/Good Omens/Good Omens.mp3", "Neil Gaiman", "Good Omens", "", "", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -136,6 +148,36 @@ func TestExtractInfoFromPath_SeriesTitleIsNotAnAuthor(t *testing.T) {
 			}
 			if pos != tc.wantPosition {
 				t.Errorf("resolveSeriesID(%q) position = %d, want %d", b.Series, pos, tc.wantPosition)
+			}
+		})
+	}
+}
+
+// TestExtractInfoFromPath_TagOrientsTheSplit pins the tagged-author case: the
+// book already has an author (from a tag) when the filename is parsed. The
+// side matching the tag is the author and the other the title; a parsed author
+// that disagrees with the tag is refused and the pair reads as series - title.
+func TestExtractInfoFromPath_TagOrientsTheSplit(t *testing.T) {
+	cases := []struct {
+		tag, path             string
+		wantTitle, wantSeries string
+	}{
+		{"Suzanne Collins", "/lib/import/The Hunger Games - Catching Fire.mp3", "Catching Fire", "The Hunger Games"},
+		{"Andy Weir", "/lib/import/Andy Weir - Project Hail Mary.mp3", "Project Hail Mary", ""},
+		{"Brandon Sanderson", "/lib/import/Mistborn Book 1 - The Final Empire.mp3", "The Final Empire", "Mistborn Book 1"},
+		{"Stephen King", "/lib/import/The Dark Tower 01 - Stephen King.mp3", "The Dark Tower 01", ""},
+		{"Brandon Sanderson", "/lib/import/The Stormlight Archive - The Way of Kings.mp3", "The Way of Kings", "The Stormlight Archive"},
+		// A spelling difference is not a disagreement.
+		{"Andy Weir", "/lib/import/The Martian - Andy Weir (Unabridged).mp3", "The Martian", ""},
+		{"King, Stephen", "/lib/Stephen King/The Stand/The Stand - Stephen King.mp3", "The Stand", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			b := &Book{FilePath: tc.path, Author: tc.tag}
+			extractInfoFromPath(b)
+			if b.Author != tc.tag || b.Title != tc.wantTitle || b.Series != tc.wantSeries {
+				t.Errorf("got (author %q, title %q, series %q), want (%q, %q, %q)",
+					b.Author, b.Title, b.Series, tc.tag, tc.wantTitle, tc.wantSeries)
 			}
 		})
 	}

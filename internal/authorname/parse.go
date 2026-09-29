@@ -1,5 +1,5 @@
 // file: internal/authorname/parse.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9f4c2a71-58d3-4e60-b19a-6c0e7d35f8b2
 // last-edited: 2026-09-28
 
@@ -76,7 +76,7 @@ var skipDirs = map[string]bool{
 // Stormlight Archive" and "The Hobbit" -- two to four capitalised words -- so a
 // file in a series or title folder whose own name named no author took the
 // FOLDER as its author. That was also the scanner's fallback after
-// ParseFilenameForAuthor correctly refused "The Stormlight Archive - The Way of
+// ParseDashFilename correctly refused "The Stormlight Archive - The Way of
 // Kings": fixing the filename parse alone would have moved the bogus author
 // one line down.
 func looksLikeDirectoryAuthor(s string) bool {
@@ -222,16 +222,20 @@ type DashParse struct {
 //     "The Expanse 01 - Leviathan Wakes" filed "Leviathan Wakes" as the AUTHOR,
 //     because the right side is two capitalised words. The padded number is a
 //     sequence position, which a person's name never carries.
-//     EXCEPT when the right side names one of the file's ancestor folders.
-//     The organizer writes "<root>/<author>/<title>/<title> - <author>.ext",
-//     so a title carrying a padded number ("Pratchett 036", "Discworld 01")
-//     arrives as "Discworld 01 - Terry Pratchett.mp3" under ".../Terry
-//     Pratchett/Discworld 01/"; the folder is the evidence that the right side
-//     is the author, which the filename alone cannot give.
-//     COST, accepted: the same name OUTSIDE such a folder gives title "Terry
-//     Pratchett" and no author. Nothing in the text separates a title from a
-//     name of the same shape; this errs to an ABSENT author (AI nomination
-//     gets the book) rather than the wrong one.
+//     TWO EXCEPTIONS keep the right side as the author:
+//     - the organizer's own layout, "<root>/<author>/<title>/<title> -
+//     <author>.ext": the IMMEDIATE parent folder equals the left side and
+//     the right side names a folder above it. A title carrying a padded
+//     number ("Pratchett 036", "Discworld 01") arrives exactly so. Matching
+//     the right side against ANY ancestor was fooled by
+//     "<author>/<series>/<title>/<series NN> - <title>.ext" layouts;
+//     - a STRONG name on the right (looksLikeStrongName): initials, a
+//     "Surname, Given" comma form, a credit list, or three or more words.
+//     COST, accepted: a plain two-word name outside the organizer layout --
+//     "The Dark Tower 01 - Stephen King" -- gives title "Stephen King" and no
+//     author. "Leviathan Wakes" and "Stephen King" have the same shape; this
+//     errs to an ABSENT author (tags or AI nomination fill it) rather than a
+//     wrong one.
 //  2. Otherwise personname.ChooseAuthorSide picks the author, with a
 //     work-named side never eligible (personname.LooksLikeWorkTitle).
 //  3. When it refuses, the refused sides are NOT all alike. A side refused only
@@ -264,7 +268,7 @@ func ParseDashFilename(filename, filePath string) DashParse {
 	right := strings.TrimSpace(parts[1])
 
 	if personname.HasPaddedVolumeNumber(left) && !personname.HasSeriesMarker(right) &&
-		!namesAnAncestorFolder(right, filePath) {
+		!isOrganizerLayout(left, right, filePath) && !looksLikeStrongName(right) {
 		return DashParse{Parsed: true, Series: left, Title: right}
 	}
 
@@ -280,24 +284,25 @@ func ParseDashFilename(filename, filePath string) DashParse {
 	case !leftCredit && !rightCredit:
 		return DashParse{Parsed: true, Series: left, Title: right}
 	case leftCredit && !rightCredit:
+		// "The Hobbit - Chapter 01" / "- Part 1" / "- 01": the non-credit
+		// side is a position marker, not the title, so the title is the
+		// credit-shaped side.
+		if personname.HasSeriesMarker(right) {
+			return DashParse{Parsed: true, Title: left}
+		}
 		return DashParse{Parsed: true, Title: right}
 	case !leftCredit && rightCredit:
+		// "Mistborn Book 1 - The Final Empire": a series-marked left side is
+		// the series and the right side the title. (Step 1 is NOT widened to
+		// every series marker: "The Book Thief", "The Jungle Book" and "Book
+		// Lovers" carry one and are titles.)
+		if personname.HasSeriesMarker(left) {
+			return DashParse{Parsed: true, Series: left, Title: right}
+		}
 		return DashParse{Parsed: true, Title: left}
 	default:
 		return DashParse{Parsed: true, Title: left + " - " + right}
 	}
-}
-
-// ParseFilenameForAuthor splits a "Title - Author" or "Author - Title" filename,
-// returning (title, author). Both are "" when no author was found; callers that
-// need the series or title in that case use ParseDashFilename, which is what
-// this wraps.
-func ParseFilenameForAuthor(filename string) (string, string) {
-	p := ParseDashFilename(filename, "")
-	if p.Author == "" {
-		return "", ""
-	}
-	return p.Title, p.Author
 }
 
 // namesAnAncestorFolder reports whether name equals (case-insensitively) the
@@ -314,4 +319,51 @@ func namesAnAncestorFolder(name, filePath string) bool {
 			return false
 		}
 	}
+}
+
+// isOrganizerLayout reports whether filePath is the organizer's own
+// "<author>/<title>/<title> - <author>.ext" shape for this left/right pair:
+// the immediate parent is the left side and a folder above it is the right.
+func isOrganizerLayout(left, right, filePath string) bool {
+	if filePath == "" {
+		return false
+	}
+	parent := filepath.Dir(filePath)
+	if !strings.EqualFold(strings.TrimSpace(filepath.Base(parent)), left) {
+		return false
+	}
+	return namesAnAncestorFolder(right, parent)
+}
+
+// looksLikeStrongName reports whether s is a credit whose SHAPE, not just its
+// capitalisation, says person: initials ("J. R. R. Tolkien", "James S. A.
+// Corey"), a "Surname, Given" comma form, a list of names, or three or more
+// words. A plain two-capitalised-word string is not strong: "Leviathan Wakes"
+// and "Stephen King" cannot be told apart.
+func looksLikeStrongName(s string) bool {
+	if !personname.LooksLikeAuthorCredit(s) {
+		return false
+	}
+	bare := personname.StripEditionSuffix(s)
+	return strings.ContainsAny(bare, ".,&+/") || len(strings.Fields(bare)) >= 3 ||
+		strings.Contains(strings.ToLower(bare), " and ")
+}
+
+// SameCredit reports whether two author strings name the same credit, up to
+// case, an edition suffix ("Andy Weir (Unabridged)"), initial punctuation
+// ("J.R.R." / "J R R") and the "Surname, Given" inversion. It exists so a
+// caller orienting a filename by a TAGGED author does not read a spelling
+// difference as a disagreement.
+func SameCredit(a, b string) bool {
+	na, nb := normalizeCredit(a), normalizeCredit(b)
+	return na != "" && na == nb
+}
+
+func normalizeCredit(s string) string {
+	s = strings.ToLower(personname.StripEditionSuffix(s))
+	if parts := strings.Split(s, ","); len(parts) == 2 {
+		s = parts[1] + " " + parts[0]
+	}
+	s = strings.NewReplacer(".", " ", "_", " ").Replace(s)
+	return strings.Join(strings.Fields(s), " ")
 }

@@ -1,7 +1,7 @@
 // file: internal/scanner/author_parsers_shim_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2393a3d3-14e8-44b4-817d-942a2d6bfdd6
-// last-edited: 2026-09-01
+// last-edited: 2026-09-28
 
 package scanner
 
@@ -19,5 +19,15 @@ import "github.com/falkcorp/audiobook-organizer/internal/authorname"
 // specifically so no production symbol here shadows the shared one.
 var (
 	extractAuthorFromDirectory = authorname.ExtractAuthorFromDirectory
-	parseFilenameForAuthor     = authorname.ParseFilenameForAuthor
 )
+
+// parseFilenameForAuthor is the (title, author) view of
+// authorname.ParseDashFilename that these tests were written against: both
+// empty when no author was found.
+func parseFilenameForAuthor(name string) (string, string) {
+	p := authorname.ParseDashFilename(name, "")
+	if p.Author == "" {
+		return "", ""
+	}
+	return p.Title, p.Author
+}

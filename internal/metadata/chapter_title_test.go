@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0cc97d6f-e2ee-42d6-8233-ed4cec61f5ab
 // last-edited: 2026-09-28
 
@@ -162,6 +162,18 @@ func TestExtractFromFilename_SeriesTitleIsNotAnAuthor(t *testing.T) {
 		{"/lib/import/Junichi Saga - Memories of Silk and Straw.mp3", "Junichi Saga", "Memories of Silk and Straw", ""},
 		// KNOWN LIMIT: the same shape as "The Stand - Stephen King".
 		{"/lib/import/The Hunger Games - Catching Fire.mp3", "Catching Fire", "The Hunger Games", ""},
+		// Round-3 review rows.
+		{"/lib/import/Mistborn Book 1 - The Final Empire.mp3", "", "The Final Empire", "Mistborn Book 1"},
+		{"/lib/import/The Hobbit - Chapter 01.mp3", "", "The Hobbit", ""},
+		{"/lib/import/The Hobbit - Part 1.mp3", "", "The Hobbit", ""},
+		{"/lib/import/The Hobbit - 01.mp3", "", "The Hobbit", ""},
+		{"/lib/import/The Dark Tower 01 - Stephen King.mp3", "", "Stephen King", "The Dark Tower 01"},
+		{"/lib/import/The Dark Tower 01 - King, Stephen.mp3", "King, Stephen", "The Dark Tower 01", ""},
+		{"/lib/Terry Pratchett/Discworld 01/Discworld 01 - Terry Pratchett.mp3", "Terry Pratchett", "Discworld 01", ""},
+		{"/lib/James S. A. Corey/The Expanse/Leviathan Wakes/The Expanse 01 - Leviathan Wakes.mp3", "", "Leviathan Wakes", "The Expanse 01"},
+		{"/lib/Leviathan Wakes/The Expanse 01 - Leviathan Wakes.mp3", "", "Leviathan Wakes", "The Expanse 01"},
+		{"/lib/import/The Book Thief - Markus Zusak.mp3", "Markus Zusak", "The Book Thief", ""},
+		{"/lib/Neil Gaiman/Good Omens/Good Omens.mp3", "Neil Gaiman", "Good Omens", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -203,6 +215,10 @@ func TestExtractMetadataFromFolder_SeriesFolderIsNotAnAuthor(t *testing.T) {
 		{"/mnt/Science Fiction/The Stormlight Archive/The Way of Kings/Disc 1", "", "The Stormlight Archive"},
 		{"/srv/Fantasy/Dune Chronicles/Children of Dune/Disc 1", "", "Dune Chronicles"},
 		{"/srv/Audiobooks/Dune Chronicles/Children of Dune/Disc 1", "", "Dune Chronicles"},
+		// The ORDINARY walk refuses genre folders too, not only the step past
+		// a series folder.
+		{"/srv/Science Fiction/Mistborn/The Final Empire", "", ""},
+		{"/srv/Science Fiction/Mistborn/The Final Empire/Disc 1", "", ""},
 		// Stops after the one step: a genre folder past the author is not read.
 		{"/mnt/Science Fiction/Stephen King/The Dark Tower/The Gunslinger/Disc 1", "Stephen King", "The Dark Tower"},
 	} {

@@ -1,5 +1,5 @@
 // file: internal/authorname/parse_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3b8e5f27-14a9-4c03-9d6b-8e21f70a4c95
 // last-edited: 2026-09-28
 
@@ -168,7 +168,7 @@ func TestSkipDirsIsRedundantExceptForThePlaceholder(t *testing.T) {
 	}
 }
 
-func TestParseFilenameForAuthor(t *testing.T) {
+func TestParseDashFilenameAuthor(t *testing.T) {
 	cases := []struct {
 		filename   string
 		wantTitle  string
@@ -226,9 +226,15 @@ func TestParseFilenameForAuthor(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.filename, func(t *testing.T) {
-			title, author := ParseFilenameForAuthor(tc.filename)
+			// Rows with no author assert only that none was found; the
+			// title/series shape of those is pinned by TestParseDashFilename.
+			p := ParseDashFilename(tc.filename, "")
+			title, author := p.Title, p.Author
+			if author == "" {
+				title = ""
+			}
 			if title != tc.wantTitle || author != tc.wantAuthor {
-				t.Errorf("ParseFilenameForAuthor(%q) = (%q, %q), want (%q, %q)",
+				t.Errorf("ParseDashFilename(%q) = (%q, %q), want (%q, %q)",
 					tc.filename, title, author, tc.wantTitle, tc.wantAuthor)
 			}
 		})
@@ -260,6 +266,19 @@ func TestParseDashFilename(t *testing.T) {
 		{"The Hunger Games - Catching Fire", "Catching Fire", "The Hunger Games", ""},
 		// Chapter positions are the caller's check (SeriesFromTitlePrefix).
 		{"Eldest - 02", "", "02", "Eldest"},
+		// A series-marked left side against a non-credit right: series+title.
+		{"Mistborn Book 1 - The Final Empire", "", "The Final Empire", "Mistborn Book 1"},
+		// A position marker on the right is not the title.
+		{"The Hobbit - Chapter 01", "", "The Hobbit", ""},
+		{"The Hobbit - Part 1", "", "The Hobbit", ""},
+		{"The Hobbit - 01", "", "The Hobbit", ""},
+		// Titles carrying a series word are not series.
+		{"The Book Thief - Markus Zusak", "Markus Zusak", "The Book Thief", ""},
+		// A strong name on the right survives a padded number on the left...
+		{"The Expanse 01 - James S. A. Corey", "James S. A. Corey", "The Expanse 01", ""},
+		{"The Dark Tower 01 - King, Stephen", "King, Stephen", "The Dark Tower 01", ""},
+		// ...a plain two-word one does not (documented cost).
+		{"The Dark Tower 01 - Stephen King", "", "Stephen King", "The Dark Tower 01"},
 	}
 	for _, tc := range cases {
 		got := ParseDashFilename(tc.in, "")
@@ -269,12 +288,49 @@ func TestParseDashFilename(t *testing.T) {
 		}
 	}
 	// The organizer's own "<author>/<title>/<title> - <author>" layout: the
-	// ancestor folder vouches for the right side despite the padded number.
-	org := ParseDashFilename("Discworld 01 - Terry Pratchett", "/lib/Terry Pratchett/Discworld 01/Discworld 01 - Terry Pratchett.mp3")
-	if org.Author != "Terry Pratchett" || org.Title != "Discworld 01" || org.Series != "" {
-		t.Errorf("organizer layout: %+v, want author Terry Pratchett, title Discworld 01", org)
+	// folders vouch for the right side despite the padded number.
+	for _, path := range []string{
+		"/lib/Terry Pratchett/Discworld 01/Discworld 01 - Terry Pratchett.mp3",
+		"/mnt/bigdata/books/audiobook-organizer/Terry Pratchett/Pratchett 036/Pratchett 036 - Terry Pratchett.mp3",
+	} {
+		base := strings.TrimSuffix(filepath.Base(path), ".mp3")
+		left := strings.SplitN(base, " - ", 2)[0]
+		org := ParseDashFilename(base, path)
+		if org.Author != "Terry Pratchett" || org.Title != left || org.Series != "" {
+			t.Errorf("organizer layout %s: %+v, want author Terry Pratchett, title %q", path, org, left)
+		}
+	}
+	// "<author>/<series>/<title>/<series NN> - <title>" is NOT that layout,
+	// even though the right side names a folder above: the immediate parent
+	// is the title, not the left side.
+	for _, path := range []string{
+		"/lib/James S. A. Corey/The Expanse/Leviathan Wakes/The Expanse 01 - Leviathan Wakes.mp3",
+		"/lib/Leviathan Wakes/The Expanse 01 - Leviathan Wakes.mp3",
+	} {
+		got := ParseDashFilename("The Expanse 01 - Leviathan Wakes", path)
+		if got.Author != "" || got.Series != "The Expanse 01" || got.Title != "Leviathan Wakes" {
+			t.Errorf("series/title layout %s: %+v, want series The Expanse 01, title Leviathan Wakes", path, got)
+		}
 	}
 	if got := ParseDashFilename("Neil Gaiman - Norse Mythology - 01", ""); got.Parsed {
 		t.Errorf("three-part name parsed: %+v", got)
+	}
+}
+
+func TestSameCredit(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"Andy Weir", "andy weir", true},
+		{"Andy Weir (Unabridged)", "Andy Weir", true},
+		{"King, Stephen", "Stephen King", true},
+		{"J.R.R. Tolkien", "J R R Tolkien", true},
+		{"Stephen King", "Suzanne Collins", false},
+		{"", "", false},
+	} {
+		if got := SameCredit(tc.a, tc.b); got != tc.want {
+			t.Errorf("SameCredit(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
 	}
 }
