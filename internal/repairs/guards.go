@@ -155,6 +155,13 @@ func (r *PathResolver) linkTargets(p string) []string {
 		}
 		text = filepath.Clean(text)
 		out = append(out, text)
+		// The target's folder may itself be (or sit under) a link into the
+		// frozen tree: check it resolved, through the folder cache.
+		if d, ok := r.dir(filepath.Dir(text)); ok {
+			if via := filepath.Join(d, filepath.Base(text)); via != text {
+				out = append(out, via)
+			}
+		}
 		fi, err := os.Lstat(text)
 		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
 			break

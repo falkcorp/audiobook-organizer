@@ -149,13 +149,26 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 	if err != nil {
 		return nil, err
 	}
+	// restoresBook: a soft-delete row earlier in the order is predicted to
+	// restore the book, so the revert finds it live at any later soft-delete
+	// row of the same book (a resumed retire's second stamp) and counts that
+	// row already restored.
+	restoresBook := map[string]bool{}
 	for _, c := range plan.Order {
 		if refusal := plan.Gate(c); refusal != nil {
 			plan.Record(c, refusal)
 			report.addReferentConflict(c, refusal)
 			continue
 		}
-		v := preflightRow(store, c, plan.Stamps)
+		var v rowVerdict
+		if c.ChangeType == ChangeTypeBookSoftDelete && restoresBook[c.BookID] {
+			v = rowVerdict{already: true}
+		} else {
+			v = preflightRow(store, c, plan.Stamps)
+		}
+		if c.ChangeType == ChangeTypeBookSoftDelete && v.refusal == nil && v.conflict == nil {
+			restoresBook[c.BookID] = true
+		}
 		plan.Record(c, v.refusal)
 		switch {
 		case v.refusal != nil:
