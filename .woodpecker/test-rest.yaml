@@ -1,5 +1,5 @@
 # file: .woodpecker/test-rest.yaml
-# version: 1.3.1
+# version: 1.4.0
 # guid: c84e1b3d-2f9a-4c57-8d06-e3a1b7f5d942
 # last-edited: 2026-09-29
 #
@@ -15,11 +15,14 @@
 # once. `go list` runs on a fresh clone, where web/node_modules does not exist.
 # That keeps the third-party Go package vendored inside it out of the list.
 #
-# The decode packages need ffmpeg, ffprobe and fpcalc, so this runs on the Mac
-# agent (local backend), never on the prod host.
+# The decode packages need ffmpeg, ffprobe and fpcalc, so this runs on the llm1
+# agent (local backend, macOS), never on the prod host. It ran on the developer
+# Mac until 2026-09-29; that agent was removed because the Mac is short on disk.
+# llm1 runs two workflows at once, so this and test-server-scanner still run in
+# parallel there and share its GOCACHE.
 
 labels:
-  host: mac
+  host: llm1
 
 when:
   - event: [push, pull_request, manual]
@@ -79,3 +82,8 @@ steps:
       - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
       # A killed build leaves its go-build temp dir behind; clear any over an hour old.
       - 'find "$${TMPDIR:-/tmp}" -maxdepth 1 -name "go-build*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true'
+      # A killed or cancelled pipeline never reaches this step, so its whole
+      # workdir (woodpecker-local-<n>, the parent of HOME) stays behind. Sweep
+      # siblings older than 3 hours; no local workflow runs that long (the test
+      # timeout is 25m). 114 of them held 93 GB on llm1 on 2026-09-29.
+      - '[ -n "$${HOME}" ] && W=$$(dirname "$${HOME}") && R=$$(dirname "$$W") && case "$$(basename "$$W")" in woodpecker-local-*) find "$$R" -mindepth 1 -maxdepth 1 -name "woodpecker-local-*" -type d ! -path "$$W" -mmin +180 -exec sh -c "chmod -R u+w \"\$$@\" && rm -rf \"\$$@\"" _ {} + ;; esac || true'

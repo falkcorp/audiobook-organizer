@@ -1,7 +1,7 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
-<!-- last-edited: 2026-09-26 -->
+<!-- last-edited: 2026-09-29 -->
 
 # Woodpecker CI: install runbook
 
@@ -17,7 +17,6 @@ Placeholders used throughout (never commit the real values; this repo is public)
 | `coke.jdfalk.com` | the public CI hostname (real; public DNS) on the existing Cloudflare tunnel |
 | `192.0.2.10` | the prod host (U0): Woodpecker server and the heavy Linux agent |
 | `192.0.2.20` | the llm1 node (macOS, arm64) |
-| `192.0.2.30` | the developer Mac |
 | `/srv/appdata` | the NVMe app-data area on U0 (not `/var/lib`, which is on the HDD pool) |
 
 ## Pipeline layout
@@ -26,12 +25,12 @@ Placeholders used throughout (never commit the real values; this repo is public)
 |---|---|---|---|
 | `test-database` | `host=u0`, `heavy=true` | `internal/database` alone, `-timeout 50m` | about 300 s on Linux (1500–2200 s on a loaded Mac) |
 | `test-server-scanner` | `host=llm1` | `internal/server`, `internal/scanner`, `internal/server/handlers/abs` | about 620 s (abs); the packages run in parallel |
-| `test-rest` | `host=mac` | every other package, including maintenance, registry and applygate | about 450–600 s |
+| `test-rest` | `host=llm1` | every other package, including maintenance, registry and applygate | about 450–600 s |
 | `checks` | `host=u0` | vet, staticcheck, errcheck ratchet, mocks-check, fmt-check, sdkguard, bench-check, web tests | about 5 min including tool install |
 | `coverage` | `host=u0` | coverage floor across the three test workflows | seconds |
 
 Placement follows two rules. First, packages whose tests decode audio (server,
-scanner and the decode set in `test-rest`) run only on the Mac agents. The prod
+scanner and the decode set in `test-rest`) run only on the llm1 agent. The prod
 host must not decode, and its Docker image has no ffmpeg. Second, the three
 test workflows start together, so the wall time is roughly the slowest of them.
 An ssh-based prototype (`scripts/ci_remote.py`) measured this layout at
@@ -127,13 +126,12 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
    "Service Auth" policy that allows that token. The webhook does not use it.
    The `coverage` workflow uses the same three values (see Secrets).
 
-## 4. Agents (as deployed 2026-09-26)
+## 4. Agents (as deployed 2026-09-26; developer-Mac agent removed 2026-09-29)
 
 | agent | host | backend | labels | parallel workflows | runs as |
 |---|---|---|---|---|---|
 | U0 | 192.0.2.10 | docker | `host=u0` | 2 | swarm service `woodpecker_woodpecker-agent` |
 | llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 2 | LaunchDaemon, `UserName` = the CI user |
-| Mac | 192.0.2.30 (macOS arm64) | local | `host=mac,heavy=true` | 2 | LaunchAgent (user) |
 
 All agents use `WOODPECKER_SERVER=192.0.2.10:18734` and the same
 `WOODPECKER_AGENT_SECRET` as the server.
@@ -162,9 +160,9 @@ ffmpeg, so the host's no-decode rule holds. A container's localhost is not the
 host's, so tests that dial `localhost:8112` or `:8484` never reach the real
 services.
 
-### llm1 and the Mac: local backend
+### llm1: local backend
 
-These agents run steps directly on macOS (`WOODPECKER_BACKEND=local`). The
+This agent runs steps directly on macOS (`WOODPECKER_BACKEND=local`). The
 decode tests need the host's ffmpeg, ffprobe and fpcalc, and macOS has no
 Docker backend.
 
