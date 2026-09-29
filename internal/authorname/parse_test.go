@@ -1,5 +1,5 @@
 // file: internal/authorname/parse_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3b8e5f27-14a9-4c03-9d6b-8e21f70a4c95
 // last-edited: 2026-09-29
 
@@ -291,6 +291,7 @@ func TestParseDashFilename(t *testing.T) {
 		{"Good Omens 01 - Neil Gaiman & Terry Pratchett", "Neil Gaiman & Terry Pratchett", "Good Omens 01", ""},
 		{"Heinlein 01 - Robert A Heinlein", "Robert A Heinlein", "Heinlein 01", ""},
 		{"Discworld 08 - Guards, Guards", "", "Guards, Guards", "Discworld 08"},
+		{"Series 01 - Smith, John A", "Smith, John A", "Series 01", ""},
 	}
 	for _, tc := range cases {
 		got := ParseDashFilename(tc.in, "")
@@ -384,6 +385,7 @@ func TestLooksLikeStrongName(t *testing.T) {
 		{"Words A Radiance", true},
 		{"A Man Called Ove", false},
 		{"Guards, Guards", false},
+		{"Smith, John A", true},
 	} {
 		if got := looksLikeStrongName(tc.in); got != tc.want {
 			t.Errorf("looksLikeStrongName(%q) = %v, want %v", tc.in, got, tc.want)
@@ -415,6 +417,10 @@ func TestExtractAuthorAboveTitle(t *testing.T) {
 		{"/lib/Harry Potter/Harry Potter in Paris", "Harry Potter in Paris", ""},
 		{"/lib/Terry Pratchett/Terry Pratchett The Colour of Magic", "Terry Pratchett The Colour of Magic", "Terry Pratchett"},
 		{"/lib/Stephen King/Stephen King The Stand", "Stephen King The Stand", "Stephen King"},
+		// Final pass: a co-author list before " - " is a credit, not a run-on.
+		{"/lib/Terry Pratchett/Terry Pratchett & Stephen Baxter - The Long Earth", "Terry Pratchett & Stephen Baxter - The Long Earth", "Terry Pratchett"},
+		{"/lib/Neil Gaiman/Neil Gaiman and Terry Pratchett - Good Omens", "Neil Gaiman and Terry Pratchett - Good Omens", "Neil Gaiman"},
+		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire - Part 1", "Harry Potter and the Goblet of Fire - Part 1", ""},
 		// COST of the narrower rule: a capitalised word after a series name.
 		{"/lib/Alex Cross/Alex Cross Must Die", "Alex Cross Must Die", "Alex Cross"},
 		// title "" is the ordinary fallback.

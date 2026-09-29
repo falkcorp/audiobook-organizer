@@ -1,5 +1,5 @@
 // file: internal/authorname/parse.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9f4c2a71-58d3-4e60-b19a-6c0e7d35f8b2
 // last-edited: 2026-09-29
 
@@ -430,6 +430,10 @@ func hasInnerFunctionWord(s string) bool {
 		if w == "A" && i+1 < len(fields) && startsUpper(fields[i-1]) && startsUpper(fields[i+1]) {
 			continue
 		}
+		// A trailing "A" in a "Surname, Given A" form is an initial too.
+		if w == "A" && i == len(fields)-1 && startsUpper(fields[i-1]) && isSurnameGiven(s) {
+			continue
+		}
 		return true
 	}
 	return false
@@ -572,6 +576,10 @@ func ExtractAuthorAboveTitle(probe, title string) string {
 	return ExtractAuthorFromDirectory(probe)
 }
 
+// coAuthorDashRe matches a co-author joined to the folder-name prefix and
+// followed by " - ": the joiner, then the co-author (group 1), then the dash.
+var coAuthorDashRe = regexp.MustCompile(`^\s*(?:&|(?i:and)|,)\s+([^-]+?)\s+-\s`)
+
 // joiningWords continue a phrase: a title folder whose name is a series name
 // followed by one of these ("Harry Potter and the ...") is a series title, not
 // an author's shelf.
@@ -584,6 +592,14 @@ var joiningWords = map[string]bool{
 // lowercase or a joining word. A " - " separator is never a continuation.
 func titleRunsOn(rest string) bool {
 	if strings.HasPrefix(rest, " - ") {
+		return false
+	}
+	// A co-author list before the credit separator ("Terry Pratchett &
+	// Stephen Baxter - The Long Earth", "Neil Gaiman and Terry Pratchett -
+	// Good Omens") is the "<authors> - <title>" form, not a run-on title --
+	// but only when the joined part is itself a credit: "Harry Potter and the
+	// Goblet of Fire - Part 1" is still a run-on.
+	if m := coAuthorDashRe.FindStringSubmatch(rest); m != nil && personname.LooksLikeAuthorCredit(m[1]) {
 		return false
 	}
 	fields := strings.Fields(rest)
