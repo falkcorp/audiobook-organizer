@@ -1,0 +1,1 @@
+- CI: the applygate corpus test (`TestUnreviewedPathsRefuseEveryPairMainRefused`, about 175k gate evaluations) runs its 361 title pairs as parallel subtests; it was 672 s on one core under `-race` and the long pole of the test run.
