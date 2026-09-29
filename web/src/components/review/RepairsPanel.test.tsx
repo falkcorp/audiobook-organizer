@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -238,5 +238,100 @@ describe('RepairsPanel', () => {
     expect(await screen.findByTestId('repairs-trial-running')).toBeInTheDocument();
     expect(api.startRepairPlan).toHaveBeenCalledWith('vg-primary');
     expect(screen.getByTestId('repairs-run-trial-vg-primary')).toBeDisabled();
+  });
+});
+
+// The fragment-consolidation fixer's rows carry a class, their books and the
+// evidence; every count on screen must open its rows and books.
+describe('RepairsPanel — classified rows', () => {
+  const MOVED = row('moved:P', {
+    class: 'moved',
+    book_ids: ['P', 'F1', 'F2'],
+    title: 'Eldest',
+    members: [
+      { book_id: 'P', title: 'Eldest', role: 'parent', files: 349, missing_files: 2 },
+      { book_id: 'F1', title: '98', role: 'fragment', files: 1 },
+      { book_id: 'F2', title: '99', role: 'fragment', files: 1 },
+    ],
+    evidence: ['a ← row 1: import path', 'b ← row 2: import path', 'c', 'd'],
+  });
+  const NOPARENT = row('no-parent:x', { class: 'no-parent', book_ids: ['A', 'B', 'C'], title: 'Loose' });
+
+  beforeEach(() => {
+    vi.mocked(api.getRepairPlanRows).mockImplementation(
+      async (
+        fixerId: string,
+        planOpId: string,
+        q: { filter: RepairRowsFilter; offset: number; limit: number; rowClass?: string }
+      ) => {
+        const all = q.filter === 'applicable' ? [MOVED, NOPARENT] : [];
+        const rows = q.rowClass ? all.filter((r) => r.class === q.rowClass) : all;
+        return {
+          plan_op_id: planOpId,
+          fixer_id: fixerId,
+          planned_at: '2026-09-28T10:01:00Z',
+          filter: q.filter,
+          class: q.rowClass,
+          offset: q.offset,
+          limit: q.limit,
+          total: rows.length,
+          applicable: 2,
+          skipped_by_kind: {},
+          by_class: { moved: 1, 'no-parent': 1 },
+          by_class_in_filter: (q.filter === 'applicable' ? { moved: 1, 'no-parent': 1 } : {}) as Record<string, number>,
+          rows,
+        };
+      }
+    );
+  });
+
+  it('shows a chip per class with its count, and a chip click lists exactly that class', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-moved:P');
+    expect(screen.getByTestId('repairs-class-moved')).toHaveTextContent('Moved (1)');
+    expect(screen.getByTestId('repairs-class-no-parent')).toHaveTextContent('No parent (1)');
+    expect(screen.getByTestId('repairs-class-all')).toHaveTextContent('All (2)');
+
+    await user.click(screen.getByTestId('repairs-class-moved'));
+    expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
+      'vg-primary',
+      'plan-1',
+      expect.objectContaining({ rowClass: 'moved' }),
+      expect.anything()
+    );
+    await screen.findByTestId('repairs-row-moved:P');
+    await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-no-parent:x')).not.toBeInTheDocument());
+
+    await user.click(screen.getByTestId('repairs-class-all'));
+    expect(await screen.findByTestId('repairs-row-no-parent:x')).toBeInTheDocument();
+  });
+
+  it('lists every book of a row as a link with its role and file counts', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const r = await screen.findByTestId('repairs-row-moved:P');
+    const toggle = within(r).getByTestId('repairs-row-members-moved:P');
+    expect(toggle).toHaveTextContent('3 books in this row');
+    await user.click(toggle);
+    expect(within(r).getByRole('link', { name: '98' })).toHaveAttribute('href', '/library/F1');
+    expect(within(r).getByRole('link', { name: '99' })).toHaveAttribute('href', '/library/F2');
+    expect(within(r).getByText(/parent · 349 files · 2 missing/)).toBeInTheDocument();
+    expect(within(r).getAllByText(/fragment · 1 file$/)).toHaveLength(2);
+    // A row with no member detail still links every book id.
+    const np = screen.getByTestId('repairs-row-no-parent:x');
+    await user.click(within(np).getByTestId('repairs-row-members-no-parent:x'));
+    expect(within(np).getByRole('link', { name: 'C' })).toHaveAttribute('href', '/library/C');
+  });
+
+  it('shows the evidence, folding a long list behind a toggle', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const ev = await screen.findByTestId('repairs-row-evidence-moved:P');
+    expect(within(ev).getByText('a ← row 1: import path')).toBeInTheDocument();
+    expect(within(ev).queryByText('d')).not.toBeInTheDocument();
+    await user.click(within(ev).getByRole('button', { name: 'Show all 4' }));
+    expect(within(ev).getByText('d')).toBeInTheDocument();
+    expect(within(screen.getByTestId('repairs-row-moved:P')).getByText('Moved')).toBeInTheDocument();
   });
 });

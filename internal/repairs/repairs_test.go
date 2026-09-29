@@ -320,6 +320,16 @@ func TestPlanResult_Page(t *testing.T) {
 	require.Equal(t, 4, p.Total)
 	require.Len(t, p.Rows, 3)
 
+	// A class filter narrows within the filter; the in-filter tally counts
+	// exactly the rows each class chip lists.
+	res.Rows[0].Class, res.Rows[1].Class = "moved", "moved"
+	p, err = res.Page("op-plan", FilterAll, "moved", 0, 50)
+	require.NoError(t, err)
+	require.Equal(t, 2, p.Total)
+	require.Equal(t, 2, p.ByClassInFilter["moved"])
+	for _, r := range p.Rows {
+		require.Equal(t, "moved", r.Class)
+	}
 	_, err = res.Page("op-plan", "bogus", "", 0, 1)
 	require.Error(t, err)
 }

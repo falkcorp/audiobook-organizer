@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -20,6 +20,7 @@
  * blocked.
  */
 
+import { useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
@@ -268,6 +269,131 @@ function FixerRail({ repairs }: RepairsPanelProps) {
   );
 }
 
+/** Words for a fixer's row class, falling back to the class id. */
+function classLabel(c: string): string {
+  const labels: Record<string, string> = {
+    moved: 'Moved',
+    copy: 'Copy',
+    'no-parent': 'No parent',
+    'manual-only': 'Manual only',
+    ambiguous: 'Ambiguous',
+  };
+  return labels[c] ?? c;
+}
+
+/**
+ * One chip per row class on the current tab, each with the count of rows it
+ * lists. Clicking a chip narrows the rows to that class ("All" clears it), so
+ * every count here opens exactly the rows, and through them the books, it
+ * counts.
+ */
+function ClassChips({ repairs }: RepairsPanelProps) {
+  const counts = repairs.page?.by_class_in_filter;
+  if (!counts || Object.keys(counts).length === 0) {
+    // Keep a stale class filter clearable even when the tab has no classes.
+    if (!repairs.rowClass) return null;
+  }
+  const entries = Object.entries(counts ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const total = entries.reduce((n, [, v]) => n + v, 0);
+  return (
+    <Stack
+      direction="row"
+      spacing={1}
+      useFlexGap
+      sx={{ px: 2, py: 1, flexWrap: 'wrap', alignItems: 'center' }}
+      data-testid="repairs-class-chips"
+    >
+      <Chip
+        size="small"
+        label={`All (${total})`}
+        color={repairs.rowClass === null ? 'primary' : 'default'}
+        variant={repairs.rowClass === null ? 'filled' : 'outlined'}
+        onClick={() => repairs.setRowClass(null)}
+        data-testid="repairs-class-all"
+      />
+      {entries.map(([c, n]) => (
+        <Chip
+          key={c}
+          size="small"
+          label={`${classLabel(c)} (${n})`}
+          color={repairs.rowClass === c ? 'primary' : 'default'}
+          variant={repairs.rowClass === c ? 'filled' : 'outlined'}
+          onClick={() => repairs.setRowClass(repairs.rowClass === c ? null : c)}
+          data-testid={`repairs-class-${c}`}
+        />
+      ))}
+    </Stack>
+  );
+}
+
+/**
+ * Every book of a row, each a link to the book, with its role and file
+ * counts. Rows with one book show nothing extra (the title above links it);
+ * rows with more show a "N books" toggle that lists them all.
+ */
+function RowMembers({ row }: { row: RepairRow }) {
+  const [open, setOpen] = useState(false);
+  const members =
+    row.members && row.members.length > 0
+      ? row.members
+      : row.book_ids.map((id) => ({ book_id: id, files: 0 }) as NonNullable<RepairRow['members']>[number]);
+  if (members.length <= 1) return null;
+  return (
+    <Box>
+      <Button
+        size="small"
+        variant="text"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        sx={{ p: 0, minWidth: 0, textTransform: 'none' }}
+        data-testid={`repairs-row-members-${row.row_id}`}
+      >
+        {members.length} books in this row
+      </Button>
+      {open && (
+        <Box component="ul" sx={{ m: 0, pl: 2 }}>
+          {members.map((m) => (
+            <li key={m.book_id}>
+              <Link component={RouterLink} to={`/library/${encodeURIComponent(m.book_id)}`}>
+                {m.title || m.book_id}
+              </Link>
+              <Typography variant="caption" sx={{ color: 'text.secondary', ml: 0.5 }}>
+                {[m.role, m.files ? `${m.files} file${m.files === 1 ? '' : 's'}` : '', m.missing_files ? `${m.missing_files} missing` : '']
+                  .filter(Boolean)
+                  .join(' · ')}
+              </Typography>
+            </li>
+          ))}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+const EVIDENCE_SHOWN = 3;
+
+/** What the row's decision was made from; long lists fold behind a toggle. */
+function RowEvidence({ row }: { row: RepairRow }) {
+  const [all, setAll] = useState(false);
+  const ev = row.evidence ?? [];
+  if (ev.length === 0) return null;
+  const shown = all ? ev : ev.slice(0, EVIDENCE_SHOWN);
+  return (
+    <Box data-testid={`repairs-row-evidence-${row.row_id}`}>
+      {shown.map((e, i) => (
+        <Typography key={i} variant="caption" component="div" sx={{ color: 'text.secondary', wordBreak: 'break-all' }}>
+          {e}
+        </Typography>
+      ))}
+      {ev.length > EVIDENCE_SHOWN && (
+        <Button size="small" onClick={() => setAll((v) => !v)} sx={{ p: 0, minWidth: 0, textTransform: 'none' }}>
+          {all ? 'Show less' : `Show all ${ev.length}`}
+        </Button>
+      )}
+    </Box>
+  );
+}
+
 function RowsTable({ repairs }: RepairsPanelProps) {
   const { rows, filter, selectedRowIds, rowOutcomes, settledRowIds } = repairs;
   const skippedTab = filter === 'skipped';
@@ -319,11 +445,12 @@ function RowsTable({ repairs }: RepairsPanelProps) {
                     {row.author}
                   </Typography>
                 )}
-                {row.book_ids.length > 1 && (
-                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                    {row.book_ids.length} books in this row
-                  </Typography>
+                {row.class && (
+                  <Box>
+                    <Chip size="small" variant="outlined" label={classLabel(row.class)} sx={{ mt: 0.5 }} />
+                  </Box>
                 )}
+                <RowMembers row={row} />
               </TableCell>
               <TableCell sx={{ minWidth: 220 }}>
                 <DiffCell row={row} />
@@ -341,6 +468,7 @@ function RowsTable({ repairs }: RepairsPanelProps) {
                 ) : (
                   <Typography variant="body2">{row.reason}</Typography>
                 )}
+                <RowEvidence row={row} />
               </TableCell>
               <TableCell>
                 <Chip
@@ -460,6 +588,7 @@ function PlanView({ repairs }: RepairsPanelProps) {
               Re-run trial
             </Button>
           </Stack>
+          <ClassChips repairs={repairs} />
 
           {repairs.filter === 'applicable' && (
             <Stack

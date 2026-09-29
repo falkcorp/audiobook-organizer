@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -197,6 +197,9 @@ export interface RepairsLane {
 
   filter: RepairRowsFilter;
   setFilter: (f: RepairRowsFilter) => void;
+  /** Row class the page is narrowed to (fixers that classify rows), or null. */
+  rowClass: string | null;
+  setRowClass: (c: string | null) => void;
   offset: number;
   pageSize: number;
   setOffset: (offset: number) => void;
@@ -244,6 +247,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
   const [trials, setTrials] = useState<Record<string, RepairTrialState>>({});
 
   const [filter, setFilterState] = useState<RepairRowsFilter>('applicable');
+  const [rowClass, setRowClassState] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [pageSize, setPageSizeState] = useState<number>(initialPageSize);
   const [page, setPage] = useState<RepairRowsPage | null>(null);
@@ -437,7 +441,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
       .getRepairPlanRows(
         selectedFixerId,
         planOpId,
-        { filter, offset, limit: pageSize },
+        { filter, offset, limit: pageSize, rowClass: rowClass ?? undefined },
         { signal: ctrl.signal }
       )
       .then((p) => {
@@ -452,7 +456,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
         if (!ctrl.signal.aborted) setRowsLoading(false);
       });
     return () => ctrl.abort();
-  }, [active, selectedFixerId, planOpId, filter, offset, pageSize, rowsNonce]);
+  }, [active, selectedFixerId, planOpId, filter, rowClass, offset, pageSize, rowsNonce]);
 
   const reloadRows = useCallback(() => setRowsNonce((n) => n + 1), []);
 
@@ -462,7 +466,8 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     page &&
     page.fixer_id === selectedFixerId &&
     page.plan_op_id === planOpId &&
-    (page.filter ?? '') === filter
+    (page.filter ?? '') === filter &&
+    (page.class ?? '') === (rowClass ?? '')
       ? page
       : null;
   const rows = useMemo(() => currentPage?.rows ?? [], [currentPage]);
@@ -504,6 +509,11 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     setOffset(0);
   }, []);
 
+  const setRowClass = useCallback((c: string | null) => {
+    setRowClassState(c);
+    setOffset(0);
+  }, []);
+
   const setPageSize = useCallback((n: number) => {
     setPageSizeState(n);
     setOffset(0);
@@ -513,6 +523,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
   const selectFixer = useCallback((id: string) => {
     setSelectedFixerId(id);
     setFilterState('applicable');
+    setRowClassState(null);
     writeStored(REPAIRS_FIXER_STORAGE_KEY, id);
   }, []);
 
@@ -717,6 +728,8 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     trials,
     filter,
     setFilter,
+    rowClass,
+    setRowClass,
     offset,
     pageSize,
     setOffset,

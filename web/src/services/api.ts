@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.132.0
+// version: 2.133.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-28
 
@@ -7559,6 +7559,22 @@ export interface RepairRow {
   /** Skip kind; set on a row apply will never write. */
   skipped?: string;
   skip_reason?: string;
+  /** Fixer-defined kind of row ("moved", "copy", ...); a filter of the rows endpoint. */
+  class?: string;
+  /** Every book of the row, with its role and file counts, for linking. */
+  members?: RepairRowMember[];
+  /** What the row's decision was made from, in words. */
+  evidence?: string[];
+}
+
+/** One book of a repair row. */
+export interface RepairRowMember {
+  book_id: string;
+  title?: string;
+  /** Fixer-defined: "parent", "fragment", "survivor", ... */
+  role?: string;
+  files: number;
+  missing_files?: number;
 }
 
 export type RepairRowsFilter = 'applicable' | 'skipped';
@@ -7575,6 +7591,12 @@ export interface RepairRowsPage {
   /** The whole plan's applicable count, whatever the filter. */
   applicable: number;
   skipped_by_kind: Record<string, number>;
+  /** The whole plan's per-class tally (fixers that set a class). */
+  by_class?: Record<string, number>;
+  /** The class the page is filtered to, if any. */
+  class?: string;
+  /** Per-class tally of the rows matching the filter: what each chip lists. */
+  by_class_in_filter?: Record<string, number>;
   rows: RepairRow[];
 }
 
@@ -7669,7 +7691,7 @@ export async function startRepairPlan(
 export async function getRepairPlanRows(
   fixerId: string,
   planOpId: string,
-  query: { filter: RepairRowsFilter; offset: number; limit: number },
+  query: { filter: RepairRowsFilter; offset: number; limit: number; rowClass?: string },
   opts?: { signal?: AbortSignal; timeoutMs?: number }
 ): Promise<RepairRowsPage> {
   const params = new URLSearchParams({
@@ -7677,6 +7699,7 @@ export async function getRepairPlanRows(
     offset: String(query.offset),
     limit: String(Math.min(query.limit, REPAIRS_ROWS_MAX_LIMIT)),
   });
+  if (query.rowClass) params.set('class', query.rowClass);
   const response = await apiFetch(
     `${API_BASE}/repairs/${encodeURIComponent(fixerId)}/plan/${encodeURIComponent(planOpId)}/rows?${params.toString()}`,
     { signal: opts?.signal, timeoutMs: opts?.timeoutMs ?? REPAIRS_FETCH_TIMEOUT_MS }

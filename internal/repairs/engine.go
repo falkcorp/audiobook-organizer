@@ -211,7 +211,10 @@ type RowsPage struct {
 	SkippedByKind map[string]int `json:"skipped_by_kind"`
 	// ByClass is the whole plan's per-class tally, whatever the filter.
 	ByClass map[string]int `json:"by_class,omitempty"`
-	Rows    []Row          `json:"rows"`
+	// ByClassInFilter tallies by class only the rows matching filter (class
+	// aside): exactly the rows a class chip on this tab lists.
+	ByClassInFilter map[string]int `json:"by_class_in_filter,omitempty"`
+	Rows            []Row          `json:"rows"`
 }
 
 // Page returns rows [offset, offset+limit) of the plan's rows matching
@@ -224,9 +227,16 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 		return nil, fmt.Errorf("repairs: unknown filter %q (want applicable or skipped)", filter)
 	}
 	var match []Row
+	var inFilter map[string]int
 	for i := range p.Rows {
 		if filter != FilterAll && p.Rows[i].Applicable() != (filter == FilterApplicable) {
 			continue
+		}
+		if c := p.Rows[i].Class; c != "" {
+			if inFilter == nil {
+				inFilter = map[string]int{}
+			}
+			inFilter[c]++
 		}
 		if class != "" && p.Rows[i].Class != class {
 			continue
@@ -238,7 +248,7 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 	}
 	out := &RowsPage{PlanOpID: planOpID, FixerID: p.FixerID, PlannedAt: p.PlannedAt, Filter: filter,
 		Class: class, Offset: offset, Limit: limit, Total: len(match), Applicable: p.Applicable,
-		SkippedByKind: p.SkippedByKind, ByClass: p.ByClass, Rows: []Row{}}
+		SkippedByKind: p.SkippedByKind, ByClass: p.ByClass, ByClassInFilter: inFilter, Rows: []Row{}}
 	if offset < len(match) {
 		end := offset + limit
 		if end > len(match) {
