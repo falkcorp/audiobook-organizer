@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
 // last-edited: 2026-09-29
 
@@ -140,6 +140,25 @@ const (
 	RuleTitleOfOther    = "title_of_another_authors_book"
 	RuleSeriesOfOther   = "series_of_another_authors_books"
 	RuleCharacterSeries = "person_shaped_series_of_another_author"
+	// RuleArticleThe: "The Complete", "The Rosharan System", "The Thirteenth
+	// Doctor Adventures" -- person-SHAPED, so RuleLeadingArticle misses them.
+	RuleArticleThe = "leading_the_title_shape"
+	// RuleNumberWord: a word that is (or starts with) a number, or a
+	// letter-and-number code ("Avatars Dance 1", "Beka Cooper 2-Bloodhound",
+	// "B01 Her").
+	RuleNumberWord = "number_word"
+	// RuleSlug: a lowercase hyphen-joined slug ("the-final-strife").
+	RuleSlug = "slug"
+	// RuleGluedWords: several words glued into one CamelCase token
+	// ("StudyinSlaughterSchooledinMagicBook3").
+	RuleGluedWords = "glued_words"
+	// RuleFranchise: a media franchise ("Star Wars", "Stargate SG-1").
+	RuleFranchise = "franchise_name"
+	// RuleSiteTag: a release-site or uploader tag ("abooks").
+	RuleSiteTag = "release_site_tag"
+	// RuleSeriesParenthetical: a person with a series in parentheses
+	// ("Dante King (Dragon Born)", "L. E. Miranda (Rise of the Last Star)").
+	RuleSeriesParenthetical = "series_parenthetical"
 )
 
 // collectiveWords: author-path-link's list (authorPathLinkCollectiveWords),
@@ -237,6 +256,75 @@ var genreNames = map[string]bool{
 	"superhero": true, "superheroes": true, "space": true, "audiobook": true,
 	"audiobooks": true, "podcast": true, "podcasts": true, "radio": true,
 	"lecture": true, "lectures": true, "general": true,
+	"lesbian romance": true, "lesbian fiction": true, "lesbian erotica": true,
+	"gay romance": true, "lgbt": true, "lgbtq": true, "erotica": true,
+	"anime": true, "manga": true,
+}
+
+// genreWrapWords are the work nouns a genre label is wrapped in: "A LitRPG
+// Novel", "An Epic Fantasy Adventure". genreCore strips a leading article and
+// one trailing wrap word before the whole-name genre lookup, so "The Anime"
+// and "A LitRPG Novel" are the genre they name and "Anime" alone still is.
+var genreWrapWords = map[string]bool{
+	"novel": true, "novels": true, "story": true, "stories": true,
+	"adventure": true, "tale": true, "tales": true,
+}
+
+// genreCore is n (a Normalize result) without a leading article and one
+// trailing genreWrapWords word, or "" when nothing was stripped.
+func genreCore(n string) string {
+	f := strings.Fields(n)
+	stripped := false
+	if len(f) >= 2 && (f[0] == "the" || f[0] == "a" || f[0] == "an") {
+		f, stripped = f[1:], true
+	}
+	if len(f) >= 2 && genreWrapWords[f[len(f)-1]] {
+		f, stripped = f[:len(f)-1], true
+	}
+	if !stripped {
+		return ""
+	}
+	return strings.Join(f, " ")
+}
+
+// siteTags are release-site and uploader tags seen in the author field.
+// Whole normalized name only.
+var siteTags = map[string]bool{"abooks": true}
+
+// franchisePhrases are media franchises, matched as a whole-word phrase
+// anywhere in the normalized name ("Star Wars Full Cast Audio Drama",
+// "Stargate SG-1"). Only multi-word phrases or coined words no person is
+// named: "Marvel" and "Halo" are left out on purpose.
+var franchisePhrases = []string{
+	"star wars", "star trek", "stargate", "warhammer", "dragonlance",
+	"battletech", "mechwarrior", "forgotten realms", "sword art online",
+	"doctor who", "torchwood",
+}
+
+// productionPhrases mark a production credit anywhere in the name: "Star
+// Wars Full Cast Audio Drama". publisherNames has them as whole names only.
+var productionPhrases = []string{"full cast", "audio drama", "radio drama", "dramatized adaptation"}
+
+// hasPhrase reports whether the normalized name n holds phrase as whole words.
+func hasPhrase(n, phrase string) bool {
+	return n == phrase || strings.HasPrefix(n, phrase+" ") || strings.HasSuffix(n, " "+phrase) ||
+		strings.Contains(n, " "+phrase+" ")
+}
+
+// orgWords make a "The ..." name a corporate or collective credit rather than
+// a title: "The Arbinger Institute", "The Brothers Grimm", "The Editors of
+// Time", "The Great Courses", "The Economist".
+var orgWords = map[string]bool{
+	"institute": true, "institution": true, "brothers": true, "sisters": true,
+	"editors": true, "editor": true, "foundation": true, "society": true,
+	"company": true, "corporation": true, "group": true, "team": true,
+	"staff": true, "family": true, "monks": true, "fathers": true,
+	"committee": true, "council": true, "association": true, "church": true,
+	"school": true, "university": true, "college": true, "center": true,
+	"centre": true, "trust": true, "league": true, "club": true,
+	"project": true, "collective": true, "courses": true, "partners": true,
+	"associates": true, "economist": true, "times": true, "onion": true,
+	"guardian": true, "journal": true, "magazine": true, "review": true,
 }
 
 var (
@@ -385,8 +473,16 @@ func classifyName(s string) Verdict {
 	if len(words) >= 2 && words[len(words)-1] == "books" && !hasDigit(n) && len(words) <= 3 {
 		return strong(ClassPublisher, RulePublisher)
 	}
+	for _, ph := range productionPhrases {
+		if hasPhrase(full, ph) {
+			return strong(ClassPublisher, RulePublisher)
+		}
+	}
+	if siteTags[n] || siteTags[full] {
+		return strong(ClassOther, RuleSiteTag)
+	}
 
-	if genreNames[n] || genreNames[full] {
+	if genreNames[n] || genreNames[full] || genreNames[genreCore(n)] {
 		return strong(ClassGenre, RuleGenre)
 	}
 
@@ -432,6 +528,34 @@ func classifyName(s string) Verdict {
 		return Verdict{}
 	}
 
+	// A word that is a number or starts with one ("Avatars Dance 1", "Beka
+	// Cooper 2-Bloodhound", "203 The Key To Key To Time"), or a letter-and-
+	// number code ("B01 Her"): track, volume and disc labels. A generational
+	// ordinal ("Thurston Howell 3rd") is a name suffix and passes; so does a
+	// single-token pen name with digits ("Borgy60", "nobody103").
+	if f := strings.Fields(core); len(f) >= 2 {
+		for _, w := range f {
+			w = strings.Trim(w, ".,;:()[]")
+			if (w != "" && unicode.IsDigit([]rune(w)[0]) && !ordinalRe.MatchString(w)) || codeWordRe.MatchString(w) {
+				return strong(ClassOther, RuleNumberWord)
+			}
+		}
+	}
+	if isSlug(s) {
+		return strong(ClassOther, RuleSlug)
+	}
+	if isGluedWords(s) {
+		return strong(ClassWorkTitle, RuleGluedWords)
+	}
+	// "Dante King (Dragon Born)" with a parenthetical that is plainly not a
+	// person ("L. E. Miranda (Rise of the Last Star)"). A person-shaped
+	// parenthetical is a narrator as often as a series ("Kevin Hearne (Luke
+	// Daniels)"): the name alone cannot tell, so ClassifyNameInLibrary asks
+	// the library's series table.
+	if head, paren, ok := splitParenthetical(s); ok && personHead(head) && seriesShapedParenthetical(paren) {
+		return strong(ClassSeriesName, RuleSeriesParenthetical)
+	}
+
 	// A possessive word: "Shadow's Edge", "Ender's Game". Names do not
 	// inflect that way ("O'Brien", "D'Angelo" do not end in s).
 	for _, w := range strings.Fields(s) {
@@ -446,8 +570,24 @@ func classifyName(s string) Verdict {
 	if leadsWithArticle(s) && !personShaped {
 		return strong(ClassWorkTitle, RuleLeadingArticle)
 	}
+	// "The" is never an initial and never a given name, so a person-SHAPED
+	// "The ..." is still a title, a series or a fragment of one ("The
+	// Complete", "The Rosharan System", "The Thirteenth Doctor Adventures"),
+	// unless it names a corporate or collective credit ("The Arbinger
+	// Institute", "The Brothers Grimm"; orgWords). "A" and "An" are not
+	// judged this way: "A Johnston", "A Lee Martinez" (an initial without its
+	// period), "A Merrydew" and "An Na" are credits of that exact shape.
+	// A stage name ("The Rock") is flagged too; that costs a held row.
+	if len(words) >= 2 && words[0] == "the" && !anyOrgWord(words[1:]) {
+		return strong(ClassWorkTitle, RuleArticleThe)
+	}
 	if shoutWords(s) >= 3 {
 		return strong(ClassOther, RuleShout)
+	}
+	for _, ph := range franchisePhrases {
+		if hasPhrase(full, ph) {
+			return strong(ClassSeriesName, RuleFranchise)
+		}
 	}
 	// Filename shrapnel: an underscore, or letters and digits glued together
 	// in a multi-word name. Judged on the undecorated core, so a web-serial
@@ -457,6 +597,119 @@ func classifyName(s string) Verdict {
 		return strong(ClassOther, RuleFilenameShape)
 	}
 	return Verdict{}
+}
+
+// ClassifyNameInLibrary is ClassifyName plus the one name shape only the
+// library can decide: a person-shaped head with a person-shaped parenthetical
+// ("Dante King (Dragon Born)", "D. B. King (War Wizard)"). The parenthetical
+// is a series when isSeries reports its Normalize form as a series name in
+// the library; otherwise it is left alone as a narrator credit ("Kevin
+// Hearne (Luke Daniels)"). The verdict is Strong: the head is the person and
+// CleanedName yields it. isSeries nil is ClassifyName.
+func ClassifyNameInLibrary(name string, isSeries func(normalized string) bool) Verdict {
+	s := strings.TrimSpace(name)
+	v := ClassifyName(s)
+	if v.Junk() || isSeries == nil {
+		return v
+	}
+	head, paren, ok := splitParenthetical(s)
+	if ok && personHead(head) && personname.LooksLikePersonName(paren) && isSeries(Normalize(paren)) {
+		return strong(ClassSeriesName, RuleSeriesParenthetical)
+	}
+	return v
+}
+
+var (
+	// parenRe: a name and one trailing parenthetical, space before "(" or
+	// not ("Dante King(War Mage Academy)").
+	parenRe = regexp.MustCompile(`^(.*[^\s(])\s*\(([^()]+)\)\s*$`)
+	// ordinalRe: a generational suffix ("3rd", "4th").
+	ordinalRe = regexp.MustCompile(`(?i)^\d+(?:st|nd|rd|th)$`)
+	// codeWordRe: one letter and a padded number, a disc/book code ("B01",
+	// "D07").
+	codeWordRe = regexp.MustCompile(`^\p{L}\d{2,}$`)
+	// slugPartRe: one part of a lowercase slug.
+	slugPartRe = regexp.MustCompile(`^\p{Ll}+$`)
+)
+
+// splitParenthetical splits "Head (Paren)" into its two halves.
+func splitParenthetical(s string) (head, paren string, ok bool) {
+	m := parenRe.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil {
+		return "", "", false
+	}
+	head, paren = strings.TrimSpace(m[1]), strings.TrimSpace(m[2])
+	return head, paren, head != "" && paren != ""
+}
+
+// personHead: the head of a parenthetical name is one person.
+func personHead(head string) bool {
+	return personname.LooksLikePersonName(head) && !hasCreditSeparator(head)
+}
+
+// seriesShapedParenthetical reports whether a parenthetical is, by its shape
+// alone, a series or title: two or more words, capitalized, not a person
+// shape (a lowercase connective: "Rise of the Last Star", "Feast or
+// Famine"), and not a credit ("with Rebecca Moesta", "translated by X").
+// A one-word parenthetical is a role or a note ("Editor", "Jr."), never
+// judged.
+func seriesShapedParenthetical(p string) bool {
+	f := strings.Fields(p)
+	if len(f) < 2 || !unicode.IsUpper([]rune(f[0])[0]) || hasCreditSeparator(p) {
+		return false
+	}
+	if strings.Contains(" "+strings.ToLower(p)+" ", " by ") {
+		return false
+	}
+	return !personname.LooksLikePersonName(p) || personname.HasSeriesMarker(p)
+}
+
+// isSlug: a lowercase hyphen-joined slug of three or more words
+// ("the-final-strife"). A two-part one ("lavf-fate", or a hyphenated pen
+// name) is not judged.
+func isSlug(s string) bool {
+	if strings.ContainsAny(s, " \t") {
+		return false
+	}
+	parts := strings.Split(s, "-")
+	if len(parts) < 3 {
+		return false
+	}
+	for _, p := range parts {
+		if !slugPartRe.MatchString(p) {
+			return false
+		}
+	}
+	return true
+}
+
+// isGluedWords: one token of fifteen or more letters with three or more
+// lower-to-upper case changes, i.e. words run together
+// ("StudyinSlaughterSchooledinMagicBook3"). A CamelCase pen name has one or
+// two ("SerasStreams", "RavensDagger", "OverXelous").
+func isGluedWords(s string) bool {
+	if strings.ContainsAny(s, " \t") || len([]rune(s)) < 15 {
+		return false
+	}
+	humps := 0
+	var prev rune
+	for _, r := range s {
+		if unicode.IsUpper(r) && unicode.IsLower(prev) {
+			humps++
+		}
+		prev = r
+	}
+	return humps >= 3
+}
+
+// anyOrgWord reports whether any of words is an orgWords word.
+func anyOrgWord(words []string) bool {
+	for _, w := range words {
+		if orgWords[w] {
+			return true
+		}
+	}
+	return false
 }
 
 // FoldKey is the one author-name key the junk-author fixer matches with: case,
@@ -541,17 +794,37 @@ var (
 	// studioBracketRe: "GraphicAudio [R. A. Salvatore]": a bracket after a
 	// studio name, and nothing after it.
 	studioBracketRe = regexp.MustCompile(`^\s*([^\[\]]+?)\s*\[([^\]]+)\]\s*$`)
+	// byTailRe: "... by Saara El-Arifi_7": the last " by " and a tail with no
+	// parenthesis, a trailing "_N" / number dropped.
+	byTailRe = regexp.MustCompile(`(?i)^(.*\S)\s+by\s+([^()\[\]]+?)[\s_]*\d*[\s_]*$`)
 )
 
+// byRoleWords: the word before "by" that makes the tail someone other than
+// the writer ("read by", "translated by").
+var byRoleWords = map[string]bool{
+	"read": true, "narrated": true, "performed": true, "translated": true,
+	"edited": true, "illustrated": true, "adapted": true, "introduced": true,
+	"compiled": true, "retold": true, "abridged": true, "foreword": true,
+	"introduction": true, "afterword": true, "selected": true, "arranged": true,
+	"produced": true, "directed": true, "presented": true, "hosted": true,
+}
+
 // CleanedName returns the person a junk author row's own name carries once
-// its decoration is removed, and true, for exactly four shapes that carry a
+// its decoration is removed, and true, for exactly six shapes that carry a
 // person:
 //
 //   - a bracketed name after a studio: "GraphicAudio [R. A. Salvatore]"
 //     (several names in the bracket, "[Author / Narrator]": the FIRST only);
 //   - a leading "-" or "+": "- Arthur C. Clarke", "+Brandon Sanderson";
 //   - a copyright prefix with a year: "(c) 2001 Stephen Hawking";
-//   - a narrator suffix: "Christopher Paolini - Read by Gerard Doyle".
+//   - a narrator suffix: "Christopher Paolini - Read by Gerard Doyle";
+//   - a person with a parenthetical that is not a studio or a narrator role:
+//     "Dante King (Dragon Born)", "Daniel Pierce(Future Reborn)" (only junk
+//     rows are cleaned, so "Kevin Hearne (Luke Daniels)", a narrator credit
+//     the classifier leaves alone, never gets here);
+//   - a writer's "by" tail: "Listening to Final Strife, The (The Final
+//     Strife, Book 1) by Saara El-Arifi_7" (a trailing "_N" dropped; not
+//     after "read", "translated" and the other role words in byRoleWords).
 //
 // Nothing else is cleaned. Stripping "_" or digits off a name yields titles
 // and chapter labels as often as people ("HOR_ Prologue", "Killing Titan
@@ -581,6 +854,15 @@ func CleanedName(name string) (string, bool) {
 		out = copyrightPrefixRe.FindStringSubmatch(s)[1]
 	case readBySuffixRe.MatchString(s):
 		out = readBySuffixRe.FindStringSubmatch(s)[1]
+	case parenCleanable(s):
+		out, _, _ = splitParenthetical(s)
+	case byTailRe.MatchString(s):
+		m := byTailRe.FindStringSubmatch(s)
+		pre := strings.Fields(strings.ToLower(m[1]))
+		if byRoleWords[strings.Trim(pre[len(pre)-1], ".,;:-()[]")] {
+			return "", false
+		}
+		out = strings.TrimRight(m[2], "_ ")
 	default:
 		return "", false
 	}
@@ -592,6 +874,22 @@ func CleanedName(name string) (string, bool) {
 		return "", false
 	}
 	return out, true
+}
+
+// parenCleanable: "Head (Paren)" whose head is one person and whose
+// parenthetical is neither a studio ("Brandon Sanderson (GraphicAudio)":
+// the studio shape is left to the bracket form) nor a narrator role
+// ("Michael Kramer (narrator)": the head is the reader).
+func parenCleanable(s string) bool {
+	head, paren, ok := splitParenthetical(s)
+	if !ok || !personHead(head) || narratorRe.MatchString(s) {
+		return false
+	}
+	pl := strings.ToLower(paren)
+	if strings.Contains(pl, "narrat") || strings.Contains(pl, "read by") {
+		return false
+	}
+	return classifyName(paren).Class != ClassPublisher
 }
 
 // hasCreditSeparator reports whether s joins several credits.

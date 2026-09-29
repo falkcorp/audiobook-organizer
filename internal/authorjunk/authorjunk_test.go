@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-09-29
 
@@ -293,6 +293,138 @@ func TestNormalize(t *testing.T) {
 	} {
 		if got := Normalize(in); got != want {
 			t.Errorf("Normalize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Relink TARGETS the 2026-09-29 prod trial proposed that are junk: every one
+// passed the classifier until these rules (17,940-row trial, 6,874 relinks).
+func TestClassifyName_TrialTargets(t *testing.T) {
+	cases := []struct {
+		name string
+		want Class
+		rule string
+	}{
+		{"Lesbian Romance", ClassGenre, RuleGenre},
+		{"A LitRPG Novel", ClassGenre, RuleGenre},
+		{"The Anime", ClassGenre, RuleGenre},
+		{"An Epic Fantasy Adventure", ClassGenre, RuleGenre},
+		{"the-final-strife", ClassOther, RuleSlug},
+		{"The Complete", ClassWorkTitle, RuleArticleThe},
+		{"The World", ClassWorkTitle, RuleArticleThe},
+		{"The Stainless", ClassWorkTitle, RuleArticleThe},
+		{"The Delphi", ClassWorkTitle, RuleArticleThe},
+		{"The Core", ClassWorkTitle, RuleArticleThe},
+		{"The Dragon", ClassWorkTitle, RuleArticleThe},
+		{"The Iron", ClassWorkTitle, RuleArticleThe},
+		{"The Salvation", ClassWorkTitle, RuleArticleThe},
+		{"The Safanarion", ClassWorkTitle, RuleArticleThe},
+		{"The Rosharan System", ClassWorkTitle, RuleArticleThe},
+		{"The Threnodite System", ClassWorkTitle, RuleArticleThe},
+		{"The Scadrian System", ClassWorkTitle, RuleArticleThe},
+		{"The Thirteenth Doctor Adventures", ClassWorkTitle, RuleArticleThe},
+		{"The Beast Realms", ClassWorkTitle, RuleArticleThe},
+		{"The Ultimates", ClassWorkTitle, RuleArticleThe},
+		{"The Primal Hunter", ClassWorkTitle, RuleArticleThe},
+		{"The Faraway Paladin", ClassWorkTitle, RuleArticleThe},
+		{"The Sapphire Crescent", ClassWorkTitle, RuleArticleThe},
+		{"The Cunning Man", ClassWorkTitle, RuleArticleThe},
+		{"The Seeing Stone", ClassWorkTitle, RuleArticleThe},
+		{"Avatars Dance 1", ClassOther, RuleNumberWord},
+		{"B01 Her", ClassOther, RuleNumberWord},
+		{"B07 The", ClassOther, RuleNumberWord},
+		{"Beka Cooper 2-Bloodhound", ClassOther, RuleNumberWord},
+		{"203 The Key To Key To Time", ClassOther, RuleNumberWord},
+		{"Star Wars", ClassSeriesName, RuleFranchise},
+		{"Stargate SG-1", ClassSeriesName, RuleFranchise},
+		{"Alphabet Squadron (Star Wars)", ClassSeriesName, RuleFranchise},
+		{"Star Wars Full Cast Audio Drama", ClassPublisher, RulePublisher},
+		{"StudyinSlaughterSchooledinMagicBook3", ClassWorkTitle, RuleGluedWords},
+		{"abooks", ClassOther, RuleSiteTag},
+		{"L. E. Miranda (Rise of the Last Star)", ClassSeriesName, RuleSeriesParenthetical},
+		{"Phil Tucker (Dawn of the Void)", ClassSeriesName, RuleSeriesParenthetical},
+		{"J. M. Alexia (Feast or Famine)", ClassSeriesName, RuleSeriesParenthetical},
+	}
+	for _, c := range cases {
+		v := ClassifyName(c.name)
+		if v.Class != c.want || v.Strength != Strong || v.Rule != c.rule {
+			t.Errorf("ClassifyName(%q) = %+v, want %s/%s (strong)", c.name, v, c.want, c.rule)
+		}
+	}
+}
+
+// Real people and pen names the new rules must not touch: single-token
+// LitRPG pen names, CamelCase handles, initials, article-led credits and
+// narrator parentheticals.
+func TestClassifyName_TrialRealAuthors(t *testing.T) {
+	for _, n := range []string{
+		"Zogarth", "Virlyce", "Ryuto", "Bainin", "Fuurou", "JKSManga", "Nectar", "Lunadea",
+		"Twoony", "Hamuo", "Inori", "Macronomicon", "Bosloe", "Strungbound", "Yorth", "Gloam",
+		"Rhaegar", "Simon", "Borgy60", "SerasStreams", "RavensDagger", "AvaritiaBona", "SourpatchHero",
+		"OverXelous", "XKarnation", "WillPowah", "SpaizZzer", "Chaos65", "adastra339", "randombluecat",
+		"Martha Wells", "Joe Abercrombie", "Brandon Sanderson", "An Na", "The Arbinger Institute",
+		"The Brothers Grimm", "The Great Courses", "Ivan Kal", "Shane Purdy",
+		"Rhea Zulu", "E. E. Knight", "Jack Bryce", "Dennis E. Taylor", "Lesley L. Smith",
+		"A Johnston", "A Lee Martinez", "A Merrydew", "A. Merritt", "Adam-Troy Castro",
+		"Michael-Scott Earle", "K-Ming Chang", "Aer-ki Jyr", "Thurston Howell 3rd", "MacLeod Andrews",
+		"Kevin Hearne (Luke Daniels)", "Kevin Hearne (Christopher Ragland)", "Robin Hobb (Anne Flosnik)",
+		"nobody103 (Jack Voraces)", "Jane Doe (Editor)", "Kevin J. Anderson (with Rebecca Moesta)",
+		"Jane Doe (translated by John Roe)", "Dante King (Dragon Born)", "D. B. King (War Wizard)",
+	} {
+		if v := ClassifyName(n); v.Junk() {
+			t.Errorf("ClassifyName(%q) = %+v, want not junk", n, v)
+		}
+	}
+}
+
+// A person-shaped parenthetical is a series only when the library says so.
+func TestClassifyNameInLibrary(t *testing.T) {
+	series := map[string]bool{"dragon born": true, "war mage academy": true, "future reborn": true, "last reaper": true}
+	isSeries := func(n string) bool { return series[n] }
+	for n, want := range map[string]bool{
+		"Dante King (Dragon Born)":              true,
+		"Dante King(War Mage Academy)":          true,
+		"Daniel Pierce(Future Reborn)":          true,
+		"J. N. Chaney (Last Reaper)":            true,
+		"Kevin Hearne (Luke Daniels)":           false, // a narrator, not a series here
+		"Dante King":                            false,
+		"Dragon Born":                           false, // no parenthetical: the series row itself is not judged here
+		"L. E. Miranda (Rise of the Last Star)": true,  // name alone
+	} {
+		v := ClassifyNameInLibrary(n, isSeries)
+		if v.Junk() != want || (want && v.Strength != Strong) {
+			t.Errorf("ClassifyNameInLibrary(%q) = %+v, want junk=%v", n, v, want)
+		}
+	}
+	if v := ClassifyNameInLibrary("Dante King (Dragon Born)", nil); v.Junk() {
+		t.Errorf("nil isSeries must be ClassifyName: %+v", v)
+	}
+}
+
+// CleanedName's parenthetical and "by" shapes yield the person.
+func TestCleanedName_ParentheticalAndBy(t *testing.T) {
+	for n, want := range map[string]string{
+		"Dante King (Dragon Born)":              "Dante King",
+		"Daniel Pierce(Future Reborn)":          "Daniel Pierce",
+		"L. E. Miranda (Rise of the Last Star)": "L. E. Miranda",
+		"C. T. Phipps (Cthulhu Armageddon)":     "C. T. Phipps",
+		"D. B. King (World End)":                "D. B. King",
+		"Daniel Arenson (Starship Freedom)":     "Daniel Arenson",
+		"Listening to Final Strife, The (The Final Strife, Book 1) by Saara El-Arifi_7":  "Saara El-Arifi",
+		"Listening to Final Strife, The (The Final Strife, Book 1) by Saara El-Arifi_15": "Saara El-Arifi",
+		"The Way of Kings by Brandon Sanderson":                                          "Brandon Sanderson",
+		// A narrator is never the cleaned person.
+		"Michael Kramer (narrator)":               "",
+		"The Way of Kings read by Michael Kramer": "",
+		"The Iliad translated by Robert Fagles":   "",
+		"Brandon Sanderson (GraphicAudio)":        "",
+		"nobody103 (Jack Voraces)":                "", // head is not person-shaped
+		"Stand by Me":                             "",
+		"Death by Chocolate":                      "",
+	} {
+		got, ok := CleanedName(n)
+		if got != want || ok != (want != "") {
+			t.Errorf("CleanedName(%q) = %q, %v; want %q", n, got, ok, want)
 		}
 	}
 }
