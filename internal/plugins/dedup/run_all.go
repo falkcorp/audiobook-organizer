@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/run_all.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 428d4a76-207e-4f6e-8b0a-5f4d939690f2
 // last-edited: 2026-09-28
 
@@ -119,6 +119,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -210,11 +211,10 @@ type RunAllResult struct {
 	RescorePreview *dedupengine.RescoreResult `json:"rescore_preview"`
 }
 
-// opStatusReader is the one store method this op needs to follow its children.
-// *database.PebbleStore satisfies it; register.go wires it from the plugin store.
-type opStatusReader interface {
-	GetOperationV2(id string) (*database.OperationV2Row, error)
-}
+// opStatusReader is the one store method this op needs to follow its children
+// (childop.Reader). *database.PebbleStore satisfies it; register.go wires it
+// from the plugin store.
+type opStatusReader = childop.Reader
 
 // The production store must keep satisfying it, or register.go's assertion
 // fails and every run errors with "operation store not available".
@@ -505,14 +505,13 @@ func childEndedError(step runAllStep, row *database.OperationV2Row) error {
 	return fmt.Errorf("%s (%s) ended as %q%s", step.Label, row.ID, row.Status, why)
 }
 
-// waitRunAllChild polls the child row until it is terminal, mirroring its
-// progress onto the parent. See LIVENESS in the file comment.
+// waitRunAllChild follows the child with childop.Follow until it is terminal,
+// mirroring its progress onto the parent. See LIVENESS in the file comment:
+// Follow reports a running child only when its row changed, and a queued or
+// operator-paused child on every poll, so this op's watchdog sees exactly
+// what the child shows and a wedged child leaves this op silent too.
 func (p *Plugin) waitRunAllChild(ctx context.Context, rep sdk.Reporter, st *runAllState, step runAllStep, head string, total int) error {
 	base := st.StepIndex * runAllStepUnits
-	ticker := time.NewTicker(p.runAllPoll())
-	defer ticker.Stop()
-
-	lastSig := ""
 	// A recorded child counts as one unit of progress before it reports any.
 	// Without it a run whose step-0 child sits queued (acoustid.scan behind a
 	// fingerprint rescan) checkpoints high_water_progress=0, and the registry's
@@ -528,64 +527,46 @@ func (p *Plugin) waitRunAllChild(ctx context.Context, rep sdk.Reporter, st *runA
 			rep.Logger().Warn("dedup.run-all: checkpoint failed", "error", err)
 		}
 	}
-	for {
-		row, err := p.opStatus.GetOperationV2(st.ChildOpID)
-		if err == nil && row != nil {
-			switch {
-			case row.Status == "completed":
-				return nil
-			case row.Status == "failed" || row.Status == "canceled":
-				return childEndedError(step, row)
-			case strings.HasPrefix(row.Status, "interrupted_"):
-				// During a LIVE wait this is not a restart (this op would have
-				// been stopped too); it is the registry force-dropping the child.
-				return childEndedError(step, row)
-			case row.Status == "queued":
+	row, err := childop.Follow(ctx, p.opStatus, st.ChildOpID, childop.Options{
+		Interval: p.runAllPoll(),
+		Paused:   p.operationsPaused,
+		OnObserve: func(o childop.Observation) {
+			switch o.Event {
+			case childop.EventQueued:
 				_ = rep.UpdateProgress(base+share, total, head+" — waiting to start (queued behind other work)")
 				checkpoint()
-			case p.operationsPaused():
+			case childop.EventPaused:
 				// The operator pause parks a RunItems child between items and
 				// keeps only ITS in-memory liveness clock stamped; its row does
-				// not change. Mirror the gate (pause_gate.go stamps liveness
-				// while held) so a long pause does not get this op reaped.
+				// not change. Mirror the gate so a long pause does not get this
+				// op reaped.
 				_ = rep.UpdateProgress(base+share, total, head+" — paused by an operator")
-			default: // running
-				sig := childSignature(row)
-				if sig != lastSig {
-					lastSig = sig
-					if row.ProgressTotal > 0 {
-						// Monotonic within the step: full-scan runs two 0..N
-						// phases, and a bar that jumps back reads as a restart.
-						// The message carries the child's real phase and counts.
-						if s := min(row.ProgressCurrent*runAllStepUnits/row.ProgressTotal, runAllStepUnits-1); s > share {
-							share = s
-						}
+			default: // the running child's row changed
+				if o.Row.ProgressTotal > 0 {
+					// Monotonic within the step: full-scan runs two 0..N
+					// phases, and a bar that jumps back reads as a restart.
+					// The message carries the child's real phase and counts.
+					if s := min(o.Row.ProgressCurrent*runAllStepUnits/o.Row.ProgressTotal, runAllStepUnits-1); s > share {
+						share = s
 					}
-					msg := head
-					if row.ProgressMessage != "" {
-						msg += " — " + row.ProgressMessage
-					}
-					_ = rep.UpdateProgress(base+share, total, msg)
-					checkpoint()
 				}
+				msg := head
+				if o.Row.ProgressMessage != "" {
+					msg += " — " + o.Row.ProgressMessage
+				}
+				_ = rep.UpdateProgress(base+share, total, msg)
+				checkpoint()
 			}
-		}
-		// A read error is not reported as progress: if the store stays
-		// unreadable the watchdog should see a silent op.
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
+		},
+	})
+	if err != nil {
+		return err
 	}
-}
-
-// childSignature is what "the child's row changed" means for liveness.
-func childSignature(row *database.OperationV2Row) string {
-	lp := ""
-	if row.LastProgressAt != nil {
-		lp = row.LastProgressAt.UTC().Format(time.RFC3339Nano)
+	if row.Status == "completed" {
+		return nil
 	}
-	return fmt.Sprintf("%s|%d|%d|%s|%s", row.Status, row.ProgressCurrent, row.ProgressTotal, row.ProgressMessage, lp)
+	// failed, canceled, or interrupted_*. During a LIVE wait an interrupted
+	// child is not a restart (this op would have been stopped too); it is the
+	// registry force-dropping the child.
+	return childEndedError(step, row)
 }
