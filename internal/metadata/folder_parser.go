@@ -1,7 +1,7 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
-// last-edited: 2026-09-19
+// last-edited: 2026-09-28
 
 package metadata
 
@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
 // FieldConfidence describes how confident we are about a parsed field.
@@ -364,6 +365,16 @@ func tryExtractAuthorFromDashSplit(seg string, fm *FolderMetadata) {
 //	"Tolkien, J. R. R."
 func looksLikeAuthorSegment(s string) bool {
 	if len(s) < 3 {
+		return false
+	}
+	// A work-named segment is never an author, whichever branch below would
+	// accept it -- including the early " & ", "." and "," returns, which skip
+	// the shape check. In a <series>/<title>/<disc> layout the series folder
+	// sits where Pass 3 looks for the author, so "The Stormlight Archive" was
+	// taken as the author at HIGH confidence. This veto only removes authors;
+	// the wider predicate divergence from personname is still tracked in
+	// todo.d/20260901-folder-parser-shape-predicate-diverges.md.
+	if personname.LooksLikeWorkTitle(s) {
 		return false
 	}
 	// Any multi-author " & " makes this very likely an author segment.
