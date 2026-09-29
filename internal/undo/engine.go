@@ -300,8 +300,15 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange) error
 		if !ok {
 			return refuse(ReasonOldValueUnparsable, "no book_file id in %q", c.FieldName)
 		}
-		onTarget, _ := r.GetBookFileByID(c.BookID, id)
-		onSource, _ := r.GetBookFileByID(c.OldValue, id)
+		// Not found is (nil, nil); an error is a failed read, never "absent".
+		onTarget, err := r.GetBookFileByID(c.BookID, id)
+		if err != nil {
+			return refuse(ReasonFieldUnreadable, "read book_file %s on %s: %v", id, c.BookID, err)
+		}
+		onSource, err := r.GetBookFileByID(c.OldValue, id)
+		if err != nil {
+			return refuse(ReasonFieldUnreadable, "read book_file %s on %s: %v", id, c.OldValue, err)
+		}
 		return CheckReassignCurrent(onTarget != nil, onSource != nil, c)
 	case ChangeTypeBookFileTrack:
 		return checkFsRegroupRowCurrent(store, c, func(f *database.BookFile) error {
@@ -369,7 +376,10 @@ func checkFsRegroupRowCurrent(store ConflictChecker, c *database.OperationChange
 		return refuse(ReasonOldValueUnparsable, "no book_file id in %q", c.FieldName)
 	}
 	f, err := r.GetBookFileByID(c.BookID, id)
-	if err != nil || f == nil {
+	if err != nil {
+		return refuse(ReasonFieldUnreadable, "read book_file %s on %s: %v", id, c.BookID, err)
+	}
+	if f == nil {
 		return refuse(ReasonChangedSince, "book_file %s is no longer on book %s", id, c.BookID)
 	}
 	return check(f)

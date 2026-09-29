@@ -723,8 +723,15 @@ func (rs *RevertService) revertBookFileReassign(c *database.OperationChange) err
 	if _, err := rs.loadBook(c.OldValue); err != nil {
 		return err
 	}
-	onTarget, _ := rs.db.GetBookFileByID(c.BookID, fileID)
-	onSource, _ := rs.db.GetBookFileByID(c.OldValue, fileID)
+	// Not found is (nil, nil); an error is a failed read, never "absent".
+	onTarget, err := rs.db.GetBookFileByID(c.BookID, fileID)
+	if err != nil {
+		return fmt.Errorf("read book_file %s on %s: %w", fileID, c.BookID, err)
+	}
+	onSource, err := rs.db.GetBookFileByID(c.OldValue, fileID)
+	if err != nil {
+		return fmt.Errorf("read book_file %s on %s: %w", fileID, c.OldValue, err)
+	}
 	if err := undo.CheckReassignCurrent(onTarget != nil, onSource != nil, c); err != nil {
 		return err
 	}
