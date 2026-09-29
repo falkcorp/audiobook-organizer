@@ -1,5 +1,5 @@
 // file: internal/util/title_sort_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a3d9e52-1c8f-4b70-a4e6-3f2b8d0c5e19
 // last-edited: 2026-09-28
 
@@ -29,6 +29,10 @@ func TestTitleSortKey_Table(t *testing.T) {
 		{"III John", "john 3"},
 		{"First Samuel chapter 4", "samuel 1 chapter 4"},
 		{"IV Maccabees", "maccabees 4"},
+		{"1. John", "john 1"},
+		{"2 - Kings", "kings 2"},
+		{"2-Peter", "peter 2"},
+		{"1 John: Commentary", "john 1: commentary"},
 		// ---- untouched: plain NormalizeTitle ----
 		{"The Odyssey", "the odyssey"},
 		{"I, Robot", "i, robot"},
@@ -45,6 +49,20 @@ func TestTitleSortKey_Table(t *testing.T) {
 	for _, c := range cases {
 		if got := TitleSortKey(c.in); got != c.want {
 			t.Errorf("TitleSortKey(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestSeriesSortKey(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"I Corinthians", "corinthians 1"},
+		{"1 John", "john 1"},
+		{"I Corinthians Study Series", "i corinthians study series"},
+		{"The Expanse", "the expanse"},
+	}
+	for _, c := range cases {
+		if got := SeriesSortKey(c.in); got != c.want {
+			t.Errorf("SeriesSortKey(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
