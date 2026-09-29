@@ -1,7 +1,7 @@
 // file: internal/database/book_sort.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c1f7a52-9d84-4e6b-b0a7-2f5c8e1d4a93
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 //
 // The single ordering authority for a []Book.
 //
@@ -88,9 +88,9 @@ func compareSortInts(av int64, ap bool, bv int64, bp bool) int {
 // the sentinel, not in this function; fixing it means re-keying the title
 // index, which is a migration, not a comparator change.
 func bookTitleSortValue(b *Book) string {
-	key := util.NormalizeTitle(b.Title)
+	key := util.TitleSortKey(b.Title)
 	if key == "" && b.OriginalFilename != nil {
-		key = util.NormalizeTitle(*b.OriginalFilename)
+		key = util.TitleSortKey(*b.OriginalFilename)
 	}
 	return key
 }
