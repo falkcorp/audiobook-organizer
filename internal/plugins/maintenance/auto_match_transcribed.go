@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-14
+// last-edited: 2026-09-28
 
 package maintenance
 
@@ -14,7 +14,10 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -110,7 +113,7 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		return nil
 	}
 
-	var scanned, eligible, applied int
+	var scanned, eligible, applied, manualOnly int
 
 	// Fail-safe cap (internal/applycap). This op walks the WHOLE library and
 	// decides per book, so its target set is unknowable up front — a running
@@ -193,6 +196,27 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 			}
 		}
 
+		// Gate 4: owner-manual-only (owner rule, standing). Doctor Who / Big
+		// Finish / Torchwood are applied by hand, one book at a time, and this
+		// op is a bulk apply: such a book is never written, found by its path,
+		// title, transcribed title, the matched candidate, or any book_file
+		// path. A blank-titled Big Finish book whose intro names it is exactly
+		// the book the transcription match would otherwise fill. A failed
+		// book_file read refuses too (fail closed). The op's store cannot read
+		// series rows, so the series is checked where it can be: the server's
+		// ApplyTranscriptionCandidate re-runs the full guard (series and the
+		// full candidate included) and refuses with
+		// ErrTranscriptionOwnerManualOnly, counted below.
+		guard := applygate.BulkManualOnlyGuard(store, nil, b, transTitle)
+		if reason, detail := applygate.ManualOnlyDetail(b,
+			&metafetch.MetadataCandidate{Title: candTitle, Author: candAuthor},
+			applygate.TranscribedSearch{Query: transTitle}, guard); reason != "" {
+			manualOnly++
+			log.Info("auto-match-transcribed: skipped, owner applies this book by hand",
+				"book_id", id, "reason", reason, "detail", logger.SanitizeLogValue(detail))
+			return nil
+		}
+
 		// All gates passed — this book is eligible.
 		eligible++
 
@@ -218,6 +242,15 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 			eligible--
 			log.Info("auto-match-transcribed: skipped, nothing left to fill",
 				"book_id", id, "candidate", candTitle)
+			return nil
+		}
+		if errors.Is(applyErr, ErrTranscriptionOwnerManualOnly) {
+			// The server's full guard found what the pre-check could not (the
+			// series row, or the candidate's series): a skip, not a failure.
+			eligible--
+			manualOnly++
+			log.Info("auto-match-transcribed: skipped, owner applies this book by hand",
+				"book_id", id, "detail", logger.SanitizeLogValue(applyErr.Error()))
 			return nil
 		}
 		if applyErr != nil {
@@ -253,13 +286,13 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 	var summary string
 	if dryRun {
 		summary = fmt.Sprintf(
-			"auto-match-transcribed complete (dry-run): scanned %d, eligible %d, would-apply %d",
-			scanned, eligible, eligible,
+			"auto-match-transcribed complete (dry-run): scanned %d, eligible %d, would-apply %d, owner-manual skipped %d",
+			scanned, eligible, eligible, manualOnly,
 		)
 	} else {
 		summary = fmt.Sprintf(
-			"auto-match-transcribed complete: scanned %d, eligible %d, applied %d",
-			scanned, eligible, applied,
+			"auto-match-transcribed complete: scanned %d, eligible %d, applied %d, owner-manual skipped %d",
+			scanned, eligible, applied, manualOnly,
 		)
 	}
 	log.Info(summary)

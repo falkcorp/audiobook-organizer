@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c1e4f6a-2b7d-4a3e-8f5c-6d1a9b2e4c7f
-// last-edited: 2026-09-14
+// last-edited: 2026-09-28
 
 // Package server tests for TASK-23 (MATCH-6/BUG-3/QUAL-3): ApplyTranscriptionCandidate
 // must verify the identity of the re-read cached candidate against the
@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -353,5 +354,62 @@ func TestApplyTranscriptionCandidate_EmptyCandidateValueWritesNothing(t *testing
 	}
 	if book.MetadataReviewStatus != nil || book.MetadataSource != nil || book.MetadataSourceHash != nil || book.VersionNotes != nil {
 		t.Fatalf("book stamped: status=%v source=%v hash=%v", book.MetadataReviewStatus, book.MetadataSource, book.MetadataSourceHash)
+	}
+}
+
+// Owner rule (standing): auto-match-transcribed is a bulk apply, so it never
+// writes a Doctor Who / Big Finish / Torchwood book. A blank-titled Big
+// Finish book whose only marker is its series row -- the one thing the op's
+// own pre-check cannot read -- is refused here, before any write; so is a
+// book whose owner-manual check could not be done (fail closed).
+func TestApplyTranscriptionCandidate_OwnerManualOnlyRefused(t *testing.T) {
+	const chimes = "The Chimes of Midnight"
+	seriesID := 11
+	cases := []struct {
+		name       string
+		series     func(int) (*database.Series, error)
+		files      func(string) ([]database.BookFile, error)
+		wantReason string
+	}{
+		{name: "series row names Big Finish",
+			series: func(int) (*database.Series, error) {
+				return &database.Series{ID: seriesID, Name: "Big Finish Main Range"}, nil
+			},
+			wantReason: "owner_manual_only"},
+		{name: "a book_file path names Doctor Who",
+			files: func(string) ([]database.BookFile, error) {
+				return []database.BookFile{{FilePath: "/library/Doctor Who/Chimes/01.mp3"}}, nil
+			},
+			wantReason: "owner_manual_only"},
+		{name: "the book_file read fails",
+			files: func(string) ([]database.BookFile, error) {
+				return nil, errors.New("pebble: closed")
+			},
+			wantReason: "owner_manual_check_failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bookID := "book-bf"
+			book := &database.Book{ID: bookID, Title: "", SeriesID: &seriesID,
+				FilePath: "/library/Unknown Author/Unknown Title/book.m4b", TranscribedTitle: strPtr(chimes)}
+			cand := metafetch.MetadataCandidate{Title: chimes, Author: "Robert Shearman", Score: 0.95, Source: "test"}
+			entry := mustCandidateCache(t, bookID, cand)
+			store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+			withCreatableAuthors(store)
+			store.GetSeriesByIDFunc = tc.series
+			store.GetBookFilesFunc = tc.files
+			s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+
+			err := s.ApplyTranscriptionCandidate(context.Background(), bookID, cand.Title, cand.Author)
+			if !errors.Is(err, maintenanceplugin.ErrTranscriptionOwnerManualOnly) {
+				t.Fatalf("ApplyTranscriptionCandidate() = %v, want ErrTranscriptionOwnerManualOnly", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantReason) {
+				t.Errorf("error %q does not name reason %q", err, tc.wantReason)
+			}
+			if len(*updateCalls) != 0 {
+				t.Fatalf("UpdateBook calls = %d, want 0", len(*updateCalls))
+			}
+		})
 	}
 }
