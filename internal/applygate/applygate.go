@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-09-28
 
@@ -241,7 +241,7 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 	confirms := ts.Query != "" && TranscribedSearchConfirms(ts, c)
 	refusal := ""
 	if confirms {
-		refusal = transcribedLiftRefusal(book, authors, c, ts.Query)
+		refusal = transcribedLiftRefusal(book, authors, c, ts)
 	}
 	match := confirms && refusal == ""
 	used := false

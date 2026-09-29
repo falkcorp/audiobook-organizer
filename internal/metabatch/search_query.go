@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
 // last-edited: 2026-09-28
 //
@@ -8,10 +8,8 @@
 package metabatch
 
 import (
-	"path/filepath"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -99,7 +97,7 @@ func ResolveCandidateSearchQuery(files BookFilesGetter, book *database.Book) Can
 	if book == nil {
 		return CandidateSearchQuery{}
 	}
-	j := &titleJudge{files: files, bookID: book.ID}
+	j := &titleJudge{files: files, bookID: book.ID, bookPath: book.FilePath}
 	if !j.unsearchable(book.Title) {
 		return CandidateSearchQuery{Title: book.Title, Source: SearchQuerySourceTitle, Usable: true}
 	}
@@ -128,10 +126,11 @@ func ResolveCandidateSearchQuery(files BookFilesGetter, book *database.Book) Can
 // it names a part (headingCorroborated). The files are read at most once,
 // and only when a title needs them or a file-level fallback is reached.
 type titleJudge struct {
-	files   BookFilesGetter
-	bookID  string
-	loaded  bool
-	present []database.BookFile
+	files    BookFilesGetter
+	bookID   string
+	bookPath string
+	loaded   bool
+	present  []database.BookFile
 }
 
 // presentFiles returns the book's present files in play order
@@ -146,17 +145,46 @@ func (j *titleJudge) presentFiles() []database.BookFile {
 	if j.files == nil {
 		return nil
 	}
-	bookFiles, err := j.files.GetBookFiles(j.bookID)
+	present, err := presentFilesInPlayOrder(j.files, j.bookID)
 	if err != nil {
 		return nil
 	}
+	j.present = present
+	return j.present
+}
+
+// presentFilesInPlayOrder reads bookID's book_file rows and returns the
+// present ones in play order (sortByPosition).
+func presentFilesInPlayOrder(files BookFilesGetter, bookID string) ([]database.BookFile, error) {
+	bookFiles, err := files.GetBookFiles(bookID)
+	if err != nil {
+		return nil, err
+	}
+	var present []database.BookFile
 	for i := range bookFiles {
 		if !bookFiles[i].Missing {
-			j.present = append(j.present, bookFiles[i])
+			present = append(present, bookFiles[i])
 		}
 	}
-	sortByPosition(j.present)
-	return j.present
+	sortByPosition(present)
+	return present, nil
+}
+
+// FirstPresentFilePath returns the path of bookID's first present file in
+// play order (lowest disc, then track; the file ResolveCandidateSearchQuery
+// takes a file-level transcription and a folder title from), or "" when the
+// book has none. The certainty gate reads the book's work folder from it
+// (applygate.TranscribedSearch.FirstFilePath): a multi-file book's own
+// FilePath is a directory.
+func FirstPresentFilePath(files BookFilesGetter, bookID string) (string, error) {
+	if files == nil {
+		return "", nil
+	}
+	present, err := presentFilesInPlayOrder(files, bookID)
+	if err != nil || len(present) == 0 {
+		return "", err
+	}
+	return present[0].FilePath, nil
 }
 
 // unsearchable reports whether t is no title to search this book by.
@@ -164,24 +192,44 @@ func (j *titleJudge) unsearchable(t string) bool {
 	if metadata.IsUnsearchableTitle(t) {
 		return true
 	}
-	return metadata.IsSectionHeadingTitle(t) && headingCorroborated(j.presentFiles(), t)
+	return metadata.IsSectionHeadingTitle(t) && headingCorroborated(j.presentFiles(), j.bookPath, t)
 }
 
 // headingCorroborated reports whether a book's files say a section-heading
-// title names a part of something rather than a whole book: the book has
-// more than one present file, or the title is a file's own tag title on a
-// numbered track (a chapter file's tag promoted to the book).
-func headingCorroborated(present []database.BookFile, title string) bool {
-	if len(present) > 1 {
-		return true
-	}
-	t := strings.TrimSpace(title)
+// title names a part of something rather than a whole book. Two facts count:
+//
+//   - a present file's own Title tag is the title: a chapter file's tag
+//     promoted to the book ("Chapter One" on a book whose files are tagged
+//     "Chapter One", "Book Two");
+//   - the book's work folder (metadata.WorkFolderTitle, from the first present
+//     file, else the book's own path) names something else: "Prologue" in
+//     ".../Paolini/Eldest/" is Eldest's prologue.
+//
+// The number of files is NOT evidence: a multi-file "Act One" or "Forward"
+// in a folder of that name is a real book in chapters. A work folder that
+// names nothing (a placeholder or chapter folder, metadata.IsUnsearchableTitle)
+// is no evidence either way.
+func headingCorroborated(present []database.BookFile, bookPath, title string) bool {
+	t := normTitle(title)
 	for _, f := range present {
-		if f.TrackNumber > 0 && strings.EqualFold(strings.TrimSpace(f.Title), t) {
+		if normTitle(f.Title) == t {
 			return true
 		}
 	}
-	return false
+	path := bookPath
+	if len(present) > 0 {
+		path = present[0].FilePath
+	}
+	folder, ok := metadata.WorkFolderTitle(path)
+	if !ok || metadata.IsUnsearchableTitle(folder) {
+		return false
+	}
+	return normTitle(folder) != t
+}
+
+// normTitle lowercases a title and collapses its whitespace.
+func normTitle(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
 // sortByPosition orders a book's files as they play: disc, then track, then
@@ -224,41 +272,20 @@ func (j *titleJudge) usableTitle(p *string) string {
 }
 
 // folderTitle returns the work folder's name for a book with no title of its
-// own, or "". It asks metadata.ChapterTitleFromDirectory with an empty title
-// (so every path qualifies) for the first present file's path, then for the
-// book's own path. A directory FilePath (a multi-file book) is given a
-// stand-in child so the folder asked about is the book's folder itself, not
-// its parent. The organizer files such books under "Unknown Title" folders,
-// so the answer is run back through titleJudge.unsearchable.
+// own, or "": metadata.WorkFolderTitle of the first present file's path, then
+// of the book's own path (a directory for a multi-file book). The organizer
+// files such books under "Unknown Title" folders, so the answer is run back
+// through titleJudge.unsearchable.
 func (j *titleJudge) folderTitle(bookPath string) string {
 	var paths []string
 	if present := j.presentFiles(); len(present) > 0 {
 		paths = append(paths, present[0].FilePath)
 	}
-	if p := strings.TrimSpace(bookPath); p != "" {
-		if !isFileExt(filepath.Ext(p)) {
-			p = filepath.Join(p, "_")
-		}
-		paths = append(paths, p)
-	}
+	paths = append(paths, bookPath)
 	for _, p := range paths {
-		if strings.TrimSpace(p) == "" {
-			continue
-		}
-		if t, _, ok := metadata.ChapterTitleFromDirectory(p, ""); ok {
-			if t = strings.TrimSpace(t); !j.unsearchable(t) {
-				return t
-			}
+		if t, ok := metadata.WorkFolderTitle(p); ok && !j.unsearchable(t) {
+			return t
 		}
 	}
 	return ""
-}
-
-// isFileExt tells a real extension (".m4b", ".mp3") from a folder name that
-// merely contains a dot ("Book 1.5" -> ".5").
-func isFileExt(ext string) bool {
-	if len(ext) < 2 || len(ext) > 5 {
-		return false
-	}
-	return strings.IndexFunc(ext[1:], unicode.IsLetter) >= 0
 }

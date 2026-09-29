@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-09-28
 
@@ -61,9 +61,33 @@ func TestResolveCandidateSearchQuery_Fallbacks(t *testing.T) {
 			wantTitle: "Act One", wantSrc: SearchQuerySourceTitle},
 		{name: "front-matter title on a single-file book is searched as-is", book: database.Book{Title: "Epilogue"},
 			wantTitle: "Epilogue", wantSrc: SearchQuerySourceTitle},
-		{name: "heading title on a multi-file book uses the transcription", book: database.Book{Title: "Book Two", TranscribedTitle: strp("Eldest")},
-			files:     fakeBookFiles{files: []database.BookFile{{TrackNumber: 1}, {TrackNumber: 2}}},
+		{name: "heading title under a folder naming another work uses the transcription", book: database.Book{Title: "Book Two", TranscribedTitle: strp("Eldest")},
+			files: fakeBookFiles{files: []database.BookFile{
+				{TrackNumber: 1, FilePath: "/library/Paolini/Inheritance/01.mp3"}, {TrackNumber: 2, FilePath: "/library/Paolini/Inheritance/02.mp3"}}},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceTranscribedTitle},
+		// The number of files is not evidence: a real book in chapters, in a
+		// folder of its own name, is searched by its title.
+		{name: "multi-file Act One in its own folder is searched as-is", book: database.Book{Title: "Act One", TranscribedTitle: strp("Other")},
+			files: fakeBookFiles{files: []database.BookFile{
+				{TrackNumber: 1, FilePath: "/library/Nina Kiriki/Act One/01.mp3"}, {TrackNumber: 2, FilePath: "/library/Nina Kiriki/Act One/02.mp3"}}},
+			wantTitle: "Act One", wantSrc: SearchQuerySourceTitle},
+		{name: "multi-file Forward in its own folder is searched as-is", book: database.Book{Title: "Forward", FilePath: "/library/Blake Crouch/Forward"},
+			files: fakeBookFiles{files: []database.BookFile{
+				{TrackNumber: 1, FilePath: "/library/Blake Crouch/Forward/01.mp3"}, {TrackNumber: 2, FilePath: "/library/Blake Crouch/Forward/02.mp3"}}},
+			wantTitle: "Forward", wantSrc: SearchQuerySourceTitle},
+		{name: "multi-file heading with no folder evidence is searched as-is", book: database.Book{Title: "Act One"},
+			files:     fakeBookFiles{files: []database.BookFile{{TrackNumber: 1}, {TrackNumber: 2}}},
+			wantTitle: "Act One", wantSrc: SearchQuerySourceTitle},
+		// A file's own tag equal to the title corroborates it; the folder here
+		// is a placeholder and says nothing, so the tag alone decides.
+		{name: "multi-file Chapter One tagged on its files is refused", book: database.Book{Title: "Chapter One"},
+			files: fakeBookFiles{files: []database.BookFile{
+				{TrackNumber: 1, Title: "Chapter One", FilePath: "/library/Unknown Author/Unknown Title/01.mp3"},
+				{TrackNumber: 2, Title: "Book Two", FilePath: "/library/Unknown Author/Unknown Title/02.mp3"}}}},
+		{name: "multi-file Book Two tagged on its files is refused", book: database.Book{Title: "Book Two"},
+			files: fakeBookFiles{files: []database.BookFile{
+				{TrackNumber: 1, Title: "Chapter One", FilePath: "/library/Unknown Author/Unknown Title/01.mp3"},
+				{TrackNumber: 2, Title: "Book Two", FilePath: "/library/Unknown Author/Unknown Title/02.mp3"}}}},
 		{name: "front-matter title that is a numbered file's own tag uses the folder", book: database.Book{Title: "Prologue"},
 			files:     fakeBookFiles{files: []database.BookFile{{TrackNumber: 1, Title: "Prologue", FilePath: "/library/Paolini/Eldest/01.mp3"}}},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceFolderTitle},

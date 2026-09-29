@@ -1,11 +1,45 @@
 // file: internal/metadata/chapter_title_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0cc97d6f-e2ee-42d6-8233-ed4cec61f5ab
 // last-edited: 2026-09-28
 
 package metadata
 
 import "testing"
+
+// WorkFolderTitle reads the work folder from a file path or a directory
+// path (a multi-file book's FilePath). A directory used to be read as a file
+// path: ".../Terry Pratchett/Mort" named "Terry Pratchett", or nothing.
+func TestWorkFolderTitle(t *testing.T) {
+	cases := []struct {
+		path   string
+		want   string
+		wantOK bool
+	}{
+		{"/library/Terry Pratchett/Mort/Mort.m4b", "Mort", true},
+		{"/library/Terry Pratchett/Mort", "Mort", true},
+		{"/library/Terry Pratchett/Mort/", "Mort", true},
+		{"/library/Terry Pratchett/Mort/CD1/01.mp3", "Mort", true},
+		{"/library/Terry Pratchett/Mort/CD1", "Mort", true},
+		{"/library/Unknown Author/Mort", "Mort", true},
+		{"/library/Unknown Author/Mort/01.mp3", "Mort", true},
+		{"/library/Brandon Sanderson/Book 1.5", "Book 1.5", true},
+		{"/library/Terry Pratchett", "", false}, // an author folder under the library root
+		{"/library/Unknown Author", "", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := WorkFolderTitle(tc.path)
+		if got != tc.want || ok != tc.wantOK {
+			t.Errorf("WorkFolderTitle(%q) = %q, %v; want %q, %v", tc.path, got, ok, tc.want, tc.wantOK)
+		}
+	}
+	// The scanner's title recovery is unchanged: a folder under the
+	// placeholder author folder is still not offered there.
+	if got, _, ok := ChapterTitleFromDirectory("/library/Unknown Author/Mort/01.mp3", "01"); ok {
+		t.Errorf("ChapterTitleFromDirectory under Unknown Author = %q, want no title (scanner behaviour unchanged)", got)
+	}
+}
 
 func TestChapterTitleFromDirectory(t *testing.T) {
 	cases := []struct {

@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-28
 
@@ -471,6 +471,10 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *
 //
 // A row fetched for another query, another author, or before the book got a
 // real title fails one of them, and the refusal stays identity_stale.
+//
+// The search also carries the book's first present file path
+// (transcribedFirstFile), from which the gate reads the work folder that can
+// contradict the transcription.
 func cachedTranscribedSearch(svc cachedApplyService, books bookReader, entry *metafetch.MetadataCandidateCache, book *database.Book, authors []string, idErr error) applygate.TranscribedSearch {
 	if idErr == nil || !errors.Is(idErr, metafetch.ErrStaleMetadataCache) {
 		return applygate.TranscribedSearch{}
@@ -482,7 +486,21 @@ func cachedTranscribedSearch(svc cachedApplyService, books bookReader, entry *me
 	if !svc.CachedQueryMatchesIdentity(entry, book, authors, cur.Title) {
 		return applygate.TranscribedSearch{}
 	}
-	return applygate.TranscribedSearch{Query: cur.Title, Author: cur.Author, Source: cur.Source, ExplainsStaleIdentity: true}
+	return applygate.TranscribedSearch{Query: cur.Title, Author: cur.Author, Source: cur.Source, ExplainsStaleIdentity: true,
+		FirstFilePath: transcribedFirstFile(books, book)}
+}
+
+// transcribedFirstFile is the book's first present file path for
+// applygate.TranscribedSearch.FirstFilePath (metabatch.FirstPresentFilePath).
+// A read failure answers "": the gate then reads the work folder from the
+// book's own FilePath (metadata.WorkFolderTitle, which handles a directory),
+// so the folder check still runs.
+func transcribedFirstFile(books bookReader, book *database.Book) string {
+	p, err := metabatch.FirstPresentFilePath(books, book.ID)
+	if err != nil {
+		return ""
+	}
+	return p
 }
 
 // searchedByStandIn reports whether an op-result candidate's fetch searched a
@@ -506,7 +524,8 @@ func opResultTranscribedSearch(books bookReader, book *database.Book, cr Candida
 	if !cur.Usable || cur.Title != cr.SearchQuery || !metabatch.IsTranscribedSource(cur.Source) {
 		return applygate.TranscribedSearch{}
 	}
-	return applygate.TranscribedSearch{Query: cur.Title, Author: cur.Author, Source: cur.Source}
+	return applygate.TranscribedSearch{Query: cur.Title, Author: cur.Author, Source: cur.Source,
+		FirstFilePath: transcribedFirstFile(books, book)}
 }
 
 // excludedFromPreview reports whether the bulk-apply preview leaves this book

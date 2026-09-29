@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-09-28
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"golang.org/x/text/unicode/norm"
 )
@@ -456,7 +457,7 @@ func bookTitleVariants(book *database.Book, seriesNames map[string]bool) (full, 
 	add(parenRe.ReplaceAllString(book.Title, " "))
 	if p := strings.TrimSpace(book.FilePath); p != "" {
 		base := filepath.Base(p)
-		if ext := filepath.Ext(base); isFileExt(ext) {
+		if ext := filepath.Ext(base); metadata.IsFileExt(ext) {
 			addPath(strings.TrimSuffix(base, ext))
 			addPath(filepath.Base(filepath.Dir(p)))
 		} else {
@@ -471,15 +472,6 @@ func bookTitleVariants(book *database.Book, seriesNames map[string]bool) (full, 
 		}
 	}
 	return full, segs
-}
-
-// isFileExt tells a real extension (".m4b", ".mp3") from a folder name that
-// merely contains a dot ("Book 1.5" -> ".5").
-func isFileExt(ext string) bool {
-	if len(ext) < 2 || len(ext) > 5 {
-		return false
-	}
-	return strings.IndexFunc(ext[1:], unicode.IsLetter) >= 0
 }
 
 var (

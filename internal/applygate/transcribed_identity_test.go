@@ -1,5 +1,5 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
 // last-edited: 2026-09-28
 
@@ -161,6 +161,7 @@ func TestEvaluateTranscribed_BlocksTheTranscriptionCannotLift(t *testing.T) {
 	stale := errors.Join(metafetch.ErrStaleMetadataCache, errors.New("x"))
 	cases := []struct {
 		name, title, path, heard string
+		firstFile                string // TranscribedSearch.FirstFilePath
 		cand                     metafetch.MetadataCandidate
 		wantAllowed              bool
 		wantInDetail             string
@@ -174,6 +175,23 @@ func TestEvaluateTranscribed_BlocksTheTranscriptionCannotLift(t *testing.T) {
 		{name: "chapter title, folder names another work", title: "Chapter 1", path: "/library/Terry Pratchett/Mort/01.mp3", heard: "Guards! Guards!",
 			cand:         metafetch.MetadataCandidate{Title: "Guards! Guards!", SeriesPosition: "1"},
 			wantInDetail: `folder names "Mort"`},
+		// A multi-file book's FilePath is its work folder, a directory:
+		// read as a file path it named the author folder or nothing.
+		{name: "directory path, folder names another work", path: "/library/Terry Pratchett/Mort", heard: "Guards! Guards!",
+			cand:         metafetch.MetadataCandidate{Title: "Guards! Guards!"},
+			wantInDetail: `folder names "Mort"`},
+		{name: "directory path with a trailing slash", path: "/library/Terry Pratchett/Mort/", heard: "Guards! Guards!",
+			cand:         metafetch.MetadataCandidate{Title: "Guards! Guards!"},
+			wantInDetail: `folder names "Mort"`},
+		{name: "directory path under a placeholder author folder", path: "/library/Unknown Author/Mort", heard: "Guards! Guards!",
+			cand:         metafetch.MetadataCandidate{Title: "Guards! Guards!"},
+			wantInDetail: `folder names "Mort"`},
+		{name: "first present file in a disc folder names another work", path: "/library/Unknown Author/Unknown Title",
+			firstFile: "/library/Terry Pratchett/Mort/CD1/01.mp3", heard: "Guards! Guards!",
+			cand:         metafetch.MetadataCandidate{Title: "Guards! Guards!"},
+			wantInDetail: `folder names "Mort"`},
+		{name: "directory path agreeing with the transcription: lifted", path: "/library/Terry Pratchett/Guards Guards", heard: "Guards! Guards!",
+			cand: metafetch.MetadataCandidate{Title: "Guards! Guards!"}, wantAllowed: true},
 		{name: "folder agrees with the transcription: lifted", path: "/library/Terry Pratchett/Guards Guards/book.m4b", heard: "Guards! Guards!",
 			cand: metafetch.MetadataCandidate{Title: "Guards! Guards!"}, wantAllowed: true},
 		{name: "author folder is no evidence: lifted", path: "/library/Terry Pratchett/book.m4b", heard: "Guards! Guards!",
@@ -184,7 +202,7 @@ func TestEvaluateTranscribed_BlocksTheTranscriptionCannotLift(t *testing.T) {
 			book := &database.Book{ID: "b1", Title: tc.title, FilePath: tc.path, TranscribedTitle: strp(tc.heard), Duration: intp(36000)}
 			cand := tc.cand
 			cand.Author, cand.Score, cand.DurationSec, cand.Source = "Terry Pratchett", 0.95, 36000, "Audible"
-			ts := TranscribedSearch{Query: tc.heard, Source: "transcribed_title", ExplainsStaleIdentity: true}
+			ts := TranscribedSearch{Query: tc.heard, Source: "transcribed_title", ExplainsStaleIdentity: true, FirstFilePath: tc.firstFile}
 			v := EvaluateTranscribed(book, Authors{"Terry Pratchett"}, database.ComputeBookRuntime(book, nil), &cand, stale, nil, ts, ManualOnlyGuard{Bulk: true})
 			if v.Allowed != tc.wantAllowed {
 				t.Fatalf("allowed = %v (reason %q: %s), want %v", v.Allowed, v.Reason, v.Detail, tc.wantAllowed)
