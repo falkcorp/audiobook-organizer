@@ -1,7 +1,7 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 // Guard tests for operation-ID renames.
 //
@@ -41,6 +41,24 @@ import (
 )
 
 const opIDLedgerPath = "testdata/op_ids.golden"
+
+// retiredOpIDs are ledger IDs that deliberately resolve to NO op, each with
+// why no FormerIDs alias points it somewhere. The ledger line stays (it is
+// append-only); an entry here is the explicit decision the guard asks for.
+//
+// A timeline filter on a retired ID still finds its old rows: an ID the
+// registry does not know is matched verbatim against each row's def_id
+// (canonicalDefID), which is what an alias would break by widening the
+// filter to every row of the op it points at.
+var retiredOpIDs = map[string]string{
+	// Absorbed 2026-09-28 into the Repairs-lane fixer of the SAME id
+	// (internal/plugins/maintenance/junk_title_fixer.go), planned and applied
+	// through repairs.plan / repairs.apply with fixer_id set to it. Aliasing
+	// the old op to repairs.plan would send an old-style enqueue ({dryRun})
+	// to an op that needs fixer_id, and the alias guard below would then
+	// forbid the fixer from naming its own id.
+	"maintenance.repair-junk-titles": "absorbed into the junk-title Repairs fixer",
+}
 
 // bootRegisteredOpIDs boots a server the way TestNewServer_RegistersOpsWithEmptyRootDir
 // does and returns its registry's canonical IDs and alias table.
@@ -135,6 +153,12 @@ func TestOpIDs_NoRenameWithoutAlias(t *testing.T) {
 	for _, id := range ledger {
 		inLedger[id] = true
 		if _, ok := srv.opRegistry.Def(id); ok {
+			if why, retired := retiredOpIDs[id]; retired {
+				t.Errorf("op ID %q is listed as retired (%s) but resolves again; drop it from retiredOpIDs", id, why)
+			}
+			continue
+		}
+		if _, retired := retiredOpIDs[id]; retired {
 			continue
 		}
 		t.Errorf("op ID %q was registered before and no longer resolves.\n"+
@@ -170,6 +194,20 @@ func TestOpIDs_NoRenameWithoutAlias(t *testing.T) {
 // TestOpIDs_AliasesNeverShadowRegisteredIDs asserts on the fully booted set what
 // RegisterOp enforces one registration at a time: an ID is either a def or an
 // alias, never both.
+// A retired ID must be one the ledger records: the list excuses a ledger line,
+// it never invents one.
+func TestOpIDs_RetiredIDsAreLedgerIDs(t *testing.T) {
+	inLedger := map[string]bool{}
+	for _, id := range readOpIDLedger(t) {
+		inLedger[id] = true
+	}
+	for id := range retiredOpIDs {
+		if !inLedger[id] {
+			t.Errorf("retiredOpIDs lists %q, which is not in %s", id, opIDLedgerPath)
+		}
+	}
+}
+
 func TestOpIDs_AliasesNeverShadowRegisteredIDs(t *testing.T) {
 	_, registered, aliases := bootRegisteredOpIDs(t)
 	if len(aliases) == 0 {
