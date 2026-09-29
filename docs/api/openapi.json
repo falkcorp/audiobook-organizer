@@ -721,7 +721,7 @@
           },
           "class": {
             "type": "string",
-            "description": "Optional fixer-defined kind of row (fragment-consolidation: moved, copy, no-parent, manual-only, ambiguous). The rows endpoint filters on it."
+            "description": "Optional fixer-defined kind of row (fragment-consolidation: moved, copy, no-parent, manual-only, ambiguous, held). The rows endpoint filters on it."
           },
           "members": {
             "type": "array",
@@ -736,6 +736,11 @@
               "type": "string"
             },
             "description": "What the decision was made from, in words."
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Fixer-private plan-time values the apply compares against (fragment-consolidation no-parent rows: each member's planned book_file row id and the survivor's title and path). Opaque to clients."
           }
         }
       },
