@@ -1,5 +1,5 @@
 // file: internal/repairs/fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
 // last-edited: 2026-09-28
 
@@ -90,6 +90,12 @@ type Row struct {
 	// SkipReason says why in words.
 	Skipped    string `json:"skipped,omitempty"`
 	SkipReason string `json:"skip_reason,omitempty"`
+	// State is fixer-private state stored WITH the plan: what Replan needs
+	// from plan time that the row as it is now cannot tell it (the ids of the
+	// rows a group was planned over, the values a compare-and-set must find).
+	// Replan receives it back on the planned row. The framework never reads
+	// it.
+	State json.RawMessage `json:"state,omitempty"`
 	// Detail is fixer-private state carried from Replan to Apply inside one
 	// apply run. It is never persisted: the stored plan holds only the
 	// fields above, and Apply always receives a row fresh from Replan.

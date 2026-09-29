@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
-// last-edited: 2026-09-14
+// last-edited: 2026-09-28
 
 package metafetch
 
@@ -58,6 +58,18 @@ const ChangeTypeApplyIncomplete = "apply_incomplete"
 // ErrApplyHistoryIncomplete: an apply's write committed but its history rows
 // were not all recorded, so undo is refused for it.
 var ErrApplyHistoryIncomplete = errors.New("the apply's change history was not fully recorded; it cannot be undone")
+
+// ChangeTypeApplyOpJournaled marks a batch written by an apply that also
+// journaled its steps as operation changes (the Repairs lane, which moves and
+// repoints book_file rows and retires books alongside the book fields it
+// records here). Undoing only this batch's book fields would leave the rest of
+// that apply in place, so UndoLastApply refuses it and points at the
+// operation revert. repairs.ChangeTypeApplyOpJournaled spells the same value.
+const ChangeTypeApplyOpJournaled = "apply_op_journaled"
+
+// ErrApplyUndoneFromOperation: the book's last apply was part of an
+// operation-journaled apply; undo it from its operation instead.
+var ErrApplyUndoneFromOperation = errors.New("the last apply on this book was a Repairs apply; undo it from its operation (Operations page, Revert)")
 
 // ErrFieldAlreadyUndone: the newest change to the field is an undo. Treating
 // that undo as a change to undo put the provider value back on a second click.
@@ -449,6 +461,9 @@ func (mfs *Service) UndoLastApply(bookID string) (*UndoApplyResult, error) {
 		// would leave the book half undone, so the apply is refused whole.
 		if r.ChangeType == ChangeTypeApplyIncomplete {
 			return nil, ErrApplyHistoryIncomplete
+		}
+		if r.ChangeType == ChangeTypeApplyOpJournaled {
+			return nil, ErrApplyUndoneFromOperation
 		}
 		rows = append(rows, r)
 	}

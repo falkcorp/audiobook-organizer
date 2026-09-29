@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.57.1
+// version: 1.57.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-28
 
@@ -98,6 +98,9 @@ type opsFileAndPathReader interface {
 	GetAllImportPaths() ([]database.ImportPath, error)
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// GetBookFileByID is the Repairs writer's read-before-journal for a
+	// book_file compare-and-set (repairs.BookFileWriter).
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	// LiveBookIDsAtPath is the multi-valued "which live books sit at this
 	// path?" read; repoint-unrecorded-renames uses it to refuse a book-row
 	// repoint onto a path another book already holds.
@@ -246,6 +249,14 @@ type opsHousekeeping interface {
 	opsRecordsAndQueue
 	opsSystemPreferences
 	database.RawKVStore
+	opsOperationJournalReader
+}
+
+// opsOperationJournalReader lists an operation's change rows. The Repairs
+// apply reads its own op's journal before writing a step, so a resumed run
+// does not journal a step twice (repairs.ChangeJournal).
+type opsOperationJournalReader interface {
+	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 }
 
 // opsRecordsAndQueue is opsHousekeeping's original method set.
@@ -380,10 +391,13 @@ type forwardingStoreProvider interface {
 
 // FragmentRepairReader is what the fragment-consolidation fixer reads beyond
 // OpsStore: a book's path-change history (where a fragment's file was when it
-// was imported) and the complete who-owns-this-path lookup
-// (database.BookFileRowsAtPathStrict), which apply re-checks before it acts.
+// was imported), the complete who-owns-this-path lookup
+// (database.BookFileRowsAtPathStrict), which apply re-checks before it acts,
+// and a book's journaled changes, from which a plan tells which book a
+// partly applied consolidation moved an emptied book's row onto.
 type FragmentRepairReader interface {
 	GetBookPathHistory(bookID string) ([]database.BookPathChange, error)
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
 	database.BookFilePathLookup
 }
 

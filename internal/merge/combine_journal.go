@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 
 package merge
 
@@ -708,11 +708,67 @@ func intPtrEqual(a, b *int) bool {
 	return *a == *b
 }
 
+// RestoreFollowedProgress reverses one absorbed book's journaled follow
+// (FollowAbsorbedJournaled, or CombineBooks' per-absorbed step): the ABS sync
+// redirect absorbed -> survivor is cleared when syncRedirected, a pending
+// user-state repair for the pair is dropped (the absorbed book is coming back,
+// and the sweep would otherwise drain it onto the survivor again), every
+// user's absorbed-book state and positions are written back, and the
+// survivor's are put back only while they still hold what the follow left. A
+// survivor a user has listened to since keeps its newer state; that is
+// returned as a warning, not an error. Safe to run twice: a survivor already
+// back at its before-state is left alone.
+//
+// Shared by UndoCombine and the operation revert of a user_state_follow row.
+func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID string, syncRedirected bool, progress []CombineUserProgress) ([]string, error) {
+	var warnings []string
+	if syncRedirected && database.AsSyncIdentityStore(db) != nil {
+		if clearer, _ := database.AsCapability[syncMergeClearer](db); clearer == nil {
+			warnings = append(warnings, fmt.Sprintf("store cannot clear sync redirects; %s still redirects to the survivor for ABS clients", absorbedID))
+		} else if err := clearer.ClearSyncMerge(absorbedID, survivorID); err != nil {
+			return warnings, fmt.Errorf("clear sync redirect %s -> %s: %w", absorbedID, survivorID, err)
+		}
+	}
+	if err := db.DeleteRaw(pendingRepairKey(absorbedID, survivorID)); err != nil {
+		return warnings, fmt.Errorf("drop pending user-state repair %s -> %s: %w", absorbedID, survivorID, err)
+	}
+	for _, p := range progress {
+		curAbs, err := db.GetUserBookState(p.UserID, absorbedID)
+		if err != nil {
+			return warnings, fmt.Errorf("read progress user=%s book=%s: %w", p.UserID, absorbedID, err)
+		}
+		if err := writeProgress(db, p.UserID, absorbedID, p.AbsorbedState, p.AbsorbedPositions, curAbs); err != nil {
+			return warnings, err
+		}
+		curSurv, err := db.GetUserBookState(p.UserID, survivorID)
+		if err != nil {
+			return warnings, fmt.Errorf("read progress user=%s book=%s: %w", p.UserID, survivorID, err)
+		}
+		curSurvPos, err := db.ListUserPositionsForBook(p.UserID, survivorID)
+		if err != nil {
+			return warnings, fmt.Errorf("read positions user=%s book=%s: %w", p.UserID, survivorID, err)
+		}
+		if sameProgress(curSurv, p.SurvivorStateBefore, curSurvPos, p.SurvivorPosBefore) {
+			// Already restored (an earlier attempt of this undo got here).
+			continue
+		}
+		if !sameProgress(curSurv, p.SurvivorStateAfter, curSurvPos, p.SurvivorPosAfter) {
+			// The user has listened to the survivor since. Their newer
+			// position there is theirs; leave it rather than rewind it.
+			warnings = append(warnings, fmt.Sprintf(
+				"user %s progress on survivor %s changed after the merge; left as is", p.UserID, survivorID))
+			continue
+		}
+		if err := writeProgress(db, p.UserID, survivorID, p.SurvivorStateBefore, p.SurvivorPosBefore, curSurv); err != nil {
+			return warnings, err
+		}
+	}
+	return warnings, nil
+}
+
 // applyUndo performs the reversal. Preconditions have passed.
 func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	res := &CombineUndoResult{JournalID: j.ID, SurvivorID: j.SurvivorID}
-	syncStore := database.AsSyncIdentityStore(ms.db)
-	clearer, _ := database.AsCapability[syncMergeClearer](ms.db)
 
 	// 1. Restore the absorbed rows first, so the file moves below land on live
 	//    books. Re-fetch and patch only the fields the combine changed:
@@ -847,49 +903,10 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 				return res, fmt.Errorf("move %s id %s back to %s: %w", x.Source, x.ExternalID, a.BookID, err)
 			}
 		}
-		if a.SyncRedirected && syncStore != nil {
-			if clearer == nil {
-				res.Warnings = append(res.Warnings, fmt.Sprintf("store cannot clear sync redirects; %s still redirects to the survivor for ABS clients", a.BookID))
-			} else if err := clearer.ClearSyncMerge(a.BookID, j.SurvivorID); err != nil {
-				return res, fmt.Errorf("clear sync redirect %s -> %s: %w", a.BookID, j.SurvivorID, err)
-			}
-		}
-		// The absorbed book is coming back: a pending-repair record for it
-		// (left when some user's state could not be moved) must go too, or the
-		// sweep would later drain the restored book onto the survivor.
-		if err := ms.db.DeleteRaw(pendingRepairKey(a.BookID, j.SurvivorID)); err != nil {
-			return res, fmt.Errorf("drop pending user-state repair %s -> %s: %w", a.BookID, j.SurvivorID, err)
-		}
-		for _, p := range a.Progress {
-			curAbs, err := ms.db.GetUserBookState(p.UserID, a.BookID)
-			if err != nil {
-				return res, fmt.Errorf("read progress user=%s book=%s: %w", p.UserID, a.BookID, err)
-			}
-			if err := writeProgress(ms.db, p.UserID, a.BookID, p.AbsorbedState, p.AbsorbedPositions, curAbs); err != nil {
-				return res, err
-			}
-			curSurv, err := ms.db.GetUserBookState(p.UserID, j.SurvivorID)
-			if err != nil {
-				return res, fmt.Errorf("read progress user=%s book=%s: %w", p.UserID, j.SurvivorID, err)
-			}
-			curSurvPos, err := ms.db.ListUserPositionsForBook(p.UserID, j.SurvivorID)
-			if err != nil {
-				return res, fmt.Errorf("read positions user=%s book=%s: %w", p.UserID, j.SurvivorID, err)
-			}
-			if sameProgress(curSurv, p.SurvivorStateBefore, curSurvPos, p.SurvivorPosBefore) {
-				// Already restored (an earlier attempt of this undo got here).
-				continue
-			}
-			if !sameProgress(curSurv, p.SurvivorStateAfter, curSurvPos, p.SurvivorPosAfter) {
-				// The user has listened to the survivor since. Their newer
-				// position there is theirs; leave it rather than rewind it.
-				res.Warnings = append(res.Warnings, fmt.Sprintf(
-					"user %s progress on survivor %s changed after the combine; left as is", p.UserID, j.SurvivorID))
-				continue
-			}
-			if err := writeProgress(ms.db, p.UserID, j.SurvivorID, p.SurvivorStateBefore, p.SurvivorPosBefore, curSurv); err != nil {
-				return res, err
-			}
+		warns, err := RestoreFollowedProgress(ms.db, j.SurvivorID, a.BookID, a.SyncRedirected, a.Progress)
+		res.Warnings = append(res.Warnings, warns...)
+		if err != nil {
+			return res, err
 		}
 	}
 

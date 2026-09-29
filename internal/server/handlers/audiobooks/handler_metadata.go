@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
-// last-edited: 2026-09-13
+// last-edited: 2026-09-28
 
 // Metadata-history / undo / field-state / path-history / external-id /
 // changelog / changes endpoints for the audiobooks domain. Split out of
@@ -220,7 +220,8 @@ func (h *Handler) UndoLastApply(c *gin.Context) {
 	case errors.Is(err, metafetch.ErrNoApplyToUndo):
 		httputil.RespondWithNotFound(c, "changes", "none")
 		return
-	case errors.Is(err, metafetch.ErrApplyPredatesBatches), errors.Is(err, metafetch.ErrApplyAlreadyUndone), errors.Is(err, metafetch.ErrApplyHistoryIncomplete):
+	case errors.Is(err, metafetch.ErrApplyPredatesBatches), errors.Is(err, metafetch.ErrApplyAlreadyUndone), errors.Is(err, metafetch.ErrApplyHistoryIncomplete),
+		errors.Is(err, metafetch.ErrApplyUndoneFromOperation):
 		httputil.RespondWithConflict(c, err.Error())
 		return
 	case err != nil:
