@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package metabatch
 
@@ -18,6 +18,11 @@ type fakeBookFiles struct {
 }
 
 func (f fakeBookFiles) GetBookFiles(string) ([]database.BookFile, error) { return f.files, f.err }
+
+// fakeBookFiles has no author links; a test that needs them sets Book.Author
+// (the snapshot) or uses fakeBookFilesAuthors.
+func (f fakeBookFiles) GetBookAuthors(string) ([]database.BookAuthor, error) { return nil, nil }
+func (f fakeBookFiles) GetAuthorByID(int) (*database.Author, error)          { return nil, nil }
 
 func strp(s string) *string { return &s }
 
@@ -132,6 +137,74 @@ func TestResolveCandidateSearchQuery_Fallbacks(t *testing.T) {
 			}
 			if !q.Usable || q.Title != tc.wantTitle || q.Source != tc.wantSrc || q.Author != tc.wantAuthor {
 				t.Fatalf("got %+v, want %q by %q from %s", q, tc.wantTitle, tc.wantAuthor, tc.wantSrc)
+			}
+		})
+	}
+}
+
+// fakeBookFilesAuthors is fakeBookFiles with live author links.
+type fakeBookFilesAuthors struct {
+	fakeBookFiles
+	links   []database.BookAuthor
+	authors map[int]string
+	err     error
+}
+
+func (f fakeBookFilesAuthors) GetBookAuthors(string) ([]database.BookAuthor, error) {
+	return f.links, f.err
+}
+func (f fakeBookFilesAuthors) GetAuthorByID(id int) (*database.Author, error) {
+	if n, ok := f.authors[id]; ok {
+		return &database.Author{ID: id, Name: n}, nil
+	}
+	return nil, nil
+}
+
+// A heading title filed directly under its author's folder is a book called
+// that, not a part of a work: the author folder is no corroboration. On a
+// root WorkFolderTitle does not treat as generic, the folder it returns for
+// ".../Anne Roiphe/Epilogue.m4b" is the author's, and the book used to be
+// searched by "Anne Roiphe".
+func TestResolveCandidateSearchQuery_AuthorFolderIsNoHeadingEvidence(t *testing.T) {
+	const path = "/mnt/stuff/Anne Roiphe/Epilogue.m4b"
+	files := fakeBookFiles{files: []database.BookFile{{FilePath: path}}}
+	aid := 7
+	cases := []struct {
+		name    string
+		book    database.Book
+		reader  SearchQueryReader
+		want    string
+		wantSrc string
+	}{
+		{name: "live primary author names the folder",
+			book:   database.Book{ID: "b1", Title: "Epilogue", FilePath: path, AuthorID: &aid},
+			reader: fakeBookFilesAuthors{fakeBookFiles: files, authors: map[int]string{7: "Anne Roiphe"}},
+			want:   "Epilogue", wantSrc: SearchQuerySourceTitle},
+		{name: "joined co-author names the folder",
+			book: database.Book{ID: "b1", Title: "Epilogue", FilePath: path},
+			reader: fakeBookFilesAuthors{fakeBookFiles: files,
+				links: []database.BookAuthor{{BookID: "b1", AuthorID: 9}}, authors: map[int]string{9: "anne  roiphe"}},
+			want: "Epilogue", wantSrc: SearchQuerySourceTitle},
+		{name: "snapshot author names the folder",
+			book:   database.Book{ID: "b1", Title: "Epilogue", FilePath: path, Author: &database.Author{Name: "Anne Roiphe"}},
+			reader: files, want: "Epilogue", wantSrc: SearchQuerySourceTitle},
+		{name: "author read fault never refuses the title",
+			book:   database.Book{ID: "b1", Title: "Epilogue", FilePath: path, AuthorID: &aid},
+			reader: fakeBookFilesAuthors{fakeBookFiles: files, err: errors.New("boom")},
+			want:   "Epilogue", wantSrc: SearchQuerySourceTitle},
+		// A folder that is NOT the author still corroborates: Eldest's
+		// prologue is searched by the work folder.
+		{name: "work folder by another name still corroborates",
+			book: database.Book{ID: "b1", Title: "Prologue", FilePath: "/mnt/stuff/Christopher Paolini/Eldest/Prologue.mp3", AuthorID: &aid},
+			reader: fakeBookFilesAuthors{fakeBookFiles: fakeBookFiles{files: []database.BookFile{{FilePath: "/mnt/stuff/Christopher Paolini/Eldest/Prologue.mp3"}}},
+				authors: map[int]string{7: "Christopher Paolini"}},
+			want: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := ResolveCandidateSearchQuery(tc.reader, &tc.book)
+			if !q.Usable || q.Title != tc.want || q.Source != tc.wantSrc {
+				t.Fatalf("got %+v, want %q from %s", q, tc.want, tc.wantSrc)
 			}
 		})
 	}

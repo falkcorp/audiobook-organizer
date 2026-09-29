@@ -1,0 +1,1 @@
+- Metadata search: a book titled with a section heading ("Epilogue", "Prologue") that sits directly under its author's folder is now searched by its own title. The author's folder used to count as proof the heading named a part of some other work, so the book was searched by the author's name instead.
