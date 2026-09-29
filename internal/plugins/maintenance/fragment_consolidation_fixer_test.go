@@ -183,14 +183,6 @@ func (f *fragFixture) apply(t *testing.T, planOpID, opID string, rowIDs []string
 	return res
 }
 
-func rowByClass(res *repairs.PlanResult) map[string][]repairs.Row {
-	out := map[string][]repairs.Row{}
-	for _, r := range res.Rows {
-		out[r.Class] = append(out[r.Class], r)
-	}
-	return out
-}
-
 func findRow(t *testing.T, res *repairs.PlanResult, id string) repairs.Row {
 	t.Helper()
 	for _, r := range res.Rows {
@@ -309,6 +301,13 @@ func TestFragmentFixer_ApplyThenUndoRoundTrip(t *testing.T) {
 	sb, err := f.s.GetBookByID(survivor)
 	require.NoError(t, err)
 	require.Equal(t, "Loose", sb.Title, "titled from the folder")
+	require.Equal(t, f.path("lib/Loose"), sb.FilePath, "a multi-file book's path is its folder")
+	survivorPath := ""
+	for _, n := range []string{"01", "02", "03"} {
+		if f.ids["loose"+n] == survivor {
+			survivorPath = f.path("lib/Loose/Loose " + n + ".mp3")
+		}
+	}
 	// hands-off rows untouched.
 	require.True(t, f.live(t, "itunesFrag"))
 	require.True(t, f.live(t, "dw01"))
@@ -345,6 +344,7 @@ func TestFragmentFixer_ApplyThenUndoRoundTrip(t *testing.T) {
 	sb, err = f.s.GetBookByID(survivor)
 	require.NoError(t, err)
 	require.NotEqual(t, "Loose", sb.Title, "title restored")
+	require.Equal(t, survivorPath, sb.FilePath, "book path restored")
 }
 
 // TestFragmentFixer_ResumesAPartiallyAppliedRow: a run cut off after the
@@ -375,6 +375,36 @@ func TestFragmentFixer_ResumesAPartiallyAppliedRow(t *testing.T) {
 
 // TestFragmentFixer_ResumesFromCheckpoint: rows a checkpoint says were
 // settled are reported as settled and not applied again.
+// TestFragmentFixer_ResumesAPartiallyAppliedGroup: a no-parent run cut off
+// after one row moved and the survivor was retitled finishes on the next
+// apply.
+func TestFragmentFixer_ResumesAPartiallyAppliedGroup(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	res := f.plan(t, "op-plan")
+	id := noParentRowID(f.path("lib/Loose"), "loose")
+	row := findRow(t, res, id)
+	survivor := row.Proposed["survivor"]
+	var other, otherRow string
+	for _, n := range []string{"01", "02", "03"} {
+		if f.ids["loose"+n] != survivor {
+			other, otherRow = f.ids["loose"+n], f.rowIDs["l"+n]
+			break
+		}
+	}
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+	require.NoError(t, w.MoveBookFiles([]string{otherRow}, other, survivor))
+	_, err := f.s.ModifyBook(survivor, func(b *database.Book) error { b.Title = "Loose"; return nil })
+	require.NoError(t, err)
+
+	out := f.apply(t, "op-plan", "op-apply", []string{id}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	rows, err := f.s.GetBookFiles(survivor)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+	require.False(t, f.live(t, "loose01") && f.live(t, "loose02") && f.live(t, "loose03"))
+}
+
 func TestFragmentFixer_ResumesFromCheckpoint(t *testing.T) {
 	f := newFragFixture(t)
 	f.seed(t)
