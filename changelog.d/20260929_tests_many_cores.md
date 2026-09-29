@@ -1,0 +1,1 @@
+- Tests: two tests that failed on the new 48-core U1 CI agent now pass on any core count. The activity filter-index backfill resume test pins its worker pool (new `workers` param; the default stays `runtime.NumCPU()`), and the purge-boundary tests wait for memdb warmup before purging.

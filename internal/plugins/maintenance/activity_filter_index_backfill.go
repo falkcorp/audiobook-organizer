@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d7602035-c210-4555-84a3-7a28e0a22f83
-// last-edited: 2026-09-19
+// last-edited: 2026-09-29
 
 package maintenance
 
@@ -41,6 +41,12 @@ type activityFilterIndexBackfillParams struct {
 	// Force re-runs even when the sentinel says the indexes are complete (after
 	// a rollback to a build that wrote rows without them, for instance).
 	Force bool `json:"force,omitempty"`
+
+	// Workers sizes the window worker pool; 0 means runtime.NumCPU(). The
+	// resume test pins it: with more workers than windows every window starts
+	// at once, completion order is arbitrary, and whether a checkpoint lands
+	// before a cancel depends on the host's core count.
+	Workers int `json:"workers,omitempty"`
 
 	PlanStartNanos int64 `json:"planStartNanos,omitempty"`
 	PlanWindows    int   `json:"planWindows,omitempty"`
@@ -186,6 +192,10 @@ func (p *Plugin) runActivityFilterIndexBackfill(ctx context.Context, raw json.Ra
 		windows[i] = i
 	}
 	var indexed atomic.Int64
+	workers := params.Workers
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
 
 	// CONCURRENCY (CLAUDE.md mandate): each window is a disjoint timestamp
 	// range and its work is a JSON decode per row, so it is CPU-bound and
@@ -196,13 +206,14 @@ func (p *Plugin) runActivityFilterIndexBackfill(ctx context.Context, raw json.Ra
 		indexed.Add(int64(n))
 		return err
 	}, opsregistry.RunItemsOptions{
-		Concurrency:     runtime.NumCPU(),
+		Concurrency:     workers,
 		ResumeFrom:      resumeFrom,
 		ProgressTotal:   params.PlanWindows,
 		CheckpointEvery: 8,
 		CheckpointStateFn: func(_ context.Context, watermark int) error {
 			return reporter.Checkpoint(activityFilterIndexBackfillParams{
 				Force:          params.Force,
+				Workers:        params.Workers,
 				PlanStartNanos: params.PlanStartNanos,
 				PlanWindows:    params.PlanWindows,
 				ResumeFrom:     watermark,
