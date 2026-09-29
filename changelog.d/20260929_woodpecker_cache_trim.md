@@ -1,0 +1,1 @@
+- Woodpecker cleanup now trims the shared Go build cache (entries unused for a day) and removes orphaned `go-build*` temp dirs older than an hour, so the Mac agent's disk no longer fills and fails builds with "no space left on device".

@@ -1,7 +1,7 @@
 # file: .woodpecker/test-server-scanner.yaml
-# version: 1.1.0
+# version: 1.2.0
 # guid: 7a2d4e81-0c63-4f9b-b5e2-9d1f3a6c8e27
-# last-edited: 2026-09-28
+# last-edited: 2026-09-29
 #
 # `make ci` test-short, part 2 of 3: internal/server, internal/scanner and
 # internal/server/handlers/abs.
@@ -57,6 +57,13 @@ steps:
     image: bash
     when:
       - status: [success, failure]
+    environment:
+      GOCACHE: /Users/jdfalk/ci/cache/go-build
     commands:
       - '[ -n "$${CI_WORKSPACE}" ] && [ "$${CI_WORKSPACE}" != / ] && find "$${CI_WORKSPACE}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true'
       - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
+      # The shared GOCACHE has no size cap and race+cover builds grow it fast
+      # (94 GB on 2026-09-29, filling the disk). Drop entries unused for a day (go refreshes mtime on use).
+      - '[ -n "$${GOCACHE}" ] && find "$${GOCACHE}" -type f -mtime +1 -delete 2>/dev/null || true'
+      # A killed build leaves its go-build temp dir behind; clear any over an hour old.
+      - 'find "$${TMPDIR:-/tmp}" -maxdepth 1 -name "go-build*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true'
