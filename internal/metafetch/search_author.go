@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_author.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2296132-2b4b-426c-9f36-b3031543cec6
 // last-edited: 2026-09-28
 
@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // SearchAuthorHint returns name as the author a provider search is narrowed
@@ -33,4 +34,17 @@ func SearchAuthorHint(name string) string {
 		return ""
 	}
 	return n
+}
+
+// FetchCacheIdentity is database.MetadataSearchIdentity -- the stamp on a
+// provider fetch-cache row -- keyed on the author a search actually sends
+// (SearchAuthorHint), not the stored one. A row fetched while a placeholder
+// author was still sent ("Planet Hulk by Unknown Author") then no longer
+// matches the book's identity and is refetched instead of replayed until it
+// expires; a real author's identity is unchanged (MetadataSearchIdentity
+// normalizes the same trimmed name). Every fetch-cache read and write --
+// the per-book search, the single-book fetch and the bulk fetch -- goes
+// through this, so they agree on the stamp.
+func FetchCacheIdentity(title, author string, asin, isbn13, isbn10 *string) string {
+	return database.MetadataSearchIdentity(title, SearchAuthorHint(author), asin, isbn13, isbn10)
 }

@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-28
 //
@@ -254,7 +254,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		// Resolved before the skip_cached probe: the probe must ask for the
 		// book's CURRENT search identity, or a row fetched for an older
 		// title/author would count as fresh and the book would never refresh.
-		identity := database.MetadataSearchIdentity(b.Title, author, b.ASIN, b.ISBN13, b.ISBN10)
+		identity := metafetch.FetchCacheIdentity(b.Title, author, b.ASIN, b.ISBN13, b.ISBN10)
 		// skip_cached: skip books that already have a valid (non-expired) cache entry
 		// from any source so we only hit the API for books with no cached data.
 		if params.SkipCached {
@@ -771,7 +771,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		// Resolved before the skip_cached probe: the probe must ask for the
 		// book's CURRENT search identity, or a row fetched for an older
 		// title/author would count as fresh and the book would never refresh.
-		identity := database.MetadataSearchIdentity(b.Title, author, b.ASIN, b.ISBN13, b.ISBN10)
+		identity := metafetch.FetchCacheIdentity(b.Title, author, b.ASIN, b.ISBN13, b.ISBN10)
 		if params.SkipCached {
 			hasFresh := false
 			for _, src := range s.metadataFetchService.BuildSourceChain() {
