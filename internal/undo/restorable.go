@@ -1,11 +1,12 @@
 // file: internal/undo/restorable.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-28
 
 package undo
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -106,7 +107,58 @@ const (
 	// the book NewValue. Restorable: it moves back while it still names
 	// NewValue.
 	ChangeTypeExternalIDReassign = "external_id_reassign"
+	// ChangeTypeBookFileRepoint: the book_file row named in FieldName
+	// ("book_file:<id>") was pointed at a file that already sat elsewhere on
+	// disk, with NOTHING moved. OldValue and NewValue are BookFileLocation
+	// JSON: the row's path, Missing flag, hash and size before and after.
+	// Restorable: while the row still holds NewValue's location it is put
+	// back to OldValue's. Written by the fragment-consolidation repair, which
+	// repoints a parent book's stale rows at the files an old scan imported
+	// (and organize moved) as separate chapter books.
+	ChangeTypeBookFileRepoint = "book_file_repoint_location"
 )
+
+// BookFileLocation is the part of a book_file row a ChangeTypeBookFileRepoint
+// changes, recorded whole on both sides so the revert restores every field
+// the repoint wrote and checks every one of them first.
+type BookFileLocation struct {
+	Path    string `json:"path"`
+	Missing bool   `json:"missing"`
+	Hash    string `json:"hash,omitempty"`
+	Size    int64  `json:"size,omitempty"`
+}
+
+// LocationOf reads f's BookFileLocation.
+func LocationOf(f *database.BookFile) BookFileLocation {
+	return BookFileLocation{Path: f.FilePath, Missing: f.Missing, Hash: f.FileHash, Size: f.FileSize}
+}
+
+// Apply writes l onto f.
+func (l BookFileLocation) Apply(f *database.BookFile) {
+	f.FilePath, f.Missing, f.FileHash, f.FileSize = l.Path, l.Missing, l.Hash, l.Size
+}
+
+// Encode is l as the JSON a change row holds.
+func (l BookFileLocation) Encode() string {
+	b, err := json.Marshal(l)
+	if err != nil { // strings, a bool and an int cannot fail to marshal
+		return ""
+	}
+	return string(b)
+}
+
+// DecodeBookFileLocation parses a ChangeTypeBookFileRepoint value. A value
+// with no path is refused: restoring it would blank the row.
+func DecodeBookFileLocation(v string) (BookFileLocation, error) {
+	var l BookFileLocation
+	if err := json.Unmarshal([]byte(v), &l); err != nil {
+		return l, fmt.Errorf("book_file location %q: %w", v, err)
+	}
+	if l.Path == "" {
+		return l, fmt.Errorf("book_file location %q has no path", v)
+	}
+	return l, nil
+}
 
 // Organize change types.
 const (
@@ -517,6 +569,17 @@ func NotRestorableLabel(c *database.OperationChange) string {
 		}
 		return c.ChangeType + ":(no book_file id)"
 	case ChangeTypeBookPathUpdate, ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote:
+		return ""
+	case ChangeTypeBookFileRepoint:
+		if _, ok := BookFileIDFromField(c.FieldName); !ok {
+			return c.ChangeType + ":(no book_file id)"
+		}
+		if _, err := DecodeBookFileLocation(c.OldValue); err != nil {
+			return c.ChangeType + ":(unparsable)"
+		}
+		if _, err := DecodeBookFileLocation(c.NewValue); err != nil {
+			return c.ChangeType + ":(unparsable)"
+		}
 		return ""
 	case ChangeTypeTitleRelinkCredits:
 		if _, _, err := DecodeTitleRelinkCredits(c); err != nil {
