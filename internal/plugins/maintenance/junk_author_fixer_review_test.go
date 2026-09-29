@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
 // last-edited: 2026-09-29
 
@@ -872,4 +872,43 @@ func TestJunkAuthorFixer_NeverMintsTitleShapedNames(t *testing.T) {
 	after, err := f.s.GetAllAuthors()
 	require.NoError(t, err)
 	require.Len(t, after, len(before), "no author row minted")
+}
+
+// One sibling book is one piece of evidence even when it shares the version
+// group, the folder AND the series: the three sibling sources are one kind.
+// A relink-only verdict needs two independent kinds (or the provider / the
+// cleaned name).
+func TestJunkAuthorFixer_RelinkOnlyNeedsIndependentKinds(t *testing.T) {
+	t.Run("one sibling in folder and series is one kind", func(t *testing.T) {
+		f := newJunkFixture(t)
+		f.mkSeries("Fab Four", "Hunter Davies")
+		f.book(junkBookSpec{title: "The Beatles Biography", path: "/lib/fab/one.m4b", author: "Hunter Davies", series: "Fab Four"})
+		id := f.book(junkBookSpec{title: "Love Me Do", path: "/lib/fab/two.m4b", author: "The Beatles", series: "Fab Four"})
+		r := f.row(f.plan(), "The Beatles", id)
+		require.NotNil(t, r)
+		require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%s / %s", r.Reason, r.SkipReason)
+	})
+	t.Run("one sibling in the folder only", func(t *testing.T) {
+		f := newJunkFixture(t)
+		f.book(junkBookSpec{title: "The Beatles Biography", path: "/lib/fab/one.m4b", author: "Hunter Davies"})
+		id := f.book(junkBookSpec{title: "Love Me Do", path: "/lib/fab/two.m4b", author: "The Beatles"})
+		r := f.row(f.plan(), "The Beatles", id)
+		require.NotNil(t, r)
+		require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%s / %s", r.Reason, r.SkipReason)
+	})
+	t.Run("file tag and a sibling are two kinds", func(t *testing.T) {
+		f := newJunkFixture(t)
+		f.book(junkBookSpec{title: "The Beatles Biography", path: "/lib/fab/one.m4b", author: "Hunter Davies"})
+		id := f.book(junkBookSpec{title: "Love Me Do", path: "/lib/fab/two.m4b", author: "The Beatles",
+			tags: map[string]string{"artist": "Hunter Davies"}})
+		plan := f.plan()
+		r := f.row(plan, "The Beatles", id)
+		require.NotNil(t, r)
+		require.Empty(t, r.Skipped, r.SkipReason)
+		require.Equal(t, junkAuthorDecRelink, r.Proposed["decision"], r.Reason)
+		require.Equal(t, "Hunter Davies", r.Proposed["author"], r.Reason)
+		res := f.apply(plan, []string{r.RowID})
+		require.Equal(t, 1, res.Applied, "by outcome: %v", res.ByOutcome)
+		require.Equal(t, []int{f.authors["Hunter Davies"]}, f.credits(id))
+	})
 }
