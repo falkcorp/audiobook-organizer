@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-09-28
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
@@ -32,9 +33,25 @@ type fragFixture struct {
 	rowIDs map[string]string
 }
 
+// newFragStore seeds a real PebbleStore. Unlike newSeriesPhantomStore it
+// does NOT skip under -short: CI runs the short suite, and these are the only
+// tests of the fixer's writes.
+func newFragStore(t *testing.T) *database.PebbleStore {
+	t.Helper()
+	s, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	s.WaitForWarmup()
+	return s
+}
+
 func newFragFixture(t *testing.T) *fragFixture {
 	t.Helper()
-	f := &fragFixture{s: newSeriesPhantomStore(t), root: t.TempDir(), ids: map[string]string{}, rowIDs: map[string]string{}}
+	// The root is resolved (macOS temp dirs sit behind the /var symlink), so
+	// the guard's symlink resolution compares like with like.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	f := &fragFixture{s: newFragStore(t), root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
 	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
 	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: f.s}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
 	withRoot(t, f.root)
@@ -123,13 +140,15 @@ func (f *fragFixture) seed(t *testing.T) {
 	require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
 	hPath := f.file(t, "lib/Elsewhere/01.mp3", 201)
 	h := f.book(t, "fragH", "01", hPath, nil)
-	f.row(t, "h01", h, hPath, "01.mp3", 201, 600, 0)
+	// A different duration: name and size alone, unproven.
+	f.row(t, "h01", h, hPath, "01.mp3", 201, 590, 0)
 
 	// no-parent
 	for i, n := range []string{"03", "01", "02"} {
 		p := f.file(t, "lib/Loose/Loose "+n+".mp3", 300+i)
 		f.book(t, "loose"+n, "Loose "+n, p, nil)
 		f.row(t, "l"+n, f.ids["loose"+n], p, "Loose "+n+".mp3", int64(300+i), 300, 0)
+		f.organized(t, f.ids["loose"+n])
 	}
 	// duration gate
 	for i, n := range []string{"01", "02", "03"} {
@@ -163,6 +182,14 @@ func (f *fragFixture) seed(t *testing.T) {
 		f.book(t, "dw"+n, "Part "+n, p, nil)
 		f.row(t, "dw"+n, f.ids["dw"+n], p, "Part "+n+".mp3", int64(600+i), 300, 0)
 	}
+}
+
+// organized marks a book organized (the survivor election reads it).
+func (f *fragFixture) organized(t *testing.T, bookID string) {
+	t.Helper()
+	st := "organized"
+	_, err := f.s.ModifyBook(bookID, func(b *database.Book) error { b.LibraryState = &st; return nil })
+	require.NoError(t, err)
 }
 
 func (f *fragFixture) plan(t *testing.T, opID string) *repairs.PlanResult {
@@ -406,7 +433,9 @@ func TestFragmentFixer_ResumesAPartiallyAppliedGroup(t *testing.T) {
 	}
 	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
 	require.NoError(t, w.MoveBookFiles([]string{otherRow}, other, survivor))
-	_, err := f.s.ModifyBook(survivor, func(b *database.Book) error { b.Title = "Loose"; return nil })
+	// The cut-off run also retitled the survivor and pointed its path at the
+	// folder: the survivor's own row is found by its stored id, not its path.
+	_, err := f.s.ModifyBook(survivor, func(b *database.Book) error { b.Title = "Loose"; b.FilePath = f.path("lib/Loose"); return nil })
 	require.NoError(t, err)
 
 	out := f.apply(t, "op-plan", "op-apply", []string{id}, nil)
@@ -444,4 +473,352 @@ func TestFragmentFixer_ResumesFromCheckpoint(t *testing.T) {
 	require.Equal(t, 2, out.Applied)
 	require.True(t, f.live(t, "fragG"), "the checkpointed row was not applied again")
 	require.False(t, f.live(t, "fragF"), "the open row was applied")
+}
+
+// looseGroup seeds n short "<name> 0N" fragment books in dir; organized
+// says which of them (1-based) are organized. It returns the book ids.
+func (f *fragFixture) looseGroup(t *testing.T, dir, name string, n int, organized func(i int) bool) []string {
+	t.Helper()
+	var ids []string
+	for i := 1; i <= n; i++ {
+		stem := name + " 0" + string(rune('0'+i))
+		p := f.file(t, filepath.Join(dir, stem+".mp3"), 800+i)
+		id := f.book(t, dir+stem, stem, p, nil)
+		f.row(t, dir+stem, id, p, stem+".mp3", int64(800+i), 300, 0)
+		if organized(i) {
+			f.organized(t, id)
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func rowWithBooks(t *testing.T, res *repairs.PlanResult, ids []string) repairs.Row {
+	t.Helper()
+	for _, r := range res.Rows {
+		if len(r.BookIDs) != len(ids) {
+			continue
+		}
+		match := true
+		for _, id := range ids {
+			if !contains(r.BookIDs, id) {
+				match = false
+			}
+		}
+		if match {
+			return r
+		}
+	}
+	t.Fatalf("no row with books %v", ids)
+	return repairs.Row{}
+}
+
+// TestFragmentFixer_MovedNameSizeOnlyIsUnproven (H2): a moved match resting
+// on the original name and size alone is a skipped moved-unproven row; the
+// same match with the fragment imported from the parent row's folder is a
+// proven moved row.
+func TestFragmentFixer_MovedNameSizeOnlyIsUnproven(t *testing.T) {
+	seed := func(t *testing.T, f *fragFixture, importRel string) {
+		x1 := f.file(t, "lib/X/01.mp3", 101)
+		parent := f.book(t, "parent", "X", f.path("lib/X"), nil)
+		f.row(t, "p01", parent, x1, "01.mp3", 101, 600, 1)
+		f.row(t, "p02", parent, f.path("lib/X/02.mp3"), "02.mp3", 102, 600, 2) // gone from disk
+		imp := f.file(t, importRel, 102)
+		frag := f.book(t, "frag", "02", imp, nil)
+		f.row(t, "f02", frag, imp, "02.mp3", 102, 590, 0)
+		f.organize(t, frag, imp, f.path("lib/Y/02/02.mp3"))
+	}
+	t.Run("name and size only", func(t *testing.T) {
+		f := newFragFixture(t)
+		seed(t, f, "lib/Elsewhere/02.mp3")
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, fragRowMovedUnproven+":"+f.ids["parent"])
+		require.Equal(t, fragClassMoved, r.Class)
+		require.Equal(t, fragSkipMovedUnproven, r.Skipped)
+		require.False(t, r.Applicable())
+	})
+	t.Run("imported from the parent row's folder", func(t *testing.T) {
+		f := newFragFixture(t)
+		seed(t, f, "lib/X/02 (copy).mp3")
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, "moved:"+f.ids["parent"])
+		require.True(t, r.Applicable(), r.SkipReason)
+		require.Contains(t, r.Evidence[0], fragEvNameSizeFolder)
+	})
+}
+
+// TestFragmentFixer_SurvivorMustBeOrganizedAndPrimary (H3).
+func TestFragmentFixer_SurvivorMustBeOrganizedAndPrimary(t *testing.T) {
+	f := newFragFixture(t)
+	none := f.looseGroup(t, "lib/NoneOrg", "Chap", 3, func(int) bool { return false })
+	last := f.looseGroup(t, "lib/LastOrg", "Chap", 3, func(i int) bool { return i == 3 })
+	res := f.plan(t, "op-plan")
+
+	r := rowWithBooks(t, res, none)
+	require.Equal(t, fragSkipNoSurvivor, r.Skipped, r.SkipReason)
+
+	r = rowWithBooks(t, res, last)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.Equal(t, last[2], r.Proposed["survivor"], "the only organized member, not the lowest id")
+}
+
+// TestFragmentFixer_ChapterOrderMustBeKnown (H1): two files at one position
+// skip the group rather than guess an order.
+func TestFragmentFixer_ChapterOrderMustBeKnown(t *testing.T) {
+	f := newFragFixture(t)
+	var ids []string
+	for i, stem := range []string{"Part 1", "Part 01", "Part 2"} {
+		p := f.file(t, "lib/Dup/"+stem+".mp3", 900+i)
+		id := f.book(t, stem, stem, p, nil)
+		f.row(t, stem, id, p, stem+".mp3", int64(900+i), 300, 0)
+		f.organized(t, id)
+		ids = append(ids, id)
+	}
+	r := rowWithBooks(t, f.plan(t, "op-plan"), ids)
+	require.Equal(t, fragSkipTrackOrder, r.Skipped, r.SkipReason)
+}
+
+// TestFragmentFixer_DiscFoldersFormOneGroup (M5): CD1/CD2 siblings are one
+// group, ordered disc first.
+func TestFragmentFixer_DiscFoldersFormOneGroup(t *testing.T) {
+	f := newFragFixture(t)
+	var ids []string
+	for _, rel := range []string{"CD2/01", "CD1/02", "CD2/02", "CD1/01"} {
+		p := f.file(t, "lib/Saga/"+rel+".mp3", 300)
+		id := f.book(t, rel, filepath.Base(rel), p, nil)
+		f.row(t, rel, id, p, filepath.Base(rel)+".mp3", 300, 300, 0)
+		f.organized(t, id)
+		ids = append(ids, id)
+	}
+	res := f.plan(t, "op-plan")
+	r := rowWithBooks(t, res, ids)
+	require.True(t, r.Applicable(), r.SkipReason)
+	out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	rows, err := f.s.GetBookFiles(r.Proposed["survivor"])
+	require.NoError(t, err)
+	track := map[string]int{}
+	for _, row := range rows {
+		rel, err := filepath.Rel(f.path("lib/Saga"), row.FilePath)
+		require.NoError(t, err)
+		track[rel] = row.TrackNumber
+	}
+	require.Equal(t, map[string]int{"CD1/01.mp3": 1, "CD1/02.mp3": 2, "CD2/01.mp3": 3, "CD2/02.mp3": 4}, track)
+}
+
+// TestFragmentFixer_FolderPathOnlyWhenExact (M4): a folder holding audio
+// that is not the group's is never made the survivor's path.
+func TestFragmentFixer_FolderPathOnlyWhenExact(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	f.file(t, "lib/Loose/Bonus interview.mp3", 10)
+	r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path("lib/Loose"), "loose"))
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.NotContains(t, r.Proposed, "book_path")
+}
+
+// TestFragmentFixer_PathProvenCopyComparesSizeOnDisk (L1).
+func TestFragmentFixer_PathProvenCopyComparesSizeOnDisk(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	require.NoError(t, os.WriteFile(f.path("lib/Suns2/02.mp3"), make([]byte, 999), 0o644))
+	res := f.plan(t, "op-plan")
+	for _, r := range res.Rows {
+		require.NotEqual(t, "copy:"+f.ids["suns"], r.RowID, "no proven copy row")
+	}
+	r := findRow(t, res, fragRowCopyUnproven+":"+f.ids["suns"])
+	require.Contains(t, r.BookIDs, f.ids["fragG"])
+	require.False(t, r.Applicable())
+}
+
+// TestFragmentFixer_SymlinkIntoITunesIsManual (L2).
+func TestFragmentFixer_SymlinkIntoITunesIsManual(t *testing.T) {
+	f := newFragFixture(t)
+	require.NoError(t, os.MkdirAll(f.path("books/itunes/Real"), 0o755))
+	require.NoError(t, os.MkdirAll(f.path("lib"), 0o755))
+	require.NoError(t, os.Symlink(f.path("books/itunes/Real"), f.path("lib/Link")))
+	ids := f.looseGroup(t, "lib/Link", "Chap", 3, func(int) bool { return true })
+	r := rowWithBooks(t, f.plan(t, "op-plan"), ids)
+	require.Equal(t, fragClassManual, r.Class)
+	require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+}
+
+// TestFragmentFixer_ITunesIDMakesFragmentManual (H5): a fragment carrying an
+// iTunes persistent id is never retired (the purge would queue an iTunes
+// remove for it).
+func TestFragmentFixer_ITunesIDMakesFragmentManual(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	pid := "ABCDEF0123456789"
+	_, err := f.s.ModifyBook(f.ids["fragF"], func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
+	require.NoError(t, err)
+	row, err := f.s.GetBookFileByID(f.ids["loose02"], f.rowIDs["l02"])
+	require.NoError(t, err)
+	row.ITunesPersistentID = "0123456789ABCDEF"
+	require.NoError(t, f.s.UpdateBookFile(row.ID, row))
+
+	res := f.plan(t, "op-plan")
+	for _, id := range []string{"moved:" + f.ids["parent"], noParentRowID(f.path("lib/Loose"), "loose")} {
+		r := findRow(t, res, id)
+		require.Equal(t, fragClassManual, r.Class, id)
+		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+	}
+}
+
+// TestFragmentFixer_RetireIsAMerge (H4, H5, M7): the retired fragment names
+// its parent, loses its path, hands over its external ids and every user's
+// position; the revert puts every one of them back and crowns it again.
+func TestFragmentFixer_RetireIsAMerge(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag, parent := f.ids["fragF"], f.ids["parent"]
+	fragPath := f.path("lib/Eldest/03/03/03.mp3")
+	require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "audible", ExternalID: "B0FRAG", BookID: frag}))
+	u, err := f.s.CreateUser("reader", "reader@example.com", "bcrypt", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	require.NoError(t, f.s.SetUserPosition(u.ID, frag, f.rowIDs["f03"], 100))
+
+	f.plan(t, "op-plan")
+	out := f.apply(t, "op-plan", "op-apply", []string{"moved:" + parent}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+
+	b, err := f.s.GetBookByID(frag)
+	require.NoError(t, err)
+	require.True(t, b.IsSoftDeleted())
+	require.NotNil(t, b.MergedIntoBookID)
+	require.Equal(t, parent, *b.MergedIntoBookID)
+	require.Empty(t, b.FilePath, "the purge must not delete the parent's file")
+	require.NotNil(t, b.IsPrimaryVersion)
+	require.False(t, *b.IsPrimaryVersion)
+	owner, err := f.s.GetBookByExternalID("audible", "B0FRAG")
+	require.NoError(t, err)
+	require.Equal(t, parent, owner)
+	pos, err := f.s.ListUserPositionsForBook(u.ID, frag)
+	require.NoError(t, err)
+	require.Empty(t, pos, "the fragment's position followed")
+	pos, err = f.s.ListUserPositionsForBook(u.ID, parent)
+	require.NoError(t, err)
+	require.Len(t, pos, 1)
+	require.InDelta(t, 1300, pos[0].PositionSeconds, 0.01, "chapter 3 starts after two 600 s chapters")
+
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
+	require.NoError(t, err)
+	require.Zero(t, rr.Failed, "%+v", rr)
+	b, err = f.s.GetBookByID(frag)
+	require.NoError(t, err)
+	require.False(t, b.IsSoftDeleted())
+	require.Nil(t, b.MergedIntoBookID)
+	require.Equal(t, fragPath, b.FilePath)
+	require.True(t, b.IsPrimaryVersion == nil || *b.IsPrimaryVersion, "crowned again")
+	owner, err = f.s.GetBookByExternalID("audible", "B0FRAG")
+	require.NoError(t, err)
+	require.Equal(t, frag, owner)
+	pos, err = f.s.ListUserPositionsForBook(u.ID, frag)
+	require.NoError(t, err)
+	require.Len(t, pos, 1)
+	require.InDelta(t, 100, pos[0].PositionSeconds, 0.01)
+}
+
+// TestFragmentFixer_RetiredStaysRetiredWhenRepointRevertIsRefused (M2).
+func TestFragmentFixer_RetiredStaysRetiredWhenRepointRevertIsRefused(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	f.plan(t, "op-plan")
+	out := f.apply(t, "op-plan", "op-apply", []string{"moved:" + f.ids["parent"]}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	// Someone moves the parent's row on: the repoint can no longer be undone.
+	row := f.fileRow(t, "parent", "p03")
+	row.FilePath = f.path("lib/Eldest/elsewhere.mp3")
+	require.NoError(t, f.s.UpdateBookFile(row.ID, row))
+
+	_, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
+	require.Error(t, err, "the repoint is refused")
+	require.False(t, f.live(t, "fragF"), "restoring it would leave two live books on one file")
+	// Nothing else of the retired book comes back either: a path restored
+	// onto a book that stays retired is a path the purge deletes.
+	b, err := f.s.GetBookByID(f.ids["fragF"])
+	require.NoError(t, err)
+	require.Empty(t, b.FilePath)
+	require.NotNil(t, b.MergedIntoBookID)
+	changes, err := f.s.GetOperationChanges("op-apply")
+	require.NoError(t, err)
+	for _, c := range changes {
+		if c.BookID == f.ids["fragF"] {
+			require.Nil(t, c.RevertedAt, "%s of the retired fragment was reverted", c.ChangeType)
+		}
+	}
+}
+
+// TestFragmentFixer_UndoLastApplyRefusesARepairsBatch (M2).
+func TestFragmentFixer_UndoLastApplyRefusesARepairsBatch(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	res := f.plan(t, "op-plan")
+	r := findRow(t, res, noParentRowID(f.path("lib/Loose"), "loose"))
+	out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	_, err := metafetch.NewService(f.s).UndoLastApply(r.Proposed["survivor"])
+	require.ErrorIs(t, err, metafetch.ErrApplyUndoneFromOperation)
+}
+
+// TestFragmentFixer_SurvivorTitleChangedAfterPlan (M3).
+func TestFragmentFixer_SurvivorTitleChangedAfterPlan(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	res := f.plan(t, "op-plan")
+	r := findRow(t, res, noParentRowID(f.path("lib/Loose"), "loose"))
+	_, err := f.s.ModifyBook(r.Proposed["survivor"], func(b *database.Book) error { b.Title = "Renamed by hand"; return nil })
+	require.NoError(t, err)
+	out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+	require.Equal(t, 1, out.ChangedSincePlan, "%+v", out.Rows)
+	rows, err := f.s.GetBookFiles(r.Proposed["survivor"])
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "nothing moved")
+}
+
+// TestFragmentFixer_ReplanReformsAnAbandonedGroup (M6): a run cut off after
+// moving one member's row is re-attributed by a NEW plan, which re-forms the
+// same group instead of stranding the emptied member.
+func TestFragmentFixer_ReplanReformsAnAbandonedGroup(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	res := f.plan(t, "op-plan")
+	id := noParentRowID(f.path("lib/Loose"), "loose")
+	survivor := findRow(t, res, id).Proposed["survivor"]
+	var other, otherRow string
+	for _, n := range []string{"01", "02", "03"} {
+		if f.ids["loose"+n] != survivor {
+			other, otherRow = f.ids["loose"+n], f.rowIDs["l"+n]
+			break
+		}
+	}
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+	require.NoError(t, w.MoveBookFiles([]string{otherRow}, other, survivor))
+
+	res2 := f.plan(t, "op-plan2")
+	r := findRow(t, res2, id)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.Contains(t, r.BookIDs, other, "the emptied member is still in the group")
+	out := f.apply(t, "op-plan2", "op-apply", []string{id}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	rows, err := f.s.GetBookFiles(survivor)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+	b, err := f.s.GetBookByID(other)
+	require.NoError(t, err)
+	require.True(t, b.IsSoftDeleted(), "the emptied member is retired, not stranded")
+}
+
+// TestFragmentFixer_JournalDedupesOnResume (M1): a resumed run journals a
+// step it already journaled once, not twice.
+func TestFragmentFixer_JournalDedupesOnResume(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	for i := 0; i < 2; i++ {
+		w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-x")
+		require.NoError(t, w.Journal(f.ids["fragF"], undo.ChangeTypeBookMergedInto, "merged_into_book_id", "", f.ids["parent"]))
+	}
+	changes, err := f.s.GetOperationChanges("op-x")
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
 }
