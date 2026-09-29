@@ -1,7 +1,7 @@
 // file: web/src/utils/titleSortKey.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b9e1c62-7d3a-4f85-b2c0-6a8d3e5f1b97
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 import { describe, expect, it } from 'vitest';
 import { numberedBookSortForm, titleSortKey } from './titleSortKey';
@@ -53,6 +53,9 @@ describe('titleSortKey', () => {
     ['2 - Kings', 'kings 2'],
     ['2-Peter', 'peter 2'],
     ['1 John: Commentary', 'john 1: commentary'],
+    ["2 Peter's Journey", "2 peter's journey"],
+    ['1. Mose', 'mose 1'],
+    ['2. Mose', 'mose 2'],
     // NBSP is not whitespace to the server's regex: no rewrite either side
     ['1\u00a0John', '1\u00a0john'],
   ])('%s -> %s', (input, want) => {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package maintenance
 
@@ -151,7 +151,12 @@ type junkIndex struct {
 // book's folder (the file's folder for a file path), climbing past up to two
 // disc/part/chapter-number folders ("Eldest/CD1", the organizer-moved
 // "Eldest/02/98/98.mp3").
-func junkWorkDir(p string) string {
+//
+// A number folder named like the book's own title is that book's folder, not
+// a chapter folder: "Kelley Armstrong/13/13.m4b" is the book "13" filed
+// author/title, so the climb stops there — unless another number folder sits
+// right above it, which is the organizer-moved chapter shape ("02/98/98").
+func junkWorkDir(p, title string) string {
 	if p == "" {
 		return ""
 	}
@@ -160,7 +165,12 @@ func junkWorkDir(p string) string {
 		d = filepath.Dir(p)
 	}
 	for range 2 {
-		if !metadata.IsChapterOnlyTitle(filepath.Base(d)) {
+		base := filepath.Base(d)
+		if !metadata.IsChapterOnlyTitle(base) {
+			break
+		}
+		if strings.EqualFold(strings.TrimSpace(base), strings.TrimSpace(title)) &&
+			!metadata.IsChapterOnlyTitle(filepath.Base(filepath.Dir(d))) {
 			break
 		}
 		d = filepath.Dir(d)
@@ -235,7 +245,7 @@ func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, erro
 			continue
 		}
 		kind := metadata.ClassifyJunkTitleFor(b.Title, narratorsOf(b.Narrator))
-		if d := junkWorkDir(b.FilePath); d != "" {
+		if d := junkWorkDir(b.FilePath, b.Title); d != "" {
 			idx.dirBooks[d]++
 			if kind.IsChapterKind() {
 				idx.dirChapters[d]++
@@ -595,29 +605,26 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 
 	type proposal struct{ title, source, risk string }
 	var props []proposal
-	if t, ok := accept(transcribed, junkSrcTranscribed); ok {
-		props = append(props, proposal{t, junkSrcTranscribed, repairs.RiskReview})
-	}
 	// An embedded kind still carries (or sits in a folder that names) the
 	// real title; the cached candidate search ran on the junk title and its
 	// top hit is often the series' first book ("01 - Eldest" → "Eragon"), so
-	// the candidate must agree with that evidence to count.
+	// for an embedded kind a candidate must agree with that evidence to count
+	// at all.
 	embedded := kind.HasRealTitleInside() || kind.IsChapterKind()
 	var agreeWith []string
+	stripped := ""
 	if kind.HasRealTitleInside() {
 		if t, ok := metadata.StripJunkTitlePrefix(b.Title); ok {
 			agreeWith = append(agreeWith, t)
-			if t, ok = accept(t, junkSrcStripped); ok {
-				props = append(props, proposal{t, junkSrcStripped, repairs.RiskLow})
-			}
+			stripped, _ = accept(t, junkSrcStripped)
 		}
 	}
-	folderTitle, folderSrc := "", ""
+	folderTitle, folderSrc, titleDir := "", "", ""
 	if kind.IsChapterKind() && len(paths) > 0 {
 		// "" is chapter-only to ChapterTitleFromDirectory, which then reads
 		// the folder whatever the stored chapter spelling ("Part IV").
-		if t, _, ok := metadata.ChapterTitleFromDirectory(paths[0], ""); ok {
-			folderTitle, folderSrc = t, junkSrcFolder
+		if t, dir, ok := metadata.ChapterTitleFromDirectory(paths[0], ""); ok {
+			folderTitle, folderSrc, titleDir = t, junkSrcFolder, dir
 		}
 	} else if t, method, ok := DeriveJunkTitleReplacement(b.Title, author, paths); ok {
 		folderTitle, folderSrc = t, junkSrcFolder
@@ -629,23 +636,75 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		agreeWith = append(agreeWith, folderTitle)
 	}
 	if len(paths) > 0 {
-		agreeWith = append(agreeWith, filepath.Base(junkWorkDir(paths[0])))
+		agreeWith = append(agreeWith, filepath.Base(junkWorkDir(paths[0], b.Title)))
 	}
+	folder := ""
+	if folderSrc != "" {
+		folder, _ = accept(folderTitle, folderSrc)
+	}
+	// pathEvidence is what the book's own path says its title is (the
+	// stripped title, the folder or filename). A transcription or candidate
+	// that disagrees with it ranks BELOW it: "Audible Studios presents" is
+	// the intro's first words, not the title of the book in "Excession/", and
+	// a "Dune" candidate for ".../Dune Messiah/Dune Messiah.m4b" is the
+	// search's first hit, not this book.
+	var pathEvidence []string
+	for _, e := range []string{stripped, folder} {
+		if e != "" {
+			pathEvidence = append(pathEvidence, e)
+		}
+	}
+	agrees := func(t string) bool { return len(pathEvidence) == 0 || titleAgreesWithAny(t, pathEvidence) }
+	var demoted []proposal
+	add := func(p proposal) {
+		if agrees(p.title) {
+			props = append(props, p)
+			return
+		}
+		demoted = append(demoted, p)
+	}
+	spoken, _ := accept(transcribed, junkSrcTranscribed)
+	if spoken != "" {
+		add(proposal{spoken, junkSrcTranscribed, repairs.RiskReview})
+	}
+	if stripped != "" {
+		props = append(props, proposal{stripped, junkSrcStripped, repairs.RiskLow})
+	}
+	candidate := ""
 	if t, score, ok := f.candidateTitle(b.ID, author); ok {
 		switch {
 		case embedded && !titleAgreesWithAny(t, agreeWith):
 			refused = append(refused, fmt.Sprintf("candidate %q (score %.2f) disagrees with the title's own evidence", t, score))
 		default:
 			if t, ok = accept(t, junkSrcCandidate); ok {
-				props = append(props, proposal{t, junkSrcCandidate, repairs.RiskReview})
+				candidate = t
+				add(proposal{t, junkSrcCandidate, repairs.RiskReview})
 			}
 		}
 	}
-	if folderSrc != "" {
-		if t, ok := accept(folderTitle, folderSrc); ok {
-			props = append(props, proposal{t, folderSrc, repairs.RiskReview})
+	if folder != "" {
+		// A folder reached by climbing past a chapter folder that sits right
+		// under a library or import root is as likely the AUTHOR folder
+		// ("/imports/dl/Robin Hobb/01/a.mp3"): only a transcription or
+		// candidate naming the same work makes it a title.
+		climbed := titleDir != "" && titleDir != filepath.Dir(paths[0])
+		if climbed && slices.Contains(idx.roots, filepath.Dir(titleDir)) {
+			corroborated := false
+			for _, c := range []string{spoken, candidate} {
+				if c != "" && titleAgreesWithAny(c, []string{folder}) {
+					corroborated = true
+				}
+			}
+			if !corroborated {
+				return finish(junkSkipNeedsManual, fmt.Sprintf(
+					"the folder %q sits directly under the root %s above a chapter folder and may be the author; "+
+						"no transcription or candidate corroborates it", folder, filepath.Dir(titleDir)))
+			}
 		}
+		props = append(props, proposal{folder, folderSrc, repairs.RiskReview})
 	}
+	// Demoted evidence still shows as "other evidence" on the row.
+	props = append(props, demoted...)
 	if kind.IsChapterKind() && b.SeriesID != nil && idx.series[*b.SeriesID] != "" {
 		if m := trailingNumberRe.FindStringSubmatch(b.Title); m != nil {
 			// A digits-only match cannot fail to parse except by overflow,
@@ -869,9 +928,9 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 	}
 	dirs := map[string]bool{}
 	for _, p := range paths {
-		dirs[junkWorkDir(p)] = true
+		dirs[junkWorkDir(p, b.Title)] = true
 	}
-	if d := junkWorkDir(b.FilePath); d != "" {
+	if d := junkWorkDir(b.FilePath, b.Title); d != "" {
 		dirs[d] = true
 	}
 	keys := make([]string, 0, len(dirs))
@@ -890,7 +949,7 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 	// author folder by design.
 	if a := strings.TrimSpace(author); a != "" && !authorname.IsPlaceholderAuthor(a) {
 		for _, p := range append(slices.Clone(paths), b.FilePath) {
-			d := junkWorkDir(p)
+			d := junkWorkDir(p, b.Title)
 			if d == "" {
 				continue
 			}
@@ -903,9 +962,7 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 			}
 		}
 	}
-	if bareNumberRe.MatchString(strings.TrimSpace(b.Title)) {
-		return junkSkipNeedsManual, "the title is a bare number, which may be the real title; nothing proves it is a chapter", nil
-	}
+	bare := bareNumberRe.MatchString(strings.TrimSpace(b.Title))
 	for _, d := range keys {
 		// A chapter-titled book sharing its folder with any other book may be
 		// a piece of it. Any other junk title ("Opening", "read by narrator")
@@ -917,9 +974,21 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 		if kind.IsChapterKind() || kind == metadata.JunkNumberPrefix {
 			others = idx.dirBooks[d] - 1
 		}
+		// A bare unpadded number ("13") is as likely a real title: beside
+		// real-titled books of its author it stays on its own; only beside
+		// other chapter-titled books ("1".."20") is it a possible fragment.
+		if bare {
+			others = idx.dirChapters[d] - 1
+		}
 		if others >= 1 {
 			return junkSkipPossibleFragment, fmt.Sprintf("%d books share the folder %s", idx.dirBooks[d], d), nil
 		}
+	}
+	// A bare unpadded number alone in its folder may be the real title
+	// ("13", "300"); beside sibling books ("1".."20" in one folder) it was
+	// caught above as a possible fragment.
+	if bare {
+		return junkSkipNeedsManual, "the title is a bare number, which may be the real title; nothing proves it is a chapter", nil
 	}
 	if kind.IsChapterKind() && len(paths) < 2 {
 		return junkSkipPossibleFragment, "a single file titled only by a chapter position", nil

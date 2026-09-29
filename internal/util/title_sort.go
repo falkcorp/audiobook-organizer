@@ -1,7 +1,7 @@
 // file: internal/util/title_sort.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f6c8a14-5d3b-4e97-b0a2-9e4d1c7f6b58
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package util
 
@@ -19,9 +19,12 @@ import (
 // The rewrite is limited to these names on purpose. A general "leading roman
 // numeral or ordinal" rule would file "V for Vendetta" under "for" and
 // "I, Robot" under "Robot".
+//
+// "mose" is German Bible numbering ("1. Mose" … "5. Mose", the books of
+// Moses).
 var numberedBooks = []string{
 	"samuel", "kings", "chronicles", "esdras", "maccabees",
-	"corinthians", "thessalonians", "timothy", "peter", "john",
+	"corinthians", "thessalonians", "timothy", "peter", "john", "mose",
 }
 
 // ordinalWords maps a spelled or roman ordinal (lower case) to its number.
@@ -35,13 +38,14 @@ var ordinalWords = map[string]int{
 // numberedBookRe: an ordinal token, a separator (a dot, a hyphen or
 // underscore run, or whitespace: "1. John", "2 - Kings", "2-Peter"), a
 // numbered book name, and a remainder that is empty or starts with something other
-// than a letter (a chapter number, " - ", "(") or the word chapter. The
-// remainder rule keeps "First Kings of England" a title of its own.
+// than a letter or an apostrophe (a chapter number, " - ", "(") or the word
+// chapter. The remainder rule keeps "First Kings of England" and "2 Peter's
+// Journey" titles of their own.
 //
 // Whitespace here is ASCII only (RE2's \s), and web/src/utils/titleSortKey.ts
 // uses the same explicit class, so the two cannot disagree on a NBSP.
 var numberedBookRe = regexp.MustCompile(`(?i)^\s*([0-9a-z]+)(?:\.\s*|\s*[-_]+\s*|\s+)(` + strings.Join(numberedBooks, "|") +
-	`)((?:\s*[^\pL\s].*)|(?:\s+(?:chapter|ch\.?)\b.*)|\s*)$`)
+	`)((?:\s*[^\pL\s'’].*)|(?:\s+(?:chapter|ch\.?)\b.*)|\s*)$`)
 
 // mayBeOrdinal is the fast path in front of numberedBookRe: the first token
 // (up to a space, dot, hyphen or underscore) must be an ordinal or made of

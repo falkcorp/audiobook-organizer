@@ -1,7 +1,7 @@
 // file: internal/metadata/junk_title.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d7a2c91-3e6b-4f08-a1d5-8c2e9b7f4a13
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package metadata
 
@@ -86,11 +86,14 @@ var (
 	// colon is not a separator ("3:10 to Yuma"); a dot counts only before a
 	// space ("1.5"); four digits never match ("2001: A Space Odyssey", "1984").
 	numberPrefixRe = regexp.MustCompile(`^#?\d{1,3}(?:\s+-+\s+|\s*[)\]]\s*|\.\s+)(\S.*)$`)
-	// underscorePrefixRe: digits, an underscore run, then a letter ("07_Dune").
-	underscorePrefixRe = regexp.MustCompile(`^\d{1,3}_+(\pL.*)$`)
-	// zeroPaddedPrefixRe: a zero-padded track number and a space ("01 Eldest").
-	// A leading zero is never part of a real title's number.
-	zeroPaddedPrefixRe = regexp.MustCompile(`^0\d{1,2}\s+(\S.*)$`)
+	// underscorePrefixRe: a ZERO-PADDED number, an underscore run, then a
+	// letter ("07_Dune"). Unpadded, the number may be the title's ("3_Body").
+	underscorePrefixRe = regexp.MustCompile(`^0\d{1,2}_+(\pL.*)$`)
+	// zeroPaddedPrefixRe: a zero-padded track number then a space or a bare
+	// hyphen run ("01 Eldest", "01-Eldest"). A leading zero is never part of
+	// a real title's number, which is what keeps "10-Minute Toughness" and
+	// "21-Day Sugar Detox" titles.
+	zeroPaddedPrefixRe = regexp.MustCompile(`^0\d{1,2}(?:\s+|-+)(\S.*)$`)
 	// punctuationPrefixRe: leading punctuation that no title starts with.
 	// Quotes, apostrophes, brackets and "¿¡" are excluded ("'Salem's Lot"),
 	// and so are dots touching a letter ("...And Justice for All").
