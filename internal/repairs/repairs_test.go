@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-09-29
 
@@ -361,6 +361,11 @@ func TestGuardBookTitle_BothDirections(t *testing.T) {
 		"Big Finish to the Season":           false,
 		"Secrets of the Torchwood Estate":    false,
 		"Placebo Effect":                     false,
+		// Prod titles the leading/trailing rule missed (follow-up L4).
+		"Nelvana Doctor Who":                     true,
+		"The Language of Doctor Who":             true,
+		"Another Pirate's History of Doctor Who": true,
+		"Doctor.Who - Shada":                     true,
 	} {
 		k, why := GuardBookTitle("b", title)
 		require.Equal(t, want, k == SkipOwnerManual, "%q: %s", title, why)

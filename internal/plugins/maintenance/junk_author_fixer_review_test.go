@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
 // last-edited: 2026-09-29
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -97,11 +98,12 @@ func TestJunkAuthorFixer_NarratorByAlbumArtistIsReview(t *testing.T) {
 	require.Contains(t, r.Reason, "narrator")
 }
 
-// N1: self-narrated books. The narrator is an existing author: relinked, at
-// review risk, never needs_manual.
+// N1: self-narrated books. The narrator is an existing author with books of
+// his own: relinked, at review risk, never needs_manual.
 func TestJunkAuthorFixer_SelfNarratedIsRelinked(t *testing.T) {
 	f := newJunkFixture(t)
 	king := f.author("Stephen King")
+	f.book(junkBookSpec{title: "It", path: "/lib/Stephen King/It", author: "Stephen King"})
 	a := f.book(junkBookSpec{title: "Bag of Bones", path: "/lib/n/bob", author: "read by Stephen King", narrator: "Stephen King",
 		tags: map[string]string{"artist": "Stephen King", "album_artist": "Stephen King"}})
 	b := f.book(junkBookSpec{title: "Bag of Bones", path: "/lib/n/bob2", author: "GraphicAudio", bookNarrators: []string{"Stephen King"},
@@ -124,7 +126,7 @@ func TestJunkAuthorFixer_SelfNarratedIsRelinked(t *testing.T) {
 // N2: a self-narrated book never falls through to an unrelated sibling.
 func TestJunkAuthorFixer_SelfNarratedNotRelinkedToSibling(t *testing.T) {
 	f := newJunkFixture(t)
-	f.author("Neil Gaiman")
+	f.book(junkBookSpec{title: "American Gods", path: "/lib/Neil Gaiman/American Gods", author: "Neil Gaiman"})
 	gb := f.book(junkBookSpec{title: "The Graveyard Book", path: "/lib/flat/gb.m4b", author: "GraphicAudio", narrator: "Neil Gaiman",
 		tags: map[string]string{"artist": "Neil Gaiman"}})
 	f.book(junkBookSpec{title: "Unrelated", path: "/lib/flat/u.m4b", author: "Tim Dorsey"})
@@ -132,6 +134,20 @@ func TestJunkAuthorFixer_SelfNarratedNotRelinkedToSibling(t *testing.T) {
 	require.NotNil(t, r)
 	require.Equal(t, "Neil Gaiman", r.Proposed["author"], r.Reason)
 	require.Equal(t, repairs.RiskReview, r.Risk)
+}
+
+// Follow-up L1: an existing author row with no books of its own is not
+// evidence that the narrator writes. Prod has 65 narrator names that fold to
+// such an empty row; an artist tag naming one holds the row.
+func TestJunkAuthorFixer_NarratorWithEmptyAuthorRowIsHeld(t *testing.T) {
+	f := newJunkFixture(t)
+	f.author("Michael Kramer") // an author row, credited on nothing
+	id := f.book(junkBookSpec{title: "The Final Empire", path: "/lib/n/fe", author: "GraphicAudio", narrator: "Michael Kramer",
+		tags: map[string]string{"artist": "Michael Kramer"}})
+	r := f.row(f.plan(), "GraphicAudio", id)
+	require.NotNil(t, r)
+	require.NotEqual(t, "Michael Kramer", r.Proposed["author"], "narrator relinked to an empty author row: %s", r.Reason)
+	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "held: %v %s", r.Proposed, r.Reason)
 }
 
 // A narrator-only tag answer that was dropped holds the row: no sibling, no
@@ -592,4 +608,75 @@ func TestJunkAuthorFixer_PrimaryBatchIsMarkedOpJournaled(t *testing.T) {
 		kinds = append(kinds, m.ChangeType)
 	}
 	require.Equal(t, []string{repairs.ChangeTypeApplyOpJournaled}, kinds)
+}
+
+// creditOnJournal fails the op journal's create-author entry, and just before
+// failing it credits the new author to another book: a second worker whose
+// MintAuthor resolved the same name and linked it.
+type creditOnJournal struct {
+	database.Store
+	other string
+}
+
+func (c creditOnJournal) CreateOperationChange(ch *database.OperationChange) error {
+	if ch.ChangeType != undo.ChangeTypeJunkAuthorCreate {
+		return c.Store.CreateOperationChange(ch)
+	}
+	var jc undo.JunkAuthorCreate
+	if err := json.Unmarshal([]byte(ch.NewValue), &jc); err != nil {
+		return err
+	}
+	if err := c.SetBookAuthors(c.other, []database.BookAuthor{{BookID: c.other, AuthorID: jc.AuthorID, Role: "author"}}); err != nil {
+		return err
+	}
+	return errors.New("journal down")
+}
+
+// Follow-up L2: the rollback of a create whose journal entry failed never
+// deletes a row that someone else credited in the meantime.
+func TestJunkAuthorFixer_CreateRollbackKeepsACreditedRow(t *testing.T) {
+	f := newJunkFixture(t)
+	bk := f.book(junkBookSpec{title: "Assassin's Apprentice", path: "/lib/bk-create", author: "GraphicAudio",
+		tags: map[string]string{"artist": "Robin Hobb"}})
+	other := f.book(junkBookSpec{title: "Royal Assassin", path: "/lib/bk-other", author: "Somebody Else"})
+	plan := f.plan()
+	fresh, err := f.fixer.Replan(context.Background(), nil, *rowByID(plan, junkAuthorRowID(f.authors["GraphicAudio"], bk)), &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, junkAuthorDecCreate, fresh.Proposed["decision"])
+
+	j := creditOnJournal{Store: f.s, other: other}
+	w := repairs.NewWriter(f.s, f.s, f.fixer.ID(), "bulk_update", "repairs-").WithJournal(f.s, j, junkTestOpID).WithCredits(f.s)
+	require.Error(t, f.fixer.Apply(context.Background(), w, fresh))
+
+	hobb, err := f.s.GetAuthorByName("Robin Hobb")
+	require.NoError(t, err)
+	require.NotNil(t, hobb, "rollback deleted an author another book credits")
+	require.Equal(t, []int{hobb.ID}, f.credits(other))
+	require.Equal(t, []int{f.authors["GraphicAudio"]}, f.credits(bk), "the failed row was not applied")
+}
+
+// Follow-up L2, the other direction: with nothing crediting it, the row is
+// still taken back.
+func TestJunkAuthorFixer_CreateRollbackRemovesAnUncreditedRow(t *testing.T) {
+	f := newJunkFixture(t)
+	bk := f.book(junkBookSpec{title: "Assassin's Apprentice", path: "/lib/bk-create", author: "GraphicAudio",
+		tags: map[string]string{"artist": "Robin Hobb"}})
+	plan := f.plan()
+	fresh, err := f.fixer.Replan(context.Background(), nil, *rowByID(plan, junkAuthorRowID(f.authors["GraphicAudio"], bk)), &fakeReporter{})
+	require.NoError(t, err)
+	w := repairs.NewWriter(f.s, f.s, f.fixer.ID(), "bulk_update", "repairs-").WithJournal(f.s, failJournal{f.s}, junkTestOpID).WithCredits(f.s)
+	require.Error(t, f.fixer.Apply(context.Background(), w, fresh))
+	hobb, err := f.s.GetAuthorByName("Robin Hobb")
+	require.NoError(t, err)
+	require.Nil(t, hobb, "an unjournaled, uncredited row was left behind")
+}
+
+// failJournal fails only the create-author entry.
+type failJournal struct{ database.Store }
+
+func (j failJournal) CreateOperationChange(ch *database.OperationChange) error {
+	if ch.ChangeType == undo.ChangeTypeJunkAuthorCreate {
+		return errors.New("journal down")
+	}
+	return j.Store.CreateOperationChange(ch)
 }

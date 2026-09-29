@@ -1,5 +1,5 @@
 // file: internal/repairs/guards.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
 // last-edited: 2026-09-29
 
@@ -140,22 +140,48 @@ func (r *PathResolver) withResolved(paths []string) []string {
 // manualOnlyTitleRe: see GuardBookTitle. Separators inside the names vary
 // across rips ("Doctor.Who", "DoctorWho") as in applygate's path pattern.
 var manualOnlyTitleRe = regexp.MustCompile(`(?i)` +
-	`^\s*(?:doctor[\s._-]*who|torchwood)\b` + // leading
-	`|[-–—:|(\[]\s*(?:doctor[\s._-]*who|torchwood)\s*[)\]]?\s*$` + // trailing tag
+	`^\s*torchwood\b` + // leading
+	`|[-–—:|(\[]\s*torchwood\s*[)\]]?\s*$` + // trailing tag
 	`|\bbig[\s._-]*finish[\s._-]*(?:productions|ident|audio)\b`) // the studio
+
+// doctorWhoTitleRe finds "Doctor Who" anywhere in a title; a title naming it
+// is manual-only unless every mention is the prose shape doctorWhoProseRe.
+var doctorWhoTitleRe = regexp.MustCompile(`(?i)\bdoctor[\s._-]*who\b`)
+
+// doctorWhoProseRe is the one known false-positive shape: an article, then
+// "doctor who" and a past-tense verb ("The Doctor Who Fooled the World", "A
+// Doctor Who Cared") -- a doctor, not the franchise.
+var doctorWhoProseRe = regexp.MustCompile(`(?i)\b(?:the|a|an)\s+(doctor\s+who)\s+[a-z]+ed\b`)
+
+// namesDoctorWho reports whether title mentions Doctor Who other than in the
+// prose shape. It fails toward true: a false positive only skips a row, a
+// miss bulk-applies owner-manual content.
+func namesDoctorWho(title string) bool {
+	prose := map[int]bool{}
+	for _, m := range doctorWhoProseRe.FindAllStringSubmatchIndex(title, -1) {
+		prose[m[2]] = true
+	}
+	for _, m := range doctorWhoTitleRe.FindAllStringIndex(title, -1) {
+		if !prose[m[0]] {
+			return true
+		}
+	}
+	return false
+}
 
 // GuardBookTitle is the owner-manual check on a book's title. Paths and
 // series miss a Doctor Who / Big Finish / Torchwood book whose files sit on a
 // neutral path with no series row; its title still names it.
 //
-// A title is prose, not a path: the path/series pattern would take "The
-// Doctor Who Fooled the World" or "Big Finish to the Season". So the title
-// must name the franchise as a franchise: leading ("Doctor Who: Apollo 23",
-// "Torchwood: ..."), as a separated tag ("Frontios - Doctor Who",
-// "Frontios (Doctor Who)"), or the studio by its full name ("Big Finish
-// Productions").
+// "Doctor Who" anywhere in the title counts ("Nelvana Doctor Who", "The
+// Language of Doctor Who"), except the prose shape "The Doctor Who Fooled
+// the World" (namesDoctorWho); the check fails toward skipping, since a false
+// positive only holds a row. Torchwood must lead ("Torchwood: ...") or be a
+// separated tag ("... - Torchwood"), and the studio must be named in full
+// ("Big Finish Productions"): "Secrets of the Torchwood Estate" and "Big
+// Finish to the Season" are prose.
 func GuardBookTitle(bookID, title string) (kind, reason string) {
-	if manualOnlyTitleRe.MatchString(title) {
+	if namesDoctorWho(title) || manualOnlyTitleRe.MatchString(title) {
 		return SkipOwnerManual, fmt.Sprintf("member %s is Doctor Who / Big Finish / Torchwood (title %q); owner applies these by hand", bookID, title)
 	}
 	return "", ""
