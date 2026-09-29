@@ -59,8 +59,9 @@ steps:
       - awk -v wf=test-server-scanner 'NR>1{t+=$$2; if($$3>0)c+=$$2} END{printf "CI-COVERAGE workflow=%s covered=%d total=%d\n", wf, c, t}' cover.out
 
   - name: cleanup
-    # Runs on success and failure: the local backend never deletes a pipeline's
-    # workdir, so clear this clone and anything left in the per-run HOME.
+    # Runs on success and failure: clear this clone and anything left in the
+    # per-run HOME, so the agent's own workdir removal at teardown cannot trip
+    # on read-only files.
     image: bash
     when:
       - status: [success, failure]
@@ -76,8 +77,12 @@ steps:
       - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
       # A killed build leaves its go-build temp dir behind; clear any over an hour old.
       - 'find "$${TMPDIR:-/tmp}" -maxdepth 1 -name "go-build*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true'
-      # A killed or cancelled pipeline never reaches this step, so its whole
-      # workdir (woodpecker-local-<n>, the parent of HOME) stays behind. Sweep
-      # siblings older than 3 hours; no local workflow runs that long (the test
-      # timeout is 25m). 114 of them held 93 GB on llm1 on 2026-09-29.
+      # Backstop for leftover workdirs (woodpecker-local-<n>, the parent of
+      # HOME). The agent removes a workflow's workdir at teardown, but that
+      # removal failed on the read-only Go module cache each run used to keep
+      # under its own HOME ("could not destroy workflow ... permission denied"),
+      # and 114 such dirs held 93 GB on llm1 by 2026-09-29. The shared GOMODCACHE
+      # above fixed the cause; this clears anything an agent crash or a future
+      # regression leaves. Sweeps siblings older than 3 hours: safe only while
+      # the repo's Woodpecker pipeline timeout (60 min) stays below that.
       - '[ -n "$${HOME}" ] && W=$$(dirname "$${HOME}") && R=$$(dirname "$$W") && case "$$(basename "$$W")" in woodpecker-local-*) find "$$R" -mindepth 1 -maxdepth 1 -name "woodpecker-local-*" -type d ! -path "$$W" -mmin +180 -exec sh -c "chmod -R u+w \"\$$@\" && rm -rf \"\$$@\"" _ {} + ;; esac || true'
