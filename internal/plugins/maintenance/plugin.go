@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.57.2
+// version: 1.58.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package maintenance
 
@@ -33,8 +33,10 @@ type Plugin struct {
 func (p *Plugin) Repairs() *repairs.Registry {
 	p.repairsOnce.Do(func() {
 		p.repairsReg = repairs.NewRegistry()
-		if err := p.repairsReg.Register(newVGPrimaryFixer(p)); err != nil {
-			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
+		for _, fx := range []repairs.Fixer{newVGPrimaryFixer(p), newFragmentFixer(p)} {
+			if err := p.repairsReg.Register(fx); err != nil {
+				logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
+			}
 		}
 	})
 	return p.repairsReg
