@@ -1,5 +1,5 @@
 # file: .woodpecker/checks-lint.yaml
-# version: 2.0.0
+# version: 2.1.0
 # guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
 # last-edited: 2026-09-29
 #
@@ -45,7 +45,6 @@ variables:
     GOCACHE: /ci-cache/go-build
     GOMODCACHE: /ci-cache/gomod
     GOBIN: /ci-cache/bin
-    GOLANGCI_LINT_CACHE: /ci-cache/golangci-lint
     XDG_CACHE_HOME: /ci-cache/xdg
 
 steps:
@@ -53,12 +52,14 @@ steps:
     image: *go_image
     environment: *go_env
     commands:
-      # Fails fast if the agent's cache mount is missing: without it these
-      # paths would sit in the step container and vanish with it.
-      - 'mountpoint -q /ci-cache || { echo "::error::/ci-cache is not mounted; see docs/ci/woodpecker.md"; exit 1; }'
-      # A few seconds once the caches are warm; go install renames the binary
-      # into GOBIN, so a concurrent workflow still running the old one is
-      # unaffected.
+      # Fails fast unless /ci-cache is the real cache dataset. A bind mount
+      # alone is not proof: if the dataset is not mounted on the host, docker
+      # creates an empty host directory in its place, on the root filesystem
+      # and outside the quota. The marker file lives only on the dataset.
+      - 'test -f /ci-cache/.woodpecker-cache-dataset || { echo "::error::/ci-cache is not the nvmecache/woodpecker-cache dataset; see docs/ci/woodpecker.md"; exit 1; }'
+      # A few seconds once the caches are warm: go install skips the copy when
+      # the installed binary is already current, so only a version bump
+      # rewrites a file in GOBIN.
       - go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
       - go install github.com/vektra/mockery/v3@v3.7.4
@@ -80,9 +81,11 @@ steps:
       - make --no-print-directory lint-errcheck-ratchet
 
   - name: mocks-check
+    # After the linters, not beside them: mockery rewrites the committed mock
+    # files, and a linter parsing one mid-write reports a spurious error.
     image: *go_image
     environment: *go_env
-    depends_on: [tools]
+    depends_on: [staticcheck, errcheck-ratchet]
     commands:
       - export PATH="$$GOBIN:$$PATH"
       - make --no-print-directory mocks-check
@@ -97,4 +100,4 @@ steps:
     when:
       - status: [success, failure]
     commands:
-      - python3 scripts/ci/trim_go_cache.py "$${GOCACHE}" --max-gb 40 --target-gb 30
+      - python3 scripts/ci/trim_go_cache.py "$${GOCACHE}" --max-gb 40 --target-gb 30 || true

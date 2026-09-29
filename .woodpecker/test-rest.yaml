@@ -1,5 +1,5 @@
 # file: .woodpecker/test-rest.yaml
-# version: 1.5.2
+# version: 1.5.3
 # guid: c84e1b3d-2f9a-4c57-8d06-e3a1b7f5d942
 # last-edited: 2026-09-29
 #
@@ -12,14 +12,15 @@
 #
 # The exclusion list below must stay the exact complement of the other two test
 # workflows, so each package runs exactly once and the coverage sum counts it
-# once. `go list` runs on a fresh clone, where web/node_modules does not exist.
-# That keeps the third-party Go package vendored inside it out of the list.
+# once. go.mod's `ignore ./web` keeps npm's third-party Go packages under
+# web/node_modules out of `./...`.
 #
 # The decode packages need ffmpeg, ffprobe and fpcalc, so this runs on the U1
 # agent (local backend, Linux amd64, user `woodpecker`), never on the prod host.
 # Its caches live on U1's `tank/ci` ZFS dataset. It ran on the developer Mac,
 # then briefly on llm1, until U1 joined on 2026-09-29. U1 also runs
-# test-database; llm1 runs test-server-scanner; U0 runs only `checks`.
+# test-database and checks-build; llm1 runs test-server-scanner; U0 runs
+# only checks-lint.
 
 labels:
   host: u1
@@ -60,7 +61,7 @@ steps:
       # python3 runs the cache cap in cleanup; fail here, loudly, if it is missing.
       - command -v ffmpeg && command -v ffprobe && command -v fpcalc && python3 --version
       - >-
-        PKGS=$$(go list ./... | grep -v /node_modules/ |
+        PKGS=$$(go list ./... |
         grep -vxE 'github.com/falkcorp/audiobook-organizer/internal/(database|server|scanner|server/handlers/abs)')
         && go test $$PKGS -short -race -covermode=atomic -coverprofile=cover.out -timeout 25m
       - awk -v wf=test-rest 'NR>1{t+=$$2; if($$3>0)c+=$$2} END{printf "CI-COVERAGE workflow=%s covered=%d total=%d\n", wf, c, t}' cover.out
