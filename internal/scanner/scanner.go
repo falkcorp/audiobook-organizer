@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.115.0
+// version: 1.116.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package scanner
 
@@ -2129,7 +2129,8 @@ func extractInfoFromPath(book *Book) {
 		// had one, filed that author as the series.
 		p := authorname.ParseDashFilename(baseName, path)
 		// A tag already named the author: orient the split by it. The side
-		// matching the tag is the author and the other the title; a parsed
+		// crediting every tagged name (authorname.CreditIncludes) is the
+		// author and the other the title; a parsed
 		// author that DISAGREES with the tag was a guess and is refused, so
 		// the pair reads as series - title. Without this, "Andy Weir - Project
 		// Hail Mary" (tag Andy Weir) could not be told from "The Hunger Games
@@ -2139,9 +2140,9 @@ func extractInfoFromPath(book *Book) {
 			if dp := strings.SplitN(baseName, " - ", 2); len(dp) == 2 && !strings.Contains(dp[1], " - ") {
 				l, r := strings.TrimSpace(dp[0]), strings.TrimSpace(dp[1])
 				switch {
-				case authorname.SameCredit(l, book.Author):
+				case authorname.CreditIncludes(l, book.Author):
 					p = authorname.DashParse{Parsed: true, Author: l, Title: r}
-				case authorname.SameCredit(r, book.Author):
+				case authorname.CreditIncludes(r, book.Author):
 					p = authorname.DashParse{Parsed: true, Author: r, Title: l}
 				case p.Author != "":
 					p = authorname.DashParse{Parsed: true, Series: l, Title: r}

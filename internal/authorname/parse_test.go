@@ -1,7 +1,7 @@
 // file: internal/authorname/parse_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3b8e5f27-14a9-4c03-9d6b-8e21f70a4c95
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package authorname
 
@@ -289,6 +289,8 @@ func TestParseDashFilename(t *testing.T) {
 		{"Mistborn 01 - Brandon Sanderson (Unabridged)", "Brandon Sanderson (Unabridged)", "Mistborn 01", ""},
 		{"Discworld 01 - J. R. R. Tolkien", "J. R. R. Tolkien", "Discworld 01", ""},
 		{"Good Omens 01 - Neil Gaiman & Terry Pratchett", "Neil Gaiman & Terry Pratchett", "Good Omens 01", ""},
+		{"Heinlein 01 - Robert A Heinlein", "Robert A Heinlein", "Heinlein 01", ""},
+		{"Discworld 08 - Guards, Guards", "", "Guards, Guards", "Discworld 08"},
 	}
 	for _, tc := range cases {
 		got := ParseDashFilename(tc.in, "")
@@ -327,7 +329,7 @@ func TestParseDashFilename(t *testing.T) {
 	}
 }
 
-func TestSameCredit(t *testing.T) {
+func TestCreditIncludes(t *testing.T) {
 	for _, tc := range []struct {
 		a, b string
 		want bool
@@ -345,10 +347,14 @@ func TestSameCredit(t *testing.T) {
 		{"Neil Gaiman, Terry Pratchett", "Terry Pratchett Neil Gaiman", false},
 		{"Tolkien, J.R.R.", "J.R.R. Tolkien", true},
 		{"Le Guin, Ursula K.", "Ursula K. Le Guin", true},
-		{"Douglas Preston & Lincoln Child", "Lincoln Child", false},
+		// Round-5: the TAG's names need only be a subset of the side's.
+		{"Douglas Preston & Lincoln Child", "Lincoln Child", true},
+		{"Neil Gaiman & Terry Pratchett", "Neil Gaiman", true},
+		{"Lincoln Child", "Douglas Preston & Lincoln Child", false},
+		{"Stephen King", "S. King", false},
 	} {
-		if got := SameCredit(tc.a, tc.b); got != tc.want {
-			t.Errorf("SameCredit(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		if got := CreditIncludes(tc.a, tc.b); got != tc.want {
+			t.Errorf("CreditIncludes(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
 	}
 }
@@ -372,6 +378,12 @@ func TestLooksLikeStrongName(t *testing.T) {
 		{"Mr. Mercedes", false},
 		{"Oathbringer Part One", false},
 		{"Preston & Child", false},
+		// Round-5: a bare middle initial is an initial, not the article.
+		{"Robert A Heinlein", true},
+		{"Robert A. Heinlein", true},
+		{"Words A Radiance", true},
+		{"A Man Called Ove", false},
+		{"Guards, Guards", false},
 	} {
 		if got := looksLikeStrongName(tc.in); got != tc.want {
 			t.Errorf("looksLikeStrongName(%q) = %v, want %v", tc.in, got, tc.want)
@@ -392,6 +404,19 @@ func TestExtractAuthorAboveTitle(t *testing.T) {
 		{"/lib/Stephen King/Stephen Kingdom", "Stephen Kingdom", "Stephen King"},
 		// LIMIT: not prefixing its titles, a series folder is person-shaped.
 		{"/lib/Jack Reacher/Killing Floor", "Killing Floor", "Jack Reacher"},
+		// Round-5: an author's name opening the title is ordinary shelving;
+		// only a lowercase or joining word after it refuses.
+		{"/lib/Stephen King/Stephen King - The Stand", "Stephen King - The Stand", "Stephen King"},
+		{"/lib/Stephen King/Stephen King Collection", "Stephen King Collection", "Stephen King"},
+		{"/lib/Stephen King/Stephen King Short Stories", "Stephen King Short Stories", "Stephen King"},
+		{"/lib/Brandon Sanderson/Brandon Sanderson Mistborn", "Brandon Sanderson Mistborn", "Brandon Sanderson"},
+		{"/lib/Lee Child/Lee Child Jack Reacher 01 Killing Floor", "Lee Child Jack Reacher 01 Killing Floor", "Lee Child"},
+		{"/lib/Harry Potter/Harry Potter And The Goblet Of Fire", "Harry Potter And The Goblet Of Fire", ""},
+		{"/lib/Harry Potter/Harry Potter in Paris", "Harry Potter in Paris", ""},
+		{"/lib/Terry Pratchett/Terry Pratchett The Colour of Magic", "Terry Pratchett The Colour of Magic", "Terry Pratchett"},
+		{"/lib/Stephen King/Stephen King The Stand", "Stephen King The Stand", "Stephen King"},
+		// COST of the narrower rule: a capitalised word after a series name.
+		{"/lib/Alex Cross/Alex Cross Must Die", "Alex Cross Must Die", "Alex Cross"},
 		// title "" is the ordinary fallback.
 		{"/lib/Harry Potter/x.mp3", "", "Harry Potter"},
 	} {
