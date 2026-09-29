@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-28
 
@@ -654,26 +654,26 @@ func (s *Server) DedupTriageExactPending(ctx context.Context, apply bool) (*main
 }
 
 // SearchTranscriptionCandidate implements maintenance.ServerDeps.
-// Uses the local metadata cache — no external API calls. Returns (title,
-// author, score, true, nil) when a cached candidate exists; (‟", "", 0,
-// false, nil) on cache-miss or unavailable service.
-func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ string) (string, string, float64, bool, error) {
+// Uses the local metadata cache — no external API calls. Returns the top
+// cached candidate (title, author, series, score) and true when one exists;
+// the zero value and false on cache-miss or unavailable service.
+func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ string) (maintenanceplugin.TranscriptionCandidate, bool, error) {
 	if s.metadataFetchService == nil {
-		return "", "", 0, false, nil
+		return maintenanceplugin.TranscriptionCandidate{}, false, nil
 	}
 	entry, _, err := s.metadataFetchService.GetCachedCandidates(bookID)
 	if err != nil {
-		return "", "", 0, false, err
+		return maintenanceplugin.TranscriptionCandidate{}, false, err
 	}
 	if entry == nil || len(entry.Candidates) == 0 {
-		return "", "", 0, false, nil
+		return maintenanceplugin.TranscriptionCandidate{}, false, nil
 	}
 	// Cache is stored score-descending; first entry is the best.
 	var best metafetch.MetadataCandidate
 	if err := json.Unmarshal(entry.Candidates[0], &best); err != nil {
-		return "", "", 0, false, nil
+		return maintenanceplugin.TranscriptionCandidate{}, false, nil
 	}
-	return best.Title, best.Author, best.Score, true, nil
+	return maintenanceplugin.TranscriptionCandidate{Title: best.Title, Author: best.Author, Series: best.Series, Score: best.Score}, true, nil
 }
 
 // ApplyTranscriptionCandidate implements maintenance.ServerDeps.
@@ -696,11 +696,17 @@ func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ st
 //
 // SourceHash layer (INIT-3-T5): the slot-0 identity re-check catches a cache
 // row whose top candidate was swapped, but NOT a row whose search INPUTS
-// drifted (the book's title/author/narrator/series was edited) while the top
-// candidate happened to stay put. ValidateCachedIdentity recomputes the stored
-// SourceHash over the book's CURRENT fields and refuses on mismatch (fail
-// closed); legacy rows with an empty hash fail open with a warning. This runs
-// BEFORE the slot-0 check as a first, independent layer — both guards are kept.
+// drifted (the book's title or author was edited) while the top candidate
+// happened to stay put. The row's identity is checked exactly as the bulk-apply
+// planner checks it (planCachedApply): ValidateCachedIdentityForBook with the
+// book's LIVE authors, and for a row found by the book's transcribed title the
+// same transcription lift (cachedTranscribedSearch +
+// applygate.TranscribedIdentityLifts). A row the planner accepts is accepted
+// here and one it refuses is refused here; before 2026-09-28 this path used
+// ValidateCachedIdentity with the Book.Author snapshot and the full
+// narrator/series shape, so it refused every batch row hashed with the live
+// author or a transcribed query. Legacy rows with an empty hash fail open with
+// a warning, as in the planner. Both guards are kept.
 func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTitle, gatedAuthor string) error {
 	if s.metadataFetchService == nil {
 		return fmt.Errorf("metadata fetch service not initialized")
@@ -727,27 +733,14 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 	if book == nil {
 		return fmt.Errorf("book %s not found for cache-identity check", bookID)
 	}
-	curAuthor := ""
-	if book.Author != nil && book.Author.Name != "" {
-		curAuthor = book.Author.Name
-	}
-	curNarrator := ""
-	if book.Narrator != nil {
-		curNarrator = *book.Narrator
-	}
-	curSeries := ""
-	if book.Series != nil && book.Series.Name != "" {
-		curSeries = book.Series.Name
-	}
-	if verr := s.metadataFetchService.ValidateCachedIdentity(entry, bookID, book.Title, curAuthor, curNarrator, curSeries); verr != nil {
-		slog.Warn("apply-transcription-candidate: cache source-hash drift since write",
-			"book_id", bookID, "error", verr)
-		return verr
-	}
-
 	var cand metafetch.MetadataCandidate
 	if err := json.Unmarshal(entry.Candidates[0], &cand); err != nil {
 		return fmt.Errorf("decode cached candidate for book %s: %w", bookID, err)
+	}
+	if verr := transcriptionCacheIdentity(s.metadataFetchService, s.store, entry, book, cand); verr != nil {
+		slog.Warn("apply-transcription-candidate: cache identity does not match the book",
+			"book_id", bookID, "error", verr)
+		return verr
 	}
 
 	titleMismatch := util.NormalizeTitle(cand.Title) != util.NormalizeTitle(gatedTitle)
@@ -767,10 +760,11 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 
 	// OWNER-MANUAL-ONLY (owner rule, standing): Doctor Who / Big Finish /
 	// Torchwood are never written by a bulk apply, and this op is one. The
-	// op pre-checks without the series row (its store has none); this is the
-	// authoritative check, with the series row, every book_file path, the
-	// transcribed title the candidate was matched by, and the FULL candidate
-	// (its series too). A store read fault refuses as well (fail closed).
+	// op runs the same check before it counts a book eligible; this re-runs
+	// it on the book and cache row as they are at the write: the series row,
+	// every book_file path, the transcribed title the candidate was matched
+	// by, and the full candidate. A store read fault refuses as well (fail
+	// closed).
 	transcribed := ""
 	if book.TranscribedTitle != nil {
 		transcribed = *book.TranscribedTitle
@@ -835,6 +829,32 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 		return fmt.Errorf("book %s: %w", bookID, maintenanceplugin.ErrTranscriptionNothingToFill)
 	}
 	return err
+}
+
+// transcriptionCacheIdentity is the bulk-apply planner's cache-identity leg
+// (planCachedApply) for ApplyTranscriptionCandidate: nil when the row was
+// fetched for the book as it is now, else the ErrStaleMetadataCache error.
+//
+// It is the planner's check, not a copy of it: ValidateCachedIdentityForBook
+// with the book's live authors (database.LiveBookAuthorNames; a read failure
+// refuses), then, for a stale row, the transcription lift the certainty gate
+// applies (cachedTranscribedSearch proves the row differs from the book only
+// in its transcribed query, applygate.TranscribedIdentityLifts that the
+// candidate matches that transcription and nothing contradicts it).
+func transcriptionCacheIdentity(svc cachedApplyService, books bookReader, entry *metafetch.MetadataCandidateCache, book *database.Book, cand metafetch.MetadataCandidate) error {
+	live, err := database.LiveBookAuthorNames(books, book)
+	if err != nil {
+		return fmt.Errorf("read live authors of %s for the cache-identity check: %w", book.ID, err)
+	}
+	idErr := svc.ValidateCachedIdentityForBook(entry, book, live)
+	if idErr == nil {
+		return nil
+	}
+	ts := cachedTranscribedSearch(svc, books, entry, book, live, idErr)
+	if applygate.TranscribedIdentityLifts(book, applygate.Authors(live), &cand, ts) {
+		return nil
+	}
+	return idErr
 }
 
 // fillableTranscriptionFields is transcriptionApplyFields minus every field

@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_fields_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c4e1b58-2a93-4f60-9d17-5b8e03c2a7f4
-// last-edited: 2026-09-14
+// last-edited: 2026-09-28
 
 package server
 
@@ -55,7 +55,8 @@ func TestApplyTranscriptionCandidate_AppliesOnlyGatedFields(t *testing.T) {
 	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
 	ctx := context.Background()
 
-	candTitle, candAuthor, _, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	top, found, err := s.SearchTranscriptionCandidate(ctx, bookID, "irrelevant", "irrelevant")
+	candTitle, candAuthor := top.Title, top.Author
 	if err != nil || !found {
 		t.Fatalf("SearchTranscriptionCandidate() = (found=%v, err=%v), want found=true", found, err)
 	}
