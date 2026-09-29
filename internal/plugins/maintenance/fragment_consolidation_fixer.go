@@ -756,6 +756,10 @@ type fragGroupPlan struct {
 	Dir, Key   string
 	SurvivorID string
 	Title      string // "" keeps the survivor's title
+	// Folder is the one folder every member's file sits in now, which
+	// becomes the survivor's book path (a multi-file book's path is its
+	// folder). "" when the files are spread out: the path is left alone.
+	Folder string
 	Members    []fragGroupMember
 }
 
@@ -847,8 +851,18 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	sort.Strings(ids)
 	plan.SurvivorID = ids[0]
 	survivor := lib.books[plan.SurvivorID]
-	if t, _, ok := metadata.ChapterTitleFromDirectory(filepath.Join(dir, "x"), ""); ok && t != survivor.Title {
+	// Title and Folder are decided from the group alone, never from whether
+	// the survivor already has them: a run cut off after the retitle must
+	// re-plan to the same fingerprint (the write is then a no-op).
+	if t, _, ok := metadata.ChapterTitleFromDirectory(filepath.Join(dir, "x"), ""); ok {
 		plan.Title = t
+	}
+	plan.Folder = filepath.Dir(cs[0].File.Path)
+	for _, c := range cs[1:] {
+		if filepath.Dir(c.File.Path) != plan.Folder {
+			plan.Folder = ""
+			break
+		}
 	}
 	r := repairs.Row{RowID: noParentRowID(dir, key), Class: fragClassNoParent, BookIDs: ids,
 		Title: survivor.Title, Author: lib.authorName(survivor), Risk: repairs.RiskReview, Detail: plan}
@@ -901,7 +915,10 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	if k, why := f.guard(lib, books, extra); k != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
 	}
-	r.Fingerprint = fragFingerprint(append([]string{fragClassNoParent, dir, key, plan.SurvivorID, plan.Title}, fpParts...)...)
+	if plan.Folder != "" {
+		r.Proposed["book_path"] = plan.Folder
+	}
+	r.Fingerprint = fragFingerprint(append([]string{fragClassNoParent, dir, key, plan.SurvivorID, plan.Title, plan.Folder}, fpParts...)...)
 	return r
 }
 
@@ -1177,6 +1194,13 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 				steps++
 			}
 		}
+		if plan.Folder != "" {
+			if did, err := f.setBookFolder(w, plan.SurvivorID, plan.Folder); err != nil {
+				return partial(err)
+			} else if did {
+				steps++
+			}
+		}
 		if plan.Title != "" {
 			if did, err := f.retitle(store, w, plan.SurvivorID, plan.Title); err != nil {
 				return partial(err)
@@ -1208,6 +1232,24 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	default:
 		return fmt.Errorf("%s: row %s carries no plan", fragFixerID, fresh.RowID)
 	}
+}
+
+// setBookFolder points the survivor's book path at the folder its files now
+// share, journaled as a restorable book_path_update (nothing moves on disk).
+func (f *fragmentFixer) setBookFolder(w *repairs.Writer, id, folder string) (bool, error) {
+	var old string
+	changed, err := w.Modify(id, func(b *database.Book) error {
+		old = b.FilePath
+		b.FilePath = folder
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	if len(changed) == 0 || old == folder {
+		return false, nil
+	}
+	return true, w.Journal(id, undo.ChangeTypeBookPathUpdate, "file_path", old, folder)
 }
 
 // retitle sets the survivor's title unless it is locked, journaled as a
