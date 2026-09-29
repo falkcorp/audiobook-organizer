@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-09-29
 
@@ -684,6 +684,14 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	}
 	if folder != "" && !weakFolder {
 		pathEv = append(pathEv, evidence{folderSrc, folder})
+	} else if weakFolder {
+		// A weak stem is never proposed, but one that still names something
+		// ("The_Final_Empire", "It", "1Q84") vetoes evidence that disagrees
+		// with it. A stem of rip tokens only ("hp1", "final",
+		// "audible_download_2019") says nothing and vetoes nothing.
+		if clean, ok := weakStemVeto(folder); ok {
+			pathEv = append(pathEv, evidence{folderSrc, clean})
+		}
 	}
 	if len(pathEv) > 0 {
 		pathTitles := make([]string, len(pathEv))
@@ -833,6 +841,66 @@ func isWeakFileStem(stem string) bool {
 		}
 	}
 	return false
+}
+
+// ripTokens are words of a rip's file name that name no work.
+var ripTokens = map[string]bool{"kbps": true, "bitrate": true, "download": true, "downloaded": true,
+	"final": true, "merged": true, "output": true, "audible": true, "audiobook": true, "mp3": true,
+	"m4b": true, "m4a": true, "unabridged": true, "abridged": true, "part": true, "disc": true, "track": true}
+
+var kbpsTokenRe = regexp.MustCompile(`(?i)^\d+kbps$`)
+
+// weakStemVeto decides whether a weak filename stem still names a work, and
+// returns it cleaned for the conflict check: underscores become spaces and
+// rip tokens are trimmed off both ends ("dune_messiah_64kbps" → "dune
+// messiah"; a bare year at an end goes too while another word remains).
+// Tokens inside the stem stay, so "The_Final_Empire" keeps its "Final".
+// It vetoes when the cleaned stem keeps a word of three or more letters
+// that is no rip token, or when it is one short word that reads like a
+// title rather than an abbreviation: a vowel ("It") or a leading digit
+// with a letter ("1Q84"), not "hp1" or "zz". A stem of rip tokens only
+// ("final", "audible_download_2019") vetoes nothing.
+func weakStemVeto(stem string) (string, bool) {
+	words := strings.Fields(strings.ReplaceAll(stem, "_", " "))
+	noise := func(w string, others bool) bool {
+		lw := strings.ToLower(w)
+		if ripTokens[lw] || kbpsTokenRe.MatchString(lw) {
+			return true
+		}
+		return others && strings.IndexFunc(w, func(r rune) bool { return !unicode.IsDigit(r) }) < 0
+	}
+	for len(words) > 0 && noise(words[0], len(words) > 1) {
+		words = words[1:]
+	}
+	for len(words) > 0 && noise(words[len(words)-1], len(words) > 1) {
+		words = words[:len(words)-1]
+	}
+	if len(words) == 0 {
+		return "", false
+	}
+	clean := strings.Join(words, " ")
+	for _, w := range words {
+		if ripTokens[strings.ToLower(w)] {
+			continue
+		}
+		letters := 0
+		for _, r := range w {
+			if unicode.IsLetter(r) {
+				letters++
+			}
+		}
+		if letters >= 3 && letters == len([]rune(w)) {
+			return clean, true
+		}
+	}
+	if len(words) == 1 && len([]rune(clean)) <= 4 {
+		first := []rune(clean)[0]
+		hasLetter := strings.IndexFunc(clean, unicode.IsLetter) >= 0
+		if strings.ContainsAny(strings.ToLower(clean), "aeiou") || (unicode.IsDigit(first) && hasLetter) {
+			return clean, true
+		}
+	}
+	return "", false
 }
 
 // hasSubtitle: s is p followed by a subtitle separator.
