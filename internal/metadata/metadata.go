@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 // last-edited: 2026-09-28
 
@@ -765,6 +765,10 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 		if dirTitle, titleDir, ok := ChapterTitleFromDirectory(filePath, metadata.Title); ok {
 			metadata.Title = dirTitle
 			authorProbe = titleDir
+		} else if ParentIsTitleFolder(filePath, metadata.Title) {
+			// "<author>/<title>/<title>.ext": the parent is the TITLE, so the
+			// author is read from the folder above it.
+			authorProbe = filepath.Dir(filePath)
 		}
 
 		// The organizer names an authorless book "<title> - Unknown Author.ext", so
@@ -843,7 +847,7 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 
 	// Try to parse "Title - Author" or "Author - Title" patterns
 	if strings.Contains(filename, " - ") {
-		// ParseDashFilename, not ParseFilenameForAuthor: when no author is
+		// ParseDashFilename, not a bare (title, author) parse: when no author is
 		// found the parser also says whether the left side may be a SERIES.
 		// Splitting every authorless pair into series=left, title=right filed
 		// refused real credits as series ("An Na - A Step from Heaven" ->

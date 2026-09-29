@@ -1,7 +1,7 @@
 // file: internal/metadata/chapter_title.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c962e504-746a-454a-996f-1020803a8cab
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package metadata
 
@@ -229,6 +229,24 @@ func WorkFolderTitle(path string) (string, bool) {
 	t, _, ok := workFolder(p, true)
 	t = strings.TrimSpace(t)
 	return t, ok && t != ""
+}
+
+// ParentIsTitleFolder reports whether the folder holding filePath is named
+// exactly the book's title -- the organizer's "<author>/<title>/<file>" layout,
+// and any library shelved the same way. The author-from-directory fallback
+// reads the IMMEDIATE parent, which here is the title, so a person-shaped title
+// ("Good Omens", "Pratchett 036" is not, "The Martian" is refused as a work)
+// was filed as the author. Callers pass the folder itself as the probe instead,
+// so the fallback reads the folder ABOVE it
+// (todo.d/20260825-directory-fallback-reads-title-as-author.md). It only fires
+// on an exact, case-insensitive name match, so an author folder holding
+// "<author>/<title>.ext" is untouched.
+func ParentIsTitleFolder(filePath, title string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(filepath.Base(filepath.Dir(filePath))), title)
 }
 
 // SeriesFromTitlePrefix decides whether the "X" of an authorless "X - ... - Y"

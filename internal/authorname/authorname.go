@@ -1,7 +1,7 @@
 // file: internal/authorname/authorname.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5e2b7c14-9a36-4f81-b0d7-2c93e845af60
-// last-edited: 2026-09-01
+// last-edited: 2026-09-28
 
 // Package authorname holds the one author name the system writes to mean "we
 // could not resolve an author".
@@ -18,7 +18,7 @@
 // This package once unified the LITERAL only, and carried a NOTE that the
 // filename/directory author parsers themselves still existed twice, in
 // internal/scanner and internal/metadata, as divergent copies. That is CLOSED:
-// ExtractAuthorFromDirectory and ParseFilenameForAuthor now live here, in
+// ExtractAuthorFromDirectory and ParseDashFilename now live here, in
 // parse.go, with one implementation each. See that file for what the two copies
 // actually differed on -- measured, and smaller than it looked.
 //
