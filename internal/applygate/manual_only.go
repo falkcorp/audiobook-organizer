@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
 // last-edited: 2026-09-29
 
@@ -20,7 +20,21 @@ import (
 // book id. Separators between words vary across rips ("Doctor.Who",
 // "Doctor_Who", "DoctorWho"), so any run of separators, or none, is accepted.
 // Match it through matchesManualOnly, never directly: see FoldUnderscores.
-var manualOnlyRe = regexp.MustCompile(`(?i)\b(doctor[\s._-]*who|big[\s._-]*finish|torchwood)\b`)
+//
+// The Doctor ranges count too, not only the literal "Doctor Who": Big Finish
+// sells "The Thirteenth Doctor Adventures", "The War Doctor", "The Fugitive
+// Doctor" and "The 13th Doctor" series whose names never say "Doctor Who",
+// and on 2026-09-29 a junk-author trial would have minted "The Thirteenth
+// Doctor Adventures" as an author for them. An ordinal ("First" ..
+// "Fifteenth", or "1st" .. "15th"), "War" or "Fugitive" directly before
+// "Doctor" is one. "War Doctor" also names a surgeon's memoir; the check
+// fails toward holding a row, as every owner-manual guard does. A bare
+// "Doctor" is not ("Doctor Sleep", "Doctors Orders"), and neither is "The
+// Doctor's Wife": it is a Doctor Who episode title, but also a novel, and a
+// title with no range, franchise or studio word names neither.
+var manualOnlyRe = regexp.MustCompile(`(?i)\b(doctor[\s._-]*who|big[\s._-]*finish|torchwood|` +
+	`(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|` +
+	`[1-9](?:st|nd|rd|th)|1[0-5]th|war|fugitive)[\s._-]*doctor)\b`)
 
 // FoldUnderscores turns every "_" into a space so a \b pattern sees a word
 // boundary there. "_" is a regexp word character, so \b never fires next to

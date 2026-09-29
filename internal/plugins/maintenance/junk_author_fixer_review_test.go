@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
 // last-edited: 2026-09-29
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -722,4 +723,69 @@ func (j failJournal) CreateOperationChange(ch *database.OperationChange) error {
 		return errors.New("journal down")
 	}
 	return j.Store.CreateOperationChange(ch)
+}
+
+// ---- 2026-09-29 trial: targets that are junk themselves ----
+
+// A person with a series in parentheses is junk when the library has that
+// series, and resolves to the person; the verdict holds from Plan through
+// Replan to Apply. A narrator parenthetical is left alone, and a junk-shaped
+// name is never a relink target.
+func TestJunkAuthorFixer_SeriesParentheticalResolvesToPerson(t *testing.T) {
+	f := newJunkFixture(t)
+	f.mkSeries("Dragon Born", "Dante King")
+	f.book(junkBookSpec{title: "Dragon Born 1", path: "/lib/dk/db1", author: "Dante King", series: "Dragon Born"})
+	paren := f.book(junkBookSpec{title: "Shifter Hoard", path: "/lib/dk/db2", author: "Dante King (Dragon Born)"})
+	f.book(junkBookSpec{title: "Hounded", path: "/lib/kh/h", author: "Kevin Hearne (Luke Daniels)"})
+	// A junk credit whose file names a junk-shaped "author": no target.
+	tagged := f.book(junkBookSpec{title: "Some Book", path: "/lib/x/sb", author: "Book 1 (Unabridged)",
+		tags: map[string]string{"artist": "Dante King (Dragon Born)"}})
+	plan := f.plan()
+
+	r := f.row(plan, "Dante King (Dragon Born)", paren)
+	require.NotNil(t, r)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Equal(t, "series_name", r.Current["class"], r.Reason)
+	require.Equal(t, junkAuthorDecRelink, r.Proposed["decision"], r.Reason)
+	require.Equal(t, "Dante King", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSrcCleaned, r.Proposed["source"])
+	noRowsFor(t, f, plan, "Kevin Hearne (Luke Daniels)")
+	if tr := f.row(plan, "Book 1 (Unabridged)", tagged); tr != nil {
+		require.NotEqual(t, strconv.Itoa(f.authors["Dante King (Dragon Born)"]), tr.Proposed["author_id"], tr.Reason)
+		require.NotEqual(t, "Dante King (Dragon Born)", tr.Proposed["author"], tr.Reason)
+	}
+
+	res := f.apply(plan, []string{r.RowID})
+	require.Equal(t, 1, res.Applied, "Replan must reach the plan's verdict: %v", res.ByOutcome)
+	require.Equal(t, []int{f.authors["Dante King"]}, f.credits(paren))
+}
+
+// "The Thirteenth Doctor Adventures" is four capitalized words, so the
+// person-shape test passed it and the trial minted it as an author for Big
+// Finish books. It is neither minted nor applied: the name is junk, and the
+// Doctor range is owner-manual. An article-led name is never minted.
+func TestJunkAuthorFixer_NeverMintsTitleShapedNames(t *testing.T) {
+	f := newJunkFixture(t)
+	dw := f.book(junkBookSpec{title: "The Return of the Doctor", path: "/lib/ad/rd", author: "Book 1 (Unabridged)",
+		tags: map[string]string{"artist": "The Thirteenth Doctor Adventures"}})
+	tt := f.book(junkBookSpec{title: "Dyke 2288", path: "/lib/ad/tt", author: "Opening Credits",
+		tags: map[string]string{"artist": "A Time Travel"}})
+	series := f.book(junkBookSpec{title: "Lionesses in Winter", path: "/lib/ad/lw", author: "The Thirteenth Doctor Adventures - Series 1",
+		tags: map[string]string{"artist": "Jacqueline Rayner"}})
+	before, err := f.s.GetAllAuthors()
+	require.NoError(t, err)
+	plan := f.plan()
+	for _, c := range []struct{ author, book string }{{"Book 1 (Unabridged)", dw}, {"Opening Credits", tt}} {
+		r := f.row(plan, c.author, c.book)
+		require.NotNil(t, r, c.author)
+		require.NotEqual(t, junkAuthorDecCreate, r.Proposed["decision"], "%s: %s", c.author, r.Reason)
+		require.NotEqual(t, junkAuthorDecRelink, r.Proposed["decision"], "%s: %s", c.author, r.Reason)
+	}
+	r := f.row(plan, "The Thirteenth Doctor Adventures - Series 1", series)
+	require.NotNil(t, r)
+	require.Equal(t, repairs.SkipOwnerManual, r.Skipped, r.Reason)
+	f.apply(plan, nil)
+	after, err := f.s.GetAllAuthors()
+	require.NoError(t, err)
+	require.Len(t, after, len(before), "no author row minted")
 }

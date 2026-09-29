@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ed721904-7696-436b-95ae-8ef5a85c91aa
 // last-edited: 2026-09-29
 
@@ -41,6 +41,31 @@ func TestIsOwnerManualOnly(t *testing.T) {
 	for _, c := range no {
 		if IsOwnerManualOnly(c[0], c[1]) {
 			t.Errorf("IsOwnerManualOnly(%q, %q) = true, want false", c[0], c[1])
+		}
+	}
+}
+
+// The Doctor ranges: Big Finish series named for a Doctor, never "Doctor
+// Who" (the 2026-09-29 junk-author trial minted "The Thirteenth Doctor
+// Adventures" as an author).
+func TestIsOwnerManualOnly_DoctorRanges(t *testing.T) {
+	for _, s := range []string{
+		"The Thirteenth Doctor Adventures", "The Thirteenth Doctor Adventures - Series 1",
+		"The First Doctor Adventures", "The Eighth Doctor - The Time War", "The Fifteenth Doctor",
+		"The War Doctor", "War.Doctor", "The Fugitive Doctor", "13th Doctor", "The 1st Doctor Adventures",
+		"Thirteenth_Doctor", "The Thirteenth Doctor_ Series 1", "ThirteenthDoctor", "The Tenth-Doctor Chronicles",
+		"/lib/Big Finish/The Fourth Doctor Adventures/01.mp3",
+	} {
+		if !IsOwnerManualOnly("", s) || !IsOwnerManualOnly(s, "") {
+			t.Errorf("IsOwnerManualOnly(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{
+		"Doctor Sleep", "Doctors Orders", "The Doctor's Wife", "Doctor Strange", "The Tenth Doctorate",
+		"Doctor Dolittle", "Second Opinion", "The First Doctors", "Warm Doctor", "16th Doctor", "The Doctor Is In",
+	} {
+		if IsOwnerManualOnly("", s) || IsOwnerManualOnly(s, "") {
+			t.Errorf("IsOwnerManualOnly(%q) = true, want false", s)
 		}
 	}
 }

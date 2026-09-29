@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -269,19 +269,21 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 	for _, n := range narrators {
 		idx.narratorsByID[n.ID] = n.Name
 	}
+	// Series first: the name verdict reads the series table
+	// (idx.classifyName).
+	for _, s := range series {
+		idx.seriesByID[s.ID] = s
+		k := authorjunk.Normalize(s.Name)
+		idx.seriesByNorm[k] = append(idx.seriesByNorm[k], s)
+	}
 	for _, a := range authors {
 		idx.authorsByID[a.ID] = a
 		if k := authorjunk.FoldKey(a.Name); k != "" {
 			idx.byName[k] = append(idx.byName[k], a)
 		}
-		if v := authorjunk.ClassifyName(a.Name); v.Junk() {
+		if v := idx.classifyName(a.Name); v.Junk() {
 			idx.strongJunk[a.ID] = v
 		}
-	}
-	for _, s := range series {
-		idx.seriesByID[s.ID] = s
-		k := authorjunk.Normalize(s.Name)
-		idx.seriesByNorm[k] = append(idx.seriesByNorm[k], s)
 	}
 	bump := func(m map[string]map[int]int, key string, id int) {
 		if key == "" {
@@ -339,6 +341,25 @@ func (f *junkAuthorFixer) cachedIndex(store OpsStore) (*junkAuthorIndex, error) 
 	}
 	f.idx, f.idxAt = idx, time.Now()
 	return idx, nil
+}
+
+// classifyName is the fixer's one strong (name-decided) verdict:
+// authorjunk.ClassifyName plus the series table, which tells "Dante King
+// (Dragon Born)" (a series in this library) from "Kevin Hearne (Luke
+// Daniels)" (a narrator). Every place that asks "is this name junk?" -- the
+// index, each answer, Replan, the pre-create check and Apply's backstop --
+// asks this, so a row's verdict does not change between plan and apply.
+func (idx *junkAuthorIndex) classifyName(name string) authorjunk.Verdict {
+	return authorjunk.ClassifyNameInLibrary(name, func(n string) bool { return len(idx.seriesByNorm[n]) > 0 })
+}
+
+// mintable reports whether name may become a NEW author row: person-shaped,
+// not junk, and not a work-title shape. personname.LooksLikePersonName is a
+// shape test that passes "The Thirteenth Doctor Adventures" (four
+// capitalized words); LooksLikeWorkTitle refuses any article-led name, so a
+// held row, not a minted author, is the cost of a real "A Lee Martinez".
+func (idx *junkAuthorIndex) mintable(name string) bool {
+	return personname.LooksLikePersonName(name) && !personname.LooksLikeWorkTitle(name) && !idx.classifyName(name).Junk()
 }
 
 // evidence builds the library evidence authorjunk.Classify reads for a.
@@ -522,7 +543,7 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 				return
 			}
 		}
-		if authorjunk.ClassifyName(name).Junk() {
+		if idx.classifyName(name).Junk() {
 			return
 		}
 		// The cleaned name folds to the junk name by construction; the gate's
@@ -563,8 +584,9 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 			// the caller through a sentinel id.
 			ans = answer{row: database.Author{ID: -1, Name: name}}
 		default:
-			// No row: only a person-shaped name may be minted.
-			if !personname.LooksLikePersonName(name) {
+			// No row: only a person-shaped name that is not a title shape
+			// may be minted (idx.mintable).
+			if !idx.mintable(name) {
 				return
 			}
 			ans = answer{row: database.Author{Name: name}, create: true}
@@ -1080,7 +1102,7 @@ func (f *junkAuthorFixer) Replan(_ context.Context, _ json.RawMessage, planned r
 		return repairs.Row{RowID: planned.RowID, Fingerprint: fingerprintStrings("gone"), Skipped: junkAuthorSkipAmbiguous,
 			SkipReason: "the author row is gone"}, nil
 	}
-	v := authorjunk.ClassifyName(a.Name)
+	v := idx.classifyName(a.Name)
 	if !v.Junk() {
 		v = authorjunk.Verdict{Class: authorjunk.Class(planned.Current["class"]), Strength: authorjunk.Weak, Rule: planned.Current["rule"]}
 	}
@@ -1159,8 +1181,13 @@ func (f *junkAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repa
 		target = created
 	}
 	// Never onto the junk row itself (the store's name lookup ignores case),
-	// nor onto another name-alone junk row.
-	if target != nil && (target.ID == junkID || authorjunk.ClassifyName(target.Name).Junk()) {
+	// nor onto another name-alone junk row (the same verdict the plan used:
+	// idx.classifyName).
+	idx, err := f.cachedIndex(store)
+	if err != nil {
+		return err
+	}
+	if target != nil && (target.ID == junkID || idx.classifyName(target.Name).Junk()) {
 		return fmt.Errorf("%w: book %s: target %q (id %d) is the junk row or junk itself", repairs.ErrChangedSincePlan, bookID, target.Name, target.ID)
 	}
 
@@ -1252,6 +1279,11 @@ func (f *junkAuthorFixer) createTarget(w *repairs.Writer, store OpsStore, d *jun
 		if row.ID != d.Author.ID {
 			return nil, fmt.Errorf("%w: book %s: %q is spelled like existing author %q (id %d)", repairs.ErrChangedSincePlan, d.Book.ID, name, row.Name, row.ID)
 		}
+	}
+	// The plan's mint test again, before the row exists: Apply's backstop
+	// below the create runs only after MintAuthor has written it.
+	if !idx.mintable(name) {
+		return nil, fmt.Errorf("%w: book %s: %q is not a name to create an author for", repairs.ErrChangedSincePlan, d.Book.ID, name)
 	}
 	created, minted, err := store.MintAuthor(name)
 	if err != nil {
