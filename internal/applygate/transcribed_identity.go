@@ -1,5 +1,5 @@
 // file: internal/applygate/transcribed_identity.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: fedfaa92-fca3-4c73-b38b-25f4b0426918
 // last-edited: 2026-09-28
 
@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
@@ -77,11 +79,26 @@ func TranscribedSearchConfirms(ts TranscribedSearch, c *metafetch.MetadataCandid
 // let a placeholder book with no runtime, author or ASIN evidence pass
 // MinAgreements on the transcription alone. A file-level transcription does
 // not reach the transcription check, so there the title check carries it.
-func applyTranscribedTitle(ev *EvidenceVerdict, query string, audioConfirmed bool) bool {
+//
+// Two blocks are never lifted (transcribedLiftRefusal): a candidate whose
+// title is the series name, and a book whose folder names a different work
+// than the transcription. The first is the title check's hard block and an
+// intro announcing "Discworld" names no volume; the second is evidence
+// against the transcription, not a missing title.
+//
+// refusal is transcribedLiftRefusal's answer; when set, a block is annotated
+// with it and nothing is lifted.
+func applyTranscribedTitle(ev *EvidenceVerdict, query, refusal string, audioConfirmed bool) bool {
 	for i := range ev.Checks {
 		ch := &ev.Checks[i]
 		if ch.Name != "title" || ch.Outcome == OutcomeAgree {
 			continue
+		}
+		if refusal != "" {
+			if ch.Outcome == OutcomeBlock {
+				ch.Detail += "; not lifted by the transcribed title " + strconv.Quote(query) + ": " + refusal
+			}
+			return false
 		}
 		detail := "matches the transcribed title " + strconv.Quote(query) + " it was found by"
 		if ch.Detail != "" {
@@ -99,4 +116,37 @@ func applyTranscribedTitle(ev *EvidenceVerdict, query string, audioConfirmed boo
 		return true
 	}
 	return false
+}
+
+// transcribedLiftRefusal returns why a transcribed-title match may not lift
+// the title check, or "":
+//
+//   - the candidate's title is a series name (candidateTitleIsSeriesName):
+//     "Discworld" heard and "Discworld" (series Discworld) returned;
+//   - the book's work folder names a different work: an intro heard as
+//     "Guards! Guards!" in ".../Terry Pratchett/Mort/" is a mis-filed file or
+//     a mis-heard intro, and the gate cannot tell which. A folder that says
+//     nothing (a placeholder or chapter folder, metadata.IsUnsearchableTitle)
+//     or names one of the book's authors is no evidence either way.
+func transcribedLiftRefusal(book *database.Book, authors Authors, c *metafetch.MetadataCandidate, query string) string {
+	if candidateTitleIsSeriesName(book, c) {
+		return "the candidate's title " + strconv.Quote(c.Title) + " is the series name"
+	}
+	if book == nil || strings.TrimSpace(book.FilePath) == "" {
+		return ""
+	}
+	folder, _, ok := metadata.ChapterTitleFromDirectory(book.FilePath, "")
+	folder = strings.TrimSpace(folder)
+	if !ok || folder == "" || metadata.IsUnsearchableTitle(folder) {
+		return ""
+	}
+	for _, a := range authors {
+		if normText(a) == normText(folder) {
+			return ""
+		}
+	}
+	if titleSim(query, folder) < 0.5 {
+		return "the book's folder names " + strconv.Quote(folder)
+	}
+	return ""
 }
