@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-09-29
 
@@ -524,6 +524,50 @@ func TestGuard_UnreadableFolderIsDoubt(t *testing.T) {
 	// A plain missing row is an answer, not doubt.
 	k, why = GuardBookPathsWith(NewPathResolver(), "b", []string{filepath.Join(lib, "Plain", "gone", "x.m4b")}, "")
 	require.Empty(t, k, why)
+}
+
+// TestGuard_OverlongComponentIsNotDoubt (review LC6): a stored path with a
+// component longer than the system allows cannot exist on disk. Lstat answers
+// ENAMETOOLONG, which is "missing", not doubt, so the row is cleared.
+func TestGuard_OverlongComponentIsNotDoubt(t *testing.T) {
+	_, _, lib := itunesLinkRoot(t)
+	p := filepath.Join(lib, "Plain", strings.Repeat("a", 300)+".m4b")
+	k, why := GuardBookPathsWith(NewPathResolver(), "b", []string{p}, "")
+	require.Empty(t, k, why)
+	p = filepath.Join(lib, strings.Repeat("a", 300), "x.m4b")
+	k, why = GuardBookPathsWith(NewPathResolver(), "b", []string{p}, "")
+	require.Empty(t, k, why)
+}
+
+// TestGuard_LoopThroughITunesIsCaught (control): a link loop with one member
+// inside books/itunes/** is caught on the way round.
+func TestGuard_LoopThroughITunesIsCaught(t *testing.T) {
+	_, itunes, lib := itunesLinkRoot(t)
+	require.NoError(t, os.Symlink(filepath.Join(itunes, "y.m4b"), filepath.Join(lib, "Plain", "x.m4b")))
+	require.NoError(t, os.Symlink(filepath.Join(lib, "Plain", "x.m4b"), filepath.Join(itunes, "y.m4b")))
+	k, why := GuardBookPathsWith(NewPathResolver(), "b", []string{filepath.Join(lib, "Plain", "x.m4b")}, "")
+	require.Equal(t, SkipITunes, k, why)
+}
+
+// TestGuard_LongChainIsWalkedOnce: a dangling chain is resolved with
+// EvalSymlinks once, on the path the walk starts from, and then by hand.
+// Asking EvalSymlinks again at every hop re-walks the rest of the chain each
+// time: quadratic, 537 ms for 250 links on APFS.
+func TestGuard_LongChainIsWalkedOnce(t *testing.T) {
+	_, _, lib := itunesLinkRoot(t)
+	first := linkChain(t, filepath.Join(lib, "Plain"), 250, filepath.Join(lib, "gone.m4b"))
+	var calls int
+	orig := evalSymlinks
+	evalSymlinks = func(p string) (string, error) {
+		calls++
+		return orig(p)
+	}
+	t.Cleanup(func() { evalSymlinks = orig })
+	k, why := GuardBookPathsWith(NewPathResolver(), "b", []string{first}, "")
+	require.Empty(t, k, why)
+	// The start, and the one folder every link is in (resolved once, then
+	// cached); the chain's end sits in lib.
+	require.LessOrEqual(t, calls, 3, "EvalSymlinks per hop")
 }
 
 // ---- paging ----

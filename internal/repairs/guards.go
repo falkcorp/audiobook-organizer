@@ -1,5 +1,5 @@
 // file: internal/repairs/guards.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
 // last-edited: 2026-09-29
 
@@ -106,10 +106,15 @@ type resolvedDir struct {
 func NewPathResolver() *PathResolver { return &PathResolver{dirs: map[string]resolvedDir{}} }
 
 // missing reports an error that means a path component does not exist, which
-// is an answer, not doubt.
+// is an answer, not doubt. ENAMETOOLONG counts: a path with a component (or a
+// whole) longer than the system allows cannot exist on disk.
 func missing(err error) bool {
-	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) ||
+		errors.Is(err, syscall.ENAMETOOLONG)
 }
+
+// evalSymlinks is filepath.EvalSymlinks; a test counts the calls through it.
+var evalSymlinks = filepath.EvalSymlinks
 
 func (r *PathResolver) dir(d string) resolvedDir {
 	r.mu.Lock()
@@ -118,7 +123,7 @@ func (r *PathResolver) dir(d string) resolvedDir {
 	if hit {
 		return got
 	}
-	p, err := filepath.EvalSymlinks(d)
+	p, err := evalSymlinks(d)
 	switch {
 	case err == nil:
 		got = resolvedDir{path: p, ok: true}
@@ -138,11 +143,17 @@ func (r *PathResolver) dir(d string) resolvedDir {
 // books/itunes/** is caught; one longer than this is doubt.
 const maxLinkHops = 255
 
-// resolveWalk is the state of one path's walk: the hops left and the links
-// already followed (a revisit is a loop, which points nowhere: not doubt).
+// resolveWalk is the state of one path's walk: the hops left, the links
+// already followed (a revisit is a loop, which points nowhere: not doubt),
+// and whether a link has been followed by hand yet.
 type resolveWalk struct {
 	hops    int
 	visited map[string]bool
+	// byHand: EvalSymlinks already failed on the path the walk started
+	// from, so every later hop is on that same chain and would fail too.
+	// Asking it again at each hop re-walks the rest of the chain every time
+	// (quadratic in the chain's length); the walk goes on by hand instead.
+	byHand bool
 }
 
 // spellings returns the paths p resolves to, besides p: the resolved path of
@@ -163,8 +174,8 @@ func (r *PathResolver) walk(p string, w *resolveWalk) ([]string, error) {
 		}
 		return r.walkMissing(p, w)
 	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		if rp, err := filepath.EvalSymlinks(p); err == nil {
+	if fi.Mode()&os.ModeSymlink != 0 && !w.byHand {
+		if rp, err := evalSymlinks(p); err == nil {
 			return []string{rp}, nil
 		}
 	}
@@ -230,6 +241,7 @@ func (r *PathResolver) follow(link string, w *resolveWalk) ([]string, error) {
 		return nil, nil // a loop points nowhere
 	}
 	w.visited[link] = true
+	w.byHand = true
 	if w.hops == 0 {
 		return nil, fmt.Errorf("resolve %s: more than %d links", link, maxLinkHops)
 	}
