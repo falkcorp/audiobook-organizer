@@ -1,0 +1,5 @@
+- Repairs `fragment-consolidation` follow-ups:
+  - A resumed retire reuses the soft-delete stamp its interrupted run journaled, so one retire never journals two. An operation that already holds two stamps for one book is no longer reported as a conflict, and it reverts whichever stamp was written.
+  - The undo preflight now walks rows in the revert's own order. It reports a retired book's rows as refused (`dependent change not reverted`) when the change that moved or repointed its file cannot be undone, as the revert does. It also counts rows that are already restored (`already_restored`).
+  - The hands-off guard follows a broken symlink's link text, so a dead link in an ordinary folder that points into `books/itunes/**` is skipped as iTunes.
+  - Reverting a primary demote that had already been put back still makes that book the group's one primary, so the group cannot end up with two.
