@@ -1,5 +1,5 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
 // last-edited: 2026-09-28
 
@@ -147,6 +147,68 @@ func TestEvaluateTranscribed(t *testing.T) {
 			}
 			if tc.wantAgree >= 0 && v.Evidence.Agreements != tc.wantAgree {
 				t.Errorf("agreements = %d, want %d (checks %+v)", v.Evidence.Agreements, tc.wantAgree, v.Evidence.Checks)
+			}
+		})
+	}
+}
+
+// The transcription never lifts two title blocks: a candidate whose title is
+// the series name ("Discworld" heard, "Discworld" of series Discworld
+// returned), and a book whose folder names another work ("Guards! Guards!"
+// heard in ".../Mort/"). A placeholder folder or an author folder is no
+// evidence and does not stop the lift.
+func TestEvaluateTranscribed_BlocksTheTranscriptionCannotLift(t *testing.T) {
+	stale := errors.Join(metafetch.ErrStaleMetadataCache, errors.New("x"))
+	cases := []struct {
+		name, title, path, heard string
+		cand                     metafetch.MetadataCandidate
+		wantAllowed              bool
+		wantInDetail             string
+	}{
+		{name: "candidate title is the series name", path: "/library/Terry Pratchett/Unknown Title/book.m4b", heard: "Discworld",
+			cand:         metafetch.MetadataCandidate{Title: "Discworld", Series: "Discworld"},
+			wantInDetail: "is the series name"},
+		{name: "blank title, folder names another work", path: "/library/Terry Pratchett/Mort/Mort.m4b", heard: "Guards! Guards!",
+			cand:         metafetch.MetadataCandidate{Title: "Guards! Guards!"},
+			wantInDetail: `folder names "Mort"`},
+		{name: "chapter title, folder names another work", title: "Chapter 1", path: "/library/Terry Pratchett/Mort/01.mp3", heard: "Guards! Guards!",
+			cand:         metafetch.MetadataCandidate{Title: "Guards! Guards!", SeriesPosition: "1"},
+			wantInDetail: `folder names "Mort"`},
+		{name: "folder agrees with the transcription: lifted", path: "/library/Terry Pratchett/Guards Guards/book.m4b", heard: "Guards! Guards!",
+			cand: metafetch.MetadataCandidate{Title: "Guards! Guards!"}, wantAllowed: true},
+		{name: "author folder is no evidence: lifted", path: "/library/Terry Pratchett/book.m4b", heard: "Guards! Guards!",
+			cand: metafetch.MetadataCandidate{Title: "Guards! Guards!"}, wantAllowed: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			book := &database.Book{ID: "b1", Title: tc.title, FilePath: tc.path, TranscribedTitle: strp(tc.heard), Duration: intp(36000)}
+			cand := tc.cand
+			cand.Author, cand.Score, cand.DurationSec, cand.Source = "Terry Pratchett", 0.95, 36000, "Audible"
+			ts := TranscribedSearch{Query: tc.heard, Source: "transcribed_title", ExplainsStaleIdentity: true}
+			v := EvaluateTranscribed(book, Authors{"Terry Pratchett"}, database.ComputeBookRuntime(book, nil), &cand, stale, nil, ts, ManualOnlyGuard{Bulk: true})
+			if v.Allowed != tc.wantAllowed {
+				t.Fatalf("allowed = %v (reason %q: %s), want %v", v.Allowed, v.Reason, v.Detail, tc.wantAllowed)
+			}
+			if tc.wantAllowed {
+				return
+			}
+			if v.Reason != ReasonIdentityStale && v.Reason != ReasonTitleDisagrees {
+				t.Errorf("reason = %q (%s)", v.Reason, v.Detail)
+			}
+			if cand.IdentityEvidence != nil {
+				t.Errorf("evidence stamped on a block the transcription did not lift: %+v", cand.IdentityEvidence)
+			}
+			found := false
+			for _, ch := range v.Evidence.Checks {
+				if ch.Name == "title" {
+					found = ch.Outcome == OutcomeBlock && strings.Contains(ch.Detail, tc.wantInDetail)
+					if !found {
+						t.Errorf("title check = %s (%s), want a block naming %q", ch.Outcome, ch.Detail, tc.wantInDetail)
+					}
+				}
+			}
+			if !found {
+				t.Error("no blocking title check")
 			}
 		})
 	}

@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-09-28
 
@@ -235,10 +235,18 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 	v.Sequence = CheckSequence(book, c)
 	v.Evidence = CheckEvidenceInBatch(book, authors, rt, c, audio, claims)
 
-	match := ts.Query != "" && TranscribedSearchConfirms(ts, c)
+	// A confirming transcription is identity evidence unless something on
+	// the book contradicts it (transcribedLiftRefusal): then it lifts
+	// neither the title check nor identity_stale.
+	confirms := ts.Query != "" && TranscribedSearchConfirms(ts, c)
+	refusal := ""
+	if confirms {
+		refusal = transcribedLiftRefusal(book, authors, c, ts.Query)
+	}
+	match := confirms && refusal == ""
 	used := false
-	if match {
-		used = applyTranscribedTitle(&v.Evidence, ts.Query, audio)
+	if confirms {
+		used = applyTranscribedTitle(&v.Evidence, ts.Query, refusal, audio)
 	}
 	identityLifted := identityErr != nil && match && ts.ExplainsStaleIdentity
 	if identityLifted {

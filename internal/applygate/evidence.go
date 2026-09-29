@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-09-28
 
@@ -322,12 +322,7 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 	if strings.TrimSpace(c.Subtitle) != "" {
 		candVariants = append(candVariants, c.Title+" "+c.Subtitle)
 	}
-	seriesNames := map[string]bool{}
-	for _, s := range []string{c.Series, seriesName(book)} {
-		if n := normText(s); n != "" {
-			seriesNames[n] = true
-		}
-	}
+	seriesNames := titleSeriesNames(book, c)
 	full, segs := bookTitleVariants(book, seriesNames)
 	// The candidate's own main title ("The Hobbit" of "The Hobbit: Or There
 	// and Back Again") may agree with a whole book title, unless it is the
@@ -361,7 +356,7 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 	switch {
 	case best >= 0.85:
 		r.Outcome = OutcomeAgree
-	case seriesNames[normText(c.Title)] && strings.TrimSpace(c.Subtitle) == "":
+	case candidateTitleIsSeriesName(book, c):
 		r.Outcome, r.Reason = OutcomeBlock, ReasonTitleDisagrees
 		r.Detail = "candidate title " + strconv.Quote(c.Title) + " is the series name; " + r.Detail
 	case best < 0.5:
@@ -370,6 +365,27 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 		r.Outcome = OutcomeNeutral
 	}
 	return r
+}
+
+// titleSeriesNames is the normalized series names the title check knows: the
+// candidate's series and the book's.
+func titleSeriesNames(book *database.Book, c *metafetch.MetadataCandidate) map[string]bool {
+	names := map[string]bool{}
+	for _, s := range []string{c.Series, seriesName(book)} {
+		if n := normText(s); n != "" {
+			names[n] = true
+		}
+	}
+	return names
+}
+
+// candidateTitleIsSeriesName reports whether the candidate's whole title is a
+// series name with no subtitle to tell the volume ("Star Wars", "Discworld"):
+// the title check's hard block. It is its own function because nothing may
+// lift that block -- not even a transcription that says the same word, since
+// an intro announcing the series names no volume (applyTranscribedTitle).
+func candidateTitleIsSeriesName(book *database.Book, c *metafetch.MetadataCandidate) bool {
+	return titleSeriesNames(book, c)[normText(c.Title)] && strings.TrimSpace(c.Subtitle) == ""
 }
 
 // checkNarrator compares narrator surnames. A contradiction blocks only when
