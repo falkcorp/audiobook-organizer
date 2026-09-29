@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/go_test_shards.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 3b8e6d21-7c4f-4a90-b1e5-9f2d0c7a6e48
 # last-edited: 2026-09-29
 """Run Go test packages split into shards, then merge their coverage.
@@ -32,6 +32,7 @@ import concurrent.futures
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -43,15 +44,19 @@ _NAME_RE = re.compile(r"^(Test|Fuzz|Example)[A-Za-z0-9_]*$")
 
 
 def list_tests(pkg: str, go_args: list[str]) -> list[str]:
-    # -list compiles the test binary with the same flags the shards use, so the
-    # shards reuse it from the build cache instead of each compiling it again.
+    # -list compiles the package with the same flags the shards use, so the
+    # shards reuse its compiled objects from the build cache (each still links
+    # its own test binary).
     # Only flags that change the compiled binary; test flags such as -timeout
     # may take their value as a separate argument, which -list would misread.
     build_flags = [a for a in go_args if a in ("-race", "-cover", "-trimpath") or a.startswith(("-covermode=", "-tags=", "-gcflags="))]
-    out = subprocess.run(
-        ["go", "test", *build_flags, "-list", ".", pkg],
-        check=True, capture_output=True, text=True,
-    ).stdout
+    res = subprocess.run(["go", "test", *build_flags, "-list", ".", pkg], capture_output=True, text=True)
+    if res.returncode != 0:
+        # A compile error in the package's tests surfaces here first; show it,
+        # as a plain `go test` would have.
+        print(res.stdout + res.stderr, flush=True)
+        raise SystemExit(f"::error::go test -list {pkg} failed (exit {res.returncode})")
+    out = res.stdout
     return sorted({ln.strip() for ln in out.splitlines() if _NAME_RE.match(ln.strip())})
 
 
@@ -145,19 +150,32 @@ def main() -> int:
     order = sorted(plan, key=lambda it: -sum(timings.get(it[0].removeprefix("./"), {}).get(t, 0.0) for t in it[2]))
     jobs = a.jobs if a.jobs > 0 else len(order)
     failed, profiles = 0, []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
-        for pkg, i, rc, secs, output, prof in ex.map(run, order):
-            profiles.append(prof)
-            status = "ok" if rc == 0 else "FAIL"
-            print(f"--- shard {pkg}#{i} {status} in {secs:.0f}s", flush=True)
-            if rc != 0:
-                failed += 1
-                print(output, flush=True)
-            else:
-                for ln in output.splitlines():
-                    if ln.startswith(("ok", "---", "FAIL")):
-                        print("    " + ln, flush=True)
-    merge_profiles(profiles, a.out)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+            # Report each shard as it finishes, so a fast failure is not held
+            # behind slower shards.
+            for fut in concurrent.futures.as_completed([ex.submit(run, it) for it in order]):
+                pkg, i, rc, secs, output, prof = fut.result()
+                profiles.append(prof)
+                # A shard whose names matched nothing means -list saw a
+                # different test set than the shard compiled (a build flag
+                # this script did not forward): those tests would silently not
+                # run, so treat it as a failure.
+                empty = "[no tests to run]" in output
+                status = "ok" if rc == 0 and not empty else "FAIL"
+                print(f"--- shard {pkg}#{i} {status} in {secs:.0f}s", flush=True)
+                if status == "FAIL":
+                    failed += 1
+                    print(output, flush=True)
+                    if empty:
+                        print(f"::error::shard {pkg}#{i} ran no tests; -list and the shard disagree", flush=True)
+                else:
+                    for ln in output.splitlines():
+                        if ln.startswith(("ok", "---", "FAIL")):
+                            print("    " + ln, flush=True)
+        merge_profiles(sorted(profiles), a.out)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     return 1 if failed else 0
 
 
