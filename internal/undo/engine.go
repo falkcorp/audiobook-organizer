@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-29
 //
@@ -149,6 +149,7 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 	if err != nil {
 		return nil, err
 	}
+	plan.NoteRevertedEarlier(changes)
 	// restoresBook: a soft-delete row earlier in the order is predicted to
 	// restore the book, so the revert finds it live at any later soft-delete
 	// row of the same book (a resumed retire's second stamp) and counts that
@@ -156,7 +157,7 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 	restoresBook := map[string]bool{}
 	for _, c := range plan.Order {
 		if refusal := plan.Gate(c); refusal != nil {
-			plan.Record(c, refusal)
+			plan.Record(c, refusal, false)
 			report.addReferentConflict(c, refusal)
 			continue
 		}
@@ -169,7 +170,7 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 		if c.ChangeType == ChangeTypeBookSoftDelete && v.refusal == nil && v.conflict == nil {
 			restoresBook[c.BookID] = true
 		}
-		plan.Record(c, v.refusal)
+		plan.Record(c, v.refusal, v.already)
 		switch {
 		case v.refusal != nil:
 			report.addReferentConflict(c, v.refusal)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-09-29
 
@@ -8,8 +8,10 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1189,10 +1191,11 @@ func TestFragmentFixer_PreflightPredictsDependentRefusals(t *testing.T) {
 		"preflight %+v vs revert %+v", report, rr)
 }
 
-// TestFragmentFixer_AlreadyRestoredDemoteStillCrowns (L-d): a demote row whose
-// write never happened is already restored, and the revert still makes its
-// book the group's one primary.
-func TestFragmentFixer_AlreadyRestoredDemoteStillCrowns(t *testing.T) {
+// TestFragmentFixer_AlreadyRestoredDemoteLeavesAnUntouchedGroup (L-d, F1): a
+// demote row whose write never happened, with no written soft-delete, is
+// already restored and writes nothing: the flags in its group are not the
+// operation's (here two primaries a user left) and stay as they are.
+func TestFragmentFixer_AlreadyRestoredDemoteLeavesAnUntouchedGroup(t *testing.T) {
 	f := newFragFixture(t)
 	f.seed(t)
 	frag := f.ids["fragF"]
@@ -1220,12 +1223,165 @@ func TestFragmentFixer_AlreadyRestoredDemoteStillCrowns(t *testing.T) {
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-crown")
 	require.NoError(t, err)
 	require.Equal(t, 1, rr.AlreadyRestored)
+	for _, id := range []string{frag, sib} {
+		b, err := f.s.GetBookByID(id)
+		require.NoError(t, err)
+		require.NotNil(t, b.IsPrimaryVersion)
+		require.True(t, *b.IsPrimaryVersion, "%s keeps its flag", id)
+	}
+}
+
+// TestFragmentFixer_CutOffRetireRevertLeavesTheGroupAlone (F1, review LD1): a
+// retire cut off after journaling, before any write, never touched the
+// version group. Its revert writes no primary flag: the organized sibling's
+// unset flag (read as primary, what ABS shows) stays unset.
+func TestFragmentFixer_CutOffRetireRevertLeavesTheGroupAlone(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag, parent := f.ids["fragF"], f.ids["parent"]
+	group := "vg-cut"
+	_, err := f.s.ModifyBook(frag, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = nil
+		return nil
+	})
+	require.NoError(t, err)
+	sibPath := f.file(t, "lib/Sibling/Sibling edition.m4b", 5000)
+	sib := f.book(t, "sibling", "Eldest, another edition", sibPath, nil)
+	f.row(t, "sib", sib, sibPath, "Sibling edition.m4b", 5000, 36000, 0)
+	f.organized(t, sib)
+	_, err = f.s.ModifyBook(sib, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = nil
+		return nil
+	})
+	require.NoError(t, err)
+
 	fb, err := f.s.GetBookByID(frag)
 	require.NoError(t, err)
-	require.NotNil(t, fb.IsPrimaryVersion)
-	require.True(t, *fb.IsPrimaryVersion)
+	// What the retire journals for an unset-flag fragment, cut off before it
+	// wrote anything.
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut-vg")
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookMergedInto, "merged_into_book_id", "", parent))
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPathUpdate, "file_path", fb.FilePath, ""))
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(time.Now())))
+
+	report, err := undo.PreflightUndoConflicts(f.s, "op-cut-vg")
+	require.NoError(t, err)
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-cut-vg")
+	require.NoError(t, err)
+	require.Equal(t, 4, rr.AlreadyRestored, "%+v", rr)
+	require.Equal(t, rr.AlreadyRestored, report.AlreadyRestored)
+
+	sb, err := f.s.GetBookByID(sib)
+	require.NoError(t, err)
+	require.Nil(t, sb.IsPrimaryVersion, "the sibling's flag was written")
+	fb, err = f.s.GetBookByID(frag)
+	require.NoError(t, err)
+	require.Nil(t, fb.IsPrimaryVersion, "the fragment's flag was written")
+}
+
+// TestFragmentFixer_AlreadyRestoredDemoteKeepsALaterUserPick (F1, review
+// LD2): the fragment is primary again and a user has since picked another
+// member too. The demote row is already restored; the revert does not demote
+// the user's pick.
+func TestFragmentFixer_AlreadyRestoredDemoteKeepsALaterUserPick(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag := f.ids["fragF"]
+	group := "vg-user"
+	yes := true
+	_, err := f.s.ModifyBook(frag, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = &yes
+		return nil
+	})
+	require.NoError(t, err)
+	otherPath := f.file(t, "lib/Other/Other edition.m4b", 5000)
+	other := f.book(t, "other", "Eldest, user pick", otherPath, nil)
+	f.organized(t, other)
+	_, err = f.s.ModifyBook(other, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = &yes
+		return nil
+	})
+	require.NoError(t, err)
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-user")
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
+
+	_, err = audiobooks.NewRevertService(f.s).RevertOperation("op-user")
+	require.NoError(t, err)
+	ob, err := f.s.GetBookByID(other)
+	require.NoError(t, err)
+	require.NotNil(t, ob.IsPrimaryVersion)
+	require.True(t, *ob.IsPrimaryVersion, "the user's pick was demoted")
+}
+
+// crownFailsOnce fails the first version-group read of group, the read
+// versionprimary.Crown starts with.
+type crownFailsOnce struct {
+	*database.PebbleStore
+	group string
+	armed atomic.Bool
+}
+
+func (s *crownFailsOnce) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
+	if groupID == s.group && s.armed.CompareAndSwap(true, false) {
+		return nil, errors.New("version group read failed")
+	}
+	return s.PebbleStore.GetBooksByVersionGroup(groupID)
+}
+
+// TestFragmentFixer_RetryCrownsAfterACrownFailure (F1): the first revert pass
+// restores the retired fragment and its flag, then Crown fails, leaving two
+// primaries. The retry finds the demote already restored and, because this
+// operation's soft-delete was written and reverted in the first pass, crowns.
+func TestFragmentFixer_RetryCrownsAfterACrownFailure(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag := f.ids["fragF"]
+	group := "vg-frag"
+	yes, no := true, false
+	_, err := f.s.ModifyBook(frag, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = &yes
+		return nil
+	})
+	require.NoError(t, err)
+	sibPath := f.file(t, "lib/Sibling/Sibling edition.m4b", 5000)
+	sib := f.book(t, "sibling", "Eldest, another edition", sibPath, nil)
+	f.row(t, "sib", sib, sibPath, "Sibling edition.m4b", 5000, 36000, 0)
+	f.organized(t, sib)
+	_, err = f.s.ModifyBook(sib, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = &no
+		return nil
+	})
+	require.NoError(t, err)
+	f.plan(t, "op-plan")
+	out := f.apply(t, "op-plan", "op-apply", []string{"moved:" + f.ids["parent"]}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+
+	failing := &crownFailsOnce{PebbleStore: f.s, group: group}
+	failing.armed.Store(true)
+	_, err = audiobooks.NewRevertService(failing).RevertOperation("op-apply")
+	require.Error(t, err, "the first pass's Crown fails")
+	require.False(t, failing.armed.Load(), "the Crown ran")
+	require.True(t, f.live(t, "fragF"))
+	fb, err := f.s.GetBookByID(frag)
+	require.NoError(t, err)
+	require.True(t, fb.IsPrimaryVersion != nil && *fb.IsPrimaryVersion)
+
+	report, err := undo.PreflightUndoConflicts(f.s, "op-apply")
+	require.NoError(t, err)
+	require.Empty(t, report.CheckFailed, "%+v", report.CheckFailed)
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
+	require.NoError(t, err)
+	require.Equal(t, 1, rr.AlreadyRestored, "%+v", rr)
+	require.Equal(t, rr.AlreadyRestored, report.AlreadyRestored)
 	sb, err := f.s.GetBookByID(sib)
 	require.NoError(t, err)
 	require.NotNil(t, sb.IsPrimaryVersion)
-	require.False(t, *sb.IsPrimaryVersion, "one primary per group")
+	require.False(t, *sb.IsPrimaryVersion, "the retry crowned the fragment")
 }

@@ -1,5 +1,5 @@
 // file: internal/undo/revert_plan.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
 // last-edited: 2026-09-29
 
@@ -39,6 +39,10 @@ type RevertPlan struct {
 	depIDs      map[string]bool
 	restored    map[string]bool
 	refusedBook map[string]bool
+	// undeleted: books whose soft-delete by this operation was written and
+	// has been reverted, by a write in this pass (Record) or in an earlier
+	// one (NoteRevertedEarlier).
+	undeleted map[string]bool
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -51,7 +55,7 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 		return nil, err
 	}
 	p := &RevertPlan{Stamps: OpSoftDeleteStamps(rows), deps: deps, depIDs: map[string]bool{},
-		restored: map[string]bool{}, refusedBook: map[string]bool{}}
+		restored: map[string]bool{}, refusedBook: map[string]bool{}, undeleted: map[string]bool{}}
 	for _, ids := range deps {
 		for _, id := range ids {
 			p.depIDs[id] = true
@@ -99,16 +103,39 @@ func (p *RevertPlan) Gate(c *database.OperationChange) error {
 	return err
 }
 
-// Record notes a row's outcome (nil: restored, including already restored).
-func (p *RevertPlan) Record(c *database.OperationChange, err error) {
+// Record notes a row's outcome: err nil is restored, already when that needed
+// no write (ErrAlreadyRestored).
+func (p *RevertPlan) Record(c *database.OperationChange, err error, already bool) {
 	if err == nil {
 		p.restored[c.ID] = true
+		if c.ChangeType == ChangeTypeBookSoftDelete && !already {
+			p.undeleted[c.BookID] = true
+		}
 		return
 	}
 	if c.ChangeType == ChangeTypeBookSoftDelete {
 		p.refusedBook[c.BookID] = true
 	}
 }
+
+// NoteRevertedEarlier takes every row of the operation and notes the books
+// whose soft-delete row an earlier revert pass already marked reverted: a
+// retry after that pass failed on a later row of the same book.
+func (p *RevertPlan) NoteRevertedEarlier(all []*database.OperationChange) {
+	for _, c := range all {
+		if c.ChangeType == ChangeTypeBookSoftDelete && c.RevertedAt != nil {
+			p.undeleted[c.BookID] = true
+		}
+	}
+}
+
+// Undeleted reports whether this operation's soft-delete of bookID was
+// written and has been reverted (this pass or an earlier one). Only then did
+// the operation retire the book, and only then may an already-restored
+// primary demote of it re-crown its group: the retire's hand-off promoted a
+// sibling after the demote. Otherwise the group is not the operation's to
+// change (a retire cut off before writing, or a later pick by a user).
+func (p *RevertPlan) Undeleted(bookID string) bool { return p.undeleted[bookID] }
 
 // RetireDependents maps each book a soft-delete row of rows restores to the
 // ids of the rows (in rows) that moved one of its book_file rows onto another
