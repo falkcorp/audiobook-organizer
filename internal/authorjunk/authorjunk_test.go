@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-09-29
 
@@ -305,10 +305,10 @@ func TestClassifyName_TrialTargets(t *testing.T) {
 		want Class
 		rule string
 	}{
-		{"Lesbian Romance", ClassGenre, RuleGenre},
-		{"A LitRPG Novel", ClassGenre, RuleGenre},
-		{"The Anime", ClassGenre, RuleGenre},
-		{"An Epic Fantasy Adventure", ClassGenre, RuleGenre},
+		{"Lesbian Romance", ClassGenre, RuleGenreLabel},
+		{"A LitRPG Novel", ClassGenre, RuleGenreLabel},
+		{"The Anime", ClassGenre, RuleGenreLabel},
+		{"An Epic Fantasy Adventure", ClassGenre, RuleGenreLabel},
 		{"the-final-strife", ClassOther, RuleSlug},
 		{"The Complete", ClassWorkTitle, RuleArticleThe},
 		{"The World", ClassWorkTitle, RuleArticleThe},
@@ -338,7 +338,7 @@ func TestClassifyName_TrialTargets(t *testing.T) {
 		{"Star Wars", ClassSeriesName, RuleFranchise},
 		{"Stargate SG-1", ClassSeriesName, RuleFranchise},
 		{"Alphabet Squadron (Star Wars)", ClassSeriesName, RuleFranchise},
-		{"Star Wars Full Cast Audio Drama", ClassPublisher, RulePublisher},
+		{"Star Wars Full Cast Audio Drama", ClassPublisher, RuleProductionPhrase},
 		{"StudyinSlaughterSchooledinMagicBook3", ClassWorkTitle, RuleGluedWords},
 		{"abooks", ClassOther, RuleSiteTag},
 		{"L. E. Miranda (Rise of the Last Star)", ClassSeriesName, RuleSeriesParenthetical},
@@ -370,6 +370,7 @@ func TestClassifyName_TrialRealAuthors(t *testing.T) {
 		"Kevin Hearne (Luke Daniels)", "Kevin Hearne (Christopher Ragland)", "Robin Hobb (Anne Flosnik)",
 		"nobody103 (Jack Voraces)", "Jane Doe (Editor)", "Kevin J. Anderson (with Rebecca Moesta)",
 		"Jane Doe (translated by John Roe)", "Dante King (Dragon Born)", "D. B. King (War Wizard)",
+		"Michael Chatfield (Science fiction author)", "Jane Doe (American novelist)",
 	} {
 		if v := ClassifyName(n); v.Junk() {
 			t.Errorf("ClassifyName(%q) = %+v, want not junk", n, v)
@@ -420,11 +421,45 @@ func TestCleanedName_ParentheticalAndBy(t *testing.T) {
 		"Brandon Sanderson (GraphicAudio)":        "",
 		"nobody103 (Jack Voraces)":                "", // head is not person-shaped
 		"Stand by Me":                             "",
+		"The Hobbit dramatised by Brian Sibley":   "",
+		"Music by Tim Foster":                     "",
+		"Voiced by Jim Dale":                      "",
+		"Sound design by Joe Kraemer":             "",
+		"Starring Tom Baker":                      "",
 		"Death by Chocolate":                      "",
 	} {
 		got, ok := CleanedName(n)
 		if got != want || ok != (want != "") {
 			t.Errorf("CleanedName(%q) = %q, %v; want %q", n, got, ok, want)
 		}
+	}
+}
+
+// Every rule added for the 2026-09-29 trial may only relink: real credits
+// sit in their reach. The older rules keep their unlink behaviour.
+func TestVerdict_RelinkOnly(t *testing.T) {
+	for _, n := range []string{
+		"The Dalai Lama", "The Rock", "The Mayo Clinic", "The Washington Post", "The Three Initiates",
+		"The Venerable Bede", "The Gawain Poet", "The Beatles", "The Rolling Stones", "The Weeknd",
+		"The Edge", "The Prophet Enoch", "50 Cent", "Jackson 5", "Maroon 5", "Blink 182", "Matchbox 20",
+		"the-final-strife", "StudyinSlaughterSchooledinMagicBook3", "Star Wars", "abooks", "Lesbian Romance",
+		"Star Wars Full Cast Audio Drama", "L. E. Miranda (Rise of the Last Star)",
+	} {
+		v := ClassifyName(n)
+		if !v.Junk() || !v.RelinkOnly() {
+			t.Errorf("ClassifyName(%q) = %+v, want a relink-only verdict", n, v)
+		}
+	}
+	if v := ClassifyNameInLibrary("Dante King (Dragon Born)", func(n string) bool { return n == "dragon born" }); !v.RelinkOnly() {
+		t.Errorf("library series parenthetical must be relink-only: %+v", v)
+	}
+	for _, n := range []string{"Demon Cycle", "Book 1 (Unabridged)", "GraphicAudio", "Science Fiction", "Unknown", "The Way of Shadows"} {
+		if v := ClassifyName(n); !v.Junk() || v.RelinkOnly() {
+			t.Errorf("ClassifyName(%q) = %+v, want junk that may unlink", n, v)
+		}
+	}
+	// A verdict rebuilt from a stored row's rule answers the same.
+	if !(Verdict{Class: ClassWorkTitle, Strength: Weak, Rule: RuleArticleThe}).RelinkOnly() {
+		t.Error("RelinkOnly must read the rule")
 	}
 }

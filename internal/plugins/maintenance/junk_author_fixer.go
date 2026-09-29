@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -768,6 +768,11 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 			d.Skip, d.SkipReason = junkAuthorSkipAmbiguous, "no evidence of the real author; a weak (library-evidence) verdict never removes a credit"
 		case authorjunk.IsCollectiveCredit(a.Name):
 			d.Skip, d.SkipReason = junkAuthorSkipAmbiguous, fmt.Sprintf("no evidence of the real author; %q is a collective credit and is kept", a.Name)
+		case v.RelinkOnly():
+			// A shape rule with real credits in its reach ("The Dalai Lama",
+			// "50 Cent"): it may move a book to an author found by evidence,
+			// never leave it with none.
+			d.Skip, d.SkipReason = junkAuthorSkipAmbiguous, fmt.Sprintf("%q is flagged only by %s; with no evidence of the real author the credit is kept", a.Name, v.Rule)
 		}
 	}
 	// The framework guard reads paths and the series name; the author name is
@@ -794,7 +799,14 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 	// not locked, and that author already has a live book in the series.
 	if d.Skip == "" && d.Decision == junkAuthorDecRelink && d.Verdict.Class == authorjunk.ClassSeriesName &&
 		d.Book.SeriesID == nil && !d.SeriesLocked {
-		d.Series = pickSeries(idx, a.Name, d.Target.ID)
+		// "Dante King (Dragon Born)": the series is the parenthetical.
+		seriesName := a.Name
+		if d.Verdict.Rule == authorjunk.RuleSeriesParenthetical {
+			if p, ok := authorjunk.SeriesOfParenthetical(a.Name); ok {
+				seriesName = p
+			}
+		}
+		d.Series = pickSeries(idx, seriesName, d.Target.ID)
 	}
 	return d
 }

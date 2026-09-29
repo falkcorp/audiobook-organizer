@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
 // last-edited: 2026-09-29
 
@@ -749,6 +749,8 @@ func TestJunkAuthorFixer_SeriesParentheticalResolvesToPerson(t *testing.T) {
 	require.Equal(t, junkAuthorDecRelink, r.Proposed["decision"], r.Reason)
 	require.Equal(t, "Dante King", r.Proposed["author"], r.Reason)
 	require.Equal(t, junkAuthorSrcCleaned, r.Proposed["source"])
+	// The series is the parenthetical, not the whole junk name.
+	require.Equal(t, "Dragon Born", r.Proposed["series"], r.Reason)
 	noRowsFor(t, f, plan, "Kevin Hearne (Luke Daniels)")
 	if tr := f.row(plan, "Book 1 (Unabridged)", tagged); tr != nil {
 		require.NotEqual(t, strconv.Itoa(f.authors["Dante King (Dragon Born)"]), tr.Proposed["author_id"], tr.Reason)
@@ -758,6 +760,56 @@ func TestJunkAuthorFixer_SeriesParentheticalResolvesToPerson(t *testing.T) {
 	res := f.apply(plan, []string{r.RowID})
 	require.Equal(t, 1, res.Applied, "Replan must reach the plan's verdict: %v", res.ByOutcome)
 	require.Equal(t, []int{f.authors["Dante King"]}, f.credits(paren))
+	b, err := f.s.GetBookByID(paren)
+	require.NoError(t, err)
+	require.NotNil(t, b.SeriesID)
+	require.Equal(t, f.series["Dragon Born"], *b.SeriesID)
+}
+
+// The rules added for the trial reach real credits ("The Dalai Lama", "50
+// Cent"). With no evidence of another author the credit is kept (skipped as
+// ambiguous, never unlinked); with evidence the book is still relinked.
+func TestJunkAuthorFixer_RelinkOnlyRulesNeverUnlink(t *testing.T) {
+	f := newJunkFixture(t)
+	names := []string{"The Dalai Lama", "The Rock", "The Mayo Clinic", "The Washington Post", "The Three Initiates",
+		"The Venerable Bede", "The Gawain Poet", "The Beatles", "The Rolling Stones", "The Weeknd", "The Edge",
+		"The Prophet Enoch", "50 Cent", "Jackson 5", "Maroon 5", "Blink 182", "Matchbox 20", "abooks", "Star Wars"}
+	books := map[string]string{}
+	for i, n := range names {
+		books[n] = f.book(junkBookSpec{title: "Own Book " + strconv.Itoa(i), path: "/lib/real/" + strconv.Itoa(i), author: n})
+	}
+	// A series named like a narrator flips a narrator parenthetical to junk;
+	// with no evidence it is still never unlinked.
+	f.mkSeries("Luke Daniels", "Someone Else")
+	kh := f.book(junkBookSpec{title: "Hounded", path: "/lib/kh/h", author: "Kevin Hearne (Luke Daniels)"})
+	// Evidence names a real author: relinked.
+	f.book(junkBookSpec{title: "The Spook's Apprentice", path: "/lib/jd/sa", author: "Joseph Delaney"})
+	tc := f.book(junkBookSpec{title: "The Spook's Curse", path: "/lib/tc/sc", author: "The Complete",
+		tags: map[string]string{"artist": "Joseph Delaney"}})
+	plan := f.plan()
+
+	for _, n := range append(names, "Kevin Hearne (Luke Daniels)") {
+		id := books[n]
+		if n == "Kevin Hearne (Luke Daniels)" {
+			id = kh
+		}
+		r := f.row(plan, n, id)
+		require.NotNil(t, r, n)
+		require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%s: %s / %s", n, r.Reason, r.SkipReason)
+		require.Contains(t, r.SkipReason, "the credit is kept", n)
+	}
+	r := f.row(plan, "The Complete", tc)
+	require.NotNil(t, r)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Equal(t, junkAuthorDecRelink, r.Proposed["decision"], r.Reason)
+	require.Equal(t, "Joseph Delaney", r.Proposed["author"], r.Reason)
+
+	f.apply(plan, nil)
+	for n, id := range books {
+		require.Equal(t, []int{f.authors[n]}, f.credits(id), "%s keeps its credit", n)
+	}
+	require.Equal(t, []int{f.authors["Kevin Hearne (Luke Daniels)"]}, f.credits(kh))
+	require.Equal(t, []int{f.authors["Joseph Delaney"]}, f.credits(tc))
 }
 
 // "The Thirteenth Doctor Adventures" is four capitalized words, so the

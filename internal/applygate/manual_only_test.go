@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ed721904-7696-436b-95ae-8ef5a85c91aa
 // last-edited: 2026-09-29
 
@@ -63,6 +63,33 @@ func TestIsOwnerManualOnly_DoctorRanges(t *testing.T) {
 	for _, s := range []string{
 		"Doctor Sleep", "Doctors Orders", "The Doctor's Wife", "Doctor Strange", "The Tenth Doctorate",
 		"Doctor Dolittle", "Second Opinion", "The First Doctors", "Warm Doctor", "16th Doctor", "The Doctor Is In",
+	} {
+		if IsOwnerManualOnly("", s) || IsOwnerManualOnly(s, "") {
+			t.Errorf("IsOwnerManualOnly(%q) = true, want false", s)
+		}
+	}
+}
+
+// "Dr Who" spellings and the Big Finish spin-off ranges with no Doctor word.
+// Holding a non-Doctor Who book costs a manual apply; missing one breaks the
+// owner rule, so the list errs toward holding ("Gallifreyan", any Dalek).
+func TestIsOwnerManualOnly_DrWhoAndSpinOffs(t *testing.T) {
+	for _, s := range []string{
+		"Dr Who", "Dr. Who and the Daleks", "Dr_Who", "DrWho", "Dr.Who - The Crusade",
+		"Gallifrey", "Gallifrey_ Time War", "The Gallifreyan Chronicles", "Dalek Empire", "Daleks!",
+		"Jago & Litefoot", "Jago and Litefoot Series 3", "Jago_and_Litefoot", "The Diary of River Song",
+		"Bernice Summerfield", "Counter-Measures", "Counter Measures Series 2", "The Paternoster Gang",
+		"Missy", "Missy Series 2", "Blake's 7", "Blakes 7", "Blake’s 7", "Blakes_7",
+		"UNIT: Dominion", "UNIT - Extinction", "UNIT Silenced", "UNIT_ Assembled", "Unit: Shutdown",
+		"/lib/UNIT - Nemesis/01.mp3", "/lib/UNIT Encounters/01.mp3",
+	} {
+		if !IsOwnerManualOnly("", s) || !IsOwnerManualOnly(s, "") {
+			t.Errorf("IsOwnerManualOnly(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{
+		"Dr. Seuss", "Dr. Seuss - Green Eggs and Ham", "Unit Operations", "The Unit", "Community Unit Plans",
+		"Blake's 70", "Countermeasure", "Jago", "River Song", "/lib/Unit Operations/01.mp3", "Commonwealth",
 	} {
 		if IsOwnerManualOnly("", s) || IsOwnerManualOnly(s, "") {
 			t.Errorf("IsOwnerManualOnly(%q) = true, want false", s)

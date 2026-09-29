@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
 // last-edited: 2026-09-29
 
@@ -32,9 +32,27 @@ import (
 // "Doctor" is not ("Doctor Sleep", "Doctors Orders"), and neither is "The
 // Doctor's Wife": it is a Doctor Who episode title, but also a novel, and a
 // title with no range, franchise or studio word names neither.
-var manualOnlyRe = regexp.MustCompile(`(?i)\b(doctor[\s._-]*who|big[\s._-]*finish|torchwood|` +
+//
+// "Dr Who" / "Dr. Who" / "DrWho" count as "Doctor Who". So do the Big Finish
+// Doctor Who spin-off ranges whose names carry no Doctor word: Gallifrey
+// (and "Gallifreyan", a Doctor Who word only), the Daleks, Jago & Litefoot,
+// The Diary of River Song, Bernice Summerfield, Counter-Measures, The
+// Paternoster Gang, Missy, and Blake's 7 (Big Finish produces it). "Missy"
+// is also a given name; holding a book by a Missy costs a manual apply,
+// missing a Doctor Who book breaks the owner rule. UNIT counts only in its
+// series forms, which manualOnlyUnitRe matches case-sensitively. "Class" is
+// left out: too generic.
+var manualOnlyRe = regexp.MustCompile(`(?i)\b(doctor[\s._-]*who|dr\.?[\s._-]*who|big[\s._-]*finish|torchwood|` +
 	`(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|` +
-	`[1-9](?:st|nd|rd|th)|1[0-5]th|war|fugitive)[\s._-]*doctor)\b`)
+	`[1-9](?:st|nd|rd|th)|1[0-5]th|war|fugitive)[\s._-]*doctor|` +
+	`gallifrey(?:an)?|daleks?|jago[\s._-]*(?:&|and)[\s._-]*litefoot|diary[\s._-]*of[\s._-]*river[\s._-]*song|` +
+	`bernice[\s._-]*summerfield|counter[\s._-]*measures|paternoster[\s._-]*gang|missy|blake[\x{2019}']?s[\s._-]*7)\b`)
+
+// manualOnlyUnitRe matches Big Finish's UNIT range in its series forms only:
+// "UNIT: Dominion", "UNIT - Extinction", or all-caps "UNIT" opening a path
+// segment or the name ("UNIT Silenced", "UNIT_ Assembled" once folded). The
+// word "unit" ("Unit Operations", "The Unit") is not matched.
+var manualOnlyUnitRe = regexp.MustCompile(`(?:^|[/\\])\s*(?:(?i:unit)\s*[:\x{2013}\x{2014}-]|UNIT\s)`)
 
 // FoldUnderscores turns every "_" into a space so a \b pattern sees a word
 // boundary there. "_" is a regexp word character, so \b never fires next to
@@ -48,7 +66,8 @@ func FoldUnderscores(s string) string {
 
 // matchesManualOnly is manualOnlyRe on the folded text.
 func matchesManualOnly(s string) bool {
-	return manualOnlyRe.MatchString(FoldUnderscores(s))
+	f := FoldUnderscores(s)
+	return manualOnlyRe.MatchString(f) || manualOnlyUnitRe.MatchString(f)
 }
 
 // IsOwnerManualOnly reports whether a book with this path or series name
