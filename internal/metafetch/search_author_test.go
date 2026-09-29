@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_author_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: bf7207f0-35f9-406d-8c06-9010e2079b36
 // last-edited: 2026-09-28
 
@@ -33,6 +33,33 @@ func TestSearchAuthorHint(t *testing.T) {
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, SearchAuthorHint(tc.in), "SearchAuthorHint(%q)", tc.in)
+	}
+}
+
+// The fetch-cache stamp keys on the author actually sent: a book whose author
+// is a placeholder no longer matches a row stamped with that placeholder (so
+// the "by Unknown Author" junk is refetched, not replayed), and a real
+// author's stamp is exactly what it was.
+func TestFetchCacheIdentity(t *testing.T) {
+	asin := "B000000001"
+	cases := []struct {
+		name, author string
+		wantSameAsRaw bool
+	}{
+		{"placeholder author is keyed as no author", "Unknown Author", false},
+		{"narrator placeholder is keyed as no author", "read by narrator", false},
+		{"real author is unchanged", "Greg Pak", true},
+		{"no author is unchanged", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FetchCacheIdentity("Planet Hulk", tc.author, &asin, nil, nil)
+			raw := database.MetadataSearchIdentity("Planet Hulk", tc.author, &asin, nil, nil)
+			assert.Equal(t, tc.wantSameAsRaw, got == raw)
+			if !tc.wantSameAsRaw {
+				assert.Equal(t, database.MetadataSearchIdentity("Planet Hulk", "", &asin, nil, nil), got)
+			}
+		})
 	}
 }
 

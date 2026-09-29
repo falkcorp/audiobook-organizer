@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-09-28
 //
@@ -594,7 +594,7 @@ func (mfs *Service) fetchCacheIdentityForTitle(book *database.Book, title string
 			author = a.Name
 		}
 	}
-	return database.MetadataSearchIdentity(title, author, book.ASIN, book.ISBN13, book.ISBN10)
+	return FetchCacheIdentity(title, author, book.ASIN, book.ISBN13, book.ISBN10)
 }
 
 // hashSearchInputs builds a short stable digest of the search inputs

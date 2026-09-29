@@ -1,5 +1,5 @@
 // file: internal/server/metadata_bulk_fetch_log_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8966af00-704c-4a19-99e8-b832e27d9f7c
 // last-edited: 2026-09-28
 
@@ -75,7 +75,7 @@ func TestBulkFetchByIDs_LogsPerBookOutcomes(t *testing.T) {
 	disableMetadataSourcesForTest(t)
 
 	books := map[string]*database.Book{
-		"b-real":   {ID: "b-real", Title: "Book One"},
+		"b-real":   {ID: "b-real", Title: "Dune Messiah"},
 		"b-frag":   {ID: "b-frag", Title: "06 Chapter 6"},
 		"b-empty":  {ID: "b-empty", Title: ""},
 		"b-ph":     {ID: "b-ph", Title: "Unknown Title", FilePath: "/library/Unknown Author/Unknown Title/book.m4b"},
@@ -105,7 +105,7 @@ func TestBulkFetchByIDs_LogsPerBookOutcomes(t *testing.T) {
 		t.Fatalf("no-match lines = %v, want 3", noMatch)
 	}
 	for _, want := range []string{
-		`"Book One"`,
+		`"Dune Messiah"`,
 		`searched transcribed_title "Marvel's Planet Hulk"`,
 		`searched folder_title "Eldest"`,
 	} {
@@ -163,7 +163,7 @@ func TestResolveBulkFetchQuery_IdentityFollowsStandIn(t *testing.T) {
 	if !q.query.Usable || q.query.Title != "Planet Hulk" {
 		t.Fatalf("query = %+v, want Planet Hulk", q.query)
 	}
-	if want := database.MetadataSearchIdentity("Planet Hulk", "Unknown Author", &asin, nil, nil); q.identity != want {
+	if want := metafetch.FetchCacheIdentity("Planet Hulk", "Unknown Author", &asin, nil, nil); q.identity != want {
 		t.Errorf("identity = %q, want the stand-in's %q", q.identity, want)
 	}
 

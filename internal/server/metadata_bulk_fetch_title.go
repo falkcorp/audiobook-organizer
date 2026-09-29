@@ -75,7 +75,7 @@ func resolveBulkFetchQuery(store bulkFetchTitleStore, bookID, title, path, autho
 	}
 	return bulkFetchQuery{
 		query:    q,
-		identity: database.MetadataSearchIdentity(q.Title, author, book.ASIN, book.ISBN13, book.ISBN10),
+		identity: metafetch.FetchCacheIdentity(q.Title, author, book.ASIN, book.ISBN13, book.ISBN10),
 	}
 }
 
