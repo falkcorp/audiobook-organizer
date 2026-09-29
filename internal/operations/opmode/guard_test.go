@@ -1,7 +1,7 @@
 // file: internal/operations/opmode/guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e03d07d-8575-4704-af45-0699789f2293
-// last-edited: 2026-09-25
+// last-edited: 2026-09-29
 
 package opmode
 
@@ -10,9 +10,9 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -456,12 +456,23 @@ func isLiveCall(e ast.Expr) bool {
 	return len(call.Args) == 1 && isIdent(call.Args[0], "false")
 }
 
+// repoRoot walks up from the package directory (go test's working directory)
+// to the directory holding go.mod. Not runtime.Caller: CI builds with
+// -trimpath, which makes a source file's path module-relative.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	// internal/operations/opmode/guard_test.go -> repo root
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no go.mod above the package directory")
+		}
+		dir = parent
+	}
 }
