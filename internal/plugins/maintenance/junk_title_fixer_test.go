@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
 // last-edited: 2026-09-29
 
@@ -673,5 +673,22 @@ func TestWeakStemVeto(t *testing.T) {
 	for _, stem := range []string{"hp1", "zz", "final", "merged", "audible_download_2019"} {
 		_, ok := weakStemVeto(stem)
 		require.False(t, ok, stem)
+	}
+}
+
+func TestJunkTitleFixer_DottedWeakStemVetoesDisagreeingCandidate(t *testing.T) {
+	for _, stem := range []string{"The_Final_Empire", "The.Final.Empire", "the-final-empire-64kbps", "The.Final.Empire.64kbps"} {
+		t.Run(stem, func(t *testing.T) {
+			st, err := database.NewPebbleStore(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = st.Close() })
+			a, err := st.CreateAuthor("Some Author")
+			require.NoError(t, err)
+			id := addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/Rips/"+stem+".m4b")
+			require.NoError(t, st.PutMetadataCache(&database.MetadataCandidateCache{BookID: id, FetchedAt: time.Now(),
+				Candidates: []json.RawMessage{json.RawMessage(`{"title":"Elantris","author":"Some Author","score":0.9}`)}}))
+			r := planRows(t, st)[id]
+			require.False(t, r.Applicable(), "%s: proposed %q over its own filename (%s)", stem, r.Proposed["title"], r.Reason)
+		})
 	}
 }
