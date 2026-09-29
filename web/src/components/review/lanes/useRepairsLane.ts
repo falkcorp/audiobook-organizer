@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -431,6 +431,25 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     };
   }, []);
 
+  // The class of every row this session has read, keyed "<plan>|<row id>":
+  // settled outcomes carry no class, and under a selected class the "apply
+  // all" count subtracts only that class's settled rows. Every settled row
+  // was read first (a page on screen, or collectApplicableIds), so it is here.
+  const [rowClasses, setRowClasses] = useState<Readonly<Record<string, string>>>({});
+  const noteRowClasses = useCallback((plan: string, rows: readonly RepairRow[]) => {
+    setRowClasses((prev) => {
+      let next: Record<string, string> | null = null;
+      for (const r of rows) {
+        const key = `${plan}|${r.row_id}`;
+        if (r.class && prev[key] !== r.class) {
+          next ??= { ...prev };
+          next[key] = r.class;
+        }
+      }
+      return next ?? prev;
+    });
+  }, []);
+
   // ---- rows ---------------------------------------------------------------
   useEffect(() => {
     if (!active || !selectedFixerId || !planOpId) return;
@@ -445,7 +464,9 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
         { signal: ctrl.signal }
       )
       .then((p) => {
-        if (!ctrl.signal.aborted) setPage(p);
+        if (ctrl.signal.aborted) return;
+        noteRowClasses(p.plan_op_id, p.rows);
+        setPage(p);
       })
       .catch((err: unknown) => {
         if (ctrl.signal.aborted) return;
@@ -456,7 +477,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
         if (!ctrl.signal.aborted) setRowsLoading(false);
       });
     return () => ctrl.abort();
-  }, [active, selectedFixerId, planOpId, filter, rowClass, offset, pageSize, rowsNonce]);
+  }, [active, selectedFixerId, planOpId, filter, rowClass, offset, pageSize, rowsNonce, noteRowClasses]);
 
   const reloadRows = useCallback(() => setRowsNonce((n) => n + 1), []);
 
@@ -545,22 +566,27 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     [followTrial, toast]
   );
 
-  /** Every applicable row id of the stored plan, less the rows already settled. */
+  /**
+   * Every applicable row id of the stored plan (of rowClass only, when set),
+   * less the rows already settled.
+   */
   const collectApplicableIds = useCallback(
-    async (fixerId: string, plan: string, settled: ReadonlySet<string>): Promise<string[]> => {
+    async (fixerId: string, plan: string, settled: ReadonlySet<string>, rowClass?: string): Promise<string[]> => {
       const ids: string[] = [];
       for (let off = 0; ; ) {
         const p = await api.getRepairPlanRows(fixerId, plan, {
           filter: 'applicable',
           offset: off,
           limit: api.REPAIRS_ROWS_MAX_LIMIT,
+          rowClass,
         });
+        noteRowClasses(plan, p.rows);
         for (const r of p.rows) if (!r.skipped && !settled.has(r.row_id)) ids.push(r.row_id);
         off += p.rows.length;
         if (p.rows.length === 0 || off >= p.total) return ids;
       }
     },
-    []
+    [noteRowClasses]
   );
 
   const runApply = useCallback(
@@ -668,8 +694,15 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
   // Rows of this plan still worth sending. The stored plan never changes, so
   // without the subtraction a second "apply all" would re-send rows already
   // applied and the server would report them as changed since the trial.
-  const remainingApplicable =
-    currentPage !== null ? Math.max(0, currentPage.applicable - settledRowIds.size) : null;
+  // Under a selected class it counts that class's rows only, the rows "apply
+  // all" then sends.
+  const remainingApplicable = useMemo(() => {
+    if (currentPage === null) return null;
+    if (!rowClass) return Math.max(0, currentPage.applicable - settledRowIds.size);
+    let settledInClass = 0;
+    for (const id of settledRowIds) if (rowClasses[`${planOpId}|${id}`] === rowClass) settledInClass++;
+    return Math.max(0, (currentPage.applicable_in_class ?? 0) - settledInClass);
+  }, [currentPage, rowClass, settledRowIds, planOpId, rowClasses]);
 
   const dispatch = useCallback(
     (action: RepairsAction) => {
@@ -696,7 +729,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
           if (!window.confirm(repairApplyConfirmMessage(n, fixerTitle(action.fixerId)))) return;
           const settled = new Set(settledRowIds);
           void runApply(action.fixerId, action.planOpId, () =>
-            collectApplicableIds(action.fixerId, action.planOpId, settled)
+            collectApplicableIds(action.fixerId, action.planOpId, settled, action.rowClass)
           );
           return;
         }

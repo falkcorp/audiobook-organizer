@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-09-29
 //
@@ -475,5 +475,92 @@ describe('RepairsPanel — skip kinds under a selected class', () => {
     );
     await screen.findByTestId('repairs-row-s-moved');
     expect(screen.queryByTestId('repairs-row-s-copy')).not.toBeInTheDocument();
+  });
+});
+
+describe('RepairsPanel — apply all under a selected class', () => {
+  const A_MOVED = row('a-moved', { class: 'moved' });
+  const A_COPY = row('a-copy', { class: 'copy' });
+
+  beforeEach(() => {
+    vi.mocked(api.getRepairPlanRows).mockImplementation(
+      async (
+        fixerId: string,
+        planOpId: string,
+        q: { filter: RepairRowsFilter; offset: number; limit: number; rowClass?: string }
+      ) => {
+        const applicableRows = [A_MOVED, A_COPY];
+        const inFilter = q.filter === 'applicable' ? applicableRows : [];
+        const rows = q.rowClass ? inFilter.filter((r) => r.class === q.rowClass) : inFilter;
+        const byClass: Record<string, number> = {};
+        for (const r of inFilter) byClass[r.class!] = (byClass[r.class!] ?? 0) + 1;
+        return {
+          plan_op_id: planOpId,
+          fixer_id: fixerId,
+          planned_at: '2026-09-29T10:01:00Z',
+          filter: q.filter,
+          class: q.rowClass,
+          offset: q.offset,
+          limit: q.limit,
+          total: rows.length,
+          applicable: applicableRows.length,
+          skipped_by_kind: {},
+          by_class: { moved: 1, copy: 1 },
+          by_class_in_filter: byClass,
+          ...(q.rowClass
+            ? {
+                skipped_by_kind_in_class: {},
+                applicable_in_class: applicableRows.filter((r) => r.class === q.rowClass).length,
+              }
+            : {}),
+          rows: rows.slice(q.offset, q.offset + q.limit),
+        };
+      }
+    );
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue({
+      fixer_id: 'vg-primary',
+      plan_op_id: 'plan-1',
+      dry_run: false,
+      requested: 1,
+      by_outcome: { applied: 1 },
+      applied: 1,
+      changed_since_plan: 0,
+      partially_applied: 0,
+      failed: 0,
+      standdown_held: true,
+      rows: [{ row_id: 'a-moved', outcome: 'applied' }],
+    });
+  });
+
+  it('applies only the selected class\'s rows, and says so', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-a-copy');
+    expect(screen.getByTestId('repairs-apply-all')).toHaveTextContent('Apply all applicable (2)');
+
+    await user.click(screen.getByTestId('repairs-class-moved'));
+    await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-a-copy')).not.toBeInTheDocument());
+    const button = screen.getByTestId('repairs-apply-all');
+    expect(button).toHaveTextContent('Apply all applicable in this class (1)');
+
+    await user.click(button);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toMatch(/^Apply 1 repair row/);
+    await vi.waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(1));
+    expect(api.startRepairApply).toHaveBeenCalledWith('vg-primary', 'plan-1', ['a-moved']);
+    expect(api.getRepairPlanRows).toHaveBeenCalledWith(
+      'vg-primary',
+      'plan-1',
+      expect.objectContaining({ filter: 'applicable', rowClass: 'moved', limit: api.REPAIRS_ROWS_MAX_LIMIT })
+    );
+
+    // The applied row is subtracted from its own class only.
+    await vi.waitFor(() =>
+      expect(screen.getByTestId('repairs-apply-all')).toHaveTextContent('Apply all applicable in this class (0)')
+    );
+    await user.click(screen.getByTestId('repairs-class-moved'));
+    await user.click(await screen.findByTestId('repairs-class-copy'));
+    await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-a-moved')).not.toBeInTheDocument());
+    expect(screen.getByTestId('repairs-apply-all')).toHaveTextContent('Apply all applicable in this class (1)');
   });
 });
