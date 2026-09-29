@@ -1,5 +1,5 @@
 // file: internal/authorname/parse.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9f4c2a71-58d3-4e60-b19a-6c0e7d35f8b2
 // last-edited: 2026-09-28
 
@@ -195,36 +195,123 @@ func ExtractAuthorFromDirectory(filePath string) string {
 	return ""
 }
 
-// ParseFilenameForAuthor splits a "Title - Author" or "Author - Title" filename,
-// returning (title, author). Author is "" when the shape is not a simple
-// two-part pattern or the sides cannot be told apart.
+// DashParse is the reading of a two-part "X - Y" filename.
 //
-// The side-choosing decision itself is personname.ChooseAuthorSide, one shared
-// decision behind every call site; this function is only the split and the
-// tie-break policy.
+// Exactly one of three shapes comes back when Parsed is true:
 //
-// A side that names a WORK rather than a person -- article-led ("The Stormlight
-// Archive", "A Song of Ice and Fire") or carrying a series word ("Wheel of Time
-// Book 1", "Dune Chronicles") -- is never an author, however person-shaped it
-// is (personname.LooksLikeWorkTitle). When neither side can be the author this
-// returns ("", ""), and BOTH callers (metadata.extractFromFilename and
-// scanner.extractInfoFromPath) then read "X - Y" as series X, title Y via
-// metadata.SeriesFromTitlePrefix. Until 2026-09-28 "The Stormlight Archive -
-// The Way of Kings" came back with author "The Stormlight Archive" and never
-// reached that branch.
-func ParseFilenameForAuthor(filename string) (string, string) {
+//   - Author and Title set: one side is the author.
+//   - Series and Title set: "Series - Title". Callers still apply their own
+//     chapter-position check (metadata.SeriesFromTitlePrefix) to Series.
+//   - Title alone: no author and NO series. One side was refused as an author
+//     but may still BE one, so it is not filed anywhere.
+//
+// Parsed is false when the name is not exactly two " - " parts; the caller's
+// own multi-part fallback applies then, unchanged.
+type DashParse struct {
+	Parsed bool
+	Author string
+	Title  string
+	Series string
+}
+
+// ParseDashFilename reads a two-part "X - Y" filename.
+//
+// ORDER OF DECISIONS, each one measured against a case that broke:
+//
+//  1. A left side carrying a zero-padded volume number is "Series NN - Title":
+//     "The Expanse 01 - Leviathan Wakes" filed "Leviathan Wakes" as the AUTHOR,
+//     because the right side is two capitalised words. The padded number is a
+//     sequence position, which a person's name never carries.
+//     EXCEPT when the right side names one of the file's ancestor folders.
+//     The organizer writes "<root>/<author>/<title>/<title> - <author>.ext",
+//     so a title carrying a padded number ("Pratchett 036", "Discworld 01")
+//     arrives as "Discworld 01 - Terry Pratchett.mp3" under ".../Terry
+//     Pratchett/Discworld 01/"; the folder is the evidence that the right side
+//     is the author, which the filename alone cannot give.
+//     COST, accepted: the same name OUTSIDE such a folder gives title "Terry
+//     Pratchett" and no author. Nothing in the text separates a title from a
+//     name of the same shape; this errs to an ABSENT author (AI nomination
+//     gets the book) rather than the wrong one.
+//  2. Otherwise personname.ChooseAuthorSide picks the author, with a
+//     work-named side never eligible (personname.LooksLikeWorkTitle).
+//  3. When it refuses, the refused sides are NOT all alike. A side refused only
+//     by its leading article can still be a real credit -- "An Na", "The
+//     Arbinger Institute", and "A Johnston" is in the production author table
+//     -- so it must become neither the SERIES nor the TITLE. Until this was
+//     split out, "An Na - A Step from Heaven" filed series "An Na". A side is
+//     a possible credit when it is credit-SHAPED
+//     (personname.LooksLikeAuthorCreditShape) and carries no series marker
+//     (personname.HasSeriesMarker).
+//     - neither side a possible credit: Series = left, Title = right
+//     ("A Song of Ice and Fire - A Game of Thrones",
+//     "The Stormlight Archive - The Way of Kings");
+//     - one side a possible credit: Title = the other side, no series;
+//     - both: Title = the whole name, no series ("The Dark Tower - The
+//     Gunslinger" -- two article-led, person-shaped phrases).
+//
+// KNOWN LIMIT, not fixed here: "The Hunger Games - Catching Fire" gives author
+// "Catching Fire". An article-led left side against a clean two-word right side
+// is exactly "The Stand - Stephen King", and the text cannot separate them.
+//
+// filePath is the file's full path, used only for the ancestor-folder check in
+// step 1; "" disables it.
+func ParseDashFilename(filename, filePath string) DashParse {
 	parts := strings.Split(filename, " - ")
 	if len(parts) != 2 {
-		return "", "" // Not a simple two-part pattern
+		return DashParse{}
 	}
-
 	left := strings.TrimSpace(parts[0])
 	right := strings.TrimSpace(parts[1])
 
-	title, author, ok := personname.ChooseAuthorSide(left, right, personname.PreferRightOnTie)
-	if !ok {
-		// Couldn't determine, return empty author
+	if personname.HasPaddedVolumeNumber(left) && !personname.HasSeriesMarker(right) &&
+		!namesAnAncestorFolder(right, filePath) {
+		return DashParse{Parsed: true, Series: left, Title: right}
+	}
+
+	if title, author, ok := personname.ChooseAuthorSide(left, right, personname.PreferRightOnTie); ok {
+		return DashParse{Parsed: true, Author: author, Title: title}
+	}
+
+	possibleCredit := func(side string) bool {
+		return !personname.HasSeriesMarker(side) && personname.LooksLikeAuthorCreditShape(side)
+	}
+	leftCredit, rightCredit := possibleCredit(left), possibleCredit(right)
+	switch {
+	case !leftCredit && !rightCredit:
+		return DashParse{Parsed: true, Series: left, Title: right}
+	case leftCredit && !rightCredit:
+		return DashParse{Parsed: true, Title: right}
+	case !leftCredit && rightCredit:
+		return DashParse{Parsed: true, Title: left}
+	default:
+		return DashParse{Parsed: true, Title: left + " - " + right}
+	}
+}
+
+// ParseFilenameForAuthor splits a "Title - Author" or "Author - Title" filename,
+// returning (title, author). Both are "" when no author was found; callers that
+// need the series or title in that case use ParseDashFilename, which is what
+// this wraps.
+func ParseFilenameForAuthor(filename string) (string, string) {
+	p := ParseDashFilename(filename, "")
+	if p.Author == "" {
 		return "", ""
 	}
-	return title, author
+	return p.Title, p.Author
+}
+
+// namesAnAncestorFolder reports whether name equals (case-insensitively) the
+// base name of any folder above filePath.
+func namesAnAncestorFolder(name, filePath string) bool {
+	if filePath == "" {
+		return false
+	}
+	for dir := filepath.Dir(filePath); ; dir = filepath.Dir(dir) {
+		if strings.EqualFold(strings.TrimSpace(filepath.Base(dir)), name) {
+			return true
+		}
+		if filepath.Dir(dir) == dir {
+			return false
+		}
+	}
 }

@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.112.0
+// version: 1.113.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-28
 
@@ -2121,15 +2121,30 @@ func extractInfoFromPath(book *Book) {
 
 	// Try to parse "Title - Author" or "Author - Title" patterns from filename
 	if strings.Contains(baseName, " - ") {
-		title, author := authorname.ParseFilenameForAuthor(baseName)
-		if author != "" && book.Author == "" {
-			book.Author = author
-			book.Title = title
-		} else {
-			// No author could be determined: the last segment is the title,
-			// and the first is the series unless either end is only a chapter
-			// position ("02 - Eldest" filed one book per chapter under a series
-			// named "02"). See metadata.SeriesFromTitlePrefix.
+		// ParseDashFilename, not ParseFilenameForAuthor: when no author is
+		// found the parser also says whether the left side may be a SERIES.
+		// Splitting every authorless pair into series=left, title=right filed
+		// refused real credits as series ("An Na - A Step from Heaven" ->
+		// series "An Na") and, when an author WAS found but the book already
+		// had one, filed that author as the series.
+		p := authorname.ParseDashFilename(baseName, path)
+		switch {
+		case p.Author != "":
+			if book.Author == "" {
+				book.Author = p.Author
+			}
+			book.Title = p.Title
+		case p.Parsed:
+			if p.Series != "" && book.Series == "" {
+				// The chapter-position check still applies: "Eldest - 02".
+				book.Series = metadata.SeriesFromTitlePrefix([]string{p.Series, p.Title})
+			}
+			book.Title = p.Title
+		default:
+			// Not a two-part name: the last segment is the title, and the
+			// first is the series unless either end is only a chapter position
+			// ("02 - Eldest" filed one book per chapter under a series named
+			// "02"). See metadata.SeriesFromTitlePrefix.
 			parts := strings.Split(baseName, " - ")
 			if len(parts) > 1 {
 				if series := metadata.SeriesFromTitlePrefix(parts); series != "" && book.Series == "" {

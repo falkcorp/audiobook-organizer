@@ -1,5 +1,5 @@
 // file: internal/authorname/parse_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b8e5f27-14a9-4c03-9d6b-8e21f70a4c95
 // last-edited: 2026-09-28
 
@@ -232,5 +232,49 @@ func TestParseFilenameForAuthor(t *testing.T) {
 					tc.filename, title, author, tc.wantTitle, tc.wantAuthor)
 			}
 		})
+	}
+}
+
+// TestParseDashFilename pins the three answer shapes and, above all, that a
+// side refused as an author but still credit-shaped is filed NOWHERE -- not as
+// the series and not as the title.
+func TestParseDashFilename(t *testing.T) {
+	cases := []struct {
+		in                    string
+		author, title, series string
+	}{
+		{"The Stormlight Archive - The Way of Kings", "", "The Way of Kings", "The Stormlight Archive"},
+		{"A Song of Ice and Fire - A Game of Thrones", "", "A Game of Thrones", "A Song of Ice and Fire"},
+		{"Wheel of Time 01 - The Eye of the World", "", "The Eye of the World", "Wheel of Time 01"},
+		{"Discworld 01 - The Colour of Magic", "", "The Colour of Magic", "Discworld 01"},
+		{"The Expanse 01 - Leviathan Wakes", "", "Leviathan Wakes", "The Expanse 01"},
+		{"Brandon Sanderson - The Way of Kings", "Brandon Sanderson", "The Way of Kings", ""},
+		{"Mistborn Book 1 - Brandon Sanderson", "Brandon Sanderson", "Mistborn Book 1", ""},
+		{"An Na - A Step from Heaven", "", "A Step from Heaven", ""},
+		{"A Step from Heaven - An Na", "", "A Step from Heaven", ""},
+		{"The Arbinger Institute - Leadership and Self-Deception", "", "Leadership and Self-Deception", ""},
+		{"The Dark Tower - The Gunslinger", "", "The Dark Tower - The Gunslinger", ""},
+		{"Memories of Silk and Straw - Junichi Saga", "Junichi Saga", "Memories of Silk and Straw", ""},
+		{"Junichi Saga - Memories of Silk and Straw", "Junichi Saga", "Memories of Silk and Straw", ""},
+		// KNOWN LIMIT: the same shape as "The Stand - Stephen King".
+		{"The Hunger Games - Catching Fire", "Catching Fire", "The Hunger Games", ""},
+		// Chapter positions are the caller's check (SeriesFromTitlePrefix).
+		{"Eldest - 02", "", "02", "Eldest"},
+	}
+	for _, tc := range cases {
+		got := ParseDashFilename(tc.in, "")
+		if !got.Parsed || got.Author != tc.author || got.Title != tc.title || got.Series != tc.series {
+			t.Errorf("ParseDashFilename(%q) = %+v, want author %q title %q series %q",
+				tc.in, got, tc.author, tc.title, tc.series)
+		}
+	}
+	// The organizer's own "<author>/<title>/<title> - <author>" layout: the
+	// ancestor folder vouches for the right side despite the padded number.
+	org := ParseDashFilename("Discworld 01 - Terry Pratchett", "/lib/Terry Pratchett/Discworld 01/Discworld 01 - Terry Pratchett.mp3")
+	if org.Author != "Terry Pratchett" || org.Title != "Discworld 01" || org.Series != "" {
+		t.Errorf("organizer layout: %+v, want author Terry Pratchett, title Discworld 01", org)
+	}
+	if got := ParseDashFilename("Neil Gaiman - Norse Mythology - 01", ""); got.Parsed {
+		t.Errorf("three-part name parsed: %+v", got)
 	}
 }

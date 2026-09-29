@@ -1,5 +1,5 @@
 // file: internal/scanner/extract_info_chapter_title_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1887ad95-0bf8-4bb7-87f5-cf52026d1289
 // last-edited: 2026-09-28
 
@@ -8,7 +8,8 @@ package scanner
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 )
 
 // TestExtractInfoFromPath_ChapterFilesAndNoSeriesFromPrefix is task E on the
@@ -63,33 +64,52 @@ func TestExtractInfoFromPath_ChapterFilesAndNoSeriesFromPrefix(t *testing.T) {
 }
 
 // TestExtractInfoFromPath_SeriesTitleIsNotAnAuthor is the end-to-end pin for
-// "The Stormlight Archive - The Way of Kings.mp3" in a folder that names no
-// author. authorname.ParseFilenameForAuthor used to read the capitalised left
-// side as the AUTHOR, so the book got a bogus author and no series; and when the
-// folder itself was the series, authorname.ExtractAuthorFromDirectory would
-// have handed the same bogus author back as the fallback.
+// the dash-filename reading in a folder that names no author, through the
+// series write: each row with a series is fed to the REAL resolveSeriesID (on
+// a mock store) and must look up the stripped name and return the position.
 //
-// wantSeriesName/wantPosition are what resolveSeriesID persists: it runs
-// metadata.StripSeriesContamination over this series before writing, which is
-// where "Discworld 01" becomes series "Discworld" at position 1.
+// Three failure classes are pinned here:
+//   - a series or title filed as the AUTHOR ("The Stormlight Archive - The Way
+//     of Kings", "The Expanse 01 - Leviathan Wakes");
+//   - a real credit refused as an author and then filed as the SERIES or the
+//     TITLE ("An Na - A Step from Heaven", "The Arbinger Institute - ...");
+//   - a surname that is also a series word ("Junichi Saga").
+//
+// wantAuthor "" means NO author, and is asserted, not skipped.
 func TestExtractInfoFromPath_SeriesTitleIsNotAnAuthor(t *testing.T) {
 	cases := []struct {
 		path                       string
 		wantAuthor, wantTitle      string
 		wantSeries, wantSeriesName string
-		wantPosition               string
+		wantPosition               int
 	}{
-		{"/lib/import/The Stormlight Archive - The Way of Kings.mp3", "", "The Way of Kings", "The Stormlight Archive", "The Stormlight Archive", ""},
+		{"/lib/import/The Stormlight Archive - The Way of Kings.mp3", "", "The Way of Kings", "The Stormlight Archive", "The Stormlight Archive", 0},
 		// The folder is the series: the directory fallback must not take it.
-		{"/lib/The Stormlight Archive/The Stormlight Archive - The Way of Kings.mp3", "", "The Way of Kings", "The Stormlight Archive", "The Stormlight Archive", ""},
-		{"/lib/import/Brandon Sanderson - The Way of Kings.mp3", "Brandon Sanderson", "The Way of Kings", "", "", ""},
-		{"/lib/import/Sanderson, Brandon - Mistborn.mp3", "Sanderson, Brandon", "Mistborn", "", "", ""},
-		{"/lib/import/Wheel of Time 01 - The Eye of the World.mp3", "", "The Eye of the World", "Wheel of Time 01", "Wheel of Time", "1"},
-		{"/lib/import/A Song of Ice and Fire - A Game of Thrones.mp3", "", "A Game of Thrones", "A Song of Ice and Fire", "A Song of Ice and Fire", ""},
-		{"/lib/import/J.R.R. Tolkien - The Hobbit.mp3", "J.R.R. Tolkien", "The Hobbit", "", "", ""},
-		{"/lib/import/Discworld 01 - The Colour of Magic.mp3", "", "The Colour of Magic", "Discworld 01", "Discworld", "1"},
-		{"/lib/import/The Dark Tower - The Gunslinger.mp3", "", "The Gunslinger", "The Dark Tower", "The Dark Tower", ""},
-		{"/lib/import/A J Finn - The Woman in the Window.mp3", "A J Finn", "The Woman in the Window", "", "", ""},
+		{"/lib/The Stormlight Archive/The Stormlight Archive - The Way of Kings.mp3", "", "The Way of Kings", "The Stormlight Archive", "The Stormlight Archive", 0},
+		{"/lib/import/Brandon Sanderson - The Way of Kings.mp3", "Brandon Sanderson", "The Way of Kings", "", "", 0},
+		{"/lib/import/Sanderson, Brandon - Mistborn.mp3", "Sanderson, Brandon", "Mistborn", "", "", 0},
+		{"/lib/import/Wheel of Time 01 - The Eye of the World.mp3", "", "The Eye of the World", "Wheel of Time 01", "Wheel of Time", 1},
+		{"/lib/import/A Song of Ice and Fire - A Game of Thrones.mp3", "", "A Game of Thrones", "A Song of Ice and Fire", "A Song of Ice and Fire", 0},
+		{"/lib/import/J.R.R. Tolkien - The Hobbit.mp3", "J.R.R. Tolkien", "The Hobbit", "", "", 0},
+		{"/lib/import/Discworld 01 - The Colour of Magic.mp3", "", "The Colour of Magic", "Discworld 01", "Discworld", 1},
+		{"/lib/import/A J Finn - The Woman in the Window.mp3", "A J Finn", "The Woman in the Window", "", "", 0},
+		// A padded volume number marks "Series NN - Title", so the two-word
+		// title on the right is not the author.
+		{"/lib/import/The Expanse 01 - Leviathan Wakes.mp3", "", "Leviathan Wakes", "The Expanse 01", "The Expanse", 1},
+		// A series WORD alone does not: "Title Book N - Author" is common.
+		{"/lib/import/Mistborn Book 1 - Brandon Sanderson.mp3", "Brandon Sanderson", "Mistborn Book 1", "", "", 0},
+		// Refused credits are neither series nor title.
+		{"/lib/import/An Na - A Step from Heaven.mp3", "", "A Step from Heaven", "", "", 0},
+		{"/lib/import/A Step from Heaven - An Na.mp3", "", "A Step from Heaven", "", "", 0},
+		{"/lib/import/The Arbinger Institute - Leadership and Self-Deception.mp3", "", "Leadership and Self-Deception", "", "", 0},
+		// Two article-led person-shaped halves: keep the whole name as the title.
+		{"/lib/import/The Dark Tower - The Gunslinger.mp3", "", "The Dark Tower - The Gunslinger", "", "", 0},
+		// "Saga" is a surname, not a series word.
+		{"/lib/import/Memories of Silk and Straw - Junichi Saga.mp3", "Junichi Saga", "Memories of Silk and Straw", "", "", 0},
+		{"/lib/import/Junichi Saga - Memories of Silk and Straw.mp3", "Junichi Saga", "Memories of Silk and Straw", "", "", 0},
+		// KNOWN LIMIT, pinned so a change is noticed: this is the same shape as
+		// "The Stand - Stephen King" and the text cannot separate them.
+		{"/lib/import/The Hunger Games - Catching Fire.mp3", "Catching Fire", "The Hunger Games", "", "", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -102,14 +122,20 @@ func TestExtractInfoFromPath_SeriesTitleIsNotAnAuthor(t *testing.T) {
 			if b.Series == "" {
 				return
 			}
-			c := metadata.StripSeriesContamination(b.Series, "")
-			name := c.Name
-			if name == "" {
-				name = b.Series
+			store := dbmocks.NewMockStore(t)
+			origStore := database.GetGlobalStore()
+			database.SetGlobalStore(store)
+			SetStore(store)
+			t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
+			store.EXPECT().GetSeriesByName(tc.wantSeriesName, (*int)(nil)).
+				Return(&database.Series{ID: 7, Name: tc.wantSeriesName}, nil)
+
+			id, pos, err := resolveSeriesID(b.Series, nil)
+			if err != nil || id == nil || *id != 7 {
+				t.Fatalf("resolveSeriesID(%q) = (%v, %d, %v)", b.Series, id, pos, err)
 			}
-			if name != tc.wantSeriesName || c.Position != tc.wantPosition {
-				t.Errorf("persisted series = (%q, pos %q), want (%q, pos %q)",
-					name, c.Position, tc.wantSeriesName, tc.wantPosition)
+			if pos != tc.wantPosition {
+				t.Errorf("resolveSeriesID(%q) position = %d, want %d", b.Series, pos, tc.wantPosition)
 			}
 		})
 	}

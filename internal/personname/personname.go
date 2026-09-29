@@ -1,5 +1,5 @@
 // file: internal/personname/personname.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8c3f6a15-2e94-4d78-b1a0-5f7e2c9d3b48
 // last-edited: 2026-09-28
 
@@ -167,17 +167,25 @@ var titleLeadRe = regexp.MustCompile(`(?i)^(?:the|a|an)\s`)
 // volume, a collection -- and that do not occur in a person's name. They are
 // matched as WHOLE WORDS anywhere in the string, never as prefixes (see
 // structuralWords for the Booker/Volker damage a prefix test does), so
-// "Stormlight Archive" and "Mistborn Saga" match while "Archer" and "Sagan" do
-// not.
+// "Stormlight Archive" matches while "Archer" does not.
 //
 // It is a superset of structuralWords: that list is only tested as the FIRST
 // word (by IsValidAuthor), which is why "Wheel of Time Book 1" and "Dune
 // Chronicles" got past it.
+//
+// MEASURED 2026-09-28 against the 15,048 distinct names in the production
+// author table: of the names that are person-SHAPED, 125 contain one of these
+// words, and every one of them is a mis-filed work ("Demon Cycle", "The Martian
+// Chronicles", "Nano Mage Omnibus", "Night Angel Series"), not a person.
+//
+// "saga" is deliberately ABSENT. It hit only works in that corpus too, but it
+// is a real surname -- Junichi Saga, "Memories of Silk and Straw" -- and a
+// real author refused here is exactly the failure this list must not cause.
+// Add a word only after the same measurement, and never one that is a surname.
 var workWords = func() map[string]bool {
 	m := map[string]bool{
 		"archive": true, "archives": true,
 		"chronicle": true, "chronicles": true,
-		"saga": true, "sagas": true,
 		"series": true,
 		"cycle":  true, "cycles": true,
 		"trilogy": true, "trilogies": true,
@@ -190,11 +198,65 @@ var workWords = func() map[string]bool {
 	return m
 }()
 
+// paddedNumberRe matches a zero-padded or "#"-marked volume number ("01",
+// "007", "#3"). An UNPADDED number is deliberately not a series marker:
+// "Catch 22", "Fahrenheit 451" and "Slaughterhouse 5" are titles, and nothing
+// in the text separates them from "Discworld 5". Padding is the same evidence
+// metadata.SplitSeriesPosition reports as Padded.
+var paddedNumberRe = regexp.MustCompile(`^(?:0\d+|#\d+)$`)
+
+// leadsWithArticle reports whether s opens with The/A/An as an article. "A"
+// followed by a single-letter word is initials, not an article: "A J Finn",
+// "A E van Vogt". ("A. J. Finn" never matches at all -- the article must be
+// followed by whitespace.)
+func leadsWithArticle(s string) bool {
+	if !titleLeadRe.MatchString(s) {
+		return false
+	}
+	fields := strings.Fields(s)
+	isInitials := strings.EqualFold(fields[0], "a") && len(fields) > 1 &&
+		len([]rune(strings.TrimRight(fields[1], "."))) == 1
+	return !isInitials
+}
+
+// HasSeriesMarker reports whether s carries STRONG evidence of naming a series
+// or volume: a series/volume word as a whole word ("Stormlight Archive", "Dune
+// Chronicles", "Wheel of Time Book 1") or a zero-padded / "#" volume number
+// ("The Expanse 01", "Discworld 01").
+//
+// It is the stronger half of LooksLikeWorkTitle. A leading article is WEAK
+// evidence -- "An Na", "A Johnston" and "The Arbinger Institute" are credits
+// that open with one -- so a caller that must decide whether a side may be
+// filed as a SERIES asks this, not LooksLikeWorkTitle.
+func HasSeriesMarker(s string) bool {
+	if HasPaddedVolumeNumber(s) {
+		return true
+	}
+	for _, w := range strings.Fields(StripEditionSuffix(s)) {
+		if workWords[strings.ToLower(strings.Trim(w, ".,:;-_()[]0123456789"))] {
+			return true
+		}
+	}
+	return false
+}
+
+// HasPaddedVolumeNumber reports whether s carries a zero-padded or "#" volume
+// number as a whole word ("The Expanse 01", "Discworld #3"). That is a
+// SEQUENCE POSITION, so "Series NN - X" names a series and a book in it; see
+// authorname.ParseDashFilename for the one place this decides an orientation.
+func HasPaddedVolumeNumber(s string) bool {
+	for _, w := range strings.Fields(StripEditionSuffix(s)) {
+		if paddedNumberRe.MatchString(strings.Trim(w, ".,:;-_()[]")) {
+			return true
+		}
+	}
+	return false
+}
+
 // LooksLikeWorkTitle reports whether s reads as the name of a work or a series
-// rather than of a person, on evidence a person's name never carries: it opens
-// with an English article ("The Stormlight Archive", "A Song of Ice and Fire",
-// "An Ember in the Ashes"), or it contains a series/volume word as a whole word
-// ("Stormlight Archive", "Dune Chronicles", "Wheel of Time Book 1").
+// rather than of a person: it opens with an English article ("The Stormlight
+// Archive", "A Song of Ice and Fire", "An Ember in the Ashes"), or it carries a
+// series marker (HasSeriesMarker).
 //
 // It exists because LooksLikePersonName is a SHAPE test -- two to four
 // capitalised words -- and "The Stormlight Archive" has exactly that shape. In
@@ -202,38 +264,21 @@ var workWords = func() map[string]bool {
 // (lowercase "of") and the left passes it, so the SERIES was filed as the
 // author and the book lost both its series and any chance at AI nomination.
 //
-// One exception keeps real names out of it:
-//
-//   - "A" followed by a single-letter word is initials, not an article:
-//     "A J Finn", "A E van Vogt". ("A. J. Finn" never matches the article test
-//     at all -- the article must be followed by whitespace.)
-//
-// KNOWN COST, accepted: a two-word name whose first word is literally "An" --
-// "An Na", the Korean-American novelist -- reads as article-led and is refused.
-// Refusal here means "not an author", which routes the book to AI nomination;
-// the wrong-author failure this fixes is not recoverable that way.
+// This answers "may this side be the AUTHOR?" and nothing more. A side refused
+// only by its article may still BE a person -- the production author table
+// holds "A Johnston" and "A Merrydew", and "An Na" and "The Arbinger
+// Institute" are real credits -- so a refusal here must never be read as "this
+// side is a series" or "this side is a title". authorname.ParseDashFilename is
+// the caller that makes that distinction, via LooksLikeAuthorCreditShape.
 //
 // A trailing edition marker is ignored first, so "The Hobbit (Unabridged)" is
 // judged as "The Hobbit".
 func LooksLikeWorkTitle(s string) bool {
 	s = StripEditionSuffix(s)
-	fields := strings.Fields(s)
-	if len(fields) == 0 {
+	if strings.TrimSpace(s) == "" {
 		return false
 	}
-	if titleLeadRe.MatchString(s) {
-		isInitials := strings.EqualFold(fields[0], "a") && len(fields) > 1 &&
-			len([]rune(strings.TrimRight(fields[1], "."))) == 1
-		if !isInitials {
-			return true
-		}
-	}
-	for _, w := range fields {
-		if workWords[strings.ToLower(strings.Trim(w, ".,:;-_()[]0123456789"))] {
-			return true
-		}
-	}
-	return false
+	return leadsWithArticle(s) || HasSeriesMarker(s)
 }
 
 // looksLikeAuthorName is the orientation-side name test: person-SHAPED and not
@@ -493,12 +538,25 @@ func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string
 // Callers deciding whether to ACCEPT a single string as a name still want the
 // strict predicate, because a credit list is not a person.
 func LooksLikeAuthorCredit(s string) bool {
+	return looksLikeCredit(s, looksLikeAuthorName)
+}
+
+// LooksLikeAuthorCreditShape is LooksLikeAuthorCredit WITHOUT the work-title
+// veto: the bare shape question, "could this be a name or a list of names?".
+// A caller that has to decide whether a REFUSED side might still be a person
+// ("An Na", "The Arbinger Institute") asks this, because the vetoed predicate
+// cannot tell "a work" from "a person whose name opens with an article".
+func LooksLikeAuthorCreditShape(s string) bool {
+	return looksLikeCredit(s, LooksLikePersonName)
+}
+
+func looksLikeCredit(s string, name func(string) bool) bool {
 	s = strings.TrimSpace(s)
-	if looksLikeAuthorName(s) {
+	if name(s) {
 		return true
 	}
 	bare := strings.TrimSpace(editionSuffixRe.ReplaceAllString(s, ""))
-	if bare != s && looksLikeAuthorName(bare) {
+	if bare != s && name(bare) {
 		return true
 	}
 	// A credit list: EVERY clause must be a name. One title clause poisons the
@@ -511,7 +569,7 @@ func LooksLikeAuthorCredit(s string) bool {
 		return false
 	}
 	for _, c := range clauses {
-		if !looksLikeAuthorName(strings.TrimSpace(c)) {
+		if !name(strings.TrimSpace(c)) {
 			return false
 		}
 	}
