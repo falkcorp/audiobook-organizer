@@ -1,5 +1,5 @@
 # file: .woodpecker/checks.yaml
-# version: 2.0.0
+# version: 1.1.0
 # guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
 # last-edited: 2026-09-29
 #
@@ -8,22 +8,27 @@
 # ratchet, mocks-check, fmt-check, sdkguard, bench-check, and the web tests.
 # Each step runs the same make target `make ci` runs.
 #
-# Runs on the U1 agent (local backend, Linux amd64, 48 cores). It ran on the
-# prod host's docker agent until 2026-09-29, where it took 566 s and set the
-# CI wall time: the docker backend mounts /woodpecker as a volume created for
-# each workflow and deleted at its end, so every run re-downloaded and rebuilt
-# staticcheck, golangci-lint and mockery (89-131 s) and then built the whole
-# repo cold in five steps at once. A host directory as the cache needs the
-# repo to be Trusted. On the local backend the caches below are ordinary host
-# directories on U1's tank/ci dataset and persist between runs.
+# Runs on the prod host's agent (docker backend, 2 workflows at a time, 8 CPU /
+# 16 GiB per step container), alongside test-database. Measured on Linux: vet about 20 s,
+# staticcheck about 105 s, errcheck ratchet about 90 s, bench-check about 60 s,
+# web tests about 50 s, plus about 2 min to install the pinned tools. The
+# workflow finishes in roughly the time the Mac test workflows take.
 #
-# Tool versions match the runner nodes and scripts/setup-mockery.sh. Node is
-# the official v26 tarball under /tank/ci/tools/node (checksum-verified; see
-# docs/ci/woodpecker.md). PATH puts the pinned Go toolchain's own bin first so
-# fmt-check runs gofmt 1.27.1, not the older /usr/bin/gofmt from Ubuntu's Go.
+# Tool versions match the runner nodes and scripts/setup-mockery.sh. Binaries,
+# the Go build cache and the module cache live under /ci-cache, which lies
+# outside the source tree (fmt-check runs `gofmt -l .` on the tree).
+#
+# /ci-cache is a host directory the U0 agent mounts into every step container
+# (WOODPECKER_BACKEND_DOCKER_VOLUMES; see docs/ci/woodpecker.md). Until
+# 2026-09-29 the caches lived under /woodpecker/cache, but the docker backend
+# creates /woodpecker as a volume per workflow and deletes it at the end, so
+# every run re-downloaded and rebuilt the linters (89-131 s) and built the repo
+# cold: 566 s, the slowest workflow. The mount is set on the agent, not in this
+# file, so the repo does not need Woodpecker's Trusted flag (which would let
+# any pipeline file mount any host path on the prod host).
 
 labels:
-  host: u1
+  host: u0
 
 when:
   - event: [push, pull_request, manual]
@@ -36,97 +41,88 @@ clone:
       depth: 50
 
 variables:
+  - &go_image golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
   - &go_env
     GOTOOLCHAIN: go1.27.1
-    # -trimpath: every run clones into a new woodpecker-local-<n> workdir, and
-    # without it Go keys each package's cache entry on that directory, so the
-    # shared cache would never hit (see test-server-scanner.yaml).
-    GOFLAGS: -buildvcs=false -trimpath
-    GOCACHE: /tank/ci/cache/go-build
-    GOMODCACHE: /tank/ci/cache/gomod
-    GOBIN: /tank/ci/cache/bin
-    GOLANGCI_LINT_CACHE: /tank/ci/cache/golangci-lint
-    XDG_CACHE_HOME: /tank/ci/cache/xdg
-  - &path_setup 'export PATH="$$GOBIN:$$(go env GOROOT)/bin:$$PATH"'
+    GOFLAGS: -buildvcs=false
+    GOCACHE: /ci-cache/go-build
+    GOMODCACHE: /ci-cache/gomod
+    GOBIN: /ci-cache/bin
+    GOLANGCI_LINT_CACHE: /ci-cache/golangci-lint
+    XDG_CACHE_HOME: /ci-cache/xdg
 
 steps:
   - name: tools
-    # Local backend: `image` names the SHELL that runs the commands.
-    image: bash
+    image: *go_image
     environment: *go_env
     commands:
-      # A few seconds once the caches are warm. go install renames the binary
-      # into GOBIN, so a concurrent pipeline still running the old file is
+      # Fails fast if the agent's cache mount is missing: without it these
+      # paths would sit in the step container and vanish with it.
+      - 'mountpoint -q /ci-cache || { echo "::error::/ci-cache is not mounted; see docs/ci/woodpecker.md"; exit 1; }'
+      # A few seconds once the caches are warm; go install renames the binary
+      # into GOBIN, so a concurrent workflow still running the old one is
       # unaffected.
       - go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
       - go install github.com/vektra/mockery/v3@v3.7.4
 
   - name: vet
-    image: bash
+    image: *go_image
     environment: *go_env
     depends_on: [tools]
     commands:
       - make --no-print-directory vet
 
   - name: staticcheck
-    image: bash
+    image: *go_image
     environment: *go_env
     depends_on: [tools]
     commands:
-      - *path_setup
+      - export PATH="$$GOBIN:$$PATH"
       - make --no-print-directory staticcheck
 
   - name: errcheck-ratchet
-    image: bash
+    image: *go_image
     environment: *go_env
     depends_on: [tools]
     commands:
-      - *path_setup
+      - export PATH="$$GOBIN:$$PATH"
       - make --no-print-directory lint-errcheck-ratchet
 
   - name: mocks-check
-    image: bash
+    image: *go_image
     environment: *go_env
     depends_on: [tools]
     commands:
-      - *path_setup
+      - export PATH="$$GOBIN:$$PATH"
       - make --no-print-directory mocks-check
 
   - name: fmt-sdkguard-bench
-    image: bash
+    image: *go_image
     environment: *go_env
     depends_on: [tools]
     commands:
-      - *path_setup
-      - command -v gofmt && go version
       - make --no-print-directory fmt-check
       - make --no-print-directory sdkguard
       - make --no-print-directory bench-check
 
   - name: web-test
-    image: bash
+    image: node:26-alpine@sha256:dbaa92e5758cbbcf85d65d5403fdb530fe3442cbe8c6dbfb7ef23365450d5070
     depends_on: []
     environment:
-      npm_config_cache: /tank/ci/cache/npm
+      npm_config_cache: /ci-cache/npm
     commands:
-      - export PATH="/tank/ci/tools/node/bin:$$PATH"
-      - node --version
       - npm ci --prefix web --no-audit --no-fund
       - cd web && npm run test -- --run
 
-  - name: cleanup
-    # Same cleanup as test-rest.yaml: cap the shared GOCACHE, clear this clone
-    # and the per-run HOME, and sweep workdirs left by a crashed agent.
-    image: bash
-    depends_on: [vet, staticcheck, errcheck-ratchet, mocks-check, fmt-sdkguard-bench, web-test]
+  - name: cache-trim
+    # Keeps the shared build cache under its budget, least recently used
+    # first. The dataset behind /ci-cache also has a hard ZFS quota; this step
+    # keeps the cache well below it so builds never fail on a full cache.
+    image: *go_image
+    environment: *go_env
+    depends_on: [vet, staticcheck, errcheck-ratchet, mocks-check, fmt-sdkguard-bench]
     when:
       - status: [success, failure]
-    environment:
-      GOCACHE: /tank/ci/cache/go-build
     commands:
-      - '[ -n "$${GOCACHE}" ] && python3 scripts/ci/trim_go_cache.py "$${GOCACHE}" --max-gb 40 --target-gb 30 || true'
-      - '[ -n "$${CI_WORKSPACE}" ] && [ "$${CI_WORKSPACE}" != / ] && find "$${CI_WORKSPACE}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true'
-      - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
-      - 'find "$${TMPDIR:-/tmp}" -maxdepth 1 -name "go-build*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true'
-      - '[ -n "$${HOME}" ] && W=$$(dirname "$${HOME}") && R=$$(dirname "$$W") && case "$$(basename "$$W")" in woodpecker-local-*) find "$$R" -mindepth 1 -maxdepth 1 -name "woodpecker-local-*" -type d ! -path "$$W" -mmin +180 -exec sh -c "chmod -R u+w \"\$$@\" && rm -rf \"\$$@\"" _ {} + ;; esac || true'
+      - python3 scripts/ci/trim_go_cache.py "$${GOCACHE}" --max-gb 40 --target-gb 30
