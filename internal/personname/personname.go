@@ -1,7 +1,7 @@
 // file: internal/personname/personname.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8c3f6a15-2e94-4d78-b1a0-5f7e2c9d3b48
-// last-edited: 2026-09-01
+// last-edited: 2026-09-28
 
 // Package personname answers "does this string look like a human author's
 // name, rather than a title or a structural marker?" -- the heuristic that
@@ -163,6 +163,87 @@ var creditSeparatorRe = regexp.MustCompile(`(?i)\s*(?:,|;|&|\+|/|\band\b|\bwith\
 // identical shape "two to four capitalised words".
 var titleLeadRe = regexp.MustCompile(`(?i)^(?:the|a|an)\s`)
 
+// workWords are words that name a WORK or a grouping of works -- a series, a
+// volume, a collection -- and that do not occur in a person's name. They are
+// matched as WHOLE WORDS anywhere in the string, never as prefixes (see
+// structuralWords for the Booker/Volker damage a prefix test does), so
+// "Stormlight Archive" and "Mistborn Saga" match while "Archer" and "Sagan" do
+// not.
+//
+// It is a superset of structuralWords: that list is only tested as the FIRST
+// word (by IsValidAuthor), which is why "Wheel of Time Book 1" and "Dune
+// Chronicles" got past it.
+var workWords = func() map[string]bool {
+	m := map[string]bool{
+		"archive": true, "archives": true,
+		"chronicle": true, "chronicles": true,
+		"saga": true, "sagas": true,
+		"series": true,
+		"cycle":  true, "cycles": true,
+		"trilogy": true, "trilogies": true,
+		"collection": true, "collections": true,
+		"omnibus": true,
+	}
+	for w := range structuralWords {
+		m[w] = true
+	}
+	return m
+}()
+
+// LooksLikeWorkTitle reports whether s reads as the name of a work or a series
+// rather than of a person, on evidence a person's name never carries: it opens
+// with an English article ("The Stormlight Archive", "A Song of Ice and Fire",
+// "An Ember in the Ashes"), or it contains a series/volume word as a whole word
+// ("Stormlight Archive", "Dune Chronicles", "Wheel of Time Book 1").
+//
+// It exists because LooksLikePersonName is a SHAPE test -- two to four
+// capitalised words -- and "The Stormlight Archive" has exactly that shape. In
+// "The Stormlight Archive - The Way of Kings" the right side fails the shape
+// (lowercase "of") and the left passes it, so the SERIES was filed as the
+// author and the book lost both its series and any chance at AI nomination.
+//
+// One exception keeps real names out of it:
+//
+//   - "A" followed by a single-letter word is initials, not an article:
+//     "A J Finn", "A E van Vogt". ("A. J. Finn" never matches the article test
+//     at all -- the article must be followed by whitespace.)
+//
+// KNOWN COST, accepted: a two-word name whose first word is literally "An" --
+// "An Na", the Korean-American novelist -- reads as article-led and is refused.
+// Refusal here means "not an author", which routes the book to AI nomination;
+// the wrong-author failure this fixes is not recoverable that way.
+//
+// A trailing edition marker is ignored first, so "The Hobbit (Unabridged)" is
+// judged as "The Hobbit".
+func LooksLikeWorkTitle(s string) bool {
+	s = StripEditionSuffix(s)
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return false
+	}
+	if titleLeadRe.MatchString(s) {
+		isInitials := strings.EqualFold(fields[0], "a") && len(fields) > 1 &&
+			len([]rune(strings.TrimRight(fields[1], "."))) == 1
+		if !isInitials {
+			return true
+		}
+	}
+	for _, w := range fields {
+		if workWords[strings.ToLower(strings.Trim(w, ".,:;-_()[]0123456789"))] {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeAuthorName is the orientation-side name test: person-SHAPED and not
+// work-NAMED. LooksLikePersonName stays shape-only because internal/dedup's
+// composite splitter also calls it and falls through to a weaker gate on
+// refusal, so widening it there is a separate, separately-measured change.
+func looksLikeAuthorName(s string) bool {
+	return LooksLikePersonName(s) && !LooksLikeWorkTitle(s)
+}
+
 // StripEditionSuffix removes trailing edition/format markers -- "(Unabridged)",
 // "[Dramatized Adaptation]", and repeats of them. Exported because callers that
 // compare an author against a known string (authorname.IsPlaceholder) must
@@ -185,7 +266,7 @@ func looksLikeAmpersandCredit(s string) bool {
 		return false
 	}
 	for _, c := range clauses {
-		if !LooksLikePersonName(strings.TrimSpace(c)) {
+		if !looksLikeAuthorName(strings.TrimSpace(c)) {
 			return false
 		}
 	}
@@ -245,7 +326,7 @@ func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string
 		return "", "", false
 	}
 
-	// Both sides could be a credit. Three discriminators, in order.
+	// Both sides could be a credit. Two discriminators, in order.
 	//
 	// There was briefly a fourth, tried first: "a list of two or more names
 	// beats a single name", splitting on the full creditSeparatorRe. It was
@@ -305,23 +386,29 @@ func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string
 	// "Series = first part, Title = last part" split, then a directory-derived
 	// author), which then fills in a worse answer. Fail-closed at this predicate
 	// is not fail-closed at the consumer.
-	leftLead, rightLead := titleLeadRe.MatchString(left), titleLeadRe.MatchString(right)
-	if leftLead != rightLead {
-		// A leading article marks the title.
-		if leftLead {
-			return left, right, true
-		}
-		return right, left, true
-	}
-
-	// Second of the three. Ordering here is load-bearing in BOTH directions and
-	// each direction was measured, because it is not deducible:
 	//
-	//   - It must run AFTER the article test. With it first,
-	//     "The City & The City - China Mieville" filed the TITLE as the author:
-	//     the left side is two person-shaped clauses joined by "&", and a
-	//     leading article is the stronger signal.
-	//   - It must run BEFORE the initials test. With it last, any title
+	// There used to be a leading-article discriminator here, tried first: when
+	// both sides were credit-shaped and exactly one opened with "The"/"A"/"An",
+	// that one was the title. It is gone because it can no longer fire: an
+	// article-led side now fails LooksLikeAuthorCredit itself (see
+	// LooksLikeWorkTitle), so the pair is settled by the switch above with the
+	// same answer. Moving the article from a TIEBREAK to a GATE is what fixed
+	// the case the tiebreak could not see -- both sides article-led, or only the
+	// article-led side person-shaped:
+	//
+	//   "The Stormlight Archive - The Way of Kings" -> author "The Stormlight Archive"
+	//   "The Dark Tower - The Gunslinger"           -> author "The Gunslinger"
+	//
+	// Both now refuse, and the caller files the left side as the series.
+	//
+	// Ordering of the two discriminators below is load-bearing and was
+	// measured, because it is not deducible:
+	//
+	//   - "The City & The City - China Mieville" used to depend on the article
+	//     test running before the ampersand test; the left side is two
+	//     person-shaped clauses joined by "&". It is now refused at the gate,
+	//     before either runs.
+	//   - The ampersand test must run BEFORE the initials test. With it last, any title
 	//     containing a period beat an ampersand credit, which origin/main got
 	//     right and this did not:
 	//       "David Weber & John Ringo - Mr. Mercedes"      -> author "Mr. Mercedes"
@@ -407,11 +494,11 @@ func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string
 // strict predicate, because a credit list is not a person.
 func LooksLikeAuthorCredit(s string) bool {
 	s = strings.TrimSpace(s)
-	if LooksLikePersonName(s) {
+	if looksLikeAuthorName(s) {
 		return true
 	}
 	bare := strings.TrimSpace(editionSuffixRe.ReplaceAllString(s, ""))
-	if bare != s && LooksLikePersonName(bare) {
+	if bare != s && looksLikeAuthorName(bare) {
 		return true
 	}
 	// A credit list: EVERY clause must be a name. One title clause poisons the
@@ -424,7 +511,7 @@ func LooksLikeAuthorCredit(s string) bool {
 		return false
 	}
 	for _, c := range clauses {
-		if !LooksLikePersonName(strings.TrimSpace(c)) {
+		if !looksLikeAuthorName(strings.TrimSpace(c)) {
 			return false
 		}
 	}
