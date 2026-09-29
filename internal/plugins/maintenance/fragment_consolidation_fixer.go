@@ -24,8 +24,9 @@
 //     row at the file's current path (same row id, track and history) and
 //     retires the fragment into the parent. A match resting on the original
 //     name and size alone is a separate, skipped "moved-unproven" row unless
-//     the fragment was also imported from the parent row's folder or the two
-//     durations agree.
+//     the fragment was also imported from the parent row's folder. An equal
+//     duration proves nothing more: for a constant-bitrate file the size
+//     already determines it.
 //   - copy: the fragment's file duplicates a file the parent still has on
 //     disk. A proven match (imported FROM the parent row's path with the same
 //     size on disk, or the same hash) is retired into the parent; an
@@ -159,7 +160,6 @@ const (
 	fragEvImportPath       = "import path equals the parent row's path"
 	fragEvHash             = "file hash equals the parent row's"
 	fragEvNameSizeFolder   = "original filename and size equal the parent row's, imported from the parent row's folder"
-	fragEvNameSizeDuration = "original filename, size and duration equal the parent row's"
 	fragEvNameSize         = "original filename and size equal the parent row's"
 	fragEvDone             = "parent row already points at the fragment's file (finished step)"
 )
@@ -376,7 +376,7 @@ type fragMatch struct {
 // match finds the parent rows the candidate matches, strongest tier first:
 // a finished step, the import path, the hash, then the pre-organize basename
 // plus size (upgraded when the fragment was imported from the parent row's
-// folder or the durations agree). Size alone never matches. Rows of the
+// folder). Size alone never matches. Rows of the
 // candidate's own book are ignored. A tier that yields a match ends the
 // search.
 func (ix *fragIndex) match(c *fragCandidate) []fragMatch {
@@ -425,11 +425,8 @@ func (ix *fragIndex) match(c *fragCandidate) []fragMatch {
 			continue
 		}
 		ev := fragEvNameSize
-		switch {
-		case c.ImportPath != "" && filepath.Dir(c.ImportPath) == filepath.Dir(r.Path):
+		if c.ImportPath != "" && filepath.Dir(c.ImportPath) == filepath.Dir(r.Path) {
 			ev = fragEvNameSizeFolder
-		case r.Duration > 0 && r.Duration == c.File.Duration:
-			ev = fragEvNameSizeDuration
 		}
 		out = append(out, fragMatch{Row: r, Evidence: ev})
 	}
@@ -450,16 +447,17 @@ func hashesDisagree(a, b fragFile) bool {
 }
 
 // provenMatch: evidence strong enough to repoint a parent row or retire a
-// copy. A name-and-size match on its own never is. For a moved row a shared
-// import folder or an equal duration also proves it (the parent's file is
-// gone, so there is nothing else left to compare); a copy, whose parent file
-// is still on disk, is proven only by the import path (with an equal size on
+// copy. A name-and-size match on its own never is, nor with an equal
+// duration (a constant-bitrate file's size already fixes its duration). For a
+// moved row a shared import folder also proves it (the parent's file is gone,
+// so there is nothing else left to compare); a copy, whose parent file is
+// still on disk, is proven only by the import path (with an equal size on
 // disk) or a hash.
 func provenMatch(kind, evidence string) bool {
 	switch evidence {
 	case fragEvImportPath, fragEvHash, fragEvDone:
 		return true
-	case fragEvNameSizeFolder, fragEvNameSizeDuration:
+	case fragEvNameSizeFolder:
 		return kind == fragClassMoved
 	}
 	return false
@@ -1095,7 +1093,7 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		if rowKind == fragRowMovedUnproven {
 			r.Risk = repairs.RiskReview
 			r.Skipped = fragSkipMovedUnproven
-			r.SkipReason = fmt.Sprintf("%d match(es) rest on the original name and size only (no import path, hash, shared folder or duration): check by hand before repointing", n)
+			r.SkipReason = fmt.Sprintf("%d match(es) rest on the original name and size only (no import path, hash or shared import folder): check by hand before repointing", n)
 		}
 	case fragClassCopy, fragRowCopyUnproven:
 		r.Proposed = map[string]string{"action": fmt.Sprintf("retire %d fragment book(s) into the parent (the parent keeps its own files; nothing is repointed)", n)}

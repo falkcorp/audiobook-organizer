@@ -525,10 +525,12 @@ func TestFragmentFixer_MovedNameSizeOnlyIsUnproven(t *testing.T) {
 		f.row(t, "p02", parent, f.path("lib/X/02.mp3"), "02.mp3", 102, 600, 2) // gone from disk
 		imp := f.file(t, importRel, 102)
 		frag := f.book(t, "frag", "02", imp, nil)
-		f.row(t, "f02", frag, imp, "02.mp3", 102, 590, 0)
+		// The same duration as the parent row: on a constant-bitrate file the
+		// size already fixes it, so it proves nothing more.
+		f.row(t, "f02", frag, imp, "02.mp3", 102, 600, 0)
 		f.organize(t, frag, imp, f.path("lib/Y/02/02.mp3"))
 	}
-	t.Run("name and size only", func(t *testing.T) {
+	t.Run("name, size and duration only", func(t *testing.T) {
 		f := newFragFixture(t)
 		seed(t, f, "lib/Elsewhere/02.mp3")
 		res := f.plan(t, "op-plan")
@@ -536,6 +538,10 @@ func TestFragmentFixer_MovedNameSizeOnlyIsUnproven(t *testing.T) {
 		require.Equal(t, fragClassMoved, r.Class)
 		require.Equal(t, fragSkipMovedUnproven, r.Skipped)
 		require.False(t, r.Applicable())
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Zero(t, out.Applied)
+		p02 := f.fileRow(t, "parent", "p02")
+		require.Equal(t, f.path("lib/X/02.mp3"), p02.FilePath, "not repointed")
 	})
 	t.Run("imported from the parent row's folder", func(t *testing.T) {
 		f := newFragFixture(t)
