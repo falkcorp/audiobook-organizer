@@ -192,25 +192,34 @@ func TestExtractMetadataFromFolder_SeriesFolderIsNotAnAuthor(t *testing.T) {
 			t.Errorf("%s: authors = %q, want none", dir, fm.Authors)
 		}
 	}
-	// A work-named segment ENDS the author walk: going past it took a genre
-	// folder as the author. The series-marked segment is recorded as the series.
-	fm, err := ExtractMetadataFromFolder("/mnt/Science Fiction/The Stormlight Archive/The Way of Kings/Disc 1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(fm.Authors) != 0 || fm.SeriesName != "The Stormlight Archive" {
-		t.Errorf("genre folder: authors = %q series = %q, want none / The Stormlight Archive", fm.Authors, fm.SeriesName)
-	}
-	// COST, pinned: an author folder beyond a series folder is not reached.
-	fm, err = ExtractMetadataFromFolder("/lib/Brandon Sanderson/The Stormlight Archive/The Way of Kings/Disc 1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(fm.Authors) != 0 {
-		t.Errorf("author/series/title/disc: authors = %q, want none (walk stops at the series)", fm.Authors)
+	// Past a work-named (series) folder the walk takes exactly ONE more step,
+	// and accepts it only if person-shaped and not a genre/container folder.
+	for _, tc := range []struct {
+		dir, wantAuthor, wantSeries string
+	}{
+		{"/lib/Stephen King/The Dark Tower/The Gunslinger/Disc 1", "Stephen King", "The Dark Tower"},
+		{"/lib/Isaac Asimov/The Foundation Series/Foundation/Part 1", "Isaac Asimov", "The Foundation Series"},
+		{"/lib/Brandon Sanderson/The Stormlight Archive/The Way of Kings/Disc 1", "Brandon Sanderson", "The Stormlight Archive"},
+		{"/mnt/Science Fiction/The Stormlight Archive/The Way of Kings/Disc 1", "", "The Stormlight Archive"},
+		{"/srv/Fantasy/Dune Chronicles/Children of Dune/Disc 1", "", "Dune Chronicles"},
+		{"/srv/Audiobooks/Dune Chronicles/Children of Dune/Disc 1", "", "Dune Chronicles"},
+		// Stops after the one step: a genre folder past the author is not read.
+		{"/mnt/Science Fiction/Stephen King/The Dark Tower/The Gunslinger/Disc 1", "Stephen King", "The Dark Tower"},
+	} {
+		fm, err := ExtractMetadataFromFolder(tc.dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotAuthor := ""
+		if len(fm.Authors) > 0 {
+			gotAuthor = fm.Authors[0]
+		}
+		if gotAuthor != tc.wantAuthor || len(fm.Authors) > 1 || fm.SeriesName != tc.wantSeries {
+			t.Errorf("%s: authors = %q series = %q, want %q / %q", tc.dir, fm.Authors, fm.SeriesName, tc.wantAuthor, tc.wantSeries)
+		}
 	}
 
-	fm, err = ExtractMetadataFromFolder("/lib/books/Brandon Sanderson/The Way of Kings/Disc 1")
+	fm, err := ExtractMetadataFromFolder("/lib/books/Brandon Sanderson/The Way of Kings/Disc 1")
 	if err != nil {
 		t.Fatal(err)
 	}
