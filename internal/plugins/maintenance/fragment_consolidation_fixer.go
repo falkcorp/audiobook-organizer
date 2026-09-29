@@ -977,7 +977,11 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		}
 		r.Evidence = append(r.Evidence, fmt.Sprintf("%s ← parent row %s (%s): %s",
 			p.Frag.File.Path, p.Parent.ID, filepath.Base(p.Parent.Path), p.Evidence))
-		fpParts = append(fpParts, strings.Join([]string{p.Frag.Book.ID, p.Frag.File.ID, p.Frag.File.Path, p.Parent.ID, p.Evidence}, "|"))
+		// The pairing and whether it is proven, not the evidence text: a
+		// finished repoint turns "import path" into "already points at it"
+		// for the same decision.
+		fpParts = append(fpParts, strings.Join([]string{p.Frag.Book.ID, p.Frag.File.ID, p.Frag.File.Path, p.Parent.ID,
+			strconv.FormatBool(provenMatch(p.Evidence))}, "|"))
 	}
 	sort.Strings(r.BookIDs)
 	n := len(pairs)
@@ -1459,6 +1463,15 @@ func (f *fragmentFixer) replanGroup(store OpsStore, lib *fragLibrary, hist Fragm
 		}
 		if plan, ok := r.Detail.(*fragGroupPlan); ok {
 			plan.WasTitle, plan.WasPath = st.SurvivorTitle, st.SurvivorPath
+			// The survivor's title and path must still be what the plan saw,
+			// or what this row's own finished step set, before anything moves.
+			sb := lib.books[survivorID]
+			if sb.Title != st.SurvivorTitle && (plan.Title == "" || sb.Title != plan.Title) {
+				return changedRow(planned, fmt.Sprintf("survivor %s title is %q, not %q as planned", survivorID, sb.Title, st.SurvivorTitle)), nil
+			}
+			if sb.FilePath != st.SurvivorPath && (plan.Folder == "" || sb.FilePath != plan.Folder) {
+				return changedRow(planned, fmt.Sprintf("survivor %s path is %q, not %q as planned", survivorID, sb.FilePath, st.SurvivorPath)), nil
+			}
 		}
 		r.State = planned.State
 		return f.checkOwners(hist, planned, r)

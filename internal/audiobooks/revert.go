@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.26.0
+// version: 1.26.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-28
 
@@ -333,21 +333,35 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			operationID, restorableTotal)
 	}
 
-	// Process newest first, except that a retired book's soft-delete and
-	// primary-demote rows wait until every row of this operation that moved
-	// or repointed that book's file elsewhere has been reverted
-	// (retireDependents): restoring the book first -- or at all, when one of
-	// those rows is refused -- would leave two live books owning one file.
+	// Process newest first, except that every row of a retired book (its
+	// soft-delete, primary demote, merged-into, cleared path, moved external
+	// ids and followed user state) waits until every row of this operation
+	// that moved or repointed that book's file elsewhere has been reverted
+	// (retireDependents), and is refused if one of those was not: restoring
+	// the book would leave two live books owning one file, and restoring only
+	// its path, ids or progress onto a book that stays retired hands them to
+	// the purge (which deletes a purged book's file_path and tombstones its
+	// ids).
 	var errMsgs []string
 	var restoredIDs []string
 	deps, err := rs.retireDependents(restorable)
 	if err != nil {
 		return nil, err
 	}
+	depIDs := map[string]bool{}
+	for _, ids := range deps {
+		for _, id := range ids {
+			depIDs[id] = true
+		}
+	}
+	retiredRow := func(c *database.OperationChange) bool {
+		_, ok := deps[c.BookID]
+		return ok && !depIDs[c.ID]
+	}
 	order := make([]*database.OperationChange, 0, len(restorable))
 	var deferred []*database.OperationChange
 	for _, c := range slices.Backward(restorable) {
-		if _, ok := deps[c.BookID]; ok && (c.ChangeType == undo.ChangeTypeBookSoftDelete || c.ChangeType == undo.ChangeTypeBookPrimaryDemote) {
+		if retiredRow(c) {
 			deferred = append(deferred, c)
 			continue
 		}
@@ -358,8 +372,8 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	refusedBook := map[string]bool{}
 	for _, c := range order {
 		var err error
-		if ids, ok := deps[c.BookID]; ok && (c.ChangeType == undo.ChangeTypeBookSoftDelete || c.ChangeType == undo.ChangeTypeBookPrimaryDemote) {
-			for _, id := range ids {
+		if retiredRow(c) {
+			for _, id := range deps[c.BookID] {
 				if !restored[id] {
 					err = &undo.ReferentError{Reason: undo.ReasonDependentNotReverted,
 						Detail: fmt.Sprintf("change %s (the file of book %s moved or repointed elsewhere) was not reverted; book %s stays retired", id, c.BookID, c.BookID)}
@@ -368,7 +382,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			}
 			if err == nil && refusedBook[c.BookID] {
 				err = &undo.ReferentError{Reason: undo.ReasonDependentNotReverted,
-					Detail: fmt.Sprintf("book %s was not restored, so its primary flag is not either", c.BookID)}
+					Detail: fmt.Sprintf("book %s was not restored, so its %s change is not either", c.BookID, c.ChangeType)}
 			}
 			if err != nil {
 				refusedBook[c.BookID] = true

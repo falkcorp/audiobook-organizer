@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-28
 //
