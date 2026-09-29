@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-09-29
 
@@ -563,9 +563,16 @@ function PlanView({ repairs }: RepairsPanelProps) {
 
   const runTrial = () => repairs.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: fixer.id });
   const running = trial?.phase === 'running';
-  const skippedTotal = sumCounts(page?.skipped_by_kind);
+  // Under a selected class the tabs list only that class's rows, so their
+  // labels count only them ("every count opens its books"). The page's own
+  // class decides, so a label never counts rows of a class the list is not
+  // (yet) showing.
+  const inClass = !!page?.class;
+  const skippedTotal = sumCounts(
+    inClass && page?.skipped_by_kind_in_class ? page.skipped_by_kind_in_class : page?.skipped_by_kind
+  );
   const selectedCount = repairs.selectedRowIds.size;
-  const applicable = page?.applicable ?? 0;
+  const applicable = (inClass ? page?.applicable_in_class : undefined) ?? page?.applicable ?? 0;
   const remaining = repairs.remainingApplicable ?? 0;
   const applyDisabled = repairs.applying || running;
 

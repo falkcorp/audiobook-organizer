@@ -813,7 +813,11 @@
             "additionalProperties": {
               "type": "integer"
             },
-            "description": "Skipped rows of the selected class by skip kind, whatever the filter. Only when class is set."
+            "description": "Skipped rows of the selected class by skip kind, whatever the filter. An object (possibly empty) when class is set; null otherwise."
+          },
+          "applicable_in_class": {
+            "type": "integer",
+            "description": "Applicable rows of the selected class, whatever the filter. Present (possibly 0) only when class is set."
           }
         }
       },

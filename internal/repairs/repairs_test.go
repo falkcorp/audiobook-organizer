@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-09-29
 
@@ -656,6 +656,70 @@ func TestPlanResult_PageSkipKindWithClass(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, p.Total)
 	require.NotNil(t, p.Rows)
+}
+
+// TestPlanResult_PageInClassTalliesAreInTheJSON (F4, review MED1): under a
+// class, an empty in-class skip tally and a zero in-class applicable count
+// are in the JSON (the panel reads a missing key as "no class counts" and
+// falls back to the whole plan's); without a class, applicable_in_class is
+// absent.
+func TestPlanResult_PageInClassTalliesAreInTheJSON(t *testing.T) {
+	res := &PlanResult{FixerID: "x", Rows: []Row{
+		{RowID: "r1", Class: "moved"},
+		{RowID: "r2", Skipped: SkipITunes, Class: "copy"},
+	}, SkippedByKind: map[string]int{SkipITunes: 1}, Applicable: 1}
+	keys := func(p *RowsPage) map[string]json.RawMessage {
+		raw, err := json.Marshal(p)
+		require.NoError(t, err)
+		var m map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &m))
+		return m
+	}
+
+	p, err := res.Page("op", FilterAll, "moved", 0, 10)
+	require.NoError(t, err)
+	m := keys(p)
+	require.JSONEq(t, `{}`, string(m["skipped_by_kind_in_class"]))
+	require.JSONEq(t, `1`, string(m["applicable_in_class"]))
+
+	p, err = res.Page("op", FilterSkipped, "copy", 0, 10)
+	require.NoError(t, err)
+	m = keys(p)
+	require.JSONEq(t, `{"skipped_itunes":1}`, string(m["skipped_by_kind_in_class"]))
+	require.JSONEq(t, `0`, string(m["applicable_in_class"]), "a zero count is present, not absent")
+
+	p, err = res.Page("op", FilterAll, "", 0, 10)
+	require.NoError(t, err)
+	m = keys(p)
+	_, ok := m["applicable_in_class"]
+	require.False(t, ok, "no class: no in-class applicable count")
+}
+
+// TestPlanResult_PageApplicableInClass (F3): the in-class applicable count
+// is the class's applicable rows whatever the filter, and equals the Total
+// the "applicable" filter pages for that class.
+func TestPlanResult_PageApplicableInClass(t *testing.T) {
+	res := &PlanResult{FixerID: "x", Rows: []Row{
+		{RowID: "a", Class: "moved"},
+		{RowID: "b", Class: "moved"},
+		{RowID: "c", Class: "copy"},
+		{RowID: "d", Skipped: SkipITunes, Class: "moved"},
+	}, SkippedByKind: map[string]int{SkipITunes: 1}, Applicable: 3}
+	for _, filter := range []string{FilterAll, FilterApplicable, FilterSkipped, FilterSkippedKindPrefix + SkipITunes} {
+		for class, want := range map[string]int{"moved": 2, "copy": 1, "none": 0} {
+			p, err := res.Page("op", filter, class, 0, 50)
+			require.NoError(t, err)
+			require.NotNil(t, p.ApplicableInClass, "%s/%s", filter, class)
+			require.Equal(t, want, *p.ApplicableInClass, "%s/%s", filter, class)
+			require.Equal(t, 3, p.Applicable, "the whole-plan count is unchanged")
+			ap, err := res.Page("op", FilterApplicable, class, 0, 50)
+			require.NoError(t, err)
+			require.Equal(t, ap.Total, *p.ApplicableInClass, "%s/%s", filter, class)
+		}
+	}
+	p, err := res.Page("op", FilterAll, "", 0, 50)
+	require.NoError(t, err)
+	require.Nil(t, p.ApplicableInClass)
 }
 
 func TestLoadPlan_ChecksDefStatusAndFixer(t *testing.T) {
