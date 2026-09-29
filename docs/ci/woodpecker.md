@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-09-29 -->
 
@@ -133,7 +133,7 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
 |---|---|---|---|---|---|
 | U0 | 192.0.2.10 | docker | `host=u0` | 2 | swarm service `woodpecker_woodpecker-agent` |
 | llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 2 | LaunchDaemon, `UserName` = the CI user |
-| U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true` | 2 | systemd `woodpecker-agent.service`, `User=woodpecker` |
+| U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true` | 4 | systemd `woodpecker-agent.service`, `User=woodpecker` |
 
 All agents use `WOODPECKER_SERVER=192.0.2.10:18734` and the same
 `WOODPECKER_AGENT_SECRET` as the server.
