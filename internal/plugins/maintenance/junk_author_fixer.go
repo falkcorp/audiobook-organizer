@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -145,6 +145,42 @@ var junkAuthorSources = []string{junkAuthorSrcCleaned, junkAuthorSrcTags, junkAu
 // someone else, confirms or refutes a weak verdict.
 func junkAuthorConfirmingSource(src string) bool {
 	return src == junkAuthorSrcTags || src == junkAuthorSrcProvider
+}
+
+// junkAuthorEvidenceKind groups the sources by what they read, so agreement
+// is counted between INDEPENDENT evidence. The version group, the folder and
+// the series all read sibling books, and one sibling can be in all three:
+// they are one kind, "siblings", however many sibling books name the author
+// (neighbours by the same author are one inference, not several). The folder
+// parser reads where the file sits: "location".
+func junkAuthorEvidenceKind(src string) string {
+	switch src {
+	case junkAuthorSrcTags:
+		return "file"
+	case junkAuthorSrcProvider:
+		return "provider"
+	case junkAuthorSrcCleaned:
+		return "name"
+	case junkAuthorSrcPath:
+		return "location"
+	default: // version_group, same_folder, same_series
+		return "siblings"
+	}
+}
+
+// junkAuthorEvidenceKinds counts the distinct evidence kinds whose answers
+// include key.
+func junkAuthorEvidenceKinds[A any](bySource map[string]map[string]A, key string) int {
+	if key == "" {
+		return 0
+	}
+	kinds := map[string]bool{}
+	for src, ans := range bySource {
+		if _, ok := ans[key]; ok {
+			kinds[junkAuthorEvidenceKind(src)] = true
+		}
+	}
+	return len(kinds)
 }
 
 // junkAuthorCorroborates: the sources that lift a tag-only or cleaned-name answer
@@ -708,8 +744,8 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		}
 	}
 
-	// agreeing counts the later sources that name the chosen author too.
-	agreeing := 0
+	// chosenKey is the chosen answer's key, for the evidence-kind count.
+	chosenKey := ""
 	// The first source with an answer decides.
 	for si, src := range junkAuthorSources {
 		ans := bySource[src]
@@ -735,6 +771,7 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 			d.Skip, d.SkipReason = junkAuthorSkipAmbiguous, fmt.Sprintf("%q matches more than one author row", chosen.row.Name)
 			break
 		}
+		chosenKey = key
 		d.Source, d.Target, d.Variant, d.NarratorAnswer = src, chosen.row, chosen.variant, chosen.narrator
 		d.Decision = junkAuthorDecRelink
 		if chosen.create {
@@ -746,7 +783,6 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 					d.Others = append(d.Others, o.row.Name+" ["+later+"]")
 					continue
 				}
-				agreeing++
 				if junkAuthorCorroborates(later) {
 					d.Corroborated = true
 				}
@@ -766,12 +802,13 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 	}
 	// A relink-only verdict ("The Dalai Lama", "50 Cent": real credits are
 	// in the rule's reach) moves a book only on strong evidence: the provider,
-	// the name itself cleaned, or a second source naming the same author. It
-	// never mints: one file tag naming a co-author ("Howard Cutler") would
-	// otherwise replace the real credit.
+	// the name itself cleaned, or two independent evidence kinds naming the
+	// same author (junkAuthorEvidenceKinds). It never mints: one file tag
+	// naming a co-author ("Howard Cutler") would otherwise replace the real
+	// credit.
 	if v.RelinkOnly() && d.Skip == "" && (d.Decision == junkAuthorDecRelink || d.Decision == junkAuthorDecCreate) {
 		strongSrc := d.Source == junkAuthorSrcProvider || d.Source == junkAuthorSrcCleaned
-		if d.Decision == junkAuthorDecCreate || (!strongSrc && agreeing == 0) {
+		if d.Decision == junkAuthorDecCreate || (!strongSrc && junkAuthorEvidenceKinds(bySource, chosenKey) < 2) {
 			d.Skip, d.SkipReason = junkAuthorSkipAmbiguous, fmt.Sprintf(
 				"%q is flagged only by %s; %q [%s] is one uncorroborated answer, so the credit is kept", a.Name, v.Rule, d.Target.Name, d.Source)
 		}
