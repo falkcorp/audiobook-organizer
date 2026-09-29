@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-09-29
 
@@ -731,7 +731,11 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 						"no transcription or candidate corroborates it", folder, filepath.Dir(titleDir)))
 			}
 		}
-		props = append(props, proposal{folder, folderSrc, repairs.RiskReview})
+		// A weak filename stem ("hp1", "final") is never a title, not even
+		// as a last resort.
+		if !weakFolder {
+			props = append(props, proposal{folder, folderSrc, repairs.RiskReview})
+		}
 	}
 	if kind.IsChapterKind() && b.SeriesID != nil && idx.series[*b.SeriesID] != "" {
 		if m := trailingNumberRe.FindStringSubmatch(b.Title); m != nil {
@@ -747,6 +751,9 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	if ownerManual != "" {
 		return finish(repairs.SkipOwnerManual, fmt.Sprintf(
 			"the proposed title %q marks Big Finish / Doctor Who / Torchwood content; owner applies these by hand", ownerManual))
+	}
+	if len(props) == 0 && weakFolder {
+		return finish(junkSkipNeedsManual, "only a weak filename stem: "+folder)
 	}
 	if len(props) == 0 {
 		why := "no trustworthy replacement title (no transcription, matching candidate, usable folder or series)"

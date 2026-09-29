@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
 // last-edited: 2026-09-29
 
@@ -613,5 +613,24 @@ func TestJunkTitleFixer_BareNumbers(t *testing.T) {
 	require.Equal(t, junkSkipNeedsManual, rows[thirteen].Skipped, rows[thirteen].SkipReason)
 	for _, id := range sibs {
 		require.Equal(t, junkSkipPossibleFragment, rows[id].Skipped, rows[id].SkipReason)
+	}
+}
+
+// A weak filename stem with no other evidence is never proposed.
+func TestJunkTitleFixer_WeakStemAloneNeedsManual(t *testing.T) {
+	st, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	a, err := st.CreateAuthor("Some Author")
+	require.NoError(t, err)
+	ids := map[string]string{}
+	for _, stem := range []string{"hp1", "final", "audible_download_2019"} {
+		ids[stem] = addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/Rips/"+stem+".m4b")
+	}
+	rows := planRows(t, st)
+	for stem, id := range ids {
+		r := rows[id]
+		require.Equal(t, junkSkipNeedsManual, r.Skipped, "%s: %s", stem, r.SkipReason)
+		require.Equal(t, "only a weak filename stem: "+stem, r.SkipReason)
 	}
 }
