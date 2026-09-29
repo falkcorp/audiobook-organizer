@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
-// last-edited: 2026-09-27
+// last-edited: 2026-09-29
 //
 // Every action a reviewer can take, across all three lanes, as one discriminated
 // union.
@@ -93,12 +93,14 @@ export type RegroupAction =
  *
  * `applyAllApplicable` is NOT `applyRows` over the visible page: it names every
  * applicable row of the plan, including pages not loaded, and the lane resolves
- * the ids from the stored plan after the confirm.
+ * the ids from the stored plan after the confirm. With `rowClass` it names only
+ * that class's applicable rows: the button sits next to a class-scoped count,
+ * so it must never write rows of another class.
  */
 export type RepairsAction =
   | { lane: 'repairs'; type: 'runTrial'; fixerId: string }
   | { lane: 'repairs'; type: 'applyRows'; fixerId: string; planOpId: string; rowIds: string[] }
-  | { lane: 'repairs'; type: 'applyAllApplicable'; fixerId: string; planOpId: string };
+  | { lane: 'repairs'; type: 'applyAllApplicable'; fixerId: string; planOpId: string; rowClass?: string };
 
 export type ReviewAction = DupesAction | MetadataAction | RegroupAction | RepairsAction;
 

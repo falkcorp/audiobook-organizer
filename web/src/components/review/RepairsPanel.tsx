@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-09-29
 
@@ -712,10 +712,13 @@ function PlanView({ repairs }: RepairsPanelProps) {
                     type: 'applyAllApplicable',
                     fixerId: fixer.id,
                     planOpId,
+                    rowClass: repairs.rowClass ?? undefined,
                   })
                 }
               >
-                Apply all applicable ({remaining})
+                {repairs.rowClass
+                  ? `Apply all applicable in this class (${remaining})`
+                  : `Apply all applicable (${remaining})`}
               </Button>
             </Stack>
           )}
