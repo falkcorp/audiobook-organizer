@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 0cc97d6f-e2ee-42d6-8233-ed4cec61f5ab
 // last-edited: 2026-09-29
 
@@ -185,6 +185,10 @@ func TestExtractFromFilename_SeriesTitleIsNotAnAuthor(t *testing.T) {
 		{"/lib/Stephen King/Stephen King The Stand/Stephen King The Stand.mp3", "Stephen King", "Stephen King The Stand", ""},
 		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/01.mp3", "", "Harry Potter and the Goblet of Fire", ""},
 		{"/lib/import/Discworld 08 - Guards, Guards.mp3", "", "Guards, Guards", "Discworld 08"},
+		// Final-pass rows: co-authored title folders.
+		{"/lib/Terry Pratchett/Terry Pratchett & Stephen Baxter - The Long Earth/01.mp3", "Terry Pratchett", "Terry Pratchett & Stephen Baxter - The Long Earth", ""},
+		{"/lib/Neil Gaiman/Neil Gaiman and Terry Pratchett - Good Omens/01.mp3", "Neil Gaiman", "Neil Gaiman and Terry Pratchett - Good Omens", ""},
+		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire - Part 1/01.mp3", "", "Harry Potter and the Goblet of Fire - Part 1", ""},
 		// Round-4 review rows.
 		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/Harry Potter and the Goblet of Fire.mp3", "", "Harry Potter and the Goblet of Fire", ""},
 		{"/lib/Harry Potter/Harry Potter and the Goblet of Fire/01.mp3", "", "Harry Potter and the Goblet of Fire", ""},
