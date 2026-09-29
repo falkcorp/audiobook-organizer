@@ -718,6 +718,24 @@
           },
           "skip_reason": {
             "type": "string"
+          },
+          "class": {
+            "type": "string",
+            "description": "Optional fixer-defined kind of row (fragment-consolidation: moved, copy, no-parent, manual-only, ambiguous). The rows endpoint filters on it."
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairRowMember"
+            },
+            "description": "Every book of the row with its role and file counts, so the lane links each one."
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the decision was made from, in words."
           }
         }
       },
@@ -766,6 +784,24 @@
             "items": {
               "$ref": "#/components/schemas/RepairRow"
             }
+          },
+          "class": {
+            "type": "string",
+            "description": "The class the page is narrowed to, if any."
+          },
+          "by_class": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "The whole plan's rows by class."
+          },
+          "by_class_in_filter": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Rows matching the filter, by class: exactly what each class filter lists."
           }
         }
       },
@@ -877,6 +913,32 @@
           "dry_run": {
             "type": "boolean",
             "description": "Only an explicit false writes; omitted or true re-checks the rows and reports would_apply."
+          }
+        }
+      },
+      "RepairRowMember": {
+        "type": "object",
+        "required": [
+          "book_id",
+          "files"
+        ],
+        "properties": {
+          "book_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "Fixer-defined: parent, fragment, survivor, candidate parent."
+          },
+          "files": {
+            "type": "integer",
+            "description": "The book's book_file rows at plan time."
+          },
+          "missing_files": {
+            "type": "integer"
           }
         }
       }
@@ -11850,6 +11912,14 @@
                 "skipped"
               ]
             }
+          },
+          {
+            "name": "class",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only rows of this Row.class (fixers that classify rows)."
           }
         ],
         "responses": {
