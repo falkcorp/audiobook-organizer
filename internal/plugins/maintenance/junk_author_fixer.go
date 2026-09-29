@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -578,9 +578,11 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		}
 		if narrators[key] {
 			// The book's reader. Still the writer when the name is an author
-			// row of its own (not this book's narrator credit), or the source
-			// names the author field: authors read their own books.
-			existingAuthor := !ans.create && ans.row.ID != 0 && !narratorCreditIDs[ans.row.ID]
+			// row of its own (not this book's narrator credit) that has books
+			// of its own -- an empty row is no evidence the reader writes,
+			// the same bar as the cleaned source -- or the source names the
+			// author field: authors read their own books.
+			existingAuthor := !ans.create && ans.row.ID > 0 && !narratorCreditIDs[ans.row.ID] && len(idx.ownBooks[ans.row.ID]) > 0
 			if !existingAuthor && !namesAuthor {
 				if junkAuthorConfirmingSource(src) && d.NarratorDropped == "" {
 					d.NarratorDropped = name
@@ -1275,8 +1277,17 @@ func (f *junkAuthorFixer) createTarget(w *repairs.Writer, store OpsStore, d *jun
 	}
 	if err := w.RecordChange(d.Book.ID, repairs.UndoEntry{ChangeType: undo.ChangeTypeJunkAuthorCreate,
 		Field: "author_name", New: string(rec)}); err != nil {
-		// Nothing credits the row yet: take it back rather than leave an
-		// unjournaled author the revert cannot see.
+		// Take it back rather than leave an unjournaled author the revert
+		// cannot see -- but only while nothing credits it: another worker's
+		// MintAuthor resolves the same name to this row (created=false) and
+		// may already have linked a book to it.
+		credited, cerr := store.GetBooksByAuthorIDForRelinkCore(created.ID)
+		switch {
+		case cerr != nil:
+			return nil, fmt.Errorf("journal created author %d: %w (kept: reading its credits failed: %v)", created.ID, err, cerr)
+		case len(credited) > 0:
+			return nil, fmt.Errorf("journal created author %d: %w (kept: %d book(s) already credit it)", created.ID, err, len(credited))
+		}
 		if derr := store.DeleteAuthor(created.ID); derr != nil {
 			return nil, fmt.Errorf("journal created author %d: %w (and removing it failed: %v)", created.ID, err, derr)
 		}

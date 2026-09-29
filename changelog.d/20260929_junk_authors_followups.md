@@ -1,0 +1,2 @@
+- Junk authors: a narrator is taken as the author only when their author record already has books of their own (an empty record with the same name is no evidence), and a created author record is never removed on a failed save if another book already uses it.
+- Repairs tab: a book whose title mentions Doctor Who anywhere ("Nelvana Doctor Who", "The Language of Doctor Who") is now hands-off; only prose like "The Doctor Who Fooled the World" is not.
