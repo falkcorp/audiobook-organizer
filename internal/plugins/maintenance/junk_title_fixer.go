@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-09-28
 
@@ -138,9 +138,13 @@ type junkIndex struct {
 	// already owned.
 	owners map[string][]string
 	// roots are the library root and every import path, cleaned. A proposal
-	// that names one of their segments, or the folder right below one (the
-	// author folder of a root/Author/Title layout), is a path, not a title.
+	// that names one of their segments is a path, not a title.
 	roots []string
+	// authorRoot is the library root when the organizer files books
+	// author-first ("{author}/…", the default folder pattern): the folder
+	// right below it is an author folder, never a title. Import paths are
+	// not in it; their layouts are whatever the source had, often flat.
+	authorRoot string
 }
 
 // junkWorkDir is the folder that names the work a book path belongs to: the
@@ -204,7 +208,15 @@ func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, erro
 	idx := &junkIndex{dirBooks: map[string]int{}, dirChapters: map[string]int{}, titles: map[string]bool{},
 		authors: map[int]string{}, series: map[int]string{}, owners: map[string][]string{}}
 	if config.AppConfig.RootDir != "" {
-		idx.roots = append(idx.roots, filepath.Clean(config.AppConfig.RootDir))
+		root := filepath.Clean(config.AppConfig.RootDir)
+		idx.roots = append(idx.roots, root)
+		pattern := strings.TrimSpace(config.AppConfig.FolderNamingPattern)
+		if pattern == "" {
+			pattern = config.DefaultFolderNamingPattern
+		}
+		if strings.HasPrefix(pattern, "{author}") {
+			idx.authorRoot = root
+		}
 	}
 	for i := range imports {
 		if p := strings.TrimSpace(imports[i].Path); p != "" {
@@ -560,7 +572,8 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		id := l.AuthorID
 		people = append(people, f.authorName(idx, &id))
 	}
-	pc := junkProposalCheck{stored: b.Title, narrators: narrators, people: people, roots: idx.roots, paths: paths}
+	pc := junkProposalCheck{stored: b.Title, narrators: narrators, people: people, roots: idx.roots,
+		authorRoot: idx.authorRoot, paths: paths}
 	var refused []string
 	ownerManual := ""
 	accept := func(cand, source string) (string, bool) {
@@ -717,11 +730,12 @@ func hasSubtitle(s, p string) bool {
 
 // junkProposalCheck refuses a proposed title that is not a title.
 type junkProposalCheck struct {
-	stored    string
-	narrators []string
-	people    []string
-	roots     []string
-	paths     []string
+	stored     string
+	narrators  []string
+	people     []string
+	roots      []string
+	authorRoot string
+	paths      []string
 }
 
 var (
@@ -798,7 +812,7 @@ func (pc junkProposalCheck) namesAPersonNormalized(s string) bool {
 
 // isPathRoot: c is the first segment of one of the book's paths ("lib" of
 // "/lib/A/intro.mp3"), a segment of a configured library root or import
-// path, or the folder right below one (the author folder).
+// path, or the author folder right below an author-first library root.
 func (pc junkProposalCheck) isPathRoot(c string) bool {
 	eq := func(seg string) bool { return seg != "" && strings.EqualFold(seg, c) }
 	for _, p := range pc.paths {
@@ -812,14 +826,17 @@ func (pc junkProposalCheck) isPathRoot(c string) bool {
 				return true
 			}
 		}
-		for _, p := range pc.paths {
-			rel, err := filepath.Rel(root, p)
-			if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-				continue
-			}
-			if first, _, _ := strings.Cut(filepath.ToSlash(rel), "/"); first != filepath.ToSlash(rel) && eq(first) {
-				return true
-			}
+	}
+	if pc.authorRoot == "" {
+		return false
+	}
+	for _, p := range pc.paths {
+		rel, err := filepath.Rel(pc.authorRoot, p)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		if first, _, more := strings.Cut(filepath.ToSlash(rel), "/"); more && eq(first) {
+			return true
 		}
 	}
 	return false

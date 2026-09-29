@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
 // last-edited: 2026-09-28
 
@@ -372,11 +372,16 @@ func TestJunkProposalCheck_Refusals(t *testing.T) {
 	require.Empty(t, pc.refusal("Dune Tape 3", junkSrcTranscribed))
 	require.NotEmpty(t, pc.refusal("lib", junkSrcCandidate))
 	require.Empty(t, pc.refusal("Dune", junkSrcFolder))
-	// The author folder directly below a configured root is a path.
-	pc2 := junkProposalCheck{stored: "x", roots: []string{"/mnt/data/audiobooks"},
+	// The author folder directly below an author-first library root is a path.
+	pc2 := junkProposalCheck{stored: "x", roots: []string{"/mnt/data/audiobooks"}, authorRoot: "/mnt/data/audiobooks",
 		paths: []string{"/mnt/data/audiobooks/Some Author/Real Work/01.mp3"}}
 	require.Contains(t, pc2.refusal("Some Author", junkSrcFolder), "root")
 	require.Empty(t, pc2.refusal("Real Work", junkSrcFolder))
+	// An import path is not author-first: a flat import folder is the title.
+	pc3 := junkProposalCheck{stored: "x", roots: []string{"/mnt/data/audiobooks", "/srv/incoming-rips"},
+		authorRoot: "/mnt/data/audiobooks", paths: []string{"/srv/incoming-rips/Real Work/01.mp3"}}
+	require.Empty(t, pc3.refusal("Real Work", junkSrcFolder))
+	require.Contains(t, pc3.refusal("incoming-rips", junkSrcFolder), "root")
 }
 
 func TestTitleAgreesWithAny(t *testing.T) {
