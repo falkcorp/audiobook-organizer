@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # file: scripts/ci/trim_go_cache.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 5f2d8c41-9a73-4e0b-b6d1-3c7e9f2a0d84
 # last-edited: 2026-09-29
 """Cap a shared GOCACHE at a size, deleting the least recently used files.
 
-The Woodpecker Mac and llm1 agents share one GOCACHE across pipelines. An age
+Each Woodpecker local-backend agent (llm1) shares one GOCACHE across its
+pipelines, and two workflows can trim it at the same time; a file the other
+run already removed is skipped. An age
 rule ("delete entries unused for a day") never fired: 164 GB accumulated in
 under a day on 2026-09-29, all of it younger than the cutoff. A size cap is the
 bound that actually holds.
