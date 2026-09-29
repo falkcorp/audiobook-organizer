@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-09-29 -->
 
@@ -27,7 +27,7 @@ Placeholders used throughout (never commit the real values; this repo is public)
 | `test-database` | `host=u1` | `internal/database` alone in 8 shards, `-timeout 50m` | see Sharding |
 | `test-server-scanner` | `host=llm1` | `internal/server`, `internal/scanner`, `internal/server/handlers/abs`, 4 shards each | see Sharding |
 | `test-rest` | `host=u1` | every other package, including maintenance, registry and applygate | about 450–600 s |
-| `checks` | `host=u0` | vet, staticcheck, errcheck ratchet, mocks-check, fmt-check, sdkguard, bench-check, web tests | about 5 min including tool install |
+| `checks` | `host=u1` | vet, staticcheck, errcheck ratchet, mocks-check, fmt-check, sdkguard, bench-check, web tests | 566 s on U0's docker agent, where every run started with empty caches |
 | `coverage` | `host=u0` | coverage floor across the three test workflows | seconds |
 
 Placement follows two rules. First, packages whose tests decode audio (server,
@@ -155,7 +155,7 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
 |---|---|---|---|---|---|
 | U0 | 192.0.2.10 | docker | `host=u0` | 2 | swarm service `woodpecker_woodpecker-agent` |
 | llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 2 | LaunchDaemon, `UserName` = the CI user |
-| U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true` | 4 | systemd `woodpecker-agent.service`, `User=woodpecker` |
+| U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true` | 6 | systemd `woodpecker-agent.service`, `User=woodpecker` |
 
 All agents use `WOODPECKER_SERVER=192.0.2.10:18734` and the same
 `WOODPECKER_AGENT_SECRET` as the server.
@@ -178,11 +178,13 @@ WOODPECKER_BACKEND_DOCKER_LIMIT_CPU_QUOTA=800000     # 8 CPUs per step container
 WOODPECKER_BACKEND_DOCKER_LIMIT_MEM=17179869184      # 16 GiB per step container
 ```
 
-That bounds CI at about 16 CPUs and 32 GiB of the host's 48 cores. The
-`checks` and `test-database` workflows run in the `golang` image, which has no
-ffmpeg, so the host's no-decode rule holds. A container's localhost is not the
-host's, so tests that dial `localhost:8112` or `:8484` never reach the real
-services.
+That bounds CI at about 16 CPUs and 32 GiB of the host's 48 cores. Since
+2026-09-29 no workflow targets `host=u0`: `test-database` and then `checks`
+moved to U1. The docker backend mounts `/woodpecker` as a volume it creates for
+each workflow and deletes at the end, so caches placed there never outlived a
+run, and `checks` re-downloaded and rebuilt its linters (89-131 s) and built
+the repo cold every time. Keeping a cache would need a host-path volume, which
+Woodpecker allows only for a repo marked Trusted.
 
 ### llm1: local backend
 
@@ -212,7 +214,7 @@ pipelines would run as root.
 
 ### U1: local backend on Linux
 
-U1 runs `test-rest` with the local backend, like llm1, so the decode tests use
+U1 runs `test-rest`, `test-database` and `checks` with the local backend, like llm1, so the decode tests use
 the host's ffmpeg, ffprobe and fpcalc (`apt install ffmpeg
 libchromaprint-tools`). `build-essential` supplies the C compiler `-race`
 needs, and `golang-go` is only a bootstrap: `GOTOOLCHAIN=go1.27.1` fetches the
@@ -223,10 +225,18 @@ pinned version.
 - **Install layout:** `/tank/ci/woodpecker/bin/{woodpecker-agent,plugin-git}`
   (v3.18.1 and 2.10.1, linux/amd64). `/tank/ci` is its own ZFS dataset and the
   user's HOME.
-- **Caches:** `/tank/ci/cache/{go-build,gomod}`, set in `test-rest.yaml` and `test-database.yaml`.
+- **Caches:** `/tank/ci/cache/{go-build,gomod}`, set in every U1 workflow;
+  `checks.yaml` also keeps `bin` (GOBIN for staticcheck, golangci-lint and
+  mockery), `golangci-lint`, `xdg` (staticcheck's cache) and `npm` there.
+- **Node:** the official `node-v26.10.0-linux-x64` tarball, verified against
+  the release's `SHASUMS256.txt`, unpacked in `/tank/ci/tools` with a
+  `/tank/ci/tools/node` symlink that `web-test` puts on PATH. To upgrade, unpack
+  the new version beside it and repoint the symlink.
 - **Step workspaces:** `/tank/ci/woodpecker/work`.
 - **Service:** `/etc/systemd/system/woodpecker-agent.service`, with the agent
-  secret in the root-only `/etc/woodpecker-agent.env` (mode 600). Logs:
+  secret in the root-only `/etc/woodpecker-agent.env` (mode 600) and
+  `WOODPECKER_MAX_WORKFLOWS=6` (a push to a PR branch starts two pipelines,
+  each with three U1 workflows). Logs:
   `journalctl -u woodpecker-agent`.
 
 ### Running CI from a workstation
