@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
-// last-edited: 2026-09-25
+// last-edited: 2026-09-28
 
 package abs
 
@@ -611,7 +611,17 @@ func lastFirst(name string) string {
 var ignorePrefixes = []string{"the ", "a ", "an "}
 
 // ignorePrefix renders titleIgnorePrefix: "The Odyssey" -> "Odyssey, The".
+//
+// A numbered-book title is first rewritten to its sort form
+// (util.NumberedBookSortForm), so "I Corinthians", "1 Corinthians", "First
+// Corinthians" and the glyph-confused "l Corinthians" all render
+// "Corinthians 1" and sort, and letter-jump, under C together instead of
+// under I, 1, F and L. The library's own title sort uses the same rewrite
+// (util.TitleSortKey).
 func ignorePrefix(title string) string {
+	if form, ok := util.NumberedBookSortForm(title); ok {
+		return form
+	}
 	lower := strings.ToLower(title)
 	for _, p := range ignorePrefixes {
 		if strings.HasPrefix(lower, p) {

@@ -1,7 +1,7 @@
 // file: internal/database/memdb_indexers.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000001
-// last-edited: 2026-09-02
+// last-edited: 2026-09-28
 
 package database
 
@@ -310,7 +310,8 @@ func encodeBool(b bool) []byte {
 
 // titleSortIndex indexes Book.Title for sorted iteration, with a fallback so
 // every book has a key (even those scanned without enrichment). Order:
-//  1. Title (lowercased, trimmed) if non-empty
+//  1. Title (util.TitleSortKey: lowercased, trimmed, a numbered-book title
+//     such as "I Corinthians" rewritten to "corinthians 1") if non-empty
 //  2. OriginalFilename (lowercased) if Title empty
 //  3. "~" sentinel — sorts after all printable ASCII so titleless+filename-less
 //     books cluster at the end of asc iteration.
@@ -324,9 +325,9 @@ func (titleSortIndex) FromObject(obj any) (bool, []byte, error) {
 	if !ok {
 		return false, nil, fmt.Errorf("titleSortIndex: expected *Book, got %T", obj)
 	}
-	key := util.NormalizeTitle(b.Title)
+	key := util.TitleSortKey(b.Title)
 	if key == "" && b.OriginalFilename != nil {
-		key = util.NormalizeTitle(*b.OriginalFilename)
+		key = util.TitleSortKey(*b.OriginalFilename)
 	}
 	if key == "" {
 		key = "~" // sort to end
@@ -343,7 +344,7 @@ func (titleSortIndex) FromArgs(args ...any) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("titleSortIndex: arg must be string, got %T", args[0])
 	}
-	return append([]byte(util.NormalizeTitle(s)), 0), nil
+	return append([]byte(util.TitleSortKey(s)), 0), nil
 }
 
 func (titleSortIndex) PrefixFromArgs(args ...any) ([]byte, error) {
