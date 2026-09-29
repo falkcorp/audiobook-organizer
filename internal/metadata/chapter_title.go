@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c962e504-746a-454a-996f-1020803a8cab
 // last-edited: 2026-09-28
 
@@ -48,7 +48,45 @@ func IsChapterOnlyTitle(title string) bool {
 // ladder's rule that such a title plays no part in the search), so a title
 // one path refuses to search cannot be searched verbatim by another.
 func IsUnsearchableTitle(title string) bool {
-	return authorname.IsPlaceholderTitle(title) || IsChapterOnlyTitle(title) || IsLikelyChapterFragment(title)
+	return authorname.IsPlaceholderTitle(title) || IsChapterOnlyTitle(title) ||
+		IsLikelyChapterFragment(title) || IsSectionHeadingTitle(title)
+}
+
+// sectionHeadingTitleRe matches a title that is only a section label and its
+// position, where the position is a numeral, a roman numeral or a number word:
+// "Chapter One", "Part II", "Book 1", "Vol. 2", "Volume 2", "Episode Three".
+// IsChapterOnlyTitle already covers the digit forms of chapter/part/disc/
+// track; this adds the words and the book/volume labels, for the search paths
+// only (IsChapterOnlyTitle also judges filenames and is left as it is).
+//
+// A roman numeral or word must be set off from the label by a space ("Part
+// II"), so a real title that merely starts with a label's letters ("Epic",
+// "Chill": ep+ic, ch+ill) is not read as one.
+var sectionHeadingTitleRe = regexp.MustCompile(`(?i)^(?:chapter|chap|ch|part|pt|book|bk|volume|vol|episode|ep|section|sect|act|disc|disk|cd|track)\.?` +
+	`(?:[\s_\-]*\d+|[\s_\-]+(?:[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|first|second|third|fourth|fifth|last|final))` +
+	`(?:\s*of\s*(?:\d+|[a-z]+))?$`)
+
+// sectionNameTitles are the names of a book's front and back matter, which a
+// per-file title often is and which name no book.
+var sectionNameTitles = map[string]bool{
+	"prologue": true, "epilogue": true, "introduction": true, "intro": true, "preface": true,
+	"foreword": true, "forward": true, "afterword": true, "interlude": true, "dedication": true,
+	"acknowledgments": true, "acknowledgements": true, "contents": true, "table of contents": true,
+	"opening credits": true, "closing credits": true, "end credits": true, "credits": true,
+	"copyright": true, "about the author": true, "author's note": true, "authors note": true,
+}
+
+// IsSectionHeadingTitle reports whether a title is only a section heading --
+// a labelled position ("Chapter One", "Part II", "Book 1", "Vol. 2") or the
+// name of front or back matter ("Prologue", "Introduction", "Opening
+// Credits") -- and so names no book. A year-like number keeps its title:
+// "1984" is not matched here (it has no label).
+func IsSectionHeadingTitle(title string) bool {
+	t := strings.Join(strings.Fields(strings.ToLower(title)), " ")
+	if t == "" {
+		return false
+	}
+	return sectionHeadingTitleRe.MatchString(t) || sectionNameTitles[strings.Trim(t, ".:-_ ")]
 }
 
 // genericDirNames are folder names that say nothing about the work: a disc or
