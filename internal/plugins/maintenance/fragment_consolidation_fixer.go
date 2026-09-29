@@ -759,8 +759,8 @@ type fragGroupPlan struct {
 	// Folder is the one folder every member's file sits in now, which
 	// becomes the survivor's book path (a multi-file book's path is its
 	// folder). "" when the files are spread out: the path is left alone.
-	Folder string
-	Members    []fragGroupMember
+	Folder  string
+	Members []fragGroupMember
 }
 
 var fragLeadingNumRe = regexp.MustCompile(`^\D*?(\d+)`)
