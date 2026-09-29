@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/run_all_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ef555d0e-38d5-4c56-ae25-d1de6f868f64
 // last-edited: 2026-09-28
 
@@ -466,6 +466,28 @@ func TestRunAll_MirrorsChildProgress(t *testing.T) {
 	}
 	if !sawQueued || !sawHalf || !sawPhase2 {
 		t.Fatalf("queued=%v half=%v phase2=%v progress=%+v", sawQueued, sawHalf, sawPhase2, rep.progress)
+	}
+}
+
+// A running child whose row stops changing must not keep the parent alive:
+// the parent relays observed progress only, so both watchdogs see the hang.
+func TestRunAll_StalledChildIsNotHeartbeated(t *testing.T) {
+	p, _, ops, _ := newRunAllPlugin(t, true)
+	stuck := database.OperationV2Row{Status: "running", ProgressCurrent: 7, ProgressTotal: 100, ProgressMessage: "stuck at 7"}
+	ops.byDef["dedup.full-scan"] = []database.OperationV2Row{stuck, stuck, stuck, stuck, stuck, {Status: "completed"}}
+	rep := &runAllReporter{}
+	params := mustJSON(t, runAllState{DryRun: opmode.Live(), Plan: []string{"find"}})
+	if err := p.runRunAll(context.Background(), params, rep); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, pr := range rep.progress {
+		if strings.Contains(pr.msg, "stuck at 7") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("five identical running reads must relay once, got %d: %+v", n, rep.progress)
 	}
 }
 
