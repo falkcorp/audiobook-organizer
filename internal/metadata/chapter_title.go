@@ -125,14 +125,8 @@ func IsSectionHeadingTitle(title string) bool {
 	return sectionNameTitles[strings.Trim(t, ".:-_ ")]
 }
 
-// genericDirNames are folder names that say nothing about the work: a disc or
-// part folder, or a library/import root.
-var genericDirNames = map[string]bool{
-	"": true, ".": true, "/": true,
-	"books": true, "audiobooks": true, "audiobook": true, "downloads": true, "import": true,
-	"imports": true, "incoming": true, "library": true, "media": true, "audio": true,
-	"unknown author": true, "unknown": true,
-}
+// Generic folder names (library and import roots) are authorname.IsGenericFolder,
+// shared with the author-from-directory fallback.
 
 // ChapterTitleFromDirectory answers the filename fallback's worst case: a file
 // named only by its chapter number ("Eldest/98.mp3"). The number is not a
@@ -172,12 +166,12 @@ func ChapterTitleFromDirectory(filePath, title string) (dirTitle, titleDir strin
 func workFolder(filePath string, placeholderAuthorAbove bool) (dirTitle, titleDir string, ok bool) {
 	dir := filepath.Dir(filePath)
 	name := strings.TrimSpace(filepath.Base(dir))
-	if IsChapterOnlyTitle(name) && !genericDirNames[strings.ToLower(name)] {
+	if IsChapterOnlyTitle(name) && !authorname.IsGenericFolder(name) {
 		// A "CD1" / "Disc 2" / "Part 3" folder: the work is one level up.
 		dir = filepath.Dir(dir)
 		name = strings.TrimSpace(filepath.Base(dir))
 	}
-	if genericDirNames[strings.ToLower(name)] || IsChapterOnlyTitle(name) {
+	if authorname.IsGenericFolder(name) || IsChapterOnlyTitle(name) {
 		return "", "", false
 	}
 	// The folder is only a title when it sits UNDER an author folder. In an
@@ -189,7 +183,7 @@ func workFolder(filePath string, placeholderAuthorAbove bool) (dirTitle, titleDi
 	if placeholderAuthorAbove && authorname.IsPlaceholderAuthor(above) {
 		return name, dir, true
 	}
-	if genericDirNames[strings.ToLower(above)] || strings.EqualFold(above, "iTunes Media") {
+	if authorname.IsGenericFolder(above) || strings.EqualFold(above, "iTunes Media") {
 		return "", "", false
 	}
 	return name, dir, true
@@ -240,7 +234,14 @@ func WorkFolderTitle(path string) (string, bool) {
 // so the fallback reads the folder ABOVE it
 // (todo.d/20260825-directory-fallback-reads-title-as-author.md). It only fires
 // on an exact, case-insensitive name match, so an author folder holding
-// "<author>/<title>.ext" is untouched.
+// "<author>/<title>.ext" is untouched. The folder above is read through
+// authorname.ExtractAuthorAboveTitle, which refuses a series folder that
+// prefixes the title and (with the shared gate) a genre folder.
+//
+// LIMIT: "/lib/Stephen King/Stephen King.mp3" -- a file named for its author
+// folder -- reads "lib" and gets no author. It has exactly the shape of
+// "/lib/Audiobooks/Good Omens/Good Omens.mp3", where reading the parent would
+// credit the title, so it is not special-cased.
 func ParentIsTitleFolder(filePath, title string) bool {
 	title = strings.TrimSpace(title)
 	if title == "" {

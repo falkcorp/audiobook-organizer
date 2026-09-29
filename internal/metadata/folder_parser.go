@@ -1,5 +1,5 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
 // last-edited: 2026-09-28
 
@@ -379,23 +379,9 @@ func tryExtractAuthorFromDashSplit(seg string, fm *FolderMetadata) {
 	}
 }
 
-// genreDirNames are genre / category folder names that are person-SHAPED (two
-// capitalised words, or one) and would otherwise pass the shape test.
-// looksLikeFolderAuthor refuses them on every author assignment; container
-// names ("Audiobooks", "Books", "Media", "Library", "Downloads")
-// are already in genericDirNames and are checked alongside. No genre list
-// existed in the repo to reuse: the provider genre data (Audible category
-// ladders, Google Books categories) is per-book API output, not a lookup set.
-var genreDirNames = map[string]bool{
-	"science fiction": true, "sci-fi": true, "scifi": true, "fantasy": true,
-	"science fiction & fantasy": true, "science fiction and fantasy": true,
-	"mystery": true, "mysteries": true, "thriller": true, "thrillers": true,
-	"mystery & thriller": true, "horror": true, "romance": true,
-	"non-fiction": true, "nonfiction": true, "non fiction": true, "fiction": true,
-	"biography": true, "biographies": true, "history": true,
-	"young adult": true, "kids": true, "children": true, "childrens": true,
-	"children's": true, "classics": true, "literature": true,
-}
+// Genre and container folder names are authorname.IsGenreFolder and
+// authorname.IsGenericFolder, shared with the author-from-directory fallback so
+// both refuse the same set.
 
 // looksLikeFolderAuthor is the gate this parser's three author assignments
 // use: author-SHAPED (looksLikeAuthorSegment) and not work-NAMED
@@ -413,8 +399,7 @@ var genreDirNames = map[string]bool{
 // leading-article name ("The Messenger") as suspect-non-person for owner
 // review. Vetoing there would silently drop those rows from its report.
 func looksLikeFolderAuthor(s string) bool {
-	lower := strings.ToLower(strings.TrimSpace(s))
-	if genreDirNames[lower] || genericDirNames[lower] {
+	if authorname.IsGenreFolder(s) || authorname.IsGenericFolder(s) {
 		// "/srv/Science Fiction/Mistborn/The Final Empire" credited the genre
 		// folder at HIGH confidence on the ordinary walk, not only past a
 		// series folder.

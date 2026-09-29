@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.114.0
+// version: 1.115.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-28
 
@@ -2198,18 +2198,21 @@ func extractInfoFromPath(book *Book) {
 	// in its name. Take the folder's name as the title and read the author
 	// from the folder above it; otherwise this produced title "98", author
 	// "Eldest". See metadata.ChapterTitleFromDirectory.
-	authorProbe := path
+	// aboveTitle is set when the probe's parent sits ABOVE a title folder;
+	// that folder may be a series named like the title, which
+	// ExtractAuthorAboveTitle refuses.
+	authorProbe, aboveTitle := path, ""
 	if dirTitle, titleDir, ok := metadata.ChapterTitleFromDirectory(path, book.Title); ok {
 		book.Title = dirTitle
-		authorProbe = titleDir
+		authorProbe, aboveTitle = titleDir, dirTitle
 	} else if metadata.ParentIsTitleFolder(path, book.Title) {
 		// "<author>/<title>/<title>.ext": the parent is the TITLE, so the
 		// author is read from the folder above it.
-		authorProbe = filepath.Dir(path)
+		authorProbe, aboveTitle = filepath.Dir(path), book.Title
 	}
 
 	if book.Author == "" {
-		book.Author = authorname.ExtractAuthorFromDirectory(authorProbe)
+		book.Author = authorname.ExtractAuthorAboveTitle(authorProbe, aboveTitle)
 	}
 
 	if book.Position <= 0 {
