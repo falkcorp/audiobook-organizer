@@ -1,7 +1,7 @@
 // file: internal/metafetch/batch_verdict_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fcb57db8-150d-40b2-a501-0934fa3be00b
-// last-edited: 2026-09-19
+// last-edited: 2026-09-28
 
 // Tests for the batch candidate fetch's durable verdicts (CachedBatchVerdict):
 // when a book may be answered from the candidate cache without a provider
@@ -203,4 +203,74 @@ func TestBatchVerdict_LegacyEmptyEntryIsNotKnownEmpty(t *testing.T) {
 	}))
 	_, verdict, _ := f.mfs.CachedBatchVerdict(f.book(b.ID), b.Title, "")
 	require.Equal(t, BatchVerdictNone, verdict)
+}
+
+// A row the batch fetch wrote before 2026-09-28 was hashed with no author
+// (GetBookByID leaves Book.Author nil, so the hint was ""), for a book that
+// has one. The fetch now hashes the live author. The batch verdict and the
+// apply planner must read that row the same way: before, the verdict served
+// it as fresh (never refetched) while the apply gate read it as
+// identity_stale, so the book was stuck until the row expired. Its search
+// fingerprint bound the author resolved from AuthorID, so it is accepted by
+// both while that author is unchanged, and stale to both once it changes. A
+// no-author row with no fingerprint proves nothing and stays stale.
+func TestBatchVerdict_PreDeployNoAuthorRowAgreesWithApply(t *testing.T) {
+	f := newVerdictFixture(t)
+	pkd, err := f.store.CreateAuthor("Philip K. Dick")
+	require.NoError(t, err)
+	b, err := f.store.CreateBook(&database.Book{Title: "Valis", FilePath: "/lib/v/valis.m4b", AuthorID: &pkd.ID})
+	require.NoError(t, err)
+	src := &verdictSource{name: "Src", results: []metadata.BookMetadata{{Title: "Valis", Author: "Philip K. Dick"}}}
+	f.mfs.SetOverrideSources([]metadata.MetadataSource{src})
+	f.batchFetch(b.ID) // the pre-deploy shape: hint ""
+
+	judge := func() (verdict BatchVerdict, idErr error, queryMatch bool) {
+		t.Helper()
+		book := f.book(b.ID)
+		live, lerr := database.LiveBookAuthorNames(f.store, book)
+		require.NoError(t, lerr)
+		require.NotEmpty(t, live)
+		_, verdict, _ = f.mfs.CachedBatchVerdict(book, book.Title, SearchAuthorHint(live[0]))
+		entry, gerr := f.store.GetMetadataCache(b.ID)
+		require.NoError(t, gerr)
+		return verdict, f.mfs.ValidateCachedIdentityForBook(entry, book, live),
+			f.mfs.CachedQueryMatchesIdentity(entry, book, live, book.Title)
+	}
+
+	verdict, idErr, queryMatch := judge()
+	require.Equal(t, BatchVerdictFreshCandidates, verdict, "the row is the book's: serve it")
+	require.NoError(t, idErr, "the apply gate must accept the row the verdict served")
+	require.True(t, queryMatch)
+
+	// Without a fingerprint the no-author hash proves nothing about the author.
+	entry, err := f.store.GetMetadataCache(b.ID)
+	require.NoError(t, err)
+	saved := entry.SearchFingerprint
+	entry.SearchFingerprint = ""
+	require.NoError(t, f.store.PutMetadataCache(entry))
+	verdict, idErr, queryMatch = judge()
+	require.Equal(t, BatchVerdictNone, verdict)
+	require.ErrorIs(t, idErr, ErrStaleMetadataCache)
+	require.False(t, queryMatch)
+	entry.SearchFingerprint = saved
+	require.NoError(t, f.store.PutMetadataCache(entry))
+	verdict, idErr, _ = judge()
+	require.Equal(t, BatchVerdictFreshCandidates, verdict, "fingerprint restored")
+	require.NoError(t, idErr)
+
+	// The author changes: the row was fetched for someone else, and both
+	// readers say so. The store drops the cache row on an identity change,
+	// so the old row is put back to see what the identity checks alone say
+	// (a row written back by a racing fetch, or one the drop missed).
+	leguin, err := f.store.CreateAuthor("Ursula K. Le Guin")
+	require.NoError(t, err)
+	book := f.book(b.ID)
+	book.AuthorID = &leguin.ID
+	_, err = f.store.UpdateBook(book.ID, book)
+	require.NoError(t, err)
+	require.NoError(t, f.store.PutMetadataCache(entry))
+	verdict, idErr, queryMatch = judge()
+	require.Equal(t, BatchVerdictNone, verdict)
+	require.ErrorIs(t, idErr, ErrStaleMetadataCache)
+	require.False(t, queryMatch)
 }
