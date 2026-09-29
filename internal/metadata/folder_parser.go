@@ -1,5 +1,5 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
 // last-edited: 2026-09-28
 
@@ -121,17 +121,26 @@ func ExtractMetadataFromFolder(dirPath string) (*FolderMetadata, error) {
 			break
 		}
 		// A segment that is author-SHAPED but work-NAMED ("The Stormlight
-		// Archive") ends the walk. Walking past it took the next folder out,
-		// which in "/mnt/Science Fiction/The Stormlight Archive/The Way of
-		// Kings/Disc 1" is a GENRE, as the author -- and AssembleBookMetadata
-		// does not read AuthorConf, so a lower confidence would change nothing.
-		// COST, accepted: in "<author>/<series>/<title>/<disc>" the author
-		// folder is now not reached and the author comes from tags or AI
-		// instead. An absent author is recoverable; a wrong one is not.
+		// Archive") is a SERIES folder. Record it, then look exactly ONE step
+		// further out: in the common "<author>/<series>/<title>/<disc>" layout
+		// that is the author ("Stephen King/The Dark Tower/The Gunslinger/
+		// Disc 1"), and it is the only author source for an untagged book. It
+		// is accepted only when person-shaped AND not a genre or container
+		// folder, because "/mnt/Science Fiction/The Stormlight Archive/..." has
+		// the same shape and walking on unchecked credited "Science Fiction".
+		// The walk stops after that step whatever it finds.
 		if looksLikeAuthorSegment(seg) && personname.LooksLikeWorkTitle(seg) {
-			if fm.SeriesConf == ConfidenceNone && personname.HasSeriesMarker(seg) {
+			if fm.SeriesConf == ConfidenceNone {
 				fm.SeriesName = seg
 				fm.SeriesConf = ConfidenceLow
+			}
+			if i-1 >= 0 {
+				outer := strings.TrimSpace(segments[i-1])
+				lower := strings.ToLower(outer)
+				if looksLikeFolderAuthor(outer) && !genreDirNames[lower] && !genericDirNames[lower] {
+					fm.Authors = splitMultipleAuthors(outer)
+					fm.AuthorConf = ConfidenceMedium
+				}
 			}
 			break
 		}
@@ -369,6 +378,24 @@ func tryExtractAuthorFromDashSplit(seg string, fm *FolderMetadata) {
 			fm.AuthorConf = ConfidenceMedium
 		}
 	}
+}
+
+// genreDirNames are genre / category folder names that are person-SHAPED (two
+// capitalised words, or one) and so pass looksLikeFolderAuthor. They are
+// checked only on the one step the author walk takes past a series folder;
+// container names ("Audiobooks", "Books", "Media", "Library", "Downloads")
+// are already in genericDirNames and are checked alongside. No genre list
+// existed in the repo to reuse: the provider genre data (Audible category
+// ladders, Google Books categories) is per-book API output, not a lookup set.
+var genreDirNames = map[string]bool{
+	"science fiction": true, "sci-fi": true, "scifi": true, "fantasy": true,
+	"science fiction & fantasy": true, "science fiction and fantasy": true,
+	"mystery": true, "mysteries": true, "thriller": true, "thrillers": true,
+	"mystery & thriller": true, "horror": true, "romance": true,
+	"non-fiction": true, "nonfiction": true, "non fiction": true, "fiction": true,
+	"biography": true, "biographies": true, "history": true,
+	"young adult": true, "kids": true, "children": true, "childrens": true,
+	"children's": true, "classics": true, "literature": true,
 }
 
 // looksLikeFolderAuthor is the gate this parser's three author assignments
