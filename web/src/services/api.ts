@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.134.0
+// version: 2.135.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-29
 
@@ -7607,6 +7607,11 @@ export interface RepairRowsPage {
    * only when the page is narrowed to a class.
    */
   skipped_by_kind_in_class?: Record<string, number>;
+  /**
+   * Applicable rows of the selected class, whatever the filter; set only
+   * when the page is narrowed to a class.
+   */
+  applicable_in_class?: number;
   rows: RepairRow[];
 }
 

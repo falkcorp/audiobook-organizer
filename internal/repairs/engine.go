@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-09-29
 
@@ -224,9 +224,15 @@ type RowsPage struct {
 	// SkippedByKindInClass is the Skipped tally of the rows of Class,
 	// whatever the filter: under a selected class the skip-kind chips count
 	// exactly the rows "skipped:<kind>" pages. Set only when Class is (then
-	// never nil, so an empty tally reads as zero rows, not as absent).
-	SkippedByKindInClass map[string]int `json:"skipped_by_kind_in_class,omitempty"`
-	Rows                 []Row          `json:"rows"`
+	// never nil, so an empty tally reads as {}, not as absent); null
+	// without a class.
+	SkippedByKindInClass map[string]int `json:"skipped_by_kind_in_class"`
+	// ApplicableInClass counts the applicable rows of Class, whatever the
+	// filter: under a selected class the Applicable tab counts exactly the
+	// rows "applicable" pages. Set only when Class is (then present even at
+	// zero).
+	ApplicableInClass *int  `json:"applicable_in_class,omitempty"`
+	Rows              []Row `json:"rows"`
 }
 
 // Page returns rows [offset, offset+limit) of the plan's rows matching
@@ -250,12 +256,18 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 	}
 	var match []Row
 	var inFilter, kindsInClass map[string]int
+	var applicableInClass *int
 	if class != "" {
 		kindsInClass = map[string]int{}
+		applicableInClass = new(int)
 	}
 	for i := range p.Rows {
-		if class != "" && p.Rows[i].Class == class && !p.Rows[i].Applicable() {
-			kindsInClass[p.Rows[i].Skipped]++
+		if class != "" && p.Rows[i].Class == class {
+			if p.Rows[i].Applicable() {
+				*applicableInClass++
+			} else {
+				kindsInClass[p.Rows[i].Skipped]++
+			}
 		}
 		if !inScope(&p.Rows[i]) {
 			continue
@@ -277,7 +289,7 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 	out := &RowsPage{PlanOpID: planOpID, FixerID: p.FixerID, PlannedAt: p.PlannedAt, Filter: filter,
 		Class: class, Offset: offset, Limit: limit, Total: len(match), Applicable: p.Applicable,
 		SkippedByKind: p.SkippedByKind, ByClass: p.ByClass, ByClassInFilter: inFilter,
-		SkippedByKindInClass: kindsInClass, Rows: []Row{}}
+		SkippedByKindInClass: kindsInClass, ApplicableInClass: applicableInClass, Rows: []Row{}}
 	if offset < len(match) {
 		end := offset + limit
 		if end > len(match) {
