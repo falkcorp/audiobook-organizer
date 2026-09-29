@@ -1,5 +1,5 @@
 // file: internal/server/metadata_bulk_fetch_title.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a88b51d9-3878-41d2-b50e-c04f1ff6793e
 // last-edited: 2026-09-28
 //
@@ -11,6 +11,7 @@ package server
 import (
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -52,7 +53,7 @@ type bulkFetchQuery struct {
 // so the two paths still share rows and neither replays what an earlier
 // search of the placeholder cached.
 func resolveBulkFetchQuery(store bulkFetchTitleStore, bookID, title, path, author, identity string, full *database.Book) bulkFetchQuery {
-	if !metadata.IsUnsearchableTitle(title) {
+	if !metadata.MayBeUnsearchableTitle(title) {
 		return bulkFetchQuery{
 			query:    metabatch.CandidateSearchQuery{Title: title, Source: metabatch.SearchQuerySourceTitle, Usable: true},
 			identity: identity,
@@ -90,9 +91,11 @@ func unsearchableTitleKind(title string) (kind, status string) {
 		return "chapter fragment", metafetch.FetchStatusSkippedFragment
 	case metadata.IsChapterOnlyTitle(t):
 		return "chapter number only", metafetch.FetchStatusSkippedFragment
-	case metadata.IsSectionHeadingTitle(t):
-		return "section heading only", metafetch.FetchStatusSkippedFragment
-	default:
+	case authorname.IsPlaceholderTitle(t):
 		return "placeholder title", metafetch.FetchStatusSkippedNoTitle
+	default:
+		// "Book 1", "Vol. 2", or a heading the book's files corroborate
+		// ("Book Two" on a multi-file book; metabatch's titleJudge).
+		return "section heading only", metafetch.FetchStatusSkippedFragment
 	}
 }

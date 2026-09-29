@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-09-28
 
@@ -54,6 +54,29 @@ func TestResolveCandidateSearchQuery_Fallbacks(t *testing.T) {
 				{TrackNumber: 1, FilePath: "/library/Paolini/Eldest/01.mp3"},
 			}},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
+		// A heading in words or a front-matter name is a real title unless
+		// the book's files say it names a part.
+		{name: "heading title on a single-file book is searched as-is", book: database.Book{Title: "Act One", TranscribedTitle: strp("Other")},
+			files:     fakeBookFiles{files: []database.BookFile{{FilePath: "/library/Nina Kiriki/Act One/act one.m4b"}}},
+			wantTitle: "Act One", wantSrc: SearchQuerySourceTitle},
+		{name: "front-matter title on a single-file book is searched as-is", book: database.Book{Title: "Epilogue"},
+			wantTitle: "Epilogue", wantSrc: SearchQuerySourceTitle},
+		{name: "heading title on a multi-file book uses the transcription", book: database.Book{Title: "Book Two", TranscribedTitle: strp("Eldest")},
+			files:     fakeBookFiles{files: []database.BookFile{{TrackNumber: 1}, {TrackNumber: 2}}},
+			wantTitle: "Eldest", wantSrc: SearchQuerySourceTranscribedTitle},
+		{name: "front-matter title that is a numbered file's own tag uses the folder", book: database.Book{Title: "Prologue"},
+			files:     fakeBookFiles{files: []database.BookFile{{TrackNumber: 1, Title: "Prologue", FilePath: "/library/Paolini/Eldest/01.mp3"}}},
+			wantTitle: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
+		{name: "front-matter transcription on a single-file book is a usable stand-in", book: database.Book{Title: "", TranscribedTitle: strp("Interlude")},
+			wantTitle: "Interlude", wantSrc: SearchQuerySourceTranscribedTitle},
+		{name: "front-matter transcription on a multi-file book is refused", book: database.Book{Title: "", TranscribedTitle: strp("Introduction"), FilePath: "/library/Paolini/Eldest"},
+			files:     fakeBookFiles{files: []database.BookFile{{FilePath: "/library/Paolini/Eldest/01.mp3"}, {FilePath: "/library/Paolini/Eldest/02.mp3"}}},
+			wantTitle: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
+		{name: "heading folder on a single-file book is a usable stand-in", book: database.Book{Title: "", FilePath: "/library/Ron Carlson/Dedication/book.m4b"},
+			wantTitle: "Dedication", wantSrc: SearchQuerySourceFolderTitle},
+		{name: "files error: a heading title is searched as-is", book: database.Book{Title: "Book X"},
+			files:     fakeBookFiles{err: errors.New("boom")},
+			wantTitle: "Book X", wantSrc: SearchQuerySourceTitle},
 		{name: "chapter fragment falls back to folder", book: database.Book{Title: "06 Chapter 6", FilePath: "/library/Paolini/Eldest/06.mp3"},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
 		{name: "placeholder title uses present file's folder", book: database.Book{Title: "Unknown Title", FilePath: "/library/Paolini/Eldest"},
