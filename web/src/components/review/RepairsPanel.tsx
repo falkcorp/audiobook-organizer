@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -327,6 +327,69 @@ function ClassChips({ repairs }: RepairsPanelProps) {
   );
 }
 
+
+/** Words for the skip kinds fixers report; an unknown kind shows as is. */
+export const SKIP_KIND_LABEL: Record<string, string> = {
+  fragment: 'Fragment — use the consolidation fixer',
+  needs_manual: 'Needs manual',
+  user_locked: 'User-locked title',
+  skipped_itunes: 'iTunes library (hands-off)',
+  skipped_owner_manual: 'Doctor Who / Big Finish / Torchwood (manual)',
+  skipped_guard_unreadable: 'Could not read for the guard',
+  error: 'Error',
+};
+
+/** True for the skipped tab and for any one-kind view of it. */
+export function isSkippedFilter(filter: string): boolean {
+  return filter === 'skipped' || filter.startsWith('skipped:');
+}
+
+/**
+ * One chip per skip kind with its count. Each chip pages exactly the rows it
+ * counts ("every count opens its books"); "All skipped" goes back.
+ */
+function SkipKindChips({ repairs }: RepairsPanelProps) {
+  const counts = repairs.page?.skipped_by_kind ?? {};
+  const kinds = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
+  if (kinds.length === 0) return null;
+  const total = sumCounts(counts);
+  return (
+    <Stack
+      direction="row"
+      spacing={1}
+      useFlexGap
+      sx={{ px: 2, py: 1, flexWrap: 'wrap' }}
+      data-testid="repairs-skip-kinds"
+    >
+      <Chip
+        size="small"
+        clickable
+        label={`All skipped (${total})`}
+        color={repairs.filter === 'skipped' ? 'primary' : 'default'}
+        variant={repairs.filter === 'skipped' ? 'filled' : 'outlined'}
+        onClick={() => repairs.setFilter('skipped')}
+        data-testid="repairs-skip-kind-all"
+      />
+      {kinds.map((k) => {
+        const active = repairs.filter === `skipped:${k}`;
+        return (
+          <Chip
+            key={k}
+            size="small"
+            clickable
+            label={`${SKIP_KIND_LABEL[k] ?? k} (${counts[k]})`}
+            color={active ? 'primary' : 'default'}
+            variant={active ? 'filled' : 'outlined'}
+            onClick={() => repairs.setFilter(`skipped:${k}`)}
+            data-testid={`repairs-skip-kind-${k}`}
+          />
+        );
+      })}
+    </Stack>
+  );
+}
+
+
 /**
  * Every book of a row, each a link to the book, with its role and file
  * counts. Rows with one book show nothing extra (the title above links it);
@@ -397,7 +460,7 @@ function RowEvidence({ row }: { row: RepairRow }) {
 
 function RowsTable({ repairs }: RepairsPanelProps) {
   const { rows, filter, selectedRowIds, rowOutcomes, settledRowIds } = repairs;
-  const skippedTab = filter === 'skipped';
+  const skippedTab = isSkippedFilter(filter);
   return (
     <Table size="small" stickyHeader data-testid="repairs-rows">
       <TableHead>
@@ -565,7 +628,7 @@ function PlanView({ repairs }: RepairsPanelProps) {
             sx={{ px: 2, pt: 1, flexWrap: 'wrap', alignItems: 'center' }}
           >
             <Tabs
-              value={repairs.filter}
+              value={isSkippedFilter(repairs.filter) ? 'skipped' : 'applicable'}
               onChange={(_, v: 'applicable' | 'skipped') => repairs.setFilter(v)}
               aria-label="Trial rows"
               sx={{ minHeight: 40 }}
@@ -644,6 +707,8 @@ function PlanView({ repairs }: RepairsPanelProps) {
               </Button>
             </Stack>
           )}
+
+          {isSkippedFilter(repairs.filter) && <SkipKindChips repairs={repairs} />}
 
           {repairs.applying && (
             <Alert severity="info" sx={{ mx: 2 }} data-testid="repairs-applying" icon={<CircularProgress size={18} />}>

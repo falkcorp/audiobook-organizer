@@ -1,6 +1,7 @@
 // file: web/src/pages/Works.tsx
-// version: 1.2.2
+// version: 1.3.0
 // guid: 4b5c6d7e-8f9a-0b1c-2d3e-4f5a6b7c8d9e
+// last-edited: 2026-09-28
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -25,6 +26,7 @@ import {
   ColumnPicker,
   type ColumnDef,
 } from '../components/common/ConfigurableTable';
+import { titleSortKey } from '../utils/titleSortKey';
 
 const COLUMNS: ColumnDef<api.Work>[] = [
   {
@@ -33,7 +35,8 @@ const COLUMNS: ColumnDef<api.Work>[] = [
     defaultWidth: 300,
     sortable: true,
     render: (w) => w.title || 'Untitled',
-    sortValue: (w) => w.title ?? '',
+    // The server's title sort key, so "I Corinthians" files under C here too.
+    sortValue: (w) => titleSortKey(w.title),
   },
   {
     key: 'id',
