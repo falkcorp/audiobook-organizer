@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.54.1
+// version: 1.55.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-28
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -660,9 +661,15 @@ type OpEnqueuer interface {
 	// Returns the operation ID of the newly enqueued (or deduped existing) run.
 	EnqueueOp(ctx context.Context, defID string, params any) (string, error)
 	// WaitForOp blocks until the operation with the given ID reaches a terminal
-	// state (completed, failed, canceled, dropped) or ctx is done.
+	// state (completed, failed, canceled, interrupted_*) or ctx is done.
 	// Returns nil on success, non-nil on failure or context cancellation.
-	WaitForOp(ctx context.Context, opID string) error
+	//
+	// onObserve (may be nil) receives every observation of the child worth
+	// relaying as progress: a changed row while it runs, and every poll while
+	// it is queued or operations are paused. A waiting op MUST relay these to
+	// reporter.UpdateProgress, or the watchdog reaps it while the child is
+	// healthy -- see childop's package doc.
+	WaitForOp(ctx context.Context, opID string, onObserve func(childop.Observation)) error
 }
 
 // ScanController lets a write op cooperatively quiesce the library scanner for

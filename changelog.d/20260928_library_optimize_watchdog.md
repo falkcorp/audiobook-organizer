@@ -1,0 +1,1 @@
+- The library optimize sweep (`maintenance.library-optimize`) no longer gets canceled by the watchdog while a long child runs. It now relays each child's progress (and its queued or operator-paused waits) as its own, through a shared `internal/operations/childop` follower, so a child that keeps working keeps the sweep alive and a child that stalls still leaves it silent.
