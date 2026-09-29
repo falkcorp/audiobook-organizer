@@ -23,6 +23,8 @@ func TestClassifyJunkTitle_Table(t *testing.T) {
 		{"3 of 12", JunkChapterOnly},
 		{"Part IV", JunkChapterOnly},
 		{"Chapter xii", JunkChapterOnly},
+		{"Chapter One", JunkChapterOnly},
+		{"Part Twelve", JunkChapterOnly},
 		// ---- narrator credits ----
 		{"read by narrator", JunkNarratorCredit},
 		{"Read by Kate Reading", JunkNarratorCredit},
@@ -105,9 +107,10 @@ func TestStripJunkTitlePrefix(t *testing.T) {
 		{"01 - - Eldest", "Eldest", true},
 		{"01 - 02", "", false},        // remainder is itself junk
 		{"01 - Chapter 3", "", false}, // remainder is itself junk
-		{"Eldest", "", false},         // no prefix
-		{"1 Corinthians", "", false},  // no separator: a title
-		{"01 - X", "", false},         // single-rune remainder
+		{"02 - Chapter Two", "", false},
+		{"Eldest", "", false},        // no prefix
+		{"1 Corinthians", "", false}, // no separator: a title
+		{"01 - X", "", false},        // single-rune remainder
 	}
 	for _, c := range cases {
 		got, ok := StripJunkTitlePrefix(c.in)

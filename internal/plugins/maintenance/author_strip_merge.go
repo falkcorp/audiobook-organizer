@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-09-26
+// last-edited: 2026-09-28
 
 package maintenance
 
@@ -483,7 +483,7 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 	}
 
 	// booksByAuthorID and seriesByID back the title-as-author check below.
-	// One full-library read each, same pattern maintenance.repair-junk-titles
+	// One full-library read each, same pattern the maintenance.repair-junk-titles fixer
 	// uses for its own book-title sweep, rather than a per-author query: with
 	// ~20k author rows a per-author fetch is the "2,793 round trips" this op's
 	// byName index above already exists to avoid, just on the books side.

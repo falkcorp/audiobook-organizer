@@ -38,6 +38,12 @@ func (p *Plugin) Repairs() *repairs.Registry {
 				logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 			}
 		}
+		if err := p.repairsReg.Register(newJunkTitleFixer(p)); err != nil {
+			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
+		}
+		if err := p.repairsReg.Register(newLetterLOrdinalFixer(p)); err != nil {
+			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
+		}
 	})
 	return p.repairsReg
 }
@@ -77,7 +83,8 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.orphanBookFilesCleanupDef(),
 		p.orphanBookFilesRepointPlanDef(),
 		p.dedupeBookFileRowsDef(),
-		p.repairJunkTitlesDef(),
+		// maintenance.repair-junk-titles is now the Repairs-lane fixer of the
+		// same id (junk_title_fixer.go).
 		p.seriesDenumberDef(),
 		p.seriesPhantomRepairDef(),
 		p.integrityCheckDef(),

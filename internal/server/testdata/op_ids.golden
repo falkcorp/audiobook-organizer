@@ -195,7 +195,6 @@ maintenance.regroup-shattered-ai
 maintenance.relink-missing-to-itunes
 maintenance.relink-report
 maintenance.relink-unlinked-books
-maintenance.repair-junk-titles
 maintenance.repair-library-state
 maintenance.repair-missing-files
 maintenance.repair-transcribe-status
