@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/trim_go_cache.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 5f2d8c41-9a73-4e0b-b6d1-3c7e9f2a0d84
 # last-edited: 2026-09-29
 """Cap a shared GOCACHE at a size, deleting the least recently used files.
@@ -10,11 +10,14 @@ rule ("delete entries unused for a day") never fired: 164 GB accumulated in
 under a day on 2026-09-29, all of it younger than the cutoff. A size cap is the
 bound that actually holds.
 
-Go refreshes a cache entry's mtime when it uses it, so mtime order is LRU
-order. Files touched in the last --min-age-minutes are never deleted, so a
-build running concurrently in another pipeline keeps what it just wrote.
+Go refreshes a cache entry's mtime when it uses it, but only once the mtime is
+more than an hour old (cmd/go/internal/cache mtimeInterval), so mtime order is
+LRU order at one-hour granularity. An entry a concurrent build is using can
+therefore carry an mtime up to an hour stale; files touched in the last
+--min-age-minutes (default two hours) are never deleted, which keeps every
+entry used in the last hour.
 
-Usage: trim_go_cache.py DIR [--max-gb 40] [--target-gb 30] [--min-age-minutes 30]
+Usage: trim_go_cache.py DIR [--max-gb 40] [--target-gb 30] [--min-age-minutes 120]
 """
 
 import argparse
@@ -30,7 +33,7 @@ def main() -> int:
     ap.add_argument("dir")
     ap.add_argument("--max-gb", type=float, default=40.0, help="trim only above this size")
     ap.add_argument("--target-gb", type=float, default=30.0, help="trim down to this size")
-    ap.add_argument("--min-age-minutes", type=float, default=30.0, help="never delete files newer than this")
+    ap.add_argument("--min-age-minutes", type=float, default=120.0, help="never delete files newer than this")
     args = ap.parse_args()
 
     if not os.path.isdir(args.dir):
