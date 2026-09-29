@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-09-26
+// last-edited: 2026-09-29
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -100,6 +100,7 @@ const (
 	fsChangePathUpdate    = undo.ChangeTypeBookPathUpdate
 	fsChangeSoftDelete    = undo.ChangeTypeBookSoftDelete
 	fsChangePrimaryDemote = undo.ChangeTypeBookPrimaryDemote
+	fsChangeHandOff       = undo.ChangeTypeBookPrimaryHandoff // ledger note
 	fsChangeExtIDs        = undo.ChangeTypeExternalIDReassign
 )
 
@@ -1447,7 +1448,9 @@ func (a *fsApplier) retire(kind, folder, shellID, targetID, note string) {
 	// Hand the shell's group on, or it is left with no primary. The writes
 	// are not journaled (undo has no promote kind): a revert restores the
 	// shell and revertBookPrimaryDemote then crowns it and demotes the rest
-	// (versionprimary.Crown), so the group still ends with one primary.
+	// (versionprimary.Crown), so the group still ends with one primary. A
+	// successful hand-off is noted (book_primary_handoff): the revert
+	// re-crowns over an already-restored demote only with that evidence.
 	if wasPrimary && b.VersionGroupID != nil && *b.VersionGroupID != "" {
 		res, herr := versionprimary.EnsureSinglePrimary(context.Background(), a.store, *b.VersionGroupID,
 			versionprimary.Env{RootDir: config.AppConfig.RootDir})
@@ -1455,9 +1458,12 @@ func (a *fsApplier) retire(kind, folder, shellID, targetID, note string) {
 			a.errs.Add(1)
 			a.log(slog.LevelWarn, "%s %q: primary hand-off in group %s after retiring %s: %v", kind, folder,
 				logger.SanitizeLogValue(*b.VersionGroupID), shellID, herr)
-		} else if len(res.Writes) > 0 {
-			a.log(slog.LevelInfo, "%s %q: group %s primary handed from %s to %s", kind, folder,
-				logger.SanitizeLogValue(*b.VersionGroupID), shellID, logger.SanitizeLogValue(res.PrimaryID))
+		} else {
+			a.journal(shellID, fsChangeHandOff, "version_group_id", "", *b.VersionGroupID)
+			if len(res.Writes) > 0 {
+				a.log(slog.LevelInfo, "%s %q: group %s primary handed from %s to %s", kind, folder,
+					logger.SanitizeLogValue(*b.VersionGroupID), shellID, logger.SanitizeLogValue(res.PrimaryID))
+			}
 		}
 	}
 	for _, e := range exts {

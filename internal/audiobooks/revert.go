@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-29
 
@@ -349,7 +349,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	if err != nil {
 		return nil, err
 	}
-	plan.NoteRevertedEarlier(changes)
+	plan.NoteHandOffs(changes)
 	for _, c := range plan.Order {
 		err := plan.Gate(c)
 		already := false
@@ -369,7 +369,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			revertLog.Warn("revert of change %s restored in part: %s", c.ID, partial.detail)
 			err = nil
 		}
-		plan.Record(c, err, already)
+		plan.Record(c, err)
 		if err != nil {
 			result.Failed++
 			switch undo.RefusalReason(err) {
@@ -465,7 +465,10 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	case undo.ChangeTypeBookSoftDelete:
 		return rs.revertBookSoftDelete(c, stamps)
 	case undo.ChangeTypeBookPrimaryDemote:
-		return rs.revertBookPrimaryDemote(c, plan != nil && plan.Undeleted(c.BookID))
+		return rs.revertBookPrimaryDemote(c, plan != nil && plan.HandedOff(c.BookID))
+	case undo.ChangeTypeBookPrimaryHandoff:
+		// A note: the primary demote row's revert undoes the hand-off.
+		return nil
 	case undo.ChangeTypeExternalIDReassign:
 		return rs.revertExternalIDReassign(c)
 	case undo.ChangeTypeBookMergedInto:
@@ -944,8 +947,9 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 
 // revertBookPrimaryDemote restores a retired shell's primary flag ("" is nil,
 // the never-set shape) while it is still the false the operation wrote. An
-// already-restored true is crowned only when the operation's soft-delete of
-// the book was written and reverted (see undo.RevertPlan.Undeleted).
+// already-restored true is crowned only when the operation recorded handing
+// the book's group to another member (handedOff, see
+// undo.RevertPlan.HandedOff).
 //
 // Restoring an explicit true re-crowns the shell with versionprimary.Crown,
 // which also writes explicit false on every other live member: the operation
@@ -955,7 +959,7 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 // shell's own write, outside its ModifyBook callback, and only when the shell
 // is live again (the soft-delete row, later in the ledger, is reverted
 // first); otherwise the restored true on a deleted row competes with nobody.
-func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, undeleted bool) error {
+func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, handedOff bool) error {
 	var restored *bool
 	switch c.OldValue {
 	case "":
@@ -979,17 +983,17 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, un
 		book.IsPrimaryVersion = restored
 		return nil
 	})
-	// An already-restored row crowns only when this operation's soft-delete
-	// of the book was written and has been reverted (undeleted): then the
-	// retire did hand the group's flag to a sibling, and this is a retry
-	// whose earlier Crown failed after the flag write. Otherwise (a retire
-	// cut off before it wrote, or a flag a user set since) the group is not
+	// An already-restored row crowns only when this operation recorded the
+	// hand-off (handedOff): the retire did give the group's flag to another
+	// member, and this is a retry whose earlier Crown failed after the flag
+	// write. Otherwise (a retire cut off before it wrote, however an earlier
+	// pass counted its rows, or a flag a user set since) the group is not
 	// the operation's to change, and the row writes nothing.
 	already := errors.Is(err, undo.ErrAlreadyRestored)
 	if err != nil && !already {
 		return err
 	}
-	if already && !undeleted {
+	if already && !handedOff {
 		return err
 	}
 	if restored != nil && *restored && group != "" {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-09-29
 
@@ -1957,7 +1957,7 @@ func (f *fragmentFixer) retire(ctx context.Context, store OpsStore, w *repairs.W
 	}
 	steps++
 	if wasPrimary && b.VersionGroupID != nil && *b.VersionGroupID != "" {
-		f.handOff(ctx, store, *b.VersionGroupID)
+		f.handOff(ctx, store, w, id, *b.VersionGroupID)
 	}
 	return steps, nil
 }
@@ -2018,9 +2018,13 @@ func (f *fragmentFixer) followUserState(w *repairs.Writer, target, id string, sl
 // handOff gives a retired fragment's version group a primary again, as
 // fs-regroup-xml's retire does. The demote was journaled with OldValue
 // "true", so its revert crowns the fragment (versionprimary.Crown) and
-// demotes whichever sibling this hand-off promoted. A failure is logged, not
-// returned: the retirement itself is done and journaled.
-func (f *fragmentFixer) handOff(ctx context.Context, store OpsStore, groupID string) {
+// demotes whichever sibling this hand-off promoted. Once the hand-off
+// succeeded it is journaled (undo.ChangeTypeBookPrimaryHandoff): that row is
+// the revert's evidence the group's flags were changed, the only case in
+// which it re-crowns over an already-restored demote. A failure is logged,
+// not returned: the retirement itself is done and journaled, and a missing
+// hand-off row only keeps a revert from touching the group's flags.
+func (f *fragmentFixer) handOff(ctx context.Context, store OpsStore, w *repairs.Writer, id, groupID string) {
 	vps := f.p.deps.VersionPrimaryStore()
 	if vps == nil {
 		return
@@ -2030,6 +2034,11 @@ func (f *fragmentFixer) handOff(ctx context.Context, store OpsStore, groupID str
 		versionprimary.Env{RootDir: config.AppConfig.RootDir}); err != nil {
 		fragLog.Warn("%s: primary hand-off in group %s: %s", fragFixerID,
 			logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(err.Error()))
+		return
+	}
+	if err := w.Journal(id, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", "", groupID); err != nil {
+		fragLog.Warn("%s: journal the primary hand-off of %s in group %s: %s", fragFixerID,
+			logger.SanitizeLogValue(id), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(err.Error()))
 	}
 }
 

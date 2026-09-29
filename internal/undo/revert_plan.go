@@ -1,5 +1,5 @@
 // file: internal/undo/revert_plan.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
 // last-edited: 2026-09-29
 
@@ -39,10 +39,10 @@ type RevertPlan struct {
 	depIDs      map[string]bool
 	restored    map[string]bool
 	refusedBook map[string]bool
-	// undeleted: books whose soft-delete by this operation was written and
-	// has been reverted, by a write in this pass (Record) or in an earlier
-	// one (NoteRevertedEarlier).
-	undeleted map[string]bool
+	// handedOff: books whose version group this operation handed to another
+	// member after retiring them (a ChangeTypeBookPrimaryHandoff row, see
+	// NoteHandOffs).
+	handedOff map[string]bool
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -55,7 +55,7 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 		return nil, err
 	}
 	p := &RevertPlan{Stamps: OpSoftDeleteStamps(rows), deps: deps, depIDs: map[string]bool{},
-		restored: map[string]bool{}, refusedBook: map[string]bool{}, undeleted: map[string]bool{}}
+		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}}
 	for _, ids := range deps {
 		for _, id := range ids {
 			p.depIDs[id] = true
@@ -103,14 +103,11 @@ func (p *RevertPlan) Gate(c *database.OperationChange) error {
 	return err
 }
 
-// Record notes a row's outcome: err nil is restored, already when that needed
-// no write (ErrAlreadyRestored).
-func (p *RevertPlan) Record(c *database.OperationChange, err error, already bool) {
+// Record notes a row's outcome: err nil is restored (ErrAlreadyRestored
+// included).
+func (p *RevertPlan) Record(c *database.OperationChange, err error) {
 	if err == nil {
 		p.restored[c.ID] = true
-		if c.ChangeType == ChangeTypeBookSoftDelete && !already {
-			p.undeleted[c.BookID] = true
-		}
 		return
 	}
 	if c.ChangeType == ChangeTypeBookSoftDelete {
@@ -118,24 +115,25 @@ func (p *RevertPlan) Record(c *database.OperationChange, err error, already bool
 	}
 }
 
-// NoteRevertedEarlier takes every row of the operation and notes the books
-// whose soft-delete row an earlier revert pass already marked reverted: a
-// retry after that pass failed on a later row of the same book.
-func (p *RevertPlan) NoteRevertedEarlier(all []*database.OperationChange) {
+// NoteHandOffs takes every row of the operation, reverted or not, and notes
+// the books it has a ChangeTypeBookPrimaryHandoff row for.
+func (p *RevertPlan) NoteHandOffs(all []*database.OperationChange) {
 	for _, c := range all {
-		if c.ChangeType == ChangeTypeBookSoftDelete && c.RevertedAt != nil {
-			p.undeleted[c.BookID] = true
+		if c.ChangeType == ChangeTypeBookPrimaryHandoff {
+			p.handedOff[c.BookID] = true
 		}
 	}
 }
 
-// Undeleted reports whether this operation's soft-delete of bookID was
-// written and has been reverted (this pass or an earlier one). Only then did
-// the operation retire the book, and only then may an already-restored
-// primary demote of it re-crown its group: the retire's hand-off promoted a
-// sibling after the demote. Otherwise the group is not the operation's to
-// change (a retire cut off before writing, or a later pick by a user).
-func (p *RevertPlan) Undeleted(bookID string) bool { return p.undeleted[bookID] }
+// HandedOff reports whether this operation recorded handing bookID's version
+// group to another member after retiring it (ChangeTypeBookPrimaryHandoff).
+// That row is written only after the hand-off, so it is evidence the
+// operation changed the group's flags. Only then may an already-restored
+// primary demote of bookID re-crown its group (a retry whose earlier Crown
+// failed). Without it the group is not the operation's to change: a retire
+// cut off before it wrote, whatever an earlier revert pass counted already
+// restored, or a flag a user set since.
+func (p *RevertPlan) HandedOff(bookID string) bool { return p.handedOff[bookID] }
 
 // RetireDependents maps each book a soft-delete row of rows restores to the
 // ids of the rows (in rows) that moved one of its book_file rows onto another
