@@ -146,6 +146,17 @@ func (f *fragFixture) seed(t *testing.T) {
 	itFrag := f.book(t, "itunesFrag", "02", i2, nil)
 	f.row(t, "if02", itFrag, i2, "02.mp3", 502, 600, 0)
 	f.organize(t, itFrag, i2, f.path("lib/Eldest iTunes/02/02.mp3"))
+	// held: the parent's 02 is gone, and so is the fragment's own file.
+	hd1 := f.file(t, "lib/Held/01.mp3", 701)
+	hd2 := f.path("lib/Held/02.mp3")
+	heldParent := f.book(t, "heldParent", "Held", f.path("lib/Held"), nil)
+	f.row(t, "hp01", heldParent, hd1, "01.mp3", 701, 600, 1)
+	f.row(t, "hp02", heldParent, hd2, "02.mp3", 702, 600, 2)
+	hf := f.book(t, "heldFrag", "02", hd2, nil)
+	gone := f.path("lib/Held/02/02.mp3")
+	f.row(t, "hf02", hf, gone, "02.mp3", 702, 600, 0)
+	_, err = f.s.ModifyBook(hf, func(b *database.Book) error { b.FilePath = gone; return nil })
+	require.NoError(t, err)
 	// Doctor Who: the no-parent shape.
 	for i, n := range []string{"01", "02", "03"} {
 		p := f.file(t, "lib/Doctor Who - Loose/Part "+n+".mp3", 600+i)
@@ -226,6 +237,7 @@ func TestFragmentFixer_PlanClassifiesEveryShape(t *testing.T) {
 		{"no-parent", noParentRowID(f.path("lib/Loose"), "loose"), fragClassNoParent, "", []string{"loose01", "loose02", "loose03"}, ""},
 		{"duration gate", noParentRowID(f.path("lib/Long"), "long"), fragClassNoParent, fragSkipDurationGate, []string{"long01", "long02", "long03"}, ""},
 		{"itunes", "moved:" + f.ids["itunesParent"], fragClassManual, repairs.SkipITunes, []string{"itunesParent", "itunesFrag"}, ""},
+		{"held: fragment file missing", "held:" + f.ids["heldFrag"], fragClassHeld, fragSkipFilesMissing, []string{"heldFrag", "heldParent"}, fragEvImportPath},
 		{"doctor who", noParentRowID(f.path("lib/Doctor Who - Loose"), ""), fragClassManual, repairs.SkipOwnerManual, []string{"dw01", "dw02", "dw03"}, ""},
 	}
 	for _, tc := range cases {
@@ -403,6 +415,21 @@ func TestFragmentFixer_ResumesAPartiallyAppliedGroup(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 3)
 	require.False(t, f.live(t, "loose01") && f.live(t, "loose02") && f.live(t, "loose03"))
+}
+
+// TestFragmentFixer_RefusesAFileAnotherBookNowOwns: the strict ownership
+// re-check at apply time refuses a row whose file some other book claims.
+func TestFragmentFixer_RefusesAFileAnotherBookNowOwns(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	f.plan(t, "op-plan")
+	moved := f.path("lib/Eldest/03/03/03.mp3")
+	intruder := f.book(t, "intruder", "Someone else", moved, nil)
+	f.row(t, "x", intruder, moved, "03.mp3", 103, 600, 0)
+
+	out := f.apply(t, "op-plan", "op-apply", []string{"moved:" + f.ids["parent"]}, nil)
+	require.Equal(t, 1, out.ChangedSincePlan, "%+v", out.Rows)
+	require.True(t, f.live(t, "fragF"), "nothing written")
 }
 
 func TestFragmentFixer_ResumesFromCheckpoint(t *testing.T) {

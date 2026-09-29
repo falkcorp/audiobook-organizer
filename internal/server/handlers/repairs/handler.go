@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 // Package repairs serves the Repairs lane of /review (/api/v1/repairs/*):
 // list the fixers, start a plan, page a stored plan's rows, and start an
@@ -208,7 +208,7 @@ func (h *Handler) StartPlan(c *gin.Context) {
 }
 
 // ListPlanRows implements GET /repairs/:fixer/plan/:op_id/rows
-// ?offset=&limit=&filter=applicable|skipped.
+// ?offset=&limit=&filter=applicable|skipped&class=<row class>.
 func (h *Handler) ListPlanRows(c *gin.Context) {
 	f, ok := h.fixer(c)
 	if !ok {

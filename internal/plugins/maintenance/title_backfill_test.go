@@ -100,8 +100,8 @@ func (d fakeDeps) OperationQueueStore() OpQueueReader { return d.store }
 // MergeUserStateStore hands back the store unchanged, as Server's does.
 func (d fakeDeps) MergeUserStateStore() merge.UserStateRepairStore { return d.store }
 
-// PathHistoryReader hands back the store unchanged, as Server's does.
-func (d fakeDeps) PathHistoryReader() BookPathHistoryReader { return d.store }
+// FragmentRepairReader hands back the store unchanged, as Server's does.
+func (d fakeDeps) FragmentRepairReader() FragmentRepairReader { return d.store }
 
 // VersionPrimaryStore hands back the store unchanged, as Server's does.
 func (d fakeDeps) VersionPrimaryStore() VersionPrimaryStore { return d.store }
