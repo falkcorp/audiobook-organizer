@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
 // last-edited: 2026-09-29
 
@@ -159,7 +159,30 @@ const (
 	// RuleSeriesParenthetical: a person with a series in parentheses
 	// ("Dante King (Dragon Born)", "L. E. Miranda (Rise of the Last Star)").
 	RuleSeriesParenthetical = "series_parenthetical"
+	// RuleGenreLabel: a genre label added with the 2026-09-29 rules ("Lesbian
+	// Romance", "The Anime", "A LitRPG Novel").
+	RuleGenreLabel = "genre_label"
+	// RuleProductionPhrase: a production credit inside a longer name ("Star
+	// Wars Full Cast Audio Drama").
+	RuleProductionPhrase = "production_phrase"
 )
+
+// relinkOnlyRules are the rules added on 2026-09-29 for the junk-author
+// trial's targets. They are shape rules with real credits in their reach
+// ("The Dalai Lama", "The Beatles", "50 Cent", "Maroon 5"), so a verdict
+// from one of them may move a book to a real author found by evidence but
+// never removes the credit when there is none (Verdict.RelinkOnly). The
+// older rules keep their unlink behaviour.
+var relinkOnlyRules = map[string]bool{
+	RuleArticleThe: true, RuleNumberWord: true, RuleSlug: true, RuleGluedWords: true,
+	RuleFranchise: true, RuleSiteTag: true, RuleSeriesParenthetical: true,
+	RuleGenreLabel: true, RuleProductionPhrase: true,
+}
+
+// RelinkOnly reports whether the verdict may only relink a book to a real
+// author, never unlink its credit (relinkOnlyRules). It reads the rule name,
+// so a verdict rebuilt from a stored row's rule answers the same.
+func (v Verdict) RelinkOnly() bool { return relinkOnlyRules[v.Rule] }
 
 // collectiveWords: author-path-link's list (authorPathLinkCollectiveWords),
 // whole words. Kept to words that mean "no single author".
@@ -256,6 +279,11 @@ var genreNames = map[string]bool{
 	"superhero": true, "superheroes": true, "space": true, "audiobook": true,
 	"audiobooks": true, "podcast": true, "podcasts": true, "radio": true,
 	"lecture": true, "lectures": true, "general": true,
+}
+
+// genreLabels are genre names added on 2026-09-29 from the junk-author trial.
+// They decide as RuleGenreLabel, a relink-only rule (Verdict.RelinkOnly).
+var genreLabels = map[string]bool{
 	"lesbian romance": true, "lesbian fiction": true, "lesbian erotica": true,
 	"gay romance": true, "lgbt": true, "lgbtq": true, "erotica": true,
 	"anime": true, "manga": true,
@@ -473,16 +501,8 @@ func classifyName(s string) Verdict {
 	if len(words) >= 2 && words[len(words)-1] == "books" && !hasDigit(n) && len(words) <= 3 {
 		return strong(ClassPublisher, RulePublisher)
 	}
-	for _, ph := range productionPhrases {
-		if hasPhrase(full, ph) {
-			return strong(ClassPublisher, RulePublisher)
-		}
-	}
-	if siteTags[n] || siteTags[full] {
-		return strong(ClassOther, RuleSiteTag)
-	}
 
-	if genreNames[n] || genreNames[full] || genreNames[genreCore(n)] {
+	if genreNames[n] || genreNames[full] {
 		return strong(ClassGenre, RuleGenre)
 	}
 
@@ -528,6 +548,54 @@ func classifyName(s string) Verdict {
 		return Verdict{}
 	}
 
+	// A possessive word: "Shadow's Edge", "Ender's Game". Names do not
+	// inflect that way ("O'Brien", "D'Angelo" do not end in s).
+	for _, w := range strings.Fields(s) {
+		lw := strings.ToLower(strings.Trim(w, ".,;:\"()[]"))
+		if strings.HasSuffix(lw, "'s") || strings.HasSuffix(lw, "’s") {
+			return strong(ClassWorkTitle, RulePossessive)
+		}
+	}
+	// A leading article on a name that is NOT person-shaped is a title
+	// ("The Restaurant at the End of the Universe"). A person-shaped one
+	// ("An Na", "The Arbinger Institute") is left to library evidence.
+	if leadsWithArticle(s) && !personShaped {
+		return strong(ClassWorkTitle, RuleLeadingArticle)
+	}
+	if shoutWords(s) >= 3 {
+		return strong(ClassOther, RuleShout)
+	}
+	// Filename shrapnel: an underscore, or letters and digits glued together
+	// in a multi-word name. Judged on the undecorated core, so a web-serial
+	// pen name with its reader in parentheses ("nobody103 (Jack Voraces)")
+	// is one token and passes.
+	if strings.Contains(core, "_") || digitGlueRe.MatchString(core) && !personname.LooksLikePersonName(core) && !singleToken(core) {
+		return strong(ClassOther, RuleFilenameShape)
+	}
+	return classifyAdded(s, core, n, full, words)
+}
+
+// classifyAdded holds the rules added on 2026-09-29 for the junk-author
+// trial's targets. Every one is relink-only (relinkOnlyRules), and they run
+// AFTER every older rule so a name an older rule flagged keeps that verdict
+// and its unlink behaviour.
+func classifyAdded(s, core, n, full string, words []string) Verdict {
+	for _, ph := range productionPhrases {
+		if hasPhrase(full, ph) {
+			return strong(ClassPublisher, RuleProductionPhrase)
+		}
+	}
+	if siteTags[n] || siteTags[full] {
+		return strong(ClassOther, RuleSiteTag)
+	}
+	if gc := genreCore(n); genreLabels[n] || genreLabels[full] || genreNames[gc] || genreLabels[gc] {
+		return strong(ClassGenre, RuleGenreLabel)
+	}
+	for _, ph := range franchisePhrases {
+		if hasPhrase(full, ph) {
+			return strong(ClassSeriesName, RuleFranchise)
+		}
+	}
 	// A word that is a number or starts with one ("Avatars Dance 1", "Beka
 	// Cooper 2-Bloodhound", "203 The Key To Key To Time"), or a letter-and-
 	// number code ("B01 Her"): track, volume and disc labels. A generational
@@ -555,21 +623,6 @@ func classifyName(s string) Verdict {
 	if head, paren, ok := splitParenthetical(s); ok && personHead(head) && seriesShapedParenthetical(paren) {
 		return strong(ClassSeriesName, RuleSeriesParenthetical)
 	}
-
-	// A possessive word: "Shadow's Edge", "Ender's Game". Names do not
-	// inflect that way ("O'Brien", "D'Angelo" do not end in s).
-	for _, w := range strings.Fields(s) {
-		lw := strings.ToLower(strings.Trim(w, ".,;:\"()[]"))
-		if strings.HasSuffix(lw, "'s") || strings.HasSuffix(lw, "’s") {
-			return strong(ClassWorkTitle, RulePossessive)
-		}
-	}
-	// A leading article on a name that is NOT person-shaped is a title
-	// ("The Restaurant at the End of the Universe"). A person-shaped one
-	// ("An Na", "The Arbinger Institute") is left to library evidence.
-	if leadsWithArticle(s) && !personShaped {
-		return strong(ClassWorkTitle, RuleLeadingArticle)
-	}
 	// "The" is never an initial and never a given name, so a person-SHAPED
 	// "The ..." is still a title, a series or a fragment of one ("The
 	// Complete", "The Rosharan System", "The Thirteenth Doctor Adventures"),
@@ -580,21 +633,6 @@ func classifyName(s string) Verdict {
 	// A stage name ("The Rock") is flagged too; that costs a held row.
 	if len(words) >= 2 && words[0] == "the" && !anyOrgWord(words[1:]) {
 		return strong(ClassWorkTitle, RuleArticleThe)
-	}
-	if shoutWords(s) >= 3 {
-		return strong(ClassOther, RuleShout)
-	}
-	for _, ph := range franchisePhrases {
-		if hasPhrase(full, ph) {
-			return strong(ClassSeriesName, RuleFranchise)
-		}
-	}
-	// Filename shrapnel: an underscore, or letters and digits glued together
-	// in a multi-word name. Judged on the undecorated core, so a web-serial
-	// pen name with its reader in parentheses ("nobody103 (Jack Voraces)")
-	// is one token and passes.
-	if strings.Contains(core, "_") || digitGlueRe.MatchString(core) && !personname.LooksLikePersonName(core) && !singleToken(core) {
-		return strong(ClassOther, RuleFilenameShape)
 	}
 	return Verdict{}
 }
@@ -658,10 +696,30 @@ func seriesShapedParenthetical(p string) bool {
 	if len(f) < 2 || !unicode.IsUpper([]rune(f[0])[0]) || hasCreditSeparator(p) {
 		return false
 	}
-	if strings.Contains(" "+strings.ToLower(p)+" ", " by ") {
+	lp := " " + Normalize(p) + " "
+	if strings.Contains(lp, " by ") {
 		return false
 	}
+	// A descriptor, not a series: "Michael Chatfield (Science fiction
+	// author)".
+	for _, w := range descriptorWords {
+		if strings.Contains(lp, " "+w+" ") {
+			return false
+		}
+	}
 	return !personname.LooksLikePersonName(p) || personname.HasSeriesMarker(p)
+}
+
+// descriptorWords make a parenthetical a description of the person.
+var descriptorWords = []string{"author", "authors", "writer", "novelist", "poet", "editor",
+	"translator", "illustrator", "journalist", "historian", "scientist", "professor"}
+
+// SeriesOfParenthetical returns the parenthetical of a series-parenthetical
+// name ("Dante King (Dragon Born)" -> "Dragon Born"), for the caller that
+// links the book to that series.
+func SeriesOfParenthetical(name string) (string, bool) {
+	_, p, ok := splitParenthetical(name)
+	return p, ok
 }
 
 // isSlug: a lowercase hyphen-joined slug of three or more words
@@ -807,6 +865,9 @@ var byRoleWords = map[string]bool{
 	"compiled": true, "retold": true, "abridged": true, "foreword": true,
 	"introduction": true, "afterword": true, "selected": true, "arranged": true,
 	"produced": true, "directed": true, "presented": true, "hosted": true,
+	"dramatised": true, "dramatized": true, "music": true, "voiced": true,
+	"sound": true, "design": true, "starring": true, "featuring": true,
+	"recorded": true, "commentary": true, "cover": true, "art": true, "artwork": true,
 }
 
 // CleanedName returns the person a junk author row's own name carries once
