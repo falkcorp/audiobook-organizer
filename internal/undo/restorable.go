@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-28
 
@@ -116,7 +116,57 @@ const (
 	// repoints a parent book's stale rows at the files an old scan imported
 	// (and organize moved) as separate chapter books.
 	ChangeTypeBookFileRepoint = "book_file_repoint_location"
+	// ChangeTypeBookMergedInto: a retired book's merged_into_book_id went
+	// OldValue ("" for unset) -> NewValue, the book it was consolidated into.
+	// Restorable: put back while the column still names NewValue.
+	ChangeTypeBookMergedInto = "book_merged_into"
+	// ChangeTypeUserStateFollow: every user's listening state and positions
+	// on the retired book BookID were carried onto the survivor named in
+	// FieldName ("survivor:<id>", see SurvivorFromField). NewValue is a
+	// UserStateFollowRecord (JSON). Restorable: the retired book's state is
+	// written back, and the survivor's is put back only while it still holds
+	// what the follow left (a later listen there is kept).
+	ChangeTypeUserStateFollow = "user_state_follow"
 )
+
+// SameFileLocation reports whether a row's location matches want where a
+// repoint compare-and-set looks: the path and the Missing flag. Hash and size
+// are not compared: a hash backfill or rescan fills them in on a row without
+// moving it, and that must not block the repoint's revert.
+func SameFileLocation(a, b BookFileLocation) bool {
+	return a.Path == b.Path && a.Missing == b.Missing
+}
+
+// UserStateFollowRecord is the NewValue of a ChangeTypeUserStateFollow row.
+// Progress is merge.CombineUserProgress entries, kept raw here so this
+// package does not import internal/merge; the revert decodes it.
+type UserStateFollowRecord struct {
+	// SyncRedirected: the ABS sync layer was reachable, so a redirect
+	// retired -> survivor may have been recorded and the revert clears it.
+	SyncRedirected bool            `json:"sync_redirected"`
+	Progress       json.RawMessage `json:"progress"`
+}
+
+// DecodeUserStateFollow parses a ChangeTypeUserStateFollow value.
+func DecodeUserStateFollow(v string) (UserStateFollowRecord, error) {
+	var r UserStateFollowRecord
+	if err := json.Unmarshal([]byte(v), &r); err != nil {
+		return r, fmt.Errorf("user_state_follow %q: %w", v, err)
+	}
+	if len(r.Progress) == 0 || !json.Valid(r.Progress) {
+		return r, fmt.Errorf("user_state_follow carries no progress")
+	}
+	return r, nil
+}
+
+// SurvivorField is the FieldName of a ChangeTypeUserStateFollow row.
+func SurvivorField(survivorID string) string { return "survivor:" + survivorID }
+
+// SurvivorFromField parses SurvivorField.
+func SurvivorFromField(field string) (string, bool) {
+	id, ok := strings.CutPrefix(field, "survivor:")
+	return id, ok && id != ""
+}
 
 // BookFileLocation is the part of a book_file row a ChangeTypeBookFileRepoint
 // changes, recorded whole on both sides so the revert restores every field
@@ -406,6 +456,11 @@ const (
 	// the operation wrote, so restoring OldValue would overwrite a later
 	// change. The revert refuses it; the preflight files it under CheckFailed.
 	ReasonChangedSince = "changed since"
+	// ReasonDependentNotReverted: the row restores a retired book, but a
+	// change of the same operation that moved or repointed that book's file
+	// onto another book was not put back, so restoring the book would leave
+	// two live books owning one file. RevertOperation refuses it.
+	ReasonDependentNotReverted = "dependent change not reverted"
 )
 
 // ReferentError is CheckRestoreReferent's refusal: Reason is one of the
@@ -569,6 +624,19 @@ func NotRestorableLabel(c *database.OperationChange) string {
 		}
 		return c.ChangeType + ":(no book_file id)"
 	case ChangeTypeBookPathUpdate, ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote:
+		return ""
+	case ChangeTypeBookMergedInto:
+		if c.NewValue == "" {
+			return c.ChangeType + ":(no target)"
+		}
+		return ""
+	case ChangeTypeUserStateFollow:
+		if _, ok := SurvivorFromField(c.FieldName); !ok {
+			return c.ChangeType + ":(no survivor)"
+		}
+		if _, err := DecodeUserStateFollow(c.NewValue); err != nil {
+			return c.ChangeType + ":(unparsable)"
+		}
 		return ""
 	case ChangeTypeBookFileRepoint:
 		if _, ok := BookFileIDFromField(c.FieldName); !ok {

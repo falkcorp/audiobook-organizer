@@ -1,5 +1,5 @@
 // file: internal/repairs/writer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
 // last-edited: 2026-09-28
 
@@ -23,6 +23,13 @@ import (
 // so the framework does not depend on the metafetch service.
 const ChangeTypeApplyIncomplete = "apply_incomplete"
 
+// ChangeTypeApplyOpJournaled matches metafetch.ChangeTypeApplyOpJournaled: a
+// Writer wired to an op journal (WithJournal) writes it into every history
+// batch, and UndoLastApply refuses such a batch. The book fields a Repairs
+// apply records are one part of a step whose other parts (book_file rows moved
+// or repointed, books retired) only the operation revert puts back.
+const ChangeTypeApplyOpJournaled = "apply_op_journaled"
+
 // BookModifier is the one book write primitive a fixer gets.
 type BookModifier interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
@@ -42,7 +49,9 @@ type HistoryRecorder interface {
 // write it describes, all under one batch id per call, so "undo last apply"
 // on a book reverts that call's change to it. If a row cannot be recorded, an
 // apply_incomplete marker is written so undo refuses the batch rather than
-// half-reverting it. Safe for concurrent use.
+// half-reverting it. A Writer wired to an op journal marks every batch
+// apply_op_journaled instead: that apply is undone from its operation, never
+// field by field. Safe for concurrent use.
 type Writer struct {
 	store   BookModifier
 	history HistoryRecorder
@@ -56,6 +65,7 @@ type Writer struct {
 	files   BookFileWriter
 	journal ChangeJournal
 	opID    string
+	index   *journalIndex
 	touch   func()
 
 	writes        atomic.Int64
@@ -134,6 +144,19 @@ func (w *Writer) recordHistory(bookID string, before, after *database.Book) []st
 			continue
 		}
 		w.historyRows.Add(1)
+	}
+	if len(changed) > 0 && w.journal != nil {
+		if err := w.history.RecordMetadataChange(&database.MetadataChangeRecord{
+			BookID: bookID, Field: "apply", ChangeType: ChangeTypeApplyOpJournaled,
+			Source: w.source, ChangedAt: now, BatchID: batchID,
+		}); err != nil {
+			// Without the marker, undo-last-apply would revert this batch's
+			// fields alone; fall through to the incomplete marker, which it
+			// also refuses.
+			failed++
+			w.log.Warn("%s: op-journaled marker not recorded: book_id=%s batch_id=%s err=%s",
+				w.source, logger.SanitizeLogValue(bookID), batchID, logger.SanitizeLogValue(err.Error()))
+		}
 	}
 	if failed > 0 {
 		w.historyFailed.Add(int64(failed))

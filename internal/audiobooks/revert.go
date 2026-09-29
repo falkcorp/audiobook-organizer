@@ -1,11 +1,12 @@
 // file: internal/audiobooks/revert.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-28
 
 package audiobooks
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -332,11 +333,50 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			operationID, restorableTotal)
 	}
 
-	// Process in reverse order
+	// Process newest first, except that a retired book's soft-delete and
+	// primary-demote rows wait until every row of this operation that moved
+	// or repointed that book's file elsewhere has been reverted
+	// (retireDependents): restoring the book first -- or at all, when one of
+	// those rows is refused -- would leave two live books owning one file.
 	var errMsgs []string
 	var restoredIDs []string
+	deps, err := rs.retireDependents(restorable)
+	if err != nil {
+		return nil, err
+	}
+	order := make([]*database.OperationChange, 0, len(restorable))
+	var deferred []*database.OperationChange
 	for _, c := range slices.Backward(restorable) {
-		err := rs.revertChange(c)
+		if _, ok := deps[c.BookID]; ok && (c.ChangeType == undo.ChangeTypeBookSoftDelete || c.ChangeType == undo.ChangeTypeBookPrimaryDemote) {
+			deferred = append(deferred, c)
+			continue
+		}
+		order = append(order, c)
+	}
+	order = append(order, deferred...)
+	restored := map[string]bool{}
+	refusedBook := map[string]bool{}
+	for _, c := range order {
+		var err error
+		if ids, ok := deps[c.BookID]; ok && (c.ChangeType == undo.ChangeTypeBookSoftDelete || c.ChangeType == undo.ChangeTypeBookPrimaryDemote) {
+			for _, id := range ids {
+				if !restored[id] {
+					err = &undo.ReferentError{Reason: undo.ReasonDependentNotReverted,
+						Detail: fmt.Sprintf("change %s (the file of book %s moved or repointed elsewhere) was not reverted; book %s stays retired", id, c.BookID, c.BookID)}
+					break
+				}
+			}
+			if err == nil && refusedBook[c.BookID] {
+				err = &undo.ReferentError{Reason: undo.ReasonDependentNotReverted,
+					Detail: fmt.Sprintf("book %s was not restored, so its primary flag is not either", c.BookID)}
+			}
+			if err != nil {
+				refusedBook[c.BookID] = true
+			}
+		}
+		if err == nil {
+			err = rs.revertChange(c)
+		}
 		var partial *partialTagRestore
 		if errors.As(err, &partial) {
 			// Every tag that still held what the operation wrote was put
@@ -348,6 +388,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			err = nil
 		}
 		if err != nil {
+			if c.ChangeType == undo.ChangeTypeBookSoftDelete {
+				refusedBook[c.BookID] = true
+			}
 			result.Failed++
 			switch undo.RefusalReason(err) {
 			case undo.ReasonChangedSince, undo.ReasonSeriesRenamedSince:
@@ -358,6 +401,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			continue
 		}
 		restoredIDs = append(restoredIDs, c.ID)
+		restored[c.ID] = true
 		if result.RestoredTypes == nil {
 			result.RestoredTypes = map[string]int{}
 		}
@@ -380,6 +424,63 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		return result, fmt.Errorf("partially reverted with %d errors: %s", len(errMsgs), errMsgs[0])
 	}
 	return result, nil
+}
+
+// retireDependents maps each book a soft-delete row of this revert restores
+// to the ids of the rows (in the same revert) that moved one of its book_file
+// rows onto another book (book_file_reassign with OldValue == the book) or
+// repointed another book's row at one of its files (book_file_repoint_location
+// whose new path is one of the book's row paths). Only books with at least one
+// such row are listed.
+func (rs *RevertService) retireDependents(rows []*database.OperationChange) (map[string][]string, error) {
+	retired := map[string]bool{}
+	for _, c := range rows {
+		if c.ChangeType == undo.ChangeTypeBookSoftDelete {
+			retired[c.BookID] = true
+		}
+	}
+	out := map[string][]string{}
+	if len(retired) == 0 {
+		return out, nil
+	}
+	repointedTo := map[string][]string{} // new path -> repoint row ids
+	for _, c := range rows {
+		switch c.ChangeType {
+		case undo.ChangeTypeBookFileReassign:
+			if retired[c.OldValue] && c.OldValue != c.BookID {
+				out[c.OldValue] = append(out[c.OldValue], c.ID)
+			}
+		case undo.ChangeTypeBookFileRepoint:
+			if to, err := undo.DecodeBookFileLocation(c.NewValue); err == nil {
+				repointedTo[to.Path] = append(repointedTo[to.Path], c.ID)
+			}
+		}
+	}
+	if len(repointedTo) == 0 {
+		return out, nil
+	}
+	ids := make([]string, 0, len(retired))
+	for id := range retired {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		files, err := rs.db.GetBookFiles(id)
+		if err != nil {
+			// Fail closed: without the book's rows the order cannot be proven.
+			return nil, fmt.Errorf("read book_file rows of %s to order the revert: %w", id, err)
+		}
+		for _, f := range files {
+			if rowIDs, ok := repointedTo[f.FilePath]; ok {
+				for _, rid := range rowIDs {
+					if !slices.Contains(out[id], rid) {
+						out[id] = append(out[id], rid)
+					}
+				}
+			}
+		}
+	}
+	return out, nil
 }
 
 // formatTypeCounts renders {"author_delete": 3} as "3 author_delete rows",
@@ -431,6 +532,10 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 		return rs.revertBookPrimaryDemote(c)
 	case undo.ChangeTypeExternalIDReassign:
 		return rs.revertExternalIDReassign(c)
+	case undo.ChangeTypeBookMergedInto:
+		return rs.revertBookMergedInto(c)
+	case undo.ChangeTypeUserStateFollow:
+		return rs.revertUserStateFollow(c)
 	case undo.ChangeTypeTitleRelinkCredits:
 		return rs.revertTitleRelinkCredits(c)
 	case undo.ChangeTypeTitleRelinkAuthorCreate:
@@ -705,7 +810,9 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 	if err != nil || f == nil {
 		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
 	}
-	if undo.LocationOf(f) != set {
+	// Path and Missing only (undo.SameFileLocation): a hash or size a scan
+	// filled in since does not make the row someone else's.
+	if !undo.SameFileLocation(undo.LocationOf(f), set) {
 		return driftRefusal("book_file %s is now at %q, not where the operation pointed it (%q)", fileID, f.FilePath, set.Path)
 	}
 	was.Apply(f)
@@ -713,6 +820,62 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 		return fmt.Errorf("restore location of book_file %s: %w", fileID, err)
 	}
 	return nil
+}
+
+// revertBookMergedInto puts a retired book's merged_into_book_id back
+// (OldValue "" is unset) while it still names the book the operation set.
+func (rs *RevertService) revertBookMergedInto(c *database.OperationChange) error {
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
+	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+		if book.MergedIntoBookID == nil || *book.MergedIntoBookID != c.NewValue {
+			return driftRefusal("book %s merged_into changed since the operation", book.ID)
+		}
+		if c.OldValue == "" {
+			book.MergedIntoBookID = nil
+		} else {
+			v := c.OldValue
+			book.MergedIntoBookID = &v
+		}
+		return nil
+	})
+}
+
+// revertUserStateFollow puts every user's listening state back from a
+// journaled follow (merge.RestoreFollowedProgress): the retired book's state
+// and positions are written back, and the survivor's are restored only while
+// they still hold what the follow left. A store without the user-progress
+// surface refuses the row rather than drop the progress silently.
+func (rs *RevertService) revertUserStateFollow(c *database.OperationChange) error {
+	survivor, ok := undo.SurvivorFromField(c.FieldName)
+	if !ok {
+		return fmt.Errorf("no survivor in field %q", c.FieldName)
+	}
+	rec, err := undo.DecodeUserStateFollow(c.NewValue)
+	if err != nil {
+		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: err.Error()}
+	}
+	var progress []merge.CombineUserProgress
+	if err := json.Unmarshal(rec.Progress, &progress); err != nil {
+		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: fmt.Sprintf("progress: %v", err)}
+	}
+	if _, err := rs.loadBook(c.BookID); err != nil {
+		return err
+	}
+	if _, err := rs.loadBook(survivor); err != nil {
+		return err
+	}
+	db, ok := database.AsCapability[merge.UserProgressMerger](rs.db)
+	if !ok {
+		return fmt.Errorf("store cannot restore user progress; %d user(s) left on %s", len(progress), survivor)
+	}
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
+	warns, err := merge.RestoreFollowedProgress(db, survivor, c.BookID, rec.SyncRedirected, progress)
+	for _, w := range warns {
+		revertLog.Warn("revert of change %s: %s", c.ID, logger.SanitizeLogValue(w))
+	}
+	return err
 }
 
 // revertBookPathUpdate restores a book's file_path that was changed with

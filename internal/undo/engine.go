@@ -195,7 +195,7 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 			}
 		case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
 			ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
-			ChangeTypeBookFileMove, ChangeTypeBookFileRepoint:
+			ChangeTypeBookFileMove, ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow:
 			if refusal := checkFsRegroupRow(store, c); refusal != nil {
 				report.addReferentConflict(c, refusal)
 			} else {
@@ -310,15 +310,25 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange) error
 			return refuse(ReasonChangedSince, "%s is occupied again", c.OldValue)
 		}
 	case ChangeTypeBookFileRepoint:
-		// The revert puts the row back only while it still holds exactly the
-		// location the repoint wrote.
+		// The revert puts the row back only while it still names the path
+		// (and Missing flag) the repoint wrote (SameFileLocation).
 		want, err := DecodeBookFileLocation(c.NewValue)
 		if err != nil {
 			return refuse(ReasonOldValueUnparsable, "%v", err)
 		}
 		return checkFsRegroupRowOn(store, c, func(f *database.BookFile) bool {
-			return LocationOf(f) == want
+			return SameFileLocation(LocationOf(f), want)
 		})
+	case ChangeTypeBookMergedInto:
+		if book.MergedIntoBookID == nil || *book.MergedIntoBookID != c.NewValue {
+			return refuse(ReasonChangedSince, "book %s merged_into changed since the operation", c.BookID)
+		}
+	case ChangeTypeUserStateFollow:
+		// The revert writes progress on both books: both must exist.
+		survivor, _ := SurvivorFromField(c.FieldName)
+		if _, refusal := CheckRestoreBook(store, survivor); refusal != nil {
+			return refusal
+		}
 	case ChangeTypeBookPathUpdate:
 		if book.FilePath != c.NewValue {
 			return refuse(ReasonChangedSince, "book %s path changed since the operation", c.BookID)
