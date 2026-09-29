@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-09-29
 
@@ -192,6 +192,23 @@ func TestResolveCandidateSearchQuery_AuthorFolderIsNoHeadingEvidence(t *testing.
 			book:   database.Book{ID: "b1", Title: "Epilogue", FilePath: path, AuthorID: &aid},
 			reader: fakeBookFilesAuthors{fakeBookFiles: files, err: errors.New("boom")},
 			want:   "Epilogue", wantSrc: SearchQuerySourceTitle},
+		{name: "inverted author name matches the folder",
+			book:   database.Book{ID: "b1", Title: "Epilogue", FilePath: path, AuthorID: &aid},
+			reader: fakeBookFilesAuthors{fakeBookFiles: files, authors: map[int]string{7: "Roiphe, Anne"}},
+			want:   "Epilogue", wantSrc: SearchQuerySourceTitle},
+		{name: "decomposed accent in the folder matches the precomposed author",
+			book: database.Book{ID: "b1", Title: "Epilogue", FilePath: "/mnt/stuff/Jose\u0301 Saramago/Epilogue.m4b", AuthorID: &aid},
+			reader: fakeBookFilesAuthors{fakeBookFiles: fakeBookFiles{files: []database.BookFile{{FilePath: "/mnt/stuff/Jose\u0301 Saramago/Epilogue.m4b"}}},
+				authors: map[int]string{7: "Jos\u00e9 Saramago"}},
+			want: "Epilogue", wantSrc: SearchQuerySourceTitle},
+		// File-tag evidence needs no authors: an author read fault must not
+		// discard it. "Book Two" tagged "Book Two" on its file is a part, so
+		// the transcription stands in.
+		{name: "file-tag evidence survives an author read fault",
+			book: database.Book{ID: "b1", Title: "Book Two", TranscribedTitle: strp("Eldest"), FilePath: path, AuthorID: &aid},
+			reader: fakeBookFilesAuthors{fakeBookFiles: fakeBookFiles{files: []database.BookFile{{Title: "Book Two", FilePath: path}}},
+				err: errors.New("boom")},
+			want: "Eldest", wantSrc: SearchQuerySourceTranscribedTitle},
 		// A folder that is NOT the author still corroborates: Eldest's
 		// prologue is searched by the work folder.
 		{name: "work folder by another name still corroborates",
