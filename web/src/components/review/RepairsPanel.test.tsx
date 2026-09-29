@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-09-28
 //
@@ -49,7 +49,7 @@ function row(id: string, extra: Partial<RepairRow> = {}): RepairRow {
 const APPLICABLE = [row('g1'), row('g2', { risk: 'review' })];
 const SKIPPED = [
   row('g3', { skipped: 'skipped_itunes', skip_reason: 'Lives in the iTunes library' }),
-  row('g4', { skipped: 'fragment', skip_reason: 'fragment — use the consolidation fixer: 3 books share the folder' }),
+  row('g4', { skipped: 'skipped_fragment', skip_reason: 'fragment — use the consolidation fixer: 3 books share the folder' }),
 ];
 
 function skippedByKind(): Record<string, number> {
@@ -202,7 +202,7 @@ describe('RepairsPanel', () => {
     await screen.findByTestId('repairs-row-g1');
     await user.click(screen.getByTestId('repairs-tab-skipped'));
     await screen.findByTestId('repairs-row-g4');
-    const fragChip = screen.getByTestId('repairs-skip-kind-fragment');
+    const fragChip = screen.getByTestId('repairs-skip-kind-skipped_fragment');
     expect(fragChip).toHaveTextContent('Fragment — use the consolidation fixer (1)');
     expect(screen.getByTestId('repairs-skip-kind-all')).toHaveTextContent('All skipped (2)');
 
@@ -210,7 +210,7 @@ describe('RepairsPanel', () => {
     expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
       'vg-primary',
       'plan-1',
-      expect.objectContaining({ filter: 'skipped:fragment', offset: 0 }),
+      expect.objectContaining({ filter: 'skipped:skipped_fragment', offset: 0 }),
       expect.anything()
     );
     await screen.findByTestId('repairs-row-g4');
