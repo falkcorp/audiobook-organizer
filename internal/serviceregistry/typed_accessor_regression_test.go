@@ -1,7 +1,7 @@
 // file: internal/serviceregistry/typed_accessor_regression_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 77383469-1c73-49a2-898a-076cd8201792
-// last-edited: 2026-08-23
+// last-edited: 2026-09-29
 
 package serviceregistry_test
 
@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -130,26 +129,25 @@ func TestNoRawGetForAccessorOwnedTypes(t *testing.T) {
 	}
 }
 
-// moduleRoot returns the directory containing this test file's module, i.e.
-// the directory holding go.mod. Derived from runtime.Caller rather than
-// os.Getwd (`go test` sets the working directory to the package under test,
-// not the module root) or shelling out to `git rev-parse --show-toplevel`
-// (an extra process, and a dependency on git being on PATH that a pure
-// runtime.Caller walk up to go.mod does not need).
+// moduleRoot returns the directory holding go.mod, walking up from the
+// package directory that `go test` uses as the working directory. Not
+// runtime.Caller: CI builds with -trimpath, which makes a source file's path
+// module-relative. Not `git rev-parse --show-toplevel` either: an extra process
+// and a dependency on git being on PATH.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller(0) failed; cannot locate module root")
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	dir := filepath.Dir(thisFile)
+	start := dir
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			t.Fatalf("no go.mod found above %s", thisFile)
+			t.Fatalf("no go.mod found above %s", start)
 		}
 		dir = parent
 	}

@@ -1,5 +1,5 @@
 # file: .woodpecker/test-server-scanner.yaml
-# version: 1.2.0
+# version: 1.3.0
 # guid: 7a2d4e81-0c63-4f9b-b5e2-9d1f3a6c8e27
 # last-edited: 2026-09-29
 #
@@ -46,6 +46,12 @@ steps:
       # pipelines are safe.
       GOMODCACHE: /Users/jdfalk/ci/cache/gomod
       GOCACHE: /Users/jdfalk/ci/cache/go-build
+      # Every pipeline clones into a new random workdir
+      # (woodpecker-local-<n>), and without -trimpath Go keys each package's
+      # cache entry on its directory: nothing was ever reused and the cache
+      # grew by a full race+cover build per run (164 GB in under a day,
+      # 2026-09-29). -trimpath drops the directory from the key.
+      GOFLAGS: -trimpath
     commands:
       - command -v ffmpeg && command -v ffprobe && command -v fpcalc
       - go test ./internal/server ./internal/scanner ./internal/server/handlers/abs -short -race -covermode=atomic -coverprofile=cover.out -timeout 25m
@@ -60,10 +66,12 @@ steps:
     environment:
       GOCACHE: /Users/jdfalk/ci/cache/go-build
     commands:
+      # Cap the shared GOCACHE by size, least recently used first. The age rule
+      # this replaces (drop entries unused for a day) never fired: the cache
+      # hit 164 GB in under a day on 2026-09-29. Runs before the workspace is
+      # cleared, since the script lives in the clone.
+      - '[ -n "$${GOCACHE}" ] && python3 scripts/ci/trim_go_cache.py "$${GOCACHE}" --max-gb 40 --target-gb 30 || true'
       - '[ -n "$${CI_WORKSPACE}" ] && [ "$${CI_WORKSPACE}" != / ] && find "$${CI_WORKSPACE}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true'
       - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
-      # The shared GOCACHE has no size cap and race+cover builds grow it fast
-      # (94 GB on 2026-09-29, filling the disk). Drop entries unused for a day (go refreshes mtime on use).
-      - '[ -n "$${GOCACHE}" ] && find "$${GOCACHE}" -type f -mtime +1 -delete 2>/dev/null || true'
       # A killed build leaves its go-build temp dir behind; clear any over an hour old.
       - 'find "$${TMPDIR:-/tmp}" -maxdepth 1 -name "go-build*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true'

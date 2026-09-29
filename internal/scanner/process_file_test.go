@@ -1,7 +1,7 @@
 // file: internal/scanner/process_file_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-01
+// last-edited: 2026-09-29
 
 package scanner
 
@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
@@ -20,10 +19,14 @@ import (
 // testdataDir returns the absolute path to the project testdata/fixtures directory.
 func testdataDir(t *testing.T) string {
 	t.Helper()
-	// The test binary runs with the package directory as cwd, but the testdata
-	// dir is two levels up (internal/scanner → repo root).
-	_, thisFile, _, _ := runtime.Caller(0)
-	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..", "..")
+	// The test binary runs with the package directory as cwd, and the path is
+	// taken from there, not from runtime.Caller: CI builds with -trimpath,
+	// which makes a source file's path module-relative.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoRoot := filepath.Join(cwd, "..", "..", "..")
 	return filepath.Join(repoRoot, "testdata", "fixtures")
 }
 
