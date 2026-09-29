@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c962e504-746a-454a-996f-1020803a8cab
 // last-edited: 2026-09-28
 
@@ -37,37 +37,62 @@ func IsChapterOnlyTitle(title string) bool {
 }
 
 // IsUnsearchableTitle reports whether a book's title is no title to search a
-// catalog by: empty or one of the system's placeholders ("Unknown Title",
-// "read by narrator"; authorname.IsPlaceholderTitle), a bare chapter
-// position ("Chapter 3", "03"; IsChapterOnlyTitle), or a chapter fragment of
-// a shattered book ("06 Chapter 6"; IsLikelyChapterFragment). A catalog
-// answers any of these with whatever it ranks first.
+// catalog by, whatever book it is on: empty or one of the system's
+// placeholders ("Unknown Title", "read by narrator";
+// authorname.IsPlaceholderTitle), a bare chapter position ("Chapter 3", "03";
+// IsChapterOnlyTitle), a chapter fragment of a shattered book ("06 Chapter
+// 6"; IsLikelyChapterFragment), or a labelled position in digits ("Book 1",
+// "Vol. 2", "Episode 3"). A catalog answers any of these with whatever it
+// ranks first.
 //
-// It is the ONE predicate the metadata search paths share (the batch
-// candidate fetch's query resolver, the bulk metadata fetch, and the search
-// ladder's rule that such a title plays no part in the search), so a title
-// one path refuses to search cannot be searched verbatim by another.
+// A heading in words or roman numerals ("Book Two", "Part II") and the name
+// of front or back matter ("Prologue", "Introduction") are NOT matched here:
+// each is also some real book's title ("Act One", "Epilogue", "Interlude").
+// IsSectionHeadingTitle names those, and a caller holding the book's files
+// decides with their corroboration (metabatch.ResolveCandidateSearchQuery).
+//
+// It is the one unconditional predicate the metadata search paths share (the
+// batch candidate fetch's query resolver, the bulk metadata fetch, and the
+// search ladder's rule that such a title plays no part in the search), so a
+// title one path refuses to search cannot be searched verbatim by another.
 func IsUnsearchableTitle(title string) bool {
 	return authorname.IsPlaceholderTitle(title) || IsChapterOnlyTitle(title) ||
-		IsLikelyChapterFragment(title) || IsSectionHeadingTitle(title)
+		IsLikelyChapterFragment(title) || sectionDigitTitleRe.MatchString(normHeading(title))
 }
 
-// sectionHeadingTitleRe matches a title that is only a section label and its
-// position, where the position is a numeral, a roman numeral or a number word:
-// "Chapter One", "Part II", "Book 1", "Vol. 2", "Volume 2", "Episode Three".
-// IsChapterOnlyTitle already covers the digit forms of chapter/part/disc/
-// track; this adds the words and the book/volume labels, for the search paths
-// only (IsChapterOnlyTitle also judges filenames and is left as it is).
+// MayBeUnsearchableTitle is IsUnsearchableTitle or IsSectionHeadingTitle: a
+// title a caller without the book's files hands to one that has them
+// (metabatch.ResolveCandidateSearchQuery) rather than searching it as-is.
+func MayBeUnsearchableTitle(title string) bool {
+	return IsUnsearchableTitle(title) || IsSectionHeadingTitle(title)
+}
+
+// sectionLabels are the labels a section position is written after.
+const sectionLabels = `(?:chapter|chap|ch|part|pt|book|bk|volume|vol|episode|ep|section|sect|act|disc|disk|cd|track)`
+
+// sectionDigitTitleRe is a label and a position in digits ("Book 1", "Vol. 2",
+// "Episode 3 of 12"): no book is titled that, so it is unsearchable anywhere.
+var sectionDigitTitleRe = regexp.MustCompile(`^` + sectionLabels + `\.?[\s_\-]*\d+(?:\s*of\s*\d+)?$`)
+
+// sectionWordTitleRe is a label and a position in words or a VALID roman
+// numeral ("Chapter One", "Part II", "Book X", "Volume IV"). The numeral must
+// be well formed and set off by a space, so "Book Ill" (I-L-L), "CD Civil",
+// "Epic" and "Chill" are not read as one.
 //
-// A roman numeral or word must be set off from the label by a space ("Part
-// II"), so a real title that merely starts with a label's letters ("Epic",
-// "Chill": ep+ic, ch+ill) is not read as one.
-var sectionHeadingTitleRe = regexp.MustCompile(`(?i)^(?:chapter|chap|ch|part|pt|book|bk|volume|vol|episode|ep|section|sect|act|disc|disk|cd|track)\.?` +
-	`(?:[\s_\-]*\d+|[\s_\-]+(?:[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|first|second|third|fourth|fifth|last|final))` +
+// The position is captured: every part of the roman form is optional, so an
+// empty capture ("Act of Will" read as act + "" + "of will") is refused by
+// IsSectionHeadingTitle.
+var sectionWordTitleRe = regexp.MustCompile(`^` + sectionLabels + `\.?[\s_\-]+` +
+	`(m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|first|second|third|fourth|fifth|last|final)` +
 	`(?:\s*of\s*(?:\d+|[a-z]+))?$`)
 
+// normHeading lowercases a title and collapses its whitespace.
+func normHeading(title string) string {
+	return strings.Join(strings.Fields(strings.ToLower(title)), " ")
+}
+
 // sectionNameTitles are the names of a book's front and back matter, which a
-// per-file title often is and which name no book.
+// per-file title often is.
 var sectionNameTitles = map[string]bool{
 	"prologue": true, "epilogue": true, "introduction": true, "intro": true, "preface": true,
 	"foreword": true, "forward": true, "afterword": true, "interlude": true, "dedication": true,
@@ -76,17 +101,27 @@ var sectionNameTitles = map[string]bool{
 	"copyright": true, "about the author": true, "author's note": true, "authors note": true,
 }
 
-// IsSectionHeadingTitle reports whether a title is only a section heading --
-// a labelled position ("Chapter One", "Part II", "Book 1", "Vol. 2") or the
+// IsSectionHeadingTitle reports whether a title reads as a section heading
+// that IsUnsearchableTitle does not already refuse: a labelled position in
+// words or a valid roman numeral ("Chapter One", "Part II", "Book X") or the
 // name of front or back matter ("Prologue", "Introduction", "Opening
-// Credits") -- and so names no book. A year-like number keeps its title:
-// "1984" is not matched here (it has no label).
+// Credits").
+//
+// Each is ALSO a real book's title ("Act One", "Epilogue", "Book Two",
+// "Interlude"), so this is half the evidence only: a caller treats the title
+// as unsearchable when the book's files corroborate that it names a part of
+// something (metabatch: more than one present file, or the title is a
+// file's own tag title on a numbered track). A year-like number ("1984") has
+// no label and is never matched.
 func IsSectionHeadingTitle(title string) bool {
-	t := strings.Join(strings.Fields(strings.ToLower(title)), " ")
+	t := normHeading(title)
 	if t == "" {
 		return false
 	}
-	return sectionHeadingTitleRe.MatchString(t) || sectionNameTitles[strings.Trim(t, ".:-_ ")]
+	if m := sectionWordTitleRe.FindStringSubmatch(t); m != nil && m[1] != "" {
+		return true
+	}
+	return sectionNameTitles[strings.Trim(t, ".:-_ ")]
 }
 
 // genericDirNames are folder names that say nothing about the work: a disc or

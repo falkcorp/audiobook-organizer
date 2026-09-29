@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-28
 //
@@ -247,7 +247,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		// title for it (resolveBulkFetchQuery) and its identity with it, so
 		// there is no identity to probe the cache with here. WalkSourceChain
 		// still serves a fresh cached row for the stand-in without a call.
-		if metadata.IsUnsearchableTitle(b.Title) {
+		if metadata.MayBeUnsearchableTitle(b.Title) {
 			work = append(work, bookWork{book: *b, authorName: author})
 			continue
 		}
@@ -764,7 +764,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		}
 		// No searchable title of its own: a worker resolves a stand-in (see
 		// runBulkMetadataFetchAll and resolveBulkFetchQuery).
-		if metadata.IsUnsearchableTitle(b.Title) {
+		if metadata.MayBeUnsearchableTitle(b.Title) {
 			work = append(work, bookWork{book: *b, authorName: author})
 			continue
 		}

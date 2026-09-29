@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
 // last-edited: 2026-09-28
 //
@@ -74,7 +74,9 @@ type CandidateSearchQuery struct {
 // chapter fragment ("06 Chapter 6"). Searching a catalog for any of those
 // returns whatever the provider ranks first: on 2026-09-27 two books titled
 // "" "matched" Audible's "Bad in Bed" while their intro transcription said
-// "Marvel's Planet Hulk".
+// "Marvel's Planet Hulk". A section heading in words or a front-matter name
+// ("Book Two", "Prologue") is unsearchable only when the book's files
+// corroborate it (titleJudge): alone it is some real book's title.
 //
 // For such a book the fallbacks are tried in order, each itself refused when
 // unsearchable:
@@ -97,34 +99,89 @@ func ResolveCandidateSearchQuery(files BookFilesGetter, book *database.Book) Can
 	if book == nil {
 		return CandidateSearchQuery{}
 	}
-	if !metadata.IsUnsearchableTitle(book.Title) {
+	j := &titleJudge{files: files, bookID: book.ID}
+	if !j.unsearchable(book.Title) {
 		return CandidateSearchQuery{Title: book.Title, Source: SearchQuerySourceTitle, Usable: true}
 	}
-	if t := usableTitle(book.TranscribedTitle); t != "" {
+	if t := j.usableTitle(book.TranscribedTitle); t != "" {
 		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceTranscribedTitle,
 			Author: trimmed(book.TranscribedAuthor), Usable: true}
 	}
-	var present []database.BookFile
-	if files != nil {
-		if bookFiles, err := files.GetBookFiles(book.ID); err == nil {
-			for i := range bookFiles {
-				if !bookFiles[i].Missing {
-					present = append(present, bookFiles[i])
-				}
-			}
-		}
-	}
-	sortByPosition(present)
+	present := j.presentFiles()
 	if len(present) > 0 {
-		if t := usableTitle(present[0].TranscribedTitle); t != "" {
+		if t := j.usableTitle(present[0].TranscribedTitle); t != "" {
 			return CandidateSearchQuery{Title: t, Source: SearchQuerySourceFileTranscribedText,
 				Author: trimmed(present[0].TranscribedAuthor), Usable: true}
 		}
 	}
-	if t := folderTitle(present, book.FilePath); t != "" {
+	if t := j.folderTitle(book.FilePath); t != "" {
 		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceFolderTitle, Usable: true}
 	}
 	return CandidateSearchQuery{}
+}
+
+// titleJudge decides whether a title is worth searching for one book. Most
+// of that is metadata.IsUnsearchableTitle, which needs nothing but the text.
+// A section heading in words or a roman numeral, or a front-matter name
+// ("Book Two", "Prologue"; metadata.IsSectionHeadingTitle), is also some real
+// book's title, so it is refused only when the book's files corroborate that
+// it names a part (headingCorroborated). The files are read at most once,
+// and only when a title needs them or a file-level fallback is reached.
+type titleJudge struct {
+	files   BookFilesGetter
+	bookID  string
+	loaded  bool
+	present []database.BookFile
+}
+
+// presentFiles returns the book's present files in play order
+// (sortByPosition). A GetBookFiles error is treated as "no file rows": the
+// file-level steps are skipped and a heading is not corroborated, so it is
+// searched as-is -- a real title is never refused on a read fault.
+func (j *titleJudge) presentFiles() []database.BookFile {
+	if j.loaded {
+		return j.present
+	}
+	j.loaded = true
+	if j.files == nil {
+		return nil
+	}
+	bookFiles, err := j.files.GetBookFiles(j.bookID)
+	if err != nil {
+		return nil
+	}
+	for i := range bookFiles {
+		if !bookFiles[i].Missing {
+			j.present = append(j.present, bookFiles[i])
+		}
+	}
+	sortByPosition(j.present)
+	return j.present
+}
+
+// unsearchable reports whether t is no title to search this book by.
+func (j *titleJudge) unsearchable(t string) bool {
+	if metadata.IsUnsearchableTitle(t) {
+		return true
+	}
+	return metadata.IsSectionHeadingTitle(t) && headingCorroborated(j.presentFiles(), t)
+}
+
+// headingCorroborated reports whether a book's files say a section-heading
+// title names a part of something rather than a whole book: the book has
+// more than one present file, or the title is a file's own tag title on a
+// numbered track (a chapter file's tag promoted to the book).
+func headingCorroborated(present []database.BookFile, title string) bool {
+	if len(present) > 1 {
+		return true
+	}
+	t := strings.TrimSpace(title)
+	for _, f := range present {
+		if f.TrackNumber > 0 && strings.EqualFold(strings.TrimSpace(f.Title), t) {
+			return true
+		}
+	}
+	return false
 }
 
 // sortByPosition orders a book's files as they play: disc, then track, then
@@ -153,13 +210,14 @@ func trimmed(p *string) string {
 }
 
 // usableTitle returns the trimmed title, or "" when it is absent or itself
-// unsearchable.
-func usableTitle(p *string) string {
+// unsearchable for this book (titleJudge.unsearchable: a lone "Prologue"
+// transcription on a single-file book is still a usable stand-in).
+func (j *titleJudge) usableTitle(p *string) string {
 	if p == nil {
 		return ""
 	}
 	t := strings.TrimSpace(*p)
-	if metadata.IsUnsearchableTitle(t) {
+	if j.unsearchable(t) {
 		return ""
 	}
 	return t
@@ -171,10 +229,10 @@ func usableTitle(p *string) string {
 // book's own path. A directory FilePath (a multi-file book) is given a
 // stand-in child so the folder asked about is the book's folder itself, not
 // its parent. The organizer files such books under "Unknown Title" folders,
-// so the answer is run back through IsUnsearchableTitle.
-func folderTitle(present []database.BookFile, bookPath string) string {
+// so the answer is run back through titleJudge.unsearchable.
+func (j *titleJudge) folderTitle(bookPath string) string {
 	var paths []string
-	if len(present) > 0 {
+	if present := j.presentFiles(); len(present) > 0 {
 		paths = append(paths, present[0].FilePath)
 	}
 	if p := strings.TrimSpace(bookPath); p != "" {
@@ -188,7 +246,7 @@ func folderTitle(present []database.BookFile, bookPath string) string {
 			continue
 		}
 		if t, _, ok := metadata.ChapterTitleFromDirectory(p, ""); ok {
-			if t = strings.TrimSpace(t); !metadata.IsUnsearchableTitle(t) {
+			if t = strings.TrimSpace(t); !j.unsearchable(t) {
 				return t
 			}
 		}
