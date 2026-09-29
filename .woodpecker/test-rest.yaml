@@ -1,5 +1,5 @@
 # file: .woodpecker/test-rest.yaml
-# version: 1.5.1
+# version: 1.5.2
 # guid: c84e1b3d-2f9a-4c57-8d06-e3a1b7f5d942
 # last-edited: 2026-09-29
 #
@@ -18,8 +18,8 @@
 # The decode packages need ffmpeg, ffprobe and fpcalc, so this runs on the U1
 # agent (local backend, Linux amd64, user `woodpecker`), never on the prod host.
 # Its caches live on U1's `tank/ci` ZFS dataset. It ran on the developer Mac,
-# then briefly on llm1, until U1 joined on 2026-09-29; the three test workflows
-# now run on three hosts again (u0, llm1, u1).
+# then briefly on llm1, until U1 joined on 2026-09-29. U1 also runs
+# test-database; llm1 runs test-server-scanner; U0 runs only `checks`.
 
 labels:
   host: u1
