@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-28
 
@@ -80,7 +80,8 @@ type bookReader interface {
 // (applygate.ManualOnlyGuard) for a bulk planner: the store-backed half of
 // the check, which the gate cannot do itself -- the book's series name and
 // every book_file path, the same inputs metabatch's upgrade checks. A read
-// failure is reported as a finding, never read as "not manual-only".
+// failure goes in ReadErr, which the gate refuses as owner_manual_check_failed
+// (hard, not overridable) -- never read as "not manual-only".
 //
 // rowApproval is a single review row the owner approved: one book, chosen by
 // the owner, which is how the owner rule says these books ARE applied, so it
@@ -105,7 +106,7 @@ func bulkManualOnlyGuard(books bookReader, book *database.Book, rowApproval bool
 		sr, err := books.GetSeriesByID(*book.SeriesID)
 		switch {
 		case err != nil:
-			g.StoreDetail = "could not read the series for the owner-manual check: " + err.Error()
+			g.ReadErr = "could not read the series for the owner-manual check: " + err.Error()
 			return g
 		case sr != nil && applygate.IsOwnerManualOnly("", sr.Name):
 			g.StoreDetail = why + "series " + strconv.Quote(sr.Name)
@@ -114,7 +115,7 @@ func bulkManualOnlyGuard(books bookReader, book *database.Book, rowApproval bool
 	}
 	files, err := books.GetBookFiles(book.ID)
 	if err != nil {
-		g.StoreDetail = "could not read the files for the owner-manual check: " + err.Error()
+		g.ReadErr = "could not read the files for the owner-manual check: " + err.Error()
 		return g
 	}
 	for _, f := range files {
@@ -398,6 +399,15 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipAuthorsUnreadable, Err: aerr}
 	}
 	idErr := svc.ValidateCachedIdentityForBook(entry, book, authors)
+	// The owner-manual-only bypass keys on the PIN, not on the request size.
+	// Each row pin is an explicit owner approval of this one book's candidate:
+	// the owner clicked Apply on that row, which is how the owner rule says
+	// Doctor Who / Big Finish books are applied. It deliberately does NOT
+	// require len(book_ids)==1: the review page batches per-row Apply clicks
+	// made inside its 500ms debounce window into one request
+	// (web/src/components/review/lanes/useMetadataLane.ts), so several row
+	// approvals arrive together. A bulk button's pin (origin "review_bulk") and the
+	// hashless marker are not row pins and get the guard.
 	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims,
 		cachedTranscribedSearch(svc, books, entry, book, authors, idErr),
 		bulkManualOnlyGuard(books, book, pin != nil && pin.IsRowReview(), metabatch.ResolveCandidateSearchQuery(books, book).Title))

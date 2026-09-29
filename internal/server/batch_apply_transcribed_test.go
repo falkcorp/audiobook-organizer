@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_transcribed_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6a7c9ec1-ca94-4bd5-b088-7920aaeb18af
 // last-edited: 2026-09-28
 
@@ -72,6 +72,48 @@ func TestBulkApplyPlanners_OwnerManualOnly(t *testing.T) {
 				t.Errorf("reason = %q (%s), want %q", plan.Gate.Reason, plan.Gate.Detail, applygate.ReasonOwnerManualOnly)
 			}
 		})
+	}
+}
+
+// filesFaultBooks is fakeBooks whose book_file read fails.
+type filesFaultBooks struct{ fakeBooks }
+
+func (filesFaultBooks) GetBookFiles(string) ([]database.BookFile, error) {
+	return nil, errors.New("pebble: closed")
+}
+
+// A store read fault during the owner-manual check refuses the bulk apply
+// under its own reason, owner_manual_check_failed -- not owner_manual_only,
+// which would count a read fault as a Doctor Who book -- and a bulk owner pin
+// does not lift it. The book here names nothing manual-only.
+func TestBulkApplyPlanners_OwnerManualCheckFailed(t *testing.T) {
+	const hulk = "Marvel's Planet Hulk"
+	dur := 36000
+	book := &database.Book{ID: "b1", Title: "", TranscribedTitle: strPtr(hulk),
+		FilePath: "/lib/Unknown Author/Unknown Title/book.m4b", Duration: &dur}
+	cand := metafetch.MetadataCandidate{Title: hulk, Author: "Greg Pak", Score: 0.95, DurationSec: 36000, Source: "Audible"}
+	stale := fmt.Errorf("%w: book b1 (stored a, current b)", metafetch.ErrStaleMetadataCache)
+	bulkPin := metafetch.PinOf(cand)
+	bulkPin.Origin = metafetch.PinOriginReviewBulk
+	blob, err := json.Marshal(cand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &fakeApplySvc{candidates: []json.RawMessage{blob}, identityErr: stale, queryMatches: map[string]bool{hulk: true}}
+	for _, pin := range []*metafetch.CandidatePin{nil, &bulkPin} {
+		plan := planCachedApply(svc, filesFaultBooks{fakeBooks{"b1": book}}, "b1", nil, pin)
+		if plan.Gate == nil {
+			t.Fatalf("gate did not run: %+v", plan)
+		}
+		if plan.Gate.Allowed || plan.OwnerReviewed {
+			t.Fatalf("applied despite a failed owner-manual check (pin %v)", pin != nil)
+		}
+		if plan.Gate.Reason != applygate.ReasonOwnerManualCheckFailed {
+			t.Errorf("reason = %q (%s), want %q", plan.Gate.Reason, plan.Gate.Detail, applygate.ReasonOwnerManualCheckFailed)
+		}
+		if !strings.Contains(plan.Gate.Detail, "pebble: closed") {
+			t.Errorf("detail %q does not carry the read error", plan.Gate.Detail)
+		}
 	}
 }
 
