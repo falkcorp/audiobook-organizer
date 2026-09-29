@@ -305,6 +305,10 @@ func TestPathResolver_SymlinksIntoITunes(t *testing.T) {
 	require.NoError(t, os.Symlink(itunes, filepath.Join(lib, "Link")))
 	require.NoError(t, os.Symlink(filepath.Join(itunes, "a.m4b"), filepath.Join(lib, "Plain", "file-link.m4b")))
 	require.NoError(t, os.Symlink(filepath.Join(root, "nowhere.m4b"), filepath.Join(itunes, "dead.m4b")))
+	// Dangling links in a plain folder whose link text names the iTunes tree
+	// (L-c), absolute and relative.
+	require.NoError(t, os.Symlink(filepath.Join(itunes, "gone.m4b"), filepath.Join(lib, "Plain", "dead-abs.m4b")))
+	require.NoError(t, os.Symlink(filepath.Join("..", "..", "books", "itunes", "Real", "gone.m4b"), filepath.Join(lib, "Plain", "dead-rel.m4b")))
 
 	res := NewPathResolver()
 	for _, p := range []string{
@@ -312,6 +316,8 @@ func TestPathResolver_SymlinksIntoITunes(t *testing.T) {
 		filepath.Join(lib, "Link", "gone.m4b"), // missing, folder is a link
 		filepath.Join(lib, "Link", "dead.m4b"), // dangling link, folder is a link
 		filepath.Join(lib, "Plain", "file-link.m4b"),
+		filepath.Join(lib, "Plain", "dead-abs.m4b"),
+		filepath.Join(lib, "Plain", "dead-rel.m4b"),
 	} {
 		k, why := GuardBookPathsWith(res, "b", []string{p}, "")
 		require.Equal(t, SkipITunes, k, "%s: %s", p, why)
@@ -822,7 +828,7 @@ func TestWriter_HasNoDeletePrimitive(t *testing.T) {
 			strings.Contains(lower, "purge"), "Writer exposes %s", n)
 	}
 	require.ElementsMatch(t, []string{"Modify", "Writes", "HistoryRows", "HistoryFailed",
-		"WithJournal", "WithLiveness", "Touch", "Journal", "Journaled", "Step",
+		"WithJournal", "WithLiveness", "Touch", "Journal", "Journaled", "JournaledValue", "Step",
 		"RepointBookFile", "MoveBookFiles", "SetTrackNumber", "Recompute",
 		"WithCredits", "ModifyCredits", "SetPrimaryAuthor", "RecordChange"}, names)
 }

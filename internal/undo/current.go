@@ -1,5 +1,5 @@
 // file: internal/undo/current.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e7b4c19-8d3a-4f60-9b15-c6a0e8d2f473
 // last-edited: 2026-09-29
 
@@ -33,25 +33,64 @@ import (
 // book's stamp against it (CheckSoftDeleteCurrent).
 func SoftDeleteStamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
+// ParseSoftDeleteStamp reads a SoftDeleteStamp back; ok is false for any other
+// NewValue (the note fs-regroup-xml journals).
+func ParseSoftDeleteStamp(v string) (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339Nano, v)
+	return t, err == nil
+}
+
+// SoftDeleteStamps holds, per book, every stamp the book_soft_delete rows of
+// one operation journaled. A retire resumed before stamps were reused
+// (fragment-consolidation, 2026-09-29) could journal a second stamp for the
+// same book, so the book may carry any one of them.
+type SoftDeleteStamps map[string][]time.Time
+
+// OpSoftDeleteStamps collects the stamps of every book_soft_delete row in
+// changes (all rows of one operation).
+func OpSoftDeleteStamps(changes []*database.OperationChange) SoftDeleteStamps {
+	out := SoftDeleteStamps{}
+	for _, c := range changes {
+		if c.ChangeType != ChangeTypeBookSoftDelete {
+			continue
+		}
+		if t, ok := ParseSoftDeleteStamp(c.NewValue); ok {
+			out[c.BookID] = append(out[c.BookID], t)
+		}
+	}
+	return out
+}
+
+func (s SoftDeleteStamps) has(bookID string, t time.Time) bool {
+	for _, st := range s[bookID] {
+		if st.Equal(t) {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckSoftDeleteCurrent: a live book is already restored. A book_soft_delete
 // row whose NewValue is a stamp (SoftDeleteStamp) is reverted only while the
-// book's marked_for_deletion_at is that stamp, so a leftover row (the retire
-// journaled it and never wrote it) cannot un-delete a book the user deleted
-// later. A row with any other NewValue (the note fs-regroup-xml journals) keeps
-// the earlier rule: any soft-deleted book is restored.
-func CheckSoftDeleteCurrent(book *database.Book, c *database.OperationChange) error {
+// book's marked_for_deletion_at is a stamp this operation journaled for it
+// (its own, or another of op's rows for the same book), so a leftover row (the
+// retire journaled it and never wrote it) cannot un-delete a book the user
+// deleted later, and two stamps of one resumed retire are not a conflict. A
+// row with any other NewValue (the note fs-regroup-xml journals) keeps the
+// earlier rule: any soft-deleted book is restored.
+func CheckSoftDeleteCurrent(book *database.Book, c *database.OperationChange, op SoftDeleteStamps) error {
 	if !book.IsSoftDeleted() {
 		return ErrAlreadyRestored
 	}
-	stamp, err := time.Parse(time.RFC3339Nano, c.NewValue)
-	if err != nil {
+	stamp, ok := ParseSoftDeleteStamp(c.NewValue)
+	if !ok {
 		return nil
 	}
-	if book.MarkedForDeletionAt == nil || !book.MarkedForDeletionAt.Equal(stamp) {
-		return refuse(ReasonChangedSince, "book %s was deleted again since the operation (marked %v, not %s)",
-			c.BookID, book.MarkedForDeletionAt, c.NewValue)
+	if cur := book.MarkedForDeletionAt; cur != nil && (cur.Equal(stamp) || op.has(c.BookID, *cur)) {
+		return nil
 	}
-	return nil
+	return refuse(ReasonChangedSince, "book %s was deleted again since the operation (marked %v, not %s)",
+		c.BookID, book.MarkedForDeletionAt, c.NewValue)
 }
 
 // CheckMergedIntoCurrent compares merged_into_book_id ("" is unset).
