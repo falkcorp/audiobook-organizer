@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b2d9e46-0c81-4a37-b5f9-1e6c3a8d4f20
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package maintenance
 
@@ -310,15 +310,29 @@ func TestRepairsOps_ApplyWritesThroughTheOpWriterWithHistory(t *testing.T) {
 	require.Equal(t, "donor description", *a.Description)
 	require.Equal(t, "Keep", *a.Narrator)
 
-	hist, err := f.s.GetBookChangeHistory("B", 100)
-	require.NoError(t, err)
+	// Each journaled batch also carries one apply_op_journaled marker, which
+	// sends "undo last apply" to the operation revert.
+	fieldRows := func(book string) (rows []database.MetadataChangeRecord, markers int) {
+		hist, err := f.s.GetBookChangeHistory(book, 100)
+		require.NoError(t, err)
+		for _, h := range hist {
+			if h.ChangeType == repairs.ChangeTypeApplyOpJournaled {
+				markers++
+				continue
+			}
+			rows = append(rows, h)
+		}
+		return rows, markers
+	}
+	hist, markers := fieldRows("B")
 	require.Len(t, hist, 1)
+	require.Equal(t, 1, markers)
 	require.Equal(t, "is_primary_version", hist[0].Field)
 	require.Equal(t, vgPrimaryFixerID, hist[0].Source)
 	require.True(t, strings.HasPrefix(hist[0].BatchID, "repairs-"))
-	histA, err := f.s.GetBookChangeHistory("A", 100)
-	require.NoError(t, err)
+	histA, markers := fieldRows("A")
 	require.Len(t, histA, 3, "one row per carried field")
+	require.Equal(t, 1, markers)
 	// A: 3 carried fields; B: flag true→false; C: flag nil→false.
 	require.Equal(t, 5, res.HistoryRows)
 }

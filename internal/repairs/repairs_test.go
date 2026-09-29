@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-09-28
 
@@ -698,7 +698,7 @@ func TestWriter_HasNoDeletePrimitive(t *testing.T) {
 			strings.Contains(lower, "purge"), "Writer exposes %s", n)
 	}
 	require.ElementsMatch(t, []string{"Modify", "Writes", "HistoryRows", "HistoryFailed",
-		"WithJournal", "WithLiveness", "Touch", "Journal", "Journaled",
+		"WithJournal", "WithLiveness", "Touch", "Journal", "Journaled", "Step",
 		"RepointBookFile", "MoveBookFiles", "SetTrackNumber", "Recompute"}, names)
 }
 
