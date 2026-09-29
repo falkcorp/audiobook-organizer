@@ -478,6 +478,77 @@ func TestPlanResult_Page(t *testing.T) {
 	require.Error(t, err, "an empty kind is not a filter")
 }
 
+// TestPlanResult_PageSkipKindsInClass: under a selected class the skip-kind
+// chips count only that class's skipped rows (skipped_by_kind_in_class), so
+// each chip opens exactly the rows it counts.
+func TestPlanResult_PageSkipKindsInClass(t *testing.T) {
+	res := &PlanResult{FixerID: "x", Rows: []Row{
+		{RowID: "a", Skipped: SkipITunes, Class: "moved"},
+		{RowID: "b", Skipped: SkipITunes, Class: "copy"},
+		{RowID: "c", Class: "moved"},
+	}, SkippedByKind: map[string]int{SkipITunes: 2}, Applicable: 1}
+
+	p, err := res.Page("op", FilterSkipped, "moved", 0, 50)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{SkipITunes: 1}, p.SkippedByKindInClass)
+	require.Equal(t, 2, p.SkippedByKind[SkipITunes], "the whole-plan tally is unchanged")
+	require.Equal(t, 1, p.Total)
+
+	// It counts the class's skipped rows whatever the filter.
+	p, err = res.Page("op", FilterApplicable, "moved", 0, 50)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{SkipITunes: 1}, p.SkippedByKindInClass)
+
+	// Returned only when a class is set.
+	p, err = res.Page("op", FilterSkipped, "", 0, 50)
+	require.NoError(t, err)
+	require.Nil(t, p.SkippedByKindInClass)
+
+	// A class with no skipped rows reports an empty tally, not nil.
+	res.Rows = append(res.Rows, Row{RowID: "d", Class: "no-parent"})
+	p, err = res.Page("op", FilterSkipped, "no-parent", 0, 50)
+	require.NoError(t, err)
+	require.NotNil(t, p.SkippedByKindInClass)
+	require.Empty(t, p.SkippedByKindInClass)
+}
+
+// TestPlanResult_PageSkipKindWithClass: "skipped:<kind>" and a class narrow
+// together, and every in-class kind count pages exactly its rows.
+func TestPlanResult_PageSkipKindWithClass(t *testing.T) {
+	res := &PlanResult{FixerID: "x", Rows: []Row{
+		{RowID: "a", Skipped: SkipITunes, Class: "moved"},
+		{RowID: "b", Skipped: SkipITunes, Class: "copy"},
+		{RowID: "c", Skipped: SkipOwnerManual, Class: "moved"},
+		{RowID: "d", Skipped: SkipOwnerManual, Class: "moved"},
+		{RowID: "e", Class: "moved"},
+	}, SkippedByKind: map[string]int{SkipITunes: 2, SkipOwnerManual: 2}, Applicable: 1}
+
+	p, err := res.Page("op", FilterSkippedKindPrefix+SkipITunes, "moved", 0, 50)
+	require.NoError(t, err)
+	require.Equal(t, 1, p.Total)
+	require.Len(t, p.Rows, 1)
+	require.Equal(t, "a", p.Rows[0].RowID)
+	require.Equal(t, map[string]int{"moved": 1, "copy": 1}, p.ByClassInFilter)
+
+	for _, class := range []string{"moved", "copy"} {
+		p, err = res.Page("op", FilterSkipped, class, 0, 50)
+		require.NoError(t, err)
+		for kind, n := range p.SkippedByKindInClass {
+			kp, err := res.Page("op", FilterSkippedKindPrefix+kind, class, 0, 50)
+			require.NoError(t, err)
+			require.Equal(t, n, kp.Total, "%s/%s", class, kind)
+			for _, r := range kp.Rows {
+				require.Equal(t, kind, r.Skipped)
+				require.Equal(t, class, r.Class)
+			}
+		}
+	}
+	p, err = res.Page("op", FilterSkippedKindPrefix+SkipOwnerManual, "copy", 0, 50)
+	require.NoError(t, err)
+	require.Zero(t, p.Total)
+	require.NotNil(t, p.Rows)
+}
+
 func TestLoadPlan_ChecksDefStatusAndFixer(t *testing.T) {
 	s := newMemStore()
 	seed(s)

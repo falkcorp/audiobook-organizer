@@ -807,6 +807,13 @@
               "type": "integer"
             },
             "description": "Rows matching the filter, by class: exactly what each class filter lists."
+          },
+          "skipped_by_kind_in_class": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Skipped rows of the selected class by skip kind, whatever the filter. Only when class is set."
           }
         }
       },

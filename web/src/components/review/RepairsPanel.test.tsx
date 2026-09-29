@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -373,5 +373,73 @@ describe('RepairsPanel — classified rows', () => {
     await user.click(within(ev).getByRole('button', { name: 'Show all 4' }));
     expect(within(ev).getByText('d')).toBeInTheDocument();
     expect(within(screen.getByTestId('repairs-row-moved:P')).getByText('Moved')).toBeInTheDocument();
+  });
+});
+
+describe('RepairsPanel — skip kinds under a selected class', () => {
+  const S_MOVED = row('s-moved', { class: 'moved', skipped: 'skipped_itunes', skip_reason: 'iTunes' });
+  const S_COPY = row('s-copy', { class: 'copy', skipped: 'skipped_itunes', skip_reason: 'iTunes' });
+
+  beforeEach(() => {
+    vi.mocked(api.getRepairPlanRows).mockImplementation(
+      async (
+        fixerId: string,
+        planOpId: string,
+        q: { filter: RepairRowsFilter; offset: number; limit: number; rowClass?: string }
+      ) => {
+        const skipped = [S_MOVED, S_COPY];
+        const inFilter =
+          q.filter === 'applicable' ? [] : skipped.filter((r) => q.filter === 'skipped' || q.filter === `skipped:${r.skipped}`);
+        const rows = q.rowClass ? inFilter.filter((r) => r.class === q.rowClass) : inFilter;
+        const byClass: Record<string, number> = {};
+        for (const r of inFilter) byClass[r.class!] = (byClass[r.class!] ?? 0) + 1;
+        const kindsInClass: Record<string, number> = {};
+        for (const r of skipped.filter((r) => r.class === q.rowClass)) {
+          kindsInClass[r.skipped!] = (kindsInClass[r.skipped!] ?? 0) + 1;
+        }
+        return {
+          plan_op_id: planOpId,
+          fixer_id: fixerId,
+          planned_at: '2026-09-29T10:01:00Z',
+          filter: q.filter,
+          class: q.rowClass,
+          offset: q.offset,
+          limit: q.limit,
+          total: rows.length,
+          applicable: 0,
+          skipped_by_kind: { skipped_itunes: 2 },
+          by_class: { moved: 1, copy: 1 },
+          by_class_in_filter: byClass,
+          ...(q.rowClass ? { skipped_by_kind_in_class: kindsInClass } : {}),
+          rows,
+        };
+      }
+    );
+  });
+
+  it('labels each kind chip, and All skipped, with the selected class\'s count', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(await screen.findByTestId('repairs-tab-skipped'));
+    await screen.findByTestId('repairs-row-s-copy');
+    expect(screen.getByTestId('repairs-skip-kind-skipped_itunes')).toHaveTextContent('(2)');
+    expect(screen.getByTestId('repairs-skip-kind-all')).toHaveTextContent('All skipped (2)');
+
+    await user.click(screen.getByTestId('repairs-class-moved'));
+    await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-s-copy')).not.toBeInTheDocument());
+    const chip = screen.getByTestId('repairs-skip-kind-skipped_itunes');
+    expect(chip).toHaveTextContent('iTunes library (hands-off) (1)');
+    expect(screen.getByTestId('repairs-skip-kind-all')).toHaveTextContent('All skipped (1)');
+
+    // The chip opens exactly the one row it counts.
+    await user.click(chip);
+    expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
+      'vg-primary',
+      'plan-1',
+      expect.objectContaining({ filter: 'skipped:skipped_itunes', rowClass: 'moved' }),
+      expect.anything()
+    );
+    await screen.findByTestId('repairs-row-s-moved');
+    expect(screen.queryByTestId('repairs-row-s-copy')).not.toBeInTheDocument();
   });
 });

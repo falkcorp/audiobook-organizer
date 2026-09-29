@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-09-29
 
@@ -348,10 +348,13 @@ export function isSkippedFilter(filter: string): boolean {
 
 /**
  * One chip per skip kind with its count. Each chip pages exactly the rows it
- * counts ("every count opens its books"); "All skipped" goes back.
+ * counts ("every count opens its books"); "All skipped" goes back. Under a
+ * selected row class the counts are that class's (skipped_by_kind_in_class),
+ * since a kind chip then pages only the class's rows.
  */
 function SkipKindChips({ repairs }: RepairsPanelProps) {
-  const counts = repairs.page?.skipped_by_kind ?? {};
+  const counts =
+    (repairs.rowClass ? repairs.page?.skipped_by_kind_in_class : repairs.page?.skipped_by_kind) ?? {};
   const kinds = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
   if (kinds.length === 0) return null;
   const total = sumCounts(counts);

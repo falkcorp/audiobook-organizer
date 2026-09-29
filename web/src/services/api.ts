@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.133.0
+// version: 2.134.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -7602,6 +7602,11 @@ export interface RepairRowsPage {
   class?: string;
   /** Per-class tally of the rows matching the filter: what each chip lists. */
   by_class_in_filter?: Record<string, number>;
+  /**
+   * Skip-kind tally of the selected class's rows, whatever the filter; set
+   * only when the page is narrowed to a class.
+   */
+  skipped_by_kind_in_class?: Record<string, number>;
   rows: RepairRow[];
 }
 
