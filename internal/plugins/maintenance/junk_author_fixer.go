@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -68,10 +68,10 @@ import (
 // title-relink gate (acceptableRelinkName) and must not be a junk row itself,
 // and a name the book says is its narrator (its Narrator string, its
 // book_narrators rows, or a narrator-role credit) is an answer only when it is
-// an author row of its own or the album-artist tag or provider names it, and
-// then at review risk (authors read their own books); an artist tag naming
-// only the reader holds the row, never falling to a sibling, a path or an
-// unlink. Names are matched on one folded key (case, punctuation,
+// an author row with books of its own or the provider names it, and then at
+// review risk (authors read their own books); a file tag (artist or
+// album_artist) naming only the reader holds the row, never falling to a
+// sibling, a path or an unlink. Names are matched on one folded key (case, punctuation,
 // initials spacing, diacritics: authorjunk.FoldKey), so "BRANDON SANDERSON"
 // resolves to the existing row, never a new one; a spelling that differs from
 // the row it resolves to is review risk ("possible duplicate"). An answer
@@ -504,10 +504,8 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		narrator bool
 	}
 	bySource := map[string]map[string]answer{}
-	// add weighs one answer. namesAuthor: the source names the author field
-	// itself (the album-artist tag, the provider's author) rather than the
-	// performer (the artist tag), so a narrator it names is kept.
-	add := func(src, name string, namesAuthor bool) {
+	// add weighs one answer.
+	add := func(src, name string) {
 		name = strings.TrimSpace(name)
 		key := authorjunk.FoldKey(name)
 		if key == "" {
@@ -577,13 +575,15 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 			return
 		}
 		if narrators[key] {
-			// The book's reader. Still the writer when the name is an author
-			// row of its own (not this book's narrator credit) that has books
-			// of its own -- an empty row is no evidence the reader writes,
-			// the same bar as the cleaned source -- or the source names the
-			// author field: authors read their own books.
+			// The book's reader. Still the writer (authors read their own
+			// books) only when the name is an author row of its own (not this
+			// book's narrator credit) that has books of its own -- an empty
+			// row is no evidence the reader writes, the same bar as the
+			// cleaned source -- or the provider names them as the author. No
+			// file tag suffices: rips put the reader in album_artist as often
+			// as in artist, and taking it would create an author for them.
 			existingAuthor := !ans.create && ans.row.ID > 0 && !narratorCreditIDs[ans.row.ID] && len(idx.ownBooks[ans.row.ID]) > 0
-			if !existingAuthor && !namesAuthor {
+			if !existingAuthor && src != junkAuthorSrcProvider {
 				if junkAuthorConfirmingSource(src) && d.NarratorDropped == "" {
 					d.NarratorDropped = name
 				}
@@ -607,7 +607,7 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 
 	if !weak {
 		if cleaned, ok := authorjunk.CleanedName(a.Name); ok {
-			add(junkAuthorSrcCleaned, cleaned, false)
+			add(junkAuthorSrcCleaned, cleaned)
 		}
 	}
 	for i := range files {
@@ -617,8 +617,8 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			if lk := strings.ToLower(k); titleRelinkFileTagKeys[lk] {
-				add(junkAuthorSrcTags, files[i].RawTags[k], albumArtistTagKeys[lk])
+			if titleRelinkFileTagKeys[strings.ToLower(k)] {
+				add(junkAuthorSrcTags, files[i].RawTags[k])
 			}
 		}
 	}
@@ -636,7 +636,7 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		}
 	}
 	if fetchedAuthor != "" && providerTitleAgrees(fetchedTitle, d.Book.Title) {
-		add(junkAuthorSrcProvider, fetchedAuthor, true)
+		add(junkAuthorSrcProvider, fetchedAuthor)
 	}
 	sibs := func(src string, list []database.BookCore) {
 		for i := range list {
@@ -645,7 +645,7 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 				continue
 			}
 			if row, ok := idx.authorsByID[*sb.AuthorID]; ok {
-				add(src, row.Name, false)
+				add(src, row.Name)
 			}
 		}
 	}
@@ -667,7 +667,7 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 			continue
 		}
 		for _, c := range authorPathLinkCandidates(p) {
-			add(junkAuthorSrcPath, c.Name, false)
+			add(junkAuthorSrcPath, c.Name)
 		}
 	}
 
@@ -819,12 +819,6 @@ func junkAuthorNarratorKeys(full *database.Book, credits []database.BookAuthor, 
 
 // narratorSplitRe splits a Narrator string into names.
 var narratorSplitRe = regexp.MustCompile(`(?i)\s*(?:[,;&/|]|\band\b|\bwith\b)\s*`)
-
-// albumArtistTagKeys: the tag keys (of titleRelinkFileTagKeys) that name the
-// album's author. The artist tag very often names the performer instead.
-var albumArtistTagKeys = map[string]bool{
-	"album_artist": true, "albumartist": true, "album artist": true, "tpe2": true, "aart": true,
-}
 
 // isNarratorRole: a junction role that credits a reader, not a writer.
 func isNarratorRole(role string) bool {

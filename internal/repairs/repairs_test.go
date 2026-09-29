@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-09-29
 
@@ -366,10 +366,35 @@ func TestGuardBookTitle_BothDirections(t *testing.T) {
 		"The Language of Doctor Who":             true,
 		"Another Pirate's History of Doctor Who": true,
 		"Doctor.Who - Shada":                     true,
+		// "_" is a regexp word character; the organizer writes ":" as "_ "
+		// (#3616 review F1).
+		"Doctor Who_ Mindwarp":            true,
+		"Doctor_Who_Mindwarp":             true,
+		"Torchwood_ Border Princes":       true,
+		"Big_Finish_Productions":          true,
+		"Doctor Whoopsie":                 false,
+		"The_Doctor_Who_Fooled_the_World": false,
 	} {
 		k, why := GuardBookTitle("b", title)
 		require.Equal(t, want, k == SkipOwnerManual, "%q: %s", title, why)
 	}
+}
+
+// #3616 review F1: a prod book escaped every guard -- "_" is a regexp word
+// character, so \b never fired in "Doctor Who_ Mindwarp".
+func TestGuardBookPaths_UnderscoreColon(t *testing.T) {
+	k, why := GuardBookPaths("b", []string{"/x/Unknown Author/Doctor Who_ Mindwarp/01.mp3"}, "")
+	require.Equal(t, SkipOwnerManual, k, why)
+	for _, series := range []string{"Doctor Who_ Mindwarp", "Doctor_Who_Mindwarp", "Torchwood_ Border Princes", "Big_Finish_Productions"} {
+		k, why = GuardBookPaths("b", []string{"/x/neutral/01.mp3"}, series)
+		require.Equal(t, SkipOwnerManual, k, "%q: %s", series, why)
+	}
+	for _, p := range []string{"/x/Doctor_Who_Mindwarp/01.mp3", "/x/Torchwood_ Border Princes/01.mp3", "/x/Big_Finish_Productions/01.mp3"} {
+		k, why = GuardBookPaths("b", []string{p}, "")
+		require.Equal(t, SkipOwnerManual, k, "%q: %s", p, why)
+	}
+	k, _ = GuardBookPaths("b", []string{"/x/Doctor Whoopsie/01.mp3"}, "")
+	require.Empty(t, k)
 }
 
 // ---- paging ----

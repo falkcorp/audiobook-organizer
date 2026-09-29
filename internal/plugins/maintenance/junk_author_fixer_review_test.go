@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
 // last-edited: 2026-09-29
 
@@ -83,17 +83,60 @@ func TestJunkAuthorFixer_NarratorOnlyTagIsHeld(t *testing.T) {
 	}
 }
 
-// Review 2 (N-H1 of H2): a narrator named by the album_artist tag (or the
-// provider) is still an answer -- the author may read their own book -- at
-// review risk, and a create for it is review too.
-func TestJunkAuthorFixer_NarratorByAlbumArtistIsReview(t *testing.T) {
+// #3616 review F2: the album_artist tag naming the book's narrator is no
+// more evidence than the artist tag -- rips put the reader in either. The row
+// is held unless the name resolves to an author row with books of its own or
+// the provider names them. (Round 2 accepted album_artist alone at review
+// risk; that created an author for the reader, or reopened L1.)
+func TestJunkAuthorFixer_NarratorByAlbumArtistIsHeld(t *testing.T) {
 	f := newJunkFixture(t)
 	id := f.book(junkBookSpec{title: "The Final Empire", path: "/lib/n/fe", author: "GraphicAudio", narrator: "Michael Kramer",
 		tags: map[string]string{"album_artist": "Michael Kramer"}})
 	r := f.row(f.plan(), "GraphicAudio", id)
 	require.NotNil(t, r)
+	require.NotEqual(t, "Michael Kramer", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%v %s", r.Proposed, r.Reason)
+}
+
+// F2 A1: album_artist and artist both name the narrator, and no author row
+// exists: held, and no author is created for the reader.
+func TestJunkAuthorFixer_NarratorByAlbumArtistNeverCreates(t *testing.T) {
+	f := newJunkFixture(t)
+	id := f.book(junkBookSpec{title: "The Final Empire", path: "/lib/a/fe", author: "GraphicAudio", narrator: "Michael Kramer",
+		tags: map[string]string{"album_artist": "Michael Kramer", "artist": "Michael Kramer"}})
+	plan := f.plan()
+	r := f.row(plan, "GraphicAudio", id)
+	require.NotNil(t, r)
+	require.NotEqual(t, junkAuthorDecCreate, r.Proposed["decision"], r.Reason)
+	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%v %s", r.Proposed, r.Reason)
+	kramer, err := f.s.GetAuthorByName("Michael Kramer")
+	require.NoError(t, err)
+	require.Nil(t, kramer, "planning made an author row for the narrator")
+}
+
+// F2 A2: album_artist names the narrator, who has an author row with no
+// books: held (L1 through the album-artist leg).
+func TestJunkAuthorFixer_NarratorByAlbumArtistEmptyRowIsHeld(t *testing.T) {
+	f := newJunkFixture(t)
+	f.author("Michael Kramer")
+	id := f.book(junkBookSpec{title: "The Final Empire", path: "/lib/a/fe", author: "GraphicAudio", bookNarrators: []string{"Michael Kramer"},
+		tags: map[string]string{"album_artist": "Michael Kramer"}})
+	r := f.row(f.plan(), "GraphicAudio", id)
+	require.NotNil(t, r)
+	require.NotEqual(t, "Michael Kramer", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%v %s", r.Proposed, r.Reason)
+}
+
+// F2: the provider naming the narrator as the author is still an answer
+// (authors read their own books), at review risk.
+func TestJunkAuthorFixer_NarratorByProviderIsReview(t *testing.T) {
+	f := newJunkFixture(t)
+	id := f.book(junkBookSpec{title: "Bag of Bones", path: "/lib/n/bob", author: "GraphicAudio", narrator: "Stephen King"})
+	f.setProvider(id, "Bag of Bones", "Stephen King")
+	r := f.row(f.plan(), "GraphicAudio", id)
+	require.NotNil(t, r)
 	require.Empty(t, r.Skipped, r.SkipReason)
-	require.Equal(t, "Michael Kramer", r.Proposed["author"])
+	require.Equal(t, "Stephen King", r.Proposed["author"], r.Reason)
 	require.Equal(t, repairs.RiskReview, r.Risk)
 	require.Contains(t, r.Reason, "narrator")
 }
