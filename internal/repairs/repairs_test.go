@@ -304,11 +304,13 @@ func TestPathResolver_SymlinksIntoITunes(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(lib, "Plain"), 0o755))
 	require.NoError(t, os.Symlink(itunes, filepath.Join(lib, "Link")))
 	require.NoError(t, os.Symlink(filepath.Join(itunes, "a.m4b"), filepath.Join(lib, "Plain", "file-link.m4b")))
+	require.NoError(t, os.Symlink(filepath.Join(root, "nowhere.m4b"), filepath.Join(itunes, "dead.m4b")))
 
 	res := NewPathResolver()
 	for _, p := range []string{
 		filepath.Join(lib, "Link", "a.m4b"),
 		filepath.Join(lib, "Link", "gone.m4b"), // missing, folder is a link
+		filepath.Join(lib, "Link", "dead.m4b"), // dangling link, folder is a link
 		filepath.Join(lib, "Plain", "file-link.m4b"),
 	} {
 		k, why := GuardBookPathsWith(res, "b", []string{p}, "")
