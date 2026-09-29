@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-09-28
 //
@@ -195,10 +195,28 @@ func cachedQueryMatches(entry *MetadataCandidateCache, book *database.Book, form
 	return false
 }
 
+// BatchSourceHash is the SourceHash the batch candidate fetch writes for a
+// row it searched by (query, author hint): the batch shape of
+// hashSearchInputs, which the identity checks above compare against. It lets
+// a caller outside this package build a row the checks judge exactly as a
+// real one.
+func BatchSourceHash(bookID, query, authorHint string) string {
+	return hashSearchInputs(bookID, query, authorHint, "", "")
+}
+
 // CurrentAuthorForms lists every string a cache writer could have recorded as
-// book's author, first the Book.Author snapshot ("" when nil), then the live
-// primary author and all live authors joined with " & " (the API's
-// author_name), without repeats. It is never empty.
+// book's author, first the Book.Author snapshot, then the live primary author
+// and all live authors joined with " & " (the API's author_name), without
+// repeats. It is never empty.
+//
+// The empty form ("no author") is listed only when the book has no author at
+// all -- no snapshot and no live author. GetBookByID does not fill
+// Book.Author, so an empty snapshot is the normal case, and listing "" for a
+// book with a live author let a row hashed with no author prove the author
+// half of the identity for ANY author: a row fetched before the author
+// changed still matched. (A placeholder live author still matches a
+// no-author row through cachedQueryMatches' placeholder leg: the fetch sends
+// and hashes no hint for it.)
 //
 // It exists for the identity checks only: they compare a recorded input with
 // the book NOW, and the recorded input came from whichever form its writer
@@ -209,7 +227,10 @@ func CurrentAuthorForms(book *database.Book, liveAuthors []string) []string {
 	if book != nil && book.Author != nil {
 		snapshot = book.Author.Name
 	}
-	forms := []string{snapshot}
+	var forms []string
+	if strings.TrimSpace(snapshot) != "" || len(liveAuthors) == 0 {
+		forms = append(forms, snapshot)
+	}
 	add := func(a string) {
 		for _, f := range forms {
 			if f == a {

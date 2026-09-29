@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_author_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: bf7207f0-35f9-406d-8c06-9010e2079b36
 // last-edited: 2026-09-28
 
@@ -214,6 +214,13 @@ func TestValidateCachedIdentityForBook_PlaceholderAuthorEmptyHint(t *testing.T) 
 		{name: "stand-in query, placeholder author, empty hint", author: placeholder, hashTitle: "Planet Hulk", query: "Planet Hulk", wantOK: true},
 		{name: "stand-in query, real author, empty hint", author: realAuthor, live: []string{"Greg Pak"}, hashTitle: "Planet Hulk", query: "Planet Hulk", wantOK: false},
 		{name: "stand-in query, row for a different query", author: placeholder, hashTitle: "Planet Hulk", query: "World War Hulk", wantOK: false},
+		// GetBookByID leaves Book.Author nil: the empty snapshot must not
+		// prove the author half for a book that has a live author.
+		{name: "nil snapshot, live author, empty-hint row is stale", live: []string{"Greg Pak"}, hashTitle: "Planet Hulk", query: "Planet Hulk", wantOK: false},
+		{name: "nil snapshot, row for the live author passes", live: []string{"Greg Pak"}, hashTitle: "Planet Hulk", hashAuth: "Greg Pak", query: "Planet Hulk", wantOK: true},
+		{name: "nil snapshot, author changed since the fetch is stale", live: []string{"Someone Else"}, hashTitle: "Planet Hulk", hashAuth: "Greg Pak", query: "Planet Hulk", wantOK: false},
+		{name: "nil snapshot, own-title row, empty hint, live author is stale", live: []string{"Greg Pak"}, hashTitle: "Unknown Title", wantOK: false},
+		{name: "no author at all, empty-hint row passes", hashTitle: "Planet Hulk", query: "Planet Hulk", wantOK: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

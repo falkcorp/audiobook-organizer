@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_transcribed_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a7c9ec1-ca94-4bd5-b088-7920aaeb18af
 // last-edited: 2026-09-28
 
@@ -70,6 +70,74 @@ func TestBulkApplyPlanners_OwnerManualOnly(t *testing.T) {
 			}
 			if !tc.wantAllowed && plan.Gate.Reason != applygate.ReasonOwnerManualOnly {
 				t.Errorf("reason = %q (%s), want %q", plan.Gate.Reason, plan.Gate.Detail, applygate.ReasonOwnerManualOnly)
+			}
+		})
+	}
+}
+
+// realIdentitySvc is fakeApplySvc with the REAL identity checks
+// (metafetch.Service) over a real batch-shaped cache row, so a test sees what
+// the hash proves rather than what a fake says.
+type realIdentitySvc struct {
+	*fakeApplySvc
+	entry *metafetch.MetadataCandidateCache
+}
+
+func (r realIdentitySvc) GetCachedCandidates(string) (*metafetch.MetadataCandidateCache, bool, error) {
+	return r.entry, true, nil
+}
+func (r realIdentitySvc) ValidateCachedIdentityForBook(e *metafetch.MetadataCandidateCache, b *database.Book, live []string) error {
+	return (&metafetch.Service{}).ValidateCachedIdentityForBook(e, b, live)
+}
+func (r realIdentitySvc) CachedQueryMatchesIdentity(e *metafetch.MetadataCandidateCache, b *database.Book, live []string, q string) bool {
+	return (&metafetch.Service{}).CachedQueryMatchesIdentity(e, b, live, q)
+}
+
+// A row the batch fetch wrote for the transcribed query proves the identity
+// only for the author it was fetched with. GetBookByID leaves Book.Author nil,
+// and an empty snapshot used to count as a current author form, so a row
+// hashed with no author -- or one fetched before the author changed -- still
+// passed. Both are refused now; the row for the current author passes.
+func TestPlanCachedApply_TranscribedRowNeedsTheCurrentAuthor(t *testing.T) {
+	const hulk = "Marvel's Planet Hulk"
+	dur := 36000
+	pakID, otherID := 7, 8
+	cases := []struct {
+		name        string
+		hashAuthor  string
+		liveID      int
+		wantAllowed bool
+	}{
+		{name: "row for the current author passes", hashAuthor: "Greg Pak", liveID: pakID, wantAllowed: true},
+		{name: "author changed since the fetch is refused", hashAuthor: "Greg Pak", liveID: otherID},
+		{name: "row hashed with no author is refused for a book with an author", hashAuthor: "", liveID: pakID},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id := tc.liveID
+			book := &database.Book{ID: "b1", Title: "", TranscribedTitle: strPtr(hulk), AuthorID: &id,
+				FilePath: "/lib/Greg Pak/Unknown Title/book.m4b", Duration: &dur}
+			books := liveAuthorBooks{
+				fakeBooks: fakeBooks{"b1": book},
+				authors: map[int]*database.Author{pakID: {ID: pakID, Name: "Greg Pak"},
+					otherID: {ID: otherID, Name: "Someone Else"}},
+			}
+			cand := metafetch.MetadataCandidate{Title: hulk, Author: "Greg Pak", Score: 0.95, DurationSec: 36000, Source: "Audible"}
+			blob, err := json.Marshal(cand)
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc := realIdentitySvc{fakeApplySvc: &fakeApplySvc{}, entry: &metafetch.MetadataCandidateCache{BookID: "b1",
+				SourceHash: metafetch.BatchSourceHash("b1", hulk, tc.hashAuthor), Candidates: []json.RawMessage{blob}}}
+			plan := planCachedApply(svc, books, "b1", nil, nil)
+			if plan.Gate == nil {
+				t.Fatalf("gate did not run: %+v", plan)
+			}
+			if plan.Gate.Allowed != tc.wantAllowed {
+				t.Fatalf("allowed = %v (reason %q: %s), want %v", plan.Gate.Allowed, plan.Gate.Reason, plan.Gate.Detail, tc.wantAllowed)
+			}
+			if !tc.wantAllowed && plan.Gate.Reason != applygate.ReasonIdentityStale {
+				t.Errorf("reason = %q (%s), want %q", plan.Gate.Reason, plan.Gate.Detail, applygate.ReasonIdentityStale)
 			}
 		})
 	}
