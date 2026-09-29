@@ -1,17 +1,20 @@
 // file: internal/repairs/guards.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
 // last-edited: 2026-09-29
 
 package repairs
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"sync"
+	"syscall"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -48,11 +51,16 @@ func GuardBookPathsWith(res *PathResolver, bookID string, paths []string, series
 	if res == nil {
 		res = NewPathResolver()
 	}
-	paths = res.withResolved(paths)
+	paths, doubt := res.withResolved(paths)
 	for _, p := range paths {
 		if p != "" && pathutil.UnderFrozenITunesTree(p) {
 			return SkipITunes, fmt.Sprintf("member %s has a file under books/itunes/** (hands-off): %s", bookID, p)
 		}
+	}
+	// Fail closed: a path whose location could not be settled may be under
+	// books/itunes/**, so the row is skipped, never cleared.
+	if doubt != nil {
+		return SkipGuardUnreadable, fmt.Sprintf("member %s: could not tell whether a file is under books/itunes/**: %v", bookID, doubt)
 	}
 	for _, p := range paths {
 		if applygate.IsOwnerManualOnly(p, seriesName) {
@@ -70,9 +78,15 @@ func GuardBookPathsWith(res *PathResolver, bookID string, paths []string, series
 // resolution: a plan or apply checks thousands of files that share a few
 // hundred folders, and EvalSymlinks walks (lstats) every component of every
 // path it is given. A file is resolved through its folder's cached answer,
-// with one Lstat of the file itself; only a file that is itself a symlink is
-// resolved in full. Built per plan or apply run, so a link created since an
-// earlier run is seen. Safe for concurrent use.
+// with one Lstat of the file itself; a link is followed hop by hop only when
+// EvalSymlinks cannot resolve it (it is dangling). Built per plan or apply
+// run, so a link created since an earlier run is seen. Safe for concurrent
+// use.
+//
+// It fails closed: whenever it cannot tell where a path lives (a folder or
+// link it cannot read, a link it cannot read the text of, or a chain longer
+// than maxLinkHops) it reports doubt, and the guard skips the row
+// (SkipGuardUnreadable) instead of clearing it.
 type PathResolver struct {
 	mu   sync.Mutex
 	dirs map[string]resolvedDir
@@ -80,116 +94,188 @@ type PathResolver struct {
 
 type resolvedDir struct {
 	path string
-	ok   bool
+	// ok: the folder exists and resolved to path.
+	ok bool
+	// doubt: EvalSymlinks failed for a reason other than a missing
+	// component (a permission error, a loop), so whether the folder exists
+	// or where it points is unknown.
+	doubt error
 }
 
 // NewPathResolver returns an empty resolver.
 func NewPathResolver() *PathResolver { return &PathResolver{dirs: map[string]resolvedDir{}} }
 
-func (r *PathResolver) dir(d string) (string, bool) {
+// missing reports an error that means a path component does not exist, which
+// is an answer, not doubt.
+func missing(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+func (r *PathResolver) dir(d string) resolvedDir {
 	r.mu.Lock()
 	got, hit := r.dirs[d]
 	r.mu.Unlock()
 	if hit {
-		return got.path, got.ok
+		return got
 	}
 	p, err := filepath.EvalSymlinks(d)
-	got = resolvedDir{path: p, ok: err == nil}
+	switch {
+	case err == nil:
+		got = resolvedDir{path: p, ok: true}
+	case missing(err):
+		got = resolvedDir{}
+	default:
+		got = resolvedDir{doubt: fmt.Errorf("resolve folder %s: %w", d, err)}
+	}
 	r.mu.Lock()
 	r.dirs[d] = got
 	r.mu.Unlock()
-	return got.path, got.ok
+	return got
 }
 
-// Resolve returns the path p's symlinks resolve to. ok is false when neither
-// p (if it is itself a link) nor its folder can be resolved: p is gone with
-// its folder, or unreadable; the guard then checks it lexically only.
-func (r *PathResolver) Resolve(p string) (string, bool) {
-	rp, ok, _ := r.resolve(p)
-	return rp, ok
+// maxLinkHops bounds the links one path's walk follows by hand. A chain the
+// kernel refuses (more than its 40) is still followed, so a long chain into
+// books/itunes/** is caught; one longer than this is doubt.
+const maxLinkHops = 255
+
+// resolveWalk is the state of one path's walk: the hops left and the links
+// already followed (a revisit is a loop, which points nowhere: not doubt).
+type resolveWalk struct {
+	hops    int
+	visited map[string]bool
 }
 
-// maxLinkHops bounds the dangling-link walk (the kernel's own ELOOP limit).
-const maxLinkHops = 40
+// spellings returns the paths p resolves to, besides p: the resolved path of
+// a live path, and for a dangling link or a missing path every path its link
+// texts name, each resolved through its longest existing ancestor. doubt is
+// non-nil when some step could not be read; the spellings found so far are
+// still returned.
+func (r *PathResolver) spellings(p string) (out []string, doubt error) {
+	w := &resolveWalk{hops: maxLinkHops, visited: map[string]bool{}}
+	return r.walk(p, w)
+}
 
-// resolve is Resolve plus, for a dangling link, the paths its link text
-// names (dangling): EvalSymlinks fails on those, and the folder fallback
-// alone would miss a dead link in a plain folder whose text points into
-// books/itunes/**.
-func (r *PathResolver) resolve(p string) (resolved string, ok bool, dangling []string) {
-	if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+func (r *PathResolver) walk(p string, w *resolveWalk) ([]string, error) {
+	fi, err := os.Lstat(p)
+	if err != nil {
+		if !missing(err) {
+			return nil, fmt.Errorf("read %s: %w", p, err)
+		}
+		return r.walkMissing(p, w)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
 		if rp, err := filepath.EvalSymlinks(p); err == nil {
-			return rp, true, nil
+			return []string{rp}, nil
 		}
-		// A dangling link: check where its text points, and fall back to its
-		// folder's resolution, so a dead link inside a folder linked into
-		// books/itunes/** still guards.
-		dangling = r.linkTargets(p)
 	}
-	d, ok := r.dir(filepath.Dir(p))
-	if !ok {
-		return "", false, dangling
+	// p exists: where it sits is its folder's resolution. A dangling link
+	// also lives wherever its text points.
+	d := r.dir(filepath.Dir(p))
+	if !d.ok {
+		if d.doubt != nil {
+			return nil, d.doubt
+		}
+		return nil, fmt.Errorf("resolve %s: its folder vanished during the check", p)
 	}
-	return filepath.Join(d, filepath.Base(p)), true, dangling
+	own := filepath.Join(d.path, filepath.Base(p))
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return []string{own}, nil
+	}
+	targets, doubt := r.follow(p, w)
+	return append([]string{own}, targets...), doubt
 }
 
-// linkTargets follows the link text of the dangling link p, hop by hop, and
-// returns each target it names: a relative text is joined to its link's
-// folder (resolved when it can be). The walk stops at a target that is not a
-// link (it is missing, or EvalSymlinks would have succeeded) or after
-// maxLinkHops.
-func (r *PathResolver) linkTargets(p string) []string {
-	var out []string
-	link := p
-	for range maxLinkHops {
-		text, err := os.Readlink(link)
-		if err != nil {
-			break
+// walkMissing resolves a path that does not exist through its longest
+// existing ancestor A. Below A, the first component c does not exist per
+// EvalSymlinks, but may be a dangling link: then the path lives wherever that
+// link points, with the rest rejoined. Otherwise nothing below A exists, so
+// nothing below it can be a link, and A's resolution plus the rest is the
+// answer.
+func (r *PathResolver) walkMissing(p string, w *resolveWalk) ([]string, error) {
+	dir, rest := filepath.Dir(p), ""
+	c := filepath.Base(p)
+	for {
+		d := r.dir(dir)
+		if d.doubt != nil {
+			return nil, d.doubt
 		}
-		if !filepath.IsAbs(text) {
-			base := filepath.Dir(link)
-			if d, ok := r.dir(base); ok {
-				base = d
+		if d.ok {
+			first := filepath.Join(d.path, c)
+			if fi, err := os.Lstat(first); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+				targets, doubt := r.follow(first, w)
+				out := []string{filepath.Join(first, rest)}
+				for _, t := range targets {
+					out = append(out, filepath.Join(t, rest))
+				}
+				return out, doubt
+			} else if err != nil && !missing(err) {
+				return nil, fmt.Errorf("read %s: %w", first, err)
 			}
-			text = filepath.Join(base, text)
+			return []string{filepath.Join(first, rest)}, nil
 		}
-		text = filepath.Clean(text)
-		out = append(out, text)
-		// The target's folder may itself be (or sit under) a link into the
-		// frozen tree: check it resolved, through the folder cache.
-		if d, ok := r.dir(filepath.Dir(text)); ok {
-			if via := filepath.Join(d, filepath.Base(text)); via != text {
-				out = append(out, via)
-			}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil, nil
 		}
-		fi, err := os.Lstat(text)
-		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-			break
-		}
-		link = text
+		rest = filepath.Join(c, rest)
+		c = filepath.Base(dir)
+		dir = parent
 	}
-	return out
 }
 
-// withResolved adds, after each path, the path its symlinks resolve to when
-// that differs, and for a dangling link every path its link text names: a
-// library symlink into books/itunes/** is under the frozen tree however it is
-// spelled, dead or alive. A path that cannot be resolved is checked lexically
-// only.
-func (r *PathResolver) withResolved(paths []string) []string {
-	out := make([]string, 0, len(paths))
+// follow reads the dangling link's text, joins a relative text to the link's
+// resolved folder, and walks the target: every path it names is returned.
+func (r *PathResolver) follow(link string, w *resolveWalk) ([]string, error) {
+	if w.visited[link] {
+		return nil, nil // a loop points nowhere
+	}
+	w.visited[link] = true
+	if w.hops == 0 {
+		return nil, fmt.Errorf("resolve %s: more than %d links", link, maxLinkHops)
+	}
+	w.hops--
+	text, err := os.Readlink(link)
+	if err != nil {
+		return nil, fmt.Errorf("read link %s: %w", link, err)
+	}
+	if !filepath.IsAbs(text) {
+		d := r.dir(filepath.Dir(link))
+		base := filepath.Dir(link)
+		switch {
+		case d.ok:
+			base = d.path
+		case d.doubt != nil:
+			return nil, d.doubt
+		}
+		text = filepath.Join(base, text)
+	}
+	text = filepath.Clean(text)
+	more, doubt := r.walk(text, w)
+	return append([]string{text}, more...), doubt
+}
+
+// withResolved adds, after each path, the other paths it resolves to (see
+// spellings): a library symlink into books/itunes/** is under the frozen tree
+// however it is spelled, dead or alive. doubt is the first path the resolver
+// could not settle.
+func (r *PathResolver) withResolved(paths []string) (out []string, doubt error) {
+	out = make([]string, 0, len(paths))
 	for _, p := range paths {
 		out = append(out, p)
 		if p == "" {
 			continue
 		}
-		rp, ok, dangling := r.resolve(p)
-		if ok && rp != p {
-			out = append(out, rp)
+		more, err := r.spellings(p)
+		for _, m := range more {
+			if m != p {
+				out = append(out, m)
+			}
 		}
-		out = append(out, dangling...)
+		if err != nil && doubt == nil {
+			doubt = err
+		}
 	}
-	return out
+	return out, doubt
 }
 
 // manualOnlyTitleRe: see GuardBookTitle. Separators inside the names vary
