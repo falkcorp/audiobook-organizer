@@ -1,5 +1,5 @@
 // file: internal/util/title_sort_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6a3d9e52-1c8f-4b70-a4e6-3f2b8d0c5e19
 // last-edited: 2026-09-29
 
@@ -36,6 +36,11 @@ func TestTitleSortKey_Table(t *testing.T) {
 		{"2 Peter's Journey", "2 peter's journey"},
 		{"1. Mose", "mose 1"},
 		{"2. Mose", "mose 2"},
+		{"5. Mose", "mose 5"},
+		{"V Mose", "mose 5"},
+		{"Fifth Corinthians", "fifth corinthians"},
+		{"5 John", "5 john"},
+		{"V for Vendetta", "v for vendetta"},
 		// NBSP is not whitespace to the numbered-book rule (web mirrors this)
 		{"1 John", "1 john"},
 		// ---- untouched: plain NormalizeTitle ----

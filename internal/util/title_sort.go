@@ -1,5 +1,5 @@
 // file: internal/util/title_sort.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f6c8a14-5d3b-4e97-b0a2-9e4d1c7f6b58
 // last-edited: 2026-09-29
 
@@ -33,6 +33,9 @@ var ordinalWords = map[string]int{
 	"2": 2, "ii": 2, "second": 2, "2nd": 2,
 	"3": 3, "iii": 3, "third": 3, "3rd": 3,
 	"4": 4, "iv": 4, "fourth": 4, "4th": 4,
+	// Five for the German books of Moses ("5. Mose"); matchNumberedBook
+	// accepts it for Mose only.
+	"5": 5, "v": 5, "fifth": 5, "5th": 5,
 }
 
 // numberedBookRe: an ordinal token, a separator (a dot, a hyphen or
@@ -90,7 +93,8 @@ func matchNumberedBook(title string) (n int, book, rest string, letterL, ok bool
 		return 0, "", "", false, false
 	}
 	n, letterL = ordinalOf(m[1])
-	if n == 0 {
+	// Only the books of Moses go past four: "Fifth Corinthians" is no book.
+	if n == 0 || (n > 4 && !strings.EqualFold(m[2], "mose")) {
 		return 0, "", "", false, false
 	}
 	return n, m[2], strings.TrimSpace(m[3]), letterL, true
