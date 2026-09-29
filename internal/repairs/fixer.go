@@ -1,7 +1,7 @@
 // file: internal/repairs/fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 // Package repairs is the shared framework behind the Repairs lane of /review:
 // one contract every library fixer implements, and one engine that plans,
@@ -71,6 +71,17 @@ type Row struct {
 	Proposed map[string]string `json:"proposed,omitempty"`
 	Reason   string            `json:"reason"`
 	Risk     string            `json:"risk"`
+	// Class is an optional fixer-defined kind of row ("moved", "copy", ...).
+	// The plan tallies rows by it (PlanResult.ByClass) and the rows endpoint
+	// filters on it, so every per-class count in the lane lists its rows.
+	Class string `json:"class,omitempty"`
+	// Members optionally describes every book of the row (its role in the
+	// row and its file counts), so the lane can list and link each of them
+	// rather than show a bare "N books" count.
+	Members []RowMember `json:"members,omitempty"`
+	// Evidence optionally lists what the row's decision was made from, in
+	// words ("import path equals parent row path", "hash equal").
+	Evidence []string `json:"evidence,omitempty"`
 	// Fingerprint hashes every input the row's decision was made from. Apply
 	// re-plans the row and refuses it when the fresh fingerprint differs.
 	Fingerprint string `json:"fingerprint"`
@@ -83,6 +94,17 @@ type Row struct {
 	// apply run. It is never persisted: the stored plan holds only the
 	// fields above, and Apply always receives a row fresh from Replan.
 	Detail any `json:"-"`
+}
+
+// RowMember is one book of a Row, for display.
+type RowMember struct {
+	BookID string `json:"book_id"`
+	Title  string `json:"title,omitempty"`
+	// Role is fixer-defined ("parent", "fragment", "survivor").
+	Role string `json:"role,omitempty"`
+	// Files / MissingFiles count the book's book_file rows at plan time.
+	Files        int `json:"files"`
+	MissingFiles int `json:"missing_files,omitempty"`
 }
 
 // Applicable reports whether apply may write this row.

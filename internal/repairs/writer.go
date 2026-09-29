@@ -1,7 +1,7 @@
 // file: internal/repairs/writer.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package repairs
 
@@ -51,9 +51,17 @@ type Writer struct {
 	source, changeType, batchPrefix string
 	log                             logger.LevelLogger
 
+	// Operation journal and book_file surface (writer_files.go); nil until
+	// WithJournal.
+	files   BookFileWriter
+	journal ChangeJournal
+	opID    string
+	touch   func()
+
 	writes        atomic.Int64
 	historyRows   atomic.Int64
 	historyFailed atomic.Int64
+	journaled     atomic.Int64
 }
 
 // NewWriter builds a Writer. Its warnings go to the "repairs" subsystem

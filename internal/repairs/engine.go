@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package repairs
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"sort"
 	"strings"
@@ -65,7 +66,10 @@ type PlanResult struct {
 	Applicable int             `json:"applicable"`
 	// SkippedByKind counts the rows apply will not write, by Row.Skipped.
 	SkippedByKind map[string]int `json:"skipped_by_kind"`
-	Rows          []Row          `json:"rows"`
+	// ByClass counts every row (applicable and skipped) by Row.Class, for a
+	// fixer that sets one. Each count is a filter of the rows endpoint.
+	ByClass map[string]int `json:"by_class,omitempty"`
+	Rows    []Row          `json:"rows"`
 }
 
 // PlanDeps is what RunPlan needs besides the fixer.
@@ -136,6 +140,12 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 		} else {
 			res.SkippedByKind[rows[i].Skipped]++
 		}
+		if c := rows[i].Class; c != "" {
+			if res.ByClass == nil {
+				res.ByClass = map[string]int{}
+			}
+			res.ByClass[c]++
+		}
 	}
 	return res, nil
 }
@@ -192,37 +202,43 @@ type RowsPage struct {
 	FixerID    string    `json:"fixer_id"`
 	PlannedAt  time.Time `json:"planned_at"`
 	Filter     string    `json:"filter,omitempty"`
+	Class      string    `json:"class,omitempty"`
 	Offset     int       `json:"offset"`
 	Limit      int       `json:"limit"`
 	Total      int       `json:"total"` // rows matching the filter
 	Applicable int       `json:"applicable"`
 	// SkippedByKind is the whole plan's tally, whatever the filter.
 	SkippedByKind map[string]int `json:"skipped_by_kind"`
-	Rows          []Row          `json:"rows"`
+	// ByClass is the whole plan's per-class tally, whatever the filter.
+	ByClass map[string]int `json:"by_class,omitempty"`
+	Rows    []Row          `json:"rows"`
 }
 
 // Page returns rows [offset, offset+limit) of the plan's rows matching
-// filter. An unknown filter is an error. Rows is never nil.
-func (p *PlanResult) Page(planOpID, filter string, offset, limit int) (*RowsPage, error) {
-	var match []Row
+// filter and, when class is not empty, of that Row.Class. An unknown filter
+// is an error. Rows is never nil.
+func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*RowsPage, error) {
 	switch filter {
-	case FilterAll:
-		match = p.Rows
-	case FilterApplicable, FilterSkipped:
-		for i := range p.Rows {
-			if p.Rows[i].Applicable() == (filter == FilterApplicable) {
-				match = append(match, p.Rows[i])
-			}
-		}
+	case FilterAll, FilterApplicable, FilterSkipped:
 	default:
 		return nil, fmt.Errorf("repairs: unknown filter %q (want applicable or skipped)", filter)
+	}
+	var match []Row
+	for i := range p.Rows {
+		if filter != FilterAll && p.Rows[i].Applicable() != (filter == FilterApplicable) {
+			continue
+		}
+		if class != "" && p.Rows[i].Class != class {
+			continue
+		}
+		match = append(match, p.Rows[i])
 	}
 	if offset < 0 {
 		offset = 0
 	}
 	out := &RowsPage{PlanOpID: planOpID, FixerID: p.FixerID, PlannedAt: p.PlannedAt, Filter: filter,
-		Offset: offset, Limit: limit, Total: len(match), Applicable: p.Applicable,
-		SkippedByKind: p.SkippedByKind, Rows: []Row{}}
+		Class: class, Offset: offset, Limit: limit, Total: len(match), Applicable: p.Applicable,
+		SkippedByKind: p.SkippedByKind, ByClass: p.ByClass, Rows: []Row{}}
 	if offset < len(match) {
 		end := offset + limit
 		if end > len(match) {
@@ -241,6 +257,24 @@ type ApplyParams struct {
 	RowIDs   []string `json:"row_ids"`
 	DryRun   *bool    `json:"dry_run,omitempty"`
 	DryRunC  *bool    `json:"dryRun,omitempty"`
+	// Resume is the checkpoint of an interrupted run (set by the op through
+	// the registry's checkpoint merge, never by a caller): the rows it had
+	// already settled. A resumed run keeps those results and does not
+	// re-apply them.
+	Resume *ApplyCheckpoint `json:"resume,omitempty"`
+}
+
+// ApplyCheckpoint is what repairs.apply checkpoints while it runs: every row
+// settled so far, with its outcome. Merged back into the op's params as
+// "resume" when the server restarts mid-apply (ResumeRestart).
+type ApplyCheckpoint struct {
+	Settled []RowResult `json:"settled"`
+}
+
+// settledForResume reports whether a checkpointed outcome is final. An
+// aborted row was never attempted and is applied again on resume.
+func settledForResume(outcome string) bool {
+	return outcome != "" && outcome != OutcomeAborted && outcome != OutcomeWouldApply
 }
 
 // RowResult is the apply outcome of one requested row.
@@ -290,7 +324,24 @@ type ApplyDeps struct {
 	// Concurrency of the per-partition workers; 0 means 4 (the fixers so far
 	// are I/O-bound: point reads and ffprobe header reads).
 	Concurrency int
+	// Resumed is the checkpoint of an interrupted run of this same apply;
+	// its settled rows are reported as they were and not re-applied.
+	Resumed *ApplyCheckpoint
+	// Checkpoint, when set, is called with every row settled so far after
+	// each write-run row settles (throttled; see checkpointEvery). A dry run
+	// never checkpoints.
+	Checkpoint func(ApplyCheckpoint) error
 }
+
+// checkpointEvery / checkpointInterval throttle ApplyDeps.Checkpoint: a row
+// whose settle was not yet checkpointed when the server stops is re-planned
+// on resume, and a fixer's Replan recognises its own finished steps, so a
+// lost checkpoint costs a re-check, not a double write. Variables so tests
+// can checkpoint every row.
+var (
+	checkpointEvery    = 5
+	checkpointInterval = 15 * time.Second
+)
 
 const defaultApplyConcurrency = 4
 
@@ -338,10 +389,21 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 		results = append(results, r)
 		mu.Unlock()
 	}
+	resumed := map[string]bool{}
+	if deps.Resumed != nil && !dryRun {
+		for _, r := range deps.Resumed.Settled {
+			if settledForResume(r.Outcome) && !resumed[r.RowID] {
+				resumed[r.RowID] = true
+				record(r)
+			}
+		}
+	}
 	var selected []Row
 	for _, id := range ids {
 		row, ok := byID[id]
 		switch {
+		case resumed[id]:
+			// Settled before the restart; its result is already recorded.
 		case !ok:
 			res.NotInPlan = append(res.NotInPlan, id)
 		case !row.Applicable():
@@ -367,6 +429,30 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 
 	var lost atomic.Bool
 	var done atomic.Int64
+	// Checkpoint state: the rows settled since the last checkpoint and when
+	// it was written. Guarded by mu, like results.
+	sinceCP, lastCP := 0, time.Now()
+	settle := func(r RowResult) {
+		mu.Lock()
+		results = append(results, r)
+		if dryRun || deps.Checkpoint == nil || r.Outcome == OutcomeAborted {
+			mu.Unlock()
+			return
+		}
+		sinceCP++
+		if sinceCP < checkpointEvery && time.Since(lastCP) < checkpointInterval {
+			mu.Unlock()
+			return
+		}
+		cp := ApplyCheckpoint{Settled: append([]RowResult(nil), results...)}
+		sinceCP, lastCP = 0, time.Now()
+		// Written under mu so checkpoints land in order: a slower earlier one
+		// can never overwrite a later one with fewer rows.
+		if err := deps.Checkpoint(cp); err != nil && reporter != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("repairs.apply: checkpoint not written (a restart re-checks these rows): %v", err))
+		}
+		mu.Unlock()
+	}
 	parts := partitionRows(selected)
 	conc := deps.Concurrency
 	if conc <= 0 {
@@ -374,7 +460,7 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	}
 	runErr := registry.RunItems(ctx, reporter, parts, func(pctx context.Context, part []Row) error {
 		for _, planned := range part {
-			record(applyOne(pctx, f, plan.Params, planned, dryRun, deps, holder, held, &lost, reporter))
+			settle(applyOne(pctx, f, plan.Params, planned, dryRun, deps, holder, held, &lost, reporter))
 			done.Add(1)
 		}
 		return nil
@@ -382,7 +468,9 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 		Concurrency: conc,
 		ErrMode:     registry.ErrModeCollect,
 		// Label runs inside the workers: it reads only the atomic.
-		Label: func(_, _ int) string { return fmt.Sprintf("Rows %d/%d", done.Load(), len(selected)) },
+		Label: func(_, _ int) string {
+			return fmt.Sprintf("Rows %d/%d (%d settled before a restart)", done.Load(), len(selected), len(resumed))
+		},
 	})
 
 	sort.Slice(results, func(i, j int) bool { return results[i].RowID < results[j].RowID })
