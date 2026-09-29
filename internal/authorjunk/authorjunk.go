@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
 // last-edited: 2026-09-29
 
@@ -399,7 +399,7 @@ func IsCompositeCredit(name string) bool {
 			continue
 		}
 		r := []rune(c)
-		if !unicode.IsLetter(r[0]) || classifyName(c).Junk() {
+		if !unicode.IsLetter(r[0]) || classifyBase(c).Junk() {
 			return false
 		}
 		n++
@@ -452,7 +452,39 @@ func ClassifyName(name string) Verdict {
 
 func strong(c Class, rule string) Verdict { return Verdict{Class: c, Strength: Strong, Rule: rule} }
 
+// nameParts carries classifyBaseParts' normalized forms to classifyAdded.
+type nameParts struct {
+	core, n, full string
+	words         []string
+}
+
+// classifyName is every rule: the pre-2026-09-29 rules (classifyBase), then,
+// for a name they leave unflagged and do not settle as a credit list, the
+// relink-only rules added for the junk-author trial (classifyAdded).
 func classifyName(s string) Verdict {
+	v, p := classifyBaseParts(s)
+	// A name that joins several credits ("50 Cent, Robert Greene") is never
+	// judged by the added rules: a clause they flag may be a real person, and
+	// a relink would drop the co-author.
+	if p == nil || hasCreditSeparator(s) {
+		return v
+	}
+	return classifyAdded(s, p.core, p.n, p.full, p.words)
+}
+
+// classifyBase is the pre-2026-09-29 rules only. Internal re-classification
+// of a PART of a name (a credit-list clause, a studio head, a parenthetical)
+// or of a cleaned candidate uses it: the added rules reach real credits ("The
+// Dalai Lama", "50 Cent"), and judging a clause by them would turn "The Dalai
+// Lama, Howard C. Cutler" from a credit list into a junk title.
+func classifyBase(s string) Verdict {
+	v, _ := classifyBaseParts(s)
+	return v
+}
+
+// classifyBaseParts is classifyBase; a nil *nameParts means the verdict is
+// final (junk, or a credit list), otherwise the added rules may still judge.
+func classifyBaseParts(s string) (Verdict, *nameParts) {
 	// Leading punctuation and edition decoration hide the words the lists
 	// match ("- Unknown Author", "Big Finish (Unabridged)").
 	core := strings.TrimLeftFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
@@ -460,7 +492,7 @@ func classifyName(s string) Verdict {
 	core = personname.StripEditionSuffix(core)
 	n := Normalize(core)
 	if n == "" || full == "" {
-		return strong(ClassOther, RuleCreationGate)
+		return strong(ClassOther, RuleCreationGate), nil
 	}
 	// words are the whole string's words, decoration included, so a
 	// parenthetical studio ("Brandon Sanderson (GraphicAudio)") is seen.
@@ -468,10 +500,10 @@ func classifyName(s string) Verdict {
 
 	// Placeholder: the system's own non-answers first.
 	if authorname.IsPlaceholderAuthor(core) {
-		return strong(ClassPlaceholder, RulePlaceholder)
+		return strong(ClassPlaceholder, RulePlaceholder), nil
 	}
 	if ok, why := personname.IsPlausibleAuthorName(core); !ok && why == personname.RejectPlaceholder {
-		return strong(ClassPlaceholder, RulePlaceholder)
+		return strong(ClassPlaceholder, RulePlaceholder), nil
 	}
 	// A collective word counts only in a single credit: "Various Authors" is
 	// a placeholder, "J. Anderson, Various" is a credit list for the split
@@ -479,31 +511,31 @@ func classifyName(s string) Verdict {
 	if !hasCreditSeparator(core) {
 		for _, w := range words {
 			if collectiveWords[w] {
-				return strong(ClassPlaceholder, RuleCollective)
+				return strong(ClassPlaceholder, RuleCollective), nil
 			}
 		}
 	}
 
 	if narratorRe.MatchString(s) {
-		return strong(ClassNarrator, RuleNarrator)
+		return strong(ClassNarrator, RuleNarrator), nil
 	}
 
 	if publisherNames[n] || publisherNames[full] {
-		return strong(ClassPublisher, RulePublisher)
+		return strong(ClassPublisher, RulePublisher), nil
 	}
 	for _, w := range words {
 		if publisherWords[w] {
-			return strong(ClassPublisher, RulePublisher)
+			return strong(ClassPublisher, RulePublisher), nil
 		}
 	}
 	// "Velox Books", "Portal Books": a trailing "Books" after a name-like
 	// word is an imprint. A person's name does not end in "Books".
 	if len(words) >= 2 && words[len(words)-1] == "books" && !hasDigit(n) && len(words) <= 3 {
-		return strong(ClassPublisher, RulePublisher)
+		return strong(ClassPublisher, RulePublisher), nil
 	}
 
 	if genreNames[n] || genreNames[full] {
-		return strong(ClassGenre, RuleGenre)
+		return strong(ClassGenre, RuleGenre), nil
 	}
 
 	personShaped := personname.LooksLikePersonName(s)
@@ -514,20 +546,20 @@ func classifyName(s string) Verdict {
 			// "Marvel Universe" names a series; "The Restaurant at the End of
 			// the Universe" is a title (judged below).
 			if i == len(words)-1 && i > 0 && !leadsWithArticle(s) {
-				return strong(ClassSeriesName, RuleSeriesMarker)
+				return strong(ClassSeriesName, RuleSeriesMarker), nil
 			}
 			continue
 		}
 		if seriesMarkers[w] {
-			return strong(ClassSeriesName, RuleSeriesMarker)
+			return strong(ClassSeriesName, RuleSeriesMarker), nil
 		}
 		if (w == "saga" || w == "sagas") && !(personShaped && len(words) == 2) {
-			return strong(ClassSeriesName, RuleSeriesMarker)
+			return strong(ClassSeriesName, RuleSeriesMarker), nil
 		}
 	}
 	for _, w := range words {
 		if structuralWords[w] {
-			return strong(ClassWorkTitle, RuleStructuralWord)
+			return strong(ClassWorkTitle, RuleStructuralWord), nil
 		}
 	}
 
@@ -536,16 +568,16 @@ func classifyName(s string) Verdict {
 	if ok, why := personname.IsPlausibleAuthorName(s); !ok {
 		switch why {
 		case personname.RejectReadBy:
-			return strong(ClassNarrator, RuleNarrator)
+			return strong(ClassNarrator, RuleNarrator), nil
 		case personname.RejectEditionMarker:
-			return strong(ClassWorkTitle, RuleCreationGate)
+			return strong(ClassWorkTitle, RuleCreationGate), nil
 		default:
-			return strong(ClassOther, RuleCreationGate)
+			return strong(ClassOther, RuleCreationGate), nil
 		}
 	}
 
 	if IsCompositeCredit(s) {
-		return Verdict{}
+		return Verdict{}, nil
 	}
 
 	// A possessive word: "Shadow's Edge", "Ender's Game". Names do not
@@ -553,26 +585,26 @@ func classifyName(s string) Verdict {
 	for _, w := range strings.Fields(s) {
 		lw := strings.ToLower(strings.Trim(w, ".,;:\"()[]"))
 		if strings.HasSuffix(lw, "'s") || strings.HasSuffix(lw, "’s") {
-			return strong(ClassWorkTitle, RulePossessive)
+			return strong(ClassWorkTitle, RulePossessive), nil
 		}
 	}
 	// A leading article on a name that is NOT person-shaped is a title
 	// ("The Restaurant at the End of the Universe"). A person-shaped one
 	// ("An Na", "The Arbinger Institute") is left to library evidence.
 	if leadsWithArticle(s) && !personShaped {
-		return strong(ClassWorkTitle, RuleLeadingArticle)
+		return strong(ClassWorkTitle, RuleLeadingArticle), nil
 	}
 	if shoutWords(s) >= 3 {
-		return strong(ClassOther, RuleShout)
+		return strong(ClassOther, RuleShout), nil
 	}
 	// Filename shrapnel: an underscore, or letters and digits glued together
 	// in a multi-word name. Judged on the undecorated core, so a web-serial
 	// pen name with its reader in parentheses ("nobody103 (Jack Voraces)")
 	// is one token and passes.
 	if strings.Contains(core, "_") || digitGlueRe.MatchString(core) && !personname.LooksLikePersonName(core) && !singleToken(core) {
-		return strong(ClassOther, RuleFilenameShape)
+		return strong(ClassOther, RuleFilenameShape), nil
 	}
-	return classifyAdded(s, core, n, full, words)
+	return Verdict{}, &nameParts{core: core, n: n, full: full, words: words}
 }
 
 // classifyAdded holds the rules added on 2026-09-29 for the junk-author
@@ -902,7 +934,7 @@ func CleanedName(name string) (string, bool) {
 	switch {
 	case studioBracketRe.MatchString(s):
 		m := studioBracketRe.FindStringSubmatch(s)
-		if classifyName(m[1]).Class != ClassPublisher {
+		if classifyBase(m[1]).Class != ClassPublisher {
 			return "", false
 		}
 		out = m[2]
@@ -931,7 +963,7 @@ func CleanedName(name string) (string, bool) {
 	if out == "" || out == s {
 		return "", false
 	}
-	if !personname.LooksLikePersonName(out) || classifyName(out).Junk() || hasCreditSeparator(out) {
+	if !personname.LooksLikePersonName(out) || classifyBase(out).Junk() || hasCreditSeparator(out) {
 		return "", false
 	}
 	return out, true
@@ -950,7 +982,7 @@ func parenCleanable(s string) bool {
 	if strings.Contains(pl, "narrat") || strings.Contains(pl, "read by") {
 		return false
 	}
-	return classifyName(paren).Class != ClassPublisher
+	return classifyBase(paren).Class != ClassPublisher
 }
 
 // hasCreditSeparator reports whether s joins several credits.

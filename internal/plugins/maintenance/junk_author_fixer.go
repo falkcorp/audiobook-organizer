@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -708,6 +708,8 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		}
 	}
 
+	// agreeing counts the later sources that name the chosen author too.
+	agreeing := 0
 	// The first source with an answer decides.
 	for si, src := range junkAuthorSources {
 		ans := bySource[src]
@@ -742,7 +744,10 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 			for k, o := range bySource[later] {
 				if k != key {
 					d.Others = append(d.Others, o.row.Name+" ["+later+"]")
-				} else if junkAuthorCorroborates(later) {
+					continue
+				}
+				agreeing++
+				if junkAuthorCorroborates(later) {
 					d.Corroborated = true
 				}
 			}
@@ -758,6 +763,18 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		(d.Decision == "" || (d.Source != junkAuthorSrcCleaned && d.Source != junkAuthorSrcTags && d.Source != junkAuthorSrcProvider)) {
 		d.Decision, d.Target, d.Source, d.Variant, d.NarratorAnswer, d.Others, d.Corroborated = "", database.Author{}, "", "", false, nil, false
 		d.Skip, d.SkipReason = junkAuthorSkipAmbiguous, fmt.Sprintf("the file tags or provider name only %q, the book's narrator; not decided from siblings or paths", d.NarratorDropped)
+	}
+	// A relink-only verdict ("The Dalai Lama", "50 Cent": real credits are
+	// in the rule's reach) moves a book only on strong evidence: the provider,
+	// the name itself cleaned, or a second source naming the same author. It
+	// never mints: one file tag naming a co-author ("Howard Cutler") would
+	// otherwise replace the real credit.
+	if v.RelinkOnly() && d.Skip == "" && (d.Decision == junkAuthorDecRelink || d.Decision == junkAuthorDecCreate) {
+		strongSrc := d.Source == junkAuthorSrcProvider || d.Source == junkAuthorSrcCleaned
+		if d.Decision == junkAuthorDecCreate || (!strongSrc && agreeing == 0) {
+			d.Skip, d.SkipReason = junkAuthorSkipAmbiguous, fmt.Sprintf(
+				"%q is flagged only by %s; %q [%s] is one uncorroborated answer, so the credit is kept", a.Name, v.Rule, d.Target.Name, d.Source)
+		}
 	}
 	if d.Decision == "" && d.Skip == "" {
 		d.Decision = junkAuthorDecUnlink
