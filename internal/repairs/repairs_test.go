@@ -309,25 +309,39 @@ func TestPathResolver_SymlinksIntoITunes(t *testing.T) {
 	// (L-c), absolute and relative.
 	require.NoError(t, os.Symlink(filepath.Join(itunes, "gone.m4b"), filepath.Join(lib, "Plain", "dead-abs.m4b")))
 	require.NoError(t, os.Symlink(filepath.Join("..", "..", "books", "itunes", "Real", "gone.m4b"), filepath.Join(lib, "Plain", "dead-rel.m4b")))
+	// Its text names a path through a folder link into the iTunes tree.
+	require.NoError(t, os.Symlink(filepath.Join(lib, "Link", "gone2.m4b"), filepath.Join(lib, "Plain", "dead-via-link.m4b")))
 
 	res := NewPathResolver()
-	for _, p := range []string{
-		filepath.Join(lib, "Link", "a.m4b"),
-		filepath.Join(lib, "Link", "gone.m4b"), // missing, folder is a link
-		filepath.Join(lib, "Link", "dead.m4b"), // dangling link, folder is a link
-		filepath.Join(lib, "Plain", "file-link.m4b"),
-		filepath.Join(lib, "Plain", "dead-abs.m4b"),
-		filepath.Join(lib, "Plain", "dead-rel.m4b"),
-	} {
-		k, why := GuardBookPathsWith(res, "b", []string{p}, "")
-		require.Equal(t, SkipITunes, k, "%s: %s", p, why)
+	cached := func() int {
+		res.mu.Lock()
+		defer res.mu.Unlock()
+		return len(res.dirs)
 	}
-	k, _ := GuardBookPathsWith(res, "b", []string{filepath.Join(lib, "Plain", "own.m4b")}, "")
-	require.Empty(t, k, "a plain folder is not iTunes")
-	res.mu.Lock()
-	n := len(res.dirs)
-	res.mu.Unlock()
-	require.Equal(t, 2, n, "Link and Plain resolved once each")
+	var first int
+	for pass := 0; pass < 2; pass++ {
+		for _, p := range []string{
+			filepath.Join(lib, "Link", "a.m4b"),
+			filepath.Join(lib, "Link", "gone.m4b"), // missing, folder is a link
+			filepath.Join(lib, "Link", "dead.m4b"), // dangling link, folder is a link
+			filepath.Join(lib, "Plain", "file-link.m4b"),
+			filepath.Join(lib, "Plain", "dead-abs.m4b"),
+			filepath.Join(lib, "Plain", "dead-rel.m4b"),
+			filepath.Join(lib, "Plain", "dead-via-link.m4b"),
+		} {
+			k, why := GuardBookPathsWith(res, "b", []string{p}, "")
+			require.Equal(t, SkipITunes, k, "%s: %s", p, why)
+		}
+		k, _ := GuardBookPathsWith(res, "b", []string{filepath.Join(lib, "Plain", "own.m4b")}, "")
+		require.Empty(t, k, "a plain folder is not iTunes")
+		if pass == 0 {
+			first = cached()
+			// Link, Plain and the iTunes folder the dead links name.
+			require.LessOrEqual(t, first, 4)
+		}
+	}
+	require.Equal(t, first, cached(), "a second pass resolves no folder again")
+	var k string
 	// Unresolvable: checked lexically only.
 	k, _ = GuardBookPathsWith(res, "b", []string{"/nonexistent-192.0.2.1/books/itunes/x.m4b"}, "")
 	require.Equal(t, SkipITunes, k)

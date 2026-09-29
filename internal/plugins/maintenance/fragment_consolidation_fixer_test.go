@@ -1144,6 +1144,7 @@ func TestFragmentFixer_TwoStampsOfOneRetireAreNotAConflict(t *testing.T) {
 			rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-two")
 			require.NoError(t, err)
 			require.Zero(t, rr.Failed, "%+v", rr)
+			require.Equal(t, rr.AlreadyRestored, report.AlreadyRestored, "the preflight predicts the revert's count")
 			require.True(t, f.live(t, "fragF"))
 		})
 	}
