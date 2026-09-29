@@ -259,17 +259,24 @@ var mainRefusedCorpus = struct {
 // parallel subtest; the gate functions are pure, and the refused tally is an
 // atomic read after the group, once every subtest has finished.
 func TestUnreviewedPathsRefuseEveryPairMainRefused(t *testing.T) {
-	var refused atomic.Int64
+	var refused, completed atomic.Int64
 	t.Run("pairs", func(t *testing.T) {
 		for ci, ct := range mainRefusedCorpus.titles {
 			for hi, ht := range mainRefusedCorpus.titles {
 				t.Run(fmt.Sprintf("c%02d_h%02d", ci, hi), func(t *testing.T) {
 					t.Parallel()
 					refused.Add(int64(refusedPairsFor(t, ct, ht)))
+					completed.Add(1)
 				})
 			}
 		}
 	})
+	// The floor is about the whole corpus: skip it when -run selected only
+	// some pairs, or when a pair already failed (its own error says why).
+	want := int64(len(mainRefusedCorpus.titles) * len(mainRefusedCorpus.titles))
+	if completed.Load() != want {
+		return
+	}
 	if n := refused.Load(); n < 1000 {
 		t.Fatalf("corpus produced only %d refused pairs; it no longer exercises the rule", n)
 	}
