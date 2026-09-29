@@ -42,6 +42,13 @@
 //     applied.
 //   - ambiguous: a fragment that matches two parents or two parent rows, or
 //     a parent row two fragments claim. Listed, never applied.
+//   - held: a fragment that matches a parent but whose own file is missing
+//     or unreadable. Listed, never applied.
+//
+// Before a row is applied, Replan re-checks with the strict ownership
+// lookup (database.BookFileRowsAtPathStrict) that no book outside the row
+// owns any file the row touches; an incomplete lookup (memdb warmup) fails
+// the row rather than guessing.
 //
 // EVERY STEP IS UNDOABLE. Each write goes through repairs.Writer and is
 // journaled under the apply op's id AFTER it commits: book_file_repoint_location,
@@ -82,6 +89,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -98,6 +106,10 @@ const (
 	fragClassNoParent  = "no-parent"
 	fragClassManual    = "manual-only"
 	fragClassAmbiguous = "ambiguous"
+	// fragClassHeld: a fragment that matches a parent but whose own file is
+	// not on disk (or cannot be read). Repointing a parent row at it would
+	// mark a missing file present, so it is listed, never applied.
+	fragClassHeld = "held"
 )
 
 // fragRowCopyUnproven prefixes the row id of a parent's UNPROVEN copies, so
@@ -344,9 +356,9 @@ func hashesDisagree(a, b fragFile) bool {
 
 // ---- stores ---------------------------------------------------------------
 
-func (f *fragmentFixer) stores() (OpsStore, BookPathHistoryReader, error) {
+func (f *fragmentFixer) stores() (OpsStore, FragmentRepairReader, error) {
 	store := f.p.deps.OpsStore()
-	hist := f.p.deps.PathHistoryReader()
+	hist := f.p.deps.FragmentRepairReader()
 	if store == nil || hist == nil {
 		return nil, nil, fmt.Errorf("database not initialized")
 	}
@@ -378,7 +390,7 @@ func importPathOf(hist []database.BookPathChange) string {
 
 // candidateFrom builds a candidate from a live single-file book, or returns
 // false when the book carries no chapter evidence.
-func (f *fragmentFixer) candidateFrom(b fragBook, file fragFile, hist BookPathHistoryReader) (*fragCandidate, bool, error) {
+func (f *fragmentFixer) candidateFrom(b fragBook, file fragFile, hist FragmentRepairReader) (*fragCandidate, bool, error) {
 	c := &fragCandidate{Book: b, File: file}
 	h, err := hist.GetBookPathHistory(b.ID)
 	if err != nil {
@@ -570,6 +582,12 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		switch {
 		case len(ms) == 0:
 			unmatched = append(unmatched, c)
+		case c.StatErr != "":
+			rows = append(rows, f.holdRow(lib, c, fragClassHeld, fragClassHeld, fragSkipUnreadable,
+				fmt.Sprintf("file %s is unreadable (%s)", c.File.Path, c.StatErr), ms))
+		case !c.Present:
+			rows = append(rows, f.holdRow(lib, c, fragClassHeld, fragClassHeld, fragSkipFilesMissing,
+				fmt.Sprintf("file %s is not on disk", c.File.Path), ms))
 		case len(parents) > 1 || len(ms) > 1:
 			rows = append(rows, f.ambiguousRow(lib, c, fmt.Sprintf("matches %d rows of %d parent books", len(ms), len(parents)), ms))
 		default:
@@ -654,9 +672,15 @@ func member(lib *fragLibrary, b fragBook, role string) repairs.RowMember {
 }
 
 func (f *fragmentFixer) ambiguousRow(lib *fragLibrary, c *fragCandidate, why string, ms []fragMatch) repairs.Row {
-	r := repairs.Row{RowID: "ambiguous:" + c.Book.ID, Class: fragClassAmbiguous, Title: c.Book.Title,
+	return f.holdRow(lib, c, "ambiguous", fragClassAmbiguous, fragSkipAmbiguous, why, ms)
+}
+
+// holdRow is a never-applied row for one fragment: listed with its candidate
+// parents so the owner can act by hand.
+func (f *fragmentFixer) holdRow(lib *fragLibrary, c *fragCandidate, idPrefix, class, skip, why string, ms []fragMatch) repairs.Row {
+	r := repairs.Row{RowID: idPrefix + ":" + c.Book.ID, Class: class, Title: c.Book.Title,
 		Author: lib.authorName(c.Book), Risk: repairs.RiskReview, Reason: "fragment " + why,
-		Skipped: fragSkipAmbiguous, SkipReason: "fragment " + why + "; resolve by hand"}
+		Skipped: skip, SkipReason: "fragment " + why + "; resolve by hand"}
 	books := []fragBook{c.Book}
 	r.BookIDs = []string{c.Book.ID}
 	r.Members = []repairs.RowMember{member(lib, c.Book, "fragment")}
@@ -667,13 +691,14 @@ func (f *fragmentFixer) ambiguousRow(lib *fragLibrary, c *fragCandidate, why str
 			seen[m.Row.BookID] = true
 			if pb, ok := lib.books[m.Row.BookID]; ok {
 				r.Members = append(r.Members, member(lib, pb, "candidate parent"))
+				r.BookIDs = append(r.BookIDs, pb.ID)
 			}
 		}
 	}
 	if k, _ := f.guard(lib, books, map[string][]string{c.Book.ID: {c.ImportPath}}); k != "" {
 		r.Class = fragClassManual
 	}
-	r.Fingerprint = fragFingerprint("ambiguous", c.Book.ID, why)
+	r.Fingerprint = fragFingerprint(idPrefix, c.Book.ID, why)
 	return r
 }
 
@@ -983,7 +1008,7 @@ func (f *fragmentFixer) Replan(ctx context.Context, _ json.RawMessage, planned r
 	}
 }
 
-func (f *fragmentFixer) replanParent(lib *fragLibrary, hist BookPathHistoryReader, planned repairs.Row, parentID string) (repairs.Row, error) {
+func (f *fragmentFixer) replanParent(lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row, parentID string) (repairs.Row, error) {
 	ix := newFragIndex()
 	for _, r := range lib.files[parentID] {
 		ix.add(r)
@@ -1012,13 +1037,13 @@ func (f *fragmentFixer) replanParent(lib *fragLibrary, hist BookPathHistoryReade
 	rows := f.buildRows(lib, ix, cands)
 	for _, r := range rows {
 		if r.RowID == planned.RowID {
-			return r, nil
+			return f.checkOwners(hist, planned, r)
 		}
 	}
 	return changedRow(planned, "the fragments no longer match the parent in this class"), nil
 }
 
-func (f *fragmentFixer) replanGroup(lib *fragLibrary, hist BookPathHistoryReader, planned repairs.Row) (repairs.Row, error) {
+func (f *fragmentFixer) replanGroup(lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row) (repairs.Row, error) {
 	// A partial run moved some fragments' rows onto the survivor. Rebuild
 	// each fragment's single-file view from the rows as they sit now: a row
 	// on the survivor still stands for the fragment it came from, found by
@@ -1069,15 +1094,52 @@ func (f *fragmentFixer) replanGroup(lib *fragLibrary, hist BookPathHistoryReader
 		if r.RowID == planned.RowID {
 			// Rows already on the survivor count as the survivor's: the plan
 			// was made before they moved.
-			return r, nil
+			return f.checkOwners(hist, planned, r)
 		}
 	}
 	return changedRow(planned, "the fragments no longer form this group"), nil
 }
 
+// checkOwners re-checks, with the strict lookup, that every file the fresh
+// row touches is owned only by books of the row. A file some other book also
+// claims makes the row changed (the plan's whole-library listing no longer
+// holds); an incomplete lookup fails the row rather than guessing.
+func (f *fragmentFixer) checkOwners(look database.BookFilePathLookup, planned, fresh repairs.Row) (repairs.Row, error) {
+	if !fresh.Applicable() {
+		return fresh, nil
+	}
+	var paths []string
+	switch d := fresh.Detail.(type) {
+	case []fragPair:
+		for _, p := range d {
+			paths = append(paths, p.Frag.File.Path)
+		}
+	case *fragGroupPlan:
+		for _, m := range d.Members {
+			paths = append(paths, m.Frag.File.Path)
+		}
+	}
+	allowed := map[string]bool{}
+	for _, id := range fresh.BookIDs {
+		allowed[id] = true
+	}
+	for _, path := range paths {
+		owners, err := database.BookFileRowsAtPathStrict(look, path)
+		if err != nil {
+			return repairs.Row{}, fmt.Errorf("who owns %s: %w", path, err)
+		}
+		for _, o := range owners {
+			if !allowed[o.BookID] {
+				return changedRow(planned, fmt.Sprintf("%s is also owned by book %s", path, o.BookID)), nil
+			}
+		}
+	}
+	return fresh, nil
+}
+
 // survivorOwnRow is the survivor's original row: the one at its own import
 // path or, failing that, whose original filename matches its import path's.
-func (f *fragmentFixer) survivorOwnRow(lib *fragLibrary, hist BookPathHistoryReader, b fragBook) (fragFile, bool) {
+func (f *fragmentFixer) survivorOwnRow(lib *fragLibrary, hist FragmentRepairReader, b fragBook) (fragFile, bool) {
 	rows := lib.files[b.ID]
 	if len(rows) == 1 {
 		return rows[0], true
@@ -1097,7 +1159,7 @@ func (f *fragmentFixer) survivorOwnRow(lib *fragLibrary, hist BookPathHistoryRea
 
 // movedRowFor finds the row a partial run moved from fragment b onto the
 // survivor: the survivor row at b's import path (or b's own book path).
-func (f *fragmentFixer) movedRowFor(lib *fragLibrary, hist BookPathHistoryReader, b fragBook, survivorID string) (fragFile, bool) {
+func (f *fragmentFixer) movedRowFor(lib *fragLibrary, hist FragmentRepairReader, b fragBook, survivorID string) (fragFile, bool) {
 	h, err := hist.GetBookPathHistory(b.ID)
 	if err != nil {
 		return fragFile{}, false
@@ -1130,9 +1192,16 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	if err != nil {
 		return err
 	}
+	// Held for the whole row, as fs-regroup-xml's fragment merge holds it:
+	// a dedup merge must not interleave with rows moving between books and
+	// books being retired.
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
 	var steps int
 	partial := func(err error) error {
-		if steps == 0 {
+		// A write that committed but whose undo row failed is a step: the row
+		// is not unchanged, so it must not report plain failed.
+		if steps == 0 && !errors.Is(err, repairs.ErrNotJournaled) {
 			return err
 		}
 		return fmt.Errorf("%w: after %d step(s): %v", repairs.ErrPartiallyApplied, steps, err)

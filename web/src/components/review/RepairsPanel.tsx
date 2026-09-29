@@ -277,6 +277,7 @@ function classLabel(c: string): string {
     'no-parent': 'No parent',
     'manual-only': 'Manual only',
     ambiguous: 'Ambiguous',
+    held: 'Held',
   };
   return labels[c] ?? c;
 }

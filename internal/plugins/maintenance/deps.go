@@ -378,20 +378,24 @@ type forwardingStoreProvider interface {
 	MergeUserStateStore() merge.UserStateRepairStore
 }
 
-// BookPathHistoryReader reads a book's path-change history.
-type BookPathHistoryReader interface {
+// FragmentRepairReader is what the fragment-consolidation fixer reads beyond
+// OpsStore: a book's path-change history (where a fragment's file was when it
+// was imported) and the complete who-owns-this-path lookup
+// (database.BookFileRowsAtPathStrict), which apply re-checks before it acts.
+type FragmentRepairReader interface {
 	GetBookPathHistory(bookID string) ([]database.BookPathChange, error)
+	database.BookFilePathLookup
 }
 
 // keyspaceStoreProvider serves the separate keyspaces that are deliberately
 // kept out of the wide Store interface. Two of the three are resolved as
 // capabilities; see FileProvenanceStore for the database.AsCapability rule.
 type keyspaceStoreProvider interface {
-	// PathHistoryReader serves the fragment-consolidation fixer (Repairs lane),
-	// which reads each fragment book's "import" path-change row to learn
-	// where its file was before organize moved it. OpsStore has no path
-	// history, and one caller does not widen it.
-	PathHistoryReader() BookPathHistoryReader
+	// FragmentRepairReader serves the fragment-consolidation fixer (Repairs
+	// lane): each fragment book's "import" path-change row (where its file was
+	// before organize moved it) and the strict path-ownership lookup. OpsStore
+	// has neither, and one caller does not widen it.
+	FragmentRepairReader() FragmentRepairReader
 	// MetadataCacheStore serves runMetadataCacheReap. The metadata-candidate
 	// cache is a separate keyspace ("metadata_cache:<book_id>") with its own
 	// four-method interface, and OpsStore names none of them -- so the reaper
