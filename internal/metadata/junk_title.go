@@ -63,6 +63,9 @@ var (
 	// "Chapter IV", "Part II", "Book III" is NOT here (a "Book 3" title is a
 	// real title of a series entry and stays).
 	romanChapterRe = regexp.MustCompile(`(?i)^(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_\-]*([ivxlcdm]+)$`)
+	// spelledChapterRe is a chapter position spelled out: "Chapter One",
+	// "Part Twelve", "Disc Two".
+	spelledChapterRe = regexp.MustCompile(`(?i)^(?:chapter|part|disc|disk|track)\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)$`)
 	// narratorCreditRe: the title IS a narrator credit.
 	narratorCreditRe = regexp.MustCompile(`(?i)^(?:read|narrated|performed)\s+by(?:\s+.*)?$`)
 	// trackTagRe: a track tag that names a segment of an audiobook, never a
@@ -117,6 +120,8 @@ func ClassifyJunkTitle(title string) JunkTitleKind {
 		// leading number handed "98.mp3" over as "".
 		return JunkChapterOnly
 	case romanChapterRe.MatchString(t) && isBareRoman(romanChapterRe.FindStringSubmatch(t)[1]):
+		return JunkChapterOnly
+	case spelledChapterRe.MatchString(t):
 		return JunkChapterOnly
 	case narratorCreditRe.MatchString(t):
 		return JunkNarratorCredit

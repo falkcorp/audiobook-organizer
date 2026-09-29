@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_derive.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 6fb9129d-4c59-4097-979e-6cfe61bc6894
-// last-edited: 2026-08-04
+// last-edited: 2026-09-28
 
 package maintenance
 
@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
 // junkTitles are stored Book.Title values that are demonstrably NOT a book title.
@@ -30,10 +33,20 @@ var junkTitles = map[string]struct{}{
 	"opening credits 1": {},
 }
 
-// IsJunkTitle reports whether a stored title is one of the known bad values.
+// IsJunkTitle reports whether a stored title is not a title. It is the
+// Repairs-lane classifier (metadata.ClassifyJunkTitle) — chapter positions,
+// narrator credits, track tags, placeholders, bare roman numerals, junk
+// prefixes — with junkTitles kept as a floor. The empty title is not junk
+// here: the derivation below rejects short candidates on its own.
 func IsJunkTitle(title string) bool {
-	_, ok := junkTitles[strings.ToLower(strings.TrimSpace(title))]
-	return ok
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return false
+	}
+	if _, ok := junkTitles[strings.ToLower(t)]; ok {
+		return true
+	}
+	return metadata.ClassifyJunkTitle(t) != metadata.JunkNone
 }
 
 // audioExts are stripped from a filename before it is read as a title.
@@ -207,4 +220,42 @@ func DeriveJunkTitleReplacement(storedTitle, author string, filePaths []string) 
 	}
 
 	return "", "", false
+}
+
+// junkTitleOwnerManual reports whether any of path, title or series marks the
+// book as owner-manual (Doctor Who / Big Finish / Torchwood). The title is
+// checked because "Big Finish Ident" is itself one of the junk titles this op
+// targets, and a book carrying it is Big Finish content.
+func junkTitleOwnerManual(path, title, series string) bool {
+	return applygate.IsOwnerManualOnly(path, series) || applygate.IsOwnerManualOnly(title, "")
+}
+
+// splitCreditNames splits a denormalized credit string ("A, B & C") into the
+// names it lists, keeping the whole string too.
+func splitCreditNames(s string) []string {
+	out := []string{s}
+	parts := strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ';' || r == '&' || r == '/' })
+	for _, p := range parts {
+		for _, q := range strings.Split(p, " and ") {
+			if q = strings.TrimSpace(q); q != "" {
+				out = append(out, q)
+			}
+		}
+	}
+	return out
+}
+
+// titleNamesAPerson reports whether title equals, case-insensitively and
+// ignoring surrounding whitespace, any of the given names.
+func titleNamesAPerson(title string, names []string) bool {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return false
+	}
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n != "" && strings.EqualFold(t, n) {
+			return true
+		}
+	}
+	return false
 }

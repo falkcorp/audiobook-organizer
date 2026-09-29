@@ -141,7 +141,6 @@ maintenance.purge-old-logs	no-mode
 maintenance.recompact-activity-digests	no-mode
 maintenance.recover-missing-files	preview
 maintenance.relink-unlinked-books	preview
-maintenance.repair-junk-titles	preview
 maintenance.repair-library-state	preview
 maintenance.repair-transcribe-status	preview
 maintenance.repoint-book-file-rows	preview
