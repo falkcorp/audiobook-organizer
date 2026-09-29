@@ -1,5 +1,5 @@
 # file: .woodpecker/test-server-scanner.yaml
-# version: 1.4.0
+# version: 1.5.0
 # guid: 7a2d4e81-0c63-4f9b-b5e2-9d1f3a6c8e27
 # last-edited: 2026-09-29
 #
@@ -55,7 +55,13 @@ steps:
     commands:
       # python3 runs the cache cap in cleanup; fail here, loudly, if it is missing.
       - command -v ffmpeg && command -v ffprobe && command -v fpcalc && python3 --version
-      - go test ./internal/server ./internal/scanner ./internal/server/handlers/abs -short -race -covermode=atomic -coverprofile=cover.out -timeout 25m
+      # Each package runs as 4 shard processes (scripts/ci/go_test_shards.py):
+      # one go test process per package ran its tests one after another, so
+      # this workflow took as long as abs alone (about 620 s here).
+      - >-
+        python3 scripts/ci/go_test_shards.py --out cover.out
+        --pkg ./internal/server:4 --pkg ./internal/scanner:4 --pkg ./internal/server/handlers/abs:4
+        -- -short -race -covermode=atomic -timeout 25m
       - awk -v wf=test-server-scanner 'NR>1{t+=$$2; if($$3>0)c+=$$2} END{printf "CI-COVERAGE workflow=%s covered=%d total=%d\n", wf, c, t}' cover.out
 
   - name: cleanup

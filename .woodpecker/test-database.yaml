@@ -1,28 +1,25 @@
 # file: .woodpecker/test-database.yaml
-# version: 1.0.2
+# version: 1.1.0
 # guid: 3f1c9a52-8e47-4b0d-a6c1-5d2e7f9b0c14
 # last-edited: 2026-09-29
 #
 # `make ci` test-short, part 1 of 3: internal/database ALONE.
 #
-# It is the slowest package by far: 300 s on the Linux server, 1500-2200 s on a
-# loaded Mac, where it blew make ci's 25m -timeout on 2026-09-26. So it gets
-# its own workflow, a 50m timeout, and the Linux agent on the prod host (the only
-# Linux agent; the heavy=true agent is llm1, a Mac, where it is 5-7x slower). The other two test
-# workflows run at the same time on the llm1 agent.
+# The slowest package by test count (1,439 tests, 265 s in one process on U1).
+# It runs as 8 shard processes (scripts/ci/go_test_shards.py) on the U1 agent
+# (local backend, Linux amd64, 48 cores). It ran on the prod host's docker
+# agent until 2026-09-29; moving it keeps CI load off prod, whose agent now
+# runs only `checks`.
 #
-# Runs on the prod host's agent (docker backend). The golang image has no
-# ffmpeg/ffprobe/fpcalc, which keeps the prod host's no-decode rule, and the
-# container's localhost is not the host's, so tests that dial fixed localhost
-# ports (Deluge on 8112, the app, the Ollama tunnel) cannot reach real services.
-# internal/database needs no decoder.
+# U1's localhost has none of the fixed-port services some tests dial (Deluge
+# on 8112, the app, the Ollama tunnel), as the prod container's did not.
 #
 # Coverage: the last command prints this workflow's statement counts. The
 # `coverage` workflow sums them across the three test workflows (see
 # scripts/ci_coverage_gate.py).
 
 labels:
-  host: u0
+  host: u1
 
 when:
   - event: [push, pull_request, manual]
@@ -36,12 +33,33 @@ clone:
 
 steps:
   - name: test
-    image: golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+    # Local backend: `image` names the SHELL that runs the commands.
+    image: bash
     environment:
       GOTOOLCHAIN: go1.27.1
-      GOFLAGS: -buildvcs=false
-      GOCACHE: /woodpecker/cache/go-build
-      GOMODCACHE: /woodpecker/cache/gomod
+      # Host-wide caches on U1's tank/ci dataset; see test-rest.yaml for why
+      # per-run caches and cache keys without -trimpath filled disks.
+      GOMODCACHE: /tank/ci/cache/gomod
+      GOCACHE: /tank/ci/cache/go-build
+      GOFLAGS: -trimpath
     commands:
-      - go test ./internal/database -short -race -covermode=atomic -coverprofile=cover.out -timeout 50m
+      - python3 --version
+      - >-
+        python3 scripts/ci/go_test_shards.py --out cover.out --pkg ./internal/database:8
+        -- -short -race -covermode=atomic -timeout 50m
       - awk -v wf=test-database 'NR>1{t+=$$2; if($$3>0)c+=$$2} END{printf "CI-COVERAGE workflow=%s covered=%d total=%d\n", wf, c, t}' cover.out
+
+  - name: cleanup
+    # Same cleanup as test-rest.yaml: cap the shared GOCACHE, clear this clone
+    # and the per-run HOME, and sweep workdirs left by a crashed agent.
+    image: bash
+    when:
+      - status: [success, failure]
+    environment:
+      GOCACHE: /tank/ci/cache/go-build
+    commands:
+      - '[ -n "$${GOCACHE}" ] && python3 scripts/ci/trim_go_cache.py "$${GOCACHE}" --max-gb 40 --target-gb 30 || true'
+      - '[ -n "$${CI_WORKSPACE}" ] && [ "$${CI_WORKSPACE}" != / ] && find "$${CI_WORKSPACE}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true'
+      - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
+      - 'find "$${TMPDIR:-/tmp}" -maxdepth 1 -name "go-build*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true'
+      - '[ -n "$${HOME}" ] && W=$$(dirname "$${HOME}") && R=$$(dirname "$$W") && case "$$(basename "$$W")" in woodpecker-local-*) find "$$R" -mindepth 1 -maxdepth 1 -name "woodpecker-local-*" -type d ! -path "$$W" -mmin +180 -exec sh -c "chmod -R u+w \"\$$@\" && rm -rf \"\$$@\"" _ {} + ;; esac || true'

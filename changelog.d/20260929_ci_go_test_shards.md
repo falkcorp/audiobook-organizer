@@ -1,0 +1,1 @@
+- CI: slow Go test packages run as several parallel `go test` processes (`scripts/ci/go_test_shards.py`, balanced by recorded test times, coverage merged block by block). `internal/database` runs in 8 shards on U1 (265 s → 46 s) and moves off the prod host; `server`, `scanner` and `abs` run in 4 shards each on llm1.

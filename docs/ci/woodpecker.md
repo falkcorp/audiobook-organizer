@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-09-29 -->
 
@@ -24,8 +24,8 @@ Placeholders used throughout (never commit the real values; this repo is public)
 
 | workflow | agent label | runs | measured time |
 |---|---|---|---|
-| `test-database` | `host=u0`, `heavy=true` | `internal/database` alone, `-timeout 50m` | about 300 s on Linux (1500–2200 s on a loaded Mac) |
-| `test-server-scanner` | `host=llm1` | `internal/server`, `internal/scanner`, `internal/server/handlers/abs` | about 620 s (abs); the packages run in parallel |
+| `test-database` | `host=u1` | `internal/database` alone in 8 shards, `-timeout 50m` | see Sharding |
+| `test-server-scanner` | `host=llm1` | `internal/server`, `internal/scanner`, `internal/server/handlers/abs`, 4 shards each | see Sharding |
 | `test-rest` | `host=u1` | every other package, including maintenance, registry and applygate | about 450–600 s |
 | `checks` | `host=u0` | vet, staticcheck, errcheck ratchet, mocks-check, fmt-check, sdkguard, bench-check, web tests | about 5 min including tool install |
 | `coverage` | `host=u0` | coverage floor across the three test workflows | seconds |
@@ -37,6 +37,28 @@ test workflows start together, so the wall time is roughly the slowest of them.
 An ssh-based prototype (`scripts/ci_remote.py`) measured this layout at
 **753 s** for a full run on 2026-09-26. A local `make ci` of the same commit
 on the loaded Mac took **2099 s**, and `internal/database` hit its 25m timeout.
+
+### Sharding
+
+`go test` runs packages in parallel but a package's tests in one process, one
+after another unless a test calls `t.Parallel()`, so a workflow takes as long
+as its slowest package. `scripts/ci/go_test_shards.py` lists a package's
+top-level tests, deals them into N shards balanced by the recorded durations
+in `scripts/ci/go_test_timings.json`, runs each shard as its own
+`go test -run '^(...)$'` process, and merges the shards' coverage profiles
+block by block so the CI-COVERAGE sum is unchanged. Separate processes keep
+the tests' shared globals as isolated as before.
+
+Measured on U1 (`-short -race -covermode=atomic`), one process vs. sharded:
+
+| package | one process | sharded |
+|---|---|---|
+| `internal/database` | 265 s | 46 s (8 shards) |
+| `internal/server/handlers/abs` | 253 s | 54 s (6 shards) |
+
+Refresh the timings file when the shard estimates printed at the start of a
+run drift far from the measured shard times: run the package with
+`go test -json` and keep each top-level test's `Elapsed`.
 
 Every workflow clones with `lfs: false`, because GitHub's LFS budget is
 exhausted and no test reads LFS content. Every image is pinned by digest.
@@ -201,7 +223,7 @@ pinned version.
 - **Install layout:** `/tank/ci/woodpecker/bin/{woodpecker-agent,plugin-git}`
   (v3.18.1 and 2.10.1, linux/amd64). `/tank/ci` is its own ZFS dataset and the
   user's HOME.
-- **Caches:** `/tank/ci/cache/{go-build,gomod}`, set in `test-rest.yaml`.
+- **Caches:** `/tank/ci/cache/{go-build,gomod}`, set in `test-rest.yaml` and `test-database.yaml`.
 - **Step workspaces:** `/tank/ci/woodpecker/work`.
 - **Service:** `/etc/systemd/system/woodpecker-agent.service`, with the agent
   secret in the root-only `/etc/woodpecker-agent.env` (mode 600). Logs:
