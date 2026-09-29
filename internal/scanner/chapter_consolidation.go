@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_consolidation.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: f9a0b1c2-d3e4-5f60-a7b8-c9d0e1f2a3b4
 // last-edited: 2026-09-28
 
@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -21,100 +20,24 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
-// chapterKeyKind says which numbering shape chapterGroupKey recognised.
-type chapterKeyKind int
+// chapterKeyKind and chapterGroupKey live in internal/metadata (moved
+// 2026-09-28 so the fragment-consolidation repair shares the rule); these
+// aliases keep the scanner's own names.
+type chapterKeyKind = metadata.ChapterKeyKind
 
 const (
-	chapterKeyNone           chapterKeyKind = iota // no chapter numbering: a standalone file
-	chapterKeyLeading                              // "01 - Title", "01. Title", bare "98"
-	chapterKeyMarker                               // "Title - Chapter 12", "Title Part 3", "Title Disc 2", "Chapter 01 - Title"
-	chapterKeyOfTotal                              // "Title 3 of 12", "Title (03 of 12)"
-	chapterKeyTrailingNumber                       // "Book Title 01"
+	chapterKeyNone           = metadata.ChapterKeyNone
+	chapterKeyLeading        = metadata.ChapterKeyLeading
+	chapterKeyMarker         = metadata.ChapterKeyMarker
+	chapterKeyOfTotal        = metadata.ChapterKeyOfTotal
+	chapterKeyTrailingNumber = metadata.ChapterKeyTrailingNumber
 )
 
-var (
-	// chapterLeadingNumRe: a leading track/chapter number followed by a
-	// separator, or a stem that is nothing but a number ("98").
-	chapterLeadingNumRe = regexp.MustCompile(`^\d+(?:[\s\-–._]+|$)`)
-	// chapterLeadingMarkerRe: "Chapter 01 - Title", "Disc 2 - Title". The
-	// marker word must be followed by a number, so "Discworld - Mort" is not
-	// a disc marker.
-	chapterLeadingMarkerRe = regexp.MustCompile(`(?i)^(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_]*\d+(?:\s*of\s*\d+)?(?:[\s\-–._:]+|$)`)
-	// chapterTrailingMarkerRe: "Title - Chapter 12", "Title Part 3",
-	// "Title_Disc2", "Title (CD 1)", "Title Part 3 of 12". The marker must
-	// start a word (start of stem or after a separator) and be followed by a
-	// number, so "Discworld 5" is NOT a disc marker.
-	chapterTrailingMarkerRe = regexp.MustCompile(`(?i)(?:^|[\s\-–_.,(\[]+)(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_\-]*\d+(?:\s*of\s*\d+)?[)\]]?\s*$`)
-	// chapterTrailingOfRe: "Title 3 of 12", "Title (03 of 12)". Captures the
-	// total, which is part of the grouping key.
-	chapterTrailingOfRe = regexp.MustCompile(`(?i)(?:^|[\s\-–_.,(\[]+)\d+\s*of\s*(\d+)[)\]]?\s*$`)
-	// chapterTrailingNumRe: "Book Title 01", "Book Title - 01", "Title_01".
-	chapterTrailingNumRe = regexp.MustCompile(`(?:^|[\s\-–_.,(\[]+)\d+[)\]]?\s*$`)
-	// chapterSeriesWordRe: a trailing number after one of these is a series
-	// entry ("Mistborn Book 2", "Vol. 3", "#4"), a separate book, not a
-	// chapter.
-	chapterSeriesWordRe = regexp.MustCompile(`(?i)(?:^|[\s\-–_.,(\[])(?:book|bk|volume|vol|no|#)\.?$`)
-)
-
-// chapterGroupKey reduces a filename stem to the key its chapter siblings
-// share, by stripping ONE leading and ONE trailing chapter number:
-//
-//	"01 - My Book"          -> "my book"   (leading)
-//	"98"                    -> ""          (leading; bare chapter number)
-//	"My Book - Chapter 12"  -> "my book"   (marker)
-//	"My Book Disc 2"        -> "my book"   (marker)
-//	"My Book 3 of 12"       -> "my book|of 12" (of-total; the total is kept so
-//	                           two differently-sized sets do not merge)
-//	"My Book 01"            -> "my book"   (trailing number)
-//	"01 Genesis 001"        -> "genesis"   (both ends)
-//
-// kind is chapterKeyNone when the stem carries no chapter numbering at all; the
-// file then stands alone. A trailing number after "Book", "Vol" or "#" is a
-// series position, not a chapter, and is not stripped. "Discworld" is not a
-// disc marker: every marker must be followed by a number.
-//
-// Recognising a key is not a decision to merge: consolidateChapterGroups still
-// requires ≥3 files and short durations before it groups anything.
-func chapterGroupKey(stem string) (key string, kind chapterKeyKind) {
-	s := strings.TrimSpace(stem)
-
-	if loc := chapterLeadingMarkerRe.FindStringIndex(s); loc != nil {
-		s, kind = s[loc[1]:], chapterKeyMarker
-	} else if loc := chapterLeadingNumRe.FindStringIndex(s); loc != nil {
-		s, kind = s[loc[1]:], chapterKeyLeading
-	}
-
-	suffix := ""
-	switch {
-	case chapterTrailingMarkerRe.MatchString(s):
-		s = chapterTrailingMarkerRe.ReplaceAllString(s, "")
-		kind = chapterKeyMarker
-	case chapterTrailingOfRe.MatchString(s):
-		suffix = "|of " + chapterTrailingOfRe.FindStringSubmatch(s)[1]
-		s = chapterTrailingOfRe.ReplaceAllString(s, "")
-		if kind == chapterKeyNone {
-			kind = chapterKeyOfTotal
-		}
-	case chapterTrailingNumRe.MatchString(s):
-		rest := chapterTrailingNumRe.ReplaceAllString(s, "")
-		if rest != "" && !chapterSeriesWordRe.MatchString(strings.TrimSpace(rest)) {
-			s = rest
-			if kind == chapterKeyNone {
-				kind = chapterKeyTrailingNumber
-			}
-		}
-	}
-	if kind == chapterKeyNone {
-		return "", chapterKeyNone
-	}
-
-	s = strings.Trim(strings.ToLower(s), " -–_.,:")
-	s = strings.Join(strings.Fields(s), " ")
-	return s + suffix, kind
-}
+func chapterGroupKey(stem string) (string, chapterKeyKind) { return metadata.ChapterGroupKey(stem) }
 
 // chapterFileDurationSec reads one file's duration in seconds, 0 when it
 // cannot be read. A package var so tests can supply durations without real
