@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-28
 
@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -79,9 +78,10 @@ type bookReader interface {
 // bulkManualOnlyGuard builds the certainty gate's owner-manual-only input
 // (applygate.ManualOnlyGuard) for a bulk planner: the store-backed half of
 // the check, which the gate cannot do itself -- the book's series name and
-// every book_file path, the same inputs metabatch's upgrade checks. A read
-// failure goes in ReadErr, which the gate refuses as owner_manual_check_failed
-// (hard, not overridable) -- never read as "not manual-only".
+// every book_file path, the same inputs metabatch's upgrade checks
+// (applygate.BulkManualOnlyGuard). A read failure goes in ReadErr, which the
+// gate refuses as owner_manual_check_failed (hard, not overridable) -- never
+// read as "not manual-only".
 //
 // rowApproval is a single review row the owner approved: one book, chosen by
 // the owner, which is how the owner rule says these books ARE applied, so it
@@ -96,35 +96,7 @@ func bulkManualOnlyGuard(books bookReader, book *database.Book, rowApproval bool
 	if rowApproval {
 		return applygate.ManualOnlyGuard{}
 	}
-	g := applygate.ManualOnlyGuard{Bulk: true}
-	const why = "Doctor Who / Big Finish / Torchwood are applied by hand, one book at a time; "
-	if applygate.IsOwnerManualOnly(searchQuery, "") {
-		g.StoreDetail = why + "search query " + strconv.Quote(searchQuery)
-		return g
-	}
-	if book.SeriesID != nil {
-		sr, err := books.GetSeriesByID(*book.SeriesID)
-		switch {
-		case err != nil:
-			g.ReadErr = "could not read the series for the owner-manual check: " + err.Error()
-			return g
-		case sr != nil && applygate.IsOwnerManualOnly("", sr.Name):
-			g.StoreDetail = why + "series " + strconv.Quote(sr.Name)
-			return g
-		}
-	}
-	files, err := books.GetBookFiles(book.ID)
-	if err != nil {
-		g.ReadErr = "could not read the files for the owner-manual check: " + err.Error()
-		return g
-	}
-	for _, f := range files {
-		if applygate.IsOwnerManualOnly(f.FilePath, "") {
-			g.StoreDetail = why + "file " + strconv.Quote(f.FilePath)
-			return g
-		}
-	}
-	return g
+	return applygate.BulkManualOnlyGuard(books, books, book, searchQuery)
 }
 
 // itunesEnqueuer mirrors handlers.WriteBackEnqueuer: the iTunes library sync

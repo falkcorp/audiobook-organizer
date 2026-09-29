@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.55.0
+// version: 1.56.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-28
 
@@ -817,3 +817,11 @@ var _ = time.Duration(0)
 // 2026-09-14), so there is nothing it may write: nothing is written, the book
 // is skipped, not failed, and stays unreviewed for the ordinary review lane.
 var ErrTranscriptionNothingToFill = errors.New("nothing to fill: title and author filled, or no writable value for the empty one")
+
+// ErrTranscriptionOwnerManualOnly is what ApplyTranscriptionCandidate returns
+// for a book the owner applies by hand (Doctor Who / Big Finish / Torchwood,
+// applygate.BulkManualOnlyGuard + ManualOnlyDetail), or whose owner-manual
+// check could not be done because a store read failed (fail closed). The op
+// is a bulk apply, so it never writes such a book: nothing is written and the
+// book is skipped, not failed.
+var ErrTranscriptionOwnerManualOnly = errors.New("owner applies this book by hand (or the owner-manual check could not be done)")

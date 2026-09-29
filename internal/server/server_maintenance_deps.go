@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-28
 
@@ -20,6 +20,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -762,6 +763,22 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 			"gated_author", gatedAuthor, "cache_author", cand.Author)
 		return fmt.Errorf("cached candidate for book %s changed since gating (want %q/%q, got %q/%q)",
 			bookID, gatedTitle, gatedAuthor, cand.Title, cand.Author)
+	}
+
+	// OWNER-MANUAL-ONLY (owner rule, standing): Doctor Who / Big Finish /
+	// Torchwood are never written by a bulk apply, and this op is one. The
+	// op pre-checks without the series row (its store has none); this is the
+	// authoritative check, with the series row, every book_file path, the
+	// transcribed title the candidate was matched by, and the FULL candidate
+	// (its series too). A store read fault refuses as well (fail closed).
+	transcribed := ""
+	if book.TranscribedTitle != nil {
+		transcribed = *book.TranscribedTitle
+	}
+	guard := applygate.BulkManualOnlyGuard(s.store, s.store, book, transcribed)
+	if reason, detail := applygate.ManualOnlyDetail(book, &cand,
+		applygate.TranscribedSearch{Query: transcribed}, guard); reason != "" {
+		return fmt.Errorf("book %s: %w: %s: %s", bookID, maintenanceplugin.ErrTranscriptionOwnerManualOnly, reason, detail)
 	}
 
 	// 🔴 APPLY ONLY WHAT WAS GATED. This used to pass nil, which means "no

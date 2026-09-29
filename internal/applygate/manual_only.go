@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
 // last-edited: 2026-09-28
 
@@ -57,6 +57,64 @@ type ManualOnlyGuard struct {
 	ReadErr string
 }
 
+// ManualOnlyFilesReader reads a book's book_file rows for BulkManualOnlyGuard.
+type ManualOnlyFilesReader interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// ManualOnlySeriesReader reads a book's series row for BulkManualOnlyGuard.
+type ManualOnlySeriesReader interface {
+	GetSeriesByID(id int) (*database.Series, error)
+}
+
+// manualOnlyWhy prefixes every owner_manual_only detail.
+const manualOnlyWhy = "Doctor Who / Big Finish / Torchwood are applied by hand, one book at a time; "
+
+// BulkManualOnlyGuard builds the ManualOnlyGuard for a bulk caller: the
+// store-backed half of the check, which EvaluateTranscribed cannot do itself
+// -- the query the candidate was found by, the book's series name and every
+// book_file path. A read failure goes in ReadErr, which the gate refuses as
+// owner_manual_check_failed; it is never read as "not manual-only".
+//
+// series may be nil for a caller whose store cannot read series rows; the
+// series is then not checked, and that caller must re-check where it can (the
+// auto-match-transcribed op's pre-check does, and the server's apply re-runs
+// the guard with both readers before it writes).
+func BulkManualOnlyGuard(files ManualOnlyFilesReader, series ManualOnlySeriesReader, book *database.Book, searchQuery string) ManualOnlyGuard {
+	g := ManualOnlyGuard{Bulk: true}
+	if IsOwnerManualOnly(searchQuery, "") {
+		g.StoreDetail = manualOnlyWhy + "search query " + strconv.Quote(searchQuery)
+		return g
+	}
+	if book == nil {
+		g.ReadErr = "no book to check for the owner-manual rule"
+		return g
+	}
+	if series != nil && book.SeriesID != nil {
+		sr, err := series.GetSeriesByID(*book.SeriesID)
+		switch {
+		case err != nil:
+			g.ReadErr = "could not read the series for the owner-manual check: " + err.Error()
+			return g
+		case sr != nil && IsOwnerManualOnly("", sr.Name):
+			g.StoreDetail = manualOnlyWhy + "series " + strconv.Quote(sr.Name)
+			return g
+		}
+	}
+	bookFiles, err := files.GetBookFiles(book.ID)
+	if err != nil {
+		g.ReadErr = "could not read the files for the owner-manual check: " + err.Error()
+		return g
+	}
+	for _, f := range bookFiles {
+		if IsOwnerManualOnly(f.FilePath, "") {
+			g.StoreDetail = manualOnlyWhy + "file " + strconv.Quote(f.FilePath)
+			return g
+		}
+	}
+	return g
+}
+
 // ManualOnlyDetail reports why a bulk apply of candidate c onto book must be
 // refused, as a reason and detail, or two "" when nothing marks it. The
 // reason is ReasonOwnerManualCheckFailed when the caller's store read failed
@@ -90,7 +148,7 @@ func ManualOnlyDetail(book *database.Book, c *metafetch.MetadataCandidate, ts Tr
 	}
 	for _, ch := range checks {
 		if manualOnlyRe.MatchString(ch.value) {
-			return ReasonOwnerManualOnly, "Doctor Who / Big Finish / Torchwood are applied by hand, one book at a time; " +
+			return ReasonOwnerManualOnly, manualOnlyWhy +
 				ch.what + " " + strconv.Quote(ch.value)
 		}
 	}
