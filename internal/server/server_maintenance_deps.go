@@ -113,6 +113,11 @@ func (s *Server) FileProvenanceStore() database.FileProvenanceStore {
 // gives: the decorator installed by NewServer hides every capability from a bare
 // assertion. TestMaintenanceStoreAccessorsResolveThroughIndexedStore holds both
 // accessors to that.
+// PathHistoryReader hands the fragment-consolidation fixer the book
+// path-change history. GetBookPathHistory is part of database.Store, so no
+// capability resolution is needed.
+func (s *Server) PathHistoryReader() maintenanceplugin.BookPathHistoryReader { return s.store }
+
 // MergeUserStateStore returns the store for repair-merged-user-state.
 func (s *Server) MergeUserStateStore() merge.UserStateRepairStore { return s.store }
 
