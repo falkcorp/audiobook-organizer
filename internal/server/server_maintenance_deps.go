@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.44.0
+// version: 1.44.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-28
 
