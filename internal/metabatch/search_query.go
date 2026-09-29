@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
 // last-edited: 2026-09-29
 //
@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
@@ -206,16 +207,7 @@ func (j *titleJudge) unsearchable(t string) bool {
 	if metadata.IsUnsearchableTitle(t) {
 		return true
 	}
-	if !metadata.IsSectionHeadingTitle(t) {
-		return false
-	}
-	authors, err := j.bookAuthors()
-	if err != nil {
-		// Unknown authors: the folder might be the author's, so it is no
-		// evidence -- a real title is never refused on a read fault.
-		return false
-	}
-	return headingCorroborated(j.presentFiles(), j.bookPath, t, authors)
+	return metadata.IsSectionHeadingTitle(t) && headingCorroborated(j.presentFiles(), j.bookPath, t, j.bookAuthors)
 }
 
 // bookAuthors returns the book's live author names (database.LiveBookAuthorNames)
@@ -254,10 +246,16 @@ func (j *titleJudge) bookAuthors() ([]string, error) {
 // in a folder of that name is a real book in chapters. A work folder that
 // names nothing (a placeholder or chapter folder, metadata.IsUnsearchableTitle)
 // is no evidence either way, and neither is a folder named for one of the
-// book's authors: ".../Anne Roiphe/Epilogue.m4b" is a book called Epilogue
-// filed under its author, whenever the author folder's own parent is not one
-// of the generic roots WorkFolderTitle already skips.
-func headingCorroborated(present []database.BookFile, bookPath, title string, authors []string) bool {
+// book's authors (authorjunk.SamePersonName): ".../Anne Roiphe/Epilogue.m4b"
+// is a book called Epilogue filed under its author, whenever the author
+// folder's own parent is not one of the generic roots WorkFolderTitle already
+// skips.
+//
+// authors is called only when the folder test is reached, so a file-tag
+// answer never waits on, or is lost to, an author read. An author read fault
+// leaves the folder unproven -- no evidence -- so the title is searched
+// as-is: a real title is never refused on a read fault.
+func headingCorroborated(present []database.BookFile, bookPath, title string, authors func() ([]string, error)) bool {
 	t := normTitle(title)
 	for _, f := range present {
 		if normTitle(f.Title) == t {
@@ -273,12 +271,19 @@ func headingCorroborated(present []database.BookFile, bookPath, title string, au
 		return false
 	}
 	nf := normTitle(folder)
-	for _, a := range authors {
-		if normTitle(a) == nf {
+	if nf == t {
+		return false
+	}
+	names, err := authors()
+	if err != nil {
+		return false
+	}
+	for _, a := range names {
+		if authorjunk.SamePersonName(a, folder) {
 			return false
 		}
 	}
-	return nf != t
+	return true
 }
 
 // normTitle lowercases a title and collapses its whitespace.

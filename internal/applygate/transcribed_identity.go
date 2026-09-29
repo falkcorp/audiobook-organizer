@@ -1,7 +1,7 @@
 // file: internal/applygate/transcribed_identity.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: fedfaa92-fca3-4c73-b38b-25f4b0426918
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package applygate
 
@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -169,7 +170,9 @@ func transcribedLiftRefusal(book *database.Book, authors Authors, c *metafetch.M
 	}
 	query := ts.Query
 	for _, a := range authors {
-		if normText(a) == normText(folder) {
+		// The same person test as metabatch's heading check
+		// (authorjunk.SamePersonName): "Roiphe, Anne", "J.R.R. Tolkien".
+		if authorjunk.SamePersonName(a, folder) {
 			return ""
 		}
 	}
