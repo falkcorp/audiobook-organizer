@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_identity_live_author_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a7f9c14-6b3e-4d85-a0c2-9e1d5b8f3a76
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package metafetch
 
@@ -27,7 +27,10 @@ func TestValidateCachedIdentityForBook_LiveAuthorForms(t *testing.T) {
 		live   []string
 		wantOK bool
 	}{
-		{"batch shape, snapshot author (nil)", hashSearchInputs("valis", "Valis", "", "", ""), live, true},
+		// A nil snapshot is not "no author" when the book has a live one:
+		// a row hashed with no author proves nothing about which author.
+		{"batch shape, no author, live author exists", hashSearchInputs("valis", "Valis", "", "", ""), live, false},
+		{"batch shape, no author, no live author", hashSearchInputs("valis", "Valis", "", "", ""), nil, true},
 		{"batch shape, live author", hashSearchInputs("valis", "Valis", "Philip K. Dick", "", ""), live, true},
 		{"live author row, no live authors given", hashSearchInputs("valis", "Valis", "Philip K. Dick", "", ""), nil, false},
 		{"another author", hashSearchInputs("valis", "Valis", "Stephen King", "", ""), live, false},

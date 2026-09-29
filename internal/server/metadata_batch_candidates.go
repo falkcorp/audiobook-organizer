@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.15.0
+// version: 4.16.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-28
 //
@@ -262,15 +262,36 @@ func (s *Server) fetchCandidateForBook(
 		return r
 	}
 
+	// The hint is the book's LIVE primary author (database.LiveBookAuthorNames:
+	// AuthorID, then the join), not the Book.Author snapshot, which
+	// GetBookByID does not fill: hashing that empty snapshot recorded "no
+	// author" for nearly every book, and the apply gate could then not tell a
+	// row fetched for the book's author from one fetched before it changed.
+	// The author is recorded on the result too (bookInfo.Author), for the
+	// op-result path's fetchTimeIdentity. A read failure fails the book
+	// rather than hashing it as authorless.
+	//
 	// A placeholder author ("Unknown Author", "read by narrator") is not a
 	// hint: it is never sent, and the row is hashed without it
 	// (metafetch.SearchAuthorHint, which the ladder applies again to the
 	// author it resolves from AuthorID).
-	var authorHint []string
+	liveAuthors, lerr := database.LiveBookAuthorNames(store, book)
+	if lerr != nil {
+		return CandidateResult{Book: bookInfo, Status: "error", Error: "read book authors: " + lerr.Error()}
+	}
+	author := ""
 	if book.Author != nil {
-		if a := metafetch.SearchAuthorHint(book.Author.Name); a != "" {
-			authorHint = append(authorHint, a)
+		author = book.Author.Name
+	}
+	if len(liveAuthors) > 0 {
+		author = liveAuthors[0]
+		if bookInfo.Author == "" {
+			bookInfo.Author = author
 		}
+	}
+	var authorHint []string
+	if a := metafetch.SearchAuthorHint(author); a != "" {
+		authorHint = append(authorHint, a)
 	}
 
 	// METADATA-CACHED-MATCHER: batch fetch always invalidates + writes

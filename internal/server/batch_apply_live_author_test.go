@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_live_author_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6b0e3f27-94c1-4a8d-b2e5-1d7c9a4f0e63
 // last-edited: 2026-09-28
 //
@@ -186,17 +186,22 @@ func TestGateUsesLiveAuthor_ReadFailureRefuses(t *testing.T) {
 
 // fetchTimeIdentity accepts the author the fetch recorded in any form the
 // book's current author takes (snapshot, live primary, live joined), and
-// still refuses an author the book no longer has.
+// still refuses an author the book no longer has. A recorded "" (the nil
+// snapshot an older fetch recorded) no longer proves the author of a book
+// that has a live one: it is refused, and passes only for an authorless book.
 func TestFetchTimeIdentity_LiveAuthorForms(t *testing.T) {
 	book := &database.Book{ID: "valis", Title: "Valis"}
 	live := []string{"Philip K. Dick"}
-	for _, recorded := range []string{"", "Philip K. Dick"} {
-		if err := fetchTimeIdentity("Valis", recorded, "", book, live); err != nil {
-			t.Errorf("recorded %q: %v, want nil", recorded, err)
+	if err := fetchTimeIdentity("Valis", "Philip K. Dick", "", book, live); err != nil {
+		t.Errorf("recorded the live author: %v, want nil", err)
+	}
+	for _, recorded := range []string{"Stephen King", ""} {
+		if err := fetchTimeIdentity("Valis", recorded, "", book, live); !errors.Is(err, metafetch.ErrStaleMetadataCache) {
+			t.Errorf("recorded %q: %v, want ErrStaleMetadataCache", recorded, err)
 		}
 	}
-	if err := fetchTimeIdentity("Valis", "Stephen King", "", book, live); !errors.Is(err, metafetch.ErrStaleMetadataCache) {
-		t.Errorf("recorded Stephen King: %v, want ErrStaleMetadataCache", err)
+	if err := fetchTimeIdentity("Valis", "", "", book, nil); err != nil {
+		t.Errorf("recorded \"\" for an authorless book: %v, want nil", err)
 	}
 }
 
