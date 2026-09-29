@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-09-28
 
@@ -519,9 +519,12 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	}
 	if kind.IsChapterKind() && b.SeriesID != nil && idx.series[*b.SeriesID] != "" {
 		if m := trailingNumberRe.FindStringSubmatch(b.Title); m != nil {
-			n, _ := strconv.Atoi(m[1])
-			if t, ok := accept(fmt.Sprintf("%s, Book %d", idx.series[*b.SeriesID], n)); ok {
-				props = append(props, proposal{t, junkSrcSeriesNum, repairs.RiskReview})
+			// A digits-only match cannot fail to parse except by overflow,
+			// which is no book number: no proposal then.
+			if n, perr := strconv.Atoi(m[1]); perr == nil {
+				if t, ok := accept(fmt.Sprintf("%s, Book %d", idx.series[*b.SeriesID], n)); ok {
+					props = append(props, proposal{t, junkSrcSeriesNum, repairs.RiskReview})
+				}
 			}
 		}
 	}
