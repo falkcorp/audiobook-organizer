@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
 // last-edited: 2026-09-29
 
@@ -67,6 +67,53 @@ type journalIndex struct {
 	loaded bool
 	keys   map[string]bool
 	books  map[string]bool
+	// latest is the NewValue of the newest row per book, type and field
+	// (valueKey), for JournaledValue.
+	latest map[string]string
+}
+
+func valueKey(bookID, changeType, field string) string {
+	return strings.Join([]string{bookID, changeType, field}, "\x00")
+}
+
+// load reads the op journal once. The caller holds ix.mu.
+func (ix *journalIndex) load(w *Writer) error {
+	if ix.loaded {
+		return nil
+	}
+	rows, err := w.journal.GetOperationChanges(w.opID)
+	if err != nil {
+		return fmt.Errorf("%w: read the op journal: %v", ErrNotJournaled, err)
+	}
+	ix.keys = map[string]bool{}
+	ix.books = map[string]bool{}
+	ix.latest = map[string]string{}
+	for _, r := range rows {
+		if r.RevertedAt == nil {
+			ix.keys[journalKey(r.BookID, r.ChangeType, r.FieldName, r.OldValue, r.NewValue)] = true
+			ix.latest[valueKey(r.BookID, r.ChangeType, r.FieldName)] = r.NewValue
+		}
+	}
+	ix.loaded = true
+	return nil
+}
+
+// JournaledValue returns the NewValue of the newest un-reverted row of this
+// op's journal for bookID, changeType and field, so a resumed step whose value
+// is not deterministic (a soft-delete's stamp) journals and writes the value
+// its cut-off run journaled instead of a second one.
+func (w *Writer) JournaledValue(bookID, changeType, field string) (string, bool, error) {
+	if w.journal == nil || w.opID == "" || w.index == nil {
+		return "", false, fmt.Errorf("%w: no journal wired (book %s, %s)", ErrNotJournaled, bookID, changeType)
+	}
+	ix := w.index
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if err := ix.load(w); err != nil {
+		return "", false, err
+	}
+	v, ok := ix.latest[valueKey(bookID, changeType, field)]
+	return v, ok, nil
 }
 
 // journaledBook reports whether this writer journaled (or, on a resume, found
@@ -119,19 +166,8 @@ func (w *Writer) Journal(bookID, changeType, field, oldV, newV string) error {
 	ix := w.index
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
-	if !ix.loaded {
-		rows, err := w.journal.GetOperationChanges(w.opID)
-		if err != nil {
-			return fmt.Errorf("%w: read the op journal: %v", ErrNotJournaled, err)
-		}
-		ix.keys = map[string]bool{}
-		ix.books = map[string]bool{}
-		for _, r := range rows {
-			if r.RevertedAt == nil {
-				ix.keys[journalKey(r.BookID, r.ChangeType, r.FieldName, r.OldValue, r.NewValue)] = true
-			}
-		}
-		ix.loaded = true
+	if err := ix.load(w); err != nil {
+		return err
 	}
 	if ix.keys[key] {
 		ix.books[bookID] = true
@@ -147,6 +183,7 @@ func (w *Writer) Journal(bookID, changeType, field, oldV, newV string) error {
 	}
 	ix.keys[key] = true
 	ix.books[bookID] = true
+	ix.latest[valueKey(bookID, changeType, field)] = newV
 	w.journaled.Add(1)
 	return nil
 }

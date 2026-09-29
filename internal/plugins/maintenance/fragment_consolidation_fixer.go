@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-09-29
 
@@ -1927,7 +1927,18 @@ func (f *fragmentFixer) retire(ctx context.Context, store OpsStore, w *repairs.W
 	// row left by a retire that never wrote cannot un-delete a book the user
 	// deleted later. Truncated to the microsecond so the stamp compares equal
 	// after any store round trip.
+	//
+	// A resumed retire whose soft-delete was journaled and never written
+	// reuses the journaled stamp: the Step then dedupes onto that row and
+	// writes its stamp, so one retire never journals two.
 	now := f.now().UTC().Truncate(time.Microsecond)
+	if prev, ok, err := w.JournaledValue(id, undo.ChangeTypeBookSoftDelete, "marked_for_deletion"); err != nil {
+		return steps, fmt.Errorf("read the journaled soft-delete of %s: %w", id, err)
+	} else if ok {
+		if t, ok := undo.ParseSoftDeleteStamp(prev); ok {
+			now = t
+		}
+	}
 	if err := w.Step(id, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(now), func() error {
 		_, err := w.Modify(id, func(cur *database.Book) error {
 			if cur.FilePath != b.FilePath {

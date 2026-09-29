@@ -105,24 +105,70 @@ func (r *PathResolver) dir(d string) (string, bool) {
 // p (if it is itself a link) nor its folder can be resolved: p is gone with
 // its folder, or unreadable; the guard then checks it lexically only.
 func (r *PathResolver) Resolve(p string) (string, bool) {
+	rp, ok, _ := r.resolve(p)
+	return rp, ok
+}
+
+// maxLinkHops bounds the dangling-link walk (the kernel's own ELOOP limit).
+const maxLinkHops = 40
+
+// resolve is Resolve plus, for a dangling link, the paths its link text
+// names (dangling): EvalSymlinks fails on those, and the folder fallback
+// alone would miss a dead link in a plain folder whose text points into
+// books/itunes/**.
+func (r *PathResolver) resolve(p string) (resolved string, ok bool, dangling []string) {
 	if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		if rp, err := filepath.EvalSymlinks(p); err == nil {
-			return rp, true
+			return rp, true, nil
 		}
-		// A dangling link: fall back to its folder's resolution, so a dead
-		// link inside a folder linked into books/itunes/** still guards.
+		// A dangling link: check where its text points, and fall back to its
+		// folder's resolution, so a dead link inside a folder linked into
+		// books/itunes/** still guards.
+		dangling = r.linkTargets(p)
 	}
 	d, ok := r.dir(filepath.Dir(p))
 	if !ok {
-		return "", false
+		return "", false, dangling
 	}
-	return filepath.Join(d, filepath.Base(p)), true
+	return filepath.Join(d, filepath.Base(p)), true, dangling
+}
+
+// linkTargets follows the link text of the dangling link p, hop by hop, and
+// returns each target it names: a relative text is joined to its link's
+// folder (resolved when it can be). The walk stops at a target that is not a
+// link (it is missing, or EvalSymlinks would have succeeded) or after
+// maxLinkHops.
+func (r *PathResolver) linkTargets(p string) []string {
+	var out []string
+	link := p
+	for range maxLinkHops {
+		text, err := os.Readlink(link)
+		if err != nil {
+			break
+		}
+		if !filepath.IsAbs(text) {
+			base := filepath.Dir(link)
+			if d, ok := r.dir(base); ok {
+				base = d
+			}
+			text = filepath.Join(base, text)
+		}
+		text = filepath.Clean(text)
+		out = append(out, text)
+		fi, err := os.Lstat(text)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			break
+		}
+		link = text
+	}
+	return out
 }
 
 // withResolved adds, after each path, the path its symlinks resolve to when
-// that differs: a library symlink into books/itunes/** is under the frozen
-// tree however it is spelled. A path that cannot be resolved is checked
-// lexically only.
+// that differs, and for a dangling link every path its link text names: a
+// library symlink into books/itunes/** is under the frozen tree however it is
+// spelled, dead or alive. A path that cannot be resolved is checked lexically
+// only.
 func (r *PathResolver) withResolved(paths []string) []string {
 	out := make([]string, 0, len(paths))
 	for _, p := range paths {
@@ -130,9 +176,11 @@ func (r *PathResolver) withResolved(paths []string) []string {
 		if p == "" {
 			continue
 		}
-		if rp, ok := r.Resolve(p); ok && rp != p {
+		rp, ok, dangling := r.resolve(p)
+		if ok && rp != p {
 			out = append(out, rp)
 		}
+		out = append(out, dangling...)
 	}
 	return out
 }

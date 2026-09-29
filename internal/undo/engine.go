@@ -57,6 +57,10 @@ type UndoConflictReport struct {
 	// restore.
 	NotRestorable      int            `json:"not_restorable"`
 	NotRestorableTypes map[string]int `json:"not_restorable_types,omitempty"`
+	// AlreadyRestored counts the Safe rows that need no write: the target
+	// already holds OldValue (ErrAlreadyRestored), as the revert's
+	// already_restored will.
+	AlreadyRestored int `json:"already_restored,omitempty"`
 }
 
 // UndoConflictItem describes one change that may conflict.
@@ -106,7 +110,10 @@ func (r *UndoConflictReport) addReferentConflict(c *database.OperationChange, er
 // PreflightUndoConflicts scans the operation's changes and reports
 // which ones can be safely undone vs which have conflicts. It predicts what
 // POST /operations/:id/revert (audiobooks.RevertService) will do, so it
-// classifies rows with NotRestorableLabel, the classifier that endpoint uses.
+// classifies rows with NotRestorableLabel, the classifier that endpoint uses,
+// and walks them in the revert's order (PlanRevert): a retired book's rows
+// that the revert will refuse because a row that moved or repointed its file
+// is refused are reported refused (ReasonDependentNotReverted).
 func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoConflictReport, error) {
 	changes, err := store.GetOperationChanges(operationID)
 	if err != nil {
@@ -115,6 +122,7 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 
 	report := &UndoConflictReport{TotalChanges: len(changes)}
 
+	var restorable []*database.OperationChange
 	for _, c := range changes {
 		// Classify before the reverted check, as the revert does: a
 		// record-only row is never counted as already reverted.
@@ -130,99 +138,116 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 			report.AlreadyReverted++
 			continue
 		}
+		restorable = append(restorable, c)
+	}
 
-		switch c.ChangeType {
-		case "file_move", "organize_rename":
-			conflict, refusal := checkFileMoveConflict(store, c)
-			switch {
-			case refusal != nil:
-				report.addReferentConflict(c, refusal)
-			case conflict == nil:
-				report.Safe++
-			case conflict.Reason == "book deleted":
-				report.BookDeleted = append(report.BookDeleted, *conflict)
-			case conflict.Reason == "re-organized":
-				report.ReOrganized = append(report.ReOrganized, *conflict)
-			default:
-				report.ContentChanged = append(report.ContentChanged, *conflict)
-			}
-		case "metadata_update":
-			// The revert reads the book first (RevertService.loadBook) and
-			// then runs CheckRestoreReferent. Either refusal fails the row
-			// every time, so neither may be counted restorable here.
-			book, refusal := CheckRestoreBook(store, c.BookID)
-			if refusal == nil {
-				refusal = CheckRestoreReferent(store, c)
-			}
-			switch {
-			case refusal != nil:
-				report.addReferentConflict(c, refusal)
-			case book.IsSoftDeleted():
-				report.BookDeleted = append(report.BookDeleted, UndoConflictItem{
-					ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
-					Reason: "book deleted",
-				})
-			default:
-				// The revert is compare-and-set (CheckBookFieldCurrent): a
-				// field edited since the operation is refused, not
-				// overwritten; ErrAlreadyRestored is not a conflict, the
-				// revert counts that row Restored without writing. Fields the
-				// revert cannot restore at all keep their earlier
-				// classification.
-				if !IsRevertableBookField(c.FieldName) {
-					report.Safe++
-				} else if err := CheckBookFieldCurrent(book, c); err != nil && !errors.Is(err, ErrAlreadyRestored) {
-					report.addReferentConflict(c, err)
-				} else {
-					report.Safe++
-				}
-			}
-		case "tag_write":
-			// The revert reads the book before it touches the file.
-			if _, refusal := CheckRestoreBook(store, c.BookID); refusal != nil {
-				report.addReferentConflict(c, refusal)
-			} else {
-				report.Safe++
-			}
-		case ChangeTypeSeriesRename:
-			// ErrAlreadyRestored is not a conflict: the revert counts that row
-			// Restored without writing.
-			if err := CheckRestoreReferent(store, c); err != nil && !errors.Is(err, ErrAlreadyRestored) {
-				report.addReferentConflict(c, err)
-			} else {
-				report.Safe++
-			}
-		case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
-			ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
-			ChangeTypeBookFileMove, ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow:
-			// ErrAlreadyRestored (a journaled step whose write never
-			// happened, or one already put back) is not a conflict: the
-			// revert counts that row restored without writing.
-			if refusal := checkFsRegroupRow(store, c); refusal != nil && !errors.Is(refusal, ErrAlreadyRestored) {
-				report.addReferentConflict(c, refusal)
-			} else {
-				report.Safe++
-			}
-		case ChangeTypeTitleRelinkCredits, ChangeTypeJunkAuthorCredits:
-			// The preflight only proves the book is restorable: the credit
-			// compare-and-set needs the junction, which the preflight store
-			// does not read, so a row counted Safe here can still be refused
-			// by the revert. What the revert refuses differs by type:
-			// junk_author_credits requires the EXACT junction and primary the
-			// repair wrote (any later credit change is refused, nothing
-			// written); title_relink_credits checks only that its source
-			// credit is absent and its target present (revertTitleRelinkCredits).
-			if _, refusal := CheckRestoreBook(store, c.BookID); refusal != nil {
-				report.addReferentConflict(c, refusal)
-			} else {
-				report.Safe++
-			}
-		default:
+	var files func(string) ([]database.BookFile, error)
+	if r, ok := store.(bookFilesReader); ok {
+		files = r.GetBookFiles
+	}
+	plan, err := PlanRevert(restorable, files)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range plan.Order {
+		if refusal := plan.Gate(c); refusal != nil {
+			plan.Record(c, refusal)
+			report.addReferentConflict(c, refusal)
+			continue
+		}
+		v := preflightRow(store, c, plan.Stamps)
+		plan.Record(c, v.refusal)
+		switch {
+		case v.refusal != nil:
+			report.addReferentConflict(c, v.refusal)
+		case v.conflict == nil:
 			report.Safe++
+			if v.already {
+				report.AlreadyRestored++
+			}
+		case v.conflict.Reason == "book deleted":
+			report.BookDeleted = append(report.BookDeleted, *v.conflict)
+		case v.conflict.Reason == "re-organized":
+			report.ReOrganized = append(report.ReOrganized, *v.conflict)
+		default:
+			report.ContentChanged = append(report.ContentChanged, *v.conflict)
 		}
 	}
 
 	return report, nil
+}
+
+// rowVerdict is the preflight's prediction for one row: refused (refusal), a
+// restorable conflict (conflict), or safe, already restored or not.
+type rowVerdict struct {
+	refusal  error
+	conflict *UndoConflictItem
+	already  bool
+}
+
+// verdictOf reads a compare-and-set answer: ErrAlreadyRestored is safe (the
+// revert counts that row restored without writing), any other error refuses.
+func verdictOf(err error) rowVerdict {
+	if errors.Is(err, ErrAlreadyRestored) {
+		return rowVerdict{already: true}
+	}
+	return rowVerdict{refusal: err}
+}
+
+func preflightRow(store ConflictChecker, c *database.OperationChange, stamps SoftDeleteStamps) rowVerdict {
+	switch c.ChangeType {
+	case "file_move", "organize_rename":
+		conflict, refusal := checkFileMoveConflict(store, c)
+		return rowVerdict{refusal: refusal, conflict: conflict}
+	case "metadata_update":
+		// The revert reads the book first (RevertService.loadBook) and
+		// then runs CheckRestoreReferent. Either refusal fails the row
+		// every time, so neither may be counted restorable here.
+		book, refusal := CheckRestoreBook(store, c.BookID)
+		if refusal == nil {
+			refusal = CheckRestoreReferent(store, c)
+		}
+		switch {
+		case refusal != nil:
+			return rowVerdict{refusal: refusal}
+		case book.IsSoftDeleted():
+			return rowVerdict{conflict: &UndoConflictItem{
+				ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
+				Reason: "book deleted",
+			}}
+		case !IsRevertableBookField(c.FieldName):
+			// Fields the revert cannot restore at all keep their earlier
+			// classification.
+			return rowVerdict{}
+		}
+		// The revert is compare-and-set (CheckBookFieldCurrent): a field
+		// edited since the operation is refused, not overwritten.
+		return verdictOf(CheckBookFieldCurrent(book, c))
+	case "tag_write":
+		// The revert reads the book before it touches the file.
+		_, refusal := CheckRestoreBook(store, c.BookID)
+		return rowVerdict{refusal: refusal}
+	case ChangeTypeTitleRelinkCredits, ChangeTypeJunkAuthorCredits:
+		// The preflight only proves the book is restorable: the credit
+		// compare-and-set needs the junction, which the preflight store
+		// does not read, so a row counted Safe here can still be refused
+		// by the revert. What the revert refuses differs by type:
+		// junk_author_credits requires the EXACT junction and primary the
+		// repair wrote (any later credit change is refused, nothing
+		// written); title_relink_credits checks only that its source
+		// credit is absent and its target present (revertTitleRelinkCredits).
+		_, refusal := CheckRestoreBook(store, c.BookID)
+		return rowVerdict{refusal: refusal}
+	case ChangeTypeSeriesRename:
+		return verdictOf(CheckRestoreReferent(store, c))
+	case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
+		ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
+		ChangeTypeBookFileMove, ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow:
+		// A journaled step whose write never happened, or one already put
+		// back, is already restored.
+		return verdictOf(checkFsRegroupRow(store, c, stamps))
+	}
+	return rowVerdict{}
 }
 
 // checkFileMoveConflict mirrors RevertService.revertFileMove. A file no longer
@@ -275,6 +300,10 @@ func checkFileMoveConflict(store ConflictChecker, c *database.OperationChange) (
 // not on ConflictChecker, so its implementers need not grow: a store without
 // them gets the book checks only, and the revert still refuses drift under its
 // own compare-and-set.
+type bookFilesReader interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
 type bookFileByIDReader interface {
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 }
@@ -287,7 +316,7 @@ type externalIDOwnerReader interface {
 // the books it reads must exist, and the field it restores must still hold the
 // value the operation wrote (ReasonChangedSince otherwise), as the revert's
 // compare-and-set requires.
-func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange) error {
+func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamps SoftDeleteStamps) error {
 	book, refusal := CheckRestoreBook(store, c.BookID)
 	if refusal != nil {
 		return refusal
@@ -342,7 +371,7 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange) error
 	case ChangeTypeBookMergedInto:
 		return CheckMergedIntoCurrent(book, c)
 	case ChangeTypeBookSoftDelete:
-		return CheckSoftDeleteCurrent(book, c)
+		return CheckSoftDeleteCurrent(book, c, stamps)
 	case ChangeTypeUserStateFollow:
 		// The revert writes progress on both books: both must exist.
 		survivor, _ := SurvivorFromField(c.FieldName)

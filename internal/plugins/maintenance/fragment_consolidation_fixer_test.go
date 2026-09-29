@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-09-29
 
@@ -1027,6 +1027,7 @@ func TestFragmentFixer_JournaledStepNeverWrittenIsAlreadyRestored(t *testing.T) 
 	report, err := undo.PreflightUndoConflicts(f.s, "op-cut")
 	require.NoError(t, err)
 	require.Empty(t, report.CheckFailed, "%+v", report.CheckFailed)
+	require.Equal(t, 4, report.AlreadyRestored, "the preflight counts them (L-b)")
 
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-cut")
 	require.NoError(t, err)
@@ -1080,4 +1081,150 @@ func TestFragmentFixer_PendingFollowNeverDrainsALiveFragment(t *testing.T) {
 	pos, err := f.s.ListUserPositionsForBook(u.ID, frag)
 	require.NoError(t, err)
 	require.Len(t, pos, 1)
+}
+
+// TestFragmentFixer_ResumedRetireReusesTheJournaledStamp (L-a): a retire cut
+// off after journaling its soft-delete journals no second stamp on resume; it
+// writes the stamp it journaled.
+func TestFragmentFixer_ResumedRetireReusesTheJournaledStamp(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag, parent := f.ids["fragF"], f.ids["parent"]
+	stamp := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-resume")
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(stamp)))
+
+	w2 := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-resume")
+	_, err := newFragmentFixer(f.p).retire(context.Background(), f.s, w2, frag, parent, merge.SliceMapping{})
+	require.NoError(t, err)
+	changes, err := f.s.GetOperationChanges("op-resume")
+	require.NoError(t, err)
+	n := 0
+	for _, c := range changes {
+		if c.ChangeType == undo.ChangeTypeBookSoftDelete {
+			n++
+		}
+	}
+	require.Equal(t, 1, n, "one soft-delete row")
+	b, err := f.s.GetBookByID(frag)
+	require.NoError(t, err)
+	require.NotNil(t, b.MarkedForDeletionAt)
+	require.True(t, b.MarkedForDeletionAt.Equal(stamp), "the journaled stamp is written")
+
+	report, err := undo.PreflightUndoConflicts(f.s, "op-resume")
+	require.NoError(t, err)
+	require.Empty(t, report.CheckFailed, "%+v", report.CheckFailed)
+}
+
+// TestFragmentFixer_TwoStampsOfOneRetireAreNotAConflict (L-a): an op that
+// already holds two soft-delete stamps for one book (journaled by a resume
+// before stamps were reused) reverts cleanly whichever of them was written.
+func TestFragmentFixer_TwoStampsOfOneRetireAreNotAConflict(t *testing.T) {
+	s1 := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	s2 := s1.Add(time.Minute)
+	for _, written := range []time.Time{s1, s2} {
+		t.Run(written.Format(time.Kitchen), func(t *testing.T) {
+			f := newFragFixture(t)
+			f.seed(t)
+			frag := f.ids["fragF"]
+			w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-two")
+			require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(s1)))
+			require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(s2)))
+			at := written
+			_, err := f.s.ModifyBook(frag, func(b *database.Book) error {
+				yes := true
+				b.MarkedForDeletion, b.MarkedForDeletionAt = &yes, &at
+				return nil
+			})
+			require.NoError(t, err)
+
+			report, err := undo.PreflightUndoConflicts(f.s, "op-two")
+			require.NoError(t, err)
+			require.Empty(t, report.CheckFailed, "%+v", report.CheckFailed)
+			rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-two")
+			require.NoError(t, err)
+			require.Zero(t, rr.Failed, "%+v", rr)
+			require.True(t, f.live(t, "fragF"))
+		})
+	}
+}
+
+// TestFragmentFixer_PreflightPredictsDependentRefusals (L-b): when the repoint
+// that took a retired fragment's file can no longer be undone, the preflight
+// reports every row of the fragment as refused, as the revert does, and its
+// restorable count matches what the revert restores.
+func TestFragmentFixer_PreflightPredictsDependentRefusals(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	f.plan(t, "op-plan")
+	out := f.apply(t, "op-plan", "op-apply", []string{"moved:" + f.ids["parent"]}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	row := f.fileRow(t, "parent", "p03")
+	row.FilePath = f.path("lib/Eldest/elsewhere.mp3")
+	require.NoError(t, f.s.UpdateBookFile(row.ID, row))
+
+	report, err := undo.PreflightUndoConflicts(f.s, "op-apply")
+	require.NoError(t, err)
+	dependent := map[string]bool{}
+	for _, it := range report.CheckFailed {
+		if it.Reason == undo.ReasonDependentNotReverted {
+			dependent[it.ChangeID] = true
+		}
+	}
+	changes, err := f.s.GetOperationChanges("op-apply")
+	require.NoError(t, err)
+	fragRows := 0
+	for _, c := range changes {
+		if c.BookID == f.ids["fragF"] && undo.NotRestorableLabel(c) == "" {
+			fragRows++
+			require.True(t, dependent[c.ID], "%s of the retired fragment is predicted refused", c.ChangeType)
+		}
+	}
+	require.NotZero(t, fragRows)
+
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
+	require.Error(t, err)
+	require.Equal(t, rr.Restored, report.Safe+len(report.ContentChanged)+len(report.BookDeleted)+len(report.ReOrganized),
+		"preflight %+v vs revert %+v", report, rr)
+}
+
+// TestFragmentFixer_AlreadyRestoredDemoteStillCrowns (L-d): a demote row whose
+// write never happened is already restored, and the revert still makes its
+// book the group's one primary.
+func TestFragmentFixer_AlreadyRestoredDemoteStillCrowns(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	frag := f.ids["fragF"]
+	group := "vg-frag"
+	yes := true
+	_, err := f.s.ModifyBook(frag, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = &yes
+		return nil
+	})
+	require.NoError(t, err)
+	sibPath := f.file(t, "lib/Sibling/Sibling edition.m4b", 5000)
+	sib := f.book(t, "sibling", "Eldest, another edition", sibPath, nil)
+	f.row(t, "sib", sib, sibPath, "Sibling edition.m4b", 5000, 36000, 0)
+	f.organized(t, sib)
+	_, err = f.s.ModifyBook(sib, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = &yes
+		return nil
+	})
+	require.NoError(t, err)
+	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-crown")
+	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
+
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-crown")
+	require.NoError(t, err)
+	require.Equal(t, 1, rr.AlreadyRestored)
+	fb, err := f.s.GetBookByID(frag)
+	require.NoError(t, err)
+	require.NotNil(t, fb.IsPrimaryVersion)
+	require.True(t, *fb.IsPrimaryVersion)
+	sb, err := f.s.GetBookByID(sib)
+	require.NoError(t, err)
+	require.NotNil(t, sb.IsPrimaryVersion)
+	require.False(t, *sb.IsPrimaryVersion, "one primary per group")
 }
