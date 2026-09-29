@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0cc97d6f-e2ee-42d6-8233-ed4cec61f5ab
 // last-edited: 2026-09-28
 
@@ -159,5 +159,32 @@ func TestExtractFromFilename_SeriesTitleIsNotAnAuthor(t *testing.T) {
 					m.Artist, m.Title, m.Series, tc.wantArtist, tc.wantTitle, tc.wantSeries)
 			}
 		})
+	}
+}
+
+// TestExtractMetadataFromFolder_SeriesFolderIsNotAnAuthor pins the folder
+// parser's side of the same bug: in a <series>/<title>/<disc> layout the series
+// folder sits where Pass 3 looks for an author, and "The Stormlight Archive"
+// was taken as the author at high confidence.
+func TestExtractMetadataFromFolder_SeriesFolderIsNotAnAuthor(t *testing.T) {
+	for _, dir := range []string{
+		"/lib/books/The Stormlight Archive/The Way of Kings/Disc 1",
+		"/lib/books/Dune Chronicles/Children of Dune/Disc 1",
+		"/lib/books/The City & The City/Part One/Disc 1",
+	} {
+		fm, err := ExtractMetadataFromFolder(dir)
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		if len(fm.Authors) != 0 {
+			t.Errorf("%s: authors = %q, want none", dir, fm.Authors)
+		}
+	}
+	fm, err := ExtractMetadataFromFolder("/lib/books/Brandon Sanderson/The Way of Kings/Disc 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fm.Authors) != 1 || fm.Authors[0] != "Brandon Sanderson" {
+		t.Errorf("real author folder: authors = %q, want [Brandon Sanderson]", fm.Authors)
 	}
 }
