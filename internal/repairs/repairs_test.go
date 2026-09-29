@@ -1,7 +1,7 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
-// last-edited: 2026-09-27
+// last-edited: 2026-09-28
 
 package repairs
 
@@ -378,6 +378,46 @@ func TestRunApply_AppliesSelectedRowsAndWritesHistory(t *testing.T) {
 	require.True(t, strings.HasPrefix(h.BatchID, "rp-"))
 	require.Equal(t, 1, res.HistoryRows)
 	require.Equal(t, 1, sd.released, "the stand-down is released")
+}
+
+// TestRunApply_CheckpointsAndResumes: every settled row is checkpointed, and
+// a run resumed from that checkpoint reports those rows as they were without
+// applying them again, and applies only the rest.
+func TestRunApply_CheckpointsAndResumes(t *testing.T) {
+	old := checkpointEvery
+	checkpointEvery = 1
+	t.Cleanup(func() { checkpointEvery = old })
+
+	s := newMemStore()
+	seed(s)
+	f := &trimFixer{s: s}
+	plan := planFor(t, s, f)
+	var mu sync.Mutex
+	var last ApplyCheckpoint
+	d := deps(s, &fakeStandDown{renewsLeft: -1})
+	d.Checkpoint = func(cp ApplyCheckpoint) error {
+		mu.Lock()
+		defer mu.Unlock()
+		last = cp
+		return nil
+	}
+	_, err := RunApply(context.Background(), f, plan, "op-plan", []string{"b1"}, false, d, nopReporter{})
+	require.NoError(t, err)
+	require.Len(t, last.Settled, 1)
+	require.Equal(t, RowResult{RowID: "b1", Outcome: OutcomeApplied}, last.Settled[0])
+
+	// Undo b1 by hand: a resumed run must NOT re-apply it.
+	_, err = s.ModifyBook("b1", func(b *database.Book) error { b.Title = " One "; return nil })
+	require.NoError(t, err)
+	d2 := deps(s, &fakeStandDown{renewsLeft: -1})
+	cp := last
+	cp.Settled = append(cp.Settled, RowResult{RowID: "b2", Outcome: OutcomeAborted})
+	d2.Resumed = &cp
+	res, err := RunApply(context.Background(), f, plan, "op-plan", []string{"b1", "b2"}, false, d2, nopReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 2, res.Applied, "b1 from the checkpoint, b2 (aborted, never written) applied now")
+	require.Equal(t, " One ", s.title("b1"), "a checkpointed row is not applied again")
+	require.Equal(t, "Two", s.title("b2"))
 }
 
 func TestRunApply_RefusesRowWhoseFingerprintChanged(t *testing.T) {
