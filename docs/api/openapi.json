@@ -11910,12 +11910,10 @@
           {
             "name": "filter",
             "in": "query",
+            "description": "applicable, skipped, or skipped:<kind> for the skipped rows of one kind (a key of skipped_by_kind).",
             "schema": {
               "type": "string",
-              "enum": [
-                "applicable",
-                "skipped"
-              ]
+              "pattern": "^(applicable|skipped|skipped:.+)$"
             }
           },
           {

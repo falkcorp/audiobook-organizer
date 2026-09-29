@@ -1,5 +1,5 @@
 // file: internal/metadata/junk_title.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d7a2c91-3e6b-4f08-a1d5-8c2e9b7f4a13
 // last-edited: 2026-09-28
 

@@ -7577,7 +7577,12 @@ export interface RepairRowMember {
   missing_files?: number;
 }
 
-export type RepairRowsFilter = 'applicable' | 'skipped';
+/**
+ * Which rows of a stored trial to page: the applicable ones, every skipped
+ * one, or the skipped rows of one kind (`skipped:<kind>`, a key of
+ * `skipped_by_kind`) so each per-kind count opens the rows behind it.
+ */
+export type RepairRowsFilter = 'applicable' | 'skipped' | `skipped:${string}`;
 
 export interface RepairRowsPage {
   plan_op_id: string;

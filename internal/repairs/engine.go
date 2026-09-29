@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-09-29
 
@@ -197,6 +197,10 @@ const (
 	FilterAll        = ""
 	FilterApplicable = "applicable"
 	FilterSkipped    = "skipped"
+	// FilterSkippedKindPrefix + a skip kind ("skipped:fragment") pages only
+	// the skipped rows of that kind, so each per-kind count the lane shows
+	// opens the rows behind it.
+	FilterSkippedKindPrefix = FilterSkipped + ":"
 )
 
 // RowsPage is one page of a stored plan.
@@ -221,18 +225,28 @@ type RowsPage struct {
 }
 
 // Page returns rows [offset, offset+limit) of the plan's rows matching
-// filter and, when class is not empty, of that Row.Class. An unknown filter
-// is an error. Rows is never nil.
+// filter (all, applicable, skipped, or "skipped:<kind>" for the skipped rows
+// of one kind) and, when class is not empty, of that Row.Class. An unknown
+// filter is an error. Rows is never nil.
 func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*RowsPage, error) {
+	inScope := func(r *Row) bool { return true }
 	switch filter {
-	case FilterAll, FilterApplicable, FilterSkipped:
+	case FilterAll:
+	case FilterApplicable:
+		inScope = func(r *Row) bool { return r.Applicable() }
+	case FilterSkipped:
+		inScope = func(r *Row) bool { return !r.Applicable() }
 	default:
-		return nil, fmt.Errorf("repairs: unknown filter %q (want applicable or skipped)", filter)
+		kind, ok := strings.CutPrefix(filter, FilterSkippedKindPrefix)
+		if !ok || kind == "" {
+			return nil, fmt.Errorf("repairs: unknown filter %q (want applicable, skipped or skipped:<kind>)", filter)
+		}
+		inScope = func(r *Row) bool { return r.Skipped == kind }
 	}
 	var match []Row
 	var inFilter map[string]int
 	for i := range p.Rows {
-		if filter != FilterAll && p.Rows[i].Applicable() != (filter == FilterApplicable) {
+		if !inScope(&p.Rows[i]) {
 			continue
 		}
 		if c := p.Rows[i].Class; c != "" {

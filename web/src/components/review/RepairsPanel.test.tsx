@@ -47,7 +47,16 @@ function row(id: string, extra: Partial<RepairRow> = {}): RepairRow {
 }
 
 const APPLICABLE = [row('g1'), row('g2', { risk: 'review' })];
-const SKIPPED = [row('g3', { skipped: 'skipped_itunes', skip_reason: 'Lives in the iTunes library' })];
+const SKIPPED = [
+  row('g3', { skipped: 'skipped_itunes', skip_reason: 'Lives in the iTunes library' }),
+  row('g4', { skipped: 'fragment', skip_reason: 'fragment — use the consolidation fixer: 3 books share the folder' }),
+];
+
+function skippedByKind(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const r of SKIPPED) out[r.skipped!] = (out[r.skipped!] ?? 0) + 1;
+  return out;
+}
 
 const toast = vi.fn();
 
@@ -73,7 +82,12 @@ beforeEach(() => {
   vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER]);
   vi.mocked(api.getRepairPlanRows).mockImplementation(
     async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
-      const all = q.filter === 'applicable' ? APPLICABLE : SKIPPED;
+      const all =
+        q.filter === 'applicable'
+          ? APPLICABLE
+          : q.filter === 'skipped'
+            ? SKIPPED
+            : SKIPPED.filter((r) => `skipped:${r.skipped}` === q.filter);
       return {
         plan_op_id: planOpId,
         fixer_id: fixerId,
@@ -83,7 +97,7 @@ beforeEach(() => {
         limit: q.limit,
         total: all.length,
         applicable: APPLICABLE.length,
-        skipped_by_kind: { skipped_itunes: SKIPPED.length },
+        skipped_by_kind: skippedByKind(),
         rows: all.slice(q.offset, q.offset + q.limit),
       };
     }
@@ -180,6 +194,32 @@ describe('RepairsPanel', () => {
     expect(within(skipped).getByText('Lives in the iTunes library')).toBeInTheDocument();
     expect(within(skipped).queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.queryByTestId('repairs-apply-selected')).not.toBeInTheDocument();
+  });
+
+  it('gives each skip kind a count that opens exactly its rows', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g1');
+    await user.click(screen.getByTestId('repairs-tab-skipped'));
+    await screen.findByTestId('repairs-row-g4');
+    const fragChip = screen.getByTestId('repairs-skip-kind-fragment');
+    expect(fragChip).toHaveTextContent('Fragment — use the consolidation fixer (1)');
+    expect(screen.getByTestId('repairs-skip-kind-all')).toHaveTextContent('All skipped (2)');
+
+    await user.click(fragChip);
+    expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
+      'vg-primary',
+      'plan-1',
+      expect.objectContaining({ filter: 'skipped:fragment', offset: 0 }),
+      expect.anything()
+    );
+    await screen.findByTestId('repairs-row-g4');
+    expect(screen.queryByTestId('repairs-row-g3')).not.toBeInTheDocument();
+    // Still the skipped tab: no checkboxes, the skip reason shown.
+    expect(screen.queryByTestId('repairs-apply-selected')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('repairs-skip-kind-all'));
+    await screen.findByTestId('repairs-row-g3');
   });
 
   it('renders a fixer-list failure as an error with retry', async () => {

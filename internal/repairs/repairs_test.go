@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-09-29
 
@@ -368,8 +368,24 @@ func TestPlanResult_Page(t *testing.T) {
 	for _, r := range p.Rows {
 		require.Equal(t, "moved", r.Class)
 	}
+
+	// Every per-kind skip count pages exactly the rows it counts.
+	sum := 0
+	for kind, n := range res.SkippedByKind {
+		p, err = res.Page("op-plan", FilterSkippedKindPrefix+kind, "", 0, 50)
+		require.NoError(t, err)
+		require.Equal(t, n, p.Total, kind)
+		for _, r := range p.Rows {
+			require.Equal(t, kind, r.Skipped)
+		}
+		sum += p.Total
+	}
+	require.Equal(t, 4, sum)
+
 	_, err = res.Page("op-plan", "bogus", "", 0, 1)
 	require.Error(t, err)
+	_, err = res.Page("op-plan", FilterSkippedKindPrefix, "", 0, 1)
+	require.Error(t, err, "an empty kind is not a filter")
 }
 
 func TestLoadPlan_ChecksDefStatusAndFixer(t *testing.T) {
