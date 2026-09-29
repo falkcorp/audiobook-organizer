@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-09-28
 
@@ -21,51 +21,70 @@
 //
 //   - moved: a parent book's row names a path that is gone from disk, and
 //     the file now sits under a fragment book. Apply repoints the parent's
-//     row at the file's current path (same row id, track and history; the
-//     row's old location is journaled) and soft-retires the fragment. The
-//     fragment's own row is kept, on the retired book: no book_file row is
-//     ever deleted.
+//     row at the file's current path (same row id, track and history) and
+//     retires the fragment into the parent. A match resting on the original
+//     name and size alone is a separate, skipped "moved-unproven" row unless
+//     the fragment was also imported from the parent row's folder or the two
+//     durations agree.
 //   - copy: the fragment's file duplicates a file the parent still has on
-//     disk. When the match is proven (the fragment was imported FROM the
-//     parent row's path, or the two files hash the same) apply soft-retires
-//     the fragment; the parent is not written. An unproven match (name and
-//     size only) is shown as a skipped row for the owner to decide.
-//   - no-parent: three or more fragments imported from one folder that
-//     share a chapter key (metadata.ChapterGroupKey, the scanner's rule) and
-//     whose every file is shorter than the chapter-consolidation threshold,
-//     with no existing parent. Apply elects one of them (the lowest book id,
-//     so a re-plan elects the same one), moves every other fragment's row
-//     onto it, numbers the tracks in chapter order, titles it from the
-//     folder (unless the title is locked) and retires the emptied fragments.
-//   - manual-only: anything with a path under books/itunes/** or that is
-//     Doctor Who / Big Finish / Torchwood by path or series. Listed, never
-//     applied.
+//     disk. A proven match (imported FROM the parent row's path with the same
+//     size on disk, or the same hash) is retired into the parent; an
+//     unproven one is a separate, skipped "copy-unproven" row.
+//   - no-parent: three or more fragments imported from one folder (sibling
+//     CD1/CD2/Disc N folders count as one) that share a chapter key
+//     (metadata.ChapterGroupKey, the scanner's rule), each shorter than the
+//     chapter-consolidation threshold. The survivor is the lowest-id member
+//     that is organized and primary (none: the row is skipped). Apply moves
+//     every other member's row onto it in chapter order (disc first, then
+//     the chapter number ChapterGroupKey stripped; a repeated or unknown
+//     position skips the row), titles it from the folder (unless the title
+//     is locked), points its path at the folder only when that folder's
+//     audio is exactly the group's files, and retires the emptied members.
+//   - manual-only: anything with a path under books/itunes/** (symlinks
+//     resolved), Doctor Who / Big Finish / Torchwood by path or series, or a
+//     fragment carrying an iTunes persistent id (book, row or itunes
+//     external id): retiring it would queue an iTunes remove at the purge.
+//     Listed, never applied.
 //   - ambiguous: a fragment that matches two parents or two parent rows, or
 //     a parent row two fragments claim. Listed, never applied.
 //   - held: a fragment that matches a parent but whose own file is missing
 //     or unreadable. Listed, never applied.
 //
-// Before a row is applied, Replan re-checks with the strict ownership
-// lookup (database.BookFileRowsAtPathStrict) that no book outside the row
-// owns any file the row touches; an incomplete lookup (memdb warmup) fails
-// the row rather than guessing.
+// RETIRING a fragment into its parent or survivor is what merge.Service does
+// for an absorbed book: every user's listening state and positions follow it
+// (merge.FollowAbsorbedJournaled, as a slice of the survivor's timeline), its
+// external ids move over, it is demoted, and it is soft-deleted with
+// merged_into_book_id set and its file_path CLEARED (that path is now a file
+// the survivor owns, and the purge deletes a purged book's file_path).
 //
-// EVERY STEP IS UNDOABLE. Each write goes through repairs.Writer and is
-// journaled under the apply op's id AFTER it commits: book_file_repoint_location,
-// book_file_reassign, book_file_track, book_primary_demote, book_soft_delete,
-// metadata_update (title). POST /operations/<apply op>/revert undoes the lot.
+// EVERY STEP IS UNDOABLE, AND JOURNALED FIRST. Each write goes through
+// repairs.Writer, which records its OperationChange under the apply op's id
+// BEFORE the write (see repairs/writer_files.go): book_file_repoint_location,
+// book_file_reassign, book_file_track, book_path_update, metadata_update
+// (title), user_state_follow, external_id_reassign, book_primary_demote,
+// book_merged_into, book_soft_delete. POST /operations/<apply op>/revert
+// undoes the lot; it restores a retired book only after the rows that moved
+// its file elsewhere are back, and refuses it if one of them is refused.
+// "Undo last apply" on a single book refuses a Repairs batch.
+//
+// RE-CHECKED UNDER THE LOCK. Apply holds merge.LockMergeRMW for the whole row
+// and re-plans the row inside it (the whole-library listing, the strict
+// ownership check and every plan-time read), refusing the row if its
+// fingerprint moved. The title and folder writes compare against the values
+// stored with the plan (Row.State).
 //
 // RESUME. The fingerprint hashes the DECISION (the class, the members, each
-// planned file pairing, the survivor, the title), not the raw row state, and
-// Replan recognises its own finished steps (a parent row already at the
-// fragment's path; a fragment already retired; a row already on the
-// survivor). A row cut off mid-write therefore re-plans to the same
-// fingerprint and the resumed apply finishes it.
+// planned file pairing, the survivor and its state, the title), not the raw
+// row state, and Replan recognises its own finished steps. A no-parent row
+// finds its members' rows by the row ids stored with the plan (Row.State),
+// wherever a cut-off run left them. A plan made after an abandoned group run
+// re-attributes each emptied member's row (journaled book_file_reassign) back
+// to it, so the group re-forms rather than strands its emptied books.
 //
 // CONCURRENCY. Plan evaluates fragment candidates on a bounded RunItems pool
-// (point reads of path history plus os.Stat). Apply runs through the
-// framework engine, which partitions rows so that rows sharing any book land
-// in one partition: no book is ever written by two workers.
+// (point reads of path history, external ids and os.Stat). Apply runs through
+// the framework engine, which partitions rows so that rows sharing any book
+// land in one partition: no book is ever written by two workers.
 package maintenance
 
 import (
@@ -78,7 +97,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -88,6 +106,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -112,26 +131,34 @@ const (
 	fragClassHeld = "held"
 )
 
-// fragRowCopyUnproven prefixes the row id of a parent's UNPROVEN copies, so
-// they never share a row (and a skip) with the proven ones.
-const fragRowCopyUnproven = "copy-unproven"
+// Row id prefixes of a parent's UNPROVEN matches, so they never share a row
+// (and a skip) with the proven ones.
+const (
+	fragRowCopyUnproven  = "copy-unproven"
+	fragRowMovedUnproven = "moved-unproven"
+)
 
 // Skip kinds this fixer sets itself (the framework adds the guard kinds).
 const (
 	fragSkipAmbiguous       = "skipped_ambiguous"
 	fragSkipCopyUnproven    = "skipped_copy_unproven"
+	fragSkipMovedUnproven   = "skipped_moved_unproven"
 	fragSkipDurationGate    = "skipped_duration_gate"
 	fragSkipDurationUnknown = "skipped_duration_unknown"
 	fragSkipFilesMissing    = "skipped_files_missing"
 	fragSkipUnreadable      = "skipped_unreadable"
+	fragSkipTrackOrder      = "skipped_track_order"
+	fragSkipNoSurvivor      = "skipped_no_survivor"
 )
 
 // Evidence kinds of a fragment-to-parent match, strongest first.
 const (
-	fragEvImportPath = "import path equals the parent row's path"
-	fragEvHash       = "file hash equals the parent row's"
-	fragEvNameSize   = "original filename and size equal the parent row's"
-	fragEvDone       = "parent row already points at the fragment's file (finished step)"
+	fragEvImportPath       = "import path equals the parent row's path"
+	fragEvHash             = "file hash equals the parent row's"
+	fragEvNameSizeFolder   = "original filename and size equal the parent row's, imported from the parent row's folder"
+	fragEvNameSizeDuration = "original filename, size and duration equal the parent row's"
+	fragEvNameSize         = "original filename and size equal the parent row's"
+	fragEvDone             = "parent row already points at the fragment's file (finished step)"
 )
 
 // fragMinGroup is the scanner's consolidation minimum: fewer same-key files
@@ -143,12 +170,14 @@ type fragmentFixer struct {
 	p *Plugin
 	// statFn replaces os.Stat in tests.
 	statFn func(string) (os.FileInfo, error)
+	// readDir replaces os.ReadDir in tests.
+	readDir func(string) ([]os.DirEntry, error)
 	// now replaces time.Now in tests.
 	now func() time.Time
 }
 
 func newFragmentFixer(p *Plugin) *fragmentFixer {
-	return &fragmentFixer{p: p, statFn: os.Stat, now: time.Now}
+	return &fragmentFixer{p: p, statFn: os.Stat, readDir: os.ReadDir, now: time.Now}
 }
 
 var _ repairs.Fixer = (*fragmentFixer)(nil)
@@ -157,11 +186,12 @@ func (f *fragmentFixer) ID() string    { return fragFixerID }
 func (f *fragmentFixer) Title() string { return "Chapter fragments" }
 func (f *fragmentFixer) Description() string {
 	return "Chapter and disc files an old scan imported as separate books. Moved: the parent's row points " +
-		"at a path organize emptied — repoint it at the file's new path and retire the fragment. Copy: the " +
-		"parent still has the file — retire the proven duplicate. No parent: 3+ short same-key chapters " +
-		"from one folder — elect one book and move every chapter onto it in track order. iTunes and " +
-		"Doctor Who / Big Finish / Torchwood are listed for manual action only. Every step is undoable " +
-		"from the apply operation."
+		"at a path organize emptied — repoint it at the file's new path and retire the fragment into the parent. " +
+		"Copy: the parent still has the file — retire the proven duplicate. No parent: 3+ short same-key chapters " +
+		"from one folder — move every chapter onto one organized primary book in track order. Listening progress " +
+		"and external ids follow each retired fragment. iTunes (including fragments with an iTunes id) and " +
+		"Doctor Who / Big Finish / Torchwood are listed for manual action only. Every step is undoable from the " +
+		"apply operation."
 }
 
 // fragParams are the fixer params. BookIDs limits the plan to fragments
@@ -190,6 +220,26 @@ type fragBook struct {
 	AuthorID    *int
 	SeriesID    *int
 	SoftDeleted bool
+	// Organized: library_state == "organized". Primary: is_primary_version
+	// is unset or true. Together they make a book electable as a survivor.
+	Organized bool
+	Primary   bool
+	ITunesPID string // the book-level iTunes persistent id
+}
+
+func fragBookFrom(id, title, path string, author, series *int, softDeleted bool, state *string, primary *bool, pid *string) fragBook {
+	b := fragBook{ID: id, Title: title, FilePath: path, AuthorID: author, SeriesID: series, SoftDeleted: softDeleted}
+	b.Organized = state != nil && *state == "organized"
+	b.Primary = primary == nil || *primary
+	if pid != nil {
+		b.ITunesPID = *pid
+	}
+	return b
+}
+
+func fragBookOf(b *database.Book) fragBook {
+	return fragBookFrom(b.ID, b.Title, b.FilePath, b.AuthorID, b.SeriesID, b.IsSoftDeleted(), b.LibraryState,
+		b.IsPrimaryVersion, b.ITunesPersistentID)
 }
 
 // fragFile is the part of a book_file row the fixer reads.
@@ -202,11 +252,19 @@ type fragFile struct {
 	Duration         int
 	Track            int
 	Missing          bool
+	ITunesPID        string
 }
 
-func fragFileFrom(bookID string, id, path, orig string, size int64, hash, origHash string, dur, track int, missing bool) fragFile {
-	return fragFile{ID: id, BookID: bookID, Path: path, OriginalFilename: orig, Size: size, Hash: hash,
-		OrigHash: origHash, Duration: dur, Track: track, Missing: missing}
+func fragFileOf(bookID string, r *database.BookFile) fragFile {
+	return fragFile{ID: r.ID, BookID: bookID, Path: r.FilePath, OriginalFilename: r.OriginalFilename, Size: r.FileSize,
+		Hash: r.FileHash, OrigHash: r.OriginalFileHash, Duration: r.Duration, Track: r.TrackNumber, Missing: r.Missing,
+		ITunesPID: r.ITunesPersistentID}
+}
+
+func fragFileOfCore(r *database.BookFileCore) fragFile {
+	return fragFile{ID: r.ID, BookID: r.BookID, Path: r.FilePath, OriginalFilename: r.OriginalFilename, Size: r.FileSize,
+		Hash: r.FileHash, OrigHash: r.OriginalFileHash, Duration: r.Duration, Track: r.TrackNumber, Missing: r.Missing,
+		ITunesPID: r.ITunesPersistentID}
 }
 
 func (x fragFile) location() undo.BookFileLocation {
@@ -218,9 +276,11 @@ func (x fragFile) location() undo.BookFileLocation {
 type fragCandidate struct {
 	Book       fragBook
 	File       fragFile
+	ExtIDs     []database.ExternalIDMapping
 	ImportPath string // where the file was when the book was imported ("" unknown)
 	OrigName   string // the pre-organize basename ("" unknown)
 	Present    bool   // the fragment's own file is on disk
+	DiskSize   int64  // its size on disk (-1 unknown)
 	StatErr    string // a stat error other than not-exist
 }
 
@@ -241,6 +301,24 @@ func (c *fragCandidate) origDir() string {
 	return filepath.Dir(c.File.Path)
 }
 
+// itunesPID names an iTunes persistent id the fragment carries, "" when it
+// carries none. Retiring such a fragment would queue an iTunes remove for
+// that id when the purge reaches the retired book.
+func (c *fragCandidate) itunesPID() string {
+	switch {
+	case c.Book.ITunesPID != "":
+		return "book iTunes id " + c.Book.ITunesPID
+	case c.File.ITunesPID != "":
+		return "file iTunes id " + c.File.ITunesPID
+	}
+	for _, e := range c.ExtIDs {
+		if e.Source == "itunes" && e.ExternalID != "" && !e.Tombstoned {
+			return "itunes external id " + e.ExternalID
+		}
+	}
+	return ""
+}
+
 // fragIndex indexes parent rows (rows of books with two or more rows).
 type fragIndex struct {
 	byPath map[string][]fragFile
@@ -257,7 +335,8 @@ func (ix *fragIndex) add(r fragFile) {
 	for _, h := range uniqueNonEmpty(r.Hash, r.OrigHash) {
 		ix.byHash[h] = append(ix.byHash[h], r)
 	}
-	ix.byName[strings.ToLower(filepath.Base(r.Path))] = append(ix.byName[strings.ToLower(filepath.Base(r.Path))], r)
+	name := strings.ToLower(filepath.Base(r.Path))
+	ix.byName[name] = append(ix.byName[name], r)
 }
 
 func uniqueNonEmpty(vals ...string) []string {
@@ -286,11 +365,11 @@ type fragMatch struct {
 }
 
 // match finds the parent rows the candidate matches, strongest tier first:
-// the import path, then the hash, then the pre-organize basename plus size.
-// Size alone never matches. Rows of the candidate's own book are ignored. A
-// tier that yields a match ends the search. The second result is set when a
-// tier found conflicting evidence (a hash on both sides that differs) that
-// rejected an otherwise matching row.
+// a finished step, the import path, the hash, then the pre-organize basename
+// plus size (upgraded when the fragment was imported from the parent row's
+// folder or the durations agree). Size alone never matches. Rows of the
+// candidate's own book are ignored. A tier that yields a match ends the
+// search.
 func (ix *fragIndex) match(c *fragCandidate) []fragMatch {
 	own := c.Book.ID
 	var out []fragMatch
@@ -336,7 +415,14 @@ func (ix *fragIndex) match(c *fragCandidate) []fragMatch {
 		if hashesDisagree(r, c.File) {
 			continue
 		}
-		out = append(out, fragMatch{Row: r, Evidence: fragEvNameSize})
+		ev := fragEvNameSize
+		switch {
+		case c.ImportPath != "" && filepath.Dir(c.ImportPath) == filepath.Dir(r.Path):
+			ev = fragEvNameSizeFolder
+		case r.Duration > 0 && r.Duration == c.File.Duration:
+			ev = fragEvNameSizeDuration
+		}
+		out = append(out, fragMatch{Row: r, Evidence: ev})
 	}
 	return out
 }
@@ -352,6 +438,16 @@ func hashesDisagree(a, b fragFile) bool {
 		}
 	}
 	return true
+}
+
+// provenMatch: evidence strong enough to repoint a parent row or retire a
+// copy. A name-and-size match on its own is not.
+func provenMatch(evidence string) bool {
+	switch evidence {
+	case fragEvImportPath, fragEvHash, fragEvDone, fragEvNameSizeFolder, fragEvNameSizeDuration:
+		return true
+	}
+	return false
 }
 
 // ---- stores ---------------------------------------------------------------
@@ -390,8 +486,8 @@ func importPathOf(hist []database.BookPathChange) string {
 
 // candidateFrom builds a candidate from a live single-file book, or returns
 // false when the book carries no chapter evidence.
-func (f *fragmentFixer) candidateFrom(b fragBook, file fragFile, hist FragmentRepairReader) (*fragCandidate, bool, error) {
-	c := &fragCandidate{Book: b, File: file}
+func (f *fragmentFixer) candidateFrom(store OpsStore, b fragBook, file fragFile, hist FragmentRepairReader) (*fragCandidate, bool, error) {
+	c := &fragCandidate{Book: b, File: file, DiskSize: -1}
 	h, err := hist.GetBookPathHistory(b.ID)
 	if err != nil {
 		return nil, false, fmt.Errorf("path history of %s: %w", b.ID, err)
@@ -410,15 +506,22 @@ func (f *fragmentFixer) candidateFrom(b fragBook, file fragFile, hist FragmentRe
 	if kind == metadata.ChapterKeyNone && !metadata.IsChapterOnlyTitle(b.Title) {
 		return nil, false, nil
 	}
-	if _, err := f.statFn(file.Path); err == nil {
+	exts, err := store.GetExternalIDsForBook(b.ID)
+	if err != nil {
+		// The iTunes-id guard reads these: fail rather than plan past it.
+		return nil, false, fmt.Errorf("external ids of %s: %w", b.ID, err)
+	}
+	c.ExtIDs = exts
+	if fi, err := f.statFn(file.Path); err == nil {
 		c.Present = true
+		c.DiskSize = fi.Size()
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		c.StatErr = err.Error()
 	}
 	return c, true, nil
 }
 
-// fragLibrary is the whole-library snapshot a plan reads.
+// fragLibrary is the library snapshot a plan reads.
 type fragLibrary struct {
 	books   map[string]fragBook
 	files   map[string][]fragFile // by book id
@@ -426,16 +529,20 @@ type fragLibrary struct {
 	authors map[int]string
 }
 
+func newFragLibrary() *fragLibrary {
+	return &fragLibrary{books: map[string]fragBook{}, files: map[string][]fragFile{}, series: map[int]string{}, authors: map[int]string{}}
+}
+
 func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
-	lib := &fragLibrary{books: map[string]fragBook{}, files: map[string][]fragFile{}, series: map[int]string{}, authors: map[int]string{}}
+	lib := newFragLibrary()
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list books: %w", err)
 	}
 	for i := range books {
 		b := &books[i]
-		lib.books[b.ID] = fragBook{ID: b.ID, Title: b.Title, FilePath: b.FilePath, AuthorID: b.AuthorID,
-			SeriesID: b.SeriesID, SoftDeleted: b.IsSoftDeleted()}
+		lib.books[b.ID] = fragBookFrom(b.ID, b.Title, b.FilePath, b.AuthorID, b.SeriesID, b.IsSoftDeleted(),
+			b.LibraryState, b.IsPrimaryVersion, b.ITunesPersistentID)
 	}
 	cores, err := store.GetAllBookFilesCore()
 	if err != nil {
@@ -443,8 +550,7 @@ func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
 	}
 	for i := range cores {
 		r := &cores[i]
-		lib.files[r.BookID] = append(lib.files[r.BookID], fragFileFrom(r.BookID, r.ID, r.FilePath, r.OriginalFilename,
-			r.FileSize, r.FileHash, r.OriginalFileHash, r.Duration, r.TrackNumber, r.Missing))
+		lib.files[r.BookID] = append(lib.files[r.BookID], fragFileOfCore(r))
 	}
 	all, err := store.GetAllSeries()
 	if err != nil {
@@ -476,11 +582,57 @@ func (lib *fragLibrary) authorName(b fragBook) string {
 	return lib.authors[*b.AuthorID]
 }
 
+// moveRow re-attributes row id from one book to another in the snapshot.
+func (lib *fragLibrary) moveRow(id, from, to string) bool {
+	rows := lib.files[from]
+	for i, r := range rows {
+		if r.ID == id {
+			lib.files[from] = append(rows[:i:i], rows[i+1:]...)
+			r.BookID = to
+			lib.files[to] = append(lib.files[to], r)
+			return true
+		}
+	}
+	return false
+}
+
+// emptiedRowOn finds the row a partly applied consolidation moved off book z:
+// the row now owned by another live book at z's own path, whose move from z
+// is journaled (book_file_reassign, OldValue z) and not reverted. "" when
+// there is none.
+func emptiedRowOn(lib *fragLibrary, hist FragmentRepairReader, z fragBook) (owner, rowID string, err error) {
+	owners, err := database.BookFileRowsAtPathStrict(hist, z.FilePath)
+	if err != nil {
+		return "", "", fmt.Errorf("who owns %s: %w", z.FilePath, err)
+	}
+	for _, o := range owners {
+		if o.BookID == z.ID {
+			continue
+		}
+		ob, ok := lib.books[o.BookID]
+		if !ok || ob.SoftDeleted {
+			continue
+		}
+		changes, err := hist.GetBookChanges(o.BookID)
+		if err != nil {
+			return "", "", fmt.Errorf("changes of %s: %w", o.BookID, err)
+		}
+		for _, c := range changes {
+			if c.ChangeType == undo.ChangeTypeBookFileReassign && c.FieldName == "book_file:"+o.ID &&
+				c.OldValue == z.ID && c.BookID == o.BookID && c.RevertedAt == nil {
+				return o.BookID, o.ID, nil
+			}
+		}
+	}
+	return "", "", nil
+}
+
 // ---- plan -----------------------------------------------------------------
 
-// Plan reads the whole library once, evaluates every fragment candidate on a
-// bounded pool, and builds one row per parent-and-class, per ambiguous
-// fragment and per no-parent folder group.
+// Plan reads the whole library once, re-attributes the rows a partly applied
+// group moved off its emptied members, evaluates every fragment candidate on
+// a bounded pool, and builds one row per parent-and-class, per held fragment
+// and per no-parent folder group.
 func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
 	fp, err := decodeFragParams(raw)
 	if err != nil {
@@ -499,6 +651,9 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 	}
 	lib, err := f.loadLibrary(store)
 	if err != nil {
+		return nil, err
+	}
+	if err := f.attributeEmptied(ctx, rep, lib, hist, only); err != nil {
 		return nil, err
 	}
 	ix := newFragIndex()
@@ -531,7 +686,7 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 	// Each worker writes only cands[i] for its own i.
 	if err := registry.RunItems(ctx, rep, idx, func(_ context.Context, i int) error {
 		defer done.Add(1)
-		c, ok, cerr := f.candidateFrom(singles[i].b, singles[i].file, hist)
+		c, ok, cerr := f.candidateFrom(store, singles[i].b, singles[i].file, hist)
 		if cerr != nil {
 			return cerr
 		}
@@ -555,19 +710,93 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 	return f.buildRows(lib, ix, live), nil
 }
 
+// attributeEmptied puts back, in the snapshot only, each row a partly applied
+// no-parent group moved off a member it did not get to retire: that member is
+// then a single-file candidate again and the group re-forms with the same
+// survivor, instead of the member being stranded as a live empty book.
+func (f *fragmentFixer) attributeEmptied(ctx context.Context, rep registry.Reporter, lib *fragLibrary, hist FragmentRepairReader, only map[string]bool) error {
+	var empties []fragBook
+	for id, b := range lib.books {
+		if !b.SoftDeleted && b.FilePath != "" && len(lib.files[id]) == 0 && (only == nil || only[id]) {
+			empties = append(empties, b)
+		}
+	}
+	if len(empties) == 0 {
+		return nil
+	}
+	sort.Slice(empties, func(i, j int) bool { return empties[i].ID < empties[j].ID })
+	type found struct{ owner, row string }
+	res := make([]found, len(empties))
+	idx := make([]int, len(empties))
+	for i := range idx {
+		idx[i] = i
+	}
+	var done atomic.Int64
+	// Each worker writes only res[i]; the snapshot is changed afterwards.
+	if err := registry.RunItems(ctx, rep, idx, func(_ context.Context, i int) error {
+		defer done.Add(1)
+		owner, row, err := emptiedRowOn(lib, hist, empties[i])
+		if err != nil {
+			return err
+		}
+		res[i] = found{owner, row}
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		ErrMode:     registry.ErrModeCollect,
+		Label:       func(_, total int) string { return fmt.Sprintf("Emptied books %d/%d", done.Load(), total) },
+	}); err != nil {
+		return fmt.Errorf("%s: emptied books: %w", fragFixerID, err)
+	}
+	for i, r := range res {
+		if r.row != "" {
+			lib.moveRow(r.row, r.owner, empties[i].ID)
+		}
+	}
+	return nil
+}
+
 // fragPair is one fragment matched to one parent row.
 type fragPair struct {
 	Frag     *fragCandidate
 	Parent   fragFile
 	Evidence string
 	Done     bool // the parent row already points at the fragment's file
+	// Slice is where the fragment's audio sits in the parent's timeline, for
+	// carrying listening positions.
+	Slice merge.SliceMapping
+}
+
+// sliceIn is where row target starts in a book whose rows are rows: the sum
+// of the durations of the rows before it in track order. Not mappable when
+// the track numbers are missing or repeated, or a preceding duration is
+// unknown.
+func sliceIn(rows []fragFile, target fragFile) merge.SliceMapping {
+	if target.Track <= 0 {
+		return merge.SliceMapping{}
+	}
+	seen := map[int]bool{}
+	var off float64
+	for _, r := range rows {
+		if r.Track <= 0 || seen[r.Track] {
+			return merge.SliceMapping{}
+		}
+		seen[r.Track] = true
+		if r.Track < target.Track {
+			if r.Duration <= 0 {
+				return merge.SliceMapping{}
+			}
+			off += float64(r.Duration)
+		}
+	}
+	return merge.SliceMapping{OffsetSeconds: off, Mappable: true}
 }
 
 // buildRows turns the evaluated candidates into rows. It is shared by Plan
 // (over the whole library) and Replan (over one row's books), so both reach
 // the same decision from the same state.
 func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*fragCandidate) []repairs.Row {
-	type parentKey struct{ parent, class string }
+	type parentKey struct{ parent, kind string }
 	pairs := map[parentKey][]fragPair{}
 	claims := map[string][]*fragCandidate{} // parent row id -> fragments claiming it
 	var rows []repairs.Row
@@ -610,20 +839,33 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		}
 		c := cs[0]
 		m := ix.match(c)[0]
-		p := fragPair{Frag: c, Parent: m.Row, Evidence: m.Evidence, Done: m.Evidence == fragEvDone}
-		class := fragClassMoved
+		p := fragPair{Frag: c, Parent: m.Row, Evidence: m.Evidence, Done: m.Evidence == fragEvDone,
+			Slice: sliceIn(lib.files[m.Row.BookID], m.Row)}
+		kind := fragClassMoved
 		if !p.Done {
-			if _, err := f.statFn(m.Row.Path); err == nil {
-				class = fragClassCopy
-			} else if !errors.Is(err, fs.ErrNotExist) {
+			fi, err := f.statFn(m.Row.Path)
+			switch {
+			case err == nil:
+				kind = fragClassCopy
+				// A path-proven copy must also be the same size on disk: the
+				// parent's file may have been replaced since the import.
+				if p.Evidence == fragEvImportPath && c.DiskSize >= 0 && fi.Size() != c.DiskSize {
+					p.Evidence = fmt.Sprintf("%s, but the files differ in size on disk (%d vs %d bytes)", fragEvImportPath, fi.Size(), c.DiskSize)
+				}
+			case !errors.Is(err, fs.ErrNotExist):
 				rows = append(rows, f.ambiguousRow(lib, c, "parent row path unreadable: "+err.Error(), []fragMatch{m}))
 				continue
 			}
 		}
-		if class == fragClassCopy && !provenMatch(p.Evidence) {
-			class = fragRowCopyUnproven
+		if !provenMatch(p.Evidence) {
+			switch kind {
+			case fragClassCopy:
+				kind = fragRowCopyUnproven
+			case fragClassMoved:
+				kind = fragRowMovedUnproven
+			}
 		}
-		k := parentKey{m.Row.BookID, class}
+		k := parentKey{m.Row.BookID, kind}
 		pairs[k] = append(pairs[k], p)
 	}
 	var keys []parentKey
@@ -634,10 +876,10 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		if keys[i].parent != keys[j].parent {
 			return keys[i].parent < keys[j].parent
 		}
-		return keys[i].class < keys[j].class
+		return keys[i].kind < keys[j].kind
 	})
 	for _, k := range keys {
-		rows = append(rows, f.parentRow(lib, k.parent, k.class, pairs[k]))
+		rows = append(rows, f.parentRow(lib, k.parent, k.kind, pairs[k]))
 	}
 	rows = append(rows, f.noParentRows(lib, unmatched)...)
 	return rows
@@ -695,7 +937,7 @@ func (f *fragmentFixer) holdRow(lib *fragLibrary, c *fragCandidate, idPrefix, cl
 			}
 		}
 	}
-	if k, _ := f.guard(lib, books, map[string][]string{c.Book.ID: {c.ImportPath}}); k != "" {
+	if k, _ := f.guard(lib, books, map[string][]string{c.Book.ID: {c.ImportPath}}); k != "" || c.itunesPID() != "" {
 		r.Class = fragClassManual
 	}
 	r.Fingerprint = fragFingerprint(idPrefix, c.Book.ID, why)
@@ -703,17 +945,16 @@ func (f *fragmentFixer) holdRow(lib *fragLibrary, c *fragCandidate, idPrefix, cl
 }
 
 // parentRow is a moved or copy row: one parent and every fragment matched to
-// it in that class.
-func provenMatch(evidence string) bool {
-	return evidence == fragEvImportPath || evidence == fragEvHash || evidence == fragEvDone
-}
-
+// it in that kind (proven or not).
 func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pairs []fragPair) repairs.Row {
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].Frag.Book.ID < pairs[j].Frag.Book.ID })
 	parent := lib.books[parentID]
 	class := rowKind
-	if rowKind == fragRowCopyUnproven {
+	switch rowKind {
+	case fragRowCopyUnproven:
 		class = fragClassCopy
+	case fragRowMovedUnproven:
+		class = fragClassMoved
 	}
 	r := repairs.Row{RowID: rowKind + ":" + parentID, Class: class, Title: parent.Title,
 		Author: lib.authorName(parent), Risk: repairs.RiskLow, Detail: pairs}
@@ -722,7 +963,7 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 	books := []fragBook{parent}
 	extra := map[string][]string{}
 	var fpParts []string
-	proven, done := 0, 0
+	done, withPID := 0, ""
 	for _, p := range pairs {
 		r.BookIDs = append(r.BookIDs, p.Frag.Book.ID)
 		r.Members = append(r.Members, member(lib, p.Frag.Book, "fragment"))
@@ -731,12 +972,12 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		if p.Done {
 			done++
 		}
-		if provenMatch(p.Evidence) {
-			proven++
+		if pid := p.Frag.itunesPID(); pid != "" && withPID == "" {
+			withPID = fmt.Sprintf("fragment %s carries %s", p.Frag.Book.ID, pid)
 		}
 		r.Evidence = append(r.Evidence, fmt.Sprintf("%s ← parent row %s (%s): %s",
 			p.Frag.File.Path, p.Parent.ID, filepath.Base(p.Parent.Path), p.Evidence))
-		fpParts = append(fpParts, strings.Join([]string{p.Frag.Book.ID, p.Frag.File.ID, p.Frag.File.Path, p.Parent.ID}, "|"))
+		fpParts = append(fpParts, strings.Join([]string{p.Frag.Book.ID, p.Frag.File.ID, p.Frag.File.Path, p.Parent.ID, p.Evidence}, "|"))
 	}
 	sort.Strings(r.BookIDs)
 	n := len(pairs)
@@ -744,27 +985,32 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		"parent_files": strconv.Itoa(len(lib.files[parentID])),
 		"fragments":    strconv.Itoa(n),
 	}
-	switch class {
-	case fragClassMoved:
+	switch rowKind {
+	case fragClassMoved, fragRowMovedUnproven:
 		r.Current["stale_parent_rows"] = strconv.Itoa(n - done)
 		r.Proposed = map[string]string{
-			"action": fmt.Sprintf("repoint %d parent row(s) at the fragments' files; retire %d fragment book(s)", n-done, n),
+			"action": fmt.Sprintf("repoint %d parent row(s) at the fragments' files; retire %d fragment book(s) into the parent", n-done, n),
 		}
 		r.Reason = fmt.Sprintf("%d of the parent's rows name paths that are gone; their files now sit under %d fragment book(s)", n, n)
-		if proven < n {
+		if rowKind == fragRowMovedUnproven {
 			r.Risk = repairs.RiskReview
+			r.Skipped = fragSkipMovedUnproven
+			r.SkipReason = fmt.Sprintf("%d match(es) rest on the original name and size only (no import path, hash, shared folder or duration): check by hand before repointing", n)
 		}
-	case fragClassCopy:
-		r.Proposed = map[string]string{"action": fmt.Sprintf("retire %d fragment book(s) (the parent keeps its own files; nothing is repointed)", n)}
+	case fragClassCopy, fragRowCopyUnproven:
+		r.Proposed = map[string]string{"action": fmt.Sprintf("retire %d fragment book(s) into the parent (the parent keeps its own files; nothing is repointed)", n)}
 		r.Reason = fmt.Sprintf("%d fragment book(s) duplicate files the parent still has on disk", n)
-		if proven < n {
-			r.Skipped = fragSkipCopyUnproven
-			r.SkipReason = fmt.Sprintf("%d of %d matches rest on name and size only (no import path or hash): check by hand before retiring", n-proven, n)
+		if rowKind == fragRowCopyUnproven {
 			r.Risk = repairs.RiskReview
+			r.Skipped = fragSkipCopyUnproven
+			r.SkipReason = fmt.Sprintf("%d match(es) are not proven by an import path with an equal size on disk, or a hash: check by hand before retiring", n)
 		}
 	}
 	if k, why := f.guard(lib, books, extra); k != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
+	} else if withPID != "" {
+		r.Class, r.Skipped, r.SkipReason = fragClassManual, repairs.SkipITunes,
+			withPID+"; retiring it would queue an iTunes remove at the purge"
 	}
 	r.Fingerprint = fragFingerprint(append([]string{rowKind, parentID}, fpParts...)...)
 	return r
@@ -774,6 +1020,8 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 type fragGroupMember struct {
 	Frag  *fragCandidate
 	Track int
+	// Offset is where the member's audio starts in the survivor's timeline.
+	Offset float64
 }
 
 // fragGroupPlan is a no-parent row's decision.
@@ -781,33 +1029,25 @@ type fragGroupPlan struct {
 	Dir, Key   string
 	SurvivorID string
 	Title      string // "" keeps the survivor's title
-	// Folder is the one folder every member's file sits in now, which
-	// becomes the survivor's book path (a multi-file book's path is its
-	// folder). "" when the files are spread out: the path is left alone.
-	Folder  string
-	Members []fragGroupMember
+	// Folder is the one folder every member's file sits in now, whose audio
+	// files are exactly the group's, which becomes the survivor's book path
+	// (a multi-file book's path is its folder). "" leaves the path alone.
+	Folder string
+	// WasTitle / WasPath are the survivor's title and path when the plan was
+	// made (Row.State): the title and folder writes are compare-and-sets
+	// against them.
+	WasTitle, WasPath string
+	Members           []fragGroupMember
 }
 
-var fragLeadingNumRe = regexp.MustCompile(`^\D*?(\d+)`)
-var fragTrailingNumRe = regexp.MustCompile(`(\d+)\D*$`)
-
-// chapterNumber is the chapter position a stem carries: the leading number
-// for a leading-number key, else the last number in the stem. -1 when none.
-func chapterNumber(stem string) int {
-	_, kind := metadata.ChapterGroupKey(stem)
-	re := fragTrailingNumRe
-	if kind == metadata.ChapterKeyLeading {
-		re = fragLeadingNumRe
-	}
-	m := re.FindStringSubmatch(stem)
-	if m == nil {
-		return -1
-	}
-	n, err := strconv.Atoi(m[1])
-	if err != nil {
-		return -1
-	}
-	return n
+// fragGroupState is a no-parent row's Row.State: what Replan needs from plan
+// time.
+type fragGroupState struct {
+	// Files maps each member book to the book_file row it was planned with,
+	// so Replan finds each member's row by id wherever a cut-off run left it.
+	Files         map[string]string `json:"files"`
+	SurvivorTitle string            `json:"survivor_title"`
+	SurvivorPath  string            `json:"survivor_path"`
 }
 
 func thresholdSec() int {
@@ -816,6 +1056,22 @@ func thresholdSec() int {
 		mins = 10 // config's documented default; the scanner uses the same fallback
 	}
 	return mins * 60
+}
+
+// groupDir is the folder a fragment is grouped under: its import folder, or,
+// for a disc folder ("CD1", "Book - Disc 2"), the parent folder joined with
+// the name minus the marker, so sibling disc folders form one group. disc is
+// the folder's disc number (0 for none).
+func groupDir(c *fragCandidate) (dir string, disc int) {
+	d := c.origDir()
+	if rest, n, ok := metadata.DiscFolder(filepath.Base(d)); ok {
+		parent := filepath.Dir(d)
+		if rest == "" {
+			return parent, n
+		}
+		return filepath.Join(parent, rest), n
+	}
+	return d, 0
 }
 
 // noParentRows groups unmatched fragments by import folder and chapter key.
@@ -827,7 +1083,8 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 			// A chapter-only TITLE with an unkeyed file name: no group rule.
 			continue
 		}
-		gk := c.origDir() + "\x00" + key
+		dir, _ := groupDir(c)
+		gk := dir + "\x00" + key
 		groups[gk] = append(groups[gk], c)
 	}
 	var keys []string
@@ -852,50 +1109,131 @@ func noParentRowID(dir, key string) string {
 	return "no-parent:" + hex.EncodeToString(sum[:])[:20]
 }
 
+// chapterPos is a member's position: the stem's, with a disc folder's number
+// as the disc when the stem names none.
+func chapterPos(c *fragCandidate) (metadata.ChapterPos, bool) {
+	pos, ok := metadata.ChapterPosition(c.origStem())
+	if _, disc := groupDir(c); disc > 0 && pos.Disc == 0 {
+		pos.Disc = disc
+		ok = true
+	}
+	return pos, ok
+}
+
+// exactFolder reports whether dir's audio files are exactly paths.
+func (f *fragmentFixer) exactFolder(dir string, paths []string) bool {
+	entries, err := f.readDir(dir)
+	if err != nil {
+		return false
+	}
+	want := map[string]bool{}
+	for _, p := range paths {
+		want[p] = true
+	}
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() || !linkintegrity.IsAudioFile(e.Name()) {
+			continue
+		}
+		if !want[filepath.Join(dir, e.Name())] {
+			return false
+		}
+		n++
+	}
+	return n == len(want)
+}
+
 func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fragCandidate) repairs.Row {
-	sort.Slice(cs, func(i, j int) bool {
-		ni, nj := chapterNumber(cs[i].origStem()), chapterNumber(cs[j].origStem())
-		if ni != nj {
-			return ni < nj
+	type placed struct {
+		c   *fragCandidate
+		pos metadata.ChapterPos
+		ok  bool
+	}
+	ps := make([]placed, len(cs))
+	for i, c := range cs {
+		pos, ok := chapterPos(c)
+		ps[i] = placed{c, pos, ok}
+	}
+	sort.SliceStable(ps, func(i, j int) bool {
+		if cmp := ps[i].pos.Compare(ps[j].pos); cmp != 0 {
+			return cmp < 0
 		}
-		if cs[i].origStem() != cs[j].origStem() {
-			return cs[i].origStem() < cs[j].origStem()
+		if ps[i].c.origStem() != ps[j].c.origStem() {
+			return ps[i].c.origStem() < ps[j].c.origStem()
 		}
-		return cs[i].Book.ID < cs[j].Book.ID
+		return ps[i].c.Book.ID < ps[j].c.Book.ID
 	})
+	orderProblem := ""
+	for i, p := range ps {
+		if !p.ok {
+			orderProblem = fmt.Sprintf("%q carries no chapter position", p.c.origStem())
+			break
+		}
+		if i > 0 && p.pos.Compare(ps[i-1].pos) == 0 {
+			orderProblem = fmt.Sprintf("%q and %q claim the same chapter position", ps[i-1].c.origStem(), p.c.origStem())
+			break
+		}
+	}
+
 	plan := &fragGroupPlan{Dir: dir, Key: key}
 	ids := make([]string, 0, len(cs))
 	books := make([]fragBook, 0, len(cs))
 	extra := map[string][]string{}
-	for i, c := range cs {
-		plan.Members = append(plan.Members, fragGroupMember{Frag: c, Track: i + 1})
-		ids = append(ids, c.Book.ID)
-		books = append(books, c.Book)
-		extra[c.Book.ID] = []string{c.ImportPath}
+	var off float64
+	for i, p := range ps {
+		plan.Members = append(plan.Members, fragGroupMember{Frag: p.c, Track: i + 1, Offset: off})
+		off += float64(p.c.File.Duration)
+		ids = append(ids, p.c.Book.ID)
+		books = append(books, p.c.Book)
+		extra[p.c.Book.ID] = []string{p.c.ImportPath}
 	}
 	sort.Strings(ids)
-	plan.SurvivorID = ids[0]
+	// The survivor: the lowest-id member that is organized and primary, so it
+	// is a book ABS shows and a version group can keep.
+	for _, id := range ids {
+		if b := lib.books[id]; b.Organized && b.Primary {
+			plan.SurvivorID = id
+			break
+		}
+	}
 	survivor := lib.books[plan.SurvivorID]
+	survivorState := ""
+	if plan.SurvivorID != "" {
+		survivorState = fmt.Sprintf("organized=%t primary=%t", survivor.Organized, survivor.Primary)
+	}
 	// Title and Folder are decided from the group alone, never from whether
 	// the survivor already has them: a run cut off after the retitle must
 	// re-plan to the same fingerprint (the write is then a no-op).
 	if t, _, ok := metadata.ChapterTitleFromDirectory(filepath.Join(dir, "x"), ""); ok {
 		plan.Title = t
 	}
-	plan.Folder = filepath.Dir(cs[0].File.Path)
-	for _, c := range cs[1:] {
-		if filepath.Dir(c.File.Path) != plan.Folder {
+	var paths []string
+	for _, m := range plan.Members {
+		paths = append(paths, m.Frag.File.Path)
+	}
+	plan.Folder = filepath.Dir(paths[0])
+	for _, p := range paths[1:] {
+		if filepath.Dir(p) != plan.Folder {
 			plan.Folder = ""
 			break
 		}
 	}
+	if plan.Folder != "" && !f.exactFolder(plan.Folder, paths) {
+		// The folder holds other audio: pointing the book at it would let a
+		// rescan's directory-book arrival absorb files that are not its own.
+		plan.Folder = ""
+	}
 	r := repairs.Row{RowID: noParentRowID(dir, key), Class: fragClassNoParent, BookIDs: ids,
 		Title: survivor.Title, Author: lib.authorName(survivor), Risk: repairs.RiskReview, Detail: plan}
+	if plan.SurvivorID == "" {
+		r.Title = lib.books[ids[0]].Title
+	}
 	if plan.Title != "" {
 		r.Title = plan.Title
 	}
+	state := fragGroupState{Files: map[string]string{}, SurvivorTitle: survivor.Title, SurvivorPath: survivor.FilePath}
 	var fpParts []string
-	missing, unknown, long := 0, 0, 0
+	missing, unknown, long, withPID := 0, 0, 0, ""
 	limit := thresholdSec()
 	for _, m := range plan.Members {
 		role := "fragment"
@@ -903,6 +1241,7 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 			role = "survivor"
 		}
 		r.Members = append(r.Members, member(lib, m.Frag.Book, role))
+		state.Files[m.Frag.Book.ID] = m.Frag.File.ID
 		if !m.Frag.Present {
 			missing++
 		}
@@ -912,7 +1251,13 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		case d >= limit:
 			long++
 		}
+		if pid := m.Frag.itunesPID(); pid != "" && withPID == "" {
+			withPID = fmt.Sprintf("member %s carries %s", m.Frag.Book.ID, pid)
+		}
 		fpParts = append(fpParts, fmt.Sprintf("%s|%s|%s|%d", m.Frag.Book.ID, m.Frag.File.ID, m.Frag.File.Path, m.Track))
+	}
+	if raw, err := json.Marshal(state); err == nil {
+		r.State = raw
 	}
 	r.Evidence = []string{
 		fmt.Sprintf("%d fragment books imported from %s share the chapter key %q", len(cs), dir, key),
@@ -921,11 +1266,14 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	}
 	r.Current = map[string]string{"fragments": strconv.Itoa(len(cs)), "folder": dir}
 	r.Proposed = map[string]string{
-		"action":   fmt.Sprintf("elect %s; move %d fragment row(s) onto it in track order; retire %d emptied book(s)", plan.SurvivorID, len(cs)-1, len(cs)-1),
+		"action":   fmt.Sprintf("move %d fragment row(s) onto %s in track order; retire %d emptied book(s) into it", len(cs)-1, plan.SurvivorID, len(cs)-1),
 		"survivor": plan.SurvivorID,
 	}
 	if plan.Title != "" {
 		r.Proposed["title"] = plan.Title
+	}
+	if plan.Folder != "" {
+		r.Proposed["book_path"] = plan.Folder
 	}
 	r.Reason = fmt.Sprintf("%d chapter files from one folder were imported as %d separate books", len(cs), len(cs))
 	switch {
@@ -936,14 +1284,19 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		r.Skipped, r.SkipReason = fragSkipDurationUnknown, fmt.Sprintf("%d of %d files have no recorded duration; cannot tell chapters from whole books", unknown, len(cs))
 	case long > 0:
 		r.Skipped, r.SkipReason = fragSkipDurationGate, fmt.Sprintf("%d of %d files run %d min or longer: likely separate books, not chapters", long, len(cs), limit/60)
+	case orderProblem != "":
+		r.Skipped, r.SkipReason = fragSkipTrackOrder, orderProblem+": the chapter order cannot be told"
+	case plan.SurvivorID == "":
+		r.Skipped, r.SkipReason = fragSkipNoSurvivor, "no member is both organized and primary, so none can take the others' files"
 	}
 	if k, why := f.guard(lib, books, extra); k != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
+	} else if withPID != "" {
+		r.Class, r.Skipped, r.SkipReason = fragClassManual, repairs.SkipITunes,
+			withPID+"; retiring it would queue an iTunes remove at the purge"
 	}
-	if plan.Folder != "" {
-		r.Proposed["book_path"] = plan.Folder
-	}
-	r.Fingerprint = fragFingerprint(append([]string{fragClassNoParent, dir, key, plan.SurvivorID, plan.Title, plan.Folder}, fpParts...)...)
+	r.Fingerprint = fragFingerprint(append([]string{fragClassNoParent, dir, key, plan.SurvivorID, survivorState,
+		plan.Title, plan.Folder}, fpParts...)...)
 	return r
 }
 
@@ -962,7 +1315,7 @@ func (f *fragmentFixer) Replan(ctx context.Context, _ json.RawMessage, planned r
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	lib := &fragLibrary{books: map[string]fragBook{}, files: map[string][]fragFile{}, series: map[int]string{}, authors: map[int]string{}}
+	lib := newFragLibrary()
 	all, err := store.GetAllSeries()
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("list series: %w", err)
@@ -981,7 +1334,7 @@ func (f *fragmentFixer) Replan(ctx context.Context, _ json.RawMessage, planned r
 		if b == nil {
 			continue
 		}
-		lib.books[id] = fragBook{ID: b.ID, Title: b.Title, FilePath: b.FilePath, AuthorID: b.AuthorID, SeriesID: b.SeriesID, SoftDeleted: b.IsSoftDeleted()}
+		lib.books[id] = fragBookOf(b)
 		if b.AuthorID != nil {
 			if a, aerr := store.GetAuthorByID(*b.AuthorID); aerr == nil && a != nil {
 				lib.authors[a.ID] = a.Name
@@ -992,23 +1345,21 @@ func (f *fragmentFixer) Replan(ctx context.Context, _ json.RawMessage, planned r
 			return repairs.Row{}, fmt.Errorf("read files of %s: %w", id, err)
 		}
 		for i := range rows {
-			r := &rows[i]
-			lib.files[id] = append(lib.files[id], fragFileFrom(id, r.ID, r.FilePath, r.OriginalFilename, r.FileSize,
-				r.FileHash, r.OriginalFileHash, r.Duration, r.TrackNumber, r.Missing))
+			lib.files[id] = append(lib.files[id], fragFileOf(id, &rows[i]))
 		}
 	}
 	class, rest, _ := strings.Cut(planned.RowID, ":")
 	switch class {
-	case fragClassMoved, fragClassCopy, fragRowCopyUnproven:
-		return f.replanParent(lib, hist, planned, rest)
+	case fragClassMoved, fragClassCopy, fragRowCopyUnproven, fragRowMovedUnproven:
+		return f.replanParent(store, lib, hist, planned, rest)
 	case fragClassNoParent:
-		return f.replanGroup(lib, hist, planned)
+		return f.replanGroup(store, lib, hist, planned)
 	default:
-		return planned, nil // ambiguous rows are never applicable; return as planned
+		return planned, nil // held and ambiguous rows are never applicable; return as planned
 	}
 }
 
-func (f *fragmentFixer) replanParent(lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row, parentID string) (repairs.Row, error) {
+func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row, parentID string) (repairs.Row, error) {
 	ix := newFragIndex()
 	for _, r := range lib.files[parentID] {
 		ix.add(r)
@@ -1025,7 +1376,7 @@ func (f *fragmentFixer) replanParent(lib *fragLibrary, hist FragmentRepairReader
 		// A fragment a partial run already retired is still evaluated: its
 		// row is still there, and the parent's finished repoint names it.
 		b.SoftDeleted = false
-		c, ok, err := f.candidateFrom(b, lib.files[id][0], hist)
+		c, ok, err := f.candidateFrom(store, b, lib.files[id][0], hist)
 		if err != nil {
 			return repairs.Row{}, err
 		}
@@ -1040,16 +1391,29 @@ func (f *fragmentFixer) replanParent(lib *fragLibrary, hist FragmentRepairReader
 			return f.checkOwners(hist, planned, r)
 		}
 	}
-	return changedRow(planned, "the fragments no longer match the parent in this class"), nil
+	return changedRow(planned, "the fragments no longer match the parent in this kind"), nil
 }
 
-func (f *fragmentFixer) replanGroup(lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row) (repairs.Row, error) {
-	// A partial run moved some fragments' rows onto the survivor. Rebuild
-	// each fragment's single-file view from the rows as they sit now: a row
-	// on the survivor still stands for the fragment it came from, found by
-	// that fragment's import path. The decision (group key, survivor, track
-	// order, title) is then the same as the plan's, so is the fingerprint.
+func (f *fragmentFixer) replanGroup(store OpsStore, lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row) (repairs.Row, error) {
+	var st fragGroupState
+	if len(planned.State) == 0 || json.Unmarshal(planned.State, &st) != nil || len(st.Files) == 0 {
+		return changedRow(planned, "the plan carries no stored member rows; plan again"), nil
+	}
 	survivorID := planned.Proposed["survivor"]
+	// A partial run moved some members' rows onto the survivor. Each member
+	// is rebuilt from the row it was PLANNED with, found by id wherever it
+	// sits now (on the member, or on the survivor). A member holding any row
+	// other than its own, or a survivor holding rows no member was planned
+	// with, is a change.
+	planned2 := map[string]bool{}
+	for _, fid := range st.Files {
+		planned2[fid] = true
+	}
+	for _, r := range lib.files[survivorID] {
+		if !planned2[r.ID] {
+			return changedRow(planned, fmt.Sprintf("survivor %s holds row %s the plan did not include", survivorID, r.ID)), nil
+		}
+	}
 	var cands []*fragCandidate
 	for _, id := range planned.BookIDs {
 		b, ok := lib.books[id]
@@ -1057,30 +1421,28 @@ func (f *fragmentFixer) replanGroup(lib *fragLibrary, hist FragmentRepairReader,
 			return changedRow(planned, fmt.Sprintf("fragment %s is gone", id)), nil
 		}
 		b.SoftDeleted = false
-		rows := lib.files[id]
-		var file fragFile
-		switch {
-		case id == survivorID:
-			// The survivor's own row: the one whose history is its import.
-			own, ok := f.survivorOwnRow(lib, hist, b)
-			if !ok {
-				return changedRow(planned, "survivor's own row cannot be identified"), nil
+		fid := st.Files[id]
+		var file *fragFile
+		for _, owner := range []string{id, survivorID} {
+			for i := range lib.files[owner] {
+				if lib.files[owner][i].ID == fid {
+					file = &lib.files[owner][i]
+				}
 			}
-			file = own
-		case len(rows) == 1:
-			file = rows[0]
-		case len(rows) == 0:
-			// Moved onto the survivor already: find the row by its import path.
-			r, ok := f.movedRowFor(lib, hist, b, survivorID)
-			if !ok {
-				return changedRow(planned, fmt.Sprintf("fragment %s has no rows and none on the survivor stands for it", id)), nil
-			}
-			file = r
-		default:
-			return changedRow(planned, fmt.Sprintf("fragment %s now has %d rows", id, len(rows))), nil
 		}
-		file.BookID = id
-		c, ok, err := f.candidateFrom(b, file, hist)
+		if file == nil {
+			return changedRow(planned, fmt.Sprintf("member %s's planned row %s is on neither it nor the survivor", id, fid)), nil
+		}
+		if id != survivorID {
+			for _, r := range lib.files[id] {
+				if r.ID != fid {
+					return changedRow(planned, fmt.Sprintf("member %s now has row %s besides its planned one", id, r.ID)), nil
+				}
+			}
+		}
+		one := *file
+		one.BookID = id
+		c, ok, err := f.candidateFrom(store, b, one, hist)
 		if err != nil {
 			return repairs.Row{}, err
 		}
@@ -1089,13 +1451,17 @@ func (f *fragmentFixer) replanGroup(lib *fragLibrary, hist FragmentRepairReader,
 		}
 		cands = append(cands, c)
 	}
-	rows := f.noParentRows(lib, cands)
-	for _, r := range rows {
-		if r.RowID == planned.RowID {
-			// Rows already on the survivor count as the survivor's: the plan
-			// was made before they moved.
-			return f.checkOwners(hist, planned, r)
+	// The survivor's own snapshot lists only its planned row, so the member
+	// counts and the folder check see the group as it was planned.
+	for _, r := range f.noParentRows(lib, cands) {
+		if r.RowID != planned.RowID {
+			continue
 		}
+		if plan, ok := r.Detail.(*fragGroupPlan); ok {
+			plan.WasTitle, plan.WasPath = st.SurvivorTitle, st.SurvivorPath
+		}
+		r.State = planned.State
+		return f.checkOwners(hist, planned, r)
 	}
 	return changedRow(planned, "the fragments no longer form this group"), nil
 }
@@ -1137,42 +1503,6 @@ func (f *fragmentFixer) checkOwners(look database.BookFilePathLookup, planned, f
 	return fresh, nil
 }
 
-// survivorOwnRow is the survivor's original row: the one at its own import
-// path or, failing that, whose original filename matches its import path's.
-func (f *fragmentFixer) survivorOwnRow(lib *fragLibrary, hist FragmentRepairReader, b fragBook) (fragFile, bool) {
-	rows := lib.files[b.ID]
-	if len(rows) == 1 {
-		return rows[0], true
-	}
-	h, err := hist.GetBookPathHistory(b.ID)
-	if err != nil {
-		return fragFile{}, false
-	}
-	ip := importPathOf(h)
-	for _, r := range rows {
-		if r.Path == ip || r.Path == b.FilePath {
-			return r, true
-		}
-	}
-	return fragFile{}, false
-}
-
-// movedRowFor finds the row a partial run moved from fragment b onto the
-// survivor: the survivor row at b's import path (or b's own book path).
-func (f *fragmentFixer) movedRowFor(lib *fragLibrary, hist FragmentRepairReader, b fragBook, survivorID string) (fragFile, bool) {
-	h, err := hist.GetBookPathHistory(b.ID)
-	if err != nil {
-		return fragFile{}, false
-	}
-	ip := importPathOf(h)
-	for _, r := range lib.files[survivorID] {
-		if (ip != "" && r.Path == ip) || r.Path == b.FilePath {
-			return r, true
-		}
-	}
-	return fragFile{}, false
-}
-
 // changedRow is the planned row with a fingerprint that cannot match, so the
 // engine reports changed_since_plan with the reason in the row.
 func changedRow(planned repairs.Row, why string) repairs.Row {
@@ -1185,8 +1515,10 @@ func changedRow(planned repairs.Row, why string) repairs.Row {
 
 // ---- apply ----------------------------------------------------------------
 
-// Apply writes one fresh row. Every step is compare-and-set and journaled;
-// a step already done (by a run cut off mid-row) is skipped.
+// Apply writes one fresh row. It takes merge.LockMergeRMW for the whole row
+// and re-plans the row under it, so nothing a merge could change lands
+// between the check and the writes. Every step is compare-and-set and
+// journaled first; a step already done (by a run cut off mid-row) is skipped.
 func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	store, _, err := f.stores()
 	if err != nil {
@@ -1197,38 +1529,45 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	// books being retired.
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
+	locked, err := f.Replan(ctx, nil, fresh, nil)
+	if err != nil {
+		return err
+	}
+	if locked.Fingerprint != fresh.Fingerprint || !locked.Applicable() {
+		why := locked.Reason
+		if !locked.Applicable() {
+			why = locked.SkipReason
+		}
+		return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
+	}
 	var steps int
 	partial := func(err error) error {
-		// A write that committed but whose undo row failed is a step: the row
-		// is not unchanged, so it must not report plain failed.
-		if steps == 0 && !errors.Is(err, repairs.ErrNotJournaled) {
+		if steps == 0 {
 			return err
 		}
 		return fmt.Errorf("%w: after %d step(s): %v", repairs.ErrPartiallyApplied, steps, err)
 	}
-	switch plan := fresh.Detail.(type) {
+	switch plan := locked.Detail.(type) {
 	case []fragPair:
-		_, parentID, _ := strings.Cut(fresh.RowID, ":")
+		_, parentID, _ := strings.Cut(locked.RowID, ":")
 		for _, p := range plan {
 			if err := ctx.Err(); err != nil {
 				return partial(err)
 			}
-			if fresh.Class == fragClassMoved && !p.Done {
+			if locked.Class == fragClassMoved && !p.Done {
 				to := undo.BookFileLocation{Path: p.Frag.File.Path, Missing: false, Hash: p.Frag.File.Hash, Size: p.Frag.File.Size}
 				if err := w.RepointBookFile(parentID, p.Parent.ID, p.Parent.location(), to); err != nil {
 					return partial(err)
 				}
 				steps++
 			}
-			did, err := f.retire(ctx, store, w, p.Frag.Book.ID, "fragment of "+parentID)
+			did, err := f.retire(ctx, store, w, p.Frag.Book.ID, parentID, p.Slice, "fragment of "+parentID)
+			steps += did
 			if err != nil {
 				return partial(err)
 			}
-			if did {
-				steps++
-			}
 		}
-		if fresh.Class == fragClassMoved {
+		if locked.Class == fragClassMoved {
 			if err := w.Recompute(parentID); err != nil {
 				return partial(fmt.Errorf("recompute %s: %w", parentID, err))
 			}
@@ -1264,16 +1603,20 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 			}
 		}
 		if plan.Folder != "" {
-			if did, err := f.setBookFolder(w, plan.SurvivorID, plan.Folder); err != nil {
+			did, err := f.setBookFolder(store, w, plan.SurvivorID, plan.WasPath, plan.Folder)
+			if err != nil {
 				return partial(err)
-			} else if did {
+			}
+			if did {
 				steps++
 			}
 		}
 		if plan.Title != "" {
-			if did, err := f.retitle(store, w, plan.SurvivorID, plan.Title); err != nil {
+			did, err := f.retitle(store, w, plan.SurvivorID, plan.WasTitle, plan.Title)
+			if err != nil {
 				return partial(err)
-			} else if did {
+			}
+			if did {
 				steps++
 			}
 		}
@@ -1286,12 +1629,11 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 				// Never retire a book we cannot prove is empty.
 				return partial(fmt.Errorf("fragment %s still owns %d row(s) (err=%v); not retired", m.Frag.Book.ID, len(rows), err))
 			}
-			did, err := f.retire(ctx, store, w, m.Frag.Book.ID, "consolidated into "+plan.SurvivorID)
+			did, err := f.retire(ctx, store, w, m.Frag.Book.ID, plan.SurvivorID,
+				merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true}, "consolidated into "+plan.SurvivorID)
+			steps += did
 			if err != nil {
 				return partial(err)
-			}
-			if did {
-				steps++
 			}
 		}
 		if err := w.Recompute(plan.SurvivorID); err != nil {
@@ -1299,31 +1641,39 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 		}
 		return nil
 	default:
-		return fmt.Errorf("%s: row %s carries no plan", fragFixerID, fresh.RowID)
+		return fmt.Errorf("%s: row %s carries no plan", fragFixerID, locked.RowID)
 	}
 }
 
 // setBookFolder points the survivor's book path at the folder its files now
-// share, journaled as a restorable book_path_update (nothing moves on disk).
-func (f *fragmentFixer) setBookFolder(w *repairs.Writer, id, folder string) (bool, error) {
-	var old string
-	changed, err := w.Modify(id, func(b *database.Book) error {
-		old = b.FilePath
-		b.FilePath = folder
-		return nil
-	})
-	if err != nil {
-		return false, err
+// share, journaled as a restorable book_path_update (nothing moves on disk),
+// while the path is still the one the plan saw.
+func (f *fragmentFixer) setBookFolder(store OpsStore, w *repairs.Writer, id, was, folder string) (bool, error) {
+	b, err := store.GetBookByID(id)
+	if err != nil || b == nil {
+		return false, fmt.Errorf("read %s: %v", id, err)
 	}
-	if len(changed) == 0 || old == folder {
+	if b.FilePath == folder {
 		return false, nil
 	}
-	return true, w.Journal(id, undo.ChangeTypeBookPathUpdate, "file_path", old, folder)
+	if b.FilePath != was {
+		return false, fmt.Errorf("%w: survivor %s path is %q, not %q as planned", repairs.ErrChangedSincePlan, id, b.FilePath, was)
+	}
+	return true, w.Step(id, undo.ChangeTypeBookPathUpdate, "file_path", was, folder, func() error {
+		_, err := w.Modify(id, func(cur *database.Book) error {
+			if cur.FilePath != was {
+				return repairs.ErrChangedSincePlan
+			}
+			cur.FilePath = folder
+			return nil
+		})
+		return err
+	})
 }
 
 // retitle sets the survivor's title unless it is locked, journaled as a
-// restorable metadata_update.
-func (f *fragmentFixer) retitle(store OpsStore, w *repairs.Writer, id, title string) (bool, error) {
+// restorable metadata_update, while the title is still the one the plan saw.
+func (f *fragmentFixer) retitle(store OpsStore, w *repairs.Writer, id, was, title string) (bool, error) {
 	locks, err := database.LoadFieldLocks(store, id)
 	if err != nil {
 		return false, fmt.Errorf("field locks of %s unreadable: %w", id, err)
@@ -1331,76 +1681,191 @@ func (f *fragmentFixer) retitle(store OpsStore, w *repairs.Writer, id, title str
 	if locks.Locked(database.FieldKeyTitle) {
 		return false, nil
 	}
-	var old string
-	changed, err := w.Modify(id, func(b *database.Book) error {
-		old = b.Title
-		b.Title = title
-		return nil
-	})
-	if err != nil {
-		return false, err
+	b, err := store.GetBookByID(id)
+	if err != nil || b == nil {
+		return false, fmt.Errorf("read %s: %v", id, err)
 	}
-	if len(changed) == 0 {
+	if b.Title == title {
 		return false, nil
 	}
-	return true, w.Journal(id, "metadata_update", "title", old, title)
+	if b.Title != was {
+		return false, fmt.Errorf("%w: survivor %s title is %q, not %q as planned", repairs.ErrChangedSincePlan, id, b.Title, was)
+	}
+	return true, w.Step(id, "metadata_update", "title", was, title, func() error {
+		_, err := w.Modify(id, func(cur *database.Book) error {
+			if cur.Title != was {
+				return repairs.ErrChangedSincePlan
+			}
+			cur.Title = title
+			return nil
+		})
+		return err
+	})
 }
 
-// retire demotes and soft-deletes one fragment book, journaling each step so
-// the op revert restores it, and hands its version group on. It reports
-// false when the book was already retired (a finished step). The fragment's
-// book_file row is kept.
-func (f *fragmentFixer) retire(ctx context.Context, store OpsStore, w *repairs.Writer, id, note string) (bool, error) {
+// retire folds fragment id into target the way merge.Service retires an
+// absorbed book, each step journaled first so the op revert restores it:
+//
+//  1. every user's listening state and positions follow onto target, as a
+//     slice of its timeline (user_state_follow);
+//  2. the fragment's external ids move to target (external_id_reassign); an
+//     un-tombstoned iTunes id refuses the row instead;
+//  3. a primary fragment is demoted (book_primary_demote, OldValue "true"
+//     for an unset flag too, so the revert crowns it back and the group's
+//     hand-off is undone with it);
+//  4. one write sets merged_into_book_id (book_merged_into), CLEARS
+//     file_path (book_path_update: the path is now a file target owns, and
+//     the purge deletes a purged book's file_path) and soft-deletes it
+//     (book_soft_delete).
+//
+// Its version group is then handed a primary. The fragment's book_file row,
+// if it still has one, is kept. The count is the steps written; a book
+// already soft-deleted counts none (the last step of an earlier run).
+func (f *fragmentFixer) retire(ctx context.Context, store OpsStore, w *repairs.Writer, id, target string, slice merge.SliceMapping, note string) (int, error) {
 	b, err := store.GetBookByID(id)
 	if err != nil {
-		return false, fmt.Errorf("read %s: %w", id, err)
+		return 0, fmt.Errorf("read %s: %w", id, err)
 	}
 	if b == nil {
-		return false, fmt.Errorf("%w: fragment %s vanished", repairs.ErrChangedSincePlan, id)
+		return 0, fmt.Errorf("%w: fragment %s vanished", repairs.ErrChangedSincePlan, id)
 	}
 	if b.IsSoftDeleted() {
-		return false, nil
+		return 0, nil
 	}
+	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
+		return 0, fmt.Errorf("%w: fragment %s now carries an iTunes id", repairs.ErrChangedSincePlan, id)
+	}
+	steps := 0
+	// 1. listening state
+	did, err := f.followUserState(w, target, id, slice)
+	if err != nil {
+		return steps, fmt.Errorf("carry listening state of %s: %w", id, err)
+	}
+	steps += did
+	// 2. external ids
+	exts, err := store.GetExternalIDsForBook(id)
+	if err != nil {
+		return steps, fmt.Errorf("external ids of %s: %w", id, err)
+	}
+	for _, e := range exts {
+		if e.Source == "itunes" && !e.Tombstoned {
+			return steps, fmt.Errorf("%w: fragment %s now carries iTunes id %s", repairs.ErrChangedSincePlan, id, e.ExternalID)
+		}
+	}
+	for _, e := range exts {
+		if err := w.Step(id, undo.ChangeTypeExternalIDReassign, "external_id:"+e.Source+"/"+e.ExternalID, id, target, func() error {
+			return store.ReassignExternalID(e.Source, e.ExternalID, target)
+		}); err != nil {
+			return steps, fmt.Errorf("move external id %s/%s to %s: %w", e.Source, e.ExternalID, target, err)
+		}
+		steps++
+	}
+	// 3. demote
 	wasPrimary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
 	if wasPrimary {
-		prev := ""
-		if b.IsPrimaryVersion != nil {
-			prev = "true"
-		}
 		notPrimary := false
-		if _, err := w.Modify(id, func(cur *database.Book) error {
-			cur.IsPrimaryVersion = &notPrimary
-			return nil
+		if err := w.Step(id, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false", func() error {
+			_, err := w.Modify(id, func(cur *database.Book) error {
+				if cur.IsPrimaryVersion != nil && !*cur.IsPrimaryVersion {
+					return database.ErrSkipBookWrite
+				}
+				cur.IsPrimaryVersion = &notPrimary
+				return nil
+			})
+			return err
 		}); err != nil {
-			return false, fmt.Errorf("demote %s: %w", id, err)
+			return steps, fmt.Errorf("demote %s: %w", id, err)
 		}
-		if err := w.Journal(id, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", prev, "false"); err != nil {
-			return false, err
+		steps++
+	}
+	// 4. merged into, path cleared, soft-deleted: journaled, then one write.
+	prevMerged := ""
+	if b.MergedIntoBookID != nil {
+		prevMerged = *b.MergedIntoBookID
+	}
+	if err := w.Journal(id, undo.ChangeTypeBookMergedInto, "merged_into_book_id", prevMerged, target); err != nil {
+		return steps, err
+	}
+	if b.FilePath != "" {
+		if err := w.Journal(id, undo.ChangeTypeBookPathUpdate, "file_path", b.FilePath, ""); err != nil {
+			return steps, err
 		}
 	}
 	now := f.now()
-	if _, err := w.Modify(id, func(cur *database.Book) error {
-		t := true
-		cur.MarkedForDeletion = &t
-		cur.MarkedForDeletionAt = &now
-		return nil
+	if err := w.Step(id, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", note, func() error {
+		_, err := w.Modify(id, func(cur *database.Book) error {
+			if cur.FilePath != b.FilePath {
+				return fmt.Errorf("%w: fragment %s path changed during the retire", repairs.ErrChangedSincePlan, id)
+			}
+			t := true
+			cur.MarkedForDeletion = &t
+			cur.MarkedForDeletionAt = &now
+			cur.MergedIntoBookID = &target
+			cur.FilePath = ""
+			return nil
+		})
+		return err
 	}); err != nil {
-		return false, fmt.Errorf("soft-delete %s: %w", id, err)
+		return steps, fmt.Errorf("soft-delete %s: %w", id, err)
 	}
-	if err := w.Journal(id, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", note); err != nil {
-		return false, err
-	}
+	steps++
 	if wasPrimary && b.VersionGroupID != nil && *b.VersionGroupID != "" {
 		f.handOff(ctx, store, *b.VersionGroupID)
 	}
-	return true, nil
+	return steps, nil
+}
+
+// followUserState carries every user's state and positions on the fragment
+// onto target (merge.FollowAbsorbedJournaled, as a slice of target's
+// timeline). The before-snapshot is journaled BEFORE anything moves and the
+// before-and-after one after, both as user_state_follow rows; the revert of
+// the newer one restores everything and the older one then finds nothing
+// left to do. A store that cannot follow refuses only a fragment somebody has
+// listened to.
+func (f *fragmentFixer) followUserState(w *repairs.Writer, target, id string, slice merge.SliceMapping) (int, error) {
+	um := f.p.deps.MergeUserStateStore()
+	if um == nil {
+		return 0, errors.New("user-state store unavailable")
+	}
+	record := func(progress []merge.CombineUserProgress) error {
+		if len(progress) == 0 {
+			return nil
+		}
+		raw, err := json.Marshal(progress)
+		if err != nil {
+			return err
+		}
+		v, err := json.Marshal(undo.UserStateFollowRecord{SyncRedirected: true, Progress: raw})
+		if err != nil {
+			return err
+		}
+		return w.Journal(id, undo.ChangeTypeUserStateFollow, undo.SurvivorField(target), "", string(v))
+	}
+	progress, _, err := merge.FollowAbsorbedJournaled(um, target, id, &slice, record)
+	if errors.Is(err, merge.ErrNoSyncFollower) {
+		has, herr := merge.BookHasUserProgress(um, id)
+		if herr != nil {
+			return 0, herr
+		}
+		if has {
+			return 0, err
+		}
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if len(progress) == 0 {
+		return 0, nil
+	}
+	return 1, record(progress)
 }
 
 // handOff gives a retired fragment's version group a primary again, as
-// fs-regroup-xml's retire does. Not journaled (undo has no promote kind): a
-// revert restores the fragment and revertBookPrimaryDemote re-crowns it, so
-// the group still ends with one primary. A failure is logged, not returned:
-// the retirement itself is done and journaled.
+// fs-regroup-xml's retire does. The demote was journaled with OldValue
+// "true", so its revert crowns the fragment (versionprimary.Crown) and
+// demotes whichever sibling this hand-off promoted. A failure is logged, not
+// returned: the retirement itself is done and journaled.
 func (f *fragmentFixer) handOff(ctx context.Context, store OpsStore, groupID string) {
 	vps := f.p.deps.VersionPrimaryStore()
 	if vps == nil {

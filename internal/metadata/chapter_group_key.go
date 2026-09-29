@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_group_key.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b1e4c2a-9d53-4f8e-a6b0-3c5d8e2f1a94
 // last-edited: 2026-09-28
 
@@ -7,6 +7,7 @@ package metadata
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -105,4 +106,151 @@ func ChapterGroupKey(stem string) (key string, kind ChapterKeyKind) {
 	s = strings.Trim(strings.ToLower(s), " -–_.,:")
 	s = strings.Join(strings.Fields(s), " ")
 	return s + suffix, kind
+}
+
+// ChapterPos is where a chapter file sits in its set, read from exactly the
+// pieces ChapterGroupKey strips. Disc is the number a disc/disk/cd marker
+// carries (0 when there is none) and is the MAJOR sort key; Parts are the
+// other stripped numbers (the leading one first, then the trailing one).
+type ChapterPos struct {
+	Disc  int
+	Parts []int
+}
+
+// Compare orders two positions: disc first, then Parts element by element, a
+// shorter Parts first when one is a prefix of the other.
+func (p ChapterPos) Compare(q ChapterPos) int {
+	if p.Disc != q.Disc {
+		if p.Disc < q.Disc {
+			return -1
+		}
+		return 1
+	}
+	for i := 0; i < len(p.Parts) && i < len(q.Parts); i++ {
+		if p.Parts[i] != q.Parts[i] {
+			if p.Parts[i] < q.Parts[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	switch {
+	case len(p.Parts) < len(q.Parts):
+		return -1
+	case len(p.Parts) > len(q.Parts):
+		return 1
+	}
+	return 0
+}
+
+var (
+	chapterMarkerNumRe = regexp.MustCompile(`(?i)(chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_\-]*(\d+)`)
+	chapterOfNumRe     = regexp.MustCompile(`(?i)(\d+)\s*of\s*\d+`)
+	chapterAnyNumRe    = regexp.MustCompile(`\d+`)
+)
+
+// markerPiece reads a stripped marker piece ("Chapter 12", "Disc 2 of 3"):
+// whether its word is a disc word, and its number.
+func markerPiece(piece string) (disc bool, n int, ok bool) {
+	m := chapterMarkerNumRe.FindStringSubmatch(piece)
+	if m == nil {
+		return false, 0, false
+	}
+	n, err := strconv.Atoi(m[2])
+	if err != nil {
+		return false, 0, false
+	}
+	switch strings.ToLower(m[1]) {
+	case "disc", "disk", "cd":
+		return true, n, true
+	}
+	return false, n, true
+}
+
+func firstNum(re *regexp.Regexp, piece string, group int) (int, bool) {
+	m := re.FindStringSubmatch(piece)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[group])
+	return n, err == nil
+}
+
+// ChapterPosition reads the position a chapter stem carries from the pieces
+// ChapterGroupKey strips, never from a number left in the key:
+//
+//	"01 - My Book"          -> {Parts: [1]}
+//	"Chapter 3 - 1984"      -> {Parts: [3]}      (1984 is the title)
+//	"My Book 3 of 12"       -> {Parts: [3]}      (12 is the total)
+//	"My Book Disc 2"        -> {Disc: 2}
+//	"Disc 2 - My Story 07"  -> {Disc: 2, Parts: [7]}
+//	"01 Genesis 001"        -> {Parts: [1, 1]}
+//
+// ok is false when the stem carries no chapter numbering (ChapterKeyNone).
+func ChapterPosition(stem string) (pos ChapterPos, ok bool) {
+	s := strings.TrimSpace(stem)
+	take := func(disc bool, n int) {
+		if disc {
+			pos.Disc = n
+		} else {
+			pos.Parts = append(pos.Parts, n)
+		}
+	}
+	if loc := chapterLeadingMarkerRe.FindStringIndex(s); loc != nil {
+		if disc, n, mok := markerPiece(s[:loc[1]]); mok {
+			take(disc, n)
+			ok = true
+		}
+		s = s[loc[1]:]
+	} else if loc := chapterLeadingNumRe.FindStringIndex(s); loc != nil {
+		if n, nok := firstNum(chapterAnyNumRe, s[:loc[1]], 0); nok {
+			take(false, n)
+			ok = true
+		}
+		s = s[loc[1]:]
+	}
+	switch {
+	case chapterTrailingMarkerRe.MatchString(s):
+		piece := chapterTrailingMarkerRe.FindString(s)
+		if disc, n, mok := markerPiece(piece); mok {
+			take(disc, n)
+			ok = true
+		}
+	case chapterTrailingOfRe.MatchString(s):
+		if n, nok := firstNum(chapterOfNumRe, chapterTrailingOfRe.FindString(s), 1); nok {
+			take(false, n)
+			ok = true
+		}
+	case chapterTrailingNumRe.MatchString(s):
+		rest := chapterTrailingNumRe.ReplaceAllString(s, "")
+		if rest != "" && !chapterSeriesWordRe.MatchString(strings.TrimSpace(rest)) {
+			if n, nok := firstNum(chapterAnyNumRe, chapterTrailingNumRe.FindString(s), 0); nok {
+				take(false, n)
+				ok = true
+			}
+		}
+	}
+	if !ok {
+		return ChapterPos{}, false
+	}
+	return pos, true
+}
+
+// discFolderRe matches a disc folder name: "CD1", "Disc 2", "Disk_03",
+// "My Book - CD 2". The rest before the marker is kept by DiscFolder.
+var discFolderRe = regexp.MustCompile(`(?i)^(.*?)[\s\-–_.(\[]*\b(?:cd|disc|disk)[\s_\-.]*(\d{1,3})[)\]]?\s*$`)
+
+// DiscFolder reports whether a folder name is a disc folder of a multi-disc
+// set ("CD1", "Disc 2", "My Book - Disc 3"): the disc number and the name
+// with the marker removed ("" for a bare "CD1").
+func DiscFolder(name string) (rest string, disc int, ok bool) {
+	m := discFolderRe.FindStringSubmatch(strings.TrimSpace(name))
+	if m == nil {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(m[2])
+	if err != nil || n <= 0 {
+		return "", 0, false
+	}
+	return strings.Trim(m[1], " -–_.([)]"), n, true
 }
