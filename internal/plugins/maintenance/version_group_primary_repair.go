@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
-// last-edited: 2026-09-27
+// last-edited: 2026-09-29
 
 package maintenance
 
@@ -482,7 +482,7 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimary
 	for _, s := range allSeries {
 		seriesNames[s.ID] = s.Name
 	}
-	a := &vgApplier{store: store, reporter: reporter, apply: params.Apply, seriesNames: seriesNames}
+	a := &vgApplier{store: store, reporter: reporter, apply: params.Apply, seriesNames: seriesNames, paths: repairs.NewPathResolver()}
 	holderID, held := "", false
 	if params.Apply {
 		a.writer = repairs.NewWriter(store, vps, vgRepairSource, vgRepairChangeType, vgRepairBatchPrefix)
@@ -620,6 +620,9 @@ type vgApplier struct {
 	// seriesNames resolves SeriesID for the owner-manual guard. Read-only
 	// after construction.
 	seriesNames map[int]string
+	// paths memoizes the guard's symlink resolution per folder for the run.
+	// Safe for concurrent use; nil resolves afresh per book.
+	paths *repairs.PathResolver
 
 	fieldsFilled atomic.Int64
 }
@@ -682,7 +685,7 @@ func (a *vgApplier) planGroup(ctx context.Context, loader versionprimary.Loader,
 		return g
 	}
 	g.planned = members
-	if kind, why, gerr := vgGroupGuard(a.store, a.seriesNames, members); gerr != nil {
+	if kind, why, gerr := vgGroupGuard(a.store, a.seriesNames, a.paths, members); gerr != nil {
 		g.Error = "guard: " + gerr.Error()
 		return g
 	} else if kind != "" {

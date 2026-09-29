@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -157,11 +157,11 @@ const (
 
 // Evidence kinds of a fragment-to-parent match, strongest first.
 const (
-	fragEvImportPath       = "import path equals the parent row's path"
-	fragEvHash             = "file hash equals the parent row's"
-	fragEvNameSizeFolder   = "original filename and size equal the parent row's, imported from the parent row's folder"
-	fragEvNameSize         = "original filename and size equal the parent row's"
-	fragEvDone             = "parent row already points at the fragment's file (finished step)"
+	fragEvImportPath     = "import path equals the parent row's path"
+	fragEvHash           = "file hash equals the parent row's"
+	fragEvNameSizeFolder = "original filename and size equal the parent row's, imported from the parent row's folder"
+	fragEvNameSize       = "original filename and size equal the parent row's"
+	fragEvDone           = "parent row already points at the fragment's file (finished step)"
 )
 
 // fragMinGroup is the scanner's consolidation minimum: fewer same-key files
@@ -542,10 +542,14 @@ type fragLibrary struct {
 	authors map[int]string
 	// reattributed lists the books attributeEmptied gave a row back to.
 	reattributed []string
+	// paths memoizes the guard's symlink resolution per folder for this
+	// plan or re-plan.
+	paths *repairs.PathResolver
 }
 
 func newFragLibrary() *fragLibrary {
-	return &fragLibrary{books: map[string]fragBook{}, files: map[string][]fragFile{}, series: map[int]string{}, authors: map[int]string{}}
+	return &fragLibrary{books: map[string]fragBook{}, files: map[string][]fragFile{}, series: map[int]string{},
+		authors: map[int]string{}, paths: repairs.NewPathResolver()}
 }
 
 func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
@@ -989,7 +993,7 @@ func (f *fragmentFixer) guard(lib *fragLibrary, books []fragBook, extra map[stri
 			paths = append(paths, r.Path)
 		}
 		paths = append(paths, extra[b.ID]...)
-		if k, w := repairs.GuardBookPaths(b.ID, paths, lib.seriesName(b)); k != "" {
+		if k, w := repairs.GuardBookPathsWith(lib.paths, b.ID, paths, lib.seriesName(b)); k != "" {
 			return k, w
 		}
 	}

@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package repairs
 
@@ -110,11 +110,14 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 		conc = runtime.NumCPU()
 	}
 	var done atomic.Int64
+	// One resolver for the run: the guard's symlink resolution is memoized
+	// per folder across every row.
+	paths := NewPathResolver()
 	// Each worker writes only rows[i] for its own i: no two workers share a
 	// row, so the slice needs no lock.
 	gerr := registry.RunItems(ctx, reporter, idx, func(_ context.Context, i int) error {
 		defer done.Add(1)
-		kind, why, err := GuardBooks(deps.Guard, deps.Series, rows[i].BookIDs)
+		kind, why, err := GuardBooks(deps.Guard, deps.Series, paths, rows[i].BookIDs)
 		switch {
 		case err != nil:
 			rows[i].Skipped, rows[i].SkipReason = SkipGuardUnreadable, err.Error()
@@ -320,6 +323,9 @@ type ApplyResult struct {
 
 // ApplyDeps is what RunApply needs besides the fixer and the plan.
 type ApplyDeps struct {
+	// paths is the run's guard resolver; RunApply sets it.
+	paths *PathResolver
+
 	Guard  GuardReader
 	Series SeriesNamer
 	// StandDown may be nil only where there is no registry (tests, degraded
@@ -381,6 +387,8 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	if !dryRun && deps.Writer == nil {
 		return res, fmt.Errorf("repairs: apply %s: no writer", f.ID())
 	}
+	// One resolver for the run (the guard's per-folder symlink memo).
+	deps.paths = NewPathResolver()
 	byID := make(map[string]*Row, len(plan.Rows))
 	for i := range plan.Rows {
 		byID[plan.Rows[i].RowID] = &plan.Rows[i]
@@ -528,7 +536,7 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 		lost.Store(true)
 		return abort()
 	}
-	if kind, why, err := GuardBooks(deps.Guard, deps.Series, planned.BookIDs); err != nil {
+	if kind, why, err := GuardBooks(deps.Guard, deps.Series, deps.paths, planned.BookIDs); err != nil {
 		out.Outcome, out.Skipped, out.Error = OutcomeGuarded, SkipGuardUnreadable, err.Error()
 		return out
 	} else if kind != "" {
@@ -554,7 +562,7 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 	}
 	// A book the re-plan added to the row must pass the guard too.
 	if extra := newIDs(planned.BookIDs, fresh.BookIDs); len(extra) > 0 {
-		if kind, why, err := GuardBooks(deps.Guard, deps.Series, extra); err != nil {
+		if kind, why, err := GuardBooks(deps.Guard, deps.Series, deps.paths, extra); err != nil {
 			out.Outcome, out.Skipped, out.Error = OutcomeGuarded, SkipGuardUnreadable, err.Error()
 			return out
 		} else if kind != "" {

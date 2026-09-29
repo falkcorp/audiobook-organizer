@@ -1,14 +1,16 @@
 // file: internal/repairs/guards.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package repairs
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -32,8 +34,20 @@ const (
 // included: the rules are about where the book lives, not whether its file
 // is on disk right now. seriesName is the book's series name ("" for none).
 // It returns "" when the book may be touched.
+//
+// It resolves symlinks with a fresh PathResolver; a caller checking many books
+// in one run passes its own through GuardBookPathsWith.
 func GuardBookPaths(bookID string, paths []string, seriesName string) (kind, reason string) {
-	paths = withResolved(paths)
+	return GuardBookPathsWith(nil, bookID, paths, seriesName)
+}
+
+// GuardBookPathsWith is GuardBookPaths resolving symlinks through res (nil:
+// a fresh resolver for this call).
+func GuardBookPathsWith(res *PathResolver, bookID string, paths []string, seriesName string) (kind, reason string) {
+	if res == nil {
+		res = NewPathResolver()
+	}
+	paths = res.withResolved(paths)
 	for _, p := range paths {
 		if p != "" && pathutil.UnderFrozenITunesTree(p) {
 			return SkipITunes, fmt.Sprintf("member %s has a file under books/itunes/** (hands-off): %s", bookID, p)
@@ -51,28 +65,69 @@ func GuardBookPaths(bookID string, paths []string, seriesName string) (kind, rea
 	return "", ""
 }
 
+// PathResolver resolves symlinks for the guard, memoizing each directory's
+// resolution: a plan or apply checks thousands of files that share a few
+// hundred folders, and EvalSymlinks walks (lstats) every component of every
+// path it is given. A file is resolved through its folder's cached answer,
+// with one Lstat of the file itself; only a file that is itself a symlink is
+// resolved in full. Built per plan or apply run, so a link created since an
+// earlier run is seen. Safe for concurrent use.
+type PathResolver struct {
+	mu   sync.Mutex
+	dirs map[string]resolvedDir
+}
+
+type resolvedDir struct {
+	path string
+	ok   bool
+}
+
+// NewPathResolver returns an empty resolver.
+func NewPathResolver() *PathResolver { return &PathResolver{dirs: map[string]resolvedDir{}} }
+
+func (r *PathResolver) dir(d string) (string, bool) {
+	r.mu.Lock()
+	got, hit := r.dirs[d]
+	r.mu.Unlock()
+	if hit {
+		return got.path, got.ok
+	}
+	p, err := filepath.EvalSymlinks(d)
+	got = resolvedDir{path: p, ok: err == nil}
+	r.mu.Lock()
+	r.dirs[d] = got
+	r.mu.Unlock()
+	return got.path, got.ok
+}
+
+// Resolve returns the path p's symlinks resolve to. ok is false when neither
+// p (if it is itself a link) nor its folder can be resolved: p is gone with
+// its folder, or unreadable; the guard then checks it lexically only.
+func (r *PathResolver) Resolve(p string) (string, bool) {
+	if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		rp, err := filepath.EvalSymlinks(p)
+		return rp, err == nil
+	}
+	d, ok := r.dir(filepath.Dir(p))
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(d, filepath.Base(p)), true
+}
+
 // withResolved adds, after each path, the path its symlinks resolve to when
 // that differs: a library symlink into books/itunes/** is under the frozen
-// tree however it is spelled. A path that cannot be resolved (it is gone,
-// or unreadable) is checked lexically only; for one that no longer exists,
-// its folder is resolved instead.
-func withResolved(paths []string) []string {
+// tree however it is spelled. A path that cannot be resolved is checked
+// lexically only.
+func (r *PathResolver) withResolved(paths []string) []string {
 	out := make([]string, 0, len(paths))
 	for _, p := range paths {
 		out = append(out, p)
 		if p == "" {
 			continue
 		}
-		r, err := filepath.EvalSymlinks(p)
-		if err != nil {
-			dir, derr := filepath.EvalSymlinks(filepath.Dir(p))
-			if derr != nil {
-				continue
-			}
-			r = filepath.Join(dir, filepath.Base(p))
-		}
-		if r != p {
-			out = append(out, r)
+		if rp, ok := r.Resolve(p); ok && rp != p {
+			out = append(out, rp)
 		}
 	}
 	return out
@@ -96,12 +151,12 @@ func SeriesNamesFrom(all []database.Series) SeriesNamer {
 	return func(id int) string { return m[id] }
 }
 
-// GuardBooks runs GuardBookPaths over every book id, reading each book and
+// GuardBooks runs GuardBookPathsWith (through res) over every book id, reading each book and
 // its files fresh. A book that is gone or soft-deleted is not checked (it
 // has nothing left to protect), matching the vg op's member guard. A read
 // error is returned: without the paths the guard cannot see a hands-off book,
 // so the caller must not treat the row as clear.
-func GuardBooks(r GuardReader, series SeriesNamer, bookIDs []string) (kind, reason string, err error) {
+func GuardBooks(r GuardReader, series SeriesNamer, res *PathResolver, bookIDs []string) (kind, reason string, err error) {
 	ids := append([]string(nil), bookIDs...)
 	sort.Strings(ids)
 	for _, id := range ids {
@@ -125,7 +180,7 @@ func GuardBooks(r GuardReader, series SeriesNamer, bookIDs []string) (kind, reas
 		if b.SeriesID != nil && series != nil {
 			name = series(*b.SeriesID)
 		}
-		if k, why := GuardBookPaths(id, paths, name); k != "" {
+		if k, why := GuardBookPathsWith(res, id, paths, name); k != "" {
 			return k, why, nil
 		}
 	}
