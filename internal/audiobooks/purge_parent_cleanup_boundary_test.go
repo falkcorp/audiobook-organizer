@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_parent_cleanup_boundary_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0a9c4e7b-8f13-4d26-b5a0-d17e3c6f98b2
-// last-edited: 2026-09-19
+// last-edited: 2026-09-29
 
 package audiobooks
 
@@ -28,6 +28,10 @@ func setupPurgeBoundary(t *testing.T) (*AudiobookService, *database.PebbleStore,
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	// The purge's book_file lookup is fail-closed until memdb publishes, and
+	// warmup is async: purging straight away failed with "memdb is not
+	// serving" (FLAKE-PURGEWARMUP).
+	store.WaitForWarmup()
 	prev := config.AppConfig.RootDir
 	t.Cleanup(func() { config.AppConfig.RootDir = prev })
 	base := t.TempDir()

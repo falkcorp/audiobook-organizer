@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: dc247b67-8e09-445e-82bd-0249e292a052
-// last-edited: 2026-09-19
+// last-edited: 2026-09-29
 
 package maintenance
 
@@ -115,7 +115,12 @@ func TestActivityFilterIndexBackfill_ResumesAfterCancelAndGatesPlanner(t *testin
 	p := New(&afibDeps{store: wrapped})
 	spy := &afibSpy{}
 
-	err := p.runActivityFilterIndexBackfill(ctx, nil, spy)
+	// One worker, not NumCPU: on a 48-core host all 41 windows ran at once,
+	// finished in any order, and the contiguous watermark often never reached
+	// the first checkpoint (every 8) before the cancel after 10 calls. Any
+	// pool > 1 keeps that race; out-of-order watermarks are covered by the
+	// registry's own RunItems tests.
+	err := p.runActivityFilterIndexBackfill(ctx, json.RawMessage(`{"workers":1}`), spy)
 	require.Error(t, err, "the cancelled run must fail, not report success")
 	assert.False(t, s.FilterIndexBackfillDone(), "an interrupted backfill must not open the gate")
 
