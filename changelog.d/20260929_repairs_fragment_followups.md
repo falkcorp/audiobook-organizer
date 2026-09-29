@@ -3,3 +3,4 @@
   - The undo preflight now walks rows in the revert's own order. It reports a retired book's rows as refused (`dependent change not reverted`) when the change that moved or repointed its file cannot be undone, as the revert does. It also counts rows that are already restored (`already_restored`).
   - The hands-off guard follows a broken symlink's link text, so a dead link in an ordinary folder that points into `books/itunes/**` is skipped as iTunes.
   - Reverting a primary demote that had already been put back still makes that book the group's one primary, so the group cannot end up with two.
+- Repairs lane: with a row class selected, each skip-kind chip and the "All skipped" chip now count only that class's skipped rows, so every chip opens exactly the rows it counts. The rows endpoint returns them as `skipped_by_kind_in_class` when a class is set.
