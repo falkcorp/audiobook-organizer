@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package maintenance
 
@@ -57,15 +57,18 @@ func newJunkLib(t *testing.T) *junkLib {
 		"/lib/Author A/Lonely Book/01 - Lonely Book.mp3")
 	add("disc", "Disc 2", "/lib/Author A/Whole Work/Disc 2", a, nil,
 		"/lib/Author A/Whole Work/Disc 2/01.mp3", "/lib/Author A/Whole Work/Disc 2/02.mp3")
-	tr := add("transcribed", "Opening", "/lib/Author A/Some Folder", a, nil,
-		"/lib/Author A/Some Folder/01.mp3", "/lib/Author A/Some Folder/02.mp3")
+	// The transcription agrees with the folder, so it keeps first place.
+	tr := add("transcribed", "Opening", "/lib/Author A/The Spoken Name", a, nil,
+		"/lib/Author A/The Spoken Name/01.mp3", "/lib/Author A/The Spoken Name/02.mp3")
 	_, err = st.ModifyBook(tr, func(b *database.Book) error {
 		s := "The Spoken Name"
 		b.TranscribedTitle = &s
 		return nil
 	})
 	require.NoError(t, err)
-	cand := add("candidate", "Unknown Title", "/lib/Author A/Cand Dir/zz.mp3", a, nil, "/lib/Author A/Cand Dir/zz.mp3")
+	// No path evidence (a generic folder, a chapter-number filename): the
+	// candidate stands on its own.
+	cand := add("candidate", "Unknown Title", "/lib/Author A/Books/01.mp3", a, nil, "/lib/Author A/Books/01.mp3")
 	require.NoError(t, st.PutMetadataCache(&database.MetadataCandidateCache{BookID: cand, FetchedAt: time.Now(),
 		Candidates: []json.RawMessage{
 			json.RawMessage(`{"title":"Wrong Author Book","author":"Someone Else","score":0.95}`),
@@ -449,4 +452,105 @@ func TestLetterLOrdinalFixer(t *testing.T) {
 	b, err = st.GetBookByID(ids["l Timothy"])
 	require.NoError(t, err)
 	require.Equal(t, "l Timothy", b.Title, "a user-locked title is never rewritten")
+}
+
+// planRows plans the fixer over st and returns the rows by book id.
+func planRows(t *testing.T, st *database.PebbleStore) map[string]repairs.Row {
+	t.Helper()
+	f := newJunkTitleFixer(&Plugin{deps: fakeDeps{store: st}})
+	rows, err := f.Plan(context.Background(), nil, &fakeReporter{})
+	require.NoError(t, err)
+	out := map[string]repairs.Row{}
+	for _, r := range rows {
+		out[r.RowID] = r
+	}
+	return out
+}
+
+func addJunkBook(t *testing.T, st *database.PebbleStore, title string, author *int, files ...string) string {
+	t.Helper()
+	b, err := st.CreateBook(&database.Book{Title: title, FilePath: files[0], AuthorID: author, Format: "mp3"})
+	require.NoError(t, err)
+	for _, f := range files {
+		require.NoError(t, st.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: f, Format: "mp3"}))
+	}
+	return b.ID
+}
+
+// A transcription or candidate that disagrees with the book's own path ranks
+// below the folder or filename, for every junk kind.
+func TestJunkTitleFixer_PathEvidenceOutranksDisagreeingEvidence(t *testing.T) {
+	st, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	herbert, err := st.CreateAuthor("Frank Herbert")
+	require.NoError(t, err)
+	banks, err := st.CreateAuthor("Iain M. Banks")
+	require.NoError(t, err)
+	cache := func(id, cands string) {
+		require.NoError(t, st.PutMetadataCache(&database.MetadataCandidateCache{BookID: id, FetchedAt: time.Now(),
+			Candidates: []json.RawMessage{json.RawMessage(cands)}}))
+	}
+	messiah := addJunkBook(t, st, "Unknown Title", &herbert.ID, "/lib/Frank Herbert/Dune Messiah/Dune Messiah.m4b")
+	cache(messiah, `{"title":"Dune","author":"Frank Herbert","score":0.6}`)
+	children := addJunkBook(t, st, "Opening", &herbert.ID,
+		"/lib/Frank Herbert/Children of Dune/01.mp3", "/lib/Frank Herbert/Children of Dune/02.mp3")
+	cache(children, `{"title":"Dune","author":"Frank Herbert","score":0.9}`)
+	excession := addJunkBook(t, st, "read by narrator", &banks.ID,
+		"/lib/Iain M. Banks/Excession/01.mp3", "/lib/Iain M. Banks/Excession/02.mp3")
+	_, err = st.ModifyBook(excession, func(b *database.Book) error {
+		s := "Audible Studios presents"
+		b.TranscribedTitle = &s
+		return nil
+	})
+	require.NoError(t, err)
+
+	rows := planRows(t, st)
+	for id, want := range map[string]string{messiah: "Dune Messiah", children: "Children of Dune", excession: "Excession"} {
+		r := rows[id]
+		require.True(t, r.Applicable(), "%s: %s (%s)", want, r.Skipped, r.SkipReason)
+		require.Equal(t, want, r.Proposed["title"])
+	}
+	require.Contains(t, rows[messiah].Reason, `metadata_candidate: "Dune"`, "demoted evidence stays visible")
+	require.Contains(t, rows[excession].Reason, `transcription: "Audible Studios presents"`)
+}
+
+// A folder reached by climbing past a chapter folder, directly under an
+// import root, may be the author: without corroboration it needs a person.
+func TestJunkTitleFixer_ClimbToAFolderUnderARootNeedsCorroboration(t *testing.T) {
+	st, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	_, err = st.CreateImportPath("/imports/dl", "dl")
+	require.NoError(t, err)
+	unknown, err := st.CreateAuthor("Unknown Author")
+	require.NoError(t, err)
+	id := addJunkBook(t, st, "Chapter 1", &unknown.ID, "/imports/dl/Robin Hobb/01/a.mp3", "/imports/dl/Robin Hobb/01/b.mp3")
+	r := planRows(t, st)[id]
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, "may be the author")
+}
+
+// A bare number filed in a folder named after itself is that book, not a
+// chapter of its author: needs a person. Unpadded numbers side by side in one
+// folder are chapters of one book: a possible fragment.
+func TestJunkTitleFixer_BareNumbers(t *testing.T) {
+	st, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	armstrong, err := st.CreateAuthor("Kelley Armstrong")
+	require.NoError(t, err)
+	thirteen := addJunkBook(t, st, "13", &armstrong.ID, "/lib/Kelley Armstrong/13/13.m4b")
+	addJunkBook(t, st, "Bitten", &armstrong.ID, "/lib/Kelley Armstrong/Bitten.m4b")
+	other, err := st.CreateAuthor("Some Author")
+	require.NoError(t, err)
+	var sibs []string
+	for _, n := range []string{"1", "2", "3"} {
+		sibs = append(sibs, addJunkBook(t, st, n, &other.ID, "/lib/Some Author/Book/"+n+".mp3"))
+	}
+	rows := planRows(t, st)
+	require.Equal(t, junkSkipNeedsManual, rows[thirteen].Skipped, rows[thirteen].SkipReason)
+	for _, id := range sibs {
+		require.Equal(t, junkSkipPossibleFragment, rows[id].Skipped, rows[id].SkipReason)
+	}
 }

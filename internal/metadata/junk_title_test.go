@@ -1,7 +1,7 @@
 // file: internal/metadata/junk_title_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8b1e5f27-9c3a-4d60-b2e4-7f1a0c6d9e38
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package metadata
 
@@ -90,6 +90,9 @@ func TestClassifyJunkTitle_Table(t *testing.T) {
 		{"1.5 Degrees", JunkNone},
 		// hyphenated numbers belong to the title
 		{"10-Minute Toughness", JunkNone},
+		{"01-Eldest", JunkNumberPrefix},
+		{"3_Body", JunkNone},
+		{"1. Mose", JunkNone},
 		{"21-Day Sugar Detox", JunkNone},
 		{"12-Step Recovery", JunkNone},
 		{"1-2-3 Magic", JunkNone},
@@ -138,8 +141,10 @@ func TestStripJunkTitlePrefix(t *testing.T) {
 		{"1. John", "", false},       // numbered book
 		{"2 - Kings", "", false},     // numbered book
 		{"10-Minute Toughness", "", false},
-		{"07_Dune", "Dune", true}, // no separator: a title
-		{"01 - X", "", false},     // single-rune remainder
+		{"07_Dune", "Dune", true},
+		{"01-Eldest", "Eldest", true},
+		{"3_Body", "", false}, // no separator: a title
+		{"01 - X", "", false}, // single-rune remainder
 	}
 	for _, c := range cases {
 		got, ok := StripJunkTitlePrefix(c.in)

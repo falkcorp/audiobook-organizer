@@ -1,7 +1,7 @@
 // file: web/src/utils/titleSortKey.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f2a6d31-4c7e-4b59-a0d3-1e9b5c7f2a64
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 /**
  * The library's title sort key, ported from internal/util/title_sort.go so a
@@ -25,6 +25,8 @@ const NUMBERED_BOOKS = [
   'timothy',
   'peter',
   'john',
+  // German Bible numbering: "1. Mose" … "5. Mose"
+  'mose',
 ];
 
 const ORDINALS: Record<string, number> = {
@@ -57,7 +59,7 @@ const WS = '[\\t\\n\\f\\r ]';
 // non-letter, or is "chapter …".
 const NUMBERED_BOOK_RE = new RegExp(
   `^${WS}*([0-9a-z]+)(?:\\.${WS}*|${WS}*[-_]+${WS}*|${WS}+)(${NUMBERED_BOOKS.join('|')})` +
-    `((?:${WS}*[^\\p{L}\\t\\n\\f\\r ].*)|(?:${WS}+(?:chapter|ch\\.?)\\b.*)|${WS}*)$`,
+    `((?:${WS}*[^\\p{L}\\t\\n\\f\\r '\u2019].*)|(?:${WS}+(?:chapter|ch\\.?)\\b.*)|${WS}*)$`,
   'iu'
 );
 
