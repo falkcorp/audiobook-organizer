@@ -1,13 +1,14 @@
 // file: internal/applygate/manual_only.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
-// last-edited: 2026-09-28
+// last-edited: 2026-09-29
 
 package applygate
 
 import (
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -18,13 +19,29 @@ import (
 // a bulk apply or bulk merge -- the owner applies them manually, by explicit
 // book id. Separators between words vary across rips ("Doctor.Who",
 // "Doctor_Who", "DoctorWho"), so any run of separators, or none, is accepted.
+// Match it through matchesManualOnly, never directly: see FoldUnderscores.
 var manualOnlyRe = regexp.MustCompile(`(?i)\b(doctor[\s._-]*who|big[\s._-]*finish|torchwood)\b`)
+
+// FoldUnderscores turns every "_" into a space so a \b pattern sees a word
+// boundary there. "_" is a regexp word character, so \b never fires next to
+// it, and the organizer writes a colon as "_ " in folder names: "Doctor Who_
+// Mindwarp" escaped every manual-only guard until this fold. Every
+// owner-manual pattern (here and in repairs' title guard) matches the folded
+// text.
+func FoldUnderscores(s string) string {
+	return strings.ReplaceAll(s, "_", " ")
+}
+
+// matchesManualOnly is manualOnlyRe on the folded text.
+func matchesManualOnly(s string) bool {
+	return manualOnlyRe.MatchString(FoldUnderscores(s))
+}
 
 // IsOwnerManualOnly reports whether a book with this path or series name
 // belongs to a manual-only library and must be left out of every bulk apply or
 // bulk merge.
 func IsOwnerManualOnly(path, seriesName string) bool {
-	return manualOnlyRe.MatchString(path) || manualOnlyRe.MatchString(seriesName)
+	return matchesManualOnly(path) || matchesManualOnly(seriesName)
 }
 
 // ReasonOwnerManualOnly refuses a bulk apply of a book the owner applies by
@@ -147,7 +164,7 @@ func ManualOnlyDetail(book *database.Book, c *metafetch.MetadataCandidate, ts Tr
 		)
 	}
 	for _, ch := range checks {
-		if manualOnlyRe.MatchString(ch.value) {
+		if matchesManualOnly(ch.value) {
 			return ReasonOwnerManualOnly, manualOnlyWhy +
 				ch.what + " " + strconv.Quote(ch.value)
 		}

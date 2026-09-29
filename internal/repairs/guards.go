@@ -1,5 +1,5 @@
 // file: internal/repairs/guards.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
 // last-edited: 2026-09-29
 
@@ -155,7 +155,8 @@ var doctorWhoProseRe = regexp.MustCompile(`(?i)\b(?:the|a|an)\s+(doctor\s+who)\s
 
 // namesDoctorWho reports whether title mentions Doctor Who other than in the
 // prose shape. It fails toward true: a false positive only skips a row, a
-// miss bulk-applies owner-manual content.
+// miss bulk-applies owner-manual content. The caller folds "_" first
+// (applygate.FoldUnderscores).
 func namesDoctorWho(title string) bool {
 	prose := map[int]bool{}
 	for _, m := range doctorWhoProseRe.FindAllStringSubmatchIndex(title, -1) {
@@ -181,7 +182,10 @@ func namesDoctorWho(title string) bool {
 // ("Big Finish Productions"): "Secrets of the Torchwood Estate" and "Big
 // Finish to the Season" are prose.
 func GuardBookTitle(bookID, title string) (kind, reason string) {
-	if namesDoctorWho(title) || manualOnlyTitleRe.MatchString(title) {
+	// "_" is a regexp word character, so \b misses "Doctor Who_ Mindwarp"
+	// (the organizer's "_ " for a colon) until it is folded to a space.
+	folded := applygate.FoldUnderscores(title)
+	if namesDoctorWho(folded) || manualOnlyTitleRe.MatchString(folded) {
 		return SkipOwnerManual, fmt.Sprintf("member %s is Doctor Who / Big Finish / Torchwood (title %q); owner applies these by hand", bookID, title)
 	}
 	return "", ""
