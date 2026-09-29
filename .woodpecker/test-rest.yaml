@@ -1,5 +1,5 @@
 # file: .woodpecker/test-rest.yaml
-# version: 1.5.0
+# version: 1.5.1
 # guid: c84e1b3d-2f9a-4c57-8d06-e3a1b7f5d942
 # last-edited: 2026-09-29
 #
@@ -43,7 +43,8 @@ steps:
       GOTOOLCHAIN: go1.27.1
       # The local backend gives every pipeline a fresh HOME, so Go's default
       # caches ($HOME/go/pkg/mod, which also holds the downloaded toolchain, and
-      # $HOME/Library/Caches/go-build) were re-created per run and never removed:
+      # the per-user build cache: $HOME/.cache/go-build on Linux) were re-created
+      # per run and never removed on the Mac agents:
       # 107 leftover workdirs held 117 GB on 2026-09-28 and filled the disk.
       # One host-wide cache is shared instead; Go locks both, so concurrent
       # pipelines are safe.
