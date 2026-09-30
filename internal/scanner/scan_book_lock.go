@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_book_lock.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fe71f301-a85e-4dad-98df-b135676ab1a7
 // last-edited: 2026-09-30
 
@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -62,6 +63,55 @@ const (
 // 2026-09-30. A var so tests can shorten it.
 var scanLockWait = 90 * time.Second
 
+// scanLockBeatEvery is how often a scanner goroutine blocked on a book's lock
+// reports progress while it waits. library.scan's only liveness signal to the
+// registry watchdog is UpdateProgress, and a deferred round whose every worker
+// is waiting on an apply reports nothing else for up to scanLockWait. A var so
+// tests can shorten it.
+var scanLockBeatEvery = 25 * time.Second
+
+type scanBeatKey struct{}
+
+// withScanBeat carries the run's progress beat to the lock waits:
+// acquireScanBookLock runs in the worker and in the AI phase's save, neither
+// of which has the run's logger in reach.
+func withScanBeat(ctx context.Context, beat func(message string)) context.Context {
+	return context.WithValue(ctx, scanBeatKey{}, beat)
+}
+
+func scanBeatFrom(ctx context.Context) func(string) {
+	beat, _ := ctx.Value(scanBeatKey{}).(func(string))
+	return beat
+}
+
+// lockSetIdleBeating is scanlock.Books.LockSetIdle with a progress beat every
+// scanLockBeatEvery while it blocks. ctx supplies the beat (see
+// withScanBeat); waitCtx bounds the wait.
+func lockSetIdleBeating(ctx, waitCtx context.Context, ids []string, path string) (*scanlock.Hold, error) {
+	beat := scanBeatFrom(ctx)
+	if beat == nil {
+		return scanlock.Books.LockSetIdle(waitCtx, ids)
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		t := time.NewTicker(scanLockBeatEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				beat("waiting for " + filepath.Base(path) + ": an apply or write-back is writing it")
+			}
+		}
+	})
+	h, err := scanlock.Books.LockSetIdle(waitCtx, ids)
+	close(stop)
+	wg.Wait()
+	return h, err
+}
+
 // Process-wide counters; ProcessBooksParallel reports each run's delta.
 var (
 	scanLockGroupCapped   atomic.Int64 // version groups too large to lock whole
@@ -70,6 +120,9 @@ var (
 	scanLockGaveUpCount   atomic.Int64 // books left for the next scan after the bounded waits
 	scanLockKeptFields    atomic.Int64 // columns kept because another writer changed them mid-scan
 	scanLockGroupErrs     atomic.Int64 // version-group lookups that failed; the book was treated as busy
+	// books left for the next scan because their version group could not be
+	// read (a store error, not an apply holding them)
+	scanLockUnreadableCount atomic.Int64
 )
 
 // scanLockLog reports lock-set resolution failures, which have no run logger
@@ -309,7 +362,19 @@ func resolveScanLockSet(b *Book) ([]string, map[string]*database.Book, error) {
 			return nil, nil, fmt.Errorf("scan lock: version group %s: %w", *r.VersionGroupID, err)
 		}
 		if len(members) > scanLockMaxGroup {
+			// Too many to lock whole. Still lock the members holding the SAME
+			// content as this row -- a protected original and its library
+			// copy -- because an apply or organize of the original acts on
+			// the copy's files while holding only the original.
 			scanLockGroupCapped.Add(1)
+			ids := contentIDs(r)
+			for i := range members {
+				m := members[i]
+				if _, ok := rows[m.ID]; ok || !sharesContent(ids, &m) {
+					continue
+				}
+				rows[m.ID] = &m
+			}
 			continue
 		}
 		for i := range members {
@@ -325,6 +390,28 @@ func resolveScanLockSet(b *Book) ([]string, map[string]*database.Book, error) {
 	}
 	slices.Sort(ids)
 	return ids, rows, nil
+}
+
+// contentIDs is every content hash a row carries (FileHash,
+// OriginalFileHash, OrganizedFileHash): the identities organizer.IsLibraryCopyOf
+// matches an original to its library copy by.
+func contentIDs(b *database.Book) map[string]bool {
+	out := map[string]bool{}
+	for _, h := range []*string{b.FileHash, b.OriginalFileHash, b.OrganizedFileHash} {
+		if h != nil && *h != "" {
+			out[*h] = true
+		}
+	}
+	return out
+}
+
+func sharesContent(ids map[string]bool, b *database.Book) bool {
+	for h := range contentIDs(b) {
+		if ids[h] {
+			return true
+		}
+	}
+	return false
 }
 
 func rowValues(m map[string]*database.Book) []*database.Book {
@@ -343,6 +430,10 @@ const (
 	scanLockGaveUp                   // a bounded wait expired; record busy
 	scanLockVanished                 // the book's files are gone; skip it
 	scanLockCanceled                 // ctx canceled
+	// the book's rows or version group could not be read, so its lock set is
+	// unknown; it is NOT locked (fail closed) and nothing is held. The
+	// returned error says why: a store failure, not an apply.
+	scanLockUnreadable
 )
 
 // acquireScanBookLock takes the lock set for b. Round 0 never waits. Rounds
@@ -350,41 +441,39 @@ const (
 // deadline, which may already have passed when the book reaches a worker; the
 // book is then taken only if it is free right now. ctx is the scan's own
 // context: its cancellation is scanLockCanceled, waitCtx expiring is
-// scanLockGaveUp. The returned hold is nil unless the outcome is scanLockHeld.
+// scanLockGaveUp. The returned hold is nil unless the outcome is scanLockHeld;
+// readErr is non-nil only with scanLockUnreadable.
 //
 // freshSnaps: the main pass is about to read the tags, so every held row's
 // snapshot is retaken now. The AI-phase re-save passes false: its baseline is
 // what the main pass last wrote (rememberRow), and a row another writer
 // changed since then must keep that change. Rows with no snapshot yet get one.
-func acquireScanBookLock(ctx, waitCtx context.Context, b *Book, round int, freshSnaps bool) (*scanlock.Hold, scanLockOutcome) {
+func acquireScanBookLock(ctx, waitCtx context.Context, b *Book, round int, freshSnaps bool) (_ *scanlock.Hold, _ scanLockOutcome, readErr error) {
 	for try := 0; try < scanLockResolveTries; try++ {
 		ids, _, rerr := resolveScanLockSet(b)
 		if rerr != nil {
-			if round == 0 {
-				return nil, scanLockBusy
-			}
-			return nil, scanLockGaveUp
+			return nil, scanLockUnreadable, rerr
 		}
 		h, ok := scanlock.Books.TryLockSetIdle(ids)
 		if !ok {
 			if round == 0 {
-				return nil, scanLockBusy
+				return nil, scanLockBusy, nil
 			}
 			if ctx.Err() != nil {
-				return nil, scanLockCanceled
+				return nil, scanLockCanceled, nil
 			}
 			// Try first, THEN wait: with the shared deadline already past,
 			// LockSetIdle's select could pick ctx.Done over a free key.
 			if waitCtx.Err() != nil {
-				return nil, scanLockGaveUp
+				return nil, scanLockGaveUp, nil
 			}
 			var err error
-			h, err = scanlock.Books.LockSetIdle(waitCtx, ids)
+			h, err = lockSetIdleBeating(ctx, waitCtx, ids, b.FilePath)
 			if err != nil {
 				if ctx.Err() != nil {
-					return nil, scanLockCanceled
+					return nil, scanLockCanceled, nil
 				}
-				return nil, scanLockGaveUp
+				return nil, scanLockGaveUp, nil
 			}
 		}
 		// Re-resolve under the lock: an apply that held a row may have renamed
@@ -392,21 +481,18 @@ func acquireScanBookLock(ctx, waitCtx context.Context, b *Book, round int, fresh
 		again, rows, rerr := resolveScanLockSet(b)
 		if rerr != nil {
 			h.Release()
-			if round == 0 {
-				return nil, scanLockBusy
-			}
-			return nil, scanLockGaveUp
+			return nil, scanLockUnreadable, rerr
 		}
 		if !subset(again, h) {
 			h.Release()
 			if round == 0 {
-				return nil, scanLockBusy
+				return nil, scanLockBusy, nil
 			}
 			continue
 		}
 		if filesVanished(b) {
 			h.Release()
-			return nil, scanLockVanished
+			return nil, scanLockVanished, nil
 		}
 		if freshSnaps {
 			b.rowSnaps = nil
@@ -416,9 +502,9 @@ func acquireScanBookLock(ctx, waitCtx context.Context, b *Book, round int, fresh
 				b.rememberRow(rows[id])
 			}
 		}
-		return h, scanLockHeld
+		return h, scanLockHeld, nil
 	}
-	return nil, scanLockGaveUp
+	return nil, scanLockGaveUp, nil
 }
 
 // saveBookUnderScanLock is the AI phase's save: it runs after the worker has
@@ -429,9 +515,12 @@ func acquireScanBookLock(ctx, waitCtx context.Context, b *Book, round int, fresh
 func saveBookUnderScanLock(ctx context.Context, book *Book, save func(context.Context, *Book) error) (saved bool, err error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		wctx, cancel := context.WithTimeout(ctx, scanLockWait)
-		hold, outcome := acquireScanBookLock(ctx, wctx, book, 1, false)
+		hold, outcome, readErr := acquireScanBookLock(ctx, wctx, book, 1, false)
 		cancel()
 		switch outcome {
+		case scanLockUnreadable:
+			scanLockUnreadableCount.Add(1)
+			return false, fmt.Errorf("scan lock: the version group of %s could not be read, so it was not saved; the next scan picks it up: %w", book.FilePath, readErr)
 		case scanLockVanished:
 			scanLockVanishedCount.Add(1)
 			return false, nil

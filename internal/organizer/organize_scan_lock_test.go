@@ -1,5 +1,5 @@
 // file: internal/organizer/organize_scan_lock_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c3a9e15-2f84-4d6b-a0c1-58e2b94d7f36
 // last-edited: 2026-09-30
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +28,15 @@ func holdBook(t *testing.T, id string) *scanlock.Hold {
 	t.Cleanup(h.Release)
 	return h
 }
+
+// cancelAfterLogger reports canceled from its (after+1)th IsCanceled call on.
+type cancelAfterLogger struct {
+	noopLogger
+	after int32
+	calls atomic.Int32
+}
+
+func (l *cancelAfterLogger) IsCanceled() bool { return l.calls.Add(1) > l.after }
 
 func movedFrom(path string) bool {
 	_, err := os.Stat(path)
@@ -80,6 +90,59 @@ func TestOrganizeBooks_WaitsForAHeldBookAndOrganizesAFreeOneAtOnce(t *testing.T)
 	}
 	if n := scanlock.Books.Held(); n != 0 {
 		t.Fatalf("organize left %d scan lock(s) held", n)
+	}
+}
+
+// The book pass 2 waited for is one the scanner has just merged. The organize
+// must use the row as it is after the merge (re-read under the lock), not the
+// copy it listed before any lock: the target path comes from the merged title.
+func TestOrganizeBooks_HeldBookIsOrganizedFromTheRowAfterTheScan(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	src := filepath.Join(root, "incoming", "merged.m4b")
+	b := addInPlaceBook(t, store, "merged", "Listed Title", src, filled(150, 5), nil, 0)
+
+	scan := holdBook(t, b.ID)
+	done := make(chan *Stats, 1)
+	go func() {
+		done <- svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	// The scanner's merge, while it holds the book.
+	if _, err := store.ModifyBook(b.ID, func(r *database.Book) error { r.Title = "Merged Title"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	scan.Release()
+	select {
+	case stats := <-done:
+		if stats.Failed != 0 || stats.Organized+stats.ReOrganized != 1 {
+			t.Fatalf("want one organized, got %+v", stats)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("organize never finished")
+	}
+	got, err := store.GetBookByID(b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "Merged Title" || !strings.Contains(got.FilePath, "Merged Title") {
+		t.Fatalf("organized from the stale listing: title=%q path=%q", got.Title, got.FilePath)
+	}
+}
+
+// Canceled during pass 1: the books pass 1 set aside are counted skipped
+// (scan_busy), so the totals still add up.
+func TestOrganizeBooks_CanceledInPass1CountsTheSetAsideBooks(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	src := filepath.Join(root, "incoming", "held2.m4b")
+	b := addInPlaceBook(t, store, "held2", "Held Two", src, filled(150, 6), nil, 0)
+	holdBook(t, b.ID)
+
+	// Not canceled for the feeder's and the worker's checks in pass 1 (the
+	// book is set aside), canceled from the check after pass 1 on.
+	log := &cancelAfterLogger{after: 2}
+	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, log, "", true)
+	if stats.Skipped != 1 || stats.Collisions[OutcomeScanBusy] != 1 {
+		t.Fatalf("want the set-aside book counted skipped scan_busy, got %+v", stats)
 	}
 }
 

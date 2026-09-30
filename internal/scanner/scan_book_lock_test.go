@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_book_lock_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 161af27f-a511-4b3d-a32f-02348506c28a
 // last-edited: 2026-09-30
 
@@ -10,7 +10,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -311,7 +313,7 @@ func TestScanBookLock_AIPhaseSaveOverlaysMainPassButKeepsUserEdit(t *testing.T) 
 	require.NoError(t, err)
 
 	b := &Book{FilePath: p, Title: "Main Pass Title", Author: "A. Author", Format: ".m4b"}
-	hold, outcome := acquireScanBookLock(context.Background(), context.Background(), b, 1, true)
+	hold, outcome, _ := acquireScanBookLock(context.Background(), context.Background(), b, 1, true)
 	require.Equal(t, scanLockHeld, outcome)
 	require.NoError(t, saveBookToDatabase(scanlock.WithHold(context.Background(), hold), b))
 	hold.Release()
@@ -518,6 +520,28 @@ func TestScanBookLock_RescanMergeRecordsNoChangeHistory(t *testing.T) {
 	require.Empty(t, history, "the scanner's merge recorded change history; queued applies would read it as a user edit")
 }
 
+// A version group over the lock cap is not locked whole, but the scanner
+// reaching a library copy S still locks its original X (same content): an
+// apply or organize of X acts on S's files holding only X.
+func TestScanBookLock_CappedGroupStillLocksTheSameContentOriginal(t *testing.T) {
+	f := newScanLockFixture(t, "")
+	vg := "vg-big"
+	p := f.file(t, "lib/copy.m4b", "s-data")
+	s, err := f.store.CreateBook(&database.Book{Title: "S", FilePath: p, Format: "m4b", VersionGroupID: &vg, OriginalFileHash: new("h-x")})
+	require.NoError(t, err)
+	x, err := f.store.CreateBook(&database.Book{Title: "X", FilePath: filepath.Join(f.dir, "itunes", "x.m4b"), Format: "m4b", VersionGroupID: &vg, FileHash: new("h-x")})
+	require.NoError(t, err)
+	for i := range scanLockMaxGroup {
+		_, err := f.store.CreateBook(&database.Book{Title: "other", FilePath: filepath.Join(f.dir, "o", string(rune('a'+i%26))+string(rune('a'+i/26))+".m4b"),
+			Format: "m4b", VersionGroupID: &vg, FileHash: new("h-other")})
+		require.NoError(t, err)
+	}
+
+	ids, _, err := resolveScanLockSet(&Book{FilePath: p})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{s.ID, x.ID}, ids, "a capped group must still lock the same-content original, and nothing else")
+}
+
 // groupErrStore fails every version-group lookup.
 type groupErrStore struct{ scannerStore }
 
@@ -537,10 +561,109 @@ func TestScanBookLock_VersionGroupLookupErrorFailsClosed(t *testing.T) {
 
 	before := scanLockGroupErrs.Load()
 	b := &Book{FilePath: p, Title: "Scanned", Format: ".m4b"}
-	_, outcome := acquireScanBookLock(context.Background(), nil, b, 0, true)
-	require.Equal(t, scanLockBusy, outcome, "round 0 must requeue a book whose version group could not be read")
-	_, outcome = acquireScanBookLock(context.Background(), context.Background(), b, 1, true)
-	require.Equal(t, scanLockGaveUp, outcome, "a later round must record it busy, not lock it without its versions")
+	_, outcome, readErr := acquireScanBookLock(context.Background(), nil, b, 0, true)
+	require.Equal(t, scanLockUnreadable, outcome, "round 0 must not lock a book whose version group could not be read")
+	require.Error(t, readErr)
+	_, outcome, readErr = acquireScanBookLock(context.Background(), context.Background(), b, 1, true)
+	require.Equal(t, scanLockUnreadable, outcome, "a later round must not lock it without its versions either")
+	require.Error(t, readErr)
 	require.Equal(t, int64(2), scanLockGroupErrs.Load()-before)
 	require.Zero(t, scanlock.Books.Held())
+}
+
+// Nit 6a: a book left for the next scan because its version group could not
+// be read says so. Its FileFailure must not blame an apply, which never held
+// it.
+func TestScanBookLock_UnreadableGroupFailureNamesTheCause(t *testing.T) {
+	f := newScanLockFixture(t, "")
+	p := f.file(t, "a/book.m4b", "x-data")
+	_, err := f.store.CreateBook(&database.Book{Title: "Before", FilePath: p, Format: "m4b", VersionGroupID: new("vg-1")})
+	require.NoError(t, err)
+	useScannerStore(t, groupErrStore{f.store})
+	old := scanLockWait
+	scanLockWait = 50 * time.Millisecond
+	t.Cleanup(func() { scanLockWait = old })
+
+	failures := &FileFailures{}
+	ctx := withFileFailures(context.Background(), failures)
+	require.NoError(t, ProcessBooksParallel(ctx, []Book{{FilePath: p, Title: "Scanned", Author: "A", Format: ".m4b"}}, 1, nil, logger.New("test")))
+
+	var reasons []string
+	for _, s := range failures.Samples() {
+		if s.Stage == FileFailureStageBusy {
+			reasons = append(reasons, s.Reason)
+		}
+	}
+	require.Len(t, reasons, 1)
+	require.Contains(t, reasons[0], "version group could not be read")
+	require.NotContains(t, reasons[0], "apply")
+}
+
+// beatLogger records every progress message the scanner publishes.
+type beatLogger struct {
+	logger.Logger
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (l *beatLogger) UpdateProgress(_, _ int, message string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.msgs = append(l.msgs, message)
+}
+
+func (l *beatLogger) waits() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, m := range l.msgs {
+		if strings.HasPrefix(m, "waiting for ") {
+			n++
+		}
+	}
+	return n
+}
+
+// Watchdog: a deferred round whose only worker is blocked on an apply's lock
+// still reports progress while it waits. Without the beat the op publishes
+// nothing for up to scanLockWait per round, and the registry's progress
+// watchdog cannot tell that from a wedged scan.
+func TestScanBookLock_DeferredWaitBeatsProgress(t *testing.T) {
+	f := newScanLockFixture(t, "")
+	oldWait, oldBeat := scanLockWait, scanLockBeatEvery
+	scanLockWait, scanLockBeatEvery = 300*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { scanLockWait, scanLockBeatEvery = oldWait, oldBeat })
+
+	p := f.file(t, "a/book.m4b", "x-data")
+	row, err := f.store.CreateBook(&database.Book{Title: "Before", FilePath: p, Format: "m4b"})
+	require.NoError(t, err)
+	hold, err := scanlock.Books.LockSet(context.Background(), []string{row.ID})
+	require.NoError(t, err)
+	defer hold.Release()
+
+	log := &beatLogger{Logger: logger.New("test")}
+	require.NoError(t, ProcessBooksParallel(context.Background(),
+		[]Book{{FilePath: p, Title: "Scanned", Author: "A", Format: ".m4b"}}, 1, nil, log))
+	require.GreaterOrEqual(t, log.waits(), 3, "the lock wait published no progress beat: %v", log.msgs)
+}
+
+// The AI phase's save waits for the book the same way and beats too.
+func TestScanBookLock_AIPhaseSaveWaitBeatsProgress(t *testing.T) {
+	f := newScanLockFixture(t, "")
+	oldWait, oldBeat := scanLockWait, scanLockBeatEvery
+	scanLockWait, scanLockBeatEvery = 200*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { scanLockWait, scanLockBeatEvery = oldWait, oldBeat })
+
+	p := f.file(t, "a/book.m4b", "x-data")
+	row, err := f.store.CreateBook(&database.Book{Title: "Before", FilePath: p, Format: "m4b"})
+	require.NoError(t, err)
+	hold, err := scanlock.Books.LockSet(context.Background(), []string{row.ID})
+	require.NoError(t, err)
+	defer hold.Release()
+
+	var beats atomic.Int32
+	ctx := withScanBeat(context.Background(), func(string) { beats.Add(1) })
+	_, err = saveBookUnderScanLock(ctx, &Book{FilePath: p, Title: "AI", Format: ".m4b"}, saveBookToDatabase)
+	require.Error(t, err, "the save must give up while the apply holds the book")
+	require.GreaterOrEqual(t, beats.Load(), int32(3))
 }

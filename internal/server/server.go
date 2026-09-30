@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.70.0
+// version: 2.71.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-30
 
@@ -276,8 +276,8 @@ type Server struct {
 	// applyWhenScannedHandler runs metadata.apply-when-scanned's single-book
 	// kinds; set when the metadata handler is wired (wire_handlers.go).
 	applyWhenScannedHandler queuedApplyRunner
-	// queuedOrganizeRunner runs metadata.apply-when-scanned's "organize"
-	// kind; set when the organize handler is wired (wire_handlers.go).
+	// queuedOrganizeRunner runs library.organize-when-scanned (the queued
+	// "organize" kind); set when the organize handler is wired (wire_handlers.go).
 	queuedOrganizeRunner queuedOrganizeRunner
 
 	// opRegistrationErrs collects failures from the op-registrar loop in

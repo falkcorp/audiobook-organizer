@@ -1,5 +1,5 @@
 // file: internal/server/apply_when_scanned_op_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e3b6a14-72c5-4f08-b1d9-58a0c3e7f216
 // last-edited: 2026-09-30
 
@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
@@ -241,16 +242,42 @@ func (r *recordingOrganizeRunner) RunQueuedOrganize(_ context.Context, id string
 	return nil
 }
 
-// A queued organize ("organize" kind) runs through the organize handler's
-// runner, not the metadata one.
+// A queued organize runs through its own def, library.organize-when-scanned,
+// which carries the organize route's permission, and the organize handler's
+// runner.
 func TestApplyWhenScanned_OrganizeKindRunsTheOrganizeRunner(t *testing.T) {
 	reg := capOpReg(t)
 	org := &recordingOrganizeRunner{}
 	s := &Server{applyWhenScannedHandler: failingRunner{t}, queuedOrganizeRunner: org}
 	require.NoError(t, s.RegisterApplyWhenScannedOp(reg))
-	def, ok := reg.Def(applyWhenScannedOpID)
+	def, ok := reg.Def(organizeWhenScannedOpID)
 	require.True(t, ok)
+	require.Equal(t, []auth.Permission{auth.PermLibraryOrganize}, def.Permissions)
 	require.NoError(t, def.Run(context.Background(),
 		json.RawMessage(`{"kind":"organize","book_id":"b9","dry_run":false}`), &sdReporter{id: "op-org"}))
 	require.Equal(t, []string{"b9"}, org.ids)
+}
+
+// No escalation through POST /operations/v2 (any params, def permission
+// only): metadata.apply-when-scanned (library.edit_metadata) refuses the
+// organize kind, and library.organize-when-scanned (library.organize) refuses
+// every metadata kind. Neither reaches a runner.
+func TestApplyWhenScanned_EachDefRefusesTheOthersKinds(t *testing.T) {
+	reg := capOpReg(t)
+	org := &recordingOrganizeRunner{}
+	s := &Server{applyWhenScannedHandler: failingRunner{t}, queuedOrganizeRunner: org}
+	require.NoError(t, s.RegisterApplyWhenScannedOp(reg))
+
+	meta, ok := reg.Def(applyWhenScannedOpID)
+	require.True(t, ok)
+	require.Error(t, meta.Run(context.Background(),
+		json.RawMessage(`{"kind":"organize","book_id":"b9","dry_run":false}`), &sdReporter{id: "op-1"}))
+	require.Empty(t, org.ids, "metadata.apply-when-scanned organized a book")
+
+	orgDef, ok := reg.Def(organizeWhenScannedOpID)
+	require.True(t, ok)
+	for _, kind := range []string{"apply-candidate", "write-back", "fetch", "op-result-candidate"} {
+		require.Error(t, orgDef.Run(context.Background(),
+			json.RawMessage(`{"kind":"`+kind+`","book_id":"b9","dry_run":false}`), &sdReporter{id: "op-2"}), kind)
+	}
 }
