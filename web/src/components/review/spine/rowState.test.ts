@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: a80c5f34-7d16-4e92-b503-6c1f9a27e408
-// last-edited: 2026-08-20
+// last-edited: 2026-09-30
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -12,6 +12,7 @@ import {
   getRowSx,
   isRowActionable,
   runtimeDiffers,
+  runtimeHiddenBySwitch,
   scoreColor,
   type RowState,
 } from './rowState';
@@ -144,5 +145,34 @@ describe('runtimeDiffers', () => {
     // Warning here would put a scary chip on every candidate with no duration.
     expect(runtimeDiffers(undefined)).toBe(false);
     expect(runtimeDiffers(null)).toBe(false);
+  });
+});
+
+describe('runtimeHiddenBySwitch', () => {
+  // The screenshot case: 53 minutes off a ~10-hour book is under the gate's
+  // 10%, but the spine shows the warning chip, so the switch must hide it.
+  it('hides a warned row the 10% rule alone would keep', () => {
+    const r = {
+      book: { duration_seconds: 36000 },
+      candidate: { duration_sec: 36000 - 3180, duration_delta_sec: 3180 },
+    };
+    expect(runtimeHiddenBySwitch(r)).toBe(true);
+  });
+
+  it('hides a row over 10% off', () => {
+    const r = { book: { duration_seconds: 3000 }, candidate: { duration_sec: 3500 } };
+    expect(runtimeHiddenBySwitch(r)).toBe(true);
+  });
+
+  it('keeps a row within ten minutes and within 10%', () => {
+    const r = {
+      book: { duration_seconds: 36000 },
+      candidate: { duration_sec: 35700, duration_delta_sec: 300 },
+    };
+    expect(runtimeHiddenBySwitch(r)).toBe(false);
+  });
+
+  it('keeps a row whose runtime is unknown', () => {
+    expect(runtimeHiddenBySwitch({ book: {}, candidate: null })).toBe(false);
   });
 });
