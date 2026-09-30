@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_round2_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 993dd8c9-20d0-4bd4-951b-11471d5dff76
 // last-edited: 2026-09-29
 
@@ -352,4 +352,102 @@ func TestJunkAuthorIndex_IndependentWorksSkipLabelsAndTheOthersWorks(t *testing.
 	idx = indexFrom([]database.Author{{ID: ca, Name: "Cthulhu Armageddon"}, {ID: ctp, Name: "C. T. Phipps"}},
 		books, []database.Series{{ID: s, Name: "Cthulhu Armageddon"}, {ID: wk, Name: "Wraith Knight"}}, nil, nil)
 	require.Equal(t, "C. T. Phipps", idx.workCreditedElsewhere("Cthulhu Armageddon", ca))
+}
+
+// A series named exactly for an author and holding that author's books is the
+// author-named swap artifact (the prod "Brent Weeks" shape), not evidence
+// against the author: one Peter V. Brett book filed beside them neither makes
+// Brent Weeks a work nor takes his shelf.
+func TestJunkAuthorFixer_AuthorNamedSeriesArtifactStaysTheAuthors(t *testing.T) {
+	f := newJunkFixture(t)
+	f.mkSeries("Brent Weeks", "Brent Weeks")
+	for _, ti := range []string{"The Way of Shadows", "Shadow's Edge", "Beyond the Shadows", "The Black Prism"} {
+		f.book(junkBookSpec{title: ti, path: "/lib/bw/" + ti, author: "Brent Weeks", series: "Brent Weeks"})
+	}
+	f.book(junkBookSpec{title: "Some Anthology", path: "/lib/o/1", author: "Peter V. Brett", series: "Brent Weeks"})
+	f.book(junkBookSpec{title: "The Warded Man", path: "/lib/o/2", author: "Peter V. Brett"})
+	id := f.book(junkBookSpec{title: "The Blinding Knife", path: "/lib/j/bk", author: "read by narrator",
+		tags: map[string]string{"artist": "Brent Weeks"}})
+	r := relinkRow(t, f, f.plan(), "read by narrator", id)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Equal(t, "Brent Weeks", r.Proposed["author"], r.Reason)
+}
+
+// The same shape with two or more other authors writing in the series is an
+// anthology, and a row of its name is its title: held.
+func TestJunkAuthorFixer_AnthologySeriesRowIsHeld(t *testing.T) {
+	f := newJunkFixture(t)
+	f.mkSeries("Dangerous Visions", "Dangerous Visions")
+	for _, ti := range []string{"Introduction One", "Introduction Two", "Afterword Three"} {
+		f.book(junkBookSpec{title: ti, path: "/lib/dv/" + ti, author: "Dangerous Visions", series: "Dangerous Visions"})
+	}
+	f.book(junkBookSpec{title: "Aye and Gomorrah", path: "/lib/o/1", author: "Samuel R. Delany", series: "Dangerous Visions"})
+	f.book(junkBookSpec{title: "Dhalgren", path: "/lib/o/2", author: "Samuel R. Delany"})
+	f.book(junkBookSpec{title: "Riders of the Purple Wage", path: "/lib/o/3", author: "Philip Jose Farmer", series: "Dangerous Visions"})
+	f.book(junkBookSpec{title: "To Your Scattered Bodies Go", path: "/lib/o/4", author: "Philip Jose Farmer"})
+	id := f.book(junkBookSpec{title: "The Jigsaw Man", path: "/lib/j/jm", author: "read by narrator",
+		tags: map[string]string{"artist": "Dangerous Visions"}})
+	r := relinkRow(t, f, f.plan(), "read by narrator", id)
+	require.NotEqual(t, "Dangerous Visions", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "held: %v %s", r.Proposed, r.Reason)
+	require.Contains(t, r.SkipReason, "Dangerous Visions")
+}
+
+// One shared word with another author's title does not make a title theirs:
+// Laura Thompson's "Murder" takes none of Agatha Christie's "Murder ..."
+// titles, so the one "Agatha Christie" biography still does not outweigh her.
+func TestJunkAuthorFixer_OneSharedWordIsNotTheOtherAuthorsWork(t *testing.T) {
+	f := newJunkFixture(t)
+	for _, ti := range []string{"Murder on the Orient Express", "Murder at the Vicarage", "The Murder of Roger Ackroyd"} {
+		f.book(junkBookSpec{title: ti, path: "/lib/ac/" + ti, author: "Agatha Christie"})
+	}
+	f.book(junkBookSpec{title: "Agatha Christie", path: "/lib/lt/1", author: "Laura Thompson"})
+	f.book(junkBookSpec{title: "Murder", path: "/lib/lt/2", author: "Laura Thompson"})
+	id := f.book(junkBookSpec{title: "Evil Under the Sun", path: "/lib/j/eus", author: "read by narrator",
+		tags: map[string]string{"artist": "Agatha Christie"}})
+	r := relinkRow(t, f, f.plan(), "read by narrator", id)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Equal(t, "Agatha Christie", r.Proposed["author"], r.Reason)
+}
+
+// A row named for another author's series, with none of its own books in it,
+// is a work named after that series even when it holds more series-less
+// titles than the series has works: C. T. Phipps's two-book "Cthulhu
+// Armageddon" against a "Cthulhu Armageddon" row with three titles. The book
+// titled after its own series counts once as a title AND once in the series.
+func TestJunkAuthorFixer_RowNamedForAnotherAuthorsSeriesIsHeld(t *testing.T) {
+	f := newJunkFixture(t)
+	f.mkSeries("Cthulhu Armageddon", "C. T. Phipps")
+	for _, ti := range []string{"Cthulhu Armageddon", "The Tower of Zhaal"} {
+		f.book(junkBookSpec{title: ti, path: "/lib/ctp/" + ti, author: "C. T. Phipps", series: "Cthulhu Armageddon"})
+	}
+	for i, ti := range []string{"Wrath of the Old Ones", "Fallen Gods Hunger", "Sea of Madness"} {
+		f.book(junkBookSpec{title: ti, path: "/lib/w/" + ti, author: "Cthulhu Armageddon", vg: fmt.Sprintf("vgw-%d", i)})
+	}
+	id := f.book(junkBookSpec{title: "Wrath of the Old Ones (copy)", path: "/lib/j/w", author: "read by narrator", vg: "vgw-0"})
+
+	idx := f.index()
+	ctp := f.author("C. T. Phipps")
+	require.Equal(t, 2, idx.seriesWorkCredits["cthulhu armageddon"][ctp], "title-named-for-its-series book counts in the series too")
+
+	r := relinkRow(t, f, f.plan(), "read by narrator", id)
+	require.NotEqual(t, "Cthulhu Armageddon", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "held: %v %s", r.Proposed, r.Reason)
+	require.Contains(t, r.SkipReason, `credited to "C. T. Phipps"`)
+}
+
+// One misfiled book is not a series: C. T. Phipps's single book in a series
+// "Glynn Stewart" (none of Glynn Stewart's own books in it) does not hold
+// Glynn Stewart.
+func TestJunkAuthorFixer_OneMisfiledBookIsNotAnotherAuthorsSeries(t *testing.T) {
+	f := newJunkFixture(t)
+	f.mkSeries("Glynn Stewart", "Glynn Stewart")
+	f.book(junkBookSpec{title: "Mercury Rising", path: "/lib/gs/1", author: "Glynn Stewart"})
+	f.book(junkBookSpec{title: "Cthulhu Armageddon", path: "/lib/ctp/1", author: "C. T. Phipps", series: "Glynn Stewart"})
+	f.book(junkBookSpec{title: "The Rules of Supervillainy", path: "/lib/ctp/2", author: "C. T. Phipps"})
+	id := f.book(junkBookSpec{title: "Starship's Mage", path: "/lib/j/sm", author: "read by narrator",
+		tags: map[string]string{"artist": "Glynn Stewart"}})
+	r := relinkRow(t, f, f.plan(), "read by narrator", id)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Equal(t, "Glynn Stewart", r.Proposed["author"], r.Reason)
 }
