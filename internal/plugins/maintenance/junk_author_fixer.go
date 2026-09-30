@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -334,10 +334,10 @@ type junkAuthorIndex struct {
 	// excludes all of them except the row's planned target.
 	weakJunk map[int]authorjunk.Verdict
 	// seriesCorroborated: author id -> true when the row holds books in a
-	// series named for it (workKey equal) AND one of those books carries
-	// direct evidence naming the row as author (a file tag or a stored
-	// provider match). Set once by buildIndex (corroborateNamedSeries);
-	// nil (nothing corroborated) for an index built by indexFrom alone.
+	// series named for it (workKey equal) AND a stored provider match on one
+	// of those books names the row as author (file tags never do). Set once
+	// by buildIndex (corroborateNamedSeries); nil (nothing corroborated) for
+	// an index built by indexFrom alone.
 	seriesCorroborated map[int]bool
 }
 
@@ -392,17 +392,26 @@ type junkAuthorCorroborationReader interface {
 // in a series named for it is either an author whose series was named after
 // them (Brent Weeks in series "Brent Weeks") or a work row filed in its own
 // series ("Wraith Knight" holding "Wraith Lord", "Wraith Queen" in series
-// "Wraith Knight"). The series structure cannot tell them apart; direct
-// evidence on the books can: the Brent Weeks files are tagged "Brent Weeks",
-// the Wraith Knight files name C. T. Phipps, and an anthology's name its
-// editors or story authors.
+// "Wraith Knight"). Neither the series structure nor the file tags can tell
+// them apart: the scanner creates a junk row FROM the artist tag, so a tag
+// naming the row is circular ("artist: Wraith Knight" made the "Wraith
+// Knight" row). Only an independent source corroborates: a stored provider
+// author match whose fetched title agrees with the book's (see
+// providerCorroborates). Tags count only against: one naming a different,
+// existing real author vetoes the row.
+//
+// Deliberate trade-off: a real author whose every book sits in a series of
+// their own name and has no provider match is held. Authors with any book
+// outside that series pass through hasOtherWork instead, which is how every
+// watched real author passes in the offline replay.
 //
 // Candidates are only the rows holding at least one book in a series whose
 // workKey is the row's own; for each, up to junkAuthorCorroborationSample of
 // those books (lowest book IDs first, so the verdict is stable) are read: two
 // reads per book (files, field states), so at most candidates x 5 x 2 reads,
 // on 8 workers (DB reads, not CPU). Any read error fails the index, and so
-// the plan, closed. The map is written once, after every worker is done.
+// the plan, closed. Workers write only their own found[i]; the map is
+// written once, after every worker is done.
 func (idx *junkAuthorIndex) corroborateNamedSeries(r junkAuthorCorroborationReader) error {
 	type candidate struct {
 		id    int
@@ -434,12 +443,21 @@ func (idx *junkAuthorIndex) corroborateNamedSeries(r junkAuthorCorroborationRead
 		}
 		cands = append(cands, candidate{id: id, name: a.Name, books: in})
 	}
+	// real: FoldKey of every existing author row that is not strong junk and
+	// has books: the rows whose names in a tag or a provider credit mean a
+	// different person wrote the book.
+	real := map[string]bool{}
+	for id, a := range idx.authorsByID {
+		if _, junk := idx.strongJunk[id]; !junk && len(idx.ownBooks[id]) > 0 {
+			real[authorjunk.FoldKey(a.Name)] = true
+		}
+	}
 	found := make([]bool, len(cands))
 	var g errgroup.Group
 	g.SetLimit(8)
 	for i := range cands {
 		g.Go(func() error {
-			ok, err := namesAuthorDirectly(r, cands[i].name, cands[i].books)
+			ok, err := providerCorroborates(r, cands[i].name, cands[i].books, real)
 			if err != nil {
 				return fmt.Errorf("corroborate named series of %q: %w", cands[i].name, err)
 			}
@@ -459,27 +477,41 @@ func (idx *junkAuthorIndex) corroborateNamedSeries(r junkAuthorCorroborationRead
 	return nil
 }
 
-// namesAuthorDirectly reports whether any of books carries direct evidence
-// naming name as author: an author file tag (titleRelinkFileTagKeys, the
-// keys decideBook reads as its file_tags source) or a stored provider author
-// whose fetched title agrees with the book's, either folding
-// (authorjunk.FoldKey) to name whole or as one of its credited names.
-func namesAuthorDirectly(r junkAuthorCorroborationReader, name string, books []database.BookCore) (bool, error) {
+// providerCorroborates reports whether a stored provider match on one of
+// books names name as author, and no author file tag on them names someone
+// else. real holds the FoldKeys of existing real author rows.
+//
+//   - Evidence: a fetched author_name whose fetched title agrees with the
+//     book's (providerTitleAgrees) and that folds to name whole, or holds it
+//     as one of several credited names (split on , ; & / "and") when none of
+//     the others is a real author row: "C. T. Phipps & Wraith Knight" names
+//     Phipps and never corroborates "Wraith Knight".
+//   - Veto: an author tag key (titleRelinkFileTagKeys) on any sampled file
+//     naming a different person-shaped name that is a real author row
+//     ("artist: C. T. Phipps" beside "album_artist: Wraith Knight").
+func providerCorroborates(r junkAuthorCorroborationReader, name string, books []database.BookCore, real map[string]bool) (bool, error) {
 	self := authorjunk.FoldKey(name)
 	if self == "" {
 		return false, nil
 	}
-	names := func(v string) bool {
-		if authorjunk.FoldKey(v) == self {
-			return true
+	credits := func(v string) (own, others bool) {
+		parts := narratorSplitRe.Split(v, -1)
+		if authorjunk.FoldKey(v) != "" {
+			parts = append(parts, v)
 		}
-		for _, part := range narratorSplitRe.Split(v, -1) {
-			if authorjunk.FoldKey(part) == self {
-				return true
+		for _, part := range parts {
+			k := authorjunk.FoldKey(part)
+			switch {
+			case k == "":
+			case k == self:
+				own = true
+			case real[k] && personname.LooksLikePersonName(strings.TrimSpace(part)):
+				others = true
 			}
 		}
-		return false
+		return own, others
 	}
+	named := false
 	for _, b := range books {
 		files, err := r.GetBookFiles(b.ID)
 		if err != nil {
@@ -487,8 +519,11 @@ func namesAuthorDirectly(r junkAuthorCorroborationReader, name string, books []d
 		}
 		for i := range files {
 			for k, v := range files[i].RawTags {
-				if titleRelinkFileTagKeys[strings.ToLower(k)] && names(v) {
-					return true, nil
+				if !titleRelinkFileTagKeys[strings.ToLower(k)] {
+					continue
+				}
+				if _, others := credits(v); others {
+					return false, nil // the files name the real author: evidence against
 				}
 			}
 		}
@@ -509,11 +544,15 @@ func namesAuthorDirectly(r junkAuthorCorroborationReader, name string, books []d
 				}
 			}
 		}
-		if fetchedAuthor != "" && providerTitleAgrees(fetchedTitle, b.Title) && names(fetchedAuthor) {
-			return true, nil
+		if fetchedAuthor == "" || !providerTitleAgrees(fetchedTitle, b.Title) {
+			continue
+		}
+		own, others := credits(fetchedAuthor)
+		if authorjunk.FoldKey(fetchedAuthor) == self || (own && !others) {
+			named = true
 		}
 	}
-	return false, nil
+	return named, nil
 }
 
 // indexFrom builds the index from the library as read (buildIndex's reads,

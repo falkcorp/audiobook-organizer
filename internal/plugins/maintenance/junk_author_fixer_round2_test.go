@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_round2_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 993dd8c9-20d0-4bd4-951b-11471d5dff76
 // last-edited: 2026-09-29
 
@@ -356,36 +356,35 @@ func TestJunkAuthorIndex_IndependentWorksSkipLabelsAndTheOthersWorks(t *testing.
 
 // A series named exactly for a row and holding the row's books is either the
 // author-named swap artifact (the prod "Brent Weeks" shape) or a work row
-// filed in its own series ("Wraith Knight"). Only direct evidence on those
-// books tells them apart: a file tag or provider match naming the row.
-func weeksFixture(t *testing.T, tagged bool, speakman bool) (*junkFixture, string) {
+// filed in its own series ("Wraith Knight"). File tags cannot tell them apart
+// (the scanner makes a junk row FROM its artist tag); only a stored provider
+// match naming the row corroborates, and a tag naming a different real author
+// vetoes.
+func weeksFixture(t *testing.T, tags map[string]string, provider bool, others ...string) (*junkFixture, string) {
 	f := newJunkFixture(t)
 	f.mkSeries("Brent Weeks", "Brent Weeks")
 	for _, ti := range []string{"The Way of Shadows", "Shadow's Edge", "Beyond the Shadows", "The Black Prism"} {
-		spec := junkBookSpec{title: ti, path: "/lib/bw/" + ti, author: "Brent Weeks", series: "Brent Weeks"}
-		if tagged {
-			spec.tags = map[string]string{"artist": "Brent Weeks"}
+		bid := f.book(junkBookSpec{title: ti, path: "/lib/bw/" + ti, author: "Brent Weeks", series: "Brent Weeks", tags: tags})
+		if provider {
+			f.setProvider(bid, ti, "Brent Weeks")
 		}
-		f.book(spec)
 	}
-	f.book(junkBookSpec{title: "Some Anthology", path: "/lib/o/1", author: "Peter V. Brett", series: "Brent Weeks"})
-	f.book(junkBookSpec{title: "The Warded Man", path: "/lib/o/2", author: "Peter V. Brett"})
-	if speakman {
-		f.book(junkBookSpec{title: "Unfettered", path: "/lib/o/3", author: "Shawn Speakman", series: "Brent Weeks"})
-		f.book(junkBookSpec{title: "The Dark Thorn", path: "/lib/o/4", author: "Shawn Speakman"})
+	for i, o := range others {
+		f.book(junkBookSpec{title: "Anthology " + o, path: fmt.Sprintf("/lib/o/%d", i), author: o, series: "Brent Weeks"})
+		f.book(junkBookSpec{title: "Own Book " + o, path: fmt.Sprintf("/lib/o/x%d", i), author: o})
 	}
 	id := f.book(junkBookSpec{title: "The Blinding Knife", path: "/lib/j/bk", author: "read by narrator",
 		tags: map[string]string{"artist": "Brent Weeks"}})
 	return f, id
 }
 
-// Brent Weeks with every book in series "Brent Weeks" and tagged "Brent
-// Weeks" relinks, with one other author misfiled in the series (Peter V.
-// Brett) or two (plus Shawn Speakman): the tags corroborate the series.
-func TestJunkAuthorFixer_CorroboratedAuthorNamedSeriesStaysTheAuthors(t *testing.T) {
-	for _, speakman := range []bool{false, true} {
-		t.Run(fmt.Sprintf("speakman=%v", speakman), func(t *testing.T) {
-			f, id := weeksFixture(t, true, speakman)
+// Brent Weeks with every book in series "Brent Weeks" and an agreeing
+// provider match naming him relinks, with one other author misfiled in the
+// series (W1) or two (E).
+func TestJunkAuthorFixer_ProviderCorroboratedAuthorNamedSeriesStaysTheAuthors(t *testing.T) {
+	for _, others := range [][]string{{"Peter V. Brett"}, {"Peter V. Brett", "Shawn Speakman"}} {
+		t.Run(fmt.Sprintf("%d others", len(others)), func(t *testing.T) {
+			f, id := weeksFixture(t, map[string]string{"artist": "Brent Weeks"}, true, others...)
 			require.True(t, f.index().seriesCorroborated[f.author("Brent Weeks")])
 			r := relinkRow(t, f, f.plan(), "read by narrator", id)
 			require.Empty(t, r.Skipped, r.SkipReason)
@@ -394,36 +393,49 @@ func TestJunkAuthorFixer_CorroboratedAuthorNamedSeriesStaysTheAuthors(t *testing
 	}
 }
 
-// The deliberate trade-off: the same library with no tag or provider match on
-// the Brent Weeks books is structurally a work row filed in its own series,
-// so the row is held rather than guessed at.
-func TestJunkAuthorFixer_UncorroboratedAuthorNamedSeriesIsHeld(t *testing.T) {
-	f, id := weeksFixture(t, false, false)
-	require.False(t, f.index().seriesCorroborated[f.author("Brent Weeks")])
-	r := relinkRow(t, f, f.plan(), "read by narrator", id)
-	require.NotEqual(t, "Brent Weeks", r.Proposed["author"], r.Reason)
-	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "held: %v %s", r.Proposed, r.Reason)
+// The deliberate trade-off: without a provider match the same library is
+// structurally a work row filed in its own series, and a tag naming the row
+// is circular, so the row is held -- tagged (W1) or not (W2).
+func TestJunkAuthorFixer_TagsAloneNeverCorroborateAnAuthorNamedSeries(t *testing.T) {
+	for _, tags := range []map[string]string{{"artist": "Brent Weeks"}, nil} {
+		t.Run(fmt.Sprintf("tags=%v", tags), func(t *testing.T) {
+			f, id := weeksFixture(t, tags, false, "Peter V. Brett")
+			require.False(t, f.index().seriesCorroborated[f.author("Brent Weeks")])
+			r := relinkRow(t, f, f.plan(), "read by narrator", id)
+			require.NotEqual(t, "Brent Weeks", r.Proposed["author"], r.Reason)
+			require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "held: %v %s", r.Proposed, r.Reason)
+		})
+	}
 }
 
-// A work row filed in its own series, its files tagged with the real author:
-// held whether C. T. Phipps has a book in the series or not (the
-// folder-parser shape "Wraith Knight/Wraith Lord/...").
+// A work row filed in its own series is held in every shape: untagged (A,
+// C), tagged with the series name beside the real author (C2, even with a
+// provider match naming the row: the real author's tag vetoes), tagged with
+// the series name alone (C3: the row was made from that tag), or with a
+// provider match naming the real author, alone or joined to the row's name.
 func TestJunkAuthorFixer_WorkRowInItsOwnSeriesIsHeld(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		titles   []string
 		phippsIn int
-		tagged   bool
+		tags     map[string]string
+		provider string   // fetched author on each work-row book ("" = none)
 		outside  []string // the row's titles outside the series
 	}{
-		{"A: three titles, Phipps has one in the series, untagged", []string{"Wraith Lord", "Wraith Queen", "Wraith Emperor"}, 1, false, nil},
-		{"A: three titles, Phipps has one in the series, tagged Phipps", []string{"Wraith Lord", "Wraith Queen", "Wraith Emperor"}, 1, true, nil},
-		{"C: two titles, Phipps has none in the series, untagged", []string{"Wraith Lord", "Wraith Queen"}, 0, false, nil},
-		{"C: two titles, Phipps has none in the series, tagged Phipps", []string{"Wraith Lord", "Wraith Queen"}, 0, true, nil},
+		{"A: three titles, Phipps has one in the series", []string{"Wraith Lord", "Wraith Queen", "Wraith Emperor"}, 1, nil, "", nil},
+		{"C: two titles, Phipps has none in the series", []string{"Wraith Lord", "Wraith Queen"}, 0, nil, "", nil},
+		{"C2: album_artist is the series, artist is Phipps", []string{"Wraith Lord", "Wraith Queen"}, 0,
+			map[string]string{"album_artist": "Wraith Knight", "artist": "C. T. Phipps"}, "", nil},
+		{"C2 with a provider match naming the row", []string{"Wraith Lord", "Wraith Queen"}, 0,
+			map[string]string{"album_artist": "Wraith Knight", "artist": "C. T. Phipps"}, "Wraith Knight", nil},
+		{"C3: artist is the series (the row was made from it)", []string{"Wraith Lord", "Wraith Queen"}, 0,
+			map[string]string{"artist": "Wraith Knight"}, "", nil},
+		{"provider names Phipps", []string{"Wraith Lord", "Wraith Queen"}, 0, nil, "C. T. Phipps", nil},
+		{"provider names Phipps joined to the row's name", []string{"Wraith Lord", "Wraith Queen"}, 0, nil, "C. T. Phipps & Wraith Knight", nil},
 		// One title outside the series is other work (hasOtherWork), so only
 		// the uncorroborated series books keep the row from outweighing
 		// Phipps's two: they must not count as its own.
-		{"three titles plus one outside, Phipps has two in the series", []string{"Wraith Lord", "Wraith Queen", "Wraith Emperor"}, 2, false, []string{"Night Watch"}},
+		{"three titles plus one outside, Phipps has two in the series", []string{"Wraith Lord", "Wraith Queen", "Wraith Emperor"}, 2, nil, "", []string{"Night Watch"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newJunkFixture(t)
@@ -433,11 +445,11 @@ func TestJunkAuthorFixer_WorkRowInItsOwnSeriesIsHeld(t *testing.T) {
 			}
 			f.book(junkBookSpec{title: "The Rules of Supervillainy", path: "/lib/ctp/rs", author: "C. T. Phipps"})
 			for i, ti := range tc.titles {
-				spec := junkBookSpec{title: ti, path: fmt.Sprintf("/lib/w/%d", i), author: "Wraith Knight", series: "Wraith Knight", vg: fmt.Sprintf("vgw-%d", i)}
-				if tc.tagged {
-					spec.tags = map[string]string{"artist": "C. T. Phipps"}
+				bid := f.book(junkBookSpec{title: ti, path: fmt.Sprintf("/lib/w/%d", i), author: "Wraith Knight", series: "Wraith Knight",
+					vg: fmt.Sprintf("vgw-%d", i), tags: tc.tags})
+				if tc.provider != "" {
+					f.setProvider(bid, ti, tc.provider)
 				}
-				f.book(spec)
 			}
 			for i, ti := range tc.outside {
 				f.book(junkBookSpec{title: ti, path: fmt.Sprintf("/lib/w/out%d", i), author: "Wraith Knight"})
@@ -445,8 +457,8 @@ func TestJunkAuthorFixer_WorkRowInItsOwnSeriesIsHeld(t *testing.T) {
 			id := f.book(junkBookSpec{title: tc.titles[0] + " (copy)", path: "/lib/j/w", author: "read by narrator", vg: "vgw-0"})
 			require.False(t, f.index().seriesCorroborated[f.author("Wraith Knight")])
 			r := relinkRow(t, f, f.plan(), "read by narrator", id)
-			// Held: skipped, or the junk credit left for a hand decision
-			// (the tags naming Phipps confirm the row is junk). Never relinked.
+			// Held: skipped, or the junk credit left for a hand decision.
+			// Never relinked to the work row.
 			require.NotEqual(t, "Wraith Knight", r.Proposed["author"], r.Reason)
 			require.NotEqual(t, "relink", r.Proposed["decision"], "held: %v %s", r.Proposed, r.Reason)
 		})
@@ -488,37 +500,63 @@ func (c corroborationReader) GetMetadataFieldStates(id string) ([]database.Metad
 	return c.states[id], nil
 }
 
+func providerStates(title, author string) []database.MetadataFieldState {
+	enc := func(v string) *string { return new(`"` + v + `"`) }
+	return []database.MetadataFieldState{{Field: "title", FetchedValue: enc(title)}, {Field: "author_name", FetchedValue: enc(author)}}
+}
+
 // Corroboration reads only candidate rows (a book in the series of the row's
-// own name), accepts a tag or an agreeing provider match naming the row
-// (whole or as one of several credited names), and fails closed on a read
-// error.
+// own name); only an agreeing provider match naming the row counts; a tag
+// naming another real author vetoes; a joint credit counts only when no other
+// name in it is a real author row; a read error fails closed.
 func TestJunkAuthorIndex_CorroborateNamedSeries(t *testing.T) {
-	s := 7
 	books := []database.BookCore{
-		{ID: "bw1", Title: "The Way of Shadows", AuthorID: new(1), SeriesID: &s},
+		{ID: "bw1", Title: "The Way of Shadows", AuthorID: new(1), SeriesID: new(7)},
 		{ID: "wk1", Title: "Wraith Lord", AuthorID: new(2), SeriesID: new(8)},
-		{ID: "gs1", Title: "Mercury Rising", AuthorID: new(3)},
+		{ID: "ctp", Title: "The Rules of Supervillainy", AuthorID: new(3)},
+		{ID: "gs1", Title: "Mercury Rising", AuthorID: new(4)},
 	}
-	idx := indexFrom([]database.Author{{ID: 1, Name: "Brent Weeks"}, {ID: 2, Name: "Wraith Knight"}, {ID: 3, Name: "Glynn Stewart"}},
+	idx := indexFrom([]database.Author{{ID: 1, Name: "Brent Weeks"}, {ID: 2, Name: "Wraith Knight"}, {ID: 3, Name: "C. T. Phipps"}, {ID: 4, Name: "Glynn Stewart"}},
 		books, []database.Series{{ID: 7, Name: "Brent Weeks"}, {ID: 8, Name: "Wraith Knight"}}, nil, nil)
-
-	tagged := corroborationReader{files: map[string][]database.BookFile{
-		"bw1": {{RawTags: map[string]string{"ALBUM_ARTIST": "Brent Weeks & Someone Else"}}},
-		"wk1": {{RawTags: map[string]string{"artist": "C. T. Phipps", "title": "Wraith Knight"}}},
-		"gs1": {{RawTags: map[string]string{"artist": "Glynn Stewart"}}},
-	}}
-	require.NoError(t, idx.corroborateNamedSeries(tagged))
-	require.Equal(t, map[int]bool{1: true}, idx.seriesCorroborated, "Glynn Stewart is no candidate; Wraith Knight's tags name Phipps")
-
-	provider := corroborationReader{states: map[string][]database.MetadataFieldState{
-		"bw1": {
-			{Field: "title", FetchedValue: new(`"The Way of Shadows"`)},
-			{Field: "author_name", FetchedValue: new(`"Brent Weeks"`)},
-		},
-	}}
-	require.NoError(t, idx.corroborateNamedSeries(provider))
-	require.True(t, idx.seriesCorroborated[1], "an agreeing provider match corroborates")
-
+	tags := func(m map[string]map[string]string) map[string][]database.BookFile {
+		out := map[string][]database.BookFile{}
+		for id, t := range m {
+			out[id] = []database.BookFile{{RawTags: t}}
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name string
+		r    corroborationReader
+		want map[int]bool
+	}{
+		{"tags naming the rows never corroborate", corroborationReader{files: tags(map[string]map[string]string{
+			"bw1": {"artist": "Brent Weeks"}, "wk1": {"artist": "Wraith Knight"}, "gs1": {"artist": "Glynn Stewart"},
+		})}, map[int]bool{}},
+		{"an agreeing provider match does", corroborationReader{states: map[string][]database.MetadataFieldState{
+			"bw1": providerStates("The Way of Shadows", "Brent Weeks"),
+			"gs1": providerStates("Mercury Rising", "Glynn Stewart"),
+		}}, map[int]bool{1: true}},
+		{"a provider match for another title does not", corroborationReader{states: map[string][]database.MetadataFieldState{
+			"bw1": providerStates("A Different Book Entirely", "Brent Weeks"),
+		}}, map[int]bool{}},
+		{"a joint credit with no other real author does", corroborationReader{states: map[string][]database.MetadataFieldState{
+			"bw1": providerStates("The Way of Shadows", "Brent Weeks & Someone Unknown"),
+		}}, map[int]bool{1: true}},
+		{"a joint credit naming a real author does not", corroborationReader{states: map[string][]database.MetadataFieldState{
+			"wk1": providerStates("Wraith Lord", "C. T. Phipps & Wraith Knight"),
+		}}, map[int]bool{}},
+		{"a tag naming another real author vetoes the provider", corroborationReader{
+			files: tags(map[string]map[string]string{"wk1": {"album_artist": "Wraith Knight", "artist": "C. T. Phipps"}}),
+			states: map[string][]database.MetadataFieldState{
+				"wk1": providerStates("Wraith Lord", "Wraith Knight"),
+			}}, map[int]bool{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, idx.corroborateNamedSeries(tc.r))
+			require.Equal(t, tc.want, idx.seriesCorroborated)
+		})
+	}
 	require.Error(t, idx.corroborateNamedSeries(corroborationReader{err: errors.New("disk gone")}))
 }
 
