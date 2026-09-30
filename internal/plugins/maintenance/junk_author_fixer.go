@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
@@ -307,11 +308,19 @@ type junkAuthorIndex struct {
 	workNames  map[string]bool
 	seriesWork map[string]bool
 	// titleWorkCredits / seriesWorkCredits: workKey of a live book's title /
-	// series name -> primary author id -> books, leaving out a book whose
-	// primary author is also its Narrator (a reader filed as the author is no
-	// evidence of who wrote the work). idx.workCreditedElsewhere reads them.
+	// series name -> primary author id -> distinct works (title workKeys)
+	// credited: a work split into forty chapter files is one work.
+	// idx.workCreditedElsewhere reads them.
 	titleWorkCredits  map[string]map[int]int
 	seriesWorkCredits map[string]map[int]int
+	// authorWorkKeys: author id -> workKey of every title and series name the
+	// library credits to it (idx.independentWorks).
+	authorWorkKeys map[int]map[string]bool
+	// readsForOthers / readsOwn: authorjunk.FoldKey of a name -> books whose
+	// Narrator names it and whose primary author is someone else / is that
+	// same name (an author reading their own book). idx.isReader reads them.
+	readsForOthers map[string]int
+	readsOwn       map[string]int
 	// narratedBooks: authorjunk.FoldKey of a narrator name -> books that
 	// credit it as narrator: the larger of the live books whose Narrator
 	// string names it and the books whose book_narrators rows link it.
@@ -372,6 +381,7 @@ func indexFrom(authors []database.Author, books []database.BookCore, series []da
 		workNames: map[string]bool{}, seriesWork: map[string]bool{}, narratedBooks: map[string]int{},
 		weakJunk:         map[int]authorjunk.Verdict{},
 		titleWorkCredits: map[string]map[int]int{}, seriesWorkCredits: map[string]map[int]int{},
+		authorWorkKeys: map[int]map[string]bool{}, readsForOthers: map[string]int{}, readsOwn: map[string]int{},
 	}
 	for _, n := range narrators {
 		idx.narratorsByID[n.ID] = n.Name
@@ -403,6 +413,19 @@ func indexFrom(authors []database.Author, books []database.BookCore, series []da
 			m[key] = map[int]int{}
 		}
 		m[key][id]++
+	}
+	type workCredit struct {
+		key   string
+		id    int
+		title string
+	}
+	seenWork := map[workCredit]bool{}
+	bumpWork := func(m map[string]map[int]int, key string, id int, title string) {
+		if key == "" || seenWork[workCredit{key, id, title}] {
+			return
+		}
+		seenWork[workCredit{key, id, title}] = true
+		bump(m, key, id)
 	}
 	for i := range books {
 		b := books[i]
@@ -437,10 +460,41 @@ func indexFrom(authors []database.Author, books []database.BookCore, series []da
 			if b.SeriesID != nil {
 				bump(idx.seriesCredits, authorjunk.Normalize(idx.seriesByID[*b.SeriesID].Name), *b.AuthorID)
 			}
-			if !narratesOwnBook(b, idx.authorsByID[*b.AuthorID].Name) {
-				bump(idx.titleWorkCredits, workKey(b.Title), *b.AuthorID)
-				if b.SeriesID != nil {
-					bump(idx.seriesWorkCredits, workKey(idx.seriesByID[*b.SeriesID].Name), *b.AuthorID)
+			aid := *b.AuthorID
+			tk := workKey(b.Title)
+			keys := idx.authorWorkKeys[aid]
+			if keys == nil {
+				keys = map[string]bool{}
+				idx.authorWorkKeys[aid] = keys
+			}
+			if tk != "" {
+				keys[tk] = true
+			}
+			bumpWork(idx.titleWorkCredits, tk, aid, tk)
+			if b.SeriesID != nil {
+				sk := workKey(idx.seriesByID[*b.SeriesID].Name)
+				if sk != "" {
+					keys[sk] = true
+				}
+				bumpWork(idx.seriesWorkCredits, sk, aid, tk)
+			}
+		}
+		if b.Narrator != nil {
+			own := ""
+			if b.AuthorID != nil {
+				own = authorjunk.FoldKey(idx.authorsByID[*b.AuthorID].Name)
+			}
+			seen := map[string]bool{}
+			for _, part := range narratorSplitRe.Split(*b.Narrator, -1) {
+				k := authorjunk.FoldKey(part)
+				if k == "" || seen[k] {
+					continue
+				}
+				seen[k] = true
+				if k == own {
+					idx.readsOwn[k]++
+				} else {
+					idx.readsForOthers[k]++
 				}
 			}
 		}
@@ -456,6 +510,11 @@ func indexFrom(authors []database.Author, books []database.BookCore, series []da
 	for id, n := range narratorRefs {
 		if k := authorjunk.FoldKey(idx.narratorsByID[id]); k != "" && n > idx.narratedBooks[k] {
 			idx.narratedBooks[k] = n
+		}
+		// book_narrators counts carry no author: the books the Narrator text
+		// shows the name reading for itself are taken off.
+		if k := authorjunk.FoldKey(idx.narratorsByID[id]); k != "" && n-idx.readsOwn[k] > idx.readsForOthers[k] {
+			idx.readsForOthers[k] = n - idx.readsOwn[k]
 		}
 	}
 	return idx
@@ -643,30 +702,34 @@ func (idx *junkAuthorIndex) workTarget(name string, id int, bookTitle string, bo
 	return junkRefuseOwnTitle, "the book's own title or series (or a part of it), not a person"
 }
 
-// workCreditedElsewhere names the author the library credits with a live
-// book or series whose workKey is name's, when that author is someone other
-// than row id (<= 0: a mint); "" when none. Not counted as someone else,
-// since none of them is evidence of who wrote a work:
+// workCreditedElsewhere names an author the library credits with a live book
+// or series whose workKey is name's, when that credit outweighs row id's own
+// body of work (id <= 0: a mint, no body of work); "" when none. One stray
+// credit never outweighs an author's work: a biography titled "Agatha
+// Christie" does not make Agatha Christie a work, one C. T. Phipps book filed
+// in a series "Glynn Stewart" does not make Glynn Stewart one.
+//
+// Counts are distinct works (title workKeys), not files. Not counted as
+// someone else, since none of them is evidence of who wrote a work:
 //   - row id itself, a row spelled the same (authorjunk.FoldKey), or a row
 //     carrying the name whole ("Brandon Sanderson (GraphicAudio)");
 //   - a strong junk row (a name-alone verdict: the rows this fixer repairs).
 //     A weak one still counts: weakJunk holds real authors ("Brent Weeks",
 //     "Terry Pratchett") whose names are also junk series rows;
-//   - a swapped pair: a row whose own name is a work credited to row id on at
-//     least as many books ("Mistborn", credited with one book in a series
-//     "Brandon Sanderson", while Brandon Sanderson is credited with the
-//     Mistborn books; "Katherine Rundell" against an "Impossible Creatures"
-//     row the other way round): the side with more books under the other's
-//     name is the writer;
-//   - a reader filed as an author: a name the library credits as narrator on
-//     at least half as many books as it has as author ("Cressida Cowell"
-//     series filed under David Tennant), or the book's own Narrator
-//     (the credit maps leave those books out, narratesOwnBook);
-//   - for a title (not a series) match, a row with no other work, or with no
-//     more books under that title than row id has: a book titled with a
-//     person's name is usually a folder parsed the wrong way round ("Joe
-//     Abercrombie" credited to "Before They Are Ha", two "Roald Dahl" titles
-//     filed under Robert Jordan beside nine under Roald Dahl).
+//   - a reader filed as an author (idx.isReader);
+//   - for a title (not a series) match, a row with no other work ("Joe
+//     Abercrombie" credited to "Before They Are Ha").
+//
+// The other author must also have more works under the name than row id has
+// independent works (idx.independentWorks: its works not named for the name,
+// not the other author's own works, and not file labels -- "Disc 07", "01").
+// The row's own works named for the name count on the other side: they are
+// the work's, not the person's ("American Gods 10th Anniversary" under an
+// "American Gods" row; Neil Gaiman has "American Gods").
+// A swapped pair -- each credited under the other's name ("Mistborn" in a
+// series "Brandon Sanderson", Brandon Sanderson in series "Mistborn") -- goes
+// to row id only when it alone has work outside the pair; otherwise the
+// credit stands and the row is held.
 //
 // The lowest qualifying id is named, so the refusal reads the same on every
 // plan. Maps are read-only here (RunItems workers call this concurrently).
@@ -677,55 +740,187 @@ func (idx *junkAuthorIndex) workCreditedElsewhere(name string, id int) string {
 	}
 	self := authorjunk.FoldKey(name)
 	best := 0
-	consider := func(m map[string]map[int]int, title bool) {
-		for oid, n := range m[k] {
-			if oid == id || (best != 0 && oid >= best) {
-				continue
-			}
-			o, ok := idx.authorsByID[oid]
-			if !ok || authorjunk.FoldKey(o.Name) == self || properWordPart(k, workKey(o.Name)) {
-				continue
-			}
-			if _, junk := idx.strongJunk[oid]; junk {
-				continue
-			}
-			if id > 0 {
-				ok := workKey(o.Name)
-				if idx.seriesWorkCredits[ok][id]+idx.titleWorkCredits[ok][id] >= n {
-					continue
-				}
-			}
-			if 2*idx.narratedBooks[authorjunk.FoldKey(o.Name)] >= len(idx.ownBooks[oid]) {
-				continue
-			}
-			if title && (!idx.hasOtherWork(oid, name) || (id > 0 && n <= m[k][id])) {
-				continue
-			}
-			best = oid
+	consider := func(oid int) {
+		if oid == id || (best != 0 && oid >= best) {
+			return
 		}
+		o, ok := idx.authorsByID[oid]
+		if !ok || authorjunk.FoldKey(o.Name) == self || properWordPart(k, workKey(o.Name)) {
+			return
+		}
+		if _, junk := idx.strongJunk[oid]; junk {
+			return
+		}
+		if idx.isReader(oid) {
+			return
+		}
+		inSeries := idx.seriesWorkCredits[k][oid]
+		n := inSeries + idx.titleWorkCredits[k][oid]
+		if inSeries == 0 && !idx.hasOtherWork(oid, name) {
+			return
+		}
+		if id > 0 {
+			ok := workKey(o.Name)
+			if idx.seriesWorkCredits[ok][id]+idx.titleWorkCredits[ok][id] > 0 {
+				if idx.independentWorks(id, oid, k, ok, 1) > 0 && idx.independentWorks(oid, id, ok, k, 1) == 0 {
+					return // row id is the writer; the other row is its swapped work
+				}
+				best = oid
+				return
+			}
+			// The row's own works named for the name ("American Gods 10th
+			// Anniversary" under an "American Gods" row) are the work's too.
+			if w := n + idx.namedWorks(id, k); idx.independentWorks(id, oid, k, "", w) >= w {
+				return
+			}
+		}
+		best = oid
 	}
-	consider(idx.seriesWorkCredits, false)
-	consider(idx.titleWorkCredits, true)
+	for oid := range idx.seriesWorkCredits[k] {
+		consider(oid)
+	}
+	for oid := range idx.titleWorkCredits[k] {
+		consider(oid)
+	}
 	if best == 0 {
 		return ""
 	}
 	return idx.authorsByID[best].Name
 }
 
-// narratesOwnBook reports whether the book's Narrator names its primary
-// author (name): a reader filed as the author, or an author reading their own
-// book -- either way no evidence for workCreditedElsewhere.
-func narratesOwnBook(b database.BookCore, name string) bool {
-	self := authorjunk.FoldKey(name)
-	if b.Narrator == nil || self == "" {
+// isReader reports a reader filed as an author: the library credits the name
+// as narrator of other authors' books on at least half as many books as it
+// credits it as author (David Tennant, filed as the author of a "Cressida
+// Cowell" series he reads). An author reading their own books (Neil Gaiman)
+// is not a reader: those books count on neither side.
+func (idx *junkAuthorIndex) isReader(id int) bool {
+	key := authorjunk.FoldKey(idx.authorsByID[id].Name)
+	others := idx.readsForOthers[key]
+	if others == 0 {
 		return false
 	}
-	for _, part := range narratorSplitRe.Split(*b.Narrator, -1) {
-		if authorjunk.FoldKey(part) == self {
-			return true
+	return 2*others >= len(idx.ownBooks[id])-idx.readsOwn[key]
+}
+
+// independentWorks counts row id's distinct works (title workKeys), up to
+// limit, that are named for neither k1 nor k2 (a title or series equal to
+// either, or holding either as whole words) and are not works the library
+// credits to row other (a title or series that is, or holds as whole words,
+// one of other's titles or series names): the body of work that says row id
+// is a writer and not other's folder dump ("Cthulhu Armageddon"'s "Wraith
+// Knight Three Worlds, Book" is C. T. Phipps's "Wraith Knight").
+func (idx *junkAuthorIndex) independentWorks(id, other int, k1, k2 string, limit int) int {
+	named := func(x string) bool {
+		for _, k := range []string{k1, k2} {
+			if k != "" && (x == k || properWordPart(k, x)) {
+				return true
+			}
+		}
+		return false
+	}
+	theirs := idx.authorWorkKeys[other]
+	otherWork := func(x string) bool {
+		if x == "" || len(theirs) == 0 {
+			return false
+		}
+		words := strings.Fields(x)
+		for i := range words {
+			for j := i + 1; j <= len(words); j++ {
+				g := strings.Join(words[i:j], " ")
+				if j-i == 1 && len(g) < 5 {
+					continue // "the", "war": too common to name a work
+				}
+				if theirs[g] {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	seen := map[string]bool{}
+	for _, b := range idx.ownBooks[id] {
+		tk := workKey(b.Title)
+		if tk == "" || named(tk) || otherWork(tk) {
+			continue
+		}
+		if b.SeriesID != nil {
+			if sk := workKey(idx.seriesByID[*b.SeriesID].Name); sk != "" && (named(sk) || otherWork(sk)) {
+				continue
+			}
+		}
+		work := workOfTitle(tk)
+		if work == "" || seen[work] {
+			continue
+		}
+		seen[work] = true
+		if len(seen) >= limit {
+			break
 		}
 	}
-	return false
+	return len(seen)
+}
+
+// namedWorks counts row id's distinct works (workOfTitle) whose title holds
+// k with more words ("American Gods 10th Anniversary") or whose series is or
+// holds k. A title that is k exactly is left out: a book titled with a
+// person's own name is a folder parsed the wrong way round ("Roald Dahl"
+// filed as the title of Roald Dahl's books), not a work of that name.
+func (idx *junkAuthorIndex) namedWorks(id int, k string) int {
+	named := func(x string) bool { return x != "" && (x == k || properWordPart(k, x)) }
+	seen := map[string]bool{}
+	for _, b := range idx.ownBooks[id] {
+		tk := workKey(b.Title)
+		isNamed := properWordPart(k, tk)
+		if !isNamed && b.SeriesID != nil {
+			isNamed = named(workKey(idx.seriesByID[*b.SeriesID].Name))
+		}
+		if w := workOfTitle(tk); isNamed && w != "" {
+			seen[w] = true
+		}
+	}
+	return len(seen)
+}
+
+// fileLabelWords: words that number or label a file rather than name a work.
+var fileLabelWords = map[string]bool{
+	"disc": true, "disk": true, "cd": true, "part": true, "pt": true, "track": true, "chapter": true, "chap": true,
+	"ch": true, "book": true, "vol": true, "volume": true, "side": true, "tape": true, "episode": true, "ep": true,
+	"file": true, "copy": true, "copy1": true, "unknown": true, "title": true, "read": true, "by": true, "narrator": true,
+	"intro": true, "introduction": true, "prologue": true, "epilogue": true, "opening": true, "closing": true,
+	"credits": true, "unabridged": true, "abridged": true, "audiobook": true, "of": true,
+}
+
+// workOfTitle reduces a title workKey to the work it names, without file
+// labels and numbers ("skinwalker part 2" -> "skinwalker"); "" when nothing
+// names a work: no all-letter word of three or more letters is left ("disc
+// 07", "01", "0i06yh b 3").
+func workOfTitle(tk string) string {
+	var keep []string
+	named := false
+	for _, w := range strings.Fields(tk) {
+		if fileLabelWords[w] || strings.IndexFunc(w, func(r rune) bool { return !unicode.IsDigit(r) }) < 0 {
+			continue
+		}
+		keep = append(keep, w)
+		if len([]rune(w)) >= 3 && strings.IndexFunc(w, func(r rune) bool { return !unicode.IsLetter(r) }) < 0 {
+			named = true
+		}
+	}
+	if !named {
+		return ""
+	}
+	return strings.Join(keep, " ")
+}
+
+// junkAuthorSourceRank is src's position in junkAuthorSources (lower
+// decides first); len(junkAuthorSources) for an unknown source.
+func junkAuthorSourceRank(src string) int {
+	for i, s := range junkAuthorSources {
+		if s == src {
+			return i
+		}
+	}
+	return len(junkAuthorSources)
 }
 
 // junkAuthorInferredSource: the sources that transfer another book's credit
@@ -952,6 +1147,10 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		narrator bool
 	}
 	bySource := map[string]map[string]answer{}
+	// creditedRefusedAt: the rank (junkAuthorSources) of the best source whose
+	// answer was refused as a work credited to another author. A weighed
+	// judgement, not a shape: a lower source may not overrule it.
+	creditedRefusedAt, creditedRefusedSrc := len(junkAuthorSources), ""
 	// addName weighs one answer. resolveOnly: the name was derived from the
 	// evidence (a "Person (Reader)" head, a junk name cleaned), so it may only
 	// resolve to an existing author with books, never mint one.
@@ -1050,6 +1249,11 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		// A work, not a person (workTarget: by evidence, mints included).
 		if code, why := idx.workTarget(name, ans.row.ID, d.Book.Title, d.Book.SeriesID); code != "" {
 			refuse(src, name, code, why)
+			if code == junkRefuseWorkCredited {
+				if si := junkAuthorSourceRank(src); si < creditedRefusedAt {
+					creditedRefusedAt, creditedRefusedSrc = si, src
+				}
+			}
 			return
 		}
 		// "Simon" of "Simon & Schuster": a piece of the junk name that is not
@@ -1277,6 +1481,15 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		}
 		sort.Strings(d.Others)
 		break
+	}
+	// A better source's answer was refused as a work credited elsewhere: that
+	// refusal weighs evidence and can be wrong, so a lower source naming
+	// someone else does not decide the row in its place; it is held.
+	if d.Skip == "" && d.Decision != "" && junkAuthorSourceRank(d.Source) > creditedRefusedAt {
+		d.Decision, d.Target, d.Variant, d.NarratorAnswer, d.Others, d.Corroborated = "", database.Author{}, "", false, nil, false
+		d.Skip, d.SkipReason = junkAuthorSkipAmbiguous, fmt.Sprintf("%s's answer was refused as a work credited to another author; not decided from %s instead",
+			creditedRefusedSrc, d.Source)
+		d.Source = ""
 	}
 	// The tags or provider named only the book's reader: the answer is theirs
 	// to give, so the row is held rather than decided from a sibling or a

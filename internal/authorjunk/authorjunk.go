@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
 // last-edited: 2026-09-29
 
@@ -124,22 +124,25 @@ type Evidence struct {
 
 // Rule names.
 const (
-	RulePlaceholder     = "placeholder"
-	RuleCollective      = "collective_word"
-	RuleNarrator        = "narrator_phrase"
-	RulePublisher       = "publisher_or_studio_name"
-	RuleGenre           = "genre_name"
-	RuleCreationGate    = "author_creation_gate"
-	RuleSeriesMarker    = "series_marker_word"
-	RuleStructuralWord  = "structural_word"
-	RuleLeadingArticle  = "leading_article_title_shape"
-	RulePossessive      = "possessive"
-	RuleShout           = "all_caps_shout"
-	RuleFilenameShape   = "filename_shape"
-	RuleOwnTitles       = "own_books_titled_with_name"
-	RuleTitleOfOther    = "title_of_another_authors_book"
-	RuleSeriesOfOther   = "series_of_another_authors_books"
-	RuleCharacterSeries = "person_shaped_series_of_another_author"
+	RulePlaceholder = "placeholder"
+	// RulePlaceholderPhrase: a name made only of placeholder words
+	// (isPlaceholderPhrase). Relink-only: a vocabulary rule never unlinks.
+	RulePlaceholderPhrase = "placeholder_phrase"
+	RuleCollective        = "collective_word"
+	RuleNarrator          = "narrator_phrase"
+	RulePublisher         = "publisher_or_studio_name"
+	RuleGenre             = "genre_name"
+	RuleCreationGate      = "author_creation_gate"
+	RuleSeriesMarker      = "series_marker_word"
+	RuleStructuralWord    = "structural_word"
+	RuleLeadingArticle    = "leading_article_title_shape"
+	RulePossessive        = "possessive"
+	RuleShout             = "all_caps_shout"
+	RuleFilenameShape     = "filename_shape"
+	RuleOwnTitles         = "own_books_titled_with_name"
+	RuleTitleOfOther      = "title_of_another_authors_book"
+	RuleSeriesOfOther     = "series_of_another_authors_books"
+	RuleCharacterSeries   = "person_shaped_series_of_another_author"
 	// RuleArticleThe: "The Complete", "The Rosharan System", "The Thirteenth
 	// Doctor Adventures" -- person-SHAPED, so RuleLeadingArticle misses them.
 	RuleArticleThe = "leading_the_title_shape"
@@ -192,7 +195,7 @@ var relinkOnlyRules = map[string]bool{
 	RuleFranchise: true, RuleSiteTag: true, RuleSeriesParenthetical: true,
 	RuleGenreLabel: true, RuleProductionPhrase: true,
 	RuleEncoderTag: true, RuleReleaseName: true, RuleChapterLabel: true, RuleSortPrefix: true,
-	RuleUnbalancedBracket: true,
+	RuleUnbalancedBracket: true, RulePlaceholderPhrase: true,
 }
 
 // RelinkOnly reports whether the verdict may only relink a book to a real
@@ -225,9 +228,13 @@ var (
 	placeholderHeads = map[string]bool{"author": true, "authors": true, "writer": true, "name": true, "idea": true}
 )
 
-// isPlaceholderPhrase reports whether words (Normalize form) are all
-// placeholderWords and include a placeholderHeads word.
+// isPlaceholderPhrase reports whether words (Normalize form) are two or more
+// placeholderWords including a placeholderHeads word. A lone head ("Writer",
+// "Name", "Idea") is left alone: it can be a surname.
 func isPlaceholderPhrase(words []string) bool {
+	if len(words) < 2 {
+		return false
+	}
 	head := false
 	for _, w := range words {
 		if !placeholderWords[w] {
@@ -562,7 +569,7 @@ func classifyBaseParts(s string) (Verdict, *nameParts) {
 		}
 	}
 	if isPlaceholderPhrase(words) {
-		return strong(ClassPlaceholder, RulePlaceholder), nil
+		return strong(ClassPlaceholder, RulePlaceholderPhrase), nil
 	}
 
 	if narratorRe.MatchString(s) {
