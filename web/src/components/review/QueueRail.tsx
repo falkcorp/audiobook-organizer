@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -97,9 +97,10 @@ const SWITCHES: Array<{ key: keyof MetadataFilters; label: string; help?: string
     key: 'hideRuntimeDifferences',
     label: 'Hide runtime differences',
     help:
-      "Hide candidates whose runtime is more than 10% off the book's -- the same " +
-      'tolerance the apply gate refuses at. Rows with an unknown runtime on either ' +
-      'side stay visible. Part of In-depth and Strict review.',
+      'Hide every candidate showing the "runtime differs" warning (more than 10 ' +
+      "minutes off the book's runtime) and any candidate more than 10% off, which " +
+      'the apply gate refuses. Rows with an unknown runtime on either side stay ' +
+      'visible. Part of In-depth and Strict review.',
   },
   {
     key: 'hideMultiBook',
@@ -676,7 +677,11 @@ export function QueueRail({
                 <>
                   All {filteredCount.toLocaleString()} matching selected.{' '}
                   {onClearSelection && (
-                    <Button size="small" onClick={onClearSelection} data-testid="clear-selection-banner">
+                    <Button
+                      size="small"
+                      onClick={onClearSelection}
+                      data-testid="clear-selection-banner"
+                    >
                       Clear selection
                     </Button>
                   )}
@@ -684,8 +689,13 @@ export function QueueRail({
               ) : (
                 <>
                   All {rows.length.toLocaleString()} on this page selected
-                  {selectedCount > rows.length ? ` (${selectedCount.toLocaleString()} in all)` : ''}.{' '}
-                  <Button size="small" onClick={onSelectAllMatching} data-testid="select-all-matching">
+                  {selectedCount > rows.length ? ` (${selectedCount.toLocaleString()} in all)` : ''}
+                  .{' '}
+                  <Button
+                    size="small"
+                    onClick={onSelectAllMatching}
+                    data-testid="select-all-matching"
+                  >
                     Select all {filteredCount.toLocaleString()} matching
                   </Button>
                 </>
@@ -738,7 +748,12 @@ export function QueueRail({
                       {r.candidate.title}
                     </Typography>
                   ) : isUnreviewableRow(r) ? (
-                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      noWrap
+                      sx={{ display: 'block' }}
+                    >
                       {r.status === 'decode_error' ? 'candidate will not decode' : 'no candidate'}
                       {r.book.author ? ` \u00b7 ${r.book.author}` : ''}
                     </Typography>

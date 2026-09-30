@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 //
 // Owner, 2026-09-27: "the 11324 with no candidates let me click on the chips
 // at the left bar in the review page". Every summary chip filters the list to
@@ -152,9 +152,7 @@ describe('summary chips filter the list to exactly the books they count', () => 
     await waitFor(() => expect(listedIds()).toEqual(ids));
     expect(listedIds()).toHaveLength(count);
     expect(el).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent(
-      `Showing the ${count}`
-    );
+    expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent(`Showing the ${count}`);
     // The reviewable chips need nothing more from the server.
     expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1);
   });
@@ -338,12 +336,17 @@ describe('runtime differences', () => {
       return {
         ...r,
         book: { ...r.book, duration_seconds: book },
-        candidate: { ...r.candidate, duration_sec: cand },
+        // duration_delta_sec as the server computes it: |book - candidate|.
+        candidate: {
+          ...r.candidate,
+          duration_sec: cand,
+          duration_delta_sec: Math.abs(book - cand),
+        },
       } as api.CandidateResult;
     };
     vi.mocked(api.getCachedReviewResults).mockResolvedValue({
       ...summary,
-      results: [withRuntime('ok', 36000, 35000), withRuntime('off', 36000, 18000)],
+      results: [withRuntime('ok', 36000, 35700), withRuntime('off', 36000, 18000)],
       total_count: 2,
     } as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
     await openWorkspace();
