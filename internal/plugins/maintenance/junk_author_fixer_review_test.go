@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
 // last-edited: 2026-09-29
 
@@ -345,7 +345,10 @@ func TestJunkAuthorFixer_FoldedNameResolvesToExistingRow(t *testing.T) {
 	books := map[string]string{}
 	for real, tag := range pairs {
 		f.author(real)
-		books[real] = f.book(junkBookSpec{title: "Book " + real, path: "/lib/m/" + tag, author: "GraphicAudio",
+		// The title must not carry the author's name: an existing author with
+		// no books whose name is part of the book's own title is held
+		// (workTarget).
+		books[real] = f.book(junkBookSpec{title: "Book " + strconv.Itoa(len(books)+1), path: "/lib/m/" + tag, author: "GraphicAudio",
 			tags: map[string]string{"artist": tag}})
 	}
 	before, err := f.s.GetAllAuthors()

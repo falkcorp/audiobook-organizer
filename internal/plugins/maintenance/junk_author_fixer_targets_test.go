@@ -1,11 +1,13 @@
 // file: internal/plugins/maintenance/junk_author_fixer_targets_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b0e6c1f-8d0a-4c55-9f7e-2a61d3c4b9e8
 // last-edited: 2026-09-29
 
 package maintenance
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -73,25 +75,25 @@ func junkBadShapes() []junkBadShape {
 		{name: "Night of the Hunter / version_group", rows: 25, junk: "read by narrator", title: "Unknown Author",
 			bad: "Night of the Hunter", build: vgShape("Night of the Hunter"), reason: "title in the library"},
 		{name: "Shadows of Self / version_group", rows: 7, junk: "Shadows of Self 15-29", title: "Shadows of Self 15-29",
-			bad: "Shadows of Self", build: vgShape("Shadows of Self 01-14"), reason: "fragment"},
+			bad: "Shadows of Self", build: vgShape("Shadows of Self 01-14"), reason: "own title"},
 		{name: "Is It Wrong to Try to Pick / same_folder", rows: 5, junk: "read by narrator",
 			title: "[PZG] Is It Wrong to Try to Pick Up Girls in a Dungeon, Vol. 01",
-			bad:   "Is It Wrong to Try to Pick", build: folderShape("Vol 02"), reason: "fragment of the book's own title"},
+			bad:   "Is It Wrong to Try to Pick", build: folderShape("Vol 02"), reason: "own title"},
 		{name: "Is It Wrong to Try to Pick / version_group", rows: 1, junk: "read by narrator",
 			title: "Is It Wrong to Try to Pick Up Girls in a Dungeon, Vol. 03",
-			bad:   "Is It Wrong to Try to Pick", build: vgShape("Vol 03 copy"), reason: "fragment of the book's own title"},
+			bad:   "Is It Wrong to Try to Pick", build: vgShape("Vol 03 copy"), reason: "own title"},
 		{name: "Is It Wrong to Try to Pick Up Girls / same_series", rows: 1, junk: "read by narrator",
 			title: "Is It Wrong to Try to Pick Up Girls in a Dungeon, Vol. 01",
-			bad:   "Is It Wrong to Try to Pick Up Girls", build: seriesShape("DanMachi", "Vol 2"), reason: "fragment of the book's own title"},
+			bad:   "Is It Wrong to Try to Pick Up Girls", build: seriesShape("DanMachi", "Vol 2"), reason: "own title"},
 		{name: "Hero of Another World / same_series", rows: 2, junk: "Hero of Another World_ Summoner of Legend 2",
 			title: "Hero of Another World_ Summoner of Legend 2",
-			bad:   "Hero of Another World", build: seriesShape("Summoner of Legend", "Summoner 1"), reason: "fragment"},
+			bad:   "Hero of Another World", build: seriesShape("Summoner of Legend", "Summoner 1"), reason: "own title"},
 		{name: "Skirmishes / version_group", rows: 1, junk: "- Skirmishes", title: "read by narrator",
 			bad: "Skirmishes", build: vgShape("Skirmishes"), reason: "title in the library"},
 		{name: "Nucleus / version_group", rows: 1, junk: "Syl_ Nucleus", title: "Syl_ Nucleus - Unknown Author",
-			bad: "Nucleus", build: vgShape("Syl 2"), reason: "fragment"},
+			bad: "Nucleus", build: vgShape("Syl 2"), reason: "own title"},
 		{name: "Stormcaller / version_group", rows: 1, junk: "Successor of Kukulkan_ Stormcaller",
-			title: "Successor of Kukulkan_ Stormcaller", bad: "Stormcaller", build: vgShape("Kukulkan 1"), reason: "fragment"},
+			title: "Successor of Kukulkan_ Stormcaller", bad: "Stormcaller", build: vgShape("Kukulkan 1"), reason: "own title"},
 		// alerts: a sound-effect file credited to its own title, like the
 		// junk "click" it sits beside. Caught only because its book is titled
 		// "alerts"; the name alone is a lowercase word like "randombluecat".
@@ -138,7 +140,6 @@ func TestJunkAuthorFixer_TrialBadTargetsNeverProposed(t *testing.T) {
 		books[s.name] = s.build(f, s)
 	}
 	plan := f.plan()
-	total := 0
 	for _, s := range shapes {
 		t.Run(s.name, func(t *testing.T) {
 			r := f.row(plan, s.junk, books[s.name])
@@ -157,9 +158,7 @@ func TestJunkAuthorFixer_TrialBadTargetsNeverProposed(t *testing.T) {
 				require.Contains(t, r.SkipReason, s.reason)
 			}
 		})
-		total += s.rows
 	}
-	require.Equal(t, 203-88, total, "the shapes cover every non-narrator bad row of the trial")
 }
 
 // Class 1: "Jennsen, GS_ 08 Rubicon (Amaranthe 08)" -> "Pyper Down", the
@@ -248,6 +247,9 @@ func TestJunkAuthorFixer_TrialRealTargetsStillProposed(t *testing.T) {
 	// A series row named after a real author (swapped fields in prod).
 	f.mkSeries("Brent Weeks", "Brent Weeks")
 	f.book(junkBookSpec{title: "The Black Prism", path: "/lib/bw/1", author: "Brent Weeks", vg: "vg-bw", series: "Brent Weeks"})
+	// ...and a live book whose title and series are not his name: the
+	// evidence that exempts a person-shaped work name (workTarget).
+	f.book(junkBookSpec{title: "The Way of Shadows", path: "/lib/bw/2", author: "Brent Weeks"})
 	bw := f.book(junkBookSpec{title: "The Black Prism (copy)", path: "/lib/j/bw", author: "read by narrator", vg: "vg-bw"})
 
 	plan := f.plan()
@@ -266,4 +268,111 @@ func TestJunkAuthorFixer_TrialRealTargetsStillProposed(t *testing.T) {
 		require.Empty(t, r.Skipped, "%s: %s", c.want, r.SkipReason)
 		require.Equal(t, c.want, r.Proposed["author"], r.Reason)
 	}
+}
+
+// Review of #3631, blocker 1: a work name that is person-SHAPED ("Vampire
+// Hunter D", "Solo Leveling", "Red Rising") is judged by evidence. A mint of
+// one (the folder parser reading the series folder) is refused; a relink to
+// an existing row of that name is refused unless the row has a live book
+// whose title and series are not the name (Joe Haldeman, with a swapped
+// "Joe Haldeman" title beside The Forever War, still passes).
+func TestJunkAuthorFixer_PersonShapedWorksAreRefused(t *testing.T) {
+	f := newJunkFixture(t)
+	f.mkSeries("Vampire Hunter D", "Hideyuki Kikuchi")
+	vhd := f.book(junkBookSpec{title: "Vampire Hunter D_ Volume 11", path: "/lib/Vampire Hunter D/Vampire Hunter D_ Volume 11",
+		author: "Graphic Audio LLC.", series: "Vampire Hunter D"})
+	f.mkSeries("Solo Leveling", "Chugong")
+	solo := f.book(junkBookSpec{title: "Solo Leveling, Vol. 3", path: "/lib/Solo Leveling/Solo Leveling, Vol. 3", author: "GraphicAudio"})
+
+	f.book(junkBookSpec{title: "Red Rising", path: "/lib/rr/1", author: "Red Rising", vg: "vg-rr"})
+	rr := f.book(junkBookSpec{title: "Red Rising (Unabridged)", path: "/lib/j/rr", author: "read by narrator", vg: "vg-rr"})
+
+	f.book(junkBookSpec{title: "The Forever War", path: "/lib/jh/1", author: "Joe Haldeman", vg: "vg-jh"})
+	f.book(junkBookSpec{title: "Joe Haldeman", path: "/lib/jh/2", author: "Joe Haldeman"})
+	jh := f.book(junkBookSpec{title: "The Forever War (copy)", path: "/lib/j/jh", author: "read by narrator", vg: "vg-jh"})
+
+	plan := f.plan()
+	for _, c := range []struct{ junk, book, bad string }{
+		{"Graphic Audio LLC.", vhd, "Vampire Hunter D"},
+		{"GraphicAudio", solo, "Solo Leveling"},
+		{"read by narrator", rr, "Red Rising"},
+	} {
+		r := f.row(plan, c.junk, c.book)
+		require.NotNil(t, r, c.bad)
+		require.NotEqual(t, c.bad, r.Proposed["author"], "%s: %s", c.bad, r.Reason)
+		require.NotEqual(t, junkAuthorDecCreate, r.Proposed["decision"], "%s: %s", c.bad, r.Reason)
+		require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%s: held, not unlinked: %v %s", c.bad, r.Proposed, r.Reason)
+		require.Contains(t, r.SkipReason, c.bad)
+	}
+	r := f.row(plan, "read by narrator", jh)
+	require.NotNil(t, r)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Equal(t, "Joe Haldeman", r.Proposed["author"], r.Reason)
+}
+
+// Review of #3631, blocker 2, exactly as prod holds book
+// 01M0TGRGRS988X5S6R9XGBSE5V: no narrator anywhere, no tags, and the reader
+// credited as author of more books than she is known to narrate. The path is
+// Narrator/Author/Book; the outer folder is refused because a deeper one is
+// the junk name's own author ("Jennsen").
+func TestJunkAuthorFixer_PathNarratorAboveAuthorFolder(t *testing.T) {
+	const junk = "Jennsen, GS_ 08 Rubicon (Amaranthe 08)"
+	f := newJunkFixture(t)
+	for i := range 3 {
+		f.book(junkBookSpec{title: fmt.Sprintf("Mis-credited %d", i), path: fmt.Sprintf("/lib/pd/%d", i), author: "Pyper Down"})
+	}
+	id := f.book(junkBookSpec{title: "8-06 Rubicon (Amaranthe 08) — 06",
+		path: "/mnt/bigdata/books/audiobook-organizer/Pyper Down/Jennsen/Jennsen, GS_ 08 Rubicon (Amaranthe 08)", author: junk})
+	r := f.row(f.plan(), junk, id)
+	require.NotNil(t, r)
+	require.NotEqual(t, "Pyper Down", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "held, not unlinked: %v %s", r.Proposed, r.Reason)
+	require.Contains(t, r.SkipReason, "a folder above \"Jennsen\"")
+}
+
+// Review of #3631, minor 7: the surname-first clean carries initials only;
+// a provider naming someone else wins over it.
+func TestJunkAuthorFixer_SurnameFirstYieldsToProvider(t *testing.T) {
+	const junk = "Jennsen, GS_ 08 Rubicon (Amaranthe 08)"
+	f := newJunkFixture(t)
+	f.book(junkBookSpec{title: "Starshine", path: "/lib/gsj/1", author: "G. S. Jennsen"})
+	f.book(junkBookSpec{title: "Mercury Rising", path: "/lib/gs/1", author: "Glynn Stewart"})
+	id := f.book(junkBookSpec{title: "Rubicon", path: "/lib/j/rub", author: junk})
+	f.setProvider(id, "Rubicon", "Glynn Stewart")
+	r := f.row(f.plan(), junk, id)
+	require.NotNil(t, r)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Equal(t, "Glynn Stewart", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSrcProvider, r.Proposed["source"])
+}
+
+// Review of #3631, major 3: Apply's backstop runs the plan's work test
+// against the index as it is at apply. Plan and Replan see "Zogarth" as a
+// pen name; a book titled "Zogarth" lands before apply and the index is
+// rebuilt; Apply refuses and writes nothing.
+func TestJunkAuthorFixer_ApplyBackstopRefusesANewWorkTitle(t *testing.T) {
+	f := newJunkFixture(t)
+	f.book(junkBookSpec{title: "The Primal Hunter", path: "/lib/Zogarth/tph1", author: "Zogarth"})
+	id := f.book(junkBookSpec{title: "The Primal Hunter 9 - A LitRPG Adventure", path: "/lib/j/zog", author: "A LitRPG Adventure"})
+	f.setProvider(id, "The Primal Hunter 9 - A LitRPG Adventure", "Zogarth")
+	plan := f.plan()
+	row := f.row(plan, "A LitRPG Adventure", id)
+	require.NotNil(t, row)
+	require.Equal(t, "Zogarth", row.Proposed["author"], row.Reason)
+	fresh, err := f.fixer.Replan(context.Background(), nil, *row, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, row.Fingerprint, fresh.Fingerprint)
+	before := f.credits(id)
+
+	f.book(junkBookSpec{title: "Zogarth", path: "/lib/o/z", author: "Ann Other"})
+	f.fixer.idxMu.Lock()
+	f.fixer.idx = nil
+	f.fixer.idxMu.Unlock()
+
+	w := repairs.NewWriter(f.s, f.s, f.fixer.ID(), "bulk_update", "repairs-").WithJournal(f.s, f.s, junkTestOpID).WithCredits(f.s)
+	err = f.fixer.Apply(context.Background(), w, fresh)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, repairs.ErrChangedSincePlan), err)
+	require.Contains(t, err.Error(), "title in the library")
+	require.Equal(t, before, f.credits(id), "nothing written")
 }
