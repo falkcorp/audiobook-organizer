@@ -1,13 +1,14 @@
 // file: internal/batch/service.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-24
+// last-edited: 2026-09-30
 
 package batch
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -38,6 +39,11 @@ type batchBookStore interface {
 	// value no reader can compare against.
 	GetAuthorByID(id int) (*database.Author, error)
 	GetSeriesByID(id int) (*database.Series, error)
+	// RecordMetadataChange: a bulk edit records a "manual" history row for
+	// every field it changed (database.RecordBookEditHistory), like the
+	// single-book edit. Without it a queued apply cannot see the edit and
+	// overwrites it, and the book's history never shows it.
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
 	// A batch edit that changes a book's primary flag, deletion state or
 	// version group keeps each group it touched at one primary
 	// (handOffPrimary).
@@ -111,10 +117,17 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 			resp.addError(id, "not found")
 			continue
 		}
+		// pre is the stored row as this edit read it, under the book's write
+		// lock: the history diff must not credit this edit with a change
+		// another writer committed after GetBookByID above. applyUpdates
+		// replaces fields rather than writing through their pointers, so a
+		// shallow copy keeps the old values.
+		var pre database.Book
 		updated, err := bs.db.ModifyBook(id, func(b *database.Book) error {
 			if len(req.Updates) == 0 {
 				return database.ErrSkipBookWrite
 			}
+			pre = *b
 			applyUpdates(b, req.Updates)
 			return nil
 		})
@@ -127,8 +140,19 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 			continue
 		}
 		bs.handOffPrimary(book, updated, req.Updates)
+		var problems []string
+		if pre.ID != "" {
+			if _, herr := database.RecordBookEditHistory(bs.db, &pre, updated,
+				database.ChangeTypeManual, "manual", time.Now(), nil); herr != nil {
+				batchLog.Error("batch: %v", herr)
+				problems = append(problems, "the edit was saved but its change history was not fully recorded: "+herr.Error())
+			}
+		}
 		if err := bs.recordUserLocks(id, req.Updates); err != nil {
-			resp.addError(id, err.Error())
+			problems = append(problems, err.Error())
+		}
+		if len(problems) > 0 {
+			resp.addError(id, strings.Join(problems, "; "))
 			continue
 		}
 		resp.addSuccess(id)

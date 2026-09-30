@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
 // last-edited: 2026-09-30
 
@@ -21,30 +21,19 @@ import (
 
 var applyHistoryLog = logger.New("metafetch-apply-history")
 
-// History field names that differ from the Book JSON name. author_id and
-// series_id are foreign keys: their history rows carry the display names in
-// PreviousValue/NewValue (what the UI and the revert-metadata-fetch job read)
-// and the ids in PreviousRef/NewRef (what undo restores). series_sequence has
-// always been recorded as series_position.
+// History field names that differ from the Book JSON name: the shared
+// vocabulary in internal/database (book_edit_history.go), which the user-edit
+// paths record with too.
 const (
-	historyFieldAuthor   = "author_name"
-	historyFieldSeries   = "series"
-	historyFieldSeriesNo = "series_position"
+	historyFieldAuthor   = database.HistoryFieldAuthor
+	historyFieldSeries   = database.HistoryFieldSeries
+	historyFieldSeriesNo = database.HistoryFieldSeriesNo
 )
 
-var historyToJSON = map[string]string{
-	historyFieldAuthor:   "author_id",
-	historyFieldSeries:   "series_id",
-	historyFieldSeriesNo: "series_sequence",
-}
+var historyToJSON = database.HistoryFieldToJSON
 
 func jsonToHistory(jsonName string) string {
-	for h, j := range historyToJSON {
-		if j == jsonName {
-			return h
-		}
-	}
-	return jsonName
+	return database.HistoryFieldName(jsonName)
 }
 
 // ChangeTypeApplyUndo is the change_type of the rows UndoLastApply records.

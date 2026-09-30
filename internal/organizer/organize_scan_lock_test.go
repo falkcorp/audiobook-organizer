@@ -1,5 +1,5 @@
 // file: internal/organizer/organize_scan_lock_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c3a9e15-2f84-4d6b-a0c1-58e2b94d7f36
 // last-edited: 2026-09-30
 
@@ -7,6 +7,7 @@ package organizer
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -229,5 +230,70 @@ func TestOrganizeBooks_CopyLandsUnderTheBooksScanLock(t *testing.T) {
 	}
 	if n := scanlock.Books.Held(); n != 0 {
 		t.Fatalf("organize left %d scan lock(s) held", n)
+	}
+}
+
+// Batch organize of a protected original also holds its library copy: a
+// scanner holding only the copy (a version group over the scanner's cap, or a
+// copy whose rewritten tags no longer share the original's hash) keeps the
+// organize waiting until it releases the copy.
+func TestOrganizeBooks_LocksTheLibraryCopyToo(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	src := filepath.Join(root, "incoming", "orig.m4b")
+	b := addInPlaceBook(t, store, "orig", "Orig Title", src, filled(150, 5), nil, 0)
+	svc.ResolveLibraryCopy = func(book *database.Book) (*database.Book, bool) {
+		cp := *book
+		cp.ID = "lib-copy"
+		return &cp, true
+	}
+
+	scan := holdBook(t, "lib-copy")
+	done := make(chan *Stats, 1)
+	go func() {
+		done <- svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true)
+	}()
+	select {
+	case st := <-done:
+		t.Fatalf("organize finished while the scanner held the library copy: %+v", st)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if movedFrom(src) {
+		t.Fatal("organize touched the original while the scanner held its library copy")
+	}
+	scan.Release()
+	select {
+	case st := <-done:
+		if st.Failed != 0 || st.Organized+st.ReOrganized != 1 {
+			t.Fatalf("want one organized after the copy freed, got %+v", st)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("organize never finished after the copy was released")
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
+	}
+}
+
+// A library copy that changes on every resolution never settles: the book is
+// not organized (skipped scan_busy) and nothing stays held.
+func TestOrganizeBooks_UnsettledCopyIsSkippedBusy(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	src := filepath.Join(root, "incoming", "flux.m4b")
+	b := addInPlaceBook(t, store, "flux", "Flux Title", src, filled(150, 5), nil, 0)
+	var n atomic.Int32
+	svc.ResolveLibraryCopy = func(book *database.Book) (*database.Book, bool) {
+		cp := *book
+		cp.ID = fmt.Sprintf("copy-%d", n.Add(1))
+		return &cp, true
+	}
+	st := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true)
+	if st.Organized+st.ReOrganized != 0 || st.Skipped != 1 {
+		t.Fatalf("an unsettled pair was organized: %+v", st)
+	}
+	if movedFrom(src) {
+		t.Fatal("the original was moved")
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
 	}
 }

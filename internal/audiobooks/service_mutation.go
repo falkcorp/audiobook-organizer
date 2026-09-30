@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-09-24
+// last-edited: 2026-09-30
 
 package audiobooks
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // errAlreadySoftDeleted is returned by DeleteAudiobook's soft-delete when the
@@ -46,6 +47,17 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	before, err := database.SnapshotBook(currentBook)
 	if err != nil {
 		return nil, err
+	}
+	// overrideRecorded: history fields the override bookkeeping below already
+	// recorded a row for ("override", "user_edit"); the column diff after the
+	// save skips them so one edit is not listed twice.
+	overrideRecorded := map[string]bool{}
+	noteOverride := func(lockKey string) {
+		if lockKey == database.FieldKeySeriesName {
+			overrideRecorded[database.HistoryFieldSeries] = true
+			return
+		}
+		overrideRecorded[lockKey] = true
 	}
 
 	now := time.Now()
@@ -134,6 +146,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			// Record history for clearing an override.
 			if fmt.Sprintf("%v", oldOverrideValue) != fmt.Sprintf("%v", nil) {
 				mss.recordChange(id, field, "override", "user_edit", oldOverrideValue, nil)
+				noteOverride(field)
 			}
 		} else {
 			if len(override.Value) > 0 {
@@ -145,6 +158,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 				// Record history for setting an override.
 				if fmt.Sprintf("%v", oldOverrideValue) != fmt.Sprintf("%v", val) {
 					mss.recordChange(id, field, "override", "user_edit", oldOverrideValue, val)
+					noteOverride(field)
 				}
 			} else if override.Locked != nil {
 				entry.OverrideLocked = *override.Locked
@@ -334,6 +348,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			// Record history only when the value actually changed.
 			if fmt.Sprintf("%v", oldValue) != fmt.Sprintf("%v", value) {
 				mss.recordChange(id, field, "override", "user_edit", oldValue, value)
+				noteOverride(field)
 			}
 		} else {
 			slog.Debug("UpdateAudiobook extractor for field returned false/nil", "field", field)
@@ -369,7 +384,16 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	}
 
 	// Save to database: this edit's changed fields only, onto the fresh row.
+	// pre is the stored row this save merged onto, taken under the book's
+	// write lock, so the history below credits this edit only with what it
+	// changed -- not with a concurrent apply's fields.
+	var pre *database.Book
 	updatedBook, err := svc.store.ModifyBook(id, func(fresh *database.Book) error {
+		snap, sErr := database.SnapshotBook(fresh)
+		if sErr != nil {
+			return sErr
+		}
+		pre = snap
 		_, mErr := database.MergeBookChanges(fresh, before, payload.Book)
 		return mErr
 	})
@@ -378,6 +402,19 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	}
 	if updatedBook == nil {
 		return nil, fmt.Errorf("audiobook not found")
+	}
+
+	// A "manual" history row for EVERY field this edit changed, clears
+	// included (database.RecordBookEditHistory). A queued metadata apply reads
+	// this history to refuse overwriting a user's later edit; a changed field
+	// with no row would be overwritten silently. The edit has committed, so a
+	// failure here is reported, as the metadata-state save below is.
+	if pre != nil {
+		if _, herr := database.RecordBookEditHistory(svc.store, pre, updatedBook,
+			database.ChangeTypeManual, "manual", now, overrideRecorded); herr != nil {
+			editHistoryLog.Error("UpdateAudiobook %s: change history not recorded: %v", logger.SanitizeLogValue(id), herr)
+			return nil, fmt.Errorf("the edit was saved but its change history was not fully recorded: %w", herr)
+		}
 	}
 
 	// Save metadata state
@@ -721,3 +758,6 @@ func ApplyOverrideToPayload(payload *AudiobookUpdate, field string, value any) {
 		}
 	}
 }
+
+// editHistoryLog reports a user edit whose change history was not recorded.
+var editHistoryLog = logger.New("audiobooks.edit-history")

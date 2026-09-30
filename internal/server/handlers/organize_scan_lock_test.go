@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize_scan_lock_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0e8b5c27-4a13-4f96-b7d2-c93a61e8f405
 // last-edited: 2026-09-30
 
@@ -199,5 +199,63 @@ func TestRunQueuedOrganize_WaitsThenRunsAndReportsFailure(t *testing.T) {
 	err := h2.RunQueuedOrganize(context.Background(), "b1", nil)
 	if err == nil || !strings.Contains(err.Error(), "disk on fire") {
 		t.Fatalf("want the organize failure reported, got %v", err)
+	}
+}
+
+// unsettledResolver resolves the book to a DIFFERENT library copy on every
+// call: the lock set never settles.
+func unsettledResolver() func(*database.Book) (*database.Book, bool) {
+	var n atomic.Int32
+	return func(b *database.Book) (*database.Book, bool) {
+		cp := *b
+		cp.ID = "copy-" + string(rune('a'+n.Add(1)%26))
+		return &cp, true
+	}
+}
+
+// A copy that keeps changing while the organize locks it: the request never
+// organizes a copy it does not hold. It holds nothing, touches no file, and
+// queues the organize (202) for later.
+func TestOrganizeBook_UnsettledLockSetQueuesAndTouchesNothing(t *testing.T) {
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, nil, false)
+	h.SetLibraryCopyResolver(unsettledResolver())
+	q := &fakeOrganizeQueuer{}
+	h.SetOrganizeQueuer(q)
+
+	w := organizeRequest(h, "b1")
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status %d, want 202: %s", w.Code, w.Body.String())
+	}
+	if svc.calls.Load() != 0 {
+		t.Fatalf("organized %d time(s) with a lock set that never settled", svc.calls.Load())
+	}
+	if len(q.ids) != 1 || q.ids[0] != "b1" {
+		t.Fatalf("queued %v", q.ids)
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
+	}
+}
+
+// The queued organize retries an unsettled set a bounded number of times,
+// then fails without organizing anything.
+func TestRunQueuedOrganize_UnsettledLockSetFailsWithoutOrganizing(t *testing.T) {
+	defer handlers.SetOrganizeUnsettledRetryForTest(2, time.Millisecond)()
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, nil, false)
+	h.SetLibraryCopyResolver(unsettledResolver())
+
+	err := h.RunQueuedOrganize(context.Background(), "b1", nil)
+	if !handlers.IsOrganizeSetUnsettled(err) {
+		t.Fatalf("want the unsettled refusal, got %v", err)
+	}
+	if svc.calls.Load() != 0 {
+		t.Fatalf("organized %d time(s) with a lock set that never settled", svc.calls.Load())
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
 	}
 }

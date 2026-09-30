@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.5.0
-// last-edited: 2026-09-24
+// version: 1.6.0
+// last-edited: 2026-09-30
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -29,6 +29,18 @@ type MockBookStore struct {
 	lockErr  error
 	authors  map[int]string
 	seriesNm map[int]string
+
+	// history is every change-history row recorded, in order.
+	history []database.MetadataChangeRecord
+	histErr error
+}
+
+func (m *MockBookStore) RecordMetadataChange(r *database.MetadataChangeRecord) error {
+	if m.histErr != nil {
+		return m.histErr
+	}
+	m.history = append(m.history, *r)
+	return nil
 }
 
 func NewMockBookStore() *MockBookStore {

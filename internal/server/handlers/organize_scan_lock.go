@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize_scan_lock.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b7e4c91-5d08-4f3a-b6e2-9a14c7d3f058
 // last-edited: 2026-09-30
 
@@ -7,6 +7,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -55,62 +56,88 @@ func (h *OrganizeHandler) SetOrganizeQueuer(q OrganizeQueuer) { h.queuer = q }
 // acts on changes while it waits for the lock.
 const organizeLockTries = 3
 
+// organizeUnsettledRetries bounds how many times the QUEUED organize retries
+// a lock set that would not settle before it fails; organizeUnsettledDelay is
+// the pause between tries. Vars so tests can shorten them.
+var (
+	organizeUnsettledRetries = 10
+	organizeUnsettledDelay   = 2 * time.Second
+)
+
+// errOrganizeSetUnsettled: the library copy the organize would act on kept
+// changing while it took the lock (organizeLockTries re-resolutions), so it
+// holds nothing and did nothing. Busy, not failed: try again later.
+var errOrganizeSetUnsettled = errors.New("the book's library copy kept changing while the organize tried to lock it; nothing was organized")
+
+// errOrganizeBookUnreadable wraps a store error reading the book to build or
+// check its lock set.
+var errOrganizeBookUnreadable = errors.New("failed to fetch book")
+
 // organizeLockSet is the rows an organize of id must hold: id, and the library
 // copy it resolves to (organizeBookCore acts on that copy's files), sorted. A
 // scanner reaching the copy normally locks {copy, id} through their version
 // group, but not when the group is over the scanner's cap -- so the organize
 // holds both itself. subject is the row the organize acts on (the copy, or
-// the book itself). A book that cannot be read is just {id} with a nil
-// subject; the core reports the read error.
-func (h *OrganizeHandler) organizeLockSet(id string) (ids []string, subject *database.Book) {
+// the book itself). A book that does not exist is {id} with a nil subject: the
+// core answers not-found and touches nothing. A read error is returned.
+func (h *OrganizeHandler) organizeLockSet(id string) (ids []string, subject *database.Book, err error) {
 	ids = []string{id}
-	if h.store == nil || h.resolveLibraryCopy == nil {
-		return ids, nil
+	if h.store == nil {
+		return ids, nil, nil
 	}
 	requested, err := h.store.GetBookByID(id)
-	if err != nil || requested == nil {
-		return ids, nil
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w %s: %v", errOrganizeBookUnreadable, id, err)
+	}
+	if requested == nil {
+		return ids, nil, nil
 	}
 	subject = organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
 	if subject != nil && subject.ID != id {
 		ids = append(ids, subject.ID)
 	}
 	slices.Sort(ids)
-	return ids, subject
+	return ids, subject, nil
 }
 
 // lockOrganizeSet takes organizeLockSet(id) with lock (a bounded or unbounded
-// LockSet), re-resolving under the lock: when the copy changed while it waited
-// (created, repointed, removed) it releases and retries, at most
-// organizeLockTries times, then keeps the last set it holds -- a copy that
-// keeps changing is left to organizeBookCore, which resolves it again.
+// LockSet) and re-resolves UNDER the lock. When the copy changed while it
+// waited (created, repointed, removed) it releases and retries, at most
+// organizeLockTries times; if the set still has not settled it releases
+// everything and returns errOrganizeSetUnsettled -- it never hands back a
+// hold that does not cover the row the organize would act on.
 //
-// subject is the row resolved UNDER the lock, which organizeBookCore acts on
-// without resolving a third time, so the organize writes exactly the copy it
-// holds. It is nil when the book could not be read or the set never settled;
-// the core then resolves (and reports read errors) itself.
+// subject is the row resolved under the lock; organizeBookCore acts on it
+// without resolving again, so it writes exactly the copy it holds. It is nil
+// only when the book does not exist (or there is no store).
 func (h *OrganizeHandler) lockOrganizeSet(id string, lock func([]string) (*scanlock.Hold, error)) (*scanlock.Hold, *database.Book, error) {
-	for try := 0; ; try++ {
-		want, _ := h.organizeLockSet(id)
+	for try := 0; try < organizeLockTries; try++ {
+		want, _, err := h.organizeLockSet(id)
+		if err != nil {
+			return nil, nil, err
+		}
 		hold, err := lock(want)
 		if err != nil {
 			return nil, nil, err
 		}
-		again, subject := h.organizeLockSet(id)
+		again, subject, err := h.organizeLockSet(id)
+		if err != nil {
+			hold.Release()
+			return nil, nil, err
+		}
 		if slices.Equal(again, want) {
 			return hold, subject, nil
 		}
-		if try+1 >= organizeLockTries {
-			return hold, nil, nil
-		}
 		hold.Release()
 	}
+	return nil, nil, errOrganizeSetUnsettled
 }
 
 // lockBookForOrganize takes book id's scan lock for a request, waiting at
-// most organizeBookLockWait. Past the bound it queues the organize and writes
-// 202 (ok=false), or, with no queuer wired, keeps waiting on the request's
-// context. ok=false with nothing written means the client went away.
+// most organizeBookLockWait. Past the bound -- or when the library copy would
+// not settle -- it queues the organize and writes 202 (ok=false), or, with no
+// queuer wired, keeps waiting on the request's context. A book that cannot be
+// read answers 500. ok=false with nothing written means the client went away.
 //
 // subject is lockOrganizeSet's: the row to organize, resolved under the lock.
 func (h *OrganizeHandler) lockBookForOrganize(c *gin.Context, id string) (_ *scanlock.Hold, subject *database.Book, ok bool) {
@@ -121,12 +148,24 @@ func (h *OrganizeHandler) lockBookForOrganize(c *gin.Context, id string) (_ *sca
 	if err == nil {
 		return hold, subject, true
 	}
+	if errors.Is(err, errOrganizeBookUnreadable) {
+		httputil.InternalError(c, "failed to fetch book", err)
+		return nil, nil, false
+	}
 	if reqCtx.Err() != nil {
 		return nil, nil, false
 	}
 	if h.queuer == nil {
 		hold, subject, err = h.lockOrganizeSet(id, func(ids []string) (*scanlock.Hold, error) { return scanlock.Books.LockSet(reqCtx, ids) })
-		return hold, subject, err == nil
+		switch {
+		case err == nil:
+			return hold, subject, true
+		case errors.Is(err, errOrganizeBookUnreadable):
+			httputil.InternalError(c, "failed to fetch book", err)
+		case errors.Is(err, errOrganizeSetUnsettled):
+			httputil.RespondWithConflict(c, err.Error())
+		}
+		return nil, nil, false
 	}
 	opID, qerr := h.queuer.EnqueueOrganizeWhenScanned(reqCtx, id)
 	if qerr != nil {
@@ -144,10 +183,13 @@ func (h *OrganizeHandler) lockBookForOrganize(c *gin.Context, id string) (_ *sca
 // RunQueuedOrganize is the queued organize: wait for the book as long as the
 // op lives, beating so the progress watchdog sees a live wait, then organize
 // exactly as the request would have. A refusal or failure the request would
-// have answered with a 4xx/5xx fails the op with the same message.
+// have answered with a 4xx/5xx fails the op with the same message. A lock set
+// that will not settle is retried after organizeUnsettledDelay, at most
+// organizeUnsettledRetries times, then fails the op (nothing organized).
 func (h *OrganizeHandler) RunQueuedOrganize(ctx context.Context, id string, beat func(msg string)) error {
 	var hold *scanlock.Hold
 	var subject *database.Book
+	unsettled := 0
 	for {
 		wctx, cancel := context.WithTimeout(ctx, queuedOrganizeBeat)
 		var err error
@@ -158,6 +200,20 @@ func (h *OrganizeHandler) RunQueuedOrganize(ctx context.Context, id string, beat
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if errors.Is(err, errOrganizeBookUnreadable) {
+			return err
+		}
+		if errors.Is(err, errOrganizeSetUnsettled) {
+			unsettled++
+			if unsettled >= organizeUnsettledRetries {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(organizeUnsettledDelay):
+			}
 		}
 		if beat != nil {
 			beat("waiting for the library scan to finish reading book " + id)

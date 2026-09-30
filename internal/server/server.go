@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.71.0
+// version: 2.72.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-30
 
@@ -791,6 +791,12 @@ func NewServer(store database.Store) *Server {
 	// extraOpsRegistrar's DedupEngine dep gets the container's engine.
 	if server.dedupEngine != nil {
 		server.extraOpsRegistrar.Deps.DedupEngine = server.dedupEngine
+	}
+
+	// Batch organize locks a protected original together with its library
+	// copy, resolved exactly as the single-book organize resolves it.
+	if server.organizeService != nil {
+		server.organizeService.ResolveLibraryCopy = server.organizeLibraryCopyResolver()
 	}
 
 	// Organize collision hook stays inline because it uses serverOrganizeHooks
