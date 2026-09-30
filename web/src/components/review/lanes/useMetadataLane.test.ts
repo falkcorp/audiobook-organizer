@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.23.0
+// version: 1.24.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -533,21 +533,31 @@ describe('hideMultiBook', () => {
 
 describe('hideRuntimeDifferences', () => {
   beforeEach(() => window.localStorage.clear());
-  // Mirrors the apply gate (applygate checkRuntime): hidden only when the
-  // candidate is more than 10% off a KNOWN book runtime. Unknown on either
-  // side is kept -- not evidence of a mismatch.
+  // Hidden when the spine would show the "runtime differs" chip (a delta over
+  // ten minutes) OR the apply gate would refuse (more than 10% off a KNOWN
+  // book runtime). Unknown on either side is kept -- not evidence of a
+  // mismatch. The fixture sets duration_delta_sec the way the server does
+  // (metafetch service_search.go): |book - candidate| when both are known.
   function withRuntime(
     id: string,
     book: Partial<api.CandidateBookInfo>,
     durationSec: number | undefined
   ) {
-    const r = makeResult(id, {}, durationSec === undefined ? {} : { duration_sec: durationSec });
+    const bookSec = book.duration_seconds ?? 0;
+    const cand: Partial<api.MetadataCandidate> =
+      durationSec === undefined ? {} : { duration_sec: durationSec };
+    if (durationSec !== undefined && bookSec > 0 && durationSec > 0) {
+      cand.duration_delta_sec = Math.abs(bookSec - durationSec);
+    }
+    const r = makeResult(id, {}, cand);
     return { ...r, book: { ...r.book, ...book } } as api.CandidateResult;
   }
 
-  it('is on by default (In-depth), and hides only known >10% differences', async () => {
+  it('is on by default (In-depth), and hides warned or >10% differences', async () => {
     const rows = [
-      withRuntime('ten-percent', { duration_seconds: 36000 }, 32400), // exactly 10%: kept
+      withRuntime('five-minutes', { duration_seconds: 36000 }, 35700), // no chip, <10%: kept
+      // Exactly 10% passes the gate, but the 60-minute gap shows the chip: hidden.
+      withRuntime('ten-percent', { duration_seconds: 36000 }, 32400),
       withRuntime('eleven-percent', { duration_seconds: 36000 }, 32000), // >10%: hidden
       withRuntime('no-cand-runtime', { duration_seconds: 36000 }, undefined),
       withRuntime('no-book-runtime', {}, 32000),
@@ -559,16 +569,16 @@ describe('hideRuntimeDifferences', () => {
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload(rows));
 
     const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(6));
+    await waitFor(() => expect(result.current.results).toHaveLength(7));
 
     expect(result.current.filters.hideRuntimeDifferences).toBe(true);
     expect(result.current.filteredResults.map((r) => r.book.id).sort()).toEqual(
-      ['no-book-runtime', 'no-cand-runtime', 'partial-unknown', 'ten-percent'].sort()
+      ['five-minutes', 'no-book-runtime', 'no-cand-runtime', 'partial-unknown'].sort()
     );
-    expect(result.current.runtimeHiddenCount).toBe(2);
+    expect(result.current.runtimeHiddenCount).toBe(3);
 
     act(() => result.current.setFilters({ hideRuntimeDifferences: false }));
-    await waitFor(() => expect(result.current.filteredResults).toHaveLength(6));
+    await waitFor(() => expect(result.current.filteredResults).toHaveLength(7));
     expect(result.current.runtimeHiddenCount).toBe(0);
   });
 });
