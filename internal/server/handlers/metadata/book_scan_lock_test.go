@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 85df29b0-0d44-40e8-bbab-726ab6928927
 // last-edited: 2026-09-30
 
@@ -119,7 +119,17 @@ func TestSingleBookHandlers_WaitForTheScannerWithinTheBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { time.Sleep(50 * time.Millisecond); scan.Release() }()
+	// released closes once the scanner side's Release has RETURNED. Release
+	// hands the token over before it drops its own table entry, so the request
+	// can acquire, finish and release while the scanner goroutine is still
+	// between the two; the table only empties once both are done. Asserting
+	// Held() before that is a race (CI saw 1), not a leak.
+	released := make(chan struct{})
+	go func() {
+		defer close(released)
+		time.Sleep(50 * time.Millisecond)
+		scan.Release()
+	}()
 
 	w := doReq(h.WriteBackAudiobookMetadata, http.MethodPost, "/api/v1/audiobooks/b1/write-back",
 		map[string]any{"segment_ids": []string{"s1"}}, gin.Params{{Key: "id", Value: "b1"}})
@@ -129,6 +139,7 @@ func TestSingleBookHandlers_WaitForTheScannerWithinTheBound(t *testing.T) {
 	if len(q.calls) != 0 {
 		t.Fatalf("queued %d applies; the scanner released the book within the bound", len(q.calls))
 	}
+	<-released
 	if n := scanlock.Books.Held(); n != 0 {
 		t.Fatalf("the request left %d scan lock(s) held", n)
 	}
