@@ -1,5 +1,5 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
 // last-edited: 2026-09-30
 
@@ -140,6 +140,12 @@ func (s *Server) RegisterApplyWhenScannedOp(reg *opsregistry.Registry) error {
 					return errors.New("apply-when-scanned: the metadata handler is not wired")
 				}
 				err = h.RunQueuedApply(ctx, q, beat)
+			}
+			if errors.Is(err, metadatahandler.ErrQueuedAlreadyApplied) {
+				// A re-run after the apply landed (ResumeRequeue after a
+				// restart): complete, write nothing, no second history row.
+				_ = reporter.UpdateProgress(1, 1, "book "+q.BookID+": "+err.Error()+"; nothing written")
+				return nil
 			}
 			if err != nil {
 				return err

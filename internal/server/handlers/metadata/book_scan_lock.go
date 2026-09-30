@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
 // last-edited: 2026-09-30
 
@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -71,6 +73,104 @@ type QueuedApply struct {
 	Rename     *bool                        `json:"rename,omitempty"`
 	// OperationID is the candidate-fetch operation (QueuedOpResultCandidate).
 	OperationID string `json:"operation_id,omitempty"`
+	// Baseline (QueuedApplyCandidate) is, for each field the apply would
+	// change when it was queued, that field's value at the time: the state the
+	// user chose the candidate against. The run compares the book against it
+	// so a queued apply never overwrites an edit made after it was queued
+	// (checkQueuedCandidate). Nil when the preview could not be taken.
+	Baseline map[string]string `json:"baseline,omitempty"`
+}
+
+// ErrQueuedAlreadyApplied is returned by RunQueuedApply when a queued
+// candidate apply finds every field it would write already holding the
+// candidate's value -- typically the op re-running after a restart that
+// interrupted it after the apply landed. Nothing is written (no second history
+// row); the op completes as "already applied".
+var ErrQueuedAlreadyApplied = errors.New("already applied: the book already holds every value this change would write")
+
+// ErrQueuedApplyStale is returned by RunQueuedApply when a field the queued
+// candidate apply would write was changed by someone else after the apply was
+// queued. Nothing is written; the op fails with the fields named so the user
+// can re-apply against the book as it is now.
+var ErrQueuedApplyStale = errors.New("this book was changed after the change was queued; nothing was applied")
+
+// coverField is left out of the queued-apply comparison: the apply stores a
+// renderable local cover path, not the candidate's remote URL, so the field
+// never reads back as the candidate's value and would make every re-run look
+// like someone else's edit.
+const coverField = "cover_url"
+
+func baselineOf(pv *metafetch.ApplyPreview) map[string]string {
+	out := make(map[string]string, len(pv.Changes))
+	for _, c := range pv.Changes {
+		if c.Field != coverField {
+			out[c.Field] = c.Old
+		}
+	}
+	return out
+}
+
+// queuedCandidateBaseline previews the queued apply against the book as it is
+// now. A preview that cannot be built is logged and leaves the baseline nil:
+// it fails only for the causes that make the apply itself fail (book gone,
+// policy:no-metadata, unreadable field locks), and the apply reports those.
+func (h *Handler) queuedCandidateBaseline(q QueuedApply) map[string]string {
+	if q.Candidate == nil || h.metadataFetchService == nil {
+		return nil
+	}
+	pv, err := h.metadataFetchService.PreviewCandidateApply(q.BookID, *q.Candidate, q.Fields)
+	if err != nil || pv == nil {
+		bookLockLog.Warn("queued apply for book %s: could not record the book's current values (%v); the queued run cannot check for later edits",
+			logger.SanitizeLogValue(q.BookID), err)
+		return nil
+	}
+	return baselineOf(pv)
+}
+
+// checkQueuedCandidate compares the book, under its scan lock, with the
+// baseline taken when the apply was queued. For every field the apply would
+// change now:
+//   - current value == baseline: still to apply;
+//   - otherwise (including a field that already matched the candidate when
+//     queued and has since been changed away): someone else wrote it, and the
+//     apply would overwrite them, so ErrQueuedApplyStale.
+//
+// When nothing is left to change, ErrQueuedAlreadyApplied. A field whose value
+// moved away from the baseline but the apply would no longer change (the new
+// value is one the apply keeps) is not a conflict: nothing overwrites it.
+//
+// The scanner's own merge counts as a change like any other writer's; that is
+// only a refusal when the file's tags differ from the row on a field the
+// apply writes, and refusing is the safe side of it.
+func (h *Handler) checkQueuedCandidate(q QueuedApply) error {
+	if q.Baseline == nil {
+		return nil
+	}
+	pv, err := h.metadataFetchService.PreviewCandidateApply(q.BookID, *q.Candidate, q.Fields)
+	if err != nil || pv == nil {
+		// The apply runs the same reads and reports the cause itself.
+		return nil
+	}
+	var changed []string
+	pending := 0
+	for _, c := range pv.Changes {
+		if c.Field == coverField {
+			continue
+		}
+		if old, ok := q.Baseline[c.Field]; ok && old == c.Old {
+			pending++
+			continue
+		}
+		changed = append(changed, c.Field)
+	}
+	if len(changed) > 0 {
+		slices.Sort(changed)
+		return fmt.Errorf("%w (changed since: %s)", ErrQueuedApplyStale, strings.Join(changed, ", "))
+	}
+	if pending == 0 {
+		return ErrQueuedAlreadyApplied
+	}
+	return nil
 }
 
 // QueuedApplyEnqueuer enqueues a QueuedApply as a durable operation.
@@ -103,6 +203,9 @@ func (h *Handler) lockBookForRequest(c *gin.Context, q QueuedApply) (*scanlock.H
 	if h.queuedApply == nil {
 		hold, err = scanlock.Books.LockSet(reqCtx, []string{q.BookID})
 		return hold, err == nil
+	}
+	if q.Kind == QueuedApplyCandidate {
+		q.Baseline = h.queuedCandidateBaseline(q)
 	}
 	opID, qerr := h.queuedApply.EnqueueApplyWhenScanned(reqCtx, q)
 	if qerr != nil {
@@ -160,7 +263,7 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 	if pool := h.fileIOPool; pool != nil {
 		mfs := h.metadataFetchService
 		pendingCover := resp.PendingCoverURL
-		pool.Submit(id, func() {
+		accepted := pool.Submit(id, func() {
 			// Cover download FIRST, then the file I/O, then the tags exactly
 			// once (FinishApplyFileWork). It takes metafetch's own book and
 			// path locks; this job holds none of that table. The response is
@@ -169,6 +272,14 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 				bookLockLog.Warn("background apply file work failed for book %s: %s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
 			}
 		})
+		if !accepted {
+			// The pool is stopping (shutdown): the job was dropped without
+			// running. The pool clears its own pending mark on a drop and this
+			// path retains no scan hold, so nothing is left held -- but the
+			// database now has the new metadata and the files do not. Say so.
+			bookLockLog.Error("apply file work for book %s was dropped: the file I/O pool is stopped; the metadata is saved but the tags, cover and rename did not run (write back or re-apply to finish)",
+				logger.SanitizeLogValue(id))
+		}
 	}
 	if h.publishEvent != nil {
 		h.publishEvent(ctx, plugin.NewEvent(plugin.EventMetadataApplied, id, map[string]any{
@@ -286,6 +397,10 @@ func (h *Handler) RunQueuedApply(ctx context.Context, q QueuedApply, beat func(m
 	case QueuedApplyCandidate:
 		if q.Candidate == nil {
 			return fmt.Errorf("queued apply for %s has no candidate", q.BookID)
+		}
+		if err := h.checkQueuedCandidate(q); err != nil {
+			bookLockLog.Info("queued apply for book %s not run: %s", logger.SanitizeLogValue(q.BookID), logger.SanitizeLogValue(err.Error()))
+			return err
 		}
 		_, err := h.applyCandidateCore(ctx, q.BookID, *q.Candidate, q.Fields, q.WriteBack)
 		return err

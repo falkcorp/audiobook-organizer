@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 85df29b0-0d44-40e8-bbab-726ab6928927
 // last-edited: 2026-09-30
 
@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/mock"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
 )
@@ -68,6 +70,14 @@ func TestSingleBookHandlers_QueueInsteadOf409WhenTheScannerHoldsTheBook(t *testi
 			}
 			defer scan.Release()
 
+			if tc.kind == metadatahandler.QueuedApplyCandidate {
+				// The enqueue records the value of each field the apply would
+				// change, for the queued run's stale check. cover_url is left out.
+				d.mfs.EXPECT().PreviewCandidateApply("b1", mock.Anything, mock.Anything).Return(&metafetch.ApplyPreview{
+					Changes: []metafetch.FieldChange{{Field: "title", Old: "Current", New: "T"}, {Field: "cover_url", Old: "", New: "http://192.0.2.1/c.jpg"}},
+				}, nil)
+			}
+
 			w := doReq(tc.run(h), http.MethodPost, tc.target, tc.body, id)
 			if w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202; body=%s", w.Code, w.Body.String())
@@ -87,6 +97,11 @@ func TestSingleBookHandlers_QueueInsteadOf409WhenTheScannerHoldsTheBook(t *testi
 			}
 			if len(q.calls) != 1 || q.calls[0].Kind != tc.kind || q.calls[0].BookID != "b1" {
 				t.Fatalf("enqueued %+v, want one %s for b1", q.calls, tc.kind)
+			}
+			if tc.kind == metadatahandler.QueuedApplyCandidate {
+				if b := q.calls[0].Baseline; len(b) != 1 || b["title"] != "Current" {
+					t.Fatalf("baseline = %v, want {title: Current}", b)
+				}
 			}
 		})
 	}
@@ -161,6 +176,72 @@ func TestRunQueuedApply_WaitsForTheBookThenRuns(t *testing.T) {
 	}
 	if n := scanlock.Books.Held(); n != 0 {
 		t.Fatalf("the queued apply left %d scan lock(s) held", n)
+	}
+}
+
+func queuedCandidate(baseline map[string]string) metadatahandler.QueuedApply {
+	return metadatahandler.QueuedApply{
+		Kind: metadatahandler.QueuedApplyCandidate, BookID: "b1",
+		Candidate: &metafetch.MetadataCandidate{Title: "Cand"}, Baseline: baseline,
+	}
+}
+
+func preview(changes ...metafetch.FieldChange) *metafetch.ApplyPreview {
+	return &metafetch.ApplyPreview{BookID: "b1", Changes: changes}
+}
+
+// MEDIUM 2: a field the queued apply would write was changed by someone else
+// after the apply was queued. The run refuses (terminal), names the field, and
+// never calls the apply (strict mock).
+func TestRunQueuedApply_CandidateRefusesToClobberALaterEdit(t *testing.T) {
+	h, d := newHandler(t)
+	d.mfs.EXPECT().PreviewCandidateApply("b1", mock.Anything, mock.Anything).Return(preview(
+		metafetch.FieldChange{Field: "title", Old: "User Edit", New: "Cand"},
+		metafetch.FieldChange{Field: "narrator", Old: "N", New: "Cand N"},
+	), nil)
+	err := h.RunQueuedApply(context.Background(), queuedCandidate(map[string]string{"title": "Old", "narrator": "N"}), nil)
+	if !errors.Is(err, metadatahandler.ErrQueuedApplyStale) || !strings.Contains(err.Error(), "title") ||
+		strings.Contains(err.Error(), "narrator") {
+		t.Fatalf("want a stale refusal naming title only, got %v", err)
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
+	}
+}
+
+// LOW 11: the op re-runs after a restart that came after the apply landed.
+// Every field already holds the candidate's value (the preview has nothing
+// left but the cover, which never reads back as the remote URL): the run
+// completes "already applied" without calling the apply, so no second history
+// row.
+func TestRunQueuedApply_CandidateReRunAfterTheApplyIsAlreadyApplied(t *testing.T) {
+	h, d := newHandler(t)
+	d.mfs.EXPECT().PreviewCandidateApply("b1", mock.Anything, mock.Anything).Return(preview(
+		metafetch.FieldChange{Field: "cover_url", Old: "/api/v1/covers/local/b1.jpg", New: "http://192.0.2.1/c.jpg"},
+	), nil)
+	err := h.RunQueuedApply(context.Background(), queuedCandidate(map[string]string{"title": "Old"}), nil)
+	if !errors.Is(err, metadatahandler.ErrQueuedAlreadyApplied) {
+		t.Fatalf("want already-applied, got %v", err)
+	}
+}
+
+// Nothing changed since the apply was queued: it runs. A pool that drops the
+// file job (shutdown) does not fail the apply or leave anything held (LOW 7).
+func TestRunQueuedApply_CandidateUnchangedSinceQueuedApplies(t *testing.T) {
+	h, d := newHandler(t)
+	d.mfs.EXPECT().PreviewCandidateApply("b1", mock.Anything, mock.Anything).Return(preview(
+		metafetch.FieldChange{Field: "title", Old: "Old", New: "Cand"},
+	), nil)
+	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
+	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).Return(&metafetch.FetchMetadataResponse{}, nil)
+	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
+	d.wb.EXPECT().Enqueue("b1").Maybe()
+	d.pool.EXPECT().Submit("b1", mock.Anything).Return(false)
+	if err := h.RunQueuedApply(context.Background(), queuedCandidate(map[string]string{"title": "Old"}), nil); err != nil {
+		t.Fatalf("RunQueuedApply: %v", err)
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
 	}
 }
 
