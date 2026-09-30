@@ -1,5 +1,5 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
 // last-edited: 2026-09-30
 
@@ -66,6 +66,18 @@ type applyWhenScannedParams struct {
 	DryRunCamel *bool `json:"dryRun,omitempty"`
 }
 
+// queuedOrganizeRunner runs the "organize" kind;
+// *handlers.OrganizeHandler implements it.
+type queuedOrganizeRunner interface {
+	RunQueuedOrganize(ctx context.Context, bookID string, beat func(msg string)) error
+}
+
+// EnqueueOrganizeWhenScanned implements handlers.OrganizeQueuer: the same
+// durable op as a queued apply, kind "organize".
+func (s *Server) EnqueueOrganizeWhenScanned(ctx context.Context, bookID string) (string, error) {
+	return s.EnqueueApplyWhenScanned(ctx, metadatahandler.QueuedApply{Kind: metadatahandler.QueuedOrganize, BookID: bookID})
+}
+
 // EnqueueApplyWhenScanned implements metadatahandler.QueuedApplyEnqueuer.
 func (s *Server) EnqueueApplyWhenScanned(ctx context.Context, q metadatahandler.QueuedApply) (string, error) {
 	if s.opRegistry == nil {
@@ -113,9 +125,16 @@ func (s *Server) RegisterApplyWhenScannedOp(reg *opsregistry.Registry) error {
 			}
 			beat := func(msg string) { _ = reporter.UpdateProgress(0, 1, msg) }
 			beat("waiting for the library scan to finish reading book " + q.BookID)
-			if q.Kind == metadatahandler.QueuedOpResultCandidate {
+			switch q.Kind {
+			case metadatahandler.QueuedOpResultCandidate:
 				err = s.runQueuedOpResultCandidate(ctx, q, beat)
-			} else {
+			case metadatahandler.QueuedOrganize:
+				r := s.queuedOrganizeRunner
+				if r == nil {
+					return errors.New("apply-when-scanned: the organize handler is not wired")
+				}
+				err = r.RunQueuedOrganize(ctx, q.BookID, beat)
+			default:
 				h := s.applyWhenScannedHandler
 				if h == nil {
 					return errors.New("apply-when-scanned: the metadata handler is not wired")

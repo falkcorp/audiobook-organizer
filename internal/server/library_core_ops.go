@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-24
+// last-edited: 2026-09-30
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -340,6 +340,9 @@ func (s *Server) RegisterLibraryOrganizeOp(reg *opsregistry.Registry) error {
 				FetchMetadataFirst: p.FetchMetadataFirst,
 				SyncITunesFirst:    p.SyncITunesFirst,
 				OperationID:        opID,
+				// Per-book scan lock: a running scan never reads a book while
+				// this organize moves it (organizer.organizeBooksOpts).
+				LockBooksAgainstScan: true,
 			}
 			err := s.organizeService.PerformOrganize(ctx, organizeReq, operations.LoggerFromReporter(progress))
 			// A cancelled run is not a failed one. PerformOrganize returns an

@@ -1,5 +1,5 @@
 // file: internal/server/apply_when_scanned_op_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e3b6a14-72c5-4f08-b1d9-58a0c3e7f216
 // last-edited: 2026-09-30
 
@@ -204,4 +204,25 @@ func TestApplyWhenScanned_OmittedModeIsAPreview(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	require.NoError(t, def.Run(ctx, json.RawMessage(`{"kind":"fetch","book_id":"b1"}`), &sdReporter{id: "op-preview"}))
+}
+
+type recordingOrganizeRunner struct{ ids []string }
+
+func (r *recordingOrganizeRunner) RunQueuedOrganize(_ context.Context, id string, _ func(string)) error {
+	r.ids = append(r.ids, id)
+	return nil
+}
+
+// A queued organize ("organize" kind) runs through the organize handler's
+// runner, not the metadata one.
+func TestApplyWhenScanned_OrganizeKindRunsTheOrganizeRunner(t *testing.T) {
+	reg := capOpReg(t)
+	org := &recordingOrganizeRunner{}
+	s := &Server{applyWhenScannedHandler: failingRunner{t}, queuedOrganizeRunner: org}
+	require.NoError(t, s.RegisterApplyWhenScannedOp(reg))
+	def, ok := reg.Def(applyWhenScannedOpID)
+	require.True(t, ok)
+	require.NoError(t, def.Run(context.Background(),
+		json.RawMessage(`{"kind":"organize","book_id":"b9","dry_run":false}`), &sdReporter{id: "op-org"}))
+	require.Equal(t, []string{"b9"}, org.ids)
 }

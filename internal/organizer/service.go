@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.50.1
+// version: 1.51.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-30
 
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
+	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
@@ -266,6 +267,13 @@ type Request struct {
 	SyncITunesFirst    bool
 	OperationID        string
 	BookIDs            []string // if set, only organize these books
+	// LockBooksAgainstScan makes each book's organize take its per-book scan
+	// lock (internal/scanlock, L0) for the whole OrganizeOneBook +
+	// CommitLanding span, so a library scan cannot read and merge a book while
+	// its files are being moved and its version row written. Set by the
+	// library.organize op. The post-scan auto-organize hook leaves it false:
+	// it runs inside the scan, which must never wait on its own lock table.
+	LockBooksAgainstScan bool
 }
 
 // Stats holds organize operation statistics.
@@ -419,7 +427,7 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 	log.Debug("Organize: %s", logMsg)
 
 	// Perform organization
-	stats := orgSvc.organizeBooks(ctx, booksToOrganize, alreadyCorrect, log, req.OperationID)
+	stats := orgSvc.organizeBooksOpts(ctx, booksToOrganize, alreadyCorrect, log, req.OperationID, req.LockBooksAgainstScan)
 	stats.addCollision(OutcomePlaceholderSkipped, heldBack.placeholderTitle)
 	stats.addCollision(OutcomeVersionGroupUnreadable, heldBack.versionGroupUnreadable)
 
@@ -1464,6 +1472,29 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 }
 
 func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []database.Book, alreadyCorrect []database.Book, log logger.Logger, operationID string) *Stats {
+	return orgSvc.organizeBooksOpts(ctx, booksToOrganize, alreadyCorrect, log, operationID, false)
+}
+
+// organizeBookLockWait bounds, in total, the second pass's wait for books a
+// library scan was reading on the first pass (lockBooks only). A var so tests
+// can shorten it.
+var organizeBookLockWait = 90 * time.Second
+
+// OutcomeScanBusy counts books a library scan held for longer than
+// organizeBookLockWait: skipped, not failed, so the next organize picks them up.
+const OutcomeScanBusy = "scan_busy"
+
+// organizeBooksOpts is organizeBooks with per-book scan locking (lockBooks).
+//
+// With lockBooks each book is organized under its scan lock, in two passes
+// like batch-apply-candidates: pass 1 only TRIES each lock, so a book the scan
+// is reading is set aside instead of parking a worker and every other book
+// organizes at full speed; pass 2 waits for the set-aside books under ONE
+// shared organizeBookLockWait deadline, and a book still held then is counted
+// Skipped under OutcomeScanBusy. The lock is L0, the outermost in the process
+// (internal/scanlock): it is taken before OrganizeOneBook and CommitLanding
+// take the version-group key (L1), and released after both.
+func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []database.Book, alreadyCorrect []database.Book, log logger.Logger, operationID string, lockBooks bool) *Stats {
 	stats := &Stats{Total: len(booksToOrganize) + len(alreadyCorrect)}
 
 	// Thread-safe counters and collectors
@@ -1484,217 +1515,272 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 	fragmentCollapsed := orgSvc.detectFragmentCollapse(ctx, booksToOrganize)
 
 	const numWorkers = 8
-	jobs := make(chan int, numWorkers*2)
 
-	// Start worker goroutines
-	var wg sync.WaitGroup
-	for range numWorkers {
-		wg.Go(func() {
-			workerOrg := orgSvc.newOrganizer()
+	// organizeOne is one book's organize: file operations, rows, iTunes
+	// write-back and progress. The caller holds the book's scan lock when
+	// lockBooks is set.
+	organizeOne := func(workerOrg *Organizer, i int) {
+		book := booksToOrganize[i]
 
-			for i := range jobs {
-				// Cancellation is checked HERE as well as in the feeder below.
-				// Checking only the feeder stops new work being queued but lets
-				// the eight workers drain everything already buffered, so a
-				// cancelled organize kept moving files after the user asked it
-				// to stop. ctx covers the cases log.IsCanceled() cannot see at
-				// all — the HTTP client disconnecting, and server shutdown.
-				if ctx.Err() != nil || log.IsCanceled() {
-					statsMu.Lock()
-					stats.Skipped++
-					statsMu.Unlock()
-					progressCounter.Add(1)
-					continue
+		// Policy check: skip books tagged policy:no-organize.
+		if tags, err := orgSvc.db.GetBookTags(book.ID); err == nil {
+			if policy.EvaluatePolicy(tags).NoOrganize {
+				log.Debug("organize: skipping book %s — policy:no-organize tag", book.ID)
+				statsMu.Lock()
+				stats.Skipped++
+				statsMu.Unlock()
+				progressCounter.Add(1)
+				return
+			}
+		}
+
+		oldPath := book.FilePath
+
+		if target, collapsed := fragmentCollapsed[book.ID]; collapsed {
+			orgSvc.recordFragmentCollapse(&book, target)
+			log.Debug("Organize: %s not moved — %s: another book from %s targets %s", book.Title, OutcomeFragmentCollapse, filepath.Dir(oldPath), target)
+			statsMu.Lock()
+			stats.Skipped++
+			stats.addCollision(OutcomeFragmentCollapse, 1)
+			statsMu.Unlock()
+			progressCounter.Add(1)
+			return
+		}
+
+		// --- Step 1: File operations ---
+		var newPath string
+		var landing *Landing
+		var err error
+
+		// Same decision as the post-scan auto-organize hook, via one
+		// shared method — see OrganizeOneBook for why that matters.
+		// The DB-update step below branches on landing.InPlace, the
+		// decision OrganizeOneBook actually took, not on a prefix
+		// test of its own.
+		landing, err = orgSvc.OrganizeOneBook(workerOrg, &book, log)
+		if landing != nil {
+			newPath = landing.Path
+		}
+
+		// Detection-only collision check (DEC-11): record which book
+		// claimed newPath first, and flag when a DIFFERENT book's
+		// path collides with an already-claimed one. This runs
+		// before any of the branching below so detection happens
+		// regardless of which branch (already-correct/in-place/
+		// versioned) the book takes, and it does not alter any of
+		// those branches' outcomes. A failed organize (err != nil)
+		// or an empty newPath is not recorded as a claim, since it
+		// cannot collide with anything. The check-then-set happens
+		// under one lock acquisition so two workers computing the
+		// same newPath at the same instant cannot both observe
+		// "unclaimed" and both skip the counter.
+		if err == nil && newPath != "" {
+			pathMu.Lock()
+			if otherBookID, claimed := claimedPaths[newPath]; claimed && otherBookID != book.ID {
+				metrics.RecordOrganizeTargetPathCollision()
+				log.Warn("organize: target path collision — two different books would organize to the same path: path=%s book_id=%s other_book_id=%s", newPath, book.ID, otherBookID)
+			} else if !claimed {
+				claimedPaths[newPath] = book.ID
+			}
+			pathMu.Unlock()
+		}
+
+		// --- Step 2: DB operations ---
+		var commitErr error
+		var conflict *DestinationConflictError
+		var hasCopy *LibraryCopyExistsError
+		if errors.As(err, &hasCopy) {
+			// The book's content is already in the library as its own
+			// library copy (same hash, same version group). Nothing to
+			// do and nothing wrong: a skip, not a failure, and the
+			// copy itself is organized as its own row.
+			log.Debug("Organize: %s not copied — %s", book.Title, hasCopy.Error())
+			statsMu.Lock()
+			stats.Skipped++
+			stats.addCollision(CollisionLibraryCopyExists, 1)
+			statsMu.Unlock()
+			if operationID != "" {
+				if cerr := orgSvc.db.CreateOperationChange(&database.OperationChange{
+					ID:          ulid.Make().String(),
+					OperationID: operationID,
+					BookID:      book.ID,
+					ChangeType:  "organize_skipped",
+					FieldName:   "file_path",
+					OldValue:    oldPath,
+					NewValue:    CollisionLibraryCopyExists + ": already has library copy " + hasCopy.CopyID,
+				}); cerr != nil {
+					log.Warn("Organize: record library-copy skip for %s: %v", book.ID, cerr)
 				}
+			}
+		} else if errors.As(err, &conflict) {
+			// A declined destination conflict is a counted outcome, not a
+			// failure: one debug line per pair here, one tally line per
+			// batch below.
+			log.Debug("Organize: %s not moved — %s", book.Title, conflict.Error())
+			statsMu.Lock()
+			stats.Skipped++
+			stats.addCollision(conflict.Category, 1)
+			statsMu.Unlock()
+			if operationID != "" {
+				_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+					ID:          ulid.Make().String(),
+					OperationID: operationID,
+					BookID:      book.ID,
+					ChangeType:  "organize_skipped",
+					FieldName:   "file_path",
+					OldValue:    oldPath,
+					NewValue:    conflict.Category + ": " + conflict.Reason,
+				})
+			}
+		} else if err != nil {
+			log.Warn("Failed to organize %s: %s", book.Title, err.Error())
+			statsMu.Lock()
+			stats.Failed++
+			statsMu.Unlock()
 
-				book := booksToOrganize[i]
+			if operationID != "" {
+				_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+					ID:          ulid.Make().String(),
+					OperationID: operationID,
+					BookID:      book.ID,
+					ChangeType:  "organize_failed",
+					FieldName:   "file_path",
+					OldValue:    oldPath,
+					NewValue:    err.Error(),
+				})
+			}
+		} else {
+			// One row-writing path for every caller. The
+			// already-correct / in-place / versioned branch lived
+			// inline here until 2026-09-02, and every other caller
+			// of OrganizeOneBook (the batch-save op, the folder
+			// auto-scan, metafetch's library copy) had grown its own
+			// copy of it -- three of them skipping the row writes.
+			var outcome LandingOutcome
+			outcome, _, commitErr = orgSvc.CommitLanding(&book, landing, operationID, log)
+			statsMu.Lock()
+			switch {
+			case commitErr != nil:
+				stats.Failed++
+			case outcome == LandingUnchanged:
+				stats.AlreadyCorrect++
+			case outcome == LandingRenamed:
+				stats.ReOrganized++
+			case outcome == LandingAdopted:
+				stats.Skipped++
+			default:
+				stats.Organized++
+			}
+			if commitErr == nil && landing != nil && landing.Resolution != nil {
+				stats.addCollision(landing.Resolution.Outcome, 1)
+			}
+			statsMu.Unlock()
+		}
 
-				// Policy check: skip books tagged policy:no-organize.
-				if tags, err := orgSvc.db.GetBookTags(book.ID); err == nil {
-					if policy.EvaluatePolicy(tags).NoOrganize {
-						log.Debug("organize: skipping book %s — policy:no-organize tag", book.ID)
+		// --- Step 3: Enqueue iTunes writeback ---
+		if err == nil && commitErr == nil && oldPath != newPath && orgSvc.writeBackBatcher != nil {
+			orgSvc.writeBackBatcher.Enqueue(book.ID)
+		}
+
+		// --- Step 4: Progress reporting ---
+		count := progressCounter.Add(1)
+		if count%50 == 0 || count == int64(len(booksToOrganize)) {
+			log.UpdateProgress(int(count), len(booksToOrganize),
+				fmt.Sprintf("Organizing: %d/%d books", count, len(booksToOrganize)))
+		}
+	}
+
+	// deferred collects the books pass 1 found held by a library scan.
+	var deferredMu sync.Mutex
+	var deferred []int
+
+	// runPass organizes indices with numWorkers workers. waitCtx is nil on
+	// pass 1 (try-lock, defer the busy) and the shared deadline on pass 2.
+	runPass := func(indices []int, waitCtx context.Context) {
+		jobs := make(chan int, numWorkers*2)
+		var wg sync.WaitGroup
+		for range numWorkers {
+			wg.Go(func() {
+				workerOrg := orgSvc.newOrganizer()
+
+				for i := range jobs {
+					// Cancellation is checked HERE as well as in the feeder below.
+					// Checking only the feeder stops new work being queued but lets
+					// the eight workers drain everything already buffered, so a
+					// cancelled organize kept moving files after the user asked it
+					// to stop. ctx covers the cases log.IsCanceled() cannot see at
+					// all — the HTTP client disconnecting, and server shutdown.
+					if ctx.Err() != nil || log.IsCanceled() {
 						statsMu.Lock()
 						stats.Skipped++
 						statsMu.Unlock()
 						progressCounter.Add(1)
 						continue
 					}
-				}
-
-				oldPath := book.FilePath
-
-				if target, collapsed := fragmentCollapsed[book.ID]; collapsed {
-					orgSvc.recordFragmentCollapse(&book, target)
-					log.Debug("Organize: %s not moved — %s: another book from %s targets %s", book.Title, OutcomeFragmentCollapse, filepath.Dir(oldPath), target)
-					statsMu.Lock()
-					stats.Skipped++
-					stats.addCollision(OutcomeFragmentCollapse, 1)
-					statsMu.Unlock()
-					progressCounter.Add(1)
-					continue
-				}
-
-				// --- Step 1: File operations ---
-				var newPath string
-				var landing *Landing
-				var err error
-
-				// Same decision as the post-scan auto-organize hook, via one
-				// shared method — see OrganizeOneBook for why that matters.
-				// The DB-update step below branches on landing.InPlace, the
-				// decision OrganizeOneBook actually took, not on a prefix
-				// test of its own.
-				landing, err = orgSvc.OrganizeOneBook(workerOrg, &book, log)
-				if landing != nil {
-					newPath = landing.Path
-				}
-
-				// Detection-only collision check (DEC-11): record which book
-				// claimed newPath first, and flag when a DIFFERENT book's
-				// path collides with an already-claimed one. This runs
-				// before any of the branching below so detection happens
-				// regardless of which branch (already-correct/in-place/
-				// versioned) the book takes, and it does not alter any of
-				// those branches' outcomes. A failed organize (err != nil)
-				// or an empty newPath is not recorded as a claim, since it
-				// cannot collide with anything. The check-then-set happens
-				// under one lock acquisition so two workers computing the
-				// same newPath at the same instant cannot both observe
-				// "unclaimed" and both skip the counter.
-				if err == nil && newPath != "" {
-					pathMu.Lock()
-					if otherBookID, claimed := claimedPaths[newPath]; claimed && otherBookID != book.ID {
-						metrics.RecordOrganizeTargetPathCollision()
-						log.Warn("organize: target path collision — two different books would organize to the same path: path=%s book_id=%s other_book_id=%s", newPath, book.ID, otherBookID)
-					} else if !claimed {
-						claimedPaths[newPath] = book.ID
+					if !lockBooks {
+						organizeOne(workerOrg, i)
+						continue
 					}
-					pathMu.Unlock()
-				}
-
-				// --- Step 2: DB operations ---
-				var commitErr error
-				var conflict *DestinationConflictError
-				var hasCopy *LibraryCopyExistsError
-				if errors.As(err, &hasCopy) {
-					// The book's content is already in the library as its own
-					// library copy (same hash, same version group). Nothing to
-					// do and nothing wrong: a skip, not a failure, and the
-					// copy itself is organized as its own row.
-					log.Debug("Organize: %s not copied — %s", book.Title, hasCopy.Error())
-					statsMu.Lock()
-					stats.Skipped++
-					stats.addCollision(CollisionLibraryCopyExists, 1)
-					statsMu.Unlock()
-					if operationID != "" {
-						if cerr := orgSvc.db.CreateOperationChange(&database.OperationChange{
-							ID:          ulid.Make().String(),
-							OperationID: operationID,
-							BookID:      book.ID,
-							ChangeType:  "organize_skipped",
-							FieldName:   "file_path",
-							OldValue:    oldPath,
-							NewValue:    CollisionLibraryCopyExists + ": already has library copy " + hasCopy.CopyID,
-						}); cerr != nil {
-							log.Warn("Organize: record library-copy skip for %s: %v", book.ID, cerr)
+					id := booksToOrganize[i].ID
+					var hold *scanlock.Hold
+					if waitCtx == nil {
+						h, ok := scanlock.Books.TryLockSet([]string{id})
+						if !ok {
+							deferredMu.Lock()
+							deferred = append(deferred, i)
+							deferredMu.Unlock()
+							continue
 						}
+						hold = h
+					} else {
+						h, err := scanlock.Books.LockSet(waitCtx, []string{id})
+						if err != nil {
+							log.Info("Organize: %s skipped: a library scan is still reading it; the next organize picks it up", booksToOrganize[i].Title)
+							statsMu.Lock()
+							stats.Skipped++
+							stats.addCollision(OutcomeScanBusy, 1)
+							statsMu.Unlock()
+							progressCounter.Add(1)
+							continue
+						}
+						hold = h
 					}
-				} else if errors.As(err, &conflict) {
-					// A declined destination conflict is a counted outcome, not a
-					// failure: one debug line per pair here, one tally line per
-					// batch below.
-					log.Debug("Organize: %s not moved — %s", book.Title, conflict.Error())
-					statsMu.Lock()
-					stats.Skipped++
-					stats.addCollision(conflict.Category, 1)
-					statsMu.Unlock()
-					if operationID != "" {
-						_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
-							ID:          ulid.Make().String(),
-							OperationID: operationID,
-							BookID:      book.ID,
-							ChangeType:  "organize_skipped",
-							FieldName:   "file_path",
-							OldValue:    oldPath,
-							NewValue:    conflict.Category + ": " + conflict.Reason,
-						})
-					}
-				} else if err != nil {
-					log.Warn("Failed to organize %s: %s", book.Title, err.Error())
-					statsMu.Lock()
-					stats.Failed++
-					statsMu.Unlock()
-
-					if operationID != "" {
-						_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
-							ID:          ulid.Make().String(),
-							OperationID: operationID,
-							BookID:      book.ID,
-							ChangeType:  "organize_failed",
-							FieldName:   "file_path",
-							OldValue:    oldPath,
-							NewValue:    err.Error(),
-						})
-					}
-				} else {
-					// One row-writing path for every caller. The
-					// already-correct / in-place / versioned branch lived
-					// inline here until 2026-09-02, and every other caller
-					// of OrganizeOneBook (the batch-save op, the folder
-					// auto-scan, metafetch's library copy) had grown its own
-					// copy of it -- three of them skipping the row writes.
-					var outcome LandingOutcome
-					outcome, _, commitErr = orgSvc.CommitLanding(&book, landing, operationID, log)
-					statsMu.Lock()
-					switch {
-					case commitErr != nil:
-						stats.Failed++
-					case outcome == LandingUnchanged:
-						stats.AlreadyCorrect++
-					case outcome == LandingRenamed:
-						stats.ReOrganized++
-					case outcome == LandingAdopted:
-						stats.Skipped++
-					default:
-						stats.Organized++
-					}
-					if commitErr == nil && landing != nil && landing.Resolution != nil {
-						stats.addCollision(landing.Resolution.Outcome, 1)
-					}
-					statsMu.Unlock()
+					func() {
+						defer hold.Release()
+						organizeOne(workerOrg, i)
+					}()
 				}
+			})
+		}
 
-				// --- Step 3: Enqueue iTunes writeback ---
-				if err == nil && commitErr == nil && oldPath != newPath && orgSvc.writeBackBatcher != nil {
-					orgSvc.writeBackBatcher.Enqueue(book.ID)
-				}
-
-				// --- Step 4: Progress reporting ---
-				count := progressCounter.Add(1)
-				if count%50 == 0 || count == int64(len(booksToOrganize)) {
-					log.UpdateProgress(int(count), len(booksToOrganize),
-						fmt.Sprintf("Organizing: %d/%d books", count, len(booksToOrganize)))
-				}
+		// Feed jobs — cancellation checked here AND in the worker loop above.
+		for _, i := range indices {
+			if ctx.Err() != nil {
+				log.Info("Organize canceled: %s", ctx.Err().Error())
+				stats.Canceled = true
+				break
 			}
-		})
+			if log.IsCanceled() {
+				log.Info("Organize canceled")
+				stats.Canceled = true
+				break
+			}
+			jobs <- i
+		}
+		close(jobs)
+		wg.Wait()
 	}
 
-	// Feed jobs — cancellation checked here AND in the worker loop above.
-	for i := range booksToOrganize {
-		if ctx.Err() != nil {
-			log.Info("Organize canceled: %s", ctx.Err().Error())
-			stats.Canceled = true
-			break
-		}
-		if log.IsCanceled() {
-			log.Info("Organize canceled")
-			stats.Canceled = true
-			break
-		}
-		jobs <- i
+	all := make([]int, len(booksToOrganize))
+	for i := range all {
+		all[i] = i
 	}
-	close(jobs)
-	wg.Wait()
+	runPass(all, nil)
+	if len(deferred) > 0 && !stats.Canceled {
+		waitCtx, cancel := context.WithTimeout(ctx, organizeBookLockWait)
+		runPass(deferred, waitCtx)
+		cancel()
+	}
 
 	stats.AlreadyCorrect += orgSvc.stampAlreadyCorrect(ctx, alreadyCorrect, operationID, log)
 
