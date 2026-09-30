@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.17.0
+// version: 4.17.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-30
 //
@@ -688,13 +688,13 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 		QueuedCount        int      `json:"queued_count"`
 		QueuedOperationIDs []string `json:"queued_operation_ids"`
 	}{
-		Applied:         applied,
-		Skipped:         skipped,
-		Blocked:         blocked,
-		BlockedCount:    len(blocked),
-		Errors:          errors,
-		ErrorCount:      len(errors),
-		OperationID:     req.OperationID,
+		Applied:            applied,
+		Skipped:            skipped,
+		Blocked:            blocked,
+		BlockedCount:       len(blocked),
+		Errors:             errors,
+		ErrorCount:         len(errors),
+		OperationID:        req.OperationID,
 		UnreadableBooks:    claims.Unreadable(),
 		QueuedBookIDs:      queued,
 		QueuedCount:        len(queued),

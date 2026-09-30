@@ -1,5 +1,5 @@
 // file: internal/server/apply_when_scanned_op_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e3b6a14-72c5-4f08-b1d9-58a0c3e7f216
 // last-edited: 2026-09-30
 
@@ -177,4 +177,31 @@ func TestBatchApplyCandidates_QueuesTheBookTheScannerHoldsInsteadOf409(t *testin
 	require.NotEmpty(t, got.QueuedOperationIDs[0])
 	// b2 has no stored candidate: processed (skipped), not held back by b1.
 	require.Equal(t, 1, got.Skipped)
+}
+
+// failingRunner fails the test if the op reaches the apply at all.
+type failingRunner struct{ t *testing.T }
+
+func (r failingRunner) RunQueuedApply(context.Context, metadatahandler.QueuedApply, func(string)) error {
+	r.t.Error("a preview run reached the apply")
+	return nil
+}
+
+// Owner rule 2026-09-25: a writing op whose mode is omitted previews. Params
+// without dry_run describe the apply and touch nothing -- not even the book's
+// scan lock, which a held book proves (a live run would block on it).
+func TestApplyWhenScanned_OmittedModeIsAPreview(t *testing.T) {
+	reg := capOpReg(t)
+	s := &Server{applyWhenScannedHandler: failingRunner{t}}
+	require.NoError(t, s.RegisterApplyWhenScannedOp(reg))
+	def, ok := reg.Def(applyWhenScannedOpID)
+	require.True(t, ok)
+
+	held, err := scanlock.Books.LockSet(context.Background(), []string{"b1"})
+	require.NoError(t, err)
+	defer held.Release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, def.Run(ctx, json.RawMessage(`{"kind":"fetch","book_id":"b1"}`), &sdReporter{id: "op-preview"}))
 }
