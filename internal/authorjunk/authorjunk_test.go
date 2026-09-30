@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-09-29
 
@@ -42,6 +42,13 @@ func TestClassifyName_Positives(t *testing.T) {
 		{"read by narrator", ClassPlaceholder},
 		{"Anonymous", ClassPlaceholder},
 		{"n/a", ClassPlaceholder},
+		// parser / form stand-ins (prod rows, 2026-09-29): "parse author"
+		// was proposed as the relink target of 49 books.
+		{"parse author", ClassPlaceholder},
+		{"Parsed Author", ClassPlaceholder},
+		{"author name", ClassPlaceholder},
+		{"Test Author", ClassPlaceholder},
+		{"NO IDEA", ClassPlaceholder},
 		// publishers and studios
 		{"Audible Studios", ClassPublisher},
 		{"Big Finish", ClassPublisher},
@@ -96,6 +103,9 @@ func TestClassifyName_RealAuthors(t *testing.T) {
 		"A. A. Milne",
 		"A J Finn",
 		"The Arbinger Institute", // corporate author, person-shaped
+		// a placeholder word among real ones (isPlaceholderPhrase needs all)
+		"Nathan Writer",
+		"Idea Vilariño",
 		"Ursula K. Le Guin",
 		"Arthur C. Clarke",
 		"Daphne du Maurier",

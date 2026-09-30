@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
 // last-edited: 2026-09-29
 
@@ -206,6 +206,36 @@ var collectiveWords = map[string]bool{
 	"various": true, "anonymous": true, "unknown": true, "assorted": true,
 	"multiple": true, "misc": true, "miscellaneous": true, "anthology": true,
 	"compilation": true, "uncredited": true,
+}
+
+// placeholderWords / placeholderHeads: a name made only of these words, one
+// of them a head, is a parser's or a form's stand-in, not a person: "parse
+// author" (a parser's label that became an author row in prod, 2026-09-29),
+// "author name", "Test Author". No single word here is a surname on its own
+// ("Author" alone is already authorname.IsPlaceholderAuthor).
+var (
+	placeholderWords = map[string]bool{
+		"author": true, "authors": true, "writer": true, "name": true, "names": true,
+		"parse": true, "parsed": true, "parser": true, "placeholder": true,
+		"test": true, "sample": true, "example": true, "default": true,
+		"dummy": true, "fake": true, "no": true, "none": true, "null": true, "tbd": true,
+		"the": true, "an": true, "a": true, "idea": true,
+	}
+	// "idea": "NO IDEA", an author row in prod (a form's "don't know").
+	placeholderHeads = map[string]bool{"author": true, "authors": true, "writer": true, "name": true, "idea": true}
+)
+
+// isPlaceholderPhrase reports whether words (Normalize form) are all
+// placeholderWords and include a placeholderHeads word.
+func isPlaceholderPhrase(words []string) bool {
+	head := false
+	for _, w := range words {
+		if !placeholderWords[w] {
+			return false
+		}
+		head = head || placeholderHeads[w]
+	}
+	return head
 }
 
 // seriesMarkers: #3610's measured workWords minus the structural words (see
@@ -530,6 +560,9 @@ func classifyBaseParts(s string) (Verdict, *nameParts) {
 				return strong(ClassPlaceholder, RuleCollective), nil
 			}
 		}
+	}
+	if isPlaceholderPhrase(words) {
+		return strong(ClassPlaceholder, RulePlaceholder), nil
 	}
 
 	if narratorRe.MatchString(s) {

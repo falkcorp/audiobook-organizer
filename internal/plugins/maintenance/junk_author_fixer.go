@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -306,6 +306,12 @@ type junkAuthorIndex struct {
 	// not) and of every series name; the works idx.workTarget refuses.
 	workNames  map[string]bool
 	seriesWork map[string]bool
+	// titleWorkCredits / seriesWorkCredits: workKey of a live book's title /
+	// series name -> primary author id -> books, leaving out a book whose
+	// primary author is also its Narrator (a reader filed as the author is no
+	// evidence of who wrote the work). idx.workCreditedElsewhere reads them.
+	titleWorkCredits  map[string]map[int]int
+	seriesWorkCredits map[string]map[int]int
 	// narratedBooks: authorjunk.FoldKey of a narrator name -> books that
 	// credit it as narrator: the larger of the live books whose Narrator
 	// string names it and the books whose book_narrators rows link it.
@@ -335,6 +341,27 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list narrators: %w", err)
 	}
+	// book_narrators credits, read in one pass over the junction. A store
+	// that cannot answer (a test double) leaves the Narrator-text count; a
+	// read error fails the index (and so the plan) closed.
+	var narratorRefs map[int]int
+	if rs := database.AsNarratorRefStore(store); rs == nil {
+		logger.New("maintenance").Debug("repair-junk-authors: store %T cannot count book_narrators credits; narrator counts use the Narrator field only", store)
+	} else {
+		refs, err := rs.GetAllNarratorRefs()
+		if err != nil {
+			return nil, fmt.Errorf("count narrator credits: %w", err)
+		}
+		narratorRefs = refs.ByID
+	}
+	return indexFrom(authors, books, series, narrators, narratorRefs), nil
+}
+
+// indexFrom builds the index from the library as read (buildIndex's reads,
+// or a test's fixture). narratorRefs: narrator id -> books whose
+// book_narrators rows link it (nil: none known). The index is read-only
+// once built: RunItems workers read it concurrently.
+func indexFrom(authors []database.Author, books []database.BookCore, series []database.Series, narrators []database.Narrator, narratorRefs map[int]int) *junkAuthorIndex {
 	idx := &junkAuthorIndex{
 		narratorsByID: make(map[int]string, len(narrators)),
 		authorsByID:   make(map[int]database.Author, len(authors)), byName: map[string][]database.Author{},
@@ -343,7 +370,8 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 		titleCredits: map[string]map[int]int{}, seriesCredits: map[string]map[int]int{},
 		ownBooks: map[int][]database.BookCore{}, strongJunk: map[int]authorjunk.Verdict{},
 		workNames: map[string]bool{}, seriesWork: map[string]bool{}, narratedBooks: map[string]int{},
-		weakJunk: map[int]authorjunk.Verdict{},
+		weakJunk:         map[int]authorjunk.Verdict{},
+		titleWorkCredits: map[string]map[int]int{}, seriesWorkCredits: map[string]map[int]int{},
 	}
 	for _, n := range narrators {
 		idx.narratorsByID[n.ID] = n.Name
@@ -409,6 +437,12 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 			if b.SeriesID != nil {
 				bump(idx.seriesCredits, authorjunk.Normalize(idx.seriesByID[*b.SeriesID].Name), *b.AuthorID)
 			}
+			if !narratesOwnBook(b, idx.authorsByID[*b.AuthorID].Name) {
+				bump(idx.titleWorkCredits, workKey(b.Title), *b.AuthorID)
+				if b.SeriesID != nil {
+					bump(idx.seriesWorkCredits, workKey(idx.seriesByID[*b.SeriesID].Name), *b.AuthorID)
+				}
+			}
 		}
 	}
 	for _, a := range authors {
@@ -419,23 +453,12 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 			idx.weakJunk[a.ID] = v
 		}
 	}
-	// book_narrators credits, read in one pass over the junction. A store
-	// that cannot answer (a test double) leaves the Narrator-text count; a
-	// read error fails the index (and so the plan) closed.
-	if rs := database.AsNarratorRefStore(store); rs == nil {
-		logger.New("maintenance").Debug("repair-junk-authors: store %T cannot count book_narrators credits; narrator counts use the Narrator field only", store)
-	} else {
-		refs, err := rs.GetAllNarratorRefs()
-		if err != nil {
-			return nil, fmt.Errorf("count narrator credits: %w", err)
-		}
-		for id, n := range refs.ByID {
-			if k := authorjunk.FoldKey(idx.narratorsByID[id]); k != "" && n > idx.narratedBooks[k] {
-				idx.narratedBooks[k] = n
-			}
+	for id, n := range narratorRefs {
+		if k := authorjunk.FoldKey(idx.narratorsByID[id]); k != "" && n > idx.narratedBooks[k] {
+			idx.narratedBooks[k] = n
 		}
 	}
-	return idx, nil
+	return idx
 }
 
 // cachedIndex returns the apply-time index, rebuilt after junkAuthorIndexTTL.
@@ -468,8 +491,74 @@ func (idx *junkAuthorIndex) classifyName(name string) authorjunk.Verdict {
 // shape test that passes "The Thirteenth Doctor Adventures" (four
 // capitalized words); LooksLikeWorkTitle refuses any article-led name, so a
 // held row, not a minted author, is the cost of a real "A Lee Martinez".
+//
+// Nor a name no person carries: square or curly brackets ("Raymond L.
+// Weil-Star Cross[1-5]", a folder's volume range) or an author and a title
+// hyphen-joined mid-name (authorTitleHyphenJoin).
 func (idx *junkAuthorIndex) mintable(name string) bool {
-	return personname.LooksLikePersonName(name) && !personname.LooksLikeWorkTitle(name) && !idx.classifyName(name).Junk()
+	return personname.LooksLikePersonName(name) && !personname.LooksLikeWorkTitle(name) && !idx.classifyName(name).Junk() &&
+		!strings.ContainsAny(name, "[]{}") && !authorTitleHyphenJoin(name)
+}
+
+// authorTitleHyphenJoin reports a hyphen joining two words with no space,
+// in a word that is neither the name's first nor its last: "Raymond L.
+// Weil-Star Cross" is "Raymond L. Weil" + "Star Cross" run together by a
+// folder parser. A hyphenated given name ("Jean-Paul Sartre") is the first
+// word and a double-barrelled surname ("Hannah Bonam-Young") the last.
+func authorTitleHyphenJoin(name string) bool {
+	f := strings.Fields(name)
+	for i := 1; i < len(f)-1; i++ {
+		if strings.Contains(strings.Trim(f[i], "-"), "-") {
+			return true
+		}
+	}
+	return false
+}
+
+// outerParenthetical splits "Cathfach (A (Not So) Simple Fetch Quest)" into
+// its head and the outermost trailing parenthetical (nesting balanced).
+func outerParenthetical(name string) (head, inner string, ok bool) {
+	s := strings.TrimSpace(name)
+	if !strings.HasSuffix(s, ")") {
+		return "", "", false
+	}
+	depth := 0
+	for i := len(s) - 1; i >= 0; i-- {
+		switch s[i] {
+		case ')':
+			depth++
+		case '(':
+			depth--
+			if depth == 0 {
+				head, inner = strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+1:len(s)-1])
+				return head, inner, head != "" && inner != ""
+			}
+		}
+	}
+	return "", "", false
+}
+
+// parenWork reports whether name is "Person (Work)": a head and a trailing
+// parenthetical that is a book title or series name in the library, or the
+// book's own title or series. The composite is not a person; its head may be
+// (decideBook resolves the head, resolve-only; workTarget refuses the whole).
+func (idx *junkAuthorIndex) parenWork(name, bookTitle string, bookSeries *int) (string, bool) {
+	head, inner, ok := outerParenthetical(name)
+	if !ok {
+		return "", false
+	}
+	ik := workKey(inner)
+	if ik == "" {
+		return "", false
+	}
+	own := ik == workKey(bookTitle)
+	if bookSeries != nil && ik == workKey(idx.seriesByID[*bookSeries].Name) {
+		own = true
+	}
+	if idx.workNames[ik] || idx.seriesWork[ik] || own {
+		return head, true
+	}
+	return "", false
 }
 
 // workKey is the key works are compared on: authorjunk.Normalize with a
@@ -484,6 +573,8 @@ const (
 	junkRefuseNarrator      = "narrator"
 	junkRefuseNarratorCount = "narrator_count"
 	junkRefuseWorkTitle     = "work_title"
+	junkRefuseWorkCredited  = "work_credited"
+	junkRefuseComposite     = "person_work_composite"
 	junkRefuseOwnTitle      = "own_title"
 	junkRefuseJunkFragment  = "junk_fragment"
 	junkRefusePathOuter     = "path_outer"
@@ -521,6 +612,9 @@ func (idx *junkAuthorIndex) workTarget(name string, id int, bookTitle string, bo
 	if k == "" {
 		return "", ""
 	}
+	if head, ok := idx.parenWork(name, bookTitle, bookSeries); ok {
+		return junkRefuseComposite, fmt.Sprintf("%q with a work title in parentheses, not a person", head)
+	}
 	library := idx.workNames[k] || idx.seriesWork[k]
 	tk := workKey(bookTitle)
 	own := (tk == k || properWordPart(k, tk)) && !byNamed(name, bookTitle) && !dashCredited(name, bookTitle)
@@ -532,6 +626,14 @@ func (idx *junkAuthorIndex) workTarget(name string, id int, bookTitle string, bo
 	if !library && !own {
 		return "", ""
 	}
+	// Who the library credits the work to decides, not whether the row has
+	// books of its own (a junk row does): series "Cthulhu Armageddon" is C. T.
+	// Phipps's, so an author row of that name is the work. A series named
+	// after its own author ("Brent Weeks" -> Brent Weeks) names no one else
+	// and falls through to the test below.
+	if other := idx.workCreditedElsewhere(name, id); other != "" {
+		return junkRefuseWorkCredited, fmt.Sprintf("a book or series title in the library credited to %q, not a person", other)
+	}
 	if id > 0 && personname.LooksLikePersonName(name) && idx.hasOtherWork(id, name) {
 		return "", ""
 	}
@@ -539,6 +641,91 @@ func (idx *junkAuthorIndex) workTarget(name string, id int, bookTitle string, bo
 		return junkRefuseWorkTitle, "a book or series title in the library, not a person"
 	}
 	return junkRefuseOwnTitle, "the book's own title or series (or a part of it), not a person"
+}
+
+// workCreditedElsewhere names the author the library credits with a live
+// book or series whose workKey is name's, when that author is someone other
+// than row id (<= 0: a mint); "" when none. Not counted as someone else,
+// since none of them is evidence of who wrote a work:
+//   - row id itself, a row spelled the same (authorjunk.FoldKey), or a row
+//     carrying the name whole ("Brandon Sanderson (GraphicAudio)");
+//   - a strong junk row (a name-alone verdict: the rows this fixer repairs).
+//     A weak one still counts: weakJunk holds real authors ("Brent Weeks",
+//     "Terry Pratchett") whose names are also junk series rows;
+//   - a swapped pair: a row whose own name is a work credited to row id on at
+//     least as many books ("Mistborn", credited with one book in a series
+//     "Brandon Sanderson", while Brandon Sanderson is credited with the
+//     Mistborn books; "Katherine Rundell" against an "Impossible Creatures"
+//     row the other way round): the side with more books under the other's
+//     name is the writer;
+//   - a reader filed as an author: a name the library credits as narrator on
+//     at least half as many books as it has as author ("Cressida Cowell"
+//     series filed under David Tennant), or the book's own Narrator
+//     (the credit maps leave those books out, narratesOwnBook);
+//   - for a title (not a series) match, a row with no other work, or with no
+//     more books under that title than row id has: a book titled with a
+//     person's name is usually a folder parsed the wrong way round ("Joe
+//     Abercrombie" credited to "Before They Are Ha", two "Roald Dahl" titles
+//     filed under Robert Jordan beside nine under Roald Dahl).
+//
+// The lowest qualifying id is named, so the refusal reads the same on every
+// plan. Maps are read-only here (RunItems workers call this concurrently).
+func (idx *junkAuthorIndex) workCreditedElsewhere(name string, id int) string {
+	k := workKey(name)
+	if k == "" {
+		return ""
+	}
+	self := authorjunk.FoldKey(name)
+	best := 0
+	consider := func(m map[string]map[int]int, title bool) {
+		for oid, n := range m[k] {
+			if oid == id || (best != 0 && oid >= best) {
+				continue
+			}
+			o, ok := idx.authorsByID[oid]
+			if !ok || authorjunk.FoldKey(o.Name) == self || properWordPart(k, workKey(o.Name)) {
+				continue
+			}
+			if _, junk := idx.strongJunk[oid]; junk {
+				continue
+			}
+			if id > 0 {
+				ok := workKey(o.Name)
+				if idx.seriesWorkCredits[ok][id]+idx.titleWorkCredits[ok][id] >= n {
+					continue
+				}
+			}
+			if 2*idx.narratedBooks[authorjunk.FoldKey(o.Name)] >= len(idx.ownBooks[oid]) {
+				continue
+			}
+			if title && (!idx.hasOtherWork(oid, name) || (id > 0 && n <= m[k][id])) {
+				continue
+			}
+			best = oid
+		}
+	}
+	consider(idx.seriesWorkCredits, false)
+	consider(idx.titleWorkCredits, true)
+	if best == 0 {
+		return ""
+	}
+	return idx.authorsByID[best].Name
+}
+
+// narratesOwnBook reports whether the book's Narrator names its primary
+// author (name): a reader filed as the author, or an author reading their own
+// book -- either way no evidence for workCreditedElsewhere.
+func narratesOwnBook(b database.BookCore, name string) bool {
+	self := authorjunk.FoldKey(name)
+	if b.Narrator == nil || self == "" {
+		return false
+	}
+	for _, part := range narratorSplitRe.Split(*b.Narrator, -1) {
+		if authorjunk.FoldKey(part) == self {
+			return true
+		}
+	}
+	return false
 }
 
 // junkAuthorInferredSource: the sources that transfer another book's credit
@@ -775,6 +962,12 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		if src != junkAuthorSrcCleaned && !resolveOnly {
 			// "Kevin Hearne (Luke Daniels)": the writer is the head.
 			if head, ok := authorjunk.PersonParentheticalHead(name); ok {
+				addName(src, head, true)
+				return
+			}
+			// "Cathfach (A (Not So) Simple Fetch Quest)": the writer is the
+			// head when the parenthetical is a work (idx.parenWork).
+			if head, ok := idx.parenWork(name, d.Book.Title, d.Book.SeriesID); ok {
 				addName(src, head, true)
 				return
 			}
