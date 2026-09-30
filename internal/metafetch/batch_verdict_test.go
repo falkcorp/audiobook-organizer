@@ -1,7 +1,7 @@
 // file: internal/metafetch/batch_verdict_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: fcb57db8-150d-40b2-a501-0934fa3be00b
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 
 // Tests for the batch candidate fetch's durable verdicts (CachedBatchVerdict):
 // when a book may be answered from the candidate cache without a provider
@@ -81,7 +81,11 @@ func (f *verdictFixture) batchFetch(id string) BatchVerdict {
 		return verdict
 	}
 	_, err := f.mfs.FetchAndCacheLimited(context.Background(), nil, id, b.Title, "", "", "", SearchOptions{OnlySources: ask})
-	require.NoError(f.t, err)
+	// A search no source answered writes nothing and says so; that is the
+	// outcome, not a fixture failure.
+	if !errors.Is(err, ErrNoSourceAnswered) {
+		require.NoError(f.t, err)
+	}
 	return verdict
 }
 

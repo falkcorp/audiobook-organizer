@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -267,6 +267,41 @@ func CurrentAuthorForms(book *database.Book, liveAuthors []string) []string {
 	return forms
 }
 
+// ErrNoSourceAnswered is returned by FetchAndCache and FetchAndCacheLimited
+// when a search found nothing AND no source's query ladder completed: every
+// provider errored, was throttled, or was cancelled. The search core returns a
+// nil error in that case, and recording it as an empty answer stamped
+// LastEmptyFetchAt = now, so one provider outage or quota exhaustion during a
+// forced stale refetch marked the whole backlog as freshly checked for 30 days
+// (MetadataCacheTTL) without anyone having been asked anything. Nothing is
+// written; the entry stays exactly as it was, stale if it was stale.
+var ErrNoSourceAnswered = errors.New("metadata search: no source answered (every provider errored, was throttled or was cancelled)")
+
+// noSourceAnswered reports the ErrNoSourceAnswered case for resp, naming the
+// failures so the caller's result row says what happened.
+//
+// A response WITH results is never this case: the candidates came from a
+// source that returned them, so dating them now is true even if that source's
+// later ladder steps failed.
+func noSourceAnswered(resp *SearchMetadataResponse) error {
+	if resp == nil || len(resp.Results) > 0 || len(resp.SourcesAnswered) > 0 {
+		return nil
+	}
+	if len(resp.SourcesFailed) == 0 {
+		return ErrNoSourceAnswered
+	}
+	names := make([]string, 0, len(resp.SourcesFailed))
+	for name := range resp.SourcesFailed {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+": "+resp.SourcesFailed[name])
+	}
+	return fmt.Errorf("%w: %s", ErrNoSourceAnswered, strings.Join(parts, "; "))
+}
+
 // FetchAndCache runs the existing search pipeline, writes top-N to
 // the cache (always replaces), and returns the resulting entry.
 //
@@ -279,6 +314,9 @@ func (mfs *Service) FetchAndCache(ctx context.Context, bookID, query, author, na
 	}
 	resp, err := mfs.SearchMetadataForBookWithOptions(bookID, query, author, narrator, series, opts)
 	if err != nil {
+		return nil, err
+	}
+	if err := noSourceAnswered(resp); err != nil {
 		return nil, err
 	}
 	return mfs.cacheSearchResponse(bookID, query, author, narrator, series, resp), nil
@@ -295,6 +333,9 @@ func (mfs *Service) FetchAndCacheLimited(ctx context.Context, limiter *rate.Limi
 	}
 	resp, err := mfs.searchMetadataForBook(ctx, limiter, bookID, query, author, narrator, series, opts)
 	if err != nil {
+		return nil, err
+	}
+	if err := noSourceAnswered(resp); err != nil {
 		return nil, err
 	}
 	return mfs.cacheSearchResponse(bookID, query, author, narrator, series, resp), nil
@@ -325,6 +366,9 @@ func (mfs *Service) FetchAndCacheLimited(ctx context.Context, limiter *rate.Limi
 // and the stored candidates are still the best answer anyone has, so they stay
 // and only LastEmptyFetchAt moves. Different inputs means the title/author/
 // series the candidates answer to no longer exists, so replacing them is right.
+//
+// Callers must rule out noSourceAnswered first: an empty response nobody
+// answered is not a look, and recording it would date the row as checked.
 func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series string, resp *SearchMetadataResponse) *MetadataCandidateCache {
 	candidates := resp.Results
 	if len(candidates) > metadataCacheTopN {
