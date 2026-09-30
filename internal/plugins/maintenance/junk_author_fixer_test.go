@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3d080ff3-6e67-4d08-a849-8bc0996a8315
 // last-edited: 2026-09-29
 
@@ -90,6 +90,8 @@ type junkBookSpec struct {
 	bookNarrators []string
 	series        string
 	tags          map[string]string
+	// vg is the book's version group id.
+	vg string
 }
 
 // book creates a book whose junction and primary both name spec.author (plus
@@ -100,6 +102,9 @@ func (f *junkFixture) book(spec junkBookSpec) string {
 	b := &database.Book{Title: spec.title, FilePath: spec.path, AuthorID: &aid, IsPrimaryVersion: new(true)}
 	if spec.narrator != "" {
 		b.Narrator = &spec.narrator
+	}
+	if spec.vg != "" {
+		b.VersionGroupID = &spec.vg
 	}
 	if spec.series != "" {
 		sid := f.series[spec.series]
