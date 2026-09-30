@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_book_lock.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: fe71f301-a85e-4dad-98df-b135676ab1a7
 // last-edited: 2026-09-30
 
@@ -129,8 +129,10 @@ var (
 // in reach (resolveScanLockSet runs inside the worker and the AI phase).
 var scanLockLog = logger.New("scanner.scanlock")
 
-// FileFailureStageBusy: the book was being written by an apply for longer than
-// the scanner will wait. Nothing was read or written; the next scan picks it up.
+// FileFailureStageBusy: the scanner could not lock the book -- an apply was
+// writing it for longer than the scanner will wait, or its version group could
+// not be read so its lock set was unknown (the Reason says which). Nothing was
+// read or written; the next scan picks it up.
 const FileFailureStageBusy = "busy"
 
 // errScanLockWiden is returned by saveBookToDatabase BEFORE any write when it
