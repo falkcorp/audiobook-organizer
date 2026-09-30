@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
 // last-edited: 2026-09-30
 
@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/errhandling"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -94,6 +95,12 @@ var ErrQueuedAlreadyApplied = errors.New("already applied: this queued change la
 // this apply was queued. Nothing is written; the op fails with the edits named
 // so the user can re-apply against the book as it is now. The library scan's
 // own merge is not an edit here: it records no change history.
+//
+// Automated writers that DO record history (auto-fetch, the nightly metadata
+// upgrade, an enhanced bulk_update) count as edits too, so one of them landing
+// between enqueue and run refuses the queued apply. That is deliberate: it
+// fails safe (nothing is overwritten), the message names the source, and the
+// user can simply apply the change again.
 var ErrQueuedApplyStale = errors.New("this book was edited after the change was queued; nothing was applied")
 
 // newQueuedApplyBatchID is the history batch id a queued apply's rows carry.
@@ -147,7 +154,8 @@ func (h *Handler) checkQueuedCandidate(q QueuedApply) error {
 		return ErrQueuedAlreadyApplied
 	}
 	if len(edits.Others) > 0 {
-		return fmt.Errorf("%w (edited since: %s)", ErrQueuedApplyStale, strings.Join(edits.Others, "; "))
+		return fmt.Errorf("%w (edited since: %s). Apply the change again if you still want it; it will apply to the book as it is now",
+			ErrQueuedApplyStale, strings.Join(edits.Others, "; "))
 	}
 	return nil
 }
@@ -240,7 +248,7 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 		return nil, err
 	}
 	// Applying invalidates the candidate cache (METADATA-CACHED-MATCHER).
-	_ = h.metadataFetchService.InvalidateCachedCandidates(id)
+	errhandling.MustLog(h.metadataFetchService.InvalidateCachedCandidates(id), "candidate cache not invalidated; the dialog may show stale candidates", "book_id", id)
 
 	shouldWriteBack := writeBack == nil || *writeBack
 	// Enqueue before the pool submission so the iTunes batcher picks up the
@@ -340,7 +348,7 @@ func (h *Handler) fetchCore(ctx context.Context, id string) (*metafetch.FetchMet
 	if err != nil {
 		return nil, err
 	}
-	_ = h.metadataFetchService.InvalidateCachedCandidates(id)
+	errhandling.MustLog(h.metadataFetchService.InvalidateCachedCandidates(id), "candidate cache not invalidated; the dialog may show stale candidates", "book_id", id)
 	if wb := h.resolveWriteBack(); wb != nil {
 		wb.Enqueue(id)
 	}

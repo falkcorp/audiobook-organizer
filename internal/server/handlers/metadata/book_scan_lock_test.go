@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 85df29b0-0d44-40e8-bbab-726ab6928927
 // last-edited: 2026-09-30
 
@@ -192,7 +192,8 @@ func TestRunQueuedApply_CandidateRefusesALaterEdit(t *testing.T) {
 	d.mfs.EXPECT().ApplyEditsSince("b1", int64(42), "apply-queued-own").Return(
 		metafetch.QueuedApplyEdits{Others: []string{"title (fetched, audible)"}}, nil)
 	err := h.RunQueuedApply(context.Background(), queuedCandidate(), nil)
-	if !errors.Is(err, metadatahandler.ErrQueuedApplyStale) || !strings.Contains(err.Error(), "title (fetched, audible)") {
+	if !errors.Is(err, metadatahandler.ErrQueuedApplyStale) || !strings.Contains(err.Error(), "title (fetched, audible)") ||
+		!strings.Contains(err.Error(), "Apply the change again") {
 		t.Fatalf("want a later-edit refusal naming the edit, got %v", err)
 	}
 	if n := scanlock.Books.Held(); n != 0 {

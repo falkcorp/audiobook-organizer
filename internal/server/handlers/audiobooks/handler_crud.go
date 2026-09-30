@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-09-19
+// last-edited: 2026-09-30
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -11,11 +11,9 @@
 package audiobookshandler
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +31,7 @@ import (
 )
 
 // UpdateAudiobook handles PUT /audiobooks/:id. Full-column replacement via the
-// update service, then records manual change history, writes metadata back to
+// update service (which records the change history), writes metadata back to
 // the file, enqueues iTunes write-back, and invalidates caches.
 func (h *Handler) UpdateAudiobook(c *gin.Context) {
 	id := c.Param("id")
@@ -43,12 +41,6 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
-	}
-
-	// Fetch old book for change history comparison
-	var oldBook *database.Book
-	if store != nil {
-		oldBook, _ = store.GetBookByID(id)
 	}
 
 	updatedBook, err := h.audiobookUpdater.UpdateAudiobook(c.Request.Context(), id, payload)
@@ -61,74 +53,12 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 		return
 	}
 
-	// Record metadata change history for manual edits
-	if oldBook != nil && store != nil {
-		now := time.Now()
-		manualChanges := []struct {
-			field  string
-			oldVal string
-			newVal string
-		}{
-			{"title", oldBook.Title, updatedBook.Title},
-			{"narrator", ptrStr(oldBook.Narrator), ptrStr(updatedBook.Narrator)},
-			{"publisher", ptrStr(oldBook.Publisher), ptrStr(updatedBook.Publisher)},
-			{"language", ptrStr(oldBook.Language), ptrStr(updatedBook.Language)},
-		}
-		// Compare author names
-		oldAuthor := ""
-		if oldBook.AuthorID != nil {
-			if a, err := store.GetAuthorByID(*oldBook.AuthorID); err == nil && a != nil {
-				oldAuthor = a.Name
-			}
-		}
-		newAuthor := ""
-		if updatedBook.AuthorID != nil {
-			if a, err := store.GetAuthorByID(*updatedBook.AuthorID); err == nil && a != nil {
-				newAuthor = a.Name
-			}
-		}
-		manualChanges = append(manualChanges, struct {
-			field  string
-			oldVal string
-			newVal string
-		}{"author_name", oldAuthor, newAuthor})
-		// Compare year
-		oldYear := ""
-		if oldBook.AudiobookReleaseYear != nil {
-			oldYear = strconv.Itoa(*oldBook.AudiobookReleaseYear)
-		}
-		newYear := ""
-		if updatedBook.AudiobookReleaseYear != nil {
-			newYear = strconv.Itoa(*updatedBook.AudiobookReleaseYear)
-		}
-		manualChanges = append(manualChanges, struct {
-			field  string
-			oldVal string
-			newVal string
-		}{"audiobook_release_year", oldYear, newYear})
-
-		for _, ch := range manualChanges {
-			if ch.newVal == "" || ch.newVal == ch.oldVal {
-				continue
-			}
-			oldJSON, _ := json.Marshal(ch.oldVal)
-			newJSON, _ := json.Marshal(ch.newVal)
-			oldStr := string(oldJSON)
-			newStr := string(newJSON)
-			record := &database.MetadataChangeRecord{
-				BookID:        id,
-				Field:         ch.field,
-				PreviousValue: &oldStr,
-				NewValue:      &newStr,
-				ChangeType:    "manual",
-				Source:        "manual",
-				ChangedAt:     now,
-			}
-			if err := store.RecordMetadataChange(record); err != nil {
-				slog.Warn("failed to record manual metadata change for .", "id", logger.SanitizeLogValue(id), "c", ch.field, "err", err)
-			}
-		}
-	}
+	// Change history for this edit is recorded by the update service
+	// (audiobooks.AudiobookService.UpdateAudiobook -> database.RecordBookEditHistory):
+	// one "manual" row per changed field, clears included, diffed under the
+	// book's write lock. Until 2026-09-30 this handler recorded its own rows
+	// for six fields and only for non-empty values, so any other field -- or
+	// a clear -- left no history, and a queued metadata apply overwrote it.
 
 	// Write updated metadata back to the audio file
 	if updatedBook.FilePath != "" {

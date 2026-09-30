@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.8.10
+// version: 1.9.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 
 package logger
 
@@ -9,7 +9,7 @@ package logger
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
 	slogRatchetFileCeiling = 317
-	slogRatchetCallCeiling = 1856
+	slogRatchetCallCeiling = 1851
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -258,7 +258,7 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/activity.go":                       1,
 	"internal/server/handlers/ai.go":                             3,
 	"internal/server/handlers/apikeys.go":                        5,
-	"internal/server/handlers/audiobooks/handler_crud.go":        4,
+	"internal/server/handlers/audiobooks/handler_crud.go":        3,
 	"internal/server/handlers/audiobooks/handler_files.go":       1,
 	"internal/server/handlers/audiobooks/handler_metadata.go":    1,
 	"internal/server/handlers/cache.go":                          2,
@@ -268,7 +268,7 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/duplicates/handler.go":             1,
 	"internal/server/handlers/filesystem.go":                     7,
 	"internal/server/handlers/itunes.go":                         7,
-	"internal/server/handlers/metadata/handler.go":               5,
+	"internal/server/handlers/metadata/handler.go":               3,
 	"internal/server/handlers/metadata_cache.go":                 5,
 	"internal/server/handlers/openai_validate.go":                3,
 	"internal/server/handlers/operations/handler.go":             3,
@@ -288,7 +288,7 @@ var slogRatchet = map[string]int{
 	"internal/server/library_writeback_op.go":                    1,
 	"internal/server/maintenance_fixups.go":                      20,
 	"internal/server/maintenance_job_op.go":                      1,
-	"internal/server/metadata_batch_candidates.go":               4,
+	"internal/server/metadata_batch_candidates.go":               2,
 	"internal/server/metadata_results_cache.go":                  4,
 	"internal/server/metadata_results_warmer.go":                 4,
 	"internal/server/middleware/absauthprobe.go":                 1,

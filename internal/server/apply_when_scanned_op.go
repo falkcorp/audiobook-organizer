@@ -1,5 +1,5 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
 // last-edited: 2026-09-30
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/errhandling"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
@@ -283,7 +284,9 @@ func (s *Server) applyOpResultBooks(ctx context.Context, opID string, bookIDs []
 				return nil
 			})
 		}
-		_ = g.Wait() // every worker returns nil; failures are in outcomes
+		// Every worker returns nil (failures are in outcomes), so an error
+		// here is a bug; log it rather than drop it.
+		errhandling.MustLog(g.Wait(), "batch candidate apply: a worker returned an unexpected error")
 	}
 
 	pass(nil, nil)
@@ -414,12 +417,12 @@ func (s *Server) applyOpResultCandidateLocked(opID, bookID string, byBook map[st
 	// book as still needing review. Mirrors the reject handler.
 	cr.Status = "applied"
 	if updatedJSON, err := json.Marshal(cr); err == nil {
-		_ = s.Ops().CreateOperationResult(&database.OperationResult{
+		errhandling.MustLog(s.Ops().CreateOperationResult(&database.OperationResult{
 			OperationID: opID,
 			BookID:      bookID,
 			ResultJSON:  string(updatedJSON),
 			Status:      "applied",
-		})
+		}), "applied status not saved; the review dialog may list this book again", "op_id", opID, "book_id", bookID)
 	}
 
 	// Queue file I/O through the worker pool (bounded concurrency). Submit

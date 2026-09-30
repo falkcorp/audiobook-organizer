@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-30
 
@@ -162,6 +162,16 @@ type Service struct {
 	// ScanEnqueuer enqueues a background library scan. Wired by the server
 	// package after construction to avoid a circular import.
 	ScanEnqueuer func(ctx context.Context) error
+
+	// ResolveLibraryCopy maps a protected original to its library copy (the
+	// resolver the single-book organize uses). Batch organize acts on the
+	// original itself, but LOCKS the pair {original, copy}: a library copy
+	// whose tags were rewritten no longer shares the original's file hash, so
+	// the organizer's same-hash backstop can miss it and the organize lands
+	// beside it, and the scanner only locks the pair through their version
+	// group, which it does not lock whole past its cap. Nil locks the book
+	// alone. Set by the server package after construction.
+	ResolveLibraryCopy LibraryCopyResolver
 
 	// DiscoverITunesLibraryPath discovers the iTunes library path.
 	// Set by the server package after construction.
@@ -1760,11 +1770,15 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 						organizeOne(workerOrg, i)
 						continue
 					}
-					id := booksToOrganize[i].ID
 					var hold *scanlock.Hold
 					if waitCtx == nil {
-						h, ok := scanlock.Books.TryLockSet([]string{id})
-						if !ok {
+						h, lerr := orgSvc.lockBatchBook(&booksToOrganize[i], func(ids []string) (*scanlock.Hold, error) {
+							if h, ok := scanlock.Books.TryLockSet(ids); ok {
+								return h, nil
+							}
+							return nil, errBatchBookBusy
+						})
+						if lerr != nil {
 							deferredMu.Lock()
 							deferred = append(deferred, i)
 							deferredMu.Unlock()
@@ -1772,7 +1786,9 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 						}
 						hold = h
 					} else {
-						h, err := scanlock.Books.LockSet(waitCtx, []string{id})
+						h, err := orgSvc.lockBatchBook(&booksToOrganize[i], func(ids []string) (*scanlock.Hold, error) {
+							return scanlock.Books.LockSet(waitCtx, ids)
+						})
 						if err != nil {
 							log.Info("Organize: %s skipped: a library scan is still reading it; the next organize picks it up", booksToOrganize[i].Title)
 							statsMu.Lock()
