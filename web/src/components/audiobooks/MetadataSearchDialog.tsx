@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-30
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
@@ -185,6 +185,11 @@ export function MetadataSearchDialog({
       const resp = await api.applyMetadataCandidate(bookId, candidate, undefined, writeToFiles);
       onApplied(resp.book);
       onClose();
+      if (resp.queued) {
+        // The scan is reading this book; the change is queued, not refused.
+        toast(resp.message, 'info');
+        return;
+      }
       toast(`Metadata applied from ${resp.source}`, 'success', {
         label: 'Undo',
         onClick: async () => {
@@ -219,6 +224,10 @@ export function MetadataSearchDialog({
       );
       onApplied(resp.book);
       onClose();
+      if (resp.queued) {
+        toast(resp.message, 'info');
+        return;
+      }
       toast(`Selected fields applied from ${resp.source}`, 'success', {
         label: 'Undo',
         onClick: async () => {

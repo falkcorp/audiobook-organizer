@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: ec4cb47b-6f18-4083-ab37-a05af679a097
-// last-edited: 2026-09-12
+// last-edited: 2026-09-30
 
 import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -202,6 +202,34 @@ describe('BulkMetadataSearchDialog — applied books', () => {
     expect(screen.queryByText('Book C')).not.toBeInTheDocument();
     expect(header()).toBe('Search Metadata — Book 2 of 2 (1 filtered)');
     expect(Number(determinateProgress())).toBeCloseTo(100 / 3, 5);
+  });
+});
+
+describe('BulkMetadataSearchDialog — the library scan is reading the book', () => {
+  // 202 queued: the server waited its bound for the scan to move off this
+  // book and handed the change to metadata.apply-when-scanned. That is
+  // information, never a warning or an error, and there is nothing to undo
+  // yet because nothing has been applied.
+  it('shows an info toast, no warning, no Undo, and moves on', async () => {
+    const message =
+      'The library scan is reading this book right now; your change is queued and will be applied as soon as it moves on.';
+    mockApply.mockResolvedValueOnce({
+      ...applyOk,
+      queued: true,
+      operation_id: 'op-q1',
+      message,
+    });
+    renderDialog([book('a'), book('b')]);
+    fireEvent.click(await waitForBook('Book A'));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(`"Book A": ${message}`, 'info'));
+    for (const call of toast.mock.calls) {
+      expect(call[1]).not.toBe('warning');
+      expect(call[1]).not.toBe('error');
+      expect(call[2]).toBeUndefined(); // no Undo action
+    }
+    await waitForBook('Book B');
+    expect(screen.queryByRole('button', { name: /Undo Last/ })).not.toBeInTheDocument();
   });
 });
 

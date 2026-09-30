@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.58.0
+// version: 1.59.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-09-19
+// last-edited: 2026-09-30
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -519,6 +519,11 @@ export const BookDetail = () => {
     setFetchingMetadata(true);
     try {
       const result = await api.fetchBookMetadata(book.id);
+      if (result.queued) {
+        // The scan is reading this book; the fetch is queued, not refused.
+        toast(result.message, 'info');
+        return;
+      }
       setBook(result.book);
       // Re-fetch enriched book (with populated authors array) and tags
       await refreshBook();
@@ -554,6 +559,10 @@ export const BookDetail = () => {
     setWriteBackDialogOpen(false);
     try {
       const result = await api.writeBackMetadata(book.id);
+      if (result.queued) {
+        toast(result.message, 'info');
+        return;
+      }
       toast(result.message || 'Metadata written to files.', 'success');
       refreshFilesTab(); // reload tags and changelog after write
       await refreshBook(); // refresh book data to reflect any changes

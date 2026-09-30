@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.94.0
+// version: 1.95.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -1540,7 +1540,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
 
   const handleFetchMetadata = async (audiobook: Audiobook) => {
     try {
-      await api.fetchBookMetadata(audiobook.id);
+      const result = await api.fetchBookMetadata(audiobook.id);
+      if (result?.queued) toast(result.message, 'info');
       // Reload audiobooks to show updated data
       clearLibraryCache();
       loadAudiobooks();
