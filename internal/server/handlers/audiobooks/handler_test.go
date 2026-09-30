@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-09-14
+// last-edited: 2026-09-30
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -824,7 +824,6 @@ func TestRemoveBookAlternativeTitle_MissingTitle(t *testing.T) {
 
 func TestUpdateAudiobook_NotFound(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBookByID("x").Return(nil, nil)
 	d.updater.EXPECT().UpdateAudiobook(mock.Anything, "x", mock.Anything).Return(nil, errString("not found"))
 	c, w := newCtx("PUT", "/audiobooks/x", map[string]any{"title": "T"}, p("id", "x"))
 	h.UpdateAudiobook(c)
@@ -835,10 +834,8 @@ func TestUpdateAudiobook_NotFound(t *testing.T) {
 
 func TestUpdateAudiobook_Success(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
 	d.updater.EXPECT().UpdateAudiobook(mock.Anything, "b1", mock.Anything).
 		Return(&database.Book{ID: "b1", Title: "New"}, nil)
-	d.store.EXPECT().RecordMetadataChange(mock.Anything).Return(nil).Maybe()
 	d.svc.EXPECT().InvalidateBookCaches().Return()
 	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
@@ -851,10 +848,8 @@ func TestUpdateAudiobook_Success(t *testing.T) {
 func TestUpdateAudiobook_ProtectedPathSkipsWriteBack(t *testing.T) {
 	h, d := newHandler(t)
 	d.rec.protectedReturn = true // isProtectedPath returns true → write-back skipped
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
 	d.updater.EXPECT().UpdateAudiobook(mock.Anything, "b1", mock.Anything).
 		Return(&database.Book{ID: "b1", Title: "New", FilePath: "/protected/book.m4b"}, nil)
-	d.store.EXPECT().RecordMetadataChange(mock.Anything).Return(nil).Maybe()
 	// The write-back tagMap gets "title" but no "artist"/"narrator", so the
 	// handler probes the author/narrator join tables; return ≤1 each so the
 	// multi-value join branch is skipped. (Protected-path short-circuits before

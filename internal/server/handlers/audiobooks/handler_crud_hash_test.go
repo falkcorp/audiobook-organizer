@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud_hash_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4e1a73-8d25-4f6b-b3e0-7a2d6f9c1e58
-// last-edited: 2026-09-13
+// last-edited: 2026-09-30
 
 package audiobookshandler_test
 
@@ -56,10 +56,8 @@ func TestUpdateAudiobook_WriteBackRecordsNewFileHash(t *testing.T) {
 	defer metadata.SetBookFileHashStore(nil)
 
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
 	d.updater.EXPECT().UpdateAudiobook(mock.Anything, "b1", mock.Anything).
 		Return(&database.Book{ID: "b1", Title: "A New Title", FilePath: path}, nil)
-	d.store.EXPECT().RecordMetadataChange(mock.Anything).Return(nil).Maybe()
 	d.store.EXPECT().GetBookAuthors("b1").Return([]database.BookAuthor{}, nil).Maybe()
 	d.store.EXPECT().GetBookNarrators("b1").Return([]database.BookNarrator{}, nil).Maybe()
 	d.store.EXPECT().SetLastWrittenAt("b1", mock.Anything).Return(nil)

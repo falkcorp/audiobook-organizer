@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-19
+// last-edited: 2026-09-30
 
 package audiobooks
 
@@ -1010,6 +1010,13 @@ func TestAudiobookService_UpdateAudiobook_TitleUpdate(t *testing.T) {
 			written = fresh
 			return fresh, nil
 		})
+	// The edit's history: exactly one "manual" row, for the title it
+	// changed. The concurrent writer's Publisher is not this edit's change,
+	// so a row for it would be an unexpected call.
+	mockStore.EXPECT().RecordMetadataChange(mock.MatchedBy(func(r *database.MetadataChangeRecord) bool {
+		return r.Field == "title" && r.ChangeType == database.ChangeTypeManual &&
+			r.PreviousValue != nil && *r.PreviousValue == `"Old Title"` && r.NewValue != nil && *r.NewValue == `"New Title"`
+	})).Return(nil).Once()
 	mockStore.EXPECT().GetBookAuthors("id1").Return(nil, nil).Maybe()
 	mockStore.EXPECT().GetBookNarrators("id1").Return(nil, nil).Maybe()
 	mockStore.EXPECT().GetNarratorsByBookIDs(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
