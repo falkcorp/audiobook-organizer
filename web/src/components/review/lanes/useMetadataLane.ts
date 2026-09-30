@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.23.0
+// version: 1.24.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -46,7 +46,7 @@ import * as api from '../../../services/api';
 import { isAuthRedirectError } from '../../../utils/apiFetch';
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
 import type { CandidateGroup, SpineContext } from '../spine/CompareSpine';
-import { runtimeDiffersFromBook, type RowState } from '../spine/rowState';
+import { runtimeHiddenBySwitch, type RowState } from '../spine/rowState';
 import type { MetadataAction } from '../reviewActions';
 
 // Upper bound on how long a dispatched apply keeps its rows protected from
@@ -1206,7 +1206,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const runtimeHidden = useMemo(
     () =>
       filters.hideRuntimeDifferences
-        ? new Set(beforeRuntime.filter((r) => runtimeDiffersFromBook(r)).map((r) => r.book.id))
+        ? new Set(beforeRuntime.filter((r) => runtimeHiddenBySwitch(r)).map((r) => r.book.id))
         : new Set<string>(),
     [beforeRuntime, filters.hideRuntimeDifferences]
   );
@@ -1214,10 +1214,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const preGroupFiltered = useMemo(
     () =>
       beforeRuntime
-        // Mirrors the apply gate's runtime rule (runtimeDiffersFromBook): a
-        // candidate more than 10% off the book's known runtime. An unknown
-        // runtime on either side is not evidence of a mismatch, so those rows
-        // stay reviewable.
+        // runtimeHiddenBySwitch: the apply gate's 10% rule OR the spine's
+        // ten-minute warning chip, so no warned row survives the switch. An
+        // unknown runtime on either side is not evidence of a mismatch, so
+        // those rows stay reviewable.
         .filter((r) => !runtimeHidden.has(r.book.id))
         .filter((r) => {
           // An unknown language on EITHER side is a no-op, not a hide: a book

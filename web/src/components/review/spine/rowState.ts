@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d17c69b-0e83-4a25-91f6-7b2c8a034e51
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 //
 // Row-state derivations and formatting, lifted verbatim from
 // MetadataReviewDialog so CompareSpine can reuse them rather than reimplement
@@ -139,8 +139,8 @@ export function runtimeDiffers(deltaSec: number | undefined | null): boolean {
 /**
  * The apply gate's runtime tolerance: `internal/applygate/evidence.go`
  * RuntimeBlockRatio. A candidate more than 10% off the book's runtime is a
- * runtime_mismatch there, and the gate refuses it; hiding the same rows here
- * keeps the review list from offering what the gate would refuse.
+ * runtime_mismatch there, and the gate refuses it. The hide switch uses this
+ * together with the warning chip's rule (runtimeHiddenBySwitch below).
  *
  * Mirrors the gate's rule, not RUNTIME_WARN_THRESHOLD_SEC above: that flat
  * ten minutes is the spine's warning chip, and on a 40-hour book it flags a
@@ -151,7 +151,7 @@ export const RUNTIME_BLOCK_RATIO = 0.1;
 /** The runtime inputs `runtimeDiffersFromBook` reads off a review row. */
 export interface RuntimeRow {
   book: { duration_seconds?: number; runtime_lower_bound_seconds?: number };
-  candidate?: { duration_sec?: number } | null;
+  candidate?: { duration_sec?: number; duration_delta_sec?: number } | null;
 }
 
 /**
@@ -180,4 +180,18 @@ export function runtimeDiffersFromBook(r: RuntimeRow): boolean {
     return (lb - cand) / lb > RUNTIME_BLOCK_RATIO;
   }
   return false;
+}
+
+/**
+ * Whether the "Hide runtime differences" switch hides this row.
+ *
+ * The union of the two runtime rules: the gate's 10% rule
+ * (runtimeDiffersFromBook) and the spine's flat ten-minute warning chip
+ * (runtimeDiffers). The owner's rule (2026-09-30): a row showing the
+ * "runtime differs" chip must never appear while the switch is on, even when
+ * the gate would accept it -- a 53-minute gap on a nine-hour book is under
+ * 10% but still warned.
+ */
+export function runtimeHiddenBySwitch(r: RuntimeRow): boolean {
+  return runtimeDiffers(r.candidate?.duration_delta_sec) || runtimeDiffersFromBook(r);
 }

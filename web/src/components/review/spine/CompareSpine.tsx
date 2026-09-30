@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.10.0
+// version: 1.11.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 //
 // The shared comparison spine: the surface that shows a reviewer what they are
 // deciding between.
@@ -76,6 +76,7 @@ import {
   formatFileSize,
   getRowSx,
   isRowActionable,
+  runtimeDiffers,
   type RowState,
 } from './rowState';
 
@@ -548,7 +549,7 @@ const CompactRow = memo(function CompactRow({
                 sx={{ fontWeight: 500 }}
               />
             )}
-            {Math.abs(r.candidate?.duration_delta_sec ?? 0) > 600 && (
+            {runtimeDiffers(r.candidate?.duration_delta_sec) && (
               <Chip
                 label={`⚠ runtime differs by ${formatDuration(Math.abs(r.candidate.duration_delta_sec!))}`}
                 color="warning"
