@@ -1,0 +1,1 @@
+- Woodpecker: `test-server-scanner` moves from llm1 to U1 (8 shards for `server` and `scanner`, 6 for `abs`; every shard under 55 s on U1, against 538 s for the workflow on llm1). No CI workflow runs on llm1 any more, so it is free for Whisper transcription.
