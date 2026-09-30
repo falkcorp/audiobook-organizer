@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_targets_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b0e6c1f-8d0a-4c55-9f7e-2a61d3c4b9e8
 // last-edited: 2026-09-29
 
@@ -291,16 +291,45 @@ func TestJunkAuthorFixer_PersonShapedWorksAreRefused(t *testing.T) {
 	f.book(junkBookSpec{title: "Joe Haldeman", path: "/lib/jh/2", author: "Joe Haldeman"})
 	jh := f.book(junkBookSpec{title: "The Forever War (copy)", path: "/lib/j/jh", author: "read by narrator", vg: "vg-jh"})
 
+	// A work title first, then " - ": the first segment is never a credit.
+	f.book(junkBookSpec{title: "Red Rising", path: "/lib/rr2/1", author: "Red Rising", vg: "vg-rr2"})
+	rr2 := f.book(junkBookSpec{title: "Red Rising - Pierce Brown - read by Tim Gerard Reynolds", path: "/lib/j/rr2",
+		author: "read by narrator", vg: "vg-rr2"})
+	solo2 := f.book(junkBookSpec{title: "Solo Leveling - Vol 3", path: "/lib/Solo Leveling/Solo Leveling - Vol 3", author: "GraphicAudio"})
+	vhd2 := f.book(junkBookSpec{title: "Vampire Hunter D - Volume 11", path: "/lib/Vampire Hunter D/Vampire Hunter D - Volume 11",
+		author: "Graphic Audio LLC.", series: "Vampire Hunter D"})
+
+	// hasOtherWork: a "Red Rising" row whose only book is "Red Rising -
+	// Pierce Brown" has no other work (the first segment is the title, not a
+	// credit), so with "Red Rising" a library title it is refused.
+	f.book(junkBookSpec{title: "Red Rising", path: "/lib/pb/1", author: "Pierce Brown"})
+	f.book(junkBookSpec{title: "Red Rising - Pierce Brown", path: "/lib/rr3/1", author: "Red Rising", vg: "vg-rr3"})
+	rr3 := f.book(junkBookSpec{title: "Morning Star", path: "/lib/j/rr3", author: "read by narrator", vg: "vg-rr3"})
+
 	plan := f.plan()
-	for _, c := range []struct{ junk, book, bad string }{
-		{"Graphic Audio LLC.", vhd, "Vampire Hunter D"},
-		{"GraphicAudio", solo, "Solo Leveling"},
-		{"read by narrator", rr, "Red Rising"},
+	for _, c := range []struct {
+		junk, book, bad string
+		// titleGate: the older title gate (acceptableRelinkName) drops the
+		// name before the work test sees it, so nothing is recorded and a
+		// placeholder credit with no other evidence goes to needs_manual.
+		titleGate bool
+	}{
+		{"Graphic Audio LLC.", vhd, "Vampire Hunter D", false},
+		{"GraphicAudio", solo, "Solo Leveling", false},
+		{"read by narrator", rr, "Red Rising", false},
+		{"read by narrator", rr2, "Red Rising", true},
+		{"GraphicAudio", solo2, "Solo Leveling", true},
+		{"Graphic Audio LLC.", vhd2, "Vampire Hunter D", true},
+		{"read by narrator", rr3, "Red Rising", false},
 	} {
 		r := f.row(plan, c.junk, c.book)
 		require.NotNil(t, r, c.bad)
 		require.NotEqual(t, c.bad, r.Proposed["author"], "%s: %s", c.bad, r.Reason)
 		require.NotEqual(t, junkAuthorDecCreate, r.Proposed["decision"], "%s: %s", c.bad, r.Reason)
+		if c.titleGate {
+			require.Equal(t, junkAuthorDecUnlink, r.Proposed["decision"], "%s: %s", c.bad, r.Reason)
+			continue
+		}
 		require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%s: held, not unlinked: %v %s", c.bad, r.Proposed, r.Reason)
 		require.Contains(t, r.SkipReason, c.bad)
 	}

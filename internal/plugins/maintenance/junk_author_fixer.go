@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -565,14 +565,18 @@ func byNamed(name, title string) bool {
 }
 
 // dashCredited reports whether title carries name as a whole " - "-delimited
-// segment ("The Path of Two - DP Behling - read by X"): a credit in the
-// title, like byNamed, not a work named after the person.
+// segment AFTER the first ("The Path of Two - DP Behling - read by X"): a
+// credit in the title, like byNamed, not a work named after the person. The
+// first segment is the work title ("Red Rising - Pierce Brown", "Solo
+// Leveling - Vol 3") and is never read as a credit, so a leading "Author -
+// Title" shape stays held -- the safe direction: a held row, never a work
+// minted or relinked as an author.
 func dashCredited(name, title string) bool {
 	k := workKey(name)
 	if k == "" || !strings.Contains(title, " - ") {
 		return false
 	}
-	for _, seg := range strings.Split(title, " - ") {
+	for _, seg := range strings.Split(title, " - ")[1:] {
 		if workKey(seg) == k {
 			return true
 		}
