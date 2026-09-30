@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-09-29
 
@@ -513,7 +513,7 @@ func TestClassifyName_TrialShrapnelTargets(t *testing.T) {
 		}
 	}
 	// Names near those shapes that are people or pen names.
-	for _, n := range []string{"Lame", "Jim Lame", "Chapman", "Chad Leito", "Zane Grey", "Xander Tate",
+	for _, n := range []string{"Lame", "Jim Lame", "Lame-Duck", "Chapman", "Chad Leito", "Zane Grey", "Xander Tate",
 		"Trackman", "Cdric Smith", "Ian w. Sainsbury", "Stephanie 'Stephabeni' Benamati"} {
 		if v := ClassifyName(n); v.Junk() {
 			t.Errorf("ClassifyName(%q) = %+v, want not junk", n, v)
@@ -531,6 +531,9 @@ func TestCleanedName_TrialShapes(t *testing.T) {
 		if got, ok := CleanedName(in); !ok || got != want {
 			t.Errorf("CleanedName(%q) = %q, %v; want %q", in, got, ok, want)
 		}
+	}
+	if !IsSurnameFirstInitials("Jennsen, GS_ 08 Rubicon (Amaranthe 08)") || IsSurnameFirstInitials("G. S. Jennsen") {
+		t.Error("IsSurnameFirstInitials misjudges the surname-first shape")
 	}
 	// A surname-first head needs initials and a title after "_" / ":".
 	for _, in := range []string{"Jennsen, Grace", "Smith, Jones_ Title", "Rubicon, 08_ Title"} {

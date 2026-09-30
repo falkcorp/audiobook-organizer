@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
 // last-edited: 2026-09-29
 
@@ -172,7 +172,6 @@ const (
 	// ("Richard.Phillips-the.Rho.Agenda-Once.Dead.Nmr.64.Kbps").
 	RuleReleaseName = "release_name"
 	// RuleChapterLabel: a chapter or track label ("chap-26-NOTES-1").
-
 	RuleChapterLabel = "chapter_label"
 	// RuleSortPrefix: a sort prefix glued to a name ("zzJim Butcher");
 	// CleanedName strips it.
@@ -726,9 +725,10 @@ func ClassifyNameInLibrary(name string, isSeries func(normalized string) bool) V
 
 var (
 	// encoderTagRe: an encoder signature: ffmpeg's libavformat ("lavf-fate",
-	// "Lavf58.76.100") or LAME ("lame-3.99.5"). The version or suffix is
-	// required, so a surname "Lame" is not matched.
-	encoderTagRe = regexp.MustCompile(`(?i)^(?:lavf|lavc|libav(?:format|codec)|lame|libmp3lame)(?:[-_ .]?\d[\w.]*|-\p{L}+)$`)
+	// "Lavf58.76.100") or LAME ("lame-3.99.5"). A version number is
+	// required, or ffmpeg's "-fate" test-suite suffix: a surname "Lame" or a
+	// word "Lame-Duck" is not matched.
+	encoderTagRe = regexp.MustCompile(`(?i)^(?:lavf|lavc|libav(?:format|codec)|lame|libmp3lame)(?:[-_ .]?\d[\w.]*|-fate)$`)
 	// kbpsRe: a bitrate ("64.Kbps", "128 kbps").
 	kbpsRe = regexp.MustCompile(`(?i)\d{2,3}[\s._-]*kbps\b`)
 	// chapterLabelRe: a chapter or track label at the start of the name.
@@ -1126,4 +1126,11 @@ func PersonParentheticalHead(name string) (string, bool) {
 		return "", false
 	}
 	return head, true
+}
+
+// IsSurnameFirstInitials reports whether name is the surname-first shape
+// CleanedName reads ("Jennsen, GS_ 08 Rubicon"): its clean carries initials
+// only, so a caller should let other evidence that disagrees win over it.
+func IsSurnameFirstInitials(name string) bool {
+	return surnameFirstRe.MatchString(strings.TrimSpace(name))
 }

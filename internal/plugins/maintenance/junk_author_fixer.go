@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
@@ -105,12 +106,20 @@ import (
 //     who wrote this book. The book's narrators include its files' NARRATOR /
 //     PERFORMER / READER tags, and a name the library credits as narrator on
 //     more live books than it has as author is refused from those sources too;
-//   - not person-shaped and the Normalize form of a book title or series
-//     name in the library ("Theft of Swords", "Night of the Hunter"); a
-//     person-shaped name is exempt (the series table holds "Brent Weeks");
-//   - not person-shaped and a proper part of the junk name ("Simon" of "Simon
-//     & Schuster") or of the book's own title ("Stormcaller" of "Successor
-//     of Kukulkan_ Stormcaller"), except a pen name after "by" in the title.
+//   - a work: a book title or series name in the library ("Theft of
+//     Swords", "Vampire Hunter D"), or the book's own title / series or a
+//     whole-word part of it ("Stormcaller" of "Successor of Kukulkan_
+//     Stormcaller"), except a pen name after "by" in the title. Judged by
+//     evidence, not shape ("Vampire Hunter D", "Red Rising" are person-
+//     shaped): a mint is always refused; an existing author is exempt only
+//     when person-shaped AND credited with a live book whose title and series
+//     are not the name itself ("Brent Weeks", who also names a junk series
+//     row). workTarget; Apply's backstop asks the same;
+//   - not person-shaped, a proper part of the junk name ("Simon" of "Simon &
+//     Schuster"), and named by a sibling or a path;
+//   - a folder above a deeper path segment that is the junk name's own
+//     author ("Pyper Down/Jennsen/Jennsen, GS_ 08 Rubicon/..."): the layout is
+//     Narrator/Author/Book, so the outer folder is the reader.
 //
 // Evidence naming a "Person (Reader)" credit ("Kevin Hearne (Luke Daniels)")
 // counts as the person, and evidence naming a junk row that CleanedName
@@ -292,11 +301,13 @@ type junkAuthorIndex struct {
 	seriesCredits map[string]map[int]int
 	// ownBooks: primary-author id -> live books (for Evidence.OwnTitles).
 	ownBooks map[int][]database.BookCore
-	// workNames: authorjunk.Normalize of every live book's title (credited or
-	// not); with seriesByNorm, the names idx.workNamed refuses as targets.
-	workNames map[string]bool
-	// narratedBooks: authorjunk.FoldKey of a narrator name -> live books whose
-	// Narrator string names it.
+	// workNames / seriesWork: workKey of every live book's title (credited or
+	// not) and of every series name; the works idx.workTarget refuses.
+	workNames  map[string]bool
+	seriesWork map[string]bool
+	// narratedBooks: authorjunk.FoldKey of a narrator name -> books that
+	// credit it as narrator: the larger of the live books whose Narrator
+	// string names it and the books whose book_narrators rows link it.
 	narratedBooks map[string]int
 	// strongJunk: rows the name alone flags. Never a relink target.
 	strongJunk map[int]authorjunk.Verdict
@@ -330,7 +341,7 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 		byVG: map[string][]database.BookCore{}, bySeries: map[int][]database.BookCore{}, byDir: map[string][]database.BookCore{},
 		titleCredits: map[string]map[int]int{}, seriesCredits: map[string]map[int]int{},
 		ownBooks: map[int][]database.BookCore{}, strongJunk: map[int]authorjunk.Verdict{},
-		workNames: map[string]bool{}, narratedBooks: map[string]int{},
+		workNames: map[string]bool{}, seriesWork: map[string]bool{}, narratedBooks: map[string]int{},
 		weakJunk: map[int]authorjunk.Verdict{},
 	}
 	for _, n := range narrators {
@@ -342,6 +353,9 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 		idx.seriesByID[s.ID] = s
 		k := authorjunk.Normalize(s.Name)
 		idx.seriesByNorm[k] = append(idx.seriesByNorm[k], s)
+		if wk := workKey(s.Name); wk != "" {
+			idx.seriesWork[wk] = true
+		}
 	}
 	for _, a := range authors {
 		idx.authorsByID[a.ID] = a
@@ -369,7 +383,7 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 		if g := b.VersionGroupID; g != nil && *g != "" {
 			idx.byVG[*g] = append(idx.byVG[*g], b)
 		}
-		if k := authorjunk.Normalize(b.Title); k != "" {
+		if k := workKey(b.Title); k != "" {
 			idx.workNames[k] = true
 		}
 		if b.Narrator != nil {
@@ -402,6 +416,20 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 		}
 		if v := authorjunk.Classify(a.Name, idx.evidence(a)); v.Junk() {
 			idx.weakJunk[a.ID] = v
+		}
+	}
+	// book_narrators credits, read in one pass over the junction. A store
+	// that cannot answer (a test double) leaves the Narrator-text count; a
+	// read error fails the index (and so the plan) closed.
+	if rs := database.AsNarratorRefStore(store); rs != nil {
+		refs, err := rs.GetAllNarratorRefs()
+		if err != nil {
+			return nil, fmt.Errorf("count narrator credits: %w", err)
+		}
+		for id, n := range refs.ByID {
+			if k := authorjunk.FoldKey(idx.narratorsByID[id]); k != "" && n > idx.narratedBooks[k] {
+				idx.narratedBooks[k] = n
+			}
 		}
 	}
 	return idx, nil
@@ -441,18 +469,73 @@ func (idx *junkAuthorIndex) mintable(name string) bool {
 	return personname.LooksLikePersonName(name) && !personname.LooksLikeWorkTitle(name) && !idx.classifyName(name).Junk()
 }
 
-// workNamed reports whether name is, as a relink target, a work and not a
-// person: not person-shaped, and the title of a live book or the name of a
-// series in the library ("Theft of Swords", "Night of the Hunter"). A
-// person-shaped name is never refused here: the series and title tables hold
-// swapped fields ("Brent Weeks" as a series). Book-independent, so Apply's
-// backstop asks it too.
-func (idx *junkAuthorIndex) workNamed(name string) bool {
-	if personname.LooksLikePersonName(name) {
-		return false
+// workKey is the key works are compared on: authorjunk.Normalize with a
+// leading "the" dropped ("The Dresden Files" and "Dresden Files" are one).
+func workKey(s string) string {
+	return strings.TrimPrefix(authorjunk.Normalize(s), "the ")
+}
+
+// Refusal codes: the fingerprint carries these, never the display text (which
+// holds library-wide counts that move with every scan).
+const (
+	junkRefuseNarrator      = "narrator"
+	junkRefuseNarratorCount = "narrator_count"
+	junkRefuseWorkTitle     = "work_title"
+	junkRefuseOwnTitle      = "own_title"
+	junkRefuseJunkFragment  = "junk_fragment"
+	junkRefusePathOuter     = "path_outer"
+)
+
+// hasOtherWork reports whether author id is credited with a live book whose
+// title (whole, or a whole-word part of it) and series are not name itself:
+// evidence that the name is a writer and not the work it names.
+func (idx *junkAuthorIndex) hasOtherWork(id int, name string) bool {
+	k := workKey(name)
+	for _, b := range idx.ownBooks[id] {
+		tk := workKey(b.Title)
+		if tk == k || properWordPart(k, tk) {
+			continue
+		}
+		if b.SeriesID != nil && workKey(idx.seriesByID[*b.SeriesID].Name) == k {
+			continue
+		}
+		return true
 	}
-	n := authorjunk.Normalize(name)
-	return n != "" && (idx.workNames[n] || len(idx.seriesByNorm[n]) > 0)
+	return false
+}
+
+// workTarget reports whether name, as the target of a book titled bookTitle
+// in series bookSeries, is a work and not a person: a book title or series
+// name in the library, or the book's own title / series or a whole-word part
+// of it (not a pen name after "by"). id is the existing author row it
+// resolves to (<= 0: a mint or no single row). Judged by evidence, not
+// shape: "Vampire Hunter D", "Solo Leveling", "Red Rising" are person-shaped.
+// A mint is always refused; an existing row only unless it is person-shaped
+// AND hasOtherWork ("Brent Weeks", whose name is also a junk series row).
+// Plan (decideBook) and Apply's backstop both ask this.
+func (idx *junkAuthorIndex) workTarget(name string, id int, bookTitle string, bookSeries *int) (code, why string) {
+	k := workKey(name)
+	if k == "" {
+		return "", ""
+	}
+	library := idx.workNames[k] || idx.seriesWork[k]
+	tk := workKey(bookTitle)
+	own := (tk == k || properWordPart(k, tk)) && !byNamed(name, bookTitle)
+	if bookSeries != nil {
+		if sk := workKey(idx.seriesByID[*bookSeries].Name); sk != "" && (sk == k || properWordPart(k, sk)) {
+			own = true
+		}
+	}
+	if !library && !own {
+		return "", ""
+	}
+	if id > 0 && personname.LooksLikePersonName(name) && idx.hasOtherWork(id, name) {
+		return "", ""
+	}
+	if library {
+		return junkRefuseWorkTitle, "a book or series title in the library, not a person"
+	}
+	return junkRefuseOwnTitle, "the book's own title or series (or a part of it), not a person"
 }
 
 // junkAuthorInferredSource: the sources that transfer another book's credit
@@ -548,6 +631,9 @@ type junkAuthorBookDecision struct {
 	// name, a fragment of the junk name or the book's title. A row left with
 	// no answer and some refusals is held, not unlinked.
 	Refused []string
+	// RefusedKeys is Refused as "name [source] code" (junkRefuse*): what the
+	// fingerprint hashes.
+	RefusedKeys []string
 
 	AuthorLocked, SeriesLocked bool
 	// Series is the existing series row to link, when proposed.
@@ -633,16 +719,16 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 	gateBook := d.Book
 	gateBook.Narrator = nil
 	titleKey := authorjunk.FoldKey(d.Book.Title)
-	titleNorm := authorjunk.Normalize(d.Book.Title)
 	junkNorm := authorjunk.Normalize(a.Name)
-	refuse := func(src, name, why string) {
-		entry := fmt.Sprintf("%q [%s]: %s", name, src, why)
-		for _, r := range d.Refused {
-			if r == entry {
+	refuse := func(src, name, code, why string) {
+		key := fmt.Sprintf("%q [%s] %s", name, src, code)
+		for _, r := range d.RefusedKeys {
+			if r == key {
 				return
 			}
 		}
-		d.Refused = append(d.Refused, entry)
+		d.RefusedKeys = append(d.RefusedKeys, key)
+		d.Refused = append(d.Refused, fmt.Sprintf("%q [%s]: %s", name, src, why))
 	}
 
 	selfKey := authorjunk.FoldKey(a.Name)
@@ -709,23 +795,6 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		if src == junkAuthorSrcCleaned && titleKey != "" && strings.HasPrefix(titleKey, key) {
 			return
 		}
-		// A work, not a person: a library title or series name, or (not
-		// person-shaped) a part of the junk name or of this book's title.
-		if idx.workNamed(name) {
-			refuse(src, name, "a book or series title in the library, not a person")
-			return
-		}
-		if src != junkAuthorSrcCleaned && !personname.LooksLikePersonName(name) {
-			n := authorjunk.Normalize(name)
-			if properWordPart(n, junkNorm) {
-				refuse(src, name, fmt.Sprintf("a fragment of the junk name %q, not a person", a.Name))
-				return
-			}
-			if properWordPart(n, titleNorm) && !byNamed(name, d.Book.Title) {
-				refuse(src, name, "a fragment of the book's own title, not a person")
-				return
-			}
-		}
 		var others, live []database.Author
 		for _, row := range idx.byName[key] {
 			if row.ID == a.ID {
@@ -762,19 +831,38 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		if (src == junkAuthorSrcCleaned || resolveOnly) && (ans.create || ans.row.ID <= 0 || len(idx.ownBooks[ans.row.ID]) == 0) {
 			return
 		}
+		// A work, not a person (workTarget: by evidence, mints included).
+		if code, why := idx.workTarget(name, ans.row.ID, d.Book.Title, d.Book.SeriesID); code != "" {
+			refuse(src, name, code, why)
+			return
+		}
+		// "Simon" of "Simon & Schuster": a piece of the junk name that is not
+		// person-shaped, named by a sibling or a path. A file tag or the
+		// provider naming a pen name inside a junk credit still resolves
+		// ("Shirtaloon" in a "Shirtaloon (He Who Fights With Monsters)" row);
+		// a sibling credited to the fragment is the junk split in two.
+		if junkAuthorInferredSource(src) && !personname.LooksLikePersonName(name) &&
+			properWordPart(authorjunk.Normalize(name), junkNorm) {
+			refuse(src, name, junkRefuseJunkFragment, fmt.Sprintf("a fragment of the junk name %q, not a person", a.Name))
+			return
+		}
 		// A sibling or a path naming the book's reader is refused outright:
 		// "[PZG]" rips filed by reader and siblings mis-credited to their
 		// narrator put the reader there far more often than a self-narrated
 		// author (trial: 146 such rows, none a writer). So is a name the
 		// library credits as narrator on more books than it has as author
 		// (a reader whose own "author" books are themselves mis-credits).
+		// Deliberately, both hold a real author-narrator too (Travis Baldree
+		// writes and reads): from a sibling or a path the two cannot be told
+		// apart, and a held row costs a review, a wrong relink a bad credit.
+		// File tags and the provider keep the self-narrated rule below.
 		if junkAuthorInferredSource(src) {
 			switch {
 			case narrators[key]:
-				refuse(src, name, "the book's narrator")
+				refuse(src, name, junkRefuseNarrator, "the book's narrator")
 				return
 			case ans.row.ID > 0 && idx.narratedBooks[key] > len(idx.ownBooks[ans.row.ID]):
-				refuse(src, name, fmt.Sprintf("narrates %d books in the library and is credited as author of %d",
+				refuse(src, name, junkRefuseNarratorCount, fmt.Sprintf("narrates %d books in the library and is credited as author of %d",
 					idx.narratedBooks[key], len(idx.ownBooks[ans.row.ID])))
 				return
 			}
@@ -877,11 +965,18 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 	for i := range files {
 		paths = append(paths, files[i].FilePath)
 	}
+	junkPathKeys := junkAuthorPathKeys(a.Name)
 	for _, p := range paths {
 		if p == "" {
 			continue
 		}
+		segs := metadata.SplitPathSegments(p)
 		for _, c := range authorPathLinkCandidates(p) {
+			if below := junkAuthorSegmentBelow(segs, c.Name, junkPathKeys); below != "" {
+				refuse(junkAuthorSrcPath, c.Name, junkRefusePathOuter, fmt.Sprintf(
+					"a folder above %q, the junk name's own author (a Narrator/Author/Book layout)", below))
+				continue
+			}
 			add(junkAuthorSrcPath, c.Name)
 		}
 	}
@@ -898,6 +993,22 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 		}
 		if len(existing) > 0 {
 			bySource[junkAuthorSrcPath] = existing
+		}
+	}
+
+	// A surname-first clean ("Jennsen, GS_ 08 Rubicon" -> "G. S. Jennsen")
+	// carries initials only: a provider that names someone else wins over it.
+	if cl := bySource[junkAuthorSrcCleaned]; len(cl) > 0 && authorjunk.IsSurnameFirstInitials(a.Name) {
+		if prov := bySource[junkAuthorSrcProvider]; len(prov) > 0 {
+			agree := false
+			for k := range cl {
+				if _, ok := prov[k]; ok {
+					agree = true
+				}
+			}
+			if !agree {
+				delete(bySource, junkAuthorSrcCleaned)
+			}
 		}
 	}
 
@@ -961,6 +1072,7 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 	// refusals as its reason rather than unlink it (the evidence named
 	// someone; it was not an author).
 	sort.Strings(d.Refused)
+	sort.Strings(d.RefusedKeys)
 	if d.Decision == "" && d.Skip == "" && len(d.Refused) > 0 {
 		d.Skip, d.SkipReason = junkAuthorSkipAmbiguous, "no acceptable author; refused: "+strings.Join(d.Refused, "; ")
 	}
@@ -1038,6 +1150,56 @@ func bookFolder(p string) string {
 		return filepath.Dir(p)
 	}
 	return filepath.Clean(p)
+}
+
+// junkAuthorPathKeys are the folded names under which the junk name's own
+// author may appear as a folder: the surname before a comma ("Jennsen, GS_
+// 08 Rubicon" -> "jennsen") and the cleaned name and its last word ("G. S.
+// Jennsen" -> "gsjennsen", "jennsen"). Keys shorter than 3 are dropped.
+func junkAuthorPathKeys(junk string) map[string]bool {
+	out := map[string]bool{}
+	put := func(s string) {
+		if k := authorjunk.FoldKey(s); len(k) >= 3 {
+			out[k] = true
+		}
+	}
+	if head, _, ok := strings.Cut(junk, ","); ok && !strings.ContainsAny(head, " _") {
+		put(head)
+	}
+	if c, ok := authorjunk.CleanedName(junk); ok {
+		put(c)
+		if f := strings.Fields(c); len(f) > 1 {
+			put(f[len(f)-1])
+		}
+	}
+	return out
+}
+
+// junkAuthorSegmentBelow returns the path segment BELOW candidate's own
+// folder that is one of keys (the junk name's own author), or "". A folder
+// above the author's folder is not the author: "Pyper Down/Jennsen/Jennsen,
+// GS_ 08 Rubicon (Amaranthe 08)/8-06.mp3" is Narrator/Author/Book.
+func junkAuthorSegmentBelow(segs []string, candidate string, keys map[string]bool) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	ck := authorjunk.FoldKey(candidate)
+	at := -1
+	for i, s := range segs {
+		left, _, _ := strings.Cut(s, " - ")
+		if authorjunk.FoldKey(s) == ck || authorjunk.FoldKey(left) == ck {
+			at = i
+		}
+	}
+	if at < 0 {
+		return ""
+	}
+	for _, s := range segs[at+1:] {
+		if keys[authorjunk.FoldKey(s)] {
+			return s
+		}
+	}
+	return ""
 }
 
 // junkAuthorNarratorKeys folds every name the book says reads it: its Narrator
@@ -1438,8 +1600,15 @@ func (f *junkAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repa
 	if err != nil {
 		return err
 	}
-	if target != nil && (target.ID == junkID || idx.classifyName(target.Name).Junk() || idx.workNamed(target.Name)) {
-		return fmt.Errorf("%w: book %s: target %q (id %d) is the junk row, junk itself, or a work title", repairs.ErrChangedSincePlan, bookID, target.Name, target.ID)
+	if target != nil && (target.ID == junkID || idx.classifyName(target.Name).Junk()) {
+		return fmt.Errorf("%w: book %s: target %q (id %d) is the junk row or junk itself", repairs.ErrChangedSincePlan, bookID, target.Name, target.ID)
+	}
+	// The plan's work test, against the index as it is now. A target created
+	// just above has no books, so it answers as the mint it was planned as.
+	if target != nil {
+		if code, why := idx.workTarget(target.Name, target.ID, d.Book.Title, d.Book.SeriesID); code != "" {
+			return fmt.Errorf("%w: book %s: target %q (id %d) is %s", repairs.ErrChangedSincePlan, bookID, target.Name, target.ID, why)
+		}
 	}
 
 	primaryChanged := false
@@ -1770,7 +1939,7 @@ func junkAuthorRow(d *junkAuthorBookDecision) repairs.Row {
 		"l", strconv.FormatBool(d.AuthorLocked), strconv.FormatBool(d.SeriesLocked),
 		"d", d.Decision, d.Source, d.Target.Name, strconv.Itoa(d.Target.ID), d.Skip,
 		"e", strconv.FormatBool(d.Corroborated), d.Variant, strconv.FormatBool(d.NarratorAnswer), d.NarratorDropped,
-		"r", strings.Join(d.Refused, ";"),
+		"r", strings.Join(d.RefusedKeys, ";"),
 	}
 	if d.Series != nil {
 		parts = append(parts, "ser", strconv.Itoa(d.Series.ID))
