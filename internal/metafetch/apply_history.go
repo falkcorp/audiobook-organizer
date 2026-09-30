@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 
 package metafetch
 
@@ -99,12 +99,24 @@ func newApplyBatchID() string {
 // incomplete (markApplyIncomplete) and ErrApplyHistoryIncomplete returned, so
 // UndoLastApply refuses it instead of undoing part of it or an older apply.
 func (mfs *Service) RecordApplyHistory(before, after *database.Book, credits *AuthorCredits, source string) (string, error) {
+	return mfs.recordApplyHistory(before, after, credits, source, "")
+}
+
+// recordApplyHistory is RecordApplyHistory with the batch id fixed by the
+// caller (ApplyOptions.BatchID); "" draws a fresh one.
+func (mfs *Service) recordApplyHistory(before, after *database.Book, credits *AuthorCredits, source, fixedBatch string) (string, error) {
 	if before == nil || after == nil {
 		return "", nil
 	}
+	batchOr := func() string {
+		if fixedBatch != "" {
+			return fixedBatch
+		}
+		return newApplyBatchID()
+	}
 	changed, err := database.ChangedBookFields(before, after)
 	if err != nil {
-		batchID := newApplyBatchID()
+		batchID := batchOr()
 		applyHistoryLog.Error("apply history for %s not recorded: %v", logger.SanitizeLogValue(after.ID), err)
 		mfs.markApplyIncomplete(after.ID, batchID, source)
 		return batchID, fmt.Errorf("%w: %v", ErrApplyHistoryIncomplete, err)
@@ -119,7 +131,7 @@ func (mfs *Service) RecordApplyHistory(before, after *database.Book, credits *Au
 	if len(changed) == 0 {
 		return "", nil
 	}
-	batchID := newApplyBatchID()
+	batchID := batchOr()
 	failed := 0
 	now := time.Now()
 	activityTitle := after.Title
@@ -783,7 +795,7 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 // credits is the author join the apply read and wrote under the store's
 // book_authors lock (guardedApply returns it); nil means unknown.
 func (mfs *Service) CommitApply(id string, before, book *database.Book, credits *AuthorCredits, source string) (*database.Book, error) {
-	return mfs.commitApply(id, before, book, credits, source, nil)
+	return mfs.commitApply(id, before, book, credits, source, "", nil)
 }
 
 // commitApply is CommitApply with an optional guard run on the fresh row
@@ -791,7 +803,9 @@ func (mfs *Service) CommitApply(id string, before, book *database.Book, credits 
 // aborts the write (nil book, the guard's error). The automatic apply uses
 // it to re-check "no match": its earlier check read a row that can be
 // minutes old in a bulk run, and the owner may have marked the book since.
-func (mfs *Service) commitApply(id string, before, book *database.Book, credits *AuthorCredits, source string, guard func(fresh *database.Book) error) (*database.Book, error) {
+//
+// batchID fixes the history batch id (ApplyOptions.BatchID); "" draws one.
+func (mfs *Service) commitApply(id string, before, book *database.Book, credits *AuthorCredits, source, batchID string, guard func(fresh *database.Book) error) (*database.Book, error) {
 	var mergedFields []string
 	updated, err := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
 		if guard != nil {
@@ -818,10 +832,14 @@ func (mfs *Service) commitApply(id string, before, book *database.Book, credits 
 	}
 	if snapErr != nil {
 		applyHistoryLog.Error("apply history for %s not recorded: %v", logger.SanitizeLogValue(id), snapErr)
-		mfs.markApplyIncomplete(id, newApplyBatchID(), source)
+		incomplete := batchID
+		if incomplete == "" {
+			incomplete = newApplyBatchID()
+		}
+		mfs.markApplyIncomplete(id, incomplete, source)
 		return updated, fmt.Errorf("%w: %v", ErrApplyHistoryIncomplete, snapErr)
 	}
-	if _, herr := mfs.RecordApplyHistory(before, written, credits, source); herr != nil {
+	if _, herr := mfs.recordApplyHistory(before, written, credits, source, batchID); herr != nil {
 		return updated, herr
 	}
 	return updated, nil

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
 // last-edited: 2026-09-30
 
@@ -9,8 +9,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"crypto/rand"
+	"encoding/hex"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -73,102 +74,80 @@ type QueuedApply struct {
 	Rename     *bool                        `json:"rename,omitempty"`
 	// OperationID is the candidate-fetch operation (QueuedOpResultCandidate).
 	OperationID string `json:"operation_id,omitempty"`
-	// Baseline (QueuedApplyCandidate) is, for each field the apply would
-	// change when it was queued, that field's value at the time: the state the
-	// user chose the candidate against. The run compares the book against it
-	// so a queued apply never overwrites an edit made after it was queued
-	// (checkQueuedCandidate). Nil when the preview could not be taken.
-	Baseline map[string]string `json:"baseline,omitempty"`
+	// EditMark and ApplyBatchID (QueuedApplyCandidate) are fixed when the
+	// apply is queued. EditMark is the book's newest field-edit history row
+	// then (metafetch.ApplyEditMark); ApplyBatchID is the batch id the apply's
+	// own history rows will carry. See checkQueuedCandidate.
+	EditMark     int64  `json:"edit_mark,omitempty"`
+	ApplyBatchID string `json:"apply_batch_id,omitempty"`
 }
 
-// ErrQueuedAlreadyApplied is returned by RunQueuedApply when a queued
-// candidate apply finds every field it would write already holding the
-// candidate's value -- typically the op re-running after a restart that
-// interrupted it after the apply landed. Nothing is written (no second history
-// row); the op completes as "already applied".
-var ErrQueuedAlreadyApplied = errors.New("already applied: the book already holds every value this change would write")
+// ErrQueuedAlreadyApplied is returned by RunQueuedApply when the queued
+// candidate apply's own history rows are already there: the op is re-running
+// after a restart that interrupted it after the apply landed. Nothing is
+// written again (no second history row); the op completes as "already
+// applied".
+var ErrQueuedAlreadyApplied = errors.New("already applied: this queued change landed before the server restarted")
 
-// ErrQueuedApplyStale is returned by RunQueuedApply when a field the queued
-// candidate apply would write was changed by someone else after the apply was
-// queued. Nothing is written; the op fails with the fields named so the user
-// can re-apply against the book as it is now.
-var ErrQueuedApplyStale = errors.New("this book was changed after the change was queued; nothing was applied")
+// ErrQueuedApplyStale is returned by RunQueuedApply when someone edited the
+// book (another apply, a manual edit, an undo, a bulk update, a repair) after
+// this apply was queued. Nothing is written; the op fails with the edits named
+// so the user can re-apply against the book as it is now. The library scan's
+// own merge is not an edit here: it records no change history.
+var ErrQueuedApplyStale = errors.New("this book was edited after the change was queued; nothing was applied")
 
-// coverField is left out of the queued-apply comparison: the apply stores a
-// renderable local cover path, not the candidate's remote URL, so the field
-// never reads back as the candidate's value and would make every re-run look
-// like someone else's edit.
-const coverField = "cover_url"
-
-func baselineOf(pv *metafetch.ApplyPreview) map[string]string {
-	out := make(map[string]string, len(pv.Changes))
-	for _, c := range pv.Changes {
-		if c.Field != coverField {
-			out[c.Field] = c.Old
-		}
+// newQueuedApplyBatchID is the history batch id a queued apply's rows carry.
+func newQueuedApplyBatchID() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("apply-queued-%d", time.Now().UnixNano())
 	}
-	return out
+	return "apply-queued-" + hex.EncodeToString(b[:])
 }
 
-// queuedCandidateBaseline previews the queued apply against the book as it is
-// now. A preview that cannot be built is logged and leaves the baseline nil:
-// it fails only for the causes that make the apply itself fail (book gone,
-// policy:no-metadata, unreadable field locks), and the apply reports those.
-func (h *Handler) queuedCandidateBaseline(q QueuedApply) map[string]string {
-	if q.Candidate == nil || h.metadataFetchService == nil {
-		return nil
-	}
-	pv, err := h.metadataFetchService.PreviewCandidateApply(q.BookID, *q.Candidate, q.Fields)
-	if err != nil || pv == nil {
-		bookLockLog.Warn("queued apply for book %s: could not record the book's current values (%v); the queued run cannot check for later edits",
+// stampQueuedCandidate fixes the edit mark and the batch id when a candidate
+// apply is queued. A history that cannot be read falls back to "now": any
+// edit from here on still counts, only one racing the enqueue itself could be
+// missed, and that is logged.
+func (h *Handler) stampQueuedCandidate(q *QueuedApply) {
+	q.ApplyBatchID = newQueuedApplyBatchID()
+	mark, err := h.metadataFetchService.ApplyEditMark(q.BookID)
+	if err != nil {
+		mark = time.Now().UnixNano()
+		bookLockLog.Warn("queued apply for book %s: change history unreadable (%v); treating edits from now on as later edits",
 			logger.SanitizeLogValue(q.BookID), err)
-		return nil
 	}
-	return baselineOf(pv)
+	q.EditMark = mark
 }
 
-// checkQueuedCandidate compares the book, under its scan lock, with the
-// baseline taken when the apply was queued. For every field the apply would
-// change now:
-//   - current value == baseline: still to apply;
-//   - otherwise (including a field that already matched the candidate when
-//     queued and has since been changed away): someone else wrote it, and the
-//     apply would overwrite them, so ErrQueuedApplyStale.
+// checkQueuedCandidate decides, under the book's scan lock, whether the
+// queued candidate apply may run. It reads the book's change history newer
+// than EditMark:
+//   - a row with the apply's own batch id: it already landed
+//     (ErrQueuedAlreadyApplied);
+//   - any other field-edit row: someone edited the book after the apply was
+//     queued, and the apply would overwrite them (ErrQueuedApplyStale);
+//   - none: run.
 //
-// When nothing is left to change, ErrQueuedAlreadyApplied. A field whose value
-// moved away from the baseline but the apply would no longer change (the new
-// value is one the apply keeps) is not a conflict: nothing overwrites it.
-//
-// The scanner's own merge counts as a change like any other writer's; that is
-// only a refusal when the file's tags differ from the row on a field the
-// apply writes, and refusing is the safe side of it.
+// The library scan's merge -- which the op was queued behind, and which
+// almost always rewrites the row from the file's tags -- writes no history,
+// so it never refuses the apply. An unreadable history refuses (fail closed):
+// the op fails and says so rather than risk overwriting an edit.
 func (h *Handler) checkQueuedCandidate(q QueuedApply) error {
-	if q.Baseline == nil {
+	if q.ApplyBatchID == "" {
+		// Queued without a stamp (no fetch service at enqueue): nothing to
+		// compare against; run as the request would have.
 		return nil
 	}
-	pv, err := h.metadataFetchService.PreviewCandidateApply(q.BookID, *q.Candidate, q.Fields)
-	if err != nil || pv == nil {
-		// The apply runs the same reads and reports the cause itself.
-		return nil
+	edits, err := h.metadataFetchService.ApplyEditsSince(q.BookID, q.EditMark, q.ApplyBatchID)
+	if err != nil {
+		return fmt.Errorf("%w: could not read the book's change history to check for later edits: %v", ErrQueuedApplyStale, err)
 	}
-	var changed []string
-	pending := 0
-	for _, c := range pv.Changes {
-		if c.Field == coverField {
-			continue
-		}
-		if old, ok := q.Baseline[c.Field]; ok && old == c.Old {
-			pending++
-			continue
-		}
-		changed = append(changed, c.Field)
-	}
-	if len(changed) > 0 {
-		slices.Sort(changed)
-		return fmt.Errorf("%w (changed since: %s)", ErrQueuedApplyStale, strings.Join(changed, ", "))
-	}
-	if pending == 0 {
+	if edits.OwnApplied {
 		return ErrQueuedAlreadyApplied
+	}
+	if len(edits.Others) > 0 {
+		return fmt.Errorf("%w (edited since: %s)", ErrQueuedApplyStale, strings.Join(edits.Others, "; "))
 	}
 	return nil
 }
@@ -204,8 +183,8 @@ func (h *Handler) lockBookForRequest(c *gin.Context, q QueuedApply) (*scanlock.H
 		hold, err = scanlock.Books.LockSet(reqCtx, []string{q.BookID})
 		return hold, err == nil
 	}
-	if q.Kind == QueuedApplyCandidate {
-		q.Baseline = h.queuedCandidateBaseline(q)
+	if q.Kind == QueuedApplyCandidate && h.metadataFetchService != nil {
+		h.stampQueuedCandidate(&q)
 	}
 	opID, qerr := h.queuedApply.EnqueueApplyWhenScanned(reqCtx, q)
 	if qerr != nil {
@@ -236,7 +215,10 @@ func (e *errRenameWouldFail) Unwrap() error { return e.err }
 // and the queued op. The caller holds the book's scan lock; the file work is
 // submitted before it returns, so the pool's pending mark is in place before
 // the lock is released.
-func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafetch.MetadataCandidate, fields []string, writeBack *bool) (*metafetch.FetchMetadataResponse, error) {
+//
+// batchID fixes the apply's history batch id (the queued apply's
+// ApplyBatchID); "" is the request path, which draws a fresh one.
+func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafetch.MetadataCandidate, fields []string, writeBack *bool, batchID string) (*metafetch.FetchMetadataResponse, error) {
 	// The apply writes the database first; the rename runs afterwards in the
 	// background file-IO job. When that rename is known to fail, refuse here,
 	// before any write, so the book cannot end up with new metadata and its
@@ -247,7 +229,13 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 			return nil, &errRenameWouldFail{perr}
 		}
 	}
-	resp, err := h.metadataFetchService.ApplyMetadataCandidate(id, cand, fields)
+	var resp *metafetch.FetchMetadataResponse
+	var err error
+	if batchID == "" {
+		resp, err = h.metadataFetchService.ApplyMetadataCandidate(id, cand, fields)
+	} else {
+		resp, err = h.metadataFetchService.ApplyMetadataCandidateWithOptions(id, cand, fields, metafetch.ApplyOptions{BatchID: batchID})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +390,7 @@ func (h *Handler) RunQueuedApply(ctx context.Context, q QueuedApply, beat func(m
 			bookLockLog.Info("queued apply for book %s not run: %s", logger.SanitizeLogValue(q.BookID), logger.SanitizeLogValue(err.Error()))
 			return err
 		}
-		_, err := h.applyCandidateCore(ctx, q.BookID, *q.Candidate, q.Fields, q.WriteBack)
+		_, err := h.applyCandidateCore(ctx, q.BookID, *q.Candidate, q.Fields, q.WriteBack, q.ApplyBatchID)
 		return err
 	case QueuedWriteBack:
 		_, err := h.writeBackCore(ctx, q.BookID, q.SegmentIDs, q.Rename != nil && *q.Rename)

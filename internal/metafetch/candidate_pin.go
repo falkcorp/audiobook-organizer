@@ -1,7 +1,7 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 
 package metafetch
 
@@ -236,6 +236,12 @@ type ApplyOptions struct {
 	// UnseenCandidate keeps both of those automatic behaviours (see
 	// automatic) while still letting the apply overwrite.
 	UnseenCandidate bool
+	// BatchID, when set, is the batch id every change-history row of this
+	// apply carries, instead of a fresh random one. The queued single-book
+	// apply (metadata.apply-when-scanned) fixes it when the apply is queued,
+	// so a re-run after a restart can recognise its own rows (ApplyEditsSince)
+	// and complete as "already applied" instead of applying twice.
+	BatchID string
 }
 
 // automatic reports whether nobody picked this candidate: a fill-only apply,
