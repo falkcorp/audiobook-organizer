@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.25.0
+// version: 1.26.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-30
 //
@@ -557,8 +557,8 @@ export interface MetadataLaneSummary {
  *   errors                        candidates that will not decode
  *   no_candidates                 nobody has ruled on it, no candidate stored
  *   resolved_no_candidates        ruled on, candidate gone
- *   stale                         every non-orphaned row past the cache TTL,
- *                                 minus books the owner marked no-match
+ *   stale                         rows the server flags `stale` (past the TTL and
+ *                                 searchable by a refetch)
  *
  * The last four need the server's unreviewable bucket, loaded on first use.
  */
@@ -1251,15 +1251,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       case 'resolved_no_candidates':
         return unreviewableResults.filter((r) => r.status === 'resolved_no_candidates');
       case 'stale':
-        // Explicitly false, as everywhere else: no age is not stale. Books the
-        // owner marked "no match" are left out, as the server's count leaves
-        // them out (cacheRowStale): the candidate fetch never searches them.
-        // Reviewable rows carry that verdict as status 'no_match', unreviewable
-        // rows as their raw review_status.
-        return [
-          ...results.filter((r) => r.status !== 'no_match'),
-          ...unreviewableResults.filter((r) => r.review_status !== 'no_match'),
-        ].filter((r) => r.is_fresh === false);
+        // The server's per-row `stale` flag, computed by the same predicate as
+        // the chip's count (and the {stale: true} refetch set). Nothing is
+        // re-derived here: an earlier mirror of the server's exclusions was a
+        // second copy of the rule that could drift from the first. Explicitly
+        // true: an absent flag is not a stale claim.
+        return [...results, ...unreviewableResults].filter((r) => r.stale === true);
     }
   }, [chipFilter, results, unreviewableResults]);
 

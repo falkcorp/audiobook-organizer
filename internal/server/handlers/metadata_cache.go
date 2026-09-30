@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-30
 
@@ -80,6 +80,10 @@ type MetadataCacheBookStore interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	// GetBookFiles is required to satisfy metabatch.BookFilesGetter.
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// The book's live authors, which metabatch.ResolveCandidateSearchQuery
+	// reads (with GetBookFiles) to decide whether a stale row is one a
+	// refetch would actually search -- see cacheRowStale.
+	database.BookAuthorReader
 }
 
 // ActiveOpsLister is the shape of database.Store's ListActiveOperationsV2. It
@@ -473,6 +477,8 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// candidates were kept. It drives is_fresh so a row the UI offers a
 		// "Refresh" on is one a refresh would actually change.
 		lastChecked time.Time
+		// stale is cacheRowStale for this row, served as the row's `stale`.
+		stale bool
 	}
 	// ONE clock read for every freshness decision below -- the summary counts and
 	// the per-row is_fresh flag. Reading time.Now() twice for one predicate lets
@@ -495,6 +501,8 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		status      string
 		errMsg      string
 		lastChecked time.Time
+		// stale is cacheRowStale for this row, served as the row's `stale`.
+		stale bool
 	}
 	wantUnreviewable := bucket == reviewBucketUnreviewable
 	var unreviewableRows []unreviewableRow
@@ -517,7 +525,8 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		entry := p.row.entry
 		// cacheRowStale is the predicate StaleCachedBookIDs applies too, so
 		// this count is the size of the set the refetch-all-stale button sends.
-		if cacheRowStale(p.row, freshCutoff) {
+		rowStale := cacheRowStale(p.row, freshCutoff)
+		if rowStale {
 			stale++
 		}
 		if entry == nil || len(entry.Candidates) == 0 {
@@ -531,7 +540,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			}
 			if wantUnreviewable {
 				unreviewableRows = append(unreviewableRows, unreviewableRow{
-					sum: p.sum, status: st, lastChecked: lastChecked(entry, p.sum.FetchedAt),
+					sum: p.sum, status: st, lastChecked: lastChecked(entry, p.sum.FetchedAt), stale: rowStale,
 				})
 			}
 			continue
@@ -546,6 +555,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 					status:      unreviewableStatusDecodeError,
 					errMsg:      "stored candidate will not decode: " + err.Error(),
 					lastChecked: lastChecked(entry, p.sum.FetchedAt),
+					stale:       rowStale,
 				})
 			}
 			continue
@@ -555,6 +565,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			status:      p.status,
 			cand:        cand,
 			lastChecked: lastChecked(entry, p.sum.FetchedAt),
+			stale:       rowStale,
 		})
 	}
 
@@ -658,6 +669,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 				Error:        u.errMsg,
 				FetchedAt:    &fetchedAt,
 				IsFresh:      &isFresh,
+				Stale:        &u.stale,
 				ReviewStatus: reviewStatus,
 			})
 		}
@@ -718,6 +730,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			Status:    page[i].status,
 			FetchedAt: &fetchedAt,
 			IsFresh:   &isFresh,
+			Stale:     &page[i].stale,
 			// The same hash the apply recomputes from the same cache row:
 			// every review-page apply button echoes it back in its pin.
 			CandidateHash: metafetch.CandidateHash(cand),

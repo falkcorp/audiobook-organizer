@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_stale_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bd448962-829a-45be-aa5f-86e10c847ff3
 // last-edited: 2026-09-30
 
@@ -48,6 +48,7 @@ func TestStaleCachedBookIDs_MatchesTheSummaryStaleCount(t *testing.T) {
 		{BookID: "rejected-empty-stale", FetchedAt: old},  // resolved_no_candidates via no_match: OUT
 		{BookID: "empty-looked-recently", FetchedAt: old}, // old candidates, recent empty search: OUT
 		{BookID: "gone-stale", FetchedAt: old},            // orphaned: OUT
+		{BookID: "untitled-stale", FetchedAt: old},        // stale, but no usable search title: OUT
 	}, nil)
 
 	store.EXPECT().GetBooksByIDs(mock.Anything).Return([]database.Book{
@@ -61,6 +62,9 @@ func TestStaleCachedBookIDs_MatchesTheSummaryStaleCount(t *testing.T) {
 		{ID: "rejected-stale", Title: "H", MetadataReviewStatus: strptr("no_match")},
 		{ID: "rejected-empty-stale", Title: "I", MetadataReviewStatus: strptr("no_match")},
 		{ID: "empty-looked-recently", Title: "J"},
+		// Empty title, no transcription, no path: the fetch skips it with
+		// "no usable title", so it must not be counted stale.
+		{ID: "untitled-stale", Title: ""},
 	}, nil)
 	store.EXPECT().GetBookByID("gone-stale").Return(nil, nil)
 
@@ -80,6 +84,8 @@ func TestStaleCachedBookIDs_MatchesTheSummaryStaleCount(t *testing.T) {
 	}, true, nil)
 	svc.EXPECT().GetCachedCandidates("rejected-stale").Return(with(), true, nil)
 	svc.EXPECT().GetCachedCandidates("rejected-empty-stale").Return(&metafetch.MetadataCandidateCache{}, true, nil)
+	svc.EXPECT().GetCachedCandidates("untitled-stale").Return(with(), true, nil)
+	store.EXPECT().GetBookAuthors(mock.Anything).Return(nil, nil).Maybe()
 	svc.EXPECT().GetCachedCandidates("empty-looked-recently").Return(&metafetch.MetadataCandidateCache{
 		Candidates: []json.RawMessage{raw}, LastEmptyFetchAt: &recent,
 	}, true, nil)
@@ -115,4 +121,36 @@ func TestStaleCachedBookIDs_MatchesTheSummaryStaleCount(t *testing.T) {
 	assert.Equal(t, 2, body.Data.ByCause.NoCandidates)
 	assert.Equal(t, 1, body.Data.ByCause.DecodeErrors)
 	assert.Equal(t, 2, body.Data.ResolvedNoCandidates)
+
+	// Every row's `stale` flag is the same predicate: across both buckets,
+	// exactly the rows in the set say stale:true, so the web's stale chip view
+	// (which only reads the flag) shows the set the count describes.
+	flagged := map[string]bool{}
+	for _, q := range []string{"all=true", "all=true&bucket=unreviewable"} {
+		c, w := reviewCtx(q)
+		h.GetCacheReviewResults(c)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var rows struct {
+			Data struct {
+				Results []struct {
+					Book struct {
+						ID string `json:"id"`
+					} `json:"book"`
+					Stale *bool `json:"stale"`
+				} `json:"results"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+		for _, r := range rows.Data.Results {
+			require.NotNil(t, r.Stale, "row %s carries no stale flag", r.Book.ID)
+			if *r.Stale {
+				flagged[r.Book.ID] = true
+			}
+		}
+	}
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	assert.Equal(t, want, flagged, "per-row stale flags must name exactly the refetch-all-stale set")
 }
