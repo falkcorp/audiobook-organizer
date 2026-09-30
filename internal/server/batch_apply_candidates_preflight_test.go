@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_candidates_preflight_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d2a8e41-9c07-4b3f-a6e2-71f0c4d98b35
-// last-edited: 2026-09-13
+// last-edited: 2026-09-30
 //
 // The rename preflight on /metadata/batch-apply-candidates: the handler writes
 // the database and then queues the file job that renames, which is the order
@@ -114,7 +114,7 @@ func stoppedPool() *FileIOPool {
 func runBatchApplyCandidates(t *testing.T, store *database.MockStore, pool *FileIOPool) *httptest.ResponseRecorder {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	s := &Server{store: store, metadataFetchService: metafetch.NewService(store), scanStandDownGateOverride: &sdGate{}, fileIOPool: pool}
+	s := &Server{store: store, metadataFetchService: metafetch.NewService(store), fileIOPool: pool}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/metadata/batch-apply-candidates",

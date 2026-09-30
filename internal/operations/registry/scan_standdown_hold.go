@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown_hold.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3b7e91d4-0c52-4f6a-a8e3-6d2f1c9b5a07
-// last-edited: 2026-09-19
+// last-edited: 2026-09-30
 
 package registry
 
@@ -12,27 +12,21 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
-	"time"
-
-	"github.com/oklog/ulid/v2"
 )
 
-// Standing rule: metadata is NEVER applied while a library scan is running. The
-// scan rewrites book rows and files under the library root; an apply that races
-// it loses writes to whichever side lands second. This file turns that rule from
-// prose into a control for the two kinds of caller that apply metadata:
+// Bulk metadata OPS (batch-apply-cached, bulk write-back, metadata
+// refresh/upgrade, ...) block on AcquireScanStandDown via HoldScanStandDown,
+// exactly like the maintenance callers of acquireScanStandDownForApply: the scan
+// is quiesced, the op fails with a clear error if it does not park, and the
+// lease is renewed on the op's own progress heartbeat.
 //
-//   - ops (batch-apply-cached, bulk write-back, metadata refresh/upgrade, ...)
-//     block on AcquireScanStandDown via HoldScanStandDown, exactly like the
-//     maintenance callers of acquireScanStandDownForApply: the scan is quiesced,
-//     the op fails with a clear error if it does not park, and the lease is
-//     renewed on the op's own progress heartbeat.
-//   - HTTP requests (single-book apply, candidate apply, ...) never quiesce a
-//     scan and never wait: TryAcquireScanStandDown refuses immediately with
-//     ErrScanRunning, which handlers map to 409.
+// HTTP requests used a no-wait variant here (TryAcquireScanStandDown) that
+// refused with 409 SCAN_RUNNING while any scan ran. It was removed on
+// 2026-09-30: requests now coordinate with the scanner per BOOK
+// (internal/scanlock) and are never refused because a scan is running.
 
-// ErrScanRunning is returned by TryAcquireScanStandDown when a library.scan is
-// running (or claimed by the dispatcher). Its text is the user-facing message.
+// ErrScanRunning prefixes the error an op returns when the scan does not stand
+// down for it (HoldScanStandDown).
 var ErrScanRunning = errors.New("a library scan is running; try again when it finishes")
 
 // ErrScanStandDownLost reports that a holder's lease lapsed (no heartbeat inside
@@ -48,71 +42,7 @@ type ScanStandDownGate interface {
 	RenewScanStandDown(holderOpID string) bool
 }
 
-// ScanStandDownTryGate is the non-blocking gate a request handler needs.
-type ScanStandDownTryGate interface {
-	TryAcquireScanStandDown(holderOpID, reason string) (release func(), err error)
-}
-
-// ScanStandDownRequestGate is what a request-scoped hold needs: the no-wait
-// acquire plus renewal, so a long request (bulk fetch, candidate apply, the
-// single apply's background file job) renews per item instead of outliving
-// its lease.
-type ScanStandDownRequestGate interface {
-	ScanStandDownTryGate
-	RenewScanStandDown(holderOpID string) bool
-}
-
 type scanStandDownHoldKey struct{}
-
-// TryAcquireScanStandDown registers holderOpID as a stand-down holder WITHOUT
-// quiescing anything. If a library.scan is running, or has been claimed by the
-// dispatcher, it returns ErrScanRunning at once (zero wait). Otherwise the caller
-// holds the gate: the dispatcher will not start a new library.scan (Gate 3.5)
-// until release is called or the lease lapses.
-//
-// Ordering is what makes this race-free. The holder is registered BEFORE r.running
-// is inspected: a scan claimed before registration is visible in r.running (the
-// claim block writes it under r.mu), and a claim after registration is refused by
-// the Gate 3.5 check the claim block makes under the same r.mu.
-//
-// Stub handles (claimed, goroutine not started) count as running here, unlike in
-// findRunningScan: the pickup gate would drop such a scan as interrupted_quiesced,
-// and with no scanOpID recorded nothing would re-queue it. Refusing is cheaper than
-// stranding a scan for one request.
-//
-// The acquire itself persists no marker: there is no quiesced scan to protect
-// across a reboot, and the marker is a singleton that a concurrent blocking
-// holder may own. A request hold that renews (Beat → RenewScanStandDown) does
-// write the marker with its http: holder id and whatever scanOpID is recorded;
-// that is harmless because startup acts on the marker only when ScanOpID is set.
-func (r *Registry) TryAcquireScanStandDown(holderOpID, reason string) (func(), error) {
-	if holderOpID == "" {
-		return nil, fmt.Errorf("scan stand-down: empty holder opID")
-	}
-	r.scanGate.mu.Lock()
-	r.scanGate.holders[holderOpID] = time.Now().Add(r.leaseTTL())
-	// A pending re-queue grace ends here: the quiesced scan stays parked and
-	// this holder's last release re-queues it (see scan_standdown.go).
-	r.cancelScanStandDownGraceLocked(holderOpID)
-	r.scanGate.mu.Unlock()
-
-	if r.anyScanClaimed() {
-		// Refuse through the normal release path, never an inline delete. Our
-		// brief registration can make the worker pickup gate drop a claimed scan
-		// as interrupted_quiesced and park it on scanGate.dropped; only
-		// releaseScanStandDown drains that list, so an inline delete here would
-		// strand the scan until some later holder's last release or a restart.
-		// As the last holder out it also wakes the dispatcher for any scan Gate
-		// 3.5 held back on our account.
-		r.releaseScanStandDown(holderOpID)
-		return nil, ErrScanRunning
-	}
-
-	r.logger.Info("registry: scan stand-down acquired (no-wait)",
-		"holder_op_id", holderOpID, "reason", reason)
-	var once sync.Once
-	return func() { once.Do(func() { r.releaseScanStandDown(holderOpID) }) }, nil
-}
 
 // LibraryScanRunning reports whether a library.scan is claimed or running. It
 // is a read: it registers no holder, parks nothing and starts no grace timer.
@@ -131,12 +61,6 @@ func (r *Registry) anyScanClaimed() bool {
 		}
 	}
 	return false
-}
-
-// RequestScanStandDownHolderID mints a unique holder id for a request-scoped
-// (non-op) caller. The registry rejects empty ids, and an HTTP request has no op id.
-func RequestScanStandDownHolderID(reason string) string {
-	return "http:" + reason + ":" + ulid.Make().String()
 }
 
 // ScanStandDownHold is an op's hold on the scan stand-down. Obtain it with
@@ -201,27 +125,6 @@ func HoldScanStandDown(ctx context.Context, gate ScanStandDownGate, rep Reporter
 	}
 	h.take(gate, holderID, rel)
 	h.reporter = &standDownReporter{Reporter: rep, hold: h}
-	return h, nil
-}
-
-// TryHoldScanStandDown is the request-path hold: no wait and no quiesce
-// (TryAcquireScanStandDown), ErrScanRunning while a scan is running, and a hold
-// the handler beats per item with Checkpoint exactly like an op. Its context is
-// rooted in Background, not the request: the single apply's file job runs after
-// the response is written, and a client disconnect must not read as a lost hold.
-// A nil gate yields an ungated hold (tests that never run a scan).
-func TryHoldScanStandDown(gate ScanStandDownRequestGate, reason string) (*ScanStandDownHold, error) {
-	h := newHold(context.Background())
-	if gate == nil {
-		return h, nil
-	}
-	holderID := RequestScanStandDownHolderID(reason)
-	rel, err := gate.TryAcquireScanStandDown(holderID, reason)
-	if err != nil {
-		h.cancel(err)
-		return nil, err
-	}
-	h.take(gate, holderID, rel)
 	return h, nil
 }
 

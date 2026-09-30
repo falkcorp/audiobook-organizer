@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.39.0
+// version: 2.40.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-09-30
 
@@ -635,7 +635,10 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.updateFetchedMetadataState,
 		s.publishEvent,
 	)
-	metadataH.SetScanStandDownGate(s)
+	// A single-book apply the library scan holds past the request's wait
+	// bound is handed to metadata.apply-when-scanned (apply_when_scanned_op.go).
+	metadataH.SetQueuedApplyEnqueuer(s)
+	s.applyWhenScannedHandler = metadataH
 
 	// Tools lifecycle handler (instantiated here so wireMediaRoutes receives it).
 	toolsH := toolshandler.New(s.toolRegistry, &config.AppConfig.Tools, nil)

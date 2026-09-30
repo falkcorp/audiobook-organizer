@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
 // last-edited: 2026-09-30
 
@@ -49,6 +49,11 @@ const (
 	QueuedApplyCandidate = "apply-candidate"
 	QueuedWriteBack      = "write-back"
 	QueuedFetch          = "fetch"
+	// QueuedOpResultCandidate is one book of POST
+	// /metadata/batch-apply-candidates: the candidate stored for BookID in
+	// candidate-fetch operation OperationID, applied fill-only through the
+	// certainty gate. Run by package server, which owns that path.
+	QueuedOpResultCandidate = "op-result-candidate"
 )
 
 // QueuedApply is one apply handed to the metadata.apply-when-scanned op: the
@@ -61,6 +66,8 @@ type QueuedApply struct {
 	WriteBack  *bool                        `json:"write_back,omitempty"`
 	SegmentIDs []string                     `json:"segment_ids,omitempty"`
 	Rename     *bool                        `json:"rename,omitempty"`
+	// OperationID is the candidate-fetch operation (QueuedOpResultCandidate).
+	OperationID string `json:"operation_id,omitempty"`
 }
 
 // QueuedApplyEnqueuer enqueues a QueuedApply as a durable operation.
@@ -107,7 +114,8 @@ func (h *Handler) lockBookForRequest(c *gin.Context, q QueuedApply) (*scanlock.H
 			resp["book"] = h.enrichBook(b)
 		}
 	}
-	c.JSON(http.StatusAccepted, resp)
+	// Enveloped like every success, so the client reads it from body.data.
+	httputil.RespondWithSuccess(c, http.StatusAccepted, resp)
 	return nil, false
 }
 
@@ -237,26 +245,38 @@ func (h *Handler) fetchCore(ctx context.Context, id string) (*metafetch.FetchMet
 	return resp, nil
 }
 
+// queuedWaitBeat is how often a queued apply waiting for its book reports
+// progress, well inside the op's progress watchdog.
+var queuedWaitBeat = 30 * time.Second
+
+// WaitForBook takes book id's scan lock for a queued apply, waiting as long as
+// ctx lives and calling beat each queuedWaitBeat so the op's progress watchdog
+// sees a live wait rather than a wedged op.
+func WaitForBook(ctx context.Context, id string, beat func(msg string)) (*scanlock.Hold, error) {
+	for {
+		wctx, cancel := context.WithTimeout(ctx, queuedWaitBeat)
+		hold, err := scanlock.Books.LockSet(wctx, []string{id})
+		cancel()
+		if err == nil {
+			return hold, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if beat != nil {
+			beat("waiting for the library scan to finish reading book " + id)
+		}
+	}
+}
+
 // RunQueuedApply is the body of the metadata.apply-when-scanned op: wait for
 // the book as long as the op lives (ctx), then run the same core the request
 // would have run. The wait reports through beat so the op's progress watchdog
 // sees it is alive.
 func (h *Handler) RunQueuedApply(ctx context.Context, q QueuedApply, beat func(msg string)) error {
-	var hold *scanlock.Hold
-	for {
-		wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		var err error
-		hold, err = scanlock.Books.LockSet(wctx, []string{q.BookID})
-		cancel()
-		if err == nil {
-			break
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if beat != nil {
-			beat("waiting for the library scan to finish reading book " + q.BookID)
-		}
+	hold, err := WaitForBook(ctx, q.BookID, beat)
+	if err != nil {
+		return err
 	}
 	defer hold.Release()
 	switch q.Kind {

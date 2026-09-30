@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-30
 
@@ -97,10 +97,6 @@ type Handler struct {
 	// snapshot, typed-nil guarded by the controller so the in-method
 	// `== nil` guard (mirroring `s.opRegistry == nil`) holds.
 	opRegistry OperationsRegistry
-
-	// scanGate refuses inline metadata writes while a library scan runs (409).
-	// Nil = ungated. Set by SetScanStandDownGate.
-	scanGate opsregistry.ScanStandDownRequestGate
 
 	// queuedApply hands an apply whose book the library scan holds past
 	// requestBookLockWait to the metadata.apply-when-scanned op (202). Nil
@@ -264,12 +260,13 @@ type batchSaveOpParams struct {
 }
 
 // batchUpdateMetadata handles batch metadata updates with validation
+//
+// No scan coordination is needed here and none is taken: it writes only the
+// database and schedules no file work, and a running scan's merge keeps every
+// field another writer changed after the scan read the book
+// (scanner.mergeScannedKeepingForeignEdits). It used to refuse with 409 while
+// any scan ran.
 func (h *Handler) batchUpdateMetadataImpl(c *gin.Context) {
-	hold, ok := h.holdScanStandDown(c, "batch-update-metadata")
-	if !ok {
-		return
-	}
-	defer hold.Release()
 	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
@@ -856,12 +853,12 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 
 // bulkFetchMetadata fetches external metadata for multiple audiobooks and applies
 // fields only when they are missing and not manually overridden or locked.
+//
+// Like batch-update it writes only the database (CommitApply, no file work),
+// so it takes no scan lock: a running scan's merge keeps the fields this
+// writes (scanner.mergeScannedKeepingForeignEdits). It used to refuse with
+// 409 while any scan ran, and stop mid-run when its stand-down lease lapsed.
 func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
-	hold, ok := h.holdScanStandDown(c, "bulk-fetch-metadata")
-	if !ok {
-		return
-	}
-	defer hold.Release()
 	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
@@ -926,15 +923,6 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		result := bulkFetchMetadataResult{
 			BookID: bookID,
 			Status: "skipped",
-		}
-
-		// Per-book stand-down beat: renews the request's hold, and once it is
-		// lost (a scan may be running again) no further book is written.
-		if err := hold.Checkpoint(); err != nil {
-			result.Status = "error"
-			result.Message = err.Error()
-			setResult(i, result)
-			return nil
 		}
 
 		book, err := store.GetBookByID(bookID)

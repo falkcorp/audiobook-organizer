@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.16.0
+// version: 4.17.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -11,14 +11,12 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
@@ -630,238 +628,36 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 		return
 	}
 
-	// Metadata is never applied during a library scan: 409 at once, no wait.
-	hold, ok := s.holdScanStandDownForRequest(c, "batch-apply-candidates")
-	if !ok {
-		return
-	}
-	defer hold.Release()
+	// Scan coordination is per BOOK (internal/scanlock), never library-wide:
+	// each book is applied under its own scan lock, so only a book the library
+	// scan is reading right now waits, and one it holds past the bound is
+	// queued rather than refused. Until 2026-09-30 this whole request answered
+	// 409 SCAN_RUNNING while any scan ran. See applyOpResultBooks.
 
 	// The list this feeds is memoised; a status change must not keep offering a
 	// candidate the user just acted on.
 	defer invalidateMetadataResultsCache()
 
-	store := s.Ops()
-	mfs := s.metadataFetchService
-
-	// Load all operation results for the given operation.
-	results, err := store.GetOperationResults(req.OperationID)
-	if err != nil {
-		httputil.InternalError(c, "failed to load operation results", err)
+	resultsByBook, claims, loadErr := s.loadOpResultApplyInputs(c.Request.Context(), req.OperationID)
+	if loadErr != nil {
+		httputil.InternalError(c, "failed to load the operation's candidates", loadErr)
 		return
 	}
 
-	// Index results by book ID for fast lookup.
-	resultsByBook := make(map[string]database.OperationResult, len(results))
-	for _, r := range results {
-		resultsByBook[r.BookID] = r
-	}
-
-	// Apply in parallel with a bounded pool, assembling the response strictly in
-	// request order. Each goroutine owns exactly one slot in `outcomes` and the
-	// slice is read only after Wait, so the slots need no lock. Building the
-	// counters and the error list from that ordered slice afterwards — rather
-	// than appending from the workers — is what keeps `errors` deterministic:
-	// appending concurrently would both race and reorder the messages the user
-	// sees between two identical requests.
-	type applyOutcome struct {
-		applied bool
-		skipped bool
-		// blocked: the certainty gate refused the candidate (see
-		// internal/applygate); nothing was written, the book is left for
-		// manual review, and blockMsg says which leg refused.
-		blocked  bool
-		blockMsg string
-		errMsg   string
-	}
-	outcomes := make([]applyOutcome, len(req.BookIDs))
-
-	// Claim index for the gate's partial_book check, built before any apply
-	// over EVERY row of the operation (not req.BookIDs), the same universe the
-	// preview uses, so a subset request sees the same siblings.
-	// A book the index cannot read is recorded with what is still known
-	// (folder, ASIN): rows that look like it are blocked for manual review,
-	// the rest proceed, and the count is returned as unreadable_books. Only a
-	// cancelled request fails here.
-	claims, claimErr := buildClaimIndex(c.Request.Context(), keysOf(resultsByBook), opResultClaimLoader(s.store, func(id string) (CandidateResult, bool, error) {
-		r, ok := resultsByBook[id]
-		if !ok {
-			return CandidateResult{}, false, nil
-		}
-		var cr CandidateResult
-		if err := json.Unmarshal([]byte(r.ResultJSON), &cr); err != nil {
-			return CandidateResult{}, false, fmt.Errorf("decode operation result: %w", err)
-		}
-		return cr, true, nil
-	}))
-	if claimErr != nil {
-		httputil.InternalError(c, "failed to build the sibling-part index", claimErr)
-		return
-	}
-
-	g, gctx := errgroup.WithContext(c.Request.Context())
-	// Deliberately NOT writeBackWorkers(): this handler does not write back.
-	// The per-book work left on the request path is DB-bound
-	// (ApplyMetadataCandidate + CreateOperationResult); the file work already
-	// goes to s.fileIOPool. Tying it to the write-back knob would mean an
-	// operator raising write_back_workers to speed up DISK writes also widened
-	// the in-request DB fan-out here, which is not what that knob says it does.
-	// Matches batchApplyConcurrency in the sibling handler, which does the same
-	// work for the cache-backed endpoint.
-	g.SetLimit(batchApplyConcurrency)
-
-	for i, bookID := range req.BookIDs {
-		g.Go(func() error {
-			if gctx.Err() != nil {
-				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: canceled: %v", bookID, gctx.Err())}
-				return nil
-			}
-			// Per-book stand-down beat: renews the request's hold; once it is
-			// lost a scan may be running again, so this book is not applied.
-			if err := hold.Checkpoint(); err != nil {
-				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: %v", bookID, err)}
-				return nil
-			}
-
-			opResult, ok := resultsByBook[bookID]
-			if !ok {
-				outcomes[i] = applyOutcome{skipped: true}
-				return nil
-			}
-
-			var cr CandidateResult
-			if err := json.Unmarshal([]byte(opResult.ResultJSON), &cr); err != nil {
-				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: failed to parse result", bookID)}
-				return nil
-			}
-			if cr.Candidate == nil || cr.Status != "matched" {
-				outcomes[i] = applyOutcome{skipped: true}
-				return nil
-			}
-
-			// Certainty gate: score floor, fetch-time identity, and the
-			// sequence-number guard. The "matched" status above is only "the
-			// top non-rejected candidate", with no floor behind it.
-			plan := planOpResultApply(s.store, bookID, cr, claims)
-			if plan.Reason == applySkipMarkedNoMatch {
-				// Marked "no match" since the fetch: nothing to apply.
-				outcomes[i] = applyOutcome{skipped: true}
-				return nil
-			}
-			if plan.Reason == applySkipGateBlocked {
-				outcomes[i] = applyOutcome{blocked: true, blockMsg: fmt.Sprintf("%s: %v", bookID, plan.Err)}
-				return nil
-			}
-			if plan.Reason != "" {
-				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: %s: %v", bookID, plan.Reason, plan.Err)}
-				return nil
-			}
-
-			candidate := *plan.Candidate
-
-			// The apply below writes the database first; the rename runs
-			// afterwards in the file-IO job queued further down. That is the
-			// order in which three books got new metadata and old file names on
-			// 2026-09-13. When the rename is known to fail, refuse here, before
-			// any write -- no apply, no "applied" op-result row, no file job --
-			// with the same read-only preflight the cached batch apply (#3385)
-			// and the single-book apply (#3389) run.
-			//
-			// Gated exactly as the file job is: it runs whenever there is a pool
-			// and always does the file I/O (fileIO=true below), so a pool means
-			// a rename follows. With no pool there is no file sequel to fail.
-			// Reported as blocked, not as an error: nothing failed and nothing
-			// was written, so the book is left for review rather than a retry.
-			if s.fileIOPool != nil {
-				if perr := mfs.RenamePreflightWithOptions(bookID, candidate, nil, metafetch.ApplyOptions{FillOnly: true}); perr != nil {
-					batchApplyCandidatesLog.Warn("batch-apply-candidates: refused %s before any write: %s",
-						logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(perr.Error()))
-					outcomes[i] = applyOutcome{blocked: true, blockMsg: fmt.Sprintf("%s: %s: %v",
-						bookID, metafetch.ApplyRefusedReasonFileWorkWouldFail, perr)}
-					return nil
-				}
-			}
-
-			// Batch apply: fill-only (owner decision A3#3).
-			resp, err := mfs.ApplyMetadataCandidateWithOptions(bookID, candidate, nil, metafetch.ApplyOptions{FillOnly: true})
-			if err != nil && errors.Is(err, metafetch.ErrMarkedNoMatch) {
-				// Marked "no match" between the plan and the apply.
-				outcomes[i] = applyOutcome{skipped: true}
-				return nil
-			}
-			if err != nil {
-				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: apply failed: %v", bookID, err)}
-				return nil
-			}
-			pendingCover := ""
-			if resp != nil {
-				pendingCover = resp.PendingCoverURL
-			}
-
-			// Persist "applied" status so re-opens of the dialog don't show
-			// this book as still needing review. Mirrors the reject handler.
-			cr.Status = "applied"
-			if updatedJSON, err := json.Marshal(cr); err == nil {
-				_ = store.CreateOperationResult(&database.OperationResult{
-					OperationID: req.OperationID,
-					BookID:      bookID,
-					ResultJSON:  string(updatedJSON),
-					Status:      "applied",
-				})
-			}
-
-			// Queue file I/O through the worker pool (bounded concurrency).
-			if pool := s.fileIOPool; pool != nil {
-				bid := bookID
-				jobDone := hold.Retain()
-				if !pool.Submit(bid, func() {
-					defer jobDone()
-					if err := hold.Checkpoint(); err != nil {
-						slog.Warn("background apply file I/O skipped: scan stand-down lost", "bid", logger.SanitizeLogValue(bid), "err", err)
-						return
-					}
-					// Logged, not returned: this runs in the pool AFTER the
-					// handler has already answered, so outcomes[i] is long
-					// since written. The response cannot report it; the log is
-					// the only channel left.
-					//
-					// The shared sequel: cover download (this path never fetched
-					// the new cover before 2026-09-12), file I/O, and the tags
-					// exactly once (ApplyMetadataFileIO followed by its own
-					// write-back tagged twice under auto_write_tags_on_apply).
-					if err := mfs.FinishApplyFileWork(bid, pendingCover, true, true, hold.Checkpoint); err != nil {
-						slog.Warn("background apply file work failed", "bid", logger.SanitizeLogValue(bid), "err", logger.SanitizeLogValue(err.Error()))
-					}
-					if s.writeBackBatcher != nil {
-						s.writeBackBatcher.Enqueue(bid)
-					}
-				}) {
-					// Dropped (pool stopped): fn will never run, so release its share of the hold here.
-					jobDone()
-				}
-			}
-
-			outcomes[i] = applyOutcome{applied: true}
-			return nil
-		})
-	}
-	// No worker returns a non-nil error — every per-book failure is recorded in
-	// outcomes[i].errMsg so it reaches the user in the `errors` array — but the
-	// result is checked rather than discarded in case that ever changes.
-	if err := g.Wait(); err != nil {
-		httputil.InternalError(c, "failed to apply candidates", err)
-		return
-	}
+	outcomes := s.applyOpResultBooks(c.Request.Context(), req.OperationID, req.BookIDs, resultsByBook, claims)
 
 	applied := 0
 	skipped := 0
-	var errors, blocked []string
-	for _, o := range outcomes {
+	var errors, blocked, queued, queuedOps []string
+	for i, o := range outcomes {
 		switch {
 		case o.applied:
 			applied++
 		case o.skipped:
 			skipped++
+		case o.queued:
+			queued = append(queued, req.BookIDs[i])
+			queuedOps = append(queuedOps, o.queuedOpID)
 		case o.blocked:
 			blocked = append(blocked, o.blockMsg)
 		case o.errMsg != "":
@@ -884,6 +680,13 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 		// UnreadableBooks counts books of the operation the sibling-part
 		// index could not read; the same field as the preview summary's.
 		UnreadableBooks int `json:"unreadable_books"`
+		// QueuedBookIDs lists books the library scan was reading for longer
+		// than the wait bound. Nothing was refused: each is handed to a
+		// metadata.apply-when-scanned operation (QueuedOperationIDs, same
+		// order) that applies it as soon as the scan moves on.
+		QueuedBookIDs      []string `json:"queued_book_ids"`
+		QueuedCount        int      `json:"queued_count"`
+		QueuedOperationIDs []string `json:"queued_operation_ids"`
 	}{
 		Applied:         applied,
 		Skipped:         skipped,
@@ -892,7 +695,10 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 		Errors:          errors,
 		ErrorCount:      len(errors),
 		OperationID:     req.OperationID,
-		UnreadableBooks: claims.Unreadable(),
+		UnreadableBooks:    claims.Unreadable(),
+		QueuedBookIDs:      queued,
+		QueuedCount:        len(queued),
+		QueuedOperationIDs: queuedOps,
 	})
 }
 
