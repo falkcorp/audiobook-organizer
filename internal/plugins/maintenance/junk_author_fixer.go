@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
-// last-edited: 2026-09-29
+// last-edited: 2026-09-30
 
 package maintenance
 
@@ -397,8 +397,8 @@ type junkAuthorCorroborationReader interface {
 // naming the row is circular ("artist: Wraith Knight" made the "Wraith
 // Knight" row). Only an independent source corroborates: a stored provider
 // author match whose fetched title agrees with the book's (see
-// providerCorroborates). Tags count only against: one naming a different,
-// existing real author vetoes the row.
+// providerCorroborates). Tags count only against: an artist tag naming the
+// same different real author on most of the sampled files vetoes the row.
 //
 // Deliberate trade-off: a real author whose every book sits in a series of
 // their own name and has no provider match is held. Authors with any book
@@ -443,12 +443,13 @@ func (idx *junkAuthorIndex) corroborateNamedSeries(r junkAuthorCorroborationRead
 		}
 		cands = append(cands, candidate{id: id, name: a.Name, books: in})
 	}
-	// real: FoldKey of every existing author row that is not strong junk and
-	// has books: the rows whose names in a tag or a provider credit mean a
-	// different person wrote the book.
+	// real: FoldKey of every existing author row that is not strong junk, has
+	// books, and is not mainly a narrator (idx.isReader): the rows whose names
+	// in a tag or a provider credit mean a different person wrote the book. A
+	// reader ("Simon Vance") beside the author is the performer, not a rival.
 	real := map[string]bool{}
 	for id, a := range idx.authorsByID {
-		if _, junk := idx.strongJunk[id]; !junk && len(idx.ownBooks[id]) > 0 {
+		if _, junk := idx.strongJunk[id]; !junk && len(idx.ownBooks[id]) > 0 && !idx.isReader(id) {
 			real[authorjunk.FoldKey(a.Name)] = true
 		}
 	}
@@ -477,53 +478,63 @@ func (idx *junkAuthorIndex) corroborateNamedSeries(r junkAuthorCorroborationRead
 	return nil
 }
 
+// junkAuthorArtistTagKeys are the raw tag keys (lower case) that name a
+// track's performing artist -- for an audiobook, its author. Album-artist
+// keys (album_artist, tpe2, aart) are left out of the veto: they carry
+// narrators, publishers and series names as often as authors.
+var junkAuthorArtistTagKeys = map[string]bool{"artist": true, "tpe1": true, "©art": true}
+
 // providerCorroborates reports whether a stored provider match on one of
-// books names name as author, and no author file tag on them names someone
-// else. real holds the FoldKeys of existing real author rows.
+// books names name as author, and the files' artist tags do not name someone
+// else. real holds the FoldKeys of existing real author rows (not readers).
+//
+// A credit value ("Brent Weeks & Simon Vance") is read as its credited names
+// in order (split on , ; & / "and"); its lead is the first that is name
+// itself or a real author row, other names skipped. The whole value folding
+// to name leads with name too.
 //
 //   - Evidence: a fetched author_name whose fetched title agrees with the
-//     book's (providerTitleAgrees) and that folds to name whole, or holds it
-//     as one of several credited names (split on , ; & / "and") when none of
-//     the others is a real author row: "C. T. Phipps & Wraith Knight" names
-//     Phipps and never corroborates "Wraith Knight".
-//   - Veto: an author tag key (titleRelinkFileTagKeys) on any sampled file
-//     naming a different person-shaped name that is a real author row
-//     ("artist: C. T. Phipps" beside "album_artist: Wraith Knight").
+//     book's (providerTitleAgrees) and whose lead is name. "C. T. Phipps &
+//     Wraith Knight" leads with Phipps and never corroborates "Wraith Knight".
+//   - Veto: the artist tags (junkAuthorArtistTagKeys) of a strict majority of
+//     the sampled files lead with the SAME different, person-shaped real
+//     author ("artist: C. T. Phipps" on the Wraith Knight files). One stray
+//     file, an album artist, or a co-credit after name ("Brent Weeks, Simon
+//     Vance") never vetoes.
 func providerCorroborates(r junkAuthorCorroborationReader, name string, books []database.BookCore, real map[string]bool) (bool, error) {
 	self := authorjunk.FoldKey(name)
 	if self == "" {
 		return false, nil
 	}
-	credits := func(v string) (own, others bool) {
-		parts := narratorSplitRe.Split(v, -1)
-		if authorjunk.FoldKey(v) != "" {
-			parts = append(parts, v)
+	lead := func(v string) string {
+		if authorjunk.FoldKey(v) == self {
+			return self
 		}
-		for _, part := range parts {
+		for _, part := range narratorSplitRe.Split(v, -1) {
 			k := authorjunk.FoldKey(part)
-			switch {
-			case k == "":
-			case k == self:
-				own = true
-			case real[k] && personname.LooksLikePersonName(strings.TrimSpace(part)):
-				others = true
+			if k == self || (k != "" && real[k] && personname.LooksLikePersonName(strings.TrimSpace(part))) {
+				return k
 			}
 		}
-		return own, others
+		return ""
 	}
 	named := false
+	files, rivals := 0, map[string]int{}
 	for _, b := range books {
-		files, err := r.GetBookFiles(b.ID)
+		bookFiles, err := r.GetBookFiles(b.ID)
 		if err != nil {
 			return false, fmt.Errorf("read files of %s: %w", b.ID, err)
 		}
-		for i := range files {
-			for k, v := range files[i].RawTags {
-				if !titleRelinkFileTagKeys[strings.ToLower(k)] {
+		for i := range bookFiles {
+			files++
+			seen := map[string]bool{}
+			for k, v := range bookFiles[i].RawTags {
+				if !junkAuthorArtistTagKeys[strings.ToLower(k)] {
 					continue
 				}
-				if _, others := credits(v); others {
-					return false, nil // the files name the real author: evidence against
+				if l := lead(v); l != "" && l != self && !seen[l] {
+					seen[l] = true
+					rivals[l]++
 				}
 			}
 		}
@@ -544,12 +555,13 @@ func providerCorroborates(r junkAuthorCorroborationReader, name string, books []
 				}
 			}
 		}
-		if fetchedAuthor == "" || !providerTitleAgrees(fetchedTitle, b.Title) {
-			continue
-		}
-		own, others := credits(fetchedAuthor)
-		if authorjunk.FoldKey(fetchedAuthor) == self || (own && !others) {
+		if fetchedAuthor != "" && providerTitleAgrees(fetchedTitle, b.Title) && lead(fetchedAuthor) == self {
 			named = true
+		}
+	}
+	for _, n := range rivals {
+		if 2*n > files {
+			return false, nil // most files name the same other author: evidence against
 		}
 	}
 	return named, nil
