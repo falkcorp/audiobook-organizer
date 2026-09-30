@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.17.1
+// version: 4.18.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-30
 //
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 
 // Re-export metabatch types under server-local aliases so existing
@@ -35,14 +36,17 @@ type CandidateBookInfo = metabatch.CandidateBookInfo
 type CandidateResult = metabatch.CandidateResult
 
 // batchFetchRequest is the JSON body for handleBatchFetchCandidates.
-// Either BookIDs or Selection must be provided; OnlyUnmatched can be combined
-// with either to exclude books that already have a "matched" candidate.
+// One of BookIDs, Selection or Stale must be provided; OnlyUnmatched can be
+// combined with any of them to exclude books that already have a "matched"
+// candidate.
 type batchFetchRequest = metabatch.BatchFetchRequest
 
 // batchApplyRequest is the JSON body for handleBatchApplyCandidates.
 type batchApplyRequest = metabatch.BatchApplyRequest
 
 var batchApplyCandidatesLog = logger.New("server.batch-apply-candidates")
+
+var batchFetchCandidatesLog = logger.New("server.batch-fetch-candidates")
 
 // handleBatchFetchCandidates creates a background operation that spawns parallel
 // workers to fetch metadata candidates for the given book IDs.
@@ -55,8 +59,45 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 
 	store := s.Ops()
 
-	// Resolve the target book IDs — from either explicit list or SelectionSpec.
+	// Resolve the target book IDs — from an explicit list, a SelectionSpec, or
+	// the stale set.
 	candidateIDs := req.BookIDs
+	force := req.Force
+	if len(candidateIDs) == 0 && req.Selection == nil && req.Stale {
+		// Resolved here, not by the client, because the client only holds the
+		// reviewable bucket: the rail read "3,511 stale" while the button
+		// refetched the 10 stale rows it could see. StaleCachedBookIDs shares
+		// its loader and predicate with the summary count, so the two cannot
+		// drift.
+		if s.metadataFetchService == nil {
+			httputil.RespondWithInternalError(c, "metadata service not initialized")
+			return
+		}
+		staleIDs, err := handlers.StaleCachedBookIDs(c.Request.Context(), s.storeForWiring(), s.metadataFetchService)
+		if err != nil {
+			httputil.InternalError(c, "failed to resolve stale metadata cache rows", err)
+			return
+		}
+		if len(staleIDs) == 0 {
+			// Not a bad request: the backlog is simply clear.
+			httputil.RespondWithOK(c, gin.H{
+				"message":      "no stale books to refetch",
+				"operation_id": "",
+				"book_count":   0,
+				"skipped":      0,
+			})
+			return
+		}
+		candidateIDs = staleIDs
+		// Every one of these is past MetadataCacheTTL and is meant to be
+		// re-queried. Without force, a zero-candidate row every provider
+		// answered empty 30-90 days ago is served as known-empty
+		// (MetadataKnownEmptyTTL is 90 days), is not re-dated, and would stay
+		// stale forever. Fresh-candidate rows cannot be in this set: the fetch's
+		// fresh check and cacheRowStale use the same last-checked rule.
+		force = true
+		batchFetchCandidatesLog.Info("stale refetch resolved %d books", len(staleIDs))
+	}
 	if len(candidateIDs) == 0 && req.Selection != nil {
 		resolved, err := operations.ResolveBookIDs(*req.Selection, func(f operations.FilterSpec) ([]string, error) {
 			return s.resolveFilterToBookIDs(c.Request.Context(), f)
@@ -68,7 +109,7 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 		candidateIDs = resolved
 	}
 	if len(candidateIDs) == 0 {
-		httputil.RespondWithBadRequest(c, "book_ids or selection is required")
+		httputil.RespondWithBadRequest(c, "book_ids, selection or stale is required")
 		return
 	}
 
@@ -157,7 +198,7 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 	params := metadataCandidateFetchOpParams{
 		BookIDs:    bookIDs,
 		TotalBooks: totalBooks,
-		Force:      req.Force,
+		Force:      force,
 	}
 	opID, enqErr := s.opRegistry.EnqueueOp(c.Request.Context(), "metadata.candidate-fetch", params)
 	if enqErr != nil {
@@ -165,13 +206,20 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 		return
 	}
 
+	// book_count and skipped are what the caller should report: the books this
+	// op will fetch and the ones left to a fetch already running. total_books
+	// repeats book_count for existing readers.
 	httputil.RespondWithSuccess(c, http.StatusAccepted, struct {
 		OperationID string `json:"operation_id"`
 		TotalBooks  int    `json:"total_books"`
+		BookCount   int    `json:"book_count"`
+		Skipped     int    `json:"skipped"`
 		Message     string `json:"message"`
 	}{
 		OperationID: opID,
 		TotalBooks:  totalBooks,
+		BookCount:   totalBooks,
+		Skipped:     skippedCount,
 		Message:     "metadata candidate fetch started",
 	})
 }

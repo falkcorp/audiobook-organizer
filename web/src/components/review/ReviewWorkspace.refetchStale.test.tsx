@@ -1,17 +1,21 @@
 // file: web/src/components/review/ReviewWorkspace.refetchStale.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4d91c7a3-6b28-4e50-9f13-8a26c5b407de
-// last-edited: 2026-09-25
+// last-edited: 2026-09-30
 //
 // The refetch path from /review. Before this the stale chip's tooltip ended
 // "refetch to be sure", naming a remedy the workspace had no way to reach --
 // the only fetch entry point was a dialog on the Library page.
 //
-// The property worth guarding hardest is which rows count as stale. The payload
-// distinguishes three states, not two: `is_fresh: false` (stale), `is_fresh:
-// true` (fresh), and ABSENT (this row has no age at all). Treating absent as
-// stale would sweep rows into a bulk provider fetch on a claim the server never
-// made, which is why the predicate is `=== false` and not falsy.
+// The property worth guarding hardest is that the number the dialog shows and
+// the set the button sends are the SAME set. They were not: the chip showed the
+// server's count (every stale cache row, reviewable or not) while the button
+// sent ids derived on the client from the reviewable bucket alone -- "3,511
+// stale" on the chip, "Refetch 10 stale books?" in the dialog. The bulk path
+// now shows `summary.stale` and POSTs {stale: true}, so the server resolves the
+// set with the count's own predicate.
+//
+// The per-row path still sends one explicit id.
 
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -82,6 +86,8 @@ function seed(results: api.CandidateResult[], stale: number) {
   vi.mocked(api.batchFetchCandidates).mockResolvedValue({
     operation_id: 'op-1',
     total_books: 2,
+    book_count: 2,
+    skipped: 0,
     message: 'metadata candidate fetch started',
   });
   // CompareSpine (Task 7) now calls usePathAliases() itself, which pulls
@@ -103,28 +109,52 @@ async function openWorkspace() {
 }
 
 describe('refetching stale rows from /review', () => {
-  it('sends exactly the stale book ids, and only after the confirm', async () => {
+  it('shows the server stale count and sends {stale: true}, only after the confirm', async () => {
     const user = userEvent.setup();
+    // The server counts 3,511 stale rows; the client holds only two of them
+    // (the rest are in the unreviewable bucket or simply not loaded). The
+    // dialog must show the server's number and must not send the client's ids.
     seed(
       [
         makeResult('a', { is_fresh: false }),
         makeResult('b', { is_fresh: true }),
         makeResult('c', { is_fresh: false }),
       ] as api.CandidateResult[],
-      2
+      3511
     );
     await openWorkspace();
 
-    await user.click(screen.getByLabelText(/Refetch 2 stale books/i));
+    await user.click(screen.getByLabelText(/Refetch 3,511 stale books/i));
 
     // Nothing may leave for the providers on the strength of a chip click.
     expect(api.batchFetchCandidates).not.toHaveBeenCalled();
-    expect(await screen.findByText(/Refetch 2 stale books\?/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Refetch 3,511 stale books\?/i)).toBeInTheDocument();
+    expect(screen.getByTestId('refetch-stale-confirm')).toHaveTextContent('Refetch 3,511');
 
     await user.click(screen.getByTestId('refetch-stale-confirm'));
 
     await waitFor(() => expect(api.batchFetchCandidates).toHaveBeenCalledTimes(1));
-    expect(api.batchFetchCandidates).toHaveBeenCalledWith({ book_ids: ['a', 'c'] });
+    expect(api.batchFetchCandidates).toHaveBeenCalledWith({ stale: true });
+  });
+
+  it("reports the server's book_count and skipped, not a client count", async () => {
+    const user = userEvent.setup();
+    seed([makeResult('a', { is_fresh: false })] as api.CandidateResult[], 3511);
+    vi.mocked(api.batchFetchCandidates).mockResolvedValue({
+      operation_id: 'op-1',
+      total_books: 3500,
+      book_count: 3500,
+      skipped: 11,
+      message: 'metadata candidate fetch started',
+    });
+    await openWorkspace();
+
+    await user.click(screen.getByLabelText(/Refetch 3,511 stale books/i));
+    await user.click(screen.getByTestId('refetch-stale-confirm'));
+
+    expect(
+      await screen.findByText(/Refetching metadata for 3,500 books \(11 already being fetched\)/i)
+    ).toBeInTheDocument();
   });
 
   // Regression, 2026-09-07. `batchFetchCandidates` returned the raw `{data:...}`
@@ -191,27 +221,6 @@ describe('refetching stale rows from /review', () => {
     expect(api.batchFetchCandidates).not.toHaveBeenCalled();
   });
 
-  // The three-state property. A row the server sent no age for is not a stale
-  // row: `is_fresh` absent means "this result has no age", which is a different
-  // claim from "this result is stale".
-  it('never sweeps a row with no age into the refetch', async () => {
-    const user = userEvent.setup();
-    seed(
-      [
-        makeResult('a', { is_fresh: false }),
-        makeResult('no-age'), // no is_fresh key at all
-      ] as api.CandidateResult[],
-      1
-    );
-    await openWorkspace();
-
-    await user.click(screen.getByLabelText(/Refetch 1 stale book/i));
-    await user.click(screen.getByTestId('refetch-stale-confirm'));
-
-    await waitFor(() => expect(api.batchFetchCandidates).toHaveBeenCalled());
-    expect(api.batchFetchCandidates).toHaveBeenCalledWith({ book_ids: ['a'] });
-  });
-
   it('offers no refetch affordance when nothing is stale', async () => {
     seed([makeResult('a', { is_fresh: true })] as api.CandidateResult[], 0);
     await openWorkspace();
@@ -219,20 +228,22 @@ describe('refetching stale rows from /review', () => {
     expect(screen.queryByLabelText(/Refetch .* stale book/i)).not.toBeInTheDocument();
   });
 
-  // The chip renders on the SERVER's stale count and the action runs on the
-  // CLIENT's derived set. Those are two independent gates over two different
-  // numbers, and an older server that counts staleness but sends no per-row
-  // `is_fresh` makes them disagree. When they do, the chip must not offer an
-  // action that would send an empty fetch.
-  it('does not offer the action when the server counts stale rows but sends no ages', async () => {
+  // The chip and the action now read the SAME number. An older design gated
+  // the action on a client-derived id list, so a server that counted stale
+  // rows the client could not see (unreviewable ones, or rows with no
+  // per-row age) showed a chip with no action. The server resolves the set
+  // now, so the count alone decides.
+  it('offers the action whenever the server counts stale rows, even with no row ages', async () => {
+    const user = userEvent.setup();
     seed([makeResult('a'), makeResult('b')] as api.CandidateResult[], 2);
     await openWorkspace();
 
-    // The chip still reports what the server said -- that is not this feature's
-    // to contradict.
     expect(screen.getByText('2 stale')).toBeInTheDocument();
-    // But there is nothing to act on, so there is no action.
-    expect(screen.queryByLabelText(/Refetch .* stale book/i)).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText(/Refetch 2 stale books/i));
+    await user.click(screen.getByTestId('refetch-stale-confirm'));
+
+    await waitFor(() => expect(api.batchFetchCandidates).toHaveBeenCalledTimes(1));
+    expect(api.batchFetchCandidates).toHaveBeenCalledWith({ stale: true });
   });
 
   // One row is not worth a dialog. It must also leave the row's selection

@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -113,8 +113,9 @@ type CandidateResult struct {
 }
 
 // BatchFetchRequest is the JSON body for the batch candidate fetch handler.
-// Either BookIDs or Selection must be provided; OnlyUnmatched can be combined
-// with either to exclude books that already have a "matched" candidate.
+// One of BookIDs, Selection or Stale must be provided; OnlyUnmatched can be
+// combined with any of them to exclude books that already have a "matched"
+// candidate.
 type BatchFetchRequest struct {
 	BookIDs       []string                  `json:"book_ids"`
 	Selection     *operations.SelectionSpec `json:"selection"`
@@ -122,6 +123,13 @@ type BatchFetchRequest struct {
 	// Force bypasses the candidate-cache skip in the fetch op (see
 	// FetchOpParams.Force). Default false: an unchanged book is not refetched.
 	Force bool `json:"force"`
+	// Stale, with no BookIDs and no Selection, targets every book the metadata
+	// review summary counts as `stale` (handlers.StaleCachedBookIDs), resolved
+	// on the server so the count the UI shows and the set that is refetched
+	// come from one predicate. It implies Force: a stale zero-candidate row
+	// whose providers all answered empty 30-90 days ago would otherwise be
+	// served as known-empty (MetadataKnownEmptyTTL is 90 days) and stay stale.
+	Stale bool `json:"stale"`
 }
 
 // BatchApplyRequest is the JSON body for the batch candidate apply handler.

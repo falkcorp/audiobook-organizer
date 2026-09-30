@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, and library repairs.
@@ -678,9 +678,15 @@ export function ReviewWorkspace() {
         external metadata providers -- on production 5,771 of 5,774 reviewable
         rows are stale. The count goes in the dialog because "refetch stale"
         reads as a tidy-up until you see the number.
+
+        The count is the server summary's `stale`, the same number the chip
+        shows, and the POST is {stale: true} so the server resolves the set
+        with that count's predicate. This used to be a client-derived id list
+        built from the reviewable bucket only: the chip read "3,511 stale"
+        while the dialog offered 10.
       */}
       <Dialog open={confirmRefetchStale} onClose={() => setConfirmRefetchStale(false)}>
-        <DialogTitle>Refetch {metadata.staleIds.length.toLocaleString()} stale books?</DialogTitle>
+        <DialogTitle>Refetch {metadata.summary.stale.toLocaleString()} stale books?</DialogTitle>
         <DialogContent>
           <DialogContentText>
             Every one of these was last fetched more than 30 days ago. Refetching queries the
@@ -701,10 +707,10 @@ export function ReviewWorkspace() {
             data-testid="refetch-stale-confirm"
             onClick={() => {
               setConfirmRefetchStale(false);
-              void metadata.refetchBooks(metadata.staleIds);
+              void metadata.refetchStale();
             }}
           >
-            Refetch {metadata.staleIds.length.toLocaleString()}
+            Refetch {metadata.summary.stale.toLocaleString()}
           </Button>
         </DialogActions>
       </Dialog>
