@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_book_lock.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fe71f301-a85e-4dad-98df-b135676ab1a7
 // last-edited: 2026-09-30
 
@@ -301,13 +301,13 @@ func acquireScanBookLock(ctx context.Context, b *Book, round int, freshSnaps boo
 		var h *scanlock.Hold
 		if round == 0 {
 			var ok bool
-			if h, ok = scanlock.Books.TryLockSet(ids); !ok {
+			if h, ok = scanlock.Books.TryLockSetIdle(ids); !ok {
 				return nil, scanLockBusy
 			}
 		} else {
 			wctx, cancel := context.WithTimeout(ctx, scanLockWait)
 			var err error
-			h, err = scanlock.Books.LockSet(wctx, ids)
+			h, err = scanlock.Books.LockSetIdle(wctx, ids)
 			cancel()
 			if err != nil {
 				if ctx.Err() != nil {
