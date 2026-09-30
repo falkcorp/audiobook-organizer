@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-30
 
@@ -551,6 +551,11 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 		// batch apply loop below, the v2 fetch ops) deliberately do NOT set it.
 		entry, err := h.metadataFetchService.FetchAndCache(c.Request.Context(), id, body.Query, body.Author, body.Narrator, body.Series, metafetch.SearchOptions{UseRerank: body.UseRerank, BypassProviderThrottle: true})
 		if err != nil {
+			// Every provider failed: an outage, not a missing book.
+			if errors.Is(err, metafetch.ErrNoSourceAnswered) {
+				httputil.RespondWithError(c, http.StatusServiceUnavailable, err.Error(), "SERVICE_UNAVAILABLE")
+				return
+			}
 			httputil.RespondWithError(c, 404, err.Error(), "NOT_FOUND")
 			return
 		}
