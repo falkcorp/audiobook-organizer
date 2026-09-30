@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 
 // Package handlers — OrganizeHandler covers the rename-preview, rename-apply,
 // organize-preview, and single-book organize HTTP endpoints.
@@ -111,6 +111,20 @@ type OrganizeHandler struct {
 	writeBack    WriteBackEnqueuer // may be nil
 	publisher    EventPublisher
 	autoOrganize bool
+
+	// resolveLibraryCopy maps a protected original to its existing library
+	// copy, so OrganizeBook organizes the row the preview showed (the
+	// preview service is wired with the same resolver). Nil: every book is
+	// organized as itself. Set with SetLibraryCopyResolver.
+	resolveLibraryCopy organizer.LibraryCopyResolver
+}
+
+// SetLibraryCopyResolver installs the protected-original -> library-copy
+// lookup OrganizeBook applies before organizing. Production passes
+// metafetch's Service.ExistingLibraryCopy, the resolver the metadata apply
+// uses, and gives the preview service the same one.
+func (h *OrganizeHandler) SetLibraryCopyResolver(resolve organizer.LibraryCopyResolver) {
+	h.resolveLibraryCopy = resolve
 }
 
 // NewOrganizeHandler constructs an OrganizeHandler.
@@ -236,7 +250,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 	// created. The v1 row this used to mint as type "organize" was never read.
 	opID := ulid.Make().String()
 
-	book, err := h.store.GetBookByID(id)
+	requested, err := h.store.GetBookByID(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			httputil.RespondWithNotFound(c, "book", id)
@@ -244,6 +258,24 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		}
 		httputil.InternalError(c, "failed to fetch book", err)
 		return
+	}
+	if requested == nil {
+		httputil.RespondWithNotFound(c, "book", id)
+		return
+	}
+
+	// A protected original (import / iTunes path) whose metadata apply
+	// already made a library copy is organized THROUGH that copy: the copy
+	// is under RootDir, so it re-organizes in place, and when it already sits
+	// at the computed target this is the "already organized" no-op below.
+	// Organizing the original instead copied the same bytes a second time,
+	// and the organizer's same-hash check reported the book's own copy as a
+	// foreign duplicate -- a 500 and a dedup candidate pairing the book with
+	// itself (2026-09-30). PreviewOrganize resolves with the same function.
+	book := organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
+	originalID := ""
+	if book.ID != requested.ID {
+		originalID = requested.ID
 	}
 
 	oldPath := book.FilePath
@@ -262,6 +294,22 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		// occupied destination -- is the organizer's deliberate refusal, not a
 		// server fault. Answer 409 with its category and reason so the client
 		// can say WHY; it used to surface as a bare 500.
+		// The book's content is already in the library as another version
+		// of it -- a copy the resolver did not hand back (it rejects a copy
+		// with a file row still in a protected tree), or one made after it
+		// ran. Organizing would make a second copy; say which row to use.
+		var hasCopy *organizer.LibraryCopyExistsError
+		if errors.As(err, &hasCopy) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":        "organize declined: this book already has a library copy; organize that copy instead",
+				"category":     "library_copy_exists",
+				"reason":       hasCopy.Error(),
+				"book_id":      book.ID,
+				"copy_book_id": hasCopy.CopyID,
+				"copy_path":    hasCopy.CopyPath,
+			})
+			return
+		}
 		var conflict *organizer.DestinationConflictError
 		if errors.As(err, &conflict) {
 			c.JSON(http.StatusConflict, gin.H{
@@ -280,13 +328,13 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 	newPath := landing.Path
 
 	if oldPath == newPath {
-		httputil.RespondWithOK(c, gin.H{
+		httputil.RespondWithOK(c, withOriginal(gin.H{
 			"message":      "already organized",
 			"book_id":      book.ID,
 			"old_path":     oldPath,
 			"new_path":     newPath,
 			"operation_id": opID,
-		})
+		}, originalID))
 		return
 	}
 
@@ -319,13 +367,13 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 				"operation_id": opID,
 			}))
 		}
-		httputil.RespondWithOK(c, gin.H{
+		httputil.RespondWithOK(c, withOriginal(gin.H{
 			"message":      fmt.Sprintf("re-organized: %s → %s", oldPath, newPath),
 			"book_id":      book.ID,
 			"old_path":     oldPath,
 			"new_path":     newPath,
 			"operation_id": opID,
-		})
+		}, originalID))
 		return
 	}
 
@@ -372,3 +420,13 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
+
+// withOriginal adds original_book_id to an OrganizeBook response when the
+// organize acted on the requested book's library copy rather than the book
+// itself, so the client can tell which row moved.
+func withOriginal(resp gin.H, originalID string) gin.H {
+	if originalID != "" {
+		resp["original_book_id"] = originalID
+	}
+	return resp
+}

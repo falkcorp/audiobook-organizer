@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.42.2
+// version: 1.43.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 
 package organizer
 
@@ -162,6 +162,19 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 		existingBook, err := o.store.GetBookByFileHash(*book.FileHash)
 		if err == nil && existingBook != nil && existingBook.ID != book.ID {
 			if pathutil.IsWithin(existingBook.FilePath, o.config.RootDir) {
+				// The hash twin is another version of THIS book -- in
+				// practice the library copy metafetch made for a protected
+				// original. It is not a duplicate, so no collision hook
+				// (that hook files a dedup candidate pairing the book with
+				// its own copy; the dedup engine suppresses same-group pairs
+				// everywhere else). It is not a success either: carrying on
+				// would reach the target-exists branch, find the copy owns
+				// the target, and write a second library copy at _copy1.
+				// Callers are expected to organize the copy instead; this
+				// is the backstop for one that did not.
+				if SameVersionGroup(book, existingBook) {
+					return "", "", &LibraryCopyExistsError{BookID: book.ID, CopyID: existingBook.ID, CopyPath: existingBook.FilePath}
+				}
 				// Content-identical book already organized under a
 				// different row. This is a true duplicate — fire the
 				// collision hook so the dedup tab picks it up.
