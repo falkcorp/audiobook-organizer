@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_round2_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 993dd8c9-20d0-4bd4-951b-11471d5dff76
 // last-edited: 2026-09-29
 
@@ -354,32 +354,113 @@ func TestJunkAuthorIndex_IndependentWorksSkipLabelsAndTheOthersWorks(t *testing.
 	require.Equal(t, "C. T. Phipps", idx.workCreditedElsewhere("Cthulhu Armageddon", ca))
 }
 
-// A series named exactly for an author and holding that author's books is the
-// author-named swap artifact (the prod "Brent Weeks" shape), not evidence
-// against the author: one Peter V. Brett book filed beside them neither makes
-// Brent Weeks a work nor takes his shelf.
-func TestJunkAuthorFixer_AuthorNamedSeriesArtifactStaysTheAuthors(t *testing.T) {
+// A series named exactly for a row and holding the row's books is either the
+// author-named swap artifact (the prod "Brent Weeks" shape) or a work row
+// filed in its own series ("Wraith Knight"). Only direct evidence on those
+// books tells them apart: a file tag or provider match naming the row.
+func weeksFixture(t *testing.T, tagged bool, speakman bool) (*junkFixture, string) {
 	f := newJunkFixture(t)
 	f.mkSeries("Brent Weeks", "Brent Weeks")
 	for _, ti := range []string{"The Way of Shadows", "Shadow's Edge", "Beyond the Shadows", "The Black Prism"} {
-		f.book(junkBookSpec{title: ti, path: "/lib/bw/" + ti, author: "Brent Weeks", series: "Brent Weeks"})
+		spec := junkBookSpec{title: ti, path: "/lib/bw/" + ti, author: "Brent Weeks", series: "Brent Weeks"}
+		if tagged {
+			spec.tags = map[string]string{"artist": "Brent Weeks"}
+		}
+		f.book(spec)
 	}
 	f.book(junkBookSpec{title: "Some Anthology", path: "/lib/o/1", author: "Peter V. Brett", series: "Brent Weeks"})
 	f.book(junkBookSpec{title: "The Warded Man", path: "/lib/o/2", author: "Peter V. Brett"})
+	if speakman {
+		f.book(junkBookSpec{title: "Unfettered", path: "/lib/o/3", author: "Shawn Speakman", series: "Brent Weeks"})
+		f.book(junkBookSpec{title: "The Dark Thorn", path: "/lib/o/4", author: "Shawn Speakman"})
+	}
 	id := f.book(junkBookSpec{title: "The Blinding Knife", path: "/lib/j/bk", author: "read by narrator",
 		tags: map[string]string{"artist": "Brent Weeks"}})
-	r := relinkRow(t, f, f.plan(), "read by narrator", id)
-	require.Empty(t, r.Skipped, r.SkipReason)
-	require.Equal(t, "Brent Weeks", r.Proposed["author"], r.Reason)
+	return f, id
 }
 
-// The same shape with two or more other authors writing in the series is an
-// anthology, and a row of its name is its title: held.
+// Brent Weeks with every book in series "Brent Weeks" and tagged "Brent
+// Weeks" relinks, with one other author misfiled in the series (Peter V.
+// Brett) or two (plus Shawn Speakman): the tags corroborate the series.
+func TestJunkAuthorFixer_CorroboratedAuthorNamedSeriesStaysTheAuthors(t *testing.T) {
+	for _, speakman := range []bool{false, true} {
+		t.Run(fmt.Sprintf("speakman=%v", speakman), func(t *testing.T) {
+			f, id := weeksFixture(t, true, speakman)
+			require.True(t, f.index().seriesCorroborated[f.author("Brent Weeks")])
+			r := relinkRow(t, f, f.plan(), "read by narrator", id)
+			require.Empty(t, r.Skipped, r.SkipReason)
+			require.Equal(t, "Brent Weeks", r.Proposed["author"], r.Reason)
+		})
+	}
+}
+
+// The deliberate trade-off: the same library with no tag or provider match on
+// the Brent Weeks books is structurally a work row filed in its own series,
+// so the row is held rather than guessed at.
+func TestJunkAuthorFixer_UncorroboratedAuthorNamedSeriesIsHeld(t *testing.T) {
+	f, id := weeksFixture(t, false, false)
+	require.False(t, f.index().seriesCorroborated[f.author("Brent Weeks")])
+	r := relinkRow(t, f, f.plan(), "read by narrator", id)
+	require.NotEqual(t, "Brent Weeks", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "held: %v %s", r.Proposed, r.Reason)
+}
+
+// A work row filed in its own series, its files tagged with the real author:
+// held whether C. T. Phipps has a book in the series or not (the
+// folder-parser shape "Wraith Knight/Wraith Lord/...").
+func TestJunkAuthorFixer_WorkRowInItsOwnSeriesIsHeld(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		titles   []string
+		phippsIn int
+		tagged   bool
+		outside  []string // the row's titles outside the series
+	}{
+		{"A: three titles, Phipps has one in the series, untagged", []string{"Wraith Lord", "Wraith Queen", "Wraith Emperor"}, 1, false, nil},
+		{"A: three titles, Phipps has one in the series, tagged Phipps", []string{"Wraith Lord", "Wraith Queen", "Wraith Emperor"}, 1, true, nil},
+		{"C: two titles, Phipps has none in the series, untagged", []string{"Wraith Lord", "Wraith Queen"}, 0, false, nil},
+		{"C: two titles, Phipps has none in the series, tagged Phipps", []string{"Wraith Lord", "Wraith Queen"}, 0, true, nil},
+		// One title outside the series is other work (hasOtherWork), so only
+		// the uncorroborated series books keep the row from outweighing
+		// Phipps's two: they must not count as its own.
+		{"three titles plus one outside, Phipps has two in the series", []string{"Wraith Lord", "Wraith Queen", "Wraith Emperor"}, 2, false, []string{"Night Watch"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newJunkFixture(t)
+			f.mkSeries("Wraith Knight", "C. T. Phipps")
+			for i := range tc.phippsIn {
+				f.book(junkBookSpec{title: fmt.Sprintf("Phipps WK %d", i), path: fmt.Sprintf("/lib/ctp/wk%d", i), author: "C. T. Phipps", series: "Wraith Knight"})
+			}
+			f.book(junkBookSpec{title: "The Rules of Supervillainy", path: "/lib/ctp/rs", author: "C. T. Phipps"})
+			for i, ti := range tc.titles {
+				spec := junkBookSpec{title: ti, path: fmt.Sprintf("/lib/w/%d", i), author: "Wraith Knight", series: "Wraith Knight", vg: fmt.Sprintf("vgw-%d", i)}
+				if tc.tagged {
+					spec.tags = map[string]string{"artist": "C. T. Phipps"}
+				}
+				f.book(spec)
+			}
+			for i, ti := range tc.outside {
+				f.book(junkBookSpec{title: ti, path: fmt.Sprintf("/lib/w/out%d", i), author: "Wraith Knight"})
+			}
+			id := f.book(junkBookSpec{title: tc.titles[0] + " (copy)", path: "/lib/j/w", author: "read by narrator", vg: "vgw-0"})
+			require.False(t, f.index().seriesCorroborated[f.author("Wraith Knight")])
+			r := relinkRow(t, f, f.plan(), "read by narrator", id)
+			// Held: skipped, or the junk credit left for a hand decision
+			// (the tags naming Phipps confirm the row is junk). Never relinked.
+			require.NotEqual(t, "Wraith Knight", r.Proposed["author"], r.Reason)
+			require.NotEqual(t, "relink", r.Proposed["decision"], "held: %v %s", r.Proposed, r.Reason)
+		})
+	}
+}
+
+// An anthology series whose files name its editor: a row of its name is the
+// anthology's title, held.
 func TestJunkAuthorFixer_AnthologySeriesRowIsHeld(t *testing.T) {
 	f := newJunkFixture(t)
 	f.mkSeries("Dangerous Visions", "Dangerous Visions")
 	for _, ti := range []string{"Introduction One", "Introduction Two", "Afterword Three"} {
-		f.book(junkBookSpec{title: ti, path: "/lib/dv/" + ti, author: "Dangerous Visions", series: "Dangerous Visions"})
+		f.book(junkBookSpec{title: ti, path: "/lib/dv/" + ti, author: "Dangerous Visions", series: "Dangerous Visions",
+			tags: map[string]string{"artist": "Harlan Ellison"}})
 	}
 	f.book(junkBookSpec{title: "Aye and Gomorrah", path: "/lib/o/1", author: "Samuel R. Delany", series: "Dangerous Visions"})
 	f.book(junkBookSpec{title: "Dhalgren", path: "/lib/o/2", author: "Samuel R. Delany"})
@@ -389,8 +470,56 @@ func TestJunkAuthorFixer_AnthologySeriesRowIsHeld(t *testing.T) {
 		tags: map[string]string{"artist": "Dangerous Visions"}})
 	r := relinkRow(t, f, f.plan(), "read by narrator", id)
 	require.NotEqual(t, "Dangerous Visions", r.Proposed["author"], r.Reason)
-	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "held: %v %s", r.Proposed, r.Reason)
-	require.Contains(t, r.SkipReason, "Dangerous Visions")
+	require.NotEqual(t, "relink", r.Proposed["decision"], "held: %v %s", r.Proposed, r.Reason)
+}
+
+// corroborationReader is a junkAuthorCorroborationReader over fixed data.
+type corroborationReader struct {
+	files  map[string][]database.BookFile
+	states map[string][]database.MetadataFieldState
+	err    error
+}
+
+func (c corroborationReader) GetBookFiles(id string) ([]database.BookFile, error) {
+	return c.files[id], c.err
+}
+
+func (c corroborationReader) GetMetadataFieldStates(id string) ([]database.MetadataFieldState, error) {
+	return c.states[id], nil
+}
+
+// Corroboration reads only candidate rows (a book in the series of the row's
+// own name), accepts a tag or an agreeing provider match naming the row
+// (whole or as one of several credited names), and fails closed on a read
+// error.
+func TestJunkAuthorIndex_CorroborateNamedSeries(t *testing.T) {
+	s := 7
+	books := []database.BookCore{
+		{ID: "bw1", Title: "The Way of Shadows", AuthorID: new(1), SeriesID: &s},
+		{ID: "wk1", Title: "Wraith Lord", AuthorID: new(2), SeriesID: new(8)},
+		{ID: "gs1", Title: "Mercury Rising", AuthorID: new(3)},
+	}
+	idx := indexFrom([]database.Author{{ID: 1, Name: "Brent Weeks"}, {ID: 2, Name: "Wraith Knight"}, {ID: 3, Name: "Glynn Stewart"}},
+		books, []database.Series{{ID: 7, Name: "Brent Weeks"}, {ID: 8, Name: "Wraith Knight"}}, nil, nil)
+
+	tagged := corroborationReader{files: map[string][]database.BookFile{
+		"bw1": {{RawTags: map[string]string{"ALBUM_ARTIST": "Brent Weeks & Someone Else"}}},
+		"wk1": {{RawTags: map[string]string{"artist": "C. T. Phipps", "title": "Wraith Knight"}}},
+		"gs1": {{RawTags: map[string]string{"artist": "Glynn Stewart"}}},
+	}}
+	require.NoError(t, idx.corroborateNamedSeries(tagged))
+	require.Equal(t, map[int]bool{1: true}, idx.seriesCorroborated, "Glynn Stewart is no candidate; Wraith Knight's tags name Phipps")
+
+	provider := corroborationReader{states: map[string][]database.MetadataFieldState{
+		"bw1": {
+			{Field: "title", FetchedValue: new(`"The Way of Shadows"`)},
+			{Field: "author_name", FetchedValue: new(`"Brent Weeks"`)},
+		},
+	}}
+	require.NoError(t, idx.corroborateNamedSeries(provider))
+	require.True(t, idx.seriesCorroborated[1], "an agreeing provider match corroborates")
+
+	require.Error(t, idx.corroborateNamedSeries(corroborationReader{err: errors.New("disk gone")}))
 }
 
 // One shared word with another author's title does not make a title theirs:

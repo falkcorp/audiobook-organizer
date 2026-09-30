@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
@@ -331,6 +333,12 @@ type junkAuthorIndex struct {
 	// their books). Plan excludes the confirmed ones as targets; Replan
 	// excludes all of them except the row's planned target.
 	weakJunk map[int]authorjunk.Verdict
+	// seriesCorroborated: author id -> true when the row holds books in a
+	// series named for it (workKey equal) AND one of those books carries
+	// direct evidence naming the row as author (a file tag or a stored
+	// provider match). Set once by buildIndex (corroborateNamedSeries);
+	// nil (nothing corroborated) for an index built by indexFrom alone.
+	seriesCorroborated map[int]bool
 }
 
 func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
@@ -363,7 +371,149 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 		}
 		narratorRefs = refs.ByID
 	}
-	return indexFrom(authors, books, series, narrators, narratorRefs), nil
+	idx := indexFrom(authors, books, series, narrators, narratorRefs)
+	if err := idx.corroborateNamedSeries(store); err != nil {
+		return nil, err
+	}
+	return idx, nil
+}
+
+// junkAuthorCorroborationSample: books read per candidate row by
+// corroborateNamedSeries.
+const junkAuthorCorroborationSample = 5
+
+// junkAuthorCorroborationReader is what corroborateNamedSeries reads.
+type junkAuthorCorroborationReader interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+}
+
+// corroborateNamedSeries fills idx.seriesCorroborated. A row whose books sit
+// in a series named for it is either an author whose series was named after
+// them (Brent Weeks in series "Brent Weeks") or a work row filed in its own
+// series ("Wraith Knight" holding "Wraith Lord", "Wraith Queen" in series
+// "Wraith Knight"). The series structure cannot tell them apart; direct
+// evidence on the books can: the Brent Weeks files are tagged "Brent Weeks",
+// the Wraith Knight files name C. T. Phipps, and an anthology's name its
+// editors or story authors.
+//
+// Candidates are only the rows holding at least one book in a series whose
+// workKey is the row's own; for each, up to junkAuthorCorroborationSample of
+// those books (lowest book IDs first, so the verdict is stable) are read: two
+// reads per book (files, field states), so at most candidates x 5 x 2 reads,
+// on 8 workers (DB reads, not CPU). Any read error fails the index, and so
+// the plan, closed. The map is written once, after every worker is done.
+func (idx *junkAuthorIndex) corroborateNamedSeries(r junkAuthorCorroborationReader) error {
+	type candidate struct {
+		id    int
+		name  string
+		books []database.BookCore
+	}
+	var cands []candidate
+	for id, own := range idx.ownBooks {
+		a, ok := idx.authorsByID[id]
+		if !ok {
+			continue
+		}
+		k := workKey(a.Name)
+		if k == "" {
+			continue
+		}
+		var in []database.BookCore
+		for _, b := range own {
+			if b.SeriesID != nil && workKey(idx.seriesByID[*b.SeriesID].Name) == k {
+				in = append(in, b)
+			}
+		}
+		if len(in) == 0 {
+			continue
+		}
+		sort.Slice(in, func(i, j int) bool { return in[i].ID < in[j].ID })
+		if len(in) > junkAuthorCorroborationSample {
+			in = in[:junkAuthorCorroborationSample]
+		}
+		cands = append(cands, candidate{id: id, name: a.Name, books: in})
+	}
+	found := make([]bool, len(cands))
+	var g errgroup.Group
+	g.SetLimit(8)
+	for i := range cands {
+		g.Go(func() error {
+			ok, err := namesAuthorDirectly(r, cands[i].name, cands[i].books)
+			if err != nil {
+				return fmt.Errorf("corroborate named series of %q: %w", cands[i].name, err)
+			}
+			found[i] = ok
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	idx.seriesCorroborated = make(map[int]bool, len(cands))
+	for i, c := range cands {
+		if found[i] {
+			idx.seriesCorroborated[c.id] = true
+		}
+	}
+	return nil
+}
+
+// namesAuthorDirectly reports whether any of books carries direct evidence
+// naming name as author: an author file tag (titleRelinkFileTagKeys, the
+// keys decideBook reads as its file_tags source) or a stored provider author
+// whose fetched title agrees with the book's, either folding
+// (authorjunk.FoldKey) to name whole or as one of its credited names.
+func namesAuthorDirectly(r junkAuthorCorroborationReader, name string, books []database.BookCore) (bool, error) {
+	self := authorjunk.FoldKey(name)
+	if self == "" {
+		return false, nil
+	}
+	names := func(v string) bool {
+		if authorjunk.FoldKey(v) == self {
+			return true
+		}
+		for _, part := range narratorSplitRe.Split(v, -1) {
+			if authorjunk.FoldKey(part) == self {
+				return true
+			}
+		}
+		return false
+	}
+	for _, b := range books {
+		files, err := r.GetBookFiles(b.ID)
+		if err != nil {
+			return false, fmt.Errorf("read files of %s: %w", b.ID, err)
+		}
+		for i := range files {
+			for k, v := range files[i].RawTags {
+				if titleRelinkFileTagKeys[strings.ToLower(k)] && names(v) {
+					return true, nil
+				}
+			}
+		}
+		states, err := r.GetMetadataFieldStates(b.ID)
+		if err != nil {
+			return false, fmt.Errorf("read field states of %s: %w", b.ID, err)
+		}
+		var fetchedTitle, fetchedAuthor string
+		for i := range states {
+			switch states[i].Field {
+			case "title":
+				if v, ok := metastate.Decode(states[i].FetchedValue).(string); ok {
+					fetchedTitle = v
+				}
+			case "author_name":
+				if v, ok := metastate.Decode(states[i].FetchedValue).(string); ok {
+					fetchedAuthor = v
+				}
+			}
+		}
+		if fetchedAuthor != "" && providerTitleAgrees(fetchedTitle, b.Title) && names(fetchedAuthor) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // indexFrom builds the index from the library as read (buildIndex's reads,
@@ -696,7 +846,7 @@ func (idx *junkAuthorIndex) workTarget(name string, id int, bookTitle string, bo
 	if other := idx.workCreditedElsewhere(name, id); other != "" {
 		return junkRefuseWorkCredited, fmt.Sprintf("a book or series title in the library credited to %q, not a person", other)
 	}
-	if id > 0 && personname.LooksLikePersonName(name) && (idx.hasOtherWork(id, name) || idx.ownsNamedSeries(id, k)) {
+	if id > 0 && personname.LooksLikePersonName(name) && (idx.hasOtherWork(id, name) || idx.seriesCorroborated[id]) {
 		return "", ""
 	}
 	if library {
@@ -784,12 +934,11 @@ func (idx *junkAuthorIndex) workCreditedElsewhere(name string, id int) string {
 			}
 			// The row's own works titled for the name with more words ("American
 			// Gods 10th Anniversary" under an "American Gods" row) are the
-			// work's too. Its books in a series named exactly k are its own
-			// (the author-named swap artifact) unless two or more other
-			// authors write in that series too: then it is an anthology and
-			// the row is its title ("Dangerous Visions").
-			own := idx.seriesOtherAuthors(k, id) <= 1
-			if w := n + idx.namedWorks(id, k); idx.independentWorks(id, oid, k, "", w, own) >= w {
+			// work's too. Its books in a series named exactly k count as its
+			// own only when their files or provider match name it
+			// (idx.seriesCorroborated: Brent Weeks's tags say "Brent Weeks";
+			// a "Wraith Knight" work row's say C. T. Phipps).
+			if w := n + idx.namedWorks(id, k); idx.independentWorks(id, oid, k, "", w, idx.seriesCorroborated[id]) >= w {
 				return
 			}
 		}
@@ -833,8 +982,8 @@ func (idx *junkAuthorIndex) isReader(id int) bool {
 // take "Murder on the Orient Express" from Agatha Christie.
 //
 // ownSeries: a book in a series named exactly k1 counts as row id's work (its
-// title is still checked), since a series named for row id holding row id's
-// own books is the author-named series artifact, not evidence against it.
+// title is still checked). Callers pass idx.seriesCorroborated[id]: the
+// series is then the author-named artifact, backed by direct evidence.
 func (idx *junkAuthorIndex) independentWorks(id, other int, k1, k2 string, limit int, ownSeries bool) int {
 	named := func(x string) bool {
 		for _, k := range []string{k1, k2} {
@@ -917,47 +1066,6 @@ func (idx *junkAuthorIndex) seriesOnlyBy(k string, oid int) bool {
 		}
 	}
 	return true
-}
-
-// ownsNamedSeries reports whether row id holds the series whose workKey is k:
-// two or more of its distinct works are in it, more than any other author
-// has there, and at most one other author writes in it (strong junk rows and
-// readers left out; an anthology series such as "Dangerous Visions" has many
-// authors, and a row of its name is its title). Brent Weeks with every
-// book in a series "Brent Weeks" is that author-named swap artifact, not a
-// work; one Peter V. Brett book misfiled beside them does not take it.
-func (idx *junkAuthorIndex) ownsNamedSeries(id int, k string) bool {
-	mine := idx.seriesWorkCredits[k][id]
-	if mine < 2 || idx.seriesOtherAuthors(k, id) > 1 {
-		return false
-	}
-	for aid, n := range idx.seriesWorkCredits[k] {
-		if aid == id || n < mine {
-			continue
-		}
-		if _, junk := idx.strongJunk[aid]; junk || idx.isReader(aid) {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-// seriesOtherAuthors counts the authors other than row id credited with a
-// work in the series whose workKey is k, leaving out strong junk rows and
-// readers (neither is evidence of who wrote the series).
-func (idx *junkAuthorIndex) seriesOtherAuthors(k string, id int) int {
-	n := 0
-	for aid := range idx.seriesWorkCredits[k] {
-		if aid == id {
-			continue
-		}
-		if _, junk := idx.strongJunk[aid]; junk || idx.isReader(aid) {
-			continue
-		}
-		n++
-	}
-	return n
 }
 
 // inSeriesNamed reports whether any of row id's books is in a series whose
