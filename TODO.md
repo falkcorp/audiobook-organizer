@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.21 -->
+<!-- version: 10.73.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-28 -->
+<!-- last-edited: 2026-09-30 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,23 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **FLAKE-FPWINDOW** `TestFileWindow_ContextKill`
+      (`internal/fingerprint/window_exec_test.go`) failed once on Woodpecker
+      (pipeline 238, #3613's head) and passed on restart (241) with no code
+      change. Find the timing assumption (context cancel vs. subprocess exit)
+      and make it deterministic; done = 50 consecutive `-count=50 -race` passes
+      on the Mac agent.
+
+- [ ] **FLAKE-WDOGTOUCH** `TestWatchdog_TouchLivenessAloneKeepsOpAlive`
+      (`internal/operations/registry/touch_liveness_watchdog_test.go`) failed
+      on Woodpecker pipeline 287 (#3619 head 8e2d181f4, unrelated change):
+      the op touches liveness every 20ms against a 100ms ProgressTimeout, and
+      under `-race` with two test-rest runs sharing the Mac a 20ms sleep
+      overran 100ms, so the watchdog struck and canceled it. Widen the margin
+      (e.g. ProgressTimeout 1s, touch every 20ms, run 2s) or drive the
+      watchdog with an injected clock; done = 50 consecutive `-count=50
+      -race` passes under a parallel `make ci-woodpecker` load.
 
 - [ ] **AUTHOR-SNAPSHOT** The metadata apply never refreshes the `Book.Author`
       snapshot stored in the book row. `internal/metafetch/service_apply.go`
