@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.9.0
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-12
+// last-edited: 2026-09-30
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
@@ -296,9 +296,18 @@ export function BulkMetadataSearchDialog({
     const bookId = currentBook.id;
     const bookTitle = currentBook.title;
     try {
-      await api.applyMetadataCandidate(bookId, candidate, fields, writeToFiles);
+      const resp = await api.applyMetadataCandidate(bookId, candidate, fields, writeToFiles);
       if (isStale(session)) {
         refreshAfterStaleWrite();
+        return;
+      }
+      if (resp?.queued) {
+        // The scan is reading this book: the change is queued and lands as
+        // soon as it moves on. Information, not a warning; no Undo yet
+        // because nothing has been applied.
+        toast(`"${bookTitle}": ${resp.message}`, 'info');
+        setBookStatuses((prev) => new Map(prev).set(bookId, 'applied'));
+        advanceFrom(bookId, skipApplied);
         return;
       }
       toast(successMessage, 'success', {

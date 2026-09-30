@@ -3696,9 +3696,21 @@ export async function searchMetadata(
   return body.data;
 }
 
+/**
+ * Present on a single-book apply, fetch or write-back answered 202: the
+ * library scan was reading this book, so the server queued the change as a
+ * metadata.apply-when-scanned operation that runs as soon as the scan moves
+ * on. It is information, not a warning or an error: nothing was refused.
+ * `message` says so in words fit for an info toast.
+ */
+export interface QueuedBehindScan {
+  queued?: boolean;
+  operation_id?: string;
+}
+
 export async function fetchBookMetadata(
   bookId: string
-): Promise<{ message: string; book: Book; source: string }> {
+): Promise<{ message: string; book: Book; source: string } & QueuedBehindScan> {
   const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/fetch-metadata`, {
     method: 'POST',
   });
@@ -3751,7 +3763,7 @@ export async function applyMetadataCandidate(
   candidate: MetadataCandidate,
   fields?: string[],
   writeBack?: boolean
-): Promise<{ message: string; book: Book; source: string }> {
+): Promise<{ message: string; book: Book; source: string } & QueuedBehindScan> {
   const payload: { candidate: MetadataCandidate; fields: string[]; write_back?: boolean } = {
     candidate,
     fields: fields || [],
@@ -3780,7 +3792,7 @@ export async function markNoMatch(bookId: string): Promise<void> {
   }
 }
 
-export interface WriteBackMetadataResponse {
+export interface WriteBackMetadataResponse extends QueuedBehindScan {
   message: string;
   written_count: number;
 }
@@ -4824,7 +4836,13 @@ export async function getMetadataResults(
 export async function batchApplyCandidates(
   operationId: string,
   bookIds: string[]
-): Promise<{ applied: number }> {
+): Promise<{
+  applied: number;
+  /** Books the library scan was reading; each is applied by its queued operation. */
+  queued_book_ids?: string[];
+  queued_count?: number;
+  queued_operation_ids?: string[];
+}> {
   const response = await apiFetch(`${API_BASE}/metadata/batch-apply-candidates`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
