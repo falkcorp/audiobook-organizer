@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-09-29 -->
 
@@ -25,19 +25,23 @@ Placeholders used throughout (never commit the real values; this repo is public)
 | workflow | agent label | runs | measured time |
 |---|---|---|---|
 | `test-database` | `host=u1` | `internal/database` alone in 8 shards, `-timeout 50m` | see Sharding |
-| `test-server-scanner` | `host=llm1` | `internal/server`, `internal/scanner`, `internal/server/handlers/abs`, 4 shards each | see Sharding |
+| `test-server-scanner` | `host=u1` | `internal/server` and `internal/scanner` in 8 shards each, `internal/server/handlers/abs` in 6 | every shard under 55 s on U1 (538 s on llm1 with 4 each) |
 | `test-rest` | `host=u1` | every other package, including maintenance, registry and applygate | about 450–600 s |
 | `checks-lint` | `host=u0` | staticcheck, errcheck ratchet, mocks-check | 566 s as one `checks` workflow with cold caches; see The CI cache |
 | `checks-build` | `host=u1` | vet, fmt-check, sdkguard, bench-check, web tests | split out of `checks` on 2026-09-29 |
 | `coverage` | `host=u0` | coverage floor across the three test workflows | seconds |
 
-Placement follows two rules. First, packages whose tests decode audio (server,
-scanner and the decode set in `test-rest`) run only on the llm1 and U1 agents. The prod
-host must not decode, and its Docker image has no ffmpeg. Second, the three
-test workflows start together, so the wall time is roughly the slowest of them.
-An ssh-based prototype (`scripts/ci_remote.py`) measured this layout at
-**753 s** for a full run on 2026-09-26. A local `make ci` of the same commit
-on the loaded Mac took **2099 s**, and `internal/database` hit its 25m timeout.
+Placement follows three rules. First, packages whose tests decode audio
+(server, scanner and the decode set in `test-rest`) never run on the prod
+host, which must not decode; its Docker image has no ffmpeg. Second, the test
+workflows start together, so the wall time is roughly the slowest of them.
+Third, since 2026-09-29 no workflow runs on llm1: it is kept free for Whisper
+transcription, and its 10 cores were the slowest host (538 s for
+`test-server-scanner`, against under 55 s per shard on U1). The llm1 agent
+stays installed but idle, and can take a workflow again by changing that
+workflow's `host` label. An ssh-based prototype (`scripts/ci_remote.py`)
+measured an earlier layout at **753 s** for a full run on 2026-09-26; a local
+`make ci` of the same commit on the loaded Mac took **2099 s**.
 
 ### Sharding
 
@@ -224,9 +228,9 @@ golangci-lint caches (under `XDG_CACHE_HOME`) there.
   fork waits for a maintainer's approval before any agent runs it. Keep that
   setting. U1's shared `/tank/ci/cache` has the same exposure.
 
-### llm1: local backend
+### llm1: local backend (idle since 2026-09-29)
 
-This agent runs steps directly on macOS (`WOODPECKER_BACKEND=local`). The
+No workflow targets `host=llm1`; see Pipeline layout. This agent runs steps directly on macOS (`WOODPECKER_BACKEND=local`). The
 decode tests need the host's ffmpeg, ffprobe and fpcalc, and macOS has no
 Docker backend.
 

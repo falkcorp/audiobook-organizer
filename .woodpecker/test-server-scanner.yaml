@@ -1,24 +1,21 @@
 # file: .woodpecker/test-server-scanner.yaml
-# version: 1.5.1
+# version: 2.0.0
 # guid: 7a2d4e81-0c63-4f9b-b5e2-9d1f3a6c8e27
 # last-edited: 2026-09-29
 #
 # `make ci` test-short, part 2 of 3: internal/server, internal/scanner and
-# internal/server/handlers/abs.
-#
-# Measured on the macOS runner node, 2026-09-26, one process per package: abs
-# 620 s, scanner 265-285 s, server 190-230 s, so the workflow took as long as
-# abs alone. Each package now runs as 4 shard processes
-# (scripts/ci/go_test_shards.py). abs does not need a decoder; it is here to
-# keep test-rest short.
+# internal/server/handlers/abs, each as shard processes
+# (scripts/ci/go_test_shards.py).
 #
 # server and scanner decode audio in their tests (exec.LookPath("ffmpeg") and
-# similar), so this workflow must run on an agent that has ffmpeg, ffprobe and
-# fpcalc: the llm1 node (local backend on macOS). It must never run on the prod
-# host.
+# similar), so this runs on an agent with ffmpeg, ffprobe and fpcalc, never on
+# the prod host: the U1 agent (local backend, Linux amd64, 48 cores). It ran
+# on llm1 until 2026-09-29, where 12 shards on 10 cores took 538 s; llm1 is now
+# kept free for Whisper transcription. Measured on U1 with these shard counts:
+# every shard under 55 s.
 
 labels:
-  host: llm1
+  host: u1
 
 when:
   - event: [push, pull_request, manual]
@@ -38,13 +35,13 @@ steps:
     environment:
       GOTOOLCHAIN: go1.27.1
       # The local backend gives every pipeline a fresh HOME, so Go's default
-      # caches ($HOME/go/pkg/mod, which also holds the downloaded toolchain, and
-      # $HOME/Library/Caches/go-build) were re-created per run and never removed:
-      # 107 leftover workdirs held 117 GB on 2026-09-28 and filled the disk.
+      # caches (under $HOME, including the downloaded toolchain) were
+      # re-created per run and never removed: 107 leftover workdirs held 117 GB
+      # on llm1 on 2026-09-28 and filled the disk.
       # One host-wide cache is shared instead; Go locks both, so concurrent
       # pipelines are safe.
-      GOMODCACHE: /Users/jdfalk/ci/cache/gomod
-      GOCACHE: /Users/jdfalk/ci/cache/go-build
+      GOMODCACHE: /tank/ci/cache/gomod
+      GOCACHE: /tank/ci/cache/go-build
       # Every pipeline clones into a new random workdir
       # (woodpecker-local-<n>), and without -trimpath Go keys each package's
       # cache entry on its directory: nothing was ever reused and the cache
@@ -54,12 +51,12 @@ steps:
     commands:
       # python3 runs the cache cap in cleanup; fail here, loudly, if it is missing.
       - command -v ffmpeg && command -v ffprobe && command -v fpcalc && python3 --version
-      # Each package runs as 4 shard processes (scripts/ci/go_test_shards.py):
+      # Each package runs as shard processes (scripts/ci/go_test_shards.py):
       # one go test process per package ran its tests one after another, so
-      # this workflow took as long as abs alone (about 620 s here).
+      # this workflow took as long as abs alone (about 620 s on llm1).
       - >-
         python3 scripts/ci/go_test_shards.py --out cover.out
-        --pkg ./internal/server:4 --pkg ./internal/scanner:4 --pkg ./internal/server/handlers/abs:4
+        --pkg ./internal/server:8 --pkg ./internal/scanner:8 --pkg ./internal/server/handlers/abs:6
         -- -short -race -covermode=atomic -timeout 25m
       - awk -v wf=test-server-scanner 'NR>1{t+=$$2; if($$3>0)c+=$$2} END{printf "CI-COVERAGE workflow=%s covered=%d total=%d\n", wf, c, t}' cover.out
 
@@ -71,7 +68,7 @@ steps:
     when:
       - status: [success, failure]
     environment:
-      GOCACHE: /Users/jdfalk/ci/cache/go-build
+      GOCACHE: /tank/ci/cache/go-build
     commands:
       # Cap the shared GOCACHE by size, least recently used first. The age rule
       # this replaces (drop entries unused for a day) never fired: the cache
