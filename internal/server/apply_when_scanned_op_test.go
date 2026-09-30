@@ -1,5 +1,5 @@
 // file: internal/server/apply_when_scanned_op_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9e3b6a14-72c5-4f08-b1d9-58a0c3e7f216
 // last-edited: 2026-09-30
 
@@ -38,8 +38,13 @@ type waitingRunner struct {
 }
 
 func (r *waitingRunner) RunQueuedApply(ctx context.Context, q metadatahandler.QueuedApply, beat func(string)) error {
+	return r.RunQueuedOrganize(ctx, q.BookID, beat)
+}
+
+// RunQueuedOrganize is the same wait for library.organize-when-scanned.
+func (r *waitingRunner) RunQueuedOrganize(ctx context.Context, bookID string, beat func(string)) error {
 	close(r.dispatched)
-	hold, err := metadatahandler.WaitForBook(ctx, q.BookID, beat)
+	hold, err := metadatahandler.WaitForBook(ctx, bookID, beat)
 	if err != nil {
 		return err
 	}
@@ -60,6 +65,24 @@ func (r *waitingRunner) RunQueuedApply(ctx context.Context, q metadatahandler.Qu
 // Run swapped for a body that holds book-1's scan lock the way the scanner
 // does, so its ConcurrencyKey, Writes and priority are production's.
 func TestApplyWhenScanned_RunsDuringARunningScanAsSoonAsTheBookFrees(t *testing.T) {
+	runsDuringScan(t, applyWhenScannedOpID, func(ctx context.Context, s *Server) error {
+		_, err := s.EnqueueApplyWhenScanned(ctx, metadatahandler.QueuedApply{Kind: metadatahandler.QueuedFetch, BookID: "book-1"})
+		return err
+	})
+}
+
+// The same property for library.organize-when-scanned, which differs from
+// the metadata def in ID and Plugin ("library"): a gate keyed on either must
+// not hold the queued organize behind library.scan.
+func TestOrganizeWhenScanned_RunsDuringARunningScanAsSoonAsTheBookFrees(t *testing.T) {
+	runsDuringScan(t, organizeWhenScannedOpID, func(ctx context.Context, s *Server) error {
+		_, err := s.EnqueueOrganizeWhenScanned(ctx, "book-1")
+		return err
+	})
+}
+
+func runsDuringScan(t *testing.T, opID string, enqueue func(context.Context, *Server) error) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -96,7 +119,7 @@ func TestApplyWhenScanned_RunsDuringARunningScanAsSoonAsTheBookFrees(t *testing.
 	require.NoError(t, reg.RegisterOp(scanDef))
 
 	runner := &waitingRunner{dispatched: make(chan struct{}), applied: make(chan struct{}), reg: reg}
-	s := &Server{opRegistry: reg, applyWhenScannedHandler: runner}
+	s := &Server{opRegistry: reg, applyWhenScannedHandler: runner, queuedOrganizeRunner: runner}
 	require.NoError(t, s.RegisterApplyWhenScannedOp(reg))
 	reg.Start(ctx)
 	defer close(endScan)
@@ -110,12 +133,11 @@ func TestApplyWhenScanned_RunsDuringARunningScanAsSoonAsTheBookFrees(t *testing.
 	}
 	require.True(t, reg.LibraryScanRunning())
 
-	_, err = s.EnqueueApplyWhenScanned(ctx, metadatahandler.QueuedApply{Kind: metadatahandler.QueuedFetch, BookID: "book-1"})
-	require.NoError(t, err)
+	require.NoError(t, enqueue(ctx, s))
 	select {
 	case <-runner.dispatched:
 	case <-time.After(10 * time.Second):
-		t.Fatal("metadata.apply-when-scanned was not dispatched while library.scan ran")
+		t.Fatalf("%s was not dispatched while library.scan ran", opID)
 	}
 	select {
 	case <-runner.applied:
