@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.68.0
+// version: 2.69.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 
 package server
 
@@ -272,7 +272,10 @@ type Server struct {
 	repairFixers *repairs.Registry
 	// scanStandDownGateOverride replaces the scan stand-down gate in tests; nil
 	// in production (see scanGate in metadata_scan_standdown.go).
-	scanStandDownGateOverride metadataScanGate
+	scanStandDownGateOverride opsregistry.ScanStandDownGate
+	// applyWhenScannedHandler runs metadata.apply-when-scanned's single-book
+	// kinds; set when the metadata handler is wired (wire_handlers.go).
+	applyWhenScannedHandler queuedApplyRunner
 
 	// opRegistrationErrs collects failures from the op-registrar loop in
 	// NewServer. NewServer returns *Server with no error (47 call sites, most

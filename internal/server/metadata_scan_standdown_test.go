@@ -1,7 +1,7 @@
 // file: internal/server/metadata_scan_standdown_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: c83e1a5f-02d7-4b69-8f4e-5a91d6c70b28
-// last-edited: 2026-09-13
+// last-edited: 2026-09-30
 
 package server
 
@@ -10,25 +10,20 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
 // sdGate stands in for the registry's scan stand-down. acquireErr models a scan
-// that will not park; tryErr models a scan running at request time.
+// that will not park.
 type sdGate struct {
-	acquireErr, tryErr error
-	acquired, tries    int
-	renewFail          bool
-	renews, released   atomic.Int32
+	acquireErr error
+	acquired   int
+	renewFail  bool
+	renews     atomic.Int32
 }
 
 func (g *sdGate) AcquireScanStandDown(_ context.Context, _, _ string) (func(), error) {
@@ -41,13 +36,6 @@ func (g *sdGate) AcquireScanStandDown(_ context.Context, _, _ string) (func(), e
 func (g *sdGate) RenewScanStandDown(string) bool {
 	g.renews.Add(1)
 	return !g.renewFail
-}
-func (g *sdGate) TryAcquireScanStandDown(string, string) (func(), error) {
-	g.tries++
-	if g.tryErr != nil {
-		return nil, g.tryErr
-	}
-	return func() { g.released.Add(1) }, nil
 }
 
 // sdReporter is a registry reporter carrying an op id, which is what makes the
@@ -115,54 +103,4 @@ func TestBatchApplyCachedOp_ProceedsOnceScanParks(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not initialized", "must reach the dependency check after the gate")
 	require.Equal(t, 1, gate.acquired, "the op must hold the stand-down before applying")
-}
-
-func TestBatchApplyCandidates_409WhileScanRuns(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	gate := &sdGate{tryErr: opsregistry.ErrScanRunning}
-	s := &Server{scanStandDownGateOverride: gate}
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/metadata/batch-apply-candidates",
-		strings.NewReader(`{"operation_id":"op","book_ids":["b1"],"dry_run":false}`))
-	c.Request.Header.Set("Content-Type", "application/json")
-	s.handleBatchApplyCandidates(c)
-	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
-	require.Contains(t, w.Body.String(), "a library scan is running; try again when it finishes")
-	require.Equal(t, 1, gate.tries)
-}
-
-// batch-apply-candidates renews its request hold once per book, and once the
-// hold is lost no book is applied (a scan may already be running again). The
-// lost case would reach the nil fetch service if the checkpoint did not stop it.
-func TestBatchApplyCandidates_RenewsPerBookAndStopsWhenHoldLost(t *testing.T) {
-	withBulkApplyCapServer(t, 100)
-	gin.SetMode(gin.TestMode)
-	run := func(t *testing.T, gate *sdGate) *httptest.ResponseRecorder {
-		store := dbmocks.NewMockStore(t)
-		store.EXPECT().GetOperationResults("op").Return(nil, nil)
-		s := &Server{store: store, scanStandDownGateOverride: gate}
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/metadata/batch-apply-candidates",
-			strings.NewReader(`{"operation_id":"op","book_ids":["b1","b2","b3"],"dry_run":false}`))
-		c.Request.Header.Set("Content-Type", "application/json")
-		s.handleBatchApplyCandidates(c)
-		return w
-	}
-	t.Run("renews per book", func(t *testing.T) {
-		gate := &sdGate{}
-		w := run(t, gate)
-		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-		require.EqualValues(t, 3, gate.renews.Load(), "one renewal per book")
-		require.EqualValues(t, 1, gate.released.Load())
-	})
-	t.Run("lost hold applies nothing", func(t *testing.T) {
-		gate := &sdGate{renewFail: true}
-		w := run(t, gate)
-		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-		require.Contains(t, w.Body.String(), opsregistry.ErrScanStandDownLost.Error())
-		require.NotContains(t, w.Body.String(), `"applied":1`)
-		require.EqualValues(t, 1, gate.released.Load())
-	})
 }

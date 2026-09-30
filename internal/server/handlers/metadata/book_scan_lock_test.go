@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 85df29b0-0d44-40e8-bbab-726ab6928927
 // last-edited: 2026-09-30
 
@@ -8,6 +8,7 @@ package metadatahandler_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -17,8 +18,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
+	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
 )
 
 type fakeEnqueuer struct {
@@ -74,10 +75,13 @@ func TestSingleBookHandlers_QueueInsteadOf409WhenTheScannerHoldsTheBook(t *testi
 			if strings.Contains(w.Body.String(), "SCAN_RUNNING") || strings.Contains(w.Body.String(), "try again") {
 				t.Fatalf("the response still carries a scan warning: %s", w.Body.String())
 			}
-			var resp map[string]any
-			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			var env struct {
+				Data map[string]any `json:"data"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 				t.Fatal(err)
 			}
+			resp := env.Data
 			if resp["queued"] != true || resp["operation_id"] != "op-queued-1" || resp["book"] == nil {
 				t.Fatalf("202 body missing queued/operation_id/book: %v", resp)
 			}
@@ -114,5 +118,72 @@ func TestSingleBookHandlers_WaitForTheScannerWithinTheBound(t *testing.T) {
 	}
 	if n := scanlock.Books.Held(); n != 0 {
 		t.Fatalf("the request left %d scan lock(s) held", n)
+	}
+}
+
+// The queued op waits for exactly as long as the scanner holds the book,
+// beating so its progress watchdog sees a live wait, and runs the same core
+// the request would have the moment the book frees. The strict mock proves
+// nothing touches the book's files while the scanner holds it.
+func TestRunQueuedApply_WaitsForTheBookThenRuns(t *testing.T) {
+	defer metadatahandler.SetQueuedWaitBeatForTest(10 * time.Millisecond)()
+	h, d := newHandler(t)
+
+	scan, err := scanlock.Books.LockSet(context.Background(), []string{"b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beat := make(chan struct{})
+	var once sync.Once
+	done := make(chan error, 1)
+	go func() {
+		done <- h.RunQueuedApply(context.Background(), metadatahandler.QueuedApply{
+			Kind: metadatahandler.QueuedWriteBack, BookID: "b1", SegmentIDs: []string{"s1"},
+		}, func(string) { once.Do(func() { close(beat) }) })
+	}()
+	<-beat // at least one beat while the scanner held the book
+	select {
+	case err := <-done:
+		t.Fatalf("RunQueuedApply returned (%v) while the scanner held the book", err)
+	default:
+	}
+
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
+	d.mfs.EXPECT().WriteBackMetadataForBook("b1", [][]string{{"s1"}}).Return(1, nil)
+	scan.Release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunQueuedApply: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunQueuedApply never ran after the scanner released the book")
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("the queued apply left %d scan lock(s) held", n)
+	}
+}
+
+// batch-update writes only the database, so it takes no scan lock and never
+// waits for, or refuses because of, a scan: it answers at once even for a
+// book the scanner holds. (The scanner's merge keeps the fields it wrote.)
+func TestBatchUpdate_NeverWaitsOrRefusesForAScan(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetBookByID("b1").Return(nil, errors.New("not found")).Maybe()
+
+	scan, err := scanlock.Books.LockSet(context.Background(), []string{"b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scan.Release()
+
+	start := time.Now()
+	w := doReq(h.BatchUpdateMetadata, http.MethodPost, "/api/v1/metadata/batch-update",
+		map[string]any{"updates": []map[string]any{{"book_id": "b1", "updates": map[string]any{"title": "T"}}}}, nil)
+	if w.Code == http.StatusConflict || strings.Contains(w.Body.String(), "SCAN_RUNNING") {
+		t.Fatalf("batch-update refused for a scan: %d %s", w.Code, w.Body.String())
+	}
+	if el := time.Since(start); el > 2*time.Second {
+		t.Fatalf("batch-update waited %s for the scanner", el)
 	}
 }

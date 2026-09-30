@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown_checkpoint_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1f6a9c3e-8b27-4d05-9e41-7c2d0a5b8f63
-// last-edited: 2026-09-26
+// last-edited: 2026-09-30
 
 package registry_test
 
@@ -156,15 +156,11 @@ func TestScanStandDown_ScanDroppedAtPickupResumesOnRelease(t *testing.T) {
 		t.Fatalf("EnqueueOp scan: %v", err)
 	}
 	// Wait until the dispatcher has claimed the scan (stub handle, no worker).
-	// TryAcquire refuses on a claimed stub and leaves nothing registered.
+	// LibraryScanRunning counts a claimed stub and registers nothing.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		rel, err := r.TryAcquireScanStandDown("probe", "probe")
-		if errors.Is(err, registry.ErrScanRunning) {
+		if r.LibraryScanRunning() {
 			break
-		}
-		if err == nil {
-			rel() // not claimed yet; let the dispatcher proceed
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("dispatcher never claimed the scan")
