@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-09-30
 
@@ -145,8 +145,9 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			entry.UpdatedAt = now
 			// Record history for clearing an override.
 			if fmt.Sprintf("%v", oldOverrideValue) != fmt.Sprintf("%v", nil) {
-				mss.recordChange(id, field, "override", "user_edit", oldOverrideValue, nil)
-				noteOverride(field)
+				if mss.recordChange(id, field, "override", "user_edit", oldOverrideValue, nil) {
+					noteOverride(field)
+				}
 			}
 		} else {
 			if len(override.Value) > 0 {
@@ -157,8 +158,9 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 				ApplyOverrideToPayload(payload, field, val)
 				// Record history for setting an override.
 				if fmt.Sprintf("%v", oldOverrideValue) != fmt.Sprintf("%v", val) {
-					mss.recordChange(id, field, "override", "user_edit", oldOverrideValue, val)
-					noteOverride(field)
+					if mss.recordChange(id, field, "override", "user_edit", oldOverrideValue, val) {
+						noteOverride(field)
+					}
 				}
 			} else if override.Locked != nil {
 				entry.OverrideLocked = *override.Locked
@@ -347,8 +349,9 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 
 			// Record history only when the value actually changed.
 			if fmt.Sprintf("%v", oldValue) != fmt.Sprintf("%v", value) {
-				mss.recordChange(id, field, "override", "user_edit", oldValue, value)
-				noteOverride(field)
+				if mss.recordChange(id, field, "override", "user_edit", oldValue, value) {
+					noteOverride(field)
+				}
 			}
 		} else {
 			slog.Debug("UpdateAudiobook extractor for field returned false/nil", "field", field)
@@ -407,13 +410,22 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// A "manual" history row for EVERY field this edit changed, clears
 	// included (database.RecordBookEditHistory). A queued metadata apply reads
 	// this history to refuse overwriting a user's later edit; a changed field
-	// with no row would be overwritten silently. The edit has committed, so a
-	// failure here is reported, as the metadata-state save below is.
+	// with no row would be overwritten silently.
+	//
+	// Stamped AFTER the write commits (not with `now`, taken before it): a
+	// queued apply's mark read between the two would otherwise sort after
+	// these rows and miss this edit.
+	//
+	// The edit HAS committed, so a history failure does not abort the rest:
+	// the metadata state, cache invalidation and the handler's file write-back
+	// still run, and the request succeeds (a 500 for a landed edit would make
+	// the user retry an edit that then changes, and records, nothing). The
+	// failure is logged at Error, as batch.UpdateAudiobooks reports it.
 	if pre != nil {
 		if _, herr := database.RecordBookEditHistory(svc.store, pre, updatedBook,
-			database.ChangeTypeManual, "manual", now, overrideRecorded); herr != nil {
-			editHistoryLog.Error("UpdateAudiobook %s: change history not recorded: %v", logger.SanitizeLogValue(id), herr)
-			return nil, fmt.Errorf("the edit was saved but its change history was not fully recorded: %w", herr)
+			database.ChangeTypeManual, "manual", time.Now(), overrideRecorded); herr != nil {
+			editHistoryLog.Error("UpdateAudiobook %s: the edit was saved but its change history was not fully recorded "+
+				"(a queued metadata apply may not see it): %v", logger.SanitizeLogValue(id), herr)
 		}
 	}
 

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-09-02
+// last-edited: 2026-09-30
 //
 // Private utilities needed by the audiobooks service package. Most still mirror
 // equivalent helpers in internal/server/ (stringPtr, boolPtr, decodeRawValue,
@@ -197,9 +197,12 @@ func newMetadataStateSvc(db metadataStateStore) *metadataStateSvc {
 	return &metadataStateSvc{db: db}
 }
 
-func (mss *metadataStateSvc) recordChange(bookID, field, changeType, source string, previousValue, newValue any) {
+// recordChange records one override history row and reports whether it was
+// recorded. A caller that skips the field elsewhere because this row covers it
+// (UpdateAudiobook's column diff) must only do so on true.
+func (mss *metadataStateSvc) recordChange(bookID, field, changeType, source string, previousValue, newValue any) bool {
 	if mss.db == nil {
-		return
+		return false
 	}
 	prev, _ := metastate.Encode(previousValue)
 	next, _ := metastate.Encode(newValue)
@@ -214,7 +217,9 @@ func (mss *metadataStateSvc) recordChange(bookID, field, changeType, source stri
 	}
 	if err := mss.db.RecordMetadataChange(record); err != nil {
 		slog.Warn("failed to record metadata change for /", "bookID", bookID, "field", field, "err", err)
+		return false
 	}
+	return true
 }
 
 // --- path helpers -----------------------------------------------------------

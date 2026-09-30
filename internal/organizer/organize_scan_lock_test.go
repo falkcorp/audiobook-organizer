@@ -1,5 +1,5 @@
 // file: internal/organizer/organize_scan_lock_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c3a9e15-2f84-4d6b-a0c1-58e2b94d7f36
 // last-edited: 2026-09-30
 
@@ -292,6 +292,29 @@ func TestOrganizeBooks_UnsettledCopyIsSkippedBusy(t *testing.T) {
 	}
 	if movedFrom(src) {
 		t.Fatal("the original was moved")
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
+	}
+}
+
+// The retry locks the set the STORED row resolves to. The listing handed in
+// is stale (its copy differs from the stored row's); re-deriving the set
+// from it on every try would never settle and skip the book busy.
+func TestOrganizeBooks_RetryLocksTheStoredRowsCopy(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	src := filepath.Join(root, "incoming", "stale.m4b")
+	b := addInPlaceBook(t, store, "stale", "Fresh Title", src, filled(150, 5), nil, 0)
+	svc.ResolveLibraryCopy = func(book *database.Book) (*database.Book, bool) {
+		cp := *book
+		cp.ID = "copy-of-" + book.Title
+		return &cp, true
+	}
+	listed := *b
+	listed.Title = "Stale Title"
+	st := svc.organizeBooksOpts(context.Background(), []database.Book{listed}, nil, &noopLogger{}, "", true)
+	if st.Organized+st.ReOrganized != 1 {
+		t.Fatalf("a stale listing kept the pair from settling: %+v", st)
 	}
 	if n := scanlock.Books.Held(); n != 0 {
 		t.Fatalf("left %d scan lock(s) held", n)

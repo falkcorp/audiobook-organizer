@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_history_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f1a8c34-2d9b-4e70-a5c3-0b7e4d2f9a51
 // last-edited: 2026-09-30
 
@@ -7,6 +7,7 @@ package audiobooks_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -52,4 +53,84 @@ func TestUpdateAudiobook_ChangeOfAnUnlistedFieldRefusesAQueuedApply(t *testing.T
 	after, err := store.GetBookChangeHistory(book.ID, 1000)
 	require.NoError(t, err)
 	require.Len(t, after, len(before), "a no-op PUT recorded history")
+}
+
+// historyFailStore fails RecordMetadataChange for rows fail picks.
+type historyFailStore struct {
+	*database.PebbleStore
+	fail func(*database.MetadataChangeRecord) bool
+}
+
+func (s historyFailStore) RecordMetadataChange(r *database.MetadataChangeRecord) error {
+	if s.fail(r) {
+		return errors.New("history store down")
+	}
+	return s.PebbleStore.RecordMetadataChange(r)
+}
+
+func editFixture(t *testing.T) (*database.PebbleStore, *database.Book) {
+	t.Helper()
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/e.m4b", Format: "m4b"})
+	require.NoError(t, err)
+	return store, book
+}
+
+// The column rows are stamped AFTER the write commits, so they are never
+// older than the override rows the same edit wrote before it (a queued
+// apply's mark taken between the two must not miss the edit).
+func TestUpdateAudiobook_ManualRowsAreStampedAfterOverrideRows(t *testing.T) {
+	store, book := editFixture(t)
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"format": "mp3", "isbn13": "9780000000002"})
+	require.NoError(t, err)
+	history, err := store.GetBookChangeHistory(book.ID, 100)
+	require.NoError(t, err)
+	var overrideAt, manualAt int64
+	for _, r := range history {
+		switch r.ChangeType {
+		case "override":
+			overrideAt = max(overrideAt, r.ChangedAt.UnixNano())
+		case database.ChangeTypeManual:
+			manualAt = r.ChangedAt.UnixNano()
+		}
+	}
+	require.NotZero(t, overrideAt)
+	require.NotZero(t, manualAt)
+	require.GreaterOrEqual(t, manualAt, overrideAt, "a manual row is older than the edit's override rows")
+}
+
+// An override row that fails to record must not make the column diff skip
+// the field: it then gets its manual row.
+func TestUpdateAudiobook_FailedOverrideRowStillGetsAColumnRow(t *testing.T) {
+	store, book := editFixture(t)
+	fs := historyFailStore{store, func(r *database.MetadataChangeRecord) bool { return r.ChangeType == "override" }}
+	_, err := audiobooks.NewAudiobookUpdateService(fs).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"isbn13": "9780000000002"})
+	require.NoError(t, err)
+	history, err := store.GetBookChangeHistory(book.ID, 100)
+	require.NoError(t, err)
+	found := false
+	for _, r := range history {
+		if r.Field == "isbn13" && r.ChangeType == database.ChangeTypeManual {
+			found = true
+		}
+	}
+	require.True(t, found, "isbn13 has no history row at all: %+v", history)
+}
+
+// A history failure after the row committed does not fail the edit: the
+// request succeeds (the edit landed) and the rest of the save still runs.
+func TestUpdateAudiobook_HistoryFailureDoesNotFailALandedEdit(t *testing.T) {
+	store, book := editFixture(t)
+	fs := historyFailStore{store, func(*database.MetadataChangeRecord) bool { return true }}
+	got, err := audiobooks.NewAudiobookUpdateService(fs).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"format": "mp3"})
+	require.NoError(t, err, "a landed edit was reported as failed")
+	require.Equal(t, "mp3", got.Format)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.Equal(t, "mp3", row.Format)
 }
