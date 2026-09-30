@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -27,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -423,8 +423,7 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 	// that cannot answer (a test double) leaves the Narrator-text count; a
 	// read error fails the index (and so the plan) closed.
 	if rs := database.AsNarratorRefStore(store); rs == nil {
-		slog.Debug("repair-junk-authors: store cannot count book_narrators credits; narrator counts use the Narrator field only",
-			"store", fmt.Sprintf("%T", store))
+		logger.New("maintenance").Debug("repair-junk-authors: store %T cannot count book_narrators credits; narrator counts use the Narrator field only", store)
 	} else {
 		refs, err := rs.GetAllNarratorRefs()
 		if err != nil {
