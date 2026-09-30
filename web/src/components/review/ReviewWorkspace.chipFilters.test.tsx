@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
 // last-edited: 2026-09-30
 //
@@ -57,19 +57,21 @@ function emptyRow(
 const reviewable = [
   row('m1', { is_fresh: false }),
   row('m2', {}, 0.5), // below every preset's confidence floor
-  row('n1', { status: 'no_match' }), // hidden by Hide no-match
+  // Stale, but owner-marked no match: the server leaves it out of `stale`
+  // (the candidate fetch never searches it), so the stale chip must too.
+  row('n1', { status: 'no_match', is_fresh: false }), // hidden by Hide no-match
 ];
 const unreviewable = [
   emptyRow('e1', 'no_candidates', { is_fresh: false }),
   emptyRow('e2', 'no_candidates'),
-  emptyRow('r1', 'resolved_no_candidates', { review_status: 'no_match' }),
+  emptyRow('r1', 'resolved_no_candidates', { review_status: 'no_match', is_fresh: false }),
   emptyRow('d1', 'decode_error', { error_message: 'stored candidate will not decode' }),
 ];
 const summary = {
   matched: 2,
   no_match: 1,
   errors: 1,
-  stale: 2, // m1 + e1
+  stale: 2, // m1 + e1; n1 and r1 are stale but owner-marked no match
   unreviewable: 6,
   unreviewable_by_cause: { orphaned: 3, no_candidates: 2, decode_errors: 1 },
   resolved_no_candidates: 1,
