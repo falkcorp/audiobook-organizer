@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.117.0
+// version: 1.118.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-30
 
@@ -1387,6 +1387,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	lockGaveUpStart := scanLockGaveUpCount.Load()
 	lockKeptStart := scanLockKeptFields.Load()
 	lockGroupCappedStart := scanLockGroupCapped.Load()
+	lockGroupErrStart := scanLockGroupErrs.Load()
 
 	// Computed ONCE for the run, not per file: a cutoff that drifts while the
 	// scan walks 40k files would make the gate's verdict depend on where in the
@@ -1449,8 +1450,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 	// PER-BOOK SCAN LOCK (scan_book_lock.go). Round 0 only tries each book's
 	// lock; a book an apply is writing is requeued here and the worker moves
-	// on. Rounds 1..scanLockRounds wait, each bounded by scanLockWait. The
-	// list is only touched under deferredMu.
+	// on. Rounds 1..scanLockRounds wait, each under ONE deadline shared by all
+	// of its books (scanLockWait from the round's start). The list is only
+	// touched under deferredMu.
 	var deferredMu sync.Mutex
 	var deferred []int
 	// requeueOrGiveUp sends idx to the next round, or -- past the last one --
@@ -1470,7 +1472,8 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		return false
 	}
 
-	processBook := func(idx, round int) {
+	// waitCtx is the round's shared deadline (unused in round 0).
+	processBook := func(idx, round int, waitCtx context.Context) {
 		semaphore <- struct{}{} // Acquire
 		requeued := false
 		defer func() {
@@ -1517,7 +1520,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		// skip check above stays outside: a skipped book reads and writes
 		// nothing, so it needs no lock. From here to the end of this
 		// function an apply or write-back of this book waits for us.
-		hold, lockOutcome := acquireScanBookLock(ctx, &books[idx], round, true)
+		hold, lockOutcome := acquireScanBookLock(ctx, waitCtx, &books[idx], round, true)
 		switch lockOutcome {
 		case scanLockBusy:
 			requeued = requeueOrGiveUp(idx, round, "an apply or write-back was writing this book")
@@ -1947,11 +1950,15 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			ctxErr = ctx.Err()
 			break
 		}
-		wg.Go(func() { processBook(idx, 0) })
+		wg.Go(func() { processBook(idx, 0, ctx) })
 	}
 	wg.Wait()
 	// Books an apply was writing when their turn came, and books whose save
-	// found a row they did not hold. Each round waits (bounded) for the lock.
+	// found a row they did not hold. Each round waits for the locks under ONE
+	// deadline shared by all of its books: the pool runs them a few at a
+	// time, so a per-book clock would stretch the wait to scanLockWait x
+	// (books / workers). A book still busy when it reaches a worker after the
+	// deadline is recorded busy at once.
 	for round := 1; round <= scanLockRounds && ctx.Err() == nil; round++ {
 		deferredMu.Lock()
 		list := deferred
@@ -1961,10 +1968,12 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			break
 		}
 		scanLog.Info("scan: %d book(s) were being written by an apply; processing them now (round %d)", len(list), round)
+		roundCtx, cancelRound := context.WithTimeout(ctx, scanLockWait)
 		for _, idx := range list {
-			wg.Go(func() { processBook(idx, round) })
+			wg.Go(func() { processBook(idx, round, roundCtx) })
 		}
 		wg.Wait()
+		cancelRound()
 	}
 	// Only a canceled scan leaves books here; count them as processed so the
 	// progress total still closes.
@@ -1998,6 +2007,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	}
 	if d := scanLockGroupCapped.Load() - lockGroupCappedStart; d > 0 {
 		scanLog.Warn("scan summary: %d version group(s) had more than %d members and were not locked whole", d, scanLockMaxGroup)
+	}
+	if d := scanLockGroupErrs.Load() - lockGroupErrStart; d > 0 {
+		scanLog.Warn("scan summary: %d version-group lookup(s) failed while locking a book; those books were treated as busy (retried, or left for the next scan)", d)
 	}
 	if ownFailures {
 		failures.ReportSummary(scanLog)
@@ -3602,6 +3614,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					if err := requireHeld(ctx, existing.ID); err != nil {
 						return err
 					}
+					if err := requirePathRowHeld(ctx, book.FilePath); err != nil {
+						return err
+					}
 					linkedGroup, ok := linkVersionGroup(existing.ID, groupID, existingPrimary)
 					if !ok {
 						// The link did not land, so there is no group to join.
@@ -3695,6 +3710,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					// the same rule when it does not land: no group on the new
 					// row either, rather than an orphan group of one.
 					if err := requireHeld(ctx, matchedBook.ID); err != nil {
+						return err
+					}
+					if err := requirePathRowHeld(ctx, book.FilePath); err != nil {
 						return err
 					}
 					linkedGroup, ok := linkVersionGroup(matchedBook.ID, groupID, matchedPrimary)
