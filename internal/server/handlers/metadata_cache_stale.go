@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
 // last-edited: 2026-09-30
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
@@ -30,10 +31,13 @@ import (
 
 var metadataCacheLog = logger.New("handlers.metadata-cache")
 
-// cacheRowBookReader is the book-store slice loadCacheRows needs.
+// cacheRowBookReader is the book-store slice loadCacheRows needs: book reads,
+// plus what metabatch.ResolveCandidateSearchQuery reads (files and live
+// authors) to decide whether a row is searchable at all.
 type cacheRowBookReader interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBooksByIDs(ids []string) ([]database.Book, error)
+	metabatch.SearchQueryReader
 }
 
 // cacheRowCandidateReader is the metadata-cache slice loadCacheRows needs.
@@ -48,6 +52,10 @@ type loadedCacheRow struct {
 	sum   metafetch.MetadataCacheSummary
 	book  *database.Book
 	entry *metafetch.MetadataCandidateCache
+	// searchable is metabatch.ResolveCandidateSearchQuery(...).Usable: false
+	// when the candidate fetch would skip the book with "no usable title"
+	// instead of searching it.
+	searchable bool
 }
 
 // cacheRowSet is what loadCacheRows read.
@@ -120,6 +128,12 @@ func loadCacheRows(ctx context.Context, store cacheRowBookReader, svc cacheRowCa
 			if cerr == nil {
 				set.rows[i].entry = entry
 			}
+			// The same resolver fetchCandidateForBook runs before it searches.
+			// For an ordinary title it is a text check; it reads the book's
+			// files (and at most its authors) only for a title that needs
+			// corroborating or a fallback, which is why it runs here in the
+			// pool rather than in the serial pass that applies cacheRowStale.
+			set.rows[i].searchable = metabatch.ResolveCandidateSearchQuery(store, set.rows[i].book).Usable
 			return nil // a per-entry failure skips that row, never the whole batch
 		})
 	}
@@ -143,19 +157,26 @@ func cacheRowLastChecked(entry *metafetch.MetadataCandidateCache, fetchedAt time
 
 // cacheRowStale reports whether a loaded row counts as stale: its last search
 // is at or before freshCutoff (now - MetadataCacheTTL), AND a refetch would
-// actually search for it.
+// actually search for it. It is the ONE stale rule: the summary's `stale`
+// count, each row's `stale` flag (which the web's stale chip view reads and
+// does not re-derive), and the refetch-all-stale set all come from it.
 //
-// The second half excludes books the owner marked "no match". The candidate
-// fetch skips those before it asks any provider
-// (fetchCandidateForBook: metafetch.IsMarkedNoMatch -- "do not spend provider
-// quota searching for, or offer, a match they rejected"), so counting them
-// stale made a backlog no refetch could ever clear: the chip would never reach
-// zero. ClearMetadataNoMatch makes such a book eligible again, and it is
-// counted from then on.
+// The second half excludes the two kinds of book the candidate fetch skips
+// before it asks any provider (fetchCandidateForBook). Counting them made a
+// backlog no refetch could ever clear -- the chip never reached zero and every
+// click re-queued them:
+//
+//   - Books the owner marked "no match" (metafetch.IsMarkedNoMatch -- "do not
+//     spend provider quota searching for, or offer, a match they rejected").
+//     ClearMetadataNoMatch makes such a book eligible again.
+//   - Books with no usable search title (metabatch.ResolveCandidateSearchQuery
+//     not Usable: an empty, placeholder or chapter-fragment title with no
+//     transcribed or folder fallback). A retitle or a transcription makes it
+//     searchable, and it is counted from then on.
 //
 // A row with no readable cache entry is dated off its summary's FetchedAt.
 func cacheRowStale(r loadedCacheRow, freshCutoff time.Time) bool {
-	if metafetch.IsMarkedNoMatch(r.book.MetadataReviewStatus) {
+	if metafetch.IsMarkedNoMatch(r.book.MetadataReviewStatus) || !r.searchable {
 		return false
 	}
 	return !cacheRowLastChecked(r.entry, r.sum.FetchedAt).After(freshCutoff)

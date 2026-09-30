@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.137.0
+// version: 2.138.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-30
 
@@ -4334,6 +4334,14 @@ export interface CandidateResult {
    * claims, and only one of them should put a warning in front of a reviewer.
    */
   is_fresh?: boolean;
+  /**
+   * Whether the server's summary counts this row in `stale`: past the TTL AND
+   * a refetch would search it (not owner-marked no match, has a usable search
+   * title). Computed by the same server predicate as the count and the
+   * {stale: true} refetch set, so the stale chip lists exactly these rows.
+   * Not the negation of is_fresh. Absent when the row has no age.
+   */
+  stale?: boolean;
 }
 
 export interface BatchFetchResponse {

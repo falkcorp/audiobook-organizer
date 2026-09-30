@@ -1,5 +1,5 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
 // last-edited: 2026-09-30
 //
@@ -388,7 +388,8 @@ export function QueueRail({
             <Tooltip
               title={
                 `${summary.stale.toLocaleString()} books were last searched more than 30 days ago ` +
-                '(books you marked no match are not counted: they are never searched again). ' +
+                '(not counted: books you marked no match, and books with no usable title to search for, ' +
+                'since a refetch never searches either). ' +
                 'They are still reviewable, but the source may have changed since. Click to see them.'
               }
             >

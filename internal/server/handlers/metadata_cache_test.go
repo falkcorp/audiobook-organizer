@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //
@@ -453,7 +453,9 @@ func TestGetCacheReviewResults_FlagsStaleRows(t *testing.T) {
 	svc.EXPECT().ListCachedSummaries(mock.Anything).Return(summaries, nil)
 
 	store.EXPECT().GetBooksByIDs(mock.Anything).
-		Return([]database.Book{{ID: "fresh"}, {ID: "stale"}}, nil)
+		// Real titles: a book with no usable search title is never refetched,
+		// so it is not counted stale (cacheRowStale).
+		Return([]database.Book{{ID: "fresh", Title: "Fresh Book"}, {ID: "stale", Title: "Stale Book"}}, nil)
 	store.EXPECT().GetBookFiles(mock.Anything).Return(nil, nil).Maybe()
 
 	raw, err := json.Marshal(map[string]any{"title": "T"})

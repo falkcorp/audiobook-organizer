@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_buckets_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e04b3d7-6c81-4a25-b3f0-72d9a1c86e53
-// last-edited: 2026-09-12
+// last-edited: 2026-09-30
 
 // The review rail's chips were reporting a different library than the one the
 // reviewer was looking at. Four separate defects, all visible in one screenshot
@@ -82,20 +82,20 @@ func TestGetCacheReviewResults_BucketsAndStaleness(t *testing.T) {
 	store.EXPECT().GetBooksByIDs(mock.Anything).Return([]database.Book{
 		// Nobody has ruled on this one: status defaults to "matched", which
 		// means PENDING review, not reviewed.
-		{ID: "pending-fresh"},
+		{ID: "pending-fresh", Title: "Pending Fresh"},
 		// Confirmed against the book's own transcribed audio by
 		// metafetch/service_apply.go. A verdict, not a pending row.
-		{ID: "audio-confirmed", MetadataReviewStatus: strptr("audio_confirmed")},
+		{ID: "audio-confirmed", Title: "Audio Confirmed", MetadataReviewStatus: strptr("audio_confirmed")},
 		// Ruled on, but its candidates are gone -- the shape an empty refetch
 		// used to produce before metafetch.cacheSearchResponse stopped
 		// overwriting on empty.
-		{ID: "resolved-empty", MetadataReviewStatus: strptr("matched")},
+		{ID: "resolved-empty", Title: "Resolved Empty", MetadataReviewStatus: strptr("matched")},
 		// Never ruled on, no candidates, and long past the TTL. This is the row
 		// the stale chip could not see.
-		{ID: "stale-empty"},
+		{ID: "stale-empty", Title: "Stale Empty"},
 		// Has candidates from a fetch two months ago, but the last SEARCH was
 		// just now and came back empty, so the candidates were preserved.
-		{ID: "preserved"},
+		{ID: "preserved", Title: "Preserved"},
 	}, nil)
 	store.EXPECT().GetBookByID(mock.Anything).Return(nil, nil).Maybe()
 	store.EXPECT().GetBookFiles(mock.Anything).Return(nil, nil).Maybe()

@@ -1,5 +1,5 @@
 // file: internal/metabatch/candidates.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-30
 //
@@ -86,6 +86,14 @@ type CandidateResult struct {
 	// three-month-old candidate needs to be able to tell those apart.
 	FetchedAt *time.Time `json:"fetched_at,omitempty"`
 	IsFresh   *bool      `json:"is_fresh,omitempty"`
+	// Stale is whether the metadata review summary counts this row in its
+	// `stale` total (handlers.cacheRowStale): past the TTL AND a refetch would
+	// search it. Not the negation of IsFresh -- a no-match-marked book or one
+	// with no usable search title can be old without being stale. The review
+	// page's stale chip lists exactly the rows with Stale true, so the chip's
+	// number and its rows come from one server predicate. Pointer for the
+	// same reason as IsFresh: absent means "not served from the cache".
+	Stale *bool `json:"stale,omitempty"`
 	// CandidateHash is metafetch.CandidateHash(*Candidate), served by the
 	// cache review list so every review-page apply button can pin exactly the
 	// record the owner looked at (metafetch.CandidatePin.ContentHash). Empty
