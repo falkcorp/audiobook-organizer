@@ -1,5 +1,5 @@
 # file: .woodpecker/test-database.yaml
-# version: 1.1.1
+# version: 1.2.0
 # guid: 3f1c9a52-8e47-4b0d-a6c1-5d2e7f9b0c14
 # last-edited: 2026-09-29
 #
@@ -22,7 +22,13 @@ labels:
   host: u1
 
 when:
-  - event: [push, pull_request, manual]
+  # One run per commit. A branch push with an open PR used to fire both a
+  # `push` and a `pull_request` pipeline for the same SHA, doubling the load
+  # on the agents; the doubled U1 load timed out web tests (2026-09-29). Pushes
+  # run only on main; PRs, and `make ci-woodpecker` (manual), cover branches.
+  - event: push
+    branch: main
+  - event: [pull_request, manual]
 
 clone:
   - name: clone

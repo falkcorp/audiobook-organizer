@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-09-29 -->
 
@@ -21,6 +21,12 @@ Placeholders used throughout (never commit the real values; this repo is public)
 | `/srv/appdata` | the NVMe app-data area on U0 (not `/var/lib`, which is on the HDD pool) |
 
 ## Pipeline layout
+
+**Triggers.** Every workflow runs on `push` to `main`, on `pull_request`, and
+on `manual` runs. A push to any other branch starts nothing: with an open PR
+the `pull_request` event already runs that commit, and running both doubled
+the agents' load (the doubled U1 load timed out web tests, 2026-09-29). To
+test a branch with no PR, use `make ci-woodpecker`.
 
 | workflow | agent label | runs | measured time |
 |---|---|---|---|

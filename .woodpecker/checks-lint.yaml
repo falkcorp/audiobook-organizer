@@ -1,5 +1,5 @@
 # file: .woodpecker/checks-lint.yaml
-# version: 2.1.0
+# version: 2.2.0
 # guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
 # last-edited: 2026-09-29
 #
@@ -28,7 +28,13 @@ labels:
   host: u0
 
 when:
-  - event: [push, pull_request, manual]
+  # One run per commit. A branch push with an open PR used to fire both a
+  # `push` and a `pull_request` pipeline for the same SHA, doubling the load
+  # on the agents; the doubled U1 load timed out web tests (2026-09-29). Pushes
+  # run only on main; PRs, and `make ci-woodpecker` (manual), cover branches.
+  - event: push
+    branch: main
+  - event: [pull_request, manual]
 
 clone:
   - name: clone
