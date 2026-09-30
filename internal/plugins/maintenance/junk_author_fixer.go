@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -314,7 +314,7 @@ type junkAuthorIndex struct {
 	titleWorkCredits  map[string]map[int]int
 	seriesWorkCredits map[string]map[int]int
 	// authorWorkKeys: author id -> workKey of every title and series name the
-	// library credits to it (idx.independentWorks).
+	// library credits to it -> whether it is a series name (idx.independentWorks).
 	authorWorkKeys map[int]map[string]bool
 	// readsForOthers / readsOwn: authorjunk.FoldKey of a name -> books whose
 	// Narrator names it and whose primary author is someone else / is that
@@ -419,12 +419,15 @@ func indexFrom(authors []database.Author, books []database.BookCore, series []da
 		id    int
 		title string
 	}
-	seenWork := map[workCredit]bool{}
-	bumpWork := func(m map[string]map[int]int, key string, id int, title string) {
-		if key == "" || seenWork[workCredit{key, id, title}] {
+	// One seen set per map: a book titled after its own series ("Cthulhu
+	// Armageddon" in series "Cthulhu Armageddon") is one title work AND one
+	// series work, and a shared set dropped the second.
+	seenTitleWork, seenSeriesWork := map[workCredit]bool{}, map[workCredit]bool{}
+	bumpWork := func(m map[string]map[int]int, seen map[workCredit]bool, key string, id int, title string) {
+		if key == "" || seen[workCredit{key, id, title}] {
 			return
 		}
-		seenWork[workCredit{key, id, title}] = true
+		seen[workCredit{key, id, title}] = true
 		bump(m, key, id)
 	}
 	for i := range books {
@@ -467,16 +470,16 @@ func indexFrom(authors []database.Author, books []database.BookCore, series []da
 				keys = map[string]bool{}
 				idx.authorWorkKeys[aid] = keys
 			}
-			if tk != "" {
-				keys[tk] = true
+			if _, have := keys[tk]; tk != "" && !have {
+				keys[tk] = false
 			}
-			bumpWork(idx.titleWorkCredits, tk, aid, tk)
+			bumpWork(idx.titleWorkCredits, seenTitleWork, tk, aid, tk)
 			if b.SeriesID != nil {
 				sk := workKey(idx.seriesByID[*b.SeriesID].Name)
 				if sk != "" {
 					keys[sk] = true
 				}
-				bumpWork(idx.seriesWorkCredits, sk, aid, tk)
+				bumpWork(idx.seriesWorkCredits, seenSeriesWork, sk, aid, tk)
 			}
 		}
 		if b.Narrator != nil {
@@ -693,7 +696,7 @@ func (idx *junkAuthorIndex) workTarget(name string, id int, bookTitle string, bo
 	if other := idx.workCreditedElsewhere(name, id); other != "" {
 		return junkRefuseWorkCredited, fmt.Sprintf("a book or series title in the library credited to %q, not a person", other)
 	}
-	if id > 0 && personname.LooksLikePersonName(name) && idx.hasOtherWork(id, name) {
+	if id > 0 && personname.LooksLikePersonName(name) && (idx.hasOtherWork(id, name) || idx.ownsNamedSeries(id, k)) {
 		return "", ""
 	}
 	if library {
@@ -762,15 +765,31 @@ func (idx *junkAuthorIndex) workCreditedElsewhere(name string, id int) string {
 		if id > 0 {
 			ok := workKey(o.Name)
 			if idx.seriesWorkCredits[ok][id]+idx.titleWorkCredits[ok][id] > 0 {
-				if idx.independentWorks(id, oid, k, ok, 1) > 0 && idx.independentWorks(oid, id, ok, k, 1) == 0 {
+				if idx.independentWorks(id, oid, k, ok, 1, false) > 0 && idx.independentWorks(oid, id, ok, k, 1, false) == 0 {
 					return // row id is the writer; the other row is its swapped work
 				}
 				best = oid
 				return
 			}
-			// The row's own works named for the name ("American Gods 10th
-			// Anniversary" under an "American Gods" row) are the work's too.
-			if w := n + idx.namedWorks(id, k); idx.independentWorks(id, oid, k, "", w) >= w {
+			// A series of two or more works, every one of them credited to the
+			// other author, with none of row id's books in it: the series is
+			// theirs and row id is a work named after it ("Cthulhu Armageddon"
+			// holding three series-less titles; C. T. Phipps's series). Row id's
+			// own books in the series (Brent Weeks in a series "Brent Weeks")
+			// make it the swap artifact instead, and one misfiled book (C. T.
+			// Phipps in a series "Glynn Stewart") never decides it.
+			if inSeries >= 2 && idx.seriesOnlyBy(k, oid) && !idx.inSeriesNamed(id, k) {
+				best = oid
+				return
+			}
+			// The row's own works titled for the name with more words ("American
+			// Gods 10th Anniversary" under an "American Gods" row) are the
+			// work's too. Its books in a series named exactly k are its own
+			// (the author-named swap artifact) unless two or more other
+			// authors write in that series too: then it is an anthology and
+			// the row is its title ("Dangerous Visions").
+			own := idx.seriesOtherAuthors(k, id) <= 1
+			if w := n + idx.namedWorks(id, k); idx.independentWorks(id, oid, k, "", w, own) >= w {
 				return
 			}
 		}
@@ -805,11 +824,18 @@ func (idx *junkAuthorIndex) isReader(id int) bool {
 // independentWorks counts row id's distinct works (title workKeys), up to
 // limit, that are named for neither k1 nor k2 (a title or series equal to
 // either, or holding either as whole words) and are not works the library
-// credits to row other (a title or series that is, or holds as whole words,
-// one of other's titles or series names): the body of work that says row id
-// is a writer and not other's folder dump ("Cthulhu Armageddon"'s "Wraith
-// Knight Three Worlds, Book" is C. T. Phipps's "Wraith Knight").
-func (idx *junkAuthorIndex) independentWorks(id, other int, k1, k2 string, limit int) int {
+// credits to row other (a title or series that holds two or more words in a
+// row of one of other's titles or series names, or a single word of five or
+// more letters that is one of other's series names): the body of work that
+// says row id is a writer and not other's folder dump ("Cthulhu Armageddon"'s
+// "Wraith Knight Three Worlds, Book" is C. T. Phipps's "Wraith Knight"). One
+// shared word with a title is no evidence: Laura Thompson's "Murder" does not
+// take "Murder on the Orient Express" from Agatha Christie.
+//
+// ownSeries: a book in a series named exactly k1 counts as row id's work (its
+// title is still checked), since a series named for row id holding row id's
+// own books is the author-named series artifact, not evidence against it.
+func (idx *junkAuthorIndex) independentWorks(id, other int, k1, k2 string, limit int, ownSeries bool) int {
 	named := func(x string) bool {
 		for _, k := range []string{k1, k2} {
 			if k != "" && (x == k || properWordPart(k, x)) {
@@ -827,11 +853,12 @@ func (idx *junkAuthorIndex) independentWorks(id, other int, k1, k2 string, limit
 		for i := range words {
 			for j := i + 1; j <= len(words); j++ {
 				g := strings.Join(words[i:j], " ")
-				if j-i == 1 && len(g) < 5 {
-					continue // "the", "war": too common to name a work
+				isSeries, have := theirs[g]
+				if !have {
+					continue
 				}
-				if theirs[g] {
-					return true
+				if j-i >= 2 || (isSeries && len(g) >= 5) {
+					return true // one word only as a series name: "Mistborn", not "Murder" or "war"
 				}
 			}
 		}
@@ -844,7 +871,8 @@ func (idx *junkAuthorIndex) independentWorks(id, other int, k1, k2 string, limit
 			continue
 		}
 		if b.SeriesID != nil {
-			if sk := workKey(idx.seriesByID[*b.SeriesID].Name); sk != "" && (named(sk) || otherWork(sk)) {
+			sk := workKey(idx.seriesByID[*b.SeriesID].Name)
+			if sk != "" && !(ownSeries && sk == k1) && (named(sk) || otherWork(sk)) {
 				continue
 			}
 		}
@@ -861,24 +889,86 @@ func (idx *junkAuthorIndex) independentWorks(id, other int, k1, k2 string, limit
 }
 
 // namedWorks counts row id's distinct works (workOfTitle) whose title holds
-// k with more words ("American Gods 10th Anniversary") or whose series is or
-// holds k. A title that is k exactly is left out: a book titled with a
-// person's own name is a folder parsed the wrong way round ("Roald Dahl"
-// filed as the title of Roald Dahl's books), not a work of that name.
+// k with more words ("American Gods 10th Anniversary"). A title that is k
+// exactly is left out: a book titled with a person's own name is a folder
+// parsed the wrong way round ("Roald Dahl" filed as the title of Roald Dahl's
+// books), not a work of that name. So is a book's series: a series named k
+// holding row id's books is the author-named swap artifact (Brent Weeks's
+// books in a series "Brent Weeks"), and counting it for the work would hand
+// an author's whole shelf to whoever else has one book in that series.
 func (idx *junkAuthorIndex) namedWorks(id int, k string) int {
-	named := func(x string) bool { return x != "" && (x == k || properWordPart(k, x)) }
 	seen := map[string]bool{}
 	for _, b := range idx.ownBooks[id] {
 		tk := workKey(b.Title)
-		isNamed := properWordPart(k, tk)
-		if !isNamed && b.SeriesID != nil {
-			isNamed = named(workKey(idx.seriesByID[*b.SeriesID].Name))
-		}
-		if w := workOfTitle(tk); isNamed && w != "" {
+		if w := workOfTitle(tk); properWordPart(k, tk) && w != "" {
 			seen[w] = true
 		}
 	}
 	return len(seen)
+}
+
+// seriesOnlyBy reports whether every book in a series whose workKey is k is
+// credited to row oid, leaving out strong junk rows (the rows this fixer
+// repairs: their credits are not authorship).
+func (idx *junkAuthorIndex) seriesOnlyBy(k string, oid int) bool {
+	for aid := range idx.seriesWorkCredits[k] {
+		if _, junk := idx.strongJunk[aid]; aid != oid && !junk {
+			return false
+		}
+	}
+	return true
+}
+
+// ownsNamedSeries reports whether row id holds the series whose workKey is k:
+// two or more of its distinct works are in it, more than any other author
+// has there, and at most one other author writes in it (strong junk rows and
+// readers left out; an anthology series such as "Dangerous Visions" has many
+// authors, and a row of its name is its title). Brent Weeks with every
+// book in a series "Brent Weeks" is that author-named swap artifact, not a
+// work; one Peter V. Brett book misfiled beside them does not take it.
+func (idx *junkAuthorIndex) ownsNamedSeries(id int, k string) bool {
+	mine := idx.seriesWorkCredits[k][id]
+	if mine < 2 || idx.seriesOtherAuthors(k, id) > 1 {
+		return false
+	}
+	for aid, n := range idx.seriesWorkCredits[k] {
+		if aid == id || n < mine {
+			continue
+		}
+		if _, junk := idx.strongJunk[aid]; junk || idx.isReader(aid) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// seriesOtherAuthors counts the authors other than row id credited with a
+// work in the series whose workKey is k, leaving out strong junk rows and
+// readers (neither is evidence of who wrote the series).
+func (idx *junkAuthorIndex) seriesOtherAuthors(k string, id int) int {
+	n := 0
+	for aid := range idx.seriesWorkCredits[k] {
+		if aid == id {
+			continue
+		}
+		if _, junk := idx.strongJunk[aid]; junk || idx.isReader(aid) {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// inSeriesNamed reports whether any of row id's books is in a series whose
+// workKey is k.
+func (idx *junkAuthorIndex) inSeriesNamed(id int, k string) bool {
+	for _, b := range idx.ownBooks[id] {
+		if b.SeriesID != nil && workKey(idx.seriesByID[*b.SeriesID].Name) == k {
+			return true
+		}
+	}
+	return false
 }
 
 // fileLabelWords: words that number or label a file rather than name a work.
