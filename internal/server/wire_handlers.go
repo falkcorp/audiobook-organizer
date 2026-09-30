@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.37.0
+// version: 2.38.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 
 package server
 
@@ -12,6 +12,7 @@ import (
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	admindebug "github.com/falkcorp/audiobook-organizer/internal/server/handlers/admindebug"
@@ -88,15 +89,30 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		mcScanActive = func() bool { return handlers.LibraryScanActive(st.ListActiveOperationsV2) }
 	}
 	metaCacheH := handlers.NewMetadataCacheHandler(s.storeForWiring(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool, s.opRegistry, mcScanActive)
+	// Preview and apply of a single-book organize resolve a protected
+	// original to its library copy through ONE function -- metafetch's
+	// read-only lookup, the one the metadata apply renames through -- so the
+	// preview shows the row and target the apply acts on. It reads
+	// s.metadataFetchService at call time; nil (metafetch not wired) means
+	// every book organizes as itself, as it did before.
+	resolveLibraryCopy := organizer.LibraryCopyResolver(func(b *database.Book) (*database.Book, bool) {
+		if s.metadataFetchService == nil {
+			return b, true
+		}
+		return s.metadataFetchService.ExistingLibraryCopy(b)
+	})
+	organizePreviewSvc := NewOrganizePreviewService(s.storeForWiring())
+	organizePreviewSvc.ResolveLibraryCopy = resolveLibraryCopy
 	organizeH := handlers.NewOrganizeHandler(
 		s.storeForWiring(),
 		NewRenameService(s.storeForWiring()),
-		NewOrganizePreviewService(s.storeForWiring()),
+		organizePreviewSvc,
 		s.organizeService,
 		s.writeBackBatcher,
 		s.eventBus,
 		config.AppConfig.AutoOrganize,
 	)
+	organizeH.SetLibraryCopyResolver(resolveLibraryCopy)
 	filesystemH := handlers.NewFilesystemHandler(
 		s.storeForWiring(),
 		s.filesystemService,

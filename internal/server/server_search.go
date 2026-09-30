@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 
 package server
 
@@ -19,6 +19,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
@@ -340,6 +342,23 @@ func (h *serverOrganizeHooks) OnCollision(currentBookID, occupantPath string) {
 			return
 		}
 		if occupant == nil || occupant.ID == currentBookID {
+			return
+		}
+		// Two versions of one book are not a duplicate pair. The dedup
+		// engine drops same-version-group pairs everywhere (PairEligibility's
+		// version_group_same, the file-hash check in CheckBook); this hook
+		// writes candidates directly, so it checks for itself. The organizer
+		// no longer fires the hook for a book's own library copy, but a
+		// caller outside it could, and a pending candidate pairing a book
+		// with its own copy is what the 2026-09-30 organize failure left in
+		// the dedup queue.
+		current, curErr := h.server.store.GetBookByID(currentBookID)
+		if curErr != nil {
+			logger.New("organize-collision").Warn("organize-collision hook: could not read book %s to check its version group; filing the candidate anyway: %v",
+				logger.SanitizeLogValue(currentBookID), curErr)
+		} else if organizer.SameVersionGroup(current, occupant) {
+			logger.New("organize-collision").Info("organize-collision hook: %s and occupant %s are versions of one book; no dedup candidate",
+				logger.SanitizeLogValue(currentBookID), logger.SanitizeLogValue(occupant.ID))
 			return
 		}
 		sim := 1.0

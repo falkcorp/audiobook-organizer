@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 
 package metafetch
 
@@ -1235,6 +1235,21 @@ func (mfs *Service) MarkNoMatch(id string) error {
 		return fmt.Errorf("audiobook not found")
 	}
 	return nil
+}
+
+// ExistingLibraryCopy is existingLibraryCopy for callers outside this package:
+// the single-book organize preview and apply (organizer.LibraryCopyResolver).
+// It never creates a copy. Both organize endpoints resolve a protected
+// original to its library copy through this, so they act on the same row the
+// metadata apply renamed. Until 2026-09-30 organize ran on the original, and
+// its same-hash check reported the book's own library copy as a foreign
+// duplicate ("duplicate file already organized at ...") and filed a dedup
+// candidate pairing the two.
+func (mfs *Service) ExistingLibraryCopy(book *database.Book) (*database.Book, bool) {
+	if mfs == nil || book == nil {
+		return book, true
+	}
+	return mfs.existingLibraryCopy(book)
 }
 
 // existingLibraryCopy resolves the row file work may touch WITHOUT creating

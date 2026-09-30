@@ -1,7 +1,7 @@
 // file: internal/organizer/preview.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
-// last-edited: 2026-09-12
+// last-edited: 2026-09-30
 
 package organizer
 
@@ -37,6 +37,12 @@ type PreviewResponse struct {
 	IsProtected   bool          `json:"is_protected"`
 	HasBookFiles  bool          `json:"has_book_files"`
 	BookFileCount int           `json:"book_file_count"`
+	// BookID is the row the preview describes and the apply will organize.
+	// It differs from the requested id when that book is a protected
+	// original with a library copy: then it is the copy, and
+	// LibraryCopyOf names the original that was asked for.
+	BookID        string `json:"book_id"`
+	LibraryCopyOf string `json:"library_copy_of,omitempty"`
 }
 
 // PreviewService builds a read-only preview of what a single-book organize would do.
@@ -51,6 +57,12 @@ type PreviewService struct {
 	// Returns (authorName, seriesName).
 	// Set by the server package after construction.
 	ResolveAuthorAndSeriesNames func(*database.Book) (string, string)
+
+	// ResolveLibraryCopy maps a protected original to its existing library
+	// copy -- the SAME resolver the organize apply uses (see
+	// LibraryCopyResolver), so the preview shows the row and target the
+	// apply acts on. Nil means every book previews as itself.
+	ResolveLibraryCopy LibraryCopyResolver
 }
 
 // NewPreviewService creates a new PreviewService.
@@ -75,10 +87,20 @@ func NewPreviewService(db Store) *PreviewService {
 
 // PreviewOrganize computes all steps without executing them.
 func (ops *PreviewService) PreviewOrganize(bookID string) (*PreviewResponse, error) {
-	book, err := ops.db.GetBookByID(bookID)
-	if err != nil || book == nil {
+	requested, err := ops.db.GetBookByID(bookID)
+	if err != nil || requested == nil {
 		return nil, fmt.Errorf("audiobook not found: %s", bookID)
 	}
+	// Preview the row the apply will organize. For a protected original
+	// with a library copy that is the copy: every read below -- file rows,
+	// narrators, the target path -- must use its id, not the requested one,
+	// or the preview shows the copy's path over the original's files.
+	book := ResolveOrganizeSubject(ops.ResolveLibraryCopy, requested)
+	libraryCopyOf := ""
+	if book.ID != requested.ID {
+		libraryCopyOf = requested.ID
+	}
+	bookID = book.ID
 
 	org := NewOrganizer(&config.AppConfig)
 	org.SetStore(ops.db) // AuthorID/SeriesID must resolve — see OrganizerStore
@@ -128,6 +150,15 @@ func (ops *PreviewService) PreviewOrganize(bookID string) (*PreviewResponse, err
 	}
 
 	var steps []PreviewStep
+
+	if libraryCopyOf != "" {
+		steps = append(steps, PreviewStep{
+			Action:      "info",
+			Description: fmt.Sprintf("This book is in a protected path, and another version of it is already in the library (book %s). Organize acts on that library version; the protected original is not modified.", book.ID),
+			From:        requested.FilePath,
+			To:          book.FilePath,
+		})
+	}
 
 	// Author gate (mirrors PerformOrganize and ReOrganizeInPlace): never
 	// propose a rename/copy whose target bakes the "Unknown Author"
@@ -241,6 +272,8 @@ func (ops *PreviewService) PreviewOrganize(bookID string) (*PreviewResponse, err
 		IsProtected:   protected,
 		HasBookFiles:  len(activeBookFiles) > 0,
 		BookFileCount: len(activeBookFiles),
+		BookID:        book.ID,
+		LibraryCopyOf: libraryCopyOf,
 	}, nil
 }
 
