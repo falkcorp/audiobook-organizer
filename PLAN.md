@@ -1,5 +1,5 @@
 <!-- file: PLAN.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: a3e90137-2ca9-4148-9870-411a5cfa3283 -->
 <!-- last-edited: 2026-09-30 -->
 
@@ -226,8 +226,11 @@ Rules:
    row, keep `cur` and do not overlay the scanned value. Log once per book at
    Info ("kept N fields another writer changed during the scan").
 
-   If `cur.FilePath` differs from the snapshot, return `ErrSkipBookWrite`: the
-   row moved under the scan.
+   If `cur.FilePath` differs from the snapshot, the row moved under the scan:
+   keep `cur`'s file identity (FilePath, Format, FileHash, FileSize) and still
+   merge the tag-derived columns under the rule above. (An earlier draft said
+   "skip the write"; review of f27ffc24e chose keep-cur, which is what the
+   code does.)
 
    This covers writers that do not take L0 (maintenance ops, AI parse, the
    write-back batcher) and is independent of the lock. With no snapshot
@@ -357,7 +360,7 @@ grain mismatch in the worker comment), so they are hit hardest.
   values.
 - **T5: the safety net.** An unlocked `ModifyBook` changes Narrator between the
   tag read and the merge. The narrator survives and other fields still
-  overlay. A changed FilePath means no write.
+  overlay. A changed FilePath keeps the row's current file identity.
 - **T6: move (a).** **Red first:** at `1ec4cc4e0`, a walk-listed path deleted
   before processing mints a ghost row. Green: skipped, `vanishedMidScan` = 1,
   no row.
