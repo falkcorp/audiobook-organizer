@@ -1,5 +1,5 @@
 // file: internal/organizer/library_copy.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f3144b62-7dfb-4ee1-95d2-ea314e1fde3c
 // last-edited: 2026-09-30
 
@@ -18,11 +18,11 @@ import (
 // book itself. ok=false means the book is protected and has no usable copy
 // yet, and the caller organizes the original, which creates one.
 //
-// Production wires metafetch's read-only lookup (Service.ExistingLibraryCopy),
-// the same one the metadata apply pipeline uses to decide which row's files it
-// may touch, so the organize preview, the organize apply and the metadata
-// apply all agree on which row is "the library copy". A resolver must never
-// create anything.
+// Production wires metafetch's Service.ExistingLibraryCopyOfFile: the metadata
+// apply pipeline's lookup (same root/protected gates, same clean-sibling
+// rules), narrowed by IsLibraryCopyOf to a copy of THIS book's file, so the
+// organize preview and the organize apply agree on the row and never act on a
+// different edition of the book. A resolver must never create anything.
 type LibraryCopyResolver func(book *database.Book) (libraryCopy *database.Book, ok bool)
 
 // ResolveOrganizeSubject applies resolve to book and returns the row to
@@ -51,6 +51,50 @@ func SameVersionGroup(a, b *database.Book) bool {
 	}
 	return *a.VersionGroupID != "" && *a.VersionGroupID == *b.VersionGroupID
 }
+
+// IsLibraryCopyOf reports whether candidate is a library copy of original's
+// OWN file -- not merely another version of the same book. A version group
+// can hold several editions (an iTunes m4b and an mp3 rip, say); organizing
+// the m4b must never act on the mp3 edition just because it is the group's
+// clean member under RootDir.
+//
+// The test is content identity. original's identities are its FileHash (a
+// protected original's file is never rewritten, so this is stable) and its
+// OriginalFileHash. candidate's are FileHash, OriginalFileHash and
+// OrganizedFileHash. They match when the two sets share a non-empty value.
+// The extra candidate fields matter because a library copy's FileHash does
+// NOT stay equal to the original's: CreateOrganizedVersion sets it (via
+// ApplyOrganizedFileMetadata) to the hash of the freshly copied bytes, but
+// the copy's tags are then written, and the next scan re-hashes the file and
+// overwrites FileHash (applyScannerFields). OrganizedFileHash (the hash at
+// organize time) and OriginalFileHash (inherited from the original and
+// preserved by every rescan) still carry the original's content hash.
+func IsLibraryCopyOf(original, candidate *database.Book) bool {
+	if original == nil || candidate == nil {
+		return false
+	}
+	var ids []string
+	for _, h := range []*string{original.FileHash, original.OriginalFileHash} {
+		if h != nil && *h != "" {
+			ids = append(ids, *h)
+		}
+	}
+	for _, h := range []*string{candidate.FileHash, candidate.OriginalFileHash, candidate.OrganizedFileHash} {
+		if h == nil || *h == "" {
+			continue
+		}
+		for _, id := range ids {
+			if *h == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// CollisionLibraryCopyExists is the batch organize's skip category (Stats
+// Collisions, organize_skipped change rows) for a LibraryCopyExistsError.
+const CollisionLibraryCopyExists = "library_copy_exists"
 
 // ErrLibraryCopyExists is the sentinel LibraryCopyExistsError unwraps to.
 var ErrLibraryCopyExists = errors.New("organize: book already has a library copy")

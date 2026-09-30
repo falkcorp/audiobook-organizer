@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.135.0
+// version: 2.136.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-29
+// last-edited: 2026-09-30
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -5525,11 +5525,20 @@ export interface OrganizePreviewResponse {
   is_protected: boolean;
   has_book_files: boolean;
   book_file_count: number;
+  /** The row the preview describes and the apply will organize. Differs from
+   *  the requested id when that book is a protected original with a library
+   *  copy of its own file: then it is the copy. */
+  book_id?: string;
+  /** Set when book_id is a library copy: the protected original asked for. */
+  library_copy_of?: string;
 }
 
 export interface OrganizeResult {
   message: string;
   book_id: string;
+  /** Set when the organize acted on the requested book's library copy
+   *  (book_id) rather than the book itself. */
+  original_book_id?: string;
   old_path: string;
   new_path: string;
   tags_written: number;

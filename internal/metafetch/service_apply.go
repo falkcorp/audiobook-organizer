@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-30
 
@@ -1237,19 +1237,30 @@ func (mfs *Service) MarkNoMatch(id string) error {
 	return nil
 }
 
-// ExistingLibraryCopy is existingLibraryCopy for callers outside this package:
-// the single-book organize preview and apply (organizer.LibraryCopyResolver).
-// It never creates a copy. Both organize endpoints resolve a protected
-// original to its library copy through this, so they act on the same row the
-// metadata apply renamed. Until 2026-09-30 organize ran on the original, and
-// its same-hash check reported the book's own library copy as a foreign
-// duplicate ("duplicate file already organized at ...") and filed a dedup
-// candidate pairing the two.
-func (mfs *Service) ExistingLibraryCopy(book *database.Book) (*database.Book, bool) {
+// ExistingLibraryCopyOfFile is the single-book organize preview's and apply's
+// resolver (organizer.LibraryCopyResolver). It never creates a copy. It is
+// existingLibraryCopy -- the same RootDir / protected-path gates and the same
+// clean-sibling rules the metadata apply uses -- with one more condition: the
+// sibling must be a copy of THIS book's file (organizer.IsLibraryCopyOf).
+//
+// The apply accepts any clean sibling under root as the row to write, because
+// it writes metadata. Organize moves files, and a version group can hold a
+// different edition: resolving an iTunes m4b to the group's mp3 edition would
+// rename the mp3 in place and never give the m4b its own copy. So a protected
+// book whose only library sibling is another edition answers ok=false here,
+// and organize copies the book itself, as it did before this resolver existed.
+//
+// Until 2026-09-30 organize always ran on the original, and its same-hash
+// check reported the book's own library copy as a foreign duplicate
+// ("duplicate file already organized at ...") and filed a dedup candidate
+// pairing the two.
+func (mfs *Service) ExistingLibraryCopyOfFile(book *database.Book) (*database.Book, bool) {
 	if mfs == nil || book == nil {
 		return book, true
 	}
-	return mfs.existingLibraryCopy(book)
+	return mfs.existingLibraryCopyMatching(book, func(sib *database.Book) bool {
+		return organizer.IsLibraryCopyOf(book, sib)
+	})
 }
 
 // existingLibraryCopy resolves the row file work may touch WITHOUT creating
@@ -1257,6 +1268,12 @@ func (mfs *Service) ExistingLibraryCopy(book *database.Book) (*database.Book, bo
 // library copy; ensureLibraryCopy then creates one, and the auto-fetch path
 // (existingCopyOnly) skips the file work instead.
 func (mfs *Service) existingLibraryCopy(book *database.Book) (*database.Book, bool) {
+	return mfs.existingLibraryCopyMatching(book, nil)
+}
+
+// existingLibraryCopyMatching is existingLibraryCopy with an extra sibling
+// filter; nil accepts every clean library sibling (the apply's rule).
+func (mfs *Service) existingLibraryCopyMatching(book *database.Book, accept func(*database.Book) bool) (*database.Book, bool) {
 	root := config.AppConfig.RootDir
 	if root == "" {
 		return book, true // no library configured
@@ -1267,7 +1284,7 @@ func (mfs *Service) existingLibraryCopy(book *database.Book) (*database.Book, bo
 	if !mfs.isProtectedPath(book.FilePath) {
 		return book, true // not protected, safe to modify
 	}
-	if sib := mfs.librarySibling(book); sib != nil {
+	if sib := mfs.librarySiblingMatching(book, accept); sib != nil {
 		slog.Info("using existing library copy for protected book", "siblingID", sib.ID, "bookID", book.ID)
 		return sib, true
 	}
@@ -1281,6 +1298,13 @@ func (mfs *Service) existingLibraryCopy(book *database.Book) (*database.Book, bo
 // used to be handed back as "the library copy", and the apply pipeline then
 // renamed every one of its rows -- including the iTunes file.
 func (mfs *Service) librarySibling(book *database.Book) *database.Book {
+	return mfs.librarySiblingMatching(book, nil)
+}
+
+// librarySiblingMatching is librarySibling restricted to siblings accept
+// admits (nil admits all). The filter runs before the protected-file-row
+// check, so a rejected edition costs no book_file read.
+func (mfs *Service) librarySiblingMatching(book *database.Book, accept func(*database.Book) bool) *database.Book {
 	if book.VersionGroupID == nil || *book.VersionGroupID == "" {
 		return nil
 	}
@@ -1291,6 +1315,9 @@ func (mfs *Service) librarySibling(book *database.Book) *database.Book {
 	for i := range siblings {
 		sib := &siblings[i]
 		if sib.ID == book.ID || !pathUnderRoot(sib.FilePath, config.AppConfig.RootDir) {
+			continue
+		}
+		if accept != nil && !accept(sib) {
 			continue
 		}
 		if p := mfs.firstProtectedFileRow(sib.ID); p != "" {

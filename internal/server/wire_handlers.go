@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.38.0
+// version: 2.39.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-09-30
 
@@ -89,30 +89,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		mcScanActive = func() bool { return handlers.LibraryScanActive(st.ListActiveOperationsV2) }
 	}
 	metaCacheH := handlers.NewMetadataCacheHandler(s.storeForWiring(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool, s.opRegistry, mcScanActive)
-	// Preview and apply of a single-book organize resolve a protected
-	// original to its library copy through ONE function -- metafetch's
-	// read-only lookup, the one the metadata apply renames through -- so the
-	// preview shows the row and target the apply acts on. It reads
-	// s.metadataFetchService at call time; nil (metafetch not wired) means
-	// every book organizes as itself, as it did before.
-	resolveLibraryCopy := organizer.LibraryCopyResolver(func(b *database.Book) (*database.Book, bool) {
-		if s.metadataFetchService == nil {
-			return b, true
-		}
-		return s.metadataFetchService.ExistingLibraryCopy(b)
-	})
-	organizePreviewSvc := NewOrganizePreviewService(s.storeForWiring())
-	organizePreviewSvc.ResolveLibraryCopy = resolveLibraryCopy
-	organizeH := handlers.NewOrganizeHandler(
-		s.storeForWiring(),
-		NewRenameService(s.storeForWiring()),
-		organizePreviewSvc,
-		s.organizeService,
-		s.writeBackBatcher,
-		s.eventBus,
-		config.AppConfig.AutoOrganize,
-	)
-	organizeH.SetLibraryCopyResolver(resolveLibraryCopy)
+	organizeH := s.newOrganizeHandler()
 	filesystemH := handlers.NewFilesystemHandler(
 		s.storeForWiring(),
 		s.filesystemService,
@@ -745,4 +722,55 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		adminDebugActivity = s.activityService
 	}
 	admindebug.New(s.storeForWiring(), adminDebugActivity).Register(protected)
+}
+
+// newOrganizeHandler builds the single-book organize handler. Preview and
+// apply resolve a protected original to its library copy through ONE function
+// (organizeLibraryCopyResolver), so the preview shows the row and target the
+// apply acts on. A method rather than inline wiring so a test can drive the
+// handler exactly as production builds it.
+func (s *Server) newOrganizeHandler() *handlers.OrganizeHandler {
+	resolveLibraryCopy := s.organizeLibraryCopyResolver()
+	organizePreviewSvc := NewOrganizePreviewService(s.storeForWiring())
+	organizePreviewSvc.ResolveLibraryCopy = resolveLibraryCopy
+	// Typed-nil guard, as elsewhere in this file: a nil *organizer.Service
+	// boxed into the interface would pass the handler's nil checks.
+	var organizeSvc handlers.OrganizeServicer
+	if s.organizeService != nil {
+		organizeSvc = s.organizeService
+	}
+	var writeBack handlers.WriteBackEnqueuer
+	if s.writeBackBatcher != nil {
+		writeBack = s.writeBackBatcher
+	}
+	var publisher handlers.EventPublisher
+	if s.eventBus != nil {
+		publisher = s.eventBus
+	}
+	organizeH := handlers.NewOrganizeHandler(
+		s.storeForWiring(),
+		NewRenameService(s.storeForWiring()),
+		organizePreviewSvc,
+		organizeSvc,
+		writeBack,
+		publisher,
+		config.AppConfig.AutoOrganize,
+	)
+	organizeH.SetLibraryCopyResolver(resolveLibraryCopy)
+	return organizeH
+}
+
+// organizeLibraryCopyResolver is the resolver the single-book organize preview
+// and apply share: metafetch's ExistingLibraryCopyOfFile, which maps a
+// protected original to the library copy of its OWN file (never to another
+// edition in its version group). It reads s.metadataFetchService at call
+// time; nil (metafetch not wired) means every book organizes as itself, as it
+// did before the resolver existed.
+func (s *Server) organizeLibraryCopyResolver() organizer.LibraryCopyResolver {
+	return func(b *database.Book) (*database.Book, bool) {
+		if s.metadataFetchService == nil {
+			return b, true
+		}
+		return s.metadataFetchService.ExistingLibraryCopyOfFile(b)
+	}
 }

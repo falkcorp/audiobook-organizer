@@ -1,11 +1,12 @@
 // file: internal/organizer/library_copy_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 93a1faee-be59-4abb-ab7d-eb7996f3665e
 // last-edited: 2026-09-30
 
 package organizer
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -232,5 +233,44 @@ func TestResolveOrganizeSubject_FallsBackToTheBook(t *testing.T) {
 	noCopy := func(*database.Book) (*database.Book, bool) { return nil, false }
 	if got := ResolveOrganizeSubject(noCopy, b); got != b {
 		t.Errorf("protected with no copy must organize the original (which makes one); got %v", got)
+	}
+}
+
+// library.organize batch: a book whose own library copy already exists is a
+// skip (counted under library_copy_exists), not a failure.
+func TestOrganizeBooks_OwnLibraryCopyCountsAsSkipped(t *testing.T) {
+	f := newLibraryCopyFixture(t, "vg-1")
+	stats := f.svc.organizeBooks(context.Background(), []database.Book{*f.original}, nil, &noopLogger{}, "")
+	if stats.Failed != 0 || stats.Skipped != 1 {
+		t.Errorf("stats failed=%d skipped=%d; want failed=0 skipped=1", stats.Failed, stats.Skipped)
+	}
+	if stats.Collisions[CollisionLibraryCopyExists] != 1 {
+		t.Errorf("collisions = %v; want %s=1", stats.Collisions, CollisionLibraryCopyExists)
+	}
+}
+
+func TestIsLibraryCopyOf(t *testing.T) {
+	s := func(v string) *string { return &v }
+	orig := &database.Book{ID: "o", FileHash: s("h-orig"), OriginalFileHash: s("h-src")}
+	cases := []struct {
+		name string
+		cand *database.Book
+		want bool
+	}{
+		{"same file hash", &database.Book{FileHash: s("h-orig")}, true},
+		{"file hash diverged after a tag write, original hash kept", &database.Book{FileHash: s("h-new"), OriginalFileHash: s("h-orig")}, true},
+		{"organized hash is the original's content", &database.Book{FileHash: s("h-new"), OrganizedFileHash: s("h-orig")}, true},
+		{"matches the original's own original hash", &database.Book{FileHash: s("h-new"), OriginalFileHash: s("h-src")}, true},
+		{"different edition", &database.Book{FileHash: s("h-mp3"), OriginalFileHash: s("h-mp3"), OrganizedFileHash: s("h-mp3")}, false},
+		{"no hashes", &database.Book{}, false},
+		{"empty strings never match", &database.Book{FileHash: s("")}, false},
+	}
+	for _, tc := range cases {
+		if got := IsLibraryCopyOf(orig, tc.cand); got != tc.want {
+			t.Errorf("%s: IsLibraryCopyOf = %v; want %v", tc.name, got, tc.want)
+		}
+	}
+	if IsLibraryCopyOf(&database.Book{FileHash: s("")}, &database.Book{FileHash: s("")}) {
+		t.Error("two empty hashes matched")
 	}
 }
