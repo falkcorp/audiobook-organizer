@@ -677,11 +677,7 @@ export function QueueRail({
                 <>
                   All {filteredCount.toLocaleString()} matching selected.{' '}
                   {onClearSelection && (
-                    <Button
-                      size="small"
-                      onClick={onClearSelection}
-                      data-testid="clear-selection-banner"
-                    >
+                    <Button size="small" onClick={onClearSelection} data-testid="clear-selection-banner">
                       Clear selection
                     </Button>
                   )}
@@ -689,13 +685,8 @@ export function QueueRail({
               ) : (
                 <>
                   All {rows.length.toLocaleString()} on this page selected
-                  {selectedCount > rows.length ? ` (${selectedCount.toLocaleString()} in all)` : ''}
-                  .{' '}
-                  <Button
-                    size="small"
-                    onClick={onSelectAllMatching}
-                    data-testid="select-all-matching"
-                  >
+                  {selectedCount > rows.length ? ` (${selectedCount.toLocaleString()} in all)` : ''}.{' '}
+                  <Button size="small" onClick={onSelectAllMatching} data-testid="select-all-matching">
                     Select all {filteredCount.toLocaleString()} matching
                   </Button>
                 </>
@@ -748,12 +739,7 @@ export function QueueRail({
                       {r.candidate.title}
                     </Typography>
                   ) : isUnreviewableRow(r) ? (
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      noWrap
-                      sx={{ display: 'block' }}
-                    >
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
                       {r.status === 'decode_error' ? 'candidate will not decode' : 'no candidate'}
                       {r.book.author ? ` \u00b7 ${r.book.author}` : ''}
                     </Typography>
