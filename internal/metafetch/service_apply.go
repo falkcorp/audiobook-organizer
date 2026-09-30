@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-30
 
@@ -843,7 +843,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 			return nil
 		}
 	}
-	updatedBook, updateErr := mfs.commitApply(id, before, book, credits, historySource, commitGuard)
+	updatedBook, updateErr := mfs.commitApply(id, before, book, credits, historySource, opts.BatchID, commitGuard)
 	if updatedBook == nil {
 		return nil, updateErr
 	}

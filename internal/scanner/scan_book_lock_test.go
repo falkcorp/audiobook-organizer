@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_book_lock_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 161af27f-a511-4b3d-a32f-02348506c28a
 // last-edited: 2026-09-30
 
@@ -493,6 +493,29 @@ func TestMergeScanned_MovedRowKeepsItsFileIdentity(t *testing.T) {
 	still := *row
 	require.Zero(t, mergeScannedKeepingForeignEdits(&still, scanned, nil, &snap))
 	require.Equal(t, "/import/walked.m4b", still.FilePath)
+}
+
+// The queued single-book apply (metadata.apply-when-scanned) tells a later
+// user edit from the scanner's merge by change history: edits record it, the
+// scanner must not. A rescan whose tags differ from the row rewrites the title
+// here and must leave the book's change history empty -- if the scanner ever
+// starts recording history, every queued apply behind a scan would refuse.
+func TestScanBookLock_RescanMergeRecordsNoChangeHistory(t *testing.T) {
+	f := newScanLockFixture(t, "")
+	p := f.file(t, "a/book.m4b", "x-data")
+	x, err := f.store.CreateBook(&database.Book{Title: "DB Title", FilePath: p, Format: "m4b"})
+	require.NoError(t, err)
+
+	scanOne(t, Book{FilePath: p, Title: "Tag Title", Author: "A. Author", Format: ".m4b"})
+
+	got, err := f.store.GetBookByID(x.ID)
+	require.NoError(t, err)
+	// The fake file's "tags" come from ProcessFile's filename fallback; what
+	// matters is that the merge rewrote the title.
+	require.NotEqual(t, "DB Title", got.Title, "the rescan did not merge a title; the test proves nothing")
+	history, err := f.store.GetBookChangeHistory(x.ID, 1<<30)
+	require.NoError(t, err)
+	require.Empty(t, history, "the scanner's merge recorded change history; queued applies would read it as a user edit")
 }
 
 // groupErrStore fails every version-group lookup.

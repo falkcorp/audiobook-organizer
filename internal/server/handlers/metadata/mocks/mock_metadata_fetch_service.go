@@ -39,6 +39,138 @@ func (_m *MockMetadataFetchService) EXPECT() *MockMetadataFetchService_Expecter 
 	return &MockMetadataFetchService_Expecter{mock: &_m.Mock}
 }
 
+// ApplyEditMark provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) ApplyEditMark(bookID string) (int64, error) {
+	ret := _mock.Called(bookID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ApplyEditMark")
+	}
+
+	var r0 int64
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (int64, error)); ok {
+		return returnFunc(bookID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) int64); ok {
+		r0 = returnFunc(bookID)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(bookID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataFetchService_ApplyEditMark_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ApplyEditMark'
+type MockMetadataFetchService_ApplyEditMark_Call struct {
+	*mock.Call
+}
+
+// ApplyEditMark is a helper method to define mock.On call
+//   - bookID string
+func (_e *MockMetadataFetchService_Expecter) ApplyEditMark(bookID any) *MockMetadataFetchService_ApplyEditMark_Call {
+	return &MockMetadataFetchService_ApplyEditMark_Call{Call: _e.mock.On("ApplyEditMark", bookID)}
+}
+
+func (_c *MockMetadataFetchService_ApplyEditMark_Call) Run(run func(bookID string)) *MockMetadataFetchService_ApplyEditMark_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_ApplyEditMark_Call) Return(n int64, err error) *MockMetadataFetchService_ApplyEditMark_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockMetadataFetchService_ApplyEditMark_Call) RunAndReturn(run func(bookID string) (int64, error)) *MockMetadataFetchService_ApplyEditMark_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ApplyEditsSince provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) ApplyEditsSince(bookID string, mark int64, ownBatch string) (metafetch.QueuedApplyEdits, error) {
+	ret := _mock.Called(bookID, mark, ownBatch)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ApplyEditsSince")
+	}
+
+	var r0 metafetch.QueuedApplyEdits
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, int64, string) (metafetch.QueuedApplyEdits, error)); ok {
+		return returnFunc(bookID, mark, ownBatch)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, int64, string) metafetch.QueuedApplyEdits); ok {
+		r0 = returnFunc(bookID, mark, ownBatch)
+	} else {
+		r0 = ret.Get(0).(metafetch.QueuedApplyEdits)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, int64, string) error); ok {
+		r1 = returnFunc(bookID, mark, ownBatch)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataFetchService_ApplyEditsSince_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ApplyEditsSince'
+type MockMetadataFetchService_ApplyEditsSince_Call struct {
+	*mock.Call
+}
+
+// ApplyEditsSince is a helper method to define mock.On call
+//   - bookID string
+//   - mark int64
+//   - ownBatch string
+func (_e *MockMetadataFetchService_Expecter) ApplyEditsSince(bookID any, mark any, ownBatch any) *MockMetadataFetchService_ApplyEditsSince_Call {
+	return &MockMetadataFetchService_ApplyEditsSince_Call{Call: _e.mock.On("ApplyEditsSince", bookID, mark, ownBatch)}
+}
+
+func (_c *MockMetadataFetchService_ApplyEditsSince_Call) Run(run func(bookID string, mark int64, ownBatch string)) *MockMetadataFetchService_ApplyEditsSince_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 int64
+		if args[1] != nil {
+			arg1 = args[1].(int64)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_ApplyEditsSince_Call) Return(queuedApplyEdits metafetch.QueuedApplyEdits, err error) *MockMetadataFetchService_ApplyEditsSince_Call {
+	_c.Call.Return(queuedApplyEdits, err)
+	return _c
+}
+
+func (_c *MockMetadataFetchService_ApplyEditsSince_Call) RunAndReturn(run func(bookID string, mark int64, ownBatch string) (metafetch.QueuedApplyEdits, error)) *MockMetadataFetchService_ApplyEditsSince_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ApplyMetadataCandidate provides a mock function for the type MockMetadataFetchService
 func (_mock *MockMetadataFetchService) ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error) {
 	ret := _mock.Called(id, candidate, fields)
@@ -109,6 +241,86 @@ func (_c *MockMetadataFetchService_ApplyMetadataCandidate_Call) Return(fetchMeta
 }
 
 func (_c *MockMetadataFetchService_ApplyMetadataCandidate_Call) RunAndReturn(run func(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)) *MockMetadataFetchService_ApplyMetadataCandidate_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ApplyMetadataCandidateWithOptions provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) ApplyMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error) {
+	ret := _mock.Called(id, candidate, fields, opts)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ApplyMetadataCandidateWithOptions")
+	}
+
+	var r0 *metafetch.FetchMetadataResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.MetadataCandidate, []string, metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)); ok {
+		return returnFunc(id, candidate, fields, opts)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.MetadataCandidate, []string, metafetch.ApplyOptions) *metafetch.FetchMetadataResponse); ok {
+		r0 = returnFunc(id, candidate, fields, opts)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*metafetch.FetchMetadataResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, metafetch.MetadataCandidate, []string, metafetch.ApplyOptions) error); ok {
+		r1 = returnFunc(id, candidate, fields, opts)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ApplyMetadataCandidateWithOptions'
+type MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call struct {
+	*mock.Call
+}
+
+// ApplyMetadataCandidateWithOptions is a helper method to define mock.On call
+//   - id string
+//   - candidate metafetch.MetadataCandidate
+//   - fields []string
+//   - opts metafetch.ApplyOptions
+func (_e *MockMetadataFetchService_Expecter) ApplyMetadataCandidateWithOptions(id any, candidate any, fields any, opts any) *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call {
+	return &MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call{Call: _e.mock.On("ApplyMetadataCandidateWithOptions", id, candidate, fields, opts)}
+}
+
+func (_c *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call) Run(run func(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions)) *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 metafetch.MetadataCandidate
+		if args[1] != nil {
+			arg1 = args[1].(metafetch.MetadataCandidate)
+		}
+		var arg2 []string
+		if args[2] != nil {
+			arg2 = args[2].([]string)
+		}
+		var arg3 metafetch.ApplyOptions
+		if args[3] != nil {
+			arg3 = args[3].(metafetch.ApplyOptions)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call) Return(fetchMetadataResponse *metafetch.FetchMetadataResponse, err error) *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call {
+	_c.Call.Return(fetchMetadataResponse, err)
+	return _c
+}
+
+func (_c *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call) RunAndReturn(run func(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)) *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -709,80 +921,6 @@ func (_c *MockMetadataFetchService_MarkNoMatch_Call) Return(err error) *MockMeta
 }
 
 func (_c *MockMetadataFetchService_MarkNoMatch_Call) RunAndReturn(run func(id string) error) *MockMetadataFetchService_MarkNoMatch_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// PreviewCandidateApply provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) PreviewCandidateApply(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.ApplyPreview, error) {
-	ret := _mock.Called(id, candidate, fields)
-
-	if len(ret) == 0 {
-		panic("no return value specified for PreviewCandidateApply")
-	}
-
-	var r0 *metafetch.ApplyPreview
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, metafetch.MetadataCandidate, []string) (*metafetch.ApplyPreview, error)); ok {
-		return returnFunc(id, candidate, fields)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string, metafetch.MetadataCandidate, []string) *metafetch.ApplyPreview); ok {
-		r0 = returnFunc(id, candidate, fields)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*metafetch.ApplyPreview)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(string, metafetch.MetadataCandidate, []string) error); ok {
-		r1 = returnFunc(id, candidate, fields)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockMetadataFetchService_PreviewCandidateApply_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PreviewCandidateApply'
-type MockMetadataFetchService_PreviewCandidateApply_Call struct {
-	*mock.Call
-}
-
-// PreviewCandidateApply is a helper method to define mock.On call
-//   - id string
-//   - candidate metafetch.MetadataCandidate
-//   - fields []string
-func (_e *MockMetadataFetchService_Expecter) PreviewCandidateApply(id any, candidate any, fields any) *MockMetadataFetchService_PreviewCandidateApply_Call {
-	return &MockMetadataFetchService_PreviewCandidateApply_Call{Call: _e.mock.On("PreviewCandidateApply", id, candidate, fields)}
-}
-
-func (_c *MockMetadataFetchService_PreviewCandidateApply_Call) Run(run func(id string, candidate metafetch.MetadataCandidate, fields []string)) *MockMetadataFetchService_PreviewCandidateApply_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 metafetch.MetadataCandidate
-		if args[1] != nil {
-			arg1 = args[1].(metafetch.MetadataCandidate)
-		}
-		var arg2 []string
-		if args[2] != nil {
-			arg2 = args[2].([]string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockMetadataFetchService_PreviewCandidateApply_Call) Return(applyPreview *metafetch.ApplyPreview, err error) *MockMetadataFetchService_PreviewCandidateApply_Call {
-	_c.Call.Return(applyPreview, err)
-	return _c
-}
-
-func (_c *MockMetadataFetchService_PreviewCandidateApply_Call) RunAndReturn(run func(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.ApplyPreview, error)) *MockMetadataFetchService_PreviewCandidateApply_Call {
 	_c.Call.Return(run)
 	return _c
 }

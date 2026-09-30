@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-09-30
 
@@ -163,10 +163,14 @@ type MetadataApplier interface {
 	// the file sequel that follows the apply is known to fail; the error wraps
 	// metafetch.ErrApplyFileWorkWouldFail. Read-only.
 	RenamePreflight(id string, candidate metafetch.MetadataCandidate, fields []string) error
-	// PreviewCandidateApply is ApplyMetadataCandidate's read-only diff: each
-	// field the apply would change, with its current value. The queued apply
-	// uses it to refuse clobbering an edit made after the apply was queued.
-	PreviewCandidateApply(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.ApplyPreview, error)
+	// ApplyMetadataCandidateWithOptions is ApplyMetadataCandidate with
+	// options; the queued apply uses it to fix the history batch id.
+	ApplyMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)
+	// ApplyEditMark and ApplyEditsSince let the queued apply refuse to
+	// overwrite an edit made after it was queued, and recognise its own
+	// completed apply on a re-run (metafetch/queued_apply_history.go).
+	ApplyEditMark(bookID string) (int64, error)
+	ApplyEditsSince(bookID string, mark int64, ownBatch string) (metafetch.QueuedApplyEdits, error)
 	// FinishApplyFileWork is the shared file-side sequel to an apply: cover
 	// download, file I/O, and a tag write that happens exactly once.
 	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run

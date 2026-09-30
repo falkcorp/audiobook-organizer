@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 85df29b0-0d44-40e8-bbab-726ab6928927
 // last-edited: 2026-09-30
 
@@ -71,11 +71,9 @@ func TestSingleBookHandlers_QueueInsteadOf409WhenTheScannerHoldsTheBook(t *testi
 			defer scan.Release()
 
 			if tc.kind == metadatahandler.QueuedApplyCandidate {
-				// The enqueue records the value of each field the apply would
-				// change, for the queued run's stale check. cover_url is left out.
-				d.mfs.EXPECT().PreviewCandidateApply("b1", mock.Anything, mock.Anything).Return(&metafetch.ApplyPreview{
-					Changes: []metafetch.FieldChange{{Field: "title", Old: "Current", New: "T"}, {Field: "cover_url", Old: "", New: "http://192.0.2.1/c.jpg"}},
-				}, nil)
+				// The enqueue records the book's newest edit, for the queued
+				// run's later-edit check.
+				d.mfs.EXPECT().ApplyEditMark("b1").Return(int64(42), nil)
 			}
 
 			w := doReq(tc.run(h), http.MethodPost, tc.target, tc.body, id)
@@ -99,8 +97,8 @@ func TestSingleBookHandlers_QueueInsteadOf409WhenTheScannerHoldsTheBook(t *testi
 				t.Fatalf("enqueued %+v, want one %s for b1", q.calls, tc.kind)
 			}
 			if tc.kind == metadatahandler.QueuedApplyCandidate {
-				if b := q.calls[0].Baseline; len(b) != 1 || b["title"] != "Current" {
-					t.Fatalf("baseline = %v, want {title: Current}", b)
+				if c := q.calls[0]; c.EditMark != 42 || !strings.HasPrefix(c.ApplyBatchID, "apply-queued-") {
+					t.Fatalf("queued without its edit mark / batch id: mark=%d batch=%q", c.EditMark, c.ApplyBatchID)
 				}
 			}
 		})
@@ -179,65 +177,62 @@ func TestRunQueuedApply_WaitsForTheBookThenRuns(t *testing.T) {
 	}
 }
 
-func queuedCandidate(baseline map[string]string) metadatahandler.QueuedApply {
+func queuedCandidate() metadatahandler.QueuedApply {
 	return metadatahandler.QueuedApply{
 		Kind: metadatahandler.QueuedApplyCandidate, BookID: "b1",
-		Candidate: &metafetch.MetadataCandidate{Title: "Cand"}, Baseline: baseline,
+		Candidate: &metafetch.MetadataCandidate{Title: "Cand"},
+		EditMark:  42, ApplyBatchID: "apply-queued-own",
 	}
 }
 
-func preview(changes ...metafetch.FieldChange) *metafetch.ApplyPreview {
-	return &metafetch.ApplyPreview{BookID: "b1", Changes: changes}
-}
-
-// MEDIUM 2: a field the queued apply would write was changed by someone else
-// after the apply was queued. The run refuses (terminal), names the field, and
-// never calls the apply (strict mock).
-func TestRunQueuedApply_CandidateRefusesToClobberALaterEdit(t *testing.T) {
+// (b) Someone applied another candidate after the apply was queued. The run
+// refuses (terminal), names the edit, and never calls the apply (strict mock).
+func TestRunQueuedApply_CandidateRefusesALaterEdit(t *testing.T) {
 	h, d := newHandler(t)
-	d.mfs.EXPECT().PreviewCandidateApply("b1", mock.Anything, mock.Anything).Return(preview(
-		metafetch.FieldChange{Field: "title", Old: "User Edit", New: "Cand"},
-		metafetch.FieldChange{Field: "narrator", Old: "N", New: "Cand N"},
-	), nil)
-	err := h.RunQueuedApply(context.Background(), queuedCandidate(map[string]string{"title": "Old", "narrator": "N"}), nil)
-	if !errors.Is(err, metadatahandler.ErrQueuedApplyStale) || !strings.Contains(err.Error(), "title") ||
-		strings.Contains(err.Error(), "narrator") {
-		t.Fatalf("want a stale refusal naming title only, got %v", err)
+	d.mfs.EXPECT().ApplyEditsSince("b1", int64(42), "apply-queued-own").Return(
+		metafetch.QueuedApplyEdits{Others: []string{"title (fetched, audible)"}}, nil)
+	err := h.RunQueuedApply(context.Background(), queuedCandidate(), nil)
+	if !errors.Is(err, metadatahandler.ErrQueuedApplyStale) || !strings.Contains(err.Error(), "title (fetched, audible)") {
+		t.Fatalf("want a later-edit refusal naming the edit, got %v", err)
 	}
 	if n := scanlock.Books.Held(); n != 0 {
 		t.Fatalf("left %d scan lock(s) held", n)
 	}
 }
 
-// LOW 11: the op re-runs after a restart that came after the apply landed.
-// Every field already holds the candidate's value (the preview has nothing
-// left but the cover, which never reads back as the remote URL): the run
-// completes "already applied" without calling the apply, so no second history
-// row.
+// An unreadable history refuses: failing closed beats overwriting an edit.
+func TestRunQueuedApply_CandidateUnreadableHistoryRefuses(t *testing.T) {
+	h, d := newHandler(t)
+	d.mfs.EXPECT().ApplyEditsSince("b1", int64(42), "apply-queued-own").Return(metafetch.QueuedApplyEdits{}, errors.New("disk"))
+	if err := h.RunQueuedApply(context.Background(), queuedCandidate(), nil); !errors.Is(err, metadatahandler.ErrQueuedApplyStale) {
+		t.Fatalf("want a refusal, got %v", err)
+	}
+}
+
+// (c) The op re-runs after a restart that came after its apply landed: its own
+// history rows are there, so it completes "already applied" without calling
+// the apply again -- no second history batch.
 func TestRunQueuedApply_CandidateReRunAfterTheApplyIsAlreadyApplied(t *testing.T) {
 	h, d := newHandler(t)
-	d.mfs.EXPECT().PreviewCandidateApply("b1", mock.Anything, mock.Anything).Return(preview(
-		metafetch.FieldChange{Field: "cover_url", Old: "/api/v1/covers/local/b1.jpg", New: "http://192.0.2.1/c.jpg"},
-	), nil)
-	err := h.RunQueuedApply(context.Background(), queuedCandidate(map[string]string{"title": "Old"}), nil)
-	if !errors.Is(err, metadatahandler.ErrQueuedAlreadyApplied) {
+	d.mfs.EXPECT().ApplyEditsSince("b1", int64(42), "apply-queued-own").Return(metafetch.QueuedApplyEdits{OwnApplied: true}, nil)
+	if err := h.RunQueuedApply(context.Background(), queuedCandidate(), nil); !errors.Is(err, metadatahandler.ErrQueuedAlreadyApplied) {
 		t.Fatalf("want already-applied, got %v", err)
 	}
 }
 
-// Nothing changed since the apply was queued: it runs. A pool that drops the
+// (a) No edit since it was queued -- the scanner's merge in between writes no
+// history -- so it applies, with its fixed batch id. A pool that drops the
 // file job (shutdown) does not fail the apply or leave anything held (LOW 7).
-func TestRunQueuedApply_CandidateUnchangedSinceQueuedApplies(t *testing.T) {
+func TestRunQueuedApply_CandidateWithNoLaterEditApplies(t *testing.T) {
 	h, d := newHandler(t)
-	d.mfs.EXPECT().PreviewCandidateApply("b1", mock.Anything, mock.Anything).Return(preview(
-		metafetch.FieldChange{Field: "title", Old: "Old", New: "Cand"},
-	), nil)
+	d.mfs.EXPECT().ApplyEditsSince("b1", int64(42), "apply-queued-own").Return(metafetch.QueuedApplyEdits{}, nil)
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
-	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).Return(&metafetch.FetchMetadataResponse{}, nil)
+	d.mfs.EXPECT().ApplyMetadataCandidateWithOptions("b1", mock.Anything, mock.Anything,
+		metafetch.ApplyOptions{BatchID: "apply-queued-own"}).Return(&metafetch.FetchMetadataResponse{}, nil)
 	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
 	d.wb.EXPECT().Enqueue("b1").Maybe()
 	d.pool.EXPECT().Submit("b1", mock.Anything).Return(false)
-	if err := h.RunQueuedApply(context.Background(), queuedCandidate(map[string]string{"title": "Old"}), nil); err != nil {
+	if err := h.RunQueuedApply(context.Background(), queuedCandidate(), nil); err != nil {
 		t.Fatalf("RunQueuedApply: %v", err)
 	}
 	if n := scanlock.Books.Held(); n != 0 {
