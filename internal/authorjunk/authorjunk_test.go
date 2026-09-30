@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-09-29
 
@@ -485,6 +485,75 @@ func TestIsCompositeCredit_AddedRulesDoNotJudgeClauses(t *testing.T) {
 		}
 		if v := Classify(n, Evidence{}); v.Junk() {
 			t.Errorf("Classify(%q) = %+v, want not junk", n, v)
+		}
+	}
+}
+
+// Junk-author trial 2026-09-29 (plan op 01M3QT6HZ6843PSZCZ4JNSBYPC): relink
+// targets that no rule flagged. Encoder tags, bitrate release names, chapter
+// labels, sort prefixes and cut-off brackets are shrapnel; each is relink-only.
+func TestClassifyName_TrialShrapnelTargets(t *testing.T) {
+	for n, rule := range map[string]string{
+		"lavf-fate":       RuleEncoderTag,
+		"lame-3.99.5":     RuleEncoderTag,
+		"lame-3.100":      RuleEncoderTag,
+		"Lavf58.76.100":   RuleEncoderTag,
+		"chap-26-NOTES-1": RuleChapterLabel,
+		"zzJim Butcher":   RuleSortPrefix,
+		"Richard.Phillips-the.Rho.Agenda-Once.Dead.Nmr.64.Kbps": RuleReleaseName,
+		"Graphic Audio [Jon Scieszka":                           RuleUnbalancedBracket,
+	} {
+		v := ClassifyName(n)
+		if !v.Junk() || v.Rule != rule {
+			t.Errorf("ClassifyName(%q) = %+v, want rule %s", n, v, rule)
+			continue
+		}
+		if !v.RelinkOnly() {
+			t.Errorf("ClassifyName(%q) rule %s is not relink-only", n, v.Rule)
+		}
+	}
+	// Names near those shapes that are people or pen names.
+	for _, n := range []string{"Lame", "Jim Lame", "Chapman", "Chad Leito", "Zane Grey", "Xander Tate",
+		"Trackman", "Cdric Smith", "Ian w. Sainsbury", "Stephanie 'Stephabeni' Benamati"} {
+		if v := ClassifyName(n); v.Junk() {
+			t.Errorf("ClassifyName(%q) = %+v, want not junk", n, v)
+		}
+	}
+}
+
+func TestCleanedName_TrialShapes(t *testing.T) {
+	for in, want := range map[string]string{
+		"zzJim Butcher":                          "Jim Butcher",
+		"Graphic Audio [Jon Scieszka":            "Jon Scieszka",
+		"Jennsen, GS_ 08 Rubicon (Amaranthe 08)": "G. S. Jennsen",
+		"Jennsen, G.S._ 01 Starshine":            "G. S. Jennsen",
+	} {
+		if got, ok := CleanedName(in); !ok || got != want {
+			t.Errorf("CleanedName(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	// A surname-first head needs initials and a title after "_" / ":".
+	for _, in := range []string{"Jennsen, Grace", "Smith, Jones_ Title", "Rubicon, 08_ Title"} {
+		if got, ok := CleanedName(in); ok {
+			t.Errorf("CleanedName(%q) = %q, want no clean name", in, got)
+		}
+	}
+}
+
+func TestPersonParentheticalHead(t *testing.T) {
+	for in, want := range map[string]string{
+		"Kevin Hearne (Luke Daniels)":        "Kevin Hearne",
+		"Kevin Hearne (Christopher Ragland)": "Kevin Hearne",
+		"Robin Hobb (Anne Flosnik)":          "Robin Hobb",
+	} {
+		if got, ok := PersonParentheticalHead(in); !ok || got != want {
+			t.Errorf("PersonParentheticalHead(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"Kevin Hearne", "Jane Doe (Editor)", "Kevin J. Anderson (with Rebecca Moesta)",
+		"nobody103 (Jack Voraces)", "Dante King (Rise of the Last Star)"} {
+		if got, ok := PersonParentheticalHead(in); ok {
+			t.Errorf("PersonParentheticalHead(%q) = %q, want none", in, got)
 		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
 // last-edited: 2026-09-29
 
@@ -165,6 +165,21 @@ const (
 	// RuleProductionPhrase: a production credit inside a longer name ("Star
 	// Wars Full Cast Audio Drama").
 	RuleProductionPhrase = "production_phrase"
+	// RuleEncoderTag: an audio encoder's signature left in the artist tag
+	// ("lavf-fate", "lame-3.99.5", "Lavf58.76.100").
+	RuleEncoderTag = "encoder_tag"
+	// RuleReleaseName: a release name carrying a bitrate
+	// ("Richard.Phillips-the.Rho.Agenda-Once.Dead.Nmr.64.Kbps").
+	RuleReleaseName = "release_name"
+	// RuleChapterLabel: a chapter or track label ("chap-26-NOTES-1").
+
+	RuleChapterLabel = "chapter_label"
+	// RuleSortPrefix: a sort prefix glued to a name ("zzJim Butcher");
+	// CleanedName strips it.
+	RuleSortPrefix = "sort_prefix"
+	// RuleUnbalancedBracket: a name cut off inside a bracket ("Graphic Audio
+	// [Jon Scieszka").
+	RuleUnbalancedBracket = "unbalanced_bracket"
 )
 
 // relinkOnlyRules are the rules added on 2026-09-29 for the junk-author
@@ -177,6 +192,8 @@ var relinkOnlyRules = map[string]bool{
 	RuleArticleThe: true, RuleNumberWord: true, RuleSlug: true, RuleGluedWords: true,
 	RuleFranchise: true, RuleSiteTag: true, RuleSeriesParenthetical: true,
 	RuleGenreLabel: true, RuleProductionPhrase: true,
+	RuleEncoderTag: true, RuleReleaseName: true, RuleChapterLabel: true, RuleSortPrefix: true,
+	RuleUnbalancedBracket: true,
 }
 
 // RelinkOnly reports whether the verdict may only relink a book to a real
@@ -612,6 +629,24 @@ func classifyBaseParts(s string) (Verdict, *nameParts) {
 // AFTER every older rule so a name an older rule flagged keeps that verdict
 // and its unlink behaviour.
 func classifyAdded(s, core, n, full string, words []string) Verdict {
+	// Tag and filename shrapnel the older rules pass because it is one token
+	// or has no separator (2026-09-29 trial targets). Each is a narrow shape:
+	// a lowercase pen name ("adastra339", "randombluecat") matches none.
+	if encoderTagRe.MatchString(s) {
+		return strong(ClassOther, RuleEncoderTag)
+	}
+	if kbpsRe.MatchString(s) {
+		return strong(ClassOther, RuleReleaseName)
+	}
+	if chapterLabelRe.MatchString(s) {
+		return strong(ClassOther, RuleChapterLabel)
+	}
+	if sortPrefixRe.MatchString(s) {
+		return strong(ClassOther, RuleSortPrefix)
+	}
+	if strings.Count(s, "[") != strings.Count(s, "]") || strings.Count(s, "(") != strings.Count(s, ")") {
+		return strong(ClassOther, RuleUnbalancedBracket)
+	}
 	for _, ph := range productionPhrases {
 		if hasPhrase(full, ph) {
 			return strong(ClassPublisher, RuleProductionPhrase)
@@ -690,6 +725,20 @@ func ClassifyNameInLibrary(name string, isSeries func(normalized string) bool) V
 }
 
 var (
+	// encoderTagRe: an encoder signature: ffmpeg's libavformat ("lavf-fate",
+	// "Lavf58.76.100") or LAME ("lame-3.99.5"). The version or suffix is
+	// required, so a surname "Lame" is not matched.
+	encoderTagRe = regexp.MustCompile(`(?i)^(?:lavf|lavc|libav(?:format|codec)|lame|libmp3lame)(?:[-_ .]?\d[\w.]*|-\p{L}+)$`)
+	// kbpsRe: a bitrate ("64.Kbps", "128 kbps").
+	kbpsRe = regexp.MustCompile(`(?i)\d{2,3}[\s._-]*kbps\b`)
+	// chapterLabelRe: a chapter or track label at the start of the name.
+	chapterLabelRe = regexp.MustCompile(`(?i)^(?:chap|chapter|ch|track|trk|disc|disk|cd)[-_ .]*\d+\b`)
+	// sortPrefixRe: "zz" / "xx" glued to a capitalized name ("zzJim Butcher").
+	sortPrefixRe = regexp.MustCompile(`^(?:zz+|xx+|ZZ+)(\p{Lu}.*)$`)
+	// surnameFirstRe: "Jennsen, GS_ 08 Rubicon (Amaranthe 08)": a surname,
+	// a comma, one to three initials, then "_" or ":" ("_" is the filename
+	// stand-in for ":") and a title.
+	surnameFirstRe = regexp.MustCompile(`^(\p{Lu}[\p{Ll}'-]+),\s*((?:\p{Lu}\.?\s?){1,3})\s*[_:]\s*\S`)
 	// parenRe: a name and one trailing parenthetical, space before "(" or
 	// not ("Dante King(War Mage Academy)").
 	parenRe = regexp.MustCompile(`^(.*[^\s(])\s*\(([^()]+)\)\s*$`)
@@ -884,6 +933,10 @@ var (
 	// studioBracketRe: "GraphicAudio [R. A. Salvatore]": a bracket after a
 	// studio name, and nothing after it.
 	studioBracketRe = regexp.MustCompile(`^\s*([^\[\]]+?)\s*\[([^\]]+)\]\s*$`)
+	// studioOpenBracketRe: the same with the bracket cut off ("Graphic Audio
+	// [Jon Scieszka", from "Graphic Audio [Jon Scieszka / Steven Weinberg]"
+	// split on "/").
+	studioOpenBracketRe = regexp.MustCompile(`^\s*([^\[\]]+?)\s*\[([^\[\]]+)$`)
 	// byTailRe: "... by Saara El-Arifi_7": the last " by " and a tail with no
 	// parenthesis, a trailing "_N" / number dropped.
 	byTailRe = regexp.MustCompile(`(?i)^(.*\S)\s+by\s+([^()\[\]]+?)[\s_]*\d*[\s_]*$`)
@@ -903,11 +956,15 @@ var byRoleWords = map[string]bool{
 }
 
 // CleanedName returns the person a junk author row's own name carries once
-// its decoration is removed, and true, for exactly six shapes that carry a
+// its decoration is removed, and true, for exactly these shapes that carry a
 // person:
 //
 //   - a bracketed name after a studio: "GraphicAudio [R. A. Salvatore]"
 //     (several names in the bracket, "[Author / Narrator]": the FIRST only);
+//     The bracket may be cut off: "Graphic Audio [Jon Scieszka";
+//   - a sort prefix: "zzJim Butcher";
+//   - a surname-first head with initials before a "_" / ":" title:
+//     "Jennsen, GS_ 08 Rubicon (Amaranthe 08)" -> "G. S. Jennsen";
 //   - a leading "-" or "+": "- Arthur C. Clarke", "+Brandon Sanderson";
 //   - a copyright prefix with a year: "(c) 2001 Stephen Hawking";
 //   - a narrator suffix: "Christopher Paolini - Read by Gerard Doyle";
@@ -941,6 +998,26 @@ func CleanedName(name string) (string, bool) {
 		if i := strings.IndexAny(out, "/;|"); i >= 0 {
 			out = out[:i]
 		}
+	case studioOpenBracketRe.MatchString(s):
+		m := studioOpenBracketRe.FindStringSubmatch(s)
+		if classifyBase(m[1]).Class != ClassPublisher {
+			return "", false
+		}
+		out = m[2]
+		if i := strings.IndexAny(out, "/;|"); i >= 0 {
+			out = out[:i]
+		}
+	case sortPrefixRe.MatchString(s):
+		out = sortPrefixRe.FindStringSubmatch(s)[1]
+	case surnameFirstRe.MatchString(s):
+		m := surnameFirstRe.FindStringSubmatch(s)
+		var initials []string
+		for _, r := range m[2] {
+			if unicode.IsUpper(r) {
+				initials = append(initials, string(r)+".")
+			}
+		}
+		out = strings.Join(initials, " ") + " " + m[1]
 	case leadingMarkRe.MatchString(s):
 		out = leadingMarkRe.FindStringSubmatch(s)[1]
 	case copyrightPrefixRe.MatchString(s):
@@ -1034,3 +1111,19 @@ func hasDigit(s string) bool { return strings.IndexFunc(s, unicode.IsDigit) >= 0
 // singleToken: one word, e.g. a web-serial pen name ("nobody103"), which the
 // filename-shape rule must not refuse.
 func singleToken(s string) bool { return len(strings.Fields(s)) == 1 }
+
+// PersonParentheticalHead returns the person of a "Person (Person)" credit
+// the classifier leaves alone because the parenthetical is a reader as often
+// as a series ("Kevin Hearne (Luke Daniels)", "Robin Hobb (Anne Flosnik)"):
+// the head is the writer either way. It is for EVIDENCE naming such a credit
+// (a file tag, a sibling's author row), never for judging an author row.
+func PersonParentheticalHead(name string) (string, bool) {
+	head, paren, ok := splitParenthetical(strings.TrimSpace(name))
+	if !ok || !personHead(head) || !personname.LooksLikePersonName(paren) || hasCreditSeparator(paren) {
+		return "", false
+	}
+	if classifyBase(head).Junk() {
+		return "", false
+	}
+	return head, true
+}
