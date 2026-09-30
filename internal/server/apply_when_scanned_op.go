@@ -1,5 +1,5 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
 // last-edited: 2026-09-30
 
@@ -17,9 +17,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
+	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -54,12 +55,24 @@ type queuedApplyRunner interface {
 	RunQueuedApply(ctx context.Context, q metadatahandler.QueuedApply, beat func(msg string)) error
 }
 
+// applyWhenScannedParams is the op's params: the queued apply plus the
+// preview switch every writing op carries (owner rule 2026-09-25: an omitted
+// mode is a preview). EnqueueApplyWhenScanned always sends dry_run:false,
+// because the user already asked for the apply itself; `{}` from anywhere
+// else only reports what would run.
+type applyWhenScannedParams struct {
+	metadatahandler.QueuedApply
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
+}
+
 // EnqueueApplyWhenScanned implements metadatahandler.QueuedApplyEnqueuer.
 func (s *Server) EnqueueApplyWhenScanned(ctx context.Context, q metadatahandler.QueuedApply) (string, error) {
 	if s.opRegistry == nil {
 		return "", errors.New("no operations registry to queue the change on")
 	}
-	return s.opRegistry.EnqueueOp(ctx, applyWhenScannedOpID, q)
+	live := false
+	return s.opRegistry.EnqueueOp(ctx, applyWhenScannedOpID, applyWhenScannedParams{QueuedApply: q, DryRun: &live})
 }
 
 // RegisterApplyWhenScannedOp registers metadata.apply-when-scanned.
@@ -82,16 +95,24 @@ func (s *Server) RegisterApplyWhenScannedOp(reg *opsregistry.Registry) error {
 		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, raw json.RawMessage, reporter opsregistry.Reporter) error {
-			var q metadatahandler.QueuedApply
-			if err := json.Unmarshal(raw, &q); err != nil {
+			var p applyWhenScannedParams
+			if err := json.Unmarshal(raw, &p); err != nil {
 				return fmt.Errorf("apply-when-scanned: decode params: %w", err)
 			}
+			q := p.QueuedApply
 			if q.BookID == "" {
 				return errors.New("apply-when-scanned: no book id")
 			}
+			dryRun, err := opmode.ResolveDryRun(applyWhenScannedOpID, p.DryRun, p.DryRunCamel)
+			if err != nil {
+				return err
+			}
+			if dryRun {
+				_ = reporter.UpdateProgress(1, 1, fmt.Sprintf("preview: would apply %s to book %s once the library scan has read it; nothing written", q.Kind, q.BookID))
+				return nil
+			}
 			beat := func(msg string) { _ = reporter.UpdateProgress(0, 1, msg) }
 			beat("waiting for the library scan to finish reading book " + q.BookID)
-			var err error
 			if q.Kind == metadatahandler.QueuedOpResultCandidate {
 				err = s.runQueuedOpResultCandidate(ctx, q, beat)
 			} else {
