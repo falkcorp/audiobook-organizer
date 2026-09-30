@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_preview.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3d6a0f94-8b27-4c1e-a5d3-e9f2b7c04a18
-// last-edited: 2026-09-14
+// last-edited: 2026-09-30
 //
 // Read-only preview of ApplyMetadataCandidate, for the bulk-apply dry run.
 //
@@ -181,6 +181,16 @@ func CandidateMetadata(candidate MetadataCandidate) metadata.BookMetadata {
 // labels history.
 func (mfs *Service) PreviewMetadataCandidateWithOptions(id string, candidate MetadataCandidate, writeBack bool, opts ApplyOptions) (*ApplyPreview, error) {
 	return mfs.previewMetadataCandidate(id, candidate, nil, opts.FillOnly, writeBack)
+}
+
+// PreviewCandidateApply reports what ApplyMetadataCandidate(id, candidate,
+// fields) -- the hand-picked single-book apply -- would change right now. Its
+// Changes carry each field's CURRENT value as Old. The queued single-book apply
+// takes it once when queued and again when it runs, and compares the two to
+// tell "still to apply" from "already applied" from "changed by someone else
+// since". Read-only; the rename plan is not computed (writeBack false).
+func (mfs *Service) PreviewCandidateApply(id string, candidate MetadataCandidate, fields []string) (*ApplyPreview, error) {
+	return mfs.previewMetadataCandidate(id, candidate, fields, false, false)
 }
 
 // previewMetadataCandidate is PreviewMetadataCandidateWithOptions for

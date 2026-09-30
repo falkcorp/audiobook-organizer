@@ -713,6 +713,80 @@ func (_c *MockMetadataFetchService_MarkNoMatch_Call) RunAndReturn(run func(id st
 	return _c
 }
 
+// PreviewCandidateApply provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) PreviewCandidateApply(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.ApplyPreview, error) {
+	ret := _mock.Called(id, candidate, fields)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PreviewCandidateApply")
+	}
+
+	var r0 *metafetch.ApplyPreview
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.MetadataCandidate, []string) (*metafetch.ApplyPreview, error)); ok {
+		return returnFunc(id, candidate, fields)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.MetadataCandidate, []string) *metafetch.ApplyPreview); ok {
+		r0 = returnFunc(id, candidate, fields)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*metafetch.ApplyPreview)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, metafetch.MetadataCandidate, []string) error); ok {
+		r1 = returnFunc(id, candidate, fields)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataFetchService_PreviewCandidateApply_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PreviewCandidateApply'
+type MockMetadataFetchService_PreviewCandidateApply_Call struct {
+	*mock.Call
+}
+
+// PreviewCandidateApply is a helper method to define mock.On call
+//   - id string
+//   - candidate metafetch.MetadataCandidate
+//   - fields []string
+func (_e *MockMetadataFetchService_Expecter) PreviewCandidateApply(id any, candidate any, fields any) *MockMetadataFetchService_PreviewCandidateApply_Call {
+	return &MockMetadataFetchService_PreviewCandidateApply_Call{Call: _e.mock.On("PreviewCandidateApply", id, candidate, fields)}
+}
+
+func (_c *MockMetadataFetchService_PreviewCandidateApply_Call) Run(run func(id string, candidate metafetch.MetadataCandidate, fields []string)) *MockMetadataFetchService_PreviewCandidateApply_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 metafetch.MetadataCandidate
+		if args[1] != nil {
+			arg1 = args[1].(metafetch.MetadataCandidate)
+		}
+		var arg2 []string
+		if args[2] != nil {
+			arg2 = args[2].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_PreviewCandidateApply_Call) Return(applyPreview *metafetch.ApplyPreview, err error) *MockMetadataFetchService_PreviewCandidateApply_Call {
+	_c.Call.Return(applyPreview, err)
+	return _c
+}
+
+func (_c *MockMetadataFetchService_PreviewCandidateApply_Call) RunAndReturn(run func(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.ApplyPreview, error)) *MockMetadataFetchService_PreviewCandidateApply_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RenameOnlyPreflight provides a mock function for the type MockMetadataFetchService
 func (_mock *MockMetadataFetchService) RenameOnlyPreflight(id string) error {
 	ret := _mock.Called(id)

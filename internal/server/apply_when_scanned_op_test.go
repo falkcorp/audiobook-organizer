@@ -1,5 +1,5 @@
 // file: internal/server/apply_when_scanned_op_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e3b6a14-72c5-4f08-b1d9-58a0c3e7f216
 // last-edited: 2026-09-30
 
@@ -177,6 +177,34 @@ func TestBatchApplyCandidates_QueuesTheBookTheScannerHoldsInsteadOf409(t *testin
 	require.NotEmpty(t, got.QueuedOperationIDs[0])
 	// b2 has no stored candidate: processed (skipped), not held back by b1.
 	require.Equal(t, 1, got.Skipped)
+}
+
+type sentinelRunner struct{ err error }
+
+func (r sentinelRunner) RunQueuedApply(context.Context, metadatahandler.QueuedApply, func(string)) error {
+	return r.err
+}
+
+// A queued apply that finds itself already applied (a re-run after a restart)
+// completes the op; one refused as stale fails it with the reason.
+func TestApplyWhenScanned_AlreadyAppliedCompletesAndStaleFails(t *testing.T) {
+	for _, tc := range []struct {
+		err     error
+		wantErr bool
+	}{{metadatahandler.ErrQueuedAlreadyApplied, false}, {metadatahandler.ErrQueuedApplyStale, true}} {
+		reg := capOpReg(t)
+		s := &Server{applyWhenScannedHandler: sentinelRunner{tc.err}}
+		require.NoError(t, s.RegisterApplyWhenScannedOp(reg))
+		def, ok := reg.Def(applyWhenScannedOpID)
+		require.True(t, ok)
+		err := def.Run(context.Background(),
+			json.RawMessage(`{"kind":"apply-candidate","book_id":"b9","dry_run":false}`), &sdReporter{id: "op-x"})
+		if tc.wantErr {
+			require.ErrorIs(t, err, metadatahandler.ErrQueuedApplyStale)
+		} else {
+			require.NoError(t, err)
+		}
+	}
 }
 
 // failingRunner fails the test if the op reaches the apply at all.
