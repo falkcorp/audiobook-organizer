@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-09-29
 
@@ -567,6 +567,23 @@ func TestPersonParentheticalHead(t *testing.T) {
 		"nobody103 (Jack Voraces)", "Dante King (Rise of the Last Star)"} {
 		if got, ok := PersonParentheticalHead(in); ok {
 			t.Errorf("PersonParentheticalHead(%q) = %q, want none", in, got)
+		}
+	}
+}
+
+// The placeholder-phrase rule needs two or more words and is relink-only: a
+// vocabulary rule never unlinks a credit on its own, and a lone head word can
+// be a surname.
+func TestClassifyName_PlaceholderPhraseIsRelinkOnly(t *testing.T) {
+	for _, n := range []string{"parse author", "author name", "NO IDEA", "Test Author"} {
+		v := ClassifyName(n)
+		if v.Rule != RulePlaceholderPhrase || !v.RelinkOnly() {
+			t.Errorf("ClassifyName(%q) = %+v, want relink-only %s", n, v, RulePlaceholderPhrase)
+		}
+	}
+	for _, n := range []string{"Writer", "Name", "Idea"} {
+		if v := ClassifyName(n); v.Rule == RulePlaceholderPhrase {
+			t.Errorf("ClassifyName(%q) = %+v: a lone word is not a placeholder phrase", n, v)
 		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_round2_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 993dd8c9-20d0-4bd4-951b-11471d5dff76
 // last-edited: 2026-09-29
 
@@ -100,6 +100,7 @@ func TestJunkAuthorFixer_AuthorNamedSeriesStillPasses(t *testing.T) {
 	f.book(junkBookSpec{title: "Mistborn 02 - The Well of Ascension", path: "/lib/bs/x", author: "Mistborn", series: "Brandon Sanderson"})
 	f.book(junkBookSpec{title: "The Final Empire", path: "/lib/bs/1", author: "Brandon Sanderson", series: "Mistborn", vg: "vg-bs"})
 	f.book(junkBookSpec{title: "The Hero of Ages", path: "/lib/bs/2", author: "Brandon Sanderson", series: "Mistborn"})
+	f.book(junkBookSpec{title: "The Way of Kings", path: "/lib/bs/3", author: "Brandon Sanderson"})
 	add("Brandon Sanderson", "vg-bs")
 
 	plan := f.plan()
@@ -116,7 +117,6 @@ func TestJunkAuthorFixer_AuthorNamedSeriesStillPasses(t *testing.T) {
 // refuses the relink before anything is written.
 func TestJunkAuthorFixer_ApplyBackstopRefusesAWorkCreditedSincePlan(t *testing.T) {
 	f := newJunkFixture(t)
-	f.book(junkBookSpec{title: "Esoterrorism From the Secret File 2", path: "/lib/wk/1", author: "Wraith Knight"})
 	f.book(junkBookSpec{title: "Three Worlds", path: "/lib/wk/2", author: "Wraith Knight", vg: "vg-wk"})
 	id := f.book(junkBookSpec{title: "read by narrator", path: "/lib/j/wk", author: "read by narrator", vg: "vg-wk"})
 	plan := f.plan()
@@ -128,6 +128,7 @@ func TestJunkAuthorFixer_ApplyBackstopRefusesAWorkCreditedSincePlan(t *testing.T
 
 	f.mkSeries("Wraith Knight", "C. T. Phipps")
 	f.book(junkBookSpec{title: "The Wraith Knight", path: "/lib/ctp/wk1", author: "C. T. Phipps", series: "Wraith Knight"})
+	f.book(junkBookSpec{title: "The Wraith Lord", path: "/lib/ctp/wk2", author: "C. T. Phipps", series: "Wraith Knight"})
 	f.book(junkBookSpec{title: "Cthulhu Armageddon", path: "/lib/ctp/ca", author: "C. T. Phipps"})
 	f.fixer.idxMu.Lock()
 	f.fixer.idx = nil
@@ -201,33 +202,111 @@ func TestJunkAuthorIndex_MintableRefusesJoinedAndBracketedNames(t *testing.T) {
 	}
 }
 
-// The credit maps skip a book whose primary author is also its Narrator,
-// even when the reader is credited with more books than they narrate.
+// A reader filed as an author is no evidence: David Tennant, credited with a
+// book in a series "Cressida Cowell", reads her books. Without the reader
+// test his one credit plus her own series outweighs her (no other work).
 func TestJunkAuthorIndex_ReaderCreditIsNoWorkEvidence(t *testing.T) {
 	tennant, cowell, s := 1, 2, 10
 	narr := "David Tennant"
-	idx := indexFrom(
-		[]database.Author{{ID: tennant, Name: "David Tennant"}, {ID: cowell, Name: "Cressida Cowell"}},
-		[]database.BookCore{
-			{ID: "b1", Title: "How to Speak Dragonese", AuthorID: &tennant, SeriesID: &s, Narrator: &narr},
-			{ID: "b2", Title: "Mis-credited One", AuthorID: &tennant},
-			{ID: "b3", Title: "Mis-credited Two", AuthorID: &tennant},
-			{ID: "b4", Title: "How to Be a Pirate", AuthorID: &cowell},
-		},
-		[]database.Series{{ID: s, Name: "Cressida Cowell"}}, nil, nil)
+	books := []database.BookCore{
+		{ID: "b1", Title: "How to Speak Dragonese", AuthorID: &tennant, SeriesID: &s},
+		{ID: "b2", Title: "How to Be a Pirate", AuthorID: &cowell, SeriesID: &s, Narrator: &narr},
+		{ID: "b3", Title: "How to Cheat a Dragon's Curse", AuthorID: &cowell, SeriesID: &s, Narrator: &narr},
+	}
+	idx := indexFrom([]database.Author{{ID: tennant, Name: "David Tennant"}, {ID: cowell, Name: "Cressida Cowell"}},
+		books, []database.Series{{ID: s, Name: "Cressida Cowell"}}, nil, nil)
+	require.True(t, idx.isReader(tennant))
 	require.Empty(t, idx.workCreditedElsewhere("Cressida Cowell", cowell))
+}
+
+// An author reading their own books is not a reader: Neil Gaiman's
+// self-read "American Gods" still makes an "American Gods" row a work.
+func TestJunkAuthorFixer_SelfNarratingAuthorIsStillEvidence(t *testing.T) {
+	f := newJunkFixture(t)
+	for _, ti := range []string{"American Gods", "Anansi Boys", "Neverwhere", "Coraline"} {
+		f.book(junkBookSpec{title: ti, path: "/lib/ng/" + ti, author: "Neil Gaiman", narrator: "Neil Gaiman"})
+	}
+	f.book(junkBookSpec{title: "Stardust", path: "/lib/ng/sd", author: "Neil Gaiman"})
+	f.book(junkBookSpec{title: "American Gods 10th Anniversary", path: "/lib/ag/1", author: "American Gods", vg: "vg-ag"})
+	f.book(junkBookSpec{title: "Norse Mythology", path: "/lib/ag/2", author: "American Gods"})
+	id := f.book(junkBookSpec{title: "American Gods 10th Anniversary (copy)", path: "/lib/j/ag", author: "read by narrator", vg: "vg-ag"})
+	r := relinkRow(t, f, f.plan(), "read by narrator", id)
+	require.NotEqual(t, "American Gods", r.Proposed["author"], r.Reason)
+	require.Contains(t, r.SkipReason, `credited to "Neil Gaiman"`)
+}
+
+// One stray credit never outweighs a body of work: a biography titled
+// "Agatha Christie" does not make Agatha Christie a work.
+func TestJunkAuthorFixer_BiographyTitleDoesNotRefuseItsSubject(t *testing.T) {
+	f := newJunkFixture(t)
+	for _, ti := range []string{"Murder on the Orient Express", "Death on the Nile", "The ABC Murders"} {
+		f.book(junkBookSpec{title: ti, path: "/lib/ac/" + ti, author: "Agatha Christie"})
+	}
+	f.book(junkBookSpec{title: "Agatha Christie", path: "/lib/lt/1", author: "Laura Thompson"})
+	f.book(junkBookSpec{title: "The Six Wives of Henry VIII", path: "/lib/lt/2", author: "Laura Thompson"})
+	id := f.book(junkBookSpec{title: "Evil Under the Sun", path: "/lib/j/eus", author: "read by narrator",
+		tags: map[string]string{"artist": "Agatha Christie"}})
+	r := relinkRow(t, f, f.plan(), "read by narrator", id)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Equal(t, "Agatha Christie", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSrcTags, r.Proposed["source"])
+}
+
+// A swapped pair where neither side has work outside it: held, never the
+// work row ("Cthulhu Armageddon" credited with three books in a series "C.
+// T. Phipps", C. T. Phipps with two in series "Cthulhu Armageddon").
+func TestJunkAuthorFixer_SwappedPairWithNoOutsideWorkIsHeld(t *testing.T) {
+	f := newJunkFixture(t)
+	f.mkSeries("Cthulhu Armageddon", "C. T. Phipps")
+	f.mkSeries("C. T. Phipps", "Cthulhu Armageddon")
+	for i := range 2 {
+		f.book(junkBookSpec{title: fmt.Sprintf("CA Book %d", i), path: fmt.Sprintf("/lib/ctp/%d", i), author: "C. T. Phipps", series: "Cthulhu Armageddon"})
+	}
+	for i := range 3 {
+		f.book(junkBookSpec{title: fmt.Sprintf("Swapped %d", i), path: fmt.Sprintf("/lib/sw/%d", i), author: "Cthulhu Armageddon",
+			series: "C. T. Phipps", vg: fmt.Sprintf("vg-%d", i)})
+	}
+	id := f.book(junkBookSpec{title: "Swapped 0 (copy)", path: "/lib/j/sw", author: "read by narrator", vg: "vg-0"})
+	r := relinkRow(t, f, f.plan(), "read by narrator", id)
+	require.NotEqual(t, "Cthulhu Armageddon", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "held: %v %s", r.Proposed, r.Reason)
+	require.Contains(t, r.SkipReason, `credited to "C. T. Phipps"`)
+}
+
+// A better source's answer refused as a work credited elsewhere holds the
+// row: a sibling naming someone else does not decide it instead.
+func TestJunkAuthorFixer_RefusedWorkCreditHoldsAgainstLowerSources(t *testing.T) {
+	f := newJunkFixture(t)
+	f.mkSeries("Wraith Knight", "C. T. Phipps")
+	for _, ti := range []string{"The Wraith Knight", "The Wraith Lord"} {
+		f.book(junkBookSpec{title: ti, path: "/lib/ctp/" + ti, author: "C. T. Phipps", series: "Wraith Knight"})
+	}
+	f.book(junkBookSpec{title: "Three Worlds", path: "/lib/wk/1", author: "Wraith Knight"})
+	f.book(junkBookSpec{title: "Some Other Book", path: "/lib/mix/sib.m4b", author: "Ann Other"})
+	id := f.book(junkBookSpec{title: "read by narrator", path: "/lib/mix/j.m4b", author: "read by narrator",
+		tags: map[string]string{"artist": "Wraith Knight"}})
+	r := relinkRow(t, f, f.plan(), "read by narrator", id)
+	require.NotEqual(t, "Wraith Knight", r.Proposed["author"], r.Reason)
+	require.NotEqual(t, "Ann Other", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "held: %v %s", r.Proposed, r.Reason)
+	require.Contains(t, r.SkipReason, "refused as a work credited to another author")
 }
 
 // Not someone else: a strong junk row, a row spelled the same, a row
 // carrying the name whole. Someone else: a real author with the series.
 func TestJunkAuthorIndex_WorkCreditedElsewhereExclusions(t *testing.T) {
-	gs, rbn, dup, jr, ctp, s := 1, 2, 3, 4, 5, 10
+	gs, rbn, dup, jr, ctp, stray, s := 1, 2, 3, 4, 5, 6, 10
+	// Glynn Stewart's only book is in the series of his name (no independent
+	// work), so each excluded credit alone would outweigh him.
 	idx := indexFrom(
 		[]database.Author{{ID: gs, Name: "Glynn Stewart"}, {ID: rbn, Name: "read by narrator"},
-			{ID: dup, Name: "glynn stewart"}, {ID: jr, Name: "Glynn Stewart Jr"}, {ID: ctp, Name: "C. T. Phipps"}},
+			{ID: dup, Name: "glynn stewart"}, {ID: jr, Name: "Glynn Stewart Jr"}, {ID: ctp, Name: "C. T. Phipps"},
+			{ID: stray, Name: "Stray Row"}},
 		[]database.BookCore{
 			{ID: "b1", Title: "Starship's Mage", AuthorID: &rbn, SeriesID: &s},
-			{ID: "b2", Title: "Mercury Rising", AuthorID: &gs},
+			{ID: "b2", Title: "Mercury Rising", AuthorID: &gs, SeriesID: &s},
+			// title-only, and the row has no other work: a folder parse.
+			{ID: "b6", Title: "Glynn Stewart", AuthorID: &stray},
 			{ID: "b3", Title: "Sword of Mars", AuthorID: &dup, SeriesID: &s},
 			{ID: "b4", Title: "Duchy of Terra", AuthorID: &jr, SeriesID: &s},
 			{ID: "b5", Title: "Other Work", AuthorID: &jr},
@@ -235,12 +314,42 @@ func TestJunkAuthorIndex_WorkCreditedElsewhereExclusions(t *testing.T) {
 		[]database.Series{{ID: s, Name: "Glynn Stewart"}}, nil, nil)
 	require.Empty(t, idx.workCreditedElsewhere("Glynn Stewart", gs))
 
-	idx = indexFrom(
-		[]database.Author{{ID: gs, Name: "Glynn Stewart"}, {ID: ctp, Name: "C. T. Phipps"}},
-		[]database.BookCore{
-			{ID: "b1", Title: "Cthulhu Armageddon", AuthorID: &ctp, SeriesID: &s},
-			{ID: "b2", Title: "Mercury Rising", AuthorID: &gs},
-		},
-		[]database.Series{{ID: s, Name: "Glynn Stewart"}}, nil, nil)
-	require.Equal(t, "C. T. Phipps", idx.workCreditedElsewhere("Glynn Stewart", gs))
+	// Proportional: one C. T. Phipps book filed in a series "Glynn Stewart"
+	// does not outweigh Glynn Stewart's own work; two works do outweigh one.
+	books := []database.BookCore{
+		{ID: "b1", Title: "Cthulhu Armageddon", AuthorID: &ctp, SeriesID: &s},
+		{ID: "b2", Title: "Mercury Rising", AuthorID: &gs},
+		{ID: "b3", Title: "The Tower of Zhaal", AuthorID: &ctp},
+	}
+	authors := []database.Author{{ID: gs, Name: "Glynn Stewart"}, {ID: ctp, Name: "C. T. Phipps"}}
+	series := []database.Series{{ID: s, Name: "Glynn Stewart"}}
+	require.Empty(t, indexFrom(authors, books, series, nil, nil).workCreditedElsewhere("Glynn Stewart", gs))
+	books = append(books, database.BookCore{ID: "b4", Title: "The Tree of Azathoth", AuthorID: &ctp, SeriesID: &s})
+	require.Equal(t, "C. T. Phipps", indexFrom(authors, books, series, nil, nil).workCreditedElsewhere("Glynn Stewart", gs))
+}
+
+// A junk row's "body of work" does not count file labels ("Disc 01") or the
+// other author's own works ("Wraith Knight Three Worlds" is C. T. Phipps's
+// "Wraith Knight"): neither outweighs one real credit.
+func TestJunkAuthorIndex_IndependentWorksSkipLabelsAndTheOthersWorks(t *testing.T) {
+	lk, tp, s := 1, 2, 10
+	books := []database.BookCore{{ID: "t1", Title: "Lady Knight", AuthorID: &tp, SeriesID: &s}, {ID: "t2", Title: "Alanna", AuthorID: &tp}}
+	for i := range 3 {
+		books = append(books, database.BookCore{ID: fmt.Sprintf("d%d", i), Title: fmt.Sprintf("Disc 0%d", i+1), AuthorID: &lk})
+	}
+	idx := indexFrom([]database.Author{{ID: lk, Name: "Lady Knight"}, {ID: tp, Name: "Tamora Pierce"}},
+		books, []database.Series{{ID: s, Name: "Lady Knight"}}, nil, nil)
+	require.Equal(t, "Tamora Pierce", idx.workCreditedElsewhere("Lady Knight", lk))
+
+	ca, ctp, wk := 3, 4, 11
+	books = []database.BookCore{
+		{ID: "c1", Title: "The Tower of Zhaal", AuthorID: &ctp, SeriesID: &s},
+		{ID: "c2", Title: "The Wraith Knight", AuthorID: &ctp, SeriesID: &wk},
+	}
+	for i := range 3 {
+		books = append(books, database.BookCore{ID: fmt.Sprintf("w%d", i), Title: fmt.Sprintf("Wraith Knight Three Worlds, Book %d", i), AuthorID: &ca})
+	}
+	idx = indexFrom([]database.Author{{ID: ca, Name: "Cthulhu Armageddon"}, {ID: ctp, Name: "C. T. Phipps"}},
+		books, []database.Series{{ID: s, Name: "Cthulhu Armageddon"}, {ID: wk, Name: "Wraith Knight"}}, nil, nil)
+	require.Equal(t, "C. T. Phipps", idx.workCreditedElsewhere("Cthulhu Armageddon", ca))
 }
