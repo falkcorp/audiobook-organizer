@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.9.1
+// version: 2.10.0
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-30
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 )
 
 const pendingFileOpPrefix = "pending_file_op:"
@@ -164,7 +165,22 @@ func (p *FileIOPool) Submit(bookID string, fn func()) bool {
 // SubmitTyped queues a file I/O job with a specific operation type. Its result
 // is Submit's: false when the job was dropped without running.
 func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) bool {
+	// The book has file work queued: a library scan treats it as busy until
+	// the job has run (scanlock.MarkPending), so it cannot read the book's old
+	// tags between the caller's database write and this job's tag write. The
+	// caller submits while it still holds the book's scan lock, so the scan
+	// cannot slip in before the mark. Cleared when fn returns (or panics), or
+	// here when the job is dropped.
+	clearPending := scanlock.Books.MarkPending(bookID)
+	inner := fn
+	fn = func() {
+		defer clearPending()
+		inner()
+	}
 	if done, accepted := p.tryQueue(bookID, opType, fn); done {
+		if !accepted {
+			clearPending()
+		}
 		return accepted
 	}
 
@@ -184,6 +200,7 @@ func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) bool {
 		// the recovery mechanism, so the work is picked up on next start
 		// rather than silently lost.
 		<-p.overflow
+		clearPending()
 		slog.Warn("file I/O pool stopped, dropping job for book (op)", "bookID", logger.SanitizeLogValue(bookID), "opType", opType)
 		return false
 	}

@@ -1,5 +1,5 @@
 // file: internal/scanlock/scanlock_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 17e29a0f-0309-4e70-ad4c-1f5d29bcdfac
 // last-edited: 2026-09-30
 
@@ -132,6 +132,56 @@ func TestOverlappingSetsNeverDeadlock(t *testing.T) {
 	}
 	if n := tb.Held(); n != 0 {
 		t.Fatalf("table not empty: %d", n)
+	}
+}
+
+// A pending file job makes the book busy for the scanner (the Idle acquires)
+// but not for another apply (plain LockSet).
+func TestPendingBlocksOnlyTheIdleAcquires(t *testing.T) {
+	tb := New()
+	done := tb.MarkPending("p")
+	if _, ok := tb.TryLockSetIdle([]string{"p"}); ok {
+		t.Fatal("scanner acquired a book with pending file work")
+	}
+	h, ok := tb.TryLockSet([]string{"p"})
+	if !ok {
+		t.Fatal("a second apply was blocked by the first apply's pending file job")
+	}
+	h.Release()
+
+	got := make(chan struct{})
+	go func() {
+		g, err := tb.LockSetIdle(context.Background(), []string{"p", "q"})
+		if err == nil {
+			close(got)
+			g.Release()
+		}
+	}()
+	select {
+	case <-got:
+		t.Fatal("LockSetIdle returned while file work was pending")
+	case <-time.After(30 * time.Millisecond):
+	}
+	done()
+	done() // idempotent
+	select {
+	case <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("LockSetIdle never acquired after the pending mark cleared")
+	}
+	if n := tb.Held(); n != 0 {
+		t.Fatalf("table not empty: %d", n)
+	}
+}
+
+func TestLockSetIdleHonoursTimeoutWhilePending(t *testing.T) {
+	tb := New()
+	done := tb.MarkPending("p")
+	defer done()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := tb.LockSetIdle(ctx, []string{"p"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want deadline exceeded, got %v", err)
 	}
 }
 

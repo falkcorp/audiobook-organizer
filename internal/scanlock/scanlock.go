@@ -1,5 +1,5 @@
 // file: internal/scanlock/scanlock.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 515417c0-cdec-4e8d-bf38-99b598b4115d
 // last-edited: 2026-09-30
 
@@ -68,7 +68,12 @@ type Table struct {
 type entry struct {
 	// ch has capacity 1: a token in the channel means "held".
 	ch   chan struct{}
-	refs int // holders + waiters; guarded by Table.mu
+	refs int // holders + waiters + pending marks; guarded by Table.mu
+	// pending counts writers between their database write and their file
+	// write (MarkPending). idle is non-nil while pending > 0 and is closed
+	// when it drops to zero. Both guarded by Table.mu.
+	pending int
+	idle    chan struct{}
 }
 
 // New returns an empty table.
@@ -185,6 +190,94 @@ func (t *Table) TryLockSet(ids []string) (*Hold, bool) {
 		}
 	}
 	h.shares.Store(1)
+	return h, true
+}
+
+// MarkPending records that a writer has committed book id's metadata to the
+// database and has file work (tag write, rename, cover embed) still to run.
+// It does not exclude other writers -- a second apply of the book need not
+// wait for the first one's file job, metafetch's own book lock serializes
+// those -- but the SCANNER treats a pending book as busy (LockSetIdle,
+// TryLockSetIdle). Without it the scanner could read the book's old tags
+// after the apply's database write and before its tag write, overlay them
+// onto the applied row, and the file job would then write the reverted
+// values into the files.
+//
+// A writer marks pending while it still holds the book's exclusive lock, so
+// the scanner can never slip in between the database write and the mark. The
+// returned func clears the mark; it is idempotent.
+func (t *Table) MarkPending(id string) func() {
+	if id == "" {
+		return func() {}
+	}
+	e := t.ref(id, "p+")
+	t.mu.Lock()
+	e.pending++
+	if e.idle == nil {
+		e.idle = make(chan struct{})
+	}
+	t.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			t.mu.Lock()
+			e.pending--
+			if e.pending == 0 && e.idle != nil {
+				close(e.idle)
+				e.idle = nil
+			}
+			t.mu.Unlock()
+			t.unref(id, e, "p-")
+		})
+	}
+}
+
+// firstPendingIdle returns the idle channel of the first held key with
+// pending file work, or nil when none has any.
+func (h *Hold) firstPendingIdle() <-chan struct{} {
+	h.t.mu.Lock()
+	defer h.t.mu.Unlock()
+	for _, e := range h.entries {
+		if e.pending > 0 {
+			return e.idle
+		}
+	}
+	return nil
+}
+
+// LockSetIdle is LockSet for the scanner: it also waits until no key has
+// pending file work (MarkPending). While it waits for a pending job it holds
+// nothing, so it never blocks the writer that is about to finish.
+func (t *Table) LockSetIdle(ctx context.Context, ids []string) (*Hold, error) {
+	for {
+		h, err := t.LockSet(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		idle := h.firstPendingIdle()
+		if idle == nil {
+			return h, nil
+		}
+		h.Release()
+		select {
+		case <-idle:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// TryLockSetIdle is TryLockSet for the scanner: it also fails when any key
+// has pending file work.
+func (t *Table) TryLockSetIdle(ids []string) (*Hold, bool) {
+	h, ok := t.TryLockSet(ids)
+	if !ok {
+		return nil, false
+	}
+	if h.firstPendingIdle() != nil {
+		h.Release()
+		return nil, false
+	}
 	return h, true
 }
 

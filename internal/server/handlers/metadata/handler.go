@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-09-25
+// last-edited: 2026-09-30
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -67,7 +67,6 @@ import (
 	metadatapkg "github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -102,6 +101,11 @@ type Handler struct {
 	// scanGate refuses inline metadata writes while a library scan runs (409).
 	// Nil = ungated. Set by SetScanStandDownGate.
 	scanGate opsregistry.ScanStandDownRequestGate
+
+	// queuedApply hands an apply whose book the library scan holds past
+	// requestBookLockWait to the metadata.apply-when-scanned op (202). Nil
+	// makes the request keep waiting. Set by SetQueuedApplyEnqueuer.
+	queuedApply QueuedApplyEnqueuer
 
 	// fileIOPool backs applyAudiobookMetadata's background file-IO submission.
 	// Interface snapshot, typed-nil guarded by the controller so the in-method
@@ -434,11 +438,6 @@ func (h *Handler) searchMetadataImpl(c *gin.Context) {
 
 // fetchAudiobookMetadata fetches and applies metadata to an audiobook
 func (h *Handler) fetchAudiobookMetadataImpl(c *gin.Context) {
-	hold, ok := h.holdScanStandDown(c, "fetch-metadata")
-	if !ok {
-		return
-	}
-	defer hold.Release()
 	id := c.Param("id")
 
 	store := h.store
@@ -447,20 +446,20 @@ func (h *Handler) fetchAudiobookMetadataImpl(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.metadataFetchService.FetchMetadataForBook(c.Request.Context(), id)
+	// Per-book scan lock (book_scan_lock.go). The fetch applies and schedules
+	// file work through the pool, so it holds the book like an apply does.
+	hold, ok := h.lockBookForRequest(c, QueuedApply{Kind: QueuedFetch, BookID: id})
+	if !ok {
+		return
+	}
+	defer hold.Release()
+
+	// fetchCore also invalidates the candidate cache (fetch+apply rewrites
+	// the book's identity) and enqueues the iTunes write-back.
+	resp, err := h.fetchCore(c.Request.Context(), id)
 	if err != nil {
 		httputil.RespondWithError(c, 404, err.Error(), "NOT_FOUND")
 		return
-	}
-
-	// METADATA-CACHED-MATCHER: fetch+apply rewrites book identity (title,
-	// author, etc), so the cached candidates are stale by definition.
-	// Invalidate so the next read fetches fresh.
-	_ = h.metadataFetchService.InvalidateCachedCandidates(id)
-
-	// Enqueue for iTunes auto write-back if metadata was updated
-	if wb := h.resolveWriteBack(); wb != nil {
-		wb.Enqueue(id)
 	}
 
 	// Re-fetch to get fully enriched book with author/series/narrator names
@@ -612,105 +611,28 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid request body")
 		return
 	}
-	// Metadata is never applied during a library scan: 409 at once, no wait.
-	// The gate is held until the background file-IO job below finishes, since
-	// that job writes tags and renames files (it Retains the hold); every other
-	// exit releases it on return.
-	hold, ok := h.holdScanStandDown(c, "apply-metadata")
+	// Per-book scan lock (book_scan_lock.go): waits only if the library scan
+	// is reading THIS book, at most requestBookLockWait, then hands off to the
+	// queued op (202). The file job is submitted under the lock; the pool marks
+	// the book pending until it has run.
+	hold, ok := h.lockBookForRequest(c, QueuedApply{Kind: QueuedApplyCandidate, BookID: id,
+		Candidate: &body.Candidate, Fields: body.Fields, WriteBack: body.WriteBack})
 	if !ok {
 		return
 	}
 	defer hold.Release()
 
-	// The apply below writes the database first; the rename runs afterwards in
-	// the background file-IO job. When that rename is known to fail, refuse
-	// here, before any write, so the book cannot end up with new metadata and
-	// its old file names (three books did on 2026-09-13; the batch apply got
-	// the same check in #3385). The same read-only preflight the batch apply
-	// runs, planned with this request's field subset.
-	//
-	// Gated on the pool, not on write_back: the background job always runs the
-	// file I/O (fileIO=true below) and write_back only decides the tag write,
-	// so a write_back=false apply still renames. With no pool there is no file
-	// sequel and nothing to refuse.
-	if h.fileIOPool != nil {
-		if perr := h.metadataFetchService.RenamePreflight(id, body.Candidate, body.Fields); perr != nil {
-			httputil.RespondWithErrorFields(c, http.StatusConflict, perr.Error(), "CONFLICT",
+	resp, err := h.applyCandidateCore(c.Request.Context(), id, body.Candidate, body.Fields, body.WriteBack)
+	if err != nil {
+		var refused *errRenameWouldFail
+		if errors.As(err, &refused) {
+			httputil.RespondWithErrorFields(c, http.StatusConflict, refused.Error(), "CONFLICT",
 				map[string]any{"reason": metafetch.ApplyRefusedReasonFileWorkWouldFail})
 			return
 		}
-	}
-
-	resp, err := h.metadataFetchService.ApplyMetadataCandidate(id, body.Candidate, body.Fields)
-	if err != nil {
 		httputil.InternalError(c, "failed to apply metadata", err)
 		return
 	}
-
-	// METADATA-CACHED-MATCHER: applying invalidates the cache so the
-	// next read goes through a fresh fetch chain that reflects the
-	// new title/author/etc.
-	if h.metadataFetchService != nil {
-		_ = h.metadataFetchService.InvalidateCachedCandidates(id)
-	}
-
-	// Kick off the slow file work (cover download, cover embed, rename, tags)
-	// in the background. The response keeps the previous cover until the
-	// download lands (renderableCoverURL).
-	shouldWriteBack := body.WriteBack == nil || *body.WriteBack
-
-	// Enqueue in the write-back batcher immediately (before pool submission)
-	// so the batcher picks up the metadata change even if the background
-	// file-IO job panics on a malformed audio file. The DB metadata is
-	// already updated at this point, so early enqueueing is correct.
-	if wb := h.resolveWriteBack(); shouldWriteBack && wb != nil {
-		wb.Enqueue(id)
-	}
-
-	if pool := h.fileIOPool; pool != nil {
-		bookID := id
-		mfs := h.metadataFetchService
-		pendingCover := resp.PendingCoverURL
-		jobDone := hold.Retain()
-		if !pool.Submit(bookID, func() {
-			defer jobDone()
-			// The response is already written. A lost hold means a scan may be
-			// running again, so the job does not start its file work, and
-			// FinishApplyFileWork re-checks the hold (hold.Checkpoint) before the
-			// cover download, the file I/O and the tag write.
-			if err := hold.Checkpoint(); err != nil {
-				slog.Warn("background apply skipped: scan stand-down lost", "bookID", logger.SanitizeLogValue(bookID), "err", err)
-				return
-			}
-			// The shared sequel the batch sibling also runs: cover download
-			// FIRST (it used to run inline in ApplyMetadataCandidate, ~4s of a
-			// measured 6.44s request, and it must precede the embed or the
-			// previous image is embedded), then the file I/O, then the tags
-			// exactly once. This used to follow ApplyMetadataFileIO with its own
-			// WriteBackMetadataForBook, which tagged every file twice whenever
-			// auto_write_tags_on_apply was on.
-			//
-			// FinishApplyFileWork takes the per-path write lock itself, on the
-			// path each write touches (the library copy's for a protected book,
-			// the post-rename path for the tags), so this job serializes with
-			// auto-fetch and the batch apply of the same files. This handler
-			// cannot know that path and must not lock around the call.
-			//
-			// The HTTP response has already been written by the time this runs,
-			// so a failure can only be logged.
-			if err := mfs.FinishApplyFileWork(bookID, pendingCover, true, shouldWriteBack, hold.Checkpoint); err != nil {
-				slog.Warn("background apply file work failed", "bookID", logger.SanitizeLogValue(bookID), "err", logger.SanitizeLogValue(err.Error()))
-			}
-		}) {
-			// Dropped (pool stopped): fn will never run, so release its share of the hold here.
-			jobDone()
-		}
-	}
-
-	h.publishEvent(c.Request.Context(), plugin.NewEvent(plugin.EventMetadataApplied, id, map[string]any{
-		"source":  resp.Source,
-		"message": resp.Message,
-	}))
 
 	// Re-fetch to get fully enriched book with author/series/narrator names
 	enrichedBook := resp.Book
@@ -860,11 +782,6 @@ func (h *Handler) pruneBookCOWVersionsImpl(c *gin.Context) {
 // writeBackAudiobookMetadata handles POST /api/v1/audiobooks/:id/write-back.
 // It writes current DB metadata to audio files AND renames files if AutoRenameOnApply is enabled.
 func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
-	hold, ok := h.holdScanStandDown(c, "write-back")
-	if !ok {
-		return
-	}
-	defer hold.Release()
 	id := c.Param("id")
 	if id == "" {
 		httputil.RespondWithBadRequest(c, "book id is required")
@@ -887,54 +804,39 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 		return
 	}
 
-	store := h.store
-	book, err := store.GetBookByID(id)
-	if err != nil || book == nil {
+	if b, err := h.store.GetBookByID(id); err != nil || b == nil {
 		httputil.RespondWithNotFound(c, "audiobook", "")
 		return
 	}
-
-	// Step 1: Rename files if requested or AutoRenameOnApply is on
-	renamed := 0
 	doRename := (body.Rename != nil && *body.Rename) || config.AppConfig.AutoRenameOnApply
-	if doRename && len(body.SegmentIDs) == 0 {
-		// Refuse before anything moves when the rename is known to fail (two
-		// files on one target, a broken pattern, an unresolved recorded
-		// collision). Until 2026-09-13 this path found out by trying: the
-		// rename moved some files, failed on the next, and the handler logged a
-		// warning, wrote tags and answered 200 "metadata written".
-		if err := h.metadataFetchService.RenameOnlyPreflight(id); err != nil {
-			if errors.Is(err, metafetch.ErrApplyFileWorkWouldFail) {
-				httputil.RespondWithError(c, http.StatusConflict, err.Error(), metafetch.ApplyRefusedReasonFileWorkWouldFail)
+
+	// Per-book scan lock (book_scan_lock.go), held for the whole synchronous
+	// rename + tag write: the scanner must not read these files mid-write.
+	hold, ok := h.lockBookForRequest(c, QueuedApply{Kind: QueuedWriteBack, BookID: id,
+		SegmentIDs: body.SegmentIDs, Rename: &doRename})
+	if !ok {
+		return
+	}
+	defer hold.Release()
+
+	res, err := h.writeBackCore(c.Request.Context(), id, body.SegmentIDs, doRename)
+	if err != nil {
+		var conflict *errWriteBackConflict
+		if errors.As(err, &conflict) {
+			if conflict.status == http.StatusNotFound {
+				httputil.RespondWithNotFound(c, "audiobook", "")
 				return
 			}
-			httputil.InternalError(c, "rename preflight failed", err)
+			httputil.RespondWithError(c, conflict.status, conflict.msg, conflict.code)
 			return
 		}
-		if err := h.metadataFetchService.RunApplyPipelineRenameOnly(c.Request.Context(), id, book); err != nil {
-			// The rename may have moved some files before it failed (their rows
-			// are updated; see RunApplyPipelineRenameOnly). Writing tags now
-			// would stamp a half-moved book, so stop and say what happened.
-			status := http.StatusInternalServerError
-			if errors.Is(err, organizer.ErrDuplicateRenameTarget) || errors.Is(err, metafetch.ErrApplyFileWorkWouldFail) {
-				status = http.StatusConflict
-			}
-			httputil.RespondWithError(c, status, "rename failed; no tags were written: "+err.Error(), "rename_failed")
-			return
-		}
-		renamed = 1
-	}
-
-	// Step 2: Write tags to files
-	var writtenCount int
-	if len(body.SegmentIDs) > 0 {
-		writtenCount, err = h.metadataFetchService.WriteBackMetadataForBook(id, body.SegmentIDs)
-	} else {
-		writtenCount, err = h.metadataFetchService.WriteBackMetadataForBook(id)
-	}
-	if err != nil {
 		httputil.InternalError(c, "failed to write back metadata", err)
 		return
+	}
+	writtenCount := res.written
+	renamed := 0
+	if res.renamed {
+		renamed = 1
 	}
 
 	msg := fmt.Sprintf("metadata written to %d file(s)", writtenCount)
