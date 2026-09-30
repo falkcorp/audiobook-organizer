@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-09-29
 
@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -421,7 +422,10 @@ func (f *junkAuthorFixer) buildIndex(store OpsStore) (*junkAuthorIndex, error) {
 	// book_narrators credits, read in one pass over the junction. A store
 	// that cannot answer (a test double) leaves the Narrator-text count; a
 	// read error fails the index (and so the plan) closed.
-	if rs := database.AsNarratorRefStore(store); rs != nil {
+	if rs := database.AsNarratorRefStore(store); rs == nil {
+		slog.Debug("repair-junk-authors: store cannot count book_narrators credits; narrator counts use the Narrator field only",
+			"store", fmt.Sprintf("%T", store))
+	} else {
 		refs, err := rs.GetAllNarratorRefs()
 		if err != nil {
 			return nil, fmt.Errorf("count narrator credits: %w", err)
@@ -493,7 +497,7 @@ func (idx *junkAuthorIndex) hasOtherWork(id int, name string) bool {
 	k := workKey(name)
 	for _, b := range idx.ownBooks[id] {
 		tk := workKey(b.Title)
-		if tk == k || properWordPart(k, tk) {
+		if (tk == k || properWordPart(k, tk)) && !dashCredited(name, b.Title) {
 			continue
 		}
 		if b.SeriesID != nil && workKey(idx.seriesByID[*b.SeriesID].Name) == k {
@@ -520,7 +524,7 @@ func (idx *junkAuthorIndex) workTarget(name string, id int, bookTitle string, bo
 	}
 	library := idx.workNames[k] || idx.seriesWork[k]
 	tk := workKey(bookTitle)
-	own := (tk == k || properWordPart(k, tk)) && !byNamed(name, bookTitle)
+	own := (tk == k || properWordPart(k, tk)) && !byNamed(name, bookTitle) && !dashCredited(name, bookTitle)
 	if bookSeries != nil {
 		if sk := workKey(idx.seriesByID[*bookSeries].Name); sk != "" && (sk == k || properWordPart(k, sk)) {
 			own = true
@@ -558,6 +562,22 @@ func properWordPart(part, whole string) bool {
 // Reborn, Book 2 by Borgy60"): the title then names the author, not a work.
 func byNamed(name, title string) bool {
 	return strings.Contains(" "+authorjunk.Normalize(title)+" ", " by "+authorjunk.Normalize(name)+" ")
+}
+
+// dashCredited reports whether title carries name as a whole " - "-delimited
+// segment ("The Path of Two - DP Behling - read by X"): a credit in the
+// title, like byNamed, not a work named after the person.
+func dashCredited(name, title string) bool {
+	k := workKey(name)
+	if k == "" || !strings.Contains(title, " - ") {
+		return false
+	}
+	for _, seg := range strings.Split(title, " - ") {
+		if workKey(seg) == k {
+			return true
+		}
+	}
+	return false
 }
 
 // evidence builds the library evidence authorjunk.Classify reads for a.
@@ -997,18 +1017,21 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 	}
 
 	// A surname-first clean ("Jennsen, GS_ 08 Rubicon" -> "G. S. Jennsen")
-	// carries initials only: a provider that names someone else wins over it.
+	// carries initials only: when the file tags or the provider answer and
+	// none of them names it, the clean is dropped and the next source decides
+	// (so the disagreeing tag / provider answer wins, at that source's risk).
 	if cl := bySource[junkAuthorSrcCleaned]; len(cl) > 0 && authorjunk.IsSurnameFirstInitials(a.Name) {
-		if prov := bySource[junkAuthorSrcProvider]; len(prov) > 0 {
-			agree := false
-			for k := range cl {
-				if _, ok := prov[k]; ok {
+		answered, agree := false, false
+		for _, src := range []string{junkAuthorSrcTags, junkAuthorSrcProvider} {
+			for k := range bySource[src] {
+				answered = true
+				if _, ok := cl[k]; ok {
 					agree = true
 				}
 			}
-			if !agree {
-				delete(bySource, junkAuthorSrcCleaned)
-			}
+		}
+		if answered && !agree {
+			delete(bySource, junkAuthorSrcCleaned)
 		}
 	}
 
@@ -1154,8 +1177,9 @@ func bookFolder(p string) string {
 
 // junkAuthorPathKeys are the folded names under which the junk name's own
 // author may appear as a folder: the surname before a comma ("Jennsen, GS_
-// 08 Rubicon" -> "jennsen") and the cleaned name and its last word ("G. S.
-// Jennsen" -> "gsjennsen", "jennsen"). Keys shorter than 3 are dropped.
+// 08 Rubicon" -> "jennsen"), the cleaned name and its last word ("G. S.
+// Jennsen" -> "gsjennsen", "jennsen"), and the junk name whole (a book folder
+// named exactly that). Keys shorter than 3 are dropped.
 func junkAuthorPathKeys(junk string) map[string]bool {
 	out := map[string]bool{}
 	put := func(s string) {
@@ -1172,6 +1196,8 @@ func junkAuthorPathKeys(junk string) map[string]bool {
 			put(f[len(f)-1])
 		}
 	}
+	// The junk name itself: the book folder is often named exactly that.
+	put(junk)
 	return out
 }
 
@@ -1184,6 +1210,14 @@ func junkAuthorSegmentBelow(segs []string, candidate string, keys map[string]boo
 		return ""
 	}
 	ck := authorjunk.FoldKey(candidate)
+	// The candidate IS the junk name's author ("Brandon Sanderson" above
+	// "Sanderson, B_ Mistborn"): its fold or its surname is a key.
+	if keys[ck] {
+		return ""
+	}
+	if f := strings.Fields(candidate); len(f) > 1 && keys[authorjunk.FoldKey(f[len(f)-1])] {
+		return ""
+	}
 	at := -1
 	for i, s := range segs {
 		left, _, _ := strings.Cut(s, " - ")
@@ -1194,8 +1228,12 @@ func junkAuthorSegmentBelow(segs []string, candidate string, keys map[string]boo
 	if at < 0 {
 		return ""
 	}
+	// Any deeper segment: the author folder ("Jennsen"), or the book folder
+	// itself when it is the junk name or its comma head is the surname
+	// ("Pyper Down/Jennsen, GS_ 08 Rubicon (Amaranthe 08)/8-06.mp3").
 	for _, s := range segs[at+1:] {
-		if keys[authorjunk.FoldKey(s)] {
+		head, _, _ := strings.Cut(s, ",")
+		if keys[authorjunk.FoldKey(s)] || keys[authorjunk.FoldKey(head)] {
 			return s
 		}
 	}
@@ -1581,6 +1619,19 @@ func (f *junkAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repa
 		return fmt.Errorf("%w: book %s author was locked by the user", repairs.ErrChangedSincePlan, bookID)
 	}
 
+	idx, err := f.cachedIndex(store)
+	if err != nil {
+		return err
+	}
+	// The plan's work test before anything is written: a name that became a
+	// library title since Replan must not leave a freshly created, empty
+	// author row behind.
+	if d.Decision == junkAuthorDecCreate {
+		if code, why := idx.workTarget(d.Target.Name, 0, d.Book.Title, d.Book.SeriesID); code != "" {
+			return fmt.Errorf("%w: book %s: new author %q is %s", repairs.ErrChangedSincePlan, bookID, d.Target.Name, why)
+		}
+	}
+
 	var target *database.Author
 	switch d.Decision {
 	case junkAuthorDecRelink:
@@ -1596,10 +1647,6 @@ func (f *junkAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repa
 	// Never onto the junk row itself (the store's name lookup ignores case),
 	// nor onto another name-alone junk row (the same verdict the plan used:
 	// idx.classifyName).
-	idx, err := f.cachedIndex(store)
-	if err != nil {
-		return err
-	}
 	if target != nil && (target.ID == junkID || idx.classifyName(target.Name).Junk()) {
 		return fmt.Errorf("%w: book %s: target %q (id %d) is the junk row or junk itself", repairs.ErrChangedSincePlan, bookID, target.Name, target.ID)
 	}

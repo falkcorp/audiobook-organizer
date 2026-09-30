@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_targets_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b0e6c1f-8d0a-4c55-9f7e-2a61d3c4b9e8
 // last-edited: 2026-09-29
 
@@ -375,4 +375,92 @@ func TestJunkAuthorFixer_ApplyBackstopRefusesANewWorkTitle(t *testing.T) {
 	require.True(t, errors.Is(err, repairs.ErrChangedSincePlan), err)
 	require.Contains(t, err.Error(), "title in the library")
 	require.Equal(t, before, f.credits(id), "nothing written")
+}
+
+// Re-review of #3631, item 2: no author folder at all -- the reader's folder
+// holds the book folder, which is named after the junk credit. Pyper Down is
+// credited with more books (5) than she narrates (1) and there are no tags,
+// so only the path layout can tell.
+func TestJunkAuthorFixer_PathNarratorAboveBookFolder(t *testing.T) {
+	const junk = "Jennsen, GS_ 08 Rubicon (Amaranthe 08)"
+	f := newJunkFixture(t)
+	for i := range 5 {
+		f.book(junkBookSpec{title: fmt.Sprintf("Mis-credited %d", i), path: fmt.Sprintf("/lib/pd/%d", i), author: "Pyper Down"})
+	}
+	f.book(junkBookSpec{title: "Narrated", path: "/lib/n/1", author: "Ann Other", narrator: "Pyper Down"})
+	id := f.book(junkBookSpec{title: "8-06 Rubicon (Amaranthe 08) — 06",
+		path: "/mnt/bigdata/books/audiobook-organizer/Pyper Down/Jennsen, GS_ 08 Rubicon (Amaranthe 08)", author: junk})
+	r := f.row(f.plan(), junk, id)
+	require.NotNil(t, r)
+	require.NotEqual(t, "Pyper Down", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "held, not unlinked: %v %s", r.Proposed, r.Reason)
+	require.Contains(t, r.SkipReason, "a folder above \"Jennsen, GS_ 08 Rubicon (Amaranthe 08)\"")
+}
+
+// The outer folder that IS the junk name's author is not refused: its
+// surname is the book folder's comma head.
+func TestJunkAuthorFixer_PathAuthorAboveBookFolderStillAnswers(t *testing.T) {
+	const junk = "Sanderson, B_ Mistborn"
+	f := newJunkFixture(t)
+	f.book(junkBookSpec{title: "Elantris", path: "/lib/bs/1", author: "Brandon Sanderson"})
+	id := f.book(junkBookSpec{title: "Mistborn", path: "/lib/Brandon Sanderson/Sanderson, B_ Mistborn", author: junk})
+	r := f.row(f.plan(), junk, id)
+	require.NotNil(t, r)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Equal(t, "Brandon Sanderson", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSrcPath, r.Proposed["source"])
+}
+
+// Re-review item 1: a small author whose titles carry the name as a " - "
+// credit segment is not a work title.
+func TestJunkAuthorFixer_DashCreditInTitleIsNotAWork(t *testing.T) {
+	f := newJunkFixture(t)
+	f.book(junkBookSpec{title: "The Path of One - DP Behling", path: "/lib/dp/1", author: "DP Behling"})
+	id := f.book(junkBookSpec{title: "The Path of Two - DP Behling - read by Kyle Snyder", path: "/lib/j/dp", author: "GraphicAudio",
+		tags: map[string]string{"artist": "DP Behling"}})
+	r := f.row(f.plan(), "GraphicAudio", id)
+	require.NotNil(t, r)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Equal(t, "DP Behling", r.Proposed["author"], r.Reason)
+}
+
+// Re-review item 4: a file tag naming someone else also demotes the
+// initials-only surname-first clean; the tag's answer decides.
+func TestJunkAuthorFixer_SurnameFirstYieldsToFileTag(t *testing.T) {
+	const junk = "Jennsen, GS_ 08 Rubicon (Amaranthe 08)"
+	f := newJunkFixture(t)
+	f.book(junkBookSpec{title: "Starshine", path: "/lib/gsj/1", author: "G. S. Jennsen"})
+	f.book(junkBookSpec{title: "Mercury Rising", path: "/lib/gs/1", author: "Glynn Stewart"})
+	id := f.book(junkBookSpec{title: "Rubicon", path: "/lib/j/rub", author: junk, tags: map[string]string{"artist": "Glynn Stewart"}})
+	r := f.row(f.plan(), junk, id)
+	require.NotNil(t, r)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Equal(t, "Glynn Stewart", r.Proposed["author"], r.Reason)
+	require.Equal(t, junkAuthorSrcTags, r.Proposed["source"])
+}
+
+// Re-review item 3: a create row whose name became a library title after
+// Replan is refused BEFORE the author row is created.
+func TestJunkAuthorFixer_ApplyRefusesAWorkMintBeforeCreating(t *testing.T) {
+	f := newJunkFixture(t)
+	id := f.book(junkBookSpec{title: "Some Novel", path: "/lib/j/an", author: "GraphicAudio", tags: map[string]string{"artist": "Ann Newauthor"}})
+	row := f.row(f.plan(), "GraphicAudio", id)
+	require.NotNil(t, row)
+	require.Equal(t, junkAuthorDecCreate, row.Proposed["decision"], row.Reason)
+	fresh, err := f.fixer.Replan(context.Background(), nil, *row, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, row.Fingerprint, fresh.Fingerprint)
+
+	f.book(junkBookSpec{title: "Ann Newauthor", path: "/lib/o/an", author: "Ann Other"})
+	f.fixer.idxMu.Lock()
+	f.fixer.idx = nil
+	f.fixer.idxMu.Unlock()
+
+	w := repairs.NewWriter(f.s, f.s, f.fixer.ID(), "bulk_update", "repairs-").WithJournal(f.s, f.s, junkTestOpID).WithCredits(f.s)
+	err = f.fixer.Apply(context.Background(), w, fresh)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, repairs.ErrChangedSincePlan), err)
+	got, err := f.s.GetAuthorByName("Ann Newauthor")
+	require.NoError(t, err)
+	require.Nil(t, got, "no author row created")
 }
