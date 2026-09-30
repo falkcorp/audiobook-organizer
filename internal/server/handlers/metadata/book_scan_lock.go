@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
 // last-edited: 2026-09-30
 
@@ -7,10 +7,10 @@ package metadatahandler
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"

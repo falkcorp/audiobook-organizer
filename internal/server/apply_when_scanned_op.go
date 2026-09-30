@@ -1,5 +1,5 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
 // last-edited: 2026-09-30
 
@@ -42,6 +42,15 @@ import (
 // has no caller), so Gate 2 does not hold it either.
 const applyWhenScannedOpID = "metadata.apply-when-scanned"
 
+// organizeWhenScannedOpID is the same op for a single-book organize, as its
+// own def so it carries the organize route's permission. An op def's
+// Permissions are static, and POST /operations/v2 lets any caller holding
+// them enqueue the def with ANY params: were organize a kind of
+// metadata.apply-when-scanned, a caller with library.edit_metadata but not
+// library.organize could organize books through it. Each def refuses the
+// other's kinds.
+const organizeWhenScannedOpID = "library.organize-when-scanned"
+
 // applyWhenScannedLog logs the op and the batch handler's per-book handoff.
 var applyWhenScannedLog = logger.New("server.apply-when-scanned")
 
@@ -75,7 +84,12 @@ type queuedOrganizeRunner interface {
 // EnqueueOrganizeWhenScanned implements handlers.OrganizeQueuer: the same
 // durable op as a queued apply, kind "organize".
 func (s *Server) EnqueueOrganizeWhenScanned(ctx context.Context, bookID string) (string, error) {
-	return s.EnqueueApplyWhenScanned(ctx, metadatahandler.QueuedApply{Kind: metadatahandler.QueuedOrganize, BookID: bookID})
+	if s.opRegistry == nil {
+		return "", errors.New("no operations registry to queue the organize on")
+	}
+	live := false
+	return s.opRegistry.EnqueueOp(ctx, organizeWhenScannedOpID, applyWhenScannedParams{
+		QueuedApply: metadatahandler.QueuedApply{Kind: metadatahandler.QueuedOrganize, BookID: bookID}, DryRun: &live})
 }
 
 // EnqueueApplyWhenScanned implements metadatahandler.QueuedApplyEnqueuer.
@@ -87,13 +101,28 @@ func (s *Server) EnqueueApplyWhenScanned(ctx context.Context, q metadatahandler.
 	return s.opRegistry.EnqueueOp(ctx, applyWhenScannedOpID, applyWhenScannedParams{QueuedApply: q, DryRun: &live})
 }
 
-// RegisterApplyWhenScannedOp registers metadata.apply-when-scanned.
+// RegisterApplyWhenScannedOp registers metadata.apply-when-scanned and
+// library.organize-when-scanned.
 func (s *Server) RegisterApplyWhenScannedOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              applyWhenScannedOpID,
-		Plugin:          "metadata",
-		DisplayName:     "Apply Metadata After Scan",
-		Description:     "Applies a metadata change to one book as soon as the running library scan has finished reading that book.",
+	if err := reg.RegisterOp(s.whenScannedDef(applyWhenScannedOpID, "metadata", "Apply Metadata After Scan",
+		"Applies a metadata change to one book as soon as the running library scan has finished reading that book.",
+		auth.PermLibraryEditMetadata, func(kind string) bool { return kind != metadatahandler.QueuedOrganize })); err != nil {
+		return err
+	}
+	return reg.RegisterOp(s.whenScannedDef(organizeWhenScannedOpID, "library", "Organize After Scan",
+		"Organizes one book as soon as the running library scan has finished reading that book.",
+		auth.PermLibraryOrganize, func(kind string) bool { return kind == metadatahandler.QueuedOrganize }))
+}
+
+// whenScannedDef is one of the two queued-behind-the-scan defs. accepts says
+// which kinds this def runs; any other kind fails before anything is read or
+// written, so the def's permission always matches what it does.
+func (s *Server) whenScannedDef(opID, plugin, display, desc string, perm auth.Permission, accepts func(kind string) bool) opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              opID,
+		Plugin:          plugin,
+		DisplayName:     display,
+		Description:     desc,
 		DefaultPriority: opsregistry.PriorityHigh,
 		Cancellable:     true,
 		// Survives a restart: the user was told the change is queued.
@@ -104,18 +133,21 @@ func (s *Server) RegisterApplyWhenScannedOp(reg *opsregistry.Registry) error {
 		// allowed after the last beat is wider than the 5m default.
 		ProgressTimeout: 20 * time.Minute,
 		Timeout:         6 * time.Hour,
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
+		Permissions:     []auth.Permission{perm},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, raw json.RawMessage, reporter opsregistry.Reporter) error {
 			var p applyWhenScannedParams
 			if err := json.Unmarshal(raw, &p); err != nil {
-				return fmt.Errorf("apply-when-scanned: decode params: %w", err)
+				return fmt.Errorf("%s: decode params: %w", opID, err)
 			}
 			q := p.QueuedApply
 			if q.BookID == "" {
-				return errors.New("apply-when-scanned: no book id")
+				return fmt.Errorf("%s: no book id", opID)
 			}
-			dryRun, err := opmode.ResolveDryRun(applyWhenScannedOpID, p.DryRun, p.DryRunCamel)
+			if !accepts(q.Kind) {
+				return fmt.Errorf("%s does not run kind %q", opID, q.Kind)
+			}
+			dryRun, err := opmode.ResolveDryRun(opID, p.DryRun, p.DryRunCamel)
 			if err != nil {
 				return err
 			}
@@ -153,7 +185,7 @@ func (s *Server) RegisterApplyWhenScannedOp(reg *opsregistry.Registry) error {
 			_ = reporter.UpdateProgress(1, 1, "applied to book "+q.BookID)
 			return nil
 		},
-	})
+	}
 }
 
 func init() {

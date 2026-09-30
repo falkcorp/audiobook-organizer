@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize_scan_lock_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e8b5c27-4a13-4f96-b7d2-c93a61e8f405
 // last-edited: 2026-09-30
 
@@ -92,6 +92,40 @@ func TestOrganizeBook_WaitsForTheScannerThenOrganizes(t *testing.T) {
 	}
 	if svc.calls.Load() != 1 {
 		t.Fatalf("OrganizeOneBook calls = %d, want 1", svc.calls.Load())
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("organize left %d scan lock(s) held", n)
+	}
+}
+
+// The organize of a protected original X acts on its library copy S. It locks
+// {X, S}: a scanner holding only S (a version group over the scanner's cap)
+// still keeps the organize off S's files.
+func TestOrganizeBook_LocksTheLibraryCopyItActsOn(t *testing.T) {
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, nil, false)
+	h.SetLibraryCopyResolver(func(b *database.Book) (*database.Book, bool) {
+		cp := *b
+		cp.ID = "s1"
+		return &cp, true
+	})
+	scan := lockBook(t, "s1")
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- organizeRequest(h, "b1") }()
+	time.Sleep(100 * time.Millisecond)
+	if n := svc.calls.Load(); n != 0 {
+		t.Fatalf("organize touched the library copy %d time(s) while the scanner held it", n)
+	}
+	scan.Release()
+	select {
+	case w := <-done:
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("organize never ran after the scanner released the copy")
 	}
 	if n := scanlock.Books.Held(); n != 0 {
 		t.Fatalf("organize left %d scan lock(s) held", n)

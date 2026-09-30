@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize_scan_lock.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b7e4c91-5d08-4f3a-b6e2-9a14c7d3f058
 // last-edited: 2026-09-30
 
@@ -9,11 +9,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	"github.com/gin-gonic/gin"
 )
@@ -23,7 +25,7 @@ import (
 // the book's scan lock, waiting at most organizeBookLockWait for the scanner
 // to finish reading that book; any other book never waits. If the scanner
 // holds the book past the bound, the organize is handed to the durable
-// metadata.apply-when-scanned op (kind "organize") and the request answers
+// library.organize-when-scanned op (kind "organize") and the request answers
 // 202 -- never 409, never a scan warning.
 
 var organizeLockLog = logger.New("organize.scanlock")
@@ -48,6 +50,51 @@ type OrganizeQueuer interface {
 // its book in time keep waiting on the request's own context instead.
 func (h *OrganizeHandler) SetOrganizeQueuer(q OrganizeQueuer) { h.queuer = q }
 
+// organizeLockTries bounds re-resolution when the library copy the organize
+// acts on changes while it waits for the lock.
+const organizeLockTries = 3
+
+// organizeLockSet is the rows an organize of id must hold: id, and the library
+// copy it resolves to (organizeBookCore acts on that copy's files), sorted. A
+// scanner reaching the copy normally locks {copy, id} through their version
+// group, but not when the group is over the scanner's cap -- so the organize
+// holds both itself. A book that cannot be read is just {id}; the core reports
+// the read error.
+func (h *OrganizeHandler) organizeLockSet(id string) []string {
+	ids := []string{id}
+	if h.store == nil || h.resolveLibraryCopy == nil {
+		return ids
+	}
+	requested, err := h.store.GetBookByID(id)
+	if err != nil || requested == nil {
+		return ids
+	}
+	if subject := organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested); subject != nil && subject.ID != id {
+		ids = append(ids, subject.ID)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// lockOrganizeSet takes organizeLockSet(id) with lock (a bounded or unbounded
+// LockSet), re-resolving under the lock: when the copy changed while it waited
+// (created, repointed, removed) it releases and retries, at most
+// organizeLockTries times, then keeps the last set it holds -- a copy that
+// keeps changing is left to organizeBookCore, which re-reads it.
+func (h *OrganizeHandler) lockOrganizeSet(id string, lock func([]string) (*scanlock.Hold, error)) (*scanlock.Hold, error) {
+	for try := 0; ; try++ {
+		want := h.organizeLockSet(id)
+		hold, err := lock(want)
+		if err != nil {
+			return nil, err
+		}
+		if again := h.organizeLockSet(id); slices.Equal(again, want) || try+1 >= organizeLockTries {
+			return hold, nil
+		}
+		hold.Release()
+	}
+}
+
 // lockBookForOrganize takes book id's scan lock for a request, waiting at
 // most organizeBookLockWait. Past the bound it queues the organize and writes
 // 202 (ok=false), or, with no queuer wired, keeps waiting on the request's
@@ -55,7 +102,7 @@ func (h *OrganizeHandler) SetOrganizeQueuer(q OrganizeQueuer) { h.queuer = q }
 func (h *OrganizeHandler) lockBookForOrganize(c *gin.Context, id string) (*scanlock.Hold, bool) {
 	reqCtx := c.Request.Context()
 	wctx, cancel := context.WithTimeout(reqCtx, organizeBookLockWait)
-	hold, err := scanlock.Books.LockSet(wctx, []string{id})
+	hold, err := h.lockOrganizeSet(id, func(ids []string) (*scanlock.Hold, error) { return scanlock.Books.LockSet(wctx, ids) })
 	cancel()
 	if err == nil {
 		return hold, true
@@ -64,7 +111,7 @@ func (h *OrganizeHandler) lockBookForOrganize(c *gin.Context, id string) (*scanl
 		return nil, false
 	}
 	if h.queuer == nil {
-		hold, err = scanlock.Books.LockSet(reqCtx, []string{id})
+		hold, err = h.lockOrganizeSet(id, func(ids []string) (*scanlock.Hold, error) { return scanlock.Books.LockSet(reqCtx, ids) })
 		return hold, err == nil
 	}
 	opID, qerr := h.queuer.EnqueueOrganizeWhenScanned(reqCtx, id)
@@ -89,7 +136,7 @@ func (h *OrganizeHandler) RunQueuedOrganize(ctx context.Context, id string, beat
 	for {
 		wctx, cancel := context.WithTimeout(ctx, queuedOrganizeBeat)
 		var err error
-		hold, err = scanlock.Books.LockSet(wctx, []string{id})
+		hold, err = h.lockOrganizeSet(id, func(ids []string) (*scanlock.Hold, error) { return scanlock.Books.LockSet(wctx, ids) })
 		cancel()
 		if err == nil {
 			break

@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.118.0
+// version: 1.119.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-30
 
@@ -1362,6 +1362,13 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// This run's own ownership/ceiling/append outcomes (see scanRunCounters):
 	// every worker below uses this ctx.
 	ctx, runCounts := withScanRunCounters(ctx)
+	// processedSoFar mirrors the progress goroutine's count for the lock-wait
+	// beat (withScanBeat): a worker blocked on an apply reports the run's
+	// current position rather than advancing it.
+	var processedSoFar atomic.Int64
+	ctx = withScanBeat(ctx, func(message string) {
+		scanLog.UpdateProgress(int(processedSoFar.Load()), len(books), message)
+	})
 	scanCacheErrStart := scanCacheUpdateErrCount.Load()
 	scanFailCountErrStart := scanFailCountErrCount.Load()
 	scanCacheStatErrStart := scanCacheStatErrCount.Load()
@@ -1385,6 +1392,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	lockVanishedStart := scanLockVanishedCount.Load()
 	lockRequeuedStart := scanLockRequeuedCount.Load()
 	lockGaveUpStart := scanLockGaveUpCount.Load()
+	lockUnreadableStart := scanLockUnreadableCount.Load()
 	lockKeptStart := scanLockKeptFields.Load()
 	lockGroupCappedStart := scanLockGroupCapped.Load()
 	lockGroupErrStart := scanLockGroupErrs.Load()
@@ -1409,6 +1417,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		processed := 0
 		for path := range progressCh {
 			processed++
+			processedSoFar.Store(int64(processed))
 			if progressFn != nil {
 				progressFn(processed, total, path)
 			}
@@ -1458,7 +1467,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// requeueOrGiveUp sends idx to the next round, or -- past the last one --
 	// records it as busy for the next scan. It reports whether the book was
 	// requeued (the caller then must not report progress for it).
-	requeueOrGiveUp := func(idx, round int, why string) bool {
+	//
+	// gaveUp is the counter a give-up is summarized under: scanLockGaveUpCount
+	// for an apply that outlasted the waits, scanLockUnreadableCount for a
+	// version group that could not be read.
+	requeueOrGiveUp := func(idx, round int, why string, gaveUp *atomic.Int64) bool {
 		if round < scanLockRounds {
 			deferredMu.Lock()
 			deferred = append(deferred, idx)
@@ -1466,15 +1479,17 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			scanLockRequeuedCount.Add(1)
 			return true
 		}
-		scanLockGaveUpCount.Add(1)
+		gaveUp.Add(1)
 		failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageBusy,
 			Reason: why + "; the next scan picks it up"})
 		return false
 	}
 
-	// waitCtx is the round's shared deadline (unused in round 0).
+	// waitCtx is the round's shared deadline (unused in round 0). The CALLER
+	// takes the semaphore slot before starting the goroutine, so at most
+	// `workers` goroutines exist at once in every round; processBook releases
+	// the slot.
 	processBook := func(idx, round int, waitCtx context.Context) {
-		semaphore <- struct{}{} // Acquire
 		requeued := false
 		defer func() {
 			<-semaphore // Release
@@ -1520,13 +1535,19 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		// skip check above stays outside: a skipped book reads and writes
 		// nothing, so it needs no lock. From here to the end of this
 		// function an apply or write-back of this book waits for us.
-		hold, lockOutcome := acquireScanBookLock(ctx, waitCtx, &books[idx], round, true)
+		hold, lockOutcome, readErr := acquireScanBookLock(ctx, waitCtx, &books[idx], round, true)
 		switch lockOutcome {
 		case scanLockBusy:
-			requeued = requeueOrGiveUp(idx, round, "an apply or write-back was writing this book")
+			requeued = requeueOrGiveUp(idx, round, "an apply or write-back was writing this book", &scanLockGaveUpCount)
 			return
 		case scanLockGaveUp:
-			requeueOrGiveUp(idx, scanLockRounds, "an apply or write-back held this book longer than the scan waits")
+			requeueOrGiveUp(idx, scanLockRounds, "an apply or write-back held this book longer than the scan waits", &scanLockGaveUpCount)
+			return
+		case scanLockUnreadable:
+			// Not an apply: the store could not say which rows this book's
+			// version group spans, so the book is not locked or read.
+			requeued = requeueOrGiveUp(idx, round,
+				fmt.Sprintf("this book's version group could not be read (%v)", readErr), &scanLockUnreadableCount)
 			return
 		case scanLockVanished:
 			// Moved or deleted since the walk listed it (typically an apply's
@@ -1548,7 +1569,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				return false
 			}
 			books[idx].scanLockExtra = append(books[idx].scanLockExtra, w.ids...)
-			requeued = requeueOrGiveUp(idx, round, "the book's rows kept changing while the scan tried to lock them")
+			requeued = requeueOrGiveUp(idx, round, "the book's rows kept changing while the scan tried to lock them", &scanLockGaveUpCount)
 			return true
 		}
 
@@ -1950,6 +1971,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			ctxErr = ctx.Err()
 			break
 		}
+		semaphore <- struct{}{} // Acquire; processBook releases
 		wg.Go(func() { processBook(idx, 0, ctx) })
 	}
 	wg.Wait()
@@ -1970,6 +1992,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		scanLog.Info("scan: %d book(s) were being written by an apply; processing them now (round %d)", len(list), round)
 		roundCtx, cancelRound := context.WithTimeout(ctx, scanLockWait)
 		for _, idx := range list {
+			semaphore <- struct{}{} // Acquire; processBook releases
 			wg.Go(func() { processBook(idx, round, roundCtx) })
 		}
 		wg.Wait()
@@ -1994,10 +2017,13 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		scanLog.Warn("%d books failed to save", len(errs))
 	}
 	if d := scanLockRequeuedCount.Load() - lockRequeuedStart; d > 0 {
-		scanLog.Info("scan summary: %d book(s) were deferred because an apply or write-back was writing them", d)
+		scanLog.Info("scan summary: %d book(s) were deferred: an apply or write-back was writing them, or their version group could not be read", d)
 	}
 	if d := scanLockGaveUpCount.Load() - lockGaveUpStart; d > 0 {
 		scanLog.Warn("scan summary: %d book(s) left for the next scan: an apply held them longer than the scan waits (listed with the file failures)", d)
+	}
+	if d := scanLockUnreadableCount.Load() - lockUnreadableStart; d > 0 {
+		scanLog.Warn("scan summary: %d book(s) left for the next scan: their version group could not be read (listed with the file failures)", d)
 	}
 	if d := scanLockVanishedCount.Load() - lockVanishedStart; d > 0 {
 		scanLog.Info("scan summary: %d book(s) skipped because their files were renamed or removed after the scan listed them", d)

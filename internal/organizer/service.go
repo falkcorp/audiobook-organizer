@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-30
 
@@ -1484,6 +1484,9 @@ var organizeBookLockWait = 90 * time.Second
 // organizeBookLockWait: skipped, not failed, so the next organize picks them up.
 const OutcomeScanBusy = "scan_busy"
 
+// sameIntPtr reports whether a and b are both nil or point at equal values.
+func sameIntPtr(a, b *int) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
+
 // organizeBooksOpts is organizeBooks with per-book scan locking (lockBooks).
 //
 // With lockBooks each book is organized under its scan lock, in two passes
@@ -1521,6 +1524,42 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 	// lockBooks is set.
 	organizeOne := func(workerOrg *Organizer, i int) {
 		book := booksToOrganize[i]
+		if lockBooks {
+			// booksToOrganize was read before any lock, and a book pass 2
+			// waited for is exactly one the scanner has just merged: its
+			// title/author (the target path) and every column
+			// CreateOrganizedVersion copies onto the library copy may have
+			// changed. Re-read under the scan lock, as the single-book path
+			// does, and organize the row as it is now.
+			fresh, err := orgSvc.db.GetBookByID(book.ID)
+			switch {
+			case err != nil:
+				log.Error("Organize: re-read %s under its scan lock: %v", book.ID, err)
+				statsMu.Lock()
+				stats.Failed++
+				statsMu.Unlock()
+				progressCounter.Add(1)
+				return
+			case fresh == nil:
+				log.Info("Organize: %s skipped: the book was deleted before its turn", book.ID)
+				statsMu.Lock()
+				stats.Skipped++
+				statsMu.Unlock()
+				progressCounter.Add(1)
+				return
+			}
+			// The listing may carry hydrated Author/Series projections the
+			// stored row does not. They stay valid only while the ids they
+			// project are unchanged; otherwise the organizer resolves the new
+			// ids itself (expandPattern falls back to AuthorID/SeriesID).
+			if fresh.Author == nil && sameIntPtr(fresh.AuthorID, book.AuthorID) {
+				fresh.Author = book.Author
+			}
+			if fresh.Series == nil && sameIntPtr(fresh.SeriesID, book.SeriesID) {
+				fresh.Series = book.Series
+			}
+			book = *fresh
+		}
 
 		// Policy check: skip books tagged policy:no-organize.
 		if tags, err := orgSvc.db.GetBookTags(book.ID); err == nil {
@@ -1776,10 +1815,21 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 		all[i] = i
 	}
 	runPass(all, nil)
-	if len(deferred) > 0 && !stats.Canceled {
-		waitCtx, cancel := context.WithTimeout(ctx, organizeBookLockWait)
-		runPass(deferred, waitCtx)
-		cancel()
+	if len(deferred) > 0 {
+		if stats.Canceled || ctx.Err() != nil || log.IsCanceled() {
+			// Canceled during pass 1: the set-aside books never get a pass
+			// 2. Count them, or Skipped+Organized+Failed would not add up to
+			// the books handed in.
+			statsMu.Lock()
+			stats.Skipped += len(deferred)
+			stats.addCollision(OutcomeScanBusy, len(deferred))
+			statsMu.Unlock()
+			progressCounter.Add(int64(len(deferred)))
+		} else {
+			waitCtx, cancel := context.WithTimeout(ctx, organizeBookLockWait)
+			runPass(deferred, waitCtx)
+			cancel()
+		}
 	}
 
 	stats.AlreadyCorrect += orgSvc.stampAlreadyCorrect(ctx, alreadyCorrect, operationID, log)
