@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
 // last-edited: 2026-09-30
 
@@ -258,19 +258,24 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 	// library copy below: the scanner's lock set for either row includes the
 	// other through their version group, so {id} covers both. L0 is taken
 	// before any L1 key (the version-group key CreateOrganizedVersion takes).
-	hold, ok := h.lockBookForOrganize(c, id)
+	hold, subject, ok := h.lockBookForOrganize(c, id)
 	if !ok {
 		return
 	}
 	defer hold.Release()
-	h.organizeBookCore(c.Request.Context(), ginOrganizeResponder{c}, id)
+	h.organizeBookCore(c.Request.Context(), ginOrganizeResponder{c}, id, subject)
 }
 
 // organizeBookCore is POST /audiobooks/:id/organize after its scan lock is
 // held, shared by the handler and the queued organize. r receives the
 // outcome: the handler writes it as the HTTP response, the queued op turns an
 // error status into its failure.
-func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeResponder, id string) {
+//
+// locked is the row lockOrganizeSet resolved under the scan lock (the library
+// copy it locked, or the book itself). The core acts on it rather than
+// resolving again, so it writes exactly the copy it holds; nil means the lock
+// step could not resolve, and the core resolves here.
+func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeResponder, id string, locked *database.Book) {
 
 	// Correlation key only — see ApplyRename above for why no operations row is
 	// created. The v1 row this used to mint as type "organize" was never read.
@@ -298,7 +303,10 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 	// and the organizer's same-hash check reported the book's own copy as a
 	// foreign duplicate -- a 500 and a dedup candidate pairing the book with
 	// itself (2026-09-30). PreviewOrganize resolves with the same function.
-	book := organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
+	book := locked
+	if book == nil {
+		book = organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
+	}
 	originalID := ""
 	if book.ID != requested.ID {
 		originalID = requested.ID

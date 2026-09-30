@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize_library_copy_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 68af52f3-742d-4b0c-99ba-e3a73e2e0443
 // last-edited: 2026-09-30
 
@@ -156,8 +156,12 @@ func TestOrganizeHandlers_ProtectedOriginalActsOnItsLibraryCopy(t *testing.T) {
 	if spy.calls != 0 {
 		t.Errorf("collision hook fired %d time(s); want 0", spy.calls)
 	}
-	if resolveCalls != 2 {
-		t.Errorf("resolver ran %d time(s); preview and apply must each resolve once", resolveCalls)
+	// Preview resolves once. Apply resolves to build its lock set {orig,
+	// copy} and once more under the lock to confirm the set, then acts on that
+	// under-lock result: a third resolution in the core could pick a copy it
+	// does not hold.
+	if resolveCalls != 3 {
+		t.Errorf("resolver ran %d time(s); want preview 1 + apply 2 (lock set, under-lock check)", resolveCalls)
 	}
 	if _, err := os.Stat(origPath); err != nil {
 		t.Errorf("protected original was touched: %v", err)
