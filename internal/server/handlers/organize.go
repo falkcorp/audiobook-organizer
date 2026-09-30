@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
 // last-edited: 2026-09-30
 
@@ -15,6 +15,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -117,6 +118,11 @@ type OrganizeHandler struct {
 	// preview service is wired with the same resolver). Nil: every book is
 	// organized as itself. Set with SetLibraryCopyResolver.
 	resolveLibraryCopy organizer.LibraryCopyResolver
+
+	// queuer hands an organize whose book the library scan holds past
+	// organizeBookLockWait to the queued op (202). Nil: keep waiting. Set
+	// with SetOrganizeQueuer.
+	queuer OrganizeQueuer
 }
 
 // SetLibraryCopyResolver installs the protected-original -> library-copy
@@ -246,6 +252,25 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "book id is required")
 		return
 	}
+	// The book's scan lock (internal/scanlock, L0) is held for the whole
+	// organize: OrganizeOneBook's file moves and CreateOrganizedVersion's rows.
+	// It is keyed on the REQUESTED id even when the book resolves to its
+	// library copy below: the scanner's lock set for either row includes the
+	// other through their version group, so {id} covers both. L0 is taken
+	// before any L1 key (the version-group key CreateOrganizedVersion takes).
+	hold, ok := h.lockBookForOrganize(c, id)
+	if !ok {
+		return
+	}
+	defer hold.Release()
+	h.organizeBookCore(c.Request.Context(), ginOrganizeResponder{c}, id)
+}
+
+// organizeBookCore is POST /audiobooks/:id/organize after its scan lock is
+// held, shared by the handler and the queued organize. r receives the
+// outcome: the handler writes it as the HTTP response, the queued op turns an
+// error status into its failure.
+func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeResponder, id string) {
 
 	// Correlation key only — see ApplyRename above for why no operations row is
 	// created. The v1 row this used to mint as type "organize" was never read.
@@ -254,14 +279,14 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 	requested, err := h.store.GetBookByID(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			httputil.RespondWithNotFound(c, "book", id)
+			r.notFound("book", id)
 			return
 		}
-		httputil.InternalError(c, "failed to fetch book", err)
+		r.internal("failed to fetch book", err)
 		return
 	}
 	if requested == nil {
-		httputil.RespondWithNotFound(c, "book", id)
+		r.notFound("book", id)
 		return
 	}
 
@@ -301,7 +326,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		// ran. Organizing would make a second copy; say which row to use.
 		var hasCopy *organizer.LibraryCopyExistsError
 		if errors.As(err, &hasCopy) {
-			c.JSON(http.StatusConflict, gin.H{
+			r.json(http.StatusConflict, gin.H{
 				"error":        "organize declined: this book already has a library copy; organize that copy instead",
 				"category":     organizer.CollisionLibraryCopyExists,
 				"reason":       hasCopy.Error(),
@@ -313,7 +338,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		}
 		var conflict *organizer.DestinationConflictError
 		if errors.As(err, &conflict) {
-			c.JSON(http.StatusConflict, gin.H{
+			r.json(http.StatusConflict, gin.H{
 				"error":    "organize declined: " + conflict.Reason,
 				"category": conflict.Category,
 				"reason":   conflict.Reason,
@@ -323,13 +348,13 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 			})
 			return
 		}
-		httputil.InternalError(c, "failed to organize book", err)
+		r.internal("failed to organize book", err)
 		return
 	}
 	newPath := landing.Path
 
 	if oldPath == newPath {
-		httputil.RespondWithOK(c, withOriginal(gin.H{
+		r.ok(withOriginal(gin.H{
 			"message":      "already organized",
 			"book_id":      book.ID,
 			"old_path":     oldPath,
@@ -362,13 +387,13 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 			log2.Warn("organize: undo record incomplete for book %s: %s", book.ID, logger.SanitizeLogValue(recErr.Error()))
 		}
 		if h.publisher != nil {
-			h.publisher.Publish(c.Request.Context(), plugin.NewEvent(plugin.EventFileOrganized, book.ID, map[string]any{
+			h.publisher.Publish(ctx, plugin.NewEvent(plugin.EventFileOrganized, book.ID, map[string]any{
 				"old_path":     oldPath,
 				"new_path":     newPath,
 				"operation_id": opID,
 			}))
 		}
-		httputil.RespondWithOK(c, withOriginal(gin.H{
+		r.ok(withOriginal(gin.H{
 			"message":      fmt.Sprintf("re-organized: %s → %s", oldPath, newPath),
 			"book_id":      book.ID,
 			"old_path":     oldPath,
@@ -380,7 +405,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 
 	createdBook, createErr := h.organizeSvc.CreateOrganizedVersion(book, landing, opID, log2)
 	if createErr != nil {
-		httputil.InternalError(c, "failed to create organized version", createErr)
+		r.internal("failed to create organized version", createErr)
 		return
 	}
 
@@ -399,7 +424,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 	deluge.NotifyDelugeAfterOrganize(h.store, book.ID, newPath)
 
 	if h.publisher != nil {
-		h.publisher.Publish(c.Request.Context(), plugin.NewEvent(plugin.EventFileOrganized, createdBook.ID, map[string]any{
+		h.publisher.Publish(ctx, plugin.NewEvent(plugin.EventFileOrganized, createdBook.ID, map[string]any{
 			"old_path":         oldPath,
 			"new_path":         newPath,
 			"original_book_id": book.ID,
@@ -415,7 +440,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		"new_path":         newPath,
 		"operation_id":     opID,
 	}
-	httputil.RespondWithOK(c, resp)
+	r.ok(resp)
 }
 
 // -----------------------------------------------------------------------

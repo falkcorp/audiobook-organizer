@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
 // last-edited: 2026-09-30
 
@@ -54,6 +54,9 @@ const (
 	// candidate-fetch operation OperationID, applied fill-only through the
 	// certainty gate. Run by package server, which owns that path.
 	QueuedOpResultCandidate = "op-result-candidate"
+	// QueuedOrganize is POST /audiobooks/:id/organize for BookID. Run by
+	// package server through the organize handler.
+	QueuedOrganize = "organize"
 )
 
 // QueuedApply is one apply handed to the metadata.apply-when-scanned op: the

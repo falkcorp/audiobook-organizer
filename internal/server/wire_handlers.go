@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.40.0
+// version: 2.41.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-09-30
 
@@ -760,6 +760,10 @@ func (s *Server) newOrganizeHandler() *handlers.OrganizeHandler {
 		config.AppConfig.AutoOrganize,
 	)
 	organizeH.SetLibraryCopyResolver(resolveLibraryCopy)
+	// An organize the library scan holds past the request's wait bound is
+	// handed to metadata.apply-when-scanned (kind "organize").
+	organizeH.SetOrganizeQueuer(s)
+	s.queuedOrganizeRunner = organizeH
 	return organizeH
 }
 
