@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-09-14
+// last-edited: 2026-09-30
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -267,6 +267,18 @@ func TestSearchAudiobookMetadata_PlainFetchAndCache(t *testing.T) {
 	w := doReq(h.SearchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/search-metadata", nil, idParam("b1"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// Every provider failing is an outage, not a missing book: 503, not 404.
+func TestSearchAudiobookMetadata_NoSourceAnsweredIs503(t *testing.T) {
+	h, d := newHandler(t)
+	d.mfs.EXPECT().GetCachedCandidates("b1").Return(nil, false, nil)
+	d.mfs.EXPECT().FetchAndCache(mock.Anything, "b1", "", "", "", "", mock.Anything).
+		Return(nil, fmt.Errorf("%w (audible: timeout)", metafetch.ErrNoSourceAnswered))
+	w := doReq(h.SearchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/search-metadata", nil, idParam("b1"))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
