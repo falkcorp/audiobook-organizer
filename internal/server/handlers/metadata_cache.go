@@ -461,7 +461,6 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		return statusRank[prepared[i].status] < statusRank[prepared[j].status]
 	})
 
-
 	// reviewable is every row this endpoint can actually hand back, in the
 	// sorted order established above. Counts and pagination both derive from
 	// it, so they cannot disagree with each other or with `results`.
