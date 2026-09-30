@@ -1,5 +1,5 @@
 // file: internal/database/book_edit_history.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b8e2f71-0c4d-4a96-b3e7-9d1a6c2f8e40
 // last-edited: 2026-09-30
 
@@ -109,6 +109,12 @@ func RecordBookEditHistory(s BookEditHistoryStore, before, after *Book, changeTy
 				// without values rather than not at all.
 				errs = append(errs, fmt.Errorf("%s: render: %w", field, rerr))
 			}
+		}
+		// ChangedBookFields compares stored JSON, so nil and a pointer to ""
+		// differ there although nothing a user can see changed. A `"" -> ""`
+		// row would refuse a queued apply for an edit that did nothing.
+		if oldVal == newVal && rec.PreviousRef == nil {
+			continue
 		}
 		oldJSON, newJSON := jsonString(oldVal), jsonString(newVal)
 		rec.PreviousValue, rec.NewValue = &oldJSON, &newJSON

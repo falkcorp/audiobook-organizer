@@ -1,5 +1,5 @@
 // file: internal/organizer/organize_batch_lock.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4c2e71-3b8d-4f15-a6e0-c5d7b1f3e284
 // last-edited: 2026-09-30
 
@@ -56,6 +56,9 @@ func (orgSvc *Service) lockBatchBook(book *database.Book, lock func([]string) (*
 		if slices.Equal(orgSvc.batchLockSet(fresh), want) {
 			return hold, nil
 		}
+		// The next try locks the set the STORED row resolves to, not the
+		// stale input's again.
+		book = fresh
 		hold.Release()
 	}
 	return nil, errBatchBookBusy

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -266,17 +266,6 @@ func (h *Handler) resolveWriteBack() WriteBackEnqueuer {
 		return nil
 	}
 	return h.getWriteBack()
-}
-
-// ptrStr is a local copy of the *string→string helper used by UpdateAudiobook.
-// The server copy is cycle-bound and the audiobookspkg copy is unexported, so a
-// local copy keeps this package decoupled (the codebase already keeps two
-// copies, so this is consistent).
-func ptrStr(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
 }
 
 // bareParamAllowList names fields that are BOTH a filter field and a genuine
