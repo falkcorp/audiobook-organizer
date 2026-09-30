@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -26,7 +26,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/sync/errgroup"
 )
 
 // reviewListConcurrency bounds the concurrent cached-candidate reads when
@@ -380,15 +379,42 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		defaulted = true
 	}
 
-	summaries, err := h.svc.ListCachedSummaries(c.Request.Context())
+	// One loader for the summaries, their books (ONE batch read, with a
+	// per-book fallback) and every row's cached candidates, shared with
+	// StaleCachedBookIDs so the `stale` count below and the refetch-all-stale
+	// set are read the same way (metadata_cache_stale.go).
+	//
+	// The candidate reads cover EVERY row, not just the requested page, and
+	// that decides what is reviewable. This ordering is the fix for a real
+	// reporting bug. The counts used to be tallied over every row whose BOOK
+	// resolved, while `results` additionally dropped any row with no cached
+	// candidates or an undecodable one. On production that was 10,952 counted
+	// against 5,774 returned, so the review rail advertised "10730 matched"
+	// over a list that could never hold more than 5,774 rows, and `errors` was
+	// hardcoded 0 so nothing hinted at the ~5,178 missing. A count that
+	// includes rows the caller cannot be given is not a summary, it is a lie
+	// with a number on it.
+	//
+	// Doing this for all rows rather than one page also makes `total_count`
+	// correct for pagination. It is also why capping the default page size does
+	// NOT bound this fan-out: it runs over every row whatever `limit` is. In
+	// the real call path the lane sends all=true, so its page is every row
+	// anyway; that describes the current caller, and is not an argument that
+	// the full fan-out is cheap.
+	set, err := loadCacheRows(c.Request.Context(), h.store, h.svc)
 	if err != nil {
 		httputil.InternalError(c, "failed to list metadata cache", err)
 		return
 	}
-
-	total := len(summaries)
+	lookupBook := set.lookupBook
+	// orphaned counts cache rows that outlived their book. loadCacheRows counts
+	// it where the row is dropped: that is the only place that still knows WHY
+	// the row is going away, and a subtraction at the end cannot tell it apart
+	// from a book that simply has no candidates stored.
+	orphaned := set.orphaned
 
 	type entryWithStatus struct {
+		row    loadedCacheRow
 		sum    metafetch.MetadataCacheSummary
 		status string // "matched" | "no_match" | "applied"
 		// reviewed distinguishes "a human (or the audio-confirm pass) has ruled
@@ -400,57 +426,10 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// forever.
 		reviewed bool
 	}
-	// Fetch every book in ONE batch read instead of a GetBookByID per summary.
-	//
-	// The loops below run over the entire pending set whatever the page size
-	// (the review lane sends all=true for every row, and the counts span the
-	// whole set regardless). It previously did GetBookByID once here to
-	// compute status counts and AGAIN further down to build each row — 2N
-	// sequential point reads. Production served it in 21.7s and 35.2s, which is
-	// what was timing the UI out.
-	//
-	// GetBooksByIDs preserves input order and is a single store call.
-	bookIDs := make([]string, 0, total)
-	for _, sum := range summaries {
-		bookIDs = append(bookIDs, sum.BookID)
-	}
-	booksByID := make(map[string]*database.Book, total)
-	if fetched, berr := h.store.GetBooksByIDs(bookIDs); berr == nil {
-		for i := range fetched {
-			booksByID[fetched[i].ID] = &fetched[i]
-		}
-	} else {
-		slog.Warn("GetCacheReviewResults batch book fetch failed; falling back to per-book reads", "err", berr)
-	}
 
-	// lookupBook serves from the batch result and falls back to a point read only
-	// when the batch missed the row (or the batch call itself failed), so a
-	// partial batch degrades in behavior-preserving fashion rather than dropping
-	// entries.
-	lookupBook := func(id string) *database.Book {
-		if b, ok := booksByID[id]; ok {
-			return b
-		}
-		b, err := h.store.GetBookByID(id)
-		if err != nil || b == nil {
-			return nil
-		}
-		booksByID[id] = b
-		return b
-	}
-
-	prepared := make([]entryWithStatus, 0, total)
-	// orphaned counts cache rows that outlived their book. Counted here rather
-	// than inferred later: this `continue` is the only place that still knows
-	// WHY the row is going away, and a subtraction at the end cannot tell it
-	// apart from a book that simply has no candidates stored.
-	var orphaned int
-	for _, sum := range summaries {
-		book := lookupBook(sum.BookID)
-		if book == nil {
-			orphaned++
-			continue
-		}
+	prepared := make([]entryWithStatus, 0, len(set.rows))
+	for _, row := range set.rows {
+		book := row.book
 		// "matched" is the PENDING-review default, not a verdict — a book nobody
 		// has ruled on lands here.
 		st := "matched"
@@ -474,7 +453,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 				st, reviewed = "applied", true
 			}
 		}
-		prepared = append(prepared, entryWithStatus{sum: sum, status: st, reviewed: reviewed})
+		prepared = append(prepared, entryWithStatus{row: row, sum: row.sum, status: st, reviewed: reviewed})
 	}
 	// Stable sort: matched (pending review) first, then no_match, then applied.
 	statusRank := map[string]int{"matched": 0, "no_match": 1, "applied": 2}
@@ -482,37 +461,6 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		return statusRank[prepared[i].status] < statusRank[prepared[j].status]
 	})
 
-	// Resolve cached candidates for EVERY prepared row, not just the requested
-	// page, and let that decide what is reviewable.
-	//
-	// This ordering is the fix for a real reporting bug. The counts used to be
-	// tallied over `prepared` — every row whose BOOK resolved — while `results`
-	// additionally dropped any row with no cached candidates or an undecodable
-	// one. On production that was 10,952 counted against 5,774 returned, so the
-	// review rail advertised "10730 matched" over a list that could never hold
-	// more than 5,774 rows, and `errors` was hardcoded 0 so nothing hinted at
-	// the ~5,178 missing. A count that includes rows the caller cannot be given
-	// is not a summary, it is a lie with a number on it.
-	//
-	// Doing this for all rows rather than one page also makes `total_count`
-	// correct for pagination. It is also why capping the default page size does
-	// NOT bound this fan-out: it runs over every prepared row whatever `limit`
-	// is. In the real call path the lane sends all=true, so its page is every
-	// row anyway; that describes the current caller, and is not an argument
-	// that the full fan-out is cheap.
-	cachedByIdx := make([]*metafetch.MetadataCandidateCache, len(prepared))
-	var cg errgroup.Group
-	cg.SetLimit(reviewListConcurrency)
-	for i := range prepared {
-		cg.Go(func() error {
-			entry, _, cerr := h.svc.GetCachedCandidates(prepared[i].sum.BookID)
-			if cerr == nil {
-				cachedByIdx[i] = entry
-			}
-			return nil // a per-entry failure skips that row, never the whole batch
-		})
-	}
-	_ = cg.Wait()
 
 	// reviewable is every row this endpoint can actually hand back, in the
 	// sorted order established above. Counts and pagination both derive from
@@ -535,19 +483,9 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// millisecond under test.
 	freshCutoff := time.Now().Add(-database.MetadataCacheTTL)
 
-	// lastChecked is when this book was last SEARCHED FOR, which is not the same
-	// as when its candidates were fetched. A book whose providers returned
-	// nothing an hour ago keeps its older candidates and their older FetchedAt
-	// (see metafetch.cacheSearchResponse), so dating staleness off FetchedAt
-	// alone would leave it permanently overdue and every refetch pass would pick
-	// it again forever -- "we pressed the stale button yesterday and they are
-	// still marked stale". LastEmptyFetchAt records that fruitless look.
-	lastChecked := func(entry *metafetch.MetadataCandidateCache, fetchedAt time.Time) time.Time {
-		if entry != nil && entry.LastEmptyFetchAt != nil && entry.LastEmptyFetchAt.After(fetchedAt) {
-			return *entry.LastEmptyFetchAt
-		}
-		return fetchedAt
-	}
+	// lastChecked is when this book was last searched for (see
+	// cacheRowLastChecked for why that is not simply FetchedAt).
+	lastChecked := cacheRowLastChecked
 
 	reviewable := make([]reviewableRow, 0, len(prepared))
 	// unreviewableRows is every non-orphaned row the reviewable list drops,
@@ -576,9 +514,11 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// production the chip read "11 stale" while 2,658 stale zero-candidate rows
 	// sat in the unreviewable bucket, understating the backlog 242x.
 	var stale int
-	for i, p := range prepared {
-		entry := cachedByIdx[i]
-		if !lastChecked(entry, p.sum.FetchedAt).After(freshCutoff) {
+	for _, p := range prepared {
+		entry := p.row.entry
+		// cacheRowStale is the predicate StaleCachedBookIDs applies too, so
+		// this count is the size of the set the refetch-all-stale button sends.
+		if cacheRowStale(p.row, freshCutoff) {
 			stale++
 		}
 		if entry == nil || len(entry.Candidates) == 0 {
@@ -656,9 +596,12 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// They are reported separately as `resolved_no_candidates`.
 		"unreviewable": orphaned + noCandidatesPending + decodeErrors,
 		// Rows whose last search is past MetadataCacheTTL, counted over every
-		// non-orphaned row (reviewable or not). Staleness is informational,
-		// per the TTL's contract -- but a reviewer applying month-old metadata
-		// should be told.
+		// non-orphaned row (reviewable or not), minus books the owner marked
+		// "no match" (the candidate fetch never searches those, so no refetch
+		// could clear them). Staleness is informational, per the TTL's
+		// contract -- but a reviewer applying month-old metadata should be
+		// told. This is exactly the set POST batch-fetch-candidates
+		// {stale:true} refetches (cacheRowStale / StaleCachedBookIDs).
 		"stale": stale,
 		"unreviewable_by_cause": gin.H{
 			// The book the row points at no longer resolves. Only a cleanup
@@ -700,9 +643,11 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 				continue
 			}
 			fetchedAt := u.sum.FetchedAt
-			// The same predicate, and the same clock read, as the stale
-			// counter above, so the rows marked stale here plus the stale
-			// reviewable rows add up to `stale`.
+			// The same age rule, and the same clock read, as the stale
+			// counter above. The rows marked stale here plus the stale
+			// reviewable rows add up to `stale` once owner-marked "no match"
+			// books are left out (cacheRowStale); is_fresh itself stays a
+			// statement about age.
 			isFresh := u.lastChecked.After(freshCutoff)
 			reviewStatus := ""
 			if book.MetadataReviewStatus != nil {
