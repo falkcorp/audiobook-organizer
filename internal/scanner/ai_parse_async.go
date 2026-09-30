@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 
 package scanner
 
@@ -711,8 +711,18 @@ func newAIParserUnjournalled(scanLog logger.Logger) (aiBatchParser, bool) {
 // saveBookAndReportPath adapts the inline scan's saveBook to the phase's saver
 // signature. The inline path runs before AutoOrganizeFn, so the book's own
 // FilePath is still the row's path and is the right thing to stamp.
+//
+// It is a second merge of the same row, so it runs under the per-book scan
+// lock like the main pass (saveBookUnderScanLock), and the merge keeps any
+// field another writer -- a user's apply -- changed since the main pass wrote
+// the row.
 func saveBookAndReportPath(ctx context.Context, book *Book) (string, error) {
-	if err := saveBook(ctx, book); err != nil {
+	saved, err := saveBookUnderScanLock(ctx, book, saveBook)
+	if err == nil && !saved {
+		// Files gone since the main pass: nothing saved, nothing to stamp.
+		return "", nil
+	}
+	if err != nil {
 		if errors.Is(err, errFileOwnedByOtherBook) {
 			// Not this book's files (the worker withdraws such books from the
 			// candidates, so this is the race where ownership changed between

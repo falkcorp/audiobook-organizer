@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.116.0
+// version: 1.117.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-29
+// last-edited: 2026-09-30
 
 package scanner
 
@@ -41,6 +41,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
+	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
@@ -898,6 +899,15 @@ type Book struct {
 	// one work rather than an author shelf, so createBookFilesForBook's
 	// maxDirectoryBookFiles backstop does not apply to it.
 	chapterSequence bool
+
+	// rowSnaps is the scanner's snapshot of each book row it holds the scan
+	// lock for (scan_book_lock.go), keyed by row ID: taken under the lock
+	// before the tag read and refreshed after every write the scanner makes,
+	// so the rescan merge can tell another writer's change from its own.
+	rowSnaps map[string]rowSnap
+	// scanLockExtra lists rows a previous attempt at this book discovered
+	// mid-save without holding their lock; the restart locks them up front.
+	scanLockExtra []string
 }
 
 // ScanDirectory scans the given directory for audiobook files.
@@ -1372,6 +1382,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	sameBookHashCheckStart := sameBookHashCheckCount.Load()
 	sameBookRefreshErrStart := sameBookRefreshErrCount.Load()
 	sameBookHashFailStart := sameBookHashFailCount.Load()
+	lockVanishedStart := scanLockVanishedCount.Load()
+	lockRequeuedStart := scanLockRequeuedCount.Load()
+	lockGaveUpStart := scanLockGaveUpCount.Load()
+	lockKeptStart := scanLockKeptFields.Load()
+	lockGroupCappedStart := scanLockGroupCapped.Load()
 
 	// Computed ONCE for the run, not per file: a cutoff that drifts while the
 	// scan walks 40k files would make the gate's verdict depend on where in the
@@ -1432,318 +1447,180 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	errChan := make(chan error, len(books))
 	var ctxErr error
 
-	for idx := range books {
-		// Check context cancellation before starting new work
+	// PER-BOOK SCAN LOCK (scan_book_lock.go). Round 0 only tries each book's
+	// lock; a book an apply is writing is requeued here and the worker moves
+	// on. Rounds 1..scanLockRounds wait, each bounded by scanLockWait. The
+	// list is only touched under deferredMu.
+	var deferredMu sync.Mutex
+	var deferred []int
+	// requeueOrGiveUp sends idx to the next round, or -- past the last one --
+	// records it as busy for the next scan. It reports whether the book was
+	// requeued (the caller then must not report progress for it).
+	requeueOrGiveUp := func(idx, round int, why string) bool {
+		if round < scanLockRounds {
+			deferredMu.Lock()
+			deferred = append(deferred, idx)
+			deferredMu.Unlock()
+			scanLockRequeuedCount.Add(1)
+			return true
+		}
+		scanLockGaveUpCount.Add(1)
+		failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageBusy,
+			Reason: why + "; the next scan picks it up"})
+		return false
+	}
+
+	processBook := func(idx, round int) {
+		semaphore <- struct{}{} // Acquire
+		requeued := false
+		defer func() {
+			<-semaphore // Release
+			if !requeued {
+				progressCh <- books[idx].FilePath
+			}
+		}()
+
+		// Check context cancellation at start of each worker
 		if ctx.Err() != nil {
-			ctxErr = ctx.Err()
-			break
+			return
 		}
 
-		wg.Go(func() {
-			semaphore <- struct{}{} // Acquire
-			defer func() {
-				<-semaphore // Release
-				progressCh <- books[idx].FilePath
-			}()
+		// Incremental skip check: if mtime+size unchanged and no rescan flag, skip.
+		// Every branch records why, so the completion summary can report the
+		// skip rate and which re-read reason dominated.
+		{
+			globalScanCacheMu.RLock()
+			cache := globalScanCache
+			globalScanCacheMu.RUnlock()
+			// Decide over EVERY file this book owns, not just its
+			// representative one. Until 2026-08-24 this consulted
+			// books[idx].FilePath alone, so a 6-file book whose segment 5
+			// changed was skipped whole because segment 1 had not: the
+			// changed audio never reached the row, and the duration and
+			// chapter aggregates kept describing the previous contents.
+			//
+			// The file list comes from the walk, so it is correct even
+			// before the per-file scan cache lands. Note what it does NOT
+			// change on its own: a multi-file book's segments have no
+			// cache entry today (the cache is keyed per BOOK), so they
+			// report cacheMiss and the book is re-read exactly as it is
+			// now. That is the grain mismatch, and closing it is the
+			// per-file cache's job, not this rollup's.
+			skip, reason := classifySkipBook(scanFileSetFor(&books[idx]), cache, freshCutoff, os.Stat)
+			recordSkipDecision(reason)
+			if skip {
+				return // progress deferred func will still fire
+			}
+		}
 
-			// Check context cancellation at start of each worker
-			if ctx.Err() != nil {
+		// Lock the book's rows BEFORE the tag read (scan_book_lock.go). The
+		// skip check above stays outside: a skipped book reads and writes
+		// nothing, so it needs no lock. From here to the end of this
+		// function an apply or write-back of this book waits for us.
+		hold, lockOutcome := acquireScanBookLock(ctx, &books[idx], round, true)
+		switch lockOutcome {
+		case scanLockBusy:
+			requeued = requeueOrGiveUp(idx, round, "an apply or write-back was writing this book")
+			return
+		case scanLockGaveUp:
+			requeueOrGiveUp(idx, scanLockRounds, "an apply or write-back held this book longer than the scan waits")
+			return
+		case scanLockVanished:
+			// Moved or deleted since the walk listed it (typically an apply's
+			// rename). Creating a row here would mint a ghost for a path that
+			// no longer exists; the new path is its own walk entry.
+			scanLockVanishedCount.Add(1)
+			scanLog.Info("skipping %s: its files are gone since the scan listed them (renamed or removed mid-scan)", books[idx].FilePath)
+			return
+		case scanLockCanceled:
+			return
+		}
+		defer hold.Release()
+		ctx := scanlock.WithHold(ctx, hold)
+		// widened handles a save that found a row it does not hold: restart
+		// the book with that row locked (never add a key while holding).
+		widened := func(err error) bool {
+			w, ok := asWiden(err)
+			if !ok {
+				return false
+			}
+			books[idx].scanLockExtra = append(books[idx].scanLockExtra, w.ids...)
+			requeued = requeueOrGiveUp(idx, round, "the book's rows kept changing while the scan tried to lock them")
+			return true
+		}
+
+		// Extract metadata from the file. For multi-file books where the filename
+		// is a generic part number (e.g. "01 Part 1 of 67.mp3"), use folder path
+		// hierarchy combined with first-file tags for richer metadata.
+		fallbackUsed := false
+		// Set when this book is handed to the AI filename-parsing phase.
+		// It defers this book's scan-cache stamp; see the stamp site below.
+		nominatedForAI := false
+		filePath := books[idx].FilePath
+
+		// Suspicious-file guard: single files below MinBookSizeBytes skip heavy processing.
+		if threshold := config.AppConfig.MinBookSizeBytes; threshold > 0 {
+			if fi, statErr := os.Stat(filePath); statErr == nil && !fi.IsDir() && fi.Size() < threshold {
+				extractInfoFromPath(&books[idx])
+				books[idx].LibraryState = "suspicious"
+				if saveErr := saveBook(ctx, &books[idx]); saveErr != nil {
+					if widened(saveErr) {
+						return
+					}
+					if handleOwnershipSkip(ctx, saveErr, skips, failures, books[idx].SegmentHashes, scanLog) {
+						return // another book's file: nothing of this book to stamp
+					}
+					scanLog.Warn("failed to save suspicious book %s: %v", filePath, saveErr)
+				}
+				scanLog.Warn("suspicious file (%d bytes, threshold %d): %s", fi.Size(), threshold, filePath)
+				writeBackScanCache(filePath, fi, scanLog)
 				return
 			}
+		}
 
-			// Incremental skip check: if mtime+size unchanged and no rescan flag, skip.
-			// Every branch records why, so the completion summary can report the
-			// skip rate and which re-read reason dominated.
-			{
-				globalScanCacheMu.RLock()
-				cache := globalScanCache
-				globalScanCacheMu.RUnlock()
-				// Decide over EVERY file this book owns, not just its
-				// representative one. Until 2026-08-24 this consulted
-				// books[idx].FilePath alone, so a 6-file book whose segment 5
-				// changed was skipped whole because segment 1 had not: the
-				// changed audio never reached the row, and the duration and
-				// chapter aggregates kept describing the previous contents.
-				//
-				// The file list comes from the walk, so it is correct even
-				// before the per-file scan cache lands. Note what it does NOT
-				// change on its own: a multi-file book's segments have no
-				// cache entry today (the cache is keyed per BOOK), so they
-				// report cacheMiss and the book is re-read exactly as it is
-				// now. That is the grain mismatch, and closing it is the
-				// per-file cache's job, not this rollup's.
-				skip, reason := classifySkipBook(scanFileSetFor(&books[idx]), cache, freshCutoff, os.Stat)
-				recordSkipDecision(reason)
-				if skip {
-					return // progress deferred func will still fire
+		// Handle directory-based books (multi-file books grouped by album tag)
+		if info, statErr := os.Stat(filePath); statErr == nil && info.IsDir() {
+			dirPath := filePath
+			firstFile := metadata.FindFirstAudioFile(dirPath, config.AppConfig.SupportedExtensions)
+			if firstFile == "" {
+				return // No audio files found in directory
+			}
+			fileCount := countAudioFilesInDir(dirPath, config.AppConfig.SupportedExtensions)
+			bm, bmErr := metadata.AssembleBookMetadata(dirPath, firstFile, fileCount, 0)
+			if bmErr == nil {
+				if bm.Title != "" {
+					books[idx].Title = bm.Title
+				}
+				if bm.PrimaryAuthor() != "" {
+					books[idx].Author = bm.PrimaryAuthor()
+				}
+				if bm.Narrator != "" {
+					books[idx].Narrator = bm.Narrator
+				}
+				if bm.Language != "" {
+					books[idx].Language = bm.Language
+				}
+				if bm.Publisher != "" {
+					books[idx].Publisher = bm.Publisher
+				}
+				if bm.SeriesName != "" {
+					books[idx].Series = bm.SeriesName
+				}
+				if bm.SeriesPosition > 0 {
+					books[idx].Position = bm.SeriesPosition
 				}
 			}
-
-			// Extract metadata from the file. For multi-file books where the filename
-			// is a generic part number (e.g. "01 Part 1 of 67.mp3"), use folder path
-			// hierarchy combined with first-file tags for richer metadata.
-			fallbackUsed := false
-			// Set when this book is handed to the AI filename-parsing phase.
-			// It defers this book's scan-cache stamp; see the stamp site below.
-			nominatedForAI := false
-			filePath := books[idx].FilePath
-
-			// Suspicious-file guard: single files below MinBookSizeBytes skip heavy processing.
-			if threshold := config.AppConfig.MinBookSizeBytes; threshold > 0 {
-				if fi, statErr := os.Stat(filePath); statErr == nil && !fi.IsDir() && fi.Size() < threshold {
-					extractInfoFromPath(&books[idx])
-					books[idx].LibraryState = "suspicious"
-					if saveErr := saveBook(ctx, &books[idx]); saveErr != nil {
-						if handleOwnershipSkip(ctx, saveErr, skips, failures, books[idx].SegmentHashes, scanLog) {
-							return // another book's file: nothing of this book to stamp
-						}
-						scanLog.Warn("failed to save suspicious book %s: %v", filePath, saveErr)
-					}
-					scanLog.Warn("suspicious file (%d bytes, threshold %d): %s", fi.Size(), threshold, filePath)
-					writeBackScanCache(filePath, fi, scanLog)
-					return
-				}
+			// Compute hash from first file for dedup
+			if h, herr := ComputeFileHash(firstFile); herr == nil {
+				books[idx].FileHash = h
 			}
-
-			// Handle directory-based books (multi-file books grouped by album tag)
-			if info, statErr := os.Stat(filePath); statErr == nil && info.IsDir() {
-				dirPath := filePath
-				firstFile := metadata.FindFirstAudioFile(dirPath, config.AppConfig.SupportedExtensions)
-				if firstFile == "" {
-					return // No audio files found in directory
-				}
-				fileCount := countAudioFilesInDir(dirPath, config.AppConfig.SupportedExtensions)
-				bm, bmErr := metadata.AssembleBookMetadata(dirPath, firstFile, fileCount, 0)
-				if bmErr == nil {
-					if bm.Title != "" {
-						books[idx].Title = bm.Title
-					}
-					if bm.PrimaryAuthor() != "" {
-						books[idx].Author = bm.PrimaryAuthor()
-					}
-					if bm.Narrator != "" {
-						books[idx].Narrator = bm.Narrator
-					}
-					if bm.Language != "" {
-						books[idx].Language = bm.Language
-					}
-					if bm.Publisher != "" {
-						books[idx].Publisher = bm.Publisher
-					}
-					if bm.SeriesName != "" {
-						books[idx].Series = bm.SeriesName
-					}
-					if bm.SeriesPosition > 0 {
-						books[idx].Position = bm.SeriesPosition
-					}
-				}
-				// Compute hash from first file for dedup
-				if h, herr := ComputeFileHash(firstFile); herr == nil {
-					books[idx].FileHash = h
-				}
-				// Fallback to filepath extraction if title/author still unknown
-				if books[idx].Title == "" || books[idx].Author == "" {
-					extractInfoFromPath(&books[idx])
-				}
-				if books[idx].Position <= 0 {
-					books[idx].Position = metadata.DetectVolumeNumber(books[idx].Title)
-				}
-				series, position := matcher.IdentifySeries(books[idx].Title, books[idx].FilePath)
-				if books[idx].Series == "" && series != "" {
-					books[idx].Series = series
-				}
-				if books[idx].Position == 0 && position > 0 {
-					books[idx].Position = position
-				}
-				// Save the book and create segments
-				if err := saveBook(ctx, &books[idx]); err != nil {
-					if handleOwnershipSkip(ctx, err, skips, failures, books[idx].SegmentHashes, scanLog) {
-						return // not this book's files: no rows, chapters or stamp
-					}
-					failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageSave, Reason: err.Error()})
-					errChan <- fmt.Errorf("failed to save book %s: %w", books[idx].FilePath, err)
-				} else {
-					// dirPath is a directory, so the normalization branch
-					// (guarded by !info.IsDir()) does not fire and the row does
-					// not move -- discarding the result is correct here, not an
-					// oversight. Deliberately "does not" rather than "cannot":
-					// the guard is evaluated against a fresh stat, so if this
-					// call is ever changed to pass a FILE the discard becomes a
-					// silent bug. TestProcessBooksParallelDirectoryBookKeepsItsPath
-					// pins the current behaviour.
-					_ = createBookFilesForBookLimited(dirPath, nil, scanLog, normalizeToDirectory, nil, maxDirectoryBookFiles, runCounts)
-					// Chapters must be persisted AFTER the book files exist —
-					// the multi-file synthesis path reads BookFile durations to
-					// build the cumulative timeline. Never fatal to the scan.
-					if err := PersistChaptersForBook(ctx, dirPath, scanLog); err != nil {
-						scanLog.Warn("chapter persistence failed for %s: %v", dirPath, err)
-					}
-				}
-				return // Done with this directory-based book
-			}
-
-			// CONS-17 (Path B): a sequential multi-file group (SegmentFiles>1,
-			// detected at the grouping stage) carries a single chapter file as
-			// FilePath (segs[0], or for an album group the first file in arrival
-			// order). Without this, it would fall to the per-file ProcessFile
-			// path below and take its title from one chapter's tags — chapter
-			// titles ("Chapter 1", "Part 1") then leak into and collide across
-			// Book.Title. Route it through AssembleBookMetadata (folder preference)
-			// exactly like generically-named part files; the segments are still
-			// created from SegmentFiles at the saveBook step. This mirrors the
-			// album-grouped multi-file path, which already routes via the folder.
-			if metadata.IsGenericPartFilename(filePath) || len(books[idx].SegmentFiles) > 1 {
-				dirPath := filepath.Dir(filePath)
-				firstFile := metadata.FindFirstAudioFile(dirPath, config.AppConfig.SupportedExtensions)
-				if firstFile == "" {
-					firstFile = filePath
-				}
-				fileCount := countAudioFilesInDir(dirPath, config.AppConfig.SupportedExtensions)
-				bm, bmErr := metadata.AssembleBookMetadata(dirPath, firstFile, fileCount, 0)
-				if bmErr != nil {
-					scanLog.Warn("AssembleBookMetadata failed for %s: %v", dirPath, bmErr)
-					fallbackUsed = true
-				} else {
-					if bm.Title != "" {
-						books[idx].Title = bm.Title
-					}
-					if bm.PrimaryAuthor() != "" {
-						books[idx].Author = bm.PrimaryAuthor()
-					}
-					if bm.Narrator != "" {
-						books[idx].Narrator = bm.Narrator
-					}
-					if bm.Language != "" {
-						books[idx].Language = bm.Language
-					}
-					if bm.Publisher != "" {
-						books[idx].Publisher = bm.Publisher
-					}
-					if bm.SeriesName != "" {
-						books[idx].Series = bm.SeriesName
-					}
-					if bm.SeriesPosition > 0 {
-						books[idx].Position = bm.SeriesPosition
-					}
-					fallbackUsed = bm.Title == "" || bm.PrimaryAuthor() == ""
-				}
-			} else {
-				// Single-pass extraction: open file once for tags + mediainfo + hash.
-				// Bounded: ProcessFile's chain is uncancellable syscalls, and a
-				// malformed container stalled prod's scan on the same file for 3
-				// days. A timeout arrives here as an ordinary pfErr and takes the
-				// existing fallback + fail-count path below.
-				meta, mi, fileHash, pfErr := ProcessFileWithTimeout(ctx, filePath)
-				if pfErr != nil {
-					failures.Record(scanLog, FileFailure{Path: filePath, Stage: FileFailureStageRead, Reason: pfErr.Error()})
-					fallbackUsed = true
-					if gs := getStore(); gs != nil {
-						sum := sha256.Sum256([]byte(filePath))
-						if _, ierr := gs.IncrScanFailCount(fmt.Sprintf("%x", sum[:8])); ierr != nil {
-							// Silent failure disabled the auto-quarantine escalation path (H5).
-							warnSampled(&scanFailCountErrCount, scanLog, "IncrScanFailCount failed for %s: %v", filePath, ierr)
-						}
-					}
-				} else {
-					// Reset fail counter on successful parse so transient failures
-					// don't accumulate toward the auto-quarantine threshold.
-					// Use recover guard: GetGlobalStore may return a non-nil interface
-					// wrapping a nil concrete pointer in tests.
-					func() {
-						defer func() { recover() }() //nolint:errcheck
-						if gs := getStore(); gs != nil {
-							sum := sha256.Sum256([]byte(filePath))
-							_ = gs.ResetScanFailCount(fmt.Sprintf("%x", sum[:8]))
-						}
-					}()
-					if meta != nil {
-						fallbackUsed = meta.UsedFilenameFallback
-						if meta.Title != "" {
-							books[idx].Title = meta.Title
-						}
-						if meta.Artist != "" {
-							books[idx].Author = meta.Artist
-						}
-						if meta.Narrator != "" {
-							books[idx].Narrator = meta.Narrator
-						}
-						if meta.Language != "" {
-							books[idx].Language = meta.Language
-						}
-						if meta.Publisher != "" {
-							books[idx].Publisher = meta.Publisher
-						}
-						if meta.Series != "" {
-							books[idx].Series = meta.Series
-						}
-						if meta.SeriesIndex > 0 {
-							books[idx].Position = meta.SeriesIndex
-						}
-						// Propagate custom organizer tags for re-linking
-						if meta.BookOrganizerID != "" {
-							books[idx].BookOrganizerID = meta.BookOrganizerID
-						}
-						if meta.ASIN != "" {
-							books[idx].ASIN = meta.ASIN
-						}
-						if meta.OpenLibraryID != "" {
-							books[idx].OpenLibraryID = meta.OpenLibraryID
-						}
-						if meta.HardcoverID != "" {
-							books[idx].HardcoverID = meta.HardcoverID
-						}
-						if meta.GoogleBooksID != "" {
-							books[idx].GoogleBooksID = meta.GoogleBooksID
-						}
-					}
-					if mi != nil {
-						books[idx].fileMediaInfo = mi
-						if mi.Format != "" {
-							books[idx].Format = "." + strings.TrimPrefix(strings.ToLower(mi.Format), ".")
-						}
-						if mi.Duration > 0 {
-							books[idx].Duration = mi.Duration
-						}
-					}
-					books[idx].FileHash = fileHash
-				}
-			}
-
-			// Mark books needing AI parsing for batch processing later.
-			// AI only fills EMPTY fields (title, author, series, narrator, publisher),
-			// so if the DB already has title+author from a previous scan, re-running AI
-			// would be a no-op. Skip to avoid thousands of redundant API calls on rescan.
-			if aiEnabled && (fallbackUsed || books[idx].Title == "" || books[idx].Author == "" || books[idx].Series == "") {
-				needsAI := true
-				if getStore() != nil {
-					if dbExisting, dbErr := getStore().GetBookByFilePath(books[idx].FilePath); dbErr == nil && dbExisting != nil {
-						// The placeholder is a real author row with a real,
-						// non-zero ID, so the bare non-nil check below used to
-						// pass for a book whose author is precisely unknown --
-						// which is the one case AI parsing exists to fix.
-						if dbExisting.Title != "" && rowHasRealAuthor(dbExisting.AuthorID, placeholders) {
-							needsAI = false
-						}
-					}
-				}
-				if needsAI {
-					nominatedForAI = true
-					aiCandidatesMu.Lock()
-					aiCandidates = append(aiCandidates, idx)
-					aiCandidatesMu.Unlock()
-				}
-			}
-
 			// Fallback to filepath extraction if title/author still unknown
 			if books[idx].Title == "" || books[idx].Author == "" {
 				extractInfoFromPath(&books[idx])
 			}
-
 			if books[idx].Position <= 0 {
 				books[idx].Position = metadata.DetectVolumeNumber(books[idx].Title)
 			}
-
-			// Identify series based on title and filepath
 			series, position := matcher.IdentifySeries(books[idx].Title, books[idx].FilePath)
 			if books[idx].Series == "" && series != "" {
 				books[idx].Series = series
@@ -1751,113 +1628,349 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			if books[idx].Position == 0 && position > 0 {
 				books[idx].Position = position
 			}
-
-			// Check cancellation before saving
-			if ctx.Err() != nil {
-				return
-			}
-
-			// Save to database (database operations are thread-safe)
+			// Save the book and create segments
 			if err := saveBook(ctx, &books[idx]); err != nil {
-				if handleOwnershipSkip(ctx, err, skips, failures, books[idx].SegmentHashes, scanLog) {
-					// Not this book's files. Nothing below may run: every step
-					// resolves the book BY PATH and would land on the owner --
-					// clearing its NeedsRescan, rewriting its chapters -- and a
-					// nomination made above would queue an AI parse for the
-					// owner on every scan. Withdraw it.
-					if nominatedForAI {
-						aiCandidatesMu.Lock()
-						aiCandidates = slices.DeleteFunc(aiCandidates, func(i int) bool { return i == idx })
-						aiCandidatesMu.Unlock()
-					}
+				if widened(err) {
 					return
+				}
+				if handleOwnershipSkip(ctx, err, skips, failures, books[idx].SegmentHashes, scanLog) {
+					return // not this book's files: no rows, chapters or stamp
 				}
 				failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageSave, Reason: err.Error()})
 				errChan <- fmt.Errorf("failed to save book %s: %w", books[idx].FilePath, err)
 			} else {
-				// Create segments for multi-file books grouped by album.
-				// Pass SegmentHashes (populated by saveBookToDatabase dedup loop)
-				// to avoid re-hashing each segment file (PERF-2b).
-				if len(books[idx].SegmentFiles) > 1 {
-					// Keep the in-memory book in step with the row. This call
-					// can move the stored FilePath to the containing directory,
-					// and BOTH consumers below look the book up BY PATH:
-					// PersistChaptersForBook returns silently on a miss (so
-					// chapters were never persisted at all) and writeBackScanCache
-					// counts a miss as "no book row" (so the book never acquired a
-					// scan-cache entry). Measured on prod 2026-08-24. Note this
-					// does NOT yet make the next scan SKIP the book -- see the
-					// SCOPE paragraph on createBookFilesForBook for the two
-					// grain mismatches that still defeat that.
-					pathMode := normalizeToDirectory
-					if books[idx].sharesDirectory {
-						pathMode = keepFilePath
-					}
-					fileLimit := maxDirectoryBookFiles
-					if books[idx].chapterSequence {
-						fileLimit = noBookFileLimit
-					}
-					if moved := createBookFilesForBookLimited(books[idx].FilePath, books[idx].SegmentFiles, scanLog, pathMode, books[idx].SegmentHashes, fileLimit, runCounts); moved != "" {
-						books[idx].FilePath = moved
-					}
-				} else {
-					// GENUINELY SINGLE-FILE BOOKS. This branch did not exist, so
-					// createBookFilesForBook was never called for them and they
-					// got no book_file row at all -- the gap
-					// ensureSingleFileBookFile backfills from the organize hook.
-					//
-					// It became load-bearing when the scan cache moved to
-					// book_file rows: GetScanCacheMap now iterates book_file:*
-					// and UpdateBookFileScanCache resolves a row BY PATH, so a
-					// book with no file row has no cache entry to read and no
-					// row to stamp. Every single-file book would be re-read and
-					// re-hashed on every scan, forever -- the same defect the
-					// per-file cache was built to fix, arriving through the
-					// other door.
-					//
-					// keepFilePath, NOT normalizeToDirectory: a single-file
-					// book's row belongs at its file. Normalizing it to the
-					// parent directory is wrong on its own terms (two books can
-					// share a directory) and would also undo the thing that
-					// makes these books work today.
-					createSingleFileBookFile(&books[idx], scanLog)
-				}
-				// Persist chapters. Deliberately OUTSIDE the SegmentFiles>1 block
-				// so it also runs for genuinely-single-file books, whose embedded
-				// m4b chapter marks are the primary source. Never fatal to the scan.
-				if err := PersistChaptersForBook(ctx, books[idx].FilePath, scanLog); err != nil {
-					scanLog.Warn("chapter persistence failed for %s: %v", books[idx].FilePath, err)
-				}
-				// Update scan cache so next incremental scan skips this file.
-				//
-				// EXCEPT for books handed to the AI filename-parsing phase. The
-				// stamp means "this file is fully processed, skip it next time",
-				// and for an AI candidate that is a promise, not a fact: the
-				// parse now happens in a queued operation that can be dropped on
-				// restart, aborted by a permanent LLM failure, or stopped by the
-				// batch failure threshold. Stamping here would make the next scan
-				// skip the file at classifySkipFile -- which returns BEFORE the
-				// nomination check above -- so the book would never be
-				// re-nominated and would keep its empty fields permanently, with
-				// a healthy skip rate in the log.
-				//
-				// So the AI phase owns the stamp for its own candidates and
-				// writes it once a parse has been ATTEMPTED for the book (see
-				// runAIBatchPhase), whatever the parse returned. Attempted, not
-				// succeeded: a filename the LLM legitimately cannot parse must
-				// still stop being re-read, or it churns every scan forever.
-				// Anything that stops the phase short leaves the stamp unwritten,
-				// the next scan re-reads the file, and the nomination gate --
-				// which clears itself once the DB row has a title and an author
-				// -- decides whether to queue it again.
-				if !nominatedForAI {
-					writeBackScanCache(books[idx].FilePath, nil, scanLog)
+				// dirPath is a directory, so the normalization branch
+				// (guarded by !info.IsDir()) does not fire and the row does
+				// not move -- discarding the result is correct here, not an
+				// oversight. Deliberately "does not" rather than "cannot":
+				// the guard is evaluated against a fresh stat, so if this
+				// call is ever changed to pass a FILE the discard becomes a
+				// silent bug. TestProcessBooksParallelDirectoryBookKeepsItsPath
+				// pins the current behaviour.
+				_ = createBookFilesForBookLimited(dirPath, nil, scanLog, normalizeToDirectory, nil, maxDirectoryBookFiles, runCounts)
+				// Chapters must be persisted AFTER the book files exist —
+				// the multi-file synthesis path reads BookFile durations to
+				// build the cumulative timeline. Never fatal to the scan.
+				if err := PersistChaptersForBook(ctx, dirPath, scanLog); err != nil {
+					scanLog.Warn("chapter persistence failed for %s: %v", dirPath, err)
 				}
 			}
-		})
+			return // Done with this directory-based book
+		}
+
+		// CONS-17 (Path B): a sequential multi-file group (SegmentFiles>1,
+		// detected at the grouping stage) carries a single chapter file as
+		// FilePath (segs[0], or for an album group the first file in arrival
+		// order). Without this, it would fall to the per-file ProcessFile
+		// path below and take its title from one chapter's tags — chapter
+		// titles ("Chapter 1", "Part 1") then leak into and collide across
+		// Book.Title. Route it through AssembleBookMetadata (folder preference)
+		// exactly like generically-named part files; the segments are still
+		// created from SegmentFiles at the saveBook step. This mirrors the
+		// album-grouped multi-file path, which already routes via the folder.
+		if metadata.IsGenericPartFilename(filePath) || len(books[idx].SegmentFiles) > 1 {
+			dirPath := filepath.Dir(filePath)
+			firstFile := metadata.FindFirstAudioFile(dirPath, config.AppConfig.SupportedExtensions)
+			if firstFile == "" {
+				firstFile = filePath
+			}
+			fileCount := countAudioFilesInDir(dirPath, config.AppConfig.SupportedExtensions)
+			bm, bmErr := metadata.AssembleBookMetadata(dirPath, firstFile, fileCount, 0)
+			if bmErr != nil {
+				scanLog.Warn("AssembleBookMetadata failed for %s: %v", dirPath, bmErr)
+				fallbackUsed = true
+			} else {
+				if bm.Title != "" {
+					books[idx].Title = bm.Title
+				}
+				if bm.PrimaryAuthor() != "" {
+					books[idx].Author = bm.PrimaryAuthor()
+				}
+				if bm.Narrator != "" {
+					books[idx].Narrator = bm.Narrator
+				}
+				if bm.Language != "" {
+					books[idx].Language = bm.Language
+				}
+				if bm.Publisher != "" {
+					books[idx].Publisher = bm.Publisher
+				}
+				if bm.SeriesName != "" {
+					books[idx].Series = bm.SeriesName
+				}
+				if bm.SeriesPosition > 0 {
+					books[idx].Position = bm.SeriesPosition
+				}
+				fallbackUsed = bm.Title == "" || bm.PrimaryAuthor() == ""
+			}
+		} else {
+			// Single-pass extraction: open file once for tags + mediainfo + hash.
+			// Bounded: ProcessFile's chain is uncancellable syscalls, and a
+			// malformed container stalled prod's scan on the same file for 3
+			// days. A timeout arrives here as an ordinary pfErr and takes the
+			// existing fallback + fail-count path below.
+			meta, mi, fileHash, pfErr := ProcessFileWithTimeout(ctx, filePath)
+			if pfErr != nil {
+				failures.Record(scanLog, FileFailure{Path: filePath, Stage: FileFailureStageRead, Reason: pfErr.Error()})
+				fallbackUsed = true
+				if gs := getStore(); gs != nil {
+					sum := sha256.Sum256([]byte(filePath))
+					if _, ierr := gs.IncrScanFailCount(fmt.Sprintf("%x", sum[:8])); ierr != nil {
+						// Silent failure disabled the auto-quarantine escalation path (H5).
+						warnSampled(&scanFailCountErrCount, scanLog, "IncrScanFailCount failed for %s: %v", filePath, ierr)
+					}
+				}
+			} else {
+				// Reset fail counter on successful parse so transient failures
+				// don't accumulate toward the auto-quarantine threshold.
+				// Use recover guard: GetGlobalStore may return a non-nil interface
+				// wrapping a nil concrete pointer in tests.
+				func() {
+					defer func() { recover() }() //nolint:errcheck
+					if gs := getStore(); gs != nil {
+						sum := sha256.Sum256([]byte(filePath))
+						_ = gs.ResetScanFailCount(fmt.Sprintf("%x", sum[:8]))
+					}
+				}()
+				if meta != nil {
+					fallbackUsed = meta.UsedFilenameFallback
+					if meta.Title != "" {
+						books[idx].Title = meta.Title
+					}
+					if meta.Artist != "" {
+						books[idx].Author = meta.Artist
+					}
+					if meta.Narrator != "" {
+						books[idx].Narrator = meta.Narrator
+					}
+					if meta.Language != "" {
+						books[idx].Language = meta.Language
+					}
+					if meta.Publisher != "" {
+						books[idx].Publisher = meta.Publisher
+					}
+					if meta.Series != "" {
+						books[idx].Series = meta.Series
+					}
+					if meta.SeriesIndex > 0 {
+						books[idx].Position = meta.SeriesIndex
+					}
+					// Propagate custom organizer tags for re-linking
+					if meta.BookOrganizerID != "" {
+						books[idx].BookOrganizerID = meta.BookOrganizerID
+					}
+					if meta.ASIN != "" {
+						books[idx].ASIN = meta.ASIN
+					}
+					if meta.OpenLibraryID != "" {
+						books[idx].OpenLibraryID = meta.OpenLibraryID
+					}
+					if meta.HardcoverID != "" {
+						books[idx].HardcoverID = meta.HardcoverID
+					}
+					if meta.GoogleBooksID != "" {
+						books[idx].GoogleBooksID = meta.GoogleBooksID
+					}
+				}
+				if mi != nil {
+					books[idx].fileMediaInfo = mi
+					if mi.Format != "" {
+						books[idx].Format = "." + strings.TrimPrefix(strings.ToLower(mi.Format), ".")
+					}
+					if mi.Duration > 0 {
+						books[idx].Duration = mi.Duration
+					}
+				}
+				books[idx].FileHash = fileHash
+			}
+		}
+
+		// Mark books needing AI parsing for batch processing later.
+		// AI only fills EMPTY fields (title, author, series, narrator, publisher),
+		// so if the DB already has title+author from a previous scan, re-running AI
+		// would be a no-op. Skip to avoid thousands of redundant API calls on rescan.
+		if aiEnabled && (fallbackUsed || books[idx].Title == "" || books[idx].Author == "" || books[idx].Series == "") {
+			needsAI := true
+			if getStore() != nil {
+				if dbExisting, dbErr := getStore().GetBookByFilePath(books[idx].FilePath); dbErr == nil && dbExisting != nil {
+					// The placeholder is a real author row with a real,
+					// non-zero ID, so the bare non-nil check below used to
+					// pass for a book whose author is precisely unknown --
+					// which is the one case AI parsing exists to fix.
+					if dbExisting.Title != "" && rowHasRealAuthor(dbExisting.AuthorID, placeholders) {
+						needsAI = false
+					}
+				}
+			}
+			if needsAI {
+				nominatedForAI = true
+				aiCandidatesMu.Lock()
+				aiCandidates = append(aiCandidates, idx)
+				aiCandidatesMu.Unlock()
+			}
+		}
+
+		// Fallback to filepath extraction if title/author still unknown
+		if books[idx].Title == "" || books[idx].Author == "" {
+			extractInfoFromPath(&books[idx])
+		}
+
+		if books[idx].Position <= 0 {
+			books[idx].Position = metadata.DetectVolumeNumber(books[idx].Title)
+		}
+
+		// Identify series based on title and filepath
+		series, position := matcher.IdentifySeries(books[idx].Title, books[idx].FilePath)
+		if books[idx].Series == "" && series != "" {
+			books[idx].Series = series
+		}
+		if books[idx].Position == 0 && position > 0 {
+			books[idx].Position = position
+		}
+
+		// Check cancellation before saving
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Save to database (database operations are thread-safe)
+		if err := saveBook(ctx, &books[idx]); err != nil {
+			if _, isWiden := asWiden(err); isWiden && nominatedForAI {
+				// The restart re-decides the nomination.
+				aiCandidatesMu.Lock()
+				aiCandidates = slices.DeleteFunc(aiCandidates, func(i int) bool { return i == idx })
+				aiCandidatesMu.Unlock()
+			}
+			if widened(err) {
+				return
+			}
+			if handleOwnershipSkip(ctx, err, skips, failures, books[idx].SegmentHashes, scanLog) {
+				// Not this book's files. Nothing below may run: every step
+				// resolves the book BY PATH and would land on the owner --
+				// clearing its NeedsRescan, rewriting its chapters -- and a
+				// nomination made above would queue an AI parse for the
+				// owner on every scan. Withdraw it.
+				if nominatedForAI {
+					aiCandidatesMu.Lock()
+					aiCandidates = slices.DeleteFunc(aiCandidates, func(i int) bool { return i == idx })
+					aiCandidatesMu.Unlock()
+				}
+				return
+			}
+			failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageSave, Reason: err.Error()})
+			errChan <- fmt.Errorf("failed to save book %s: %w", books[idx].FilePath, err)
+		} else {
+			// Create segments for multi-file books grouped by album.
+			// Pass SegmentHashes (populated by saveBookToDatabase dedup loop)
+			// to avoid re-hashing each segment file (PERF-2b).
+			if len(books[idx].SegmentFiles) > 1 {
+				// Keep the in-memory book in step with the row. This call
+				// can move the stored FilePath to the containing directory,
+				// and BOTH consumers below look the book up BY PATH:
+				// PersistChaptersForBook returns silently on a miss (so
+				// chapters were never persisted at all) and writeBackScanCache
+				// counts a miss as "no book row" (so the book never acquired a
+				// scan-cache entry). Measured on prod 2026-08-24. Note this
+				// does NOT yet make the next scan SKIP the book -- see the
+				// SCOPE paragraph on createBookFilesForBook for the two
+				// grain mismatches that still defeat that.
+				pathMode := normalizeToDirectory
+				if books[idx].sharesDirectory {
+					pathMode = keepFilePath
+				}
+				fileLimit := maxDirectoryBookFiles
+				if books[idx].chapterSequence {
+					fileLimit = noBookFileLimit
+				}
+				if moved := createBookFilesForBookLimited(books[idx].FilePath, books[idx].SegmentFiles, scanLog, pathMode, books[idx].SegmentHashes, fileLimit, runCounts); moved != "" {
+					books[idx].FilePath = moved
+				}
+			} else {
+				// GENUINELY SINGLE-FILE BOOKS. This branch did not exist, so
+				// createBookFilesForBook was never called for them and they
+				// got no book_file row at all -- the gap
+				// ensureSingleFileBookFile backfills from the organize hook.
+				//
+				// It became load-bearing when the scan cache moved to
+				// book_file rows: GetScanCacheMap now iterates book_file:*
+				// and UpdateBookFileScanCache resolves a row BY PATH, so a
+				// book with no file row has no cache entry to read and no
+				// row to stamp. Every single-file book would be re-read and
+				// re-hashed on every scan, forever -- the same defect the
+				// per-file cache was built to fix, arriving through the
+				// other door.
+				//
+				// keepFilePath, NOT normalizeToDirectory: a single-file
+				// book's row belongs at its file. Normalizing it to the
+				// parent directory is wrong on its own terms (two books can
+				// share a directory) and would also undo the thing that
+				// makes these books work today.
+				createSingleFileBookFile(&books[idx], scanLog)
+			}
+			// Persist chapters. Deliberately OUTSIDE the SegmentFiles>1 block
+			// so it also runs for genuinely-single-file books, whose embedded
+			// m4b chapter marks are the primary source. Never fatal to the scan.
+			if err := PersistChaptersForBook(ctx, books[idx].FilePath, scanLog); err != nil {
+				scanLog.Warn("chapter persistence failed for %s: %v", books[idx].FilePath, err)
+			}
+			// Update scan cache so next incremental scan skips this file.
+			//
+			// EXCEPT for books handed to the AI filename-parsing phase. The
+			// stamp means "this file is fully processed, skip it next time",
+			// and for an AI candidate that is a promise, not a fact: the
+			// parse now happens in a queued operation that can be dropped on
+			// restart, aborted by a permanent LLM failure, or stopped by the
+			// batch failure threshold. Stamping here would make the next scan
+			// skip the file at classifySkipFile -- which returns BEFORE the
+			// nomination check above -- so the book would never be
+			// re-nominated and would keep its empty fields permanently, with
+			// a healthy skip rate in the log.
+			//
+			// So the AI phase owns the stamp for its own candidates and
+			// writes it once a parse has been ATTEMPTED for the book (see
+			// runAIBatchPhase), whatever the parse returned. Attempted, not
+			// succeeded: a filename the LLM legitimately cannot parse must
+			// still stop being re-read, or it churns every scan forever.
+			// Anything that stops the phase short leaves the stamp unwritten,
+			// the next scan re-reads the file, and the nomination gate --
+			// which clears itself once the DB row has a title and an author
+			// -- decides whether to queue it again.
+			if !nominatedForAI {
+				writeBackScanCache(books[idx].FilePath, nil, scanLog)
+			}
+		}
 	}
 
+	for idx := range books {
+		// Check context cancellation before starting new work
+		if ctx.Err() != nil {
+			ctxErr = ctx.Err()
+			break
+		}
+		wg.Go(func() { processBook(idx, 0) })
+	}
 	wg.Wait()
+	// Books an apply was writing when their turn came, and books whose save
+	// found a row they did not hold. Each round waits (bounded) for the lock.
+	for round := 1; round <= scanLockRounds && ctx.Err() == nil; round++ {
+		deferredMu.Lock()
+		list := deferred
+		deferred = nil
+		deferredMu.Unlock()
+		if len(list) == 0 {
+			break
+		}
+		scanLog.Info("scan: %d book(s) were being written by an apply; processing them now (round %d)", len(list), round)
+		for _, idx := range list {
+			wg.Go(func() { processBook(idx, round) })
+		}
+		wg.Wait()
+	}
+	// Only a canceled scan leaves books here; count them as processed so the
+	// progress total still closes.
+	for _, idx := range deferred {
+		progressCh <- books[idx].FilePath
+	}
 	close(progressCh)
 	progressWG.Wait()
 	close(errChan)
@@ -1870,6 +1983,21 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 	if len(errs) > 0 {
 		scanLog.Warn("%d books failed to save", len(errs))
+	}
+	if d := scanLockRequeuedCount.Load() - lockRequeuedStart; d > 0 {
+		scanLog.Info("scan summary: %d book(s) were deferred because an apply or write-back was writing them", d)
+	}
+	if d := scanLockGaveUpCount.Load() - lockGaveUpStart; d > 0 {
+		scanLog.Warn("scan summary: %d book(s) left for the next scan: an apply held them longer than the scan waits (listed with the file failures)", d)
+	}
+	if d := scanLockVanishedCount.Load() - lockVanishedStart; d > 0 {
+		scanLog.Info("scan summary: %d book(s) skipped because their files were renamed or removed after the scan listed them", d)
+	}
+	if d := scanLockKeptFields.Load() - lockKeptStart; d > 0 {
+		scanLog.Info("scan summary: %d field(s) kept because another writer changed them while the scan read the file", d)
+	}
+	if d := scanLockGroupCapped.Load() - lockGroupCappedStart; d > 0 {
+		scanLog.Warn("scan summary: %d version group(s) had more than %d members and were not locked whole", d, scanLockMaxGroup)
 	}
 	if ownFailures {
 		failures.ReportSummary(scanLog)
@@ -3349,6 +3477,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				defaultLog.Warn("organizer-ID relink: looking up book %s failed (%v); saving %s by path instead",
 					book.BookOrganizerID, orgErr, book.FilePath)
 			} else if existingByOrgID != nil && existingByOrgID.FilePath != book.FilePath {
+				if err := requireHeld(ctx, existingByOrgID.ID); err != nil {
+					return err
+				}
 				oldPath := existingByOrgID.FilePath
 				relinked := false
 				// FilePath is the only field this relink owns. It is set on a
@@ -3468,6 +3599,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					// lookup above and writing it back whole reverts whatever
 					// another writer committed in the meantime. Only the two
 					// version columns are ours to set.
+					if err := requireHeld(ctx, existing.ID); err != nil {
+						return err
+					}
 					linkedGroup, ok := linkVersionGroup(existing.ID, groupID, existingPrimary)
 					if !ok {
 						// The link did not land, so there is no group to join.
@@ -3560,6 +3694,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					// Same ModifyBook link as the single-hash branch above, and
 					// the same rule when it does not land: no group on the new
 					// row either, rather than an orphan group of one.
+					if err := requireHeld(ctx, matchedBook.ID); err != nil {
+						return err
+					}
 					linkedGroup, ok := linkVersionGroup(matchedBook.ID, groupID, matchedPrimary)
 					if !ok {
 						defaultLog.Warn("Multi-file dedup: not linking %s as a version of %s: the group write did not land",
@@ -3619,6 +3756,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				// fall through to the merge path below, which overlays the
 				// scanner's fields onto the row that exists.
 				unlockPath()
+				if err := requireHeld(ctx, raced.ID); err != nil {
+					return err
+				}
 				defaultLog.Info("book row for %s was created concurrently; merging into %s instead of creating a second row",
 					book.FilePath, raced.ID)
 				existing = raced
@@ -3704,6 +3844,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				// the whole point of the lock.
 				unlockPath()
 				if err == nil {
+					// The scanner's own write: an AI-phase re-save must see it as
+					// the baseline, not as another writer's change.
+					book.rememberRow(dbBook)
 					// After both stripes are released: the hand-off takes the
 					// group lock and then each member's write stripe.
 					handOffLinkedGroup(ctx, linkedVersionGroup, rootDir)
@@ -3748,14 +3891,27 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		//
 		// applyScannerFields is pure and lockedFieldsForBook is read outside,
 		// so the callback does no IO while the stripe is held.
+		// The row is written from here: the worker must hold its scan lock.
+		if err := requireHeld(ctx, existing.ID); err != nil {
+			return err
+		}
 		locked, ok := lockedFieldsForBook(getStore(), existing.ID)
 		if !ok {
 			defaultLog.Warn("metadata field state unreadable for book %s (%s); "+
 				"treating every guarded field as locked so a scan cannot clobber a user edit",
 				existing.ID, existing.FilePath)
 		}
+		// Changed-since-read wins: any tag-derived column another writer
+		// changed after this worker took its snapshot keeps that writer's
+		// value (mergeScannedKeepingForeignEdits). ModifyBook may run the
+		// callback more than once; only the last run's count is kept.
+		var snap *rowSnap
+		if s, ok := book.rowSnaps[existing.ID]; ok {
+			snap = &s
+		}
+		kept := 0
 		written, uerr := getStore().ModifyBook(existing.ID, func(cur *database.Book) error {
-			applyScannerFields(cur, dbBook, locked)
+			kept = mergeScannedKeepingForeignEdits(cur, dbBook, locked, snap)
 			return nil
 		})
 		if uerr != nil {
@@ -3768,6 +3924,12 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				existing.ID, existing.FilePath)
 			return nil
 		}
+		if kept > 0 {
+			scanLockKeptFields.Add(int64(kept))
+			defaultLog.Info("rescan of %s kept %d field(s) another writer changed while the file was being read",
+				existing.ID, kept)
+		}
+		book.rememberRow(written)
 		// Check for metadata hash duplicates after update, against the row that
 		// was actually written rather than a local copy of it.
 		detectMetadataHashDuplicate(written, defaultLog)
