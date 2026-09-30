@@ -1,5 +1,5 @@
 <!-- file: PLAN.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a3e90137-2ca9-4148-9870-411a5cfa3283 -->
 <!-- last-edited: 2026-09-30 -->
 
@@ -408,10 +408,15 @@ Verification: `go build ./... && go vet` on touched packages, plus targeted
   through `OrganizeOneBook` + `CreateOrganizedVersion`. R2 allows this because
   L0 comes before L1. Batch-save's organize goes the same way. About 60 lines
   plus a test.
-- **O3: the write-back batcher** (`wb.Enqueue`) writes tags asynchronously with
-  no L0. The §5.1.3 net stops it causing a DB clobber, but it can rewrite a
-  file the scanner is reading. The fix is to take L0 {id} per book in the
-  batcher worker, about 20 lines.
+- **O3: withdrawn (2026-09-30).** The write-back batcher (`wb.Enqueue`,
+  `internal/itunes/service/writeback_batcher.go`) does not write audio tags.
+  It batches iTunes track updates and removals into one read-modify-write of
+  the ITL library file (line 7 of that file), which the scanner never reads.
+  Audio-tag file work goes through the file-I/O pool, whose pending mark
+  already makes the book busy for the scanner. Nothing to convert.
+- **Single-book organize** (`POST /audiobooks/:id/organize` →
+  `OrganizeHandler.OrganizeBook`) has no scan coordination at all: neither a
+  stand-down nor L0. This predates this PR and is the evidence for O2.
 
 ## 9. WAITING stand-down callers left unchanged, with cost to convert
 
