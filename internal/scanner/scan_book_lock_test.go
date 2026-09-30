@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_book_lock_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 161af27f-a511-4b3d-a32f-02348506c28a
 // last-edited: 2026-09-30
 
@@ -111,6 +111,9 @@ func TestScanBookLock_ApplyDuringScanWaitsAndIsNotReverted(t *testing.T) {
 
 	applied := make(chan struct{})
 	go func() {
+		// applied closes AFTER the release (defers run last-in first-out), so
+		// the Held() check below never races this goroutine's unref.
+		defer close(applied)
 		h, lerr := scanlock.Books.LockSet(context.Background(), []string{x.ID})
 		if lerr != nil {
 			t.Error(lerr)
@@ -121,7 +124,6 @@ func TestScanBookLock_ApplyDuringScanWaitsAndIsNotReverted(t *testing.T) {
 		if merr != nil {
 			t.Error(merr)
 		}
-		close(applied)
 	}()
 	select {
 	case <-applied:
