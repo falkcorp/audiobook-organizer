@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.50.0
+// version: 1.50.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-30
 
@@ -1587,7 +1587,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 					stats.addCollision(CollisionLibraryCopyExists, 1)
 					statsMu.Unlock()
 					if operationID != "" {
-						_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+						if cerr := orgSvc.db.CreateOperationChange(&database.OperationChange{
 							ID:          ulid.Make().String(),
 							OperationID: operationID,
 							BookID:      book.ID,
@@ -1595,7 +1595,9 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 							FieldName:   "file_path",
 							OldValue:    oldPath,
 							NewValue:    CollisionLibraryCopyExists + ": already has library copy " + hasCopy.CopyID,
-						})
+						}); cerr != nil {
+							log.Warn("Organize: record library-copy skip for %s: %v", book.ID, cerr)
+						}
 					}
 				} else if errors.As(err, &conflict) {
 					// A declined destination conflict is a counted outcome, not a
