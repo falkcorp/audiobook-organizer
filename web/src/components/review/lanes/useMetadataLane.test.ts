@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.24.0
+// version: 1.25.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-09-30
 //
@@ -1628,7 +1628,7 @@ describe('fetches the whole reviewable set', () => {
   it('sends all=true so the server default page cap does not truncate the lane', async () => {
     // The server caps a request with no positive limit to a default page unless
     // all=true is sent. Every derivation in this hook (filters, grouping,
-    // staleIds) spans the whole library, so dropping the flag would silently
+    // chip views) spans the whole library, so dropping the flag would silently
     // confine all of them to the first page.
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(
       reviewPayload([makeResult('b1')]) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
@@ -1641,7 +1641,7 @@ describe('fetches the whole reviewable set', () => {
 
   it('warns when the server still reports the response as truncated', async () => {
     // A partial set must not be presented as the whole library: filters,
-    // grouping and staleIds would silently cover only the returned rows.
+    // grouping and chip views would silently cover only the returned rows.
     toast.mockClear();
     vi.mocked(api.getCachedReviewResults).mockResolvedValue({
       ...reviewPayload([makeResult('b1')]),

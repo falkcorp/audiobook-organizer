@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.24.0
+// version: 1.25.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-30
 //
@@ -557,7 +557,8 @@ export interface MetadataLaneSummary {
  *   errors                        candidates that will not decode
  *   no_candidates                 nobody has ruled on it, no candidate stored
  *   resolved_no_candidates        ruled on, candidate gone
- *   stale                         every non-orphaned row past the cache TTL
+ *   stale                         every non-orphaned row past the cache TTL,
+ *                                 minus books the owner marked no-match
  *
  * The last four need the server's unreviewable bucket, loaded on first use.
  */
@@ -773,16 +774,6 @@ export interface MetadataLane {
   setPreviewCover: (url: string | null) => void;
 
   /**
-   * Book ids whose cached candidate is past MetadataCacheTTL.
-   *
-   * Derived here rather than in the rail because the rail only ever sees a
-   * page, and the whole point of the stale set is that it spans the library:
-   * on production 5,771 of 5,774 reviewable rows are stale, which no page can
-   * show. `results` holds every row (the lane fetches with all=true and
-   * paginates client-side), so the full set is available without a round trip.
-   */
-  staleIds: string[];
-  /**
    * True while a refetch REQUEST is in flight -- not while the resulting
    * operation runs. The op is a background job tracked by the operations list;
    * this flag exists only to stop a second click landing before the first
@@ -795,6 +786,14 @@ export interface MetadataLane {
    * a failure -- all three are reported to the user by toast).
    */
   refetchBooks: (ids: string[]) => Promise<string | null>;
+  /**
+   * Refetch every book the summary counts as stale (`summary.stale`). The set
+   * is resolved on the server with the same predicate as that count
+   * (POST {stale: true}); the client cannot build it, because it only holds
+   * the reviewable bucket -- the chip read "3,511 stale" while a client-built
+   * set refetched 10. Resolves like refetchBooks.
+   */
+  refetchStale: () => Promise<string | null>;
 
   /** Satisfies the spine's contract directly -- see the note on SpineContext. */
   spineCtx: SpineContext;
@@ -948,7 +947,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     api
       // all=true is required, not incidental: the server caps an unpaged
       // request to a default page, and every derivation below (filters,
-      // grouping, staleIds) must see the whole library, not its first page.
+      // grouping, chip views) must see the whole library, not its first page.
       .getCachedReviewResults(0, 0, true)
       .then((data) => {
         if (fetchId !== fetchIdRef.current) return; // stale -- a newer fetch is in flight
@@ -956,12 +955,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
 
         // all=true should always return the whole set, but if the server still
         // says the response is truncated, every derivation below (filters,
-        // grouping, staleIds) is over a partial set. Say so rather than present
+        // grouping, chip views) is over a partial set. Say so rather than present
         // it as the library. A warning, not `error`: the load did succeed, and
         // `error` is the failure Alert with a Retry that would not help.
         if (data.truncated === true) {
           toastRef.current(
-            `Only ${allResults.length} of ${data.total_count ?? 'unknown'} metadata review rows were returned; filters, groups and the stale set cover only these rows.`,
+            `Only ${allResults.length} of ${data.total_count ?? 'unknown'} metadata review rows were returned; filters, groups and chip views cover only these rows.`,
             'warning'
           );
         }
@@ -1252,8 +1251,15 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       case 'resolved_no_candidates':
         return unreviewableResults.filter((r) => r.status === 'resolved_no_candidates');
       case 'stale':
-        // Explicitly false, as everywhere else: no age is not stale.
-        return [...results, ...unreviewableResults].filter((r) => r.is_fresh === false);
+        // Explicitly false, as everywhere else: no age is not stale. Books the
+        // owner marked "no match" are left out, as the server's count leaves
+        // them out (cacheRowStale): the candidate fetch never searches them.
+        // Reviewable rows carry that verdict as status 'no_match', unreviewable
+        // rows as their raw review_status.
+        return [
+          ...results.filter((r) => r.status !== 'no_match'),
+          ...unreviewableResults.filter((r) => r.review_status !== 'no_match'),
+        ].filter((r) => r.is_fresh === false);
     }
   }, [chipFilter, results, unreviewableResults]);
 
@@ -1954,35 +1960,29 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     [rowStates, selectedIds, toggleSelect, dispatch, expandedId, toggleExpand, bulkApplyMode]
   );
 
-  // Explicitly `=== false`, not falsy: a row the server sent no age for is not
-  // a stale row, and sweeping it into a refetch would act on a claim the
-  // payload never made. Same predicate the per-row marker uses.
-  const staleIds = useMemo(
-    () => results.filter((r) => r.is_fresh === false).map((r) => r.book.id),
-    [results]
-  );
-
   const [refetching, setRefetching] = useState(false);
-  const refetchBooks = useCallback(
-    async (ids: string[]): Promise<string | null> => {
-      // Defensive depth on the hook's public surface, not a UI path: both
-      // callers are gated (the chip on staleIds.length, the row on one id), so
-      // no interaction can reach this and no component test covers it. It stays
-      // because `refetchBooks` is exported on MetadataLane and an empty POST is
-      // a worse failure than an early return.
-      if (!ids.length) return null;
+  // The one request path for both refetch entry points. The toast reports the
+  // server's book_count, not a client count: for {stale: true} the client never
+  // held the set, and for explicit ids the server may have left some to a
+  // fetch already running (`skipped`).
+  const startRefetch = useCallback(
+    async (req: api.BatchFetchRequest): Promise<string | null> => {
       setRefetching(true);
       try {
-        const resp = await api.batchFetchCandidates({ book_ids: ids });
+        const resp = await api.batchFetchCandidates(req);
         if (!resp.operation_id) {
           // The server declining to start is not a failure: it means these
-          // books are already in a running fetch. Say which it was.
+          // books are already in a running fetch, or there is nothing stale.
+          // Say which it was.
           toast(resp.message ?? 'Those books are already being fetched.', 'info');
           return null;
         }
+        const count = resp.book_count ?? resp.total_books ?? 0;
+        const skipped = resp.skipped ?? 0;
         toast(
-          `Refetching metadata for ${ids.length.toLocaleString()} book${ids.length !== 1 ? 's' : ''} — ` +
-            'watch the operations list for progress.',
+          `Refetching metadata for ${count.toLocaleString()} book${count !== 1 ? 's' : ''}` +
+            (skipped > 0 ? ` (${skipped.toLocaleString()} already being fetched)` : '') +
+            ' — watch the operations list for progress.',
           'info'
         );
         return resp.operation_id;
@@ -1995,6 +1995,20 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     },
     [toast]
   );
+
+  const refetchBooks = useCallback(
+    async (ids: string[]): Promise<string | null> => {
+      // Defensive depth on the hook's public surface, not a UI path: the only
+      // caller is the per-row refresh, which always passes one id. It stays
+      // because `refetchBooks` is exported on MetadataLane and an empty POST is
+      // a worse failure than an early return.
+      if (!ids.length) return null;
+      return startRefetch({ book_ids: ids });
+    },
+    [startRefetch]
+  );
+
+  const refetchStale = useCallback(() => startRefetch({ stale: true }), [startRefetch]);
 
   // Books known to have no candidate: the unreviewable bucket's rows. Apply
   // has nothing to send for them, so they are kept out of Apply selected.
@@ -2166,9 +2180,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     allVisiblePendingIds,
     previewCover,
     setPreviewCover,
-    staleIds,
     refetching,
     refetchBooks,
+    refetchStale,
     spineCtx,
     dispatch,
     refresh,

@@ -1,7 +1,7 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 //
 // The metadata lane's full surface: queue rail, comparison spine, action bar.
 //
@@ -118,7 +118,10 @@ export function MetadataPanel({
           selectedCount={metadata.selectedIds.size}
           onRefresh={metadata.refresh}
           refetching={metadata.refetching}
-          onRefetchStale={metadata.staleIds.length ? onRefetchStale : undefined}
+          // Gated on the server's count, the same number the chip shows: the
+          // set is resolved on the server ({stale: true}), so there is no
+          // client-side list to check for emptiness.
+          onRefetchStale={metadata.summary.stale > 0 ? onRefetchStale : undefined}
           onRefetchRow={(bookId) => {
             // One row goes straight through. The confirm in the shell exists
             // because a bulk refetch is thousands of calls to external

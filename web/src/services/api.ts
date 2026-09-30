@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.136.0
+// version: 2.137.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-30
 
@@ -4370,6 +4370,12 @@ export interface BatchFetchRequest {
    * means nothing changes. Books marked no-match are skipped either way.
    */
   force?: boolean;
+  /**
+   * With no book_ids and no selection: refetch every book the review summary
+   * counts as `stale`, resolved on the server with the same predicate as that
+   * count (handlers.StaleCachedBookIDs). Implies force.
+   */
+  stale?: boolean;
 }
 
 /**
@@ -4392,9 +4398,9 @@ export interface BatchFetchStartResponse {
   /** Empty string when the server declined to start. Non-empty means enqueued. */
   operation_id: string;
   message?: string;
-  /** Book count on the STARTED path. */
+  /** Book count on the STARTED path. Same value as book_count there. */
   total_books?: number;
-  /** Only on the two "nothing to do" paths, where it is always 0. */
+  /** Books the started op will fetch; 0 on the "nothing to do" paths. */
   book_count?: number;
   /** Books left out because they are already in a running fetch. */
   skipped?: number;
