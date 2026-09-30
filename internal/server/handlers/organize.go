@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
 // last-edited: 2026-09-30
 
@@ -121,8 +121,9 @@ type OrganizeHandler struct {
 
 // SetLibraryCopyResolver installs the protected-original -> library-copy
 // lookup OrganizeBook applies before organizing. Production passes
-// metafetch's Service.ExistingLibraryCopy, the resolver the metadata apply
-// uses, and gives the preview service the same one.
+// metafetch's Service.ExistingLibraryCopyOfFile (the metadata apply's lookup,
+// narrowed to a copy of this book's own file, never another edition) and
+// gives the preview service the same one.
 func (h *OrganizeHandler) SetLibraryCopyResolver(resolve organizer.LibraryCopyResolver) {
 	h.resolveLibraryCopy = resolve
 }
@@ -302,7 +303,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		if errors.As(err, &hasCopy) {
 			c.JSON(http.StatusConflict, gin.H{
 				"error":        "organize declined: this book already has a library copy; organize that copy instead",
-				"category":     "library_copy_exists",
+				"category":     organizer.CollisionLibraryCopyExists,
 				"reason":       hasCopy.Error(),
 				"book_id":      book.ID,
 				"copy_book_id": hasCopy.CopyID,

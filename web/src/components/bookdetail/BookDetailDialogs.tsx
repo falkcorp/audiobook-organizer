@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailDialogs.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-08-19
+// last-edited: 2026-09-30
 import {
   Alert,
   Box,
@@ -30,6 +30,7 @@ import FileCopyIcon from '@mui/icons-material/FileCopy';
 import LabelIcon from '@mui/icons-material/Label';
 import ImageIcon from '@mui/icons-material/Image';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import type { Book, BookSegment, OrganizePreviewResponse } from '../../services/api';
 import { MetadataEditDialog } from '../audiobooks/MetadataEditDialog';
@@ -301,6 +302,7 @@ export const BookDetailDialogs = ({
                     {step.action === 'write_tags' && <LabelIcon />}
                     {step.action === 'embed_cover' && <ImageIcon />}
                     {step.action === 'warning' && <WarningAmberIcon />}
+                    {step.action === 'info' && <InfoOutlinedIcon />}
                   </Box>
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Typography

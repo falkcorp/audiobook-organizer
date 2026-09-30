@@ -1,11 +1,12 @@
 // file: internal/server/organize_collision_hook_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b1c65824-b632-4123-aef4-5ced702b8855
 // last-edited: 2026-09-30
 
 package server
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -21,17 +22,25 @@ func TestOrganizeCollisionHook_SkipsVersionsOfOneBook(t *testing.T) {
 	cases := []struct {
 		name          string
 		occupantGroup *string
+		currentErr    error
 		wantCandidate bool
 	}{
-		{"own library copy", &group, false},
-		{"unrelated duplicate", &other, true},
-		{"ungrouped duplicate", nil, true},
+		{"own library copy", &group, nil, false},
+		{"unrelated duplicate", &other, nil, true},
+		{"ungrouped duplicate", nil, nil, true},
+		// The current book cannot be read, so the group check cannot run:
+		// file the candidate (a human can dismiss it) rather than lose a
+		// real duplicate.
+		{"current book unreadable", &group, errors.New("pebble: closed"), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			occupantPath := "/library/A/T/T.mp3"
 			store := &database.MockStore{
 				GetBookByIDFunc: func(id string) (*database.Book, error) {
+					if tc.currentErr != nil {
+						return nil, tc.currentErr
+					}
 					return &database.Book{ID: id, VersionGroupID: &group}, nil
 				},
 				GetBookByFilePathFunc: func(path string) (*database.Book, error) {
