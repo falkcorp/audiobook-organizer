@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer_round2_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 993dd8c9-20d0-4bd4-951b-11471d5dff76
-// last-edited: 2026-09-29
+// last-edited: 2026-09-30
 
 package maintenance
 
@@ -428,6 +428,8 @@ func TestJunkAuthorFixer_WorkRowInItsOwnSeriesIsHeld(t *testing.T) {
 			map[string]string{"album_artist": "Wraith Knight", "artist": "C. T. Phipps"}, "", nil},
 		{"C2 with a provider match naming the row", []string{"Wraith Lord", "Wraith Queen"}, 0,
 			map[string]string{"album_artist": "Wraith Knight", "artist": "C. T. Phipps"}, "Wraith Knight", nil},
+		{"artist is Phipps, provider names the row", []string{"Wraith Lord", "Wraith Queen"}, 0,
+			map[string]string{"artist": "C. T. Phipps"}, "Wraith Knight", nil},
 		{"C3: artist is the series (the row was made from it)", []string{"Wraith Lord", "Wraith Queen"}, 0,
 			map[string]string{"artist": "Wraith Knight"}, "", nil},
 		{"provider names Phipps", []string{"Wraith Lord", "Wraith Queen"}, 0, nil, "C. T. Phipps", nil},
@@ -558,6 +560,88 @@ func TestJunkAuthorIndex_CorroborateNamedSeries(t *testing.T) {
 		})
 	}
 	require.Error(t, idx.corroborateNamedSeries(corroborationReader{err: errors.New("disk gone")}))
+}
+
+// A provider match naming Brent Weeks corroborates his series whatever else
+// the files carry beside him: an album artist naming a narrator's author row
+// (W4), a co-credit after his name in the artist tag (W5), or a provider
+// credit that lists him first with the narrator (W6).
+func TestJunkAuthorFixer_ProviderCorroborationSurvivesCoCredits(t *testing.T) {
+	titles := []string{"The Way of Shadows", "Shadow's Edge", "Beyond the Shadows", "The Black Prism"}
+	for _, tc := range []struct {
+		name     string
+		tags     map[string]string
+		provider string
+	}{
+		{"W4: album_artist names a narrator's author row", map[string]string{"album_artist": "Simon Vance", "artist": "Brent Weeks"}, "Brent Weeks"},
+		{"W5: artist credits him first, then the narrator", map[string]string{"artist": "Brent Weeks, Simon Vance"}, "Brent Weeks"},
+		{"W6: provider credits him first, then the narrator", nil, "Brent Weeks & Simon Vance"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newJunkFixture(t)
+			f.mkSeries("Brent Weeks", "Brent Weeks")
+			f.book(junkBookSpec{title: "Voice Work", path: "/lib/pd/1", author: "Simon Vance"})
+			for _, ti := range titles {
+				bid := f.book(junkBookSpec{title: ti, path: "/lib/bw/" + ti, author: "Brent Weeks", series: "Brent Weeks", tags: tc.tags})
+				f.setProvider(bid, ti, tc.provider)
+			}
+			f.book(junkBookSpec{title: "Anthology", path: "/lib/o/1", author: "Peter V. Brett", series: "Brent Weeks"})
+			f.book(junkBookSpec{title: "The Warded Man", path: "/lib/o/2", author: "Peter V. Brett"})
+			id := f.book(junkBookSpec{title: "The Blinding Knife", path: "/lib/j/bk", author: "read by narrator",
+				tags: map[string]string{"artist": "Brent Weeks"}})
+			require.True(t, f.index().seriesCorroborated[f.author("Brent Weeks")])
+			r := relinkRow(t, f, f.plan(), "read by narrator", id)
+			require.Empty(t, r.Skipped, r.SkipReason)
+			require.Equal(t, "Brent Weeks", r.Proposed["author"], r.Reason)
+		})
+	}
+}
+
+// The veto needs the same other author on most sampled files' artist tags;
+// a reader neither vetoes nor leads a joint credit.
+func TestJunkAuthorIndex_CorroborationVetoIsByMajorityAndIgnoresReaders(t *testing.T) {
+	books := []database.BookCore{
+		{ID: "bw1", Title: "The Way of Shadows", AuthorID: new(1), SeriesID: new(7)},
+		{ID: "bw2", Title: "Shadow's Edge", AuthorID: new(1), SeriesID: new(7)},
+		{ID: "ctp", Title: "The Rules of Supervillainy", AuthorID: new(3)},
+		{ID: "sv", Title: "Voice Work", AuthorID: new(5)},
+		{ID: "gs1", Title: "Mercury Rising", AuthorID: new(4), Narrator: new("Simon Vance")},
+		{ID: "gs2", Title: "Starship's Mage", AuthorID: new(4), Narrator: new("Simon Vance")},
+	}
+	idx := indexFrom([]database.Author{{ID: 1, Name: "Brent Weeks"}, {ID: 3, Name: "C. T. Phipps"}, {ID: 4, Name: "Glynn Stewart"}, {ID: 5, Name: "Simon Vance"}},
+		books, []database.Series{{ID: 7, Name: "Brent Weeks"}}, nil, nil)
+	require.True(t, idx.isReader(5), "fixture: Simon Vance reads more than he writes")
+	provider := map[string][]database.MetadataFieldState{
+		"bw1": providerStates("The Way of Shadows", "Brent Weeks"),
+		"bw2": providerStates("Shadow's Edge", "Brent Weeks"),
+	}
+	artist := func(a, b string) map[string][]database.BookFile {
+		return map[string][]database.BookFile{
+			"bw1": {{RawTags: map[string]string{"artist": a}}},
+			"bw2": {{RawTags: map[string]string{"artist": b}}},
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		r    corroborationReader
+		want bool
+	}{
+		{"one of two files names Phipps: no majority", corroborationReader{files: artist("C. T. Phipps", "Brent Weeks"), states: provider}, true},
+		{"both files name Phipps: vetoed", corroborationReader{files: artist("C. T. Phipps", "C. T. Phipps"), states: provider}, false},
+		{"album artist naming Phipps never vetoes", corroborationReader{files: map[string][]database.BookFile{
+			"bw1": {{RawTags: map[string]string{"album_artist": "C. T. Phipps"}}},
+			"bw2": {{RawTags: map[string]string{"album_artist": "C. T. Phipps"}}},
+		}, states: provider}, true},
+		{"a reader on every file never vetoes", corroborationReader{files: artist("Simon Vance", "Simon Vance"), states: provider}, true},
+		{"a reader listed first does not lead the provider credit", corroborationReader{states: map[string][]database.MetadataFieldState{
+			"bw1": providerStates("The Way of Shadows", "Simon Vance & Brent Weeks"),
+		}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, idx.corroborateNamedSeries(tc.r))
+			require.Equal(t, tc.want, idx.seriesCorroborated[1])
+		})
+	}
 }
 
 // One shared word with another author's title does not make a title theirs:
