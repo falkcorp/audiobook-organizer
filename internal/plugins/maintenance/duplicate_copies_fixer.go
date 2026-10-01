@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-10-01
 
@@ -579,10 +579,53 @@ type dcRun struct {
 	notDup map[[2]string]string
 	res    *repairs.PathResolver
 	series map[int]string
-	// outside maps a hash to the live books with a link row carrying it,
-	// over the whole library: the box-set check's leg (a). Plan only; nil on
-	// a Replan, which reads only the group's neighbourhood.
-	outside map[string][]string
+	// holders names the live books with a link row carrying a hash: the
+	// box-set check's leg (a). Plan answers from its whole-library snapshot,
+	// a Replan from the store's multi-valued hash lookup (dcStoreHolders),
+	// under the apply's lock; both apply the same filter (dcHolder).
+	holders func(hash string) ([]string, error)
+}
+
+// dcHolder is leg (a)'s one filter, shared by Plan's index and a Replan's
+// store read so both reach the same answer: a row that is evidence of a work
+// (dcLinkRow) on a book that is not retired.
+func dcHolder(r database.BookFileCore, live bool) bool { return live && dcLinkRow(r) }
+
+// dcStoreHolders is leg (a) for a Replan, which loads only the group's
+// neighbourhood: each hash is read through BookFilesWithHash (memdb's
+// multi-valued hash indexes, verified against Pebble) rather than a scan of
+// every book_file per row. A read it cannot complete is an error, never "no
+// holder".
+func dcStoreHolders(store OpsStore) func(string) ([]string, error) {
+	live := map[string]bool{}
+	return func(h string) ([]string, error) {
+		rows, err := store.BookFilesWithHash(h)
+		if err != nil {
+			return nil, fmt.Errorf("books holding %s: %w", h, err)
+		}
+		var out []string
+		seen := map[string]bool{}
+		for i := range rows {
+			r := rows[i].Core()
+			if seen[r.BookID] {
+				continue
+			}
+			ok, known := live[r.BookID]
+			if !known {
+				b, err := store.GetBookByID(r.BookID)
+				if err != nil {
+					return nil, fmt.Errorf("read %s: %w", r.BookID, err)
+				}
+				ok = b != nil && !b.IsSoftDeleted()
+				live[r.BookID] = ok
+			}
+			if dcHolder(r, ok) {
+				seen[r.BookID] = true
+				out = append(out, r.BookID)
+			}
+		}
+		return out, nil
+	}
 }
 
 func (r *dcRun) book(id string) *dcBook {
@@ -623,21 +666,26 @@ func (f *duplicateCopiesFixer) rowsFor(ctx context.Context, rep registry.Reporte
 	if carried == nil {
 		// The box-set check's whole-library index: every live book, a
 		// single-file one too (a book 2 as one m4b, a stray chapter).
-		run.outside = map[string][]string{}
+		outside := map[string][]string{}
 		for id, rows := range lib.files {
+			b, listed := lib.books[id]
+			live := listed && !b.IsSoftDeleted()
 			seen := map[string]bool{}
 			for _, r := range rows {
-				if !dcLinkRow(r) {
+				if !dcHolder(r, live) {
 					continue
 				}
 				for _, h := range dcHashes(r) {
 					if !seen[h] {
 						seen[h] = true
-						run.outside[h] = append(run.outside[h], id)
+						outside[h] = append(outside[h], id)
 					}
 				}
 			}
 		}
+		run.holders = func(h string) ([]string, error) { return outside[h], nil }
+	} else {
+		run.holders = dcStoreHolders(store)
 	}
 	byHash, byTitle := map[string][]string{}, map[string][]string{}
 	for _, id := range multi {
@@ -988,11 +1036,13 @@ func (f *duplicateCopiesFixer) unprovenRow(run *dcRun, edges map[[2]string]dcVer
 //	(b) the largest copy's present audio is over dcBoxSetRatio times the
 //	    Audible runtime on file (the smallest copy's, else any member's).
 //
-// (a) reads the plan's whole-library index (run.outside). A Replan has none:
-// it carries the plan's verdict, so (a) is not in the fingerprint, and the
-// runtime (b) used is (rt). ev is the passing group's evidence line; with no
-// runtime on file it says so, for the owner to see.
-func dcBoxSet(run *dcRun, ids, itunes []string) (skip, ev, rt string) {
+// Both legs run on Plan and on every Replan: (a) reads run.holders, so a
+// book 2 imported between plan and apply skips the row under the apply's
+// lock. (a) is not in the fingerprint: a hit makes the row skipped, which the
+// engine refuses. The runtime (b) used is (rt). ev is the passing group's
+// evidence line; with no runtime on file it says so, for the owner to see. err:
+// leg (a) could not read who holds a hash, and the group must not pass.
+func dcBoxSet(run *dcRun, ids, itunes []string) (skip, ev, rt string, err error) {
 	byDur := append([]string(nil), ids...)
 	sort.SliceStable(byDur, func(i, j int) bool {
 		di, dj := run.books[byDur[i]].dur(), run.books[byDur[j]].dur()
@@ -1002,7 +1052,7 @@ func dcBoxSet(run *dcRun, ids, itunes []string) (skip, ev, rt string) {
 		return byDur[i] < byDur[j]
 	})
 	small, large := run.books[byDur[0]], run.books[byDur[len(byDur)-1]]
-	if run.outside != nil {
+	{
 		in := map[string]bool{}
 		for _, id := range append(append([]string(nil), ids...), itunes...) {
 			in[id] = true
@@ -1026,7 +1076,11 @@ func dcBoxSet(run *dcRun, ids, itunes []string) (skip, ev, rt string) {
 					continue
 				}
 				for _, h := range hs {
-					for _, o := range run.outside[h] {
+					holders, err := run.holders(h)
+					if err != nil {
+						return "", "", "", err
+					}
+					for _, o := range holders {
 						if !in[o] && !seen[o] {
 							seen[o] = true
 							hits = append(hits, o)
@@ -1038,7 +1092,7 @@ func dcBoxSet(run *dcRun, ids, itunes []string) (skip, ev, rt string) {
 		if len(hits) > 0 {
 			sort.Strings(hits)
 			return fmt.Sprintf("possible box set: audio the larger copies hold beyond %s is also in live book(s) outside the group: %s "+
-				"(a stray chapter clears once fragment consolidation retires it)", small.Core.ID, strings.Join(fbFirst(hits, 5), ", ")), "", ""
+				"(a stray chapter clears once fragment consolidation retires it)", small.Core.ID, strings.Join(fbFirst(hits, 5), ", ")), "", "", nil
 		}
 	}
 	runtime, from := 0, ""
@@ -1053,15 +1107,15 @@ func dcBoxSet(run *dcRun, ids, itunes []string) (skip, ev, rt string) {
 		}
 	}
 	if runtime == 0 {
-		return "", "box-set check: no runtime on file", ""
+		return "", "box-set check: no runtime on file", "", nil
 	}
 	rt = fmt.Sprintf("rt:%s|%d", from, runtime)
 	_, secs := large.presentStats()
 	if float64(secs) > dcBoxSetRatio*float64(runtime)*60 {
 		return fmt.Sprintf("possible box set: copy %s has %d min of present audio, over %.1fx the %d min Audible runtime on %s",
-			large.Core.ID, secs/60, dcBoxSetRatio, runtime, from), "", rt
+			large.Core.ID, secs/60, dcBoxSetRatio, runtime, from), "", rt, nil
 	}
-	return "", fmt.Sprintf("box-set check: copy %s has %d min present, Audible runtime %d min (on %s)", large.Core.ID, secs/60, runtime, from), rt
+	return "", fmt.Sprintf("box-set check: copy %s has %d min present, Audible runtime %d min (on %s)", large.Core.ID, secs/60, runtime, from), rt, nil
 }
 
 // present reports a loser or survivor row on disk and not flagged Missing.
@@ -1208,7 +1262,10 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 			}
 		}
 	}
-	skip, ev, rt := dcBoxSet(run, ids, itunes)
+	skip, ev, rt, berr := dcBoxSet(run, ids, itunes)
+	if berr != nil {
+		return fail(dcSkipUnreadable, "box-set check could not read who else holds the larger copy's audio: "+berr.Error())
+	}
 	if rt != "" {
 		fp = append(fp, rt)
 	}

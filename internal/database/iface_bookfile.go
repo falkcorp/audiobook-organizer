@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-09-19
+// last-edited: 2026-10-01
 
 package database
 
@@ -29,6 +29,10 @@ type BookFileReader interface {
 	// BookFilesAtPath returns EVERY row at a path (GetBookFileByPath's index
 	// holds one); ErrBookFilesAtPathUnavailable when it cannot be complete.
 	BookFilesAtPath(path string) ([]BookFile, error)
+	// BookFilesWithHash returns EVERY row whose file_hash or
+	// original_file_hash is hash (the single-owner hash indexes hold one);
+	// ErrBookFilesWithHashUnavailable when it cannot be complete.
+	BookFilesWithHash(hash string) ([]BookFile, error)
 }
 
 // BookFileCreator creates new book_file rows.
@@ -49,6 +53,10 @@ type BookFileUpserter interface {
 	// between rows. See pebble_store_bookfiles.go.
 	UpdateBookFiles(ctx context.Context, files []*BookFile, afterRow func(i int, applied bool)) (int, error)
 	UpsertBookFile(file *BookFile) error
+	// ClaimBookFilePathKey points the single-owner book_file_path key at a
+	// row still at path, writing nothing else (no row write, no recompute).
+	// See book_file_path_key.go.
+	ClaimBookFilePathKey(bookID, fileID, path string) (bool, error)
 	// PatchBookFileFields sets only the fields named in patch on a fresh read
 	// of the row, so it cannot revert another writer's column the way a
 	// read-whole-row, UpsertBookFile write-back does. See

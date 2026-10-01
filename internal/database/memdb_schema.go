@@ -1,7 +1,7 @@
 // file: internal/database/memdb_schema.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000002
-// last-edited: 2026-09-13
+// last-edited: 2026-10-01
 
 package database
 
@@ -23,14 +23,18 @@ const (
 
 // Index names.
 const (
-	memIdxID                = "id"
-	memIdxName              = "name"
-	memIdxAuthorID          = "author_id"
-	memIdxSeriesID          = "series_id"
-	memIdxBookID            = "book_id"
-	memIdxNarratorID        = "narrator_id"
-	memIdxFilePath          = "file_path"
-	memIdxFileHash          = "file_hash"
+	memIdxID         = "id"
+	memIdxName       = "name"
+	memIdxAuthorID   = "author_id"
+	memIdxSeriesID   = "series_id"
+	memIdxBookID     = "book_id"
+	memIdxNarratorID = "narrator_id"
+	memIdxFilePath   = "file_path"
+	memIdxFileHash   = "file_hash"
+	// memIdxOriginalFileHash backs BookFilesWithHash with memIdxFileHash:
+	// a row whose tag write changed file_hash is still found by the hash
+	// of its original bytes.
+	memIdxOriginalFileHash  = "original_file_hash"
 	memIdxMissing           = "missing"
 	memIdxIsPrimaryVersion  = "is_primary_version"
 	memIdxMarkedForDeletion = "marked_for_deletion"
@@ -278,6 +282,11 @@ func baseMemdbSchema() *memdb.DBSchema {
 						Name:         memIdxFileHash,
 						AllowMissing: true,
 						Indexer:      &memdb.StringFieldIndex{Field: "FileHash"},
+					},
+					memIdxOriginalFileHash: {
+						Name:         memIdxOriginalFileHash,
+						AllowMissing: true,
+						Indexer:      &memdb.StringFieldIndex{Field: "OriginalFileHash"},
 					},
 					memIdxMissing: {
 						Name:    memIdxMissing,
