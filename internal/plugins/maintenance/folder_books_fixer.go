@@ -76,7 +76,8 @@
 // scanner re-importing a file (scanner/file_ownership.go), so retiring a
 // folder-book that was a file's only holder would hide that file for good.
 //
-// SKIPPED rows (listed, never applied): deep; manual-only and iTunes paths
+// SKIPPED rows (listed, never applied): deep; a primary folder-book whose
+// version group has no other member versionprimary could crown; manual-only and iTunes paths
 // (framework guards; this fixer never bypasses them); an iTunes persistent id
 // on a folder-book, its rows or its external ids (retiring it would queue an
 // iTunes remove); listening progress on a folder-book; and "fragmentary": an
@@ -100,6 +101,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -120,6 +122,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 const fbFixerID = "folder-books"
@@ -138,6 +141,10 @@ const (
 	fbSkipITunesID    = "skipped_itunes_id"
 	fbSkipProgress    = "skipped_listening_progress"
 	fbSkipUnreadable  = "skipped_unreadable"
+	// fbSkipNoHeir: a primary folder-book whose version group has no other
+	// member versionprimary could crown (organized, files present, under the
+	// library root). Retiring it would leave the real book with no primary.
+	fbSkipNoHeir = "skipped_no_primary_heir"
 )
 
 // Detection thresholds (the census's).
@@ -232,6 +239,7 @@ type fbLib struct {
 	files   map[string][]database.BookFileCore
 	holders map[string][]string // path -> live books holding it (rows or file_path)
 	sets    map[string]map[string]bool
+	byVG    map[string][]string // version group -> live member ids
 	authors map[int]string
 	shelves []string
 	fixer   *folderBooksFixer
@@ -239,7 +247,7 @@ type fbLib struct {
 
 func (f *folderBooksFixer) loadLib(store OpsStore) (*fbLib, error) {
 	lib := &fbLib{books: map[string]database.BookCore{}, files: map[string][]database.BookFileCore{},
-		holders: map[string][]string{}, sets: map[string]map[string]bool{}, authors: map[int]string{}, fixer: f}
+		holders: map[string][]string{}, sets: map[string]map[string]bool{}, byVG: map[string][]string{}, authors: map[int]string{}, fixer: f}
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list books: %w", err)
@@ -261,6 +269,9 @@ func (f *folderBooksFixer) loadLib(store OpsStore) (*fbLib, error) {
 		lib.files[r.BookID] = append(lib.files[r.BookID], r)
 	}
 	for id, b := range lib.books {
+		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
+			lib.byVG[*b.VersionGroupID] = append(lib.byVG[*b.VersionGroupID], id)
+		}
 		set := map[string]bool{}
 		for _, r := range lib.files[id] {
 			set[r.FilePath] = true
@@ -813,9 +824,57 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, hist FragmentRepairReader, store
 	default:
 		if kind, why := f.refusal(lib, store, members); kind != "" {
 			row.Skipped, row.SkipReason = kind, why
+		} else if why := lib.noHeir(members); why != "" {
+			row.Skipped, row.SkipReason = fbSkipNoHeir, why
 		}
 	}
 	return row
+}
+
+// noHeir names a primary member whose version group has no other live member
+// versionprimary could crown (its rule, rank.go ineligibleReason: organized,
+// at least one active row, every active row under the library root; the
+// on-disk check is left to apply, which fails the row when the hand-off
+// crowns nobody). "" when every primary member has an heir.
+func (lib *fbLib) noHeir(members []string) string {
+	isMember := map[string]bool{}
+	for _, m := range members {
+		isMember[m] = true
+	}
+	root := filepath.Clean(config.AppConfig.RootDir)
+	for _, m := range members {
+		b := lib.books[m]
+		if !fbPrimary(b) || b.VersionGroupID == nil || *b.VersionGroupID == "" {
+			continue
+		}
+		heir := false
+		for _, id := range lib.byVG[*b.VersionGroupID] {
+			o := lib.books[id]
+			if isMember[id] || o.LibraryState == nil || *o.LibraryState != "organized" {
+				continue
+			}
+			active, under := 0, true
+			for _, r := range lib.files[id] {
+				if r.Missing {
+					continue
+				}
+				active++
+				if config.AppConfig.RootDir == "" || !pathutil.IsWithin(r.FilePath, root) {
+					under = false
+				}
+			}
+			if active > 0 && under {
+				heir = true
+				break
+			}
+		}
+		if !heir && len(lib.byVG[*b.VersionGroupID]) > len(members) {
+			return fmt.Sprintf("folder-book %s is primary in version group %s and no other member can be crowned "+
+				"(none is organized with every file under the library root); retiring it would leave the real "+
+				"book without a primary", m, *b.VersionGroupID)
+		}
+	}
+	return ""
 }
 
 func fbFirst(s []string, n int) []string {
@@ -1017,12 +1076,11 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 			return partial(err)
 		}
 	}
-	retirer := newFragmentFixer(f.p)
 	for _, m := range plan.Members {
 		if err := ctx.Err(); err != nil {
 			return partial(err)
 		}
-		did, err := f.retire(ctx, store, w, retirer, m)
+		did, err := f.retire(ctx, store, w, m)
 		steps += did
 		if err != nil {
 			return partial(err)
@@ -1101,7 +1159,7 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 // retire hides one folder-book: demote (journaled, then the group handed a
 // primary), clear file_path and soft-delete in one journaled write. Its
 // book_file rows stay. A book already soft-deleted counts none.
-func (f *folderBooksFixer) retire(ctx context.Context, store OpsStore, w *repairs.Writer, retirer *fragmentFixer, id string) (int, error) {
+func (f *folderBooksFixer) retire(ctx context.Context, store OpsStore, w *repairs.Writer, id string) (int, error) {
 	b, err := store.GetBookByID(id)
 	if err != nil {
 		return 0, fmt.Errorf("read %s: %w", id, err)
@@ -1163,7 +1221,41 @@ func (f *folderBooksFixer) retire(ctx context.Context, store OpsStore, w *repair
 	}
 	steps++
 	if wasPrimary && b.VersionGroupID != nil && *b.VersionGroupID != "" {
-		retirer.handOff(ctx, store, w, id, *b.VersionGroupID)
+		if err := f.handOff(ctx, store, w, id, *b.VersionGroupID); err != nil {
+			return steps, err
+		}
 	}
 	return steps, nil
+}
+
+// handOff gives the retired folder-book's version group a primary
+// (versionprimary.EnsureSinglePrimary) and journals book_primary_handoff once
+// it succeeded, as the fragment fixer does. Unlike the fragment fixer it
+// FAILS the row when no live member ends up primary: a folder-book's group
+// holds the real book, and leaving it headless hides that book from
+// primary-only views. A group with no other live member is left as it is.
+func (f *folderBooksFixer) handOff(ctx context.Context, store OpsStore, w *repairs.Writer, id, groupID string) error {
+	vps := f.p.deps.VersionPrimaryStore()
+	if vps == nil {
+		return errors.New("version-primary store unavailable: cannot hand the group a primary")
+	}
+	es := fragEnsureStore{OpsStore: store, chapters: vps}
+	res, err := versionprimary.EnsureSinglePrimary(ctx, es, groupID, versionprimary.Env{RootDir: config.AppConfig.RootDir})
+	if err != nil {
+		return fmt.Errorf("primary hand-off in group %s: %w", groupID, err)
+	}
+	if res.PrimaryID == "" {
+		members, err := store.GetBooksByVersionGroup(groupID)
+		if err != nil {
+			return fmt.Errorf("read group %s: %w", groupID, err)
+		}
+		for i := range members {
+			if members[i].ID != id && !members[i].IsSoftDeleted() {
+				return fmt.Errorf("primary hand-off in group %s crowned nobody (%s); the folder-book is retired, "+
+					"revert the apply to restore it", groupID, res.Outcome)
+			}
+		}
+		return nil
+	}
+	return w.Journal(id, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", "", groupID)
 }

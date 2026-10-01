@@ -91,7 +91,7 @@ func fbFindRow(res *repairs.PlanResult, bookID string) *repairs.Row {
 // proper books (Shadow, Claw), one work nobody else holds (Sword: 01 an
 // orphan, 02 also a single-file book G), and two folder-books over all of it
 // (FB primary, FB2 an exact duplicate) in one version group with Shadow.
-func (f *fragFixture) seedWolfe(t *testing.T) (all []string) {
+func (f *fragFixture) seedWolfe(t *testing.T, withG bool) (all []string) {
 	t.Helper()
 	var shadow, claw, sword []string
 	for i := 1; i <= 3; i++ {
@@ -103,7 +103,9 @@ func (f *fragFixture) seedWolfe(t *testing.T) (all []string) {
 	}
 	f.fbBook(t, "shadow", "The Shadow of the Torturer", f.path("Gene Wolfe/Shadow"), 3600, shadow...)
 	f.fbBook(t, "claw", "The Claw of the Conciliator", f.path("Gene Wolfe/Claw"), 3600, claw...)
-	f.fbBook(t, "g", "Sword 02", sword[1], 1200, sword[1])
+	if withG {
+		f.fbBook(t, "g", "Sword 02", sword[1], 1200, sword[1])
+	}
 	all = append(append(append(all, shadow...), claw...), sword...)
 	author, err := f.s.CreateAuthor("Gene Wolfe")
 	require.NoError(t, err)
@@ -121,7 +123,7 @@ func (f *fragFixture) seedWolfe(t *testing.T) (all []string) {
 
 func TestFolderBooksFixer_ApplyAndRevert(t *testing.T) {
 	f := newFragFixture(t)
-	f.seedWolfe(t)
+	f.seedWolfe(t, true)
 	fb, fb2 := f.ids["fb"], f.ids["fb2"]
 
 	// The fragment fixer sees the live folder-books as parents of G's file.
@@ -175,6 +177,13 @@ func TestFolderBooksFixer_ApplyAndRevert(t *testing.T) {
 	require.Nil(t, fbFindRow(after, fb))
 	require.Nil(t, fbFindRow(after, fb2))
 
+	// The preflight agrees with the revert: every journaled row is restorable
+	// except the record-only book_file_create rows.
+	pre, err := undo.PreflightUndoConflicts(f.s, "op-apply")
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{undo.ChangeTypeBookFileCreate: 1}, pre.NotRestorableTypes)
+	require.Equal(t, pre.TotalChanges-pre.NotRestorable, pre.Safe, "%+v", pre)
+
 	// Revert: folder-books live again, FB re-crowned, created book hidden,
 	// no row deleted.
 	_, err = audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
@@ -195,20 +204,57 @@ func TestFolderBooksFixer_ApplyAndRevert(t *testing.T) {
 }
 
 // TestFolderBooksFixer_Resume: a book an earlier cut-off apply created for a
-// group is extended, not created twice.
+// group (it holds Sword/01 and carries an unreverted repair_book_create row)
+// is extended with Sword/02, not created twice. Without that row the same
+// book is somebody else's and Sword/02 gets a book of its own.
 func TestFolderBooksFixer_Resume(t *testing.T) {
+	for _, ours := range []bool{true, false} {
+		t.Run(fmt.Sprintf("ours=%t", ours), func(t *testing.T) {
+			f := newFragFixture(t)
+			f.seedWolfe(t, false)
+			sw1, sw2 := f.path("Gene Wolfe/Sword/01.mp3"), f.path("Gene Wolfe/Sword/02.mp3")
+			mine := f.fbBook(t, "mine", "Sword", sw1, 1200, sw1)
+			if ours {
+				require.NoError(t, f.s.CreateOperationChange(&database.OperationChange{ID: "chg-create", OperationID: "op-old",
+					BookID: mine, ChangeType: undo.ChangeTypeRepairBookCreate, FieldName: "book", NewValue: mine}))
+			}
+			res := f.fbPlan(t, fbFixerID, "op-plan")
+			require.Len(t, res.Rows, 1)
+			row := res.Rows[0]
+			require.True(t, row.Applicable(), "%s %s", row.Skipped, row.SkipReason)
+			if !ours {
+				require.Equal(t, "1", row.Proposed["new_books"])
+				require.Equal(t, "0", row.Proposed["extend_books"])
+				return
+			}
+			require.Equal(t, "0", row.Proposed["new_books"])
+			require.Equal(t, "1", row.Proposed["extend_books"])
+			out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+			require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+			rows, err := f.s.GetBookFiles(mine)
+			require.NoError(t, err)
+			require.Len(t, rows, 2)
+			owners, err := f.s.BookFilesAtPath(sw2)
+			require.NoError(t, err)
+			for _, o := range owners {
+				require.Contains(t, []string{f.ids["fb"], f.ids["fb2"], mine}, o.BookID, "no third book holds Sword/02")
+			}
+		})
+	}
+}
+
+// TestFolderBooksFixer_NoPrimaryHeir: a primary folder-book whose real
+// sibling cannot be crowned (not organized) is held, not retired into a
+// headless group.
+func TestFolderBooksFixer_NoPrimaryHeir(t *testing.T) {
 	f := newFragFixture(t)
-	f.seedWolfe(t)
-	// "mine" stands for the book a cut-off apply created for Sword: it holds
-	// Sword/01 and carries an unreverted repair_book_create row.
-	mine := f.fbBook(t, "mine", "Sword", f.path("Gene Wolfe/Sword/01.mp3"), 1200, f.path("Gene Wolfe/Sword/01.mp3"))
-	require.NoError(t, f.s.CreateOperationChange(&database.OperationChange{ID: "chg-create", OperationID: "op-old",
-		BookID: mine, ChangeType: undo.ChangeTypeRepairBookCreate, FieldName: "book", NewValue: mine}))
+	f.seedWolfe(t, true)
+	imported := "imported"
+	_, err := f.s.ModifyBook(f.ids["shadow"], func(b *database.Book) error { b.LibraryState = &imported; return nil })
+	require.NoError(t, err)
 	res := f.fbPlan(t, fbFixerID, "op-plan")
 	require.Len(t, res.Rows, 1)
-	// Sword/01 is held by "mine"; Sword/02 by G: nothing orphaned.
-	require.Equal(t, "0", res.Rows[0].Proposed["new_books"])
-	require.Equal(t, "8", res.Rows[0].Proposed["held"])
+	require.Equal(t, fbSkipNoHeir, res.Rows[0].Skipped, res.Rows[0].SkipReason)
 }
 
 // TestFolderBooksFixer_Negatives: books that must not be flagged, and the
