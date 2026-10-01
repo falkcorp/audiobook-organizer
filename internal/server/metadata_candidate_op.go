@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
 // last-edited: 2026-10-01
 //
@@ -246,11 +246,13 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	var completed int64 = int64(alreadyDone)
 	var wg sync.WaitGroup
 	numWorkers := min(candidateFetchWorkers(budget, config.AppConfig.MetadataCandidateFetchWorkers), len(p.BookIDs))
-	// Every book walks every source, so the slowest source's bucket paces the
-	// run: its rate is the expected throughput, not the summed gate.
-	candidateFetchLog.Info("budget: opID=%s gate_rps=%.1f burst=%d workers=%d expected_rps=%.1f slowest_source=%s",
-		logger.SanitizeLogValue(opID), budget.RPS, budget.Burst, numWorkers, budget.SlowestRPS,
-		logger.SanitizeLogValue(budget.SlowestID))
+	// Every book waits on every source, so the source with the lowest rate
+	// per its per-book calls (metafetch.MaxSearchCallsPerBook) paces the run:
+	// min_books_per_sec is the worst case, with every search variant asked
+	// and no early stop.
+	candidateFetchLog.Info("budget: opID=%s gate_rps=%.1f burst=%d workers=%d calls_per_book=%d min_books_per_sec=%.2f binding_source=%s slowest_queue_source=%s",
+		logger.SanitizeLogValue(opID), budget.RPS, budget.Burst, numWorkers, budget.CallsPerBook, budget.BooksPerSec,
+		logger.SanitizeLogValue(budget.BindingID), logger.SanitizeLogValue(budget.SlowestID))
 
 	// CHECKPOINTING. A book joins the done-set only after its result row is
 	// written, so a checkpoint never drops a book whose fetch has not been
@@ -388,6 +390,9 @@ func candidateFetchLimiter(rps float64, burst int) *rate.Limiter {
 // floor and a configured count too.
 const (
 	candidateFetchCallLatencySec    = 0.15
+	// candidateFetchCallsPerBook is the fallback when the budget names no
+	// CallsPerBook (no enabled title-searched source); the real figure is
+	// SourcesBudget.CallsPerBook, from the search's own fan-out cap.
 	candidateFetchCallsPerBook      = 4
 	candidateFetchMinWorkers        = 16
 	candidateFetchMaxWorkers        = 32
@@ -403,7 +408,11 @@ const (
 func candidateFetchWorkers(b metafetch.SourcesBudget, configured int) int {
 	n := min(configured, candidateFetchMaxConfigured)
 	if configured <= 0 {
-		n = int(math.Ceil(b.RPS * candidateFetchCallLatencySec * candidateFetchCallsPerBook))
+		calls := b.CallsPerBook
+		if calls <= 0 {
+			calls = candidateFetchCallsPerBook
+		}
+		n = int(math.Ceil(b.RPS * candidateFetchCallLatencySec * float64(calls)))
 		n = min(max(n, candidateFetchMinWorkers), candidateFetchMaxWorkers)
 	}
 	if limit, ok := candidateFetchQueueCap(b); ok {

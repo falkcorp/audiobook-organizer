@@ -455,9 +455,7 @@ func sharesPersonWord(a, b string) bool {
 }
 
 // candidateKeys are the identities a result is deduplicated by: its ASIN,
-// its ISBNs and its normalized title+author. A result is a duplicate when
-// ANY key was already pooled, so an Audible record and an Open Library record
-// of the same book collapse to the first one even when only one carries an ID.
+// its ISBNs and its normalized title+author (always the first key).
 func candidateKeys(r metadata.BookMetadata) []string {
 	keys := []string{"ta:" + strings.ToLower(strings.Join(strings.Fields(r.Title), " ")) + "|" + strings.ToLower(strings.Join(strings.Fields(r.Author), " "))}
 	if a := strings.ToUpper(strings.TrimSpace(r.ASIN)); a != "" {
@@ -474,10 +472,19 @@ func candidateKeys(r metadata.BookMetadata) []string {
 // candidateSeen tracks pooled identities (candidateKeys).
 type candidateSeen map[string]bool
 
-// add records r's keys and reports whether r is new.
+// add records r's keys and reports whether r is new. A result carrying an
+// ASIN or ISBN is a duplicate only by that ID: two editions of one title
+// (abridged and unabridged, two narrators) have different ASINs and must both
+// reach the ranking, where runtime and narrator tell them apart. A result
+// with no ID is a duplicate by normalized title+author, so an Open Library
+// record of a book Audible already returned collapses into it.
 func (s candidateSeen) add(r metadata.BookMetadata) bool {
 	keys := candidateKeys(r)
-	for _, k := range keys {
+	check := keys
+	if len(keys) > 1 {
+		check = keys[1:]
+	}
+	for _, k := range check {
 		if s[k] {
 			return false
 		}

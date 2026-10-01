@@ -179,11 +179,24 @@ func applyProviderLimits(src config.MetadataSource) {
 type SourcesBudget struct {
 	RPS   float64
 	Burst int
-	// SlowestID, SlowestRPS and SlowestTimeout describe the enabled source
-	// with the lowest RPS x Timeout; SlowestID is "" when none is enabled.
+	// SlowestID, SlowestRPS and SlowestTimeout describe the enabled
+	// title-searched source with the lowest RPS x Timeout; SlowestID is ""
+	// when none is enabled. An ASIN-only source (Audnexus) is left out: the
+	// search asks it only for the occasional ASIN lookup, so workers never
+	// queue on it the way they queue on a source every book asks.
 	SlowestID      string
 	SlowestRPS     float64
 	SlowestTimeout time.Duration
+	// CallsPerBook is the most title-search requests one book sends any one
+	// enabled source (MaxSearchCallsPerBook): the fan-out cap when a
+	// fan-out source is enabled, else 1.
+	CallsPerBook int
+	// BindingID and BooksPerSec name the enabled source that bounds the
+	// batch's throughput in the worst case (every variant asked, no early
+	// stop): the lowest RPS / MaxSearchCallsPerBook. Every book waits on
+	// every source, so this is the op's books/s ceiling.
+	BindingID   string
+	BooksPerSec float64
 }
 
 // EnabledSourcesBudget returns the SourcesBudget of every enabled metadata
@@ -200,6 +213,14 @@ func EnabledSourcesBudget() SourcesBudget {
 		eff := effectiveProviderLimits(src)
 		b.RPS += eff.RPS
 		b.Burst += eff.Burst
+		calls := MaxSearchCallsPerBook(strings.TrimSpace(src.ID))
+		if calls == 0 {
+			continue
+		}
+		b.CallsPerBook = max(b.CallsPerBook, calls)
+		if bps := eff.RPS / float64(calls); b.BindingID == "" || bps < b.BooksPerSec {
+			b.BindingID, b.BooksPerSec = strings.TrimSpace(src.ID), bps
+		}
 		timeout := eff.Timeout
 		if timeout <= 0 {
 			timeout = providerhttp.BuiltinLimitsFor("").Timeout
