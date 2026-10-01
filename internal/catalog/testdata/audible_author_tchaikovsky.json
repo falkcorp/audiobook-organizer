@@ -1,0 +1,2716 @@
+{
+ "total_results": 86,
+ "products": [
+  {
+   "asin": "B0H444SXQB",
+   "title": "The Grave of Perfection",
+   "subtitle": "The Concluding Volume in the Tyrant Philosophers Quintet",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 1050,
+   "release_date": "2027-02-11",
+   "issue_date": "2027-02-11",
+   "publisher_name": "Head of Zeus -- an AdAstra Book",
+   "series": [
+    {
+     "asin": "B0CRDB3NHZ",
+     "title": "The Tyrant Philosophers",
+     "sequence": "5"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51-GVyl0ybL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0HJWWWPHZ",
+   "title": "Odysseus Rising",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Andy Serkis"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "release_date": "2027-02-25",
+   "issue_date": "2027-02-25",
+   "publisher_name": "Audible Originals",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/517BWkvtXnL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B071Y9TTHC",
+   "title": "Children of Time",
+   "subtitle": "Children of Time, Book 1",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "asin": "B0C9M9H3NN",
+     "name": "Mel Hudson"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 991,
+   "release_date": "2017-05-02",
+   "issue_date": "2017-05-02",
+   "publisher_name": "Audible Studios",
+   "series": [
+    {
+     "asin": "B07MCH4ZJK",
+     "title": "Children of Time",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51tuexbxdIL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1549119788",
+   "title": "Children of Ruin",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Mel Hudson"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 926,
+   "release_date": "2019-05-14",
+   "issue_date": "2019-05-14",
+   "publisher_name": "Orbit",
+   "series": [
+    {
+     "asin": "B07MCH4ZJK",
+     "title": "Children of Time",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51BU5jI-rnL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0B8446C65",
+   "title": "Children of Memory",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Mel Hudson"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 807,
+   "release_date": "2023-01-31",
+   "issue_date": "2023-01-31",
+   "publisher_name": "Orbit",
+   "series": [
+    {
+     "asin": "B07MCH4ZJK",
+     "title": "Children of Time",
+     "sequence": "3"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51bjBj3LPqL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1549106392",
+   "title": "Shards of Earth",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Sophie Aldred"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1123,
+   "release_date": "2021-08-03",
+   "issue_date": "2021-08-03",
+   "publisher_name": "Orbit",
+   "series": [
+    {
+     "asin": "B093JH473B",
+     "title": "The Final Architecture",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51WL5zcUWhL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0FH7DN3SW",
+   "title": "Children of Strife",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Mel Hudson"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1210,
+   "release_date": "2026-03-17",
+   "issue_date": "2026-03-17",
+   "publisher_name": "Orbit",
+   "series": [
+    {
+     "asin": "B07MCH4ZJK",
+     "title": "Children of Time",
+     "sequence": "4"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51NN9b4e7CL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0H6N7S6ZV",
+   "title": "Engines of Reason",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "John Lee"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 251,
+   "release_date": "2026-09-01",
+   "issue_date": "2026-09-01",
+   "publisher_name": "Tantor Media",
+   "series": [
+    {
+     "asin": "B0H6R4MDXH",
+     "title": "Elder Race",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51eDiQnI-DL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0FMLC4795",
+   "title": "Green City Wars",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "John Pirhalla"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 770,
+   "release_date": "2026-06-23",
+   "issue_date": "2026-06-23",
+   "publisher_name": "Macmillan Audio",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/511bKbSbeUL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0DKGCTXSP",
+   "title": "Shroud",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Sophie Aldred"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 877,
+   "release_date": "2025-06-03",
+   "issue_date": "2025-06-03",
+   "publisher_name": "Orbit",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/61tNZglbz8L._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0CMYKLK4Q",
+   "title": "Service Model",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 741,
+   "release_date": "2024-06-04",
+   "issue_date": "2024-06-04",
+   "publisher_name": "Macmillan Audio",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/5140ypYIaxL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0BT3BD2KW",
+   "title": "City of Last Chances",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "David Thorpe"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1190,
+   "release_date": "2023-01-31",
+   "issue_date": "2023-01-31",
+   "publisher_name": "Recorded Books",
+   "series": [
+    {
+     "asin": "B0CRDB3NHZ",
+     "title": "The Tyrant Philosophers",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/619Bkxu2tuL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0FD44GK1K",
+   "title": "Pretenders to the Throne of God",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "David Thorpe"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1201,
+   "release_date": "2026-02-12",
+   "issue_date": "2026-02-12",
+   "publisher_name": "Head of Zeus -- an AdAstra Book",
+   "series": [
+    {
+     "asin": "B0CRDB3NHZ",
+     "title": "The Tyrant Philosophers",
+     "sequence": "4"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/61uYFcYf8YL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0CLQFYQK8",
+   "title": "Alien Clay",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Ben Allen"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 836,
+   "release_date": "2024-09-17",
+   "issue_date": "2024-09-17",
+   "publisher_name": "Orbit",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51zlS-11CJL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B09VK6R673",
+   "title": "Eyes of the Void",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Sophie Aldred"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1245,
+   "release_date": "2022-05-03",
+   "issue_date": "2022-05-03",
+   "publisher_name": "Orbit",
+   "series": [
+    {
+     "asin": "B093JH473B",
+     "title": "The Final Architecture",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51ztuiMZOHL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0CRBKZLD5",
+   "title": "House of Open Wounds",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "David Thorpe"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1381,
+   "release_date": "2024-01-02",
+   "issue_date": "2024-01-02",
+   "publisher_name": "W. F. Howes Ltd",
+   "series": [
+    {
+     "asin": "B0CRDB3NHZ",
+     "title": "The Tyrant Philosophers",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/61fVOqQWggL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0C7SRPBY9",
+   "title": "Elder Race",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "John Lee"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 254,
+   "release_date": "2023-06-27",
+   "issue_date": "2023-06-27",
+   "publisher_name": "Tantor Media",
+   "series": [
+    {
+     "asin": "B0H6R4MDXH",
+     "title": "Elder Race",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51GlKPlw0SL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0BJ49MY6L",
+   "title": "Lords of Uncreation",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Sophie Aldred"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1250,
+   "release_date": "2023-05-02",
+   "issue_date": "2023-05-02",
+   "publisher_name": "Orbit",
+   "series": [
+    {
+     "asin": "B093JH473B",
+     "title": "The Final Architecture",
+     "sequence": "3"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51MjD550vvL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1529050278",
+   "title": "Empire in Black and Gold",
+   "subtitle": "Shadows of the Apt, Book 1",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Ben Allen"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1384,
+   "release_date": "2020-12-10",
+   "issue_date": "2020-12-10",
+   "publisher_name": "Tor",
+   "series": [
+    {
+     "asin": "B08LHFGM7R",
+     "title": "Shadows of the Apt",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/515oMLa6E1L._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0FQ5JL2SZ",
+   "title": "Lives of Bitter Rain",
+   "subtitle": "A Tyrant Philosophers Novella",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "David Thorpe"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 265,
+   "release_date": "2025-10-14",
+   "issue_date": "2025-10-14",
+   "publisher_name": "Head of Zeus -- an AdAstra Book",
+   "series": [
+    {
+     "asin": "B0CRDB3NHZ",
+     "title": "The Tyrant Philosophers",
+     "sequence": ""
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/61T8Qp4fyOL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B09FC6VP81",
+   "title": "The Expert System's Champion",
+   "subtitle": "Expert System’s Brother Series, Book 2",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Shaun Grindell"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 244,
+   "release_date": "2021-09-21",
+   "issue_date": "2021-09-21",
+   "publisher_name": "Tantor Media",
+   "series": [
+    {
+     "asin": "B09FDPH97H",
+     "title": "Expert System's Brother",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51DAKvrythL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1529050456",
+   "title": "Seal of the Worm",
+   "subtitle": "Shadows of the Apt, Book 10",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Ben Allen"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1393,
+   "release_date": "2021-11-11",
+   "issue_date": "2021-11-11",
+   "publisher_name": "Tor",
+   "series": [
+    {
+     "asin": "B08LHFGM7R",
+     "title": "Shadows of the Apt",
+     "sequence": "10"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51DrdA685EL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "152905043X",
+   "title": "War Master's Gate",
+   "subtitle": "Shadows of the Apt, Book 9",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Ben Allen"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1658,
+   "release_date": "2021-11-11",
+   "issue_date": "2021-11-11",
+   "publisher_name": "Tor",
+   "series": [
+    {
+     "asin": "B08LHFGM7R",
+     "title": "Shadows of the Apt",
+     "sequence": "9"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41go5A5bXwL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1549106368",
+   "title": "The Doors of Eden",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Sophie Aldred"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1083,
+   "release_date": "2020-08-21",
+   "issue_date": "2020-08-21",
+   "publisher_name": "Orbit",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41W9mSERvdL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0FY3S7FZ4",
+   "title": "Starseer's Ruin",
+   "subtitle": "Warhammer Age of Sigmar",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Richard Reed"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 607,
+   "release_date": "2025-11-14",
+   "issue_date": "2025-11-14",
+   "publisher_name": "Black Library",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51IOW48dfsL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "3961540519",
+   "title": "Die Kinder der Zeit",
+   "subtitle": "Die Zeit-Saga 1",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Matthias Lühn"
+    }
+   ],
+   "language": "german",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1183,
+   "release_date": "2019-01-31",
+   "issue_date": "2019-01-31",
+   "publisher_name": "Ronin Hörverlag",
+   "series": [
+    {
+     "asin": "B081TCZHNZ",
+     "title": "Die Zeit-Saga",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51hPep3OkmL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0F8DFGRJ8",
+   "title": "The Hungry Gods",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Emma Newman"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 299,
+   "release_date": "2025-08-12",
+   "issue_date": "2025-08-12",
+   "publisher_name": "Tantor Media",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51pnFlJsjKL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0H7LMS8X9",
+   "title": "The Best of Adrian Tchaikovsky",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Al Barclay"
+    },
+    {
+     "name": "Ben Allen"
+    },
+    {
+     "name": "Gabrielle Nellis-Pain"
+    },
+    {
+     "name": "John Pirhalla"
+    },
+    {
+     "name": "John Scalzi"
+    },
+    {
+     "name": "Laurence Bouvard"
+    },
+    {
+     "name": "Mel Hudson"
+    },
+    {
+     "name": "Nathan Osgood"
+    },
+    {
+     "name": "Rod Hallett"
+    },
+    {
+     "name": "Sophie Aldred"
+    },
+    {
+     "name": "William Hope"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 1250,
+   "release_date": "2026-12-03",
+   "issue_date": "2026-12-03",
+   "publisher_name": "Head of Zeus -- an AdAstra Book",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51wszLD+JRL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0BTDSTWG9",
+   "title": "Cage of Souls",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "David Thorpe"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1390,
+   "release_date": "2023-01-31",
+   "issue_date": "2023-01-31",
+   "publisher_name": "Recorded Books",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51d3KkBohNL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1529050316",
+   "title": "Blood of the Mantis",
+   "subtitle": "Shadows of the Apt, Book 3",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Ben Allen"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 962,
+   "release_date": "2021-02-04",
+   "issue_date": "2021-02-04",
+   "publisher_name": "Tor",
+   "series": [
+    {
+     "asin": "B08LHFGM7R",
+     "title": "Shadows of the Apt",
+     "sequence": "3"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41c1rYJMzAL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0GPSBZFXL",
+   "title": "Preaching to the Choir",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Emma Newman"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 275,
+   "release_date": "2026-08-12",
+   "issue_date": "2026-08-12",
+   "publisher_name": "Tantor Media",
+   "series": [
+    {
+     "asin": "B0H8Q8MW8Z",
+     "title": "Terrible Worlds: Transformations",
+     "sequence": ""
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41QeDSuFDwL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0D84G942M",
+   "title": "Days of Shattered Faith",
+   "subtitle": "Shortlisted for the Hugo Award for Best Series 2025",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "David Thorpe"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1305,
+   "release_date": "2024-12-05",
+   "issue_date": "2024-12-05",
+   "publisher_name": "Head of Zeus -- an AdAstra Book",
+   "series": [
+    {
+     "asin": "B0CRDB3NHZ",
+     "title": "The Tyrant Philosophers",
+     "sequence": "3"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/612cCmAqcwL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B077V269LG",
+   "title": "The Hyena and the Hawk",
+   "authors": [
+    {
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Kyla Garcia"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1013,
+   "release_date": "2018-04-05",
+   "issue_date": "2018-04-05",
+   "publisher_name": "Macmillan Digital Audio",
+   "series": [
+    {
+     "asin": "B07C5TMP51",
+     "title": "Echoes of the Fall",
+     "sequence": "3"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51GX5E9PLKL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B082TYLHG8",
+   "title": "Spoils of War",
+   "subtitle": "Tales of the Apt, Book 1",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Sam Burns"
+    },
+    {
+     "name": "Mark Norman"
+    },
+    {
+     "name": "Tracey Norman"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 675,
+   "release_date": "2019-12-17",
+   "issue_date": "2019-12-17",
+   "publisher_name": "Circle of Spears",
+   "series": [
+    {
+     "asin": "B082W912DM",
+     "title": "Tales of the Apt",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/61ltFSA-bfL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B07TWNX6ZX",
+   "title": "Evil is a Matter of Perspective",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Courtney Schafer"
+    },
+    {
+     "name": "Mazarkis Williams"
+    },
+    {
+     "name": "Alex Marshall"
+    },
+    {
+     "name": "Jeff Salyards"
+    },
+    {
+     "name": "Shawn Speakman"
+    },
+    {
+     "name": "Brian Staveley"
+    },
+    {
+     "name": "Teresa Frohock"
+    },
+    {
+     "name": "Marc Turner"
+    },
+    {
+     "name": "R. Scott Bakker"
+    },
+    {
+     "name": "Michael R. Fletcher"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Greg Patmore"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1029,
+   "release_date": "2019-07-05",
+   "issue_date": "2019-07-05",
+   "publisher_name": "Crossroad Press",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51qjTYhAWrL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "178618351X",
+   "title": "One Day All This Will Be Yours",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 201,
+   "release_date": "2021-03-02",
+   "issue_date": "2021-03-02",
+   "publisher_name": "Penguin Audio",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/513pti2oqlL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1529050375",
+   "title": "The Sea Watch",
+   "subtitle": "Shadows of the Apt, Book 6",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Ben Allen"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1633,
+   "release_date": "2021-07-22",
+   "issue_date": "2021-07-22",
+   "publisher_name": "Tor",
+   "series": [
+    {
+     "asin": "B08LHFGM7R",
+     "title": "Shadows of the Apt",
+     "sequence": "6"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51X5VVmf9eS._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0CQRPSHGJ",
+   "title": "And Put Away Childish Things",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 281,
+   "release_date": "2023-12-26",
+   "issue_date": "2023-12-26",
+   "publisher_name": "Tantor Media",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51QfkoBzy6L._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1529050413",
+   "title": "The Air War",
+   "subtitle": "Shadows of the Apt, Book 8",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Ben Allen"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1508,
+   "release_date": "2021-11-11",
+   "issue_date": "2021-11-11",
+   "publisher_name": "Tor",
+   "series": [
+    {
+     "asin": "B08LHFGM7R",
+     "title": "Shadows of the Apt",
+     "sequence": "8"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41JsnS9elAL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1529050294",
+   "title": "Dragonfly Falling",
+   "subtitle": "Shadows of the Apt, Book 2",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Ben Allen"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1541,
+   "release_date": "2020-12-10",
+   "issue_date": "2020-12-10",
+   "publisher_name": "Tor",
+   "series": [
+    {
+     "asin": "B08LHFGM7R",
+     "title": "Shadows of the Apt",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51U3SiYz11L._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0F4KXLK5R",
+   "title": "Bee Speaker",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Gabrielle Nellis-Pain"
+    },
+    {
+     "name": "Rod Hallett"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 818,
+   "release_date": "2025-06-05",
+   "issue_date": "2025-06-05",
+   "publisher_name": "Head of Zeus -- an AdAstra Book",
+   "series": [
+    {
+     "asin": "B0BT555YQJ",
+     "title": "Dogs of War",
+     "sequence": "3"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/5150z0tJMEL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0BQLWYMWC",
+   "title": "The King Must Fall",
+   "authors": [
+    {
+     "name": "Bradley P. Beaulieu"
+    },
+    {
+     "name": "Devin Madson"
+    },
+    {
+     "name": "Luke Scull"
+    },
+    {
+     "name": "Anna Smith Spark"
+    },
+    {
+     "asin": "B00726D51G",
+     "name": "Anthony Ryan"
+    },
+    {
+     "name": "Peter Orullian"
+    },
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Kameron Hurley"
+    },
+    {
+     "name": "Daniel Polansky"
+    },
+    {
+     "name": "Shawn Speakman"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Greg Patmore"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1399,
+   "release_date": "2022-12-20",
+   "issue_date": "2022-12-20",
+   "publisher_name": "Grimdark Magazine",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51N5djZ8O1L._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1529050359",
+   "title": "The Scarab Path",
+   "subtitle": "Shadows of the Apt, Book 5",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Ben Allen"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1596,
+   "release_date": "2021-07-22",
+   "issue_date": "2021-07-22",
+   "publisher_name": "Tor",
+   "series": [
+    {
+     "asin": "B08LHFGM7R",
+     "title": "Shadows of the Apt",
+     "sequence": "5"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/510GNqHN-XS._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1630154431",
+   "title": "Walking to Aldebaran",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 216,
+   "release_date": "2019-10-15",
+   "issue_date": "2019-10-15",
+   "publisher_name": "Tantor Media",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/61Bq2pphzVL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B074ZSHQDN",
+   "title": "Guns of the Dawn",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Emma Newman"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1268,
+   "release_date": "2017-11-02",
+   "issue_date": "2017-11-02",
+   "publisher_name": "Macmillan Digital Audio",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41z-+ITZewL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0H1HQY88W",
+   "title": "Cage of Souls",
+   "subtitle": "Shortlisted for the Arthur C. Clarke Award 2020",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "David Thorpe"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1396,
+   "release_date": "2026-06-04",
+   "issue_date": "2026-06-04",
+   "publisher_name": "Head of Zeus -- an AdAstra Book",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51ayCrZT0IL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B071JW2X84",
+   "title": "The Tiger and the Wolf",
+   "subtitle": "Epic shapeshifter fantasy from the award-winning master of SF/F",
+   "authors": [
+    {
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Kyla Garcia"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1326,
+   "release_date": "2018-04-05",
+   "issue_date": "2018-04-05",
+   "publisher_name": "Macmillan Digital Audio",
+   "series": [
+    {
+     "asin": "B07C5TMP51",
+     "title": "Echoes of the Fall",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51RSO17x3oL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1250769272",
+   "title": "Made Things",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 245,
+   "release_date": "2019-12-10",
+   "issue_date": "2019-12-10",
+   "publisher_name": "Macmillan Audio",
+   "series": [
+    {
+     "asin": "B082FMRTS8",
+     "title": "Made Things",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51l+KRUsqQL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B072MP1MK1",
+   "title": "The Bear and the Serpent",
+   "authors": [
+    {
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Kyla Garcia"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1010,
+   "release_date": "2018-04-05",
+   "issue_date": "2018-04-05",
+   "publisher_name": "Macmillan Digital Audio",
+   "series": [
+    {
+     "asin": "B07C5TMP51",
+     "title": "Echoes of the Fall",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51UPwBRNi-L._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "197731919X",
+   "title": "The Expert System's Brother",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Shaun Grindell"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 242,
+   "release_date": "2019-07-30",
+   "issue_date": "2019-07-30",
+   "publisher_name": "Tantor Media",
+   "series": [
+    {
+     "asin": "B09FDPH97H",
+     "title": "Expert System's Brother",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/61jIcb0Ar6L._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "3961541280",
+   "title": "Die Erben der Zeit",
+   "subtitle": "Die Zeit-Saga 2",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Matthias Lühn"
+    }
+   ],
+   "language": "german",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1173,
+   "release_date": "2019-12-09",
+   "issue_date": "2019-12-09",
+   "publisher_name": "Ronin Hörverlag",
+   "series": [
+    {
+     "asin": "B081TCZHNZ",
+     "title": "Die Zeit-Saga",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51q-tVWvAML._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1529050391",
+   "title": "Heirs of the Blade",
+   "subtitle": "Shadows of the Apt, Book 7",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Ben Allen"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1489,
+   "release_date": "2021-07-22",
+   "issue_date": "2021-07-22",
+   "publisher_name": "Tor",
+   "series": [
+    {
+     "asin": "B08LHFGM7R",
+     "title": "Shadows of the Apt",
+     "sequence": "7"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51BB-LNSCiS._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1529050332",
+   "title": "Salute the Dark",
+   "subtitle": "Shadows of the Apt, Book 4",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Ben Allen"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1020,
+   "release_date": "2021-02-18",
+   "issue_date": "2021-02-18",
+   "publisher_name": "Tor",
+   "series": [
+    {
+     "asin": "B08LHFGM7R",
+     "title": "Shadows of the Apt",
+     "sequence": "4"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51XMdWPERaL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1786182874",
+   "title": "Firewalkers",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Adjoa Andoh"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 312,
+   "release_date": "2020-06-25",
+   "issue_date": "2020-06-25",
+   "publisher_name": "Penguin Audio",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51Noqb5yGBL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B07FPNV3X4",
+   "title": "Redemption's Blade",
+   "subtitle": "After the War, Book 1",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Nicola Barber"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 711,
+   "release_date": "2018-07-24",
+   "issue_date": "2018-07-24",
+   "publisher_name": "Recorded Books",
+   "series": [
+    {
+     "asin": "B07FQMGJ3Q",
+     "title": "After the War",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51dl61EWifL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0D4ZNFVBT",
+   "title": "Spiderlight",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 506,
+   "release_date": "2024-10-29",
+   "issue_date": "2024-10-29",
+   "publisher_name": "Macmillan Audio",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51G+N2wBKUL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0BT2T1ZWV",
+   "title": "Dogs of War",
+   "subtitle": "Dogs of War, Book 1",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Laurence Bouvard"
+    },
+    {
+     "name": "Nathan Osgood"
+    },
+    {
+     "name": "William Hope"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 598,
+   "release_date": "2023-01-31",
+   "issue_date": "2023-01-31",
+   "publisher_name": "Recorded Books",
+   "series": [
+    {
+     "asin": "B0BT555YQJ",
+     "title": "Dogs of War",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51NY0CYMZFL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1800245556",
+   "title": "Bear Head",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Nathan Osgood"
+    },
+    {
+     "name": "Laurence Bouvard"
+    },
+    {
+     "name": "William Hope"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 777,
+   "release_date": "2021-01-07",
+   "issue_date": "2021-01-07",
+   "publisher_name": "W. F. Howes Ltd",
+   "series": [
+    {
+     "asin": "B0BT555YQJ",
+     "title": "Dogs of War",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41a+ZmT2WVL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B09Q3N2FFN",
+   "title": "Day of Ascension",
+   "subtitle": "Warhammer 40,000",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Harry Myers"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 338,
+   "release_date": "2022-01-29",
+   "issue_date": "2022-01-29",
+   "publisher_name": "Black Library",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51j5SElSxAL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "1528866738",
+   "title": "Ironclads",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Peter Noble"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 248,
+   "release_date": "2019-05-02",
+   "issue_date": "2019-05-02",
+   "publisher_name": "QUEST from W. F. Howes Ltd",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51w-R1uyxqL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0BTDTF5P9",
+   "title": "Bear Head",
+   "subtitle": "Dogs of War, Book 2",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Laurence Bouvard"
+    },
+    {
+     "name": "Nathan Osgood"
+    },
+    {
+     "name": "William Hope"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 777,
+   "release_date": "2023-01-31",
+   "issue_date": "2023-01-31",
+   "publisher_name": "Recorded Books",
+   "series": [
+    {
+     "asin": "B0BT555YQJ",
+     "title": "Dogs of War",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41FYXsdfWxL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0D79L4J2N",
+   "title": "Saturation Point",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Emma Newman"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 284,
+   "release_date": "2024-07-30",
+   "issue_date": "2024-07-30",
+   "publisher_name": "Tantor Audio",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51GgtY0NVFL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0FFH122QY",
+   "title": "Dogs of War",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Laurence Bouvard"
+    },
+    {
+     "name": "Nathan Osgood"
+    },
+    {
+     "name": "William Hope"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 568,
+   "release_date": "2025-12-25",
+   "issue_date": "2025-12-25",
+   "publisher_name": "Head of Zeus -- an AdAstra Book",
+   "series": [
+    {
+     "asin": "B0BT555YQJ",
+     "title": "Dogs of War",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51+z4TztDWL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B09L33VX7M",
+   "title": "Ogres",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Emma Newman"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 298,
+   "release_date": "2022-03-15",
+   "issue_date": "2022-03-15",
+   "publisher_name": "Penguin Audio",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41PzXG2tc4L._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0H7RDNXML",
+   "title": "The Eighth Face",
+   "authors": [
+    {
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 900,
+   "release_date": "2027-03-16",
+   "issue_date": "2027-03-16",
+   "publisher_name": "Orbit"
+  },
+  {
+   "asin": "3748018118",
+   "title": "I figli del tempo",
+   "subtitle": "Children of time 1",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Riccardo Lombardo"
+    }
+   ],
+   "language": "italian",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1183,
+   "release_date": "2019-10-25",
+   "issue_date": "2019-10-25",
+   "publisher_name": "Audible Studios",
+   "series": [
+    {
+     "asin": "B0D6RTKQBF",
+     "title": "Children of time",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41XAdzaL3pL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0D4VZSDWJ",
+   "title": "Dans la toile du temps 1",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Emmanuel Lemire"
+    }
+   ],
+   "language": "french",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1069,
+   "release_date": "2024-06-13",
+   "issue_date": "2024-06-13",
+   "publisher_name": "Lizzie",
+   "series": [
+    {
+     "asin": "B0D6BTTPXZ",
+     "title": "Dans la toile du temps",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41g6stGMYOL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0GJTDHYHM",
+   "title": "Elder Race",
+   "subtitle": "La razza Antica",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Valerio Costantini - traduttore"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Massimiliano Cutrera"
+    }
+   ],
+   "language": "italian",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 294,
+   "release_date": "2026-01-30",
+   "issue_date": "2026-01-30",
+   "publisher_name": "Audible Studios",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/5189Hv7fh7L._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0B9H4GMVZ",
+   "title": "Die Scherben der Erde",
+   "subtitle": "Die Scherben der Erde 1",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Matthias Lühn"
+    }
+   ],
+   "language": "german",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1075,
+   "release_date": "2022-09-12",
+   "issue_date": "2022-09-12",
+   "publisher_name": "Random House Audio, Deutschland",
+   "series": [
+    {
+     "asin": "B0BTZ7XQM4",
+     "title": "Die Scherben der Erde",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51PLDSqvWVL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0CNRWG47B",
+   "title": "Die Feinde der Zeit",
+   "subtitle": "Die Zeit-Saga 3",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Irene Holicki - Übersetzer"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Matthias Lühn"
+    }
+   ],
+   "language": "german",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 967,
+   "release_date": "2023-12-13",
+   "issue_date": "2023-12-13",
+   "publisher_name": "Ronin Hörverlag",
+   "series": [
+    {
+     "asin": "B081TCZHNZ",
+     "title": "Die Zeit-Saga",
+     "sequence": "3"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51d96ay23FL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0D1YL528B",
+   "title": "Die Herren des Abgrunds",
+   "subtitle": "Die Scherben der Erde 3",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Irene Holicki - Übersetzer"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Matthias Lühn"
+    }
+   ],
+   "language": "german",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1246,
+   "release_date": "2024-07-08",
+   "issue_date": "2024-07-08",
+   "publisher_name": "Random House Audio, Deutschland",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/511qoAs-MZL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0BTZ82K75",
+   "title": "Die Augen der Galaxis",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Irene Holicki - Übersetzer"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Matthias Lühn"
+    }
+   ],
+   "language": "german",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1174,
+   "release_date": "2023-02-13",
+   "issue_date": "2023-02-13",
+   "publisher_name": "Random House Audio",
+   "series": [
+    {
+     "asin": "B0BTZ7XQM4",
+     "title": "Die Scherben der Erde",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/512fjrznpSL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0DYVRTW5N",
+   "title": "Dans le berceau du temps",
+   "subtitle": "Dans la toile du temps - Tome 3",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Cédric Dumond"
+    }
+   ],
+   "language": "french",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 856,
+   "release_date": "2025-03-12",
+   "issue_date": "2025-03-12",
+   "publisher_name": "Lizzie",
+   "series": [
+    {
+     "asin": "B0D6BTTPXZ",
+     "title": "Dans la toile du temps",
+     "sequence": "3"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51nPLWTfPlL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0D6BRDVF5",
+   "title": "Dans les profondeurs du temps",
+   "subtitle": "Dans la toile du temps 2",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Emmanuel Lemire"
+    }
+   ],
+   "language": "french",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1015,
+   "release_date": "2024-07-11",
+   "issue_date": "2024-07-11",
+   "publisher_name": "Lizzie",
+   "series": [
+    {
+     "asin": "B0D6BTTPXZ",
+     "title": "Dans la toile du temps",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/519ue3OVetL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "3748029446",
+   "title": "Figli della Caduta",
+   "subtitle": "Children of Time 2",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Riccardo Lombardo"
+    }
+   ],
+   "language": "italian",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1188,
+   "release_date": "2020-07-24",
+   "issue_date": "2020-07-24",
+   "publisher_name": "Audible Studios",
+   "series": [
+    {
+     "asin": "B0D6RTKQBF",
+     "title": "Children of time",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/41gMcRFyB4L._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B01M28KBX7",
+   "title": "Fabled Journey",
+   "authors": [
+    {
+     "name": "Richard Webb"
+    },
+    {
+     "name": "Elizabeth Xifaras"
+    },
+    {
+     "name": "Pardeep Aujla"
+    },
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Rachel Hine"
+    },
+    {
+     "name": "Joshua Young"
+    }
+   ],
+   "language": "english",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 103,
+   "release_date": "2016-10-27",
+   "issue_date": "2016-10-27",
+   "publisher_name": "Author's Republic",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/61MVWUCWnBL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0D6RX53L3",
+   "title": "I figli della memoria",
+   "subtitle": "Children of time 3",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Annarita Guarnieri - traduttore"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Andrea Beltramo"
+    }
+   ],
+   "language": "italian",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 899,
+   "release_date": "2024-06-17",
+   "issue_date": "2024-06-17",
+   "publisher_name": "Audible Studios",
+   "series": [
+    {
+     "asin": "B0D6RTKQBF",
+     "title": "Children of time",
+     "sequence": "3"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51QtzBhLHJL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0GMY6MNHG",
+   "title": "I Signori della Distruzione",
+   "subtitle": "The Final Architecture, Vol. 3",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Bianca Giolitti - traduttore"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Andrea Beltramo"
+    }
+   ],
+   "language": "italian",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1168,
+   "release_date": "2026-02-16",
+   "issue_date": "2026-02-16",
+   "publisher_name": "Audible Studios",
+   "series": [
+    {
+     "asin": "B0DJ997G5X",
+     "title": "The Final Architecture",
+     "sequence": "3"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51MyRj-DMlL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0H6NXLSDC",
+   "title": "Der Symbiont",
+   "subtitle": "Politische SciFi vom Erfolgsautor von »Kinder der Zeit«",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Andreas Decker - translator"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Mark Bremer"
+    }
+   ],
+   "language": "german",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 788,
+   "release_date": "2026-07-31",
+   "issue_date": "2026-07-31",
+   "publisher_name": "OSTERWOLDaudio",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51Q5IRwpUyL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "3961541469",
+   "title": "Im Krieg",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Christopher Kussin"
+    }
+   ],
+   "language": "german",
+   "format_type": "unabridged",
+   "content_delivery_type": "SinglePartBook",
+   "runtime_length_min": 611,
+   "release_date": "2020-02-28",
+   "issue_date": "2020-02-28",
+   "publisher_name": "Ronin Hörverlag",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51Q-xarvUCS._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "3961542473",
+   "title": "Portal der Welten",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Matthias Lühn"
+    }
+   ],
+   "language": "german",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1196,
+   "release_date": "2021-05-10",
+   "issue_date": "2021-05-10",
+   "publisher_name": "Ronin Hörverlag",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51ZkR5nibKL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0F3P8C73G",
+   "title": "Starship Alexandria",
+   "authors": [
+    {
+     "name": "Emma Newman and Adrian Tchaikovsky"
+    }
+   ],
+   "language": "english",
+   "format_type": "original_recording",
+   "content_delivery_type": "PodcastParent",
+   "release_date": "2025-04-04",
+   "issue_date": "2025-04-04",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51OLBAaGmBL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0H6XC4H4X",
+   "title": "Die Retter der Zeit",
+   "subtitle": "Die Zeit-Saga, Band 4",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Matthias Lühn"
+    }
+   ],
+   "language": "german",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1333,
+   "release_date": "2026-07-03",
+   "issue_date": "2026-07-03",
+   "publisher_name": "Ronin Hörverlag",
+   "series": [
+    {
+     "asin": "B081TCZHNZ",
+     "title": "Die Zeit-Saga",
+     "sequence": "4"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51BNVxlqpeL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0B6JLRCNW",
+   "title": "Le porte dell'Eden",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Giorgia De Santis - traduttore"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Riccardo Lombardo"
+    }
+   ],
+   "language": "italian",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1041,
+   "release_date": "2022-07-18",
+   "issue_date": "2022-07-18",
+   "publisher_name": "Audible Studios",
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51UMyuy8ttL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0DFWGQ3CM",
+   "title": "Frammenti della terra",
+   "subtitle": "The final architecture 1",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Bianca Giolitti - traduttore"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Andrea Beltramo"
+    }
+   ],
+   "language": "italian",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1045,
+   "release_date": "2024-09-11",
+   "issue_date": "2024-09-11",
+   "publisher_name": "Audible Studios",
+   "series": [
+    {
+     "asin": "B0DJ997G5X",
+     "title": "The Final Architecture",
+     "sequence": "1"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51ViKzCHVaL._SL500_.jpg"
+   }
+  },
+  {
+   "asin": "B0DJ98GJY6",
+   "title": "Gli occhi del vuoto",
+   "subtitle": "The final architecture 2",
+   "authors": [
+    {
+     "asin": "B002XLHS8Q",
+     "name": "Adrian Tchaikovsky"
+    },
+    {
+     "name": "Bianca Giolitti - traduttore"
+    }
+   ],
+   "narrators": [
+    {
+     "name": "Andrea Beltramo"
+    }
+   ],
+   "language": "italian",
+   "format_type": "unabridged",
+   "content_delivery_type": "MultiPartBook",
+   "runtime_length_min": 1135,
+   "release_date": "2024-10-09",
+   "issue_date": "2024-10-09",
+   "publisher_name": "Audible Studios",
+   "series": [
+    {
+     "asin": "B0DJ997G5X",
+     "title": "The Final Architecture",
+     "sequence": "2"
+    }
+   ],
+   "product_images": {
+    "500": "https://m.media-amazon.com/images/I/51hxKDwAGkL._SL500_.jpg"
+   }
+  }
+ ]
+}
