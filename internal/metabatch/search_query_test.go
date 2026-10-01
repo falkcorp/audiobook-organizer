@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-10-01
 
@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -911,5 +913,116 @@ func TestFolderMemo_ListsWrappedParentOnce(t *testing.T) {
 	direct, err := memo.list(fakeBookFiles{dir: rows, callsByDir: calls}, parent)
 	if err != nil || len(direct) != 1 || direct["loose"] == "" {
 		t.Fatalf("direct listing of the parent = %v, %v; want only the loose row", direct, err)
+	}
+}
+
+// gatedLister is a BookDirLister whose reads block until every caller of the
+// test has arrived (arrived), then count themselves, so concurrent misses on
+// one folder are all in flight at once.
+type gatedLister struct {
+	arrived *sync.WaitGroup
+	calls   *atomic.Int64
+	rows    map[string]string
+	err     error
+}
+
+func (g gatedLister) LiveBookPathsUnderDir(dir string) (map[string]string, error) {
+	g.calls.Add(1)
+	g.arrived.Wait()
+	// Hold the read a little longer so the callers that signalled arrival
+	// reach the memo while this read is still in flight.
+	time.Sleep(20 * time.Millisecond)
+	if g.err != nil {
+		return nil, g.err
+	}
+	out := map[string]string{}
+	for id, p := range g.rows {
+		if strings.HasPrefix(p, dir+"/") {
+			out[id] = p
+		}
+	}
+	return out, nil
+}
+
+// Concurrent callers of one memo for the same folder and kind share ONE
+// read -- for the direct listing and the wrapped listing alike -- and a
+// failed read is reported once, not once per caller.
+func TestFolderMemo_ConcurrentCallersShareOneRead(t *testing.T) {
+	const (
+		parent  = "/library/Authors/Gregory Benford"
+		callers = 32
+	)
+	rows := wrappedRows(parent, "Great Sky River 001 of 200.mp3", numbered("Great Sky River %03d of 200.mp3", 6, 1)...)
+	rows["loose"] = parent + "/Timescape.m4b"
+	kinds := []struct {
+		name string
+		list func(m *FolderMemo, l database.BookDirLister) (map[string]string, error)
+		want int
+	}{
+		{"direct", func(m *FolderMemo, l database.BookDirLister) (map[string]string, error) { return m.list(l, parent) }, 1},
+		{"wrapped", func(m *FolderMemo, l database.BookDirLister) (map[string]string, error) {
+			return m.listWrapped(l, parent)
+		}, 6},
+	}
+	for _, k := range kinds {
+		for _, failing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/failing=%v", k.name, failing), func(t *testing.T) {
+				var arrived sync.WaitGroup
+				arrived.Add(callers)
+				var calls atomic.Int64
+				l := gatedLister{arrived: &arrived, calls: &calls, rows: rows}
+				if failing {
+					l.err = errors.New("boom")
+				}
+				memo := NewFolderMemo()
+				failuresBefore := listWarn.failures.Load()
+				var done sync.WaitGroup
+				errs := make(chan error, callers)
+				sizes := make(chan int, callers)
+				for range callers {
+					done.Add(1)
+					go func() {
+						defer done.Done()
+						arrived.Done()
+						got, err := k.list(memo, l)
+						errs <- err
+						sizes <- len(got)
+					}()
+				}
+				finished := make(chan struct{})
+				go func() { done.Wait(); close(finished) }()
+				select {
+				case <-finished:
+				case <-time.After(10 * time.Second):
+					t.Fatal("callers never returned")
+				}
+				close(errs)
+				close(sizes)
+				if n := calls.Load(); n != 1 {
+					t.Fatalf("lister called %d times by %d concurrent callers, want 1", n, callers)
+				}
+				for err := range errs {
+					if (err != nil) != failing {
+						t.Fatalf("caller got err=%v, want failing=%v", err, failing)
+					}
+				}
+				for n := range sizes {
+					if !failing && n != k.want {
+						t.Fatalf("caller got %d rows, want %d", n, k.want)
+					}
+				}
+				wantFailures := int64(0)
+				if failing {
+					wantFailures = 1
+				}
+				if got := listWarn.failures.Load() - failuresBefore; got != wantFailures {
+					t.Fatalf("failed read reported %d times, want %d", got, wantFailures)
+				}
+				// A later caller reuses the stored listing (or error).
+				if _, err := k.list(memo, l); (err != nil) != failing || calls.Load() != 1 {
+					t.Fatalf("later caller: err=%v calls=%d, want the stored result and no new read", err, calls.Load())
+				}
+			})
+		}
 	}
 }
