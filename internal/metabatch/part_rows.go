@@ -1,5 +1,5 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
 // last-edited: 2026-10-01
 //
@@ -14,9 +14,12 @@
 package metabatch
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -64,6 +67,46 @@ const (
 	// maxPlausibleSec: a duration past a week is a unit error, not a book.
 	maxPlausibleSec = 7 * 24 * 3600
 )
+
+// Thresholds for COUSIN evidence (cousinPaths: a file alone in a folder named
+// for it, beside other such folders). One book per folder is also how whole
+// books are shelved, so cousins are weaker evidence than rows sharing one
+// folder. Measured on prod 2026-10-01 over the 15,648 unmatched rows: 98%
+// have a stored duration and a size; the fragments run a median 4 min, p75
+// 10 min, p90 29 min; a 30 min ceiling keeps 10,371 of the 11,495 rows under
+// 2 h. Whole series books ("Mistborn 1-7", "Magic Tree House 1-3", "Wheel of
+// Time 01-14", "Discworld 01-41") are 1 h or more, or have no trusted
+// duration.
+const (
+	// cousinMaxPartSec: cousins count only for a row whose trusted duration
+	// is under this; an unknown duration or one of 30 min-2 h never counts
+	// them.
+	cousinMaxPartSec = 30 * 60
+	// cousinBigSet: a set signal a whole-book series lacks. A single-token
+	// trailing title ("Stem 3") or a counted title of fewer than this many
+	// parts ("N of 7") needs this many matching cousins; a sub-numbered
+	// token ("Great Sky River 18 6") or a count of at least this many
+	// ("123 of 180") needs only minChapterSiblings.
+	cousinBigSet = 10
+	// cousinParentMaxRows: a cousin parent holding more live rows than this
+	// is a shelf, not a work's folder; its cousins are unavailable.
+	cousinParentMaxRows = 2000
+)
+
+// cousinParentContainerNames are folder names that hold many works, beyond
+// metadata.IsGenericDirName's set (which already has "audiobooks", "books",
+// "library", ...) and authorname.IsGenreFolder's genre shelves: never a
+// cousin parent.
+var cousinParentContainerNames = map[string]bool{
+	"authors": true, "itunes media": true, "audible": true, "libation": true,
+}
+
+// errCousinParentTooLarge: the parent's listing exceeded cousinParentMaxRows.
+type errCousinParentTooLarge struct{ rows int }
+
+func (e errCousinParentTooLarge) Error() string {
+	return fmt.Sprintf("folder holds %d live rows, over the cousin cap of %d", e.rows, cousinParentMaxRows)
+}
 
 // FolderMemo shares folder listings across the rows of one pass. Each
 // folder is read once per kind of listing: its direct children (list), and,
@@ -116,11 +159,15 @@ func listDirectChildren(l database.BookDirLister, dir string) (map[string]string
 
 // listWrappedGrandchildren is l's listing of parent (recursive) cut down to
 // the folder-wrapped rows exactly two levels under it: parent/<X>/<file>
-// where <X> is named like <file> (isWrappedFile).
+// where <X> is named like <file> (isWrappedFile). A parent holding more than
+// cousinParentMaxRows rows is refused (errCousinParentTooLarge).
 func listWrappedGrandchildren(l database.BookDirLister, parent string) (map[string]string, error) {
 	all, err := l.LiveBookPathsUnderDir(parent)
 	if err != nil {
 		return nil, err
+	}
+	if len(all) > cousinParentMaxRows {
+		return nil, errCousinParentTooLarge{rows: len(all)}
 	}
 	out := map[string]string{}
 	for id, p := range all {
@@ -154,7 +201,12 @@ func (m *FolderMemo) listWrapped(l database.BookDirLister, parent string) (map[s
 func (m *FolderMemo) cached(key memoKey, read func() (map[string]string, error)) (map[string]string, error) {
 	readLogged := func() (map[string]string, error) {
 		rows, err := read()
-		if err != nil {
+		var tooLarge errCousinParentTooLarge
+		switch {
+		case errors.As(err, &tooLarge):
+			cousinCapWarn.warn("cousin parent too large; judging the row without cousins: dir=%s rows=%d cap=%d suppressed_since_last=%d",
+				logger.SanitizeLogValue(key.dir), tooLarge.rows, cousinParentMaxRows)
+		case err != nil:
 			warnListFailed(key.dir, err)
 		}
 		return rows, err
@@ -310,44 +362,57 @@ func isImportRoot(dir string) bool {
 	return fresh[dir]
 }
 
-// listWarn rate-limits the sibling-listing failure warning: a store fault
-// repeats for every folder of a pass.
-var listWarn struct {
+// warnLimiter logs a Warn at most once a minute and counts the rest; the
+// suppressed count rides on the next logged line (its last format verb).
+type warnLimiter struct {
 	last       atomic.Int64
 	suppressed atomic.Int64
-	// failures counts every failed read reported (logged or suppressed).
+	// failures counts every report (logged or suppressed).
 	failures atomic.Int64
 }
 
-func warnListFailed(dir string, err error) {
-	listWarn.failures.Add(1)
+func (w *warnLimiter) warn(format string, args ...any) {
+	w.failures.Add(1)
 	now := time.Now().UnixNano()
-	last := listWarn.last.Load()
-	if now-last < int64(time.Minute) || !listWarn.last.CompareAndSwap(last, now) {
-		listWarn.suppressed.Add(1)
+	last := w.last.Load()
+	if now-last < int64(time.Minute) || !w.last.CompareAndSwap(last, now) {
+		w.suppressed.Add(1)
 		return
 	}
-	partRowLog.Warn("sibling listing failed; judging the title without its folder: dir=%s err=%s suppressed_since_last=%d",
-		logger.SanitizeLogValue(dir), logger.SanitizeLogValue(err.Error()), listWarn.suppressed.Swap(0))
+	partRowLog.Warn(format, append(args, w.suppressed.Swap(0))...)
 }
 
-// partRowRefused reports whether title shows this row to be one file of a
-// set the scanner filed as separate book rows (see ResolveCandidateSearchQuery):
+// listWarn rate-limits the folder-listing failure warning: a store fault
+// repeats for every folder of a pass. cousinCapWarn does the same for
+// cousin parents over cousinParentMaxRows.
+var listWarn, cousinCapWarn warnLimiter
+
+func warnListFailed(dir string, err error) {
+	listWarn.warn("sibling listing failed; judging the title without its folder: dir=%s err=%s suppressed_since_last=%d",
+		logger.SanitizeLogValue(dir), logger.SanitizeLogValue(err.Error()))
+}
+
+// partRowRefused returns the skip kind when title shows this row to be one
+// file of a set the scanner filed as separate book rows (see
+// ResolveCandidateSearchQuery), else "": SkipKindSiblingPart on evidence from
+// the row's own folder, SkipKindCousinPart on evidence from the like-named
+// folders beside a folder-wrapped row (cousinPart). The shapes:
 //
 //   - a chapter number or chapter fragment ("06 Chapter 6", "98",
 //     "Elantris_copy179"; metadata.IsChapterOnlyTitle,
 //     metadata.IsLikelyChapterFragment) on a chapter part row
-//     (chapterPartRow): beside any sibling in its folder whatever the file's
+//     (chapterPartKind): beside any sibling in its folder whatever the file's
 //     duration -- a file-split part runs 10-60 min -- or, folder-wrapped, a
-//     chapter-named file beside chapter-named cousins, gated by duration;
+//     chapter-named file beside chapter-named cousins (cousinPart);
 //   - an empty or placeholder title ("", "Unknown Title", "Unknown",
 //     "Untitled"; isPlaceholderTitle) on a chapter part row
 //     whose FILE is named by a chapter number ("Eldest/98.mp3");
 //   - a counted part (metadata.IsCountedPartTitle: "002 of 341") or a bare
 //     trailing part token (metadata.SiblingPartStem: "The Sunrise Lands 1")
-//     with enough same-set siblings or, folder-wrapped, cousins
-//     (countedSiblings, stemSiblings over setPaths) on a row that is not a
-//     whole product by duration (textShapePart);
+//     with enough same-set siblings (countedSiblings, stemSiblings) on a row
+//     that is not a whole product by duration (textShapePart), or,
+//     folder-wrapped, enough same-set cousins with a set signal
+//     (countedCousinSet, stemCousinSet; cousinPart);
 //   - rip details (metadata.StripRipJunk) on a part row (ripShapePart), when
 //     the title IS the folder's name: a folder name stamped onto each of its
 //     files. Cousins never count here: a wrapped row's title is always its
@@ -355,48 +420,73 @@ func warnListFailed(dir string, err error) {
 //     "American Gods [64k 577MB].m4b" beside "Coraline.m4b" is a book.
 //
 // The folder is listed only when one of these shapes matches.
-func (j *titleJudge) partRowRefused(title string) bool {
+func (j *titleJudge) partRowRefused(title string) string {
 	t := strings.TrimSpace(title)
 	if t == "" || isPlaceholderTitle(t) {
 		name := j.fileBaseName()
 		if name == "" || !(metadata.IsChapterOnlyTitle(name) || metadata.IsLikelyChapterFragment(name)) {
-			return false
+			return ""
 		}
-		return j.chapterPartRow()
+		return j.chapterPartKind()
 	}
 	switch {
 	case metadata.IsChapterOnlyTitle(t) || metadata.IsLikelyChapterFragment(t):
-		return j.chapterPartRow()
+		return j.chapterPartKind()
 	case metadata.IsCountedPartTitle(t):
-		return j.textShapePart(func() int { return j.countedSiblings(t) })
+		if j.textShapePart(func() int { return j.countedSiblings(t) }) {
+			return SkipKindSiblingPart
+		}
+		return j.cousinPart(func() bool { return j.countedCousinSet(t) })
 	}
 	if _, had := metadata.StripRipJunk(t); had {
 		dir := j.fileRowDir()
-		return dir != "" && normTitle(t) == normTitle(filepath.Base(dir)) && j.ripShapePart()
+		if dir != "" && normTitle(t) == normTitle(filepath.Base(dir)) && j.ripShapePart() {
+			return SkipKindSiblingPart
+		}
+		return ""
 	}
 	if _, _, ok := metadata.SiblingPartStem(t); ok {
-		return j.textShapePart(func() int { return j.stemSiblings(t) })
+		if j.textShapePart(func() int { return j.stemSiblings(t) }) {
+			return SkipKindSiblingPart
+		}
+		return j.cousinPart(func() bool { return j.stemCousinSet(t) })
 	}
-	return false
+	return ""
 }
 
-// chapterPartRow decides a row whose title (or, untitled, whose file name)
+// cousinPart returns SkipKindCousinPart when the row's trusted duration is
+// under cousinMaxPartSec and set reports a cousin set, else "". The
+// duration is checked first, so a long or unknown-length row never lists its
+// parent; an unknown duration never counts cousins at all (the probe-found
+// whole-book series -- "Mistborn 1-7", "Discworld 01-41" -- mostly have no
+// trusted duration or run 1 h and more).
+func (j *titleJudge) cousinPart(set func() bool) string {
+	if d := j.rowDurationSec(); d <= 0 || d >= cousinMaxPartSec {
+		return ""
+	}
+	if set() {
+		return SkipKindCousinPart
+	}
+	return ""
+}
+
+// chapterPartKind decides a row whose title (or, untitled, whose file name)
 // is a chapter number or fragment. Beside any sibling in its own folder it
 // is a part whatever its duration (isPartRow). With none, a folder-wrapped
 // row ("Eldest/98/98.mp3") is a part only on matching evidence: its own FILE
 // name is chapter-shaped too (a junk "01" tag on "Dune/Dune.m4b" is not),
 // cousins are counted only when chapter-named ("Eldest/97/97.mp3", never
 // "Hyperion/Hyperion.m4b"), and the duration decides first
-// (durationGatedPart), since one book per folder is also how whole books
-// are shelved.
-func (j *titleJudge) chapterPartRow() bool {
+// (cousinPart: a trusted duration under cousinMaxPartSec), since one book
+// per folder is also how whole books are shelved.
+func (j *titleJudge) chapterPartKind() string {
 	if j.isPartRow() {
-		return true
+		return SkipKindSiblingPart
 	}
 	if !isChapterShaped(j.fileBaseName()) {
-		return false
+		return ""
 	}
-	return j.durationGatedPart(1, j.chapterCousins)
+	return j.cousinPart(func() bool { return j.chapterCousins() >= 1 })
 }
 
 // chapterCousins counts the cousin rows (cousinPaths) whose file names are
@@ -615,15 +705,28 @@ func (j *titleJudge) siblingPaths() []string {
 	return j.siblings
 }
 
+// isCousinParentExcluded reports whether parent may not be listed for
+// cousins: a root or generic folder (isRootDir), a genre shelf
+// (authorname.IsGenreFolder), or a many-works container
+// (cousinParentContainerNames: "Authors", "iTunes Media", ...).
+func (j *titleJudge) isCousinParentExcluded(parent string) bool {
+	if j.isRootDir(parent) {
+		return true
+	}
+	base := filepath.Base(parent)
+	return authorname.IsGenreFolder(base) || cousinParentContainerNames[strings.ToLower(strings.TrimSpace(base))]
+}
+
 // cousinPaths returns, for a folder-wrapped row -- its one file alone in a
 // folder named like the file (isWrappedFile: "Gregory Benford/Great Sky
 // River 18 6/Great Sky River 18 6.mp3") -- one FilePath per OTHER wrapped
 // folder beside its own: parent/<X>/<file> with <X> named like <file>
 // (listWrappedGrandchildren), read at most once. It is empty when the row is
 // not wrapped, when its own folder holds a non-twin sibling (siblingPaths
-// decides then) or could not be read (no evidence), or when the parent is a
-// root (isRootDir: its folders are other books, and listing it would read
-// the whole library). Each cousin FOLDER counts once, so twin rows inside
+// decides then) or could not be read (no evidence), when the parent is
+// excluded (isCousinParentExcluded: its folders are other books, and listing
+// it would read a whole shelf), or when it holds more than
+// cousinParentMaxRows rows. Each cousin FOLDER counts once, so twin rows inside
 // one (3-7 at one path on prod, ".mp3" beside ".m4b") are a single cousin,
 // and nothing under the row's own folder is a cousin. A read fault is
 // logged (rate-limited) and is no evidence, as for siblingPaths.
@@ -640,7 +743,7 @@ func (j *titleJudge) cousinPaths() []string {
 		return nil
 	}
 	parent := filepath.Dir(dir)
-	if parent == dir || j.isRootDir(parent) {
+	if parent == dir || j.isCousinParentExcluded(parent) {
 		return nil
 	}
 	rows, err := j.memo.listWrapped(j.files, parent)
@@ -664,14 +767,50 @@ func (j *titleJudge) cousinPaths() []string {
 	return j.cousins
 }
 
-// setPaths is what a counted or trailing-token title's set is matched
-// against: the row's siblings, or, when it has none, its cousins
-// (cousinPaths). The same-set name checks apply to either.
-func (j *titleJudge) setPaths() []string {
-	if s := j.siblingPaths(); len(s) > 0 {
-		return s
+// countedCousinSet reports whether a counted title's cousins make a set:
+// minChapterSiblings same-set cousins (countedMatches) when the count is at
+// least cousinBigSet ("In The Ocean Of Night 123 of 180"), else cousinBigSet
+// of them (a set of fewer parts, "Dark Age (2 of 3)", never has enough).
+// cousinPart's duration gate comes first either way.
+func (j *titleJudge) countedCousinSet(title string) bool {
+	stem, count, ok := j.countedKey(title)
+	if !ok {
+		return false
 	}
-	return j.cousinPaths()
+	need := minChapterSiblings
+	if m, err := strconv.Atoi(count); err != nil || m < cousinBigSet {
+		need = cousinBigSet
+	}
+	return countedMatches(stem, count, j.cousinPaths()) >= need
+}
+
+// stemCousinSet reports whether a trailing-token title's cousins make a set:
+// minChapterSiblings same-stem cousins (stemMatches) when the token is
+// sub-numbered -- the stem itself ends in a number ("Great Sky River 18 6":
+// stem "Great Sky River 18") -- else cousinBigSet of them ("Stem 3" beside
+// "Stem 1"-"Stem 12"); "Mistborn 1" beside six series books is not a set.
+func (j *titleJudge) stemCousinSet(title string) bool {
+	stem, _, ok := metadata.SiblingPartStem(title)
+	if !ok {
+		return false
+	}
+	need := cousinBigSet
+	if f := strings.Fields(stem); len(f) > 0 && allDigits(f[len(f)-1]) {
+		need = minChapterSiblings
+	}
+	return stemMatches(stem, j.cousinPaths()) >= need
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func presentPaths(files []database.BookFile) []string {
@@ -688,7 +827,7 @@ func presentPaths(files []database.BookFile) []string {
 // is how whole books are shelved too.
 func (j *titleJudge) isPartRow() bool { return len(j.siblingPaths()) > 0 }
 
-// countedSiblings counts the sibling (or cousin; setPaths) rows whose file names are parts of the
+// countedSiblings counts the sibling rows whose file names are parts of the
 // SAME counted set as this row (metadata.CountedPartKey): the same count,
 // and stems that match (sameCountedStem). This row's key comes from its own
 // FILE name, like its siblings', so a tag title that differs from the file
@@ -698,14 +837,27 @@ func (j *titleJudge) isPartRow() bool { return len(j.siblingPaths()) > 0 }
 // when the file name is not counted. "Red Rising (Part 1 of 2)" is not a
 // sibling of "Golden Son (Part 1 of 2)".
 func (j *titleJudge) countedSiblings(title string) int {
-	stem, count, ok := metadata.CountedPartKey(countedFileName(j.fileBaseName()))
+	stem, count, ok := j.countedKey(title)
 	if !ok {
-		if stem, count, ok = metadata.CountedPartKey(title); !ok {
-			return 0
-		}
+		return 0
 	}
+	return countedMatches(stem, count, j.siblingPaths())
+}
+
+// countedKey is this row's counted-set key (metadata.CountedPartKey): from
+// its own file name, else from title.
+func (j *titleJudge) countedKey(title string) (stem, count string, ok bool) {
+	if stem, count, ok = metadata.CountedPartKey(countedFileName(j.fileBaseName())); ok {
+		return stem, count, true
+	}
+	return metadata.CountedPartKey(title)
+}
+
+// countedMatches counts the paths whose file names are parts of the counted
+// set (stem, count).
+func countedMatches(stem, count string, paths []string) int {
 	n := 0
-	for _, p := range j.setPaths() {
+	for _, p := range paths {
 		s, c, ok := metadata.CountedPartKey(countedFileName(strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))))
 		if ok && c == count && sameCountedStem(s, stem) {
 			n++
@@ -760,7 +912,7 @@ var siblingPartTailRe = regexp.MustCompile(`^[\s_]+(?:\d{1,4}(?:[-_.]\d{1,4})*|\
 // leadingTrackRe is a track-number prefix on a file name ("01 - ", "003. ").
 var leadingTrackRe = regexp.MustCompile(`^\d{1,4}\s*[-.]?\s+`)
 
-// stemSiblings counts the sibling (or cousin; setPaths) rows whose file names, less extension and
+// stemSiblings counts the sibling rows whose file names, less extension and
 // any track prefix, are title's stem (metadata.SiblingPartStem) and a part
 // token (siblingPartTailRe). The token may be the same as ours: every
 // sibling of "The Sunrise Lands 1" is "NN The Sunrise Lands 1.mp3". "Henry
@@ -771,9 +923,15 @@ func (j *titleJudge) stemSiblings(title string) int {
 	if !ok {
 		return 0
 	}
+	return stemMatches(stem, j.siblingPaths())
+}
+
+// stemMatches counts the paths whose file names, less extension and any
+// track prefix, are stem and a part token (siblingPartTailRe).
+func stemMatches(stem string, paths []string) int {
 	want := normTitle(stem)
 	n := 0
-	for _, p := range j.setPaths() {
+	for _, p := range paths {
 		base := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
 		base = normTitle(leadingTrackRe.ReplaceAllString(strings.TrimSpace(base), ""))
 		if rest, ok := strings.CutPrefix(base, want); ok && siblingPartTailRe.MatchString(rest) {

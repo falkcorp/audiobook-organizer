@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
 // last-edited: 2026-10-01
 //
@@ -54,6 +54,13 @@ const SkipDetailNoUsableTitle = SkipReasonNoUsableTitle +
 // by names the whole work, and a whole-book candidate attached to one file's
 // row would stamp the book's metadata onto a chapter.
 const SkipKindSiblingPart = "one file of several book rows in its folder"
+
+// SkipKindCousinPart names why a book with a title was not searched: it is
+// one short file of a set filed one file per folder, each folder named like
+// its file ("Great Sky River 18 6/Great Sky River 18 6.mp3" beside "Great Sky
+// River 18 5/..."), found through those sibling folders (titleJudge
+// cousinPart) rather than rows in its own folder.
+const SkipKindCousinPart = "one file of a set filed one-per-folder beside its sibling folders"
 
 // CandidateSearchQuery is the title a metadata search asks providers for a
 // book and where it came from. Usable is false when the book has no title
@@ -117,9 +124,11 @@ type CandidateSearchQuery struct {
 // ("Eldest/98.mp3" beside 01-97 searched "Eldest"); the owner ruled on
 // 2026-09-30 that it is skipped too. A file alone in a folder named for it
 // ("Great Sky River 18 6/Great Sky River 18 6.mp3") finds its set in the
-// like-named folders beside its own (titleJudge.cousinPaths), under the same
-// same-set and duration checks. Only a lone row -- no other row in its
-// folder and no such cousins -- keeps the stand-ins. A row that holds the whole work (two or more
+// like-named folders beside its own (titleJudge.cousinPaths), and is refused
+// with SkipKindCousinPart -- but only when its trusted duration is under 30
+// min and the cousins carry a set signal a shelf of whole books lacks
+// (titleJudge.cousinPart). Only a lone row -- no other row in its folder and
+// no such cousin set -- keeps the stand-ins. A row that holds the whole work (two or more
 // present files, or one file running at least the chapter-consolidation
 // threshold) is never a part row, so "Cobra 001 of 151" on a merged book
 // still falls back to its folder.
@@ -143,8 +152,8 @@ func ResolveCandidateSearchQueryMemo(files SearchQueryReader, book *database.Boo
 		return CandidateSearchQuery{}
 	}
 	j := &titleJudge{files: files, book: book, bookID: book.ID, bookPath: book.FilePath, memo: memo}
-	if j.partRowRefused(book.Title) {
-		return CandidateSearchQuery{SkipKind: SkipKindSiblingPart}
+	if kind := j.partRowRefused(book.Title); kind != "" {
+		return CandidateSearchQuery{SkipKind: kind}
 	}
 	if t, ok := j.ownTitle(book.Title); ok {
 		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceTitle, Usable: true}
