@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_merged_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9b41e7c3-2d58-4a06-bf19-6e35c0d7a284
-// last-edited: 2026-09-26
+// last-edited: 2026-10-01
 
 package maintenance
 
@@ -402,5 +402,43 @@ func TestDurationBackfill_NormalModeMeasuresCountedRowsOnly(t *testing.T) {
 	}
 	if len(changed) != 2 || changed[0] != "02" || changed[1] != "03x" {
 		t.Errorf("changed rows = %v, want [02 03x] (never a _copy1 twin)", changed)
+	}
+}
+
+// TestDurationBackfill_ZeroRowsScopeIsExactlyWhatABSLists pins zero-rows
+// mode's "only books ABS lists" scope to database.ABSLibraryFilter (visibility
+// audit 2026-10-01 §3 #2). The hand-written copy it replaced required an
+// EXPLICIT primary flag and ignored quarantine: an organized nil-flag book that
+// ABS lists with duration 0 was never repaired by the op whose only job is
+// fixing that, and a quarantined book ABS hides was.
+func TestDurationBackfill_ZeroRowsScopeIsExactlyWhatABSLists(t *testing.T) {
+	cases := []struct {
+		name      string
+		primary   *bool
+		quarantin bool
+		want      int
+	}{
+		{"nil flag is primary, ABS lists it", nil, false, 1},
+		{"explicit true", new(true), false, 1},
+		{"quarantined is hidden from ABS", new(true), true, 0},
+		{"explicit false is hidden from ABS", new(false), false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var segWrites, bookWrites int
+			segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0}}
+			store := bookWithSegs(t, segs, &segWrites, &bookWrites)
+			state := "organized"
+			book := database.Book{ID: "b1", Title: "B", FilePath: "/lib/B", Duration: new(3000),
+				IsPrimaryVersion: tc.primary, LibraryState: &state, DurationVerifiedAt: new(time.Now())}
+			if tc.quarantin {
+				book.QuarantinedAt = new(time.Now())
+			}
+			store.GetAllBooksFullFromFunc = pageBooksFullFrom([]database.Book{book})
+			runZeroRows(t, store)
+			if segWrites != tc.want {
+				t.Errorf("segment writes = %d, want %d", segWrites, tc.want)
+			}
+		})
 	}
 }
