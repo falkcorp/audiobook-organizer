@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-09-30
 
@@ -275,12 +275,14 @@ func siblingRows(dir, self string, names ...string) map[string]string {
 	return rows
 }
 
+func ip(n int) *int { return &n }
+
 // A row that is one file of a set the scanner filed as separate book rows
 // must be SKIPPED, not searched -- by its own title, its folder or a
 // transcription: each names the whole work, and a whole-book candidate on a
 // chapter row stamps the book onto the chapter (65 rows on 2026-09-30).
 // Every measured title shape is here, in a work folder named for the book
-// with stand-ins on offer, so a fallback that undoes the refusal fails.
+// with every stand-in on offer, so a fallback that undoes the refusal fails.
 func TestResolveCandidateSearchQuery_SiblingPartRowsAreSkipped(t *testing.T) {
 	const lib = "/library/Authors"
 	cases := []struct {
@@ -292,34 +294,34 @@ func TestResolveCandidateSearchQuery_SiblingPartRowsAreSkipped(t *testing.T) {
 	}{
 		{"N of M", lib + "/Joe Abercrombie/Before They Are Hanged", "Before They Are Hanged 002 of 341.mp3",
 			"Before They Are Hanged 002 of 341", []string{"Before They Are Hanged 001 of 341.mp3", "Before They Are Hanged 003 of 341.mp3"}},
-		{"N of M again", lib + "/Timothy Zahn/Cobra", "Cobra 100 of 151.mp3", "Cobra 100 of 151", []string{"Cobra 101 of 151.mp3"}},
-		{"cut-off N of", lib + "/Brandon Sanderson/Elantris", "Elantris 084 of.mp3", "Elantris 084 of", []string{"Elantris 085 of.mp3"}},
-		{"copy suffix", lib + "/Brandon Sanderson/Elantris", "Elantris_copy179.mp3", "Elantris_copy179", []string{"Elantris_copy178.mp3"}},
+		{"N of M again", lib + "/Timothy Zahn/Cobra", "Cobra 100 of 151.mp3", "Cobra 100 of 151", []string{"Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3"}},
+		{"cut-off N of", lib + "/Brandon Sanderson/Elantris", "Elantris 084 of.mp3", "Elantris 084 of", []string{"Elantris 083 of.mp3", "Elantris 085 of.mp3"}},
+		{"copy suffix (one sibling is enough)", lib + "/Brandon Sanderson/Elantris", "Elantris_copy179.mp3", "Elantris_copy179", []string{"Elantris_copy178.mp3"}},
 		{"Part N of M inside a subtitle", lib + "/S M Stirling/The Tears of the Sun", "Part 02 of 63.mp3",
-			"The Tears of the Sun A Novel of the Change Part 02 of 63", []string{"Part 01 of 63.mp3"}},
+			"The Tears of the Sun A Novel of the Change Part 02 of 63", []string{"Part 01 of 63.mp3", "Part 03 of 63.mp3"}},
 		{"trailing number with stem siblings", lib + "/S M Stirling/The Sunrise Lands", "The Sunrise Lands 1.mp3",
 			"The Sunrise Lands 1", []string{"The Sunrise Lands 2.mp3", "The Sunrise Lands 3.mp3"}},
-		{"trailing number, siblings carry a track prefix", lib + "/S M Stirling/The Sunrise Lands", "001 - The Sunrise Lands 1.mp3",
-			"The Sunrise Lands 1", []string{"002 - The Sunrise Lands 1-02.mp3"}},
+		{"trailing number, every sibling carries the SAME token behind a track prefix", lib + "/S M Stirling/The Sunrise Lands", "001 The Sunrise Lands 1.mp3",
+			"The Sunrise Lands 1", []string{"002 The Sunrise Lands 1.mp3", "003 The Sunrise Lands 1.mp3", "004 The Sunrise Lands 1.mp3"}},
 		{"trailing capital letter", lib + "/Anne Bishop/Sealed to the Flame", "Sealed to the Flame E.mp3",
 			"Sealed to the Flame E", []string{"Sealed to the Flame A.mp3", "Sealed to the Flame D.mp3"}},
 		{"trailing capital letter again", lib + "/Robert Jordan/A Promise to Lews Therin", "A Promise to Lews Therin C.mp3",
-			"A Promise to Lews Therin C", []string{"A Promise to Lews Therin B.mp3"}},
+			"A Promise to Lews Therin C", []string{"A Promise to Lews Therin A.mp3", "A Promise to Lews Therin B.mp3"}},
 		{"rip-detail folder name on a chapter row", lib + "/Neil Gaiman/2002 - Neil Gaiman - American Gods [64k 20;57;42 577MB]", "05.mp3",
 			"2002 - Neil Gaiman - American Gods [64k 20;57;42 577MB]", []string{"04.mp3", "06.mp3"}},
 		{"rip-detail folder as the stand-in for a number title", lib + "/Neil Gaiman/2002 - Neil Gaiman - American Gods [64k 20;57;42 577MB]", "05.mp3",
 			"05", []string{"04.mp3", "06.mp3"}},
+		// Owner, 2026-09-30: a plain-number chapter row beside its chapter
+		// siblings is skipped too; it used to borrow "Eldest".
+		{"chapter fragment beside chapter siblings", "/library/Paolini/Eldest", "06.mp3", "06 Chapter 6", []string{"05.mp3", "07.mp3"}},
+		{"bare number beside one chapter sibling", "/library/Paolini/Eldest", "98.mp3", "98", []string{"97.mp3"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			path := tc.dir + "/" + tc.self
-			book := database.Book{ID: "self", Title: tc.title, FilePath: path}
-			// Every stand-in is on offer: the transcription and the folder
-			// name each name the whole work.
-			book.TranscribedTitle = strp("Whole Work Title")
-			file := database.BookFile{FilePath: path, TranscribedTitle: strp("Whole Work Title")}
-			files := fakeBookFiles{files: []database.BookFile{file},
-				dir: siblingRows(tc.dir, tc.self, tc.sibs...)}
+			book := database.Book{ID: "self", Title: tc.title, FilePath: path, TranscribedTitle: strp("Whole Work Title")}
+			file := database.BookFile{FilePath: path, Duration: 300, TranscribedTitle: strp("Whole Work Title")}
+			files := fakeBookFiles{files: []database.BookFile{file}, dir: siblingRows(tc.dir, tc.self, tc.sibs...)}
 			q := ResolveCandidateSearchQuery(files, &book)
 			if q.Usable {
 				t.Fatalf("got usable %+v, want a skip", q)
@@ -332,79 +334,132 @@ func TestResolveCandidateSearchQuery_SiblingPartRowsAreSkipped(t *testing.T) {
 }
 
 // The shapes alone are not evidence: a whole book whose title ends in a
-// number or letter, filed beside its author's other books, is searched; a
-// counted-part title on a row holding the whole work falls back to its
-// folder; rip details on a lone row are cleaned off.
+// number or letter, or carries "N of M", is searched; twins at one path are
+// not siblings; a long file is never a chapter; a lone chapter row keeps its
+// stand-ins; rip details on a book are cleaned off.
 func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *testing.T) {
 	const author = "/library/Authors/Various"
 	others := []string{"Dune.m4b", "Neuromancer.m4b", "Hyperion.m4b"}
+	const long = 11 * 3600
 	cases := []struct {
-		name     string
-		book     database.Book
-		files    []database.BookFile
-		dir      map[string]string
-		want     string
-		wantSrc  string
-		maxLists int
+		name    string
+		book    database.Book
+		files   []database.BookFile
+		dir     map[string]string
+		dirErr  bool
+		roots   []string
+		want    string
+		wantSrc string
+		noList  bool
 	}{
 		{name: "Plan B beside unrelated books", book: database.Book{ID: "self", Title: "Plan B", FilePath: author + "/Plan B.m4b"},
-			dir: siblingRows(author, "Plan B.m4b", others...), want: "Plan B", wantSrc: SearchQuerySourceTitle, maxLists: 1},
+			dir: siblingRows(author, "Plan B.m4b", others...), want: "Plan B", wantSrc: SearchQuerySourceTitle},
 		{name: "Apollo 13 beside unrelated books", book: database.Book{ID: "self", Title: "Apollo 13", FilePath: author + "/Apollo 13.m4b"},
-			dir: siblingRows(author, "Apollo 13.m4b", others...), want: "Apollo 13", wantSrc: SearchQuerySourceTitle, maxLists: 1},
+			dir: siblingRows(author, "Apollo 13.m4b", others...), want: "Apollo 13", wantSrc: SearchQuerySourceTitle},
 		{name: "Vitamin C beside unrelated books", book: database.Book{ID: "self", Title: "Vitamin C", FilePath: author + "/Vitamin C.m4b"},
-			dir: siblingRows(author, "Vitamin C.m4b", others...), want: "Vitamin C", wantSrc: SearchQuerySourceTitle, maxLists: 1},
-		{name: "Metro 2034 beside Metro 2033 (a year-like number never splits)", book: database.Book{ID: "self", Title: "Metro 2034", FilePath: author + "/Metro 2034.m4b"},
+			dir: siblingRows(author, "Vitamin C.m4b", others...), want: "Vitamin C", wantSrc: SearchQuerySourceTitle},
+		{name: "Metro 2034 beside Metro 2033", book: database.Book{ID: "self", Title: "Metro 2034", FilePath: author + "/Metro 2034.m4b"},
 			dir: siblingRows(author, "Metro 2034.m4b", "Metro 2033.m4b"), want: "Metro 2034", wantSrc: SearchQuerySourceTitle},
-		{name: "Plan B alone, sibling listing fails", book: database.Book{ID: "self", Title: "Plan B", FilePath: author + "/Plan B.m4b"},
-			want: "Plan B", wantSrc: SearchQuerySourceTitle},
-		{name: "counted part on a row holding the whole work uses its folder",
-			book: database.Book{ID: "self", Title: "Cobra 001 of 151", FilePath: "/library/Authors/Timothy Zahn/Cobra"},
-			files: []database.BookFile{{TrackNumber: 1, FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 001 of 151.mp3"},
-				{TrackNumber: 2, FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 002 of 151.mp3"}},
-			want: "Cobra", wantSrc: SearchQuerySourceFolderTitle, maxLists: 0},
-		{name: "counted part alone in its folder uses the transcription",
-			book: database.Book{ID: "self", Title: "Cobra 001 of 151", FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 001 of 151.mp3", TranscribedTitle: strp("Cobra")},
-			dir:  siblingRows("/library/Authors/Timothy Zahn/Cobra", "Cobra 001 of 151.mp3"),
-			want: "Cobra", wantSrc: SearchQuerySourceTranscribedTitle},
-		{name: "rip details on a lone row are cleaned",
-			book: database.Book{ID: "self", Title: "2002 - Neil Gaiman - American Gods [64k 20;57;42 577MB]", FilePath: author + "/American Gods.m4b"},
-			dir:  siblingRows(author, "American Gods.m4b"),
-			want: "2002 - Neil Gaiman - American Gods", wantSrc: SearchQuerySourceTitle},
-		{name: "rip-detail folder of a whole multi-file book is cleaned",
-			book: database.Book{ID: "self", Title: "", FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB]"},
-			files: []database.BookFile{{TrackNumber: 1, FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB]/01.mp3"},
-				{TrackNumber: 2, FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB]/02.mp3"}},
-			want: "American Gods", wantSrc: SearchQuerySourceFolderTitle},
-		{name: "rip details on a book beside its author's other books are cleaned",
-			book: database.Book{ID: "self", Title: "American Gods [64k 577MB]", FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB].m4b"},
-			dir:  siblingRows("/library/Authors/Neil Gaiman", "American Gods [64k 577MB].m4b", "Coraline.m4b"),
-			want: "American Gods", wantSrc: SearchQuerySourceTitle},
+		{name: "Plan B, sibling listing fails", book: database.Book{ID: "self", Title: "Plan B", FilePath: author + "/Plan B.m4b"},
+			dirErr: true, want: "Plan B", wantSrc: SearchQuerySourceTitle},
 		{name: "Henry V beside Henry IV, Part 1", book: database.Book{ID: "self", Title: "Henry V", FilePath: "/library/Authors/Shakespeare/Henry V.m4b"},
-			dir: siblingRows("/library/Authors/Shakespeare", "Henry V.m4b", "Henry IV, Part 1.m4b"), want: "Henry V", wantSrc: SearchQuerySourceTitle},
+			dir: siblingRows("/library/Authors/Shakespeare", "Henry V.m4b", "Henry IV, Part 1.m4b", "Henry IV, Part 2.m4b"), want: "Henry V", wantSrc: SearchQuerySourceTitle},
 		{name: "Malcolm X beside Malcolm X Speaks", book: database.Book{ID: "self", Title: "Malcolm X", FilePath: "/library/Authors/Malcolm X/Malcolm X.m4b"},
 			dir: siblingRows("/library/Authors/Malcolm X", "Malcolm X.m4b", "Malcolm X Speaks.m4b"), want: "Malcolm X", wantSrc: SearchQuerySourceTitle},
 		{name: "World War I beside World War II", book: database.Book{ID: "self", Title: "World War I", FilePath: "/library/Authors/History/World War I.m4b"},
 			dir: siblingRows("/library/Authors/History", "World War I.m4b", "World War II.m4b"), want: "World War I", wantSrc: SearchQuerySourceTitle},
+		// B2: a flat folder of whole series books is too few on count, and
+		// a longer one is saved by its durations.
+		{name: "Mistborn 1 beside Mistborn 2 (too few)", book: database.Book{ID: "self", Title: "Mistborn 1", FilePath: author + "/Mistborn 1.m4b"},
+			dir: siblingRows(author, "Mistborn 1.m4b", "Mistborn 2.m4b"), want: "Mistborn 1", wantSrc: SearchQuerySourceTitle},
+		{name: "Mistborn 1 of a long flat set (whole-book duration)", book: database.Book{ID: "self", Title: "Mistborn 1", FilePath: author + "/Mistborn 1.m4b", Duration: ip(long)},
+			dir: siblingRows(author, "Mistborn 1.m4b", "Mistborn 2.m4b", "Mistborn 3.m4b"), want: "Mistborn 1", wantSrc: SearchQuerySourceTitle, noList: true},
+		// B2: twin rows at one path, and a same-stem file differing only by
+		// extension, are not siblings.
+		{name: "Fahrenheit 451 twins at one path", book: database.Book{ID: "self", Title: "Fahrenheit 451 [64k 577MB]", FilePath: "/library/Authors/Ray Bradbury/Fahrenheit 451 [64k 577MB]/f.m4b"},
+			dir: map[string]string{"self": "/library/Authors/Ray Bradbury/Fahrenheit 451 [64k 577MB]/f.m4b",
+				"twin1": "/library/Authors/Ray Bradbury/Fahrenheit 451 [64k 577MB]/f.m4b", "twin2": "/library/Authors/Ray Bradbury/Fahrenheit 451 [64k 577MB]/f.mp3"},
+			want: "Fahrenheit 451", wantSrc: SearchQuerySourceTitle},
+		// B1: dramatized products split in a few parts are whole books.
+		{name: "Golden Son (Part 1 of 2) beside its other part", book: database.Book{ID: "self", Title: "Golden Son (Part 1 of 2)", FilePath: "/library/Authors/Pierce Brown/Golden Son (Part 1 of 2).m4b"},
+			dir:  siblingRows("/library/Authors/Pierce Brown", "Golden Son (Part 1 of 2).m4b", "Golden Son (Part 2 of 2).m4b"),
+			want: "Golden Son (Part 1 of 2)", wantSrc: SearchQuerySourceTitle},
+		{name: "Dark Age (2 of 3) beside its parts, whole-part duration", book: database.Book{ID: "self", Title: "Dark Age (2 of 3)", FilePath: "/library/Authors/Pierce Brown/Dark Age (2 of 3).m4b"},
+			files: []database.BookFile{{FilePath: "/library/Authors/Pierce Brown/Dark Age (2 of 3).m4b", Duration: long}},
+			dir:   siblingRows("/library/Authors/Pierce Brown", "Dark Age (2 of 3).m4b", "Dark Age (1 of 3).m4b", "Dark Age (3 of 3).m4b"),
+			want:  "Dark Age (2 of 3)", wantSrc: SearchQuerySourceTitle, noList: true},
+		{name: "Shadow's Edge (1 of 2) [Dramatized Adaptation]", book: database.Book{ID: "self", Title: "Shadow's Edge (1 of 2) [Dramatized Adaptation]", FilePath: "/library/Authors/Brent Weeks/Shadow's Edge (1 of 2).m4b"},
+			dir:  siblingRows("/library/Authors/Brent Weeks", "Shadow's Edge (1 of 2).m4b", "Shadow's Edge (2 of 2).m4b"),
+			want: "Shadow's Edge (1 of 2) [Dramatized Adaptation]", wantSrc: SearchQuerySourceTitle},
+		{name: "Dune (1 of 2) alone", book: database.Book{ID: "self", Title: "Dune (1 of 2)", FilePath: author + "/Dune (1 of 2).m4b"},
+			dir: siblingRows(author, "Dune (1 of 2).m4b"), want: "Dune (1 of 2)", wantSrc: SearchQuerySourceTitle},
+		{name: "Wheel of Time #3 of 14 beside unrelated books", book: database.Book{ID: "self", Title: "Wheel of Time #3 of 14", FilePath: author + "/Wheel of Time 3.m4b"},
+			dir: siblingRows(author, "Wheel of Time 3.m4b", others...), want: "Wheel of Time #3 of 14", wantSrc: SearchQuerySourceTitle},
+		{name: "Mistborn Series 1 of 3 with a whole-book duration", book: database.Book{ID: "self", Title: "Mistborn Series 1 of 3", FilePath: author + "/Mistborn Series 1 of 3.m4b", Duration: ip(long)},
+			dir: siblingRows(author, "Mistborn Series 1 of 3.m4b", "Mistborn Series 2 of 3.m4b", "Mistborn Series 3 of 3.m4b"), want: "Mistborn Series 1 of 3", wantSrc: SearchQuerySourceTitle, noList: true},
+		// W2: a row filed directly under a configured root never lists it.
+		{name: "row directly under an import root", book: database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/incoming/Cobra 100 of 151.mp3"},
+			dir: siblingRows("/imports/incoming", "Cobra 100 of 151.mp3", "a.mp3", "b.mp3"), roots: []string{"/imports/incoming"},
+			want: "Cobra 100 of 151", wantSrc: SearchQuerySourceTitle, noList: true},
+		// A lone chapter row keeps its stand-ins (owner, 2026-09-30).
+		{name: "lone chapter row uses its folder", book: database.Book{ID: "self", Title: "06 Chapter 6", FilePath: "/library/Paolini/Eldest/06.mp3"},
+			dir: siblingRows("/library/Paolini/Eldest", "06.mp3"), want: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
+		{name: "counted part on a row holding the whole work",
+			book: database.Book{ID: "self", Title: "Cobra 001 of 151", FilePath: "/library/Authors/Timothy Zahn/Cobra"},
+			files: []database.BookFile{{TrackNumber: 1, FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 001 of 151.mp3"},
+				{TrackNumber: 2, FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 002 of 151.mp3"}},
+			want: "Cobra 001 of 151", wantSrc: SearchQuerySourceTitle, noList: true},
+		{name: "rip details on a lone row are cleaned",
+			book: database.Book{ID: "self", Title: "2002 - Neil Gaiman - American Gods [64k 20;57;42 577MB]", FilePath: author + "/American Gods.m4b"},
+			dir:  siblingRows(author, "American Gods.m4b"),
+			want: "2002 - Neil Gaiman - American Gods", wantSrc: SearchQuerySourceTitle},
+		{name: "rip details on a book beside its author's other books are cleaned",
+			book: database.Book{ID: "self", Title: "American Gods [64k 577MB]", FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB].m4b"},
+			dir:  siblingRows("/library/Authors/Neil Gaiman", "American Gods [64k 577MB].m4b", "Coraline.m4b"),
+			want: "American Gods", wantSrc: SearchQuerySourceTitle},
+		{name: "rip-detail folder of a whole multi-file book is cleaned",
+			book: database.Book{ID: "self", Title: "", FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB]"},
+			files: []database.BookFile{{TrackNumber: 1, FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB]/01.mp3"},
+				{TrackNumber: 2, FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB]/02.mp3"}},
+			want: "American Gods", wantSrc: SearchQuerySourceFolderTitle, noList: true},
 		{name: "a real title never lists the folder", book: database.Book{ID: "self", Title: "Dune Messiah", FilePath: author + "/Dune Messiah.m4b"},
-			dir: siblingRows(author, "Dune Messiah.m4b", others...), want: "Dune Messiah", wantSrc: SearchQuerySourceTitle, maxLists: 0},
+			dir: siblingRows(author, "Dune Messiah.m4b", others...), want: "Dune Messiah", wantSrc: SearchQuerySourceTitle, noList: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			f := fakeBookFiles{files: tc.files, dir: tc.dir, dirCalls: &calls}
-			if tc.dir == nil {
+			if tc.dirErr {
 				f.dirErr = errors.New("boom")
 			}
-			q := ResolveCandidateSearchQuery(f, &tc.book)
+			q := ResolveCandidateSearchQueryMemo(f, &tc.book, NewFolderMemo(tc.roots...))
 			if !q.Usable || q.Title != tc.want || q.Source != tc.wantSrc {
 				t.Fatalf("got %+v, want %q from %s", q, tc.want, tc.wantSrc)
 			}
-			if tc.maxLists >= 0 && calls > max(tc.maxLists, 1) {
-				t.Fatalf("listed the folder %d times, want at most %d", calls, max(tc.maxLists, 1))
+			if calls > 1 {
+				t.Fatalf("listed the folder %d times, want at most once", calls)
 			}
-			if tc.name == "a real title never lists the folder" && calls != 0 {
-				t.Fatalf("a real title listed the folder %d times", calls)
+			if tc.noList && calls != 0 {
+				t.Fatalf("listed the folder %d times, want none", calls)
 			}
 		})
+	}
+}
+
+// One memo lists each folder once across every row of a pass.
+func TestFolderMemo_ListsEachFolderOnce(t *testing.T) {
+	const dir = "/library/Paolini/Eldest"
+	calls := 0
+	rows := siblingRows(dir, "01.mp3", "02.mp3", "03.mp3")
+	memo := NewFolderMemo()
+	for _, name := range []string{"01.mp3", "02.mp3", "03.mp3"} {
+		book := database.Book{ID: name, Title: strings.TrimSuffix(name, ".mp3"), FilePath: dir + "/" + name}
+		f := fakeBookFiles{dir: rows, dirCalls: &calls}
+		if q := ResolveCandidateSearchQueryMemo(f, &book, memo); q.Usable {
+			t.Fatalf("%s: got usable %+v, want a skip", name, q)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("listed %d times across the pass, want 1", calls)
 	}
 }

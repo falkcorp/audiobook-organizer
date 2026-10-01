@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
 // last-edited: 2026-09-30
 
@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -120,6 +121,9 @@ func loadCacheRows(ctx context.Context, store cacheRowBookReader, svc cacheRowCa
 		set.rows = append(set.rows, loadedCacheRow{sum: sum, book: book})
 	}
 
+	// One folder memo for the pass: a chapter set's rows share one folder
+	// listing instead of one each, and roots are never listed.
+	memo := staleFolderMemo(store)
 	var cg errgroup.Group
 	cg.SetLimit(reviewListConcurrency)
 	for i := range set.rows {
@@ -133,7 +137,7 @@ func loadCacheRows(ctx context.Context, store cacheRowBookReader, svc cacheRowCa
 			// files (and at most its authors) only for a title that needs
 			// corroborating or a fallback, which is why it runs here in the
 			// pool rather than in the serial pass that applies cacheRowStale.
-			set.rows[i].searchable = metabatch.ResolveCandidateSearchQuery(store, set.rows[i].book).Usable
+			set.rows[i].searchable = metabatch.ResolveCandidateSearchQueryMemo(store, set.rows[i].book, memo).Usable
 			return nil // a per-entry failure skips that row, never the whole batch
 		})
 	}
@@ -207,4 +211,21 @@ func StaleCachedBookIDs(ctx context.Context, store StaleCacheBookReader, svc Sta
 		}
 	}
 	return ids, nil
+}
+
+// staleFolderMemo builds the pass's folder memo: the library root, plus the
+// import paths when the store can list them (the production store can; a
+// narrow test double need not).
+func staleFolderMemo(store any) *metabatch.FolderMemo {
+	roots := []string{config.AppConfig.RootDir}
+	if ips, ok := store.(interface {
+		GetAllImportPaths() ([]database.ImportPath, error)
+	}); ok {
+		if paths, err := ips.GetAllImportPaths(); err == nil {
+			for _, p := range paths {
+				roots = append(roots, p.Path)
+			}
+		}
+	}
+	return metabatch.NewFolderMemo(roots...)
 }

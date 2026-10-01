@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-09-27
+// last-edited: 2026-09-30
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -227,6 +227,8 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 
 	// Rate limiter: 10 requests per second globally across all workers.
 	limiter := rate.NewLimiter(rate.Limit(10), 1)
+	// One folder memo per run, shared by every worker (resolver folder reads).
+	folderMemo := s.newFolderMemo()
 
 	workCh := make(chan string, len(p.BookIDs))
 	for _, id := range p.BookIDs {
@@ -262,7 +264,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 				if ctx.Err() != nil {
 					return
 				}
-				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force)
+				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force, folderMemo)
 				resultJSON, err := json.Marshal(result)
 				if err != nil {
 					// No result row, so the book stays owed (not marked done)

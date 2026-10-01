@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8966af00-704c-4a19-99e8-b832e27d9f7c
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 
 package server
 
@@ -159,7 +159,7 @@ func TestResolveBulkFetchQuery_IdentityFollowsStandIn(t *testing.T) {
 	}
 	store, _, _ := newFastpathMockStore(books, nil)
 
-	q := resolveBulkFetchQuery(store, "b-trans", "Unknown Title", "", "Unknown Author", "", nil)
+	q := resolveBulkFetchQuery(store, "b-trans", "Unknown Title", "", "Unknown Author", "", nil, nil)
 	if !q.query.Usable || q.query.Title != "Planet Hulk" {
 		t.Fatalf("query = %+v, want Planet Hulk", q.query)
 	}
@@ -167,7 +167,7 @@ func TestResolveBulkFetchQuery_IdentityFollowsStandIn(t *testing.T) {
 		t.Errorf("identity = %q, want the stand-in's %q", q.identity, want)
 	}
 
-	q = resolveBulkFetchQuery(store, "b-real", "Eldest", "", "Christopher Paolini", "pre-loop-identity", nil)
+	q = resolveBulkFetchQuery(store, "b-real", "Eldest", "", "Christopher Paolini", "pre-loop-identity", nil, nil)
 	if q.query.Title != "Eldest" || q.identity != "pre-loop-identity" {
 		t.Errorf("real title: %+v identity %q, want unchanged", q.query, q.identity)
 	}

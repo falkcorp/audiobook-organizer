@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_title.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: c962e504-746a-454a-996f-1020803a8cab
 // last-edited: 2026-09-30
 
@@ -42,15 +42,17 @@ func IsChapterOnlyTitle(title string) bool {
 // placeholders ("Unknown Title", "read by narrator";
 // authorname.IsPlaceholderTitle), a bare chapter position ("Chapter 3", "03";
 // IsChapterOnlyTitle), a chapter fragment of a shattered book ("06 Chapter
-// 6", "Cobra 100 of 151", "Elantris_copy179"; IsLikelyChapterFragment), or a
-// labelled position in digits ("Book 1",
+// 6", "Elantris_copy179"; IsLikelyChapterFragment), or a labelled position
+// in digits ("Book 1",
 // "Vol. 2", "Episode 3"). A catalog answers any of these with whatever it
 // ranks first.
 //
 // A title ending in a bare part token ("The Sunrise Lands 1", "Sealed to the
-// Flame E"; SiblingPartStem) is NOT matched here either: "Apollo 13" and
-// "Plan B" are books, and only the book's sibling rows can tell the two
-// apart (metabatch's titleJudge).
+// Flame E"; SiblingPartStem), a counted part ("Cobra 100 of 151";
+// IsCountedPartTitle) and rip details (StripRipJunk) are NOT matched here
+// either: "Apollo 13", "Plan B" and "Golden Son (Part 1 of 2)" are books, and
+// only the book's folder and duration can tell (NeedsFolderEvidence,
+// metabatch's titleJudge).
 //
 // A heading in words or roman numerals ("Book Two", "Part II") and the name
 // of front or back matter ("Prologue", "Introduction") are NOT matched here:
@@ -67,13 +69,25 @@ func IsUnsearchableTitle(title string) bool {
 		IsLikelyChapterFragment(title) || sectionDigitTitleRe.MatchString(normHeading(title))
 }
 
-// MayBeUnsearchableTitle is IsUnsearchableTitle, IsSectionHeadingTitle, a
-// bare trailing part token (SiblingPartStem: "The Sunrise Lands 1") or rip
-// details (StripRipJunk: "American Gods [64k 577MB]"): a title a caller
-// without the book's files and folder hands to one that has them
+// MayBeUnsearchableTitle is IsUnsearchableTitle or IsSectionHeadingTitle: a
+// title a caller without the book's files hands to one that has them
 // (metabatch.ResolveCandidateSearchQuery) rather than searching it as-is.
+//
+// The folder-evidence shapes (NeedsFolderEvidence) are deliberately NOT
+// here: "Apollo 13" and "Henry V" are almost always searched by their own
+// title, so a bulk fetch still probes skip_cached for them with that title's
+// identity and only its worker asks the resolver.
 func MayBeUnsearchableTitle(title string) bool {
-	if IsUnsearchableTitle(title) || IsSectionHeadingTitle(title) {
+	return IsUnsearchableTitle(title) || IsSectionHeadingTitle(title)
+}
+
+// NeedsFolderEvidence reports whether title has a shape whose verdict
+// depends on the book's folder and duration: a counted part
+// (IsCountedPartTitle), a bare trailing part token (SiblingPartStem) or rip
+// details (StripRipJunk). A caller that would search the title as-is hands
+// such a title to metabatch.ResolveCandidateSearchQuery first.
+func NeedsFolderEvidence(title string) bool {
+	if IsCountedPartTitle(title) {
 		return true
 	}
 	if _, _, ok := SiblingPartStem(title); ok {
