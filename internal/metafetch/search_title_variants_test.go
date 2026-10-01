@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
 // last-edited: 2026-10-01
 
@@ -163,8 +163,9 @@ func TestKeepAnchored(t *testing.T) {
 	if got := keepAnchored(results, one, ""); len(got) != 0 {
 		t.Fatalf("a one-word anchor with nobody to vouch must keep nothing, kept %v", got)
 	}
-	// The narrator vouches too: tags often swap the two.
-	if got := keepAnchored(results, one, "R.C. Bray Bern Dean"); len(got) != 1 {
+	// The narrator vouches too: tags often swap the two. The people string
+	// is "; "-joined, as the search builds it (service_search.go).
+	if got := keepAnchored(results, one, "R.C. Bray; Bern Dean"); len(got) != 1 {
 		t.Fatalf("narrator vouching kept %v", got)
 	}
 

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-01
 
@@ -93,6 +93,16 @@ func (d fakeDeps) FileProvenanceStore() database.FileProvenanceStore {
 }
 func (d fakeDeps) MetadataCacheStore() database.MetadataCacheStore {
 	return d.store
+}
+
+// CachedMetadataCandidates reads the raw row: the version filter is
+// metafetch's, tested there (TestLegacyCandidatesAreFiltered), and the fake
+// has no metafetch service.
+func (d fakeDeps) CachedMetadataCandidates(bookID string) (*database.MetadataCandidateCache, error) {
+	if d.store == nil {
+		return nil, nil
+	}
+	return d.store.GetMetadataCache(bookID)
 }
 
 // OperationQueueStore hands back the store unchanged: ListActiveOperationsV2 is

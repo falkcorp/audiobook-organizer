@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-01
 //
@@ -52,10 +52,13 @@ var nowUTC = func() time.Time { return time.Now().UTC() }
 // freshness flag (entry.IsFresh()). Returns (nil, false, nil) for
 // cache-miss. Errors are real I/O failures.
 //
-// A row the version "1" ladder wrote comes back with its candidates filtered
-// by this version's position rules (filterLegacyCandidates): the apply paths
-// read candidates here, and a sibling the old ladder pooled must not be
-// applyable. The stored row is not rewritten, and nothing is refetched.
+// A row an earlier search version wrote comes back with its candidates
+// filtered by this version's position rules (filterLegacyCandidates): the
+// apply paths read candidates here, and a sibling the old ladder pooled must
+// not be applyable. The stored row is not rewritten, and nothing is
+// refetched. Only such a row costs more than the cache read: a row this
+// version wrote is recognized by its stamp (isCurrentFingerprint) and
+// returned as stored, with no book read.
 func (mfs *Service) GetCachedCandidates(bookID string) (*MetadataCandidateCache, bool, error) {
 	if mfs == nil || mfs.db == nil {
 		return nil, false, nil
@@ -67,7 +70,7 @@ func (mfs *Service) GetCachedCandidates(bookID string) (*MetadataCandidateCache,
 	if entry == nil {
 		return nil, false, nil
 	}
-	if entry.SearchFingerprint != "" && len(entry.Candidates) > 0 {
+	if len(entry.Candidates) > 0 && !isCurrentFingerprint(entry.SearchFingerprint) {
 		book, berr := mfs.db.GetBookByID(bookID)
 		if berr != nil {
 			return nil, false, berr
@@ -88,14 +91,22 @@ func (mfs *Service) GetCachedCandidates(bookID string) (*MetadataCandidateCache,
 }
 
 // filterLegacyCandidates returns entry with its candidates filtered by this
-// version's position rules when the version "1" ladder wrote it for these
-// inputs (fingerprintLegacy), else entry itself. The criteria are the ones a
-// search for the same inputs builds now (newStrongCriteria), so a legacy
-// sibling ("Rogue Ascension 7" pooled for book 8) is dropped exactly as a
-// fresh search would drop it. A copy is returned; the stored row is untouched.
+// version's position rules when an earlier search version wrote it (its
+// stamp is not isCurrentFingerprint: a version "1" fingerprint, or none),
+// else entry itself. The criteria are the ones a search for query builds now
+// (newStrongCriteria), so a legacy sibling ("Rogue Ascension 7" pooled for
+// book 8) is dropped exactly as a fresh search would drop it. A copy is
+// returned; the stored row is untouched.
+//
+// The gate is the stamp, not a fingerprint match, on purpose: a row a
+// user-typed query wrote carries the legacy fingerprint of THAT query, which
+// the book's title never reproduces, so a match-based gate let it through
+// unfiltered. Such a row is filtered by the book's own title, the identity
+// the apply paths write to. If the typed query named another position on
+// purpose (a mislabeled book), its candidate is held back until the user
+// searches again under this version, whose row is not re-filtered.
 func (mfs *Service) filterLegacyCandidates(entry *MetadataCandidateCache, book *database.Book, query, author string) *MetadataCandidateCache {
-	if entry == nil || len(entry.Candidates) == 0 ||
-		mfs.matchSearchFingerprint(entry.SearchFingerprint, book, query, author, "") != fingerprintLegacy {
+	if entry == nil || len(entry.Candidates) == 0 || isCurrentFingerprint(entry.SearchFingerprint) {
 		return entry
 	}
 	in := mfs.resolveSearchInputs(book, query, author, "")
@@ -465,12 +476,15 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 			if prev, perr := mfs.db.GetMetadataCache(bookID); perr == nil && prev != nil && prev.SourceHash == sourceHash {
 				if len(prev.Candidates) > 0 {
 					carried := prev.Candidates
-					// Version "1" ladder candidates answered ITS questions,
-					// unfiltered by this version's position rules: a sibling it
-					// pooled is dropped here (strongCriteria.filterCarried), with
-					// the same criteria this search used.
+					// Candidates an earlier search version cached answered ITS
+					// questions, unfiltered by this version's position rules: a
+					// sibling it pooled is dropped here (strongCriteria.
+					// filterCarried), with the same criteria this search used.
+					// Any row not stamped by this version is filtered, not only
+					// one whose legacy fingerprint matches (filterLegacyCandidates
+					// says why).
 					legacy := resp.LegacyFingerprint != "" && prev.SearchFingerprint == resp.LegacyFingerprint
-					if legacy && resp.carryFilter != nil {
+					if !isCurrentFingerprint(prev.SearchFingerprint) && resp.carryFilter != nil {
 						carried = resp.carryFilter(carried)
 					}
 					if len(carried) > 0 {

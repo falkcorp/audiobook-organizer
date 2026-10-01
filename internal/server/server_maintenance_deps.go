@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.46.0
+// version: 1.47.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-01
 
@@ -670,6 +670,17 @@ func (s *Server) DedupTriageExactPending(ctx context.Context, apply bool) (*main
 		"dismissed", dismissedCount,
 		"dismiss_errors", dismissErrs)
 	return report, nil
+}
+
+// CachedMetadataCandidates implements maintenance.ServerDeps: the cached
+// candidate row through metafetch's GetCachedCandidates, so candidates an
+// earlier search version cached are filtered by the current position rules.
+func (s *Server) CachedMetadataCandidates(bookID string) (*database.MetadataCandidateCache, error) {
+	if s.metadataFetchService == nil {
+		return nil, nil
+	}
+	entry, _, err := s.metadataFetchService.GetCachedCandidates(bookID)
+	return entry, err
 }
 
 // SearchTranscriptionCandidate implements maintenance.ServerDeps.
