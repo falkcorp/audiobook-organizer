@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-01
 
@@ -100,6 +100,12 @@ func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Write
 	}
 	// 2. external ids
 	for _, e := range exts {
+		if e.Tombstoned {
+			// A tombstoned mapping records an id taken off this book (an
+			// iTunes track removed, a mismatch undone): it stays on the
+			// retired book rather than land on the survivor.
+			continue
+		}
 		if err := w.Step(id, undo.ChangeTypeExternalIDReassign, "external_id:"+e.Source+"/"+e.ExternalID, id, target, func() error {
 			return store.ReassignExternalID(e.Source, e.ExternalID, target)
 		}); err != nil {

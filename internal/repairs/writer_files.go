@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 package repairs
 
@@ -55,6 +55,9 @@ type ChangeJournal interface {
 // delete method on purpose.
 type BookFileWriter interface {
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	// GetBookFileByPath names the row holding a path's single-owner key:
+	// RepointBookFile records it so the revert can hand the key back.
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
 	RecomputeBookAggregates(bookID string) error
@@ -207,7 +210,10 @@ func (w *Writer) Journaled() int { return int(w.journaled.Load()) }
 // change). Nothing on disk moves. Journaled first as
 // undo.ChangeTypeBookFileRepoint with the row's whole location before and
 // after, so the revert restores path, Missing, hash and size exactly; the
-// write is then a compare-and-set against the location journaled.
+// write is then a compare-and-set against the location journaled. The
+// journaled after-location also names the row that held to.Path's
+// single-owner path key (KeyOwnerBook/KeyOwnerRow), read before the write:
+// the revert hands the key back to that row and no other.
 func (w *Writer) RepointBookFile(bookID, fileID string, expect, to undo.BookFileLocation) error {
 	if w.files == nil {
 		return errors.New("repairs: writer has no book_file store")
@@ -222,6 +228,14 @@ func (w *Writer) RepointBookFile(bookID, fileID string, expect, to undo.BookFile
 	was := undo.LocationOf(cur)
 	if !undo.SameFileLocation(was, expect) {
 		return fmt.Errorf("%w: book_file %s is at %q, not %q", ErrChangedSincePlan, fileID, was.Path, expect.Path)
+	}
+	to.KeyOwnerBook, to.KeyOwnerRow = "", ""
+	owner, err := w.files.GetBookFileByPath(to.Path)
+	if err != nil {
+		return fmt.Errorf("read the row at %s: %w", to.Path, err)
+	}
+	if owner != nil && owner.ID != fileID {
+		to.KeyOwnerBook, to.KeyOwnerRow = owner.BookID, owner.ID
 	}
 	return w.Step(bookID, undo.ChangeTypeBookFileRepoint, "book_file:"+fileID, was.Encode(), to.Encode(), func() error {
 		written, err := w.files.ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
