@@ -1,5 +1,5 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
 // last-edited: 2026-10-01
 //
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"golang.org/x/sync/singleflight"
 )
 
 var partRowLog = logger.New("metabatch.part-rows")
@@ -67,11 +68,16 @@ const (
 // FolderMemo shares folder listings across the rows of one pass. Each
 // folder is read once per kind of listing: its direct children (list), and,
 // as the parent of folder-wrapped rows, the wrapped rows two levels down
-// (listWrapped). A read error is remembered too, so one failing folder is
-// neither re-read nor re-logged per row of the pass. Safe for concurrent use.
+// (listWrapped). Concurrent callers for the same folder and kind share ONE
+// in-flight read (singleflight), so the 16-32 workers of a fetch pass that
+// reach one author folder together list it once, not once each. A read
+// error is remembered too, and logged (warnListFailed) only by the read that
+// hit it, so one failing folder is neither re-read nor re-logged per row of
+// the pass. Safe for concurrent use.
 type FolderMemo struct {
-	mu   sync.Mutex
-	dirs map[memoKey]folderListing
+	mu       sync.Mutex
+	dirs     map[memoKey]folderListing
+	inflight singleflight.Group
 }
 
 // memoKey keys one listing: a folder's direct children, or (wrapped) the
@@ -138,23 +144,53 @@ func (m *FolderMemo) listWrapped(l database.BookDirLister, parent string) (map[s
 	})
 }
 
-// cached returns key's listing, calling read only when the memo has none. A
-// nil memo always reads.
+// cached returns key's listing, calling read only when the memo has none;
+// concurrent misses on one key wait for a single read. The result is stored
+// before the in-flight entry is released, so a caller arriving after the
+// read finished finds it in dirs rather than starting a second read. A
+// failed read is logged here, once per actual read (rate-limited by
+// warnListFailed), never by the callers that share or reuse it. A nil memo
+// always reads (and logs a failure).
 func (m *FolderMemo) cached(key memoKey, read func() (map[string]string, error)) (map[string]string, error) {
-	if m == nil {
-		return read()
+	readLogged := func() (map[string]string, error) {
+		rows, err := read()
+		if err != nil {
+			warnListFailed(key.dir, err)
+		}
+		return rows, err
 	}
-	m.mu.Lock()
-	if e, ok := m.dirs[key]; ok {
-		m.mu.Unlock()
+	if m == nil {
+		return readLogged()
+	}
+	if e, ok := m.lookup(key); ok {
 		return e.rows, e.err
 	}
-	m.mu.Unlock()
-	rows, err := read()
+	flightKey := "d:" + key.dir
+	if key.wrapped {
+		flightKey = "w:" + key.dir
+	}
+	v, _, _ := m.inflight.Do(flightKey, func() (any, error) {
+		// A read that finished between our lookup and Do already stored it.
+		if e, ok := m.lookup(key); ok {
+			return e, nil
+		}
+		rows, err := readLogged()
+		e := folderListing{rows: rows, err: err}
+		m.mu.Lock()
+		m.dirs[key] = e
+		m.mu.Unlock()
+		return e, nil
+	})
+	e := v.(folderListing)
+	return e.rows, e.err
+}
+
+// lookup returns key's stored listing, if any.
+func (m *FolderMemo) lookup(key memoKey) (folderListing, bool) {
 	m.mu.Lock()
-	m.dirs[key] = folderListing{rows: rows, err: err}
-	m.mu.Unlock()
-	return rows, err
+	defer m.mu.Unlock()
+	e, ok := m.dirs[key]
+	return e, ok
 }
 
 // isWrappedFile reports whether the file at p sits in a folder (dir) named
@@ -279,9 +315,12 @@ func isImportRoot(dir string) bool {
 var listWarn struct {
 	last       atomic.Int64
 	suppressed atomic.Int64
+	// failures counts every failed read reported (logged or suppressed).
+	failures atomic.Int64
 }
 
 func warnListFailed(dir string, err error) {
+	listWarn.failures.Add(1)
 	now := time.Now().UnixNano()
 	last := listWarn.last.Load()
 	if now-last < int64(time.Minute) || !listWarn.last.CompareAndSwap(last, now) {
@@ -556,8 +595,7 @@ func (j *titleJudge) siblingPaths() []string {
 	}
 	rows, err := j.memo.list(j.files, dir)
 	if err != nil {
-		j.siblingsFailed = true
-		warnListFailed(dir, err)
+		j.siblingsFailed = true // logged by the memo's read
 		return nil
 	}
 	own := map[string]bool{}
@@ -607,8 +645,7 @@ func (j *titleJudge) cousinPaths() []string {
 	}
 	rows, err := j.memo.listWrapped(j.files, parent)
 	if err != nil {
-		warnListFailed(parent, err)
-		return nil
+		return nil // logged by the memo's read
 	}
 	byFolder := map[string]string{}
 	for id, p := range rows {
