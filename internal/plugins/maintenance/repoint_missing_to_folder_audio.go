@@ -1,11 +1,11 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
-// last-edited: 2026-09-25
+// last-edited: 2026-10-01
 
 // Package maintenance — maintenance.repoint-missing-to-folder-audio.
 //
-// WHY: about 7,000 ABS-visible books (primary + library_state organized) read
+// WHY: about 7,000 ABS-visible books (database.ABSLibraryFilter) read
 // duration 0 because their active book_file rows point at audio that is no
 // longer on disk. The usual shape is a chapter-split book whose chapters were
 // later consolidated into one file in the same folder:
@@ -683,6 +683,11 @@ func rfScopedBooks(store rfStore, only []string) (rfScope, error) {
 		want[id] = true
 	}
 	s := rfScope{live: map[string]bool{}}
+	// The scope is exactly what ABS lists: the shared filter, not a hand-
+	// written copy of it. The copy this replaced required an EXPLICIT primary
+	// flag and ignored quarantine, so it skipped organized books with a nil
+	// flag (which ABS lists) and repaired quarantined ones (which ABS hides).
+	absLists := database.ABSLibraryFilter()
 	for offset := 0; ; offset += bookPageSize {
 		page, err := store.GetAllBooksCore(bookPageSize, offset)
 		if err != nil {
@@ -690,10 +695,9 @@ func rfScopedBooks(store rfStore, only []string) (rfScope, error) {
 		}
 		for i := range page {
 			b := page[i]
-			live := b.MarkedForDeletion == nil || !*b.MarkedForDeletion
+			live := !b.IsSoftDeleted()
 			s.live[b.ID] = live
-			if !live || b.IsPrimaryVersion == nil || !*b.IsPrimaryVersion ||
-				b.LibraryState == nil || *b.LibraryState != "organized" {
+			if !live || !absLists.MatchesCore(&b) {
 				continue
 			}
 			if len(want) > 0 && !want[b.ID] {
