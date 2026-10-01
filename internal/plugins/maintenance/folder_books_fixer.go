@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-10-01
 
@@ -189,6 +189,14 @@ const (
 	// of the orphans: that file was resolved once, and the scanner and the
 	// iTunes importer both refuse to bring it back. Never re-created here.
 	fbSkipResolved = "skipped_previously_resolved"
+	// fbSkipOnlyPresentCopy: a file the row would leave to another holder
+	// (a proper book, or a smaller folder-book's row) has a present copy only
+	// on the row's own folder-books: every other live row at the path says
+	// Missing. Retiring would leave the file on disk with no live book that
+	// knows it is there, and the scanner ignores a path soft-deleted books
+	// hold. The row waits until a live holder's row is present (the smaller
+	// folder-book's apply creates one).
+	fbSkipOnlyPresentCopy = "skipped_only_present_copy"
 )
 
 // Per-row caps (fbSkipTooLarge).
@@ -310,6 +318,40 @@ func fbGroupKey(p, root string) (key, label, dir string) {
 	return "stem:" + d + "|" + fbNorm(st), st, ""
 }
 
+// fbCreatedPath is the file_path of the book a group becomes: the work's own
+// folder (Dir) for a folder group; for a stem group or a disc group directly
+// under root, the files' common folder when that is below root (one disc
+// folder), else the first file's path, as a single-file book's. Never root:
+// every stem and disc group of a row shares root, so several created books
+// would share one file_path, and the single-owner book:path key
+// (GetBookByFilePath) names only the last one written.
+//
+// The iTunes importer (internal/itunes/service/importer.go, the album
+// group's bookFilePath) uses commonParentDir for a multi-track album, which
+// for these groups is root. It does not re-find a created book by path: it
+// matches by path (LiveBookIDsAtPath, GetBookByFilePath) and by track PID
+// (bookIDsByTrackPIDs), and the PIDs stay on the retired folder-book's rows,
+// so a re-import names the soft-deleted folder-book and skips with "restore
+// or purge" rather than making a second book.
+func fbCreatedPath(g fbGroup, root string) string {
+	if g.Dir != "" {
+		return g.Dir
+	}
+	if len(g.Files) == 0 {
+		return ""
+	}
+	if len(g.Files) > 1 {
+		paths := make([]string, len(g.Files))
+		for i, nf := range g.Files {
+			paths[i] = nf.Path
+		}
+		if d := commonDir(paths); d != root && pathutil.IsWithin(d, root) {
+			return d
+		}
+	}
+	return g.Files[0].Path
+}
+
 // commonDir is the deepest folder containing every path.
 func commonDir(paths []string) string {
 	if len(paths) == 0 {
@@ -344,12 +386,17 @@ type fbLib struct {
 	titlesAny map[string][]string
 	// dead maps a path to the soft-deleted books holding it.
 	dead map[string][]string
+	// byPath maps a live book's file_path to the book, rows or none: a book
+	// at a group's folder is that work's book even when it holds no row
+	// there (the book_file-gap shape).
+	byPath map[string][]string
 }
 
 func newFBLib() *fbLib {
 	return &fbLib{books: map[string]database.BookCore{}, files: map[string][]database.BookFileCore{},
 		holders: map[string][]string{}, sets: map[string]map[string]bool{}, byVG: map[string][]string{},
-		authors: map[int]string{}, authorNorm: map[string]bool{}, dead: map[string][]string{}}
+		authors: map[int]string{}, authorNorm: map[string]bool{}, dead: map[string][]string{},
+		byPath: map[string][]string{}}
 }
 
 // add registers one live book and its rows. A book's file_path makes it a
@@ -373,6 +420,9 @@ func (lib *fbLib) add(b database.BookCore, rows []database.BookFileCore) {
 		return
 	}
 	lib.books[b.ID] = b
+	if b.FilePath != "" {
+		lib.byPath[b.FilePath] = append(lib.byPath[b.FilePath], b.ID)
+	}
 	set := map[string]bool{}
 	for _, r := range rows {
 		if r.FilePath == "" {
@@ -418,6 +468,7 @@ func (lib *fbLib) drop(ids map[string]bool) {
 	strip(lib.holders)
 	strip(lib.dead)
 	strip(lib.byVG)
+	strip(lib.byPath)
 	for id := range ids {
 		delete(lib.books, id)
 		delete(lib.files, id)
@@ -893,10 +944,11 @@ type fbNewFile struct {
 	Track                 int
 }
 
-// fbGroup is one orphan work.
+// fbGroup is one orphan work. Path is the created book's file_path
+// (fbCreatedPath).
 type fbGroup struct {
-	Key, Title, Dir string
-	AuthorID        *int
+	Key, Title, Dir, Path string
+	AuthorID              *int
 	Files           []fbNewFile
 	Secs            int
 }
@@ -1096,7 +1148,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	row.Current = map[string]string{"tier": lead.Tier, "root": lead.Root, "files": strconv.Itoa(len(set)),
 		"works": strconv.Itoa(lead.Works), "hours": fmt.Sprintf("%.1f", lead.Hours)}
 
-	// The row's present copy of each path (any member's non-missing row).
+	// The row's copy of each path: a member's row, a present one first.
 	src := map[string]database.BookFileCore{}
 	for _, m := range members {
 		for _, r := range lib.files[m] {
@@ -1105,13 +1157,27 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			}
 		}
 	}
+	// presentAt is a non-member live holder's present row at p: a row there
+	// not marked Missing, or a book with no rows holding p by file_path
+	// (zero-row single-file book, whose presence no row records).
+	presentAt := func(h, p string) (database.BookFileCore, bool) {
+		if len(lib.files[h]) == 0 {
+			return database.BookFileCore{BookID: h, FilePath: p}, lib.sets[h][p]
+		}
+		for _, r := range lib.files[h] {
+			if r.FilePath == p && !r.Missing {
+				return r, true
+			}
+		}
+		return database.BookFileCore{}, false
+	}
 	paths := make([]string, 0, len(set))
 	for p := range set {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
 	var held, byFolder, missingOrphans int
-	var resolved []string
+	var resolved, onlyOurs []string
 	type orphan struct {
 		row           database.BookFileCore
 		key, lbl, dir string
@@ -1136,8 +1202,44 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 				cls = "folder"
 			}
 		}
-		if cls == "orphan" && src[p].Missing {
+		// Missing is per row, so one copy's flag decides nothing. A path is
+		// missing only when EVERY live row at it says so; while another live
+		// holder (a larger folder-book) has a present row, that row is the
+		// copy a new book takes. A path left to another holder (held, folder)
+		// needs a present copy on a holder that outlives this row: a proper
+		// book, a deep-tier one, or the smaller folder-book that owns the
+		// path (it keeps it, or builds the new book from a present row).
+		// Otherwise retiring this row strands the file (fbSkipOnlyPresentCopy):
+		// the scanner ignores a path only soft-deleted books hold.
+		var other database.BookFileCore
+		anyPresent, keeperPresent := false, false
+		for _, h := range lib.holders[p] {
+			if isMember[h] {
+				continue
+			}
+			r, ok := presentAt(h, p)
+			if !ok {
+				continue
+			}
+			anyPresent = true
+			if other.ID == "" && r.ID != "" {
+				other = r
+			}
+			he, flagged := ev[h]
+			if !flagged || !fbApplicableTier(he.Tier) || ownsBefore(len(lib.sets[h]), h, len(set), members[0]) {
+				keeperPresent = true
+			}
+		}
+		allMissing := src[p].Missing && !anyPresent
+		if cls == "orphan" && allMissing {
 			cls = "missing"
+		}
+		if cls == "orphan" && src[p].Missing && other.ID != "" {
+			src[p] = other
+		}
+		if (cls == "held" || cls == "folder") && !keeperPresent && !allMissing {
+			onlyOurs = append(onlyOurs, p)
+			fp = append(fp, "p:"+p)
 		}
 		if cls == "orphan" {
 			for _, h := range lib.dead[p] {
@@ -1216,6 +1318,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			}
 			return g.Files[a].Path < g.Files[b].Path
 		})
+		g.Path = fbCreatedPath(*g, lead.Root)
 		name := fmt.Sprintf("%q (%d file(s))", g.Title, len(g.Files))
 		if keyHeld[g.Key] {
 			split = append(split, name)
@@ -1236,10 +1339,16 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			}
 		}
 		if carried == nil && lib.titles != nil {
-			// An authorless book matches its title under any author.
-			same := lib.titles[fbTitleKey(g.Title, g.AuthorID)]
+			// An authorless group matches its title under any author; an
+			// authored one its own author's and an authorless book's (the
+			// match is symmetric). A live book at the group's folder or at
+			// the created file_path is the work's book whatever its title.
+			var same []string
 			if g.AuthorID == nil {
 				same = lib.titlesAny[fbNorm(g.Title)]
+			} else {
+				same = append(append(same, lib.titles[fbTitleKey(g.Title, g.AuthorID)]...),
+					lib.titles[fbTitleKey(g.Title, nil)]...)
 			}
 			for _, id := range same {
 				if !isMember[id] {
@@ -1247,8 +1356,19 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 					break
 				}
 			}
+			for _, at := range []string{g.Dir, g.Path} {
+				if at == "" {
+					continue
+				}
+				for _, id := range lib.byPath[at] {
+					if !isMember[id] {
+						dup = append(dup, fmt.Sprintf("%q: book %s already sits at %s", g.Title, id, at))
+						break
+					}
+				}
+			}
 		}
-		fp = append(fp, fmt.Sprintf("g:%s|%s|%s|%d", g.Key, g.Title, g.Dir, len(g.Files)))
+		fp = append(fp, fmt.Sprintf("g:%s|%s|%s|%s|%d", g.Key, g.Title, g.Dir, g.Path, len(g.Files)))
 		if a := g.AuthorID; a != nil {
 			fp = append(fp, "a:"+strconv.Itoa(*a))
 		}
@@ -1299,6 +1419,11 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		row.Skipped = fbSkipTooLarge
 		row.SkipReason = fmt.Sprintf("%d new book(s) over %d files exceeds the per-row cap (%d books, %d files)",
 			len(plan.Groups), len(set), fbMaxNewBooks, fbMaxRowFiles)
+	case len(onlyOurs) > 0:
+		row.Skipped = fbSkipOnlyPresentCopy
+		row.SkipReason = fmt.Sprintf("%d file(s) another live book holds have a present copy only on this row's "+
+			"folder-books (every other live row there says Missing); retiring would strand them: %s",
+			len(onlyOurs), strings.Join(fbFirst(onlyOurs, 5), "; "))
 	case len(resolved) > 0:
 		row.Skipped = fbSkipResolved
 		row.SkipReason = fmt.Sprintf("%d orphan file(s) are held by a soft-deleted book (merged away, deleted, or "+
@@ -1668,16 +1793,40 @@ func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []
 }
 
 // dupNow re-checks, under the merge lock, that no live book other than the
-// row's own (members, ours) already has group g's title: by author when the
-// group has one, by title alone when it has none. Two rows of one apply
-// creating "Dune" meet here, and so does a book created after the plan.
+// row's own (members, ours) already is group g's work: a live book at the
+// group's folder or at the created file_path (LiveBookIDsAtPath), or one with
+// its title (fbNorm equality) whose author is the group's or none, or any
+// author when the group has none, matched symmetrically with the plan's
+// lib.titles check. Two rows of one apply creating "Dune" meet here, and so
+// does a book created after the plan. The title search is
+// SearchBooksFiltered with the default filter, which drops soft-deleted books
+// inside the scan, so hidden rows never count toward a page; every page is
+// read.
 func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string, g fbGroup) (string, error) {
+	skip := func(id string) bool { return id == ours || contains(members, id) }
+	for _, at := range []string{g.Dir, g.Path} {
+		if at == "" {
+			continue
+		}
+		ids, err := store.LiveBookIDsAtPath(at)
+		if err != nil {
+			return "", fmt.Errorf("live books at %s: %w", at, err)
+		}
+		for _, id := range ids {
+			if !skip(id) {
+				return fmt.Sprintf("%q: book %s already sits at %s", g.Title, id, at), nil
+			}
+		}
+	}
 	want := fbNorm(g.Title)
-	check := func(id, title string, deleted bool) string {
-		if deleted || id == ours || contains(members, id) || fbNorm(title) != want {
+	check := func(b database.Book) string {
+		if b.IsSoftDeleted() || skip(b.ID) || fbNorm(b.Title) != want {
 			return ""
 		}
-		return fmt.Sprintf("%q is already book %s", g.Title, id)
+		if g.AuthorID != nil && b.AuthorID != nil && *b.AuthorID != *g.AuthorID {
+			return ""
+		}
+		return fmt.Sprintf("%q is already book %s", g.Title, b.ID)
 	}
 	if g.AuthorID != nil {
 		books, err := store.GetBooksByAuthorIDWithRoleCore(*g.AuthorID)
@@ -1685,28 +1834,34 @@ func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string,
 			return "", fmt.Errorf("books of author %d: %w", *g.AuthorID, err)
 		}
 		for i := range books {
-			if why := check(books[i].ID, books[i].Title, books[i].IsSoftDeleted()); why != "" {
+			b := books[i]
+			if b.IsSoftDeleted() || skip(b.ID) || fbNorm(b.Title) != want {
+				continue
+			}
+			return fmt.Sprintf("%q is already book %s", g.Title, b.ID), nil
+		}
+	}
+	search, ok := store.(interface {
+		SearchBooksFiltered(query string, limit, offset int, f database.BookSummaryFilter) ([]database.Book, error)
+	})
+	if !ok {
+		return "", errors.New("this store cannot search titles: cannot rule out a same-title book")
+	}
+	const page = 200
+	for off := 0; ; off += page {
+		books, err := search.SearchBooksFiltered(g.Title, page, off, database.BookSummaryFilter{})
+		if err != nil {
+			return "", fmt.Errorf("search %q: %w", g.Title, err)
+		}
+		for i := range books {
+			if why := check(books[i]); why != "" {
 				return why, nil
 			}
 		}
-		return "", nil
-	}
-	search, ok := store.(interface {
-		SearchBooks(query string, limit, offset int) ([]database.Book, error)
-	})
-	if !ok {
-		return "", errors.New("this store cannot search titles: cannot rule out a duplicate of an authorless book")
-	}
-	books, err := search.SearchBooks(g.Title, 200, 0)
-	if err != nil {
-		return "", fmt.Errorf("search %q: %w", g.Title, err)
-	}
-	for i := range books {
-		if why := check(books[i].ID, books[i].Title, books[i].IsSoftDeleted()); why != "" {
-			return why, nil
+		if len(books) < page {
+			return "", nil
 		}
 	}
-	return "", nil
 }
 
 // applyGroup creates (or, on a resumed apply, finishes) one orphan group's
@@ -1720,15 +1875,9 @@ func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string,
 func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *fbPlan, rowID string, g fbGroup) (int, error) {
 	steps := 0
 	target := fbCreatedID(rowID, plan.Members[0], g.Key)
-	// file_path as the iTunes importer sets it (importer.go, the album
-	// group's book): the tracks' common folder, or the one file.
-	path := g.Files[0].Path
-	if len(g.Files) > 1 {
-		paths := make([]string, len(g.Files))
-		for i, nf := range g.Files {
-			paths[i] = nf.Path
-		}
-		path = commonDir(paths)
+	path := g.Path // fbCreatedPath
+	if path == "" {
+		return steps, fmt.Errorf("%s: group %q carries no file_path", fbFixerID, g.Title)
 	}
 	val := undo.RepairBookCreateValue{ID: target, Title: g.Title, AuthorID: g.AuthorID, FilePath: path}.String()
 	cur, err := store.GetBookByID(target)
@@ -1800,6 +1949,17 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 			return steps, fmt.Errorf("create row for %s on %s: %w", nf.Path, target, err)
 		}
 		steps++
+		// The single-owner book_file_path key now names the hidden book's
+		// row (last writer wins), and GetBookFileByPath readers do not skip
+		// soft-deleted books. Hand it back to the live source row until the
+		// un-hide below claims it, so it never names a hidden row while a
+		// live one exists. (Teaching readers to skip hidden rows instead
+		// would make the single-owner read answer "no row" for a path a live
+		// book holds, the false-free answer the multi-valued reads exist to
+		// prevent.)
+		if err := store.UpdateBookFile(src.ID, src); err != nil {
+			return steps, fmt.Errorf("re-index %s on its source row %s: %w", nf.Path, src.ID, err)
+		}
 		if fbCrashHook != nil {
 			if err := fbCrashHook("row", n+1); err != nil {
 				return steps, err
@@ -1820,7 +1980,19 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 	}); err != nil && !errors.Is(err, database.ErrSkipBookWrite) {
 		return steps, fmt.Errorf("un-hide %s: %w", target, err)
 	}
-	return steps + 1, nil
+	steps++
+	// Now live, the created book's rows take the path keys (idempotent on a
+	// resumed apply). The folder-books that held them retire next.
+	rows, err := store.GetBookFiles(target)
+	if err != nil {
+		return steps, fmt.Errorf("rows of %s: %w", target, err)
+	}
+	for i := range rows {
+		if err := store.UpdateBookFile(rows[i].ID, &rows[i]); err != nil {
+			return steps, fmt.Errorf("index %s on %s: %w", rows[i].FilePath, target, err)
+		}
+	}
+	return steps, nil
 }
 
 // retire hides one folder-book: a primary one not already handed off is
