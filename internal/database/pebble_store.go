@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.182.0
+// version: 1.183.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-27
+// last-edited: 2026-10-01
 
 package database
 
@@ -2565,10 +2565,15 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 
 	p.InvalidateLibraryStats()
 	p.MarkAllQuickQueriesDirty("create_book")
-	p.libGen.Bump()
 
 	// memdb write-through (always on when initialized)
 	p.UpsertBookToMemDB(context.Background(), book)
+	// Bumped AFTER the memdb write-through: a reader that sees the new
+	// generation must also see this write in memdb, or it caches the old
+	// row under the new generation (stale until the next write). Every
+	// generation consumer reads the generation before its data, so none
+	// needs a bump ahead of the write-through.
+	p.libGen.Bump()
 	// After the memdb write, so a client reacting to the event reads the row.
 	notifyBookChanged(BookChangeCreated, book.ID)
 
@@ -2926,10 +2931,16 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 	// merge elects a different winner. Those demoted rows must leave the cached
 	// library list, so this path bumps even though it only marks TARGETED quick
 	// queries dirty (i.e. hooking MarkAllQuickQueriesDirty would have missed it).
-	p.libGen.Bump()
+	// The bump follows the memdb write-through below.
 
 	// memdb write-through
 	p.UpsertBookToMemDB(context.Background(), book)
+	// Bumped AFTER the memdb write-through: a reader that sees the new
+	// generation must also see this write in memdb, or it caches the old
+	// row under the new generation (stale until the next write). Every
+	// generation consumer reads the generation before its data, so none
+	// needs a bump ahead of the write-through.
+	p.libGen.Bump()
 	notifyBookChanged(BookChangeUpdated, id)
 
 	return book, nil
@@ -3487,10 +3498,15 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	}
 	p.InvalidateLibraryStats()
 	p.MarkAllQuickQueriesDirty("delete_book")
-	p.libGen.Bump()
 
 	// memdb write-through
 	p.DeleteBookFromMemDB(context.Background(), id)
+	// Bumped AFTER the memdb write-through: a reader that sees the new
+	// generation must also see this write in memdb, or it caches the old
+	// row under the new generation (stale until the next write). Every
+	// generation consumer reads the generation before its data, so none
+	// needs a bump ahead of the write-through.
+	p.libGen.Bump()
 	notifyBookChanged(BookChangeDeleted, id)
 
 	return nil

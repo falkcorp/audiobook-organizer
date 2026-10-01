@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sync.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
-// last-edited: 2026-09-25
+// last-edited: 2026-10-01
 
 package database
 
@@ -92,8 +92,15 @@ func (p *PebbleStore) memSyncWithStore(op string, fn func(txn memTxn, m *MemStor
 	if m == nil {
 		return
 	}
+	if memSyncApplyHook != nil {
+		memSyncApplyHook(op)
+	}
 	applyMemSync(m, op, fn)
 }
+
+// memSyncApplyHook runs just before a live memdb write-through applies.
+// Test-only; nil in production.
+var memSyncApplyHook func(op string)
 
 // applyMemSync runs fn inside a memdb write transaction. Always commits on
 // success; aborts and logs on error. Shared by the live path and by the warmup

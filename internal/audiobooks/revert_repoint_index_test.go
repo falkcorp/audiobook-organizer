@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_repoint_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c2e8a41-7d93-4b6f-9e0a-3f1b6d8c2a74
 // last-edited: 2026-10-01
 
@@ -66,8 +66,8 @@ func (s *repointStub) ModifyBookFile(bookID, fileID string, fn func(*database.Bo
 
 // TestRepointPathIndexAwayFrom_SkipsGoneAndMovedCandidates: a candidate row
 // that vanished or moved off the path is passed over for the next live one;
-// when every candidate fails the revert errors instead of leaving the key on
-// the hidden row in silence.
+// when every candidate vanished or moved, no live book holds the path and
+// the hidden row keeps the key, which is not an error.
 func TestRepointPathIndexAwayFrom_SkipsGoneAndMovedCandidates(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -78,7 +78,7 @@ func TestRepointPathIndexAwayFrom_SkipsGoneAndMovedCandidates(t *testing.T) {
 		{"first ok", nil, []string{"ra"}, false},
 		{"first gone", map[string]string{"ra": "gone"}, []string{"rb"}, false},
 		{"first moved", map[string]string{"ra": "moved"}, []string{"rb"}, false},
-		{"all fail", map[string]string{"ra": "gone", "rb": "moved"}, nil, true},
+		{"all gone or moved", map[string]string{"ra": "gone", "rb": "moved"}, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &repointStub{ledgerStub: &ledgerStub{}, modify: tc.modify}

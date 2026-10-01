@@ -1,5 +1,5 @@
 // file: internal/undo/book_create.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 7f3a9c21-5e8b-4d06-a1c4-2b9e6d0f8a53
 // last-edited: 2026-10-01
 
@@ -41,10 +41,13 @@ type RepairBookCreateValue struct {
 	FilePath string `json:"file_path"`
 }
 
-// String is the row's NewValue.
-func (v RepairBookCreateValue) String() string {
-	b, _ := json.Marshal(v) // a struct of strings and an *int: never fails
-	return string(b)
+// Encode is the row's NewValue.
+func (v RepairBookCreateValue) Encode() (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("encode repair_book_create value for %s: %w", v.ID, err)
+	}
+	return string(b), nil
 }
 
 // ParseRepairBookCreateValue reads a row's NewValue; ok is false for a
