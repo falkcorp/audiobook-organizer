@@ -136,13 +136,6 @@ func rowOf(t *testing.T, res *repairs.PlanResult, id string) repairs.Row {
 	return repairs.Row{}
 }
 
-func noRowOf(t *testing.T, res *repairs.PlanResult, id string) {
-	t.Helper()
-	for _, r := range res.Rows {
-		require.False(t, contains(r.BookIDs, id), "book %s is in row %s", id, r.RowID)
-	}
-}
-
 // dune seeds the main shape: the survivor S {1,2,4,5(Missing),6} and the
 // copy L {1,2,3,5}. L's 5 repoints S's Missing 5, L's 3 folds into the gap.
 func (d *dcFixture) dune(t *testing.T) (s, l string) {
