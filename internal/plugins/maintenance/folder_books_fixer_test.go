@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
 // last-edited: 2026-10-01
 
@@ -652,6 +652,11 @@ func TestFolderBooksFixer_ResumeAfterCrash(t *testing.T) {
 			out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
 			require.Equal(t, 0, out.Applied, "%+v", out.Rows)
 			require.True(t, f.live(t, "fb"), "the cut-off run never reached the retire")
+			byPath, err := f.s.GetBookFileByPath(sw1)
+			require.NoError(t, err)
+			require.NotNil(t, byPath)
+			require.Contains(t, []string{f.ids["fb"], f.ids["fb2"]}, byPath.BookID,
+				"while the created book is hidden the path index names a live row")
 			fbCrashHook = nil
 
 			out = f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
@@ -730,4 +735,177 @@ func TestFolderBooksFixer_DuplicateCreatedAfterPlan(t *testing.T) {
 	out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
 	require.Equal(t, 0, out.Applied, "%+v", out.Rows)
 	require.True(t, f.live(t, "fb"), "nothing was written")
+}
+
+// TestFolderBooksFixer_SubsetRowNeverStrandsAPresentFile: folder-books A
+// (fb, fb2 over Gene Wolfe) and B (over the whole iTunes media folder, a
+// superset) share Sword; A's rows say Missing and B's are present. Missing is
+// per row, so A must not read Sword as missing from its own copy: it builds
+// Sword from B's present row, and B, whose only keeper of Sword (A) holds no
+// present copy, waits instead of retiring first and stranding the file on
+// soft-deleted books.
+func TestFolderBooksFixer_SubsetRowNeverStrandsAPresentFile(t *testing.T) {
+	f := newFragFixture(t)
+	all := f.seedWolfe(t, fbITunes, "citadel")
+	sw1 := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword", "01.mp3"))
+	for _, role := range []string{"fb", "fb2"} {
+		for _, i := range []int{7, 8} {
+			f.fbSetRow(t, role, i, func(r *database.BookFile) { r.Missing = true })
+		}
+	}
+	var ann []string
+	for i := 1; i <= 3; i++ {
+		ann = append(ann, f.file(t, filepath.Join(fbITunes, "Ann", "Work One", fmt.Sprintf("0%d.mp3", i)), 10))
+	}
+	f.fbBook(t, "ann", "Work One", f.path(filepath.Join(fbITunes, "Ann", "Work One")), 3600, ann...)
+	f.fbBook(t, "root", "iTunes Media", f.path(fbITunes), 1200, append(append([]string(nil), all...), ann...)...)
+
+	res := f.fbPlan(t, fbFixerID, "op-plan")
+	a, b := fbFindRow(res, f.ids["fb"]), fbFindRow(res, f.ids["root"])
+	require.NotNil(t, a)
+	require.NotNil(t, b)
+	require.True(t, a.Applicable(), "%s %s", a.Skipped, a.SkipReason)
+	require.Equal(t, "1", a.Proposed["new_books"], "Sword has a present copy on B: not missing")
+	require.Equal(t, "0", a.Proposed["missing_orphans"])
+	require.Equal(t, fbSkipOnlyPresentCopy, b.Skipped, b.SkipReason)
+
+	out := f.fbApply(t, "op-plan", "op-apply", []string{a.RowID, b.RowID})
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	require.False(t, f.live(t, "fb"))
+	require.True(t, f.live(t, "root"), "B waited")
+
+	// Now Sword's keeper is the created book with a present row: B retires.
+	again := f.fbPlan(t, fbFixerID, "op-plan-2")
+	b = fbFindRow(again, f.ids["root"])
+	require.NotNil(t, b)
+	require.True(t, b.Applicable(), "%s %s", b.Skipped, b.SkipReason)
+	out = f.fbApply(t, "op-plan-2", "op-apply-2", []string{b.RowID})
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	require.False(t, f.live(t, "root"))
+
+	owners, err := f.s.BookFilesAtPath(sw1)
+	require.NoError(t, err)
+	livePresent := 0
+	for _, o := range owners {
+		bk, err := f.s.GetBookByID(o.BookID)
+		require.NoError(t, err)
+		if bk != nil && !bk.IsSoftDeleted() && !o.Missing {
+			livePresent++
+		}
+	}
+	require.Equal(t, 1, livePresent, "Sword/01 keeps exactly one live, present holder")
+	byPath, err := f.s.GetBookFileByPath(sw1)
+	require.NoError(t, err)
+	require.NotNil(t, byPath)
+	bk, err := f.s.GetBookByID(byPath.BookID)
+	require.NoError(t, err)
+	require.False(t, bk.IsSoftDeleted(), "the path index names the live holder")
+}
+
+// TestFBCreatedPath: a disc group directly under the root and a stem group
+// never get the root as file_path (every such group of a row would share
+// it); a folder group gets its folder, one disc folder its folder.
+func TestFBCreatedPath(t *testing.T) {
+	root := "/lib/Frank Herbert"
+	group := func(rels ...string) fbGroup {
+		var g fbGroup
+		for i, r := range rels {
+			k, lbl, dir := fbGroupKey(root+"/"+r, root)
+			if i == 0 {
+				g.Key, g.Title, g.Dir = k, lbl, dir
+			}
+			require.Equal(t, g.Key, k, "one work: %v", rels)
+			g.Files = append(g.Files, fbNewFile{Path: root + "/" + r})
+		}
+		return g
+	}
+	cases := []struct {
+		name string
+		g    fbGroup
+		want string
+	}{
+		{"discs under root", group("Dune CD1/01.mp3", "Dune CD2/01.mp3"), root + "/Dune CD1/01.mp3"},
+		{"one disc under root", group("Dune CD1/01.mp3", "Dune CD1/02.mp3"), root + "/Dune CD1"},
+		{"stem", group("Children of Dune - Part 1.mp3", "Children of Dune - Part 2.mp3"),
+			root + "/Children of Dune - Part 1.mp3"},
+		{"single-file stem", group("God Emperor of Dune.m4b"), root + "/God Emperor of Dune.m4b"},
+		{"folder", group("Heretics/01.mp3", "Heretics/Disc 2/01.mp3"), root + "/Heretics"},
+	}
+	seen := map[string]string{}
+	for _, c := range cases {
+		got := fbCreatedPath(c.g, root)
+		require.Equal(t, c.want, got, c.name)
+		require.NotEqual(t, root, got, c.name)
+		require.Empty(t, seen[got], "%s shares %s with %s", c.name, got, seen[got])
+		seen[got] = c.name
+	}
+}
+
+// TestFolderBooksFixer_DuplicateIsSymmetric: an authored group matches a
+// live AUTHORLESS same-title book, and a live book with no rows sitting at
+// the group's folder is that work's book, both at plan and under the merge
+// lock at apply.
+func TestFolderBooksFixer_DuplicateIsSymmetric(t *testing.T) {
+	for _, kind := range []string{"authorless", "at-folder"} {
+		for _, when := range []string{"before-plan", "after-plan"} {
+			t.Run(kind+"/"+when, func(t *testing.T) {
+				f := newFragFixture(t)
+				f.seedWolfe(t, fbITunes, "citadel")
+				swordDir := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword"))
+				add := func() {
+					if kind == "authorless" {
+						f.fbBook(t, "late", "Sword", f.path("Elsewhere/Sword.m4b"), 3600)
+					} else {
+						f.fbBook(t, "late", "Some Other Title", swordDir, 3600)
+					}
+				}
+				if when == "before-plan" {
+					add()
+				}
+				row := f.fbSingleRow(t, "op-plan")
+				if when == "before-plan" {
+					require.Equal(t, fbSkipDupTitle, row.Skipped, row.SkipReason)
+					return
+				}
+				require.True(t, row.Applicable(), "%s %s", row.Skipped, row.SkipReason)
+				add()
+				out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+				require.Equal(t, 0, out.Applied, "%+v", out.Rows)
+				require.True(t, f.live(t, "fb"), "nothing was written")
+			})
+		}
+	}
+}
+
+// TestFolderBooksFixer_RevertReindexesAnAlreadyHiddenBook: a created book
+// already hidden when the revert reaches it (a cut-off revert, an apply cut
+// off before its un-hide) still has the path index handed back to a live
+// row.
+func TestFolderBooksFixer_RevertReindexesAnAlreadyHiddenBook(t *testing.T) {
+	f := newFragFixture(t)
+	f.seedWolfe(t, fbITunes, "citadel")
+	swordDir := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword"))
+	sw1 := filepath.Join(swordDir, "01.mp3")
+	row := f.fbSingleRow(t, "op-plan")
+	out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	created, err := f.s.GetBookByFilePath(swordDir)
+	require.NoError(t, err)
+	require.NotNil(t, created)
+	byPath, err := f.s.GetBookFileByPath(sw1)
+	require.NoError(t, err)
+	require.Equal(t, created.ID, byPath.BookID, "the live created book owns the path key after apply")
+	yes, now := true, time.Now()
+	_, err = f.s.ModifyBook(created.ID, func(b *database.Book) error {
+		b.MarkedForDeletion, b.MarkedForDeletionAt = &yes, &now
+		return nil
+	})
+	require.NoError(t, err)
+	_, err = audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
+	require.NoError(t, err)
+	byPath, err = f.s.GetBookFileByPath(sw1)
+	require.NoError(t, err)
+	require.NotNil(t, byPath)
+	require.Contains(t, []string{f.ids["fb"], f.ids["fb2"]}, byPath.BookID,
+		"the already-hidden created book gave the path key back")
 }

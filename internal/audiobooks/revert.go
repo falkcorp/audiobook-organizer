@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-01
 
@@ -1393,20 +1393,28 @@ func (rs *RevertService) revertJunkAuthorCreate(c *database.OperationChange) err
 // operation made (undo.CheckRepairBookCreate). Its rows stay. The
 // single-owner book_file_path index then still names the hidden book's rows
 // (last writer wins), so each path is handed back to a live book's row there
-// by re-writing that row.
+// by re-writing that row. The re-index runs on every path out, the
+// already-hidden one included (a book hidden by an earlier revert that was
+// cut off before its re-index, or by an apply cut off before its un-hide),
+// and it is idempotent; a store that cannot list a path's rows refuses
+// before anything is written.
 func (rs *RevertService) revertRepairBookCreate(c *database.OperationChange) error {
 	st, ok := rs.db.(undo.RepairBookCreateStore)
 	if !ok {
 		return fmt.Errorf("revert repair_book_create %s: this store cannot check the created book", c.ID)
 	}
-	if err := undo.CheckRepairBookCreate(st, c); err != nil {
-		if errors.Is(err, undo.ErrAlreadyRestored) {
-			return nil
-		}
-		return err
+	atPath, ok := rs.db.(bookFilesAtPathReader)
+	if !ok {
+		return fmt.Errorf("revert repair_book_create %s: this store cannot list a path's rows", c.ID)
 	}
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
+	if err := undo.CheckRepairBookCreate(st, c); err != nil {
+		if errors.Is(err, undo.ErrAlreadyRestored) {
+			return rs.repointPathIndexAwayFrom(atPath, c.BookID)
+		}
+		return err
+	}
 	_, err := rs.db.ModifyBook(c.BookID, func(book *database.Book) error {
 		if book.IsSoftDeleted() {
 			return database.ErrSkipBookWrite
@@ -1420,18 +1428,26 @@ func (rs *RevertService) revertRepairBookCreate(c *database.OperationChange) err
 	if err != nil && !errors.Is(err, database.ErrSkipBookWrite) {
 		return err
 	}
-	return rs.repointPathIndexAwayFrom(c.BookID)
+	return rs.repointPathIndexAwayFrom(atPath, c.BookID)
+}
+
+// bookFilesAtPathReader is the multi-valued path read the re-index needs.
+type bookFilesAtPathReader interface {
+	BookFilesAtPath(path string) ([]database.BookFile, error)
 }
 
 // repointPathIndexAwayFrom re-writes, for each row of the hidden book
 // bookID, a live book's row at the same path, so GetBookFileByPath names the
-// live row again. A path no live book holds keeps the hidden row.
-func (rs *RevertService) repointPathIndexAwayFrom(bookID string) error {
-	atPath, ok := rs.db.(interface {
-		BookFilesAtPath(path string) ([]database.BookFile, error)
-	})
-	if !ok {
-		return fmt.Errorf("hide created book %s: this store cannot list a path's rows", bookID)
+// live row again. A path no live book holds keeps the hidden row. A book
+// still live is left alone (nothing hidden to re-index away from); a book
+// that is gone still has its rows re-indexed away from.
+func (rs *RevertService) repointPathIndexAwayFrom(atPath bookFilesAtPathReader, bookID string) error {
+	hidden, err := rs.db.GetBookByID(bookID)
+	if err != nil {
+		return fmt.Errorf("read hidden book %s: %w", bookID, err)
+	}
+	if hidden != nil && !hidden.IsSoftDeleted() {
+		return nil
 	}
 	rows, err := rs.db.GetBookFiles(bookID)
 	if err != nil {
