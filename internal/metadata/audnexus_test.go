@@ -1,12 +1,13 @@
 // file: internal/metadata/audnexus_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-c5d6e7f8a9b0
-// last-edited: 2026-07-13
+// last-edited: 2026-10-01
 
 package metadata
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -123,6 +124,54 @@ func TestAudnexusClient_LookupByASIN_NotFound(t *testing.T) {
 	_, err := client.LookupByASIN(context.Background(), "BADASIN")
 	if err == nil {
 		t.Error("expected error on 404 response")
+	}
+	if !IsNotFound(err) {
+		t.Errorf("every region 404: IsNotFound(%v) = false, want true", err)
+	}
+}
+
+// A region that FAILED outranks the regions that said "not here": the ASIN
+// may live in the failed one, so the lookup failed rather than found nothing.
+func TestAudnexusClient_LookupByASINInRegions_FailureOutranksNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("region") == "uk" {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := NewAudnexusClientWithBaseURL(server.URL)
+	_, err := client.LookupByASINInRegions(context.Background(), "B000000000", []string{"", "uk", "au"})
+	if err == nil || IsNotFound(err) {
+		t.Fatalf("err = %v, want the uk 502, not a not-found", err)
+	}
+}
+
+func TestIsNotFound(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{&ProviderStatusError{Provider: "x", Status: 404}, true},
+		{&ProviderStatusError{Provider: "x", Status: 410}, true},
+		{fmt.Errorf("ASIN B1: %w", &ProviderStatusError{Provider: "x", Status: 404}), true},
+		{fmt.Errorf("empty product: %w", ErrASINNotFound), true},
+		{&ProviderStatusError{Provider: "x", Status: 500}, false},
+		{&ProviderStatusError{Provider: "x", Status: 429}, false},
+		{context.DeadlineExceeded, false},
+		{nil, false},
+	} {
+		if got := IsNotFound(tc.err); got != tc.want {
+			t.Errorf("IsNotFound(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+		// A not-found never sets a throttle hold (the breaker stays shut).
+		if tc.want {
+			if _, _, ok := ClassifyProviderError(tc.err); ok {
+				t.Errorf("ClassifyProviderError(%v) sets a hold for a not-found", tc.err)
+			}
+		}
 	}
 }
 

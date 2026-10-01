@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.38.0
+// version: 5.39.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-01
 
@@ -395,6 +395,11 @@ type SearchMetadataResponse struct {
 	// InputFingerprint identifies the questions this search asked (see
 	// searchInputs.fingerprint). Internal, stored on the cache entry.
 	InputFingerprint string `json:"-"`
+	// LegacyFingerprint is the fingerprint the searchInputVersion "1" ladder
+	// recorded for the same inputs (searchInputs.legacyFingerprint). Internal:
+	// cacheSearchResponse keeps it on candidates carried over from such a row,
+	// so they are never relabelled as answers to this version's questions.
+	LegacyFingerprint string `json:"-"`
 }
 
 // SearchOptions carries optional per-request flags for SearchMetadataForBook.
