@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 package maintenance
 
@@ -691,4 +691,33 @@ func TestJunkTitleFixer_DottedWeakStemVetoesDisagreeingCandidate(t *testing.T) {
 			require.False(t, r.Applicable(), "%s: proposed %q over its own filename (%s)", stem, r.Proposed["title"], r.Reason)
 		})
 	}
+}
+
+// filteredCacheDeps serves a CachedMetadataCandidates row that differs from
+// the raw store row, as metafetch's version filter makes it differ.
+type filteredCacheDeps struct {
+	fakeDeps
+	filtered map[string]*database.MetadataCandidateCache
+}
+
+func (d filteredCacheDeps) CachedMetadataCandidates(bookID string) (*database.MetadataCandidateCache, error) {
+	return d.filtered[bookID], nil
+}
+
+// The fixer reads candidates the way the apply paths do, through
+// CachedMetadataCandidates: a candidate an earlier search version cached and
+// the current position rules filter out (a sibling the old ladder pooled) is
+// never proposed as the book's title, though the raw row still holds it.
+func TestJunkTitleFixer_CandidateReadIsTheFilteredRow(t *testing.T) {
+	lib := newJunkLib(t)
+	id := lib.ids["candidate"]
+	raw := newJunkTitleFixer(&Plugin{deps: fakeDeps{store: lib.store}, standDownWait: noWait})
+	title, _, ok := raw.candidateTitle(id, "Author A")
+	require.True(t, ok)
+	require.Equal(t, "Candidate Title", title)
+
+	filtered := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{fakeDeps: fakeDeps{store: lib.store},
+		filtered: map[string]*database.MetadataCandidateCache{id: {BookID: id}}}, standDownWait: noWait})
+	_, _, ok = filtered.candidateTitle(id, "Author A")
+	require.False(t, ok, "the filtered row has no candidate; the raw row must not be read")
 }

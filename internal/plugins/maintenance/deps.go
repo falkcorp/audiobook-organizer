@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.58.0
+// version: 1.59.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -483,6 +483,14 @@ type MetadataRunners interface {
 	// error so a fatal setup failure or persistence error can fail the op
 	// instead of being silently swallowed (C2/H7). progress may be nil.
 	BackfillExternalIDs(progress func(processed, total int, msg string)) error
+	// CachedMetadataCandidates returns the book's cached metadata-candidate
+	// row as the apply paths read it (metafetch.Service.GetCachedCandidates):
+	// candidates an earlier search version cached come back filtered by the
+	// current position rules, so a sibling the old ladder pooled is never
+	// offered. (nil, nil) on a cache miss or when the metadata fetch service
+	// is not wired. Read it here, never through MetadataCacheStore, whose raw
+	// rows skip that filter.
+	CachedMetadataCandidates(bookID string) (*database.MetadataCandidateCache, error)
 }
 
 // SeriesRunners runs the series maintenance operations.
