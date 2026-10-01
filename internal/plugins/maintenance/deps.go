@@ -307,6 +307,8 @@ type opsNarratorStore interface {
 	// stands for.
 	CreateNarrator(name string) (*database.Narrator, error)
 	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
+	// GetNarratorByID names a book_narrators row for the credits guard.
+	GetNarratorByID(id int) (*database.Narrator, error)
 	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
 }
 
@@ -458,7 +460,10 @@ type keyspaceStoreProvider interface {
 // a missing verdict.
 type DedupVerdictReader interface {
 	ListLabeledExamplesStrict(f database.LabeledExampleFilter) ([]database.LabeledExample, error)
+	// TerminalCandidatesStrict is the whole-library read (Plan);
+	// ListCandidatesForEntityStrict the O(k) per-book read a Replan uses.
 	TerminalCandidatesStrict(entityType string) ([]database.DedupCandidate, error)
+	ListCandidatesForEntityStrict(entityType, entityID, status string) ([]database.DedupCandidate, error)
 }
 
 // BookTagReader reads a book's tags: the source-attributed book_tag rows and

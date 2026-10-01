@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store.go
-// version: 2.22.0
+// version: 2.23.0
 // last-edited: 2026-10-01
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
@@ -1374,6 +1374,19 @@ func paginateCandidates(all []DedupCandidate, f CandidateFilter) ([]DedupCandida
 // entity on either side, using the "dedup:e:" secondary index for O(k) lookup
 // instead of a full-table scan. status="" returns all statuses.
 func (s *EmbeddingStore) ListCandidatesForEntity(entityType, entityID, status string) ([]DedupCandidate, error) {
+	return s.listCandidatesForEntity(entityType, entityID, status, false)
+}
+
+// ListCandidatesForEntityStrict is ListCandidatesForEntity failing on an
+// index key or a candidate record it cannot read, where the lenient read
+// skips it: a reader that vetoes a write on a dismissal (the duplicate-copies
+// and fragment fixers' Replan) cannot tell a skipped row from no dismissal.
+// An index entry whose record is gone is still skipped: it names no decision.
+func (s *EmbeddingStore) ListCandidatesForEntityStrict(entityType, entityID, status string) ([]DedupCandidate, error) {
+	return s.listCandidatesForEntity(entityType, entityID, status, true)
+}
+
+func (s *EmbeddingStore) listCandidatesForEntity(entityType, entityID, status string, strict bool) ([]DedupCandidate, error) {
 	s.closeMu.RLock()
 	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
@@ -1394,6 +1407,9 @@ func (s *EmbeddingStore) ListCandidatesForEntity(entityType, entityID, status st
 		idHex := string(iter.Key()[pfxLen:])
 		id, err := strconv.ParseInt(idHex, 16, 64)
 		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("entity index key %q is unreadable: %w", iter.Key(), err)
+			}
 			continue
 		}
 		val, closer, err := s.db.Get(dedupRecKey(id))
@@ -1407,6 +1423,9 @@ func (s *EmbeddingStore) ListCandidatesForEntity(entityType, entityID, status st
 		unmarshalErr := json.Unmarshal(val, &rec)
 		closer.Close()
 		if unmarshalErr != nil {
+			if strict {
+				return nil, fmt.Errorf("candidate %d is unreadable: %w", id, unmarshalErr)
+			}
 			continue
 		}
 		if status != "" && rec.Status != status {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c1cb262a-d405-4d1a-9eb7-a3c341190585
 // last-edited: 2026-10-01
 
@@ -37,6 +37,19 @@ func (l *fakeLabels) ListLabeledExamplesStrict(f database.LabeledExampleFilter) 
 	for _, e := range l.ex {
 		if f.Label == "" || e.Label == f.Label {
 			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func (l *fakeLabels) ListCandidatesForEntityStrict(entityType, entityID, status string) ([]database.DedupCandidate, error) {
+	if l.err != nil {
+		return nil, l.err
+	}
+	var out []database.DedupCandidate
+	for _, c := range l.cands {
+		if c.EntityType == entityType && (c.EntityAID == entityID || c.EntityBID == entityID) && (status == "" || c.Status == status) {
+			out = append(out, c)
 		}
 	}
 	return out, nil
@@ -547,45 +560,45 @@ func TestDuplicateCopies_IdentityGate(t *testing.T) {
 		return mk("a", "Dune", nil, row(900, "h1"), row(100, "h2")),
 			mk("b", "44 - Dune", nil, row(900, "h1"), row(100, "zz"), row(600, "h3"))
 	}
-	none := map[[2]string]string{}
+	none := dcRejections{}
 	a, b := base()
 	require.Equal(t, dcEdgeProven, dcJudge(a, b, none).Kind, "90%% of the smaller copy is hash-matched")
 
 	cases := []struct {
 		name string
-		mut  func(a, b *dcBook) map[[2]string]string
+		mut  func(a, b *dcBook) dcRejections
 		want string
 	}{
-		{"coverage 89%", func(a, _ *dcBook) map[[2]string]string {
+		{"coverage 89%", func(a, _ *dcBook) dcRejections {
 			a.Rows = []database.BookFileCore{row(890, "h1"), row(110, "h2")}
 			return none
 		}, dcEdgeUnproven},
-		{"short shared intro is the only overlap", func(a, b *dcBook) map[[2]string]string {
+		{"short shared intro is the only overlap", func(a, b *dcBook) dcRejections {
 			intro := database.BookFileCore{ID: "intro", Duration: 59, FileHash: "intro", FilePath: "/x/track.mp3"}
 			a.Rows = []database.BookFileCore{intro}
 			b.Rows = []database.BookFileCore{intro, row(900, "other")}
 			return none
 		}, dcEdgeUnproven},
-		{"boilerplate credits are the only overlap", func(a, b *dcBook) map[[2]string]string {
+		{"boilerplate credits are the only overlap", func(a, b *dcBook) dcRejections {
 			credits := database.BookFileCore{ID: "cr", Duration: 300, FileHash: "cr", FilePath: "/x/x.mp3", Title: "Opening Credits"}
 			a.Rows = []database.BookFileCore{credits}
 			b.Rows = []database.BookFileCore{credits, row(900, "other")}
 			return none
 		}, dcEdgeUnproven},
-		{"titles differ", func(_, b *dcBook) map[[2]string]string {
+		{"titles differ", func(_, b *dcBook) dcRejections {
 			b.Title = dcTitleKey("Dune Messiah")
 			return none
 		}, ""},
-		{"authors differ", func(_, b *dcBook) map[[2]string]string {
+		{"authors differ", func(_, b *dcBook) dcRejections {
 			b.Author = "brianherbert"
 			return none
 		}, ""},
-		{"conflicting asin", func(a, b *dcBook) map[[2]string]string {
+		{"conflicting asin", func(a, b *dcBook) dcRejections {
 			a.Core.ASIN, b.Core.ASIN = str("B01"), str("B02")
 			return none
 		}, dcEdgeASIN},
-		{"not_dup label", func(_, _ *dcBook) map[[2]string]string {
-			return map[[2]string]string{dcPairKey("b", "a"): "labeled not_dup"}
+		{"not_dup label", func(_, _ *dcBook) dcRejections {
+			return dcRejections{dcPairKey("b", "a"): {Kind: dcEdgeNotDup, Why: "labeled not_dup"}}
 		}, dcEdgeNotDup},
 	}
 	for _, tc := range cases {

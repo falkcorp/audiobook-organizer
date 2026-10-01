@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_review_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6e2d9c41-3b7a-4f05-8c1e-a94d2f7b3e58
 // last-edited: 2026-10-01
 
@@ -53,9 +53,17 @@ func (d *dcFixture) imported(t *testing.T, id string) {
 func itunesRule(t *testing.T, pTitle string, pRows []dcRow, iTitle string, iRows []dcRow, fragTitle string, fragDur int, fragHash string,
 	mut func(d *dcFixture, p, i string)) (res *repairs.PlanResult, p, frag string) {
 	t.Helper()
-	d := newDCFixture(t)
+	d, p, _, frag := itunesRuleFixture(t, pTitle, pRows, iTitle, iRows, fragTitle, fragDur, fragHash, mut)
+	return d.planFor(t, fragFixerID, "op-plan", nil), p, frag
+}
+
+// itunesRuleFixture seeds what itunesRule plans over and returns it unplanned.
+func itunesRuleFixture(t *testing.T, pTitle string, pRows []dcRow, iTitle string, iRows []dcRow, fragTitle string, fragDur int, fragHash string,
+	mut func(d *dcFixture, p, i string)) (d *dcFixture, p, i, frag string) {
+	t.Helper()
+	d = newDCFixture(t)
 	p = d.copyBook(t, "P", pTitle, "lib/P", pRows...)
-	i := d.copyBook(t, "I", iTitle, "books/itunes/I", iRows...)
+	i = d.copyBook(t, "I", iTitle, "books/itunes/I", iRows...)
 	if mut != nil {
 		mut(d, p, i)
 	}
@@ -63,7 +71,7 @@ func itunesRule(t *testing.T, pTitle string, pRows []dcRow, iTitle string, iRows
 	frag = d.book(t, "frag", fragTitle, fp, nil)
 	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: frag, FilePath: fp, OriginalFilename: "02.mp3", FileSize: 777,
 		Duration: fragDur, FileHash: fragHash}))
-	return d.planFor(t, fragFixerID, "op-plan", nil), p, frag
+	return d, p, i, frag
 }
 
 func requireAmbiguous(t *testing.T, res *repairs.PlanResult, frag string) {
@@ -115,11 +123,61 @@ func TestFragmentFixer_ITunesParentRuleNeedsAProvenCopy(t *testing.T) {
 		require.True(t, r.Applicable(), r.SkipReason)
 		require.Contains(t, r.BookIDs, frag)
 	})
-	t.Run("an unreadable verdict store turns the rule off", func(t *testing.T) {
+	t.Run("an unreadable verdict store turns the rule off, and says so", func(t *testing.T) {
 		res, _, frag := itunesRule(t, "Dune", dune, "Dune", dune, "02", 600, "h2", func(d *dcFixture, _, _ string) {
 			d.labels.err = errors.New("corrupt label row")
 		})
 		requireAmbiguous(t, res, frag)
+		r := findRow(t, res, "ambiguous:"+frag)
+		require.Contains(t, r.SkipReason, "dedup verdicts are unreadable")
+		require.Contains(t, r.SkipReason, "corrupt label row")
+	})
+}
+
+// TestFragmentFixer_ITunesParentRuleIsDecidedAgainAtApply (review S1): the
+// rule's identity gate and the owner's verdicts are re-read under the
+// apply's lock, not carried from the plan. A dismissal or a not_dup label on
+// the parent / iTunes-copy pair added after the plan refuses the apply; with
+// nothing added the row applies.
+func TestFragmentFixer_ITunesParentRuleIsDecidedAgainAtApply(t *testing.T) {
+	dune := []dcRow{{track: 1, dur: 600, hash: "h1"}, {track: 2, dur: 600, hash: "h2"}}
+	setup := func(t *testing.T) (*dcFixture, string, string, string, repairs.Row) {
+		d, p, i, frag := itunesRuleFixture(t, "Dune", dune, "44 - Dune", dune, "02", 600, "h2", func(d *dcFixture, p, i string) {
+			d.setAuthor(t, p, "Frank Herbert")
+			d.setAuthor(t, i, "Frank Herbert")
+		})
+		r := findRow(t, d.planFor(t, fragFixerID, "op-plan", nil), "copy:"+p)
+		require.True(t, r.Applicable(), r.SkipReason)
+		require.NotContains(t, r.BookIDs, i, "the iTunes copy is never in the row's books")
+		return d, p, i, frag, r
+	}
+	retired := func(t *testing.T, d *dcFixture, frag string) bool {
+		b, err := d.s.GetBookByID(frag)
+		require.NoError(t, err)
+		return b.IsSoftDeleted()
+	}
+	t.Run("nothing changed: applies", func(t *testing.T) {
+		d, _, _, frag, r := setup(t)
+		require.Equal(t, 1, d.applyFor(t, fragFixerID, "op-plan", "op-apply", []string{r.RowID}).Applied)
+		require.True(t, retired(t, d, frag))
+	})
+	t.Run("a dismissal added after the plan refuses", func(t *testing.T) {
+		d, p, i, frag, r := setup(t)
+		d.labels.cands = append(d.labels.cands, database.DedupCandidate{ID: 4, EntityType: "book", EntityAID: i, EntityBID: p, Status: "dismissed"})
+		require.Zero(t, d.applyFor(t, fragFixerID, "op-plan", "op-apply", []string{r.RowID}).Applied)
+		require.False(t, retired(t, d, frag))
+	})
+	t.Run("a not_dup label added after the plan refuses", func(t *testing.T) {
+		d, p, i, frag, r := setup(t)
+		d.labels.ex = append(d.labels.ex, database.LabeledExample{CandidateID: 5, EntityAID: p, EntityBID: i, Label: "not_dup"})
+		require.Zero(t, d.applyFor(t, fragFixerID, "op-plan", "op-apply", []string{r.RowID}).Applied)
+		require.False(t, retired(t, d, frag))
+	})
+	t.Run("the iTunes copy no longer proven a copy refuses", func(t *testing.T) {
+		d, _, i, frag, r := setup(t)
+		d.setAuthor(t, i, "Brian Herbert")
+		require.Zero(t, d.applyFor(t, fragFixerID, "op-plan", "op-apply", []string{r.RowID}).Applied)
+		require.False(t, retired(t, d, frag))
 	})
 }
 
@@ -214,13 +272,20 @@ func TestDuplicateCopies_OwnerRejections(t *testing.T) {
 		b := d.copyBook(t, "b", "Ubik", "lib/Ubik 2", dcRow{track: 1, dur: 600, hash: "u1"}, dcRow{track: 2, dur: 600, hash: "u2"})
 		return d, a, b
 	}
-	for _, status := range []string{"dismissed", "merged"} {
+	for status, skip := range map[string]string{"dismissed": dcSkipNotDup, "merged": dcSkipOwnerMerged} {
 		t.Run("candidate "+status, func(t *testing.T) {
 			d, a, b := pair(t)
 			d.labels.cands = append(d.labels.cands, database.DedupCandidate{ID: 9, EntityType: "book", EntityAID: b, EntityBID: a, Status: status})
 			r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), a)
-			require.Equal(t, dcSkipNotDup, r.Skipped, r.SkipReason)
+			require.Equal(t, skip, r.Skipped, r.SkipReason)
 			require.Contains(t, r.SkipReason, status)
+		})
+		t.Run("candidate "+status+" after the plan refuses the apply", func(t *testing.T) {
+			d, a, b := pair(t)
+			r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), a)
+			require.True(t, r.Applicable(), r.SkipReason)
+			d.labels.cands = append(d.labels.cands, database.DedupCandidate{ID: 9, EntityType: "book", EntityAID: b, EntityBID: a, Status: status})
+			require.Zero(t, d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{r.RowID}).Applied)
 		})
 	}
 	t.Run("a pending candidate is no verdict", func(t *testing.T) {
@@ -437,9 +502,15 @@ func TestDuplicateCopies_DanglingAuthorIsUnknownNotAWildcard(t *testing.T) {
 	row := database.BookFileCore{ID: "r", Duration: 600, FileHash: "h", FilePath: "/x/r.mp3"}
 	a := &dcBook{Core: database.BookCore{ID: "a"}, Title: "dune", Author: dcAuthorKey(map[int]string{}, &five), Rows: []database.BookFileCore{row}}
 	b := &dcBook{Core: database.BookCore{ID: "b"}, Title: "dune", Author: "frankherbert", Rows: []database.BookFileCore{row}}
-	require.Empty(t, dcJudge(a, b, nil).Kind, "a dangling author never matches a known one")
+	require.Equal(t, dcEdgeUnproven, dcJudge(a, b, nil).Kind, "a dangling author against a known one is doubt: held, not unrelated")
 	b.Author = ""
-	require.Equal(t, dcEdgeProven, dcJudge(a, b, nil).Kind, "no author on the other side still matches")
+	require.Equal(t, dcEdgeUnproven, dcJudge(a, b, nil).Kind, "nor clear against no author")
+	b.Author = a.Author
+	require.Equal(t, dcEdgeUnproven, dcJudge(a, b, nil).Kind, "nor against the same dangling id")
+	a.Author, b.Author = "frankherbert", "brianherbert"
+	require.Empty(t, dcJudge(a, b, nil).Kind, "two known, different authors stay unrelated")
+	a.Author, b.Author = "frankherbert", ""
+	require.Equal(t, dcEdgeProven, dcJudge(a, b, nil).Kind, "no author on one side still matches")
 }
 
 func TestRetireInto_LeavesTombstonedExternalIDsBehind(t *testing.T) {

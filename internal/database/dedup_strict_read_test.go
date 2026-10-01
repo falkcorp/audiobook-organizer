@@ -1,5 +1,5 @@
 // file: internal/database/dedup_strict_read_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f6b1d2a-7c43-4e5b-9a18-3d2e6c4b8f71
 // last-edited: 2026-10-01
 
@@ -61,5 +61,40 @@ func TestTerminalCandidatesStrict(t *testing.T) {
 	}
 	if _, err := es.TerminalCandidatesStrict("book"); err == nil {
 		t.Fatal("strict scan read past a corrupt candidate")
+	}
+}
+
+// TestListCandidatesForEntityStrict: the entity's candidates by its index; a
+// stale index entry is skipped, an unreadable key or record is an error.
+func TestListCandidatesForEntityStrict(t *testing.T) {
+	es := newTestLabelStore(t)
+	if err := es.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "a", EntityBID: "b", Layer: "exact", Status: "dismissed"}); err != nil {
+		t.Fatal(err)
+	}
+	// A stale entry: an index key whose record is gone.
+	if err := es.db.Set(dedupEntityKey("book", "a", 0xabc), nil, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	got, err := es.ListCandidatesForEntityStrict("book", "a", "")
+	if err != nil || len(got) != 1 || got[0].EntityBID != "b" {
+		t.Fatalf("got %+v, %v; want the one a/b candidate", got, err)
+	}
+	if err := es.db.Set(dedupEntityKey("book", "a", 0xfff), nil, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := es.db.Set(dedupRecKey(0xfff), []byte("{not json"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := es.ListCandidatesForEntity("book", "a", ""); err != nil || len(got) != 1 {
+		t.Fatalf("lenient: got %d, %v; want 1, nil", len(got), err)
+	}
+	if _, err := es.ListCandidatesForEntityStrict("book", "a", ""); err == nil {
+		t.Fatal("strict read past a corrupt candidate")
+	}
+	if err := es.db.Set([]byte(dedupEntityPfx+"book:c:zz"), nil, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := es.ListCandidatesForEntityStrict("book", "c", ""); err == nil {
+		t.Fatal("strict read past an unreadable index key")
 	}
 }
