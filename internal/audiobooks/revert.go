@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-01
 
@@ -1461,6 +1461,7 @@ func (rs *RevertService) repointPathIndexAwayFrom(atPath bookFilesAtPathReader, 
 		if err != nil {
 			return fmt.Errorf("rows at %s: %w", r.FilePath, err)
 		}
+		live, moved := 0, false
 		for i := range others {
 			o := others[i]
 			if o.BookID == bookID {
@@ -1473,18 +1474,40 @@ func (rs *RevertService) repointPathIndexAwayFrom(atPath bookFilesAtPathReader, 
 			if b == nil || b.IsSoftDeleted() {
 				continue
 			}
+			live++
 			// A no-op ModifyBookFile re-reads the row under its stripe and
 			// re-writes it as stored, indexes included: the key moves to it
 			// without overwriting a concurrent writer's update with the
-			// snapshot BookFilesAtPath returned.
-			if _, err := rs.db.ModifyBookFile(o.BookID, o.ID, func(*database.BookFile) error { return nil }); err != nil {
+			// snapshot BookFilesAtPath returned. A row that is gone (nil) or
+			// that a writer outside the merge lock moved off the path is
+			// skipped for the next live candidate.
+			want := r.FilePath
+			got, err := rs.db.ModifyBookFile(o.BookID, o.ID, func(bf *database.BookFile) error {
+				if bf.FilePath != want {
+					return errRepointRowMoved
+				}
+				return nil
+			})
+			if errors.Is(err, errRepointRowMoved) || (err == nil && got == nil) {
+				continue
+			}
+			if err != nil {
 				return fmt.Errorf("re-index %s at %s: %w", o.ID, r.FilePath, err)
 			}
+			moved = true
 			break
+		}
+		if live > 0 && !moved {
+			return fmt.Errorf("hide created book %s: none of the %d live row(s) at %s could take the path key back (each vanished or moved meanwhile)",
+				bookID, live, r.FilePath)
 		}
 	}
 	return nil
 }
+
+// errRepointRowMoved: a candidate row no longer names the path being
+// re-indexed.
+var errRepointRowMoved = errors.New("row moved off the path")
 
 // revertTitleRelinkAuthorCreate removes an author row the relink created,
 // only when nothing credits it any more. Rows are reverted newest first, so

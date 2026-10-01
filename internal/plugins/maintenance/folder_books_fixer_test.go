@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
 // last-edited: 2026-10-01
 
@@ -937,10 +937,10 @@ func TestFolderBooksFixer_StrandCheckRunsUnderTheLock(t *testing.T) {
 	require.True(t, f.live(t, "root"), "B was not retired")
 }
 
-// TestFolderBooksFixer_DupNowManyCandidates: the duplicate is found past the
-// first 200 same-title candidates (the old search's page size), and by
-// fbNorm equality ("It!" is "It"), which a raw-substring search can miss.
-func TestFolderBooksFixer_DupNowManyCandidates(t *testing.T) {
+// TestFolderBooksFixer_DupNowFindsTheDuplicateAmongManySameTitleBooks: every
+// same-title candidate is checked, however many there are (250 by another
+// author come first), and titles match by fbNorm equality ("It!" is "It").
+func TestFolderBooksFixer_DupNowFindsTheDuplicateAmongManySameTitleBooks(t *testing.T) {
 	f := newFragFixture(t)
 	other, err := f.s.CreateAuthor("Someone Else")
 	require.NoError(t, err)
@@ -963,22 +963,165 @@ func TestFolderBooksFixer_DupNowManyCandidates(t *testing.T) {
 	late := f.fbBook(t, "late", "It!", f.path("Elsewhere/It.m4b"), 3600) // authorless, sorts after the 250
 	idx, err = fx.titleIndex(f.s)
 	require.NoError(t, err)
-	require.Len(t, idx["it"], 251)
+	require.Len(t, idx["it"], 251, "the create moved the generation: the index was rebuilt")
 	why, err = fx.dupNow(f.s, idx, nil, "", g)
 	require.NoError(t, err)
-	require.Contains(t, why, late, "an authorless fbNorm-equal title past the first 200 candidates")
+	require.Contains(t, why, late, "an authorless fbNorm-equal title after 250 other candidates")
 }
 
-// TestFolderBooksFixer_DupNowSeesBooksCreatedAfterTheIndex: a book this
-// fixer created after another row built its index is still found.
-func TestFolderBooksFixer_DupNowSeesBooksCreatedAfterTheIndex(t *testing.T) {
+// fbSeedAnn adds a second author shelf "Ann Author" holding two proper books
+// and an orphan "Sword" folder, under an authorless folder-book: its Sword
+// group is created with no author, so it duplicates Gene Wolfe's Sword.
+func (f *fragFixture) fbSeedAnn(t *testing.T) {
+	t.Helper()
+	rel := func(s string) string { return filepath.Join(fbITunes, "Ann Author", s) }
+	var one, two, sword []string
+	for i := 1; i <= 3; i++ {
+		one = append(one, f.file(t, rel(fmt.Sprintf("One/0%d.mp3", i)), 10))
+		two = append(two, f.file(t, rel(fmt.Sprintf("Two/0%d.mp3", i)), 10))
+	}
+	for i := 1; i <= 2; i++ {
+		sword = append(sword, f.file(t, rel(fmt.Sprintf("Sword/0%d.mp3", i)), 10))
+	}
+	f.fbBook(t, "ann-one", "Book One", f.path(rel("One")), 3600, one...)
+	f.fbBook(t, "ann-two", "Book Two", f.path(rel("Two")), 3600, two...)
+	_, err := f.s.CreateAuthor("Ann Author")
+	require.NoError(t, err)
+	f.fbBook(t, "ann", "Ann Author", f.path(filepath.Join(fbITunes, "Ann Author")), 1200,
+		append(append(append([]string(nil), one...), two...), sword...)...)
+}
+
+// liveTitled counts live books whose fbNorm title is title.
+func (f *fragFixture) liveTitled(t *testing.T, title string) int {
+	t.Helper()
+	all, err := f.s.GetAllBooksCore(0, 0)
+	require.NoError(t, err)
+	n := 0
+	for _, b := range all {
+		if !b.IsSoftDeleted() && fbNorm(b.Title) == fbNorm(title) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestFolderBooksFixer_TwoRowsOfOneApplyCreateOneTitle: two rows of ONE
+// apply both plan a new "Sword"; the second, under the merge lock, sees the
+// first's book (its create and un-hide moved the library generation, so the
+// shared title index is rebuilt) and refuses.
+func TestFolderBooksFixer_TwoRowsOfOneApplyCreateOneTitle(t *testing.T) {
 	f := newFragFixture(t)
-	fx := &folderBooksFixer{}
+	f.seedWolfe(t, fbITunes, "citadel")
+	f.fbSeedAnn(t)
+	res := f.fbPlan(t, fbFixerID, "op-plan")
+	a, b := fbFindRow(res, f.ids["fb"]), fbFindRow(res, f.ids["ann"])
+	require.NotNil(t, a)
+	require.NotNil(t, b)
+	require.True(t, a.Applicable(), "%s %s", a.Skipped, a.SkipReason)
+	require.True(t, b.Applicable(), "%s %s", b.Skipped, b.SkipReason)
+	require.Zero(t, f.liveTitled(t, "Sword"))
+	out := f.fbApply(t, "op-plan", "op-apply", []string{a.RowID, b.RowID})
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	require.Equal(t, 1, f.liveTitled(t, "Sword"), "one Sword, not two")
+}
+
+// TestFolderBooksFixer_RetitleAfterTheIndexIsCaught: the shared title index
+// was built (an earlier row) before another merge-lock holder retitled a
+// book to the group's title; the generation moved, so the apply rebuilds the
+// index under the lock and refuses.
+func TestFolderBooksFixer_RetitleAfterTheIndexIsCaught(t *testing.T) {
+	f := newFragFixture(t)
+	f.seedWolfe(t, fbITunes, "citadel")
+	id := f.fbBook(t, "renamed", "Something Else", f.path("Elsewhere/x.m4b"), 3600)
+	row := f.fbSingleRow(t, "op-plan")
+	require.True(t, row.Applicable(), "%s %s", row.Skipped, row.SkipReason)
+	fixer, ok := f.p.repairsReg.Get(fbFixerID)
+	require.True(t, ok)
+	fx := fixer.(*folderBooksFixer)
 	idx, err := fx.titleIndex(f.s)
 	require.NoError(t, err)
-	id := f.fbBook(t, "made", "Sword", f.path("Elsewhere/Sword.m4b"), 3600)
-	fx.noteCreated("Sword", id)
-	why, err := fx.dupNow(f.s, idx, nil, "", fbGroup{Title: "Sword"})
+	require.Empty(t, idx["sword"])
+	_, err = f.s.ModifyBook(id, func(b *database.Book) error { b.Title = "Sword"; return nil })
 	require.NoError(t, err)
-	require.Contains(t, why, id)
+	out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+	require.Equal(t, 0, out.Applied, "%+v", out.Rows)
+	require.True(t, f.live(t, "fb"), "nothing was written")
+}
+
+// TestFolderBooksFixer_CreatedRowMovedBeforeClaim: a created row moved off
+// its path after the un-hide is not re-indexed; the row stops.
+func TestFolderBooksFixer_CreatedRowMovedBeforeClaim(t *testing.T) {
+	f := newFragFixture(t)
+	f.seedWolfe(t, fbITunes, "citadel")
+	swordDir := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword"))
+	row := f.fbSingleRow(t, "op-plan")
+	hit := false
+	fbCrashHook = func(stage string, n int) error {
+		if stage != "claim" || n != 1 || hit {
+			return nil
+		}
+		hit = true
+		created, err := f.s.GetBookByFilePath(swordDir)
+		if err != nil || created == nil {
+			return fmt.Errorf("created book: %v", err)
+		}
+		rows, err := f.s.GetBookFiles(created.ID)
+		if err != nil || len(rows) == 0 {
+			return fmt.Errorf("created rows: %v", err)
+		}
+		r := rows[0]
+		r.FilePath = f.path("Elsewhere/moved.mp3")
+		return f.s.UpdateBookFile(r.ID, &r)
+	}
+	t.Cleanup(func() { fbCrashHook = nil })
+	out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+	require.True(t, hit)
+	require.Equal(t, 0, out.Applied, "%+v", out.Rows)
+	require.Equal(t, 1, out.Partial, "%+v", out.Rows)
+	require.True(t, f.live(t, "fb"), "the row stopped before the retire")
+}
+
+// TestFolderBooksFixer_SourceRowChangedBeforeReindex: the source row a new
+// row was copied from vanishes, or moves off the path, before the apply
+// hands its path key back: the row stops (changed since plan) rather than
+// re-index a row that no longer names the file.
+func TestFolderBooksFixer_SourceRowChangedBeforeReindex(t *testing.T) {
+	for _, how := range []string{"vanished", "moved"} {
+		t.Run(how, func(t *testing.T) {
+			f := newFragFixture(t)
+			f.seedWolfe(t, fbITunes, "citadel")
+			row := f.fbSingleRow(t, "op-plan")
+			hit := false
+			fbCrashHook = func(stage string, n int) error {
+				if stage != "reindex" || n != 1 || hit {
+					return nil
+				}
+				hit = true
+				for _, role := range []string{"fb", "fb2"} {
+					rid := f.rowIDs[role+"-7"]
+					if how == "vanished" {
+						if err := f.s.DeleteBookFile(rid); err != nil {
+							return err
+						}
+						continue
+					}
+					r, err := f.s.GetBookFileByID(f.ids[role], rid)
+					if err != nil || r == nil {
+						return fmt.Errorf("read %s: %v", rid, err)
+					}
+					r.FilePath = f.path("Elsewhere/moved.mp3")
+					if err := f.s.UpdateBookFile(r.ID, r); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			t.Cleanup(func() { fbCrashHook = nil })
+			out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+			require.True(t, hit)
+			require.Equal(t, 0, out.Applied, "%+v", out.Rows)
+			require.Equal(t, 1, out.Partial, "%+v", out.Rows)
+			require.True(t, f.live(t, "fb"), "the row stopped before the retire")
+		})
+	}
 }
