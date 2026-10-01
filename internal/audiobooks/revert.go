@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-01
 
@@ -1389,13 +1389,17 @@ func (rs *RevertService) revertJunkAuthorCreate(c *database.OperationChange) err
 }
 
 // revertRepairBookCreate soft-deletes a book a Repairs fixer created
-// (undo.ChangeTypeRepairBookCreate). It never deletes the book or the
-// book_file rows the fixer created on it: the purge refuses a book that owns
-// rows, so the hidden book stays as a record. A book that was never created
-// or is already soft-deleted counts restored. Rows are reverted newest first,
-// so the folder-book the same apply retired is live again before this runs.
+// (undo.ChangeTypeRepairBookCreate), only while it is still only what the
+// operation made (undo.CheckRepairBookCreate). Its rows stay. The
+// single-owner book_file_path index then still names the hidden book's rows
+// (last writer wins), so each path is handed back to a live book's row there
+// by re-writing that row.
 func (rs *RevertService) revertRepairBookCreate(c *database.OperationChange) error {
-	if err := undo.CheckRepairBookCreate(rs.db, c); err != nil {
+	st, ok := rs.db.(undo.RepairBookCreateStore)
+	if !ok {
+		return fmt.Errorf("revert repair_book_create %s: this store cannot check the created book", c.ID)
+	}
+	if err := undo.CheckRepairBookCreate(st, c); err != nil {
 		if errors.Is(err, undo.ErrAlreadyRestored) {
 			return nil
 		}
@@ -1413,10 +1417,50 @@ func (rs *RevertService) revertRepairBookCreate(c *database.OperationChange) err
 		book.MarkedForDeletionAt = &now
 		return nil
 	})
-	if errors.Is(err, database.ErrSkipBookWrite) {
-		return nil
+	if err != nil && !errors.Is(err, database.ErrSkipBookWrite) {
+		return err
 	}
-	return err
+	return rs.repointPathIndexAwayFrom(c.BookID)
+}
+
+// repointPathIndexAwayFrom re-writes, for each row of the hidden book
+// bookID, a live book's row at the same path, so GetBookFileByPath names the
+// live row again. A path no live book holds keeps the hidden row.
+func (rs *RevertService) repointPathIndexAwayFrom(bookID string) error {
+	atPath, ok := rs.db.(interface {
+		BookFilesAtPath(path string) ([]database.BookFile, error)
+	})
+	if !ok {
+		return fmt.Errorf("hide created book %s: this store cannot list a path's rows", bookID)
+	}
+	rows, err := rs.db.GetBookFiles(bookID)
+	if err != nil {
+		return fmt.Errorf("rows of hidden book %s: %w", bookID, err)
+	}
+	for _, r := range rows {
+		others, err := atPath.BookFilesAtPath(r.FilePath)
+		if err != nil {
+			return fmt.Errorf("rows at %s: %w", r.FilePath, err)
+		}
+		for i := range others {
+			o := others[i]
+			if o.BookID == bookID {
+				continue
+			}
+			b, err := rs.db.GetBookByID(o.BookID)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", o.BookID, err)
+			}
+			if b == nil || b.IsSoftDeleted() {
+				continue
+			}
+			if err := rs.db.UpdateBookFile(o.ID, &o); err != nil {
+				return fmt.Errorf("re-index %s at %s: %w", o.ID, r.FilePath, err)
+			}
+			break
+		}
+	}
+	return nil
 }
 
 // revertTitleRelinkAuthorCreate removes an author row the relink created,

@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-10-01
 
@@ -670,7 +670,7 @@ func NotRestorableLabel(c *database.OperationChange) string {
 		}
 		return ""
 	case ChangeTypeRepairBookCreate:
-		if c.BookID == "" || c.NewValue != c.BookID {
+		if _, _, ok := ParseRepairBookCreateValue(c.BookID, c.NewValue); !ok {
 			return ChangeTypeRepairBookCreate + ":(no book)"
 		}
 		return ""

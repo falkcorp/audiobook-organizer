@@ -1,5 +1,5 @@
 // file: internal/repairs/guards.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
 // last-edited: 2026-10-01
 
@@ -82,8 +82,10 @@ func guardBookPaths(res *PathResolver, bookID string, paths []string, seriesName
 		}
 	}
 	// Fail closed: a path whose location could not be settled may be under
-	// books/itunes/**, so the row is skipped, never cleared.
-	if doubt != nil && !allowITunes {
+	// books/itunes/** or a Doctor Who / Big Finish / Torchwood folder behind a
+	// symlink, so the row is skipped, never cleared -- for an iTunes-cleared
+	// fixer too.
+	if doubt != nil {
 		return SkipGuardUnreadable, fmt.Sprintf("member %s: could not tell whether a file is under books/itunes/**: %v", bookID, doubt)
 	}
 	for _, p := range paths {
