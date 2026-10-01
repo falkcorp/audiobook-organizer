@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
 // last-edited: 2026-10-01
 
@@ -189,14 +189,18 @@ func (c *AudnexusClient) LookupByASINInRegions(ctx context.Context, asin string,
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var lastErr error
+	// A region that failed (5xx, 429, transport) outranks one that answered
+	// "not here" (IsNotFound): the ASIN may live in the failed region, so the
+	// lookup as a whole failed. Only when every region said "not here" is the
+	// result a not-found error.
+	var failed, notFound error
 	for _, region := range regions {
 		// Bail promptly on cancellation rather than starting another region.
 		if err := ctx.Err(); err != nil {
-			if lastErr == nil {
-				lastErr = err
+			if failed == nil {
+				failed = err
 			}
-			return nil, lastErr
+			return nil, failed
 		}
 		meta, done, err := c.lookupRegion(ctx, asin, region)
 		if done {
@@ -208,10 +212,17 @@ func (c *AudnexusClient) LookupByASINInRegions(ctx context.Context, asin string,
 			if ctx.Err() != nil {
 				return nil, err
 			}
-			lastErr = err
+			if IsNotFound(err) {
+				notFound = err
+			} else {
+				failed = err
+			}
 		}
 	}
-	return nil, lastErr
+	if failed != nil {
+		return nil, failed
+	}
+	return nil, notFound
 }
 
 // lookupRegion issues a single-region ASIN lookup bounded by

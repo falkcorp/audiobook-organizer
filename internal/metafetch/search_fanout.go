@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
 // last-edited: 2026-10-01
 
@@ -90,15 +90,8 @@ func (st *fanoutSource) answered(ctx context.Context) bool {
 // (strongCriteria.ownASINAgrees), which no title filter may drop.
 func (p fanoutParams) accept(v queryVariant, rs []metadata.BookMetadata) []metadata.BookMetadata {
 	kept := v.accept(rs, p.people)
-	if p.strong.position != "" {
-		out := kept[:0:0]
-		for _, r := range kept {
-			if !positionConflicts(r, p.strong.position, p.strong.nameAnchor) {
-				out = append(out, r)
-			}
-		}
-		kept = out
-	}
+	p.strong.noteNameEvidence(rs)
+	kept = p.strong.dropConflicts(kept)
 	if p.strong.asin == "" {
 		return kept
 	}
@@ -178,6 +171,18 @@ func (mfs *Service) runSearchFanout(p fanoutParams, sources []metadata.MetadataS
 		}
 		// Never returns an error: a failing source is recorded on its state.
 		_ = g.Wait()
+		// The pool-wide position pass: two sources may each have pooled one
+		// sibling sharing the book's "name", which only the whole pool shows
+		// to be a tagline (noteNameEvidence). Re-filtered before the strong
+		// check and before the next round reads len(st.results).
+		var pool []metadata.BookMetadata
+		for _, st := range states {
+			pool = append(pool, st.results...)
+		}
+		p.strong.noteNameEvidence(pool)
+		for _, st := range states {
+			st.results = p.strong.dropConflicts(st.results)
+		}
 		if poolHasStrong(states, p.strong) {
 			searchFanoutLog.Debug("search fan-out stopped after round %d of %d: strong match (book %s)",
 				k+1, len(variants), logger.SanitizeLogValue(p.bookID))
@@ -277,6 +282,14 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 		// maxAudnexusRegions requests, so one lookup fits the per-book budget
 		// MaxSearchCallsPerBook reports.
 		res, err = metadata.NewAudnexusClient().LookupByASINInRegions(ctx, asin, audnexusSearchRegions)
+	}
+	// "No such ASIN" (a 404, an empty product) is the provider answering,
+	// not failing: it is recorded as a success and returned as (nil, nil), so
+	// the search records the source as answered rather than failed -- a
+	// failed source makes ErrNoSourceAnswered and the batch re-asks the book
+	// on every run, forever, for an ASIN that simply does not exist.
+	if metadata.IsNotFound(err) {
+		res, err = nil, nil
 	}
 	if err != nil {
 		reg.RecordFailure(providerID, err)

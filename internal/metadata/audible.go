@@ -1,7 +1,7 @@
 // file: internal/metadata/audible.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-09-10
+// last-edited: 2026-10-01
 
 package metadata
 
@@ -191,7 +191,7 @@ func (c *AudibleClient) LookupByASIN(asin string) (*BookMetadata, error) {
 	}
 
 	if result.Product.Title == "" {
-		return nil, fmt.Errorf("audible returned empty product for ASIN %s", asin)
+		return nil, fmt.Errorf("audible returned empty product for ASIN %s: %w", asin, ErrASINNotFound)
 	}
 
 	meta := c.productToMetadata(&result.Product)

@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
 // last-edited: 2026-10-01
 
@@ -7,7 +7,9 @@ package metafetch
 
 import (
 	"regexp"
+	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
@@ -28,11 +30,26 @@ const maxOpenLibraryAsks = 2
 
 // maxAudnexusRegions is how many Audnexus regions one search's single
 // Audnexus lookup tries (audnexusSearchRegions). The old ladder's fallback
-// tried all nine regions, each a separate request against Audnexus's 2/s.
+// tried all of metadata's audnexusRegions, each a separate request against
+// Audnexus's 2/s.
 const maxAudnexusRegions = 3
 
-// audnexusSearchRegions are the regions a search's Audnexus lookup tries:
-// the default store, then the two largest other English ones.
+// audnexusSearchRegions are the regions a search's Audnexus lookup tries,
+// chosen for an English-language library:
+//   - "" is the default store, which IS the US one (the full list's "us"
+//     asks it a second time);
+//   - "uk" and "au" are the two other English stores with catalogs of their
+//     own: UK-only releases (Big Finish, BBC, UK-published editions) and
+//     ANZ-only ones;
+//   - "ca" and "in" are left out: their English catalogs are drawn from the
+//     US and UK ones, so an ASIN missing from "" and "uk" is very rarely
+//     there;
+//   - "de", "fr" and "jp" are left out: their catalogs are German, French and
+//     Japanese releases, which an English library's ASINs do not name.
+//
+// This is reasoned from the stores' catalogs, not measured against the
+// library. The lookup is a fallback: Audible's own ASIN lookup and its title
+// search are asked first.
 var audnexusSearchRegions = []string{"", "uk", "au"}
 
 // strongRuntimeTolerance is the runtime agreement (|delta| / book runtime) a
@@ -65,6 +82,13 @@ type parsedTitle struct {
 	// ("A Wanted Man" from "Jack Reacher 17: A Wanted Man"), not the title
 	// with its slot still in it.
 	NameSplit bool
+	// SlotHead is the text in front of a series slot's number, whatever its
+	// word count ("Witcher" in "Witcher 4: The Tower of the Swallow"), and
+	// Name the usable book name behind it (usableSlotName), recorded even
+	// when the title is not split there. They anchor the position checks
+	// (strongCriteria.positionConflicts), never the queries.
+	SlotHead string
+	Name     string
 }
 
 var (
@@ -180,9 +204,11 @@ func parseSearchTitle(raw, author, narrator string) parsedTitle {
 	// Series slot.
 	if m := dashPositionRe.FindStringSubmatch(t); m != nil && !slotWordRe.MatchString(strings.TrimSpace(m[1])) {
 		p.Series, p.Position = strings.TrimSpace(m[1]), m[2]
+		p.SlotHead = p.Series
 		if name := strings.TrimSpace(m[3]); usableSlotName(name, p.Series) {
 			t = name
 			p.NameSplit = true
+			p.Name = name
 		}
 	} else if loc := seriesDecoration.FindStringIndex(t); loc != nil {
 		// A labelled slot (", Book 5", "Vol. 3") is read before a bare number,
@@ -191,10 +217,12 @@ func parseSearchTitle(raw, author, narrator string) parsedTitle {
 		base, series, bookName, found := splitSeriesDecoration(t)
 		if found && series != "" {
 			p.Series = series
+			p.SlotHead = series
 			p.Position = decorationNumberRe.FindString(t[loc[0]:loc[1]])
 			if bookName != "" && usableSlotName(bookName, series) {
 				t = bookName
 				p.NameSplit = true
+				p.Name = bookName
 			} else if bookName != "" {
 				// "Rogue Ascension, Book 8: A Progression LitRPG": the part
 				// after the slot is a genre tagline, not the book's name.
@@ -218,9 +246,16 @@ func parseSearchTitle(raw, author, narrator string) parsedTitle {
 		// and "A Novel" or "A Progression LitRPG" is a genre tagline.
 		series, name := strings.TrimSpace(m[1]), strings.TrimSpace(m[3])
 		p.Position = m[2]
+		p.SlotHead = series
+		// The name anchors the position checks whatever the series' word
+		// count: "Witcher 4: The Tower of the Swallow" must keep "The Tower
+		// of the Swallow" (Audible's #6) over "Time of Contempt" (#4).
+		if usableSlotName(name, series) {
+			p.Name = name
+		}
 		if len(SignificantWords(series)) >= 2 {
 			p.Series = series
-			if usableSlotName(name, series) {
+			if p.Name != "" {
 				t = name
 				p.NameSplit = true
 			}
@@ -257,49 +292,29 @@ func normPosition(pos string) string {
 	return n
 }
 
-// positionAgrees reports whether r names position want: its series position,
-// or any number in its title.
+// positionAgrees reports whether the provider's explicit series_position of r
+// is want. A number in r's title never confirms a position: "Rogue Ascension
+// 8" in a title says nothing a sibling's title can't also say.
 func positionAgrees(r metadata.BookMetadata, want string) bool {
-	if normPosition(r.SeriesPosition) == want {
-		return true
-	}
-	for _, n := range titleNumberRe.FindAllString(r.Title, -1) {
-		if normPosition(n) == want {
-			return true
-		}
-	}
-	return false
+	return want != "" && normPosition(r.SeriesPosition) == want
 }
 
-// positionConflicts reports whether r names a DIFFERENT position than want
-// (its series position, or, without one, the numbers in its title), and its
-// title does not carry the book's own name (nameAnchor) to vouch that it is
-// this book numbered another way. "Rogue Ascension 7: A Progression LitRPG"
-// conflicts with book 8; "The Tower of the Swallow" (The Witcher, Book 6)
-// does not conflict with "The Witcher - 4 - The Tower of the Swallow".
-func positionConflicts(r metadata.BookMetadata, want string, nameAnchor map[string]bool) bool {
-	if want == "" || positionAgrees(r, want) {
-		return false
+// titleNumbers returns every number in title, normalized (normPosition).
+func titleNumbers(title string) []string {
+	var out []string
+	for _, n := range titleNumberRe.FindAllString(title, -1) {
+		out = append(out, normPosition(n))
 	}
-	explicit := normPosition(r.SeriesPosition) != "" || len(titleNumberRe.FindAllString(r.Title, -1)) > 0
-	if !explicit {
-		return false
-	}
-	if len(nameAnchor) > 0 {
-		words := SignificantWords(r.Title)
-		covered := true
-		for w := range nameAnchor {
-			if !words[w] {
-				covered = false
-				break
-			}
-		}
-		if covered {
-			return false
-		}
-	}
-	return true
+	return out
 }
+
+// positionOverrideTolerance is how close r's runtime must be to the book's
+// for it to outweigh a conflicting series position. Tighter than
+// strongRuntimeTolerance: siblings in one series often run within 15% of
+// each other, but rarely within 2%, and a provider's numbering ("The Tower of
+// the Swallow" is Audible's #6, the file says "Witcher 4") is exactly the
+// case where only the runtime can tell.
+const positionOverrideTolerance = 0.02
 
 // dropGenreTagline returns title without a genre-tagline subtitle ("Catch
 // 22: A Novel" -> "Catch 22"), else title unchanged.
@@ -490,7 +505,21 @@ func buildQueryVariants(p parsedTitle, literal, rawTitle, author, narrator strin
 	// The literal title is always asked too when parsing changed it: a parse
 	// is a guess, and the literal question is the one the old ladder asked.
 	if lit := strings.TrimSpace(literal); lit != "" && !strings.EqualFold(lit, strings.TrimSpace(base)) {
-		lv := mk(variantLiteral, lit, author, nil)
+		// Anchored on the parsed title's words, as every derived variant
+		// is: "Magma Heart - Unknown Author" asked as written must not let
+		// "Frost Heart" in. A title that is only a series slot is already
+		// held to its slot (mk).
+		var lf *titleVariant
+		if !p.TitleIsSeries {
+			a := anchorWords(p.Title, p.Series)
+			if len(a) == 0 {
+				a = anchorWords(lit, "")
+			}
+			if len(a) > 0 {
+				lf = &titleVariant{Query: lit, Anchor: a}
+			}
+		}
+		lv := mk(variantLiteral, lit, author, lf)
 		if author == "" {
 			lv.Author = narrator
 		}
@@ -567,12 +596,177 @@ type strongCriteria struct {
 	bookDur    int
 	slotSeries string
 	slotPos    string
-	// position, when set, must be named by a strong answer (positionAgrees):
-	// "Rogue Ascension 7" is never strong for book 8.
+	// position is the series position read from the title (normPosition);
+	// see positionConflicts.
 	position string
-	// nameAnchor is the book name's distinguishing words when the title was
-	// split from a series slot (positionConflicts).
-	nameAnchor map[string]bool
+	// nameAnchor is the distinguishing words of the book name read from
+	// behind the title's series slot (parsedTitle.Name), and seriesWords the
+	// slot head's (parsedTitle.SlotHead).
+	nameAnchor  map[string]bool
+	seriesWords map[string]bool
+	// allowed and allowedNums are every word and number of the book's own
+	// title, series and position: with no runtime of our own, a strong
+	// answer's title says nothing else (titleSubset).
+	allowed     map[string]bool
+	allowedNums map[string]bool
+	// nameIsTagline is set, for the rest of the search, once two pooled
+	// answers carry the name with different positions: it is the series'
+	// tagline ("A Cozy Mystery"), not this book's name, and vouches for
+	// nothing (noteNameEvidence). Shared by every copy of the criteria;
+	// sources answer concurrently.
+	nameIsTagline *atomic.Bool
+}
+
+// newStrongCriteria builds the criteria for one search from its parse, the
+// title it searches by and literal, the title as written.
+func newStrongCriteria(p parsedTitle, title, literal, asin, people string, bookDur int) strongCriteria {
+	c := strongCriteria{asin: asin, people: people, bookDur: bookDur, position: normPosition(p.Position),
+		nameIsTagline: &atomic.Bool{}}
+	if p.TitleIsSeries {
+		c.slotSeries, c.slotPos = p.Series, p.Position
+	} else {
+		c.titleWords = anchorWords(title, p.Series)
+	}
+	if p.Name != "" {
+		c.nameAnchor = anchorWords(p.Name, p.SlotHead)
+	}
+	if strings.TrimSpace(p.SlotHead) != "" {
+		c.seriesWords = SignificantWords(p.SlotHead)
+	}
+	c.allowed, c.allowedNums = map[string]bool{}, map[string]bool{}
+	for _, s := range []string{literal, p.Title, p.Series, p.SlotHead, p.Name} {
+		if strings.TrimSpace(s) == "" {
+			continue
+		}
+		for w := range SignificantWords(s) {
+			c.allowed[w] = true
+		}
+		for _, n := range titleNumbers(s) {
+			c.allowedNums[n] = true
+		}
+	}
+	if c.position != "" {
+		c.allowedNums[c.position] = true
+	}
+	return c
+}
+
+// nameVouches reports whether r's title carries the book's own name, and the
+// name has not turned out to be a shared tagline.
+func (c strongCriteria) nameVouches(r metadata.BookMetadata) bool {
+	return len(c.nameAnchor) > 0 && (c.nameIsTagline == nil || !c.nameIsTagline.Load()) && coversWords(r.Title, c.nameAnchor)
+}
+
+// answerPosition is the position r names: its explicit series_position, else
+// the first number in its title; "" for neither.
+func answerPosition(r metadata.BookMetadata) string {
+	if sp := normPosition(r.SeriesPosition); sp != "" {
+		return sp
+	}
+	if nums := titleNumbers(r.Title); len(nums) > 0 {
+		return nums[0]
+	}
+	return ""
+}
+
+// noteNameEvidence marks the name a tagline when two answers in rs carry it
+// with different positions ("Hemlock Hollow 7: A Cozy Mystery" and "Hemlock
+// Hollow 8: A Cozy Mystery"): a name the series' siblings share is not this
+// book's. It catches taglines the genre vocabulary does not know.
+func (c strongCriteria) noteNameEvidence(rs []metadata.BookMetadata) {
+	if len(c.nameAnchor) == 0 || c.nameIsTagline == nil || c.nameIsTagline.Load() {
+		return
+	}
+	first := ""
+	for _, r := range rs {
+		if !coversWords(r.Title, c.nameAnchor) {
+			continue
+		}
+		pos := answerPosition(r)
+		if pos == "" {
+			continue
+		}
+		if first == "" {
+			first = pos
+		} else if pos != first {
+			c.nameIsTagline.Store(true)
+			return
+		}
+	}
+}
+
+// positionConflicts reports whether r is another book of the series than the
+// one at c.position. The evidence, strongest first:
+//  1. r's title states the series beside another number ("Rogue Ascension 7",
+//     "Hemlock Hollow 7: A Cozy Mystery" for book 8): a conflict, whatever
+//     else agrees -- the title says which book it is;
+//  2. r's runtime within positionOverrideTolerance of the book's: never a
+//     conflict (a provider's numbering differs from the file's);
+//  3. the provider's explicit series_position: a different one conflicts;
+//  4. otherwise a number in r's title: weak, it conflicts only when none of
+//     r's title numbers is the position.
+//
+// 3 and 4 are excused when r's title carries the book's own name
+// (nameVouches: "The Tower of the Swallow", Audible's #6, for "Witcher 4: The
+// Tower of the Swallow").
+func (c strongCriteria) positionConflicts(r metadata.BookMetadata) bool {
+	if c.position == "" {
+		return false
+	}
+	nums := titleNumbers(r.Title)
+	titleOther := len(nums) > 0 && !slices.Contains(nums, c.position)
+	if titleOther && len(c.seriesWords) > 0 && coversWords(r.Title, c.seriesWords) {
+		return true
+	}
+	if c.bookDur > 0 && r.DurationSec > 0 && durationDeltaRatio(c.bookDur, r.DurationSec) <= positionOverrideTolerance {
+		return false
+	}
+	var other bool
+	if sp := normPosition(r.SeriesPosition); sp != "" {
+		other = sp != c.position
+	} else {
+		other = titleOther
+	}
+	return other && !c.nameVouches(r)
+}
+
+// dropConflicts returns rs without the answers that name another position
+// (positionConflicts); an answer carrying the book's own ASIN and agreeing
+// with it (ownASINAgrees) is never dropped.
+func (c strongCriteria) dropConflicts(rs []metadata.BookMetadata) []metadata.BookMetadata {
+	if c.position == "" {
+		return rs
+	}
+	out := rs[:0:0]
+	for _, r := range rs {
+		if c.ownASINAgrees(r) || !c.positionConflicts(r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// titleSubset reports whether every word and number of r's title is the
+// book's own (allowed, allowedNums). A genre word ("A Novel") may be added; a
+// set word ("Books", "Collection") may not. "Jack Reacher, Books 17-19" and "A
+// Wanted Man / Never Go Back / Personal" fail it for "Jack Reacher 17: A
+// Wanted Man".
+func (c strongCriteria) titleSubset(r metadata.BookMetadata) bool {
+	for w := range SignificantWords(r.Title) {
+		if c.allowed[w] || c.allowedNums[normPosition(w)] {
+			continue
+		}
+		if !omnibusWords[w] && authorjunk.IsGenreTagline(w) {
+			continue
+		}
+		return false
+	}
+	for _, n := range titleNumbers(r.Title) {
+		if !c.allowedNums[n] {
+			return false
+		}
+	}
+	return true
 }
 
 // titleAgrees reports whether r's title carries every one of the cleaned
@@ -607,6 +801,15 @@ func (c strongCriteria) ownASINAgrees(r metadata.BookMetadata) bool {
 		(strings.TrimSpace(c.people) != "" && sharesPersonWord(r.Author+" "+r.Narrator, c.people))
 }
 
+// matches reports whether r is strong. Title words alone never are: a
+// sibling, a box set or an omnibus carries every word of the book's title.
+// So r must carry the book's own ASIN and agree with it (ownASINAgrees), or
+// name a person of the book's, identify it (identifies), name no other
+// position (positionConflicts), and then
+//   - with the book's own runtime: run within strongRuntimeTolerance of it;
+//   - without one: name no other explicit series_position, and say nothing in
+//     its title the book's own title, series and position do not
+//     (titleSubset).
 func (c strongCriteria) matches(r metadata.BookMetadata) bool {
 	if c.ownASINAgrees(r) {
 		return true
@@ -614,26 +817,26 @@ func (c strongCriteria) matches(r metadata.BookMetadata) bool {
 	if strings.TrimSpace(c.people) == "" || !sharesPersonWord(r.Author+" "+r.Narrator, c.people) {
 		return false
 	}
-	// A slot position must be named by the answer, or -- when the title was
-	// split from its slot and has a book name of its own -- the answer must
-	// carry that name and name no other position. "Rogue Ascension 8: A
-	// Progression LitRPG" has no name past its tagline, so "Rogue Ascension
-	// 7" is never strong for it.
-	if c.position != "" && !positionAgrees(r, c.position) &&
-		(len(c.nameAnchor) == 0 || positionConflicts(r, c.position, c.nameAnchor) || !coversWords(r.Title, c.nameAnchor)) {
-		return false
-	}
-	if c.slotSeries != "" {
-		if len(keepSeriesSlot([]metadata.BookMetadata{r}, c.slotSeries, c.slotPos)) == 0 {
-			return false
-		}
-	} else if !c.titleAgrees(r) {
+	if c.positionConflicts(r) || !c.identifies(r) {
 		return false
 	}
 	if c.bookDur > 0 {
 		return c.runtimeAgrees(r)
 	}
-	return true
+	if sp := normPosition(r.SeriesPosition); c.position != "" && sp != "" && sp != c.position {
+		return false
+	}
+	return c.titleSubset(r)
+}
+
+// identifies reports whether r's title names this book: the series slot when
+// the title is only that, else the cleaned title's words or the book's own
+// name (nameVouches).
+func (c strongCriteria) identifies(r metadata.BookMetadata) bool {
+	if c.slotSeries != "" {
+		return len(keepSeriesSlot([]metadata.BookMetadata{r}, c.slotSeries, c.slotPos)) > 0
+	}
+	return c.titleAgrees(r) || c.nameVouches(r)
 }
 
 // coversWords reports whether title carries every word of words.
