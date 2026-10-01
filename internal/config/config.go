@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.125.0
+// version: 1.126.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-27
+// last-edited: 2026-10-01
 
 package config
 
@@ -1315,6 +1315,11 @@ type Config struct {
 	// averages below this duration, they are consolidated into one book record.
 	// Default 10. Set to 0 to disable consolidation.
 	ChapterConsolidationThresholdMin int `json:"chapter_consolidation_threshold_min"`
+	// MetadataCandidateFetchWorkers is the batch candidate fetch's worker
+	// count. 0 (the default) sizes it from the enabled sources' summed rate
+	// budget (server.candidateFetchWorkers); any other value is used as is,
+	// clamped to 1-64.
+	MetadataCandidateFetchWorkers int `json:"metadata_candidate_fetch_workers"`
 	// CoalesceShatteredSiblings enables a scan-time post-pass that merges
 	// single-file books shattered across "<prefix> - N" sibling chapter subdirs
 	// (the layout that produced the 380K dedup-candidate explosion) into ONE
@@ -2790,6 +2795,7 @@ func InitConfig() {
 			ScanProgressEvery:                   viper.GetInt("scan_progress_every"),
 			ScanStandDownGraceSeconds:           viper.GetInt("scan_standdown_grace_seconds"),
 			ChapterConsolidationThresholdMin:    viper.GetInt("chapter_consolidation_threshold_min"),
+			MetadataCandidateFetchWorkers:       viper.GetInt("metadata_candidate_fetch_workers"),
 			CoalesceShatteredSiblings:           viper.GetBool("coalesce_shattered_siblings"),
 			OperationTimeoutMinutes:             viper.GetInt("operation_timeout_minutes"),
 			MinBookSizeBytes:                    viper.GetInt64("min_book_size_bytes"),
