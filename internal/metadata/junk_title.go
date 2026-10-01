@@ -1,7 +1,7 @@
 // file: internal/metadata/junk_title.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d7a2c91-3e6b-4f08-a1d5-8c2e9b7f4a13
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 package metadata
 
@@ -206,6 +206,26 @@ func StripJunkTitlePrefix(title string) (string, bool) {
 		return "", false
 	}
 	return t, true
+}
+
+// NarratorCreditName returns the name a "Read by <name>" / "Narrated by
+// <name>" / "Performed by <name>" title credits, and whether the title has
+// that shape. A bare credit with no name ("read by narrator") is not one: it
+// names nobody. The search query builder reads it so "read by Cathfach
+// (Erryn's World)" is searched as "Erryn's World" narrated by Cathfach; it
+// shares namedCreditRe with ClassifyJunkTitleFor so the two cannot disagree on
+// what a credit is.
+func NarratorCreditName(title string) (string, bool) {
+	t := strings.TrimSpace(title)
+	if bareCreditRe.MatchString(t) {
+		return "", false
+	}
+	m := namedCreditRe.FindStringSubmatch(t)
+	if m == nil {
+		return "", false
+	}
+	name := strings.TrimSpace(m[1])
+	return name, name != ""
 }
 
 // ClassifyJunkTitleFor is ClassifyJunkTitle with the book's narrator names:
