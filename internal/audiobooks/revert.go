@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-01
 
@@ -775,9 +775,65 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 	if err := undo.CheckRepointCurrent(f, c); err != nil {
 		return err
 	}
+	vacated := f.FilePath
 	was.Apply(f)
 	if err := rs.db.UpdateBookFile(f.ID, f); err != nil {
 		return fmt.Errorf("restore location of book_file %s: %w", fileID, err)
+	}
+	if vacated == f.FilePath {
+		return nil
+	}
+	// A repoint at a file another row also names (the fragment fixer's moved
+	// class, the duplicate-copies fixer's repoint onto a copy's present twin)
+	// took the single-owner book_file_path key from that row; moving this row
+	// off the path dropped the key. Hand it back so GetBookFileByPath names a
+	// row at the path again.
+	atPath, ok := rs.db.(bookFilesAtPathReader)
+	if !ok {
+		return nil
+	}
+	return rs.reindexVacatedPath(atPath, vacated, f.ID)
+}
+
+// reindexVacatedPath re-writes one other row at path (a live book's first,
+// else any), so the single-owner book_file_path key names it again after the
+// row except left the path. A no-op ModifyBookFile re-writes the row as
+// stored, indexes included; a row a writer moved off the path is skipped.
+func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, except string) error {
+	others, err := atPath.BookFilesAtPath(path)
+	if err != nil {
+		return fmt.Errorf("rows at %s: %w", path, err)
+	}
+	var live, hidden []database.BookFile
+	for i := range others {
+		o := others[i]
+		if o.ID == except {
+			continue
+		}
+		b, err := rs.db.GetBookByID(o.BookID)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", o.BookID, err)
+		}
+		if b != nil && !b.IsSoftDeleted() {
+			live = append(live, o)
+		} else {
+			hidden = append(hidden, o)
+		}
+	}
+	for _, o := range append(live, hidden...) {
+		got, err := rs.db.ModifyBookFile(o.BookID, o.ID, func(bf *database.BookFile) error {
+			if bf.FilePath != path {
+				return errRepointRowMoved
+			}
+			return nil
+		})
+		if errors.Is(err, errRepointRowMoved) || (err == nil && got == nil) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("re-index %s at %s: %w", o.ID, path, err)
+		}
+		return nil
 	}
 	return nil
 }
