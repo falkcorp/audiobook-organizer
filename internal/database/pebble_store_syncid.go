@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
-// last-edited: 2026-09-25
+// last-edited: 2026-10-01
 
 // Package database: sync_item keyspace — durable ABS `libraryItemId` identity.
 //
@@ -269,11 +269,22 @@ func (p *PebbleStore) ResolveSyncItem(syncID string) (*SyncItem, error) {
 	return nil, fmt.Errorf("%w: starting at %s", ErrSyncRedirectChainBroken, syncID)
 }
 
-// maxSyncAliases caps ListSyncAliases. A book absorbs a handful of merge
-// losers in practice; the cap exists so a corrupt MergedFrom graph cannot turn
-// one GET /api/me into an unbounded walk. Hitting it is an ERROR, not a
-// truncation: the caller's list must be complete or fail (abs/userdata.go).
-const maxSyncAliases = 256
+// maxSyncAliases caps ListSyncAliases. The cap exists so a corrupt MergedFrom
+// graph cannot turn one GET /api/me into an unbounded walk. Hitting it is an
+// ERROR, not a truncation: the caller's list must be complete or fail
+// (abs/userdata.go), and the bookmark and merge-follow paths fail outright.
+//
+// It must sit well above any real book's alias count. Merges were assumed to
+// absorb "a handful" of losers, but the fragment-consolidation fixer retires
+// every chapter file an old scan imported as its own book into the real book:
+// on 2026-10-01 one apply gave American Gods 306 aliases and The Sunrise Land
+// 272, and at the old cap of 256 every further retire failed to move its
+// listening state and that book's bookmarks stopped loading. 4096 clears the
+// largest multi-file books in the library by an order of magnitude while still
+// bounding the walk (one point read per alias).
+//
+// A var, not a const, only so a test can lower it rather than build 4096 items.
+var maxSyncAliases = 4096
 
 // ErrSyncAliasLimit is returned by ListSyncAliases when the alias graph under
 // one syncID exceeds maxSyncAliases.
