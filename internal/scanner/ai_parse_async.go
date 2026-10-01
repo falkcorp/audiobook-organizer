@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package scanner
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // EnqueueAIParseFn hands a batch of books that need AI filename parsing to the
@@ -535,8 +536,17 @@ func plausibleAIYear(y int, now time.Time) bool {
 	return y >= aiYearFloor && y <= now.Year()+1
 }
 
-// primaryVersionOf returns the primary member of row's version group, or nil
-// when row is already primary or is in no group.
+// primaryVersionOf returns the member of row's version group that the UI shows
+// as its primary, or nil when that is row itself or row is in no group.
+//
+// The member is versionprimary.Incumbent: an Electable member flagged true,
+// else the ONE Electable member whose flag is nil. Until 2026-10-01 this read
+// an explicit true only, so a group whose primary carried a nil flag (which
+// every visibility path reads as primary) had "no primary" here and the parse
+// landed on the demoted sibling; it also redirected to a trashed member
+// flagged true (visibility audit 2026-10-01 §3 #6). A group with no such
+// member, or two nil-flag members, returns nil and the caller writes to its
+// own row rather than guessing.
 //
 // A group it cannot read is returned as an ERROR, not as a silent nil. Failing
 // open is still the right call -- skipping the write loses the update too -- but
@@ -549,24 +559,29 @@ func primaryVersionOf(store scanBookLookup, row *database.Book) (*database.Book,
 	if row.VersionGroupID == nil || *row.VersionGroupID == "" {
 		return nil, nil
 	}
-	if row.IsPrimaryVersion != nil && *row.IsPrimaryVersion {
+	// A live row flagged true is its group's primary: skip the group read, so
+	// the caller keeps the fresh row it holds.
+	if row.IsPrimaryVersion != nil && *row.IsPrimaryVersion && !row.IsSoftDeleted() {
 		return nil, nil
 	}
 	members, err := store.GetBooksByVersionGroup(*row.VersionGroupID)
 	if err != nil {
 		return nil, fmt.Errorf("read version group %s: %w", *row.VersionGroupID, err)
 	}
-	for i := range members {
-		if members[i].IsPrimaryVersion != nil && *members[i].IsPrimaryVersion {
-			return &members[i], nil
+	// Merge-survivor liveness: a read error counts as alive, so the loser
+	// stays out (the same convention as versionprimary's own store check).
+	alive := func(id string) bool {
+		b, gerr := store.GetBookByID(id)
+		if gerr != nil {
+			return true
 		}
+		return b != nil && !b.IsSoftDeleted()
 	}
-	// A group with no primary member. CreateOrganizedVersion always sets the
-	// flag explicitly, so this is a group formed by some other path -- and a nil
-	// IsPrimaryVersion serializes as ABSENT, not false, so "no member is
-	// primary" and "no member says" are the same shape here. Fall through to
-	// the caller's own row rather than guessing which member wins.
-	return nil, nil
+	inc := versionprimary.Incumbent(members, alive)
+	if inc == nil || inc.ID == row.ID {
+		return nil, nil
+	}
+	return inc, nil
 }
 
 // newAIParser builds the AI fallback parser from the configured LLM backend.
