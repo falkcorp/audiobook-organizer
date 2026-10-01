@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_author_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: bf7207f0-35f9-406d-8c06-9010e2079b36
-// last-edited: 2026-09-28
+// last-edited: 2026-10-01
 
 package metafetch
 
@@ -147,9 +147,9 @@ func TestSearchMetadataForBook_NeverSendsPlaceholderAuthor(t *testing.T) {
 	}
 }
 
-// With no usable author the ladder looks the book's own ASIN up directly, and
-// the fingerprint names that question; a book with a real author is searched
-// (and fingerprinted) exactly as before.
+// The search looks the book's own ASIN up directly whenever it has one
+// (searchInputVersion "2"; before it, only with no usable author), and the
+// fingerprint names that question.
 func TestResolveSearchInputs_ASINOnlyWithoutUsableAuthor(t *testing.T) {
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestResolveSearchInputs_ASINOnlyWithoutUsableAuthor(t *testing.T) {
 	}{
 		{name: "placeholder author with ASIN", authorID: &placeholder.ID, asin: &asin, wantASIN: asin},
 		{name: "no author with ASIN", asin: &asin, wantASIN: asin},
-		{name: "real author with ASIN", authorID: &realAuthor.ID, asin: &asin},
+		{name: "real author with ASIN", authorID: &realAuthor.ID, asin: &asin, wantASIN: asin},
 		{name: "placeholder author without ASIN", authorID: &placeholder.ID},
 	}
 	for _, tc := range cases {

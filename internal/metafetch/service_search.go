@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-01
 
@@ -366,7 +366,12 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 // whenever the ladder changes what it asks (new rung, new title variant, a
 // different author/narrator resolution): a cached "every provider has nothing"
 // verdict is only valid for the exact questions that produced it.
-const searchInputVersion = "1"
+//
+// "2" (2026-10-01): the stop-at-first-hit ladder became the multi-combination
+// fan-out (buildQueryVariants) over cleaned titles (parseSearchTitle), and the
+// book's own ASIN is looked up whenever it has one. Every cached "nothing"
+// verdict is re-asked once.
+const searchInputVersion = "2"
 
 // searchInputs is what the provider ladder actually queries with, after hint
 // defaulting, chapter stripping and author/narrator resolution.
@@ -375,9 +380,14 @@ type searchInputs struct {
 	author     string // searchAuthor: the hint, else the book's resolved author
 	bookAuthor string // the book's own author for scoring ("" if garbage)
 	narrator   string // bookNarrator
-	// asin is the book's own ASIN, set only when there is no usable author
-	// (see resolveSearchInputs); the ladder then looks it up directly.
+	// asin is the book's own ASIN; the search looks it up directly.
 	asin string
+	// rawQuery is the query (else the book's title) before any cleaning;
+	// literal is it chapter-stripped -- what the old ladder searched by.
+	rawQuery string
+	literal  string
+	// parsed is what parseSearchTitle read out of rawQuery.
+	parsed parsedTitle
 }
 
 // resolveSearchInputs derives the ladder's query inputs from the book row and
@@ -385,22 +395,19 @@ type searchInputs struct {
 // it, so a fingerprint computed before a search names the same questions the
 // search asks.
 func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narrator string) searchInputs {
-	searchTitle := query
-	if searchTitle == "" {
-		searchTitle = book.Title
+	rawQuery := query
+	if rawQuery == "" {
+		rawQuery = book.Title
 	}
-	searchTitle = stripChapterFromTitle(searchTitle)
+	searchTitle := stripChapterFromTitle(rawQuery)
+	literal := searchTitle
 
 	// A placeholder author ("Unknown Author", "read by narrator") is never a
 	// search input: not as the author hint, not as the book's own author the
-	// ladder falls back to, and not as a stand-in title below. It is dropped
-	// here, in the one resolver every ladder and fingerprint goes through,
+	// search falls back to, and not as a stand-in title below. It is dropped
+	// here, in the one resolver every search and fingerprint goes through,
 	// because the hint is refilled from AuthorID further down: stripping it
 	// only at a caller would put it straight back. See SearchAuthorHint.
-	//
-	// No searchInputVersion bump: in.author is part of the fingerprint, so
-	// exactly the books whose author was a placeholder get a new fingerprint
-	// and are re-asked; every other book's cached verdict stays valid.
 	searchAuthor := SearchAuthorHint(author)
 	searchNarrator := strings.TrimSpace(narrator)
 
@@ -412,18 +419,11 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 			bookAuthor = SearchAuthorHint(a.Name)
 		}
 	}
-
-	// If title is effectively empty but we have an author, use the author
-	// name as the search query to get results.
-	if strings.TrimSpace(searchTitle) == "" || searchTitle == "-" {
-		searchTitle = bookAuthor
-	}
-	// The provider ladder searches by the book's own author when no hint was
-	// passed. GetBookByID leaves book.Author unhydrated, so the batch
-	// candidate fetch always passed an empty hint and every provider was asked
-	// by title alone: Audible, which answers only exact titles, missed books
-	// it finds with the author ("Blood of Elves" + Sapkowski). The hint alone
-	// still decides the cache input hash; this changes only the queries.
+	// The search asks by the book's own author when no hint was passed.
+	// GetBookByID leaves book.Author unhydrated, so the batch candidate fetch
+	// always passed an empty hint and every provider was asked by title
+	// alone: Audible, which answers only exact titles, missed books it finds
+	// with the author ("Blood of Elves" + Sapkowski).
 	if searchAuthor == "" {
 		searchAuthor = bookAuthor
 	}
@@ -431,17 +431,40 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	if bookNarrator == "" && book.Narrator != nil && *book.Narrator != "" {
 		bookNarrator = *book.Narrator
 	}
-	// The narrator is sent as an author too (the narrator-as-author rung), so
-	// it gets the author's placeholder rule: "read by narrator" is never a hint.
+	// The narrator is sent as an author too (the swapped variant), so it gets
+	// the author's placeholder rule: "read by narrator" is never a hint.
 	bookNarrator = SearchAuthorHint(bookNarrator)
-	// With no usable author, the book's own ASIN (when it has one) is looked
-	// up directly, so a title-only search is not the only question asked.
-	// Only then: a book with a real author is searched as it always was.
+
+	// Read the book's own name, series slot and any packed-in people out of
+	// the title ("Magma Heart - Unknown Author", "read by Cathfach (Erryn's
+	// World)", "Jack Reacher 17: A Wanted Man (Jeff Harding)").
+	parsed := parseSearchTitle(rawQuery, searchAuthor, bookNarrator)
+	if t := strings.TrimSpace(parsed.Title); t != "" && !metadata.IsUnsearchableTitle(t) {
+		searchTitle = t
+	}
+	if searchAuthor == "" {
+		searchAuthor = SearchAuthorHint(parsed.Author)
+		if bookAuthor == "" {
+			bookAuthor = searchAuthor
+		}
+	}
+	if bookNarrator == "" {
+		bookNarrator = SearchAuthorHint(parsed.Narrator)
+	}
+
+	// If title is effectively empty but we have an author, use the author
+	// name as the search query to get results.
+	if strings.TrimSpace(searchTitle) == "" || searchTitle == "-" {
+		searchTitle = bookAuthor
+	}
+	// The book's own ASIN, when it has one, is looked up directly: it is the
+	// one question whose answer is the book by definition.
 	asin := ""
-	if searchAuthor == "" && book.ASIN != nil && looksLikeASIN(*book.ASIN) {
+	if book.ASIN != nil && looksLikeASIN(*book.ASIN) {
 		asin = strings.TrimSpace(*book.ASIN)
 	}
-	return searchInputs{title: searchTitle, author: searchAuthor, bookAuthor: bookAuthor, narrator: bookNarrator, asin: asin}
+	return searchInputs{title: searchTitle, author: searchAuthor, bookAuthor: bookAuthor, narrator: bookNarrator, asin: asin,
+		rawQuery: rawQuery, literal: literal, parsed: parsed}
 }
 
 // fingerprint hashes the questions the ladder asks for these inputs: the
@@ -557,9 +580,15 @@ func (mfs *Service) searchMetadataForBook(
 		sources = kept
 	}
 
+	if searchSeries == "" {
+		searchSeries = in.parsed.Series
+	}
+
 	searchWords := SignificantWords(searchTitle)
 	if rawTitle != searchTitle {
-		for w := range SignificantWords(rawTitle) {
+		// The book's own title, cleaned the same way, so a placeholder
+		// suffix or a narrator credit adds no words to the scorer.
+		for w := range SignificantWords(parseSearchTitle(rawTitle, searchAuthor, bookNarrator).Title) {
 			searchWords[w] = true
 		}
 	}
@@ -570,254 +599,91 @@ func (mfs *Service) searchMetadataForBook(
 	bookDurationSec := mfs.bookRuntimeSec(book)
 	th := hintsFromBook(book)
 
-	// Dedupe by lowercase title+author
-	seen := map[string]bool{}
-	var candidates []MetadataCandidate
-	var sourcesTried, sourcesAnswered []string
-	sourcesFailed := map[string]string{}
-
-	// gatedSearch runs one LIVE source call after acquiring a limiter token
-	// (when a limiter is set) and threads ctx through. Cache hits never call this,
-	// so they consume no tokens — the limiter therefore governs actual outbound
-	// requests, not books. A cancelled/expired ctx short-circuits without a call.
-	gatedSearch := func(fn func(context.Context) ([]metadata.BookMetadata, error)) ([]metadata.BookMetadata, error) {
-		if err := waitForLimiter(ctx, limiter); err != nil {
-			return nil, err
-		}
-		return fn(ctx)
+	// The ASIN to look up directly: the whole query is one, or the query
+	// carries one, else the book's own (resolveSearchInputs).
+	asinToLookup := ""
+	if looksLikeASIN(searchTitle) {
+		asinToLookup = searchTitle
+	} else {
+		asinToLookup = extractASIN(searchTitle)
+	}
+	if asinToLookup == "" {
+		asinToLookup = in.asin
 	}
 
-	// Fan out across sources. Each provider now has its OWN rate-limit token
-	// bucket in internal/metadata/providerhttp, so running sources concurrently
-	// does not make them contend for tokens with each other -- that is precisely
-	// what made this unsafe before and safe now. Previously every source was
-	// queried in series, and with up to four search attempts per source plus a
-	// scoring pass, one book's search took a measured 13s on production.
-	//
-	// Only the I/O half is parallel. The dedupe/scoring merge below stays
-	// sequential and in source order, because `sources` is PRIORITY-ORDERED and
-	// the dedupe is first-wins: parallelizing the merge would make which source
-	// wins a duplicate title+author nondeterministic between runs.
+	// MULTI-COMBINATION FAN-OUT. Every search -- interactive and batch --
+	// asks the quota-free title sources (Audible, Open Library) up to
+	// maxQueryVariants title/author combinations, Google Books and the other
+	// metered sources only the best one, and Audnexus (no title search) only
+	// by ASIN. The answers are pooled, deduplicated by ASIN/ISBN or by
+	// normalized title+author, and ranked below. It is not a fallback: the
+	// old ladder stopped at the first rung that answered, so a book whose
+	// literal title missed was never asked the cleaned one. See
+	// search_variants.go for the variants and the expected calls per book.
+	variants := buildQueryVariants(in.parsed, in.literal, in.rawQuery, searchAuthor, bookNarrator)
+	people := strings.TrimSpace(searchAuthor + " " + bookNarrator)
+	strong := strongCriteria{asin: asinToLookup, people: people, bookDur: bookDurationSec}
+	if in.parsed.TitleIsSeries {
+		strong.slotSeries, strong.slotPos = in.parsed.Series, in.parsed.Position
+	} else {
+		strong.titleWords = anchorWords(searchTitle, in.parsed.Series)
+	}
+	states := mfs.runSearchFanout(fanoutParams{
+		ctx: ctx, limiter: limiter, bookID: id, identity: searchIdentity, opts: opts, people: people, strong: strong,
+	}, sources, variants)
+	mfs.enrichRuntimeByASIN(ctx, limiter, states, bookDurationSec)
+
 	type sourceFetch struct {
 		name       string
 		results    []metadata.BookMetadata
 		baseScores []float64
 		baseTier   string
 		failedErr  string
-		// answered: this source's ladder ran every rung it would run, and
-		// none of them errored, was throttled, or was cut off by a cancel.
-		// Only such a source has actually said "I have nothing".
-		answered bool
+		answered   bool
 	}
-	fetched := make([]sourceFetch, len(sources))
-
-	var fg errgroup.Group
-	fg.SetLimit(sourceFanoutLimit())
-	for srcIdx, source := range sources {
-		srcIdx, src := srcIdx, source
-		fg.Go(func() error {
-			// Stop promptly if the caller cancelled — don't start another source.
-			if err := ctx.Err(); err != nil {
-				return nil
-			}
-			var allResults []metadata.BookMetadata
-			var lastErr error
-			var failedErr string
-			cacheHit := false
-			answered := false
-
-			// Check the metadata fetch cache before hitting the
-			// external API. Cache key is (bookID, source name) —
-			// on hit, we use the cached results as-is and skip the
-			// Search* calls entirely. On miss we fall through to
-			// the API path and write the result back at the end
-			// of the per-source block.
-			//
-			// Added 2026-04-11 after the OpenAI quota incident
-			// where re-fetching 8000 books hit every external API
-			// 8000 times even for books we'd already matched with
-			// high confidence.
-			//
-			// opts.BypassFetchCache (force/refresh) skips this read; the
-			// write below still replaces the row with what the provider says.
-			maxAge := time.Duration(config.AppConfig.MetadataFetchCacheTTLDays) * 24 * time.Hour
-			var cached *database.CachedMetadataEntry
-			var cerr error
-			if !opts.BypassFetchCache {
-				cached, _, cerr = database.GetCachedMetadataFetchWithMaxAge(mfs.db, id, src.Name(), searchIdentity, maxAge)
-			}
-			if cerr == nil && cached != nil {
-				var cachedResults []metadata.BookMetadata
-				if jerr := json.Unmarshal(cached.Results, &cachedResults); jerr == nil {
-					// Keep the in-memory []BookMetadata internally consistent with the
-					// year-kind flag (#1940): entries cached before it shipped
-					// deserialize with PublishYearIsAudiobookRelease=false, so re-derive
-					// it from the source (cache key includes src.Name()). NOTE: on the
-					// search path this is defensive-only — candidates carry Source and
-					// re-derive the flag at apply time (service_apply.go) — but it keeps
-					// the two cache-replay sites symmetric.
-					isRelease := metadata.SourceProducesAudiobookReleaseYear(src.Name())
-					for i := range cachedResults {
-						cachedResults[i].PublishYearIsAudiobookRelease = isRelease
-					}
-					allResults = cachedResults
-					cacheHit = true
-					slog.Debug("metadata-search cache HIT for ( ) — results, age", "id", logger.SanitizeLogValue(id), "name", src.Name(), "count", len(cachedResults), "value", time.Since(cached.CachedAt).Round(time.Second))
+	fetched := make([]sourceFetch, len(states))
+	var sg errgroup.Group
+	sg.SetLimit(sourceFanoutLimit())
+	for i, st := range states {
+		failedErr := ""
+		lastErr := st.lastErr
+		// A fan-out cut short by cancellation still names its cause.
+		if lastErr == nil && ctx.Err() != nil && st.asked > 0 {
+			lastErr = ctx.Err()
+		}
+		if len(st.results) == 0 && lastErr != nil {
+			failedErr = lastErr.Error()
+		}
+		// The pooled per-provider row the single-book fetch and the bulk
+		// fetch replay (CachedMetadataForProvider): written when this search
+		// asked the provider live and it answered, never empty. The search
+		// itself reads only its per-variant rows.
+		if st.live > 0 && len(st.results) > 0 {
+			if blob, merr := json.Marshal(st.results); merr == nil {
+				if perr := database.PutCachedMetadataFetch(mfs.db, id, st.name, searchIdentity, blob, 0); perr != nil {
+					searchFanoutLog.Warn("search pooled cache put failed: book=%s source=%s err=%v",
+						logger.SanitizeLogValue(id), st.name, perr)
 				}
 			}
-
-			if !cacheHit {
-				// One ladder per source. A throttle hold or an open breaker
-				// answers every later rung the same way, and a cancelled
-				// context would fail each rung fast while counting against the
-				// shared breaker — both close the ladder. A sentinel never
-				// displaces a real diagnosis already held (keepDiagnosis).
-				ladderOpen := true
-				stepFailed := false
-				note := func(serr error) {
-					stepFailed = true
-					lastErr = keepDiagnosis(lastErr, serr)
-					if providerSentinel(serr) {
-						ladderOpen = false
-					}
-				}
-				open := func() bool { return ladderOpen && ctx.Err() == nil }
-
-				// If author hint provided, use title+author search for better results
-				if open() && searchAuthor != "" {
-					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-						return src.SearchByTitleAndAuthor(c, searchTitle, searchAuthor)
-					}); serr == nil {
-						allResults = append(allResults, results...)
-					} else {
-						note(serr)
-						slog.Debug("metadata-search SearchByTitleAndAuthor( ) error", "name", src.Name(), "searchTitle", logger.SanitizeLogValue(searchTitle), "searchAuthor", logger.SanitizeLogValue(searchAuthor), "error", serr)
-					}
-				}
-
-				// Narrator-as-author fallback: author/narrator fields are frequently
-				// swapped in audiobook metadata. Try searching with the narrator as
-				// author to catch these cases.
-				if open() && bookNarrator != "" && bookNarrator != searchAuthor {
-					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-						return src.SearchByTitleAndAuthor(c, searchTitle, bookNarrator)
-					}); serr == nil {
-						allResults = append(allResults, results...)
-					} else {
-						note(serr)
-						slog.Debug("metadata-search narrator-as-author fallback( ) error", "name", src.Name(), "searchTitle", logger.SanitizeLogValue(searchTitle), "narrator", bookNarrator, "error", serr)
-					}
-				}
-
-				// Always also search by title only to get broader results
-				if open() {
-					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-						return src.SearchByTitle(c, searchTitle)
-					}); serr == nil {
-						allResults = append(allResults, results...)
-					} else {
-						note(serr)
-						slog.Debug("metadata-search SearchByTitle() error", "name", src.Name(), "value", logger.SanitizeLogValue(searchTitle), "error", serr)
-					}
-				}
-				// SearchByTitle with original title if different
-				if open() && searchTitle != rawTitle {
-					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-						return src.SearchByTitle(c, rawTitle)
-					}); serr == nil {
-						allResults = append(allResults, results...)
-					} else {
-						note(serr)
-					}
-				}
-
-				// Nothing under the literal titles: retry with the book's own
-				// name and the decoration-free title (see extraTitleVariants),
-				// stopping at the first variant that answers. The answers are
-				// anchored exactly as on the bulk path: this search shares its
-				// result path with POST /api/v1/metadata/bulk-fetch, which
-				// applies the first candidate unseen. The author OR the
-				// narrator may vouch for an answer, as in the literal ladder's
-				// narrator-as-author retry. A book the literal queries found
-				// pays nothing here.
-				if len(allResults) == 0 {
-					for _, v := range extraTitleVariants(rawTitle, searchTitle) {
-						if !open() {
-							break
-						}
-						var hits []metadata.BookMetadata
-						if searchAuthor != "" {
-							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-								return src.SearchByTitleAndAuthor(c, v.Query, searchAuthor)
-							}); serr == nil {
-								hits = keepVariant(results, v, searchAuthor+" "+bookNarrator)
-							} else {
-								note(serr)
-							}
-						}
-						if len(hits) == 0 && open() && v.titleOnlyAllowed() {
-							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-								return src.SearchByTitle(c, v.Query)
-							}); serr == nil {
-								hits = keepVariant(results, v, searchAuthor+" "+bookNarrator)
-							} else {
-								note(serr)
-							}
-						}
-						if len(hits) > 0 {
-							allResults = append(allResults, hits...)
-							slog.Debug("metadata-search hit on title variant", "name", src.Name(), "variant", v.Query, "count", len(hits))
-							break
-						}
-					}
-				}
-				// A ladder cut short by cancellation still names its cause.
-				if lastErr == nil && ctx.Err() != nil {
-					lastErr = ctx.Err()
-				}
-				// If all calls failed (no results and there was an error), record it
-				if len(allResults) == 0 && lastErr != nil {
-					failedErr = lastErr.Error()
-				}
-				answered = !stepFailed && ladderOpen && ctx.Err() == nil
-
-				slog.Debug("metadata-search returned raw results for", "name", src.Name(), "count", len(allResults), "searchTitle", logger.SanitizeLogValue(searchTitle))
-
-				// Write to cache on a successful non-empty fetch.
-				// Empty and error cases are not cached so they can
-				// be retried. Cache is best-effort — a Put failure
-				// is logged but doesn't fail the outer search.
-				if len(allResults) > 0 {
-					if blob, merr := json.Marshal(allResults); merr == nil {
-						if perr := database.PutCachedMetadataFetch(mfs.db, id, src.Name(), searchIdentity, blob, 0); perr != nil {
-							slog.Warn("metadata-search cache put failed for ( )", "id", logger.SanitizeLogValue(id), "name", src.Name(), "error", perr)
-						}
-					}
-				}
-			}
-
-			baseScores, baseTier := mfs.ScoreBaseCandidates(ctx, book, allResults, searchWords)
-			fetched[srcIdx] = sourceFetch{
-				name:       src.Name(),
-				results:    allResults,
-				baseScores: baseScores,
-				baseTier:   baseTier,
-				failedErr:  failedErr,
-				answered:   cacheHit || answered,
-			}
+		}
+		fetched[i] = sourceFetch{name: st.name, results: st.results, failedErr: failedErr, answered: st.answered(ctx)}
+		sg.Go(func() error {
+			fetched[i].baseScores, fetched[i].baseTier = mfs.ScoreBaseCandidates(ctx, book, fetched[i].results, searchWords)
 			return nil
 		})
 	}
-	// Errors are never returned above (a failing source is recorded per-source and
-	// must not abort the others), so Wait's error is structurally always nil.
-	_ = fg.Wait()
+	_ = sg.Wait()
 
-	// Merge in SOURCE ORDER — see the note above about first-wins dedupe.
+	seen := candidateSeen{}
+	var candidates []MetadataCandidate
+	var sourcesTried, sourcesAnswered []string
+	sourcesFailed := map[string]string{}
+
+	// Merge in SOURCE ORDER: `sources` is priority-ordered and the dedupe is
+	// first-wins, so a parallel merge would make the winner of a duplicate
+	// nondeterministic between runs.
 	for srcIdx := range sources {
 		sf := fetched[srcIdx]
-		if sf.name == "" {
-			continue // cancelled before this source ran
-		}
 		src := sources[srcIdx]
 		sourcesTried = append(sourcesTried, sf.name)
 		if sf.failedErr != "" {
@@ -828,14 +694,11 @@ func (mfs *Service) searchMetadataForBook(
 		}
 		allResults := sf.results
 		baseScores, baseTier := sf.baseScores, sf.baseTier
-		slog.Debug("metadata-search scored results from with tier", "count", len(allResults), "name", src.Name(), "baseTier", baseTier)
 
 		for i, r := range allResults {
-			key := strings.ToLower(r.Title + "|" + r.Author)
-			if seen[key] {
+			if !seen.add(r) {
 				continue
 			}
-			seen[key] = true
 
 			baseScore := baseScores[i]
 
@@ -860,19 +723,27 @@ func (mfs *Service) searchMetadataForBook(
 				minScore = config.AppConfig.MetadataScoring.EmbeddingMinScore
 			}
 			if score <= minScore {
-				slog.Debug("metadata-search adjusted score (tier) below threshold for by from", "score", score, "baseTier", baseTier, "title", r.Title, "author", r.Author, "name", src.Name())
+				searchFanoutLog.Debug("search candidate below threshold: score=%.3f tier=%s title=%s source=%s",
+					score, baseTier, logger.SanitizeLogValue(r.Title), src.Name())
 				continue
 			}
 
-			// Author-based scoring: boost matches, penalize mismatches or missing
+			// Author-based scoring: boost matches, penalize mismatches or missing.
+			// Taggers swap author and narrator, so a result whose author is the
+			// book's narrator is credited as a swap rather than penalised.
 			if bookAuthor != "" {
 				if r.Author != "" {
 					rAuthorLower := strings.ToLower(r.Author)
 					bAuthorLower := strings.ToLower(bookAuthor)
-					if strings.Contains(rAuthorLower, bAuthorLower) || strings.Contains(bAuthorLower, rAuthorLower) {
+					nLower := strings.ToLower(bookNarrator)
+					switch {
+					case strings.Contains(rAuthorLower, bAuthorLower) || strings.Contains(bAuthorLower, rAuthorLower):
 						rec.mul("author", "Author match", 1.5,
 							"The result's author matches the book's known author.")
-					} else {
+					case nLower != "" && (strings.Contains(rAuthorLower, nLower) || strings.Contains(nLower, rAuthorLower)):
+						rec.mul("author", "Author/narrator swapped", 1.4,
+							"The result's author is the book's narrator: the book's tags have the two swapped.")
+					default:
 						rec.mul("author", "Author mismatch", 0.7,
 							"The result names a different author than the book.")
 					}
@@ -912,6 +783,11 @@ func (mfs *Service) searchMetadataForBook(
 					"The result names no narrator, typical of a print or ebook record.")
 			}
 
+			if asinToLookup != "" && strings.EqualFold(strings.TrimSpace(r.ASIN), asinToLookup) {
+				rec.mul("asin_match", "ASIN match", 2.0,
+					"The result carries the book's own ASIN; it is ranked above every result that does not.")
+			}
+
 			var transcriptionBoosted bool
 			if !th.empty() {
 				var boosted float64
@@ -926,113 +802,22 @@ func (mfs *Service) searchMetadataForBook(
 				durationStepDetail(bookDurationSec, r.DurationSec))
 			score = rec.score
 
-			durationDelta := 0
-			if bookDurationSec > 0 && r.DurationSec > 0 {
-				durationDelta = bookDurationSec - r.DurationSec
-				if durationDelta < 0 {
-					durationDelta = -durationDelta
-				}
-			}
-
-			candidates = append(candidates, MetadataCandidate{
-				Title:                   r.Title,
-				Author:                  r.Author,
-				Narrator:                r.Narrator,
-				Series:                  r.Series,
-				SeriesPosition:          r.SeriesPosition,
-				Year:                    r.PublishYear,
-				Publisher:               r.Publisher,
-				ISBN:                    r.ISBN,
-				ISBN10:                  r.ISBN10,
-				ISBN13:                  r.ISBN13,
-				ASIN:                    r.ASIN,
-				Genre:                   r.Genre,
-				Abridged:                r.Abridged,
-				Subtitle:                r.Subtitle,
-				PageCount:               r.PageCount,
-				SeriesSecondary:         r.SeriesSecondary,
-				SeriesSecondaryPosition: r.SeriesSecondaryPosition,
-				CoverURL:                r.CoverURL,
-				Description:             r.Description,
-				Language:                r.Language,
-				Source:                  src.Name(),
-				Score:                   score,
-				ScoreBreakdown:          rec.breakdown(),
-				DurationSec:             r.DurationSec,
-				DurationDeltaSec:        durationDelta,
-				DurationScore:           computeDurationScore(bookDurationSec, r.DurationSec),
-				CategoryTags:            r.CategoryTags,
-				DurationMismatch:        durationDelta > 600,
-				TranscriptionBoosted:    transcriptionBoosted,
-				AudibleRatingOverall:    r.AudibleRatingOverall,
-				AudibleRatingCount:      r.AudibleRatingCount,
-				GoogleRatingAverage:     r.GoogleRatingAverage,
-				GoogleRatingCount:       r.GoogleRatingCount,
-			})
+			candidates = append(candidates, newSearchCandidate(r, src.Name(), score, rec.breakdown(), bookDurationSec, transcriptionBoosted))
 		}
 	}
 
-	// Try ASIN lookup: either the whole query is an ASIN, or extract one from the query
-	asinToLookup := ""
-	if looksLikeASIN(searchTitle) {
-		asinToLookup = searchTitle
-	} else {
-		asinToLookup = extractASIN(searchTitle)
-	}
-	if asinToLookup == "" {
-		// No usable author: the book's own ASIN (resolveSearchInputs).
-		asinToLookup = in.asin
-	}
-	if asinToLookup != "" {
-		// Try Audible API first (more complete), fall back to Audnexus. Each is a
-		// live request, so acquire a limiter token before it (when limiter != nil)
-		// to keep the per-request rate ceiling honest. The Audnexus lookup is now
-		// ctx-aware — a batch cancel aborts its 9-region loop promptly instead of
-		// burning up to 9×30s.
-		// LookupByASIN is not on the MetadataSource interface, so these calls
-		// cannot go through ProtectedSource and are invisible to both the
-		// circuit breaker and the throttle. Gate and record them by hand.
-		//
-		// Without this, one function held two live paths to the same provider
-		// where one honoured a global hold and the other did not — and a 429
-		// here, now well-shaped as a ProviderStatusError, reached no classifier
-		// at all. Bypassed contexts skip the gate here exactly as they do in
-		// ProtectedSource.
-		bypass := metadata.ThrottleBypassed(ctx)
-		reg := metadata.DefaultThrottleRegistry()
-
-		var result *metadata.BookMetadata
-		var err error
-		if !bypass && reg.Throttled(metadata.SourceIDAudible) {
-			err = metadata.ErrProviderThrottled
-		} else if err = waitForLimiter(ctx, limiter); err == nil {
-			startedAt := time.Now()
-			result, err = metadata.NewAudibleClient().LookupByASIN(asinToLookup)
-			if err != nil {
-				reg.RecordFailure(metadata.SourceIDAudible, err)
-			} else {
-				reg.RecordSuccess(metadata.SourceIDAudible, startedAt)
-			}
-		}
+	// The direct ASIN lookup: Audible first (more complete), Audnexus as the
+	// fallback. Skipped when the pool already holds that ASIN with a runtime:
+	// the lookup could not change the ranking, and the book would wait on it.
+	if asinToLookup != "" && !poolHasASINWithRuntime(states, asinToLookup) {
+		result, err := mfs.lookupASIN(ctx, limiter, metadata.SourceIDAudible, asinToLookup)
 		if err != nil || result == nil {
-			slog.Debug("metadata-search Audible API lookup for failed, trying Audnexus", "value", logger.SanitizeLogValue(asinToLookup), "error", logger.SanitizeLogValue(fmt.Sprint(err)))
-			if !bypass && reg.Throttled(metadata.SourceIDAudnexus) {
-				err = metadata.ErrProviderThrottled
-			} else if werr := waitForLimiter(ctx, limiter); werr != nil {
-				err = werr
-			} else {
-				startedAt := time.Now()
-				result, err = metadata.NewAudnexusClient().LookupByASIN(ctx, asinToLookup)
-				if err != nil {
-					reg.RecordFailure(metadata.SourceIDAudnexus, err)
-				} else {
-					reg.RecordSuccess(metadata.SourceIDAudnexus, startedAt)
-				}
-			}
+			searchFanoutLog.Debug("search ASIN lookup on Audible failed, trying Audnexus: asin=%s err=%v",
+				logger.SanitizeLogValue(asinToLookup), err)
+			result, err = mfs.lookupASIN(ctx, limiter, metadata.SourceIDAudnexus, asinToLookup)
 		}
 		if err == nil && result != nil {
-			key := strings.ToLower(result.Title + "|" + result.Author)
-			if !seen[key] {
+			if seen.add(*result) {
 				score, asinBd := ScoreOneResultWithBreakdown(*result, searchWords)
 				asinRec := &scoreRecorder{score: score, steps: asinBd.Steps}
 				if score <= 0 {
@@ -1044,54 +829,13 @@ func (mfs *Service) searchMetadataForBook(
 						"This result was matched by ASIN, which is authoritative, so the "+
 							"title/author score was overridden.")
 				}
-				asinDurationDelta := 0
-				if bookDurationSec > 0 && result.DurationSec > 0 {
-					asinDurationDelta = bookDurationSec - result.DurationSec
-					if asinDurationDelta < 0 {
-						asinDurationDelta = -asinDurationDelta
-					}
-				}
 				asinRec.mul("duration", "Runtime comparison",
 					durationScoreMultiplier(bookDurationSec, result.DurationSec),
 					durationStepDetail(bookDurationSec, result.DurationSec))
-				score = asinRec.score
-				candidates = append(candidates, MetadataCandidate{
-					Title:                   result.Title,
-					Author:                  result.Author,
-					Narrator:                result.Narrator,
-					Series:                  result.Series,
-					SeriesPosition:          result.SeriesPosition,
-					Year:                    result.PublishYear,
-					Publisher:               result.Publisher,
-					ISBN:                    result.ISBN,
-					ISBN10:                  result.ISBN10,
-					ISBN13:                  result.ISBN13,
-					ASIN:                    result.ASIN,
-					Genre:                   result.Genre,
-					Abridged:                result.Abridged,
-					Subtitle:                result.Subtitle,
-					PageCount:               result.PageCount,
-					SeriesSecondary:         result.SeriesSecondary,
-					SeriesSecondaryPosition: result.SeriesSecondaryPosition,
-					CoverURL:                result.CoverURL,
-					Description:             result.Description,
-					Language:                result.Language,
-					Source:                  "Audnexus (Audible)",
-					Score:                   score,
-					ScoreBreakdown:          asinRec.breakdown(),
-					DurationSec:             result.DurationSec,
-					DurationDeltaSec:        asinDurationDelta,
-					DurationScore:           computeDurationScore(bookDurationSec, result.DurationSec),
-					CategoryTags:            result.CategoryTags,
-					DurationMismatch:        asinDurationDelta > 600,
-					AudibleRatingOverall:    result.AudibleRatingOverall,
-					AudibleRatingCount:      result.AudibleRatingCount,
-					GoogleRatingAverage:     result.GoogleRatingAverage,
-					GoogleRatingCount:       result.GoogleRatingCount,
-				})
+				candidates = append(candidates, newSearchCandidate(*result, "Audnexus (Audible)", asinRec.score, asinRec.breakdown(), bookDurationSec, false))
 			}
 		} else {
-			slog.Debug("metadata-search ASIN lookup for failed", "value", logger.SanitizeLogValue(asinToLookup), "error", logger.SanitizeLogValue(fmt.Sprint(err)))
+			searchFanoutLog.Debug("search ASIN lookup failed: asin=%s err=%v", logger.SanitizeLogValue(asinToLookup), err)
 		}
 	}
 
@@ -1107,7 +851,13 @@ func (mfs *Service) searchMetadataForBook(
 	if originalTitle == "" {
 		originalTitle = book.Title
 	}
-	if expectedNum := extractTrailingNumber(originalTitle); expectedNum != "" {
+	expectedNum := extractTrailingNumber(originalTitle)
+	if expectedNum == "" && in.parsed.Position != "" {
+		// The position parseSearchTitle read out of the title ("Jack Reacher
+		// 17: A Wanted Man", "The Witcher - 4 - ...").
+		expectedNum = normalizeSeriesNumber(in.parsed.Position)
+	}
+	if expectedNum != "" {
 		k := scoringKnobs()
 		for i := range candidates {
 			c := &candidates[i]
@@ -1128,8 +878,17 @@ func (mfs *Service) searchMetadataForBook(
 		}
 	}
 
-	// Sort by score descending
-	sort.Slice(candidates, func(i, j int) bool {
+	// Sort by score descending, with every candidate carrying the ASIN looked
+	// up (the book's own, or the query's) ranked first: an ASIN match wins
+	// over any combination of title, author, narrator, series and runtime
+	// agreement.
+	asinFirst := func(c MetadataCandidate) bool {
+		return asinToLookup != "" && strings.EqualFold(strings.TrimSpace(c.ASIN), asinToLookup)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if ai, aj := asinFirst(candidates[i]), asinFirst(candidates[j]); ai != aj {
+			return ai
+		}
 		return candidates[i].Score > candidates[j].Score
 	})
 
@@ -1143,7 +902,8 @@ func (mfs *Service) searchMetadataForBook(
 		candidates = mfs.RerankTopK(ctx, book, candidates)
 	}
 
-	slog.Debug("metadata-search returning candidates for (search words )", "candidateCount", len(candidates), "searchTitle", logger.SanitizeLogValue(searchTitle), "searchWords", searchWords)
+	searchFanoutLog.Debug("search returning %d candidates for %s (%d variants)", len(candidates),
+		logger.SanitizeLogValue(searchTitle), len(variants))
 
 	return &SearchMetadataResponse{
 		Results:          candidates,
