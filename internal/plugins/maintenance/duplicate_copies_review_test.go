@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e2d9c41-3b7a-4f05-8c1e-a94d2f7b3e58
 // last-edited: 2026-10-01
 
@@ -347,6 +347,29 @@ func TestDuplicateCopies_BigFinishPublisherIsManualOnly(t *testing.T) {
 }
 
 // ---- NITs ---------------------------------------------------------------------
+
+// TestDuplicateCopies_ReplanFindsACopyUnderATrackNumberedTitle: a third copy
+// that appears after the plan under the same title less a leading track
+// number ("44 - Dune" next to "Dune", either way round) is a neighbour by
+// dcTitleKey, so the re-plan sees the group change and refuses the row. Both
+// directions: the index must be keyed, and looked up, by dcTitleKey.
+func TestDuplicateCopies_ReplanFindsACopyUnderATrackNumberedTitle(t *testing.T) {
+	for _, tc := range []struct{ members, newcomer string }{{"Dune", "44 - Dune"}, {"44 - Dune", "Dune"}} {
+		t.Run(tc.members+" then "+tc.newcomer, func(t *testing.T) {
+			d := newDCFixture(t)
+			rows := []dcRow{{track: 1, dur: 600, hash: "h1"}, {track: 2, dur: 600, hash: "h2"}}
+			s := d.copyBook(t, "S", tc.members, "lib/Dune", rows...)
+			d.copyBook(t, "L", tc.members, "lib/Dune 2", rows...)
+			planned := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), s)
+			require.True(t, planned.Applicable(), planned.SkipReason)
+			d.copyBook(t, "M", tc.newcomer, "lib/Dune 3", rows...)
+			out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{planned.RowID})
+			require.Equal(t, 1, out.ChangedSincePlan, "%+v", out.Rows)
+			require.True(t, d.live(t, "S"))
+			require.True(t, d.live(t, "L"))
+		})
+	}
+}
 
 func TestDuplicateCopies_DanglingAuthorIsUnknownNotAWildcard(t *testing.T) {
 	five := 5
