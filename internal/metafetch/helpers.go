@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-10-01
 
@@ -274,6 +274,11 @@ type titleVariant struct {
 	// ("Mistborn: The Final Empire") but a sibling's never names only words
 	// our own title has.
 	Allowed map[string]bool
+	// Nums is the numbers an Exact result's title may carry (numberSet of
+	// the text Allowed came from; the query's when nil). SignificantWords
+	// drops tokens of two characters or fewer, so a number would otherwise
+	// never count against a result: "Mistborn 2" would pass for book 1.
+	Nums map[string]bool
 	// Strict narrows keepVariant's generic-word exemption: a set-naming word
 	// (omnibusWords: "complete", "collection", "series", "trilogy", "box
 	// set") must be one of ours too, and a result naming a set
@@ -380,7 +385,7 @@ func segmentVariant(rawTitle string, seen map[string]bool) []titleVariant {
 	for w := range anchor {
 		allowed[w] = true
 	}
-	return []titleVariant{{Query: field, Anchor: anchor, Exact: true, Allowed: allowed}}
+	return []titleVariant{{Query: field, Anchor: anchor, Exact: true, Allowed: allowed, Nums: numberSet(title)}}
 }
 
 // unspacedSubtitle splits "Title: Subtitle" at a colon with no space before
@@ -424,7 +429,7 @@ func subtitleVariant(rawTitle string, seen map[string]bool) []titleVariant {
 	for w := range anchor {
 		allowed[w] = true
 	}
-	return []titleVariant{{Query: head, Anchor: anchor, Exact: true, Allowed: allowed, Strict: true}}
+	return []titleVariant{{Query: head, Anchor: anchor, Exact: true, Allowed: allowed, Nums: numberSet(rawTitle), Strict: true}}
 }
 
 // omnibusWords name a set of books rather than one: "The Complete
@@ -483,9 +488,18 @@ func keepVariant(results []metadata.BookMetadata, v titleVariant, people string)
 			allowed = v.Allowed
 			peopleWords = SignificantWords(people)
 		}
+		nums := v.Nums
+		if nums == nil {
+			nums = numberSet(v.Query)
+		}
 		var exact []metadata.BookMetadata
 		for _, r := range results {
 			ok := strings.TrimSpace(r.Author) != ""
+			for _, n := range titleNumbers(r.Title) {
+				if !nums[n] {
+					ok = false
+				}
+			}
 			if v.Strict && omnibusTitle(r.Title) && !omnibusTitleIn(allowed) {
 				ok = false
 			}
@@ -519,7 +533,6 @@ func keepVariant(results []metadata.BookMetadata, v titleVariant, people string)
 // such a result must ALSO name a matching person; a provider that omits the
 // author cannot vouch for it.
 func keepAnchored(results []metadata.BookMetadata, anchor map[string]bool, people string) []metadata.BookMetadata {
-	peopleWords := SignificantWords(people)
 	var kept []metadata.BookMetadata
 	for _, r := range results {
 		words := SignificantWords(r.Title)
@@ -534,13 +547,10 @@ func keepAnchored(results []metadata.BookMetadata, anchor map[string]bool, peopl
 			continue
 		}
 		if r.Author != "" && strings.TrimSpace(people) != "" {
-			ok = false
-			for w := range SignificantWords(r.Author) {
-				if peopleWords[w] {
-					ok = true
-					break
-				}
-			}
+			// The same person (sharesPerson: full name or surname), not a
+			// shared word: "Michael Grant" does not vouch for "Michael
+			// Connelly"'s book.
+			ok = sharesPerson(r.Author, people)
 		} else if len(anchor) < 2 {
 			ok = false
 		}

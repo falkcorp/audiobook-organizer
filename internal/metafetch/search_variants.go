@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
 // last-edited: 2026-10-01
 
@@ -28,14 +28,15 @@ const maxQueryVariants = 4
 // it is asked its next variant only while it has accepted nothing.
 const maxOpenLibraryAsks = 2
 
-// maxAudnexusRegions is how many Audnexus regions one search's single
-// Audnexus lookup tries (audnexusSearchRegions). The old ladder's fallback
-// tried all of metadata's audnexusRegions, each a separate request against
-// Audnexus's 2/s.
-const maxAudnexusRegions = 3
+// maxAudnexusRequests is the most region requests one search's single
+// Audnexus lookup sends: every audnexusSearchRegions region, then every
+// audnexusFallbackRegions one, when the ASIN is in none of them. A found
+// ASIN costs at most len(audnexusSearchRegions). The old ladder's fallback
+// asked all of metadata's audnexusRegions, the default store twice.
+const maxAudnexusRequests = 8
 
-// audnexusSearchRegions are the regions a search's Audnexus lookup tries,
-// chosen for an English-language library:
+// audnexusSearchRegions are the regions a search's Audnexus lookup tries
+// first, chosen for an English-language library:
 //   - "" is the default store, which IS the US one (the full list's "us"
 //     asks it a second time);
 //   - "uk" and "au" are the two other English stores with catalogs of their
@@ -48,9 +49,15 @@ const maxAudnexusRegions = 3
 //     Japanese releases, which an English library's ASINs do not name.
 //
 // This is reasoned from the stores' catalogs, not measured against the
-// library. The lookup is a fallback: Audible's own ASIN lookup and its title
-// search are asked first.
+// library, so it costs no recall: only when all three say "not here"
+// (metadata.IsNotFound) are the rest asked (audnexusFallbackRegions) before
+// the ASIN is called not found -- the full list main asked, without the
+// default store twice.
 var audnexusSearchRegions = []string{"", "uk", "au"}
+
+// audnexusFallbackRegions are asked only after every audnexusSearchRegions
+// region answered "not here".
+var audnexusFallbackRegions = []string{"ca", "in", "de", "fr", "jp"}
 
 // strongRuntimeTolerance is the runtime agreement (|delta| / book runtime) a
 // title+author match needs to count as strong enough to stop the fan-out.
@@ -292,13 +299,6 @@ func normPosition(pos string) string {
 	return n
 }
 
-// positionAgrees reports whether the provider's explicit series_position of r
-// is want. A number in r's title never confirms a position: "Rogue Ascension
-// 8" in a title says nothing a sibling's title can't also say.
-func positionAgrees(r metadata.BookMetadata, want string) bool {
-	return want != "" && normPosition(r.SeriesPosition) == want
-}
-
 // titleNumbers returns every number in title, normalized (normPosition).
 func titleNumbers(title string) []string {
 	var out []string
@@ -384,7 +384,7 @@ func (v queryVariant) accept(results []metadata.BookMetadata, people string) []m
 	if v.personRequired && strings.TrimSpace(people) != "" {
 		var kept []metadata.BookMetadata
 		for _, r := range results {
-			if sharesPersonWord(r.Author+" "+r.Narrator, people) {
+			if sharesPerson(r.Author+"; "+r.Narrator, people) {
 				kept = append(kept, r)
 			}
 		}
@@ -561,7 +561,7 @@ func buildQueryVariants(p parsedTitle, literal, rawTitle, author, narrator strin
 		for w := range a {
 			allowed[w] = true
 		}
-		add(mk(variantShort, p.Short, who, &titleVariant{Query: p.Short, Anchor: a, Exact: true, Allowed: allowed, Strict: true}))
+		add(mk(variantShort, p.Short, who, &titleVariant{Query: p.Short, Anchor: a, Exact: true, Allowed: allowed, Nums: numberSet(base), Strict: true}))
 	}
 	if p.Series != "" && p.Position != "" && who != "" {
 		v := queryVariant{Kind: variantSeriesAuthor, Title: p.Series, Author: who, slotSeries: p.Series, slotPosition: p.Position}
@@ -592,7 +592,10 @@ func buildQueryVariants(p parsedTitle, literal, rawTitle, author, narrator strin
 type strongCriteria struct {
 	asin       string
 	titleWords map[string]bool
-	people     string
+	// authors is the book's author credit ("; "-separated names). Only an
+	// author match satisfies the person leg (authorAgrees); a narrator in
+	// common never does on its own.
+	authors    string
 	bookDur    int
 	slotSeries string
 	slotPos    string
@@ -619,8 +622,8 @@ type strongCriteria struct {
 
 // newStrongCriteria builds the criteria for one search from its parse, the
 // title it searches by and literal, the title as written.
-func newStrongCriteria(p parsedTitle, title, literal, asin, people string, bookDur int) strongCriteria {
-	c := strongCriteria{asin: asin, people: people, bookDur: bookDur, position: normPosition(p.Position),
+func newStrongCriteria(p parsedTitle, title, literal, asin, author string, bookDur int) strongCriteria {
+	c := strongCriteria{asin: asin, authors: author, bookDur: bookDur, position: normPosition(p.Position),
 		nameIsTagline: &atomic.Bool{}}
 	if p.TitleIsSeries {
 		c.slotSeries, c.slotPos = p.Series, p.Position
@@ -727,19 +730,23 @@ func (c strongCriteria) positionConflicts(r metadata.BookMetadata) bool {
 	} else {
 		other = titleOther
 	}
-	return other && !c.nameVouches(r)
+	// The book's name excuses another position only in a title that carries
+	// no number the book's own does not (numbersFit): "Assertions 2" covers
+	// the name "Assertions" and is still another book. Word coverage cannot
+	// see the "2" -- SignificantWords drops short tokens.
+	return other && !(c.nameVouches(r) && c.numbersFit(r.Title))
 }
 
 // dropConflicts returns rs without the answers that name another position
-// (positionConflicts); an answer carrying the book's own ASIN and agreeing
-// with it (ownASINAgrees) is never dropped.
+// (positionConflicts). An answer carrying the book's own ASIN gets no pass:
+// a stored ASIN can be a sibling's (ownASINAgrees).
 func (c strongCriteria) dropConflicts(rs []metadata.BookMetadata) []metadata.BookMetadata {
 	if c.position == "" {
 		return rs
 	}
 	out := rs[:0:0]
 	for _, r := range rs {
-		if c.ownASINAgrees(r) || !c.positionConflicts(r) {
+		if !c.positionConflicts(r) {
 			out = append(out, r)
 		}
 	}
@@ -751,22 +758,50 @@ func (c strongCriteria) dropConflicts(rs []metadata.BookMetadata) []metadata.Boo
 // set word ("Books", "Collection") may not. "Jack Reacher, Books 17-19" and "A
 // Wanted Man / Never Go Back / Personal" fail it for "Jack Reacher 17: A
 // Wanted Man".
+//
+// A title may restate the answer's OWN series metadata ("A Wanted Man: Jack
+// Reacher, Book 17" with series "Jack Reacher") and edition noise
+// ("Unabridged"); "Abridged" is another product and fails.
 func (c strongCriteria) titleSubset(r metadata.BookMetadata) bool {
+	own := SignificantWords(r.Series)
+	if strings.TrimSpace(r.Series) == "" {
+		own = nil
+	}
 	for w := range SignificantWords(r.Title) {
-		if c.allowed[w] || c.allowedNums[normPosition(w)] {
+		if c.allowed[w] || c.allowedNums[normPosition(w)] || own[w] || subsetNoiseWords[w] {
 			continue
 		}
-		if !omnibusWords[w] && authorjunk.IsGenreTagline(w) {
+		if !omnibusWords[w] && w != "abridged" && authorjunk.IsGenreTagline(w) {
 			continue
 		}
 		return false
 	}
-	for _, n := range titleNumbers(r.Title) {
+	return c.numbersFit(r.Title)
+}
+
+// subsetNoiseWords may appear in a strong answer's title beyond the book's
+// own words: they say nothing about which book it is.
+var subsetNoiseWords = map[string]bool{"unabridged": true, "audiobook": true, "book": true}
+
+// numbersFit reports whether every number in title is one of the book's own
+// (allowedNums). SignificantWords drops tokens of two characters or fewer, so
+// without this "Rogue Ascension 7" reads as "Rogue Ascension 8".
+func (c strongCriteria) numbersFit(title string) bool {
+	for _, n := range titleNumbers(title) {
 		if !c.allowedNums[n] {
 			return false
 		}
 	}
 	return true
+}
+
+// numberSet returns the numbers in s (titleNumbers) as a set.
+func numberSet(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, n := range titleNumbers(s) {
+		out[n] = true
+	}
+	return out
 }
 
 // titleAgrees reports whether r's title carries every one of the cleaned
@@ -781,52 +816,72 @@ func (c strongCriteria) titleAgrees(r metadata.BookMetadata) bool {
 			return false
 		}
 	}
-	return true
+	// Numbers never vanish from the comparison (numbersFit).
+	return c.numbersFit(r.Title)
 }
 
 func (c strongCriteria) runtimeAgrees(r metadata.BookMetadata) bool {
 	return c.bookDur > 0 && r.DurationSec > 0 && durationDeltaRatio(c.bookDur, r.DurationSec) <= strongRuntimeTolerance
 }
 
-// ownASINAgrees reports whether r carries the book's own ASIN AND agrees with
-// the book on something else: its title words, a person, or its runtime. A
-// stored ASIN is sometimes wrong (an earlier bad match); an answer that
-// carries it but disagrees on everything gets the ASIN multiplier only, not
-// the first-place tier or the early stop.
+// ownASINAgrees reports whether r carries the book's own ASIN AND is this
+// book by the same evidence any other answer needs: it names no other
+// position (positionConflicts), and it runs within strongRuntimeTolerance or
+// its title says nothing the book's does not (titleSubset). A stored ASIN is
+// sometimes wrong -- an earlier bad match stored a sibling's ("Rogue
+// Ascension 7" on book 8) -- and an answer that carries it but fails that
+// gets the ASIN multiplier only, not the first-place tier or the early stop.
 func (c strongCriteria) ownASINAgrees(r metadata.BookMetadata) bool {
 	if c.asin == "" || !strings.EqualFold(strings.TrimSpace(r.ASIN), c.asin) {
 		return false
 	}
-	return c.titleAgrees(r) || c.runtimeAgrees(r) ||
-		(strings.TrimSpace(c.people) != "" && sharesPersonWord(r.Author+" "+r.Narrator, c.people))
+	return !c.positionConflicts(r) && (c.runtimeAgrees(r) || c.titleSubset(r))
+}
+
+// explicitPositionConflicts reports whether r's explicit series_position is
+// not the title's and r's runtime is not within positionOverrideTolerance of
+// the book's. A strong answer never has one: the name exemption that keeps it
+// in the pool ("The Tower of the Swallow", Audible's #6) is not enough to
+// stop the search on.
+func (c strongCriteria) explicitPositionConflicts(r metadata.BookMetadata) bool {
+	sp := normPosition(r.SeriesPosition)
+	if c.position == "" || sp == "" || sp == c.position {
+		return false
+	}
+	return !(c.bookDur > 0 && r.DurationSec > 0 && durationDeltaRatio(c.bookDur, r.DurationSec) <= positionOverrideTolerance)
+}
+
+// authorAgrees reports whether one of r's authors is one of the book's
+// (samePersonName). The person leg of a strong match: a shared first name
+// ("Michael Grant" for "Michael Connelly") is not a match, and a narrator in
+// common is not one at all.
+func (c strongCriteria) authorAgrees(r metadata.BookMetadata) bool {
+	return sharesPerson(r.Author, c.authors)
 }
 
 // matches reports whether r is strong. Title words alone never are: a
-// sibling, a box set or an omnibus carries every word of the book's title.
-// So r must carry the book's own ASIN and agree with it (ownASINAgrees), or
-// name a person of the book's, identify it (identifies), name no other
-// position (positionConflicts), and then
-//   - with the book's own runtime: run within strongRuntimeTolerance of it;
-//   - without one: name no other explicit series_position, and say nothing in
-//     its title the book's own title, series and position do not
-//     (titleSubset).
+// sibling, a box set or an omnibus carries every word of the book's title,
+// and a sequel ("The Fall of Hyperion") runs close to the book. So r must
+// carry the book's own ASIN and agree with it (ownASINAgrees), or:
+//   - name one of the book's AUTHORS (authorAgrees; a narrator never counts);
+//   - identify the book (identifies) and name no other position
+//     (positionConflicts), nor another explicit series_position unless its
+//     runtime is within positionOverrideTolerance (explicitPositionConflicts);
+//   - say nothing in its title the book's own title, series and position do
+//     not (titleSubset);
+//   - and, when the book has its own runtime, run within
+//     strongRuntimeTolerance of it.
 func (c strongCriteria) matches(r metadata.BookMetadata) bool {
 	if c.ownASINAgrees(r) {
 		return true
 	}
-	if strings.TrimSpace(c.people) == "" || !sharesPersonWord(r.Author+" "+r.Narrator, c.people) {
+	if !c.authorAgrees(r) {
 		return false
 	}
-	if c.positionConflicts(r) || !c.identifies(r) {
+	if c.positionConflicts(r) || c.explicitPositionConflicts(r) || !c.identifies(r) || !c.titleSubset(r) {
 		return false
 	}
-	if c.bookDur > 0 {
-		return c.runtimeAgrees(r)
-	}
-	if sp := normPosition(r.SeriesPosition); c.position != "" && sp != "" && sp != c.position {
-		return false
-	}
-	return c.titleSubset(r)
+	return c.bookDur <= 0 || c.runtimeAgrees(r)
 }
 
 // identifies reports whether r's title names this book: the series slot when
@@ -850,12 +905,60 @@ func coversWords(title string, words map[string]bool) bool {
 	return true
 }
 
-// sharesPersonWord reports whether a and b share a significant name word.
-func sharesPersonWord(a, b string) bool {
-	bw := SignificantWords(b)
-	for w := range SignificantWords(a) {
-		if bw[w] {
-			return true
+// personSepRe splits a credit into names: "Lee Child, Jeff Harding", "A & B",
+// "A and B", "A; B", "A / B".
+var personSepRe = regexp.MustCompile(`(?i)\s*(?:[,;/&]|\band\b)\s*`)
+
+// personSuffixes are name suffixes that are not a surname.
+var personSuffixes = map[string]bool{"jr": true, "sr": true, "ii": true, "iii": true, "iv": true, "phd": true, "md": true}
+
+// personNames splits a credit into names, each as its lower-cased words.
+func personNames(s string) [][]string {
+	var out [][]string
+	for _, part := range personSepRe.Split(s, -1) {
+		var words []string
+		for _, w := range strings.Fields(strings.ToLower(part)) {
+			if w = strings.Trim(w, ".,;:'\"()"); w != "" {
+				words = append(words, w)
+			}
+		}
+		if len(words) > 0 {
+			out = append(out, words)
+		}
+	}
+	return out
+}
+
+// surname is a name's last word that is not a suffix or an initial.
+func surname(words []string) string {
+	for i := len(words) - 1; i >= 0; i-- {
+		if w := words[i]; len(w) > 1 && !personSuffixes[w] {
+			return w
+		}
+	}
+	return ""
+}
+
+// samePersonName reports whether two names are one person: the same full
+// name, or the same surname. "Michael Grant" and "Michael Connelly" share a
+// word, not a person.
+func samePersonName(a, b []string) bool {
+	if strings.Join(a, " ") == strings.Join(b, " ") {
+		return true
+	}
+	sa, sb := surname(a), surname(b)
+	return sa != "" && sa == sb
+}
+
+// sharesPerson reports whether a credit in a and one in b name the same
+// person (samePersonName).
+func sharesPerson(a, b string) bool {
+	bn := personNames(b)
+	for _, x := range personNames(a) {
+		for _, y := range bn {
+			if samePersonName(x, y) {
+				return true
+			}
 		}
 	}
 	return false
@@ -945,7 +1048,7 @@ func sourcePolicyFor(providerID string) sourcePolicy {
 // provider with this config id, ASIN lookups included (cache hits and early
 // stop send fewer): Audible maxQueryVariants title searches + 1 lookup of the
 // book's own ASIN; Open Library maxOpenLibraryAsks; Google Books, Hardcover
-// and the rest 1; Audnexus one ASIN lookup of at most maxAudnexusRegions
+// and the rest 1; Audnexus one ASIN lookup of at most maxAudnexusRequests
 // region requests. The candidate op sizes its workers and reports its
 // binding source from this.
 func MaxSearchCallsPerBook(providerID string) int {
@@ -958,7 +1061,7 @@ func MaxSearchCallsPerBook(providerID string) int {
 	case policyUntilFound:
 		return maxOpenLibraryAsks
 	case policyASINOnly:
-		return maxAudnexusRegions
+		return maxAudnexusRequests
 	default:
 		return 1
 	}
