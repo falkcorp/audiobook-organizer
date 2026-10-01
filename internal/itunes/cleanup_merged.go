@@ -1,5 +1,5 @@
 // file: internal/itunes/cleanup_merged.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c4e7a20-1b83-4d6f-a2e9-5c0d3b8f1a74
 // last-edited: 2026-10-01
 //
@@ -17,9 +17,12 @@ package itunes
 
 import (
 	"fmt"
-	"log/slog"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+var cmlog = logger.New("itunes-cleanup-merged")
 
 // MergedCleanupPreview summarizes the superseded-track removal without applying.
 type MergedCleanupPreview struct {
@@ -86,7 +89,7 @@ func computeMergedCleanupFromInITL(inITL map[string]bool, store RebuildStore) (*
 		if err != nil {
 			// Fail closed: if we can't fully enumerate the DB we cannot safely
 			// decide what is superseded, so remove nothing.
-			slog.Error("cleanup-merged: get books failed, aborting (remove nothing)", "err", err)
+			cmlog.Error("cleanup-merged: get books failed, aborting (remove nothing): %v", err)
 			return &ITLOperationSet{Removes: map[string]bool{}}, &MergedCleanupPreview{TracksInITL: len(inITL)}
 		}
 		if len(books) == 0 {
@@ -97,7 +100,11 @@ func computeMergedCleanupFromInITL(inITL map[string]bool, store RebuildStore) (*
 			isPrimary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
 			files, ferr := store.GetBookFiles(b.ID)
 			if ferr != nil {
-				continue
+				// Fail closed: a book whose rows cannot be read may hold the
+				// only path of a track (PathHeldSkipped) or a primary PID, so
+				// nothing is removed.
+				cmlog.Error("cleanup-merged: files of book %s unreadable, aborting (remove nothing): %v", b.ID, ferr)
+				return &ITLOperationSet{Removes: map[string]bool{}}, &MergedCleanupPreview{TracksInITL: len(inITL)}
 			}
 			for j := range files {
 				pid := strings.ToUpper(files[j].ITunesPersistentID)
@@ -167,9 +174,8 @@ func computeMergedCleanupFromInITL(inITL map[string]bool, store RebuildStore) (*
 		}
 	}
 
-	slog.Info("itunes cleanup-merged: computed superseded-track removal",
-		"tracksInITL", preview.TracksInITL, "primaryPIDs", preview.PrimaryPIDs,
-		"nonPrimaryPIDs", preview.NonPrimaryPIDs, "toRemove", preview.ToRemove,
-		"sharedSkipped", preview.SharedSkipped)
+	cmlog.Info("itunes cleanup-merged: computed superseded-track removal: tracksInITL=%d primaryPIDs=%d "+
+		"nonPrimaryPIDs=%d toRemove=%d sharedSkipped=%d pathHeldSkipped=%d", preview.TracksInITL, preview.PrimaryPIDs,
+		preview.NonPrimaryPIDs, preview.ToRemove, preview.SharedSkipped, preview.PathHeldSkipped)
 	return &ops, preview
 }

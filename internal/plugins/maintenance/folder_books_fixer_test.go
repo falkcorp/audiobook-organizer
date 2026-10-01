@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
 // last-edited: 2026-10-01
 
@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -174,6 +175,7 @@ func TestFolderBooksFixer_ApplyAndRevert(t *testing.T) {
 	require.True(t, row.Applicable(), "skipped: %s %s", row.Skipped, row.SkipReason)
 	require.Equal(t, "1", row.Proposed["new_books"])
 	require.Equal(t, "7", row.Proposed["held"])
+	require.Contains(t, row.BookIDs, f.ids["shadow"], "the version group's other members are row books")
 	rowsBefore := fbRowCount(t, f.s)
 
 	out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
@@ -259,13 +261,17 @@ func TestFolderBooksFixer_ApplyAndRevert(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, created.IsSoftDeleted(), "the created book is hidden by the revert")
 	require.Equal(t, rowsBefore+2, fbRowCount(t, f.s), "the revert deletes no row")
+	byPath, err := f.s.GetBookFileByPath(sw1)
+	require.NoError(t, err)
+	require.NotNil(t, byPath)
+	require.Contains(t, []string{fb, fb2}, byPath.BookID, "the path index names a live book's row again")
 }
 
 // TestFolderBooksFixer_RevertRefusesAMovedCreatedBook: once a created book's
 // row names another path than the one journaled, or the book joins a version
 // group, the preflight and the revert refuse to hide it.
 func TestFolderBooksFixer_RevertRefusesAMovedCreatedBook(t *testing.T) {
-	for _, how := range []string{"moved", "linked"} {
+	for _, how := range []string{"moved", "linked", "retitled"} {
 		t.Run(how, func(t *testing.T) {
 			f := newFragFixture(t)
 			f.seedWolfe(t, fbITunes, "citadel")
@@ -281,8 +287,11 @@ func TestFolderBooksFixer_RevertRefusesAMovedCreatedBook(t *testing.T) {
 				r := rows[0]
 				r.FilePath = f.path("Gene Wolfe/Sword/01.mp3")
 				require.NoError(t, f.s.UpdateBookFile(r.ID, &r))
-			} else {
+			} else if how == "linked" {
 				f.setVG(t, created.ID, "vg-other", true)
+			} else {
+				_, err := f.s.ModifyBook(created.ID, func(b *database.Book) error { b.Title = "Sword (edited)"; return nil })
+				require.NoError(t, err)
 			}
 			var c *database.OperationChange
 			changes, err := f.s.GetOperationChanges("op-apply")
@@ -533,7 +542,7 @@ func TestFBStemAndGroupKey(t *testing.T) {
 	k1, _, _ := fbGroupKey("/r/A/Book/CD1/01.mp3", "/r/A")
 	k2, _, _ := fbGroupKey("/r/A/Book/CD2/01.mp3", "/r/A")
 	require.Equal(t, k1, k2, "disc folders group with their parent")
-	for _, disc := range []string{"Disc 1 of 3", "1", "Book CD2", "Part 2"} {
+	for _, disc := range []string{"Disc 1 of 3", "1", "Book CD2", "Book (Disc 2)"} {
 		k, _, d := fbGroupKey("/r/A/Book/"+disc+"/01.mp3", "/r/A")
 		require.Equal(t, k1, k, disc)
 		require.Equal(t, "/r/A/Book", d, disc)
@@ -618,4 +627,107 @@ func TestFolderBooksFixer_DiscFoldersUnderTheRoot(t *testing.T) {
 		require.True(t, fbUnclearTitle(title), title)
 	}
 	require.False(t, fbUnclearTitle("Dune"))
+}
+
+// TestFolderBooksFixer_ResumeAfterCrash: an apply cut off after CreateBook,
+// or after k of a group's rows, resumes in the same operation into the same
+// book: no second book, no stuck row.
+func TestFolderBooksFixer_ResumeAfterCrash(t *testing.T) {
+	for _, stop := range []struct {
+		stage string
+		n     int
+	}{{"book", 0}, {"row", 1}} {
+		t.Run(fmt.Sprintf("%s-%d", stop.stage, stop.n), func(t *testing.T) {
+			f := newFragFixture(t)
+			f.seedWolfe(t, fbITunes, "citadel")
+			sw1 := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword", "01.mp3"))
+			row := f.fbSingleRow(t, "op-plan")
+			fbCrashHook = func(stage string, n int) error {
+				if stage == stop.stage && n == stop.n {
+					return fmt.Errorf("injected stop at %s %d", stage, n)
+				}
+				return nil
+			}
+			t.Cleanup(func() { fbCrashHook = nil })
+			out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+			require.Equal(t, 0, out.Applied, "%+v", out.Rows)
+			require.True(t, f.live(t, "fb"), "the cut-off run never reached the retire")
+			fbCrashHook = nil
+
+			out = f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+			require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+			require.False(t, f.live(t, "fb"))
+			owners, err := f.s.BookFilesAtPath(sw1)
+			require.NoError(t, err)
+			others := map[string]bool{}
+			for _, o := range owners {
+				if o.BookID != f.ids["fb"] && o.BookID != f.ids["fb2"] {
+					others[o.BookID] = true
+				}
+			}
+			require.Len(t, others, 1, "one created book holds Sword/01")
+			for id := range others {
+				b, err := f.s.GetBookByID(id)
+				require.NoError(t, err)
+				require.False(t, b.IsSoftDeleted(), "the resumed apply un-hid it")
+				rows, err := f.s.GetBookFiles(id)
+				require.NoError(t, err)
+				require.Len(t, rows, 2, "no row created twice")
+			}
+		})
+	}
+}
+
+// TestFolderBooksFixer_PreviouslyResolvedFileIsNotRecreated: an orphan a
+// soft-deleted book holds (a merge loser, a deleted book) was resolved once;
+// the row skips rather than bring it back.
+func TestFolderBooksFixer_PreviouslyResolvedFileIsNotRecreated(t *testing.T) {
+	f := newFragFixture(t)
+	f.seedWolfe(t, fbITunes, "citadel")
+	sw1 := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword", "01.mp3"))
+	id := f.fbBook(t, "loser", "Sword (old)", sw1, 1200, sw1)
+	yes := true
+	now := time.Now()
+	_, err := f.s.ModifyBook(id, func(b *database.Book) error {
+		b.MarkedForDeletion, b.MarkedForDeletionAt = &yes, &now
+		return nil
+	})
+	require.NoError(t, err)
+	row := f.fbSingleRow(t, "op-plan")
+	require.Equal(t, fbSkipResolved, row.Skipped, row.SkipReason)
+}
+
+// TestFolderBooksFixer_RootFolderOnlyRetires: a folder-book over the iTunes
+// media root itself never creates books; it is skipped while it has orphans.
+func TestFolderBooksFixer_RootFolderOnlyRetires(t *testing.T) {
+	f := newFragFixture(t)
+	var paths []string
+	for _, w := range []string{"Ann/Work One", "Bob/Work Two"} {
+		for i := 1; i <= 3; i++ {
+			paths = append(paths, f.file(t, filepath.Join(fbITunes, w, fmt.Sprintf("0%d.mp3", i)), 10))
+		}
+	}
+	f.fbBook(t, "root", "iTunes Media", f.path(fbITunes), 3600, paths...)
+	row := f.fbSingleRow(t, "op-plan")
+	require.Equal(t, fbTierShelf, row.Class)
+	require.Equal(t, fbSkipRootFolder, row.Skipped, row.SkipReason)
+}
+
+// TestFolderBooksFixer_DuplicateCreatedAfterPlan: a book with a group's
+// title and author that appears between plan and apply stops the row under
+// the merge lock.
+func TestFolderBooksFixer_DuplicateCreatedAfterPlan(t *testing.T) {
+	f := newFragFixture(t)
+	f.seedWolfe(t, fbITunes, "citadel")
+	row := f.fbSingleRow(t, "op-plan")
+	require.True(t, row.Applicable(), "%s %s", row.Skipped, row.SkipReason)
+	a, err := f.s.GetAuthorByName("Gene Wolfe")
+	require.NoError(t, err)
+	id := f.fbBook(t, "late", "Sword", f.path("Elsewhere/Sword.m4b"), 3600)
+	_, err = f.s.ModifyBook(id, func(b *database.Book) error { b.AuthorID = &a.ID; return nil })
+	require.NoError(t, err)
+	require.NoError(t, f.s.SetBookAuthors(id, []database.BookAuthor{{BookID: id, AuthorID: a.ID, Role: "author"}}))
+	out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+	require.Equal(t, 0, out.Applied, "%+v", out.Rows)
+	require.True(t, f.live(t, "fb"), "nothing was written")
 }
