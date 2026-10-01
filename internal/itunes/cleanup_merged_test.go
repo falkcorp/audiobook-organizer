@@ -1,7 +1,7 @@
 // file: internal/itunes/cleanup_merged_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d3a0c81-4e29-4b6f-90a5-1c8e2f7b0d43
-// last-edited: 2026-07-22
+// last-edited: 2026-10-01
 
 package itunes
 
@@ -66,5 +66,40 @@ func TestComputeMergedTrackCleanup_core(t *testing.T) {
 	}
 	if len(ops.Adds) != 0 || len(ops.LocationUpdates) != 0 {
 		t.Errorf("cleanup must emit only Removes")
+	}
+}
+
+// TestComputeMergedTrackCleanup_keepsOnlyTrackOfALiveFile: the folder-books
+// repair retires a folder-book (demoted, soft-deleted) that keeps its PID'd
+// row, and creates a live book holding the same path with no PID. That PID is
+// the file's only iTunes track and must not be removed. A non-primary PID
+// whose file a live primary owns WITH its own track is still a duplicate and
+// is removed.
+func TestComputeMergedTrackCleanup_keepsOnlyTrackOfALiveFile(t *testing.T) {
+	yes, no, del := true, false, true
+	store := &mockRebuildStore{
+		books: map[string]*database.Book{
+			"folder":  {ID: "folder", IsPrimaryVersion: &no, MarkedForDeletion: &del},
+			"created": {ID: "created", IsPrimaryVersion: nil},
+			"dupLose": {ID: "dupLose", IsPrimaryVersion: &no},
+			"dupWin":  {ID: "dupWin", IsPrimaryVersion: &yes},
+		},
+		bookFiles: map[string][]database.BookFile{
+			"folder":  {{ITunesPersistentID: "F0000001", FilePath: "/it/Author/Book/01.mp3"}},
+			"created": {{FilePath: "/it/Author/Book/01.mp3"}},
+			"dupLose": {{ITunesPersistentID: "D0000001", FilePath: "/x/d.m4b"}},
+			"dupWin":  {{ITunesPersistentID: "D0000002", FilePath: "/x/d.m4b"}},
+		},
+	}
+	inITL := map[string]bool{"F0000001": true, "D0000001": true, "D0000002": true}
+	ops, preview := computeMergedCleanupFromInITL(inITL, store)
+	if ops.Removes["F0000001"] {
+		t.Errorf("the only track of a file a live primary owns was removed")
+	}
+	if preview.PathHeldSkipped != 1 {
+		t.Errorf("PathHeldSkipped=%d, want 1", preview.PathHeldSkipped)
+	}
+	if !ops.Removes["D0000001"] {
+		t.Errorf("a duplicate track of a file whose primary has its own track must still be removed")
 	}
 }

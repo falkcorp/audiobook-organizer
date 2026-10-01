@@ -1,7 +1,7 @@
 // file: internal/repairs/guards.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 package repairs
 
@@ -48,18 +48,42 @@ func GuardBookPaths(bookID string, paths []string, seriesName string) (kind, rea
 // GuardBookPathsWith is GuardBookPaths resolving symlinks through res (nil:
 // a fresh resolver for this call).
 func GuardBookPathsWith(res *PathResolver, bookID string, paths []string, seriesName string) (kind, reason string) {
+	return guardBookPaths(res, bookID, paths, seriesName, false)
+}
+
+// ITunesDatabaseOnly is implemented by a fixer the owner has cleared to write
+// the DATABASE rows of books whose files sit under books/itunes/** (owner
+// decision 2026-10-01, folder-books only). For such a fixer the guard skips
+// the iTunes path check; Doctor Who / Big Finish / Torchwood stays guarded.
+// The fixer itself must never move, rename or delete anything there and never
+// change an iTunes persistent id.
+type ITunesDatabaseOnly interface {
+	ITunesDatabaseOnly() bool
+}
+
+// AllowsITunesDatabaseOnly reports whether f opted out of the iTunes path
+// guard (ITunesDatabaseOnly).
+func AllowsITunesDatabaseOnly(f Fixer) bool {
+	x, ok := f.(ITunesDatabaseOnly)
+	return ok && x.ITunesDatabaseOnly()
+}
+
+func guardBookPaths(res *PathResolver, bookID string, paths []string, seriesName string, allowITunes bool) (kind, reason string) {
 	if res == nil {
 		res = NewPathResolver()
 	}
 	paths, doubt := res.withResolved(paths)
 	for _, p := range paths {
+		if allowITunes {
+			break
+		}
 		if p != "" && pathutil.UnderFrozenITunesTree(p) {
 			return SkipITunes, fmt.Sprintf("member %s has a file under books/itunes/** (hands-off): %s", bookID, p)
 		}
 	}
 	// Fail closed: a path whose location could not be settled may be under
 	// books/itunes/**, so the row is skipped, never cleared.
-	if doubt != nil {
+	if doubt != nil && !allowITunes {
 		return SkipGuardUnreadable, fmt.Sprintf("member %s: could not tell whether a file is under books/itunes/**: %v", bookID, doubt)
 	}
 	for _, p := range paths {
@@ -368,6 +392,16 @@ func SeriesNamesFrom(all []database.Series) SeriesNamer {
 // error is returned: without the paths the guard cannot see a hands-off book,
 // so the caller must not treat the row as clear.
 func GuardBooks(r GuardReader, series SeriesNamer, res *PathResolver, bookIDs []string) (kind, reason string, err error) {
+	return guardBooks(r, series, res, bookIDs, false)
+}
+
+// GuardBooksFor is GuardBooks for fixer f: the iTunes path check is skipped
+// when f opted out of it (ITunesDatabaseOnly).
+func GuardBooksFor(f Fixer, r GuardReader, series SeriesNamer, res *PathResolver, bookIDs []string) (kind, reason string, err error) {
+	return guardBooks(r, series, res, bookIDs, AllowsITunesDatabaseOnly(f))
+}
+
+func guardBooks(r GuardReader, series SeriesNamer, res *PathResolver, bookIDs []string, allowITunes bool) (kind, reason string, err error) {
 	ids := append([]string(nil), bookIDs...)
 	sort.Strings(ids)
 	for _, id := range ids {
@@ -391,7 +425,7 @@ func GuardBooks(r GuardReader, series SeriesNamer, res *PathResolver, bookIDs []
 		if b.SeriesID != nil && series != nil {
 			name = series(*b.SeriesID)
 		}
-		if k, why := GuardBookPathsWith(res, id, paths, name); k != "" {
+		if k, why := guardBookPaths(res, id, paths, name, allowITunes); k != "" {
 			return k, why, nil
 		}
 		// The title is evidence too: "Doctor Who: Placebo Effect" on a
