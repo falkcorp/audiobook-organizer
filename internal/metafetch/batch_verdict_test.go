@@ -1,5 +1,5 @@
 // file: internal/metafetch/batch_verdict_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: fcb57db8-150d-40b2-a501-0934fa3be00b
 // last-edited: 2026-10-01
 
@@ -325,4 +325,27 @@ func TestBatchVerdict_LegacyFingerprintKeepsCandidatesOnly(t *testing.T) {
 	put("not-a-fingerprint", true)
 	_, verdict, _ = f.mfs.CachedBatchVerdict(f.book(b.ID), book.Title, "")
 	require.Equal(t, BatchVerdictNone, verdict)
+}
+
+// An empty refetch keeps the previous candidates. When the version "1"
+// ladder found them they keep its fingerprint: stamping the current one would
+// pass unfiltered legacy answers off as this version's.
+func TestCacheSearchResponse_EmptyRefetchKeepsLegacyStamp(t *testing.T) {
+	f := newVerdictFixture(t)
+	b, err := f.store.CreateBook(&database.Book{Title: "Legacy Carry", FilePath: "/lib/lc/book.m4b"})
+	require.NoError(t, err)
+	book := f.book(b.ID)
+	in := f.mfs.resolveSearchInputs(book, book.Title, "", "")
+	legacy, current := in.legacyFingerprint(book.Title), in.fingerprint(book.Title)
+	for _, prevFP := range []string{legacy, current} {
+		require.NoError(t, f.store.PutMetadataCache(&database.MetadataCandidateCache{
+			BookID: b.ID, FetchedAt: time.Now().UTC(), SourceHash: hashSearchInputs(b.ID, book.Title, "", "", ""),
+			SearchFingerprint: prevFP, Candidates: []json.RawMessage{json.RawMessage(`{"title":"Legacy Carry"}`)},
+		}))
+		entry := f.mfs.cacheSearchResponse(b.ID, book.Title, "", "", "", &SearchMetadataResponse{
+			InputFingerprint: current, LegacyFingerprint: legacy, SourcesAnswered: []string{"A"},
+		})
+		require.Len(t, entry.Candidates, 1, "the previous candidates are kept")
+		require.Equal(t, prevFP, entry.SearchFingerprint)
+	}
 }
