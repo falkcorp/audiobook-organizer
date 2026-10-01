@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
 // last-edited: 2026-10-01
 //
@@ -115,8 +115,11 @@ type CandidateSearchQuery struct {
 // title: on 2026-09-30 65 such rows were handed a whole book's candidate.
 // Until then a plain-number chapter row borrowed its folder's title
 // ("Eldest/98.mp3" beside 01-97 searched "Eldest"); the owner ruled on
-// 2026-09-30 that it is skipped too. Only a lone row -- no other row in its
-// folder -- keeps the stand-ins. A row that holds the whole work (two or more
+// 2026-09-30 that it is skipped too. A file alone in a folder named for it
+// ("Great Sky River 18 6/Great Sky River 18 6.mp3") finds its set in the
+// like-named folders beside its own (titleJudge.cousinPaths), under the same
+// same-set and duration checks. Only a lone row -- no other row in its
+// folder and no such cousins -- keeps the stand-ins. A row that holds the whole work (two or more
 // present files, or one file running at least the chapter-consolidation
 // threshold) is never a part row, so "Cobra 001 of 151" on a merged book
 // still falls back to its folder.
@@ -215,6 +218,14 @@ type titleJudge struct {
 	// title's shape needs them.
 	siblingsLoaded bool
 	siblings       []string
+	// siblingsFailed: the folder listing failed, so neither its siblings
+	// nor any cousins are evidence.
+	siblingsFailed bool
+	// cousinsLoaded/cousins: for a folder-wrapped row with no siblings, one
+	// row per other wrapped folder beside its own (cousinPaths), read once
+	// and only when a title's shape needs them.
+	cousinsLoaded bool
+	cousins       []string
 	// memo shares folder listings across rows and knows the roots; nil
 	// lists through files directly.
 	memo *FolderMemo
