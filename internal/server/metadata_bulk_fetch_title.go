@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_title.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a88b51d9-3878-41d2-b50e-c04f1ff6793e
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 //
 // The title the bulk metadata fetch searches a book by, for a book whose own
 // title is not worth searching.
@@ -57,10 +57,13 @@ type bulkFetchQuery struct {
 // A title whose verdict hangs on the book's folder and duration
 // (metadata.NeedsFolderEvidence: "Cobra 100 of 151", "The Sunrise Lands 1",
 // "American Gods [64k]") keeps the pre-loop's skip_cached probe and identity:
-// it goes to the resolver without a GetBookByID (the resolver reads the
-// book's files and, through memo, its folder once per pass), and when it is
-// searched by its own title the pre-loop identity stands.
-func resolveBulkFetchQuery(store bulkFetchTitleStore, bookID, title, path, author, identity string, full *database.Book, memo *metabatch.FolderMemo) bulkFetchQuery {
+// it goes to the resolver without a GetBookByID -- built from full, else
+// from core (the BookCore the walk already holds: ASIN, ISBNs and Duration
+// intact, so the identity and the duration test match the full-book path),
+// else from the bare ID/title/path -- and when it is searched by its own
+// title the pre-loop identity stands. The resolver reads the book's files
+// and, through memo, its folder once per pass.
+func resolveBulkFetchQuery(store bulkFetchTitleStore, bookID, title, path, author, identity string, full *database.Book, core *database.BookCore, memo *metabatch.FolderMemo) bulkFetchQuery {
 	ownTitle := bulkFetchQuery{
 		query:    metabatch.CandidateSearchQuery{Title: title, Source: metabatch.SearchQuerySourceTitle, Usable: true},
 		identity: identity,
@@ -70,7 +73,12 @@ func resolveBulkFetchQuery(store bulkFetchTitleStore, bookID, title, path, autho
 			return ownTitle
 		}
 		book := full
-		if book == nil {
+		switch {
+		case book != nil:
+		case core != nil:
+			b := core.ToBook()
+			book = &b
+		default:
 			book = &database.Book{ID: bookID, Title: title, FilePath: path}
 		}
 		q := metabatch.ResolveCandidateSearchQueryMemo(store, book, memo)

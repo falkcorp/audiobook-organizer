@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.72.0
+// version: 2.73.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package server
 
@@ -487,6 +487,10 @@ func (s *Server) publishEvent(ctx context.Context, event plugin.Event) {
 var activityStoreOverrideForTest database.ActivityStorer
 
 func NewServer(store database.Store) *Server {
+	// The metadata search-title resolver treats every import path as a root
+	// on every path (fetch, stale scan, apply, gate).
+	registerImportRootsSource(store)
+
 	// Set Gin to release mode (production) unless debug flag is set.
 	// In release mode, Gin suppresses route-registration logging and uses optimized
 	// middleware. See MED-9 in fable5-review-findings.md.

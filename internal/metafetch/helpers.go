@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package metafetch
 
@@ -274,10 +274,11 @@ type titleVariant struct {
 	// ("Mistborn: The Final Empire") but a sibling's never names only words
 	// our own title has.
 	Allowed map[string]bool
-	// Strict drops keepVariant's generic-word exemption: a result word such
-	// as "complete", "collection" or "series" must be one of ours too, and a
-	// result naming a set (omnibusTitle) is refused unless our own title
-	// does. Set for a subtitle head ("Harry Potter" from "Harry Potter: The
+	// Strict narrows keepVariant's generic-word exemption: a set-naming word
+	// (omnibusWords: "complete", "collection", "series", "trilogy", "box
+	// set") must be one of ours too, and a result naming a set
+	// (omnibusTitle) is refused unless our own title does. Other generic
+	// words stay exempt: "(Unabridged)", "A Novel", "Unabridged Edition". Set for a subtitle head ("Harry Potter" from "Harry Potter: The
 	// Philosopher's Stone"), which is so often the series name that
 	// "Harry Potter: The Complete Collection" would otherwise pass.
 	Strict bool
@@ -489,7 +490,8 @@ func keepVariant(results []metadata.BookMetadata, v titleVariant, people string)
 				ok = false
 			}
 			for w := range SignificantWords(r.Title) {
-				if (v.Strict || !genericTitleWords[w]) && (!allowed[w] || (peopleWords[w] && !v.Anchor[w])) {
+				exempt := genericTitleWords[w] && !(v.Strict && omnibusWords[w])
+				if !exempt && (!allowed[w] || (peopleWords[w] && !v.Anchor[w])) {
 					ok = false
 					break
 				}

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -374,7 +374,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		// book is searched by its transcribed title or folder name instead,
 		// and skipped -- with a ledger row and its own line -- only when
 		// neither is usable. See resolveBulkFetchQuery.
-		q := resolveBulkFetchQuery(store, bookID, w.book.Title, w.book.FilePath, currentAuthor, w.identity, nil, folderMemo)
+		q := resolveBulkFetchQuery(store, bookID, w.book.Title, w.book.FilePath, currentAuthor, w.identity, nil, &w.book, folderMemo)
 		ref := bulkFetchBook{id: bookID, title: w.book.Title, author: currentAuthor, path: w.book.FilePath, query: q.query}
 		if !q.query.Usable {
 			_ = store.CreateOperationResult(&database.OperationResult{
@@ -872,7 +872,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		// A title not worth searching is replaced by a stand-in, or the book
 		// is skipped with its own line (see runBulkMetadataFetchAll). The full
 		// book is already in hand here, so only its files are read.
-		q := resolveBulkFetchQuery(store, bookID, w.book.Title, w.book.FilePath, w.authorName, w.identity, &w.book, folderMemo)
+		q := resolveBulkFetchQuery(store, bookID, w.book.Title, w.book.FilePath, w.authorName, w.identity, &w.book, nil, folderMemo)
 		ref := bulkFetchBook{id: bookID, title: w.book.Title, author: w.authorName, path: w.book.FilePath, query: q.query}
 		if !q.query.Usable {
 			_ = store.CreateOperationResult(&database.OperationResult{

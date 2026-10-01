@@ -1,14 +1,13 @@
 // file: internal/server/metadata_stores.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package server
 
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -75,20 +74,32 @@ type candidateFetchStore interface {
 }
 
 // newFolderMemo returns a metabatch.FolderMemo for one pass over many books
-// (a candidate fetch op, a bulk fetch): each folder is listed once, and the
-// library root and every import path are roots, never listed. An import-path
-// read failure leaves only the library root (config RootDir, which the
-// resolver also checks itself).
+// (a candidate fetch op, a bulk fetch): each folder is listed once. Roots
+// (RootDir, import paths) are the resolver's own concern
+// (registerImportRootsSource), so the apply paths reach the same verdict.
 func (s *Server) newFolderMemo() *metabatch.FolderMemo {
-	roots := []string{config.AppConfig.RootDir}
-	if store := s.storeForWiring(); store != nil {
-		if paths, err := store.GetAllImportPaths(); err == nil {
-			for _, p := range paths {
-				roots = append(roots, p.Path)
-			}
-		}
+	return metabatch.NewFolderMemo()
+}
+
+// registerImportRootsSource points the metadata search-title resolver at the
+// store's import paths (metabatch.SetImportRootsSource): a folder that is an
+// import root is never listed for sibling rows, on every path -- fetch,
+// stale scan, apply and gate alike.
+func registerImportRootsSource(store database.ImportPathStore) {
+	if store == nil {
+		return
 	}
-	return metabatch.NewFolderMemo(roots...)
+	metabatch.SetImportRootsSource(func() ([]string, error) {
+		paths, err := store.GetAllImportPaths()
+		if err != nil {
+			return nil, err
+		}
+		out := make([]string, 0, len(paths))
+		for _, p := range paths {
+			out = append(out, p.Path)
+		}
+		return out, nil
+	})
 }
 
 // metadataResultsReader is the cache-refresh path: it only reads op history.

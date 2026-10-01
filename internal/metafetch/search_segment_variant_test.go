@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_segment_variant_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e7a9c41-6b2d-4f80-a1c5-8d0e2f4b7a93
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package metafetch
 
@@ -173,5 +173,29 @@ func TestSubtitleVariant_RefusesSeriesOmnibuses(t *testing.T) {
 				t.Fatalf("kept %+v, want only %q", kept, tc.keep)
 			}
 		})
+	}
+}
+
+// Strict refuses only set-naming words; edition decorations stay exempt.
+func TestSubtitleVariant_KeepsEditionDecorations(t *testing.T) {
+	cases := []struct {
+		raw, author string
+		keep        []string
+	}{
+		{"In Fire Forged: Worlds of Honor V", "David Weber", []string{"In Fire Forged (Unabridged)", "In Fire Forged: A Novel"}},
+		{"The Way of Kings: Stormlight Archive", "Brandon Sanderson", []string{"The Way of Kings (Unabridged Edition)"}},
+	}
+	for _, tc := range cases {
+		vs := subtitleVariant(tc.raw, map[string]bool{})
+		if len(vs) != 1 {
+			t.Fatalf("%q: variants = %v, want one", tc.raw, queries(vs))
+		}
+		var res []metadata.BookMetadata
+		for _, title := range tc.keep {
+			res = append(res, metadata.BookMetadata{Title: title, Author: tc.author})
+		}
+		if kept := keepVariant(res, vs[0], tc.author); len(kept) != len(tc.keep) {
+			t.Errorf("%q: kept %+v, want all of %v", tc.raw, kept, tc.keep)
+		}
 	}
 }

@@ -160,7 +160,7 @@ func TestResolveBulkFetchQuery_IdentityFollowsStandIn(t *testing.T) {
 	}
 	store, _, _ := newFastpathMockStore(books, nil)
 
-	q := resolveBulkFetchQuery(store, "b-trans", "Unknown Title", "", "Unknown Author", "", nil, nil)
+	q := resolveBulkFetchQuery(store, "b-trans", "Unknown Title", "", "Unknown Author", "", nil, nil, nil)
 	if !q.query.Usable || q.query.Title != "Planet Hulk" {
 		t.Fatalf("query = %+v, want Planet Hulk", q.query)
 	}
@@ -168,7 +168,7 @@ func TestResolveBulkFetchQuery_IdentityFollowsStandIn(t *testing.T) {
 		t.Errorf("identity = %q, want the stand-in's %q", q.identity, want)
 	}
 
-	q = resolveBulkFetchQuery(store, "b-real", "Eldest", "", "Christopher Paolini", "pre-loop-identity", nil, nil)
+	q = resolveBulkFetchQuery(store, "b-real", "Eldest", "", "Christopher Paolini", "pre-loop-identity", nil, nil, nil)
 	if q.query.Title != "Eldest" || q.identity != "pre-loop-identity" {
 		t.Errorf("real title: %+v identity %q, want unchanged", q.query, q.identity)
 	}
@@ -194,11 +194,11 @@ func TestResolveBulkFetchQuery_FolderEvidenceTitles(t *testing.T) {
 		},
 	}
 	memo := metabatch.NewFolderMemo()
-	q := resolveBulkFetchQuery(store, "b-apollo", "Apollo 13", "/library/Authors/Jim Lovell/Apollo 13.m4b", "Jim Lovell", "pre-loop-identity", nil, memo)
+	q := resolveBulkFetchQuery(store, "b-apollo", "Apollo 13", "/library/Authors/Jim Lovell/Apollo 13.m4b", "Jim Lovell", "pre-loop-identity", nil, nil, memo)
 	if !q.query.Usable || q.query.Title != "Apollo 13" || q.identity != "pre-loop-identity" {
 		t.Errorf("Apollo 13: %+v identity %q, want its own title on the pre-loop identity", q.query, q.identity)
 	}
-	q = resolveBulkFetchQuery(store, "b-cobra", "Cobra 100 of 151", "/library/Authors/Timothy Zahn/Cobra/Cobra 100 of 151.mp3", "Timothy Zahn", "pre-loop-identity", nil, memo)
+	q = resolveBulkFetchQuery(store, "b-cobra", "Cobra 100 of 151", "/library/Authors/Timothy Zahn/Cobra/Cobra 100 of 151.mp3", "Timothy Zahn", "pre-loop-identity", nil, nil, memo)
 	if q.query.Usable || q.skipKind != metabatch.SkipKindSiblingPart || q.skipStatus != metafetch.FetchStatusSkippedFragment {
 		t.Errorf("Cobra 100 of 151: %+v kind %q status %q, want a sibling-part skip", q.query, q.skipKind, q.skipStatus)
 	}

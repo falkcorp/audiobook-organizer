@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package handlers
 
@@ -11,7 +11,6 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -122,8 +121,8 @@ func loadCacheRows(ctx context.Context, store cacheRowBookReader, svc cacheRowCa
 	}
 
 	// One folder memo for the pass: a chapter set's rows share one folder
-	// listing instead of one each, and roots are never listed.
-	memo := staleFolderMemo(store)
+	// listing instead of one each (roots are the resolver's own concern).
+	memo := metabatch.NewFolderMemo()
 	var cg errgroup.Group
 	cg.SetLimit(reviewListConcurrency)
 	for i := range set.rows {
@@ -211,21 +210,4 @@ func StaleCachedBookIDs(ctx context.Context, store StaleCacheBookReader, svc Sta
 		}
 	}
 	return ids, nil
-}
-
-// staleFolderMemo builds the pass's folder memo: the library root, plus the
-// import paths when the store can list them (the production store can; a
-// narrow test double need not).
-func staleFolderMemo(store any) *metabatch.FolderMemo {
-	roots := []string{config.AppConfig.RootDir}
-	if ips, ok := store.(interface {
-		GetAllImportPaths() ([]database.ImportPath, error)
-	}); ok {
-		if paths, err := ips.GetAllImportPaths(); err == nil {
-			for _, p := range paths {
-				roots = append(roots, p.Path)
-			}
-		}
-	}
-	return metabatch.NewFolderMemo(roots...)
 }

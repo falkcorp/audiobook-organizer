@@ -1,7 +1,7 @@
 // file: internal/metadata/chapter_fragment_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3a9c0e21-6f48-4b7d-95a2-1c8f0d4e7b52
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package metadata
 
@@ -194,5 +194,26 @@ func TestIsCountedPartTitle_AndNeedsFolderEvidence(t *testing.T) {
 		if got := NeedsFolderEvidence(title); got != want {
 			t.Errorf("NeedsFolderEvidence(%q) = %v, want %v", title, got, want)
 		}
+	}
+}
+
+func TestCountedPartKey(t *testing.T) {
+	cases := []struct{ title, stem, count string }{
+		{"Golden Son (Part 1 of 2)", "golden son", "2"},
+		{"Red Rising (Part 1 of 2)", "red rising", "2"},
+		{"Before They Are Hanged 002 of 341", "before they are hanged", "341"},
+		{"Part 01 of 63", "", "63"},
+		{"Elantris 084 of", "elantris", ""},
+		{"Wheel of Time #3 of 14", "wheel of time", "14"},
+		{"Cobra - 100 of 151", "cobra", "151"},
+	}
+	for _, tc := range cases {
+		stem, count, ok := CountedPartKey(tc.title)
+		if !ok || stem != tc.stem || count != tc.count {
+			t.Errorf("CountedPartKey(%q) = (%q, %q, %v), want (%q, %q)", tc.title, stem, count, ok, tc.stem, tc.count)
+		}
+	}
+	if _, _, ok := CountedPartKey("The Dragon Reborn (Book 3 of 14)"); ok {
+		t.Error("a series position is not a counted part")
 	}
 }
