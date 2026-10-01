@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c1cb262a-d405-4d1a-9eb7-a3c341190585
 // last-edited: 2026-10-01
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // fakeLabels is an in-memory dedup label store.
@@ -356,6 +357,21 @@ func TestDuplicateCopies_ChangedSincePlanIsRefused(t *testing.T) {
 	require.True(t, d.fileRow(t, "S", "S/5").Missing, "nothing written")
 }
 
+// TestDuplicateCopies_LoserJoinedAGroupSincePlan: a loser that joined a
+// version group after the plan would hand that group's primacy to the
+// survivor, a write nobody reviewed, so the row is refused.
+func TestDuplicateCopies_LoserJoinedAGroupSincePlan(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	d.planFor(t, dcFixerID, "op-plan", nil)
+	gid, yes := "vg-later", true
+	_, err := d.s.ModifyBook(l, func(b *database.Book) error { b.VersionGroupID, b.IsPrimaryVersion = &gid, &yes; return nil })
+	require.NoError(t, err)
+	out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{dupRowID(s, l)})
+	require.Equal(t, 1, out.ChangedSincePlan, "%+v", out.Rows)
+	require.True(t, d.live(t, "L"))
+}
+
 // TestDuplicateCopies_ITunesCopyIsIgnoredNeverWritten: a third copy with a
 // book PID (and one under books/itunes/**) is excluded: never elected, never
 // in the row's books, untouched by the apply; the other two still merge.
@@ -586,4 +602,69 @@ func TestDuplicateCopies_FailsClosedWithoutLabels(t *testing.T) {
 	d.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: d.s}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}, standDownWait: noWait}
 	_, err := newDuplicateCopiesFixer(d.p).Plan(context.Background(), nil, nil)
 	require.ErrorContains(t, err, "not_dup")
+}
+
+// TestDuplicateCopies_FoldGatesAndClique: a fold that repeats a track, a fold
+// over 25% of the matched audio, and a group that is not all proven copies of
+// each other are each skipped.
+func TestDuplicateCopies_FoldGatesAndClique(t *testing.T) {
+	d := newDCFixture(t)
+	// The copy's unmatched file is track 4, which the survivor already has.
+	r1 := d.copyBook(t, "r1", "Dune", "lib/Dune", dcRow{track: 1, dur: 600, hash: "h1"}, dcRow{track: 2, dur: 600, hash: "h2"}, dcRow{track: 4, dur: 600, hash: "h4"})
+	d.copyBook(t, "r2", "Dune", "lib/Dune 2", dcRow{track: 1, dur: 600, hash: "h1"}, dcRow{track: 2, dur: 600, hash: "h2"}, dcRow{track: 4, dur: 100, hash: "hx"})
+	// The survivor is the smaller copy (the other is not organized): its
+	// fold would add 600 s to 1,200 s of matched audio.
+	c1 := d.copyBook(t, "c1", "Emma", "lib/Emma", dcRow{track: 1, dur: 600, hash: "e1"}, dcRow{track: 2, dur: 600, hash: "e2"})
+	c2 := d.copyBook(t, "c2", "Emma", "lib/Emma 2", dcRow{track: 1, dur: 600, hash: "e1"}, dcRow{track: 2, dur: 600, hash: "e2"}, dcRow{track: 3, dur: 600, hash: "e3"})
+	imported := "imported"
+	_, err := d.s.ModifyBook(c2, func(b *database.Book) error { b.LibraryState = &imported; return nil })
+	require.NoError(t, err)
+	// A and C are each a proven copy of B but share no audio with each other.
+	a := d.copyBook(t, "A", "Ubik", "lib/Ubik A", dcRow{track: 1, dur: 600, hash: "u1"}, dcRow{track: 2, dur: 600, hash: "u2"})
+	d.copyBook(t, "B", "Ubik", "lib/Ubik B", dcRow{track: 1, dur: 600, hash: "u1"}, dcRow{track: 2, dur: 600, hash: "u2"},
+		dcRow{track: 3, dur: 600, hash: "u3"}, dcRow{track: 4, dur: 600, hash: "u4"})
+	d.copyBook(t, "C", "Ubik", "lib/Ubik C", dcRow{track: 3, dur: 600, hash: "u3"}, dcRow{track: 4, dur: 600, hash: "u4"})
+
+	res := d.planFor(t, dcFixerID, "op-plan", nil)
+	r := rowOf(t, res, r1)
+	require.Equal(t, dcSkipTrackOrder, r.Skipped, r.SkipReason)
+	r = rowOf(t, res, c1)
+	require.Equal(t, c1, rowOf(t, res, c1).BookIDs[0])
+	require.Equal(t, dcSkipFoldCap, r.Skipped, r.SkipReason)
+	r = rowOf(t, res, a)
+	require.Equal(t, dcSkipNotClique, r.Skipped, r.SkipReason)
+	require.Len(t, r.BookIDs, 3)
+}
+
+// TestDuplicateCopies_ResumesAfterTheHandOff: a run cut off after the
+// primary loser handed its version group to the survivor re-plans to the
+// same decision and finishes.
+func TestDuplicateCopies_ResumesAfterTheHandOff(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	gid := "vg-dune"
+	no := false
+	_, err := d.s.ModifyBook(s, func(b *database.Book) error { b.VersionGroupID, b.IsPrimaryVersion = &gid, &no; return nil })
+	require.NoError(t, err)
+	_, err = d.s.ModifyBook(l, func(b *database.Book) error { b.VersionGroupID = &gid; return nil })
+	require.NoError(t, err)
+	res := d.planFor(t, dcFixerID, "op-plan", nil)
+	id := dupRowID(s, l)
+	row := findRow(t, res, id)
+	require.True(t, row.Applicable(), row.SkipReason)
+	require.Equal(t, []string{s}, row.Detail.(*dcPlan).HandOff[gid])
+
+	// The cut-off run: the loser's demote journaled, the survivor crowned.
+	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-cut")
+	require.NoError(t, w.Journal(l, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
+	cr, err := versionprimary.Crown(fragEnsureStore{OpsStore: d.s, chapters: d.s}, gid, s)
+	require.NoError(t, err)
+	require.Equal(t, s, cr.PrimaryID)
+
+	out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{id})
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	require.False(t, d.live(t, "L"))
+	sb, err := d.s.GetBookByID(s)
+	require.NoError(t, err)
+	require.True(t, sb.IsPrimaryVersion != nil && *sb.IsPrimaryVersion)
 }

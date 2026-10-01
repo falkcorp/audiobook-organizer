@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-10-01
 
@@ -113,6 +113,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/boilerplate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -720,7 +721,7 @@ type dcQuiet struct{}
 
 func (dcQuiet) UpdateProgress(int, int, string) error      { return nil }
 func (dcQuiet) Log(slog.Level, string, ...slog.Attr) error { return nil }
-func (dcQuiet) Logger() *slog.Logger                       { return slog.New(slog.DiscardHandler) }
+func (dcQuiet) Logger() *slog.Logger                       { return logger.FromContext(context.Background()) }
 func (dcQuiet) Checkpoint(any) error                       { return nil }
 func (dcQuiet) IsCanceled() bool                           { return false }
 func (dcQuiet) Trigger(context.Context, string, any) error { return nil }
@@ -1126,7 +1127,14 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 			return fail(dcSkipTags, fmt.Sprintf("copy %s has user tag(s) the survivor lacks: %s", l, strings.Join(fbFirst(lacks, 5), ", ")))
 		}
 	}
-	// Version groups a primary loser leads.
+	// Version groups a primary loser leads. The fingerprint names every
+	// loser's group whatever its flag: the hand-off and the retire both
+	// demote the loser, and a cut-off run must re-plan to the same decision.
+	for _, l := range losers {
+		if vg := run.books[l].Core.VersionGroupID; vg != nil && *vg != "" {
+			fp = append(fp, "vg:"+l+"|"+*vg)
+		}
+	}
 	isLoser := map[string]bool{}
 	for _, l := range losers {
 		isLoser[l] = true
@@ -1174,7 +1182,6 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 		}
 		sort.Strings(heirs)
 		plan.HandOff[gid] = heirs
-		fp = append(fp, "vg:"+gid)
 	}
 	inRow := map[string]bool{}
 	for _, id := range r.BookIDs {
