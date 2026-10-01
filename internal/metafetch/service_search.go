@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-01
 
@@ -171,21 +171,44 @@ func applyProviderLimits(src config.MetadataSource) {
 		"rps", eff.RPS, "burst", eff.Burst, "timeout", eff.Timeout)
 }
 
-// EnabledSourcesBudget returns the summed effective request budget (RPS and
-// burst, effectiveProviderLimits) of every enabled metadata source -- what the
-// per-provider token buckets in providerhttp allow together. A batch op sizes
-// its own gate and worker pool from it, so the op never throttles below what
-// the providers themselves permit. It has no side effects.
-func EnabledSourcesBudget() (rps float64, burst int) {
+// SourcesBudget is the effective request budget (effectiveProviderLimits) of
+// the enabled metadata sources: the summed RPS and burst the per-provider
+// token buckets in providerhttp allow together, and the source whose queue
+// drains slowest (the lowest RPS x Timeout), which bounds how many requests
+// may wait on one bucket before the last of them times out.
+type SourcesBudget struct {
+	RPS   float64
+	Burst int
+	// SlowestID, SlowestRPS and SlowestTimeout describe the enabled source
+	// with the lowest RPS x Timeout; SlowestID is "" when none is enabled.
+	SlowestID      string
+	SlowestRPS     float64
+	SlowestTimeout time.Duration
+}
+
+// EnabledSourcesBudget returns the SourcesBudget of every enabled metadata
+// source. A batch op sizes its own gate and worker pool from it, so the op
+// never throttles below what the providers themselves permit and never
+// queues more callers on one provider than its timeout lets drain. It has no
+// side effects.
+func EnabledSourcesBudget() SourcesBudget {
+	var b SourcesBudget
 	for _, src := range config.AppConfig.MetadataSources {
 		if !src.Enabled || strings.TrimSpace(src.ID) == "" {
 			continue
 		}
 		eff := effectiveProviderLimits(src)
-		rps += eff.RPS
-		burst += eff.Burst
+		b.RPS += eff.RPS
+		b.Burst += eff.Burst
+		timeout := eff.Timeout
+		if timeout <= 0 {
+			timeout = providerhttp.BuiltinLimitsFor("").Timeout
+		}
+		if b.SlowestID == "" || eff.RPS*timeout.Seconds() < b.SlowestRPS*b.SlowestTimeout.Seconds() {
+			b.SlowestID, b.SlowestRPS, b.SlowestTimeout = strings.TrimSpace(src.ID), eff.RPS, timeout
+		}
 	}
-	return rps, burst
+	return b
 }
 
 // effectiveProviderLimits is applyProviderLimits' resolution without

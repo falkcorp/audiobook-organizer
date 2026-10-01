@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
 // last-edited: 2026-10-01
 //
@@ -232,8 +232,8 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	// (candidateFetchLimiter, candidateFetchWorkers): a fixed 10/s across
 	// every source and 8 workers had become the cap once Audible alone was
 	// configured for 8/s.
-	budgetRPS, budgetBurst := metafetch.EnabledSourcesBudget()
-	limiter := candidateFetchLimiter(budgetRPS, budgetBurst)
+	budget := metafetch.EnabledSourcesBudget()
+	limiter := candidateFetchLimiter(budget.RPS, budget.Burst)
 	// One folder memo per run, shared by every worker (resolver folder reads).
 	folderMemo := s.newFolderMemo()
 
@@ -245,9 +245,12 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 
 	var completed int64 = int64(alreadyDone)
 	var wg sync.WaitGroup
-	numWorkers := min(candidateFetchWorkers(budgetRPS, config.AppConfig.MetadataCandidateFetchWorkers), len(p.BookIDs))
-	candidateFetchLog.Info("budget: opID=%s rps=%.1f burst=%d workers=%d",
-		logger.SanitizeLogValue(opID), budgetRPS, budgetBurst, numWorkers)
+	numWorkers := min(candidateFetchWorkers(budget, config.AppConfig.MetadataCandidateFetchWorkers), len(p.BookIDs))
+	// Every book walks every source, so the slowest source's bucket paces the
+	// run: its rate is the expected throughput, not the summed gate.
+	candidateFetchLog.Info("budget: opID=%s gate_rps=%.1f burst=%d workers=%d expected_rps=%.1f slowest_source=%s",
+		logger.SanitizeLogValue(opID), budget.RPS, budget.Burst, numWorkers, budget.SlowestRPS,
+		logger.SanitizeLogValue(budget.SlowestID))
 
 	// CHECKPOINTING. A book joins the done-set only after its result row is
 	// written, so a checkpoint never drops a book whose fetch has not been
@@ -376,20 +379,45 @@ func candidateFetchLimiter(rps float64, burst int) *rate.Limiter {
 // source), so workers = rps x latency x callsPerBook. The floor keeps at
 // least twice the old fixed 8, so workers are not the cap at prod's budget;
 // the ceiling bounds the goroutines and the store's concurrent writes.
+//
+// Every worker also waits on each source's own token bucket, and a request
+// that waits there longer than the source's timeout fails. N workers queued
+// on a source of rate r drain in N/r seconds, so the pool is capped at
+// candidateFetchQueueTimeoutShare of the slowest source's r x timeout
+// (prod 2026-10-01: audnexus 2/s x 30 s x 0.5 = 30), and the cap binds the
+// floor and a configured count too.
 const (
-	candidateFetchCallLatencySec = 0.15
-	candidateFetchCallsPerBook   = 4
-	candidateFetchMinWorkers     = 16
-	candidateFetchMaxWorkers     = 32
+	candidateFetchCallLatencySec    = 0.15
+	candidateFetchCallsPerBook      = 4
+	candidateFetchMinWorkers        = 16
+	candidateFetchMaxWorkers        = 32
+	candidateFetchMaxConfigured     = 64
+	candidateFetchQueueTimeoutShare = 0.5
 )
 
 // candidateFetchWorkers returns the op's worker count: configured (clamped to
-// 1-64) when set, else sized from the summed budget rps and clamped to
-// [candidateFetchMinWorkers, candidateFetchMaxWorkers].
-func candidateFetchWorkers(rps float64, configured int) int {
-	if configured > 0 {
-		return min(configured, 64)
+// 1-candidateFetchMaxConfigured) when set, else sized from the summed budget
+// rps and clamped to [candidateFetchMinWorkers, candidateFetchMaxWorkers];
+// either way no more than the slowest source can drain within its timeout
+// (candidateFetchQueueCap).
+func candidateFetchWorkers(b metafetch.SourcesBudget, configured int) int {
+	n := min(configured, candidateFetchMaxConfigured)
+	if configured <= 0 {
+		n = int(math.Ceil(b.RPS * candidateFetchCallLatencySec * candidateFetchCallsPerBook))
+		n = min(max(n, candidateFetchMinWorkers), candidateFetchMaxWorkers)
 	}
-	n := int(math.Ceil(rps * candidateFetchCallLatencySec * candidateFetchCallsPerBook))
-	return min(max(n, candidateFetchMinWorkers), candidateFetchMaxWorkers)
+	if limit, ok := candidateFetchQueueCap(b); ok {
+		n = min(n, limit)
+	}
+	return n
+}
+
+// candidateFetchQueueCap is the most workers the slowest enabled source can
+// drain within its timeout (see the sizing notes above); ok is false when no
+// source is enabled.
+func candidateFetchQueueCap(b metafetch.SourcesBudget) (int, bool) {
+	if b.SlowestID == "" || b.SlowestRPS <= 0 || b.SlowestTimeout <= 0 {
+		return 0, false
+	}
+	return max(int(b.SlowestRPS*b.SlowestTimeout.Seconds()*candidateFetchQueueTimeoutShare), 1), true
 }
