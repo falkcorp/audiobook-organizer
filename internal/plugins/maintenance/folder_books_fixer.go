@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-10-01
 
@@ -891,11 +891,17 @@ type folderBooksFixer struct {
 	// apply that reads it holds the merge lock, which serializes them; the
 	// mutex only makes the cache safe on its own terms.
 	titleMu  sync.Mutex
-	titleGen uint64
-	titleIdx fbTitleIndex
+	titleIdx map[string]fbTitleCache // by key name (titleIndexBy)
 }
 
-// fbTitleIndex maps fbNorm(title) to every live book with that title.
+// fbTitleCache is one title index and the library generation it was built at.
+type fbTitleCache struct {
+	gen uint64
+	idx fbTitleIndex
+}
+
+// fbTitleIndex maps a title key (fbNorm(title) for folder-books) to every
+// live book with that key.
 type fbTitleIndex map[string][]string
 
 // titleIndex returns the fbNorm(title) index of the live library, cached per
@@ -919,12 +925,19 @@ type fbTitleIndex map[string][]string
 // irreversible create, so a memdb known to be missing rows must not answer
 // it (the store falls through to the authoritative Pebble scan).
 func (f *folderBooksFixer) titleIndex(store OpsStore) (fbTitleIndex, error) {
+	return f.titleIndexBy(store, "fbNorm", fbNorm)
+}
+
+// titleIndexBy is titleIndex keyed by key(title) instead (the duplicate-copies
+// fixer keys by dcTitleKey, which drops a leading track number), cached under
+// name with the same generation rule.
+func (f *folderBooksFixer) titleIndexBy(store OpsStore, name string, key func(string) string) (fbTitleIndex, error) {
 	gen, tracked := database.LibraryGenerationOf(store)
 	cur := gen.Value() // read BEFORE the build: a write during it moves past cur
 	f.titleMu.Lock()
 	defer f.titleMu.Unlock()
-	if tracked && f.titleIdx != nil && f.titleGen == cur {
-		return f.titleIdx, nil
+	if c, ok := f.titleIdx[name]; tracked && ok && c.gen == cur {
+		return c.idx, nil
 	}
 	books, err := store.GetAllBooksCoreComplete(0, 0)
 	if err != nil {
@@ -935,11 +948,14 @@ func (f *folderBooksFixer) titleIndex(store OpsStore) (fbTitleIndex, error) {
 		if books[i].IsSoftDeleted() {
 			continue
 		}
-		k := fbNorm(books[i].Title)
+		k := key(books[i].Title)
 		idx[k] = append(idx[k], books[i].ID)
 	}
 	if tracked {
-		f.titleGen, f.titleIdx = cur, idx
+		if f.titleIdx == nil {
+			f.titleIdx = map[string]fbTitleCache{}
+		}
+		f.titleIdx[name] = fbTitleCache{gen: cur, idx: idx}
 	}
 	return idx, nil
 }

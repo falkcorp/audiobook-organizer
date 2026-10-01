@@ -1,7 +1,7 @@
 // file: internal/database/dedup_label.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5a0319bd-8bc4-4135-91e6-dfd43628dcc5
-// last-edited: 2026-07-11
+// last-edited: 2026-10-01
 
 package database
 
@@ -139,8 +139,22 @@ func (s *EmbeddingStore) GetLabeledExample(candidateID int64) (*LabeledExample, 
 	return &ex, nil
 }
 
-// ListLabeledExamples returns examples matching the filter (prefix scan).
+// ListLabeledExamples returns examples matching the filter (prefix scan). A
+// corrupt row is skipped; a caller that must honour every verdict uses
+// ListLabeledExamplesStrict.
 func (s *EmbeddingStore) ListLabeledExamples(f LabeledExampleFilter) ([]LabeledExample, error) {
+	return s.listLabeledExamples(f, false)
+}
+
+// ListLabeledExamplesStrict is ListLabeledExamples failing on a corrupt row
+// instead of skipping it: a reader that vetoes a write on a label (the
+// duplicate-copies fixer's not_dup check) cannot tell a skipped not_dup from
+// no label, so it must not plan past one.
+func (s *EmbeddingStore) ListLabeledExamplesStrict(f LabeledExampleFilter) ([]LabeledExample, error) {
+	return s.listLabeledExamples(f, true)
+}
+
+func (s *EmbeddingStore) listLabeledExamples(f LabeledExampleFilter, strict bool) ([]LabeledExample, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
 	}
@@ -157,6 +171,9 @@ func (s *EmbeddingStore) ListLabeledExamples(f LabeledExampleFilter) ([]LabeledE
 	for iter.First(); iter.Valid(); iter.Next() {
 		var ex LabeledExample
 		if err := json.Unmarshal(iter.Value(), &ex); err != nil {
+			if strict {
+				return nil, fmt.Errorf("labeled example %q is unreadable: %w", iter.Key(), err)
+			}
 			continue // skip a corrupt row rather than abort the scan
 		}
 		if !f.matches(&ex) {

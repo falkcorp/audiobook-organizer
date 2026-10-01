@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-01
 
@@ -128,10 +128,10 @@ func (s *Server) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
 // methods are part of database.Store, so no capability resolution is needed.
 func (s *Server) FragmentRepairReader() maintenanceplugin.FragmentRepairReader { return s.store }
 
-// DedupLabelReader hands the duplicate-copies fixer the dedup pair labels
-// (owner not_dup verdicts), which live in the embedding store. nil when the
-// server has none: the fixer then refuses to plan.
-func (s *Server) DedupLabelReader() maintenanceplugin.DedupLabelReader {
+// DedupVerdictReader hands the duplicate-copies fixer the owner's dedup pair
+// verdicts (not_dup labels, decided candidates), which live in the embedding
+// store. nil when the server has none: the fixer then refuses to plan.
+func (s *Server) DedupVerdictReader() maintenanceplugin.DedupVerdictReader {
 	if s.embeddingStore == nil {
 		return nil
 	}

@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.21.0
-// last-edited: 2026-09-28
+// version: 2.22.0
+// last-edited: 2026-10-01
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -566,6 +566,45 @@ func (s *EmbeddingStore) PutCachedEmbedding(textHash, model string, vector []flo
 // this instead of spelling the strings.
 func IsTerminalCandidateStatus(status string) bool {
 	return status == "dismissed" || status == "merged"
+}
+
+// TerminalCandidatesStrict returns every candidate of entityType whose status
+// is terminal (IsTerminalCandidateStatus): the pairs a human dismissed or
+// auto-resolve acted on. It scans the whole dedup:r: record range, whether or
+// not the status index is built, and fails on a key or record it cannot
+// read: a reader that vetoes a write on a dismissal cannot tell a skipped
+// row from no dismissal.
+func (s *EmbeddingStore) TerminalCandidatesStrict(entityType string) ([]DedupCandidate, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	prefix := []byte(dedupRecPfx)
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixUpperBound(prefix)})
+	if err != nil {
+		return nil, fmt.Errorf("terminal candidates: %w", err)
+	}
+	defer func() { _ = iter.Close() }()
+	var out []DedupCandidate
+	for iter.First(); iter.Valid(); iter.Next() {
+		id, err := strconv.ParseInt(string(iter.Key())[len(dedupRecPfx):], 16, 64)
+		if err != nil {
+			return nil, fmt.Errorf("candidate key %q is unreadable: %w", iter.Key(), err)
+		}
+		var rec candRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			return nil, fmt.Errorf("candidate %d is unreadable: %w", id, err)
+		}
+		c := candRecToCandidate(id, rec)
+		if c.EntityType == entityType && IsTerminalCandidateStatus(c.Status) {
+			out = append(out, c)
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("terminal candidates scan: %w", err)
+	}
+	return out, nil
 }
 
 func dedupRecKey(id int64) []byte {

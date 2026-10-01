@@ -1,5 +1,5 @@
 // file: internal/repairs/guards.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
 // last-edited: 2026-10-01
 
@@ -370,10 +370,76 @@ func GuardBookTitle(bookID, title string) (kind, reason string) {
 	return "", ""
 }
 
+// GuardBookCredits is the owner-manual check on a book's credits: its
+// publisher, its authors and its narrator, through the same pattern as its
+// paths and series (applygate.IsOwnerManualOnly). A Big Finish release on a
+// neutral path with a neutral title ("Michael Fenton Stevens / The Ultimate
+// Foe", publisher "Big Finish Productions") names the studio only there.
+func GuardBookCredits(bookID, publisher, narrator string, authors []string) (kind, reason string) {
+	check := func(field, v string) (string, string) {
+		if v != "" && applygate.IsOwnerManualOnly(v, "") {
+			return SkipOwnerManual, fmt.Sprintf("member %s is Doctor Who / Big Finish / Torchwood (%s %q); owner applies these by hand", bookID, field, v)
+		}
+		return "", ""
+	}
+	if k, w := check("publisher", publisher); k != "" {
+		return k, w
+	}
+	for _, a := range authors {
+		if k, w := check("author", a); k != "" {
+			return k, w
+		}
+	}
+	return check("narrator", narrator)
+}
+
 // GuardReader is what the framework guard reads.
 type GuardReader interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// The credits check (GuardBookCredits) names a book's authors.
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	GetAuthorByID(id int) (*database.Author, error)
+}
+
+// BookAuthorNames reads every author name of b: its primary author and its
+// book_authors rows. A read error is returned: the credits check cannot clear
+// a book whose authors it could not see.
+func BookAuthorNames(r GuardReader, b *database.Book) ([]string, error) {
+	ids := map[int]bool{}
+	if b.AuthorID != nil {
+		ids[*b.AuthorID] = true
+	}
+	links, err := r.GetBookAuthors(b.ID)
+	if err != nil {
+		return nil, fmt.Errorf("guard: read authors of %s: %w", b.ID, err)
+	}
+	for _, l := range links {
+		ids[l.AuthorID] = true
+	}
+	sorted := make([]int, 0, len(ids))
+	for id := range ids {
+		sorted = append(sorted, id)
+	}
+	sort.Ints(sorted)
+	var names []string
+	for _, id := range sorted {
+		a, err := r.GetAuthorByID(id)
+		if err != nil {
+			return nil, fmt.Errorf("guard: read author %d of %s: %w", id, b.ID, err)
+		}
+		if a != nil && a.Name != "" {
+			names = append(names, a.Name)
+		}
+	}
+	return names, nil
+}
+
+func strOf(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // SeriesNamer resolves a series id to its name. Built once per run.
@@ -433,6 +499,14 @@ func guardBooks(r GuardReader, series SeriesNamer, res *PathResolver, bookIDs []
 		// The title is evidence too: "Doctor Who: Placebo Effect" on a
 		// neutral path with no series row is still a Doctor Who book.
 		if k, why := GuardBookTitle(id, b.Title); k != "" {
+			return k, why, nil
+		}
+		// And the credits: a Big Finish publisher, author or narrator.
+		authors, err := BookAuthorNames(r, b)
+		if err != nil {
+			return "", "", err
+		}
+		if k, why := GuardBookCredits(id, strOf(b.Publisher), strOf(b.Narrator), authors); k != "" {
 			return k, why, nil
 		}
 	}
