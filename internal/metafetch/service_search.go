@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-01
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -179,17 +180,16 @@ func applyProviderLimits(src config.MetadataSource) {
 type SourcesBudget struct {
 	RPS   float64
 	Burst int
-	// SlowestID, SlowestRPS and SlowestTimeout describe the enabled
-	// title-searched source with the lowest RPS x Timeout; SlowestID is ""
-	// when none is enabled. An ASIN-only source (Audnexus) is left out: the
-	// search asks it only for the occasional ASIN lookup, so workers never
-	// queue on it the way they queue on a source every book asks.
+	// SlowestID, SlowestRPS and SlowestTimeout describe the enabled source
+	// with the lowest RPS x Timeout; SlowestID is "" when none is enabled.
+	// The ASIN-only source (Audnexus) counts too: a book can send it an ASIN
+	// lookup (up to maxAudnexusRegions requests), so workers queue on it.
 	SlowestID      string
 	SlowestRPS     float64
 	SlowestTimeout time.Duration
-	// CallsPerBook is the most title-search requests one book sends any one
-	// enabled source (MaxSearchCallsPerBook): the fan-out cap when a
-	// fan-out source is enabled, else 1.
+	// CallsPerBook is the most requests one book sends any one enabled
+	// source in the worst case (MaxSearchCallsPerBook): Audible's variant
+	// cap plus its ASIN lookup when Audible is enabled.
 	CallsPerBook int
 	// BindingID and BooksPerSec name the enabled source that bounds the
 	// batch's throughput in the worst case (every variant asked, no early
@@ -214,9 +214,6 @@ func EnabledSourcesBudget() SourcesBudget {
 		b.RPS += eff.RPS
 		b.Burst += eff.Burst
 		calls := MaxSearchCallsPerBook(strings.TrimSpace(src.ID))
-		if calls == 0 {
-			continue
-		}
 		b.CallsPerBook = max(b.CallsPerBook, calls)
 		if bps := eff.RPS / float64(calls); b.BindingID == "" || bps < b.BooksPerSec {
 			b.BindingID, b.BooksPerSec = strings.TrimSpace(src.ID), bps
@@ -390,8 +387,12 @@ func (mfs *Service) SearchMetadataForBookWithOptions(
 //
 // "2" (2026-10-01): the stop-at-first-hit ladder became the multi-combination
 // fan-out (buildQueryVariants) over cleaned titles (parseSearchTitle), and the
-// book's own ASIN is looked up whenever it has one. Every cached "nothing"
-// verdict is re-asked once.
+// book's own ASIN is looked up whenever it has one. The bump does NOT re-ask
+// every cached row: a row stamped with the version "1" fingerprint for the
+// same inputs (legacyFingerprint) keeps its candidates valid -- for the batch
+// verdict and for the apply gate's fingerprint leg -- and only its "nothing
+// found" verdicts are re-asked. Re-asking every row would be ~100k books
+// against Google Books' 1,000/day quota.
 const searchInputVersion = "2"
 
 // searchInputs is what the provider ladder actually queries with, after hint
@@ -409,6 +410,16 @@ type searchInputs struct {
 	literal  string
 	// parsed is what parseSearchTitle read out of rawQuery.
 	parsed parsedTitle
+	// legacy is what the searchInputVersion "1" ladder asked with
+	// (legacyFingerprint).
+	legacy legacyInputs
+}
+
+// legacyInputs are the questions the stop-at-first-hit ladder
+// (searchInputVersion "1") asked for a book: its chapter-stripped title, the
+// resolved author and narrator, and the ASIN only when there was no author.
+type legacyInputs struct {
+	title, author, narrator, asin string
 }
 
 // resolveSearchInputs derives the ladder's query inputs from the book row and
@@ -456,6 +467,14 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	// the author's placeholder rule: "read by narrator" is never a hint.
 	bookNarrator = SearchAuthorHint(bookNarrator)
 
+	legacy := legacyInputs{title: searchTitle, author: searchAuthor, narrator: bookNarrator}
+	if strings.TrimSpace(legacy.title) == "" || legacy.title == "-" {
+		legacy.title = bookAuthor
+	}
+	if searchAuthor == "" && book.ASIN != nil && looksLikeASIN(*book.ASIN) {
+		legacy.asin = strings.TrimSpace(*book.ASIN)
+	}
+
 	// Read the book's own name, series slot and any packed-in people out of
 	// the title ("Magma Heart - Unknown Author", "read by Cathfach (Erryn's
 	// World)", "Jack Reacher 17: A Wanted Man (Jeff Harding)").
@@ -485,7 +504,7 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 		asin = strings.TrimSpace(*book.ASIN)
 	}
 	return searchInputs{title: searchTitle, author: searchAuthor, bookAuthor: bookAuthor, narrator: bookNarrator, asin: asin,
-		rawQuery: rawQuery, literal: literal, parsed: parsed}
+		rawQuery: rawQuery, literal: literal, parsed: parsed, legacy: legacy}
 }
 
 // fingerprint hashes the questions the ladder asks for these inputs: the
@@ -506,6 +525,50 @@ func (in searchInputs) fingerprint(bookTitle string) string {
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// legacyFingerprint is the fingerprint the searchInputVersion "1" ladder
+// recorded for these inputs, byte for byte. A cached row carrying it asked
+// the old questions: its CANDIDATES are still the book's (the identity checks
+// and freshness rules are unchanged), but a "nothing found" under it is not
+// an answer to the new questions. See SearchFingerprintMatches.
+func (in searchInputs) legacyFingerprint(bookTitle string) string {
+	h := sha256.New()
+	parts := []string{"1", bookTitle, in.legacy.title, in.legacy.author, in.legacy.narrator}
+	if in.legacy.asin != "" {
+		parts = append(parts, "asin:"+in.legacy.asin)
+	}
+	for _, part := range parts {
+		h.Write([]byte(part))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// fingerprintMatch says how a stored fingerprint relates to the questions a
+// search for book would ask now.
+type fingerprintMatch int
+
+const (
+	fingerprintStale fingerprintMatch = iota
+	// fingerprintLegacy: the row was fetched by the version "1" ladder for
+	// the same book inputs. Valid for candidates, not for empty verdicts.
+	fingerprintLegacy
+	fingerprintCurrent
+)
+
+func (mfs *Service) matchSearchFingerprint(stored string, book *database.Book, query, author, narrator string) fingerprintMatch {
+	if mfs == nil || mfs.db == nil || book == nil || stored == "" {
+		return fingerprintStale
+	}
+	in := mfs.resolveSearchInputs(book, query, author, narrator)
+	switch stored {
+	case in.fingerprint(book.Title):
+		return fingerprintCurrent
+	case in.legacyFingerprint(book.Title):
+		return fingerprintLegacy
+	}
+	return fingerprintStale
 }
 
 // SearchFingerprintFor returns the fingerprint a search for book with these
@@ -605,11 +668,13 @@ func (mfs *Service) searchMetadataForBook(
 		searchSeries = in.parsed.Series
 	}
 
-	searchWords := SignificantWords(searchTitle)
+	// A genre tagline subtitle ("Catch 22: A Novel") adds no words to the
+	// scorer: "novel" would rank "Closing Time: A Novel" over "Catch-22".
+	searchWords := SignificantWords(dropGenreTagline(searchTitle))
 	if rawTitle != searchTitle {
 		// The book's own title, cleaned the same way, so a placeholder
 		// suffix or a narrator credit adds no words to the scorer.
-		for w := range SignificantWords(parseSearchTitle(rawTitle, searchAuthor, bookNarrator).Title) {
+		for w := range SignificantWords(dropGenreTagline(parseSearchTitle(rawTitle, searchAuthor, bookNarrator).Title)) {
 			searchWords[w] = true
 		}
 	}
@@ -643,16 +708,25 @@ func (mfs *Service) searchMetadataForBook(
 	// search_variants.go for the variants and the expected calls per book.
 	variants := buildQueryVariants(in.parsed, in.literal, in.rawQuery, searchAuthor, bookNarrator)
 	people := strings.TrimSpace(searchAuthor + " " + bookNarrator)
-	strong := strongCriteria{asin: asinToLookup, people: people, bookDur: bookDurationSec}
+	strong := strongCriteria{asin: asinToLookup, people: people, bookDur: bookDurationSec,
+		position: normPosition(in.parsed.Position)}
 	if in.parsed.TitleIsSeries {
 		strong.slotSeries, strong.slotPos = in.parsed.Series, in.parsed.Position
 	} else {
 		strong.titleWords = anchorWords(searchTitle, in.parsed.Series)
 	}
+	if in.parsed.NameSplit {
+		strong.nameAnchor = anchorWords(in.parsed.Title, in.parsed.Series)
+	}
 	states := mfs.runSearchFanout(fanoutParams{
 		ctx: ctx, limiter: limiter, bookID: id, identity: searchIdentity, opts: opts, people: people, strong: strong,
 	}, sources, variants)
-	mfs.enrichRuntimeByASIN(ctx, limiter, states, bookDurationSec)
+	// One Audnexus lookup per book: the own-ASIN fallback below, when it may
+	// run, is reserved first; otherwise one runtime fill.
+	needOwnASIN := asinToLookup != "" && !poolHasASINWithRuntime(states, asinToLookup)
+	if !needOwnASIN {
+		mfs.enrichRuntimeByASIN(ctx, limiter, states, bookDurationSec)
+	}
 
 	type sourceFetch struct {
 		name       string
@@ -808,8 +882,11 @@ func (mfs *Service) searchMetadataForBook(
 			}
 
 			if asinToLookup != "" && strings.EqualFold(strings.TrimSpace(r.ASIN), asinToLookup) {
-				rec.mul("asin_match", "ASIN match", 2.0,
-					"The result carries the book's own ASIN; it is ranked above every result that does not.")
+				detail := "The result carries the book's own ASIN but agrees with the book on nothing else (title, people, runtime), so it is not ranked first: the stored ASIN may be wrong."
+				if strong.ownASINAgrees(r) {
+					detail = "The result carries the book's own ASIN and agrees with the book on its title, a person or its runtime; it is ranked above every result that does not."
+				}
+				rec.mul("asin_match", "ASIN match", 2.0, detail)
 			}
 
 			var transcriptionBoosted bool
@@ -833,12 +910,33 @@ func (mfs *Service) searchMetadataForBook(
 	// The direct ASIN lookup: Audible first (more complete), Audnexus as the
 	// fallback. Skipped when the pool already holds that ASIN with a runtime:
 	// the lookup could not change the ranking, and the book would wait on it.
-	if asinToLookup != "" && !poolHasASINWithRuntime(states, asinToLookup) {
+	// A lookup that ERRORS (not "no such ASIN") marks its provider failed and
+	// unanswered, so a search whose identity question failed is never
+	// recorded as that provider's fresh "nothing" (noSourceAnswered,
+	// cacheSearchResponse).
+	lookupFailed := map[string]string{}
+	providerName := func(id, fallback string) string {
+		for _, st := range states {
+			if metadata.ProviderIDOf(st.src) == id {
+				return st.name
+			}
+		}
+		return fallback
+	}
+	if needOwnASIN {
 		result, err := mfs.lookupASIN(ctx, limiter, metadata.SourceIDAudible, asinToLookup)
+		if err != nil {
+			lookupFailed[providerName(metadata.SourceIDAudible, "Audible")] = err.Error()
+		}
 		if err != nil || result == nil {
 			searchFanoutLog.Debug("search ASIN lookup on Audible failed, trying Audnexus: asin=%s err=%v",
 				logger.SanitizeLogValue(asinToLookup), err)
 			result, err = mfs.lookupASIN(ctx, limiter, metadata.SourceIDAudnexus, asinToLookup)
+			if err != nil {
+				lookupFailed[providerName(metadata.SourceIDAudnexus, "Audnexus (Audible)")] = err.Error()
+			} else {
+				delete(lookupFailed, providerName(metadata.SourceIDAudible, "Audible"))
+			}
 		}
 		if err == nil && result != nil {
 			if seen.add(*result) {
@@ -860,6 +958,23 @@ func (mfs *Service) searchMetadataForBook(
 			}
 		} else {
 			searchFanoutLog.Debug("search ASIN lookup failed: asin=%s err=%v", logger.SanitizeLogValue(asinToLookup), err)
+		}
+	}
+	if len(lookupFailed) > 0 {
+		kept := sourcesAnswered[:0:0]
+		for _, n := range sourcesAnswered {
+			if _, failed := lookupFailed[n]; !failed {
+				kept = append(kept, n)
+			}
+		}
+		sourcesAnswered = kept
+		for n, e := range lookupFailed {
+			if _, had := sourcesFailed[n]; !had {
+				sourcesFailed[n] = "ASIN lookup: " + e
+			}
+			if !slices.Contains(sourcesAsked, n) {
+				sourcesAsked = append(sourcesAsked, n)
+			}
 		}
 	}
 
@@ -894,7 +1009,9 @@ func (mfs *Service) searchMetadataForBook(
 			if candidateNum == "" {
 				candidateNum = extractTrailingNumber(c.Title)
 			}
-			if candidateNum == expectedNum {
+			// The number may sit anywhere in the candidate's title ("Catch-22",
+			// "Apollo 8: The Thrilling Story ..."), not only at its end.
+			if candidateNum == expectedNum || positionAgrees(metadata.BookMetadata{Title: c.Title, SeriesPosition: c.SeriesPosition}, normPosition(expectedNum)) {
 				c.Score *= k.SeriesNumberExactBoost // Strong boost for exact number match
 			} else if candidateNum != "" && candidateNum != expectedNum {
 				c.Score *= k.SeriesNumberWrongPenalty // Penalize wrong number in same series
@@ -902,12 +1019,14 @@ func (mfs *Service) searchMetadataForBook(
 		}
 	}
 
-	// Sort by score descending, with every candidate carrying the ASIN looked
-	// up (the book's own, or the query's) ranked first: an ASIN match wins
-	// over any combination of title, author, narrator, series and runtime
-	// agreement.
+	// Sort by score descending, with every candidate that carries the ASIN
+	// looked up (the book's own, or the query's) AND agrees with the book on
+	// its title, a person or its runtime ranked first (ownASINAgrees). A
+	// stored ASIN is sometimes wrong, so one that agrees on nothing keeps
+	// only its x2.0 multiplier.
 	asinFirst := func(c MetadataCandidate) bool {
-		return asinToLookup != "" && strings.EqualFold(strings.TrimSpace(c.ASIN), asinToLookup)
+		return strong.ownASINAgrees(metadata.BookMetadata{Title: c.Title, Author: c.Author, Narrator: c.Narrator,
+			ASIN: c.ASIN, DurationSec: c.DurationSec})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if ai, aj := asinFirst(candidates[i]), asinFirst(candidates[j]); ai != aj {

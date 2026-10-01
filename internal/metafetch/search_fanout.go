@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
 // last-edited: 2026-10-01
 
@@ -25,8 +25,10 @@ import (
 var searchFanoutLog = logger.New("metafetch.search")
 
 // maxASINEnrich caps the Audnexus lookups one search spends filling the
-// runtime of pooled answers that carry an ASIN but no runtime.
-const maxASINEnrich = 2
+// runtime of pooled answers that carry an ASIN but no runtime. With the
+// own-ASIN fallback it shares ONE Audnexus lookup per book (of at most
+// maxAudnexusRegions requests): the fallback is reserved first.
+const maxASINEnrich = 1
 
 // fanoutSource is one provider's state across the fan-out rounds. A round
 // touches each state from exactly one goroutine and rounds run one after
@@ -56,15 +58,19 @@ func (st *fanoutSource) note(ctx context.Context, err error) {
 	}
 }
 
-// wants reports whether st asks the variant of round k.
-func (st *fanoutSource) wants(k int) bool {
+// wants reports whether st asks v, the variant of round k.
+func (st *fanoutSource) wants(k int, v queryVariant) bool {
 	switch {
 	case !st.open:
+		return false
+	case v.onlyIfEmpty && len(st.results) > 0:
 		return false
 	case st.policy == policyASINOnly:
 		return false
 	case st.policy == policyBestOnly:
 		return k == 0
+	case st.policy == policyUntilFound:
+		return st.asked < maxOpenLibraryAsks && len(st.results) == 0
 	}
 	return true
 }
@@ -77,15 +83,27 @@ func (st *fanoutSource) answered(ctx context.Context) bool {
 	return !st.stepFailed && st.open && ctx.Err() == nil
 }
 
-// accept is v.accept plus any answer carrying the ASIN being looked up: the
-// book's own ASIN identifies it, so no title or person filter may drop it.
+// accept is what one variant's answers add to the pool: v.accept, minus any
+// answer naming a different series position than the title's
+// (positionConflicts: "Rogue Ascension 7" for book 8), plus an answer that
+// carries the book's own ASIN AND agrees with the book on something else
+// (strongCriteria.ownASINAgrees), which no title filter may drop.
 func (p fanoutParams) accept(v queryVariant, rs []metadata.BookMetadata) []metadata.BookMetadata {
 	kept := v.accept(rs, p.people)
+	if p.strong.position != "" {
+		out := kept[:0:0]
+		for _, r := range kept {
+			if !positionConflicts(r, p.strong.position, p.strong.nameAnchor) {
+				out = append(out, r)
+			}
+		}
+		kept = out
+	}
 	if p.strong.asin == "" {
 		return kept
 	}
 	for _, r := range rs {
-		if !strings.EqualFold(strings.TrimSpace(r.ASIN), p.strong.asin) {
+		if !p.strong.ownASINAgrees(r) {
 			continue
 		}
 		dup := false
@@ -137,14 +155,22 @@ func (mfs *Service) runSearchFanout(p fanoutParams, sources []metadata.MetadataS
 		if p.ctx.Err() != nil {
 			break
 		}
-		var g errgroup.Group
-		g.SetLimit(sourceFanoutLimit())
-		asked := 0
+		var round []*fanoutSource
 		for _, st := range states {
-			if !st.wants(k) {
-				continue
+			if st.wants(k, v) {
+				round = append(round, st)
 			}
-			asked++
+		}
+		if len(round) == 0 {
+			continue
+		}
+		// Sized to the round: each provider paces itself with its own token
+		// bucket, so a round's sources never contend with each other, and a
+		// limit below the round would make a fifth source wait out the first
+		// four for nothing.
+		var g errgroup.Group
+		g.SetLimit(max(sourceFanoutLimit(), len(round)))
+		for _, st := range round {
 			g.Go(func() error {
 				mfs.askVariant(p, st, v)
 				return nil
@@ -152,9 +178,6 @@ func (mfs *Service) runSearchFanout(p fanoutParams, sources []metadata.MetadataS
 		}
 		// Never returns an error: a failing source is recorded on its state.
 		_ = g.Wait()
-		if asked == 0 {
-			break
-		}
 		if poolHasStrong(states, p.strong) {
 			searchFanoutLog.Debug("search fan-out stopped after round %d of %d: strong match (book %s)",
 				k+1, len(variants), logger.SanitizeLogValue(p.bookID))
@@ -250,8 +273,10 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 	case providerID == metadata.SourceIDAudible:
 		res, err = metadata.NewAudibleClient().LookupByASIN(asin)
 	default:
-		// Ctx-aware: a batch cancel aborts its region loop promptly.
-		res, err = metadata.NewAudnexusClient().LookupByASIN(ctx, asin)
+		// Ctx-aware: a batch cancel aborts its region loop promptly. At most
+		// maxAudnexusRegions requests, so one lookup fits the per-book budget
+		// MaxSearchCallsPerBook reports.
+		res, err = metadata.NewAudnexusClient().LookupByASINInRegions(ctx, asin, audnexusSearchRegions)
 	}
 	if err != nil {
 		reg.RecordFailure(providerID, err)

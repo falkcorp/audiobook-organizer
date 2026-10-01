@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-01
 //
@@ -212,8 +212,11 @@ func (mfs *Service) cachedQueryMatches(entry *MetadataCandidateCache, book *data
 	if entry.SourceHash != noAuthor || entry.SearchFingerprint == "" || len(liveAuthors) == 0 {
 		return false
 	}
-	want := mfs.SearchFingerprintFor(book, query, SearchAuthorHint(liveAuthors[0]), "")
-	return want != "" && entry.SearchFingerprint == want
+	// A row fetched by the version "1" ladder for the same inputs vouches
+	// for its candidates as well as a current one (legacyFingerprint): the
+	// searchInputVersion bump changed which questions are asked, not which
+	// book the row's candidates were fetched for.
+	return mfs.matchSearchFingerprint(entry.SearchFingerprint, book, query, SearchAuthorHint(liveAuthors[0]), "") != fingerprintStale
 }
 
 // BatchSourceHash is the SourceHash the batch candidate fetch writes for a
@@ -584,7 +587,11 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 		!mfs.CachedQueryMatchesIdentity(entry, book, live, query) {
 		return entry, BatchVerdictNone, nil
 	}
-	if entry.SearchFingerprint != mfs.SearchFingerprintFor(book, query, author, "") {
+	// A row from the version "1" ladder for the same inputs keeps its fresh
+	// CANDIDATES; a "nothing found" under it answered the old questions, not
+	// the fan-out's, so it is re-asked (searchInputVersion).
+	fp := mfs.matchSearchFingerprint(entry.SearchFingerprint, book, query, author, "")
+	if fp == fingerprintStale || (fp == fingerprintLegacy && len(entry.Candidates) == 0) {
 		return entry, BatchVerdictNone, nil
 	}
 	now := nowUTC()

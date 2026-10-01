@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
 // last-edited: 2026-10-01
 //
@@ -385,9 +385,10 @@ func candidateFetchLimiter(rps float64, burst int) *rate.Limiter {
 // Every worker also waits on each source's own token bucket, and a request
 // that waits there longer than the source's timeout fails. N workers queued
 // on a source of rate r drain in N/r seconds, so the pool is capped at
-// candidateFetchQueueTimeoutShare of the slowest source's r x timeout
-// (prod 2026-10-01: audnexus 2/s x 30 s x 0.5 = 30), and the cap binds the
-// floor and a configured count too.
+// candidateFetchQueueTimeoutShare of the slowest enabled source's r x
+// timeout (SourcesBudget.SlowestID, which counts the ASIN-only Audnexus
+// since a book can send it an ASIN lookup; prod 2026-10-01: audnexus 2/s x
+// 30 s x 0.5 = 30), and the cap binds the floor and a configured count too.
 const (
 	candidateFetchCallLatencySec = 0.15
 	// candidateFetchCallsPerBook is the fallback when the budget names no
