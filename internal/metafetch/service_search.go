@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-01
 
@@ -183,7 +183,7 @@ type SourcesBudget struct {
 	// SlowestID, SlowestRPS and SlowestTimeout describe the enabled source
 	// with the lowest RPS x Timeout; SlowestID is "" when none is enabled.
 	// The ASIN-only source (Audnexus) counts too: a book can send it an ASIN
-	// lookup (up to maxAudnexusRegions requests), so workers queue on it.
+	// lookup (up to maxAudnexusRequests requests), so workers queue on it.
 	SlowestID      string
 	SlowestRPS     float64
 	SlowestTimeout time.Duration
@@ -698,8 +698,9 @@ func (mfs *Service) searchMetadataForBook(
 	// literal title missed was never asked the cleaned one. See
 	// search_variants.go for the variants and the expected calls per book.
 	variants := buildQueryVariants(in.parsed, in.literal, in.rawQuery, searchAuthor, bookNarrator)
-	people := strings.TrimSpace(searchAuthor + " " + bookNarrator)
-	strong := newStrongCriteria(in.parsed, searchTitle, in.literal, asinToLookup, people, bookDurationSec)
+	// "; "-separated, so sharesPerson can tell the names apart.
+	people := strings.Trim(searchAuthor+"; "+bookNarrator, "; ")
+	strong := newStrongCriteria(in.parsed, searchTitle, in.literal, asinToLookup, searchAuthor, bookDurationSec)
 	states := mfs.runSearchFanout(fanoutParams{
 		ctx: ctx, limiter: limiter, bookID: id, identity: searchIdentity, opts: opts, people: people, strong: strong,
 	}, sources, variants)
@@ -749,7 +750,11 @@ func (mfs *Service) searchMetadataForBook(
 			return nil
 		})
 	}
-	_ = sg.Wait()
+	// Scoring never returns an error (the callbacks return nil); one here is
+	// a broken invariant, logged rather than dropped.
+	if err := sg.Wait(); err != nil {
+		searchFanoutLog.Error("search scoring: unexpected error (book %s): %v", logger.SanitizeLogValue(id), err)
+	}
 
 	seen := candidateSeen{}
 	var candidates []MetadataCandidate
@@ -864,9 +869,9 @@ func (mfs *Service) searchMetadataForBook(
 			}
 
 			if asinToLookup != "" && strings.EqualFold(strings.TrimSpace(r.ASIN), asinToLookup) {
-				detail := "The result carries the book's own ASIN but agrees with the book on nothing else (title, people, runtime), so it is not ranked first: the stored ASIN may be wrong."
+				detail := "The result carries the book's own ASIN but names another series position or agrees with the book on neither runtime nor title, so it is not ranked first: the stored ASIN may be a sibling's."
 				if strong.ownASINAgrees(r) {
-					detail = "The result carries the book's own ASIN and agrees with the book on its title, a person or its runtime; it is ranked above every result that does not."
+					detail = "The result carries the book's own ASIN, names no other series position, and agrees with the book on its runtime or title; it is ranked above every result that does not."
 				}
 				rec.mul("asin_match", "ASIN match", 2.0, detail)
 			}
@@ -919,6 +924,15 @@ func (mfs *Service) searchMetadataForBook(
 			} else {
 				delete(lookupFailed, providerName(metadata.SourceIDAudible, "Audible"))
 			}
+		}
+		if err == nil && result != nil && strong.positionConflicts(*result) {
+			// The stored ASIN is a sibling's ("Rogue Ascension 7" stored on
+			// book 8 by an earlier bad match): the store answered for another
+			// book, which the position rules drop exactly as they drop it from
+			// the pool. Not a failure -- the provider answered.
+			searchFanoutLog.Debug("search ASIN lookup returned another position, dropped: asin=%s title=%s position=%s",
+				logger.SanitizeLogValue(asinToLookup), logger.SanitizeLogValue(result.Title), logger.SanitizeLogValue(result.SeriesPosition))
+			result = nil
 		}
 		if err == nil && result != nil {
 			if seen.add(*result) {
@@ -1000,13 +1014,14 @@ func (mfs *Service) searchMetadataForBook(
 	}
 
 	// Sort by score descending, with every candidate that carries the ASIN
-	// looked up (the book's own, or the query's) AND agrees with the book on
-	// its title, a person or its runtime ranked first (ownASINAgrees). A
-	// stored ASIN is sometimes wrong, so one that agrees on nothing keeps
-	// only its x2.0 multiplier.
+	// looked up (the book's own, or the query's) AND agrees with the book
+	// (ownASINAgrees: no other series position, and its runtime or its title)
+	// ranked first. A stored ASIN is sometimes a sibling's, so one that
+	// disagrees keeps only its x2.0 multiplier. The candidate's series fields
+	// go in too: the position check needs its explicit series_position.
 	asinFirst := func(c MetadataCandidate) bool {
 		return strong.ownASINAgrees(metadata.BookMetadata{Title: c.Title, Author: c.Author, Narrator: c.Narrator,
-			ASIN: c.ASIN, DurationSec: c.DurationSec})
+			Series: c.Series, SeriesPosition: c.SeriesPosition, ASIN: c.ASIN, DurationSec: c.DurationSec})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if ai, aj := asinFirst(candidates[i]), asinFirst(candidates[j]); ai != aj {
@@ -1037,6 +1052,7 @@ func (mfs *Service) searchMetadataForBook(
 		SourcesAsked:      sourcesAsked,
 		InputFingerprint:  in.fingerprint(book.Title),
 		LegacyFingerprint: in.legacyFingerprint(book.Title),
+		carryFilter:       strong.filterCarried,
 	}, nil
 }
 

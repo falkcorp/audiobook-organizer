@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_variants_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f16af23a-770c-4bcf-8317-0c7f7724ee42
 // last-edited: 2026-10-01
 
@@ -176,6 +176,6 @@ func TestMaxSearchCallsPerBook(t *testing.T) {
 	assert.Equal(t, maxOpenLibraryAsks, MaxSearchCallsPerBook(metadata.SourceIDOpenLibrary))
 	assert.Equal(t, 1, MaxSearchCallsPerBook(metadata.SourceIDGoogleBooks))
 	assert.Equal(t, 1, MaxSearchCallsPerBook(metadata.SourceIDHardcover))
-	assert.Equal(t, maxAudnexusRegions, MaxSearchCallsPerBook(metadata.SourceIDAudnexus), "one lookup, at most 3 regions")
-	assert.Len(t, audnexusSearchRegions, maxAudnexusRegions)
+	assert.Equal(t, maxAudnexusRequests, MaxSearchCallsPerBook(metadata.SourceIDAudnexus), "one lookup, every region at worst")
+	assert.Equal(t, maxAudnexusRequests, len(audnexusSearchRegions)+len(audnexusFallbackRegions))
 }
