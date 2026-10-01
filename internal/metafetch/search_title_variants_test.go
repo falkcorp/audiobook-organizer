@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
-// last-edited: 2026-09-14
+// last-edited: 2026-10-01
 
 package metafetch
 
@@ -451,18 +451,18 @@ func TestSearchMetadataForBook_SeriesDecoratedTitleFallsBackToVariants(t *testin
 	}
 }
 
-// A literal-title hit on the interactive path never reaches the variants.
-func TestSearchMetadataForBook_LiteralHitSkipsVariants(t *testing.T) {
-	src := &recordingSource{name: "audible", hitOn: "Eternal Dominion, Book 04 - Assertions"}
+// A strong hit (the cleaned title's words + the book's author, no runtime to
+// disagree with) in the first fan-out round stops the fan-out: no further
+// variant is asked.
+func TestSearchMetadataForBook_StrongHitStopsFanout(t *testing.T) {
+	src := &recordingSource{name: "audible", hitOn: "Assertions", author: "Bern Dean"}
 	svc := newVariantService(t, "Eternal Dominion, Book 04 - Assertions", src)
 
 	if _, err := svc.searchMetadataForBook(context.Background(), nil, "b1", "", "Bern Dean", "", "", SearchOptions{}); err != nil {
 		t.Fatalf("searchMetadataForBook: %v", err)
 	}
-	for _, q := range src.queries {
-		if q != "Eternal Dominion, Book 04 - Assertions" {
-			t.Fatalf("variant %q was queried after a literal hit; queries: %v", q, src.queries)
-		}
+	if len(src.queries) != 1 || src.queries[0] != "Assertions" {
+		t.Fatalf("a strong first-round hit must stop the fan-out; queries: %v", src.queries)
 	}
 }
 

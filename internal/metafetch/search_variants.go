@@ -161,20 +161,26 @@ func parseSearchTitle(raw, author, narrator string) parsedTitle {
 	// Series slot.
 	if m := dashPositionRe.FindStringSubmatch(t); m != nil && !slotWordRe.MatchString(strings.TrimSpace(m[1])) {
 		p.Series, p.Position, t = strings.TrimSpace(m[1]), m[2], strings.TrimSpace(m[3])
-	} else if m := bareSeriesNumber.FindStringSubmatch(t); m != nil && !slotWordRe.MatchString(strings.TrimSpace(m[1])) {
-		p.Series, p.Position, t = strings.TrimSpace(m[1]), m[2], strings.TrimSpace(m[3])
 	} else if loc := seriesDecoration.FindStringIndex(t); loc != nil {
+		// A labelled slot (", Book 5", "Vol. 3") is read before a bare number,
+		// so "Eternal Dominion, Book 04 - Assertions" names the series
+		// "Eternal Dominion", not "Eternal Dominion, Book".
 		base, series, bookName, found := splitSeriesDecoration(t)
 		if found && series != "" {
 			p.Series = series
 			p.Position = decorationNumberRe.FindString(t[loc[0]:loc[1]])
 			if bookName != "" {
 				t = bookName
-			} else if strings.TrimSpace(base) != "" {
-				t = strings.TrimSpace(base)
-				p.TitleIsSeries = p.Position != ""
+			} else if b := strings.TrimSpace(base); b != "" {
+				t = b
+				// Only the series and the slot remain ("Saving
+				// Supervillains, Book 5"); a base that still carries more
+				// ("Blood of Elves The Witcher, Book 1") is searched as is.
+				p.TitleIsSeries = p.Position != "" && strings.EqualFold(b, series)
 			}
 		}
+	} else if m := bareSeriesNumber.FindStringSubmatch(t); m != nil && !slotWordRe.MatchString(strings.TrimSpace(m[1])) {
+		p.Series, p.Position, t = strings.TrimSpace(m[1]), m[2], strings.TrimSpace(m[3])
 	}
 
 	p.Title = stripChapterFromTitle(t)
@@ -225,12 +231,53 @@ func (v queryVariant) key() string {
 // and narrator, the persons a result may be vouched by.
 func (v queryVariant) accept(results []metadata.BookMetadata, people string) []metadata.BookMetadata {
 	if v.slotSeries != "" {
-		results = keepSeriesSlot(results, v.slotSeries, v.slotPosition)
+		if v.Kind == variantSeriesAuthor {
+			results = keepSeriesSlot(results, v.slotSeries, v.slotPosition)
+		} else {
+			results = keepSlotOrNamed(results, v.slotSeries, v.slotPosition)
+		}
 	}
 	if v.filter != nil {
 		results = keepVariant(results, *v.filter, people)
 	}
 	return results
+}
+
+// keepSlotOrNamed is keepSeriesSlot for a title that splitSeriesDecoration
+// read as "<series>, Book N" with nothing else -- a guess, because "Blood of
+// Elves The Witcher, Book 1" has the same shape as "Saving Supervillains,
+// Book 5". An answer is kept when it is in that series at that position, or
+// when it names no slot of its own and its title is a proper part of ours
+// ("Blood of Elves") carrying no other position number. An answer that is
+// only the series' name, or names another position, is a sibling.
+func keepSlotOrNamed(results []metadata.BookMetadata, series, position string) []metadata.BookMetadata {
+	want := normalizeSeriesNumber(position)
+	ours := SignificantWords(series)
+	var kept []metadata.BookMetadata
+	for _, r := range results {
+		if len(keepSeriesSlot([]metadata.BookMetadata{r}, series, position)) == 1 {
+			kept = append(kept, r)
+			continue
+		}
+		if strings.TrimSpace(r.SeriesPosition) != "" || strings.EqualFold(strings.TrimSpace(r.Title), strings.TrimSpace(series)) {
+			continue
+		}
+		if n := extractTrailingNumber(r.Title); n != "" && n != want {
+			continue
+		}
+		words := SignificantWords(r.Title)
+		ok := len(words) >= 2 && len(words) < len(ours)
+		for w := range words {
+			if !ours[w] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			kept = append(kept, r)
+		}
+	}
+	return kept
 }
 
 // keepSeriesSlot keeps answers in series at position. A query by series name
