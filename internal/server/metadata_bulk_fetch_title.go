@@ -1,5 +1,5 @@
 // file: internal/server/metadata_bulk_fetch_title.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a88b51d9-3878-41d2-b50e-c04f1ff6793e
 // last-edited: 2026-09-30
 //
@@ -53,11 +53,36 @@ type bulkFetchQuery struct {
 // metafetch's fetchCacheIdentityForTitle keys the per-book search's rows,
 // so the two paths still share rows and neither replays what an earlier
 // search of the placeholder cached.
-func resolveBulkFetchQuery(store bulkFetchTitleStore, bookID, title, path, author, identity string, full *database.Book) bulkFetchQuery {
+//
+// A title whose verdict hangs on the book's folder and duration
+// (metadata.NeedsFolderEvidence: "Cobra 100 of 151", "The Sunrise Lands 1",
+// "American Gods [64k]") keeps the pre-loop's skip_cached probe and identity:
+// it goes to the resolver without a GetBookByID (the resolver reads the
+// book's files and, through memo, its folder once per pass), and when it is
+// searched by its own title the pre-loop identity stands.
+func resolveBulkFetchQuery(store bulkFetchTitleStore, bookID, title, path, author, identity string, full *database.Book, memo *metabatch.FolderMemo) bulkFetchQuery {
+	ownTitle := bulkFetchQuery{
+		query:    metabatch.CandidateSearchQuery{Title: title, Source: metabatch.SearchQuerySourceTitle, Usable: true},
+		identity: identity,
+	}
 	if !metadata.MayBeUnsearchableTitle(title) {
-		return bulkFetchQuery{
-			query:    metabatch.CandidateSearchQuery{Title: title, Source: metabatch.SearchQuerySourceTitle, Usable: true},
-			identity: identity,
+		if !metadata.NeedsFolderEvidence(title) {
+			return ownTitle
+		}
+		book := full
+		if book == nil {
+			book = &database.Book{ID: bookID, Title: title, FilePath: path}
+		}
+		q := metabatch.ResolveCandidateSearchQueryMemo(store, book, memo)
+		switch {
+		case !q.Usable:
+			kind, status := unsearchableQueryKind(q, title)
+			return bulkFetchQuery{query: q, skipKind: kind, skipStatus: status}
+		case q.Title == title:
+			return ownTitle
+		default:
+			// Rip details cleaned off: the stand-in carries its own identity.
+			return bulkFetchQuery{query: q, identity: metafetch.FetchCacheIdentity(q.Title, author, book.ASIN, book.ISBN13, book.ISBN10)}
 		}
 	}
 	book := full
@@ -70,7 +95,7 @@ func resolveBulkFetchQuery(store bulkFetchTitleStore, bookID, title, path, autho
 			book = &database.Book{ID: bookID, Title: title, FilePath: path}
 		}
 	}
-	q := metabatch.ResolveCandidateSearchQuery(store, book)
+	q := metabatch.ResolveCandidateSearchQueryMemo(store, book, memo)
 	if !q.Usable {
 		kind, status := unsearchableQueryKind(q, title)
 		return bulkFetchQuery{query: q, skipKind: kind, skipStatus: status}

@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
 // last-edited: 2026-09-30
 //
@@ -8,7 +8,6 @@
 package metabatch
 
 import (
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -99,22 +98,27 @@ type CandidateSearchQuery struct {
 //     transcription is mid-book narration or another work's intro on a
 //     mis-merged book, not the book's title, so there is no fall-through;
 //  3. the folder holding the book's files (metadata.ChapterTitleFromDirectory:
-//     "Eldest/98.mp3" -> "Eldest", one disc/part folder skipped), from the
-//     first present file, then from the book's own path.
+//     "Eldest/98.mp3" -> "Eldest" for a lone row, one disc/part folder
+//     skipped), from the first present file, then from the book's own path.
 //
 // If none is usable the result is not Usable and the book must be skipped
 // with SkipReasonNoUsableTitle -- never searched.
 //
 // A row that is one file of a set filed as separate book rows in one folder
-// (titleJudge.partRowRefused: "Cobra 100 of 151", "Elantris_copy179", "The
-// Sunrise Lands 1" beside "The Sunrise Lands 2", a rip-detail folder name
-// beside other rows) is refused OUTRIGHT, with SkipKindSiblingPart: no
-// stand-in is tried. Every stand-in -- the intro transcription, the folder
-// name -- names the whole work, and a fragment must be skipped, not cleaned
-// into its parent's title (the "06 Chapter 6" lesson): on 2026-09-30 65 such
-// rows were handed a whole book's candidate. A row that holds the whole work
-// (two or more present files) is not a part row, so "Cobra 001 of 151" on a
-// merged book still falls back to its folder.
+// (titleJudge.partRowRefused, part_rows.go: "06 Chapter 6" or "98" beside
+// other chapter rows, "Elantris_copy179", "Cobra 100 of 151" or "The Sunrise
+// Lands 1" beside chapter siblings, a rip-detail folder name beside other
+// rows) is refused OUTRIGHT, with SkipKindSiblingPart: no stand-in is tried.
+// Every stand-in -- the intro transcription, the folder name -- names the
+// whole work, and a fragment must be skipped, not cleaned into its parent's
+// title: on 2026-09-30 65 such rows were handed a whole book's candidate.
+// Until then a plain-number chapter row borrowed its folder's title
+// ("Eldest/98.mp3" beside 01-97 searched "Eldest"); the owner ruled on
+// 2026-09-30 that it is skipped too. Only a lone row -- no other row in its
+// folder -- keeps the stand-ins. A row that holds the whole work (two or more
+// present files, or one file running at least the chapter-consolidation
+// threshold) is never a part row, so "Cobra 001 of 151" on a merged book
+// still falls back to its folder.
 //
 // A title or folder name carrying rip details ("American Gods [64k
 // 20;57;42 577MB]"; metadata.StripRipJunk) is searched without them when the
@@ -123,10 +127,18 @@ type CandidateSearchQuery struct {
 // A GetBookFiles error is treated as "no file rows": the file-level steps are
 // skipped and only the book's own path is tried, which is the safe direction.
 func ResolveCandidateSearchQuery(files SearchQueryReader, book *database.Book) CandidateSearchQuery {
+	return ResolveCandidateSearchQueryMemo(files, book, nil)
+}
+
+// ResolveCandidateSearchQueryMemo is ResolveCandidateSearchQuery with a
+// FolderMemo shared across the rows of one pass (a fetch op, a stale scan):
+// each folder is listed once, and the memo's library and import roots are
+// never listed at all. memo may be nil.
+func ResolveCandidateSearchQueryMemo(files SearchQueryReader, book *database.Book, memo *FolderMemo) CandidateSearchQuery {
 	if book == nil {
 		return CandidateSearchQuery{}
 	}
-	j := &titleJudge{files: files, book: book, bookID: book.ID, bookPath: book.FilePath}
+	j := &titleJudge{files: files, book: book, bookID: book.ID, bookPath: book.FilePath, memo: memo}
 	if j.partRowRefused(book.Title) {
 		return CandidateSearchQuery{SkipKind: SkipKindSiblingPart}
 	}
@@ -178,141 +190,6 @@ func (j *titleJudge) ownTitle(title string) (string, bool) {
 // hasLetterRe: a title must hold a letter to be one.
 var hasLetterRe = regexp.MustCompile(`\pL`)
 
-// partRowRefused reports whether title shows this row to be one file of a
-// set the scanner filed as separate book rows (see ResolveCandidateSearchQuery):
-//
-//   - a counted part or copy suffix (metadata.IsCountedPartTitle: "002 of
-//     341", "_copy179") on a single-file row with other rows in its folder;
-//   - a bare trailing part token (metadata.SiblingPartStem: "The Sunrise
-//     Lands 1", "Sealed to the Flame E") with a sibling row whose file name
-//     starts with the same stem (stemSiblings) -- the shape alone is "Apollo
-//     13" or "Plan B";
-//   - rip details (metadata.StripRipJunk) on a single-file row with other
-//     rows in its folder, when the title IS that folder's name: a folder
-//     name stamped onto each of its files. "American Gods [64k 577MB].m4b"
-//     filed beside "Coraline.m4b" is a book and is searched, cleaned.
-//
-// The folder is listed only when one of these shapes matches.
-func (j *titleJudge) partRowRefused(title string) bool {
-	if strings.TrimSpace(title) == "" {
-		return false
-	}
-	if metadata.IsCountedPartTitle(title) {
-		return j.isPartRow()
-	}
-	if _, had := metadata.StripRipJunk(title); had {
-		dir := j.fileRowDir()
-		return dir != "" && normTitle(title) == normTitle(filepath.Base(dir)) && j.isPartRow()
-	}
-	return j.stemSiblings(title)
-}
-
-// ripFolderPartRow reports whether this is a single-file row with other rows
-// in its folder and that folder's name carries rip details: one file of a
-// folder the scanner split into rows. Checked before the transcription
-// fallbacks, which would otherwise search the whole work by a mid-book
-// file's intro.
-func (j *titleJudge) ripFolderPartRow() bool {
-	dir := j.fileRowDir()
-	if dir == "" {
-		return false
-	}
-	if _, had := metadata.StripRipJunk(filepath.Base(dir)); !had {
-		return false
-	}
-	return j.isPartRow()
-}
-
-// fileRowDir returns the folder holding this row's one file, or "" when the
-// row is not a single-file row (two or more present files: it holds the
-// whole work; or its path is a directory) or the folder is a library or
-// import root (metadata.IsGenericDirName), whose listing would be the whole
-// library and whose other rows are other books.
-func (j *titleJudge) fileRowDir() string {
-	present := j.presentFiles()
-	if len(present) > 1 {
-		return ""
-	}
-	p := j.bookPath
-	if len(present) == 1 {
-		p = present[0].FilePath
-	}
-	p = strings.TrimSpace(p)
-	if p == "" || !metadata.IsFileExt(filepath.Ext(p)) {
-		return ""
-	}
-	dir := filepath.Dir(p)
-	if dir == "." || dir == string(filepath.Separator) || metadata.IsGenericDirName(filepath.Base(dir)) {
-		return ""
-	}
-	return dir
-}
-
-// siblingPaths returns the FilePath of every OTHER live book row directly
-// in this single-file row's folder (fileRowDir), read at most once. A read
-// fault is no evidence: the title is then judged on its own, so a real title
-// is never refused on a read fault.
-func (j *titleJudge) siblingPaths() []string {
-	if j.siblingsLoaded {
-		return j.siblings
-	}
-	j.siblingsLoaded = true
-	dir := j.fileRowDir()
-	if dir == "" || j.files == nil {
-		return nil
-	}
-	all, err := j.files.LiveBookPathsUnderDir(dir)
-	if err != nil {
-		return nil
-	}
-	for id, p := range all {
-		if id == j.bookID || filepath.Dir(p) != dir {
-			continue
-		}
-		j.siblings = append(j.siblings, p)
-	}
-	sort.Strings(j.siblings)
-	return j.siblings
-}
-
-// isPartRow reports whether this single-file row shares its folder with
-// another live book row.
-func (j *titleJudge) isPartRow() bool { return len(j.siblingPaths()) > 0 }
-
-// siblingPartTailRe is what may follow the stem in a sibling's file name: a
-// separator and a part token -- digits, optionally sub-numbered ("2",
-// "1-02") -- or one letter ("a").
-var siblingPartTailRe = regexp.MustCompile(`^[\s_]+(?:\d{1,4}(?:[-_.]\d{1,4})*|\pL)$`)
-
-// leadingTrackRe is a track-number prefix on a file name ("01 - ", "003. ").
-var leadingTrackRe = regexp.MustCompile(`^\d{1,4}\s*[-.]?\s+`)
-
-// stemSiblings reports whether title ends in a bare part token
-// (metadata.SiblingPartStem) and a sibling row's file name, less its
-// extension and any track prefix, is the same stem followed by nothing but a
-// part token (siblingPartTailRe):
-// "The Sunrise Lands 1" beside "The Sunrise Lands 2.mp3" or "The Sunrise
-// Lands 1-05.mp3", "Sealed to the Flame E" beside "Sealed to the Flame
-// A.mp3". "Plan B" filed beside its author's other books has no such
-// sibling and is searched, and so are "Henry V" beside "Henry IV, Part 1",
-// "Malcolm X" beside "Malcolm X Speaks" and "World War I" beside "World War
-// II": what follows the stem there is not a part token.
-func (j *titleJudge) stemSiblings(title string) bool {
-	stem, _, ok := metadata.SiblingPartStem(title)
-	if !ok {
-		return false
-	}
-	want := normTitle(stem)
-	for _, p := range j.siblingPaths() {
-		base := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
-		base = normTitle(leadingTrackRe.ReplaceAllString(strings.TrimSpace(base), ""))
-		if rest, ok := strings.CutPrefix(base, want); ok && siblingPartTailRe.MatchString(rest) {
-			return true
-		}
-	}
-	return false
-}
-
 // titleJudge decides whether a title is worth searching for one book. Most
 // of that is metadata.IsUnsearchableTitle, which needs nothing but the text.
 // A section heading in words or a roman numeral, or a front-matter name
@@ -337,6 +214,9 @@ type titleJudge struct {
 	// title's shape needs them.
 	siblingsLoaded bool
 	siblings       []string
+	// memo shares folder listings across rows and knows the roots; nil
+	// lists through files directly.
+	memo *FolderMemo
 }
 
 // SearchQueryReader is what ResolveCandidateSearchQuery reads: the book's

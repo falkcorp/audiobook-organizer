@@ -1,5 +1,5 @@
 // file: internal/server/metadata_stores.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
 // last-edited: 2026-09-30
 
@@ -8,6 +8,7 @@ package server
 import (
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -71,6 +72,23 @@ type candidateFetchStore interface {
 	database.BookDirLister
 
 	GetBookByID(id string) (*database.Book, error)
+}
+
+// newFolderMemo returns a metabatch.FolderMemo for one pass over many books
+// (a candidate fetch op, a bulk fetch): each folder is listed once, and the
+// library root and every import path are roots, never listed. An import-path
+// read failure leaves only the library root (config RootDir, which the
+// resolver also checks itself).
+func (s *Server) newFolderMemo() *metabatch.FolderMemo {
+	roots := []string{config.AppConfig.RootDir}
+	if store := s.storeForWiring(); store != nil {
+		if paths, err := store.GetAllImportPaths(); err == nil {
+			for _, p := range paths {
+				roots = append(roots, p.Path)
+			}
+		}
+	}
+	return metabatch.NewFolderMemo(roots...)
 }
 
 // metadataResultsReader is the cache-refresh path: it only reads op history.

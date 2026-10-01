@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -330,6 +330,9 @@ func (s *Server) runBulkMetadataFetchAll(
 	// Per-provider semaphore (fixed cap 2) shared by all workers so N pool workers
 	// can never stampede a single provider. Built from the read-only sourceChain.
 	sem := metafetch.NewProviderSemaphore(sourceChain, metafetch.DefaultPerProviderFetchCap)
+	// One folder memo per run: the resolver lists each book's folder once
+	// across all workers, and never lists a library or import root.
+	folderMemo := s.newFolderMemo()
 
 	// progressMu serializes ProgressReporter calls — the reporter is not assumed
 	// concurrency-safe (see runBulkWriteBack for the same precaution).
@@ -371,7 +374,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		// book is searched by its transcribed title or folder name instead,
 		// and skipped -- with a ledger row and its own line -- only when
 		// neither is usable. See resolveBulkFetchQuery.
-		q := resolveBulkFetchQuery(store, bookID, w.book.Title, w.book.FilePath, currentAuthor, w.identity, nil)
+		q := resolveBulkFetchQuery(store, bookID, w.book.Title, w.book.FilePath, currentAuthor, w.identity, nil, folderMemo)
 		ref := bulkFetchBook{id: bookID, title: w.book.Title, author: currentAuthor, path: w.book.FilePath, query: q.query}
 		if !q.query.Usable {
 			_ = store.CreateOperationResult(&database.OperationResult{
@@ -831,6 +834,9 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	// Per-provider semaphore (fixed cap 2) shared by all workers, built from the
 	// read-only sourceChain — see runBulkMetadataFetchAll.
 	sem := metafetch.NewProviderSemaphore(sourceChain, metafetch.DefaultPerProviderFetchCap)
+	// One folder memo per run: the resolver lists each book's folder once
+	// across all workers, and never lists a library or import root.
+	folderMemo := s.newFolderMemo()
 
 	var progressMu sync.Mutex
 	reportProgress := func(current, total int, message string) {
@@ -866,7 +872,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		// A title not worth searching is replaced by a stand-in, or the book
 		// is skipped with its own line (see runBulkMetadataFetchAll). The full
 		// book is already in hand here, so only its files are read.
-		q := resolveBulkFetchQuery(store, bookID, w.book.Title, w.book.FilePath, w.authorName, w.identity, &w.book)
+		q := resolveBulkFetchQuery(store, bookID, w.book.Title, w.book.FilePath, w.authorName, w.identity, &w.book, folderMemo)
 		ref := bulkFetchBook{id: bookID, title: w.book.Title, author: w.authorName, path: w.book.FilePath, query: q.query}
 		if !q.query.Usable {
 			_ = store.CreateOperationResult(&database.OperationResult{

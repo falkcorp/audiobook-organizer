@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_fragment.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d2f1a4c-9b6e-4c0a-8f31-2e5a9c1d3b67
 // last-edited: 2026-09-30
 
@@ -67,7 +67,11 @@ var (
 //
 // TRUE examples:  "06 Chapter 6", "Chapter 6", "01 - Track 1", "Disc 2", "06",
 //
-//	"Cobra 100 of 151", "Elantris 084 of", "Part 02 of 63", "Elantris_copy179"
+//	"Elantris_copy179"
+//
+// A counted part ("Cobra 100 of 151"; IsCountedPartTitle) is NOT matched:
+// "Golden Son (Part 1 of 2)" and "Dune (1 of 2)" are whole dramatized
+// products, so only the book's folder can tell (metabatch's titleJudge).
 //
 // FALSE examples: "The Moons of Barsk", "Metro 2034", "1984",
 //
@@ -86,25 +90,24 @@ func IsLikelyChapterFragment(title string) bool {
 	if chapterFragZeroPadded.MatchString(t) {
 		return true
 	}
-	return IsCountedPartTitle(t)
+	return chapterFragCopySuffix.MatchString(t)
 }
 
-// IsCountedPartTitle reports whether title carries a file's position out of
-// a count ("002 of 341", "Part 02 of 63", "084 of" cut short) or a file
-// manager's copy suffix ("_copy179"). Either names ONE file of a set, so the
-// title is a chapter fragment whatever words surround it. A caller holding
-// the book's folder (metabatch.ResolveCandidateSearchQuery) also refuses any
-// stand-in title for such a row when it is one of several file rows in its
-// folder: the stand-in names the whole work, not this file.
+// IsCountedPartTitle reports whether title carries a position out of a count
+// ("002 of 341", "Part 02 of 63", "084 of" cut short).
+//
+// The text alone is NOT evidence. A chapter file's title has the shape
+// ("Before They Are Hanged 002 of 341"), and so does a whole dramatized
+// product split in a few parts ("Golden Son (Part 1 of 2)", "Dark Age (2 of
+// 3)", "Wheel of Time #3 of 14"; ~129 in prod, 11-23h each). A caller holding
+// the book's folder and duration refuses it only for a short single-file row
+// with chapter siblings (metabatch: titleJudge.partRowRefused).
 //
 // A count after a book or volume label is a series position, not a file's
 // ("The Dragon Reborn (Book 3 of 14)", "Vol. 2 of 3"), and is not matched;
 // after "Part", "Disc" or "Track" it is a file's.
 func IsCountedPartTitle(title string) bool {
 	t := strings.TrimSpace(title)
-	if chapterFragCopySuffix.MatchString(t) {
-		return true
-	}
 	for _, re := range []*regexp.Regexp{chapterFragOfCount, chapterFragOfTail} {
 		for _, loc := range re.FindAllStringIndex(t, -1) {
 			if !seriesCountLabelRe.MatchString(t[:loc[0]]) {
@@ -137,8 +140,10 @@ var partTokenLabelRe = regexp.MustCompile(`(?i)\b` + sectionLabels + `\.?$`)
 //
 // The shape alone is NOT evidence: "Apollo 13", "Plan B", "Vitamin C" and
 // "Malcolm X" are whole books. A caller treats the title as a chapter part
-// only when other book rows in the same folder share the stem with a
-// different token (metabatch: titleJudge.stemSiblings). Year-like numbers
+// only when enough other book rows in the same folder carry the same stem and
+// a part token -- the SAME token counts too: every sibling of "The Sunrise
+// Lands 1" is "NN The Sunrise Lands 1.mp3" (metabatch:
+// titleJudge.stemSiblings). Year-like numbers
 // ("Metro 2034", "Blade Runner 2049") and a labelled position ("Book 1",
 // "Part 1") never split.
 func SiblingPartStem(title string) (stem, token string, ok bool) {
