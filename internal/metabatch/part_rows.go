@@ -1,5 +1,5 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
 // last-edited: 2026-10-01
 //
@@ -76,7 +76,12 @@ const (
 // 10 min, p90 29 min; a 30 min ceiling keeps 10,371 of the 11,495 rows under
 // 2 h. Whole series books ("Mistborn 1-7", "Magic Tree House 1-3", "Wheel of
 // Time 01-14", "Discworld 01-41") are 1 h or more, or have no trusted
-// duration.
+// duration. Accepted trade-off: a collection of 11 or more short items
+// (under 30 min each) filed one per folder with a single trailing number
+// ("Mr Men 1-40" at 8 min, "Short Trips N of 12" at 25 min, numbered
+// Big Finish releases) looks exactly like a chapter set from file names and
+// durations, and is skipped by the automatic fetch. A per-book search and a
+// per-row apply still work on it.
 const (
 	// cousinMaxPartSec: cousins count only for a row whose trusted duration
 	// is under this; an unknown duration or one of 30 min-2 h never counts
@@ -113,10 +118,13 @@ func (e errCousinParentTooLarge) Error() string {
 // as the parent of folder-wrapped rows, the wrapped rows two levels down
 // (listWrapped). Concurrent callers for the same folder and kind share ONE
 // in-flight read (singleflight), so the 16-32 workers of a fetch pass that
-// reach one author folder together list it once, not once each. A read
-// error is remembered too, and logged (warnListFailed) only by the read that
-// hit it, so one failing folder is neither re-read nor re-logged per row of
-// the pass. Safe for concurrent use.
+// reach one author folder together list it once, not once each. A failed
+// read is logged (warnListFailed, rate-limited) only by the read that hit
+// it and shared with the callers already waiting on it, but it is not kept:
+// a later row reads the folder again, so one transient store fault does not
+// cost the folder's evidence for the rest of a run that can last hours.
+// Only the cousin size cap, a property of the folder, is kept like a
+// listing. Safe for concurrent use.
 type FolderMemo struct {
 	mu       sync.Mutex
 	dirs     map[memoKey]folderListing
@@ -221,18 +229,31 @@ func (m *FolderMemo) cached(key memoKey, read func() (map[string]string, error))
 	if key.wrapped {
 		flightKey = "w:" + key.dir
 	}
-	v, _, _ := m.inflight.Do(flightKey, func() (any, error) {
+	// read must never call back into this memo on the same key:
+	// singleflight does not detect re-entry and would wait on itself.
+	v, err, _ := m.inflight.Do(flightKey, func() (any, error) {
 		// A read that finished between our lookup and Do already stored it.
 		if e, ok := m.lookup(key); ok {
 			return e, nil
 		}
 		rows, err := readLogged()
 		e := folderListing{rows: rows, err: err}
-		m.mu.Lock()
-		m.dirs[key] = e
-		m.mu.Unlock()
+		// Only a successful listing or the size cap (a property of the
+		// folder, not a fault) is kept for the pass. A transient read
+		// fault is shared with the callers already waiting on this read,
+		// but a later row reads again rather than going without folder
+		// evidence for the rest of a run that can last hours.
+		var tooLarge errCousinParentTooLarge
+		if err == nil || errors.As(err, &tooLarge) {
+			m.mu.Lock()
+			m.dirs[key] = e
+			m.mu.Unlock()
+		}
 		return e, nil
 	})
+	if err != nil {
+		return nil, err
+	}
 	e := v.(folderListing)
 	return e.rows, e.err
 }
