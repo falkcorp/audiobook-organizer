@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package metafetch
 
@@ -162,7 +162,36 @@ func applyProviderLimits(src config.MetadataSource) {
 		slog.Warn("metadata source has no id; cannot apply a rate-limit budget")
 		return
 	}
+	eff := effectiveProviderLimits(src)
+	providerhttp.SetLimits(key, eff)
+	// Drop the cached client/limiter so the next Client() rebuilds on the new
+	// budget. Without this the setting is stored and never takes effect.
+	providerhttp.ResetProvider(key)
+	slog.Debug("applied provider rate limit", "provider", key, "tier", src.RateLimit.Tier,
+		"rps", eff.RPS, "burst", eff.Burst, "timeout", eff.Timeout)
+}
 
+// EnabledSourcesBudget returns the summed effective request budget (RPS and
+// burst, effectiveProviderLimits) of every enabled metadata source -- what the
+// per-provider token buckets in providerhttp allow together. A batch op sizes
+// its own gate and worker pool from it, so the op never throttles below what
+// the providers themselves permit. It has no side effects.
+func EnabledSourcesBudget() (rps float64, burst int) {
+	for _, src := range config.AppConfig.MetadataSources {
+		if !src.Enabled || strings.TrimSpace(src.ID) == "" {
+			continue
+		}
+		eff := effectiveProviderLimits(src)
+		rps += eff.RPS
+		burst += eff.Burst
+	}
+	return rps, burst
+}
+
+// effectiveProviderLimits is applyProviderLimits' resolution without
+// installing anything.
+func effectiveProviderLimits(src config.MetadataSource) providerhttp.Limits {
+	key := strings.TrimSpace(src.ID)
 	base := providerhttp.BuiltinLimitsFor(key)
 	rl := src.RateLimit
 	mult := rl.Tier.Multiplier()
@@ -196,13 +225,7 @@ func applyProviderLimits(src config.MetadataSource) {
 	if rl.TimeoutSeconds > 0 {
 		eff.Timeout = time.Duration(rl.TimeoutSeconds) * time.Second
 	}
-
-	providerhttp.SetLimits(key, eff)
-	// Drop the cached client/limiter so the next Client() rebuilds on the new
-	// budget. Without this the setting is stored and never takes effect.
-	providerhttp.ResetProvider(key)
-	slog.Debug("applied provider rate limit", "provider", key, "tier", rl.Tier,
-		"rps", eff.RPS, "burst", eff.Burst, "timeout", eff.Timeout)
+	return eff
 }
 
 // buildSourceChainFromConfig constructs a fresh source chain from the current

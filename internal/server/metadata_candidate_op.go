@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -13,14 +13,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"golang.org/x/time/rate"
 )
@@ -225,8 +228,12 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 
 	_ = progress.UpdateProgress(alreadyDone, totalBooks, fmt.Sprintf("starting: %d books to fetch", len(p.BookIDs)))
 
-	// Rate limiter: 10 requests per second globally across all workers.
-	limiter := rate.NewLimiter(rate.Limit(10), 1)
+	// The op's gate and pool are sized from the enabled sources' own budgets
+	// (candidateFetchLimiter, candidateFetchWorkers): a fixed 10/s across
+	// every source and 8 workers had become the cap once Audible alone was
+	// configured for 8/s.
+	budgetRPS, budgetBurst := metafetch.EnabledSourcesBudget()
+	limiter := candidateFetchLimiter(budgetRPS, budgetBurst)
 	// One folder memo per run, shared by every worker (resolver folder reads).
 	folderMemo := s.newFolderMemo()
 
@@ -238,7 +245,9 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 
 	var completed int64 = int64(alreadyDone)
 	var wg sync.WaitGroup
-	numWorkers := min(8, len(p.BookIDs))
+	numWorkers := min(candidateFetchWorkers(budgetRPS, config.AppConfig.MetadataCandidateFetchWorkers), len(p.BookIDs))
+	candidateFetchLog.Info("budget: opID=%s rps=%.1f burst=%d workers=%d",
+		logger.SanitizeLogValue(opID), budgetRPS, budgetBurst, numWorkers)
 
 	// CHECKPOINTING. A book joins the done-set only after its result row is
 	// written, so a checkpoint never drops a book whose fetch has not been
@@ -339,4 +348,48 @@ func init() {
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
 		return s.RegisterMetadataCandidateFetchOp(reg)
 	})
+}
+
+// candidateFetchFallbackRPS is the op's gate when no enabled source reports a
+// budget (none configured): the old fixed figure.
+const candidateFetchFallbackRPS = 10
+
+// candidateFetchLimiter is the op's global gate on live provider calls
+// (threaded into searchMetadataForBook, which waits on it before every live
+// call; cache hits take no token). It is set to the SUM of the enabled
+// sources' effective budgets, not removed: each provider's own token bucket
+// (providerhttp) already paces that provider, so a sum never binds below
+// them, while the gate still bounds the op's total outbound rate if a call
+// path ever reaches a provider without its bucket. Before 2026-10-01 it was a
+// fixed 10/s across every source, below Audible's configured 8/s plus the
+// rest.
+func candidateFetchLimiter(rps float64, burst int) *rate.Limiter {
+	if rps <= 0 {
+		rps = candidateFetchFallbackRPS
+	}
+	return rate.NewLimiter(rate.Limit(rps), max(burst, 1))
+}
+
+// Worker sizing (candidateFetchWorkers). By Little's law the in-flight
+// requests needed to keep the budget busy are rps x latency; each book holds
+// a worker across its calls (callsPerBook, a ladder of a few rungs per
+// source), so workers = rps x latency x callsPerBook. The floor keeps at
+// least twice the old fixed 8, so workers are not the cap at prod's budget;
+// the ceiling bounds the goroutines and the store's concurrent writes.
+const (
+	candidateFetchCallLatencySec = 0.15
+	candidateFetchCallsPerBook   = 4
+	candidateFetchMinWorkers     = 16
+	candidateFetchMaxWorkers     = 32
+)
+
+// candidateFetchWorkers returns the op's worker count: configured (clamped to
+// 1-64) when set, else sized from the summed budget rps and clamped to
+// [candidateFetchMinWorkers, candidateFetchMaxWorkers].
+func candidateFetchWorkers(rps float64, configured int) int {
+	if configured > 0 {
+		return min(configured, 64)
+	}
+	n := int(math.Ceil(rps * candidateFetchCallLatencySec * candidateFetchCallsPerBook))
+	return min(max(n, candidateFetchMinWorkers), candidateFetchMaxWorkers)
 }

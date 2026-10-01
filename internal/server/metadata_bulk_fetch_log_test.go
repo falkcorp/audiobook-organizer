@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8966af00-704c-4a19-99e8-b832e27d9f7c
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package server
 
@@ -190,6 +190,10 @@ func TestResolveBulkFetchQuery_FolderEvidenceTitles(t *testing.T) {
 				"b-cobra": dir + "/Cobra 100 of 151.mp3",
 				"s1":      dir + "/Cobra 099 of 151.mp3",
 				"s2":      dir + "/Cobra 101 of 151.mp3",
+				// No duration is known here, so the set must be big (5+).
+				"s3": dir + "/Cobra 102 of 151.mp3",
+				"s4": dir + "/Cobra 103 of 151.mp3",
+				"s5": dir + "/Cobra 104 of 151.mp3",
 			}, nil
 		},
 	}
@@ -204,6 +208,42 @@ func TestResolveBulkFetchQuery_FolderEvidenceTitles(t *testing.T) {
 	}
 	if gets != 0 {
 		t.Errorf("GetBookByID called %d times, want 0", gets)
+	}
+}
+
+// E2: with no full book, the folder-evidence branch builds the book from
+// the walk's BookCore, so the ASIN reaches the identity (the same identity
+// the full-book path computes) and the duration reaches the part test.
+func TestResolveBulkFetchQuery_FolderEvidenceUsesTheCore(t *testing.T) {
+	const dir = "/library/Authors/Timothy Zahn/Cobra"
+	store := &database.MockStore{
+		GetBookByIDFunc: func(string) (*database.Book, error) { t.Fatal("GetBookByID called"); return nil, nil },
+		LiveBookPathsUnderDirFunc: func(string) (map[string]string, error) {
+			return map[string]string{"b": dir + "/Cobra 100 of 151.mp3", "s1": dir + "/Cobra 099 of 151.mp3",
+				"s2": dir + "/Cobra 101 of 151.mp3", "s3": dir + "/American Gods.m4b"}, nil
+		},
+	}
+	asin := "B00TESTASN"
+	core := database.BookCore{ID: "b", Title: "American Gods [64k 577MB]", FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB].m4b", ASIN: &asin}
+	full := core.ToBook()
+	viaCore := resolveBulkFetchQuery(store, "b", core.Title, core.FilePath, "Neil Gaiman", "pre", nil, &core, nil)
+	viaFull := resolveBulkFetchQuery(store, "b", core.Title, core.FilePath, "Neil Gaiman", "pre", &full, nil, nil)
+	if !viaCore.query.Usable || viaCore.query.Title != "American Gods" || viaCore.identity != viaFull.identity {
+		t.Fatalf("core %+v %q, full %+v %q: want the cleaned title on one identity", viaCore.query, viaCore.identity, viaFull.query, viaFull.identity)
+	}
+	if want := metafetch.FetchCacheIdentity("American Gods", "Neil Gaiman", &asin, nil, nil); viaCore.identity != want {
+		t.Errorf("identity = %q, want the ASIN-bearing %q", viaCore.identity, want)
+	}
+
+	long := 11 * 3600
+	cobra := database.BookCore{ID: "b", Title: "Cobra 100 of 151", FilePath: dir + "/Cobra 100 of 151.mp3", Duration: &long}
+	if q := resolveBulkFetchQuery(store, "b", cobra.Title, cobra.FilePath, "Timothy Zahn", "pre", nil, &cobra, nil); !q.query.Usable {
+		t.Errorf("an 11 h row is a whole product, got %+v", q.query)
+	}
+	short := 20 * 60
+	cobra.Duration = &short
+	if q := resolveBulkFetchQuery(store, "b", cobra.Title, cobra.FilePath, "Timothy Zahn", "pre", nil, &cobra, nil); q.query.Usable {
+		t.Errorf("a 20 min row beside its counted siblings is a part, got %+v", q.query)
 	}
 }
 
