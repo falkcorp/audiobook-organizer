@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 
 package server
 
@@ -73,6 +73,9 @@ type bookReader interface {
 	// (bulkManualOnlyGuard).
 	GetSeriesByID(id int) (*database.Series, error)
 	database.BookAuthorReader
+	// BookDirLister: metabatch.ResolveCandidateSearchQuery reads the other
+	// rows in a book's folder (metabatch.SkipKindSiblingPart).
+	database.BookDirLister
 }
 
 // bulkManualOnlyGuard builds the certainty gate's owner-manual-only input

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_stores.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
-// last-edited: 2026-09-29
+// last-edited: 2026-09-30
 
 package server
 
@@ -66,6 +66,9 @@ type candidateFetchStore interface {
 	// BookAuthorReader resolves the live author the fetch hints and hashes
 	// with (database.LiveBookAuthorNames).
 	database.BookAuthorReader
+	// BookDirLister: metabatch.ResolveCandidateSearchQuery reads the other
+	// rows in a book's folder (metabatch.SkipKindSiblingPart).
+	database.BookDirLister
 
 	GetBookByID(id string) (*database.Book, error)
 }
