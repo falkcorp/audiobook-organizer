@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 package audiobooks
 
@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -483,6 +484,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertJunkAuthorCredits(c)
 	case undo.ChangeTypeJunkAuthorCreate:
 		return rs.revertJunkAuthorCreate(c)
+	case undo.ChangeTypeRepairBookCreate:
+		return rs.revertRepairBookCreate(c)
 	case "organize_failed", "organize_skipped", "organize_summary":
 		// No filesystem or DB mutation recorded; nothing to reverse.
 		return nil
@@ -1383,6 +1386,37 @@ func (rs *RevertService) revertJunkAuthorCreate(c *database.OperationChange) err
 		return fmt.Errorf("delete created author %d: %w", a.ID, err)
 	}
 	return nil
+}
+
+// revertRepairBookCreate soft-deletes a book a Repairs fixer created
+// (undo.ChangeTypeRepairBookCreate). It never deletes the book or the
+// book_file rows the fixer created on it: the purge refuses a book that owns
+// rows, so the hidden book stays as a record. A book that was never created
+// or is already soft-deleted counts restored. Rows are reverted newest first,
+// so the folder-book the same apply retired is live again before this runs.
+func (rs *RevertService) revertRepairBookCreate(c *database.OperationChange) error {
+	if err := undo.CheckRepairBookCreate(rs.db, c); err != nil {
+		if errors.Is(err, undo.ErrAlreadyRestored) {
+			return nil
+		}
+		return err
+	}
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
+	_, err := rs.db.ModifyBook(c.BookID, func(book *database.Book) error {
+		if book.IsSoftDeleted() {
+			return database.ErrSkipBookWrite
+		}
+		t := true
+		now := time.Now().UTC()
+		book.MarkedForDeletion = &t
+		book.MarkedForDeletionAt = &now
+		return nil
+	})
+	if errors.Is(err, database.ErrSkipBookWrite) {
+		return nil
+	}
+	return err
 }
 
 // revertTitleRelinkAuthorCreate removes an author row the relink created,

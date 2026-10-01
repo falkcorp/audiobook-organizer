@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -254,6 +254,10 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return rowVerdict{refusal: refusal}
 	case ChangeTypeSeriesRename:
 		return verdictOf(CheckRestoreReferent(store, c))
+	case ChangeTypeRepairBookCreate:
+		// The revert soft-deletes the created book; one that is absent or
+		// already soft-deleted counts restored.
+		return verdictOf(CheckRepairBookCreate(store, c))
 	case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
 		ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
 		ChangeTypeBookFileMove, ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow:
