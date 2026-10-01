@@ -1,11 +1,12 @@
 // file: internal/itunes/cleanup_merged_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d3a0c81-4e29-4b6f-90a5-1c8e2f7b0d43
 // last-edited: 2026-10-01
 
 package itunes
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -101,5 +102,41 @@ func TestComputeMergedTrackCleanup_keepsOnlyTrackOfALiveFile(t *testing.T) {
 	}
 	if !ops.Removes["D0000001"] {
 		t.Errorf("a duplicate track of a file whose primary has its own track must still be removed")
+	}
+}
+
+// failFilesStore fails GetBookFiles for one book.
+type failFilesStore struct {
+	*mockRebuildStore
+	failID string
+}
+
+func (s failFilesStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	if bookID == s.failID {
+		return nil, errors.New("injected read failure")
+	}
+	return s.mockRebuildStore.GetBookFiles(bookID)
+}
+
+// TestComputeMergedTrackCleanup_unreadableRowsRemoveNothing: a book whose
+// rows cannot be read may hold the only path of a track, so the cleanup
+// removes nothing and says why.
+func TestComputeMergedTrackCleanup_unreadableRowsRemoveNothing(t *testing.T) {
+	no, yes := false, true
+	store := failFilesStore{failID: "created", mockRebuildStore: &mockRebuildStore{
+		books: map[string]*database.Book{
+			"folder":  {ID: "folder", IsPrimaryVersion: &no},
+			"created": {ID: "created", IsPrimaryVersion: &yes},
+		},
+		bookFiles: map[string][]database.BookFile{
+			"folder": {{ITunesPersistentID: "F0000001", FilePath: "/it/Author/Book/01.mp3"}},
+		},
+	}}
+	ops, preview := computeMergedCleanupFromInITL(map[string]bool{"F0000001": true}, store)
+	if len(ops.Removes) != 0 {
+		t.Fatalf("removed %v with a book's rows unreadable; want nothing", ops.Removes)
+	}
+	if preview.Error == "" {
+		t.Fatalf("the preview must say why nothing was removed")
 	}
 }
