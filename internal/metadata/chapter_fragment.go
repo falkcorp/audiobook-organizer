@@ -1,7 +1,7 @@
 // file: internal/metadata/chapter_fragment.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7d2f1a4c-9b6e-4c0a-8f31-2e5a9c1d3b67
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package metadata
 
@@ -117,6 +117,36 @@ func IsCountedPartTitle(title string) bool {
 	}
 	return false
 }
+
+// CountedPartKey returns what identifies the set a counted-part title
+// belongs to: the normalized text before its first counted position (stem;
+// "Golden Son (Part 1 of 2)" -> "golden son") and the count ("2"; "" for a
+// cut-off "084 of"). Two files are parts of one set when their counts match
+// and their stems match or either stem is empty (a file named only "Part 01
+// of 63"). ok is false when title is not a counted part.
+func CountedPartKey(title string) (stem, count string, ok bool) {
+	t := strings.TrimSpace(title)
+	for _, re := range []*regexp.Regexp{chapterFragOfCount, chapterFragOfTail} {
+		for _, loc := range re.FindAllStringIndex(t, -1) {
+			if seriesCountLabelRe.MatchString(t[:loc[0]]) {
+				continue
+			}
+			if m := countOfRe.FindStringSubmatch(t[loc[0]:loc[1]]); m != nil {
+				count = strings.TrimLeft(m[1], "0")
+			}
+			stem = countedStemTrailRe.ReplaceAllString(strings.ToLower(t[:loc[0]]), "")
+			return strings.Join(strings.Fields(stem), " "), count, true
+		}
+	}
+	return "", "", false
+}
+
+// countOfRe reads the count out of a counted position ("002 of 341" -> "341").
+var countOfRe = regexp.MustCompile(`(?i)of\s*(\d{1,4})`)
+
+// countedStemTrailRe is the label and punctuation between a stem and its
+// position: "Golden Son (Part ", "Wheel of Time #", "Cobra - ".
+var countedStemTrailRe = regexp.MustCompile(`(?i)[\s(\[#,:_\-]*(?:\b(?:part|pt|disc|disk|cd|track|chapter|ch)\.?)?[\s(\[#,:_\-]*$`)
 
 // seriesCountLabelRe: text ending in a book or volume label, so the count
 // that follows is a series position ("Book 3 of 14").

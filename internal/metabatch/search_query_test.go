@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package metabatch
 
@@ -315,19 +315,63 @@ func TestResolveCandidateSearchQuery_SiblingPartRowsAreSkipped(t *testing.T) {
 		// siblings is skipped too; it used to borrow "Eldest".
 		{"chapter fragment beside chapter siblings", "/library/Paolini/Eldest", "06.mp3", "06 Chapter 6", []string{"05.mp3", "07.mp3"}},
 		{"bare number beside one chapter sibling", "/library/Paolini/Eldest", "98.mp3", "98", []string{"97.mp3"}},
+		// Owner, 2026-10-01: an empty or placeholder title on a chapter-number
+		// FILE beside its siblings is skipped too, not searched as "Eldest".
+		{"empty title on a chapter-number file", "/library/Paolini/Eldest", "98.mp3", "", []string{"97.mp3"}},
+		{"placeholder title on a chapter-number file", "/library/Paolini/Eldest", "98.mp3", "Unknown Title", []string{"97.mp3"}},
+	}
+	// Each at a short chapter length and at the 20-25 min a file-split part
+	// commonly runs (E1: the 10-min consolidation threshold must not exempt
+	// these). The duration exemption is productMinSec (2 h) and applies only
+	// to the counted and trailing-token shapes.
+	for _, dur := range []int{300, 20 * 60, 25 * 60} {
+		for _, tc := range cases {
+			t.Run(fmt.Sprintf("%s/%ds", tc.name, dur), func(t *testing.T) {
+				path := tc.dir + "/" + tc.self
+				book := database.Book{ID: "self", Title: tc.title, FilePath: path, TranscribedTitle: strp("Whole Work Title"), Duration: ip(dur)}
+				file := database.BookFile{FilePath: path, Duration: dur, FileSize: int64(dur) * 8000, TranscribedTitle: strp("Whole Work Title")}
+				files := fakeBookFiles{files: []database.BookFile{file}, dir: siblingRows(tc.dir, tc.self, tc.sibs...)}
+				for _, memo := range []*FolderMemo{nil, NewFolderMemo()} {
+					q := ResolveCandidateSearchQueryMemo(files, &book, memo)
+					if q.Usable {
+						t.Fatalf("got usable %+v, want a skip", q)
+					}
+					if q.SkipKind != SkipKindSiblingPart {
+						t.Fatalf("SkipKind = %q, want %q", q.SkipKind, SkipKindSiblingPart)
+					}
+				}
+			})
+		}
+	}
+}
+
+// With no trustworthy duration, a counted or trailing-token title needs a
+// big set (unknownDurationMinSiblings) -- chapter sets run 10-341 rows on
+// prod, whole-book sets 2-5. A milliseconds value read as seconds would make
+// a 2-minute chapter a 33-hour "product"; it is treated as unknown.
+func TestResolveCandidateSearchQuery_UnknownDurationNeedsABigSet(t *testing.T) {
+	const dir = "/library/Authors/S M Stirling/The Sunrise Lands"
+	five := []string{"002 The Sunrise Lands 1.mp3", "003 The Sunrise Lands 1.mp3", "004 The Sunrise Lands 1.mp3", "005 The Sunrise Lands 1.mp3", "006 The Sunrise Lands 1.mp3"}
+	cases := []struct {
+		name   string
+		sibs   []string
+		dur    int
+		size   int64
+		usable bool
+	}{
+		{"unknown duration, big set", five, 0, 0, false},
+		{"unknown duration, small set", five[:2], 0, 0, true},
+		{"milliseconds duration is unknown, big set", five, 120000, 2_000_000, false},
+		{"absurd duration with no size is unknown, big set", five, 9_000_000, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			path := tc.dir + "/" + tc.self
-			book := database.Book{ID: "self", Title: tc.title, FilePath: path, TranscribedTitle: strp("Whole Work Title")}
-			file := database.BookFile{FilePath: path, Duration: 300, TranscribedTitle: strp("Whole Work Title")}
-			files := fakeBookFiles{files: []database.BookFile{file}, dir: siblingRows(tc.dir, tc.self, tc.sibs...)}
-			q := ResolveCandidateSearchQuery(files, &book)
-			if q.Usable {
-				t.Fatalf("got usable %+v, want a skip", q)
-			}
-			if q.SkipKind != SkipKindSiblingPart {
-				t.Fatalf("SkipKind = %q, want %q", q.SkipKind, SkipKindSiblingPart)
+			path := dir + "/001 The Sunrise Lands 1.mp3"
+			book := database.Book{ID: "self", Title: "The Sunrise Lands 1", FilePath: path}
+			files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: tc.dur, FileSize: tc.size}},
+				dir: siblingRows(dir, "001 The Sunrise Lands 1.mp3", tc.sibs...)}
+			if q := ResolveCandidateSearchQuery(files, &book); q.Usable != tc.usable {
+				t.Fatalf("got %+v, want usable=%v", q, tc.usable)
 			}
 		})
 	}
@@ -342,15 +386,15 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 	others := []string{"Dune.m4b", "Neuromancer.m4b", "Hyperion.m4b"}
 	const long = 11 * 3600
 	cases := []struct {
-		name    string
-		book    database.Book
-		files   []database.BookFile
-		dir     map[string]string
-		dirErr  bool
-		roots   []string
-		want    string
-		wantSrc string
-		noList  bool
+		name       string
+		book       database.Book
+		files      []database.BookFile
+		dir        map[string]string
+		dirErr     bool
+		importRoot string
+		want       string
+		wantSrc    string
+		noList     bool
 	}{
 		{name: "Plan B beside unrelated books", book: database.Book{ID: "self", Title: "Plan B", FilePath: author + "/Plan B.m4b"},
 			dir: siblingRows(author, "Plan B.m4b", others...), want: "Plan B", wantSrc: SearchQuerySourceTitle},
@@ -399,8 +443,21 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 			dir: siblingRows(author, "Mistborn Series 1 of 3.m4b", "Mistborn Series 2 of 3.m4b", "Mistborn Series 3 of 3.m4b"), want: "Mistborn Series 1 of 3", wantSrc: SearchQuerySourceTitle, noList: true},
 		// W2: a row filed directly under a configured root never lists it.
 		{name: "row directly under an import root", book: database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/incoming/Cobra 100 of 151.mp3"},
-			dir: siblingRows("/imports/incoming", "Cobra 100 of 151.mp3", "a.mp3", "b.mp3"), roots: []string{"/imports/incoming"},
+			dir: siblingRows("/imports/incoming", "Cobra 100 of 151.mp3", "a.mp3", "b.mp3"), importRoot: "/imports/incoming",
 			want: "Cobra 100 of 151", wantSrc: SearchQuerySourceTitle, noList: true},
+		// W-b: same-stem counted siblings only.
+		{name: "Golden Son beside other products' parts", book: database.Book{ID: "self", Title: "Golden Son (Part 1 of 2)", FilePath: "/library/Authors/Pierce Brown/Golden Son (Part 1 of 2).m4b", Duration: ip(1500)},
+			dir: siblingRows("/library/Authors/Pierce Brown", "Golden Son (Part 1 of 2).m4b",
+				"Red Rising (Part 1 of 2).m4b", "Red Rising (Part 2 of 2).m4b", "Morning Star (Part 1 of 2).m4b"),
+			want: "Golden Son (Part 1 of 2)", wantSrc: SearchQuerySourceTitle},
+		// W-b: a 3-book set with no durations is too small to be chapters.
+		{name: "Mistborn 1 of 3 with no durations", book: database.Book{ID: "self", Title: "Mistborn 1", FilePath: author + "/Mistborn 1.m4b"},
+			dir: siblingRows(author, "Mistborn 1.m4b", "Mistborn 2.m4b", "Mistborn 3.m4b"), want: "Mistborn 1", wantSrc: SearchQuerySourceTitle},
+		{name: "Dune (1 of 3) with no durations", book: database.Book{ID: "self", Title: "Dune (1 of 3)", FilePath: author + "/Dune (1 of 3).m4b"},
+			dir: siblingRows(author, "Dune (1 of 3).m4b", "Dune (2 of 3).m4b", "Dune (3 of 3).m4b"), want: "Dune (1 of 3)", wantSrc: SearchQuerySourceTitle},
+		// Owner rule: a lone chapter-number file keeps its stand-ins.
+		{name: "lone empty-title chapter file uses its folder", book: database.Book{ID: "self", Title: "", FilePath: "/library/Paolini/Eldest/98.mp3"},
+			dir: siblingRows("/library/Paolini/Eldest", "98.mp3"), want: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
 		// A lone chapter row keeps its stand-ins (owner, 2026-09-30).
 		{name: "lone chapter row uses its folder", book: database.Book{ID: "self", Title: "06 Chapter 6", FilePath: "/library/Paolini/Eldest/06.mp3"},
 			dir: siblingRows("/library/Paolini/Eldest", "06.mp3"), want: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
@@ -432,7 +489,10 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 			if tc.dirErr {
 				f.dirErr = errors.New("boom")
 			}
-			q := ResolveCandidateSearchQueryMemo(f, &tc.book, NewFolderMemo(tc.roots...))
+			if tc.importRoot != "" {
+				setImportRoots(t, tc.importRoot)
+			}
+			q := ResolveCandidateSearchQueryMemo(f, &tc.book, NewFolderMemo())
 			if !q.Usable || q.Title != tc.want || q.Source != tc.wantSrc {
 				t.Fatalf("got %+v, want %q from %s", q, tc.want, tc.wantSrc)
 			}
@@ -461,5 +521,45 @@ func TestFolderMemo_ListsEachFolderOnce(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("listed %d times across the pass, want 1", calls)
+	}
+}
+
+// setImportRoots registers roots as the resolver's import paths for one test.
+func setImportRoots(t *testing.T, roots ...string) {
+	t.Helper()
+	SetImportRootsSource(func() ([]string, error) { return roots, nil })
+	t.Cleanup(func() { SetImportRootsSource(nil) })
+}
+
+// The fetch paths pass a FolderMemo; the apply and gate paths
+// (batch_apply_one.go) call ResolveCandidateSearchQuery with none. Both must
+// reach the same verdict for the same row -- including a row directly under
+// an import root, which neither may list.
+func TestResolveCandidateSearchQuery_FetchAndApplyAgree(t *testing.T) {
+	setImportRoots(t, "/imports/incoming")
+	rows := []struct {
+		book database.Book
+		dir  map[string]string
+	}{
+		{database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/incoming/Cobra 100 of 151.mp3"},
+			siblingRows("/imports/incoming", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")},
+		{database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 100 of 151.mp3", Duration: ip(1200)},
+			siblingRows("/library/Authors/Timothy Zahn/Cobra", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")},
+		{database.Book{ID: "self", Title: "98", FilePath: "/library/Paolini/Eldest/98.mp3"},
+			siblingRows("/library/Paolini/Eldest", "98.mp3", "97.mp3")},
+		{database.Book{ID: "self", Title: "Plan B", FilePath: "/library/Authors/Various/Plan B.m4b"},
+			siblingRows("/library/Authors/Various", "Plan B.m4b", "Dune.m4b")},
+	}
+	for _, r := range rows {
+		calls := 0
+		f := fakeBookFiles{dir: r.dir, dirCalls: &calls}
+		apply := ResolveCandidateSearchQuery(f, &r.book)
+		fetch := ResolveCandidateSearchQueryMemo(f, &r.book, NewFolderMemo())
+		if apply != fetch {
+			t.Errorf("%s: apply %+v, fetch %+v", r.book.FilePath, apply, fetch)
+		}
+		if strings.HasPrefix(r.book.FilePath, "/imports/incoming/") && calls != 0 {
+			t.Errorf("%s: an import root was listed %d times", r.book.FilePath, calls)
+		}
 	}
 }
