@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-01
 
@@ -99,6 +99,9 @@ type revertBookFileStore interface {
 	// ModifyBookFile is the read-modify-write the repair_book_create revert
 	// re-indexes a path with, so no snapshot overwrites a concurrent update.
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+	// ClaimBookFilePathKey hands a vacated path's single-owner key back to a
+	// row still at the path, writing nothing else (reindexVacatedPath).
+	ClaimBookFilePathKey(bookID, fileID, path string) (bool, error)
 	GetBookByExternalID(source, externalID string) (string, error)
 	ReassignExternalID(source, externalID, newBookID string) error
 }
@@ -797,17 +800,19 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 	return rs.reindexVacatedPath(atPath, vacated, f.ID, set.KeyOwnerBook, set.KeyOwnerRow)
 }
 
-// reindexVacatedPath re-writes one other row at path so the single-owner
-// book_file_path key names it again after the row except left the path. A
-// no-op ModifyBookFile re-writes the row as stored, indexes included.
+// reindexVacatedPath points the single-owner book_file_path key at one other
+// row at path again after the row except left the path. Only the key is
+// written (ClaimBookFilePathKey): no row write, no aggregate recompute, no
+// change notification, so the key can go back to an iTunes copy's row
+// without writing to the iTunes book.
 //
 // The row is the key's owner the repoint journaled (ownerBook/ownerRow),
-// while it is still at path. A repoint journaled before the owner was
-// recorded, or an owner since gone, falls back to the rows at path, a live
-// book's first. An iTunes row is never re-written: the no-op write still
-// notifies and recomputes the book's aggregates, so it is a write, and no
-// write touches an iTunes book (a path under books/itunes/**, a row or book
-// iTunes id, a row iTunes path). With no eligible row the key stays dropped.
+// while it is still at path, iTunes or not, live or retired since. A repoint
+// journaled before the owner was recorded, or an owner since gone or moved,
+// falls back to the rows at path: a live book's first, then a retired one's.
+// The fallback never picks an iTunes row (a row or book iTunes id, a row
+// iTunes path), which it cannot tell was the owner; nor does anything act on
+// a path under books/itunes/**. With no eligible row the key stays dropped.
 func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, except, ownerBook, ownerRow string) error {
 	if pathutil.UnderFrozenITunesTree(path) {
 		return nil
@@ -833,7 +838,7 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 	seen := map[string]bool{}
 	for i := range cands {
 		o := cands[i]
-		if o.ID == except || seen[o.ID] || o.FilePath != path || o.ITunesPersistentID != "" || o.ITunesPath != "" {
+		if o.ID == except || seen[o.ID] || o.FilePath != path {
 			continue
 		}
 		seen[o.ID] = true
@@ -841,10 +846,11 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 		if err != nil {
 			return fmt.Errorf("read %s: %w", o.BookID, err)
 		}
+		itunes := o.ITunesPersistentID != "" || o.ITunesPath != "" || (b != nil && b.ITunesPersistentID != nil && *b.ITunesPersistentID != "")
 		switch {
-		case b != nil && b.ITunesPersistentID != nil && *b.ITunesPersistentID != "":
 		case o.ID == ownerRow && b != nil:
-			owner = append(owner, o) // the key's owner before, live or retired since
+			owner = append(owner, o) // the key's owner before, iTunes or not, live or retired since
+		case itunes:
 		case b != nil && !b.IsSoftDeleted():
 			live = append(live, o)
 		default:
@@ -852,19 +858,13 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 		}
 	}
 	for _, o := range append(append(owner, live...), hidden...) {
-		got, err := rs.db.ModifyBookFile(o.BookID, o.ID, func(bf *database.BookFile) error {
-			if bf.FilePath != path {
-				return errRepointRowMoved
-			}
-			return nil
-		})
-		if errors.Is(err, errRepointRowMoved) || (err == nil && got == nil) {
-			continue
-		}
+		claimed, err := rs.db.ClaimBookFilePathKey(o.BookID, o.ID, path)
 		if err != nil {
 			return fmt.Errorf("re-index %s at %s: %w", o.ID, path, err)
 		}
-		return nil
+		if claimed {
+			return nil
+		}
 	}
 	return nil
 }

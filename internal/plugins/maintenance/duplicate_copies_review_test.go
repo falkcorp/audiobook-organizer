@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_review_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6e2d9c41-3b7a-4f05-8c1e-a94d2f7b3e58
 // last-edited: 2026-10-01
 
@@ -552,4 +552,46 @@ func TestRevertRepoint_NeverRewritesAnITunesRow(t *testing.T) {
 	afterBook, err := d.s.GetBookByID(it)
 	require.NoError(t, err)
 	require.Equal(t, beforeBook.UpdatedAt, afterBook.UpdatedAt, "nor its book")
+	require.Equal(t, beforeBook, afterBook, "the iTunes book is unchanged")
+	got, err := d.s.GetBookFileByPath(path)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the key is handed back, not dropped")
+	require.Equal(t, before[0].ID, got.ID, "to the journaled iTunes owner, by the key alone")
+}
+
+// TestRevertRepoint_KeyGoesBackToAnITunesOwnerNotTheLoser is review P6: the
+// survivor's row is repointed onto the loser's present twin while an iTunes
+// copy's row held that path's key. After apply and revert the key names the
+// iTunes row again, not the loser's row, and the iTunes row is not written.
+func TestRevertRepoint_KeyGoesBackToAnITunesOwnerNotTheLoser(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	lPath := d.path("lib/Dune copy/05.mp3")
+	it := d.book(t, "I", "Something", lPath, nil)
+	pid := "PIDX"
+	_, err := d.s.ModifyBook(it, func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
+	require.NoError(t, err)
+	itRow := &database.BookFile{BookID: it, FilePath: lPath, FileSize: 500, Duration: 600, ITunesPersistentID: "TRK"}
+	require.NoError(t, d.s.CreateBookFile(itRow))
+	owner, err := d.s.GetBookFileByPath(lPath)
+	require.NoError(t, err)
+	require.Equal(t, itRow.ID, owner.ID)
+	itBefore, err := d.s.GetBookFileByID(it, itRow.ID)
+	require.NoError(t, err)
+
+	id := dupRowID(s, l)
+	r := findRow(t, d.planFor(t, dcFixerID, "op-plan", nil), id)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.Equal(t, 1, d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{id}).Applied)
+	rr, err := audiobooks.NewRevertService(d.s).RevertOperation("op-apply")
+	require.NoError(t, err)
+	require.Zero(t, rr.Failed)
+
+	after, err := d.s.GetBookFileByPath(lPath)
+	require.NoError(t, err)
+	require.NotNil(t, after, "the path key is not dropped")
+	require.Equal(t, itRow.ID, after.ID, "the key goes back to the iTunes row that held it, not the loser's")
+	itAfter, err := d.s.GetBookFileByID(it, itRow.ID)
+	require.NoError(t, err)
+	require.Equal(t, itBefore, itAfter, "the iTunes row itself is never written")
 }
