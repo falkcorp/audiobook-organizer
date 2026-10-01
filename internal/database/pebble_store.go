@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.183.0
+// version: 1.183.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-01
 
@@ -2409,6 +2409,25 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 	return created, err
 }
 
+// writeThroughThenBump runs a book's memdb write-through, then bumps the
+// library generation.
+//
+// The bump comes AFTER the write-through: a reader that sees the new
+// generation must also see the write in memdb, or it caches the old row under
+// the new generation (stale until the next write). Generation consumers take
+// their cache key before reading data (the list cache, the list warmer, the
+// ABS attribute index, the folder-books title index), so none needs a bump
+// ahead of the write.
+//
+// The bump is deferred so it still runs if the write-through panics (its
+// pre-reads of authors and files can): the Pebble batch has already
+// committed, and a recovered panic must not leave every cache serving the
+// pre-write library under the old generation.
+func (p *PebbleStore) writeThroughThenBump(writeThrough func()) {
+	defer p.libGen.Bump()
+	writeThrough()
+}
+
 // createBook is CreateBook's body; it takes and releases the book stripe
 // itself, so CreateBook can run the narrator junction sync after it.
 func (p *PebbleStore) createBook(book *Book) (*Book, error) {
@@ -2567,13 +2586,7 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	p.MarkAllQuickQueriesDirty("create_book")
 
 	// memdb write-through (always on when initialized)
-	p.UpsertBookToMemDB(context.Background(), book)
-	// Bumped AFTER the memdb write-through: a reader that sees the new
-	// generation must also see this write in memdb, or it caches the old
-	// row under the new generation (stale until the next write). Every
-	// generation consumer reads the generation before its data, so none
-	// needs a bump ahead of the write-through.
-	p.libGen.Bump()
+	p.writeThroughThenBump(func() { p.UpsertBookToMemDB(context.Background(), book) })
 	// After the memdb write, so a client reacting to the event reads the row.
 	notifyBookChanged(BookChangeCreated, book.ID)
 
@@ -2934,13 +2947,7 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 	// The bump follows the memdb write-through below.
 
 	// memdb write-through
-	p.UpsertBookToMemDB(context.Background(), book)
-	// Bumped AFTER the memdb write-through: a reader that sees the new
-	// generation must also see this write in memdb, or it caches the old
-	// row under the new generation (stale until the next write). Every
-	// generation consumer reads the generation before its data, so none
-	// needs a bump ahead of the write-through.
-	p.libGen.Bump()
+	p.writeThroughThenBump(func() { p.UpsertBookToMemDB(context.Background(), book) })
 	notifyBookChanged(BookChangeUpdated, id)
 
 	return book, nil
@@ -3500,13 +3507,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	p.MarkAllQuickQueriesDirty("delete_book")
 
 	// memdb write-through
-	p.DeleteBookFromMemDB(context.Background(), id)
-	// Bumped AFTER the memdb write-through: a reader that sees the new
-	// generation must also see this write in memdb, or it caches the old
-	// row under the new generation (stale until the next write). Every
-	// generation consumer reads the generation before its data, so none
-	// needs a bump ahead of the write-through.
-	p.libGen.Bump()
+	p.writeThroughThenBump(func() { p.DeleteBookFromMemDB(context.Background(), id) })
 	notifyBookChanged(BookChangeDeleted, id)
 
 	return nil
