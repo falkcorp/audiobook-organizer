@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-01
 
@@ -115,6 +115,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/boilerplate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
@@ -259,6 +260,7 @@ type fragBook struct {
 	Organized bool
 	Primary   bool
 	ITunesPID string // the book-level iTunes persistent id
+	ASIN      string // for the iTunes-parent rule's identity gate (dcJudge)
 	// MergedInto is merged_into_book_id ("" unset): which book a retired
 	// fragment was folded into.
 	MergedInto string
@@ -278,8 +280,10 @@ func fragBookFrom(id, title, path string, author, series *int, softDeleted bool,
 }
 
 func fragBookOf(b *database.Book) fragBook {
-	return fragBookFrom(b.ID, b.Title, b.FilePath, b.AuthorID, b.SeriesID, b.IsSoftDeleted(), b.LibraryState,
+	fb := fragBookFrom(b.ID, b.Title, b.FilePath, b.AuthorID, b.SeriesID, b.IsSoftDeleted(), b.LibraryState,
 		b.IsPrimaryVersion, b.ITunesPersistentID, b.MergedIntoBookID)
+	fb.ASIN = dcStr(b.ASIN)
+	return fb
 }
 
 // fragFile is the part of a book_file row the fixer reads.
@@ -584,6 +588,11 @@ type fragLibrary struct {
 	// acts when every parent is known.
 	itunes      map[string]string
 	itunesDoubt map[string]bool
+	// verdicts are the owner's pair rejections (dcOwnerVerdicts) the rule's
+	// identity gate honours; verdictsErr is why they could not be read, which
+	// turns the rule off (the fragments stay ambiguous).
+	verdicts    map[[2]string]string
+	verdictsErr string
 }
 
 func newFragLibrary() *fragLibrary {
@@ -600,8 +609,10 @@ func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
 	}
 	for i := range books {
 		b := &books[i]
-		lib.books[b.ID] = fragBookFrom(b.ID, b.Title, b.FilePath, b.AuthorID, b.SeriesID, b.IsSoftDeleted(),
+		fb := fragBookFrom(b.ID, b.Title, b.FilePath, b.AuthorID, b.SeriesID, b.IsSoftDeleted(),
 			b.LibraryState, b.IsPrimaryVersion, b.ITunesPersistentID, b.MergedIntoBookID)
+		fb.ASIN = dcStr(b.ASIN)
+		lib.books[b.ID] = fb
 	}
 	cores, err := store.GetAllBookFilesCore()
 	if err != nil {
@@ -870,6 +881,13 @@ func (f *fragmentFixer) resolveITunesParents(ctx context.Context, rep registry.R
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	if len(ids) > 0 {
+		v, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store)
+		if err != nil {
+			lib.verdictsErr = err.Error()
+		}
+		lib.verdicts = v
+	}
 	type verdict struct {
 		why   string
 		doubt bool
@@ -918,15 +936,44 @@ func (lib *fragLibrary) itunesParentWhy(store OpsStore, id string) (why string, 
 	return itunesCopyWhy(lib.paths, id, b.ITunesPID, paths, rows, exts)
 }
 
+// dcBookOf is parent book id as the duplicate-copies identity gate reads it.
+func (lib *fragLibrary) dcBookOf(id string) *dcBook {
+	b := lib.books[id]
+	asin := b.ASIN
+	d := &dcBook{Core: database.BookCore{ID: id, ASIN: &asin}, Title: dcTitleKey(b.Title), Author: dcAuthorKey(lib.authors, b.AuthorID)}
+	for _, r := range lib.files[id] {
+		d.Rows = append(d.Rows, database.BookFileCore{ID: r.ID, BookID: id, FilePath: r.Path, Duration: r.Duration,
+			FileHash: r.Hash, OriginalFileHash: r.OrigHash})
+	}
+	return d
+}
+
 // disregardITunesParents is the owner's 2026-10-01 rule: when a fragment
 // that is not itself an iTunes copy matches exactly one non-iTunes parent
 // book plus one or more iTunes copies of it, the non-iTunes parent is its
 // single parent. It returns the matches to that parent and the iTunes
-// parents set aside (never written: they are not in the row's books). ok is
-// false when the rule does not apply (a parent the plan could not tell, two
-// non-iTunes parents, no iTunes parent, or an iTunes fragment).
+// parents set aside (never written: they are not in the row's books).
+//
+// "Copies of it" is proven, not assumed: every iTunes parent set aside must
+// pass the duplicate-copies identity gate against the kept parent (dcJudge:
+// the same track-stripped title, a compatible author, no ASIN conflict, no
+// owner rejection, 90%+ of the smaller copy hash-matched). Two different works
+// sharing one file (an intro, a sting) are not copies, and the fragment stays
+// ambiguous. Neither does the rule act for a fragment that is no evidence of
+// a work: under 60 s, or an intro/credits title.
+//
+// ok is false when the rule does not apply (a parent the plan could not tell,
+// two non-iTunes parents, no iTunes parent, an iTunes or non-chapter
+// fragment, an iTunes parent not proven a copy, or verdicts unreadable).
 func (f *fragmentFixer) disregardITunesParents(lib *fragLibrary, c *fragCandidate, ms []fragMatch) (kept []fragMatch, ignored []string, ok bool) {
 	if c.itunesPID() != "" || c.File.ITunesPath != "" {
+		return nil, nil, false
+	}
+	if !dcLinkRow(database.BookFileCore{ID: c.File.ID, FilePath: c.File.Path, Duration: c.File.Duration}) ||
+		boilerplate.IsBoilerplateTitle(c.Book.Title) {
+		return nil, nil, false
+	}
+	if lib.verdictsErr != "" {
 		return nil, nil, false
 	}
 	if k, _ := f.guard(lib, []fragBook{c.Book}, map[string][]string{c.Book.ID: {c.ImportPath}}); k == repairs.SkipITunes || k == repairs.SkipGuardUnreadable {
@@ -953,6 +1000,12 @@ func (f *fragmentFixer) disregardITunesParents(lib *fragLibrary, c *fragCandidat
 	}
 	if keep == "" || len(ignored) == 0 {
 		return nil, nil, false
+	}
+	kb := lib.dcBookOf(keep)
+	for _, it := range ignored {
+		if dcJudge(kb, lib.dcBookOf(it), lib.verdicts).Kind != dcEdgeProven {
+			return nil, nil, false
+		}
 	}
 	for _, m := range ms {
 		if m.Row.BookID == keep {

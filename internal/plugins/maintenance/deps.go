@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.59.0
+// version: 1.60.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-01
 
@@ -439,19 +439,23 @@ type keyspaceStoreProvider interface {
 	// implements it; the op reports that as "not supported" rather than
 	// panicking.
 	ReviewStatusIndexStore() database.ReviewStatusIndexRepairer
-	// DedupLabelReader serves the duplicate-copies fixer: the owner's dedup
-	// pair labels (not_dup verdicts it must honour). They live in the
+	// DedupVerdictReader serves the duplicate-copies fixer (and the fragment
+	// fixer's iTunes-parent rule): the owner's dedup pair verdicts it must
+	// honour, not_dup labels and decided candidates. They live in the
 	// embedding store, not database.Store. Returns nil when there is none,
 	// and the fixer then refuses to plan rather than ignore the verdicts.
-	DedupLabelReader() DedupLabelReader
+	DedupVerdictReader() DedupVerdictReader
 	// BookTagReader serves the duplicate-copies fixer: a copy's user tags,
 	// which a retire would leave behind on the hidden book.
 	BookTagReader() BookTagReader
 }
 
-// DedupLabelReader lists labeled dedup pairs (database.EmbeddingStore).
-type DedupLabelReader interface {
-	ListLabeledExamples(f database.LabeledExampleFilter) ([]database.LabeledExample, error)
+// DedupVerdictReader reads the owner's dedup pair verdicts
+// (database.EmbeddingStore), strictly: a row it cannot read is an error, never
+// a missing verdict.
+type DedupVerdictReader interface {
+	ListLabeledExamplesStrict(f database.LabeledExampleFilter) ([]database.LabeledExample, error)
+	TerminalCandidatesStrict(entityType string) ([]database.DedupCandidate, error)
 }
 
 // BookTagReader reads a book's tags: the source-attributed book_tag rows and

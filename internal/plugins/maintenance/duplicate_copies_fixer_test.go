@@ -21,14 +21,35 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
-// fakeLabels is an in-memory dedup label store.
-type fakeLabels struct{ ex []database.LabeledExample }
+// fakeLabels is an in-memory dedup verdict store: labels, decided
+// candidates, and an error each strict read returns when set.
+type fakeLabels struct {
+	ex    []database.LabeledExample
+	cands []database.DedupCandidate
+	err   error
+}
 
-func (l *fakeLabels) ListLabeledExamples(f database.LabeledExampleFilter) ([]database.LabeledExample, error) {
+func (l *fakeLabels) ListLabeledExamplesStrict(f database.LabeledExampleFilter) ([]database.LabeledExample, error) {
+	if l.err != nil {
+		return nil, l.err
+	}
 	var out []database.LabeledExample
 	for _, e := range l.ex {
 		if f.Label == "" || e.Label == f.Label {
 			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func (l *fakeLabels) TerminalCandidatesStrict(entityType string) ([]database.DedupCandidate, error) {
+	if l.err != nil {
+		return nil, l.err
+	}
+	var out []database.DedupCandidate
+	for _, c := range l.cands {
+		if c.EntityType == entityType && database.IsTerminalCandidateStatus(c.Status) {
+			out = append(out, c)
 		}
 	}
 	return out, nil
@@ -526,45 +547,45 @@ func TestDuplicateCopies_IdentityGate(t *testing.T) {
 		return mk("a", "Dune", nil, row(900, "h1"), row(100, "h2")),
 			mk("b", "44 - Dune", nil, row(900, "h1"), row(100, "zz"), row(600, "h3"))
 	}
-	none := map[[2]string]bool{}
+	none := map[[2]string]string{}
 	a, b := base()
 	require.Equal(t, dcEdgeProven, dcJudge(a, b, none).Kind, "90%% of the smaller copy is hash-matched")
 
 	cases := []struct {
 		name string
-		mut  func(a, b *dcBook) map[[2]string]bool
+		mut  func(a, b *dcBook) map[[2]string]string
 		want string
 	}{
-		{"coverage 89%", func(a, _ *dcBook) map[[2]string]bool {
+		{"coverage 89%", func(a, _ *dcBook) map[[2]string]string {
 			a.Rows = []database.BookFileCore{row(890, "h1"), row(110, "h2")}
 			return none
 		}, dcEdgeUnproven},
-		{"short shared intro is the only overlap", func(a, b *dcBook) map[[2]string]bool {
+		{"short shared intro is the only overlap", func(a, b *dcBook) map[[2]string]string {
 			intro := database.BookFileCore{ID: "intro", Duration: 59, FileHash: "intro", FilePath: "/x/track.mp3"}
 			a.Rows = []database.BookFileCore{intro}
 			b.Rows = []database.BookFileCore{intro, row(900, "other")}
 			return none
 		}, dcEdgeUnproven},
-		{"boilerplate credits are the only overlap", func(a, b *dcBook) map[[2]string]bool {
+		{"boilerplate credits are the only overlap", func(a, b *dcBook) map[[2]string]string {
 			credits := database.BookFileCore{ID: "cr", Duration: 300, FileHash: "cr", FilePath: "/x/x.mp3", Title: "Opening Credits"}
 			a.Rows = []database.BookFileCore{credits}
 			b.Rows = []database.BookFileCore{credits, row(900, "other")}
 			return none
 		}, dcEdgeUnproven},
-		{"titles differ", func(_, b *dcBook) map[[2]string]bool {
+		{"titles differ", func(_, b *dcBook) map[[2]string]string {
 			b.Title = dcTitleKey("Dune Messiah")
 			return none
 		}, ""},
-		{"authors differ", func(_, b *dcBook) map[[2]string]bool {
+		{"authors differ", func(_, b *dcBook) map[[2]string]string {
 			b.Author = "brianherbert"
 			return none
 		}, ""},
-		{"conflicting asin", func(a, b *dcBook) map[[2]string]bool {
+		{"conflicting asin", func(a, b *dcBook) map[[2]string]string {
 			a.Core.ASIN, b.Core.ASIN = str("B01"), str("B02")
 			return none
 		}, dcEdgeASIN},
-		{"not_dup label", func(_, _ *dcBook) map[[2]string]bool {
-			return map[[2]string]bool{dcPairKey("b", "a"): true}
+		{"not_dup label", func(_, _ *dcBook) map[[2]string]string {
+			return map[[2]string]string{dcPairKey("b", "a"): "labeled not_dup"}
 		}, dcEdgeNotDup},
 	}
 	for _, tc := range cases {

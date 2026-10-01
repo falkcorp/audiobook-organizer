@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-10-01
 
@@ -145,6 +145,7 @@ const (
 	dcSkipITunesVG   = "skipped_itunes_version_group"
 	dcSkipNoHeir     = "skipped_no_primary_heir"
 	dcSkipUnreadable = "skipped_unreadable"
+	dcSkipBoxSet     = "skipped_box_set"
 )
 
 // Identity thresholds.
@@ -152,6 +153,9 @@ const (
 	dcMinLinkSec = 60
 	dcCoverage   = 0.90
 	dcFoldCap    = 0.25
+	// dcBoxSetRatio: a largest copy with more present audio than this times
+	// the Audible runtime on file is a box set, not a copy (dcBoxSet).
+	dcBoxSetRatio = 1.5
 	// dcMaxHashFan: a hash more books than this share seeds no pairs (a
 	// publisher sting, silence); the coverage of a pair seeded otherwise
 	// still counts it.
@@ -228,12 +232,43 @@ type dcBook struct {
 	detailed bool
 }
 
+// distinctRows is b's rows counting each audio once: a row carrying a hash
+// (either of its two) an earlier row carried is that audio again, so
+// duplicated junk rows cannot outweigh the real ones. A row with no hash is
+// its own audio.
+func (b *dcBook) distinctRows() []database.BookFileCore {
+	seen := map[string]bool{}
+	var out []database.BookFileCore
+	for _, r := range b.Rows {
+		hs := dcHashes(r)
+		dup := false
+		for _, h := range hs {
+			dup = dup || seen[h]
+			seen[h] = true
+		}
+		if !dup {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// dur is b's distinct audio in seconds.
 func (b *dcBook) dur() int {
 	n := 0
-	for _, r := range b.Rows {
+	for _, r := range b.distinctRows() {
 		n += r.Duration
 	}
 	return n
+}
+
+// dcHashKey names a row's audio for distinct counting: its first hash, else
+// the row itself.
+func dcHashKey(r database.BookFileCore) string {
+	if hs := dcHashes(r); len(hs) > 0 {
+		return hs[0]
+	}
+	return "row:" + r.ID
 }
 
 func dcHashes(r database.BookFileCore) []string {
@@ -251,10 +286,19 @@ func dcLinkRow(r database.BookFileCore) bool {
 	return !boilerplate.IsBoilerplateTitle(title)
 }
 
-// dcCoverage is H: the share of the smaller copy's duration in link rows
-// whose hash a row of the other copy carries. ok is false when a row of the
-// smaller copy has no known duration.
+// dcCoverage is H: the share of the smaller copy's distinct audio in link
+// rows whose hash a row of the other copy carries, each distinct hash counted
+// once in both the matched and the total duration. ok is false when a row of
+// either copy has no known duration: an unknown row could be any length, so
+// it can neither be weighed nor picked the smaller copy by.
 func dcCoverageOf(a, b *dcBook) (cov float64, ok bool) {
+	for _, x := range [2]*dcBook{a, b} {
+		for _, r := range x.Rows {
+			if r.Duration <= 0 {
+				return 0, false
+			}
+		}
+	}
 	small, big := a, b
 	if da, db := a.dur(), b.dur(); db < da || (db == da && b.Core.ID < a.Core.ID) {
 		small, big = b, a
@@ -266,10 +310,7 @@ func dcCoverageOf(a, b *dcBook) (cov float64, ok bool) {
 		}
 	}
 	total, matched := 0, 0
-	for _, r := range small.Rows {
-		if r.Duration <= 0 {
-			return 0, false
-		}
+	for _, r := range small.distinctRows() {
 		total += r.Duration
 		if !dcLinkRow(r) {
 			continue
@@ -303,7 +344,7 @@ type dcVerdict struct {
 
 // dcJudge applies every identity clause to one pair. Each clause is checked
 // here and only here.
-func dcJudge(a, b *dcBook, notDup map[[2]string]bool) dcVerdict {
+func dcJudge(a, b *dcBook, notDup map[[2]string]string) dcVerdict {
 	if a.Title == "" || a.Title != b.Title {
 		return dcVerdict{}
 	}
@@ -313,8 +354,8 @@ func dcJudge(a, b *dcBook, notDup map[[2]string]bool) dcVerdict {
 	if x, y := dcStr(a.Core.ASIN), dcStr(b.Core.ASIN); x != "" && y != "" && !strings.EqualFold(x, y) {
 		return dcVerdict{Kind: dcEdgeASIN, Why: fmt.Sprintf("%s and %s carry different ASINs (%s, %s)", a.Core.ID, b.Core.ID, x, y)}
 	}
-	if notDup[dcPairKey(a.Core.ID, b.Core.ID)] {
-		return dcVerdict{Kind: dcEdgeNotDup, Why: fmt.Sprintf("%s and %s are labeled not_dup", a.Core.ID, b.Core.ID)}
+	if why := notDup[dcPairKey(a.Core.ID, b.Core.ID)]; why != "" {
+		return dcVerdict{Kind: dcEdgeNotDup, Why: why}
 	}
 	cov, ok := dcCoverageOf(a, b)
 	switch {
@@ -324,6 +365,24 @@ func dcJudge(a, b *dcBook, notDup map[[2]string]bool) dcVerdict {
 		return dcVerdict{Kind: dcEdgeUnproven, Why: fmt.Sprintf("%s / %s: %.0f%% of the smaller copy is hash-matched (needs %.0f%%)", a.Core.ID, b.Core.ID, cov*100, dcCoverage*100)}
 	}
 	return dcVerdict{Kind: dcEdgeProven, Why: fmt.Sprintf("%s / %s: %.0f%% of the smaller copy is hash-matched", a.Core.ID, b.Core.ID, cov*100)}
+}
+
+// dcAuthorKey is the author clause's key: fbNorm of the author's name, ""
+// (matches any author) for no author or "Unknown Author". An author id with
+// no author row is unknown, not absent: its key names the id, so it matches
+// only itself and never a known author.
+func dcAuthorKey(authors map[int]string, id *int) string {
+	if id == nil {
+		return ""
+	}
+	name, ok := authors[*id]
+	if !ok {
+		return fmt.Sprintf("?author#%d", *id)
+	}
+	if a := fbNorm(name); a != "unknownauthor" {
+		return a
+	}
+	return ""
 }
 
 func dcStr(p *string) string {
@@ -374,20 +433,69 @@ func (f *duplicateCopiesFixer) stores() (OpsStore, FragmentRepairReader, error) 
 	return store, hist, nil
 }
 
-// notDupPairs reads every not_dup label. No label store fails closed.
-func (f *duplicateCopiesFixer) notDupPairs() (map[[2]string]bool, error) {
-	lr := f.p.deps.DedupLabelReader()
-	if lr == nil {
-		return nil, errors.New("dedup label store unavailable: cannot honour not_dup verdicts")
+// dcDismissedGroupsPref is the preference the review page's "reject group"
+// writes (handlers/duplicates RejectBookDuplicateGroup): a JSON list of group
+// keys, each the group's book ids joined by "+".
+const dcDismissedGroupsPref = "dedup_dismissed_groups"
+
+// dcPrefReader reads a user preference (OpsStore has it).
+type dcPrefReader interface {
+	GetUserPreference(key string) (*database.UserPreference, error)
+}
+
+// dcOwnerVerdicts reads every owner rejection of a book pair, with why:
+//   - not_dup labels, from any source;
+//   - dedup candidates with a terminal status (database.IsTerminalCandidateStatus:
+//     dismissed by a human, or merged by auto-resolve), each a decision about
+//     the pair this fixer must not remake;
+//   - the review page's dismissed duplicate groups, every pair inside one.
+//
+// Every read is strict: a rejection it cannot read fails the plan rather than
+// reading as none, and so does no verdict store at all. The fragment fixer's
+// iTunes-parent rule reads the same verdicts.
+func dcOwnerVerdicts(vr DedupVerdictReader, prefs dcPrefReader) (map[[2]string]string, error) {
+	if vr == nil {
+		return nil, errors.New("dedup verdict store unavailable: cannot honour the owner's not_dup labels and dismissals")
 	}
-	labels, err := lr.ListLabeledExamples(database.LabeledExampleFilter{Label: "not_dup"})
+	out := map[[2]string]string{}
+	add := func(a, b, why string) {
+		if a == "" || b == "" || a == b {
+			return
+		}
+		if k := dcPairKey(a, b); out[k] == "" {
+			out[k] = why
+		}
+	}
+	labels, err := vr.ListLabeledExamplesStrict(database.LabeledExampleFilter{Label: "not_dup"})
 	if err != nil {
 		return nil, fmt.Errorf("list not_dup labels: %w", err)
 	}
-	out := make(map[[2]string]bool, len(labels))
 	for _, l := range labels {
-		if l.EntityAID != "" && l.EntityBID != "" {
-			out[dcPairKey(l.EntityAID, l.EntityBID)] = true
+		add(l.EntityAID, l.EntityBID, fmt.Sprintf("%s and %s are labeled not_dup (%s)", l.EntityAID, l.EntityBID, l.LabelSource))
+	}
+	cands, err := vr.TerminalCandidatesStrict("book")
+	if err != nil {
+		return nil, fmt.Errorf("list decided dedup candidates: %w", err)
+	}
+	for _, c := range cands {
+		add(c.EntityAID, c.EntityBID, fmt.Sprintf("dedup candidate %d (%s / %s) is %s", c.ID, c.EntityAID, c.EntityBID, c.Status))
+	}
+	pref, err := prefs.GetUserPreference(dcDismissedGroupsPref)
+	if err != nil {
+		return nil, fmt.Errorf("read dismissed duplicate groups: %w", err)
+	}
+	if pref != nil && pref.Value != nil && *pref.Value != "" {
+		var keys []string
+		if err := json.Unmarshal([]byte(*pref.Value), &keys); err != nil {
+			return nil, fmt.Errorf("dismissed duplicate groups are unreadable: %w", err)
+		}
+		for _, k := range keys {
+			ids := strings.Split(k, "+")
+			for i := range ids {
+				for j := i + 1; j < len(ids); j++ {
+					add(ids[i], ids[j], fmt.Sprintf("the owner dismissed duplicate group %s", k))
+				}
+			}
 		}
 	}
 	return out, nil
@@ -446,7 +554,7 @@ func (f *duplicateCopiesFixer) Plan(ctx context.Context, raw json.RawMessage, re
 	if err != nil {
 		return nil, err
 	}
-	notDup, err := f.notDupPairs()
+	notDup, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store)
 	if err != nil {
 		return nil, err
 	}
@@ -468,9 +576,13 @@ func (f *duplicateCopiesFixer) Plan(ctx context.Context, raw json.RawMessage, re
 type dcRun struct {
 	lib    *fbLib
 	books  map[string]*dcBook
-	notDup map[[2]string]bool
+	notDup map[[2]string]string
 	res    *repairs.PathResolver
 	series map[int]string
+	// outside maps a hash to the live books with a link row carrying it,
+	// over the whole library: the box-set check's leg (a). Plan only; nil on
+	// a Replan, which reads only the group's neighbourhood.
+	outside map[string][]string
 }
 
 func (r *dcRun) book(id string) *dcBook {
@@ -481,19 +593,14 @@ func (r *dcRun) book(id string) *dcBook {
 	if !ok {
 		return nil
 	}
-	b := &dcBook{Core: core, Rows: r.lib.files[id], Title: dcTitleKey(core.Title)}
-	if core.AuthorID != nil {
-		if a := fbNorm(r.lib.authors[*core.AuthorID]); a != "unknownauthor" {
-			b.Author = a
-		}
-	}
+	b := &dcBook{Core: core, Rows: r.lib.files[id], Title: dcTitleKey(core.Title), Author: dcAuthorKey(r.lib.authors, core.AuthorID)}
 	r.books[id] = b
 	return b
 }
 
 // rowsFor builds every row over the snapshot. only limits the seeds (Plan's
 // book_ids); carried is the replanned row's stored state (nil on Plan).
-func (f *duplicateCopiesFixer) rowsFor(ctx context.Context, rep registry.Reporter, store OpsStore, lib *fbLib, notDup map[[2]string]bool, only map[string]bool, carried *dcState) ([]repairs.Row, error) {
+func (f *duplicateCopiesFixer) rowsFor(ctx context.Context, rep registry.Reporter, store OpsStore, lib *fbLib, notDup map[[2]string]string, only map[string]bool, carried *dcState) ([]repairs.Row, error) {
 	if rep == nil {
 		rep = dcQuiet{} // Replan: a few books, no op to report to
 	}
@@ -513,6 +620,25 @@ func (f *duplicateCopiesFixer) rowsFor(ctx context.Context, rep registry.Reporte
 		}
 	}
 	sort.Strings(multi)
+	if carried == nil {
+		// The box-set check's whole-library index: every live book, a
+		// single-file one too (a book 2 as one m4b, a stray chapter).
+		run.outside = map[string][]string{}
+		for id, rows := range lib.files {
+			seen := map[string]bool{}
+			for _, r := range rows {
+				if !dcLinkRow(r) {
+					continue
+				}
+				for _, h := range dcHashes(r) {
+					if !seen[h] {
+						seen[h] = true
+						run.outside[h] = append(run.outside[h], id)
+					}
+				}
+			}
+		}
+	}
 	byHash, byTitle := map[string][]string{}, map[string][]string{}
 	for _, id := range multi {
 		b := run.book(id)
@@ -671,6 +797,17 @@ func (f *duplicateCopiesFixer) detail(store OpsStore, run *dcRun, b *dcBook) err
 		b.Manual = w
 	} else if k2, w2 := repairs.GuardBookTitle(id, b.Core.Title); k2 == repairs.SkipOwnerManual {
 		b.Manual = w2
+	}
+	if b.Manual == "" {
+		full := b.Core.ToBook()
+		authors, aerr := repairs.BookAuthorNames(store, &full)
+		if aerr != nil {
+			b.Doubt = fmt.Sprintf("authors of %s unreadable: %v", id, aerr)
+			return nil
+		}
+		if k, w := repairs.GuardBookCredits(id, dcStr(b.Core.Publisher), dcStr(b.Core.Narrator), authors); k == repairs.SkipOwnerManual {
+			b.Manual = w
+		}
 	}
 	if tr := f.p.deps.BookTagReader(); tr != nil {
 		tags, terr := tr.GetBookTagsDetailed(id)
@@ -839,6 +976,94 @@ func (f *duplicateCopiesFixer) unprovenRow(run *dcRun, edges map[[2]string]dcVer
 	return r
 }
 
+// dcBoxSet is the owner's 2026-10-01 box-set check. A set holding book 1 and
+// more passes the identity gate against book 1 alone, since all of book 1 is
+// inside it, so a group is skipped when either:
+//
+//	(a) audio the larger copies have and the smallest lacks is also held by a
+//	    live book outside the group (book 2 stored as its own book). The
+//	    group's iTunes copies are the same work and do not count. A stray
+//	    chapter of a short copy counts too, until fragment consolidation
+//	    retires it into its single parent;
+//	(b) the largest copy's present audio is over dcBoxSetRatio times the
+//	    Audible runtime on file (the smallest copy's, else any member's).
+//
+// (a) reads the plan's whole-library index (run.outside). A Replan has none:
+// it carries the plan's verdict, so (a) is not in the fingerprint, and the
+// runtime (b) used is (rt). ev is the passing group's evidence line; with no
+// runtime on file it says so, for the owner to see.
+func dcBoxSet(run *dcRun, ids, itunes []string) (skip, ev, rt string) {
+	byDur := append([]string(nil), ids...)
+	sort.SliceStable(byDur, func(i, j int) bool {
+		di, dj := run.books[byDur[i]].dur(), run.books[byDur[j]].dur()
+		if di != dj {
+			return di < dj
+		}
+		return byDur[i] < byDur[j]
+	})
+	small, large := run.books[byDur[0]], run.books[byDur[len(byDur)-1]]
+	if run.outside != nil {
+		in := map[string]bool{}
+		for _, id := range append(append([]string(nil), ids...), itunes...) {
+			in[id] = true
+		}
+		have := map[string]bool{}
+		for _, r := range small.Rows {
+			for _, h := range dcHashes(r) {
+				have[h] = true
+			}
+		}
+		seen := map[string]bool{}
+		var hits []string
+		for _, id := range byDur[1:] {
+			for _, r := range run.books[id].Rows {
+				hs := dcHashes(r)
+				lacks := dcLinkRow(r)
+				for _, h := range hs {
+					lacks = lacks && !have[h]
+				}
+				if !lacks {
+					continue
+				}
+				for _, h := range hs {
+					for _, o := range run.outside[h] {
+						if !in[o] && !seen[o] {
+							seen[o] = true
+							hits = append(hits, o)
+						}
+					}
+				}
+			}
+		}
+		if len(hits) > 0 {
+			sort.Strings(hits)
+			return fmt.Sprintf("possible box set: audio the larger copies hold beyond %s is also in live book(s) outside the group: %s "+
+				"(a stray chapter clears once fragment consolidation retires it)", small.Core.ID, strings.Join(fbFirst(hits, 5), ", ")), "", ""
+		}
+	}
+	runtime, from := 0, ""
+	if m := small.Core.AudibleRuntimeMin; m != nil && *m > 0 {
+		runtime, from = *m, small.Core.ID
+	} else {
+		for _, id := range ids {
+			if m := run.books[id].Core.AudibleRuntimeMin; m != nil && *m > 0 {
+				runtime, from = *m, id
+				break
+			}
+		}
+	}
+	if runtime == 0 {
+		return "", "box-set check: no runtime on file", ""
+	}
+	rt = fmt.Sprintf("rt:%s|%d", from, runtime)
+	_, secs := large.presentStats()
+	if float64(secs) > dcBoxSetRatio*float64(runtime)*60 {
+		return fmt.Sprintf("possible box set: copy %s has %d min of present audio, over %.1fx the %d min Audible runtime on %s",
+			large.Core.ID, secs/60, dcBoxSetRatio, runtime, from), "", rt
+	}
+	return "", fmt.Sprintf("box-set check: copy %s has %d min present, Audible runtime %d min (on %s)", large.Core.ID, secs/60, runtime, from), rt
+}
+
 // present reports a loser or survivor row on disk and not flagged Missing.
 func (b *dcBook) present(r database.BookFileCore) bool { return !r.Missing && b.Present[r.ID] }
 
@@ -983,6 +1208,14 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 			}
 		}
 	}
+	skip, ev, rt := dcBoxSet(run, ids, itunes)
+	if rt != "" {
+		fp = append(fp, rt)
+	}
+	if skip != "" {
+		return fail(dcSkipBoxSet, skip)
+	}
+	r.Evidence = append(r.Evidence, ev)
 	order := dcElect(run, ids)
 	if order == nil {
 		return fail(dcSkipNoSurvivor, "no copy is organized with every file present under the library root")
@@ -1018,9 +1251,9 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 		}
 		tracks[x.TrackNumber]++
 	}
-	brought := map[string]bool{}   // hashes a fold or repoint already brings
-	repointed := map[string]bool{} // survivor rows already repointed
-	matchedRows := map[string]bool{}
+	brought := map[string]bool{}      // hashes a fold or repoint already brings
+	repointed := map[string]bool{}    // survivor rows already repointed
+	matchedAudio := map[string]bool{} // dcHashKey of survivor rows matched
 	for _, l := range losers {
 		lb := run.books[l]
 		kept := 0
@@ -1038,8 +1271,8 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 			case len(twins) > 0:
 				kept++
 				for _, t := range twins {
-					if !matchedRows[t.ID] {
-						matchedRows[t.ID] = true
+					if k := dcHashKey(t); !matchedAudio[k] {
+						matchedAudio[k] = true
 						matchedSecs += t.Duration
 					}
 				}
@@ -1069,6 +1302,10 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 					return fail(dcSkipTrackOrder, fmt.Sprintf("copy %s row %s (%s) has no twin on the survivor and is not on disk to fold", l, x.ID, filepath.Base(x.FilePath)))
 				case x.ITunesPersistentID != "" || x.ITunesPath != "":
 					return fail(dcSkipTrackOrder, fmt.Sprintf("copy %s row %s has no twin on the survivor and is an iTunes track", l, x.ID))
+				case x.Duration <= 0:
+					// Never folded: a row of unknown length cannot be
+					// weighed against the fold cap.
+					return fail(dcSkipFoldCap, fmt.Sprintf("copy %s row %s has no twin on the survivor and no known duration", l, x.ID))
 				}
 				for _, h := range hs {
 					brought[h] = true
@@ -1265,7 +1502,7 @@ func (f *duplicateCopiesFixer) Replan(ctx context.Context, _ json.RawMessage, pl
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	notDup, err := f.notDupPairs()
+	notDup, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store)
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -1318,13 +1555,13 @@ func (f *duplicateCopiesFixer) Replan(ctx context.Context, _ json.RawMessage, pl
 			return repairs.Row{}, err
 		}
 	}
-	titles, err := f.fb.titleIndex(store)
+	titles, err := f.fb.titleIndexBy(store, "dcTitleKey", dcTitleKey)
 	if err != nil {
 		return repairs.Row{}, err
 	}
 	for _, m := range st.Members {
 		if b, ok := lib.books[m]; ok {
-			for _, id := range titles[fbNorm(b.Title)] {
+			for _, id := range titles[dcTitleKey(b.Title)] {
 				if _, err := load(id); err != nil {
 					return repairs.Row{}, err
 				}

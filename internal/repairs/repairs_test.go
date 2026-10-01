@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-10-01
 
@@ -33,6 +33,11 @@ type memStore struct {
 	files   map[string][]database.BookFile
 	history []database.MetadataChangeRecord
 	ops     map[string]*database.OperationV2Row
+	// authors and bookAuthors back the credits guard; authorErr fails its
+	// author read.
+	authors     map[int]*database.Author
+	bookAuthors map[string][]database.BookAuthor
+	authorErr   error
 	// failHistory makes RecordMetadataChange fail for this field.
 	failHistory string
 }
@@ -57,6 +62,21 @@ func (s *memStore) GetBookByID(id string) (*database.Book, error) {
 	}
 	cp := *b
 	return &cp, nil
+}
+
+func (s *memStore) GetBookAuthors(id string) ([]database.BookAuthor, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]database.BookAuthor(nil), s.bookAuthors[id]...), nil
+}
+
+func (s *memStore) GetAuthorByID(id int) (*database.Author, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.authorErr != nil {
+		return nil, s.authorErr
+	}
+	return s.authors[id], nil
 }
 
 func (s *memStore) GetBookFiles(id string) ([]database.BookFile, error) {
@@ -1193,4 +1213,42 @@ func TestGuardBookPaths_ITunesClearedStillFailsClosedOnDoubt(t *testing.T) {
 			t.Fatalf("allowITunes=%t: kind %q (%s), want %q", allow, kind, reason, SkipGuardUnreadable)
 		}
 	}
+}
+
+// TestGuardBooks_Credits: a Big Finish release on a neutral path with a
+// neutral title is manual-only by its publisher, an author (primary or a
+// book_authors row) or its narrator; an author read failure is an error.
+func TestGuardBooks_Credits(t *testing.T) {
+	str := func(s string) *string { return &s }
+	seedOne := func(mut func(s *memStore, b *database.Book)) *memStore {
+		s := newMemStore()
+		b := &database.Book{ID: "b", Title: "Michael Fenton Stevens/The Ultimate Foe", FilePath: "/lib/neutral/b.m4b"}
+		s.authors = map[int]*database.Author{1: {ID: 1, Name: "Michael Fenton Stevens"}, 2: {ID: 2, Name: "Big Finish Productions"}}
+		s.bookAuthors = map[string][]database.BookAuthor{}
+		mut(s, b)
+		s.books["b"] = b
+		return s
+	}
+	for name, mut := range map[string]func(s *memStore, b *database.Book){
+		"publisher":      func(_ *memStore, b *database.Book) { b.Publisher = str("Big Finish Productions") },
+		"narrator":       func(_ *memStore, b *database.Book) { b.Narrator = str("Big Finish Audio Cast") },
+		"primary author": func(_ *memStore, b *database.Book) { two := 2; b.AuthorID = &two },
+		"book_authors row": func(s *memStore, _ *database.Book) {
+			s.bookAuthors["b"] = []database.BookAuthor{{BookID: "b", AuthorID: 2}}
+		},
+	} {
+		k, why, err := GuardBooks(seedOne(mut), nil, NewPathResolver(), []string{"b"})
+		require.NoError(t, err, name)
+		require.Equal(t, SkipOwnerManual, k, "%s: %s", name, why)
+	}
+	clean := seedOne(func(_ *memStore, b *database.Book) {
+		one := 1
+		b.AuthorID, b.Publisher, b.Narrator = &one, str("Audible Studios"), str("Michael Fenton Stevens")
+	})
+	k, why, err := GuardBooks(clean, nil, NewPathResolver(), []string{"b"})
+	require.NoError(t, err)
+	require.Empty(t, k, why)
+	broken := seedOne(func(s *memStore, b *database.Book) { one := 1; b.AuthorID = &one; s.authorErr = errors.New("boom") })
+	_, _, err = GuardBooks(broken, nil, NewPathResolver(), []string{"b"})
+	require.Error(t, err, "an unreadable author never clears the book")
 }
