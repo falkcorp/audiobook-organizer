@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4877e93-ba6a-468d-b428-30be15fdfa27
-// last-edited: 2026-09-25
+// last-edited: 2026-10-01
 
 // Tests for the sync_item:/sync_item:book: keyspace (durable ABS libraryItemId
 // identity). Covers: mint-on-first-encounter idempotency, distinct IDs per book,
@@ -12,6 +12,8 @@
 package database
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -412,5 +414,61 @@ func TestSyncID_ListSyncAliases(t *testing.T) {
 	}
 	if got, err := store.ListSyncAliases(ids["a"]); err != nil || !slices.Equal(got, []string{ids["b"]}) {
 		t.Fatalf("after ClearSyncMerge(a, c): ListSyncAliases(a) = %v, %v; want [b]", got, err)
+	}
+}
+
+// TestSyncID_ListSyncAliases_ChapterConsolidationScale pins the alias cap
+// above a chapter-consolidated book: 2026-10-01 a fragment-consolidation apply
+// retired 306 chapter books into American Gods, and the old cap of 256 made
+// every later retire fail its user-state move and the book's bookmarks fail to
+// load. 300 losers into one winner must list all 300.
+func TestSyncID_ListSyncAliases_ChapterConsolidationScale(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+	winnerID, err := store.MintOrGetSyncID("book-winner")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID winner: %v", err)
+	}
+	const losers = 300
+	for i := 0; i < losers; i++ {
+		id := fmt.Sprintf("book-chapter-%03d", i)
+		if _, err := store.MintOrGetSyncID(id); err != nil {
+			t.Fatalf("MintOrGetSyncID %s: %v", id, err)
+		}
+		if err := store.RecordSyncMerge(id, "book-winner"); err != nil {
+			t.Fatalf("RecordSyncMerge %s: %v", id, err)
+		}
+	}
+	aliases, err := store.ListSyncAliases(winnerID)
+	if err != nil {
+		t.Fatalf("ListSyncAliases with %d aliases: %v", losers, err)
+	}
+	if len(aliases) != losers {
+		t.Fatalf("ListSyncAliases returned %d aliases, want %d", len(aliases), losers)
+	}
+}
+
+// TestSyncID_ListSyncAliases_CapStillBounds keeps the cap a hard error: a graph
+// one over the cap fails with ErrSyncAliasLimit instead of truncating.
+func TestSyncID_ListSyncAliases_CapStillBounds(t *testing.T) {
+	prev := maxSyncAliases
+	maxSyncAliases = 5
+	t.Cleanup(func() { maxSyncAliases = prev })
+
+	store := newPebbleStoreForSyncID(t)
+	winnerID, err := store.MintOrGetSyncID("book-winner")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID winner: %v", err)
+	}
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("book-loser-%d", i)
+		if _, err := store.MintOrGetSyncID(id); err != nil {
+			t.Fatalf("MintOrGetSyncID %s: %v", id, err)
+		}
+		if err := store.RecordSyncMerge(id, "book-winner"); err != nil {
+			t.Fatalf("RecordSyncMerge %s: %v", id, err)
+		}
+	}
+	if _, err := store.ListSyncAliases(winnerID); !errors.Is(err, ErrSyncAliasLimit) {
+		t.Fatalf("ListSyncAliases over the cap: err = %v, want ErrSyncAliasLimit", err)
 	}
 }
