@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_save_target_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: ade87d70-9dc4-4aee-9538-449a631e678d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-01
 
 package scanner
 
@@ -156,10 +156,20 @@ type fakeGroupLookup struct {
 	scanBookLookup
 	members []database.Book
 	err     error
+	// others are books outside the group, by ID (merge survivors).
+	others map[string]database.Book
 }
 
 func (f fakeGroupLookup) GetBooksByVersionGroup(string) ([]database.Book, error) {
 	return f.members, f.err
+}
+
+// GetBookByID answers merge-survivor liveness for books outside the group.
+func (f fakeGroupLookup) GetBookByID(id string) (*database.Book, error) {
+	if b, ok := f.others[id]; ok {
+		return &b, nil
+	}
+	return nil, nil
 }
 
 func TestPrimaryVersionOfSelectsByFlagNotByPosition(t *testing.T) {
@@ -185,9 +195,12 @@ func TestPrimaryVersionOfSelectsByFlagNotByPosition(t *testing.T) {
 // has. Returning some other member would move the write to an arbitrary row.
 func TestPrimaryVersionOfFailsOpen(t *testing.T) {
 	const group = "vg"
+	// Every member explicitly false: nothing acts as primary. (A nil-flag
+	// member is NOT "no primary" -- every visibility path reads nil as
+	// primary; see TestPrimaryVersionOfNilFlagPrimaryWins.)
 	noPrimary := []database.Book{
 		{ID: "a", VersionGroupID: new(group), IsPrimaryVersion: new(false)},
-		{ID: "b", VersionGroupID: new(group)},
+		{ID: "b", VersionGroupID: new(group), IsPrimaryVersion: new(false)},
 	}
 
 	got, err := primaryVersionOf(
@@ -215,6 +228,64 @@ func TestPrimaryVersionOfFailsOpen(t *testing.T) {
 		&database.Book{ID: "a", VersionGroupID: new(group), IsPrimaryVersion: new(true), Title: "fresh"})
 	require.NoError(t, err)
 	require.Nil(t, got, "a row that is already primary must not be redirected to a re-read copy of itself")
+}
+
+// TestPrimaryVersionOfNilFlagPrimaryWins is visibility audit 2026-10-01 §3
+// #6. A group whose primary P carries a nil flag (the scanner creates books
+// without setting it, and normalize-primary-flags never touches grouped rows)
+// beside an explicitly demoted sibling S: the UI shows P, because every
+// visibility path reads nil as primary. The old loop looked for an EXPLICIT
+// true only, found none, and left the AI parse on S -- the demoted row the UI
+// never shows, which is the bug primaryVersionOf exists to prevent.
+func TestPrimaryVersionOfNilFlagPrimaryWins(t *testing.T) {
+	const group = "vg"
+	members := []database.Book{
+		{ID: "S", VersionGroupID: new(group), IsPrimaryVersion: new(false)},
+		{ID: "P", VersionGroupID: new(group)}, // nil flag: the shown primary
+	}
+	got, err := primaryVersionOf(fakeGroupLookup{members: members},
+		&database.Book{ID: "S", VersionGroupID: new(group), IsPrimaryVersion: new(false)})
+	require.NoError(t, err)
+	require.NotNil(t, got, "the nil-flag primary was not found; the parse lands on the demoted row")
+	require.Equal(t, "P", got.ID)
+
+	// The parse arriving for P itself stays on P's own fresh row.
+	got, err = primaryVersionOf(fakeGroupLookup{members: members},
+		&database.Book{ID: "P", VersionGroupID: new(group)})
+	require.NoError(t, err)
+	require.Nil(t, got, "a nil-flag primary must not be redirected to a re-read copy of itself")
+
+	// Two nil-flag members: which one the user sees cannot be told without
+	// electing, so the write stays where it was.
+	ambiguous := []database.Book{
+		{ID: "S", VersionGroupID: new(group), IsPrimaryVersion: new(false)},
+		{ID: "P1", VersionGroupID: new(group)},
+		{ID: "P2", VersionGroupID: new(group)},
+	}
+	got, err = primaryVersionOf(fakeGroupLookup{members: ambiguous},
+		&database.Book{ID: "S", VersionGroupID: new(group), IsPrimaryVersion: new(false)})
+	require.NoError(t, err)
+	require.Nil(t, got, "two nil-flag members must not be guessed between")
+}
+
+// TestPrimaryVersionOfSkipsMembersThatCannotBePrimary: a trashed member, and a
+// merge loser whose survivor is alive, are hidden everywhere even with an
+// explicit true flag, so the parse must not be redirected to them.
+func TestPrimaryVersionOfSkipsMembersThatCannotBePrimary(t *testing.T) {
+	const group = "vg"
+	members := []database.Book{
+		{ID: "trashed", VersionGroupID: new(group), IsPrimaryVersion: new(true), MarkedForDeletion: new(true)},
+		{ID: "loser", VersionGroupID: new(group), IsPrimaryVersion: new(true), MergedIntoBookID: new("survivor")},
+		{ID: "S", VersionGroupID: new(group), IsPrimaryVersion: new(false)},
+		{ID: "P", VersionGroupID: new(group)},
+	}
+	lookup := fakeGroupLookup{members: members,
+		others: map[string]database.Book{"survivor": {ID: "survivor"}}}
+	got, err := primaryVersionOf(lookup,
+		&database.Book{ID: "S", VersionGroupID: new(group), IsPrimaryVersion: new(false)})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "P", got.ID, "redirected to a trashed or merged-away member")
 }
 
 // TestPrimaryVersionOfSurfacesAReadFailure: failing open here is right --
