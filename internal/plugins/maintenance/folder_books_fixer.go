@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-10-01
 
@@ -1451,7 +1451,8 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	st, err := json.Marshal(fbState{Members: members, DupTitles: dup})
 	if err != nil {
 		row.Skipped, row.SkipReason = fbSkipUnreadable, fmt.Sprintf("encode the row's state: %v", err)
-		row.Fingerprint = "unencodable"
+		// Unique per row like every other fingerprint, never a shared constant.
+		row.Fingerprint = "unencodable:" + fbRowID(members)
 		return row
 	}
 	row.State = st

@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.7.1
+// version: 2.7.2
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-09-02
+// last-edited: 2026-10-01
 
 // Pre-warms svc.audiobookService.listCache by firing the queries the UI
 // is most likely to hit on first load — library page (first few pages,
@@ -565,6 +565,12 @@ func (s *Server) warmAudiobookListCache() {
 			}
 		}
 		qStart := time.Now()
+		// Snapshot the key BEFORE the query, as the trickle phase does: a
+		// book write that lands mid-query bumps the generation, and a key
+		// taken afterwards would publish this already-stale response under
+		// the new generation as if it were fresh.
+		raw := buildListCacheRawQuery(q.limit, q.offset, q.filters)
+		cacheKey := s.libraryGeneration().Key("list:", raw)
 		resp, err := s.buildAudiobookListResponse(ctx, q.limit, q.offset, "", nil, nil, q.filters, false)
 		if err != nil {
 			misses++
@@ -574,8 +580,7 @@ func (s *Server) warmAudiobookListCache() {
 		}
 		hits++
 		if len(q.filters.PerUserFilters) == 0 {
-			raw := buildListCacheRawQuery(q.limit, q.offset, q.filters)
-			s.listCache.Set(s.libraryGeneration().Key("list:", raw), resp)
+			s.listCache.Set(cacheKey, resp)
 			cached++
 		}
 		slog.Debug("library list warm-up query ok",
