@@ -1,5 +1,5 @@
 // file: internal/undo/book_create.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7f3a9c21-5e8b-4d06-a1c4-2b9e6d0f8a53
 // last-edited: 2026-10-01
 
@@ -128,7 +128,7 @@ func CheckRepairBookCreate(store RepairBookCreateStore, c *database.OperationCha
 			return changed("gained external id %s/%s since", e.Source, e.ExternalID)
 		}
 	}
-	um, ok := store.(merge.UserProgressMerger)
+	um, ok := database.AsCapability[merge.UserProgressMerger](store)
 	if !ok {
 		return &ReferentError{Reason: ReasonFieldUnreadable, Detail: "this store cannot read listening progress"}
 	}

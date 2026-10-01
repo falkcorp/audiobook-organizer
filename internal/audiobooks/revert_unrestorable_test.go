@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
-// last-edited: 2026-09-26
+// last-edited: 2026-10-01
 
 package audiobooks
 
@@ -361,6 +361,9 @@ func (s *ledgerStub) MoveBookFilesToBook([]string, string, string) error { retur
 func (s *ledgerStub) GetBookFileByID(string, string) (*database.BookFile, error) {
 	return nil, nil
 }
-func (s *ledgerStub) UpdateBookFile(string, *database.BookFile) error    { return nil }
+func (s *ledgerStub) UpdateBookFile(string, *database.BookFile) error { return nil }
+func (s *ledgerStub) ModifyBookFile(string, string, func(*database.BookFile) error) (*database.BookFile, error) {
+	return nil, nil
+}
 func (s *ledgerStub) GetBookByExternalID(string, string) (string, error) { return "", nil }
 func (s *ledgerStub) ReassignExternalID(string, string, string) error    { return nil }
