@@ -47,7 +47,15 @@
 //     external id): retiring it would queue an iTunes remove at the purge.
 //     Listed, never applied.
 //   - ambiguous: a fragment that matches two parents or two parent rows, or
-//     a parent row two fragments claim. Listed, never applied.
+//     a parent row two fragments claim. Listed, never applied. One exception
+//     (owner, 2026-10-01): a fragment that is not itself an iTunes copy and
+//     matches exactly one non-iTunes parent plus iTunes copies of it takes
+//     the non-iTunes one as its single parent. The iTunes copies are listed
+//     in the evidence and are never in the row's books, so never written.
+//
+// A plan with the read-only assume_retired param is a what-if: the snapshot
+// is edited as if a duplicate-copies apply had retired its losers, and every
+// row is skipped with its would-be outcome in Current["what_if"].
 //   - held: a fragment that matches a parent but whose own file is missing
 //     or unreadable. Listed, never applied.
 //
@@ -200,7 +208,31 @@ func (f *fragmentFixer) Description() string {
 // and parents among these ids (tests, spot checks); empty means the library.
 type fragParams struct {
 	BookIDs []string `json:"book_ids,omitempty"`
+	// AssumeRetired makes the plan a read-only what-if: the library snapshot
+	// is edited as if a duplicate-copies apply had already run (each loser
+	// retired into its survivor, the fold rows moved onto the survivor)
+	// before the parent index is built. Every row of such a plan is skipped
+	// (fragSkipWhatIf) and carries the outcome it would have had in
+	// Current["what_if"], so the unlock can be counted and nothing can be
+	// applied from it.
+	AssumeRetired *fragAssumeRetired `json:"assume_retired,omitempty"`
 }
+
+// fragAssumeRetired is the what-if of fragParams.AssumeRetired.
+type fragAssumeRetired struct {
+	// Retire maps each loser book to the survivor it would be retired into.
+	Retire map[string]string `json:"retire"`
+	// Fold lists the book_file row ids that would move from a loser onto its
+	// survivor.
+	Fold []string `json:"fold,omitempty"`
+}
+
+// fragSkipWhatIf marks every row of an assume_retired plan: never applied.
+const fragSkipWhatIf = "skipped_what_if"
+
+// fragWhatIfKey is the Row.Current key holding a what-if row's would-be
+// outcome: "applicable", or the skip kind it would have had.
+const fragWhatIfKey = "what_if"
 
 func decodeFragParams(raw json.RawMessage) (fragParams, error) {
 	var fp fragParams
@@ -261,18 +293,19 @@ type fragFile struct {
 	Track            int
 	Missing          bool
 	ITunesPID        string
+	ITunesPath       string
 }
 
 func fragFileOf(bookID string, r *database.BookFile) fragFile {
 	return fragFile{ID: r.ID, BookID: bookID, Path: r.FilePath, OriginalFilename: r.OriginalFilename, Size: r.FileSize,
 		Hash: r.FileHash, OrigHash: r.OriginalFileHash, Duration: r.Duration, Track: r.TrackNumber, Missing: r.Missing,
-		ITunesPID: r.ITunesPersistentID}
+		ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath}
 }
 
 func fragFileOfCore(r *database.BookFileCore) fragFile {
 	return fragFile{ID: r.ID, BookID: r.BookID, Path: r.FilePath, OriginalFilename: r.OriginalFilename, Size: r.FileSize,
 		Hash: r.FileHash, OrigHash: r.OriginalFileHash, Duration: r.Duration, Track: r.TrackNumber, Missing: r.Missing,
-		ITunesPID: r.ITunesPersistentID}
+		ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath}
 }
 
 func (x fragFile) location() undo.BookFileLocation {
@@ -544,11 +577,19 @@ type fragLibrary struct {
 	// paths memoizes the guard's symlink resolution per folder for this
 	// plan or re-plan.
 	paths *repairs.PathResolver
+	// itunes holds, for each candidate parent of a fragment matching two or
+	// more parents, whether it is an iTunes copy (non-empty reason) and
+	// itunesDoubt the parents that could not be told (an unreadable external
+	// id list or path): the iTunes-parent rule (disregardITunesParents) only
+	// acts when every parent is known.
+	itunes      map[string]string
+	itunesDoubt map[string]bool
 }
 
 func newFragLibrary() *fragLibrary {
 	return &fragLibrary{books: map[string]fragBook{}, files: map[string][]fragFile{}, series: map[int]string{},
-		authors: map[int]string{}, paths: repairs.NewPathResolver()}
+		authors: map[int]string{}, paths: repairs.NewPathResolver(), itunes: map[string]string{},
+		itunesDoubt: map[string]bool{}}
 }
 
 func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
@@ -690,6 +731,9 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 	if err := f.attributeEmptied(ctx, rep, lib, store, hist, only); err != nil {
 		return nil, err
 	}
+	if fp.AssumeRetired != nil {
+		lib.assumeRetired(fp.AssumeRetired)
+	}
 	ix := newFragIndex()
 	type single struct {
 		b    fragBook
@@ -741,8 +785,182 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 			live = append(live, c)
 		}
 	}
+	if err := f.resolveITunesParents(ctx, rep, store, lib, ix, live); err != nil {
+		return nil, err
+	}
 	rows := f.buildRows(lib, ix, live)
-	return append(rows, strandedRows(lib, rows)...), nil
+	rows = append(rows, strandedRows(lib, rows)...)
+	if fp.AssumeRetired != nil {
+		whatIf(rows)
+	}
+	return rows, nil
+}
+
+// assumeRetired edits the snapshot (only) as if a duplicate-copies apply had
+// run: each fold row moves from the book holding it onto that book's
+// survivor, and each loser is soft-deleted, so it drops out of the parent
+// index. Read-only: nothing is written.
+func (lib *fragLibrary) assumeRetired(a *fragAssumeRetired) {
+	fold := map[string]bool{}
+	for _, id := range a.Fold {
+		fold[id] = true
+	}
+	losers := make([]string, 0, len(a.Retire))
+	for loser := range a.Retire {
+		losers = append(losers, loser)
+	}
+	sort.Strings(losers)
+	for _, loser := range losers {
+		survivor := a.Retire[loser]
+		var move []string
+		for _, r := range lib.files[loser] {
+			if fold[r.ID] {
+				move = append(move, r.ID)
+			}
+		}
+		for _, id := range move {
+			lib.moveRow(id, loser, survivor)
+		}
+		if b, ok := lib.books[loser]; ok {
+			b.SoftDeleted = true
+			b.MergedInto = survivor
+			lib.books[loser] = b
+		}
+	}
+}
+
+// whatIf turns every row of an assume_retired plan into a never-applied row
+// that records the outcome it would have had.
+func whatIf(rows []repairs.Row) {
+	for i := range rows {
+		r := &rows[i]
+		would := "applicable"
+		if r.Skipped != "" {
+			would = r.Skipped
+		}
+		if r.Current == nil {
+			r.Current = map[string]string{}
+		}
+		r.Current[fragWhatIfKey] = would
+		r.Skipped = fragSkipWhatIf
+		r.SkipReason = "what-if plan (assume_retired): would be " + would + "; never applied from this plan"
+	}
+}
+
+// resolveITunesParents settles, on a bounded pool, whether each candidate
+// parent of a fragment that matches two or more parent books is an iTunes
+// copy (lib.itunes) or cannot be told (lib.itunesDoubt). Only those parents
+// are read: the iTunes-parent rule needs nothing else.
+func (f *fragmentFixer) resolveITunesParents(ctx context.Context, rep registry.Reporter, store OpsStore, lib *fragLibrary, ix *fragIndex, cands []*fragCandidate) error {
+	want := map[string]bool{}
+	for _, c := range cands {
+		ms := ix.match(c)
+		parents := map[string]bool{}
+		for _, m := range ms {
+			parents[m.Row.BookID] = true
+		}
+		if len(parents) > 1 {
+			for p := range parents {
+				want[p] = true
+			}
+		}
+	}
+	ids := make([]string, 0, len(want))
+	for id := range want {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	type verdict struct {
+		why   string
+		doubt bool
+	}
+	out := make([]verdict, len(ids))
+	var done atomic.Int64
+	// Each worker writes only out[i]; the PathResolver is safe for
+	// concurrent use, the snapshot is read-only here.
+	if err := registry.RunItems(ctx, rep, fbIndexes(len(ids)), func(_ context.Context, i int) error {
+		defer done.Add(1)
+		why, doubt := lib.itunesParentWhy(store, ids[i])
+		out[i] = verdict{why: why, doubt: doubt}
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		ErrMode:     registry.ErrModeCollect,
+		Label:       func(_, total int) string { return fmt.Sprintf("iTunes parents %d/%d", done.Load(), total) },
+	}); err != nil {
+		return fmt.Errorf("%s: iTunes parents: %w", fragFixerID, err)
+	}
+	for i, id := range ids {
+		switch {
+		case out[i].doubt:
+			lib.itunesDoubt[id] = true
+		case out[i].why != "":
+			lib.itunes[id] = out[i].why
+		}
+	}
+	return nil
+}
+
+// itunesParentWhy tells whether parent book id is an iTunes copy, from the
+// snapshot and its external ids. doubt: it cannot be told.
+func (lib *fragLibrary) itunesParentWhy(store OpsStore, id string) (why string, doubt bool) {
+	b := lib.books[id]
+	paths := []string{b.FilePath}
+	var rows []fragFile
+	for _, r := range lib.files[id] {
+		paths = append(paths, r.Path)
+		rows = append(rows, r)
+	}
+	exts, err := store.GetExternalIDsForBook(id)
+	if err != nil {
+		return "", true
+	}
+	return itunesCopyWhy(lib.paths, id, b.ITunesPID, paths, rows, exts)
+}
+
+// disregardITunesParents is the owner's 2026-10-01 rule: when a fragment
+// that is not itself an iTunes copy matches exactly one non-iTunes parent
+// book plus one or more iTunes copies of it, the non-iTunes parent is its
+// single parent. It returns the matches to that parent and the iTunes
+// parents set aside (never written: they are not in the row's books). ok is
+// false when the rule does not apply (a parent the plan could not tell, two
+// non-iTunes parents, no iTunes parent, or an iTunes fragment).
+func (f *fragmentFixer) disregardITunesParents(lib *fragLibrary, c *fragCandidate, ms []fragMatch) (kept []fragMatch, ignored []string, ok bool) {
+	if c.itunesPID() != "" || c.File.ITunesPath != "" {
+		return nil, nil, false
+	}
+	if k, _ := f.guard(lib, []fragBook{c.Book}, map[string][]string{c.Book.ID: {c.ImportPath}}); k == repairs.SkipITunes || k == repairs.SkipGuardUnreadable {
+		return nil, nil, false
+	}
+	keep := ""
+	seen := map[string]bool{}
+	for _, m := range ms {
+		p := m.Row.BookID
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		switch {
+		case lib.itunesDoubt[p]:
+			return nil, nil, false
+		case lib.itunes[p] != "":
+			ignored = append(ignored, p)
+		case keep != "":
+			return nil, nil, false // two non-iTunes parents
+		default:
+			keep = p
+		}
+	}
+	if keep == "" || len(ignored) == 0 {
+		return nil, nil, false
+	}
+	for _, m := range ms {
+		if m.Row.BookID == keep {
+			kept = append(kept, m)
+		}
+	}
+	sort.Strings(ignored)
+	return kept, ignored, true
 }
 
 // strandedRows lists, as held rows, every book attributeEmptied gave a row
@@ -862,6 +1080,10 @@ type fragPair struct {
 	// Slice is where the fragment's audio sits in the parent's timeline, for
 	// carrying listening positions.
 	Slice merge.SliceMapping
+	// IgnoredITunes are the iTunes copies of the parent the fragment also
+	// matched, set aside by the iTunes-parent rule (disregardITunesParents).
+	// They are listed, never in the row's books and never written.
+	IgnoredITunes []string
 }
 
 // sliceIn is where row target starts in a book whose rows are rows: the sum
@@ -898,6 +1120,10 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 	claims := map[string][]*fragCandidate{} // parent row id -> fragments claiming it
 	var rows []repairs.Row
 	var unmatched []*fragCandidate
+	// matchOf is each candidate's matches after the iTunes-parent rule, and
+	// ignoredOf the iTunes parents that rule set aside.
+	matchOf := map[*fragCandidate][]fragMatch{}
+	ignoredOf := map[*fragCandidate][]string{}
 
 	for _, c := range cands {
 		ms := ix.match(c)
@@ -905,6 +1131,13 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		for _, m := range ms {
 			parents[m.Row.BookID] = true
 		}
+		if len(parents) > 1 {
+			if kept, ignored, ok := f.disregardITunesParents(lib, c, ms); ok {
+				ms, ignoredOf[c] = kept, ignored
+				parents = map[string]bool{kept[0].Row.BookID: true}
+			}
+		}
+		matchOf[c] = ms
 		switch {
 		case len(ms) == 0:
 			unmatched = append(unmatched, c)
@@ -930,14 +1163,14 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		cs := claims[rid]
 		if len(cs) > 1 {
 			for _, c := range cs {
-				rows = append(rows, f.ambiguousRow(lib, c, fmt.Sprintf("parent row %s is claimed by %d fragments", rid, len(cs)), ix.match(c)))
+				rows = append(rows, f.ambiguousRow(lib, c, fmt.Sprintf("parent row %s is claimed by %d fragments", rid, len(cs)), matchOf[c]))
 			}
 			continue
 		}
 		c := cs[0]
-		m := ix.match(c)[0]
+		m := matchOf[c][0]
 		p := fragPair{Frag: c, Parent: m.Row, Evidence: m.Evidence, Done: m.Evidence == fragEvDone,
-			Slice: sliceIn(lib.files[m.Row.BookID], m.Row)}
+			Slice: sliceIn(lib.files[m.Row.BookID], m.Row), IgnoredITunes: ignoredOf[c]}
 		kind := fragClassMoved
 		if !p.Done {
 			fi, err := f.statFn(m.Row.Path)
@@ -1074,6 +1307,10 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		}
 		r.Evidence = append(r.Evidence, fmt.Sprintf("%s ← parent row %s (%s): %s",
 			p.Frag.File.Path, p.Parent.ID, filepath.Base(p.Parent.Path), p.Evidence))
+		for _, it := range p.IgnoredITunes {
+			r.Evidence = append(r.Evidence, fmt.Sprintf("fragment %s also matches iTunes copy %s (%s): disregarded, never written",
+				p.Frag.Book.ID, it, lib.itunes[it]))
+		}
 		// The pairing and whether it is proven, not the evidence text: a
 		// finished repoint turns "import path" into "already points at it"
 		// for the same decision.

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.4.1
+// version: 2.5.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-10-01
 
@@ -1730,7 +1730,7 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
 		}
 	}
-	heirs, err := f.electHeirs(ctx, store, plan.Members)
+	heirs, err := f.electHeirs(ctx, store, plan.Members, nil)
 	if err != nil {
 		return err // nothing written yet
 	}
@@ -1780,7 +1780,9 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 // row is primary, the member that takes over: versionprimary's own election
 // (Elect) over the group's OTHER members, with their on-disk signals. A group
 // with no other live member needs no heir. A held election refuses the row.
-func (f *folderBooksFixer) electHeirs(ctx context.Context, store OpsStore, members []string) (map[string]string, error) {
+// notHeir, when set, keeps a member out of the election (the duplicate-copies
+// fixer never crowns an iTunes copy); nil lets every other member stand.
+func (f *folderBooksFixer) electHeirs(ctx context.Context, store OpsStore, members []string, notHeir func(id string) bool) (map[string]string, error) {
 	vps := f.p.deps.VersionPrimaryStore()
 	heirs := map[string]string{}
 	for _, m := range members {
@@ -1802,7 +1804,7 @@ func (f *folderBooksFixer) electHeirs(ctx context.Context, store OpsStore, membe
 		}
 		var others []database.Book
 		for i := range group {
-			if !contains(members, group[i].ID) && !group[i].IsSoftDeleted() {
+			if !contains(members, group[i].ID) && !group[i].IsSoftDeleted() && (notHeir == nil || !notHeir(group[i].ID)) {
 				others = append(others, group[i])
 			}
 		}

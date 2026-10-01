@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.44.1
+// version: 1.45.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-28
+// last-edited: 2026-10-01
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -127,6 +127,20 @@ func (s *Server) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
 // path-change history and the complete book_file-at-path lookup. All three
 // methods are part of database.Store, so no capability resolution is needed.
 func (s *Server) FragmentRepairReader() maintenanceplugin.FragmentRepairReader { return s.store }
+
+// DedupLabelReader hands the duplicate-copies fixer the dedup pair labels
+// (owner not_dup verdicts), which live in the embedding store. nil when the
+// server has none: the fixer then refuses to plan.
+func (s *Server) DedupLabelReader() maintenanceplugin.DedupLabelReader {
+	if s.embeddingStore == nil {
+		return nil
+	}
+	return s.embeddingStore
+}
+
+// BookTagReader hands the duplicate-copies fixer a book's tags. Both methods
+// are part of database.Store.
+func (s *Server) BookTagReader() maintenanceplugin.BookTagReader { return s.store }
 
 // ---- delegated run helpers ----
 

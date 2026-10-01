@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.58.0
+// version: 1.59.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -439,6 +439,26 @@ type keyspaceStoreProvider interface {
 	// implements it; the op reports that as "not supported" rather than
 	// panicking.
 	ReviewStatusIndexStore() database.ReviewStatusIndexRepairer
+	// DedupLabelReader serves the duplicate-copies fixer: the owner's dedup
+	// pair labels (not_dup verdicts it must honour). They live in the
+	// embedding store, not database.Store. Returns nil when there is none,
+	// and the fixer then refuses to plan rather than ignore the verdicts.
+	DedupLabelReader() DedupLabelReader
+	// BookTagReader serves the duplicate-copies fixer: a copy's user tags,
+	// which a retire would leave behind on the hidden book.
+	BookTagReader() BookTagReader
+}
+
+// DedupLabelReader lists labeled dedup pairs (database.EmbeddingStore).
+type DedupLabelReader interface {
+	ListLabeledExamples(f database.LabeledExampleFilter) ([]database.LabeledExample, error)
+}
+
+// BookTagReader reads a book's tags: the source-attributed book_tag rows and
+// the free-form user labels.
+type BookTagReader interface {
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+	GetBookUserTags(bookID string) ([]string, error)
 }
 
 // VersionPrimaryStore is what version-group-primary-repair needs beyond

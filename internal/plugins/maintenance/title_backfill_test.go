@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-09-28
+// last-edited: 2026-10-01
 
 package maintenance
 
@@ -52,7 +52,11 @@ var _ sdk.Reporter = (*fakeReporter)(nil)
 // fakeDeps satisfies the ServerDeps interface with only the store accessors
 // wired. All four return the same value; the narrowing lives in the declared
 // type, not in what is handed over.
-type fakeDeps struct{ store database.Store }
+type fakeDeps struct {
+	store database.Store
+	// labels backs DedupLabelReader; nil means the server has no label store.
+	labels DedupLabelReader
+}
 
 func (d fakeDeps) MergeBooks(bookIDs []string, primaryID string) (int, error) { return 0, nil }
 
@@ -102,6 +106,13 @@ func (d fakeDeps) MergeUserStateStore() merge.UserStateRepairStore { return d.st
 
 // FragmentRepairReader hands back the store unchanged, as Server's does.
 func (d fakeDeps) FragmentRepairReader() FragmentRepairReader { return d.store }
+
+// DedupLabelReader hands back the test's label store (nil when unset), as
+// Server's hands back its embedding store.
+func (d fakeDeps) DedupLabelReader() DedupLabelReader { return d.labels }
+
+// BookTagReader hands back the store unchanged, as Server's does.
+func (d fakeDeps) BookTagReader() BookTagReader { return d.store }
 
 // VersionPrimaryStore hands back the store unchanged, as Server's does.
 func (d fakeDeps) VersionPrimaryStore() VersionPrimaryStore { return d.store }
