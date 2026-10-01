@@ -48,8 +48,9 @@ const SkipDetailNoUsableTitle = SkipReasonNoUsableTitle +
 
 // SkipKindSiblingPart names why a book with a title was not searched: it is
 // one file of a set the scanner filed as separate book rows in one folder
-// ("Cobra 100 of 151", "The Sunrise Lands 1" beside "...2", a folder name
-// carrying rip details beside other rows), so any title it could be searched
+// ("98" or "06 Chapter 6" beside other chapter rows, "Cobra 100 of 151" beside
+// "Cobra 099 of 151", "The Sunrise Lands 1" beside its stem siblings, a folder
+// name carrying rip details beside other rows), so any title it could be searched
 // by names the whole work, and a whole-book candidate attached to one file's
 // row would stamp the book's metadata onto a chapter.
 const SkipKindSiblingPart = "one file of several book rows in its folder"
