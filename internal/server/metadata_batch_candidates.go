@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.19.0
+// version: 4.20.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-30
 //
@@ -382,7 +382,7 @@ func (s *Server) fetchCandidateForBook(
 		}
 	}
 
-	entry, err := mfs.FetchAndCacheLimited(ctx, limiter, bookID, query.Title, authorForHash, "", "", metafetch.SearchOptions{OnlySources: askOnly})
+	entry, err := mfs.FetchAndCacheLimited(ctx, limiter, bookID, query.Title, authorForHash, "", "", metafetch.SearchOptions{OnlySources: askOnly, BypassFetchCache: force})
 	if err != nil {
 		return withQuery(CandidateResult{
 			Book:   bookInfo,
