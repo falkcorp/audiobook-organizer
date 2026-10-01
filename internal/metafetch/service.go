@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.37.0
+// version: 5.38.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package metafetch
 
@@ -191,6 +191,9 @@ type Service struct {
 	db               Store
 	olStore          *openlibrary.OLStore
 	overrideSources  []metadata.MetadataSource // for testing
+	// asinLookupOverride replaces the live Audible/Audnexus ASIN clients in
+	// lookupASIN (tests only; nil in production).
+	asinLookupOverride func(ctx context.Context, providerID, asin string) (*metadata.BookMetadata, error)
 	isbnEnrichment   *ISBNService
 	activityService  *activity.Service
 	dedupEngine      *dedup.Engine
