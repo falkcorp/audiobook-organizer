@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_review_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6e2d9c41-3b7a-4f05-8c1e-a94d2f7b3e58
 // last-edited: 2026-10-01
 
@@ -288,6 +288,13 @@ func TestDuplicateCopies_OwnerRejections(t *testing.T) {
 			require.Zero(t, d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{r.RowID}).Applied)
 		})
 	}
+	t.Run("a pending candidate after the plan does not stop the apply", func(t *testing.T) {
+		d, a, b := pair(t)
+		r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), a)
+		require.True(t, r.Applicable(), r.SkipReason)
+		d.labels.cands = append(d.labels.cands, database.DedupCandidate{ID: 9, EntityType: "book", EntityAID: a, EntityBID: b, Status: "pending"})
+		require.Equal(t, 1, d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{r.RowID}).Applied)
+	})
 	t.Run("a pending candidate is no verdict", func(t *testing.T) {
 		d, a, b := pair(t)
 		d.labels.cands = append(d.labels.cands, database.DedupCandidate{ID: 9, EntityType: "book", EntityAID: a, EntityBID: b, Status: "pending"})
@@ -598,6 +605,25 @@ func TestRevertRepoint_LegacyEntryFallsBackToALiveRow(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Equal(t, bRow, got.ID, "no owner journaled: a live book's row")
+}
+
+// TestRevertRepoint_LegacyFallbackNeverPicksAnITunesRow: with no owner
+// journaled the fallback cannot tell an iTunes row held the key, so it never
+// hands the key to one; with no other row at the path the key stays dropped.
+func TestRevertRepoint_LegacyFallbackNeverPicksAnITunesRow(t *testing.T) {
+	d := newDCFixture(t)
+	path := d.file(t, "lib/shared/01.mp3", 500)
+	other := d.file(t, "lib/x/01.mp3", 501)
+	it := d.book(t, "I", "I", path, nil)
+	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: it, FilePath: path, FileSize: 500, Duration: 600, FileHash: "k",
+		ITunesPersistentID: "TRK1"}))
+	xBook := d.book(t, "X", "X", other, nil)
+	xf := &database.BookFile{BookID: xBook, FilePath: other, FileSize: 501, Duration: 600, FileHash: "k"}
+	require.NoError(t, d.s.CreateBookFile(xf))
+	repointAndRevert(t, d, xBook, xf.ID, path, true)
+	got, err := d.s.GetBookFileByPath(path)
+	require.NoError(t, err)
+	require.Nil(t, got, "the legacy fallback does not pick the iTunes row")
 }
 
 func TestRevertRepoint_NeverRewritesAnITunesRow(t *testing.T) {
