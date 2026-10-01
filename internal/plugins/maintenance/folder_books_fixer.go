@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-10-01
 
@@ -868,10 +868,12 @@ func fbApplicableTier(t string) bool { return t == fbTierShelf || t == fbTierAut
 
 var fbTrue = true
 
-// fbCrashHook, when set (tests only), is called after each write applyGroup
-// makes (stage "book" after CreateBook, "row" after the n-th CreateBookFile,
-// "reindex" before the n-th source row's re-index, "claim" before the n-th
-// created row's re-index after the un-hide);
+// fbCrashHook, when set (tests only), is called at fixed points of
+// applyGroup: stage "book" after CreateBook (n 0); "row" after the n-th
+// CreateBookFile; "reindex" after the n-th CreateBookFile, before that new
+// row's source row takes the path key back (n counts the group's files, as
+// for "row"); "claim" before the n-th created row's re-index after the
+// un-hide (n counts the created book's rows);
 // an error it returns stops the apply there, as a server stop would.
 var fbCrashHook func(stage string, n int) error
 
@@ -884,8 +886,10 @@ type folderBooksFixer struct {
 	commonMu    sync.Mutex
 	commonCache *fbCommon
 
-	// titleMu guards the title index, shared by every row and apply worker
-	// and rebuilt only when the library generation moved (titleIndex).
+	// titleMu guards the title index, rebuilt only when the library
+	// generation moved (titleIndex). It never contends in practice: every
+	// apply that reads it holds the merge lock, which serializes them; the
+	// mutex only makes the cache safe on its own terms.
 	titleMu  sync.Mutex
 	titleGen uint64
 	titleIdx fbTitleIndex
@@ -898,17 +902,18 @@ type fbTitleIndex map[string][]string
 // library generation (database.LibraryGenerationOf: bumped by every book
 // create, update and delete) and shared across rows and apply workers.
 //
-// It is called UNDER the merge lock, after Replan and the fingerprint check,
-// and rebuilt there whenever the generation moved: one memdb pass. It is not
-// built before the lock. The store bumps the generation after the Pebble
-// commit but BEFORE the memdb write-through (pebble_store.go createBook,
-// updateBookLockedMode, DeleteBook), so a build that overlaps another
-// merge-lock holder's retitle (fragment consolidation, split-book merge,
-// fs-regroup) can record the new generation over the old title, and no
-// generation check could tell. Under the lock every merge-lock holder has
-// finished, write-through included; a writer that does not take the merge
-// lock (scanner, importer) can still race this check, as it could race any
-// check, since the lock never excluded it.
+// dupNow calls it lazily, under the merge lock, at its first title lookup
+// (after the path and author checks, so a row they refuse pays for no
+// build), and it is rebuilt there whenever the generation moved: one memdb
+// pass. The store bumps the generation only AFTER the memdb write-through
+// (pebble_store.go createBook, updateBookLockedMode, DeleteBook), and the
+// generation is read before the build, so a cached index is never labelled
+// current while missing a write: a write landing during the build moves the
+// generation past the one recorded. Under the lock every merge-lock holder
+// (fragment consolidation, split-book merge, fs-regroup retitles) has
+// finished; a writer that does not take the merge lock (scanner, importer)
+// can still race the check itself, as it could race any check, since the
+// lock never excluded it.
 //
 // GetAllBooksCoreComplete, not GetAllBooksCore: the index authorizes an
 // irreversible create, so a memdb known to be missing rows must not answer
@@ -1443,7 +1448,12 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			fp = append(fp, "a:"+strconv.Itoa(*a))
 		}
 	}
-	st, _ := json.Marshal(fbState{Members: members, DupTitles: dup})
+	st, err := json.Marshal(fbState{Members: members, DupTitles: dup})
+	if err != nil {
+		row.Skipped, row.SkipReason = fbSkipUnreadable, fmt.Sprintf("encode the row's state: %v", err)
+		row.Fingerprint = "unencodable"
+		return row
+	}
 	row.State = st
 	row.Proposed = map[string]string{"held": strconv.Itoa(held), "held_by_folder_row": strconv.Itoa(byFolder),
 		"missing_orphans": strconv.Itoa(missingOrphans), "new_books": strconv.Itoa(len(plan.Groups)),
@@ -1712,12 +1722,8 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 	if !ok {
 		return fmt.Errorf("%s: row %s carries no plan", fbFixerID, locked.RowID)
 	}
-	titles, err := f.titleIndex(store) // under the lock; cached per generation
-	if err != nil {
-		return err
-	}
 	for _, g := range plan.Groups {
-		if why, err := f.dupNow(store, titles, plan.Members, fbCreatedID(locked.RowID, plan.Members[0], g.Key), g); err != nil {
+		if why, err := f.dupNow(store, plan.Members, fbCreatedID(locked.RowID, plan.Members[0], g.Key), g); err != nil {
 			return err
 		} else if why != "" {
 			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
@@ -1882,7 +1888,7 @@ func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []
 // library per page and matches authors and narrators too, so a short title
 // ("It") meant hundreds of full scans under the lock, and its raw-substring
 // candidates missed fbNorm-equal titles spelled with other punctuation.
-func (f *folderBooksFixer) dupNow(store OpsStore, titles fbTitleIndex, members []string, ours string, g fbGroup) (string, error) {
+func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string, g fbGroup) (string, error) {
 	skip := func(id string) bool { return id == ours || contains(members, id) }
 	for _, at := range []string{g.Dir, g.Path} {
 		if at == "" {
@@ -1913,6 +1919,10 @@ func (f *folderBooksFixer) dupNow(store OpsStore, titles fbTitleIndex, members [
 		}
 	}
 	seen := map[string]bool{}
+	titles, err := f.titleIndex(store) // lazily: the checks above refuse without it
+	if err != nil {
+		return "", err
+	}
 	for _, id := range titles[want] {
 		if seen[id] || skip(id) {
 			continue
@@ -1950,7 +1960,10 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 	if path == "" {
 		return steps, fmt.Errorf("%s: group %q carries no file_path", fbFixerID, g.Title)
 	}
-	val := undo.RepairBookCreateValue{ID: target, Title: g.Title, AuthorID: g.AuthorID, FilePath: path}.String()
+	val, err := undo.RepairBookCreateValue{ID: target, Title: g.Title, AuthorID: g.AuthorID, FilePath: path}.Encode()
+	if err != nil {
+		return steps, err
+	}
 	cur, err := store.GetBookByID(target)
 	if err != nil {
 		return steps, fmt.Errorf("read %s: %w", target, err)

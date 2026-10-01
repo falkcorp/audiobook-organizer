@@ -1,5 +1,5 @@
 // file: internal/undo/book_create_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e1b7c93-2d58-4a06-9f3e-8c5a1d7b2e60
 // last-edited: 2026-10-01
 
@@ -34,7 +34,7 @@ func TestCheckRepairBookCreate_UserStateRefusals(t *testing.T) {
 		}
 		c := &database.OperationChange{ID: "chg-1", OperationID: "op-1", BookID: b.ID,
 			ChangeType: ChangeTypeRepairBookCreate, FieldName: "book",
-			NewValue: RepairBookCreateValue{ID: b.ID, Title: "Sword", FilePath: "/lib/books/itunes/A/Sword"}.String()}
+			NewValue: mustEncode(t, RepairBookCreateValue{ID: b.ID, Title: "Sword", FilePath: "/lib/books/itunes/A/Sword"})}
 		return store, c
 	}
 
@@ -72,4 +72,13 @@ func TestCheckRepairBookCreate_UserStateRefusals(t *testing.T) {
 			t.Fatalf("no progress reader: reason %q, want %q (fail closed)", got, ReasonFieldUnreadable)
 		}
 	})
+}
+
+func mustEncode(t *testing.T, v RepairBookCreateValue) string {
+	t.Helper()
+	s, err := v.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

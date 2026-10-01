@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
 // last-edited: 2026-10-01
 
@@ -956,7 +956,7 @@ func TestFolderBooksFixer_DupNowFindsTheDuplicateAmongManySameTitleBooks(t *test
 	idx, err := fx.titleIndex(f.s)
 	require.NoError(t, err)
 	require.Len(t, idx["it"], 250)
-	why, err := fx.dupNow(f.s, idx, nil, "", g)
+	why, err := fx.dupNow(f.s, nil, "", g)
 	require.NoError(t, err)
 	require.Empty(t, why, "another author's same-title books are not duplicates")
 
@@ -964,7 +964,7 @@ func TestFolderBooksFixer_DupNowFindsTheDuplicateAmongManySameTitleBooks(t *test
 	idx, err = fx.titleIndex(f.s)
 	require.NoError(t, err)
 	require.Len(t, idx["it"], 251, "the create moved the generation: the index was rebuilt")
-	why, err = fx.dupNow(f.s, idx, nil, "", g)
+	why, err = fx.dupNow(f.s, nil, "", g)
 	require.NoError(t, err)
 	require.Contains(t, why, late, "an authorless fbNorm-equal title after 250 other candidates")
 }
@@ -1048,37 +1048,44 @@ func TestFolderBooksFixer_RetitleAfterTheIndexIsCaught(t *testing.T) {
 	require.True(t, f.live(t, "fb"), "nothing was written")
 }
 
-// TestFolderBooksFixer_CreatedRowMovedBeforeClaim: a created row moved off
-// its path after the un-hide is not re-indexed; the row stops.
-func TestFolderBooksFixer_CreatedRowMovedBeforeClaim(t *testing.T) {
-	f := newFragFixture(t)
-	f.seedWolfe(t, fbITunes, "citadel")
-	swordDir := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword"))
-	row := f.fbSingleRow(t, "op-plan")
-	hit := false
-	fbCrashHook = func(stage string, n int) error {
-		if stage != "claim" || n != 1 || hit {
-			return nil
-		}
-		hit = true
-		created, err := f.s.GetBookByFilePath(swordDir)
-		if err != nil || created == nil {
-			return fmt.Errorf("created book: %v", err)
-		}
-		rows, err := f.s.GetBookFiles(created.ID)
-		if err != nil || len(rows) == 0 {
-			return fmt.Errorf("created rows: %v", err)
-		}
-		r := rows[0]
-		r.FilePath = f.path("Elsewhere/moved.mp3")
-		return f.s.UpdateBookFile(r.ID, &r)
+// TestFolderBooksFixer_CreatedRowChangedBeforeClaim: a created row moved off
+// its path, or gone, after the un-hide is not re-indexed; the row stops.
+func TestFolderBooksFixer_CreatedRowChangedBeforeClaim(t *testing.T) {
+	for _, how := range []string{"moved", "vanished"} {
+		t.Run(how, func(t *testing.T) {
+			f := newFragFixture(t)
+			f.seedWolfe(t, fbITunes, "citadel")
+			swordDir := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword"))
+			row := f.fbSingleRow(t, "op-plan")
+			hit := false
+			fbCrashHook = func(stage string, n int) error {
+				if stage != "claim" || n != 1 || hit {
+					return nil
+				}
+				hit = true
+				created, err := f.s.GetBookByFilePath(swordDir)
+				if err != nil || created == nil {
+					return fmt.Errorf("created book: %v", err)
+				}
+				rows, err := f.s.GetBookFiles(created.ID)
+				if err != nil || len(rows) == 0 {
+					return fmt.Errorf("created rows: %v", err)
+				}
+				r := rows[0]
+				if how == "vanished" {
+					return f.s.DeleteBookFile(r.ID)
+				}
+				r.FilePath = f.path("Elsewhere/moved.mp3")
+				return f.s.UpdateBookFile(r.ID, &r)
+			}
+			t.Cleanup(func() { fbCrashHook = nil })
+			out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+			require.True(t, hit)
+			require.Equal(t, 0, out.Applied, "%+v", out.Rows)
+			require.Equal(t, 1, out.Partial, "%+v", out.Rows)
+			require.True(t, f.live(t, "fb"), "the row stopped before the retire")
+		})
 	}
-	t.Cleanup(func() { fbCrashHook = nil })
-	out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
-	require.True(t, hit)
-	require.Equal(t, 0, out.Applied, "%+v", out.Rows)
-	require.Equal(t, 1, out.Partial, "%+v", out.Rows)
-	require.True(t, f.live(t, "fb"), "the row stopped before the retire")
 }
 
 // TestFolderBooksFixer_SourceRowChangedBeforeReindex: the source row a new
