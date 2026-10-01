@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_budget_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d4b2e61-7a3c-4f18-b5e0-6c2a8f1d3e94
 // last-edited: 2026-10-01
 
@@ -27,6 +27,11 @@ func TestCandidateFetchBudget(t *testing.T) {
 		{ID: "google-books", Enabled: false, RateLimit: config.MetadataSourceRateLimit{RPS: 0.1, Burst: 50}},
 	}
 	b := metafetch.EnabledSourcesBudget()
+	// Audible and Open Library are fan-out sources: 4 calls per book each,
+	// so Open Library (5/s / 4) binds at 1.25 books/s.
+	if b.CallsPerBook != metafetch.MaxSearchCallsPerBook("audible") || b.BindingID != "openlibrary" || b.BooksPerSec != 5/float64(b.CallsPerBook) {
+		t.Fatalf("binding = %s %.2f books/s at %d calls/book", b.BindingID, b.BooksPerSec, b.CallsPerBook)
+	}
 	if b.RPS != 13 || b.Burst != 6 {
 		t.Fatalf("budget = %.1f/%d, want 13/6 (disabled sources excluded)", b.RPS, b.Burst)
 	}
@@ -59,6 +64,7 @@ func TestCandidateFetchBudget(t *testing.T) {
 		{"tiny source still one worker", metafetch.SourcesBudget{RPS: 0.1, SlowestID: "x", SlowestRPS: 0.1, SlowestTimeout: 5 * time.Second}, 0, 1},
 		{"no sources", metafetch.SourcesBudget{}, 0, 16},
 		{"prod 2026-10-01", with(metafetch.SourcesBudget{SlowestID: "audnexus", SlowestRPS: 2, SlowestTimeout: 30 * time.Second}, 16), 0, 16},
+		{"calls per book from the budget", metafetch.SourcesBudget{RPS: 40, CallsPerBook: 1, SlowestID: "x", SlowestRPS: 10, SlowestTimeout: 30 * time.Second}, 0, 16}, // 40 x 0.15 x 1 = 6
 	} {
 		if got := candidateFetchWorkers(tc.b, tc.configured); got != tc.want {
 			t.Errorf("%s: candidateFetchWorkers = %d, want %d", tc.name, got, tc.want)
