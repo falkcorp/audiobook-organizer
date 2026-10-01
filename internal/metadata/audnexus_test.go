@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus_test.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-c5d6e7f8a9b0
 // last-edited: 2026-10-01
 
@@ -117,6 +117,7 @@ func TestAudnexusClient_SearchByTitleAndAuthor(t *testing.T) {
 func TestAudnexusClient_LookupByASIN_NotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"statusCode":404,"error":"Not Found","message":"Item not available"}`))
 	}))
 	defer server.Close()
 
@@ -139,6 +140,7 @@ func TestAudnexusClient_LookupByASINInRegions_FailureOutranksNotFound(t *testing
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"statusCode":404}`))
 	}))
 	defer server.Close()
 
@@ -154,9 +156,13 @@ func TestIsNotFound(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{&ProviderStatusError{Provider: "x", Status: 404}, true},
-		{&ProviderStatusError{Provider: "x", Status: 410}, true},
-		{fmt.Errorf("ASIN B1: %w", &ProviderStatusError{Provider: "x", Status: 404}), true},
+		{&ProviderStatusError{Provider: "x", Status: 404, Body: `{"statusCode":404}`}, true},
+		{&ProviderStatusError{Provider: "x", Status: 410, Body: `[]`}, true},
+		{fmt.Errorf("ASIN B1: %w", &ProviderStatusError{Provider: "x", Status: 404, Body: `{"error":"x"}`}), true},
+		// A proxy's or an edge's 404 is not the provider's answer.
+		{&ProviderStatusError{Provider: "x", Status: 404, Body: "<html><body>404 Not Found</body></html>"}, false},
+		{&ProviderStatusError{Provider: "x", Status: 404}, false},
+		{&ProviderStatusError{Provider: "x", Status: 404, Body: "<body unreadable: EOF>", BodyUnreadable: true}, false},
 		{fmt.Errorf("empty product: %w", ErrASINNotFound), true},
 		{&ProviderStatusError{Provider: "x", Status: 500}, false},
 		{&ProviderStatusError{Provider: "x", Status: 429}, false},

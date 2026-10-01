@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-01
 //
@@ -51,6 +51,11 @@ var nowUTC = func() time.Time { return time.Now().UTC() }
 // GetCachedCandidates returns the cached entry for bookID plus a
 // freshness flag (entry.IsFresh()). Returns (nil, false, nil) for
 // cache-miss. Errors are real I/O failures.
+//
+// A row the version "1" ladder wrote comes back with its candidates filtered
+// by this version's position rules (filterLegacyCandidates): the apply paths
+// read candidates here, and a sibling the old ladder pooled must not be
+// applyable. The stored row is not rewritten, and nothing is refetched.
 func (mfs *Service) GetCachedCandidates(bookID string) (*MetadataCandidateCache, bool, error) {
 	if mfs == nil || mfs.db == nil {
 		return nil, false, nil
@@ -62,7 +67,42 @@ func (mfs *Service) GetCachedCandidates(bookID string) (*MetadataCandidateCache,
 	if entry == nil {
 		return nil, false, nil
 	}
+	if entry.SearchFingerprint != "" && len(entry.Candidates) > 0 {
+		book, berr := mfs.db.GetBookByID(bookID)
+		if berr != nil {
+			return nil, false, berr
+		}
+		if book != nil {
+			live, lerr := database.LiveBookAuthorNames(mfs.db, book)
+			if lerr != nil {
+				return nil, false, lerr
+			}
+			author := ""
+			if len(live) > 0 {
+				author = SearchAuthorHint(live[0])
+			}
+			entry = mfs.filterLegacyCandidates(entry, book, book.Title, author)
+		}
+	}
 	return entry, entry.IsFresh(), nil
+}
+
+// filterLegacyCandidates returns entry with its candidates filtered by this
+// version's position rules when the version "1" ladder wrote it for these
+// inputs (fingerprintLegacy), else entry itself. The criteria are the ones a
+// search for the same inputs builds now (newStrongCriteria), so a legacy
+// sibling ("Rogue Ascension 7" pooled for book 8) is dropped exactly as a
+// fresh search would drop it. A copy is returned; the stored row is untouched.
+func (mfs *Service) filterLegacyCandidates(entry *MetadataCandidateCache, book *database.Book, query, author string) *MetadataCandidateCache {
+	if entry == nil || len(entry.Candidates) == 0 ||
+		mfs.matchSearchFingerprint(entry.SearchFingerprint, book, query, author, "") != fingerprintLegacy {
+		return entry
+	}
+	in := mfs.resolveSearchInputs(book, query, author, "")
+	c := newStrongCriteria(in.parsed, in.title, in.literal, in.asin, in.author, mfs.bookRuntimeSec(book))
+	cp := *entry
+	cp.Candidates = c.filterCarried(entry.Candidates)
+	return &cp
 }
 
 // ValidateCachedIdentity closes the metadata-cache TOCTOU window (INIT-3-T5):
@@ -424,19 +464,26 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		if mfs.db != nil {
 			if prev, perr := mfs.db.GetMetadataCache(bookID); perr == nil && prev != nil && prev.SourceHash == sourceHash {
 				if len(prev.Candidates) > 0 {
-					entry.Candidates = prev.Candidates
-					// NOT bumped: FetchedAt dates the CANDIDATES, and these are the
-					// ones the previous search returned. Moving it would relabel
-					// month-old candidates as freshly fetched.
-					entry.FetchedAt = prev.FetchedAt
-					// Nor re-stamped, when the version "1" ladder found them: they
-					// answered ITS questions, unfiltered by this version's position
-					// and variant rules, and stamping the current fingerprint would
-					// pass them off as this version's answers. The legacy stamp
-					// keeps them valid exactly as long as an untouched legacy row
-					// (matchSearchFingerprint).
-					if resp.LegacyFingerprint != "" && prev.SearchFingerprint == resp.LegacyFingerprint {
-						entry.SearchFingerprint = prev.SearchFingerprint
+					carried := prev.Candidates
+					// Version "1" ladder candidates answered ITS questions,
+					// unfiltered by this version's position rules: a sibling it
+					// pooled is dropped here (strongCriteria.filterCarried), with
+					// the same criteria this search used.
+					legacy := resp.LegacyFingerprint != "" && prev.SearchFingerprint == resp.LegacyFingerprint
+					if legacy && resp.carryFilter != nil {
+						carried = resp.carryFilter(carried)
+					}
+					if len(carried) > 0 {
+						entry.Candidates = carried
+						// NOT bumped: FetchedAt dates the CANDIDATES, and these are
+						// the ones the previous search returned. Moving it would
+						// relabel month-old candidates as freshly fetched.
+						entry.FetchedAt = prev.FetchedAt
+						// Nor re-stamped: stamping the current fingerprint would
+						// pass legacy candidates off as this version's answers.
+						if legacy {
+							entry.SearchFingerprint = prev.SearchFingerprint
+						}
 					}
 				}
 				// Same questions (fingerprint): a source that answered "nothing"
@@ -602,6 +649,15 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 	fp := mfs.matchSearchFingerprint(entry.SearchFingerprint, book, query, author, "")
 	if fp == fingerprintStale || (fp == fingerprintLegacy && len(entry.Candidates) == 0) {
 		return entry, BatchVerdictNone, nil
+	}
+	if fp == fingerprintLegacy {
+		// Its candidates, filtered by this version's position rules: a row
+		// whose every legacy candidate was a sibling has nothing to apply and
+		// is re-asked -- only that book, never a mass refetch.
+		entry = mfs.filterLegacyCandidates(entry, book, query, author)
+		if len(entry.Candidates) == 0 {
+			return entry, BatchVerdictNone, nil
+		}
 	}
 	now := nowUTC()
 	if len(entry.Candidates) > 0 {

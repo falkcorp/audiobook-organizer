@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.39.0
+// version: 5.40.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-01
 
@@ -8,6 +8,7 @@ package metafetch
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -400,6 +401,10 @@ type SearchMetadataResponse struct {
 	// cacheSearchResponse keeps it on candidates carried over from such a row,
 	// so they are never relabelled as answers to this version's questions.
 	LegacyFingerprint string `json:"-"`
+	// carryFilter drops, from legacy candidates cacheSearchResponse carries
+	// over an empty refetch, the ones this search's position rules refuse
+	// (strongCriteria.filterCarried).
+	carryFilter func([]json.RawMessage) []json.RawMessage
 }
 
 // SearchOptions carries optional per-request flags for SearchMetadataForBook.

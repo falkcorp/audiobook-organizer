@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
 // last-edited: 2026-10-01
 
@@ -27,7 +27,7 @@ var searchFanoutLog = logger.New("metafetch.search")
 // maxASINEnrich caps the Audnexus lookups one search spends filling the
 // runtime of pooled answers that carry an ASIN but no runtime. With the
 // own-ASIN fallback it shares ONE Audnexus lookup per book (of at most
-// maxAudnexusRegions requests): the fallback is reserved first.
+// maxAudnexusRequests region requests): the fallback is reserved first.
 const maxASINEnrich = 1
 
 // fanoutSource is one provider's state across the fan-out rounds. A round
@@ -86,8 +86,9 @@ func (st *fanoutSource) answered(ctx context.Context) bool {
 // accept is what one variant's answers add to the pool: v.accept, minus any
 // answer naming a different series position than the title's
 // (positionConflicts: "Rogue Ascension 7" for book 8), plus an answer that
-// carries the book's own ASIN AND agrees with the book on something else
-// (strongCriteria.ownASINAgrees), which no title filter may drop.
+// carries the book's own ASIN AND agrees with the book (strongCriteria.
+// ownASINAgrees: no other position, and its runtime or title), which no
+// title filter may drop.
 func (p fanoutParams) accept(v queryVariant, rs []metadata.BookMetadata) []metadata.BookMetadata {
 	kept := v.accept(rs, p.people)
 	p.strong.noteNameEvidence(rs)
@@ -111,6 +112,36 @@ func (p fanoutParams) accept(v queryVariant, rs []metadata.BookMetadata) []metad
 		}
 	}
 	return kept
+}
+
+// filterCarried returns the cached candidates (MetadataCandidate JSON) whose
+// answer this search's position rules keep (positionConflicts), after the
+// same pool-wide tagline check a search runs (noteNameEvidence). A candidate
+// that does not decode is kept: it is not this filter's to judge.
+func (c strongCriteria) filterCarried(raw []json.RawMessage) []json.RawMessage {
+	if c.position == "" || len(raw) == 0 {
+		return raw
+	}
+	answers := make([]*metadata.BookMetadata, len(raw))
+	var pool []metadata.BookMetadata
+	for i, r := range raw {
+		var mc MetadataCandidate
+		if json.Unmarshal(r, &mc) != nil {
+			continue
+		}
+		bm := metadata.BookMetadata{Title: mc.Title, Author: mc.Author, Narrator: mc.Narrator, Series: mc.Series,
+			SeriesPosition: mc.SeriesPosition, ASIN: mc.ASIN, DurationSec: mc.DurationSec}
+		answers[i] = &bm
+		pool = append(pool, bm)
+	}
+	c.noteNameEvidence(pool)
+	out := raw[:0:0]
+	for i, r := range raw {
+		if answers[i] == nil || !c.positionConflicts(*answers[i]) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 type fanoutParams struct {
@@ -169,8 +200,13 @@ func (mfs *Service) runSearchFanout(p fanoutParams, sources []metadata.MetadataS
 				return nil
 			})
 		}
-		// Never returns an error: a failing source is recorded on its state.
-		_ = g.Wait()
+		// The callbacks return nil -- a failing source is recorded on its
+		// state -- so an error here is a broken invariant: logged, never
+		// dropped, and the round's recorded answers still stand.
+		if err := g.Wait(); err != nil {
+			searchFanoutLog.Error("search fan-out round %d of %d: unexpected error (book %s): %v",
+				k+1, len(variants), logger.SanitizeLogValue(p.bookID), err)
+		}
 		// The pool-wide position pass: two sources may each have pooled one
 		// sibling sharing the book's "name", which only the whole pool shows
 		// to be a tagline (noteNameEvidence). Re-filtered before the strong
@@ -278,10 +314,15 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 	case providerID == metadata.SourceIDAudible:
 		res, err = metadata.NewAudibleClient().LookupByASIN(asin)
 	default:
-		// Ctx-aware: a batch cancel aborts its region loop promptly. At most
-		// maxAudnexusRegions requests, so one lookup fits the per-book budget
-		// MaxSearchCallsPerBook reports.
-		res, err = metadata.NewAudnexusClient().LookupByASINInRegions(ctx, asin, audnexusSearchRegions)
+		// Ctx-aware: a batch cancel aborts its region loop promptly. The
+		// English stores first; the rest only when every one of those said
+		// "not here", so a found ASIN costs at most 3 requests and a missing
+		// one the full 8 MaxSearchCallsPerBook reports.
+		client := metadata.NewAudnexusClient()
+		res, err = client.LookupByASINInRegions(ctx, asin, audnexusSearchRegions)
+		if res == nil && metadata.IsNotFound(err) {
+			res, err = client.LookupByASINInRegions(ctx, asin, audnexusFallbackRegions)
+		}
 	}
 	// "No such ASIN" (a 404, an empty product) is the provider answering,
 	// not failing: it is recorded as a success and returned as (nil, nil), so

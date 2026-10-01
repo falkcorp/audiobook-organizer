@@ -1,5 +1,5 @@
 # file: .errcheck-baseline
-# version: 1.2.1
+# version: 1.3.0
 # guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
 # last-edited: 2026-10-01
 
@@ -53,4 +53,7 @@
 # (GOOS=linux). The dedup entity-index backfill no longer discards its
 # per-row batch writes, and the label index writes go through checked
 # batches.
-828
+# 2026-10-01 (feat/multi-combo-search, #3641): 828 -> 827, measured with this
+# script. The search scoring group's Wait error is logged instead of dropped,
+# and the new fan-out round's Wait is handled the same way.
+827
