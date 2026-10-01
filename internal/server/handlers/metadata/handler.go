@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-30
 
@@ -549,7 +549,11 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 		// BypassProviderThrottle: this handler is the interactive per-book
 		// search dialog — a human is waiting on one book. Bulk paths (the
 		// batch apply loop below, the v2 fetch ops) deliberately do NOT set it.
-		entry, err := h.metadataFetchService.FetchAndCache(c.Request.Context(), id, body.Query, body.Author, body.Narrator, body.Series, metafetch.SearchOptions{UseRerank: body.UseRerank, BypassProviderThrottle: true})
+		// BypassFetchCache: ?refresh=true re-asks the providers; without it
+		// the per-source fetch cache answered the "refresh" for the same
+		// identity.
+		entry, err := h.metadataFetchService.FetchAndCache(c.Request.Context(), id, body.Query, body.Author, body.Narrator, body.Series,
+			metafetch.SearchOptions{UseRerank: body.UseRerank, BypassProviderThrottle: true, BypassFetchCache: refresh})
 		if err != nil {
 			// Every provider failed: an outage, not a missing book.
 			if errors.Is(err, metafetch.ErrNoSourceAnswered) {
@@ -568,7 +572,7 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 
 	resp, err := h.metadataFetchService.SearchMetadataForBookWithOptions(
 		id, body.Query, body.Author, body.Narrator, body.Series,
-		metafetch.SearchOptions{UseRerank: body.UseRerank, BypassProviderThrottle: true},
+		metafetch.SearchOptions{UseRerank: body.UseRerank, BypassProviderThrottle: true, BypassFetchCache: refresh},
 	)
 	if err != nil {
 		httputil.RespondWithError(c, 404, err.Error(), "NOT_FOUND")

@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.36.0
+// version: 5.37.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 
 package metafetch
 
@@ -417,6 +417,16 @@ type SearchOptions struct {
 	// Set it only where a human asked for exactly one book. Setting it on a
 	// batch path silently deletes the whole feature.
 	BypassProviderThrottle bool
+
+	// BypassFetchCache skips the per-source fetch-cache READ, so every
+	// selected provider is asked again. Fresh non-empty results are still
+	// WRITTEN, replacing the row. Set it wherever the caller asked to force or
+	// refresh: the batch candidate fetch's force (a stale-refetch implies it)
+	// and the search dialog's ?refresh=true. Without it a "forced" refetch
+	// skipped the candidate-cache verdict only to be answered, provider by
+	// provider, from the fetch cache's rows for the same identity, so force
+	// re-asked nobody until those rows aged out.
+	BypassFetchCache bool
 }
 
 // embedCoverInBookFiles embeds cover art into all audio files for a book.

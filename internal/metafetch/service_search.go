@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-09-28
+// last-edited: 2026-09-30
 
 package metafetch
 
@@ -591,8 +591,16 @@ func (mfs *Service) searchMetadataForBook(
 			// where re-fetching 8000 books hit every external API
 			// 8000 times even for books we'd already matched with
 			// high confidence.
+			//
+			// opts.BypassFetchCache (force/refresh) skips this read; the
+			// write below still replaces the row with what the provider says.
 			maxAge := time.Duration(config.AppConfig.MetadataFetchCacheTTLDays) * 24 * time.Hour
-			if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(mfs.db, id, src.Name(), searchIdentity, maxAge); cerr == nil && cached != nil {
+			var cached *database.CachedMetadataEntry
+			var cerr error
+			if !opts.BypassFetchCache {
+				cached, _, cerr = database.GetCachedMetadataFetchWithMaxAge(mfs.db, id, src.Name(), searchIdentity, maxAge)
+			}
+			if cerr == nil && cached != nil {
 				var cachedResults []metadata.BookMetadata
 				if jerr := json.Unmarshal(cached.Results, &cachedResults); jerr == nil {
 					// Keep the in-memory []BookMetadata internally consistent with the
