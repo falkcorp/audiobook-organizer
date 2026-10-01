@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-30
 
@@ -84,6 +84,10 @@ type MetadataCacheBookStore interface {
 	// reads (with GetBookFiles) to decide whether a stale row is one a
 	// refetch would actually search -- see cacheRowStale.
 	database.BookAuthorReader
+	// The other book rows in a book's folder, which the resolver reads to
+	// refuse one file of a set filed as separate rows
+	// (metabatch.SkipKindSiblingPart).
+	database.BookDirLister
 }
 
 // ActiveOpsLister is the shape of database.Store's ListActiveOperationsV2. It

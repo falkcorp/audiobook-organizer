@@ -1,12 +1,14 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
-// last-edited: 2026-09-29
+// last-edited: 2026-09-30
 
 package metabatch
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -15,9 +17,31 @@ import (
 type fakeBookFiles struct {
 	files []database.BookFile
 	err   error
+	// dir is every live book row's id -> FilePath, answered for any folder
+	// (LiveBookPathsUnderDir filters by prefix like the store does).
+	dir    map[string]string
+	dirErr error
+	// dirCalls counts folder listings, shared across copies.
+	dirCalls *int
 }
 
 func (f fakeBookFiles) GetBookFiles(string) ([]database.BookFile, error) { return f.files, f.err }
+
+func (f fakeBookFiles) LiveBookPathsUnderDir(dir string) (map[string]string, error) {
+	if f.dirCalls != nil {
+		*f.dirCalls++
+	}
+	if f.dirErr != nil {
+		return nil, f.dirErr
+	}
+	out := map[string]string{}
+	for id, p := range f.dir {
+		if strings.HasPrefix(p, dir+"/") {
+			out[id] = p
+		}
+	}
+	return out, nil
+}
 
 // fakeBookFiles has no author links; a test that needs them sets Book.Author
 // (the snapshot) or uses fakeBookFilesAuthors.
@@ -238,5 +262,143 @@ func TestIsTranscribedSource(t *testing.T) {
 		if got := IsTranscribedSource(src); got != want {
 			t.Errorf("IsTranscribedSource(%q) = %v, want %v", src, got, want)
 		}
+	}
+}
+
+// siblingRows returns a folder listing: the book under test as "self" plus
+// one row per name, all directly in dir.
+func siblingRows(dir, self string, names ...string) map[string]string {
+	rows := map[string]string{"self": dir + "/" + self}
+	for i, n := range names {
+		rows[fmt.Sprintf("sib%d", i)] = dir + "/" + n
+	}
+	return rows
+}
+
+// A row that is one file of a set the scanner filed as separate book rows
+// must be SKIPPED, not searched -- by its own title, its folder or a
+// transcription: each names the whole work, and a whole-book candidate on a
+// chapter row stamps the book onto the chapter (65 rows on 2026-09-29).
+// Every measured title shape is here, in a work folder named for the book
+// with stand-ins on offer, so a fallback that undoes the refusal fails.
+func TestResolveCandidateSearchQuery_SiblingPartRowsAreSkipped(t *testing.T) {
+	const lib = "/library/Authors"
+	cases := []struct {
+		name  string
+		dir   string
+		self  string
+		title string
+		sibs  []string
+		// noTranscript: a bare-number title ("05") keeps its designed
+		// transcription stand-in; the case tests the folder step alone.
+		noTranscript bool
+	}{
+		{"N of M", lib + "/Joe Abercrombie/Before They Are Hanged", "Before They Are Hanged 002 of 341.mp3",
+			"Before They Are Hanged 002 of 341", []string{"Before They Are Hanged 001 of 341.mp3", "Before They Are Hanged 003 of 341.mp3"}, false},
+		{"N of M again", lib + "/Timothy Zahn/Cobra", "Cobra 100 of 151.mp3", "Cobra 100 of 151", []string{"Cobra 101 of 151.mp3"}, false},
+		{"cut-off N of", lib + "/Brandon Sanderson/Elantris", "Elantris 084 of.mp3", "Elantris 084 of", []string{"Elantris 085 of.mp3"}, false},
+		{"copy suffix", lib + "/Brandon Sanderson/Elantris", "Elantris_copy179.mp3", "Elantris_copy179", []string{"Elantris_copy178.mp3"}, false},
+		{"Part N of M inside a subtitle", lib + "/S M Stirling/The Tears of the Sun", "Part 02 of 63.mp3",
+			"The Tears of the Sun A Novel of the Change Part 02 of 63", []string{"Part 01 of 63.mp3"}, false},
+		{"trailing number with stem siblings", lib + "/S M Stirling/The Sunrise Lands", "The Sunrise Lands 1.mp3",
+			"The Sunrise Lands 1", []string{"The Sunrise Lands 2.mp3", "The Sunrise Lands 3.mp3"}, false},
+		{"trailing number, siblings carry a track prefix", lib + "/S M Stirling/The Sunrise Lands", "001 - The Sunrise Lands 1.mp3",
+			"The Sunrise Lands 1", []string{"002 - The Sunrise Lands 1-02.mp3"}, false},
+		{"trailing capital letter", lib + "/Anne Bishop/Sealed to the Flame", "Sealed to the Flame E.mp3",
+			"Sealed to the Flame E", []string{"Sealed to the Flame A.mp3", "Sealed to the Flame D.mp3"}, false},
+		{"trailing capital letter again", lib + "/Robert Jordan/A Promise to Lews Therin", "A Promise to Lews Therin C.mp3",
+			"A Promise to Lews Therin C", []string{"A Promise to Lews Therin B.mp3"}, false},
+		{"rip-detail folder name on a chapter row", lib + "/Neil Gaiman/2002 - Neil Gaiman - American Gods [64k 20;57;42 577MB]", "05.mp3",
+			"2002 - Neil Gaiman - American Gods [64k 20;57;42 577MB]", []string{"04.mp3", "06.mp3"}, false},
+		{"rip-detail folder as the stand-in for a number title", lib + "/Neil Gaiman/2002 - Neil Gaiman - American Gods [64k 20;57;42 577MB]", "05.mp3",
+			"05", []string{"04.mp3", "06.mp3"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := tc.dir + "/" + tc.self
+			book := database.Book{ID: "self", Title: tc.title, FilePath: path}
+			file := database.BookFile{FilePath: path}
+			if !tc.noTranscript {
+				book.TranscribedTitle = strp("Whole Work Title")
+				file.TranscribedTitle = strp("Whole Work Title")
+			}
+			files := fakeBookFiles{files: []database.BookFile{file},
+				dir: siblingRows(tc.dir, tc.self, tc.sibs...)}
+			q := ResolveCandidateSearchQuery(files, &book)
+			if q.Usable {
+				t.Fatalf("got usable %+v, want a skip", q)
+			}
+			if q.SkipKind != SkipKindSiblingPart {
+				t.Fatalf("SkipKind = %q, want %q", q.SkipKind, SkipKindSiblingPart)
+			}
+		})
+	}
+}
+
+// The shapes alone are not evidence: a whole book whose title ends in a
+// number or letter, filed beside its author's other books, is searched; a
+// counted-part title on a row holding the whole work falls back to its
+// folder; rip details on a lone row are cleaned off.
+func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *testing.T) {
+	const author = "/library/Authors/Various"
+	others := []string{"Dune.m4b", "Neuromancer.m4b", "Hyperion.m4b"}
+	cases := []struct {
+		name     string
+		book     database.Book
+		files    []database.BookFile
+		dir      map[string]string
+		want     string
+		wantSrc  string
+		maxLists int
+	}{
+		{name: "Plan B beside unrelated books", book: database.Book{ID: "self", Title: "Plan B", FilePath: author + "/Plan B.m4b"},
+			dir: siblingRows(author, "Plan B.m4b", others...), want: "Plan B", wantSrc: SearchQuerySourceTitle, maxLists: 1},
+		{name: "Apollo 13 beside unrelated books", book: database.Book{ID: "self", Title: "Apollo 13", FilePath: author + "/Apollo 13.m4b"},
+			dir: siblingRows(author, "Apollo 13.m4b", others...), want: "Apollo 13", wantSrc: SearchQuerySourceTitle, maxLists: 1},
+		{name: "Vitamin C beside unrelated books", book: database.Book{ID: "self", Title: "Vitamin C", FilePath: author + "/Vitamin C.m4b"},
+			dir: siblingRows(author, "Vitamin C.m4b", others...), want: "Vitamin C", wantSrc: SearchQuerySourceTitle, maxLists: 1},
+		{name: "Metro 2034 beside Metro 2033 (a year-like number never splits)", book: database.Book{ID: "self", Title: "Metro 2034", FilePath: author + "/Metro 2034.m4b"},
+			dir: siblingRows(author, "Metro 2034.m4b", "Metro 2033.m4b"), want: "Metro 2034", wantSrc: SearchQuerySourceTitle},
+		{name: "Plan B alone, sibling listing fails", book: database.Book{ID: "self", Title: "Plan B", FilePath: author + "/Plan B.m4b"},
+			want: "Plan B", wantSrc: SearchQuerySourceTitle},
+		{name: "counted part on a row holding the whole work uses its folder",
+			book: database.Book{ID: "self", Title: "Cobra 001 of 151", FilePath: "/library/Authors/Timothy Zahn/Cobra"},
+			files: []database.BookFile{{TrackNumber: 1, FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 001 of 151.mp3"},
+				{TrackNumber: 2, FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 002 of 151.mp3"}},
+			want: "Cobra", wantSrc: SearchQuerySourceFolderTitle, maxLists: 0},
+		{name: "counted part alone in its folder uses the transcription",
+			book: database.Book{ID: "self", Title: "Cobra 001 of 151", FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 001 of 151.mp3", TranscribedTitle: strp("Cobra")},
+			dir:  siblingRows("/library/Authors/Timothy Zahn/Cobra", "Cobra 001 of 151.mp3"),
+			want: "Cobra", wantSrc: SearchQuerySourceTranscribedTitle},
+		{name: "rip details on a lone row are cleaned",
+			book: database.Book{ID: "self", Title: "2002 - Neil Gaiman - American Gods [64k 20;57;42 577MB]", FilePath: author + "/American Gods.m4b"},
+			dir:  siblingRows(author, "American Gods.m4b"),
+			want: "2002 - Neil Gaiman - American Gods", wantSrc: SearchQuerySourceTitle},
+		{name: "rip-detail folder of a whole multi-file book is cleaned",
+			book: database.Book{ID: "self", Title: "", FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB]"},
+			files: []database.BookFile{{TrackNumber: 1, FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB]/01.mp3"},
+				{TrackNumber: 2, FilePath: "/library/Authors/Neil Gaiman/American Gods [64k 577MB]/02.mp3"}},
+			want: "American Gods", wantSrc: SearchQuerySourceFolderTitle},
+		{name: "a real title never lists the folder", book: database.Book{ID: "self", Title: "Dune Messiah", FilePath: author + "/Dune Messiah.m4b"},
+			dir: siblingRows(author, "Dune Messiah.m4b", others...), want: "Dune Messiah", wantSrc: SearchQuerySourceTitle, maxLists: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			f := fakeBookFiles{files: tc.files, dir: tc.dir, dirCalls: &calls}
+			if tc.dir == nil {
+				f.dirErr = errors.New("boom")
+			}
+			q := ResolveCandidateSearchQuery(f, &tc.book)
+			if !q.Usable || q.Title != tc.want || q.Source != tc.wantSrc {
+				t.Fatalf("got %+v, want %q from %s", q, tc.want, tc.wantSrc)
+			}
+			if tc.maxLists >= 0 && calls > max(tc.maxLists, 1) {
+				t.Fatalf("listed the folder %d times, want at most %d", calls, max(tc.maxLists, 1))
+			}
+			if tc.name == "a real title never lists the folder" && calls != 0 {
+				t.Fatalf("a real title listed the folder %d times", calls)
+			}
+		})
 	}
 }

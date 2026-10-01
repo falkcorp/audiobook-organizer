@@ -1,13 +1,15 @@
 // file: internal/metabatch/search_query.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
-// last-edited: 2026-09-29
+// last-edited: 2026-09-30
 //
 // Resolves the title a metadata search asks providers for a book.
 
 package metabatch
 
 import (
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -45,6 +47,14 @@ const SkipReasonNoUsableTitle = "no usable title"
 const SkipDetailNoUsableTitle = SkipReasonNoUsableTitle +
 	" (title is empty, a placeholder or a chapter number, and no transcribed title or folder name offers one)"
 
+// SkipKindSiblingPart names why a book with a title was not searched: it is
+// one file of a set the scanner filed as separate book rows in one folder
+// ("Cobra 100 of 151", "The Sunrise Lands 1" beside "...2", a folder name
+// carrying rip details beside other rows), so any title it could be searched
+// by names the whole work, and a whole-book candidate attached to one file's
+// row would stamp the book's metadata onto a chapter.
+const SkipKindSiblingPart = "one file of several book rows in its folder"
+
 // CandidateSearchQuery is the title a metadata search asks providers for a
 // book and where it came from. Usable is false when the book has no title
 // worth searching; the caller must then skip the book rather than search.
@@ -62,6 +72,9 @@ type CandidateSearchQuery struct {
 	// vouches for a candidate "X" by B.
 	Author string
 	Usable bool
+	// SkipKind, when not Usable, names a refusal the title alone does not
+	// explain (SkipKindSiblingPart); "" when the title's own kind does.
+	SkipKind string
 }
 
 // ResolveCandidateSearchQuery picks the title a metadata search asks
@@ -92,6 +105,21 @@ type CandidateSearchQuery struct {
 // If none is usable the result is not Usable and the book must be skipped
 // with SkipReasonNoUsableTitle -- never searched.
 //
+// A row that is one file of a set filed as separate book rows in one folder
+// (titleJudge.partRowRefused: "Cobra 100 of 151", "Elantris_copy179", "The
+// Sunrise Lands 1" beside "The Sunrise Lands 2", a rip-detail folder name
+// beside other rows) is refused OUTRIGHT, with SkipKindSiblingPart: no
+// stand-in is tried. Every stand-in -- the intro transcription, the folder
+// name -- names the whole work, and a fragment must be skipped, not cleaned
+// into its parent's title (the "06 Chapter 6" lesson): on 2026-09-29 65 such
+// rows were handed a whole book's candidate. A row that holds the whole work
+// (two or more present files) is not a part row, so "Cobra 001 of 151" on a
+// merged book still falls back to its folder.
+//
+// A title or folder name carrying rip details ("American Gods [64k
+// 20;57;42 577MB]"; metadata.StripRipJunk) is searched without them when the
+// row is not such a part row.
+//
 // A GetBookFiles error is treated as "no file rows": the file-level steps are
 // skipped and only the book's own path is tried, which is the safe direction.
 func ResolveCandidateSearchQuery(files SearchQueryReader, book *database.Book) CandidateSearchQuery {
@@ -99,8 +127,11 @@ func ResolveCandidateSearchQuery(files SearchQueryReader, book *database.Book) C
 		return CandidateSearchQuery{}
 	}
 	j := &titleJudge{files: files, book: book, bookID: book.ID, bookPath: book.FilePath}
-	if !j.unsearchable(book.Title) {
-		return CandidateSearchQuery{Title: book.Title, Source: SearchQuerySourceTitle, Usable: true}
+	if j.partRowRefused(book.Title) {
+		return CandidateSearchQuery{SkipKind: SkipKindSiblingPart}
+	}
+	if t, ok := j.ownTitle(book.Title); ok {
+		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceTitle, Usable: true}
 	}
 	if t := j.usableTitle(book.TranscribedTitle); t != "" {
 		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceTranscribedTitle,
@@ -113,10 +144,141 @@ func ResolveCandidateSearchQuery(files SearchQueryReader, book *database.Book) C
 				Author: trimmed(present[0].TranscribedAuthor), Usable: true}
 		}
 	}
-	if t := j.folderTitle(book.FilePath); t != "" {
+	t, refused := j.folderTitle(book.FilePath)
+	if t != "" {
 		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceFolderTitle, Usable: true}
 	}
+	if refused {
+		return CandidateSearchQuery{SkipKind: SkipKindSiblingPart}
+	}
 	return CandidateSearchQuery{}
+}
+
+// ownTitle returns the book's own title to search by and true, or false when
+// it is unsearchable. Rip details are cleaned off first (metadata.StripRipJunk);
+// the caller has already refused a part row (partRowRefused).
+func (j *titleJudge) ownTitle(title string) (string, bool) {
+	if cleaned, had := metadata.StripRipJunk(title); had {
+		if !hasLetterRe.MatchString(cleaned) || j.unsearchable(cleaned) {
+			return "", false
+		}
+		return cleaned, true
+	}
+	if j.unsearchable(title) {
+		return "", false
+	}
+	return title, true
+}
+
+// hasLetterRe: a title must hold a letter to be one.
+var hasLetterRe = regexp.MustCompile(`\pL`)
+
+// partRowRefused reports whether title shows this row to be one file of a
+// set the scanner filed as separate book rows (see ResolveCandidateSearchQuery):
+//
+//   - a counted part or copy suffix (metadata.IsCountedPartTitle: "002 of
+//     341", "_copy179") on a single-file row with other rows in its folder;
+//   - a bare trailing part token (metadata.SiblingPartStem: "The Sunrise
+//     Lands 1", "Sealed to the Flame E") with a sibling row whose file name
+//     starts with the same stem (stemSiblings) -- the shape alone is "Apollo
+//     13" or "Plan B";
+//   - rip details (metadata.StripRipJunk) on a single-file row with other
+//     rows in its folder: a folder name stamped onto each of its files.
+//
+// The folder is listed only when one of these shapes matches.
+func (j *titleJudge) partRowRefused(title string) bool {
+	if strings.TrimSpace(title) == "" {
+		return false
+	}
+	if metadata.IsCountedPartTitle(title) {
+		return j.isPartRow()
+	}
+	if _, had := metadata.StripRipJunk(title); had {
+		return j.isPartRow()
+	}
+	return j.stemSiblings(title)
+}
+
+// fileRowDir returns the folder holding this row's one file, or "" when the
+// row is not a single-file row (two or more present files: it holds the
+// whole work; or its path is a directory) or the folder is a library or
+// import root (metadata.IsGenericDirName), whose listing would be the whole
+// library and whose other rows are other books.
+func (j *titleJudge) fileRowDir() string {
+	present := j.presentFiles()
+	if len(present) > 1 {
+		return ""
+	}
+	p := j.bookPath
+	if len(present) == 1 {
+		p = present[0].FilePath
+	}
+	p = strings.TrimSpace(p)
+	if p == "" || !metadata.IsFileExt(filepath.Ext(p)) {
+		return ""
+	}
+	dir := filepath.Dir(p)
+	if dir == "." || dir == string(filepath.Separator) || metadata.IsGenericDirName(filepath.Base(dir)) {
+		return ""
+	}
+	return dir
+}
+
+// siblingPaths returns the FilePath of every OTHER live book row directly
+// in this single-file row's folder (fileRowDir), read at most once. A read
+// fault is no evidence: the title is then judged on its own, so a real title
+// is never refused on a read fault.
+func (j *titleJudge) siblingPaths() []string {
+	if j.siblingsLoaded {
+		return j.siblings
+	}
+	j.siblingsLoaded = true
+	dir := j.fileRowDir()
+	if dir == "" || j.files == nil {
+		return nil
+	}
+	all, err := j.files.LiveBookPathsUnderDir(dir)
+	if err != nil {
+		return nil
+	}
+	for id, p := range all {
+		if id == j.bookID || filepath.Dir(p) != dir {
+			continue
+		}
+		j.siblings = append(j.siblings, p)
+	}
+	sort.Strings(j.siblings)
+	return j.siblings
+}
+
+// isPartRow reports whether this single-file row shares its folder with
+// another live book row.
+func (j *titleJudge) isPartRow() bool { return len(j.siblingPaths()) > 0 }
+
+// leadingTrackRe is a track-number prefix on a file name ("01 - ", "003. ").
+var leadingTrackRe = regexp.MustCompile(`^\d{1,4}\s*[-.]?\s+`)
+
+// stemSiblings reports whether title ends in a bare part token
+// (metadata.SiblingPartStem) and a sibling row's file name, less its
+// extension and any track prefix, starts with the same stem as whole words:
+// "The Sunrise Lands 1" beside "The Sunrise Lands 2.mp3" or "The Sunrise
+// Lands 1-05.mp3", "Sealed to the Flame E" beside "Sealed to the Flame
+// A.mp3". "Plan B" filed beside its author's other books has no such
+// sibling and is searched.
+func (j *titleJudge) stemSiblings(title string) bool {
+	stem, _, ok := metadata.SiblingPartStem(title)
+	if !ok {
+		return false
+	}
+	want := normTitle(stem)
+	for _, p := range j.siblingPaths() {
+		base := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
+		base = normTitle(leadingTrackRe.ReplaceAllString(strings.TrimSpace(base), ""))
+		if base == want || strings.HasPrefix(base, want+" ") || strings.HasPrefix(base, want+"_") {
+			return true
+		}
+	}
+	return false
 }
 
 // titleJudge decides whether a title is worth searching for one book. Most
@@ -138,14 +300,21 @@ type titleJudge struct {
 	authorsLoaded bool
 	authorsErr    error
 	authors       []string
+	// siblingsLoaded/siblings: the other live rows directly in this
+	// single-file row's folder (siblingPaths), read once and only when a
+	// title's shape needs them.
+	siblingsLoaded bool
+	siblings       []string
 }
 
 // SearchQueryReader is what ResolveCandidateSearchQuery reads: the book's
-// files (fallback titles, heading corroboration) and its authors (a folder
-// named for the author is not a work folder).
+// files (fallback titles, heading corroboration), its authors (a folder
+// named for the author is not a work folder) and the other book rows in its
+// folder (a file of a set filed as separate rows; titleJudge.siblingPaths).
 type SearchQueryReader interface {
 	BookFilesGetter
 	database.BookAuthorReader
+	database.BookDirLister
 }
 
 // presentFiles returns the book's present files in play order
@@ -323,8 +492,8 @@ func (j *titleJudge) usableTitle(p *string) string {
 	if p == nil {
 		return ""
 	}
-	t := strings.TrimSpace(*p)
-	if j.unsearchable(t) {
+	t, ok := j.ownTitle(strings.TrimSpace(*p))
+	if !ok {
 		return ""
 	}
 	return t
@@ -334,17 +503,27 @@ func (j *titleJudge) usableTitle(p *string) string {
 // own, or "": metadata.WorkFolderTitle of the first present file's path, then
 // of the book's own path (a directory for a multi-file book). The organizer
 // files such books under "Unknown Title" folders, so the answer is run back
-// through titleJudge.unsearchable.
-func (j *titleJudge) folderTitle(bookPath string) string {
+// through titleJudge.unsearchable. A folder name carrying rip details
+// ("2002 - Neil Gaiman - American Gods [64k 20;57;42 577MB]") is cleaned
+// (metadata.StripRipJunk), unless this row is one file of several rows in
+// that folder: then refused is true and no folder is offered.
+func (j *titleJudge) folderTitle(bookPath string) (title string, refused bool) {
 	var paths []string
 	if present := j.presentFiles(); len(present) > 0 {
 		paths = append(paths, present[0].FilePath)
 	}
 	paths = append(paths, bookPath)
 	for _, p := range paths {
-		if t, ok := metadata.WorkFolderTitle(p); ok && !j.unsearchable(t) {
-			return t
+		t, ok := metadata.WorkFolderTitle(p)
+		if !ok {
+			continue
+		}
+		if _, had := metadata.StripRipJunk(t); had && j.isPartRow() {
+			return "", true
+		}
+		if t, ok := j.ownTitle(t); ok {
+			return t, false
 		}
 	}
-	return ""
+	return "", false
 }

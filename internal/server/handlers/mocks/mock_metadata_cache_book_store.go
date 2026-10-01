@@ -346,6 +346,68 @@ func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) RunAndReturn(run func(i
 	return _c
 }
 
+// LiveBookPathsUnderDir provides a mock function for the type MockMetadataCacheBookStore
+func (_mock *MockMetadataCacheBookStore) LiveBookPathsUnderDir(dir string) (map[string]string, error) {
+	ret := _mock.Called(dir)
+
+	if len(ret) == 0 {
+		panic("no return value specified for LiveBookPathsUnderDir")
+	}
+
+	var r0 map[string]string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (map[string]string, error)); ok {
+		return returnFunc(dir)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) map[string]string); ok {
+		r0 = returnFunc(dir)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(dir)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataCacheBookStore_LiveBookPathsUnderDir_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LiveBookPathsUnderDir'
+type MockMetadataCacheBookStore_LiveBookPathsUnderDir_Call struct {
+	*mock.Call
+}
+
+// LiveBookPathsUnderDir is a helper method to define mock.On call
+//   - dir string
+func (_e *MockMetadataCacheBookStore_Expecter) LiveBookPathsUnderDir(dir any) *MockMetadataCacheBookStore_LiveBookPathsUnderDir_Call {
+	return &MockMetadataCacheBookStore_LiveBookPathsUnderDir_Call{Call: _e.mock.On("LiveBookPathsUnderDir", dir)}
+}
+
+func (_c *MockMetadataCacheBookStore_LiveBookPathsUnderDir_Call) Run(run func(dir string)) *MockMetadataCacheBookStore_LiveBookPathsUnderDir_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_LiveBookPathsUnderDir_Call) Return(stringToString map[string]string, err error) *MockMetadataCacheBookStore_LiveBookPathsUnderDir_Call {
+	_c.Call.Return(stringToString, err)
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_LiveBookPathsUnderDir_Call) RunAndReturn(run func(dir string) (map[string]string, error)) *MockMetadataCacheBookStore_LiveBookPathsUnderDir_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ModifyBook provides a mock function for the type MockMetadataCacheBookStore
 func (_mock *MockMetadataCacheBookStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
 	ret := _mock.Called(id, fn)

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_title.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a88b51d9-3878-41d2-b50e-c04f1ff6793e
-// last-edited: 2026-09-29
+// last-edited: 2026-09-30
 //
 // The title the bulk metadata fetch searches a book by, for a book whose own
 // title is not worth searching.
@@ -72,13 +72,23 @@ func resolveBulkFetchQuery(store bulkFetchTitleStore, bookID, title, path, autho
 	}
 	q := metabatch.ResolveCandidateSearchQuery(store, book)
 	if !q.Usable {
-		kind, status := unsearchableTitleKind(title)
+		kind, status := unsearchableQueryKind(q, title)
 		return bulkFetchQuery{query: q, skipKind: kind, skipStatus: status}
 	}
 	return bulkFetchQuery{
 		query:    q,
 		identity: metafetch.FetchCacheIdentity(q.Title, author, book.ASIN, book.ISBN13, book.ISBN10),
 	}
+}
+
+// unsearchableQueryKind is unsearchableTitleKind, unless the resolver
+// refused the book for a reason its title alone does not show
+// (metabatch.SkipKindSiblingPart: one file of several rows in its folder).
+func unsearchableQueryKind(q metabatch.CandidateSearchQuery, title string) (kind, status string) {
+	if q.SkipKind != "" {
+		return q.SkipKind, metafetch.FetchStatusSkippedFragment
+	}
+	return unsearchableTitleKind(title)
 }
 
 // unsearchableTitleKind names what an unsearchable title is, for the skip

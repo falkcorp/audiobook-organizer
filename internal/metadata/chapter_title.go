@@ -1,7 +1,7 @@
 // file: internal/metadata/chapter_title.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c962e504-746a-454a-996f-1020803a8cab
-// last-edited: 2026-09-29
+// last-edited: 2026-09-30
 
 package metadata
 
@@ -42,9 +42,15 @@ func IsChapterOnlyTitle(title string) bool {
 // placeholders ("Unknown Title", "read by narrator";
 // authorname.IsPlaceholderTitle), a bare chapter position ("Chapter 3", "03";
 // IsChapterOnlyTitle), a chapter fragment of a shattered book ("06 Chapter
-// 6"; IsLikelyChapterFragment), or a labelled position in digits ("Book 1",
+// 6", "Cobra 100 of 151", "Elantris_copy179"; IsLikelyChapterFragment), or a
+// labelled position in digits ("Book 1",
 // "Vol. 2", "Episode 3"). A catalog answers any of these with whatever it
 // ranks first.
+//
+// A title ending in a bare part token ("The Sunrise Lands 1", "Sealed to the
+// Flame E"; SiblingPartStem) is NOT matched here either: "Apollo 13" and
+// "Plan B" are books, and only the book's sibling rows can tell the two
+// apart (metabatch's titleJudge).
 //
 // A heading in words or roman numerals ("Book Two", "Part II") and the name
 // of front or back matter ("Prologue", "Introduction") are NOT matched here:
@@ -61,11 +67,20 @@ func IsUnsearchableTitle(title string) bool {
 		IsLikelyChapterFragment(title) || sectionDigitTitleRe.MatchString(normHeading(title))
 }
 
-// MayBeUnsearchableTitle is IsUnsearchableTitle or IsSectionHeadingTitle: a
-// title a caller without the book's files hands to one that has them
+// MayBeUnsearchableTitle is IsUnsearchableTitle, IsSectionHeadingTitle, a
+// bare trailing part token (SiblingPartStem: "The Sunrise Lands 1") or rip
+// details (StripRipJunk: "American Gods [64k 577MB]"): a title a caller
+// without the book's files and folder hands to one that has them
 // (metabatch.ResolveCandidateSearchQuery) rather than searching it as-is.
 func MayBeUnsearchableTitle(title string) bool {
-	return IsUnsearchableTitle(title) || IsSectionHeadingTitle(title)
+	if IsUnsearchableTitle(title) || IsSectionHeadingTitle(title) {
+		return true
+	}
+	if _, _, ok := SiblingPartStem(title); ok {
+		return true
+	}
+	_, had := StripRipJunk(title)
+	return had
 }
 
 // sectionLabels are the labels a section position is written after.
