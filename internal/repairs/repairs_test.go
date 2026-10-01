@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-10-01
 
@@ -38,6 +38,9 @@ type memStore struct {
 	authors     map[int]*database.Author
 	bookAuthors map[string][]database.BookAuthor
 	authorErr   error
+	// narrators and bookNarrators back its narrator read.
+	narrators     map[int]*database.Narrator
+	bookNarrators map[string][]database.BookNarrator
 	// failHistory makes RecordMetadataChange fail for this field.
 	failHistory string
 }
@@ -68,6 +71,18 @@ func (s *memStore) GetBookAuthors(id string) ([]database.BookAuthor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]database.BookAuthor(nil), s.bookAuthors[id]...), nil
+}
+
+func (s *memStore) GetBookNarrators(id string) ([]database.BookNarrator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]database.BookNarrator(nil), s.bookNarrators[id]...), nil
+}
+
+func (s *memStore) GetNarratorByID(id int) (*database.Narrator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.narrators[id], nil
 }
 
 func (s *memStore) GetAuthorByID(id int) (*database.Author, error) {
@@ -1235,6 +1250,10 @@ func TestGuardBooks_Credits(t *testing.T) {
 		"primary author": func(_ *memStore, b *database.Book) { two := 2; b.AuthorID = &two },
 		"book_authors row": func(s *memStore, _ *database.Book) {
 			s.bookAuthors["b"] = []database.BookAuthor{{BookID: "b", AuthorID: 2}}
+		},
+		"book_narrators row": func(s *memStore, _ *database.Book) {
+			s.narrators = map[int]*database.Narrator{7: {ID: 7, Name: "Big Finish Audio Cast"}}
+			s.bookNarrators = map[string][]database.BookNarrator{"b": {{BookID: "b", NarratorID: 7}}}
 		},
 	} {
 		k, why, err := GuardBooks(seedOne(mut), nil, NewPathResolver(), []string{"b"})

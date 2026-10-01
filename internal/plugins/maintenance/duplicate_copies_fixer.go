@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-10-01
 
@@ -132,20 +132,23 @@ const (
 
 // Skip kinds this fixer sets itself (the framework adds the guard kinds).
 const (
-	dcSkipUnproven   = "skipped_copy_unproven"
-	dcSkipASIN       = "skipped_conflicting_asin"
-	dcSkipNotDup     = "skipped_owner_not_dup"
-	dcSkipNotClique  = "skipped_not_clique"
-	dcSkipNoSurvivor = "skipped_no_eligible_survivor"
-	dcSkipProgress   = "skipped_progress_layout"
-	dcSkipTrackOrder = "skipped_track_order"
-	dcSkipFoldCap    = "skipped_fold_cap"
-	dcSkipLoserEmpty = "skipped_loser_would_empty"
-	dcSkipTags       = "skipped_user_tags"
-	dcSkipITunesVG   = "skipped_itunes_version_group"
-	dcSkipNoHeir     = "skipped_no_primary_heir"
-	dcSkipUnreadable = "skipped_unreadable"
-	dcSkipBoxSet     = "skipped_box_set"
+	dcSkipUnproven = "skipped_copy_unproven"
+	dcSkipASIN     = "skipped_conflicting_asin"
+	dcSkipNotDup   = "skipped_owner_not_dup"
+	// dcSkipOwnerMerged: a dedup candidate on the pair is already merged
+	// (by a human or auto-resolve); this fixer does not remake that merge.
+	dcSkipOwnerMerged = "skipped_owner_merged"
+	dcSkipNotClique   = "skipped_not_clique"
+	dcSkipNoSurvivor  = "skipped_no_eligible_survivor"
+	dcSkipProgress    = "skipped_progress_layout"
+	dcSkipTrackOrder  = "skipped_track_order"
+	dcSkipFoldCap     = "skipped_fold_cap"
+	dcSkipLoserEmpty  = "skipped_loser_would_empty"
+	dcSkipTags        = "skipped_user_tags"
+	dcSkipITunesVG    = "skipped_itunes_version_group"
+	dcSkipNoHeir      = "skipped_no_primary_heir"
+	dcSkipUnreadable  = "skipped_unreadable"
+	dcSkipBoxSet      = "skipped_box_set"
 )
 
 // Identity thresholds.
@@ -171,6 +174,7 @@ const (
 	dcEdgeUnproven = "unproven"
 	dcEdgeASIN     = "asin"
 	dcEdgeNotDup   = "not_dup"
+	dcEdgeMerged   = "merged"
 )
 
 var dcLeadTrackRe = regexp.MustCompile(`^\s*\d{1,3}\s*[-_.]\s*`)
@@ -344,18 +348,23 @@ type dcVerdict struct {
 
 // dcJudge applies every identity clause to one pair. Each clause is checked
 // here and only here.
-func dcJudge(a, b *dcBook, notDup map[[2]string]string) dcVerdict {
+func dcJudge(a, b *dcBook, notDup dcRejections) dcVerdict {
 	if a.Title == "" || a.Title != b.Title {
 		return dcVerdict{}
 	}
-	if a.Author != "" && b.Author != "" && a.Author != b.Author {
+	dangling := dcDanglingAuthor(a.Author) || dcDanglingAuthor(b.Author)
+	if !dangling && a.Author != "" && b.Author != "" && a.Author != b.Author {
 		return dcVerdict{}
 	}
 	if x, y := dcStr(a.Core.ASIN), dcStr(b.Core.ASIN); x != "" && y != "" && !strings.EqualFold(x, y) {
 		return dcVerdict{Kind: dcEdgeASIN, Why: fmt.Sprintf("%s and %s carry different ASINs (%s, %s)", a.Core.ID, b.Core.ID, x, y)}
 	}
-	if why := notDup[dcPairKey(a.Core.ID, b.Core.ID)]; why != "" {
-		return dcVerdict{Kind: dcEdgeNotDup, Why: why}
+	if rj := notDup[dcPairKey(a.Core.ID, b.Core.ID)]; rj.Kind != "" {
+		return dcVerdict{Kind: rj.Kind, Why: rj.Why}
+	}
+	if dangling {
+		return dcVerdict{Kind: dcEdgeUnproven, Why: fmt.Sprintf("%s / %s: an author id has no author row (%s, %s), so the authors cannot be compared",
+			a.Core.ID, b.Core.ID, dcAuthorShown(a.Author), dcAuthorShown(b.Author))}
 	}
 	cov, ok := dcCoverageOf(a, b)
 	switch {
@@ -369,8 +378,9 @@ func dcJudge(a, b *dcBook, notDup map[[2]string]string) dcVerdict {
 
 // dcAuthorKey is the author clause's key: fbNorm of the author's name, ""
 // (matches any author) for no author or "Unknown Author". An author id with
-// no author row is unknown, not absent: its key names the id, so it matches
-// only itself and never a known author.
+// no author row is unknown, not absent: its key names the id
+// (dcDanglingAuthor), and dcJudge holds any pair with one as unproven, never
+// clear and never unrelated.
 func dcAuthorKey(authors map[int]string, id *int) string {
 	if id == nil {
 		return ""
@@ -383,6 +393,16 @@ func dcAuthorKey(authors map[int]string, id *int) string {
 		return a
 	}
 	return ""
+}
+
+// dcDanglingAuthor is an author key naming an id with no author row.
+func dcDanglingAuthor(k string) bool { return strings.HasPrefix(k, "?author#") }
+
+func dcAuthorShown(k string) string {
+	if k == "" {
+		return "no author"
+	}
+	return k
 }
 
 func dcStr(p *string) string {
@@ -443,27 +463,42 @@ type dcPrefReader interface {
 	GetUserPreference(key string) (*database.UserPreference, error)
 }
 
+// dcRejection is one owner decision about a pair: Kind dcEdgeNotDup (a
+// not_dup label, a dismissed candidate, a dismissed review group) or
+// dcEdgeMerged (a candidate already merged), with why.
+type dcRejection struct{ Kind, Why string }
+
+// dcRejections maps a sorted pair (dcPairKey) to its rejection.
+type dcRejections = map[[2]string]dcRejection
+
 // dcOwnerVerdicts reads every owner rejection of a book pair, with why:
 //   - not_dup labels, from any source;
-//   - dedup candidates with a terminal status (database.IsTerminalCandidateStatus:
-//     dismissed by a human, or merged by auto-resolve), each a decision about
-//     the pair this fixer must not remake;
+//   - dedup candidates with a terminal status (database.IsTerminalCandidateStatus):
+//     dismissed (a not_dup) or merged (its own kind, dcEdgeMerged), each a
+//     decision about the pair this fixer must not remake;
 //   - the review page's dismissed duplicate groups, every pair inside one.
+//
+// ids nil reads the candidates of the whole library (Plan); otherwise only
+// those of the books ids, through the O(k) entity index (a Replan: every
+// pair it judges has both books in ids). Labels are always read whole: they
+// are keyed by candidate id with no entity index, and DeleteCandidate drops
+// a candidate's keys but not its label, so a per-candidate read would miss an
+// orphaned not_dup.
 //
 // Every read is strict: a rejection it cannot read fails the plan rather than
 // reading as none, and so does no verdict store at all. The fragment fixer's
 // iTunes-parent rule reads the same verdicts.
-func dcOwnerVerdicts(vr DedupVerdictReader, prefs dcPrefReader) (map[[2]string]string, error) {
+func dcOwnerVerdicts(vr DedupVerdictReader, prefs dcPrefReader, ids []string) (dcRejections, error) {
 	if vr == nil {
 		return nil, errors.New("dedup verdict store unavailable: cannot honour the owner's not_dup labels and dismissals")
 	}
-	out := map[[2]string]string{}
-	add := func(a, b, why string) {
+	out := dcRejections{}
+	add := func(a, b, kind, why string) {
 		if a == "" || b == "" || a == b {
 			return
 		}
-		if k := dcPairKey(a, b); out[k] == "" {
-			out[k] = why
+		if k := dcPairKey(a, b); out[k].Kind == "" {
+			out[k] = dcRejection{Kind: kind, Why: why}
 		}
 	}
 	labels, err := vr.ListLabeledExamplesStrict(database.LabeledExampleFilter{Label: "not_dup"})
@@ -471,14 +506,32 @@ func dcOwnerVerdicts(vr DedupVerdictReader, prefs dcPrefReader) (map[[2]string]s
 		return nil, fmt.Errorf("list not_dup labels: %w", err)
 	}
 	for _, l := range labels {
-		add(l.EntityAID, l.EntityBID, fmt.Sprintf("%s and %s are labeled not_dup (%s)", l.EntityAID, l.EntityBID, l.LabelSource))
+		add(l.EntityAID, l.EntityBID, dcEdgeNotDup, fmt.Sprintf("%s and %s are labeled not_dup (%s)", l.EntityAID, l.EntityBID, l.LabelSource))
 	}
-	cands, err := vr.TerminalCandidatesStrict("book")
-	if err != nil {
-		return nil, fmt.Errorf("list decided dedup candidates: %w", err)
+	var cands []database.DedupCandidate
+	if ids == nil {
+		if cands, err = vr.TerminalCandidatesStrict("book"); err != nil {
+			return nil, fmt.Errorf("list decided dedup candidates: %w", err)
+		}
+	} else {
+		for _, id := range ids {
+			cs, err := vr.ListCandidatesForEntityStrict("book", id, "")
+			if err != nil {
+				return nil, fmt.Errorf("list dedup candidates of %s: %w", id, err)
+			}
+			for _, c := range cs {
+				if database.IsTerminalCandidateStatus(c.Status) {
+					cands = append(cands, c)
+				}
+			}
+		}
 	}
 	for _, c := range cands {
-		add(c.EntityAID, c.EntityBID, fmt.Sprintf("dedup candidate %d (%s / %s) is %s", c.ID, c.EntityAID, c.EntityBID, c.Status))
+		kind := dcEdgeNotDup
+		if c.Status == "merged" {
+			kind = dcEdgeMerged
+		}
+		add(c.EntityAID, c.EntityBID, kind, fmt.Sprintf("dedup candidate %d (%s / %s) is %s", c.ID, c.EntityAID, c.EntityBID, c.Status))
 	}
 	pref, err := prefs.GetUserPreference(dcDismissedGroupsPref)
 	if err != nil {
@@ -493,7 +546,7 @@ func dcOwnerVerdicts(vr DedupVerdictReader, prefs dcPrefReader) (map[[2]string]s
 			ids := strings.Split(k, "+")
 			for i := range ids {
 				for j := i + 1; j < len(ids); j++ {
-					add(ids[i], ids[j], fmt.Sprintf("the owner dismissed duplicate group %s", k))
+					add(ids[i], ids[j], dcEdgeNotDup, fmt.Sprintf("the owner dismissed duplicate group %s", k))
 				}
 			}
 		}
@@ -554,7 +607,7 @@ func (f *duplicateCopiesFixer) Plan(ctx context.Context, raw json.RawMessage, re
 	if err != nil {
 		return nil, err
 	}
-	notDup, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store)
+	notDup, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -576,7 +629,7 @@ func (f *duplicateCopiesFixer) Plan(ctx context.Context, raw json.RawMessage, re
 type dcRun struct {
 	lib    *fbLib
 	books  map[string]*dcBook
-	notDup map[[2]string]string
+	notDup dcRejections
 	res    *repairs.PathResolver
 	series map[int]string
 	// holders names the live books with a link row carrying a hash: the
@@ -643,7 +696,7 @@ func (r *dcRun) book(id string) *dcBook {
 
 // rowsFor builds every row over the snapshot. only limits the seeds (Plan's
 // book_ids); carried is the replanned row's stored state (nil on Plan).
-func (f *duplicateCopiesFixer) rowsFor(ctx context.Context, rep registry.Reporter, store OpsStore, lib *fbLib, notDup map[[2]string]string, only map[string]bool, carried *dcState) ([]repairs.Row, error) {
+func (f *duplicateCopiesFixer) rowsFor(ctx context.Context, rep registry.Reporter, store OpsStore, lib *fbLib, notDup dcRejections, only map[string]bool, carried *dcState) ([]repairs.Row, error) {
 	if rep == nil {
 		rep = dcQuiet{} // Replan: a few books, no op to report to
 	}
@@ -853,7 +906,12 @@ func (f *duplicateCopiesFixer) detail(store OpsStore, run *dcRun, b *dcBook) err
 			b.Doubt = fmt.Sprintf("authors of %s unreadable: %v", id, aerr)
 			return nil
 		}
-		if k, w := repairs.GuardBookCredits(id, dcStr(b.Core.Publisher), dcStr(b.Core.Narrator), authors); k == repairs.SkipOwnerManual {
+		narrators, nerr := repairs.BookNarratorNames(store, &full)
+		if nerr != nil {
+			b.Doubt = fmt.Sprintf("narrators of %s unreadable: %v", id, nerr)
+			return nil
+		}
+		if k, w := repairs.GuardBookCredits(id, dcStr(b.Core.Publisher), narrators, authors); k == repairs.SkipOwnerManual {
 			b.Manual = w
 		}
 	}
@@ -1248,6 +1306,8 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 				return fail(dcSkipASIN, v.Why)
 			case ok && v.Kind == dcEdgeNotDup:
 				return fail(dcSkipNotDup, v.Why)
+			case ok && v.Kind == dcEdgeMerged:
+				return fail(dcSkipOwnerMerged, v.Why)
 			}
 		}
 	}
@@ -1559,10 +1619,6 @@ func (f *duplicateCopiesFixer) Replan(ctx context.Context, _ json.RawMessage, pl
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	notDup, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store)
-	if err != nil {
-		return repairs.Row{}, err
-	}
 	lib := newFBLib()
 	c, err := f.fb.common(store, false)
 	if err != nil {
@@ -1651,6 +1707,17 @@ func (f *duplicateCopiesFixer) Replan(ctx context.Context, _ json.RawMessage, pl
 		}
 	}
 	lib.finish()
+	// The owner's verdicts on every pair this re-plan can judge: each has
+	// both books loaded, so the entity index of the loaded books covers it.
+	loaded := make([]string, 0, len(lib.books))
+	for id := range lib.books {
+		loaded = append(loaded, id)
+	}
+	sort.Strings(loaded)
+	notDup, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store, loaded)
+	if err != nil {
+		return repairs.Row{}, err
+	}
 	rows, err := f.rowsFor(ctx, nil, store, lib, notDup, members, &st)
 	if err != nil {
 		return repairs.Row{}, err

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-01
 
@@ -590,8 +590,8 @@ type fragLibrary struct {
 	itunesDoubt map[string]bool
 	// verdicts are the owner's pair rejections (dcOwnerVerdicts) the rule's
 	// identity gate honours; verdictsErr is why they could not be read, which
-	// turns the rule off (the fragments stay ambiguous).
-	verdicts    map[[2]string]string
+	// turns the rule off (the fragments stay ambiguous, and say why).
+	verdicts    dcRejections
 	verdictsErr string
 }
 
@@ -882,11 +882,7 @@ func (f *fragmentFixer) resolveITunesParents(ctx context.Context, rep registry.R
 	}
 	sort.Strings(ids)
 	if len(ids) > 0 {
-		v, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store)
-		if err != nil {
-			lib.verdictsErr = err.Error()
-		}
-		lib.verdicts = v
+		f.loadVerdicts(store, lib, nil)
 	}
 	type verdict struct {
 		why   string
@@ -917,6 +913,21 @@ func (f *fragmentFixer) resolveITunesParents(ctx context.Context, rep registry.R
 		}
 	}
 	return nil
+}
+
+// loadVerdicts reads the owner's pair verdicts the iTunes-parent rule's
+// identity gate honours: the whole library's (ids nil, Plan) or those of ids
+// (a Replan). A read failure turns the rule off; it is logged once here and
+// named on each row the rule would have acted on.
+func (f *fragmentFixer) loadVerdicts(store OpsStore, lib *fragLibrary, ids []string) {
+	v, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store, ids)
+	if err != nil {
+		lib.verdictsErr = err.Error()
+		fragLog.Warn("%s: the owner's dedup verdicts are unreadable, so the iTunes-parent rule is off for this plan: %s",
+			fragFixerID, lib.verdictsErr)
+		return
+	}
+	lib.verdicts = v
 }
 
 // itunesParentWhy tells whether parent book id is an iTunes copy, from the
@@ -965,19 +976,18 @@ func (lib *fragLibrary) dcBookOf(id string) *dcBook {
 // ok is false when the rule does not apply (a parent the plan could not tell,
 // two non-iTunes parents, no iTunes parent, an iTunes or non-chapter
 // fragment, an iTunes parent not proven a copy, or verdicts unreadable).
-func (f *fragmentFixer) disregardITunesParents(lib *fragLibrary, c *fragCandidate, ms []fragMatch) (kept []fragMatch, ignored []string, ok bool) {
+// note says why when the rule would have acted but could not read the
+// owner's verdicts; the fragment's ambiguous row carries it.
+func (f *fragmentFixer) disregardITunesParents(lib *fragLibrary, c *fragCandidate, ms []fragMatch) (kept []fragMatch, ignored []string, ok bool, note string) {
 	if c.itunesPID() != "" || c.File.ITunesPath != "" {
-		return nil, nil, false
+		return nil, nil, false, ""
 	}
 	if !dcLinkRow(database.BookFileCore{ID: c.File.ID, FilePath: c.File.Path, Duration: c.File.Duration}) ||
 		boilerplate.IsBoilerplateTitle(c.Book.Title) {
-		return nil, nil, false
-	}
-	if lib.verdictsErr != "" {
-		return nil, nil, false
+		return nil, nil, false, ""
 	}
 	if k, _ := f.guard(lib, []fragBook{c.Book}, map[string][]string{c.Book.ID: {c.ImportPath}}); k == repairs.SkipITunes || k == repairs.SkipGuardUnreadable {
-		return nil, nil, false
+		return nil, nil, false, ""
 	}
 	keep := ""
 	seen := map[string]bool{}
@@ -989,22 +999,27 @@ func (f *fragmentFixer) disregardITunesParents(lib *fragLibrary, c *fragCandidat
 		seen[p] = true
 		switch {
 		case lib.itunesDoubt[p]:
-			return nil, nil, false
+			return nil, nil, false, ""
 		case lib.itunes[p] != "":
 			ignored = append(ignored, p)
 		case keep != "":
-			return nil, nil, false // two non-iTunes parents
+			return nil, nil, false, "" // two non-iTunes parents
 		default:
 			keep = p
 		}
 	}
 	if keep == "" || len(ignored) == 0 {
-		return nil, nil, false
+		return nil, nil, false, ""
+	}
+	// The rule would act here: say so on the row when it cannot (S2), rather
+	// than leave a fragment ambiguous with no word of why.
+	if lib.verdictsErr != "" {
+		return nil, nil, false, "the iTunes-parent rule could not run: the owner's dedup verdicts are unreadable (" + lib.verdictsErr + ")"
 	}
 	kb := lib.dcBookOf(keep)
 	for _, it := range ignored {
 		if dcJudge(kb, lib.dcBookOf(it), lib.verdicts).Kind != dcEdgeProven {
-			return nil, nil, false
+			return nil, nil, false, ""
 		}
 	}
 	for _, m := range ms {
@@ -1013,7 +1028,7 @@ func (f *fragmentFixer) disregardITunesParents(lib *fragLibrary, c *fragCandidat
 		}
 	}
 	sort.Strings(ignored)
-	return kept, ignored, true
+	return kept, ignored, true, ""
 }
 
 // strandedRows lists, as held rows, every book attributeEmptied gave a row
@@ -1184,10 +1199,14 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		for _, m := range ms {
 			parents[m.Row.BookID] = true
 		}
+		note := ""
 		if len(parents) > 1 {
-			if kept, ignored, ok := f.disregardITunesParents(lib, c, ms); ok {
+			kept, ignored, ok, why := f.disregardITunesParents(lib, c, ms)
+			if ok {
 				ms, ignoredOf[c] = kept, ignored
 				parents = map[string]bool{kept[0].Row.BookID: true}
+			} else {
+				note = why
 			}
 		}
 		matchOf[c] = ms
@@ -1201,7 +1220,11 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 			rows = append(rows, f.holdRow(lib, c, fragClassHeld, fragClassHeld, fragSkipFilesMissing,
 				fmt.Sprintf("file %s is not on disk", c.File.Path), ms))
 		case len(parents) > 1 || len(ms) > 1:
-			rows = append(rows, f.ambiguousRow(lib, c, fmt.Sprintf("matches %d rows of %d parent books", len(ms), len(parents)), ms))
+			why := fmt.Sprintf("matches %d rows of %d parent books", len(ms), len(parents))
+			if note != "" {
+				why += "; " + note
+			}
+			rows = append(rows, f.ambiguousRow(lib, c, why, ms))
 		default:
 			claims[ms[0].Row.ID] = append(claims[ms[0].Row.ID], c)
 		}
@@ -1347,7 +1370,9 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 	extra := map[string][]string{}
 	var fpParts []string
 	done, withPID := 0, ""
+	var ignored []string
 	for _, p := range pairs {
+		ignored = append(ignored, p.IgnoredITunes...)
 		r.BookIDs = append(r.BookIDs, p.Frag.Book.ID)
 		r.Members = append(r.Members, member(lib, p.Frag.Book, "fragment"))
 		books = append(books, p.Frag.Book)
@@ -1403,8 +1428,39 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, repairs.SkipITunes,
 			withPID+"; retiring it would queue an iTunes remove at the purge"
 	}
+	if len(ignored) > 0 {
+		// Replan re-reads these and re-runs the rule's identity gate on them.
+		ignored = uniqueSorted(ignored)
+		st, err := json.Marshal(fragParentState{IgnoredITunes: ignored})
+		if err != nil {
+			r.Skipped, r.SkipReason = fragSkipUnreadable, "cannot store the iTunes parents set aside: "+err.Error()
+		}
+		r.State = st
+		fpParts = append(fpParts, "itunes-set-aside|"+strings.Join(ignored, ","))
+	}
 	r.Fingerprint = fragFingerprint(append([]string{rowKind, parentID}, fpParts...)...)
 	return r
+}
+
+// fragParentState is a parent row's Row.State: the iTunes copies of the
+// parent the iTunes-parent rule set aside, which Replan reloads so the rule
+// (and its identity gate, and the owner's verdicts) is decided again under
+// the apply's lock.
+type fragParentState struct {
+	IgnoredITunes []string `json:"ignored_itunes,omitempty"`
+}
+
+func uniqueSorted(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // fragGroupMember is one fragment of a no-parent group, in track order.
@@ -1718,25 +1774,8 @@ func (f *fragmentFixer) Replan(ctx context.Context, _ json.RawMessage, planned r
 		if err := ctx.Err(); err != nil {
 			return repairs.Row{}, err
 		}
-		b, err := store.GetBookByID(id)
-		if err != nil {
-			return repairs.Row{}, fmt.Errorf("read %s: %w", id, err)
-		}
-		if b == nil {
-			continue
-		}
-		lib.books[id] = fragBookOf(b)
-		if b.AuthorID != nil {
-			if a, aerr := store.GetAuthorByID(*b.AuthorID); aerr == nil && a != nil {
-				lib.authors[a.ID] = a.Name
-			}
-		}
-		rows, err := store.GetBookFiles(id)
-		if err != nil {
-			return repairs.Row{}, fmt.Errorf("read files of %s: %w", id, err)
-		}
-		for i := range rows {
-			lib.files[id] = append(lib.files[id], fragFileOf(id, &rows[i]))
+		if err := replanLoad(store, lib, id); err != nil {
+			return repairs.Row{}, err
 		}
 	}
 	class, rest, _ := strings.Cut(planned.RowID, ":")
@@ -1750,10 +1789,70 @@ func (f *fragmentFixer) Replan(ctx context.Context, _ json.RawMessage, planned r
 	}
 }
 
+// replanLoad reads book id and its rows into lib (a book that is gone is
+// left out).
+func replanLoad(store OpsStore, lib *fragLibrary, id string) error {
+	b, err := store.GetBookByID(id)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", id, err)
+	}
+	if b == nil {
+		return nil
+	}
+	lib.books[id] = fragBookOf(b)
+	if b.AuthorID != nil {
+		if a, aerr := store.GetAuthorByID(*b.AuthorID); aerr == nil && a != nil {
+			lib.authors[a.ID] = a.Name
+		}
+	}
+	rows, err := store.GetBookFiles(id)
+	if err != nil {
+		return fmt.Errorf("read files of %s: %w", id, err)
+	}
+	for i := range rows {
+		lib.files[id] = append(lib.files[id], fragFileOf(id, &rows[i]))
+	}
+	return nil
+}
+
 func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row, parentID string) (repairs.Row, error) {
+	// The iTunes copies the rule set aside at plan time come back as
+	// candidate parents, so the rule is decided again here: each is
+	// re-classified, its identity gate re-run against the parent, and the
+	// owner's verdicts on those books re-read (a not_dup or dismissal added
+	// since the plan makes the fragment ambiguous, and the row changes).
+	var ps fragParentState
+	if len(planned.State) > 0 {
+		if err := json.Unmarshal(planned.State, &ps); err != nil {
+			return changedRow(planned, "the plan's stored iTunes parents are unreadable; plan again"), nil
+		}
+	}
+	for _, it := range ps.IgnoredITunes {
+		if err := replanLoad(store, lib, it); err != nil {
+			return repairs.Row{}, err
+		}
+		if _, ok := lib.books[it]; !ok {
+			continue
+		}
+		why, doubt := lib.itunesParentWhy(store, it)
+		switch {
+		case doubt:
+			lib.itunesDoubt[it] = true
+		case why != "":
+			lib.itunes[it] = why
+		}
+	}
+	if len(ps.IgnoredITunes) > 0 {
+		f.loadVerdicts(store, lib, append([]string{parentID}, ps.IgnoredITunes...))
+	}
 	ix := newFragIndex()
 	for _, r := range lib.files[parentID] {
 		ix.add(r)
+	}
+	for _, it := range ps.IgnoredITunes {
+		for _, r := range lib.files[it] {
+			ix.add(r)
+		}
 	}
 	var cands []*fragCandidate
 	for _, id := range planned.BookIDs {
