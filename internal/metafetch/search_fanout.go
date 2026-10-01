@@ -77,6 +77,31 @@ func (st *fanoutSource) answered(ctx context.Context) bool {
 	return !st.stepFailed && st.open && ctx.Err() == nil
 }
 
+// accept is v.accept plus any answer carrying the ASIN being looked up: the
+// book's own ASIN identifies it, so no title or person filter may drop it.
+func (p fanoutParams) accept(v queryVariant, rs []metadata.BookMetadata) []metadata.BookMetadata {
+	kept := v.accept(rs, p.people)
+	if p.strong.asin == "" {
+		return kept
+	}
+	for _, r := range rs {
+		if !strings.EqualFold(strings.TrimSpace(r.ASIN), p.strong.asin) {
+			continue
+		}
+		dup := false
+		for _, k := range kept {
+			if strings.EqualFold(strings.TrimSpace(k.ASIN), p.strong.asin) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			kept = append(kept, r)
+		}
+	}
+	return kept
+}
+
 type fanoutParams struct {
 	ctx      context.Context
 	limiter  *rate.Limiter
@@ -169,7 +194,7 @@ func (mfs *Service) askVariant(p fanoutParams, st *fanoutSource, v queryVariant)
 				for i := range rs {
 					rs[i].PublishYearIsAudiobookRelease = isRelease
 				}
-				st.results = append(st.results, v.accept(rs, p.people)...)
+				st.results = append(st.results, p.accept(v, rs)...)
 				return
 			}
 		}
@@ -200,7 +225,7 @@ func (mfs *Service) askVariant(p fanoutParams, st *fanoutSource, v queryVariant)
 			}
 		}
 	}
-	st.results = append(st.results, v.accept(rs, p.people)...)
+	st.results = append(st.results, p.accept(v, rs)...)
 }
 
 // lookupASIN looks asin up on Audible or Audnexus. LookupByASIN is not on the
