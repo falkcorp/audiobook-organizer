@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-10-01
 
@@ -574,8 +574,8 @@ func TestResolveCandidateSearchQuery_FetchAndApplyAgree(t *testing.T) {
 		if apply != fetch {
 			t.Errorf("%s: apply %+v, fetch %+v", r.book.FilePath, apply, fetch)
 		}
-		if strings.Contains(r.book.FilePath, "/Great Sky River 18 6/") && apply.SkipKind != SkipKindSiblingPart {
-			t.Errorf("%s: got %+v, want a %q skip on both paths", r.book.FilePath, apply, SkipKindSiblingPart)
+		if strings.Contains(r.book.FilePath, "/Great Sky River 18 6/") && apply.SkipKind != SkipKindCousinPart {
+			t.Errorf("%s: got %+v, want a %q skip on both paths", r.book.FilePath, apply, SkipKindCousinPart)
 		}
 		if strings.HasPrefix(r.book.FilePath, "/imports/incoming/") && calls != 0 {
 			t.Errorf("%s: an import root was listed %d times", r.book.FilePath, calls)
@@ -743,16 +743,18 @@ func wrappedRows(parent, self string, cousins ...string) map[string]string {
 	return rows
 }
 
-// A fragment the scanner filed as its own row in a folder named exactly like
-// the file ("Gregory Benford/Great Sky River 18 6/Great Sky River 18 6.mp3")
-// has no sibling in its folder; its set is the like-named folders beside it.
-// Prod searched thousands of these against Audible until 2026-10-01. Each is
-// SKIPPED, on the same same-set and duration rules as a flat folder.
+// A short fragment the scanner filed as its own row in a folder named
+// exactly like the file ("Gregory Benford/Great Sky River 18 6/Great Sky
+// River 18 6.mp3") has no sibling in its folder; its set is the like-named
+// folders beside it. Prod searched thousands of these against Audible until
+// 2026-10-01. Each is SKIPPED as a cousin part: a trusted duration under
+// cousinMaxPartSec and a set signal a shelf of whole books lacks.
 func TestResolveCandidateSearchQuery_FolderWrappedPartRowsAreSkipped(t *testing.T) {
 	const (
 		benford = "/library/Authors/Gregory Benford"
 		eldest  = "/library/Authors/Christopher Paolini/Eldest"
 	)
+	gsr := numbered("Great Sky River 18 %d.mp3", 7, 6)
 	cases := []struct {
 		name    string
 		parent  string
@@ -761,16 +763,14 @@ func TestResolveCandidateSearchQuery_FolderWrappedPartRowsAreSkipped(t *testing.
 		cousins []string
 		dur     int
 	}{
-		{"counted part", benford, "Great Sky River 179 of 200.mp3", "Great Sky River 179 of 200",
-			[]string{"Great Sky River 178 of 200.mp3", "Great Sky River 180 of 200.mp3"}, 1200},
-		{"counted part, cousins beside another set", benford, "In The Ocean Of Night 123 of 180.mp3", "In The Ocean Of Night 123 of 180",
-			[]string{"In The Ocean Of Night 122 of 180.mp3", "In The Ocean Of Night 124 of 180.mp3", "Great Sky River 179 of 200.mp3"}, 1200},
-		{"counted part, unknown duration, big set", benford, "Great Sky River 179 of 200.mp3", "Great Sky River 179 of 200",
-			numbered("Great Sky River %03d of 200.mp3", 6, 0), 0},
-		{"stem part", benford, "Great Sky River 18 6.mp3", "Great Sky River 18 6",
+		{"sub-numbered stem, 68 s", benford, "Great Sky River 18 6.mp3", "Great Sky River 18 6", gsr, 68},
+		{"sub-numbered stem, two cousins", benford, "Great Sky River 18 6.mp3", "Great Sky River 18 6",
 			[]string{"Great Sky River 18 5.mp3", "Great Sky River 18 4.mp3"}, 1200},
-		{"stem part, unknown duration, big set", benford, "Great Sky River 18 6.mp3", "Great Sky River 18 6",
-			numbered("Great Sky River 18 %d.mp3", 5, 0), 0},
+		{"counted part of 180, 262 s", benford, "In The Ocean Of Night 123 of 180.mp3", "In The Ocean Of Night 123 of 180",
+			[]string{"In The Ocean Of Night 122 of 180.mp3", "In The Ocean Of Night 124 of 180.mp3", "Great Sky River 179 of 200.mp3"}, 262},
+		{"counted part of 200", benford, "Great Sky River 179 of 200.mp3", "Great Sky River 179 of 200",
+			[]string{"Great Sky River 178 of 200.mp3", "Great Sky River 180 of 200.mp3"}, 1200},
+		{"single-token stem with 12 cousins", benford, "Stem 3.mp3", "Stem 3", numbered("Stem %d.mp3", 13, 3), 300},
 		{"chapter number beside chapter-number cousins", eldest, "98.mp3", "98", []string{"97.mp3", "96.mp3"}, 300},
 		{"empty title on a chapter-number file beside chapter-number cousins", eldest, "98.mp3", "", []string{"97.mp3", "96.mp3"}, 300},
 	}
@@ -782,8 +782,8 @@ func TestResolveCandidateSearchQuery_FolderWrappedPartRowsAreSkipped(t *testing.
 			files := fakeBookFiles{files: []database.BookFile{file}, dir: wrappedRows(tc.parent, tc.self, tc.cousins...)}
 			for _, memo := range []*FolderMemo{nil, NewFolderMemo()} {
 				q := ResolveCandidateSearchQueryMemo(files, &book, memo)
-				if q.Usable || q.SkipKind != SkipKindSiblingPart {
-					t.Fatalf("memo=%v: got %+v, want a %q skip", memo != nil, q, SkipKindSiblingPart)
+				if q.Usable || q.SkipKind != SkipKindCousinPart {
+					t.Fatalf("memo=%v: got %+v, want a %q skip", memo != nil, q, SkipKindCousinPart)
 				}
 			}
 		})
@@ -791,19 +791,31 @@ func TestResolveCandidateSearchQuery_FolderWrappedPartRowsAreSkipped(t *testing.
 }
 
 // One book per folder, named for the book, is also how whole books are
-// shelved. Cousins are evidence only for a title that is itself a part
-// shape AND only on the same rules as siblings: a whole-book duration wins,
-// cousins must be of the same set, twins inside one cousin folder count
-// once, a chapter-number title needs a chapter-named FILE and chapter-named
-// cousins, rip details never borrow cousins, a root parent is never listed,
-// and a failed listing of the row's own folder is no evidence.
+// shelved, so cousins are evidence only under cousinPart's rules: a trusted
+// duration under 30 min (an unknown one, or 30 min-2 h, never counts them),
+// a set signal for a single-token or small counted title, same-set cousins
+// counted once per folder, a chapter-named FILE for a chapter-number title,
+// never for rip details, and never under a root, generic, genre or
+// many-works parent or one over the row cap. The first six cases are the
+// whole-book series the adversarial review of #3640 found refused at
+// 874c56c8a.
 func TestResolveCandidateSearchQuery_FolderWrappedWholeBooksAreSearched(t *testing.T) {
 	const (
-		herbert = "/library/Authors/Various"
+		various = "/library/Authors/Various"
 		benford = "/library/Authors/Gregory Benford"
 		gaiman  = "/library/Authors/Neil Gaiman"
 		tenH    = 10 * 3600
 	)
+	gsr := numbered("Great Sky River 18 %d.mp3", 7, 6)
+	type sz int
+	const (
+		sized sz = iota // FileSize = dur * 8000 (a trusted duration)
+		noSize
+	)
+	bigParent := wrappedRows(benford, "Great Sky River 18 6.mp3", gsr...)
+	for i := range cousinParentMaxRows {
+		bigParent[fmt.Sprintf("filler%d", i)] = fmt.Sprintf("%s/Other/%04d.mp3", benford, i)
+	}
 	cases := []struct {
 		name        string
 		parent      string
@@ -812,41 +824,77 @@ func TestResolveCandidateSearchQuery_FolderWrappedWholeBooksAreSearched(t *testi
 		dir         map[string]string // nil: wrappedRows(parent, self, cousins...)
 		cousins     []string
 		dur         int
+		size        sz
 		importRoot  string
 		dirErr      bool
-		want        string
-		wantSrc     string
-		parentLists int // how often the parent may be listed
+		want        string // "" : only assert it was not refused as a part
+		parentLists int    // how often the parent may be listed; with a memo, a
+		// case with parentLists 1 MUST list it (the cousin code was reached)
 	}{
-		{name: "Book A beside Book B", parent: herbert, self: "Book A.m4b", title: "Book A",
-			cousins: []string{"Book B.m4b", "Book C.m4b"}, dur: 1200, want: "Book A", wantSrc: SearchQuerySourceTitle},
-		{name: "junk chapter tag on a wrapped whole book", parent: herbert, self: "Dune.m4b", title: "01",
-			cousins: []string{"Hyperion.m4b", "Neuromancer.m4b"}, dur: 1200, want: "Dune", wantSrc: SearchQuerySourceFolderTitle},
-		{name: "stem title at 10 h beside its series", parent: herbert, self: "Mistborn 1.m4b", title: "Mistborn 1",
-			cousins: numbered("Mistborn %d.m4b", 6, 1), dur: tenH, want: "Mistborn 1", wantSrc: SearchQuerySourceTitle},
-		{name: "counted title at 10 h beside its set", parent: benford, self: "Great Sky River 179 of 200.mp3", title: "Great Sky River 179 of 200",
-			cousins: numbered("Great Sky River %03d of 200.mp3", 6, 0), dur: tenH, want: "Great Sky River 179 of 200", wantSrc: SearchQuerySourceTitle},
-		{name: "stem title, unknown duration, small set", parent: herbert, self: "Mistborn 1.m4b", title: "Mistborn 1",
-			cousins: numbered("Mistborn %d.m4b", 3, 1), want: "Mistborn 1", wantSrc: SearchQuerySourceTitle, parentLists: 1},
+		// The review's probes.
+		{name: "Mistborn 1-7, no duration", parent: various, self: "Mistborn 1.m4b", title: "Mistborn 1",
+			cousins: numbered("Mistborn %d.m4b", 7, 1), want: "Mistborn 1"},
+		{name: "Mistborn 1-7, 10 h with no size", parent: various, self: "Mistborn 1.m4b", title: "Mistborn 1",
+			cousins: numbered("Mistborn %d.m4b", 7, 1), dur: tenH, size: noSize, want: "Mistborn 1"},
+		{name: "Magic Tree House 1-3, 1 h", parent: various, self: "Magic Tree House 1.m4b", title: "Magic Tree House 1",
+			cousins: numbered("Magic Tree House %d.m4b", 3, 1), dur: 3600, want: "Magic Tree House 1"},
+		{name: "Wheel of Time #03 of 14 beside 13, no duration", parent: various, self: "Wheel of Time #03 of 14.m4b", title: "Wheel of Time #03 of 14",
+			cousins: numbered("Wheel of Time #%02d of 14.m4b", 14, 3), want: "Wheel of Time #03 of 14"},
+		{name: "Wheel of Time 01-14, no duration", parent: various, self: "Wheel of Time 01.m4b", title: "Wheel of Time 01",
+			cousins: numbered("Wheel of Time %02d.m4b", 14, 1), want: "Wheel of Time 01"},
+		{name: "Discworld 01-41, 10 h with no size", parent: various, self: "Discworld 01.m4b", title: "Discworld 01",
+			cousins: numbered("Discworld %02d.m4b", 41, 1), dur: tenH, size: noSize, want: "Discworld 01"},
+		{name: "Part 1 beside Part 2, 1 h", parent: various, self: "Part 1.m4b", title: "Part 1",
+			cousins: []string{"Part 2.m4b"}, dur: 3600},
+
+		// The 30 min gate: a real fragment set, but a long file.
+		{name: "sub-numbered stem at 45 min", parent: benford, self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
+			cousins: gsr, dur: 45 * 60, want: "Great Sky River 18 6"},
+		{name: "sub-numbered stem at exactly 30 min", parent: benford, self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
+			cousins: gsr, dur: cousinMaxPartSec, want: "Great Sky River 18 6"},
+		{name: "counted title at 10 h", parent: benford, self: "Great Sky River 179 of 200.mp3", title: "Great Sky River 179 of 200",
+			cousins: numbered("Great Sky River %03d of 200.mp3", 6, 0), dur: tenH, want: "Great Sky River 179 of 200"},
+
+		// The set signal.
+		{name: "single-token stem with 3 cousins at 5 min", parent: benford, self: "Stem 3.mp3", title: "Stem 3",
+			cousins: []string{"Stem 1.mp3", "Stem 2.mp3", "Stem 4.mp3"}, dur: 300, want: "Stem 3", parentLists: 1},
+		{name: "Dragon Saga 2 beside Dragon Saga 1 and 3 at 5 min", parent: various, self: "Dragon Saga 2.m4b", title: "Dragon Saga 2",
+			cousins: []string{"Dragon Saga 1.m4b", "Dragon Saga 3.m4b"}, dur: 300, want: "Dragon Saga 2", parentLists: 1},
+		{name: "counted title of 7 beside its 6 others at 5 min", parent: various, self: "Saga 3 of 7.m4b", title: "Saga 3 of 7",
+			cousins: numbered("Saga %d of 7.m4b", 7, 3), dur: 300, want: "Saga 3 of 7", parentLists: 1},
 		{name: "counted title beside another set's parts", parent: benford, self: "Great Sky River 179 of 200.mp3", title: "Great Sky River 179 of 200",
 			cousins: []string{"In The Ocean Of Night 122 of 180.mp3", "In The Ocean Of Night 124 of 180.mp3"}, dur: 1200,
-			want: "Great Sky River 179 of 200", wantSrc: SearchQuerySourceTitle, parentLists: 1},
+			want: "Great Sky River 179 of 200", parentLists: 1},
 		{name: "twins inside one cousin folder count once", parent: benford, self: "Great Sky River 179 of 200.mp3", title: "Great Sky River 179 of 200",
 			dir: map[string]string{
 				"self":  wrappedPath(benford, "Great Sky River 179 of 200.mp3"),
 				"twin1": wrappedPath(benford, "Great Sky River 178 of 200.mp3"),
 				"twin2": wrappedPath(benford, "Great Sky River 178 of 200.mp3"),
 				"twin3": wrappedPath(benford, "Great Sky River 178 of 200.m4b"),
-			}, dur: 1200, want: "Great Sky River 179 of 200", wantSrc: SearchQuerySourceTitle, parentLists: 1},
+			}, dur: 1200, want: "Great Sky River 179 of 200", parentLists: 1},
+
+		// Chapter-number titles need a chapter-named FILE.
+		{name: "junk chapter tag on a wrapped whole book beside chapter-named cousins", parent: various, self: "Dune.m4b", title: "01",
+			cousins: []string{"02.m4b", "03.m4b"}, dur: 300, want: "Dune"},
+
+		// Rip details never borrow cousins.
 		{name: "rip details never borrow cousins", parent: gaiman, self: "American Gods [64k].m4b", title: "American Gods [64k]",
 			cousins: []string{"Coraline [64k].m4b", "Stardust [64k].m4b", "Neverwhere [64k].m4b", "Anansi Boys [64k].m4b", "Norse Mythology [64k].m4b"},
-			want:    "American Gods", wantSrc: SearchQuerySourceTitle},
-		{name: "a parent that is an import root is never listed", parent: "/imports/incoming", self: "Cobra 100 of 151.mp3", title: "Cobra 100 of 151",
-			cousins: []string{"Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3"}, dur: 1200, importRoot: "/imports/incoming",
-			want: "Cobra 100 of 151", wantSrc: SearchQuerySourceTitle},
-		{name: "own folder unreadable: no cousin listing", parent: benford, self: "Great Sky River 179 of 200.mp3", title: "Great Sky River 179 of 200",
-			cousins: []string{"Great Sky River 178 of 200.mp3", "Great Sky River 180 of 200.mp3"}, dur: 1200, dirErr: true,
-			want: "Great Sky River 179 of 200", wantSrc: SearchQuerySourceTitle},
+			dur:     300, want: "American Gods"},
+
+		// Parents never listed.
+		{name: "a parent that is an import root", parent: "/imports/incoming", self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
+			cousins: gsr, dur: 68, importRoot: "/imports/incoming", want: "Great Sky River 18 6"},
+		{name: "a genre-shelf parent", parent: "/library/Science Fiction", self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
+			cousins: gsr, dur: 68, want: "Great Sky River 18 6"},
+		{name: "an Authors parent", parent: "/library/Authors", self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
+			cousins: gsr, dur: 68, want: "Great Sky River 18 6"},
+		{name: "an iTunes Media parent", parent: "/library/iTunes Media", self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
+			cousins: gsr, dur: 68, want: "Great Sky River 18 6"},
+		{name: "own folder unreadable", parent: benford, self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
+			cousins: gsr, dur: 68, dirErr: true, want: "Great Sky River 18 6"},
+		{name: "a parent over the row cap", parent: benford, self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
+			dir: bigParent, dur: 68, want: "Great Sky River 18 6", parentLists: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -858,9 +906,13 @@ func TestResolveCandidateSearchQuery_FolderWrappedWholeBooksAreSearched(t *testi
 			if dir == nil {
 				dir = wrappedRows(tc.parent, tc.self, tc.cousins...)
 			}
+			size := int64(tc.dur) * 8000
+			if tc.size == noSize {
+				size = 0
+			}
 			calls := map[string]int{}
 			f := fakeBookFiles{dir: dir, callsByDir: calls,
-				files: []database.BookFile{{FilePath: path, Duration: tc.dur, FileSize: int64(tc.dur) * 8000}}}
+				files: []database.BookFile{{FilePath: path, Duration: tc.dur, FileSize: size}}}
 			if tc.dirErr {
 				f.dirErr = errors.New("boom")
 			}
@@ -868,14 +920,43 @@ func TestResolveCandidateSearchQuery_FolderWrappedWholeBooksAreSearched(t *testi
 			for _, memo := range []*FolderMemo{nil, NewFolderMemo()} {
 				clear(calls)
 				q := ResolveCandidateSearchQueryMemo(f, &book, memo)
-				if !q.Usable || q.Title != tc.want || q.Source != tc.wantSrc {
-					t.Fatalf("memo=%v: got %+v, want %q from %s", memo != nil, q, tc.want, tc.wantSrc)
+				if q.SkipKind != "" {
+					t.Fatalf("memo=%v: got %+v, want no part skip", memo != nil, q)
 				}
-				if n := calls[tc.parent]; n > tc.parentLists {
-					t.Fatalf("memo=%v: parent listed %d times, want at most %d", memo != nil, n, tc.parentLists)
+				if tc.want != "" && (!q.Usable || q.Title != tc.want) {
+					t.Fatalf("memo=%v: got %+v, want %q searched", memo != nil, q, tc.want)
+				}
+				if n := calls[tc.parent]; n > tc.parentLists || (memo != nil && n != tc.parentLists) {
+					t.Fatalf("memo=%v: parent listed %d times, want %d", memo != nil, n, tc.parentLists)
 				}
 			}
 		})
+	}
+}
+
+// A cousin parent over cousinParentMaxRows is reported through its own
+// rate-limited warning, once per read.
+func TestResolveCandidateSearchQuery_CousinParentCapIsReported(t *testing.T) {
+	const parent = "/library/Authors/Gregory Benford"
+	rows := wrappedRows(parent, "Great Sky River 18 6.mp3", numbered("Great Sky River 18 %d.mp3", 7, 6)...)
+	for i := range cousinParentMaxRows {
+		rows[fmt.Sprintf("filler%d", i)] = fmt.Sprintf("%s/Other/%04d.mp3", parent, i)
+	}
+	path := wrappedPath(parent, "Great Sky River 18 6.mp3")
+	f := fakeBookFiles{dir: rows, files: []database.BookFile{{FilePath: path, Duration: 68, FileSize: 68 * 8000}}}
+	book := database.Book{ID: "self", Title: "Great Sky River 18 6", FilePath: path}
+	before, listBefore := cousinCapWarn.failures.Load(), listWarn.failures.Load()
+	memo := NewFolderMemo()
+	for range 3 {
+		if q := ResolveCandidateSearchQueryMemo(f, &book, memo); q.SkipKind != "" {
+			t.Fatalf("got %+v, want no part skip", q)
+		}
+	}
+	if got := cousinCapWarn.failures.Load() - before; got != 1 {
+		t.Fatalf("cap reported %d times over 3 rows of one pass, want 1", got)
+	}
+	if got := listWarn.failures.Load() - listBefore; got != 0 {
+		t.Fatalf("cap reported as a listing failure %d times, want 0", got)
 	}
 }
 
