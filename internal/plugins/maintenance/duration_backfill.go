@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.8.0
+// version: 2.8.1
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-09-26
+// last-edited: 2026-10-01
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -132,7 +132,7 @@ type durationReextractParams struct {
 	// in ABS. Accepted as book_ids too.
 	BookIDs []string `json:"bookIds,omitempty"`
 	// ZeroRowsOnly is the narrow repair for books that read "0" in ABS: only
-	// books ABS lists (primary + organized) are examined, and only file rows
+	// books ABS lists (database.ABSLibraryFilter) are examined, and only file rows
 	// whose stored Duration is <= 0 are written.
 	//
 	// Only a book's COUNTED rows are filled (database.SplitOwnFolderFiles):
@@ -616,12 +616,15 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	producerErr := make(chan error, 1)
 	go func() {
 		dispatched := 0
+		// Zero-rows mode repairs exactly what ABS lists: the shared filter,
+		// not a hand-written copy (which read a nil primary flag as NOT
+		// primary and ignored quarantine; visibility audit 2026-10-01 #2).
+		absLists := database.ABSLibraryFilter()
 		visit := func(book database.Book) error {
 			if params.Limit > 0 && dispatched >= params.Limit {
 				return errLimitReached
 			}
-			if zeroRows && !(book.IsPrimaryVersion != nil && *book.IsPrimaryVersion &&
-				book.LibraryState != nil && *book.LibraryState == "organized") {
+			if zeroRows && !absLists.Matches(&book) {
 				return nil // zero-rows mode: only books ABS lists
 			}
 			if params.OnlyMissingDuration && book.Duration != nil && *book.Duration > 0 {
