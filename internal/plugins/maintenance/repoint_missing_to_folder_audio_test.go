@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7aa3a17c-fb70-48c4-ad3c-0911029bae0b
-// last-edited: 2026-09-25
+// last-edited: 2026-10-01
 
 package maintenance
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -656,4 +657,36 @@ func TestRepointFolderAudio_ReportsRequestedIDsOutOfScope(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"nope"}, report.OutOfScope)
 	require.Equal(t, 1, report.Planned)
+}
+
+// TestRepointFolderAudio_ScopeIsExactlyWhatABSLists pins the op's scope to
+// database.ABSLibraryFilter, the rule the ABS surface lists by (visibility
+// audit 2026-10-01 §3 #1). The scope used to be hand-written: explicit
+// IsPrimaryVersion==true and no quarantine check. An organized, ungrouped book
+// with a nil flag -- which ABS lists, nil counting as primary -- was never
+// repaired, and a quarantined book ABS hides was.
+func TestRepointFolderAudio_ScopeIsExactlyWhatABSLists(t *testing.T) {
+	organized := "organized"
+	imported := "imported"
+	books := []database.BookCore{
+		{ID: "nil-flag", LibraryState: &organized},                                                                 // ABS lists it
+		{ID: "explicit-true", LibraryState: &organized, IsPrimaryVersion: new(true)},                               // ABS lists it
+		{ID: "quarantined", LibraryState: &organized, IsPrimaryVersion: new(true), QuarantinedAt: new(time.Now())}, // hidden
+		{ID: "demoted", LibraryState: &organized, IsPrimaryVersion: new(false)},                                    // hidden
+		{ID: "imported", LibraryState: &imported},                                                                  // hidden
+		{ID: "trashed", LibraryState: &organized, MarkedForDeletion: new(true)},                                    // hidden
+	}
+	s, err := rfScopedBooks(&rfFakeStore{books: books}, nil)
+	require.NoError(t, err)
+
+	var got []string
+	for _, b := range s.scoped {
+		got = append(got, b.ID)
+	}
+	require.ElementsMatch(t, []string{"nil-flag", "explicit-true"}, got)
+	// Liveness is still recorded for EVERY row, scoped or not: the owner
+	// check reads it for books outside the scope.
+	require.Len(t, s.live, len(books))
+	require.True(t, s.live["quarantined"])
+	require.False(t, s.live["trashed"])
 }

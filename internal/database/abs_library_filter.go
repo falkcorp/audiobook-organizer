@@ -1,7 +1,7 @@
 // file: internal/database/abs_library_filter.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b7e8dfea-f143-4f43-86c6-b41fa3542dec
-// last-edited: 2026-09-25
+// last-edited: 2026-10-01
 
 package database
 
@@ -32,4 +32,17 @@ func (f BookSummaryFilter) Matches(b *Book) bool {
 		return false
 	}
 	return bookMatchesSummaryFilter(b, f)
+}
+
+// MatchesCore is Matches for a BookCore row, for scope builders that page
+// GetAllBooksCore. It converts the row and runs the SAME predicate rather
+// than restating it for the second row type: every column the predicate reads
+// (primary flag, trash bit, quarantine, library state, review status) is
+// carried by BookCore and copied by ToBook.
+func (f BookSummaryFilter) MatchesCore(c *BookCore) bool {
+	if c == nil {
+		return false
+	}
+	b := c.ToBook()
+	return bookMatchesSummaryFilter(&b, f)
 }
