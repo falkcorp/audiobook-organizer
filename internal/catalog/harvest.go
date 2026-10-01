@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -187,10 +188,12 @@ func (h *Harvester) fetchAll(ctx context.Context, name string, touch func()) fet
 func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func()) (database.CatalogAuthorState, error) {
 	now := h.Cfg.Now().UTC()
 	st := database.CatalogAuthorState{Key: a.Key, Name: a.Name, LastAttemptAt: now, OpID: h.Cfg.OpID}
+	var prevASINs []string
 	if prev, err := h.Store.GetAuthorState(a.Key); err != nil {
 		return st, fmt.Errorf("catalog harvest %q: read state: %w", a.Name, err)
 	} else if prev != nil {
 		st.LastCompleteAt = prev.LastCompleteAt
+		prevASINs = prev.AuthorASINs
 	}
 
 	fr := h.fetchAll(ctx, a.Name, touch)
@@ -210,10 +213,23 @@ func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 		}
 		return p, err
 	}
-	var res Resolution
-	var resErr error
-	if fr.err == nil {
-		res, resErr = ResolveAuthorASINs(ctx, a.Name, a.OwnedASINs, fr.products, lookup)
+	// A fetch that stopped early still resolves from what it did receive, but
+	// makes no lookups (the provider just failed or stood down).
+	if fr.err != nil {
+		lookup = nil
+	}
+	res, resErr := ResolveAuthorASINs(ctx, a.Name, a.OwnedASINs, fr.products, lookup)
+	if (fr.err != nil || resErr != nil || res.LookupErrors > 0) && prevASINs != nil {
+		// An incomplete resolution must not downgrade entries an earlier
+		// complete run confirmed by ASIN to name_only (or keep a homonym the
+		// earlier run dropped): fall back to the identities already known.
+		for _, asin := range prevASINs {
+			if !slices.Contains(res.AuthorASINs, asin) {
+				res.AuthorASINs = append(res.AuthorASINs, asin)
+			}
+		}
+		slices.Sort(res.AuthorASINs)
+		res.Conflict = len(res.AuthorASINs) > 1
 	}
 	st.AuthorASINs, st.Conflict = res.AuthorASINs, res.Conflict
 
