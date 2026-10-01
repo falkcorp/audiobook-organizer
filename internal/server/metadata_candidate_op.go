@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
 // last-edited: 2026-10-01
 //
@@ -131,9 +131,12 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 		// result-row filter below stays as a second, independent guard.
 		ResumePolicy:   opsregistry.ResumeRestart,
 		ConcurrencyKey: "metadata.candidate-fetch",
-		Permissions:    []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:   []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkGeneric},
-		Run:            s.runMetadataCandidateFetchOp,
+		// The author-catalog harvest shares Audible's token bucket. DependsOn
+		// is one-directional, so each op lists the other.
+		DependsOn:    []string{catalogHarvestOpID},
+		Permissions:  []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkGeneric},
+		Run:          s.runMetadataCandidateFetchOp,
 	})
 }
 

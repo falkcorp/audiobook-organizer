@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-25
+// last-edited: 2026-10-01
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See the spec at
@@ -357,6 +357,8 @@ const (
 	ResReviewItems Resource = "review_items"
 	ResEmbeddings  Resource = "embeddings"
 	ResOperations  Resource = "operations"
+	// ResCatalog is the author catalog (cat:* keys, database.CatalogStore).
+	ResCatalog Resource = "catalog"
 )
 
 // EventSubscription wires an event name to a handler on the OperationDef.
