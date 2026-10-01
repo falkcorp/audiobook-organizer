@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_segment_variant_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e7a9c41-6b2d-4f80-a1c5-8d0e2f4b7a93
 // last-edited: 2026-09-30
 
@@ -135,5 +135,43 @@ func TestSubtitleVariant_RefusesSeriesHeadsAndFragments(t *testing.T) {
 		if got := subtitleVariant(raw, map[string]bool{}); got != nil {
 			t.Errorf("subtitleVariant(%q) = %v, want nil", raw, queries(got))
 		}
+	}
+}
+
+// A subtitle head is often the series name, so the variant refuses the
+// series' omnibus or box set, which the ordinary generic-word exemption
+// would let through.
+func TestSubtitleVariant_RefusesSeriesOmnibuses(t *testing.T) {
+	cases := []struct {
+		raw, author string
+		omnibus     []string
+		keep        string
+	}{
+		{"Harry Potter: The Philosopher's Stone", "J.K. Rowling",
+			[]string{"Harry Potter: The Complete Collection", "Harry Potter Box Set", "Harry Potter Series"},
+			"Harry Potter: The Philosopher's Stone"},
+		{"Wheel of Time: The Eye of the World", "Robert Jordan",
+			[]string{"The Wheel of Time Series", "Wheel of Time Omnibus", "The Wheel of Time: Complete Books"},
+			"The Eye of the World: Wheel of Time"},
+		{"Star Wars: Thrawn", "Timothy Zahn",
+			[]string{"Star Wars Trilogy", "Star Wars: Thrawn Trilogy"},
+			"Star Wars: Thrawn"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			vs := subtitleVariant(tc.raw, map[string]bool{})
+			if len(vs) != 1 || !vs[0].Strict {
+				t.Fatalf("variants = %+v, want one Strict", vs)
+			}
+			var res []metadata.BookMetadata
+			for _, title := range tc.omnibus {
+				res = append(res, metadata.BookMetadata{Title: title, Author: tc.author})
+			}
+			res = append(res, metadata.BookMetadata{Title: tc.keep, Author: tc.author})
+			kept := keepVariant(res, vs[0], tc.author)
+			if len(kept) != 1 || kept[0].Title != tc.keep {
+				t.Fatalf("kept %+v, want only %q", kept, tc.keep)
+			}
+		})
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-30
 
@@ -274,6 +274,13 @@ type titleVariant struct {
 	// ("Mistborn: The Final Empire") but a sibling's never names only words
 	// our own title has.
 	Allowed map[string]bool
+	// Strict drops keepVariant's generic-word exemption: a result word such
+	// as "complete", "collection" or "series" must be one of ours too, and a
+	// result naming a set (omnibusTitle) is refused unless our own title
+	// does. Set for a subtitle head ("Harry Potter" from "Harry Potter: The
+	// Philosopher's Stone"), which is so often the series name that
+	// "Harry Potter: The Complete Collection" would otherwise pass.
+	Strict bool
 }
 
 // titleOnlyAllowed reports whether the variant may be searched WITHOUT an
@@ -384,7 +391,9 @@ var unspacedSubtitle = regexp.MustCompile(`^(.*\S):\s+\S`)
 // Forged: Worlds of Honor V" -> "In Fire Forged") as an Exact variant whose
 // Allowed words are the full title's: a provider that lists the book under
 // its main title alone, or with the same subtitle, is accepted; a sibling
-// carrying another subtitle ("Mistborn: The Well of Ascension") is not.
+// carrying another subtitle ("Mistborn: The Well of Ascension") is not, and
+// neither is the series' omnibus ("Harry Potter: The Complete Collection",
+// "The Wheel of Time Series", "Star Wars Trilogy"; titleVariant.Strict).
 // Allowed makes keepVariant require a person of ours to vouch, so it is
 // anchored on the author (or narrator). The main title needs two or more
 // distinguishing words: a one-word head is usually the series ("Mistborn:
@@ -403,7 +412,10 @@ func subtitleVariant(rawTitle string, seen map[string]bool) []titleVariant {
 	head := strings.Trim(strings.TrimSpace(m[1]), " -–—:,")
 	key := strings.ToLower(head)
 	anchor := anchorWords(head, "")
-	if len(anchor) < 2 || seen[key] || metadata.MayBeUnsearchableTitle(head) {
+	// A head that may be a part ("Cobra 100 of 151", "The Sunrise Lands 1";
+	// metadata.NeedsFolderEvidence) is not tried: this ladder has no folder
+	// to judge it by.
+	if len(anchor) < 2 || seen[key] || metadata.MayBeUnsearchableTitle(head) || metadata.NeedsFolderEvidence(head) {
 		return nil
 	}
 	seen[key] = true
@@ -411,7 +423,28 @@ func subtitleVariant(rawTitle string, seen map[string]bool) []titleVariant {
 	for w := range anchor {
 		allowed[w] = true
 	}
-	return []titleVariant{{Query: head, Anchor: anchor, Exact: true, Allowed: allowed}}
+	return []titleVariant{{Query: head, Anchor: anchor, Exact: true, Allowed: allowed, Strict: true}}
+}
+
+// omnibusWords name a set of books rather than one: "The Complete
+// Collection", "The Wheel of Time Series", "Star Wars Trilogy", "Box Set".
+var omnibusWords = map[string]bool{
+	"collection": true, "omnibus": true, "series": true, "trilogy": true, "quartet": true,
+	"complete": true, "box": true, "boxed": true, "boxset": true, "anthology": true, "books": true,
+}
+
+// omnibusTitle reports whether title names a set of books (omnibusWords).
+func omnibusTitle(title string) bool {
+	return omnibusTitleIn(SignificantWords(title))
+}
+
+func omnibusTitleIn(words map[string]bool) bool {
+	for w := range words {
+		if omnibusWords[w] {
+			return true
+		}
+	}
+	return false
 }
 
 // partSuffixVariant returns the title without its part number ("Rogue Lawyer -
@@ -452,8 +485,11 @@ func keepVariant(results []metadata.BookMetadata, v titleVariant, people string)
 		var exact []metadata.BookMetadata
 		for _, r := range results {
 			ok := strings.TrimSpace(r.Author) != ""
+			if v.Strict && omnibusTitle(r.Title) && !omnibusTitleIn(allowed) {
+				ok = false
+			}
 			for w := range SignificantWords(r.Title) {
-				if !genericTitleWords[w] && (!allowed[w] || (peopleWords[w] && !v.Anchor[w])) {
+				if (v.Strict || !genericTitleWords[w]) && (!allowed[w] || (peopleWords[w] && !v.Anchor[w])) {
 					ok = false
 					break
 				}
