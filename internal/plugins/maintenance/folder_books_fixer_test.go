@@ -909,3 +909,52 @@ func TestFolderBooksFixer_RevertReindexesAnAlreadyHiddenBook(t *testing.T) {
 	require.Contains(t, []string{f.ids["fb"], f.ids["fb2"]}, byPath.BookID,
 		"the already-hidden created book gave the path key back")
 }
+
+// TestFolderBooksFixer_StrandCheckRunsUnderTheLock: B is applicable at plan
+// (A's copy of Sword is present, so A keeps it); A's rows turn Missing
+// before the apply, and B's apply refuses under the merge lock instead of
+// retiring the only present copy.
+func TestFolderBooksFixer_StrandCheckRunsUnderTheLock(t *testing.T) {
+	f := newFragFixture(t)
+	all := f.seedWolfe(t, fbITunes, "citadel")
+	var ann []string
+	for i := 1; i <= 3; i++ {
+		ann = append(ann, f.file(t, filepath.Join(fbITunes, "Ann", "Work One", fmt.Sprintf("0%d.mp3", i)), 10))
+	}
+	f.fbBook(t, "ann", "Work One", f.path(filepath.Join(fbITunes, "Ann", "Work One")), 3600, ann...)
+	f.fbBook(t, "root", "iTunes Media", f.path(fbITunes), 1200, append(append([]string(nil), all...), ann...)...)
+	res := f.fbPlan(t, fbFixerID, "op-plan")
+	b := fbFindRow(res, f.ids["root"])
+	require.NotNil(t, b)
+	require.True(t, b.Applicable(), "%s %s", b.Skipped, b.SkipReason)
+	for _, role := range []string{"fb", "fb2"} {
+		for _, i := range []int{7, 8} {
+			f.fbSetRow(t, role, i, func(r *database.BookFile) { r.Missing = true })
+		}
+	}
+	out := f.fbApply(t, "op-plan", "op-apply", []string{b.RowID})
+	require.Equal(t, 0, out.Applied, "%+v", out.Rows)
+	require.True(t, f.live(t, "root"), "B was not retired")
+}
+
+// fbDecorated hides the PebbleStore's methods beyond database.Store, as the
+// production search-index decorator does, and unwraps to it.
+type fbDecorated struct {
+	database.Store
+	inner database.Store
+}
+
+func (d fbDecorated) Unwrap() database.Store { return d.inner }
+
+// TestFolderBooksFixer_DupNowThroughADecorator: the title search reaches
+// SearchBooksFiltered through a decorated store instead of refusing.
+func TestFolderBooksFixer_DupNowThroughADecorator(t *testing.T) {
+	f := newFragFixture(t)
+	f.fbBook(t, "late", "Sword", f.path("Elsewhere/Sword.m4b"), 3600)
+	why, err := (&folderBooksFixer{}).dupNow(fbDecorated{Store: f.s, inner: f.s}, nil, "", fbGroup{Title: "Sword"})
+	require.NoError(t, err)
+	require.Contains(t, why, f.ids["late"])
+	why, err = (&folderBooksFixer{}).dupNow(fbDecorated{Store: f.s, inner: f.s}, nil, "", fbGroup{Title: "Sword", AuthorID: new(int)})
+	require.NoError(t, err)
+	require.Contains(t, why, f.ids["late"], "an authored group matches an authorless book")
+}
