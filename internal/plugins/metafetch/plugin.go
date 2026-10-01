@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/plugin.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c4d1f0a-2b7e-4c61-8a3d-5e9f0b1c2d34
-// last-edited: 2026-09-25
+// last-edited: 2026-10-01
 
 // Package metafetch is the UOS plugin for metadata-fetch maintenance/analysis
 // operations. It wraps the internal metafetch.Service (persisted candidate
@@ -22,15 +22,20 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// Plugin is the metafetch UOS plugin. It holds the read-only dependencies the
+// Plugin is the metafetch UOS plugin. It holds the dependencies the
 // calibration harness needs: the metafetch.Service (for persisted candidate
 // caches via GetCachedCandidates) and the database store (for enumerating
-// books and reading metadata-field-state override provenance). Neither is
-// mutated by any op in this package.
+// books and reading metadata-field-state override provenance). The calibration
+// harness mutates neither; metafetch.asin-backfill writes Book.ASIN through
+// the wider asinBackfillStore surface it asserts the store to at run time.
 type Plugin struct {
 	store    pluginStore
 	mfs      *metafetch.Service
 	registry sdk.Registry // set in Register; unused by the read-only ops today
+
+	// newAudible, when set, replaces the Audible client metafetch.asin-backfill
+	// builds per book. Tests only; nil in production.
+	newAudible func() audibleIdentitySearcher
 }
 
 // New constructs a metafetch Plugin. Either dependency may be nil (e.g. the
@@ -69,6 +74,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 func (p *Plugin) OperationDefs() []sdk.OperationDef {
 	return []sdk.OperationDef{
 		p.calibrateScoringDef(), // INIT-3-T1: read-only scoring calibration report
+		p.asinBackfillDef(),     // Audible-only ASIN backfill (asin_backfill.go)
 	}
 }
 

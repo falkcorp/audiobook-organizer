@@ -1,7 +1,7 @@
 # file: internal/server/testdata/op_ids.golden
-# version: 1.4.0
+# version: 1.5.0
 # guid: 6d1f8a42-9c3e-4b75-a2d6-0e7b4c9f3a18
-# last-edited: 2026-09-30
+# last-edited: 2026-10-01
 #
 # Ledger of every operation def ID this server has registered, canonical IDs
 # and FormerIDs (aliases) alike. APPEND-ONLY. Read by
@@ -234,6 +234,7 @@ metadata.batch-apply-cached
 metadata.batch-save
 metadata.bulk-apply-preview
 metadata.candidate-fetch
+metafetch.asin-backfill
 metafetch.calibrate-scoring
 openlibrary.download
 openlibrary.import
