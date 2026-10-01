@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_budget_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d4b2e61-7a3c-4f18-b5e0-6c2a8f1d3e94
 // last-edited: 2026-10-01
 
@@ -27,9 +27,10 @@ func TestCandidateFetchBudget(t *testing.T) {
 		{ID: "google-books", Enabled: false, RateLimit: config.MetadataSourceRateLimit{RPS: 0.1, Burst: 50}},
 	}
 	b := metafetch.EnabledSourcesBudget()
-	// Audible and Open Library are fan-out sources: 4 calls per book each,
-	// so Open Library (5/s / 4) binds at 1.25 books/s.
-	if b.CallsPerBook != metafetch.MaxSearchCallsPerBook("audible") || b.BindingID != "openlibrary" || b.BooksPerSec != 5/float64(b.CallsPerBook) {
+	// Worst case Audible takes 5 calls a book (4 variants + an ASIN lookup)
+	// and Open Library 2 (asked again only while empty), so Audible (8/s /
+	// 5 = 1.6) binds ahead of Open Library (5/s / 2 = 2.5).
+	if b.CallsPerBook != 5 || b.CallsPerBook != metafetch.MaxSearchCallsPerBook("audible") || b.BindingID != "audible" || b.BooksPerSec != 8/5.0 {
 		t.Fatalf("binding = %s %.2f books/s at %d calls/book", b.BindingID, b.BooksPerSec, b.CallsPerBook)
 	}
 	if b.RPS != 13 || b.Burst != 6 {

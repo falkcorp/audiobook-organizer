@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_variants_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f16af23a-770c-4bcf-8317-0c7f7724ee42
 // last-edited: 2026-10-01
 
@@ -27,11 +27,11 @@ func TestParseSearchTitle_ProdFailures(t *testing.T) {
 		{raw: "read by Solomon Ignis (Reborn a Hero)",
 			want: parsedTitle{Title: "Reborn a Hero", Narrator: "Solomon Ignis"}},
 		{raw: "Jack Reacher 17: A Wanted Man (Jeff Harding)", author: "Lee Child",
-			want: parsedTitle{Title: "A Wanted Man", Series: "Jack Reacher", Position: "17", Narrator: "Jeff Harding"}},
+			want: parsedTitle{Title: "A Wanted Man", Series: "Jack Reacher", Position: "17", Narrator: "Jeff Harding", NameSplit: true}},
 		{raw: "Jack Reacher 17: A Wanted Man (Jeff Harding)", author: "Lee Child", narrator: "Jeff Harding",
-			want: parsedTitle{Title: "A Wanted Man", Series: "Jack Reacher", Position: "17", Narrator: "Jeff Harding"}},
+			want: parsedTitle{Title: "A Wanted Man", Series: "Jack Reacher", Position: "17", Narrator: "Jeff Harding", NameSplit: true}},
 		{raw: "The Witcher - 4 - The Tower of the Swallow", author: "Andrzej Sapkowski",
-			want: parsedTitle{Title: "The Tower of the Swallow", Series: "The Witcher", Position: "4"}},
+			want: parsedTitle{Title: "The Tower of the Swallow", Series: "The Witcher", Position: "4", NameSplit: true}},
 		{raw: "Saving Supervillains, Book 5 - Bruce Sentar",
 			want: parsedTitle{Title: "Saving Supervillains", Series: "Saving Supervillains", Position: "5", Author: "Bruce Sentar", TitleIsSeries: true}},
 		{raw: "Drudge Match - Unknown Author",
@@ -40,6 +40,21 @@ func TestParseSearchTitle_ProdFailures(t *testing.T) {
 			want: parsedTitle{Title: "2010 The Stainless Steel Rat Returns", YearFree: "The Stainless Steel Rat Returns"}},
 		{raw: "Mayor of Mythos: An Isekai LitRPG Fantasy (Unabridged)",
 			want: parsedTitle{Title: "Mayor of Mythos: An Isekai LitRPG Fantasy", Short: "Mayor of Mythos"}},
+		// The review's blockers (2026-10-01): a genre tagline after a series
+		// slot is not the book's name, and a one-word "series" with a number
+		// is a title. The number is still the position answers must name.
+		{raw: "Rogue Ascension 8: A Progression LitRPG", author: "Hunter Mythos",
+			want: parsedTitle{Title: "Rogue Ascension 8: A Progression LitRPG", Series: "Rogue Ascension", Position: "8", Short: "Rogue Ascension 8"}},
+		{raw: "Rogue Ascension, Book 8: A LitRPG Adventure",
+			want: parsedTitle{Title: "Rogue Ascension", Series: "Rogue Ascension", Position: "8", TitleIsSeries: true}},
+		{raw: "Fahrenheit 451: A Novel",
+			want: parsedTitle{Title: "Fahrenheit 451: A Novel", Position: "451", Short: "Fahrenheit 451"}},
+		{raw: "Catch 22: A Novel",
+			want: parsedTitle{Title: "Catch 22: A Novel", Position: "22", Short: "Catch 22"}},
+		{raw: "Area 51: An Uncensored History",
+			want: parsedTitle{Title: "Area 51: An Uncensored History", Position: "51", Short: "Area 51"}},
+		{raw: "Apollo 8: The Thrilling Story of the First Mission to the Moon",
+			want: parsedTitle{Title: "Apollo 8: The Thrilling Story of the First Mission to the Moon", Position: "8", Short: "Apollo 8"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {
@@ -50,19 +65,30 @@ func TestParseSearchTitle_ProdFailures(t *testing.T) {
 
 // Titles that must come through untouched: a number that IS the title, a year
 // glued to a subtitle, a trailing dash field that is the book, a series in
-// parentheses.
+// parentheses. Title, series and position are pinned for every case.
 func TestParseSearchTitle_Negatives(t *testing.T) {
-	for _, raw := range []string{"1984", "11/22/63", "2001: A Space Odyssey", "Metro 2034", "Dune", "The Long Cosmos (Long Earth Saga)"} {
-		t.Run(raw, func(t *testing.T) {
-			p := parseSearchTitle(raw, "", "")
+	cases := []struct{ raw, title, series, position string }{
+		{raw: "1984", title: "1984"},
+		{raw: "11/22/63", title: "11/22/63"},
+		{raw: "2001: A Space Odyssey", title: "2001: A Space Odyssey"},
+		{raw: "Metro 2034", title: "Metro 2034"},
+		{raw: "Dune", title: "Dune"},
+		{raw: "The Long Cosmos (Long Earth Saga)", title: "The Long Cosmos (Long Earth Saga)"},
+		{raw: "Star Wars - Thrawn", title: "Star Wars - Thrawn"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			p := parseSearchTitle(tc.raw, "", "")
+			assert.Equal(t, tc.title, p.Title)
+			assert.Equal(t, tc.series, p.Series)
+			assert.Equal(t, tc.position, p.Position)
 			assert.Empty(t, p.YearFree)
 			assert.Empty(t, p.Narrator)
 			assert.Empty(t, p.Author)
 			assert.False(t, p.TitleIsSeries)
+			assert.False(t, p.NameSplit)
 		})
 	}
-	assert.Equal(t, "2001: A Space Odyssey", parseSearchTitle("2001: A Space Odyssey", "", "").Title)
-	assert.Equal(t, "The Long Cosmos (Long Earth Saga)", parseSearchTitle("The Long Cosmos (Long Earth Saga)", "", "").Title)
 }
 
 func variantPairs(vs []queryVariant) [][2]string {
@@ -81,23 +107,27 @@ func TestBuildQueryVariants_ProdFailures(t *testing.T) {
 		want                  [][2]string
 	}{
 		{raw: "Magma Heart - Unknown Author", author: "Plum Parrot",
-			want: [][2]string{{"Magma Heart", "Plum Parrot"}, {"Magma Heart", ""}}},
+			want: [][2]string{{"Magma Heart", "Plum Parrot"}, {"Magma Heart - Unknown Author", "Plum Parrot"}, {"Magma Heart", ""}}},
 		{raw: "read by Cathfach (Erryn's World)",
-			want: [][2]string{{"Erryn's World", "Cathfach"}, {"Erryn's World", ""}}},
+			want: [][2]string{{"Erryn's World", "Cathfach"}, {"read by Cathfach (Erryn's World)", "Cathfach"}, {"Erryn's World", ""}}},
 		{raw: "read by Solomon Ignis (Reborn a Hero)",
-			want: [][2]string{{"Reborn a Hero", "Solomon Ignis"}, {"Reborn a Hero", ""}}},
+			want: [][2]string{{"Reborn a Hero", "Solomon Ignis"}, {"read by Solomon Ignis (Reborn a Hero)", "Solomon Ignis"}, {"Reborn a Hero", ""}}},
 		{raw: "Jack Reacher 17: A Wanted Man (Jeff Harding)", author: "Lee Child",
-			want: [][2]string{{"A Wanted Man", "Lee Child"}, {"A Wanted Man", "Jeff Harding"}, {"Jack Reacher", "Lee Child"}, {"A Wanted Man", ""}}},
+			want: [][2]string{{"A Wanted Man", "Lee Child"}, {"A Wanted Man", "Jeff Harding"}, {"Jack Reacher 17: A Wanted Man (Jeff Harding)", "Lee Child"}, {"Jack Reacher", "Lee Child"}}},
 		{raw: "The Witcher - 4 - The Tower of the Swallow", author: "Andrzej Sapkowski", narrator: "Peter Kenny",
-			want: [][2]string{{"The Tower of the Swallow", "Andrzej Sapkowski"}, {"The Tower of the Swallow", "Peter Kenny"}, {"The Witcher", "Andrzej Sapkowski"}, {"The Tower of the Swallow", ""}}},
+			want: [][2]string{{"The Tower of the Swallow", "Andrzej Sapkowski"}, {"The Tower of the Swallow", "Peter Kenny"}, {"The Witcher - 4 - The Tower of the Swallow", "Andrzej Sapkowski"}, {"The Witcher", "Andrzej Sapkowski"}}},
 		{raw: "Saving Supervillains, Book 5 - Bruce Sentar",
-			want: [][2]string{{"Saving Supervillains", "Bruce Sentar"}, {"Saving Supervillains", ""}}},
+			want: [][2]string{{"Saving Supervillains", "Bruce Sentar"}, {"Saving Supervillains, Book 5 - Bruce Sentar", "Bruce Sentar"}, {"Saving Supervillains", ""}}},
 		{raw: "Drudge Match - Unknown Author",
-			want: [][2]string{{"Drudge Match", ""}}},
+			want: [][2]string{{"Drudge Match", ""}, {"Drudge Match - Unknown Author", ""}}},
 		{raw: "2010 The Stainless Steel Rat Returns - Unknown Author", author: "Harry Harrison",
-			want: [][2]string{{"2010 The Stainless Steel Rat Returns", "Harry Harrison"}, {"The Stainless Steel Rat Returns", "Harry Harrison"}, {"2010 The Stainless Steel Rat Returns", ""}}},
+			want: [][2]string{{"2010 The Stainless Steel Rat Returns", "Harry Harrison"}, {"2010 The Stainless Steel Rat Returns - Unknown Author", "Harry Harrison"}, {"The Stainless Steel Rat Returns", "Harry Harrison"}, {"2010 The Stainless Steel Rat Returns", ""}}},
 		{raw: "Mayor of Mythos: An Isekai LitRPG Fantasy (Unabridged)", author: "Eric Vall",
 			want: [][2]string{{"Mayor of Mythos: An Isekai LitRPG Fantasy", "Eric Vall"}, {"Mayor of Mythos", "Eric Vall"}, {"Mayor of Mythos: An Isekai LitRPG Fantasy", ""}}},
+		{raw: "Rogue Ascension 8: A Progression LitRPG", author: "Hunter Mythos",
+			want: [][2]string{{"Rogue Ascension 8: A Progression LitRPG", "Hunter Mythos"}, {"Rogue Ascension 8", "Hunter Mythos"}, {"Rogue Ascension", "Hunter Mythos"}, {"Rogue Ascension 8: A Progression LitRPG", ""}}},
+		{raw: "Fahrenheit 451: A Novel", author: "Ray Bradbury",
+			want: [][2]string{{"Fahrenheit 451: A Novel", "Ray Bradbury"}, {"Fahrenheit 451", "Ray Bradbury"}, {"Fahrenheit 451: A Novel", ""}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {
@@ -142,9 +172,10 @@ func TestCandidateSeen_DedupesByIDOrTitleAuthor(t *testing.T) {
 }
 
 func TestMaxSearchCallsPerBook(t *testing.T) {
-	assert.Equal(t, maxQueryVariants, MaxSearchCallsPerBook(metadata.SourceIDAudible))
-	assert.Equal(t, maxQueryVariants, MaxSearchCallsPerBook(metadata.SourceIDOpenLibrary))
+	assert.Equal(t, maxQueryVariants+1, MaxSearchCallsPerBook(metadata.SourceIDAudible), "4 variants + the own-ASIN lookup")
+	assert.Equal(t, maxOpenLibraryAsks, MaxSearchCallsPerBook(metadata.SourceIDOpenLibrary))
 	assert.Equal(t, 1, MaxSearchCallsPerBook(metadata.SourceIDGoogleBooks))
 	assert.Equal(t, 1, MaxSearchCallsPerBook(metadata.SourceIDHardcover))
-	assert.Equal(t, 0, MaxSearchCallsPerBook(metadata.SourceIDAudnexus))
+	assert.Equal(t, maxAudnexusRegions, MaxSearchCallsPerBook(metadata.SourceIDAudnexus), "one lookup, at most 3 regions")
+	assert.Len(t, audnexusSearchRegions, maxAudnexusRegions)
 }

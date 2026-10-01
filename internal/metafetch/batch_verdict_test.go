@@ -1,7 +1,7 @@
 // file: internal/metafetch/batch_verdict_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fcb57db8-150d-40b2-a501-0934fa3be00b
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 // Tests for the batch candidate fetch's durable verdicts (CachedBatchVerdict):
 // when a book may be answered from the candidate cache without a provider
@@ -11,6 +11,7 @@ package metafetch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"sync/atomic"
@@ -277,4 +278,51 @@ func TestBatchVerdict_PreDeployNoAuthorRowAgreesWithApply(t *testing.T) {
 	require.Equal(t, BatchVerdictNone, verdict)
 	require.ErrorIs(t, idErr, ErrStaleMetadataCache)
 	require.False(t, queryMatch)
+}
+
+// The searchInputVersion "2" bump must not re-ask every cached row (~100k
+// books against Google Books' 1,000/day quota): a row stamped with the
+// version "1" fingerprint for the same inputs keeps its fresh candidates,
+// and only a "nothing found" under it is re-asked.
+func TestBatchVerdict_LegacyFingerprintKeepsCandidatesOnly(t *testing.T) {
+	f := newVerdictFixture(t)
+	b, err := f.store.CreateBook(&database.Book{Title: "Legacy Rows", FilePath: "/lib/lr/book.m4b"})
+	require.NoError(t, err)
+	f.mfs.SetOverrideSources([]metadata.MetadataSource{&verdictSource{name: "A"}})
+	book := f.book(b.ID)
+	in := f.mfs.resolveSearchInputs(book, book.Title, "", "")
+	legacy, current := in.legacyFingerprint(book.Title), in.fingerprint(book.Title)
+	require.NotEqual(t, legacy, current)
+	now := time.Now().UTC()
+	put := func(fp string, candidates bool) {
+		entry := &database.MetadataCandidateCache{
+			BookID:            b.ID,
+			FetchedAt:         now,
+			SourceHash:        hashSearchInputs(b.ID, book.Title, "", "", ""),
+			SearchFingerprint: fp,
+		}
+		if candidates {
+			entry.Candidates = []json.RawMessage{json.RawMessage(`{"title":"Legacy Rows"}`)}
+		} else {
+			entry.LastEmptyFetchAt = &now
+			entry.EmptyAnswers = map[string]time.Time{"A": now}
+		}
+		require.NoError(t, f.store.PutMetadataCache(entry))
+	}
+
+	put(legacy, true)
+	_, verdict, _ := f.mfs.CachedBatchVerdict(f.book(b.ID), book.Title, "")
+	require.Equal(t, BatchVerdictFreshCandidates, verdict, "a version 1 row's candidates stay valid")
+
+	put(legacy, false)
+	_, verdict, _ = f.mfs.CachedBatchVerdict(f.book(b.ID), book.Title, "")
+	require.Equal(t, BatchVerdictNone, verdict, "a version 1 nothing-found is re-asked")
+
+	put(current, false)
+	_, verdict, _ = f.mfs.CachedBatchVerdict(f.book(b.ID), book.Title, "")
+	require.Equal(t, BatchVerdictKnownEmpty, verdict)
+
+	put("not-a-fingerprint", true)
+	_, verdict, _ = f.mfs.CachedBatchVerdict(f.book(b.ID), book.Title, "")
+	require.Equal(t, BatchVerdictNone, verdict)
 }
