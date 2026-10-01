@@ -1,5 +1,5 @@
 // file: internal/server/metadata_bulk_fetch_log_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8966af00-704c-4a19-99e8-b832e27d9f7c
 // last-edited: 2026-09-30
 
@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -170,6 +171,39 @@ func TestResolveBulkFetchQuery_IdentityFollowsStandIn(t *testing.T) {
 	q = resolveBulkFetchQuery(store, "b-real", "Eldest", "", "Christopher Paolini", "pre-loop-identity", nil, nil)
 	if q.query.Title != "Eldest" || q.identity != "pre-loop-identity" {
 		t.Errorf("real title: %+v identity %q, want unchanged", q.query, q.identity)
+	}
+}
+
+// A folder-evidence title ("Apollo 13", "Cobra 100 of 151") goes to the
+// resolver without a GetBookByID, keeps the pre-loop identity when it is
+// searched by its own title, and is skipped as a sibling part beside its
+// counted siblings.
+func TestResolveBulkFetchQuery_FolderEvidenceTitles(t *testing.T) {
+	gets := 0
+	store := &database.MockStore{
+		GetBookByIDFunc: func(string) (*database.Book, error) { gets++; return nil, nil },
+		LiveBookPathsUnderDirFunc: func(dir string) (map[string]string, error) {
+			if dir != "/library/Authors/Timothy Zahn/Cobra" {
+				return map[string]string{}, nil
+			}
+			return map[string]string{
+				"b-cobra": dir + "/Cobra 100 of 151.mp3",
+				"s1":      dir + "/Cobra 099 of 151.mp3",
+				"s2":      dir + "/Cobra 101 of 151.mp3",
+			}, nil
+		},
+	}
+	memo := metabatch.NewFolderMemo()
+	q := resolveBulkFetchQuery(store, "b-apollo", "Apollo 13", "/library/Authors/Jim Lovell/Apollo 13.m4b", "Jim Lovell", "pre-loop-identity", nil, memo)
+	if !q.query.Usable || q.query.Title != "Apollo 13" || q.identity != "pre-loop-identity" {
+		t.Errorf("Apollo 13: %+v identity %q, want its own title on the pre-loop identity", q.query, q.identity)
+	}
+	q = resolveBulkFetchQuery(store, "b-cobra", "Cobra 100 of 151", "/library/Authors/Timothy Zahn/Cobra/Cobra 100 of 151.mp3", "Timothy Zahn", "pre-loop-identity", nil, memo)
+	if q.query.Usable || q.skipKind != metabatch.SkipKindSiblingPart || q.skipStatus != metafetch.FetchStatusSkippedFragment {
+		t.Errorf("Cobra 100 of 151: %+v kind %q status %q, want a sibling-part skip", q.query, q.skipKind, q.skipStatus)
+	}
+	if gets != 0 {
+		t.Errorf("GetBookByID called %d times, want 0", gets)
 	}
 }
 
