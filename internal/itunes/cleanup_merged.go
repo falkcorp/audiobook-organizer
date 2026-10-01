@@ -1,5 +1,5 @@
 // file: internal/itunes/cleanup_merged.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c4e7a20-1b83-4d6f-a2e9-5c0d3b8f1a74
 // last-edited: 2026-10-01
 //
@@ -26,11 +26,15 @@ var cmlog = logger.New("itunes-cleanup-merged")
 
 // MergedCleanupPreview summarizes the superseded-track removal without applying.
 type MergedCleanupPreview struct {
-	TracksInITL    int `json:"tracks_in_itl"`
-	PrimaryPIDs    int `json:"primary_pids"`     // distinct primary book_file PIDs present in the ITL
-	NonPrimaryPIDs int `json:"non_primary_pids"` // distinct non-primary book_file PIDs present in the ITL
-	ToRemove       int `json:"to_remove"`        // non-primary PIDs that are NOT also a primary PID
-	SharedSkipped  int `json:"shared_skipped"`   // non-primary PIDs also owned by a primary (kept, defensive)
+	// Error is set when the cleanup failed closed (removes nothing) because
+	// the DB could not be fully read: without it an aborted run reads the
+	// same as "nothing to remove".
+	Error          string `json:"error,omitempty"`
+	TracksInITL    int    `json:"tracks_in_itl"`
+	PrimaryPIDs    int    `json:"primary_pids"`     // distinct primary book_file PIDs present in the ITL
+	NonPrimaryPIDs int    `json:"non_primary_pids"` // distinct non-primary book_file PIDs present in the ITL
+	ToRemove       int    `json:"to_remove"`        // non-primary PIDs that are NOT also a primary PID
+	SharedSkipped  int    `json:"shared_skipped"`   // non-primary PIDs also owned by a primary (kept, defensive)
 	// PathHeldSkipped counts non-primary PIDs kept because a live primary
 	// book_file holds the same FILE with no track of its own in the ITL
 	// (no PID, or one not in the ITL). The non-primary track is then the only
@@ -90,7 +94,8 @@ func computeMergedCleanupFromInITL(inITL map[string]bool, store RebuildStore) (*
 			// Fail closed: if we can't fully enumerate the DB we cannot safely
 			// decide what is superseded, so remove nothing.
 			cmlog.Error("cleanup-merged: get books failed, aborting (remove nothing): %v", err)
-			return &ITLOperationSet{Removes: map[string]bool{}}, &MergedCleanupPreview{TracksInITL: len(inITL)}
+			return &ITLOperationSet{Removes: map[string]bool{}}, &MergedCleanupPreview{TracksInITL: len(inITL),
+				Error: fmt.Sprintf("read books: %v; nothing removed", err)}
 		}
 		if len(books) == 0 {
 			break
@@ -104,7 +109,8 @@ func computeMergedCleanupFromInITL(inITL map[string]bool, store RebuildStore) (*
 				// only path of a track (PathHeldSkipped) or a primary PID, so
 				// nothing is removed.
 				cmlog.Error("cleanup-merged: files of book %s unreadable, aborting (remove nothing): %v", b.ID, ferr)
-				return &ITLOperationSet{Removes: map[string]bool{}}, &MergedCleanupPreview{TracksInITL: len(inITL)}
+				return &ITLOperationSet{Removes: map[string]bool{}}, &MergedCleanupPreview{TracksInITL: len(inITL),
+					Error: fmt.Sprintf("read files of book %s: %v; nothing removed", b.ID, ferr)}
 			}
 			for j := range files {
 				pid := strings.ToUpper(files[j].ITunesPersistentID)

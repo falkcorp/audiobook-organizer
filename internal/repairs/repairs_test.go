@@ -1,7 +1,7 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 package repairs
 
@@ -1169,4 +1169,28 @@ func TestRegistry(t *testing.T) {
 	require.Len(t, r.List(), 1)
 	_, ok = r.Get("nope")
 	require.False(t, ok)
+}
+
+// TestGuardBookPaths_ITunesClearedStillFailsClosedOnDoubt: a fixer cleared
+// for iTunes database rows still skips a row whose folder could not be
+// resolved (a permission error): behind it may be a Doctor Who / Big Finish
+// / Torchwood folder.
+func TestGuardBookPaths_ITunesClearedStillFailsClosedOnDoubt(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "Author", "Book", "01.mp3")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := evalSymlinks
+	t.Cleanup(func() { evalSymlinks = orig })
+	evalSymlinks = func(string) (string, error) { return "", os.ErrPermission }
+	for _, allow := range []bool{false, true} {
+		kind, reason := guardBookPaths(NewPathResolver(), "b1", []string{p}, "", allow)
+		if kind != SkipGuardUnreadable {
+			t.Fatalf("allowITunes=%t: kind %q (%s), want %q", allow, kind, reason, SkipGuardUnreadable)
+		}
+	}
 }
