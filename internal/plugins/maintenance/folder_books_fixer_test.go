@@ -564,3 +564,26 @@ func TestFolderBooksFixer_ITunesOptOutIsThisFixerOnly(t *testing.T) {
 	row := f.fbSingleRow(t, "op-plan")
 	require.Equal(t, repairs.SkipOwnerManual, row.Skipped, row.SkipReason)
 }
+
+// TestFolderBooksFixer_ChapterBooksAreNotProperBooks: a real book in its
+// author's folder whose chapters an old scan imported one book each (prod's
+// "Metro 2033": eleven one-hour chapter books) is not a shelf of works.
+func TestFolderBooksFixer_ChapterBooksAreNotProperBooks(t *testing.T) {
+	dir := "/lib/Dmitry Glukhovsky/"
+	var paths []string
+	for _, ch := range []string{"Intro", "Chapter One - The End", "Chapter Two - The Hunter", "Chapter Three - If",
+		"Chapter Four - The V", "Chapter Five - Ka"} {
+		paths = append(paths, dir+ch+".mp3")
+	}
+	lib := fbUnitLib([]string{"/lib"}, []string{"Dmitry Glukhovsky"}, "Metro 2033", paths, 3700)
+	for i, p := range paths[1:4] {
+		id := fmt.Sprintf("ch%d", i)
+		d := 3700
+		lib.add(database.BookCore{ID: id, Title: filepath.Base(p), Duration: &d},
+			[]database.BookFileCore{{ID: id + "-0", BookID: id, FilePath: p, Duration: d}})
+	}
+	lib.finish()
+	ev := lib.evaluate("b")
+	require.Equal(t, 0, ev.Proper, "a one-hour single-file chapter book is not a proper book")
+	require.False(t, fbApplicableTier(ev.Tier), "tier %q evidence %v", ev.Tier, ev.Evidence)
+}

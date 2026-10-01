@@ -1,11 +1,7 @@
-- New Repairs fixer, "Folder-sized books". It finds book rows that are really a whole author, series or library folder: an old scan and the 2026-08-26 book-file backfill had attached every file in the folder to them.
-- Apply works on the database only:
-  - A file that no proper book holds gets a new book of its own, grouped by folder or filename stem, at the same path. Nothing moves on disk.
-  - The folder-book is then hidden. It is soft-deleted with its file rows kept, and its version-group primacy is handed to the real book.
-- Rows that are listed but never applied:
-  - deep-tier;
-  - fragmentary, where a group would be chapter-sized;
-  - iTunes;
-  - listening progress;
-  - Doctor Who / Big Finish / Torchwood.
-- Undoing the apply operation restores every folder-book. It also hides the books the apply created, through the new restorable `repair_book_create` change. No row is deleted.
+- New Repairs fixer, "Folder-sized books". It finds book rows that are really a whole author, series or library folder: an old scan and the 2026-08-26 book-file backfill had attached every file in the folder to them. A folder counts as an author shelf only when its name is an author's, so a single book folder, a multi-disc rip or a box set is never flagged.
+- Apply works on the database only, including for books under `books/itunes/**` (owner-approved; the fixer opts out of the framework's iTunes path guard, Doctor Who / Big Finish / Torchwood stay guarded):
+  - A work whose files no proper book holds gets a new book of its own at the same paths, with the work's folder as its path. Nothing moves on disk, and no iTunes persistent id is copied or changed. Books are only created under the iTunes tree, which organize never moves.
+  - The real book is crowned version-group primary first; only then is the folder-book hidden (soft-deleted with its file rows kept).
+- Rows that are listed but never applied: deep-tier; a work split between a proper book and orphans; a new book whose title and author already exist; fragmentary groups; new books needed outside the iTunes tree; no primary heir; an iTunes id on the folder-book itself; listening progress; Doctor Who / Big Finish / Torchwood.
+- Undoing the apply operation restores every folder-book and hides the books it created (new restorable `repair_book_create` change). The undo refuses to hide a created book whose rows moved, gained a row, or joined a version group. No row is deleted.
+- iTunes merged-track cleanup now keeps a non-primary track id when it is the only track of a file a live primary book holds, so retiring a folder-book never removes a track from iTunes.
