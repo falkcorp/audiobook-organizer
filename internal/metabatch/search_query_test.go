@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-10-01
 
@@ -1027,7 +1027,8 @@ func (g gatedLister) LiveBookPathsUnderDir(dir string) (map[string]string, error
 
 // Concurrent callers of one memo for the same folder and kind share ONE
 // read -- for the direct listing and the wrapped listing alike -- and a
-// failed read is reported once, not once per caller.
+// failed read is reported once, not once per caller. A failed read is not
+// kept: a later caller reads the folder again.
 func TestFolderMemo_ConcurrentCallersShareOneRead(t *testing.T) {
 	const (
 		parent  = "/library/Authors/Gregory Benford"
@@ -1099,9 +1100,14 @@ func TestFolderMemo_ConcurrentCallersShareOneRead(t *testing.T) {
 				if got := listWarn.failures.Load() - failuresBefore; got != wantFailures {
 					t.Fatalf("failed read reported %d times, want %d", got, wantFailures)
 				}
-				// A later caller reuses the stored listing (or error).
-				if _, err := k.list(memo, l); (err != nil) != failing || calls.Load() != 1 {
-					t.Fatalf("later caller: err=%v calls=%d, want the stored result and no new read", err, calls.Load())
+				// A later caller reuses a stored listing, but reads a failed
+				// folder again: a transient fault is not kept for the pass.
+				wantCalls := int64(1)
+				if failing {
+					wantCalls = 2
+				}
+				if _, err := k.list(memo, l); (err != nil) != failing || calls.Load() != wantCalls {
+					t.Fatalf("later caller: err=%v calls=%d, want calls=%d", err, calls.Load(), wantCalls)
 				}
 			})
 		}
