@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-01
 
@@ -423,9 +423,9 @@ type legacyInputs struct {
 }
 
 // resolveSearchInputs derives the ladder's query inputs from the book row and
-// the caller's hints. searchMetadataForBook and SearchFingerprintFor both use
-// it, so a fingerprint computed before a search names the same questions the
-// search asks.
+// the caller's hints. searchMetadataForBook and the cache's fingerprint checks
+// (matchSearchFingerprint, CachedBatchVerdict) both use it, so a fingerprint
+// computed before a search names the same questions the search asks.
 func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narrator string) searchInputs {
 	rawQuery := query
 	if rawQuery == "" {
@@ -531,7 +531,7 @@ func (in searchInputs) fingerprint(bookTitle string) string {
 // recorded for these inputs, byte for byte. A cached row carrying it asked
 // the old questions: its CANDIDATES are still the book's (the identity checks
 // and freshness rules are unchanged), but a "nothing found" under it is not
-// an answer to the new questions. See SearchFingerprintMatches.
+// an answer to the new questions. See matchSearchFingerprint.
 func (in searchInputs) legacyFingerprint(bookTitle string) string {
 	h := sha256.New()
 	parts := []string{"1", bookTitle, in.legacy.title, in.legacy.author, in.legacy.narrator}
@@ -569,15 +569,6 @@ func (mfs *Service) matchSearchFingerprint(stored string, book *database.Book, q
 		return fingerprintLegacy
 	}
 	return fingerprintStale
-}
-
-// SearchFingerprintFor returns the fingerprint a search for book with these
-// hints would record (SearchMetadataResponse.InputFingerprint).
-func (mfs *Service) SearchFingerprintFor(book *database.Book, query, author, narrator string) string {
-	if mfs == nil || mfs.db == nil || book == nil {
-		return ""
-	}
-	return mfs.resolveSearchInputs(book, query, author, narrator).fingerprint(book.Title)
 }
 
 // SearchAuthorFor returns the author a search for book with this author hint
@@ -708,16 +699,7 @@ func (mfs *Service) searchMetadataForBook(
 	// search_variants.go for the variants and the expected calls per book.
 	variants := buildQueryVariants(in.parsed, in.literal, in.rawQuery, searchAuthor, bookNarrator)
 	people := strings.TrimSpace(searchAuthor + " " + bookNarrator)
-	strong := strongCriteria{asin: asinToLookup, people: people, bookDur: bookDurationSec,
-		position: normPosition(in.parsed.Position)}
-	if in.parsed.TitleIsSeries {
-		strong.slotSeries, strong.slotPos = in.parsed.Series, in.parsed.Position
-	} else {
-		strong.titleWords = anchorWords(searchTitle, in.parsed.Series)
-	}
-	if in.parsed.NameSplit {
-		strong.nameAnchor = anchorWords(in.parsed.Title, in.parsed.Series)
-	}
+	strong := newStrongCriteria(in.parsed, searchTitle, in.literal, asinToLookup, people, bookDurationSec)
 	states := mfs.runSearchFanout(fanoutParams{
 		ctx: ctx, limiter: limiter, bookID: id, identity: searchIdentity, opts: opts, people: people, strong: strong,
 	}, sources, variants)
@@ -1009,9 +991,7 @@ func (mfs *Service) searchMetadataForBook(
 			if candidateNum == "" {
 				candidateNum = extractTrailingNumber(c.Title)
 			}
-			// The number may sit anywhere in the candidate's title ("Catch-22",
-			// "Apollo 8: The Thrilling Story ..."), not only at its end.
-			if candidateNum == expectedNum || positionAgrees(metadata.BookMetadata{Title: c.Title, SeriesPosition: c.SeriesPosition}, normPosition(expectedNum)) {
+			if candidateNum == expectedNum {
 				c.Score *= k.SeriesNumberExactBoost // Strong boost for exact number match
 			} else if candidateNum != "" && candidateNum != expectedNum {
 				c.Score *= k.SeriesNumberWrongPenalty // Penalize wrong number in same series
@@ -1049,13 +1029,14 @@ func (mfs *Service) searchMetadataForBook(
 		logger.SanitizeLogValue(searchTitle), len(variants))
 
 	return &SearchMetadataResponse{
-		Results:          candidates,
-		Query:            searchTitle,
-		SourcesTried:     sourcesTried,
-		SourcesFailed:    sourcesFailed,
-		SourcesAnswered:  sourcesAnswered,
-		SourcesAsked:     sourcesAsked,
-		InputFingerprint: in.fingerprint(book.Title),
+		Results:           candidates,
+		Query:             searchTitle,
+		SourcesTried:      sourcesTried,
+		SourcesFailed:     sourcesFailed,
+		SourcesAnswered:   sourcesAnswered,
+		SourcesAsked:      sourcesAsked,
+		InputFingerprint:  in.fingerprint(book.Title),
+		LegacyFingerprint: in.legacyFingerprint(book.Title),
 	}, nil
 }
 

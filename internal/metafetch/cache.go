@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-01
 //
@@ -429,6 +429,15 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 					// ones the previous search returned. Moving it would relabel
 					// month-old candidates as freshly fetched.
 					entry.FetchedAt = prev.FetchedAt
+					// Nor re-stamped, when the version "1" ladder found them: they
+					// answered ITS questions, unfiltered by this version's position
+					// and variant rules, and stamping the current fingerprint would
+					// pass them off as this version's answers. The legacy stamp
+					// keeps them valid exactly as long as an untouched legacy row
+					// (matchSearchFingerprint).
+					if resp.LegacyFingerprint != "" && prev.SearchFingerprint == resp.LegacyFingerprint {
+						entry.SearchFingerprint = prev.SearchFingerprint
+					}
 				}
 				// Same questions (fingerprint): a source that answered "nothing"
 				// earlier and was not asked, or could not be asked, this time still

@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_variants_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f16af23a-770c-4bcf-8317-0c7f7724ee42
 // last-edited: 2026-10-01
 
@@ -27,13 +27,13 @@ func TestParseSearchTitle_ProdFailures(t *testing.T) {
 		{raw: "read by Solomon Ignis (Reborn a Hero)",
 			want: parsedTitle{Title: "Reborn a Hero", Narrator: "Solomon Ignis"}},
 		{raw: "Jack Reacher 17: A Wanted Man (Jeff Harding)", author: "Lee Child",
-			want: parsedTitle{Title: "A Wanted Man", Series: "Jack Reacher", Position: "17", Narrator: "Jeff Harding", NameSplit: true}},
+			want: parsedTitle{Title: "A Wanted Man", Series: "Jack Reacher", Position: "17", Narrator: "Jeff Harding", NameSplit: true, SlotHead: "Jack Reacher", Name: "A Wanted Man"}},
 		{raw: "Jack Reacher 17: A Wanted Man (Jeff Harding)", author: "Lee Child", narrator: "Jeff Harding",
-			want: parsedTitle{Title: "A Wanted Man", Series: "Jack Reacher", Position: "17", Narrator: "Jeff Harding", NameSplit: true}},
+			want: parsedTitle{Title: "A Wanted Man", Series: "Jack Reacher", Position: "17", Narrator: "Jeff Harding", NameSplit: true, SlotHead: "Jack Reacher", Name: "A Wanted Man"}},
 		{raw: "The Witcher - 4 - The Tower of the Swallow", author: "Andrzej Sapkowski",
-			want: parsedTitle{Title: "The Tower of the Swallow", Series: "The Witcher", Position: "4", NameSplit: true}},
+			want: parsedTitle{Title: "The Tower of the Swallow", Series: "The Witcher", Position: "4", NameSplit: true, SlotHead: "The Witcher", Name: "The Tower of the Swallow"}},
 		{raw: "Saving Supervillains, Book 5 - Bruce Sentar",
-			want: parsedTitle{Title: "Saving Supervillains", Series: "Saving Supervillains", Position: "5", Author: "Bruce Sentar", TitleIsSeries: true}},
+			want: parsedTitle{Title: "Saving Supervillains", Series: "Saving Supervillains", Position: "5", Author: "Bruce Sentar", TitleIsSeries: true, SlotHead: "Saving Supervillains"}},
 		{raw: "Drudge Match - Unknown Author",
 			want: parsedTitle{Title: "Drudge Match"}},
 		{raw: "2010 The Stainless Steel Rat Returns - Unknown Author", author: "Harry Harrison",
@@ -44,17 +44,17 @@ func TestParseSearchTitle_ProdFailures(t *testing.T) {
 		// slot is not the book's name, and a one-word "series" with a number
 		// is a title. The number is still the position answers must name.
 		{raw: "Rogue Ascension 8: A Progression LitRPG", author: "Hunter Mythos",
-			want: parsedTitle{Title: "Rogue Ascension 8: A Progression LitRPG", Series: "Rogue Ascension", Position: "8", Short: "Rogue Ascension 8"}},
+			want: parsedTitle{Title: "Rogue Ascension 8: A Progression LitRPG", Series: "Rogue Ascension", Position: "8", Short: "Rogue Ascension 8", SlotHead: "Rogue Ascension"}},
 		{raw: "Rogue Ascension, Book 8: A LitRPG Adventure",
-			want: parsedTitle{Title: "Rogue Ascension", Series: "Rogue Ascension", Position: "8", TitleIsSeries: true}},
+			want: parsedTitle{Title: "Rogue Ascension", Series: "Rogue Ascension", Position: "8", TitleIsSeries: true, SlotHead: "Rogue Ascension"}},
 		{raw: "Fahrenheit 451: A Novel",
-			want: parsedTitle{Title: "Fahrenheit 451: A Novel", Position: "451", Short: "Fahrenheit 451"}},
+			want: parsedTitle{Title: "Fahrenheit 451: A Novel", Position: "451", Short: "Fahrenheit 451", SlotHead: "Fahrenheit"}},
 		{raw: "Catch 22: A Novel",
-			want: parsedTitle{Title: "Catch 22: A Novel", Position: "22", Short: "Catch 22"}},
+			want: parsedTitle{Title: "Catch 22: A Novel", Position: "22", Short: "Catch 22", SlotHead: "Catch"}},
 		{raw: "Area 51: An Uncensored History",
-			want: parsedTitle{Title: "Area 51: An Uncensored History", Position: "51", Short: "Area 51"}},
+			want: parsedTitle{Title: "Area 51: An Uncensored History", Position: "51", Short: "Area 51", SlotHead: "Area", Name: "An Uncensored History"}},
 		{raw: "Apollo 8: The Thrilling Story of the First Mission to the Moon",
-			want: parsedTitle{Title: "Apollo 8: The Thrilling Story of the First Mission to the Moon", Position: "8", Short: "Apollo 8"}},
+			want: parsedTitle{Title: "Apollo 8: The Thrilling Story of the First Mission to the Moon", Position: "8", Short: "Apollo 8", SlotHead: "Apollo", Name: "The Thrilling Story of the First Mission to the Moon"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {

@@ -1,11 +1,12 @@
 // file: internal/metadata/provider_error.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fa58b130-5ad4-4cfc-b726-728a75522364
-// last-edited: 2026-09-03
+// last-edited: 2026-10-01
 
 package metadata
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,22 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrASINNotFound is a provider's answer that it has no product for an ASIN:
+// an empty product body. A 404 means the same (IsNotFound).
+var ErrASINNotFound = errors.New("no product for this ASIN")
+
+// IsNotFound reports whether err is a provider saying it has no such item --
+// ErrASINNotFound, or a 404 or 410 status. It is an answer about the QUERY,
+// not a provider failure: ClassifyProviderError sets no hold for it, and a
+// caller must not record it as the provider failing.
+func IsNotFound(err error) bool {
+	if errors.Is(err, ErrASINNotFound) {
+		return true
+	}
+	var se *ProviderStatusError
+	return errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusGone)
+}
 
 // providerErrorBodyLimit bounds how much of a failing response we keep. Enough
 // to carry a quota message, far short of a full error page.
