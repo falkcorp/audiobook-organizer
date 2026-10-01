@@ -1,5 +1,5 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
 // last-edited: 2026-10-01
 //
@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -119,6 +121,7 @@ func (m *FolderMemo) list(l database.BookDirLister, dir string) (map[string]stri
 var importRoots struct {
 	mu     sync.Mutex
 	source func() ([]string, error)
+	gen    uint64 // bumped by SetImportRootsSource; a stale refresh is dropped
 	roots  map[string]bool
 	at     time.Time
 }
@@ -126,36 +129,50 @@ var importRoots struct {
 const importRootsTTL = time.Minute
 
 // SetImportRootsSource registers where the import paths come from (the
-// store's GetAllImportPaths) and drops the cached list.
+// store's GetAllImportPaths) and drops the cached list. nil unregisters.
 func SetImportRootsSource(source func() ([]string, error)) {
 	importRoots.mu.Lock()
 	defer importRoots.mu.Unlock()
 	importRoots.source = source
+	importRoots.gen++
 	importRoots.roots = nil
 	importRoots.at = time.Time{}
 }
 
-// isImportRoot reports whether dir is a registered import path. A read error
-// is logged at Warn and keeps the previous list.
+// isImportRoot reports whether dir is a registered import path. The source
+// is called outside the lock (it is a store read), by one caller per TTL
+// window; the others use the list on hand. A read error is logged at Warn
+// and keeps the previous list.
 func isImportRoot(dir string) bool {
 	importRoots.mu.Lock()
-	defer importRoots.mu.Unlock()
-	if importRoots.source != nil && time.Since(importRoots.at) >= importRootsTTL {
-		importRoots.at = time.Now()
-		if paths, err := importRoots.source(); err != nil {
-			partRowLog.Warn("import paths unreadable; keeping the previous root list: err=%s",
-				logger.SanitizeLogValue(err.Error()))
-		} else {
-			roots := make(map[string]bool, len(paths))
-			for _, p := range paths {
-				if p = strings.TrimSpace(p); p != "" {
-					roots[filepath.Clean(p)] = true
-				}
-			}
-			importRoots.roots = roots
+	source, gen := importRoots.source, importRoots.gen
+	refresh := source != nil && time.Since(importRoots.at) >= importRootsTTL
+	if refresh {
+		importRoots.at = time.Now() // claim this window's refresh
+	}
+	roots := importRoots.roots
+	importRoots.mu.Unlock()
+	if !refresh {
+		return roots[dir]
+	}
+	paths, err := source()
+	if err != nil {
+		partRowLog.Warn("import paths unreadable; keeping the previous root list: err=%s",
+			logger.SanitizeLogValue(err.Error()))
+		return roots[dir]
+	}
+	fresh := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if p = strings.TrimSpace(p); p != "" {
+			fresh[filepath.Clean(p)] = true
 		}
 	}
-	return importRoots.roots[dir]
+	importRoots.mu.Lock()
+	if importRoots.gen == gen {
+		importRoots.roots = fresh
+	}
+	importRoots.mu.Unlock()
+	return fresh[dir]
 }
 
 // listWarn rate-limits the sibling-listing failure warning: a store fault
@@ -183,20 +200,22 @@ func warnListFailed(dir string, err error) {
 //     "Elantris_copy179"; metadata.IsChapterOnlyTitle,
 //     metadata.IsLikelyChapterFragment) on a part row (isPartRow), whatever
 //     the file's duration -- a file-split part runs 10-60 min;
-//   - an empty or placeholder title ("", "Unknown Title") on a part row
+//   - an empty or placeholder title ("", "Unknown Title", "Unknown",
+//     "Untitled"; isPlaceholderTitle) on a part row
 //     whose FILE is named by a chapter number ("Eldest/98.mp3");
 //   - a counted part (metadata.IsCountedPartTitle: "002 of 341") or a bare
 //     trailing part token (metadata.SiblingPartStem: "The Sunrise Lands 1")
 //     with enough same-set siblings (countedSiblings, stemSiblings) on a row
 //     that is not a whole product by duration (textShapePart);
-//   - rip details (metadata.StripRipJunk) on a part row, when the title IS
-//     the folder's name: a folder name stamped onto each of its files.
+//   - rip details (metadata.StripRipJunk) on a part row (ripShapePart), when
+//     the title IS the folder's name: a folder name stamped onto each of its
+//     files.
 //     "American Gods [64k 577MB].m4b" beside "Coraline.m4b" is a book.
 //
 // The folder is listed only when one of these shapes matches.
 func (j *titleJudge) partRowRefused(title string) bool {
 	t := strings.TrimSpace(title)
-	if t == "" || authorname.IsPlaceholderTitle(t) {
+	if t == "" || isPlaceholderTitle(t) {
 		name := j.fileBaseName()
 		if name == "" || !(metadata.IsChapterOnlyTitle(name) || metadata.IsLikelyChapterFragment(name)) {
 			return false
@@ -211,7 +230,7 @@ func (j *titleJudge) partRowRefused(title string) bool {
 	}
 	if _, had := metadata.StripRipJunk(t); had {
 		dir := j.fileRowDir()
-		return dir != "" && normTitle(t) == normTitle(filepath.Base(dir)) && j.isPartRow()
+		return dir != "" && normTitle(t) == normTitle(filepath.Base(dir)) && j.ripShapePart()
 	}
 	if _, _, ok := metadata.SiblingPartStem(t); ok {
 		return j.textShapePart(func() int { return j.stemSiblings(t) })
@@ -231,50 +250,89 @@ func (j *titleJudge) ripFolderPartRow() bool {
 	if _, had := metadata.StripRipJunk(filepath.Base(dir)); !had {
 		return false
 	}
-	return j.isPartRow()
+	return j.ripShapePart()
+}
+
+// ripShapePart decides a row of a rip-details folder by duration first,
+// as textShapePart does: a file of productMinSec or more is a whole book
+// (a "Harry Potter 1-7 [64k]" box set's 10 h files), a shorter one is a
+// part beside any sibling, and with no trustworthy duration the folder must
+// hold unknownDurationMinSiblings siblings.
+func (j *titleJudge) ripShapePart() bool {
+	return j.durationGatedPart(1, func() int { return len(j.siblingPaths()) })
 }
 
 // textShapePart decides a counted or trailing-token title from its same-set
 // sibling count: with a trustworthy duration, a row under productMinSec with
 // minChapterSiblings siblings is a part and one at or over it never is; with
 // none, unknownDurationMinSiblings siblings are needed (see the threshold
-// notes above). The duration is checked first, so a whole product never
-// lists its folder; siblings is called only when the count decides.
+// notes above).
 func (j *titleJudge) textShapePart(siblings func() int) bool {
+	return j.durationGatedPart(minChapterSiblings, siblings)
+}
+
+// durationGatedPart is the duration-first rule textShapePart and
+// ripShapePart share: at or over productMinSec never a part; under it, a
+// part with minKnown siblings; with no trustworthy duration, a part with
+// unknownDurationMinSiblings. The duration is checked first, so a whole
+// product never lists its folder; siblings is called only when the count
+// decides.
+func (j *titleJudge) durationGatedPart(minKnown int, siblings func() int) bool {
 	d := j.rowDurationSec()
 	switch {
 	case d >= productMinSec:
 		return false
 	case d > 0:
-		return siblings() >= minChapterSiblings
+		return siblings() >= minKnown
 	default:
 		return siblings() >= unknownDurationMinSiblings
 	}
 }
 
 // rowDurationSec returns the row's trustworthy duration in seconds, 0 when
-// unknown. The single present file's own duration wins; then the book's.
-// A value that looks like milliseconds for its file size
-// (database.DurationLooksLikeMillis), or one past maxPlausibleSec when no
-// size can judge it, is unknown: read as seconds it would make every chapter
-// a "whole product".
+// unknown. The single present file's own duration wins; when the file has
+// one, the book's is never consulted, so a file value rejected as
+// milliseconds cannot be replaced by a book copy of the same bad value. A
+// value is judged against a file size (the file's, else the book's):
+// database.DurationLooksLikeMillis rejects one too long for its bytes. With
+// no size at all, a value under productMinSec is kept (read as seconds or
+// as milliseconds, the file is short), while one of productMinSec or more is
+// unknown: a 2 h-7 d reading is exactly what a 7-604 s chapter's duration
+// stored in milliseconds looks like. Past maxPlausibleSec is always unknown.
 func (j *titleJudge) rowDurationSec() int {
-	plausible := func(d int, size int64) bool {
-		return d > 0 && d < maxPlausibleSec && !database.DurationLooksLikeMillis(size, d)
+	var bookSize int64
+	if b := j.book; b != nil && b.FileSize != nil {
+		bookSize = *b.FileSize
 	}
-	if present := j.presentFiles(); len(present) == 1 && plausible(present[0].Duration, present[0].FileSize) {
-		return present[0].Duration
+	if present := j.presentFiles(); len(present) == 1 && present[0].Duration > 0 {
+		size := present[0].FileSize
+		if size <= 0 {
+			size = bookSize
+		}
+		return trustedDurationSec(present[0].Duration, size)
 	}
 	if b := j.book; b != nil && b.Duration != nil {
-		var size int64
-		if b.FileSize != nil {
-			size = *b.FileSize
-		}
-		if plausible(*b.Duration, size) {
-			return *b.Duration
-		}
+		return trustedDurationSec(*b.Duration, bookSize)
 	}
 	return 0
+}
+
+// trustedDurationSec is d when it reads as seconds (see rowDurationSec),
+// else 0.
+func trustedDurationSec(d int, size int64) int {
+	switch {
+	case d <= 0 || d >= maxPlausibleSec:
+		return 0
+	case size > 0:
+		if database.DurationLooksLikeMillis(size, d) {
+			return 0
+		}
+		return d
+	case d < productMinSec:
+		return d
+	default:
+		return 0
+	}
 }
 
 // isRootDir reports whether dir is the library root (config RootDir), a
@@ -385,24 +443,67 @@ func presentPaths(files []database.BookFile) []string {
 func (j *titleJudge) isPartRow() bool { return len(j.siblingPaths()) > 0 }
 
 // countedSiblings counts the sibling rows whose file names are parts of the
-// SAME counted set as title (metadata.CountedPartKey): the same count, and
-// the same stem unless either is empty ("Part 01 of 63.mp3" names nothing
-// else). "Red Rising (Part 1 of 2)" is not a sibling of "Golden Son (Part 1
-// of 2)".
+// SAME counted set as this row (metadata.CountedPartKey): the same count,
+// and stems that match (sameCountedStem). This row's key comes from its own
+// FILE name, like its siblings', so a tag title that differs from the file
+// names ("Before They Are Hanged 002 of 341" on "Joe Abercrombie - Before
+// They Are Hanged 002 of 341.mp3", "Cobra (Unabridged) 100 of 151" on
+// "Cobra 100 of 151.mp3") still finds its set; the title is the key only
+// when the file name is not counted. "Red Rising (Part 1 of 2)" is not a
+// sibling of "Golden Son (Part 1 of 2)".
 func (j *titleJudge) countedSiblings(title string) int {
-	stem, count, ok := metadata.CountedPartKey(title)
+	stem, count, ok := metadata.CountedPartKey(countedFileName(j.fileBaseName()))
 	if !ok {
-		return 0
+		if stem, count, ok = metadata.CountedPartKey(title); !ok {
+			return 0
+		}
 	}
 	n := 0
 	for _, p := range j.siblingPaths() {
-		name := leadingTrackRe.ReplaceAllString(strings.TrimSpace(strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))), "")
-		s, c, ok := metadata.CountedPartKey(name)
-		if ok && c == count && (s == stem || s == "" || stem == "") {
+		s, c, ok := metadata.CountedPartKey(countedFileName(strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))))
+		if ok && c == count && sameCountedStem(s, stem) {
 			n++
 		}
 	}
 	return n
+}
+
+// countedFileName is a file's base name (no extension) less any track
+// prefix ("01 - ").
+func countedFileName(base string) string {
+	return leadingTrackRe.ReplaceAllString(strings.TrimSpace(base), "")
+}
+
+// sameCountedStem reports whether two counted-part stems name one set:
+// equal, either empty ("Part 01 of 63.mp3" names nothing else), or one
+// ending in the other at a word boundary ("timothy zahn - cobra" and
+// "cobra": an author prefix on some files).
+func sameCountedStem(a, b string) bool {
+	if a == b || a == "" || b == "" {
+		return true
+	}
+	if len(a) < len(b) {
+		a, b = b, a
+	}
+	rest, ok := strings.CutSuffix(a, b)
+	return ok && !unicode.IsLetter(lastRune(rest)) && !unicode.IsDigit(lastRune(rest))
+}
+
+func lastRune(s string) rune {
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return r
+}
+
+// isPlaceholderTitle is a title that names nothing: the shared placeholder
+// set (authorname.IsPlaceholderTitle: "Unknown Title", ...) plus the bare
+// "Unknown" and "Untitled" taggers write. Local to the part-row rule; the
+// shared set is not widened.
+func isPlaceholderTitle(t string) bool {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "unknown", "untitled":
+		return true
+	}
+	return authorname.IsPlaceholderTitle(t)
 }
 
 // siblingPartTailRe is what may follow the stem in a sibling's file name: a

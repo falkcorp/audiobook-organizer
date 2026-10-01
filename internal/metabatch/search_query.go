@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 //
 // Resolves the title a metadata search asks providers for a book.
 
@@ -419,7 +419,8 @@ func (j *titleJudge) usableTitle(p *string) string {
 // through titleJudge.unsearchable. A folder name carrying rip details
 // ("2002 - Neil Gaiman - American Gods [64k 20;57;42 577MB]") is cleaned
 // (metadata.StripRipJunk), unless this row is one file of several rows in
-// that folder: then refused is true and no folder is offered.
+// that folder: then no folder is offered, and refused is true when the row
+// is a part by duration (ripShapePart).
 func (j *titleJudge) folderTitle(bookPath string) (title string, refused bool) {
 	var paths []string
 	if present := j.presentFiles(); len(present) > 0 {
@@ -432,7 +433,11 @@ func (j *titleJudge) folderTitle(bookPath string) (title string, refused bool) {
 			continue
 		}
 		if _, had := metadata.StripRipJunk(t); had && j.isPartRow() {
-			return "", true
+			// The folder names the set, not this row: never offered. It is
+			// a sibling-part skip only when the row is a part by duration
+			// (ripShapePart); a whole book there (a box set's 10 h file)
+			// is just untitled.
+			return "", j.ripShapePart()
 		}
 		if t, ok := j.ownTitle(t); ok {
 			return t, false

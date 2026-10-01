@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-10-01
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -277,6 +278,8 @@ func siblingRows(dir, self string, names ...string) map[string]string {
 
 func ip(n int) *int { return &n }
 
+func i64p(n int64) *int64 { return &n }
+
 // A row that is one file of a set the scanner filed as separate book rows
 // must be SKIPPED, not searched -- by its own title, its folder or a
 // transcription: each names the whole work, and a whole-book candidate on a
@@ -385,6 +388,9 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 	const author = "/library/Authors/Various"
 	others := []string{"Dune.m4b", "Neuromancer.m4b", "Hyperion.m4b"}
 	const long = 11 * 3600
+	// A long duration is trusted only beside a size that reads it as seconds
+	// (rowDurationSec): 11 h at 64 kb/s.
+	const longSize int64 = long * 8000
 	cases := []struct {
 		name       string
 		book       database.Book
@@ -416,7 +422,7 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 		// a longer one is saved by its durations.
 		{name: "Mistborn 1 beside Mistborn 2 (too few)", book: database.Book{ID: "self", Title: "Mistborn 1", FilePath: author + "/Mistborn 1.m4b"},
 			dir: siblingRows(author, "Mistborn 1.m4b", "Mistborn 2.m4b"), want: "Mistborn 1", wantSrc: SearchQuerySourceTitle},
-		{name: "Mistborn 1 of a long flat set (whole-book duration)", book: database.Book{ID: "self", Title: "Mistborn 1", FilePath: author + "/Mistborn 1.m4b", Duration: ip(long)},
+		{name: "Mistborn 1 of a long flat set (whole-book duration)", book: database.Book{ID: "self", Title: "Mistborn 1", FilePath: author + "/Mistborn 1.m4b", Duration: ip(long), FileSize: i64p(longSize)},
 			dir: siblingRows(author, "Mistborn 1.m4b", "Mistborn 2.m4b", "Mistborn 3.m4b"), want: "Mistborn 1", wantSrc: SearchQuerySourceTitle, noList: true},
 		// B2: twin rows at one path, and a same-stem file differing only by
 		// extension, are not siblings.
@@ -429,7 +435,7 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 			dir:  siblingRows("/library/Authors/Pierce Brown", "Golden Son (Part 1 of 2).m4b", "Golden Son (Part 2 of 2).m4b"),
 			want: "Golden Son (Part 1 of 2)", wantSrc: SearchQuerySourceTitle},
 		{name: "Dark Age (2 of 3) beside its parts, whole-part duration", book: database.Book{ID: "self", Title: "Dark Age (2 of 3)", FilePath: "/library/Authors/Pierce Brown/Dark Age (2 of 3).m4b"},
-			files: []database.BookFile{{FilePath: "/library/Authors/Pierce Brown/Dark Age (2 of 3).m4b", Duration: long}},
+			files: []database.BookFile{{FilePath: "/library/Authors/Pierce Brown/Dark Age (2 of 3).m4b", Duration: long, FileSize: longSize}},
 			dir:   siblingRows("/library/Authors/Pierce Brown", "Dark Age (2 of 3).m4b", "Dark Age (1 of 3).m4b", "Dark Age (3 of 3).m4b"),
 			want:  "Dark Age (2 of 3)", wantSrc: SearchQuerySourceTitle, noList: true},
 		{name: "Shadow's Edge (1 of 2) [Dramatized Adaptation]", book: database.Book{ID: "self", Title: "Shadow's Edge (1 of 2) [Dramatized Adaptation]", FilePath: "/library/Authors/Brent Weeks/Shadow's Edge (1 of 2).m4b"},
@@ -439,7 +445,7 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 			dir: siblingRows(author, "Dune (1 of 2).m4b"), want: "Dune (1 of 2)", wantSrc: SearchQuerySourceTitle},
 		{name: "Wheel of Time #3 of 14 beside unrelated books", book: database.Book{ID: "self", Title: "Wheel of Time #3 of 14", FilePath: author + "/Wheel of Time 3.m4b"},
 			dir: siblingRows(author, "Wheel of Time 3.m4b", others...), want: "Wheel of Time #3 of 14", wantSrc: SearchQuerySourceTitle},
-		{name: "Mistborn Series 1 of 3 with a whole-book duration", book: database.Book{ID: "self", Title: "Mistborn Series 1 of 3", FilePath: author + "/Mistborn Series 1 of 3.m4b", Duration: ip(long)},
+		{name: "Mistborn Series 1 of 3 with a whole-book duration", book: database.Book{ID: "self", Title: "Mistborn Series 1 of 3", FilePath: author + "/Mistborn Series 1 of 3.m4b", Duration: ip(long), FileSize: i64p(longSize)},
 			dir: siblingRows(author, "Mistborn Series 1 of 3.m4b", "Mistborn Series 2 of 3.m4b", "Mistborn Series 3 of 3.m4b"), want: "Mistborn Series 1 of 3", wantSrc: SearchQuerySourceTitle, noList: true},
 		// W2: a row filed directly under a configured root never lists it.
 		{name: "row directly under an import root", book: database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/incoming/Cobra 100 of 151.mp3"},
@@ -561,5 +567,119 @@ func TestResolveCandidateSearchQuery_FetchAndApplyAgree(t *testing.T) {
 		if strings.HasPrefix(r.book.FilePath, "/imports/incoming/") && calls != 0 {
 			t.Errorf("%s: an import root was listed %d times", r.book.FilePath, calls)
 		}
+	}
+}
+
+// numbered returns the file names fmt-built from pattern for 1..n, skipping
+// skip (the row's own number).
+func numbered(pattern string, n, skip int) []string {
+	var out []string
+	for i := 1; i <= n; i++ {
+		if i != skip {
+			out = append(out, fmt.Sprintf(pattern, i))
+		}
+	}
+	return out
+}
+
+// Regression cases from the third review of #3638 (probes probe3-5):
+// a counted row is keyed by its FILE name, not its tag title; a duration
+// that may be milliseconds is unknown, never a whole product; a rip-folder
+// row is judged by duration first; "Unknown"/"Untitled" are placeholders.
+func TestResolveCandidateSearchQuery_PartRowEvidence(t *testing.T) {
+	const (
+		zahn  = "/library/Authors/Timothy Zahn/Cobra"
+		aber  = "/library/Authors/Joe Abercrombie/Before They Are Hanged"
+		sun   = "/library/Authors/S M Stirling/The Sunrise Lands"
+		rip   = "/library/Authors/J K Rowling/Harry Potter 1-7 [64k]"
+		eldst = "/library/Authors/Christopher Paolini/Eldest"
+		hp    = "Harry Potter %d.m4b"
+		tenH  = 10 * 3600
+		ms    = 300000 // 5 min stored in milliseconds
+	)
+	sunSibs := numbered("%03d The Sunrise Lands 1.mp3", 6, 1)
+	cases := []struct {
+		name     string
+		dir      string
+		self     string
+		title    string
+		sibs     []string
+		fileDur  int
+		fileSize int64
+		bookDur  *int
+		bookSize *int64
+		skip     bool
+	}{
+		// E-A: the row's own file name keys its set.
+		{"tag title, author-prefixed files", aber, "Joe Abercrombie - Before They Are Hanged 002 of 341.mp3", "Before They Are Hanged 002 of 341",
+			numbered("Joe Abercrombie - Before They Are Hanged %03d of 341.mp3", 7, 2), 600, 0, nil, nil, true},
+		{"author-prefixed files, bare title", zahn, "Timothy Zahn - Cobra 100 of 151.mp3", "Cobra 100 of 151",
+			[]string{"Timothy Zahn - Cobra 099 of 151.mp3", "Timothy Zahn - Cobra 101 of 151.mp3"}, 1200, 0, nil, nil, true},
+		{"some siblings author-prefixed", zahn, "Cobra 100 of 151.mp3", "Cobra 100 of 151",
+			[]string{"Timothy Zahn - Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3"}, 1200, 0, nil, nil, true},
+		{"tag title with (Unabridged)", zahn, "Cobra 100 of 151.mp3", "Cobra (Unabridged) 100 of 151",
+			[]string{"Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3"}, 1200, 0, nil, nil, true},
+		{"underscore file names", zahn, "Cobra_100_of_151.mp3", "Cobra 100 of 151",
+			[]string{"Cobra_099_of_151.mp3", "Cobra_101_of_151.mp3"}, 1200, 0, nil, nil, true},
+		{"another set's parts are not siblings", "/library/Authors/Pierce Brown", "Golden Son (Part 1 of 2).m4b", "Golden Son (Part 1 of 2)",
+			[]string{"Red Rising (Part 1 of 2).m4b", "Red Rising (Part 2 of 2).m4b"}, 1200, 0, nil, nil, false},
+		{"a stem inside a word is not a suffix match", zahn, "Cobra 100 of 151.mp3", "Cobra 100 of 151",
+			[]string{"Anacobra 099 of 151.mp3", "Anacobra 101 of 151.mp3"}, 1200, 0, nil, nil, false},
+
+		// E-B: a value that may be milliseconds is unknown (6-row set: a part).
+		{"2.5 h with no size is unknown", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 9000, 0, nil, nil, true},
+		{"2.5 h with a size is a product", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 9000, 9000 * 8000, nil, nil, false},
+		{"file rejected as ms, book copy not used", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, ms, 4_800_000, ip(ms), nil, true},
+		{"book value judged by the book size", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 0, 0, ip(ms), i64p(4_800_000), true},
+		{"book value with no size is unknown", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 0, 0, ip(9000), nil, true},
+		{"file without size judged by the book size", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 9000, 0, nil, i64p(9000 * 8000), false},
+
+		// W-2: rip-folder rows are judged by duration first (an untitled
+		// row reaches the folder check before any transcription stand-in).
+		{"rip box set, 10 h files", rip, "Harry Potter 1.m4b", "", numbered(hp, 7, 1), tenH, tenH * 8000, nil, nil, false},
+		{"rip box set, unknown duration, small set", rip, "Harry Potter 1.m4b", "", numbered(hp, 3, 1), 0, 0, nil, nil, false},
+		{"rip folder, unknown duration, big set", rip, "Harry Potter 1.m4b", "", numbered(hp, 7, 1), 0, 0, nil, nil, true},
+		{"rip folder, short file", rip, "Harry Potter 1.m4b", "", numbered(hp, 2, 1), 1200, 0, nil, nil, true},
+		{"rip title is the folder, 10 h file", rip, "Harry Potter 1.m4b", "Harry Potter 1-7 [64k]", numbered(hp, 7, 1), tenH, tenH * 8000, nil, nil, false},
+		{"rip title is the folder, short file", rip, "Harry Potter 1.m4b", "Harry Potter 1-7 [64k]", numbered(hp, 2, 1), 1200, 0, nil, nil, true},
+
+		// N-2: bare placeholders on a chapter-number file.
+		{"Unknown on Chapter 98", eldst, "Chapter 98.mp3", "Unknown", []string{"Chapter 97.mp3"}, 300, 0, nil, nil, true},
+		{"Untitled on 98", eldst, "98.mp3", "Untitled", []string{"97.mp3"}, 300, 0, nil, nil, true},
+		{"Unknown alone in its folder", eldst, "98.mp3", "Unknown", nil, 300, 0, nil, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := tc.dir + "/" + tc.self
+			book := database.Book{ID: "self", Title: tc.title, FilePath: path, Duration: tc.bookDur, FileSize: tc.bookSize}
+			files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: tc.fileDur, FileSize: tc.fileSize}},
+				dir: siblingRows(tc.dir, tc.self, tc.sibs...)}
+			q := ResolveCandidateSearchQuery(files, &book)
+			if got := q.SkipKind == SkipKindSiblingPart; got != tc.skip {
+				t.Fatalf("got %+v, want skipped as a sibling part = %v", q, tc.skip)
+			}
+		})
+	}
+}
+
+// The import-roots source is called outside the registry's lock: a source
+// that itself consults the registry (re-entrant) does not deadlock, and a
+// refresh that finishes after the source was replaced is dropped.
+func TestImportRoots_SourceRunsOutsideTheLock(t *testing.T) {
+	t.Cleanup(func() { SetImportRootsSource(nil) })
+	SetImportRootsSource(func() ([]string, error) {
+		_ = isImportRoot("/elsewhere") // would self-deadlock under the lock
+		SetImportRootsSource(func() ([]string, error) { return []string{"/new"}, nil })
+		return []string{"/stale"}, nil
+	})
+	done := make(chan bool, 1)
+	go func() { done <- isImportRoot("/stale") }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("isImportRoot deadlocked calling its source")
+	}
+	if isImportRoot("/stale") || !isImportRoot("/new") {
+		t.Error("a refresh from a replaced source was kept")
 	}
 }

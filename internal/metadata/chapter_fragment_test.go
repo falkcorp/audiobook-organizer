@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_fragment_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3a9c0e21-6f48-4b7d-95a2-1c8f0d4e7b52
 // last-edited: 2026-10-01
 
@@ -206,6 +206,8 @@ func TestCountedPartKey(t *testing.T) {
 		{"Elantris 084 of", "elantris", ""},
 		{"Wheel of Time #3 of 14", "wheel of time", "14"},
 		{"Cobra - 100 of 151", "cobra", "151"},
+		{"Cobra_099_of_151", "cobra", "151"},
+		{"Timothy Zahn - Cobra 099 of 151", "timothy zahn - cobra", "151"},
 	}
 	for _, tc := range cases {
 		stem, count, ok := CountedPartKey(tc.title)

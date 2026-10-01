@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_fragment.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7d2f1a4c-9b6e-4c0a-8f31-2e5a9c1d3b67
 // last-edited: 2026-10-01
 
@@ -107,7 +107,7 @@ func IsLikelyChapterFragment(title string) bool {
 // ("The Dragon Reborn (Book 3 of 14)", "Vol. 2 of 3"), and is not matched;
 // after "Part", "Disc" or "Track" it is a file's.
 func IsCountedPartTitle(title string) bool {
-	t := strings.TrimSpace(title)
+	t := countedPartText(title)
 	for _, re := range []*regexp.Regexp{chapterFragOfCount, chapterFragOfTail} {
 		for _, loc := range re.FindAllStringIndex(t, -1) {
 			if !seriesCountLabelRe.MatchString(t[:loc[0]]) {
@@ -125,7 +125,7 @@ func IsCountedPartTitle(title string) bool {
 // and their stems match or either stem is empty (a file named only "Part 01
 // of 63"). ok is false when title is not a counted part.
 func CountedPartKey(title string) (stem, count string, ok bool) {
-	t := strings.TrimSpace(title)
+	t := countedPartText(title)
 	for _, re := range []*regexp.Regexp{chapterFragOfCount, chapterFragOfTail} {
 		for _, loc := range re.FindAllStringIndex(t, -1) {
 			if seriesCountLabelRe.MatchString(t[:loc[0]]) {
@@ -139,6 +139,14 @@ func CountedPartKey(title string) (stem, count string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+// countedPartText is title as the counted-part shapes read it: underscores
+// are spaces, so a file named "Cobra_099_of_151" parses like "Cobra 099 of
+// 151" (an underscore is a word character, so \b never sits between it and
+// a digit).
+func countedPartText(title string) string {
+	return strings.TrimSpace(strings.ReplaceAll(title, "_", " "))
 }
 
 // countOfRe reads the count out of a counted position ("002 of 341" -> "341").
