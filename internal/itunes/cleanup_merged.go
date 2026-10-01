@@ -1,7 +1,7 @@
 // file: internal/itunes/cleanup_merged.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c4e7a20-1b83-4d6f-a2e9-5c0d3b8f1a74
-// last-edited: 2026-07-22
+// last-edited: 2026-10-01
 //
 // P3 of the 2-way-sync writeback: remove stale duplicate audiobook tracks left
 // in the library by books that were merged/superseded (the merge-cleanup that
@@ -23,12 +23,20 @@ import (
 
 // MergedCleanupPreview summarizes the superseded-track removal without applying.
 type MergedCleanupPreview struct {
-	TracksInITL    int                   `json:"tracks_in_itl"`
-	PrimaryPIDs    int                   `json:"primary_pids"`     // distinct primary book_file PIDs present in the ITL
-	NonPrimaryPIDs int                   `json:"non_primary_pids"` // distinct non-primary book_file PIDs present in the ITL
-	ToRemove       int                   `json:"to_remove"`        // non-primary PIDs that are NOT also a primary PID
-	SharedSkipped  int                   `json:"shared_skipped"`   // non-primary PIDs also owned by a primary (kept, defensive)
-	Sample         []MergedRemovalSample `json:"sample"`           // up to sampleLimit of the to-remove tracks, for review
+	TracksInITL    int `json:"tracks_in_itl"`
+	PrimaryPIDs    int `json:"primary_pids"`     // distinct primary book_file PIDs present in the ITL
+	NonPrimaryPIDs int `json:"non_primary_pids"` // distinct non-primary book_file PIDs present in the ITL
+	ToRemove       int `json:"to_remove"`        // non-primary PIDs that are NOT also a primary PID
+	SharedSkipped  int `json:"shared_skipped"`   // non-primary PIDs also owned by a primary (kept, defensive)
+	// PathHeldSkipped counts non-primary PIDs kept because a live primary
+	// book_file holds the same FILE with no track of its own in the ITL
+	// (no PID, or one not in the ITL). The non-primary track is then the only
+	// iTunes track of a file a live book owns: removing it would drop the
+	// file from iTunes. This is the shape the folder-books repair leaves: the
+	// retired folder-book keeps its PID'd row, and the new book it created
+	// for the file holds the same path with no PID (repairs never move PIDs).
+	PathHeldSkipped int                   `json:"path_held_skipped,omitempty"`
+	Sample          []MergedRemovalSample `json:"sample"` // up to sampleLimit of the to-remove tracks, for review
 }
 
 // MergedRemovalSample is one to-be-removed track, surfaced so the operator can
@@ -68,6 +76,8 @@ func computeMergedCleanupFromInITL(inITL map[string]bool, store RebuildStore) (*
 	primary := make(map[string]bool)             // PID → is a primary book_file's PID
 	nonPrimary := make(map[string]bool)          // PID → is a non-primary book_file's PID (in ITL)
 	info := make(map[string]MergedRemovalSample) // PID → book context (for the sample)
+	trackless := make(map[string]bool)           // path → a live primary row holds it with no ITL track
+	pidPaths := make(map[string][]string)        // non-primary PID → its rows' paths
 
 	const pageSize = 500
 	afterID := ""
@@ -92,12 +102,16 @@ func computeMergedCleanupFromInITL(inITL map[string]bool, store RebuildStore) (*
 			for j := range files {
 				pid := strings.ToUpper(files[j].ITunesPersistentID)
 				if pid == "" || !inITL[pid] {
+					if isPrimary && !b.IsSoftDeleted() && files[j].FilePath != "" {
+						trackless[files[j].FilePath] = true
+					}
 					continue
 				}
 				if isPrimary {
 					primary[pid] = true
 				} else {
 					nonPrimary[pid] = true
+					pidPaths[pid] = append(pidPaths[pid], files[j].FilePath)
 					if _, seen := info[pid]; !seen {
 						mergedInto := ""
 						if b.MergedIntoBookID != nil {
@@ -129,6 +143,17 @@ func computeMergedCleanupFromInITL(inITL map[string]bool, store RebuildStore) (*
 	for pid := range nonPrimary {
 		if primary[pid] {
 			preview.SharedSkipped++ // a live primary also owns this PID — never remove
+			continue
+		}
+		held := false
+		for _, p := range pidPaths[pid] {
+			if trackless[p] {
+				held = true
+				break
+			}
+		}
+		if held {
+			preview.PathHeldSkipped++ // the only track of a file a live primary owns
 			continue
 		}
 		ops.Removes[pid] = true
