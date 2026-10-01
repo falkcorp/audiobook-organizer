@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.126.0
+// version: 1.127.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-01
 
@@ -927,6 +927,29 @@ func (c *Config) EffectiveLLMMode() string {
 	return AIBackendModeDisabled
 }
 
+// CatalogConfig drives the author catalog (design
+// .claude/notes/catalog-wanted-requests-design-2026-10-01.md). Enabled is the
+// feature flag: off (the default) makes catalog.harvest-authors refuse to run
+// and the /catalog routes answer 404. Nothing in the catalog writes to books,
+// book files or the iTunes library.
+type CatalogConfig struct {
+	Enabled bool `json:"enabled" mapstructure:"enabled"`
+	// Language keeps only products in this provider language ("english").
+	// Audible's author listing returns every language under one name search.
+	Language string `json:"language" mapstructure:"language"`
+	// Marketplace is the Audible marketplace the entries are filed under. Only
+	// "us" (api.audible.com) is fetched today.
+	Marketplace string `json:"marketplace" mapstructure:"marketplace"`
+	// HarvestRateFraction is the share of Audible's effective request budget
+	// the harvest may use (0 < f <= 1). The harvest runs its own limiter at
+	// fraction x audible RPS ON TOP of the shared per-provider token bucket,
+	// so it can never take the whole budget from metadata fetches.
+	HarvestRateFraction float64 `json:"harvest_rate_fraction" mapstructure:"harvest_rate_fraction"`
+	// MaxProductsPerAuthor caps one author's listing (raw products received).
+	// Hitting it is logged and recorded on the author state, never silent.
+	MaxProductsPerAuthor int `json:"max_products_per_author" mapstructure:"max_products_per_author"`
+}
+
 // ScheduledTaskConfig holds per-task scheduler settings.
 type ScheduledTaskConfig struct {
 	Enabled   bool `json:"enabled"    mapstructure:"enabled"`
@@ -1398,6 +1421,9 @@ type Config struct {
 	// (embedding scoring, LLM rerank tier, and tag-write backup policy).
 	// Previously these were 7 flat fields; Wave 3 nests them here.
 	MetadataScoring MetadataScoringConfig `json:"metadata_scoring" mapstructure:"metadata_scoring"`
+
+	// Catalog holds the author-catalog feature flag and harvest settings.
+	Catalog CatalogConfig `json:"catalog" mapstructure:"catalog"`
 
 	// AIBackend holds the backend-mode toggle for the embedding + LLM clients
 	// (independent EmbeddingMode / LLMMode enums, local endpoint coordinates).
@@ -2588,6 +2614,13 @@ func InitConfig() {
 	viper.BindEnv("activity_db_path", "ACTIVITY_DB_PATH")                     //nolint:errcheck
 	viper.BindEnv("activity_db_move_on_change", "ACTIVITY_DB_MOVE_ON_CHANGE") //nolint:errcheck
 
+	// Author catalog (nested under "catalog.*"). Off by default.
+	viper.SetDefault("catalog.enabled", false)
+	viper.SetDefault("catalog.language", "english")
+	viper.SetDefault("catalog.marketplace", "us")
+	viper.SetDefault("catalog.harvest_rate_fraction", 0.5)
+	viper.SetDefault("catalog.max_products_per_author", 2000)
+
 	// Dedup boilerplate-blocklist extras (nested under "dedup_boilerplate.*",
 	// INIT-4 T5). Empty by default — the compiled-in blocklist in
 	// internal/dedup/boilerplate.go is always active regardless.
@@ -2987,6 +3020,15 @@ func InitConfig() {
 					BandMediumMin:  viper.GetFloat64("dedup.signals.band_medium_min"),
 					BandReviewMin:  viper.GetFloat64("dedup.signals.band_review_min"),
 				},
+			},
+
+			// Author catalog (feature flag + harvest settings).
+			Catalog: CatalogConfig{
+				Enabled:              viper.GetBool("catalog.enabled"),
+				Language:             viper.GetString("catalog.language"),
+				Marketplace:          viper.GetString("catalog.marketplace"),
+				HarvestRateFraction:  viper.GetFloat64("catalog.harvest_rate_fraction"),
+				MaxProductsPerAuthor: viper.GetInt("catalog.max_products_per_author"),
 			},
 
 			// Dedup boilerplate-blocklist extras (nested sub-struct, INIT-4 T5).
@@ -3608,6 +3650,15 @@ func ResetToDefaults() {
 					BandMediumMin:  75.0,
 					BandReviewMin:  60.0,
 				},
+			},
+
+			// Author catalog: off by default.
+			Catalog: CatalogConfig{
+				Enabled:              false,
+				Language:             "english",
+				Marketplace:          "us",
+				HarvestRateFraction:  0.5,
+				MaxProductsPerAuthor: 2000,
 			},
 
 			// Dedup boilerplate-blocklist extras (nested sub-struct, INIT-4 T5).

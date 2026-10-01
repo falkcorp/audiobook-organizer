@@ -259,3 +259,4 @@ maintenance.repair-merged-user-state
 dedup.run-all
 metadata.apply-when-scanned
 library.organize-when-scanned
+catalog.harvest-authors

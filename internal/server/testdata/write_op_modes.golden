@@ -185,3 +185,4 @@ scheduler.resolve-production-authors	preview
 scheduler.temp-file-cleanup	no-mode
 scheduler.tombstone-cleanup	no-mode
 scheduler.trash-cleanup	no-mode
+catalog.harvest-authors	preview

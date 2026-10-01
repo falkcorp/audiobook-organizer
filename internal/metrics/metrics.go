@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.15.1
+// version: 1.16.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-09-26
+// last-edited: 2026-10-01
 
 package metrics
 
@@ -140,6 +140,22 @@ var (
 		Name:      "merge_user_state_pending",
 		Help:      "Pending user-state repair records a merge left (moves still owed), sampled by the repair ticker every 15 minutes",
 	})
+	// catalogHarvestAuthorsGauge is the author-catalog harvest census: how
+	// many authors' last harvest ended complete, partial or failed (R12).
+	// Set at the end of every catalog.harvest-authors run from the stored
+	// per-author states, so it reflects the whole catalog, not one run.
+	catalogHarvestAuthorsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "harvest_authors",
+		Help:      "Author-catalog harvest states by outcome of each author's last harvest (complete, partial, failed), set after every catalog.harvest-authors run",
+	}, []string{"state"})
+	// catalogEntriesStaleGauge counts catalog entries no harvested author's
+	// complete listing returns any more (stale_since set).
+	catalogEntriesStaleGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "catalog_entries_stale",
+		Help:      "Author-catalog entries with stale_since set (no longer returned by any complete author listing), set after every catalog.harvest-authors run",
+	})
 	foldersGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "audiobook_organizer",
 		Name:      "import_paths_total",
@@ -273,6 +289,7 @@ func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
 			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, searchCachePatchCapRebuildsTotal, searchCacheRebuildsTotal, foldersGauge, memoryAllocGauge, goroutinesGauge, mergeUserStatePendingGauge,
+			catalogHarvestAuthorsGauge, catalogEntriesStaleGauge,
 			opActivityMirrorDroppedTotal, sortByRequestedTotal, operationDeprecatedDefIDTotal,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
 			itunesLocationUnmappable, organizeTargetPathCollision, aiBackendAvailable,
@@ -354,9 +371,20 @@ func IncSortByRequested(field string) { sortByRequestedTotal.WithLabelValues(fie
 // SetSearchIndexDirtyBacklog records the dirty-set size at a reconcile tick (TASK-130).
 func SetSearchIndexDirtyBacklog(n int) { searchIndexDirtyBacklogGauge.Set(float64(n)) }
 func SetMergeUserStatePending(n int)   { mergeUserStatePendingGauge.Set(float64(n)) }
-func SetFolders(n int)                 { foldersGauge.Set(float64(n)) }
-func SetMemoryAlloc(b uint64)          { memoryAllocGauge.Set(float64(b)) }
-func SetGoroutines(n int)              { goroutinesGauge.Set(float64(n)) }
+
+// SetCatalogHarvestAuthors publishes the per-state author counts.
+func SetCatalogHarvestAuthors(byState map[string]int) {
+	for _, st := range []string{"complete", "partial", "failed"} {
+		catalogHarvestAuthorsGauge.WithLabelValues(st).Set(float64(byState[st]))
+	}
+}
+
+// SetCatalogEntriesStale publishes the stale catalog entry count.
+func SetCatalogEntriesStale(n int) { catalogEntriesStaleGauge.Set(float64(n)) }
+
+func SetFolders(n int)        { foldersGauge.Set(float64(n)) }
+func SetMemoryAlloc(b uint64) { memoryAllocGauge.Set(float64(b)) }
+func SetGoroutines(n int)     { goroutinesGauge.Set(float64(n)) }
 
 // SetOpProgress records the current/total items-processed progress for an
 // in-flight operation (OPS-5 op-stall detection). Call on every
