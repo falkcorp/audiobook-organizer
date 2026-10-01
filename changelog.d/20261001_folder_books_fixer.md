@@ -1,0 +1,11 @@
+- New Repairs fixer, "Folder-sized books". It finds book rows that are really a whole author, series or library folder: an old scan and the 2026-08-26 book-file backfill had attached every file in the folder to them.
+- Apply works on the database only:
+  - A file that no proper book holds gets a new book of its own, grouped by folder or filename stem, at the same path. Nothing moves on disk.
+  - The folder-book is then hidden. It is soft-deleted with its file rows kept, and its version-group primacy is handed to the real book.
+- Rows that are listed but never applied:
+  - deep-tier;
+  - fragmentary, where a group would be chapter-sized;
+  - iTunes;
+  - listening progress;
+  - Doctor Who / Big Finish / Torchwood.
+- Undoing the apply operation restores every folder-book. It also hides the books the apply created, through the new restorable `repair_book_create` change. No row is deleted.

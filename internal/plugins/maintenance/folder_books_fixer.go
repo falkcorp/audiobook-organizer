@@ -180,14 +180,16 @@ var (
 )
 
 // fbStem is the census's per-work filename stem (fold_ex.py): leading track
-// numbers, a trailing "(N of M)" and a trailing part/track/chapter/disc
-// marker are stripped.
+// numbers, a trailing part/track/chapter/disc marker and a trailing "(N of
+// M)" are stripped.
 func fbStem(p string) string {
 	s := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
 	s = fbLeadNumRe.ReplaceAllString(s, "")
-	s = fbTailNumRe.ReplaceAllString(s, "")
+	// The part marker goes first, so "Title - Part 2" loses "- Part 2"
+	// whole (the census stripped the number first and kept "Title - Part").
 	s = fbPartTailRe.ReplaceAllString(s, "")
-	return strings.TrimSpace(s)
+	s = fbTailNumRe.ReplaceAllString(s, "")
+	return strings.Trim(s, " -_.")
 }
 
 // fbGroupKey is the work a file belongs to inside a folder rooted at root:
