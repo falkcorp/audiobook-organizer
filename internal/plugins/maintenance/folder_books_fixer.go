@@ -20,7 +20,7 @@
 //
 //   - D: the rows' durations sum to at least 80h.
 //   - P: other live books holding a strict subset of its paths, each with two
-//     or more files or at least an hour, under a different title.
+//     or more files or at least three hours, under a different title.
 //   - multi-work: the files are two or more works. Evidence is folders, not
 //     filenames: two or more sub-folders of the common root (a disc folder --
 //     "CD1", "Disc 1 of 3", "Dune CD2", a bare number -- counts as its
@@ -38,9 +38,11 @@
 // Tiers, first match wins:
 //
 //   - shelf: the common root is at or above its shelf, or is an author
-//     folder, and a generic title ("Prologue", "iTunes Media"), P>=2,
-//     multi-work, or (at or above the shelf and titled with its folder name).
-//     Duration alone is never enough: one long work stored flat is one book.
+//     folder, and a generic title ("Prologue", "iTunes Media"), P>=2, D and
+//     multi-work, or titled with its folder's name and multi-work. Neither
+//     duration nor multi-work alone is enough: one long work stored flat is
+//     one book, and a book's files named by point-of-view chapter ("Holden",
+//     "Naomi", "Holden") repeat stems.
 //   - author-copy: below an author folder, titled with the author folder's
 //     name, multi-work, and D, P>=2 or 100+ files.
 //   - deep: P>=3, or D and multi-work, anywhere else. Listed, never applied.
@@ -173,7 +175,11 @@ const (
 	fbMinFiles       = 5
 	fbDeepHours      = 80
 	fbAuthorCopyMinN = 100
-	fbProperMinSec   = 3600
+	// fbProperMinSec: a single-file book counts as a proper book holding part
+	// of the folder only from three hours up. At one hour (the census's
+	// figure) a real book whose chapters an old scan imported one book each
+	// ("Metro 2033": eleven one-hour chapter books) read as a shelf of works.
+	fbProperMinSec = 3 * 3600
 )
 
 // fbGeneric are titles that name no work (normalized by fbNorm).
@@ -633,7 +639,7 @@ func (lib *fbLib) evaluate(id string) fbEval {
 	addEv(fmt.Sprintf("its folder %q is an author's", ev.Author), authorFolder)
 	addEv("the folder is a library root or above one", atOrAbove)
 	switch {
-	case (atOrAbove || authorFolder) && (generic || ev.Proper >= 2 || multi || (atOrAbove && t == base)):
+	case (atOrAbove || authorFolder) && (generic || ev.Proper >= 2 || (deep && multi) || (t == base && multi)):
 		ev.Tier = fbTierShelf
 	case !atOrAbove && !authorFolder && authorNamed && multi && (deep || ev.Proper >= 2 || ev.N >= fbAuthorCopyMinN):
 		ev.Tier = fbTierAuthorCopy
