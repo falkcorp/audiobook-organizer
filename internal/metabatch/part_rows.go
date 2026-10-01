@@ -1,5 +1,5 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
 // last-edited: 2026-10-01
 //
@@ -320,7 +320,7 @@ func (j *titleJudge) partRowRefused(title string) bool {
 	t := strings.TrimSpace(title)
 	if t == "" || isPlaceholderTitle(t) {
 		name := j.fileBaseName()
-		if !isChapterShaped(name) {
+		if name == "" || !(metadata.IsChapterOnlyTitle(name) || metadata.IsLikelyChapterFragment(name)) {
 			return false
 		}
 		return j.chapterPartRow()
