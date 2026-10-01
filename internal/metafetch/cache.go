@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -283,9 +283,26 @@ var ErrNoSourceAnswered = errors.New("metadata search: no source answered (every
 // A response WITH results is never this case: the candidates came from a
 // source that returned them, so dating them now is true even if that source's
 // later ladder steps failed.
+//
+// When the response names the sources it asked (SourcesAsked), only an
+// answered source that was ASKED counts: a source with nothing to be asked
+// (Audnexus, asked only by ASIN, for a book with none) is "answered" so the
+// batch does not re-ask it forever, but it said nothing about the book, and a
+// search whose every asked source errored must still refuse to cache
+// "nothing found". A search that asked nobody (a partial re-ask of only
+// Audnexus) counts its answered sources as before.
 func noSourceAnswered(resp *SearchMetadataResponse) error {
-	if resp == nil || len(resp.Results) > 0 || len(resp.SourcesAnswered) > 0 {
+	if resp == nil || len(resp.Results) > 0 {
 		return nil
+	}
+	asked := make(map[string]bool, len(resp.SourcesAsked))
+	for _, n := range resp.SourcesAsked {
+		asked[n] = true
+	}
+	for _, n := range resp.SourcesAnswered {
+		if len(asked) == 0 || asked[n] {
+			return nil
+		}
 	}
 	if len(resp.SourcesFailed) == 0 {
 		return ErrNoSourceAnswered
