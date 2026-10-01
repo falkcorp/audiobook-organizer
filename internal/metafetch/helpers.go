@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-10-01
 
@@ -32,48 +32,53 @@ func (mfs *Service) protectedListLoaded() bool {
 	return mfs == nil || tagger.ProtectedListLoaded(mfs.safeWriteDeps.ProtectedCache)
 }
 
+// The stripChapterFromTitle patterns, compiled once. They were compiled on
+// every call -- ten regexps per title, 70% of what a legacy cache row's
+// read-time filter allocated (BenchmarkGetCachedCandidates) and paid by every
+// search's input resolution.
+var (
+	chapterTrackNumPrefixRe  = regexp.MustCompile(`^\d{1,3}\s*[-–.]\s*`)
+	chapterBareNumPrefixRe   = regexp.MustCompile(`^\d{1,3}\s+`)
+	chapterTrackWordPrefixRe = regexp.MustCompile(`(?i)^[Tt]rack\s*\d+\s*[-–.]\s*`)
+	chapterDiscWordPrefixRe  = regexp.MustCompile(`(?i)^[Dd]is[ck]\s*\d+\s*[-–.]\s*`)
+	chapterBracketPrefixRe   = regexp.MustCompile(`^\[.*?\]\s*[-–]?\s*`)
+	chapterBracketSuffixRe   = regexp.MustCompile(`\s*\[.*?\]\s*$`)
+	chapterSuffixRes         = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)[,:\s]*-?\s*(?:Book|Chapter|Part|Volume|Vol\.?|Pt\.?)\s*\d+[\.\d]*\s*$`),
+		regexp.MustCompile(`(?i)\s*\((?:Book|Chapter|Part|Volume)\s*\d+[\.\d]*\)`),
+		regexp.MustCompile(`(?i)\s*#\d+[\.\d]*\s*$`),
+	}
+	chapterQualifierRe = regexp.MustCompile(`(?i)\s*\((un)?abridged\)`)
+)
+
 func stripChapterFromTitle(title string) string {
 	cleaned := title
 
 	// Strip leading track/disc number prefixes from filenames
 	// e.g. "01 - Title", "01. Title", "1 - Title", "123 - Title"
-	trackNumPrefix := regexp.MustCompile(`^\d{1,3}\s*[-–.]\s*`)
-	cleaned = trackNumPrefix.ReplaceAllString(cleaned, "")
+	cleaned = chapterTrackNumPrefixRe.ReplaceAllString(cleaned, "")
 	// e.g. "01 Title" (bare number prefix followed by non-numeric text)
-	bareNumPrefix := regexp.MustCompile(`^\d{1,3}\s+`)
-	if stripped := strings.TrimSpace(bareNumPrefix.ReplaceAllString(cleaned, "")); stripped != "" {
+	if stripped := strings.TrimSpace(chapterBareNumPrefixRe.ReplaceAllString(cleaned, "")); stripped != "" {
 		cleaned = stripped
 	}
 	// e.g. "Track 01 - Title", "Track01 - Title"
-	trackWordPrefix := regexp.MustCompile(`(?i)^[Tt]rack\s*\d+\s*[-–.]\s*`)
-	cleaned = trackWordPrefix.ReplaceAllString(cleaned, "")
+	cleaned = chapterTrackWordPrefixRe.ReplaceAllString(cleaned, "")
 	// e.g. "Disc 1 - Title", "Disc01 - Title"
-	discWordPrefix := regexp.MustCompile(`(?i)^[Dd]is[ck]\s*\d+\s*[-–.]\s*`)
-	cleaned = discWordPrefix.ReplaceAllString(cleaned, "")
+	cleaned = chapterDiscWordPrefixRe.ReplaceAllString(cleaned, "")
 
 	// Strip leading bracketed series info like "[The Expanse 9.0]" or "[Series Name]"
-	bracketPrefix := regexp.MustCompile(`^\[.*?\]\s*[-–]?\s*`)
-	cleaned = bracketPrefix.ReplaceAllString(cleaned, "")
+	cleaned = chapterBracketPrefixRe.ReplaceAllString(cleaned, "")
 
 	// Strip trailing bracketed info like "Title [Unabridged]"
-	bracketSuffix := regexp.MustCompile(`\s*\[.*?\]\s*$`)
-	cleaned = bracketSuffix.ReplaceAllString(cleaned, "")
+	cleaned = chapterBracketSuffixRe.ReplaceAllString(cleaned, "")
 
 	// Common patterns for chapters/books/parts/volumes
-	patterns := []string{
-		`(?i)[,:\s]*-?\s*(?:Book|Chapter|Part|Volume|Vol\.?|Pt\.?)\s*\d+[\.\d]*\s*$`,
-		`(?i)\s*\((?:Book|Chapter|Part|Volume)\s*\d+[\.\d]*\)`,
-		`(?i)\s*#\d+[\.\d]*\s*$`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
+	for _, re := range chapterSuffixRes {
 		cleaned = re.ReplaceAllString(cleaned, "")
 	}
 
 	// Strip audiobook qualifiers like "(Unabridged)", "(Abridged)", etc.
-	qualifiers := regexp.MustCompile(`(?i)\s*\((un)?abridged\)`)
-	cleaned = qualifiers.ReplaceAllString(cleaned, "")
+	cleaned = chapterQualifierRe.ReplaceAllString(cleaned, "")
 
 	// Strip leading/trailing " - " artifacts from removals
 	cleaned = strings.TrimLeft(cleaned, " -–")

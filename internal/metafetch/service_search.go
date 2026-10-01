@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-01
 
@@ -507,11 +507,26 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 		rawQuery: rawQuery, literal: literal, parsed: parsed, legacy: legacy}
 }
 
+// fingerprintPrefix starts every fingerprint this searchInputVersion writes.
+// Version "1" fingerprints are bare hex and older rows have none, so a row an
+// earlier ladder wrote is told apart by its stamp alone (isCurrentFingerprint)
+// -- no book read, no input resolution. That is what lets GetCachedCandidates
+// filter every such row, including one a user-typed query wrote, whose legacy
+// fingerprint the book's own title can never reproduce.
+const fingerprintPrefix = "v" + searchInputVersion + ":"
+
+// isCurrentFingerprint reports whether fp was written by this
+// searchInputVersion (fingerprintPrefix).
+func isCurrentFingerprint(fp string) bool {
+	return strings.HasPrefix(fp, fingerprintPrefix)
+}
+
 // fingerprint hashes the questions the ladder asks for these inputs: the
 // ladder version, the book's own title (the ladder also queries it and its
 // variants) and the resolved title, author and narrator. Unlike the cache's
 // SourceHash, which hashes the caller's HINTS, this sees an author resolved
-// from AuthorID, so renaming the author changes it.
+// from AuthorID, so renaming the author changes it. It carries
+// fingerprintPrefix.
 func (in searchInputs) fingerprint(bookTitle string) string {
 	h := sha256.New()
 	parts := []string{searchInputVersion, bookTitle, in.title, in.author, in.narrator}
@@ -524,7 +539,7 @@ func (in searchInputs) fingerprint(bookTitle string) string {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return fingerprintPrefix + hex.EncodeToString(h.Sum(nil))
 }
 
 // legacyFingerprint is the fingerprint the searchInputVersion "1" ladder

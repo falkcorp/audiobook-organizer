@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_gate_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 8b4f2d70-1e9a-4c63-a7d5-f0c3e6b91a24
-// last-edited: 2026-09-27
+// last-edited: 2026-10-01
 //
 // The certainty gate on both bulk-apply paths, and the dry run's read-only
 // contract.
@@ -180,8 +180,12 @@ func TestBulkApplyPreview_WritesNothing(t *testing.T) {
 			return nil, nil
 		}
 		// Empty SourceHash: the legacy fail-open row, so identity passes and
-		// the preview reaches the field and rename planners.
-		return &database.MetadataCandidateCache{BookID: id, Candidates: candidateJSON(t, c)}, nil
+		// the preview reaches the field and rename planners. Stamped as a row
+		// the current search version wrote ("v2:", metafetch's
+		// fingerprintPrefix): an unstamped row is filtered on read by the
+		// position rules, which would drop "wrong"'s Big Cats 3 before the
+		// apply gate this test pins ever sees it.
+		return &database.MetadataCandidateCache{BookID: id, SearchFingerprint: "v2:test", Candidates: candidateJSON(t, c)}, nil
 	}
 	store.GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
 		return []database.BookFile{{ID: "f-" + id, BookID: id, FilePath: books[strings.TrimSuffix(id, "")].FilePath, Format: "m4b"}}, nil

@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
 // last-edited: 2026-10-01
 
@@ -96,6 +96,12 @@ type parsedTitle struct {
 	// (strongCriteria.positionConflicts), never the queries.
 	SlotHead string
 	Name     string
+	// BareSlot: Position is a bare number trailing the title ("Rogue
+	// Ascension 8", "Rogue Ascension #8", "Rogue Ascension VIII"), with no
+	// slot word. Such a number may be part of the name ("Fahrenheit 451",
+	// "Area 51"), so an answer whose title carries it is not refuted by a
+	// provider's other series_position (strongCriteria.positionConflicts).
+	BareSlot bool
 }
 
 var (
@@ -115,6 +121,15 @@ var (
 	slotWordRe = regexp.MustCompile(`(?i)^(?:book|bk|part|pt|vol(?:ume)?|episode|ep|chapter|disc|disk|track)\.?$`)
 	// decorationNumberRe pulls the position out of a seriesDecoration match.
 	decorationNumberRe = regexp.MustCompile(`\d+(?:\.\d+)?`)
+	// labelledWordNumberRe: a slot word followed by a written-out number
+	// ("Book Eight", "Part II", "Vol. Three"); parseSearchTitle reads it as
+	// the digits, so it takes the same series-slot path as "Book 8".
+	labelledWordNumberRe = regexp.MustCompile(`(?i)\b(book|bk|vol(?:ume)?|part|pt|episode|ep)(\.?\s+)([a-z]+)\b`)
+	// trailingSeriesNumberRe: "<series> <n>" with nothing after the number --
+	// "Rogue Ascension 8", "Rogue Ascension #8", "Rogue Ascension 08",
+	// "Rogue Ascension 8.5", "Rogue Ascension VIII", "Rogue Ascension Eight".
+	// A lone "I" is never a position here: "Who Am I".
+	trailingSeriesNumberRe = regexp.MustCompile(`(?i)^(.*\pL.*?)[\s,]+#?\s*(\d{1,3}(?:\.\d+)?|xx|xix|xviii|xvii|xvi|xv|xiv|xiii|xii|xi|x|ix|viii|vii|vi|v|iv|iii|ii|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)$`)
 )
 
 // notPersonWords are words a series or title in trailing parentheses carries
@@ -208,6 +223,14 @@ func parseSearchTitle(raw, author, narrator string) parsedTitle {
 		}
 	}
 
+	// A labelled written-out position reads as its digits ("Rogue Ascension,
+	// Book Eight" is "Rogue Ascension, Book 8") -- only in a title with no
+	// digits, so it never displaces a digit slot: "Hemlock Hollow 8: Book
+	// One" stays book 8 with a tagline, not book 1 of "Hemlock Hollow 8".
+	if !titleNumberRe.MatchString(t) {
+		t = labelledWordNumberRe.ReplaceAllStringFunc(t, labelledWordNumber)
+	}
+
 	// Series slot.
 	if m := dashPositionRe.FindStringSubmatch(t); m != nil && !slotWordRe.MatchString(strings.TrimSpace(m[1])) {
 		p.Series, p.Position = strings.TrimSpace(m[1]), m[2]
@@ -267,6 +290,23 @@ func parseSearchTitle(raw, author, narrator string) parsedTitle {
 				p.NameSplit = true
 			}
 		}
+	} else if m := trailingSeriesNumberRe.FindStringSubmatch(t); m != nil && !slotWordRe.MatchString(strings.TrimSpace(m[1])) {
+		// "<series> <n>" with nothing after it. The number is the position
+		// the answers must agree with; the title is searched as written and
+		// no series is recorded, so no query variant changes. A written-out
+		// number needs a series of two or more words ("Ready Player One" has
+		// one; "Malcolm X" does not). The digits always count: "Apollo 13" vs
+		// "Apollo 11" is a different book whatever the series' length.
+		series := strings.Trim(strings.TrimSpace(m[1]), " ,:-–—")
+		num, written := m[2], false
+		if v, ok := wordNumber(num); ok {
+			num, written = v, true
+		}
+		if words := len(SignificantWords(series)); words >= 2 || (words == 1 && !written) {
+			p.Position = num
+			p.SlotHead = series
+			p.BareSlot = true
+		}
 	}
 
 	p.Title = stripChapterFromTitle(t)
@@ -277,6 +317,17 @@ func parseSearchTitle(raw, author, narrator string) parsedTitle {
 		p.Short = s
 	}
 	return p
+}
+
+// labelledWordNumber rewrites one labelledWordNumberRe match with the
+// number's digits ("Book Eight" -> "Book 8"); a word that is no number is
+// left as written ("Book Club").
+func labelledWordNumber(m string) string {
+	sub := labelledWordNumberRe.FindStringSubmatch(m)
+	if v, ok := wordNumber(sub[3]); ok {
+		return sub[1] + sub[2] + v
+	}
+	return m
 }
 
 // usableSlotName reports whether name, read from behind a series slot, can
@@ -291,6 +342,41 @@ func usableSlotName(name, series string) bool {
 // ("Catch-22" -> 22, "Book 08" -> 8).
 var titleNumberRe = regexp.MustCompile(`\d+(?:\.\d+)?`)
 
+// romanNumerals and numberWords are the written-out positions a title uses
+// ("Rogue Ascension VIII", "Book Eight"): I to XX and one to twenty.
+var romanNumerals = map[string]string{
+	"i": "1", "ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10",
+	"xi": "11", "xii": "12", "xiii": "13", "xiv": "14", "xv": "15", "xvi": "16", "xvii": "17", "xviii": "18", "xix": "19", "xx": "20",
+}
+
+var numberWords = map[string]string{
+	"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+	"eleven": "11", "twelve": "12", "thirteen": "13", "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
+	"eighteen": "18", "nineteen": "19", "twenty": "20",
+}
+
+// wordNumber returns the number a written-out word names ("VIII", "eight"
+// -> "8"), case and surrounding punctuation ignored.
+func wordNumber(w string) (string, bool) {
+	w = strings.ToLower(strings.Trim(w, ".,:;#!?'\"()[]"))
+	if v, ok := romanNumerals[w]; ok {
+		return v, true
+	}
+	v, ok := numberWords[w]
+	return v, ok
+}
+
+// numberKeywords label the number after them as a position ("Book Eight",
+// "Part II", "No. 3").
+var numberKeywords = map[string]bool{
+	"book": true, "bk": true, "vol": true, "volume": true, "part": true, "pt": true,
+	"episode": true, "ep": true, "no": true, "number": true,
+}
+
+// numberSegmentRe splits a title at its separators, so "last word" means the
+// last word before a colon, comma, bracket or spaced dash.
+var numberSegmentRe = regexp.MustCompile(`\s*(?:[:;,()\[\]]|\s[-–—]\s)\s*`)
+
 func normPosition(pos string) string {
 	n := normalizeSeriesNumber(pos)
 	if t := strings.TrimLeft(n, "0"); t != "" && t[0] != '.' {
@@ -299,11 +385,30 @@ func normPosition(pos string) string {
 	return n
 }
 
-// titleNumbers returns every number in title, normalized (normPosition).
+// titleNumbers returns every number in title, normalized (normPosition):
+// every number in digits, and a written-out one (wordNumber) after a slot
+// word ("Book Eight", "Part II") or as the last word of a segment after
+// another word ("Rogue Ascension VIII", "Rogue Ascension: Book Seven"). A
+// written number elsewhere is a word ("Seven Years in Tibet"), and a lone
+// trailing "I" is a pronoun ("Who Am I").
 func titleNumbers(title string) []string {
 	var out []string
 	for _, n := range titleNumberRe.FindAllString(title, -1) {
 		out = append(out, normPosition(n))
+	}
+	for _, seg := range numberSegmentRe.Split(title, -1) {
+		toks := strings.Fields(seg)
+		for i, tok := range toks {
+			v, ok := wordNumber(tok)
+			if !ok {
+				continue
+			}
+			labelled := i > 0 && numberKeywords[strings.ToLower(strings.Trim(toks[i-1], ".#"))]
+			trailing := i > 0 && i == len(toks)-1 && !strings.EqualFold(strings.Trim(tok, ".,:;!?"), "i")
+			if labelled || trailing {
+				out = append(out, v)
+			}
+		}
 	}
 	return out
 }
@@ -600,8 +705,10 @@ type strongCriteria struct {
 	slotSeries string
 	slotPos    string
 	// position is the series position read from the title (normPosition);
-	// see positionConflicts.
+	// see positionConflicts. bareSlot: it was a bare trailing number
+	// (parsedTitle.BareSlot).
 	position string
+	bareSlot bool
 	// nameAnchor is the distinguishing words of the book name read from
 	// behind the title's series slot (parsedTitle.Name), and seriesWords the
 	// slot head's (parsedTitle.SlotHead).
@@ -624,7 +731,7 @@ type strongCriteria struct {
 // title it searches by and literal, the title as written.
 func newStrongCriteria(p parsedTitle, title, literal, asin, author string, bookDur int) strongCriteria {
 	c := strongCriteria{asin: asin, authors: author, bookDur: bookDur, position: normPosition(p.Position),
-		nameIsTagline: &atomic.Bool{}}
+		bareSlot: p.BareSlot, nameIsTagline: &atomic.Bool{}}
 	if p.TitleIsSeries {
 		c.slotSeries, c.slotPos = p.Series, p.Position
 	} else {
@@ -650,6 +757,14 @@ func newStrongCriteria(p parsedTitle, title, literal, asin, author string, bookD
 	}
 	if c.position != "" {
 		c.allowedNums[c.position] = true
+	}
+	// A written-out number of the book's own ("viii" in "Rogue Ascension
+	// VIII") is checked as a number (numbersFit, positionConflicts), not as a
+	// word every answer must carry: "Rogue Ascension 8" is the same book.
+	for w := range c.titleWords {
+		if v, ok := wordNumber(w); ok && c.allowedNums[v] {
+			delete(c.titleWords, w)
+		}
 	}
 	return c
 }
@@ -726,7 +841,9 @@ func (c strongCriteria) positionConflicts(r metadata.BookMetadata) bool {
 	}
 	var other bool
 	if sp := normPosition(r.SeriesPosition); sp != "" {
-		other = sp != c.position
+		// A bare trailing number may be the name's own ("Area 51"): an answer
+		// whose title carries it is not refuted by its series_position.
+		other = sp != c.position && !(c.bareSlot && slices.Contains(nums, c.position))
 	} else {
 		other = titleOther
 	}
@@ -769,6 +886,9 @@ func (c strongCriteria) titleSubset(r metadata.BookMetadata) bool {
 	}
 	for w := range SignificantWords(r.Title) {
 		if c.allowed[w] || c.allowedNums[normPosition(w)] || own[w] || subsetNoiseWords[w] {
+			continue
+		}
+		if v, ok := wordNumber(w); ok && c.allowedNums[v] {
 			continue
 		}
 		if !omnibusWords[w] && w != "abridged" && authorjunk.IsGenreTagline(w) {
@@ -826,8 +946,10 @@ func (c strongCriteria) runtimeAgrees(r metadata.BookMetadata) bool {
 
 // ownASINAgrees reports whether r carries the book's own ASIN AND is this
 // book by the same evidence any other answer needs: it names no other
-// position (positionConflicts), and it runs within strongRuntimeTolerance or
-// its title says nothing the book's does not (titleSubset). A stored ASIN is
+// position (positionConflicts, explicitPositionConflicts), its title carries
+// no number the book's does not (numbersFit), and it runs within
+// strongRuntimeTolerance or its title says nothing the book's does not
+// (titleSubset). A stored ASIN is
 // sometimes wrong -- an earlier bad match stored a sibling's ("Rogue
 // Ascension 7" on book 8) -- and an answer that carries it but fails that
 // gets the ASIN multiplier only, not the first-place tier or the early stop.
@@ -835,17 +957,28 @@ func (c strongCriteria) ownASINAgrees(r metadata.BookMetadata) bool {
 	if c.asin == "" || !strings.EqualFold(strings.TrimSpace(r.ASIN), c.asin) {
 		return false
 	}
-	return !c.positionConflicts(r) && (c.runtimeAgrees(r) || c.titleSubset(r))
+	return !c.positionConflicts(r) && !c.explicitPositionConflicts(r) && c.numbersFit(r.Title) &&
+		(c.runtimeAgrees(r) || c.titleSubset(r))
 }
 
 // explicitPositionConflicts reports whether r's explicit series_position is
-// not the title's and r's runtime is not within positionOverrideTolerance of
-// the book's. A strong answer never has one: the name exemption that keeps it
-// in the pool ("The Tower of the Swallow", Audible's #6) is not enough to
-// stop the search on.
+// not the book's and r's runtime is not within positionOverrideTolerance of
+// the book's. "Not the book's": not the title's position, or, when the parse
+// found none, not one of the title's numbers (allowedNums) -- a title with no
+// number at all says nothing either way. A strong answer never has one: the
+// name exemption that keeps it in the pool ("The Tower of the Swallow",
+// Audible's #6) is not enough to stop the search on, and neither is a
+// position the parse could not read.
 func (c strongCriteria) explicitPositionConflicts(r metadata.BookMetadata) bool {
 	sp := normPosition(r.SeriesPosition)
-	if c.position == "" || sp == "" || sp == c.position {
+	if sp == "" {
+		return false
+	}
+	if c.position != "" {
+		if sp == c.position || (c.bareSlot && slices.Contains(titleNumbers(r.Title), c.position)) {
+			return false
+		}
+	} else if len(c.allowedNums) == 0 || c.allowedNums[sp] {
 		return false
 	}
 	return !(c.bookDur > 0 && r.DurationSec > 0 && durationDeltaRatio(c.bookDur, r.DurationSec) <= positionOverrideTolerance)
@@ -905,49 +1038,113 @@ func coversWords(title string, words map[string]bool) bool {
 	return true
 }
 
-// personSepRe splits a credit into names: "Lee Child, Jeff Harding", "A & B",
-// "A and B", "A; B", "A / B".
-var personSepRe = regexp.MustCompile(`(?i)\s*(?:[,;/&]|\band\b)\s*`)
+// personSepRe splits a credit into groups of names: "A & B", "A and B",
+// "A; B", "A / B". A comma is read inside a group (personNames): it may
+// separate two people ("Lee Child, Jeff Harding"), a suffix or role ("Michael
+// Grant, Jr.", "X, editor") or a sorted name ("Grant, Michael").
+var personSepRe = regexp.MustCompile(`(?i)\s*(?:[;/&]|\band\b)\s*`)
 
-// personSuffixes are name suffixes that are not a surname.
-var personSuffixes = map[string]bool{"jr": true, "sr": true, "ii": true, "iii": true, "iv": true, "phd": true, "md": true}
+// personRoleWords are name suffixes and credit roles: words of a credit that
+// are never a name of their own, a surname, or a given name.
+var personRoleWords = map[string]bool{
+	"jr": true, "sr": true, "ii": true, "iii": true, "iv": true, "phd": true, "md": true,
+	"ed": true, "eds": true, "editor": true, "editors": true, "translator": true, "foreword": true,
+	"introduction": true, "narrator": true, "illustrator": true,
+}
 
-// personNames splits a credit into names, each as its lower-cased words.
+// personPlaceholders name nobody: two credits that both say "Various
+// Authors" share no person.
+var personPlaceholders = map[string]bool{
+	"various": true, "various authors": true, "various artists": true, "unknown": true, "unknown author": true,
+	"full cast": true, "a full cast": true, "anonymous": true, "anon": true, "uncredited": true, "multiple authors": true,
+}
+
+// personNames splits a credit into names, each as its lower-cased words
+// without dots ("Ph.D." is "phd", "J.R.R." is "jrr"). A comma part that is
+// only a suffix or role is dropped ("Michael Grant, Jr."), a two-part
+// "<surname>, <given>" credit is read as one name ("Grant, Michael"), and a
+// placeholder ("Various Authors", "Full Cast") is no name at all.
 func personNames(s string) [][]string {
 	var out [][]string
-	for _, part := range personSepRe.Split(s, -1) {
-		var words []string
-		for _, w := range strings.Fields(strings.ToLower(part)) {
-			if w = strings.Trim(w, ".,;:'\"()"); w != "" {
-				words = append(words, w)
+	for _, group := range personSepRe.Split(s, -1) {
+		var parts [][]string
+		for _, part := range strings.Split(group, ",") {
+			if words := nameWords(part); len(words) > 0 {
+				parts = append(parts, words)
 			}
 		}
-		if len(words) > 0 {
-			out = append(out, words)
+		if len(parts) == 2 && len(parts[0]) == 1 {
+			parts = [][]string{append(parts[1], parts[0]...)}
+		}
+		for _, words := range parts {
+			name := strings.Join(words, " ")
+			if !personPlaceholders[name] && !authorname.IsPlaceholderAuthor(name) {
+				out = append(out, words)
+			}
 		}
 	}
 	return out
 }
 
-// surname is a name's last word that is not a suffix or an initial.
-func surname(words []string) string {
-	for i := len(words) - 1; i >= 0; i-- {
-		if w := words[i]; len(w) > 1 && !personSuffixes[w] {
-			return w
+// nameWords returns part's words, lower-cased and without punctuation or
+// dots, or nil when every word is a suffix or role (personRoleWords).
+func nameWords(part string) []string {
+	var words []string
+	roleOnly := true
+	for _, w := range strings.Fields(strings.ToLower(part)) {
+		w = strings.ReplaceAll(strings.Trim(w, ".,;:'\"()"), ".", "")
+		if w == "" {
+			continue
+		}
+		words = append(words, w)
+		if !personRoleWords[w] {
+			roleOnly = false
 		}
 	}
-	return ""
+	if roleOnly {
+		return nil
+	}
+	return words
+}
+
+// surname is a name's last word that is not a suffix, role or initial, and
+// its index; "", -1 for none.
+func surname(words []string) (string, int) {
+	for i := len(words) - 1; i >= 0; i-- {
+		if w := words[i]; len([]rune(w)) > 1 && !personRoleWords[w] {
+			return w, i
+		}
+	}
+	return "", -1
+}
+
+// givenInitial is the first letter of a name's first word before its
+// surname (at si), skipping roles; 0 when the name is a surname alone.
+func givenInitial(words []string, si int) rune {
+	for _, w := range words[:max(si, 0)] {
+		if !personRoleWords[w] {
+			return []rune(w)[0]
+		}
+	}
+	return 0
 }
 
 // samePersonName reports whether two names are one person: the same full
-// name, or the same surname. "Michael Grant" and "Michael Connelly" share a
-// word, not a person.
+// name, or the same surname with the same first initial when both give one
+// ("J.R.R. Tolkien" is "John Ronald Reuel Tolkien"; "Owen King" is not
+// "Stephen King"). A surname alone agrees with any given name. "Michael
+// Grant" and "Michael Connelly" share a word, not a person.
 func samePersonName(a, b []string) bool {
 	if strings.Join(a, " ") == strings.Join(b, " ") {
 		return true
 	}
-	sa, sb := surname(a), surname(b)
-	return sa != "" && sa == sb
+	sa, ia := surname(a)
+	sb, ib := surname(b)
+	if sa == "" || sa != sb {
+		return false
+	}
+	ga, gb := givenInitial(a, ia), givenInitial(b, ib)
+	return ga == 0 || gb == 0 || ga == gb
 }
 
 // sharesPerson reports whether a credit in a and one in b name the same
