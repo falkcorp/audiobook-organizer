@@ -1,5 +1,5 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
 // last-edited: 2026-10-01
 //
@@ -124,9 +124,19 @@ var importRoots struct {
 	gen    uint64 // bumped by SetImportRootsSource; a stale refresh is dropped
 	roots  map[string]bool
 	at     time.Time
+	// ready is closed when this generation's FIRST load finishes (success or
+	// error). Callers that arrive while it is in flight wait on it instead of
+	// reading the still-nil list, which would answer "not a root" for every
+	// import path -- the candidate op starts 16-32 workers at once, so the
+	// first pass after start-up would otherwise list whole import roots.
+	ready chan struct{}
 }
 
 const importRootsTTL = time.Minute
+
+// importRootsFirstLoadWait bounds how long a caller waits for a generation's
+// first load; the load is one store read, normally milliseconds.
+var importRootsFirstLoadWait = 2 * time.Second
 
 // SetImportRootsSource registers where the import paths come from (the
 // store's GetAllImportPaths) and drops the cached list. nil unregisters.
@@ -137,6 +147,14 @@ func SetImportRootsSource(source func() ([]string, error)) {
 	importRoots.gen++
 	importRoots.roots = nil
 	importRoots.at = time.Time{}
+	// Release anyone waiting on the replaced generation's first load.
+	if importRoots.ready != nil {
+		close(importRoots.ready)
+		importRoots.ready = nil
+	}
+	if source != nil {
+		importRoots.ready = make(chan struct{})
+	}
 }
 
 // isImportRoot reports whether dir is a registered import path. The source
@@ -145,7 +163,7 @@ func SetImportRootsSource(source func() ([]string, error)) {
 // and keeps the previous list.
 func isImportRoot(dir string) bool {
 	importRoots.mu.Lock()
-	source, gen := importRoots.source, importRoots.gen
+	source, gen, ready := importRoots.source, importRoots.gen, importRoots.ready
 	refresh := source != nil && time.Since(importRoots.at) >= importRootsTTL
 	if refresh {
 		importRoots.at = time.Now() // claim this window's refresh
@@ -153,25 +171,47 @@ func isImportRoot(dir string) bool {
 	roots := importRoots.roots
 	importRoots.mu.Unlock()
 	if !refresh {
+		if roots == nil && ready != nil {
+			// The first load of this generation is in flight: wait for it,
+			// bounded so a source that re-enters the registry (or a stuck
+			// store read) degrades to "not a root" instead of hanging.
+			select {
+			case <-ready:
+			case <-time.After(importRootsFirstLoadWait):
+			}
+			importRoots.mu.Lock()
+			roots = importRoots.roots
+			importRoots.mu.Unlock()
+		}
 		return roots[dir]
 	}
 	paths, err := source()
+	var fresh map[string]bool
+	if err == nil {
+		fresh = make(map[string]bool, len(paths))
+		for _, p := range paths {
+			if p = strings.TrimSpace(p); p != "" {
+				fresh[filepath.Clean(p)] = true
+			}
+		}
+	}
+	importRoots.mu.Lock()
+	if importRoots.gen == gen {
+		if err == nil {
+			importRoots.roots = fresh
+		}
+		// First load of this generation done (even on error): release waiters.
+		if importRoots.ready != nil && importRoots.ready == ready {
+			close(importRoots.ready)
+			importRoots.ready = nil
+		}
+	}
+	importRoots.mu.Unlock()
 	if err != nil {
 		partRowLog.Warn("import paths unreadable; keeping the previous root list: err=%s",
 			logger.SanitizeLogValue(err.Error()))
 		return roots[dir]
 	}
-	fresh := make(map[string]bool, len(paths))
-	for _, p := range paths {
-		if p = strings.TrimSpace(p); p != "" {
-			fresh[filepath.Clean(p)] = true
-		}
-	}
-	importRoots.mu.Lock()
-	if importRoots.gen == gen {
-		importRoots.roots = fresh
-	}
-	importRoots.mu.Unlock()
 	return fresh[dir]
 }
 

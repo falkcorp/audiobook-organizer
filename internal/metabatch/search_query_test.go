@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-10-01
 
@@ -681,5 +681,34 @@ func TestImportRoots_SourceRunsOutsideTheLock(t *testing.T) {
 	}
 	if isImportRoot("/stale") || !isImportRoot("/new") {
 		t.Error("a refresh from a replaced source was kept")
+	}
+}
+
+// Callers that arrive while a generation's first load is in flight wait for
+// it rather than reading the still-nil list: every concurrent caller at cold
+// start must see the registered import root.
+func TestImportRoots_ColdStartCallersWaitForFirstLoad(t *testing.T) {
+	t.Cleanup(func() { SetImportRootsSource(nil) })
+	release := make(chan struct{})
+	SetImportRootsSource(func() ([]string, error) {
+		<-release
+		return []string{"/imports"}, nil
+	})
+	const callers = 16
+	results := make(chan bool, callers)
+	for range callers {
+		go func() { results <- isImportRoot("/imports") }()
+	}
+	time.Sleep(50 * time.Millisecond) // let every caller reach the registry
+	close(release)
+	for range callers {
+		select {
+		case ok := <-results:
+			if !ok {
+				t.Fatal("a cold-start caller answered 'not a root' before the first load finished")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a cold-start caller never returned")
+		}
 	}
 }
