@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.24.0
+// version: 1.24.1
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-01
 //
@@ -256,8 +256,14 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return verdictOf(CheckRestoreReferent(store, c))
 	case ChangeTypeRepairBookCreate:
 		// The revert soft-deletes the created book; one that is absent or
-		// already soft-deleted counts restored.
-		return verdictOf(CheckRepairBookCreate(store, c))
+		// already soft-deleted counts restored, one whose rows moved or that
+		// joined a version group is refused.
+		rbs, ok := store.(RepairBookCreateStore)
+		if !ok {
+			return rowVerdict{refusal: &ReferentError{Reason: ReasonBookLookupFailed,
+				Detail: "this store cannot read the created book's rows"}}
+		}
+		return verdictOf(CheckRepairBookCreate(rbs, c))
 	case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
 		ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
 		ChangeTypeBookFileMove, ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow:
