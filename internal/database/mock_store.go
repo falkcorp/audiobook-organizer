@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.134.0
+// version: 1.135.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 package database
 
@@ -572,6 +572,8 @@ type MockStore struct {
 	ClearITunesPIDFunc                      func(itunesPID string) (bool, error)
 	GetBookFileByPathFunc                   func(filePath string) (*BookFile, error)
 	BookFilesAtPathFunc                     func(path string) ([]BookFile, error)
+	BookFilesWithHashFunc                   func(hash string) ([]BookFile, error)
+	ClaimBookFilePathKeyFunc                func(bookID, fileID, path string) (bool, error)
 	BookAtPathIndexBuiltFunc                func() (bool, error)
 	MarkFileImportedFromDelugeFunc          func(ctx context.Context, originalPath, libraryPath, torrentHash string) error
 	GetBookFileByAcoustIDFunc               func(fingerprint string) (*BookFile, error)
@@ -3408,6 +3410,18 @@ func (m *MockStore) BookAtPathIndexBuilt() (bool, error) {
 		return m.BookAtPathIndexBuiltFunc()
 	}
 	return true, nil
+}
+func (m *MockStore) BookFilesWithHash(hash string) ([]BookFile, error) {
+	if m.BookFilesWithHashFunc != nil {
+		return m.BookFilesWithHashFunc(hash)
+	}
+	return nil, nil
+}
+func (m *MockStore) ClaimBookFilePathKey(bookID, fileID, path string) (bool, error) {
+	if m.ClaimBookFilePathKeyFunc != nil {
+		return m.ClaimBookFilePathKeyFunc(bookID, fileID, path)
+	}
+	return false, nil
 }
 func (m *MockStore) BookFilesAtPath(path string) ([]BookFile, error) {
 	if m.BookFilesAtPathFunc != nil {

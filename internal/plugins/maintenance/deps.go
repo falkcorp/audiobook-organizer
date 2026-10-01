@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.60.0
+// version: 1.61.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-01
 
@@ -105,6 +105,9 @@ type opsFileAndPathReader interface {
 	// path?" read; repoint-unrecorded-renames uses it to refuse a book-row
 	// repoint onto a path another book already holds.
 	LiveBookIDsAtPath(path string) ([]string, error)
+	// BookFilesWithHash is the multi-valued "which rows carry this hash?"
+	// read: the duplicate-copies box-set check re-reads it at apply.
+	BookFilesWithHash(hash string) ([]database.BookFile, error)
 }
 
 // opsBookFileMutator creates and updates book_file rows.

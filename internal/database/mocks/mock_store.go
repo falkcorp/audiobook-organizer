@@ -5824,6 +5824,68 @@ func (_c *MockStore_BookFilesAtPath_Call) RunAndReturn(run func(path string) ([]
 	return _c
 }
 
+// BookFilesWithHash provides a mock function for the type MockStore
+func (_mock *MockStore) BookFilesWithHash(hash string) ([]database.BookFile, error) {
+	ret := _mock.Called(hash)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BookFilesWithHash")
+	}
+
+	var r0 []database.BookFile
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]database.BookFile, error)); ok {
+		return returnFunc(hash)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []database.BookFile); ok {
+		r0 = returnFunc(hash)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookFile)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(hash)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_BookFilesWithHash_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BookFilesWithHash'
+type MockStore_BookFilesWithHash_Call struct {
+	*mock.Call
+}
+
+// BookFilesWithHash is a helper method to define mock.On call
+//   - hash string
+func (_e *MockStore_Expecter) BookFilesWithHash(hash any) *MockStore_BookFilesWithHash_Call {
+	return &MockStore_BookFilesWithHash_Call{Call: _e.mock.On("BookFilesWithHash", hash)}
+}
+
+func (_c *MockStore_BookFilesWithHash_Call) Run(run func(hash string)) *MockStore_BookFilesWithHash_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_BookFilesWithHash_Call) Return(bookFiles []database.BookFile, err error) *MockStore_BookFilesWithHash_Call {
+	_c.Call.Return(bookFiles, err)
+	return _c
+}
+
+func (_c *MockStore_BookFilesWithHash_Call) RunAndReturn(run func(hash string) ([]database.BookFile, error)) *MockStore_BookFilesWithHash_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // BulkCreateExternalIDMappings provides a mock function for the type MockStore
 func (_mock *MockStore) BulkCreateExternalIDMappings(mappings []database.ExternalIDMapping) error {
 	ret := _mock.Called(mappings)
@@ -5997,6 +6059,78 @@ func (_c *MockStore_CarryOverFingerprintWindows_Call) Return(n int, err error) *
 }
 
 func (_c *MockStore_CarryOverFingerprintWindows_Call) RunAndReturn(run func(from []database.FingerprintWindowRef, to database.FingerprintWindowRef) (int, error)) *MockStore_CarryOverFingerprintWindows_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ClaimBookFilePathKey provides a mock function for the type MockStore
+func (_mock *MockStore) ClaimBookFilePathKey(bookID string, fileID string, path string) (bool, error) {
+	ret := _mock.Called(bookID, fileID, path)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ClaimBookFilePathKey")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) (bool, error)); ok {
+		return returnFunc(bookID, fileID, path)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) bool); ok {
+		r0 = returnFunc(bookID, fileID, path)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, string) error); ok {
+		r1 = returnFunc(bookID, fileID, path)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ClaimBookFilePathKey_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ClaimBookFilePathKey'
+type MockStore_ClaimBookFilePathKey_Call struct {
+	*mock.Call
+}
+
+// ClaimBookFilePathKey is a helper method to define mock.On call
+//   - bookID string
+//   - fileID string
+//   - path string
+func (_e *MockStore_Expecter) ClaimBookFilePathKey(bookID any, fileID any, path any) *MockStore_ClaimBookFilePathKey_Call {
+	return &MockStore_ClaimBookFilePathKey_Call{Call: _e.mock.On("ClaimBookFilePathKey", bookID, fileID, path)}
+}
+
+func (_c *MockStore_ClaimBookFilePathKey_Call) Run(run func(bookID string, fileID string, path string)) *MockStore_ClaimBookFilePathKey_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ClaimBookFilePathKey_Call) Return(b bool, err error) *MockStore_ClaimBookFilePathKey_Call {
+	_c.Call.Return(b, err)
+	return _c
+}
+
+func (_c *MockStore_ClaimBookFilePathKey_Call) RunAndReturn(run func(bookID string, fileID string, path string) (bool, error)) *MockStore_ClaimBookFilePathKey_Call {
 	_c.Call.Return(run)
 	return _c
 }

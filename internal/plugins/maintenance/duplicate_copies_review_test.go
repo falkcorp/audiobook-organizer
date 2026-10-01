@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_review_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6e2d9c41-3b7a-4f05-8c1e-a94d2f7b3e58
 // last-edited: 2026-10-01
 
@@ -155,7 +155,8 @@ func TestDuplicateCopies_ZeroDurationRowIsNeverFolded(t *testing.T) {
 	f := newDuplicateCopiesFixer(d.p)
 	lib, err := f.fb.loadFull(d.s)
 	require.NoError(t, err)
-	run := &dcRun{lib: lib, books: map[string]*dcBook{}, res: repairs.NewPathResolver(), series: map[int]string{}}
+	run := &dcRun{lib: lib, books: map[string]*dcBook{}, res: repairs.NewPathResolver(), series: map[int]string{},
+		holders: func(string) ([]string, error) { return nil, nil }}
 	for _, id := range []string{s, l} {
 		require.NoError(t, f.detail(d.s, run, run.book(id)))
 	}
@@ -284,6 +285,64 @@ func TestDuplicateCopies_BoxSet(t *testing.T) {
 		require.Equal(t, b, r.Proposed["survivor"])
 		require.Contains(t, r.Evidence, "box-set check: no runtime on file")
 	})
+}
+
+// TestDuplicateCopies_BoxSetLegAIsRecheckedAtApply is review P1: Ubik A is
+// planned against box set B while no book 2 exists, so the row is
+// applicable. Book 2 is then imported as its own book holding B's extra
+// audio. The stale row must not retire A into the box set: the Replan under
+// the apply's lock reads who holds the hashes again.
+func TestDuplicateCopies_BoxSetLegAIsRecheckedAtApply(t *testing.T) {
+	d, a, _ := ubik(t)
+	r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), a)
+	require.True(t, r.Applicable(), r.SkipReason)
+	d.copyBook(t, "C", "Ubik 2", "lib/Ubik 2", dcRow{track: 1, dur: 600, hash: "x3"}, dcRow{track: 2, dur: 600, hash: "x4"})
+	out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{r.RowID})
+	require.Zero(t, out.Applied)
+	ab, err := d.s.GetBookByID(a)
+	require.NoError(t, err)
+	require.False(t, ab.IsSoftDeleted(), "A must not be retired into the box set")
+	require.Nil(t, ab.MergedIntoBookID)
+}
+
+// dcNoHashLookup is a store whose multi-valued hash lookup is unavailable.
+type dcNoHashLookup struct{ *database.PebbleStore }
+
+func (dcNoHashLookup) BookFilesWithHash(string) ([]database.BookFile, error) {
+	return nil, database.ErrBookFilesWithHashUnavailable
+}
+
+// TestDuplicateCopies_BoxSetLookupUnavailableAtApplyRefuses: a Replan that
+// cannot read who holds the hashes holds the row; it never reads as "no
+// book 2".
+func TestDuplicateCopies_BoxSetLookupUnavailableAtApplyRefuses(t *testing.T) {
+	d, a, _ := ubik(t)
+	r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), a)
+	require.True(t, r.Applicable(), r.SkipReason)
+	d.p.deps = scanDeps{fakeDeps: fakeDeps{store: dcNoHashLookup{d.s}, labels: d.labels}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
+	out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{r.RowID})
+	require.Zero(t, out.Applied)
+	ab, err := d.s.GetBookByID(a)
+	require.NoError(t, err)
+	require.False(t, ab.IsSoftDeleted())
+}
+
+// TestDuplicateCopies_BoxSetLegAIgnoresRetiredBooks: a retired book holding
+// the extra audio is not a book 2, on Plan or at apply.
+func TestDuplicateCopies_BoxSetLegAIgnoresRetiredBooks(t *testing.T) {
+	d, a, b := ubik(t)
+	c := d.copyBook(t, "C", "Ubik 2", "lib/Ubik 2", dcRow{track: 1, dur: 600, hash: "x3"}, dcRow{track: 2, dur: 600, hash: "x4"})
+	_, err := d.s.ModifyBook(c, func(bk *database.Book) error {
+		yes := true
+		bk.MarkedForDeletion = &yes
+		bk.MergedIntoBookID = &b
+		return nil
+	})
+	require.NoError(t, err)
+	r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), a)
+	require.True(t, r.Applicable(), r.SkipReason)
+	out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{r.RowID})
+	require.Equal(t, 1, out.Applied)
 }
 
 // TestDuplicateCopies_BoxSetOwnerCasesStillMerge: the owner's two short
