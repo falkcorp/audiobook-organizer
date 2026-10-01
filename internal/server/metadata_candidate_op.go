@@ -389,7 +389,7 @@ func candidateFetchLimiter(rps float64, burst int) *rate.Limiter {
 // (prod 2026-10-01: audnexus 2/s x 30 s x 0.5 = 30), and the cap binds the
 // floor and a configured count too.
 const (
-	candidateFetchCallLatencySec    = 0.15
+	candidateFetchCallLatencySec = 0.15
 	// candidateFetchCallsPerBook is the fallback when the budget names no
 	// CallsPerBook (no enabled title-searched source); the real figure is
 	// SourcesBudget.CallsPerBook, from the search's own fan-out cap.

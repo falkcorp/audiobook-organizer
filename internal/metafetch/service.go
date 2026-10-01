@@ -188,18 +188,18 @@ type Store interface {
 }
 
 type Service struct {
-	db               Store
-	olStore          *openlibrary.OLStore
-	overrideSources  []metadata.MetadataSource // for testing
+	db              Store
+	olStore         *openlibrary.OLStore
+	overrideSources []metadata.MetadataSource // for testing
 	// asinLookupOverride replaces the live Audible/Audnexus ASIN clients in
 	// lookupASIN (tests only; nil in production).
 	asinLookupOverride func(ctx context.Context, providerID, asin string) (*metadata.BookMetadata, error)
-	isbnEnrichment   *ISBNService
-	activityService  *activity.Service
-	dedupEngine      *dedup.Engine
-	metadataScorer   ai.MetadataCandidateScorer // optional; nil = fallback to F1
-	llmScorer        ai.MetadataCandidateScorer // optional; nil = no LLM rerank tier
-	writeBackBatcher WriteBackEnqueuer
+	isbnEnrichment     *ISBNService
+	activityService    *activity.Service
+	dedupEngine        *dedup.Engine
+	metadataScorer     ai.MetadataCandidateScorer // optional; nil = fallback to F1
+	llmScorer          ai.MetadataCandidateScorer // optional; nil = no LLM rerank tier
+	writeBackBatcher   WriteBackEnqueuer
 	// safeWriteDeps guards tag/cover writes against Deluge-protected paths.
 	// Zero-value = no guard (writes proceed in-place). Set via SetSafeWriteDeps.
 	safeWriteDeps tagger.SafeWriteDeps
@@ -386,6 +386,12 @@ type SearchMetadataResponse struct {
 	// an error, throttle or cancel (a fetch-cache hit counts). Internal: it is
 	// what cacheSearchResponse records as a provider's "nothing" answer.
 	SourcesAnswered []string `json:"-"`
+	// SourcesAsked names the sources the search sent at least one question
+	// (live or from the fetch cache). Internal: noSourceAnswered uses it so a
+	// source that had nothing to be asked (Audnexus with no ASIN), which is
+	// "answered" for the per-provider bookkeeping, cannot by itself make a
+	// search whose every asked source failed look answered.
+	SourcesAsked []string `json:"-"`
 	// InputFingerprint identifies the questions this search asked (see
 	// searchInputs.fingerprint). Internal, stored on the cache entry.
 	InputFingerprint string `json:"-"`

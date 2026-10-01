@@ -697,7 +697,7 @@ func (mfs *Service) searchMetadataForBook(
 
 	seen := candidateSeen{}
 	var candidates []MetadataCandidate
-	var sourcesTried, sourcesAnswered []string
+	var sourcesTried, sourcesAnswered, sourcesAsked []string
 	sourcesFailed := map[string]string{}
 
 	// Merge in SOURCE ORDER: `sources` is priority-ordered and the dedupe is
@@ -712,6 +712,9 @@ func (mfs *Service) searchMetadataForBook(
 		}
 		if sf.answered {
 			sourcesAnswered = append(sourcesAnswered, sf.name)
+		}
+		if states[srcIdx].asked > 0 {
+			sourcesAsked = append(sourcesAsked, sf.name)
 		}
 		allResults := sf.results
 		baseScores, baseTier := sf.baseScores, sf.baseTier
@@ -932,6 +935,7 @@ func (mfs *Service) searchMetadataForBook(
 		SourcesTried:     sourcesTried,
 		SourcesFailed:    sourcesFailed,
 		SourcesAnswered:  sourcesAnswered,
+		SourcesAsked:     sourcesAsked,
 		InputFingerprint: in.fingerprint(book.Title),
 	}, nil
 }

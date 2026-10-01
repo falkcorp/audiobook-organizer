@@ -218,3 +218,50 @@ func TestSearchFanout_PlaceholderSuffixStripped(t *testing.T) {
 	assert.Equal(t, "Magma Heart", resp.Results[0].Title)
 	assert.Equal(t, [2]string{"Magma Heart", "Plum Parrot"}, audible.calls[0])
 }
+
+// failingProvider errors on every question.
+type failingProvider struct{ fakeProvider }
+
+func (f *failingProvider) SearchByTitle(_ context.Context, title string) ([]metadata.BookMetadata, error) {
+	f.ask(title, "")
+	return nil, errors.New("provider down")
+}
+func (f *failingProvider) SearchByTitleAndAuthor(_ context.Context, title, author string) ([]metadata.BookMetadata, error) {
+	f.ask(title, author)
+	return nil, errors.New("provider down")
+}
+
+// Every title source failing must still be ErrNoSourceAnswered, so nothing
+// is cached as "nothing found": Audnexus, asked nothing, is answered for the
+// per-provider bookkeeping but cannot vouch for the book.
+func TestSearchFanout_AllAskedSourcesFailIsNoSourceAnswered(t *testing.T) {
+	audible := &failingProvider{fakeProvider{id: metadata.SourceIDAudible, name: "Audible"}}
+	ol := &failingProvider{fakeProvider{id: metadata.SourceIDOpenLibrary, name: "Open Library"}}
+	google := &failingProvider{fakeProvider{id: metadata.SourceIDGoogleBooks, name: "Google Books"}}
+	audnexus := &fakeProvider{id: metadata.SourceIDAudnexus, name: "Audnexus (Audible)"}
+	svc := fanoutHarness(t, reacherBook(0), audible, ol, google, audnexus)
+
+	resp, err := svc.SearchMetadataForBookWithOptions("b1", reacherTitle, "Lee Child", "", "", SearchOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Audnexus (Audible)"}, resp.SourcesAnswered)
+	assert.ErrorIs(t, noSourceAnswered(resp), ErrNoSourceAnswered)
+
+	// A partial re-ask of only Audnexus asks nobody: its answer stands.
+	resp, err = svc.SearchMetadataForBookWithOptions("b1", reacherTitle, "Lee Child", "", "",
+		SearchOptions{OnlySources: []string{"Audnexus (Audible)"}})
+	require.NoError(t, err)
+	assert.NoError(t, noSourceAnswered(resp))
+}
+
+func TestNoSourceAnswered_AskedSourcesDecide(t *testing.T) {
+	assert.ErrorIs(t, noSourceAnswered(&SearchMetadataResponse{
+		SourcesAnswered: []string{"Audnexus (Audible)"}, SourcesAsked: []string{"Audible"},
+		SourcesFailed: map[string]string{"Audible": "down"},
+	}), ErrNoSourceAnswered, "an answered source that was not asked does not count")
+	assert.NoError(t, noSourceAnswered(&SearchMetadataResponse{
+		SourcesAnswered: []string{"Audible", "Audnexus (Audible)"}, SourcesAsked: []string{"Audible"},
+	}), "an asked source answered")
+	assert.NoError(t, noSourceAnswered(&SearchMetadataResponse{SourcesAnswered: []string{"Audnexus (Audible)"}}),
+		"nobody asked: answered sources count as before")
+	assert.ErrorIs(t, noSourceAnswered(&SearchMetadataResponse{}), ErrNoSourceAnswered)
+}
