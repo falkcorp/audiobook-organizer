@@ -55,6 +55,9 @@ func TestIsLikelyChapterFragment(t *testing.T) {
 		{"copyright is not a copy suffix", "Notes_copyright", false},
 		{"dune messiah", "Dune Messiah", false},
 		{"series book number", "Mistborn Book 1", false},
+		{"series position out of a count", "The Dragon Reborn (Book 3 of 14)", false},
+		{"volume out of a count", "Collected Stories Vol. 2 of 3", false},
+		{"disc out of a count is a file's", "Dune Disc 2 of 12", true},
 		{"split part", "The Way of Kings, Part 1", false},
 		{"subtitled book number", "Halls of Power: Ancient Dreams, Book 3", false},
 		// Sibling-conditional shapes are NOT fragments on their own.

@@ -111,7 +111,7 @@ type CandidateSearchQuery struct {
 // beside other rows) is refused OUTRIGHT, with SkipKindSiblingPart: no
 // stand-in is tried. Every stand-in -- the intro transcription, the folder
 // name -- names the whole work, and a fragment must be skipped, not cleaned
-// into its parent's title (the "06 Chapter 6" lesson): on 2026-09-29 65 such
+// into its parent's title (the "06 Chapter 6" lesson): on 2026-09-30 65 such
 // rows were handed a whole book's candidate. A row that holds the whole work
 // (two or more present files) is not a part row, so "Cobra 001 of 151" on a
 // merged book still falls back to its folder.
@@ -132,6 +132,11 @@ func ResolveCandidateSearchQuery(files SearchQueryReader, book *database.Book) C
 	}
 	if t, ok := j.ownTitle(book.Title); ok {
 		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceTitle, Usable: true}
+	}
+	// A part row in a rip-detail folder is refused before any transcription:
+	// its one file is mid-book, and every stand-in names the whole work.
+	if j.ripFolderPartRow() {
+		return CandidateSearchQuery{SkipKind: SkipKindSiblingPart}
 	}
 	if t := j.usableTitle(book.TranscribedTitle); t != "" {
 		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceTranscribedTitle,
@@ -183,7 +188,9 @@ var hasLetterRe = regexp.MustCompile(`\pL`)
 //     starts with the same stem (stemSiblings) -- the shape alone is "Apollo
 //     13" or "Plan B";
 //   - rip details (metadata.StripRipJunk) on a single-file row with other
-//     rows in its folder: a folder name stamped onto each of its files.
+//     rows in its folder, when the title IS that folder's name: a folder
+//     name stamped onto each of its files. "American Gods [64k 577MB].m4b"
+//     filed beside "Coraline.m4b" is a book and is searched, cleaned.
 //
 // The folder is listed only when one of these shapes matches.
 func (j *titleJudge) partRowRefused(title string) bool {
@@ -194,9 +201,26 @@ func (j *titleJudge) partRowRefused(title string) bool {
 		return j.isPartRow()
 	}
 	if _, had := metadata.StripRipJunk(title); had {
-		return j.isPartRow()
+		dir := j.fileRowDir()
+		return dir != "" && normTitle(title) == normTitle(filepath.Base(dir)) && j.isPartRow()
 	}
 	return j.stemSiblings(title)
+}
+
+// ripFolderPartRow reports whether this is a single-file row with other rows
+// in its folder and that folder's name carries rip details: one file of a
+// folder the scanner split into rows. Checked before the transcription
+// fallbacks, which would otherwise search the whole work by a mid-book
+// file's intro.
+func (j *titleJudge) ripFolderPartRow() bool {
+	dir := j.fileRowDir()
+	if dir == "" {
+		return false
+	}
+	if _, had := metadata.StripRipJunk(filepath.Base(dir)); !had {
+		return false
+	}
+	return j.isPartRow()
 }
 
 // fileRowDir returns the folder holding this row's one file, or "" when the
@@ -255,16 +279,24 @@ func (j *titleJudge) siblingPaths() []string {
 // another live book row.
 func (j *titleJudge) isPartRow() bool { return len(j.siblingPaths()) > 0 }
 
+// siblingPartTailRe is what may follow the stem in a sibling's file name: a
+// separator and a part token -- digits, optionally sub-numbered ("2",
+// "1-02") -- or one letter ("a").
+var siblingPartTailRe = regexp.MustCompile(`^[\s_]+(?:\d{1,4}(?:[-_.]\d{1,4})*|\pL)$`)
+
 // leadingTrackRe is a track-number prefix on a file name ("01 - ", "003. ").
 var leadingTrackRe = regexp.MustCompile(`^\d{1,4}\s*[-.]?\s+`)
 
 // stemSiblings reports whether title ends in a bare part token
 // (metadata.SiblingPartStem) and a sibling row's file name, less its
-// extension and any track prefix, starts with the same stem as whole words:
+// extension and any track prefix, is the same stem followed by nothing but a
+// part token (siblingPartTailRe):
 // "The Sunrise Lands 1" beside "The Sunrise Lands 2.mp3" or "The Sunrise
 // Lands 1-05.mp3", "Sealed to the Flame E" beside "Sealed to the Flame
 // A.mp3". "Plan B" filed beside its author's other books has no such
-// sibling and is searched.
+// sibling and is searched, and so are "Henry V" beside "Henry IV, Part 1",
+// "Malcolm X" beside "Malcolm X Speaks" and "World War I" beside "World War
+// II": what follows the stem there is not a part token.
 func (j *titleJudge) stemSiblings(title string) bool {
 	stem, _, ok := metadata.SiblingPartStem(title)
 	if !ok {
@@ -274,7 +306,7 @@ func (j *titleJudge) stemSiblings(title string) bool {
 	for _, p := range j.siblingPaths() {
 		base := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
 		base = normTitle(leadingTrackRe.ReplaceAllString(strings.TrimSpace(base), ""))
-		if base == want || strings.HasPrefix(base, want+" ") || strings.HasPrefix(base, want+"_") {
+		if rest, ok := strings.CutPrefix(base, want); ok && siblingPartTailRe.MatchString(rest) {
 			return true
 		}
 	}

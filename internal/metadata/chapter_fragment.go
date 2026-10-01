@@ -96,11 +96,28 @@ func IsLikelyChapterFragment(title string) bool {
 // the book's folder (metabatch.ResolveCandidateSearchQuery) also refuses any
 // stand-in title for such a row when it is one of several file rows in its
 // folder: the stand-in names the whole work, not this file.
+//
+// A count after a book or volume label is a series position, not a file's
+// ("The Dragon Reborn (Book 3 of 14)", "Vol. 2 of 3"), and is not matched;
+// after "Part", "Disc" or "Track" it is a file's.
 func IsCountedPartTitle(title string) bool {
 	t := strings.TrimSpace(title)
-	return chapterFragOfCount.MatchString(t) || chapterFragOfTail.MatchString(t) ||
-		chapterFragCopySuffix.MatchString(t)
+	if chapterFragCopySuffix.MatchString(t) {
+		return true
+	}
+	for _, re := range []*regexp.Regexp{chapterFragOfCount, chapterFragOfTail} {
+		for _, loc := range re.FindAllStringIndex(t, -1) {
+			if !seriesCountLabelRe.MatchString(t[:loc[0]]) {
+				return true
+			}
+		}
+	}
+	return false
 }
+
+// seriesCountLabelRe: text ending in a book or volume label, so the count
+// that follows is a series position ("Book 3 of 14").
+var seriesCountLabelRe = regexp.MustCompile(`(?i)\b(?:book|bk|volume|vol)\.?\s*#?$`)
 
 // trailingPartTokenRe is a title ending in a bare part token after a space
 // or underscore: a 1-4 digit number ("The Sunrise Lands 1") or one capital
