@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-10-01
 
@@ -571,6 +571,9 @@ func TestResolveCandidateSearchQuery_FetchAndApplyAgree(t *testing.T) {
 		fetch := ResolveCandidateSearchQueryMemo(f, &r.book, NewFolderMemo())
 		if apply != fetch {
 			t.Errorf("%s: apply %+v, fetch %+v", r.book.FilePath, apply, fetch)
+		}
+		if strings.Contains(r.book.FilePath, "/Great Sky River 18 6/") && apply.SkipKind != SkipKindSiblingPart {
+			t.Errorf("%s: got %+v, want a %q skip on both paths", r.book.FilePath, apply, SkipKindSiblingPart)
 		}
 		if strings.HasPrefix(r.book.FilePath, "/imports/incoming/") && calls != 0 {
 			t.Errorf("%s: an import root was listed %d times", r.book.FilePath, calls)
