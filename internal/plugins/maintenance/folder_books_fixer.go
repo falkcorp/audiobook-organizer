@@ -1237,7 +1237,10 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		if cls == "orphan" && src[p].Missing && other.ID != "" {
 			src[p] = other
 		}
-		if (cls == "held" || cls == "folder") && !keeperPresent && !allMissing {
+		// Only a present copy on the row's own folder-books can be stranded:
+		// when theirs is Missing too, retiring them loses nothing (a larger
+		// folder-book's present copy is its own row's concern).
+		if (cls == "held" || cls == "folder") && !keeperPresent && !src[p].Missing {
 			onlyOurs = append(onlyOurs, p)
 			fp = append(fp, "p:"+p)
 		}
@@ -1841,9 +1844,13 @@ func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string,
 			return fmt.Sprintf("%q is already book %s", g.Title, b.ID), nil
 		}
 	}
-	search, ok := store.(interface {
+	// Not on database.Store: production's store is the search-index
+	// decorator, which carries no SearchBooksFiltered, so a plain type
+	// assertion would fail and refuse every apply. AsCapability unwraps to
+	// the PebbleStore.
+	search, ok := database.AsCapability[interface {
 		SearchBooksFiltered(query string, limit, offset int, f database.BookSummaryFilter) ([]database.Book, error)
-	})
+	}](store)
 	if !ok {
 		return "", errors.New("this store cannot search titles: cannot rule out a same-title book")
 	}
