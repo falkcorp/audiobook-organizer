@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-01
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
@@ -788,39 +789,69 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 	// took the single-owner book_file_path key from that row; moving this row
 	// off the path dropped the key. Hand it back so GetBookFileByPath names a
 	// row at the path again.
-	atPath, ok := rs.db.(bookFilesAtPathReader)
-	if !ok {
-		return nil
+	set, err := undo.DecodeBookFileLocation(c.NewValue)
+	if err != nil {
+		return err
 	}
-	return rs.reindexVacatedPath(atPath, vacated, f.ID)
+	atPath, _ := rs.db.(bookFilesAtPathReader)
+	return rs.reindexVacatedPath(atPath, vacated, f.ID, set.KeyOwnerBook, set.KeyOwnerRow)
 }
 
-// reindexVacatedPath re-writes one other row at path (a live book's first,
-// else any), so the single-owner book_file_path key names it again after the
-// row except left the path. A no-op ModifyBookFile re-writes the row as
-// stored, indexes included; a row a writer moved off the path is skipped.
-func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, except string) error {
-	others, err := atPath.BookFilesAtPath(path)
-	if err != nil {
-		return fmt.Errorf("rows at %s: %w", path, err)
+// reindexVacatedPath re-writes one other row at path so the single-owner
+// book_file_path key names it again after the row except left the path. A
+// no-op ModifyBookFile re-writes the row as stored, indexes included.
+//
+// The row is the key's owner the repoint journaled (ownerBook/ownerRow),
+// while it is still at path. A repoint journaled before the owner was
+// recorded, or an owner since gone, falls back to the rows at path, a live
+// book's first. An iTunes row is never re-written: the no-op write still
+// notifies and recomputes the book's aggregates, so it is a write, and no
+// write touches an iTunes book (a path under books/itunes/**, a row or book
+// iTunes id, a row iTunes path). With no eligible row the key stays dropped.
+func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, except, ownerBook, ownerRow string) error {
+	if pathutil.UnderFrozenITunesTree(path) {
+		return nil
 	}
-	var live, hidden []database.BookFile
-	for i := range others {
-		o := others[i]
-		if o.ID == except {
+	var cands []database.BookFile
+	if ownerRow != "" && ownerRow != except {
+		o, err := rs.db.GetBookFileByID(ownerBook, ownerRow)
+		if err != nil {
+			return fmt.Errorf("read the path key's owner %s: %w", ownerRow, err)
+		}
+		if o != nil {
+			cands = append(cands, *o)
+		}
+	}
+	if atPath != nil {
+		others, err := atPath.BookFilesAtPath(path)
+		if err != nil {
+			return fmt.Errorf("rows at %s: %w", path, err)
+		}
+		cands = append(cands, others...)
+	}
+	var owner, live, hidden []database.BookFile
+	seen := map[string]bool{}
+	for i := range cands {
+		o := cands[i]
+		if o.ID == except || seen[o.ID] || o.FilePath != path || o.ITunesPersistentID != "" || o.ITunesPath != "" {
 			continue
 		}
+		seen[o.ID] = true
 		b, err := rs.db.GetBookByID(o.BookID)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", o.BookID, err)
 		}
-		if b != nil && !b.IsSoftDeleted() {
+		switch {
+		case b != nil && b.ITunesPersistentID != nil && *b.ITunesPersistentID != "":
+		case o.ID == ownerRow && b != nil:
+			owner = append(owner, o) // the key's owner before, live or retired since
+		case b != nil && !b.IsSoftDeleted():
 			live = append(live, o)
-		} else {
+		default:
 			hidden = append(hidden, o)
 		}
 	}
-	for _, o := range append(live, hidden...) {
+	for _, o := range append(append(owner, live...), hidden...) {
 		got, err := rs.db.ModifyBookFile(o.BookID, o.ID, func(bf *database.BookFile) error {
 			if bf.FilePath != path {
 				return errRepointRowMoved

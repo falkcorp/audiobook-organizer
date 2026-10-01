@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.19.1
+// version: 1.20.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-10-01
 
@@ -180,11 +180,19 @@ func SurvivorFromField(field string) (string, bool) {
 // BookFileLocation is the part of a book_file row a ChangeTypeBookFileRepoint
 // changes, recorded whole on both sides so the revert restores every field
 // the repoint wrote and checks every one of them first.
+//
+// KeyOwnerBook/KeyOwnerRow are set on the repoint's NewValue only: the row
+// that held the single-owner book_file_path key at Path before the repoint
+// took it. The revert hands the key back to exactly that row. They are not
+// part of the location: LocationOf never sets them and Apply ignores them.
 type BookFileLocation struct {
 	Path    string `json:"path"`
 	Missing bool   `json:"missing"`
 	Hash    string `json:"hash,omitempty"`
 	Size    int64  `json:"size,omitempty"`
+
+	KeyOwnerBook string `json:"key_owner_book,omitempty"`
+	KeyOwnerRow  string `json:"key_owner_row,omitempty"`
 }
 
 // LocationOf reads f's BookFileLocation.
