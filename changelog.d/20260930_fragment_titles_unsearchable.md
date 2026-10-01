@@ -1,0 +1,5 @@
+### Fixed
+
+- The metadata candidate fetch no longer searches chapter-file rows by fragment titles. "Cobra 100 of 151", "Elantris 084 of" and "Elantris_copy179" are now chapter fragments. A title ending in a bare part number or capital letter ("The Sunrise Lands 1", "Sealed to the Flame E") is a fragment when sibling rows in its folder share the stem. Such a row is skipped outright with no stand-in title, so a whole book's candidate is no longer attached to one chapter file. Rip details in brackets ("[64k 20;57;42 577MB]") are cleaned off a lone row's title or folder name, and a chapter row carrying them is skipped.
+- `force` on the batch candidate fetch and `?refresh=true` on the search dialog now re-ask the providers instead of replaying the per-source fetch cache (`SearchOptions.BypassFetchCache`); fresh results still replace the cached rows.
+- A title with an unspaced-colon subtitle ("In Fire Forged: Worlds of Honor V") is also searched by its main title, anchored on the author, when the literal searches find nothing.

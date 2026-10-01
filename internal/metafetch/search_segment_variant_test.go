@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_segment_variant_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e7a9c41-6b2d-4f80-a1c5-8d0e2f4b7a93
-// last-edited: 2026-09-14
+// last-edited: 2026-09-30
 
 package metafetch
 
@@ -94,5 +94,46 @@ func TestKeepVariant_SegmentAcceptsOwnTitleWordsOnly(t *testing.T) {
 	}
 	if got := keepVariant([]metadata.BookMetadata{{Title: "Sojourn", Author: "R. A. Salvatore"}}, s, "R. A. Salvatore"); len(got) != 1 {
 		t.Fatalf("Salvatore's Sojourn dropped")
+	}
+}
+
+func TestSubtitleVariant_UnspacedColonSearchesTheMainTitle(t *testing.T) {
+	raw := "In Fire Forged: Worlds of Honor V"
+	got := extraTitleVariants(raw, stripChapterFromTitle(raw))
+	if len(got) != 1 {
+		t.Fatalf("variants = %v, want one", queries(got))
+	}
+	v := got[0]
+	if v.Query != "In Fire Forged" || !v.Exact || v.Allowed == nil {
+		t.Fatalf("variant = %+v, want Exact %q with Allowed", v, "In Fire Forged")
+	}
+	res := []metadata.BookMetadata{
+		{Title: "In Fire Forged", Author: "David Weber"},
+		{Title: "In Fire Forged: Worlds of Honor V", Author: "David Weber"},
+		{Title: "In Fire Forged: Some Other Anthology", Author: "David Weber"}, // words we lack
+		{Title: "In Fire Forged", Author: ""},                                  // no author
+	}
+	kept := keepVariant(res, v, "David Weber")
+	if len(kept) != 2 || kept[0].Title != "In Fire Forged" || kept[1].Title != "In Fire Forged: Worlds of Honor V" {
+		t.Fatalf("kept %+v", kept)
+	}
+	if keepVariant(res, v, "") != nil {
+		t.Fatal("a subtitle variant must be anchored on the author")
+	}
+}
+
+func TestSubtitleVariant_RefusesSeriesHeadsAndFragments(t *testing.T) {
+	for _, raw := range []string{
+		"Mistborn: The Final Empire",                  // one-word head is the series
+		"Dune: House Atreides",                        // likewise
+		"Knaves over Queens : Wild Cards",             // spaced colon is segmentVariant's
+		"Chapter 3: The Return",                       // fragment head
+		"Cobra 100 of 151: The Tears",                 // counted part
+		"A Plain Title",                               // no colon
+		"The Sunrise Lands 1: Part of the Change set", // head is a sibling-part shape
+	} {
+		if got := subtitleVariant(raw, map[string]bool{}); got != nil {
+			t.Errorf("subtitleVariant(%q) = %v, want nil", raw, queries(got))
+		}
 	}
 }

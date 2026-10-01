@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-14
+// last-edited: 2026-09-30
 
 package metafetch
 
@@ -297,10 +297,12 @@ func extraTitleVariants(rawTitle, searchTitle string) []titleVariant {
 		if v := partSuffixVariant(rawTitle, searchTitle); v != nil {
 			return v
 		}
-		return segmentVariant(rawTitle, map[string]bool{
+		seen := map[string]bool{
 			strings.ToLower(strings.TrimSpace(searchTitle)): true,
 			strings.ToLower(strings.TrimSpace(rawTitle)):    true,
-		})
+		}
+		out := segmentVariant(rawTitle, seen)
+		return append(out, subtitleVariant(rawTitle, seen)...)
 	}
 	if bookName == "" {
 		return nil
@@ -371,6 +373,45 @@ func segmentVariant(rawTitle string, seen map[string]bool) []titleVariant {
 		allowed[w] = true
 	}
 	return []titleVariant{{Query: field, Anchor: anchor, Exact: true, Allowed: allowed}}
+}
+
+// unspacedSubtitle splits "Title: Subtitle" at a colon with no space before
+// it -- the shape of a real subtitle ("In Fire Forged: Worlds of Honor V").
+// A spaced colon is the rip convention segmentVariant reads.
+var unspacedSubtitle = regexp.MustCompile(`^(.*\S):\s+\S`)
+
+// subtitleVariant returns the title before an unspaced colon ("In Fire
+// Forged: Worlds of Honor V" -> "In Fire Forged") as an Exact variant whose
+// Allowed words are the full title's: a provider that lists the book under
+// its main title alone, or with the same subtitle, is accepted; a sibling
+// carrying another subtitle ("Mistborn: The Well of Ascension") is not.
+// Allowed makes keepVariant require a person of ours to vouch, so it is
+// anchored on the author (or narrator). The main title needs two or more
+// distinguishing words: a one-word head is usually the series ("Mistborn:
+// The Final Empire", "Dune: House Atreides"), and would accept the series'
+// omnibus. A chapter fragment (metadata.IsLikelyChapterFragment) or an
+// unsearchable head offers nothing: a fragment is skipped, never cleaned
+// into its parent's title.
+func subtitleVariant(rawTitle string, seen map[string]bool) []titleVariant {
+	if metadata.IsLikelyChapterFragment(rawTitle) {
+		return nil
+	}
+	m := unspacedSubtitle.FindStringSubmatch(strings.TrimSpace(rawTitle))
+	if m == nil {
+		return nil
+	}
+	head := strings.Trim(strings.TrimSpace(m[1]), " -–—:,")
+	key := strings.ToLower(head)
+	anchor := anchorWords(head, "")
+	if len(anchor) < 2 || seen[key] || metadata.MayBeUnsearchableTitle(head) {
+		return nil
+	}
+	seen[key] = true
+	allowed := SignificantWords(rawTitle)
+	for w := range anchor {
+		allowed[w] = true
+	}
+	return []titleVariant{{Query: head, Anchor: anchor, Exact: true, Allowed: allowed}}
 }
 
 // partSuffixVariant returns the title without its part number ("Rogue Lawyer -
