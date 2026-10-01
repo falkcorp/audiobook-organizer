@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-10-01
 
@@ -881,6 +881,57 @@ type folderBooksFixer struct {
 
 	commonMu    sync.Mutex
 	commonCache *fbCommon
+
+	// created maps fbNorm(title) to the books this fixer created since the
+	// process started: rows of one apply may build their title indexes
+	// before an earlier row (serialized by the merge lock) creates its
+	// book, so dupNow also consults what was created here.
+	createdMu sync.Mutex
+	created   map[string][]string
+}
+
+// fbTitleIndex maps fbNorm(title) to every live book with that title, from
+// one GetAllBooksCore read (memdb-served once warm).
+type fbTitleIndex map[string][]string
+
+// titleIndex reads every live book once and indexes it by fbNorm(title).
+// Apply builds it BEFORE taking the merge lock, so the lock is held only for
+// point reads (dupNow re-validates each hit by id). A book created or
+// retitled by a writer that does not take the merge lock (scanner,
+// importer) between the read and the lock is missed, but such a writer is
+// not excluded by the lock either: it can create the same title a moment
+// after the check, so the under-lock check never closed that race. Books
+// THIS fixer creates are tracked in f.created.
+func (f *folderBooksFixer) titleIndex(store OpsStore) (fbTitleIndex, error) {
+	books, err := store.GetAllBooksCore(0, 0)
+	if err != nil {
+		return nil, fmt.Errorf("list books for the duplicate check: %w", err)
+	}
+	idx := make(fbTitleIndex, len(books))
+	for i := range books {
+		if books[i].IsSoftDeleted() {
+			continue
+		}
+		k := fbNorm(books[i].Title)
+		idx[k] = append(idx[k], books[i].ID)
+	}
+	return idx, nil
+}
+
+func (f *folderBooksFixer) noteCreated(title, id string) {
+	f.createdMu.Lock()
+	defer f.createdMu.Unlock()
+	if f.created == nil {
+		f.created = map[string][]string{}
+	}
+	k := fbNorm(title)
+	f.created[k] = append(f.created[k], id)
+}
+
+func (f *folderBooksFixer) createdWith(norm string) []string {
+	f.createdMu.Lock()
+	defer f.createdMu.Unlock()
+	return append([]string(nil), f.created[norm]...)
 }
 
 func newFolderBooksFixer(p *Plugin) *folderBooksFixer {
@@ -949,8 +1000,8 @@ type fbNewFile struct {
 type fbGroup struct {
 	Key, Title, Dir, Path string
 	AuthorID              *int
-	Files           []fbNewFile
-	Secs            int
+	Files                 []fbNewFile
+	Secs                  int
 }
 
 // fbPlan is Row.Detail.
@@ -1225,6 +1276,10 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			if other.ID == "" && r.ID != "" {
 				other = r
 			}
+			// The keeper restriction (a present copy on a LARGER folder-book
+			// does not count) is conservative, not load-bearing: that larger
+			// row runs this same check on its own copy. It keeps this row's
+			// verdict from leaning on a holder that will retire too.
 			he, flagged := ev[h]
 			if !flagged || !fbApplicableTier(he.Tier) || ownsBefore(len(lib.sets[h]), h, len(set), members[0]) {
 				keeperPresent = true
@@ -1241,7 +1296,14 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		// when theirs is Missing too, retiring them loses nothing (a larger
 		// folder-book's present copy is its own row's concern).
 		if (cls == "held" || cls == "folder") && !keeperPresent && !src[p].Missing {
-			onlyOurs = append(onlyOurs, p)
+			var waiting []string
+			for _, h := range lib.holders[p] {
+				if !isMember[h] {
+					waiting = append(waiting, h)
+				}
+			}
+			onlyOurs = append(onlyOurs, fmt.Sprintf("%s (held by book %s, with no present copy on a holder that outlives this row)", p,
+				strings.Join(fbFirst(waiting, 3), ", ")))
 			fp = append(fp, "p:"+p)
 		}
 		if cls == "orphan" {
@@ -1628,6 +1690,10 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 	if err != nil {
 		return err
 	}
+	titles, err := f.titleIndex(store) // outside the lock: one full read
+	if err != nil {
+		return err
+	}
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	locked, err := f.Replan(ctx, nil, fresh, nil)
@@ -1646,7 +1712,7 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 		return fmt.Errorf("%s: row %s carries no plan", fbFixerID, locked.RowID)
 	}
 	for _, g := range plan.Groups {
-		if why, err := f.dupNow(store, plan.Members, fbCreatedID(locked.RowID, plan.Members[0], g.Key), g); err != nil {
+		if why, err := f.dupNow(store, titles, plan.Members, fbCreatedID(locked.RowID, plan.Members[0], g.Key), g); err != nil {
 			return err
 		} else if why != "" {
 			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
@@ -1801,11 +1867,16 @@ func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []
 // its title (fbNorm equality) whose author is the group's or none, or any
 // author when the group has none, matched symmetrically with the plan's
 // lib.titles check. Two rows of one apply creating "Dune" meet here, and so
-// does a book created after the plan. The title search is
-// SearchBooksFiltered with the default filter, which drops soft-deleted books
-// inside the scan, so hidden rows never count toward a page; every page is
-// read.
-func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string, g fbGroup) (string, error) {
+// does a book created after the plan.
+//
+// Candidates come from titles (titleIndex, read before the lock), the books
+// this fixer created (f.created) and, for an authored group, the author's
+// books; each is re-read by id here, so only point reads run under the lock.
+// It does not page a substring search: SearchBooksFiltered ranks the whole
+// library per page and matches authors and narrators too, so a short title
+// ("It") meant hundreds of full scans under the lock, and its raw-substring
+// candidates missed fbNorm-equal titles spelled with other punctuation.
+func (f *folderBooksFixer) dupNow(store OpsStore, titles fbTitleIndex, members []string, ours string, g fbGroup) (string, error) {
 	skip := func(id string) bool { return id == ours || contains(members, id) }
 	for _, at := range []string{g.Dir, g.Path} {
 		if at == "" {
@@ -1822,15 +1893,6 @@ func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string,
 		}
 	}
 	want := fbNorm(g.Title)
-	check := func(b database.Book) string {
-		if b.IsSoftDeleted() || skip(b.ID) || fbNorm(b.Title) != want {
-			return ""
-		}
-		if g.AuthorID != nil && b.AuthorID != nil && *b.AuthorID != *g.AuthorID {
-			return ""
-		}
-		return fmt.Sprintf("%q is already book %s", g.Title, b.ID)
-	}
 	if g.AuthorID != nil {
 		books, err := store.GetBooksByAuthorIDWithRoleCore(*g.AuthorID)
 		if err != nil {
@@ -1844,31 +1906,25 @@ func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string,
 			return fmt.Sprintf("%q is already book %s", g.Title, b.ID), nil
 		}
 	}
-	// Not on database.Store: production's store is the search-index
-	// decorator, which carries no SearchBooksFiltered, so a plain type
-	// assertion would fail and refuse every apply. AsCapability unwraps to
-	// the PebbleStore.
-	search, ok := database.AsCapability[interface {
-		SearchBooksFiltered(query string, limit, offset int, f database.BookSummaryFilter) ([]database.Book, error)
-	}](store)
-	if !ok {
-		return "", errors.New("this store cannot search titles: cannot rule out a same-title book")
-	}
-	const page = 200
-	for off := 0; ; off += page {
-		books, err := search.SearchBooksFiltered(g.Title, page, off, database.BookSummaryFilter{})
+	seen := map[string]bool{}
+	for _, id := range append(append([]string(nil), titles[want]...), f.createdWith(want)...) {
+		if seen[id] || skip(id) {
+			continue
+		}
+		seen[id] = true
+		b, err := store.GetBookByID(id)
 		if err != nil {
-			return "", fmt.Errorf("search %q: %w", g.Title, err)
+			return "", fmt.Errorf("read %s: %w", id, err)
 		}
-		for i := range books {
-			if why := check(books[i]); why != "" {
-				return why, nil
-			}
+		if b == nil || b.IsSoftDeleted() || fbNorm(b.Title) != want {
+			continue
 		}
-		if len(books) < page {
-			return "", nil
+		if g.AuthorID != nil && b.AuthorID != nil && *b.AuthorID != *g.AuthorID {
+			continue
 		}
+		return fmt.Sprintf("%q is already book %s", g.Title, b.ID), nil
 	}
+	return "", nil
 }
 
 // applyGroup creates (or, on a resumed apply, finishes) one orphan group's
@@ -1911,6 +1967,7 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 		if _, err := store.CreateBook(nb); err != nil {
 			return steps, fmt.Errorf("create book %q: %w", g.Title, err)
 		}
+		f.noteCreated(g.Title, target)
 		steps++
 		if fbCrashHook != nil {
 			if err := fbCrashHook("book", 0); err != nil {
@@ -1964,8 +2021,13 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 		// would make the single-owner read answer "no row" for a path a live
 		// book holds, the false-free answer the multi-valued reads exist to
 		// prevent.)
-		if err := store.UpdateBookFile(src.ID, src); err != nil {
+		// ModifyBookFile with a no-op re-reads the row under its stripe and
+		// re-writes it as stored (indexes included), so a concurrent writer's
+		// update of the source row is never overwritten by this snapshot.
+		if again, err := store.ModifyBookFile(src.BookID, src.ID, fbNoopFile); err != nil {
 			return steps, fmt.Errorf("re-index %s on its source row %s: %w", nf.Path, src.ID, err)
+		} else if again == nil {
+			return steps, fmt.Errorf("%w: source row %s of %s vanished", repairs.ErrChangedSincePlan, src.ID, src.BookID)
 		}
 		if fbCrashHook != nil {
 			if err := fbCrashHook("row", n+1); err != nil {
@@ -1995,12 +2057,17 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 		return steps, fmt.Errorf("rows of %s: %w", target, err)
 	}
 	for i := range rows {
-		if err := store.UpdateBookFile(rows[i].ID, &rows[i]); err != nil {
+		if _, err := store.ModifyBookFile(target, rows[i].ID, fbNoopFile); err != nil {
 			return steps, fmt.Errorf("index %s on %s: %w", rows[i].FilePath, target, err)
 		}
 	}
 	return steps, nil
 }
+
+// fbNoopFile changes nothing: ModifyBookFile then re-writes the stored row
+// and its secondary indexes, which hands the single-owner book_file_path key
+// to that row.
+func fbNoopFile(*database.BookFile) error { return nil }
 
 // retire hides one folder-book: a primary one not already handed off is
 // demoted (a group of its own), then file_path is cleared and it is

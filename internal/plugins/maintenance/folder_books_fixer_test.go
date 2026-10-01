@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
 // last-edited: 2026-10-01
 
@@ -937,24 +937,48 @@ func TestFolderBooksFixer_StrandCheckRunsUnderTheLock(t *testing.T) {
 	require.True(t, f.live(t, "root"), "B was not retired")
 }
 
-// fbDecorated hides the PebbleStore's methods beyond database.Store, as the
-// production search-index decorator does, and unwraps to it.
-type fbDecorated struct {
-	database.Store
-	inner database.Store
+// TestFolderBooksFixer_DupNowManyCandidates: the duplicate is found past the
+// first 200 same-title candidates (the old search's page size), and by
+// fbNorm equality ("It!" is "It"), which a raw-substring search can miss.
+func TestFolderBooksFixer_DupNowManyCandidates(t *testing.T) {
+	f := newFragFixture(t)
+	other, err := f.s.CreateAuthor("Someone Else")
+	require.NoError(t, err)
+	mine, err := f.s.CreateAuthor("Stephen King")
+	require.NoError(t, err)
+	for i := 0; i < 250; i++ {
+		id := f.fbBook(t, fmt.Sprintf("it-%d", i), "It", f.path(fmt.Sprintf("Other/It %d.m4b", i)), 3600)
+		_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.AuthorID = &other.ID; return nil })
+		require.NoError(t, err)
+	}
+	fx := &folderBooksFixer{}
+	g := fbGroup{Title: "It", AuthorID: &mine.ID}
+	idx, err := fx.titleIndex(f.s)
+	require.NoError(t, err)
+	require.Len(t, idx["it"], 250)
+	why, err := fx.dupNow(f.s, idx, nil, "", g)
+	require.NoError(t, err)
+	require.Empty(t, why, "another author's same-title books are not duplicates")
+
+	late := f.fbBook(t, "late", "It!", f.path("Elsewhere/It.m4b"), 3600) // authorless, sorts after the 250
+	idx, err = fx.titleIndex(f.s)
+	require.NoError(t, err)
+	require.Len(t, idx["it"], 251)
+	why, err = fx.dupNow(f.s, idx, nil, "", g)
+	require.NoError(t, err)
+	require.Contains(t, why, late, "an authorless fbNorm-equal title past the first 200 candidates")
 }
 
-func (d fbDecorated) Unwrap() database.Store { return d.inner }
-
-// TestFolderBooksFixer_DupNowThroughADecorator: the title search reaches
-// SearchBooksFiltered through a decorated store instead of refusing.
-func TestFolderBooksFixer_DupNowThroughADecorator(t *testing.T) {
+// TestFolderBooksFixer_DupNowSeesBooksCreatedAfterTheIndex: a book this
+// fixer created after another row built its index is still found.
+func TestFolderBooksFixer_DupNowSeesBooksCreatedAfterTheIndex(t *testing.T) {
 	f := newFragFixture(t)
-	f.fbBook(t, "late", "Sword", f.path("Elsewhere/Sword.m4b"), 3600)
-	why, err := (&folderBooksFixer{}).dupNow(fbDecorated{Store: f.s, inner: f.s}, nil, "", fbGroup{Title: "Sword"})
+	fx := &folderBooksFixer{}
+	idx, err := fx.titleIndex(f.s)
 	require.NoError(t, err)
-	require.Contains(t, why, f.ids["late"])
-	why, err = (&folderBooksFixer{}).dupNow(fbDecorated{Store: f.s, inner: f.s}, nil, "", fbGroup{Title: "Sword", AuthorID: new(int)})
+	id := f.fbBook(t, "made", "Sword", f.path("Elsewhere/Sword.m4b"), 3600)
+	fx.noteCreated("Sword", id)
+	why, err := fx.dupNow(f.s, idx, nil, "", fbGroup{Title: "Sword"})
 	require.NoError(t, err)
-	require.Contains(t, why, f.ids["late"], "an authored group matches an authorless book")
+	require.Contains(t, why, id)
 }

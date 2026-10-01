@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-01
 
@@ -95,6 +95,9 @@ type revertBookFileStore interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	UpdateBookFile(id string, file *database.BookFile) error
+	// ModifyBookFile is the read-modify-write the repair_book_create revert
+	// re-indexes a path with, so no snapshot overwrites a concurrent update.
+	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 	GetBookByExternalID(source, externalID string) (string, error)
 	ReassignExternalID(source, externalID, newBookID string) error
 }
@@ -1470,7 +1473,11 @@ func (rs *RevertService) repointPathIndexAwayFrom(atPath bookFilesAtPathReader, 
 			if b == nil || b.IsSoftDeleted() {
 				continue
 			}
-			if err := rs.db.UpdateBookFile(o.ID, &o); err != nil {
+			// A no-op ModifyBookFile re-reads the row under its stripe and
+			// re-writes it as stored, indexes included: the key moves to it
+			// without overwriting a concurrent writer's update with the
+			// snapshot BookFilesAtPath returned.
+			if _, err := rs.db.ModifyBookFile(o.BookID, o.ID, func(*database.BookFile) error { return nil }); err != nil {
 				return fmt.Errorf("re-index %s at %s: %w", o.ID, r.FilePath, err)
 			}
 			break
