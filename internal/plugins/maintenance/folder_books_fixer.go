@@ -168,6 +168,10 @@ const (
 	// fbSkipNeedsNewBook: a new book is needed for files outside
 	// books/itunes/**, where organize could later move it.
 	fbSkipNeedsNewBook = "skipped_needs_new_book"
+	// fbSkipUnclearWork: an orphan group's title names no work (a bare
+	// number, a disc marker, a generic title) or two groups share a title:
+	// the grouping cannot tell where one work ends.
+	fbSkipUnclearWork = "skipped_unclear_work"
 )
 
 // Detection thresholds (the census's).
@@ -210,9 +214,24 @@ var (
 	fbLeadNumRe  = regexp.MustCompile(`^[\d\s\-_.]+`)
 	fbTailNumRe  = regexp.MustCompile(`[\s\-_]*\(?\d+\s*(?:of\s*\d+)?\)?\s*$`)
 	fbPartTailRe = regexp.MustCompile(`(?i)\s*[-_]?\s*(?:part|pt|track|chapter|disc|cd)\s*\d+.*$`)
-	// fbDiscDirRe: a disc folder ("CD1", "Disc 1 of 3", "Dune CD2", "1").
-	fbDiscDirRe = regexp.MustCompile(`(?i)^(?:(?:.*[\s\-_])?(?:cd|disc|disk|part|pt|vol|volume|side)\s*[-_ ]?\d+(?:\s*of\s*\d+)?|\d+)$`)
+	// fbDiscDirRe: a disc folder ("CD1", "Disc 1 of 3", "Dune CD2",
+	// "Dune (Disc 1)", "Dune [CD 2]", "Dune, Disc 1", "1"). A bare number is
+	// one or two digits: "1984" and "2001" are titles.
+	fbDiscDirRe = regexp.MustCompile(`(?i)^(?:(?:.*[\s\-_,(\[])?(?:cd|disc|disk|part|pt|vol|volume|side)\s*[-_ ]?\d+(?:\s*of\s*\d+)?[)\]]?|\d{1,2})$`)
+	// fbDiscTailRe strips a disc marker off a folder name.
+	fbDiscTailRe = regexp.MustCompile(`(?i)[\s\-_,(\[]*(?:cd|disc|disk|part|pt|vol|volume|side)\s*[-_ ]?\d+(?:\s*of\s*\d+)?[)\]]?\s*$`)
+	fbDigitsRe   = regexp.MustCompile(`^\d*$`)
+	// fbRootDiscRe: the disc markers that join sibling folders directly
+	// under a group root into one work (no vol/part: those are works).
+	fbRootDiscRe = regexp.MustCompile(`(?i)^(?:(?:.*[\s\-_,(\[])?(?:cd|disc|disk|side)\s*[-_ ]?\d+(?:\s*of\s*\d+)?[)\]]?|\d{1,2})$`)
 )
+
+// fbUnclearTitle reports whether a group title names no work: empty, a bare
+// number, a generic title, or only a disc marker.
+func fbUnclearTitle(title string) bool {
+	n := fbNorm(title)
+	return fbDigitsRe.MatchString(n) || fbGeneric[n] || fbDiscDirRe.MatchString(strings.TrimSpace(title))
+}
 
 // fbStem is the census's per-work filename stem (fold_ex.py): leading track
 // numbers, a trailing part/track/chapter/disc marker and a trailing "(N of
@@ -234,6 +253,18 @@ func fbStem(p string) string {
 func fbGroupKey(p, root string) (key, label, dir string) {
 	d := filepath.Dir(p)
 	for fbDiscDirRe.MatchString(filepath.Base(d)) && d != root && pathutil.IsWithin(d, root) {
+		if parent := filepath.Dir(d); parent == root {
+			// Directly under root a "Vol 2" / "Part 2" folder is a work of
+			// its own ("Wheel of Time Vol 2" is not a disc of "Vol 3").
+			if !fbRootDiscRe.MatchString(filepath.Base(d)) {
+				break
+			}
+			// A disc folder directly under root ("Frank Herbert/Dune CD1"):
+			// its work is the folder's name without the marker, shared by
+			// its sibling discs. No single folder holds it (dir "").
+			name := strings.TrimSpace(fbDiscTailRe.ReplaceAllString(filepath.Base(d), ""))
+			return "disc:" + root + "|" + fbNorm(name), name, ""
+		}
 		d = filepath.Dir(d)
 	}
 	if d != root && pathutil.IsWithin(d, root) {
@@ -583,7 +614,7 @@ func (lib *fbLib) evaluate(id string) fbEval {
 			dirs++
 		}
 		groups[k] = label
-		if dir == "" {
+		if dir == "" && !fbDigitsRe.MatchString(fbNorm(label)) {
 			stemFiles[k]++
 		}
 	}
@@ -995,7 +1026,8 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		g.Files = append(g.Files, fbNewFile{SrcBook: o.row.BookID, SrcRow: o.row.ID, Path: o.row.FilePath, Track: o.row.TrackNumber})
 		g.Secs += o.row.Duration
 	}
-	var fragmentary, split, outside []string
+	var fragmentary, split, outside, unclear []string
+	seenTitle := map[string]bool{}
 	dup := []string{}
 	if carried != nil {
 		dup = carried.DupTitles
@@ -1011,6 +1043,11 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		name := fmt.Sprintf("%q (%d file(s))", g.Title, len(g.Files))
 		if keyHeld[g.Key] {
 			split = append(split, name)
+		}
+		if t := fbNorm(g.Title); fbUnclearTitle(g.Title) || seenTitle[t] {
+			unclear = append(unclear, name)
+		} else {
+			seenTitle[t] = true
 		}
 		if g.Secs < thresholdSec() {
 			fragmentary = append(fragmentary, fmt.Sprintf("%q (%d file(s), %ds)", g.Title, len(g.Files), g.Secs))
@@ -1056,6 +1093,10 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	switch {
 	case !fbApplicableTier(lead.Tier):
 		row.Skipped, row.SkipReason = fbSkipDeep, "deep tier: listed for review only"
+	case len(unclear) > 0:
+		row.Skipped = fbSkipUnclearWork
+		row.SkipReason = fmt.Sprintf("%d orphan group(s) are titled with no work's name (a number, a disc marker, a "+
+			"generic title) or repeat another group's title: %s", len(unclear), strings.Join(fbFirst(unclear, 5), "; "))
 	case len(split) > 0:
 		row.Skipped = fbSkipSplitWork
 		row.SkipReason = fmt.Sprintf("%d work(s) are partly held by a proper book and partly orphaned; a new book "+

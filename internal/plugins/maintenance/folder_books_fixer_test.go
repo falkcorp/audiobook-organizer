@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -586,4 +587,35 @@ func TestFolderBooksFixer_ChapterBooksAreNotProperBooks(t *testing.T) {
 	ev := lib.evaluate("b")
 	require.Equal(t, 0, ev.Proper, "a one-hour single-file chapter book is not a proper book")
 	require.False(t, fbApplicableTier(ev.Tier), "tier %q evidence %v", ev.Tier, ev.Evidence)
+}
+
+// TestFolderBooksFixer_DiscFoldersUnderTheRoot: disc folders directly in an
+// author folder are one work, not a shelf of "01"/"02" stems; "Vol N"
+// folders there stay separate works; a number-titled group is unclear.
+func TestFolderBooksFixer_DiscFoldersUnderTheRoot(t *testing.T) {
+	root := "/lib/Frank Herbert"
+	for _, disc := range []string{"Dune CD1", "Dune (Disc 1)", "Dune [CD 1]", "Dune, Disc 1"} {
+		k, label, dir := fbGroupKey(root+"/"+disc+"/01.mp3", root)
+		require.Equal(t, "Dune", label, disc)
+		require.Empty(t, dir, disc)
+		k2, _, _ := fbGroupKey(root+"/"+strings.ReplaceAll(disc, "1", "2")+"/01.mp3", root)
+		require.Equal(t, k, k2, "sibling discs are one work: %s", disc)
+	}
+	kv2, _, _ := fbGroupKey(root+"/Wheel Vol 2/01.mp3", root)
+	kv3, _, _ := fbGroupKey(root+"/Wheel Vol 3/01.mp3", root)
+	require.NotEqual(t, kv2, kv3, "volumes are separate works")
+	k1984, l1984, _ := fbGroupKey(root+"/1984/01.mp3", root)
+	require.Equal(t, "1984", l1984)
+	require.True(t, strings.HasPrefix(k1984, "dir:"), "a year-titled folder is a work")
+
+	var paths []string
+	for _, d := range []string{"Dune CD1", "Dune CD2", "Dune CD3"} {
+		paths = append(paths, root+"/"+d+"/01.mp3", root+"/"+d+"/02.mp3")
+	}
+	ev := fbUnitLib([]string{"/lib"}, []string{"Frank Herbert"}, "Frank Herbert", paths, 3600).evaluate("b")
+	require.False(t, fbApplicableTier(ev.Tier), "one multi-disc book: tier %q evidence %v", ev.Tier, ev.Evidence)
+	for _, title := range []string{"01", "", "CD2", "Prologue"} {
+		require.True(t, fbUnclearTitle(title), title)
+	}
+	require.False(t, fbUnclearTitle("Dune"))
 }
