@@ -1,7 +1,7 @@
 // file: internal/metadata/audible.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-09-10
+// last-edited: 2026-10-01
 
 package metadata
 
@@ -82,6 +82,10 @@ type audibleProduct struct {
 	RuntimeLengthMin     *int                    `json:"runtime_length_min"` // nullable in API
 	Rating               *audibleRating          `json:"rating"`
 	CategoryLadders      []audibleCategoryLadder `json:"category_ladders"`
+	// ISBN is the AUDIOBOOK edition's ISBN. Audible returns it only under the
+	// product_details response group, which audibleResponseGroups does not
+	// request, so it is empty on every path except SearchIdentities.
+	ISBN string `json:"isbn"`
 }
 
 type audibleRating struct {
@@ -362,4 +366,114 @@ func (c *AudibleClient) productToMetadata(p *audibleProduct) BookMetadata {
 	}
 
 	return meta
+}
+
+// audibleIdentityResponseGroups is what SearchIdentities requests: exactly the
+// groups that carry identity (title/subtitle, authors, runtime/format, series,
+// and product_details for the audiobook ISBN). It is separate from
+// audibleResponseGroups on purpose -- adding product_details there would make
+// every metadata fetch start carrying an audiobook ISBN into the apply path.
+const audibleIdentityResponseGroups = "product_desc,contributors,product_attrs,series,product_details"
+
+// AudibleIdentityQuery is one catalog search. Title/Author map to Audible's
+// title= and author= filters; Keywords maps to keywords= (an audiobook ISBN
+// there returns that product). Empty fields are omitted. NumResults <= 0 means
+// 20; Audible caps it at 50.
+type AudibleIdentityQuery struct {
+	Title      string
+	Author     string
+	Keywords   string
+	NumResults int
+}
+
+// AudibleSeriesRef is one series membership of a catalog product.
+type AudibleSeriesRef struct {
+	Title    string
+	Sequence string
+}
+
+// AudibleIdentity is the identity-relevant view of one catalog product: every
+// author (not a joined string), every series membership, the runtime, the
+// format and the audiobook ISBN.
+type AudibleIdentity struct {
+	ASIN       string
+	Title      string
+	Subtitle   string
+	Authors    []string
+	Series     []AudibleSeriesRef
+	RuntimeMin int
+	FormatType string
+	ISBN       string
+}
+
+// SearchIdentities runs one catalog search and returns identity views of the
+// products. It goes through the same providerhttp client (and therefore the
+// same per-provider token bucket) as every other Audible call.
+func (c *AudibleClient) SearchIdentities(ctx context.Context, q AudibleIdentityQuery) ([]AudibleIdentity, error) {
+	n := q.NumResults
+	if n <= 0 {
+		n = 20
+	}
+	if n > 50 {
+		n = 50
+	}
+	v := url.Values{}
+	if q.Title != "" {
+		v.Set("title", q.Title)
+	}
+	if q.Author != "" {
+		v.Set("author", q.Author)
+	}
+	if q.Keywords != "" {
+		v.Set("keywords", q.Keywords)
+	}
+	if len(v) == 0 {
+		return nil, fmt.Errorf("audible identity search: empty query")
+	}
+	v.Set("num_results", strconv.Itoa(n))
+	v.Set("products_sort_by", "Relevance")
+	v.Set("response_groups", audibleIdentityResponseGroups)
+	searchURL := c.baseURL + "/catalog/products?" + v.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Audible request: %w", err)
+	}
+	req.Header.Set("User-Agent", "Audible/3.0")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query Audible API: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, StatusError(SourceIDAudible, resp)
+	}
+	var catalog audibleCatalogResponse
+	if err := json.UnmarshalRead(resp.Body, &catalog); err != nil {
+		return nil, fmt.Errorf("failed to decode Audible response: %w", err)
+	}
+	out := make([]AudibleIdentity, 0, len(catalog.Products))
+	for i := range catalog.Products {
+		p := &catalog.Products[i]
+		id := AudibleIdentity{
+			ASIN:       strings.TrimSpace(p.ASIN),
+			Title:      p.Title,
+			Subtitle:   p.Subtitle,
+			FormatType: p.FormatType,
+			ISBN:       strings.TrimSpace(p.ISBN),
+		}
+		for _, a := range p.Authors {
+			if name := strings.TrimSpace(a.Name); name != "" {
+				id.Authors = append(id.Authors, name)
+			}
+		}
+		for _, s := range p.Series {
+			id.Series = append(id.Series, AudibleSeriesRef{Title: s.Title, Sequence: s.Sequence})
+		}
+		if p.RuntimeLengthMin != nil {
+			id.RuntimeMin = *p.RuntimeLengthMin
+		}
+		out = append(out, id)
+	}
+	return out, nil
 }
