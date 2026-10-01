@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.21.0
+// version: 4.21.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -1003,6 +1004,15 @@ func (s *Server) handleListMetadataResults(c *gin.Context) {
 			all = append(all, item{BookID: id, Status: "unfetched"})
 		}
 	}
+
+	// latest is a map, so without a sort every request walked it in a new
+	// random order and offset paging returned an arbitrary slice each time:
+	// pages repeated some books and never reached others. Book ID is the
+	// key, not fetch time: the cached set is refreshed in the background
+	// while a client pages, and a newest-first order would shift every later
+	// offset each time a fetch landed. A new result for a book already
+	// listed keeps its place.
+	sort.Slice(all, func(i, j int) bool { return all[i].BookID < all[j].BookID })
 
 	total := len(all)
 
