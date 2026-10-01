@@ -99,6 +99,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -492,6 +493,9 @@ func (r *dcRun) book(id string) *dcBook {
 // rowsFor builds every row over the snapshot. only limits the seeds (Plan's
 // book_ids); carried is the replanned row's stored state (nil on Plan).
 func (f *duplicateCopiesFixer) rowsFor(ctx context.Context, rep registry.Reporter, store OpsStore, lib *fbLib, notDup map[[2]string]bool, only map[string]bool, carried *dcState) ([]repairs.Row, error) {
+	if rep == nil {
+		rep = dcQuiet{} // Replan: a few books, no op to report to
+	}
 	run := &dcRun{lib: lib, books: map[string]*dcBook{}, notDup: notDup, res: repairs.NewPathResolver(), series: map[int]string{}}
 	all, err := store.GetAllSeries()
 	if err != nil {
@@ -708,6 +712,21 @@ func (f *duplicateCopiesFixer) detail(store OpsStore, run *dcRun, b *dcBook) err
 	}
 	b.Signals = s
 	return nil
+}
+
+// dcQuiet is the reporter of a Replan's pools: there is no operation to
+// report progress to.
+type dcQuiet struct{}
+
+func (dcQuiet) UpdateProgress(int, int, string) error      { return nil }
+func (dcQuiet) Log(slog.Level, string, ...slog.Attr) error { return nil }
+func (dcQuiet) Logger() *slog.Logger                       { return slog.New(slog.DiscardHandler) }
+func (dcQuiet) Checkpoint(any) error                       { return nil }
+func (dcQuiet) IsCanceled() bool                           { return false }
+func (dcQuiet) Trigger(context.Context, string, any) error { return nil }
+func (dcQuiet) SetCurrentItem(string)                      {}
+func (q dcQuiet) RunPhase(ctx context.Context, _ string, fn func(context.Context, registry.Reporter) error) error {
+	return fn(ctx, q)
 }
 
 // dcFiles serves versionprimary.Loader the snapshot's rows.
