@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 // Package authorjunk answers "is this AUTHOR ROW a person, or something the
 // importer filed in the author field that is not a person?" -- a series name
@@ -428,6 +428,43 @@ func Normalize(s string) string {
 	s = strings.ToLower(strings.ReplaceAll(s, "_", " "))
 	s = normRe.ReplaceAllString(s, " ")
 	return strings.TrimSpace(spaceRe.ReplaceAllString(s, " "))
+}
+
+// genreTaglineWords are the words a genre tagline is made of: every word of
+// genreNames and genreLabels, the genreWrapWords nouns, and the articles.
+var genreTaglineWords = func() map[string]bool {
+	w := map[string]bool{"a": true, "an": true, "the": true}
+	for _, set := range []map[string]bool{genreNames, genreLabels, genreWrapWords} {
+		for name := range set {
+			for _, f := range strings.Fields(name) {
+				w[f] = true
+			}
+		}
+	}
+	return w
+}()
+
+// IsGenreTagline reports whether s is only a genre tagline -- the subtitle a
+// self-published title carries instead of a name ("A Novel", "A Progression
+// LitRPG", "An Isekai LitRPG Fantasy", "A LitRPG Adventure") -- built from
+// the same genre vocabulary the author classifier uses. The metadata search
+// refuses to read such a subtitle as the book's own name: "Rogue Ascension 8:
+// A Progression LitRPG" is not a book called "A Progression LitRPG".
+func IsGenreTagline(s string) bool {
+	f := strings.Fields(Normalize(s))
+	if len(f) == 0 {
+		return false
+	}
+	content := 0
+	for _, w := range f {
+		if !genreTaglineWords[w] {
+			return false
+		}
+		if w != "a" && w != "an" && w != "the" {
+			content++
+		}
+	}
+	return content > 0
 }
 
 // IsCompositeCredit reports whether name is a LIST of person names

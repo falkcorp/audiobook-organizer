@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 package authorjunk
 
@@ -584,6 +584,21 @@ func TestClassifyName_PlaceholderPhraseIsRelinkOnly(t *testing.T) {
 	for _, n := range []string{"Writer", "Name", "Idea"} {
 		if v := ClassifyName(n); v.Rule == RulePlaceholderPhrase {
 			t.Errorf("ClassifyName(%q) = %+v: a lone word is not a placeholder phrase", n, v)
+		}
+	}
+}
+
+func TestIsGenreTagline(t *testing.T) {
+	for _, s := range []string{"A Novel", "A Progression LitRPG", "An Isekai LitRPG Fantasy", "A LitRPG Adventure",
+		"An Epic Fantasy Adventure", "A Thriller", "Novel"} {
+		if !IsGenreTagline(s) {
+			t.Errorf("IsGenreTagline(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "A", "The", "A Wanted Man", "An Uncensored History", "The Tower of the Swallow",
+		"A Jack Reacher Novel", "Erryn's World"} {
+		if IsGenreTagline(s) {
+			t.Errorf("IsGenreTagline(%q) = true, want false", s)
 		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
 // last-edited: 2026-10-01
 
@@ -470,7 +470,11 @@ func TestSearchMetadataForBook_StrongHitStopsFanout(t *testing.T) {
 // endpoint, so a series-name answer must not surface as a candidate.
 func TestSearchMetadataForBook_VariantAnswerIsAnchored(t *testing.T) {
 	src := &answeringSource{name: "audible", answers: map[string][]metadata.BookMetadata{
-		"Assertions": {{Title: "Assertions", Author: "Bern Dean"}, {Title: "Eternal Dominion: Ascension", Author: "Bern Dean"}},
+		// "Assertions" by another writer scores well on its title alone, so
+		// only the variant filter (a person of the book's must vouch) keeps
+		// it out: this fails if the filter is bypassed.
+		"Assertions": {{Title: "Assertions", Author: "Bern Dean"}, {Title: "Eternal Dominion: Ascension", Author: "Bern Dean"},
+			{Title: "Assertions", Author: "Other Writer"}},
 	}}
 	svc := newVariantService(t, "Eternal Dominion, Book 04 - Assertions", src)
 

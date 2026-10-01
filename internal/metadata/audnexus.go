@@ -1,7 +1,7 @@
 // file: internal/metadata/audnexus.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
-// last-edited: 2026-09-10
+// last-edited: 2026-10-01
 
 package metadata
 
@@ -179,11 +179,18 @@ const audnexusPerRegionTimeout = 10 * time.Second
 // and each region request is additionally bounded by audnexusPerRegionTimeout via
 // http.NewRequestWithContext so a single hung region can't stall the lookup.
 func (c *AudnexusClient) LookupByASIN(ctx context.Context, asin string) (*BookMetadata, error) {
+	return c.LookupByASINInRegions(ctx, asin, audnexusRegions)
+}
+
+// LookupByASINInRegions is LookupByASIN over only the given regions ("" is
+// the default store), at most one request each. The metadata search uses it
+// to bound its one Audnexus lookup per book to a known request count.
+func (c *AudnexusClient) LookupByASINInRegions(ctx context.Context, asin string, regions []string) (*BookMetadata, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	var lastErr error
-	for _, region := range audnexusRegions {
+	for _, region := range regions {
 		// Bail promptly on cancellation rather than starting another region.
 		if err := ctx.Err(); err != nil {
 			if lastErr == nil {
