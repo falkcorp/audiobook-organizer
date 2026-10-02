@@ -1,5 +1,5 @@
 // file: internal/server/catalog_harvest_op_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d7e9b41-5c3a-4f86-9e10-4b8a6c2d1f57
 // last-edited: 2026-10-01
 
@@ -67,7 +67,10 @@ func (l *catalogFakeLister) ListByAuthor(_ context.Context, name string, page, _
 	}}, nil
 }
 func (l *catalogFakeLister) LookupProduct(context.Context, string) (*metadata.CatalogProduct, error) {
-	return nil, errors.New("not found")
+	// Not-found, never a generic error: the harvest feeds provider errors to
+	// the process-wide throttle registry, and a hold recorded here would leak
+	// into every later test in this binary.
+	return nil, metadata.ErrCatalogProductNotFound
 }
 
 func withCatalogEnabled(t *testing.T, on bool) {
