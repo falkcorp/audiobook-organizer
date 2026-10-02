@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-02
 
@@ -330,11 +330,20 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 // leave the book to another fixer's row, which must finish that hand-off
 // rather than refuse it forever with the group left without a primary), the book is still explicit false,
 // and no live member of its group is primary. It is then made by THIS op and
-// journaled in this op's journal. Reverts converge in either order: the
-// hand-off row is a note (the revert of the first op's demote re-crowns the
-// book with versionprimary.Crown, which demotes the member this hand-off
-// crowned), and reverting this op alone leaves the group with the member it
-// crowned, its one primary.
+// journaled in this op's journal. Reverting the two ops converges to one
+// live primary in either order, through the revert engine
+// (internal/audiobooks/revert.go), not through the hand-off row, which is a
+// note:
+//   - this op first: its soft-delete revert brings the book back and yields
+//     it to the member this hand-off crowned (YieldToIncumbent), so it is
+//     non-primary; the first op's demote revert then finds it live and
+//     re-crowns it with versionprimary.Crown, which demotes that member.
+//   - the first op first: the book is still retired, so its demote revert
+//     writes nothing (superseded: Crown cannot crown a retired book, and a
+//     true written anyway came back with the book later as a second
+//     primary); this op's soft-delete revert then brings it back
+//     non-primary under the member this hand-off crowned.
+// Reverting this op alone leaves the group with the member it crowned.
 //
 // Anything it cannot tell (history or journal unreadable, the flag changed
 // by someone else since the demote, two or more live primaries after a
@@ -454,8 +463,10 @@ func livePrimaries(store OpsStore, members []database.Book, except string) int {
 		if live, ok := inGroup[id]; ok {
 			return live
 		}
+		// versionprimary.StoreAlive's answer: a failed read counts the
+		// survivor alive, so a loser is never made Electable by it.
 		sb, err := store.GetBookByID(id)
-		return err == nil && sb != nil && !sb.IsSoftDeleted()
+		return err != nil || (sb != nil && !sb.IsSoftDeleted())
 	}
 	explicit := 0
 	for i := range others {
