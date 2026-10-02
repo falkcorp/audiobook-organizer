@@ -263,8 +263,11 @@ func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 		ur, err := h.Store.UpsertEntries(items, a.Key)
 		if err != nil {
 			st.State, st.LastError = database.CatalogHarvestFailed, err.Error()
-			_ = h.Store.PutAuthorState(&st)
-			return st, fmt.Errorf("catalog harvest %q: upsert: %w", a.Name, err)
+			upErr := fmt.Errorf("catalog harvest %q: upsert: %w", a.Name, err)
+			if perr := h.Store.PutAuthorState(&st); perr != nil {
+				upErr = errors.Join(upErr, fmt.Errorf("write failed state: %w", perr))
+			}
+			return st, upErr
 		}
 		for _, id := range ur.IDs {
 			seen[id] = true
@@ -461,7 +464,12 @@ func (h *Harvester) EstimateRun(ctx context.Context, scope ScopeCensus, due []Sc
 		for _, p := range pg.Products {
 			fetched[p.ASIN] = p
 		}
-		res, _ := ResolveAuthorASINs(ctx, a.Name, a.OwnedASINs, fetched, nil)
+		// No lookup func: the only error is cancellation.
+		res, err := ResolveAuthorASINs(ctx, a.Name, a.OwnedASINs, fetched, nil)
+		if err != nil {
+			est.SampleErrors++
+			break
+		}
 		for _, p := range pg.Products {
 			rawSum++
 			if !LanguageMatches(p.Language, h.Cfg.Language) || !Decide(p, a.Name, res).Keep {

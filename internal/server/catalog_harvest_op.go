@@ -191,7 +191,10 @@ func runCatalogHarvest(ctx context.Context, reporter opsregistry.Reporter, store
 			sampleN = max(*p.SampleAuthors, 0)
 		}
 		est := h.EstimateRun(ctx, census, due, sampleN)
-		b, _ := json.Marshal(est)
+		b, err := json.Marshal(est)
+		if err != nil {
+			return fmt.Errorf("%s: encode census: %w", catalogHarvestOpID, err)
+		}
 		_ = reporter.Log(slog.LevelInfo, "dry run census (nothing written): "+string(b))
 		catalogHarvestLog.Info("dry run census: %s", string(b))
 		_ = reporter.UpdateProgress(1, 1, fmt.Sprintf("dry run: %d authors due, ~%d requests, ~%d entries", est.AuthorsDue, est.EstimatedRequests, est.EstimatedEntries))
