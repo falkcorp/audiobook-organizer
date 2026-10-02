@@ -1,5 +1,5 @@
 // file: internal/itunes/service/regroup_plan.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-01
 
@@ -112,6 +112,10 @@ type GroupAction struct {
 	// owner-manual-only (Doctor Who / Big Finish / Torchwood). No mutation,
 	// not even a retitle.
 	ManualOnly bool
+	// KeepTitle: the existing target is a library-folder copy (LibraryCopy).
+	// Its metadata comes from the metadata pipeline, never from iTunes album
+	// tags, so the apply must not retitle it (or write any other field).
+	KeepTitle  bool
 	Unresolved []string // group PIDs not present in the DB
 }
 
@@ -131,8 +135,11 @@ type RegroupPlan struct {
 	FreshBooks        int
 	// ManualOnlySkipped counts groups skipped as owner-manual-only.
 	ManualOnlySkipped int
-	PIDsResolved      int
-	PIDsUnresolved    int
+	// LibraryTitleKept counts planned groups whose existing target is a
+	// library-folder copy, so its title is left as it is (KeepTitle).
+	LibraryTitleKept int
+	PIDsResolved     int
+	PIDsUnresolved   int
 
 	// Rule-change delta (dry-run report). For every group that needs moves, the
 	// pre-2026-10-01 rule (skip when any holder's version group has a member
@@ -283,6 +290,10 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 		// groups falsely skip merely for touching a version-grouped book.)
 		if len(moves) == 0 && !fresh {
 			act.Target = target
+			act.KeepTitle = LibraryCopy(snap.Books[target])
+			if act.KeepTitle {
+				plan.LibraryTitleKept++
+			}
 			claimed[target] = true
 			plan.AlreadyCorrect++
 			plan.Groups = append(plan.Groups, act)
@@ -322,6 +333,12 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 			plan.FreshBooks++
 		} else {
 			claimed[target] = true
+			// entanglement already refuses a target with a library file; an
+			// organized target without one still keeps its title.
+			act.KeepTitle = LibraryCopy(snap.Books[target])
+			if act.KeepTitle {
+				plan.LibraryTitleKept++
+			}
 		}
 		plan.Consolidated++
 		plan.Groups = append(plan.Groups, act)
@@ -443,6 +460,14 @@ func entanglement(gi int, moves []FileMove, target string, fresh bool, snap Snap
 		}
 	}
 	return ""
+}
+
+// LibraryCopy reports whether b is a library-folder copy: it has a file
+// under the library root or is organized. Owner rule: that copy is the
+// canonical book and its metadata comes from the metadata pipeline, so the
+// regroup never retitles it from an iTunes album tag.
+func LibraryCopy(b BookMeta) bool {
+	return b.HasLibraryFile || b.Organized
 }
 
 // anyHolder reports whether pred holds for any known book among the holders.

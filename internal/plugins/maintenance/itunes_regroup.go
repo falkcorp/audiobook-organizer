@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-01
 
@@ -136,8 +136,8 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	plan := itunesservice.PlanRegroup(groups, snap)
 
 	summary := fmt.Sprintf(
-		"groups=%d already-correct=%d consolidate=%d entangled-skipped=%d manual-only-skipped=%d fresh-books=%d delete-empty=%d | PIDs resolved=%d unresolved=%d | %s",
-		plan.TotalGroups, plan.AlreadyCorrect, plan.Consolidated, plan.EntangledSkipped, plan.ManualOnlySkipped,
+		"groups=%d already-correct=%d consolidate=%d entangled-skipped=%d manual-only-skipped=%d library-title-kept=%d fresh-books=%d delete-empty=%d | PIDs resolved=%d unresolved=%d | %s",
+		plan.TotalGroups, plan.AlreadyCorrect, plan.Consolidated, plan.EntangledSkipped, plan.ManualOnlySkipped, plan.LibraryTitleKept,
 		plan.FreshBooks, len(plan.DeleteBooks), plan.PIDsResolved, plan.PIDsUnresolved,
 		regroupRuleDelta(plan))
 	_ = reporter.Log(slog.LevelInfo, "PLAN: "+summary)
@@ -487,7 +487,7 @@ func enrichScore(b *database.Book) int {
 // whose books changed since the snapshot is skipped and counted.
 func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore, plan itunesservice.RegroupPlan, rootDir string, reporter sdk.Reporter) error {
 	touched := make(map[string]bool)
-	var moved, titled, created, deleted, deleteSkipped, recheckSkipped, errCount int
+	var moved, titled, titleKept, created, deleted, deleteSkipped, recheckSkipped, errCount int
 
 	for gi, a := range plan.Groups {
 		if ctx.Err() != nil {
@@ -502,12 +502,14 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 		// locks internally and release them on return, so no lock can be
 		// held across this read and the writes below. The window left is the
 		// few reads between here and the bulk move.
-		if why, err := regroupRecheck(store, plan, gi, rootDir); err != nil {
+		why, keepTitle, err := regroupRecheck(store, plan, gi, rootDir)
+		if err != nil {
 			recheckSkipped++
 			errCount++
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip group %q: apply-time recheck could not read its books: %v", a.Title, err))
 			continue
-		} else if why != "" {
+		}
+		if why != "" {
 			recheckSkipped++
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip group %q (target %s): changed since the plan, recheck refuses it as %s", a.Title, a.Target, why))
 			continue
@@ -580,6 +582,14 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 		// Write only Title, under the book's write lock (ModifyBook), so a
 		// column another writer commits meanwhile is not reverted (audit
 		// A1#15); a survivor already carrying the canonical title is skipped.
+		// A library-folder copy (planned or as re-read just now) keeps its
+		// title: its metadata comes from the metadata pipeline, never from
+		// an iTunes album tag.
+		if keepTitle {
+			titleKept++
+			touched[target] = true
+			continue
+		}
 		retitled := false
 		if written, err := store.ModifyBook(target, func(tb *database.Book) error {
 			if tb.Title == a.Title {
@@ -635,8 +645,8 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 	}
 
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"APPLIED: moved=%d titled=%d fresh=%d deleted=%d delete-skipped=%d recheck-skipped=%d errors=%d",
-		moved, titled, created, deleted, deleteSkipped, recheckSkipped, errCount))
+		"APPLIED: moved=%d titled=%d library-title-kept=%d fresh=%d deleted=%d delete-skipped=%d recheck-skipped=%d errors=%d",
+		moved, titled, titleKept, created, deleted, deleteSkipped, recheckSkipped, errCount))
 	if errCount > 0 {
 		return fmt.Errorf("%d errors during itunes-regroup (see op log)", errCount)
 	}
@@ -647,13 +657,14 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 // each book row, its book_file rows, its series name and, for a grouped book,
 // its version group's members -- builds the same BookMeta the snapshot builds
 // (regroupBookMeta, regroupFileFacts) and runs plan.Recheck on it. It returns
-// the refusal reason ("" = still allowed) or a read error, which the caller
-// treats as a refusal (fail closed).
+// the refusal reason ("" = still allowed), whether the target must keep its
+// title (planned KeepTitle, or the fresh target is now a library copy), or a
+// read error, which the caller treats as a refusal (fail closed).
 //
 // TODO(#3649): once versionprimary.LockGroup lands, hold it on a grouped
 // target's version group from this read through the group's moves, so a
 // concurrent primary election cannot slip between the check and the write.
-func regroupRecheck(store itunesRegroupStore, plan itunesservice.RegroupPlan, gi int, rootDir string) (string, error) {
+func regroupRecheck(store itunesRegroupStore, plan itunesservice.RegroupPlan, gi int, rootDir string) (string, bool, error) {
 	a := plan.Groups[gi]
 	ids := make([]string, 0, len(a.Moves)+1)
 	if !a.FreshBook {
@@ -674,14 +685,14 @@ func regroupRecheck(store itunesRegroupStore, plan itunesservice.RegroupPlan, gi
 		seen[id] = true
 		b, err := store.GetBookByID(id)
 		if err != nil {
-			return "", fmt.Errorf("GetBookByID %s: %w", id, err)
+			return "", false, fmt.Errorf("GetBookByID %s: %w", id, err)
 		}
 		if b == nil || !regroupEligible(b) {
 			continue // left out of fresh.Books: Recheck refuses it as unknown-book
 		}
 		files, err := store.GetBookFiles(id)
 		if err != nil {
-			return "", fmt.Errorf("GetBookFiles %s: %w", id, err)
+			return "", false, fmt.Errorf("GetBookFiles %s: %w", id, err)
 		}
 		ff := &regroupFileFacts{}
 		for i := range files {
@@ -695,7 +706,7 @@ func regroupRecheck(store itunesRegroupStore, plan itunesservice.RegroupPlan, gi
 		if b.SeriesID != nil {
 			sr, err := store.GetSeriesByID(*b.SeriesID)
 			if err != nil {
-				return "", fmt.Errorf("GetSeriesByID %d: %w", *b.SeriesID, err)
+				return "", false, fmt.Errorf("GetSeriesByID %d: %w", *b.SeriesID, err)
 			}
 			if sr != nil {
 				series = sr.Name
@@ -705,12 +716,16 @@ func regroupRecheck(store itunesRegroupStore, plan itunesservice.RegroupPlan, gi
 		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
 			incumbent, legacy, err = regroupGroupIncumbent(store, *b.VersionGroupID, b)
 			if err != nil {
-				return "", err
+				return "", false, err
 			}
 		}
 		fresh.Books[id] = regroupBookMeta(b, ff, incumbent, legacy, series)
 	}
-	return plan.Recheck(gi, fresh), nil
+	keep := a.KeepTitle
+	if t, ok := fresh.Books[a.Target]; ok && !a.FreshBook && itunesservice.LibraryCopy(t) {
+		keep = true
+	}
+	return plan.Recheck(gi, fresh), keep, nil
 }
 
 // regroupGroupIncumbent reads version group vg's members and returns its
