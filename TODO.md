@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.22 -->
+<!-- version: 10.73.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-30 -->
+<!-- last-edited: 2026-10-02 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,35 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **ALTQUERY-CACHE** An alt-query metadata search (custom title, no
+      `refresh`) can be answered from the book row's own cached provider
+      results: the per-source fetch-cache identity comes from the row, not
+      the query. Key the cache on the effective query.
+- [ ] **RIPTITLE-CACHE-KEY** The bulk candidate path keys the fetch cache on
+      the cleaned rip-detail title, while `searchMetadataForBook` keys it on
+      the raw row title, so the two paths never share cache entries for the
+      same book. Use one key builder for both.
+- [ ] **APPLY-METADATA-404** `POST /audiobooks/:id/apply-metadata` returns
+      500 for a book that does not exist; it should be 404.
+- [ ] **FRAGMENT-SHAPES** The part-row resolver (`internal/metabatch/
+      part_rows.go`) still lets these fragment shapes through to a whole-book
+      search: "NN - Title" ("32 - Leveling Up The World 3"), "N-M Author"
+      ("248-299 Kevin J Anderson"), bare `copyN` stems ("Cobra_copy124"),
+      and "Part NN" rows searched under their folder name. The bulk-apply
+      runtime gate catches them today; the resolver should not search them.
+      Also measure rip-titled box sets ("Harry Potter 1-7 [64k]") before
+      adding a duration check to the rip branch.
+- [ ] **DATA-EDGE-OF-VICTORY** Book "Edge of Victory 1 - Conquest" has its
+      narrator (Alexander Adams) as author instead of Greg Keyes, so the
+      author-gated search variants miss it. Look for other narrator-as-author
+      rows of the same shape.
+
+- [ ] **FLAKE-SCANLOCK-PENDING** `TestPendingBlocksOnlyTheIdleAcquires`
+      (`internal/scanlock/scanlock_test.go:173`, "table not empty: 2") failed
+      in CI on PR #3639, which does not touch scanlock. It passes 50/50 under
+      `-race` locally, so the table check races the release cleanup under CI
+      load. Wait for the table to drain instead of checking once.
 
 - [ ] **FLAKE-FPWINDOW** `TestFileWindow_ContextKill`
       (`internal/fingerprint/window_exec_test.go`) failed once on Woodpecker
