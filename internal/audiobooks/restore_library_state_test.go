@@ -1,5 +1,5 @@
 // file: internal/audiobooks/restore_library_state_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ddf71ad3-a1e7-432e-a422-41aa7f87a782
 // last-edited: 2026-10-01
 
@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 
@@ -96,4 +97,45 @@ func TestRestoreAudiobook_LegacyTrashFallsBackByFileLocation(t *testing.T) {
 
 	require.Equal(t, "organized", *restoredRow(t, f, inside).LibraryState)
 	require.Equal(t, "imported", *restoredRow(t, f, outside).LibraryState)
+}
+
+// The recorded state, not the file location, decides: a book inside the
+// library root whose state was "imported" (the stale-state population) comes
+// back "imported", not promoted into ABS by the fallback.
+func TestRestoreAudiobook_RecordedStateBeatsFileLocation(t *testing.T) {
+	f, svc := handoffFixture(t)
+	id := f.Book(t, vptest.Spec{ID: "stale", Primary: "nil", State: "imported"})
+
+	_, err := svc.DeleteAudiobook(context.Background(), id, &DeleteAudiobookOptions{SoftDelete: true})
+	require.NoError(t, err)
+	_, err = svc.RestoreAudiobook(context.Background(), id)
+	require.NoError(t, err)
+
+	b := restoredRow(t, f, id)
+	require.Equal(t, "imported", *b.LibraryState)
+	require.Nil(t, b.PreTrashLibraryState, "the record is cleared once used")
+}
+
+// Reverting an operation's soft delete applies the same state rule, but leaves
+// MergedIntoBookID to the journal: the operation that set it records that
+// change itself, and its revert restores the pre-operation value.
+func TestRevertBookSoftDelete_RestoresStateKeepsMergePointer(t *testing.T) {
+	f, _ := handoffFixture(t)
+	id := f.Book(t, vptest.Spec{ID: "rev", Primary: "nil"})
+	_, err := f.S.ModifyBook(id, func(b *database.Book) error {
+		v, now, deleted, organized, survivor := true, time.Now(), "deleted", "organized", "survivor"
+		b.MarkedForDeletion, b.MarkedForDeletionAt = &v, &now
+		b.LibraryState, b.PreTrashLibraryState = &deleted, &organized
+		b.MergedIntoBookID = &survivor
+		return nil
+	})
+	require.NoError(t, err)
+
+	rs := NewRevertService(f.S)
+	require.NoError(t, rs.revertBookSoftDelete(&database.OperationChange{BookID: id}, undo.SoftDeleteStamps{}))
+
+	b := restoredRow(t, f, id)
+	require.False(t, b.IsSoftDeleted())
+	require.Equal(t, "organized", *b.LibraryState)
+	require.NotNil(t, b.MergedIntoBookID)
 }
