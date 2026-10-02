@@ -1,5 +1,5 @@
 // file: internal/database/book_trash_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e0be750-b46f-4059-ac27-c22ce7676874
 // last-edited: 2026-10-01
 
@@ -60,7 +60,12 @@ func TestRestoreLibraryStateFromTrash(t *testing.T) {
 		// whose present files do not prove it: kept, recorded or legacy.
 		{"recorded organized with no files is imported", strp("deleted"), strp("organized"), nil, env, "imported"},
 		{"kept organized with no files is imported (combine shell)", strp("organized"), nil, nil, env, "imported"},
-		{"kept organized with only missing files is imported", strp("organized"), nil, []BookFile{{FilePath: "/lib/x.m4b", Missing: true}}, env, "imported"},
+		// Missing does not demote (re-review of #3649, finding 3): an
+		// organized book whose files are all marked Missing stays in
+		// repoint-missing-to-folder-audio's ABSLibraryFilter scope.
+		{"kept organized with only missing files under the root stays", strp("organized"), nil, []BookFile{{FilePath: "/lib/x.m4b", Missing: true}}, env, "organized"},
+		{"kept organized with a missing file in the iTunes library is imported", strp("organized"), nil, append(in, BookFile{FilePath: "/media/iTunes/a.m4b", Missing: true}), TrashRestoreEnv{RootDir: "/", ITunesRoots: []string{"/media/iTunes"}}, "imported"},
+		{"kept organized with a missing file with no path is imported", strp("organized"), nil, append(in, BookFile{FilePath: "", Missing: true}), env, "imported"},
 		{"kept organized with a file outside the root is imported", strp("organized"), nil, append(in, BookFile{FilePath: "/elsewhere/c.m4b"}), env, "imported"},
 		{"kept organized in the iTunes library is imported", strp("organized"), nil, []BookFile{{FilePath: "/media/iTunes/a.m4b"}}, TrashRestoreEnv{RootDir: "/media", ITunesRoots: []string{"/media/iTunes"}}, "imported"},
 		{"kept organized with present files inside the root stays", strp("organized"), nil, in, env, "organized"},
@@ -69,8 +74,8 @@ func TestRestoreLibraryStateFromTrash(t *testing.T) {
 		{"a recorded deleted is ignored", strp("deleted"), strp("deleted"), nil, env, "imported"},
 		{"legacy: present files inside the root", strp("deleted"), nil, in, env, "organized"},
 		{"legacy: a file outside the root", strp("deleted"), nil, append(in, BookFile{FilePath: "/elsewhere/c.m4b"}), env, "imported"},
-		{"legacy: a missing file outside the root is ignored", strp("deleted"), nil, append(in, BookFile{FilePath: "/elsewhere/c.m4b", Missing: true}), env, "organized"},
-		{"legacy: no present files", strp("deleted"), nil, []BookFile{{FilePath: "/lib/x.m4b", Missing: true}}, env, "imported"},
+		{"legacy: a missing file outside the root is imported", strp("deleted"), nil, append(in, BookFile{FilePath: "/elsewhere/c.m4b", Missing: true}), env, "imported"},
+		{"legacy: only missing files under the root", strp("deleted"), nil, []BookFile{{FilePath: "/lib/x.m4b", Missing: true}}, env, "organized"},
 		{"legacy: no files", strp("deleted"), nil, nil, env, "imported"},
 		{"legacy: an empty file path", strp("deleted"), nil, []BookFile{{FilePath: ""}}, env, "imported"},
 		{"legacy: frozen iTunes tree under the root", strp("deleted"), nil, []BookFile{{FilePath: "/lib/books/itunes/A/a.m4b"}}, TrashRestoreEnv{RootDir: "/lib"}, "imported"},
@@ -145,5 +150,58 @@ func TestRestoreBookFromTrash_LiveRowIsANoOp(t *testing.T) {
 	}
 	if !IsInTrash(&Book{MarkedForDeletion: new(true)}) || !IsInTrash(&Book{LibraryState: strp(" Deleted ")}) {
 		t.Errorf("a trashed row (flag or label) reads as live")
+	}
+}
+
+// Re-review of #3649, finding 3: an organized book whose file rows are all
+// marked Missing, under the library root, comes back "organized", so
+// repoint-missing-to-folder-audio (scoped by ABSLibraryFilter) still repairs
+// it. It is not ABS-listable as its own item: it has no audio to play.
+func TestRestoreLibraryStateFromTrash_AllMissingUnderRootStaysOrganized(t *testing.T) {
+	env := TrashRestoreEnv{RootDir: "/lib"}
+	files := []BookFile{{FilePath: "/lib/A/a.m4b", Missing: true}, {FilePath: "/lib/A/b.m4b", Missing: true}}
+	b := &Book{MarkedForDeletion: new(true), LibraryState: strp("organized")}
+	if !RestoreBookFromTrash(b, files, env) {
+		t.Fatal("a trashed row reported not restored")
+	}
+	if got := stateOf(b); got != "organized" {
+		t.Fatalf("state = %q, want organized", got)
+	}
+	if !ABSLibraryFilter().Matches(b) {
+		t.Fatal("the restored row must be back in ABSLibraryFilter scope (repoint-missing-to-folder-audio)")
+	}
+	if RestoredRowIsABSListable(b, files, env) {
+		t.Fatal("a row with no present file is not listable as an item of its own")
+	}
+}
+
+func TestRestoredRowIsABSListable(t *testing.T) {
+	env := TrashRestoreEnv{RootDir: "/lib", ITunesRoots: []string{"/lib/iTunes"}}
+	in := []BookFile{{FilePath: "/lib/A/a.m4b"}}
+	live := func(state string, primary *bool) *Book {
+		return &Book{MarkedForDeletion: new(false), LibraryState: strp(state), IsPrimaryVersion: primary}
+	}
+	cases := []struct {
+		name  string
+		b     *Book
+		files []BookFile
+		want  bool
+	}{
+		{"primary organized with a present file", live("organized", nil), in, true},
+		{"explicit primary", live("organized", new(true)), in, true},
+		{"non-primary (a MergeBooks loser)", live("organized", new(false)), in, false},
+		{"imported", live("imported", nil), in, false},
+		{"no files (a combine shell)", live("organized", nil), nil, false},
+		{"only missing files", live("organized", nil), []BookFile{{FilePath: "/lib/A/a.m4b", Missing: true}}, false},
+		{"a present file in the iTunes library", live("organized", nil), append(in, BookFile{FilePath: "/lib/iTunes/a.m4b"}), false},
+		{"still in the trash", &Book{MarkedForDeletion: new(true), LibraryState: strp("organized")}, in, false},
+		{"nil", nil, in, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RestoredRowIsABSListable(tc.b, tc.files, env); got != tc.want {
+				t.Errorf("RestoredRowIsABSListable = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

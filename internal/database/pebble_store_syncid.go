@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
 // last-edited: 2026-10-01
 
@@ -547,6 +547,14 @@ func (p *PebbleStore) unlinkSyncRedirect(loserSyncID string, loserItem *SyncItem
 // redirect. A redirect whose target record is missing is an error: the
 // winner's MergedFrom cannot be repaired, and a half-written un-merge would
 // leave ListSyncAliases disagreeing with ResolveSyncItem.
+//
+// It removes exactly one link: the loser's own redirect and its entry in that
+// winner's MergedFrom. Other losers of the same winner keep redirecting to it.
+// In a chain A -> B -> C, clearing B makes B a live item again: B stops
+// resolving to C and leaves C's aliases, and A, whose redirect still names B,
+// now resolves to B and is listed as B's alias, not C's. A client holding A's
+// id therefore lands on the restored B, the book A was merged into, rather
+// than on C.
 func (p *PebbleStore) ClearSyncRedirect(loserBookID string) (winnerBookID string, cleared bool, err error) {
 	loserSyncID, has, err := p.GetSyncIDForBook(loserBookID)
 	if err != nil || !has {
