@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store.go
-// version: 2.24.0
+// version: 2.25.0
 // last-edited: 2026-10-01
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
@@ -1501,7 +1501,7 @@ func (s *EmbeddingStore) BackfillCandidateEntityIndex() (CandidateIndexBackfill,
 	defer iter.Close()
 
 	b := s.db.NewBatch()
-	pending := 0
+	pending, batches := 0, 0
 	for iter.First(); iter.Valid(); iter.Next() {
 		idHex := string(iter.Key())[len(dedupRecPfx):]
 		id, err := strconv.ParseInt(idHex, 16, 64)
@@ -1526,6 +1526,8 @@ func (s *EmbeddingStore) BackfillCandidateEntityIndex() (CandidateIndexBackfill,
 			}
 			b.Close()
 			b, pending = s.db.NewBatch(), 0
+			batches++
+			logDedupBackfillProgress("candidates", batches, res.Indexed, res.Unreadable)
 		}
 	}
 	if err := iter.Error(); err != nil {

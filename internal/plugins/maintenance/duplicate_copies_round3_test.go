@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_round3_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e4ed5d00-b92e-4387-91d0-1b1b72542bb2
 // last-edited: 2026-10-01
 
@@ -190,6 +190,54 @@ func TestTitleIndex_CatchesUpWithoutARebuild(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{made.ID}, ids)
 	require.EqualValues(t, 2, full.Load(), "an unlisted change forces a rebuild")
+}
+
+// dcFailReadStore fails GetBookByID for one book (a corrupt book_sig
+// sidecar, say) and counts full-library reads like dcCountingStore.
+type dcFailReadStore struct {
+	dcCountingStore
+	bad string
+}
+
+func (c dcFailReadStore) GetBookByID(id string) (*database.Book, error) {
+	if id == c.bad {
+		return nil, errDCInjected
+	}
+	return c.Store.GetBookByID(id)
+}
+
+// TestTitleIndex_ReReadErrorRebuildsInsteadOfWedging: a catch-up re-read
+// that fails for one changed book must not return the error with the cache
+// left at its old generation (every later call would re-read the same book
+// and fail the same way). It drops the cache and rebuilds from the full
+// listing, which answers correctly.
+func TestTitleIndex_ReReadErrorRebuildsInsteadOfWedging(t *testing.T) {
+	f := newFragFixture(t)
+	_, err := f.s.CreateBook(&database.Book{Title: "Filler", FilePath: f.path("Fill/0")})
+	require.NoError(t, err)
+	var full atomic.Int32
+	st := dcFailReadStore{dcCountingStore: dcCountingStore{Store: f.s, full: &full}}
+	fx := &folderBooksFixer{}
+	ids, err := fx.titleIndex(st, "sword")
+	require.NoError(t, err)
+	require.Empty(t, ids)
+	require.EqualValues(t, 1, full.Load())
+
+	made, err := f.s.CreateBook(&database.Book{Title: "Sword", FilePath: f.path("New/Sword")})
+	require.NoError(t, err)
+	st.bad = made.ID
+	ids, err = fx.titleIndex(st, "sword")
+	require.NoError(t, err, "one unreadable book must not fail the duplicate check")
+	require.Equal(t, []string{made.ID}, ids, "the full rebuild lists the book")
+	require.EqualValues(t, 2, full.Load(), "the failed catch-up fell through to the full rebuild")
+
+	// The rebuilt cache is current: a later write is caught up again.
+	other, err := f.s.CreateBook(&database.Book{Title: "Sword", FilePath: f.path("New/Sword2")})
+	require.NoError(t, err)
+	ids, err = fx.titleIndex(st, "sword")
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{made.ID, other.ID}, ids)
+	require.EqualValues(t, 2, full.Load(), "the rebuilt cache caught up without another rebuild")
 }
 
 // TestDuplicateCopies_BulkApplyReadsTheLibraryOnce (C-1b): two rows of one

@@ -1,5 +1,5 @@
 // file: internal/database/dedup_label.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5a0319bd-8bc4-4135-91e6-dfd43628dcc5
 // last-edited: 2026-10-01
 
@@ -11,6 +11,8 @@ import (
 	"strconv"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // dedupLabelPfx is the Pebble keyspace for labeled dedup examples.
@@ -455,7 +457,7 @@ func (s *EmbeddingStore) BackfillLabelEntityIndex() (LabelIndexBackfill, error) 
 	}
 	defer func() { _ = iter.Close() }()
 	b := s.db.NewBatch()
-	pending := 0
+	pending, batches := 0, 0
 	for iter.First(); iter.Valid(); iter.Next() {
 		var ex LabeledExample
 		if json.Unmarshal(iter.Value(), &ex) != nil {
@@ -474,6 +476,8 @@ func (s *EmbeddingStore) BackfillLabelEntityIndex() (LabelIndexBackfill, error) 
 			}
 			_ = b.Close()
 			b, pending = s.db.NewBatch(), 0
+			batches++
+			logDedupBackfillProgress("labels", batches, res.Indexed, res.Unreadable)
 		}
 	}
 	if err := iter.Error(); err != nil {
@@ -490,3 +494,21 @@ func (s *EmbeddingStore) BackfillLabelEntityIndex() (LabelIndexBackfill, error) 
 
 // labelBackfillBatch is how many rows a backfill commits per batch.
 const labelBackfillBatch = 1000
+
+// dedupBackfillLog is where migration 64 (the dedup entity-index backfills)
+// reports. A var so a test can capture it.
+var dedupBackfillLog logger.Logger = logger.New("database.migration-064")
+
+// dedupBackfillProgressEvery is how many committed batches pass between two
+// progress lines: 50 batches is 50,000 rows, a few seconds of a boot that
+// would otherwise be silent for tens of seconds. A var so a test can lower it.
+var dedupBackfillProgressEvery = 50
+
+// logDedupBackfillProgress logs a backfill's running totals every
+// dedupBackfillProgressEvery committed batches.
+func logDedupBackfillProgress(what string, batches, indexed, unreadable int) {
+	if dedupBackfillProgressEvery <= 0 || batches%dedupBackfillProgressEvery != 0 {
+		return
+	}
+	dedupBackfillLog.Info("migration 64: %s backfill in progress: %d indexed, %d unreadable so far", what, indexed, unreadable)
+}

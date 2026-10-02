@@ -1,5 +1,5 @@
 // file: internal/database/book_file_path_key.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a41d0c6-2f7e-4b39-95d8-c6e1f3a07b24
 // last-edited: 2026-10-01
 
@@ -39,20 +39,30 @@ func (p *PebbleStore) ClaimBookFilePathKey(bookID, fileID, path string) (claimed
 	unlock := p.lockBookFile(fileID)
 	defer unlock()
 	unlockOwner := p.lockBookOwners(bookID)
-	defer unlockOwner()
 	f, err := p.getBookFileByID(bookID, fileID)
 	if err != nil {
+		unlockOwner()
 		return false, fmt.Errorf("read book_file %s: %w", fileID, err)
 	}
 	if f == nil || f.FilePath != path {
+		unlockOwner()
 		return false, nil
 	}
 	if claimPathKeyBeforeSetHook != nil {
 		claimPathKeyBeforeSetHook()
 	}
 	key := []byte(fmt.Sprintf("book_file_path:%s", bookFilePathCRC(path)))
-	if err := p.db.Set(key, []byte(bookID+":"+fileID), pebble.Sync); err != nil {
+	// NoSync under the owner stripe, fsync after releasing it: no fsync runs
+	// under an owner stripe (book_delete_owns_files.go, WHAT RUNS UNDER THEM).
+	err = p.db.Set(key, []byte(bookID+":"+fileID), pebble.NoSync)
+	unlockOwner()
+	if err != nil {
 		return false, fmt.Errorf("claim the path key for %s: %w", fileID, err)
+	}
+	// The key is applied (visible) even if the fsync fails, so claimed is
+	// true alongside an ErrBookFileDurabilityUnknown error.
+	if err := p.syncBookFileWAL(); err != nil {
+		return true, fmt.Errorf("claim the path key for %s: %w", fileID, err)
 	}
 	return true, nil
 }

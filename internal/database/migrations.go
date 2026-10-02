@@ -1,5 +1,5 @@
 // file: internal/database/migrations.go
-// version: 1.49.0
+// version: 1.50.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
 // last-edited: 2026-10-01
 
@@ -1317,16 +1317,24 @@ func migration063Up(store migrationStore) error {
 func migration064Up(store migrationStore) error {
 	b, ok := store.(dedupIndexBackfiller)
 	if !ok {
-		slog.Warn("migration 64: store cannot backfill the dedup entity indexes; nothing to do", "store", fmt.Sprintf("%T", store))
+		dedupBackfillLog.Warn("migration 64: store %T cannot backfill the dedup entity indexes; nothing to do", store)
 		return nil
 	}
+	dedupBackfillLog.Info("migration 64: backfilling the dedup entity indexes (one pass over every candidate and label)")
 	cands, labels, err := b.BackfillDedupEntityIndexes()
 	if err != nil {
 		return fmt.Errorf("migration 64: backfill dedup entity indexes: %w", err)
 	}
-	slog.Info("migration 64: dedup entity indexes backfilled",
-		"candidates_indexed", cands.Indexed, "candidates_unreadable", cands.Unreadable,
-		"labels_indexed", labels.Indexed, "labels_unreadable", labels.Unreadable)
+	dedupBackfillLog.Info("migration 64: dedup entity indexes backfilled: candidates %d indexed, %d unreadable; labels %d indexed, %d unreadable",
+		cands.Indexed, cands.Unreadable, labels.Indexed, labels.Unreadable)
+	// An unreadable row could not be indexed, so its verdict is invisible to
+	// every per-entity read (a fixer's Replan): say so loudly.
+	if cands.Unreadable > 0 {
+		dedupBackfillLog.Warn("migration 64: %d dedup candidates are unreadable and were not indexed by entity", cands.Unreadable)
+	}
+	if labels.Unreadable > 0 {
+		dedupBackfillLog.Warn("migration 64: %d labeled examples are unreadable and were not indexed by entity", labels.Unreadable)
+	}
 	return nil
 }
 

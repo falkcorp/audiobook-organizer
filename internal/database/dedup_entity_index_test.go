@@ -1,15 +1,21 @@
 // file: internal/database/dedup_entity_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 42d58947-e661-49b8-bdef-32b171b2b68d
 // last-edited: 2026-10-01
 
 package database
 
 import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // legacyCandidate writes a candidate the way rows stored before 2026-06-22
@@ -133,4 +139,79 @@ func TestLabelEntityIndex_ReadsOnlyTheBooksAsked(t *testing.T) {
 	require.NoError(t, s.db.Set(dedupLabelEntityKey("bA", 3), nil, pebble.Sync))
 	_, err = s.ListLabeledExamplesForEntitiesStrict([]string{"bA"}, LabeledExampleFilter{})
 	require.Error(t, err, "a corrupt label indexed under the book may be a verdict on it")
+}
+
+// recordingLog captures Info and Warn lines.
+type recordingLog struct {
+	logger.Logger
+	mu          sync.Mutex
+	infos, warn []string
+}
+
+func (r *recordingLog) Info(msg string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.infos = append(r.infos, fmt.Sprintf(msg, args...))
+}
+
+func (r *recordingLog) Warn(msg string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.warn = append(r.warn, fmt.Sprintf(msg, args...))
+}
+
+// TestMigration064_LogsProgressAndWarnsOnUnreadable: a long backfill reports
+// progress every dedupBackfillProgressEvery batches, so boot is not silent,
+// and unreadable rows (which could not be indexed) are a Warn, not buried in
+// an Info line's counters.
+func TestMigration064_LogsProgressAndWarnsOnUnreadable(t *testing.T) {
+	ps, err := NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	s := NewEmbeddingStore(ps.DB())
+	b := s.db.NewBatch()
+	for i := 1; i <= labelBackfillBatch+1; i++ {
+		v, err := json.Marshal(LabeledExample{CandidateID: int64(i), EntityAID: "bA", EntityBID: fmt.Sprintf("b%d", i), Label: "not_dup"})
+		require.NoError(t, err)
+		require.NoError(t, b.Set(dedupLabelKey(int64(i)), v, nil))
+	}
+	require.NoError(t, b.Set(dedupLabelKey(int64(labelBackfillBatch+5)), []byte("{corrupt"), nil))
+	require.NoError(t, b.Commit(pebble.Sync))
+	_ = b.Close()
+
+	rec := &recordingLog{Logger: logger.New("test")}
+	prevLog, prevEvery := dedupBackfillLog, dedupBackfillProgressEvery
+	dedupBackfillLog, dedupBackfillProgressEvery = rec, 1
+	t.Cleanup(func() { dedupBackfillLog, dedupBackfillProgressEvery = prevLog, prevEvery })
+
+	require.NoError(t, migration064Up(ps))
+
+	var progress int
+	for _, l := range rec.infos {
+		if strings.Contains(l, "labels backfill in progress") {
+			progress++
+			require.Contains(t, l, fmt.Sprintf("%d indexed", labelBackfillBatch))
+		}
+	}
+	require.Equal(t, 1, progress, "one full batch, one progress line: %q", rec.infos)
+	require.Len(t, rec.warn, 1, "%q", rec.warn)
+	require.Contains(t, rec.warn[0], "1 labeled examples are unreadable")
+}
+
+// TestLabelEntityIndex_SkipsAStaleRowForTheOldBook: an index row left behind
+// under a book the label no longer names (written by a path that did not
+// maintain the index) is skipped, not returned as a verdict on that book.
+func TestLabelEntityIndex_SkipsAStaleRowForTheOldBook(t *testing.T) {
+	s := newTestEmbeddingStore(t)
+	require.NoError(t, s.UpsertLabeledExample(LabeledExample{CandidateID: 1, EntityAID: "bA", EntityBID: "bB", Label: "not_dup"}))
+	v, err := json.Marshal(LabeledExample{CandidateID: 1, EntityAID: "bX", EntityBID: "bY", Label: "not_dup"})
+	require.NoError(t, err)
+	require.NoError(t, s.db.Set(dedupLabelKey(1), v, pebble.Sync)) // bypasses index maintenance
+	_, closer, err := s.db.Get(dedupLabelEntityKey("bA", 1))
+	require.NoError(t, err, "the stale index row is still there")
+	_ = closer.Close()
+
+	got, err := s.ListLabeledExamplesForEntitiesStrict([]string{"bA"}, LabeledExampleFilter{})
+	require.NoError(t, err)
+	require.Empty(t, got, "the label names bX/bY now, not bA")
 }

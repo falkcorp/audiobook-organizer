@@ -1,5 +1,5 @@
 // file: internal/database/book_change_log_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b1d4a52-6f0e-4c1a-9d37-5e8a2c7b1f63
 // last-edited: 2026-10-01
 
@@ -47,6 +47,44 @@ func TestBookChangeLog_ListsWhatChangedOrRefuses(t *testing.T) {
 	ids, _, ok = l.since(&g, g.Value()-1)
 	require.True(t, ok)
 	require.Equal(t, []string{"x"}, ids)
+}
+
+// TestBookChangeLog_MidLogGapIsNotListable: a bare Bump between two
+// recorded bumps leaves a generation no record names, so since() must refuse
+// from before it, and list from after it.
+func TestBookChangeLog_MidLogGapIsNotListable(t *testing.T) {
+	var g cache.Generation
+	var l bookChangeLog
+	l.bump(&g, "a") // 1
+	g.Bump()        // 2: a write the log did not see
+	l.bump(&g, "b") // 3
+	_, _, ok := l.since(&g, 0)
+	require.False(t, ok, "generation 2 has no record")
+	ids, upTo, ok := l.since(&g, 2)
+	require.True(t, ok)
+	require.Equal(t, []string{"b"}, ids)
+	require.Equal(t, uint64(3), upTo)
+}
+
+// TestBookChangeLog_RecordsMustCoverExactlyTheRange pins since()'s own
+// contract: it is ok only when the records exactly cover (from, cur]. A
+// record count that happens to equal cur-from is not proof; the records must
+// be contiguous from from+1. No production caller can reach this state (the
+// reader holds l.mu and every record is <= the generation it reads), so this
+// drives since() with a generation behind the log: records 1, 3, 4 against
+// cur 3 is three records for a span of three, with generation 2 missing.
+func TestBookChangeLog_RecordsMustCoverExactlyTheRange(t *testing.T) {
+	var g, behind cache.Generation
+	var l bookChangeLog
+	l.bump(&g, "a") // 1
+	g.Bump()        // 2: no record
+	l.bump(&g, "b") // 3
+	l.bump(&g, "c") // 4
+	behind.Bump()
+	behind.Bump()
+	behind.Bump()
+	_, _, ok := l.since(&behind, 0)
+	require.False(t, ok, "generation 2 has no record")
 }
 
 // TestPebbleStore_BooksChangedSince: create, update and delete are logged

@@ -1,5 +1,5 @@
 // file: internal/database/book_files_with_hash_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5d27b9e0-8c14-4f6a-a3d1-0e9f72b6c845
 // last-edited: 2026-10-01
 
@@ -247,4 +247,44 @@ func TestClaimBookFilePathKey_SerializesWithAMove(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, b.ID+":"+fa.ID, string(v))
 	_ = closer.Close()
+}
+
+// TestClaimBookFilePathKey_FsyncsOutsideTheOwnerStripe: no fsync runs under an
+// owner stripe (book_delete_owns_files.go, WHAT RUNS UNDER THEM). The claim
+// applies its key NoSync under the stripe and makes it durable through
+// syncBookFileWAL after releasing it, so the WAL-sync hook must run, and must
+// find the owner stripe free. A failed fsync still reports the claim, since
+// the key is already visible.
+func TestClaimBookFilePathKey_FsyncsOutsideTheOwnerStripe(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	s.WaitForWarmup()
+	a, err := s.CreateBook(&Book{Title: "A", FilePath: "/lib/A"})
+	require.NoError(t, err)
+	fa := &BookFile{BookID: a.ID, FilePath: "/lib/z.mp3"}
+	require.NoError(t, s.CreateBookFile(fa))
+
+	var synced, stripeFree bool
+	bookFileWALSyncHook = func() error {
+		synced = true
+		mu := &s.bookOwnerLocks[stripeFor(a.ID)]
+		if mu.TryLock() {
+			stripeFree = true
+			mu.Unlock()
+		}
+		return nil
+	}
+	t.Cleanup(func() { bookFileWALSyncHook = nil })
+
+	ok, err := s.ClaimBookFilePathKey(a.ID, fa.ID, "/lib/z.mp3")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, synced, "the claim must fsync its key through syncBookFileWAL")
+	require.True(t, stripeFree, "the fsync ran while the owner stripe was held")
+
+	bookFileWALSyncHook = func() error { return errors.New("injected fsync failure") }
+	ok, err = s.ClaimBookFilePathKey(a.ID, fa.ID, "/lib/z.mp3")
+	require.ErrorIs(t, err, ErrBookFileDurabilityUnknown)
+	require.True(t, ok, "the key was applied; only its durability is unknown")
 }
