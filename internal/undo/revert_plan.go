@@ -1,5 +1,5 @@
 // file: internal/undo/revert_plan.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
 // last-edited: 2026-10-02
 
@@ -45,6 +45,9 @@ type RevertPlan struct {
 	// member after retiring them (a ChangeTypeBookPrimaryHandoff row, see
 	// NoteHandOffs).
 	handedOff map[string]bool
+	// demoted: books this operation journaled a primary demote for
+	// (NoteHandOffs), reverted or not.
+	demoted map[string]bool
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -57,7 +60,7 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 		return nil, err
 	}
 	p := &RevertPlan{Stamps: OpSoftDeleteStamps(rows), deps: deps, depIDs: map[string]bool{},
-		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}}
+		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}, demoted: map[string]bool{}}
 	for _, ids := range deps {
 		for _, id := range ids {
 			p.depIDs[id] = true
@@ -168,8 +171,11 @@ func (p *RevertPlan) Record(c *database.OperationChange, err error) {
 // the books it has a ChangeTypeBookPrimaryHandoff row for.
 func (p *RevertPlan) NoteHandOffs(all []*database.OperationChange) {
 	for _, c := range all {
-		if c.ChangeType == ChangeTypeBookPrimaryHandoff {
+		switch c.ChangeType {
+		case ChangeTypeBookPrimaryHandoff:
 			p.handedOff[c.BookID] = true
+		case ChangeTypeBookPrimaryDemote:
+			p.demoted[c.BookID] = true
 		}
 	}
 }
@@ -183,6 +189,13 @@ func (p *RevertPlan) NoteHandOffs(all []*database.OperationChange) {
 // cut off before it wrote, whatever an earlier revert pass counted already
 // restored, or a flag a user set since.
 func (p *RevertPlan) HandedOff(bookID string) bool { return p.handedOff[bookID] }
+
+// ChangedPrimary reports whether this operation journaled a primary demote
+// or a hand-off for bookID: evidence it set out to change the primary of the
+// book's version group, so its revert may settle that group.
+func (p *RevertPlan) ChangedPrimary(bookID string) bool {
+	return p.handedOff[bookID] || p.demoted[bookID]
+}
 
 // RetireDependents maps each book a soft-delete row of rows restores to the
 // ids of the rows (in rows) that moved one of its book_file rows onto another
