@@ -1,5 +1,5 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
 // last-edited: 2026-10-02
 

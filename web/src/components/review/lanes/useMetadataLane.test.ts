@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.26.0
+// version: 1.27.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-10-02
 //
@@ -68,19 +68,25 @@ function reviewPayload(results: api.CandidateResult[]) {
 type ReviewResponse = Awaited<ReturnType<typeof api.getCachedReviewResults>>;
 
 /**
- * Serves index loads from a queue and answers every per-page detail request
- * (ids=) with nothing, for tests that script a SEQUENCE of index responses.
+ * Serves index loads from a queue, for tests that script a SEQUENCE of index
+ * responses, and answers every per-page detail request (ids=) from the index
+ * most recently served -- as the server does from one snapshot.
  * mockResolvedValueOnce cannot tell the two request shapes apart, so a detail
  * fetch would consume a response meant for the next index load.
  */
 function routeIndexQueue(): (next: Promise<unknown> | unknown) => void {
   const queue: Array<Promise<unknown> | unknown> = [];
+  let lastIndex: api.CandidateResult[] = [];
   vi.mocked(api.getCachedReviewResults).mockImplementation(
-    (_limit, _offset, _all, _bucket, options = {}) => {
-      if (options.ids || queue.length === 0) {
-        return Promise.resolve(reviewPayload([]) as ReviewResponse);
+    async (_limit, _offset, _all, _bucket, options = {}) => {
+      if (options.ids) {
+        const want = new Set(options.ids);
+        return reviewPayload(lastIndex.filter((r) => want.has(r.book.id))) as ReviewResponse;
       }
-      return Promise.resolve(queue.shift()) as Promise<ReviewResponse>;
+      if (queue.length === 0) return reviewPayload([]) as ReviewResponse;
+      const next = (await queue.shift()) as ReviewResponse;
+      lastIndex = next.results;
+      return next;
     }
   );
   return (next) => {
@@ -1753,7 +1759,7 @@ describe('index + per-page details (the 93 MB / 119 s full list timed out)', () 
     expect(result.current.results).toHaveLength(120);
   });
 
-  it('keeps an index row whose detail hash differs (the detail is never newer truth)', async () => {
+  it('refetches the index once, then warns, when a detail hash differs (never newer truth)', async () => {
     vi.mocked(api.getCachedReviewResults).mockImplementation(
       async (_l, _o, _a, _b, options = {}) =>
         reviewPayload([
@@ -1767,8 +1773,36 @@ describe('index + per-page details (the 93 MB / 119 s full list timed out)', () 
     await waitFor(() =>
       expect(vi.mocked(api.getCachedReviewResults).mock.calls.some((c) => c[4]?.ids)).toBe(true)
     );
-    await Promise.resolve();
+    // The mismatch refetches the index once; still mismatched, it warns
+    // instead of leaving a row whose Apply would be refused.
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringContaining('changed on the server'),
+        'warning'
+      )
+    );
+    const indexCalls = vi
+      .mocked(api.getCachedReviewResults)
+      .mock.calls.filter((c) => c[4]?.view === 'index');
+    expect(indexCalls).toHaveLength(2);
     expect(result.current.pageResults[0].candidate?.title).toBe('Indexed');
+  });
+
+  it('refetches the index when a shown book is gone from the server', async () => {
+    let indexLoads = 0;
+    vi.mocked(api.getCachedReviewResults).mockImplementation(
+      async (_l, _o, _a, _b, options = {}) => {
+        if (options.ids)
+          return reviewPayload([]) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
+        indexLoads += 1;
+        return reviewPayload(
+          indexLoads === 1 ? [makeResult('gone', { candidate_hash: 'h' })] : []
+        ) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
+      }
+    );
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(indexLoads).toBe(2));
+    await waitFor(() => expect(result.current.results).toHaveLength(0));
   });
 
   it('bulk apply pins books on pages never opened, from the index', async () => {
