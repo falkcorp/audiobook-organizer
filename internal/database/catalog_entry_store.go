@@ -1,5 +1,5 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
 // last-edited: 2026-10-01
 
@@ -217,6 +217,9 @@ type CatalogAuthorState struct {
 	ShortKind      string `json:"short_kind,omitempty"`
 	ShortRuns      int    `json:"short_runs,omitempty"`
 	ShortDelivered int    `json:"short_delivered,omitempty"`
+	// ShortSince is when the current streak of agreeing short runs began.
+	// A zero-total streak is accepted only once it spans a minimum window.
+	ShortSince *time.Time `json:"short_since,omitempty"`
 	// Conflict: owned books named more than one author ASIN for this name.
 	Conflict       bool       `json:"conflict,omitempty"`
 	MarkedStale    int        `json:"marked_stale,omitempty"`

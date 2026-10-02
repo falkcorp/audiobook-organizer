@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
 // last-edited: 2026-10-01
 
@@ -14,7 +14,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -689,7 +691,9 @@ func TestUpsert_CoAuthorVerdictsMerge(t *testing.T) {
 // so a test can serve a truncated or inconsistent reply on a chosen page. It
 // counts every request (listing pages and lookups). Lookups are not found.
 type scriptLister struct {
-	list    func(name string, page, size int) metadata.AuthorPage
+	list func(name string, page, size int) metadata.AuthorPage
+	// fail, when set and returning non-nil, fails that listing request.
+	fail    func(name string, page int) error
 	pages   atomic.Int64
 	lookups atomic.Int64
 }
@@ -697,6 +701,11 @@ type scriptLister struct {
 func (l *scriptLister) ProviderID() string { return "audible" }
 func (l *scriptLister) ListByAuthor(_ context.Context, name string, page, size int) (metadata.AuthorPage, error) {
 	l.pages.Add(1)
+	if l.fail != nil {
+		if err := l.fail(name, page); err != nil {
+			return metadata.AuthorPage{}, err
+		}
+	}
 	return l.list(name, page, size), nil
 }
 func (l *scriptLister) LookupProduct(_ context.Context, asin string) (*metadata.CatalogProduct, error) {
@@ -965,22 +974,244 @@ func TestHarvest_PersistentShortListingIsAcceptedAfterThreeRuns(t *testing.T) {
 	}
 }
 
-// TestHarvest_ZeroTotalAcceptedAfterThreeRunsAndStales: an author whose
-// catalog is really gone answers 0 every time. The first two runs are
-// partial (and, since a short run keeps nothing, the second must still be
-// guarded by the entries on file, not by the last run's kept count); the
-// third agreeing run is complete and stales everything.
-func TestHarvest_ZeroTotalAcceptedAfterThreeRunsAndStales(t *testing.T) {
-	st, _ := openCatalog(t)
-	states, _ := harvestN(t, st, 3, func(int, int) metadata.AuthorPage {
-		return metadata.AuthorPage{Products: []metadata.CatalogProduct{}}
-	})
-	for i, s := range states[:2] {
-		if s.State != database.CatalogHarvestPartial || s.MarkedStale != 0 {
-			t.Errorf("zero run %d = %s, stale %d; want partial, 0", i+1, s.State, s.MarkedStale)
+// clock is a settable test clock.
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *clock) Now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *clock) Add(d time.Duration) { c.mu.Lock(); c.t = c.t.Add(d); c.mu.Unlock() }
+
+// annRuns harvests Ann Author once against the full six-product listing,
+// then once per entry of advance (moving the clock by it first) against
+// next, returning each later run's state.
+func annRuns(t *testing.T, st *database.CatalogStore, l *scriptLister, c *clock, advance []time.Duration) []database.CatalogAuthorState {
+	t.Helper()
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1, OpID: "op-test", Now: c.Now})
+	a := ScopeAuthor{Key: HarvestKey("Ann Author"), Name: "Ann Author"}
+	var out []database.CatalogAuthorState
+	for i := -1; i < len(advance); i++ {
+		if i >= 0 {
+			c.Add(advance[i])
+		}
+		s, err := h.HarvestAuthor(context.Background(), a, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i >= 0 {
+			out = append(out, s)
 		}
 	}
-	if s := states[2]; s.State != database.CatalogHarvestComplete || s.MarkedStale != 6 {
-		t.Errorf("third zero run = %s, stale %d; want complete, 6", s.State, s.MarkedStale)
+	return out
+}
+
+// phasedLister serves the full six-product listing on the first harvest and
+// then whatever next returns.
+func phasedLister(next func(page, size int) metadata.AuthorPage) (*scriptLister, *atomic.Int64) {
+	all := sixProducts()
+	var calls atomic.Int64
+	l := &scriptLister{list: func(_ string, page, size int) metadata.AuthorPage {
+		if calls.Add(1) <= 3 { // the first walk is pages 0..2
+			return slicePage(all, page, size)
+		}
+		return next(page, size)
+	}}
+	return l, &calls
+}
+
+// TestHarvest_ZeroTotalNeedsTheWindowNotJustRuns: three "0 results" replies
+// inside an hour (an outage, or a decode regression reading total as 0) must
+// NOT stale anything. Acceptance needs the agreeing runs to span
+// ZeroTotalAcceptWindow; once they do, the stale pass runs.
+func TestHarvest_ZeroTotalNeedsTheWindowNotJustRuns(t *testing.T) {
+	st, _ := openCatalog(t)
+	l, _ := phasedLister(func(int, int) metadata.AuthorPage { return metadata.AuthorPage{Products: []metadata.CatalogProduct{}} })
+	c := &clock{t: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+	states := annRuns(t, st, l, c, []time.Duration{time.Minute, 20 * time.Minute, 20 * time.Minute, 4 * 24 * time.Hour, 4 * 24 * time.Hour})
+	for i, s := range states[:4] {
+		if s.State != database.CatalogHarvestPartial || s.MarkedStale != 0 {
+			t.Errorf("zero run %d (within the window) = %s, stale %d; want partial, 0", i+1, s.State, s.MarkedStale)
+		}
+	}
+	if s := states[4]; s.State != database.CatalogHarvestComplete || s.MarkedStale != 6 {
+		t.Errorf("zero run 5 (window spanned) = %s, stale %d; want complete, 6", s.State, s.MarkedStale)
+	}
+}
+
+// TestHarvest_ShortRunsRequireSameTotal: the same delivered count under a
+// different total_results is a different answer and restarts the count.
+func TestHarvest_ShortRunsRequireSameTotal(t *testing.T) {
+	st, _ := openCatalog(t)
+	all := sixProducts()
+	totals := []int{6, 7, 6}
+	run := 0
+	l, _ := phasedLister(func(page, size int) metadata.AuthorPage {
+		pg := slicePage(all[:4], page, size)
+		pg.TotalResults = totals[run]
+		if len(pg.Products) == 0 {
+			run = min(run+1, len(totals)-1)
+		}
+		return pg
+	})
+	c := &clock{t: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+	for i, s := range annRuns(t, st, l, c, []time.Duration{time.Hour, time.Hour, time.Hour}) {
+		if s.ShortRuns != 1 || s.State != database.CatalogHarvestPartial {
+			t.Errorf("run %d: short_runs=%d state=%s; want 1, partial (total changed)", i+1, s.ShortRuns, s.State)
+		}
+	}
+}
+
+// TestHarvest_ErrorRunResetsShortRuns: short, provider error, short -- the
+// error breaks the streak, so the third run starts again at 1.
+func TestHarvest_ErrorRunResetsShortRuns(t *testing.T) {
+	st, _ := openCatalog(t)
+	all := sixProducts()
+	l, _ := phasedLister(func(page, size int) metadata.AuthorPage {
+		pg := slicePage(all[:4], page, size)
+		pg.TotalResults = 6
+		return pg
+	})
+	var failing atomic.Bool
+	l.fail = func(string, int) error {
+		if failing.Load() {
+			return errors.New("provider 500")
+		}
+		return nil
+	}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1})
+	a := ScopeAuthor{Key: HarvestKey("Ann Author"), Name: "Ann Author"}
+	var got []int
+	for i := 0; i < 4; i++ {
+		failing.Store(i == 2)
+		s, err := h.HarvestAuthor(context.Background(), a, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, s.ShortRuns)
+	}
+	if fmt.Sprint(got) != "[0 1 0 1]" {
+		t.Errorf("short_runs per run = %v; want [0 1 0 1] (full, short, error resets, short)", got)
+	}
+}
+
+// breakerAuthors returns n authors, each listing two products of its own.
+func breakerAuthors(n int) ([]ScopeAuthor, map[string][]metadata.CatalogProduct) {
+	var authors []ScopeAuthor
+	by := map[string][]metadata.CatalogProduct{}
+	for i := range n {
+		name := fmt.Sprintf("Author %c", 'A'+i)
+		authors = append(authors, ScopeAuthor{Key: HarvestKey(name), Name: name})
+		for j := range 2 {
+			by[name] = append(by[name], metadata.CatalogProduct{ASIN: fmt.Sprintf("%c%d", 'A'+i, j), Title: fmt.Sprintf("%s %d", name, j),
+				Language: "english", Authors: []metadata.CatalogContributor{{Name: name}}})
+		}
+	}
+	return authors, by
+}
+
+// TestRun_ZeroTotalBreakerTreatsMassZeroAsOutage: when most of a run's
+// authors answer "0 results", that is the provider failing, not every catalog
+// vanishing at once. The zero replies must not count toward the acceptance
+// streak (nor finish a new author as complete), and the run reports it.
+func TestRun_ZeroTotalBreakerTreatsMassZeroAsOutage(t *testing.T) {
+	st, _ := openCatalog(t)
+	authors, by := breakerAuthors(6)
+	var zero atomic.Bool
+	l := &scriptLister{list: func(name string, page, size int) metadata.AuthorPage {
+		if zero.Load() {
+			return metadata.AuthorPage{Products: []metadata.CatalogProduct{}}
+		}
+		return slicePage(by[name], page, size)
+	}}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 3})
+	// A seventh author has never been harvested: under the outage it must
+	// not be recorded complete-and-empty for a whole reharvest interval.
+	fresh := ScopeAuthor{Key: HarvestKey("Fresh Author"), Name: "Fresh Author"}
+	if _, err := h.Run(context.Background(), &fakeReporter{}, authors, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	zero.Store(true)
+	tally, err := h.Run(context.Background(), &fakeReporter{}, append(slices.Clone(authors), fresh), RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range append(slices.Clone(authors), fresh) {
+		s, _ := st.GetAuthorState(a.Key)
+		if s == nil || s.State != database.CatalogHarvestPartial || s.ShortRuns != 0 || s.MarkedStale != 0 {
+			t.Errorf("%s under a mass zero reply: %+v; want partial, short_runs 0, nothing stale", a.Name, s)
+		}
+	}
+	if n, _ := st.CountStale(); n != 0 {
+		t.Errorf("mass zero reply staled %d entries", n)
+	}
+	if !tally.ZeroBreakerTripped.Load() || tally.ZeroTotal.Load() != 7 {
+		t.Errorf("tally zero_total=%d tripped=%v; want 7, true", tally.ZeroTotal.Load(), tally.ZeroBreakerTripped.Load())
+	}
+
+	// A run too small to judge is not a breaker: a 2-author run counts.
+	st2, _ := openCatalog(t)
+	h2 := NewHarvester(l, st2, Settings{Language: "english", PageSize: 2, Concurrency: 2})
+	zero.Store(false)
+	if _, err := h2.Run(context.Background(), &fakeReporter{}, authors[:2], RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	zero.Store(true)
+	if _, err := h2.Run(context.Background(), &fakeReporter{}, authors[:2], RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := st2.GetAuthorState(authors[0].Key); s == nil || s.ShortRuns != 1 {
+		t.Errorf("2-author zero run: %+v; want short_runs 1 (too small to judge)", s)
+	}
+}
+
+// TestRun_AcceptedZeroTotalStalesAfterTheRun: inside Run an accepted zero
+// total defers its stale pass until the breaker has seen the whole run; with
+// one zero author among six the breaker stays closed and the pass runs.
+func TestRun_AcceptedZeroTotalStalesAfterTheRun(t *testing.T) {
+	st, _ := openCatalog(t)
+	authors, by := breakerAuthors(6)
+	var gone atomic.Bool
+	l := &scriptLister{list: func(name string, page, size int) metadata.AuthorPage {
+		if gone.Load() && name == authors[0].Name {
+			return metadata.AuthorPage{Products: []metadata.CatalogProduct{}}
+		}
+		return slicePage(by[name], page, size)
+	}}
+	c := &clock{t: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 3, Now: c.Now})
+	if _, err := h.Run(context.Background(), &fakeReporter{}, authors, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	gone.Store(true)
+	for _, d := range []time.Duration{time.Hour, 4 * 24 * time.Hour, 4 * 24 * time.Hour} {
+		c.Add(d)
+		if _, err := h.Run(context.Background(), &fakeReporter{}, authors, RunOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, _ := st.GetAuthorState(authors[0].Key)
+	if s == nil || s.State != database.CatalogHarvestComplete || s.MarkedStale != 2 {
+		t.Errorf("gone author after the window: %+v; want complete, 2 marked stale", s)
+	}
+	if n, _ := st.CountStale(); n != 2 {
+		t.Errorf("stale count %d; want 2 (only the gone author's entries)", n)
+	}
+}
+
+// TestRun_TallyReportsDuplicatedAuthors: a walk with duplicate ASINs never
+// stales, so the run must at least say how many authors that applied to.
+func TestRun_TallyReportsDuplicatedAuthors(t *testing.T) {
+	st, _ := openCatalog(t)
+	all := sixProducts()
+	walk := []metadata.CatalogProduct{all[0], all[1], all[1], all[2], all[3], all[5]}
+	l := &scriptLister{list: func(_ string, page, size int) metadata.AuthorPage { return slicePage(walk, page, size) }}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1})
+	tally, err := h.Run(context.Background(), &fakeReporter{}, []ScopeAuthor{{Key: HarvestKey("Ann Author"), Name: "Ann Author"}}, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tally.Duplicated.Load() != 1 || !strings.Contains(tally.Summary(), "duplicated=1") {
+		t.Errorf("tally = %s; want duplicated=1", tally.Summary())
 	}
 }
