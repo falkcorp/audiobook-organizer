@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_books_under_dir.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c41e2a9-5b3d-4f86-9a0e-2d8b6f1c4e57
-// last-edited: 2026-09-19
+// last-edited: 2026-10-02
 
 package database
 
@@ -57,11 +57,17 @@ func (p *PebbleStore) liveBookPathsUnderDirScan(prefix string) (map[string]strin
 }
 
 func (p *PebbleStore) liveBookPathsUnderDirIndex(prefix string) (map[string]string, error) {
-	snap := p.db.NewSnapshot()
+	// The marker set is copied with the snapshot, so the undecodable check is
+	// point reads of the (normally zero) marked ids, never a range scan of
+	// the marker family (pebble_store_atpath_markers.go).
+	snap, markerIDs, err := p.undecodableMarkerSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("live books under dir: %w", err)
+	}
 	defer snap.Close()
 
 	under := func(path string) bool { return strings.HasPrefix(path, prefix) }
-	out, err := undecodableMarkedMatching(snap, under)
+	out, err := undecodableMarkedMatching(snap, markerIDs, under)
 	if err != nil {
 		return nil, fmt.Errorf("live books under dir: %w", err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
-// last-edited: 2026-09-19
+// last-edited: 2026-10-02
 
 // The book_atpath: multi-valued path index.
 //
@@ -256,11 +256,22 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 	// sentinel is written. A Set by a concurrent writer is never lost here
 	// (only the backfill writes markers); a concurrent UpdateBook/DeleteBook
 	// only ever deletes one.
+	//
+	// The in-memory marker set (pebble_store_atpath_markers.go) drops only the
+	// ids last added at or before the generation captured here, and only once
+	// the range delete has committed: an id a concurrent backfill added after
+	// the capture may have a marker committed after the range delete.
+	markerGen, err := p.undecodableMarkerGeneration()
+	if err != nil {
+		slog.Error("book-atpath-backfill: cannot load undecodable-marker set, aborting", "err", err)
+		return res, err
+	}
 	if err := p.db.DeleteRange([]byte(bookAtPathUndecodablePrefix),
 		bareRowUpperBound(bookAtPathUndecodablePrefix), pebble.Sync); err != nil {
 		slog.Error("book-atpath-backfill: cannot clear undecodable markers, aborting", "err", err)
 		return res, fmt.Errorf("clear undecodable markers: %w", err)
 	}
+	p.clearUndecodableMarkersUpTo(markerGen)
 
 	workers := bookAtPathBackfillWorkers
 	if workers < 1 {
@@ -298,6 +309,12 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 			batch := p.db.NewBatch()
 			defer func() { batch.Close() }()
 			buffered := 0
+			// Marker ids staged in the current batch. Each is noted in the
+			// in-memory set before it is staged and again after its batch
+			// commits, so an UpdateBook/DeleteBook that looked in between
+			// (and may have committed its marker Delete before this commit)
+			// cannot drop it from the set (pebble_store_atpath_markers.go).
+			var stagedMarkers []string
 			flush := func() error {
 				if buffered == 0 {
 					return nil
@@ -305,6 +322,12 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 				if err := batch.Commit(pebble.Sync); err != nil {
 					return fmt.Errorf("chunk commit: %w", err)
 				}
+				for _, id := range stagedMarkers {
+					if err := p.noteUndecodableMarker(id); err != nil {
+						return fmt.Errorf("record undecodable marker for %s: %w", id, err)
+					}
+				}
+				stagedMarkers = stagedMarkers[:0]
 				batch.Close()
 				batch = p.db.NewBatch()
 				buffered = 0
@@ -328,6 +351,10 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 					// row. Instead stage its marker, which keeps
 					// LiveBookIDsAtPath failing closed while the row stays
 					// broken, and report it at Error below.
+					if err := p.noteUndecodableMarker(r.id); err != nil {
+						return fmt.Errorf("record undecodable marker for %s: %w", r.id, err)
+					}
+					stagedMarkers = append(stagedMarkers, r.id)
 					if err := batch.Set(bookAtPathUndecodableKey(r.id), []byte{}, nil); err != nil {
 						return fmt.Errorf("stage undecodable marker for %s: %w", r.id, err)
 					}
@@ -360,7 +387,7 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 		})
 	}
 
-	err := g.Wait()
+	err = g.Wait()
 	res.Scanned = int(scanned.Load())
 	res.Commits = int(commits.Load())
 	res.UndecodableRows = len(undecodable)
@@ -450,7 +477,13 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 	}
 	rep.SentinelSet = built
 
-	snap := p.db.NewSnapshot()
+	// The in-memory marker set is copied with the snapshot; the marker check
+	// below point-reads only those ids instead of range-scanning the family
+	// (pebble_store_atpath_markers.go).
+	snap, markerIDs, err := p.undecodableMarkerSnapshot()
+	if err != nil {
+		return rep, fmt.Errorf("verify book_atpath: %w", err)
+	}
 	defer snap.Close()
 
 	type pair struct{ path, id string }
@@ -512,16 +545,15 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 	}
 
 	markers := make(map[string]bool)
-	mLower := []byte(bookAtPathUndecodablePrefix)
-	if err := forEachKeyInRange(snap, mLower, bareRowUpperBound(bookAtPathUndecodablePrefix), func(key, _ []byte) error {
-		id := string(key[len(mLower):])
+	onDisk, err := markersOnDiskIn(snap, markerIDs)
+	if err != nil {
+		return rep, fmt.Errorf("verify book_atpath: read undecodable markers: %w", err)
+	}
+	for _, id := range onDisk {
 		markers[id] = true
 		if !undecodable[id] {
 			rep.StaleMarkers++
 		}
-		return nil
-	}); err != nil {
-		return rep, fmt.Errorf("verify book_atpath: scan undecodable markers: %w", err)
 	}
 	var unmarked []string
 	for id := range undecodable {
