@@ -1,5 +1,5 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
 // last-edited: 2026-10-01
 
@@ -205,6 +205,18 @@ type CatalogAuthorState struct {
 	// Skipped: products the provider sent that could not be decoded. They
 	// count toward Fetched; a run that skipped any marks nothing stale.
 	Skipped int `json:"skipped,omitempty"`
+	// Duplicates: products the listing repeated across pages. A walk with
+	// any is complete but marks nothing stale (a repeat stands in for an
+	// omitted product).
+	Duplicates int `json:"duplicates,omitempty"`
+	// ShortKind/ShortRuns/ShortDelivered count consecutive runs whose
+	// listing came back short the same way (same kind, same delivered
+	// count). The harvest accepts a short listing after a fixed number of
+	// agreeing runs instead of re-walking it forever; zero means the last
+	// run was not short.
+	ShortKind      string `json:"short_kind,omitempty"`
+	ShortRuns      int    `json:"short_runs,omitempty"`
+	ShortDelivered int    `json:"short_delivered,omitempty"`
 	// Conflict: owned books named more than one author ASIN for this name.
 	Conflict       bool       `json:"conflict,omitempty"`
 	MarkedStale    int        `json:"marked_stale,omitempty"`
@@ -642,6 +654,16 @@ func (s *CatalogStore) EditionGroupMembers(groupID string) ([]string, error) {
 // CountEntries counts every catalog entry by its keys-only cat_id index.
 func (s *CatalogStore) CountEntries() (int, error) {
 	_, n, err := s.pageUnder(catIDPrefix, 0, 0)
+	return n, err
+}
+
+// CountHarvestedBy counts the entries a harvest key currently lists (its
+// keys-only cat_hv index): the entries a stale pass for it could touch.
+func (s *CatalogStore) CountHarvestedBy(harvestKey string) (int, error) {
+	if harvestKey == "" {
+		return 0, nil
+	}
+	_, n, err := s.pageUnder(catHarvestPrefix+harvestKey+":", 0, 0)
 	return n, err
 }
 
