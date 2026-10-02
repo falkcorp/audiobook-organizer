@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b8f4c71-6e05-4d39-a1c7-9e3d0f5a8b26
 // last-edited: 2026-10-01
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -726,5 +727,90 @@ func TestASINBackfill_BadRequestIsRememberedNotTripped(t *testing.T) {
 	before := fa.calls.Load()
 	if res := runASIN(t, p, `{"dry_run":false}`).res(t); res.SkippedRecentMiss != int64(len(ids)) || fa.calls.Load() != before {
 		t.Fatalf("second run result = %+v", res)
+	}
+}
+
+// An existing ASIN whose product is a different book (wrong title or author)
+// is reported as asin_suspect: listed, nothing written.
+func TestASINBackfill_SuspectExistingASINWritesNothing(t *testing.T) {
+	gs := metadata.AudibleIdentity{ASIN: "B00GOLDSON", Title: "Golden Son", Authors: []string{"Pierce Brown"}, ISBN: "9781480590441"}
+	other := metadata.AudibleIdentity{ASIN: "B00OTHERAU", Title: "Red Rising", Authors: []string{"Somebody Else"}, ISBN: "9781480590442"}
+	fa := &fakeAudible{byASIN: map[string]*metadata.AudibleIdentity{"B00GOLDSON": &gs, "B00OTHERAU": &other}}
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, "Pierce Brown")
+	wrongTitle := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00GOLDSON")})
+	wrongAuthor := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00OTHERAU")})
+
+	res := runASIN(t, p, `{"dry_run":false}`).res(t)
+	if res.ASINSuspect != 2 || res.ISBNWritten != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	for _, b := range []*database.Book{wrongTitle, wrongAuthor} {
+		if i13, _ := isbnOf(t, s, b.ID); i13 != "" {
+			t.Fatalf("suspect book %s got isbn %q", b.ID, i13)
+		}
+	}
+	n := 0
+	for _, pr := range res.Proposals {
+		if pr.Via == "asin_suspect" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("suspect proposals = %d, want 2: %+v", n, res.Proposals)
+	}
+}
+
+// The dry run is a faithful preview: on the same fixture it reports exactly
+// what the live run then writes (counts and the proposal list).
+func TestASINBackfill_DryRunMatchesLive(t *testing.T) {
+	build := func() (*Plugin, *database.PebbleStore) {
+		prod := rrProduct()
+		prod.Series = []metadata.AudibleSeriesRef{{Title: "Red Rising", Sequence: "1"}}
+		fa := &fakeAudible{
+			byTitle: map[string][]metadata.AudibleIdentity{"red rising": {prod}},
+			byKW:    map[string][]metadata.AudibleIdentity{isbnRR: {prod}},
+			byASIN:  map[string]*metadata.AudibleIdentity{"B00I2VWW5U": &prod},
+		}
+		p, s := newASINTestPlugin(t, fa)
+		aid := mkAuthor(t, s, "Pierce Brown")
+		ser, err := s.CreateSeries("Red Rising", &aid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Matched, already has ISBN-13: ASIN only.
+		mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ISBN13: new(isbnRR)})
+		// Matched, has ISBN-10 only: ASIN only.
+		mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, SeriesID: &ser.ID, SeriesSequence: new(1), ISBN10: new("0345539788")})
+		// Matched, no ISBN, ISBN-13 locked: ASIN only.
+		locked := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, SeriesID: &ser.ID, SeriesSequence: new(1)})
+		if err := s.UpsertMetadataFieldState(&database.MetadataFieldState{
+			BookID: locked.ID, Field: database.FieldKeyISBN13, OverrideValue: new(`""`), OverrideLocked: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// Matched, no ISBN: ASIN + ISBN.
+		mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, SeriesID: &ser.ID, SeriesSequence: new(1)})
+		// Has ASIN, no ISBN: ISBN by lookup.
+		mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00I2VWW5U")})
+		return p, s
+	}
+	norm := func(r asinBackfillResult) (string, []string) {
+		var ps []string
+		for _, p := range r.Proposals {
+			ps = append(ps, p.Via+"|"+p.ASIN+"|"+p.ISBN13)
+		}
+		sort.Strings(ps)
+		return fmt.Sprintf("asin=%d isbn=%d suspect=%d", r.MatchedWritten, r.ISBNWritten, r.ASINSuspect), ps
+	}
+	pd, _ := build()
+	dryCounts, dryProps := norm(runASIN(t, pd, `{}`).res(t))
+	pl, _ := build()
+	liveCounts, liveProps := norm(runASIN(t, pl, `{"dry_run":false}`).res(t))
+	if dryCounts != liveCounts || strings.Join(dryProps, ",") != strings.Join(liveProps, ",") {
+		t.Fatalf("dry %s %v\nlive %s %v", dryCounts, dryProps, liveCounts, liveProps)
+	}
+	if dryCounts != "asin=4 isbn=2 suspect=0" {
+		t.Fatalf("counts = %s, want asin=4 isbn=2", dryCounts)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
 // last-edited: 2026-10-01
 
@@ -230,6 +230,10 @@ type asinBackfillTally struct {
 	// book:asin index.
 	skippedManualOnly, skippedMerged atomic.Int64
 
+	// asinSuspect: a book's EXISTING ASIN looked up to a product whose title
+	// or author disagrees with the book (a wrong ASIN from an older writer).
+	asinSuspect atomic.Int64
+
 	// proposals is the would-write / written list, capped at
 	// asinProposalSampleCap; proposalsDropped counts what the cap left out.
 	proposals        []asinProposal
@@ -277,8 +281,9 @@ type asinProposal struct {
 	ISBN13       string   `json:"isbn13,omitempty"`
 	AudibleTitle string   `json:"audible_title,omitempty"`
 	Evidence     []string `json:"evidence,omitempty"`
-	// Via is "match" (searched + gate) or "asin_lookup" (ISBN by an
-	// existing ASIN).
+	// Via is "match" (searched + gate), "asin_lookup" (ISBN by an existing
+	// ASIN) or "asin_suspect" (the existing ASIN names a different product;
+	// nothing written, listed for the owner).
 	Via string `json:"via"`
 }
 
@@ -320,6 +325,9 @@ type asinBackfillResult struct {
 
 	SkippedManualOnly int64 `json:"skipped_manual_only"`
 	SkippedMerged     int64 `json:"skipped_merged"`
+	// ASINSuspect counts books whose existing ASIN names a different
+	// product; each is listed in Proposals with via "asin_suspect".
+	ASINSuspect int64 `json:"asin_suspect"`
 
 	// Proposals lists the books written (or, in a dry run, that would be),
 	// up to asinProposalSampleCap; ProposalsDropped counts the rest.
@@ -351,7 +359,8 @@ func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResu
 		ISBNLookups: t.isbnLookups.Load(), ISBNWritten: t.isbnWritten.Load(), ISBNNone: t.isbnNone.Load(),
 		SkippedRecentISBNMiss: t.skippedRecentISBNMiss.Load(),
 		SkippedManualOnly:     t.skippedManualOnly.Load(), SkippedMerged: t.skippedMerged.Load(),
-		Proposals: proposals, ProposalsDropped: dropped,
+		ASINSuspect: t.asinSuspect.Load(),
+		Proposals:   proposals, ProposalsDropped: dropped,
 	}
 }
 
@@ -538,7 +547,20 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 		return nil
 	}
 	if hasASIN {
-		return r.fillISBNByASIN(ctx, &b)
+		if searchTitle == "" {
+			t.skippedNoTitle.Add(1)
+			return nil
+		}
+		authors, err := database.LiveBookAuthorNames(r.store, &b)
+		if err != nil {
+			r.bookError(b.ID, "read authors", err)
+			return nil
+		}
+		if len(authors) == 0 {
+			t.skippedNoAuthor.Add(1)
+			return nil
+		}
+		return r.fillISBNByASIN(ctx, &b, searchTitle, authors)
 	}
 
 	locks, err := database.LoadFieldLocks(r.store, b.ID)
@@ -632,7 +654,7 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 	t.addDecision(d)
 	switch d.Outcome {
 	case asinOutcomeMatched:
-		r.apply(b.ID, title, d)
+		r.apply(&b, locks, title, d)
 	case asinOutcomeAmbiguous:
 		t.ambiguous.Add(1)
 		r.log.Info("ambiguous, nothing written: book_id=%s title=%s passing=%v",
@@ -725,17 +747,23 @@ func (r *asinBackfillRun) search(ctx context.Context, f asinBookFacts) ([]metada
 }
 
 // apply writes the matched ASIN (or, in a dry run, logs it).
-func (r *asinBackfillRun) apply(bookID, title string, d asinDecision) {
+func (r *asinBackfillRun) apply(b *database.Book, locks database.FieldLocks, title string, d asinDecision) {
+	bookID := b.ID
 	t := r.tally
 	evidence := strings.Join(d.Evidence, "+")
 	if r.dry {
 		t.matchedWritten.Add(1)
-		if d.ISBN != "" {
+		// The same conditions the live write applies, on the row and locks
+		// this run already read, so the preview is what a live run would do.
+		wouldISBN := d.ISBN != "" && bookHasNoISBN(b) && !locks.Locked(database.FieldKeyISBN13)
+		pr := asinProposal{BookID: bookID, Title: title, ASIN: d.ASIN, AudibleTitle: d.Title, Evidence: d.Evidence, Via: "match"}
+		if wouldISBN {
 			t.isbnWritten.Add(1)
+			pr.ISBN13 = d.ISBN
 		}
-		t.propose(asinProposal{BookID: bookID, Title: title, ASIN: d.ASIN, ISBN13: d.ISBN, AudibleTitle: d.Title, Evidence: d.Evidence, Via: "match"})
+		t.propose(pr)
 		r.log.Info("would write asin=%s isbn13=%s book_id=%s title=%s audible_title=%s evidence=%s",
-			d.ASIN, writtenOrNone(d.ISBN != "", d.ISBN), logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(title), logger.SanitizeLogValue(d.Title), evidence)
+			d.ASIN, writtenOrNone(wouldISBN, d.ISBN), logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(title), logger.SanitizeLogValue(d.Title), evidence)
 		return
 	}
 	asin := d.ASIN
@@ -859,10 +887,14 @@ func isbnMissKey(bookID string) string { return isbnMissKeyPrefix + bookID }
 // fillISBNByASIN handles a book that already has an ASIN but no ISBN: it looks
 // the product up BY THAT ASIN (an exact identity, so there is no matching gate
 // to pass) and writes the audiobook ISBN when Audible has one. The ASIN itself
-// is never changed. A product Audible does not carry, or one without an ISBN,
-// is recorded as an ISBN miss so the next run does not fetch it again inside
-// the retry window.
-func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book) error {
+// is never changed. The existing ASIN is NOT trusted blindly: some were
+// written by the old isbn-enrichment job's title-prefix matching. The
+// looked-up product's title and author must agree with the book (the gate's
+// title and author rules); a product that disagrees is reported as
+// asin_suspect, listed for the owner, and nothing is written. A product
+// Audible does not carry, one without an ISBN, or a suspect one is recorded as
+// an ISBN miss so the next run does not fetch it again inside the retry window.
+func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book, title string, authors []string) error {
 	t := r.tally
 	locks, err := database.LoadFieldLocks(r.store, b.ID)
 	if err != nil {
@@ -914,6 +946,15 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book) 
 		return nil
 	}
 	if id != nil && strings.EqualFold(strings.TrimSpace(id.ASIN), asin) {
+		_, titleOK := asinTitleMatch(title, id.Title, id.Subtitle)
+		if !titleOK || !asinAuthorMatches(authors, id.Authors) {
+			t.asinSuspect.Add(1)
+			t.propose(asinProposal{BookID: b.ID, Title: title, ASIN: asin, AudibleTitle: id.Title, Via: "asin_suspect"})
+			r.log.Info("existing asin names a different product; nothing written: book_id=%s asin=%s title=%s audible_title=%s",
+				logger.SanitizeLogValue(b.ID), asin, logger.SanitizeLogValue(title), logger.SanitizeLogValue(id.Title))
+			r.markRaw(isbnMissKey(b.ID), asinMissMarker{At: r.now().UTC(), Outcome: "asin_suspect"})
+			return nil
+		}
 		isbn = normISBN13(id.ISBN)
 	}
 	if isbn == "" {
