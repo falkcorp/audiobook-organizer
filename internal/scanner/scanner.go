@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.119.3
+// version: 1.120.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-02
 
@@ -3820,20 +3820,8 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				// book has other versions" and lists none.
 				if dbBook.VersionGroupID != nil && *dbBook.VersionGroupID != "" {
 					groupID, primary := *dbBook.VersionGroupID, dbBook.IsPrimaryVersion
-					joined := false
-					var heldGroup string
-					if _, merr := getStore().ModifyBook(raced.ID, func(fresh *database.Book) error {
-						// A row another writer already grouped keeps that
-						// group; two groups for one row is worse than one.
-						if fresh.VersionGroupID != nil && *fresh.VersionGroupID != "" {
-							heldGroup = *fresh.VersionGroupID
-							return database.ErrSkipBookWrite
-						}
-						fresh.VersionGroupID = &groupID
-						fresh.IsPrimaryVersion = primary
-						joined = true
-						return nil
-					}); merr != nil {
+					joined, heldGroup, merr := joinRacedRow(raced.ID, groupID, primary)
+					if merr != nil {
 						defaultLog.Warn("could not join raced row %s (%s) to version group %s: %v",
 							raced.ID, book.FilePath, groupID, merr)
 					} else if !joined {
@@ -4377,6 +4365,34 @@ func preserveExistingFields(scanned *database.Book, existing *database.Book) {
 	if scanned.SourceImportPath == nil && existing.SourceImportPath != nil {
 		scanned.SourceImportPath = existing.SourceImportPath
 	}
+}
+
+// joinRacedRow carries a version link onto a row another writer created at
+// the same path while the scan was working (the raced-row carry in
+// saveBook): an ungrouped raced row joins groupID with primary as its flag; a
+// row already grouped keeps its group, which is returned as heldGroup with
+// joined false. The row joins from no group, so the write holds the no-group
+// sentinel and groupID (one versionprimary.LockGroups call), as
+// linkVersionGroup does, and releases them before returning: the caller's
+// hand-off runs after.
+func joinRacedRow(racedID, groupID string, primary *bool) (joined bool, heldGroup string, err error) {
+	defer versionprimary.LockGroups("", groupID)()
+	_, err = getStore().ModifyBook(racedID, func(fresh *database.Book) error {
+		// A row another writer already grouped keeps that
+		// group; two groups for one row is worse than one.
+		if fresh.VersionGroupID != nil && *fresh.VersionGroupID != "" {
+			heldGroup = *fresh.VersionGroupID
+			return database.ErrSkipBookWrite
+		}
+		fresh.VersionGroupID = &groupID
+		fresh.IsPrimaryVersion = primary
+		joined = true
+		return nil
+	})
+	if err != nil {
+		joined = false
+	}
+	return joined, heldGroup, err
 }
 
 // applyScannerFields overlays the fields the scanner freshly derives from the

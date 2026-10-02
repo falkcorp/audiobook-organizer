@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-10-02
 
@@ -654,6 +654,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 		log.Info("Starting hash validation for %d new books...", len(newBookIDs))
 
 		hashLinked := 0
+		hashLinkDropped := 0
 		hashBlocked := 0
 		hashBlockFailed := 0
 		// H4 (2026-07 error-correction sweep): GetBookByID error vs. a benign
@@ -712,7 +713,10 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 				log.Info("Hash validation: linked %s → %s via hash", book.Title, existing.ID)
 			}
 
-			werr := writeHashValidation(imp.store, bookID, hashedPath, hash, importMode, linkGroup, log)
+			dropped, werr := writeHashValidation(imp.store, bookID, hashedPath, hash, importMode, linkGroup, log)
+			if dropped {
+				hashLinkDropped++
+			}
 			if werr != nil {
 				log.Warn("Hash validation: failed to update %s: %v", bookID, werr)
 			}
@@ -723,7 +727,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 				log.UpdateProgress(totalGroups, totalGroups, msg)
 			}
 		}
-		log.Info("Hash validation completed: %d linked, %d blocked, %d blocked-but-soft-delete-failed, %d lookup errors out of %d new books", hashLinked, hashBlocked, hashBlockFailed, bookLookupErrs, len(newBookIDs))
+		log.Info("Hash validation completed: %d linked (%d version links dropped: group locks failed or the book changed group), %d blocked, %d blocked-but-soft-delete-failed, %d lookup errors out of %d new books", hashLinked, hashLinkDropped, hashBlocked, hashBlockFailed, bookLookupErrs, len(newBookIDs))
 	}
 
 	// Phase 4: Metadata enrichment
@@ -763,21 +767,22 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 // group (the no-group sentinel when it has none) and linkGroup, taken in one
 // versionprimary.LockBookGroups acquisition and released on return (per book,
 // never across the import loop). When the locks cannot be taken, or the book
-// changed group after they were read, the link is dropped and the hashes are
-// still written.
-func writeHashValidation(store importerStore, bookID, hashedPath, hash string, importMode itunes.ImportMode, linkGroup *string, log logger.Logger) error {
+// changed group after they were read, the link is dropped (linkDropped) and
+// the hashes are still written.
+func writeHashValidation(store importerStore, bookID, hashedPath, hash string, importMode itunes.ImportMode, linkGroup *string, log logger.Logger) (linkDropped bool, err error) {
 	var lockedGroups map[string]string
 	if linkGroup != nil {
 		unlock, g, lerr := versionprimary.LockBookGroups(store, []string{bookID}, *linkGroup)
 		if lerr != nil {
 			log.Warn("Hash validation: not linking %s: %v", bookID, lerr)
 			linkGroup = nil
+			linkDropped = true
 		} else {
 			defer unlock()
 			lockedGroups = g
 		}
 	}
-	_, err := store.ModifyBook(bookID, func(fresh *database.Book) error {
+	_, err = store.ModifyBook(bookID, func(fresh *database.Book) error {
 		if fresh.FilePath != hashedPath {
 			// The file moved while it was being hashed: the hash
 			// describes a path this book no longer has.
@@ -790,6 +795,7 @@ func writeHashValidation(store importerStore, bookID, hashedPath, hash string, i
 		if g, ok := lockedGroups[fresh.ID]; ok {
 			if err := versionprimary.CheckMembership(fresh, g); err != nil {
 				log.Warn("Hash validation: not linking %s: %v", bookID, err)
+				linkDropped = true
 				return nil
 			}
 		}
@@ -798,7 +804,7 @@ func writeHashValidation(store importerStore, bookID, hashedPath, hash string, i
 		fresh.IsPrimaryVersion = &isPrimary
 		return nil
 	})
-	return err
+	return linkDropped, err
 }
 
 var errHashedPathMoved = errors.New("book path changed while it was being hashed; hash not recorded")
