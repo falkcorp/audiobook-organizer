@@ -1,5 +1,5 @@
 // file: internal/itunes/service/regroup_plan.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-01
 
@@ -50,6 +50,10 @@ type BookMeta struct {
 	// library copy can hold iTunes PIDs (itunes.clone-into-library moves the
 	// PID onto the library rows) and need not be its group's primary.
 	HasLibraryFile bool
+	// HasNonITunesFile: at least one book_file row is outside the frozen
+	// iTunes tree. With Organized it marks a library copy even when the root
+	// comparison missed it (a symlinked or oddly spelled root).
+	HasNonITunesFile bool
 	// Organized: library_state is "organized". ABS shows a primary organized
 	// book, so files leaving one can take visible content away.
 	Organized bool
@@ -373,7 +377,8 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 //     ABS-visible content onto a book ABS does not show. Checked before the
 //     fresh-book case, since a split also takes files off its sources.
 //  3. A fresh-book target is allowed from here (its sources passed 1 and 2).
-//  4. No existing target may hold a file under the library root
+//  4. No existing target may hold a file under the library root, nor be
+//     organized with any file outside the frozen iTunes tree
 //     (EntangleLibraryTarget): pouring iTunes-folder rows into a library copy
 //     scatters its files across two locations, whatever its flag says.
 //  5. A target NOT in a version group may now receive (ungrouped<->ungrouped).
@@ -439,7 +444,11 @@ func entanglement(gi int, moves []FileMove, target string, fresh bool, snap Snap
 	if fresh {
 		return ""
 	}
-	if t.HasLibraryFile {
+	// An organized target with any row outside the iTunes tree is a library
+	// copy even if HasLibraryFile missed it (root spelling, symlink). An
+	// organized book whose rows are ALL in the iTunes tree is an in-place
+	// iTunes edition and may still receive its own album's fragments.
+	if t.HasLibraryFile || (t.Organized && t.HasNonITunesFile) {
 		return EntangleLibraryTarget
 	}
 	if t.VersionGroupID == "" {

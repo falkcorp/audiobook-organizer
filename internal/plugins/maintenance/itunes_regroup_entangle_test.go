@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
 // last-edited: 2026-10-01
 
@@ -874,6 +874,70 @@ func TestITunesRegroupApply_LibraryCopyKeepsTitle(t *testing.T) {
 			}
 			if !strings.Contains(applied, kept) {
 				t.Fatalf("APPLIED line %q, want %s", applied, kept)
+			}
+		})
+	}
+}
+
+// Probe A again under other spellings of the same root: IsWithin compares raw
+// strings, so "/library/./" and "/library/" used to miss the library copy and
+// plan a move into it.
+func TestITunesRegroupEntanglementRule_ProbeARootSpellings(t *testing.T) {
+	tr, fa := rgFlag(true), rgFlag(false)
+	for _, root := range []string{"/library", "/library/", "/library/./", "/library//"} {
+		t.Run(root, func(t *testing.T) {
+			r := &regroupFakeReader{
+				books: []database.Book{rgBook("I0", "vg1", tr), rgBook("L1", "vg1", fa), rgBook("F1", "", nil)},
+				files: []database.BookFileCore{
+					rgFileAt("f1", "L1", "p1", "/library/Author//Book/./p1.m4b"), rgFile("f2", "F1", "p2"),
+				},
+			}
+			p := &Plugin{}
+			snap, err := p.buildRegroupSnapshot(context.Background(), r, root, &fakeReporter{})
+			if err != nil {
+				t.Fatalf("buildRegroupSnapshot: %v", err)
+			}
+			if !snap.Books["L1"].HasLibraryFile {
+				t.Fatalf("L1 not seen as a library copy under root %q", root)
+			}
+			plan := itunesservice.PlanRegroup([]itunesservice.HealGroup{{Title: "G", PIDs: []string{"p1", "p2"}}}, snap)
+			if a := plan.Groups[0]; !a.Entangled || a.EntangleReason != itunesservice.EntangleLibraryTarget || len(a.Moves) != 0 {
+				t.Fatalf("action = %+v, want refused as %q", a, itunesservice.EntangleLibraryTarget)
+			}
+		})
+	}
+}
+
+// An organized target is a library copy when any of its rows sits outside the
+// iTunes tree, even if the root comparison missed it (here: a root that does
+// not match the copy's real path, as with a symlinked spelling). The control
+// (S4) is an organized in-place iTunes edition whose rows are ALL in the
+// iTunes tree: it still consolidates its album's fragment.
+func TestITunesRegroupEntanglementRule_OrganizedTarget(t *testing.T) {
+	cases := []struct {
+		name       string
+		targetPath string
+		wantReason string
+	}{
+		{"organized copy outside iTunes tree, root missed", "/mnt/real-library/Author/Book/p1.m4b", itunesservice.EntangleLibraryTarget},
+		{"S4: organized in-place iTunes edition consolidates", rgITunes + "/Album/p1.m4b", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tgt := rgOrganized(rgBook("T1", "", nil))
+			asin := "B000ORG"
+			tgt.ASIN = &asin // outranks F1, so T1 is the target
+			r := &regroupFakeReader{
+				books: []database.Book{tgt, rgBook("F1", "", nil)},
+				files: []database.BookFileCore{rgFileAt("f1", "T1", "p1", tc.targetPath), rgFile("f2", "F1", "p2")},
+			}
+			_, plan := rgPlan(t, r, []itunesservice.HealGroup{{Title: "G", PIDs: []string{"p1", "p2"}}})
+			a := plan.Groups[0]
+			if a.EntangleReason != tc.wantReason {
+				t.Fatalf("action = %+v, want reason %q", a, tc.wantReason)
+			}
+			if tc.wantReason == "" && (a.Target != "T1" || len(a.Moves) != 1 || !a.KeepTitle) {
+				t.Fatalf("S4 action = %+v, want 1 move onto T1 with its title kept", a)
 			}
 		})
 	}
