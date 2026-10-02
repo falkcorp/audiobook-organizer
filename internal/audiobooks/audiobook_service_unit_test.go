@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package audiobooks
 
@@ -681,12 +681,12 @@ func TestAudiobookService_EnrichAudiobooksWithNames_WithAuthorAndSeries(t *testi
 		},
 	}
 
-	// aggregateFileMetadata (called by EnrichAudiobooksWithNames) tries
-	// GetBookFilesForIDsCore first, then falls back to per-book GetBookFiles.
-	// MockStore doesn't implement GetBookFilesForIDsCore, so the per-book path
-	// is taken. The test doesn't care about file aggregates — return empty.
-	mockStore.EXPECT().GetBookFiles("e1").Return(nil, nil).Maybe()
-	mockStore.EXPECT().GetBookFiles("e2").Return(nil, nil).Maybe()
+	// aggregateFileMetadata (called by EnrichAudiobooksWithNames) reads the
+	// files of every book in one GetBookFilesForIDsCore call -- part of
+	// database.Store since 2026-10-02, so MockStore has it and the batch path
+	// is the one taken, as in production. The test doesn't care about file
+	// aggregates -- return none.
+	mockStore.EXPECT().GetBookFilesForIDsCore([]string{"e1", "e2"}).Return(map[string][]database.BookFileCore{}, nil)
 
 	result := svc.EnrichAudiobooksWithNames(books)
 	assert.Len(t, result, 2)

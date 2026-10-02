@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
-// last-edited: 2026-09-30
+// last-edited: 2026-10-02
 //
 // Owner, 2026-09-27: "the 11324 with no candidates let me click on the chips
 // at the left bar in the review page". Every summary chip filters the list to
@@ -133,6 +133,15 @@ function listedIds(): string[] {
     .map((cb) => (cb.getAttribute('aria-label') ?? '').replace(/^Select Book /, ''));
 }
 
+/**
+ * Index loads of the metadata set: calls without `ids`. The lane also fetches
+ * full rows for the visible page (`ids`), one request sized by the page; that
+ * is not a reload of the set and is not what these tests count.
+ */
+function metadataIndexLoads(): number {
+  return vi.mocked(api.getCachedReviewResults).mock.calls.filter((c) => !c[4]?.ids).length;
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
@@ -160,7 +169,7 @@ describe('summary chips filter the list to exactly the books they count', () => 
     expect(el).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent(`Showing the ${count}`);
     // The reviewable chips need nothing more from the server.
-    expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1);
+    expect(metadataIndexLoads()).toBe(1);
   });
 
   it('clicking the active chip again, or Show all, clears it', async () => {
@@ -249,8 +258,9 @@ describe('Search again on the no-candidate books', () => {
     await waitFor(() => expect(api.pollOperationV2).toHaveBeenCalledWith('op-search'));
     await waitFor(() =>
       expect(
-        vi.mocked(api.getCachedReviewResults).mock.calls.filter((c) => c[3] !== 'unreviewable')
-          .length
+        vi
+          .mocked(api.getCachedReviewResults)
+          .mock.calls.filter((c) => c[3] !== 'unreviewable' && !c[4]?.ids).length
       ).toBeGreaterThanOrEqual(2)
     );
   });
