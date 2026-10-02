@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-16
+// last-edited: 2026-10-01
 
 package maintenance
 
@@ -74,7 +74,7 @@ func TestITunesRegroupApply_MergeAndDelete(t *testing.T) {
 	rep := &fakeReporter{}
 	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
 
-	snap, err := p.buildRegroupSnapshot(context.Background(), s, rep)
+	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestITunesRegroupApply_MergeAndDelete(t *testing.T) {
 	if plan.Consolidated != 1 || len(plan.DeleteBooks) != 1 {
 		t.Fatalf("plan consolidate=%d deletes=%d, want 1/1", plan.Consolidated, len(plan.DeleteBooks))
 	}
-	if err := p.applyRegroupPlan(context.Background(), s, plan, rep); err != nil {
+	if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 
@@ -127,14 +127,14 @@ func TestITunesRegroupApply_DeleteGuardSkipsResidualExtID(t *testing.T) {
 	p := &Plugin{}
 	rep := &fakeReporter{}
 	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
-	snap, _ := p.buildRegroupSnapshot(context.Background(), s, rep)
+	snap, _ := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
 	plan := itunesservice.PlanRegroup(groups, snap)
 
 	survivor := plan.Groups[0].Target
 	if survivor != b1 {
 		t.Skipf("survivor was %s not b1 (tiebreak); residual-guard case needs b2 to be the loser", survivor)
 	}
-	if err := p.applyRegroupPlan(context.Background(), s, plan, rep); err != nil {
+	if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 	// b2 still has the residual mapping → must NOT have been deleted.
@@ -157,7 +157,7 @@ func TestITunesRegroupApply_DeleteGuardFailsClosedOnReadError(t *testing.T) {
 	p := &Plugin{}
 	rep := &fakeReporter{}
 	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
-	snap, _ := p.buildRegroupSnapshot(context.Background(), s, rep)
+	snap, _ := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
 	plan := itunesservice.PlanRegroup(groups, snap)
 
 	survivor := plan.Groups[0].Target
@@ -169,7 +169,7 @@ func TestITunesRegroupApply_DeleteGuardFailsClosedOnReadError(t *testing.T) {
 	// Wrap so the delete-guard's ext-id read for the loser errors. The merge
 	// phase does not call GetExternalIDsForBook, so only the guard is affected.
 	wrapped := &errExtIDStore{Store: s, failID: loser}
-	if err := p.applyRegroupPlan(context.Background(), wrapped, plan, rep); err != nil {
+	if err := p.applyRegroupPlan(context.Background(), wrapped, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 

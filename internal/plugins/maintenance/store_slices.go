@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-09-24
+// last-edited: 2026-10-01
 
 package maintenance
 
@@ -165,10 +165,16 @@ type itunesExternalIDReassigner interface {
 // rather than book files, and reassigns one external ID at a time.
 //
 // Split into the five interfaces above on 2026-08-18 -- three of them shared
-// with fsRegroupStore. This name is retained as their composition so the method
-// set is byte-identical and no consumer moves; the type checker proves it.
+// with fsRegroupStore. This name is retained as their composition so no
+// consumer moves. Since 2026-10-01 it also reads a version group's members and
+// a series row directly, for the apply-time recheck (regroupRecheck); those two
+// are not part of fsRegroupStore.
 type itunesRegroupStore interface {
 	regroupBookReader
+	// The apply-time recheck (regroupRecheck) re-reads a target's version
+	// group and its series name.
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	GetSeriesByID(id int) (*database.Series, error)
 	regroupBookMutator
 	regroupFileMover
 	itunesBookCreator

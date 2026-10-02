@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
 // last-edited: 2026-10-01
 
@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 )
@@ -24,8 +25,13 @@ import (
 // a test can describe version groups as real database.Book rows (flags and
 // all) and drive the snapshot builder and the planner together.
 type regroupFakeReader struct {
-	books []database.Book
-	files []database.BookFileCore
+	books  []database.Book
+	files  []database.BookFileCore
+	series []database.Series
+}
+
+func (r *regroupFakeReader) GetAllSeries() ([]database.Series, error) {
+	return r.series, nil
 }
 
 func (r *regroupFakeReader) GetAllBookFilesCore() ([]database.BookFileCore, error) {
@@ -47,7 +53,14 @@ func (r *regroupFakeReader) GetAllBooksFullFrom(afterID string, limit int) ([]da
 	return out, nil
 }
 
-var _ regroupSnapshotReader = (*regroupFakeReader)(nil)
+var _ itunesRegroupSnapshotReader = (*regroupFakeReader)(nil)
+
+// rgRoot is the library root every regroup test plans against. Paths under
+// it are library-folder copies; rgITunes paths are the frozen iTunes tree.
+const (
+	rgRoot   = "/library"
+	rgITunes = "/media/books/itunes/Media"
+)
 
 func rgFlag(v bool) *bool { return &v }
 
@@ -61,15 +74,30 @@ func rgBook(id, vg string, flag *bool) database.Book {
 	return b
 }
 
-// rgFile is one book_file row; pid "" is a file that belongs to no heal group.
+// rgFile is one book_file row in the iTunes tree; pid "" is a file that
+// belongs to no heal group.
 func rgFile(id, bookID, pid string) database.BookFileCore {
-	return database.BookFileCore{ID: id, BookID: bookID, ITunesPersistentID: pid}
+	return rgFileAt(id, bookID, pid, rgITunes+"/"+id+".m4b")
 }
 
-// The entanglement table. Naming: L* is a library-folder copy (holds no iTunes
-// PIDs), I* is an iTunes-imported copy linked into a version group, F* is an
-// ungrouped iTunes fragment record. Every case plans ONE heal group "G" over
-// every PID in its files.
+// rgFileAt is rgFile at an explicit path (rgRoot+"/..." for a library copy).
+func rgFileAt(id, bookID, pid, path string) database.BookFileCore {
+	return database.BookFileCore{ID: id, BookID: bookID, ITunesPersistentID: pid, FilePath: path}
+}
+
+// rgOrganized marks a book row library_state=organized.
+func rgOrganized(b database.Book) database.Book {
+	st := "organized"
+	b.LibraryState = &st
+	return b
+}
+
+// The entanglement table. Naming: L* is a library-folder copy (files under
+// rgRoot; it MAY hold iTunes PIDs -- itunes.clone-into-library moves the PID
+// onto the library rows -- and need not be its group's primary), I* is an
+// iTunes-imported copy linked into a version group, F* is an ungrouped iTunes
+// fragment record. A fixture file is in the iTunes tree unless placed with
+// rgFileAt. Every case plans ONE heal group "G" over every PID in its files.
 func TestITunesRegroupEntanglementRule(t *testing.T) {
 	tr, fa := rgFlag(true), rgFlag(false)
 	cases := []struct {
@@ -186,12 +214,74 @@ func TestITunesRegroupEntanglementRule(t *testing.T) {
 			files: []database.BookFileCore{rgFile("f1", "I1", "p1"), rgFile("f2", "F1", "p2")},
 			pids:  []string{"p1", "p2"}, wantTarget: "I1", wantMoves: 1,
 		},
+		{
+			// Probe A: the flag says I0 is primary, but L1 is the library copy.
+			// It holds a PID and outranks F1, so the flag-only rule targeted it
+			// and poured an iTunes-folder row into the library copy.
+			name: "probe A: non-primary library copy holding a PID is never a target",
+			books: []database.Book{
+				rgBook("I0", "vg1", tr), rgBook("L1", "vg1", fa), rgBook("F1", "", nil),
+			},
+			files: []database.BookFileCore{
+				rgFileAt("f1", "L1", "p1", rgRoot+"/Author/Book/p1.m4b"), rgFile("f2", "F1", "p2"),
+			},
+			pids: []string{"p1", "p2"}, wantSkipped: true,
+			wantReason: itunesservice.EntangleLibraryTarget,
+		},
+		{
+			// Probe B2: F1 is organized with its file under the root -- an
+			// ABS-visible book. Moving p2 onto the non-primary I1 hides it.
+			name: "probe B2: organized library source is never moved off",
+			books: []database.Book{
+				rgBook("L0", "vg1", tr), rgBook("I1", "vg1", fa), rgOrganized(rgBook("F1", "", nil)),
+			},
+			files: []database.BookFileCore{
+				rgFile("f1", "I1", "p1"), rgFileAt("f2", "F1", "p2", rgRoot+"/Author/Book/p2.m4b"),
+			},
+			pids: []string{"p1", "p2"}, wantSkipped: true,
+			wantReason: itunesservice.EntangleLibrarySource,
+		},
+		{
+			name: "organized source with no file under root is never moved off",
+			books: []database.Book{
+				rgBook("L0", "vg1", tr), rgBook("I1", "vg1", fa), rgOrganized(rgBook("F1", "", nil)),
+			},
+			files: []database.BookFileCore{rgFile("f1", "I1", "p1"), rgFile("f2", "F1", "p2")},
+			pids:  []string{"p1", "p2"}, wantSkipped: true,
+			wantReason: itunesservice.EntangleLibrarySource,
+		},
+		{
+			name: "ungrouped library copy never receives iTunes rows",
+			books: func() []database.Book {
+				lib := rgBook("F1", "", nil)
+				asin := "B000LIB"
+				lib.ASIN = &asin // outranks F2, so it is the target
+				return []database.Book{lib, rgBook("F2", "", nil)}
+			}(),
+			files: []database.BookFileCore{
+				rgFileAt("f1", "F1", "p1", rgRoot+"/Author/Book/p1.m4b"), rgFile("f2", "F2", "p2"),
+			},
+			pids: []string{"p1", "p2"}, wantSkipped: true,
+			wantReason: itunesservice.EntangleLibraryTarget,
+		},
+		{
+			// NIT 2: a row with no PID cannot be shown to be this album's.
+			name: "grouped target holding a row with no PID is mixed",
+			books: []database.Book{
+				rgBook("I1", "vg1", fa), rgBook("L1", "vg1", tr), rgBook("F1", "", nil),
+			},
+			files: []database.BookFileCore{
+				rgFile("f1", "I1", "p1"), rgFile("x1", "I1", ""), rgFile("f2", "F1", "p2"),
+			},
+			pids: []string{"p1", "p2"}, wantSkipped: true,
+			wantReason: itunesservice.EntangleMixedTarget,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &Plugin{}
 			snap, err := p.buildRegroupSnapshot(context.Background(),
-				&regroupFakeReader{books: tc.books, files: tc.files}, &fakeReporter{})
+				&regroupFakeReader{books: tc.books, files: tc.files}, rgRoot, &fakeReporter{})
 			if err != nil {
 				t.Fatalf("buildRegroupSnapshot: %v", err)
 			}
@@ -237,7 +327,7 @@ func TestITunesRegroupEntanglementRule_SplitOutOfGroupedSkipped(t *testing.T) {
 		},
 	}
 	p := &Plugin{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), r, &fakeReporter{})
+	snap, err := p.buildRegroupSnapshot(context.Background(), r, rgRoot, &fakeReporter{})
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -257,7 +347,8 @@ func TestITunesRegroupEntanglementRule_SplitOutOfGroupedSkipped(t *testing.T) {
 // The snapshot's primary semantics, per version-group shape: the incumbent is
 // the explicitly-true member, else the ONE unset member; several unset members
 // (or none electable) leave the group with no incumbent. A soft-deleted
-// explicit-true member does not count. Ungrouped books read unset as primary.
+// explicit-true member does not count, and is not in snap.Books at all (it
+// can never be a target or source). Ungrouped books read unset as primary.
 // Rows with no CreatedAt must not panic the snapshot (they used to).
 func TestBuildRegroupSnapshot_IncumbentSemantics(t *testing.T) {
 	tr, fa := rgFlag(true), rgFlag(false)
@@ -273,7 +364,7 @@ func TestBuildRegroupSnapshot_IncumbentSemantics(t *testing.T) {
 		rgBook("U1", "", nil), noCreated, // ungrouped
 	}
 	p := &Plugin{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), &regroupFakeReader{books: books}, &fakeReporter{})
+	snap, err := p.buildRegroupSnapshot(context.Background(), &regroupFakeReader{books: books}, rgRoot, &fakeReporter{})
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -281,7 +372,7 @@ func TestBuildRegroupSnapshot_IncumbentSemantics(t *testing.T) {
 		"M1": {true, false, true}, "M2": {false, false, true},
 		"N1": {true, false, true}, "N2": {false, false, true},
 		"A1": {false, true, true}, "A2": {false, true, true}, "A3": {false, true, true},
-		"T1": {false, false, true}, "T2": {true, false, true},
+		"T2": {true, false, true},
 		"U1": {true, false, false}, "U2": {false, false, false},
 	}
 	for id, w := range want {
@@ -290,6 +381,9 @@ func TestBuildRegroupSnapshot_IncumbentSemantics(t *testing.T) {
 			t.Errorf("%s: primary=%v noIncumbent=%v legacy=%v, want %v/%v/%v",
 				id, got.IsPrimary, got.GroupHasNoIncumbent, got.LegacyEntangled, w.primary, w.noIncumbent, w.legacy)
 		}
+	}
+	if _, ok := snap.Books["T1"]; ok {
+		t.Errorf("soft-deleted T1 is in snap.Books; a trashed book must never be planned")
 	}
 	if got := snap.Books["U2"].CreatedAtUnix; got != math.MaxInt64 {
 		t.Errorf("U2 CreatedAtUnix = %d, want MaxInt64 (unknown ranks newest)", got)
@@ -355,6 +449,9 @@ func TestITunesRegroupDryRun_ReportsRuleDelta(t *testing.T) {
 		t.Fatalf("write xml: %v", err)
 	}
 	raw, _ := json.Marshal(map[string]string{"xmlPath": xmlPath})
+	prevRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = rgRoot
+	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
 	p := New(fakeDeps{store: s})
 	rep := &fakeReporter{}
 	if err := p.runITunesRegroup(context.Background(), raw, rep); err != nil {
@@ -400,7 +497,7 @@ func TestITunesRegroupApply_GroupedEditionReceivesFragment(t *testing.T) {
 
 	p := &Plugin{}
 	rep := &fakeReporter{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), s, rep)
+	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -408,7 +505,7 @@ func TestITunesRegroupApply_GroupedEditionReceivesFragment(t *testing.T) {
 	if plan.Consolidated != 1 || plan.Groups[0].Target != ed.ID {
 		t.Fatalf("plan = %+v, want consolidate onto the edition %s", plan.Groups, ed.ID)
 	}
-	if err := p.applyRegroupPlan(context.Background(), s, plan, rep); err != nil {
+	if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
 	}
 
@@ -439,5 +536,241 @@ func TestITunesRegroupApply_GroupedEditionReceivesFragment(t *testing.T) {
 	libFiles, _ := s.GetBookFiles(lib.ID)
 	if len(libFiles) != 1 || libFiles[0].FilePath != "/library/book.m4b" {
 		t.Fatalf("library copy files changed: %+v", libFiles)
+	}
+}
+
+// rgPlan builds the snapshot from r and plans groups over it.
+func rgPlan(t *testing.T, r *regroupFakeReader, groups []itunesservice.HealGroup) (itunesservice.Snapshot, itunesservice.RegroupPlan) {
+	t.Helper()
+	p := &Plugin{}
+	snap, err := p.buildRegroupSnapshot(context.Background(), r, rgRoot, &fakeReporter{})
+	if err != nil {
+		t.Fatalf("buildRegroupSnapshot: %v", err)
+	}
+	return snap, itunesservice.PlanRegroup(groups, snap)
+}
+
+// rgAssertNeverTouches fails if any group targets id, moves a file off it, or
+// the plan deletes it.
+func rgAssertNeverTouches(t *testing.T, plan itunesservice.RegroupPlan, id string) {
+	t.Helper()
+	for _, a := range plan.Groups {
+		if a.Target == id {
+			t.Fatalf("group %q targets %s: %+v", a.Title, id, a)
+		}
+		for _, m := range a.Moves {
+			if m.From == id {
+				t.Fatalf("group %q moves %s off %s", a.Title, m.PID, id)
+			}
+		}
+	}
+	for _, d := range plan.DeleteBooks {
+		if d == id {
+			t.Fatalf("plan deletes %s", id)
+		}
+	}
+}
+
+// Probe B: a trashed book's row is absent from the book scan (the real store
+// drops it) while its file rows still come back. Live Y holds p1 and p2,
+// trashed X holds p3; G1{p1} claims Y, so G2{p2,p3} used to pick X -- a book
+// missing from snap.Books -- and entanglement allowed a target it could not
+// find. The second variant keeps X's row but soft-deleted.
+func TestITunesRegroupEntanglementRule_TrashedBookNeverTarget(t *testing.T) {
+	trashed := rgBook("X", "", nil)
+	trashed.MarkedForDeletion = rgFlag(true)
+	for name, books := range map[string][]database.Book{
+		"row absent from book scan": {rgBook("Y", "", nil)},
+		"row present, soft-deleted": {rgBook("Y", "", nil), trashed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := &regroupFakeReader{
+				books: books,
+				files: []database.BookFileCore{rgFile("f1", "Y", "p1"), rgFile("f2", "Y", "p2"), rgFile("f3", "X", "p3")},
+			}
+			snap, plan := rgPlan(t, r, []itunesservice.HealGroup{
+				{Title: "G1", PIDs: []string{"p1"}},
+				{Title: "G2", PIDs: []string{"p2", "p3"}},
+			})
+			if _, ok := snap.PIDLoc["p3"]; ok {
+				t.Fatalf("PIDLoc holds p3 on trashed X: %+v", snap.PIDLoc["p3"])
+			}
+			rgAssertNeverTouches(t, plan, "X")
+			if g2 := plan.Groups[1]; len(g2.Unresolved) != 1 || g2.Unresolved[0] != "p3" {
+				t.Fatalf("G2 unresolved = %v, want [p3]", g2.Unresolved)
+			}
+		})
+	}
+}
+
+// Probe C: a trashed book as a SOURCE. Live Y holds p1, trashed X holds p2;
+// G{p1,p2} must not plan a move off X.
+func TestITunesRegroupEntanglementRule_TrashedBookNeverSource(t *testing.T) {
+	r := &regroupFakeReader{
+		books: []database.Book{rgBook("Y", "", nil)},
+		files: []database.BookFileCore{rgFile("f1", "Y", "p1"), rgFile("f2", "X", "p2")},
+	}
+	_, plan := rgPlan(t, r, []itunesservice.HealGroup{{Title: "G", PIDs: []string{"p1", "p2"}}})
+	rgAssertNeverTouches(t, plan, "X")
+	if a := plan.Groups[0]; a.Target != "Y" || len(a.Moves) != 0 || plan.AlreadyCorrect != 1 {
+		t.Fatalf("G = %+v, want already-correct on Y with p2 unresolved", a)
+	}
+}
+
+// Doctor Who / Big Finish / Torchwood are manual-only: a group is skipped,
+// counted, and not even retitled, whether the library is named by the heal
+// group's title, a holder's title, file path or series name.
+func TestITunesRegroupManualOnlySkipped(t *testing.T) {
+	series := rgBook("S1", "", nil)
+	sid := 7
+	series.SeriesID = &sid
+	titled := rgBook("T1", "", nil)
+	titled.Title = "Torchwood: Aliens Among Us"
+	cases := []struct {
+		name   string
+		title  string
+		books  []database.Book
+		files  []database.BookFileCore
+		series []database.Series
+	}{
+		{"group title", "Doctor Who: Spearhead from Space",
+			[]database.Book{rgBook("F1", "", nil), rgBook("F2", "", nil)},
+			[]database.BookFileCore{rgFile("f1", "F1", "p1"), rgFile("f2", "F2", "p2")}, nil},
+		{"holder file path", "Some Album",
+			[]database.Book{rgBook("F1", "", nil), rgBook("F2", "", nil)},
+			[]database.BookFileCore{rgFileAt("f1", "F1", "p1", rgITunes+"/Big Finish/Album/01.m4b"), rgFile("f2", "F2", "p2")}, nil},
+		{"holder series", "Some Album",
+			[]database.Book{series, rgBook("F2", "", nil)},
+			[]database.BookFileCore{rgFile("f1", "S1", "p1"), rgFile("f2", "F2", "p2")},
+			[]database.Series{{ID: 7, Name: "Doctor Who: The Monthly Adventures"}}},
+		{"holder title", "Some Album",
+			[]database.Book{titled, rgBook("F2", "", nil)},
+			[]database.BookFileCore{rgFile("f1", "T1", "p1"), rgFile("f2", "F2", "p2")}, nil},
+		{"already correct (no moves, no retitle)", "Doctor Who: Shada",
+			[]database.Book{rgBook("F1", "", nil)},
+			[]database.BookFileCore{rgFile("f1", "F1", "p1"), rgFile("f2", "F1", "p2")}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &regroupFakeReader{books: tc.books, files: tc.files, series: tc.series}
+			_, plan := rgPlan(t, r, []itunesservice.HealGroup{{Title: tc.title, PIDs: []string{"p1", "p2"}}})
+			a := plan.Groups[0]
+			if !a.ManualOnly || a.Target != "" || len(a.Moves) != 0 || a.FreshBook {
+				t.Fatalf("action = %+v, want manual-only skip with no target or moves", a)
+			}
+			if plan.ManualOnlySkipped != 1 || plan.Consolidated != 0 || plan.AlreadyCorrect != 0 || len(plan.DeleteBooks) != 0 {
+				t.Fatalf("manual-only=%d consolidated=%d already-correct=%d deletes=%v, want 1/0/0/none",
+					plan.ManualOnlySkipped, plan.Consolidated, plan.AlreadyCorrect, plan.DeleteBooks)
+			}
+		})
+	}
+}
+
+// The apply re-reads each group's books just before writing it and re-runs
+// the same rule: a group whose books changed since the plan is skipped with
+// a logged reason, and nothing of it is written.
+func TestITunesRegroupApply_RecheckSkipsChangedGroup(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(t *testing.T, s *database.PebbleStore, frag, other string)
+		want   string
+	}{
+		{"source became organized", func(t *testing.T, s *database.PebbleStore, frag, _ string) {
+			if _, err := s.ModifyBook(frag, func(b *database.Book) error {
+				st := "organized"
+				b.LibraryState = &st
+				return nil
+			}); err != nil {
+				t.Fatalf("ModifyBook: %v", err)
+			}
+		}, itunesservice.EntangleLibrarySource},
+		{"source file moved elsewhere", func(t *testing.T, s *database.PebbleStore, frag, other string) {
+			files, err := s.GetBookFiles(frag)
+			if err != nil || len(files) != 1 {
+				t.Fatalf("GetBookFiles: %v (%d)", err, len(files))
+			}
+			if err := s.MoveBookFilesToBook([]string{files[0].ID}, frag, other); err != nil {
+				t.Fatalf("MoveBookFilesToBook: %v", err)
+			}
+		}, itunesservice.EntangleChanged},
+		{"source series became Big Finish", func(t *testing.T, s *database.PebbleStore, frag, _ string) {
+			sr, err := s.CreateSeries("Big Finish Originals", nil)
+			if err != nil || sr == nil {
+				t.Fatalf("CreateSeries: %v", err)
+			}
+			if _, err := s.ModifyBook(frag, func(b *database.Book) error {
+				b.SeriesID = &sr.ID
+				return nil
+			}); err != nil {
+				t.Fatalf("ModifyBook: %v", err)
+			}
+		}, itunesservice.ReasonOwnerManualOnly},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := regroupStore(t)
+			vg := "vg-recheck"
+			tr, fa := rgFlag(true), rgFlag(false)
+			if _, err := s.CreateBook(&database.Book{Title: "Library copy", VersionGroupID: &vg, IsPrimaryVersion: tr}); err != nil {
+				t.Fatalf("CreateBook library: %v", err)
+			}
+			ed, err := s.CreateBook(&database.Book{Title: "iTunes edition", VersionGroupID: &vg, IsPrimaryVersion: fa})
+			if err != nil {
+				t.Fatalf("CreateBook edition: %v", err)
+			}
+			frag := seedBook(t, s, "fragment")
+			other := seedBook(t, s, "unrelated")
+			seedFilePID(t, s, ed.ID, "p1")
+			seedFilePID(t, s, frag, "p2")
+
+			p := &Plugin{}
+			rep := &fakeReporter{}
+			snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+			if err != nil {
+				t.Fatalf("buildRegroupSnapshot: %v", err)
+			}
+			plan := itunesservice.PlanRegroup([]itunesservice.HealGroup{{Title: "The Book", PIDs: []string{"p1", "p2"}}}, snap)
+			if plan.Consolidated != 1 || plan.Groups[0].Target != ed.ID {
+				t.Fatalf("plan = %+v, want consolidate onto the edition", plan.Groups)
+			}
+
+			tc.change(t, s, frag, other)
+
+			if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+				t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+			}
+			var found bool
+			for _, l := range rep.logs {
+				if strings.Contains(l, "recheck refuses it as "+tc.want) {
+					found = true
+				}
+				if strings.HasPrefix(l, "APPLIED") && !strings.Contains(l, "moved=0 ") {
+					t.Fatalf("apply moved files after a refused recheck: %s", l)
+				}
+			}
+			if !found {
+				t.Fatalf("no recheck refusal %q logged: %v", tc.want, rep.logs)
+			}
+			if edFiles, _ := s.GetBookFiles(ed.ID); len(edFiles) != 1 {
+				t.Fatalf("edition has %d files, want 1 (group must be skipped)", len(edFiles))
+			}
+			if edAfter, _ := s.GetBookByID(ed.ID); edAfter == nil || edAfter.Title != "iTunes edition" {
+				t.Fatalf("edition retitled despite skip: %+v", edAfter)
+			}
+		})
+	}
+}
+
+// Without a library root nothing can tell a library copy apart, so the op
+// refuses to run at all -- the dry run included.
+func TestITunesRegroup_RefusesWithoutRootDir(t *testing.T) {
+	prevRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = ""
+	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	raw, _ := json.Marshal(map[string]string{"xmlPath": "/nonexistent/lib.xml"})
+	p := New(fakeDeps{store: regroupStore(t)})
+	err := p.runITunesRegroup(context.Background(), raw, &fakeReporter{})
+	if err == nil || !strings.Contains(err.Error(), "root_dir") {
+		t.Fatalf("err = %v, want a root_dir refusal", err)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/itunes/service/regroup_plan.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-01
 
@@ -8,6 +8,8 @@ package itunesservice
 import (
 	"fmt"
 	"sort"
+
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 )
 
 // PIDLoc is the current DB location of one iTunes track PID.
@@ -41,6 +43,23 @@ type BookMeta struct {
 	// not explicitly true). It drives ONLY the dry-run delta report
 	// (RegroupPlan.Unblocked / NewlyBlocked), never a decision.
 	LegacyEntangled bool
+
+	// HasLibraryFile: at least one of the book's book_file rows (missing or
+	// not) has a path under the library root and outside the frozen iTunes
+	// tree. That is a library-folder copy, whatever its primary flag says: a
+	// library copy can hold iTunes PIDs (itunes.clone-into-library moves the
+	// PID onto the library rows) and need not be its group's primary.
+	HasLibraryFile bool
+	// Organized: library_state is "organized". ABS shows a primary organized
+	// book, so files leaving one can take visible content away.
+	Organized bool
+	// FilesWithoutPID counts the book's book_file rows that carry no iTunes
+	// PID. Such a row cannot be shown to belong to any heal group.
+	FilesWithoutPID int
+	// ManualOnly: the book's title, path, any file path, or series name names
+	// a library the owner curates by hand (applygate.IsOwnerManualOnly:
+	// Doctor Who / Big Finish / Torchwood). The regroup never touches it.
+	ManualOnly bool
 }
 
 // Entanglement skip reasons (GroupAction.EntangleReason). See entanglement.
@@ -49,8 +68,16 @@ const (
 	EntangleWouldEmpty    = "would-empty"     // a version-group member would be emptied (and deleted)
 	EntanglePrimaryTarget = "primary-target"  // files would be added to a group's primary (library) copy
 	EntangleAmbiguous     = "ambiguous-group" // target's group has no incumbent primary to tell copies apart
-	EntangleMixedTarget   = "mixed-target"    // grouped target already holds another heal group's tracks
+	EntangleMixedTarget   = "mixed-target"    // grouped target already holds another heal group's tracks, or a row with no PID
+	EntangleLibraryTarget = "library-target"  // target holds a file under the library root (a library copy)
+	EntangleLibrarySource = "library-source"  // a source is organized or holds a file under the library root
+	EntangleUnknownBook   = "unknown-book"    // a holder is not a live book (trashed, deleted, merged away)
+	EntangleChanged       = "changed"         // apply-time recheck: a planned file is no longer where the plan saw it
 )
+
+// ReasonOwnerManualOnly is the GroupAction.SkipReason of a group left alone
+// because it touches an owner-manual-only library (applygate.IsOwnerManualOnly).
+const ReasonOwnerManualOnly = applygate.ReasonOwnerManualOnly
 
 // Snapshot is an immutable read of the DB state the planner reasons over. It is
 // built ONCE before planning and never changes during planning — so the plan is
@@ -59,7 +86,9 @@ type Snapshot struct {
 	// PIDLoc maps every group PID that resolves in the DB to its file/book.
 	// PIDs absent here are "unresolved" (in the XML but never imported).
 	PIDLoc map[string]PIDLoc
-	// Books holds metadata for every book referenced by PIDLoc.
+	// Books holds metadata for every LIVE book: not soft-deleted, not merged
+	// away. PIDLoc must only point at books listed here; a location whose book
+	// is missing is refused (EntangleUnknownBook), never planned.
 	Books map[string]BookMeta
 }
 
@@ -79,7 +108,11 @@ type GroupAction struct {
 	Entangled bool       // skipped: version-group entanglement (no mutation)
 	// EntangleReason is why Entangled is set (one of the Entangle* constants).
 	EntangleReason string
-	Unresolved     []string // group PIDs not present in the DB
+	// ManualOnly: skipped because the group's title or one of its holders is
+	// owner-manual-only (Doctor Who / Big Finish / Torchwood). No mutation,
+	// not even a retitle.
+	ManualOnly bool
+	Unresolved []string // group PIDs not present in the DB
 }
 
 // RegroupPlan is the complete, deterministic, frozen plan. The executor applies
@@ -96,6 +129,8 @@ type RegroupPlan struct {
 	// EntangledByReason breaks EntangledSkipped down by EntangleReason.
 	EntangledByReason map[string]int
 	FreshBooks        int
+	// ManualOnlySkipped counts groups skipped as owner-manual-only.
+	ManualOnlySkipped int
 	PIDsResolved      int
 	PIDsUnresolved    int
 
@@ -130,6 +165,11 @@ type RegroupPlan struct {
 	SFCMid      int // 15-90min — novella / long chapter / short book (ambiguous)
 	SFCLong     int // >= 90min — a COMPLETE book (false alarm: series entry)
 	SFCExamples []string
+
+	// pidGroup maps each PID to the index of the heal group listing it. Kept
+	// so the apply-time Recheck can rebuild the mixed-target check on fresh
+	// rows.
+	pidGroup map[string]int
 }
 
 // PlanRegroup computes the frozen heal plan: assign each group exactly one target
@@ -145,6 +185,7 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 	plan := RegroupPlan{TotalGroups: len(groups), EntangledByReason: make(map[string]int)}
 	claimed := make(map[string]bool, len(groups)) // existing books already taken as a target
 	own := newOwnership(groups, snap)
+	plan.pidGroup = own.pidGroup
 	singleFileChapters := make(map[string]struct{}) // distinct single-file books in multi-track groups
 
 	for gi, g := range groups {
@@ -201,6 +242,26 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 
 		if len(resolved) == 0 {
 			// Nothing in the DB to heal for this group (book never imported).
+			plan.Groups = append(plan.Groups, act)
+			continue
+		}
+
+		// Holder-level refusals come BEFORE the already-correct shortcut: the
+		// apply retitles every target, moves or not, so a trashed or
+		// owner-manual-only book must not even be claimed. Each branch appends
+		// exactly one action so plan.Groups[gi] stays aligned with groups[gi]
+		// (Recheck depends on it).
+		if applygate.IsOwnerManualOnly(g.Title, "") || anyHolder(resolved, snap, func(b BookMeta) bool { return b.ManualOnly }) {
+			act.ManualOnly = true
+			plan.ManualOnlySkipped++
+			plan.Groups = append(plan.Groups, act)
+			continue
+		}
+		if unknownHolder(resolved, snap) {
+			act.Entangled = true
+			act.EntangleReason = EntangleUnknownBook
+			plan.EntangledSkipped++
+			plan.EntangledByReason[EntangleUnknownBook]++
 			plan.Groups = append(plan.Groups, act)
 			continue
 		}
@@ -273,34 +334,48 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 
 // entanglement decides whether a group's planned moves may run, returning ""
 // (allowed) or the Entangle* reason it is skipped. Its job is to keep every
-// curated version link meaning what it meant: a version group links EDITIONS
-// of one work (by the owner's rule, the library-folder copy is the primary and
-// every iTunes copy linked to it is a non-primary member), so the regroup may
-// complete an iTunes edition but must never change which files make up a
-// different edition, nor remove a member. The rule, checked in order:
+// curated version link meaning what it meant and every library-folder copy
+// exactly as it is. By the owner's rule every book gets a copy in the library
+// folder and that copy is primary; iTunes copies linked to it are non-primary
+// members. The primary FLAG is not a reliable stand-in for "is the library
+// copy" (a library copy can sit unflagged while an iTunes copy holds the
+// flag), so the rule reads the book's LOCATION too (BookMeta.HasLibraryFile,
+// BookMeta.Organized). The regroup may complete an iTunes edition but must
+// never change which files make up a different edition or a library copy,
+// nor remove a member. The rule, checked in order:
 //
+//  0. Every source and the target must be a live book in the snapshot
+//     (EntangleUnknownBook otherwise: trashed, deleted or merged away).
 //  1. No file may LEAVE a version-group member (EntangleWouldEmpty when the
 //     member would be left with no files and so deleted, else
 //     EntangleGroupedSource). This covers a fresh-book split out of a grouped
 //     book, a move between two members of the same group, and a move from a
 //     member of another group into the target.
-//  2. After (1) every source is an ungrouped iTunes record. A target that is
-//     NOT in a version group may receive anything (ungrouped<->ungrouped).
-//  3. A grouped target may receive files from those ungrouped fragments only
+//  2. No file may leave a book that is organized or holds a file under the
+//     library root (EntangleLibrarySource): moving rows off it could take
+//     ABS-visible content onto a book ABS does not show. Checked before the
+//     fresh-book case, since a split also takes files off its sources.
+//  3. A fresh-book target is allowed from here (its sources passed 1 and 2).
+//  4. No existing target may hold a file under the library root
+//     (EntangleLibraryTarget): pouring iTunes-folder rows into a library copy
+//     scatters its files across two locations, whatever its flag says.
+//  5. A target NOT in a version group may now receive (ungrouped<->ungrouped).
+//  6. A grouped target may receive files from those ungrouped fragments only
 //     when it is a NON-primary member of a group that HAS an incumbent
-//     primary, AND every iTunes PID it already holds belongs to THIS heal
-//     group (PIDs no heal group owns -- in the DB, gone from the XML -- are
+//     primary, AND every one of its book_file rows carries an iTunes PID, and
+//     every such PID that some heal group owns belongs to THIS heal group
+//     (PIDs no heal group owns -- in the DB, gone from the XML -- are
 //     ignored): it is then an iTunes edition of this one album linked to its
 //     library copy, and gathering the rest of the album's tracks onto it
-//     completes the edition the link already points at. The library copy is
-//     untouched.
-//     - target is the incumbent primary -> EntanglePrimaryTarget: that is the
-//     library copy (or, before the owner's rule is fully applied, the copy
-//     users see), and pouring iTunes-folder rows into it would mix
-//     locations and change what is shown and played.
+//     completes the edition the link already points at.
+//     - target is the incumbent primary -> EntanglePrimaryTarget: it is the
+//     copy users see, and pouring iTunes-folder rows into it would change
+//     what is shown and played.
 //     - target's group has no incumbent ({unset,unset,...}, all false) ->
-//     EntangleAmbiguous: the target could be the library copy itself, and
-//     the incumbent rule refuses to guess, so the planner does too.
+//     EntangleAmbiguous: the target could be the copy users see, and the
+//     incumbent rule refuses to guess, so the planner does too.
+//     - target holds a row with no PID, or another heal group's PID ->
+//     EntangleMixedTarget.
 //
 // A group whose files are already on one book (no moves) never reaches here.
 func entanglement(gi int, moves []FileMove, target string, fresh bool, snap Snapshot, own ownership) string {
@@ -313,10 +388,22 @@ func entanglement(gi int, moves []FileMove, target string, fresh bool, snap Snap
 		sources = append(sources, id)
 	}
 	sort.Strings(sources)
+	for _, id := range sources {
+		if _, ok := snap.Books[id]; !ok {
+			return EntangleUnknownBook
+		}
+	}
+	var t BookMeta
+	if !fresh {
+		var ok bool
+		if t, ok = snap.Books[target]; !ok {
+			return EntangleUnknownBook
+		}
+	}
 	reason := ""
 	for _, id := range sources {
-		b, ok := snap.Books[id]
-		if !ok || b.VersionGroupID == "" {
+		b := snap.Books[id]
+		if b.VersionGroupID == "" {
 			continue
 		}
 		if b.FileCount-out[id] <= 0 {
@@ -327,11 +414,18 @@ func entanglement(gi int, moves []FileMove, target string, fresh bool, snap Snap
 	if reason != "" {
 		return reason
 	}
+	for _, id := range sources {
+		if b := snap.Books[id]; b.Organized || b.HasLibraryFile {
+			return EntangleLibrarySource
+		}
+	}
 	if fresh {
 		return ""
 	}
-	t, ok := snap.Books[target]
-	if !ok || t.VersionGroupID == "" {
+	if t.HasLibraryFile {
+		return EntangleLibraryTarget
+	}
+	if t.VersionGroupID == "" {
 		return ""
 	}
 	if t.GroupHasNoIncumbent {
@@ -340,12 +434,86 @@ func entanglement(gi int, moves []FileMove, target string, fresh bool, snap Snap
 	if t.IsPrimary {
 		return EntanglePrimaryTarget
 	}
+	if t.FilesWithoutPID > 0 {
+		return EntangleMixedTarget
+	}
 	for _, pid := range own.bookPIDs[target] {
 		if owner, ok := own.pidGroup[pid]; ok && owner != gi {
 			return EntangleMixedTarget
 		}
 	}
 	return ""
+}
+
+// anyHolder reports whether pred holds for any known book among the holders.
+func anyHolder(resolved []PIDLoc, snap Snapshot, pred func(BookMeta) bool) bool {
+	for _, loc := range resolved {
+		if b, ok := snap.Books[loc.BookID]; ok && pred(b) {
+			return true
+		}
+	}
+	return false
+}
+
+// unknownHolder reports whether any holder is missing from snap.Books (not a
+// live book). The snapshot builder drops such locations, so this is the
+// planner's own refusal for a snapshot that did not.
+func unknownHolder(resolved []PIDLoc, snap Snapshot) bool {
+	for _, loc := range resolved {
+		if _, ok := snap.Books[loc.BookID]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+// Recheck re-runs the plan's refusal rules for plan.Groups[gi] on FRESH rows,
+// read immediately before the apply writes that group, and returns "" when
+// the group may still be applied or the reason it must now be skipped
+// (ReasonOwnerManualOnly or an Entangle* constant). fresh must hold the
+// group's target (unless FreshBook) and every move source, each with every
+// PID on its current book_file rows in fresh.PIDLoc; a book that is no longer
+// live is left out of fresh.Books and refused as EntangleUnknownBook.
+//
+// It also refuses (EntangleChanged) when a planned file is no longer on the
+// book the plan moves it from, so a move is never applied from a stale read.
+func (p RegroupPlan) Recheck(gi int, fresh Snapshot) string {
+	if gi < 0 || gi >= len(p.Groups) {
+		return EntangleUnknownBook
+	}
+	a := p.Groups[gi]
+	if a.Entangled || a.ManualOnly || (a.Target == "" && !a.FreshBook) {
+		return ""
+	}
+	ids := make([]string, 0, len(a.Moves)+1)
+	if !a.FreshBook {
+		ids = append(ids, a.Target)
+	}
+	for _, m := range a.Moves {
+		ids = append(ids, m.From)
+	}
+	for _, id := range ids {
+		b, ok := fresh.Books[id]
+		if !ok {
+			return EntangleUnknownBook
+		}
+		if b.ManualOnly {
+			return ReasonOwnerManualOnly
+		}
+	}
+	if len(a.Moves) == 0 {
+		return ""
+	}
+	for _, m := range a.Moves {
+		if loc, ok := fresh.PIDLoc[m.PID]; !ok || loc.FileID != m.FileID || loc.BookID != m.From {
+			return EntangleChanged
+		}
+	}
+	own := ownership{pidGroup: p.pidGroup, bookPIDs: make(map[string][]string)}
+	for pid, loc := range fresh.PIDLoc {
+		own.bookPIDs[loc.BookID] = append(own.bookPIDs[loc.BookID], pid)
+	}
+	return entanglement(gi, a.Moves, a.Target, a.FreshBook, fresh, own)
 }
 
 // ownership indexes which heal group owns each PID and which PIDs each book
@@ -408,7 +576,8 @@ func pickTarget(resolved []PIDLoc, snap Snapshot, claimed map[string]bool) (stri
 
 // betterSurvivor orders books best-first: a version-grouped book, then primary,
 // then richer enrichment, then more files, then older, then by ID for
-// stability.
+// stability. It only ranks; entanglement still refuses a target that is a
+// library copy (HasLibraryFile) or a group's primary.
 //
 // A grouped holder ranks first because the entanglement rule never lets files
 // leave a version-group member: with the grouped book as the target it only
