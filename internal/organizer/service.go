@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-30
+// last-edited: 2026-10-02
 
 package organizer
 
@@ -2487,25 +2487,44 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 	book.VersionGroupID = &versionGroupID
 	book.IsPrimaryVersion = &isNotPrimary
 	book.LibraryState = &organizedSourceState
-	modified, modifyErr := orgSvc.db.ModifyBook(book.ID, func(b *database.Book) error {
-		b.VersionGroupID = &versionGroupID
-		b.IsPrimaryVersion = &isNotPrimary
-		b.LibraryState = &organizedSourceState
-		return nil
-	})
-	switch {
-	case modifyErr != nil:
-		// The locked write itself failed. The pre-fix code only warned on a
-		// failed UpdateBook of the hydrated row; keep that shape rather than
-		// widening the whole-row fallback to one more error path.
-		log.Warn("Failed to update original book %s version group: %v", book.ID, modifyErr)
-	case modified == nil:
-		// Row not readable under the lock: fall back to the direct
-		// state-only write (the pre-fix behavior) so the transition lands.
-		if _, err := orgSvc.db.UpdateBook(book.ID, book); err != nil {
-			log.Warn("Failed to update original book %s version group: %v", book.ID, err)
+	//
+	// Membership lock: the original's current group (the no-group sentinel
+	// when it has none) and versionGroupID, in one acquisition, across this
+	// write and its fallback, released before the hand-off below (which
+	// takes the group lock itself). A failed lock is handled like a failed
+	// locked write: warned, and the state-only fallback is not taken.
+	func() {
+		unlockGroups, lockedGroups, lockErr := versionprimary.LockBookGroups(orgSvc.db, []string{book.ID}, versionGroupID)
+		if lockErr != nil {
+			log.Warn("Failed to update original book %s version group: %v", book.ID, lockErr)
+			return
 		}
-	}
+		defer unlockGroups()
+		modified, modifyErr := orgSvc.db.ModifyBook(book.ID, func(b *database.Book) error {
+			if g, ok := lockedGroups[b.ID]; ok {
+				if err := versionprimary.CheckMembership(b, g); err != nil {
+					return err
+				}
+			}
+			b.VersionGroupID = &versionGroupID
+			b.IsPrimaryVersion = &isNotPrimary
+			b.LibraryState = &organizedSourceState
+			return nil
+		})
+		switch {
+		case modifyErr != nil:
+			// The locked write itself failed. The pre-fix code only warned on a
+			// failed UpdateBook of the hydrated row; keep that shape rather than
+			// widening the whole-row fallback to one more error path.
+			log.Warn("Failed to update original book %s version group: %v", book.ID, modifyErr)
+		case modified == nil:
+			// Row not readable under the lock: fall back to the direct
+			// state-only write (the pre-fix behavior) so the transition lands.
+			if _, err := orgSvc.db.UpdateBook(book.ID, book); err != nil {
+				log.Warn("Failed to update original book %s version group: %v", book.ID, err)
+			}
+		}
+	}()
 
 	// Record operation changes for undo
 	if operationID != "" {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-09-24
+// last-edited: 2026-10-02
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -372,6 +372,27 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 		// so it is not a second incumbent that would make the hand-off below
 		// re-rank a healthy group (the scanner's joinPrimaryFlag, same rule).
 		// In a fresh group every member keeps its flag and the rule decides.
+		// Membership lock: every member's current group (the no-group
+		// sentinel for an ungrouped one) and target, in one acquisition,
+		// held across the reused group's read and the link writes, and
+		// released before the hand-off below (which takes it itself). A
+		// member whose group moved since this item read it fails the item.
+		memberIDs := make([]string, len(books))
+		for i := range books {
+			memberIDs[i] = books[i].ID
+		}
+		unlockGroups, lockedGroups, err := versionprimary.LockBookGroups(store, memberIDs, target)
+		if err != nil {
+			return fmt.Errorf("regroup version-group apply: lock version groups: %w", err)
+		}
+		groupsLocked := true
+		releaseGroups := func() {
+			if groupsLocked {
+				groupsLocked = false
+				unlockGroups()
+			}
+		}
+		defer releaseGroups()
 		reusedHasPrimary := false
 		if len(groups) > 0 {
 			current, err := store.GetBooksByVersionGroup(target)
@@ -396,6 +417,11 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 				if cur.VersionGroupID != nil && *cur.VersionGroupID == target {
 					return database.ErrSkipBookWrite
 				}
+				if g, ok := lockedGroups[cur.ID]; ok {
+					if err := versionprimary.CheckMembership(cur, g); err != nil {
+						return err
+					}
+				}
 				cur.VersionGroupID = &vg
 				if reusedHasPrimary {
 					f := false
@@ -410,6 +436,7 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 				return fmt.Errorf("regroup version-group apply: set version group on %s: book not found", b.ID)
 			}
 		}
+		releaseGroups()
 		// Primary: the shared rule over EVERY current member of the group,
 		// including members of a reused group that are not in this hold.
 		// versionprimary.EnsureSinglePrimary keeps a healthy incumbent,

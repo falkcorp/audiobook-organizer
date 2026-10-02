@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-02
 
@@ -529,17 +529,15 @@ type regroupApplyCounts struct {
 
 // applyRegroupGroup rechecks and writes plan.Groups[gi].
 //
-// When the target is in a version group, the group's hand-off lock
-// (versionprimary.LockGroup) is held from before the recheck reads the group
-// until the group's last write here, so a hand-off (EnsureSinglePrimary,
-// Crown, a trash restore or a combine undo) cannot make the target the
-// group's primary between the recheck that found it a non-primary member and
-// the moves onto it. It also excludes the membership writers that take
-// versionprimary.LockGroups on the group a book leaves and joins (batch
-// edits, the versions handler's link and set-primary, the scanner's version
-// link). It does not cover every writer of version_group_id or
-// is_primary_version: the remaining writers are tracked in TODO.md under
-// "Version-group membership lock: remaining writers".
+// The target's version group lock (versionprimary.LockGroups) is held from
+// before the recheck reads the group until the group's last write here, so a
+// hand-off (EnsureSinglePrimary, Crown, a trash restore or a combine undo)
+// cannot make the target the group's primary between the recheck that found
+// it a non-primary member and the moves onto it, and no membership writer
+// (each holds the group a book leaves and the one it joins) can move it in
+// or out meanwhile. An ungrouped target takes the no-group sentinel instead,
+// which every write moving a book into a group from none holds, so it stays
+// ungrouped until this group is written.
 //
 // Lock order: this group lock, then the per-book write locks
 // MoveBookFilesToBook(Bulk), ReassignExternalID, CreateBook and ModifyBook
@@ -562,10 +560,13 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip group %q: apply-time recheck could not read target %s: %v", a.Title, a.Target, err))
 			return
 		}
-		if tb != nil && tb.VersionGroupID != nil && *tb.VersionGroupID != "" {
+		if tb != nil && tb.VersionGroupID != nil {
 			lockedGID = *tb.VersionGroupID
-			defer versionprimary.LockGroup(lockedGID)()
 		}
+		// "" takes the no-group sentinel: every write that moves a book
+		// into a group from none holds it, so an ungrouped target stays
+		// ungrouped until this group is written.
+		defer versionprimary.LockGroups(lockedGID)()
 	}
 
 	why, keepTitle, err := regroupRecheck(store, plan, gi, rootDir, lockedGID)

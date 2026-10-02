@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-09-25
+// last-edited: 2026-10-02
 
 package jobs
 
@@ -256,12 +256,21 @@ func vgUnlinkOutliers(ctx context.Context, store versionprimary.EnsureStore, gro
 	}()
 	for _, ob := range outliers {
 		newGroupID := ulid.Make().String()
+		// Hold the group the outlier leaves and its new one across this one
+		// write (per outlier; the deferred hand-off runs after the release).
+		// An outlier that has already left groupID was moved by someone else
+		// and is not ours to move.
+		unlockGroups := versionprimary.LockGroups(groupID, newGroupID)
 		updated, merr := store.ModifyBook(ob.ID, func(b *database.Book) error {
+			if versionprimary.CheckMembership(b, groupID) != nil {
+				return database.ErrSkipBookWrite
+			}
 			t := true
 			b.VersionGroupID = &newGroupID
 			b.IsPrimaryVersion = &t
 			return nil
 		})
+		unlockGroups()
 		if merr != nil {
 			return fmt.Errorf("unlink %s: %w", ob.ID, merr)
 		}

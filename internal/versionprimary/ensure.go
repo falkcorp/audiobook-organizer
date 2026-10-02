@@ -100,9 +100,19 @@ type HandoffResult struct {
 // errHandoffAbort aborts a winner write whose row changed since the read.
 var errHandoffAbort = errors.New("versionprimary: member changed since the group read")
 
-// groupLocks serialises hand-offs per group in this process, so two workers
-// retiring members of one group cannot interleave read-decide-write.
-var groupLocks [64]sync.Mutex
+// groupLocks serialises hand-offs and membership changes per group in this
+// process, so two workers retiring members of one group cannot interleave
+// read-decide-write. Group IDs hash onto the first groupStripes entries; the
+// last one, noGroupStripe, is the "no group" sentinel: the lock every write
+// that moves a book INTO a group from no group takes, and that a reader
+// relying on a book staying ungrouped (itunes.regroup's apply on an ungrouped
+// target) holds.
+var groupLocks [groupStripes + 1]sync.Mutex
+
+const (
+	groupStripes  = 64
+	noGroupStripe = groupStripes
+)
 
 // LockGroup takes group gid's hand-off lock and returns its release. A
 // caller that reads the group to decide a member's flag and then writes it
@@ -121,14 +131,23 @@ func lockGroup(gid string) func() {
 	return mu.Unlock
 }
 
+// groupStripe is gid's index in groupLocks. gid is trimmed first, as
+// groupOfBook trims, so " g" and "g" share a lock; "" (or all whitespace)
+// means no group and maps to the sentinel stripe, noGroupStripe.
 func groupStripe(gid string) int {
+	gid = strings.TrimSpace(gid)
+	if gid == "" {
+		return noGroupStripe
+	}
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(strings.TrimSpace(gid)))
-	return int(h.Sum32() % uint32(len(groupLocks)))
+	_, _ = h.Write([]byte(gid))
+	return int(h.Sum32() % groupStripes)
 }
 
-// LockGroups takes the hand-off locks of every non-empty gid -- each stripe
-// once, in ascending stripe order -- and returns the release. Two groups can
+// LockGroups takes the hand-off locks of every gid -- each stripe once, in
+// ascending stripe order -- and returns the release. "" is the no-group
+// sentinel (always the last stripe), so a write that moves a book from no
+// group into one passes both "" and the destination. Two groups can
 // share a stripe, so a caller that needs more than one group (a write that
 // moves a book from one version group to another) must take them through
 // here, never by calling LockGroup twice: the second call could self-deadlock
@@ -144,9 +163,6 @@ func groupStripe(gid string) int {
 func LockGroups(gids ...string) (unlock func()) {
 	idx := make([]int, 0, len(gids))
 	for _, g := range gids {
-		if strings.TrimSpace(g) == "" {
-			continue
-		}
 		idx = append(idx, groupStripe(g))
 	}
 	slices.Sort(idx)
@@ -172,11 +188,12 @@ type BookReader interface {
 }
 
 // LockBookGroups takes, in ONE LockGroups acquisition, the locks of the
-// current version group of every book in ids plus every group in extra (the
-// groups the caller will move books into). The books are read, their groups
-// locked, and the books re-read under the locks; when one moved in between,
-// the locks are dropped and the read repeated (at most five times, then
-// ErrMembershipChanged). A missing book is skipped.
+// current version group of every book in ids ("" = no group, the sentinel)
+// plus every group in extra (the groups the caller will move books into).
+// The books are read, their groups locked, and the books re-read under the
+// locks; when one moved in between, the locks are dropped and the read
+// repeated (at most five times, then ErrMembershipChanged). A missing book
+// is skipped.
 //
 // It returns the release and each book's group as read under the locks: the
 // raw stored value, untrimmed ("" = none), because callers write it back as a
@@ -185,8 +202,12 @@ type BookReader interface {
 // locks themselves are taken on the trimmed id (groupStripe), and
 // CheckMembership trims both sides, so padding never changes which stripe is
 // held or whether a membership check passes. A caller writing through
-// ModifyBook checks the group there (CheckMembership). Order rules as LockGroups: merge lock before, book write
-// locks inside, never another stripe or a hand-off while holding these.
+// ModifyBook checks the group there (CheckMembership); since every membership
+// writer holds the group a book leaves, a book cannot move while its group is
+// locked, so that check is a backstop.
+//
+// Order rules as LockGroups: merge lock before, book write locks inside,
+// never another stripe or a hand-off while holding these.
 func LockBookGroups(store BookReader, ids []string, extra ...string) (unlock func(), groups map[string]string, err error) {
 	read := func() (map[string]string, error) {
 		m := make(map[string]string, len(ids))

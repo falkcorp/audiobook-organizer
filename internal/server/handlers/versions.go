@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
 // last-edited: 2026-10-02
 
@@ -100,7 +100,9 @@ type VersionsHandler struct {
 	store VersionsStore
 }
 
-// lockGroups locks the given version groups ("" is skipped) through the
+// lockGroups locks the given version groups ("" is the no-group sentinel, so
+// a link of an ungrouped book also excludes a reader relying on it staying
+// ungrouped) through the
 // shared hand-off locks (versionprimary.LockGroups: each stripe once, in
 // stripe order) and returns the unlock.
 //

@@ -1,7 +1,7 @@
 // file: internal/server/transcode_version.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e2b7c41-3d58-4a16-8f0e-6c1d4a7b2e93
-// last-edited: 2026-09-25
+// last-edited: 2026-10-02
 
 package server
 
@@ -69,7 +69,11 @@ func recordTranscodedVersion(ctx context.Context, store transcodeVersionStore, o
 	// snapshot taken before the (long) transcode.
 	wasPrimary := false
 	origNotes := "Original format"
-	grouped, err := store.ModifyBook(original.ID, func(b *database.Book) error {
+	//
+	// Membership lock: the original's current group (the no-group sentinel
+	// when it has none) and groupID, in one acquisition, across this write
+	// only; the hand-off further down runs after the release.
+	grouped, err := transcodeLockedGroupWrite(store, original.ID, groupID, func(b *database.Book) error {
 		wasPrimary = b.VersionGroupID == nil || *b.VersionGroupID == "" ||
 			(b.IsPrimaryVersion != nil && *b.IsPrimaryVersion)
 		b.VersionGroupID = &groupID
@@ -121,7 +125,7 @@ func recordTranscodedVersion(ctx context.Context, store transcodeVersionStore, o
 	}
 	if _, cerr := store.CreateBook(nb); cerr != nil {
 		logf("warn", fmt.Sprintf("Failed to create M4B version record, updating original: %v", cerr))
-		rewritten, updateErr := store.ModifyBook(original.ID, func(b *database.Book) error {
+		rewritten, updateErr := transcodeLockedGroupWrite(store, original.ID, groupID, func(b *database.Book) error {
 			fallbackNotes := fmt.Sprintf("Transcoded to M4B (in-place, original was at %s)", b.FilePath)
 			b.FilePath = outputPath
 			b.Format = m4bFormat
@@ -211,4 +215,26 @@ func handOffTranscodeGroup(ctx context.Context, store versionprimary.EnsureStore
 	}
 	transcodeLog.Info("transcode: version group %s primary %s (%s)",
 		logger.SanitizeLogValue(gid), logger.SanitizeLogValue(res.PrimaryID), res.Outcome)
+}
+
+// transcodeLockedGroupWrite runs fn through ModifyBook on book id while
+// holding the version-group locks of the group the book is in (the no-group
+// sentinel when none) and groupID, the group fn puts it in, taken in one
+// versionprimary.LockBookGroups acquisition and released on return. fn is
+// refused (versionprimary.ErrMembershipChanged) if the book's group differs
+// from the one locked.
+func transcodeLockedGroupWrite(store transcodeVersionStore, id, groupID string, fn func(*database.Book) error) (*database.Book, error) {
+	unlock, locked, err := versionprimary.LockBookGroups(store, []string{id}, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return store.ModifyBook(id, func(b *database.Book) error {
+		if g, ok := locked[b.ID]; ok {
+			if err := versionprimary.CheckMembership(b, g); err != nil {
+				return err
+			}
+		}
+		return fn(b)
+	})
 }

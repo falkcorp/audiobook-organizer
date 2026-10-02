@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-09-26
+// last-edited: 2026-10-02
 
 package merge
 
@@ -559,6 +559,29 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// this group between the read and the writes below can still leave two.
 	// Out of scope per the item; noted so the next reader does not assume it
 	// is handled.
+	// Membership lock: every participant's current version group (the
+	// no-group sentinel for an ungrouped one) and versionGroupID, in one
+	// versionprimary.LockBookGroups acquisition under mergeSerializeMu (merge
+	// lock, then group stripes, then book locks). Held across the reused
+	// group's member read, the membership writes and the demotions, and
+	// released before handOffLeftGroups, which takes the group locks itself.
+	ids := make([]string, len(books))
+	for i := range books {
+		ids[i] = books[i].ID
+	}
+	unlockGroups, lockedGroups, err := versionprimary.LockBookGroups(ms.db, ids, versionGroupID)
+	if err != nil {
+		return nil, fmt.Errorf("lock version groups for merge: %w", err)
+	}
+	groupsLocked := true
+	releaseGroups := func() {
+		if groupsLocked {
+			groupsLocked = false
+			unlockGroups()
+		}
+	}
+	defer releaseGroups()
+
 	var preExistingMembers []database.Book
 	if reusedGroup {
 		members, err := ms.db.GetBooksByVersionGroup(versionGroupID)
@@ -594,8 +617,11 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			// snapshot, so an unchanged rewrite is not free.
 			continue
 		}
-		book.VersionGroupID = &versionGroupID
-		book.IsPrimaryVersion = &isPrimary
+		// The in-memory `book` is not set to the new group before the write:
+		// it may be the very row the store hands back (a mock, a cache), and
+		// the membership check inside ModifyBook must see the stored group.
+		// books[i] is replaced with what was stored below.
+		//
 		// The iTunes carry (opts.CarryITunesFields) is applied to the survivor
 		// HERE, inside mergeSerializeMu and before any loser is soft-deleted,
 		// so a merge whose carry cannot be written fails with every loser still
@@ -613,6 +639,11 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		// loop below reads IsSoftDeleted() (MarkedForDeletion) off it, and
 		// that must be the row as written, not as read at the top.
 		stored, err := ms.db.ModifyBook(book.ID, func(fresh *database.Book) error {
+			if g, ok := lockedGroups[fresh.ID]; ok {
+				if err := versionprimary.CheckMembership(fresh, g); err != nil {
+					return err
+				}
+			}
 			fresh.VersionGroupID = &versionGroupID
 			fresh.IsPrimaryVersion = &isPrimary
 			if isPrimary && opts.CarryITunesFields {
@@ -705,6 +736,7 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		slog.Info("merge demoted pre-existing version-group member",
 			"id", member.ID, "group", versionGroupID, "primary", resolvedPrimaryID)
 	}
+	releaseGroups()
 
 	// --- Per-loser cleanup ---
 	//

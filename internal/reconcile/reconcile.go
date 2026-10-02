@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.16.3
+// version: 1.17.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package reconcile
 
@@ -1655,6 +1655,11 @@ func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 			plannedVGID := fmt.Sprintf("vg-%s", ulid.Make().String())
 			isPrimary := true
 			organizedState := "organized"
+			// The book joins a group from none: hold the no-group sentinel and
+			// the new group across this one write (per book, not the loop), so
+			// a reader relying on an ungrouped book staying ungrouped
+			// (itunes.regroup's apply) sees it join only after it releases.
+			unlockGroups := versionprimary.LockGroups("", plannedVGID)
 			written, err := store.ModifyBook(c.ID, func(b *database.Book) error {
 				if b.VersionGroupID != nil && *b.VersionGroupID != "" {
 					return errVGAssignedConcurrently
@@ -1664,6 +1669,7 @@ func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 				b.LibraryState = &organizedState
 				return nil
 			})
+			unlockGroups()
 			switch {
 			case errors.Is(err, errVGAssignedConcurrently):
 				atomic.AddInt64(&skippedConcurrent, 1)
