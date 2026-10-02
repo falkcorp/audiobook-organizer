@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
-// last-edited: 2026-09-13
+// last-edited: 2026-10-02
 
 package database
 
@@ -555,6 +555,19 @@ func seedUndecodableAfterBackfill(t *testing.T, s *PebbleStore) string {
 	return good.ID
 }
 
+// plantUndecodableMarker writes a marker the way the backfill does: noted in
+// the in-memory set first, then committed. A raw s.db.Set alone would bypass
+// the set, which no production writer can do.
+func plantUndecodableMarker(t testing.TB, s *PebbleStore, id string) {
+	t.Helper()
+	if err := s.noteUndecodableMarker(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Set(bookAtPathUndecodableKey(id), []byte{}, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func hasUndecodableMarker(t *testing.T, s *PebbleStore, id string) bool {
 	t.Helper()
 	_, closer, err := s.db.Get(bookAtPathUndecodableKey(id))
@@ -667,9 +680,7 @@ func TestUpdateAndDeleteBook_DropUndecodableMarker(t *testing.T) {
 		t.Fatalf("LiveBookIDsAtPath(/fixed) = %v %v, want [01BADROW]", ids, err)
 	}
 
-	if err := s.db.Set(bookAtPathUndecodableKey("01BADROW"), []byte{}, pebble.Sync); err != nil {
-		t.Fatal(err)
-	}
+	plantUndecodableMarker(t, s, "01BADROW")
 	if err := s.DeleteBook("01BADROW"); err != nil {
 		t.Fatal(err)
 	}
@@ -686,9 +697,7 @@ func TestRebuild_RecomputesUndecodableMarkers(t *testing.T) {
 	goodID := seedUndecodableAfterBackfill(t, s)
 	// A stale marker (row gone) and a marker on a decodable book.
 	for _, id := range []string{"01GONEMARKER", goodID} {
-		if err := s.db.Set(bookAtPathUndecodableKey(id), []byte{}, pebble.Sync); err != nil {
-			t.Fatal(err)
-		}
+		plantUndecodableMarker(t, s, id)
 	}
 	rep, err := s.VerifyBookAtPathIndex(context.Background())
 	if err != nil {
