@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_match.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f7c1b9e-58a2-4d0f-9e61-c2a4b8d07e15
 // last-edited: 2026-10-01
 
@@ -84,9 +84,12 @@ const (
 	rejectRuntimeConflict = "runtime_conflict"
 	rejectUncorroborated  = "uncorroborated"
 	rejectPartialTitle    = "partial_title_weak"
-	rejectEdition         = "edition"
-	rejectBoxSet          = "box_set"
-	rejectVolume          = "volume_mismatch"
+	// rejectUnpositionedNote is a partial match whose subtitle numbers a
+	// series volume on a book with no recorded position.
+	rejectUnpositionedNote = "series_note_unpositioned"
+	rejectEdition          = "edition"
+	rejectBoxSet           = "box_set"
+	rejectVolume           = "volume_mismatch"
 
 	evidenceISBN    = "isbn"
 	evidenceRuntime = "runtime"
@@ -137,6 +140,7 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 	// book's known position. "Overlord, Vol. 2" against a book at #1 is a
 	// different volume; against a book with no known position it is only a
 	// partial match (it needs the ISBN or two corroborations).
+	unpositionedNote := false
 	if title == titleSeriesNote {
 		known := float64(0)
 		switch {
@@ -145,7 +149,7 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 		case hasParenVol:
 			known = parenVol
 		}
-		note := readSeriesNote(c.Subtitle)
+		note := readSeriesNote(c.Subtitle, seriesNameIn(c.Subtitle, b))
 		switch {
 		case note.split:
 			// "Volume 1, Part 2": parts of one volume run to similar
@@ -167,7 +171,10 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 		case known > 0:
 			title = titleExact
 		default:
+			// The book records no position, so a numbered note cannot be
+			// checked. Counted apart so a dry run sizes what this costs.
 			title = titlePartial
+			unpositionedNote = true
 		}
 	}
 
@@ -237,6 +244,9 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 		return asinVerdict{Reason: rejectUncorroborated}
 	}
 	if title == titlePartial && !isbnAgree && len(evidence) < 2 {
+		if unpositionedNote {
+			return asinVerdict{Reason: rejectUnpositionedNote}
+		}
 		return asinVerdict{Reason: rejectPartialTitle}
 	}
 	if title == titleSplit && !isbnAgree {
@@ -760,7 +770,7 @@ func checkKnownIdentity(b asinBookFacts, c metadata.AudibleIdentity) string {
 	switch {
 	case v.Pass:
 		return identityOK
-	case v.Reason == rejectUncorroborated || v.Reason == rejectPartialTitle:
+	case v.Reason == rejectUncorroborated || v.Reason == rejectPartialTitle || v.Reason == rejectUnpositionedNote:
 		return identityOK
 	case v.Reason == rejectTitle || v.Reason == rejectAuthor:
 		return identityUnverified
@@ -802,11 +812,20 @@ type seriesNote struct {
 
 // readSeriesNote reads every volume number a series-note subtitle names:
 // digits ("Vol. 2"), ordinal digits ("2nd"), words ("Book Two", "The Second
-// Book") and roman numerals after a volume word ("Volume II"). Years are
-// ignored. A "part" marks a split release.
-func readSeriesNote(sub string) seriesNote {
+// Book") and roman numerals after a volume word ("Volume II"). Years and
+// editions ("2nd Edition") are ignored. A "part" marks a split release.
+// series, when the note names it, is removed first so a number word in the
+// series' own name ("Seven Realms, Book 1") is not read as a volume.
+//
+// A note that places the book without a readable number ("Final Volume",
+// "Last Book", "Series IV") is unreadable: it names a volume we cannot check.
+func readSeriesNote(sub, series string) seriesNote {
 	var out seriesNote
-	toks := strings.Fields(normTitle(sub))
+	norm := " " + normTitle(sub) + " "
+	if series != "" {
+		norm = strings.Replace(norm, " "+series+" ", " ", 1)
+	}
+	toks := strings.Fields(norm)
 	seen := map[float64]bool{}
 	add := func(f float64) {
 		if !seen[f] {
@@ -816,11 +835,18 @@ func readSeriesNote(sub string) seriesNote {
 	}
 	for i, t := range toks {
 		prevVolume := i > 0 && volumeWords[toks[i-1]]
+		nextEdition := i+1 < len(toks) && (toks[i+1] == "edition" || toks[i+1] == "ed")
 		switch {
 		case t == "part" || t == "pt" || t == "parts":
 			out.split = true
+		case nextEdition:
+			// "2nd Edition", "Second Edition": not a volume.
 		case ordinalDigitsRe.MatchString(t):
-			f, _ := strconv.ParseFloat(ordinalDigitsRe.FindStringSubmatch(t)[1], 64)
+			f, err := strconv.ParseFloat(ordinalDigitsRe.FindStringSubmatch(t)[1], 64)
+			if err != nil {
+				out.unreadable = true
+				continue
+			}
 			add(f)
 		case isDigits(t):
 			f, err := strconv.ParseFloat(t, 64)
@@ -840,9 +866,32 @@ func readSeriesNote(sub string) seriesNote {
 			// "Book Something": a volume word followed by a token we do
 			// not read as a number.
 			out.unreadable = true
+		case placeWords[t]:
+			out.unreadable = true
+		case romanValues[t] > 0 && t != "i":
+			// "Series IV" with no volume word ("i" alone is a word).
+			out.unreadable = true
+		case volumeWords[t] && i == len(toks)-1 && t != "no":
+			// "Final Volume": a trailing volume word with no number.
+			out.unreadable = true
 		}
 	}
 	return out
+}
+
+// placeWords place a volume in a series without a number.
+var placeWords = map[string]bool{"final": true, "last": true, "concluding": true, "closing": true, "penultimate": true, "finale": true}
+
+// seriesNameIn returns the normalized series name (or, with none recorded,
+// the book's title) when the subtitle names it, else "".
+func seriesNameIn(sub string, b asinBookFacts) string {
+	if !subtitleNamesSeries(sub, b) {
+		return ""
+	}
+	if want := normSeriesName(b.SeriesName); want != "" {
+		return want
+	}
+	return normSeriesName(stripSeriesParen(b.Title))
 }
 
 func isDigits(s string) bool {
