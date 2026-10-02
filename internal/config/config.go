@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.128.0
+// version: 1.129.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-02
 
@@ -2459,6 +2459,7 @@ func InitConfig() {
 	viper.BindEnv("scheduled.acoustid_backfill.on_startup", "SCHEDULED_ACOUSTID_BACKFILL_ON_STARTUP")               //nolint:errcheck
 	viper.BindEnv("scheduled.metadata_upgrade.interval", "SCHEDULED_METADATA_UPGRADE_INTERVAL")                     //nolint:errcheck
 	viper.BindEnv("scheduled.metadata_upgrade.on_startup", "SCHEDULED_METADATA_UPGRADE_ON_STARTUP")                 //nolint:errcheck
+	viper.BindEnv("scheduled.asin_backfill.interval", "SCHEDULED_ASIN_BACKFILL_INTERVAL")                           //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.enabled", "SCHEDULED_LABEL_REFINEMENT_ENABLED")                       //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.interval", "SCHEDULED_LABEL_REFINEMENT_INTERVAL")                     //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.on_startup", "SCHEDULED_LABEL_REFINEMENT_ON_STARTUP")                 //nolint:errcheck

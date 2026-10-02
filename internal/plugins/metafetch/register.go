@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/register.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a2f9c1d-4e63-4b80-9c15-6d0e1f2a3b40
 // last-edited: 2026-10-02
 
@@ -84,9 +84,12 @@ var registerLog = logger.New("metafetch.plugin")
 // Shutdown reaches the queue only through Container.Stop's Stopper check.
 var _ serviceregistry.Stopper = (*Plugin)(nil)
 
-// Stop cancels the backfill queue's pending flush on shutdown, so its timer
-// does not enqueue an op into a registry that is going away. Safe on a nil
-// plugin (Build returns a typed nil when deps are missing).
+// Stop stops the backfill queue on container shutdown. It is a backstop:
+// the server stops the queue itself before draining the op registry
+// (Server.stopASINBackfillQueue), because Container.Stop runs after the
+// registry is already shut down. Queue.Stop is idempotent, so the second
+// call is a no-op. Safe on a nil plugin (Build returns a typed nil when deps
+// are missing).
 func (p *Plugin) Stop(_ context.Context) error {
 	if p == nil || p.mfs == nil {
 		return nil

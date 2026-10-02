@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.13.2
+// version: 4.14.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-02
 
@@ -484,6 +484,13 @@ func (s *Server) Start(cfg ServerConfig) error {
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		slog.Warn("HTTP server forced shutdown", "err", err)
 	}
+
+	// Stop the metadata-apply ASIN backfill queue BEFORE the registry
+	// drains: its debounce timer enqueues metafetch.asin-backfill runs, and
+	// one firing mid-shutdown would enqueue into a registry that is going
+	// away. Pending ids are dropped; their no-match markers were cleared on
+	// Add, so the next scheduled walk reaches them.
+	s.stopASINBackfillQueue()
 
 	// Drain the UOS-02 operations registry before canceling bgCtx so that
 	// in-flight ops get a clean shutdown signal via their per-run ctx.
@@ -1766,4 +1773,14 @@ func (s *Server) startMergeUserStateRepair() {
 		merge.PendingRepairLoop(s.bgCtx, db, mergeUserStateRepairInterval, mergeUserStateRepairMinAge,
 			func(r merge.PendingSweepResult) { metrics.SetMergeUserStatePending(r.Remaining) })
 	})
+}
+
+// stopASINBackfillQueue stops the metafetch ASIN backfill queue's debounce
+// timer. Idempotent and nil-safe; the metafetch plugin's Stop (run later by
+// Container.Stop) calls the same Stop as a backstop.
+func (s *Server) stopASINBackfillQueue() {
+	if s.metadataFetchService == nil {
+		return
+	}
+	s.metadataFetchService.ASINBackfillQueue().Stop()
 }

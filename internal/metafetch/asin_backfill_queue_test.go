@@ -1,5 +1,5 @@
 // file: internal/metafetch/asin_backfill_queue_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f2b6d14-0a93-4c57-9e18-b4c7d2e05a61
 // last-edited: 2026-10-02
 
@@ -81,7 +81,7 @@ func TestASINBackfillQueue_CoalescesBurst(t *testing.T) {
 		m.q.Add(id)
 	}
 	require.Equal(t, 1, m.fire(), "a burst must arm exactly one flush")
-	require.Equal(t, [][]string{{"b1", "b2", "b3"}}, m.enqueued)
+	require.Equal(t, [][]string{{"b3", "b1", "b2"}}, m.enqueued, "arrival order, duplicate dropped")
 	assert.Empty(t, m.q.Pending())
 	assert.Equal(t, 0, m.fire(), "nothing re-armed after a flush with no new ids")
 }
@@ -205,13 +205,18 @@ func TestASINBackfillQueue_StopCancelsTimer(t *testing.T) {
 }
 
 // A burst larger than maxASINBackfillRunIDs goes out as bounded runs, one at
-// a time: the rest wait while the previous run is still queued.
+// a time, oldest ids first: the rest wait while the previous run is still
+// queued. Ids are added in DESCENDING sort order so a sorted take would fail.
 func TestASINBackfillQueue_SplitsLargeBurst(t *testing.T) {
 	m := newManualQueue()
 	const n = 2*maxASINBackfillRunIDs + 201
+	want := make([]string, 0, n)
 	for i := range n {
-		m.q.Add(fmt.Sprintf("b%05d", i))
+		id := fmt.Sprintf("b%05d", n-i)
+		want = append(want, id)
+		m.q.Add(id)
 	}
+	m.q.Add(want[0]) // a re-Add keeps its original place
 	require.Equal(t, 1, m.fire())
 	require.Len(t, m.enqueued, 1)
 	assert.Len(t, m.enqueued[0], maxASINBackfillRunIDs)
@@ -234,14 +239,11 @@ func TestASINBackfillQueue_SplitsLargeBurst(t *testing.T) {
 	assert.Empty(t, m.q.Pending())
 	assert.Equal(t, 0, m.fire(), "nothing left to arm")
 
-	seen := map[string]bool{}
+	var sent []string
 	for _, run := range m.enqueued {
-		for _, id := range run {
-			assert.False(t, seen[id], "id %s sent twice", id)
-			seen[id] = true
-		}
+		sent = append(sent, run...)
 	}
-	assert.Len(t, seen, n)
+	assert.Equal(t, want, sent, "every id exactly once, in arrival (FIFO) order")
 }
 
 // SetASINBackfillQueue races an apply's read without a data race.

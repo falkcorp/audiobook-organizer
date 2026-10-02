@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.25.1
+// version: 1.26.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-10-02
 
@@ -22,7 +22,7 @@
 //
 // The async-operation machinery that lived in the SAME source file
 // (registryProgressAdapter, runBulkMetadataFetchAll / ForBookIDs,
-// runBulkWriteBack, runIsbnEnrichment, runMetadataRefreshScan,
+// runBulkWriteBack, runMetadataRefreshScan,
 // resolveFilterToBookIDs, RegisterBulkMetadataFetchOp, init) is NOT abstracted
 // here — it is referenced by 15+ server-resident files (every *_ops.go, plus
 // server_maintenance_deps.go / metadata_batch_candidates.go /
