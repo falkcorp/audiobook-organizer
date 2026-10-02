@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
 // last-edited: 2026-10-02
 
@@ -164,19 +164,31 @@ type audibleIdentitySearcher interface {
 	LookupIdentityByASIN(ctx context.Context, asin string) (*metadata.AudibleIdentity, error)
 }
 
-// asinBackfillStore is what the op reads and writes.
-type asinBackfillStore interface {
-	database.MetadataFieldStateReader
-	database.BookAuthorReader
-	database.BookFilesGetter
+// asinBackfillBookStore is the op's book walk and its identifier writes.
+type asinBackfillBookStore interface {
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 	GetBookByID(id string) (*database.Book, error)
 	GetSeriesByID(id int) (*database.Series, error)
 	CountAllBooks() (int, error)
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	RecordMetadataChange(record *database.MetadataChangeRecord) error
+}
+
+// asinBackfillMarkerStore holds the op's resume cursor and its per-book
+// no-match markers, which live in raw keys.
+type asinBackfillMarkerStore interface {
 	GetRaw(key string) ([]byte, error)
 	SetRaw(key string, value []byte) error
+}
+
+// asinBackfillStore is what the op reads and writes: the composition of the
+// pieces above, so the method set is unchanged.
+type asinBackfillStore interface {
+	database.MetadataFieldStateReader
+	database.BookAuthorReader
+	database.BookFilesGetter
+	asinBackfillBookStore
+	asinBackfillMarkerStore
 }
 
 var _ asinBackfillStore = (database.Store)(nil)
