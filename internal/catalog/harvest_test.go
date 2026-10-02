@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
 // last-edited: 2026-10-02
 
@@ -1488,7 +1488,7 @@ func states(t *testing.T, st *database.CatalogStore, authors []ScopeAuthor) []st
 // still counts toward an empty streak; once ShortAcceptRuns runs span
 // ZeroTotalAcceptWindow they complete as empty and stop being due.
 func TestRun_EmptyNeverHarvestedAuthorsCompleteAfterTheWindow(t *testing.T) {
-	st, full, empties, _ := emptyRuns(t, 4, 6, []time.Duration{0, time.Hour, 4 * 24 * time.Hour})
+	st, _, empties, _ := emptyRuns(t, 4, 6, []time.Duration{0, time.Hour, 4 * 24 * time.Hour})
 	for _, s := range states(t, st, empties) {
 		if s != database.CatalogHarvestPartial {
 			t.Fatalf("empties before the window: %v; want all partial", states(t, st, empties))
