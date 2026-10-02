@@ -1,5 +1,5 @@
 // file: internal/undo/revert_plan.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
 // last-edited: 2026-10-02
 
@@ -27,7 +27,9 @@ import (
 // book that stays retired hands them to the purge (which deletes a purged
 // book's file_path and tombstones its ids). Once one row of a retired book is
 // refused that way, or its soft-delete fails, its remaining rows are refused
-// too.
+// too. Within each book its soft-delete row goes first (softDeleteFirst), so
+// "remaining" is every other row of the book, including rows journaled after
+// the soft-delete.
 type RevertPlan struct {
 	// Order is every row, in the order the revert processes them.
 	Order []*database.OperationChange
@@ -69,8 +71,45 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 		}
 		p.Order = append(p.Order, c)
 	}
-	p.Order = append(p.Order, deferred...)
+	p.Order = append(softDeleteFirst(p.Order), softDeleteFirst(deferred)...)
 	return p, nil
+}
+
+// softDeleteFirst moves each book's newest soft-delete row ahead of every
+// other row of that book in list, keeping everything else in place. A row
+// journaled AFTER a book's soft-delete (fs-regroup-xml's external-id moves
+// off the shell, a hand-off note) was otherwise reverted before it, so a
+// soft-delete revert that then failed could not refuse it (Gate): its
+// change landed on a book that stayed retired.
+func softDeleteFirst(list []*database.OperationChange) []*database.OperationChange {
+	first := map[string]*database.OperationChange{}
+	for _, c := range list {
+		if c.ChangeType == ChangeTypeBookSoftDelete {
+			if _, ok := first[c.BookID]; !ok {
+				first[c.BookID] = c
+			}
+		}
+	}
+	if len(first) == 0 {
+		return list
+	}
+	out := make([]*database.OperationChange, 0, len(list))
+	emitted := map[string]bool{}
+	for _, c := range list {
+		sd, ok := first[c.BookID]
+		if !ok {
+			out = append(out, c)
+			continue
+		}
+		if !emitted[c.BookID] {
+			emitted[c.BookID] = true
+			out = append(out, sd)
+		}
+		if c != sd {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (p *RevertPlan) retiredRow(c *database.OperationChange) bool {

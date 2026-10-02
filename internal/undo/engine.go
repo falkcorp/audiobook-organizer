@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.24.1
+// version: 1.25.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -154,6 +154,14 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 	// restore the book, so the revert finds it live at any later soft-delete
 	// row of the same book (a resumed retire's second stamp) and counts that
 	// row already restored.
+	//
+	// The follow-on refusals come from the same plan: a soft-delete row
+	// predicted refused is Recorded refused, and Gate then refuses every
+	// later row of its book, as the revert does. What the preflight cannot
+	// predict is a soft-delete revert that fails for a transient reason (a
+	// store read error, the version-group read the revert makes under the
+	// group lock): it has no way to know that will happen, so it counts
+	// those rows safe and the revert refuses them when it does.
 	restoresBook := map[string]bool{}
 	for _, c := range plan.Order {
 		if refusal := plan.Gate(c); refusal != nil {

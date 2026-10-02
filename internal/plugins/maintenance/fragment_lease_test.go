@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_lease_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6b1e8d42-3c7f-4a95-b2d6-9f0a4e7c1d38
 // last-edited: 2026-10-02
 
@@ -190,15 +190,22 @@ func handOffProbeRenewals(t *testing.T) int {
 	return probe.scan().renews
 }
 
-// livePrimaries lists the group's live explicit primaries.
+// livePrimaries lists the group's members ABS counts as primary: Electable
+// (live, and not the loser of a live merge survivor) and primary by
+// database.EffectiveIsPrimaryVersion, so a nil flag counts.
 func (f *fragFixture) livePrimaries(t *testing.T, gid string) []string {
 	t.Helper()
 	members, err := f.s.GetBooksByVersionGroup(gid)
 	require.NoError(t, err)
+	alive := func(id string) bool {
+		b, err := f.s.GetBookByID(id)
+		require.NoError(t, err)
+		return b != nil && !b.IsSoftDeleted()
+	}
 	var out []string
 	for i := range members {
 		m := &members[i]
-		if !m.IsSoftDeleted() && m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
+		if versionprimary.Electable(m, alive) && database.EffectiveIsPrimaryVersion(m.IsPrimaryVersion) {
 			out = append(out, m.ID)
 		}
 	}

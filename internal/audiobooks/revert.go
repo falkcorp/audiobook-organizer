@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-02
 
@@ -252,6 +252,12 @@ type RevertResult struct {
 	// incumbent instead (revertBookPrimaryDemote).
 	Superseded       int      `json:"superseded,omitempty"`
 	SupersededDetail []string `json:"superseded_detail,omitempty"`
+	// HandOffFailed lists the version-group hand-offs a restored row needed
+	// and did not get (versionprimary.EnsureSinglePrimary failed after the
+	// row's write committed): book, group and error. The row itself is
+	// Restored; its group may be left without one primary until a
+	// version-group-primary repair or the next hand-off settles it.
+	HandOffFailed []string `json:"hand_off_failed,omitempty"`
 }
 
 // Partial reports whether any row of the operation was left un-reverted.
@@ -276,6 +282,9 @@ func (r *RevertResult) Summary() string {
 	}
 	if r.Superseded > 0 {
 		fmt.Fprintf(&b, "; %d superseded and left as they are (%s)", r.Superseded, strings.Join(r.SupersededDetail, "; "))
+	}
+	if len(r.HandOffFailed) > 0 {
+		fmt.Fprintf(&b, "; %d restored without their version group's primary hand-off (%s)", len(r.HandOffFailed), strings.Join(r.HandOffFailed, "; "))
 	}
 	if r.Failed > 0 {
 		fmt.Fprintf(&b, "; %d failed to restore", r.Failed)
@@ -382,6 +391,14 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			if errors.Is(err, undo.ErrAlreadyRestored) {
 				already, err = true, nil
 			}
+		}
+		var handOff *handOffFailed
+		if errors.As(err, &handOff) {
+			// The row's own write committed: it is restored. The group's
+			// hand-off after it failed, and that is reported, not hidden.
+			result.HandOffFailed = append(result.HandOffFailed, handOff.Error())
+			revertLog.Warn("revert of change %s: %s", c.ID, logger.SanitizeLogValue(handOff.Error()))
+			err = nil
 		}
 		var superseded *supersededRestore
 		if errors.As(err, &superseded) {
@@ -707,6 +724,32 @@ type partialTagRestore struct{ detail string }
 type supersededRestore struct{ detail string }
 
 func (s *supersededRestore) Error() string { return "superseded: " + s.detail }
+
+// handOffFailed is a restored row whose version group's hand-off
+// (versionprimary.EnsureSinglePrimary) failed after the row's write
+// committed. RevertOperation counts the row Restored and lists this in
+// RevertResult.HandOffFailed.
+type handOffFailed struct {
+	book, group string
+	err         error
+}
+
+func (h *handOffFailed) Error() string {
+	return fmt.Sprintf("book %s: primary hand-off in version group %s failed: %v", h.book, h.group, h.err)
+}
+
+func (h *handOffFailed) Unwrap() error { return h.err }
+
+// ensureGroupPrimary hands group gid off (EnsureSinglePrimary) after a
+// restore of book committed; a failure is a *handOffFailed. Call it with the
+// group's lock released (LockGroup is not reentrant).
+func (rs *RevertService) ensureGroupPrimary(book, gid string) error {
+	if _, err := versionprimary.EnsureSinglePrimary(context.Background(), rs.db, gid,
+		versionprimary.Env{RootDir: merge.TrashRestoreEnv().RootDir}); err != nil {
+		return &handOffFailed{book: book, group: gid, err: err}
+	}
+	return nil
+}
 
 func (p *partialTagRestore) Error() string { return "tag restored in part: " + p.detail }
 
@@ -1115,6 +1158,17 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 				book.IsPrimaryVersion = &no
 			}
 		}
+		// A row that comes back as the loser of a live merge survivor is
+		// never a primary: Crown and EnsureSinglePrimary skip it (not
+		// Electable), so a true it carries (a demote revert that wrote it
+		// while the book was retired) would stay, and ABSLibraryFilter,
+		// which does not read MergedIntoBookID, would list it next to the
+		// real primary. Read here, under the book's write stripe, so a
+		// survivor trashed since cannot slip past.
+		if book.MergedIntoBookID != nil && *book.MergedIntoBookID != "" && versionprimary.StoreAlive(rs.db)(*book.MergedIntoBookID) {
+			no := false
+			book.IsPrimaryVersion = &no
+		}
 		return nil
 	})
 	// The group lock is not reentrant: release it before the hand-off.
@@ -1124,14 +1178,9 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 	}
 	// No live primary to yield to: hand the group off now, as a trash
 	// restore does (merge.RestoreFromTrash), so the restored book's flag (a
-	// stale false, say) cannot leave the group without one. Best-effort:
-	// the restore has committed.
-	if _, herr := versionprimary.EnsureSinglePrimary(context.Background(), rs.db, gid,
-		versionprimary.Env{RootDir: env.RootDir}); herr != nil {
-		revertLog.Warn("revert: primary hand-off in version group %s after restoring %s failed: %s",
-			logger.SanitizeLogValue(gid), logger.SanitizeLogValue(c.BookID), logger.SanitizeLogValue(herr.Error()))
-	}
-	return nil
+	// stale false, say) cannot leave the group without one. The restore has
+	// committed; a failed hand-off is reported (RevertResult.HandOffFailed).
+	return rs.ensureGroupPrimary(c.BookID, gid)
 }
 
 // primaryFlagString renders a primary flag for a message: "nil", "true" or
@@ -1184,32 +1233,24 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, ha
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	crowns := restored == nil || *restored
-	// The merge survivor the book points at, and whether it is alive, read
-	// before the book's write stripe is taken; the callback re-checks that
-	// the book still points at it.
-	survivor, survivorAlive := "", false
-	if crowns {
-		cur, err := rs.db.GetBookByID(c.BookID)
-		if err != nil {
-			return fmt.Errorf("read %s: %w", c.BookID, err)
-		}
-		if cur != nil && cur.MergedIntoBookID != nil && *cur.MergedIntoBookID != "" {
-			survivor = *cur.MergedIntoBookID
-			survivorAlive = versionprimary.StoreAlive(rs.db)(survivor)
-		}
-	}
-	group := ""
+	group, live := "", false
 	err := rs.modifyBook(c.BookID, func(book *database.Book) error {
 		group = ""
 		if book.VersionGroupID != nil {
 			group = *book.VersionGroupID
 		}
+		live = !book.IsSoftDeleted()
 		if err := undo.CheckPrimaryDemoteCurrent(book, c); err != nil {
 			return err
 		}
-		if crowns && !book.IsSoftDeleted() && survivorAlive && book.MergedIntoBookID != nil && *book.MergedIntoBookID == survivor {
+		// The survivor's liveness is read here, under the book's write
+		// stripe: a survivor can be trashed without the merge lock (a batch
+		// soft-delete, DeleteBook), so a read taken before the callback
+		// could be stale by the write.
+		if crowns && live && book.MergedIntoBookID != nil && *book.MergedIntoBookID != "" &&
+			versionprimary.StoreAlive(rs.db)(*book.MergedIntoBookID) {
 			return &supersededRestore{detail: fmt.Sprintf("book %s is merged into live book %s; its primary flag is left %s",
-				c.BookID, survivor, primaryFlagString(book.IsPrimaryVersion))}
+				c.BookID, *book.MergedIntoBookID, primaryFlagString(book.IsPrimaryVersion))}
 		}
 		book.IsPrimaryVersion = restored
 		return nil
@@ -1231,6 +1272,13 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, ha
 		if _, cerr := versionprimary.Crown(rs.db, group, c.BookID); cerr != nil {
 			return fmt.Errorf("demote the rest of group %s after restoring %s as primary: %w", group, c.BookID, cerr)
 		}
+	}
+	// A nil restore (the flag was never set, as fs-regroup-xml journals an
+	// unset shell) reads as primary on every visibility path, but Crown is
+	// for an explicit true: hand the group off instead, so a live book back
+	// at nil never sits next to the group's explicit primary.
+	if restored == nil && err == nil && live && strings.TrimSpace(group) != "" {
+		return rs.ensureGroupPrimary(c.BookID, strings.TrimSpace(group))
 	}
 	return err
 }
