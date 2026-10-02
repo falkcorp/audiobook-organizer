@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c1cb262a-d405-4d1a-9eb7-a3c341190585
 // last-edited: 2026-10-01
 
@@ -36,6 +36,23 @@ func (l *fakeLabels) ListLabeledExamplesStrict(f database.LabeledExampleFilter) 
 	var out []database.LabeledExample
 	for _, e := range l.ex {
 		if f.Label == "" || e.Label == f.Label {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func (l *fakeLabels) ListLabeledExamplesForEntitiesStrict(ids []string, f database.LabeledExampleFilter) ([]database.LabeledExample, error) {
+	if l.err != nil {
+		return nil, l.err
+	}
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	var out []database.LabeledExample
+	for _, e := range l.ex {
+		if (want[e.EntityAID] || want[e.EntityBID]) && (f.Label == "" || e.Label == f.Label) {
 			out = append(out, e)
 		}
 	}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.61.0
+// version: 1.62.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-01
 
@@ -459,7 +459,11 @@ type keyspaceStoreProvider interface {
 // (database.EmbeddingStore), strictly: a row it cannot read is an error, never
 // a missing verdict.
 type DedupVerdictReader interface {
+	// ListLabeledExamplesStrict is the whole-keyspace label read (Plan);
+	// ListLabeledExamplesForEntitiesStrict the O(k) per-book read a Replan
+	// uses, through the label entity index.
 	ListLabeledExamplesStrict(f database.LabeledExampleFilter) ([]database.LabeledExample, error)
+	ListLabeledExamplesForEntitiesStrict(ids []string, f database.LabeledExampleFilter) ([]database.LabeledExample, error)
 	// TerminalCandidatesStrict is the whole-library read (Plan);
 	// ListCandidatesForEntityStrict the O(k) per-book read a Replan uses.
 	TerminalCandidatesStrict(entityType string) ([]database.DedupCandidate, error)

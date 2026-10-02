@@ -1,7 +1,7 @@
 // file: internal/database/migrations.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-09-19
+// last-edited: 2026-10-01
 
 package database
 
@@ -43,6 +43,12 @@ type migrationStore interface {
 // *PebbleStore and has it.
 type hollowOpsSweeper interface {
 	SweepHollowOperationsV2() (int, error)
+}
+
+// dedupIndexBackfiller is migration064Up's one capability, asserted at run
+// time for the same reason as hollowOpsSweeper.
+type dedupIndexBackfiller interface {
+	BackfillDedupEntityIndexes() (CandidateIndexBackfill, LabelIndexBackfill, error)
 }
 
 // junctionBookIDRepairer is migration063Up's one capability, asserted at run
@@ -468,6 +474,12 @@ var migrations = []Migration{
 		Version:     63,
 		Description: "Stamp book_authors/book_narrators rows with the book ID from their key (rows stored without book_id stalled memdb updates of the book)",
 		Up:          migration063Up,
+		Down:        nil,
+	},
+	{
+		Version:     64,
+		Description: "Backfill the dedup candidate and label entity indexes (pre-index verdicts were invisible to the repairs fixers' per-book re-plan)",
+		Up:          migration064Up,
 		Down:        nil,
 	},
 }
@@ -1283,4 +1295,49 @@ func migration063Up(store migrationStore) error {
 		"narrator_rows_repaired", res.NarratorRowsRepaired,
 		"undecodable", res.Undecodable)
 	return nil
+}
+
+// migration064Up backfills the two entity indexes the repairs fixers' Replan
+// reads the owner's dedup verdicts through:
+//   - "dedup:e:" over candidates. UpsertCandidateNew has written it since
+//     2026-06-22, but a candidate stored before then had none, and the status
+//     writers never added it, so a dismissal or merge recorded on an old pair
+//     was invisible to ListCandidatesForEntityStrict and a duplicate-copies or
+//     fragment re-plan could remake a merge the owner had refused.
+//     BackfillEntityIndex existed for exactly this and had no caller.
+//   - "dedup:lbe:" over labeled examples, new with this migration: Replan used
+//     to decode the whole dedup:label: keyspace once per row under the global
+//     merge lock.
+//
+// A startup migration rather than an operator-run op because the write paths
+// now maintain both indexes and the readers assume completeness: the
+// migration ledger is the done-marker, and it runs before anything can apply.
+// One pass over each keyspace in NoSync batches with a final Sync. Idempotent:
+// the rows are presence-only keys.
+func migration064Up(store migrationStore) error {
+	b, ok := store.(dedupIndexBackfiller)
+	if !ok {
+		slog.Warn("migration 64: store cannot backfill the dedup entity indexes; nothing to do", "store", fmt.Sprintf("%T", store))
+		return nil
+	}
+	cands, labels, err := b.BackfillDedupEntityIndexes()
+	if err != nil {
+		return fmt.Errorf("migration 64: backfill dedup entity indexes: %w", err)
+	}
+	slog.Info("migration 64: dedup entity indexes backfilled",
+		"candidates_indexed", cands.Indexed, "candidates_unreadable", cands.Unreadable,
+		"labels_indexed", labels.Indexed, "labels_unreadable", labels.Unreadable)
+	return nil
+}
+
+// BackfillDedupEntityIndexes runs migration 64's two backfills over this
+// store's Pebble DB (the embedding store shares it).
+func (p *PebbleStore) BackfillDedupEntityIndexes() (CandidateIndexBackfill, LabelIndexBackfill, error) {
+	es := NewEmbeddingStore(p.DB())
+	cands, err := es.BackfillCandidateEntityIndex()
+	if err != nil {
+		return cands, LabelIndexBackfill{}, err
+	}
+	labels, err := es.BackfillLabelEntityIndex()
+	return cands, labels, err
 }

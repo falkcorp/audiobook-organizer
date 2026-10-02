@@ -1,7 +1,7 @@
 // file: internal/database/embedding_store_manual.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e91eddf1-7da1-4f28-a63f-8fe992e52838
-// last-edited: 2026-09-26
+// last-edited: 2026-10-01
 
 package database
 
@@ -273,6 +273,9 @@ func (s *EmbeddingStore) manualCandidate(entityType, aID, bID, note string, writ
 			}
 		}
 		if err := b.Set(dedupStatusIdxKey(rec.Status, id), nil, nil); err != nil {
+			return nil, err
+		}
+		if err := setCandidateEntityIndex(b, rec, id); err != nil {
 			return nil, err
 		}
 	}
