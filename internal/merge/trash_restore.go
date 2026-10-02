@@ -1,5 +1,5 @@
 // file: internal/merge/trash_restore.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
 // last-edited: 2026-10-01
 
@@ -59,7 +59,8 @@ type pendingRepairScanner interface {
 //     works out the row the restore will write (database.RestoreBookFromTrash
 //     plus versionprimary.YieldToIncumbent);
 //  2. when that row will be listed by ABS as an item of its own, with audio
-//     to play (database.RestoredRowIsABSListable), removes the sync-identity
+//     to play (database.RestoredRowIsABSListable, and not left in a group
+//     whose live incumbent the caller's hand-off keeps), removes the sync-identity
 //     redirect a merge left on it (RecordSyncMerge), so ABS renders it instead
 //     of dropping it as a merge loser. A combine's absorbed shell and a
 //     MergeBooks loser never record MergedIntoBookID, so the redirect is read
@@ -168,12 +169,24 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 		}
 		return true
 	}
+	// listable is the redirect decision. A row that stays in a group with a
+	// live incumbent ends non-primary whatever its flag says: the caller's
+	// hand-off keeps the incumbent, and a nil flag, which YieldToIncumbent
+	// leaves alone and ABSLibraryFilter reads as primary, is written false by
+	// it. Judged on the flag alone, such a row lost its redirect and was then
+	// hidden.
+	listable := func(row *database.Book) bool {
+		if incumbent != "" && row.VersionGroupID != nil && strings.TrimSpace(*row.VersionGroupID) == gid {
+			return false
+		}
+		return database.RestoredRowIsABSListable(row, files, env)
+	}
 	if trashed {
 		// RestoreBookFromTrash and YieldToIncumbent assign fresh pointers and
 		// never write through the row's, so a shallow copy leaves book alone.
 		preview := *book
 		restoreRow(&preview)
-		if database.RestoredRowIsABSListable(&preview, files, env) {
+		if listable(&preview) {
 			if res.RedirectFrom, err = clearRestoredRedirect(store, id); err != nil {
 				unlockGroup()
 				return res, err
@@ -208,7 +221,7 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 		return res, nil
 	}
 	res.Book = updated
-	if res.Restored && reconcileRestoredRedirect(store, &res, files, env) {
+	if res.Restored && reconcileRestoredRedirect(store, &res, listable) {
 		dropRestoredPendingRepairs(store, id)
 	}
 	return res, nil
@@ -221,9 +234,9 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 // out listable has its redirect removed now. res.RedirectFrom is kept in step.
 // It reports whether the row is listable and no redirect is left on it, i.e.
 // whether the pending moves onto the old survivor are no longer owed.
-func reconcileRestoredRedirect(store any, res *TrashRestoreResult, files []database.BookFile, env database.TrashRestoreEnv) bool {
+func reconcileRestoredRedirect(store any, res *TrashRestoreResult, listable func(*database.Book) bool) bool {
 	id := res.Book.ID
-	if !database.RestoredRowIsABSListable(res.Book, files, env) {
+	if !listable(res.Book) {
 		if res.RedirectFrom != "" {
 			mlog.Warn("restore from trash: book=%s is not ABS-listable as written; putting its sync redirect to survivor=%s back",
 				logger.SanitizeLogValue(id), logger.SanitizeLogValue(res.RedirectFrom))

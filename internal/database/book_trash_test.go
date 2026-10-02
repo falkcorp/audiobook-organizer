@@ -1,5 +1,5 @@
 // file: internal/database/book_trash_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7e0be750-b46f-4059-ac27-c22ce7676874
 // last-edited: 2026-10-01
 
@@ -65,6 +65,7 @@ func TestRestoreLibraryStateFromTrash(t *testing.T) {
 		// repoint-missing-to-folder-audio's ABSLibraryFilter scope.
 		{"kept organized with only missing files under the root stays", strp("organized"), nil, []BookFile{{FilePath: "/lib/x.m4b", Missing: true}}, env, "organized"},
 		{"kept organized with a missing file in the iTunes library is imported", strp("organized"), nil, append(in, BookFile{FilePath: "/media/iTunes/a.m4b", Missing: true}), TrashRestoreEnv{RootDir: "/", ITunesRoots: []string{"/media/iTunes"}}, "imported"},
+		{"the same root without the iTunes row stays organized", strp("organized"), nil, in, TrashRestoreEnv{RootDir: "/", ITunesRoots: []string{"/media/iTunes"}}, "organized"},
 		{"kept organized with a missing file with no path is imported", strp("organized"), nil, append(in, BookFile{FilePath: "", Missing: true}), env, "imported"},
 		{"kept organized with a file outside the root is imported", strp("organized"), nil, append(in, BookFile{FilePath: "/elsewhere/c.m4b"}), env, "imported"},
 		{"kept organized in the iTunes library is imported", strp("organized"), nil, []BookFile{{FilePath: "/media/iTunes/a.m4b"}}, TrashRestoreEnv{RootDir: "/media", ITunesRoots: []string{"/media/iTunes"}}, "imported"},
