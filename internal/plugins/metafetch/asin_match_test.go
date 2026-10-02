@@ -189,19 +189,24 @@ func TestEvaluateASINCandidate(t *testing.T) {
 		},
 		{
 			name: "author mismatch rejects",
-			book: func() asinBookFacts { b := redRisingBook(); b.Authors = []string{"Dan Brown"}; b.RuntimeSec = 972 * 60; return b },
+			book: func() asinBookFacts {
+				b := redRisingBook()
+				b.Authors = []string{"Dan Brown"}
+				b.RuntimeSec = 972 * 60
+				return b
+			},
 			cand: redRising, reason: rejectAuthor,
 		},
 		{
-			name: "numbered title rejects before anything else",
-			book: func() asinBookFacts { b := redRisingBook(); b.RuntimeSec = 972 * 60; return b },
-			cand: func() metadata.AudibleIdentity { c := redRising(); c.Title = "Red Rising 2"; return c },
+			name:   "numbered title rejects before anything else",
+			book:   func() asinBookFacts { b := redRisingBook(); b.RuntimeSec = 972 * 60; return b },
+			cand:   func() metadata.AudibleIdentity { c := redRising(); c.Title = "Red Rising 2"; return c },
 			reason: rejectTitle,
 		},
 		{
-			name: "empty ASIN rejects",
-			book: func() asinBookFacts { b := redRisingBook(); b.RuntimeSec = 972 * 60; return b },
-			cand: func() metadata.AudibleIdentity { c := redRising(); c.ASIN = ""; return c },
+			name:   "empty ASIN rejects",
+			book:   func() asinBookFacts { b := redRisingBook(); b.RuntimeSec = 972 * 60; return b },
+			cand:   func() metadata.AudibleIdentity { c := redRising(); c.ASIN = ""; return c },
 			reason: rejectNoASIN,
 		},
 	}
