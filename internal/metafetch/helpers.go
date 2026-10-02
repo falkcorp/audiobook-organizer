@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-10-01
 
@@ -155,8 +155,9 @@ func stripSeriesDecoration(title string) string {
 
 // bareSeriesNumber is the other folder convention: "The Expanse 04 - Cibola
 // Burn", "Bobiverse 2 - For We Are Many" — a series name, a bare number, a
-// separator, the book's own name.
-var bareSeriesNumber = regexp.MustCompile(`^([^-–—:]+?)\s+(\d{1,3})\s*[-–—:]\s+(.+)$`)
+// separator, the book's own name. The number may be a decimal ("Stormlight
+// Archive 2.5: Edgedancer", a novella between books).
+var bareSeriesNumber = regexp.MustCompile(`^([^-–—:]+?)\s+(\d{1,3}(?:\.\d+)?)\s*[-–—:]\s+(.+)$`)
 
 // slotOfSeries matches " of <series>" right after a decoration: "A Game of
 // Thrones: Book 1 of A Song of Ice and Fire" names the BOOK first and the

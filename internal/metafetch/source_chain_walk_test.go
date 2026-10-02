@@ -1,7 +1,7 @@
 // file: internal/metafetch/source_chain_walk_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3e91c7d4-8b52-4a06-9f13-6c8d2e5a70b4
-// last-edited: 2026-09-19
+// last-edited: 2026-10-01
 
 package metafetch
 
@@ -147,13 +147,15 @@ type recordingSource struct {
 	hitOn   string
 	queries []string
 	author  string // named on every answer; a one-word variant hit needs someone to vouch
+	// position is the hit's series_position (Audible's shape); "" for none.
+	position string
 }
 
 func (r *recordingSource) Name() string { return r.name }
 func (r *recordingSource) SearchByTitle(_ context.Context, title string) ([]metadata.BookMetadata, error) {
 	r.queries = append(r.queries, title)
 	if title == r.hitOn {
-		return []metadata.BookMetadata{{Title: title, Author: r.author}}, nil
+		return []metadata.BookMetadata{{Title: title, Author: r.author, SeriesPosition: r.position}}, nil
 	}
 	return nil, nil
 }

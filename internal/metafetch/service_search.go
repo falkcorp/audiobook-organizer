@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.32.2
+// version: 1.32.3
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-01
 
@@ -15,6 +15,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -479,6 +480,12 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	// the title ("Magma Heart - Unknown Author", "read by Cathfach (Erryn's
 	// World)", "Jack Reacher 17: A Wanted Man (Jeff Harding)").
 	parsed := parseSearchTitle(rawQuery, searchAuthor, bookNarrator)
+	// A title that names no position takes the book's stored series sequence
+	// for the strong gates only ("Overlord", sequence 8, is not strong on
+	// "Overlord" at series_position 1). See parsedTitle.StoredPosition.
+	if parsed.Position == "" && book.SeriesSequence != nil && *book.SeriesSequence > 0 {
+		parsed.StoredPosition = strconv.Itoa(*book.SeriesSequence)
+	}
 	if t := strings.TrimSpace(parsed.Title); t != "" && !metadata.IsUnsearchableTitle(t) {
 		searchTitle = t
 	}
@@ -883,12 +890,19 @@ func (mfs *Service) searchMetadataForBook(
 					"The result names no narrator, typical of a print or ebook record.")
 			}
 
+			// The ASIN multiplier goes only to an answer that agrees with the
+			// book (ownASINAgrees). A stored ASIN is sometimes a sibling's,
+			// and a sibling that names no number ("The Final" for "The Final
+			// Four") is one the apply gate cannot refute: doubling it put it
+			// above the right answer, and bulk apply takes Candidates[0].
 			if asinToLookup != "" && strings.EqualFold(strings.TrimSpace(r.ASIN), asinToLookup) {
-				detail := "The result carries the book's own ASIN but names another series position, names none of the book's position or numbers, or agrees with the book on neither runtime nor title, so it is not ranked first: the stored ASIN may be a sibling's."
 				if strong.ownASINAgrees(r) {
-					detail = "The result carries the book's own ASIN, names no other series position, and agrees with the book on its runtime or title; it is ranked above every result that does not."
+					rec.mul("asin_match", "ASIN match", 2.0,
+						"The result carries the book's own ASIN, names the book's position and no other, and agrees with the book on its title or on a runtime within 2%; it is ranked above every result that does not.")
+				} else {
+					rec.mul("asin_match", "ASIN match (no boost)", 1.0,
+						"The result carries the book's own ASIN but names another series position, names none of the book's position or numbers, or agrees with the book on neither its title nor a runtime within 2%, so the ASIN earns it no boost: the stored ASIN may be a sibling's.")
 				}
-				rec.mul("asin_match", "ASIN match", 2.0, detail)
 			}
 
 			var transcriptionBoosted bool
@@ -953,8 +967,10 @@ func (mfs *Service) searchMetadataForBook(
 			if seen.add(*result) {
 				score, asinBd := ScoreOneResultWithBreakdown(*result, searchWords)
 				asinRec := &scoreRecorder{score: score, steps: asinBd.Steps}
-				if score <= 0 {
-					// Direct ASIN match always scores high. This OVERWRITES the
+				if score <= 0 && strong.ownASINAgrees(*result) {
+					// A direct ASIN match that agrees with the book (ownASINAgrees)
+					// always scores high; one that does not may be a sibling's
+					// stored by an earlier bad match, and keeps its own score. This OVERWRITES the
 					// pipeline result rather than adjusting it, so it is recorded
 					// as a replace -- a reviewer seeing 1.0 needs to know the
 					// title/author evidence was bypassed, not that it was strong.
@@ -1011,6 +1027,11 @@ func (mfs *Service) searchMetadataForBook(
 		k := scoringKnobs()
 		for i := range candidates {
 			c := &candidates[i]
+			// A range or list ("8-10") is an omnibus: neither this book's
+			// number nor another's (normPosition), so no boost and no penalty.
+			if len(titleNumberRe.FindAllString(c.SeriesPosition, 2)) > 1 {
+				continue
+			}
 			candidateNum := ""
 			// Check SeriesPosition first (most reliable)
 			if c.SeriesPosition != "" {
@@ -1030,9 +1051,9 @@ func (mfs *Service) searchMetadataForBook(
 
 	// Sort by score descending, with every candidate that carries the ASIN
 	// looked up (the book's own, or the query's) AND agrees with the book
-	// (ownASINAgrees: no other series position, and its runtime or its title)
-	// ranked first. A stored ASIN is sometimes a sibling's, so one that
-	// disagrees keeps only its x2.0 multiplier. The candidate's series fields
+	// (ownASINAgrees: the book's position and no other, and its title or a
+	// runtime within 2%) ranked first. A stored ASIN is sometimes a
+	// sibling's, so one that disagrees gets no ASIN multiplier and no tier. The candidate's series fields
 	// go in too: the position check needs its explicit series_position.
 	asinFirst := func(c MetadataCandidate) bool {
 		return strong.ownASINAgrees(metadata.BookMetadata{Title: c.Title, Author: c.Author, Narrator: c.Narrator,
