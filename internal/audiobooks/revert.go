@@ -1,11 +1,12 @@
 // file: internal/audiobooks/revert.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-02
 
 package audiobooks
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1083,14 +1084,15 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 	if cur != nil && cur.VersionGroupID != nil {
 		gid = strings.TrimSpace(*cur.VersionGroupID)
 	}
+	unlock := func() {}
 	if gid != "" {
-		unlock := versionprimary.LockGroup(gid)
-		defer unlock()
+		unlock = versionprimary.LockGroup(gid)
 		if incumbent, err = versionprimary.IncumbentExcept(rs.db, gid, c.BookID); err != nil {
+			unlock()
 			return err
 		}
 	}
-	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+	err = rs.modifyBook(c.BookID, func(book *database.Book) error {
 		// A live book is already restored; a stamped row is reverted only
 		// while the book carries a stamp this operation journaled for it
 		// (undo.CheckSoftDeleteCurrent).
@@ -1115,6 +1117,21 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 		}
 		return nil
 	})
+	// The group lock is not reentrant: release it before the hand-off.
+	unlock()
+	if err != nil || gid == "" || incumbent != "" {
+		return err
+	}
+	// No live primary to yield to: hand the group off now, as a trash
+	// restore does (merge.RestoreFromTrash), so the restored book's flag (a
+	// stale false, say) cannot leave the group without one. Best-effort:
+	// the restore has committed.
+	if _, herr := versionprimary.EnsureSinglePrimary(context.Background(), rs.db, gid,
+		versionprimary.Env{RootDir: env.RootDir}); herr != nil {
+		revertLog.Warn("revert: primary hand-off in version group %s after restoring %s failed: %s",
+			logger.SanitizeLogValue(gid), logger.SanitizeLogValue(c.BookID), logger.SanitizeLogValue(herr.Error()))
+	}
+	return nil
 }
 
 // primaryFlagString renders a primary flag for a message: "nil", "true" or
@@ -1141,17 +1158,19 @@ func primaryFlagString(v *bool) string {
 // is live again (the soft-delete row, later in the ledger, is reverted
 // first).
 //
-// A book that is NOT Electable now (soft-deleted, or merged into a live
-// survivor) is left as it is and the row is superseded (supersededRestore):
-// a retire that demoted it lost its lease before the soft-delete, and
-// another operation (a retry, another fixer) retired it and handed its group
-// to a sibling. Writing true here crowned nobody (Crown refuses a
-// non-Electable member) yet the true came back with the book when that
-// operation's soft-delete was reverted later, next to the sibling: two
-// primaries. A nil restore is refused the same way, since a nil flag reads
-// as primary. The book's soft-delete revert yields to the group's incumbent
-// (revertBookSoftDelete), so in either revert order the group ends with one
-// primary: here the sibling, as a trash restore would leave it.
+// A soft-deleted book gets its flag back like any other: Crown cannot crown
+// it (not Electable) and leaves the group alone, and the book's own
+// soft-delete revert, from this or another operation, settles the group
+// when it brings the book back (revertBookSoftDelete yields it to a live
+// incumbent, or hands the group off when there is none). Refusing the write
+// instead left the group with no primary when the incumbent was gone by
+// then.
+//
+// A LIVE book merged into a live survivor is the one case left as it is:
+// such a loser is not Electable, and an explicit true on it would put it in
+// the ABS library (ABSLibraryFilter does not read MergedIntoBookID) next to
+// the group's primary. The row is marked reverted as Superseded
+// (supersededRestore), never Restored.
 func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, handedOff bool) error {
 	var restored *bool
 	switch c.OldValue {
@@ -1165,16 +1184,18 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, ha
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	crowns := restored == nil || *restored
+	// The merge survivor the book points at, and whether it is alive, read
+	// before the book's write stripe is taken; the callback re-checks that
+	// the book still points at it.
+	survivor, survivorAlive := "", false
 	if crowns {
-		// Read under the merge lock, which every retire and merge holds, so
-		// the book cannot be retired or restored between here and the write.
 		cur, err := rs.db.GetBookByID(c.BookID)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", c.BookID, err)
 		}
-		if cur != nil && !versionprimary.Electable(cur, versionprimary.StoreAlive(rs.db)) {
-			return &supersededRestore{detail: fmt.Sprintf("book %s is retired; its primary flag is left %s and it returns non-primary if restored",
-				c.BookID, primaryFlagString(cur.IsPrimaryVersion))}
+		if cur != nil && cur.MergedIntoBookID != nil && *cur.MergedIntoBookID != "" {
+			survivor = *cur.MergedIntoBookID
+			survivorAlive = versionprimary.StoreAlive(rs.db)(survivor)
 		}
 	}
 	group := ""
@@ -1185,6 +1206,10 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, ha
 		}
 		if err := undo.CheckPrimaryDemoteCurrent(book, c); err != nil {
 			return err
+		}
+		if crowns && !book.IsSoftDeleted() && survivorAlive && book.MergedIntoBookID != nil && *book.MergedIntoBookID == survivor {
+			return &supersededRestore{detail: fmt.Sprintf("book %s is merged into live book %s; its primary flag is left %s",
+				c.BookID, survivor, primaryFlagString(book.IsPrimaryVersion))}
 		}
 		book.IsPrimaryVersion = restored
 		return nil

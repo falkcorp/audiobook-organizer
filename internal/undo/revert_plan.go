@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-09-29
+// last-edited: 2026-10-02
 
 package undo
 
@@ -81,8 +81,18 @@ func (p *RevertPlan) retiredRow(c *database.OperationChange) bool {
 // Gate returns the ReasonDependentNotReverted refusal of a retired book's row
 // whose dependencies were not all reverted (or whose book was already
 // refused), or nil. Call it for each row of Order in turn, before reverting.
+//
+// A book whose soft-delete revert failed (Record) refuses EVERY later row of
+// it, not only those of a book with file dependencies: a retire that moved
+// no book_file row (the duplicate-copies retire journals none) otherwise
+// restored its merged-into pointer, path and ids onto a book that stayed
+// retired, and the demote revert ran against the wrong group state.
 func (p *RevertPlan) Gate(c *database.OperationChange) error {
 	if !p.retiredRow(c) {
+		if p.refusedBook[c.BookID] {
+			return &ReferentError{Reason: ReasonDependentNotReverted,
+				Detail: fmt.Sprintf("book %s was not restored, so its %s change is not either", c.BookID, c.ChangeType)}
+		}
 		return nil
 	}
 	var err error

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-02
 
@@ -339,10 +339,11 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 //     non-primary; the first op's demote revert then finds it live and
 //     re-crowns it with versionprimary.Crown, which demotes that member.
 //   - the first op first: the book is still retired, so its demote revert
-//     writes nothing (superseded: Crown cannot crown a retired book, and a
-//     true written anyway came back with the book later as a second
-//     primary); this op's soft-delete revert then brings it back
-//     non-primary under the member this hand-off crowned.
+//     writes its true but Crown leaves the group alone (a retired book is
+//     not Electable); this op's soft-delete revert then brings it back and
+//     yields it to the member this hand-off crowned, or, when that member is
+//     gone by then, keeps the true or hands the group off
+//     (EnsureSinglePrimary), so the group has one live primary either way.
 //
 // Reverting this op alone leaves the group with the member it crowned.
 //

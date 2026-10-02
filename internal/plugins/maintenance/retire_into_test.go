@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
 // last-edited: 2026-10-02
 
@@ -7,7 +7,9 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -195,20 +197,106 @@ func TestRetireInto_CrossFixerDemoteOnlyRevertsToOnePrimaryInEitherOrder(t *test
 			_, err = retireInto(context.Background(), d.p, d.s, b, time.Now, dcFixerID, l, s, nil)
 			require.NoError(t, err)
 			require.Equal(t, []string{s}, d.livePrimaries(t, gid))
-			live := func() []string { return d.livePrimaries(t, gid) }
+			revertBoth(t, d.s, gid, func() []string { return d.livePrimaries(t, gid) }, order...)
 			if order[0] == "op-a" {
-				// L is retired: op-a's demote revert writes nothing and says
-				// so, rather than count a flag Crown refused as restored.
-				res, err := audiobooks.NewRevertService(d.s).RevertOperation("op-a")
-				require.NoError(t, err)
-				require.Zero(t, res.Restored)
-				require.Equal(t, 1, res.Superseded, "%+v", res)
-				require.Equal(t, []string{s}, live())
-				revertBoth(t, d.s, gid, live, "op-b")
-			} else {
-				revertBoth(t, d.s, gid, live, order...)
+				// S was crowned by op-b's hand-off and is still live when L
+				// comes back: L yields to it.
+				require.Equal(t, []string{s}, d.livePrimaries(t, gid))
 			}
 			require.True(t, d.live(t, "L"), "both reverts bring the copy back")
 		})
 	}
+}
+
+// crossFixerDemoteOnly seeds the cross-fixer case: S explicit false, L
+// explicit true in one group; op-a (fragment consolidation) demotes L and
+// stops; op-b (duplicate copies) retires L and hands the group to S.
+func crossFixerDemoteOnly(t *testing.T) (d *dcFixture, s, l, gid string) {
+	t.Helper()
+	d = newDCFixture(t)
+	s, l = d.dune(t)
+	gid = "vg-dune"
+	yes, no := true, false
+	_, err := d.s.ModifyBook(s, func(b *database.Book) error { b.VersionGroupID, b.IsPrimaryVersion = &gid, &no; return nil })
+	require.NoError(t, err)
+	_, err = d.s.ModifyBook(l, func(b *database.Book) error { b.VersionGroupID, b.IsPrimaryVersion = &gid, &yes; return nil })
+	require.NoError(t, err)
+	a := repairs.NewWriter(d.s, d.s, fragFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-a")
+	require.NoError(t, a.Step(l, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false", func() error {
+		_, err := a.Modify(l, func(cur *database.Book) error { cur.IsPrimaryVersion = &no; return nil })
+		return err
+	}))
+	b := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-b")
+	_, err = retireInto(context.Background(), d.p, d.s, b, time.Now, dcFixerID, l, s, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{s}, d.livePrimaries(t, gid))
+	return d, s, l, gid
+}
+
+// Revert op-a while L is still retired, then S goes to the trash, then
+// revert op-b. L comes back with no live incumbent to yield to and must end
+// the group's one primary. Before the fix op-a's demote revert was
+// superseded on the retired L (its flag left false) and L came back false
+// next to a trashed S: no live primary at all.
+func TestRetireInto_RevertWithTheIncumbentGoneLeavesOnePrimary(t *testing.T) {
+	d, s, l, gid := crossFixerDemoteOnly(t)
+	_, err := audiobooks.NewRevertService(d.s).RevertOperation("op-a")
+	require.NoError(t, err)
+	yes := true
+	now := time.Now().UTC()
+	_, err = d.s.ModifyBook(s, func(b *database.Book) error { b.MarkedForDeletion, b.MarkedForDeletionAt = &yes, &now; return nil })
+	require.NoError(t, err)
+	_, err = audiobooks.NewRevertService(d.s).RevertOperation("op-b")
+	require.NoError(t, err)
+	require.Equal(t, []string{l}, d.livePrimaries(t, gid))
+}
+
+// groupReadFailsOnce fails the first version-group read of group: the
+// soft-delete revert's incumbent read.
+type groupReadFailsOnce struct {
+	*database.PebbleStore
+	group string
+	armed atomic.Bool
+}
+
+func (g *groupReadFailsOnce) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
+	if groupID == g.group && g.armed.CompareAndSwap(true, false) {
+		return nil, errors.New("version group read failed")
+	}
+	return g.PebbleStore.GetBooksByVersionGroup(groupID)
+}
+
+// A duplicate-copies retire of primary L journals no book_file move, so the
+// revert plan had no file dependency to gate L's rows on. A soft-delete
+// revert that fails once (a transient group read) must refuse L's other
+// rows in that pass; the second pass then restores L whole and its demote
+// revert re-crowns it. Before the fix the first pass restored L's
+// merged-into and path onto the still-retired book and reverted the demote
+// against it, and the second pass returned no error with L live but
+// non-primary and S still primary.
+func TestRetireInto_FailedSoftDeleteRevertRefusesTheBooksOtherRows(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	gid := "vg-dune"
+	yes, no := true, false
+	_, err := d.s.ModifyBook(s, func(b *database.Book) error { b.VersionGroupID, b.IsPrimaryVersion = &gid, &no; return nil })
+	require.NoError(t, err)
+	_, err = d.s.ModifyBook(l, func(b *database.Book) error { b.VersionGroupID, b.IsPrimaryVersion = &gid, &yes; return nil })
+	require.NoError(t, err)
+	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-b")
+	_, err = retireInto(context.Background(), d.p, d.s, w, time.Now, dcFixerID, l, s, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{s}, d.livePrimaries(t, gid))
+
+	failing := &groupReadFailsOnce{PebbleStore: d.s, group: gid}
+	failing.armed.Store(true)
+	_, err = audiobooks.NewRevertService(failing).RevertOperation("op-b")
+	require.Error(t, err, "the soft-delete revert fails on the group read")
+	require.False(t, failing.armed.Load())
+	require.False(t, d.live(t, "L"))
+
+	_, err = audiobooks.NewRevertService(d.s).RevertOperation("op-b")
+	require.NoError(t, err)
+	require.True(t, d.live(t, "L"))
+	require.Equal(t, []string{l}, d.livePrimaries(t, gid))
 }
