@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
 // last-edited: 2026-10-02
 
@@ -257,6 +257,11 @@ func CheckMembership(cur *database.Book, lockedGID string) error {
 
 // storeAlive is the merge-target liveness check: a point read, with a read
 // error counting as alive (the loser then stays ineligible).
+// StoreAlive is the alive answer Crown and EnsureSinglePrimary use for a
+// merge survivor outside the group: live unless soft-deleted or gone, and
+// live on a read error (so a loser is never made Electable by a failed read).
+func StoreAlive(store EnsureStore) func(string) bool { return storeAlive(store) }
+
 func storeAlive(store EnsureStore) func(string) bool {
 	return func(id string) bool {
 		b, err := store.GetBookByID(id)

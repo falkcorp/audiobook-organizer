@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package audiobooks
 
@@ -242,6 +242,15 @@ type RevertResult struct {
 	// journals each step BEFORE its write, so a step whose write never
 	// happened (a cut-off run, a failed write) lands here, not in Failed.
 	AlreadyRestored int `json:"already_restored,omitempty"`
+	// Superseded counts rows marked reverted with NO write, because what
+	// they would restore no longer applies, and SupersededDetail says why
+	// for each. Not counted in Restored. The one case: a primary-flag demote
+	// of a book that is retired now (soft-deleted, or merged into a live
+	// survivor), so the restored flag could crown nobody; the book's
+	// soft-delete revert brings it back non-primary under its group's
+	// incumbent instead (revertBookPrimaryDemote).
+	Superseded       int      `json:"superseded,omitempty"`
+	SupersededDetail []string `json:"superseded_detail,omitempty"`
 }
 
 // Partial reports whether any row of the operation was left un-reverted.
@@ -263,6 +272,9 @@ func (r *RevertResult) Summary() string {
 	}
 	if r.PartiallyRestored > 0 {
 		fmt.Fprintf(&b, "; %d restored in part (tags changed since the operation were left as they are)", r.PartiallyRestored)
+	}
+	if r.Superseded > 0 {
+		fmt.Fprintf(&b, "; %d superseded and left as they are (%s)", r.Superseded, strings.Join(r.SupersededDetail, "; "))
 	}
 	if r.Failed > 0 {
 		fmt.Fprintf(&b, "; %d failed to restore", r.Failed)
@@ -353,6 +365,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	// elsewhere.
 	var errMsgs []string
 	var restoredIDs []string
+	// markedIDs are rows marked reverted without being restored
+	// (supersededRestore).
+	var markedIDs []string
 	plan, err := undo.PlanRevert(restorable, rs.db.GetBookFiles)
 	if err != nil {
 		return nil, err
@@ -366,6 +381,17 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			if errors.Is(err, undo.ErrAlreadyRestored) {
 				already, err = true, nil
 			}
+		}
+		var superseded *supersededRestore
+		if errors.As(err, &superseded) {
+			// Nothing was written and nothing is owed: the row is done, so
+			// it is marked reverted, but it is not reported Restored.
+			result.Superseded++
+			result.SupersededDetail = append(result.SupersededDetail, fmt.Sprintf("change %s: %s", c.ID, superseded.detail))
+			revertLog.Info("revert of change %s superseded: %s", c.ID, superseded.detail)
+			plan.Record(c, nil)
+			markedIDs = append(markedIDs, c.ID)
+			continue
 		}
 		var partial *partialTagRestore
 		if errors.As(err, &partial) {
@@ -398,9 +424,10 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		result.RestoredTypes[c.ChangeType]++
 	}
 
-	// Mark only the rows that were actually restored.
-	if len(restoredIDs) > 0 {
-		if err := rs.db.MarkOperationChangesReverted(operationID, restoredIDs); err != nil {
+	// Mark only the rows that were actually restored, and the superseded
+	// ones (done, with nothing to write).
+	if mark := append(append([]string(nil), restoredIDs...), markedIDs...); len(mark) > 0 {
+		if err := rs.db.MarkOperationChangesReverted(operationID, mark); err != nil {
 			return nil, fmt.Errorf("restored %d changes but failed to mark them reverted: %w", len(restoredIDs), err)
 		}
 	}
@@ -672,6 +699,13 @@ func (rs *RevertService) revertBookFileReassign(c *database.OperationChange) err
 // the kept properties changed since the operation. RevertOperation counts the
 // row restored and reports detail.
 type partialTagRestore struct{ detail string }
+
+// supersededRestore is a row's revert that wrote nothing because what it
+// would restore no longer applies (see RevertResult.Superseded). The row is
+// marked reverted and counted Superseded, never Restored.
+type supersededRestore struct{ detail string }
+
+func (s *supersededRestore) Error() string { return "superseded: " + s.detail }
 
 func (p *partialTagRestore) Error() string { return "tag restored in part: " + p.detail }
 
@@ -1037,6 +1071,25 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 	env := merge.TrashRestoreEnv()
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
+	// The group's incumbent is read and the yield written under the group's
+	// lock (merge lock, then group lock, then the book's write lock, the
+	// order merge.RestoreFromTrash uses), so no hand-off changes the group
+	// in between.
+	cur, err := rs.db.GetBookByID(c.BookID)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", c.BookID, err)
+	}
+	gid, incumbent := "", ""
+	if cur != nil && cur.VersionGroupID != nil {
+		gid = strings.TrimSpace(*cur.VersionGroupID)
+	}
+	if gid != "" {
+		unlock := versionprimary.LockGroup(gid)
+		defer unlock()
+		if incumbent, err = versionprimary.IncumbentExcept(rs.db, gid, c.BookID); err != nil {
+			return err
+		}
+	}
 	return rs.modifyBook(c.BookID, func(book *database.Book) error {
 		// A live book is already restored; a stamped row is reverted only
 		// while the book carries a stamp this operation journaled for it
@@ -1048,8 +1101,29 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 		book.MarkedForDeletion = &notMarked
 		book.MarkedForDeletionAt = nil
 		database.RestoreLibraryStateFromTrash(book, files, env)
+		// Its group has had another primary since it was retired (a
+		// retire's hand-off): it comes back non-primary, as a trash restore
+		// does (versionprimary.YieldToIncumbent), so a stale true, or a nil
+		// read as primary, never doubles the group. A demote revert later
+		// in the ledger (same operation) re-crowns it deliberately.
+		if incumbent != "" && book.VersionGroupID != nil && strings.TrimSpace(*book.VersionGroupID) == gid {
+			versionprimary.YieldToIncumbent(book, incumbent)
+			if book.IsPrimaryVersion == nil {
+				no := false
+				book.IsPrimaryVersion = &no
+			}
+		}
 		return nil
 	})
+}
+
+// primaryFlagString renders a primary flag for a message: "nil", "true" or
+// "false".
+func primaryFlagString(v *bool) string {
+	if v == nil {
+		return "nil"
+	}
+	return strconv.FormatBool(*v)
 }
 
 // revertBookPrimaryDemote restores a retired shell's primary flag ("" is nil,
@@ -1065,7 +1139,19 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 // alone would leave the group with two primaries. Crown runs after the
 // shell's own write, outside its ModifyBook callback, and only when the shell
 // is live again (the soft-delete row, later in the ledger, is reverted
-// first); otherwise the restored true on a deleted row competes with nobody.
+// first).
+//
+// A book that is NOT Electable now (soft-deleted, or merged into a live
+// survivor) is left as it is and the row is superseded (supersededRestore):
+// a retire that demoted it lost its lease before the soft-delete, and
+// another operation (a retry, another fixer) retired it and handed its group
+// to a sibling. Writing true here crowned nobody (Crown refuses a
+// non-Electable member) yet the true came back with the book when that
+// operation's soft-delete was reverted later, next to the sibling: two
+// primaries. A nil restore is refused the same way, since a nil flag reads
+// as primary. The book's soft-delete revert yields to the group's incumbent
+// (revertBookSoftDelete), so in either revert order the group ends with one
+// primary: here the sibling, as a trash restore would leave it.
 func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, handedOff bool) error {
 	var restored *bool
 	switch c.OldValue {
@@ -1078,6 +1164,19 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, ha
 	}
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
+	crowns := restored == nil || *restored
+	if crowns {
+		// Read under the merge lock, which every retire and merge holds, so
+		// the book cannot be retired or restored between here and the write.
+		cur, err := rs.db.GetBookByID(c.BookID)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", c.BookID, err)
+		}
+		if cur != nil && !versionprimary.Electable(cur, versionprimary.StoreAlive(rs.db)) {
+			return &supersededRestore{detail: fmt.Sprintf("book %s is retired; its primary flag is left %s and it returns non-primary if restored",
+				c.BookID, primaryFlagString(cur.IsPrimaryVersion))}
+		}
+	}
 	group := ""
 	err := rs.modifyBook(c.BookID, func(book *database.Book) error {
 		group = ""
