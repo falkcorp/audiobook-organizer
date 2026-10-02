@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-10-01
 
@@ -360,7 +360,7 @@ func dcJudge(a, b *dcBook, notDup dcRejections) dcVerdict {
 		return dcVerdict{Kind: dcEdgeASIN, Why: fmt.Sprintf("%s and %s carry different ASINs (%s, %s)", a.Core.ID, b.Core.ID, x, y)}
 	}
 	if rj := notDup[dcPairKey(a.Core.ID, b.Core.ID)]; rj.Kind != "" {
-		return dcVerdict{Kind: rj.Kind, Why: rj.Why}
+		return dcVerdict(rj)
 	}
 	if dangling {
 		return dcVerdict{Kind: dcEdgeUnproven, Why: fmt.Sprintf("%s / %s: an author id has no author row (%s, %s), so the authors cannot be compared",

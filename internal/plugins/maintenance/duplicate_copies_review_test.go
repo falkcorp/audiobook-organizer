@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_review_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6e2d9c41-3b7a-4f05-8c1e-a94d2f7b3e58
 // last-edited: 2026-10-01
 
@@ -170,6 +170,15 @@ func TestFragmentFixer_ITunesParentRuleIsDecidedAgainAtApply(t *testing.T) {
 	t.Run("a not_dup label added after the plan refuses", func(t *testing.T) {
 		d, p, i, frag, r := setup(t)
 		d.labels.ex = append(d.labels.ex, database.LabeledExample{CandidateID: 5, EntityAID: p, EntityBID: i, Label: "not_dup"})
+		require.Zero(t, d.applyFor(t, fragFixerID, "op-plan", "op-apply", []string{r.RowID}).Applied)
+		require.False(t, retired(t, d, frag))
+	})
+	t.Run("an iTunes copy set aside no longer matches the fragment: refuses", func(t *testing.T) {
+		// The decision named the copies it set aside (fingerprint): a
+		// different set is a different decision, re-planned by the owner.
+		d, _, i, frag, r := setup(t)
+		_ = i
+		require.NoError(t, d.s.SetBookFileHash(d.rowIDs["I/2"], "other"))
 		require.Zero(t, d.applyFor(t, fragFixerID, "op-plan", "op-apply", []string{r.RowID}).Applied)
 		require.False(t, retired(t, d, frag))
 	})
@@ -375,6 +384,17 @@ func TestDuplicateCopies_BoxSetLegAIsRecheckedAtApply(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ab.IsSoftDeleted(), "A must not be retired into the box set")
 	require.Nil(t, ab.MergedIntoBookID)
+}
+
+// TestDuplicateCopies_BoxSetIgnoresNonEvidenceRowsOutside: an outside book
+// that holds the extra audio only in a row that is no evidence of a work (an
+// intro/credits title) is not a book 2, on Plan or at apply.
+func TestDuplicateCopies_BoxSetIgnoresNonEvidenceRowsOutside(t *testing.T) {
+	d, a, _ := ubik(t)
+	d.copyBook(t, "C", "Something Else", "lib/Other", dcRow{track: 1, dur: 600, hash: "x3", name: "Opening Credits.mp3"})
+	r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), a)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.Equal(t, 1, d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{r.RowID}).Applied)
 }
 
 // dcNoHashLookup is a store whose multi-valued hash lookup is unavailable.
@@ -605,6 +625,37 @@ func TestRevertRepoint_LegacyEntryFallsBackToALiveRow(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Equal(t, bRow, got.ID, "no owner journaled: a live book's row")
+}
+
+// dcClaimRefuses refuses to claim the path key for one row, as a row moved
+// off the path between the revert's read and its claim would.
+type dcClaimRefuses struct {
+	*database.PebbleStore
+	row string
+}
+
+func (s dcClaimRefuses) ClaimBookFilePathKey(bookID, fileID, path string) (bool, error) {
+	if fileID == s.row {
+		return false, nil
+	}
+	return s.PebbleStore.ClaimBookFilePathKey(bookID, fileID, path)
+}
+
+// TestRevertRepoint_UnclaimedOwnerFallsThroughToTheNextRow: when the
+// journaled owner cannot be claimed the key goes to the next eligible row,
+// never left dropped while one exists.
+func TestRevertRepoint_UnclaimedOwnerFallsThroughToTheNextRow(t *testing.T) {
+	d, path, aRow, bRow, xBook, xRow := keyOwnerFixture(t)
+	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-rp")
+	cur, err := d.s.GetBookFileByID(xBook, xRow)
+	require.NoError(t, err)
+	require.NoError(t, w.RepointBookFile(xBook, xRow, undo.LocationOf(cur), undo.BookFileLocation{Path: path, Hash: "k", Size: 500}))
+	_, err = audiobooks.NewRevertService(dcClaimRefuses{PebbleStore: d.s, row: aRow}).RevertOperation("op-rp")
+	require.NoError(t, err)
+	got, err := d.s.GetBookFileByPath(path)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, bRow, got.ID)
 }
 
 // TestRevertRepoint_LegacyFallbackNeverPicksAnITunesRow: with no owner
