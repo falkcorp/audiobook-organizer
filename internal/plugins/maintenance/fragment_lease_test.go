@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_lease_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6b1e8d42-3c7f-4a95-b2d6-9f0a4e7c1d38
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package maintenance
 
@@ -441,4 +441,75 @@ func TestFolderBooksFixer_LeaseLostBeforeTheAuthorCredit(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, repairs.OutcomeAborted, res.Rows[0].Outcome, "%+v", res.Rows[0])
 	require.Contains(t, res.Rows[0].Error, "author credit of", "refused at the credit, not at a later write")
+}
+
+// The lease lapses at every beat of the copy row in turn, and the row is then
+// run again, as a resume of op-apply from its checkpoint or as a new op (a
+// retry). The group must end with exactly one live primary every time. Before
+// the fix the retire read wasPrimary from the CURRENT flag: a first run that
+// demoted fragment G (step 3) and lost the lease before its soft-delete left
+// G explicit false, the next run skipped the hand-off, soft-deleted G and
+// reported applied with no live primary in the group.
+func TestFragmentFixer_LeaseLostAtEveryBeatLeavesOnePrimary(t *testing.T) {
+	total := handOffProbeRenewals(t)
+	for k := 0; k < total; k++ {
+		for _, retry := range []string{"op-apply", "op-retry"} {
+			t.Run(fmt.Sprintf("k%d_%s", k, retry), func(t *testing.T) {
+				f := newFragFixture(t)
+				f.seed(t)
+				f.primaryFragG(t)
+				f.plan(t, "op-plan")
+				scan := f.scan()
+				scan.mu.Lock()
+				scan.renewsLeft = k
+				scan.mu.Unlock()
+				res, _ := f.applyErr(t, "op-plan", "op-apply", []string{"copy:" + f.ids["suns"]}, nil)
+				scan.mu.Lock()
+				scan.renewsLeft = -1
+				scan.mu.Unlock()
+				var resume *repairs.ApplyCheckpoint
+				if retry == "op-apply" && res != nil {
+					resume = &repairs.ApplyCheckpoint{Settled: res.Rows}
+				}
+				_, err := f.applyErr(t, "op-plan", retry, []string{"copy:" + f.ids["suns"]}, resume)
+				require.NoError(t, err)
+				require.Len(t, f.livePrimaries(t, "vg-fragG"), 1)
+			})
+		}
+	}
+}
+
+// A duplicate-copies loser demoted by Crown whose hand-off note was cut off
+// (the lease lost after Crown, before the note): the demote is journaled,
+// no hand-off row and no Writer history row exist, but the group has its
+// one live primary, the heir Crown made. A retry owes nothing. Before the
+// fix resumeHandOff validated history before counting primaries and refused
+// the row as changed since plan on every retry.
+func TestRetireInto_RetiredLoserCrownedWithoutANoteOwesNothing(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	gid := "vg-dune"
+	yes := true
+	_, err := d.s.ModifyBook(s, func(b *database.Book) error { b.VersionGroupID = &gid; return nil })
+	require.NoError(t, err)
+	_, err = d.s.ModifyBook(l, func(b *database.Book) error { b.VersionGroupID, b.IsPrimaryVersion = &gid, &yes; return nil })
+	require.NoError(t, err)
+
+	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-cut")
+	require.NoError(t, w.Journal(l, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
+	cr, err := versionprimary.Crown(fragEnsureStore{OpsStore: d.s, chapters: d.s}, gid, s)
+	require.NoError(t, err)
+	require.Equal(t, s, cr.PrimaryID)
+	now := time.Now().UTC()
+	_, err = d.s.ModifyBook(l, func(b *database.Book) error {
+		b.MarkedForDeletion, b.MarkedForDeletionAt, b.MergedIntoBookID = &yes, &now, &s
+		return nil
+	})
+	require.NoError(t, err)
+
+	retry := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-retry")
+	n, err := retireInto(context.Background(), d.p, d.s, retry, time.Now, dcFixerID, l, s, nil)
+	require.NoError(t, err)
+	require.Zero(t, n)
+	require.Zero(t, retry.Journaled(), "nothing owed, nothing journaled")
 }

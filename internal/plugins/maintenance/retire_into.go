@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 // The shared retire of the Repairs-lane merge fixers: fold one book into
 // another as merge.Service retires an absorbed book, every step journaled
@@ -45,7 +45,10 @@ import (
 //     the purge deletes a purged book's file_path) and soft-deletes it
 //     (book_soft_delete).
 //
-// Its version group is then handed a primary. The fragment's book_file row,
+// Its version group is then handed a primary: by retireHandOff when the
+// book was primary at the read, else by resumeHandOff when the evidence says
+// an earlier run demoted it and never handed off (see owedHandOff). The
+// fragment's book_file row,
 // if it still has one, is kept.
 //
 // Every refusal (an iTunes id on the book, on one of its rows or among its
@@ -69,7 +72,7 @@ func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Write
 	if b.IsSoftDeleted() {
 		// Retired by an earlier run, which may have been cut off (a lost
 		// scan stand-down lease) before its primary hand-off.
-		return 0, resumeHandOff(ctx, p, store, w, fixerID, b, target)
+		return 0, resumeHandOff(ctx, p, store, w, fixerID, id, target)
 	}
 	// Refusals first: nothing is written for a refused retire.
 	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
@@ -180,8 +183,19 @@ func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Write
 		return steps, fmt.Errorf("soft-delete %s: %w", id, err)
 	}
 	steps++
-	if wasPrimary && b.VersionGroupID != nil && *b.VersionGroupID != "" {
-		if err := retireHandOff(ctx, p, store, w, fixerID, id, *b.VersionGroupID); err != nil {
+	if b.VersionGroupID != nil && *b.VersionGroupID != "" {
+		// wasPrimary is the flag at the read above. An earlier run of this
+		// retire may have demoted the book (step 3) and lost the lease before
+		// the soft-delete landed: the flag then reads false here although the
+		// group still owes a primary, so a book that was not primary at the
+		// read goes through the evidence check (resumeHandOff), never a
+		// silent skip that would leave the group with no live primary.
+		if wasPrimary {
+			err = retireHandOff(ctx, p, store, w, fixerID, id, *b.VersionGroupID)
+		} else {
+			err = resumeHandOff(ctx, p, store, w, fixerID, id, target)
+		}
+		if err != nil {
 			return steps, err
 		}
 	}
@@ -289,24 +303,28 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	return nil
 }
 
-// resumeHandOff finishes the primary hand-off of a book an earlier run of
-// fixer fixerID retired but did not hand off, from ANY operation: a
-// lease-lost apply ends failed, and its retry (POST /operations/v2/:id/retry)
-// is a new op whose journal holds none of the first run's rows, so the
-// evidence is the book's state and the fixer's history, never the op id.
-// Shared by every fixer that retires through retireInto.
+// resumeHandOff finishes the primary hand-off of book id, retired into
+// target, when an earlier run of fixer fixerID demoted it and never handed
+// off, from ANY operation: a lease-lost apply ends failed, and its retry
+// (POST /operations/v2/:id/retry) is a new op whose journal holds none of the
+// first run's rows, so the evidence is the book's state, every op's journal
+// and the fixer's history, never the op id. Shared by every fixer that
+// retires through retireInto, both for a book met already retired and for a
+// book retired just now that was not primary at the read (its demote may be
+// an earlier run's).
 //
-// Nothing is owed (nil) when:
+// In order, nothing is owed (nil) when:
 //   - the book has no version group, or was merged into another target;
-//   - no un-reverted demote row for it is in any op's journal (never demoted
-//     by a retire), or an un-reverted hand-off row is newer than the newest
-//     such demote (handed off already: a duplicate-copies loser, demoted by
-//     Crown and noted after it, ends here);
-//   - its group already has its one live primary.
+//   - its group has exactly one live primary. Checked before any history:
+//     a duplicate-copies loser demoted by Crown, whose hand-off note was cut
+//     off, has no Writer history row, and its group is whole;
+//   - no un-reverted demote row for it is in any op's journal (never
+//     demoted by a retire), or an un-reverted hand-off row is newer than the
+//     newest such demote (handed off already).
 //
-// It is owed when the newest is_primary_version history row of the book is
-// fixerID's demote to false, the book is still explicit false, and no live
-// member of its group is an explicit primary. It is then made by THIS op and
+// It is owed when, besides, the newest is_primary_version history row of
+// the book is fixerID's demote to false, the book is still explicit false,
+// and no live member of its group is primary. It is then made by THIS op and
 // journaled in this op's journal. Reverts converge in either order: the
 // hand-off row is a note (the revert of the first op's demote re-crowns the
 // book with versionprimary.Crown, which demotes the member this hand-off
@@ -314,18 +332,47 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 // crowned, its one primary.
 //
 // Anything it cannot tell (history or journal unreadable, the flag changed
-// by someone else since the demote, two live primaries) refuses the row as
-// changed since plan rather than guess.
-func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID string, b *database.Book, target string) error {
-	if b.VersionGroupID == nil || *b.VersionGroupID == "" || b.MergedIntoBookID == nil || *b.MergedIntoBookID != target {
+// by someone else since the demote, two or more live primaries after a
+// demote of ours) refuses the row as changed since plan rather than guess.
+//
+// GetBookChanges has no by-book index (PebbleStore scans every opchange
+// row), so the lease is renewed before it, and the live-primary count above
+// keeps the scan off the common path.
+func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, target string) error {
+	b, err := store.GetBookByID(id)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", id, err)
+	}
+	if b == nil || b.VersionGroupID == nil || *b.VersionGroupID == "" || b.MergedIntoBookID == nil || *b.MergedIntoBookID != target {
 		return nil
 	}
+	gid := *b.VersionGroupID
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("%w: hand-off of retired book %s: %s", repairs.ErrChangedSincePlan, b.ID, fmt.Sprintf(format, args...))
+	}
+	members, err := store.GetBooksByVersionGroup(gid)
+	if err != nil {
+		return refuse("group %s unreadable: %v", gid, err)
+	}
+	live := 0
+	for i := range members {
+		m := &members[i]
+		if m.ID == b.ID || m.IsSoftDeleted() {
+			continue
+		}
+		if m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
+			live++
+		}
+	}
+	if live == 1 {
+		return nil // the group has its one primary: nothing owed
 	}
 	journal, ok := store.(bookJournalReader)
 	if !ok {
 		return refuse("the store has no operation journal to check it with")
+	}
+	if err := w.Beat("hand-off check of " + id); err != nil {
+		return err
 	}
 	changes, err := journal.GetBookChanges(b.ID)
 	if err != nil {
@@ -376,28 +423,10 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 		return refuse("its primary flag was last changed by %q, not by %s", newest.Source, fixerID)
 	case newest.NewValue == nil || *newest.NewValue != string(falseJSON) || storedPrimaryFlag(b.IsPrimaryVersion) != "false":
 		return refuse("its primary flag is %s, not the false %s wrote", storedPrimaryFlag(b.IsPrimaryVersion), fixerID)
-	}
-	members, err := store.GetBooksByVersionGroup(*b.VersionGroupID)
-	if err != nil {
-		return refuse("group %s unreadable: %v", *b.VersionGroupID, err)
-	}
-	live := 0
-	for i := range members {
-		m := &members[i]
-		if m.ID == b.ID || m.IsSoftDeleted() {
-			continue
-		}
-		if m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
-			live++
-		}
-	}
-	switch {
-	case live == 1:
-		return nil // the group has its one primary: nothing owed
 	case live > 1:
-		return refuse("group %s has %d live primaries", *b.VersionGroupID, live)
+		return refuse("group %s has %d live primaries", gid, live)
 	}
-	return retireHandOff(ctx, p, store, w, fixerID, b.ID, *b.VersionGroupID)
+	return retireHandOff(ctx, p, store, w, fixerID, b.ID, gid)
 }
 
 // bookJournalReader reads every operation's journal rows for one book.

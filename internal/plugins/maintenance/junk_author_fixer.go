@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package maintenance
 
@@ -2445,6 +2445,12 @@ func (f *junkAuthorFixer) createTarget(w *repairs.Writer, store OpsStore, d *jun
 		case len(credited) > 0:
 			return nil, fmt.Errorf("journal created author %d: %w (kept: %d book(s) already credit it)", created.ID, err, len(credited))
 		}
+		// Deliberately NOT guarded by w.Beat: err is often ErrStandDownLost,
+		// and a lapsed lease must not stop this compensating delete. It only
+		// undoes the MintAuthor just above, of an author nothing credits and
+		// no journal row describes; an orphan junk author left behind would
+		// be invisible to the op revert, which is worse than one store write
+		// made after the lease lapsed.
 		if derr := store.DeleteAuthor(created.ID); derr != nil {
 			return nil, fmt.Errorf("journal created author %d: %w (and removing it failed: %v)", created.ID, err, derr)
 		}
