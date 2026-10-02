@@ -1,5 +1,5 @@
 // file: internal/versionprimary/lock_groups_sentinel_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f2b8d14-3a9c-4e57-b0d2-8c1e7a5f3b96
 // last-edited: 2026-10-02
 
@@ -195,9 +195,10 @@ func (m mapStore) GetBookByID(id string) (*database.Book, error) {
 }
 
 // LockPlannedGroups refuses a book whose group is not the one its caller
-// planned from with ErrMembershipChanged and releases every lock; a padded
-// planned id matches its trimmed stored one; a missing book is skipped, as
-// LockBookGroups skips it (the caller's write reports it).
+// planned from, or that is gone, with ErrMembershipChanged and releases
+// every lock; a padded planned id matches its trimmed stored one; a missing
+// book that is only in ids (not planned) is skipped, as LockBookGroups skips
+// it.
 func TestLockPlannedGroups_RefusesAMovedBook(t *testing.T) {
 	store := mapStore{"a": "g", "b": "h", "gone": "-"}
 	cases := []struct {
@@ -208,11 +209,11 @@ func TestLockPlannedGroups_RefusesAMovedBook(t *testing.T) {
 		{"as planned", map[string]string{"a": "g", "b": " h "}, false},
 		{"moved between plan and lock", map[string]string{"a": "g", "b": "g"}, true},
 		{"moved out of no group", map[string]string{"a": ""}, true},
-		{"vanished is skipped", map[string]string{"a": "g", "gone": "g"}, false},
+		{"planned book vanished", map[string]string{"a": "g", "gone": "g"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			unlock, groups, err := LockPlannedGroups(store, []string{"a"}, tc.planned, "dest")
+			unlock, groups, err := LockPlannedGroups(store, []string{"a", "gone"}, tc.planned, "dest")
 			if tc.wantErr {
 				if !errors.Is(err, ErrMembershipChanged) {
 					t.Fatalf("err = %v, want ErrMembershipChanged", err)
