@@ -1,5 +1,5 @@
 // file: internal/database/book_files_with_hash_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d27b9e0-8c14-4f6a-a3d1-0e9f72b6c845
 // last-edited: 2026-10-01
 
@@ -108,6 +108,29 @@ func TestBookFilesWithHash_MatchesBruteForceAcrossWrites(t *testing.T) {
 		rows, _ := s.GetBookFiles(a)
 		return rows[0].ID
 	}())
+}
+
+// TestBookFilesWithHash_SharedOriginalHashAndStaleIndex: two books sharing
+// an original hash are both found (the single-owner orig index holds only
+// the last), and a stale single-owner index entry naming a row that no longer
+// carries the hash is dropped by the Pebble verification.
+func TestBookFilesWithHash_SharedOriginalHashAndStaleIndex(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	s.WaitForWarmup()
+	a, err := s.CreateBook(&Book{Title: "A", FilePath: "/lib/A"})
+	require.NoError(t, err)
+	b, err := s.CreateBook(&Book{Title: "B", FilePath: "/lib/B"})
+	require.NoError(t, err)
+	fa := &BookFile{BookID: a.ID, FilePath: "/lib/A/1.mp3", FileHash: "fa", OriginalFileHash: "orig"}
+	require.NoError(t, s.CreateBookFile(fa))
+	fb := &BookFile{BookID: b.ID, FilePath: "/lib/B/1.mp3", FileHash: "fb", OriginalFileHash: "orig"}
+	require.NoError(t, s.CreateBookFile(fb))
+	require.ElementsMatch(t, []string{fa.ID, fb.ID}, hashLookup(t, s, "orig"))
+
+	require.NoError(t, s.db.Set([]byte("book_file_hash:ghost"), []byte(a.ID+":"+fa.ID), nil))
+	require.Empty(t, hashLookup(t, s, "ghost"), "a stale index entry is verified away")
 }
 
 // TestBookFilesWithHash_FailsClosedWithoutMemdb: with memdb not serving the
