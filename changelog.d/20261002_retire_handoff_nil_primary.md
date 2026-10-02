@@ -1,0 +1,4 @@
+### Fixed
+
+- A Repairs retire (fragment consolidation, duplicate copies) no longer mistakes a version group whose primary has no explicit flag for a group with no primary. Every screen treats that member as the primary, but the retire's hand-off check counted only an explicit "primary" flag, so each retire in such a group scanned the whole operation journal looking for a hand-off it did not owe. It now counts primaries by the same rule the rest of the app uses.
+- A hand-off left owed by one retire fixer, whose run lost its lease after demoting the book, is now finished by another retire fixer that later retires the same book, instead of that row being refused on every run while the group stayed without a primary.
