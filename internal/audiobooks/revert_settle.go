@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
 // last-edited: 2026-10-02
 
@@ -74,11 +74,11 @@ type settleInput struct {
 	// crowned: per retired book, the members the operation's hand-off notes
 	// recorded crowning (undo.HandOffCrowned).
 	crowned map[string][]string
-	// priorPending: the record held an EARLIER run's intent when this run
-	// started. Only then are its Pending groups settled; this run's own
-	// intent is not evidence (a retire cut off before it wrote has rows,
-	// and its group must be left alone).
-	priorPending bool
+	// priorPending: the groups an EARLIER run's intent left pending when
+	// this run started. Only those Pending groups are settled from the
+	// record; this run's own intent is not evidence (a retire cut off
+	// before it wrote has rows, and its group must be left alone).
+	priorPending map[string]bool
 }
 
 // opLocks serialises reverts of one operation in this process, so two
@@ -107,45 +107,52 @@ func crownedByHandOff(changes []*database.OperationChange) map[string][]string {
 	return out
 }
 
-// writeSettlePending records the intent before the row loop: the groups of
-// rows (and the groups already owed, kept as they are). It returns whether
-// an earlier run's intent was still pending, which makes already-restored
-// rows evidence in this run. A store without raw keys records nothing.
-func (rs *RevertService) writeSettlePending(operationID string, rows []*database.OperationChange) bool {
+// bookGroup is a book's current version group, or "".
+func (rs *RevertService) bookGroup(id string) string {
+	b, err := rs.db.GetBookByID(id)
+	if err != nil || b == nil || b.VersionGroupID == nil {
+		return ""
+	}
+	return strings.TrimSpace(*b.VersionGroupID)
+}
+
+// settlePendingGroups is the set of groups an earlier run's intent left
+// pending in the operation's record (settleOwedGroup.Pending).
+func (rs *RevertService) settlePendingGroups(operationID string) map[string]bool {
+	kv, _ := rs.db.(rawKV)
+	out := map[string]bool{}
+	for gid, og := range rs.loadSettleOwed(kv, operationID).Groups {
+		if og.Pending {
+			out[gid] = true
+		}
+	}
+	return out
+}
+
+// markSettlePending adds group gid to the operation's record as pending,
+// keeping whatever else it holds. Called the first time a settle row of a
+// book in gid writes. A store without raw keys, or a failed write (logged),
+// records nothing: a run that then dies before its settle leaves the group
+// to version-group-primary-repair.
+func (rs *RevertService) markSettlePending(operationID, gid string) {
 	kv, _ := rs.db.(rawKV)
 	if kv == nil {
-		return false
+		return
 	}
 	rec := rs.loadSettleOwed(kv, operationID)
-	prior := rec.Pending
-	seen := map[string]bool{}
-	for _, c := range rows {
-		if _, ok := settleNote(c); !ok || seen[c.BookID] {
-			continue
-		}
-		seen[c.BookID] = true
-		b, err := rs.db.GetBookByID(c.BookID)
-		if err != nil || b == nil || b.VersionGroupID == nil || strings.TrimSpace(*b.VersionGroupID) == "" {
-			continue
-		}
-		gid := strings.TrimSpace(*b.VersionGroupID)
-		if _, owed := rec.Groups[gid]; !owed {
-			rec.Groups[gid] = settleOwedGroup{Pending: true}
-		}
+	if _, ok := rec.Groups[gid]; ok {
+		return
 	}
-	if len(rec.Groups) == 0 {
-		return prior
-	}
+	rec.Groups[gid] = settleOwedGroup{Pending: true}
 	rec.Pending = true
 	raw, err := json.Marshal(rec)
 	if err == nil {
 		err = kv.SetRaw(settleOwedKeyPrefix+operationID, raw)
 	}
 	if err != nil {
-		revertLog.Warn("revert: record the pending group settles of operation %s: %s",
-			logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
+		revertLog.Warn("revert: record the pending settle of group %s of operation %s: %s",
+			logger.SanitizeLogValue(gid), logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
 	}
-	return prior
 }
 
 // rawKV is the raw key surface the owed record is kept in, asserted on the
@@ -161,10 +168,10 @@ type settleTouch struct {
 	bookID, changeType, oldValue string
 }
 
-// settleNote decides, after a row's revert, whether the row is evidence
-// for the settle pass: only a row that wrote in this run (not one found
-// already restored: a retire cut off before it wrote changed nothing), of a
-// type that can change who a group's primary is.
+// settleNote reports whether a row is of a type that can change who a
+// group's primary is, and so may be evidence for the settle pass. Whether
+// it IS evidence is the caller's call: a row that wrote in this run, or one
+// found already restored whose group an earlier run left pending.
 func settleNote(c *database.OperationChange) (settleTouch, bool) {
 	switch c.ChangeType {
 	case undo.ChangeTypeBookPrimaryDemote, undo.ChangeTypeBookPrimaryHandoff,
@@ -172,6 +179,12 @@ func settleNote(c *database.OperationChange) (settleTouch, bool) {
 		return settleTouch{bookID: c.BookID, changeType: c.ChangeType, oldValue: c.OldValue}, true
 	}
 	return settleTouch{}, false
+}
+
+// clearSettleOwed deletes the operation's record.
+func (rs *RevertService) clearSettleOwed(operationID string) {
+	kv, _ := rs.db.(rawKV)
+	_ = rs.storeSettleOwed(kv, operationID, settleOwedRecord{})
 }
 
 // settleGroups is the settle pass of RevertOperation: every version group
@@ -243,7 +256,7 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 	for gid, og := range owed.Groups {
 		og := og
 		if og.Pending {
-			if !in.priorPending {
+			if !in.priorPending[gid] {
 				continue // this run's own intent: not evidence
 			}
 			// Listed by an earlier run's intent: that run's rows are
@@ -355,13 +368,21 @@ func (rs *RevertService) settleGroup(gid string, originals []string, owed *settl
 			// primary, and the group is judged as it stands below.
 			revertLog.Info("revert: version group %s keeps %s, made primary after the operation; %s returns non-primary",
 				logger.SanitizeLogValue(gid), logger.SanitizeLogValue(later), logger.SanitizeLogValue(o))
-			if err := rs.yieldOriginal(o); err != nil {
-				return explicit, fmt.Errorf("return %s non-primary in group %s: %w", o, gid, err)
+			// EVERY electable original yields (a folder-books row demotes
+			// each primary folder-book, so there can be several): one left
+			// true would be elected over the later pick below.
+			for _, y := range originals {
+				if !electable[y] {
+					continue
+				}
+				if err := rs.yieldOriginal(y); err != nil {
+					return explicit, fmt.Errorf("return %s non-primary in group %s: %w", y, gid, err)
+				}
 			}
 			effective = 0
 			for i := range members {
 				m := &members[i]
-				if m.ID != o && electable[m.ID] && database.EffectiveIsPrimaryVersion(m.IsPrimaryVersion) {
+				if !slices.Contains(originals, m.ID) && electable[m.ID] && database.EffectiveIsPrimaryVersion(m.IsPrimaryVersion) {
 					effective++
 				}
 			}
@@ -465,8 +486,15 @@ func (rs *RevertService) storeSettleOwed(kv rawKV, operationID string, rec settl
 	return kv.SetRaw(key, raw)
 }
 
-// hasSettleOwed reports whether the operation has groups owed a settle.
+// hasSettleOwed reports whether the operation has groups owed a settle by
+// a failed one (a pending intent alone does not count: see
+// settlePendingGroups).
 func (rs *RevertService) hasSettleOwed(operationID string) bool {
 	kv, _ := rs.db.(rawKV)
-	return len(rs.loadSettleOwed(kv, operationID).Groups) > 0
+	for _, og := range rs.loadSettleOwed(kv, operationID).Groups {
+		if !og.Pending {
+			return true
+		}
+	}
+	return false
 }
