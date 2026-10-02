@@ -1,7 +1,7 @@
 // file: internal/server/organize_service_regression_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-organize-regr
-// last-edited: 2026-09-02
+// last-edited: 2026-10-02
 
 package server
 
@@ -273,6 +273,7 @@ func TestCreateOrganizedVersion_RecomputesITunesPath(t *testing.T) {
 	var mu sync.Mutex
 	isPrimary := false
 	mockDB := &database.MockStore{
+		GetBookByIDFunc: ungroupedOriginalRow,
 		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
 			return []database.BookFile{
 				{
@@ -503,6 +504,7 @@ func TestCreateOrganizedVersion_CopiesAllBookFiles(t *testing.T) {
 	isPrimary := false
 
 	mockDB := &database.MockStore{
+		GetBookByIDFunc: ungroupedOriginalRow,
 		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
 			return []database.BookFile{
 				{ID: "bf1", BookID: bookID, FilePath: "/import/Author/ch01.mp3", ITunesPersistentID: "PID1"},
@@ -575,6 +577,7 @@ func TestCreateOrganizedVersion_SetsCorrectStates(t *testing.T) {
 
 	mockDB := &database.MockStore{
 		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) { return nil, nil },
+		GetBookByIDFunc:  ungroupedOriginalRow,
 		CreateBookFunc: func(book *database.Book) (*database.Book, error) {
 			return book, nil
 		},
@@ -617,4 +620,11 @@ func TestCreateOrganizedVersion_SetsCorrectStates(t *testing.T) {
 	assert.NotNil(t, created.VersionGroupID)
 	assert.NotNil(t, updatedOriginal.VersionGroupID)
 	assert.Equal(t, *created.VersionGroupID, *updatedOriginal.VersionGroupID)
+}
+
+// ungroupedOriginalRow serves CreateOrganizedVersion's version-group lock,
+// which re-reads the source row (it must still exist, in the group it was
+// planned from -- none here) before the organized copy is created.
+func ungroupedOriginalRow(id string) (*database.Book, error) {
+	return &database.Book{ID: id}, nil
 }

@@ -1,5 +1,5 @@
 // file: internal/organizer/membership_lock_writers_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c4f7a26-3b8e-4d19-a6c5-0e2d8b1f7a43
 // last-edited: 2026-10-02
 
@@ -83,6 +83,18 @@ func TestCreateOrganizedVersion_RefusesOriginalMovedAfterRead(t *testing.T) {
 	require.NoError(t, err)
 
 	landing := &Landing{Path: filepath.Join(t.TempDir(), "organized-orig.m4b")}
-	_, _ = NewService(f.S).CreateOrganizedVersion(snapshot, landing, "", &noopLogger{})
+	created, err := NewService(f.S).CreateOrganizedVersion(snapshot, landing, "", &noopLogger{})
+	require.ErrorIs(t, err, versionprimary.ErrMembershipChanged)
+	require.Nil(t, created)
 	require.Equal(t, "h", f.GroupOf(t, orig), "the original stays in the group it moved to")
+	// No copy was created, so none is linked into the stale group g, and h
+	// holds only its own members.
+	inG, err := f.S.GetBooksByVersionGroup("g")
+	require.NoError(t, err)
+	require.Empty(t, inG, "no organized copy may join the stale group")
+	inH, err := f.S.GetBooksByVersionGroup("h")
+	require.NoError(t, err)
+	require.Len(t, inH, 2, "h holds h-inc and the original only")
+	require.Equal(t, "g", *snapshot.VersionGroupID, "the caller's book is not rewritten on a refusal")
+	require.True(t, *snapshot.IsPrimaryVersion)
 }
