@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -76,18 +76,67 @@ func (mfs *Service) GetCachedCandidates(bookID string) (*MetadataCandidateCache,
 			return nil, false, berr
 		}
 		if book != nil {
-			live, lerr := database.LiveBookAuthorNames(mfs.db, book)
-			if lerr != nil {
-				return nil, false, lerr
+			filtered, ferr := mfs.filterLegacyForBook(entry, book, mfs.db, mfs.bookRuntimeSec(book))
+			if ferr != nil {
+				return nil, false, ferr
 			}
-			author := ""
-			if len(live) > 0 {
-				author = SearchAuthorHint(live[0])
-			}
-			entry = mfs.filterLegacyCandidates(entry, book, book.Title, author)
+			entry = filtered
 		}
 	}
 	return entry, entry.IsFresh(), nil
+}
+
+// GetCachedCandidatesPreloaded is GetCachedCandidates for a caller that has
+// already read the book (nil when it no longer resolves) and holds its file
+// rows: a listing over the whole cache (the review page's loader) reads every
+// book in one batch and every book's files in one batch, and the per-row
+// GetBookByID plus the per-book GetBookFiles range scan behind the legacy
+// filter's runtime were 38% of a 119 s review request on production.
+//
+// The result is identical to GetCachedCandidates for the same store state:
+// the same stamp gate, the same live-author hint (read through authors), and
+// the same runtime rule (database.LoadBookRuntime over files).
+func (mfs *Service) GetCachedCandidatesPreloaded(bookID string, book *database.Book, files database.BookFilesGetter, authors database.BookAuthorReader) (*MetadataCandidateCache, bool, error) {
+	if mfs == nil || mfs.db == nil {
+		return nil, false, nil
+	}
+	entry, err := mfs.db.GetMetadataCache(bookID)
+	if err != nil {
+		return nil, false, err
+	}
+	if entry == nil {
+		return nil, false, nil
+	}
+	if len(entry.Candidates) > 0 && !isCurrentFingerprint(entry.SearchFingerprint) && book != nil {
+		rt, rerr := database.LoadBookRuntime(files, book)
+		if rerr != nil {
+			cachePreloadLog.Warn("book files unreadable; runtime treated as unknown: book_id=%s err=%v", book.ID, rerr)
+		}
+		sec, _ := rt.KnownSeconds()
+		filtered, ferr := mfs.filterLegacyForBook(entry, book, authors, sec)
+		if ferr != nil {
+			return nil, false, ferr
+		}
+		entry = filtered
+	}
+	return entry, entry.IsFresh(), nil
+}
+
+var cachePreloadLog = logger.New("metafetch.cache")
+
+// filterLegacyForBook is the GetCachedCandidates legacy filter for a resolved
+// book: the search author hint is the book's first live author, read through
+// authors, and runtimeSec is the book's known runtime (bookRuntimeSec).
+func (mfs *Service) filterLegacyForBook(entry *MetadataCandidateCache, book *database.Book, authors database.BookAuthorReader, runtimeSec int) (*MetadataCandidateCache, error) {
+	live, err := database.LiveBookAuthorNames(authors, book)
+	if err != nil {
+		return nil, err
+	}
+	author := ""
+	if len(live) > 0 {
+		author = SearchAuthorHint(live[0])
+	}
+	return mfs.filterLegacyCandidatesRuntime(entry, book, book.Title, author, runtimeSec), nil
 }
 
 // filterLegacyCandidates returns entry with its candidates filtered by this
@@ -109,8 +158,17 @@ func (mfs *Service) filterLegacyCandidates(entry *MetadataCandidateCache, book *
 	if entry == nil || len(entry.Candidates) == 0 || isCurrentFingerprint(entry.SearchFingerprint) {
 		return entry
 	}
+	return mfs.filterLegacyCandidatesRuntime(entry, book, query, author, mfs.bookRuntimeSec(book))
+}
+
+// filterLegacyCandidatesRuntime is filterLegacyCandidates with the book's
+// runtime already known, for a caller that holds the book's file rows.
+func (mfs *Service) filterLegacyCandidatesRuntime(entry *MetadataCandidateCache, book *database.Book, query, author string, runtimeSec int) *MetadataCandidateCache {
+	if entry == nil || len(entry.Candidates) == 0 || isCurrentFingerprint(entry.SearchFingerprint) {
+		return entry
+	}
 	in := mfs.resolveSearchInputs(book, query, author, "")
-	c := newStrongCriteria(in.parsed, in.title, in.literal, in.asin, in.author, mfs.bookRuntimeSec(book))
+	c := newStrongCriteria(in.parsed, in.title, in.literal, in.asin, in.author, runtimeSec)
 	cp := *entry
 	cp.Candidates = c.filterCarried(entry.Candidates)
 	return &cp

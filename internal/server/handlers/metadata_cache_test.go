@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-09-30
+// last-edited: 2026-10-02
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //
@@ -95,6 +95,7 @@ func paramsMap(t *testing.T, v any) map[string]any {
 func newDispatchHandler(t *testing.T, ops handlers.OpEnqueuer) *handlers.MetadataCacheHandler {
 	t.Helper()
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
 	batcher := handlersmocks.NewMockWriteBackEnqueuer(t)
 	return handlers.NewMetadataCacheHandler(store, svc, batcher, nil, ops, nil)
@@ -299,6 +300,7 @@ func reviewCtx(query string) (*gin.Context, *httptest.ResponseRecorder) {
 // whose book is gone and one with no stored candidate, leaving two reviewable.
 func TestGetCacheReviewResults_CountsOnlyReviewableRows(t *testing.T) {
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
 
 	ids := []string{"b1", "b2", "b3", "gone"}
@@ -366,6 +368,7 @@ func TestGetCacheReviewResults_CountsOnlyReviewableRows(t *testing.T) {
 // The fixture puts one row in each cause and one reviewable row beside them.
 func TestGetCacheReviewResults_UnreviewableSplitByCause(t *testing.T) {
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
 
 	ids := []string{"ok", "gone", "empty", "bad"}
@@ -443,6 +446,7 @@ func TestGetCacheReviewResults_UnreviewableSplitByCause(t *testing.T) {
 // and every one was presented as though freshly fetched.
 func TestGetCacheReviewResults_FlagsStaleRows(t *testing.T) {
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
 
 	now := time.Now()
@@ -545,6 +549,7 @@ func decodeCachedBody(t *testing.T, w *httptest.ResponseRecorder) cachedBody {
 func cachedFixture(t *testing.T, statuses []*string) (*handlersmocks.MockMetadataCacheBookStore, *handlersmocks.MockMetadataCacheFetchService) {
 	t.Helper()
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
 
 	summaries := make([]metafetch.MetadataCacheSummary, 0, len(statuses))
@@ -668,6 +673,7 @@ func TestListCachedCandidates_StatusMatchedFilters(t *testing.T) {
 // drop rows that do still exist.
 func TestListCachedCandidates_OrphanedRowDroppedViaFallback(t *testing.T) {
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
 
 	svc.EXPECT().ListCachedSummaries(mock.Anything).Return([]metafetch.MetadataCacheSummary{
@@ -693,6 +699,7 @@ func TestListCachedCandidates_OrphanedRowDroppedViaFallback(t *testing.T) {
 // have no cached metadata" if it is not handled.
 func TestListCachedCandidates_BatchFailureFallsBackToPointReads(t *testing.T) {
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
 
 	svc.EXPECT().ListCachedSummaries(mock.Anything).Return([]metafetch.MetadataCacheSummary{
@@ -721,6 +728,7 @@ func TestListCachedCandidates_BatchFailureFallsBackToPointReads(t *testing.T) {
 func pagedReviewHandler(t *testing.T, n int) *handlers.MetadataCacheHandler {
 	t.Helper()
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
 
 	summaries := make([]metafetch.MetadataCacheSummary, 0, n)

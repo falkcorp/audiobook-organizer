@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package handlers
 
@@ -56,6 +56,9 @@ type loadedCacheRow struct {
 	// when the candidate fetch would skip the book with "no usable title"
 	// instead of searching it.
 	searchable bool
+	// files is what the review row's book info takes from the book's file
+	// rows, read in the same pass so the page never reads them again.
+	files metabatch.BookFileFacts
 }
 
 // cacheRowSet is what loadCacheRows read.
@@ -69,6 +72,74 @@ type cacheRowSet struct {
 	lookupBook func(id string) *database.Book
 }
 
+// bookFilesBatchReader is the batch file read loadCacheRows uses when the
+// store has it (database.Store does; with memdb published it is an index
+// lookup per book, not a Pebble range scan). A store without it is read per
+// book, as before.
+type bookFilesBatchReader interface {
+	GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error)
+}
+
+// preloadedCandidateReader is metafetch.(*Service).GetCachedCandidatesPreloaded:
+// GetCachedCandidates with the book and its file rows already in hand. A
+// service without it is read through GetCachedCandidates, as before.
+type preloadedCandidateReader interface {
+	GetCachedCandidatesPreloaded(bookID string, book *database.Book, files database.BookFilesGetter, authors database.BookAuthorReader) (*metafetch.MetadataCandidateCache, bool, error)
+}
+
+// loadChunkSize is how many rows one worker of loadCacheRows takes at a
+// time: one batch file read per chunk. Bounded so the rows held at once stay
+// small (a whole-cache batch is ~40k books and hundreds of thousands of file
+// rows), large enough that the per-call overhead vanishes.
+const loadChunkSize = 256
+
+// chunkFiles serves GetBookFiles for one chunk's books from a single batch
+// read, and delegates everything else (authors, folder listings) to the
+// store. A book the batch covered but holds no rows for has no files: that is
+// an answer, not a miss.
+type chunkFiles struct {
+	cacheRowBookReader
+	byBook map[string][]database.BookFile
+}
+
+func (c chunkFiles) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	if c.byBook == nil {
+		return c.cacheRowBookReader.GetBookFiles(bookID)
+	}
+	return c.byBook[bookID], nil
+}
+
+// filesForChunk returns the reader one chunk's rows use for file reads: the
+// batch result when the store can batch and the read succeeds, else the store
+// itself (per-book reads, the old behaviour).
+func filesForChunk(store cacheRowBookReader, rows []loadedCacheRow) chunkFiles {
+	batch, ok := store.(bookFilesBatchReader)
+	if !ok {
+		return chunkFiles{cacheRowBookReader: store}
+	}
+	ids := make([]string, len(rows))
+	for i := range rows {
+		ids[i] = rows[i].book.ID
+	}
+	cores, err := batch.GetBookFilesForIDsCore(ids)
+	if err != nil {
+		metadataCacheLog.Warn("batch book-file read failed; falling back to per-book reads: %v", err)
+		return chunkFiles{cacheRowBookReader: store}
+	}
+	byBook := make(map[string][]database.BookFile, len(ids))
+	for _, id := range ids {
+		byBook[id] = nil
+	}
+	for id, list := range cores {
+		files := make([]database.BookFile, len(list))
+		for i := range list {
+			files[i] = list[i].AsBookFile()
+		}
+		byBook[id] = files
+	}
+	return chunkFiles{cacheRowBookReader: store, byBook: byBook}
+}
+
 // loadCacheRows lists every metadata-cache summary, resolves each one's book
 // in ONE batch read (with a per-book fallback), drops the orphans, and reads
 // every surviving row's cached candidates over a bounded worker pool.
@@ -77,6 +148,12 @@ type cacheRowSet struct {
 // measured at 21.7s and 35.2s on production). The candidate reads run over
 // every row whatever page a caller asked for, because the counts span the
 // whole set; reviewListConcurrency bounds that fan-out.
+//
+// Book files are read ONCE per row, in batches of loadChunkSize, and shared by
+// the three consumers that each used to read them: the legacy candidate filter
+// (its runtime), the search-title resolver (presentFiles), and the row's book
+// info (metabatch.BookFileFacts, kept on the row). On production those were
+// three Pebble range scans per book and most of a 119 s request.
 func loadCacheRows(ctx context.Context, store cacheRowBookReader, svc cacheRowCandidateReader) (cacheRowSet, error) {
 	summaries, err := svc.ListCachedSummaries(ctx)
 	if err != nil {
@@ -98,6 +175,7 @@ func loadCacheRows(ctx context.Context, store cacheRowBookReader, svc cacheRowCa
 	// Serves from the batch result and falls back to a point read only when
 	// the batch missed the row (or the batch call itself failed), so a partial
 	// batch degrades in behavior-preserving fashion rather than dropping rows.
+	// Only called from this goroutine.
 	lookupBook := func(id string) *database.Book {
 		if b, ok := booksByID[id]; ok {
 			return b
@@ -120,27 +198,49 @@ func loadCacheRows(ctx context.Context, store cacheRowBookReader, svc cacheRowCa
 		set.rows = append(set.rows, loadedCacheRow{sum: sum, book: book})
 	}
 
+	preloaded, canPreload := svc.(preloadedCandidateReader)
 	// One folder memo for the pass: a chapter set's rows share one folder
 	// listing instead of one each (roots are the resolver's own concern).
 	memo := metabatch.NewFolderMemo()
 	var cg errgroup.Group
 	cg.SetLimit(reviewListConcurrency)
-	for i := range set.rows {
+	// Chunks are disjoint index ranges of set.rows, so no two workers write
+	// the same row.
+	for lo := 0; lo < len(set.rows); lo += loadChunkSize {
+		hi := min(lo+loadChunkSize, len(set.rows))
 		cg.Go(func() error {
-			entry, _, cerr := svc.GetCachedCandidates(set.rows[i].sum.BookID)
-			if cerr == nil {
-				set.rows[i].entry = entry
+			if ctx.Err() != nil {
+				return nil
 			}
-			// The same resolver fetchCandidateForBook runs before it searches.
-			// For an ordinary title it is a text check; it reads the book's
-			// files (and at most its authors) only for a title that needs
-			// corroborating or a fallback, which is why it runs here in the
-			// pool rather than in the serial pass that applies cacheRowStale.
-			set.rows[i].searchable = metabatch.ResolveCandidateSearchQueryMemo(store, set.rows[i].book, memo).Usable
+			chunk := set.rows[lo:hi]
+			files := filesForChunk(store, chunk)
+			for i := range chunk {
+				r := &chunk[i]
+				var entry *metafetch.MetadataCandidateCache
+				var cerr error
+				if canPreload {
+					entry, _, cerr = preloaded.GetCachedCandidatesPreloaded(r.sum.BookID, r.book, files, store)
+				} else {
+					entry, _, cerr = svc.GetCachedCandidates(r.sum.BookID)
+				}
+				if cerr == nil {
+					r.entry = entry
+				}
+				// The same resolver fetchCandidateForBook runs before it searches.
+				// For an ordinary title it is a text check; it reads the book's
+				// files (and at most its authors) only for a title that needs
+				// corroborating or a fallback, which is why it runs here in the
+				// pool rather than in the serial pass that applies cacheRowStale.
+				r.searchable = metabatch.ResolveCandidateSearchQueryMemo(files, r.book, memo).Usable
+				r.files = metabatch.ReadBookFileFacts(files, r.book)
+			}
 			return nil // a per-entry failure skips that row, never the whole batch
 		})
 	}
 	_ = cg.Wait()
+	if err := ctx.Err(); err != nil {
+		return cacheRowSet{}, err
+	}
 	return set, nil
 }
 

@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package database
 
@@ -24,6 +24,11 @@ type BookFileReader interface {
 	// BookFileCore return type makes reading a stripped fingerprint field a
 	// compile error instead of a silent nil.
 	GetAllBookFilesCore() ([]BookFileCore, error)
+	// GetBookFilesForIDsCore returns the BookFileCore rows of each of
+	// bookIDs, grouped by book id (a book with no rows is absent). With memdb
+	// published it is an index lookup per book, not a Pebble range scan, so a
+	// listing over thousands of books reads their files in one call.
+	GetBookFilesForIDsCore(bookIDs []string) (map[string][]BookFileCore, error)
 	GetBookFileByID(bookID, fileID string) (*BookFile, error)
 	GetBookFileByPath(filePath string) (*BookFile, error)
 	// BookFilesAtPath returns EVERY row at a path (GetBookFileByPath's index

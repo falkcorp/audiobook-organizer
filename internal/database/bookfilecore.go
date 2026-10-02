@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-09-19
+// last-edited: 2026-10-02
 
 package database
 
@@ -179,5 +179,70 @@ func (f *BookFile) Core() BookFileCore {
 		LastScanMtime:                  f.LastScanMtime,
 		LastScanSize:                   f.LastScanSize,
 		NeedsRescan:                    f.NeedsRescan,
+	}
+}
+
+// AsBookFile is the inverse of Core: a BookFile carrying every Core field,
+// with the stripped heavy fields (fingerprint diagnostics, AcoustID
+// fingerprint and segments) left zero. For read paths that already hold a
+// batch of BookFileCore rows (GetBookFilesForIDsCore) and must hand them to a
+// []BookFile consumer that reads none of the stripped fields -- runtime
+// (ComputeBookRuntime), the search-title resolver, the review book info --
+// instead of re-reading each book's rows from Pebble.
+func (c *BookFileCore) AsBookFile() BookFile {
+	return BookFile{
+		ID:                             c.ID,
+		BookID:                         c.BookID,
+		VersionID:                      c.VersionID,
+		FilePath:                       c.FilePath,
+		OriginalFilename:               c.OriginalFilename,
+		ITunesPath:                     c.ITunesPath,
+		ITunesPersistentID:             c.ITunesPersistentID,
+		TrackNumber:                    c.TrackNumber,
+		TrackCount:                     c.TrackCount,
+		DiscNumber:                     c.DiscNumber,
+		DiscCount:                      c.DiscCount,
+		Title:                          c.Title,
+		RawTags:                        c.RawTags,
+		Format:                         c.Format,
+		Codec:                          c.Codec,
+		Duration:                       c.Duration,
+		FileSize:                       c.FileSize,
+		BitrateKbps:                    c.BitrateKbps,
+		SampleRateHz:                   c.SampleRateHz,
+		Channels:                       c.Channels,
+		BitDepth:                       c.BitDepth,
+		FileHash:                       c.FileHash,
+		OriginalFileHash:               c.OriginalFileHash,
+		OriginalFileHashKind:           c.OriginalFileHashKind,
+		PostMetadataHash:               c.PostMetadataHash,
+		Scan:                           c.Scan,
+		AcoustIDFingerprintDurationSec: c.AcoustIDFingerprintDurationSec,
+		AcoustIDFPVersion:              c.AcoustIDFPVersion,
+		FingerprintFailedAt:            c.FingerprintFailedAt,
+		AcoustIDOnlineRecordingID:      c.AcoustIDOnlineRecordingID,
+		AcoustIDOnlineScore:            c.AcoustIDOnlineScore,
+		AcoustIDOnlineLookedUpAt:       c.AcoustIDOnlineLookedUpAt,
+		OrganizeMethod:                 c.OrganizeMethod,
+		Missing:                        c.Missing,
+		SkipScan:                       c.SkipScan,
+		CreatedAt:                      c.CreatedAt,
+		UpdatedAt:                      c.UpdatedAt,
+		DelugeHash:                     c.DelugeHash,
+		DownloadHash:                   c.DownloadHash,
+		DelugeOriginalPath:             c.DelugeOriginalPath,
+		ImportedFromDelugeAt:           c.ImportedFromDelugeAt,
+		TranscribedTitle:               c.TranscribedTitle,
+		TranscribedAuthor:              c.TranscribedAuthor,
+		TranscribedNarrator:            c.TranscribedNarrator,
+		TranscribedTranslator:          c.TranscribedTranslator,
+		TranscribedCoverArtist:         c.TranscribedCoverArtist,
+		IntroTranscribedAt:             c.IntroTranscribedAt,
+		TranscribeStatus:               c.TranscribeStatus,
+		TranscribeError:                c.TranscribeError,
+		TranscribeAttemptedAt:          c.TranscribeAttemptedAt,
+		LastScanMtime:                  c.LastScanMtime,
+		LastScanSize:                   c.LastScanSize,
+		NeedsRescan:                    c.NeedsRescan,
 	}
 }
