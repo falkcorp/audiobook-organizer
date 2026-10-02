@@ -1,5 +1,5 @@
 // file: internal/audiobooks/restore_trash_review_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d002b2d9-da13-4681-9c42-b8845f6cacf1
 // last-edited: 2026-10-01
 
@@ -176,4 +176,26 @@ func TestRestoreAudiobook_MergeBooksLoserKeepsRedirect(t *testing.T) {
 	got, err := f.S.GetRaw(pendingKey)
 	require.NoError(t, err)
 	require.NotNil(t, got, "the pending move onto the survivor is still owed while the redirect stands")
+}
+
+// A grouped member with a nil primary flag beside a live explicit primary:
+// YieldToIncumbent leaves a nil flag alone and ABSLibraryFilter reads nil as
+// primary, but the hand-off after the restore writes it false. Judged on the
+// flag alone the redirect was removed and the row then hidden, the same
+// stranding as a MergeBooks loser. It keeps its redirect.
+func TestRestoreAudiobook_NilFlagGroupMemberKeepsRedirect(t *testing.T) {
+	f, svc := handoffFixture(t)
+	inc := f.Book(t, vptest.Spec{ID: "inc", Group: "g", Primary: "true"})
+	m := f.Book(t, vptest.Spec{ID: "m", Group: "g", Primary: "nil"})
+	_, err := f.S.MintOrGetSyncID(m)
+	require.NoError(t, err)
+	require.NoError(t, f.S.RecordSyncMerge(m, inc))
+	f.SoftDelete(t, m)
+
+	_, err = svc.RestoreAudiobook(context.Background(), m)
+	require.NoError(t, err)
+
+	f.RequireSinglePrimary(t, "g", inc)
+	require.Equal(t, "false", f.Flag(t, m), "the hand-off leaves the member non-primary")
+	require.False(t, absWouldRender(t, f.S, m), "so its redirect is kept")
 }
