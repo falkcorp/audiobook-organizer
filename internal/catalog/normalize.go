@@ -1,5 +1,5 @@
 // file: internal/catalog/normalize.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c8e5a17-9f43-4b6d-8e20-7d1a3c5f9b42
 // last-edited: 2026-10-01
 
@@ -96,25 +96,27 @@ func NormalizeTitle(title string) string {
 	return authorjunk.FoldKey(StripEditionMarkers(title))
 }
 
-// PrimaryAuthorIdentity is the first credited author's identity: the author
-// ASIN when the provider gave one, else the folded name, else "".
-func PrimaryAuthorIdentity(authorName, authorASIN string) string {
-	if k := AuthorASINKey(authorASIN); k != "" {
-		return k
-	}
-	return AuthorNameKey(authorName)
-}
-
-// EditionGroupKey is the R6 grouping key: primary author identity + the
-// normalized title. Series and sequence are NOT part of it. It returns ""
-// when either half is missing: an entry with no author identity is never
-// grouped on its title alone, it gets a singleton group.
+// EditionGroupKey is the R6 grouping key: the first credited author's folded
+// NAME + the normalized title. Series and sequence are NOT part of it. It
+// returns "" when either half is missing: an entry with no author name is
+// never grouped on its title alone (excluded by design), it gets a singleton
+// group.
 //
-// Known gap (reported, not fixed in P1): an edition whose first author
-// carries an ASIN and another edition of the same title whose author does not
-// produce different keys ("asin:X|t" vs "name:n|t") and so different groups.
-func EditionGroupKey(primaryAuthorName, primaryAuthorASIN, title string) string {
-	id := PrimaryAuthorIdentity(primaryAuthorName, primaryAuthorASIN)
+// The author ASIN is deliberately NOT part of the key. Audible gives an
+// author ASIN on some credits and omits it on others for the same person, so
+// an ASIN-when-present key split one work into two groups ("asin:X|t" and
+// "name:n|t"), and because UpsertEntries keeps an entry's first group id
+// forever, the split was permanent. The trade-off: two spellings of one
+// author's name that fold differently ("A. Tchaikovsky" vs "Adrian
+// Tchaikovsky") are two groups, and two different authors who share a name
+// share a group for a title they both wrote. Author identity by ASIN is
+// still decided per entry (Decide, R10); grouping only collects editions.
+//
+// The ASIN-keyed form never reached a store: no live harvest had run when
+// this changed (the op is behind catalog.enabled, default off), so there are
+// no cat_egkey rows under the old shape and no migration.
+func EditionGroupKey(primaryAuthorName, title string) string {
+	id := AuthorNameKey(primaryAuthorName)
 	t := NormalizeTitle(title)
 	if id == "" || t == "" {
 		return ""

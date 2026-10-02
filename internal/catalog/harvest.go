@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c2e4a90-1d6f-4b38-8e57-3a9b5c1f0d26
 // last-edited: 2026-10-01
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -151,17 +152,36 @@ type fetchResult struct {
 	products map[string]metadata.CatalogProduct
 	order    []string
 	pages    int
-	raw      int
-	total    int
-	capped   bool
-	err      error
+	// raw counts every product the provider sent, decoded or skipped: it is
+	// what is compared with total and with the cap.
+	raw     int
+	skipped int
+	total   int
+	capped  bool
+	// short is set when the listing ended before it reached the provider's
+	// own total (or the total itself is not believable). The rows received
+	// are real and are kept, but the listing is NOT complete, so nothing may
+	// be marked stale from it (R10: stale_since only after a complete fetch).
+	short string
+	err   error
 }
 
+// complete reports whether the walk reached the provider's total: no error,
+// not short. A capped walk is complete-but-capped; the caller handles that.
+func (r fetchResult) complete() bool { return r.err == nil && r.short == "" }
+
 // fetchAll pages through an author listing: page 0, 1, ... until the
-// provider's total_results is reached, an empty page arrives, or the cap is
-// hit (counted on RAW products received, not on kept ones). ASINs are
-// deduped across pages.
-func (h *Harvester) fetchAll(ctx context.Context, name string, touch func()) fetchResult {
+// provider's total_results is reached or the cap is hit (counted on RAW
+// products received, not on kept ones). ASINs are deduped across pages.
+//
+// Only reaching total_results completes a walk. An empty page that arrives
+// before the total is a truncated reply, not the end of the listing: it ends
+// the walk as short. A total of 0 is believed only for an author with no
+// kept entries from an earlier run (prevKept == 0); for an author whose last
+// harvest kept rows, an empty "0 results" reply is far likelier a transient
+// provider answer than the author's whole catalog vanishing, and believing it
+// would stale every entry.
+func (h *Harvester) fetchAll(ctx context.Context, name string, prevKept int, touch func()) fetchResult {
 	r := fetchResult{products: map[string]metadata.CatalogProduct{}}
 	for page := 0; ; page++ {
 		if err := h.waitTurn(ctx); err != nil {
@@ -179,7 +199,9 @@ func (h *Harvester) fetchAll(ctx context.Context, name string, touch func()) fet
 		}
 		r.pages++
 		r.total = pg.TotalResults
-		r.raw += len(pg.Products)
+		received := len(pg.Products) + pg.Skipped
+		r.raw += received
+		r.skipped += pg.Skipped
 		for _, p := range pg.Products {
 			if p.ASIN == "" {
 				continue
@@ -189,7 +211,18 @@ func (h *Harvester) fetchAll(ctx context.Context, name string, touch func()) fet
 			}
 			r.products[p.ASIN] = p
 		}
-		if len(pg.Products) == 0 || r.raw >= pg.TotalResults {
+		switch {
+		case pg.TotalResults <= 0:
+			if r.raw > 0 {
+				r.short = fmt.Sprintf("provider sent %d products but reported total_results %d", r.raw, pg.TotalResults)
+			} else if prevKept > 0 {
+				r.short = fmt.Sprintf("provider reported 0 results for an author whose last harvest kept %d entries", prevKept)
+			}
+			return r
+		case r.raw >= pg.TotalResults:
+			return r
+		case received == 0:
+			r.short = fmt.Sprintf("listing ended at %d of %d products (empty page %d)", r.raw, pg.TotalResults, page)
 			return r
 		}
 		if r.raw >= h.Cfg.MaxProducts {
@@ -207,15 +240,25 @@ func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 	now := h.Cfg.Now().UTC()
 	st := database.CatalogAuthorState{Key: a.Key, Name: a.Name, LastAttemptAt: now, OpID: h.Cfg.OpID}
 	var prevASINs []string
+	prevKept := 0
 	if prev, err := h.Store.GetAuthorState(a.Key); err != nil {
 		return st, fmt.Errorf("catalog harvest %q: read state: %w", a.Name, err)
 	} else if prev != nil {
 		st.LastCompleteAt = prev.LastCompleteAt
 		prevASINs = prev.AuthorASINs
+		prevKept = prev.Kept
 	}
 
-	fr := h.fetchAll(ctx, a.Name, touch)
-	st.PagesDone, st.Fetched, st.TotalResults, st.Capped = fr.pages, fr.raw, fr.total, fr.capped
+	fr := h.fetchAll(ctx, a.Name, prevKept, touch)
+	st.PagesDone, st.Fetched, st.TotalResults, st.Capped, st.Skipped = fr.pages, fr.raw, fr.total, fr.capped, fr.skipped
+	if fr.short != "" {
+		harvestLog.Warn("author %q: %s; entries kept, nothing marked stale, retried next run",
+			logger.SanitizeLogValue(a.Name), fr.short)
+	}
+	if fr.skipped > 0 {
+		harvestLog.Warn("author %q: %d undecodable products skipped; nothing marked stale",
+			logger.SanitizeLogValue(a.Name), fr.skipped)
+	}
 	if fr.capped {
 		harvestLog.Warn("author %q hit the %d-product cap (provider total %d); entries kept, nothing marked stale",
 			logger.SanitizeLogValue(a.Name), h.Cfg.MaxProducts, fr.total)
@@ -238,7 +281,7 @@ func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 		lookup = nil
 	}
 	res, resErr := ResolveAuthorASINs(ctx, a.Name, a.OwnedASINs, fr.products, lookup)
-	if (fr.err != nil || resErr != nil || res.LookupErrors > 0) && prevASINs != nil {
+	if (!fr.complete() || resErr != nil || res.LookupErrors > 0) && prevASINs != nil {
 		// An incomplete resolution must not downgrade entries an earlier
 		// complete run confirmed by ASIN to name_only (or keep a homonym the
 		// earlier run dropped): fall back to the identities already known.
@@ -304,6 +347,11 @@ func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 			st.State = database.CatalogHarvestPartial
 		}
 		st.LastError = err.Error()
+	case fr.short != "":
+		// A truncated listing: keep what arrived, mark nothing stale, and
+		// stay due so the next run retries it (R10).
+		st.State = database.CatalogHarvestPartial
+		st.LastError = fr.short
 	case res.LookupErrors > 0:
 		// The listing is whole but the identity check is not: keep what was
 		// kept, mark nothing stale, retry next run.
@@ -313,7 +361,10 @@ func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 		st.State = database.CatalogHarvestComplete
 		t := now
 		st.LastCompleteAt = &t
-		if !fr.capped {
+		// A capped walk never saw the tail, and a skipped product may be a
+		// stored entry whose id cannot be read off it: either way "not seen"
+		// does not mean "gone".
+		if !fr.capped && fr.skipped == 0 {
 			n, err := h.Store.MarkUnseen(a.Key, seen)
 			if err != nil {
 				return st, fmt.Errorf("catalog harvest %q: stale pass: %w", a.Name, err)
@@ -460,18 +511,30 @@ func (h *Harvester) Run(parent context.Context, reporter registry.Reporter, auth
 
 // Estimate is the dry-run census.
 type Estimate struct {
-	Scope              ScopeCensus `json:"scope"`
-	AuthorsDue         int         `json:"authors_due"`
-	DueWithASIN        int         `json:"authors_due_with_asin"`
-	SampleAuthors      int         `json:"sample_authors"`
-	SampleErrors       int         `json:"sample_errors"`
-	AvgTotalResults    float64     `json:"avg_total_results"`
-	AvgKeptRatio       float64     `json:"avg_kept_ratio"`
-	AvgEntryBytes      float64     `json:"avg_entry_bytes"`
-	EstimatedRequests  int         `json:"estimated_requests"`
-	EstimatedEntries   int         `json:"estimated_entries"`
-	EstimatedBytes     int64       `json:"estimated_bytes"`
-	SampledAuthorNames []string    `json:"sampled_author_names,omitempty"`
+	Scope           ScopeCensus `json:"scope"`
+	AuthorsDue      int         `json:"authors_due"`
+	DueWithASIN     int         `json:"authors_due_with_asin"`
+	SampleAuthors   int         `json:"sample_authors"`
+	SampleErrors    int         `json:"sample_errors"`
+	AvgTotalResults float64     `json:"avg_total_results"`
+	AvgKeptRatio    float64     `json:"avg_kept_ratio"`
+	AvgEntryBytes   float64     `json:"avg_entry_bytes"`
+	// AvgPagesPerAuthor is the mean over sampled authors of each author's
+	// own page count, ceil(min(total, cap) / page size) and at least 1:
+	// the mean of the ceilings, never the ceiling of the mean total.
+	AvgPagesPerAuthor float64 `json:"avg_pages_per_author"`
+	// EstimatedLookups counts one product lookup per owned ASIN of every due
+	// author: the most ResolveAuthorASINs can make (an owned ASIN the listing
+	// returns costs none).
+	EstimatedLookups int `json:"estimated_lookups"`
+	// EstimatedRequests = listing pages + EstimatedLookups. The lookups term
+	// is a true upper bound; the pages term is exact for sampled authors and
+	// extrapolated (sample mean) for the rest. Retries of a partial run are
+	// not included.
+	EstimatedRequests  int      `json:"estimated_requests"`
+	EstimatedEntries   int      `json:"estimated_entries"`
+	EstimatedBytes     int64    `json:"estimated_bytes"`
+	SampledAuthorNames []string `json:"sampled_author_names,omitempty"`
 }
 
 // EstimateRun builds the dry-run census from the due authors, fetching
@@ -484,7 +547,7 @@ func (h *Harvester) EstimateRun(ctx context.Context, scope ScopeCensus, due []Sc
 			est.DueWithASIN++
 		}
 	}
-	var totSum, keptSum, rawSum float64
+	var totSum, keptSum, rawSum, pageSum float64
 	var byteSum, keptN float64
 	for i := 0; i < len(due) && est.SampleAuthors < sampleN; i++ {
 		a := due[i*max(len(due)/max(sampleN, 1), 1)%len(due)]
@@ -499,7 +562,9 @@ func (h *Harvester) EstimateRun(ctx context.Context, scope ScopeCensus, due []Sc
 		}
 		est.SampleAuthors++
 		est.SampledAuthorNames = append(est.SampledAuthorNames, a.Name)
-		totSum += float64(min(pg.TotalResults, h.Cfg.MaxProducts))
+		listed := min(pg.TotalResults, h.Cfg.MaxProducts)
+		totSum += float64(listed)
+		pageSum += float64(max((listed+h.Cfg.PageSize-1)/h.Cfg.PageSize, 1))
 		fetched := map[string]metadata.CatalogProduct{}
 		for _, p := range pg.Products {
 			fetched[p.ASIN] = p
@@ -532,14 +597,16 @@ func (h *Harvester) EstimateRun(ctx context.Context, scope ScopeCensus, due []Sc
 	if keptN > 0 {
 		est.AvgEntryBytes = byteSum / keptN
 	}
-	pagesPer := 1
-	if est.AvgTotalResults > 0 {
-		pagesPer = max(int((est.AvgTotalResults+float64(h.Cfg.PageSize)-1)/float64(h.Cfg.PageSize)), 1)
+	// With no sample the page count is unknown; one page per author is the
+	// least any harvest makes.
+	est.AvgPagesPerAuthor = 1
+	if est.SampleAuthors > 0 {
+		est.AvgPagesPerAuthor = pageSum / float64(est.SampleAuthors)
 	}
-	// One listing walk per due author plus, at most, one owned-ASIN lookup
-	// per author that has an ASIN-tagged book (most are answered by the
-	// listing itself, so this is an upper bound).
-	est.EstimatedRequests = len(due)*pagesPer + est.DueWithASIN
+	for _, a := range due {
+		est.EstimatedLookups += len(a.OwnedASINs)
+	}
+	est.EstimatedRequests = int(math.Ceil(est.AvgPagesPerAuthor*float64(len(due)))) + est.EstimatedLookups
 	est.EstimatedEntries = int(float64(len(due)) * est.AvgTotalResults * est.AvgKeptRatio)
 	est.EstimatedBytes = int64(float64(est.EstimatedEntries) * est.AvgEntryBytes)
 	return est

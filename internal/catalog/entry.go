@@ -1,5 +1,5 @@
 // file: internal/catalog/entry.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e7a2c91-6b5d-4f08-a3e1-9c2d8f6b1a74
 // last-edited: 2026-10-01
 
@@ -109,7 +109,7 @@ func BuildEntry(p metadata.CatalogProduct, provider, marketplace string) databas
 	// author being harvested: a co-authored title reached through either
 	// author must land in one group.
 	if len(p.Authors) > 0 {
-		e.EditionGroupKey = EditionGroupKey(p.Authors[0].Name, p.Authors[0].ASIN, p.Title)
+		e.EditionGroupKey = EditionGroupKey(p.Authors[0].Name, p.Title)
 	}
 	return e
 }
