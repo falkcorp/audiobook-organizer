@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_round3_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e4ed5d00-b92e-4387-91d0-1b1b72542bb2
 // last-edited: 2026-10-01
 
@@ -213,4 +213,58 @@ func TestDuplicateCopies_BulkApplyReadsTheLibraryOnce(t *testing.T) {
 	require.Equal(t, 2, out.Applied, "%+v", out.Rows)
 	require.LessOrEqual(t, full.Load()-before, int32(1),
 		"Replan per row catches the title index up; it does not rebuild it from every book")
+}
+
+// dcFailModify is a book writer whose every ModifyBook fails with
+// errDCInjected.
+type dcFailModify struct{ *database.PebbleStore }
+
+func (dcFailModify) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
+	return nil, errDCInjected
+}
+
+// TestFragmentFixer_PartialKeepsTheCause: the fragment fixer's partial()
+// makes the same promise as the duplicate-copies one: after its repoint, a
+// failing book write is ErrPartiallyApplied and still the write's own error.
+func TestFragmentFixer_PartialKeepsTheCause(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	res := f.plan(t, "op-plan")
+	row := findRow(t, res, "moved:"+f.ids["parent"])
+	require.True(t, row.Applicable(), row.SkipReason)
+	w := repairs.NewWriter(dcFailModify{f.s}, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-partial")
+	err := newFragmentFixer(f.p).Apply(context.Background(), w, row)
+	require.ErrorIs(t, err, repairs.ErrPartiallyApplied)
+	require.ErrorIs(t, err, errDCInjected, "the cause survives the partial wrap: %v", err)
+}
+
+// dcFailRetire is a book writer whose write that would hide a book fails
+// with errDCInjected; every other write goes through.
+type dcFailRetire struct{ *database.PebbleStore }
+
+func (s dcFailRetire) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	return s.PebbleStore.ModifyBook(id, func(b *database.Book) error {
+		if err := fn(b); err != nil {
+			return err
+		}
+		if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			return errDCInjected
+		}
+		return nil
+	})
+}
+
+// TestFolderBooksFixer_PartialKeepsTheCause: the folder-books fixer's
+// partial() keeps the failing step's error too (its retire, after the
+// groups were written).
+func TestFolderBooksFixer_PartialKeepsTheCause(t *testing.T) {
+	f := newFragFixture(t)
+	f.seedWolfe(t, fbITunes, "citadel")
+	row := f.fbSingleRow(t, "op-plan")
+	require.True(t, row.Applicable(), "skipped: %s %s", row.Skipped, row.SkipReason)
+	w := repairs.NewWriter(dcFailRetire{f.s}, f.s, fbFixerID, "bulk_update", "repairs-").
+		WithJournal(f.s, f.s, "op-partial").WithCredits(f.s)
+	err := newFolderBooksFixer(f.p).Apply(context.Background(), w, row)
+	require.ErrorIs(t, err, repairs.ErrPartiallyApplied)
+	require.ErrorIs(t, err, errDCInjected, "the cause survives the partial wrap: %v", err)
 }
