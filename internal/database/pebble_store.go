@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.184.0
+// version: 1.185.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package database
 
@@ -129,6 +129,7 @@ type PebbleStore struct {
 	fileProvMu               sync.Mutex     // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
 	fpwinLocks               bookLocks      // per-window-ref stripes: a window write and the delete cascade of the same file serialize, different files do not (pebble_store_fpwin.go)
 	bookFileIDScans          atomic.Int64   // count of scanForBookFileByID full scans; instrumentation so tests can prove a path never falls back to the O(N) walk
+	atpathMarkers            undecodableMarkerSet // which book_atpath_undecodable:<id> markers may exist (pebble_store_atpath_markers.go)
 	bookLocks                bookLocks      // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	bookFileLocks            bookLocks      // per-book_file-ID write stripes: every single-row book_file read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	bookOwnerLocks           bookLocks      // per-book-ID stripes over "which book_file rows name this book": DeleteBook's owns-files check+commit vs every book_file writer's commit (book_delete_owns_files.go)
@@ -392,6 +393,13 @@ func newPebbleStore(path string, fs vfs.FS) (*PebbleStore, error) {
 		UseMemDB: true, // in-memory query layer is the default after Phase 3
 	}
 	store.seedWorksGeneration()
+
+	// Load the undecodable-marker set before any write can stage (or skip) a
+	// marker delete (pebble_store_atpath_markers.go).
+	if err := store.ensureUndecodableMarkersLoaded(); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	slog.Info("PebbleDB opened", "path", path, "format_version", db.FormatMajorVersion())
 
@@ -2800,10 +2808,16 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 	// This batch writes a decodable row, so any undecodable-row marker for it
 	// is now stale. Dropping it here keeps the marker set exact. (A row that
 	// is still undecodable never reaches this batch: the GetBookByID above
-	// fails on it.)
-	if err := batch.Delete(bookAtPathUndecodableKey(id), nil); err != nil {
-		batch.Close()
-		return nil, err
+	// fails on it.) Staged ONLY when the marker may exist: an unconditional
+	// Delete left a tombstone per book write that every marker read walked
+	// (pebble_store_atpath_markers.go). The id leaves the in-memory set only
+	// after the commit below succeeds.
+	markerGen, markerMayExist := p.undecodableMarkerMayExist(id)
+	if markerMayExist {
+		if err := batch.Delete(bookAtPathUndecodableKey(id), nil); err != nil {
+			batch.Close()
+			return nil, err
+		}
 	}
 
 	updateHashIndex := func(oldVal, newVal *string, prefix string) error {
@@ -2917,9 +2931,15 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 	// ASIN) changes. The cache stored top-N matches for the prior
 	// identity; they may no longer apply. Done as a batch.Delete so
 	// the same transaction that updates the book row also clears the
-	// cache. Missing-key is a no-op in pebble.
+	// cache. Staged only when an entry exists: most books have none, and an
+	// unconditional Delete leaves a tombstone that ListMetadataCacheKeys'
+	// range scan (the cache review page) walks until compaction. An ASIN/ISBN
+	// backfill changes identity on every book it writes.
 	if identityChanged(oldBook, book) {
-		_ = batch.Delete(metadataCacheKey(id), nil)
+		if err := p.stageDeleteIfPresent(batch, metadataCacheKey(id)); err != nil {
+			batch.Close()
+			return nil, err
+		}
 	}
 
 	// ISBN/ASIN secondary index: delete stale rows for old values and write
@@ -2937,8 +2957,14 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 		}
 	}
 
+	if bookWriteBatchPreCommitHook != nil {
+		bookWriteBatchPreCommitHook("update", id, batch)
+	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return nil, err
+	}
+	if markerMayExist {
+		p.forgetUndecodableMarker(id, markerGen)
 	}
 
 	p.InvalidateLibraryStats()
@@ -3285,14 +3311,15 @@ func (p *PebbleStore) DeleteBook(id string) error {
 		return err
 	}
 
-	// Delete the signature sidecar. Unconditional: gating on
-	// book.BookSigV1 != nil would make the teardown depend on the read that
-	// just hydrated it, so a sidecar that failed to hydrate — or a book whose
-	// row was written by an older build — would leak its key forever. A
-	// Delete of an absent key is a no-op in Pebble, so there is nothing to
-	// gain by checking. Same dangling-row class as the work/hash indexes
-	// below, which were added to this function after a writer got ahead of it.
-	if err := batch.Delete(bookSigKey(id), nil); err != nil {
+	// Delete the signature sidecar. NOT gated on book.BookSigV1 != nil:
+	// that would make the teardown depend on the read that just hydrated it,
+	// so a sidecar that failed to hydrate — or a book whose row was written by
+	// an older build — would leak its key forever. Gated instead on the key
+	// itself existing on disk, which has no such blind spot: an absent key's
+	// Delete is not free, it leaves a tombstone that signal_coverage_era's
+	// range scan of book_sig: walks until compaction. Same dangling-row class
+	// as the work/hash indexes below.
+	if err := p.stageDeleteIfPresent(batch, bookSigKey(id)); err != nil {
 		batch.Close()
 		return err
 	}
@@ -3305,10 +3332,15 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	}
 
 	// Multi-valued path index. If book was a stale read, the row's real key
-	// survives as an extra (row gone), which the reader skips.
-	if err := batch.Delete(bookAtPathUndecodableKey(id), nil); err != nil {
-		batch.Close()
-		return err
+	// survives as an extra (row gone), which the reader skips. The
+	// undecodable marker is deleted only when it may exist, and leaves the
+	// in-memory set only after the commit (pebble_store_atpath_markers.go).
+	markerGen, markerMayExist := p.undecodableMarkerMayExist(id)
+	if markerMayExist {
+		if err := batch.Delete(bookAtPathUndecodableKey(id), nil); err != nil {
+			batch.Close()
+			return err
+		}
 	}
 	if err := batch.Delete(bookAtPathKey(book.FilePath, id), nil); err != nil {
 		batch.Close()
@@ -3397,8 +3429,10 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// embedding_store.go); deleted directly in this batch for atomicity
 	// with the rest of the book removal rather than wiring in a separate
 	// EmbeddingStore dependency on PebbleStore.
+	// Only when it exists: most books have no embedding, and the
+	// emb:v:book: family is range-scanned by the embedding store.
 	embKey := []byte(embVecPfx + "book:" + id)
-	if err := batch.Delete(embKey, nil); err != nil {
+	if err := p.stageDeleteIfPresent(batch, embKey); err != nil {
 		batch.Close()
 		return err
 	}
@@ -3442,8 +3476,9 @@ func (p *PebbleStore) DeleteBook(id string) error {
 		return err
 	}
 
-	// Delete this book's persisted chapter list (abs-sync TASK-06).
-	if err := batch.Delete([]byte("chapters:"+id), nil); err != nil {
+	// Delete this book's persisted chapter list (abs-sync TASK-06), only when
+	// one exists (stageDeleteIfPresent: no tombstone for an absent key).
+	if err := p.stageDeleteIfPresent(batch, []byte("chapters:"+id)); err != nil {
 		batch.Close()
 		return err
 	}
@@ -3453,9 +3488,12 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// row class as the work/hash indexes above: each of these is written by a
 	// Set*/Add* method on the book and torn down by nothing on delete, so every
 	// hard delete (purge, merge cleanup, archive sweep, dedup) leaked them
-	// permanently. Unconditional single-key Deletes: an absent key is a no-op
-	// in Pebble, and gating on a read would reintroduce the hydration
-	// dependency the book_sig comment above warns about.
+	// permanently. Each Delete is gated on the KEY existing on disk
+	// (stageDeleteIfPresent), not on any hydrated field, so there is no
+	// hydration dependency; an absent key's Delete is not free in Pebble, it
+	// leaves a tombstone that every range scan of the family (book_authors:
+	// for author counts, metadata_cache: for the cache review page) walks
+	// until compaction.
 	//
 	//   book_authors:<id>      SetBookAuthors     — the author junction row.
 	//                          bookIDsInAuthorJunction / GetAllAuthorBookCounts
@@ -3478,7 +3516,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 		[]byte("alt_titles:book:" + id),
 		metadataCacheKey(id),
 	} {
-		if err := batch.Delete(sidecar, nil); err != nil {
+		if err := p.stageDeleteIfPresent(batch, sidecar); err != nil {
 			batch.Close()
 			return err
 		}
@@ -3506,8 +3544,14 @@ func (p *PebbleStore) DeleteBook(id string) error {
 		return err
 	}
 
+	if bookWriteBatchPreCommitHook != nil {
+		bookWriteBatchPreCommitHook("delete", id, batch)
+	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return err
+	}
+	if markerMayExist {
+		p.forgetUndecodableMarker(id, markerGen)
 	}
 	p.InvalidateLibraryStats()
 	p.MarkAllQuickQueriesDirty("delete_book")

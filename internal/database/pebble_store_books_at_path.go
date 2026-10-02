@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_books_at_path.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ae16bae9-c3ef-4063-8cbc-7353bb345e55
-// last-edited: 2026-09-19
+// last-edited: 2026-10-02
 
 package database
 
@@ -79,10 +79,13 @@ func (p *PebbleStore) liveBookIDsAtPathScan(path string) ([]string, error) {
 // in one batch, so a book moving into or out of path mid-lookup is seen
 // consistently.
 func (p *PebbleStore) liveBookIDsAtPathIndex(path string) ([]string, error) {
-	snap := p.db.NewSnapshot()
+	snap, markerIDs, err := p.undecodableMarkerSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("live books at path: %w", err)
+	}
 	defer snap.Close()
 
-	repaired, err := undecodableMarkedAtPath(snap, path)
+	repaired, err := undecodableMarkedAtPath(snap, markerIDs, path)
 	if err != nil {
 		return nil, fmt.Errorf("live books at path: %w", err)
 	}
@@ -148,9 +151,13 @@ func (p *PebbleStore) liveBookIDsAtPathIndex(path string) ([]string, error) {
 //     so ignoring it would report its folder free. It is a candidate: if it is
 //     live and at path, its id is returned for merging with the index result.
 //
-// Normally there are no markers, so this is one empty seek.
-func undecodableMarkedAtPath(snap *pebble.Snapshot, path string) ([]string, error) {
-	matched, err := undecodableMarkedMatching(snap, func(p string) bool { return p == path })
+// markerIDs is the in-memory marker set copied with snap
+// (undecodableMarkerSnapshot), a superset of the markers in snap. Normally it
+// is empty and this does no I/O at all; it never range-scans the marker family,
+// whose absent-key tombstones made that "empty seek" cost ~51s per cache-review
+// request on 2026-10-02 (pebble_store_atpath_markers.go).
+func undecodableMarkedAtPath(snap *pebble.Snapshot, markerIDs []string, path string) ([]string, error) {
+	matched, err := undecodableMarkedMatching(snap, markerIDs, func(p string) bool { return p == path })
 	if err != nil {
 		return nil, err
 	}
@@ -166,38 +173,54 @@ func undecodableMarkedAtPath(snap *pebble.Snapshot, path string) ([]string, erro
 // predicate: it returns id -> path for each marked row that now decodes, is
 // live, and whose path matches, and fails closed on a row that still does not
 // decode.
-func undecodableMarkedMatching(snap *pebble.Snapshot, match func(path string) bool) (map[string]string, error) {
-	lower := []byte(bookAtPathUndecodablePrefix)
-	var blocking []string
+func undecodableMarkedMatching(snap *pebble.Snapshot, markerIDs []string, match func(path string) bool) (map[string]string, error) {
 	atPath := map[string]string{}
-	err := forEachKeyInRange(snap, lower, bareRowUpperBound(bookAtPathUndecodablePrefix), func(key, _ []byte) error {
-		id := string(key[len(lower):])
-		v, closer, err := snap.Get([]byte("book:" + id))
-		if errors.Is(err, pebble.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("read undecodable-marked book %s: %w", id, err)
-		}
-		var row bookAtPathRow
-		decErr := json.Unmarshal(v, &row)
-		closer.Close()
-		if decErr != nil {
-			blocking = append(blocking, id)
-			return nil
-		}
-		if match(row.FilePath) && !markedForDeletionFlag(row.MarkedForDeletion) {
-			atPath[id] = row.FilePath
-		}
-		return nil
-	})
+	if len(markerIDs) == 0 {
+		return atPath, nil
+	}
+	marked, err := markersOnDiskIn(snap, markerIDs)
 	if err != nil {
 		return nil, err
 	}
+	slices.Sort(marked) // deterministic blocking[0] in the error below
+	var blocking []string
+	for _, id := range marked {
+		if err := undecodableMarkedVisit(snap, id, match, atPath, &blocking); err != nil {
+			return nil, err
+		}
+	}
 	if len(blocking) > 0 {
-		return nil, fmt.Errorf("%d book row(s) cannot be decoded (e.g. book:%s); LiveBookIDsAtPath "+
-			"refuses until each is rewritten or removed out of band (UpdateBook and DeleteBook cannot "+
-			"read it either), then run maintenance.book-atpath-index-backfill", len(blocking), blocking[0])
+		return nil, undecodableBlockingError(blocking)
 	}
 	return atPath, nil
+}
+
+// undecodableMarkedVisit point-reads one marked row: gone is ignored, still
+// undecodable is appended to blocking, live and matching lands in atPath.
+func undecodableMarkedVisit(snap *pebble.Snapshot, id string, match func(path string) bool,
+	atPath map[string]string, blocking *[]string) error {
+	v, closer, err := snap.Get([]byte("book:" + id))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read undecodable-marked book %s: %w", id, err)
+	}
+	var row bookAtPathRow
+	decErr := json.Unmarshal(v, &row)
+	closer.Close()
+	if decErr != nil {
+		*blocking = append(*blocking, id)
+		return nil
+	}
+	if match(row.FilePath) && !markedForDeletionFlag(row.MarkedForDeletion) {
+		atPath[id] = row.FilePath
+	}
+	return nil
+}
+
+func undecodableBlockingError(blocking []string) error {
+	return fmt.Errorf("%d book row(s) cannot be decoded (e.g. book:%s); LiveBookIDsAtPath "+
+		"refuses until each is rewritten or removed out of band (UpdateBook and DeleteBook cannot "+
+		"read it either), then run maintenance.book-atpath-index-backfill", len(blocking), blocking[0])
 }
