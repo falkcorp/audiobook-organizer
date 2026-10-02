@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
 // last-edited: 2026-10-01
 
@@ -1213,5 +1213,106 @@ func TestRun_TallyReportsDuplicatedAuthors(t *testing.T) {
 	}
 	if tally.Duplicated.Load() != 1 || !strings.Contains(tally.Summary(), "duplicated=1") {
 		t.Errorf("tally = %s; want duplicated=1", tally.Summary())
+	}
+}
+
+// TestRun_ZeroTotalUnsettledIsRetriedNotComplete: a worker inside Run must
+// not persist an accepted zero total (or an advanced streak) before the
+// breaker settles. If the process dies between the worker and settleZero,
+// the stored state must be the pre-run one marked partial, so the author is
+// simply retried.
+func TestRun_ZeroTotalUnsettledIsRetriedNotComplete(t *testing.T) {
+	st, _ := openCatalog(t)
+	l, _ := phasedLister(func(int, int) metadata.AuthorPage { return metadata.AuthorPage{Products: []metadata.CatalogProduct{}} })
+	c := &clock{t: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+	annRuns(t, st, l, c, []time.Duration{time.Minute, 4 * 24 * time.Hour})
+	a := ScopeAuthor{Key: HarvestKey("Ann Author"), Name: "Ann Author"}
+	before, _ := st.GetAuthorState(a.Key)
+	c.Add(4 * 24 * time.Hour) // the third zero run now spans the window
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1, Now: c.Now})
+	if _, err := h.harvestAuthor(context.Background(), a, nil, newZeroLedger()); err != nil {
+		t.Fatal(err)
+	}
+	// No settleZero: the "crash".
+	got, _ := st.GetAuthorState(a.Key)
+	if got.State != database.CatalogHarvestPartial || got.ShortRuns != before.ShortRuns ||
+		got.LastCompleteAt == nil || !got.LastCompleteAt.Equal(*before.LastCompleteAt) {
+		t.Errorf("unsettled zero author persisted as %s short_runs=%d last_complete=%v; want partial, %d, %v",
+			got.State, got.ShortRuns, got.LastCompleteAt, before.ShortRuns, before.LastCompleteAt)
+	}
+	if n, _ := st.CountStale(); n != 0 {
+		t.Errorf("unsettled run staled %d", n)
+	}
+}
+
+// TestRun_BreakerRestoreKeepsTruncatedStreak: a tripped breaker must put back
+// the WHOLE pre-run state. Author A is two runs into a truncated streak
+// (total 3, 2 delivered); an outage run in between must not reset it, so the
+// next truncated run is the third and is accepted.
+func TestRun_BreakerRestoreKeepsTruncatedStreak(t *testing.T) {
+	st, _ := openCatalog(t)
+	authors, by := breakerAuthors(6)
+	var phase atomic.Int32 // 0 full, 1 A truncated, 2 everyone zero
+	l := &scriptLister{list: func(name string, page, size int) metadata.AuthorPage {
+		switch {
+		case phase.Load() == 2:
+			return metadata.AuthorPage{Products: []metadata.CatalogProduct{}}
+		case phase.Load() == 1 && name == authors[0].Name:
+			pg := slicePage(by[name], page, size)
+			pg.TotalResults = 3
+			return pg
+		}
+		return slicePage(by[name], page, size)
+	}}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 3})
+	for _, p := range []int32{0, 1, 1, 2, 1} {
+		phase.Store(p)
+		if _, err := h.Run(context.Background(), &fakeReporter{}, authors, RunOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, _ := st.GetAuthorState(authors[0].Key)
+	if s == nil || s.ShortRuns != 3 || s.State != database.CatalogHarvestComplete {
+		t.Errorf("author A after short, short, outage, short: %+v; want short_runs 3, complete", s)
+	}
+}
+
+// TestRun_NeverHarvestedZeroAuthorsDoNotTripBreaker: the breaker judges only
+// authors with entries on file. A run of mostly never-harvested authors with
+// no catalog answers 0 legitimately; they complete (empty) and are not due
+// again next run.
+func TestRun_NeverHarvestedZeroAuthorsDoNotTripBreaker(t *testing.T) {
+	st, _ := openCatalog(t)
+	// Six filed authors (enough to judge) answer normally; seven
+	// never-harvested ones answer 0. Counting the unfiled zeros would make
+	// it 7 of 13 and trip the breaker.
+	authors, by := breakerAuthors(6)
+	var nobodies []ScopeAuthor
+	for i := range 7 {
+		n := fmt.Sprintf("Nobody %d", i)
+		nobodies = append(nobodies, ScopeAuthor{Key: HarvestKey(n), Name: n})
+	}
+	l := &scriptLister{list: func(name string, page, size int) metadata.AuthorPage {
+		return slicePage(by[name], page, size) // nobodies have no products
+	}}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 3})
+	if _, err := h.Run(context.Background(), &fakeReporter{}, authors, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	all := append(slices.Clone(authors), nobodies...)
+	tally, err := h.Run(context.Background(), &fakeReporter{}, all, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tally.ZeroBreakerTripped.Load() {
+		t.Error("breaker tripped on never-harvested authors with no catalog")
+	}
+	for _, a := range nobodies {
+		if s, _ := st.GetAuthorState(a.Key); s == nil || s.State != database.CatalogHarvestComplete {
+			t.Errorf("%s: %+v; want complete", a.Name, s)
+		}
+	}
+	if due, _ := h.SelectDue(nobodies, nil); len(due) != 0 {
+		t.Errorf("%d never-harvested zero authors still due after a clean run", len(due))
 	}
 }

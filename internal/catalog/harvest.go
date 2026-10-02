@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7c2e4a90-1d6f-4b38-8e57-3a9b5c1f0d26
 // last-edited: 2026-10-01
 
@@ -196,9 +196,19 @@ const (
 	ZeroTotalAcceptWindow = 7 * 24 * time.Hour
 
 	// The run-level zero-total breaker: when more than ZeroBreakerFraction of
-	// a run's attempted authors answer "0 results", the provider is failing,
-	// not every catalog vanishing at once. Runs with fewer than
-	// ZeroBreakerMinAuthors attempted authors are too small to judge.
+	// a run's authors WITH ENTRIES ON FILE (filed > 0) whose listing answered
+	// say "0 results", the provider is failing, not every catalog vanishing
+	// at once. Only that population is judged: a zero answer from an author
+	// we have never found anything for is uninformative (most obscure
+	// authors legitimately have no catalog), while one from an author with
+	// entries is anomalous. ZeroBreakerMinAuthors applies to the same
+	// filed > 0 population; a run with fewer is too small to judge.
+	//
+	// When the breaker trips, every zero-total author of the run, filed or
+	// not, is left partial at its pre-run state (retried next run; a
+	// never-harvested author must not be recorded complete-and-empty for a
+	// whole reharvest interval on an outage's word). When it does not trip,
+	// zero-total authors settle normally: filed == 0 ones complete empty.
 	ZeroBreakerFraction   = 0.5
 	ZeroBreakerMinAuthors = 5
 )
@@ -284,7 +294,7 @@ func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 
 // harvestAuthor is HarvestAuthor with an optional run-level zero-total
 // ledger. With rz set (inside Run) every zero-total reply is reported to it
-// and the stale pass of an accepted zero total is deferred to it, so the
+// and its persisted state and stale pass are held for it, so the
 // breaker can judge the whole run before anything is staled.
 func (h *Harvester) harvestAuthor(ctx context.Context, a ScopeAuthor, touch func(), rz *zeroLedger) (database.CatalogAuthorState, error) {
 	now := h.Cfg.Now().UTC()
@@ -427,6 +437,7 @@ func (h *Harvester) harvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 		}
 	}
 
+	pendingStale := false
 	switch {
 	case fr.err != nil || resErr != nil:
 		err := fr.err
@@ -461,9 +472,10 @@ func (h *Harvester) harvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 		// are the evidence that the catalog is gone.
 		staleOK := !fr.capped && fr.skipped == 0 && fr.duplicates == 0 &&
 			(fr.short == "" || fr.shortKind == shortZeroTotal)
-		if staleOK && rz != nil && fr.shortKind == shortZeroTotal {
-			// Inside a run, an accepted zero total waits for the breaker.
-			rz.deferStale(a.Key)
+		if rz != nil && fr.zero {
+			// Inside a run a zero-total author is settled by the breaker:
+			// see the hold below. Its stale pass, if any, runs there.
+			pendingStale = staleOK
 		} else if staleOK {
 			n, err := h.Store.MarkUnseen(a.Key, seen)
 			if err != nil {
@@ -472,11 +484,30 @@ func (h *Harvester) harvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 			st.MarkedStale = n
 		}
 	}
-	if err := h.Store.PutAuthorState(&st); err != nil {
-		return st, fmt.Errorf("catalog harvest %q: write state: %w", a.Name, err)
+	if rz != nil && fr.err == nil && filed > 0 {
+		rz.answered()
 	}
 	if rz != nil && fr.err == nil && fr.zero {
-		rz.observe(a.Key, prev)
+		// Hold: persist the PRE-RUN state, marked partial, and hand the
+		// state this run would write to the ledger. settleZero writes it
+		// (and runs the stale pass) only if the breaker does not trip. A
+		// crash before settling therefore leaves the author partial with
+		// its old streak, i.e. retried: the safe direction. The ledger
+		// entry is added only after the hold is durably written, so a
+		// failed write can never be settled.
+		hold := pendingHold(prev, st, "zero-total reply; held until the run's zero-total breaker settles")
+		if err := h.Store.PutAuthorState(&hold); err != nil {
+			return st, fmt.Errorf("catalog harvest %q: write state: %w", a.Name, err)
+		}
+		rz.observe(a.Key, zeroObs{prev: prev, final: st, filed: filed > 0, stale: pendingStale})
+		harvestLog.Info("author %q: zero-total reply held for the run breaker (intended state=%s short_runs=%d)",
+			logger.SanitizeLogValue(a.Name), st.State, st.ShortRuns)
+		ret := st
+		ret.State = database.CatalogHarvestPartial
+		return ret, nil
+	}
+	if err := h.Store.PutAuthorState(&st); err != nil {
+		return st, fmt.Errorf("catalog harvest %q: write state: %w", a.Name, err)
 	}
 	harvestLog.Info("author %q: state=%s pages=%d fetched=%d/%d kept=%d dropped=%d (language=%d) name_only=%d author_asins=%v conflict=%v stale=%d",
 		logger.SanitizeLogValue(a.Name), st.State, st.PagesDone, st.Fetched, st.TotalResults, st.Kept, st.Dropped,
@@ -535,84 +566,103 @@ func (t *Tally) record(st database.CatalogAuthorState) {
 	}
 }
 
-// zeroLedger collects one run's zero-total replies for the breaker: each
-// author's state from BEFORE the run (to restore if the breaker trips) and
-// the authors whose accepted zero total is waiting for its stale pass.
+// zeroLedger collects one run's zero-total replies for the breaker.
 type zeroLedger struct {
-	mu       sync.Mutex
-	prev     map[string]*database.CatalogAuthorState
-	deferred []string
+	mu sync.Mutex
+	// filedAnswered counts authors with entries on file whose listing
+	// answered (no error): the breaker's population.
+	filedAnswered int
+	obs           map[string]zeroObs
+}
+
+// zeroObs is one held zero-total author: its whole pre-run state (nil if
+// never harvested), the state this run would write, whether it had entries
+// on file, and whether its settle runs the stale pass.
+type zeroObs struct {
+	prev  *database.CatalogAuthorState
+	final database.CatalogAuthorState
+	filed bool
+	stale bool
 }
 
 func newZeroLedger() *zeroLedger {
-	return &zeroLedger{prev: map[string]*database.CatalogAuthorState{}}
+	return &zeroLedger{obs: map[string]zeroObs{}}
 }
 
-func (z *zeroLedger) observe(key string, prev *database.CatalogAuthorState) {
+func (z *zeroLedger) answered() {
 	z.mu.Lock()
 	defer z.mu.Unlock()
-	z.prev[key] = prev
+	z.filedAnswered++
 }
 
-func (z *zeroLedger) deferStale(key string) {
+func (z *zeroLedger) observe(key string, o zeroObs) {
 	z.mu.Lock()
 	defer z.mu.Unlock()
-	z.deferred = append(z.deferred, key)
+	z.obs[key] = o
 }
 
-// settleZero runs after the pool: it either trips the breaker (restore every
-// zero-total author to its pre-run streak, mark it partial so it is retried,
-// stale nothing) or runs the deferred stale passes.
+// pendingHold is the pre-run state (a fresh one for a never-harvested
+// author) with only State, LastError, LastAttemptAt and OpID overlaid from
+// this run: every streak field, TotalResults and LastCompleteAt stay as they
+// were before it.
+func pendingHold(prev *database.CatalogAuthorState, now database.CatalogAuthorState, reason string) database.CatalogAuthorState {
+	hold := database.CatalogAuthorState{Key: now.Key, Name: now.Name}
+	if prev != nil {
+		hold = *prev
+	}
+	hold.State, hold.LastError, hold.LastAttemptAt, hold.OpID = database.CatalogHarvestPartial, reason, now.LastAttemptAt, now.OpID
+	return hold
+}
+
+// settleZero runs after the pool. Every held zero-total author was written
+// as its pre-run state marked partial. If the breaker trips they stay that
+// way (with the breaker's reason); otherwise each gets the state its run
+// computed, and an accepted zero total runs its stale pass first.
 func (h *Harvester) settleZero(reporter registry.Reporter, z *zeroLedger, tally *Tally) error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
-	zeroN, done := len(z.prev), int(tally.Done.Load())
-	tally.ZeroTotal.Store(int64(zeroN))
-	if done >= ZeroBreakerMinAuthors && float64(zeroN) > ZeroBreakerFraction*float64(done) {
+	zeroFiled := 0
+	for _, o := range z.obs {
+		if o.filed {
+			zeroFiled++
+		}
+	}
+	tally.ZeroTotal.Store(int64(len(z.obs)))
+	var errs []error
+	if z.filedAnswered >= ZeroBreakerMinAuthors && float64(zeroFiled) > ZeroBreakerFraction*float64(z.filedAnswered) {
 		tally.ZeroBreakerTripped.Store(true)
-		msg := fmt.Sprintf("zero-total breaker: %d of %d authors answered 0 results; treated as a provider failure, not counted, nothing staled", zeroN, done)
+		msg := fmt.Sprintf("zero-total breaker: %d of %d authors with catalog entries answered 0 results; treated as a provider failure, not counted, nothing staled (%d zero-total authors held partial)",
+			zeroFiled, z.filedAnswered, len(z.obs))
 		harvestLog.Warn("%s", msg)
 		if reporter != nil {
 			_ = reporter.Log(slog.LevelWarn, msg)
 		}
-		var errs []error
-		for key, prev := range z.prev {
-			cur, err := h.Store.GetAuthorState(key)
-			if err != nil || cur == nil {
-				errs = append(errs, fmt.Errorf("breaker restore %q: %w", key, err))
-				continue
-			}
-			if cur.State == database.CatalogHarvestComplete {
-				tally.Complete.Add(-1)
-				tally.Partial.Add(1)
-			}
-			cur.State, cur.LastError, cur.MarkedStale = database.CatalogHarvestPartial, msg, 0
-			cur.ShortKind, cur.ShortRuns, cur.ShortDelivered, cur.ShortSince, cur.LastCompleteAt = "", 0, 0, nil, nil
-			if prev != nil {
-				cur.ShortKind, cur.ShortRuns, cur.ShortDelivered = prev.ShortKind, prev.ShortRuns, prev.ShortDelivered
-				cur.ShortSince, cur.LastCompleteAt = prev.ShortSince, prev.LastCompleteAt
-			}
-			if err := h.Store.PutAuthorState(cur); err != nil {
-				errs = append(errs, fmt.Errorf("breaker restore %q: %w", key, err))
+		for key, o := range z.obs {
+			hold := pendingHold(o.prev, o.final, msg)
+			if err := h.Store.PutAuthorState(&hold); err != nil {
+				errs = append(errs, fmt.Errorf("breaker hold %q: %w", key, err))
 			}
 		}
 		return errors.Join(errs...)
 	}
-	var errs []error
-	for _, key := range z.deferred {
-		n, err := h.Store.MarkUnseen(key, map[string]bool{})
-		if err != nil {
-			errs = append(errs, fmt.Errorf("deferred stale pass %q: %w", key, err))
+	for key, o := range z.obs {
+		final := o.final
+		if o.stale {
+			n, err := h.Store.MarkUnseen(key, map[string]bool{})
+			if err != nil {
+				// Leave the hold (partial, pre-run streak): retried.
+				errs = append(errs, fmt.Errorf("zero-total stale pass %q: %w", key, err))
+				continue
+			}
+			final.MarkedStale = n
+		}
+		if err := h.Store.PutAuthorState(&final); err != nil {
+			errs = append(errs, fmt.Errorf("zero-total settle %q: %w", key, err))
 			continue
 		}
-		cur, err := h.Store.GetAuthorState(key)
-		if err != nil || cur == nil {
-			errs = append(errs, fmt.Errorf("deferred stale pass %q: read state: %w", key, err))
-			continue
-		}
-		cur.MarkedStale = n
-		if err := h.Store.PutAuthorState(cur); err != nil {
-			errs = append(errs, fmt.Errorf("deferred stale pass %q: %w", key, err))
+		if final.State == database.CatalogHarvestComplete {
+			tally.Partial.Add(-1)
+			tally.Complete.Add(1)
 		}
 	}
 	return errors.Join(errs...)
