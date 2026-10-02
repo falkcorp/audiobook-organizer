@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.73.0
+// version: 2.74.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-01
 
@@ -62,8 +62,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	acoustidplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
 	dedupplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
-	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
-	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
+	// The one list of service-registry plugins (internal/plugins/plugins.go).
+	_ "github.com/falkcorp/audiobook-organizer/internal/plugins"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/quarantine"
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
