@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-01
 
@@ -67,7 +67,9 @@ func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Write
 		return 0, fmt.Errorf("%w: book %s vanished", repairs.ErrChangedSincePlan, id)
 	}
 	if b.IsSoftDeleted() {
-		return 0, nil
+		// Retired by an earlier run, which may have been cut off (a lost
+		// scan stand-down lease) before its primary hand-off.
+		return 0, resumeHandOff(ctx, p, store, w, fixerID, b, target)
 	}
 	// Refusals first: nothing is written for a refused retire.
 	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
@@ -179,7 +181,9 @@ func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Write
 	}
 	steps++
 	if wasPrimary && b.VersionGroupID != nil && *b.VersionGroupID != "" {
-		retireHandOff(ctx, p, store, w, fixerID, id, *b.VersionGroupID)
+		if err := retireHandOff(ctx, p, store, w, fixerID, id, *b.VersionGroupID); err != nil {
+			return steps, err
+		}
 	}
 	return steps, nil
 }
@@ -216,6 +220,13 @@ func followUserStateInto(p *Plugin, w *repairs.Writer, target, id string, slice 
 		persisted++
 		return nil
 	}
+	// FollowAbsorbedJournaled writes the store directly (the pending-repair
+	// record, then the progress moves) before its first record call, and
+	// record journals nothing for a book nobody listened to: renew here so
+	// none of those writes runs on a lapsed lease.
+	if err := w.Beat("user state of " + id); err != nil {
+		return 0, err
+	}
 	progress, _, err := merge.FollowAbsorbedJournaled(um, target, id, slice, record)
 	if errors.Is(err, merge.ErrNoSyncFollower) {
 		has, herr := merge.BookHasUserProgress(um, id)
@@ -246,20 +257,151 @@ func followUserStateInto(p *Plugin, w *repairs.Writer, target, id string, slice 
 // which it re-crowns over an already-restored demote. A failure is logged,
 // not returned: the retirement itself is done and journaled, and a missing
 // hand-off row only keeps a revert from touching the group's flags.
-func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, groupID string) {
+//
+// EXCEPT a lost scan stand-down lease (repairs.ErrStandDownLost), which is
+// returned: EnsureSinglePrimary writes the store directly, so the lease is
+// renewed (Writer.Beat) before it runs, and a refusal there or at the
+// journal must stop the row. Swallowed, it let the rest of the row write on
+// a lapsed lease and a row's last retire report applied with no hand-off;
+// returned, the row aborts and resumeHandOff finishes it on the retry.
+func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, groupID string) error {
 	vps := p.deps.VersionPrimaryStore()
 	if vps == nil {
-		return
+		return nil
+	}
+	if err := w.Beat("primary hand-off of " + id + " in group " + groupID); err != nil {
+		return fmt.Errorf("primary hand-off of %s: %w", id, err)
 	}
 	es := fragEnsureStore{OpsStore: store, chapters: vps}
 	if _, err := versionprimary.EnsureSinglePrimary(ctx, es, groupID,
 		versionprimary.Env{RootDir: config.AppConfig.RootDir}); err != nil {
 		fragLog.Warn("%s: primary hand-off in group %s: %s", fixerID,
 			logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(err.Error()))
-		return
+		return nil
 	}
 	if err := w.Journal(id, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", "", groupID); err != nil {
+		if errors.Is(err, repairs.ErrStandDownLost) {
+			return fmt.Errorf("journal the primary hand-off of %s: %w", id, err)
+		}
 		fragLog.Warn("%s: journal the primary hand-off of %s in group %s: %s", fixerID,
 			logger.SanitizeLogValue(id), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(err.Error()))
 	}
+	return nil
+}
+
+// resumeHandOff finishes the primary hand-off of a book an earlier run of
+// fixer fixerID retired but did not hand off, from ANY operation: a
+// lease-lost apply ends failed, and its retry (POST /operations/v2/:id/retry)
+// is a new op whose journal holds none of the first run's rows, so the
+// evidence is the book's state and the fixer's history, never the op id.
+// Shared by every fixer that retires through retireInto.
+//
+// Nothing is owed (nil) when:
+//   - the book has no version group, or was merged into another target;
+//   - no un-reverted demote row for it is in any op's journal (never demoted
+//     by a retire), or an un-reverted hand-off row is newer than the newest
+//     such demote (handed off already: a duplicate-copies loser, demoted by
+//     Crown and noted after it, ends here);
+//   - its group already has its one live primary.
+//
+// It is owed when the newest is_primary_version history row of the book is
+// fixerID's demote to false, the book is still explicit false, and no live
+// member of its group is an explicit primary. It is then made by THIS op and
+// journaled in this op's journal. Reverts converge in either order: the
+// hand-off row is a note (the revert of the first op's demote re-crowns the
+// book with versionprimary.Crown, which demotes the member this hand-off
+// crowned), and reverting this op alone leaves the group with the member it
+// crowned, its one primary.
+//
+// Anything it cannot tell (history or journal unreadable, the flag changed
+// by someone else since the demote, two live primaries) refuses the row as
+// changed since plan rather than guess.
+func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID string, b *database.Book, target string) error {
+	if b.VersionGroupID == nil || *b.VersionGroupID == "" || b.MergedIntoBookID == nil || *b.MergedIntoBookID != target {
+		return nil
+	}
+	refuse := func(format string, args ...any) error {
+		return fmt.Errorf("%w: hand-off of retired book %s: %s", repairs.ErrChangedSincePlan, b.ID, fmt.Sprintf(format, args...))
+	}
+	journal, ok := store.(bookJournalReader)
+	if !ok {
+		return refuse("the store has no operation journal to check it with")
+	}
+	changes, err := journal.GetBookChanges(b.ID)
+	if err != nil {
+		return refuse("operation journal unreadable: %v", err)
+	}
+	demote, handOff := "", ""
+	for _, c := range changes {
+		if c == nil || c.RevertedAt != nil {
+			continue
+		}
+		switch c.ChangeType {
+		case undo.ChangeTypeBookPrimaryDemote:
+			if c.ID > demote {
+				demote = c.ID
+			}
+		case undo.ChangeTypeBookPrimaryHandoff:
+			if c.ID > handOff {
+				handOff = c.ID
+			}
+		}
+	}
+	if demote == "" || handOff > demote {
+		return nil // never demoted by a retire, or handed off since
+	}
+	hist, ok := store.(bookHistoryReader)
+	if !ok {
+		return refuse("the store has no change history to check it with")
+	}
+	rows, err := hist.GetBookChangeHistory(b.ID, vgHistoryWindow)
+	if err != nil {
+		return refuse("change history unreadable: %v", err)
+	}
+	var newest *database.MetadataChangeRecord
+	for i := range rows {
+		if rows[i].Field == "is_primary_version" {
+			newest = &rows[i]
+			break
+		}
+	}
+	falseJSON, err := json.Marshal("false")
+	if err != nil {
+		return refuse("encode: %v", err)
+	}
+	switch {
+	case newest == nil:
+		return refuse("a demote is journaled but no history row records it")
+	case newest.Source != fixerID:
+		return refuse("its primary flag was last changed by %q, not by %s", newest.Source, fixerID)
+	case newest.NewValue == nil || *newest.NewValue != string(falseJSON) || storedPrimaryFlag(b.IsPrimaryVersion) != "false":
+		return refuse("its primary flag is %s, not the false %s wrote", storedPrimaryFlag(b.IsPrimaryVersion), fixerID)
+	}
+	members, err := store.GetBooksByVersionGroup(*b.VersionGroupID)
+	if err != nil {
+		return refuse("group %s unreadable: %v", *b.VersionGroupID, err)
+	}
+	live := 0
+	for i := range members {
+		m := &members[i]
+		if m.ID == b.ID || m.IsSoftDeleted() {
+			continue
+		}
+		if m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
+			live++
+		}
+	}
+	switch {
+	case live == 1:
+		return nil // the group has its one primary: nothing owed
+	case live > 1:
+		return refuse("group %s has %d live primaries", *b.VersionGroupID, live)
+	}
+	return retireHandOff(ctx, p, store, w, fixerID, b.ID, *b.VersionGroupID)
+}
+
+// bookJournalReader reads every operation's journal rows for one book.
+// Asserted on the ops store rather than widening OpsStore.
+type bookJournalReader interface {
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
 }

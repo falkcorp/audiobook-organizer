@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-10-01
 
@@ -1784,7 +1784,12 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 	if err != nil {
 		return err
 	}
-	merge.LockMergeRMW()
+	// The lock is process-wide: an outside holder (a dedup merge) may keep
+	// it past the scan stand-down lease, so the wait renews the lease and
+	// refuses the row (ErrStandDownLost, nothing written) if it lapses.
+	if err := w.LockWaiting(ctx, "the merge lock", merge.LockMergeRMW, merge.UnlockMergeRMW); err != nil {
+		return err
+	}
 	defer merge.UnlockMergeRMW()
 	locked, err := f.Replan(ctx, nil, fresh, nil)
 	if err != nil {
@@ -2077,6 +2082,12 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 		}
 	}
 	if g.AuthorID != nil {
+		// A direct store write the Writer cannot route, reached with no
+		// journal row in front of it on a resumed apply (the book already
+		// exists): renew the scan stand-down lease first.
+		if err := w.Beat("author credit of " + target); err != nil {
+			return steps, err
+		}
 		if err := store.SetBookAuthors(target, []database.BookAuthor{{BookID: target, AuthorID: *g.AuthorID,
 			Role: "author", Position: 0}}); err != nil {
 			return steps, fmt.Errorf("credit author of %s: %w", target, err)
@@ -2170,6 +2181,11 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 			if err := fbCrashHook("claim", i+1); err != nil {
 				return steps, err
 			}
+		}
+		// A direct store write the Writer cannot route: renew the scan
+		// stand-down lease before each, as every Writer write does.
+		if err := w.Beat("path key of row " + rows[i].ID); err != nil {
+			return steps, err
 		}
 		got, err := store.ModifyBookFile(target, rows[i].ID, fbKeepAt(rows[i].FilePath))
 		if err != nil {

@@ -165,6 +165,11 @@ func (w *Writer) Journal(bookID, changeType, field, oldV, newV string) error {
 	if w.journal == nil || w.opID == "" || w.index == nil {
 		return fmt.Errorf("%w: no journal wired (book %s, %s)", ErrNotJournaled, bookID, changeType)
 	}
+	// Every journaled write (Step, the book_file methods, credits) journals
+	// first, so beating here renews the lease before each of them.
+	if err := w.beat(changeType + " on book " + bookID); err != nil {
+		return err
+	}
 	key := journalKey(bookID, changeType, field, oldV, newV)
 	ix := w.index
 	ix.mu.Lock()
@@ -312,6 +317,9 @@ func (w *Writer) SetTrackNumber(bookID, fileID string, from, to int) error {
 func (w *Writer) Recompute(bookID string) error {
 	if w.files == nil {
 		return errors.New("repairs: writer has no book_file store")
+	}
+	if err := w.beat("aggregates of book " + bookID); err != nil {
+		return err
 	}
 	return w.files.RecomputeBookAggregates(bookID)
 }

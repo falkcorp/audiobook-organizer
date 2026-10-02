@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7b2d9e46-0c81-4a37-b5f9-1e6c3a8d4f20
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 package maintenance
 
@@ -34,6 +34,13 @@ type scriptedScan struct {
 	acquires, releases  int
 	renewsLeft          int
 	running, pausedByUs bool
+	// renews counts every renewal call. ttl > 0 adds the registry's
+	// wall-clock rule on top: a renewal later than ttl after the previous
+	// one (or the acquire) fails, and the holder stays lost.
+	renews  int
+	ttl     time.Duration
+	expires time.Time
+	lapsed  bool
 }
 
 func (s *scriptedScan) AcquireScanStandDown(_ context.Context, holder, _ string) (func(), error) {
@@ -50,6 +57,9 @@ func (s *scriptedScan) AcquireScanStandDown(_ context.Context, holder, _ string)
 	if s.running {
 		s.running, s.pausedByUs = false, true
 	}
+	if s.ttl > 0 {
+		s.expires = time.Now().Add(s.ttl)
+	}
 	return func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -63,6 +73,14 @@ func (s *scriptedScan) AcquireScanStandDown(_ context.Context, holder, _ string)
 func (s *scriptedScan) RenewScanStandDown(string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.renews++
+	if s.ttl > 0 {
+		if s.lapsed || time.Now().After(s.expires) {
+			s.lapsed = true
+			return false
+		}
+		s.expires = time.Now().Add(s.ttl)
+	}
 	if s.renewsLeft < 0 {
 		return true
 	}

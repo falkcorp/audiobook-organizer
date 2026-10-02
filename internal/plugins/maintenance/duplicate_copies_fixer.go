@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-10-01
 
@@ -1779,7 +1779,12 @@ func (f *duplicateCopiesFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 	if err != nil {
 		return err
 	}
-	merge.LockMergeRMW()
+	// The lock is process-wide: an outside holder (a dedup merge) may keep
+	// it past the scan stand-down lease, so the wait renews the lease and
+	// refuses the row (ErrStandDownLost, nothing written) if it lapses.
+	if err := w.LockWaiting(ctx, "the merge lock", merge.LockMergeRMW, merge.UnlockMergeRMW); err != nil {
+		return err
+	}
 	defer merge.UnlockMergeRMW()
 	locked, err := f.Replan(ctx, nil, fresh, nil)
 	if err != nil {

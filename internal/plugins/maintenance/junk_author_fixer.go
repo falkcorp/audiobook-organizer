@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package maintenance
 
@@ -2369,12 +2369,12 @@ func (f *junkAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repa
 	}
 	if primaryChanged {
 		if perr := w.SetPrimaryAuthor(bookID, junkID, primaryAfter); perr != nil {
-			return fmt.Errorf("%w: book %s credits moved but the primary was not: %v", repairs.ErrPartiallyApplied, bookID, perr)
+			return fmt.Errorf("%w: book %s credits moved but the primary was not: %w", repairs.ErrPartiallyApplied, bookID, perr)
 		}
 	}
 	if d.Series != nil {
 		if serr := f.linkSeries(w, store, bookID, *d.Series); serr != nil {
-			return fmt.Errorf("%w: book %s relinked but the series link failed: %v", repairs.ErrPartiallyApplied, bookID, serr)
+			return fmt.Errorf("%w: book %s relinked but the series link failed: %w", repairs.ErrPartiallyApplied, bookID, serr)
 		}
 	}
 	return nil
@@ -2409,6 +2409,12 @@ func (f *junkAuthorFixer) createTarget(w *repairs.Writer, store OpsStore, d *jun
 	// below the create runs only after MintAuthor has written it.
 	if !idx.mintable(name) {
 		return nil, fmt.Errorf("%w: book %s: %q is not a name to create an author for", repairs.ErrChangedSincePlan, d.Book.ID, name)
+	}
+	// MintAuthor writes the store directly, ahead of the journal row below:
+	// renew the scan stand-down lease first, so a lapsed one refuses the row
+	// before the author exists rather than after.
+	if err := w.Beat("create author " + name); err != nil {
+		return nil, err
 	}
 	created, minted, err := store.MintAuthor(name)
 	if err != nil {

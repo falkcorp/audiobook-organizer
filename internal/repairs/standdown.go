@@ -1,7 +1,7 @@
 // file: internal/repairs/standdown.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f6d3b82-9e14-4c7a-b25d-7a1e8c4f9d03
-// last-edited: 2026-09-27
+// last-edited: 2026-10-01
 
 package repairs
 
@@ -44,6 +44,10 @@ type WaitOptions struct {
 	RetryInterval time.Duration
 	// Sleep waits d or until ctx ends; tests inject an immediate one.
 	Sleep func(ctx context.Context, d time.Duration) error
+	// LockRenewEvery is how often Writer.LockWaiting renews the lease while
+	// an apply row waits for a process-wide lock; zero means 30s. Tests
+	// shorten it.
+	LockRenewEvery time.Duration
 }
 
 const (

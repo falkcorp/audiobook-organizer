@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-10-01
 
@@ -1084,8 +1084,9 @@ func TestRunApply_LeaseLapseAbortsRemainingRows(t *testing.T) {
 	}
 	f := &trimFixer{s: s}
 	plan := planFor(t, s, f)
-	// Two renewals succeed, then the lease is gone.
-	sd := &fakeStandDown{renewsLeft: 2}
+	// Three renewals succeed (row r0's start, its pre-write check and its one
+	// write), then the lease is gone.
+	sd := &fakeStandDown{renewsLeft: 3}
 	d := deps(s, sd)
 	d.Concurrency = 1
 	res, err := RunApply(context.Background(), f, plan, "op-plan", []string{"r0", "r1", "r2", "r3", "r4"}, false, d, nopReporter{})
@@ -1167,7 +1168,7 @@ func TestWriter_HasNoDeletePrimitive(t *testing.T) {
 	require.ElementsMatch(t, []string{"Modify", "Writes", "HistoryRows", "HistoryFailed",
 		"WithJournal", "WithLiveness", "Touch", "Journal", "Journaled", "JournaledValue", "Step",
 		"RepointBookFile", "MoveBookFiles", "SetTrackNumber", "Recompute",
-		"WithCredits", "ModifyCredits", "SetPrimaryAuthor", "RecordChange"}, names)
+		"WithCredits", "ModifyCredits", "SetPrimaryAuthor", "RecordChange", "Beat", "LockWaiting"}, names)
 }
 
 func TestWriter_HistoryFailureWritesIncompleteMarker(t *testing.T) {

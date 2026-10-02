@@ -1,0 +1,333 @@
+// file: internal/plugins/maintenance/fragment_lease_test.go
+// version: 1.4.0
+// guid: 6b1e8d42-3c7f-4a95-b2d6-9f0a4e7c1d38
+// last-edited: 2026-10-01
+
+package maintenance
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
+)
+
+// fragApplyErr is fragFixture.apply without requiring success.
+func (f *fragFixture) applyErr(t *testing.T, planOpID, opID string, rowIDs []string, resume *repairs.ApplyCheckpoint) (*repairs.ApplyResult, error) {
+	t.Helper()
+	no := false
+	params, err := json.Marshal(repairs.ApplyParams{FixerID: fragFixerID, PlanOpID: planOpID, RowIDs: rowIDs, DryRun: &no, Resume: resume})
+	require.NoError(t, err)
+	rep := &repairsOpReporter{id: opID}
+	runErr := f.p.runRepairsApply(context.Background(), params, rep)
+	res, _ := rep.result.(*repairs.ApplyResult)
+	return res, runErr
+}
+
+func (f *fragFixture) scan() *scriptedScan { return f.p.deps.(scanDeps).scan }
+
+// An outside holder keeps merge.LockMergeRMW (a dedup merge, say) for longer
+// than the stand-down lease while the fragment row waits for it. The wait
+// renews the lease, so the row applies once the lock is free. Before the fix
+// the fixer blocked in LockMergeRMW with no renewal, the lease lapsed, and
+// the row's first write was refused.
+//
+// Not parallel: it holds the process-wide merge lock.
+func TestFragmentFixer_MergeLockWaitKeepsTheLease(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	f.plan(t, "op-plan")
+	scan := f.scan()
+	scan.mu.Lock()
+	scan.ttl = 400 * time.Millisecond
+	scan.mu.Unlock()
+	f.p.standDownWait.LockRenewEvery = 20 * time.Millisecond
+
+	merge.LockMergeRMW()
+	type out struct {
+		res *repairs.ApplyResult
+		err error
+	}
+	done := make(chan out, 1)
+	go func() {
+		res, err := f.applyErr(t, "op-plan", "op-apply", []string{"moved:" + f.ids["parent"]}, nil)
+		done <- out{res, err}
+	}()
+	time.Sleep(1500 * time.Millisecond) // well past the 400ms lease
+	merge.UnlockMergeRMW()
+	o := <-done
+	require.NoError(t, o.err, "%+v", o.res)
+	require.Equal(t, 1, o.res.Applied, "%+v", o.res.Rows)
+	require.False(t, f.live(t, "fragF"))
+}
+
+// primaryFragG puts the copy row's fragment G in a version group as its
+// explicit primary, with an organized sibling, so retiring G hands the
+// group's primary to the sibling (handOff).
+func (f *fragFixture) primaryFragG(t *testing.T) (sib string) {
+	t.Helper()
+	group := "vg-fragG"
+	yes, no := true, false
+	_, err := f.s.ModifyBook(f.ids["fragG"], func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = &yes
+		return nil
+	})
+	require.NoError(t, err)
+	sibPath := f.file(t, "lib/SunsSibling/Suns edition.m4b", 6000)
+	sib = f.book(t, "sibling", "Scattered Suns, another edition", sibPath, nil)
+	f.row(t, "sib", sib, sibPath, "Suns edition.m4b", 6000, 36000, 0)
+	f.organized(t, sib)
+	_, err = f.s.ModifyBook(sib, func(b *database.Book) error {
+		b.VersionGroupID = &group
+		b.IsPrimaryVersion = &no
+		return nil
+	})
+	require.NoError(t, err)
+	return sib
+}
+
+func handoffJournaled(t *testing.T, s interface {
+	GetOperationChanges(string) ([]*database.OperationChange, error)
+}, opID, bookID string) bool {
+	t.Helper()
+	changes, err := s.GetOperationChanges(opID)
+	require.NoError(t, err)
+	for _, c := range changes {
+		if c.BookID == bookID && c.ChangeType == undo.ChangeTypeBookPrimaryHandoff && c.RevertedAt == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// The lease lapses inside the copy row's last retire, at the primary
+// hand-off (the row's last beats). Before the fix handOff logged the refused
+// Journal and returned nothing, retire returned nil and the row reported
+// applied, with the hand-off journal row missing. Now the row is aborted and
+// the next run finishes the hand-off, whether it resumes the same op from
+// its checkpoint (a restart) or is a NEW op with the same rows (POST
+// /operations/v2/:id/retry of the failed apply re-enqueues its params as a
+// new run, with no checkpoint): the owed hand-off is found from the
+// fragment's state and this fixer's history, not from the op journal.
+func TestFragmentFixer_LeaseLostAtHandOffAbortsAndResumes(t *testing.T) {
+	total := handOffProbeRenewals(t)
+	// back=1 refuses the hand-off's journal (EnsureSinglePrimary already
+	// crowned the sibling: nothing is owed after); back=2 refuses the beat
+	// before EnsureSinglePrimary (nothing of the hand-off written: owed).
+	for _, back := range []int{1, 2} {
+		for _, retry := range []string{"op-apply", "op-retry"} {
+			t.Run(fmt.Sprintf("refuse_beat_%d_from_the_end/next_run_%s", back, retry), func(t *testing.T) {
+				f, _, rows := leaseLostAtHandOff(t, total-back)
+				f.finishAfterLostHandOff(t, retry, back == 2, rows)
+			})
+		}
+	}
+}
+
+// Reverting the failed first op and the retry that finished its hand-off,
+// in either order, leaves the group with exactly one primary after each
+// revert: the hand-off row is a note, and the first op's demote revert
+// re-crowns the fragment with Crown, which demotes the sibling the retry
+// crowned. Reverting the retry alone leaves the sibling it crowned.
+func TestFragmentFixer_RevertFirstOpAndRetryInEitherOrder(t *testing.T) {
+	total := handOffProbeRenewals(t)
+	for _, order := range [][]string{{"op-apply", "op-retry"}, {"op-retry", "op-apply"}} {
+		t.Run(order[0]+"_then_"+order[1], func(t *testing.T) {
+			f, sib, rows := leaseLostAtHandOff(t, total-2)
+			f.finishAfterLostHandOff(t, "op-retry", true, rows)
+			require.Equal(t, []string{sib}, f.livePrimaries(t, "vg-fragG"))
+			for _, op := range order {
+				_, err := audiobooks.NewRevertService(f.s).RevertOperation(op)
+				require.NoError(t, err, "revert %s", op)
+				require.Len(t, f.livePrimaries(t, "vg-fragG"), 1, "after reverting %s", op)
+			}
+			require.True(t, f.live(t, "fragG"), "the first op's revert restores the fragment")
+			require.Equal(t, []string{f.ids["fragG"]}, f.livePrimaries(t, "vg-fragG"))
+		})
+	}
+}
+
+// A fragment whose flag someone else changed after this fixer's demote is
+// not guessed at: the retry refuses the row.
+func TestFragmentFixer_OwedHandOffRefusesAFlagChangedByAnotherWriter(t *testing.T) {
+	total := handOffProbeRenewals(t)
+	f, _, _ := leaseLostAtHandOff(t, total-2)
+	fr := f.ids["fragG"]
+	yes := true
+	_, err := f.s.ModifyBook(fr, func(b *database.Book) error { b.IsPrimaryVersion = &yes; return nil })
+	require.NoError(t, err)
+	src := "manual"
+	tv, fv := `"true"`, `"false"`
+	require.NoError(t, f.s.RecordMetadataChange(&database.MetadataChangeRecord{BookID: fr, Field: "is_primary_version",
+		PreviousValue: &fv, NewValue: &tv, ChangeType: "override", Source: src, ChangedAt: time.Now()}))
+	res, err := f.applyErr(t, "op-plan", "op-retry", []string{"copy:" + f.ids["suns"]}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.ChangedSincePlan, "%+v", res.Rows)
+	require.Contains(t, res.Rows[0].Error, "last changed by \"manual\"", "refused by the owed-hand-off check")
+	require.Empty(t, f.livePrimaries(t, "vg-fragG"), "nothing crowned on a guess")
+}
+
+func handOffProbeRenewals(t *testing.T) int {
+	t.Helper()
+	probe := newFragFixture(t)
+	probe.seed(t)
+	probe.primaryFragG(t)
+	probe.plan(t, "op-plan")
+	out := probe.apply(t, "op-plan", "op-apply", []string{"copy:" + probe.ids["suns"]}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	require.True(t, handoffJournaled(t, probe.s, "op-apply", probe.ids["fragG"]))
+	return probe.scan().renews
+}
+
+// livePrimaries lists the group's live explicit primaries.
+func (f *fragFixture) livePrimaries(t *testing.T, gid string) []string {
+	t.Helper()
+	members, err := f.s.GetBooksByVersionGroup(gid)
+	require.NoError(t, err)
+	var out []string
+	for i := range members {
+		m := &members[i]
+		if !m.IsSoftDeleted() && m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
+			out = append(out, m.ID)
+		}
+	}
+	return out
+}
+
+// leaseLostAtHandOff runs the copy row as op-apply with renewals beats
+// allowed; the refusal lands in the hand-off, so the op fails and the row is
+// aborted with the fragment already retired.
+func leaseLostAtHandOff(t *testing.T, renewals int) (*fragFixture, string, []repairs.RowResult) {
+	t.Helper()
+	f := newFragFixture(t)
+	f.seed(t)
+	sib := f.primaryFragG(t)
+	f.plan(t, "op-plan")
+	scan := f.scan()
+	scan.mu.Lock()
+	scan.renewsLeft = renewals
+	scan.mu.Unlock()
+	res, err := f.applyErr(t, "op-plan", "op-apply", []string{"copy:" + f.ids["suns"]}, nil)
+	require.ErrorIs(t, err, repairs.ErrStandDownLost)
+	require.NotNil(t, res)
+	require.Len(t, res.Rows, 1)
+	require.Equal(t, repairs.OutcomeAborted, res.Rows[0].Outcome,
+		"a refused hand-off must not report the row applied: %+v", res.Rows[0])
+	require.Contains(t, res.Rows[0].Error, "hand-off")
+	require.False(t, f.live(t, "fragG"), "the retire itself was written")
+	require.False(t, handoffJournaled(t, f.s, "op-apply", f.ids["fragG"]))
+	scan.mu.Lock()
+	scan.renewsLeft = -1
+	scan.mu.Unlock()
+	return f, sib, res.Rows
+}
+
+// finishAfterLostHandOff runs the row again: as op-apply from its
+// checkpoint (a restart) or as a new op with no checkpoint (a retry). The
+// row applies and the group ends with exactly one live primary; owed says
+// whether this run had to make (and journal) the hand-off itself.
+func (f *fragFixture) finishAfterLostHandOff(t *testing.T, opID string, owed bool, first []repairs.RowResult) {
+	t.Helper()
+	var resume *repairs.ApplyCheckpoint
+	if opID == "op-apply" {
+		resume = &repairs.ApplyCheckpoint{Settled: first}
+	}
+	res, err := f.applyErr(t, "op-plan", opID, []string{"copy:" + f.ids["suns"]}, resume)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Applied, "%+v", res.Rows)
+	require.Len(t, f.livePrimaries(t, "vg-fragG"), 1, "exactly one primary after the next run")
+	require.Equal(t, owed, handoffJournaled(t, f.s, opID, f.ids["fragG"]),
+		"the run that made the owed hand-off journals it in its own op")
+}
+
+// A create decision whose lease lapses at the first write never mints the
+// author: the renewal before MintAuthor (a direct store write) is refused,
+// so nothing is created and nothing has to be taken back. Before, MintAuthor
+// ran on the lapsed lease, the journal row was refused after it, and the
+// row's error was the take-back's "journal created author".
+func TestJunkAuthorFixer_LeaseLostBeforeMintCreatesNothing(t *testing.T) {
+	f := newJunkFixture(t)
+	bk := f.book(junkBookSpec{title: "Assassin's Apprentice", path: "/lib/bk-create", author: "GraphicAudio",
+		tags: map[string]string{"artist": "Robin Hobb"}})
+	plan := f.plan()
+	id := junkAuthorRowID(f.authors["GraphicAudio"], bk)
+	require.Equal(t, junkAuthorDecCreate, rowByID(plan, id).Proposed["decision"])
+	all, err := f.s.GetAllSeries()
+	require.NoError(t, err)
+	w := repairs.NewWriter(f.s, f.s, f.fixer.ID(), "bulk_update", "repairs-").WithJournal(f.s, f.s, junkTestOpID).WithCredits(f.s)
+	scan := &scriptedScan{renewsLeft: 2} // row start and pre-Apply; the first write's beat is refused
+	res, err := repairs.RunApply(context.Background(), f.fixer, plan, "op-junk-plan", []string{id}, false,
+		repairs.ApplyDeps{Guard: f.s, Series: repairs.SeriesNamesFrom(all), Writer: w, OpID: junkTestOpID,
+			StandDown: scan, Wait: noWait}, &fakeReporter{})
+	require.ErrorIs(t, err, repairs.ErrStandDownLost)
+	require.Len(t, res.Rows, 1)
+	require.Equal(t, repairs.OutcomeAborted, res.Rows[0].Outcome, "%+v", res.Rows[0])
+	require.NotContains(t, res.Rows[0].Error, "journal created author", "refused before the mint, not after")
+	got, err := f.s.GetAuthorByName("Robin Hobb")
+	require.NoError(t, err)
+	require.Nil(t, got)
+	require.Equal(t, []int{f.authors["GraphicAudio"]}, f.credits(bk))
+}
+
+// The lease is refused at the renewal before FollowAbsorbedJournaled, whose
+// pending-repair record and progress moves are direct store writes that run
+// before any journaled record (and a fragment nobody listened to journals
+// none). The row stops there, before anything of the retire is written.
+// Beats before it: row start, pre-Apply, and LockWaiting's two (before
+// waiting, after acquiring).
+func TestFragmentFixer_LeaseLostBeforeTheUserStateFollow(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	f.plan(t, "op-plan")
+	scan := f.scan()
+	scan.mu.Lock()
+	scan.renewsLeft = 4
+	scan.mu.Unlock()
+	res, err := f.applyErr(t, "op-plan", "op-apply", []string{"copy:" + f.ids["suns"]}, nil)
+	require.ErrorIs(t, err, repairs.ErrStandDownLost)
+	require.Len(t, res.Rows, 1)
+	require.Equal(t, repairs.OutcomeAborted, res.Rows[0].Outcome, "%+v", res.Rows[0])
+	require.Contains(t, res.Rows[0].Error, "user state of "+f.ids["fragG"], "refused before the follow, not at a later write")
+	require.True(t, f.live(t, "fragG"))
+	require.Zero(t, res.JournalRows)
+}
+
+// The folder-books claim loop re-indexes each created row with a direct
+// ModifyBookFile; the lease lapsing just before it refuses the claim there
+// rather than at some later Writer write.
+func TestFolderBooksFixer_LeaseLostAtThePathKeyClaim(t *testing.T) {
+	f := newFragFixture(t)
+	f.seedWolfe(t, fbITunes, "citadel")
+	row := f.fbSingleRow(t, "op-plan")
+	scan := f.scan()
+	fbCrashHook = func(stage string, n int) error {
+		if stage == "claim" && n == 1 {
+			scan.mu.Lock()
+			scan.renewsLeft = 0
+			scan.mu.Unlock()
+		}
+		return nil
+	}
+	t.Cleanup(func() { fbCrashHook = nil })
+	no := false
+	params, err := json.Marshal(repairs.ApplyParams{FixerID: fbFixerID, PlanOpID: "op-plan", RowIDs: []string{row.RowID}, DryRun: &no})
+	require.NoError(t, err)
+	rep := &repairsOpReporter{id: "op-apply"}
+	runErr := f.p.runRepairsApply(context.Background(), params, rep)
+	require.ErrorIs(t, runErr, repairs.ErrStandDownLost)
+	res, ok := rep.result.(*repairs.ApplyResult)
+	require.True(t, ok)
+	require.Equal(t, repairs.OutcomeAborted, res.Rows[0].Outcome, "%+v", res.Rows[0])
+	require.Contains(t, res.Rows[0].Error, "path key of row", "refused at the claim, not at a later write")
+	require.True(t, f.live(t, "fb"), "the folder-book is not retired")
+}
