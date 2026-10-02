@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-01
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -321,6 +322,7 @@ type regroupFileFacts struct {
 	count       int
 	withoutPID  int
 	libraryFile bool // a row (missing or not) under the root, outside the frozen iTunes tree
+	nonITunes   bool // a row outside the frozen iTunes tree (anywhere)
 	manualPath  bool // a row path names an owner-manual-only library
 }
 
@@ -331,7 +333,18 @@ func (ff *regroupFileFacts) add(path, pid, rootDir string) {
 	}
 	// Same library-copy test as itunes.clone-into-library, except a missing
 	// row counts too: this decides a refusal, so it errs toward refusing.
-	if rootDir != "" && pathutil.IsWithin(path, rootDir) && !pathutil.UnderFrozenITunesTree(path) {
+	// Both sides are filepath.Clean'd first, as versionprimary's signals do:
+	// IsWithin compares raw strings, so a root spelled "/library/./" or
+	// "/library/" (or a row path with "//" or "./") would otherwise miss
+	// every library copy and let iTunes rows be poured into one. A symlinked
+	// root spelling is not resolved here (no filesystem access in the
+	// planner); entanglement's organized-target refusal is the backstop.
+	clean := filepath.Clean(path)
+	inITunes := pathutil.UnderFrozenITunesTree(clean)
+	if !inITunes {
+		ff.nonITunes = true
+	}
+	if rootDir != "" && pathutil.IsWithin(clean, filepath.Clean(rootDir)) && !inITunes {
 		ff.libraryFile = true
 	}
 	if applygate.IsOwnerManualOnly(path, "") {
@@ -373,6 +386,7 @@ func regroupBookMeta(b *database.Book, ff *regroupFileFacts, incumbent string, l
 		GroupHasNoIncumbent: vg != "" && incumbent == "",
 		LegacyEntangled:     vg != "" && legacyNonPrimary,
 		HasLibraryFile:      ff.libraryFile,
+		HasNonITunesFile:    ff.nonITunes,
 		Organized:           b.LibraryState != nil && *b.LibraryState == "organized",
 		FilesWithoutPID:     ff.withoutPID,
 		ManualOnly: ff.manualPath || applygate.IsOwnerManualOnly(b.FilePath, seriesName) ||
