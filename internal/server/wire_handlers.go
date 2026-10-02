@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.45.0
+// version: 2.46.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-10-02
 
@@ -93,11 +93,14 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// snapshot rebuilds run in bgWG under bgCtx, so Stop() waits for one
 	// instead of closing the store under it.
 	s.metadataCacheH = metaCacheH
-	metaCacheH.SetBackgroundRunner(s.bgCtx, func(fn func()) {
+	metaCacheH.SetBackgroundRunner(s.bgCtx, func(fn func()) bool {
+		// Refusing (false) fails the build cleanly; the cache never waits on
+		// a goroutine that was not started.
 		if s.bgCtx != nil && s.bgCtx.Err() != nil {
-			return
+			return false
 		}
 		s.bgWG.Go("metadata-review-rebuild", fn)
+		return true
 	})
 	organizeH := s.newOrganizeHandler()
 	filesystemH := handlers.NewFilesystemHandler(

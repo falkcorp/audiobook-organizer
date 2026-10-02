@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_snapshot_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a0e9c37-1d4b-4f62-8b17-c2e6d9a40f13
 // last-edited: 2026-10-02
 
@@ -14,6 +14,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
 // snapHarness drives a reviewSnapshotCache with a counting build, a write
@@ -42,7 +45,8 @@ func newSnapHarness(t *testing.T) *snapHarness {
 		return &reviewSnapshot{builtAt: h.now(), orphaned: int(n)}, nil
 	}, h.gen.Load)
 	h.c.now = h.now
-	h.c.idleDrop = 0 // tested separately, with the real clock
+	h.c.idleMark = 0    // tested separately, with the real clock
+	h.c.minInterval = 0 // tested separately
 	return h
 }
 
@@ -189,25 +193,68 @@ func TestReviewSnapshotCache_FailedBuildBacksOff(t *testing.T) {
 	require.EqualValues(t, 3, h.builds.Load())
 }
 
-func TestReviewSnapshotCache_DropsAfterIdle(t *testing.T) {
+// After the idle mark the snapshot is NOT dropped: the next visit is served
+// it at once and refreshes it in the background.
+func TestReviewSnapshotCache_IdleMarksStaleInsteadOfDropping(t *testing.T) {
 	h := newSnapHarness(t)
-	h.c.now = time.Now
-	h.c.idleDrop = 20 * time.Millisecond
+	h.c.idleMark = 20 * time.Millisecond
+	first := h.get(t)
+	time.Sleep(60 * time.Millisecond) // the mark fires
+	require.Same(t, first, h.get(t), "served the old snapshot, no cold wait")
+	h.waitBuilds(t, 2)
+}
+
+// Continuous cache writes (a fetch op) start at most one rebuild per
+// minInterval; the snapshot is served meanwhile.
+func TestReviewSnapshotCache_MinIntervalBetweenRebuilds(t *testing.T) {
+	h := newSnapHarness(t)
+	h.c.minInterval = time.Minute
 	h.get(t)
-	require.Eventually(t, func() bool {
-		h.c.mu.Lock()
-		defer h.c.mu.Unlock()
-		return h.c.snap == nil
-	}, 2*time.Second, 5*time.Millisecond)
+	h.advance(2 * time.Minute)
+	h.gen.Add(1)
 	h.get(t)
-	require.EqualValues(t, 2, h.builds.Load(), "the next visit builds again")
+	h.waitBuilds(t, 2)
+	for i := 0; i < 10; i++ {
+		h.gen.Add(1)
+		h.advance(time.Second)
+		h.get(t)
+	}
+	time.Sleep(20 * time.Millisecond)
+	require.EqualValues(t, 2, h.builds.Load(), "inside minInterval: no rebuild")
+	h.advance(time.Minute)
+	h.get(t)
+	h.waitBuilds(t, 3)
+}
+
+// Cold builds run on the spawn the server provides (its tracked group), and a
+// refused spawn fails the request instead of hanging it.
+func TestReviewSnapshotCache_ColdBuildUsesSpawnAndRefusalFails(t *testing.T) {
+	h := newSnapHarness(t)
+	var spawned atomic.Int64
+	h.c.setBackground(context.Background(), func(f func()) bool { spawned.Add(1); go f(); return true })
+	h.get(t)
+	require.EqualValues(t, 1, spawned.Load())
+
+	h2 := newSnapHarness(t)
+	h2.c.setBackground(context.Background(), func(func()) bool { return false })
+	_, err := h2.c.get(context.Background())
+	require.ErrorIs(t, err, errReviewBuildNotStarted)
+	require.EqualValues(t, 0, h2.builds.Load())
+
+	// A cancelled lifetime context starts nothing either.
+	h3 := newSnapHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	h3.c.setBackground(ctx, nil)
+	_, err = h3.c.get(context.Background())
+	require.ErrorIs(t, err, errReviewBuildNotStarted)
 }
 
 // Run under -race: requests, invalidations and cache writes interleaving with
 // background rebuilds.
 func TestReviewSnapshotCache_ConcurrentGetInvalidateRebuild(t *testing.T) {
 	h := newSnapHarness(t)
-	h.c.idleDrop = time.Millisecond
+	h.c.idleMark = time.Millisecond
 	h.c.now = time.Now
 	var wg sync.WaitGroup
 	for w := 0; w < 8; w++ {
@@ -230,4 +277,87 @@ func TestReviewSnapshotCache_ConcurrentGetInvalidateRebuild(t *testing.T) {
 		}(w)
 	}
 	wg.Wait()
+}
+
+// overlayFake serves the overlay's two reads; everything else is unused.
+type overlayFake struct {
+	cacheRowBookReader
+	batchErr error
+	books    map[string]*database.Book
+	pointErr map[string]error
+}
+
+func (f overlayFake) GetBooksByIDs(ids []string) ([]database.Book, error) {
+	if f.batchErr != nil {
+		return nil, f.batchErr
+	}
+	var out []database.Book
+	for _, id := range ids {
+		if b := f.books[id]; b != nil {
+			out = append(out, *b)
+		}
+	}
+	return out, nil
+}
+
+func (f overlayFake) GetBookByID(id string) (*database.Book, error) {
+	if err := f.pointErr[id]; err != nil {
+		return nil, err
+	}
+	return f.books[id], nil
+}
+
+func overlaySnap(ids ...string) *reviewSnapshot {
+	s := &reviewSnapshot{}
+	for _, id := range ids {
+		s.rows = append(s.rows, snapshotRow{loadedCacheRow: loadedCacheRow{sum: metafetch.MetadataCacheSummary{BookID: id}}})
+	}
+	return s
+}
+
+func TestOverlay_BatchFailureFallsBackToPointReads(t *testing.T) {
+	f := overlayFake{
+		batchErr: errors.New("batch fault"),
+		books:    map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}},
+		pointErr: map[string]error{"c": errors.New("point fault")},
+	}
+	out, err := overlayLiveBooks(overlaySnap("a", "b", "c", "gone"), f, nil)
+	require.NoError(t, err)
+	require.Len(t, out.rows, 2)
+	require.Equal(t, 1, out.readErrors, "a failed read is an error")
+	require.Equal(t, 1, out.orphaned, "only the book that is really gone is orphaned")
+}
+
+func TestOverlay_EveryReadFailingIsAnError(t *testing.T) {
+	f := overlayFake{
+		batchErr: errors.New("batch fault"),
+		pointErr: map[string]error{"a": errors.New("x"), "b": errors.New("y")},
+	}
+	_, err := overlayLiveBooks(overlaySnap("a", "b"), f, nil)
+	require.ErrorIs(t, err, errOverlayAllReadsFailed)
+
+	// A working batch with one failed miss confirmation is not "every read".
+	f2 := overlayFake{books: map[string]*database.Book{"a": {ID: "a"}}, pointErr: map[string]error{"b": errors.New("y")}}
+	out, err := overlayLiveBooks(overlaySnap("a", "b"), f2, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, out.readErrors)
+}
+
+func TestOverlay_IDsReadOnlyTheAskedBooks(t *testing.T) {
+	var asked []string
+	f := overlayFakeRecording{overlayFake: overlayFake{books: map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}}}, asked: &asked}
+	out, err := overlayLiveBooks(overlaySnap("a", "b", "c"), f, map[string]bool{"b": true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"b"}, asked)
+	require.Len(t, out.rows, 1)
+}
+
+type overlayFakeRecording struct {
+	overlayFake
+	asked *[]string
+}
+
+func (f overlayFakeRecording) GetBooksByIDs(ids []string) ([]database.Book, error) {
+	*f.asked = append(*f.asked, ids...)
+	return f.overlayFake.GetBooksByIDs(ids)
 }

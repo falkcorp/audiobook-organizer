@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.140.0
+// version: 2.141.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-02
 
@@ -4609,6 +4609,8 @@ export async function getCachedReviewResults(
     orphaned: number;
     no_candidates: number;
     decode_errors: number;
+    /** Live book reads that failed on this request (a store fault, not a gone book). */
+    book_read_errors?: number;
   };
   /**
    * Books already matched or marked no-match whose stored candidate is gone.

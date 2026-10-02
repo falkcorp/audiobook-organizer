@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-02
 
@@ -204,6 +204,9 @@ func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetc
 		var gen func() uint64
 		if g, ok := database.AsCapability[metadataCacheGenerationReader](store); ok {
 			gen = g.MetadataCacheGeneration
+			metadataCacheLog.Info("review snapshot: metadata-cache write counter resolved; cache writes trigger a rebuild")
+		} else {
+			metadataCacheLog.Info("review snapshot: store has no metadata-cache write counter; only apply/clear marks, idle and age trigger a rebuild")
 		}
 		h.reviewSnap = newReviewSnapshotCache(func(ctx context.Context) (*reviewSnapshot, error) {
 			return buildReviewSnapshot(ctx, store, svc)
@@ -243,7 +246,10 @@ func (h *MetadataCacheHandler) WarmReviewSnapshot(ctx context.Context) error {
 // the review snapshot's background rebuilds, and run the way they start --
 // the server passes its tracked background group, so shutdown waits for a
 // rebuild rather than closing the store under it.
-func (h *MetadataCacheHandler) SetBackgroundRunner(ctx context.Context, run func(fn func())) {
+//
+// run reports whether it started fn; it refuses once the server is stopping,
+// and the build then fails with errReviewBuildNotStarted instead of hanging.
+func (h *MetadataCacheHandler) SetBackgroundRunner(ctx context.Context, run func(fn func()) bool) {
 	if h.reviewSnap == nil {
 		return
 	}
@@ -591,7 +597,6 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// millisecond under test.
 	freshCutoff := time.Now().Add(-database.MetadataCacheTTL)
 
-
 	reviewable := make([]reviewableRow, 0, len(prepared))
 	// unreviewableRows is every non-orphaned row the reviewable list drops,
 	// with the cause it was counted under. Only collected when the caller asked
@@ -691,7 +696,9 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		"no_match": noMatch,
 		// Real decode failures, not a hardcoded zero. A row counted here is one
 		// the cache holds but nobody can review until it is repaired.
-		"errors":        decodeErrors,
+		// Book reads that failed this request (set.readErrors) are errors too:
+		// the row could not be served, but it is not orphaned.
+		"errors":        decodeErrors + set.readErrors,
 		"total_applied": applied,
 		// Cache summaries that exist but are not reviewable. Surfaced so the gap
 		// between "the cache has 14,306 entries" and "you can review 5,774" is
@@ -709,7 +716,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// have a verdict; there is nothing for a reviewer to do with them, so
 		// filing them under "unreviewable" reported settled work as a backlog.
 		// They are reported separately as `resolved_no_candidates`.
-		"unreviewable": orphaned + noCandidatesPending + decodeErrors,
+		"unreviewable": orphaned + noCandidatesPending + decodeErrors + set.readErrors,
 		// Rows whose last search is past MetadataCacheTTL, counted over every
 		// non-orphaned row (reviewable or not), minus books the owner marked
 		// "no match" (the candidate fetch never searches those, so no refetch
@@ -728,6 +735,9 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			// Stored, but the JSON would not decode. Also counted in `errors`;
 			// this repeats it so the three causes sum to `unreviewable`.
 			"decode_errors": decodeErrors,
+			// The book's live read failed on this request (a store fault, not a
+			// missing book). Also counted in `errors`.
+			"book_read_errors": set.readErrors,
 		},
 		// Books already ruled on that have no candidate left to show. Not a
 		// backlog and not an error -- reported so the number is visible rather

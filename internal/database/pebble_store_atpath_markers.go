@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_markers.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 68a95fef-a156-403b-a6fa-3ae0ba84f8fd
 // last-edited: 2026-10-02
 
@@ -247,18 +247,23 @@ func markersOnDiskIn(snap *pebble.Snapshot, ids []string) ([]string, error) {
 // between the probe and the commit and survive. The same writer landing just
 // after the commit already survives the unconditional Delete, so this only
 // moves the edge of an existing window, it does not open a new class.
-func (p *PebbleStore) stageDeleteIfPresent(batch *pebble.Batch, key []byte) error {
-	_, closer, err := p.db.Get(key)
+func (p *PebbleStore) stageDeleteIfPresent(batch *pebble.Batch, key []byte) (staged bool, err error) {
+	_, closer, gerr := p.db.Get(key)
 	switch {
-	case errors.Is(err, pebble.ErrNotFound):
-		return nil
-	case err != nil:
+	case errors.Is(gerr, pebble.ErrNotFound):
+		return false, nil
+	case gerr != nil:
 		atpathMarkerLog.Warn("probe of %s before delete failed, deleting unconditionally: %v",
-			logger.SanitizeLogValue(string(key)), err)
+			logger.SanitizeLogValue(string(key)), gerr)
 	default:
 		closer.Close()
 	}
-	return batch.Delete(key, nil)
+	if err := batch.Delete(key, nil); err != nil {
+		return false, err
+	}
+	// staged is true whenever the key may exist (the probe found it, or could
+	// not tell): a caller that tracks writes to a keyspace must count it.
+	return true, nil
 }
 
 // bookWriteBatchPreCommitHook, when non-nil, sees UpdateBook's and

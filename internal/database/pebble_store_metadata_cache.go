@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
 // last-edited: 2026-10-02
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -112,13 +113,30 @@ func (p *PebbleStore) ListMetadataCacheKeys() ([]MetadataCacheSummary, error) {
 	return out, nil
 }
 
-// MetadataCacheGeneration counts the metadata-cache writes (PutMetadataCache
-// and DeleteMetadataCache, the only two writers of the "metadata_cache:"
-// keyspace) since this store was opened. A reader holding something derived
-// from the cache -- the review listing's snapshot -- compares it to the value
-// it built at to learn, for the cost of an atomic load, whether anything it
-// read can have changed. It is per process and starts at 0 on every open: a
-// value is only comparable with another from the same store.
+// MetadataCacheGeneration counts the writes to the "metadata_cache:" keyspace
+// since this store was opened. Every writer moves it, after its commit:
+//
+//   - PutMetadataCache and DeleteMetadataCache;
+//   - UpdateBook, when an identity change (title, author, narrator, series,
+//     ISBN, ASIN) deletes the book's cache row in the book's own batch --
+//     an ASIN/ISBN backfill does this on every book it writes;
+//   - DeleteBook, which deletes the row with the book's other sidecars;
+//   - SetRaw, DeleteRaw and DeleteRawBatch on a key under the prefix;
+//   - Reset, which wipes everything.
+//
+// A reader holding something derived from the cache -- the review listing's
+// snapshot -- compares it to the value it read when it began building, to
+// learn for the cost of an atomic load whether anything it read can have
+// changed. It is per process and starts at 0 on every open: a value is only
+// comparable with another from the same store.
 func (p *PebbleStore) MetadataCacheGeneration() uint64 {
 	return p.metadataCacheWrites.Load()
+}
+
+// noteRawMetadataCacheWrite moves MetadataCacheGeneration when a raw key
+// write landed in the "metadata_cache:" keyspace.
+func (p *PebbleStore) noteRawMetadataCacheWrite(key string) {
+	if strings.HasPrefix(key, metadataCacheKeyPrefix) {
+		p.metadataCacheWrites.Add(1)
+	}
 }

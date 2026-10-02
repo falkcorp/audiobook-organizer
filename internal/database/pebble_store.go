@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.187.0
+// version: 1.188.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-02
 
@@ -2940,11 +2940,14 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 	// unconditional Delete leaves a tombstone that ListMetadataCacheKeys'
 	// range scan (the cache review page) walks until compaction. An ASIN/ISBN
 	// backfill changes identity on every book it writes.
+	cacheRowDeleted := false
 	if identityChanged(oldBook, book) {
-		if err := p.stageDeleteIfPresent(batch, metadataCacheKey(id)); err != nil {
+		staged, err := p.stageDeleteIfPresent(batch, metadataCacheKey(id))
+		if err != nil {
 			batch.Close()
 			return nil, err
 		}
+		cacheRowDeleted = staged
 	}
 
 	// ISBN/ASIN secondary index: delete stale rows for old values and write
@@ -2967,6 +2970,9 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return nil, err
+	}
+	if cacheRowDeleted {
+		p.metadataCacheWrites.Add(1)
 	}
 	if markerMayExist {
 		p.forgetUndecodableMarker(id, markerGen)
@@ -3324,7 +3330,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// Delete is not free, it leaves a tombstone that signal_coverage_era's
 	// range scan of book_sig: walks until compaction. Same dangling-row class
 	// as the work/hash indexes below.
-	if err := p.stageDeleteIfPresent(batch, bookSigKey(id)); err != nil {
+	if _, err := p.stageDeleteIfPresent(batch, bookSigKey(id)); err != nil {
 		batch.Close()
 		return err
 	}
@@ -3437,7 +3443,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// Only when it exists: most books have no embedding, and the
 	// emb:v:book: family is range-scanned by the embedding store.
 	embKey := []byte(embVecPfx + "book:" + id)
-	if err := p.stageDeleteIfPresent(batch, embKey); err != nil {
+	if _, err := p.stageDeleteIfPresent(batch, embKey); err != nil {
 		batch.Close()
 		return err
 	}
@@ -3483,7 +3489,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 
 	// Delete this book's persisted chapter list (abs-sync TASK-06), only when
 	// one exists (stageDeleteIfPresent: no tombstone for an absent key).
-	if err := p.stageDeleteIfPresent(batch, []byte("chapters:"+id)); err != nil {
+	if _, err := p.stageDeleteIfPresent(batch, []byte("chapters:"+id)); err != nil {
 		batch.Close()
 		return err
 	}
@@ -3531,6 +3537,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 			unlockAuthors()
 		}
 	}()
+	cacheRowDeleted := false
 	for _, sidecar := range [][]byte{
 		[]byte("book_authors:" + id),
 		[]byte("book_narrators:" + id),
@@ -3538,9 +3545,13 @@ func (p *PebbleStore) DeleteBook(id string) error {
 		[]byte("alt_titles:book:" + id),
 		metadataCacheKey(id),
 	} {
-		if err := p.stageDeleteIfPresent(batch, sidecar); err != nil {
+		staged, err := p.stageDeleteIfPresent(batch, sidecar)
+		if err != nil {
 			batch.Close()
 			return err
+		}
+		if staged && bytes.Equal(sidecar, metadataCacheKey(id)) {
+			cacheRowDeleted = true
 		}
 	}
 
@@ -3571,6 +3582,9 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return err
+	}
+	if cacheRowDeleted {
+		p.metadataCacheWrites.Add(1)
 	}
 	unlockAuthors()
 	authorsLocked = false
@@ -4691,7 +4705,11 @@ func (p *PebbleStore) recomputeDurationMap(bookNumericID int) error {
 // ---- Operation State Persistence (resumable operations) ----
 
 func (p *PebbleStore) SetRaw(key string, value []byte) error {
-	return p.db.Set([]byte(key), value, pebble.Sync)
+	if err := p.db.Set([]byte(key), value, pebble.Sync); err != nil {
+		return err
+	}
+	p.noteRawMetadataCacheWrite(key)
+	return nil
 }
 
 // GetRaw reads a single key. Returns (nil, nil) on miss so callers
@@ -4713,7 +4731,11 @@ func (p *PebbleStore) GetRaw(key string) ([]byte, error) {
 }
 
 func (p *PebbleStore) DeleteRaw(key string) error {
-	return p.db.Delete([]byte(key), pebble.Sync)
+	if err := p.db.Delete([]byte(key), pebble.Sync); err != nil {
+		return err
+	}
+	p.noteRawMetadataCacheWrite(key)
+	return nil
 }
 
 func (p *PebbleStore) ScanPrefix(prefix string) ([]KVPair, error) {
@@ -4799,7 +4821,13 @@ func (p *PebbleStore) DeleteRawBatch(keys []string) error {
 			return err
 		}
 	}
-	return b.Commit(pebble.Sync)
+	if err := b.Commit(pebble.Sync); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		p.noteRawMetadataCacheWrite(k)
+	}
+	return nil
 }
 
 func (p *PebbleStore) CountPrefix(prefix string) (int64, error) {
@@ -5016,6 +5044,8 @@ func (p *PebbleStore) Reset() error {
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("failed to commit reset batch: %w", err)
 	}
+	// The wipe removed every metadata_cache: row too.
+	p.metadataCacheWrites.Add(1)
 	// The wipe removed every work: row; invalidate any works cache.
 	p.bumpWorksGeneration()
 

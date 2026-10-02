@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_snapshot.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d3c7a51-2e6b-4f08-b4a9-7c1e5f2d8a36
 // last-edited: 2026-10-02
 
@@ -11,8 +11,6 @@ import (
 	"errors"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/singleflight"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -26,26 +24,32 @@ import (
 // (overlayLiveBooks), so review status, applied, "no match" and deleted books
 // are always live; only what the snapshot derived can lag.
 //
-// A rebuild is triggered, and the CURRENT snapshot served meanwhile
-// (stale-while-revalidate), when:
+// The snapshot goes out of date, and the next request is served it while a
+// background rebuild runs (stale-while-revalidate), when:
 //
 //   - the metadata cache was written since the snapshot's build began
-//     (database.PebbleStore.MetadataCacheGeneration: every Put and Delete of
-//     a cache row moves it) -- the normal trigger, so paging an idle library
-//     rebuilds nothing;
-//   - a handler action marked it dirty (apply dispatch, clear no-match);
+//     (database.PebbleStore.MetadataCacheGeneration, which every writer of the
+//     keyspace moves, including UpdateBook's identity-change delete) -- the
+//     normal trigger, so paging an unchanged cache rebuilds nothing;
+//   - a handler action marked it (apply dispatch, clear no-match);
+//   - nobody asked for reviewSnapshotIdleMark: the next visit after a long
+//     idle is served the old snapshot at once and refreshes it, rather than
+//     waiting for a cold build;
 //   - it is older than reviewSnapshotMaxAge, a safety net for what the write
 //     counter cannot see: a retitle or a file change that alters a row's
 //     searchability or runtime without touching the cache.
 //
 // A build allocates on the order of a GB at production scale, so none of these
-// is a timer: a rebuild only ever follows a request that found the snapshot
-// out of date. After reviewSnapshotIdleDrop with no request the snapshot is
-// dropped (the next visit builds again), and after a failed build no new build
-// starts for reviewSnapshotFailBackoff.
+// rebuilds on a timer -- a rebuild only follows a request that found the
+// snapshot out of date -- and no rebuild starts within reviewSnapshotMinInterval
+// of the last one began (a fetch op Puts continuously; the snapshot is served
+// meanwhile). After a failed build no new build starts for
+// reviewSnapshotFailBackoff. Every build, cold or background, runs on a
+// goroutine the server tracks (spawn) under its lifetime context.
 const (
 	reviewSnapshotMaxAge      = 30 * time.Minute
-	reviewSnapshotIdleDrop    = 15 * time.Minute
+	reviewSnapshotIdleMark    = 15 * time.Minute
+	reviewSnapshotMinInterval = 45 * time.Second
 	reviewSnapshotFailBackoff = 30 * time.Second
 )
 
@@ -115,44 +119,53 @@ func buildReviewSnapshot(ctx context.Context, store cacheRowBookReader, svc cach
 // errReviewBuildBackoff is returned while a failed build's backoff runs.
 var errReviewBuildBackoff = errors.New("review listing unavailable: the last build failed; retrying shortly")
 
-// reviewSnapshotCache holds the current snapshot and rebuilds it
-// single-flight. Safe for concurrent use.
+// errReviewBuildNotStarted is a build the server refused to start (shutting down).
+var errReviewBuildNotStarted = errors.New("review listing unavailable: the server is shutting down")
+
+// buildCall is one build in flight, shared by every request that waits on it.
+type buildCall struct {
+	done chan struct{}
+	snap *reviewSnapshot
+	err  error
+}
+
+// reviewSnapshotCache holds the current snapshot and runs at most one build at
+// a time. Safe for concurrent use.
 type reviewSnapshotCache struct {
 	build func(ctx context.Context) (*reviewSnapshot, error)
 	// gen reads the metadata cache's write counter; nil when the store has
-	// none, and then only invalidation and age trigger a rebuild.
+	// none, and then only marks and age make the snapshot out of date.
 	gen         func() uint64
 	maxAge      time.Duration
-	idleDrop    time.Duration
+	idleMark    time.Duration
+	minInterval time.Duration
 	failBackoff time.Duration
 	now         func() time.Time
-	// spawn starts a background rebuild's goroutine. The server sets it to
-	// its tracked background group (SetBackgroundRunner), so shutdown waits
-	// for a rebuild instead of closing the store under it.
-	spawn func(func())
 
 	mu sync.Mutex
-	// baseCtx parents background rebuilds: the server's lifetime context once
-	// warm has been called, so shutdown stops a rebuild.
-	baseCtx  context.Context
-	snap     *reviewSnapshot
-	invalGen uint64
-	failedAt time.Time
-	failErr  error
-	lastUse  time.Time
-	idle     *time.Timer
-	// refreshing is set while a background rebuild goroutine runs, so a burst
-	// of out-of-date requests starts one goroutine, not one each.
-	refreshing bool
-	sf         singleflight.Group
+	// baseCtx parents every build: the server's lifetime context once
+	// setBackground or warm has been called.
+	baseCtx context.Context
+	// spawn starts a build's goroutine and reports whether it did. The server
+	// sets it to its tracked background group, so shutdown waits for a build
+	// instead of closing the store under it, and refuses once shutting down.
+	spawn     func(func()) bool
+	snap      *reviewSnapshot
+	invalGen  uint64
+	inflight  *buildCall
+	lastStart time.Time
+	failedAt  time.Time
+	failErr   error
+	idle      *time.Timer
 }
 
 func newReviewSnapshotCache(build func(ctx context.Context) (*reviewSnapshot, error), gen func() uint64) *reviewSnapshotCache {
 	return &reviewSnapshotCache{
 		build: build, gen: gen,
-		maxAge: reviewSnapshotMaxAge, idleDrop: reviewSnapshotIdleDrop, failBackoff: reviewSnapshotFailBackoff,
+		maxAge: reviewSnapshotMaxAge, idleMark: reviewSnapshotIdleMark,
+		minInterval: reviewSnapshotMinInterval, failBackoff: reviewSnapshotFailBackoff,
 		now: time.Now, baseCtx: context.Background(),
-		spawn: func(f func()) { go f() },
+		spawn: func(f func()) bool { go f(); return true },
 	}
 }
 
@@ -173,90 +186,108 @@ func (c *reviewSnapshotCache) inBackoff() bool {
 	return c.failErr != nil && c.now().Sub(c.failedAt) < c.failBackoff
 }
 
-// touch records a request and (re)arms the idle drop. Caller holds mu.
+// touch (re)arms the idle mark. Caller holds mu.
 func (c *reviewSnapshotCache) touch() {
-	c.lastUse = c.now()
-	if c.idleDrop <= 0 {
+	if c.idleMark <= 0 {
 		return
 	}
 	if c.idle == nil {
-		c.idle = time.AfterFunc(c.idleDrop, c.dropIfIdle)
+		c.idle = time.AfterFunc(c.idleMark, c.markIdle)
 		return
 	}
-	c.idle.Reset(c.idleDrop)
+	c.idle.Reset(c.idleMark)
 }
 
-func (c *reviewSnapshotCache) dropIfIdle() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.now().Sub(c.lastUse) >= c.idleDrop {
-		c.snap = nil
+// markIdle marks the snapshot out of date after reviewSnapshotIdleMark with no
+// request. It is a mark, not a drop: the snapshot is still served to the next
+// visit while it refreshes. A build running across the mark began before it,
+// so the snapshot it publishes is still out of date -- the same rule as any
+// invalidation.
+func (c *reviewSnapshotCache) markIdle() {
+	c.invalidate()
+}
+
+// startBuild returns the build in flight, or starts one on a tracked goroutine.
+// Caller holds mu.
+func (c *reviewSnapshotCache) startBuild() *buildCall {
+	if c.inflight != nil {
+		return c.inflight
 	}
+	bc := &buildCall{done: make(chan struct{})}
+	ctx := c.baseCtx
+	if ctx.Err() != nil {
+		bc.err = errReviewBuildNotStarted
+		close(bc.done)
+		return bc
+	}
+	c.inflight = bc
+	c.lastStart = c.now()
+	startInval, startGen := c.invalGen, c.cacheGen()
+	run := func() {
+		began := time.Now()
+		snap, err := c.build(ctx)
+		c.mu.Lock()
+		c.inflight = nil
+		if err != nil {
+			c.failedAt, c.failErr = c.now(), err
+		} else {
+			c.failErr = nil
+			snap.cacheGen, snap.invalGen = startGen, startInval
+			c.snap = snap
+		}
+		c.mu.Unlock()
+		if err != nil {
+			if ctx.Err() == nil {
+				metadataCacheLog.Warn("review snapshot build failed: %v", err)
+			}
+		} else {
+			metadataCacheLog.Info("review snapshot built: rows=%d orphaned=%d took=%s", len(snap.rows), snap.orphaned, time.Since(began).Round(time.Millisecond))
+		}
+		bc.snap, bc.err = snap, err
+		close(bc.done)
+	}
+	if !c.spawn(run) {
+		c.inflight = nil
+		bc.err = errReviewBuildNotStarted
+		close(bc.done)
+	}
+	return bc
 }
 
-// get returns the current snapshot. With none (first request after a restart
-// or an idle drop) it builds one and waits; a client that disconnects does not
-// cancel a build other requests share. With one that is out of date it
-// returns it at once and starts a background rebuild.
+// get returns the current snapshot. With none (the first request after a
+// restart) it starts a build, or joins the one running, and waits for it; a
+// client that disconnects stops waiting but does not cancel the build. With one
+// that is out of date it returns it at once and starts a background rebuild,
+// unless one began within minInterval or a failure is backing off.
 func (c *reviewSnapshotCache) get(ctx context.Context) (*reviewSnapshot, error) {
 	c.mu.Lock()
 	c.touch()
 	snap := c.snap
-	backoff := c.inBackoff()
-	failErr := c.failErr
-	stale := snap != nil && c.outOfDate(snap)
-	c.mu.Unlock()
 	if snap == nil {
-		if backoff {
-			return nil, errors.Join(errReviewBuildBackoff, failErr)
+		if c.inBackoff() && c.inflight == nil {
+			err := errors.Join(errReviewBuildBackoff, c.failErr)
+			c.mu.Unlock()
+			return nil, err
 		}
-		ch := c.sf.DoChan("build", func() (any, error) { return c.rebuild(context.WithoutCancel(ctx)) })
+		bc := c.startBuild()
+		c.mu.Unlock()
 		select {
-		case res := <-ch:
-			if res.Err != nil {
-				return nil, res.Err
-			}
-			return res.Val.(*reviewSnapshot), nil
+		case <-bc.done:
+			return bc.snap, bc.err
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
-	if stale && !backoff {
-		c.refreshAsync()
+	if c.outOfDate(snap) && !c.inBackoff() && c.now().Sub(c.lastStart) >= c.minInterval {
+		c.startBuild()
 	}
+	c.mu.Unlock()
 	return snap, nil
 }
 
-// refreshAsync starts a rebuild unless one is already running (or the
-// server is shutting down).
-func (c *reviewSnapshotCache) refreshAsync() {
-	c.mu.Lock()
-	ctx := c.baseCtx
-	if c.refreshing || ctx.Err() != nil {
-		c.mu.Unlock()
-		return
-	}
-	c.refreshing = true
-	spawn := c.spawn
-	c.mu.Unlock()
-	spawn(func() {
-		defer func() {
-			c.mu.Lock()
-			c.refreshing = false
-			c.mu.Unlock()
-		}()
-		// Do, not DoChan: the rebuild runs on THIS goroutine, the one the
-		// server tracks; a cold build already running is joined.
-		_, err, _ := c.sf.Do("build", func() (any, error) { return c.rebuild(ctx) })
-		if err != nil && ctx.Err() == nil {
-			metadataCacheLog.Warn("background review snapshot rebuild failed; serving the previous snapshot: %v", err)
-		}
-	})
-}
-
-// setBackground makes ctx the parent of background rebuilds and spawn the
-// way their goroutines start.
-func (c *reviewSnapshotCache) setBackground(ctx context.Context, spawn func(func())) {
+// setBackground makes ctx the parent of every build and spawn the way their
+// goroutines start.
+func (c *reviewSnapshotCache) setBackground(ctx context.Context, spawn func(func()) bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if ctx != nil {
@@ -267,35 +298,17 @@ func (c *reviewSnapshotCache) setBackground(ctx context.Context, spawn func(func
 	}
 }
 
-func (c *reviewSnapshotCache) rebuild(ctx context.Context) (*reviewSnapshot, error) {
-	c.mu.Lock()
-	startInval := c.invalGen
-	c.mu.Unlock()
-	startGen := c.cacheGen()
-	began := time.Now()
-	snap, err := c.build(ctx)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err != nil {
-		c.failedAt, c.failErr = c.now(), err
-		return nil, err
-	}
-	c.failErr = nil
-	snap.cacheGen, snap.invalGen = startGen, startInval
-	c.snap = snap
-	metadataCacheLog.Info("review snapshot built: rows=%d orphaned=%d took=%s", len(snap.rows), snap.orphaned, time.Since(began).Round(time.Millisecond))
-	return snap, nil
-}
-
-// warm builds the snapshot now, under ctx, and makes ctx the parent of every
-// later background rebuild.
+// warm builds the snapshot now (or joins the build running) and waits for it.
 func (c *reviewSnapshotCache) warm(ctx context.Context) error {
 	c.mu.Lock()
-	c.baseCtx = ctx
+	if ctx != nil {
+		c.baseCtx = ctx
+	}
 	c.touch()
+	bc := c.startBuild()
 	c.mu.Unlock()
-	_, err, _ := c.sf.Do("build", func() (any, error) { return c.rebuild(ctx) })
-	return err
+	<-bc.done
+	return bc.err
 }
 
 // invalidate marks the snapshot out of date: the next request is served the
@@ -310,18 +323,29 @@ func (c *reviewSnapshotCache) invalidate() {
 }
 
 // reviewOverlay is a snapshot with its rows' books read NOW: review status,
-// "no match", applied and the book's own fields come from the live row, and a
-// book that has gone since the snapshot was built is counted orphaned.
+// "no match", applied and the book's own fields come from the live row. A
+// book that has gone since the snapshot was built is counted orphaned; a book
+// whose read FAILED is counted in readErrors -- it may well still exist, and
+// calling it orphaned would point an operator at the reaper for a store fault.
 type reviewOverlay struct {
-	rows     []snapshotRow
-	orphaned int
-	books    map[string]*database.Book
+	rows       []snapshotRow
+	orphaned   int
+	readErrors int
+	books      map[string]*database.Book
 }
 
-// overlayLiveBooks re-reads the books of snap's rows in one batch. With want
-// non-nil (an ids= lookup) only those rows are kept and only their books are
-// read: a page's detail fetch must cost the page, not the library. The
-// summary counts over such an overlay cover only the asked rows.
+// errOverlayAllReadsFailed: not one of the overlay's book reads succeeded.
+var errOverlayAllReadsFailed = errors.New("every review book read failed")
+
+// overlayLiveBooks re-reads the books of snap's rows. With want non-nil (an
+// ids= lookup) only those rows are kept and only their books are read: a
+// page's detail fetch must cost the page, not the library. The summary counts
+// over such an overlay cover only the asked rows.
+//
+// The rows are read in one batch. A failed batch is logged and the rows are
+// read one by one instead; a row the batch missed is confirmed by a point
+// read too. A failed point read is a readErrors row, not an orphan. Only when
+// every read failed is the overlay an error.
 func overlayLiveBooks(snap *reviewSnapshot, store cacheRowBookReader, want map[string]bool) (reviewOverlay, error) {
 	rows := snap.rows
 	if want != nil {
@@ -336,31 +360,45 @@ func overlayLiveBooks(snap *reviewSnapshot, store cacheRowBookReader, want map[s
 	for i := range rows {
 		ids[i] = rows[i].sum.BookID
 	}
-	fetched, err := store.GetBooksByIDs(ids)
-	if err != nil {
-		return reviewOverlay{}, err
-	}
-	books := make(map[string]*database.Book, len(fetched))
-	for i := range fetched {
-		books[fetched[i].ID] = &fetched[i]
+	books := make(map[string]*database.Book, len(ids))
+	batchOK := false
+	if fetched, err := store.GetBooksByIDs(ids); err != nil {
+		metadataCacheLog.Warn("review overlay: batch book read failed; reading %d books one by one: %v", len(ids), err)
+	} else {
+		batchOK = true
+		for i := range fetched {
+			books[fetched[i].ID] = &fetched[i]
+		}
 	}
 	out := reviewOverlay{rows: make([]snapshotRow, 0, len(rows)), orphaned: snap.orphaned, books: books}
+	reads := 0
+	if batchOK {
+		reads = 1
+	}
 	for _, r := range rows {
 		b := books[r.sum.BookID]
 		if b == nil {
-			// The same rule as loadCacheRows' lookupBook: a batch miss is
-			// confirmed by a point read before the row is called orphaned.
-			if pb, perr := store.GetBookByID(r.sum.BookID); perr == nil && pb != nil {
-				b = pb
-				books[r.sum.BookID] = pb
+			pb, perr := store.GetBookByID(r.sum.BookID)
+			if perr != nil {
+				out.readErrors++
+				continue
 			}
-		}
-		if b == nil {
-			out.orphaned++
-			continue
+			reads++
+			if pb == nil {
+				out.orphaned++
+				continue
+			}
+			b = pb
+			books[r.sum.BookID] = pb
 		}
 		r.book = b
 		out.rows = append(out.rows, r)
+	}
+	if len(rows) > 0 && reads == 0 {
+		return reviewOverlay{}, errOverlayAllReadsFailed
+	}
+	if out.readErrors > 0 {
+		metadataCacheLog.Warn("review overlay: %d book reads failed; those rows are counted under errors, not orphaned", out.readErrors)
 	}
 	return out, nil
 }
