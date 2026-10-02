@@ -825,7 +825,8 @@ func medianUint64(in []uint64) uint64 {
 }
 
 // warmMetadataReviewSnapshot waits for memdb (the review snapshot's batch file
-// reads are index lookups only once it is published), then builds the
+// reads are index lookups only once it is published; it skips the warm
+// entirely if memdb never publishes), then builds the
 // metadata review page's snapshot, so the first visit after a restart is
 // served from it instead of waiting for a whole-cache load (119 s on
 // production before the snapshot existed). Runs under bgCtx: shutdown stops it
@@ -834,18 +835,26 @@ func (s *Server) warmMetadataReviewSnapshot() {
 	if s.metadataCacheH == nil {
 		return
 	}
-	if checker, ok := database.AsCapability[memReadyChecker](s.Ops()); ok {
-		deadline := time.Now().Add(5 * time.Minute)
-		for !checker.IsMemReady() && time.Now().Before(deadline) {
-			select {
-			case <-s.bgCtx.Done():
-				return
-			case <-time.After(2 * time.Second):
-			}
-		}
-	}
-	if s.bgCtx.Err() != nil {
+	// Without memdb the build's batch file reads fall back to a Pebble range
+	// per book: tens of thousands of cold reads at startup, competing with
+	// everything else starting up. Skip the warm then and let the first review
+	// request build -- it pays once, when someone actually wants the page.
+	checker, ok := database.AsCapability[memReadyChecker](s.Ops())
+	if !ok {
+		reviewWarmLog.Info("metadata review warm-up skipped: store has no memdb readiness signal")
 		return
+	}
+	deadline := time.Now().Add(5 * time.Minute)
+	for !checker.IsMemReady() {
+		if time.Now().After(deadline) {
+			reviewWarmLog.Warn("metadata review warm-up skipped: memdb not ready after 5 min; the first review request will build")
+			return
+		}
+		select {
+		case <-s.bgCtx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
 	}
 	if err := s.metadataCacheH.WarmReviewSnapshot(s.bgCtx); err != nil && s.bgCtx.Err() == nil {
 		reviewWarmLog.Warn("metadata review snapshot warm-up failed; the first review request will build it: %v", err)
