@@ -49,6 +49,7 @@ const (
 	EntangleWouldEmpty    = "would-empty"     // a version-group member would be emptied (and deleted)
 	EntanglePrimaryTarget = "primary-target"  // files would be added to a group's primary (library) copy
 	EntangleAmbiguous     = "ambiguous-group" // target's group has no incumbent primary to tell copies apart
+	EntangleMixedTarget   = "mixed-target"    // grouped target already holds another heal group's tracks
 )
 
 // Snapshot is an immutable read of the DB state the planner reasons over. It is
@@ -142,10 +143,11 @@ type RegroupPlan struct {
 // silently retitling it.
 func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 	plan := RegroupPlan{TotalGroups: len(groups), EntangledByReason: make(map[string]int)}
-	claimed := make(map[string]bool, len(groups))   // existing books already taken as a target
+	claimed := make(map[string]bool, len(groups)) // existing books already taken as a target
+	own := newOwnership(groups, snap)
 	singleFileChapters := make(map[string]struct{}) // distinct single-file books in multi-track groups
 
-	for _, g := range groups {
+	for gi, g := range groups {
 		act := GroupAction{Title: g.Title}
 
 		// Resolve this group's PIDs against the snapshot.
@@ -229,7 +231,7 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 		// Moves ARE needed. Only now does entanglement matter (see entanglement
 		// for the rule and why). The legacy rule is evaluated alongside it on the
 		// same holders, for the dry-run delta report only.
-		reason := entanglement(moves, target, fresh, snap)
+		reason := entanglement(gi, moves, target, fresh, snap, own)
 		legacy := legacyEntangledAmong(resolved, snap)
 		if legacy {
 			plan.LegacyEntangledSkipped++
@@ -286,9 +288,12 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 //     NOT in a version group may receive anything (ungrouped<->ungrouped).
 //  3. A grouped target may receive files from those ungrouped fragments only
 //     when it is a NON-primary member of a group that HAS an incumbent
-//     primary: it is then an iTunes edition linked to its library copy, and
-//     gathering the rest of that iTunes album's tracks onto it completes the
-//     edition the link already points at. The library copy is untouched.
+//     primary, AND every iTunes PID it already holds belongs to THIS heal
+//     group (PIDs no heal group owns -- in the DB, gone from the XML -- are
+//     ignored): it is then an iTunes edition of this one album linked to its
+//     library copy, and gathering the rest of the album's tracks onto it
+//     completes the edition the link already points at. The library copy is
+//     untouched.
 //     - target is the incumbent primary -> EntanglePrimaryTarget: that is the
 //     library copy (or, before the owner's rule is fully applied, the copy
 //     users see), and pouring iTunes-folder rows into it would mix
@@ -298,7 +303,7 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 //     the incumbent rule refuses to guess, so the planner does too.
 //
 // A group whose files are already on one book (no moves) never reaches here.
-func entanglement(moves []FileMove, target string, fresh bool, snap Snapshot) string {
+func entanglement(gi int, moves []FileMove, target string, fresh bool, snap Snapshot, own ownership) string {
 	out := make(map[string]int)
 	for _, m := range moves {
 		out[m.From]++
@@ -335,7 +340,34 @@ func entanglement(moves []FileMove, target string, fresh bool, snap Snapshot) st
 	if t.IsPrimary {
 		return EntanglePrimaryTarget
 	}
+	for _, pid := range own.bookPIDs[target] {
+		if owner, ok := own.pidGroup[pid]; ok && owner != gi {
+			return EntangleMixedTarget
+		}
+	}
 	return ""
+}
+
+// ownership indexes which heal group owns each PID and which PIDs each book
+// currently holds, for the mixed-target check. Built once per plan.
+type ownership struct {
+	pidGroup map[string]int      // PID -> index of the heal group listing it
+	bookPIDs map[string][]string // book ID -> PIDs whose file is on it (snapshot)
+}
+
+func newOwnership(groups []HealGroup, snap Snapshot) ownership {
+	o := ownership{pidGroup: make(map[string]int), bookPIDs: make(map[string][]string)}
+	for gi, g := range groups {
+		for _, pid := range g.PIDs {
+			if _, dup := o.pidGroup[pid]; !dup {
+				o.pidGroup[pid] = gi
+			}
+		}
+	}
+	for pid, loc := range snap.PIDLoc {
+		o.bookPIDs[loc.BookID] = append(o.bookPIDs[loc.BookID], pid)
+	}
+	return o
 }
 
 // legacyEntangledAmong is the pre-2026-10-01 rule: skip when any holder's

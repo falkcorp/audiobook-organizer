@@ -373,3 +373,71 @@ func TestITunesRegroupDryRun_ReportsRuleDelta(t *testing.T) {
 		t.Fatalf("dry run moved files: fragment has %d files, want 1", len(files))
 	}
 }
+
+// End-to-end apply on the newly allowed shape: an iTunes edition (non-primary,
+// linked to a library copy) receives its album's ungrouped fragment. The
+// fragment is deleted; the edition keeps its version link and its explicit
+// non-primary flag; the library copy is untouched.
+func TestITunesRegroupApply_GroupedEditionReceivesFragment(t *testing.T) {
+	s := regroupStore(t)
+	vg := "vg-apply"
+	tr, fa := rgFlag(true), rgFlag(false)
+	lib, err := s.CreateBook(&database.Book{Title: "Library copy", VersionGroupID: &vg, IsPrimaryVersion: tr})
+	if err != nil {
+		t.Fatalf("CreateBook library: %v", err)
+	}
+	libFile := &database.BookFile{BookID: lib.ID, FilePath: "/library/book.m4b"}
+	if err := s.CreateBookFile(libFile); err != nil {
+		t.Fatalf("CreateBookFile library: %v", err)
+	}
+	ed, err := s.CreateBook(&database.Book{Title: "iTunes edition", VersionGroupID: &vg, IsPrimaryVersion: fa})
+	if err != nil {
+		t.Fatalf("CreateBook edition: %v", err)
+	}
+	frag := seedBook(t, s, "fragment")
+	seedFilePID(t, s, ed.ID, "p1")
+	seedFilePID(t, s, frag, "p2")
+
+	p := &Plugin{}
+	rep := &fakeReporter{}
+	snap, err := p.buildRegroupSnapshot(context.Background(), s, rep)
+	if err != nil {
+		t.Fatalf("buildRegroupSnapshot: %v", err)
+	}
+	plan := itunesservice.PlanRegroup([]itunesservice.HealGroup{{Title: "The Book", PIDs: []string{"p1", "p2"}}}, snap)
+	if plan.Consolidated != 1 || plan.Groups[0].Target != ed.ID {
+		t.Fatalf("plan = %+v, want consolidate onto the edition %s", plan.Groups, ed.ID)
+	}
+	if err := p.applyRegroupPlan(context.Background(), s, plan, rep); err != nil {
+		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+	}
+
+	if b, _ := s.GetBookByID(frag); b != nil && !b.IsSoftDeleted() {
+		t.Fatalf("fragment %s still live after apply", frag)
+	}
+	edFiles, _ := s.GetBookFiles(ed.ID)
+	edExts, _ := s.GetExternalIDsForBook(ed.ID)
+	if len(edFiles) != 2 || len(edExts) != 2 {
+		t.Fatalf("edition has %d files / %d ext-ids, want 2/2", len(edFiles), len(edExts))
+	}
+	edAfter, err := s.GetBookByID(ed.ID)
+	if err != nil || edAfter == nil {
+		t.Fatalf("GetBookByID edition: %v", err)
+	}
+	if edAfter.VersionGroupID == nil || *edAfter.VersionGroupID != vg ||
+		edAfter.IsPrimaryVersion == nil || *edAfter.IsPrimaryVersion {
+		t.Fatalf("edition group/flag changed: vg=%v primary=%v", edAfter.VersionGroupID, edAfter.IsPrimaryVersion)
+	}
+	libAfter, err := s.GetBookByID(lib.ID)
+	if err != nil || libAfter == nil {
+		t.Fatalf("GetBookByID library: %v", err)
+	}
+	if libAfter.Title != "Library copy" || libAfter.VersionGroupID == nil || *libAfter.VersionGroupID != vg ||
+		libAfter.IsPrimaryVersion == nil || !*libAfter.IsPrimaryVersion {
+		t.Fatalf("library copy changed: %+v", libAfter)
+	}
+	libFiles, _ := s.GetBookFiles(lib.ID)
+	if len(libFiles) != 1 || libFiles[0].FilePath != "/library/book.m4b" {
+		t.Fatalf("library copy files changed: %+v", libFiles)
+	}
+}

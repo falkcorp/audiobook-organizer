@@ -318,3 +318,55 @@ func TestPlanRegroup_Deterministic(t *testing.T) {
 		}
 	}
 }
+
+// A grouped edition that already holds tracks of TWO heal groups must not
+// receive more files: gathering B's fragment onto I1 would grow an edition that
+// already mixes two books. B (planned first) is skipped as mixed-target and A
+// stays already-correct on I1; nothing moves off F1.
+func TestPlanRegroup_MixedGroupedTargetSkipped(t *testing.T) {
+	groups := []HealGroup{
+		{Title: "B", PIDs: []string{"pb1", "pb2"}},
+		{Title: "A", PIDs: []string{"pa1", "pa2"}},
+	}
+	snap := mkSnap(
+		map[string]PIDLoc{
+			"pa1": {FileID: "fa1", BookID: "I1"}, "pa2": {FileID: "fa2", BookID: "I1"},
+			"pb1": {FileID: "fb1", BookID: "I1"}, "pb2": {FileID: "fb2", BookID: "F1"},
+		},
+		map[string]BookMeta{
+			"I1": {ID: "I1", FileCount: 3, VersionGroupID: "vg1", LegacyEntangled: true},
+			"F1": {ID: "F1", FileCount: 1},
+		},
+	)
+	p := PlanRegroup(groups, snap)
+	b, a := actionByTitle(p, "B"), actionByTitle(p, "A")
+	if !b.Entangled || b.EntangleReason != EntangleMixedTarget || len(b.Moves) != 0 {
+		t.Fatalf("B = %+v, want skipped as %q", b, EntangleMixedTarget)
+	}
+	if a.Entangled || a.Target != "I1" || len(a.Moves) != 0 || p.AlreadyCorrect != 1 {
+		t.Fatalf("A = %+v already-correct=%d, want already-correct on I1", a, p.AlreadyCorrect)
+	}
+	if len(p.DeleteBooks) != 0 {
+		t.Fatalf("DeleteBooks = %v, want none", p.DeleteBooks)
+	}
+}
+
+// A PID on the target that NO heal group owns (in the DB, gone from the XML)
+// does not make the target mixed.
+func TestPlanRegroup_GroupedTargetWithUnownedPIDReceives(t *testing.T) {
+	groups := []HealGroup{{Title: "A", PIDs: []string{"pa1", "pa2"}}}
+	snap := mkSnap(
+		map[string]PIDLoc{
+			"pa1": {FileID: "fa1", BookID: "I1"}, "stale": {FileID: "fs", BookID: "I1"},
+			"pa2": {FileID: "fa2", BookID: "F1"},
+		},
+		map[string]BookMeta{
+			"I1": {ID: "I1", FileCount: 2, VersionGroupID: "vg1"},
+			"F1": {ID: "F1", FileCount: 1},
+		},
+	)
+	a := actionByTitle(PlanRegroup(groups, snap), "A")
+	if a.Entangled || a.Target != "I1" || len(a.Moves) != 1 {
+		t.Fatalf("A = %+v, want F1's file moved onto I1", a)
+	}
+}
