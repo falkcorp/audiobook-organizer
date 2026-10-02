@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-02
 
@@ -565,18 +565,19 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// reused group's member read, the membership writes and the demotions,
 	// and released before handOffLeftGroups, which takes the group locks
 	// itself. versionGroupID and leftGroups were planned from the live
-	// participants' groups as read at the top of this call, so a live
+	// participants' groups as read at the top of this call, so a
 	// participant whose group changed since is refused here
 	// (ErrMembershipChanged) before anything is written: otherwise it would
 	// leave a group nobody locked and handOffLeftGroups would hand off the
 	// wrong one.
+	//
+	// Soft-deleted participants are planned too: the loop below moves them
+	// into versionGroupID as well, so one that changed group since the read
+	// would leave a group this merge never planned for.
 	ids := make([]string, len(books))
 	planned := make(map[string]string, len(books))
 	for i := range books {
 		ids[i] = books[i].ID
-		if books[i].IsSoftDeleted() {
-			continue
-		}
 		planned[books[i].ID] = ""
 		if books[i].VersionGroupID != nil {
 			planned[books[i].ID] = *books[i].VersionGroupID

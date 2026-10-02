@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.55.0
+// version: 1.56.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-10-02
 
@@ -2270,27 +2270,6 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 	// A failed read REFUSES the organize (since 2026-09-24): creating a
 	// primary without knowing whether the group already has one is how
 	// groups got two.
-	if joinedExistingGroup {
-		if members, err := orgSvc.db.GetBooksByVersionGroup(versionGroupID); err == nil {
-			for i := range members {
-				if members[i].ID == book.ID {
-					continue // this row is demoted below
-				}
-				if members[i].IsPrimaryVersion != nil && *members[i].IsPrimaryVersion {
-					isPrimary = false
-					log.Info("Version group %s already has primary %s; organizing %q as a non-primary version",
-						versionGroupID, members[i].ID, book.Title)
-					break
-				}
-			}
-		} else {
-			log.Error("organize: cannot read version group %s of %s (%s) to check for an existing primary: %v — refusing, removing the %d file(s) this organize wrote",
-				versionGroupID, book.Title, book.ID, err, len(landing.Created))
-			orgSvc.rollbackOrganizedVersion("", landing, log)
-			return nil, fmt.Errorf("read version group %s: %w", versionGroupID, err)
-		}
-	}
-
 	// Create the new organized book record (copy of metadata)
 	newBook := database.Book{
 		ID:                   newBookID,
@@ -2338,6 +2317,125 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 	// brand-new row (C610).
 	database.DropDanglingSeriesRef(orgSvc.db, &newBook, "organizer.copy")
 
+	// Copy book files to the new book with updated paths.
+	//
+	// The per-file path must come from the SAME planner OrganizeBookDirectory
+	// copied with. Until 2026-08-15 this rebuilt it as
+	// filepath.Join(newPath, filepath.Base(bf.FilePath)) -- a third, independent
+	// derivation that silently kept the source filename. It happened to agree
+	// while OrganizeBookDirectory also kept filepath.Base; now that the file
+	// naming pattern decides the destination filename, guessing here would write
+	// every organized book_file row a path with no file at it.
+	// Both halves of this are load-bearing, and until 2026-08-24 neither was.
+	//
+	// The read error was discarded by an `err == nil` guard and the write error
+	// by `_ =`, and BOTH fell through to the version-group handover below, which
+	// demotes the ORIGINAL to organized_source and non-primary. So a failure here
+	// produced a version group whose PRIMARY row owned no audio while the row that
+	// still had the files was marked as the superseded source. Nothing logged, and
+	// the function returned success.
+	//
+	// A zero-length result is NOT a failure: books with no book_file rows are
+	// normal here (that is what ensureSingleFileBookFile backfills). Only a read
+	// error and a write error abort.
+	bookFiles, bfErr := orgSvc.db.GetBookFiles(book.ID)
+	if bfErr != nil {
+		log.Error("organize: cannot read book files for %s (%s): %v — removing the %d file(s) this organize wrote", book.Title, book.ID, bfErr, len(landing.Created))
+		orgSvc.rollbackOrganizedVersion("", landing, log)
+		return nil, fmt.Errorf("read book files for %s: %w", book.ID, bfErr)
+	}
+	if !isDir && len(bookFiles) > 1 {
+		// A single-file landing for a multi-row book would stamp every row
+		// with the one path. Nothing here can say which row that path belongs
+		// to, so fail closed rather than write rows that are wrong by
+		// construction.
+		log.Error("organize: %s (%s) has %d book_file rows but landed as a single file at %s — rolling back", book.Title, book.ID, len(bookFiles), newPath)
+		orgSvc.rollbackOrganizedVersion("", landing, log)
+		return nil, fmt.Errorf("organize: %d book_file rows for %s but a single-file landing at %s", len(bookFiles), book.ID, newPath)
+	}
+	var newFiles []*database.BookFile
+	if len(bookFiles) > 0 {
+		newFiles = make([]*database.BookFile, 0, len(bookFiles))
+		for _, bf := range bookFiles {
+			newBF := bf
+			newBF.ID = ulid.Make().String()
+			newBF.BookID = newBookID
+			if isDir && bf.FilePath != "" {
+				newBF.FilePath = resolveOrganizedFilePath(bf.FilePath, landing.Files, log)
+			} else if !isDir {
+				newBF.FilePath = newPath
+			}
+			if newBF.FilePath != "" {
+				newBF.ITunesPath = orgSvc.ComputeITunesPath(newBF.FilePath)
+			}
+			// `newBF := bf` copies the source row's Duration, so a source row
+			// created with 0 (the scanner's new-book path did this until
+			// 2026-09-25) handed the 0 to the organized copy, and ABS, which
+			// sums book_file durations, showed the book as "0". Fill it here
+			// from the NEW path: that is the file this row describes from now
+			// on. A single-file book may use book.Duration instead.
+			if newBF.Duration <= 0 && newBF.FilePath != "" {
+				known := bookfileaudio.Known{SingleFileBook: len(bookFiles) == 1}
+				if book.Duration != nil {
+					known.BookDurationSec = *book.Duration
+				}
+				bookfileaudio.EnsureDuration(&newBF, known, log)
+			}
+			newFiles = append(newFiles, &newBF)
+		}
+	}
+
+	// Membership lock (versionprimary.LockPlannedGroups): the source row's
+	// group as `book` carried it when versionGroupID was planned from it
+	// (the no-group sentinel when it had none) and versionGroupID, in one
+	// acquisition, held from the member read through the copy's CreateBook,
+	// its book_file rows and the source row's move, and released before the
+	// hand-off below (which takes the group lock itself). The copy's file
+	// rows are built (and probed) above, outside the lock. A source row that
+	// changed group or vanished since it was read is refused before the copy
+	// is created: the copy would join the stale group and the source would
+	// stay where the other writer put it.
+	plannedGroup := ""
+	if book.VersionGroupID != nil {
+		plannedGroup = *book.VersionGroupID
+	}
+	unlockGroups, lockedGroups, lockErr := versionprimary.LockPlannedGroups(orgSvc.db, nil, map[string]string{book.ID: plannedGroup}, versionGroupID)
+	if lockErr != nil {
+		log.Error("organize: cannot lock the version groups of %s (%s): %v — refusing, removing the %d file(s) this organize wrote",
+			book.Title, book.ID, lockErr, len(landing.Created))
+		orgSvc.rollbackOrganizedVersion("", landing, log)
+		return nil, fmt.Errorf("organize %s: lock version groups: %w", book.ID, lockErr)
+	}
+	groupsLocked := true
+	releaseGroups := func() {
+		if groupsLocked {
+			groupsLocked = false
+			unlockGroups()
+		}
+	}
+	defer releaseGroups()
+
+	if joinedExistingGroup {
+		if members, err := orgSvc.db.GetBooksByVersionGroup(versionGroupID); err == nil {
+			for i := range members {
+				if members[i].ID == book.ID {
+					continue // this row is demoted below
+				}
+				if members[i].IsPrimaryVersion != nil && *members[i].IsPrimaryVersion {
+					isPrimary = false
+					log.Info("Version group %s already has primary %s; organizing %q as a non-primary version",
+						versionGroupID, members[i].ID, book.Title)
+					break
+				}
+			}
+		} else {
+			log.Error("organize: cannot read version group %s of %s (%s) to check for an existing primary: %v — refusing, removing the %d file(s) this organize wrote",
+				versionGroupID, book.Title, book.ID, err, len(landing.Created))
+			orgSvc.rollbackOrganizedVersion("", landing, log)
+			return nil, fmt.Errorf("read version group %s: %w", versionGroupID, err)
+		}
+	}
+
 	createdBook, err := orgSvc.db.CreateBook(&newBook)
 	if err != nil {
 		log.Error("Failed to create organized book record for %s: %v — removing the %d file(s) this organize wrote", book.Title, err, len(landing.Created))
@@ -2380,71 +2478,7 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 		_ = orgSvc.db.SetBookAuthors(newBookID, newAuthors)
 	}
 
-	// Copy book files to the new book with updated paths.
-	//
-	// The per-file path must come from the SAME planner OrganizeBookDirectory
-	// copied with. Until 2026-08-15 this rebuilt it as
-	// filepath.Join(newPath, filepath.Base(bf.FilePath)) -- a third, independent
-	// derivation that silently kept the source filename. It happened to agree
-	// while OrganizeBookDirectory also kept filepath.Base; now that the file
-	// naming pattern decides the destination filename, guessing here would write
-	// every organized book_file row a path with no file at it.
-	// Both halves of this are load-bearing, and until 2026-08-24 neither was.
-	//
-	// The read error was discarded by an `err == nil` guard and the write error
-	// by `_ =`, and BOTH fell through to the version-group handover below, which
-	// demotes the ORIGINAL to organized_source and non-primary. So a failure here
-	// produced a version group whose PRIMARY row owned no audio while the row that
-	// still had the files was marked as the superseded source. Nothing logged, and
-	// the function returned success.
-	//
-	// A zero-length result is NOT a failure: books with no book_file rows are
-	// normal here (that is what ensureSingleFileBookFile backfills). Only a read
-	// error and a write error abort.
-	bookFiles, bfErr := orgSvc.db.GetBookFiles(book.ID)
-	if bfErr != nil {
-		log.Error("organize: cannot read book files for %s (%s): %v — rolling back the organized copy", book.Title, book.ID, bfErr)
-		orgSvc.rollbackOrganizedVersion(newBookID, landing, log)
-		return nil, fmt.Errorf("read book files for %s: %w", book.ID, bfErr)
-	}
-	if !isDir && len(bookFiles) > 1 {
-		// A single-file landing for a multi-row book would stamp every row
-		// with the one path. Nothing here can say which row that path belongs
-		// to, so fail closed rather than write rows that are wrong by
-		// construction.
-		log.Error("organize: %s (%s) has %d book_file rows but landed as a single file at %s — rolling back", book.Title, book.ID, len(bookFiles), newPath)
-		orgSvc.rollbackOrganizedVersion(newBookID, landing, log)
-		return nil, fmt.Errorf("organize: %d book_file rows for %s but a single-file landing at %s", len(bookFiles), book.ID, newPath)
-	}
-	if len(bookFiles) > 0 {
-		newFiles := make([]*database.BookFile, 0, len(bookFiles))
-		for _, bf := range bookFiles {
-			newBF := bf
-			newBF.ID = ulid.Make().String()
-			newBF.BookID = newBookID
-			if isDir && bf.FilePath != "" {
-				newBF.FilePath = resolveOrganizedFilePath(bf.FilePath, landing.Files, log)
-			} else if !isDir {
-				newBF.FilePath = newPath
-			}
-			if newBF.FilePath != "" {
-				newBF.ITunesPath = orgSvc.ComputeITunesPath(newBF.FilePath)
-			}
-			// `newBF := bf` copies the source row's Duration, so a source row
-			// created with 0 (the scanner's new-book path did this until
-			// 2026-09-25) handed the 0 to the organized copy, and ABS, which
-			// sums book_file durations, showed the book as "0". Fill it here
-			// from the NEW path: that is the file this row describes from now
-			// on. A single-file book may use book.Duration instead.
-			if newBF.Duration <= 0 && newBF.FilePath != "" {
-				known := bookfileaudio.Known{SingleFileBook: len(bookFiles) == 1}
-				if book.Duration != nil {
-					known.BookDurationSec = *book.Duration
-				}
-				bookfileaudio.EnsureDuration(&newBF, known, log)
-			}
-			newFiles = append(newFiles, &newBF)
-		}
+	if len(newFiles) > 0 {
 		// BatchCreateBookFiles rather than a CreateBookFile loop, for two reasons
 		// beyond the single aggregate recompute it was written for. It returns an
 		// error instead of offering one to discard; and its write is ATOMIC, which
@@ -2484,60 +2518,47 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 	// pre-fix behavior) so the state transition always lands — fail-OPEN for
 	// the state transition, preserve-everything-else-when-possible.
 	organizedSourceState := "organized_source"
-	//
-	// Membership lock: the original's group as `book` carried it when
-	// versionGroupID was planned from it (the no-group sentinel when it had
-	// none) and versionGroupID, in one versionprimary.LockPlannedGroups
-	// acquisition, across this write and its fallback, released before the
-	// hand-off below (which takes the group lock itself). An original that
-	// changed group since it was read is refused (ErrMembershipChanged), as
-	// is a failed lock: warned, and the state-only fallback is not taken.
-	// The in-memory `book` gets the new fields only after the locked write.
-	plannedGroup := ""
-	if book.VersionGroupID != nil {
-		plannedGroup = *book.VersionGroupID
+	transitioned := false
+	modified, modifyErr := orgSvc.db.ModifyBook(book.ID, func(b *database.Book) error {
+		if g, ok := lockedGroups[b.ID]; ok {
+			if err := versionprimary.CheckMembership(b, g); err != nil {
+				return err
+			}
+		}
+		b.VersionGroupID = &versionGroupID
+		b.IsPrimaryVersion = &isNotPrimary
+		b.LibraryState = &organizedSourceState
+		return nil
+	})
+	switch {
+	case modifyErr != nil:
+		// The locked write itself failed. The pre-fix code only warned on a
+		// failed UpdateBook of the hydrated row; keep that shape rather than
+		// widening the whole-row fallback to one more error path.
+		log.Warn("Failed to update original book %s version group: %v", book.ID, modifyErr)
+	case modified == nil:
+		// Row not readable under the lock: fall back to the direct
+		// state-only write (the pre-fix behavior) so the transition lands.
+		fb := *book
+		fb.VersionGroupID = &versionGroupID
+		fb.IsPrimaryVersion = &isNotPrimary
+		fb.LibraryState = &organizedSourceState
+		if _, err := orgSvc.db.UpdateBook(book.ID, &fb); err != nil {
+			log.Warn("Failed to update original book %s version group: %v", book.ID, err)
+		} else {
+			transitioned = true
+		}
+	default:
+		transitioned = true
 	}
-	setTransition := func() {
+	releaseGroups()
+	// The in-memory `book` reflects the transition only once it is stored.
+	if transitioned {
 		book.VersionGroupID = &versionGroupID
 		book.IsPrimaryVersion = &isNotPrimary
 		book.LibraryState = &organizedSourceState
 	}
-	func() {
-		unlockGroups, lockedGroups, lockErr := versionprimary.LockPlannedGroups(orgSvc.db, nil, map[string]string{book.ID: plannedGroup}, versionGroupID)
-		if lockErr != nil {
-			log.Warn("Failed to update original book %s version group: %v", book.ID, lockErr)
-			return
-		}
-		defer unlockGroups()
-		modified, modifyErr := orgSvc.db.ModifyBook(book.ID, func(b *database.Book) error {
-			if g, ok := lockedGroups[b.ID]; ok {
-				if err := versionprimary.CheckMembership(b, g); err != nil {
-					return err
-				}
-			}
-			b.VersionGroupID = &versionGroupID
-			b.IsPrimaryVersion = &isNotPrimary
-			b.LibraryState = &organizedSourceState
-			return nil
-		})
-		switch {
-		case modifyErr != nil:
-			// The locked write itself failed. The pre-fix code only warned on a
-			// failed UpdateBook of the hydrated row; keep that shape rather than
-			// widening the whole-row fallback to one more error path.
-			log.Warn("Failed to update original book %s version group: %v", book.ID, modifyErr)
-		case modified == nil:
-			// Row not readable under the lock: fall back to the direct
-			// state-only write (the pre-fix behavior) so the transition lands.
-			setTransition()
-			if _, err := orgSvc.db.UpdateBook(book.ID, book); err != nil {
-				log.Warn("Failed to update original book %s version group: %v", book.ID, err)
-			}
-		}
-	}()
-	setTransition()
 
-	// Record operation changes for undo
 	if operationID != "" {
 		_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
