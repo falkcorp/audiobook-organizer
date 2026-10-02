@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.186.1
+// version: 1.187.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-02
 
@@ -139,6 +139,10 @@ type PebbleStore struct {
 	rootDir                  string               // organized library root; set via SetRootDir after config load
 	libraryCountsRecomputeMu sync.Mutex           // gates recompute to prevent stampede when N callers see dirty cache
 	UseMemDB                 bool                 // feature flag: use in-memory query layer for aggregations / filtered reads
+
+	// metadataCacheWrites counts PutMetadataCache/DeleteMetadataCache calls;
+	// read by MetadataCacheGeneration.
+	metadataCacheWrites atomic.Uint64
 
 	// libraryStatsDirty is set by InvalidateLibraryStats and cleared when a
 	// recompute starts. It replaces a Pebble Delete of stats:library that ran on

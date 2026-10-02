@@ -192,14 +192,18 @@ func TestReviewSnapshot_MatchesTheLegacyLoader(t *testing.T) {
 	for i, w := range want {
 		got := snap.rows[i]
 		require.Equal(t, w.id, got.sum.BookID)
-		require.Equal(t, w.entry, set.rows[i].entry, "entry for %s", w.id)
-		// The snapshot keeps only the first candidate, the one the review reads.
+		lr := set.rows[i]
+		wantCount, wantFirst := 0, json.RawMessage(nil)
 		if w.entry != nil && len(w.entry.Candidates) > 0 {
-			require.Equal(t, w.entry.Candidates[:1], got.entry.Candidates, "kept candidate for %s", w.id)
-			require.Equal(t, w.entry.FetchedAt, got.entry.FetchedAt)
+			wantCount, wantFirst = len(w.entry.Candidates), w.entry.Candidates[0]
 		}
+		require.Equal(t, wantCount, lr.candidateCount, "candidates after the legacy filter for %s", w.id)
+		require.Equal(t, wantFirst, lr.first, "first candidate for %s", w.id)
+		require.Equal(t, cacheRowLastChecked(w.entry, lr.sum.FetchedAt), lr.lastChecked, "lastChecked for %s", w.id)
+		require.Nil(t, got.book, "the snapshot keeps no book rows")
+		require.Nil(t, got.first, "the snapshot keeps no raw candidate")
 		require.Equal(t, w.searchable, got.searchable, "searchable for %s", w.id)
-		require.Equal(t, w.info, metabatch.BuildCandidateBookInfoWithFacts(got.book, got.files), "book info for %s", w.id)
+		require.Equal(t, w.info, metabatch.BuildCandidateBookInfoWithFacts(lr.book, got.files), "book info for %s", w.id)
 		require.Equal(t, w.hash, got.hash, "hash for %s", w.id)
 		if w.entry != nil && !strings.HasPrefix(w.entry.SearchFingerprint, metafetch.FingerprintPrefix) {
 			legacyFiltered++
@@ -282,7 +286,8 @@ func TestReviewIndex_SameRowsAndCountsAsAll(t *testing.T) {
 	require.Len(t, byIDs.Data.Results, 2)
 	require.Equal(t, a.Results[1], byIDs.Data.Results[0])
 	require.Equal(t, a.Results[5], byIDs.Data.Results[1])
-	require.Equal(t, a.TotalCount, byIDs.Data.TotalCount)
+	// A detail lookup re-reads only the asked books; its counts cover them.
+	require.Equal(t, 2, byIDs.Data.TotalCount)
 
 	// Pages tile the bucket with no gap or repeat.
 	var paged []string

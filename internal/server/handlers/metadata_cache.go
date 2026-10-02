@@ -201,11 +201,22 @@ type OpEnqueuer interface {
 func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetchService, batcher WriteBackEnqueuer, fileIOPool FileIOPool, ops OpEnqueuer, scanActive func() bool) *MetadataCacheHandler {
 	h := &MetadataCacheHandler{store: store, svc: svc, batcher: batcher, fileIOPool: fileIOPool, ops: ops, scanActive: scanActive}
 	if store != nil && svc != nil {
+		var gen func() uint64
+		if g, ok := database.AsCapability[metadataCacheGenerationReader](store); ok {
+			gen = g.MetadataCacheGeneration
+		}
 		h.reviewSnap = newReviewSnapshotCache(func(ctx context.Context) (*reviewSnapshot, error) {
 			return buildReviewSnapshot(ctx, store, svc)
-		})
+		}, gen)
 	}
 	return h
+}
+
+// metadataCacheGenerationReader is database.PebbleStore's metadata-cache
+// write counter, resolved through any store decorators (AsCapability). The
+// review snapshot rebuilds when it moves.
+type metadataCacheGenerationReader interface {
+	MetadataCacheGeneration() uint64
 }
 
 // reviewSnapshot returns the review rows: the cached snapshot when the
@@ -409,7 +420,9 @@ func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 // fetches full rows for the rows it shows with ids=.
 //
 // ids=a,b,c (comma separated) restricts `results` to those books, in bucket
-// order, ignoring limit and offset; total_count stays the size of the bucket.
+// order, ignoring limit and offset. Only those books are re-read, so the
+// summary fields of an ids= response count only the asked rows: it is a
+// detail lookup for the page, not a summary.
 //
 // Rows come from a snapshot of the per-row work (cache reads, the legacy
 // filter, the resolver, file facts, the candidate decode) held between
@@ -482,7 +495,11 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		httputil.InternalError(c, "failed to list metadata cache", err)
 		return
 	}
-	set := overlayLiveBooks(snap, h.store)
+	set, err := overlayLiveBooks(snap, h.store, wantIDs)
+	if err != nil {
+		httputil.InternalError(c, "failed to read the review books", err)
+		return
+	}
 	lookupBook := func(id string) *database.Book { return set.books[id] }
 	// orphaned counts cache rows that outlived their book. loadCacheRows counts
 	// it where the row is dropped: that is the only place that still knows WHY
@@ -563,9 +580,6 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// millisecond under test.
 	freshCutoff := time.Now().Add(-database.MetadataCacheTTL)
 
-	// lastChecked is when this book was last searched for (see
-	// cacheRowLastChecked for why that is not simply FetchedAt).
-	lastChecked := cacheRowLastChecked
 
 	reviewable := make([]reviewableRow, 0, len(prepared))
 	// unreviewableRows is every non-orphaned row the reviewable list drops,
@@ -597,14 +611,13 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// sat in the unreviewable bucket, understating the backlog 242x.
 	var stale int
 	for _, p := range prepared {
-		entry := p.row.entry
 		// cacheRowStale is the predicate StaleCachedBookIDs applies too, so
 		// this count is the size of the set the refetch-all-stale button sends.
 		rowStale := cacheRowStale(p.row.loadedCacheRow, freshCutoff)
 		if rowStale {
 			stale++
 		}
-		if entry == nil || len(entry.Candidates) == 0 {
+		if p.row.candidateCount == 0 {
 			// No cached candidate means nothing to review. Not an error.
 			st := unreviewableStatusNoCandidates
 			if p.reviewed {
@@ -615,7 +628,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			}
 			if wantUnreviewable {
 				unreviewableRows = append(unreviewableRows, unreviewableRow{
-					sum: p.sum, status: st, lastChecked: lastChecked(entry, p.sum.FetchedAt), stale: rowStale,
+					sum: p.sum, status: st, lastChecked: p.row.lastChecked, stale: rowStale,
 				})
 			}
 			continue
@@ -629,7 +642,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 					sum:         p.sum,
 					status:      unreviewableStatusDecodeError,
 					errMsg:      "stored candidate will not decode: " + err.Error(),
-					lastChecked: lastChecked(entry, p.sum.FetchedAt),
+					lastChecked: p.row.lastChecked,
 					stale:       rowStale,
 				})
 			}
@@ -645,7 +658,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			cand:        cand,
 			hash:        p.row.hash,
 			files:       p.row.files,
-			lastChecked: lastChecked(entry, p.sum.FetchedAt),
+			lastChecked: p.row.lastChecked,
 			stale:       rowStale,
 		})
 	}

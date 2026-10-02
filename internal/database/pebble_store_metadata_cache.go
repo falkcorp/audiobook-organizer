@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
-// last-edited: 2026-09-09
+// last-edited: 2026-10-02
 
 package database
 
@@ -52,6 +52,7 @@ func (p *PebbleStore) PutMetadataCache(entry *MetadataCandidateCache) error {
 	if err := p.db.Set(metadataCacheKey(entry.BookID), data, pebble.Sync); err != nil {
 		return fmt.Errorf("pebble set metadata_cache:%s: %w", entry.BookID, err)
 	}
+	p.metadataCacheWrites.Add(1)
 	return nil
 }
 
@@ -61,6 +62,7 @@ func (p *PebbleStore) DeleteMetadataCache(bookID string) error {
 	if err := p.db.Delete(metadataCacheKey(bookID), pebble.Sync); err != nil {
 		return fmt.Errorf("pebble delete metadata_cache:%s: %w", bookID, err)
 	}
+	p.metadataCacheWrites.Add(1)
 	return nil
 }
 
@@ -108,4 +110,15 @@ func (p *PebbleStore) ListMetadataCacheKeys() ([]MetadataCacheSummary, error) {
 		return out[i].BookID < out[j].BookID
 	})
 	return out, nil
+}
+
+// MetadataCacheGeneration counts the metadata-cache writes (PutMetadataCache
+// and DeleteMetadataCache, the only two writers of the "metadata_cache:"
+// keyspace) since this store was opened. A reader holding something derived
+// from the cache -- the review listing's snapshot -- compares it to the value
+// it built at to learn, for the cost of an atomic load, whether anything it
+// read can have changed. It is per process and starts at 0 on every open: a
+// value is only comparable with another from the same store.
+func (p *PebbleStore) MetadataCacheGeneration() uint64 {
+	return p.metadataCacheWrites.Load()
 }

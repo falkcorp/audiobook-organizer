@@ -7,6 +7,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"time"
 
@@ -31,11 +32,16 @@ import (
 // chip shows and the set the button sends are the same computation.
 //
 // Since 2026-10-02 the chip's count is computed over the review snapshot
-// (metadata_cache_snapshot.go), at most reviewSnapshotMaxAge plus one rebuild
-// old in what the cache rows hold, while StaleCachedBookIDs loads fresh. The
-// two can differ only for cache rows written inside that window -- during or
-// just after a fetch, while the numbers are moving anyway; the book-side legs
-// (review status, "no match") are live in both.
+// (metadata_cache_snapshot.go) while StaleCachedBookIDs loads fresh. Only the
+// book's own row is live in the count (review status, so the "no match" leg);
+// everything else the stale rule reads comes from the snapshot: the cache
+// row's dates (lastChecked) and the row's searchability, which the resolver
+// derived from the book's title, files and folder siblings at build time. The
+// two can therefore differ until the next rebuild, which follows the next
+// request after any cache write (the write counter), any apply or clear
+// no-match, or reviewSnapshotMaxAge -- the last being the only trigger for a
+// retitle or a file change that alters searchability without touching the
+// cache.
 
 var metadataCacheLog = logger.New("handlers.metadata-cache")
 
@@ -54,12 +60,22 @@ type cacheRowCandidateReader interface {
 	GetCachedCandidates(bookID string) (*metafetch.MetadataCandidateCache, bool, error)
 }
 
-// loadedCacheRow is one metadata-cache row whose book still resolves, with its
-// cached candidate entry (nil when that read failed).
+// loadedCacheRow is one metadata-cache row whose book still resolves, reduced
+// to what the review listing and the stale rule read. The cache entry itself
+// is not kept: a whole-cache load holds ~40k of these, and an entry carries
+// up to ten candidates with descriptions while only the first is ever read.
 type loadedCacheRow struct {
-	sum   metafetch.MetadataCacheSummary
-	book  *database.Book
-	entry *metafetch.MetadataCandidateCache
+	sum  metafetch.MetadataCacheSummary
+	book *database.Book
+	// candidateCount is how many candidates the entry holds after the legacy
+	// filter; 0 when it holds none or the read failed.
+	candidateCount int
+	// first is the entry's first candidate, still encoded; nil when
+	// candidateCount is 0.
+	first json.RawMessage
+	// lastChecked is cacheRowLastChecked(entry, sum.FetchedAt): when the
+	// book was last searched for.
+	lastChecked time.Time
 	// searchable is metabatch.ResolveCandidateSearchQuery(...).Usable: false
 	// when the candidate fetch would skip the book with "no usable title"
 	// instead of searching it.
@@ -242,8 +258,15 @@ func loadCacheRows(ctx context.Context, store cacheRowBookReader, svc cacheRowCa
 				} else {
 					entry, _, cerr = svc.GetCachedCandidates(r.sum.BookID)
 				}
-				if cerr == nil {
-					r.entry = entry
+				if cerr != nil {
+					entry = nil
+				}
+				r.lastChecked = cacheRowLastChecked(entry, r.sum.FetchedAt)
+				if entry != nil && len(entry.Candidates) > 0 {
+					r.candidateCount = len(entry.Candidates)
+					// json.RawMessage decoding copies each element, so
+					// holding the first does not keep the other nine alive.
+					r.first = entry.Candidates[0]
 				}
 				// The same resolver fetchCandidateForBook runs before it searches.
 				// For an ordinary title it is a text check; it reads the book's
@@ -301,7 +324,7 @@ func cacheRowStale(r loadedCacheRow, freshCutoff time.Time) bool {
 	if metafetch.IsMarkedNoMatch(r.book.MetadataReviewStatus) || !r.searchable {
 		return false
 	}
-	return !cacheRowLastChecked(r.entry, r.sum.FetchedAt).After(freshCutoff)
+	return !r.lastChecked.After(freshCutoff)
 }
 
 // StaleCacheBookReader is the book-store slice StaleCachedBookIDs needs.
