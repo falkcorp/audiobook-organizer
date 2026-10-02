@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.16.2
+// version: 1.16.3
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-26
+// last-edited: 2026-10-01
 
 package reconcile
 
@@ -1104,6 +1104,8 @@ func MergeNoVGDuplicates(store VersionGroupStore, rootDir string, dryRun bool) (
 			}
 			b.MarkedForDeletion = new(true)
 			b.MarkedForDeletionAt = &now
+			// The label overwrites the state; remember it for a restore.
+			database.RememberLibraryStateBeforeTrash(b)
 			b.LibraryState = &deletedState
 			return nil
 		})

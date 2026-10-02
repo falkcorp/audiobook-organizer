@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-01
 
@@ -1021,7 +1021,20 @@ func (rs *RevertService) siblingRowAt(bookID, exceptID, path string) bool {
 
 // revertBookSoftDelete clears a book's deletion mark. A book purged since is
 // refused; one already restored is left as it is.
+//
+// The library state follows the shared restore rule
+// (database.RestoreLibraryStateFromTrash): a trash path that labelled the row
+// "deleted" (reconcile's) left it labelled after the revert until 2026-10-01.
+// MergedIntoBookID is NOT cleared here, unlike a user restore: an operation
+// that set it journals that change itself, and reverting it restores the
+// value the book had before the operation, which may be a pointer that
+// predates it.
 func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamps undo.SoftDeleteStamps) error {
+	files, err := rs.db.GetBookFiles(c.BookID)
+	if err != nil {
+		return fmt.Errorf("read files of %s: %w", c.BookID, err)
+	}
+	env := merge.TrashRestoreEnv()
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	return rs.modifyBook(c.BookID, func(book *database.Book) error {
@@ -1034,6 +1047,7 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 		notMarked := false
 		book.MarkedForDeletion = &notMarked
 		book.MarkedForDeletionAt = nil
+		database.RestoreLibraryStateFromTrash(book, files, env)
 		return nil
 	})
 }

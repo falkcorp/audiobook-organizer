@@ -1,11 +1,15 @@
 // file: internal/versionprimary/incumbent.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a10a4338-0d70-498e-aa2f-5f8db63bf26d
 // last-edited: 2026-10-01
 
 package versionprimary
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import (
+	"fmt"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+)
 
 // Incumbent returns the member of a version group that currently acts as its
 // primary, read-only, or nil when the group has none or it cannot be told
@@ -56,4 +60,42 @@ func Incumbent(members []database.Book, alive func(id string) bool) *database.Bo
 		return nilFlag
 	}
 	return nil
+}
+
+// IncumbentExcept reads group gid and returns the ID of its Incumbent among
+// the members other than exceptID, or "" when there is none (or gid is
+// empty). A restore reads it BEFORE writing, so a restored row that still
+// carries the explicit true it had when it was trashed does not take the
+// group back from the member that has been its primary since.
+func IncumbentExcept(store EnsureStore, gid, exceptID string) (string, error) {
+	if gid == "" {
+		return "", nil
+	}
+	members, err := store.GetBooksByVersionGroup(gid)
+	if err != nil {
+		return "", fmt.Errorf("read version group %s: %w", gid, err)
+	}
+	others := make([]database.Book, 0, len(members))
+	for i := range members {
+		if members[i].ID != exceptID {
+			others = append(others, members[i])
+		}
+	}
+	if inc := Incumbent(others, storeAlive(store)); inc != nil {
+		return inc.ID, nil
+	}
+	return "", nil
+}
+
+// YieldToIncumbent demotes a row being restored from the trash when its group
+// has had another primary since (incumbentID, from IncumbentExcept read
+// before the restore) and the row still carries an explicit true. The
+// restored row comes back as a non-primary member, the same rule the combine
+// undo applies, and the hand-off that follows finds the group healthy.
+func YieldToIncumbent(row *database.Book, incumbentID string) {
+	if row == nil || incumbentID == "" || incumbentID == row.ID || !explicitTrue(row) {
+		return
+	}
+	f := false
+	row.IsPrimaryVersion = &f
 }

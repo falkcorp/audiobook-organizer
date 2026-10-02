@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_guard.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7a35388d-79af-4a1e-a553-a61d6dfcf4ae
-// last-edited: 2026-09-26
+// last-edited: 2026-10-01
 
 package merge
 
@@ -108,6 +108,15 @@ func ITunesProtectedRoots(cfg config.ITunesConfig) ([]string, error) {
 		return nil, &ITunesProtectedError{Reason: "iTunes sync is enabled but neither itunes.library_read_path nor itunes.media_root is set, so no merge can be proven to stay outside the iTunes library"}
 	}
 	return roots, nil
+}
+
+// TrashRestoreEnv is the database.TrashRestoreEnv for the current config:
+// the library root and the protected iTunes roots. Unresolvable roots set
+// ITunesRootsUnknown, so the restore fallback fails closed to "imported".
+func TrashRestoreEnv() database.TrashRestoreEnv {
+	cfg := config.Snapshot()
+	roots, err := ITunesProtectedRoots(cfg.ITunes)
+	return database.TrashRestoreEnv{RootDir: cfg.RootDir, ITunesRoots: roots, ITunesRootsUnknown: err != nil}
 }
 
 // GuardITunesProtected refuses when any book in bookIDs — survivor and losers
