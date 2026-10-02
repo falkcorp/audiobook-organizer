@@ -1,5 +1,5 @@
 // file: internal/catalog/rules_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1f8b3d52-6e9a-4c07-b4d1-8a2c5e7f9b30
 // last-edited: 2026-10-01
 
@@ -70,37 +70,59 @@ func TestStripEditionMarkers(t *testing.T) {
 }
 
 func TestEditionGroupKey(t *testing.T) {
-	base := EditionGroupKey("Adrian Tchaikovsky", "B002XLHS8Q", "Cage of Souls")
-	if base == "" {
-		t.Fatal("empty key for a fully identified product")
+	base := EditionGroupKey("Adrian Tchaikovsky", "Cage of Souls")
+	if base != "name:adriantchaikovsky|cageofsouls" {
+		t.Fatalf("key = %q; want the folded name + folded title", base)
 	}
 	for _, title := range []string{"Cage of Souls (Unabridged)", "Cage of Souls: A Novel", "CAGE OF SOULS", "Cage of Souls: Dramatized Adaptation"} {
-		if got := EditionGroupKey("Adrian Tchaikovsky", "B002XLHS8Q", title); got != base {
+		if got := EditionGroupKey("Adrian Tchaikovsky", title); got != base {
 			t.Errorf("edition %q keyed %q, want %q", title, got, base)
 		}
 	}
 	// Same author, different work: different group.
-	if got := EditionGroupKey("Adrian Tchaikovsky", "B002XLHS8Q", "Children of Time"); got == base || got == "" {
+	if got := EditionGroupKey("Adrian Tchaikovsky", "Children of Time"); got == base || got == "" {
 		t.Errorf("two works by one author share a group (%q)", got)
 	}
-	// Different author identity: different group, same title.
-	if got := EditionGroupKey("Someone Else", "B000000001", "Cage of Souls"); got == base {
+	// Different author name: different group, same title.
+	if got := EditionGroupKey("Someone Else", "Cage of Souls"); got == base {
 		t.Error("two authors with one title share a group")
 	}
-	// Author ASIN wins over the spelling of the name.
-	if a, b := EditionGroupKey("A. Tchaikovsky", "B002XLHS8Q", "Cage of Souls"), base; a != b {
-		t.Errorf("same author ASIN under another spelling keyed %q vs %q", a, b)
-	}
-	// Name-only identity still groups; it is the fold of the name.
-	if got := EditionGroupKey("Adrian Tchaikovsky", "", "Cage of Souls"); got != "name:adriantchaikovsky|cageofsouls" {
-		t.Errorf("name-only key = %q", got)
+	// Spacing and punctuation variants of one name fold together.
+	if got := EditionGroupKey("adrian  tchaikovsky", "Cage of Souls"); got != base {
+		t.Errorf("folded spelling keyed %q vs %q", got, base)
 	}
 	// Never title-only.
-	if got := EditionGroupKey("", "", "Cage of Souls"); got != "" {
-		t.Errorf("no author identity must give no key, got %q", got)
+	if got := EditionGroupKey("", "Cage of Souls"); got != "" {
+		t.Errorf("no author name must give no key, got %q", got)
 	}
-	if got := EditionGroupKey("Adrian Tchaikovsky", "B002XLHS8Q", "(Unabridged)"); got != "" {
+	if got := EditionGroupKey("Adrian Tchaikovsky", "(Unabridged)"); got != "" {
 		t.Errorf("no title must give no key, got %q", got)
+	}
+}
+
+// TestEditionGroup_AuthorASINPresenceDoesNotSplit: Audible credits the same
+// author with an ASIN on one edition and without one on another. Both must
+// land in ONE edition group; a split is permanent because an entry keeps its
+// first group id forever.
+func TestEditionGroup_AuthorASINPresenceDoesNotSplit(t *testing.T) {
+	st, _ := openCatalog(t)
+	withASIN := BuildEntry(metadata.CatalogProduct{ASIN: "E1", Title: "Cage of Souls",
+		Authors: []metadata.CatalogContributor{{Name: "Adrian Tchaikovsky", ASIN: "B002XLHS8Q"}}}, "audible", "us")
+	noASIN := BuildEntry(metadata.CatalogProduct{ASIN: "E2", Title: "Cage of Souls (Unabridged)",
+		Authors: []metadata.CatalogContributor{{Name: "Adrian Tchaikovsky"}}}, "audible", "us")
+	if withASIN.EditionGroupKey != noASIN.EditionGroupKey {
+		t.Errorf("group keys differ: %q vs %q", withASIN.EditionGroupKey, noASIN.EditionGroupKey)
+	}
+	if _, err := st.UpsertEntries([]database.CatalogUpsert{{Entry: withASIN}}, "k"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertEntries([]database.CatalogUpsert{{Entry: noASIN}}, "k"); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := st.GetEntryByProviderID("audible", "us", "E1")
+	b, _ := st.GetEntryByProviderID("audible", "us", "E2")
+	if a == nil || b == nil || a.EditionGroupID != b.EditionGroupID {
+		t.Fatalf("editions split across groups: %+v / %+v", a, b)
 	}
 }
 
