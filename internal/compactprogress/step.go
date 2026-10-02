@@ -1,5 +1,5 @@
 // file: internal/compactprogress/step.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e9c7d31-5a4b-4f62-8b1e-7c3d9a2f6e15
 // last-edited: 2026-10-02
 
@@ -102,9 +102,15 @@ func RunStep(ctx context.Context, rep LogReporter, s Step) Result {
 		sample(ctx, rep, s, interval, start, res.Before, stop)
 	}()
 
-	res.Err = s.Run(ctx)
-	close(stop)
-	wg.Wait()
+	// stop+wait in a closure with a defer so a panicking Run still stops the
+	// sampler before the panic propagates.
+	func() {
+		defer func() {
+			close(stop)
+			wg.Wait()
+		}()
+		res.Err = s.Run(ctx)
+	}()
 
 	res.Elapsed = time.Since(start)
 	if res.HasStats {
