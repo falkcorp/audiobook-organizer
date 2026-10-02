@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
 // last-edited: 2026-10-02
 
@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -110,11 +111,26 @@ type VersionsHandler struct {
 // nothing else; on the shared table they also exclude every hand-off
 // (EnsureSinglePrimary, Crown) and every reader that checks a group under
 // versionprimary.LockGroup, such as itunes.regroup's apply-time recheck, which
-// must not see a link or split move its target between the recheck and the
-// moves. Nothing in this handler calls a hand-off while holding them.
+// must not see a link move its target between the recheck and the moves.
+// Link and set-primary take them here; SplitVersion takes them through
+// versionprimary.LockBookGroups (the source's group and the one it would
+// mint) across its mint, the new member's CreateBook, the row move and a
+// failed split's unmint. Nothing in this handler calls a hand-off while
+// holding them, and each handler releases them before writing its response.
 func (h *VersionsHandler) lockGroups(groupIDs ...string) func() {
 	return versionprimary.LockGroups(groupIDs...)
 }
+
+// onceRelease wraps unlock so it runs at most once: the handlers call it
+// before writing a response and defer it for a panic.
+func onceRelease(unlock func()) func() {
+	var once sync.Once
+	return func() { once.Do(unlock) }
+}
+
+// errSplitSourceGrouped aborts a split's mint when another writer grouped the
+// source after the locked read.
+var errSplitSourceGrouped = errors.New("split source was grouped concurrently")
 
 // NewVersionsHandler constructs a VersionsHandler backed by the given store.
 func NewVersionsHandler(store VersionsStore) *VersionsHandler {
@@ -215,8 +231,13 @@ func (h *VersionsHandler) LinkAudiobookVersion(c *gin.Context) {
 	}
 
 	g1, g2 := versionGroupOf(book1), versionGroupOf(book2)
-	defer h.lockGroups(g1, g2)()
+	// The shared group stripes are released before any response is written
+	// (release), so a slow client never holds them; the deferred call only
+	// covers a panic.
+	release := onceRelease(h.lockGroups(g1, g2))
+	defer release()
 	if g1 != "" && g1 == g2 {
+		release()
 		httputil.RespondWithOK(c, gin.H{"version_group_id": g1})
 		return
 	}
@@ -234,11 +255,13 @@ func (h *VersionsHandler) LinkAudiobookVersion(c *gin.Context) {
 
 	targetMembers, err := h.liveGroupMembers(versionGroupOf(targetBook), targetBook)
 	if err != nil {
+		release()
 		httputil.InternalError(c, "failed to read the target version group; nothing was linked", err)
 		return
 	}
 	incomingMembers, err := h.liveGroupMembers(incomingGroup, incomingBook)
 	if err != nil {
+		release()
 		httputil.InternalError(c, "failed to read the incoming version group; nothing was linked", err)
 		return
 	}
@@ -305,6 +328,7 @@ func (h *VersionsHandler) LinkAudiobookVersion(c *gin.Context) {
 			msg = fmt.Sprintf("failed to link book %s into version group %s (%v), and %s could not be put back into their old groups",
 				bid, targetGroup, mErr, strings.Join(stuck, ", "))
 		}
+		release()
 		httputil.RespondWithErrorFields(c, http.StatusInternalServerError, msg, "link_failed", map[string]any{
 			"version_group_id":    targetGroup,
 			"failed_book_id":      bid,
@@ -313,6 +337,7 @@ func (h *VersionsHandler) LinkAudiobookVersion(c *gin.Context) {
 		return
 	}
 
+	release()
 	httputil.RespondWithOK(c, gin.H{"version_group_id": targetGroup, "primary_book_id": winner.ID})
 }
 
@@ -568,9 +593,14 @@ func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 		}
 	}
 
-	defer h.lockGroups(groupID)()
+	// The shared group stripes are released before any response is written
+	// (release), so a slow client never holds them; the deferred call only
+	// covers a panic.
+	release := onceRelease(h.lockGroups(groupID))
+	defer release()
 	books, err := h.store.GetBooksByVersionGroup(groupID)
 	if err != nil {
+		release()
 		httputil.InternalError(c, "failed to fetch versions; nothing was changed", err)
 		return
 	}
@@ -601,6 +631,7 @@ func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 		promoted = true
 		return nil
 	}); err != nil {
+		release()
 		httputil.InternalError(c, "failed to promote the audiobook; nothing was changed", err)
 		return
 	}
@@ -654,11 +685,13 @@ func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 			msg = fmt.Sprintf("failed to demote book %s (%v), and the rollback could not restore the primary flag of %s; the group may have more than one primary",
 				oid, dErr, strings.Join(stuck, ", "))
 		}
+		release()
 		httputil.RespondWithErrorFields(c, http.StatusInternalServerError, msg, "set_primary_failed",
 			map[string]any{"version_group_id": groupID, "failed_book_id": oid, "unrestored_book_ids": stuck})
 		return
 	}
 
+	release()
 	httputil.RespondWithOK(c, gin.H{"message": "audiobook set as primary"})
 }
 
@@ -745,13 +778,28 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 		return
 	}
 
-	versionGroupID := versionGroupOf(sourceBook)
+	// Membership lock: the source's current group and the group a groupless
+	// source would be given (newGID), in one acquisition, held across the
+	// group read, the mint, the new member's CreateBook into the group, the
+	// row move and a failed split's unmint, and released before any response
+	// is written. The new book joins the group and the source may get one, so
+	// no hand-off or recheck under the group's lock may see that half-done.
+	newGID := ulid.Make().String()
+	unlockGroups, lockedGroups, err := versionprimary.LockBookGroups(h.store, []string{id}, newGID)
+	if err != nil {
+		httputil.InternalError(c, "failed to lock the version group; nothing was written", err)
+		return
+	}
+	release := onceRelease(unlockGroups)
+	defer release()
+	versionGroupID := lockedGroups[id]
 	existing := 1 // the source alone, when it has no group yet
 	if versionGroupID != "" {
 		existingVersions, err := h.store.GetBooksByVersionGroup(versionGroupID)
 		if err != nil {
 			// The member count names the new row ("Version N"). An unreadable
 			// group must fail the split, not number the row as if it were empty.
+			release()
 			httputil.InternalError(c, "failed to read version group", err)
 			return
 		}
@@ -762,11 +810,11 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 	minted := ""
 	var prevPrimary *bool
 	if versionGroupID == "" {
-		newGID := ulid.Make().String()
 		updated, err := h.modifyBook(id, func(cur *database.Book) error {
 			if g := versionGroupOf(cur); g != "" {
-				// Grouped by someone else since the read: split into that group.
-				return database.ErrSkipBookWrite
+				// Grouped by someone else since the locked read: that group
+				// is not locked here, so refuse rather than split into it.
+				return errSplitSourceGrouped
 			}
 			if cur.IsPrimaryVersion != nil {
 				v := *cur.IsPrimaryVersion
@@ -778,7 +826,15 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 			cur.IsPrimaryVersion = &t
 			return nil
 		})
+		if errors.Is(err, errSplitSourceGrouped) {
+			release()
+			httputil.RespondWithErrorFields(c, http.StatusConflict,
+				"the source book was put into a version group while the split was starting; nothing was split, retry",
+				"split_source_grouped", map[string]any{"book_id": id})
+			return
+		}
 		if err != nil {
+			release()
 			httputil.InternalError(c, "failed to update source book version group", err)
 			return
 		}
@@ -808,11 +864,13 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 	})
 	if err != nil {
 		h.unmintSplitGroup(id, minted, prevPrimary)
+		release()
 		httputil.InternalError(c, "failed to create new version", err)
 		return
 	}
 	if createdBook == nil {
 		h.unmintSplitGroup(id, minted, prevPrimary)
+		release()
 		httputil.RespondWithInternalError(c, "failed to create new version: the store returned no book")
 		return
 	}
@@ -832,17 +890,23 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 		h.unmintSplitGroup(id, minted, prevPrimary)
 		if dErr != nil {
 			versionsLog.Error("split-version: move into %s failed (%v) and deleting it failed: %v", createdBook.ID, err, dErr)
+			release()
 			httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
 				fmt.Sprintf("failed to move files into the new version; no file was moved, and the empty new book %s could not be deleted (%v): %v",
 					createdBook.ID, dErr, err),
 				"split_move_failed", map[string]any{"created_book_id": createdBook.ID})
 			return
 		}
+		release()
 		httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
 			"failed to move files into the new version; no file was moved and the new book was deleted: "+err.Error(),
 			"split_move_failed", nil)
 		return
 	}
+
+	// The membership writes (mint, CreateBook into the group, the row move)
+	// are done; what follows touches no group.
+	release()
 
 	// 4. The files have moved and that is not undone. A step that fails from
 	// here is reported in "warnings" with status 207.
@@ -918,6 +982,8 @@ func selectSourceFiles(c *gin.Context, sourceID string, files []database.BookFil
 // unmintSplitGroup takes a version group SplitVersion gave the source off it
 // again after the split failed, restoring its primary flag. A no-op when no
 // group was minted, or when the source's group has changed since.
+//
+// The caller (SplitVersion) holds the minted group's lock; this takes none.
 func (h *VersionsHandler) unmintSplitGroup(sourceID, minted string, prevPrimary *bool) {
 	if minted == "" {
 		return

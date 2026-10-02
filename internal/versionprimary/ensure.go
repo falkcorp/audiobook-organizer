@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
 // last-edited: 2026-10-02
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -122,7 +123,7 @@ func lockGroup(gid string) func() {
 
 func groupStripe(gid string) int {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(gid))
+	_, _ = h.Write([]byte(strings.TrimSpace(gid)))
 	return int(h.Sum32() % uint32(len(groupLocks)))
 }
 
@@ -143,7 +144,7 @@ func groupStripe(gid string) int {
 func LockGroups(gids ...string) (unlock func()) {
 	idx := make([]int, 0, len(gids))
 	for _, g := range gids {
-		if g == "" {
+		if strings.TrimSpace(g) == "" {
 			continue
 		}
 		idx = append(idx, groupStripe(g))
@@ -165,16 +166,77 @@ func LockGroups(gids ...string) (unlock func()) {
 // wrong group locks and must not write.
 var ErrMembershipChanged = errors.New("versionprimary: book changed version group since it was read")
 
+// BookReader is the point read LockBookGroups uses.
+type BookReader interface {
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// LockBookGroups takes, in ONE LockGroups acquisition, the locks of the
+// current version group of every book in ids plus every group in extra (the
+// groups the caller will move books into). The books are read, their groups
+// locked, and the books re-read under the locks; when one moved in between,
+// the locks are dropped and the read repeated (at most five times, then
+// ErrMembershipChanged). A missing book is skipped.
+//
+// It returns the release and each book's group as read under the locks
+// ("" = none), which a caller writing through ModifyBook checks there
+// (CheckMembership). Order rules as LockGroups: merge lock before, book write
+// locks inside, never another stripe or a hand-off while holding these.
+func LockBookGroups(store BookReader, ids []string, extra ...string) (unlock func(), groups map[string]string, err error) {
+	read := func() (map[string]string, error) {
+		m := make(map[string]string, len(ids))
+		for _, id := range ids {
+			b, err := store.GetBookByID(id)
+			if err != nil {
+				return nil, fmt.Errorf("read book %s for its version group: %w", id, err)
+			}
+			if b == nil {
+				continue
+			}
+			m[id] = groupOfBook(b)
+		}
+		return m, nil
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		before, err := read()
+		if err != nil {
+			return nil, nil, err
+		}
+		gids := append([]string(nil), extra...)
+		for _, g := range before {
+			gids = append(gids, g)
+		}
+		unlock := LockGroups(gids...)
+		after, err := read()
+		if err != nil {
+			unlock()
+			return nil, nil, err
+		}
+		if maps.Equal(before, after) {
+			return unlock, after, nil
+		}
+		unlock()
+	}
+	return nil, nil, fmt.Errorf("lock version groups of %v: %w", ids, ErrMembershipChanged)
+}
+
+// groupOfBook is b's version group, trimmed; "" for none.
+func groupOfBook(b *database.Book) string {
+	if b == nil || b.VersionGroupID == nil {
+		return ""
+	}
+	return strings.TrimSpace(*b.VersionGroupID)
+}
+
 // CheckMembership returns ErrMembershipChanged (wrapped with the book and
 // both groups) when cur's version group is not lockedGID. A caller that took
 // LockGroups from a pre-read calls it first inside its ModifyBook callback,
 // under the book's write lock.
+//
+// Both sides are compared trimmed, as merge.RestoreFromTrash reads a group.
 func CheckMembership(cur *database.Book, lockedGID string) error {
-	g := ""
-	if cur.VersionGroupID != nil {
-		g = *cur.VersionGroupID
-	}
-	if g != lockedGID {
+	g := groupOfBook(cur)
+	if g != strings.TrimSpace(lockedGID) {
 		return fmt.Errorf("book %s: read in version group %q, now in %q: %w", cur.ID, lockedGID, g, ErrMembershipChanged)
 	}
 	return nil
