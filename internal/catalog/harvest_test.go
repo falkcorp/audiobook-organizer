@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
 // last-edited: 2026-10-01
 
@@ -48,6 +48,8 @@ type fixtureServer struct {
 	failPage  int // -1 = never
 	drop      map[string]bool
 	productBy map[string]json.RawMessage
+	// lookupStatus forces a status for one product lookup (e.g. 503).
+	lookupStatus map[string]int
 }
 
 func newFixtureServer(t *testing.T) *fixtureServer {
@@ -63,7 +65,7 @@ func newFixtureServer(t *testing.T) *fixtureServer {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
-	f := &fixtureServer{products: doc.Products, total: doc.Total, failPage: -1, drop: map[string]bool{}, productBy: map[string]json.RawMessage{}}
+	f := &fixtureServer{products: doc.Products, total: doc.Total, failPage: -1, drop: map[string]bool{}, productBy: map[string]json.RawMessage{}, lookupStatus: map[string]int{}}
 	for _, p := range doc.Products {
 		var id struct {
 			ASIN string `json:"asin"`
@@ -78,6 +80,10 @@ func newFixtureServer(t *testing.T) *fixtureServer {
 
 func (f *fixtureServer) serve(w http.ResponseWriter, r *http.Request) {
 	if asin, ok := cutPrefix(r.URL.Path, "/catalog/products/"); ok {
+		if code := f.lookupStatus[asin]; code != 0 {
+			http.Error(w, "forced", code)
+			return
+		}
 		p, found := f.productBy[asin]
 		if !found {
 			http.NotFound(w, r)
@@ -543,5 +549,136 @@ func TestEstimateRun_WritesNothing(t *testing.T) {
 			t.Errorf("dry run wrote under %s: %q", p, it.Key())
 		}
 		_ = it.Close()
+	}
+}
+
+// TestHarvest_OwnedASINNotFoundIsNotALookupError: an owned ASIN the provider
+// has no product for (a 404) is an answer, so the author ends complete. A
+// 5xx on the same lookup is a failure: the author stays partial (retried)
+// and the failure reaches the throttle registry hook.
+func TestHarvest_OwnedASINNotFoundIsNotALookupError(t *testing.T) {
+	f := newFixtureServer(t)
+	st, _ := openCatalog(t)
+	h := newTestHarvester(f, st, 50)
+	var reported atomic.Int64
+	h.Cfg.OnProviderError = func(error) { reported.Add(1) }
+	a := tchaikovsky
+	a.OwnedASINs = []string{"B071Y9TTHC", "BNOTREAL00"}
+	s, err := h.HarvestAuthor(context.Background(), a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.State != database.CatalogHarvestComplete || s.LastError != "" {
+		t.Errorf("404 lookup: state=%s err=%q; want complete (not found is not a failure)", s.State, s.LastError)
+	}
+	if reported.Load() != 0 {
+		t.Errorf("404 lookup reported %d provider errors; want 0", reported.Load())
+	}
+
+	f.lookupStatus["BNOTREAL00"] = http.StatusServiceUnavailable
+	s, err = h.HarvestAuthor(context.Background(), a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.State != database.CatalogHarvestPartial {
+		t.Errorf("503 lookup: state=%s; want partial", s.State)
+	}
+	if reported.Load() != 1 {
+		t.Errorf("503 lookup reported %d provider errors; want 1", reported.Load())
+	}
+}
+
+// standDownLister fails every listing with a 429 and, like the shared
+// throttle registry, holds the provider off from the first failure on.
+type standDownLister struct {
+	calls     atomic.Int64
+	throttled atomic.Bool
+}
+
+func (l *standDownLister) ProviderID() string { return "audible" }
+func (l *standDownLister) ListByAuthor(context.Context, string, int, int) (metadata.AuthorPage, error) {
+	l.calls.Add(1)
+	return metadata.AuthorPage{}, &metadata.ProviderStatusError{Provider: "audible", Status: http.StatusTooManyRequests}
+}
+func (l *standDownLister) LookupProduct(context.Context, string) (*metadata.CatalogProduct, error) {
+	return nil, errors.New("not used")
+}
+
+// TestRun_StandsDownOnThrottle: a 429 is fed to the registry hook, and once
+// the provider is held off the run stops handing out authors, so the rest
+// keep no state (still due) instead of each being written failed.
+func TestRun_StandsDownOnThrottle(t *testing.T) {
+	st, _ := openCatalog(t)
+	l := &standDownLister{}
+	var authors []ScopeAuthor
+	for i := range 10 {
+		n := fmt.Sprintf("Author %c Person", 'A'+i)
+		authors = append(authors, ScopeAuthor{Key: HarvestKey(n), Name: n})
+	}
+	h := NewHarvester(l, st, Settings{
+		Language: "english", Concurrency: 1,
+		Throttled:       l.throttled.Load,
+		OnProviderError: func(error) { l.throttled.Store(true) },
+	})
+	tally, err := h.Run(context.Background(), &fakeReporter{}, authors, RunOptions{})
+	if !errors.Is(err, ErrProviderStandDown) {
+		t.Fatalf("Run err = %v; want ErrProviderStandDown", err)
+	}
+	if l.calls.Load() != 1 {
+		t.Errorf("listing calls = %d; want 1 (stand down after the first 429)", l.calls.Load())
+	}
+	written := 0
+	for _, a := range authors {
+		if s, _ := st.GetAuthorState(a.Key); s != nil {
+			written++
+		}
+	}
+	if written != 1 || tally.Done.Load() != 1 {
+		t.Errorf("author states written = %d, done = %d; want 1 and 1", written, tally.Done.Load())
+	}
+}
+
+// TestUpsert_CoAuthorVerdictsMerge: a co-authored product judged confirmed
+// by one author's harvest and name_only by the other's is confirmed, in
+// either write order; the flags follow the verdicts when a harvester drops it.
+func TestUpsert_CoAuthorVerdictsMerge(t *testing.T) {
+	for _, order := range [][2]string{{"a", "b"}, {"b", "a"}} {
+		st, _ := openCatalog(t)
+		base := BuildEntry(metadata.CatalogProduct{ASIN: "KMF", Title: "The King Must Fall", Authors: []metadata.CatalogContributor{{Name: "A", ASIN: "AA"}, {Name: "B", ASIN: "BB"}}}, "audible", "us")
+		verdict := map[string]database.CatalogEntry{}
+		ea := base
+		ea.NameOnlyAuthor = false // a has an owned ASIN-tagged book
+		eb := base
+		eb.NameOnlyAuthor, eb.AuthorConflict = true, true // b does not, and b's identity conflicts
+		verdict["a"], verdict["b"] = ea, eb
+		for _, k := range order {
+			if _, err := st.UpsertEntries([]database.CatalogUpsert{{Entry: verdict[k]}}, k); err != nil {
+				t.Fatal(err)
+			}
+		}
+		e, err := st.GetEntryByProviderID("audible", "us", "KMF")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.NameOnlyAuthor || !e.AuthorConflict {
+			t.Errorf("order %v: name_only=%v conflict=%v; want false/true", order, e.NameOnlyAuthor, e.AuthorConflict)
+		}
+		// a's complete listing drops it: only b's verdict is left.
+		if _, err := st.MarkUnseen("a", map[string]bool{}); err != nil {
+			t.Fatal(err)
+		}
+		e, _ = st.GetEntryByProviderID("audible", "us", "KMF")
+		if !e.NameOnlyAuthor || !e.AuthorConflict || e.StaleSince != nil {
+			t.Errorf("order %v after a drops it: name_only=%v conflict=%v stale=%v; want true/true/nil", order, e.NameOnlyAuthor, e.AuthorConflict, e.StaleSince)
+		}
+		// b re-harvests without a conflict: the conflict clears.
+		eb.AuthorConflict = false
+		if _, err := st.UpsertEntries([]database.CatalogUpsert{{Entry: eb}}, "b"); err != nil {
+			t.Fatal(err)
+		}
+		e, _ = st.GetEntryByProviderID("audible", "us", "KMF")
+		if e.AuthorConflict {
+			t.Errorf("order %v: conflict survived b's clean re-harvest", order)
+		}
 	}
 }
