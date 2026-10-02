@@ -553,23 +553,36 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// (store_invariants (a)) that this accessor cannot see and this fix does
 	// not claim to repair.
 	//
-	// RACE, deliberately unfixed here: this read-then-write is protected only
-	// by mergeSerializeMu, which covers the merge family. A non-merge writer
-	// (regroup apply, reconcile.ElectMissingPrimaries) that adds a primary to
-	// this group between the read and the writes below can still leave two.
-	// Out of scope per the item; noted so the next reader does not assume it
-	// is handled.
+	// RACE, partly closed: the read and the writes below run under the
+	// version-group locks taken next, which every membership writer and
+	// hand-off (regroup apply included) now holds. A flag writer that takes
+	// no group lock (reconcile.ElectMissingPrimaries) that adds a primary to
+	// this group between the read and the writes can still leave two.
 	// Membership lock: every participant's current version group (the
 	// no-group sentinel for an ungrouped one) and versionGroupID, in one
-	// versionprimary.LockBookGroups acquisition under mergeSerializeMu (merge
-	// lock, then group stripes, then book locks). Held across the reused
-	// group's member read, the membership writes and the demotions, and
-	// released before handOffLeftGroups, which takes the group locks itself.
+	// versionprimary.LockPlannedGroups acquisition under mergeSerializeMu
+	// (merge lock, then group stripes, then book locks). Held across the
+	// reused group's member read, the membership writes and the demotions,
+	// and released before handOffLeftGroups, which takes the group locks
+	// itself. versionGroupID and leftGroups were planned from the live
+	// participants' groups as read at the top of this call, so a live
+	// participant whose group changed since is refused here
+	// (ErrMembershipChanged) before anything is written: otherwise it would
+	// leave a group nobody locked and handOffLeftGroups would hand off the
+	// wrong one.
 	ids := make([]string, len(books))
+	planned := make(map[string]string, len(books))
 	for i := range books {
 		ids[i] = books[i].ID
+		if books[i].IsSoftDeleted() {
+			continue
+		}
+		planned[books[i].ID] = ""
+		if books[i].VersionGroupID != nil {
+			planned[books[i].ID] = *books[i].VersionGroupID
+		}
 	}
-	unlockGroups, lockedGroups, err := versionprimary.LockBookGroups(ms.db, ids, versionGroupID)
+	unlockGroups, lockedGroups, err := versionprimary.LockPlannedGroups(ms.db, ids, planned, versionGroupID)
 	if err != nil {
 		return nil, fmt.Errorf("lock version groups for merge: %w", err)
 	}

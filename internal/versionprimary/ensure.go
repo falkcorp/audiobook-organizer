@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
 // last-edited: 2026-10-02
 
@@ -252,6 +252,49 @@ func rawGroupOfBook(b *database.Book) string {
 		return ""
 	}
 	return *b.VersionGroupID
+}
+
+// LockPlannedGroups is LockBookGroups for a caller that PLANNED its write
+// from an earlier read of the books: expected maps each book whose plan
+// depends on its group to the version group it read then ("" = none). It
+// takes the locks of the current groups of every book in ids and in expected
+// (a book in ids but not in expected is locked, not compared) plus extra,
+// then compares each book's group as read
+// under the locks with expected (trimmed). A book that moved between the
+// planning read and the lock would have the caller write from a stale plan and leave a group it never locked or handed off,
+// so on any mismatch the locks are released and ErrMembershipChanged is
+// returned (wrapped with the book and both groups). The caller re-plans or
+// fails; it never writes.
+//
+// It returns the release and the groups as LockBookGroups does. Order rules
+// as LockGroups.
+func LockPlannedGroups(store BookReader, ids []string, expected map[string]string, extra ...string) (unlock func(), groups map[string]string, err error) {
+	planned := slices.Sorted(maps.Keys(expected))
+	all := slices.Clone(ids)
+	for _, id := range planned {
+		if !slices.Contains(all, id) {
+			all = append(all, id)
+		}
+	}
+	unlock, groups, err = LockBookGroups(store, all, extra...)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, id := range planned {
+		got, ok := groups[id]
+		if !ok {
+			// Missing, as LockBookGroups skips it: there is no group to
+			// leave, and the caller's own write reports the missing row
+			// (or takes its documented fallback).
+			continue
+		}
+		want := strings.TrimSpace(expected[id])
+		if strings.TrimSpace(got) != want {
+			unlock()
+			return nil, nil, fmt.Errorf("book %s: planned in version group %q, now in %q: %w", id, want, got, ErrMembershipChanged)
+		}
+	}
+	return unlock, groups, nil
 }
 
 // groupOfBook is b's version group, trimmed; "" for none.

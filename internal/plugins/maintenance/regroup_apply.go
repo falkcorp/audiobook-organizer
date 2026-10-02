@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
 // last-edited: 2026-10-02
 
@@ -372,16 +372,22 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 		// so it is not a second incumbent that would make the hand-off below
 		// re-rank a healthy group (the scanner's joinPrimaryFlag, same rule).
 		// In a fresh group every member keeps its flag and the rule decides.
-		// Membership lock: every member's current group (the no-group
-		// sentinel for an ungrouped one) and target, in one acquisition,
-		// held across the reused group's read and the link writes, and
-		// released before the hand-off below (which takes it itself). A
-		// member whose group moved since this item read it fails the item.
-		memberIDs := make([]string, len(books))
-		for i := range books {
-			memberIDs[i] = books[i].ID
+		// Membership lock: every member's group as this item read it above
+		// (the no-group sentinel for an ungrouped one) and target, in one
+		// acquisition (versionprimary.LockPlannedGroups), held across the
+		// reused group's read and the link writes, and released before the
+		// hand-off below (which takes it itself). The target and the
+		// cross-group refusal were planned from that read, so a member whose
+		// group changed since -- or that vanished -- fails the item with
+		// ErrMembershipChanged before anything is written.
+		planned := make(map[string]string, len(books))
+		for _, b := range books {
+			planned[b.ID] = ""
+			if b.VersionGroupID != nil {
+				planned[b.ID] = *b.VersionGroupID
+			}
 		}
-		unlockGroups, lockedGroups, err := versionprimary.LockBookGroups(store, memberIDs, target)
+		unlockGroups, lockedGroups, err := versionprimary.LockPlannedGroups(store, nil, planned, target)
 		if err != nil {
 			return fmt.Errorf("regroup version-group apply: lock version groups: %w", err)
 		}
