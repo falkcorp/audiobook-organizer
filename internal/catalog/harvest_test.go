@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
 // last-edited: 2026-10-01
 
@@ -816,11 +816,12 @@ func TestHarvest_SkippedProductCountsTowardTotalButStalesNothing(t *testing.T) {
 	}
 }
 
-// TestEstimateRun_IsAnUpperBound: the dry-run request estimate must not be
-// below what the run then makes. Pages are summed per author as ceilings (1
+// TestEstimateRun_CoversPagesAndOwnedLookups: for a fully sampled scope the
+// request estimate is not below what the run then makes (it is an estimate,
+// not a bound, once authors go unsampled). Pages are summed per author as ceilings (1
 // and 3 products at 2 per page = 1 + 2 pages, not 2 x ceil(2/2)), and every
 // owned ASIN the listing does not return costs one lookup.
-func TestEstimateRun_IsAnUpperBound(t *testing.T) {
+func TestEstimateRun_CoversPagesAndOwnedLookups(t *testing.T) {
 	st, _ := openCatalog(t)
 	mk := func(name string, n int) []metadata.CatalogProduct {
 		out := make([]metadata.CatalogProduct, n)
@@ -869,5 +870,117 @@ func TestMarkUnseen_LastHarvesterDropsItsVerdict(t *testing.T) {
 	if got.StaleSince == nil || len(got.HarvestedBy) != 0 || len(got.ConfirmedBy) != 0 || len(got.ConflictBy) != 0 ||
 		!got.NameOnlyAuthor || got.AuthorConflict {
 		t.Errorf("stale entry kept a dropped harvester's verdict: %+v", got)
+	}
+}
+
+// harvestN harvests Ann Author once against the full six-product listing
+// (complete, 6 kept), then n more times against next, returning each later
+// run's state.
+func harvestN(t *testing.T, st *database.CatalogStore, n int, next func(page, size int) metadata.AuthorPage) ([]database.CatalogAuthorState, *scriptLister) {
+	t.Helper()
+	all := sixProducts()
+	run := 0
+	l := &scriptLister{list: func(_ string, page, size int) metadata.AuthorPage {
+		if run == 0 {
+			return slicePage(all, page, size)
+		}
+		return next(page, size)
+	}}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1, OpID: "op-test"})
+	a := ScopeAuthor{Key: HarvestKey("Ann Author"), Name: "Ann Author"}
+	if s, err := h.HarvestAuthor(context.Background(), a, nil); err != nil || s.State != database.CatalogHarvestComplete {
+		t.Fatalf("first run = %+v, %v", s, err)
+	}
+	var out []database.CatalogAuthorState
+	for run = 1; run <= n; run++ {
+		s, err := h.HarvestAuthor(context.Background(), a, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, s)
+	}
+	return out, l
+}
+
+// TestHarvest_DuplicatesAcrossPagesStaleNothing: the listing repeats P1 and
+// omits P4 while still reaching total_results 6. The author is complete
+// (never partial forever) but P4 must not go stale on that evidence.
+func TestHarvest_DuplicatesAcrossPagesStaleNothing(t *testing.T) {
+	st, _ := openCatalog(t)
+	all := sixProducts()
+	walk := []metadata.CatalogProduct{all[0], all[1], all[1], all[2], all[3], all[5]}
+	states, _ := harvestN(t, st, 1, func(page, size int) metadata.AuthorPage { return slicePage(walk, page, size) })
+	s := states[0]
+	if s.State != database.CatalogHarvestComplete || s.Duplicates != 1 || s.MarkedStale != 0 {
+		t.Errorf("state = %+v; want complete, 1 duplicate, 0 stale", s)
+	}
+	if e, _ := st.GetEntryByProviderID("audible", "us", "P4"); e == nil || e.StaleSince != nil {
+		t.Errorf("omitted product went stale on a walk with duplicates: %+v", e)
+	}
+}
+
+// TestHarvest_PersistentShortListingIsAcceptedAfterThreeRuns: total 6, only
+// 4 ever delivered. Runs 1-2 are partial (retried); run 3 agrees with them
+// and is accepted as complete WITHOUT a stale pass, so the author stops being
+// re-walked every run. A run that delivers a different count resets the run
+// count.
+func TestHarvest_PersistentShortListingIsAcceptedAfterThreeRuns(t *testing.T) {
+	st, _ := openCatalog(t)
+	all := sixProducts()
+	states, l := harvestN(t, st, 4, func(page, size int) metadata.AuthorPage {
+		pg := slicePage(all[:4], page, size)
+		pg.TotalResults = 6
+		return pg
+	})
+	want := []string{database.CatalogHarvestPartial, database.CatalogHarvestPartial, database.CatalogHarvestComplete, database.CatalogHarvestComplete}
+	for i, s := range states {
+		if s.State != want[i] || s.MarkedStale != 0 || s.ShortRuns != i+1 {
+			t.Errorf("run %d: state=%s short_runs=%d stale=%d; want %s, %d, 0", i+1, s.State, s.ShortRuns, s.MarkedStale, want[i], i+1)
+		}
+	}
+	if n, _ := st.CountStale(); n != 0 {
+		t.Errorf("accepted short listing marked %d stale", n)
+	}
+	h := NewHarvester(l, st, Settings{})
+	if due, _ := h.SelectDue([]ScopeAuthor{{Key: HarvestKey("Ann Author"), Name: "Ann Author"}}, nil); len(due) != 0 {
+		t.Error("an accepted short listing is still due every run")
+	}
+
+	// A different delivered count is a different answer: the count restarts.
+	st2, _ := openCatalog(t)
+	counts := []int{4, 5, 4}
+	i := 0
+	states, _ = harvestN(t, st2, 3, func(page, size int) metadata.AuthorPage {
+		pg := slicePage(all[:counts[i]], page, size)
+		pg.TotalResults = 6
+		if len(pg.Products) == 0 {
+			i = min(i+1, len(counts)-1)
+		}
+		return pg
+	})
+	for j, s := range states {
+		if s.State != database.CatalogHarvestPartial || s.ShortRuns != 1 {
+			t.Errorf("varying run %d: state=%s short_runs=%d; want partial, 1", j+1, s.State, s.ShortRuns)
+		}
+	}
+}
+
+// TestHarvest_ZeroTotalAcceptedAfterThreeRunsAndStales: an author whose
+// catalog is really gone answers 0 every time. The first two runs are
+// partial (and, since a short run keeps nothing, the second must still be
+// guarded by the entries on file, not by the last run's kept count); the
+// third agreeing run is complete and stales everything.
+func TestHarvest_ZeroTotalAcceptedAfterThreeRunsAndStales(t *testing.T) {
+	st, _ := openCatalog(t)
+	states, _ := harvestN(t, st, 3, func(int, int) metadata.AuthorPage {
+		return metadata.AuthorPage{Products: []metadata.CatalogProduct{}}
+	})
+	for i, s := range states[:2] {
+		if s.State != database.CatalogHarvestPartial || s.MarkedStale != 0 {
+			t.Errorf("zero run %d = %s, stale %d; want partial, 0", i+1, s.State, s.MarkedStale)
+		}
+	}
+	if s := states[2]; s.State != database.CatalogHarvestComplete || s.MarkedStale != 6 {
+		t.Errorf("third zero run = %s, stale %d; want complete, 6", s.State, s.MarkedStale)
 	}
 }
