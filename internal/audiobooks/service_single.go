@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-01
 
@@ -589,45 +589,24 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 		return nil, fmt.Errorf("database not initialized")
 	}
 
-	book, err := svc.store.GetBookByID(id)
-	if err != nil || book == nil {
-		return nil, fmt.Errorf("audiobook not found")
-	}
-	// The file rows decide the state only for a row trashed before its
-	// pre-trash state was recorded (database.RestoreLibraryStateFromTrash).
-	files, err := svc.store.GetBookFiles(id)
-	if err != nil {
-		return nil, fmt.Errorf("read files of %s: %w", id, err)
-	}
-	env := merge.TrashRestoreEnv()
-	// Read before the write: the member that has been the group's primary
-	// while this book was in the trash keeps the flag.
-	incumbent := ""
-	if book.VersionGroupID != nil {
-		if incumbent, err = versionprimary.IncumbentExcept(svc.store, *book.VersionGroupID, id); err != nil {
-			return nil, err
-		}
-	}
-
-	// Back to the state the book had before the trash, not "imported": until
-	// 2026-10-01 this always wrote "imported", so restoring a book from the
-	// library folder dropped it out of ABS. Written with ModifyBook so only
-	// the restore's columns change on the row as it stands.
-	updated, err := svc.store.ModifyBook(id, func(row *database.Book) error {
-		database.RestoreBookFromTrash(row, files, env)
-		versionprimary.YieldToIncumbent(row, incumbent)
-		return nil
-	})
+	// The shared user restore (merge.RestoreFromTrash): back to the state
+	// the book had before the trash, not "imported" (until 2026-10-01 this
+	// always wrote "imported", so restoring a book from the library folder
+	// dropped it out of ABS); unlinked from its merge survivor, sync redirect
+	// included; and a former primary yields to the member that has held the
+	// flag since. A row that is not in the trash is returned unchanged.
+	res, err := merge.RestoreFromTrash(svc.store, id, nil)
 	if err != nil {
 		return nil, err
 	}
-	if updated == nil {
+	if res.Book == nil {
 		return nil, fmt.Errorf("audiobook not found")
 	}
-	// A restored book that was primary yields to the member handed the flag
-	// while it was deleted (YieldToIncumbent above); now that it can be
-	// organized again it would otherwise compete for it. Re-check its group:
-	// one primary, by the shared rule.
+	if !res.Restored {
+		return res.Book, nil
+	}
+	updated := res.Book
+	// Re-check its group: one primary, by the shared rule.
 	svc.handOffPrimary(updated)
 
 	svc.InvalidateBookCaches()
