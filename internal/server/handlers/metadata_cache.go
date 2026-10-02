@@ -239,6 +239,17 @@ func (h *MetadataCacheHandler) WarmReviewSnapshot(ctx context.Context) error {
 	return h.reviewSnap.warm(ctx)
 }
 
+// SetBackgroundRunner makes ctx (the server's lifetime context) the parent of
+// the review snapshot's background rebuilds, and run the way they start --
+// the server passes its tracked background group, so shutdown waits for a
+// rebuild rather than closing the store under it.
+func (h *MetadataCacheHandler) SetBackgroundRunner(ctx context.Context, run func(fn func())) {
+	if h.reviewSnap == nil {
+		return
+	}
+	h.reviewSnap.setBackground(ctx, run)
+}
+
 // InvalidateReviewSnapshot marks the review listing's snapshot dirty, so the
 // next review request starts a rebuild. Book-level changes (status, apply,
 // deletion) never need it -- every request re-reads the books -- but a

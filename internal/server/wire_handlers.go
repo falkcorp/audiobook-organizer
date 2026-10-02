@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.44.0
+// version: 2.45.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-10-02
 
@@ -89,8 +89,16 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		mcScanActive = func() bool { return handlers.LibraryScanActive(st.ListActiveOperationsV2) }
 	}
 	metaCacheH := handlers.NewMetadataCacheHandler(s.storeForWiring(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool, s.opRegistry, mcScanActive)
-	// Kept for the startup warmer (warmMetadataReviewSnapshot).
+	// Kept for the startup warmer (warmMetadataReviewSnapshot). Its background
+	// snapshot rebuilds run in bgWG under bgCtx, so Stop() waits for one
+	// instead of closing the store under it.
 	s.metadataCacheH = metaCacheH
+	metaCacheH.SetBackgroundRunner(s.bgCtx, func(fn func()) {
+		if s.bgCtx != nil && s.bgCtx.Err() != nil {
+			return
+		}
+		s.bgWG.Go("metadata-review-rebuild", fn)
+	})
 	organizeH := s.newOrganizeHandler()
 	filesystemH := handlers.NewFilesystemHandler(
 		s.storeForWiring(),

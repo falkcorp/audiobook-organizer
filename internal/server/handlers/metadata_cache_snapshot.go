@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_snapshot.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d3c7a51-2e6b-4f08-b4a9-7c1e5f2d8a36
 // last-edited: 2026-10-02
 
@@ -126,6 +126,10 @@ type reviewSnapshotCache struct {
 	idleDrop    time.Duration
 	failBackoff time.Duration
 	now         func() time.Time
+	// spawn starts a background rebuild's goroutine. The server sets it to
+	// its tracked background group (SetBackgroundRunner), so shutdown waits
+	// for a rebuild instead of closing the store under it.
+	spawn func(func())
 
 	mu sync.Mutex
 	// baseCtx parents background rebuilds: the server's lifetime context once
@@ -137,7 +141,10 @@ type reviewSnapshotCache struct {
 	failErr  error
 	lastUse  time.Time
 	idle     *time.Timer
-	sf       singleflight.Group
+	// refreshing is set while a background rebuild goroutine runs, so a burst
+	// of out-of-date requests starts one goroutine, not one each.
+	refreshing bool
+	sf         singleflight.Group
 }
 
 func newReviewSnapshotCache(build func(ctx context.Context) (*reviewSnapshot, error), gen func() uint64) *reviewSnapshotCache {
@@ -145,6 +152,7 @@ func newReviewSnapshotCache(build func(ctx context.Context) (*reviewSnapshot, er
 		build: build, gen: gen,
 		maxAge: reviewSnapshotMaxAge, idleDrop: reviewSnapshotIdleDrop, failBackoff: reviewSnapshotFailBackoff,
 		now: time.Now, baseCtx: context.Background(),
+		spawn: func(f func()) { go f() },
 	}
 }
 
@@ -219,18 +227,44 @@ func (c *reviewSnapshotCache) get(ctx context.Context) (*reviewSnapshot, error) 
 	return snap, nil
 }
 
-// refreshAsync starts a rebuild unless one is already running.
+// refreshAsync starts a rebuild unless one is already running (or the
+// server is shutting down).
 func (c *reviewSnapshotCache) refreshAsync() {
 	c.mu.Lock()
 	ctx := c.baseCtx
+	if c.refreshing || ctx.Err() != nil {
+		c.mu.Unlock()
+		return
+	}
+	c.refreshing = true
+	spawn := c.spawn
 	c.mu.Unlock()
-	c.sf.DoChan("build", func() (any, error) {
-		snap, err := c.rebuild(ctx)
-		if err != nil {
+	spawn(func() {
+		defer func() {
+			c.mu.Lock()
+			c.refreshing = false
+			c.mu.Unlock()
+		}()
+		// Do, not DoChan: the rebuild runs on THIS goroutine, the one the
+		// server tracks; a cold build already running is joined.
+		_, err, _ := c.sf.Do("build", func() (any, error) { return c.rebuild(ctx) })
+		if err != nil && ctx.Err() == nil {
 			metadataCacheLog.Warn("background review snapshot rebuild failed; serving the previous snapshot: %v", err)
 		}
-		return snap, err
 	})
+}
+
+// setBackground makes ctx the parent of background rebuilds and spawn the
+// way their goroutines start.
+func (c *reviewSnapshotCache) setBackground(ctx context.Context, spawn func(func())) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ctx != nil {
+		c.baseCtx = ctx
+	}
+	if spawn != nil {
+		c.spawn = spawn
+	}
 }
 
 func (c *reviewSnapshotCache) rebuild(ctx context.Context) (*reviewSnapshot, error) {
