@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout_round6_probe_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0c7e3a-91b4-4f26-8a1e-2c6b9f04d7e3
 // last-edited: 2026-10-01
 
@@ -47,7 +47,7 @@ func TestSearchFanoutProbe_NoPositionSiblingIsNeverStrong(t *testing.T) {
 // The own-ASIN leg of S1: the stored ASIN is the position-less sibling's,
 // within 15% of the book's runtime. It does not agree with the book
 // (ownASINAgrees), so it neither stops the search nor takes the first-place
-// tier; it keeps only the x2.0 ASIN multiplier.
+// tier; it gets no ASIN multiplier either (round 7, B1).
 func TestSearchFanoutProbe_NoPositionSiblingOwnASIN(t *testing.T) {
 	for _, tc := range s1Cases {
 		t.Run(tc.book, func(t *testing.T) {
@@ -102,8 +102,10 @@ func TestStrongCriteria_PositionNamed(t *testing.T) {
 	const named = "Witcher 4: The Tower of the Swallow"
 	p = parseSearchTitle(named, "Andrzej Sapkowski", "")
 	c = newStrongCriteria(p, p.Title, named, "", "Andrzej Sapkowski", 36000)
-	assert.True(t, c.positionNamed(metadata.BookMetadata{Title: "The Tower of the Swallow", DurationSec: 40000}),
-		"the book's own name, with no position, is enough")
+	assert.False(t, c.positionNamed(metadata.BookMetadata{Title: "The Tower of the Swallow", DurationSec: 40000}),
+		"the book's own name, with no position, is not enough: siblings can share a name (round 7, S1)")
+	assert.True(t, c.positionNamed(metadata.BookMetadata{Title: "The Tower of the Swallow", DurationSec: 36300}),
+		"the name with a runtime within positionOverrideTolerance is")
 }
 
 // S3: names written with an honorific, a surname particle or sorted by a

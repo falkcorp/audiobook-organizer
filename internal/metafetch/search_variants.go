@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
 // last-edited: 2026-10-01
 
@@ -106,6 +106,12 @@ type parsedTitle struct {
 	// "Area 51"), so an answer whose title carries it is not refuted by a
 	// provider's other series_position (strongCriteria.positionConflicts).
 	BareSlot bool
+	// StoredPosition is the book's stored series sequence, set by
+	// resolveSearchInputs only when the title names no position ("Overlord"
+	// with sequence 8). It gates strength alone (strongCriteria.storedPos),
+	// never the pool and never the queries: it may come from an earlier bad
+	// match.
+	StoredPosition string
 }
 
 var (
@@ -394,7 +400,15 @@ var numberKeywords = map[string]bool{
 // last word before a colon, comma, bracket or spaced dash.
 var numberSegmentRe = regexp.MustCompile(`\s*(?:[:;,()\[\]]|\s[-–—]\s)\s*`)
 
+// normPosition is pos's single number with leading zeros dropped ("Book
+// 08" -> "8"), or "" for none. A range or a list ("8-10", "8, 9, 10") names
+// no single position -- an omnibus is not book 8 -- so it is "" too: it
+// neither satisfies a position nor refutes one. (normalizeSeriesNumber reads
+// its first number, seqnum.ParsePosition its last.)
 func normPosition(pos string) string {
+	if len(titleNumberRe.FindAllString(pos, 2)) > 1 {
+		return ""
+	}
 	n := normalizeSeriesNumber(pos)
 	if t := strings.TrimLeft(n, "0"); t != "" && t[0] != '.' {
 		return t
@@ -729,6 +743,11 @@ type strongCriteria struct {
 	// (parsedTitle.BareSlot).
 	position string
 	bareSlot bool
+	// storedPos is the book's stored series sequence when the title names no
+	// position (parsedTitle.StoredPosition). Only the strong gates read it
+	// (positionNamed, explicitPositionConflicts); positionConflicts does not,
+	// so it never drops an answer from the pool.
+	storedPos string
 	// nameAnchor is the distinguishing words of the book name read from
 	// behind the title's series slot (parsedTitle.Name), and seriesWords the
 	// slot head's (parsedTitle.SlotHead).
@@ -783,6 +802,9 @@ func newStrongCriteria(p parsedTitle, title, literal, asin, author string, bookD
 	}
 	if c.position != "" {
 		c.allowedNums[c.position] = true
+	} else if sp := normPosition(p.StoredPosition); sp != "" {
+		c.storedPos = sp
+		c.allowedNums[sp] = true
 	}
 	// A written-out number of the book's own ("viii" in "Rogue Ascension
 	// VIII") is checked as a number (numbersFit, positionConflicts), not as a
@@ -904,10 +926,14 @@ func (c strongCriteria) dropConflicts(rs []metadata.BookMetadata) []metadata.Boo
 //
 // A title may restate the answer's OWN series metadata ("A Wanted Man: Jack
 // Reacher, Book 17" with series "Jack Reacher") and edition noise
-// ("Unabridged"); "Abridged" is another product and fails.
+// ("Unabridged"); "Abridged" is another product and fails. Only when the
+// book's title names no series of its own: a book that does already allows
+// its series' words, and an answer's other series ("Sword Art Online
+// Progressive" for "Sword Art Online, Vol. 8") is a sibling series, not a
+// restatement.
 func (c strongCriteria) titleSubset(r metadata.BookMetadata) bool {
 	own := SignificantWords(r.Series)
-	if strings.TrimSpace(r.Series) == "" {
+	if strings.TrimSpace(r.Series) == "" || len(c.seriesWords) > 0 {
 		own = nil
 	}
 	for w := range SignificantWords(r.Title) {
@@ -970,29 +996,42 @@ func (c strongCriteria) runtimeAgrees(r metadata.BookMetadata) bool {
 	return c.bookDur > 0 && r.DurationSec > 0 && durationDeltaRatio(c.bookDur, r.DurationSec) <= strongRuntimeTolerance
 }
 
+// runtimeExact reports whether r runs within positionOverrideTolerance of the
+// book: close enough to tell the book from a sibling of its series, which
+// strongRuntimeTolerance is not.
+func (c strongCriteria) runtimeExact(r metadata.BookMetadata) bool {
+	return c.bookDur > 0 && r.DurationSec > 0 && durationDeltaRatio(c.bookDur, r.DurationSec) <= positionOverrideTolerance
+}
+
 // ownASINAgrees reports whether r carries the book's own ASIN AND is this
 // book by the same evidence any other answer needs: it names no other
-// position (positionConflicts, explicitPositionConflicts), its title carries
-// no number the book's does not (numbersFit), and it runs within
-// strongRuntimeTolerance or its title says nothing the book's does not
-// (titleSubset). A stored ASIN is
+// position (positionConflicts, explicitPositionConflicts), it names the
+// book's (positionNamed), its title carries no number the book's does not
+// (numbersFit), and its title says nothing the book's does not (titleSubset)
+// or it runs within positionOverrideTolerance -- not strongRuntimeTolerance:
+// siblings of one series run alike ("Sword Art Online Progressive 8" is 4%
+// off "Sword Art Online, Vol. 8"). A stored ASIN is
 // sometimes wrong -- an earlier bad match stored a sibling's ("Rogue
 // Ascension 7" on book 8) -- and an answer that carries it but fails that
-// gets the ASIN multiplier only, not the first-place tier or the early stop.
+// gets no ASIN multiplier, no first-place tier and no early stop.
 func (c strongCriteria) ownASINAgrees(r metadata.BookMetadata) bool {
 	if c.asin == "" || !strings.EqualFold(strings.TrimSpace(r.ASIN), c.asin) {
 		return false
 	}
 	return !c.positionConflicts(r) && !c.explicitPositionConflicts(r) && c.positionNamed(r) &&
-		c.numbersFit(r.Title) && (c.runtimeAgrees(r) || c.titleSubset(r))
+		c.numbersFit(r.Title) && (c.runtimeExact(r) || c.titleSubset(r))
 }
 
 // positionNamed reports whether r names the book's number: its position
 // (an explicit series_position or a number in its title) when the book has
-// one, else every number of the book's own title (ownNums: "Metro 2033",
-// "The Final Four"). An answer carrying the book's own name (nameVouches:
-// "The Tower of the Swallow" for "Witcher 4: The Tower of the Swallow") needs
-// neither. An answer that names no number is any book of the series --
+// one, else its stored sequence (storedPos) or every number of the book's own
+// title (ownNums: "Metro 2033", "The Final Four"). An answer carrying the
+// book's own name (nameVouches: "The Tower of the Swallow" for "Witcher 4:
+// The Tower of the Swallow") needs no position only when it runs within
+// positionOverrideTolerance -- the provider-numbering case only the runtime
+// can tell. The name alone is not enough: siblings share one ("Hemlock
+// Hollow: Midlife Magic" for "Hemlock Hollow 8: Midlife Magic", "Murder at
+// the Hollow" for "Hemlock Hollow 8: Murder"). An answer that names no number is any book of the series --
 // "Rogue Ascension" (Google Books' and Open Library's shape, with no
 // series_position) for "Rogue Ascension VIII", "The Witcher" for "The
 // Witcher 4", "The Final" for "The Final Four" -- and no position gate can
@@ -1000,11 +1039,21 @@ func (c strongCriteria) ownASINAgrees(r metadata.BookMetadata) bool {
 // strong: not by its author, not by a stored ASIN that may be a sibling's,
 // and not by a runtime, which a sibling of the same series can share.
 func (c strongCriteria) positionNamed(r metadata.BookMetadata) bool {
-	if c.nameVouches(r) {
-		return true
+	names := func(pos string) bool {
+		return normPosition(r.SeriesPosition) == pos || slices.Contains(titleNumbers(r.Title), pos)
 	}
 	if c.position != "" {
-		return normPosition(r.SeriesPosition) == c.position || slices.Contains(titleNumbers(r.Title), c.position)
+		return names(c.position) || (c.nameVouches(r) && c.runtimeExact(r))
+	}
+	if c.storedPos != "" {
+		if names(c.storedPos) {
+			return true
+		}
+		// A title whose own numbers are its name ("Metro 2033", stored as
+		// its series' #1) is still named by them, below.
+		if len(c.ownNums) == 0 {
+			return false
+		}
 	}
 	nums := numberSet(r.Title)
 	for _, n := range c.ownNums {
@@ -1033,10 +1082,16 @@ func (c strongCriteria) explicitPositionConflicts(r metadata.BookMetadata) bool 
 		if sp == c.position || (c.bareSlot && slices.Contains(titleNumbers(r.Title), c.position)) {
 			return false
 		}
+	} else if c.storedPos != "" {
+		// The book's stored sequence ("Overlord", sequence 8): "Overlord"
+		// at series_position 1 is book 1.
+		if sp == c.storedPos {
+			return false
+		}
 	} else if len(c.allowedNums) == 0 || c.allowedNums[sp] || c.carriesAllNumbers(r.Title) {
 		return false
 	}
-	return !(c.bookDur > 0 && r.DurationSec > 0 && durationDeltaRatio(c.bookDur, r.DurationSec) <= positionOverrideTolerance)
+	return !c.runtimeExact(r)
 }
 
 // carriesAllNumbers reports whether title carries every number of the book's
