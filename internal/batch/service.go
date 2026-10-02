@@ -1,5 +1,5 @@
 // file: internal/batch/service.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-02
 
@@ -134,7 +134,7 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 			// row's merge redirect, so it is not repeated below.
 			var res merge.TrashRestoreResult
 			res, err = merge.RestoreFromTrash(bs.db, id, func(b *database.Book) { applyUpdates(b, req.Updates) },
-				func(_, after *database.Book) { bs.handOffPrimary(book, after, req.Updates) })
+				func(_, after *database.Book) { bs.handOffPrimary(book, after, req.Updates) }, joinGroups(req.Updates)...)
 			pre, updated = res.Before, res.Book
 		} else {
 			updated, book, err = bs.lockedModify(id, book, req.Updates, func(b *database.Book) error {
@@ -208,7 +208,7 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			if isRestore(op.Updates) {
 				var res merge.TrashRestoreResult
 				res, err = merge.RestoreFromTrash(bs.db, op.ID, func(b *database.Book) { applyUpdates(b, op.Updates) },
-					func(_, after *database.Book) { bs.handOffPrimary(book, after, op.Updates) })
+					func(_, after *database.Book) { bs.handOffPrimary(book, after, op.Updates) }, joinGroups(op.Updates)...)
 				updated = res.Book
 			} else {
 				updated, book, err = bs.lockedModify(op.ID, book, op.Updates, func(b *database.Book) error {
@@ -468,6 +468,16 @@ func applyUpdates(book *database.Book, updates map[string]any) {
 
 var batchLog = logger.New("batch")
 
+// joinGroups is the version group a batch payload moves its book into, for
+// merge.RestoreFromTrash to lock beside the row's current one; none when the
+// payload leaves the group alone.
+func joinGroups(updates map[string]any) []string {
+	if v, ok := updates["version_group_id"].(string); ok {
+		return []string{v}
+	}
+	return nil
+}
+
 // lockedModify writes one batch edit through ModifyBook. An edit that sets
 // version_group_id or is_primary_version changes a group's membership or its
 // primary, so it holds the hand-off locks of the group the book is in and
@@ -484,7 +494,8 @@ var batchLog = logger.New("batch")
 // caller's hand-off must use as "before".
 //
 // Not for a restore: merge.RestoreFromTrash takes the merge lock and then
-// the group lock itself, and taking a group lock first would invert that.
+// the group locks itself (passed joinGroups), and taking a group lock first
+// would invert that.
 func (bs *BatchService) lockedModify(id string, before *database.Book, updates map[string]any, fn func(*database.Book) error) (*database.Book, *database.Book, error) {
 	_, grp := updates["version_group_id"]
 	_, flag := updates["is_primary_version"]

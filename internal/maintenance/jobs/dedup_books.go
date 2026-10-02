@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.7.1
+// version: 3.8.0
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-09-24
+// last-edited: 2026-10-02
 
 package jobs
 
@@ -281,11 +281,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 			continue
 		}
 		for _, dupID := range dupeIDs {
-			_, upErr := store.ModifyBook(dupID, func(b *database.Book) error {
-				b.VersionGroupID = nil
-				b.IsPrimaryVersion = nil
-				return nil
-			})
+			upErr := ddUnlinkFromVersionGroup(store, vgID, dupID)
 			phase4.record(upErr)
 			if upErr != nil {
 				ddLog.Error("phase4 unlink vg=%s from book=%s: %s", logger.SanitizeLogValue(vgID), logger.SanitizeLogValue(dupID), logger.SanitizeLogValue(upErr.Error()))
@@ -842,6 +838,24 @@ func ddRetireGuard(store merge.ITunesGuardStore, sim *ddSim, planned *database.B
 }
 
 // ddMergeStore is ddMergeDuplicateBook's store: the job's whole surface.
+// ddUnlinkFromVersionGroup takes book dupID out of version group vgID (to no
+// group). It leaves vgID for the no-group sentinel, so it holds both locks
+// (one versionprimary.LockGroups call) across this one write, per book and
+// never across phase 4's loop, and refuses (versionprimary.ErrMembershipChanged)
+// a book that is no longer in vgID.
+func ddUnlinkFromVersionGroup(store maintenance.JobStore, vgID, dupID string) error {
+	defer versionprimary.LockGroups(vgID, "")()
+	_, err := store.ModifyBook(dupID, func(b *database.Book) error {
+		if err := versionprimary.CheckMembership(b, vgID); err != nil {
+			return err
+		}
+		b.VersionGroupID = nil
+		b.IsPrimaryVersion = nil
+		return nil
+	})
+	return err
+}
+
 type ddMergeStore = maintenance.JobStore
 
 // ddRetireMergedDupAttempts is how many fresh plans ddRetireMergedDup tries
@@ -1003,7 +1017,24 @@ func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Bo
 	}
 
 	var restored []string
+	// The fill can move a groupless keeper into the dup's group
+	// (ddMergeBookFields): hold the keeper's current group (the no-group
+	// sentinel when it has none) and the dup's, in one acquisition, across
+	// this one write only. The hand-off below runs after the release.
+	dupVG := ""
+	if dup.VersionGroupID != nil {
+		dupVG = *dup.VersionGroupID
+	}
+	unlockGroups, lockedGroups, lockErr := versionprimary.LockBookGroups(store, []string{keeper.ID}, dupVG)
+	if lockErr != nil {
+		return fmt.Errorf("lock version groups of keeper %s: %w", keeper.ID, lockErr)
+	}
 	updated, err := store.ModifyBook(keeper.ID, func(current *database.Book) error {
+		if g, ok := lockedGroups[current.ID]; ok {
+			if err := versionprimary.CheckMembership(current, g); err != nil {
+				return err
+			}
+		}
 		// The keeper's user-locked fields win over the dup's values -- a blank
 		// the user locked stays blank. Fail closed: if the locks cannot be read
 		// the merge does not happen and the dup is NOT deleted (its values would
@@ -1017,6 +1048,7 @@ func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Bo
 		database.DropDanglingSeriesRef(store, current, "dedup-books.keeper-fill")
 		return nil
 	})
+	unlockGroups()
 	if err != nil {
 		return fmt.Errorf("update keeper %s: %w", keeper.ID, err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-09-24
+// last-edited: 2026-10-02
 
 package itunesservice
 
@@ -712,21 +712,9 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 				log.Info("Hash validation: linked %s → %s via hash", book.Title, existing.ID)
 			}
 
-			if _, err := imp.store.ModifyBook(bookID, func(fresh *database.Book) error {
-				if fresh.FilePath != hashedPath {
-					// The file moved while it was being hashed: the hash
-					// describes a path this book no longer has.
-					return errHashedPathMoved
-				}
-				setImportHashes(fresh, hash, importMode)
-				if linkGroup != nil {
-					fresh.VersionGroupID = new(*linkGroup)
-					isPrimary := false
-					fresh.IsPrimaryVersion = &isPrimary
-				}
-				return nil
-			}); err != nil {
-				log.Warn("Hash validation: failed to update %s: %v", bookID, err)
+			werr := writeHashValidation(imp.store, bookID, hashedPath, hash, importMode, linkGroup, log)
+			if werr != nil {
+				log.Warn("Hash validation: failed to update %s: %v", bookID, werr)
 			}
 
 			if (hi+1)%100 == 0 || hi+1 == len(newBookIDs) {
@@ -767,6 +755,52 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 
 // errHashedPathMoved aborts a hash-validation write whose book changed path
 // while its file was being hashed.
+// writeHashValidation records a new book's import hashes and, when linkGroup
+// is set (an existing book with the same hash is in that version group),
+// links the book into it as a non-primary member.
+//
+// A link moves the book into linkGroup, so the write holds the book's current
+// group (the no-group sentinel when it has none) and linkGroup, taken in one
+// versionprimary.LockBookGroups acquisition and released on return (per book,
+// never across the import loop). When the locks cannot be taken, or the book
+// changed group after they were read, the link is dropped and the hashes are
+// still written.
+func writeHashValidation(store importerStore, bookID, hashedPath, hash string, importMode itunes.ImportMode, linkGroup *string, log logger.Logger) error {
+	var lockedGroups map[string]string
+	if linkGroup != nil {
+		unlock, g, lerr := versionprimary.LockBookGroups(store, []string{bookID}, *linkGroup)
+		if lerr != nil {
+			log.Warn("Hash validation: not linking %s: %v", bookID, lerr)
+			linkGroup = nil
+		} else {
+			defer unlock()
+			lockedGroups = g
+		}
+	}
+	_, err := store.ModifyBook(bookID, func(fresh *database.Book) error {
+		if fresh.FilePath != hashedPath {
+			// The file moved while it was being hashed: the hash
+			// describes a path this book no longer has.
+			return errHashedPathMoved
+		}
+		setImportHashes(fresh, hash, importMode)
+		if linkGroup == nil {
+			return nil
+		}
+		if g, ok := lockedGroups[fresh.ID]; ok {
+			if err := versionprimary.CheckMembership(fresh, g); err != nil {
+				log.Warn("Hash validation: not linking %s: %v", bookID, err)
+				return nil
+			}
+		}
+		fresh.VersionGroupID = new(*linkGroup)
+		isPrimary := false
+		fresh.IsPrimaryVersion = &isPrimary
+		return nil
+	})
+	return err
+}
+
 var errHashedPathMoved = errors.New("book path changed while it was being hashed; hash not recorded")
 
 // setImportHashes records the hash validation computed for a freshly imported

@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package merge
 
@@ -775,8 +775,21 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	//    books. Re-fetch and patch only the fields the combine changed:
 	//    UpdateBook is a full-column replace.
 	for _, a := range j.Absorbed {
+		gid := ""
+		if a.VersionGroupID != nil {
+			gid = strings.TrimSpace(*a.VersionGroupID)
+		}
+		// Membership lock: the shell's current group (the no-group sentinel
+		// when it has none) and the group it is restored into, in ONE
+		// acquisition (merge lock, then group stripes, then the book's write
+		// lock), held across the incumbent read and the whole-row restore.
+		unlockGroup, _, err := versionprimary.LockBookGroups(ms.db, []string{a.BookID}, gid)
+		if err != nil {
+			return res, fmt.Errorf("lock version groups of absorbed book %s: %w", a.BookID, err)
+		}
 		b, err := ms.db.GetBookByID(a.BookID)
 		if err != nil || b == nil {
+			unlockGroup()
 			return res, fmt.Errorf("reload absorbed book %s: %v", a.BookID, err)
 		}
 		b.MarkedForDeletion = nil
@@ -788,20 +801,13 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 		b.FilePath = a.FilePath
 		b.VersionGroupID = a.VersionGroupID
 		b.IsPrimaryVersion = a.IsPrimaryVersion
-		gid := ""
-		if a.VersionGroupID != nil {
-			gid = strings.TrimSpace(*a.VersionGroupID)
-		}
-		unlockGroup := func() {}
 		if gid != "" && a.IsPrimaryVersion != nil && *a.IsPrimaryVersion {
 			// Another member may have become the group's primary while this
 			// one was soft-deleted. One primary per group, always, by the
 			// same rule as a trash restore (versionprimary.Incumbent: an
 			// explicit-true member, else the one nil-flag member every
 			// visibility path reads as primary). Read and written under the
-			// group's hand-off lock (merge lock, then group lock, then the
-			// book's write lock: the order every merge hand-off uses).
-			unlockGroup = versionprimary.LockGroup(gid)
+			// group's hand-off lock, taken above.
 			incumbent, ierr := versionprimary.IncumbentExcept(ms.db, gid, a.BookID)
 			if ierr != nil {
 				unlockGroup()

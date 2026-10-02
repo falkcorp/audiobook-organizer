@@ -1,7 +1,7 @@
 // file: internal/merge/trash_restore.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package merge
 
@@ -117,14 +117,33 @@ type pendingRepairScanner interface {
 // closes.
 //
 // It takes LockMergeRMW, so it never interleaves with a merge or combine that
-// is recording a redirect on the same book.
+// is recording a redirect on the same book. Then, in one
+// versionprimary.LockBookGroups acquisition, the version-group locks of the
+// row's current group (the no-group sentinel when it has none) and of every
+// group in joinGroups: a caller whose apply moves the row into another group
+// names it there. They are held across the incumbent read and the write, and
+// released before handOff, which takes them itself. A row that changes group
+// in between is refused (versionprimary.ErrMembershipChanged).
 //
 // There is no operation journal for a trash restore (there is none for the
 // trash either); the redirect removal and every dropped record are logged.
-func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.Book), handOff func(before, after *database.Book)) (TrashRestoreResult, error) {
+func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.Book), handOff func(before, after *database.Book), joinGroups ...string) (TrashRestoreResult, error) {
 	var res TrashRestoreResult
 	LockMergeRMW()
 	defer UnlockMergeRMW()
+
+	unlockGroups, lockedGroups, err := versionprimary.LockBookGroups(store, []string{id}, joinGroups...)
+	if err != nil {
+		return res, err
+	}
+	groupsLocked := true
+	unlockGroup := func() {
+		if groupsLocked {
+			groupsLocked = false
+			unlockGroups()
+		}
+	}
+	defer unlockGroup()
 
 	book, err := store.GetBookByID(id)
 	if err != nil {
@@ -156,14 +175,10 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 		gid = strings.TrimSpace(*book.VersionGroupID)
 	}
 	incumbent := ""
-	unlockGroup := func() {}
 	if gid != "" {
-		// The incumbent is read and the yield written under the group's lock,
-		// so no hand-off can crown or demote a member in between. Writers that
-		// set a flag without a hand-off (a batch is_primary_version edit, the
-		// scanner) do not take this lock; for those, the EnsureSinglePrimary
-		// the caller runs afterwards is what leaves the group with one primary.
-		unlockGroup = versionprimary.LockGroup(gid)
+		// The incumbent is read and the yield written under the group's lock
+		// (taken above), so no hand-off or membership writer can crown, demote
+		// or move a member in between.
 		if incumbent, err = versionprimary.IncumbentExcept(store, gid, id); err != nil {
 			unlockGroup()
 			return res, err
@@ -210,6 +225,11 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 		}
 	}
 	updated, err := store.ModifyBook(id, func(row *database.Book) error {
+		if g, ok := lockedGroups[row.ID]; ok {
+			if err := versionprimary.CheckMembership(row, g); err != nil {
+				return err
+			}
+		}
 		res.Before = *row
 		if trashed && restoreRow(row) {
 			res.Restored = true

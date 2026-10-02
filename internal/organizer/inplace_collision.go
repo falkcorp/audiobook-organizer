@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: df0b8ccd-c8b3-4b73-b9ab-89836b0d4c37
-// last-edited: 2026-09-27
+// last-edited: 2026-10-02
 
 // Destination-conflict resolution for ReOrganizeInPlace.
 //
@@ -67,6 +67,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // Outcome categories for an organize that met an occupied destination, or was
@@ -332,6 +333,20 @@ func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target s
 		minted = true
 	}
 
+	// Membership lock: both books' current groups (the no-group sentinel
+	// for an ungrouped one) and the group they end in, in one acquisition,
+	// held across the primary read and both writes. Nothing below hands off
+	// a primary. A book that moved since it was read above declines.
+	unlockGroups, lockedGroups, lerr := versionprimary.LockBookGroups(orgSvc.db, []string{book.ID, occupant.ID}, group)
+	if lerr != nil {
+		return nil, decline(OutcomeUnresolvedConflict, fmt.Sprintf("could not lock the version groups: %v", lerr))
+	}
+	defer unlockGroups()
+	// LockBookGroups returns the raw stored ids, as derefString reads them.
+	if lockedGroups[book.ID] != bookGroup || lockedGroups[occupant.ID] != occGroup {
+		return nil, decline(OutcomeUnresolvedConflict, "the book or its occupant changed version group while the adopt was being planned")
+	}
+
 	res.Outcome = outcome
 	res.OccupantBookID = occupant.ID
 	res.VersionGroupID = group
@@ -367,6 +382,9 @@ func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target s
 		res.OccupantGroupSet = occGroup == ""
 		res.OccupantMadePrimary = makePrimary
 		if err := orgSvc.modifyBook(occupant.ID, func(b *database.Book) error {
+			if err := versionprimary.CheckMembership(b, occGroup); err != nil {
+				return err
+			}
 			b.VersionGroupID = &group
 			if makePrimary {
 				t := true
@@ -381,6 +399,9 @@ func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target s
 
 	notPrimary := false
 	if err := orgSvc.modifyBook(book.ID, func(b *database.Book) error {
+		if err := versionprimary.CheckMembership(b, bookGroup); err != nil {
+			return err
+		}
 		b.VersionGroupID = &group
 		b.IsPrimaryVersion = &notPrimary
 		return nil
