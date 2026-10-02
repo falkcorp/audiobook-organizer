@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
 // last-edited: 2026-10-01
 
@@ -1046,12 +1046,20 @@ func (c strongCriteria) positionNamed(r metadata.BookMetadata) bool {
 		return names(c.position) || (c.nameVouches(r) && c.runtimeExact(r))
 	}
 	if c.storedPos != "" {
-		if names(c.storedPos) {
+		// A stored sequence is weaker evidence than the title's own number
+		// (it may come from an earlier bad match), so a runtime within
+		// positionOverrideTolerance names the book whatever a provider
+		// numbers it ("The Tower of the Swallow", stored 4, Audible's #6).
+		if names(c.storedPos) || c.runtimeExact(r) {
 			return true
 		}
-		// A title whose own numbers are its name ("Metro 2033", stored as
-		// its series' #1) is still named by them, below.
-		if len(c.ownNums) == 0 {
+		// Another explicit position, with no number of the title's own to
+		// name the book instead, is another book ("Overlord" at #1 for
+		// stored 8). An answer with no series_position names no other
+		// position: it is judged by the title's own numbers, below, as a
+		// book without a stored sequence is ("Metro 2033" is still named by
+		// 2033).
+		if normPosition(r.SeriesPosition) != "" && len(c.ownNums) == 0 {
 			return false
 		}
 	}
@@ -1084,14 +1092,41 @@ func (c strongCriteria) explicitPositionConflicts(r metadata.BookMetadata) bool 
 		}
 	} else if c.storedPos != "" {
 		// The book's stored sequence ("Overlord", sequence 8): "Overlord"
-		// at series_position 1 is book 1.
-		if sp == c.storedPos {
+		// at series_position 1 is book 1. As with no stored sequence, a title
+		// that carries the book's numbers is excused: every allowed number
+		// ("Overlord 8" at #1), or every number of the title's own ("Metro
+		// 2033", stored 1, at #3: the provider counts a prequel).
+		if sp == c.storedPos || c.carriesAllNumbers(r.Title) || c.carriesOwnNumbers(r.Title) {
 			return false
 		}
 	} else if len(c.allowedNums) == 0 || c.allowedNums[sp] || c.carriesAllNumbers(r.Title) {
 		return false
 	}
 	return !c.runtimeExact(r)
+}
+
+// carriesOwnNumbers reports whether title carries every number of the book's
+// own title (ownNums), and there is at least one.
+func (c strongCriteria) carriesOwnNumbers(title string) bool {
+	if len(c.ownNums) == 0 {
+		return false
+	}
+	nums := numberSet(title)
+	for _, n := range c.ownNums {
+		if !nums[n] {
+			return false
+		}
+	}
+	return true
+}
+
+// siblingEvidence reports whether r positively names another book than this
+// one: another series position (positionConflicts, explicitPositionConflicts)
+// or a number in its title the book's does not carry (numbersFit). Unlike
+// !ownASINAgrees it is not a mere lack of agreement: an answer about which
+// nothing is known is not a sibling.
+func (c strongCriteria) siblingEvidence(r metadata.BookMetadata) bool {
+	return c.positionConflicts(r) || c.explicitPositionConflicts(r) || !c.numbersFit(r.Title)
 }
 
 // carriesAllNumbers reports whether title carries every number of the book's
