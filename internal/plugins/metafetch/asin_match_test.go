@@ -356,6 +356,52 @@ func TestDecideASIN_ReviewFalsePositives(t *testing.T) {
 			cands: []metadata.AudibleIdentity{{ASIN: "OMN", Title: "Foundation", Subtitle: "The Omnibus", Authors: []string{"Isaac Asimov"}, Series: []metadata.AudibleSeriesRef{{Title: "Foundation", Sequence: "1"}}}},
 		},
 	}
+	ol := []string{"Kugane Maruyama"}
+	cases = append(cases, []struct {
+		name  string
+		book  asinBookFacts
+		cands []metadata.AudibleIdentity
+	}{
+		{
+			name:  "series-note subtitle with another volume, no known position",
+			book:  asinBookFacts{Title: "Overlord", Authors: ol, RuntimeSec: 10 * 3600},
+			cands: []metadata.AudibleIdentity{{ASIN: "O2", Title: "Overlord", Subtitle: "Overlord, Vol. 2", Authors: ol, RuntimeMin: 610}},
+		},
+		{
+			name:  "Book N of the X Series, no known position",
+			book:  asinBookFacts{Title: "Overlord", Authors: ol, RuntimeSec: 10 * 3600},
+			cands: []metadata.AudibleIdentity{{ASIN: "O3", Title: "Overlord", Subtitle: "Book 2 of the Overlord Series", Authors: ol, RuntimeMin: 610}},
+		},
+		{
+			name:  "companion novel subtitle",
+			book:  asinBookFacts{Title: "Overlord", Authors: ol, RuntimeSec: 10 * 3600},
+			cands: []metadata.AudibleIdentity{{ASIN: "O5", Title: "Overlord", Subtitle: "A Companion Novel to the Overlord Series", Authors: ol, RuntimeMin: 610}},
+		},
+		{
+			name: "series-note volume vs known position, qualified series name",
+			book: asinBookFacts{Title: "Overlord", Authors: ol, RuntimeSec: 10 * 3600, SeriesName: "Overlord", SeriesSeq: 1},
+			cands: []metadata.AudibleIdentity{{ASIN: "O7", Title: "Overlord", Subtitle: "Overlord, Vol. 2", Authors: ol, RuntimeMin: 610,
+				Series: []metadata.AudibleSeriesRef{{Title: "Overlord (Light Novel)", Sequence: "2"}}}},
+		},
+		{
+			name: "qualified series name still vetoes",
+			book: asinBookFacts{Title: "Overlord", Authors: ol, RuntimeSec: 10 * 3600, SeriesName: "Overlord", SeriesSeq: 1},
+			cands: []metadata.AudibleIdentity{{ASIN: "O8", Title: "Overlord", Authors: ol, RuntimeMin: 610,
+				Series: []metadata.AudibleSeriesRef{{Title: "Overlord (Light Novel)", Sequence: "2"}}}},
+		},
+		{
+			name: "paren volume vs universe series",
+			book: asinBookFacts{Title: "Mistborn (Book 2)", Authors: []string{"Brandon Sanderson"}, RuntimeSec: 20 * 3600},
+			cands: []metadata.AudibleIdentity{{ASIN: "MB1", Title: "Mistborn", Authors: []string{"Brandon Sanderson"}, RuntimeMin: 1200,
+				Series: []metadata.AudibleSeriesRef{{Title: "Mistborn", Sequence: "1"}, {Title: "Cosmere", Sequence: "2"}}}},
+		},
+		{
+			name: "paren (Series 3, Book 2) takes the book number",
+			book: asinBookFacts{Title: "Foo (Series 3, Book 2)", Authors: []string{"A Writer"}, RuntimeSec: 10 * 3600},
+			cands: []metadata.AudibleIdentity{{ASIN: "F3", Title: "Foo", Authors: []string{"A Writer"}, RuntimeMin: 600,
+				Series: []metadata.AudibleSeriesRef{{Title: "Foo", Sequence: "3"}}}},
+		},
+	}...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if d := decideASIN(tc.book, tc.cands); d.Outcome == asinOutcomeMatched {
@@ -379,8 +425,8 @@ func TestDecideASIN_ReviewTighteningKeepsGoodMatches(t *testing.T) {
 			cand: metadata.AudibleIdentity{ASIN: "RR", Title: "Red Rising", Authors: []string{"Pierce Brown"}, RuntimeMin: 972},
 		},
 		{
-			name: "series-note subtitle is still exact",
-			book: asinBookFacts{Title: "Red Rising", Authors: []string{"Pierce Brown"}, RuntimeSec: 972 * 60},
+			name: "series-note subtitle naming the book's position is exact",
+			book: asinBookFacts{Title: "Red Rising", Authors: []string{"Pierce Brown"}, RuntimeSec: 972 * 60, SeriesName: "Red Rising Saga", SeriesSeq: 1},
 			cand: metadata.AudibleIdentity{ASIN: "RR", Title: "Red Rising", Subtitle: "Red Rising Saga, Book 1", Authors: []string{"Pierce Brown"}, RuntimeMin: 972},
 		},
 		{
@@ -404,6 +450,16 @@ func TestDecideASIN_ReviewTighteningKeepsGoodMatches(t *testing.T) {
 			name: "Le Guin, Ursula K. swap",
 			book: asinBookFacts{Title: "The Dispossessed", Authors: []string{"Le Guin, Ursula K."}, RuntimeSec: 900 * 60},
 			cand: metadata.AudibleIdentity{ASIN: "UD", Title: "The Dispossessed", Authors: []string{"Ursula K. Le Guin"}, RuntimeMin: 900},
+		},
+		{
+			name: "series-note subtitle volume equals known position",
+			book: asinBookFacts{Title: "Overlord", Authors: []string{"Kugane Maruyama"}, RuntimeSec: 10 * 3600, SeriesName: "Overlord", SeriesSeq: 2},
+			cand: metadata.AudibleIdentity{ASIN: "O2", Title: "Overlord", Subtitle: "Overlord, Vol. 2", Authors: []string{"Kugane Maruyama"}, RuntimeMin: 610},
+		},
+		{
+			name: "year in the parenthetical is not a volume",
+			book: asinBookFacts{Title: "Dune (Unabridged, 2019)", Authors: []string{"Frank Herbert"}, RuntimeSec: 1260 * 60},
+			cand: metadata.AudibleIdentity{ASIN: "DU", Title: "Dune", Authors: []string{"Frank Herbert"}, RuntimeMin: 1260},
 		},
 		{
 			name: "abridged with runtime corroboration",

@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
 // last-edited: 2026-10-01
 
@@ -109,8 +109,10 @@ const (
 	asinHistoryChangeType = "fetched"
 	asinHistoryBatch      = "asin-backfill-"
 
-	// asinProposalSampleCap bounds the would-write list a run keeps in its
-	// result. The count is always exact; the cap is logged when it binds.
+	// asinProposalSampleCap bounds, PER KIND (Via), the list a run keeps in
+	// its result, so a large has-ASIN population cannot crowd out the match
+	// rows that need review. Counts stay exact; the cap is logged when it
+	// binds.
 	asinProposalSampleCap = 2000
 
 	asinISBNSearchResults  = 10
@@ -233,10 +235,14 @@ type asinBackfillTally struct {
 	// asinSuspect: a book's EXISTING ASIN looked up to a product whose title
 	// or author disagrees with the book (a wrong ASIN from an older writer).
 	asinSuspect atomic.Int64
+	// asinUnverified: the existing ASIN's product failed only the title or
+	// author rule (formatting can cause that on a correct ASIN).
+	asinUnverified atomic.Int64
 
 	// proposals is the would-write / written list, capped at
 	// asinProposalSampleCap; proposalsDropped counts what the cap left out.
 	proposals        []asinProposal
+	proposalsPerVia  map[string]int
 	proposalsDropped int
 
 	searched    atomic.Int64 // books that reached the Audible search (Limit counts these)
@@ -290,10 +296,14 @@ type asinProposal struct {
 func (t *asinBackfillTally) propose(p asinProposal) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if len(t.proposals) >= asinProposalSampleCap {
+	if t.proposalsPerVia == nil {
+		t.proposalsPerVia = map[string]int{}
+	}
+	if t.proposalsPerVia[p.Via] >= asinProposalSampleCap {
 		t.proposalsDropped++
 		return
 	}
+	t.proposalsPerVia[p.Via]++
 	t.proposals = append(t.proposals, p)
 }
 
@@ -328,6 +338,9 @@ type asinBackfillResult struct {
 	// ASINSuspect counts books whose existing ASIN names a different
 	// product; each is listed in Proposals with via "asin_suspect".
 	ASINSuspect int64 `json:"asin_suspect"`
+	// ASINUnverified counts books whose existing ASIN's product failed only
+	// the title/author rule; listed with via "asin_unverified".
+	ASINUnverified int64 `json:"asin_unverified"`
 
 	// Proposals lists the books written (or, in a dry run, that would be),
 	// up to asinProposalSampleCap; ProposalsDropped counts the rest.
@@ -359,8 +372,8 @@ func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResu
 		ISBNLookups: t.isbnLookups.Load(), ISBNWritten: t.isbnWritten.Load(), ISBNNone: t.isbnNone.Load(),
 		SkippedRecentISBNMiss: t.skippedRecentISBNMiss.Load(),
 		SkippedManualOnly:     t.skippedManualOnly.Load(), SkippedMerged: t.skippedMerged.Load(),
-		ASINSuspect: t.asinSuspect.Load(),
-		Proposals:   proposals, ProposalsDropped: dropped,
+		ASINSuspect: t.asinSuspect.Load(), ASINUnverified: t.asinUnverified.Load(),
+		Proposals: proposals, ProposalsDropped: dropped,
 	}
 }
 
@@ -560,6 +573,10 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 			t.skippedNoAuthor.Add(1)
 			return nil
 		}
+		if authorsManualOnly(authors) {
+			t.skippedManualOnly.Add(1)
+			return nil
+		}
 		return r.fillISBNByASIN(ctx, &b, searchTitle, authors)
 	}
 
@@ -600,6 +617,10 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 		t.skippedNoAuthor.Add(1)
 		return nil
 	}
+	if authorsManualOnly(authors) {
+		t.skippedManualOnly.Add(1)
+		return nil
+	}
 
 	facts, err := r.bookFacts(&b, title, authors)
 	if err != nil {
@@ -618,8 +639,8 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// A request Audible refuses as malformed for THIS book (400, 404,
-		// 422) will fail the same way every run: remember it like a miss so
+		// A request Audible refuses as malformed for THIS book (400, 422)
+		// will fail the same way every run: remember it like a miss so
 		// it is not retried every run, and do not let a run of them abort
 		// the op as an outage would.
 		if isPermanentRequestError(err) {
@@ -946,16 +967,34 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book, 
 		return nil
 	}
 	if id != nil && strings.EqualFold(strings.TrimSpace(id.ASIN), asin) {
-		_, titleOK := asinTitleMatch(title, id.Title, id.Subtitle)
-		if !titleOK || !asinAuthorMatches(authors, id.Authors) {
-			t.asinSuspect.Add(1)
-			t.propose(asinProposal{BookID: b.ID, Title: title, ASIN: asin, AudibleTitle: id.Title, Via: "asin_suspect"})
-			r.log.Info("existing asin names a different product; nothing written: book_id=%s asin=%s title=%s audible_title=%s",
-				logger.SanitizeLogValue(b.ID), asin, logger.SanitizeLogValue(title), logger.SanitizeLogValue(id.Title))
-			r.markRaw(isbnMissKey(b.ID), asinMissMarker{At: r.now().UTC(), Outcome: "asin_suspect"})
+		facts, ferr := r.bookFacts(b, title, authors)
+		if ferr != nil {
+			r.bookError(b.ID, "read book facts", ferr)
 			return nil
 		}
-		isbn = normISBN13(id.ISBN)
+		switch v := checkKnownIdentity(facts, *id); v {
+		case identityOK:
+			isbn = normISBN13(id.ISBN)
+		default:
+			// Suspect: a hard veto fired (runtime, series position,
+			// volume, box set, edition) -- the ASIN very likely names a
+			// different product. Unverified: only the title or author
+			// rule failed, which a differently formatted title ("Mistborn
+			// 1 - The Final Empire") or credit can cause on a correct
+			// ASIN. Neither writes an ISBN; both are listed apart.
+			via := "asin_unverified"
+			if v == identitySuspect {
+				via = "asin_suspect"
+				t.asinSuspect.Add(1)
+			} else {
+				t.asinUnverified.Add(1)
+			}
+			t.propose(asinProposal{BookID: b.ID, Title: title, ASIN: asin, AudibleTitle: id.Title, Via: via})
+			r.log.Info("existing asin not confirmed (%s); no isbn written: book_id=%s asin=%s title=%s audible_title=%s",
+				via, logger.SanitizeLogValue(b.ID), asin, logger.SanitizeLogValue(title), logger.SanitizeLogValue(id.Title))
+			r.markRaw(isbnMissKey(b.ID), asinMissMarker{At: r.now().UTC(), Outcome: via})
+			return nil
+		}
 	}
 	if isbn == "" {
 		t.isbnNone.Add(1)
@@ -1008,13 +1047,34 @@ func (r *asinBackfillRun) manualOnly(b *database.Book, searchTitle string) (bool
 		return false, errors.New(g.ReadErr)
 	}
 	reason, _ := applygate.ManualOnlyDetail(b, nil, applygate.TranscribedSearch{Query: searchTitle}, g)
-	return reason != "", nil
+	if reason != "" {
+		return true, nil
+	}
+	// The transcribed title is evidence even when the book has a title of
+	// its own (an intro that says "Doctor Who" on a book named otherwise).
+	if b.TranscribedTitle != nil && applygate.IsOwnerManualOnly(*b.TranscribedTitle, "") {
+		return true, nil
+	}
+	return false, nil
+}
+
+// authorsManualOnly reports whether any author credit names a manual-only
+// library ("Big Finish Productions", "Doctor Who"). Big Finish ranges outside
+// Doctor Who (Sherlock Holmes, Dorian Gray) carry no franchise word in their
+// title or series, only in the credit.
+func authorsManualOnly(names []string) bool {
+	for _, n := range names {
+		if applygate.IsOwnerManualOnly("", n) {
+			return true
+		}
+	}
+	return false
 }
 
 // candidateManualOnly reports whether an Audible product names a manual-only
-// library in its title, subtitle or any series.
+// library in its title, subtitle, any series or any author credit.
 func candidateManualOnly(c metadata.AudibleIdentity) bool {
-	if applygate.IsOwnerManualOnly(c.Title, c.Subtitle) {
+	if applygate.IsOwnerManualOnly(c.Title, c.Subtitle) || authorsManualOnly(c.Authors) {
 		return true
 	}
 	for _, s := range c.Series {
@@ -1026,14 +1086,16 @@ func candidateManualOnly(c metadata.AudibleIdentity) bool {
 }
 
 // isPermanentRequestError reports whether err is Audible refusing the request
-// itself (400, 404, 422), as opposed to throttling, auth or an outage.
+// itself (400, 422), as opposed to throttling, auth or an outage. A 404 on a
+// search endpoint means something moved on Audible's side, not a bad query,
+// so it is an error like any other.
 func isPermanentRequestError(err error) bool {
 	var pe *metadata.ProviderStatusError
 	if !errors.As(err, &pe) {
 		return false
 	}
 	switch pe.Status {
-	case 400, 404, 422:
+	case 400, 422:
 		return true
 	}
 	return false

@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_match.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f7c1b9e-58a2-4d0f-9e61-c2a4b8d07e15
 // last-edited: 2026-10-01
 
@@ -117,17 +117,44 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 	}
 	// A volume number the book carries only in its own trailing parenthetical
 	// ("Red Rising (Book 2)") was stripped for the title compare; it must
-	// still name the product's position.
-	if n, has := titleParenVolume(b.Title); has {
+	// still name the product's position, in the series that is the book's
+	// (by name) when the product lists it, so a universe series ("Cosmere
+	// 2") cannot stand in for the book's own ("Mistborn 1").
+	parenVol, hasParenVol := titleParenVolume(b.Title)
+	if hasParenVol {
 		agree := false
-		for _, s := range c.Series {
-			if seq, ok := parseSeriesSequence(s.Sequence); ok && seq == n {
+		for _, s := range relevantSeries(b, c) {
+			if seq, ok := parseSeriesSequence(s.Sequence); ok && seq == parenVol {
 				agree = true
 				break
 			}
 		}
 		if !agree {
 			return asinVerdict{Reason: rejectVolume}
+		}
+	}
+	// A series-note subtitle is exact only when its number (if any) is the
+	// book's known position. "Overlord, Vol. 2" against a book at #1 is a
+	// different volume; against a book with no known position it is only a
+	// partial match (it needs the ISBN or two corroborations).
+	if title == titleSeriesNote {
+		known := float64(0)
+		switch {
+		case b.SeriesSeq > 0:
+			known = float64(b.SeriesSeq)
+		case hasParenVol:
+			known = parenVol
+		}
+		n, hasNum := subtitleVolume(c.Subtitle)
+		switch {
+		case !hasNum:
+			title = titleExact
+		case known > 0 && n == known:
+			title = titleExact
+		case known > 0:
+			return asinVerdict{Reason: rejectVolume}
+		default:
+			title = titlePartial
 		}
 	}
 
@@ -187,14 +214,17 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 	if seriesAgree {
 		evidence = append(evidence, evidenceSeries)
 	}
+	// Vetoes before corroboration: checkKnownIdentity accepts an
+	// uncorroborated or weak-partial product (the stored ASIN is the claim),
+	// so every veto must have run by the time those two can be returned.
+	if isRiskyEdition(c) && !runtimeAgree {
+		return asinVerdict{Reason: rejectEdition}
+	}
 	if len(evidence) == 0 {
 		return asinVerdict{Reason: rejectUncorroborated}
 	}
 	if title == titlePartial && !isbnAgree && len(evidence) < 2 {
 		return asinVerdict{Reason: rejectPartialTitle}
-	}
-	if isRiskyEdition(c) && !runtimeAgree {
-		return asinVerdict{Reason: rejectEdition}
 	}
 	return asinVerdict{Pass: true, Evidence: evidence}
 }
@@ -268,9 +298,20 @@ func decideASIN(b asinBookFacts, cands []metadata.AudibleIdentity) asinDecision 
 
 // Title match kinds.
 const (
-	titleExact   = 1 // the titles agree (an Audible subtitle that is only a series note counts)
+	titleExact   = 1 // the titles agree
 	titlePartial = 2 // one side carries a subtitle the other lacks
+	// titleSeriesNote: the titles agree and Audible's subtitle is a series
+	// note ("Red Rising Saga, Book 1"). Exact only when a number in that
+	// note equals the book's known position; see evaluateASINCandidate.
+	titleSeriesNote = 3
 )
+
+// seriesNoteRe: an Audible subtitle that only places the book in a series.
+var seriesNoteRe = regexp.MustCompile(`(?i)\b(book|bk|volume|vol|series|saga|trilogy|cycle|chronicles|sequence)\b|#\s*\d`)
+
+// companionRe: a subtitle naming a related but different work. Never a
+// series note, whatever else it says.
+var companionRe = regexp.MustCompile(`(?i)\b(companion|prequel|sequel|novella|novelette|short\s+stor(?:y|ies)|side\s+story|spin[\s-]*off|tie[\s-]*in|anthology|collection|guide|world\s+of)\b`)
 
 // asinTitleMatch is gate rule 1. See the package comment above. It reports
 // whether the titles match and, when they do, how strongly.
@@ -291,10 +332,13 @@ func asinTitleMatch(bookTitle, candTitle, candSubtitle string) (int, bool) {
 		}
 		// A subtitle the book lacks makes this partial, unless it only
 		// names the series ("Red Rising Saga, Book 1").
-		if cSub != "" && !seriesParenRe.MatchString(candSubtitle) {
-			return titlePartial, true
+		if cSub == "" {
+			return titleExact, true
 		}
-		return titleExact, true
+		if seriesNoteRe.MatchString(candSubtitle) && !companionRe.MatchString(candSubtitle) {
+			return titleSeriesNote, true
+		}
+		return titlePartial, true
 	}
 	// Audible keeps the subtitle in its own field; the book may carry it in
 	// the title ("Golden Son: Book II of the Red Rising Trilogy").
@@ -506,16 +550,50 @@ var nameSuffixes = map[string]bool{"jr": true, "sr": true, "ii": true, "iii": tr
 // Series / ISBN
 // ---------------------------------------------------------------------------
 
-// normSeriesName is normTitle without a trailing "series"/"saga"/"trilogy".
+// normSeriesName is normTitle without trailing parentheticals ("(Light
+// Novel)") and without trailing qualifiers ("series", "saga", "trilogy",
+// "cycle", "chronicles", "universe", "sequence", "books", "novels"), so the
+// same series under two spellings compares equal and the series veto is not
+// skipped by a qualifier.
 func normSeriesName(s string) string {
-	n := normTitle(s)
-	for _, suf := range []string{" series", " saga", " trilogy"} {
-		if strings.HasSuffix(n, suf) && len(n) > len(suf) {
-			n = strings.TrimSuffix(n, suf)
+	s = strings.TrimSpace(s)
+	for {
+		m := trailingParenRe.FindStringIndex(s)
+		if m == nil || m[0] == 0 {
 			break
+		}
+		s = strings.TrimSpace(s[:m[0]])
+	}
+	n := normTitle(s)
+	for changed := true; changed; {
+		changed = false
+		for _, suf := range []string{" series", " saga", " trilogy", " cycle", " chronicles", " universe", " sequence", " books", " novels", " light novel"} {
+			if strings.HasSuffix(n, suf) && len(n) > len(suf) {
+				n = strings.TrimSuffix(n, suf)
+				changed = true
+			}
 		}
 	}
 	return n
+}
+
+// relevantSeries is the product's series that name the book's series (or,
+// with none recorded, the book's title); all of them when none does.
+func relevantSeries(b asinBookFacts, c metadata.AudibleIdentity) []metadata.AudibleSeriesRef {
+	want := normSeriesName(b.SeriesName)
+	if want == "" {
+		want = normSeriesName(stripSeriesParen(b.Title))
+	}
+	var out []metadata.AudibleSeriesRef
+	for _, s := range c.Series {
+		if want != "" && normSeriesName(s.Title) == want {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return c.Series
+	}
+	return out
 }
 
 var seqNumberRe = regexp.MustCompile(`\d+(\.\d+)?`)
@@ -551,8 +629,34 @@ func isRiskyEdition(c metadata.AudibleIdentity) bool {
 	return riskyEditionRe.MatchString(c.Title) || riskyEditionRe.MatchString(c.Subtitle)
 }
 
-// parenNumberRe finds the number in a stripped parenthetical.
-var parenNumberRe = regexp.MustCompile(`#?\s*(\d+(?:\.\d+)?)`)
+// volumeNumberRe finds a number named as a volume ("Book 2", "Vol. 3",
+// "#4", "Part 2").
+var volumeNumberRe = regexp.MustCompile(`(?i)(?:\bbooks?|\bbk|\bvol(?:ume)?|\bpart|\bno|#)\.?\s*(\d+(?:\.\d+)?)`)
+
+// bareNumberRe finds any number.
+var bareNumberRe = regexp.MustCompile(`\d+(?:\.\d+)?`)
+
+// volumeIn returns the volume a note names: the number after a volume word,
+// or, with none, the note's only number when it is not a year.
+func volumeIn(note string) (float64, bool) {
+	if m := volumeNumberRe.FindStringSubmatch(note); m != nil {
+		if f, err := strconv.ParseFloat(m[1], 64); err == nil {
+			return f, true
+		}
+	}
+	nums := bareNumberRe.FindAllString(note, -1)
+	if len(nums) != 1 {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(nums[0], 64)
+	if err != nil || (f >= 1800 && f <= 2100) {
+		return 0, false
+	}
+	return f, true
+}
+
+// subtitleVolume is volumeIn for an Audible subtitle.
+func subtitleVolume(sub string) (float64, bool) { return volumeIn(sub) }
 
 // titleParenVolume returns the volume number in the trailing parenthetical
 // that stripSeriesParen would remove ("Red Rising (Book 2)" -> 2), and
@@ -564,15 +668,7 @@ func titleParenVolume(raw string) (float64, bool) {
 	if stripped == raw {
 		return 0, false
 	}
-	m := parenNumberRe.FindStringSubmatch(raw[len(stripped):])
-	if m == nil {
-		return 0, false
-	}
-	f, err := strconv.ParseFloat(m[1], 64)
-	if err != nil {
-		return 0, false
-	}
-	return f, true
+	return volumeIn(raw[len(stripped):])
 }
 
 // parseSeriesSequence reads the first number in an Audible sequence ("1",
@@ -621,4 +717,32 @@ func normISBN13(s string) string {
 		return core + strconv.Itoa((10-sum%10)%10)
 	}
 	return ""
+}
+
+// Known-identity verdicts (checkKnownIdentity).
+const (
+	identityOK         = "ok"
+	identityUnverified = "unverified"
+	identitySuspect    = "suspect"
+)
+
+// checkKnownIdentity judges a product looked up BY the book's own stored
+// ASIN. The ASIN is the identity claim, so no corroboration is needed, but
+// every veto of the gate still applies: a product that is a box set, another
+// volume, a different edition (abridged/dramatized without a runtime match)
+// or far off in runtime is not this book, and its ISBN must not be written.
+// A product that fails only the title or author rule is "unverified": a
+// differently formatted title or credit causes that on a correct ASIN.
+func checkKnownIdentity(b asinBookFacts, c metadata.AudibleIdentity) string {
+	v := evaluateASINCandidate(b, c)
+	switch {
+	case v.Pass:
+		return identityOK
+	case v.Reason == rejectUncorroborated || v.Reason == rejectPartialTitle:
+		return identityOK
+	case v.Reason == rejectTitle || v.Reason == rejectAuthor:
+		return identityUnverified
+	default:
+		return identitySuspect
+	}
 }

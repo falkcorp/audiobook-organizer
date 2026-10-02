@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b8f4c71-6e05-4d39-a1c7-9e3d0f5a8b26
 // last-edited: 2026-10-01
 
@@ -730,34 +730,81 @@ func TestASINBackfill_BadRequestIsRememberedNotTripped(t *testing.T) {
 	}
 }
 
-// An existing ASIN whose product is a different book (wrong title or author)
-// is reported as asin_suspect: listed, nothing written.
-func TestASINBackfill_SuspectExistingASINWritesNothing(t *testing.T) {
+// An existing ASIN is checked against the product it names. A product that a
+// hard veto rejects (here an abridged edition with no runtime to corroborate
+// it) is asin_suspect; one that fails only the title or author rule is
+// asin_unverified. Neither gets an ISBN; both are listed under their own kind.
+func TestASINBackfill_SuspectAndUnverifiedExistingASINWriteNothing(t *testing.T) {
 	gs := metadata.AudibleIdentity{ASIN: "B00GOLDSON", Title: "Golden Son", Authors: []string{"Pierce Brown"}, ISBN: "9781480590441"}
 	other := metadata.AudibleIdentity{ASIN: "B00OTHERAU", Title: "Red Rising", Authors: []string{"Somebody Else"}, ISBN: "9781480590442"}
-	fa := &fakeAudible{byASIN: map[string]*metadata.AudibleIdentity{"B00GOLDSON": &gs, "B00OTHERAU": &other}}
+	abr := metadata.AudibleIdentity{ASIN: "B00ABRIDGD", Title: "Red Rising", FormatType: "abridged", Authors: []string{"Pierce Brown"}, ISBN: "9781480590443"}
+	fa := &fakeAudible{byASIN: map[string]*metadata.AudibleIdentity{"B00GOLDSON": &gs, "B00OTHERAU": &other, "B00ABRIDGD": &abr}}
 	p, s := newASINTestPlugin(t, fa)
 	aid := mkAuthor(t, s, "Pierce Brown")
 	wrongTitle := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00GOLDSON")})
 	wrongAuthor := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00OTHERAU")})
+	abridged := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00ABRIDGD")})
 
 	res := runASIN(t, p, `{"dry_run":false}`).res(t)
-	if res.ASINSuspect != 2 || res.ISBNWritten != 0 {
+	if res.ASINUnverified != 2 || res.ASINSuspect != 1 || res.ISBNWritten != 0 {
 		t.Fatalf("result = %+v", res)
 	}
-	for _, b := range []*database.Book{wrongTitle, wrongAuthor} {
+	for _, b := range []*database.Book{wrongTitle, wrongAuthor, abridged} {
 		if i13, _ := isbnOf(t, s, b.ID); i13 != "" {
-			t.Fatalf("suspect book %s got isbn %q", b.ID, i13)
+			t.Fatalf("book %s got isbn %q", b.ID, i13)
 		}
 	}
-	n := 0
+	via := map[string]string{}
 	for _, pr := range res.Proposals {
-		if pr.Via == "asin_suspect" {
-			n++
+		via[pr.BookID] = pr.Via
+	}
+	if via[wrongTitle.ID] != "asin_unverified" || via[wrongAuthor.ID] != "asin_unverified" || via[abridged.ID] != "asin_suspect" {
+		t.Fatalf("proposal kinds = %v", via)
+	}
+}
+
+// A Big Finish range outside Doctor Who carries the franchise only in the
+// author credit: the book's credit and a candidate's credit both stop it.
+func TestASINBackfill_ManualOnlyByAuthorCredit(t *testing.T) {
+	sh := metadata.AudibleIdentity{ASIN: "BSH0000001", Title: "The Hound of the Baskervilles", Authors: []string{"Big Finish Productions"}, RuntimeMin: 120}
+	fa := &fakeAudible{byTitle: map[string][]metadata.AudibleIdentity{"the hound of the baskervilles": {sh}}}
+	p, s := newASINTestPlugin(t, fa)
+	bf := mkAuthor(t, s, "Big Finish Productions")
+	byCredit := mkBook(t, s, &database.Book{Title: "The Hound of the Baskervilles", AuthorID: &bf})
+	res := runASIN(t, p, `{"dry_run":false}`).res(t)
+	if res.SkippedManualOnly != 1 || fa.calls.Load() != 0 || asinOf(t, s, byCredit.ID) != "" {
+		t.Fatalf("book credit: result = %+v calls = %d", res, fa.calls.Load())
+	}
+
+	p2, s2 := newASINTestPlugin(t, fa)
+	doyle := mkAuthor(t, s2, "Arthur Conan Doyle")
+	byCand := mkBook(t, s2, &database.Book{Title: "The Hound of the Baskervilles", AuthorID: &doyle})
+	res = runASIN(t, p2, `{"dry_run":false}`).res(t)
+	if res.SkippedManualOnly != 1 || asinOf(t, s2, byCand.ID) != "" {
+		t.Fatalf("candidate credit: result = %+v", res)
+	}
+}
+
+// The proposal list is capped per kind, so a flood of one kind cannot crowd
+// out the others.
+func TestASINBackfill_ProposalCapIsPerKind(t *testing.T) {
+	tl := newASINBackfillTally()
+	for i := 0; i < asinProposalSampleCap+10; i++ {
+		tl.propose(asinProposal{BookID: fmt.Sprint("l", i), Via: "asin_lookup"})
+	}
+	tl.propose(asinProposal{BookID: "m1", Via: "match"})
+	res := tl.result(true, 0)
+	if res.ProposalsDropped != 10 {
+		t.Fatalf("dropped = %d, want 10", res.ProposalsDropped)
+	}
+	found := false
+	for _, p := range res.Proposals {
+		if p.BookID == "m1" {
+			found = true
 		}
 	}
-	if n != 2 {
-		t.Fatalf("suspect proposals = %d, want 2: %+v", n, res.Proposals)
+	if !found {
+		t.Fatal("the match proposal was crowded out")
 	}
 }
 
