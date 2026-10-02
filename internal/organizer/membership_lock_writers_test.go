@@ -1,5 +1,5 @@
 // file: internal/organizer/membership_lock_writers_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4f7a26-3b8e-4d19-a6c5-0e2d8b1f7a43
 // last-edited: 2026-10-02
 
@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
@@ -63,4 +64,25 @@ func TestInPlaceAdopt_WaitsForNoGroupSentinel(t *testing.T) {
 		func() bool { g := getInPlaceBook(t, store, b.ID).VersionGroupID; return g == nil || *g == "" })
 	require.NotNil(t, landing.Resolution)
 	require.Equal(t, OutcomeAdopted, landing.Resolution.Outcome)
+}
+
+// CreateOrganizedVersion planned versionGroupID from `book` as the caller
+// read it. An original that changed group since is refused under the locks:
+// it is not moved out of a group nobody locked into the stale one.
+func TestCreateOrganizedVersion_RefusesOriginalMovedAfterRead(t *testing.T) {
+	f := vptest.New(t)
+	f.Book(t, vptest.Spec{ID: "h-inc", Group: "h", Primary: "true"})
+	orig := f.Book(t, vptest.Spec{ID: "orig", Group: "g", Primary: "true", State: "imported"})
+	snapshot, err := f.S.GetBookByID(orig)
+	require.NoError(t, err)
+	_, err = f.S.ModifyBook(orig, func(b *database.Book) error {
+		h, no := "h", false
+		b.VersionGroupID, b.IsPrimaryVersion = &h, &no
+		return nil
+	})
+	require.NoError(t, err)
+
+	landing := &Landing{Path: filepath.Join(t.TempDir(), "organized-orig.m4b")}
+	_, _ = NewService(f.S).CreateOrganizedVersion(snapshot, landing, "", &noopLogger{})
+	require.Equal(t, "h", f.GroupOf(t, orig), "the original stays in the group it moved to")
 }

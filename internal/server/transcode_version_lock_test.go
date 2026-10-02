@@ -1,5 +1,5 @@
 // file: internal/server/transcode_version_lock_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d8c2b47-9a1e-4f36-8b70-e4a2c9f1d053
 // last-edited: 2026-10-02
 
@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
@@ -39,4 +40,30 @@ func TestRecordTranscodedVersion_WaitsForGroupHolder(t *testing.T) {
 				func() bool { return f.GroupOf(t, orig) == tc.group })
 		})
 	}
+}
+
+// The original's group is read before the (long) transcode. When the
+// original changes group in the meantime, the locked write is refused and
+// re-planned from a fresh read: the original stays in its new group and the
+// M4B version joins that group, not the stale one.
+func TestRecordTranscodedVersion_ReplansWhenOriginalMoved(t *testing.T) {
+	f := vptest.New(t)
+	f.Book(t, vptest.Spec{ID: "g-inc", Group: "g", Primary: "true"})
+	f.Book(t, vptest.Spec{ID: "h-inc", Group: "h", Primary: "true"})
+	orig := f.Book(t, vptest.Spec{ID: "orig", Group: "g", Primary: "false"})
+	snapshot, err := f.S.GetBookByID(orig)
+	require.NoError(t, err)
+	_, err = f.S.ModifyBook(orig, func(b *database.Book) error {
+		h := "h"
+		b.VersionGroupID = &h
+		return nil
+	})
+	require.NoError(t, err)
+
+	nb, _, err := recordTranscodedVersion(context.Background(), f.S, snapshot,
+		transcodeOutput(t, f.Root, "orig-out"), 128, f.Root, noLog)
+	require.NoError(t, err)
+	require.Equal(t, "h", f.GroupOf(t, orig))
+	require.NotNil(t, nb)
+	require.Equal(t, "h", f.GroupOf(t, nb.ID), "the M4B joins the original's current group")
 }

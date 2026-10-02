@@ -31,7 +31,11 @@ func TestWriteHashValidation_LinkWaitsForGroupHolder(t *testing.T) {
 			vptest.RequireWaitsForHolder(t,
 				func() func() { return versionprimary.LockGroup(held) },
 				func() error {
-					return writeHashValidation(f.S, n, b.FilePath, "deadbeef", itunes.ImportModeImport, &g, logger.New("test"))
+					dropped, err := writeHashValidation(f.S, n, b.FilePath, "deadbeef", itunes.ImportModeImport, &g, logger.New("test"))
+					if dropped {
+						t.Error("link dropped")
+					}
+					return err
 				},
 				func() bool { return f.GroupOf(t, n) == "" })
 			require.Equal(t, "g", f.GroupOf(t, n))
