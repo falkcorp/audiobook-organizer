@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 7c2e4a90-1d6f-4b38-8e57-3a9b5c1f0d26
 // last-edited: 2026-10-02
 
@@ -686,9 +686,13 @@ func pendingHold(prev *database.CatalogAuthorState, now database.CatalogAuthorSt
 
 // emptyAccepted reports whether a never-harvested author's empty streak
 // (as of the run that computed st) has reached ShortAcceptRuns runs over
-// ZeroTotalAcceptWindow.
+// ZeroTotalAcceptWindow, and the run itself completed. A run that ended
+// partial or failed (an owned-ASIN lookup failed, say) is not evidence of
+// an empty catalog, and settleZero's tally move (partial -> complete)
+// assumes a complete final.
 func emptyAccepted(st database.CatalogAuthorState) bool {
-	return st.ShortKind == shortEmpty && st.ShortRuns >= ShortAcceptRuns && st.ShortSince != nil &&
+	return st.State == database.CatalogHarvestComplete &&
+		st.ShortKind == shortEmpty && st.ShortRuns >= ShortAcceptRuns && st.ShortSince != nil &&
 		st.LastAttemptAt.Sub(*st.ShortSince) >= ZeroTotalAcceptWindow
 }
 

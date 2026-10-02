@@ -1,5 +1,5 @@
 // file: internal/server/catalog_harvest_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e6b9d24-7a1c-4f85-b2e0-5c8d1a4f7e93
 // last-edited: 2026-10-02
 //
@@ -83,6 +83,17 @@ func (s *Server) RegisterCatalogHarvestOp(reg *opsregistry.Registry) error {
 		Plugin:      "catalog",
 		DisplayName: "Harvest Author Catalogs",
 		Description: "Lists every Audible title by each owned author into the author catalog (cat:* keys only; never touches books or files). Dry run by default: census and estimates only.",
+		// Expected WARNs (not an outage): a legitimately empty first harvest
+		// -- never-harvested authors whose Audible listing really is empty --
+		// trips the zero-total breaker, or leaves the run too small to judge,
+		// on every run until those authors' empty streak spans
+		// catalog.ZeroTotalAcceptWindow (7 days). With a daily schedule that
+		// is a breaker-trip WARN per day for up to 7 days. The message splits
+		// the zero answers into first-time and repeat-zero: a run whose zeros
+		// are mostly repeat-zero is those empty authors working through their
+		// window; an outage shows up as first-time zeros from authors that
+		// have entries on file.
+		//
 		// Cancellable: an author interrupted mid-listing is recorded partial
 		// and retried next run.
 		Cancellable:     true,
