@@ -1,5 +1,5 @@
 # file: scripts/mutation-tables/catalog-harvest-rules.muts
-# version: 1.6.0
+# version: 1.7.0
 # guid: 4c1e7a93-8b2d-4f60-a5e9-2d6b0f8c3a71
 # last-edited: 2026-10-02
 #
@@ -72,3 +72,7 @@ M48 hold-overwrites-total | internal/catalog/harvest.go | s/\t\thold = \*prev\n/
 M49 no-all-answered-fallback | internal/catalog/harvest.go | s/\tif pop < ZeroBreakerMinAuthors \{\n\t\tzeros, pop, scope = len/\tif false {\n\t\tzeros, pop, scope = len/
 M50 unjudged-unfiled-completes | internal/catalog/harvest.go | s/\(verdict == zeroUnjudged \&\& !o\.filed\)/false/
 M51 settle-ignores-newer-state | internal/catalog/harvest.go | s/if cur == nil \x7c\x7c cur\.OpID != o\.final\.OpID \x7c\x7c !cur\.LastAttemptAt\.Equal\(o\.final\.LastAttemptAt\) \{/if cur == nil {/
+M52 empty-streak-not-carried | internal/catalog/harvest.go | s/\t\t\t\thold\.ShortKind, hold\.ShortRuns, hold\.ShortDelivered, hold\.ShortSince =\n\t\t\t\t\to\.final\.ShortKind/\t\t\t\t_, _, _, _ =\n\t\t\t\t\to.final.ShortKind/
+M53 empty-accepted-without-window | internal/catalog/harvest.go | s/ \&\&\n\t\tst\.LastAttemptAt\.Sub\(\*st\.ShortSince\) >= ZeroTotalAcceptWindow/ \&\& true/
+M54 empty-never-accepted | internal/catalog/harvest.go | s/if !o\.filed \&\& emptyAccepted\(o\.final\) \{/if false {/
+M55 empty-streak-restarts | internal/catalog/harvest.go | s/if prev != nil \&\& prev\.ShortKind == shortEmpty \&\& prev\.ShortRuns > 0 \{/if false {/
