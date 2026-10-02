@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: de3f610d-605b-4338-96c9-3316a2dcd8d4
 // last-edited: 2026-10-01
 
@@ -222,8 +222,10 @@ func TestSearchFanout_AgreeingOwnASINWins(t *testing.T) {
 			{Title: "A Wanted Man", Author: "Lee Child", Narrator: "Jeff Harding", Series: "Jack Reacher", SeriesPosition: "17",
 				DurationSec: 36000, CoverURL: "c", ASIN: "B000OTHER1"},
 			// Agrees on the title only (titleSubset): another author, a
-			// runtime far off -- the stored ASIN still names this book.
-			{Title: "A Wanted Man", Author: "Someone Else", DurationSec: 9000, CoverURL: "c", ASIN: own},
+			// runtime far off -- the stored ASIN still names this book. It
+			// names the book's position (#17); the name alone would not do
+			// (positionNamed).
+			{Title: "A Wanted Man", Author: "Someone Else", SeriesPosition: "17", DurationSec: 9000, CoverURL: "c", ASIN: own},
 		}
 	}}
 	book := reacherBook(36000)

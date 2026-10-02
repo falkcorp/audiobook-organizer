@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 3.7.0
+// version: 3.7.1
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
 // last-edited: 2026-10-01
 
@@ -437,7 +437,9 @@ func newVariantService(t *testing.T, title string, src metadata.MetadataSource) 
 // with an author every variant costs a SearchByTitleAndAuthor call, so a search
 // that did not stop at the hit would be seen querying the next variant.
 func TestSearchMetadataForBook_SeriesDecoratedTitleFallsBackToVariants(t *testing.T) {
-	src := &recordingSource{name: "audible", hitOn: "Assertions", author: "Bern Dean"}
+	// The hit names the book's position (#4): the name alone is never strong
+	// for a book with one -- siblings can share it (positionNamed).
+	src := &recordingSource{name: "audible", hitOn: "Assertions", author: "Bern Dean", position: "4"}
 	svc := newVariantService(t, "Eternal Dominion, Book 04 - Assertions", src)
 
 	resp, err := svc.searchMetadataForBook(context.Background(), nil, "b1", "", "Bern Dean", "", "", SearchOptions{})
@@ -454,9 +456,10 @@ func TestSearchMetadataForBook_SeriesDecoratedTitleFallsBackToVariants(t *testin
 
 // A strong hit (the cleaned title's words + the book's author, no runtime to
 // disagree with) in the first fan-out round stops the fan-out: no further
-// variant is asked.
+// variant is asked. The hit names the book's position: the name alone is not
+// strong (positionNamed).
 func TestSearchMetadataForBook_StrongHitStopsFanout(t *testing.T) {
-	src := &recordingSource{name: "audible", hitOn: "Assertions", author: "Bern Dean"}
+	src := &recordingSource{name: "audible", hitOn: "Assertions", author: "Bern Dean", position: "4"}
 	svc := newVariantService(t, "Eternal Dominion, Book 04 - Assertions", src)
 
 	if _, err := svc.searchMetadataForBook(context.Background(), nil, "b1", "", "Bern Dean", "", "", SearchOptions{}); err != nil {

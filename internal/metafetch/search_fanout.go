@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
 // last-edited: 2026-10-01
 
@@ -87,8 +87,8 @@ func (st *fanoutSource) answered(ctx context.Context) bool {
 // answer naming a different series position than the title's
 // (positionConflicts: "Rogue Ascension 7" for book 8), plus an answer that
 // carries the book's own ASIN AND agrees with the book (strongCriteria.
-// ownASINAgrees: no other position, and its runtime or title), which no
-// title filter may drop.
+// ownASINAgrees: the book's position and no other, and its title or a
+// runtime within positionOverrideTolerance), which no title filter may drop.
 func (p fanoutParams) accept(v queryVariant, rs []metadata.BookMetadata) []metadata.BookMetadata {
 	kept := v.accept(rs, p.people)
 	p.strong.noteNameEvidence(rs)
