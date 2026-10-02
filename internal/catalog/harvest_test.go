@@ -24,8 +24,18 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
+
+// TestMain lifts the process-wide Audible token bucket (2 req/s built in)
+// for the fixture server, which is local; the pacing under test is the
+// harvest's own sub-limiter, not the provider bucket.
+func TestMain(m *testing.M) {
+	providerhttp.SetLimits(metadata.SourceIDAudible, providerhttp.Limits{RPS: 10000, Burst: 1000, MaxRetries: 0, Timeout: 10 * time.Second})
+	providerhttp.ResetProvider(metadata.SourceIDAudible)
+	os.Exit(m.Run())
+}
 
 // fixtureServer serves the recorded Tchaikovsky listing, sliced by the
 // request's 0-indexed page and num_results, and records every request.
@@ -436,6 +446,23 @@ func TestRun_ConcurrentCoAuthorsShareOneEntry(t *testing.T) {
 	e, _ = st.GetEntryByProviderID("audible", "us", "SHARED")
 	if e.StaleSince != nil || len(e.HarvestedBy) != 11 {
 		t.Errorf("co-authored entry after one author dropped it: stale=%v harvested_by=%d", e.StaleSince, len(e.HarvestedBy))
+	}
+}
+
+// TestUpsert_SameProviderIDTwiceInOneBatch: one call carrying the same pid
+// twice must produce one entry (the second occurrence sees the first).
+func TestUpsert_SameProviderIDTwiceInOneBatch(t *testing.T) {
+	st, _ := openCatalog(t)
+	e := BuildEntry(metadata.CatalogProduct{ASIN: "DUP", Title: "Twice", Authors: []metadata.CatalogContributor{{Name: "A B", ASIN: "AB"}}}, "audible", "us")
+	res, err := st.UpsertEntries([]database.CatalogUpsert{{Entry: e}, {Entry: e}}, "ab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IDs[0] != res.IDs[1] || res.Created != 1 || res.Updated != 1 {
+		t.Errorf("result = %+v; want one id, 1 created + 1 updated", res)
+	}
+	if n, _ := st.CountEntries(); n != 1 {
+		t.Errorf("entries = %d; want 1", n)
 	}
 }
 
