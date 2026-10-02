@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
 // last-edited: 2026-10-02
 
@@ -786,13 +786,25 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 	// no hand-off or recheck under the group's lock may see that half-done.
 	newGID := ulid.Make().String()
 	unlockGroups, lockedGroups, err := versionprimary.LockBookGroups(h.store, []string{id}, newGID)
+	if errors.Is(err, versionprimary.ErrMembershipChanged) {
+		httputil.RespondWithErrorFields(c, http.StatusConflict,
+			"the source book kept changing version group while the split was starting; nothing was split, retry",
+			"split_source_grouped", map[string]any{"book_id": id})
+		return
+	}
 	if err != nil {
 		httputil.InternalError(c, "failed to lock the version group; nothing was written", err)
 		return
 	}
 	release := onceRelease(unlockGroups)
 	defer release()
+	// The raw stored id: the new member is created in exactly the source's
+	// group, padding and all. A blank (whitespace-only) id is no group: it
+	// locked nothing, so the source takes the mint path below.
 	versionGroupID := lockedGroups[id]
+	if strings.TrimSpace(versionGroupID) == "" {
+		versionGroupID = ""
+	}
 	existing := 1 // the source alone, when it has no group yet
 	if versionGroupID != "" {
 		existingVersions, err := h.store.GetBooksByVersionGroup(versionGroupID)
@@ -811,7 +823,7 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 	var prevPrimary *bool
 	if versionGroupID == "" {
 		updated, err := h.modifyBook(id, func(cur *database.Book) error {
-			if g := versionGroupOf(cur); g != "" {
+			if g := strings.TrimSpace(versionGroupOf(cur)); g != "" {
 				// Grouped by someone else since the locked read: that group
 				// is not locked here, so refuse rather than split into it.
 				return errSplitSourceGrouped

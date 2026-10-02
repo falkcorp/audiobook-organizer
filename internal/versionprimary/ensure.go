@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
 // last-edited: 2026-10-02
 
@@ -178,9 +178,14 @@ type BookReader interface {
 // the locks are dropped and the read repeated (at most five times, then
 // ErrMembershipChanged). A missing book is skipped.
 //
-// It returns the release and each book's group as read under the locks
-// ("" = none), which a caller writing through ModifyBook checks there
-// (CheckMembership). Order rules as LockGroups: merge lock before, book write
+// It returns the release and each book's group as read under the locks: the
+// raw stored value, untrimmed ("" = none), because callers write it back as a
+// group id (SplitVersion creates the new member in it) and group ids are not
+// normalised on write, so a trimmed copy would name a different group. The
+// locks themselves are taken on the trimmed id (groupStripe), and
+// CheckMembership trims both sides, so padding never changes which stripe is
+// held or whether a membership check passes. A caller writing through
+// ModifyBook checks the group there (CheckMembership). Order rules as LockGroups: merge lock before, book write
 // locks inside, never another stripe or a hand-off while holding these.
 func LockBookGroups(store BookReader, ids []string, extra ...string) (unlock func(), groups map[string]string, err error) {
 	read := func() (map[string]string, error) {
@@ -193,7 +198,7 @@ func LockBookGroups(store BookReader, ids []string, extra ...string) (unlock fun
 			if b == nil {
 				continue
 			}
-			m[id] = groupOfBook(b)
+			m[id] = rawGroupOfBook(b)
 		}
 		return m, nil
 	}
@@ -218,6 +223,14 @@ func LockBookGroups(store BookReader, ids []string, extra ...string) (unlock fun
 		unlock()
 	}
 	return nil, nil, fmt.Errorf("lock version groups of %v: %w", ids, ErrMembershipChanged)
+}
+
+// rawGroupOfBook is b's version group exactly as stored; "" for none.
+func rawGroupOfBook(b *database.Book) string {
+	if b == nil || b.VersionGroupID == nil {
+		return ""
+	}
+	return *b.VersionGroupID
 }
 
 // groupOfBook is b's version group, trimmed; "" for none.
