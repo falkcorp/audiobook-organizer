@@ -9,6 +9,7 @@ import (
 	"errors"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -202,4 +203,48 @@ func TestClaimBookFilePathKey_PointsTheKeyOnlyWhileTheRowIsThere(t *testing.T) {
 	got, err = s.GetBookFileByPath("/lib/x.mp3")
 	require.NoError(t, err)
 	require.Equal(t, fa.ID, got.ID)
+}
+
+// TestClaimBookFilePathKey_SerializesWithAMove: a move of the claimed row that
+// lands between the claim's re-read and its write must not leave the key
+// naming the row's old book. The hook starts the move at exactly that point;
+// the claim holds the source's owner stripe, so the move commits after it and
+// its own path-key write is the last one.
+func TestClaimBookFilePathKey_SerializesWithAMove(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	s.WaitForWarmup()
+	a, err := s.CreateBook(&Book{Title: "A", FilePath: "/lib/A"})
+	require.NoError(t, err)
+	b, err := s.CreateBook(&Book{Title: "B", FilePath: "/lib/B"})
+	require.NoError(t, err)
+	fa := &BookFile{BookID: a.ID, FilePath: "/lib/y.mp3"}
+	require.NoError(t, s.CreateBookFile(fa))
+
+	moved := make(chan error, 1)
+	claimPathKeyBeforeSetHook = func() {
+		claimPathKeyBeforeSetHook = nil
+		go func() { moved <- s.MoveBookFilesToBook([]string{fa.ID}, a.ID, b.ID) }()
+		// Give an unserialized move every chance to commit first.
+		select {
+		case err := <-moved:
+			moved <- err
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	t.Cleanup(func() { claimPathKeyBeforeSetHook = nil })
+
+	_, err = s.ClaimBookFilePathKey(a.ID, fa.ID, "/lib/y.mp3")
+	require.NoError(t, err)
+	require.NoError(t, <-moved)
+
+	got, err := s.GetBookFileByPath("/lib/y.mp3")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, b.ID, got.BookID, "the key names the row where it now lives")
+	v, closer, err := s.db.Get([]byte("book_file_path:" + bookFilePathCRC("/lib/y.mp3")))
+	require.NoError(t, err)
+	require.Equal(t, b.ID+":"+fa.ID, string(v))
+	_ = closer.Close()
 }
