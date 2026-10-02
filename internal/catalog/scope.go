@@ -108,7 +108,6 @@ func BuildScope(ctx context.Context, store any, rd ScopeReader) ([]ScopeAuthor, 
 	}
 
 	type acc struct {
-		name  string
 		asins map[string]bool
 		books int
 	}
