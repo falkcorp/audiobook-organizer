@@ -1,7 +1,7 @@
 // file: internal/server/organize_service_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-08-22
+// last-edited: 2026-10-02
 
 package server
 
@@ -135,6 +135,15 @@ func TestOrganizeService_PerformOrganize_WithBooks(t *testing.T) {
 			getAuthorByIDCalled = true
 			mu.Unlock()
 			return &database.Author{ID: id, Name: "Test Author"}, nil
+		},
+		// CreateOrganizedVersion locks the source book's planned version
+		// group (versionprimary.LockPlannedGroups), which reads the row
+		// back; a source the store can't find is refused as changed.
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			if id != "book-1" {
+				return nil, nil
+			}
+			return &database.Book{ID: "book-1", Title: "Test Book", AuthorID: &authorID, FilePath: srcFile, Format: "mp3"}, nil
 		},
 		// The book is outside RootDir, so organizeBooks routes it through
 		// CreateOrganizedVersion, which persists the organized copy via
