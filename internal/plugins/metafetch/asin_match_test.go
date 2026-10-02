@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_match_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a2d6e41-0b7c-4f93-a5e8-1c9f3d7b2a60
 // last-edited: 2026-10-01
 
@@ -49,8 +49,8 @@ func TestASINTitleMatches(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := asinTitleMatches(tc.book, tc.cand, tc.sub); got != tc.want {
-				t.Fatalf("asinTitleMatches(%q, %q, %q) = %v, want %v", tc.book, tc.cand, tc.sub, got, tc.want)
+			if _, got := asinTitleMatch(tc.book, tc.cand, tc.sub); got != tc.want {
+				t.Fatalf("asinTitleMatch(%q, %q, %q) = %v, want %v", tc.book, tc.cand, tc.sub, got, tc.want)
 			}
 		})
 	}
@@ -269,4 +269,153 @@ func TestDecideASIN(t *testing.T) {
 			t.Fatalf("got %+v, want no_match with an author reject", d)
 		}
 	})
+}
+
+// TestDecideASIN_ReviewFalsePositives pins the false positives the 2026-10-01
+// adversarial review reproduced against the gate. Every case used to come
+// back matched.
+func TestDecideASIN_ReviewFalsePositives(t *testing.T) {
+	zahn := []string{"Timothy Zahn"}
+	cases := []struct {
+		name  string
+		book  asinBookFacts
+		cands []metadata.AudibleIdentity
+	}{
+		{
+			name: "franchise head title, runtime alone",
+			book: asinBookFacts{Title: "Star Wars", Authors: zahn, RuntimeSec: 15 * 3600},
+			cands: []metadata.AudibleIdentity{
+				{ASIN: "B1", Title: "Star Wars: Heir to the Empire", Authors: zahn, RuntimeMin: 860},
+				{ASIN: "B2", Title: "Star Wars: Dark Force Rising", Authors: zahn, RuntimeMin: 1020},
+				{ASIN: "B3", Title: "Star Wars: Thrawn", Authors: zahn, RuntimeMin: 1250},
+			},
+		},
+		{
+			name: "book's own (Book 2) stripped, runtime alone",
+			book: asinBookFacts{Title: "Red Rising (Book 2)", Authors: []string{"Pierce Brown"}, RuntimeSec: 17 * 3600},
+			cands: []metadata.AudibleIdentity{
+				{ASIN: "B00I2VWW5U", Title: "Red Rising", Authors: []string{"Pierce Brown"}, RuntimeMin: 973,
+					Series: []metadata.AudibleSeriesRef{{Title: "Red Rising", Sequence: "1"}}},
+			},
+		},
+		{
+			name: "box set by series range",
+			book: asinBookFacts{Title: "Red Rising", Authors: []string{"Pierce Brown"}, SeriesName: "Red Rising Saga", SeriesSeq: 1},
+			cands: []metadata.AudibleIdentity{
+				{ASIN: "BOX", Title: "Red Rising", Subtitle: "Books 1-3", Authors: []string{"Pierce Brown"},
+					Series: []metadata.AudibleSeriesRef{{Title: "Red Rising Saga", Sequence: "1-3"}}},
+			},
+		},
+		{
+			name: "box set by range sequence only",
+			book: asinBookFacts{Title: "Red Rising", Authors: []string{"Pierce Brown"}, SeriesName: "Red Rising Saga", SeriesSeq: 1},
+			cands: []metadata.AudibleIdentity{
+				{ASIN: "BOX", Title: "Red Rising", Authors: []string{"Pierce Brown"},
+					Series: []metadata.AudibleSeriesRef{{Title: "Red Rising Saga", Sequence: "1-3"}}},
+			},
+		},
+		{
+			name: "abridged, series only",
+			book: asinBookFacts{Title: "Dune", Authors: []string{"Frank Herbert"}, SeriesName: "Dune", SeriesSeq: 1},
+			cands: []metadata.AudibleIdentity{
+				{ASIN: "ABR", Title: "Dune", FormatType: "abridged", Authors: []string{"Frank Herbert"},
+					Series: []metadata.AudibleSeriesRef{{Title: "Dune", Sequence: "1"}}},
+			},
+		},
+		{
+			name: "dramatized, series only",
+			book: asinBookFacts{Title: "Dune", Authors: []string{"Frank Herbert"}, SeriesName: "Dune", SeriesSeq: 1},
+			cands: []metadata.AudibleIdentity{
+				{ASIN: "DRA", Title: "Dune", Subtitle: "Dramatized Adaptation", Authors: []string{"Frank Herbert"},
+					Series: []metadata.AudibleSeriesRef{{Title: "Dune", Sequence: "1"}}},
+			},
+		},
+		{
+			name:  "spelled-out volume",
+			book:  asinBookFacts{Title: "The Wheel of Time", Authors: []string{"Robert Jordan"}, RuntimeSec: 30 * 3600},
+			cands: []metadata.AudibleIdentity{{ASIN: "W13", Title: "The Wheel of Time: Book Thirteen", Authors: []string{"Robert Jordan"}, RuntimeMin: 1800}},
+		},
+		{
+			name:  "season N",
+			book:  asinBookFacts{Title: "Hitchhiker", Authors: []string{"Douglas Adams"}, RuntimeSec: 5 * 3600},
+			cands: []metadata.AudibleIdentity{{ASIN: "S2", Title: "Hitchhiker: Season 2", Authors: []string{"Douglas Adams"}, RuntimeMin: 300}},
+		},
+		{
+			name:  "part N of M",
+			book:  asinBookFacts{Title: "Les Miserables", Authors: []string{"Victor Hugo"}, RuntimeSec: 20 * 3600},
+			cands: []metadata.AudibleIdentity{{ASIN: "P1", Title: "Les Miserables: Part 1 of 3", Authors: []string{"Victor Hugo"}, RuntimeMin: 1200}},
+		},
+		{
+			name:  "Henry, James is not Henry James",
+			book:  asinBookFacts{Title: "The Ambassadors", Authors: []string{"Henry, James"}, RuntimeSec: 18 * 3600},
+			cands: []metadata.AudibleIdentity{{ASIN: "HJ", Title: "The Ambassadors", Authors: []string{"Henry James"}, RuntimeMin: 1080}},
+		},
+		{
+			name:  "omnibus subtitle",
+			book:  asinBookFacts{Title: "Foundation", Authors: []string{"Isaac Asimov"}, SeriesName: "Foundation", SeriesSeq: 1},
+			cands: []metadata.AudibleIdentity{{ASIN: "OMN", Title: "Foundation", Subtitle: "The Omnibus", Authors: []string{"Isaac Asimov"}, Series: []metadata.AudibleSeriesRef{{Title: "Foundation", Sequence: "1"}}}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if d := decideASIN(tc.book, tc.cands); d.Outcome == asinOutcomeMatched {
+				t.Fatalf("matched %s (evidence %v); want no match", d.ASIN, d.Evidence)
+			}
+		})
+	}
+}
+
+// TestDecideASIN_ReviewTighteningKeepsGoodMatches is the control set: the
+// tightened gate must still match these.
+func TestDecideASIN_ReviewTighteningKeepsGoodMatches(t *testing.T) {
+	cases := []struct {
+		name string
+		book asinBookFacts
+		cand metadata.AudibleIdentity
+	}{
+		{
+			name: "exact title, runtime",
+			book: asinBookFacts{Title: "Red Rising", Authors: []string{"Pierce Brown"}, RuntimeSec: 972 * 60},
+			cand: metadata.AudibleIdentity{ASIN: "RR", Title: "Red Rising", Authors: []string{"Pierce Brown"}, RuntimeMin: 972},
+		},
+		{
+			name: "series-note subtitle is still exact",
+			book: asinBookFacts{Title: "Red Rising", Authors: []string{"Pierce Brown"}, RuntimeSec: 972 * 60},
+			cand: metadata.AudibleIdentity{ASIN: "RR", Title: "Red Rising", Subtitle: "Red Rising Saga, Book 1", Authors: []string{"Pierce Brown"}, RuntimeMin: 972},
+		},
+		{
+			name: "(Book 2) agrees with the product's position",
+			book: asinBookFacts{Title: "Golden Son (Book 2)", Authors: []string{"Pierce Brown"}, RuntimeSec: 1100 * 60},
+			cand: metadata.AudibleIdentity{ASIN: "GS", Title: "Golden Son", Authors: []string{"Pierce Brown"}, RuntimeMin: 1100,
+				Series: []metadata.AudibleSeriesRef{{Title: "Red Rising", Sequence: "2"}}},
+		},
+		{
+			name: "partial title with ISBN",
+			book: asinBookFacts{Title: "Leviathan Wakes", Authors: []string{"James S. A. Corey"}, ISBNs: []string{"9781611133158"}},
+			cand: metadata.AudibleIdentity{ASIN: "LW", Title: "Leviathan Wakes: The Expanse, Book 1", Authors: []string{"James S. A. Corey"}, ISBN: "9781611133158"},
+		},
+		{
+			name: "partial title with runtime and series",
+			book: asinBookFacts{Title: "Leviathan Wakes", Authors: []string{"James S. A. Corey"}, RuntimeSec: 1240 * 60, SeriesName: "The Expanse", SeriesSeq: 1},
+			cand: metadata.AudibleIdentity{ASIN: "LW", Title: "Leviathan Wakes: A Novel of the Expanse", Authors: []string{"James S. A. Corey"}, RuntimeMin: 1240,
+				Series: []metadata.AudibleSeriesRef{{Title: "The Expanse", Sequence: "1"}}},
+		},
+		{
+			name: "Le Guin, Ursula K. swap",
+			book: asinBookFacts{Title: "The Dispossessed", Authors: []string{"Le Guin, Ursula K."}, RuntimeSec: 900 * 60},
+			cand: metadata.AudibleIdentity{ASIN: "UD", Title: "The Dispossessed", Authors: []string{"Ursula K. Le Guin"}, RuntimeMin: 900},
+		},
+		{
+			name: "abridged with runtime corroboration",
+			book: asinBookFacts{Title: "Dune", Authors: []string{"Frank Herbert"}, RuntimeSec: 300 * 60},
+			cand: metadata.AudibleIdentity{ASIN: "ABR", Title: "Dune", FormatType: "abridged", Authors: []string{"Frank Herbert"}, RuntimeMin: 300},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if d := decideASIN(tc.book, []metadata.AudibleIdentity{tc.cand}); d.Outcome != asinOutcomeMatched {
+				t.Fatalf("outcome %s rejects %v; want matched", d.Outcome, d.Rejects)
+			}
+		})
+	}
 }
