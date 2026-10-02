@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
-// last-edited: 2026-09-12
+// last-edited: 2026-10-02
 
 package maintenance
 
@@ -109,10 +109,10 @@ func verifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, reporter s
 	summary := fmt.Sprintf(
 		"sentinel_set=%t books=%d keys=%d missing_live=%d missing_trashed=%d "+
 			"extra_row_gone=%d extra_row_moved=%d malformed=%d undecodable_rows=%d "+
-			"stale_markers=%d unmarked_undecodable=%d",
+			"stale_markers=%d unmarked_undecodable=%d markers_not_in_set=%d",
 		rep.SentinelSet, rep.BooksScanned, rep.IndexKeysScanned, rep.MissingLive,
 		rep.MissingTrashed, rep.ExtraRowGone, rep.ExtraRowMoved, rep.Malformed, rep.UndecodableRows,
-		rep.StaleMarkers, rep.UnmarkedUndecodable)
+		rep.StaleMarkers, rep.UnmarkedUndecodable, rep.MarkersNotInSet)
 	_ = reporter.Log(slog.LevelInfo, summary)
 	if b, mErr := json.Marshal(rep); mErr == nil {
 		_ = reporter.Log(slog.LevelInfo, "report: "+string(b))
@@ -128,6 +128,16 @@ func verifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, reporter s
 		return fmt.Errorf("book_atpath index cannot see %d undecodable book row(s) (no marker), so "+
 			"LiveBookIDsAtPath can report their path as free; run maintenance.book-atpath-index-backfill (%s)",
 			rep.UnmarkedUndecodable, summary)
+	}
+	if rep.MarkersNotInSet > 0 {
+		// Verify already re-added these ids to the in-memory set, so lookups
+		// fail closed again from here on. Still a failure: the set is supposed
+		// to be a superset of disk, so something lost them, and until the
+		// re-add every lookup skipped those undecodable rows.
+		return fmt.Errorf("book_atpath index: %d undecodable marker(s) on disk were missing from the in-memory "+
+			"marker set, so LiveBookIDsAtPath failed open for them; verify re-added them (sample ids: %v). "+
+			"This is a bug in the marker set's bookkeeping, please report it (%s)",
+			rep.MarkersNotInSet, rep.SampleNotInSet, summary)
 	}
 	if !rep.Complete() {
 		return fmt.Errorf("book_atpath index verify is incomplete: %d book row(s) did not decode "+

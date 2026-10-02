@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
 // last-edited: 2026-10-02
 
@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -234,6 +235,14 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 		mode = "rebuild"
 	}
 
+	// One run at a time, store-wide, including the startup backfill, which
+	// does not share the maintenance ops' ConcurrencyKey (atpathRunLock).
+	unlockRun, err := p.atpathRuns.lock(ctx)
+	if err != nil {
+		return res, fmt.Errorf("wait for book_atpath run lock: %w", err)
+	}
+	defer unlockRun()
+
 	if !force {
 		switch _, closer, err := p.db.Get([]byte(bookAtPathBackfillKey)); {
 		case err == nil:
@@ -318,6 +327,9 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 			flush := func() error {
 				if buffered == 0 {
 					return nil
+				}
+				if bookAtPathBackfillBeforeChunkCommit != nil {
+					bookAtPathBackfillBeforeChunkCommit()
 				}
 				if err := batch.Commit(pebble.Sync); err != nil {
 					return fmt.Errorf("chunk commit: %w", err)
@@ -444,13 +456,21 @@ type BookAtPathIndexReport struct {
 	ExtraRowMoved int `json:"extra_row_moved"`
 	// Malformed keys have no NUL separator or an empty id. Informational.
 	Malformed int `json:"malformed"`
-	// Undecodable-row marker drift. Verify is report-only; only the backfill
-	// and rebuild recompute markers. StaleMarkers name a row that is gone or
+	// Undecodable-row marker drift. Verify never writes markers to disk; only
+	// the backfill and rebuild recompute them. StaleMarkers name a row that is gone or
 	// now decodes (harmless: the reader handles both). UnmarkedUndecodable
 	// rows have no marker, so once the sentinel is set the reader cannot see
 	// them and their path can read as free: run the rebuild.
 	StaleMarkers        int `json:"stale_markers"`
 	UnmarkedUndecodable int `json:"unmarked_undecodable"`
+	// MarkersNotInSet are markers on disk that the in-memory marker set
+	// (pebble_store_atpath_markers.go) does not hold. The readers consult only
+	// the set, so for these the lookup fails OPEN: a row that cannot be
+	// decoded is invisible and its path can read as free. The set must be a
+	// superset of disk, so any count here is a bug. Verify re-adds these ids
+	// to the set (in memory only; it writes nothing to disk), which restores
+	// the fail-closed behaviour at once, and reports them so the bug is seen.
+	MarkersNotInSet int `json:"markers_not_in_set"`
 
 	// Samples are "<id> <path>" strings (keys, quoted, for malformed), at most
 	// bookAtPathSampleCap per class, sorted.
@@ -459,13 +479,16 @@ type BookAtPathIndexReport struct {
 	SampleExtra          []string `json:"sample_extra,omitempty"`
 	SampleMalformed      []string `json:"sample_malformed,omitempty"`
 	SampleUnmarked       []string `json:"sample_unmarked_undecodable,omitempty"`
+	SampleNotInSet       []string `json:"sample_markers_not_in_set,omitempty"`
 }
 
 // Complete reports whether every book row was decodable and therefore checked.
 func (r BookAtPathIndexReport) Complete() bool { return r.UndecodableRows == 0 }
 
 // VerifyBookAtPathIndex diffs the book_atpath: index against the book rows
-// from one snapshot. Read-only.
+// from one snapshot. Read-only on disk; the one thing it changes is the
+// in-memory marker set, which it re-syncs to a superset of disk
+// (MarkersNotInSet).
 //
 // Sequential for the same reason as the backfill: two single-cursor scans with
 // a map lookup per key. A few hundred milliseconds at library scale.
@@ -477,9 +500,20 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 	}
 	rep.SentinelSet = built
 
-	// The in-memory marker set is copied with the snapshot; the marker check
-	// below point-reads only those ids instead of range-scanning the family
-	// (pebble_store_atpath_markers.go).
+	// No backfill/rebuild may run meanwhile: a worker opens a brief window in
+	// which its marker is on disk but not yet re-noted in the set, which would
+	// show up below as a false MarkersNotInSet (atpathRunLock).
+	unlockRun, err := p.atpathRuns.lock(ctx)
+	if err != nil {
+		return rep, fmt.Errorf("verify book_atpath: wait for run lock: %w", err)
+	}
+	defer unlockRun()
+
+	// The in-memory marker set is copied with the snapshot so the two can be
+	// compared. Unlike the readers, verify range-scans the marker family on
+	// disk: it is a cold maintenance op, and a marker missing from the set is
+	// exactly the drift in which the readers fail open, which a point read of
+	// the set's own ids could never see.
 	snap, markerIDs, err := p.undecodableMarkerSnapshot()
 	if err != nil {
 		return rep, fmt.Errorf("verify book_atpath: %w", err)
@@ -544,15 +578,34 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 		return rep, fmt.Errorf("verify book_atpath: scan index: %w", err)
 	}
 
-	markers := make(map[string]bool)
-	onDisk, err := markersOnDiskIn(snap, markerIDs)
-	if err != nil {
-		return rep, fmt.Errorf("verify book_atpath: read undecodable markers: %w", err)
+	inSet := make(map[string]bool, len(markerIDs))
+	for _, id := range markerIDs {
+		inSet[id] = true
 	}
+	markers := make(map[string]bool)
+	onDisk, err := markersInRange(snap)
+	if err != nil {
+		return rep, fmt.Errorf("verify book_atpath: scan undecodable markers: %w", err)
+	}
+	var notInSet []string
 	for _, id := range onDisk {
 		markers[id] = true
 		if !undecodable[id] {
 			rep.StaleMarkers++
+		}
+		if !inSet[id] {
+			rep.MarkersNotInSet++
+			notInSet = append(notInSet, id)
+		}
+	}
+	rep.SampleNotInSet = sampleSorted(append([]string(nil), notInSet...))
+	if len(notInSet) > 0 {
+		atpathMarkerLog.Error("verify book_atpath: %d undecodable marker(s) on disk were missing from the in-memory "+
+			"set, so lookups failed open for them; re-adding (sample %v)", len(notInSet), logger.SanitizeLogValue(fmt.Sprint(rep.SampleNotInSet)))
+		for _, id := range notInSet {
+			if err := p.noteUndecodableMarker(id); err != nil {
+				return rep, fmt.Errorf("verify book_atpath: re-add marker %s to the set: %w", id, err)
+			}
 		}
 	}
 	var unmarked []string
