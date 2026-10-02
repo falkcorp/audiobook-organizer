@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.32.0
+// version: 1.32.2
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-01
 
@@ -507,18 +507,18 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 		rawQuery: rawQuery, literal: literal, parsed: parsed, legacy: legacy}
 }
 
-// fingerprintPrefix starts every fingerprint this searchInputVersion writes.
+// FingerprintPrefix starts every fingerprint this searchInputVersion writes.
 // Version "1" fingerprints are bare hex and older rows have none, so a row an
 // earlier ladder wrote is told apart by its stamp alone (isCurrentFingerprint)
 // -- no book read, no input resolution. That is what lets GetCachedCandidates
 // filter every such row, including one a user-typed query wrote, whose legacy
 // fingerprint the book's own title can never reproduce.
-const fingerprintPrefix = "v" + searchInputVersion + ":"
+const FingerprintPrefix = "v" + searchInputVersion + ":"
 
 // isCurrentFingerprint reports whether fp was written by this
-// searchInputVersion (fingerprintPrefix).
+// searchInputVersion (FingerprintPrefix).
 func isCurrentFingerprint(fp string) bool {
-	return strings.HasPrefix(fp, fingerprintPrefix)
+	return strings.HasPrefix(fp, FingerprintPrefix)
 }
 
 // fingerprint hashes the questions the ladder asks for these inputs: the
@@ -526,7 +526,7 @@ func isCurrentFingerprint(fp string) bool {
 // variants) and the resolved title, author and narrator. Unlike the cache's
 // SourceHash, which hashes the caller's HINTS, this sees an author resolved
 // from AuthorID, so renaming the author changes it. It carries
-// fingerprintPrefix.
+// FingerprintPrefix.
 func (in searchInputs) fingerprint(bookTitle string) string {
 	h := sha256.New()
 	parts := []string{searchInputVersion, bookTitle, in.title, in.author, in.narrator}
@@ -539,7 +539,7 @@ func (in searchInputs) fingerprint(bookTitle string) string {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}
-	return fingerprintPrefix + hex.EncodeToString(h.Sum(nil))
+	return FingerprintPrefix + hex.EncodeToString(h.Sum(nil))
 }
 
 // legacyFingerprint is the fingerprint the searchInputVersion "1" ladder
@@ -884,7 +884,7 @@ func (mfs *Service) searchMetadataForBook(
 			}
 
 			if asinToLookup != "" && strings.EqualFold(strings.TrimSpace(r.ASIN), asinToLookup) {
-				detail := "The result carries the book's own ASIN but names another series position or agrees with the book on neither runtime nor title, so it is not ranked first: the stored ASIN may be a sibling's."
+				detail := "The result carries the book's own ASIN but names another series position, names none of the book's position or numbers, or agrees with the book on neither runtime nor title, so it is not ranked first: the stored ASIN may be a sibling's."
 				if strong.ownASINAgrees(r) {
 					detail = "The result carries the book's own ASIN, names no other series position, and agrees with the book on its runtime or title; it is ranked above every result that does not."
 				}

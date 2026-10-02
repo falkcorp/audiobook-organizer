@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout_round5_probe_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b6f2a8e-4c1d-4e7a-9f35-8d2c61e0a4b7
 // last-edited: 2026-10-01
 
@@ -181,35 +181,49 @@ func TestSearchFanoutProbe_DirectLookupSiblingEveryFormat(t *testing.T) {
 	}
 }
 
-// R4-1 fix (2): a title with numbers but no parsed position ("Metro 2033":
-// four digits are never a slot). A provider's explicit series_position that
-// is none of the title's numbers is not strong unless the runtime is within
-// 2%; it stays in the pool.
+// R4-1 fix (2), as narrowed by the round-5 re-review (S2): a title with
+// numbers but no parsed position ("Metro 2033": four digits are never a
+// slot). An answer whose title carries all of the book's numbers is that book
+// whatever series_position a provider gives it (Metro 2033 is its series' #1;
+// "2001: A Space Odyssey" its #1): strong in round 1. One whose title does
+// not carry them is refuted by a series_position outside them unless its
+// runtime is within 2%.
 func TestSearchFanoutProbe_ExplicitPositionOutsideTheTitlesNumbers(t *testing.T) {
+	for _, tc := range []struct{ title, author, sp string }{
+		{"Metro 2033", "Dmitry Glukhovsky", "1"},
+		{"Metro 2033", "Dmitry Glukhovsky", "2"},
+		{"2001: A Space Odyssey", "Arthur C. Clarke", "1"},
+	} {
+		t.Run(tc.title+" sp "+tc.sp, func(t *testing.T) {
+			ans := metadata.BookMetadata{Title: tc.title, Author: tc.author, SeriesPosition: tc.sp, DurationSec: 34000, CoverURL: "c"}
+			src := serving(ans)
+			svc := fanoutHarness(t, probeBook(tc.title, 36000), src)
+			resp, err := svc.SearchMetadataForBookWithOptions("b1", "", tc.author, "Some Reader", "", SearchOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, []string{tc.title}, resultTitles(resp))
+			assert.Equal(t, 1, src.callCount(), "the title carries the book's own number: strong")
+		})
+	}
+
+	// The own-ASIN rule: "Metro" at #2 carries none of the book's numbers.
 	const title, author = "Metro 2033", "Dmitry Glukhovsky"
-	other := metadata.BookMetadata{Title: title, Author: author, Series: "Metro", SeriesPosition: "2", DurationSec: 34000, CoverURL: "c"}
-	src := serving(other)
-	svc := fanoutHarness(t, probeBook(title, 36000), src)
-	resp, err := svc.SearchMetadataForBookWithOptions("b1", "", author, "Some Reader", "", SearchOptions{})
-	require.NoError(t, err)
-	assert.Greater(t, src.callCount(), 1, "series_position 2 is not strong for a title numbered 2033")
-	assert.Equal(t, []string{title}, resultTitles(resp), "kept: the provider may number it differently")
-
-	same := other
-	same.SeriesPosition = ""
-	src = serving(same)
-	svc = fanoutHarness(t, probeBook(title, 36000), src)
-	_, err = svc.SearchMetadataForBookWithOptions("b1", "", author, "Some Reader", "", SearchOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, src.callCount(), "without the other position it is strong")
-
-	// The own-ASIN rule asks the same.
 	p := parseSearchTitle(title, author, "")
 	c := newStrongCriteria(p, p.Title, title, "B0METRO001", author, 36000)
-	other.ASIN = "B0METRO001"
-	assert.False(t, c.ownASINAgrees(other))
+	other := metadata.BookMetadata{Title: "Metro", Author: author, SeriesPosition: "2", DurationSec: 34000, ASIN: "B0METRO001"}
+	require.True(t, c.numbersFit(other.Title))
+	assert.False(t, c.ownASINAgrees(other), "series_position 2, and no 2033 in the title")
+	// The explicit-position rule on its own: positionNamed already refuses an
+	// answer without the book's numbers, so no search can tell this branch
+	// from its absence, and it is pinned here.
+	assert.True(t, c.explicitPositionConflicts(other), "series_position 2, and no 2033 in the title")
+	assert.False(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: title, SeriesPosition: "2", DurationSec: 34000}),
+		"the title carries 2033 (carriesAllNumbers)")
+	assert.False(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "Metro", SeriesPosition: "2", DurationSec: 36300}),
+		"within 2%: the provider's numbering differs")
 	other.DurationSec = 36300
-	assert.True(t, c.ownASINAgrees(other), "within 2%: the provider's numbering differs")
+	assert.False(t, c.ownASINAgrees(other), "still no 2033 in the title: any book of the series (positionNamed)")
+	other.DurationSec, other.Title = 34000, title
+	assert.True(t, c.ownASINAgrees(other), "the title carries 2033")
 }
 
 // R4-1 fix (1): an own-ASIN answer whose title carries a number the book's
@@ -301,7 +315,7 @@ func TestSharesPerson_PlaceholdersNameNobody(t *testing.T) {
 // R4-4(c): a row an earlier search version wrote is filtered on read however
 // it was asked -- a user-typed query's legacy fingerprint, which the book's
 // title never reproduces, and a row with no fingerprint at all -- and a row
-// this version wrote (fingerprintPrefix) is returned as stored.
+// this version wrote (FingerprintPrefix) is returned as stored.
 func TestGetCachedCandidates_EveryOldRowIsFiltered(t *testing.T) {
 	f := newVerdictFixture(t)
 	const title = "Rogue Ascension 8"
