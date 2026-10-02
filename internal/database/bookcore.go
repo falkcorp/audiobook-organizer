@@ -1,7 +1,7 @@
 // file: internal/database/bookcore.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7f3c1e28-9a4d-4b61-8c2f-bookcore000001
-// last-edited: 2026-09-13
+// last-edited: 2026-10-01
 
 package database
 
@@ -91,6 +91,10 @@ type BookCore struct {
 	Quantity            *int       `json:"quantity,omitempty"`
 	MarkedForDeletion   *bool      `json:"marked_for_deletion,omitempty"`
 	MarkedForDeletionAt *time.Time `json:"marked_for_deletion_at,omitempty"`
+	// PreTrashLibraryState is the LibraryState a trash path overwrote with
+	// "deleted", so a restore can put it back (database.RestoreLibraryStateFromTrash).
+	// Nil when the row is live, or was trashed by a path that kept its state.
+	PreTrashLibraryState *string `json:"pre_trash_library_state,omitempty"`
 	// QuarantineReason is set when a file is moved to .failed/. Non-nil means quarantined.
 	QuarantineReason *string    `json:"quarantine_reason,omitempty"`
 	QuarantinedAt    *time.Time `json:"quarantined_at,omitempty"`
@@ -238,6 +242,7 @@ func (b *Book) Core() BookCore {
 		Quantity:                 b.Quantity,
 		MarkedForDeletion:        b.MarkedForDeletion,
 		MarkedForDeletionAt:      b.MarkedForDeletionAt,
+		PreTrashLibraryState:     b.PreTrashLibraryState,
 		QuarantineReason:         b.QuarantineReason,
 		QuarantinedAt:            b.QuarantinedAt,
 		CreatedAt:                b.CreatedAt,
@@ -359,6 +364,7 @@ func (c *BookCore) ToBook() Book {
 		Quantity:                 c.Quantity,
 		MarkedForDeletion:        c.MarkedForDeletion,
 		MarkedForDeletionAt:      c.MarkedForDeletionAt,
+		PreTrashLibraryState:     c.PreTrashLibraryState,
 		QuarantineReason:         c.QuarantineReason,
 		QuarantinedAt:            c.QuarantinedAt,
 		CreatedAt:                c.CreatedAt,

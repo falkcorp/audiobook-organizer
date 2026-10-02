@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package audiobooks
 
@@ -484,6 +484,8 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 			}
 			row.MarkedForDeletion = new(true)
 			row.MarkedForDeletionAt = &now
+			// The label overwrites the state; remember it for a restore.
+			database.RememberLibraryStateBeforeTrash(row)
 			row.LibraryState = new("deleted")
 			return nil
 		})

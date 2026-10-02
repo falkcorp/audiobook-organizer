@@ -1,7 +1,7 @@
 // file: internal/versionprimary/rank.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c2a14de5-3125-41f3-a4e8-e0126c71293f
-// last-edited: 2026-09-24
+// last-edited: 2026-10-01
 
 // Package versionprimary is the ONE rule for which member of a version group
 // is its primary. Before 2026-09-24 four places answered that question with
@@ -174,9 +174,10 @@ func Electable(b *database.Book, alive func(id string) bool) bool {
 }
 
 // ElectableRow is Electable on the raw columns, for BookCore rows.
-// MergedIntoBookID is never cleared, so a loser whose survivor was later
-// trashed or removed is electable again: otherwise its group could never
-// have a primary.
+// MergedIntoBookID stays set while the loser is live or in the trash (only a
+// restore from the trash clears it: database.RestoreBookFromTrash), so a
+// loser whose survivor was later trashed or removed is electable again:
+// otherwise its group could never have a primary.
 func ElectableRow(softDeleted bool, mergedInto *string, alive func(id string) bool) bool {
 	if softDeleted {
 		return false

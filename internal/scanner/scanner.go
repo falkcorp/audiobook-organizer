@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.119.0
+// version: 1.119.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package scanner
 
@@ -4365,6 +4365,9 @@ func preserveExistingFields(scanned *database.Book, existing *database.Book) {
 	}
 	if scanned.MarkedForDeletionAt == nil && existing.MarkedForDeletionAt != nil {
 		scanned.MarkedForDeletionAt = existing.MarkedForDeletionAt
+	}
+	if scanned.PreTrashLibraryState == nil && existing.PreTrashLibraryState != nil {
+		scanned.PreTrashLibraryState = existing.PreTrashLibraryState
 	}
 	// Preserve series sequence if scan has nil/zero and existing has a value
 	if (scanned.SeriesSequence == nil || *scanned.SeriesSequence == 0) && existing.SeriesSequence != nil && *existing.SeriesSequence != 0 {

@@ -1,5 +1,5 @@
 // file: internal/versionprimary/incumbent_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d03a53c-7bc5-4dd5-9361-8479a58fb2f8
 // last-edited: 2026-10-01
 
@@ -46,13 +46,43 @@ func TestIncumbent(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := Incumbent(tc.members, alive)
-			gotID := ""
-			if got != nil {
-				gotID = got.ID
-			}
-			if gotID != tc.want {
+			if gotID := idOf(got); gotID != tc.want {
 				t.Errorf("Incumbent = %q, want %q", gotID, tc.want)
 			}
 		})
 	}
+}
+
+func idOf(b *database.Book) string {
+	if b == nil {
+		return ""
+	}
+	return b.ID
+}
+
+func TestYieldToIncumbent(t *testing.T) {
+	tr, fa := true, false
+	flagOf := func(b *database.Book) string { return storedFlag(b.IsPrimaryVersion) }
+	cases := []struct {
+		name      string
+		row       database.Book
+		incumbent string
+		want      string
+	}{
+		{"explicit true yields to another incumbent", database.Book{ID: "r", IsPrimaryVersion: &tr}, "inc", "false"},
+		{"no incumbent keeps the flag", database.Book{ID: "r", IsPrimaryVersion: &tr}, "", "true"},
+		{"itself as incumbent keeps the flag", database.Book{ID: "r", IsPrimaryVersion: &tr}, "r", "true"},
+		{"nil flag is left for the hand-off", database.Book{ID: "r"}, "inc", "nil"},
+		{"false stays false", database.Book{ID: "r", IsPrimaryVersion: &fa}, "inc", "false"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			row := tc.row
+			YieldToIncumbent(&row, tc.incumbent)
+			if got := flagOf(&row); got != tc.want {
+				t.Errorf("flag = %s, want %s", got, tc.want)
+			}
+		})
+	}
+	YieldToIncumbent(nil, "inc") // no panic
 }
