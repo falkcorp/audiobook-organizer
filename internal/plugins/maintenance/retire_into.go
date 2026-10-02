@@ -343,6 +343,7 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 //     true written anyway came back with the book later as a second
 //     primary); this op's soft-delete revert then brings it back
 //     non-primary under the member this hand-off crowned.
+//
 // Reverting this op alone leaves the group with the member it crowned.
 //
 // Anything it cannot tell (history or journal unreadable, the flag changed
