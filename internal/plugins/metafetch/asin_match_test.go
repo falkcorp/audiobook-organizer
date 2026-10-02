@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_match_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8a2d6e41-0b7c-4f93-a5e8-1c9f3d7b2a60
 // last-edited: 2026-10-01
 
@@ -473,5 +473,83 @@ func TestDecideASIN_ReviewTighteningKeepsGoodMatches(t *testing.T) {
 				t.Fatalf("outcome %s rejects %v; want matched", d.Outcome, d.Rejects)
 			}
 		})
+	}
+}
+
+// TestDecideASIN_Round3SeriesNoteVolumes pins the round-3 review's sibling
+// volumes: word and roman numbers, split parts, and a note naming another
+// series. Each used to match on runtime alone.
+func TestDecideASIN_Round3SeriesNoteVolumes(t *testing.T) {
+	ol := []string{"Kugane Maruyama"}
+	at1 := asinBookFacts{Title: "Overlord", Authors: ol, RuntimeSec: 10 * 3600, SeriesName: "Overlord", SeriesSeq: 1}
+	none := asinBookFacts{Title: "Overlord", Authors: ol, RuntimeSec: 10 * 3600}
+	cand := func(sub string) []metadata.AudibleIdentity {
+		return []metadata.AudibleIdentity{{ASIN: "OX", Title: "Overlord", Subtitle: sub, Authors: ol, RuntimeMin: 610}}
+	}
+	bad := []struct {
+		name string
+		book asinBookFacts
+		sub  string
+	}{
+		{"word number, no position", none, "Book Two of the Overlord Series"},
+		{"word number vs #1", at1, "Book Two of the Overlord Series"},
+		{"roman vs #1", at1, "Overlord, Volume II"},
+		{"ordinal word vs #1", at1, "The Second Book of the Overlord Saga"},
+		{"volume 1 part 2 vs #1", at1, "Overlord Series, Volume 1, Part 2"},
+		{"note names another series", at1, "The First Law, Book 1"},
+		{"unreadable volume token", at1, "Overlord, Book Something"},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			if d := decideASIN(tc.book, cand(tc.sub)); d.Outcome == asinOutcomeMatched {
+				t.Fatalf("matched %s (evidence %v); want no match", d.ASIN, d.Evidence)
+			}
+		})
+	}
+	at2 := at1
+	at2.SeriesSeq = 2
+	good := []struct {
+		name string
+		book asinBookFacts
+		sub  string
+	}{
+		{"word number equals position", at1, "Book One of the Overlord Series"},
+		{"roman equals position", at2, "Overlord, Volume II"},
+		{"digit equals position", at2, "Overlord, Vol. 2"},
+		{"note with a year only", at1, "Overlord Series, Book 1 (2016)"},
+		{"no number at all", none, "The Overlord Series"},
+	}
+	for _, tc := range good {
+		t.Run(tc.name, func(t *testing.T) {
+			if d := decideASIN(tc.book, cand(tc.sub)); d.Outcome != asinOutcomeMatched {
+				t.Fatalf("outcome %s rejects %v; want matched", d.Outcome, d.Rejects)
+			}
+		})
+	}
+	// A split part matches only with the ISBN.
+	split := at1
+	split.ISBNs = []string{"9781975300000"}
+	c := cand("Overlord Series, Volume 1, Part 2")
+	c[0].ISBN = "9781975300000"
+	if d := decideASIN(split, c); d.Outcome != asinOutcomeMatched {
+		t.Fatalf("split part with ISBN: outcome %s rejects %v", d.Outcome, d.Rejects)
+	}
+}
+
+// Sub-series names are not folded together: two Discworld sub-series do not
+// agree just because both reduce to "discworld". Format parentheticals are
+// still folded.
+func TestNormSeriesName_FormatOnly(t *testing.T) {
+	if normSeriesName("Discworld (City Watch)") == normSeriesName("Discworld (Rincewind)") {
+		t.Fatal("sub-series folded together")
+	}
+	if normSeriesName("The Expanse Universe") == normSeriesName("The Expanse") {
+		t.Fatal("universe folded into the series")
+	}
+	if normSeriesName("Overlord (Light Novel)") != normSeriesName("Overlord") {
+		t.Fatal("format parenthetical not folded")
+	}
+	if normSeriesName("Dune Chronicles") != normSeriesName("Dune") {
+		t.Fatal("chronicles qualifier not folded")
 	}
 }
