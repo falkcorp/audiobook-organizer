@@ -1,0 +1,5 @@
+### Fixed
+
+- Undoing an operation no longer loses the step that gives a version group its single primary when the undo is interrupted. That step used to run after the undone changes were marked as done, so a failure to mark them, or a crash in between, skipped it for good: the next undo found everything already restored and left the group with two primaries. The step now runs before the changes are marked, and the undo notes which groups it still has to settle before it starts, so an interrupted undo finishes them on the next attempt.
+- Undoing a regroup or a duplicate cleanup no longer overrides a primary that someone picked after the operation ran. The operation now records which copy it made primary; when undoing it finds a different copy has been made primary since, the restored copy comes back as non-primary and the later choice is kept.
+- An undo can now finish a pending group settle even after the operation's change records have been purged, two undos of the same operation can no longer run at once, and a restored book whose own primary-flag change could not be undone is no longer made the group's primary on the strength of its restore alone.

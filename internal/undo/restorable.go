@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package undo
 
@@ -110,6 +110,10 @@ const (
 	// re-crowns BookID over an already-restored flag only when this row
 	// exists (undo.RevertPlan.HandedOff). Restorable with nothing to write:
 	// the demote row's revert (versionprimary.Crown) undoes the hand-off.
+	// OldValue names the member the hand-off made primary, as
+	// HandOffCrownedValue writes it ("" on rows journaled before
+	// 2026-10-02): the revert re-crowns BookID only while no OTHER member
+	// is explicit primary (HandOffCrowned).
 	ChangeTypeBookPrimaryHandoff = "book_primary_handoff"
 	// ChangeTypeExternalIDReassign: one external id, named in FieldName as
 	// "external_id:<source>/<id>", moved from the book BookID (== OldValue) to
@@ -713,4 +717,28 @@ func NotRestorableLabel(c *database.OperationChange) string {
 // IsRestorable reports whether the revert engine can reverse c.
 func IsRestorable(c *database.OperationChange) bool {
 	return NotRestorableLabel(c) == ""
+}
+
+// handOffCrownedPrefix starts a ChangeTypeBookPrimaryHandoff row's OldValue
+// that names the member the hand-off crowned.
+const handOffCrownedPrefix = "crowned:"
+
+// HandOffCrownedValue is the OldValue a hand-off note journals for the
+// member it made primary (id), or "" when it is not known.
+func HandOffCrownedValue(id string) string {
+	if id == "" {
+		return ""
+	}
+	return handOffCrownedPrefix + id
+}
+
+// HandOffCrowned returns the member a hand-off note (c) recorded crowning,
+// and false for a row that names none (journaled before the field existed,
+// or by a hand-off that did not know its winner).
+func HandOffCrowned(c *database.OperationChange) (string, bool) {
+	if c == nil || c.ChangeType != ChangeTypeBookPrimaryHandoff {
+		return "", false
+	}
+	id, ok := strings.CutPrefix(c.OldValue, handOffCrownedPrefix)
+	return id, ok && id != ""
 }

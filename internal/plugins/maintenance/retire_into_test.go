@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
 // last-edited: 2026-10-02
 
@@ -603,4 +603,135 @@ func TestRevert_OwedSettleYieldsToALaterUserPick(t *testing.T) {
 	mb, err := d.s.GetBookByID(m)
 	require.NoError(t, err)
 	require.True(t, mb.IsPrimaryVersion != nil && *mb.IsPrimaryVersion)
+}
+
+// markFailsOnce fails the first MarkOperationChangesReverted.
+type markFailsOnce struct {
+	*database.PebbleStore
+	armed atomic.Bool
+}
+
+func (m *markFailsOnce) MarkOperationChangesReverted(op string, ids []string) error {
+	if m.armed.CompareAndSwap(true, false) {
+		return errors.New("mark failed")
+	}
+	return m.PebbleStore.MarkOperationChangesReverted(op, ids)
+}
+
+// groupReadPanics panics on the nth version-group read of group: a revert
+// that dies mid-run.
+type groupReadPanics struct {
+	*database.PebbleStore
+	group string
+	nth   int32
+	reads atomic.Int32
+}
+
+func (g *groupReadPanics) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
+	if groupID == g.group && g.reads.Add(1) == g.nth {
+		panic("revert died")
+	}
+	return g.PebbleStore.GetBooksByVersionGroup(groupID)
+}
+
+// nilShellHandedTo journals the nil-shell retire of l in op and hands its
+// group to s, noting the hand-off with s as the member crowned.
+func nilShellHandedTo(t *testing.T, d *dcFixture, op, l, s string) {
+	t.Helper()
+	w := nilShellRetired(t, d, op, l)
+	_, err := versionprimary.Crown(fragEnsureStore{OpsStore: d.s, chapters: d.s}, "vg-dune", s)
+	require.NoError(t, err)
+	require.NoError(t, w.Journal(l, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", undo.HandOffCrownedValue(s), "vg-dune"))
+}
+
+// The rows' mark fails after their writes: the settle must already have
+// run, so the re-run (which finds every row already restored) leaves the
+// original the one primary. Before, the rows were marked first and the
+// settle came after: a failed mark returned before it, nothing was owed,
+// and the re-run settled nothing, leaving L's nil beside S's true.
+func TestRevert_FailedMarkStillSettlesTheGroup(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	no := false
+	groupOf(t, d, "vg-dune", map[string]*bool{s: &no, l: nil})
+	nilShellRetired(t, d, "op-y", l)
+	_, err := versionprimary.Crown(fragEnsureStore{OpsStore: d.s, chapters: d.s}, "vg-dune", s)
+	require.NoError(t, err)
+
+	failing := &markFailsOnce{PebbleStore: d.s}
+	failing.armed.Store(true)
+	_, err = audiobooks.NewRevertService(failing).RevertOperation("op-y")
+	require.Error(t, err)
+	require.False(t, failing.armed.Load())
+	_, _ = audiobooks.NewRevertService(d.s).RevertOperation("op-y")
+	require.Equal(t, []string{l}, d.livePrimaries(t, "vg-dune"))
+}
+
+// A revert that dies after its rows and before its settle: the intent it
+// wrote before the rows makes the re-run count those rows, found already
+// restored, as evidence, and settle the group. Before, nothing was recorded
+// and the re-run settled nothing.
+func TestRevert_RunDyingBeforeTheSettleIsFinishedByTheNext(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	no := false
+	groupOf(t, d, "vg-dune", map[string]*bool{s: &no, l: nil})
+	nilShellRetired(t, d, "op-y", l)
+	_, err := versionprimary.Crown(fragEnsureStore{OpsStore: d.s, chapters: d.s}, "vg-dune", s)
+	require.NoError(t, err)
+
+	dying := &groupReadPanics{PebbleStore: d.s, group: "vg-dune", nth: 2} // 1: incumbent, 2: settle
+	func() {
+		defer func() { require.NotNil(t, recover(), "the first run died") }()
+		_, _ = audiobooks.NewRevertService(dying).RevertOperation("op-y")
+	}()
+	require.NotEqual(t, []string{l}, d.livePrimaries(t, "vg-dune"), "the dead run did not settle")
+
+	_, err = audiobooks.NewRevertService(d.s).RevertOperation("op-y")
+	require.NoError(t, err)
+	require.Equal(t, []string{l}, d.livePrimaries(t, "vg-dune"))
+}
+
+// The op's hand-off crowned S and recorded it; a user then made M the
+// primary. Reverting the op brings L back non-primary: M, picked after the
+// op, stays. Before, the settle crowned L over the user's pick.
+func TestRevert_SettleKeepsAPrimaryPickedAfterTheOp(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	m := d.copyBook(t, "M", "Dune", "lib/Dune third", dcRow{track: 1, dur: 600, hash: "m1"})
+	no := false
+	groupOf(t, d, "vg-dune", map[string]*bool{s: &no, l: nil, m: &no})
+	nilShellHandedTo(t, d, "op-y", l, s)
+	_, err := versionprimary.Crown(fragEnsureStore{OpsStore: d.s, chapters: d.s}, "vg-dune", m)
+	require.NoError(t, err)
+
+	_, err = audiobooks.NewRevertService(d.s).RevertOperation("op-y")
+	require.NoError(t, err)
+	require.Equal(t, []string{m}, d.livePrimaries(t, "vg-dune"))
+	lb, err := d.s.GetBookByID(l)
+	require.NoError(t, err)
+	require.False(t, lb.IsSoftDeleted())
+	require.NotNil(t, lb.IsPrimaryVersion)
+	require.False(t, *lb.IsPrimaryVersion, "L yields explicit false, not a nil read as primary")
+}
+
+// A retired book whose own demote row is refused (made primary while it
+// was in the trash) still comes back, and the group ends with one primary.
+// This pins the outcome only: the settle no longer counts such a book an
+// original (refusedDemote), but when the demote is refused the book is
+// already explicit true, so crowning it again writes nothing observable
+// here.
+func TestRevert_RefusedDemoteLeavesOnePrimary(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	no, yes := false, true
+	groupOf(t, d, "vg-dune", map[string]*bool{s: &no, l: nil})
+	nilShellRetired(t, d, "op-r", l)
+	_, err := d.s.ModifyBook(l, func(b *database.Book) error { b.IsPrimaryVersion = &yes; return nil })
+	require.NoError(t, err)
+
+	res, err := audiobooks.NewRevertService(d.s).RevertOperation("op-r")
+	require.Error(t, err, "the demote row is refused")
+	require.Equal(t, 1, res.Failed, "%+v", res)
+	require.Equal(t, []string{l}, d.livePrimaries(t, "vg-dune"))
 }
