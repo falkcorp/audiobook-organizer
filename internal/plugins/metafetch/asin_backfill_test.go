@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b8f4c71-6e05-4d39-a1c7-9e3d0f5a8b26
 // last-edited: 2026-10-01
 
@@ -73,6 +73,23 @@ type fakeAudible struct {
 	err     error
 	calls   atomic.Int64
 	delay   time.Duration
+
+	// byASIN answers LookupIdentityByASIN; a missing key is "Audible does
+	// not carry it" (nil, nil). lookups counts those calls separately from
+	// searches so the search-count assertions stay about searches.
+	byASIN    map[string]*metadata.AudibleIdentity
+	lookupErr error
+	lookups   atomic.Int64
+}
+
+func (f *fakeAudible) LookupIdentityByASIN(ctx context.Context, asin string) (*metadata.AudibleIdentity, error) {
+	f.lookups.Add(1)
+	if f.lookupErr != nil {
+		return nil, f.lookupErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.byASIN[asin], nil
 }
 
 func (f *fakeAudible) SearchIdentities(ctx context.Context, q metadata.AudibleIdentityQuery) ([]metadata.AudibleIdentity, error) {
@@ -230,7 +247,7 @@ func TestASINBackfill_SkipsLockedHasASINNoAuthorDeleted(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	has := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B000KEEPME")})
+	has := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B000KEEPME"), ISBN13: new(isbnRR)})
 	noAuthor := mkBook(t, s, &database.Book{Title: "Red Rising"})
 	deleted := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, MarkedForDeletion: new(true)})
 
@@ -244,8 +261,8 @@ func TestASINBackfill_SkipsLockedHasASINNoAuthorDeleted(t *testing.T) {
 	if res := runASIN(t, p, `{"dry_run":false,"book_ids":["`+deleted.ID+`"]}`).res(t); res.SkippedDeleted != 1 {
 		t.Fatalf("book_ids result = %+v, want the deleted book skipped", res)
 	}
-	if fa.calls.Load() != 0 {
-		t.Fatalf("Audible called %d times for books that must all be skipped", fa.calls.Load())
+	if fa.calls.Load() != 0 || fa.lookups.Load() != 0 {
+		t.Fatalf("Audible called %d+%d times for books that must all be skipped", fa.calls.Load(), fa.lookups.Load())
 	}
 	if asinOf(t, s, locked.ID) != "" || asinOf(t, s, noAuthor.ID) != "" || asinOf(t, s, deleted.ID) != "" {
 		t.Fatal("a skipped book was written")
@@ -434,5 +451,176 @@ func TestASINBackfill_DefRegistered(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("%s not in OperationDefs", asinBackfillOpID)
+	}
+}
+
+func isbnOf(t *testing.T, s *database.PebbleStore, id string) (isbn13, isbn10 string) {
+	t.Helper()
+	b, err := s.GetBookByID(id)
+	if err != nil || b == nil {
+		t.Fatalf("get %s: %v", id, err)
+	}
+	if b.ISBN13 != nil {
+		isbn13 = *b.ISBN13
+	}
+	if b.ISBN10 != nil {
+		isbn10 = *b.ISBN10
+	}
+	return isbn13, isbn10
+}
+
+// A book with no ASIN and no ISBN that matches by series gets BOTH the ASIN
+// and the matched product's audiobook ISBN, with a history row for each.
+func TestASINBackfill_MatchAlsoWritesAudiobookISBN(t *testing.T) {
+	prod := rrProduct()
+	prod.Series = []metadata.AudibleSeriesRef{{Title: "Red Rising", Sequence: "1"}}
+	fa := &fakeAudible{byTitle: map[string][]metadata.AudibleIdentity{"red rising": {prod}}}
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, "Pierce Brown")
+	ser, err := s.CreateSeries("Red Rising", &aid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, SeriesID: &ser.ID, SeriesSequence: new(1)})
+
+	res := runASIN(t, p, `{"dry_run":false}`).res(t)
+	if got := asinOf(t, s, b.ID); got != "B00I2VWW5U" {
+		t.Fatalf("asin = %q (result %+v)", got, res)
+	}
+	if i13, _ := isbnOf(t, s, b.ID); i13 != isbnRR {
+		t.Fatalf("isbn13 = %q, want %s", i13, isbnRR)
+	}
+	if res.MatchedWritten != 1 || res.ISBNWritten != 1 || res.ISBNLookups != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	hist, err := s.GetBookChangeHistory(b.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := map[string]int{}
+	for _, h := range hist {
+		fields[h.Field]++
+	}
+	if fields["asin"] != 1 || fields["isbn13"] != 1 || len(fields) != 2 {
+		t.Fatalf("history fields = %v, want one asin and one isbn13", fields)
+	}
+}
+
+// A book that already has an ISBN-10 keeps it and gets no ISBN-13 from the
+// match: the ISBN-10 may be a print edition, and pairing it with a different
+// ISBN-13 would leave the book disagreeing with itself.
+func TestASINBackfill_MatchLeavesExistingISBN10Alone(t *testing.T) {
+	prod := rrProduct()
+	prod.Series = []metadata.AudibleSeriesRef{{Title: "Red Rising", Sequence: "1"}}
+	fa := &fakeAudible{byTitle: map[string][]metadata.AudibleIdentity{"red rising": {prod}}}
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, "Pierce Brown")
+	ser, err := s.CreateSeries("Red Rising", &aid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, SeriesID: &ser.ID, SeriesSequence: new(1), ISBN10: new("0345539788")})
+
+	res := runASIN(t, p, `{"dry_run":false}`).res(t)
+	if got := asinOf(t, s, b.ID); got != "B00I2VWW5U" {
+		t.Fatalf("asin = %q (result %+v)", got, res)
+	}
+	if i13, i10 := isbnOf(t, s, b.ID); i13 != "" || i10 != "0345539788" {
+		t.Fatalf("isbn13=%q isbn10=%q, want unchanged", i13, i10)
+	}
+	if res.ISBNWritten != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+// A book with an ASIN but no ISBN is looked up BY that ASIN (no search) and
+// gets the audiobook ISBN; the ASIN is not touched.
+func TestASINBackfill_HasASINNoISBNIsLookedUpByASIN(t *testing.T) {
+	prod := rrProduct()
+	fa := &fakeAudible{byASIN: map[string]*metadata.AudibleIdentity{"B00I2VWW5U": &prod}}
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, "Pierce Brown")
+	b := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00I2VWW5U")})
+
+	// Dry run first: counted, nothing written, no marker.
+	if res := runASIN(t, p, `{}`).res(t); res.ISBNWritten != 1 || res.ISBNLookups != 1 {
+		t.Fatalf("dry result = %+v", res)
+	}
+	if i13, _ := isbnOf(t, s, b.ID); i13 != "" {
+		t.Fatalf("dry run wrote isbn13 %q", i13)
+	}
+
+	res := runASIN(t, p, `{"dry_run":false}`).res(t)
+	if i13, _ := isbnOf(t, s, b.ID); i13 != isbnRR {
+		t.Fatalf("isbn13 = %q, want %s (result %+v)", i13, isbnRR, res)
+	}
+	if got := asinOf(t, s, b.ID); got != "B00I2VWW5U" {
+		t.Fatalf("asin changed to %q", got)
+	}
+	if res.ISBNWritten != 1 || res.SkippedHasASIN != 0 || fa.calls.Load() != 0 {
+		t.Fatalf("result = %+v, searches = %d (want 0)", res, fa.calls.Load())
+	}
+	hist, _ := s.GetBookChangeHistory(b.ID, 100)
+	if len(hist) != 1 || hist[0].Field != "isbn13" {
+		t.Fatalf("history = %+v, want one isbn13 row", hist)
+	}
+	// Now it has an ISBN: a further run is a plain skip, no lookup.
+	before := fa.lookups.Load()
+	if res := runASIN(t, p, `{"dry_run":false}`).res(t); res.SkippedHasASIN != 1 || fa.lookups.Load() != before {
+		t.Fatalf("third run result = %+v, lookups %d -> %d", res, before, fa.lookups.Load())
+	}
+}
+
+// Audible answering an ASIN lookup with a DIFFERENT product (a replacement
+// ASIN) is not this book's ISBN; nothing is written and the miss is recorded.
+func TestASINBackfill_LookupAnsweredByOtherASINWritesNothing(t *testing.T) {
+	prod := rrProduct() // ASIN B00I2VWW5U
+	fa := &fakeAudible{byASIN: map[string]*metadata.AudibleIdentity{"B000OLDASN": &prod}}
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, "Pierce Brown")
+	b := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B000OLDASN")})
+
+	res := runASIN(t, p, `{"dry_run":false}`).res(t)
+	if i13, _ := isbnOf(t, s, b.ID); i13 != "" {
+		t.Fatalf("isbn13 = %q, want none", i13)
+	}
+	if res.ISBNNone != 1 || res.ISBNWritten != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	// The miss is remembered: the next run inside the window does not look up.
+	before := fa.lookups.Load()
+	if res := runASIN(t, p, `{"dry_run":false}`).res(t); res.SkippedRecentISBNMiss != 1 || fa.lookups.Load() != before {
+		t.Fatalf("second run result = %+v", res)
+	}
+}
+
+// A locked ISBN-13 is never looked up or written; a lookup error is counted,
+// writes nothing and records no miss.
+func TestASINBackfill_ISBNLockedAndLookupError(t *testing.T) {
+	prod := rrProduct()
+	fa := &fakeAudible{byASIN: map[string]*metadata.AudibleIdentity{"B00I2VWW5U": &prod}}
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, "Pierce Brown")
+	locked := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00I2VWW5U")})
+	if err := s.UpsertMetadataFieldState(&database.MetadataFieldState{
+		BookID: locked.ID, Field: database.FieldKeyISBN13, OverrideValue: new(`""`), OverrideLocked: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res := runASIN(t, p, `{"dry_run":false}`).res(t)
+	if res.SkippedLocked != 1 || fa.lookups.Load() != 0 {
+		t.Fatalf("locked: result = %+v lookups = %d", res, fa.lookups.Load())
+	}
+
+	fa2 := &fakeAudible{lookupErr: errors.New("audible returned status 503")}
+	p2, s2 := newASINTestPlugin(t, fa2)
+	aid2 := mkAuthor(t, s2, "Pierce Brown")
+	b := mkBook(t, s2, &database.Book{Title: "Red Rising", AuthorID: &aid2, ASIN: new("B00I2VWW5U")})
+	res = runASIN(t, p2, `{"dry_run":false}`).res(t)
+	if res.Errored != 1 || res.ISBNNone != 0 {
+		t.Fatalf("error: result = %+v", res)
+	}
+	if raw, _ := s2.GetRaw(isbnMissKey(b.ID)); len(raw) != 0 {
+		t.Fatal("a lookup error recorded an ISBN miss")
 	}
 }

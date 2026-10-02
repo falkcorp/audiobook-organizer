@@ -1,12 +1,22 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
 // last-edited: 2026-10-01
 
 package metafetch
 
 // metafetch.asin-backfill: fill the ASIN of every book that has none, from
-// Audible ONLY, through the strict gate in asin_match.go.
+// Audible ONLY, through the strict gate in asin_match.go -- and the audiobook
+// ISBN alongside it. Two paths per book:
+//
+//   - no ASIN: search + gate. On a match, write the ASIN and, when the book has
+//     no ISBN at all, the matched product's audiobook ISBN (same request, it
+//     comes back in product_details).
+//   - ASIN but no ISBN: look the product up BY THAT ASIN (exact identity, no
+//     gate) and write its audiobook ISBN. The ASIN is never changed.
+//
+// Only Audible's audiobook ISBN is written; print ISBNs from other sources are
+// a different edition and are not this op's business.
 //
 // Why a new op and not maintenance.isbn-enrichment: that op searches every
 // configured source (Google Books' 1,000/day key quota included), does one book
@@ -24,7 +34,8 @@ package metafetch
 // candidate-fetch moved to the new one, and the two would no longer share one
 // bucket.
 //
-// Writes: Book.ASIN only, only when empty and not user-locked, through
+// Writes: Book.ASIN and Book.ISBN13 only, each only when empty and not
+// user-locked (ISBN-13 only when the book has no ISBN-10 either), through
 // repairs.Writer (ModifyBook + one metadata-history row under its own batch id,
 // so each write is visible and revertable per book). Nothing here enqueues tag
 // write-back or iTunes (ITL) write-back: those are explicit enqueues on the
@@ -88,6 +99,10 @@ const (
 	// marker. A raw key, not opstate:, because the retention job prunes
 	// opstate: keys that do not belong to a live operation.
 	asinMissKeyPrefix = "asinbackfill:miss:"
+	// isbnMissKeyPrefix keys the per-book "looked the ASIN up, Audible has no
+	// audiobook ISBN for it" marker, so a book that already has an ASIN is not
+	// re-fetched every run. Same retry window as the ASIN marker.
+	isbnMissKeyPrefix = "asinbackfill:isbnmiss:"
 
 	asinHistorySource     = "Audible (asin-backfill)"
 	asinHistoryChangeType = "fetched"
@@ -100,6 +115,10 @@ const (
 // errASINFilledMeanwhile aborts the write when another writer filled the ASIN
 // (or a user locked it) between the search and the write.
 var errASINFilledMeanwhile = errors.New("asin filled or locked by another writer during the search")
+
+// errISBNFilledMeanwhile aborts an ISBN-only write when another writer filled
+// an ISBN (or a user locked ISBN-13) between the lookup and the write.
+var errISBNFilledMeanwhile = errors.New("isbn filled or locked by another writer during the lookup")
 
 // asinBackfillParams are the op parameters. AfterBookID is the checkpoint
 // cursor (the registry merges it back into params on resume); it is the only
@@ -133,6 +152,9 @@ type asinMissMarker struct {
 // audibleIdentitySearcher is the one Audible call the op makes.
 type audibleIdentitySearcher interface {
 	SearchIdentities(ctx context.Context, q metadata.AudibleIdentityQuery) ([]metadata.AudibleIdentity, error)
+	// LookupIdentityByASIN returns (nil, nil) when Audible does not carry the
+	// product.
+	LookupIdentityByASIN(ctx context.Context, asin string) (*metadata.AudibleIdentity, error)
 }
 
 // asinBackfillStore is what the op reads and writes.
@@ -157,13 +179,15 @@ func (p *Plugin) asinBackfillDef() sdk.OperationDef {
 		ID:          asinBackfillOpID,
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "metafetch",
-		DisplayName: "Backfill missing ASINs from Audible",
+		DisplayName: "Backfill missing ASINs and ISBNs from Audible",
 		Description: "Walks every book with no ASIN and searches Audible ONLY (never Google Books or Open Library) " +
 			"by title+author and, when the book has an ISBN, by that ISBN. Writes an ASIN only when exactly one Audible " +
 			"product passes the gate: equal title or a one-sided subtitle difference (volume numbers reject), a matching " +
 			"author, no series-position or runtime conflict, and at least one corroboration (audiobook ISBN, runtime within " +
 			"10%, or series name+position). Fills only empty, unlocked ASINs and records history per book. A no-match is " +
-			"remembered for retry_after_days (default 30). Defaults to a dry run; dry_run=false applies. Params: dry_run, " +
+			"remembered for retry_after_days (default 30). Also fills the audiobook ISBN-13 from Audible: alongside a matched " +
+			"ASIN, and for books that already have an ASIN but no ISBN by looking that ASIN up directly. An ISBN is written " +
+			"only when the book has none and ISBN-13 is unlocked. Defaults to a dry run; dry_run=false applies. Params: dry_run, " +
 			"book_ids, retry_after_days, limit, workers (default 4).",
 		// ResumeRestart with a page cursor: a resumed run restarts at the
 		// last fully drained page. Books before it that still lack an ASIN
@@ -190,6 +214,10 @@ type asinBackfillTally struct {
 	scanned, skippedHasASIN, skippedDeleted, skippedLocked, skippedNoAuthor,
 	skippedNoTitle, skippedRecentMiss, skippedLimit, matchedWritten,
 	filledMeanwhile, ambiguous, noMatch, errored atomic.Int64
+
+	// ISBN counters. isbnWritten counts every audiobook ISBN written, whether
+	// alongside a matched ASIN or from a lookup by an existing ASIN.
+	isbnLookups, isbnWritten, isbnNone, skippedRecentISBNMiss atomic.Int64
 
 	searched    atomic.Int64 // books that reached the Audible search (Limit counts these)
 	consecutive atomic.Int64 // books in a row ending in a provider error
@@ -219,8 +247,9 @@ func (t *asinBackfillTally) summary(dry bool) string {
 	if dry {
 		verb = "would write"
 	}
-	return fmt.Sprintf("scanned %d, %s %d, ambiguous %d, no match %d, errored %d",
-		t.scanned.Load(), verb, t.matchedWritten.Load(), t.ambiguous.Load(), t.noMatch.Load(), t.errored.Load())
+	return fmt.Sprintf("scanned %d, asin %s %d, isbn %s %d (lookups %d, audible has none %d), ambiguous %d, no match %d, errored %d",
+		t.scanned.Load(), verb, t.matchedWritten.Load(), verb, t.isbnWritten.Load(), t.isbnLookups.Load(), t.isbnNone.Load(),
+		t.ambiguous.Load(), t.noMatch.Load(), t.errored.Load())
 }
 
 // asinBackfillResult is the op's persisted result.
@@ -243,6 +272,11 @@ type asinBackfillResult struct {
 	RejectReasons     map[string]int `json:"reject_reasons"`
 	Evidence          map[string]int `json:"evidence"`
 	HistoryFailed     int            `json:"history_failed"`
+
+	ISBNLookups           int64 `json:"isbn_lookups"`
+	ISBNWritten           int64 `json:"isbn_written"`
+	ISBNNone              int64 `json:"isbn_none"`
+	SkippedRecentISBNMiss int64 `json:"skipped_recent_isbn_miss"`
 }
 
 func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResult {
@@ -264,6 +298,8 @@ func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResu
 		MatchedWritten: t.matchedWritten.Load(), FilledMeanwhile: t.filledMeanwhile.Load(),
 		Ambiguous: t.ambiguous.Load(), NoMatch: t.noMatch.Load(), Errored: t.errored.Load(),
 		Searched: t.searched.Load(), RejectReasons: rejects, Evidence: evidence, HistoryFailed: historyFailed,
+		ISBNLookups: t.isbnLookups.Load(), ISBNWritten: t.isbnWritten.Load(), ISBNNone: t.isbnNone.Load(),
+		SkippedRecentISBNMiss: t.skippedRecentISBNMiss.Load(),
 	}
 }
 
@@ -425,8 +461,11 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 		t.skippedDeleted.Add(1)
 		return nil
 	case b.ASIN != nil && strings.TrimSpace(*b.ASIN) != "":
-		t.skippedHasASIN.Add(1)
-		return nil
+		if !bookHasNoISBN(&b) {
+			t.skippedHasASIN.Add(1)
+			return nil
+		}
+		return r.fillISBNByASIN(ctx, &b)
 	}
 
 	locks, err := database.LoadFieldLocks(r.store, b.ID)
@@ -601,11 +640,16 @@ func (r *asinBackfillRun) apply(bookID, title string, d asinDecision) {
 	evidence := strings.Join(d.Evidence, "+")
 	if r.dry {
 		t.matchedWritten.Add(1)
-		r.log.Info("would write asin=%s book_id=%s title=%s audible_title=%s evidence=%s",
-			d.ASIN, logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(title), logger.SanitizeLogValue(d.Title), evidence)
+		if d.ISBN != "" {
+			t.isbnWritten.Add(1)
+		}
+		r.log.Info("would write asin=%s isbn13=%s book_id=%s title=%s audible_title=%s evidence=%s",
+			d.ASIN, writtenOrNone(d.ISBN != "", d.ISBN), logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(title), logger.SanitizeLogValue(d.Title), evidence)
 		return
 	}
 	asin := d.ASIN
+	isbn := d.ISBN
+	isbnWritten := false
 	_, err := r.writer.Modify(bookID, func(fresh *database.Book) error {
 		if fresh.ASIN != nil && strings.TrimSpace(*fresh.ASIN) != "" {
 			return errASINFilledMeanwhile
@@ -620,6 +664,17 @@ func (r *asinBackfillRun) apply(bookID, title string, d asinDecision) {
 			return errASINFilledMeanwhile
 		}
 		fresh.ASIN = &asin
+		// The matched product's audiobook ISBN rides along, under the same
+		// rules: only when the book has no ISBN at all (an ISBN-10 already
+		// there may be a print edition, and pairing it with a different
+		// ISBN-13 would leave the book disagreeing with itself) and ISBN-13
+		// is not locked.
+		isbnWritten = false
+		if isbn != "" && bookHasNoISBN(fresh) && !locks.Locked(database.FieldKeyISBN13) {
+			v := isbn
+			fresh.ISBN13 = &v
+			isbnWritten = true
+		}
 		return nil
 	})
 	switch {
@@ -630,18 +685,27 @@ func (r *asinBackfillRun) apply(bookID, title string, d asinDecision) {
 		r.bookError(bookID, "write asin", err)
 	default:
 		t.matchedWritten.Add(1)
-		r.log.Info("wrote asin=%s book_id=%s title=%s audible_title=%s evidence=%s",
-			asin, logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(title), logger.SanitizeLogValue(d.Title), evidence)
+		if isbnWritten {
+			t.isbnWritten.Add(1)
+		}
+		r.log.Info("wrote asin=%s isbn13=%s book_id=%s title=%s audible_title=%s evidence=%s",
+			asin, writtenOrNone(isbnWritten, isbn), logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(title), logger.SanitizeLogValue(d.Title), evidence)
 	}
 }
 
 func asinMissKey(bookID string) string { return asinMissKeyPrefix + bookID }
 
-// recentMiss reports whether the book has a no-match marker younger than the
-// retry window. A malformed marker is treated as absent (the book is simply
-// searched again); a read error is returned.
+// recentMiss reports whether the book has an ASIN no-match marker younger
+// than the retry window.
 func (r *asinBackfillRun) recentMiss(bookID string) (bool, error) {
-	raw, err := r.store.GetRaw(asinMissKey(bookID))
+	return r.recentMarker(asinMissKey(bookID))
+}
+
+// recentMarker reports whether the marker at key is younger than the retry
+// window. A malformed marker is treated as absent (the book is simply looked
+// at again); a read error is returned.
+func (r *asinBackfillRun) recentMarker(key string) (bool, error) {
+	raw, err := r.store.GetRaw(key)
 	if err != nil {
 		return false, err
 	}
@@ -658,17 +722,138 @@ func (r *asinBackfillRun) recentMiss(bookID string) (bool, error) {
 // markMiss records a genuine (error-free) no-match or ambiguous search. A dry
 // run writes nothing, markers included.
 func (r *asinBackfillRun) markMiss(bookID string, d asinDecision) {
+	passing := append([]string(nil), d.Passing...)
+	sort.Strings(passing)
+	r.markRaw(asinMissKey(bookID), asinMissMarker{At: r.now().UTC(), Outcome: d.Outcome, Passing: passing})
+}
+
+// markRaw stores one marker. A dry run writes nothing. A failed write only
+// means the book is looked at again next run.
+func (r *asinBackfillRun) markRaw(key string, m asinMissMarker) {
 	if r.dry {
 		return
 	}
-	passing := append([]string(nil), d.Passing...)
-	sort.Strings(passing)
-	data, err := json.Marshal(asinMissMarker{At: r.now().UTC(), Outcome: d.Outcome, Passing: passing})
+	data, err := json.Marshal(m)
 	if err == nil {
-		err = r.store.SetRaw(asinMissKey(bookID), data)
+		err = r.store.SetRaw(key, data)
 	}
 	if err != nil {
-		r.log.Warn("recording the no-match marker failed (book will be searched again next run): book_id=%s err=%s",
-			logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
+		r.log.Warn("recording the no-match marker failed (book will be looked at again next run): key=%s err=%s",
+			logger.SanitizeLogValue(key), logger.SanitizeLogValue(err.Error()))
 	}
+}
+
+// bookHasNoISBN reports whether the book carries neither ISBN-13 nor ISBN-10.
+func bookHasNoISBN(b *database.Book) bool {
+	for _, v := range []*string{b.ISBN13, b.ISBN10} {
+		if v != nil && strings.TrimSpace(*v) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func writtenOrNone(written bool, isbn string) string {
+	if !written {
+		return "-"
+	}
+	return isbn
+}
+
+func isbnMissKey(bookID string) string { return isbnMissKeyPrefix + bookID }
+
+// fillISBNByASIN handles a book that already has an ASIN but no ISBN: it looks
+// the product up BY THAT ASIN (an exact identity, so there is no matching gate
+// to pass) and writes the audiobook ISBN when Audible has one. The ASIN itself
+// is never changed. A product Audible does not carry, or one without an ISBN,
+// is recorded as an ISBN miss so the next run does not fetch it again inside
+// the retry window.
+func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book) error {
+	t := r.tally
+	locks, err := database.LoadFieldLocks(r.store, b.ID)
+	if err != nil {
+		r.bookError(b.ID, "read field locks", err)
+		return nil
+	}
+	if locks.Locked(database.FieldKeyISBN13) {
+		t.skippedLocked.Add(1)
+		return nil
+	}
+	if r.retry > 0 {
+		recent, err := r.recentMarker(isbnMissKey(b.ID))
+		if err != nil {
+			r.bookError(b.ID, "read isbn no-match marker", err)
+			return nil
+		}
+		if recent {
+			t.skippedRecentISBNMiss.Add(1)
+			return nil
+		}
+	}
+	if n := t.searched.Add(1); r.limit > 0 && n > r.limit {
+		t.searched.Add(-1)
+		t.skippedLimit.Add(1)
+		return nil
+	}
+
+	asin := strings.TrimSpace(*b.ASIN)
+	t.isbnLookups.Add(1)
+	id, err := r.newClient().LookupIdentityByASIN(ctx, asin)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		r.bookError(b.ID, "Audible ASIN lookup", err)
+		if t.consecutive.Add(1) >= asinBackfillMaxConsecutiveErrors {
+			return fmt.Errorf("%s: %d books in a row failed their Audible request; stopping (last: %w)",
+				asinBackfillOpID, asinBackfillMaxConsecutiveErrors, err)
+		}
+		return nil
+	}
+	t.consecutive.Store(0)
+
+	isbn := ""
+	// The product must be the one asked for: Audible can answer an old ASIN
+	// with its replacement, and that product's ISBN is not this book's.
+	if id != nil && strings.EqualFold(strings.TrimSpace(id.ASIN), asin) {
+		isbn = normISBN13(id.ISBN)
+	}
+	if isbn == "" {
+		t.isbnNone.Add(1)
+		r.markRaw(isbnMissKey(b.ID), asinMissMarker{At: r.now().UTC(), Outcome: "no_isbn"})
+		return nil
+	}
+
+	if r.dry {
+		t.isbnWritten.Add(1)
+		r.log.Info("would write isbn13=%s from asin=%s book_id=%s",
+			isbn, asin, logger.SanitizeLogValue(b.ID))
+		return nil
+	}
+	_, err = r.writer.Modify(b.ID, func(fresh *database.Book) error {
+		if fresh.ASIN == nil || !strings.EqualFold(strings.TrimSpace(*fresh.ASIN), asin) || !bookHasNoISBN(fresh) {
+			return errISBNFilledMeanwhile
+		}
+		locks, lerr := database.LoadFieldLocks(r.store, b.ID)
+		if lerr != nil {
+			return fmt.Errorf("read field locks: %w", lerr)
+		}
+		if locks.Locked(database.FieldKeyISBN13) {
+			return errISBNFilledMeanwhile
+		}
+		v := isbn
+		fresh.ISBN13 = &v
+		return nil
+	})
+	switch {
+	case errors.Is(err, errISBNFilledMeanwhile):
+		t.filledMeanwhile.Add(1)
+		r.log.Info("isbn filled, locked or asin changed during the lookup; left alone: book_id=%s", logger.SanitizeLogValue(b.ID))
+	case err != nil:
+		r.bookError(b.ID, "write isbn", err)
+	default:
+		t.isbnWritten.Add(1)
+		r.log.Info("wrote isbn13=%s from asin=%s book_id=%s", isbn, asin, logger.SanitizeLogValue(b.ID))
+	}
+	return nil
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_match.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f7c1b9e-58a2-4d0f-9e61-c2a4b8d07e15
 // last-edited: 2026-10-01
 
@@ -160,6 +160,9 @@ type asinDecision struct {
 	ASIN     string   // set only when Outcome == matched
 	Evidence []string // of the matched candidate
 	Title    string   // matched product title, for the log line
+	// ISBN is the matched product's audiobook ISBN as ISBN-13, "" when Audible
+	// gave none or it is malformed.
+	ISBN string
 	// Passing lists every distinct passing ASIN (len > 1 when ambiguous).
 	Passing []string
 	// Rejects counts reject reasons over the distinct candidates.
@@ -173,7 +176,7 @@ func decideASIN(b asinBookFacts, cands []metadata.AudibleIdentity) asinDecision 
 	d := asinDecision{Rejects: map[string]int{}}
 	seen := map[string]bool{}
 	var match asinVerdict
-	var matchTitle string
+	var matchTitle, matchISBN string
 	for _, c := range cands {
 		key := strings.ToUpper(strings.TrimSpace(c.ASIN))
 		if key != "" && seen[key] {
@@ -189,7 +192,7 @@ func decideASIN(b asinBookFacts, cands []metadata.AudibleIdentity) asinDecision 
 		}
 		d.Passing = append(d.Passing, strings.TrimSpace(c.ASIN))
 		if len(d.Passing) == 1 {
-			match, matchTitle = v, c.Title
+			match, matchTitle, matchISBN = v, c.Title, normISBN13(c.ISBN)
 		}
 	}
 	switch len(d.Passing) {
@@ -200,6 +203,7 @@ func decideASIN(b asinBookFacts, cands []metadata.AudibleIdentity) asinDecision 
 		d.ASIN = d.Passing[0]
 		d.Evidence = match.Evidence
 		d.Title = matchTitle
+		d.ISBN = matchISBN
 	default:
 		d.Outcome = asinOutcomeAmbiguous
 	}

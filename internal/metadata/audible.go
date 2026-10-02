@@ -1,5 +1,5 @@
 // file: internal/metadata/audible.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d
 // last-edited: 2026-10-01
 
@@ -454,26 +454,70 @@ func (c *AudibleClient) SearchIdentities(ctx context.Context, q AudibleIdentityQ
 	}
 	out := make([]AudibleIdentity, 0, len(catalog.Products))
 	for i := range catalog.Products {
-		p := &catalog.Products[i]
-		id := AudibleIdentity{
-			ASIN:       strings.TrimSpace(p.ASIN),
-			Title:      p.Title,
-			Subtitle:   p.Subtitle,
-			FormatType: p.FormatType,
-			ISBN:       strings.TrimSpace(p.ISBN),
-		}
-		for _, a := range p.Authors {
-			if name := strings.TrimSpace(a.Name); name != "" {
-				id.Authors = append(id.Authors, name)
-			}
-		}
-		for _, s := range p.Series {
-			id.Series = append(id.Series, AudibleSeriesRef{Title: s.Title, Sequence: s.Sequence})
-		}
-		if p.RuntimeLengthMin != nil {
-			id.RuntimeMin = *p.RuntimeLengthMin
-		}
-		out = append(out, id)
+		out = append(out, productToIdentity(&catalog.Products[i]))
 	}
 	return out, nil
+}
+
+// LookupIdentityByASIN fetches one product by ASIN with the identity response
+// groups, so the result carries the audiobook ISBN (product_details), which
+// LookupByASIN does not request. It goes through the same providerhttp client
+// and token bucket as every other Audible call. A product Audible does not
+// carry (404, or a 200 with an empty product) is (nil, nil); any other non-200
+// is an error, so a throttle is never mistaken for "no such product".
+func (c *AudibleClient) LookupIdentityByASIN(ctx context.Context, asin string) (*AudibleIdentity, error) {
+	asin = strings.TrimSpace(asin)
+	if asin == "" {
+		return nil, fmt.Errorf("audible identity lookup: empty asin")
+	}
+	productURL := fmt.Sprintf("%s/catalog/products/%s?response_groups=%s",
+		c.baseURL, url.PathEscape(asin), url.QueryEscape(audibleIdentityResponseGroups))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, productURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Audible request: %w", err)
+	}
+	req.Header.Set("User-Agent", "Audible/3.0")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query Audible API: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ASIN %s: %w", asin, StatusError(SourceIDAudible, resp))
+	}
+	var result audibleProductResponse
+	if err := json.UnmarshalRead(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode Audible response: %w", err)
+	}
+	if result.Product.Title == "" {
+		return nil, nil
+	}
+	id := productToIdentity(&result.Product)
+	return &id, nil
+}
+
+// productToIdentity is the identity view of one catalog product.
+func productToIdentity(p *audibleProduct) AudibleIdentity {
+	id := AudibleIdentity{
+		ASIN:       strings.TrimSpace(p.ASIN),
+		Title:      p.Title,
+		Subtitle:   p.Subtitle,
+		FormatType: p.FormatType,
+		ISBN:       strings.TrimSpace(p.ISBN),
+	}
+	for _, a := range p.Authors {
+		if name := strings.TrimSpace(a.Name); name != "" {
+			id.Authors = append(id.Authors, name)
+		}
+	}
+	for _, s := range p.Series {
+		id.Series = append(id.Series, AudibleSeriesRef{Title: s.Title, Sequence: s.Sequence})
+	}
+	if p.RuntimeLengthMin != nil {
+		id.RuntimeMin = *p.RuntimeLengthMin
+	}
+	return id
 }
