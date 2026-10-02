@@ -1,7 +1,7 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package versionprimary
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
@@ -114,11 +115,69 @@ var groupLocks [64]sync.Mutex
 func LockGroup(gid string) (unlock func()) { return lockGroup(gid) }
 
 func lockGroup(gid string) func() {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(gid))
-	mu := &groupLocks[h.Sum32()%uint32(len(groupLocks))]
+	mu := &groupLocks[groupStripe(gid)]
 	mu.Lock()
 	return mu.Unlock
+}
+
+func groupStripe(gid string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(gid))
+	return int(h.Sum32() % uint32(len(groupLocks)))
+}
+
+// LockGroups takes the hand-off locks of every non-empty gid -- each stripe
+// once, in ascending stripe order -- and returns the release. Two groups can
+// share a stripe, so a caller that needs more than one group (a write that
+// moves a book from one version group to another) must take them through
+// here, never by calling LockGroup twice: the second call could self-deadlock
+// on the first's stripe, and two callers locking in different orders could
+// deadlock each other.
+//
+// A write that changes a book's VersionGroupID holds the locks of the group
+// it leaves and the group it joins across the write, so a reader that checks
+// a group's membership and incumbent under LockGroup (itunes.regroup's
+// apply-time recheck) sees no member leave or join until it releases. The
+// same order rules as LockGroup apply: merge lock before, book write lock
+// inside, and release before any hand-off (EnsureSinglePrimary, Crown).
+func LockGroups(gids ...string) (unlock func()) {
+	idx := make([]int, 0, len(gids))
+	for _, g := range gids {
+		if g == "" {
+			continue
+		}
+		idx = append(idx, groupStripe(g))
+	}
+	slices.Sort(idx)
+	idx = slices.Compact(idx)
+	for _, i := range idx {
+		groupLocks[i].Lock()
+	}
+	return func() {
+		for j := len(idx) - 1; j >= 0; j-- {
+			groupLocks[idx[j]].Unlock()
+		}
+	}
+}
+
+// ErrMembershipChanged reports that a book's version group changed between
+// the read a caller locked groups from and its write: the caller holds the
+// wrong group locks and must not write.
+var ErrMembershipChanged = errors.New("versionprimary: book changed version group since it was read")
+
+// CheckMembership returns ErrMembershipChanged (wrapped with the book and
+// both groups) when cur's version group is not lockedGID. A caller that took
+// LockGroups from a pre-read calls it first inside its ModifyBook callback,
+// under the book's write lock.
+func CheckMembership(cur *database.Book, lockedGID string) error {
+	g := ""
+	if cur.VersionGroupID != nil {
+		g = *cur.VersionGroupID
+	}
+	if g != lockedGID {
+		return fmt.Errorf("book %s: read in version group %q, now in %q: %w", cur.ID, lockedGID, g, ErrMembershipChanged)
+	}
+	return nil
 }
 
 // storeAlive is the merge-target liveness check: a point read, with a read

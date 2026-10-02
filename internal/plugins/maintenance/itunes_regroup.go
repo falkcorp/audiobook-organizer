@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-02
 
@@ -534,8 +534,12 @@ type regroupApplyCounts struct {
 // until the group's last write here, so a hand-off (EnsureSinglePrimary,
 // Crown, a trash restore or a combine undo) cannot make the target the
 // group's primary between the recheck that found it a non-primary member and
-// the moves onto it. The lock serialises against hand-offs only, not against
-// every writer of is_primary_version.
+// the moves onto it. It also excludes the membership writers that take
+// versionprimary.LockGroups on the group a book leaves and joins (batch
+// edits, the versions handler's link and set-primary, the scanner's version
+// link). It does not cover every writer of version_group_id or
+// is_primary_version: the remaining writers are tracked in TODO.md under
+// "Version-group membership lock: remaining writers".
 //
 // Lock order: this group lock, then the per-book write locks
 // MoveBookFilesToBook(Bulk), ReassignExternalID, CreateBook and ModifyBook

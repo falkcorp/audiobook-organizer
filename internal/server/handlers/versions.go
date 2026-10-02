@@ -1,25 +1,24 @@
 // file: internal/server/handlers/versions.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-09-19
+// last-edited: 2026-10-02
 
 package handlers
 
 import (
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"maps"
 	"net/http"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -98,46 +97,23 @@ type VersionsStore interface {
 // setting primary, fetching a group, and split/move operations on segments.
 type VersionsHandler struct {
 	store VersionsStore
-	// groupLocks serializes the set-primary and link calls that touch the
-	// same version group; see lockGroups. The server builds one handler, so
-	// every request shares them.
-	groupLocks [versionGroupLockStripes]sync.Mutex
 }
 
-// versionGroupLockStripes is how many locks the version-group IDs hash onto.
-// Striping keeps the set fixed-size; two groups sharing a stripe only
-// serialize with each other, which is harmless.
-const versionGroupLockStripes = 64
-
-// lockGroups locks the stripes of the given version groups ("" is skipped) in
-// stripe order, so two calls locking overlapping sets cannot deadlock, and
-// returns the unlock.
+// lockGroups locks the given version groups ("" is skipped) through the
+// shared hand-off locks (versionprimary.LockGroups: each stripe once, in
+// stripe order) and returns the unlock.
 //
-// It serializes this handler's own writers of a group: two set-primary calls
-// on one group each read the members, promote their book and demote the rest,
+// It serializes this handler's writers of a group: two set-primary calls on
+// one group each read the members, promote their book and demote the rest,
 // and interleaved they demoted each other's promotion and left no primary.
-// Writers outside this handler (maintenance jobs, reconcile) do not take these
-// locks; against them the per-row checks inside each ModifyBook are the guard.
+// Until 2026-10-02 the locks were this handler's own, so they serialized
+// nothing else; on the shared table they also exclude every hand-off
+// (EnsureSinglePrimary, Crown) and every reader that checks a group under
+// versionprimary.LockGroup, such as itunes.regroup's apply-time recheck, which
+// must not see a link or split move its target between the recheck and the
+// moves. Nothing in this handler calls a hand-off while holding them.
 func (h *VersionsHandler) lockGroups(groupIDs ...string) func() {
-	var idx []int
-	for _, g := range groupIDs {
-		if g == "" {
-			continue
-		}
-		f := fnv.New32a()
-		_, _ = f.Write([]byte(g))
-		idx = append(idx, int(f.Sum32()%versionGroupLockStripes))
-	}
-	slices.Sort(idx)
-	idx = slices.Compact(idx)
-	for _, i := range idx {
-		h.groupLocks[i].Lock()
-	}
-	return func() {
-		for j := len(idx) - 1; j >= 0; j-- {
-			h.groupLocks[idx[j]].Unlock()
-		}
-	}
+	return versionprimary.LockGroups(groupIDs...)
 }
 
 // NewVersionsHandler constructs a VersionsHandler backed by the given store.

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
 // last-edited: 2026-10-02
 
@@ -945,11 +945,19 @@ func TestITunesRegroupEntanglementRule_OrganizedTarget(t *testing.T) {
 	}
 }
 
-// rgLockProbeStore runs a hook before the apply's bulk move and before its
-// title write, so a test can act while applyRegroupGroup is mid-group.
+// rgLockProbeStore runs a hook when the apply-time recheck reads the
+// target's version group, before the bulk move and before the title write,
+// so a test can act while applyRegroupGroup is mid-group.
 type rgLockProbeStore struct {
 	*database.PebbleStore
-	onMove, onModify func()
+	onGroupRead, onMove, onModify func()
+}
+
+func (s *rgLockProbeStore) GetBooksByVersionGroup(gid string) ([]database.Book, error) {
+	if s.onGroupRead != nil {
+		s.onGroupRead()
+	}
+	return s.PebbleStore.GetBooksByVersionGroup(gid)
 }
 
 func (s *rgLockProbeStore) MoveBookFilesToBookBulk(moves []database.BookFileMove, target string) error {
@@ -966,11 +974,13 @@ func (s *rgLockProbeStore) ModifyBook(id string, fn func(*database.Book) error) 
 	return s.PebbleStore.ModifyBook(id, fn)
 }
 
-// The apply holds the target's version-group hand-off lock from the recheck
-// through the group's last write: a concurrent hand-off that would crown the
-// edition (the target the recheck found a non-primary member) cannot land
-// between the recheck and the moves onto it. It blocks until the group is
-// written and runs after.
+// The apply holds the target's version-group hand-off lock from before the
+// recheck reads the group through the group's last write: a concurrent
+// hand-off that would crown the edition (the target the recheck found a
+// non-primary member) cannot land between the recheck and the moves onto it.
+// The hand-off starts while the recheck is reading the group, so a lock taken
+// only after the recheck lets it through; it must block until the group is
+// written and run after.
 func TestITunesRegroupApply_HoldsGroupLockAcrossRecheckAndMoves(t *testing.T) {
 	s := regroupStore(t)
 	vg := "vg-lock"
@@ -998,11 +1008,21 @@ func TestITunesRegroupApply_HoldsGroupLockAcrossRecheckAndMoves(t *testing.T) {
 		t.Fatalf("plan = %+v, want consolidate onto the edition %s", plan.Groups, ed.ID)
 	}
 
-	const wait = 300 * time.Millisecond
+	// A lock that is not held lets Crown through in well under a
+	// millisecond; the wait only bounds how long a held lock is watched.
+	const wait = 500 * time.Millisecond
 	crowned := make(chan error, 1)
 	var started atomic.Bool
+	notCrowned := func(where string) {
+		select {
+		case err := <-crowned:
+			crowned <- err
+			t.Errorf("hand-off crowned the target %s (err=%v): group lock not held there", where, err)
+		case <-time.After(wait):
+		}
+	}
 	probe := &rgLockProbeStore{PebbleStore: s}
-	probe.onMove = func() {
+	probe.onGroupRead = func() {
 		if !started.CompareAndSwap(false, true) {
 			return
 		}
@@ -1010,26 +1030,15 @@ func TestITunesRegroupApply_HoldsGroupLockAcrossRecheckAndMoves(t *testing.T) {
 			_, err := versionprimary.Crown(s, vg, ed.ID)
 			crowned <- err
 		}()
-		select {
-		case err := <-crowned:
-			crowned <- err
-			t.Errorf("hand-off crowned the target before the moves (err=%v): group lock not held", err)
-		case <-time.After(wait):
-		}
+		notCrowned("during the recheck")
 	}
-	probe.onModify = func() {
-		select {
-		case err := <-crowned:
-			crowned <- err
-			t.Errorf("hand-off crowned the target before the title write (err=%v): group lock released early", err)
-		case <-time.After(wait):
-		}
-	}
+	probe.onMove = func() { notCrowned("before the moves") }
+	probe.onModify = func() { notCrowned("before the title write") }
 	if err := p.applyRegroupPlan(context.Background(), probe, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
 	}
 	if !started.Load() {
-		t.Fatalf("apply never reached the bulk move (logs %v)", rep.logs)
+		t.Fatalf("apply's recheck never read the target's version group (logs %v)", rep.logs)
 	}
 
 	select {

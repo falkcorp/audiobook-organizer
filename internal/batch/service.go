@@ -1,12 +1,13 @@
 // file: internal/batch/service.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package batch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -136,7 +137,7 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 				func(_, after *database.Book) { bs.handOffPrimary(book, after, req.Updates) })
 			pre, updated = res.Before, res.Book
 		} else {
-			updated, err = bs.db.ModifyBook(id, func(b *database.Book) error {
+			updated, book, err = bs.lockedModify(id, book, req.Updates, func(b *database.Book) error {
 				if len(req.Updates) == 0 {
 					return database.ErrSkipBookWrite
 				}
@@ -210,7 +211,7 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 					func(_, after *database.Book) { bs.handOffPrimary(book, after, op.Updates) })
 				updated = res.Book
 			} else {
-				updated, err = bs.db.ModifyBook(op.ID, func(b *database.Book) error {
+				updated, book, err = bs.lockedModify(op.ID, book, op.Updates, func(b *database.Book) error {
 					if len(op.Updates) == 0 {
 						return database.ErrSkipBookWrite
 					}
@@ -466,6 +467,58 @@ func applyUpdates(book *database.Book, updates map[string]any) {
 }
 
 var batchLog = logger.New("batch")
+
+// lockedModify writes one batch edit through ModifyBook. An edit that sets
+// version_group_id or is_primary_version changes a group's membership or its
+// primary, so it holds the hand-off locks of the group the book is in and
+// the group it is set to (versionprimary.LockGroups) across the write: a
+// reader holding one of those groups' locks (itunes.regroup's apply-time
+// recheck, a hand-off) sees no member leave, join or change its flag until
+// it releases. The locks are released before the caller's handOffPrimary,
+// which takes them itself (they are not reentrant).
+//
+// before is the row the caller read; its group is the one locked, and the
+// write refuses (versionprimary.CheckMembership) if the book has changed
+// group since. That is retried from a fresh read, at most three times. It
+// returns the written row and the row the write was locked from, which the
+// caller's hand-off must use as "before".
+//
+// Not for a restore: merge.RestoreFromTrash takes the merge lock and then
+// the group lock itself, and taking a group lock first would invert that.
+func (bs *BatchService) lockedModify(id string, before *database.Book, updates map[string]any, fn func(*database.Book) error) (*database.Book, *database.Book, error) {
+	_, grp := updates["version_group_id"]
+	_, flag := updates["is_primary_version"]
+	if !grp && !flag {
+		updated, err := bs.db.ModifyBook(id, fn)
+		return updated, before, err
+	}
+	for attempt := 1; ; attempt++ {
+		oldG := groupOf(before)
+		newG := oldG
+		if v, ok := updates["version_group_id"].(string); ok {
+			newG = v
+		}
+		unlock := versionprimary.LockGroups(oldG, newG)
+		updated, err := bs.db.ModifyBook(id, func(b *database.Book) error {
+			if err := versionprimary.CheckMembership(b, oldG); err != nil {
+				return err
+			}
+			return fn(b)
+		})
+		unlock()
+		if !errors.Is(err, versionprimary.ErrMembershipChanged) || attempt == 3 {
+			return updated, before, err
+		}
+		fresh, gerr := bs.db.GetBookByID(id)
+		if gerr != nil {
+			return nil, before, fmt.Errorf("re-read %s after its version group changed: %w", id, gerr)
+		}
+		if fresh == nil {
+			return nil, before, nil
+		}
+		before = fresh
+	}
+}
 
 // handOffPrimary keeps every version group a batch edit touched at exactly
 // one live primary. before is the row read before the write, after the row
