@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-02
 
@@ -1318,10 +1318,11 @@ func TestFragmentFixer_AlreadyRestoredDemoteKeepsALaterUserPick(t *testing.T) {
 	require.True(t, *ob.IsPrimaryVersion, "the user's pick was demoted")
 }
 
-// crownFailsOnce fails the second version-group read of group: the first is
-// the soft-delete revert's incumbent read (versionprimary.IncumbentExcept,
-// which runs before the demote revert in the ledger), the second the read
-// versionprimary.Crown starts with.
+// crownFailsOnce fails the fourth version-group read of group, the read
+// versionprimary.Crown starts with. Before it, in ledger order: the
+// soft-delete revert's incumbent read (versionprimary.IncumbentExcept), and
+// the group checks after the soft-delete and merged-into reverts
+// (RevertService.settleAfter).
 type crownFailsOnce struct {
 	*database.PebbleStore
 	group string
@@ -1330,7 +1331,7 @@ type crownFailsOnce struct {
 }
 
 func (s *crownFailsOnce) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
-	if groupID == s.group && s.reads.Add(1) == 2 && s.armed.CompareAndSwap(true, false) {
+	if groupID == s.group && s.reads.Add(1) == 4 && s.armed.CompareAndSwap(true, false) {
 		return nil, errors.New("version group read failed")
 	}
 	return s.PebbleStore.GetBooksByVersionGroup(groupID)
@@ -1381,6 +1382,7 @@ func TestFragmentFixer_RetryCrownsAfterACrownFailure(t *testing.T) {
 	failing.armed.Store(true)
 	_, err = audiobooks.NewRevertService(failing).RevertOperation("op-apply")
 	require.Error(t, err, "the first pass's Crown fails")
+	require.Contains(t, err.Error(), "demote the rest of group", "the failed read is Crown's")
 	require.False(t, failing.armed.Load(), "the Crown ran")
 	require.True(t, f.live(t, "fragF"))
 	fb, err := f.s.GetBookByID(frag)
