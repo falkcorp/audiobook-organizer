@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-02
 
@@ -520,16 +520,16 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	case undo.ChangeTypeBookFileMove:
 		return rs.revertBookFileMove(c)
 	case undo.ChangeTypeBookSoftDelete:
-		return rs.settleAfter(c.BookID, rs.revertBookSoftDelete(c, stamps))
+		return rs.settleAfter(c.BookID, plan, rs.revertBookSoftDelete(c, stamps))
 	case undo.ChangeTypeBookPrimaryDemote:
-		return rs.settleAfter(c.BookID, rs.revertBookPrimaryDemote(c, plan != nil && plan.HandedOff(c.BookID)))
+		return rs.settleAfter(c.BookID, plan, rs.revertBookPrimaryDemote(c, plan != nil && plan.HandedOff(c.BookID)))
 	case undo.ChangeTypeBookPrimaryHandoff:
 		// A note: the primary demote row's revert undoes the hand-off.
 		return nil
 	case undo.ChangeTypeExternalIDReassign:
 		return rs.revertExternalIDReassign(c)
 	case undo.ChangeTypeBookMergedInto:
-		return rs.settleAfter(c.BookID, rs.revertBookMergedInto(c))
+		return rs.settleAfter(c.BookID, plan, rs.revertBookMergedInto(c))
 	case undo.ChangeTypeUserStateFollow:
 		return rs.revertUserStateFollow(c)
 	case undo.ChangeTypeTitleRelinkCredits:
@@ -747,19 +747,36 @@ func (h *handOffFailed) Unwrap() error { return h.err }
 // settleAfter runs after a row that can change who a version group's
 // primary is (a soft-delete, a primary demote, a merged-into pointer) has
 // been reverted, or found already reverted: when the book is in a group
-// and the group has no primary (versionprimary.Incumbent finds none, so a
-// nil flag counts), it hands the group off (EnsureSinglePrimary), as a trash
-// restore does. It runs on the already-restored path too, so a re-run of an
+// and no Electable member of it reads as primary
+// (database.EffectiveIsPrimaryVersion, so a nil flag counts), it hands the
+// group off (EnsureSinglePrimary), as a trash restore does. It runs on the already-restored path too, so a re-run of an
 // operation whose hand-off failed retries it. A failed hand-off is a
 // *handOffFailed: RevertOperation leaves the row unmarked (retryable) and
 // lists it in RevertResult.HandOffFailed.
+//
+// It acts only for a row whose revert wrote just now, or a book the
+// operation journaled a demote or hand-off for (RevertPlan.ChangedPrimary);
+// a group the operation never touched is left exactly as it is. With
+// neither, a failed hand-off is not retried by a re-run, and
+// version-group-primary-repair is the recovery path.
 //
 // Running at each of the three rows matters: the soft-delete revert comes
 // first, while the book still points at its merge survivor and is not
 // Electable, so only the merged-into revert, later, can make it the group's
 // primary when it is the only candidate.
-func (rs *RevertService) settleAfter(bookID string, err error) error {
+func (rs *RevertService) settleAfter(bookID string, plan *undo.RevertPlan, err error) error {
 	if err != nil && !errors.Is(err, undo.ErrAlreadyRestored) {
+		return err
+	}
+	// Scope: only a group this operation changed. Either this row's revert
+	// wrote just now (the operation retired or re-pointed the book, and
+	// putting it back is what can leave the group without a primary), or
+	// the operation journaled a demote or hand-off for the book
+	// (RevertPlan.ChangedPrimary), so an already-restored row of a re-run
+	// may retry a hand-off that failed. A row found already restored in an
+	// operation that never touched the group's flags (a retire cut off
+	// before it wrote) settles nothing.
+	if err != nil && (plan == nil || !plan.ChangedPrimary(bookID)) {
 		return err
 	}
 	if serr := rs.settleGroup(bookID); serr != nil {
@@ -782,8 +799,16 @@ func (rs *RevertService) settleGroup(bookID string) error {
 	if err != nil {
 		return &handOffFailed{book: bookID, group: gid, err: err}
 	}
-	if versionprimary.Incumbent(members, versionprimary.StoreAlive(rs.db)) != nil {
-		return nil
+	// Only a group with NO effective primary is handed off. Two members
+	// read as primary (two nil flags, say) is not this row's doing and not
+	// this revert's to settle: a cut-off retire's revert must leave a group
+	// it never touched exactly as it is.
+	alive := versionprimary.StoreAlive(rs.db)
+	for i := range members {
+		m := &members[i]
+		if versionprimary.Electable(m, alive) && database.EffectiveIsPrimaryVersion(m.IsPrimaryVersion) {
+			return nil
+		}
 	}
 	if _, err := versionprimary.EnsureSinglePrimary(context.Background(), rs.db, gid,
 		versionprimary.Env{RootDir: merge.TrashRestoreEnv().RootDir}); err != nil {

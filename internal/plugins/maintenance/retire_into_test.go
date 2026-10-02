@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
 // last-edited: 2026-10-02
 
@@ -356,8 +356,9 @@ func TestRevert_SoftDeleteWithNoIncumbentHandsTheGroupOff(t *testing.T) {
 }
 
 // The same hand-off failing (its group read errors) is reported in the
-// result, not only logged: the row is left unmarked and the result partial,
-// and a re-run of the revert retries the hand-off and finishes the group.
+// result, not only logged: the row is left unmarked and the result partial.
+// The op journaled a hand-off for L (it changed the group's primary), so a
+// re-run of the revert retries the hand-off and finishes the group.
 func TestRevert_FailedHandOffIsReported(t *testing.T) {
 	d := newDCFixture(t)
 	s, l := d.dune(t)
@@ -365,12 +366,14 @@ func TestRevert_FailedHandOffIsReported(t *testing.T) {
 	groupOf(t, d, "vg-dune", map[string]*bool{s: &no, l: &no})
 	retiredInOp(t, d, "op-old", s, "")
 	retiredInOp(t, d, "op-x", l, "")
+	hw := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-x")
+	require.NoError(t, hw.Journal(l, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", "", "vg-dune"))
 	failing := &groupReadFailsOnce{PebbleStore: d.s, group: "vg-dune", nth: 2} // 1: incumbent, 2: hand-off
 	failing.armed.Store(true)
 	res, err := audiobooks.NewRevertService(failing).RevertOperation("op-x")
 	require.Error(t, err)
 	require.False(t, failing.armed.Load(), "the hand-off's group read failed")
-	require.Zero(t, res.Restored)
+	require.Zero(t, res.RestoredTypes[undo.ChangeTypeBookSoftDelete], "the soft-delete row is left unmarked: %+v", res)
 	require.True(t, res.Partial())
 	require.Len(t, res.HandOffFailed, 1, "%+v", res)
 	require.Contains(t, res.HandOffFailed[0], "vg-dune")
