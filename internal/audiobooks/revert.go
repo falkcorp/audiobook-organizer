@@ -1,12 +1,11 @@
 // file: internal/audiobooks/revert.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-02
 
 package audiobooks
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -252,11 +251,12 @@ type RevertResult struct {
 	// incumbent instead (revertBookPrimaryDemote).
 	Superseded       int      `json:"superseded,omitempty"`
 	SupersededDetail []string `json:"superseded_detail,omitempty"`
-	// HandOffFailed lists the rows whose write committed but whose version
-	// group's hand-off (versionprimary.EnsureSinglePrimary, settleAfter)
-	// failed: change, book, group and error. Those rows are NOT counted
-	// Restored and NOT marked reverted, so the result is Partial and a
-	// re-run of the revert retries the hand-off.
+	// HandOffFailed lists the version groups the settle pass after the rows
+	// (settleGroups) could not leave with one primary: group, the
+	// operation's originals and the error, and whether the retry was
+	// recorded. The rows themselves are restored and marked; the result is
+	// Partial, and the next revert of the operation retries the recorded
+	// groups even when every row is already reverted.
 	HandOffFailed []string `json:"hand_off_failed,omitempty"`
 }
 
@@ -284,7 +284,7 @@ func (r *RevertResult) Summary() string {
 		fmt.Fprintf(&b, "; %d superseded and left as they are (%s)", r.Superseded, strings.Join(r.SupersededDetail, "; "))
 	}
 	if len(r.HandOffFailed) > 0 {
-		fmt.Fprintf(&b, "; %d written but their version group's primary hand-off failed, left to retry (%s)", len(r.HandOffFailed), strings.Join(r.HandOffFailed, "; "))
+		fmt.Fprintf(&b, "; %d version group(s) not settled to one primary (%s)", len(r.HandOffFailed), strings.Join(r.HandOffFailed, " | "))
 	}
 	if r.Failed > 0 {
 		fmt.Fprintf(&b, "; %d failed to restore", r.Failed)
@@ -364,6 +364,14 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		return nil, &NotRestorableError{OperationID: operationID, Total: result.Total, Types: result.NotRestorableTypes}
 	}
 	if len(restorable) == 0 {
+		if rs.hasSettleOwed(operationID) {
+			// Every row is reverted but a group settle failed last time:
+			// retry it (settleGroups).
+			if msgs := rs.settleGroups(operationID, nil, nil, result); len(msgs) > 0 {
+				return result, fmt.Errorf("partially reverted with %d errors: %s", len(msgs), msgs[0])
+			}
+			return result, nil
+		}
 		return nil, fmt.Errorf("operation %s has already been reverted: all %d restorable changes are marked reverted",
 			operationID, restorableTotal)
 	}
@@ -378,6 +386,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	// markedIDs are rows marked reverted without being restored
 	// (supersededRestore).
 	var markedIDs []string
+	// touched: the rows that wrote in this run and can change who a version
+	// group's primary is; the settle pass after the loop reads them.
+	var touched []settleTouch
 	plan, err := undo.PlanRevert(restorable, rs.db.GetBookFiles)
 	if err != nil {
 		return nil, err
@@ -391,18 +402,6 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			if errors.Is(err, undo.ErrAlreadyRestored) {
 				already, err = true, nil
 			}
-		}
-		var handOff *handOffFailed
-		if errors.As(err, &handOff) {
-			// The row's own write committed but its group's hand-off did
-			// not. The row is left unmarked so a re-run of the revert finds
-			// it already restored and retries the hand-off (settleAfter),
-			// and the result is partial.
-			result.HandOffFailed = append(result.HandOffFailed, fmt.Sprintf("change %s: %s", c.ID, handOff.Error()))
-			revertLog.Warn("revert of change %s: %s", c.ID, logger.SanitizeLogValue(handOff.Error()))
-			plan.Record(c, nil)
-			errMsgs = append(errMsgs, fmt.Sprintf("change %s: %v", c.ID, handOff))
-			continue
 		}
 		var superseded *supersededRestore
 		if errors.As(err, &superseded) {
@@ -439,6 +438,8 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		restoredIDs = append(restoredIDs, c.ID)
 		if already {
 			result.AlreadyRestored++
+		} else if t, ok := settleNote(c); ok {
+			touched = append(touched, t)
 		}
 		if result.RestoredTypes == nil {
 			result.RestoredTypes = map[string]int{}
@@ -454,6 +455,10 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		}
 	}
 	result.Restored = len(restoredIDs)
+
+	// One settle per version group the operation changed, after every row
+	// has run (see revert_settle.go for why not per row).
+	errMsgs = append(errMsgs, rs.settleGroups(operationID, plan, touched, result)...)
 
 	revertLog.Info("revert finished: operation=%s total=%d restored=%d failed=%d not_restorable=%d types=%s",
 		logger.SanitizeLogValue(operationID), result.Total, result.Restored, result.Failed,
@@ -520,16 +525,16 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	case undo.ChangeTypeBookFileMove:
 		return rs.revertBookFileMove(c)
 	case undo.ChangeTypeBookSoftDelete:
-		return rs.settleAfter(c.BookID, plan, rs.revertBookSoftDelete(c, stamps))
+		return rs.revertBookSoftDelete(c, stamps)
 	case undo.ChangeTypeBookPrimaryDemote:
-		return rs.settleAfter(c.BookID, plan, rs.revertBookPrimaryDemote(c, plan != nil && plan.HandedOff(c.BookID)))
+		return rs.revertBookPrimaryDemote(c)
 	case undo.ChangeTypeBookPrimaryHandoff:
 		// A note: the primary demote row's revert undoes the hand-off.
 		return nil
 	case undo.ChangeTypeExternalIDReassign:
 		return rs.revertExternalIDReassign(c)
 	case undo.ChangeTypeBookMergedInto:
-		return rs.settleAfter(c.BookID, plan, rs.revertBookMergedInto(c))
+		return rs.revertBookMergedInto(c)
 	case undo.ChangeTypeUserStateFollow:
 		return rs.revertUserStateFollow(c)
 	case undo.ChangeTypeTitleRelinkCredits:
@@ -728,94 +733,6 @@ type partialTagRestore struct{ detail string }
 type supersededRestore struct{ detail string }
 
 func (s *supersededRestore) Error() string { return "superseded: " + s.detail }
-
-// handOffFailed is a restored row whose version group's hand-off
-// (versionprimary.EnsureSinglePrimary) failed after the row's write
-// committed. RevertOperation counts the row Restored and lists this in
-// RevertResult.HandOffFailed.
-type handOffFailed struct {
-	book, group string
-	err         error
-}
-
-func (h *handOffFailed) Error() string {
-	return fmt.Sprintf("book %s: primary hand-off in version group %s failed: %v", h.book, h.group, h.err)
-}
-
-func (h *handOffFailed) Unwrap() error { return h.err }
-
-// settleAfter runs after a row that can change who a version group's
-// primary is (a soft-delete, a primary demote, a merged-into pointer) has
-// been reverted, or found already reverted: when the book is in a group
-// and no Electable member of it reads as primary
-// (database.EffectiveIsPrimaryVersion, so a nil flag counts), it hands the
-// group off (EnsureSinglePrimary), as a trash restore does. It runs on the already-restored path too, so a re-run of an
-// operation whose hand-off failed retries it. A failed hand-off is a
-// *handOffFailed: RevertOperation leaves the row unmarked (retryable) and
-// lists it in RevertResult.HandOffFailed.
-//
-// It acts only for a row whose revert wrote just now, or a book the
-// operation journaled a demote or hand-off for (RevertPlan.ChangedPrimary);
-// a group the operation never touched is left exactly as it is. With
-// neither, a failed hand-off is not retried by a re-run, and
-// version-group-primary-repair is the recovery path.
-//
-// Running at each of the three rows matters: the soft-delete revert comes
-// first, while the book still points at its merge survivor and is not
-// Electable, so only the merged-into revert, later, can make it the group's
-// primary when it is the only candidate.
-func (rs *RevertService) settleAfter(bookID string, plan *undo.RevertPlan, err error) error {
-	if err != nil && !errors.Is(err, undo.ErrAlreadyRestored) {
-		return err
-	}
-	// Scope: only a group this operation changed. Either this row's revert
-	// wrote just now (the operation retired or re-pointed the book, and
-	// putting it back is what can leave the group without a primary), or
-	// the operation journaled a demote or hand-off for the book
-	// (RevertPlan.ChangedPrimary), so an already-restored row of a re-run
-	// may retry a hand-off that failed. A row found already restored in an
-	// operation that never touched the group's flags (a retire cut off
-	// before it wrote) settles nothing.
-	if err != nil && (plan == nil || !plan.ChangedPrimary(bookID)) {
-		return err
-	}
-	if serr := rs.settleGroup(bookID); serr != nil {
-		return serr
-	}
-	return err
-}
-
-// settleGroup is settleAfter's hand-off; see there.
-func (rs *RevertService) settleGroup(bookID string) error {
-	b, err := rs.db.GetBookByID(bookID)
-	if err != nil {
-		return &handOffFailed{book: bookID, group: "?", err: err}
-	}
-	if b == nil || b.IsSoftDeleted() || b.VersionGroupID == nil || strings.TrimSpace(*b.VersionGroupID) == "" {
-		return nil
-	}
-	gid := strings.TrimSpace(*b.VersionGroupID)
-	members, err := rs.db.GetBooksByVersionGroup(gid)
-	if err != nil {
-		return &handOffFailed{book: bookID, group: gid, err: err}
-	}
-	// Only a group with NO effective primary is handed off. Two members
-	// read as primary (two nil flags, say) is not this row's doing and not
-	// this revert's to settle: a cut-off retire's revert must leave a group
-	// it never touched exactly as it is.
-	alive := versionprimary.StoreAlive(rs.db)
-	for i := range members {
-		m := &members[i]
-		if versionprimary.Electable(m, alive) && database.EffectiveIsPrimaryVersion(m.IsPrimaryVersion) {
-			return nil
-		}
-	}
-	if _, err := versionprimary.EnsureSinglePrimary(context.Background(), rs.db, gid,
-		versionprimary.Env{RootDir: merge.TrashRestoreEnv().RootDir}); err != nil {
-		return &handOffFailed{book: bookID, group: gid, err: err}
-	}
-	return nil
-}
 
 func (p *partialTagRestore) Error() string { return "tag restored in part: " + p.detail }
 
@@ -1240,9 +1157,8 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 		}
 		return nil
 	})
-	// With no live primary to yield to, the group is handed off after this
-	// returns (settleAfter in revertChangeIn), as a trash restore does
-	// (merge.RestoreFromTrash).
+	// The group's primary is settled once, after every row of the
+	// operation has run (settleGroups).
 	unlock()
 	return err
 }
@@ -1256,35 +1172,20 @@ func primaryFlagString(v *bool) string {
 	return strconv.FormatBool(*v)
 }
 
-// revertBookPrimaryDemote restores a retired shell's primary flag ("" is nil,
-// the never-set shape) while it is still the false the operation wrote. An
-// already-restored true is crowned only when the operation recorded handing
-// the book's group to another member (handedOff, see
-// undo.RevertPlan.HandedOff).
+// revertBookPrimaryDemote restores a retired book's primary flag ("" is
+// nil, the never-set shape, which reads as primary) while it is still the
+// false the operation wrote. It writes only the flag: re-crowning the book
+// over the sibling the operation handed the group to is the settle pass's,
+// once every row has run (settleGroups crowns the book whose demote this
+// run reverted), so a nil written here never stays beside that sibling's
+// true, and no later row of the same book finds a flag it did not expect.
 //
-// Restoring an explicit true re-crowns the shell with versionprimary.Crown,
-// which also writes explicit false on every other live member: the operation
-// (fs-regroup-xml's retire) hands the group's flag to a sibling after the
-// demote, without journaling that promotion, so writing true on the shell
-// alone would leave the group with two primaries. Crown runs after the
-// shell's own write, outside its ModifyBook callback, and only when the shell
-// is live again (the soft-delete row, later in the ledger, is reverted
-// first).
-//
-// A soft-deleted book gets its flag back like any other: Crown cannot crown
-// it (not Electable) and leaves the group alone, and the book's own
-// soft-delete revert, from this or another operation, settles the group
-// when it brings the book back (revertBookSoftDelete yields it to a live
-// incumbent, or hands the group off when there is none). Refusing the write
-// instead left the group with no primary when the incumbent was gone by
-// then.
-//
-// A LIVE book merged into a live survivor is the one case left as it is:
-// such a loser is not Electable, and an explicit true on it would put it in
-// the ABS library (ABSLibraryFilter does not read MergedIntoBookID) next to
-// the group's primary. The row is marked reverted as Superseded
-// (supersededRestore), never Restored.
-func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, handedOff bool) error {
+// A LIVE book merged into a live survivor is left as it is: such a loser is
+// not Electable, and an explicit true on it would put it in the ABS library
+// (ABSLibraryFilter does not read MergedIntoBookID) next to the group's
+// primary. The row is marked reverted as Superseded (supersededRestore),
+// never Restored.
+func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) error {
 	var restored *bool
 	switch c.OldValue {
 	case "":
@@ -1297,13 +1198,8 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, ha
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	crowns := restored == nil || *restored
-	group, live := "", false
-	err := rs.modifyBook(c.BookID, func(book *database.Book) error {
-		group = ""
-		if book.VersionGroupID != nil {
-			group = *book.VersionGroupID
-		}
-		live = !book.IsSoftDeleted()
+	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+		live := !book.IsSoftDeleted()
 		if err := undo.CheckPrimaryDemoteCurrent(book, c); err != nil {
 			return err
 		}
@@ -1320,32 +1216,6 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange, ha
 		book.IsPrimaryVersion = restored
 		return nil
 	})
-	// An already-restored row crowns only when this operation recorded the
-	// hand-off (handedOff): the retire did give the group's flag to another
-	// member, and this is a retry whose earlier Crown failed after the flag
-	// write. Otherwise (a retire cut off before it wrote, however an earlier
-	// pass counted its rows, or a flag a user set since) the group is not
-	// the operation's to change, and the row writes nothing.
-	already := errors.Is(err, undo.ErrAlreadyRestored)
-	if err != nil && !already {
-		return err
-	}
-	if already && !handedOff {
-		return err
-	}
-	// A nil restore (the flag was never set: fs-regroup-xml journals an
-	// unset shell that way) was primary as surely as an explicit true, so
-	// when this operation recorded handing the book's group to another
-	// member it is crowned back the same way. Without a hand-off row the
-	// group is not the operation's to re-crown; a nil left next to the
-	// group's explicit primary is settled by the hand-off after this
-	// returns (settleAfter).
-	if crowns && group != "" && (restored != nil || handedOff) {
-		if _, cerr := versionprimary.Crown(rs.db, group, c.BookID); cerr != nil {
-			return fmt.Errorf("demote the rest of group %s after restoring %s as primary: %w", group, c.BookID, cerr)
-		}
-	}
-	return err
 }
 
 // revertExternalIDReassign moves one external id back from the book it was
