@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
 // last-edited: 2026-10-02
 
@@ -734,4 +734,75 @@ func TestRevert_RefusedDemoteLeavesOnePrimary(t *testing.T) {
 	require.Error(t, err, "the demote row is refused")
 	require.Equal(t, 1, res.Failed, "%+v", res)
 	require.Equal(t, []string{l}, d.livePrimaries(t, "vg-dune"))
+}
+
+// A run that dies in its settle leaves a pending record, but only for the
+// groups whose rows it actually wrote. Group vg-b holds a retire cut off
+// before it wrote (its demote is journaled, X is still primary): the re-run
+// finds that row already restored and must leave vg-b alone. Before, the
+// intent was written op-wide before any row ran, so the re-run counted
+// vg-b's already-restored demote as evidence and crowned X, writing an
+// explicit false over Y's never-set flag.
+func TestRevert_LeftoverPendingRecordLeavesACutOffGroupAlone(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	x := d.copyBook(t, "X", "Arrakis", "lib/Arrakis one", dcRow{track: 1, dur: 600, hash: "x1"})
+	y := d.copyBook(t, "Y", "Arrakis", "lib/Arrakis two", dcRow{track: 1, dur: 600, hash: "y1"})
+	no, yes := false, true
+	groupOf(t, d, "vg-dune", map[string]*bool{s: &no, l: nil})
+	groupOf(t, d, "vg-b", map[string]*bool{x: &yes, y: nil})
+	w := nilShellRetired(t, d, "op-y", l)
+	_, err := versionprimary.Crown(fragEnsureStore{OpsStore: d.s, chapters: d.s}, "vg-dune", s)
+	require.NoError(t, err)
+	// The cut-off retire of X: journaled, never written.
+	require.NoError(t, w.Journal(x, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
+
+	dying := &groupReadPanics{PebbleStore: d.s, group: "vg-dune", nth: 2} // 1: incumbent, 2: settle
+	func() {
+		defer func() { require.NotNil(t, recover(), "the first run died") }()
+		_, _ = audiobooks.NewRevertService(dying).RevertOperation("op-y")
+	}()
+	_, _ = audiobooks.NewRevertService(d.s).RevertOperation("op-y")
+
+	yb, err := d.s.GetBookByID(y)
+	require.NoError(t, err)
+	require.Nil(t, yb.IsPrimaryVersion, "vg-b, which the op never changed, is not written")
+	require.Equal(t, []string{l}, d.livePrimaries(t, "vg-dune"), "the group the op did change is settled")
+}
+
+// An op that demoted TWO primaries of a group (as folder-books does for
+// each primary folder-book) and handed the group to S; a user then made M
+// the primary. Reverting the op restores both originals, and every one of
+// them yields to M. Before, only the first yielded, so the other came back
+// true beside M and Elect could pick it over the user's pick.
+func TestRevert_EveryOriginalYieldsToALaterPick(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	l2 := d.copyBook(t, "L2", "Dune", "lib/Dune second", dcRow{track: 1, dur: 600, hash: "l2"})
+	m := d.copyBook(t, "M", "Dune", "lib/Dune third", dcRow{track: 1, dur: 600, hash: "m1"})
+	no, yes := false, true
+	groupOf(t, d, "vg-dune", map[string]*bool{s: &no, l: &yes, l2: &yes, m: &no})
+	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-f")
+	for _, id := range []string{l, l2} {
+		id := id
+		require.NoError(t, w.Step(id, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false", func() error {
+			_, err := d.s.ModifyBook(id, func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
+			return err
+		}))
+	}
+	_, err := versionprimary.Crown(fragEnsureStore{OpsStore: d.s, chapters: d.s}, "vg-dune", s)
+	require.NoError(t, err)
+	require.NoError(t, w.Journal(l, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", undo.HandOffCrownedValue(s), "vg-dune"))
+	_, err = versionprimary.Crown(fragEnsureStore{OpsStore: d.s, chapters: d.s}, "vg-dune", m)
+	require.NoError(t, err)
+
+	_, err = audiobooks.NewRevertService(d.s).RevertOperation("op-f")
+	require.NoError(t, err)
+	require.Equal(t, []string{m}, d.livePrimaries(t, "vg-dune"), "the user's pick stays")
+	for _, id := range []string{l, l2} {
+		b, err := d.s.GetBookByID(id)
+		require.NoError(t, err)
+		require.NotNil(t, b.IsPrimaryVersion)
+		require.False(t, *b.IsPrimaryVersion, "%s yields explicit false", id)
+	}
 }
