@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-10-02
 
@@ -624,9 +624,13 @@ func (r *ExtraOpsRegistrar) runDBOptimize(ctx context.Context, reporter opsregis
 	p.StepN(2, fmt.Sprintf("AI scan database done (2/%d)", storesTotal))
 
 	// 3. OpenLibrary store (accessed via OLService)
-	if r.Deps.OLService != nil && r.Deps.OLService.Store() != nil {
-		ol := r.Deps.OLService.Store()
-		step(2, "OpenLibrary cache", ol.Optimize, ol.CompactionStats)
+	if svc := r.Deps.OLService; svc != nil && svc.Store() != nil {
+		// Stats go through the service so each sample holds svc.Mu, the lock
+		// the delete-OL-data and factory-reset handlers close the store under.
+		step(2, "OpenLibrary cache", svc.Store().Optimize, func() database.CompactionStats {
+			st, _ := svc.CompactionStats()
+			return st
+		})
 	} else {
 		_ = reporter.Log(slog.LevelInfo, "OpenLibrary store not initialized, skipping")
 	}

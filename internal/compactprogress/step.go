@@ -1,5 +1,5 @@
 // file: internal/compactprogress/step.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 0e9c7d31-5a4b-4f62-8b1e-7c3d9a2f6e15
 // last-edited: 2026-10-02
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -72,6 +73,11 @@ var stepLog = logger.New("db-optimize")
 // The log line and the current-item label go out on every tick either way;
 // neither stamps liveness, so they cannot mask a wedge.
 func Moved(prev, cur Stats) bool {
+	// A store that vanished reads as all-zero counters; without this check
+	// its EstimatedDebt dropping to 0 would look like debt falling.
+	if prev.Absent || cur.Absent {
+		return false
+	}
 	return cur.WrittenBytes() > prev.WrittenBytes() ||
 		cur.Count > prev.Count ||
 		cur.EstimatedDebt < prev.EstimatedDebt
@@ -90,7 +96,7 @@ func RunStep(ctx context.Context, rep LogReporter, s Step) Result {
 	var res Result
 	res.HasStats = s.Stats != nil
 	if res.HasStats {
-		res.Before = s.Stats()
+		res.Before = safeStats(s)
 	}
 	start := time.Now()
 
@@ -99,6 +105,14 @@ func RunStep(ctx context.Context, rep LogReporter, s Step) Result {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		// A panic in the sampler (a reporter bug, say) must stop sampling,
+		// not take the process down with it: the compaction carries on and
+		// its completion line still gets written.
+		defer func() {
+			if p := recover(); p != nil {
+				stepLog.Error("%s: progress sampler panicked, sampling stopped: %v\n%s", s.Label, p, debug.Stack())
+			}
+		}()
 		sample(ctx, rep, s, interval, start, res.Before, stop)
 	}()
 
@@ -114,7 +128,7 @@ func RunStep(ctx context.Context, rep LogReporter, s Step) Result {
 
 	res.Elapsed = time.Since(start)
 	if res.HasStats {
-		res.After = s.Stats()
+		res.After = safeStats(s)
 	}
 	line := FormatDone(s.Label, res)
 	level := slog.LevelInfo
@@ -149,8 +163,12 @@ func sample(ctx context.Context, rep LogReporter, s Step, interval time.Duration
 			rep.SetCurrentItem(line)
 			continue
 		}
-		cur := s.Stats()
-		line = FormatTick(s.Label, elapsed, base, cur)
+		cur := safeStats(s)
+		if cur.Absent {
+			line = fmt.Sprintf("%s: %s elapsed (store closed or unavailable; no counters)", s.Label, formatDuration(elapsed))
+		} else {
+			line = FormatTick(s.Label, elapsed, base, cur)
+		}
 		_ = rep.Log(slog.LevelInfo, line)
 		rep.SetCurrentItem(line)
 		if s.Frame != nil && Moved(prev, cur) {
@@ -160,21 +178,38 @@ func sample(ctx context.Context, rep LogReporter, s Step, interval time.Duration
 	}
 }
 
+// safeStats calls s.Stats, converting a panic into an Absent sample. Reading
+// Metrics() on a *pebble.DB that something else just closed can panic; that
+// must cost one progress line, not the process.
+func safeStats(s Step) (st Stats) {
+	defer func() {
+		if p := recover(); p != nil {
+			stepLog.Error("%s: sampling compaction stats panicked: %v\n%s", s.Label, p, debug.Stack())
+			st = Stats{Absent: true}
+		}
+	}()
+	return s.Stats()
+}
+
 // FormatTick renders one in-flight sample, e.g.
 //
-//	Compacting main database (1/3): 4m10s elapsed, 18.2 GiB compacted (73.0 MiB/s),
-//	3 compactions in progress (1.1 GiB), est. debt 6.4 GiB, L0 12 files,
-//	41.3 GiB on disk, ~1,234 tombstones
+//	Compacting main database (1/3): 4m10s elapsed, 18.0 GiB written by
+//	compactions (DB-wide, 73.7 MiB/s), 3 compactions in progress (1.0 GiB),
+//	12 finished, est. debt 6.0 GiB, L0 12 files, 41.0 GiB on disk incl.
+//	obsolete, ~1,234,567 tombstones
 //
-// "compacted" is bytes written by compactions since the step began, including
-// output of compactions still running. It is shown as bytes and a rate, never
+// "written by compactions" is bytes written by ALL compactions on this
+// database since the step began -- the manual one and any background ones
+// Pebble runs alongside it, which its counters do not separate -- including
+// output of compactions still running. "on disk" includes obsolete files a
+// compaction superseded but Pebble has not deleted yet. It is shown as bytes and a rate, never
 // as a percentage: a full compaction can rewrite data more than once on its
 // way down the levels, so no counter Pebble exposes is a trustworthy denominator.
 func FormatTick(label string, elapsed time.Duration, base, cur Stats) string {
 	written := delta(cur.WrittenBytes(), base.WrittenBytes())
 	parts := []string{
 		fmt.Sprintf("%s elapsed", formatDuration(elapsed)),
-		fmt.Sprintf("%s compacted (%s)", HumanBytes(written), rate(written, elapsed)),
+		fmt.Sprintf("%s written by compactions (DB-wide, %s)", HumanBytes(written), rate(written, elapsed)),
 	}
 	if cur.NumInProgress > 0 {
 		parts = append(parts, fmt.Sprintf("%d %s in progress (%s)",
@@ -188,7 +223,7 @@ func FormatTick(label string, elapsed time.Duration, base, cur Stats) string {
 	parts = append(parts,
 		fmt.Sprintf("est. debt %s", HumanBytes(cur.EstimatedDebt)),
 		fmt.Sprintf("L0 %d %s", cur.L0Files, plural(cur.L0Files, "file", "files")),
-		fmt.Sprintf("%s on disk", HumanBytes(cur.DiskSpaceUsage)),
+		fmt.Sprintf("%s on disk incl. obsolete", HumanBytes(cur.DiskSpaceUsage)),
 		fmt.Sprintf("~%s tombstones", groupDigits(cur.TombstoneCount)),
 	)
 	return label + ": " + strings.Join(parts, ", ")
@@ -220,7 +255,7 @@ func FormatDone(label string, r Result) string {
 	}
 	fmt.Fprintf(&b, ", ~%s -> ~%s tombstones", groupDigits(r.Before.TombstoneCount), groupDigits(r.After.TombstoneCount))
 	written := delta(r.After.WrittenBytes(), r.Before.WrittenBytes())
-	fmt.Fprintf(&b, ", %s rewritten (%s)", HumanBytes(written), rate(written, r.Elapsed))
+	fmt.Fprintf(&b, ", %s written by compactions (DB-wide, %s)", HumanBytes(written), rate(written, r.Elapsed))
 	return b.String()
 }
 

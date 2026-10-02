@@ -1,5 +1,5 @@
 // file: internal/compactprogress/step_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8a1c6e-2d7b-4c90-a5e4-9b1f0d7c2a83
 // last-edited: 2026-10-02
 
@@ -79,14 +79,14 @@ func TestFormatTick(t *testing.T) {
 		TombstoneCount:  1234567,
 	}
 	got := FormatTick("Compacting main database (1/3)", 4*time.Minute+10*time.Second, base, cur)
-	want := "Compacting main database (1/3): 4m10s elapsed, 18.0 GiB compacted (73.7 MiB/s), " +
+	want := "Compacting main database (1/3): 4m10s elapsed, 18.0 GiB written by compactions (DB-wide, 73.7 MiB/s), " +
 		"3 compactions in progress (1.0 GiB), 12 finished, est. debt 6.0 GiB, L0 12 files, " +
-		"41.0 GiB on disk, ~1,234,567 tombstones"
+		"41.0 GiB on disk incl. obsolete, ~1,234,567 tombstones"
 	assert.Equal(t, want, got)
 
 	idle := FormatTick("X", 500*time.Millisecond, Stats{}, Stats{L0Files: 1})
-	assert.Equal(t, "X: 500ms elapsed, 0 B compacted (rate n/a), no compaction running, "+
-		"est. debt 0 B, L0 1 file, 0 B on disk, ~0 tombstones", idle)
+	assert.Equal(t, "X: 500ms elapsed, 0 B written by compactions (DB-wide, rate n/a), no compaction running, "+
+		"est. debt 0 B, L0 1 file, 0 B on disk incl. obsolete, ~0 tombstones", idle)
 }
 
 func TestFormatDone(t *testing.T) {
@@ -99,7 +99,7 @@ func TestFormatDone(t *testing.T) {
 	got := FormatDone("Main database", r)
 	assert.Equal(t, "Main database: done in 28m31s; live tables 31.0 GiB -> 24.0 GiB (-7.0 GiB), "+
 		"on disk 32.0 GiB -> 33.0 GiB (incl. 9.0 GiB obsolete, deleted asynchronously), "+
-		"~5,000 -> ~12 tombstones, 40.0 GiB rewritten (23.9 MiB/s)", got)
+		"~5,000 -> ~12 tombstones, 40.0 GiB written by compactions (DB-wide, 23.9 MiB/s)", got)
 
 	failed := FormatDone("OpenLibrary cache", Result{Elapsed: 2 * time.Second, Err: errors.New("boom")})
 	assert.Equal(t, "OpenLibrary cache: failed after 2s: boom", failed)
@@ -124,6 +124,42 @@ func TestMoved(t *testing.T) {
 	// A compaction finishing moves its bytes from in-progress to completed;
 	// the total must not read as going backwards.
 	assert.True(t, Moved(base, Stats{CompletedBytes: 16, InProgressBytes: 0, Count: 2, EstimatedDebt: 100}))
+	// A store closed mid-run reads as zero counters; debt "falling" to 0
+	// must not be taken for progress.
+	assert.False(t, Moved(base, Stats{Absent: true}))
+	assert.False(t, Moved(Stats{Absent: true}, base))
+}
+
+// A Stats source that panics (Metrics() on a closed DB) must cost a line,
+// not the process: sampling continues as Absent, no frame is sent, and the
+// step still completes.
+func TestRunStep_StatsPanicIsContained(t *testing.T) {
+	rep := &fakeReporter{}
+	release := make(chan struct{})
+	var calls atomic.Int64
+	var frames atomic.Int64
+	done := make(chan Result, 1)
+	go func() {
+		done <- RunStep(context.Background(), rep, Step{
+			Label: "Z",
+			Run:   func(context.Context) error { <-release; return nil },
+			Stats: func() Stats {
+				if calls.Add(1) > 1 {
+					panic("pebble: closed")
+				}
+				return Stats{EstimatedDebt: 100}
+			},
+			Frame:    func(string) { frames.Add(1) },
+			Interval: tick,
+		})
+	}()
+	require.Eventually(t, func() bool { return len(rep.snapshot()) >= 3 }, 2*time.Second, tick)
+	close(release)
+	res := <-done
+	require.NoError(t, res.Err)
+	assert.True(t, res.After.Absent)
+	assert.Zero(t, frames.Load(), "an absent sample is not progress")
+	assert.Contains(t, rep.snapshot()[0], "store closed or unavailable")
 }
 
 const tick = 5 * time.Millisecond
@@ -159,7 +195,7 @@ func TestRunStep_ReportsWhileRunningAndStopsCleanly(t *testing.T) {
 
 	logs := rep.snapshot()
 	assert.Contains(t, logs[0], "Compacting main database (1/3): ")
-	assert.Contains(t, logs[0], "compacted (")
+	assert.Contains(t, logs[0], "written by compactions (DB-wide, ")
 	assert.Contains(t, logs[0], "1 compaction in progress")
 	last := logs[len(logs)-1]
 	assert.Contains(t, last, ": done in ")
@@ -261,5 +297,5 @@ func TestCollect_RealPebble(t *testing.T) {
 	assert.Greater(t, after.LiveTableSize, int64(0))
 	assert.Greater(t, after.WrittenBytes(), before.WrittenBytes(), "a compaction must show written bytes")
 	assert.Greater(t, after.BottomLevelSize, int64(0), "a full compaction lands data in the bottom level")
-	assert.Equal(t, Stats{}, Collect(nil))
+	assert.Equal(t, Stats{Absent: true}, Collect(nil))
 }
