@@ -1,5 +1,5 @@
 // file: internal/merge/trash_restore.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
 // last-edited: 2026-10-01
 
@@ -242,6 +242,13 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 		handOffRestoredGroups(store, &before, updated, env.RootDir)
 	}
 	if !res.Restored {
+		// The row left the trash between the read and the write (another
+		// restore got there first), so this call restored nothing: put back
+		// a redirect the preview removed.
+		if res.RedirectFrom != "" {
+			restoreRedirect(store, id, res.RedirectFrom)
+			res.RedirectFrom = ""
+		}
 		return res, nil
 	}
 	// The decision reads the row as the hand-off left it, not as written.

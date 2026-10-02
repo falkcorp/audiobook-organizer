@@ -1,5 +1,5 @@
 // file: internal/merge/trash_restore_reconcile_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b547034-881d-4b1b-b911-df20c1e6ce56
 // last-edited: 2026-10-01
 
@@ -90,4 +90,40 @@ func TestRestoreFromTrash_ReconcileClearsRedirectLateWhenHandOffCrowns(t *testin
 	got, err := f.S.GetRaw(pendingKey)
 	require.NoError(t, err)
 	require.Nil(t, got, "the pending move onto the old winner is dropped")
+}
+
+// untrashBeforeWrite is a store whose next ModifyBook first takes the row out
+// of the trash, as a restore that got there between RestoreFromTrash's read
+// and its write would.
+type untrashBeforeWrite struct {
+	*database.PebbleStore
+	t *testing.T
+}
+
+func (u untrashBeforeWrite) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	_, err := u.PebbleStore.ModifyBook(id, func(b *database.Book) error {
+		notMarked := false
+		b.MarkedForDeletion = &notMarked
+		b.MarkedForDeletionAt = nil
+		organized := "organized"
+		b.LibraryState = &organized
+		return nil
+	})
+	require.NoError(u.t, err)
+	return u.PebbleStore.ModifyBook(id, fn)
+}
+
+// The preview says listable and removes the redirect, but the row has left
+// the trash by the time of the write, so this call restores nothing. The
+// redirect it removed goes back.
+func TestRestoreFromTrash_RowLeftTrashBeforeWritePutsRedirectBack(t *testing.T) {
+	f := combineUndoFixture(t)
+	loser, winner, _ := trashedLoser(t, f, "nil")
+
+	res, err := RestoreFromTrash(untrashBeforeWrite{f.S, t}, loser, nil, func(_, _ *database.Book) {})
+	require.NoError(t, err)
+
+	require.False(t, res.Restored, "the row was already out of the trash at the write")
+	require.Empty(t, res.RedirectFrom)
+	require.Equal(t, winner, resolvesTo(t, f.S, loser), "the redirect the preview removed is back")
 }
