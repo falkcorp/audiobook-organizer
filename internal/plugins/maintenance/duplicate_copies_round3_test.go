@@ -9,10 +9,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
@@ -61,4 +64,58 @@ func TestDuplicateCopies_IndexIncompleteSaysSo(t *testing.T) {
 	data, err := json.Marshal(out.Rows)
 	require.NoError(t, err)
 	require.Contains(t, string(data), "file index incomplete")
+}
+
+// dcRealVerdicts points the fixture's verdict reader at a real embedding
+// store over the fixture's own Pebble DB.
+func (d *dcFixture) dcRealVerdicts(t *testing.T) *database.EmbeddingStore {
+	t.Helper()
+	es := database.NewEmbeddingStore(d.s.DB())
+	d.p.deps = scanDeps{fakeDeps: fakeDeps{store: d.s, labels: es}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
+	return es
+}
+
+// TestDuplicateCopies_LegacyCandidateVerdictReachesReplan (S-1): a candidate
+// stored before the entity index existed, dismissed after the plan, vetoes
+// the apply. Its Replan reads verdicts only through the entity index, so the
+// status write must index it.
+func TestDuplicateCopies_LegacyCandidateVerdictReachesReplan(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	es := d.dcRealVerdicts(t)
+	id, _, err := es.UpsertCandidateNew(database.DedupCandidate{EntityType: "book", EntityAID: s, EntityBID: l, Layer: "embedding", Status: "pending"})
+	require.NoError(t, err)
+	for _, side := range []string{s, l} {
+		require.NoError(t, es.PebbleDB().Delete([]byte(fmt.Sprintf("dedup:e:book:%s:%016x", side, id)), pebble.Sync))
+	}
+	res := d.planFor(t, dcFixerID, "op-plan", nil)
+	row := findRow(t, res, dupRowID(s, l))
+	require.True(t, row.Applicable(), row.SkipReason)
+
+	require.NoError(t, es.UpdateCandidateStatus(id, "dismissed"))
+	out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{row.RowID})
+	require.Zero(t, out.Applied, "%+v", out.Rows)
+	require.True(t, d.live(t, "L"), "the owner's dismissal held")
+}
+
+// TestDuplicateCopies_ReplanReadsOnlyItsBooksLabels (C-1a): a not_dup label
+// written after the plan is honoured at apply through the label entity
+// index, and a corrupt label of an unrelated book does not fail the row.
+func TestDuplicateCopies_ReplanReadsOnlyItsBooksLabels(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	es := d.dcRealVerdicts(t)
+	res := d.planFor(t, dcFixerID, "op-plan", nil)
+	row := findRow(t, res, dupRowID(s, l))
+	require.True(t, row.Applicable(), row.SkipReason)
+
+	require.NoError(t, es.PebbleDB().Set([]byte("dedup:label:00000000000000ff"), []byte("{corrupt"), pebble.Sync))
+	re, err := newDuplicateCopiesFixer(d.p).Replan(context.Background(), nil, row, nil)
+	require.NoError(t, err, "an unrelated corrupt label is not read")
+	require.Equal(t, row.Fingerprint, re.Fingerprint)
+
+	require.NoError(t, es.UpsertLabeledExample(database.LabeledExample{CandidateID: 4242, EntityAID: l, EntityBID: s, Label: "not_dup", LabelSource: "human"}))
+	out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{row.RowID})
+	require.Zero(t, out.Applied, "%+v", out.Rows)
+	require.True(t, d.live(t, "L"), "the owner's not_dup held")
 }

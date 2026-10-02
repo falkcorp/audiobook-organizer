@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store.go
-// version: 2.23.0
+// version: 2.24.0
 // last-edited: 2026-10-01
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
@@ -81,6 +81,7 @@ func init() {
 //	dedup:s:<status>:<id16hex>      → empty             (status secondary index, INIT-2 T4)
 //	dedup:seq                       → [8]byte LE int64  (auto-increment counter)
 //	dedup:label:<id16hex>           → LabeledExample JSON   (dataset labels)
+//	dedup:lbe:<entityID>:<id16hex>  → empty                 (label entity index — both sides)
 const (
 	embVecPfx         = "emb:v:"
 	embCachePfx       = "emb:c:"
@@ -620,6 +621,27 @@ func dedupPairKey(entityType, aID, bID string) []byte {
 // "dedup:e:<type>:<entityID>:" yields all candidates for that entity in O(k).
 func dedupEntityKey(entityType, entityID string, id int64) []byte {
 	return []byte(fmt.Sprintf("%s%s:%s:%016x", dedupEntityPfx, entityType, entityID, id))
+}
+
+// setCandidateEntityIndex stages both "dedup:e:" entity-index rows of
+// candidate id into b. Idempotent (presence-only keys). Every write that
+// changes a candidate's status stages them too, not only the create:
+// candidates stored before the entity index existed (2026-06-22) have no
+// rows, and a verdict landing on one must still be found by entity — the
+// duplicate-copies and fragment fixers' Replan reads verdicts only through
+// this index (ListCandidatesForEntityStrict). Migration 64 backfills the rest.
+func setCandidateEntityIndex(b *pebble.Batch, rec candRec, id int64) error {
+	if rec.EntityAID != "" {
+		if err := b.Set(dedupEntityKey(rec.EntityType, rec.EntityAID, id), nil, nil); err != nil {
+			return err
+		}
+	}
+	if rec.EntityBID != "" {
+		if err := b.Set(dedupEntityKey(rec.EntityType, rec.EntityBID, id), nil, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // dedupStatusIdxKey builds a presence-only secondary-index key for a
@@ -1443,45 +1465,79 @@ func (s *EmbeddingStore) listCandidatesForEntity(entityType, entityID, status st
 // was stored before the entity index was introduced. Safe to call repeatedly —
 // writes are idempotent. Returns the number of candidates processed.
 func (s *EmbeddingStore) BackfillEntityIndex() (int, error) {
+	res, err := s.BackfillCandidateEntityIndex()
+	return res.Indexed, err
+}
+
+// CandidateIndexBackfill reports BackfillCandidateEntityIndex's pass.
+type CandidateIndexBackfill struct {
+	Indexed, Unreadable int
+}
+
+// BackfillCandidateEntityIndex is BackfillEntityIndex with the count of
+// records it could not decode (and so could not index). It is migration 64's
+// body: until it ran, every candidate written before 2026-06-22 that no
+// status change had touched since was invisible to ListCandidatesForEntity,
+// so a fixer's Replan missed its verdict.
+//
+// Rows go out in NoSync batches of labelBackfillBatch with a final Sync: one
+// fsync per candidate made a boot-time pass over ~400k rows take minutes.
+// s.mu is not held; a concurrent DeleteCandidate can at worst leave an index
+// row whose record is gone, which every entity reader already skips.
+func (s *EmbeddingStore) BackfillCandidateEntityIndex() (CandidateIndexBackfill, error) {
+	var res CandidateIndexBackfill
 	s.closeMu.RLock()
 	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
-		return 0, err
+		return res, err
 	}
 	prefix := []byte(dedupRecPfx)
 	upper := prefixUpperBound(prefix)
 
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
 	if err != nil {
-		return 0, fmt.Errorf("backfill entity index scan: %w", err)
+		return res, fmt.Errorf("backfill entity index scan: %w", err)
 	}
 	defer iter.Close()
 
-	count := 0
+	b := s.db.NewBatch()
+	pending := 0
 	for iter.First(); iter.Valid(); iter.Next() {
 		idHex := string(iter.Key())[len(dedupRecPfx):]
 		id, err := strconv.ParseInt(idHex, 16, 64)
 		if err != nil {
+			res.Unreadable++
 			continue
 		}
 		var rec candRec
 		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			res.Unreadable++
 			continue
 		}
-		b := s.db.NewBatch()
-		_ = b.Set(dedupEntityKey(rec.EntityType, rec.EntityAID, id), nil, nil)
-		_ = b.Set(dedupEntityKey(rec.EntityType, rec.EntityBID, id), nil, nil)
-		if err := b.Commit(pebble.Sync); err != nil {
+		if err := setCandidateEntityIndex(b, rec, id); err != nil {
 			b.Close()
-			return count, fmt.Errorf("backfill entity index write %d: %w", id, err)
+			return res, fmt.Errorf("backfill entity index stage %d: %w", id, err)
 		}
-		b.Close()
-		count++
+		res.Indexed++
+		if pending++; pending >= labelBackfillBatch {
+			if err := b.Commit(pebble.NoSync); err != nil {
+				b.Close()
+				return res, fmt.Errorf("backfill entity index write: %w", err)
+			}
+			b.Close()
+			b, pending = s.db.NewBatch(), 0
+		}
 	}
 	if err := iter.Error(); err != nil {
-		return count, fmt.Errorf("backfill entity index: %w", err)
+		b.Close()
+		return res, fmt.Errorf("backfill entity index: %w", err)
 	}
-	return count, nil
+	err = b.Commit(pebble.Sync)
+	b.Close()
+	if err != nil {
+		return res, fmt.Errorf("backfill entity index write: %w", err)
+	}
+	return res, nil
 }
 
 // UpdateCandidateStatus updates the status of a single candidate by ID.
@@ -1553,6 +1609,9 @@ func (s *EmbeddingStore) writeCandidateStatusLocked(id int64, rec candRec, statu
 		}
 	}
 	if err := b.Set(dedupStatusIdxKey(status, id), nil, nil); err != nil {
+		return err
+	}
+	if err := setCandidateEntityIndex(b, rec, id); err != nil {
 		return err
 	}
 	return b.Commit(candidateWriteOpts) // NoSync — see candidateWriteOpts (#19)
@@ -1989,8 +2048,8 @@ func (s *EmbeddingStore) MarkCandidatesAsMergedForEntity(entityType, entityID st
 		// new one. Without this, bulk merges left stale dedup:s:pending: rows
 		// behind (and never wrote dedup:s:merged:), so the indexed read path
 		// kept surfacing merged candidates as pending. The "dedup:e:" entity
-		// rows are intentionally untouched — the candidate still exists and
-		// references the same entities; only its status changed.
+		// rows keep naming the same entities; they are re-set below only so
+		// a row stored before the entity index existed gains them.
 		if oldStatus != "" && oldStatus != "merged" {
 			if err := b.Delete(dedupStatusIdxKey(oldStatus, t.id), nil); err != nil {
 				return 0, fmt.Errorf("mark candidates merged status-index delete %d: %w", t.id, err)
@@ -1998,6 +2057,11 @@ func (s *EmbeddingStore) MarkCandidatesAsMergedForEntity(entityType, entityID st
 		}
 		if err := b.Set(dedupStatusIdxKey("merged", t.id), nil, nil); err != nil {
 			return 0, fmt.Errorf("mark candidates merged status-index set %d: %w", t.id, err)
+		}
+		// A legacy row may have no "dedup:e:" rows at all; a merged verdict
+		// must be findable by entity (setCandidateEntityIndex).
+		if err := setCandidateEntityIndex(b, t.rec, t.id); err != nil {
+			return 0, fmt.Errorf("mark candidates merged entity-index set %d: %w", t.id, err)
 		}
 	}
 	if err := b.Commit(pebble.Sync); err != nil {

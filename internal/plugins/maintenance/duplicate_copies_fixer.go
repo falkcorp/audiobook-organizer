@@ -491,16 +491,19 @@ type dcRejections = map[[2]string]dcRejection
 //     decision about the pair this fixer must not remake;
 //   - the review page's dismissed duplicate groups, every pair inside one.
 //
-// ids nil reads the candidates of the whole library (Plan); otherwise only
-// those of the books ids, through the O(k) entity index (a Replan: every
-// pair it judges has both books in ids). Labels are always read whole: they
-// are keyed by candidate id with no entity index, and DeleteCandidate drops
-// a candidate's keys but not its label, so a per-candidate read would miss an
-// orphaned not_dup.
+// ids nil reads the labels and candidates of the whole library (Plan);
+// otherwise only those naming the books ids, through the O(k) entity indexes
+// (a Replan: every pair it judges has both books in ids). Labels are read by
+// their own entity index (dedup:lbe:, keyed by the label's EntityAID/BID),
+// not through the candidate, so a not_dup whose candidate was deleted (an
+// orphaned label) is still found.
 //
 // Every read is strict: a rejection it cannot read fails the plan rather than
-// reading as none, and so does no verdict store at all. The fragment fixer's
-// iTunes-parent rule reads the same verdicts.
+// reading as none, and so does no verdict store at all. A Replan reads only
+// its books' labels, so a corrupt label of an unrelated book cannot fail it;
+// Plan's whole-keyspace read still fails on one, which is what keeps an
+// unindexable (corrupt) label from being skipped silently. The fragment
+// fixer's iTunes-parent rule reads the same verdicts.
 func dcOwnerVerdicts(vr DedupVerdictReader, prefs dcPrefReader, ids []string) (dcRejections, error) {
 	if vr == nil {
 		return nil, errors.New("dedup verdict store unavailable: cannot honour the owner's not_dup labels and dismissals")
@@ -514,7 +517,13 @@ func dcOwnerVerdicts(vr DedupVerdictReader, prefs dcPrefReader, ids []string) (d
 			out[k] = dcRejection{Kind: kind, Why: why}
 		}
 	}
-	labels, err := vr.ListLabeledExamplesStrict(database.LabeledExampleFilter{Label: "not_dup"})
+	var labels []database.LabeledExample
+	var err error
+	if ids == nil {
+		labels, err = vr.ListLabeledExamplesStrict(database.LabeledExampleFilter{Label: "not_dup"})
+	} else {
+		labels, err = vr.ListLabeledExamplesForEntitiesStrict(ids, database.LabeledExampleFilter{Label: "not_dup"})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list not_dup labels: %w", err)
 	}
