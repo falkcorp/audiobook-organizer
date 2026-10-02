@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-10-01
 
@@ -135,6 +135,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -949,11 +950,23 @@ func (f *folderBooksFixer) titleIDs(store OpsStore, name string, key func(string
 			for _, id := range ids {
 				b, err := store.GetBookByID(id)
 				if err != nil {
-					return nil, fmt.Errorf("re-read %s for the duplicate check: %w", id, err)
+					// One unreadable book (a corrupt sidecar, say) must not
+					// wedge the cache: returning here would leave c.gen
+					// behind, so every later call would re-read the same
+					// book and fail the same way. Drop the half-caught-up
+					// cache and take the full rebuild, which lists books
+					// without that per-book read.
+					dcLog.Warn("folder-books: re-read of book %s for the %s title index failed, rebuilding it: %s",
+						logger.SanitizeLogValue(id), name, logger.SanitizeLogValue(err.Error()))
+					delete(f.titleIdx, name)
+					c = nil
+					break
 				}
 				c.move(id, b, key)
 			}
-			c.gen = upTo
+			if c != nil {
+				c.gen = upTo
+			}
 		} else {
 			c = nil
 		}
