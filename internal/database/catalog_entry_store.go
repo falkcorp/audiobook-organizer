@@ -1,5 +1,5 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
 // last-edited: 2026-10-01
 
@@ -35,6 +35,7 @@ import (
 // Keyspace (all new prefixes; dropping them removes the feature):
 //
 //	cat:<id>                         entry JSON (no raw payload)
+//	cat_id:<id>                      ""    (every entry, keys only: list/count without reading entry values)
 //	cat_raw:<id>                     provider JSON as received (never decoded on a read path)
 //	cat_pid:<provider>:<mkt>:<pid>   -> id  (idempotent upsert)
 //	cat_author:<author key>:<id>     ""    (author identity -> entries)
@@ -45,10 +46,15 @@ import (
 //	cat_stale:<id>                   ""    (stale_since set; cheap census count)
 //	cat_author_state:<harvest key>   per-author harvest state JSON (R10)
 //
+// cat_id was added before any live harvest ran (the op is behind
+// catalog.enabled, default off), so no store holds entries without it and
+// there is no backfill.
+//
 // Prefix collisions: "cat:" is distinct from every "cat_" prefix because the
 // fifth byte differs (':' vs '_').
 const (
 	catEntryPrefix       = "cat:"
+	catIDPrefix          = "cat_id:"
 	catRawPrefix         = "cat_raw:"
 	catPIDPrefix         = "cat_pid:"
 	catAuthorPrefix      = "cat_author:"
@@ -63,7 +69,7 @@ const (
 // CatalogKeyPrefixes lists every key prefix the catalog writes. Tests use it to
 // prove a dry run writes nothing; a rollback can drop exactly these.
 func CatalogKeyPrefixes() []string {
-	return []string{catEntryPrefix, catRawPrefix, catPIDPrefix, catAuthorPrefix, catSeriesPrefix,
+	return []string{catEntryPrefix, catIDPrefix, catRawPrefix, catPIDPrefix, catAuthorPrefix, catSeriesPrefix,
 		catGroupPrefix, catGroupKeyPrefix, catHarvestPrefix, catStalePrefix, catAuthorStatePrefix}
 }
 
@@ -196,6 +202,9 @@ type CatalogAuthorState struct {
 	Dropped  int  `json:"dropped"`
 	NameOnly int  `json:"name_only"`
 	Capped   bool `json:"capped,omitempty"`
+	// Skipped: products the provider sent that could not be decoded. They
+	// count toward Fetched; a run that skipped any marks nothing stale.
+	Skipped int `json:"skipped,omitempty"`
 	// Conflict: owned books named more than one author ASIN for this name.
 	Conflict       bool       `json:"conflict,omitempty"`
 	MarkedStale    int        `json:"marked_stale,omitempty"`
@@ -216,6 +225,9 @@ type CatalogStore struct {
 	// logical race, not a memory one.
 	writeMu sync.Mutex
 	now     func() time.Time
+	// scanHook, when set (tests only), is told every prefix a list or count
+	// scan walks, so a test can prove the entry values are never iterated.
+	scanHook func(prefix string)
 }
 
 // NewCatalogStore builds the catalog store on a shared PebbleDB handle.
@@ -401,7 +413,8 @@ func (s *CatalogStore) assignGroup(batch *pebble.Batch, key string, pending map[
 }
 
 func entryIndexKeys(e *CatalogEntry) []string {
-	keys := make([]string, 0, len(e.AuthorKeys)+len(e.SeriesKeys)+len(e.HarvestedBy)+2)
+	keys := make([]string, 0, len(e.AuthorKeys)+len(e.SeriesKeys)+len(e.HarvestedBy)+3)
+	keys = append(keys, catIDPrefix+e.ID)
 	for _, k := range e.AuthorKeys {
 		keys = append(keys, catAuthorPrefix+k+":"+e.ID)
 	}
@@ -442,7 +455,8 @@ func (s *CatalogStore) deleteIndexes(batch *pebble.Batch, e *CatalogEntry) error
 // harvestKey (R10: stale_since only after a complete fetch below the cap; the
 // caller enforces that). Every entry filed under harvestKey whose id is not in
 // seen loses harvestKey from harvested_by; an entry whose harvested_by
-// becomes empty gets stale_since (if not already set). Entries are never
+// becomes empty gets stale_since (if not already set). The key's verdicts
+// (ConfirmedBy, ConflictBy) go with it in both cases. Entries are never
 // deleted. Returns how many entries became stale.
 func (s *CatalogStore) MarkUnseen(harvestKey string, seen map[string]bool) (int, error) {
 	if harvestKey == "" {
@@ -478,14 +492,13 @@ func (s *CatalogStore) MarkUnseen(harvestKey string, seen map[string]bool) (int,
 			return 0, err
 		}
 		e.HarvestedBy = slices.DeleteFunc(slices.Clone(e.HarvestedBy), func(k string) bool { return k == harvestKey })
-		if len(e.HarvestedBy) > 0 {
-			// Other authors still list it: their verdicts alone decide the
-			// flags. With no harvester left the entry goes stale and keeps
-			// its last verdicts as history.
-			e.ConfirmedBy = withoutKey(e.ConfirmedBy, harvestKey)
-			e.ConflictBy = withoutKey(e.ConflictBy, harvestKey)
-			deriveVerdictFlags(e)
-		}
+		// A harvester that no longer lists the entry has no verdict on it.
+		// That holds when it was the last one too: a stale entry must not
+		// keep reading "confirmed by author ASIN" on the strength of a
+		// listing that has stopped returning it.
+		e.ConfirmedBy = withoutKey(e.ConfirmedBy, harvestKey)
+		e.ConflictBy = withoutKey(e.ConflictBy, harvestKey)
+		deriveVerdictFlags(e)
 		if len(e.HarvestedBy) == 0 && e.StaleSince == nil {
 			t := now
 			e.StaleSince = &t
@@ -542,18 +555,35 @@ func (s *CatalogStore) GetRaw(id string) ([]byte, error) {
 }
 
 // idsUnder returns the trailing id component of every key under prefix.
+// Only index prefixes (empty values) may be passed: never catEntryPrefix,
+// whose values are the ~1 KB entry JSON.
 func (s *CatalogStore) idsUnder(prefix string) ([]string, error) {
+	ids, _, err := s.pageUnder(prefix, 0, -1)
+	return ids, err
+}
+
+// pageUnder walks the keys under an index prefix (empty values) and returns
+// the trailing ids of keys [offset, offset+limit) plus the total key count.
+// limit < 0 means no limit. Ids past the window are counted, never copied.
+func (s *CatalogStore) pageUnder(prefix string, offset, limit int) ([]string, int, error) {
+	if s.scanHook != nil {
+		s.scanHook(prefix)
+	}
 	p := []byte(prefix)
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: p, UpperBound: prefixUpperBound(p)})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer iter.Close()
 	var ids []string
+	n := 0
 	for iter.First(); iter.Valid(); iter.Next() {
-		ids = append(ids, string(bytes.TrimPrefix(iter.Key(), p)))
+		if n >= offset && (limit < 0 || len(ids) < limit) {
+			ids = append(ids, string(bytes.TrimPrefix(iter.Key(), p)))
+		}
+		n++
 	}
-	return ids, iter.Error()
+	return ids, n, iter.Error()
 }
 
 // CatalogListQuery selects entries for the read API. At most one of AuthorKey
@@ -565,7 +595,10 @@ type CatalogListQuery struct {
 	Offset    int
 }
 
-// ListEntries returns one page of entries and the total matching count.
+// ListEntries returns one page of entries and the total matching count. Every
+// branch walks a keys-only index (cat_id, cat_author, cat_series), copies only
+// the ids inside the requested window, and decodes only those entries; the
+// total is a key count. No branch iterates the entry values.
 func (s *CatalogStore) ListEntries(q CatalogListQuery) ([]CatalogEntry, int, error) {
 	if q.AuthorKey != "" && q.SeriesKey != "" {
 		return nil, 0, errors.New("catalog list: author and series filters are exclusive")
@@ -576,24 +609,17 @@ func (s *CatalogStore) ListEntries(q CatalogListQuery) ([]CatalogEntry, int, err
 	}
 	offset := max(q.Offset, 0)
 
-	var ids []string
-	var err error
+	prefix := catIDPrefix
 	switch {
 	case q.AuthorKey != "":
-		ids, err = s.idsUnder(catAuthorPrefix + q.AuthorKey + ":")
+		prefix = catAuthorPrefix + q.AuthorKey + ":"
 	case q.SeriesKey != "":
-		ids, err = s.idsUnder(catSeriesPrefix + q.SeriesKey + ":")
-	default:
-		ids, err = s.idsUnder(catEntryPrefix)
+		prefix = catSeriesPrefix + q.SeriesKey + ":"
 	}
+	ids, total, err := s.pageUnder(prefix, offset, limit)
 	if err != nil {
 		return nil, 0, err
 	}
-	total := len(ids)
-	if offset >= total {
-		return []CatalogEntry{}, total, nil
-	}
-	ids = ids[offset:min(offset+limit, total)]
 	out := make([]CatalogEntry, 0, len(ids))
 	for _, id := range ids {
 		e, err := s.GetEntry(id)
@@ -613,16 +639,16 @@ func (s *CatalogStore) EditionGroupMembers(groupID string) ([]string, error) {
 	return s.idsUnder(catGroupPrefix + groupID + ":")
 }
 
-// CountEntries counts every catalog entry.
+// CountEntries counts every catalog entry by its keys-only cat_id index.
 func (s *CatalogStore) CountEntries() (int, error) {
-	ids, err := s.idsUnder(catEntryPrefix)
-	return len(ids), err
+	_, n, err := s.pageUnder(catIDPrefix, 0, 0)
+	return n, err
 }
 
 // CountStale counts entries with stale_since set.
 func (s *CatalogStore) CountStale() (int, error) {
-	ids, err := s.idsUnder(catStalePrefix)
-	return len(ids), err
+	_, n, err := s.pageUnder(catStalePrefix, 0, 0)
+	return n, err
 }
 
 // GetAuthorState returns the harvest state for key, or nil if none.

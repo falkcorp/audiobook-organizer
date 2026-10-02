@@ -1,5 +1,5 @@
 // file: internal/metadata/audible_author_list.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f2d9a14-3b7e-4c58-a1d0-8e5f7c2b9a63
 // last-edited: 2026-10-01
 
@@ -15,7 +15,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+var authorListLog = logger.New("audible-author-list")
 
 // AuthorLister lists every product a provider credits to an author name, one
 // page at a time, for the author catalog harvest (catalog.harvest-authors).
@@ -47,6 +51,11 @@ var ErrCatalogProductNotFound = errors.New("catalog product not found")
 type AuthorPage struct {
 	Products     []CatalogProduct
 	TotalResults int
+	// Skipped counts products the provider sent on this page that could not
+	// be decoded. They are not in Products, but they ARE part of the
+	// listing: a caller counting received products toward TotalResults must
+	// add them, or one malformed product would make every walk look short.
+	Skipped int
 }
 
 // CatalogContributor is an author or narrator credit on a product. ASIN is
@@ -128,7 +137,12 @@ func (c *AudibleClient) ListByAuthor(ctx context.Context, name string, page, pag
 	for i, raw := range resp.Products {
 		p, err := decodeCatalogProduct(raw)
 		if err != nil {
-			return AuthorPage{}, fmt.Errorf("audible author listing %q page %d product %d: %w", name, page, i, err)
+			// One malformed product must not fail the page (and with it the
+			// whole author): skip it, count it, and let the walk go on.
+			out.Skipped++
+			authorListLog.Warn("audible author listing %q page %d: skipping product %d: %v",
+				logger.SanitizeLogValue(name), page, i, err)
+			continue
 		}
 		out.Products = append(out.Products, p)
 	}

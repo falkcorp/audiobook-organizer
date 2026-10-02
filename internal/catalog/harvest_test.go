@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
 // last-edited: 2026-10-01
 
@@ -487,7 +487,9 @@ func TestUpsert_GroupIDIsStable(t *testing.T) {
 		t.Fatal(err)
 	}
 	first, _ := st.GetEntry(r1.IDs[0])
-	p.Authors[0].ASIN = "AB1"
+	// The provider now credits the author under another spelling, so the
+	// group key it computes differs: the stored group id must still win.
+	p.Authors[0].Name = "A. B. Renamed"
 	if _, err := st.UpsertEntries([]database.CatalogUpsert{{Entry: BuildEntry(p, "audible", "us")}}, "ab"); err != nil {
 		t.Fatal(err)
 	}
@@ -680,5 +682,192 @@ func TestUpsert_CoAuthorVerdictsMerge(t *testing.T) {
 		if e.AuthorConflict {
 			t.Errorf("order %v: conflict survived b's clean re-harvest", order)
 		}
+	}
+}
+
+// scriptLister is an AuthorLister whose listing is a function of the call,
+// so a test can serve a truncated or inconsistent reply on a chosen page. It
+// counts every request (listing pages and lookups). Lookups are not found.
+type scriptLister struct {
+	list    func(name string, page, size int) metadata.AuthorPage
+	pages   atomic.Int64
+	lookups atomic.Int64
+}
+
+func (l *scriptLister) ProviderID() string { return "audible" }
+func (l *scriptLister) ListByAuthor(_ context.Context, name string, page, size int) (metadata.AuthorPage, error) {
+	l.pages.Add(1)
+	return l.list(name, page, size), nil
+}
+func (l *scriptLister) LookupProduct(_ context.Context, asin string) (*metadata.CatalogProduct, error) {
+	l.lookups.Add(1)
+	return nil, fmt.Errorf("%s: %w", asin, metadata.ErrCatalogProductNotFound)
+}
+
+func sixProducts() []metadata.CatalogProduct {
+	out := make([]metadata.CatalogProduct, 6)
+	for i := range out {
+		out[i] = metadata.CatalogProduct{ASIN: fmt.Sprintf("P%d", i), Title: fmt.Sprintf("Book %d", i), Language: "english",
+			Authors: []metadata.CatalogContributor{{Name: "Ann Author"}}}
+	}
+	return out
+}
+
+func slicePage(all []metadata.CatalogProduct, page, size int) metadata.AuthorPage {
+	lo := min(page*size, len(all))
+	return metadata.AuthorPage{Products: all[lo:min(lo+size, len(all))], TotalResults: len(all)}
+}
+
+// harvestTwice harvests Ann Author once against the full six-product
+// listing (complete, 6 kept), then again against second, and returns the
+// second run's state.
+func harvestTwice(t *testing.T, st *database.CatalogStore, second func(page, size int) metadata.AuthorPage) database.CatalogAuthorState {
+	t.Helper()
+	all := sixProducts()
+	run := 0
+	l := &scriptLister{list: func(_ string, page, size int) metadata.AuthorPage {
+		if run == 0 {
+			return slicePage(all, page, size)
+		}
+		return second(page, size)
+	}}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1, OpID: "op-test"})
+	a := ScopeAuthor{Key: HarvestKey("Ann Author"), Name: "Ann Author"}
+	s, err := h.HarvestAuthor(context.Background(), a, nil)
+	if err != nil || s.State != database.CatalogHarvestComplete || s.Kept != 6 {
+		t.Fatalf("first run = %+v, %v; want complete with 6 kept", s, err)
+	}
+	run = 1
+	s, err = h.HarvestAuthor(context.Background(), a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// TestHarvest_EmptyPageBeforeTotalIsPartial: page 1 comes back empty while
+// total_results still says 6. That is a truncated reply, not the end of the
+// listing: the author is partial and nothing goes stale (R10).
+func TestHarvest_EmptyPageBeforeTotalIsPartial(t *testing.T) {
+	st, _ := openCatalog(t)
+	all := sixProducts()
+	s := harvestTwice(t, st, func(page, size int) metadata.AuthorPage {
+		if page >= 1 {
+			return metadata.AuthorPage{Products: []metadata.CatalogProduct{}, TotalResults: 6}
+		}
+		return slicePage(all, page, size)
+	})
+	if s.State != database.CatalogHarvestPartial || s.MarkedStale != 0 || s.LastError == "" {
+		t.Errorf("state = %+v; want partial, 0 marked stale, an error recorded", s)
+	}
+	if n, _ := st.CountStale(); n != 0 {
+		t.Errorf("truncated listing marked %d entries stale", n)
+	}
+}
+
+// TestHarvest_ZeroTotalForKnownAuthorIsPartial: a transient "0 results"
+// reply for an author whose last harvest kept entries must not stale them.
+func TestHarvest_ZeroTotalForKnownAuthorIsPartial(t *testing.T) {
+	st, _ := openCatalog(t)
+	s := harvestTwice(t, st, func(int, int) metadata.AuthorPage {
+		return metadata.AuthorPage{Products: []metadata.CatalogProduct{}, TotalResults: 0}
+	})
+	if s.State != database.CatalogHarvestPartial || s.MarkedStale != 0 {
+		t.Errorf("state = %+v; want partial with nothing marked stale", s)
+	}
+	if n, _ := st.CountStale(); n != 0 {
+		t.Errorf("zero-total reply marked %d entries stale", n)
+	}
+}
+
+// TestHarvest_ZeroTotalForNewAuthorIsComplete: an author with nothing kept
+// before and no products now is a real, complete, empty answer.
+func TestHarvest_ZeroTotalForNewAuthorIsComplete(t *testing.T) {
+	st, _ := openCatalog(t)
+	l := &scriptLister{list: func(string, int, int) metadata.AuthorPage {
+		return metadata.AuthorPage{Products: []metadata.CatalogProduct{}}
+	}}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1})
+	s, err := h.HarvestAuthor(context.Background(), ScopeAuthor{Key: HarvestKey("Nobody"), Name: "Nobody"}, nil)
+	if err != nil || s.State != database.CatalogHarvestComplete {
+		t.Errorf("state = %+v, %v; want complete", s, err)
+	}
+}
+
+// TestHarvest_SkippedProductCountsTowardTotalButStalesNothing: an
+// undecodable product the lister skipped still counts toward total_results,
+// so the author completes; but since its id is unknown, the stale pass is
+// skipped rather than staling a stored entry it may be.
+func TestHarvest_SkippedProductCountsTowardTotalButStalesNothing(t *testing.T) {
+	st, _ := openCatalog(t)
+	all := sixProducts()
+	s := harvestTwice(t, st, func(page, size int) metadata.AuthorPage {
+		pg := slicePage(all, page, size)
+		if page == 2 { // P5 arrives malformed
+			pg.Products, pg.Skipped = pg.Products[:1], 1
+		}
+		return pg
+	})
+	if s.State != database.CatalogHarvestComplete || s.Fetched != 6 || s.Skipped != 1 || s.MarkedStale != 0 {
+		t.Errorf("state = %+v; want complete, 6 fetched, 1 skipped, 0 stale", s)
+	}
+	if e, _ := st.GetEntryByProviderID("audible", "us", "P5"); e == nil || e.StaleSince != nil {
+		t.Errorf("the skipped product's stored entry went stale: %+v", e)
+	}
+}
+
+// TestEstimateRun_IsAnUpperBound: the dry-run request estimate must not be
+// below what the run then makes. Pages are summed per author as ceilings (1
+// and 3 products at 2 per page = 1 + 2 pages, not 2 x ceil(2/2)), and every
+// owned ASIN the listing does not return costs one lookup.
+func TestEstimateRun_IsAnUpperBound(t *testing.T) {
+	st, _ := openCatalog(t)
+	mk := func(name string, n int) []metadata.CatalogProduct {
+		out := make([]metadata.CatalogProduct, n)
+		for i := range out {
+			out[i] = metadata.CatalogProduct{ASIN: fmt.Sprintf("%s%d", name, i), Title: fmt.Sprintf("%s %d", name, i), Language: "english",
+				Authors: []metadata.CatalogContributor{{Name: name}}}
+		}
+		return out
+	}
+	by := map[string][]metadata.CatalogProduct{"Ay": mk("Ay", 1), "Bee": mk("Bee", 3)}
+	l := &scriptLister{list: func(name string, page, size int) metadata.AuthorPage { return slicePage(by[name], page, size) }}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1})
+	due := []ScopeAuthor{
+		{Key: HarvestKey("Ay"), Name: "Ay"},
+		{Key: HarvestKey("Bee"), Name: "Bee", OwnedASINs: []string{"X1", "X2", "X3"}},
+	}
+	est := h.EstimateRun(context.Background(), ScopeCensus{}, due, 2)
+	l.pages.Store(0)
+	l.lookups.Store(0)
+	if _, err := h.Run(context.Background(), &fakeReporter{}, due, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	actual := int(l.pages.Load() + l.lookups.Load())
+	if actual != 6 {
+		t.Fatalf("run made %d requests; the fixture expects 6 (3 pages + 3 lookups)", actual)
+	}
+	if est.EstimatedRequests < actual {
+		t.Errorf("estimate %d < actual %d (%+v)", est.EstimatedRequests, actual, est)
+	}
+}
+
+// TestMarkUnseen_LastHarvesterDropsItsVerdict: when the only harvester that
+// confirmed an entry stops listing it, the entry goes stale AND loses that
+// confirmation; a stale entry must not keep reading "confirmed by ASIN".
+func TestMarkUnseen_LastHarvesterDropsItsVerdict(t *testing.T) {
+	st, _ := openCatalog(t)
+	e := BuildEntry(metadata.CatalogProduct{ASIN: "Z1", Title: "Zed", Authors: []metadata.CatalogContributor{{Name: "A", ASIN: "AA"}}}, "audible", "us")
+	e.NameOnlyAuthor, e.AuthorConflict = false, true
+	if _, err := st.UpsertEntries([]database.CatalogUpsert{{Entry: e}}, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.MarkUnseen("a", map[string]bool{}); err != nil || n != 1 {
+		t.Fatalf("MarkUnseen = %d, %v; want 1 stale", n, err)
+	}
+	got, _ := st.GetEntryByProviderID("audible", "us", "Z1")
+	if got.StaleSince == nil || len(got.HarvestedBy) != 0 || len(got.ConfirmedBy) != 0 || len(got.ConflictBy) != 0 ||
+		!got.NameOnlyAuthor || got.AuthorConflict {
+		t.Errorf("stale entry kept a dropped harvester's verdict: %+v", got)
 	}
 }

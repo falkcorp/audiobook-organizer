@@ -1,5 +1,5 @@
 # file: scripts/mutation-tables/catalog-harvest-rules.muts
-# version: 1.1.1
+# version: 1.2.0
 # guid: 4c1e7a93-8b2d-4f60-a5e9-2d6b0f8c3a71
 # last-edited: 2026-10-01
 #
@@ -14,6 +14,9 @@
 # range read as a position, a title-only group, a homonym's catalog kept, a
 # capped or partial listing marking the unlisted tail stale.
 #
+# M28 deletes the short verdict but keeps the return: turning the case off
+# entirely loops forever on an empty page and hangs the suite.
+#
 # M19 removes BOTH preserved fields: removing only the group id is an
 # equivalent mutant while the old group key is kept, because the key maps back
 # to the same id.
@@ -23,18 +26,18 @@ M02 range-branch-skipped | internal/catalog/sequence.go | s/seqRangeRe\.FindStri
 M03 title-only-group | internal/catalog/normalize.go | s/if id == "" \x7c\x7c t == "" \{/if t == "" {/
 M04 group-ignores-title | internal/catalog/normalize.go | s/return id \+ "\x7c" \+ t/return id/
 M05 markers-not-stripped | internal/catalog/normalize.go | s/return authorjunk\.FoldKey\(StripEditionMarkers\(title\)\)/return authorjunk.FoldKey(title)/
-M06 asin-not-preferred | internal/catalog/normalize.go | s/if k := AuthorASINKey\(authorASIN\); k != "" \{/if k := AuthorASINKey(authorASIN); k != "" && false {/
+M06 group-name-unfolded | internal/catalog/normalize.go | s/id := AuthorNameKey\(primaryAuthorName\)/id := "name:" + primaryAuthorName/
 M07 homonym-kept | internal/catalog/disambig.go | s/if asin == "" \x7c\x7c len\(res\.AuthorASINs\) == 0 \{/if true {/
 M08 coauthor-asin-taken | internal/catalog/disambig.go | s/if a\.ASIN == "" \x7c\x7c authorjunk\.FoldKey\(a\.Name\) != fold \{/if a.ASIN == "" \x7c\x7c fold == "-" {/
 M09 conflict-never-set | internal/catalog/disambig.go | s/res\.Conflict = len\(res\.AuthorASINs\) > 1\n\treturn res, nil/res.Conflict = false\n\treturn res, nil/
 M10 lookup-even-when-listed | internal/catalog/disambig.go | s/if p, ok := fetched\[owned\]; ok \{/if p, ok := fetched[owned]; ok && false {/
 M11 language-filter-off | internal/catalog/disambig.go | s/return pl == "" \x7c\x7c pl == w/return pl == pl \x7c\x7c pl == w/
 M12 dramatized-read-as-format | internal/catalog/entry.go | s/case dramatizedRe\.MatchString\(text\):/case false \&\& dramatizedRe.MatchString(text):/
-M13 capped-marks-stale | internal/catalog/harvest.go | s/\t\tif !fr\.capped \{/\t\tif true {/
+M13 capped-marks-stale | internal/catalog/harvest.go | s/if !fr\.capped \&\& fr\.skipped == 0 \{/if fr.skipped == 0 {/
 M14 cap-not-enforced | internal/catalog/harvest.go | s/if r\.raw >= h\.Cfg\.MaxProducts \{/if false {/
 M15 prev-asins-ignored | internal/catalog/harvest.go | s/\&\& prevASINs != nil \{/\&\& false {/
 M16 partial-not-retried | internal/catalog/harvest.go | s/if prev\.State != database\.CatalogHarvestComplete \x7c\x7c prev\.LastCompleteAt == nil \{/if prev.LastCompleteAt == nil {/
-M17 stop-at-total-ignored | internal/catalog/harvest.go | s/if len\(pg\.Products\) == 0 \x7c\x7c r\.raw >= pg\.TotalResults \{/if len(pg.Products) == 0 {/
+M17 stop-at-total-ignored | internal/catalog/harvest.go | s/case r\.raw >= pg\.TotalResults:/case false:/
 M18 stale-ignores-coauthors | internal/database/catalog_entry_store.go | s/if len\(e\.HarvestedBy\) == 0 \&\& e\.StaleSince == nil \{/if e.StaleSince == nil {/
 M19 group-id-recomputed | internal/database/catalog_entry_store.go | s/\t\t\tentry\.EditionGroupID = old\.EditionGroupID\n\t\t\tentry\.EditionGroupKey = old\.EditionGroupKey\n//
 M20 batch-group-map-ignored | internal/database/catalog_entry_store.go | s/if gid, ok := pending\[key\]; ok \{/if gid, ok := pending[key]; ok \&\& false {/
@@ -44,4 +47,10 @@ M23 404-not-classified | internal/metadata/audible_author_list.go | s/pse\.Statu
 M24 registry-not-fed | internal/catalog/harvest.go | s/\th\.Cfg\.OnProviderError\(err\)\n/\n/
 M25 no-stand-down-cancel | internal/catalog/harvest.go | s/\t\t\tcancel\(\)\n\t\t\}/\t\t}/
 M26 verdict-last-writer-wins | internal/database/catalog_entry_store.go | s/applyVerdict\(&entry, harvestKey, !in\.NameOnlyAuthor, in\.AuthorConflict\)/entry.NameOnlyAuthor, entry.AuthorConflict = in.NameOnlyAuthor, in.AuthorConflict/
-M27 unseen-keeps-verdict | internal/database/catalog_entry_store.go | s/\t\t\tderiveVerdictFlags\(e\)\n//
+M27 unseen-keeps-verdict | internal/database/catalog_entry_store.go | s/\t\te\.ConfirmedBy = withoutKey\(e\.ConfirmedBy, harvestKey\)\n//
+M28 empty-page-completes | internal/catalog/harvest.go | s/\t\t\tr\.short = fmt\.Sprintf\("listing ended at[^\n]*\n//
+M29 zero-total-believed | internal/catalog/harvest.go | s/\} else if prevKept > 0 \{/} else if false {/
+M30 skipped-not-counted | internal/catalog/harvest.go | s/received := len\(pg\.Products\) \+ pg\.Skipped/received := len(pg.Products)/
+M31 skipped-marks-stale | internal/catalog/harvest.go | s/if !fr\.capped \&\& fr\.skipped == 0 \{/if !fr.capped {/
+M32 estimate-one-lookup-per-author | internal/catalog/harvest.go | s/est\.EstimatedLookups \+= len\(a\.OwnedASINs\)/est.EstimatedLookups += min(len(a.OwnedASINs), 1)/
+M33 estimate-ceil-of-mean | internal/catalog/harvest.go | s/pageSum \+= float64\(max\(\(listed\+h\.Cfg\.PageSize-1\)\/h\.Cfg\.PageSize, 1\)\)/pageSum += float64(listed) \/ float64(h.Cfg.PageSize)/
