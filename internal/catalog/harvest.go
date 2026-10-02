@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c2e4a90-1d6f-4b38-8e57-3a9b5c1f0d26
 // last-edited: 2026-10-01
 
@@ -162,9 +162,23 @@ type fetchResult struct {
 	// own total (or the total itself is not believable). The rows received
 	// are real and are kept, but the listing is NOT complete, so nothing may
 	// be marked stale from it (R10: stale_since only after a complete fetch).
-	short string
-	err   error
+	short     string
+	shortKind string
+	// duplicates counts products whose ASIN an earlier page of the same walk
+	// already returned. Audible repeats a product and drops another (a
+	// 375-result author with 374 unique ASINs), so a walk that reaches the
+	// total with duplicates has NOT seen every product.
+	duplicates int
+	err        error
 }
+
+// Short-listing kinds, and how many consecutive agreeing short runs it takes
+// to accept one (see HarvestAuthor).
+const (
+	shortTruncated  = "truncated"
+	shortZeroTotal  = "zero_total"
+	ShortAcceptRuns = 3
+)
 
 // complete reports whether the walk reached the provider's total: no error,
 // not short. A capped walk is complete-but-capped; the caller handles that.
@@ -177,11 +191,12 @@ func (r fetchResult) complete() bool { return r.err == nil && r.short == "" }
 // Only reaching total_results completes a walk. An empty page that arrives
 // before the total is a truncated reply, not the end of the listing: it ends
 // the walk as short. A total of 0 is believed only for an author with no
-// kept entries from an earlier run (prevKept == 0); for an author whose last
-// harvest kept rows, an empty "0 results" reply is far likelier a transient
-// provider answer than the author's whole catalog vanishing, and believing it
-// would stale every entry.
-func (h *Harvester) fetchAll(ctx context.Context, name string, prevKept int, touch func()) fetchResult {
+// entries filed under its harvest key (filed == 0); for an author that has
+// entries, an empty "0 results" reply is far likelier a transient provider
+// answer than the author's whole catalog vanishing, and believing it would
+// stale every entry. HarvestAuthor accepts it only after ShortAcceptRuns
+// consecutive zero-total runs.
+func (h *Harvester) fetchAll(ctx context.Context, name string, filed int, touch func()) fetchResult {
 	r := fetchResult{products: map[string]metadata.CatalogProduct{}}
 	for page := 0; ; page++ {
 		if err := h.waitTurn(ctx); err != nil {
@@ -206,7 +221,9 @@ func (h *Harvester) fetchAll(ctx context.Context, name string, prevKept int, tou
 			if p.ASIN == "" {
 				continue
 			}
-			if _, dup := r.products[p.ASIN]; !dup {
+			if _, dup := r.products[p.ASIN]; dup {
+				r.duplicates++
+			} else {
 				r.order = append(r.order, p.ASIN)
 			}
 			r.products[p.ASIN] = p
@@ -214,15 +231,16 @@ func (h *Harvester) fetchAll(ctx context.Context, name string, prevKept int, tou
 		switch {
 		case pg.TotalResults <= 0:
 			if r.raw > 0 {
-				r.short = fmt.Sprintf("provider sent %d products but reported total_results %d", r.raw, pg.TotalResults)
-			} else if prevKept > 0 {
-				r.short = fmt.Sprintf("provider reported 0 results for an author whose last harvest kept %d entries", prevKept)
+				r.short, r.shortKind = fmt.Sprintf("provider sent %d products but reported total_results %d", r.raw, pg.TotalResults), shortTruncated
+			} else if filed > 0 {
+				r.short, r.shortKind = fmt.Sprintf("provider reported 0 results for an author with %d catalog entries", filed), shortZeroTotal
 			}
 			return r
 		case r.raw >= pg.TotalResults:
 			return r
 		case received == 0:
 			r.short = fmt.Sprintf("listing ended at %d of %d products (empty page %d)", r.raw, pg.TotalResults, page)
+			r.shortKind = shortTruncated
 			return r
 		}
 		if r.raw >= h.Cfg.MaxProducts {
@@ -240,20 +258,48 @@ func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 	now := h.Cfg.Now().UTC()
 	st := database.CatalogAuthorState{Key: a.Key, Name: a.Name, LastAttemptAt: now, OpID: h.Cfg.OpID}
 	var prevASINs []string
-	prevKept := 0
-	if prev, err := h.Store.GetAuthorState(a.Key); err != nil {
+	prev, err := h.Store.GetAuthorState(a.Key)
+	if err != nil {
 		return st, fmt.Errorf("catalog harvest %q: read state: %w", a.Name, err)
-	} else if prev != nil {
+	}
+	if prev != nil {
 		st.LastCompleteAt = prev.LastCompleteAt
 		prevASINs = prev.AuthorASINs
-		prevKept = prev.Kept
+	}
+	// The zero-total guard asks whether the store holds entries this author
+	// would stale, not what the last run kept: a short run keeps 0, so
+	// prev.Kept would let the SECOND transient zero reply stale everything.
+	filed, err := h.Store.CountHarvestedBy(a.Key)
+	if err != nil {
+		return st, fmt.Errorf("catalog harvest %q: count entries: %w", a.Name, err)
 	}
 
-	fr := h.fetchAll(ctx, a.Name, prevKept, touch)
-	st.PagesDone, st.Fetched, st.TotalResults, st.Capped, st.Skipped = fr.pages, fr.raw, fr.total, fr.capped, fr.skipped
-	if fr.short != "" {
-		harvestLog.Warn("author %q: %s; entries kept, nothing marked stale, retried next run",
-			logger.SanitizeLogValue(a.Name), fr.short)
+	fr := h.fetchAll(ctx, a.Name, filed, touch)
+	st.PagesDone, st.Fetched, st.TotalResults, st.Capped, st.Skipped, st.Duplicates =
+		fr.pages, fr.raw, fr.total, fr.capped, fr.skipped, fr.duplicates
+	// Consecutive short runs (R10 retry, bounded). A listing that comes back
+	// short the same way ShortAcceptRuns runs in a row is the provider's
+	// steady answer, not a transient one: re-walking it every run forever
+	// buys nothing. "The same way" is the same kind and the same delivered
+	// count (always 0 for a zero total). Any other outcome resets the count.
+	acceptShort := false
+	if fr.err == nil && fr.short != "" {
+		st.ShortKind, st.ShortDelivered, st.ShortRuns = fr.shortKind, fr.raw, 1
+		if prev != nil && prev.ShortRuns > 0 && prev.ShortKind == fr.shortKind && prev.ShortDelivered == fr.raw {
+			st.ShortRuns = prev.ShortRuns + 1
+		}
+		acceptShort = st.ShortRuns >= ShortAcceptRuns
+		if acceptShort {
+			harvestLog.Warn("author %q: %s, the same for %d consecutive runs; accepted as complete",
+				logger.SanitizeLogValue(a.Name), fr.short, st.ShortRuns)
+		} else {
+			harvestLog.Warn("author %q: %s (run %d of %d before it is accepted); entries kept, nothing marked stale, retried next run",
+				logger.SanitizeLogValue(a.Name), fr.short, st.ShortRuns, ShortAcceptRuns)
+		}
+	}
+	if fr.duplicates > 0 {
+		harvestLog.Warn("author %q: listing repeated %d products, so it may have omitted as many; nothing marked stale",
+			logger.SanitizeLogValue(a.Name), fr.duplicates)
 	}
 	if fr.skipped > 0 {
 		harvestLog.Warn("author %q: %d undecodable products skipped; nothing marked stale",
@@ -347,9 +393,9 @@ func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 			st.State = database.CatalogHarvestPartial
 		}
 		st.LastError = err.Error()
-	case fr.short != "":
-		// A truncated listing: keep what arrived, mark nothing stale, and
-		// stay due so the next run retries it (R10).
+	case fr.short != "" && !acceptShort:
+		// A short listing: keep what arrived, mark nothing stale, and stay
+		// due so the next run retries it (R10).
 		st.State = database.CatalogHarvestPartial
 		st.LastError = fr.short
 	case res.LookupErrors > 0:
@@ -361,10 +407,16 @@ func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 		st.State = database.CatalogHarvestComplete
 		t := now
 		st.LastCompleteAt = &t
-		// A capped walk never saw the tail, and a skipped product may be a
-		// stored entry whose id cannot be read off it: either way "not seen"
-		// does not mean "gone".
-		if !fr.capped && fr.skipped == 0 {
+		// "Not seen" means "gone" only for a walk that saw everything. Not
+		// for a capped walk (never saw the tail), a skipped product (may be a
+		// stored entry whose id cannot be read off it), a walk with
+		// duplicates (each one stands in for a product it omitted), or an
+		// accepted truncated listing (its missing tail was never delivered).
+		// An accepted ZERO total does stale: three agreeing empty listings
+		// are the evidence that the catalog is gone.
+		staleOK := !fr.capped && fr.skipped == 0 && fr.duplicates == 0 &&
+			(fr.short == "" || fr.shortKind == shortZeroTotal)
+		if staleOK {
 			n, err := h.Store.MarkUnseen(a.Key, seen)
 			if err != nil {
 				return st, fmt.Errorf("catalog harvest %q: stale pass: %w", a.Name, err)
@@ -527,10 +579,11 @@ type Estimate struct {
 	// author: the most ResolveAuthorASINs can make (an owned ASIN the listing
 	// returns costs none).
 	EstimatedLookups int `json:"estimated_lookups"`
-	// EstimatedRequests = listing pages + EstimatedLookups. The lookups term
-	// is a true upper bound; the pages term is exact for sampled authors and
-	// extrapolated (sample mean) for the rest. Retries of a partial run are
-	// not included.
+	// EstimatedRequests is an ESTIMATE, not a bound: listing pages +
+	// EstimatedLookups. The lookups term is bounded (one per owned ASIN);
+	// the pages term is exact for sampled authors and extrapolated from the
+	// sample mean for the rest; retries of short or partial runs are
+	// excluded.
 	EstimatedRequests  int      `json:"estimated_requests"`
 	EstimatedEntries   int      `json:"estimated_entries"`
 	EstimatedBytes     int64    `json:"estimated_bytes"`

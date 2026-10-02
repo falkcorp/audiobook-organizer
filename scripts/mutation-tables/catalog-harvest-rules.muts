@@ -1,5 +1,5 @@
 # file: scripts/mutation-tables/catalog-harvest-rules.muts
-# version: 1.2.0
+# version: 1.3.0
 # guid: 4c1e7a93-8b2d-4f60-a5e9-2d6b0f8c3a71
 # last-edited: 2026-10-01
 #
@@ -33,7 +33,7 @@ M09 conflict-never-set | internal/catalog/disambig.go | s/res\.Conflict = len\(r
 M10 lookup-even-when-listed | internal/catalog/disambig.go | s/if p, ok := fetched\[owned\]; ok \{/if p, ok := fetched[owned]; ok && false {/
 M11 language-filter-off | internal/catalog/disambig.go | s/return pl == "" \x7c\x7c pl == w/return pl == pl \x7c\x7c pl == w/
 M12 dramatized-read-as-format | internal/catalog/entry.go | s/case dramatizedRe\.MatchString\(text\):/case false \&\& dramatizedRe.MatchString(text):/
-M13 capped-marks-stale | internal/catalog/harvest.go | s/if !fr\.capped \&\& fr\.skipped == 0 \{/if fr.skipped == 0 {/
+M13 capped-marks-stale | internal/catalog/harvest.go | s/staleOK := !fr\.capped \&\& /staleOK := /
 M14 cap-not-enforced | internal/catalog/harvest.go | s/if r\.raw >= h\.Cfg\.MaxProducts \{/if false {/
 M15 prev-asins-ignored | internal/catalog/harvest.go | s/\&\& prevASINs != nil \{/\&\& false {/
 M16 partial-not-retried | internal/catalog/harvest.go | s/if prev\.State != database\.CatalogHarvestComplete \x7c\x7c prev\.LastCompleteAt == nil \{/if prev.LastCompleteAt == nil {/
@@ -49,8 +49,13 @@ M25 no-stand-down-cancel | internal/catalog/harvest.go | s/\t\t\tcancel\(\)\n\t\
 M26 verdict-last-writer-wins | internal/database/catalog_entry_store.go | s/applyVerdict\(&entry, harvestKey, !in\.NameOnlyAuthor, in\.AuthorConflict\)/entry.NameOnlyAuthor, entry.AuthorConflict = in.NameOnlyAuthor, in.AuthorConflict/
 M27 unseen-keeps-verdict | internal/database/catalog_entry_store.go | s/\t\te\.ConfirmedBy = withoutKey\(e\.ConfirmedBy, harvestKey\)\n//
 M28 empty-page-completes | internal/catalog/harvest.go | s/\t\t\tr\.short = fmt\.Sprintf\("listing ended at[^\n]*\n//
-M29 zero-total-believed | internal/catalog/harvest.go | s/\} else if prevKept > 0 \{/} else if false {/
+M29 zero-total-believed | internal/catalog/harvest.go | s/\} else if filed > 0 \{/} else if false {/
 M30 skipped-not-counted | internal/catalog/harvest.go | s/received := len\(pg\.Products\) \+ pg\.Skipped/received := len(pg.Products)/
-M31 skipped-marks-stale | internal/catalog/harvest.go | s/if !fr\.capped \&\& fr\.skipped == 0 \{/if !fr.capped {/
+M31 skipped-marks-stale | internal/catalog/harvest.go | s/ \&\& fr\.skipped == 0 \&\& / \&\& /
 M32 estimate-one-lookup-per-author | internal/catalog/harvest.go | s/est\.EstimatedLookups \+= len\(a\.OwnedASINs\)/est.EstimatedLookups += min(len(a.OwnedASINs), 1)/
 M33 estimate-ceil-of-mean | internal/catalog/harvest.go | s/pageSum \+= float64\(max\(\(listed\+h\.Cfg\.PageSize-1\)\/h\.Cfg\.PageSize, 1\)\)/pageSum += float64(listed) \/ float64(h.Cfg.PageSize)/
+M34 duplicates-mark-stale | internal/catalog/harvest.go | s/ \&\& fr\.duplicates == 0 \&\&/ \&\&/
+M35 short-never-accepted | internal/catalog/harvest.go | s/acceptShort = st\.ShortRuns >= ShortAcceptRuns/acceptShort = false/
+M36 short-runs-not-same-count | internal/catalog/harvest.go | s/ \&\& prev\.ShortDelivered == fr\.raw \{/ {/
+M37 accepted-truncation-stales | internal/catalog/harvest.go | s/\(fr\.short == "" \x7c\x7c fr\.shortKind == shortZeroTotal\)/true/
+M38 zero-guard-ignores-store | internal/catalog/harvest.go | s/filed, err := h\.Store\.CountHarvestedBy\(a\.Key\)/filed, err := st.Kept, error(nil)/
