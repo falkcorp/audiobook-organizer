@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-09-28
+// last-edited: 2026-10-02
 
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -42,6 +42,15 @@ function renderWorkspace(initialEntries: string[] = ['/review']) {
       </ToastProvider>
     </MemoryRouter>
   );
+}
+
+/**
+ * Index loads of the metadata set: calls without `ids`. The lane also fetches
+ * full rows for the visible page (`ids`), one request sized by the page; that
+ * is not a reload of the set and is not what these tests count.
+ */
+function metadataIndexLoads(): number {
+  return vi.mocked(api.getCachedReviewResults).mock.calls.filter((c) => !c[4]?.ids).length;
 }
 
 beforeEach(() => {
@@ -131,12 +140,12 @@ describe('lane default', () => {
   it('stops fetching the metadata set while another lane is showing', async () => {
     const user = userEvent.setup();
     renderWorkspace();
-    await waitFor(() => expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(metadataIndexLoads()).toBe(1));
 
     await user.click(screen.getByTestId('lane-tab-regroup'));
     await screen.findByTestId('regroup-rail');
 
-    expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1);
+    expect(metadataIndexLoads()).toBe(1);
   });
 });
 
@@ -221,7 +230,7 @@ describe('the lane comes from the URL', () => {
 
     await user.click(screen.getByTestId('lane-tab-metadata'));
     await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
-    expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1);
+    expect(metadataIndexLoads()).toBe(1);
 
     await user.click(screen.getByTestId('lane-tab-dupes'));
     await screen.findByTestId('dupes-rail');
