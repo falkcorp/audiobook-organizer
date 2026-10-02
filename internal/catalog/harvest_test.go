@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
 // last-edited: 2026-10-02
 
@@ -1526,5 +1526,37 @@ func TestRun_TinyScopedEmptyRunCompletesAfterTheWindowNotSooner(t *testing.T) {
 			t.Errorf("after the window: %v; want complete", states(t, st, empties))
 			break
 		}
+	}
+}
+
+// TestSettleZero_EmptyStreakAcceptsOnlyACompleteRun: an empty-streak author
+// whose run itself ended partial (an owned-ASIN lookup failed) must not be
+// accepted as empty, however long its streak, and the tally must not move.
+func TestSettleZero_EmptyStreakAcceptsOnlyACompleteRun(t *testing.T) {
+	st, _ := openCatalog(t)
+	h := NewHarvester(nil, st, Settings{})
+	now := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	since := now.Add(-8 * 24 * time.Hour)
+	final := database.CatalogAuthorState{Key: "emptyauthor", Name: "Empty Author", State: database.CatalogHarvestPartial,
+		LastError: "1 of 1 owned-ASIN lookups failed", LastAttemptAt: now, OpID: "op",
+		ShortKind: shortEmpty, ShortRuns: ShortAcceptRuns, ShortSince: &since}
+	hold := pendingHold(nil, final, "held")
+	if err := st.PutAuthorState(&hold); err != nil {
+		t.Fatal(err)
+	}
+	rz := newZeroLedger()
+	rz.answered(false)
+	rz.observe(final.Key, zeroObs{final: final})
+	tally := &Tally{}
+	tally.Partial.Store(1) // what Run recorded for the held author
+	if err := h.settleZero(nil, rz, tally); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetAuthorState(final.Key)
+	if got.State != database.CatalogHarvestPartial {
+		t.Errorf("partial run accepted as empty: state %s", got.State)
+	}
+	if tally.Partial.Load() != 1 || tally.Complete.Load() != 0 || tally.EmptyAccepted.Load() != 0 {
+		t.Errorf("tally moved: %s", tally.Summary())
 	}
 }
