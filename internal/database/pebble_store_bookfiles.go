@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-09-27
+// last-edited: 2026-10-02
 
 package database
 
@@ -920,9 +920,37 @@ func (s *PebbleStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]Boo
 	return s.getBookFilesForIDsPebbleScan(bookIDs)
 }
 
+// perBookRangeMaxIDs is the largest id set the Pebble fallback of
+// GetBookFilesForIDsCore reads with one book_file:<id>: range per book
+// instead of one scan of every book_file row. A per-book range costs that
+// book's rows; the full scan costs all of them (~742k on production) however
+// few books were asked for, so a caller batching a few hundred books at a time
+// before memdb publishes paid a full scan per batch.
+const perBookRangeMaxIDs = 4096
+
 func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string][]BookFileCore, error) {
 	result := make(map[string][]BookFileCore)
 	if len(bookIDs) == 0 {
+		return result, nil
+	}
+	if len(bookIDs) <= perBookRangeMaxIDs {
+		for _, id := range bookIDs {
+			if _, done := result[id]; done || id == "" {
+				continue
+			}
+			files, err := s.GetBookFiles(id)
+			if err != nil {
+				return nil, err
+			}
+			if len(files) == 0 {
+				continue
+			}
+			cores := make([]BookFileCore, len(files))
+			for i := range files {
+				cores[i] = files[i].Core()
+			}
+			result[id] = cores
+		}
 		return result, nil
 	}
 	idSet := make(map[string]bool)

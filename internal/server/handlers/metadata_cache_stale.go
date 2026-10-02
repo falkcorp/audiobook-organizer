@@ -7,6 +7,7 @@ package handlers
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -135,6 +136,17 @@ func filesForChunk(store cacheRowBookReader, rows []loadedCacheRow) chunkFiles {
 		for i := range list {
 			files[i] = list[i].AsBookFile()
 		}
+		// GetBookFiles' order (disc, track, path): the book info takes the
+		// first row's iTunes path, and the batch read promises no order.
+		sort.Slice(files, func(i, j int) bool {
+			if files[i].DiscNumber != files[j].DiscNumber {
+				return files[i].DiscNumber < files[j].DiscNumber
+			}
+			if files[i].TrackNumber != files[j].TrackNumber {
+				return files[i].TrackNumber < files[j].TrackNumber
+			}
+			return files[i].FilePath < files[j].FilePath
+		})
 		byBook[id] = files
 	}
 	return chunkFiles{cacheRowBookReader: store, byBook: byBook}
