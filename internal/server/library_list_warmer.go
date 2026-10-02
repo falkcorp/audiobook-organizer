@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.7.2
+// version: 2.8.0
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 // Pre-warms svc.audiobookService.listCache by firing the queries the UI
 // is most likely to hit on first load — library page (first few pages,
@@ -25,6 +25,7 @@ import (
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // readHeapAllocMB returns the process's current heap allocation in MB.
@@ -822,3 +823,33 @@ func medianUint64(in []uint64) uint64 {
 	}
 	return (cp[n/2-1] + cp[n/2]) / 2
 }
+
+// warmMetadataReviewSnapshot waits for memdb (the review snapshot's batch file
+// reads are index lookups only once it is published), then builds the
+// metadata review page's snapshot, so the first visit after a restart is
+// served from it instead of waiting for a whole-cache load (119 s on
+// production before the snapshot existed). Runs under bgCtx: shutdown stops it
+// and every later background rebuild.
+func (s *Server) warmMetadataReviewSnapshot() {
+	if s.metadataCacheH == nil {
+		return
+	}
+	if checker, ok := database.AsCapability[memReadyChecker](s.Ops()); ok {
+		deadline := time.Now().Add(5 * time.Minute)
+		for !checker.IsMemReady() && time.Now().Before(deadline) {
+			select {
+			case <-s.bgCtx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
+	if s.bgCtx.Err() != nil {
+		return
+	}
+	if err := s.metadataCacheH.WarmReviewSnapshot(s.bgCtx); err != nil && s.bgCtx.Err() == nil {
+		reviewWarmLog.Warn("metadata review snapshot warm-up failed; the first review request will build it: %v", err)
+	}
+}
+
+var reviewWarmLog = logger.New("server.review-warmer")

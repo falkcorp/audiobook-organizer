@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -180,15 +181,23 @@ func TestReviewSnapshot_MatchesTheLegacyLoader(t *testing.T) {
 	ctx := context.Background()
 	want, wantOrphaned, err := legacyReviewRows(ctx, store, svc)
 	require.NoError(t, err)
+	set, err := loadCacheRows(ctx, store, svc)
+	require.NoError(t, err)
 	snap, err := buildReviewSnapshot(ctx, store, svc)
 	require.NoError(t, err)
 	require.Equal(t, wantOrphaned, snap.orphaned)
+	require.Len(t, set.rows, len(want))
 	require.Len(t, snap.rows, len(want))
 	legacyFiltered := 0
 	for i, w := range want {
 		got := snap.rows[i]
 		require.Equal(t, w.id, got.sum.BookID)
-		require.Equal(t, w.entry, got.entry, "entry for %s", w.id)
+		require.Equal(t, w.entry, set.rows[i].entry, "entry for %s", w.id)
+		// The snapshot keeps only the first candidate, the one the review reads.
+		if w.entry != nil && len(w.entry.Candidates) > 0 {
+			require.Equal(t, w.entry.Candidates[:1], got.entry.Candidates, "kept candidate for %s", w.id)
+			require.Equal(t, w.entry.FetchedAt, got.entry.FetchedAt)
+		}
 		require.Equal(t, w.searchable, got.searchable, "searchable for %s", w.id)
 		require.Equal(t, w.info, metabatch.BuildCandidateBookInfoWithFacts(got.book, got.files), "book info for %s", w.id)
 		require.Equal(t, w.hash, got.hash, "hash for %s", w.id)
@@ -353,8 +362,15 @@ func BenchmarkReviewLoad(b *testing.B) {
 	})
 	b.Run("after_cold_snapshot_build", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, err := buildReviewSnapshot(ctx, store, svc)
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			snap, err := buildReviewSnapshot(ctx, store, svc)
 			require.NoError(b, err)
+			runtime.GC()
+			runtime.ReadMemStats(&after)
+			b.ReportMetric(float64(after.HeapAlloc-before.HeapAlloc)/(1<<20), "retained_MB")
+			runtime.KeepAlive(snap)
 		}
 	})
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)

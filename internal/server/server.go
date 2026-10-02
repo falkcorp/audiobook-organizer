@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.74.0
+// version: 2.75.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package server
 
@@ -45,6 +45,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	operationshandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
@@ -169,7 +170,10 @@ type narratorEntry struct {
 
 // Server represents the HTTP server
 type Server struct {
-	store                  database.Store
+	store database.Store
+	// metadataCacheH is the metadata-cache handler, kept so the startup
+	// warmer can build its review snapshot (warmMetadataReviewSnapshot).
+	metadataCacheH         *handlers.MetadataCacheHandler
 	httpServer             *http.Server
 	router                 *gin.Engine
 	audiobookService       *audiobookspkg.AudiobookService

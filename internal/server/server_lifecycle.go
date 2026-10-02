@@ -731,6 +731,10 @@ func (s *Server) startCacheWarmers() {
 		defer warmerRecover("library-list")
 		s.warmAudiobookListCache()
 	})
+	s.bgWG.Go("metadata-review-warmer", func() {
+		defer warmerRecover("metadata-review")
+		s.warmMetadataReviewSnapshot()
+	})
 	s.bgWG.Go("authors-warmer", func() {
 		defer warmerRecover("authors")
 		if s.bgCtx.Err() != nil {
