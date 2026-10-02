@@ -14325,6 +14325,68 @@ func (_c *MockStore_GetBookFiles_Call) RunAndReturn(run func(bookID string) ([]d
 	return _c
 }
 
+// GetBookFilesForIDsCore provides a mock function for the type MockStore
+func (_mock *MockStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error) {
+	ret := _mock.Called(bookIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBookFilesForIDsCore")
+	}
+
+	var r0 map[string][]database.BookFileCore
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func([]string) (map[string][]database.BookFileCore, error)); ok {
+		return returnFunc(bookIDs)
+	}
+	if returnFunc, ok := ret.Get(0).(func([]string) map[string][]database.BookFileCore); ok {
+		r0 = returnFunc(bookIDs)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string][]database.BookFileCore)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func([]string) error); ok {
+		r1 = returnFunc(bookIDs)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetBookFilesForIDsCore_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookFilesForIDsCore'
+type MockStore_GetBookFilesForIDsCore_Call struct {
+	*mock.Call
+}
+
+// GetBookFilesForIDsCore is a helper method to define mock.On call
+//   - bookIDs []string
+func (_e *MockStore_Expecter) GetBookFilesForIDsCore(bookIDs any) *MockStore_GetBookFilesForIDsCore_Call {
+	return &MockStore_GetBookFilesForIDsCore_Call{Call: _e.mock.On("GetBookFilesForIDsCore", bookIDs)}
+}
+
+func (_c *MockStore_GetBookFilesForIDsCore_Call) Run(run func(bookIDs []string)) *MockStore_GetBookFilesForIDsCore_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []string
+		if args[0] != nil {
+			arg0 = args[0].([]string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetBookFilesForIDsCore_Call) Return(stringToBookFileCores map[string][]database.BookFileCore, err error) *MockStore_GetBookFilesForIDsCore_Call {
+	_c.Call.Return(stringToBookFileCores, err)
+	return _c
+}
+
+func (_c *MockStore_GetBookFilesForIDsCore_Call) RunAndReturn(run func(bookIDs []string) (map[string][]database.BookFileCore, error)) *MockStore_GetBookFilesForIDsCore_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetBookFilesNeedingDelugeImportCore provides a mock function for the type MockStore
 func (_mock *MockStore) GetBookFilesNeedingDelugeImportCore() ([]database.BookFileCore, error) {
 	ret := _mock.Called()

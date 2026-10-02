@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-30
+// last-edited: 2026-10-02
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -12,10 +12,10 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
@@ -80,6 +80,11 @@ type MetadataCacheBookStore interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	// GetBookFiles is required to satisfy metabatch.BookFilesGetter.
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// GetBookFilesForIDsCore is the batch file read the review listing's
+	// loader uses (loadCacheRows): one call per chunk of books instead of a
+	// GetBookFiles range scan per book, read once and shared by the legacy
+	// filter, the search-title resolver and the row's book info.
+	GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error)
 	// The book's live authors, which metabatch.ResolveCandidateSearchQuery
 	// reads (with GetBookFiles) to decide whether a stale row is one a
 	// refetch would actually search -- see cacheRowStale.
@@ -174,6 +179,10 @@ type MetadataCacheHandler struct {
 	// then omitted. Injected at wiring time as a closure over the real store so
 	// MetadataCacheBookStore does not grow a method only a log line reads.
 	scanActive func() bool
+	// reviewSnap holds the expensive part of the review listing between
+	// requests (metadata_cache_snapshot.go). nil on a handler built as a
+	// struct literal; GetCacheReviewResults then loads the rows per request.
+	reviewSnap *reviewSnapshotCache
 }
 
 // OpEnqueuer is the slice of the v2 operations registry this handler needs:
@@ -190,7 +199,30 @@ type OpEnqueuer interface {
 //
 // scanActive may be nil; the slow-request WARN then omits library_scan_active.
 func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetchService, batcher WriteBackEnqueuer, fileIOPool FileIOPool, ops OpEnqueuer, scanActive func() bool) *MetadataCacheHandler {
-	return &MetadataCacheHandler{store: store, svc: svc, batcher: batcher, fileIOPool: fileIOPool, ops: ops, scanActive: scanActive}
+	h := &MetadataCacheHandler{store: store, svc: svc, batcher: batcher, fileIOPool: fileIOPool, ops: ops, scanActive: scanActive}
+	if store != nil && svc != nil {
+		h.reviewSnap = newReviewSnapshotCache(func(ctx context.Context) (*reviewSnapshot, error) {
+			return buildReviewSnapshot(ctx, store, svc)
+		})
+	}
+	return h
+}
+
+// reviewSnapshot returns the review rows: the cached snapshot when the
+// handler has one (see reviewSnapshotCache.get), else a fresh load.
+func (h *MetadataCacheHandler) reviewSnapshot(ctx context.Context) (*reviewSnapshot, error) {
+	if h.reviewSnap != nil {
+		return h.reviewSnap.get(ctx)
+	}
+	return buildReviewSnapshot(ctx, h.store, h.svc)
+}
+
+// InvalidateReviewSnapshot marks the review listing's snapshot dirty, so the
+// next review request starts a rebuild. Book-level changes (status, apply,
+// deletion) never need it -- every request re-reads the books -- but a
+// change to what the metadata cache holds does.
+func (h *MetadataCacheHandler) InvalidateReviewSnapshot() {
+	h.reviewSnap.invalidate()
 }
 
 // ListCachedCandidates handles GET /api/v1/audiobooks/metadata/cached.
@@ -358,6 +390,21 @@ func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 // page it the same way. Book info comes from the one batched book read, with no
 // per-row file read (metabatch.BuildCandidateBookInfoNoFiles). The default
 // (absent or bucket=reviewable) response is unchanged.
+//
+// view=index serves the review page's index: the same summary and every row
+// of the bucket, with each candidate's description dropped -- the one large
+// field nothing but the visible row reads. The page filters, groups, counts
+// and selects over the index exactly as it did over the full list, and
+// fetches full rows for the rows it shows with ids=.
+//
+// ids=a,b,c (comma separated) restricts `results` to those books, in bucket
+// order, ignoring limit and offset; total_count stays the size of the bucket.
+//
+// Rows come from a snapshot of the per-row work (cache reads, the legacy
+// filter, the resolver, file facts, the candidate decode) held between
+// requests (metadata_cache_snapshot.go), with every book re-read live. A
+// whole-cache load measured 119 s on production; a request served from the
+// snapshot does none of it.
 func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	if h.store == nil || h.svc == nil {
 		httputil.RespondWithInternalError(c, "metadata service not initialized")
@@ -374,6 +421,16 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		offset = 0
 	}
 	all := httputil.ParseQueryBool(c, "all", false)
+	indexView := c.Query("view") == "index"
+	var wantIDs map[string]bool
+	if raw := strings.TrimSpace(c.Query("ids")); raw != "" {
+		wantIDs = map[string]bool{}
+		for _, id := range strings.Split(raw, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				wantIDs[id] = true
+			}
+		}
+	}
 	bucket := c.DefaultQuery("bucket", reviewBucketReviewable)
 	if bucket != reviewBucketReviewable && bucket != reviewBucketUnreviewable {
 		httputil.RespondWithBadRequest(c, "bucket must be reviewable or unreviewable")
@@ -409,12 +466,13 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// the real call path the lane sends all=true, so its page is every row
 	// anyway; that describes the current caller, and is not an argument that
 	// the full fan-out is cheap.
-	set, err := loadCacheRows(c.Request.Context(), h.store, h.svc)
+	snap, err := h.reviewSnapshot(c.Request.Context())
 	if err != nil {
 		httputil.InternalError(c, "failed to list metadata cache", err)
 		return
 	}
-	lookupBook := set.lookupBook
+	set := overlayLiveBooks(snap, h.store)
+	lookupBook := func(id string) *database.Book { return set.books[id] }
 	// orphaned counts cache rows that outlived their book. loadCacheRows counts
 	// it where the row is dropped: that is the only place that still knows WHY
 	// the row is going away, and a subtraction at the end cannot tell it apart
@@ -422,7 +480,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	orphaned := set.orphaned
 
 	type entryWithStatus struct {
-		row    loadedCacheRow
+		row    snapshotRow
 		sum    metafetch.MetadataCacheSummary
 		status string // "matched" | "no_match" | "applied"
 		// reviewed distinguishes "a human (or the audio-confirm pass) has ruled
@@ -476,6 +534,8 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		sum    metafetch.MetadataCacheSummary
 		status string
 		cand   metafetch.MetadataCandidate
+		hash   string
+		files  metabatch.BookFileFacts
 		// lastChecked is when this book was last searched for, which is >=
 		// sum.FetchedAt when the last search came back empty and the older
 		// candidates were kept. It drives is_fresh so a row the UI offers a
@@ -529,7 +589,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		entry := p.row.entry
 		// cacheRowStale is the predicate StaleCachedBookIDs applies too, so
 		// this count is the size of the set the refetch-all-stale button sends.
-		rowStale := cacheRowStale(p.row, freshCutoff)
+		rowStale := cacheRowStale(p.row.loadedCacheRow, freshCutoff)
 		if rowStale {
 			stale++
 		}
@@ -549,9 +609,9 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			}
 			continue
 		}
-		var cand metafetch.MetadataCandidate
-		if err := json.Unmarshal(entry.Candidates[0], &cand); err != nil {
-			slog.Warn("GetCacheReviewResults decode candidate", "bookID", p.sum.BookID, "err", err)
+		if p.row.cand == nil {
+			// Logged once per snapshot build (buildReviewSnapshot), not per request.
+			err := p.row.decodeErr
 			decodeErrors++
 			if wantUnreviewable {
 				unreviewableRows = append(unreviewableRows, unreviewableRow{
@@ -564,10 +624,16 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			}
 			continue
 		}
+		cand := *p.row.cand
+		if indexView {
+			cand.Description = ""
+		}
 		reviewable = append(reviewable, reviewableRow{
 			sum:         p.sum,
 			status:      p.status,
 			cand:        cand,
+			hash:        p.row.hash,
+			files:       p.row.files,
 			lastChecked: lastChecked(entry, p.sum.FetchedAt),
 			stale:       rowStale,
 		})
@@ -650,8 +716,18 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		if limit > 0 {
 			end = min(start+limit, len(unreviewableRows))
 		}
-		rows := make([]metabatch.CandidateResult, 0, end-start)
-		for _, u := range unreviewableRows[start:end] {
+		pageRows := unreviewableRows[start:end]
+		if wantIDs != nil {
+			start, end = 0, len(unreviewableRows)
+			pageRows = nil
+			for _, u := range unreviewableRows {
+				if wantIDs[u.sum.BookID] {
+					pageRows = append(pageRows, u)
+				}
+			}
+		}
+		rows := make([]metabatch.CandidateResult, 0, len(pageRows))
+		for _, u := range pageRows {
 			book := lookupBook(u.sum.BookID)
 			if book == nil {
 				continue
@@ -692,6 +768,17 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		end = min(start+limit, len(reviewable))
 	}
 	page := reviewable[start:end]
+	if wantIDs != nil {
+		// An id lookup is an answer about those books, not a page: it is never
+		// "truncated", and limit/offset do not apply.
+		start, end = 0, len(reviewable)
+		page = nil
+		for _, r := range reviewable {
+			if wantIDs[r.sum.BookID] {
+				page = append(page, r)
+			}
+		}
+	}
 	// truncated follows GET /operations/timeline's convention (operations_v2.go:
 	// `matched > len(resp)`): true when this response is not the whole
 	// reviewable set -- rows exist before the offset or after the page. It is
@@ -729,7 +816,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// the candidates it still shows are older than the TTL.
 		isFresh := page[i].lastChecked.After(freshCutoff)
 		results = append(results, metabatch.CandidateResult{
-			Book:      metabatch.BuildCandidateBookInfo(h.store, book),
+			Book:      metabatch.BuildCandidateBookInfoWithFacts(book, page[i].files),
 			Candidate: &cand,
 			Status:    page[i].status,
 			FetchedAt: &fetchedAt,
@@ -737,7 +824,9 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			Stale:     &page[i].stale,
 			// The same hash the apply recomputes from the same cache row:
 			// every review-page apply button echoes it back in its pin.
-			CandidateHash: metafetch.CandidateHash(cand),
+			// Hashed over the full stored candidate (with its description),
+			// so the index view's pin matches what the apply recomputes.
+			CandidateHash: page[i].hash,
 		})
 	}
 
@@ -858,6 +947,7 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 			httputil.InternalError(c, "failed to enqueue metadata apply preview", err)
 			return
 		}
+		h.InvalidateReviewSnapshot()
 		c.JSON(http.StatusAccepted, gin.H{
 			"data": gin.H{
 				"op_id":       opID,
@@ -902,6 +992,7 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	// applied_ids/skipped because nothing has been applied yet — the caller polls
 	// the op and then re-reads the review list, which is the only description of
 	// what actually happened that cannot go stale.
+	h.InvalidateReviewSnapshot()
 	c.JSON(http.StatusAccepted, gin.H{
 		"data": gin.H{
 			"op_id":      opID,
@@ -940,5 +1031,6 @@ func (h *MetadataCacheHandler) ClearMetadataNoMatch(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "audiobook", id)
 		return
 	}
+	h.InvalidateReviewSnapshot()
 	httputil.RespondWithOK(c, gin.H{"message": "Review status cleared"})
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_lost_update_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f1c2a84-9d3e-4b7a-a5c1-2e8f0d4b9c71
-// last-edited: 2026-09-30
+// last-edited: 2026-10-02
 
 package handlers_test
 
@@ -72,6 +72,10 @@ func (s *lostUpdateCacheStore) GetBooksByIDs(ids []string) ([]database.Book, err
 }
 
 func (s *lostUpdateCacheStore) GetBookFiles(string) ([]database.BookFile, error) { return nil, nil }
+
+func (s *lostUpdateCacheStore) GetBookFilesForIDsCore([]string) (map[string][]database.BookFileCore, error) {
+	return map[string][]database.BookFileCore{}, nil
+}
 
 func (s *lostUpdateCacheStore) GetBookAuthors(string) ([]database.BookAuthor, error) { return nil, nil }
 

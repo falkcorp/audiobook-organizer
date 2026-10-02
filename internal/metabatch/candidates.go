@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-30
+// last-edited: 2026-10-02
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -186,12 +186,40 @@ func LatestMatchedBookIDs(store operationResultReader) map[string]bool {
 // BuildCandidateBookInfo builds a CandidateBookInfo from a database.Book.
 // store is used to look up BookFile.ITunesPath (the authoritative field).
 func BuildCandidateBookInfo(store BookFilesGetter, book *database.Book) CandidateBookInfo {
-	info := bookRowInfo(book)
+	return BuildCandidateBookInfoWithFacts(book, ReadBookFileFacts(store, book))
+}
+
+// BookFileFacts is everything BuildCandidateBookInfo takes from a book's file
+// rows: the first row's iTunes path and the canonical runtime, plus the read
+// error (a failed read reports the runtime as unknown, see applyRuntimeInfo).
+// A listing that reads every book's rows once can keep these few fields per
+// book instead of the rows, and build the info again from a fresher book row
+// later without another file read.
+type BookFileFacts struct {
+	ITunesPath string
+	Runtime    database.BookRuntime
+	Err        error
+}
+
+// ReadBookFileFacts reads book's file rows from store and reduces them to
+// BookFileFacts.
+func ReadBookFileFacts(store BookFilesGetter, book *database.Book) BookFileFacts {
 	bfs, bfErr := store.GetBookFiles(book.ID)
+	var f BookFileFacts
 	if bfErr == nil && len(bfs) > 0 {
-		info.ITunesPath = bfs[0].ITunesPath
+		f.ITunesPath = bfs[0].ITunesPath
 	}
-	applyRuntimeInfo(&info, database.ComputeBookRuntime(book, bfs), bfErr)
+	f.Runtime = database.ComputeBookRuntime(book, bfs)
+	f.Err = bfErr
+	return f
+}
+
+// BuildCandidateBookInfoWithFacts is BuildCandidateBookInfo with the file
+// rows already reduced to facts (ReadBookFileFacts).
+func BuildCandidateBookInfoWithFacts(book *database.Book, facts BookFileFacts) CandidateBookInfo {
+	info := bookRowInfo(book)
+	info.ITunesPath = facts.ITunesPath
+	applyRuntimeInfo(&info, facts.Runtime, facts.Err)
 	return info
 }
 

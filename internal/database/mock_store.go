@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.135.1
+// version: 1.136.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package database
 
@@ -562,6 +562,7 @@ type MockStore struct {
 	CreateBookFileFunc                      func(file *BookFile) error
 	BatchCreateBookFilesFunc                func(files []*BookFile) error
 	GetAllBookFilesCoreFunc                 func() ([]BookFileCore, error)
+	GetBookFilesForIDsCoreFunc              func(bookIDs []string) (map[string][]BookFileCore, error)
 	GetBookFilesNeedingDelugeImportCoreFunc func() ([]BookFileCore, error)
 	UpdateBookFileFunc                      func(id string, file *BookFile) error
 	UpdateBookFilesFunc                     func(ctx context.Context, files []*BookFile, afterRow func(i int, applied bool)) (int, error)
@@ -3366,6 +3367,25 @@ func (m *MockStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 		return m.GetAllBookFilesCoreFunc()
 	}
 	return nil, nil
+}
+
+// GetBookFilesForIDsCore defaults to GetBookFiles per id, so a test that
+// stubs only GetBookFilesFunc sees the same rows through the batch read.
+func (m *MockStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]BookFileCore, error) {
+	if m.GetBookFilesForIDsCoreFunc != nil {
+		return m.GetBookFilesForIDsCoreFunc(bookIDs)
+	}
+	out := make(map[string][]BookFileCore, len(bookIDs))
+	for _, id := range bookIDs {
+		files, err := m.GetBookFiles(id)
+		if err != nil {
+			return nil, err
+		}
+		for i := range files {
+			out[id] = append(out[id], files[i].Core())
+		}
+	}
+	return out, nil
 }
 func (m *MockStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error) {
 	if m.GetBookFilesNeedingDelugeImportCoreFunc != nil {
