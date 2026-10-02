@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_match.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f7c1b9e-58a2-4d0f-9e61-c2a4b8d07e15
 // last-edited: 2026-10-01
 
@@ -145,14 +145,27 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 		case hasParenVol:
 			known = parenVol
 		}
-		n, hasNum := subtitleVolume(c.Subtitle)
+		note := readSeriesNote(c.Subtitle)
 		switch {
-		case !hasNum:
+		case note.split:
+			// "Volume 1, Part 2": parts of one volume run to similar
+			// lengths, so only the ISBN may confirm one.
+			title = titleSplit
+		case note.unreadable:
+			// A number-like token we cannot place: never exact.
+			title = titlePartial
+		case len(note.nums) == 0:
 			title = titleExact
-		case known > 0 && n == known:
-			title = titleExact
-		case known > 0:
+		case len(note.nums) > 1:
+			title = titlePartial
+		case known > 0 && note.nums[0] != known:
 			return asinVerdict{Reason: rejectVolume}
+		case known > 0 && !subtitleNamesSeries(c.Subtitle, b):
+			// The number agrees but the note names another series ("The
+			// First Law, Book 1" on a book in some other series at #1).
+			title = titlePartial
+		case known > 0:
+			title = titleExact
 		default:
 			title = titlePartial
 		}
@@ -224,6 +237,9 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 		return asinVerdict{Reason: rejectUncorroborated}
 	}
 	if title == titlePartial && !isbnAgree && len(evidence) < 2 {
+		return asinVerdict{Reason: rejectPartialTitle}
+	}
+	if title == titleSplit && !isbnAgree {
 		return asinVerdict{Reason: rejectPartialTitle}
 	}
 	return asinVerdict{Pass: true, Evidence: evidence}
@@ -304,6 +320,9 @@ const (
 	// note ("Red Rising Saga, Book 1"). Exact only when a number in that
 	// note equals the book's known position; see evaluateASINCandidate.
 	titleSeriesNote = 3
+	// titleSplit: a series note that names a part of a volume ("Volume 1,
+	// Part 2"). Only an ISBN match may confirm it.
+	titleSplit = 4
 )
 
 // seriesNoteRe: an Audible subtitle that only places the book in a series.
@@ -550,16 +569,22 @@ var nameSuffixes = map[string]bool{"jr": true, "sr": true, "ii": true, "iii": tr
 // Series / ISBN
 // ---------------------------------------------------------------------------
 
-// normSeriesName is normTitle without trailing parentheticals ("(Light
-// Novel)") and without trailing qualifiers ("series", "saga", "trilogy",
-// "cycle", "chronicles", "universe", "sequence", "books", "novels"), so the
-// same series under two spellings compares equal and the series veto is not
-// skipped by a qualifier.
+// formatParenRe: a series parenthetical that names a format or edition, not
+// a sub-series. "(Light Novel)" is stripped; "(City Watch)" is a different
+// sub-series of Discworld and is kept.
+var formatParenRe = regexp.MustCompile(`(?i)^\s*(light\s+novels?|novels?|manga|audio\s*drama|dramati[sz]ed|unabridged|abridged|audiobooks?|books?|collection|series|graphic\s+audio)\s*$`)
+
+// normSeriesName is normTitle without a trailing FORMAT parenthetical ("(Light
+// Novel)", "(Novels)") and without trailing qualifiers ("series", "saga",
+// "trilogy", "cycle", "chronicles", "sequence"), so the same series under two
+// spellings compares equal and the series veto is not skipped by a qualifier.
+// Sub-series parentheticals ("Discworld (City Watch)") and "Universe" are
+// kept: they name a different series.
 func normSeriesName(s string) string {
 	s = strings.TrimSpace(s)
 	for {
-		m := trailingParenRe.FindStringIndex(s)
-		if m == nil || m[0] == 0 {
+		m := trailingParenRe.FindStringSubmatchIndex(s)
+		if m == nil || m[0] == 0 || !formatParenRe.MatchString(s[m[2]:m[3]]) {
 			break
 		}
 		s = strings.TrimSpace(s[:m[0]])
@@ -567,7 +592,7 @@ func normSeriesName(s string) string {
 	n := normTitle(s)
 	for changed := true; changed; {
 		changed = false
-		for _, suf := range []string{" series", " saga", " trilogy", " cycle", " chronicles", " universe", " sequence", " books", " novels", " light novel"} {
+		for _, suf := range []string{" series", " saga", " trilogy", " cycle", " chronicles", " sequence"} {
 			if strings.HasSuffix(n, suf) && len(n) > len(suf) {
 				n = strings.TrimSuffix(n, suf)
 				changed = true
@@ -654,9 +679,6 @@ func volumeIn(note string) (float64, bool) {
 	}
 	return f, true
 }
-
-// subtitleVolume is volumeIn for an Audible subtitle.
-func subtitleVolume(sub string) (float64, bool) { return volumeIn(sub) }
 
 // titleParenVolume returns the volume number in the trailing parenthetical
 // that stripSeriesParen would remove ("Red Rising (Book 2)" -> 2), and
@@ -745,4 +767,106 @@ func checkKnownIdentity(b asinBookFacts, c metadata.AudibleIdentity) string {
 	default:
 		return identitySuspect
 	}
+}
+
+// romanValues are the roman numerals read as a volume, only directly after a
+// volume word ("Book II", "Volume IV"): alone, "i", "v", "mix" and "civil"
+// are words.
+var romanValues = map[string]float64{
+	"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7, "viii": 8, "ix": 9, "x": 10,
+	"xi": 11, "xii": 12, "xiii": 13, "xiv": 14, "xv": 15, "xvi": 16, "xvii": 17, "xviii": 18, "xix": 19, "xx": 20,
+}
+
+// wordValues are spelled-out cardinals and ordinals.
+var wordValues = func() map[string]float64 {
+	m := map[string]float64{}
+	for i, w := range strings.Split("one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty", " ") {
+		m[w] = float64(i + 1)
+	}
+	for i, w := range strings.Split("first second third fourth fifth sixth seventh eighth ninth tenth eleventh twelfth thirteenth fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth twentieth", " ") {
+		m[w] = float64(i + 1)
+	}
+	return m
+}()
+
+var volumeWords = map[string]bool{"book": true, "books": true, "bk": true, "volume": true, "vol": true, "no": true, "number": true, "episode": true, "ep": true, "installment": true, "season": true}
+
+var ordinalDigitsRe = regexp.MustCompile(`^(\d+)(st|nd|rd|th)$`)
+
+// seriesNote is what readSeriesNote found in a series-note subtitle.
+type seriesNote struct {
+	nums       []float64 // distinct volume numbers named
+	split      bool      // names a part ("part", "pt")
+	unreadable bool      // a number-like token that could not be placed
+}
+
+// readSeriesNote reads every volume number a series-note subtitle names:
+// digits ("Vol. 2"), ordinal digits ("2nd"), words ("Book Two", "The Second
+// Book") and roman numerals after a volume word ("Volume II"). Years are
+// ignored. A "part" marks a split release.
+func readSeriesNote(sub string) seriesNote {
+	var out seriesNote
+	toks := strings.Fields(normTitle(sub))
+	seen := map[float64]bool{}
+	add := func(f float64) {
+		if !seen[f] {
+			seen[f] = true
+			out.nums = append(out.nums, f)
+		}
+	}
+	for i, t := range toks {
+		prevVolume := i > 0 && volumeWords[toks[i-1]]
+		switch {
+		case t == "part" || t == "pt" || t == "parts":
+			out.split = true
+		case ordinalDigitsRe.MatchString(t):
+			f, _ := strconv.ParseFloat(ordinalDigitsRe.FindStringSubmatch(t)[1], 64)
+			add(f)
+		case isDigits(t):
+			f, err := strconv.ParseFloat(t, 64)
+			if err != nil {
+				out.unreadable = true
+				continue
+			}
+			if f >= 1800 && f <= 2100 && !prevVolume {
+				continue // a year
+			}
+			add(f)
+		case wordValues[t] > 0:
+			add(wordValues[t])
+		case prevVolume && romanValues[t] > 0:
+			add(romanValues[t])
+		case prevVolume:
+			// "Book Something": a volume word followed by a token we do
+			// not read as a number.
+			out.unreadable = true
+		}
+	}
+	return out
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// subtitleNamesSeries reports whether a series-note subtitle names the book's
+// series (or, with none recorded, the book's title), so its number speaks to
+// the book's position and not another series'.
+func subtitleNamesSeries(sub string, b asinBookFacts) bool {
+	want := normSeriesName(b.SeriesName)
+	if want == "" {
+		want = normSeriesName(stripSeriesParen(b.Title))
+	}
+	if want == "" {
+		return false
+	}
+	return strings.Contains(" "+normTitle(sub)+" ", " "+want+" ")
 }
