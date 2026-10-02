@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.43.0
+// version: 2.44.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package server
 
@@ -89,6 +89,8 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		mcScanActive = func() bool { return handlers.LibraryScanActive(st.ListActiveOperationsV2) }
 	}
 	metaCacheH := handlers.NewMetadataCacheHandler(s.storeForWiring(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool, s.opRegistry, mcScanActive)
+	// Kept for the startup warmer (warmMetadataReviewSnapshot).
+	s.metadataCacheH = metaCacheH
 	organizeH := s.newOrganizeHandler()
 	filesystemH := handlers.NewFilesystemHandler(
 		s.storeForWiring(),

@@ -217,6 +217,17 @@ func (h *MetadataCacheHandler) reviewSnapshot(ctx context.Context) (*reviewSnaps
 	return buildReviewSnapshot(ctx, h.store, h.svc)
 }
 
+// WarmReviewSnapshot builds the review snapshot now, under ctx (the server's
+// lifetime context, which also parents every later background rebuild), so
+// the first visit after a restart does not wait for it. A no-op on a handler
+// without a snapshot cache.
+func (h *MetadataCacheHandler) WarmReviewSnapshot(ctx context.Context) error {
+	if h.reviewSnap == nil {
+		return nil
+	}
+	return h.reviewSnap.warm(ctx)
+}
+
 // InvalidateReviewSnapshot marks the review listing's snapshot dirty, so the
 // next review request starts a rebuild. Book-level changes (status, apply,
 // deletion) never need it -- every request re-reads the books -- but a

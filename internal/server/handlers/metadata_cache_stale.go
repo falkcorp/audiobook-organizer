@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
 // last-edited: 2026-10-02
 
@@ -28,7 +28,14 @@ import (
 // refetch button derived its set on the client from the reviewable bucket
 // alone, so its confirm dialog read "Refetch 10 stale books?" and refetched
 // 10. Both now go through loadCacheRows + cacheRowStale, so the number the
-// chip shows and the set the button sends cannot disagree.
+// chip shows and the set the button sends are the same computation.
+//
+// Since 2026-10-02 the chip's count is computed over the review snapshot
+// (metadata_cache_snapshot.go), at most reviewSnapshotMaxAge plus one rebuild
+// old in what the cache rows hold, while StaleCachedBookIDs loads fresh. The
+// two can differ only for cache rows written inside that window -- during or
+// just after a fetch, while the numbers are moving anyway; the book-side legs
+// (review status, "no match") are live in both.
 
 var metadataCacheLog = logger.New("handlers.metadata-cache")
 

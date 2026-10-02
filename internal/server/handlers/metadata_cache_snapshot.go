@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_snapshot.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d3c7a51-2e6b-4f08-b4a9-7c1e5f2d8a36
 // last-edited: 2026-10-02
 
@@ -60,6 +60,17 @@ func buildReviewSnapshot(ctx context.Context, store cacheRowBookReader, svc cach
 	snap := &reviewSnapshot{builtAt: time.Now(), rows: make([]snapshotRow, len(set.rows)), orphaned: set.orphaned}
 	for i, r := range set.rows {
 		sr := snapshotRow{loadedCacheRow: r}
+		if r.entry != nil && len(r.entry.Candidates) > 1 {
+			// The review path reads only Candidates[0] (and the entry's
+			// timestamps), so the snapshot keeps only that one: ten stored
+			// candidates with descriptions per row, for ~40k rows, held for
+			// the server's lifetime (twice during a rebuild), is hundreds of
+			// MB for nothing. A NEW one-element slice, not [:1], so the other
+			// nine are not kept alive by the backing array.
+			trimmed := *r.entry
+			trimmed.Candidates = []json.RawMessage{r.entry.Candidates[0]}
+			sr.entry = &trimmed
+		}
 		if r.entry != nil && len(r.entry.Candidates) > 0 {
 			var cand metafetch.MetadataCandidate
 			if derr := json.Unmarshal(r.entry.Candidates[0], &cand); derr != nil {
@@ -81,6 +92,10 @@ type reviewSnapshotCache struct {
 	build  func(ctx context.Context) (*reviewSnapshot, error)
 	maxAge time.Duration
 	now    func() time.Time
+	// baseCtx is the context background rebuilds run under: the server's
+	// lifetime context once warm has been called, so shutdown stops a rebuild
+	// instead of letting it read a closing store.
+	baseCtx context.Context
 
 	mu   sync.Mutex
 	snap *reviewSnapshot
@@ -93,7 +108,18 @@ type reviewSnapshotCache struct {
 }
 
 func newReviewSnapshotCache(build func(ctx context.Context) (*reviewSnapshot, error)) *reviewSnapshotCache {
-	return &reviewSnapshotCache{build: build, maxAge: reviewSnapshotMaxAge, now: time.Now}
+	return &reviewSnapshotCache{build: build, maxAge: reviewSnapshotMaxAge, now: time.Now, baseCtx: context.Background()}
+}
+
+// warm builds the snapshot now, under ctx (the server's lifetime context), and
+// makes ctx the parent of every later background rebuild. Called once at
+// startup so the first visit after a restart is not the one that waits.
+func (c *reviewSnapshotCache) warm(ctx context.Context) error {
+	c.mu.Lock()
+	c.baseCtx = ctx
+	c.mu.Unlock()
+	_, err, _ := c.sf.Do("build", func() (any, error) { return c.rebuild(ctx) })
+	return err
 }
 
 // get returns the current snapshot. With none yet (first request after a
@@ -125,8 +151,11 @@ func (c *reviewSnapshotCache) get(ctx context.Context) (*reviewSnapshot, error) 
 
 // refreshAsync starts a rebuild unless one is already running.
 func (c *reviewSnapshotCache) refreshAsync() {
+	c.mu.Lock()
+	ctx := c.baseCtx
+	c.mu.Unlock()
 	c.sf.DoChan("build", func() (any, error) {
-		snap, err := c.rebuild(context.Background())
+		snap, err := c.rebuild(ctx)
 		if err != nil {
 			metadataCacheLog.Warn("background review snapshot rebuild failed; serving the previous snapshot: %v", err)
 		}
