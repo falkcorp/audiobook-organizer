@@ -1,11 +1,12 @@
 // file: internal/database/pebble_store_atpath_markers.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 68a95fef-a156-403b-a6fa-3ae0ba84f8fd
 // last-edited: 2026-10-02
 
 package database
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -263,3 +264,53 @@ func (p *PebbleStore) stageDeleteIfPresent(batch *pebble.Batch, key []byte) erro
 // bookWriteBatchPreCommitHook, when non-nil, sees UpdateBook's and
 // DeleteBook's batch just before it commits. Tests only.
 var bookWriteBatchPreCommitHook func(op, id string, b *pebble.Batch)
+
+// bookAtPathBackfillBeforeChunkCommit, when non-nil, runs in a backfill worker
+// just before it commits a chunk (the chunk's markers are staged and already
+// noted in the set). Tests only: it lets a test land an UpdateBook commit
+// between a worker's note and its marker commit.
+var bookAtPathBackfillBeforeChunkCommit func()
+
+// atpathRunLock admits one backfill/rebuild/verify of the book_atpath index at
+// a time, store-wide.
+//
+// WHY: the startup backfill (server_lifecycle.go) is not an operation and does
+// not share the maintenance ops' ConcurrencyKey, so it could overlap a rebuild
+// op. Each run captures a marker generation, range-deletes the marker family,
+// and drops every id at or below that generation from the set. If run A's
+// clear lands after run B re-noted a still-undecodable id, the id leaves the
+// set while B's marker stays on disk: readers then skip a fail-closed marker.
+// Verify holds it too, so its MarkersNotInSet count cannot be the transient
+// gap a concurrent backfill worker opens (see the invariant above) and any
+// non-zero count is real drift.
+//
+// A channel, not a sync.Mutex: the rebuild op is cancellable and a waiter
+// must be able to give up on ctx. The zero value is usable (a store built
+// without newPebbleStore).
+type atpathRunLock struct {
+	once sync.Once
+	ch   chan struct{}
+}
+
+// lock takes the run lock or returns ctx's error. The returned func releases it.
+func (l *atpathRunLock) lock(ctx context.Context) (func(), error) {
+	l.once.Do(func() { l.ch = make(chan struct{}, 1) })
+	select {
+	case l.ch <- struct{}{}:
+		return func() { <-l.ch }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// markersInRange range-scans the marker family in snap. Only the cold
+// maintenance path (verify) uses it; it walks every tombstone in the family.
+func markersInRange(snap *pebble.Snapshot) ([]string, error) {
+	lower := []byte(bookAtPathUndecodablePrefix)
+	var ids []string
+	err := forEachKeyInRange(snap, lower, bareRowUpperBound(bookAtPathUndecodablePrefix), func(key, _ []byte) error {
+		ids = append(ids, string(key[len(lower):]))
+		return nil
+	})
+	return ids, err
+}

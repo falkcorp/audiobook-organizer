@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.185.0
+// version: 1.186.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-02
 
@@ -121,23 +121,24 @@ type PebbleStore struct {
 	// life of the process. See memdb_pending.go for the invariant and the
 	// ordering argument.
 	memPending               memPendingBuffer
-	counterMu                sync.Mutex     // protects nextID read-modify-write
-	opsMu                    sync.Mutex     // serializes v2 op CAS operations (SetOperationV2StatusIfQueued)
-	reviewMu                 sync.Mutex     // serializes review-item upserts so concurrent same-DedupKey writes can't duplicate rows (review_store.go)
-	nameIdx                  nameIndexLocks // per-family writer locks for the name indexes; lock order in pebble_store_name_index.go
-	apiKeyMu                 sync.Mutex     // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
-	fileProvMu               sync.Mutex     // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
-	fpwinLocks               bookLocks      // per-window-ref stripes: a window write and the delete cascade of the same file serialize, different files do not (pebble_store_fpwin.go)
-	bookFileIDScans          atomic.Int64   // count of scanForBookFileByID full scans; instrumentation so tests can prove a path never falls back to the O(N) walk
+	counterMu                sync.Mutex           // protects nextID read-modify-write
+	opsMu                    sync.Mutex           // serializes v2 op CAS operations (SetOperationV2StatusIfQueued)
+	reviewMu                 sync.Mutex           // serializes review-item upserts so concurrent same-DedupKey writes can't duplicate rows (review_store.go)
+	nameIdx                  nameIndexLocks       // per-family writer locks for the name indexes; lock order in pebble_store_name_index.go
+	apiKeyMu                 sync.Mutex           // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
+	fileProvMu               sync.Mutex           // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
+	fpwinLocks               bookLocks            // per-window-ref stripes: a window write and the delete cascade of the same file serialize, different files do not (pebble_store_fpwin.go)
+	bookFileIDScans          atomic.Int64         // count of scanForBookFileByID full scans; instrumentation so tests can prove a path never falls back to the O(N) walk
 	atpathMarkers            undecodableMarkerSet // which book_atpath_undecodable:<id> markers may exist (pebble_store_atpath_markers.go)
-	bookLocks                bookLocks      // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
-	bookFileLocks            bookLocks      // per-book_file-ID write stripes: every single-row book_file read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
-	bookOwnerLocks           bookLocks      // per-book-ID stripes over "which book_file rows name this book": DeleteBook's owns-files check+commit vs every book_file writer's commit (book_delete_owns_files.go)
-	bookAuthorLocks          bookLocks      // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit (pebble_store_authors.go)
-	opsLogSeq                atomic.Int64   // monotonic counter for log key uniqueness; accessed via atomic
-	rootDir                  string         // organized library root; set via SetRootDir after config load
-	libraryCountsRecomputeMu sync.Mutex     // gates recompute to prevent stampede when N callers see dirty cache
-	UseMemDB                 bool           // feature flag: use in-memory query layer for aggregations / filtered reads
+	atpathRuns               atpathRunLock        // one book_atpath backfill/rebuild/verify at a time, startup run included (pebble_store_atpath_markers.go)
+	bookLocks                bookLocks            // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
+	bookFileLocks            bookLocks            // per-book_file-ID write stripes: every single-row book_file read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
+	bookOwnerLocks           bookLocks            // per-book-ID stripes over "which book_file rows name this book": DeleteBook's owns-files check+commit vs every book_file writer's commit (book_delete_owns_files.go)
+	bookAuthorLocks          bookLocks            // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit (pebble_store_authors.go)
+	opsLogSeq                atomic.Int64         // monotonic counter for log key uniqueness; accessed via atomic
+	rootDir                  string               // organized library root; set via SetRootDir after config load
+	libraryCountsRecomputeMu sync.Mutex           // gates recompute to prevent stampede when N callers see dirty cache
+	UseMemDB                 bool                 // feature flag: use in-memory query layer for aggregations / filtered reads
 
 	// libraryStatsDirty is set by InvalidateLibraryStats and cleared when a
 	// recompute starts. It replaces a Pebble Delete of stats:library that ran on
@@ -3509,6 +3510,23 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	//
 	// The memdb projection of the two junction rows is cleared by
 	// DeleteBookFromMemDB below; none of the others has a memdb table.
+	//
+	// book_authors:<id> is probed under the book's book_authors stripe, held
+	// until the batch commits. SetBookAuthors/ModifyBookAuthors hold only that
+	// stripe (not the book stripe), so without it a credit write could commit
+	// between the probe (absent, no Delete staged) and this commit and leak a
+	// junction row naming a deleted book. Lock order book -> owner ->
+	// book_authors is acyclic: nothing holding a book_authors stripe takes a
+	// book or owner stripe (pebble_store_authors.go, lockBookAuthors). It is
+	// released right after the commit, before the memdb write-through and the
+	// change notification, so no observer runs under it.
+	unlockAuthors := p.lockBookAuthors(id)
+	authorsLocked := true
+	defer func() {
+		if authorsLocked {
+			unlockAuthors()
+		}
+	}()
 	for _, sidecar := range [][]byte{
 		[]byte("book_authors:" + id),
 		[]byte("book_narrators:" + id),
@@ -3550,6 +3568,8 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return err
 	}
+	unlockAuthors()
+	authorsLocked = false
 	if markerMayExist {
 		p.forgetUndecodableMarker(id, markerGen)
 	}
