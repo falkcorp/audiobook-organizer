@@ -1,5 +1,5 @@
 // file: internal/merge/trash_restore.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
 // last-edited: 2026-10-01
 
@@ -30,7 +30,8 @@ type TrashRestoreResult struct {
 	// Restored is true when the row was in the trash and this call restored it.
 	Restored bool
 	// RedirectFrom is the book the restored row's sync identity redirected
-	// to (its merge survivor), when the restore removed that redirect.
+	// to (its merge survivor), when the restore removed that redirect. Empty
+	// when there was none, or it was kept (the row is not ABS-listable).
 	RedirectFrom string
 }
 
@@ -54,18 +55,43 @@ type pendingRepairScanner interface {
 //
 // When the row is in the trash (database.IsInTrash) it:
 //
-//  1. removes the sync-identity redirect a merge left on it (RecordSyncMerge),
-//     so ABS renders it as its own item instead of dropping it as a merge
-//     loser. A combine's absorbed shell and a MergeBooks loser never record
-//     MergedIntoBookID, so the redirect is read from the sync layer, not
-//     from that column. Done first: the clear is idempotent, while a second
-//     restore of a row already written live is a no-op, so a clear that
-//     failed after the write could never be retried;
-//  2. under the book's version-group lock, reads the group's incumbent and
-//     writes database.RestoreBookFromTrash plus versionprimary.YieldToIncumbent
-//     in one ModifyBook;
-//  3. drops the pending user-state repair records that would move the
-//     restored book's state onto its old survivor.
+//  1. under the book's version-group lock, reads the group's incumbent and
+//     works out the row the restore will write (database.RestoreBookFromTrash
+//     plus versionprimary.YieldToIncumbent);
+//  2. when that row will be listed by ABS as an item of its own, with audio
+//     to play (database.RestoredRowIsABSListable), removes the sync-identity
+//     redirect a merge left on it (RecordSyncMerge), so ABS renders it instead
+//     of dropping it as a merge loser. A combine's absorbed shell and a
+//     MergeBooks loser never record MergedIntoBookID, so the redirect is read
+//     from the sync layer, not from that column. Done before the write: the
+//     clear is idempotent, while a second restore of a row already written
+//     live is a no-op, so a clear that failed after the write could never be
+//     retried;
+//  3. writes that restore in one ModifyBook, then re-checks the written row
+//     (a concurrent edit or apply may have changed it) and puts the redirect
+//     back, or removes it, to match;
+//  4. when the redirect is gone, drops the pending user-state repair records
+//     that would move the restored book's state onto its old survivor.
+//
+// The redirect is KEPT when the restored row will not be ABS-listable
+// (re-review of #3649, findings 1 and 2). The redirect is what forwards a
+// client's old libraryItemId, and the progress the merge followed onto the
+// survivor, to the survivor. Removing it from a row ABS does not list strands
+// that client: a combine shell comes back "imported" with no files, and a
+// MergeBooks or fragment-fixer loser sits in the survivor's version group
+// with IsPrimaryVersion=false, so ABS hides it while its old id would stop
+// forwarding and the client would see its progress reset. Its pending repair
+// records are kept with it: while the book is live the sweep defers them
+// (ErrPendingLoserLive), and they are still owed if it is trashed again.
+//
+// Known gap: the caller's EnsureSinglePrimary runs after this returns. When
+// a kept-redirect loser's group has no live incumbent (its survivor is gone
+// too), that hand-off can crown the loser, which ABS then lists but still
+// drops as a redirect. Closing it means re-running this decision after the
+// hand-off at each RestoreFromTrash call site (audiobooks/service_single.go
+// and three in batch/service.go). Likewise an organized row whose files are
+// all Missing keeps its redirect, and a later repoint that finds its audio
+// does not remove it.
 //
 // User state (progress, positions, bookmarks) the merge already followed onto
 // the survivor stays there; only the identity redirect is removed.
@@ -103,14 +129,12 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 	var env database.TrashRestoreEnv
 	if trashed {
 		// The file rows decide whether the row may come back "organized"
-		// (database.RestoreLibraryStateFromTrash).
+		// (database.RestoreLibraryStateFromTrash) and whether it keeps its
+		// merge redirect (database.RestoredRowIsABSListable).
 		if files, err = store.GetBookFiles(id); err != nil {
 			return res, fmt.Errorf("read files of %s: %w", id, err)
 		}
 		env = TrashRestoreEnv()
-		if res.RedirectFrom, err = clearRestoredRedirect(store, id); err != nil {
-			return res, err
-		}
 	}
 
 	gid := ""
@@ -128,19 +152,41 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 		unlockGroup = versionprimary.LockGroup(gid)
 		if incumbent, err = versionprimary.IncumbentExcept(store, gid, id); err != nil {
 			unlockGroup()
-			restoreRedirect(store, id, res.RedirectFrom)
 			return res, err
+		}
+	}
+	// restoreRow is the restore the write applies; the redirect decision runs
+	// it on a copy first, so both see the same rule.
+	restoreRow := func(row *database.Book) bool {
+		if !database.RestoreBookFromTrash(row, files, env) {
+			return false
+		}
+		// Yield only in the group whose incumbent was read; a row moved to
+		// another group since is left to the caller's hand-off.
+		if gid != "" && row.VersionGroupID != nil && strings.TrimSpace(*row.VersionGroupID) == gid {
+			versionprimary.YieldToIncumbent(row, incumbent)
+		}
+		return true
+	}
+	if trashed {
+		// RestoreBookFromTrash and YieldToIncumbent assign fresh pointers and
+		// never write through the row's, so a shallow copy leaves book alone.
+		preview := *book
+		restoreRow(&preview)
+		if database.RestoredRowIsABSListable(&preview, files, env) {
+			if res.RedirectFrom, err = clearRestoredRedirect(store, id); err != nil {
+				unlockGroup()
+				return res, err
+			}
+		} else {
+			mlog.Info("restore from trash: book=%s will not be listed by ABS as an item of its own (not primary, not organized, or no present file in the library folder); any merge redirect is kept so its old id still reaches the survivor",
+				logger.SanitizeLogValue(id))
 		}
 	}
 	updated, err := store.ModifyBook(id, func(row *database.Book) error {
 		res.Before = *row
-		if trashed && database.RestoreBookFromTrash(row, files, env) {
+		if trashed && restoreRow(row) {
 			res.Restored = true
-			// Yield only in the group whose incumbent was read; a row moved to
-			// another group since is left to the caller's hand-off.
-			if gid != "" && row.VersionGroupID != nil && strings.TrimSpace(*row.VersionGroupID) == gid {
-				versionprimary.YieldToIncumbent(row, incumbent)
-			}
 		}
 		if apply != nil {
 			apply(row)
@@ -154,6 +200,7 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 	unlockGroup()
 	if err != nil || updated == nil {
 		restoreRedirect(store, id, res.RedirectFrom)
+		res.RedirectFrom = ""
 		res.Restored = false
 		if err != nil {
 			return res, fmt.Errorf("restore %s: %w", id, err)
@@ -161,10 +208,41 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 		return res, nil
 	}
 	res.Book = updated
-	if res.Restored {
+	if res.Restored && reconcileRestoredRedirect(store, &res, files, env) {
 		dropRestoredPendingRepairs(store, id)
 	}
 	return res, nil
+}
+
+// reconcileRestoredRedirect re-runs the redirect decision on the row the
+// restore wrote, which a concurrent writer or the caller's apply may have
+// left different from the preview the decision ran on. A redirect removed
+// for a row that is not listable after all is put back; a row that turned
+// out listable has its redirect removed now. res.RedirectFrom is kept in step.
+// It reports whether the row is listable and no redirect is left on it, i.e.
+// whether the pending moves onto the old survivor are no longer owed.
+func reconcileRestoredRedirect(store any, res *TrashRestoreResult, files []database.BookFile, env database.TrashRestoreEnv) bool {
+	id := res.Book.ID
+	if !database.RestoredRowIsABSListable(res.Book, files, env) {
+		if res.RedirectFrom != "" {
+			mlog.Warn("restore from trash: book=%s is not ABS-listable as written; putting its sync redirect to survivor=%s back",
+				logger.SanitizeLogValue(id), logger.SanitizeLogValue(res.RedirectFrom))
+			restoreRedirect(store, id, res.RedirectFrom)
+			res.RedirectFrom = ""
+		}
+		return false
+	}
+	if res.RedirectFrom != "" {
+		return true
+	}
+	winner, err := clearRestoredRedirect(store, id)
+	if err != nil {
+		mlog.Error("restore from trash: book=%s is restored and ABS-listable but its sync redirect was not removed, so ABS keeps dropping it: %s",
+			logger.SanitizeLogValue(id), logger.SanitizeLogValue(fmt.Sprint(err)))
+		return false
+	}
+	res.RedirectFrom = winner
+	return true
 }
 
 // clearRestoredRedirect removes book id's merge redirect and returns the book
@@ -187,9 +265,9 @@ func clearRestoredRedirect(store any, id string) (string, error) {
 }
 
 // restoreRedirect puts back a redirect clearRestoredRedirect removed, when the
-// restore that removed it did not write. Best-effort: the row is still in the
-// trash, and a merge loser in the trash with no redirect is what a merge whose
-// follow failed leaves too; the failure is logged at Error.
+// restore that removed it did not write, or wrote a row that is not
+// ABS-listable after all. Best-effort: a merge loser with no redirect is what
+// a merge whose follow failed leaves too; the failure is logged at Error.
 func restoreRedirect(store any, id, winner string) {
 	if winner == "" {
 		return
@@ -199,7 +277,7 @@ func restoreRedirect(store any, id, winner string) {
 		return
 	}
 	if err := ids.RecordSyncMerge(id, winner); err != nil {
-		mlog.Error("restore from trash failed and the sync redirect book=%s -> survivor=%s could not be put back: %s",
+		mlog.Error("restore from trash: the sync redirect book=%s -> survivor=%s could not be put back: %s",
 			logger.SanitizeLogValue(id), logger.SanitizeLogValue(winner), logger.SanitizeLogValue(fmt.Sprint(err)))
 	}
 }
