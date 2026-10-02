@@ -84,4 +84,9 @@ func TestApply_PinFromAStaleReviewSnapshotIsRefused(t *testing.T) {
 	require.False(t, out.Applied)
 	require.Equal(t, applySkipStaleCandidate, out.Reason)
 	require.Empty(t, svc.appliedIDs)
+
+	// The background rebuild the stale request started lands, and the page
+	// then shows the current candidate. (Waiting for it also keeps the
+	// rebuild from outliving the store.)
+	require.Eventually(t, func() bool { return serve().Candidate.Title == newCand.Title }, 5*time.Second, 10*time.Millisecond)
 }
