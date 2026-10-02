@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.27.0
+// version: 1.28.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-02
 //
@@ -1363,6 +1363,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // mixing an older index's details into the new one.
   const detailAskedRef = useRef<Set<string>>(new Set());
   const detailEpochRef = useRef(0);
+  // Set when a detail mismatch refetched the index; cleared by a detail
+  // response that agrees with its index. A mismatch that survives the
+  // refetch warns instead of refetching again, so this can never loop.
+  const mismatchRefetchedRef = useRef(false);
   useEffect(() => {
     if (!active) return;
     const missing = pageIndexRows
@@ -1375,11 +1379,36 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       .getCachedReviewResults(0, 0, false, 'reviewable', { ids: missing })
       .then((data) => {
         if (epoch !== detailEpochRef.current) return;
+        const fetched = data.results || [];
         setDetailsById((prev) => {
           const next = new Map(prev);
-          for (const r of data.results || []) next.set(r.book.id, r);
+          for (const r of fetched) next.set(r.book.id, r);
           return next;
         });
+        // A detail whose hash is not the index row's, or a book the server no
+        // longer lists, means the server's candidates moved since the index
+        // was loaded. The row would show without its description and its
+        // Apply would be refused as stale -- so never leave it silently:
+        // refetch the index once, and if that still disagrees, say so.
+        const byId = new Map(fetched.map((r) => [r.book.id, r]));
+        const indexHash = new Map(pageIndexRows.map((r) => [r.book.id, r.candidate_hash]));
+        const changed = missing.filter((id) => {
+          const d = byId.get(id);
+          return !d || d.candidate_hash !== indexHash.get(id);
+        });
+        if (changed.length === 0) {
+          mismatchRefetchedRef.current = false;
+          return;
+        }
+        if (!mismatchRefetchedRef.current) {
+          mismatchRefetchedRef.current = true;
+          refresh();
+          return;
+        }
+        toast(
+          `${changed.length} row(s) on this page changed on the server since the list loaded — refresh to see their current candidates.`,
+          'warning'
+        );
       })
       .catch(() => {
         // The index rows are still shown, just without their descriptions.
@@ -1387,6 +1416,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         if (epoch !== detailEpochRef.current) return;
         missing.forEach((id) => detailAskedRef.current.delete(id));
       });
+    // refresh and toast are stable callbacks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, pageIndexRows]);
 
   const { groups, groupedBookIds } = useMemo(() => {
