@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c2e4a90-1d6f-4b38-8e57-3a9b5c1f0d26
 // last-edited: 2026-10-01
 
@@ -28,7 +28,8 @@ var harvestLog = logger.New("catalog-harvest")
 
 // ErrProviderStandDown ends an author's fetch when the provider is held off
 // by the throttle registry (a 429/quota hold set by any metadata path). The
-// author is recorded partial and retried on the next run.
+// author is recorded partial and retried on the next run, and Run stops
+// handing out further authors and returns it (wrapped).
 var ErrProviderStandDown = errors.New("provider is throttled; harvest standing down")
 
 // Defaults (Q5 and R10).
@@ -56,8 +57,13 @@ type Settings struct {
 	// Throttled reports whether the provider is currently held off. Nil
 	// means never.
 	Throttled func() bool
-	OpID      string
-	Now       func() time.Time
+	// OnProviderError is told about every provider failure (listing or
+	// lookup) other than cancellation and not-found, so the shared throttle
+	// registry can classify it: a 429 here must hold off every Audible
+	// path, and the hold is what Throttled then reports. Nil means ignore.
+	OnProviderError func(error)
+	OpID            string
+	Now             func() time.Time
 }
 
 func (s *Settings) normalize() {
@@ -129,6 +135,17 @@ func (h *Harvester) waitTurn(ctx context.Context) error {
 	return nil
 }
 
+// providerError feeds a provider failure to OnProviderError. Cancellation is
+// ours, and a missing product is an answer, so neither is reported.
+func (h *Harvester) providerError(ctx context.Context, err error) {
+	if h.Cfg.OnProviderError == nil || err == nil || ctx.Err() != nil ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, metadata.ErrCatalogProductNotFound) {
+		return
+	}
+	h.Cfg.OnProviderError(err)
+}
+
 // fetchResult is one author's raw listing.
 type fetchResult struct {
 	products map[string]metadata.CatalogProduct
@@ -153,6 +170,7 @@ func (h *Harvester) fetchAll(ctx context.Context, name string, touch func()) fet
 		}
 		pg, err := h.Lister.ListByAuthor(ctx, name, page, h.Cfg.PageSize)
 		if err != nil {
+			h.providerError(ctx, err)
 			r.err = err
 			return r
 		}
@@ -208,6 +226,7 @@ func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 			return nil, err
 		}
 		p, err := h.Lister.LookupProduct(ctx, asin)
+		h.providerError(ctx, err)
 		if touch != nil {
 			touch()
 		}
@@ -376,7 +395,15 @@ type RunOptions struct {
 // Concurrency. Each worker owns one author at a time; two workers can
 // still meet on one co-authored product, which CatalogStore.UpsertEntries
 // serializes.
-func (h *Harvester) Run(ctx context.Context, reporter registry.Reporter, authors []ScopeAuthor, opt RunOptions) (*Tally, error) {
+//
+// When the provider goes into a throttle hold mid-run, Run cancels the pool
+// instead of letting every remaining author make one doomed request and be
+// written failed: authors not yet started keep their previous state (and
+// stay due), and Run returns ErrProviderStandDown.
+func (h *Harvester) Run(parent context.Context, reporter registry.Reporter, authors []ScopeAuthor, opt RunOptions) (*Tally, error) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	var standDown atomic.Bool
 	tally := &Tally{}
 	var ckptMu sync.Mutex
 	lastCkpt := time.Now()
@@ -387,8 +414,18 @@ func (h *Harvester) Run(ctx context.Context, reporter registry.Reporter, authors
 	touch := func() { registry.TouchLiveness(reporter) }
 
 	err := registry.RunItems(ctx, reporter, authors, func(ctx context.Context, a ScopeAuthor) error {
+		// An author dispatched after a stand-down must not be attempted: an
+		// attempt would overwrite its state with a cancellation failure.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		st, err := h.HarvestAuthor(ctx, a, touch)
 		tally.record(st)
+		if h.Cfg.Throttled != nil && h.Cfg.Throttled() && standDown.CompareAndSwap(false, true) {
+			harvestLog.Warn("provider throttled after author %q; standing down the run (%s)",
+				logger.SanitizeLogValue(a.Name), tally.Summary())
+			cancel()
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -415,6 +452,9 @@ func (h *Harvester) Run(ctx context.Context, reporter registry.Reporter, authors
 			return fmt.Sprintf("Authors %d/%d (%s)", tally.Done.Load(), total, tally.Summary())
 		},
 	})
+	if standDown.Load() && parent.Err() == nil {
+		return tally, fmt.Errorf("%w after %d of %d authors", ErrProviderStandDown, tally.Done.Load(), len(authors))
+	}
 	return tally, err
 }
 

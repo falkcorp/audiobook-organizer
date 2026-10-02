@@ -1,5 +1,5 @@
 // file: internal/metadata/audible_author_list.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f2d9a14-3b7e-4c58-a1d0-8e5f7c2b9a63
 // last-edited: 2026-10-01
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,6 +36,12 @@ type AuthorLister interface {
 	// fields as a listing row. Used to read an owned book's author ASIN.
 	LookupProduct(ctx context.Context, asin string) (*CatalogProduct, error)
 }
+
+// ErrCatalogProductNotFound: the provider has no product under that id (a
+// 404, or a 200 with an empty product). It is an answer, not a failure: an
+// owned ASIN Audible no longer sells gives no author identity, and retrying
+// it will never change that. Callers must not count it as a lookup error.
+var ErrCatalogProductNotFound = errors.New("catalog product not found")
 
 // AuthorPage is one page of an author listing.
 type AuthorPage struct {
@@ -134,6 +141,10 @@ func (c *AudibleClient) LookupProduct(ctx context.Context, asin string) (*Catalo
 		c.baseURL, url.PathEscape(asin), audibleCatalogResponseGroups)
 	body, err := c.getBody(ctx, u)
 	if err != nil {
+		var pse *ProviderStatusError
+		if errors.As(err, &pse) && pse.Status == http.StatusNotFound {
+			return nil, fmt.Errorf("audible product %s: %w", asin, ErrCatalogProductNotFound)
+		}
 		return nil, fmt.Errorf("audible product %s: %w", asin, err)
 	}
 	var resp audibleRawProductResponse
@@ -141,7 +152,7 @@ func (c *AudibleClient) LookupProduct(ctx context.Context, asin string) (*Catalo
 		return nil, fmt.Errorf("audible product %s: decode: %w", asin, err)
 	}
 	if len(resp.Product) == 0 {
-		return nil, fmt.Errorf("audible product %s: empty response", asin)
+		return nil, fmt.Errorf("audible product %s: empty response: %w", asin, ErrCatalogProductNotFound)
 	}
 	p, err := decodeCatalogProduct(resp.Product)
 	if err != nil {

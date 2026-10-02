@@ -1,5 +1,5 @@
 // file: internal/server/catalog_harvest_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e6b9d24-7a1c-4f85-b2e0-5c8d1a4f7e93
 // last-edited: 2026-10-01
 //
@@ -175,7 +175,10 @@ func runCatalogHarvest(ctx context.Context, reporter opsregistry.Reporter, store
 		Concurrency:       p.Concurrency,
 		Limiter:           rate.NewLimiter(rate.Limit(rps), 1),
 		Throttled:         func() bool { return metadata.DefaultThrottleRegistry().Throttled(metadata.SourceIDAudible) },
-		OpID:              opsregistry.ReporterOpID(reporter),
+		OnProviderError: func(err error) {
+			metadata.DefaultThrottleRegistry().RecordFailure(metadata.SourceIDAudible, err)
+		},
+		OpID: opsregistry.ReporterOpID(reporter),
 	})
 	due, err := h.SelectDue(authors, force)
 	if err != nil {
