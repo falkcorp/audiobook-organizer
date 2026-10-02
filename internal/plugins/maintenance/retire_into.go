@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-02
 
@@ -315,7 +315,9 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 //
 // In order, nothing is owed (nil) when:
 //   - the book has no version group, or was merged into another target;
-//   - its group has exactly one live primary. Checked before any history:
+//   - its group has exactly one live primary (livePrimaries: the
+//     versionprimary.Incumbent rule, so a nil-flag primary counts). Checked
+//     before any history:
 //     a duplicate-copies loser demoted by Crown, whose hand-off note was cut
 //     off, has no Writer history row, and its group is whole;
 //   - no un-reverted demote row for it is in any op's journal (never
@@ -323,7 +325,10 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 //     newest such demote (handed off already).
 //
 // It is owed when, besides, the newest is_primary_version history row of
-// the book is fixerID's demote to false, the book is still explicit false,
+// the book is a retire's demote to false (any fixer in retireFixerIDs, not
+// only fixerID: one fixer's retire that lost its lease after the demote can
+// leave the book to another fixer's row, which must finish that hand-off
+// rather than refuse it forever with the group left without a primary), the book is still explicit false,
 // and no live member of its group is primary. It is then made by THIS op and
 // journaled in this op's journal. Reverts converge in either order: the
 // hand-off row is a note (the revert of the first op's demote re-crowns the
@@ -354,16 +359,7 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	if err != nil {
 		return refuse("group %s unreadable: %v", gid, err)
 	}
-	live := 0
-	for i := range members {
-		m := &members[i]
-		if m.ID == b.ID || m.IsSoftDeleted() {
-			continue
-		}
-		if m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
-			live++
-		}
-	}
+	live := livePrimaries(store, members, b.ID)
 	if live == 1 {
 		return nil // the group has its one primary: nothing owed
 	}
@@ -419,14 +415,62 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	switch {
 	case newest == nil:
 		return refuse("a demote is journaled but no history row records it")
-	case newest.Source != fixerID:
-		return refuse("its primary flag was last changed by %q, not by %s", newest.Source, fixerID)
+	case !retireFixerIDs[newest.Source]:
+		return refuse("its primary flag was last changed by %q, not by a retire", newest.Source)
 	case newest.NewValue == nil || *newest.NewValue != string(falseJSON) || storedPrimaryFlag(b.IsPrimaryVersion) != "false":
-		return refuse("its primary flag is %s, not the false %s wrote", storedPrimaryFlag(b.IsPrimaryVersion), fixerID)
+		return refuse("its primary flag is %s, not the false %s wrote", storedPrimaryFlag(b.IsPrimaryVersion), newest.Source)
 	case live > 1:
 		return refuse("group %s has %d live primaries", gid, live)
 	}
 	return retireHandOff(ctx, p, store, w, fixerID, b.ID, gid)
+}
+
+// retireFixerIDs are the fixers that retire through retireInto: a demote
+// recorded under any of them is a retire's demote, whose owed hand-off any
+// of them may finish (resumeHandOff).
+var retireFixerIDs = map[string]bool{fragFixerID: true, dcFixerID: true}
+
+// livePrimaries counts the live primaries of a version group, excluding
+// book except, by the rule versionprimary.Incumbent reads: the Electable
+// members whose flag is explicitly true, or, when there is none, exactly one
+// Electable member whose flag is nil (every visibility path reads a nil flag
+// as primary, database.EffectiveIsPrimaryVersion). Two or more nil members
+// and no explicit true count as none: Incumbent cannot tell them apart.
+// Counting only explicit true read a nil-flag primary's group as having
+// none and sent every first-run retire in it through the unindexed journal
+// scan.
+func livePrimaries(store OpsStore, members []database.Book, except string) int {
+	others := make([]database.Book, 0, len(members))
+	for i := range members {
+		if members[i].ID != except {
+			others = append(others, members[i])
+		}
+	}
+	inGroup := make(map[string]bool, len(others))
+	for i := range others {
+		inGroup[others[i].ID] = !others[i].IsSoftDeleted()
+	}
+	alive := func(id string) bool {
+		if live, ok := inGroup[id]; ok {
+			return live
+		}
+		sb, err := store.GetBookByID(id)
+		return err == nil && sb != nil && !sb.IsSoftDeleted()
+	}
+	explicit := 0
+	for i := range others {
+		m := &others[i]
+		if versionprimary.Electable(m, alive) && m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
+			explicit++
+		}
+	}
+	if explicit > 0 {
+		return explicit
+	}
+	if versionprimary.Incumbent(others, alive) != nil {
+		return 1
+	}
+	return 0
 }
 
 // bookJournalReader reads every operation's journal rows for one book.
