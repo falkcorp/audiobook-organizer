@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
 // last-edited: 2026-10-02
 
@@ -184,7 +184,7 @@ func settleNote(c *database.OperationChange) (settleTouch, bool) {
 // clearSettleOwed deletes the operation's record.
 func (rs *RevertService) clearSettleOwed(operationID string) {
 	kv, _ := rs.db.(rawKV)
-	_ = rs.storeSettleOwed(kv, operationID, settleOwedRecord{})
+	deleteSettleOwed(kv, operationID)
 }
 
 // settleGroups is the settle pass of RevertOperation: every version group
@@ -465,15 +465,8 @@ func (rs *RevertService) loadSettleOwed(kv rawKV, operationID string) settleOwed
 
 // storeSettleOwed writes the record, or deletes it when nothing is owed.
 func (rs *RevertService) storeSettleOwed(kv rawKV, operationID string, rec settleOwedRecord) error {
-	key := settleOwedKeyPrefix + operationID
 	if len(rec.Groups) == 0 {
-		if kv == nil {
-			return nil
-		}
-		if err := kv.DeleteRaw(key); err != nil {
-			revertLog.Warn("revert: clear the owed group settles of operation %s: %s",
-				logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
-		}
+		deleteSettleOwed(kv, operationID)
 		return nil
 	}
 	if kv == nil {
@@ -483,7 +476,22 @@ func (rs *RevertService) storeSettleOwed(kv rawKV, operationID string, rec settl
 	if err != nil {
 		return err
 	}
-	return kv.SetRaw(key, raw)
+	return kv.SetRaw(settleOwedKeyPrefix+operationID, raw)
+}
+
+// deleteSettleOwed removes the operation's record. A failed delete is
+// logged, not returned: both callers reach it only after the settle the
+// record was for has finished, so there is nothing left for them to retry,
+// and a leftover record only makes a later revert of the operation run the
+// settle pass again for the groups it names.
+func deleteSettleOwed(kv rawKV, operationID string) {
+	if kv == nil {
+		return
+	}
+	if err := kv.DeleteRaw(settleOwedKeyPrefix + operationID); err != nil {
+		revertLog.Warn("revert: clear the owed group settles of operation %s: %s",
+			logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
+	}
 }
 
 // hasSettleOwed reports whether the operation has groups owed a settle by
