@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-01
 
@@ -595,7 +595,9 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 	// dropped it out of ABS); unlinked from its merge survivor, sync redirect
 	// included; and a former primary yields to the member that has held the
 	// flag since. A row that is not in the trash is returned unchanged.
-	res, err := merge.RestoreFromTrash(svc.store, id, nil)
+	// It also hands off the group's primary (EnsureSinglePrimary) before it
+	// decides the redirect, so no hand-off runs here.
+	res, err := merge.RestoreFromTrash(svc.store, id, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -605,12 +607,8 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 	if !res.Restored {
 		return res.Book, nil
 	}
-	updated := res.Book
-	// Re-check its group: one primary, by the shared rule.
-	svc.handOffPrimary(updated)
-
 	svc.InvalidateBookCaches()
-	return updated, nil
+	return res.Book, nil
 }
 
 // handOffPrimary runs versionprimary.EnsureSinglePrimary on b's version
