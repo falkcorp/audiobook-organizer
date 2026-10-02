@@ -1,7 +1,7 @@
 // file: internal/itunes/service/regroup_plan.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-06-20
+// last-edited: 2026-10-01
 
 package itunesservice
 
@@ -19,16 +19,37 @@ type PIDLoc struct {
 // BookMeta is the immutable per-book metadata the planner needs to choose a
 // target book for a group. Built once from a DB read-snapshot; never mutated.
 type BookMeta struct {
-	ID                   string
-	Title                string
-	IsPrimary            bool
-	FileCount            int   // total BookFiles currently on this book
-	DurationSec          int   // book aggregate duration (seconds)
-	EnrichScore          int   // richer = preferred survivor (ISBN, description, …)
-	CreatedAtUnix        int64 // older = preferred survivor (tiebreak)
-	VersionGroupID       string
-	HasNonPrimaryMembers bool // this book's version group has ≥1 non-primary member
+	ID    string
+	Title string
+	// IsPrimary is the EFFECTIVE primary flag. For a book in a version group it
+	// is true only for the group's incumbent primary (the explicitly-true
+	// member, else the one unset member); for an ungrouped book it is
+	// database.EffectiveIsPrimaryVersion (unset reads as primary).
+	IsPrimary      bool
+	FileCount      int   // total BookFiles currently on this book
+	DurationSec    int   // book aggregate duration (seconds)
+	EnrichScore    int   // richer = preferred survivor (ISBN, description, …)
+	CreatedAtUnix  int64 // older = preferred survivor (tiebreak)
+	VersionGroupID string
+	// GroupHasNoIncumbent: this book is in a version group in which no member
+	// can be told apart as the primary (no explicit true and not exactly one
+	// unset member), so the planner cannot know which member is the library
+	// copy.
+	GroupHasNoIncumbent bool
+	// LegacyEntangled is the input of the rule this planner used before
+	// 2026-10-01 (book is in a version group that has any member whose flag is
+	// not explicitly true). It drives ONLY the dry-run delta report
+	// (RegroupPlan.Unblocked / NewlyBlocked), never a decision.
+	LegacyEntangled bool
 }
+
+// Entanglement skip reasons (GroupAction.EntangleReason). See entanglement.
+const (
+	EntangleGroupedSource = "grouped-source"  // files would leave a version-group member
+	EntangleWouldEmpty    = "would-empty"     // a version-group member would be emptied (and deleted)
+	EntanglePrimaryTarget = "primary-target"  // files would be added to a group's primary (library) copy
+	EntangleAmbiguous     = "ambiguous-group" // target's group has no incumbent primary to tell copies apart
+)
 
 // Snapshot is an immutable read of the DB state the planner reasons over. It is
 // built ONCE before planning and never changes during planning — so the plan is
@@ -50,12 +71,14 @@ type FileMove struct {
 
 // GroupAction is the frozen resolution for one HealGroup.
 type GroupAction struct {
-	Title      string
-	Target     string     // existing book ID claimed; "" iff FreshBook
-	FreshBook  bool       // a new book must be created to hold this group
-	Moves      []FileMove // PIDs whose file must move onto Target
-	Entangled  bool       // skipped: version-group entanglement (no mutation)
-	Unresolved []string   // group PIDs not present in the DB
+	Title     string
+	Target    string     // existing book ID claimed; "" iff FreshBook
+	FreshBook bool       // a new book must be created to hold this group
+	Moves     []FileMove // PIDs whose file must move onto Target
+	Entangled bool       // skipped: version-group entanglement (no mutation)
+	// EntangleReason is why Entangled is set (one of the Entangle* constants).
+	EntangleReason string
+	Unresolved     []string // group PIDs not present in the DB
 }
 
 // RegroupPlan is the complete, deterministic, frozen plan. The executor applies
@@ -69,9 +92,24 @@ type RegroupPlan struct {
 	AlreadyCorrect   int // group's resolved PIDs already all on one book (may be PARTIAL)
 	Consolidated     int // groups requiring ≥1 move
 	EntangledSkipped int
-	FreshBooks       int
-	PIDsResolved     int
-	PIDsUnresolved   int
+	// EntangledByReason breaks EntangledSkipped down by EntangleReason.
+	EntangledByReason map[string]int
+	FreshBooks        int
+	PIDsResolved      int
+	PIDsUnresolved    int
+
+	// Rule-change delta (dry-run report). For every group that needs moves, the
+	// pre-2026-10-01 rule (skip when any holder's version group has a member
+	// whose flag is not explicitly true) is evaluated on the SAME holder set as
+	// the current rule. Unblocked: legacy skipped it, the current rule plans it.
+	// NewlyBlocked: legacy planned it, the current rule skips it. This is a
+	// per-group comparison inside ONE plan, not a diff of two full plans: once a
+	// formerly-skipped group claims a target, later groups' claims can differ
+	// from what the legacy plan would have chosen.
+	LegacyEntangledSkipped int
+	Unblocked              int
+	NewlyBlocked           int
+	UnblockedExamples      []string
 
 	// Completeness metrics — distinguish "correctly grouped" from "only partially
 	// present". A group is PARTIAL when some of its XML PIDs resolve in the DB and
@@ -103,7 +141,7 @@ type RegroupPlan struct {
 // fresh book — which is what actually SPLITS an over-merged book rather than
 // silently retitling it.
 func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
-	plan := RegroupPlan{TotalGroups: len(groups)}
+	plan := RegroupPlan{TotalGroups: len(groups), EntangledByReason: make(map[string]int)}
 	claimed := make(map[string]bool, len(groups))   // existing books already taken as a target
 	singleFileChapters := make(map[string]struct{}) // distinct single-file books in multi-track groups
 
@@ -188,12 +226,28 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 			continue
 		}
 
-		// Moves ARE needed. Only now does entanglement matter: auto-merging could
-		// orphan or mis-merge curated versions (or genuine alternate editions), so
-		// skip (conservative v1). This count is "entangled AND would-move".
-		if entangledAmong(resolved, snap) {
+		// Moves ARE needed. Only now does entanglement matter (see entanglement
+		// for the rule and why). The legacy rule is evaluated alongside it on the
+		// same holders, for the dry-run delta report only.
+		reason := entanglement(moves, target, fresh, snap)
+		legacy := legacyEntangledAmong(resolved, snap)
+		if legacy {
+			plan.LegacyEntangledSkipped++
+		}
+		switch {
+		case legacy && reason == "":
+			plan.Unblocked++
+			if len(plan.UnblockedExamples) < 12 {
+				plan.UnblockedExamples = append(plan.UnblockedExamples, fmt.Sprintf("%q (%d moves)", g.Title, len(moves)))
+			}
+		case !legacy && reason != "":
+			plan.NewlyBlocked++
+		}
+		if reason != "" {
 			act.Entangled = true
+			act.EntangleReason = reason
 			plan.EntangledSkipped++
+			plan.EntangledByReason[reason]++
 			plan.Groups = append(plan.Groups, act)
 			continue
 		}
@@ -215,11 +269,81 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 	return plan
 }
 
-// entangledAmong reports whether any distinct book holding the group's resolved
-// files is in a version group with non-primary members.
-func entangledAmong(resolved []PIDLoc, snap Snapshot) bool {
+// entanglement decides whether a group's planned moves may run, returning ""
+// (allowed) or the Entangle* reason it is skipped. Its job is to keep every
+// curated version link meaning what it meant: a version group links EDITIONS
+// of one work (by the owner's rule, the library-folder copy is the primary and
+// every iTunes copy linked to it is a non-primary member), so the regroup may
+// complete an iTunes edition but must never change which files make up a
+// different edition, nor remove a member. The rule, checked in order:
+//
+//  1. No file may LEAVE a version-group member (EntangleWouldEmpty when the
+//     member would be left with no files and so deleted, else
+//     EntangleGroupedSource). This covers a fresh-book split out of a grouped
+//     book, a move between two members of the same group, and a move from a
+//     member of another group into the target.
+//  2. After (1) every source is an ungrouped iTunes record. A target that is
+//     NOT in a version group may receive anything (ungrouped<->ungrouped).
+//  3. A grouped target may receive files from those ungrouped fragments only
+//     when it is a NON-primary member of a group that HAS an incumbent
+//     primary: it is then an iTunes edition linked to its library copy, and
+//     gathering the rest of that iTunes album's tracks onto it completes the
+//     edition the link already points at. The library copy is untouched.
+//     - target is the incumbent primary -> EntanglePrimaryTarget: that is the
+//     library copy (or, before the owner's rule is fully applied, the copy
+//     users see), and pouring iTunes-folder rows into it would mix
+//     locations and change what is shown and played.
+//     - target's group has no incumbent ({unset,unset,...}, all false) ->
+//     EntangleAmbiguous: the target could be the library copy itself, and
+//     the incumbent rule refuses to guess, so the planner does too.
+//
+// A group whose files are already on one book (no moves) never reaches here.
+func entanglement(moves []FileMove, target string, fresh bool, snap Snapshot) string {
+	out := make(map[string]int)
+	for _, m := range moves {
+		out[m.From]++
+	}
+	sources := make([]string, 0, len(out))
+	for id := range out {
+		sources = append(sources, id)
+	}
+	sort.Strings(sources)
+	reason := ""
+	for _, id := range sources {
+		b, ok := snap.Books[id]
+		if !ok || b.VersionGroupID == "" {
+			continue
+		}
+		if b.FileCount-out[id] <= 0 {
+			return EntangleWouldEmpty
+		}
+		reason = EntangleGroupedSource
+	}
+	if reason != "" {
+		return reason
+	}
+	if fresh {
+		return ""
+	}
+	t, ok := snap.Books[target]
+	if !ok || t.VersionGroupID == "" {
+		return ""
+	}
+	if t.GroupHasNoIncumbent {
+		return EntangleAmbiguous
+	}
+	if t.IsPrimary {
+		return EntanglePrimaryTarget
+	}
+	return ""
+}
+
+// legacyEntangledAmong is the pre-2026-10-01 rule: skip when any holder's
+// version group has a member whose flag is not explicitly true. Kept ONLY to
+// report the rule-change delta; it decides nothing.
+func legacyEntangledAmong(resolved []PIDLoc, snap Snapshot) bool {
 	for _, loc := range resolved {
-		if b, ok := snap.Books[loc.BookID]; ok && b.VersionGroupID != "" && b.HasNonPrimaryMembers {
+		if b, ok := snap.Books[loc.BookID]; ok && b.VersionGroupID != "" && b.LegacyEntangled {
 			return true
 		}
 	}
@@ -250,9 +374,19 @@ func pickTarget(resolved []PIDLoc, snap Snapshot, claimed map[string]bool) (stri
 	return "", true
 }
 
-// betterSurvivor orders books best-first: primary, then richer enrichment, then
-// more files, then older, then by ID for stability.
+// betterSurvivor orders books best-first: a version-grouped book, then primary,
+// then richer enrichment, then more files, then older, then by ID for
+// stability.
+//
+// A grouped holder ranks first because the entanglement rule never lets files
+// leave a version-group member: with the grouped book as the target it only
+// RECEIVES, which the rule can allow, whereas any other target would take its
+// files and be skipped. It also keeps the book carrying the curated link as
+// the survivor.
 func betterSurvivor(a, b BookMeta) bool {
+	if ag, bg := a.VersionGroupID != "", b.VersionGroupID != ""; ag != bg {
+		return ag
+	}
 	if a.IsPrimary != b.IsPrimary {
 		return a.IsPrimary
 	}

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/regroup_plan_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8a
-// last-edited: 2026-06-20
+// last-edited: 2026-10-01
 
 package itunesservice
 
@@ -147,22 +147,90 @@ func TestPlanRegroup_OverMergeSplit_LoserGoesFresh(t *testing.T) {
 	}
 }
 
-func TestPlanRegroup_VersionEntangledSkipped(t *testing.T) {
+// Before 2026-10-01 this fixture was skipped outright: B1's version group has a
+// non-primary member. B1 is that non-primary iTunes edition (its group has an
+// incumbent elsewhere) and only RECEIVES the ungrouped fragment B2, so the
+// current rule plans it -- and the delta report counts it as unblocked.
+func TestPlanRegroup_GroupedNonPrimaryTargetReceives_Unblocked(t *testing.T) {
 	groups := []HealGroup{{Title: "Risky", PIDs: []string{"p1", "p2"}}}
 	snap := mkSnap(
 		map[string]PIDLoc{"p1": {FileID: "f1", BookID: "B1"}, "p2": {FileID: "f2", BookID: "B2"}},
 		map[string]BookMeta{
-			"B1": {ID: "B1", FileCount: 1, VersionGroupID: "vg1", HasNonPrimaryMembers: true},
-			"B2": {ID: "B2", FileCount: 1},
+			"B1": {ID: "B1", FileCount: 1, VersionGroupID: "vg1", LegacyEntangled: true},
+			"B2": {ID: "B2", FileCount: 1, IsPrimary: true, EnrichScore: 9}, // richer, but ungrouped
 		},
 	)
 	p := PlanRegroup(groups, snap)
 	a := actionByTitle(p, "Risky")
-	if !a.Entangled || len(a.Moves) != 0 {
-		t.Fatalf("want entangled skip with no moves, got %+v", a)
+	if a.Entangled || a.Target != "B1" || len(a.Moves) != 1 || a.Moves[0].From != "B2" {
+		t.Fatalf("want B2's file moved onto grouped B1, got %+v", a)
 	}
-	if p.EntangledSkipped != 1 || len(p.DeleteBooks) != 0 {
-		t.Fatalf("EntangledSkipped=%d deletes=%v, want 1 and none", p.EntangledSkipped, p.DeleteBooks)
+	if !reflect.DeepEqual(p.DeleteBooks, []string{"B2"}) {
+		t.Fatalf("DeleteBooks = %v, want [B2] (the ungrouped fragment only)", p.DeleteBooks)
+	}
+	if p.LegacyEntangledSkipped != 1 || p.Unblocked != 1 || p.NewlyBlocked != 0 || len(p.UnblockedExamples) != 1 {
+		t.Fatalf("legacy=%d unblocked=%d newly-blocked=%d examples=%v, want 1/1/0/1",
+			p.LegacyEntangledSkipped, p.Unblocked, p.NewlyBlocked, p.UnblockedExamples)
+	}
+}
+
+func TestPlanRegroup_EntanglementReasons(t *testing.T) {
+	cases := []struct {
+		name  string
+		books map[string]BookMeta
+		want  string
+	}{
+		{"grouped source keeps other files", map[string]BookMeta{
+			"B1": {ID: "B1", FileCount: 3, VersionGroupID: "vg1"},
+			"B2": {ID: "B2", FileCount: 2, VersionGroupID: "vg2"},
+		}, EntangleGroupedSource},
+		{"grouped source would be emptied", map[string]BookMeta{
+			"B1": {ID: "B1", FileCount: 1, VersionGroupID: "vg1"},
+			"B2": {ID: "B2", FileCount: 1, VersionGroupID: "vg2"},
+		}, EntangleWouldEmpty},
+		{"target is its group's primary", map[string]BookMeta{
+			"B1": {ID: "B1", FileCount: 1, VersionGroupID: "vg1", IsPrimary: true},
+			"B2": {ID: "B2", FileCount: 1},
+		}, EntanglePrimaryTarget},
+		{"target's group has no incumbent", map[string]BookMeta{
+			"B1": {ID: "B1", FileCount: 1, VersionGroupID: "vg1", GroupHasNoIncumbent: true},
+			"B2": {ID: "B2", FileCount: 1},
+		}, EntangleAmbiguous},
+		{"ungrouped both sides", map[string]BookMeta{
+			"B1": {ID: "B1", FileCount: 1},
+			"B2": {ID: "B2", FileCount: 1},
+		}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			groups := []HealGroup{{Title: "G", PIDs: []string{"p1", "p2"}}}
+			p := PlanRegroup(groups, mkSnap(
+				map[string]PIDLoc{"p1": {FileID: "f1", BookID: "B1"}, "p2": {FileID: "f2", BookID: "B2"}},
+				tc.books))
+			a := actionByTitle(p, "G")
+			if a.EntangleReason != tc.want || a.Entangled != (tc.want != "") {
+				t.Fatalf("reason=%q entangled=%v, want %q", a.EntangleReason, a.Entangled, tc.want)
+			}
+			if tc.want != "" && (p.EntangledByReason[tc.want] != 1 || p.EntangledSkipped != 1 || len(p.DeleteBooks) != 0) {
+				t.Fatalf("by-reason=%v skipped=%d deletes=%v", p.EntangledByReason, p.EntangledSkipped, p.DeleteBooks)
+			}
+		})
+	}
+}
+
+// The new rule is not strictly narrower: a group the legacy rule let through
+// (no member of the holder's group had a non-true flag) is skipped when its
+// target is that group's primary. The delta report counts it as newly blocked.
+func TestPlanRegroup_NewlyBlockedCounted(t *testing.T) {
+	groups := []HealGroup{{Title: "G", PIDs: []string{"p1", "p2"}}}
+	p := PlanRegroup(groups, mkSnap(
+		map[string]PIDLoc{"p1": {FileID: "f1", BookID: "B1"}, "p2": {FileID: "f2", BookID: "B2"}},
+		map[string]BookMeta{
+			"B1": {ID: "B1", FileCount: 1, VersionGroupID: "vg1", IsPrimary: true},
+			"B2": {ID: "B2", FileCount: 1},
+		}))
+	if p.NewlyBlocked != 1 || p.Unblocked != 0 || p.LegacyEntangledSkipped != 0 {
+		t.Fatalf("newly-blocked=%d unblocked=%d legacy=%d, want 1/0/0", p.NewlyBlocked, p.Unblocked, p.LegacyEntangledSkipped)
 	}
 }
 
@@ -174,7 +242,7 @@ func TestPlanRegroup_EntangledButAlreadyCorrect_NotSkipped(t *testing.T) {
 	groups := []HealGroup{{Title: "Solo", PIDs: []string{"p1", "p2"}}}
 	snap := mkSnap(
 		map[string]PIDLoc{"p1": {FileID: "f1", BookID: "B1"}, "p2": {FileID: "f2", BookID: "B1"}},
-		map[string]BookMeta{"B1": {ID: "B1", FileCount: 2, VersionGroupID: "vg1", HasNonPrimaryMembers: true}},
+		map[string]BookMeta{"B1": {ID: "B1", FileCount: 2, VersionGroupID: "vg1", IsPrimary: true, LegacyEntangled: true}},
 	)
 	p := PlanRegroup(groups, snap)
 	if p.AlreadyCorrect != 1 || p.EntangledSkipped != 0 {

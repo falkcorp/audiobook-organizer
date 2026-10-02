@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-25
+// last-edited: 2026-10-01
 
 package maintenance
 
@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -32,7 +35,17 @@ import (
 //
 // It is computed as a frozen, deterministic, exclusive-claim plan (one existing
 // book targets at most one group) so dry-run == apply and over-merges actually
-// split. Version-entangled groups are skipped in v1 (conservative).
+// split. Groups whose moves would change a version group's membership or the
+// files of a version-group member other than a non-primary iTunes edition
+// receiving its own album's tracks are skipped (itunesservice.entanglement
+// holds the exact rule).
+//
+// What the apply writes: book rows (CreateBook for a fresh target, a Title-only
+// ModifyBook, DeleteBook for books left with no files and no ext-ids),
+// book_file rows (MoveBookFilesToBook* re-points the row's book_id; the row's
+// file_path is unchanged), and itunes external-id mappings. It never touches a
+// file on disk, never writes tags, and never reads or writes the ITL or iTunes
+// XML beyond parsing the XML read-only in Phase 1.
 
 type itunesRegroupParams struct {
 	// DryRun defaults to TRUE when omitted (opmode.ResolveDryRun): a request
@@ -51,7 +64,7 @@ func (p *Plugin) itunesRegroupDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Re-group fragmented/over-merged iTunes books in place",
-		Description:     "Re-groups existing iTunes-imported books to match the FIXED importer grouping (CONS-FRAG): consolidates fragmented anthologies/chapter-parts and splits over-merged books, in place via per-PID external-id + BookFile reassignment, preserving enrichment and version groups. Version-entangled groups are skipped. Default dry-run reports the plan; set dryRun=false to apply.",
+		Description:     "Re-groups existing iTunes-imported books to match the FIXED importer grouping (CONS-FRAG): consolidates fragmented anthologies/chapter-parts and splits over-merged books, in place via per-PID external-id + BookFile reassignment (database rows only; no file on disk, tag, or ITL is touched), preserving enrichment and version groups. A group is skipped when its moves would take files out of a version-group member or add them to a group's primary or an ambiguous group; a non-primary iTunes edition may receive its own album's ungrouped fragments. Default dry-run reports the plan and how many groups the 2026-10-01 rule change unblocks; set dryRun=false to apply.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "itunes.regroup",
@@ -107,10 +120,15 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	plan := itunesservice.PlanRegroup(groups, snap)
 
 	summary := fmt.Sprintf(
-		"groups=%d already-correct=%d consolidate=%d entangled-skipped=%d fresh-books=%d delete-empty=%d | PIDs resolved=%d unresolved=%d",
+		"groups=%d already-correct=%d consolidate=%d entangled-skipped=%d fresh-books=%d delete-empty=%d | PIDs resolved=%d unresolved=%d | %s",
 		plan.TotalGroups, plan.AlreadyCorrect, plan.Consolidated, plan.EntangledSkipped,
-		plan.FreshBooks, len(plan.DeleteBooks), plan.PIDsResolved, plan.PIDsUnresolved)
+		plan.FreshBooks, len(plan.DeleteBooks), plan.PIDsResolved, plan.PIDsUnresolved,
+		regroupRuleDelta(plan))
 	_ = reporter.Log(slog.LevelInfo, "PLAN: "+summary)
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+		"RULE CHANGE (2026-10-01): %s | legacy-rule-skipped=%d | skips by reason: %s | unblocked examples: %s",
+		regroupRuleDelta(plan), plan.LegacyEntangledSkipped, regroupSkipReasons(plan),
+		strings.Join(plan.UnblockedExamples, "; ")))
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
 		"COMPLETENESS: complete-groups=%d partial-groups=%d (missing some tracks) single-file-in-multitrack-album=%d",
 		plan.CompleteGroups, plan.PartialGroups, plan.SingleFileChapterBooks))
@@ -144,17 +162,19 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store regroupSnapshot
 		Books:  make(map[string]itunesservice.BookMeta),
 	}
 
-	// Pass 1: all books → per-book fields + version-group non-primary membership.
+	// Pass 1: all books → per-book fields + version-group membership.
 	type partialMeta struct {
 		title     string
-		isPrimary bool
+		flag      *bool
 		enrich    int
 		duration  int
 		createdAt int64
 		vgID      string
 	}
 	meta := make(map[string]partialMeta)
-	vgNonPrimary := make(map[string]bool) // version-group id -> has a non-primary member
+	live := make(map[string]bool)                   // book id -> scanned and not soft-deleted
+	vgMembers := make(map[string][]regroupVGMember) // version-group id -> members, scan order
+	vgLegacyNonPrimary := make(map[string]bool)     // version-group id -> has a member not explicitly true (legacy rule)
 	const page = 1000
 	afterID := ""
 	scanned := 0
@@ -175,14 +195,26 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store regroupSnapshot
 			if b.VersionGroupID != nil {
 				vg = *b.VersionGroupID
 			}
-			isPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
 			dur := 0
 			if b.Duration != nil {
 				dur = *b.Duration
 			}
-			meta[b.ID] = partialMeta{title: b.Title, isPrimary: isPrimary, enrich: enrichScore(b), duration: dur, createdAt: b.CreatedAt.Unix(), vgID: vg}
-			if vg != "" && !isPrimary {
-				vgNonPrimary[vg] = true
+			// An unknown creation time ranks as newest, so it never wins the
+			// older-is-better tiebreak over a row whose age is known. (A nil
+			// CreatedAt used to panic the whole snapshot.)
+			created := int64(math.MaxInt64)
+			if b.CreatedAt != nil {
+				created = b.CreatedAt.Unix()
+			}
+			meta[b.ID] = partialMeta{title: b.Title, flag: b.IsPrimaryVersion, enrich: enrichScore(b), duration: dur, createdAt: created, vgID: vg}
+			live[b.ID] = !b.IsSoftDeleted()
+			if vg != "" {
+				vgMembers[vg] = append(vgMembers[vg], regroupVGMember{
+					id: b.ID, flag: b.IsPrimaryVersion, softDeleted: b.IsSoftDeleted(), mergedInto: b.MergedIntoBookID,
+				})
+				if b.IsPrimaryVersion == nil || !*b.IsPrimaryVersion {
+					vgLegacyNonPrimary[vg] = true
+				}
 			}
 		}
 		scanned += len(books)
@@ -207,23 +239,104 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store regroupSnapshot
 		}
 	}
 
+	// Every version group's incumbent primary, over ALL its members (a library
+	// copy holding no iTunes PID still decides which member is primary).
+	alive := func(id string) bool { return live[id] }
+	incumbent := make(map[string]string, len(vgMembers))
+	for vg, members := range vgMembers {
+		incumbent[vg] = regroupIncumbent(members, alive)
+	}
+
 	// Assemble book meta (only books that actually exist; planner only reads the
 	// ones referenced by resolved PIDs).
 	for id, pm := range meta {
+		isPrimary := database.EffectiveIsPrimaryVersion(pm.flag)
+		if pm.vgID != "" {
+			isPrimary = incumbent[pm.vgID] == id
+		}
 		snap.Books[id] = itunesservice.BookMeta{
-			ID:                   id,
-			Title:                pm.title,
-			IsPrimary:            pm.isPrimary,
-			FileCount:            fileCount[id],
-			DurationSec:          pm.duration,
-			EnrichScore:          pm.enrich,
-			CreatedAtUnix:        pm.createdAt,
-			VersionGroupID:       pm.vgID,
-			HasNonPrimaryMembers: pm.vgID != "" && vgNonPrimary[pm.vgID],
+			ID:                  id,
+			Title:               pm.title,
+			IsPrimary:           isPrimary,
+			FileCount:           fileCount[id],
+			DurationSec:         pm.duration,
+			EnrichScore:         pm.enrich,
+			CreatedAtUnix:       pm.createdAt,
+			VersionGroupID:      pm.vgID,
+			GroupHasNoIncumbent: pm.vgID != "" && incumbent[pm.vgID] == "",
+			LegacyEntangled:     pm.vgID != "" && vgLegacyNonPrimary[pm.vgID],
 		}
 	}
 	_ = reporter.UpdateProgress(2, 4, fmt.Sprintf("Phase 2/4: snapshot ready (%d books, %d PID locations)", len(snap.Books), len(snap.PIDLoc)))
 	return snap, nil
+}
+
+// regroupVGMember is the slice of a book row the incumbent rule reads.
+type regroupVGMember struct {
+	id          string
+	flag        *bool
+	softDeleted bool
+	mergedInto  *string
+}
+
+// regroupIncumbent returns the ID of the member that currently acts as its
+// version group's primary, or "" when none can be told apart. It is the
+// incumbent rule (read-only, never elects):
+//
+//  1. the first Electable member whose flag is explicitly true;
+//  2. otherwise the ONE Electable member whose flag is unset, since every
+//     visibility path reads an unset flag as primary
+//     (database.EffectiveIsPrimaryVersion); two or more unset members are
+//     ambiguous and return "".
+//
+// Electable (versionprimary.ElectableRow) excludes soft-deleted members and
+// merge losers whose survivor is alive. Members are in book-ID scan order, so
+// rule 1's "first" is deterministic.
+//
+// TODO(#3649): replace with versionprimary.Incumbent once PR #3649
+// (fix/visibility-hotfix-w-1) merges; this mirrors its rule on the narrow
+// member rows the snapshot keeps instead of full database.Book values.
+func regroupIncumbent(members []regroupVGMember, alive func(id string) bool) string {
+	nilID, nilCount := "", 0
+	for _, m := range members {
+		if !versionprimary.ElectableRow(m.softDeleted, m.mergedInto, alive) {
+			continue
+		}
+		if m.flag != nil && *m.flag {
+			return m.id
+		}
+		if m.flag == nil {
+			nilCount++
+			nilID = m.id
+		}
+	}
+	if nilCount == 1 {
+		return nilID
+	}
+	return ""
+}
+
+// regroupRuleDelta formats the per-group rule-change delta for the summary.
+func regroupRuleDelta(plan itunesservice.RegroupPlan) string {
+	return fmt.Sprintf("rule-delta: unblocked=%d (legacy skipped, now consolidate) newly-blocked=%d (legacy consolidated, now skipped)",
+		plan.Unblocked, plan.NewlyBlocked)
+}
+
+// regroupSkipReasons formats EntangledByReason deterministically.
+func regroupSkipReasons(plan itunesservice.RegroupPlan) string {
+	if len(plan.EntangledByReason) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(plan.EntangledByReason))
+	for k := range plan.EntangledByReason {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", k, plan.EntangledByReason[k]))
+	}
+	return strings.Join(parts, " ")
 }
 
 // enrichScore counts populated enrichment fields so the planner prefers the
@@ -407,7 +520,7 @@ func regroupExamples(plan itunesservice.RegroupPlan, n int) []string {
 		}
 		switch {
 		case a.Entangled:
-			out = append(out, fmt.Sprintf("SKIP(entangled) %q", a.Title))
+			out = append(out, fmt.Sprintf("SKIP(entangled:%s) %q", a.EntangleReason, a.Title))
 		case len(a.Moves) > 0 && a.FreshBook:
 			out = append(out, fmt.Sprintf("SPLIT→fresh %q (%d files)", a.Title, len(a.Moves)))
 		case len(a.Moves) > 0:
