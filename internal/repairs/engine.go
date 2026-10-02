@@ -332,8 +332,9 @@ func settledForResume(outcome string) bool {
 type RowResult struct {
 	RowID   string `json:"row_id"`
 	Outcome string `json:"outcome"`
-	// Skipped is the guard kind (skipped_guard) or the plan row's skip kind
-	// (not_applicable).
+	// Skipped is the guard kind (skipped_guard), the plan row's skip kind
+	// (not_applicable), or the re-plan's skip kind (changed_since_plan, with
+	// its reason in Error).
 	Skipped string `json:"skipped,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
@@ -640,13 +641,18 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 	return out
 }
 
-// changedWhy is a re-planned row's own account of itself: its skip reason
-// when the re-plan skips it, else its reason ("" when it has neither).
+// changedWhy is why a re-planned row no longer matches its plan: its skip
+// reason when the re-plan skips it, or the reason of a row a fixer marked
+// changed (Fingerprint "changed:..."); "" otherwise. A still-applicable row's
+// Reason only describes the new plan, so it is not reported as an error.
 func changedWhy(r Row) string {
 	if r.SkipReason != "" {
 		return r.SkipReason
 	}
-	return r.Reason
+	if strings.HasPrefix(r.Fingerprint, "changed:") {
+		return r.Reason
+	}
+	return ""
 }
 
 // partitionRows groups rows that share any book id (transitively) and keeps
