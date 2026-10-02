@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.8.0
+// version: 2.9.0
 // last-edited: 2026-10-02
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
-
-	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 )
 
 // AIScanStore persists AI scan data (scan history, phases, results) inside a
@@ -181,11 +179,11 @@ func (s *AIScanStore) Optimize(ctx context.Context) error {
 // progress lines. ok is false when the store shares the main database
 // (NewAIScanStoreFromDB, the production wiring): Optimize is then a no-op, and
 // reporting the main DB's counters under an "AI scan" label would mislead.
-func (s *AIScanStore) CompactionStats() (stats compactprogress.Stats, ok bool) {
+func (s *AIScanStore) CompactionStats() (stats CompactionStats, ok bool) {
 	if !s.owned {
-		return compactprogress.Stats{}, false
+		return CompactionStats{}, false
 	}
-	return compactprogress.Collect(s.db), true
+	return CollectCompactionStats(s.db), true
 }
 
 // nextID atomically reads and increments the counter for the given entity type.
