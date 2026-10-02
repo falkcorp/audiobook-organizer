@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.46.0
+// version: 1.47.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-02
 
@@ -329,16 +329,29 @@ func (e *NotRestorableError) Error() string {
 // Rows are classified by undo.NotRestorableLabel, the same classifier
 // undo.PreflightUndoConflicts uses for the confirmation the UI shows first.
 func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, error) {
+	// One revert of an operation at a time: the owed-settle record is read,
+	// rewritten and cleared across the whole run.
+	defer lockOperation(operationID)()
 	changes, err := rs.db.GetOperationChanges(operationID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get operation changes: %w", err)
 	}
 
+	result := &RevertResult{OperationID: operationID, Total: len(changes)}
+	retryOwed := func() (*RevertResult, error) {
+		if msgs := rs.settleGroups(operationID, settleInput{crowned: crownedByHandOff(changes)}, result); len(msgs) > 0 {
+			return result, fmt.Errorf("partially reverted with %d errors: %s", len(msgs), msgs[0])
+		}
+		return result, nil
+	}
 	if len(changes) == 0 {
+		if rs.hasSettleOwed(operationID) {
+			// The rows are gone (purged) but a group settle is owed.
+			return retryOwed()
+		}
 		return nil, fmt.Errorf("no changes found for operation %s", operationID)
 	}
 
-	result := &RevertResult{OperationID: operationID, Total: len(changes)}
 	var restorable []*database.OperationChange
 	restorableTotal := 0
 	for _, c := range changes {
@@ -367,10 +380,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		if rs.hasSettleOwed(operationID) {
 			// Every row is reverted but a group settle failed last time:
 			// retry it (settleGroups).
-			if msgs := rs.settleGroups(operationID, nil, nil, result); len(msgs) > 0 {
-				return result, fmt.Errorf("partially reverted with %d errors: %s", len(msgs), msgs[0])
-			}
-			return result, nil
+			return retryOwed()
 		}
 		return nil, fmt.Errorf("operation %s has already been reverted: all %d restorable changes are marked reverted",
 			operationID, restorableTotal)
@@ -389,6 +399,12 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	// touched: the rows that wrote in this run and can change who a version
 	// group's primary is; the settle pass after the loop reads them.
 	var touched []settleTouch
+	refusedDemote := map[string]bool{}
+	// The settle intent goes down before any row is written: a run that
+	// dies, or whose mark fails, between its rows and its settle leaves it,
+	// and the next run then counts the rows it finds already restored as
+	// evidence (priorPending).
+	priorPending := rs.writeSettlePending(operationID, restorable)
 	plan, err := undo.PlanRevert(restorable, rs.db.GetBookFiles)
 	if err != nil {
 		return nil, err
@@ -426,6 +442,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		}
 		plan.Record(c, err)
 		if err != nil {
+			if c.ChangeType == undo.ChangeTypeBookPrimaryDemote {
+				refusedDemote[c.BookID] = true
+			}
 			result.Failed++
 			switch undo.RefusalReason(err) {
 			case undo.ReasonChangedSince, undo.ReasonSeriesRenamedSince:
@@ -438,7 +457,8 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		restoredIDs = append(restoredIDs, c.ID)
 		if already {
 			result.AlreadyRestored++
-		} else if t, ok := settleNote(c); ok {
+		}
+		if t, ok := settleNote(c); ok && (!already || priorPending) {
 			touched = append(touched, t)
 		}
 		if result.RestoredTypes == nil {
@@ -447,6 +467,17 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		result.RestoredTypes[c.ChangeType]++
 	}
 
+	result.Restored = len(restoredIDs)
+
+	// One settle per version group the operation changed, after every row
+	// has run (see revert_settle.go for why not per row), and BEFORE the
+	// rows are marked: a mark that fails leaves the rows to be found
+	// already restored by the next run, with the groups already settled.
+	errMsgs = append(errMsgs, rs.settleGroups(operationID, settleInput{
+		plan: plan, touched: touched, refusedDemote: refusedDemote, crowned: crownedByHandOff(changes),
+		priorPending: priorPending,
+	}, result)...)
+
 	// Mark only the rows that were actually restored, and the superseded
 	// ones (done, with nothing to write).
 	if mark := append(append([]string(nil), restoredIDs...), markedIDs...); len(mark) > 0 {
@@ -454,11 +485,6 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			return nil, fmt.Errorf("restored %d changes but failed to mark them reverted: %w", len(restoredIDs), err)
 		}
 	}
-	result.Restored = len(restoredIDs)
-
-	// One settle per version group the operation changed, after every row
-	// has run (see revert_settle.go for why not per row).
-	errMsgs = append(errMsgs, rs.settleGroups(operationID, plan, touched, result)...)
 
 	revertLog.Info("revert finished: operation=%s total=%d restored=%d failed=%d not_restorable=%d types=%s",
 		logger.SanitizeLogValue(operationID), result.Total, result.Restored, result.Failed,

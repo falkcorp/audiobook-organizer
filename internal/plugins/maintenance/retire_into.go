@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-02
 
@@ -287,13 +287,14 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 		return fmt.Errorf("primary hand-off of %s: %w", id, err)
 	}
 	es := fragEnsureStore{OpsStore: store, chapters: vps}
-	if _, err := versionprimary.EnsureSinglePrimary(ctx, es, groupID,
-		versionprimary.Env{RootDir: config.AppConfig.RootDir}); err != nil {
+	res, err := versionprimary.EnsureSinglePrimary(ctx, es, groupID,
+		versionprimary.Env{RootDir: config.AppConfig.RootDir})
+	if err != nil {
 		fragLog.Warn("%s: primary hand-off in group %s: %s", fixerID,
 			logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(err.Error()))
 		return nil
 	}
-	if err := w.Journal(id, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", "", groupID); err != nil {
+	if err := w.Journal(id, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", undo.HandOffCrownedValue(res.PrimaryID), groupID); err != nil {
 		if errors.Is(err, repairs.ErrStandDownLost) {
 			return fmt.Errorf("journal the primary hand-off of %s: %w", id, err)
 		}
