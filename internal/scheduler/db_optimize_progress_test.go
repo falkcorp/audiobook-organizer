@@ -1,5 +1,5 @@
 // file: internal/scheduler/db_optimize_progress_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d4c2b7e-1f6a-4e83-b0c5-6a8e3d2f7b14
 // last-edited: 2026-10-02
 
@@ -95,7 +95,7 @@ func TestRunDBOptimize_ReportsMainCompactionWhileItRuns(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return rep.has(&rep.frames, "Compacting main database (1/3): ") &&
-			rep.has(&rep.logs, "compacted (")
+			rep.has(&rep.logs, "written by compactions (")
 	}, 2*time.Second, 5*time.Millisecond)
 	close(store.release)
 	<-done

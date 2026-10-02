@@ -1,5 +1,5 @@
 // file: internal/compactprogress/stats.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b2e4f0a-8c1d-4e7a-9f35-2d6c8a1b7e40
 // last-edited: 2026-10-02
 
@@ -68,6 +68,11 @@ type Stats struct {
 	// deletions would reclaim if compacted away. Approximate, like
 	// TombstoneCount.
 	GarbageBytes uint64
+	// Absent marks a sample taken when there was no database to read: the
+	// store was closed or removed (e.g. the OpenLibrary cache deleted
+	// mid-run), or sampling panicked. Its zero counters are not
+	// measurements, so Moved never treats them as progress.
+	Absent bool
 }
 
 // WrittenBytes is the bytes written by compactions so far, finished or not.
@@ -85,7 +90,7 @@ func (s Stats) WrittenBytes() uint64 {
 // counters and does not touch the LSM on disk.
 func Collect(db *pebble.DB) Stats {
 	if db == nil {
-		return Stats{}
+		return Stats{Absent: true}
 	}
 	m := db.Metrics()
 	s := Stats{
