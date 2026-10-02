@@ -1,5 +1,5 @@
 // file: internal/itunes/service/regroup_plan_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8a
 // last-edited: 2026-10-01
 
@@ -368,5 +368,31 @@ func TestPlanRegroup_GroupedTargetWithUnownedPIDReceives(t *testing.T) {
 	a := actionByTitle(PlanRegroup(groups, snap), "A")
 	if a.Entangled || a.Target != "I1" || len(a.Moves) != 1 {
 		t.Fatalf("A = %+v, want F1's file moved onto I1", a)
+	}
+}
+
+// A PID location whose book is not in snap.Books (trashed, deleted, merged
+// away) is a refusal, never a target or a source -- even when the group's
+// files would otherwise already be "correct" on that unknown book.
+func TestPlanRegroup_UnknownHolderRefused(t *testing.T) {
+	cases := map[string]Snapshot{
+		"unknown would-be target": mkSnap(
+			map[string]PIDLoc{"p1": {"f1", "X"}, "p2": {"f2", "B1"}},
+			map[string]BookMeta{"B1": {ID: "B1", FileCount: 1}}),
+		"unknown sole holder": mkSnap(
+			map[string]PIDLoc{"p1": {"f1", "X"}, "p2": {"f2", "X"}},
+			map[string]BookMeta{}),
+	}
+	for name, snap := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := PlanRegroup([]HealGroup{{Title: "G", PIDs: []string{"p1", "p2"}}}, snap)
+			a := p.Groups[0]
+			if !a.Entangled || a.EntangleReason != EntangleUnknownBook || a.Target != "" || len(a.Moves) != 0 {
+				t.Fatalf("action = %+v, want refused as %q", a, EntangleUnknownBook)
+			}
+			if p.EntangledByReason[EntangleUnknownBook] != 1 || len(p.DeleteBooks) != 0 {
+				t.Fatalf("by-reason=%v deletes=%v", p.EntangledByReason, p.DeleteBooks)
+			}
+		})
 	}
 }

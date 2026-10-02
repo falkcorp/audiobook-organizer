@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.63.0
+// version: 1.64.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-01
 
@@ -193,6 +193,9 @@ type opsSeriesStore interface {
 	// (SERIES-MEMBERSHIP-RESIDUAL-LOOPS), so a per-series read inside its loops
 	// is now a compile error rather than a full "book:" scan per plan.
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	// GetSeriesByID: itunes.regroup's apply-time recheck reads one book's
+	// series name for the owner-manual-only rule.
+	GetSeriesByID(id int) (*database.Series, error)
 }
 
 // opsAuthorLinkStore reads and writes a book's author credits -- the
