@@ -7,7 +7,12 @@ package maintenance
 
 import (
 	"context"
+	"encoding/json"
+	"math"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +78,7 @@ func TestITunesRegroupEntanglementRule(t *testing.T) {
 		files       []database.BookFileCore
 		pids        []string
 		wantSkipped bool
+		wantReason  string // itunesservice.Entangle* when skipped
 		wantTarget  string // checked when not skipped
 		wantMoves   int    // checked when not skipped
 	}{
@@ -93,6 +99,7 @@ func TestITunesRegroupEntanglementRule(t *testing.T) {
 				rgFile("f2", "I2", "p2"), rgFile("x2", "I2", ""),
 			},
 			pids: []string{"p1", "p2"}, wantSkipped: true,
+			wantReason: itunesservice.EntangleGroupedSource,
 		},
 		{
 			name: "grouped member would be emptied and deleted",
@@ -102,6 +109,7 @@ func TestITunesRegroupEntanglementRule(t *testing.T) {
 			},
 			files: []database.BookFileCore{rgFile("f1", "I1", "p1"), rgFile("f2", "I2", "p2")},
 			pids:  []string{"p1", "p2"}, wantSkipped: true,
+			wantReason: itunesservice.EntangleWouldEmpty,
 		},
 		{
 			name: "grouped non-primary target receives from ungrouped fragments",
@@ -129,6 +137,7 @@ func TestITunesRegroupEntanglementRule(t *testing.T) {
 			},
 			files: []database.BookFileCore{rgFile("f1", "L1", "p1"), rgFile("f2", "F1", "p2")},
 			pids:  []string{"p1", "p2"}, wantSkipped: true,
+			wantReason: itunesservice.EntanglePrimaryTarget,
 		},
 		{
 			name: "{unset,not-primary}: not-primary iTunes copy receives",
@@ -145,6 +154,7 @@ func TestITunesRegroupEntanglementRule(t *testing.T) {
 			},
 			files: []database.BookFileCore{rgFile("f1", "L1", "p1"), rgFile("f2", "F1", "p2")},
 			pids:  []string{"p1", "p2"}, wantSkipped: true,
+			wantReason: itunesservice.EntanglePrimaryTarget,
 		},
 		{
 			name: "{unset,unset,unset}: no incumbent, target ambiguous",
@@ -154,6 +164,7 @@ func TestITunesRegroupEntanglementRule(t *testing.T) {
 			},
 			files: []database.BookFileCore{rgFile("f1", "A1", "p1"), rgFile("f2", "F1", "p2")},
 			pids:  []string{"p1", "p2"}, wantSkipped: true,
+			wantReason: itunesservice.EntangleAmbiguous,
 		},
 		{
 			name: "one-member group, explicit primary target",
@@ -162,6 +173,7 @@ func TestITunesRegroupEntanglementRule(t *testing.T) {
 			},
 			files: []database.BookFileCore{rgFile("f1", "S1", "p1"), rgFile("f2", "F1", "p2")},
 			pids:  []string{"p1", "p2"}, wantSkipped: true,
+			wantReason: itunesservice.EntanglePrimaryTarget,
 		},
 		{
 			name: "grouped copy outranks a richer ungrouped fragment as target",
@@ -190,6 +202,9 @@ func TestITunesRegroupEntanglementRule(t *testing.T) {
 			a := plan.Groups[0]
 			if a.Entangled != tc.wantSkipped {
 				t.Fatalf("Entangled = %v, want %v (action %+v)", a.Entangled, tc.wantSkipped, a)
+			}
+			if a.EntangleReason != tc.wantReason {
+				t.Fatalf("EntangleReason = %q, want %q", a.EntangleReason, tc.wantReason)
 			}
 			if tc.wantSkipped {
 				if len(a.Moves) != 0 || a.Target != "" || len(plan.DeleteBooks) != 0 {
@@ -234,7 +249,127 @@ func TestITunesRegroupEntanglementRule_SplitOutOfGroupedSkipped(t *testing.T) {
 	if a.Target != "I1" || a.Entangled {
 		t.Fatalf("group A = %+v, want already-correct on I1", a)
 	}
-	if !b.Entangled || b.FreshBook || len(b.Moves) != 0 {
+	if !b.Entangled || b.EntangleReason != itunesservice.EntangleGroupedSource || b.FreshBook || len(b.Moves) != 0 {
 		t.Fatalf("group B = %+v, want skipped (split out of a grouped book)", b)
+	}
+}
+
+// The snapshot's primary semantics, per version-group shape: the incumbent is
+// the explicitly-true member, else the ONE unset member; several unset members
+// (or none electable) leave the group with no incumbent. A soft-deleted
+// explicit-true member does not count. Ungrouped books read unset as primary.
+// Rows with no CreatedAt must not panic the snapshot (they used to).
+func TestBuildRegroupSnapshot_IncumbentSemantics(t *testing.T) {
+	tr, fa := rgFlag(true), rgFlag(false)
+	trashed := rgBook("T1", "vg4", tr)
+	trashed.MarkedForDeletion = rgFlag(true)
+	noCreated := rgBook("U2", "", fa)
+	noCreated.CreatedAt = nil
+	books := []database.Book{
+		rgBook("M1", "vg1", tr), rgBook("M2", "vg1", nil), // {marked,unset}
+		rgBook("N1", "vg2", nil), rgBook("N2", "vg2", fa), // {unset,not-primary}
+		rgBook("A1", "vg3", nil), rgBook("A2", "vg3", nil), rgBook("A3", "vg3", nil), // {unset,unset,unset}
+		trashed, rgBook("T2", "vg4", nil), // trashed true member + one live unset
+		rgBook("U1", "", nil), noCreated, // ungrouped
+	}
+	p := &Plugin{}
+	snap, err := p.buildRegroupSnapshot(context.Background(), &regroupFakeReader{books: books}, &fakeReporter{})
+	if err != nil {
+		t.Fatalf("buildRegroupSnapshot: %v", err)
+	}
+	want := map[string]struct{ primary, noIncumbent, legacy bool }{
+		"M1": {true, false, true}, "M2": {false, false, true},
+		"N1": {true, false, true}, "N2": {false, false, true},
+		"A1": {false, true, true}, "A2": {false, true, true}, "A3": {false, true, true},
+		"T1": {false, false, true}, "T2": {true, false, true},
+		"U1": {true, false, false}, "U2": {false, false, false},
+	}
+	for id, w := range want {
+		got := snap.Books[id]
+		if got.IsPrimary != w.primary || got.GroupHasNoIncumbent != w.noIncumbent || got.LegacyEntangled != w.legacy {
+			t.Errorf("%s: primary=%v noIncumbent=%v legacy=%v, want %v/%v/%v",
+				id, got.IsPrimary, got.GroupHasNoIncumbent, got.LegacyEntangled, w.primary, w.noIncumbent, w.legacy)
+		}
+	}
+	if got := snap.Books["U2"].CreatedAtUnix; got != math.MaxInt64 {
+		t.Errorf("U2 CreatedAtUnix = %d, want MaxInt64 (unknown ranks newest)", got)
+	}
+}
+
+const regroupDeltaXML = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Major Version</key><integer>1</integer>
+	<key>Minor Version</key><integer>1</integer>
+	<key>Tracks</key>
+	<dict>
+		<key>1</key>
+		<dict>
+			<key>Track ID</key><integer>1</integer>
+			<key>Persistent ID</key><string>AABB0011CCDD2233</string>
+			<key>Name</key><string>Delta Book Part 1</string>
+			<key>Album</key><string>Delta Album</string>
+			<key>Artist</key><string>Delta Author</string>
+			<key>Kind</key><string>Audiobook</string>
+			<key>Location</key><string>file://localhost/missing/delta1.m4b</string>
+		</dict>
+		<key>2</key>
+		<dict>
+			<key>Track ID</key><integer>2</integer>
+			<key>Persistent ID</key><string>EEFF4455AABB6677</string>
+			<key>Name</key><string>Delta Book Part 2</string>
+			<key>Album</key><string>Delta Album</string>
+			<key>Artist</key><string>Delta Author</string>
+			<key>Kind</key><string>Audiobook</string>
+			<key>Location</key><string>file://localhost/missing/delta2.m4b</string>
+		</dict>
+	</dict>
+	<key>Playlists</key><array/>
+</dict>
+</plist>
+`
+
+// The dry run (the default) reports the rule-change delta and writes nothing:
+// an iTunes edition linked to a library copy, plus one ungrouped fragment of
+// the same album, was skipped by the legacy rule and is planned now.
+func TestITunesRegroupDryRun_ReportsRuleDelta(t *testing.T) {
+	s := regroupStore(t)
+	vg := "vg-delta"
+	tr, fa := rgFlag(true), rgFlag(false)
+	lib, err := s.CreateBook(&database.Book{Title: "Delta (library)", VersionGroupID: &vg, IsPrimaryVersion: tr})
+	if err != nil {
+		t.Fatalf("CreateBook library: %v", err)
+	}
+	ed, err := s.CreateBook(&database.Book{Title: "Delta (itunes)", VersionGroupID: &vg, IsPrimaryVersion: fa})
+	if err != nil {
+		t.Fatalf("CreateBook edition: %v", err)
+	}
+	frag := seedBook(t, s, "Delta fragment")
+	seedFilePID(t, s, ed.ID, "AABB0011CCDD2233")
+	seedFilePID(t, s, frag, "EEFF4455AABB6677")
+	_ = lib
+
+	xmlPath := filepath.Join(t.TempDir(), "lib.xml")
+	if err := os.WriteFile(xmlPath, []byte(regroupDeltaXML), 0o600); err != nil {
+		t.Fatalf("write xml: %v", err)
+	}
+	raw, _ := json.Marshal(map[string]string{"xmlPath": xmlPath})
+	p := New(fakeDeps{store: s})
+	rep := &fakeReporter{}
+	if err := p.runITunesRegroup(context.Background(), raw, rep); err != nil {
+		t.Fatalf("runITunesRegroup: %v", err)
+	}
+	var delta string
+	for _, l := range rep.logs {
+		if strings.HasPrefix(l, "RULE CHANGE") {
+			delta = l
+		}
+	}
+	if !strings.Contains(delta, "unblocked=1 ") || !strings.Contains(delta, "newly-blocked=0 ") || !strings.Contains(delta, "legacy-rule-skipped=1") {
+		t.Fatalf("RULE CHANGE line = %q, want unblocked=1 newly-blocked=0 legacy-rule-skipped=1 (logs: %v)", delta, rep.logs)
+	}
+	if files, _ := s.GetBookFiles(frag); len(files) != 1 {
+		t.Fatalf("dry run moved files: fragment has %d files, want 1", len(files))
 	}
 }
