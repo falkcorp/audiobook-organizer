@@ -32,7 +32,8 @@ import (
 // only the ids in the set and never range-scan the family, so they cannot walk
 // tombstones at all (old ones included) and an empty set costs nothing.
 //
-// INVARIANT: the set is a SUPERSET of the markers on disk, at every instant.
+// INVARIANT: the set is a SUPERSET of the markers on disk (one harmless gap,
+// below).
 // A stale "may exist" costs one no-op delete; a missing id would skip a real
 // delete (a marker that blocks every lookup forever) or hide a fail-closed
 // marker from a reader, so every update errs toward "may exist":
@@ -44,6 +45,15 @@ import (
 //     generation, an UpdateBook whose commit lands before a backfill worker's
 //     marker commit would remove an id whose marker is then on disk.
 //   - A failed commit leaves the set alone.
+//   - The one gap: a worker notes id (gen g) and stages its marker; an
+//     UpdateBook reads g and commits its Delete first; the worker commits the
+//     marker; the UpdateBook's forget(g) runs before the worker's post-commit
+//     re-note. For that instant the marker is on disk and not in the set. It
+//     is harmless: UpdateBook/DeleteBook read the row through GetBookByID,
+//     which fails on an undecodable row, so the writer can only have touched
+//     a row that already decodes and whose book_atpath key is in the same
+//     batch, so a reader that skips the marker loses no book; and the
+//     re-note puts the id back right after.
 //   - A crash between a commit and the set update needs no handling: the set
 //     lives only in memory and is rebuilt from disk at the next open.
 //

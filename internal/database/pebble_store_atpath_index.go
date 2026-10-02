@@ -263,7 +263,7 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 	// the capture may have a marker committed after the range delete.
 	markerGen, err := p.undecodableMarkerGeneration()
 	if err != nil {
-		slog.Error("book-atpath-backfill: cannot load undecodable-marker set, aborting", "err", err)
+		atpathMarkerLog.Error("book-atpath-backfill: cannot load undecodable-marker set, aborting: %v", err)
 		return res, err
 	}
 	if err := p.db.DeleteRange([]byte(bookAtPathUndecodablePrefix),
