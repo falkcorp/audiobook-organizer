@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_atpath_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1b7e4c92-5a3d-4e68-9f02-c6d8a1b3e5f7
-// last-edited: 2026-09-12
+// last-edited: 2026-10-02
 
 package maintenance
 
@@ -35,6 +35,20 @@ func TestBookAtPathVerify_MissingLiveFails(t *testing.T) {
 	err := verifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, &fakeReporter{})
 	if err == nil || !strings.Contains(err.Error(), "INCOMPLETE") {
 		t.Fatalf("missing live keys must fail the op, got %v", err)
+	}
+}
+
+// TestBookAtPathVerify_MarkersNotInSetFails: a marker on disk that the
+// in-memory set lacks makes lookups fail open, so the op must fail and name
+// the rebuild op, even when every other count is clean.
+func TestBookAtPathVerify_MarkersNotInSetFails(t *testing.T) {
+	rep := database.BookAtPathIndexReport{SentinelSet: true, BooksScanned: 3, IndexKeysScanned: 3,
+		MarkersNotInSet: 1, SampleNotInSet: []string{"01BADROW"}}
+	err := verifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, &fakeReporter{})
+	if err == nil || !strings.Contains(err.Error(), "missing from the in-memory") ||
+		!strings.Contains(err.Error(), "maintenance.book-atpath-index-backfill") ||
+		!strings.Contains(err.Error(), "01BADROW") {
+		t.Fatalf("markers missing from the set must fail the op and name the rebuild, got %v", err)
 	}
 }
 
