@@ -1,5 +1,5 @@
 // file: internal/server/transcode_version.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e2b7c41-3d58-4a16-8f0e-6c1d4a7b2e93
 // last-edited: 2026-10-02
 
@@ -108,6 +108,14 @@ func recordTranscodedVersion(ctx context.Context, store transcodeVersionStore, o
 	case grouped == nil:
 		logf("warn", fmt.Sprintf("Failed to update original book version info: book %s no longer exists", original.ID))
 	}
+	if err != nil || grouped == nil {
+		// The original was not put in groupID (its group kept changing, or
+		// the write failed), so groupID is a stale or never-used plan: the
+		// M4B record is created ungrouped rather than linked into it, and
+		// the hand-offs below are no-ops for an empty group.
+		groupID = ""
+		err = nil
+	}
 
 	m4bFormat, aacCodec := "m4b", "aac"
 	notPrimary := false
@@ -142,8 +150,12 @@ func recordTranscodedVersion(ctx context.Context, store transcodeVersionStore, o
 		CoverURL:             original.CoverURL,
 		LibraryState:         state,
 		IsPrimaryVersion:     &notPrimary,
-		VersionGroupID:       &groupID,
+		VersionGroupID:       nonEmpty(groupID),
 		VersionNotes:         &m4bNotes,
+	}
+	if groupID == "" {
+		// Ungrouped: no group to be a non-primary member of.
+		nb.IsPrimaryVersion = nil
 	}
 	if _, cerr := store.CreateBook(nb); cerr != nil {
 		logf("warn", fmt.Sprintf("Failed to create M4B version record, updating original: %v", cerr))
@@ -153,7 +165,9 @@ func recordTranscodedVersion(ctx context.Context, store transcodeVersionStore, o
 			b.Format = m4bFormat
 			b.Codec = &aacCodec
 			b.Bitrate = &bitrate
-			b.VersionGroupID = &groupID
+			if groupID != "" {
+				b.VersionGroupID = &groupID
+			}
 			b.VersionNotes = &fallbackNotes
 			return nil
 		})
@@ -260,4 +274,12 @@ func transcodeLockedGroupWrite(store transcodeVersionStore, id, plannedGroup, gr
 		}
 		return fn(b)
 	})
+}
+
+// nonEmpty returns &s, or nil for "" (no version group).
+func nonEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

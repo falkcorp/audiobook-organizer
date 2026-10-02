@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
 // last-edited: 2026-10-02
 
@@ -261,7 +261,8 @@ func rawGroupOfBook(b *database.Book) string {
 // (a book in ids but not in expected is locked, not compared) plus extra,
 // then compares each book's group as read
 // under the locks with expected (trimmed). A book that moved between the
-// planning read and the lock would have the caller write from a stale plan and leave a group it never locked or handed off,
+// planning read and the lock -- or no longer exists -- would have the caller
+// write from a stale plan and leave a group it never locked or handed off,
 // so on any mismatch the locks are released and ErrMembershipChanged is
 // returned (wrapped with the book and both groups). The caller re-plans or
 // fails; it never writes.
@@ -282,13 +283,14 @@ func LockPlannedGroups(store BookReader, ids []string, expected map[string]strin
 	}
 	for _, id := range planned {
 		got, ok := groups[id]
-		if !ok {
-			// Missing, as LockBookGroups skips it: there is no group to
-			// leave, and the caller's own write reports the missing row
-			// (or takes its documented fallback).
-			continue
-		}
 		want := strings.TrimSpace(expected[id])
+		if !ok {
+			// A planned book that is gone: the plan was made from a row
+			// that no longer exists. (A book only in ids is skipped, as
+			// LockBookGroups skips it.)
+			unlock()
+			return nil, nil, fmt.Errorf("book %s: planned in version group %q, now missing: %w", id, want, ErrMembershipChanged)
+		}
 		if strings.TrimSpace(got) != want {
 			unlock()
 			return nil, nil, fmt.Errorf("book %s: planned in version group %q, now in %q: %w", id, want, got, ErrMembershipChanged)
