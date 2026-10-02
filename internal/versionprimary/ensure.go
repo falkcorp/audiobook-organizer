@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
 // last-edited: 2026-10-01
 
@@ -99,8 +99,7 @@ type HandoffResult struct {
 var errHandoffAbort = errors.New("versionprimary: member changed since the group read")
 
 // groupLocks serialises hand-offs per group in this process, so two workers
-// retiring members of one group cannot interleave read-decide-write. It is
-// the innermost lock: nothing else is taken while it is held.
+// retiring members of one group cannot interleave read-decide-write.
 var groupLocks [64]sync.Mutex
 
 // LockGroup takes group gid's hand-off lock and returns its release. A

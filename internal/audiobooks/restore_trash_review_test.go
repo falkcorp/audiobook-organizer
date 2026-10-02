@@ -1,5 +1,5 @@
 // file: internal/audiobooks/restore_trash_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d002b2d9-da13-4681-9c42-b8845f6cacf1
 // last-edited: 2026-10-01
 
@@ -102,11 +102,13 @@ func TestRestoreAudiobook_MergeLoserRendersInABSAgain(t *testing.T) {
 	require.Equal(t, 40, st.ProgressPct, "user state followed onto the survivor stays there")
 }
 
-// Adversarial review of #3649, findings 2 and 3, on a real combine: the
-// absorbed shell keeps its "organized" label and its sync redirect, but owns
-// no files. Restored from the trash it is a book of its own, "imported" (not
-// listed by ABS as an empty book), with no redirect.
-func TestRestoreAudiobook_CombineShellComesBackImportedWithoutRedirect(t *testing.T) {
+// Adversarial review of #3649, finding 2, and re-review finding 1, on a real
+// combine: the absorbed shell keeps its "organized" label and its sync
+// redirect, but owns no files. Restored from the trash it comes back
+// "imported" (not listed by ABS as an empty book), and it KEEPS its redirect:
+// an old libraryItemId must still reach the survivor, which holds the audio
+// and the progress, not resolve to an empty shell.
+func TestRestoreAudiobook_CombineShellComesBackImportedAndKeepsRedirect(t *testing.T) {
 	f, svc := handoffFixture(t)
 	s := f.Book(t, vptest.Spec{ID: "s", Primary: "nil"})
 	a := f.Book(t, vptest.Spec{ID: "a", Primary: "nil"})
@@ -128,5 +130,50 @@ func TestRestoreAudiobook_CombineShellComesBackImportedWithoutRedirect(t *testin
 	require.False(t, b.IsSoftDeleted())
 	require.Equal(t, "imported", *b.LibraryState, "a shell with no files must not come back organized")
 	require.False(t, database.ABSLibraryFilter().Matches(b))
-	require.True(t, absWouldRender(t, f.S, a), "the restored shell no longer redirects to the survivor")
+	require.False(t, absWouldRender(t, f.S, a), "the fileless shell keeps its redirect: its old id still reaches the survivor")
+	aSync, err := f.S.MintOrGetSyncID(a)
+	require.NoError(t, err)
+	item, err := f.S.ResolveSyncItem(aSync)
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	require.Equal(t, s, item.CurrentBookID, "and resolves to the survivor that holds the audio")
+}
+
+// Re-review of #3649, finding 2: a real MergeBooks loser is in the survivor's
+// version group with IsPrimaryVersion=false. Restored, it is live but ABS
+// still hides it (not primary), so its redirect is kept: dropping it would
+// stop the old id forwarding and the client would see its progress reset.
+// The pending move onto the survivor is still owed and is kept too.
+func TestRestoreAudiobook_MergeBooksLoserKeepsRedirect(t *testing.T) {
+	f, svc := handoffFixture(t)
+	survivor := f.Book(t, vptest.Spec{ID: "survivor", Primary: "nil"})
+	loser := f.Book(t, vptest.Spec{ID: "loser", Primary: "nil"})
+	_, err := f.S.MintOrGetSyncID(loser)
+	require.NoError(t, err)
+
+	_, err = merge.NewService(f.S).MergeBooks([]string{survivor, loser}, survivor)
+	require.NoError(t, err)
+	merged := restoredRow(t, f, loser)
+	require.True(t, merged.IsSoftDeleted(), "precondition: the loser is in the trash")
+	require.NotNil(t, merged.VersionGroupID)
+	gid := *merged.VersionGroupID
+	require.Equal(t, "false", f.Flag(t, loser), "precondition: the loser is a non-primary member")
+	require.False(t, absWouldRender(t, f.S, loser), "precondition: the merge recorded the loser's redirect")
+	rec, err := json.Marshal(merge.PendingUserStateRepair{LoserBookID: loser, WinnerBookID: survivor, RecordedAt: time.Now()})
+	require.NoError(t, err)
+	pendingKey := merge.PendingUserStateRepairPrefix + loser + ":" + survivor
+	require.NoError(t, f.S.SetRaw(pendingKey, rec))
+
+	_, err = svc.RestoreAudiobook(context.Background(), loser)
+	require.NoError(t, err)
+
+	b := restoredRow(t, f, loser)
+	require.False(t, b.IsSoftDeleted(), "the loser is restored")
+	require.Equal(t, "false", f.Flag(t, loser))
+	f.RequireSinglePrimary(t, gid, survivor)
+	require.False(t, database.ABSLibraryFilter().Matches(b), "a non-primary member is not listed by ABS")
+	require.False(t, absWouldRender(t, f.S, loser), "its redirect is kept, so the old id still reaches the survivor")
+	got, err := f.S.GetRaw(pendingKey)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the pending move onto the survivor is still owed while the redirect stands")
 }

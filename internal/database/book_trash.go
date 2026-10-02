@@ -1,5 +1,5 @@
 // file: internal/database/book_trash.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b303f90-f72d-46b2-8cb2-be9a988a748c
 // last-edited: 2026-10-01
 
@@ -70,15 +70,21 @@ type TrashRestoreEnv struct {
 //   - Otherwise (a row trashed before the state was recorded) "organized".
 //
 // and then never answers "organized" (which is what ABS lists) unless the
-// book's present files prove it: at least one present file, every present
-// file inside env.RootDir and outside the iTunes library. A candidate
-// "organized" that fails that check, kept, recorded or legacy alike, becomes
-// "imported". A combine's absorbed shell is the case that forced this
-// (adversarial review of #3649, finding 2): the combine moves its files to the
-// survivor and keeps its "organized" label, so restoring it from the trash
-// brought back an empty "organized" book.
+// book's file rows place it in the library folder: at least one file row, and
+// every row, Missing or not, inside env.RootDir and outside the iTunes
+// library. A candidate "organized" that fails that check, kept, recorded or
+// legacy alike, becomes "imported". A combine's absorbed shell is the case
+// that forced this (adversarial review of #3649, finding 2): the combine moves
+// its files to the survivor and keeps its "organized" label, so restoring it
+// from the trash brought back an empty "organized" book.
 //
-// files are the book's file rows; a row with Missing set is not present.
+// Missing does not count against a row. An organized book whose files are all
+// marked Missing is still an organized book whose audio is to be found again:
+// repoint-missing-to-folder-audio repairs exactly that set, and selects it by
+// ABSLibraryFilter, so demoting it to "imported" here would take it out of
+// the one op that can bring its files back (re-review of #3649, finding 3).
+// Whether the restored row is worth an ABS item of its own (it has audio to
+// play) is a separate question, RestoredRowIsABSListable.
 //
 // Until 2026-10-01 RestoreAudiobook always wrote "imported", so restoring a
 // book from the library folder dropped it out of ABS, which lists only
@@ -97,7 +103,7 @@ func RestoreLibraryStateFromTrash(b *Book, files []BookFile, env TrashRestoreEnv
 	case recorded != nil && isLiveLibraryState(*recorded):
 		state = strings.TrimSpace(*recorded)
 	}
-	if strings.EqualFold(state, organizedLibraryState) && !presentFilesAreOrganized(files, env) {
+	if strings.EqualFold(state, organizedLibraryState) && !fileRowsAreInLibraryFolder(files, env) {
 		state = importedLibraryState
 	}
 	b.LibraryState = &state
@@ -145,6 +151,35 @@ func RestoreBookFromTrash(b *Book, files []BookFile, env TrashRestoreEnv) bool {
 	return true
 }
 
+// RestoredRowIsABSListable reports whether b, as a restore from the trash
+// leaves it, will be listed by ABS as an item of its own with audio to play:
+// it passes ABSLibraryFilter (primary, "organized", not in the trash, not
+// quarantined), and files has at least one present row, every present row
+// inside env.RootDir and outside the iTunes library.
+//
+// merge.RestoreFromTrash removes the row's merge redirect only when this
+// holds. A redirect is what forwards a client's old libraryItemId (and the
+// progress filed under it) to the survivor; removing it from a row ABS does
+// not list, or lists with no audio, strands that client on nothing.
+func RestoredRowIsABSListable(b *Book, files []BookFile, env TrashRestoreEnv) bool {
+	return ABSLibraryFilter().Matches(b) && presentFilesAreOrganized(files, env)
+}
+
+// fileRowsAreInLibraryFolder reports whether files has at least one row and
+// every row, Missing or not, is under env.RootDir and outside the iTunes
+// library. A row with an empty path fails: there is nothing to place.
+func fileRowsAreInLibraryFolder(files []BookFile, env TrashRestoreEnv) bool {
+	if strings.TrimSpace(env.RootDir) == "" || env.ITunesRootsUnknown || len(files) == 0 {
+		return false
+	}
+	for i := range files {
+		if !inLibraryFolder(files[i].FilePath, env) {
+			return false
+		}
+	}
+	return true
+}
+
 // presentFilesAreOrganized reports whether files has at least one present row
 // and every present row is under env.RootDir and outside the iTunes library.
 func presentFilesAreOrganized(files []BookFile, env TrashRestoreEnv) bool {
@@ -158,12 +193,18 @@ func presentFilesAreOrganized(files []BookFile, env TrashRestoreEnv) bool {
 			continue
 		}
 		present++
-		p := strings.TrimSpace(f.FilePath)
-		if p == "" || !pathutil.IsWithin(p, env.RootDir) || underITunesLibrary(p, env.ITunesRoots) {
+		if !inLibraryFolder(f.FilePath, env) {
 			return false
 		}
 	}
 	return present > 0
+}
+
+// inLibraryFolder reports whether path p is non-empty, under env.RootDir and
+// outside the iTunes library.
+func inLibraryFolder(p string, env TrashRestoreEnv) bool {
+	p = strings.TrimSpace(p)
+	return p != "" && pathutil.IsWithin(p, env.RootDir) && !underITunesLibrary(p, env.ITunesRoots)
 }
 
 // underITunesLibrary reports whether p is in the frozen books/itunes/ tree or
