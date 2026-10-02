@@ -1,5 +1,5 @@
 # file: scripts/mutation-tables/catalog-harvest-rules.muts
-# version: 1.3.0
+# version: 1.4.0
 # guid: 4c1e7a93-8b2d-4f60-a5e9-2d6b0f8c3a71
 # last-edited: 2026-10-01
 #
@@ -56,6 +56,13 @@ M32 estimate-one-lookup-per-author | internal/catalog/harvest.go | s/est\.Estima
 M33 estimate-ceil-of-mean | internal/catalog/harvest.go | s/pageSum \+= float64\(max\(\(listed\+h\.Cfg\.PageSize-1\)\/h\.Cfg\.PageSize, 1\)\)/pageSum += float64(listed) \/ float64(h.Cfg.PageSize)/
 M34 duplicates-mark-stale | internal/catalog/harvest.go | s/ \&\& fr\.duplicates == 0 \&\&/ \&\&/
 M35 short-never-accepted | internal/catalog/harvest.go | s/acceptShort = st\.ShortRuns >= ShortAcceptRuns/acceptShort = false/
-M36 short-runs-not-same-count | internal/catalog/harvest.go | s/ \&\& prev\.ShortDelivered == fr\.raw \{/ {/
+M36 short-runs-not-same-count | internal/catalog/harvest.go | s/prev\.ShortDelivered == fr\.raw \&\& prev\.TotalResults/prev.TotalResults/
 M37 accepted-truncation-stales | internal/catalog/harvest.go | s/\(fr\.short == "" \x7c\x7c fr\.shortKind == shortZeroTotal\)/true/
 M38 zero-guard-ignores-store | internal/catalog/harvest.go | s/filed, err := h\.Store\.CountHarvestedBy\(a\.Key\)/filed, err := st.Kept, error(nil)/
+M39 zero-window-ignored | internal/catalog/harvest.go | s/\(fr\.shortKind != shortZeroTotal \x7c\x7c now\.Sub\(since\) >= ZeroTotalAcceptWindow\)/true/
+M40 zero-streak-start-reset | internal/catalog/harvest.go | s/\t\t\t\tsince = \*prev\.ShortSince\n/\t\t\t\t_ = prev.ShortSince\n/
+M41 short-total-not-compared | internal/catalog/harvest.go | s/ \&\& prev\.TotalResults == fr\.total \{/ {/
+M42 zero-breaker-off | internal/catalog/harvest.go | s/if done >= ZeroBreakerMinAuthors \&\& float64/if false \&\& float64/
+M43 zero-breaker-no-minimum | internal/catalog/harvest.go | s/if done >= ZeroBreakerMinAuthors \&\& float64/if float64/
+M44 duplicates-not-tallied | internal/catalog/harvest.go | s/\t\tt\.Duplicated\.Add\(1\)\n//
+M45 deferred-stale-dropped | internal/catalog/harvest.go | s/\t\t\trz\.deferStale\(a\.Key\)\n//
