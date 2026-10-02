@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
 // last-edited: 2026-10-01
 
@@ -953,17 +953,17 @@ func TestFolderBooksFixer_DupNowFindsTheDuplicateAmongManySameTitleBooks(t *test
 	}
 	fx := &folderBooksFixer{}
 	g := fbGroup{Title: "It", AuthorID: &mine.ID}
-	idx, err := fx.titleIndex(f.s)
+	idx, err := fx.titleIndex(f.s, "it")
 	require.NoError(t, err)
-	require.Len(t, idx["it"], 250)
+	require.Len(t, idx, 250)
 	why, err := fx.dupNow(f.s, nil, "", g)
 	require.NoError(t, err)
 	require.Empty(t, why, "another author's same-title books are not duplicates")
 
 	late := f.fbBook(t, "late", "It!", f.path("Elsewhere/It.m4b"), 3600) // authorless, sorts after the 250
-	idx, err = fx.titleIndex(f.s)
+	idx, err = fx.titleIndex(f.s, "it")
 	require.NoError(t, err)
-	require.Len(t, idx["it"], 251, "the create moved the generation: the index was rebuilt")
+	require.Len(t, idx, 251, "the create moved the generation: the index caught up")
 	why, err = fx.dupNow(f.s, nil, "", g)
 	require.NoError(t, err)
 	require.Contains(t, why, late, "an authorless fbNorm-equal title after 250 other candidates")
@@ -1038,9 +1038,9 @@ func TestFolderBooksFixer_RetitleAfterTheIndexIsCaught(t *testing.T) {
 	fixer, ok := f.p.repairsReg.Get(fbFixerID)
 	require.True(t, ok)
 	fx := fixer.(*folderBooksFixer)
-	idx, err := fx.titleIndex(f.s)
+	idx, err := fx.titleIndex(f.s, "sword")
 	require.NoError(t, err)
-	require.Empty(t, idx["sword"])
+	require.Empty(t, idx)
 	_, err = f.s.ModifyBook(id, func(b *database.Book) error { b.Title = "Sword"; return nil })
 	require.NoError(t, err)
 	out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})

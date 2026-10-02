@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -118,4 +119,98 @@ func TestDuplicateCopies_ReplanReadsOnlyItsBooksLabels(t *testing.T) {
 	out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{row.RowID})
 	require.Zero(t, out.Applied, "%+v", out.Rows)
 	require.True(t, d.live(t, "L"), "the owner's not_dup held")
+}
+
+// dcCountingStore counts full-library book reads. It unwraps to the real
+// store, so the library generation and its change log still resolve.
+type dcCountingStore struct {
+	database.Store
+	full *atomic.Int32
+}
+
+func (c dcCountingStore) GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error) {
+	c.full.Add(1)
+	return c.Store.GetAllBooksCoreComplete(limit, offset)
+}
+
+func (c dcCountingStore) Unwrap() database.Store { return c.Store }
+
+// TestTitleIndex_CatchesUpWithoutARebuild (C-1b): after the first build the
+// title index follows creates, retitles into and out of a key, and hides by
+// re-reading only the books written, never the whole library again; a
+// generation bump the store did not log forces the (correct, slower) rebuild.
+func TestTitleIndex_CatchesUpWithoutARebuild(t *testing.T) {
+	f := newFragFixture(t)
+	for i := 0; i < 200; i++ {
+		_, err := f.s.CreateBook(&database.Book{Title: fmt.Sprintf("Filler %d", i), FilePath: f.path(fmt.Sprintf("Fill/%d", i))})
+		require.NoError(t, err)
+	}
+	var full atomic.Int32
+	st := dcCountingStore{Store: f.s, full: &full}
+	fx := &folderBooksFixer{}
+	ids, err := fx.titleIndex(st, "sword")
+	require.NoError(t, err)
+	require.Empty(t, ids)
+	require.EqualValues(t, 1, full.Load())
+
+	made, err := f.s.CreateBook(&database.Book{Title: "Sword!", FilePath: f.path("New/Sword")})
+	require.NoError(t, err)
+	other, err := f.s.CreateBook(&database.Book{Title: "Something Else", FilePath: f.path("New/Else")})
+	require.NoError(t, err)
+	ids, err = fx.titleIndex(st, "sword")
+	require.NoError(t, err)
+	require.Equal(t, []string{made.ID}, ids, "a create is caught up")
+
+	_, err = f.s.ModifyBook(other.ID, func(b *database.Book) error { b.Title = "Sword"; return nil })
+	require.NoError(t, err)
+	_, err = f.s.ModifyBook(made.ID, func(b *database.Book) error { b.Title = "Shield"; return nil })
+	require.NoError(t, err)
+	ids, err = fx.titleIndex(st, "sword")
+	require.NoError(t, err)
+	require.Equal(t, []string{other.ID}, ids, "retitled into the key in, out of it out")
+	ids, err = fx.titleIndex(st, "shield")
+	require.NoError(t, err)
+	require.Equal(t, []string{made.ID}, ids)
+
+	_, err = f.s.ModifyBook(other.ID, func(b *database.Book) error {
+		yes := true
+		b.MarkedForDeletion = &yes
+		return nil
+	})
+	require.NoError(t, err)
+	ids, err = fx.titleIndex(st, "sword")
+	require.NoError(t, err)
+	require.Empty(t, ids, "a hidden book leaves the index")
+	require.EqualValues(t, 1, full.Load(), "every catch-up re-read only the books written")
+
+	gen, tracked := database.LibraryGenerationOf(st)
+	require.True(t, tracked)
+	gen.Bump() // a bump with no log record: the changed book cannot be named
+	ids, err = fx.titleIndex(st, "shield")
+	require.NoError(t, err)
+	require.Equal(t, []string{made.ID}, ids)
+	require.EqualValues(t, 2, full.Load(), "an unlisted change forces a rebuild")
+}
+
+// TestDuplicateCopies_BulkApplyReadsTheLibraryOnce (C-1b): two rows of one
+// apply, each re-planned under the lock after the other's writes bumped the
+// generation, read every book at most once between them.
+func TestDuplicateCopies_BulkApplyReadsTheLibraryOnce(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	s2 := d.copyBook(t, "S2", "Ubik", "lib/Philip K Dick/Ubik",
+		dcRow{track: 1, dur: 600, hash: "u1"}, dcRow{track: 2, dur: 600, hash: "u2"}, dcRow{track: 3, dur: 600, hash: "u3"})
+	l2 := d.copyBook(t, "L2", "Ubik", "lib/Ubik copy",
+		dcRow{track: 1, dur: 600, hash: "u1"}, dcRow{track: 2, dur: 600, hash: "u2"}, dcRow{track: 3, dur: 600, hash: "u3"})
+	var full atomic.Int32
+	d.p.deps = scanDeps{fakeDeps: fakeDeps{store: dcCountingStore{Store: d.s, full: &full}, labels: d.labels}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
+	res := d.planFor(t, dcFixerID, "op-plan", nil)
+	a, b := findRow(t, res, dupRowID(s, l)), findRow(t, res, dupRowID(s2, l2))
+	require.True(t, a.Applicable(), a.SkipReason)
+	require.True(t, b.Applicable(), b.SkipReason)
+	before := full.Load()
+	out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{a.RowID, b.RowID})
+	require.Equal(t, 2, out.Applied, "%+v", out.Rows)
+	require.LessOrEqual(t, full.Load()-before, int32(1),
+		"Replan per row catches the title index up; it does not rebuild it from every book")
 }
