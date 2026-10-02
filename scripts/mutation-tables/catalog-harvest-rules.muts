@@ -1,5 +1,5 @@
 # file: scripts/mutation-tables/catalog-harvest-rules.muts
-# version: 1.1.0
+# version: 1.1.1
 # guid: 4c1e7a93-8b2d-4f60-a5e9-2d6b0f8c3a71
 # last-edited: 2026-10-01
 #
@@ -39,7 +39,7 @@ M18 stale-ignores-coauthors | internal/database/catalog_entry_store.go | s/if le
 M19 group-id-recomputed | internal/database/catalog_entry_store.go | s/\t\t\tentry\.EditionGroupID = old\.EditionGroupID\n\t\t\tentry\.EditionGroupKey = old\.EditionGroupKey\n//
 M20 batch-group-map-ignored | internal/database/catalog_entry_store.go | s/if gid, ok := pending\[key\]; ok \{/if gid, ok := pending[key]; ok \&\& false {/
 M21 batch-pid-map-ignored | internal/database/catalog_entry_store.go | s/if p, ok := pendingPID\[pk\]; ok \{/if p, ok := pendingPID[pk]; ok \&\& false {/
-M22 not-found-counted-as-error | internal/catalog/disambig.go | s/if errors\.Is\(err, metadata\.ErrCatalogProductNotFound\) \{/if false {/
+M22 not-found-counted-as-error | internal/catalog/disambig.go | s/if errors\.Is\(err, metadata\.ErrCatalogProductNotFound\) \{/if errors.Is(err, metadata.ErrCatalogProductNotFound) && false {/
 M23 404-not-classified | internal/metadata/audible_author_list.go | s/pse\.Status == http\.StatusNotFound/pse.Status == 0/
 M24 registry-not-fed | internal/catalog/harvest.go | s/\th\.Cfg\.OnProviderError\(err\)\n/\n/
 M25 no-stand-down-cancel | internal/catalog/harvest.go | s/\t\t\tcancel\(\)\n\t\t\}/\t\t}/
