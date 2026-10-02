@@ -1,11 +1,12 @@
 // file: internal/metafetch/search_fanout_round7_probe_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5681c68e-3c68-4920-971d-5dbd61de2aef
 // last-edited: 2026-10-01
 
 package metafetch
 
 import (
+	"context"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -180,4 +181,93 @@ func TestParseSearchTitle_DecimalPosition(t *testing.T) {
 	c := newStrongCriteria(p, p.Title, "Stormlight Archive 2.5: Edgedancer", "", "Brandon Sanderson", 0)
 	assert.True(t, c.positionConflicts(metadata.BookMetadata{Title: "Stormlight Archive 3: Oathbringer"}))
 	assert.False(t, c.positionConflicts(metadata.BookMetadata{Title: "Edgedancer", SeriesPosition: "2.5"}))
+}
+
+// Round-7 review, R1: the direct ASIN lookup's score floor. A score <= 0
+// means the title gave no search words, so the stored ASIN is the only
+// evidence; the floor is withheld only on positive sibling evidence, never on
+// a mere lack of agreement (main's floor was unconditional).
+func TestSearchFanoutProbe_DirectASINFloorNeedsSiblingEvidence(t *testing.T) {
+	const asin = "B0OWNBOOK1"
+	lookupScore := func(t *testing.T, seq int, dur int, answer metadata.BookMetadata) (float64, bool) {
+		t.Helper()
+		b := probeBook("", dur)
+		b.ASIN = func() *string { s := asin; return &s }()
+		if seq > 0 {
+			b.SeriesSequence = &seq
+		}
+		svc := fanoutHarness(t, b, serving())
+		svc.asinLookupOverride = func(_ context.Context, _, a string) (*metadata.BookMetadata, error) {
+			if a == asin {
+				r := answer
+				return &r, nil
+			}
+			return nil, nil
+		}
+		resp, err := svc.SearchMetadataForBookWithOptions("b1", "", "", "", "", SearchOptions{})
+		require.NoError(t, err)
+		for _, c := range resp.Results {
+			if c.ASIN == asin {
+				return c.Score, true
+			}
+		}
+		return 0, false
+	}
+	own := metadata.BookMetadata{Title: "Some Great Book", ASIN: asin, DurationSec: 36000, CoverURL: "c"}
+
+	t.Run("no runtime", func(t *testing.T) {
+		score, ok := lookupScore(t, 0, 0, own)
+		require.True(t, ok)
+		assert.GreaterOrEqual(t, score, 1.0)
+	})
+	t.Run("exact runtime, stored sequence 1", func(t *testing.T) {
+		score, ok := lookupScore(t, 1, 36000, own)
+		require.True(t, ok)
+		assert.GreaterOrEqual(t, score, 1.0)
+	})
+	t.Run("control: another explicit position gets no floor", func(t *testing.T) {
+		sib := own
+		sib.SeriesPosition, sib.DurationSec = "1", 30000
+		score, ok := lookupScore(t, 8, 36000, sib)
+		require.True(t, ok, "it stays a candidate: the stored sequence never drops one")
+		assert.Less(t, score, 1.0, "a sibling the stored sequence refutes is not floored")
+	})
+}
+
+// Round-7 review, R2: with a stored sequence, a runtime within
+// positionOverrideTolerance names the book whatever a provider numbers it,
+// and an answer with no series_position is judged by the title's own numbers.
+func TestStrongCriteria_StoredSequenceRuntimeExcuse(t *testing.T) {
+	const asin = "B0OWNBOOK2"
+	criteria := func(title string, seq string) strongCriteria {
+		p := parseSearchTitle(title, "Ann Author", "")
+		p.StoredPosition = seq
+		return newStrongCriteria(p, p.Title, title, asin, "Ann Author", 36000)
+	}
+	tower := criteria("The Tower of the Swallow", "4")
+	assert.True(t, tower.ownASINAgrees(metadata.BookMetadata{Title: "The Tower of the Swallow", SeriesPosition: "6", DurationSec: 36100, ASIN: asin}))
+	assert.False(t, tower.ownASINAgrees(metadata.BookMetadata{Title: "The Tower of the Swallow", SeriesPosition: "6", DurationSec: 40000, ASIN: asin}),
+		"another explicit position outside 2% is still not this book")
+
+	dune := criteria("Dune", "1")
+	assert.True(t, dune.ownASINAgrees(metadata.BookMetadata{Title: "Dune", DurationSec: 36100, ASIN: asin}))
+	assert.True(t, dune.positionNamed(metadata.BookMetadata{Title: "Dune", DurationSec: 40000}),
+		"no series_position names no other position")
+}
+
+// Round-7 review, NIT: the stored-sequence branch of explicitPositionConflicts
+// excuses a title that carries the book's numbers, as the no-position branch
+// does.
+func TestStrongCriteria_StoredSequenceCarriesNumbers(t *testing.T) {
+	p := parseSearchTitle("Overlord", "Ann Author", "")
+	p.StoredPosition = "8"
+	c := newStrongCriteria(p, p.Title, "Overlord", "", "Ann Author", 36000)
+	assert.False(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "Overlord 8", SeriesPosition: "1", DurationSec: 40000}))
+	assert.True(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "Overlord", SeriesPosition: "1", DurationSec: 40000}))
+
+	p = parseSearchTitle("Metro 2033", "Ann Author", "")
+	p.StoredPosition = "1"
+	c = newStrongCriteria(p, p.Title, "Metro 2033", "", "Ann Author", 36000)
+	assert.False(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "Metro 2033", SeriesPosition: "3", DurationSec: 40000}))
+	assert.True(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "Metro 2034", SeriesPosition: "3", DurationSec: 40000}))
 }

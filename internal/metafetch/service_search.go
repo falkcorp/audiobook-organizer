@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.32.3
+// version: 1.32.4
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-01
 
@@ -967,10 +967,14 @@ func (mfs *Service) searchMetadataForBook(
 			if seen.add(*result) {
 				score, asinBd := ScoreOneResultWithBreakdown(*result, searchWords)
 				asinRec := &scoreRecorder{score: score, steps: asinBd.Steps}
-				if score <= 0 && strong.ownASINAgrees(*result) {
-					// A direct ASIN match that agrees with the book (ownASINAgrees)
-					// always scores high; one that does not may be a sibling's
-					// stored by an earlier bad match, and keeps its own score. This OVERWRITES the
+				if score <= 0 && !strong.siblingEvidence(*result) {
+					// A direct ASIN match always scores high: a score <= 0 means
+					// the title gave no search words, so the stored ASIN is the
+					// only evidence there is. The floor is withheld only on
+					// positive evidence of a sibling (siblingEvidence: another
+					// position, or a number the book's title lacks) -- never on a
+					// mere lack of agreement, or such a book loses its only
+					// candidate (score 0 fails the apply gate). This OVERWRITES the
 					// pipeline result rather than adjusting it, so it is recorded
 					// as a replace -- a reviewer seeing 1.0 needs to know the
 					// title/author evidence was bypassed, not that it was strong.
