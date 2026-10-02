@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.47.0
+// version: 1.48.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-02
 
@@ -339,7 +339,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 
 	result := &RevertResult{OperationID: operationID, Total: len(changes)}
 	retryOwed := func() (*RevertResult, error) {
-		if msgs := rs.settleGroups(operationID, settleInput{crowned: crownedByHandOff(changes)}, result); len(msgs) > 0 {
+		if msgs := rs.settleGroups(operationID, settleInput{
+			crowned: crownedByHandOff(changes), priorPending: rs.settlePendingGroups(operationID),
+		}, result); len(msgs) > 0 {
 			return result, fmt.Errorf("partially reverted with %d errors: %s", len(msgs), msgs[0])
 		}
 		return result, nil
@@ -382,6 +384,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			// retry it (settleGroups).
 			return retryOwed()
 		}
+		// A pending intent alone is stale here (rows are marked only after
+		// their settle ran): drop it, nothing is owed.
+		rs.clearSettleOwed(operationID)
 		return nil, fmt.Errorf("operation %s has already been reverted: all %d restorable changes are marked reverted",
 			operationID, restorableTotal)
 	}
@@ -400,15 +405,18 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	// group's primary is; the settle pass after the loop reads them.
 	var touched []settleTouch
 	refusedDemote := map[string]bool{}
-	// The settle intent goes down before any row is written: a run that
-	// dies, or whose mark fails, between its rows and its settle leaves it,
-	// and the next run then counts the rows it finds already restored as
-	// evidence (priorPending).
-	priorPending := rs.writeSettlePending(operationID, restorable)
 	plan, err := undo.PlanRevert(restorable, rs.db.GetBookFiles)
 	if err != nil {
 		return nil, err
 	}
+	// Settle intent, per group: a group goes into the pending record the
+	// first time a settle row of a book in it WRITES (markSettlePending), so
+	// a run that dies, or whose mark fails, between its rows and its settle
+	// leaves exactly the groups it changed. The next run counts a row it
+	// finds already restored as evidence only when the book's group is in
+	// that earlier run's pending set (priorPending).
+	priorPending := rs.settlePendingGroups(operationID)
+	pendingNow := map[string]bool{}
 	plan.NoteHandOffs(changes)
 	for _, c := range plan.Order {
 		err := plan.Gate(c)
@@ -458,8 +466,18 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		if already {
 			result.AlreadyRestored++
 		}
-		if t, ok := settleNote(c); ok && (!already || priorPending) {
-			touched = append(touched, t)
+		if t, ok := settleNote(c); ok {
+			gid := rs.bookGroup(c.BookID)
+			switch {
+			case !already:
+				touched = append(touched, t)
+				if gid != "" && !pendingNow[gid] {
+					pendingNow[gid] = true
+					rs.markSettlePending(operationID, gid)
+				}
+			case gid != "" && priorPending[gid]:
+				touched = append(touched, t)
+			}
 		}
 		if result.RestoredTypes == nil {
 			result.RestoredTypes = map[string]int{}
