@@ -1,7 +1,7 @@
 // file: internal/server/catalog_harvest_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e6b9d24-7a1c-4f85-b2e0-5c8d1a4f7e93
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 //
 // Registers catalog.harvest-authors, phase P1 of the author catalog design
 // (.claude/notes/catalog-wanted-requests-design-2026-10-01.md, Draft 3).
@@ -94,10 +94,11 @@ func (s *Server) RegisterCatalogHarvestOp(reg *opsregistry.Registry) error {
 		ResumePolicy:          opsregistry.ResumeRestart,
 		MinCheckpointInterval: catalogHarvestMinCheckpointInterval,
 		ConcurrencyKey:        "catalog.harvest",
-		// The harvest and metadata.candidate-fetch share Audible's token
-		// bucket; DependsOn is one-directional ("must not be running for
-		// THIS op to start"), so candidate-fetch carries the reverse entry.
-		DependsOn:    []string{"metadata.candidate-fetch"},
+		// The harvest, metadata.candidate-fetch and metafetch.asin-backfill
+		// all spend Audible's token bucket; DependsOn is one-directional
+		// ("must not be running for THIS op to start"), so each of the
+		// others carries the reverse entry for catalog.harvest-authors.
+		DependsOn:    []string{"metadata.candidate-fetch", "metafetch.asin-backfill"},
 		Writes:       []opsregistry.Resource{opsregistry.ResCatalog},
 		Permissions:  []auth.Permission{auth.PermSettingsManage},
 		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkAudible},

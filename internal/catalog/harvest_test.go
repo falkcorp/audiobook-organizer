@@ -1,7 +1,7 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package catalog
 
@@ -1314,5 +1314,116 @@ func TestRun_NeverHarvestedZeroAuthorsDoNotTripBreaker(t *testing.T) {
 	}
 	if due, _ := h.SelectDue(nobodies, nil); len(due) != 0 {
 		t.Errorf("%d never-harvested zero authors still due after a clean run", len(due))
+	}
+}
+
+// zeroRun runs Run over filed authors (harvested once first, then answering
+// normally) plus unfiled never-harvested authors that answer "0 results"
+// (zeroFiled: the filed ones answer 0 too).
+func zeroRun(t *testing.T, filedN, unfiledN int, zeroFiled bool) (*database.CatalogStore, []ScopeAuthor, []ScopeAuthor, *Tally) {
+	t.Helper()
+	st, _ := openCatalog(t)
+	filed, by := breakerAuthors(filedN)
+	var unfiled []ScopeAuthor
+	for i := range unfiledN {
+		n := fmt.Sprintf("New Author %d", i)
+		unfiled = append(unfiled, ScopeAuthor{Key: HarvestKey(n), Name: n})
+	}
+	var zero atomic.Bool
+	l := &scriptLister{list: func(name string, page, size int) metadata.AuthorPage {
+		if zero.Load() {
+			return metadata.AuthorPage{Products: []metadata.CatalogProduct{}}
+		}
+		return slicePage(by[name], page, size) // unfiled authors have none
+	}}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 3})
+	if filedN > 0 {
+		if _, err := h.Run(context.Background(), &fakeReporter{}, filed, RunOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	zero.Store(zeroFiled)
+	tally, err := h.Run(context.Background(), &fakeReporter{}, append(slices.Clone(filed), unfiled...), RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st, filed, unfiled, tally
+}
+
+func assertAllPartialAndDue(t *testing.T, st *database.CatalogStore, authors []ScopeAuthor) {
+	t.Helper()
+	for _, a := range authors {
+		if s, _ := st.GetAuthorState(a.Key); s == nil || s.State != database.CatalogHarvestPartial {
+			t.Errorf("%s: %+v; want partial", a.Name, s)
+		}
+	}
+	h := NewHarvester(nil, st, Settings{})
+	if due, _ := h.SelectDue(authors, nil); len(due) != len(authors) {
+		t.Errorf("%d of %d authors due; want all", len(due), len(authors))
+	}
+}
+
+// TestRun_AllUnfiledOutageStaysPartial: the very first harvest, during an
+// outage: ten new authors, every listing empty. With no filed authors to
+// judge, the breaker judges every author that answered, trips, and leaves
+// all ten partial and due instead of complete-and-empty for 30 days.
+func TestRun_AllUnfiledOutageStaysPartial(t *testing.T) {
+	st, _, unfiled, tally := zeroRun(t, 0, 10, true)
+	if !tally.ZeroBreakerTripped.Load() {
+		t.Errorf("breaker did not trip on 10 of 10 empty answers: %s", tally.Summary())
+	}
+	assertAllPartialAndDue(t, st, unfiled)
+}
+
+// TestRun_FewFiledFallsBackToAllAnswered: 3 filed authors answer normally,
+// 4 new authors answer 0. Three filed authors are too few to judge, so the
+// judgement falls back to all 7 that answered: 4 of 7 empty trips it.
+func TestRun_FewFiledFallsBackToAllAnswered(t *testing.T) {
+	st, _, unfiled, tally := zeroRun(t, 3, 4, false)
+	if !tally.ZeroBreakerTripped.Load() {
+		t.Errorf("breaker did not trip on 4 of 7 empty answers: %s", tally.Summary())
+	}
+	assertAllPartialAndDue(t, st, unfiled)
+}
+
+// TestRun_TooSmallToJudgeLeavesUnfiledZeroPartial: 2 new authors, both
+// empty. Nothing can be judged from 2 answers, so neither is recorded
+// complete: both stay partial and are retried.
+func TestRun_TooSmallToJudgeLeavesUnfiledZeroPartial(t *testing.T) {
+	st, _, unfiled, tally := zeroRun(t, 0, 2, true)
+	if tally.ZeroBreakerTripped.Load() {
+		t.Error("a 2-author run tripped the breaker; it is too small to judge")
+	}
+	if !tally.ZeroBreakerUnjudged.Load() {
+		t.Errorf("tally does not say the run was too small to judge: %s", tally.Summary())
+	}
+	assertAllPartialAndDue(t, st, unfiled)
+}
+
+// TestSettleZero_SkipsAStateChangedSinceItsHold: settleZero must not
+// overwrite an author whose state a newer harvest wrote after the hold.
+func TestSettleZero_SkipsAStateChangedSinceItsHold(t *testing.T) {
+	st, _ := openCatalog(t)
+	l := &scriptLister{list: func(string, int, int) metadata.AuthorPage {
+		return metadata.AuthorPage{Products: []metadata.CatalogProduct{}}
+	}}
+	c := &clock{t: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1, Now: c.Now})
+	a := ScopeAuthor{Key: HarvestKey("Ann Author"), Name: "Ann Author"}
+	rz := newZeroLedger()
+	if _, err := h.harvestAuthor(context.Background(), a, nil, rz); err != nil {
+		t.Fatal(err)
+	}
+	c.Add(time.Hour)
+	newer, err := h.HarvestAuthor(context.Background(), a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.settleZero(nil, rz, &Tally{}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetAuthorState(a.Key)
+	if !got.LastAttemptAt.Equal(newer.LastAttemptAt) {
+		t.Errorf("settle overwrote a newer state: last_attempt %v; want %v", got.LastAttemptAt, newer.LastAttemptAt)
 	}
 }
