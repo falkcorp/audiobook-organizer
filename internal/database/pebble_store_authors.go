@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-09-29
+// last-edited: 2026-10-02
 
 package database
 
@@ -736,6 +736,14 @@ var ErrSkipBookAuthorsWrite = errors.New("skip book_authors write")
 // stripe set, not bookLocks: SetBookAuthors is called from code that may
 // already hold a book stripe, and sync.Mutex does not re-enter. Nothing slow
 // runs under it, and no path holds two of these stripes at once.
+//
+// Holders: SetBookAuthors and ModifyBookAuthors (read through commit), and
+// DeleteBook, which takes it AFTER its book and owner stripes and holds it
+// from its book_authors:<id> probe through its commit. Lock order is
+// book -> owner -> book_authors. It stays acyclic only while nothing that
+// holds this stripe takes a book or owner stripe: the ModifyBookAuthors
+// callbacks must stay pure, and the memdb write-through and change
+// notification under it take only leaf locks.
 func (p *PebbleStore) lockBookAuthors(bookID string) func() {
 	mu := &p.bookAuthorLocks[stripeFor(bookID)]
 	mu.Lock()

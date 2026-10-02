@@ -28,7 +28,8 @@ Follow-ups from review of the same change:
 - `maintenance.book-atpath-index-verify` range-scans the marker family on disk
   again and reports `markers_not_in_set`: markers on disk that the in-memory
   set lacks, the state in which lookups would skip an undecodable row and fail
-  open. Verify re-adds those ids to the set (memory only) and fails the op.
+  open. Verify stays read-only and fails the op, naming
+  `maintenance.book-atpath-index-backfill` as the repair.
 - `DeleteBook` now holds the book's `book_authors` stripe from the
   `book_authors:<id>` probe through the commit, so a concurrent
   `SetBookAuthors` cannot commit a credit row between the probe and the delete

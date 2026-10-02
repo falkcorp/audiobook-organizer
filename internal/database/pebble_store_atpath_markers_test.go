@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_markers_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4b7e0c2d-9f13-4a68-b5d1-7e2c8a90f346
 // last-edited: 2026-10-02
 
@@ -254,11 +254,12 @@ func TestUndecodableMarker_ZeroValueStoreLoadsLazily(t *testing.T) {
 	}
 }
 
-// TestVerifyBookAtPathIndex_MarkerNotInSetReportedAndReAdded (M1): a marker on
-// disk that the in-memory set lacks is the state in which the readers fail
-// open. Verify must find it by range-scanning the family (a point read of the
-// set's own ids cannot), report it, and put the id back so lookups fail closed.
-func TestVerifyBookAtPathIndex_MarkerNotInSetReportedAndReAdded(t *testing.T) {
+// TestVerifyBookAtPathIndex_MarkerNotInSetReported (M1): a marker on disk that
+// the in-memory set lacks is the state in which the readers fail open. Verify
+// must find it by range-scanning the family (a point read of the set's own ids
+// cannot) and report it, without changing anything; the rebuild op is the
+// repair and puts the id back so lookups fail closed.
+func TestVerifyBookAtPathIndex_MarkerNotInSetReported(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()
 	if _, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"}); err != nil {
@@ -285,11 +286,22 @@ func TestVerifyBookAtPathIndex_MarkerNotInSetReportedAndReAdded(t *testing.T) {
 	if rep.UnmarkedUndecodable != 0 || rep.StaleMarkers != 0 {
 		t.Fatalf("unmarked=%d stale=%d, want 0 0", rep.UnmarkedUndecodable, rep.StaleMarkers)
 	}
+	if _, ok := s.undecodableMarkerMayExist("01BADROW"); ok {
+		t.Fatal("verify is read-only but changed the marker set")
+	}
+	if _, err := s.LiveBookIDsAtPath("/lib/a/t.m4b"); err != nil {
+		t.Fatalf("verify is read-only but changed lookup behaviour: %v", err)
+	}
+
+	// The repair: the rebuild re-notes every still-undecodable row.
+	if _, err := s.RebuildBookAtPathIndex(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := s.undecodableMarkerMayExist("01BADROW"); !ok {
-		t.Fatal("verify did not re-add the id to the set")
+		t.Fatal("rebuild did not put the id back in the set")
 	}
 	if _, err := s.LiveBookIDsAtPath("/lib/a/t.m4b"); err == nil || !strings.Contains(err.Error(), "cannot be decoded") {
-		t.Fatalf("after verify the lookup must fail closed, got %v", err)
+		t.Fatalf("after the rebuild the lookup must fail closed, got %v", err)
 	}
 
 	rep, err = s.VerifyBookAtPathIndex(context.Background())

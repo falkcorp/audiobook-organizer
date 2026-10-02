@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.186.0
+// version: 1.186.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-02
 
@@ -134,7 +134,7 @@ type PebbleStore struct {
 	bookLocks                bookLocks            // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	bookFileLocks            bookLocks            // per-book_file-ID write stripes: every single-row book_file read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	bookOwnerLocks           bookLocks            // per-book-ID stripes over "which book_file rows name this book": DeleteBook's owns-files check+commit vs every book_file writer's commit (book_delete_owns_files.go)
-	bookAuthorLocks          bookLocks            // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit (pebble_store_authors.go)
+	bookAuthorLocks          bookLocks            // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit, DeleteBook from its book_authors probe through its commit; order book -> owner -> book_authors (pebble_store_authors.go)
 	opsLogSeq                atomic.Int64         // monotonic counter for log key uniqueness; accessed via atomic
 	rootDir                  string               // organized library root; set via SetRootDir after config load
 	libraryCountsRecomputeMu sync.Mutex           // gates recompute to prevent stampede when N callers see dirty cache
