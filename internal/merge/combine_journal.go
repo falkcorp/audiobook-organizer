@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-01
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -780,36 +781,44 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 		}
 		b.MarkedForDeletion = nil
 		b.MarkedForDeletionAt = nil
-		// The combine never relabels the state, so this is a no-op unless a
-		// later trash path (reconcile's) labelled the absorbed row "deleted":
-		// then the shared restore rule puts back what it recorded. The files
-		// are back on the survivor at this point, so the legacy fallback (no
-		// record) reads none and answers "imported". MergedIntoBookID is the
-		// journal's to restore, not cleared here.
-		database.RestoreLibraryStateFromTrash(b, nil, TrashRestoreEnv())
+		// The library state is decided in step 2b, once this book's files are
+		// back: at this point they are still on the survivor, so the restore
+		// rule would read no files and answer "imported" for every shell.
+		// MergedIntoBookID is the journal's to restore, not cleared here.
 		b.FilePath = a.FilePath
 		b.VersionGroupID = a.VersionGroupID
 		b.IsPrimaryVersion = a.IsPrimaryVersion
-		if a.IsPrimaryVersion != nil && *a.IsPrimaryVersion && a.VersionGroupID != nil && *a.VersionGroupID != "" {
-			// Another member may have been elected primary while this one was
-			// soft-deleted. One primary per group, always: restore as a
-			// non-primary member and say so.
-			if members, gerr := ms.db.GetBooksByVersionGroup(*a.VersionGroupID); gerr == nil {
-				for _, m := range members {
-					if m.ID != a.BookID && !m.IsSoftDeleted() && m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
-						f := false
-						b.IsPrimaryVersion = &f
-						res.Warnings = append(res.Warnings, fmt.Sprintf(
-							"book %s was primary of version group %s, but %s is primary now; restored as a non-primary member",
-							a.BookID, *a.VersionGroupID, m.ID))
-						break
-					}
-				}
+		gid := ""
+		if a.VersionGroupID != nil {
+			gid = strings.TrimSpace(*a.VersionGroupID)
+		}
+		unlockGroup := func() {}
+		if gid != "" && a.IsPrimaryVersion != nil && *a.IsPrimaryVersion {
+			// Another member may have become the group's primary while this
+			// one was soft-deleted. One primary per group, always, by the
+			// same rule as a trash restore (versionprimary.Incumbent: an
+			// explicit-true member, else the one nil-flag member every
+			// visibility path reads as primary). Read and written under the
+			// group's hand-off lock (merge lock, then group lock, then the
+			// book's write lock: the order every merge hand-off uses).
+			unlockGroup = versionprimary.LockGroup(gid)
+			incumbent, ierr := versionprimary.IncumbentExcept(ms.db, gid, a.BookID)
+			if ierr != nil {
+				unlockGroup()
+				return res, fmt.Errorf("read version group %s of absorbed book %s: %w", gid, a.BookID, ierr)
+			}
+			versionprimary.YieldToIncumbent(b, incumbent)
+			if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"book %s was primary of version group %s, but %s is primary now; restored as a non-primary member",
+					a.BookID, gid, incumbent))
 			}
 		}
 		// UpdateBook on purpose: this is the journal's whole-row restore of the
 		// absorbed shell, not a column write, so it is not routed through ModifyBook.
-		if _, err := ms.db.UpdateBook(a.BookID, b); err != nil {
+		_, err = ms.db.UpdateBook(a.BookID, b)
+		unlockGroup()
+		if err != nil {
 			return res, fmt.Errorf("restore absorbed book %s: %w", a.BookID, err)
 		}
 		res.RestoredBooks = append(res.RestoredBooks, a.BookID)
@@ -897,6 +906,30 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 		f.DiscNumber, f.TrackNumber = fm.DiscBefore, fm.TrackBefore
 		if err := ms.db.UpdateBookFile(f.ID, f); err != nil {
 			return res, fmt.Errorf("restore disc/track of survivor file %s: %w", f.ID, err)
+		}
+	}
+
+	// 2b. Library state, now that each absorbed book owns its files again:
+	//     the shared restore rule (database.RestoreLibraryStateFromTrash). The
+	//     combine never relabels the state, so this keeps it, except that
+	//     "organized" needs the files back inside the library root and
+	//     outside the iTunes library, and a row a later trash path labelled
+	//     "deleted" gets back what that path recorded.
+	env := TrashRestoreEnv()
+	for _, a := range j.Absorbed {
+		files, err := ms.db.GetBookFiles(a.BookID)
+		if err != nil {
+			return res, fmt.Errorf("read files of absorbed book %s: %w", a.BookID, err)
+		}
+		written, err := ms.db.ModifyBook(a.BookID, func(b *database.Book) error {
+			database.RestoreLibraryStateFromTrash(b, files, env)
+			return nil
+		})
+		if err != nil {
+			return res, fmt.Errorf("restore library state of absorbed book %s: %w", a.BookID, err)
+		}
+		if written == nil {
+			return res, fmt.Errorf("restore library state of absorbed book %s: not found", a.BookID)
 		}
 	}
 

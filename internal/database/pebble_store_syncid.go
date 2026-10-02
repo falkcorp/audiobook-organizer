@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
 // last-edited: 2026-10-01
 
@@ -505,6 +505,13 @@ func (p *PebbleStore) ClearSyncMerge(loserBookID, winnerBookID string) error {
 		return fmt.Errorf("sync item %s referenced by reverse index but record missing", winnerSyncID)
 	}
 
+	return p.unlinkSyncRedirect(loserSyncID, loserItem, winnerSyncID, winnerItem)
+}
+
+// unlinkSyncRedirect writes both halves of an un-merge in one batch: the
+// loser's item stops redirecting, and the loser's syncID leaves the winner's
+// MergedFrom (ListSyncAliases trusts an entry only while both halves agree).
+func (p *PebbleStore) unlinkSyncRedirect(loserSyncID string, loserItem *SyncItem, winnerSyncID string, winnerItem *SyncItem) error {
 	loserItem.RedirectTo = ""
 	winnerItem.MergedFrom = slices.DeleteFunc(winnerItem.MergedFrom, func(s string) bool { return s == loserSyncID })
 	loserData, err := json.Marshal(loserItem)
@@ -525,4 +532,43 @@ func (p *PebbleStore) ClearSyncMerge(loserBookID, winnerBookID string) error {
 		return err
 	}
 	return batch.Commit(pebble.Sync)
+}
+
+// ClearSyncRedirect removes whatever merge redirect loserBookID's sync item
+// carries, the reverse of RecordSyncMerge for a merge loser restored from the
+// trash as a book of its own. Unlike ClearSyncMerge it does not need the
+// winner: a combine's absorbed shell and a MergeBooks loser never record
+// MergedIntoBookID, so the redirect is the only link back.
+//
+// winnerBookID is the book the redirect's target item names (its
+// CurrentBookID), for the caller's log and for RecordSyncMerge to put the
+// redirect back if the restore that asked for this fails. cleared is false,
+// with a nil error, when the book has no sync item or its item does not
+// redirect. A redirect whose target record is missing is an error: the
+// winner's MergedFrom cannot be repaired, and a half-written un-merge would
+// leave ListSyncAliases disagreeing with ResolveSyncItem.
+func (p *PebbleStore) ClearSyncRedirect(loserBookID string) (winnerBookID string, cleared bool, err error) {
+	loserSyncID, has, err := p.GetSyncIDForBook(loserBookID)
+	if err != nil || !has {
+		return "", false, err
+	}
+	loserItem, err := p.getSyncItem(loserSyncID)
+	if err != nil {
+		return "", false, err
+	}
+	if loserItem == nil || loserItem.RedirectTo == "" {
+		return "", false, nil
+	}
+	winnerSyncID := loserItem.RedirectTo
+	winnerItem, err := p.getSyncItem(winnerSyncID)
+	if err != nil {
+		return "", false, err
+	}
+	if winnerItem == nil {
+		return "", false, fmt.Errorf("sync item %s (redirect target of %s) missing", winnerSyncID, loserSyncID)
+	}
+	if err := p.unlinkSyncRedirect(loserSyncID, loserItem, winnerSyncID, winnerItem); err != nil {
+		return "", false, err
+	}
+	return winnerItem.CurrentBookID, true, nil
 }

@@ -1,5 +1,5 @@
 // file: internal/batch/service.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-01
 
@@ -124,20 +124,24 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 		// replaces fields rather than writing through their pointers, so a
 		// shallow copy keeps the old values.
 		var pre database.Book
-		restore, rerr := bs.restoreInputs(id, req.Updates)
-		if rerr != nil {
-			resp.addError(id, rerr.Error())
-			continue
+		var updated *database.Book
+		if isRestore(req.Updates) {
+			// marked_for_deletion=false is a restore like the "restore"
+			// action: the shared rule (merge.RestoreFromTrash) runs first, in
+			// the same write as the rest of the payload.
+			var res merge.TrashRestoreResult
+			res, err = merge.RestoreFromTrash(bs.db, id, func(b *database.Book) { applyUpdates(b, req.Updates) })
+			pre, updated = res.Before, res.Book
+		} else {
+			updated, err = bs.db.ModifyBook(id, func(b *database.Book) error {
+				if len(req.Updates) == 0 {
+					return database.ErrSkipBookWrite
+				}
+				pre = *b
+				applyUpdates(b, req.Updates)
+				return nil
+			})
 		}
-		updated, err := bs.db.ModifyBook(id, func(b *database.Book) error {
-			if len(req.Updates) == 0 {
-				return database.ErrSkipBookWrite
-			}
-			pre = *b
-			restore.apply(b)
-			applyUpdates(b, req.Updates)
-			return nil
-		})
 		if err != nil {
 			resp.addError(id, err.Error())
 			continue
@@ -194,19 +198,20 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				resp.addError(op.ID, "not found")
 				continue
 			}
-			restore, rerr := bs.restoreInputs(op.ID, op.Updates)
-			if rerr != nil {
-				resp.addError(op.ID, rerr.Error())
-				continue
+			var updated *database.Book
+			if isRestore(op.Updates) {
+				var res merge.TrashRestoreResult
+				res, err = merge.RestoreFromTrash(bs.db, op.ID, func(b *database.Book) { applyUpdates(b, op.Updates) })
+				updated = res.Book
+			} else {
+				updated, err = bs.db.ModifyBook(op.ID, func(b *database.Book) error {
+					if len(op.Updates) == 0 {
+						return database.ErrSkipBookWrite
+					}
+					applyUpdates(b, op.Updates)
+					return nil
+				})
 			}
-			updated, err := bs.db.ModifyBook(op.ID, func(b *database.Book) error {
-				if len(op.Updates) == 0 {
-					return database.ErrSkipBookWrite
-				}
-				restore.apply(b)
-				applyUpdates(b, op.Updates)
-				return nil
-			})
 			if err != nil {
 				resp.addError(op.ID, err.Error())
 				continue
@@ -263,39 +268,25 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				resp.addError(op.ID, "not found")
 				continue
 			}
-			// Restore: the shared rule (database.RestoreBookFromTrash), the
-			// same as the single-book restore. Until 2026-10-01 this cleared
-			// only the two deletion columns, so a book DeleteAudiobook had
-			// labelled "deleted" came back live but still labelled "deleted":
-			// hidden from ABS, and refused by a second DeleteAudiobook as
-			// "already soft deleted". A nil flag is still written as an
-			// explicit false; a live row already carrying that false (and no
-			// trash label) is left alone.
-			files, ferr := bs.db.GetBookFiles(op.ID)
-			if ferr != nil {
-				resp.addError(op.ID, ferr.Error())
-				continue
-			}
-			restore := trashRestore{requested: true, files: files, env: merge.TrashRestoreEnv()}
-			if restore.incumbent, err = versionprimary.IncumbentExcept(bs.db, groupOf(book), op.ID); err != nil {
-				resp.addError(op.ID, err.Error())
-				continue
-			}
-			updated, err := bs.db.ModifyBook(op.ID, func(b *database.Book) error {
-				if b.MarkedForDeletion != nil && !*b.MarkedForDeletion && b.MarkedForDeletionAt == nil &&
-					(b.LibraryState == nil || !strings.EqualFold(*b.LibraryState, "deleted")) {
-					return database.ErrSkipBookWrite
-				}
-				restore.apply(b)
-				return nil
-			})
+			// Restore: the shared rule (merge.RestoreFromTrash), the same as
+			// the single-book restore. Until 2026-10-01 this cleared only the
+			// two deletion columns, so a book DeleteAudiobook had labelled
+			// "deleted" came back live but still labelled "deleted": hidden
+			// from ABS, and refused by a second DeleteAudiobook as "already
+			// soft deleted". A row that is not in the trash (database.IsInTrash:
+			// a nil or false flag and no trash label) is left alone; until the
+			// review of #3649 only an explicit false was, so a live nil-flag
+			// primary went through the restore and yielded its flag.
+			res, err := merge.RestoreFromTrash(bs.db, op.ID, nil)
 			switch {
 			case err != nil:
 				resp.addError(op.ID, err.Error())
-			case updated == nil:
+			case res.Book == nil:
 				resp.addError(op.ID, "not found")
 			default:
-				bs.handOffPrimary(book, updated, map[string]any{"marked_for_deletion": false})
+				if res.Restored {
+					bs.handOffPrimary(book, res.Book, map[string]any{"marked_for_deletion": false})
+				}
 				resp.addSuccess(op.ID)
 			}
 
@@ -383,49 +374,11 @@ func (bs *BatchService) recordUserLocks(bookID string, updates map[string]any) e
 	return database.RecordUserOverrides(bs.db, bookID, userSet)
 }
 
-// trashRestore carries what database.RestoreBookFromTrash needs into a
-// ModifyBook callback, read before the write lock is taken. The zero value
-// (no restore requested) does nothing.
-type trashRestore struct {
-	requested bool
-	files     []database.BookFile
-	env       database.TrashRestoreEnv
-	// incumbent is the group's primary other than the restored row, read
-	// before the write (versionprimary.YieldToIncumbent).
-	incumbent string
-}
-
-// restoreInputs reads the restore's inputs when updates set
-// marked_for_deletion=false, which is a restore like the "restore" action.
-func (bs *BatchService) restoreInputs(id string, updates map[string]any) (trashRestore, error) {
-	if v, ok := updates["marked_for_deletion"].(bool); !ok || v {
-		return trashRestore{}, nil
-	}
-	files, err := bs.db.GetBookFiles(id)
-	if err != nil {
-		return trashRestore{}, fmt.Errorf("read files of %s: %w", id, err)
-	}
-	r := trashRestore{requested: true, files: files, env: merge.TrashRestoreEnv()}
-	book, err := bs.db.GetBookByID(id)
-	if err != nil {
-		return trashRestore{}, fmt.Errorf("read %s: %w", id, err)
-	}
-	if r.incumbent, err = versionprimary.IncumbentExcept(bs.db, groupOf(book), id); err != nil {
-		return trashRestore{}, err
-	}
-	return r, nil
-}
-
-// apply runs the shared restore rule on b, before applyUpdates writes the
-// deletion columns, so it sees whether the row was in the trash. A restored
-// row that was primary yields to the member that has held the flag since,
-// as the single-book restore does.
-func (r trashRestore) apply(b *database.Book) {
-	if !r.requested {
-		return
-	}
-	database.RestoreBookFromTrash(b, r.files, r.env)
-	versionprimary.YieldToIncumbent(b, r.incumbent)
+// isRestore reports whether a batch payload sets marked_for_deletion=false,
+// which is a restore like the "restore" action.
+func isRestore(updates map[string]any) bool {
+	v, ok := updates["marked_for_deletion"].(bool)
+	return ok && !v
 }
 
 func applyUpdates(book *database.Book, updates map[string]any) {
@@ -496,6 +449,11 @@ func applyUpdates(book *database.Book, updates map[string]any) {
 		book.FilePath = v
 	}
 	if v, ok := updates["library_state"].(string); ok {
+		// The trash label overwrites the state; remember it for a restore,
+		// as the other two writers of the label do.
+		if strings.EqualFold(strings.TrimSpace(v), "deleted") {
+			database.RememberLibraryStateBeforeTrash(book)
+		}
 		book.LibraryState = &v
 	}
 }

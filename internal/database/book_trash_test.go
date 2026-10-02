@@ -1,5 +1,5 @@
 // file: internal/database/book_trash_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e0be750-b46f-4059-ac27-c22ce7676874
 // last-edited: 2026-10-01
 
@@ -52,10 +52,20 @@ func TestRestoreLibraryStateFromTrash(t *testing.T) {
 		want     string
 	}{
 		{"kept state is the pre-trash state", strp("organized_source"), strp("organized"), in, env, "organized_source"},
-		{"recorded state wins over the label", strp("deleted"), strp("organized"), nil, env, "organized"},
+		{"recorded state wins over the label", strp("deleted"), strp("organized"), in, env, "organized"},
 		{"recorded imported stays imported", strp("deleted"), strp("imported"), in, env, "imported"},
-		{"label is case-insensitive", strp("Deleted"), strp("organized"), nil, env, "organized"},
-		{"nil state uses the record", nil, strp("organized"), nil, env, "organized"},
+		{"label is case-insensitive", strp("Deleted"), strp("organized"), in, env, "organized"},
+		{"nil state uses the record", nil, strp("organized"), in, env, "organized"},
+		// "organized" is what ABS lists, so it is never restored on a row
+		// whose present files do not prove it: kept, recorded or legacy.
+		{"recorded organized with no files is imported", strp("deleted"), strp("organized"), nil, env, "imported"},
+		{"kept organized with no files is imported (combine shell)", strp("organized"), nil, nil, env, "imported"},
+		{"kept organized with only missing files is imported", strp("organized"), nil, []BookFile{{FilePath: "/lib/x.m4b", Missing: true}}, env, "imported"},
+		{"kept organized with a file outside the root is imported", strp("organized"), nil, append(in, BookFile{FilePath: "/elsewhere/c.m4b"}), env, "imported"},
+		{"kept organized in the iTunes library is imported", strp("organized"), nil, []BookFile{{FilePath: "/media/iTunes/a.m4b"}}, TrashRestoreEnv{RootDir: "/media", ITunesRoots: []string{"/media/iTunes"}}, "imported"},
+		{"kept organized with present files inside the root stays", strp("organized"), nil, in, env, "organized"},
+		{"kept organized wins over a stale record", strp("organized"), strp("imported"), in, env, "organized"},
+		{"recorded organized with a file outside the root is imported", strp("deleted"), strp("organized"), []BookFile{{FilePath: "/elsewhere/c.m4b"}}, env, "imported"},
 		{"a recorded deleted is ignored", strp("deleted"), strp("deleted"), nil, env, "imported"},
 		{"legacy: present files inside the root", strp("deleted"), nil, in, env, "organized"},
 		{"legacy: a file outside the root", strp("deleted"), nil, append(in, BookFile{FilePath: "/elsewhere/c.m4b"}), env, "imported"},
@@ -86,11 +96,14 @@ func TestRestoreLibraryStateFromTrash(t *testing.T) {
 func TestRestoreBookFromTrash(t *testing.T) {
 	env := TrashRestoreEnv{RootDir: "/lib"}
 	now := time.Now()
+	in := []BookFile{{FilePath: "/lib/a.m4b"}}
 
 	// A trashed merge loser: bits cleared, unlinked, state restored.
 	b := &Book{MarkedForDeletion: new(true), MarkedForDeletionAt: &now, LibraryState: strp("deleted"),
 		PreTrashLibraryState: strp("organized"), MergedIntoBookID: strp("survivor")}
-	RestoreBookFromTrash(b, nil, env)
+	if !RestoreBookFromTrash(b, in, env) {
+		t.Errorf("a trashed row reported not restored")
+	}
 	if b.MarkedForDeletion == nil || *b.MarkedForDeletion || b.MarkedForDeletionAt != nil {
 		t.Errorf("trash bits not cleared: %v %v", b.MarkedForDeletion, b.MarkedForDeletionAt)
 	}
@@ -100,20 +113,37 @@ func TestRestoreBookFromTrash(t *testing.T) {
 
 	// Only the label marks it trashed: still a restore.
 	l := &Book{LibraryState: strp("deleted"), MergedIntoBookID: strp("s")}
-	RestoreBookFromTrash(l, []BookFile{{FilePath: "/lib/a.m4b"}}, env)
+	if !RestoreBookFromTrash(l, in, env) {
+		t.Errorf("a label-only trashed row reported not restored")
+	}
 	if l.MergedIntoBookID != nil || stateOf(l) != "organized" {
 		t.Errorf("label-only: merged=%v state=%q", l.MergedIntoBookID, stateOf(l))
 	}
-
-	// A live merge loser is not in the trash: only the explicit false is
-	// written; it stays linked and keeps its state.
-	live := &Book{LibraryState: strp("imported"), MergedIntoBookID: strp("survivor")}
-	RestoreBookFromTrash(live, []BookFile{{FilePath: "/lib/a.m4b"}}, env)
-	if live.MarkedForDeletion == nil || *live.MarkedForDeletion {
-		t.Errorf("explicit false not written")
-	}
-	if live.MergedIntoBookID == nil || stateOf(live) != "imported" {
-		t.Errorf("live row changed: merged=%v state=%q", live.MergedIntoBookID, stateOf(live))
-	}
 	RestoreBookFromTrash(nil, nil, env) // no panic
+}
+
+// A row that is not in the trash is left exactly as it is: "restoring" a live
+// row must not write its deletion columns, unlink a live merge loser or
+// relabel it (adversarial review of #3649, finding 1).
+func TestRestoreBookFromTrash_LiveRowIsANoOp(t *testing.T) {
+	env := TrashRestoreEnv{RootDir: "/lib"}
+	for _, flag := range []*bool{nil, new(false)} {
+		live := &Book{LibraryState: strp("imported"), MergedIntoBookID: strp("survivor"), MarkedForDeletion: flag,
+			IsPrimaryVersion: new(true)}
+		if RestoreBookFromTrash(live, []BookFile{{FilePath: "/lib/a.m4b"}}, env) {
+			t.Errorf("flag %v: a live row reported restored", flag)
+		}
+		if live.MarkedForDeletion != flag {
+			t.Errorf("flag %v: deletion flag rewritten to %v", flag, live.MarkedForDeletion)
+		}
+		if live.MergedIntoBookID == nil || stateOf(live) != "imported" {
+			t.Errorf("flag %v: live row changed: merged=%v state=%q", flag, live.MergedIntoBookID, stateOf(live))
+		}
+	}
+	if IsInTrash(&Book{MarkedForDeletion: new(false)}) || IsInTrash(&Book{}) || IsInTrash(nil) {
+		t.Errorf("a live row (nil or false flag, no label) reads as in the trash")
+	}
+	if !IsInTrash(&Book{MarkedForDeletion: new(true)}) || !IsInTrash(&Book{LibraryState: strp(" Deleted ")}) {
+		t.Errorf("a trashed row (flag or label) reads as live")
+	}
 }

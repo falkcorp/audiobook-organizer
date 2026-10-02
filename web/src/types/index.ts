@@ -1,7 +1,7 @@
 // file: web/src/types/index.ts
-// version: 1.21.0
+// version: 1.22.0
 // guid: 0d1e2f3a-4b5c-6d7e-8f9a-0b1c2d3e4f5a
-// last-edited: 2026-09-12
+// last-edited: 2026-10-01
 
 // Audiobook (Book) type
 export interface Audiobook {
@@ -54,6 +54,9 @@ export interface Audiobook {
   quantity?: number;
   marked_for_deletion?: boolean;
   marked_for_deletion_at?: string;
+  // The library_state a trash path overwrote with "deleted", put back by a
+  // restore. Absent on a live book.
+  pre_trash_library_state?: string;
   quarantine_reason?: string;
   quarantined_at?: string;
   organize_error?: string;
