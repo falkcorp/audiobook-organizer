@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
 // last-edited: 2026-10-02
 
@@ -467,9 +467,9 @@ type BookAtPathIndexReport struct {
 	// (pebble_store_atpath_markers.go) does not hold. The readers consult only
 	// the set, so for these the lookup fails OPEN: a row that cannot be
 	// decoded is invisible and its path can read as free. The set must be a
-	// superset of disk, so any count here is a bug. Verify re-adds these ids
-	// to the set (in memory only; it writes nothing to disk), which restores
-	// the fail-closed behaviour at once, and reports them so the bug is seen.
+	// superset of disk, so any count here is a bug. Verify only reports them;
+	// the rebuild op (maintenance.book-atpath-index-backfill) re-notes every
+	// still-undecodable row and so restores the set.
 	MarkersNotInSet int `json:"markers_not_in_set"`
 
 	// Samples are "<id> <path>" strings (keys, quoted, for malformed), at most
@@ -486,9 +486,7 @@ type BookAtPathIndexReport struct {
 func (r BookAtPathIndexReport) Complete() bool { return r.UndecodableRows == 0 }
 
 // VerifyBookAtPathIndex diffs the book_atpath: index against the book rows
-// from one snapshot. Read-only on disk; the one thing it changes is the
-// in-memory marker set, which it re-syncs to a superset of disk
-// (MarkersNotInSet).
+// from one snapshot. Read-only.
 //
 // Sequential for the same reason as the backfill: two single-cursor scans with
 // a map lookup per key. A few hundred milliseconds at library scale.
@@ -600,13 +598,9 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 	}
 	rep.SampleNotInSet = sampleSorted(append([]string(nil), notInSet...))
 	if len(notInSet) > 0 {
-		atpathMarkerLog.Error("verify book_atpath: %d undecodable marker(s) on disk were missing from the in-memory "+
-			"set, so lookups failed open for them; re-adding (sample %v)", len(notInSet), logger.SanitizeLogValue(fmt.Sprint(rep.SampleNotInSet)))
-		for _, id := range notInSet {
-			if err := p.noteUndecodableMarker(id); err != nil {
-				return rep, fmt.Errorf("verify book_atpath: re-add marker %s to the set: %w", id, err)
-			}
-		}
+		atpathMarkerLog.Error("verify book_atpath: %d undecodable marker(s) on disk are missing from the in-memory "+
+			"set, so lookups fail open for them; run maintenance.book-atpath-index-backfill (sample %v)",
+			len(notInSet), logger.SanitizeLogValue(fmt.Sprint(rep.SampleNotInSet)))
 	}
 	var unmarked []string
 	for id := range undecodable {

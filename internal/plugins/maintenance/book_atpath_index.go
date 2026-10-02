@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
 // last-edited: 2026-10-02
 
@@ -130,13 +130,12 @@ func verifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, reporter s
 			rep.UnmarkedUndecodable, summary)
 	}
 	if rep.MarkersNotInSet > 0 {
-		// Verify already re-added these ids to the in-memory set, so lookups
-		// fail closed again from here on. Still a failure: the set is supposed
-		// to be a superset of disk, so something lost them, and until the
-		// re-add every lookup skipped those undecodable rows.
-		return fmt.Errorf("book_atpath index: %d undecodable marker(s) on disk were missing from the in-memory "+
-			"marker set, so LiveBookIDsAtPath failed open for them; verify re-added them (sample ids: %v). "+
-			"This is a bug in the marker set's bookkeeping, please report it (%s)",
+		// The set is supposed to be a superset of disk, so something lost
+		// these ids, and every lookup skips those undecodable rows until the
+		// rebuild re-notes them. Verify stays read-only and only reports.
+		return fmt.Errorf("book_atpath index: %d undecodable marker(s) on disk are missing from the in-memory "+
+			"marker set, so LiveBookIDsAtPath fails open for them (sample ids: %v); run "+
+			"maintenance.book-atpath-index-backfill, and report this as a marker-set bookkeeping bug (%s)",
 			rep.MarkersNotInSet, rep.SampleNotInSet, summary)
 	}
 	if !rep.Complete() {
