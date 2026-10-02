@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-02
 
@@ -11,6 +11,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -52,12 +53,59 @@ type schedulerExtraOpParams struct {
 const (
 	asinBackfillTaskName = "asin_backfill"
 	asinBackfillOpID     = "metafetch.asin-backfill"
-	// asinBackfillInterval: a run after the first walks only books still
-	// missing an ASIN or ISBN, and skips without a request every one whose
-	// no-match marker is inside retry_after_days, so a 6h tick costs reads
-	// plus the books that changed since.
-	asinBackfillInterval = 6 * time.Hour
 )
+
+// asinBackfillInterval is scheduled.asin_backfill.interval (minutes, default
+// 360 = 6h; 0 disables the task). A run after the first walks only books
+// still missing an ASIN or ISBN, and skips without a request every one whose
+// no-match marker is inside retry_after_days, so a 6h tick costs reads plus
+// the books that changed since.
+func asinBackfillInterval() time.Duration {
+	mins := config.AppConfig.Scheduled.ASINBackfill.Interval
+	if mins <= 0 {
+		return 0
+	}
+	return time.Duration(mins) * time.Minute
+}
+
+// asinBackfillScopeParams reads only the book_ids key of a
+// metafetch.asin-backfill row's params.
+type asinBackfillScopeParams struct {
+	BookIDs []string `json:"book_ids"`
+}
+
+// hasActiveASINBackfillWalk reports whether a queued or running
+// metafetch.asin-backfill op is a FULL walk. A per-book run (book_ids set,
+// enqueued by the metadata-apply queue) does not count: it covers a handful
+// of books, and treating it as a walk would let a steady stream of applies
+// starve the scheduled walk indefinitely. Params that are empty or do not
+// parse count as a full walk (a resumed walk's params carry only its
+// cursor), so the tick skips rather than stacking a second walk.
+func (ts *TaskScheduler) hasActiveASINBackfillWalk() bool {
+	store := ts.deps.Store()
+	if store == nil {
+		return false
+	}
+	ops, err := store.ListActiveOperationsV2()
+	if err != nil {
+		return false
+	}
+	canonical := func(id string) string { return id }
+	if ts.deps.OpRegistry != nil {
+		canonical = ts.deps.OpRegistry.CanonicalDefID
+	}
+	want := canonical(asinBackfillOpID)
+	for _, op := range ops {
+		if canonical(op.DefID) != want {
+			continue
+		}
+		var p asinBackfillScopeParams
+		if op.Params == "" || json.Unmarshal([]byte(op.Params), &p) != nil || len(p.BookIDs) == 0 {
+			return true
+		}
+	}
+	return false
+}
 
 type asinBackfillTaskParams struct {
 	DryRun *bool `json:"dry_run"`
@@ -574,9 +622,10 @@ func (ts *TaskScheduler) registerAllTasks() {
 			// set survives a restart (the op is ResumeRestart, so a resumed
 			// walk is active again while previousRunID, in memory, is empty);
 			// previousRunID covers the moment between enqueue and the row
-			// becoming visible.
-			if ts.hasActiveV2Op(asinBackfillOpID) {
-				schedLog.Info("%s: a %s run is already queued or running, skipping this tick (source=%s)",
+			// becoming visible. Only a FULL walk blocks the tick: per-book
+			// runs from the metadata-apply queue (book_ids set) do not.
+			if ts.hasActiveASINBackfillWalk() {
+				schedLog.Info("%s: a full %s walk is already queued or running, skipping this tick (source=%s)",
 					asinBackfillTaskName, asinBackfillOpID, source)
 				return nil, nil
 			}
@@ -596,17 +645,18 @@ func (ts *TaskScheduler) registerAllTasks() {
 			ts.setPreviousRunID(asinBackfillTaskName, v2ID)
 			return v2ScheduledOp(v2ID, asinBackfillTaskName), nil
 		},
-		// Enabled when the op exists in this binary: the metafetch plugin was
-		// once listed but never linked into the server, so its ops were
-		// absent in prod while tests passed.
+		// Enabled when scheduled.asin_backfill.interval > 0 (default 6h; 0
+		// turns it off, mirroring metadata_upgrade) AND the op exists in this
+		// binary: the metafetch plugin was once listed but never linked into
+		// the server, so its ops were absent in prod while tests passed.
 		IsEnabled: func() bool {
-			if ts.deps.OpRegistry == nil {
+			if ts.deps.OpRegistry == nil || asinBackfillInterval() <= 0 {
 				return false
 			}
 			_, ok := ts.deps.OpRegistry.Def(asinBackfillOpID)
 			return ok
 		},
-		GetInterval: func() time.Duration { return asinBackfillInterval },
+		GetInterval: asinBackfillInterval,
 		// Off at startup: memdb warmup runs asynchronously for minutes after
 		// a restart, and the interval picks the walk up soon enough.
 		RunOnStart:             func() bool { return false },

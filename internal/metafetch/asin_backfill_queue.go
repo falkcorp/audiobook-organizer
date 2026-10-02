@@ -1,5 +1,5 @@
 // file: internal/metafetch/asin_backfill_queue.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d8a5f21-9c47-4e0b-b6d2-71f4e0a9c853
 // last-edited: 2026-10-02
 
@@ -20,7 +20,13 @@ package metafetch
 // last op this queue enqueued has not started yet, a flush keeps collecting
 // ids and re-arms instead of enqueuing a second one. So at most one run from
 // this queue is ever waiting, and every id that arrives meanwhile goes into
-// the next one.
+// the next one. A flush takes at most maxASINBackfillRunIDs ids; the rest stay
+// pending and go out in later runs, one at a time under the same rule.
+//
+// The pending set is in memory only, so a restart loses it. That is why Add
+// also clears the book's stored no-match markers (via the clear callback the
+// plugin supplies): with the markers gone, the scheduled full walk re-checks
+// the book on its next tick even if the per-book run never happens.
 
 import (
 	"context"
@@ -31,6 +37,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// maxASINBackfillRunIDs caps the book_ids of one run, so a bulk apply of
+// thousands of books becomes several bounded runs instead of one whose params
+// row and progress carry every id.
+const maxASINBackfillRunIDs = 500
 
 // DefaultASINBackfillDebounce is how long the queue waits after the first
 // book of a burst before enqueuing the run.
@@ -50,10 +61,16 @@ type ASINBackfillEnqueueFunc func(ctx context.Context, bookIDs []string) (string
 // ...). An error or an unknown id is treated as "not waiting".
 type ASINBackfillStatusFunc func(opID string) (string, error)
 
+// ASINBackfillClearFunc deletes a book's stored "searched, no match"
+// markers so the next scheduled walk looks at it again. Called synchronously
+// from Add; it should be cheap and must not block on the op.
+type ASINBackfillClearFunc func(bookID string)
+
 // ASINBackfillQueue coalesces per-book backfill requests into runs.
 type ASINBackfillQueue struct {
 	enqueue  ASINBackfillEnqueueFunc
 	status   ASINBackfillStatusFunc
+	clear    ASINBackfillClearFunc
 	debounce time.Duration
 	// afterFunc is time.AfterFunc; tests replace it to fire flushes by hand.
 	afterFunc func(time.Duration, func()) *time.Timer
@@ -61,40 +78,69 @@ type ASINBackfillQueue struct {
 	mu       sync.Mutex
 	pending  map[string]struct{}
 	armed    bool
+	timer    *time.Timer
+	stopped  bool
 	lastOpID string
 }
 
 // NewASINBackfillQueue builds a queue. debounce <= 0 uses
 // DefaultASINBackfillDebounce. status may be nil (then a new run is enqueued
-// on every flush that has ids).
-func NewASINBackfillQueue(enqueue ASINBackfillEnqueueFunc, status ASINBackfillStatusFunc, debounce time.Duration) *ASINBackfillQueue {
+// on every flush that has ids). clearMarkers may be nil (then markers are left alone
+// and a lost queue waits out the markers' retry window).
+func NewASINBackfillQueue(enqueue ASINBackfillEnqueueFunc, status ASINBackfillStatusFunc, clearMarkers ASINBackfillClearFunc, debounce time.Duration) *ASINBackfillQueue {
 	if debounce <= 0 {
 		debounce = DefaultASINBackfillDebounce
 	}
 	return &ASINBackfillQueue{
-		enqueue: enqueue, status: status, debounce: debounce,
+		enqueue: enqueue, status: status, clear: clearMarkers, debounce: debounce,
 		afterFunc: time.AfterFunc, pending: map[string]struct{}{},
 	}
 }
 
-// Add records a book for the next run and arms the flush timer if it is not
-// already armed.
+// Add clears the book's no-match markers, records it for the next run, and
+// arms the flush timer if it is not already armed. The marker clear happens
+// first and regardless of the queue's state: it is what keeps the book
+// reachable by the scheduled walk if this in-memory queue is lost.
 func (q *ASINBackfillQueue) Add(bookID string) {
 	if q == nil || bookID == "" {
 		return
 	}
+	if q.clear != nil {
+		q.clear(bookID)
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.stopped {
+		return
+	}
 	q.pending[bookID] = struct{}{}
 	q.armLocked()
 }
 
 func (q *ASINBackfillQueue) armLocked() {
-	if q.armed {
+	if q.armed || q.stopped {
 		return
 	}
 	q.armed = true
-	q.afterFunc(q.debounce, q.flush)
+	q.timer = q.afterFunc(q.debounce, q.flush)
+}
+
+// Stop cancels the armed flush and makes later Adds and flushes no-ops
+// (markers are still cleared). Ids still pending are dropped; their markers
+// were cleared on Add, so the scheduled walk picks them up. Safe on nil and
+// safe to call twice.
+func (q *ASINBackfillQueue) Stop() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.stopped = true
+	q.armed = false
+	if q.timer != nil {
+		q.timer.Stop()
+		q.timer = nil
+	}
 }
 
 // Pending returns the ids waiting for the next run, sorted (tests, metrics).
@@ -113,13 +159,15 @@ func (q *ASINBackfillQueue) pendingLocked() []string {
 	return ids
 }
 
-// flush enqueues every pending id as one run, unless the previous run from
-// this queue is still waiting to start: then the ids stay pending and the
-// timer is re-armed.
+// flush enqueues up to maxASINBackfillRunIDs pending ids (lowest first) as
+// one run, unless the previous run from this queue is still waiting to start:
+// then the ids stay pending and the timer is re-armed. Ids beyond the cap stay
+// pending and the timer is re-armed for them.
 func (q *ASINBackfillQueue) flush() {
 	q.mu.Lock()
 	q.armed = false
-	if len(q.pending) == 0 {
+	q.timer = nil
+	if q.stopped || len(q.pending) == 0 {
 		q.mu.Unlock()
 		return
 	}
@@ -131,7 +179,15 @@ func (q *ASINBackfillQueue) flush() {
 		}
 	}
 	ids := q.pendingLocked()
-	q.pending = map[string]struct{}{}
+	if len(ids) > maxASINBackfillRunIDs {
+		ids = ids[:maxASINBackfillRunIDs]
+	}
+	for _, id := range ids {
+		delete(q.pending, id)
+	}
+	if len(q.pending) > 0 {
+		q.armLocked()
+	}
 	q.mu.Unlock()
 
 	opID, err := q.enqueue(context.Background(), ids)
@@ -162,8 +218,9 @@ func needsIdentifierBackfill(book *database.Book) bool {
 // queueIdentifierBackfill hands a just-applied book that lacks an ASIN or ISBN
 // to metafetch.asin-backfill. It writes nothing itself.
 func (mfs *Service) queueIdentifierBackfill(id string, book *database.Book) {
-	if mfs.asinBackfillQueue == nil || !needsIdentifierBackfill(book) {
+	q := mfs.asinBackfillQueue.Load()
+	if q == nil || !needsIdentifierBackfill(book) {
 		return
 	}
-	mfs.asinBackfillQueue.Add(id)
+	q.Add(id)
 }

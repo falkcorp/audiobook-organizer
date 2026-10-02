@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
 // last-edited: 2026-10-02
 
@@ -234,6 +234,11 @@ type asinBackfillTally struct {
 	// book:asin index.
 	skippedManualOnly, skippedMerged atomic.Int64
 
+	// loadFailed: a book_ids run could not read this book. Not a provider
+	// error (no request was made), so it never feeds the consecutive-error
+	// breaker, and no marker is written: the next run tries it again.
+	loadFailed atomic.Int64
+
 	// asinSuspect: a book's EXISTING ASIN looked up to a product whose title
 	// or author disagrees with the book (a wrong ASIN from an older writer).
 	asinSuspect atomic.Int64
@@ -362,6 +367,8 @@ type asinBackfillResult struct {
 
 	SkippedManualOnly int64 `json:"skipped_manual_only"`
 	SkippedMerged     int64 `json:"skipped_merged"`
+	// LoadFailed counts book_ids the run could not read (logged, skipped).
+	LoadFailed int64 `json:"load_failed"`
 	// ASINSuspect counts books whose existing ASIN names a different
 	// product; each is listed in Proposals with via "asin_suspect".
 	ASINSuspect int64 `json:"asin_suspect"`
@@ -413,6 +420,7 @@ func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResu
 		ISBNLookups: t.isbnLookups.Load(), ISBNWritten: t.isbnWritten.Load(), ISBNNone: t.isbnNone.Load(),
 		SkippedRecentISBNMiss: t.skippedRecentISBNMiss.Load(),
 		SkippedManualOnly:     t.skippedManualOnly.Load(), SkippedMerged: t.skippedMerged.Load(),
+		LoadFailed:  t.loadFailed.Load(),
 		ASINSuspect: t.asinSuspect.Load(), ASINUnverified: t.asinUnverified.Load(),
 		SuspectReasons: suspect, UnverifiedReasons: unverified,
 		Proposals: proposals, ProposalsDropped: dropped,
@@ -493,9 +501,9 @@ func (p *Plugin) runASINBackfill(ctx context.Context, raw json.RawMessage, repor
 	if err := registry.ReporterSetResult(reporter, res); err != nil {
 		run.log.Warn("persisting the result failed: %s", logger.SanitizeLogValue(err.Error()))
 	}
-	run.log.Info("finished (dry_run=%t): %s; rejects=%v evidence=%v asin_suspect=%d %v asin_unverified=%d %v manual_only=%d merged=%d proposals_kept=%d proposals_dropped_by_cap=%d err=%v",
+	run.log.Info("finished (dry_run=%t): %s; rejects=%v evidence=%v asin_suspect=%d %v asin_unverified=%d %v manual_only=%d merged=%d load_failed=%d proposals_kept=%d proposals_dropped_by_cap=%d err=%v",
 		dry, run.tally.summary(dry), res.RejectReasons, res.Evidence, res.ASINSuspect, res.SuspectReasons,
-		res.ASINUnverified, res.UnverifiedReasons, res.SkippedManualOnly, res.SkippedMerged,
+		res.ASINUnverified, res.UnverifiedReasons, res.SkippedManualOnly, res.SkippedMerged, res.LoadFailed,
 		len(res.Proposals), res.ProposalsDropped, runErr)
 	return runErr
 }
@@ -552,7 +560,10 @@ func (r *asinBackfillRun) runBookIDs(ctx context.Context, reporter sdk.Reporter,
 	for _, id := range ids {
 		b, err := r.store.GetBookByID(strings.TrimSpace(id))
 		if err != nil {
-			return fmt.Errorf("load book %s: %w", id, err)
+			// One unreadable book must not fail the other ids of the batch.
+			r.tally.loadFailed.Add(1)
+			r.log.Warn("loading book %s failed; skipped: %s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
+			continue
 		}
 		if b == nil {
 			r.log.Warn("book %s not found; skipped", logger.SanitizeLogValue(id))

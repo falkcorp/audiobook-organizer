@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b86925c-8469-4216-83f5-c7733c9ff488
-// last-edited: 2026-09-27
+// last-edited: 2026-10-02
 
 // Unit tests for the task-scheduler and maintenance-window HTTP handlers,
 // moved verbatim (renamed to the SchedulerHandler receiver and its own
@@ -252,6 +252,7 @@ func acceptedIntFields() []taskIntField {
 		{"reconcile_scan", "interval_minutes", func() int { return config.AppConfig.Scheduled.Reconcile.Interval }},
 		{"itunes_sync", "interval_minutes", func() int { return config.AppConfig.ITunes.SyncInterval }},
 		{"metadata_upgrade", "interval_minutes", func() int { return config.AppConfig.Scheduled.MetadataUpgrade.Interval }},
+		{"asin_backfill", "interval_minutes", func() int { return config.AppConfig.Scheduled.ASINBackfill.Interval }},
 	}
 }
 
@@ -277,6 +278,9 @@ func rejectedFields() []struct{ task, field string } {
 		{"itunes_sync", "run_in_maintenance_window"},
 		{"metadata_upgrade", "enabled"},
 		{"metadata_upgrade", "run_in_maintenance_window"},
+		{"asin_backfill", "enabled"},
+		{"asin_backfill", "run_on_startup"},
+		{"asin_backfill", "run_in_maintenance_window"},
 	}
 }
 
