@@ -1,5 +1,5 @@
 // file: internal/batch/service.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-01
 
@@ -128,9 +128,12 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 		if isRestore(req.Updates) {
 			// marked_for_deletion=false is a restore like the "restore"
 			// action: the shared rule (merge.RestoreFromTrash) runs first, in
-			// the same write as the rest of the payload.
+			// the same write as the rest of the payload. The payload's
+			// hand-off runs inside it too, before it decides the restored
+			// row's merge redirect, so it is not repeated below.
 			var res merge.TrashRestoreResult
-			res, err = merge.RestoreFromTrash(bs.db, id, func(b *database.Book) { applyUpdates(b, req.Updates) })
+			res, err = merge.RestoreFromTrash(bs.db, id, func(b *database.Book) { applyUpdates(b, req.Updates) },
+				func(_, after *database.Book) { bs.handOffPrimary(book, after, req.Updates) })
 			pre, updated = res.Before, res.Book
 		} else {
 			updated, err = bs.db.ModifyBook(id, func(b *database.Book) error {
@@ -150,7 +153,9 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 			resp.addError(id, "not found")
 			continue
 		}
-		bs.handOffPrimary(book, updated, req.Updates)
+		if !isRestore(req.Updates) {
+			bs.handOffPrimary(book, updated, req.Updates)
+		}
 		var problems []string
 		if pre.ID != "" {
 			if _, herr := database.RecordBookEditHistory(bs.db, &pre, updated,
@@ -201,7 +206,8 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			var updated *database.Book
 			if isRestore(op.Updates) {
 				var res merge.TrashRestoreResult
-				res, err = merge.RestoreFromTrash(bs.db, op.ID, func(b *database.Book) { applyUpdates(b, op.Updates) })
+				res, err = merge.RestoreFromTrash(bs.db, op.ID, func(b *database.Book) { applyUpdates(b, op.Updates) },
+					func(_, after *database.Book) { bs.handOffPrimary(book, after, op.Updates) })
 				updated = res.Book
 			} else {
 				updated, err = bs.db.ModifyBook(op.ID, func(b *database.Book) error {
@@ -220,7 +226,9 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				resp.addError(op.ID, "not found")
 				continue
 			}
-			bs.handOffPrimary(book, updated, op.Updates)
+			if !isRestore(op.Updates) {
+				bs.handOffPrimary(book, updated, op.Updates)
+			}
 			if err := bs.recordUserLocks(op.ID, op.Updates); err != nil {
 				resp.addError(op.ID, err.Error())
 				continue
@@ -277,16 +285,15 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			// a nil or false flag and no trash label) is left alone; until the
 			// review of #3649 only an explicit false was, so a live nil-flag
 			// primary went through the restore and yielded its flag.
-			res, err := merge.RestoreFromTrash(bs.db, op.ID, nil)
+			// It hands off the group's primary itself, before it decides the
+			// restored row's merge redirect.
+			res, err := merge.RestoreFromTrash(bs.db, op.ID, nil, nil)
 			switch {
 			case err != nil:
 				resp.addError(op.ID, err.Error())
 			case res.Book == nil:
 				resp.addError(op.ID, "not found")
 			default:
-				if res.Restored {
-					bs.handOffPrimary(book, res.Book, map[string]any{"marked_for_deletion": false})
-				}
 				resp.addSuccess(op.ID)
 			}
 

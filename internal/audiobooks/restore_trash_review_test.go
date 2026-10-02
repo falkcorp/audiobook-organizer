@@ -1,5 +1,5 @@
 // file: internal/audiobooks/restore_trash_review_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d002b2d9-da13-4681-9c42-b8845f6cacf1
 // last-edited: 2026-10-01
 
@@ -198,4 +198,31 @@ func TestRestoreAudiobook_NilFlagGroupMemberKeepsRedirect(t *testing.T) {
 	f.RequireSinglePrimary(t, "g", inc)
 	require.Equal(t, "false", f.Flag(t, m), "the hand-off leaves the member non-primary")
 	require.False(t, absWouldRender(t, f.S, m), "so its redirect is kept")
+}
+
+// Second re-review of #3649, gap 1: a MergeBooks loser whose survivor is in
+// the trash too. The hand-off crowns the restored loser, so ABS lists it; the
+// hand-off now runs before the redirect decision, so its redirect to the
+// trashed survivor is removed and it renders as its own item. Until then the
+// callers handed off after the decision, and the crowned loser was listed by
+// ABS while its id still forwarded to the trashed survivor.
+func TestRestoreAudiobook_LoserOfTrashedSurvivorIsCrownedAndRedirectCleared(t *testing.T) {
+	f, svc := handoffFixture(t)
+	survivor := f.Book(t, vptest.Spec{ID: "survivor", Primary: "nil"})
+	loser := f.Book(t, vptest.Spec{ID: "loser", Primary: "nil"})
+	_, err := f.S.MintOrGetSyncID(loser)
+	require.NoError(t, err)
+	_, err = merge.NewService(f.S).MergeBooks([]string{survivor, loser}, survivor)
+	require.NoError(t, err)
+	gid := *restoredRow(t, f, loser).VersionGroupID
+	f.SoftDelete(t, survivor)
+	require.False(t, absWouldRender(t, f.S, loser), "precondition: the loser redirects")
+
+	_, err = svc.RestoreAudiobook(context.Background(), loser)
+	require.NoError(t, err)
+
+	f.RequireSinglePrimary(t, gid, loser)
+	b := restoredRow(t, f, loser)
+	require.True(t, database.ABSLibraryFilter().Matches(b), "the crowned loser is listed by ABS")
+	require.True(t, absWouldRender(t, f.S, loser), "and its redirect to the trashed survivor is gone")
 }

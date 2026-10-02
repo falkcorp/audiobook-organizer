@@ -1,5 +1,5 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-01
 
@@ -471,7 +471,11 @@ func TestAudiobookService_RestoreAudiobook_Success(t *testing.T) {
 	prevRoot := config.AppConfig.RootDir
 	config.AppConfig.RootDir = "/lib"
 	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
-	mockStore.EXPECT().GetBookByID("r-1").Return(deleted, nil)
+	// The restore reads the row, then re-reads it after the primary hand-off
+	// to decide its merge redirect: the second read returns what was written.
+	var written *database.Book
+	mockStore.EXPECT().GetBookByID("r-1").Return(deleted, nil).Once()
+	mockStore.EXPECT().GetBookByID("r-1").RunAndReturn(func(string) (*database.Book, error) { return written, nil }).Once()
 	mockStore.EXPECT().GetBookFiles("r-1").Return([]database.BookFile{{ID: "f-1", BookID: "r-1", FilePath: "/lib/A/B/b.m4b"}}, nil)
 	// The restore drops pending user-state moves of a restored merge loser.
 	mockStore.EXPECT().ScanPrefix("merge_user_state_pending:").Return(nil, nil)
@@ -481,6 +485,7 @@ func TestAudiobookService_RestoreAudiobook_Success(t *testing.T) {
 			if err := fn(&row); err != nil {
 				return nil, err
 			}
+			written = &row
 			return &row, nil
 		})
 
