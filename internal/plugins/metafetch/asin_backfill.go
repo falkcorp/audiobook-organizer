@@ -60,6 +60,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -107,6 +108,10 @@ const (
 	asinHistorySource     = "Audible (asin-backfill)"
 	asinHistoryChangeType = "fetched"
 	asinHistoryBatch      = "asin-backfill-"
+
+	// asinProposalSampleCap bounds the would-write list a run keeps in its
+	// result. The count is always exact; the cap is logged when it binds.
+	asinProposalSampleCap = 2000
 
 	asinISBNSearchResults  = 10
 	asinTitleSearchResults = 25
@@ -219,6 +224,17 @@ type asinBackfillTally struct {
 	// alongside a matched ASIN or from a lookup by an existing ASIN.
 	isbnLookups, isbnWritten, isbnNone, skippedRecentISBNMiss atomic.Int64
 
+	// skippedManualOnly: Doctor Who / Big Finish / Torchwood, which the
+	// owner applies by hand. skippedMerged: a book merged into another (a
+	// merge loser) is not a book of its own and must not join the
+	// book:asin index.
+	skippedManualOnly, skippedMerged atomic.Int64
+
+	// proposals is the would-write / written list, capped at
+	// asinProposalSampleCap; proposalsDropped counts what the cap left out.
+	proposals        []asinProposal
+	proposalsDropped int
+
 	searched    atomic.Int64 // books that reached the Audible search (Limit counts these)
 	consecutive atomic.Int64 // books in a row ending in a provider error
 
@@ -252,6 +268,30 @@ func (t *asinBackfillTally) summary(dry bool) string {
 		t.ambiguous.Load(), t.noMatch.Load(), t.errored.Load())
 }
 
+// asinProposal is one would-write (dry run) or write: what the owner reviews
+// before a live run, and what a live run can be limited to through book_ids.
+type asinProposal struct {
+	BookID       string   `json:"book_id"`
+	Title        string   `json:"title"`
+	ASIN         string   `json:"asin,omitempty"`
+	ISBN13       string   `json:"isbn13,omitempty"`
+	AudibleTitle string   `json:"audible_title,omitempty"`
+	Evidence     []string `json:"evidence,omitempty"`
+	// Via is "match" (searched + gate) or "asin_lookup" (ISBN by an
+	// existing ASIN).
+	Via string `json:"via"`
+}
+
+func (t *asinBackfillTally) propose(p asinProposal) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.proposals) >= asinProposalSampleCap {
+		t.proposalsDropped++
+		return
+	}
+	t.proposals = append(t.proposals, p)
+}
+
 // asinBackfillResult is the op's persisted result.
 type asinBackfillResult struct {
 	DryRun            bool           `json:"dry_run"`
@@ -277,6 +317,14 @@ type asinBackfillResult struct {
 	ISBNWritten           int64 `json:"isbn_written"`
 	ISBNNone              int64 `json:"isbn_none"`
 	SkippedRecentISBNMiss int64 `json:"skipped_recent_isbn_miss"`
+
+	SkippedManualOnly int64 `json:"skipped_manual_only"`
+	SkippedMerged     int64 `json:"skipped_merged"`
+
+	// Proposals lists the books written (or, in a dry run, that would be),
+	// up to asinProposalSampleCap; ProposalsDropped counts the rest.
+	Proposals        []asinProposal `json:"proposals,omitempty"`
+	ProposalsDropped int            `json:"proposals_dropped,omitempty"`
 }
 
 func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResult {
@@ -289,6 +337,8 @@ func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResu
 	for k, v := range t.evidence {
 		evidence[k] = v
 	}
+	proposals := append([]asinProposal(nil), t.proposals...)
+	dropped := t.proposalsDropped
 	t.mu.Unlock()
 	return asinBackfillResult{
 		DryRun: dry, Scanned: t.scanned.Load(), SkippedHasASIN: t.skippedHasASIN.Load(),
@@ -300,6 +350,8 @@ func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResu
 		Searched: t.searched.Load(), RejectReasons: rejects, Evidence: evidence, HistoryFailed: historyFailed,
 		ISBNLookups: t.isbnLookups.Load(), ISBNWritten: t.isbnWritten.Load(), ISBNNone: t.isbnNone.Load(),
 		SkippedRecentISBNMiss: t.skippedRecentISBNMiss.Load(),
+		SkippedManualOnly:     t.skippedManualOnly.Load(), SkippedMerged: t.skippedMerged.Load(),
+		Proposals: proposals, ProposalsDropped: dropped,
 	}
 }
 
@@ -377,8 +429,9 @@ func (p *Plugin) runASINBackfill(ctx context.Context, raw json.RawMessage, repor
 	if err := registry.ReporterSetResult(reporter, res); err != nil {
 		run.log.Warn("persisting the result failed: %s", logger.SanitizeLogValue(err.Error()))
 	}
-	run.log.Info("finished (dry_run=%t): %s; rejects=%v evidence=%v err=%v",
-		dry, run.tally.summary(dry), res.RejectReasons, res.Evidence, runErr)
+	run.log.Info("finished (dry_run=%t): %s; rejects=%v evidence=%v manual_only=%d merged=%d proposals_kept=%d proposals_dropped_by_cap=%d err=%v",
+		dry, run.tally.summary(dry), res.RejectReasons, res.Evidence, res.SkippedManualOnly, res.SkippedMerged,
+		len(res.Proposals), res.ProposalsDropped, runErr)
 	return runErr
 }
 
@@ -456,15 +509,35 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 	t := r.tally
 	t.scanned.Add(1)
 
+	hasASIN := b.ASIN != nil && strings.TrimSpace(*b.ASIN) != ""
 	switch {
 	case b.MarkedForDeletion != nil && *b.MarkedForDeletion:
 		t.skippedDeleted.Add(1)
 		return nil
-	case b.ASIN != nil && strings.TrimSpace(*b.ASIN) != "":
-		if !bookHasNoISBN(&b) {
-			t.skippedHasASIN.Add(1)
-			return nil
-		}
+	case b.MergedIntoBookID != nil && strings.TrimSpace(*b.MergedIntoBookID) != "":
+		t.skippedMerged.Add(1)
+		return nil
+	case hasASIN && !bookHasNoISBN(&b):
+		t.skippedHasASIN.Add(1)
+		return nil
+	}
+
+	searchTitle := strings.TrimSpace(b.Title)
+	if searchTitle == "" && b.TranscribedTitle != nil {
+		searchTitle = strings.TrimSpace(*b.TranscribedTitle)
+	}
+	// Owner rule: Doctor Who / Big Finish / Torchwood are applied by hand,
+	// never by a bulk op. Checked on the book (path, title, the transcribed
+	// title it would be searched by, series row, every file path) before any
+	// Audible call; the candidate side is checked after the search.
+	if skip, err := r.manualOnly(&b, searchTitle); err != nil {
+		r.bookError(b.ID, "owner-manual check", err)
+		return nil
+	} else if skip {
+		t.skippedManualOnly.Add(1)
+		return nil
+	}
+	if hasASIN {
 		return r.fillISBNByASIN(ctx, &b)
 	}
 
@@ -491,10 +564,7 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 		}
 	}
 
-	title := strings.TrimSpace(b.Title)
-	if title == "" && b.TranscribedTitle != nil {
-		title = strings.TrimSpace(*b.TranscribedTitle)
-	}
+	title := searchTitle
 	if title == "" {
 		t.skippedNoTitle.Add(1)
 		return nil
@@ -526,9 +596,20 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// Any failed search leaves the candidate set incomplete -- a second
-		// passer could be the one we did not see -- so no decision is taken
-		// and no marker written.
+		// A request Audible refuses as malformed for THIS book (400, 404,
+		// 422) will fail the same way every run: remember it like a miss so
+		// it is not retried every run, and do not let a run of them abort
+		// the op as an outage would.
+		if isPermanentRequestError(err) {
+			t.errored.Add(1)
+			r.log.Warn("Audible refused the search for this book; remembered as a miss: book_id=%s err=%s",
+				logger.SanitizeLogValue(b.ID), logger.SanitizeLogValue(err.Error()))
+			r.markRaw(asinMissKey(b.ID), asinMissMarker{At: r.now().UTC(), Outcome: "bad_request"})
+			return nil
+		}
+		// Any other failed search leaves the candidate set incomplete -- a
+		// second passer could be the one we did not see -- so no decision is
+		// taken and no marker written.
 		r.bookError(b.ID, "Audible search", err)
 		if t.consecutive.Add(1) >= asinBackfillMaxConsecutiveErrors {
 			return fmt.Errorf("%s: %d books in a row failed their Audible search; stopping (last: %w)",
@@ -537,6 +618,15 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 		return nil
 	}
 	t.consecutive.Store(0)
+
+	for _, c := range cands {
+		if candidateManualOnly(c) {
+			// Audible answering with a Doctor Who / Big Finish / Torchwood
+			// product means this book is one, whatever its own row says.
+			t.skippedManualOnly.Add(1)
+			return nil
+		}
+	}
 
 	d := decideASIN(facts, cands)
 	t.addDecision(d)
@@ -643,6 +733,7 @@ func (r *asinBackfillRun) apply(bookID, title string, d asinDecision) {
 		if d.ISBN != "" {
 			t.isbnWritten.Add(1)
 		}
+		t.propose(asinProposal{BookID: bookID, Title: title, ASIN: d.ASIN, ISBN13: d.ISBN, AudibleTitle: d.Title, Evidence: d.Evidence, Via: "match"})
 		r.log.Info("would write asin=%s isbn13=%s book_id=%s title=%s audible_title=%s evidence=%s",
 			d.ASIN, writtenOrNone(d.ISBN != "", d.ISBN), logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(title), logger.SanitizeLogValue(d.Title), evidence)
 		return
@@ -685,9 +776,12 @@ func (r *asinBackfillRun) apply(bookID, title string, d asinDecision) {
 		r.bookError(bookID, "write asin", err)
 	default:
 		t.matchedWritten.Add(1)
+		p := asinProposal{BookID: bookID, Title: title, ASIN: asin, AudibleTitle: d.Title, Evidence: d.Evidence, Via: "match"}
 		if isbnWritten {
 			t.isbnWritten.Add(1)
+			p.ISBN13 = isbn
 		}
+		t.propose(p)
 		r.log.Info("wrote asin=%s isbn13=%s book_id=%s title=%s audible_title=%s evidence=%s",
 			asin, writtenOrNone(isbnWritten, isbn), logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(title), logger.SanitizeLogValue(d.Title), evidence)
 	}
@@ -815,6 +909,10 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book) 
 	isbn := ""
 	// The product must be the one asked for: Audible can answer an old ASIN
 	// with its replacement, and that product's ISBN is not this book's.
+	if id != nil && candidateManualOnly(*id) {
+		t.skippedManualOnly.Add(1)
+		return nil
+	}
 	if id != nil && strings.EqualFold(strings.TrimSpace(id.ASIN), asin) {
 		isbn = normISBN13(id.ISBN)
 	}
@@ -826,6 +924,7 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book) 
 
 	if r.dry {
 		t.isbnWritten.Add(1)
+		t.propose(asinProposal{BookID: b.ID, Title: b.Title, ASIN: asin, ISBN13: isbn, AudibleTitle: id.Title, Via: "asin_lookup"})
 		r.log.Info("would write isbn13=%s from asin=%s book_id=%s",
 			isbn, asin, logger.SanitizeLogValue(b.ID))
 		return nil
@@ -853,7 +952,48 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book) 
 		r.bookError(b.ID, "write isbn", err)
 	default:
 		t.isbnWritten.Add(1)
+		t.propose(asinProposal{BookID: b.ID, Title: b.Title, ASIN: asin, ISBN13: isbn, AudibleTitle: id.Title, Via: "asin_lookup"})
 		r.log.Info("wrote isbn13=%s from asin=%s book_id=%s", isbn, asin, logger.SanitizeLogValue(b.ID))
 	}
 	return nil
+}
+
+// manualOnly reports whether the book belongs to a library the owner applies
+// by hand (applygate's Doctor Who / Big Finish / Torchwood rule). A store
+// read failure is an error, never "not manual-only".
+func (r *asinBackfillRun) manualOnly(b *database.Book, searchTitle string) (bool, error) {
+	g := applygate.BulkManualOnlyGuard(r.store, r.store, b, searchTitle)
+	if g.ReadErr != "" {
+		return false, errors.New(g.ReadErr)
+	}
+	reason, _ := applygate.ManualOnlyDetail(b, nil, applygate.TranscribedSearch{Query: searchTitle}, g)
+	return reason != "", nil
+}
+
+// candidateManualOnly reports whether an Audible product names a manual-only
+// library in its title, subtitle or any series.
+func candidateManualOnly(c metadata.AudibleIdentity) bool {
+	if applygate.IsOwnerManualOnly(c.Title, c.Subtitle) {
+		return true
+	}
+	for _, s := range c.Series {
+		if applygate.IsOwnerManualOnly("", s.Title) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPermanentRequestError reports whether err is Audible refusing the request
+// itself (400, 404, 422), as opposed to throttling, auth or an outage.
+func isPermanentRequestError(err error) bool {
+	var pe *metadata.ProviderStatusError
+	if !errors.As(err, &pe) {
+		return false
+	}
+	switch pe.Status {
+	case 400, 404, 422:
+		return true
+	}
+	return false
 }

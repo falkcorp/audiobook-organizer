@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b8f4c71-6e05-4d39-a1c7-9e3d0f5a8b26
 // last-edited: 2026-10-01
 
@@ -622,5 +622,109 @@ func TestASINBackfill_ISBNLockedAndLookupError(t *testing.T) {
 	}
 	if raw, _ := s2.GetRaw(isbnMissKey(b.ID)); len(raw) != 0 {
 		t.Fatal("a lookup error recorded an ISBN miss")
+	}
+}
+
+// Owner rule: Doctor Who / Big Finish / Torchwood are never written by a bulk
+// op. The book side is checked before any Audible call; Audible answering
+// with such a product stops the book too.
+func TestASINBackfill_ManualOnlyBooksAreNeverWritten(t *testing.T) {
+	dw := metadata.AudibleIdentity{ASIN: "BDW0000001", Title: "Doctor Who: The Chimes of Midnight", Authors: []string{"Robert Shearman"}, RuntimeMin: 120,
+		ISBN: "9781844350001"}
+	fa := &fakeAudible{
+		byTitle: map[string][]metadata.AudibleIdentity{
+			"the chimes of midnight": {dw},
+			"red rising":             {rrProduct()},
+		},
+		byASIN: map[string]*metadata.AudibleIdentity{"BDW0000001": &dw},
+	}
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, "Robert Shearman")
+	byPath := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ISBN13: new(isbnRR), FilePath: "/books/Big Finish/Red Rising.m4b"})
+	byTitle := mkBook(t, s, &database.Book{Title: "Doctor Who: Spare Parts", AuthorID: &aid})
+	byCandidate := mkBook(t, s, &database.Book{Title: "The Chimes of Midnight", AuthorID: &aid})
+	byLookup := mkBook(t, s, &database.Book{Title: "Chimes", AuthorID: &aid, ASIN: new("BDW0000001")})
+
+	res := runASIN(t, p, `{"dry_run":false}`).res(t)
+	if res.SkippedManualOnly != 4 {
+		t.Fatalf("skipped_manual_only = %d, want 4 (result %+v)", res.SkippedManualOnly, res)
+	}
+	for _, b := range []*database.Book{byPath, byTitle, byCandidate} {
+		if got := asinOf(t, s, b.ID); got != "" {
+			t.Fatalf("manual-only book %q got asin %q", b.Title, got)
+		}
+	}
+	if i13, _ := isbnOf(t, s, byLookup.ID); i13 != "" {
+		t.Fatalf("manual-only book got isbn %q from the asin lookup", i13)
+	}
+	if res.MatchedWritten != 0 || res.ISBNWritten != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+// A merge loser is not a book of its own: no search, no write.
+func TestASINBackfill_MergedBookIsSkipped(t *testing.T) {
+	fa := rrFake()
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, "Pierce Brown")
+	keeper := mkBook(t, s, &database.Book{Title: "Golden Son", AuthorID: &aid})
+	loser := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ISBN13: new(isbnRR), MergedIntoBookID: new(keeper.ID)})
+
+	res := runASIN(t, p, `{"dry_run":false,"book_ids":["`+loser.ID+`"]}`).res(t)
+	if res.SkippedMerged != 1 || fa.calls.Load() != 0 || asinOf(t, s, loser.ID) != "" {
+		t.Fatalf("result = %+v calls = %d", res, fa.calls.Load())
+	}
+}
+
+// A dry run leaves a reviewable list: book, ASIN, ISBN, the Audible title and
+// the evidence, for both paths.
+func TestASINBackfill_DryRunListsProposals(t *testing.T) {
+	prod := rrProduct()
+	fa := rrFake()
+	fa.byASIN = map[string]*metadata.AudibleIdentity{"B00I2VWW5U": &prod}
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, "Pierce Brown")
+	match := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ISBN13: new(isbnRR)})
+	lookup := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00I2VWW5U")})
+
+	res := runASIN(t, p, `{}`).res(t)
+	if !res.DryRun || len(res.Proposals) != 2 || res.ProposalsDropped != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	got := map[string]asinProposal{}
+	for _, pr := range res.Proposals {
+		got[pr.BookID] = pr
+	}
+	if pr := got[match.ID]; pr.Via != "match" || pr.ASIN != "B00I2VWW5U" || pr.AudibleTitle != "Red Rising" || len(pr.Evidence) == 0 {
+		t.Fatalf("match proposal = %+v", pr)
+	}
+	if pr := got[lookup.ID]; pr.Via != "asin_lookup" || pr.ISBN13 != isbnRR {
+		t.Fatalf("lookup proposal = %+v", pr)
+	}
+	if asinOf(t, s, match.ID) != "" {
+		t.Fatal("dry run wrote")
+	}
+}
+
+// Audible refusing one book's request (400) is remembered like a miss and
+// does not count toward the outage trip.
+func TestASINBackfill_BadRequestIsRememberedNotTripped(t *testing.T) {
+	fa := &fakeAudible{err: fmt.Errorf("title+author: %w", &metadata.ProviderStatusError{Provider: "audible", Status: 400})}
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, "Pierce Brown")
+	var ids []string
+	for i := 0; i < asinBackfillMaxConsecutiveErrors+5; i++ {
+		ids = append(ids, mkBook(t, s, &database.Book{Title: fmt.Sprintf("Weird %d", i), AuthorID: &aid}).ID)
+	}
+	rep := &asinTestReporter{}
+	if err := p.runASINBackfill(context.Background(), json.RawMessage(`{"dry_run":false}`), rep); err != nil {
+		t.Fatalf("run aborted on per-book 400s: %v", err)
+	}
+	if raw, _ := s.GetRaw(asinMissKey(ids[0])); len(raw) == 0 {
+		t.Fatal("a 400 was not remembered")
+	}
+	before := fa.calls.Load()
+	if res := runASIN(t, p, `{"dry_run":false}`).res(t); res.SkippedRecentMiss != int64(len(ids)) || fa.calls.Load() != before {
+		t.Fatalf("second run result = %+v", res)
 	}
 }
