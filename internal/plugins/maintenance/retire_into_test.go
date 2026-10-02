@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
 // last-edited: 2026-10-02
 
@@ -251,17 +251,25 @@ func TestRetireInto_RevertWithTheIncumbentGoneLeavesOnePrimary(t *testing.T) {
 	require.Equal(t, []string{l}, d.livePrimaries(t, gid))
 }
 
-// groupReadFailsOnce fails the first version-group read of group: the
-// soft-delete revert's incumbent read.
+// groupReadFailsOnce fails one version-group read of group: the nth (1 when
+// zero), by default the soft-delete revert's incumbent read.
 type groupReadFailsOnce struct {
 	*database.PebbleStore
 	group string
+	nth   int32
 	armed atomic.Bool
+	reads atomic.Int32
 }
 
 func (g *groupReadFailsOnce) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
-	if groupID == g.group && g.armed.CompareAndSwap(true, false) {
-		return nil, errors.New("version group read failed")
+	if groupID == g.group {
+		n := g.nth
+		if n == 0 {
+			n = 1
+		}
+		if g.reads.Add(1) == n && g.armed.CompareAndSwap(true, false) {
+			return nil, errors.New("version group read failed")
+		}
 	}
 	return g.PebbleStore.GetBooksByVersionGroup(groupID)
 }
@@ -299,4 +307,144 @@ func TestRetireInto_FailedSoftDeleteRevertRefusesTheBooksOtherRows(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, d.live(t, "L"))
 	require.Equal(t, []string{l}, d.livePrimaries(t, gid))
+}
+
+// retiredInOp soft-deletes book id with a stamp journaled in op (as a
+// retire's last step), merged into mergedInto when it is not "".
+func retiredInOp(t *testing.T, d *dcFixture, op, id, mergedInto string) {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, op)
+	require.NoError(t, w.Journal(id, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(now)))
+	yes := true
+	_, err := d.s.ModifyBook(id, func(b *database.Book) error {
+		b.MarkedForDeletion, b.MarkedForDeletionAt = &yes, &now
+		if mergedInto != "" {
+			b.MergedIntoBookID = &mergedInto
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+// groupOf puts the books in group gid with the given flags.
+func groupOf(t *testing.T, d *dcFixture, gid string, flags map[string]*bool) {
+	t.Helper()
+	for id, v := range flags {
+		_, err := d.s.ModifyBook(id, func(b *database.Book) error { b.VersionGroupID, b.IsPrimaryVersion = &gid, v; return nil })
+		require.NoError(t, err)
+	}
+}
+
+// A retired book comes back with a stale explicit false, its group has no
+// live primary (the other member is in the trash) and no demote row of the
+// op follows to crown it. The soft-delete revert must hand the group off
+// itself (EnsureSinglePrimary), as a trash restore does, or the group is
+// left with no primary at all.
+func TestRevert_SoftDeleteWithNoIncumbentHandsTheGroupOff(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	no := false
+	groupOf(t, d, "vg-dune", map[string]*bool{s: &no, l: &no})
+	retiredInOp(t, d, "op-old", s, "")
+	retiredInOp(t, d, "op-x", l, "")
+	res, err := audiobooks.NewRevertService(d.s).RevertOperation("op-x")
+	require.NoError(t, err)
+	require.Empty(t, res.HandOffFailed)
+	require.Equal(t, []string{l}, d.livePrimaries(t, "vg-dune"))
+}
+
+// The same hand-off failing (its group read errors) is reported in the
+// result, with the row still counted restored, not only logged.
+func TestRevert_FailedHandOffIsReported(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	no := false
+	groupOf(t, d, "vg-dune", map[string]*bool{s: &no, l: &no})
+	retiredInOp(t, d, "op-old", s, "")
+	retiredInOp(t, d, "op-x", l, "")
+	failing := &groupReadFailsOnce{PebbleStore: d.s, group: "vg-dune", nth: 2} // 1: incumbent, 2: hand-off
+	failing.armed.Store(true)
+	res, err := audiobooks.NewRevertService(failing).RevertOperation("op-x")
+	require.NoError(t, err)
+	require.False(t, failing.armed.Load(), "the hand-off's group read failed")
+	require.Equal(t, 1, res.Restored)
+	require.Len(t, res.HandOffFailed, 1, "%+v", res)
+	require.Contains(t, res.HandOffFailed[0], "vg-dune")
+	require.Contains(t, res.Summary(), "without their version group's primary hand-off")
+	require.True(t, d.live(t, "L"))
+}
+
+// A row of a retired book journaled AFTER its soft-delete (fs-regroup-xml
+// moves external ids off the shell after retiring it; a title here) must
+// wait for the soft-delete revert and be refused when it fails. Before, the
+// plan reverted it first (newest first), and it landed on a book that
+// stayed retired.
+func TestRevert_RowsAfterAFailedSoftDeleteAreRefused(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	no, yes := false, true
+	groupOf(t, d, "vg-dune", map[string]*bool{s: &no, l: &yes})
+	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-b")
+	_, err := retireInto(context.Background(), d.p, d.s, w, time.Now, dcFixerID, l, s, nil)
+	require.NoError(t, err)
+	lb, err := d.s.GetBookByID(l)
+	require.NoError(t, err)
+	was := lb.Title
+	require.NoError(t, w.Step(l, "metadata_update", "title", was, "Retired shell", func() error {
+		_, err := d.s.ModifyBook(l, func(b *database.Book) error { b.Title = "Retired shell"; return nil })
+		return err
+	}))
+
+	failing := &groupReadFailsOnce{PebbleStore: d.s, group: "vg-dune"}
+	failing.armed.Store(true)
+	_, err = audiobooks.NewRevertService(failing).RevertOperation("op-b")
+	require.Error(t, err)
+	require.False(t, d.live(t, "L"))
+	lb, err = d.s.GetBookByID(l)
+	require.NoError(t, err)
+	require.Equal(t, "Retired shell", lb.Title, "the later row waits for the book's soft-delete revert")
+
+	_, err = audiobooks.NewRevertService(d.s).RevertOperation("op-b")
+	require.NoError(t, err)
+	lb, err = d.s.GetBookByID(l)
+	require.NoError(t, err)
+	require.Equal(t, was, lb.Title)
+	require.Equal(t, []string{l}, d.livePrimaries(t, "vg-dune"))
+}
+
+// fs-regroup-xml journals an unset shell flag as OldValue "": the demote
+// revert writes nil back, which every visibility path reads as primary, and
+// Crown is only for an explicit true. The revert hands the group off so the
+// live book at nil never sits next to the group's explicit primary.
+func TestRevert_NilDemoteRestoreLeavesOnePrimary(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	no, yes := false, true
+	groupOf(t, d, "vg-dune", map[string]*bool{s: &yes, l: &no})
+	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-y")
+	require.NoError(t, w.Journal(l, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "", "false"))
+	_, err := audiobooks.NewRevertService(d.s).RevertOperation("op-y")
+	require.NoError(t, err)
+	require.Len(t, d.livePrimaries(t, "vg-dune"), 1)
+}
+
+// A retired book carrying a true (written by a demote revert while it was
+// in the trash) comes back still merged into a live survivor that is not in
+// its group, so there is no incumbent to yield to and Crown never reaches
+// it. It must come back explicit false: ABS does not read MergedIntoBookID
+// and would list it as a primary next to the survivor.
+func TestRevert_RestoredMergeLoserComesBackNonPrimary(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	yes := true
+	groupOf(t, d, "vg-l", map[string]*bool{l: &yes})
+	retiredInOp(t, d, "op-x", l, s)
+	_, err := audiobooks.NewRevertService(d.s).RevertOperation("op-x")
+	require.NoError(t, err)
+	lb, err := d.s.GetBookByID(l)
+	require.NoError(t, err)
+	require.False(t, lb.IsSoftDeleted())
+	require.NotNil(t, lb.IsPrimaryVersion)
+	require.False(t, *lb.IsPrimaryVersion, "a live merge loser is never a primary")
 }
