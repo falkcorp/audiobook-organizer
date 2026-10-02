@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
 // last-edited: 2026-10-02
 
@@ -492,11 +492,6 @@ func (r BookAtPathIndexReport) Complete() bool { return r.UndecodableRows == 0 }
 // a map lookup per key. A few hundred milliseconds at library scale.
 func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathIndexReport, error) {
 	var rep BookAtPathIndexReport
-	built, err := p.bookAtPathIndexBuilt()
-	if err != nil {
-		return rep, err
-	}
-	rep.SentinelSet = built
 
 	// No backfill/rebuild may run meanwhile: a worker opens a brief window in
 	// which its marker is on disk but not yet re-noted in the set, which would
@@ -506,6 +501,15 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 		return rep, fmt.Errorf("verify book_atpath: wait for run lock: %w", err)
 	}
 	defer unlockRun()
+
+	// Read the sentinel only after the lock: a verify that waited on the first
+	// backfill must see the sentinel that run wrote, or it would report
+	// sentinel_set=false and the op would skip its UnmarkedUndecodable gate.
+	built, err := p.bookAtPathIndexBuilt()
+	if err != nil {
+		return rep, err
+	}
+	rep.SentinelSet = built
 
 	// The in-memory marker set is copied with the snapshot so the two can be
 	// compared. Unlike the readers, verify range-scans the marker family on

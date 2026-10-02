@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_markers_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4b7e0c2d-9f13-4a68-b5d1-7e2c8a90f346
 // last-edited: 2026-10-02
 
@@ -435,8 +435,12 @@ func TestUndecodableMarker_UpdateBookCommitBeforeBackfillMarkerCommit(t *testing
 		if _, ok := s.undecodableMarkerMayExist(b.ID); !ok {
 			t.Errorf("worker staged a marker it had not noted in the set")
 		}
-		// Repaired out of band, then an ordinary write commits first.
-		setRawBookRow(t, s, b.ID, goodJSON)
+		// Repaired out of band, then an ordinary write commits first. This
+		// runs on the backfill worker goroutine, so no t.Fatal here.
+		if err := s.db.Set([]byte("book:"+b.ID), []byte(goodJSON), pebble.Sync); err != nil {
+			t.Errorf("repair row: %v", err)
+			return
+		}
 		cur, err := s.GetBookByID(b.ID)
 		if err != nil || cur == nil {
 			t.Errorf("GetBookByID after repair: %v %v", cur, err)
