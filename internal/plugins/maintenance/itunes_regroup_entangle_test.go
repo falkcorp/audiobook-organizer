@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
 // last-edited: 2026-10-01
 
@@ -772,5 +772,109 @@ func TestITunesRegroup_RefusesWithoutRootDir(t *testing.T) {
 	err := p.runITunesRegroup(context.Background(), raw, &fakeReporter{})
 	if err == nil || !strings.Contains(err.Error(), "root_dir") {
 		t.Fatalf("err = %v, want a root_dir refusal", err)
+	}
+}
+
+// rgSeedFileAt adds a book_file row at path carrying pid, plus its itunes
+// ext-id mapping.
+func rgSeedFileAt(t *testing.T, s *database.PebbleStore, bookID, pid, path string) {
+	t.Helper()
+	if err := s.CreateBookFile(&database.BookFile{BookID: bookID, ITunesPersistentID: pid, FilePath: path}); err != nil {
+		t.Fatalf("CreateBookFile(%s,%s): %v", bookID, pid, err)
+	}
+	if err := s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: pid, BookID: bookID}); err != nil {
+		t.Fatalf("CreateExternalIDMapping(%s): %v", pid, err)
+	}
+}
+
+// A group whose files already all sit on one book renames that book to the
+// iTunes album title -- unless the book is a library-folder copy (a file
+// under the root, or organized). Owner rule: the library copy is canonical
+// and its metadata comes from the metadata pipeline, never from iTunes album
+// tags. The iTunes-only control is still retitled. "becomes library copy
+// after plan" checks the apply-time recheck keeps the title too.
+func TestITunesRegroupApply_LibraryCopyKeepsTitle(t *testing.T) {
+	cases := []struct {
+		name      string
+		dir       string // file directory for both tracks
+		organized bool
+		afterPlan func(t *testing.T, s *database.PebbleStore, id string)
+		wantKept  bool
+		planKeeps bool
+	}{
+		{name: "library copy under root", dir: rgRoot + "/Author/Book", wantKept: true, planKeeps: true},
+		{name: "organized with iTunes-tree files", dir: rgITunes + "/Album", organized: true, wantKept: true, planKeeps: true},
+		{name: "control: iTunes-only book is retitled", dir: rgITunes + "/Album", wantKept: false},
+		{name: "becomes library copy after plan", dir: rgITunes + "/Album", wantKept: true,
+			afterPlan: func(t *testing.T, s *database.PebbleStore, id string) {
+				if _, err := s.ModifyBook(id, func(b *database.Book) error {
+					st := "organized"
+					b.LibraryState = &st
+					return nil
+				}); err != nil {
+					t.Fatalf("ModifyBook: %v", err)
+				}
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := regroupStore(t)
+			bk := &database.Book{Title: "Canonical Title"}
+			if tc.organized {
+				st := "organized"
+				bk.LibraryState = &st
+			}
+			b, err := s.CreateBook(bk)
+			if err != nil || b == nil {
+				t.Fatalf("CreateBook: %v", err)
+			}
+			rgSeedFileAt(t, s, b.ID, "p1", tc.dir+"/01.m4b")
+			rgSeedFileAt(t, s, b.ID, "p2", tc.dir+"/02.m4b")
+
+			p := &Plugin{}
+			rep := &fakeReporter{}
+			snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+			if err != nil {
+				t.Fatalf("buildRegroupSnapshot: %v", err)
+			}
+			plan := itunesservice.PlanRegroup([]itunesservice.HealGroup{{Title: "iTunes Album Tag", PIDs: []string{"p1", "p2"}}}, snap)
+			a := plan.Groups[0]
+			if a.Target != b.ID || len(a.Moves) != 0 || plan.AlreadyCorrect != 1 {
+				t.Fatalf("plan = %+v, want already-correct on %s", a, b.ID)
+			}
+			if a.KeepTitle != tc.planKeeps || (plan.LibraryTitleKept == 1) != tc.planKeeps {
+				t.Fatalf("KeepTitle=%v LibraryTitleKept=%d, want keep=%v", a.KeepTitle, plan.LibraryTitleKept, tc.planKeeps)
+			}
+			if tc.afterPlan != nil {
+				tc.afterPlan(t, s, b.ID)
+			}
+			if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+				t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+			}
+			after, err := s.GetBookByID(b.ID)
+			if err != nil || after == nil {
+				t.Fatalf("GetBookByID: %v", err)
+			}
+			want := "iTunes Album Tag"
+			if tc.wantKept {
+				want = "Canonical Title"
+			}
+			if after.Title != want {
+				t.Fatalf("title = %q, want %q", after.Title, want)
+			}
+			var applied string
+			for _, l := range rep.logs {
+				if strings.HasPrefix(l, "APPLIED") {
+					applied = l
+				}
+			}
+			kept := "library-title-kept=0 "
+			if tc.wantKept {
+				kept = "library-title-kept=1 "
+			}
+			if !strings.Contains(applied, kept) {
+				t.Fatalf("APPLIED line %q, want %s", applied, kept)
+			}
+		})
 	}
 }
