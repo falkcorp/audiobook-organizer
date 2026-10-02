@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
-// last-edited: 2026-09-14
+// last-edited: 2026-10-02
 
 package metafetch
 
@@ -71,14 +71,16 @@ func (mfs *Service) SetMetadataLLMScorer(scorer ai.MetadataCandidateScorer) {
 	mfs.llmScorer = scorer
 }
 
-// SetISBNEnrichment sets the ISBN enrichment service for background ISBN/ASIN lookups.
-func (mfs *Service) SetISBNEnrichment(svc *ISBNService) {
-	mfs.isbnEnrichment = svc
+// SetASINBackfillQueue sets the queue a metadata apply hands a book missing
+// an ASIN or ISBN to (metafetch.asin-backfill, Audible only). Wired by the
+// metafetch plugin, which owns the op. Nil: an apply queues nothing.
+func (mfs *Service) SetASINBackfillQueue(q *ASINBackfillQueue) {
+	mfs.asinBackfillQueue = q
 }
 
-// ISBNEnrichment returns the ISBN enrichment service (may be nil).
-func (mfs *Service) ISBNEnrichment() *ISBNService {
-	return mfs.isbnEnrichment
+// ASINBackfillQueue returns the queue (may be nil).
+func (mfs *Service) ASINBackfillQueue() *ASINBackfillQueue {
+	return mfs.asinBackfillQueue
 }
 
 // FileWorkScheduler runs work for bookID off the calling goroutine, through

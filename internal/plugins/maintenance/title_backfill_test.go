@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package maintenance
 
@@ -137,9 +137,6 @@ func (d fakeDeps) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
 }
 
 // Delegate stubs — maintenance plugin calls these on ServerDeps from other ops.
-func (d fakeDeps) RunIsbnEnrichment(_ context.Context, _ operations.ProgressReporter, _ string) error {
-	return nil
-}
 func (d fakeDeps) RunMetadataRefreshScan(_ context.Context, _ operations.ProgressReporter) error {
 	return nil
 }
@@ -207,7 +204,6 @@ func (d fakeDeps) ReclaimMigratedActivity(_ context.Context, _ time.Duration, dr
 }
 func (d fakeDeps) HasDedupEngine() bool                      { return false }
 func (d fakeDeps) HasMetadataFetchService() bool             { return false }
-func (d fakeDeps) HasISBNEnrichment() bool                   { return false }
 func (d fakeDeps) HasAIParsing() bool                        { return false }
 func (d fakeDeps) HasBatchPoller() bool                      { return false }
 func (d fakeDeps) RootDir() string                           { return "/lib" }

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -16,7 +16,7 @@
 //     full-library / by-ID metadata fetch cores (the v2 op Run dispatches to them).
 //   - runBulkWriteBack — used by duplicates_ops.go / library_writeback_op.go /
 //     server_maintenance_deps.go.
-//   - runIsbnEnrichment / runMetadataRefreshScan — used by server_maintenance_deps.go.
+//   - runMetadataRefreshScan — used by server_maintenance_deps.go.
 //   - resolveFilterToBookIDs — used by metadata_batch_candidates.go.
 //   - RegisterBulkMetadataFetchOp + init() — register the v2 OperationDef.
 //   - bulkMetadataFetchV2Params alias.
@@ -1177,43 +1177,6 @@ func (s *Server) runBulkWriteBack(
 	if s.activityWriter != nil {
 		activity.FlushOperation(s.activityWriter, opID)
 	}
-	return nil
-}
-
-// runIsbnEnrichment enriches missing ISBN identifiers from external sources.
-// Idempotent — books that already have an ISBN are skipped, so a restart
-// safely re-runs from scratch (no checkpoint needed).
-func (s *Server) runIsbnEnrichment(ctx context.Context, progress operations.ProgressReporter, opID string) error {
-	if s.metadataFetchService == nil || s.metadataFetchService.ISBNEnrichment() == nil {
-		_ = progress.Log("info", "ISBN enrichment service is not configured, skipping", nil)
-		return nil
-	}
-	startMsg := "Scanning for books missing ISBN identifiers"
-	_ = progress.Log("info", startMsg, nil)
-	if operations.IsManual(ctx) {
-		activity.EmitInfo(s.activityWriter, opID, "isbn-enrich", "isbn-enrichment", startMsg, activity.AlwaysShow)
-	}
-	// limit 0 => resolve from the isbn_enrichment_batch_limit setting (default
-	// 100); the sweep resumes across runs via a persistent cursor.
-	checked, updated, err := s.metadataFetchService.ISBNEnrichment().EnrichMissingISBNs(ctx, 0, s.activityWriter, opID)
-	if err != nil {
-		return err
-	}
-	activity.FlushOperation(s.activityWriter, opID)
-	msg := fmt.Sprintf("ISBN enrichment complete: checked %d, updated %d", checked, updated)
-	_ = progress.Log("info", msg, nil)
-	// Use real (checked, checked) so the bar is honest. Fall back to (1,1)
-	// when nothing was checked to avoid 0/0.
-	total := checked
-	if total <= 0 {
-		total = 1
-	}
-	_ = progress.UpdateProgress(total, total, fmt.Sprintf("%s (%d/%d 100.00%%)", msg, total, total))
-	tags := activity.TagsIf(updated == 0, activity.NoOpTag)
-	if operations.IsManual(ctx) {
-		tags = append(tags, activity.AlwaysShow)
-	}
-	activity.EmitInfo(s.activityWriter, opID, "isbn-enrich", "isbn-enrichment", msg, tags...)
 	return nil
 }
 

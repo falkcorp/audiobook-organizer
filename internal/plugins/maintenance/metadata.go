@@ -1,15 +1,16 @@
 // file: internal/plugins/maintenance/metadata.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a7b8c9d0-e1f2-3456-0123-678901234567
-// last-edited: 2026-09-27
+// last-edited: 2026-10-02
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -54,57 +55,38 @@ func (p *Plugin) runMetadataRefresh(ctx context.Context, _ json.RawMessage, repo
 // scheduler.metadata-upgrade (internal/scheduler/extra_ops.go), which now
 // lists this ID as a FormerID so old rows and enqueues still resolve.
 
-// --- isbn-enrichment ---
-// Hard rule: ResumeRestart. The resume position is NOT a reporter checkpoint;
-// see the ResumePolicy comment below for where it actually lives.
+// --- isbn-enrichment (retired) ---
 
+// errISBNEnrichmentRetired is returned by the retired
+// maintenance.isbn-enrichment op instead of running.
+var errISBNEnrichmentRetired = errors.New("retired: use metafetch.asin-backfill")
+
+// isbnEnrichmentDef is RETIRED (2026-10-02). The job searched Google Books /
+// Open Library and wrote ASINs by title-prefix matching, which put wrong ASINs
+// on books. metafetch.asin-backfill (Audible only, ASIN + ISBN in one op)
+// replaced it and runs from the scheduler's asin_backfill task. The def stays
+// registered so a stale schedule row or API call fails loudly instead of
+// 404ing or writing. Its Run refuses before taking the scan stand-down hold,
+// so a refused run never parks a scan. No Schedule: a retired op must not
+// fire on a cron.
 func (p *Plugin) isbnEnrichmentDef() sdk.OperationDef {
-	sched := "0 7 * * *" // 07:00 daily
 	return sdk.OperationDef{
-		ID:          "maintenance.isbn-enrichment",
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "maintenance",
-		DisplayName: "ISBN enrichment",
-		Description: "Searches external metadata sources for missing ISBN identifiers. " +
-			"Each run is a bounded batch (isbn_enrichment_batch_limit, default 100) that resumes " +
-			"from a persistent sweep cursor, so successive runs walk the whole library.",
-		// RESUME AUDIT 2026-09-11 (c): kept, with no reporter.Checkpoint, and
-		// that is correct here. The Description used to claim "checkpoints every
-		// 100 books", which was false — nothing on this path ever called
-		// Checkpoint. What makes a from-zero restart safe is inside
-		// metafetch.EnrichMissingISBNs: it loads a PERSISTED sweep cursor
-		// (isbnEnrichCursorKey) before its loop, skips every book that already
-		// has an ISBN, and stops after `limit` attempted books, so a restart is
-		// at most one more bounded batch from where the sweep left off — the
-		// same cost as the next scheduled run, never a whole-library re-walk.
-		ResumePolicy:    sdk.ResumeRestart,
+		ID:              "maintenance.isbn-enrichment",
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "maintenance",
+		DisplayName:     "ISBN enrichment (retired)",
+		Description:     "Retired: refuses to run. Use metafetch.asin-backfill, which fills ASINs and audiobook ISBNs from Audible.",
+		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.isbn-enrichment",
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         120 * time.Minute,
-		Schedule:        &sched,
-		Capabilities: []sdk.Capability{
-			sdk.CapLibraryRead, sdk.CapLibraryWrite,
-			sdk.CapNetworkOpenLibrary, sdk.CapNetworkGoogleBooks,
-		},
-		Run: p.runISBNEnrichment,
+		Timeout:         time.Minute,
+		Capabilities:    []sdk.Capability{sdk.CapLibraryRead},
+		Run:             p.runISBNEnrichment,
 	}
 }
 
-func (p *Plugin) runISBNEnrichment(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) (retErr error) {
-	// Metadata is never applied during a library scan: hold the scan stand-down
-	// before the first write (fails the op if the scan does not park).
-	hold, sdErr := registry.HoldScanStandDown(ctx, p.deps, reporter, "maintenance.isbn-enrichment apply")
-	if sdErr != nil {
-		return sdErr
-	}
-	defer func() { retErr = hold.Finish(retErr) }()
-	ctx, reporter = hold.Context(), hold.Reporter()
-	if !p.deps.HasISBNEnrichment() {
-		_ = reporter.Log(slog.LevelInfo, "ISBN enrichment service is not configured, skipping")
-		return nil
-	}
-	opID := ctxOpID(ctx)
-	return p.deps.RunIsbnEnrichment(ctx, newOpsAdapter(reporter), opID)
+func (p *Plugin) runISBNEnrichment(context.Context, json.RawMessage, sdk.Reporter) error {
+	return fmt.Errorf("maintenance.isbn-enrichment: %w", errISBNEnrichmentRetired)
 }

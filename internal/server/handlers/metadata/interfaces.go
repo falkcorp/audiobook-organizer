@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-09-30
+// last-edited: 2026-10-02
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -215,8 +215,8 @@ type MetadataHistoryRecorder interface {
 
 // MetadataFetchService is the narrow *metafetch.Service subset the metadata
 // handlers call. The concrete *metafetch.Service satisfies it. Only the methods
-// reached from the 19 HTTP handlers are listed — BuildSourceChain /
-// ISBNEnrichment are used exclusively by the relocated async-op machinery
+// reached from the 19 HTTP handlers are listed — BuildSourceChain is used
+// exclusively by the relocated async-op machinery
 // (metadata_ops.go), so they are intentionally absent here.
 //
 // WriteBackMetadataForBook keeps the variadic segment filter so the single call

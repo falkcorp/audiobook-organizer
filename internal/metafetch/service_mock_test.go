@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.11.2
+// version: 1.12.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-09-14
+// last-edited: 2026-10-02
 
 package metafetch
 
@@ -127,74 +127,6 @@ func TestExtractASIN(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.expect, extractASIN(tt.input))
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// IsStrictTitleMatch
-// ---------------------------------------------------------------------------
-
-func TestIsStrictTitleMatch(t *testing.T) {
-	tests := []struct {
-		name   string
-		a, b   string
-		expect bool
-	}{
-		{"exact_match", "The Way of Kings", "The Way of Kings", true},
-		{"case_insensitive", "the way of kings", "The Way Of Kings", true},
-		{"prefix_with_subtitle", "Shadows of Self", "Shadows of Self: A Mistborn Novel", true},
-		{"prefix_with_dash", "Shadows of Self", "Shadows of Self - A Mistborn Novel", true},
-		{"completely_different", "Mistborn", "Oathbringer", false},
-		{"empty_a", "", "Something", false},
-		{"empty_b", "Something", "", false},
-		{"both_empty", "", "", false},
-		{"short_prefix_rejected", "The", "The Way of Kings", false}, // shorter < 60% of longer
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expect, IsStrictTitleMatch(tt.a, tt.b))
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// needsIdentifierEnrichment
-// ---------------------------------------------------------------------------
-
-func TestNeedsIdentifierEnrichment(t *testing.T) {
-	isbn10 := "1234567890"
-	isbn13 := "9781234567890"
-	asin := "B0ABCDEFGH"
-	empty := ""
-	whitespace := "   "
-
-	tests := []struct {
-		name   string
-		book   *database.BookCore
-		expect bool
-	}{
-		{"nil_book", nil, false},
-		{"no_identifier_fields", &database.BookCore{}, true},
-		// An ISBN alone no longer satisfies the gate: a book with an ISBN but no
-		// ASIN still needs enrichment (this is the bug the ASIN-aware gate fixes —
-		// the batch path used to skip these and never mint an ASIN).
-		{"has_isbn10_no_asin", &database.BookCore{ISBN10: &isbn10}, true},
-		{"has_isbn13_no_asin", &database.BookCore{ISBN13: &isbn13}, true},
-		{"has_both_isbn_no_asin", &database.BookCore{ISBN10: &isbn10, ISBN13: &isbn13}, true},
-		// An ASIN alone still needs an ISBN.
-		{"has_asin_no_isbn", &database.BookCore{ASIN: &asin}, true},
-		// Only a book that has an ISBN AND an ASIN is fully identified.
-		{"has_isbn10_and_asin", &database.BookCore{ISBN10: &isbn10, ASIN: &asin}, false},
-		{"has_isbn13_and_asin", &database.BookCore{ISBN13: &isbn13, ASIN: &asin}, false},
-		// Blank/whitespace values count as absent for every identifier.
-		{"empty_isbn10_no_asin", &database.BookCore{ISBN10: &empty}, true},
-		{"whitespace_isbn10_no_asin", &database.BookCore{ISBN10: &whitespace}, true},
-		{"isbn_present_whitespace_asin", &database.BookCore{ISBN13: &isbn13, ASIN: &whitespace}, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expect, needsIdentifierEnrichment(tt.book))
 		})
 	}
 }
@@ -601,17 +533,6 @@ func TestServiceSetters(t *testing.T) {
 		assert.Nil(t, svc.overrideSources)
 		svc.SetOverrideSources([]metadata.MetadataSource{})
 		assert.NotNil(t, svc.overrideSources)
-	})
-
-	t.Run("set_isbn_enrichment", func(t *testing.T) {
-		assert.Nil(t, svc.isbnEnrichment)
-		isbn := &ISBNService{}
-		svc.SetISBNEnrichment(isbn)
-		assert.Equal(t, isbn, svc.isbnEnrichment)
-	})
-
-	t.Run("isbn_enrichment_getter", func(t *testing.T) {
-		assert.NotNil(t, svc.ISBNEnrichment())
 	})
 }
 
@@ -1503,87 +1424,6 @@ func TestAudioFilesInDir(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// NewISBNService
-// ---------------------------------------------------------------------------
-
-func TestNewISBNService(t *testing.T) {
-	mock := &database.MockStore{}
-	svc := NewISBNService(mock, nil)
-	require.NotNil(t, svc)
-	assert.Equal(t, mock, svc.db)
-	assert.Nil(t, svc.sources)
-}
-
-// ---------------------------------------------------------------------------
-// ISBNService.resolveAuthor
-// ---------------------------------------------------------------------------
-
-func TestISBNResolveAuthor(t *testing.T) {
-	t.Run("no_author_id", func(t *testing.T) {
-		mock := &database.MockStore{}
-		svc := NewISBNService(mock, nil)
-		book := &database.Book{ID: "b1"}
-		assert.Equal(t, "", svc.resolveAuthor(book))
-	})
-
-	t.Run("author_found", func(t *testing.T) {
-		mock := &database.MockStore{
-			GetAuthorByIDFunc: func(id int) (*database.Author, error) {
-				return &database.Author{ID: id, Name: "Brandon Sanderson"}, nil
-			},
-		}
-		svc := NewISBNService(mock, nil)
-		authorID := 42
-		book := &database.Book{ID: "b1", AuthorID: &authorID}
-		assert.Equal(t, "Brandon Sanderson", svc.resolveAuthor(book))
-	})
-
-	t.Run("author_not_found", func(t *testing.T) {
-		mock := &database.MockStore{
-			GetAuthorByIDFunc: func(id int) (*database.Author, error) {
-				return nil, nil
-			},
-		}
-		svc := NewISBNService(mock, nil)
-		authorID := 99
-		book := &database.Book{ID: "b1", AuthorID: &authorID}
-		assert.Equal(t, "", svc.resolveAuthor(book))
-	})
-}
-
-// ---------------------------------------------------------------------------
-// ISBNService.EnrichBookISBN
-// ---------------------------------------------------------------------------
-
-func TestEnrichBookISBN(t *testing.T) {
-	t.Run("book_not_found", func(t *testing.T) {
-		mock := &database.MockStore{
-			GetBookByIDFunc: func(id string) (*database.Book, error) {
-				return nil, nil
-			},
-		}
-		svc := NewISBNService(mock, nil)
-		found, err := svc.EnrichBookISBN(context.Background(), "nonexistent")
-		assert.NoError(t, err)
-		assert.False(t, found)
-	})
-
-	t.Run("already_has_isbn", func(t *testing.T) {
-		isbn := "9781234567890"
-		asin := "B01N5AZR76"
-		mock := &database.MockStore{
-			GetBookByIDFunc: func(id string) (*database.Book, error) {
-				return &database.Book{ID: id, Title: "Book", ISBN13: &isbn, ASIN: &asin}, nil
-			},
-		}
-		svc := NewISBNService(mock, nil)
-		found, err := svc.EnrichBookISBN(context.Background(), "b1")
-		assert.NoError(t, err)
-		assert.False(t, found, "should not enrich when ISBN and ASIN already present")
-	})
-}
-
-// ---------------------------------------------------------------------------
 // bestTitleMatchForBook
 // ---------------------------------------------------------------------------
 
@@ -1615,33 +1455,6 @@ func TestBestTitleMatchForBook(t *testing.T) {
 		book := &database.Book{ID: "b1", Title: "Anything"}
 		matched := svc.bestTitleMatchForBook(book, nil, "", "", "Anything")
 		assert.Nil(t, matched)
-	})
-}
-
-// ---------------------------------------------------------------------------
-// queueISBNEnrichment
-// ---------------------------------------------------------------------------
-
-func TestQueueISBNEnrichment(t *testing.T) {
-	t.Run("no_enrichment_service", func(t *testing.T) {
-		mock := &database.MockStore{}
-		svc := NewService(mock)
-		// Should not panic
-		svc.queueISBNEnrichment("b1", &database.Book{ID: "b1"})
-	})
-
-	t.Run("book_already_has_identifiers", func(t *testing.T) {
-		mock := &database.MockStore{}
-		svc := NewService(mock)
-		isbn := "9781234567890"
-		asin := "B01234567X"
-		svc.SetISBNEnrichment(NewISBNService(mock, nil))
-		// Book has both ISBN and ASIN — enrichment should be skipped
-		svc.queueISBNEnrichment("b1", &database.Book{
-			ID:     "b1",
-			ISBN13: &isbn,
-			ASIN:   &asin,
-		})
 	})
 }
 
@@ -1947,78 +1760,6 @@ func TestSearchMetadataForBook(t *testing.T) {
 		resp, err := svc.SearchMetadataForBook("b1", "Mistborn", "Brandon Sanderson")
 		require.NoError(t, err)
 		assert.NotNil(t, resp)
-	})
-}
-
-// ---------------------------------------------------------------------------
-// searchSourceForISBN / searchSourceForASIN
-// ---------------------------------------------------------------------------
-
-func TestSearchSourceForISBN(t *testing.T) {
-	mock := &database.MockStore{}
-	svc := NewISBNService(mock, nil)
-
-	t.Run("found_isbn", func(t *testing.T) {
-		src := &mockMetadataSource{
-			name: "test",
-			results: []metadata.BookMetadata{
-				{Title: "Mistborn", ISBN: "9781234567890"},
-			},
-		}
-		isbn, length, err := svc.searchSourceForISBN(src, "Mistborn", "Brandon Sanderson")
-		require.NoError(t, err)
-		assert.Equal(t, "9781234567890", isbn)
-		assert.Equal(t, 13, length)
-	})
-
-	t.Run("no_matching_title", func(t *testing.T) {
-		src := &mockMetadataSource{
-			name: "test",
-			results: []metadata.BookMetadata{
-				{Title: "Completely Different Book", ISBN: "9781234567890"},
-			},
-		}
-		isbn, length, err := svc.searchSourceForISBN(src, "Mistborn", "")
-		require.NoError(t, err)
-		assert.Equal(t, "", isbn)
-		assert.Equal(t, 0, length)
-	})
-
-	t.Run("no_results", func(t *testing.T) {
-		src := &mockMetadataSource{name: "test", results: nil}
-		isbn, length, err := svc.searchSourceForISBN(src, "Mistborn", "")
-		require.NoError(t, err)
-		assert.Equal(t, "", isbn)
-		assert.Equal(t, 0, length)
-	})
-}
-
-func TestSearchSourceForASIN(t *testing.T) {
-	mock := &database.MockStore{}
-	svc := NewISBNService(mock, nil)
-
-	t.Run("found_asin", func(t *testing.T) {
-		src := &mockMetadataSource{
-			name: "test",
-			results: []metadata.BookMetadata{
-				{Title: "Mistborn", ASIN: "B01N5AZR76"},
-			},
-		}
-		asin, err := svc.searchSourceForASIN(src, "Mistborn", "")
-		require.NoError(t, err)
-		assert.Equal(t, "B01N5AZR76", asin)
-	})
-
-	t.Run("no_matching_title", func(t *testing.T) {
-		src := &mockMetadataSource{
-			name: "test",
-			results: []metadata.BookMetadata{
-				{Title: "Other Book", ASIN: "B01N5AZR76"},
-			},
-		}
-		asin, err := svc.searchSourceForASIN(src, "Mistborn", "")
-		require.NoError(t, err)
-		assert.Equal(t, "", asin)
 	})
 }
 

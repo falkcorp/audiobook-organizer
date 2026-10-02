@@ -1,5 +1,5 @@
 // file: internal/metafetch/lifecycle.go
-// version: 1.4.0
+// version: 1.5.0
 
 // Lifecycle methods on *metafetch.Service that the serviceregistry
 // container picks up via interface satisfaction. PostInit wires the
@@ -32,7 +32,7 @@ import (
 //   - SetMetadataLLMScorer (W4 metadatallmscorer, config-gated)
 //   - SetActivityService (W2 activity, DatabasePath-gated)
 //
-// Several other SetX calls (SetISBNEnrichment, SetOLStore, SetSafeWriteDeps,
+// Several other SetX calls (SetOLStore, SetSafeWriteDeps,
 // SetWriteBackBatcher) still live inline in NewServer because they depend
 // on server-local state (olService, protectedPathCache) that isn't in
 // the container yet. Those move when their underlying services migrate.
@@ -80,14 +80,6 @@ func (mfs *Service) PostInit(ctx context.Context, c *serviceregistry.Container) 
 	if ol, ok := serviceregistry.TryGet[*OpenLibraryService](c, "olservice"); ok && ol != nil {
 		if store := ol.Store(); store != nil {
 			mfs.SetOLStore(store)
-		}
-	}
-
-	// ISBN enrichment — needs a source chain. Empty chain (e.g. no
-	// AI key, no Audnexus) means no enrichment.
-	if store, ok := serviceregistry.TryGet[isbnEnrichmentStore](c, "store"); ok && store != nil {
-		if sources := mfs.BuildSourceChain(); len(sources) > 0 {
-			mfs.SetISBNEnrichment(NewISBNService(store, sources))
 		}
 	}
 
