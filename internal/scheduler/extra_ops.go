@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-10-02
 
@@ -30,6 +30,7 @@ import (
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
+	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -109,6 +110,8 @@ type extraOpsAuthorLinkStore interface {
 // extraOpsMaintenanceStore is the db-optimize and tombstone-resolve ops.
 type extraOpsMaintenanceStore interface {
 	Optimize(ctx context.Context) error
+	// CompactionStats feeds db-optimize's in-flight progress lines.
+	CompactionStats() database.CompactionStats
 	ResolveTombstoneChains() (int, error)
 }
 
@@ -548,64 +551,89 @@ func (r *ExtraOpsRegistrar) RegisterDBOptimizeOp(reg *opsregistry.Registry) erro
 		ConcurrencyKey:  "scheduler.db-optimize",
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			progress := extraOpsProgressAdapter{r: reporter}
-			store := r.Store
-			if store == nil {
+		Run: func(ctx context.Context, _ json.RawMessage, reporter opsregistry.Reporter) error {
+			if r.Store == nil {
 				return fmt.Errorf("database not initialized")
 			}
-
-			storesOptimized := 0
-			storesTotal := 3
-			startTotal := time.Now()
-			p := sdk.NewProgress(reporter, storesTotal)
-			p.Start("Starting database optimization")
-
-			// 1. Main store
-			_ = progress.Log("info", "Compacting main database (Pebble, full keyspace)...", nil)
-			p.StepN(0, "Optimizing main database (0/3)")
-			t1 := time.Now()
-			if err := store.Optimize(ctx); err != nil {
-				_ = progress.Log("error", fmt.Sprintf("Main DB optimization failed: %v", err), nil)
-			} else {
-				storesOptimized++
-				_ = progress.Log("info", fmt.Sprintf("Main database optimized in %s", time.Since(t1).Round(time.Millisecond)), nil)
-			}
-			p.StepN(1, fmt.Sprintf("Main database done (1/%d)", storesTotal))
-
-			// 2. AI scan store
-			if r.Deps.AIScanStore != nil {
-				t2 := time.Now()
-				if err := r.Deps.AIScanStore.Optimize(ctx); err != nil {
-					_ = progress.Log("error", fmt.Sprintf("AI scan DB optimization failed: %v", err), nil)
-				} else {
-					storesOptimized++
-					_ = progress.Log("info", fmt.Sprintf("AI scan database optimized in %s", time.Since(t2).Round(time.Millisecond)), nil)
-				}
-			} else {
-				_ = progress.Log("info", "AI scan store not initialized, skipping", nil)
-			}
-			p.StepN(2, fmt.Sprintf("AI scan database done (2/%d)", storesTotal))
-
-			// 3. OpenLibrary store (accessed via OLService)
-			if r.Deps.OLService != nil && r.Deps.OLService.Store() != nil {
-				t3 := time.Now()
-				if err := r.Deps.OLService.Store().Optimize(ctx); err != nil {
-					_ = progress.Log("error", fmt.Sprintf("OL cache optimization failed: %v", err), nil)
-				} else {
-					storesOptimized++
-					_ = progress.Log("info", fmt.Sprintf("OpenLibrary cache optimized in %s", time.Since(t3).Round(time.Millisecond)), nil)
-				}
-			} else {
-				_ = progress.Log("info", "OpenLibrary store not initialized, skipping", nil)
-			}
-			p.StepN(3, fmt.Sprintf("OpenLibrary cache done (3/%d)", storesTotal))
-
-			p.Done(fmt.Sprintf("Database optimization complete: %d/%d stores in %s",
-				storesOptimized, storesTotal, time.Since(startTotal).Round(time.Millisecond)))
+			r.runDBOptimize(ctx, reporter, compactprogress.DefaultInterval)
 			return nil
 		},
 	})
+}
+
+// runDBOptimize compacts the main, AI-scan and OpenLibrary stores in turn.
+//
+// Each compaction is one blocking Pebble call that can run for half an hour
+// (28m31s on production for the main store), and until 2026-10-02 the op
+// said "Optimizing main database (0/3)" and then nothing until it finished.
+// Every step now runs through compactprogress.RunStep, which samples the
+// store's Pebble counters every interval and logs what the engine is doing
+// (bytes compacted and rate, compactions in flight, debt, L0 files, size on
+// disk, tombstones), then logs a before/after completion line per store.
+// Progress FRAMES still go out only when those counters move -- see
+// compactprogress.Moved for why a blind heartbeat would be wrong.
+//
+// The "(n/3)" in each label counts stores, not key ranges: each store is
+// compacted as one full-keyspace range.
+func (r *ExtraOpsRegistrar) runDBOptimize(ctx context.Context, reporter opsregistry.Reporter, interval time.Duration) {
+	const storesTotal = 3
+	storesOptimized := 0
+	startTotal := time.Now()
+	p := sdk.NewProgress(reporter, storesTotal)
+	p.Start("Starting database optimization")
+
+	step := func(i int, name string, run func(context.Context) error, stats func() database.CompactionStats) {
+		label := fmt.Sprintf("Compacting %s (%d/%d)", name, i+1, storesTotal)
+		p.StepN(i, label)
+		res := compactprogress.RunStep(ctx, reporter, compactprogress.Step{
+			Label:    label,
+			Run:      run,
+			Stats:    stats,
+			Frame:    func(msg string) { p.StepN(i, msg) },
+			Interval: interval,
+		})
+		if res.Err == nil {
+			storesOptimized++
+		}
+	}
+
+	// 1. Main store
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+		"Compacting main database (Pebble, full keyspace); engine counters are logged every %s", interval))
+	step(0, "main database", r.Store.Optimize, r.Store.CompactionStats)
+	p.StepN(1, fmt.Sprintf("Main database done (1/%d)", storesTotal))
+
+	// 2. AI scan store
+	switch ai := r.Deps.AIScanStore; {
+	case ai == nil:
+		_ = reporter.Log(slog.LevelInfo, "AI scan store not initialized, skipping")
+	default:
+		if _, owned := ai.CompactionStats(); !owned {
+			// Production wiring: the AI scan keyspace lives inside the main
+			// database, so step 1 already compacted it and Optimize is a no-op.
+			storesOptimized++
+			_ = reporter.Log(slog.LevelInfo,
+				"AI scan store shares the main database; it was compacted in step 1, nothing separate to do")
+		} else {
+			step(1, "AI scan database", ai.Optimize, func() database.CompactionStats {
+				st, _ := ai.CompactionStats()
+				return st
+			})
+		}
+	}
+	p.StepN(2, fmt.Sprintf("AI scan database done (2/%d)", storesTotal))
+
+	// 3. OpenLibrary store (accessed via OLService)
+	if r.Deps.OLService != nil && r.Deps.OLService.Store() != nil {
+		ol := r.Deps.OLService.Store()
+		step(2, "OpenLibrary cache", ol.Optimize, ol.CompactionStats)
+	} else {
+		_ = reporter.Log(slog.LevelInfo, "OpenLibrary store not initialized, skipping")
+	}
+	p.StepN(3, fmt.Sprintf("OpenLibrary cache done (3/%d)", storesTotal))
+
+	p.Done(fmt.Sprintf("Database optimization complete: %d/%d stores in %s",
+		storesOptimized, storesTotal, time.Since(startTotal).Round(time.Millisecond)))
 }
 
 // --- cleanup-old-backups ---

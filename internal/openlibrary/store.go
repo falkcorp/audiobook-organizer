@@ -1,7 +1,7 @@
 // file: internal/openlibrary/store.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-08
+// last-edited: 2026-10-02
 
 package openlibrary
 
@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 )
 
 // OLStore provides local lookup of Open Library data dump records stored in PebbleDB.
@@ -46,6 +48,12 @@ func (s *OLStore) Close() error {
 // Optimize compacts the PebbleDB database to reclaim space.
 func (s *OLStore) Optimize(ctx context.Context) error {
 	return s.db.Compact(ctx, nil, []byte{0xff}, false)
+}
+
+// CompactionStats samples the OpenLibrary cache's PebbleDB for the
+// db-optimize progress lines.
+func (s *OLStore) CompactionStats() compactprogress.Stats {
+	return compactprogress.Collect(s.db)
 }
 
 // Key prefixes
