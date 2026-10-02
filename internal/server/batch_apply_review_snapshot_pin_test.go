@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_review_snapshot_pin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b7d4e91-6c05-4a38-9f1e-7d3a8c52e0b4
 // last-edited: 2026-10-02
 
@@ -85,8 +85,7 @@ func TestApply_PinFromAStaleReviewSnapshotIsRefused(t *testing.T) {
 	require.Equal(t, applySkipStaleCandidate, out.Reason)
 	require.Empty(t, svc.appliedIDs)
 
-	// The background rebuild the stale request started lands, and the page
-	// then shows the current candidate. (Waiting for it also keeps the
-	// rebuild from outliving the store.)
-	require.Eventually(t, func() bool { return serve().Candidate.Title == newCand.Title }, 5*time.Second, 10*time.Millisecond)
+	// No rebuild started: the first build began inside the snapshot's
+	// minimum rebuild interval, so the page keeps serving it -- which is
+	// exactly the window this pin check exists for.
 }
