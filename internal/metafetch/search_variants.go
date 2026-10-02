@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
 // last-edited: 2026-10-01
 
@@ -68,6 +68,10 @@ const strongRuntimeTolerance = 0.15
 // own name and the series slot, narrator and author that organizers and
 // taggers pack into the title field.
 type parsedTitle struct {
+	// Junk: the title is no title (metadata.ClassifyJunkTitle: "Audiobook 2",
+	// "New Recording 4"), so its numbers are not the book's -- no position,
+	// and nothing for an answer's numbers to fit or conflict with.
+	Junk bool
 	// Title is the cleaned title to search by. When TitleIsSeries is set it
 	// is the series name: the title named only a series slot.
 	Title    string
@@ -315,6 +319,19 @@ func parseSearchTitle(raw, author, narrator string) parsedTitle {
 	}
 	if s := stripSubtitle(p.Title); s != p.Title && len(anchorWords(s, "")) > 0 && !p.TitleIsSeries {
 		p.Short = s
+	}
+	// A junk title ("Audiobook 2", "New Recording 4") is no title at all, so
+	// its number is no series position (metadata.ClassifyJunkTitle, the
+	// Repairs lane's classifier). Read as one, every position gate would drop
+	// each candidate a provider numbers otherwise -- the whole input of the
+	// junk-title fixer, which exists to replace exactly these titles.
+	if metadata.ClassifyJunkTitle(strings.TrimSpace(raw)) != metadata.JunkNone {
+		p.Junk = true
+		p.Position, p.BareSlot, p.SlotHead, p.Name = "", false, "", ""
+		if p.TitleIsSeries {
+			p.Title, p.TitleIsSeries = t, false
+		}
+		p.Series = ""
 	}
 	return p
 }
@@ -697,6 +714,9 @@ func buildQueryVariants(p parsedTitle, literal, rawTitle, author, narrator strin
 type strongCriteria struct {
 	asin       string
 	titleWords map[string]bool
+	// ownNums are the numbers of the cleaned title searched by
+	// (positionNamed): with no parsed position, an answer must carry them.
+	ownNums []string
 	// authors is the book's author credit ("; "-separated names). Only an
 	// author match satisfies the person leg (authorAgrees); a narrator in
 	// common never does on its own.
@@ -732,6 +752,9 @@ type strongCriteria struct {
 func newStrongCriteria(p parsedTitle, title, literal, asin, author string, bookDur int) strongCriteria {
 	c := strongCriteria{asin: asin, authors: author, bookDur: bookDur, position: normPosition(p.Position),
 		bareSlot: p.BareSlot, nameIsTagline: &atomic.Bool{}}
+	if !p.Junk {
+		c.ownNums = titleNumbers(title)
+	}
 	if p.TitleIsSeries {
 		c.slotSeries, c.slotPos = p.Series, p.Position
 	} else {
@@ -750,6 +773,9 @@ func newStrongCriteria(p parsedTitle, title, literal, asin, author string, bookD
 		}
 		for w := range SignificantWords(s) {
 			c.allowed[w] = true
+		}
+		if p.Junk {
+			continue
 		}
 		for _, n := range titleNumbers(s) {
 			c.allowedNums[n] = true
@@ -957,15 +983,44 @@ func (c strongCriteria) ownASINAgrees(r metadata.BookMetadata) bool {
 	if c.asin == "" || !strings.EqualFold(strings.TrimSpace(r.ASIN), c.asin) {
 		return false
 	}
-	return !c.positionConflicts(r) && !c.explicitPositionConflicts(r) && c.numbersFit(r.Title) &&
-		(c.runtimeAgrees(r) || c.titleSubset(r))
+	return !c.positionConflicts(r) && !c.explicitPositionConflicts(r) && c.positionNamed(r) &&
+		c.numbersFit(r.Title) && (c.runtimeAgrees(r) || c.titleSubset(r))
+}
+
+// positionNamed reports whether r names the book's number: its position
+// (an explicit series_position or a number in its title) when the book has
+// one, else every number of the book's own title (ownNums: "Metro 2033",
+// "The Final Four"). An answer carrying the book's own name (nameVouches:
+// "The Tower of the Swallow" for "Witcher 4: The Tower of the Swallow") needs
+// neither. An answer that names no number is any book of the series --
+// "Rogue Ascension" (Google Books' and Open Library's shape, with no
+// series_position) for "Rogue Ascension VIII", "The Witcher" for "The
+// Witcher 4", "The Final" for "The Final Four" -- and no position gate can
+// refute what names nothing. It may stay in the pool, but it is never
+// strong: not by its author, not by a stored ASIN that may be a sibling's,
+// and not by a runtime, which a sibling of the same series can share.
+func (c strongCriteria) positionNamed(r metadata.BookMetadata) bool {
+	if c.nameVouches(r) {
+		return true
+	}
+	if c.position != "" {
+		return normPosition(r.SeriesPosition) == c.position || slices.Contains(titleNumbers(r.Title), c.position)
+	}
+	nums := numberSet(r.Title)
+	for _, n := range c.ownNums {
+		if !nums[n] {
+			return false
+		}
+	}
+	return true
 }
 
 // explicitPositionConflicts reports whether r's explicit series_position is
 // not the book's and r's runtime is not within positionOverrideTolerance of
 // the book's. "Not the book's": not the title's position, or, when the parse
-// found none, not one of the title's numbers (allowedNums) -- a title with no
-// number at all says nothing either way. A strong answer never has one: the
+// found none, not one of the title's numbers (allowedNums) while r's title does
+// not carry all of them (carriesAllNumbers) -- a title with no number at all
+// says nothing either way. A strong answer never has one: the
 // name exemption that keeps it in the pool ("The Tower of the Swallow",
 // Audible's #6) is not enough to stop the search on, and neither is a
 // position the parse could not read.
@@ -978,10 +1033,25 @@ func (c strongCriteria) explicitPositionConflicts(r metadata.BookMetadata) bool 
 		if sp == c.position || (c.bareSlot && slices.Contains(titleNumbers(r.Title), c.position)) {
 			return false
 		}
-	} else if len(c.allowedNums) == 0 || c.allowedNums[sp] {
+	} else if len(c.allowedNums) == 0 || c.allowedNums[sp] || c.carriesAllNumbers(r.Title) {
 		return false
 	}
 	return !(c.bookDur > 0 && r.DurationSec > 0 && durationDeltaRatio(c.bookDur, r.DurationSec) <= positionOverrideTolerance)
+}
+
+// carriesAllNumbers reports whether title carries every number of the book's
+// own (allowedNums). With no parsed position, those numbers are the name's
+// ("Metro 2033", "2001: A Space Odyssey"), and an answer that carries them is
+// that book whatever a provider numbers it in its series (Metro 2033 is its
+// series' #1).
+func (c strongCriteria) carriesAllNumbers(title string) bool {
+	nums := numberSet(title)
+	for n := range c.allowedNums {
+		if !nums[n] {
+			return false
+		}
+	}
+	return true
 }
 
 // authorAgrees reports whether one of r's authors is one of the book's
@@ -1000,6 +1070,7 @@ func (c strongCriteria) authorAgrees(r metadata.BookMetadata) bool {
 //   - identify the book (identifies) and name no other position
 //     (positionConflicts), nor another explicit series_position unless its
 //     runtime is within positionOverrideTolerance (explicitPositionConflicts);
+//   - name the book's position, when it has one (positionNamed);
 //   - say nothing in its title the book's own title, series and position do
 //     not (titleSubset);
 //   - and, when the book has its own runtime, run within
@@ -1011,7 +1082,7 @@ func (c strongCriteria) matches(r metadata.BookMetadata) bool {
 	if !c.authorAgrees(r) {
 		return false
 	}
-	if c.positionConflicts(r) || c.explicitPositionConflicts(r) || !c.identifies(r) || !c.titleSubset(r) {
+	if c.positionConflicts(r) || c.explicitPositionConflicts(r) || !c.positionNamed(r) || !c.identifies(r) || !c.titleSubset(r) {
 		return false
 	}
 	return c.bookDur <= 0 || c.runtimeAgrees(r)
@@ -1050,6 +1121,28 @@ var personRoleWords = map[string]bool{
 	"jr": true, "sr": true, "ii": true, "iii": true, "iv": true, "phd": true, "md": true,
 	"ed": true, "eds": true, "editor": true, "editors": true, "translator": true, "foreword": true,
 	"introduction": true, "narrator": true, "illustrator": true,
+	// Honorifics: "Sir Arthur C. Clarke" is Arthur C. Clarke.
+	"sir": true, "dr": true, "dame": true, "lord": true, "lady": true, "prof": true, "rev": true,
+	"mr": true, "mrs": true, "ms": true,
+}
+
+// surnameParticles join the word after them into one surname ("le guin",
+// "de camp", "van dyke"). A particle that ends a name is that name's surname
+// ("Le" in "Thanh Le"), never skipped for the word before it.
+var surnameParticles = map[string]bool{
+	"le": true, "la": true, "de": true, "del": true, "van": true, "von": true, "der": true,
+	"da": true, "du": true, "di": true, "st": true,
+}
+
+// isSurnameShape reports whether a comma part is a surname alone: one word,
+// or particles and one word ("Le Guin" in "Le Guin, Ursula K.").
+func isSurnameShape(words []string) bool {
+	for _, w := range words[:len(words)-1] {
+		if !surnameParticles[w] {
+			return false
+		}
+	}
+	return true
 }
 
 // personPlaceholders name nobody: two credits that both say "Various
@@ -1073,7 +1166,7 @@ func personNames(s string) [][]string {
 				parts = append(parts, words)
 			}
 		}
-		if len(parts) == 2 && len(parts[0]) == 1 {
+		if len(parts) == 2 && isSurnameShape(parts[0]) {
 			parts = [][]string{append(parts[1], parts[0]...)}
 		}
 		for _, words := range parts {
@@ -1107,19 +1200,27 @@ func nameWords(part string) []string {
 	return words
 }
 
-// surname is a name's last word that is not a suffix, role or initial, and
-// its index; "", -1 for none.
+// surname is a name's last word that is not a suffix, role or initial, with
+// the particles in front of it ("le guin"), and the index it starts at; "",
+// -1 for none. Every particle directly in front is taken into it, so none is
+// ever left before that index for givenInitial to read an initial from.
 func surname(words []string) (string, int) {
 	for i := len(words) - 1; i >= 0; i-- {
 		if w := words[i]; len([]rune(w)) > 1 && !personRoleWords[w] {
-			return w, i
+			j := i
+			for j > 0 && surnameParticles[words[j-1]] {
+				j--
+			}
+			return strings.Join(words[j:i+1], " "), j
 		}
 	}
 	return "", -1
 }
 
 // givenInitial is the first letter of a name's first word before its
-// surname (at si), skipping roles; 0 when the name is a surname alone.
+// surname (at si), skipping roles and honorifics; 0 when the name is a
+// surname alone. A particle is never read here: surname takes every particle
+// in front of it.
 func givenInitial(words []string, si int) rune {
 	for _, w := range words[:max(si, 0)] {
 		if !personRoleWords[w] {

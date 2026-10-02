@@ -1,5 +1,5 @@
 // file: internal/metadata/junk_title.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4d7a2c91-3e6b-4f08-a1d5-8c2e9b7f4a13
 // last-edited: 2026-10-01
 
@@ -77,8 +77,11 @@ var (
 	// trackTagRe: a track tag that names a segment of an audiobook, never a
 	// book. "Introduction" is NOT here: it is the real title of some books.
 	trackTagRe = regexp.MustCompile(`(?i)^(?:intro|opening|opening\s+(?:credits|titles|music)|(?:end|closing)\s+credits|credits|big\s+finish\s+ident)(?:\s*\d+)?$`)
-	// placeholderRe: tagger and system placeholders.
-	placeholderRe = regexp.MustCompile(`(?i)^(?:unknown(?:\s+(?:title|book|album|audiobook|artist|author|narrator))?|untitled|no\s+title|\[?untitled\]?|\[?unknown\]?)$`)
+	// placeholderRe: tagger and system placeholders, and the default names a
+	// recorder or tagger gives a file it knows nothing about ("Audiobook 2",
+	// "New Recording 4"): never a book's title, and their number is no
+	// series position (metafetch.parseSearchTitle).
+	placeholderRe = regexp.MustCompile(`(?i)^(?:unknown(?:\s+(?:title|book|album|audiobook|artist|author|narrator))?|untitled|no\s+title|\[?untitled\]?|\[?unknown\]?|audiobook(?:\s+\d+)?|new\s+recording(?:\s+\d+)?)$`)
 	// numberPrefixRe: 1-3 digits then a separator and the real title. The
 	// separator is required ("1 Corinthians" and "7 Habits" are titles). A
 	// hyphen run counts only with whitespace on both sides, so "10-Minute

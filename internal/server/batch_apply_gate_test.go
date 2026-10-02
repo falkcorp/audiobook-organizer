@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_gate_test.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 8b4f2d70-1e9a-4c63-a7d5-f0c3e6b91a24
 // last-edited: 2026-10-01
 //
@@ -151,7 +151,30 @@ func failOnWriteStore(t *testing.T) *database.MockStore {
 // the plan the real apply acts on, then the field and rename preview — against
 // a real *metafetch.Service over a store that fails the test on any write,
 // with auto-rename on so the rename planner runs too.
+//
+// It runs over the three cache-row shapes production holds:
+//   - stamped by this search version (metafetch.FingerprintPrefix): read as
+//     stored, so the "wrong" book's Big Cats 3 reaches the apply gate, which
+//     blocks it (sequence_mismatch) -- the gate this test pins;
+//   - unstamped (no fingerprint) and v1 (a bare-hex fingerprint): filtered
+//     on read by the position rules (metafetch.GetCachedCandidates), which
+//     drop Big Cats 3 for "Big Cats 1" before the gate, so there is nothing
+//     to apply (no_cached_candidates). The good book applies in all three.
 func TestBulkApplyPreview_WritesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name, stamp, wrongVerdict, wrongReason string
+	}{
+		{"current", metafetch.FingerprintPrefix + "test", previewVerdictBlocked, applygate.ReasonSequenceMismatch},
+		{"unstamped", "", previewVerdictSkipped, applySkipNoCachedCandidates},
+		{"v1", "8f3a0c1d2e4b5a6978c0d1e2f3a4b5c6", previewVerdictSkipped, applySkipNoCachedCandidates},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bulkApplyPreviewWritesNothing(t, tc.stamp, tc.wrongVerdict, tc.wrongReason)
+		})
+	}
+}
+
+func bulkApplyPreviewWritesNothing(t *testing.T, stamp, wrongVerdict, wrongReason string) {
 	oldRename, oldRoot := config.AppConfig.AutoRenameOnApply, config.AppConfig.RootDir
 	config.AppConfig.AutoRenameOnApply, config.AppConfig.RootDir = true, ""
 	t.Cleanup(func() { config.AppConfig.AutoRenameOnApply, config.AppConfig.RootDir = oldRename, oldRoot })
@@ -180,12 +203,8 @@ func TestBulkApplyPreview_WritesNothing(t *testing.T) {
 			return nil, nil
 		}
 		// Empty SourceHash: the legacy fail-open row, so identity passes and
-		// the preview reaches the field and rename planners. Stamped as a row
-		// the current search version wrote ("v2:", metafetch's
-		// fingerprintPrefix): an unstamped row is filtered on read by the
-		// position rules, which would drop "wrong"'s Big Cats 3 before the
-		// apply gate this test pins ever sees it.
-		return &database.MetadataCandidateCache{BookID: id, SearchFingerprint: "v2:test", Candidates: candidateJSON(t, c)}, nil
+		// the preview reaches the field and rename planners.
+		return &database.MetadataCandidateCache{BookID: id, SearchFingerprint: stamp, Candidates: candidateJSON(t, c)}, nil
 	}
 	store.GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
 		return []database.BookFile{{ID: "f-" + id, BookID: id, FilePath: books[strings.TrimSuffix(id, "")].FilePath, Format: "m4b"}}, nil
@@ -208,8 +227,11 @@ func TestBulkApplyPreview_WritesNothing(t *testing.T) {
 		t.Errorf("good: no rename preview")
 	}
 	wrong := rows["wrong"]
-	if wrong.Verdict != previewVerdictBlocked || wrong.Reason != applygate.ReasonSequenceMismatch {
-		t.Fatalf("wrong: verdict %q reason %q, want blocked %q", wrong.Verdict, wrong.Reason, applygate.ReasonSequenceMismatch)
+	if wrong.Verdict != wrongVerdict || wrong.Reason != wrongReason {
+		t.Fatalf("wrong: verdict %q reason %q, want %q %q", wrong.Verdict, wrong.Reason, wrongVerdict, wrongReason)
+	}
+	if wrongVerdict != previewVerdictBlocked {
+		return
 	}
 	if !hasChange(wrong.Changes, "title", "Big Cats 3") {
 		t.Errorf("wrong: blocked row should still show what it would have written; changes %+v", wrong.Changes)
