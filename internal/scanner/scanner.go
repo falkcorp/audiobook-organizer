@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.119.1
+// version: 1.119.2
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package scanner
 
@@ -4408,7 +4408,14 @@ func preserveExistingFields(scanned *database.Book, existing *database.Book) {
 // the row could not be linked at all -- the write failed, or the row is gone --
 // and the caller must not mint a group for its own row either, or that row
 // becomes an orphan advertising versions that do not exist.
+//
+// The write holds groupID's hand-off lock (versionprimary.LockGroups), so a
+// reader checking that group's members and incumbent under the lock -- a
+// hand-off, itunes.regroup's apply-time recheck -- never sees a member join
+// mid-check. The row joins only from no group, so there is no old group to
+// lock. Nothing here hands off a primary while holding it.
 func linkVersionGroup(bookID, groupID string, primary bool) (string, bool) {
+	unlock := versionprimary.LockGroups(groupID)
 	written, err := getStore().ModifyBook(bookID, func(cur *database.Book) error {
 		if cur.VersionGroupID != nil && *cur.VersionGroupID != "" {
 			return database.ErrSkipBookWrite
@@ -4417,6 +4424,7 @@ func linkVersionGroup(bookID, groupID string, primary bool) (string, bool) {
 		cur.IsPrimaryVersion = &primary
 		return nil
 	})
+	unlock()
 	if err != nil {
 		defaultLog.Warn("Failed to set version group on book %s: %v", bookID, err)
 		return "", false
