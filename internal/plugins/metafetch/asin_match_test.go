@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_match_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8a2d6e41-0b7c-4f93-a5e8-1c9f3d7b2a60
 // last-edited: 2026-10-01
 
@@ -552,4 +552,61 @@ func TestNormSeriesName_FormatOnly(t *testing.T) {
 	if normSeriesName("Dune Chronicles") != normSeriesName("Dune") {
 		t.Fatal("chronicles qualifier not folded")
 	}
+}
+
+// TestDecideASIN_Round4SeriesNotes pins the round-4 review: a note that places
+// a volume without a number never counts as exact, a number word in the
+// series' own name is not a volume, an edition is not a volume, and an
+// unpositioned numbered note is counted under its own reason.
+func TestDecideASIN_Round4SeriesNotes(t *testing.T) {
+	ol := []string{"Kugane Maruyama"}
+	at1 := asinBookFacts{Title: "Overlord", Authors: ol, RuntimeSec: 10 * 3600, SeriesName: "Overlord", SeriesSeq: 1}
+	none := asinBookFacts{Title: "Overlord", Authors: ol, RuntimeSec: 10 * 3600}
+	cand := func(title, sub string, authors []string) []metadata.AudibleIdentity {
+		return []metadata.AudibleIdentity{{ASIN: "OX", Title: title, Subtitle: sub, Authors: authors, RuntimeMin: 610}}
+	}
+	for _, tc := range []struct {
+		name string
+		book asinBookFacts
+		sub  string
+	}{
+		{"final volume at #1", at1, "Overlord Saga, Final Volume"},
+		{"final volume, no position", none, "Overlord Saga, Final Volume"},
+		{"last book", at1, "Overlord Trilogy, Last Book"},
+		{"series roman", at1, "Overlord Series IV"},
+		{"chronicles roman", at1, "Overlord Chronicles II"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if d := decideASIN(tc.book, cand("Overlord", tc.sub, ol)); d.Outcome == asinOutcomeMatched {
+				t.Fatalf("matched %s (evidence %v); want no match", d.ASIN, d.Evidence)
+			}
+		})
+	}
+
+	t.Run("number word in series name", func(t *testing.T) {
+		cw := []string{"Cinda Williams Chima"}
+		b := asinBookFacts{Title: "The Demon King", Authors: cw, RuntimeSec: 10 * 3600, SeriesName: "Seven Realms", SeriesSeq: 1}
+		if d := decideASIN(b, cand("The Demon King", "Seven Realms, Book 1", cw)); d.Outcome != asinOutcomeMatched {
+			t.Fatalf("outcome %s rejects %v; want matched", d.Outcome, d.Rejects)
+		}
+		b.SeriesSeq = 2
+		if d := decideASIN(b, cand("The Demon King", "Seven Realms, Book 1", cw)); d.Outcome == asinOutcomeMatched {
+			t.Fatal("Seven Realms #1 matched a book at #2")
+		}
+	})
+
+	t.Run("edition is not a volume", func(t *testing.T) {
+		if n := readSeriesNote("Overlord Saga, 2nd Edition", ""); len(n.nums) != 0 || n.unreadable {
+			t.Fatalf("read %+v; want no volume", n)
+		}
+	})
+
+	t.Run("unpositioned note has its own reason", func(t *testing.T) {
+		pb := []string{"Pierce Brown"}
+		b := asinBookFacts{Title: "Red Rising", Authors: pb, RuntimeSec: 10 * 3600}
+		v := evaluateASINCandidate(b, cand("Red Rising", "Red Rising Saga, Book 1", pb)[0])
+		if v.Pass || v.Reason != rejectUnpositionedNote {
+			t.Fatalf("verdict %+v; want reject %s", v, rejectUnpositionedNote)
+		}
+	})
 }
