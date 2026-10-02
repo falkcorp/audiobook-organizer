@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package maintenance
 
@@ -13,12 +13,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // regroupFakeReader serves a fixed book + file set to buildRegroupSnapshot, so
@@ -940,5 +942,174 @@ func TestITunesRegroupEntanglementRule_OrganizedTarget(t *testing.T) {
 				t.Fatalf("S4 action = %+v, want 1 move onto T1 with its title kept", a)
 			}
 		})
+	}
+}
+
+// rgLockProbeStore runs a hook before the apply's bulk move and before its
+// title write, so a test can act while applyRegroupGroup is mid-group.
+type rgLockProbeStore struct {
+	*database.PebbleStore
+	onMove, onModify func()
+}
+
+func (s *rgLockProbeStore) MoveBookFilesToBookBulk(moves []database.BookFileMove, target string) error {
+	if s.onMove != nil {
+		s.onMove()
+	}
+	return s.PebbleStore.MoveBookFilesToBookBulk(moves, target)
+}
+
+func (s *rgLockProbeStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if s.onModify != nil {
+		s.onModify()
+	}
+	return s.PebbleStore.ModifyBook(id, fn)
+}
+
+// The apply holds the target's version-group hand-off lock from the recheck
+// through the group's last write: a concurrent hand-off that would crown the
+// edition (the target the recheck found a non-primary member) cannot land
+// between the recheck and the moves onto it. It blocks until the group is
+// written and runs after.
+func TestITunesRegroupApply_HoldsGroupLockAcrossRecheckAndMoves(t *testing.T) {
+	s := regroupStore(t)
+	vg := "vg-lock"
+	tr, fa := rgFlag(true), rgFlag(false)
+	lib, err := s.CreateBook(&database.Book{Title: "Library copy", VersionGroupID: &vg, IsPrimaryVersion: tr})
+	if err != nil {
+		t.Fatalf("CreateBook library: %v", err)
+	}
+	ed, err := s.CreateBook(&database.Book{Title: "iTunes edition", VersionGroupID: &vg, IsPrimaryVersion: fa})
+	if err != nil {
+		t.Fatalf("CreateBook edition: %v", err)
+	}
+	frag := seedBook(t, s, "fragment")
+	seedFilePID(t, s, ed.ID, "p1")
+	seedFilePID(t, s, frag, "p2")
+
+	p := &Plugin{}
+	rep := &fakeReporter{}
+	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	if err != nil {
+		t.Fatalf("buildRegroupSnapshot: %v", err)
+	}
+	plan := itunesservice.PlanRegroup([]itunesservice.HealGroup{{Title: "The Book", PIDs: []string{"p1", "p2"}}}, snap)
+	if plan.Consolidated != 1 || plan.Groups[0].Target != ed.ID {
+		t.Fatalf("plan = %+v, want consolidate onto the edition %s", plan.Groups, ed.ID)
+	}
+
+	const wait = 300 * time.Millisecond
+	crowned := make(chan error, 1)
+	var started atomic.Bool
+	probe := &rgLockProbeStore{PebbleStore: s}
+	probe.onMove = func() {
+		if !started.CompareAndSwap(false, true) {
+			return
+		}
+		go func() {
+			_, err := versionprimary.Crown(s, vg, ed.ID)
+			crowned <- err
+		}()
+		select {
+		case err := <-crowned:
+			crowned <- err
+			t.Errorf("hand-off crowned the target before the moves (err=%v): group lock not held", err)
+		case <-time.After(wait):
+		}
+	}
+	probe.onModify = func() {
+		select {
+		case err := <-crowned:
+			crowned <- err
+			t.Errorf("hand-off crowned the target before the title write (err=%v): group lock released early", err)
+		case <-time.After(wait):
+		}
+	}
+	if err := p.applyRegroupPlan(context.Background(), probe, plan, rgRoot, rep); err != nil {
+		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+	}
+	if !started.Load() {
+		t.Fatalf("apply never reached the bulk move (logs %v)", rep.logs)
+	}
+
+	select {
+	case err := <-crowned:
+		if err != nil {
+			t.Fatalf("Crown after apply: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("hand-off still blocked after the apply returned: group lock leaked")
+	}
+	if edFiles, _ := s.GetBookFiles(ed.ID); len(edFiles) != 2 {
+		t.Fatalf("edition has %d files, want 2 (moves written under the lock)", len(edFiles))
+	}
+	if edAfter, _ := s.GetBookByID(ed.ID); edAfter == nil || edAfter.Title != "The Book" {
+		t.Fatalf("edition not retitled under the lock: %+v", edAfter)
+	}
+	if libAfter, _ := s.GetBookByID(lib.ID); libAfter == nil || libAfter.IsPrimaryVersion == nil || *libAfter.IsPrimaryVersion {
+		t.Fatalf("library copy still primary after the queued hand-off: %+v", libAfter)
+	}
+}
+
+// rgJoinGroupStore moves book id into version group vg right after the first
+// read of it returns, as a concurrent writer would between the apply's
+// pre-lock read of the target and its recheck.
+type rgJoinGroupStore struct {
+	*database.PebbleStore
+	id, vg string
+	done   bool
+}
+
+func (s *rgJoinGroupStore) GetBookByID(id string) (*database.Book, error) {
+	b, err := s.PebbleStore.GetBookByID(id)
+	if id == s.id && !s.done {
+		s.done = true
+		if _, merr := s.PebbleStore.ModifyBook(id, func(mb *database.Book) error {
+			mb.VersionGroupID = &s.vg
+			return nil
+		}); merr != nil {
+			return nil, merr
+		}
+	}
+	return b, err
+}
+
+// A target that joins a version group between the apply's pre-lock read and
+// the recheck is refused as changed: the recheck would otherwise read the
+// group's incumbent without holding that group's lock.
+func TestITunesRegroupApply_TargetJoinedGroupRefused(t *testing.T) {
+	s := regroupStore(t)
+	b1 := seedBook(t, s, "Frag A")
+	b2 := seedBook(t, s, "Frag B")
+	seedFilePID(t, s, b1, "p1")
+	seedFilePID(t, s, b2, "p2")
+
+	p := &Plugin{}
+	rep := &fakeReporter{}
+	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	if err != nil {
+		t.Fatalf("buildRegroupSnapshot: %v", err)
+	}
+	plan := itunesservice.PlanRegroup([]itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}, snap)
+	if plan.Consolidated != 1 || plan.Groups[0].Target == "" || plan.Groups[0].FreshBook {
+		t.Fatalf("plan = %+v, want consolidate onto an existing book", plan.Groups)
+	}
+	target := plan.Groups[0].Target
+
+	wrapped := &rgJoinGroupStore{PebbleStore: s, id: target, vg: "vg-joined"}
+	if err := p.applyRegroupPlan(context.Background(), wrapped, plan, rgRoot, rep); err != nil {
+		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+	}
+	var found bool
+	for _, l := range rep.logs {
+		if strings.Contains(l, "recheck refuses it as "+itunesservice.EntangleChanged) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no %q refusal logged: %v", itunesservice.EntangleChanged, rep.logs)
+	}
+	if files, _ := s.GetBookFiles(target); len(files) != 1 {
+		t.Fatalf("target has %d files, want 1 (group must be skipped)", len(files))
 	}
 }
