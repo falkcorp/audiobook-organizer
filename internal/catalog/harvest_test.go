@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
 // last-edited: 2026-10-02
 
@@ -1137,9 +1137,16 @@ func TestRun_ZeroTotalBreakerTreatsMassZeroAsOutage(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, a := range append(slices.Clone(authors), fresh) {
+		// Filed authors keep their pre-run streak (0). The never-harvested
+		// one counts its held empty run (1): only the window, which an
+		// outage cannot fake, can complete it.
+		want := 0
+		if a.Key == fresh.Key {
+			want = 1
+		}
 		s, _ := st.GetAuthorState(a.Key)
-		if s == nil || s.State != database.CatalogHarvestPartial || s.ShortRuns != 0 || s.MarkedStale != 0 {
-			t.Errorf("%s under a mass zero reply: %+v; want partial, short_runs 0, nothing stale", a.Name, s)
+		if s == nil || s.State != database.CatalogHarvestPartial || s.ShortRuns != want || s.MarkedStale != 0 {
+			t.Errorf("%s under a mass zero reply: %+v; want partial, short_runs %d, nothing stale", a.Name, s, want)
 		}
 	}
 	if n, _ := st.CountStale(); n != 0 {
@@ -1425,5 +1432,99 @@ func TestSettleZero_SkipsAStateChangedSinceItsHold(t *testing.T) {
 	got, _ := st.GetAuthorState(a.Key)
 	if !got.LastAttemptAt.Equal(newer.LastAttemptAt) {
 		t.Errorf("settle overwrote a newer state: last_attempt %v; want %v", got.LastAttemptAt, newer.LastAttemptAt)
+	}
+}
+
+// emptyRuns drives SelectDue+Run over withCatalog authors (each lists two
+// products) and empty never-harvested authors (no products ever), once per
+// entry of advance (moving the clock first), and returns the store and the
+// tally of each run.
+func emptyRuns(t *testing.T, withCatalog, empty int, advance []time.Duration) (*database.CatalogStore, []ScopeAuthor, []ScopeAuthor, []*Tally) {
+	t.Helper()
+	st, _ := openCatalog(t)
+	full, by := breakerAuthors(withCatalog)
+	var empties []ScopeAuthor
+	for i := range empty {
+		n := fmt.Sprintf("Empty Author %d", i)
+		empties = append(empties, ScopeAuthor{Key: HarvestKey(n), Name: n})
+	}
+	l := &scriptLister{list: func(name string, page, size int) metadata.AuthorPage { return slicePage(by[name], page, size) }}
+	c := &clock{t: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 3, Now: c.Now})
+	all := append(slices.Clone(full), empties...)
+	var tallies []*Tally
+	for _, d := range advance {
+		c.Add(d)
+		due, err := h.SelectDue(all, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tally, err := h.Run(context.Background(), &fakeReporter{}, due, RunOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tallies = append(tallies, tally)
+	}
+	return st, full, empties, tallies
+}
+
+func states(t *testing.T, st *database.CatalogStore, authors []ScopeAuthor) []string {
+	t.Helper()
+	var out []string
+	for _, a := range authors {
+		s, _ := st.GetAuthorState(a.Key)
+		if s == nil {
+			out = append(out, "none")
+			continue
+		}
+		out = append(out, s.State)
+	}
+	return out
+}
+
+// TestRun_EmptyNeverHarvestedAuthorsCompleteAfterTheWindow: 4 authors with
+// catalogs and 6 that really have none, run repeatedly. The empty six trip
+// the fallback breaker every run they are judged, but each held zero run
+// still counts toward an empty streak; once ShortAcceptRuns runs span
+// ZeroTotalAcceptWindow they complete as empty and stop being due.
+func TestRun_EmptyNeverHarvestedAuthorsCompleteAfterTheWindow(t *testing.T) {
+	st, full, empties, _ := emptyRuns(t, 4, 6, []time.Duration{0, time.Hour, 4 * 24 * time.Hour})
+	for _, s := range states(t, st, empties) {
+		if s != database.CatalogHarvestPartial {
+			t.Fatalf("empties before the window: %v; want all partial", states(t, st, empties))
+		}
+	}
+	st, full, empties, tallies := emptyRuns(t, 4, 6, []time.Duration{0, time.Hour, 4 * 24 * time.Hour, 4 * 24 * time.Hour})
+	for _, s := range append(states(t, st, full), states(t, st, empties)...) {
+		if s != database.CatalogHarvestComplete {
+			t.Fatalf("after the window: catalog %v empty %v; want all complete", states(t, st, full), states(t, st, empties))
+		}
+	}
+	h := NewHarvester(nil, st, Settings{})
+	if due, _ := h.SelectDue(append(slices.Clone(full), empties...), nil); len(due) != 0 {
+		t.Errorf("%d authors still due after the empties were accepted", len(due))
+	}
+	if last := tallies[len(tallies)-1]; !strings.Contains(last.Summary(), "repeat") && last.ZeroBreakerTripped.Load() {
+		t.Errorf("trip summary does not separate repeat-zero authors from first-time ones: %s", last.Summary())
+	}
+}
+
+// TestRun_TinyScopedEmptyRunCompletesAfterTheWindowNotSooner: 3 empty
+// authors, a run too small to judge. Three runs inside two hours (an outage
+// mid-streak looks exactly like this) must NOT complete them: the window, not
+// the run count, is what an outage cannot fake. A run past the window does.
+func TestRun_TinyScopedEmptyRunCompletesAfterTheWindowNotSooner(t *testing.T) {
+	st, _, empties, _ := emptyRuns(t, 0, 3, []time.Duration{0, time.Hour, time.Hour})
+	for _, s := range states(t, st, empties) {
+		if s != database.CatalogHarvestPartial {
+			t.Fatalf("3 runs inside 2h: %v; want partial (no fast track)", states(t, st, empties))
+		}
+	}
+	st, _, empties, _ = emptyRuns(t, 0, 3, []time.Duration{0, time.Hour, time.Hour, 8 * 24 * time.Hour})
+	for _, s := range states(t, st, empties) {
+		if s != database.CatalogHarvestComplete {
+			t.Errorf("after the window: %v; want complete", states(t, st, empties))
+			break
+		}
 	}
 }

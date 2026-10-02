@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7c2e4a90-1d6f-4b38-8e57-3a9b5c1f0d26
 // last-edited: 2026-10-02
 
@@ -179,8 +179,13 @@ type fetchResult struct {
 // Short-listing kinds, and how many consecutive agreeing short runs it takes
 // to accept one (see HarvestAuthor).
 const (
-	shortTruncated  = "truncated"
-	shortZeroTotal  = "zero_total"
+	shortTruncated = "truncated"
+	shortZeroTotal = "zero_total"
+	// shortEmpty is the streak of a NEVER-HARVESTED author (no entries on
+	// file) answering "0 results". It is not a short listing (nothing can be
+	// staled), but when the run breaker holds such an author partial the
+	// streak is what lets a really empty author be accepted eventually.
+	shortEmpty      = "empty"
 	ShortAcceptRuns = 3
 
 	// ZeroTotalAcceptWindow is how long a run of agreeing "0 results"
@@ -193,6 +198,17 @@ const (
 	// with it. Seven days outlasts any provider incident seen so far and is
 	// still well inside the 30-day default interval, so a truly gone catalog
 	// is recognized within one reharvest cycle.
+	//
+	// The same rule (ShortAcceptRuns held zero runs spanning this window)
+	// accepts a never-harvested author as EMPTY when the breaker keeps
+	// holding it (a run that trips, or one too small to judge). Every held
+	// zero run counts, an outage run included: deliberately, the window and
+	// not the run count is the evidence, and an outage cannot fake seven
+	// days. Not counting outage runs would instead strand the authors it is
+	// for: once the authors with catalogs are complete, a run of only the
+	// empty ones is all zeros and would never count. The cost of being wrong
+	// is small here: an author with no entries has nothing to stale, so a
+	// catalog hidden by a 7-day outage is only found one reharvest later.
 	ZeroTotalAcceptWindow = 7 * 24 * time.Hour
 
 	// The run-level zero-total breaker: when more than ZeroBreakerFraction of
@@ -363,6 +379,20 @@ func (h *Harvester) harvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 			harvestLog.Warn("author %q: %s (run %d of %d before it is accepted); entries kept, nothing marked stale, retried next run",
 				logger.SanitizeLogValue(a.Name), fr.short, st.ShortRuns, ShortAcceptRuns)
 		}
+	}
+	if fr.err == nil && fr.zero && filed == 0 {
+		// A never-harvested author answering 0: its own streak, so a held
+		// run still builds evidence (see shortEmpty). Any other answer
+		// leaves these fields zero, which resets it.
+		st.ShortKind, st.ShortDelivered, st.ShortRuns = shortEmpty, 0, 1
+		since := now
+		if prev != nil && prev.ShortKind == shortEmpty && prev.ShortRuns > 0 {
+			st.ShortRuns = prev.ShortRuns + 1
+			if prev.ShortSince != nil {
+				since = *prev.ShortSince
+			}
+		}
+		st.ShortSince = &since
 	}
 	if fr.duplicates > 0 {
 		harvestLog.Warn("author %q: listing repeated %d products, so it may have omitted as many; nothing marked stale",
@@ -557,6 +587,10 @@ type Tally struct {
 	// judge the run (see ZeroBreakerMinAuthors); unfiled zero authors were
 	// left partial rather than recorded complete-and-empty.
 	ZeroBreakerUnjudged atomic.Bool
+	// ZeroRepeat counts, on a trip, the zero-total authors that were already
+	// on a zero streak; EmptyAccepted counts never-harvested authors whose
+	// held empty streak spanned the window and were accepted as empty.
+	ZeroRepeat, EmptyAccepted atomic.Int64
 }
 
 // Summary renders the tally for progress labels and the final log line.
@@ -565,7 +599,10 @@ func (t *Tally) Summary() string {
 		t.Complete.Load(), t.Partial.Load(), t.Failed.Load(), t.Kept.Load(), t.Capped.Load(), t.Conflicts.Load(),
 		t.Duplicated.Load(), t.ZeroTotal.Load())
 	if t.ZeroBreakerTripped.Load() {
-		s += " ZERO-TOTAL BREAKER TRIPPED (provider failure; nothing staled)"
+		s += fmt.Sprintf(" ZERO-TOTAL BREAKER TRIPPED (provider failure; nothing staled; %d of the zero-total authors were repeat-zero)", t.ZeroRepeat.Load())
+	}
+	if n := t.EmptyAccepted.Load(); n > 0 {
+		s += fmt.Sprintf(" empty_accepted=%d", n)
 	}
 	if t.ZeroBreakerUnjudged.Load() {
 		s += " zero-total breaker could not judge (too few authors answered; unfiled zero authors left partial)"
@@ -647,6 +684,14 @@ func pendingHold(prev *database.CatalogAuthorState, now database.CatalogAuthorSt
 	return hold
 }
 
+// emptyAccepted reports whether a never-harvested author's empty streak
+// (as of the run that computed st) has reached ShortAcceptRuns runs over
+// ZeroTotalAcceptWindow.
+func emptyAccepted(st database.CatalogAuthorState) bool {
+	return st.ShortKind == shortEmpty && st.ShortRuns >= ShortAcceptRuns && st.ShortSince != nil &&
+		st.LastAttemptAt.Sub(*st.ShortSince) >= ZeroTotalAcceptWindow
+}
+
 // zeroVerdict is the breaker's judgement of one run.
 type zeroVerdict int
 
@@ -702,11 +747,20 @@ func (h *Harvester) settleZero(reporter registry.Reporter, z *zeroLedger, tally 
 	switch verdict {
 	case zeroTrips:
 		tally.ZeroBreakerTripped.Store(true)
-		msg = fmt.Sprintf("zero-total breaker: %d of %d %s answered 0 results; treated as a provider failure, not counted, nothing staled (%d zero-total authors held partial)",
-			zeros, pop, scope, len(z.obs))
+		first, repeat := 0, 0
+		for _, o := range z.obs {
+			if o.prev != nil && o.prev.ShortRuns > 0 && (o.prev.ShortKind == shortEmpty || o.prev.ShortKind == shortZeroTotal) {
+				repeat++
+			} else {
+				first++
+			}
+		}
+		tally.ZeroRepeat.Store(int64(repeat))
+		msg = fmt.Sprintf("zero-total breaker: %d of %d %s answered 0 results (%d first-time, %d repeat-zero); treated as a provider failure, nothing staled, %d zero-total authors held partial (never-harvested repeat-zero authors are accepted as empty once their streak spans %s)",
+			zeros, pop, scope, first, repeat, len(z.obs), ZeroTotalAcceptWindow)
 	case zeroUnjudged:
 		tally.ZeroBreakerUnjudged.Store(true)
-		msg = fmt.Sprintf("zero-total breaker cannot judge: only %d %s (minimum %d); unfiled zero-total authors left partial and retried",
+		msg = fmt.Sprintf("zero-total breaker cannot judge: only %d %s (minimum %d); unfiled zero-total authors left partial and retried (accepted as empty once their streak spans the window)",
 			pop, scope, ZeroBreakerMinAuthors)
 	}
 	if msg != "" {
@@ -728,7 +782,25 @@ func (h *Harvester) settleZero(reporter registry.Reporter, z *zeroLedger, tally 
 			continue
 		}
 		if verdict == zeroTrips || (verdict == zeroUnjudged && !o.filed) {
+			if !o.filed && emptyAccepted(o.final) {
+				// Held every run, but its empty streak now spans the
+				// window: accept it as empty (nothing on file to stale).
+				final := o.final
+				if err := h.Store.PutAuthorState(&final); err != nil {
+					errs = append(errs, fmt.Errorf("zero-total accept empty %q: %w", key, err))
+					continue
+				}
+				tally.Partial.Add(-1)
+				tally.Complete.Add(1)
+				tally.EmptyAccepted.Add(1)
+				continue
+			}
 			hold := pendingHold(o.prev, o.final, msg)
+			if !o.filed {
+				// Everything else stays pre-run; the empty streak counts.
+				hold.ShortKind, hold.ShortRuns, hold.ShortDelivered, hold.ShortSince =
+					o.final.ShortKind, o.final.ShortRuns, o.final.ShortDelivered, o.final.ShortSince
+			}
 			if err := h.Store.PutAuthorState(&hold); err != nil {
 				errs = append(errs, fmt.Errorf("zero-total hold %q: %w", key, err))
 			}
