@@ -22,3 +22,17 @@ The same absent-key tombstone pattern is gone from `UpdateBook`'s
 request) and from `DeleteBook`'s `book_sig:`, `emb:v:book:`, `chapters:`,
 `book_authors:`, `book_narrators:`, `user_tag:book:`, `alt_titles:book:` and
 `metadata_cache:` deletes, which are now staged only when the key exists.
+
+Follow-ups from review of the same change:
+
+- `maintenance.book-atpath-index-verify` range-scans the marker family on disk
+  again and reports `markers_not_in_set`: markers on disk that the in-memory
+  set lacks, the state in which lookups would skip an undecodable row and fail
+  open. Verify re-adds those ids to the set (memory only) and fails the op.
+- `DeleteBook` now holds the book's `book_authors` stripe from the
+  `book_authors:<id>` probe through the commit, so a concurrent
+  `SetBookAuthors` cannot commit a credit row between the probe and the delete
+  and leave it naming a deleted book.
+- Book-atpath backfill, rebuild and verify runs are serialized store-wide. The
+  startup backfill shares no concurrency key with the rebuild op, so two runs
+  could overlap and one could drop a still-undecodable marker from the set.
