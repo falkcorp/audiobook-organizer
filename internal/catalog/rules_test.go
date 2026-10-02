@@ -79,6 +79,10 @@ func TestEditionGroupKey(t *testing.T) {
 			t.Errorf("edition %q keyed %q, want %q", title, got, base)
 		}
 	}
+	// Same author, different work: different group.
+	if got := EditionGroupKey("Adrian Tchaikovsky", "B002XLHS8Q", "Children of Time"); got == base || got == "" {
+		t.Errorf("two works by one author share a group (%q)", got)
+	}
 	// Different author identity: different group, same title.
 	if got := EditionGroupKey("Someone Else", "B000000001", "Cage of Souls"); got == base {
 		t.Error("two authors with one title share a group")
