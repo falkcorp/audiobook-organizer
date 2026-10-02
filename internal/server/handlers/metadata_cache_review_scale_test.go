@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_review_scale_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f7b2d90-5c1e-4a86-9e43-8b6d1f0c2a75
 // last-edited: 2026-10-02
 
@@ -399,4 +399,15 @@ func firstIDs(b *testing.B, h *MetadataCacheHandler, n int) string {
 	}
 	sort.Strings(ids)
 	return strings.Join(ids, ",")
+}
+
+// The real store, through the real constructor, resolves the cache write
+// counter -- without it the snapshot would rebuild only on marks and age.
+func TestReviewSnapshot_RealStoreResolvesTheWriteCounter(t *testing.T) {
+	store, svc := reviewSeed(t, 3)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	require.NotNil(t, h.reviewSnap.gen)
+	before := h.reviewSnap.gen()
+	require.NoError(t, store.PutMetadataCache(&database.MetadataCandidateCache{BookID: "x"}))
+	require.Equal(t, before+1, h.reviewSnap.gen())
 }

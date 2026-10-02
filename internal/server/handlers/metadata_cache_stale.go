@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
 // last-edited: 2026-10-02
 
@@ -127,10 +127,11 @@ type chunkFiles struct {
 }
 
 func (c chunkFiles) GetBookFiles(bookID string) ([]database.BookFile, error) {
-	if c.byBook == nil {
-		return c.cacheRowBookReader.GetBookFiles(bookID)
+	if files, ok := c.byBook[bookID]; ok {
+		return files, nil
 	}
-	return c.byBook[bookID], nil
+	// Not one of this chunk's books (or no batch): read it from the store.
+	return c.cacheRowBookReader.GetBookFiles(bookID)
 }
 
 // filesForChunk returns the reader one chunk's rows use for file reads: the
