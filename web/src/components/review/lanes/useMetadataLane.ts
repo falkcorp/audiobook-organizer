@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.26.0
+// version: 1.27.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-09-30
+// last-edited: 2026-10-02
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -824,6 +824,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const [reviewLevel, setReviewLevelState] = useState<ReviewLevel>(initialLevel);
   const [chipFilter, setChipFilter] = useState<ChipFilter | null>(null);
   const [unreviewableResults, setUnreviewableResults] = useState<CandidateResult[]>([]);
+  // Full rows (with candidate descriptions) for books the page has shown,
+  // keyed by book id. `results` is the index (descriptions dropped); the page
+  // fetches the full rows for what it shows and swaps their candidates in.
+  // Reset with every index load so a refreshed index never shows an older
+  // detail row.
+  const [detailsById, setDetailsById] = useState<Map<string, CandidateResult>>(() => new Map());
   const [unreviewableError, setUnreviewableError] = useState<string | null>(null);
   // The refreshKey the loaded bucket belongs to, or -1 for "never loaded". A
   // refresh invalidates it, and the load effect fetches again only if a chip
@@ -935,8 +941,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
-  // Fetch the entire cached review set once; paginate and filter client-side.
-  // `limit=0` tells the server "return all rows".
+  // Fetch the entire cached review set once, as an index; paginate and filter
+  // client-side. `limit=0` with all=true tells the server "return all rows";
+  // view=index drops each candidate's description, which only a visible row
+  // reads (fetched per page below). The full list was 93 MB and 119 s on
+  // production and timed out; the index is served from the server's snapshot.
   useEffect(() => {
     if (!active) return;
     setLoading(true);
@@ -948,7 +957,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       // all=true is required, not incidental: the server caps an unpaged
       // request to a default page, and every derivation below (filters,
       // grouping, chip views) must see the whole library, not its first page.
-      .getCachedReviewResults(0, 0, true)
+      .getCachedReviewResults(0, 0, true, 'reviewable', { view: 'index' })
       .then((data) => {
         if (fetchId !== fetchIdRef.current) return; // stale -- a newer fetch is in flight
         const allResults = data.results || [];
@@ -1050,6 +1059,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         });
 
         setResults(allResults);
+        detailEpochRef.current += 1;
+        detailAskedRef.current = new Set();
+        setDetailsById(new Map());
         const tc = data.total_count ?? allResults.length;
         setSummary({
           matched: data.matched ?? allResults.filter((r) => r.status === 'matched').length,
@@ -1323,10 +1335,59 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // asked for; `page` is what is actually reachable.
   const page = Math.min(requestedPage, totalPages);
 
-  const pageResults = useMemo(() => {
+  const pageIndexRows = useMemo(() => {
     const start = (page - 1) * pageSize;
     return filteredResults.slice(start, start + pageSize);
   }, [filteredResults, page, pageSize]);
+
+  // The page's rows with their full candidates swapped in once fetched. Only
+  // the candidate is taken from the detail row, and only when its hash is the
+  // index row's: status, stale flag and book info stay the index's, so a
+  // detail fetched a moment later can never contradict the filters and counts
+  // the page was built from.
+  const pageResults = useMemo(
+    () =>
+      pageIndexRows.map((r) => {
+        const d = detailsById.get(r.book.id);
+        return d?.candidate && d.candidate_hash === r.candidate_hash
+          ? { ...r, candidate: d.candidate }
+          : r;
+      }),
+    [pageIndexRows, detailsById]
+  );
+
+  // Fetch the full rows for the visible page's books that have not been asked
+  // for since the index loaded. One request per page change, sized by the
+  // page, never by the library. `detailEpochRef` is bumped with every index
+  // load (below), so a response that started before it is dropped instead of
+  // mixing an older index's details into the new one.
+  const detailAskedRef = useRef<Set<string>>(new Set());
+  const detailEpochRef = useRef(0);
+  useEffect(() => {
+    if (!active) return;
+    const missing = pageIndexRows
+      .filter((r) => r.candidate && !detailAskedRef.current.has(r.book.id))
+      .map((r) => r.book.id);
+    if (missing.length === 0) return;
+    missing.forEach((id) => detailAskedRef.current.add(id));
+    const epoch = detailEpochRef.current;
+    api
+      .getCachedReviewResults(0, 0, false, 'reviewable', { ids: missing })
+      .then((data) => {
+        if (epoch !== detailEpochRef.current) return;
+        setDetailsById((prev) => {
+          const next = new Map(prev);
+          for (const r of data.results || []) next.set(r.book.id, r);
+          return next;
+        });
+      })
+      .catch(() => {
+        // The index rows are still shown, just without their descriptions.
+        // Forget the ask so the next page change or refresh tries again.
+        if (epoch !== detailEpochRef.current) return;
+        missing.forEach((id) => detailAskedRef.current.delete(id));
+      });
+  }, [active, pageIndexRows]);
 
   const { groups, groupedBookIds } = useMemo(() => {
     const groupMap = new Map<string, CandidateGroup>();

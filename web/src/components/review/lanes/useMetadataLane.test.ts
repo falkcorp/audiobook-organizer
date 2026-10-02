@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.25.0
+// version: 1.26.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-09-30
+// last-edited: 2026-10-02
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -62,6 +62,29 @@ function reviewPayload(results: api.CandidateResult[]) {
     matched: results.filter((r) => r.status === 'matched').length,
     no_match: results.filter((r) => r.status === 'no_match').length,
     errors: 0,
+  };
+}
+
+type ReviewResponse = Awaited<ReturnType<typeof api.getCachedReviewResults>>;
+
+/**
+ * Serves index loads from a queue and answers every per-page detail request
+ * (ids=) with nothing, for tests that script a SEQUENCE of index responses.
+ * mockResolvedValueOnce cannot tell the two request shapes apart, so a detail
+ * fetch would consume a response meant for the next index load.
+ */
+function routeIndexQueue(): (next: Promise<unknown> | unknown) => void {
+  const queue: Array<Promise<unknown> | unknown> = [];
+  vi.mocked(api.getCachedReviewResults).mockImplementation(
+    (_limit, _offset, _all, _bucket, options = {}) => {
+      if (options.ids || queue.length === 0) {
+        return Promise.resolve(reviewPayload([]) as ReviewResponse);
+      }
+      return Promise.resolve(queue.shift()) as Promise<ReviewResponse>;
+    }
+  );
+  return (next) => {
+    queue.push(next);
   };
 }
 
@@ -226,9 +249,9 @@ describe('stale-response discard', () => {
       resolveFirst = r;
     });
 
-    vi.mocked(api.getCachedReviewResults)
-      .mockReturnValueOnce(first as ReturnType<typeof api.getCachedReviewResults>)
-      .mockResolvedValueOnce(reviewPayload([makeResult('second')]));
+    const push = routeIndexQueue();
+    push(first);
+    push(reviewPayload([makeResult('second')]));
 
     const { result } = renderHook(() => useMetadataLane(toast));
 
@@ -992,9 +1015,8 @@ describe('dispatch', () => {
   it('a parked Replace pins the candidate shown at the click, even if a refresh lands before confirm', async () => {
     // window.confirm blocked the event loop; the dialog does not, so a refresh
     // can replace the rows while the owner is still reading the prompt.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValueOnce(
-      reviewPayload([makeResult('a', { candidate_hash: 'h-shown' }, { title: 'Shown' })])
-    );
+    const push = routeIndexQueue();
+    push(reviewPayload([makeResult('a', { candidate_hash: 'h-shown' }, { title: 'Shown' })]));
     vi.mocked(api.batchApplyFromCache).mockResolvedValue({
       op_id: 'op-parked',
     } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
@@ -1010,9 +1032,7 @@ describe('dispatch', () => {
     });
     expect(result.current.pendingReplace?.ids).toEqual(['a']);
 
-    vi.mocked(api.getCachedReviewResults).mockResolvedValueOnce(
-      reviewPayload([makeResult('a', { candidate_hash: 'h-later' }, { title: 'Later' })])
-    );
+    push(reviewPayload([makeResult('a', { candidate_hash: 'h-later' }, { title: 'Later' })]));
     act(() => result.current.refresh());
     await waitFor(() => expect(result.current.results[0].candidate?.title).toBe('Later'));
 
@@ -1636,7 +1656,10 @@ describe('fetches the whole reviewable set', () => {
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(api.getCachedReviewResults).toHaveBeenCalledWith(0, 0, true);
+    // view=index: the same whole set, minus candidate descriptions.
+    expect(api.getCachedReviewResults).toHaveBeenCalledWith(0, 0, true, 'reviewable', {
+      view: 'index',
+    });
   });
 
   it('warns when the server still reports the response as truncated', async () => {
@@ -1668,5 +1691,114 @@ describe('fetches the whole reviewable set', () => {
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(toast).not.toHaveBeenCalledWith(expect.anything(), 'warning');
+  });
+});
+
+describe('index + per-page details (the 93 MB / 119 s full list timed out)', () => {
+  // The server answers by request shape: the index for view=index, the full
+  // rows of exactly the asked books for ids=.
+  function serveIndexAndDetails(n: number) {
+    const ids = Array.from({ length: n }, (_, i) => `b${String(i).padStart(3, '0')}`);
+    const index = ids.map((id) =>
+      makeResult(id, { candidate_hash: `h-${id}` }, { description: undefined })
+    );
+    vi.mocked(api.getCachedReviewResults).mockImplementation(
+      async (_limit, _offset, _all, _bucket, options = {}) => {
+        if (options.ids) {
+          const rows = options.ids.map((id) =>
+            makeResult(id, { candidate_hash: `h-${id}` }, { description: `About ${id}` })
+          );
+          return reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
+        }
+        return reviewPayload(index) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
+      }
+    );
+    return ids;
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.getCachedReviewResults).mockReset();
+    localStorage.clear();
+  });
+
+  it('loads the index once and fetches details for the visible page only', async () => {
+    const ids = serveIndexAndDetails(120);
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setPageSize(25));
+
+    const calls = vi.mocked(api.getCachedReviewResults).mock.calls;
+    expect(calls[0]).toEqual([0, 0, true, 'reviewable', { view: 'index' }]);
+    await waitFor(() =>
+      expect(result.current.pageResults[0].candidate?.description).toBe(`About ${ids[0]}`)
+    );
+    const detailCalls = () => calls.filter((c) => c[4]?.ids);
+    // Every detail request is for rows the page showed, never the library.
+    for (const c of detailCalls()) expect(c[4]?.ids?.length).toBeLessThanOrEqual(25);
+    const asked = new Set(detailCalls().flatMap((c) => c[4]?.ids ?? []));
+    expect(asked.has(ids[0])).toBe(true);
+    expect(asked.has(ids[100])).toBe(false);
+
+    // Paging fetches that page's rows, once.
+    act(() => result.current.setPage(5));
+    await waitFor(() =>
+      expect(result.current.pageResults[0].candidate?.description).toBe(`About ${ids[100]}`)
+    );
+    const before = detailCalls().length;
+    act(() => result.current.setPage(1));
+    act(() => result.current.setPage(5));
+    await Promise.resolve();
+    expect(detailCalls().length).toBe(before);
+    // Filters and counts still span the whole index.
+    expect(result.current.results).toHaveLength(120);
+  });
+
+  it('keeps an index row whose detail hash differs (the detail is never newer truth)', async () => {
+    vi.mocked(api.getCachedReviewResults).mockImplementation(
+      async (_l, _o, _a, _b, options = {}) =>
+        reviewPayload([
+          options.ids
+            ? makeResult('a', { candidate_hash: 'h-new' }, { title: 'Refetched', description: 'x' })
+            : makeResult('a', { candidate_hash: 'h-old' }, { title: 'Indexed' }),
+        ]) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+    );
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() =>
+      expect(vi.mocked(api.getCachedReviewResults).mock.calls.some((c) => c[4]?.ids)).toBe(true)
+    );
+    await Promise.resolve();
+    expect(result.current.pageResults[0].candidate?.title).toBe('Indexed');
+  });
+
+  it('bulk apply pins books on pages never opened, from the index', async () => {
+    serveIndexAndDetails(60);
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op1',
+    } as unknown as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+    );
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setPageSize(25));
+    act(() => result.current.selectAllMatching());
+    expect(result.current.selectedIds.size).toBe(60);
+    await act(async () => {
+      result.current.dispatch({
+        lane: 'metadata',
+        type: 'applySelected',
+        ids: [...result.current.selectedIds],
+      });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(api.batchApplyFromCache).toHaveBeenCalled());
+    const pins = vi.mocked(api.batchApplyFromCache).mock.calls[0][2] as Record<
+      string,
+      { content_hash?: string; title?: string }
+    >;
+    // b050 sits on page 3, which was never shown: its pin still carries the
+    // candidate and hash the index served.
+    expect(pins.b050).toMatchObject({ content_hash: 'h-b050', title: 'Cand b050' });
   });
 });

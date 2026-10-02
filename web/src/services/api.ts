@@ -38,13 +38,13 @@ const REVIEW_ITEMS_TIMEOUT_MS = 30_000;
 const DEDUP_CANDIDATES_TIMEOUT_MS = 60_000;
 
 /**
- * Cached metadata review set. Deliberately the most generous of the four: the
- * lane calls it with limit=0, so the server resolves cached candidates AND
- * builds book info for every reviewable row. This is a backstop against a
- * hung connection, not a latency budget. Raised 120s -> 300s on 2026-10-02 as
- * a stopgap: production had grown to 39,689 reviewable rows (a 93 MB body in
- * 118.8s), so the 120s cap failed every load. The real fix is server-side
- * paging (fix/metadata-review-fast).
+ * Cached metadata review set. Deliberately the most generous of the four. The
+ * lane loads the whole set as an index (`view: 'index'`), served from the
+ * server's review snapshot in seconds once it is built. This is a backstop
+ * against a hung connection, not a latency budget. It stays at 300s (raised
+ * from 120s on 2026-10-02, when the unpaged list had grown to 39,689 rows, a
+ * 93 MB body in 118.8s) because the first request after a restart, before the
+ * snapshot warm-up finishes, still waits for a full build.
  */
 const CACHED_REVIEW_TIMEOUT_MS = 300_000;
 
@@ -4546,11 +4546,27 @@ export async function listCachedCandidates(
  */
 export type ReviewBucket = 'reviewable' | 'unreviewable';
 
+/**
+ * Extra shapes of the review request.
+ *
+ * - `view: 'index'` returns every row with each candidate's `description`
+ *   dropped: the only large field, and one only a visible row reads. Counts,
+ *   statuses, stale flags and `candidate_hash` are those of the full rows, so
+ *   filters, grouping, chips and bulk-apply pins work on the index unchanged.
+ * - `ids` returns the full rows of just those books (in bucket order),
+ *   ignoring limit/offset -- how the page fetches what it is showing.
+ */
+export interface CachedReviewOptions {
+  view?: 'index';
+  ids?: string[];
+}
+
 export async function getCachedReviewResults(
   limit: number,
   offset: number,
   all = false,
-  bucket: ReviewBucket = 'reviewable'
+  bucket: ReviewBucket = 'reviewable',
+  options: CachedReviewOptions = {}
 ): Promise<{
   results: CandidateResult[];
   total_count: number;
@@ -4615,6 +4631,8 @@ export async function getCachedReviewResults(
   // Sent only when it changes something, so the default request is byte-for-
   // byte what it was.
   if (bucket !== 'reviewable') params.set('bucket', bucket);
+  if (options.view) params.set('view', options.view);
+  if (options.ids) params.set('ids', options.ids.join(','));
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/cache/review?${params}`, {
     timeoutMs: CACHED_REVIEW_TIMEOUT_MS,
   });
