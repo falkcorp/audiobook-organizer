@@ -1,5 +1,5 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-01
 
@@ -467,8 +467,14 @@ func TestAudiobookService_RestoreAudiobook_Success(t *testing.T) {
 		LibraryState:         new("deleted"),
 		PreTrashLibraryState: new("organized"),
 	}
+	// "organized" comes back only with present files inside the library root.
+	prevRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = "/lib"
+	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
 	mockStore.EXPECT().GetBookByID("r-1").Return(deleted, nil)
-	mockStore.EXPECT().GetBookFiles("r-1").Return(nil, nil)
+	mockStore.EXPECT().GetBookFiles("r-1").Return([]database.BookFile{{ID: "f-1", BookID: "r-1", FilePath: "/lib/A/B/b.m4b"}}, nil)
+	// The restore drops pending user-state moves of a restored merge loser.
+	mockStore.EXPECT().ScanPrefix("merge_user_state_pending:").Return(nil, nil)
 	mockStore.EXPECT().ModifyBook("r-1", mock.Anything).RunAndReturn(
 		func(_ string, fn func(*database.Book) error) (*database.Book, error) {
 			row := *deleted

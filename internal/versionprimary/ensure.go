@@ -1,7 +1,7 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
-// last-edited: 2026-09-24
+// last-edited: 2026-10-01
 
 package versionprimary
 
@@ -102,6 +102,17 @@ var errHandoffAbort = errors.New("versionprimary: member changed since the group
 // retiring members of one group cannot interleave read-decide-write. It is
 // the innermost lock: nothing else is taken while it is held.
 var groupLocks [64]sync.Mutex
+
+// LockGroup takes group gid's hand-off lock and returns its release. A
+// caller that reads the group to decide a member's flag and then writes it
+// (a restore reading IncumbentExcept before YieldToIncumbent) holds it across
+// both, so no hand-off can change the group in between.
+//
+// Lock order: the merge lock (merge.LockMergeRMW) before this one, and a
+// book's write lock (ModifyBook) inside it, as EnsureSinglePrimary already
+// does. It is not reentrant: release it before calling EnsureSinglePrimary
+// or anything else that hands off a group's primary.
+func LockGroup(gid string) (unlock func()) { return lockGroup(gid) }
 
 func lockGroup(gid string) func() {
 	h := fnv.New32a()

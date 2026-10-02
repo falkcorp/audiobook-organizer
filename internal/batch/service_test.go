@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.6.0
-// last-edited: 2026-09-30
+// version: 1.7.0
+// last-edited: 2026-10-01
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -424,10 +424,13 @@ func TestExecuteOperations_MixedActions(t *testing.T) {
 		t.Errorf("expected book2 to be soft-deleted, got %+v", book2)
 	}
 
-	// Verify restore leaves book3 unmarked
+	// Verify restore leaves book3, which was never in the trash, exactly as it
+	// was: a nil flag stays nil (a restore of a live row writes nothing; until
+	// the review of #3649 it wrote an explicit false and could yield the row's
+	// primary flag).
 	book3, _ := store.GetBookByID("book3")
-	if book3 == nil || book3.MarkedForDeletion == nil || *book3.MarkedForDeletion {
-		t.Errorf("expected book3 to be unmarked after restore, got %+v", book3)
+	if book3 == nil || book3.MarkedForDeletion != nil {
+		t.Errorf("expected book3 untouched by the restore, got %+v", book3)
 	}
 }
 
