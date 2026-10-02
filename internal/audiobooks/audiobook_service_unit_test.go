@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-30
+// last-edited: 2026-10-01
 
 package audiobooks
 
@@ -460,23 +460,30 @@ func TestAudiobookService_RestoreAudiobook_Success(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 	svc := NewAudiobookService(mockStore)
 
+	// Trashed by DeleteAudiobook: labelled "deleted", "organized" recorded.
 	deleted := &database.Book{
-		ID:                "r-1",
-		MarkedForDeletion: new(true),
-		LibraryState:      new("deleted"),
-	}
-	restored := &database.Book{
-		ID:                "r-1",
-		MarkedForDeletion: new(false),
-		LibraryState:      new("imported"),
+		ID:                   "r-1",
+		MarkedForDeletion:    new(true),
+		LibraryState:         new("deleted"),
+		PreTrashLibraryState: new("organized"),
 	}
 	mockStore.EXPECT().GetBookByID("r-1").Return(deleted, nil)
-	mockStore.EXPECT().UpdateBook("r-1", mock.AnythingOfType("*database.Book")).Return(restored, nil)
+	mockStore.EXPECT().GetBookFiles("r-1").Return(nil, nil)
+	mockStore.EXPECT().ModifyBook("r-1", mock.Anything).RunAndReturn(
+		func(_ string, fn func(*database.Book) error) (*database.Book, error) {
+			row := *deleted
+			if err := fn(&row); err != nil {
+				return nil, err
+			}
+			return &row, nil
+		})
 
 	book, err := svc.RestoreAudiobook(context.Background(), "r-1")
 	assert.NoError(t, err)
 	assert.NotNil(t, book)
-	assert.Equal(t, "imported", *book.LibraryState)
+	assert.Equal(t, "organized", *book.LibraryState, "restored to the recorded pre-trash state")
+	assert.Nil(t, book.PreTrashLibraryState, "the record is cleared once used")
+	assert.False(t, book.IsSoftDeleted())
 }
 
 // --- GetSoftDeletedBooks ---

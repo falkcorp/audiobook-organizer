@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.104.0
+// version: 2.105.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-22
+// last-edited: 2026-10-01
 
 package database
 
@@ -276,6 +276,10 @@ type Book struct {
 	Quantity            *int       `json:"quantity,omitempty"`
 	MarkedForDeletion   *bool      `json:"marked_for_deletion,omitempty"`
 	MarkedForDeletionAt *time.Time `json:"marked_for_deletion_at,omitempty"`
+	// PreTrashLibraryState is the LibraryState a trash path overwrote with
+	// "deleted", so a restore can put it back (database.RestoreLibraryStateFromTrash).
+	// Nil when the row is live, or was trashed by a path that kept its state.
+	PreTrashLibraryState *string `json:"pre_trash_library_state,omitempty"`
 	// QuarantineReason is set when a file is moved to .failed/. Non-nil means quarantined.
 	QuarantineReason *string    `json:"quarantine_reason,omitempty"`
 	QuarantinedAt    *time.Time `json:"quarantined_at,omitempty"`

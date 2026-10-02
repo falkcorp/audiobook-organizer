@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-09-28
+// last-edited: 2026-10-01
 
 package merge
 
@@ -780,6 +780,13 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 		}
 		b.MarkedForDeletion = nil
 		b.MarkedForDeletionAt = nil
+		// The combine never relabels the state, so this is a no-op unless a
+		// later trash path (reconcile's) labelled the absorbed row "deleted":
+		// then the shared restore rule puts back what it recorded. The files
+		// are back on the survivor at this point, so the legacy fallback (no
+		// record) reads none and answers "imported". MergedIntoBookID is the
+		// journal's to restore, not cleared here.
+		database.RestoreLibraryStateFromTrash(b, nil, TrashRestoreEnv())
 		b.FilePath = a.FilePath
 		b.VersionGroupID = a.VersionGroupID
 		b.IsPrimaryVersion = a.IsPrimaryVersion
