@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_lease_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6b1e8d42-3c7f-4a95-b2d6-9f0a4e7c1d38
 // last-edited: 2026-10-01
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // fragApplyErr is fragFixture.apply without requiring success.
@@ -330,4 +331,114 @@ func TestFolderBooksFixer_LeaseLostAtThePathKeyClaim(t *testing.T) {
 	require.Equal(t, repairs.OutcomeAborted, res.Rows[0].Outcome, "%+v", res.Rows[0])
 	require.Contains(t, res.Rows[0].Error, "path key of row", "refused at the claim, not at a later write")
 	require.True(t, f.live(t, "fb"), "the folder-book is not retired")
+}
+
+// The duplicate-copies fixer waits for merge.LockMergeRMW like the fragment
+// fixer does: an outside holder keeps it past the lease, and the wait renews
+// the lease so the row applies once the lock is free. Before the fix its
+// Apply blocked in LockMergeRMW with no renewal and the row's first write was
+// refused on the lapsed lease.
+//
+// Not parallel: it holds the process-wide merge lock.
+func TestDuplicateCopies_MergeLockWaitKeepsTheLease(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	d.planFor(t, dcFixerID, "op-plan", nil)
+	scan := d.scan()
+	scan.mu.Lock()
+	scan.ttl = 400 * time.Millisecond
+	scan.mu.Unlock()
+	d.p.standDownWait.LockRenewEvery = 20 * time.Millisecond
+
+	merge.LockMergeRMW()
+	type out struct {
+		res *repairs.ApplyResult
+		err error
+	}
+	done := make(chan out, 1)
+	go func() {
+		no := false
+		params, err := json.Marshal(repairs.ApplyParams{FixerID: dcFixerID, PlanOpID: "op-plan", RowIDs: []string{dupRowID(s, l)}, DryRun: &no})
+		if err != nil {
+			done <- out{nil, err}
+			return
+		}
+		rep := &repairsOpReporter{id: "op-apply"}
+		runErr := d.p.runRepairsApply(context.Background(), params, rep)
+		res, _ := rep.result.(*repairs.ApplyResult)
+		done <- out{res, runErr}
+	}()
+	time.Sleep(1500 * time.Millisecond) // well past the 400ms lease
+	merge.UnlockMergeRMW()
+	o := <-done
+	require.NoError(t, o.err, "%+v", o.res)
+	require.Equal(t, 1, o.res.Applied, "%+v", o.res.Rows)
+	require.False(t, d.live(t, "L"))
+}
+
+// A duplicate-copies loser is demoted by Crown inside the hand-off, journaled
+// as a demote and then a hand-off note, with no Writer history row (Crown
+// writes the store directly). A retry that meets the loser already retired
+// must see the newer hand-off note and owe nothing. Before the shared
+// resumeHandOff checked the hand-off note first, it demanded a history row
+// from the fixer and refused the row as changed since plan.
+func TestRetireInto_RetiredLoserHandedOffByCrownOwesNothing(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	gid := "vg-dune"
+	yes := true
+	_, err := d.s.ModifyBook(s, func(b *database.Book) error { b.VersionGroupID = &gid; return nil })
+	require.NoError(t, err)
+	_, err = d.s.ModifyBook(l, func(b *database.Book) error { b.VersionGroupID, b.IsPrimaryVersion = &gid, &yes; return nil })
+	require.NoError(t, err)
+
+	// The cut-off run: demote journaled, Crown, hand-off noted, loser retired.
+	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-cut")
+	require.NoError(t, w.Journal(l, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
+	cr, err := versionprimary.Crown(fragEnsureStore{OpsStore: d.s, chapters: d.s}, gid, s)
+	require.NoError(t, err)
+	require.Equal(t, s, cr.PrimaryID)
+	require.NoError(t, w.Journal(l, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", "", gid))
+	now := time.Now().UTC()
+	_, err = d.s.ModifyBook(l, func(b *database.Book) error {
+		b.MarkedForDeletion, b.MarkedForDeletionAt, b.MergedIntoBookID = &yes, &now, &s
+		return nil
+	})
+	require.NoError(t, err)
+
+	retry := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-retry")
+	n, err := retireInto(context.Background(), d.p, d.s, retry, time.Now, dcFixerID, l, s, nil)
+	require.NoError(t, err)
+	require.Zero(t, n)
+	require.Zero(t, retry.Journaled(), "nothing owed, nothing journaled")
+}
+
+// The folder-books create credits the group's author with a direct
+// SetBookAuthors, which on a resumed apply has no journal row in front of
+// it. The lease lapsing just after the book is created refuses the row at
+// the credit, before it is written, not at the next book_file journal row.
+func TestFolderBooksFixer_LeaseLostBeforeTheAuthorCredit(t *testing.T) {
+	f := newFragFixture(t)
+	f.seedWolfe(t, fbITunes, "citadel")
+	row := f.fbSingleRow(t, "op-plan")
+	scan := f.scan()
+	fbCrashHook = func(stage string, n int) error {
+		if stage == "book" {
+			scan.mu.Lock()
+			scan.renewsLeft = 0
+			scan.mu.Unlock()
+		}
+		return nil
+	}
+	t.Cleanup(func() { fbCrashHook = nil })
+	no := false
+	params, err := json.Marshal(repairs.ApplyParams{FixerID: fbFixerID, PlanOpID: "op-plan", RowIDs: []string{row.RowID}, DryRun: &no})
+	require.NoError(t, err)
+	rep := &repairsOpReporter{id: "op-apply"}
+	runErr := f.p.runRepairsApply(context.Background(), params, rep)
+	require.ErrorIs(t, runErr, repairs.ErrStandDownLost)
+	res, ok := rep.result.(*repairs.ApplyResult)
+	require.True(t, ok)
+	require.Equal(t, repairs.OutcomeAborted, res.Rows[0].Outcome, "%+v", res.Rows[0])
+	require.Contains(t, res.Rows[0].Error, "author credit of", "refused at the credit, not at a later write")
 }
