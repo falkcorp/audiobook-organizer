@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_match.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f7c1b9e-58a2-4d0f-9e61-c2a4b8d07e15
 // last-edited: 2026-10-01
 
@@ -355,7 +355,7 @@ func isNumberDesignator(norm string) bool {
 func asinAuthorMatches(bookAuthors, candAuthors []string) bool {
 	want := map[string]bool{}
 	for _, a := range bookAuthors {
-		if n := normAuthor(a); n != "" {
+		for _, n := range normAuthorForms(a) {
 			want[n] = true
 		}
 	}
@@ -363,29 +363,44 @@ func asinAuthorMatches(bookAuthors, candAuthors []string) bool {
 		return false
 	}
 	for _, a := range candAuthors {
-		if n := normAuthor(a); n != "" && want[n] {
-			return true
+		for _, n := range normAuthorForms(a) {
+			if want[n] {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// normAuthor folds "Last, First" to "First Last", cuts a " - role" suffix
-// ("Ken Liu - translator"), and keeps only letters and digits, so
-// "J.R.R. Tolkien", "J. R. R. Tolkien" and "Tolkien, J.R.R." agree.
-func normAuthor(s string) string {
+// normAuthorForms returns the comparable forms of one author name: the name as
+// written and, when it has exactly one comma that is not a suffix ("Jr."),
+// the "Last, First" swap. Both are offered because the comma alone cannot tell
+// "Le Guin, Ursula K." (swap) from "Pierce Brown, Tim Reynolds" (a list); a
+// swapped list ("timreynoldspiercebrown") matches no real author. A " - role"
+// suffix ("Ken Liu - translator") is cut first. Each form keeps only letters
+// and digits, so "J.R.R. Tolkien", "J. R. R. Tolkien" and "Tolkien, J.R.R."
+// agree.
+func normAuthorForms(s string) []string {
 	s = strings.TrimSpace(s)
 	if i := strings.Index(s, " - "); i > 0 {
 		s = s[:i]
 	}
+	var out []string
+	if n := alnumLower(s); n != "" {
+		out = append(out, n)
+	}
 	if parts := strings.Split(s, ","); len(parts) == 2 {
 		last, first := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
-		// "Brown, Pierce" swaps; "Pierce Brown, Tim Reynolds" (a list) and
-		// "Martin Luther King, Jr." (a suffix) do not.
-		if last != "" && first != "" && !strings.Contains(last, " ") && !nameSuffixes[normTitle(first)] {
-			s = first + " " + last
+		if last != "" && first != "" && !nameSuffixes[normTitle(first)] {
+			if n := alnumLower(first + " " + last); n != "" {
+				out = append(out, n)
+			}
 		}
 	}
+	return out
+}
+
+func alnumLower(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {

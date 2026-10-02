@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_match_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a2d6e41-0b7c-4f93-a5e8-1c9f3d7b2a60
 // last-edited: 2026-10-01
 
@@ -42,6 +42,8 @@ func TestASINTitleMatches(t *testing.T) {
 		{"unabridged parenthetical stripped", "Red Rising (Unabridged)", "Red Rising", "", true},
 		{"dramatized bracket kept", "Light Bringer", "Light Bringer [Dramatized Adaptation]", "", false},
 		{"split release kept", "Light Bringer", "Light Bringer (1 of 3)", "", false},
+		{"book N of M split release kept", "Light Bringer", "Light Bringer (Book 1 of 3)", "", false},
+		{"bracket naming a book is kept", "Red Rising", "Red Rising [Dramatized Adaptation of Book 1]", "", false},
 		{"hyphenated word is not a separator", "Harry Potter and the Half-Blood Prince", "Harry Potter and the Half-Blood Prince", "", true},
 		{"empty book title rejects", "", "Anything", "", false},
 	}
@@ -68,6 +70,9 @@ func TestASINAuthorMatches(t *testing.T) {
 		{"role suffix", []string{"Ken Liu"}, []string{"Ken Liu - translator"}, true},
 		{"mismatch", []string{"Pierce Brown"}, []string{"Dan Brown"}, false},
 		{"no book author", nil, []string{"Pierce Brown"}, false},
+		{"multi-word last name swapped", []string{"Le Guin, Ursula K."}, []string{"Ursula K. Le Guin"}, true},
+		{"list on product side is not a person", []string{"Tim Reynolds"}, []string{"Pierce Brown, Tim Reynolds"}, false},
+		{"role cut before comparing", []string{"Ken Liu"}, []string{"Ken Liu - foreword"}, true},
 		{"suffix not swapped", []string{"Martin Luther King, Jr."}, []string{"Jr. Martin Luther King"}, false},
 	}
 	for _, tc := range cases {
