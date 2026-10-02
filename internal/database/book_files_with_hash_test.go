@@ -1,5 +1,5 @@
 // file: internal/database/book_files_with_hash_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d27b9e0-8c14-4f6a-a3d1-0e9f72b6c845
 // last-edited: 2026-10-01
 
@@ -146,6 +146,23 @@ func TestBookFilesWithHash_FailsClosedWithoutMemdb(t *testing.T) {
 	s.UseMemDB = false
 	_, err = s.BookFilesWithHash("h1")
 	require.True(t, errors.Is(err, ErrBookFilesWithHashUnavailable), "got %v", err)
+}
+
+// TestBookFilesWithHash_IncompleteMemdbKeepsTheCause: a memdb known to have
+// lost book_file rows refuses with BOTH the unavailable sentinel and
+// ErrMemdbIncomplete reachable, so a caller can tell the owner "wait for
+// warmup / restart" rather than a generic unreadable.
+func TestBookFilesWithHash_IncompleteMemdbKeepsTheCause(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	s.WaitForWarmup()
+	m := s.mem()
+	require.NotNil(t, m)
+	m.recordLostRows(memTableBookFiles, 1)
+	_, err = s.BookFilesWithHash("h1")
+	require.ErrorIs(t, err, ErrBookFilesWithHashUnavailable)
+	require.ErrorIs(t, err, ErrMemdbIncomplete, "got %v", err)
 }
 
 // TestClaimBookFilePathKey_PointsTheKeyOnlyWhileTheRowIsThere: the key names

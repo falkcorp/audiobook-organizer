@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.135.0
+// version: 1.135.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-01
 
@@ -3415,7 +3415,9 @@ func (m *MockStore) BookFilesWithHash(hash string) ([]BookFile, error) {
 	if m.BookFilesWithHashFunc != nil {
 		return m.BookFilesWithHashFunc(hash)
 	}
-	return nil, nil
+	// Fail closed: its callers veto a write on a hit, so an unstubbed lookup
+	// answering "no holder" would let a test pass by accident.
+	return nil, fmt.Errorf("MockStore.BookFilesWithHash not stubbed: %w", ErrBookFilesWithHashUnavailable)
 }
 func (m *MockStore) ClaimBookFilePathKey(bookID, fileID, path string) (bool, error) {
 	if m.ClaimBookFilePathKeyFunc != nil {

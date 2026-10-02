@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-01
 
@@ -595,7 +595,10 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 		return out
 	}
 	if fresh.Fingerprint != planned.Fingerprint {
-		out.Outcome = OutcomeChangedSincePlan
+		// Carry why the re-plan differs, so the owner reads the cause (a
+		// skip such as an incomplete file index, or what changed) rather
+		// than a bare outcome.
+		out.Outcome, out.Skipped, out.Error = OutcomeChangedSincePlan, fresh.Skipped, changedWhy(fresh)
 		return out
 	}
 	if !fresh.Applicable() {
@@ -635,6 +638,15 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 	}
 	out.Outcome = OutcomeApplied
 	return out
+}
+
+// changedWhy is a re-planned row's own account of itself: its skip reason
+// when the re-plan skips it, else its reason ("" when it has neither).
+func changedWhy(r Row) string {
+	if r.SkipReason != "" {
+		return r.SkipReason
+	}
+	return r.Reason
 }
 
 // partitionRows groups rows that share any book id (transitively) and keeps

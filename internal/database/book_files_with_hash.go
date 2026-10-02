@@ -1,5 +1,5 @@
 // file: internal/database/book_files_with_hash.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c8e1f47-5a2b-4d96-b0e7-8f14a6d2c953
 // last-edited: 2026-10-01
 
@@ -46,7 +46,7 @@ func (p *PebbleStore) BookFilesWithHash(hash string) ([]BookFile, error) {
 	}
 	refs, err := m.bookFileRefsWithHash(hash)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBookFilesWithHashUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrBookFilesWithHashUnavailable, err)
 	}
 	for _, prefix := range []string{"book_file_hash:", "book_file_orig_hash:"} {
 		v, closer, err := p.db.Get([]byte(prefix + hash))

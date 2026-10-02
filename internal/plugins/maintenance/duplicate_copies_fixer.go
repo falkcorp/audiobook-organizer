@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-10-01
 
@@ -149,7 +149,20 @@ const (
 	dcSkipNoHeir      = "skipped_no_primary_heir"
 	dcSkipUnreadable  = "skipped_unreadable"
 	dcSkipBoxSet      = "skipped_box_set"
+	// dcSkipIndexIncomplete: the box-set check's who-else-holds-this-audio
+	// read refused because memdb's book_file hash index is not complete
+	// (warmup still running, or rows known lost at warmup). It clears on its
+	// own once warmup finishes; a restart rebuilds the index.
+	dcSkipIndexIncomplete = "skipped_file_index_incomplete"
 )
+
+// dcIndexIncompleteWhy is dcSkipIndexIncomplete's skip reason, worded for the
+// owner rather than as a generic unreadable.
+const dcIndexIncompleteWhy = "skipped: file index incomplete, restart or wait for warmup " +
+	"(the box-set check could not list every book holding this audio, so it cannot rule out a box set)"
+
+// dcLog is the duplicate-copies fixer's logger.
+var dcLog = logger.New("maintenance")
 
 // Identity thresholds.
 const (
@@ -1323,6 +1336,10 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 		}
 	}
 	skip, ev, rt, berr := dcBoxSet(run, ids, itunes)
+	if errors.Is(berr, database.ErrBookFilesWithHashUnavailable) {
+		dcLog.Warn("%s: %s: %s", dcFixerID, dcIndexIncompleteWhy, logger.SanitizeLogValue(berr.Error()))
+		return fail(dcSkipIndexIncomplete, dcIndexIncompleteWhy+": "+berr.Error())
+	}
 	if berr != nil {
 		return fail(dcSkipUnreadable, "box-set check could not read who else holds the larger copy's audio: "+berr.Error())
 	}
@@ -1786,7 +1803,7 @@ func (f *duplicateCopiesFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 		if steps == 0 {
 			return err
 		}
-		return fmt.Errorf("%w: after %d step(s): %v", repairs.ErrPartiallyApplied, steps, err)
+		return fmt.Errorf("%w: after %d step(s): %w", repairs.ErrPartiallyApplied, steps, err)
 	}
 	for _, rp := range plan.Repoints {
 		if err := ctx.Err(); err != nil {
