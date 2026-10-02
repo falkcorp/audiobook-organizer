@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.138.0
+// version: 2.139.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-30
+// last-edited: 2026-10-02
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -40,10 +40,13 @@ const DEDUP_CANDIDATES_TIMEOUT_MS = 60_000;
 /**
  * Cached metadata review set. Deliberately the most generous of the four: the
  * lane calls it with limit=0, so the server resolves cached candidates AND
- * builds book info for every reviewable row (5,774 on production). This is a
- * backstop against a hung connection, not a latency budget.
+ * builds book info for every reviewable row. This is a backstop against a
+ * hung connection, not a latency budget. Raised 120s -> 300s on 2026-10-02 as
+ * a stopgap: production had grown to 39,689 reviewable rows (a 93 MB body in
+ * 118.8s), so the 120s cap failed every load. The real fix is server-side
+ * paging (fix/metadata-review-fast).
  */
-const CACHED_REVIEW_TIMEOUT_MS = 120_000;
+const CACHED_REVIEW_TIMEOUT_MS = 300_000;
 
 /**
  * wrapTrigger is the single seam every op-launching API call funnels through.

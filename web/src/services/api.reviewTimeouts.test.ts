@@ -1,7 +1,7 @@
 // file: web/src/services/api.reviewTimeouts.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b4e1a06-2c53-4f89-b7d1-6a0e5c38f942
-// last-edited: 2026-09-01
+// last-edited: 2026-10-02
 //
 // Every /review data call must have a deadline.
 //
@@ -80,10 +80,10 @@ describe('review route request deadlines', () => {
     await assertTimesOutAt(() => getDedupCandidates(), 60_000);
   });
 
-  it('getCachedReviewResults times out at 120s', async () => {
+  it('getCachedReviewResults times out at 300s', async () => {
     // Deliberately the most generous: the metadata lane calls this with
     // limit=0, so the server builds book info for every reviewable row.
-    await assertTimesOutAt(() => getCachedReviewResults(0, 0), 120_000);
+    await assertTimesOutAt(() => getCachedReviewResults(0, 0), 300_000);
   });
 
   it('a caller-supplied signal still cancels before the deadline', async () => {
