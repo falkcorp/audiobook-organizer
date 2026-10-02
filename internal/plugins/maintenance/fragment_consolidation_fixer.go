@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-01
 
@@ -2026,7 +2026,12 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	// Held for the whole row, as fs-regroup-xml's fragment merge holds it:
 	// a dedup merge must not interleave with rows moving between books and
 	// books being retired.
-	merge.LockMergeRMW()
+	// The lock is process-wide: an outside holder (a dedup merge) may keep
+	// it past the scan stand-down lease, so the wait renews the lease and
+	// refuses the row (ErrStandDownLost, nothing written) if it lapses.
+	if err := w.LockWaiting(ctx, "the merge lock", merge.LockMergeRMW, merge.UnlockMergeRMW); err != nil {
+		return err
+	}
 	defer merge.UnlockMergeRMW()
 	locked, err := f.Replan(ctx, nil, fresh, nil)
 	if err != nil {

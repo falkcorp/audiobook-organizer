@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-01
 
@@ -408,8 +408,11 @@ const defaultApplyConcurrency = 4
 // For each selected row, in order: renew the stand-down lease (hard abort
 // when lost), re-run the framework guards on fresh reads, Replan the row and
 // refuse it as changed_since_plan when its fingerprint differs from the
-// stored plan's, check the lease is still valid, then hand the fresh row to
-// f.Apply. A dry run (dryRun) stops before the lease and the write and
+// stored plan's, renew the lease again, then hand the fresh row to f.Apply.
+// While f.Apply runs, every write through deps.Writer renews the lease too
+// (Writer.setLease), so a long row keeps it; a renewal that fails stops the
+// row's writes there and the row is reported aborted_standdown_lost, with
+// the fixer's error (which names the steps already written) in Error. A dry run (dryRun) stops before the lease and the write and
 // reports would_apply; it takes no stand-down.
 //
 // CONCURRENCY: rows are partitioned so that rows sharing any book id land in
@@ -488,6 +491,20 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	}
 
 	var lost atomic.Bool
+	if held && deps.Writer != nil {
+		// The writes inside a row are the row's progress: each one renews
+		// the lease (see Writer.setLease for why a row-start beat alone lost
+		// a 315-book row in prod).
+		deps.Writer.setLease(func() bool {
+			if StandDownLost(deps.StandDown, holder, held) {
+				lost.Store(true)
+				return false
+			}
+			return true
+		})
+		defer deps.Writer.setLease(nil)
+		deps.Writer.lockRenewEvery = deps.Wait.LockRenewEvery
+	}
 	var done atomic.Int64
 	// Checkpoint state: the rows settled since the last checkpoint and when
 	// it was written. Guarded by mu, like results.
@@ -575,6 +592,8 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 		return abort()
 	}
 	// Heartbeat: RunItems stamps op progress but does not renew the lease.
+	// This beat covers the guards and Replan below; the Writer beats on every
+	// write once Apply starts.
 	if !dryRun && StandDownLost(deps.StandDown, holder, held) {
 		lost.Store(true)
 		return abort()
@@ -620,14 +639,23 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 		out.Outcome = OutcomeWouldApply
 		return out
 	}
-	// Last check before the write: the lease must still be live.
-	if held && !deps.StandDown.ScanStandDownValid(holder) {
+	// Last check before the write: renew, so the guards' and Replan's time
+	// is not charged against the row's writes, and refuse a lapsed lease.
+	if StandDownLost(deps.StandDown, holder, held) {
 		lost.Store(true)
 		return abort()
 	}
 	if err := f.Apply(ctx, deps.Writer, fresh); err != nil {
 		out.Error = err.Error()
 		switch {
+		case errors.Is(err, ErrStandDownLost):
+			// The Writer refused a write: the lease is gone. Checked before
+			// partial on purpose. Aborted is not a settled outcome
+			// (settledForResume), so a resumed apply re-runs the row, and
+			// every fixer skips the steps a cut-off run already wrote. Error
+			// keeps the fixer's account of how far the row got.
+			lost.Store(true)
+			out.Outcome = OutcomeAborted
 		case errors.Is(err, ErrPartiallyApplied):
 			out.Outcome = OutcomePartial
 		case errors.Is(err, ErrChangedSincePlan):

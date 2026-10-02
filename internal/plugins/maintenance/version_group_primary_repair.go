@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 package maintenance
 
@@ -181,6 +181,12 @@ type vgRepairGroupReport struct {
 	NonLiveKept []string `json:"nonlive_kept_no_live_primary,omitempty"`
 	Outcome     string   `json:"outcome,omitempty"`
 	Error       string   `json:"error,omitempty"`
+	// err is the error behind Error, kept as a value so the Repairs-lane
+	// adapter can return it with its chain (repairs.ErrStandDownLost above
+	// all: a stringified one settles the row as failed and a resume never
+	// finishes it). wrote counts the book writes write() made before it.
+	err   error
+	wrote int
 }
 
 type vgRepairReport struct {
@@ -771,9 +777,12 @@ func vgStoreAlive(store OpsStore) func(string) bool {
 // double rather than a hidden zero, and a non-live copy ABS still lists is
 // only demoted once the live primary is in place.
 func (a *vgApplier) write(gid string, planned []database.Book, g *vgRepairGroupReport) {
+	fail := func(err error) {
+		g.Outcome, g.err, g.Error = vgOutcomeFailed, err, err.Error()
+	}
 	fresh, err := a.store.GetBooksByVersionGroup(gid)
 	if err != nil {
-		g.Outcome, g.Error = vgOutcomeFailed, "re-read group: "+err.Error()
+		fail(fmt.Errorf("re-read group: %w", err))
 		return
 	}
 	plannedKeys := vgKeys(planned)
@@ -798,10 +807,11 @@ func (a *vgApplier) write(gid string, planned []database.Book, g *vgRepairGroupR
 			if errors.Is(err, errVGChangedSincePlan) {
 				g.Outcome = vgOutcomeChangedSincePlan
 			} else {
-				g.Outcome, g.Error = vgOutcomeFailed, fmt.Sprintf("write winner %s: %v", g.WinnerID, err)
+				fail(fmt.Errorf("write winner %s: %w", g.WinnerID, err))
 			}
 			return
 		}
+		g.wrote++
 		a.fieldsFilled.Add(int64(filled))
 	}
 
@@ -815,10 +825,11 @@ func (a *vgApplier) write(gid string, planned []database.Book, g *vgRepairGroupR
 			case errors.Is(err, errVGChangedSincePlan):
 				g.Outcome = vgOutcomePartial
 			default:
-				g.Outcome, g.Error = vgOutcomeFailed, fmt.Sprintf("demote %s: %v", id, err)
+				fail(fmt.Errorf("demote %s: %w", id, err))
 			}
 			return
 		}
+		g.wrote++
 	}
 	g.Outcome = vgOutcomeApplied
 }

@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_credits.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2d552bb6-33a3-4168-9c64-c78bec530ec4
-// last-edited: 2026-09-29
+// last-edited: 2026-10-01
 
 package repairs
 
@@ -70,6 +70,11 @@ func (w *Writer) ModifyCredits(bookID string, fn func(cur []database.BookAuthor)
 	if w.credits == nil {
 		return nil, errors.New("repairs: writer has no credit store")
 	}
+	// Beat before the author lock is taken (the journal row inside fn beats
+	// again under it).
+	if err := w.beat("credits of book " + bookID); err != nil {
+		return nil, err
+	}
 	skipped := false
 	next, err := w.credits.ModifyBookAuthors(bookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
 		out, entry, ferr := fn(cur)
@@ -101,6 +106,9 @@ func (w *Writer) ModifyCredits(bookID string, fn func(cur []database.BookAuthor)
 // which undo-last-apply refuses too. Returns ErrChangedSincePlan when the
 // primary no longer names from.
 func (w *Writer) SetPrimaryAuthor(bookID string, from int, to *database.Author) error {
+	if err := w.beat("primary author of book " + bookID); err != nil {
+		return err
+	}
 	var before, after *int
 	written, err := w.store.ModifyBook(bookID, func(b *database.Book) error {
 		if b.AuthorID == nil || *b.AuthorID != from {
