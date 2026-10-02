@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.6.1
+// version: 2.7.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-10-01
 
@@ -886,78 +886,127 @@ type folderBooksFixer struct {
 	commonMu    sync.Mutex
 	commonCache *fbCommon
 
-	// titleMu guards the title index, rebuilt only when the library
-	// generation moved (titleIndex). It never contends in practice: every
-	// apply that reads it holds the merge lock, which serializes them; the
-	// mutex only makes the cache safe on its own terms.
+	// titleMu guards the title indexes (titleIDs). It never contends in
+	// practice: every apply that reads them holds the merge lock, which
+	// serializes them; the mutex only makes the cache safe on its own terms.
 	titleMu  sync.Mutex
-	titleIdx map[string]fbTitleCache // by key name (titleIndexBy)
+	titleIdx map[string]*fbTitleCache // by key name (titleIDs)
 }
 
-// fbTitleCache is one title index and the library generation it was built at.
+// fbTitleCache is one title index, the library generation it is current at,
+// and each indexed book's key (to move a book whose title changed).
 type fbTitleCache struct {
-	gen uint64
-	idx fbTitleIndex
+	gen   uint64
+	idx   fbTitleIndex
+	keyOf map[string]string
 }
 
 // fbTitleIndex maps a title key (fbNorm(title) for folder-books) to every
 // live book with that key.
 type fbTitleIndex map[string][]string
 
-// titleIndex returns the fbNorm(title) index of the live library, cached per
-// library generation (database.LibraryGenerationOf: bumped by every book
-// create, update and delete) and shared across rows and apply workers.
-//
-// dupNow calls it lazily, under the merge lock, at its first title lookup
-// (after the path and author checks, so a row they refuse pays for no
-// build), and it is rebuilt there whenever the generation moved: one memdb
-// pass. The store bumps the generation only AFTER the memdb write-through
-// (pebble_store.go createBook, updateBookLockedMode, DeleteBook), and the
-// generation is read before the build, so a cached index is never labelled
-// current while missing a write: a write landing during the build moves the
-// generation past the one recorded. Under the lock every merge-lock holder
-// (fragment consolidation, split-book merge, fs-regroup retitles) has
-// finished; a writer that does not take the merge lock (scanner, importer)
-// can still race the check itself, as it could race any check, since the
-// lock never excluded it.
-//
-// GetAllBooksCoreComplete, not GetAllBooksCore: the index authorizes an
-// irreversible create, so a memdb known to be missing rows must not answer
-// it (the store falls through to the authoritative Pebble scan).
-func (f *folderBooksFixer) titleIndex(store OpsStore) (fbTitleIndex, error) {
-	return f.titleIndexBy(store, "fbNorm", fbNorm)
+// titleIndex is titleIDs keyed by fbNorm, for folder-books' duplicate check.
+func (f *folderBooksFixer) titleIndex(store OpsStore, k string) ([]string, error) {
+	return f.titleIDs(store, "fbNorm", fbNorm, k)
 }
 
-// titleIndexBy is titleIndex keyed by key(title) instead (the duplicate-copies
-// fixer keys by dcTitleKey, which drops a leading track number), cached under
-// name with the same generation rule.
-func (f *folderBooksFixer) titleIndexBy(store OpsStore, name string, key func(string) string) (fbTitleIndex, error) {
+// titleIDs returns the live books whose key(title) is k, from an index of the
+// whole live library cached under name and kept current with the library
+// generation (database.LibraryGenerationOf: bumped by every book create,
+// update and delete). It returns a copy; the index itself never leaves the
+// lock.
+//
+// COST. The index is built once from every book (GetAllBooksCoreComplete:
+// it authorizes an irreversible create, so a memdb known to be missing rows
+// must not answer it and the store falls through to the authoritative Pebble
+// scan). After that it is caught up, not rebuilt: the store logs which book
+// each generation bump was for (database.BooksChangedSinceOf), and only those
+// books are re-read (GetBookByID) and moved to their current key. In a bulk
+// apply every applied row bumps the generation, and the old design rebuilt
+// from every book on each following row, under the global merge lock; now a
+// row pays for the books written since the previous one. A full rebuild
+// happens only when the store cannot list the changes completely (no change
+// log, a generation bumped without a record, or more writes than the log
+// holds) — the same answer, by the slow road.
+//
+// FRESHNESS. The store bumps the generation only AFTER the memdb
+// write-through (pebble_store.go writeThroughThenBump), and the bump and its
+// log record are one step, so a book written before the generation a caller
+// catches up to is re-read in its written state. A write landing during the
+// catch-up is logged past the recorded generation and re-read next time. Under
+// the merge lock every merge-lock holder (fragment consolidation, split-book
+// merge, fs-regroup retitles) has finished; a writer that does not take the
+// merge lock (scanner, importer) can still race the check itself, as it could
+// race any check, since the lock never excluded it. Callers re-check each id
+// against the book as it is now.
+func (f *folderBooksFixer) titleIDs(store OpsStore, name string, key func(string) string, k string) ([]string, error) {
 	gen, tracked := database.LibraryGenerationOf(store)
-	cur := gen.Value() // read BEFORE the build: a write during it moves past cur
 	f.titleMu.Lock()
 	defer f.titleMu.Unlock()
-	if c, ok := f.titleIdx[name]; tracked && ok && c.gen == cur {
-		return c.idx, nil
-	}
-	books, err := store.GetAllBooksCoreComplete(0, 0)
-	if err != nil {
-		return nil, fmt.Errorf("list books for the duplicate check: %w", err)
-	}
-	idx := make(fbTitleIndex, len(books))
-	for i := range books {
-		if books[i].IsSoftDeleted() {
-			continue
+	c := f.titleIdx[name]
+	if c != nil && tracked && c.gen != gen.Value() {
+		if ids, upTo, ok := database.BooksChangedSinceOf(store, c.gen); ok {
+			for _, id := range ids {
+				b, err := store.GetBookByID(id)
+				if err != nil {
+					return nil, fmt.Errorf("re-read %s for the duplicate check: %w", id, err)
+				}
+				c.move(id, b, key)
+			}
+			c.gen = upTo
+		} else {
+			c = nil
 		}
-		k := key(books[i].Title)
-		idx[k] = append(idx[k], books[i].ID)
 	}
-	if tracked {
-		if f.titleIdx == nil {
-			f.titleIdx = map[string]fbTitleCache{}
+	if c == nil || !tracked {
+		cur := gen.Value() // read BEFORE the build: a write during it moves past cur
+		books, err := store.GetAllBooksCoreComplete(0, 0)
+		if err != nil {
+			return nil, fmt.Errorf("list books for the duplicate check: %w", err)
 		}
-		f.titleIdx[name] = fbTitleCache{gen: cur, idx: idx}
+		c = &fbTitleCache{gen: cur, idx: make(fbTitleIndex, len(books)), keyOf: make(map[string]string, len(books))}
+		for i := range books {
+			if books[i].IsSoftDeleted() {
+				continue
+			}
+			kk := key(books[i].Title)
+			c.idx[kk] = append(c.idx[kk], books[i].ID)
+			c.keyOf[books[i].ID] = kk
+		}
+		if tracked {
+			if f.titleIdx == nil {
+				f.titleIdx = map[string]*fbTitleCache{}
+			}
+			f.titleIdx[name] = c
+		}
 	}
-	return idx, nil
+	return append([]string(nil), c.idx[k]...), nil
+}
+
+// move re-files book id under its current key: out of its old key, and back
+// in unless it is gone (b nil) or hidden.
+func (c *fbTitleCache) move(id string, b *database.Book, key func(string) string) {
+	if old, ok := c.keyOf[id]; ok {
+		ids := c.idx[old]
+		for i, x := range ids {
+			if x == id {
+				ids = append(ids[:i:i], ids[i+1:]...)
+				break
+			}
+		}
+		if len(ids) == 0 {
+			delete(c.idx, old)
+		} else {
+			c.idx[old] = ids
+		}
+		delete(c.keyOf, id)
+	}
+	if b == nil || b.IsSoftDeleted() {
+		return
+	}
+	kk := key(b.Title)
+	c.idx[kk] = append(c.idx[kk], id)
+	c.keyOf[id] = kk
 }
 
 func newFolderBooksFixer(p *Plugin) *folderBooksFixer {
@@ -1938,11 +1987,11 @@ func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string,
 		}
 	}
 	seen := map[string]bool{}
-	titles, err := f.titleIndex(store) // lazily: the checks above refuse without it
+	titles, err := f.titleIndex(store, want) // lazily: the checks above refuse without it
 	if err != nil {
 		return "", err
 	}
-	for _, id := range titles[want] {
+	for _, id := range titles {
 		if seen[id] || skip(id) {
 			continue
 		}

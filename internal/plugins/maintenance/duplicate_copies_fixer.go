@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-10-01
 
@@ -1694,13 +1694,13 @@ func (f *duplicateCopiesFixer) Replan(ctx context.Context, _ json.RawMessage, pl
 			return repairs.Row{}, err
 		}
 	}
-	titles, err := f.fb.titleIndexBy(store, "dcTitleKey", dcTitleKey)
-	if err != nil {
-		return repairs.Row{}, err
-	}
 	for _, m := range st.Members {
 		if b, ok := lib.books[m]; ok {
-			for _, id := range titles[dcTitleKey(b.Title)] {
+			titles, err := f.fb.titleIDs(store, "dcTitleKey", dcTitleKey, dcTitleKey(b.Title))
+			if err != nil {
+				return repairs.Row{}, err
+			}
+			for _, id := range titles {
 				if _, err := load(id); err != nil {
 					return repairs.Row{}, err
 				}

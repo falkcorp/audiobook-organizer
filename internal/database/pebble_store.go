@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.183.1
+// version: 1.184.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-01
 
@@ -185,6 +185,10 @@ type PebbleStore struct {
 	// library_generation.go for why this lives on the store and why book-file
 	// mutations deliberately do NOT bump it.
 	libGen cache.Generation
+	// bookChanges records which book each libGen bump was for, so a
+	// generation-keyed index can catch up by re-reading only those books
+	// (BooksChangedSince) instead of rebuilding from every book.
+	bookChanges bookChangeLog
 }
 
 // mem returns the active in-memory query layer or nil if warmup hasn't
@@ -2423,8 +2427,10 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 // pre-reads of authors and files can): the Pebble batch has already
 // committed, and a recovered panic must not leave every cache serving the
 // pre-write library under the old generation.
-func (p *PebbleStore) writeThroughThenBump(writeThrough func()) {
-	defer p.libGen.Bump()
+//
+// id is the book written; the bump is logged against it (bookChangeLog).
+func (p *PebbleStore) writeThroughThenBump(id string, writeThrough func()) {
+	defer p.bookChanges.bump(&p.libGen, id)
 	writeThrough()
 }
 
@@ -2586,7 +2592,7 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	p.MarkAllQuickQueriesDirty("create_book")
 
 	// memdb write-through (always on when initialized)
-	p.writeThroughThenBump(func() { p.UpsertBookToMemDB(context.Background(), book) })
+	p.writeThroughThenBump(book.ID, func() { p.UpsertBookToMemDB(context.Background(), book) })
 	// After the memdb write, so a client reacting to the event reads the row.
 	notifyBookChanged(BookChangeCreated, book.ID)
 
@@ -2947,7 +2953,7 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 	// The bump follows the memdb write-through below.
 
 	// memdb write-through
-	p.writeThroughThenBump(func() { p.UpsertBookToMemDB(context.Background(), book) })
+	p.writeThroughThenBump(id, func() { p.UpsertBookToMemDB(context.Background(), book) })
 	notifyBookChanged(BookChangeUpdated, id)
 
 	return book, nil
@@ -3507,7 +3513,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	p.MarkAllQuickQueriesDirty("delete_book")
 
 	// memdb write-through
-	p.writeThroughThenBump(func() { p.DeleteBookFromMemDB(context.Background(), id) })
+	p.writeThroughThenBump(id, func() { p.DeleteBookFromMemDB(context.Background(), id) })
 	notifyBookChanged(BookChangeDeleted, id)
 
 	return nil
