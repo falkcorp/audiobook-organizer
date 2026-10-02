@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-02
 
@@ -1318,11 +1318,10 @@ func TestFragmentFixer_AlreadyRestoredDemoteKeepsALaterUserPick(t *testing.T) {
 	require.True(t, *ob.IsPrimaryVersion, "the user's pick was demoted")
 }
 
-// crownFailsOnce fails the fourth version-group read of group, the read
-// versionprimary.Crown starts with. Before it, in ledger order: the
-// soft-delete revert's incumbent read (versionprimary.IncumbentExcept), and
-// the group checks after the soft-delete and merged-into reverts
-// (RevertService.settleAfter).
+// crownFailsOnce fails the third version-group read of group, the read
+// versionprimary.Crown starts with. Before it: the soft-delete revert's
+// incumbent read (versionprimary.IncumbentExcept) and the settle pass's
+// own read of the group (RevertService.settleGroup), which then crowns.
 type crownFailsOnce struct {
 	*database.PebbleStore
 	group string
@@ -1331,7 +1330,7 @@ type crownFailsOnce struct {
 }
 
 func (s *crownFailsOnce) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
-	if groupID == s.group && s.reads.Add(1) == 4 && s.armed.CompareAndSwap(true, false) {
+	if groupID == s.group && s.reads.Add(1) == 3 && s.armed.CompareAndSwap(true, false) {
 		return nil, errors.New("version group read failed")
 	}
 	return s.PebbleStore.GetBooksByVersionGroup(groupID)
@@ -1389,13 +1388,11 @@ func TestFragmentFixer_RetryCrownsAfterACrownFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, fb.IsPrimaryVersion != nil && *fb.IsPrimaryVersion)
 
-	report, err := undo.PreflightUndoConflicts(f.s, "op-apply")
-	require.NoError(t, err)
-	require.Empty(t, report.CheckFailed, "%+v", report.CheckFailed)
+	// Every row is restored and marked; the failed group settle is owed
+	// and the next revert of the operation retries it.
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
 	require.NoError(t, err)
-	require.Equal(t, 1, rr.AlreadyRestored, "%+v", rr)
-	require.Equal(t, rr.AlreadyRestored, report.AlreadyRestored)
+	require.Empty(t, rr.HandOffFailed, "%+v", rr)
 	sb, err := f.s.GetBookByID(sib)
 	require.NoError(t, err)
 	require.NotNil(t, sb.IsPrimaryVersion)
