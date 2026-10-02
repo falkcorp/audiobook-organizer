@@ -1,5 +1,5 @@
 // file: internal/catalog/disambig.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a1c6e38-2f4b-4d7a-8c05-6b3e1d9f2a87
 // last-edited: 2026-10-01
 
@@ -7,6 +7,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 
@@ -29,9 +30,14 @@ type Resolution struct {
 	Conflict bool
 	// Lookups is how many product lookups were made; LookupErrors how many
 	// failed. A failed lookup leaves the resolution incomplete, and the
-	// caller records the author as partial so it is retried.
+	// caller records the author as partial so it is retried. NotFound
+	// counts owned ASINs the provider has no product for: those are an
+	// answer (no identity), not an error, so they never make the author
+	// partial -- otherwise one delisted owned book would pin the author
+	// partial forever and re-harvest them on every run.
 	Lookups      int
 	LookupErrors int
+	NotFound     int
 }
 
 // LookupFunc fetches one product by ASIN.
@@ -74,6 +80,10 @@ func ResolveAuthorASINs(ctx context.Context, name string, ownedASINs []string, f
 		if err != nil {
 			if ctx.Err() != nil {
 				return res, ctx.Err()
+			}
+			if errors.Is(err, metadata.ErrCatalogProductNotFound) {
+				res.NotFound++
+				continue
 			}
 			res.LookupErrors++
 			continue

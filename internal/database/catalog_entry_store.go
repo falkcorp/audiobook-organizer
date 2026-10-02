@@ -1,5 +1,5 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
 // last-edited: 2026-10-01
 
@@ -137,11 +137,22 @@ type CatalogEntry struct {
 	// ManualOnly marks Doctor Who / Big Finish / Torchwood (R13).
 	ManualOnly bool `json:"manual_only,omitempty"`
 	// NameOnlyAuthor: kept because the author NAME matched, without an
-	// author ASIN confirming identity (R10).
+	// author ASIN confirming identity (R10). Derived: true when no current
+	// harvester confirmed the entry by ASIN (ConfirmedBy is empty).
 	NameOnlyAuthor bool `json:"name_only_author,omitempty"`
 	// AuthorConflict: the owned author resolved to more than one author ASIN
 	// and this entry matched one of them. Not a pick; a census item.
+	// Derived: true when any current harvester saw a conflict.
 	AuthorConflict bool `json:"author_conflict,omitempty"`
+	// ConfirmedBy and ConflictBy are the per-harvester verdicts behind the
+	// two flags above, as harvest keys (a subset of HarvestedBy). A
+	// co-authored product is judged by each of its authors' harvests, and
+	// those verdicts differ (one author has an owned ASIN-tagged book, the
+	// other does not); storing only the flag made it last-writer-wins, so
+	// the entry flipped between confirmed and name_only depending on which
+	// worker finished last.
+	ConfirmedBy []string `json:"confirmed_by,omitempty"`
+	ConflictBy  []string `json:"conflict_by,omitempty"`
 
 	// HarvestedBy is the set of harvest keys whose listing returned this
 	// entry on their most recent fetch. A complete fetch that no longer
@@ -294,6 +305,7 @@ func (s *CatalogStore) UpsertEntries(items []CatalogUpsert, harvestKey string) (
 		entry := in
 		entry.HarvestedAt = now
 		entry.StaleSince = nil
+		entry.ConfirmedBy, entry.ConflictBy = nil, nil
 		if old != nil {
 			entry.ID = old.ID
 			entry.FirstSeenAt = old.FirstSeenAt
@@ -302,6 +314,7 @@ func (s *CatalogStore) UpsertEntries(items []CatalogUpsert, harvestKey string) (
 			entry.EditionGroupID = old.EditionGroupID
 			entry.EditionGroupKey = old.EditionGroupKey
 			entry.HarvestedBy = old.HarvestedBy
+			entry.ConfirmedBy, entry.ConflictBy = old.ConfirmedBy, old.ConflictBy
 			res.Updated++
 		} else {
 			entry.ID = ulid.Make().String()
@@ -311,6 +324,9 @@ func (s *CatalogStore) UpsertEntries(items []CatalogUpsert, harvestKey string) (
 		if harvestKey != "" && !slices.Contains(entry.HarvestedBy, harvestKey) {
 			entry.HarvestedBy = append(slices.Clone(entry.HarvestedBy), harvestKey)
 			slices.Sort(entry.HarvestedBy)
+		}
+		if harvestKey != "" {
+			applyVerdict(&entry, harvestKey, !in.NameOnlyAuthor, in.AuthorConflict)
 		}
 
 		if entry.EditionGroupID == "" {
@@ -462,6 +478,14 @@ func (s *CatalogStore) MarkUnseen(harvestKey string, seen map[string]bool) (int,
 			return 0, err
 		}
 		e.HarvestedBy = slices.DeleteFunc(slices.Clone(e.HarvestedBy), func(k string) bool { return k == harvestKey })
+		if len(e.HarvestedBy) > 0 {
+			// Other authors still list it: their verdicts alone decide the
+			// flags. With no harvester left the entry goes stale and keeps
+			// its last verdicts as history.
+			e.ConfirmedBy = withoutKey(e.ConfirmedBy, harvestKey)
+			e.ConflictBy = withoutKey(e.ConflictBy, harvestKey)
+			deriveVerdictFlags(e)
+		}
 		if len(e.HarvestedBy) == 0 && e.StaleSince == nil {
 			t := now
 			e.StaleSince = &t
@@ -643,4 +667,39 @@ func (s *CatalogStore) CountAuthorStates() (map[string]int, error) {
 		out[st.State]++
 	}
 	return out, iter.Error()
+}
+
+// applyVerdict records one harvester's verdict on an entry and re-derives
+// the flags. Verdicts from keys no longer in HarvestedBy (an entry revived
+// after going stale) are dropped first, so only current harvesters count.
+func applyVerdict(e *CatalogEntry, key string, confirmed, conflict bool) {
+	current := func(k string) bool { return k != key && slices.Contains(e.HarvestedBy, k) }
+	e.ConfirmedBy = slices.DeleteFunc(slices.Clone(e.ConfirmedBy), func(k string) bool { return !current(k) })
+	e.ConflictBy = slices.DeleteFunc(slices.Clone(e.ConflictBy), func(k string) bool { return !current(k) })
+	if confirmed {
+		e.ConfirmedBy = append(e.ConfirmedBy, key)
+		slices.Sort(e.ConfirmedBy)
+	}
+	if conflict {
+		e.ConflictBy = append(e.ConflictBy, key)
+		slices.Sort(e.ConflictBy)
+	}
+	deriveVerdictFlags(e)
+}
+
+// deriveVerdictFlags: name_only unless some current harvester confirmed the
+// entry by author ASIN; conflict if any current harvester saw one.
+func deriveVerdictFlags(e *CatalogEntry) {
+	if len(e.ConfirmedBy) == 0 {
+		e.ConfirmedBy = nil
+	}
+	if len(e.ConflictBy) == 0 {
+		e.ConflictBy = nil
+	}
+	e.NameOnlyAuthor = len(e.ConfirmedBy) == 0
+	e.AuthorConflict = len(e.ConflictBy) > 0
+}
+
+func withoutKey(keys []string, key string) []string {
+	return slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return k == key })
 }
