@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.13.1
+// version: 4.13.2
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-09-26
+// last-edited: 2026-10-02
 
 package server
 
@@ -278,7 +278,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 			return s.dedupEngine != nil
 		},
 		HasMetadataFetchSvc: func() bool {
-			return s.metadataFetchService != nil && s.metadataFetchService.ISBNEnrichment() != nil
+			return s.metadataFetchService != nil
 		},
 		HasActivitySvc: func() bool {
 			return s.activityService != nil

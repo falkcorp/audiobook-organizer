@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.64.0
+// version: 1.65.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -510,8 +510,6 @@ type OpQueueReader interface {
 
 // MetadataRunners runs the metadata enrichment and write-back operations.
 type MetadataRunners interface {
-	// RunIsbnEnrichment delegates to server.runIsbnEnrichment (idempotent).
-	RunIsbnEnrichment(ctx context.Context, progress operations.ProgressReporter, opID string) error
 	// RunMetadataRefreshScan delegates to server.runMetadataRefreshScan (read-only).
 	RunMetadataRefreshScan(ctx context.Context, progress operations.ProgressReporter) error
 	// RunBulkWriteBack delegates to server.runBulkWriteBack (resumable via startIdx).
@@ -718,7 +716,6 @@ type StoreOptimizer interface {
 type CapabilityProbes interface {
 	HasDedupEngine() bool
 	HasMetadataFetchService() bool
-	HasISBNEnrichment() bool
 	HasAIParsing() bool
 	HasBatchPoller() bool
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_match.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f7c1b9e-58a2-4d0f-9e61-c2a4b8d07e15
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package metafetch
 
@@ -41,6 +41,7 @@ package metafetch
 // ambiguous and nothing is written.
 
 import (
+	"fmt"
 	"math"
 	"regexp"
 	"strconv"
@@ -99,24 +100,38 @@ const (
 // asinVerdict is the gate's answer for one candidate.
 type asinVerdict struct {
 	Pass     bool
-	Reason   string   // reject reason when !Pass
+	Reason   string   // reject reason when !Pass (a stable code, counted)
 	Evidence []string // corroboration kinds when Pass
+	// Detail is the reject reason with the concrete values that fired it
+	// ("runtime_conflict: book 612m vs audible 1043m"), for the owner to
+	// read on a listed row. Never used as a count key: the values vary.
+	Detail string
+}
+
+// reject builds a failing verdict whose Detail is the reason code followed by
+// the formatted values (or the bare code when format is empty).
+func reject(reason, format string, args ...any) asinVerdict {
+	d := reason
+	if format != "" {
+		d = reason + ": " + fmt.Sprintf(format, args...)
+	}
+	return asinVerdict{Reason: reason, Detail: d}
 }
 
 // evaluateASINCandidate runs the gate on one catalog product.
 func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerdict {
 	if strings.TrimSpace(c.ASIN) == "" {
-		return asinVerdict{Reason: rejectNoASIN}
+		return reject(rejectNoASIN, "")
 	}
 	if isBoxSet(c.Title) || isBoxSet(c.Subtitle) {
-		return asinVerdict{Reason: rejectBoxSet}
+		return reject(rejectBoxSet, "audible title %q subtitle %q names a multi-book set", c.Title, c.Subtitle)
 	}
 	title, ok := asinTitleMatch(b.Title, c.Title, c.Subtitle)
 	if !ok {
-		return asinVerdict{Reason: rejectTitle}
+		return reject(rejectTitle, "book %q vs audible %q subtitle %q", b.Title, c.Title, c.Subtitle)
 	}
 	if !asinAuthorMatches(b.Authors, c.Authors) {
-		return asinVerdict{Reason: rejectAuthor}
+		return reject(rejectAuthor, "book %q vs audible %q", strings.Join(b.Authors, "; "), strings.Join(c.Authors, "; "))
 	}
 	// A volume number the book carries only in its own trailing parenthetical
 	// ("Red Rising (Book 2)") was stripped for the title compare; it must
@@ -126,14 +141,15 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 	parenVol, hasParenVol := titleParenVolume(b.Title)
 	if hasParenVol {
 		agree := false
-		for _, s := range relevantSeries(b, c) {
+		rel := relevantSeries(b, c)
+		for _, s := range rel {
 			if seq, ok := parseSeriesSequence(s.Sequence); ok && seq == parenVol {
 				agree = true
 				break
 			}
 		}
 		if !agree {
-			return asinVerdict{Reason: rejectVolume}
+			return reject(rejectVolume, "book title %q names volume %g; audible series %s", b.Title, parenVol, seriesRefsLabel(rel))
 		}
 	}
 	// A series-note subtitle is exact only when its number (if any) is the
@@ -163,7 +179,7 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 		case len(note.nums) > 1:
 			title = titlePartial
 		case known > 0 && note.nums[0] != known:
-			return asinVerdict{Reason: rejectVolume}
+			return reject(rejectVolume, "book position %g vs audible subtitle %q (volume %g)", known, c.Subtitle, note.nums[0])
 		case known > 0 && !subtitleNamesSeries(c.Subtitle, b):
 			// The number agrees but the note names another series ("The
 			// First Law, Book 1" on a book in some other series at #1).
@@ -186,7 +202,7 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 				continue
 			}
 			if isSequenceRange(s.Sequence) {
-				return asinVerdict{Reason: rejectBoxSet}
+				return reject(rejectBoxSet, "audible series %q sequence %q is a range", s.Title, s.Sequence)
 			}
 			seq, ok := parseSeriesSequence(s.Sequence)
 			if !ok {
@@ -195,14 +211,14 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 			if seq == float64(b.SeriesSeq) {
 				seriesAgree = true
 			} else {
-				return asinVerdict{Reason: rejectSeriesConflict}
+				return reject(rejectSeriesConflict, "book %q #%d vs audible %q #%s", b.SeriesName, b.SeriesSeq, s.Title, s.Sequence)
 			}
 		}
 	}
 	for _, s := range c.Series {
 		// A range anywhere ("1-3") is a box set, whatever the series name.
 		if isSequenceRange(s.Sequence) {
-			return asinVerdict{Reason: rejectBoxSet}
+			return reject(rejectBoxSet, "audible series %q sequence %q is a range", s.Title, s.Sequence)
 		}
 	}
 
@@ -211,7 +227,8 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 		prod := float64(c.RuntimeMin * 60)
 		ratio := math.Abs(float64(b.RuntimeSec)-prod) / prod
 		if ratio > runtimeVetoRatio {
-			return asinVerdict{Reason: rejectRuntimeConflict}
+			return reject(rejectRuntimeConflict, "book %dm vs audible %dm (off %.0f%%, limit %.0f%%)",
+				b.RuntimeSec/60, c.RuntimeMin, ratio*100, runtimeVetoRatio*100)
 		}
 		runtimeAgree = ratio <= runtimeCorroborateRatio
 	}
@@ -238,19 +255,20 @@ func evaluateASINCandidate(b asinBookFacts, c metadata.AudibleIdentity) asinVerd
 	// uncorroborated or weak-partial product (the stored ASIN is the claim),
 	// so every veto must have run by the time those two can be returned.
 	if isRiskyEdition(c) && !runtimeAgree {
-		return asinVerdict{Reason: rejectEdition}
+		return reject(rejectEdition, "audible format %q title %q subtitle %q is abridged/dramatized and the runtime does not corroborate it (%s)",
+			c.FormatType, c.Title, c.Subtitle, runtimeLabel(b.RuntimeSec, c.RuntimeMin))
 	}
 	if len(evidence) == 0 {
-		return asinVerdict{Reason: rejectUncorroborated}
+		return reject(rejectUncorroborated, "no isbn, runtime or series agreement (%s)", runtimeLabel(b.RuntimeSec, c.RuntimeMin))
 	}
 	if title == titlePartial && !isbnAgree && len(evidence) < 2 {
 		if unpositionedNote {
-			return asinVerdict{Reason: rejectUnpositionedNote}
+			return reject(rejectUnpositionedNote, "audible subtitle %q numbers a volume; book has no series position", c.Subtitle)
 		}
-		return asinVerdict{Reason: rejectPartialTitle}
+		return reject(rejectPartialTitle, "partial title match with only %s", strings.Join(evidence, "+"))
 	}
 	if title == titleSplit && !isbnAgree {
-		return asinVerdict{Reason: rejectPartialTitle}
+		return reject(rejectPartialTitle, "audible subtitle %q is part of a split volume; only an isbn can confirm it", c.Subtitle)
 	}
 	return asinVerdict{Pass: true, Evidence: evidence}
 }
@@ -765,18 +783,49 @@ const (
 // or far off in runtime is not this book, and its ISBN must not be written.
 // A product that fails only the title or author rule is "unverified": a
 // differently formatted title or credit causes that on a correct ASIN.
-func checkKnownIdentity(b asinBookFacts, c metadata.AudibleIdentity) string {
+//
+// It also returns why a non-OK verdict was reached: the stable reason code
+// (the key the run tallies by, e.g. "runtime_conflict") and the detail with
+// the concrete values ("runtime_conflict: book 612m vs audible 1043m ..."),
+// so a listed row says which rule fired. The gate stops at the first rule
+// that fails, so there is exactly one reason; an OK verdict has none.
+func checkKnownIdentity(b asinBookFacts, c metadata.AudibleIdentity) (verdict, reason, detail string) {
 	v := evaluateASINCandidate(b, c)
 	switch {
 	case v.Pass:
-		return identityOK
+		return identityOK, "", ""
 	case v.Reason == rejectUncorroborated || v.Reason == rejectPartialTitle || v.Reason == rejectUnpositionedNote:
-		return identityOK
+		return identityOK, "", ""
 	case v.Reason == rejectTitle || v.Reason == rejectAuthor:
-		return identityUnverified
+		return identityUnverified, v.Reason, v.Detail
 	default:
-		return identitySuspect
+		return identitySuspect, v.Reason, v.Detail
 	}
+}
+
+// seriesRefsLabel renders a product's series refs for a reject detail.
+func seriesRefsLabel(refs []metadata.AudibleSeriesRef) string {
+	if len(refs) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(refs))
+	for _, r := range refs {
+		parts = append(parts, fmt.Sprintf("%q #%s", r.Title, r.Sequence))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// runtimeLabel renders the two runtimes for a reject detail; an unknown side
+// says so, since an unknown runtime neither corroborates nor vetoes.
+func runtimeLabel(bookSec, audibleMin int) string {
+	b, a := "unknown", "unknown"
+	if bookSec > 0 {
+		b = fmt.Sprintf("%dm", bookSec/60)
+	}
+	if audibleMin > 0 {
+		a = fmt.Sprintf("%dm", audibleMin)
+	}
+	return "runtime book " + b + " vs audible " + a
 }
 
 // romanValues are the roman numerals read as a volume, only directly after a

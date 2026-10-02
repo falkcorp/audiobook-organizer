@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-09-27
+// last-edited: 2026-10-02
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 )
 
@@ -41,6 +42,25 @@ type librarySizeRefreshParams struct{}
 // schedulerExtraOpParams carries the v1 operation ID into the Run func.
 type schedulerExtraOpParams struct {
 	LegacyOpID string `json:"legacy_op_id"`
+}
+
+// asin_backfill task: the def it enqueues, its interval, and the params it
+// sends. asinBackfillTaskParams mirrors the dry_run key of the metafetch
+// plugin's (unexported) asinBackfillParams; it carries ONLY that key, set to
+// false, so the scheduled run writes. Every other param takes the op's own
+// default (whole library, retry_after_days 30, 4 workers, no limit).
+const (
+	asinBackfillTaskName = "asin_backfill"
+	asinBackfillOpID     = "metafetch.asin-backfill"
+	// asinBackfillInterval: a run after the first walks only books still
+	// missing an ASIN or ISBN, and skips without a request every one whose
+	// no-match marker is inside retry_after_days, so a 6h tick costs reads
+	// plus the books that changed since.
+	asinBackfillInterval = 6 * time.Hour
+)
+
+type asinBackfillTaskParams struct {
+	DryRun *bool `json:"dry_run"`
 }
 
 // labelRefinementRebuildParams / labelRefinementCalibrateParams are the params
@@ -524,30 +544,73 @@ func (ts *TaskScheduler) registerAllTasks() {
 		RunInMaintenanceWindow: func() bool { return false },
 	})
 
+	// asin_backfill replaced isbn_enrichment on 2026-10-02. The old task ran
+	// scheduler.isbn-enrichment, which searched Google Books / Open Library
+	// and wrote ASINs by title-prefix matching -- the source of most of the
+	// wrong ASINs metafetch.asin-backfill now lists as asin_suspect. The
+	// owner chose metafetch.asin-backfill (Audible only, ASIN + ISBN in one
+	// op, no per-run cap) as its replacement, running LIVE on a timer.
+	//
+	// The op's params default to a dry run when dry_run is omitted
+	// (opmode.ResolveDryRun), so the trigger sends dry_run=false explicitly;
+	// an empty params struct would preview every tick and write nothing.
+	// Repeat runs are cheap: a book Audible had no match for is skipped for
+	// retry_after_days (default 30) without a request.
+	//
+	// Not in the maintenance window: a full walk is hours of rate-limited
+	// Audible requests, and the window would sit behind it.
 	ts.registerTask(TaskDefinition{
-		Name:        "isbn_enrichment",
-		Description: "Enrich missing ISBN identifiers from external metadata sources",
+		Name:        "asin_backfill",
+		Description: "Fill missing ASINs and audiobook ISBNs from Audible (metafetch.asin-backfill, live)",
 		Category:    "maintenance",
 		TriggerFn: func(source string) (*database.Operation, error) {
 			store := ts.deps.Store()
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.isbn-enrichment", schedulerExtraOpParams{})
-			if enqErr != nil {
-				return nil, fmt.Errorf("failed to enqueue scheduler.isbn-enrichment: %w", enqErr)
+			// The op's ConcurrencyKey makes the dispatcher QUEUE a duplicate
+			// rather than reject it, so a walk that outlasts the interval
+			// would stack another behind it. Two guards: the store's active
+			// set survives a restart (the op is ResumeRestart, so a resumed
+			// walk is active again while previousRunID, in memory, is empty);
+			// previousRunID covers the moment between enqueue and the row
+			// becoming visible.
+			if ts.hasActiveV2Op(asinBackfillOpID) {
+				schedLog.Info("%s: a %s run is already queued or running, skipping this tick (source=%s)",
+					asinBackfillTaskName, asinBackfillOpID, source)
+				return nil, nil
 			}
-			return v2ScheduledOp(v2ID, "isbn-enrichment"), nil
+			if prev := ts.previousRunID(asinBackfillTaskName); prev != "" {
+				if row, err := store.GetOperationV2(prev); err == nil && row != nil {
+					if row.Status == "queued" || row.Status == "running" {
+						schedLog.Info("%s: previous run %s still %s, skipping this tick (source=%s)",
+							asinBackfillTaskName, prev, row.Status, source)
+						return nil, nil
+					}
+				}
+			}
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), asinBackfillOpID, asinBackfillTaskParams{DryRun: opmode.Live()})
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue %s: %w", asinBackfillOpID, enqErr)
+			}
+			ts.setPreviousRunID(asinBackfillTaskName, v2ID)
+			return v2ScheduledOp(v2ID, asinBackfillTaskName), nil
 		},
-		IsEnabled:   func() bool { return ts.deps.HasMetadataFetchSvc() },
-		GetInterval: func() time.Duration { return 6 * time.Hour },
-		// ISBN enrichment scans 100 books per run and frequently returns
-		// "nothing to enrich". Running it on every startup adds 0 value
-		// and clutters Active Operations. The maintenance window still
-		// picks it up periodically; the 6h interval keeps it from going
-		// completely silent.
+		// Enabled when the op exists in this binary: the metafetch plugin was
+		// once listed but never linked into the server, so its ops were
+		// absent in prod while tests passed.
+		IsEnabled: func() bool {
+			if ts.deps.OpRegistry == nil {
+				return false
+			}
+			_, ok := ts.deps.OpRegistry.Def(asinBackfillOpID)
+			return ok
+		},
+		GetInterval: func() time.Duration { return asinBackfillInterval },
+		// Off at startup: memdb warmup runs asynchronously for minutes after
+		// a restart, and the interval picks the walk up soon enough.
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.MetadataRefresh },
+		RunInMaintenanceWindow: func() bool { return false },
 	})
 
 	// acoustid_backfill is the real schedule for acoustid.backfill. The op def

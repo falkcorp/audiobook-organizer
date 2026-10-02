@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-30
+// last-edited: 2026-10-02
 
 package metafetch
 
@@ -904,12 +904,13 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 		pendingCover = meta.CoverURL
 	}
 
-	// Queue background ISBN/ASIN enrichment if identifiers are missing.
+	// A book still missing an ASIN or ISBN goes to metafetch.asin-backfill
+	// (Audible only); the apply itself never writes an ASIN from a search.
 	// No nil check: the guard above already rejected a nil book, and this one
 	// sitting AFTER an unguarded updatedBook.Title deref was what staticcheck
 	// flagged (SA5011) -- it implied a nil was possible at a point that would
 	// already have panicked.
-	mfs.queueISBNEnrichment(id, updatedBook)
+	mfs.queueIdentifierBackfill(id, updatedBook)
 
 	// Tag the book with metadata:source:* and metadata:language:*
 	// as system-applied provenance tags. Uses the singleton

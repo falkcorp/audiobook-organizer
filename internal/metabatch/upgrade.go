@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-28
+// last-edited: 2026-10-02
 //
 // Background job that upgrades metadata from lower-quality sources
 // (Open Library, Google Books, Wikipedia) to richer ones (Hardcover,
@@ -153,8 +153,8 @@ const (
 var errOwnerManualOnly = errors.New("owner-manual-only book (Doctor Who / Big Finish / Torchwood)")
 
 // upgradeCursorKey is the STABLE operation-state key of the upgrade's sweep
-// position, carried from one run to the next (the isbn-enrichment pattern,
-// metafetch.isbnEnrichCursorKey). Without it every run walked the eligible
+// position, carried from one run to the next (the pattern the retired
+// isbn-enrichment sweep used; its cursor went with it on 2026-10-02). Without it every run walked the eligible
 // books from the top and stopped at the cap, so books that never upgrade
 // (no higher-ranked candidate, or a gate refusal) were re-searched every
 // night and the rest of the list was never reached.

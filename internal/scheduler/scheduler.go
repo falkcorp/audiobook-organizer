@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.16.1
+// version: 1.16.2
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-09-27
+// last-edited: 2026-10-02
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -57,7 +57,7 @@ type SchedulerDeps struct {
 	HasDedupEngine func() bool
 
 	// HasMetadataFetchSvc returns true when a metadata fetch service is wired.
-	// Used by isbn_enrichment and metadata_upgrade IsEnabled guards.
+	// Used by the metadata_upgrade IsEnabled guard.
 	HasMetadataFetchSvc func() bool
 
 	// HasActivitySvc returns true when an activity service is wired. Used by
@@ -188,7 +188,9 @@ func NewTaskScheduler(deps SchedulerDeps) *TaskScheduler {
 		"dedup_llm_review",
 		"author_split_scan",
 		"series_prune",
-		"isbn_enrichment",
+		// isbn_enrichment left this list on 2026-10-02: its replacement,
+		// asin_backfill, runs on its own interval and a full walk is too long
+		// for the window to wait behind.
 		// metadata_upgrade left this list on 2026-09-27: it runs on its own
 		// interval (scheduled.metadata_upgrade.interval), independent of the
 		// window, and declares RunInMaintenanceWindow false.

@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-09-27
+// last-edited: 2026-10-02
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -703,31 +703,37 @@ func runCleanupOldBackups(ctx context.Context, progress cleanupProgressLogger) e
 	return err
 }
 
-// --- isbn-enrichment ---
+// --- isbn-enrichment (retired) ---
 
-// RegisterISBNEnrichmentOp registers the scheduler.isbn-enrichment OperationDef.
+// ErrISBNEnrichmentRetired is what both retired isbn-enrichment ops
+// (scheduler.isbn-enrichment here, maintenance.isbn-enrichment in the
+// maintenance plugin) return instead of running.
+var ErrISBNEnrichmentRetired = errors.New("retired: use metafetch.asin-backfill")
+
+// RegisterISBNEnrichmentOp registers the RETIRED scheduler.isbn-enrichment
+// OperationDef. The job searched Google Books / Open Library and wrote ASINs
+// by title-prefix matching, which put wrong ASINs on books; it was replaced
+// on 2026-10-02 by metafetch.asin-backfill (Audible only), which the
+// asin_backfill scheduled task now runs. The def stays registered so a stale
+// schedule row or API call fails loudly with ErrISBNEnrichmentRetired
+// instead of 404ing or, worse, writing.
 func (r *ExtraOpsRegistrar) RegisterISBNEnrichmentOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.isbn-enrichment",
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "scheduler",
-		DisplayName:     "ISBN Enrichment",
-		Description:     "Enrich missing ISBN identifiers from external metadata sources.",
+		DisplayName:     "ISBN Enrichment (retired)",
+		Description:     "Retired: refuses to run. Use metafetch.asin-backfill, which fills ASINs and audiobook ISBNs from Audible.",
 		DefaultPriority: opsregistry.PriorityLow,
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         4 * time.Hour,
+		Timeout:         time.Minute,
 		ResumePolicy:    opsregistry.ResumeDrop,
 		ConcurrencyKey:  "scheduler.isbn-enrichment",
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkOpenAI},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			var p schedulerExtraOpParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("isbn-enrichment: decode params: %w", err)
-			}
-			progress := extraOpsProgressAdapter{r: reporter}
-			return r.runIsbnEnrichment(ctx, progress, activityOpID(reporter, p))
+		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead},
+		Run: func(context.Context, json.RawMessage, opsregistry.Reporter) error {
+			return fmt.Errorf("scheduler.isbn-enrichment: %w", ErrISBNEnrichmentRetired)
 		},
 	})
 }
@@ -980,40 +986,6 @@ func (r *ExtraOpsRegistrar) RegisterMetadataRefreshOp(reg *opsregistry.Registry)
 }
 
 // --- helper methods (extracted from server/metadata_handlers.go and server/audiobooks_handlers.go) ---
-
-// runIsbnEnrichment enriches missing ISBN identifiers from external sources.
-// Idempotent — books that already have an ISBN are skipped, so a restart
-// safely re-runs from scratch (no checkpoint needed).
-func (r *ExtraOpsRegistrar) runIsbnEnrichment(ctx context.Context, progress operations.ProgressReporter, opID string) error {
-	if r.Deps.MetadataFetchService == nil || r.Deps.MetadataFetchService.ISBNEnrichment() == nil {
-		_ = progress.Log("info", "ISBN enrichment service is not configured, skipping", nil)
-		return nil
-	}
-	startMsg := "Scanning for books missing ISBN identifiers"
-	_ = progress.Log("info", startMsg, nil)
-	if operations.IsManual(ctx) {
-		activity.EmitInfo(r.Deps.ActivityWriter, opID, "isbn-enrich", "isbn-enrichment", startMsg, activity.AlwaysShow)
-	}
-	_ = progress.UpdateProgress(0, 2, "Starting ISBN enrichment (0/2) (0.00%)")
-	// limit 0 => resolve from the isbn_enrichment_batch_limit setting (default
-	// 100). The sweep resumes across runs via a persistent cursor, so successive
-	// nightly runs advance through the whole library rather than re-walking the
-	// front.
-	checked, updated, err := r.Deps.MetadataFetchService.ISBNEnrichment().EnrichMissingISBNs(ctx, 0, r.Deps.ActivityWriter, opID)
-	if err != nil {
-		return err
-	}
-	activity.FlushOperation(r.Deps.ActivityWriter, opID)
-	msg := fmt.Sprintf("ISBN enrichment complete: checked %d, updated %d", checked, updated)
-	_ = progress.Log("info", msg, nil)
-	_ = progress.UpdateProgress(2, 2, fmt.Sprintf("%s (2/2) (100.00%%)", msg))
-	tags := activity.TagsIf(updated == 0, activity.NoOpTag)
-	if operations.IsManual(ctx) {
-		tags = append(tags, activity.AlwaysShow)
-	}
-	activity.EmitInfo(r.Deps.ActivityWriter, opID, "isbn-enrich", "isbn-enrichment", msg, tags...)
-	return nil
-}
 
 // runAutoPurgeSoftDeleted purges soft-deleted books past the retention period.
 func (r *ExtraOpsRegistrar) runAutoPurgeSoftDeleted(ctx context.Context, opID string) {

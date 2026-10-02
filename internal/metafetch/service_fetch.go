@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-09-28
+// last-edited: 2026-10-02
 
 package metafetch
 
@@ -18,27 +18,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
-
-// queueISBNEnrichment starts a background goroutine to enrich ISBN/ASIN for a book
-// if the book is missing those identifiers.
-func (mfs *Service) queueISBNEnrichment(id string, book *database.Book) {
-	if mfs.isbnEnrichment == nil {
-		return
-	}
-	needsISBN := (book.ISBN10 == nil || *book.ISBN10 == "") && (book.ISBN13 == nil || *book.ISBN13 == "")
-	needsASIN := book.ASIN == nil || *book.ASIN == ""
-	if !needsISBN && !needsASIN {
-		return
-	}
-	go func(bid string) {
-		found, err := mfs.isbnEnrichment.EnrichBookISBN(context.Background(), bid)
-		if err != nil {
-			slog.Warn("ISBN enrichment failed for", "id", logger.SanitizeLogValue(bid), "error", logger.SanitizeLogValue(err.Error()))
-		} else if found {
-			slog.Info("ISBN enrichment succeeded for", "id", logger.SanitizeLogValue(bid))
-		}
-	}(id)
-}
 
 // FetchMetadataForBook fetches and applies metadata for a single audiobook,
 // trying each configured source in priority order until one succeeds.
@@ -347,9 +326,10 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 				}
 			}
 
-			// Queue background ISBN/ASIN enrichment if identifiers are missing
+			// A book still missing an ASIN or ISBN goes to
+			// metafetch.asin-backfill (Audible only).
 			if updatedBook != nil {
-				mfs.queueISBNEnrichment(id, updatedBook)
+				mfs.queueIdentifierBackfill(id, updatedBook)
 			}
 
 			return &FetchMetadataResponse{

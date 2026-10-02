@@ -1,7 +1,7 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
-// last-edited: 2026-09-14
+// last-edited: 2026-10-02
 
 package metafetch
 
@@ -16,8 +16,10 @@ import (
 // The user's field locks (database.UserLockableFields) are enforced by ONE
 // chokepoint, database.FieldLocks, shared by every writer of a lockable Book
 // column in the codebase. In this package that chokepoint is reached through
-// guardedApply (the metadata apply body) and ISBNService.EnrichBookISBN (the
-// background identifier enrichment both apply paths queue). Before 2026-09-02
+// guardedApply (the metadata apply body). (ISBNService.EnrichBookISBN, the
+// background identifier enrichment both apply paths queued, was removed on
+// 2026-10-02: an apply now hands the book to metafetch.asin-backfill, which
+// checks the same locks.) Before 2026-09-02
 // NEITHER checked: auto-fetch, candidate apply, batch-apply-cached,
 // transcription auto-match and the metadata upgrade job all wrote straight over
 // locked columns, while the provenance panel layered the override value back

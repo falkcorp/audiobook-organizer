@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2b8f4c71-6e05-4d39-a1c7-9e3d0f5a8b26
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package metafetch
 
@@ -859,5 +859,70 @@ func TestASINBackfill_DryRunMatchesLive(t *testing.T) {
 	}
 	if dryCounts != "asin=4 isbn=2 suspect=0" {
 		t.Fatalf("counts = %s, want asin=4 isbn=2", dryCounts)
+	}
+}
+
+// A suspect or unverified existing ASIN says WHY: the proposal carries the
+// rule that fired with its values, and the result tallies kinds by rule. The
+// series-conflict book has the IDENTICAL title to its product -- the case the
+// owner could not explain from a dry run that listed only titles.
+func TestASINBackfill_SuspectAndUnverifiedCarryReasons(t *testing.T) {
+	gs := metadata.AudibleIdentity{ASIN: "B00GOLDSON", Title: "Golden Son", Authors: []string{"Pierce Brown"}}
+	other := metadata.AudibleIdentity{ASIN: "B00OTHERAU", Title: "Red Rising", Authors: []string{"Somebody Else"}}
+	abr := metadata.AudibleIdentity{ASIN: "B00ABRIDGD", Title: "Red Rising", FormatType: "abridged", Authors: []string{"Pierce Brown"}}
+	vol2 := metadata.AudibleIdentity{ASIN: "B00RRVOL02", Title: "Red Rising", Authors: []string{"Pierce Brown"},
+		Series: []metadata.AudibleSeriesRef{{Title: "Red Rising", Sequence: "2"}}}
+	fa := &fakeAudible{byASIN: map[string]*metadata.AudibleIdentity{
+		"B00GOLDSON": &gs, "B00OTHERAU": &other, "B00ABRIDGD": &abr, "B00RRVOL02": &vol2}}
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, "Pierce Brown")
+	ser, err := s.CreateSeries("Red Rising", &aid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongTitle := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00GOLDSON")})
+	wrongAuthor := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00OTHERAU")})
+	abridged := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00ABRIDGD")})
+	sameTitle := mkBook(t, s, &database.Book{Title: "Red Rising", AuthorID: &aid, ASIN: new("B00RRVOL02"),
+		SeriesID: &ser.ID, SeriesSequence: new(1)})
+
+	res := runASIN(t, p, `{"dry_run":true}`).res(t)
+	if res.ASINSuspect != 2 || res.ASINUnverified != 2 {
+		t.Fatalf("result = %+v", res)
+	}
+	wantSuspect := map[string]int{rejectSeriesConflict: 1, rejectEdition: 1}
+	wantUnverified := map[string]int{rejectTitle: 1, rejectAuthor: 1}
+	if fmt.Sprint(res.SuspectReasons) != fmt.Sprint(wantSuspect) || fmt.Sprint(res.UnverifiedReasons) != fmt.Sprint(wantUnverified) {
+		t.Fatalf("suspect_reasons = %v unverified_reasons = %v", res.SuspectReasons, res.UnverifiedReasons)
+	}
+	reasons := map[string][]string{}
+	for _, pr := range res.Proposals {
+		reasons[pr.BookID] = pr.Reasons
+	}
+	want := map[string]string{
+		sameTitle.ID:   `series_conflict: book "Red Rising" #1 vs audible "Red Rising" #2`,
+		abridged.ID:    `edition: audible format "abridged"`,
+		wrongTitle.ID:  `title: book "Red Rising" vs audible "Golden Son"`,
+		wrongAuthor.ID: `author: book "Pierce Brown" vs audible "Somebody Else"`,
+	}
+	for id, prefix := range want {
+		if len(reasons[id]) != 1 || !strings.HasPrefix(reasons[id][0], prefix) {
+			t.Errorf("book %s reasons = %q, want one starting %q", id, reasons[id], prefix)
+		}
+	}
+}
+
+// checkKnownIdentity names a runtime veto with both runtimes, and returns no
+// reason for an accepted product.
+func TestCheckKnownIdentity_RuntimeReason(t *testing.T) {
+	facts := asinBookFacts{Title: "Red Rising", Authors: []string{"Pierce Brown"}, RuntimeSec: 612 * 60}
+	prod := metadata.AudibleIdentity{ASIN: "B00I2VWW5U", Title: "Red Rising", Authors: []string{"Pierce Brown"}, RuntimeMin: 1043}
+	v, reason, detail := checkKnownIdentity(facts, prod)
+	if v != identitySuspect || reason != rejectRuntimeConflict || !strings.HasPrefix(detail, "runtime_conflict: book 612m vs audible 1043m") {
+		t.Fatalf("got %q %q %q", v, reason, detail)
+	}
+	prod.RuntimeMin = 615
+	if v, reason, detail := checkKnownIdentity(facts, prod); v != identityOK || reason != "" || detail != "" {
+		t.Fatalf("ok product: got %q %q %q", v, reason, detail)
 	}
 }

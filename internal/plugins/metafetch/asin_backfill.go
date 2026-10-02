@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
 // last-edited: 2026-10-02
 
@@ -253,10 +253,29 @@ type asinBackfillTally struct {
 	mu       sync.Mutex
 	rejects  map[string]int
 	evidence map[string]int
+	// suspectReasons / unverifiedReasons count, by the gate's stable reason
+	// code, why an existing ASIN was listed as asin_suspect or
+	// asin_unverified (the per-row detail is on the proposal).
+	suspectReasons    map[string]int
+	unverifiedReasons map[string]int
 }
 
 func newASINBackfillTally() *asinBackfillTally {
-	return &asinBackfillTally{rejects: map[string]int{}, evidence: map[string]int{}}
+	return &asinBackfillTally{
+		rejects: map[string]int{}, evidence: map[string]int{},
+		suspectReasons: map[string]int{}, unverifiedReasons: map[string]int{},
+	}
+}
+
+// addKnownIdentityReason tallies why an existing ASIN was not confirmed.
+func (t *asinBackfillTally) addKnownIdentityReason(verdict, reason string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if verdict == identitySuspect {
+		t.suspectReasons[reason]++
+	} else {
+		t.unverifiedReasons[reason]++
+	}
 }
 
 func (t *asinBackfillTally) addDecision(d asinDecision) {
@@ -290,9 +309,15 @@ type asinProposal struct {
 	AudibleTitle string   `json:"audible_title,omitempty"`
 	Evidence     []string `json:"evidence,omitempty"`
 	// Via is "match" (searched + gate), "asin_lookup" (ISBN by an existing
-	// ASIN) or "asin_suspect" (the existing ASIN names a different product;
-	// nothing written, listed for the owner).
+	// ASIN), "asin_suspect" (the existing ASIN names a different product: a
+	// hard veto fired) or "asin_unverified" (the existing ASIN's product
+	// failed only the title or author rule). The last two write nothing and
+	// are listed for the owner.
 	Via string `json:"via"`
+	// Reasons says why an asin_suspect / asin_unverified row was not
+	// confirmed: the rule that fired and its values, e.g.
+	// "runtime_conflict: book 612m vs audible 1043m (off 41%, limit 25%)".
+	Reasons []string `json:"reasons,omitempty"`
 }
 
 func (t *asinBackfillTally) propose(p asinProposal) {
@@ -343,6 +368,12 @@ type asinBackfillResult struct {
 	// ASINUnverified counts books whose existing ASIN's product failed only
 	// the title/author rule; listed with via "asin_unverified".
 	ASINUnverified int64 `json:"asin_unverified"`
+	// SuspectReasons / UnverifiedReasons count those two kinds by the rule
+	// that fired (runtime_conflict, series_conflict, volume_mismatch,
+	// box_set, edition / title, author), like RejectReasons does for search
+	// candidates.
+	SuspectReasons    map[string]int `json:"suspect_reasons"`
+	UnverifiedReasons map[string]int `json:"unverified_reasons"`
 
 	// Proposals lists the books written (or, in a dry run, that would be),
 	// up to asinProposalSampleCap; ProposalsDropped counts the rest.
@@ -360,6 +391,14 @@ func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResu
 	for k, v := range t.evidence {
 		evidence[k] = v
 	}
+	suspect := make(map[string]int, len(t.suspectReasons))
+	for k, v := range t.suspectReasons {
+		suspect[k] = v
+	}
+	unverified := make(map[string]int, len(t.unverifiedReasons))
+	for k, v := range t.unverifiedReasons {
+		unverified[k] = v
+	}
 	proposals := append([]asinProposal(nil), t.proposals...)
 	dropped := t.proposalsDropped
 	t.mu.Unlock()
@@ -375,6 +414,7 @@ func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResu
 		SkippedRecentISBNMiss: t.skippedRecentISBNMiss.Load(),
 		SkippedManualOnly:     t.skippedManualOnly.Load(), SkippedMerged: t.skippedMerged.Load(),
 		ASINSuspect: t.asinSuspect.Load(), ASINUnverified: t.asinUnverified.Load(),
+		SuspectReasons: suspect, UnverifiedReasons: unverified,
 		Proposals: proposals, ProposalsDropped: dropped,
 	}
 }
@@ -453,8 +493,9 @@ func (p *Plugin) runASINBackfill(ctx context.Context, raw json.RawMessage, repor
 	if err := registry.ReporterSetResult(reporter, res); err != nil {
 		run.log.Warn("persisting the result failed: %s", logger.SanitizeLogValue(err.Error()))
 	}
-	run.log.Info("finished (dry_run=%t): %s; rejects=%v evidence=%v manual_only=%d merged=%d proposals_kept=%d proposals_dropped_by_cap=%d err=%v",
-		dry, run.tally.summary(dry), res.RejectReasons, res.Evidence, res.SkippedManualOnly, res.SkippedMerged,
+	run.log.Info("finished (dry_run=%t): %s; rejects=%v evidence=%v asin_suspect=%d %v asin_unverified=%d %v manual_only=%d merged=%d proposals_kept=%d proposals_dropped_by_cap=%d err=%v",
+		dry, run.tally.summary(dry), res.RejectReasons, res.Evidence, res.ASINSuspect, res.SuspectReasons,
+		res.ASINUnverified, res.UnverifiedReasons, res.SkippedManualOnly, res.SkippedMerged,
 		len(res.Proposals), res.ProposalsDropped, runErr)
 	return runErr
 }
@@ -974,7 +1015,7 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book, 
 			r.bookError(b.ID, "read book facts", ferr)
 			return nil
 		}
-		switch v := checkKnownIdentity(facts, *id); v {
+		switch v, reason, detail := checkKnownIdentity(facts, *id); v {
 		case identityOK:
 			isbn = normISBN13(id.ISBN)
 		default:
@@ -991,9 +1032,10 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book, 
 			} else {
 				t.asinUnverified.Add(1)
 			}
-			t.propose(asinProposal{BookID: b.ID, Title: title, ASIN: asin, AudibleTitle: id.Title, Via: via})
-			r.log.Info("existing asin not confirmed (%s); no isbn written: book_id=%s asin=%s title=%s audible_title=%s",
-				via, logger.SanitizeLogValue(b.ID), asin, logger.SanitizeLogValue(title), logger.SanitizeLogValue(id.Title))
+			t.addKnownIdentityReason(v, reason)
+			t.propose(asinProposal{BookID: b.ID, Title: title, ASIN: asin, AudibleTitle: id.Title, Via: via, Reasons: []string{detail}})
+			r.log.Info("existing asin not confirmed (%s): %s; no isbn written: book_id=%s asin=%s title=%s audible_title=%s",
+				via, logger.SanitizeLogValue(detail), logger.SanitizeLogValue(b.ID), asin, logger.SanitizeLogValue(title), logger.SanitizeLogValue(id.Title))
 			r.markRaw(isbnMissKey(b.ID), asinMissMarker{At: r.now().UTC(), Outcome: via})
 			return nil
 		}

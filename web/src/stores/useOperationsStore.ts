@@ -1,7 +1,7 @@
 // file: web/src/stores/useOperationsStore.ts
-// version: 3.11.0
+// version: 3.12.0
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-09-11
+// last-edited: 2026-10-02
 
 import { create } from 'zustand';
 import * as api from '../services/api';
@@ -179,7 +179,9 @@ function formatOpLabel(type: string): string {
     metadata_candidate_fetch: 'Metadata Fetch (Batch)',
     bulk_write_back: 'Tag Write-back',
     composer_tag_scan: 'Composer Tag Scan',
-    isbn_enrichment: 'ISBN Enrichment',
+    // isbn_enrichment: retired 2026-10-02; kept so historical rows keep a label.
+    isbn_enrichment: 'ISBN Enrichment (retired)',
+    asin_backfill: 'ASIN Backfill (Audible)',
     metadata_refresh: 'Metadata Refresh',
     reconcile_scan: 'Reconcile Scan',
     itunes_path_repair: 'iTunes Path Repair',

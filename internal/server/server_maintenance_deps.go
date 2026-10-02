@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.47.0
+// version: 1.48.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -143,10 +143,6 @@ func (s *Server) DedupVerdictReader() maintenanceplugin.DedupVerdictReader {
 func (s *Server) BookTagReader() maintenanceplugin.BookTagReader { return s.store }
 
 // ---- delegated run helpers ----
-
-func (s *Server) RunIsbnEnrichment(ctx context.Context, progress operations.ProgressReporter, opID string) error {
-	return s.runIsbnEnrichment(ctx, progress, opID)
-}
 
 func (s *Server) RunMetadataRefreshScan(ctx context.Context, progress operations.ProgressReporter) error {
 	return s.runMetadataRefreshScan(ctx, progress)
@@ -396,10 +392,6 @@ func (s *Server) HasDedupEngine() bool {
 
 func (s *Server) HasMetadataFetchService() bool {
 	return s.metadataFetchService != nil
-}
-
-func (s *Server) HasISBNEnrichment() bool {
-	return s.metadataFetchService != nil && s.metadataFetchService.ISBNEnrichment() != nil
 }
 
 func (s *Server) HasAIParsing() bool {
