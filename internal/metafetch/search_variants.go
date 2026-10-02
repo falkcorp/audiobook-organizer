@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
 // last-edited: 2026-10-01
 
@@ -1053,13 +1053,12 @@ func (c strongCriteria) positionNamed(r metadata.BookMetadata) bool {
 		if names(c.storedPos) || c.runtimeExact(r) {
 			return true
 		}
-		// Another explicit position, with no number of the title's own to
-		// name the book instead, is another book ("Overlord" at #1 for
-		// stored 8). An answer with no series_position names no other
-		// position: it is judged by the title's own numbers, below, as a
-		// book without a stored sequence is ("Metro 2033" is still named by
-		// 2033).
-		if normPosition(r.SeriesPosition) != "" && len(c.ownNums) == 0 {
+		// Only a number of the title's own can still name the book ("Metro
+		// 2033", stored 1, is named by 2033). With none, nothing else does:
+		// "Overlord" at #1 is another book, and "Overlord" with no
+		// series_position names no number at all -- the ownNums loop below
+		// would pass it vacuously.
+		if len(c.ownNums) == 0 {
 			return false
 		}
 	}

@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout_round7_probe_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5681c68e-3c68-4920-971d-5dbd61de2aef
 // last-edited: 2026-10-01
 
@@ -236,7 +236,8 @@ func TestSearchFanoutProbe_DirectASINFloorNeedsSiblingEvidence(t *testing.T) {
 
 // Round-7 review, R2: with a stored sequence, a runtime within
 // positionOverrideTolerance names the book whatever a provider numbers it,
-// and an answer with no series_position is judged by the title's own numbers.
+// and only the runtime or a number of the title's own names a book for an
+// answer with no series_position.
 func TestStrongCriteria_StoredSequenceRuntimeExcuse(t *testing.T) {
 	const asin = "B0OWNBOOK2"
 	criteria := func(title string, seq string) strongCriteria {
@@ -251,8 +252,10 @@ func TestStrongCriteria_StoredSequenceRuntimeExcuse(t *testing.T) {
 
 	dune := criteria("Dune", "1")
 	assert.True(t, dune.ownASINAgrees(metadata.BookMetadata{Title: "Dune", DurationSec: 36100, ASIN: asin}))
-	assert.True(t, dune.positionNamed(metadata.BookMetadata{Title: "Dune", DurationSec: 40000}),
-		"no series_position names no other position")
+	assert.True(t, dune.positionNamed(metadata.BookMetadata{Title: "Dune", DurationSec: 36100}),
+		"the runtime names the book when the answer names no number")
+	assert.False(t, dune.positionNamed(metadata.BookMetadata{Title: "Dune", DurationSec: 40000}),
+		"outside the runtime, an answer that names no number is any book of the series (round 8)")
 }
 
 // Round-7 review, NIT: the stored-sequence branch of explicitPositionConflicts
@@ -270,4 +273,23 @@ func TestStrongCriteria_StoredSequenceCarriesNumbers(t *testing.T) {
 	c = newStrongCriteria(p, p.Title, "Metro 2033", "", "Ann Author", 36000)
 	assert.False(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "Metro 2033", SeriesPosition: "3", DurationSec: 40000}))
 	assert.True(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "Metro 2034", SeriesPosition: "3", DurationSec: 40000}))
+}
+
+// Round-8 review, SHOULD-FIX: with a stored sequence and no number of the
+// title's own, an answer with no series_position names no number, so it is
+// not positionNamed -- the ownNums loop must not pass it vacuously.
+func TestStrongCriteria_StoredSequenceNoPositionAnswerIsNotNamed(t *testing.T) {
+	p := parseSearchTitle("Overlord", "Ann Author", "")
+	p.StoredPosition = "8"
+	c := newStrongCriteria(p, p.Title, "Overlord", "", "Ann Author", 36000)
+	assert.False(t, c.positionNamed(metadata.BookMetadata{Title: "Overlord", DurationSec: 50000}),
+		"a bare series name names no number")
+	assert.True(t, c.positionNamed(metadata.BookMetadata{Title: "Overlord", SeriesPosition: "8", DurationSec: 50000}))
+	assert.True(t, c.positionNamed(metadata.BookMetadata{Title: "Overlord 8", DurationSec: 50000}))
+
+	p = parseSearchTitle("Metro 2033", "Ann Author", "")
+	p.StoredPosition = "1"
+	c = newStrongCriteria(p, p.Title, "Metro 2033", "", "Ann Author", 36000)
+	assert.True(t, c.positionNamed(metadata.BookMetadata{Title: "Metro 2033", DurationSec: 50000}),
+		"the title's own number still names the book")
 }
