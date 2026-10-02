@@ -1,7 +1,7 @@
 # file: .woodpecker/test-database.yaml
-# version: 1.2.0
+# version: 1.3.0
 # guid: 3f1c9a52-8e47-4b0d-a6c1-5d2e7f9b0c14
-# last-edited: 2026-09-29
+# last-edited: 2026-10-02
 #
 # `make ci` test-short, part 1 of 3: internal/database ALONE.
 #
@@ -22,13 +22,13 @@ labels:
   host: u1
 
 when:
-  # One run per commit. A branch push with an open PR used to fire both a
-  # `push` and a `pull_request` pipeline for the same SHA, doubling the load
-  # on the agents; the doubled U1 load timed out web tests (2026-09-29). Pushes
-  # run only on main; PRs, and `make ci-woodpecker` (manual), cover branches.
-  - event: push
-    branch: main
-  - event: [pull_request, manual]
+  # Manual only (owner 2026-10-02). Automatic push and pull_request runs let
+  # several pipelines start at once whenever agents pushed to several PRs,
+  # loading U1 and U0 (prod) together; the server has also crashed under
+  # parallel pipelines. CI is queued one pipeline at a time via the API
+  # (`make ci-woodpecker` / scripts/ci_woodpecker.py). The repo's allow_pr
+  # setting is off as well.
+  - event: manual
 
 clone:
   - name: clone
