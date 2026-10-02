@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/register.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a2f9c1d-4e63-4b80-9c15-6d0e1f2a3b40
 // last-edited: 2026-10-02
 
@@ -18,6 +18,7 @@ import (
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -68,8 +69,56 @@ func (p *Plugin) PostInit(ctx context.Context, c *serviceregistry.Container) err
 			return row.Status, nil
 		}
 	}
-	p.mfs.SetASINBackfillQueue(metafetch.NewASINBackfillQueue(p.enqueueBookBackfill, status, 0))
+	var clearMarkers metafetch.ASINBackfillClearFunc
+	if st, ok := serviceregistry.TryGet[markerStore](c, serviceregistry.KeyStore); ok && st != nil {
+		clearMarkers = func(bookID string) { clearBackfillMarkers(st, bookID) }
+	} else {
+		registerLog.Warn("store cannot delete raw keys; a metadata apply will not clear asin-backfill no-match markers")
+	}
+	p.mfs.SetASINBackfillQueue(metafetch.NewASINBackfillQueue(p.enqueueBookBackfill, status, clearMarkers, 0))
 	return nil
+}
+
+var registerLog = logger.New("metafetch.plugin")
+
+// Shutdown reaches the queue only through Container.Stop's Stopper check.
+var _ serviceregistry.Stopper = (*Plugin)(nil)
+
+// Stop cancels the backfill queue's pending flush on shutdown, so its timer
+// does not enqueue an op into a registry that is going away. Safe on a nil
+// plugin (Build returns a typed nil when deps are missing).
+func (p *Plugin) Stop(_ context.Context) error {
+	if p == nil || p.mfs == nil {
+		return nil
+	}
+	p.mfs.ASINBackfillQueue().Stop()
+	return nil
+}
+
+// markerStore reads and deletes the op's raw no-match markers.
+type markerStore interface {
+	GetRaw(key string) ([]byte, error)
+	DeleteRaw(key string) error
+}
+
+// clearBackfillMarkers deletes the book's ASIN and ISBN no-match markers.
+// Called when a metadata apply queues the book: its metadata just changed, so
+// an older "Audible has no match" verdict no longer holds, and with the
+// markers gone the scheduled full walk re-checks the book even if the
+// in-memory queue is lost to a restart. Only a marker that exists (or could
+// not be read) is deleted, since the delete is a synced write. A failure is logged; the marker then just
+// waits out its retry window.
+func clearBackfillMarkers(st markerStore, bookID string) {
+	for _, key := range []string{asinMissKey(bookID), isbnMissKey(bookID)} {
+		// A read error falls through to the delete: absent is not proven.
+		if raw, err := st.GetRaw(key); err == nil && len(raw) == 0 {
+			continue
+		}
+		if err := st.DeleteRaw(key); err != nil {
+			registerLog.Warn("clearing asin-backfill marker %s failed: %s",
+				logger.SanitizeLogValue(key), logger.SanitizeLogValue(err.Error()))
+		}
+	}
 }
 
 // opStatusReader reads one operation's row, for the backfill queue's "is the

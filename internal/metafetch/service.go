@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.42.0
+// version: 5.43.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-02
 
@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -195,12 +196,15 @@ type Service struct {
 	// asinLookupOverride replaces the live Audible/Audnexus ASIN clients in
 	// lookupASIN (tests only; nil in production).
 	asinLookupOverride func(ctx context.Context, providerID, asin string) (*metadata.BookMetadata, error)
-	asinBackfillQueue  *ASINBackfillQueue
-	activityService    *activity.Service
-	dedupEngine        *dedup.Engine
-	metadataScorer     ai.MetadataCandidateScorer // optional; nil = fallback to F1
-	llmScorer          ai.MetadataCandidateScorer // optional; nil = no LLM rerank tier
-	writeBackBatcher   WriteBackEnqueuer
+	// asinBackfillQueue is set by the metafetch plugin's PostInit while the
+	// server may already be applying metadata, so it is read and written
+	// atomically.
+	asinBackfillQueue atomic.Pointer[ASINBackfillQueue]
+	activityService   *activity.Service
+	dedupEngine       *dedup.Engine
+	metadataScorer    ai.MetadataCandidateScorer // optional; nil = fallback to F1
+	llmScorer         ai.MetadataCandidateScorer // optional; nil = no LLM rerank tier
+	writeBackBatcher  WriteBackEnqueuer
 	// safeWriteDeps guards tag/cover writes against Deluge-protected paths.
 	// Zero-value = no guard (writes proceed in-place). Set via SetSafeWriteDeps.
 	safeWriteDeps tagger.SafeWriteDeps

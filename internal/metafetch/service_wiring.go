@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
 // last-edited: 2026-10-02
 
@@ -74,13 +74,14 @@ func (mfs *Service) SetMetadataLLMScorer(scorer ai.MetadataCandidateScorer) {
 // SetASINBackfillQueue sets the queue a metadata apply hands a book missing
 // an ASIN or ISBN to (metafetch.asin-backfill, Audible only). Wired by the
 // metafetch plugin, which owns the op. Nil: an apply queues nothing.
+// Safe to call concurrently with an apply.
 func (mfs *Service) SetASINBackfillQueue(q *ASINBackfillQueue) {
-	mfs.asinBackfillQueue = q
+	mfs.asinBackfillQueue.Store(q)
 }
 
 // ASINBackfillQueue returns the queue (may be nil).
 func (mfs *Service) ASINBackfillQueue() *ASINBackfillQueue {
-	return mfs.asinBackfillQueue
+	return mfs.asinBackfillQueue.Load()
 }
 
 // FileWorkScheduler runs work for bookID off the calling goroutine, through

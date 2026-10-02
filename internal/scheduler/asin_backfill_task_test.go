@@ -1,5 +1,5 @@
 // file: internal/scheduler/asin_backfill_task_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e1c9a47-3b0d-4f82-a5e9-2d7c8b41f036
 // last-edited: 2026-10-02
 
@@ -140,4 +140,58 @@ func TestISBNEnrichmentOp_Retired(t *testing.T) {
 	err := def.Run(context.Background(), nil, nil)
 	require.ErrorIs(t, err, ErrISBNEnrichmentRetired)
 	assert.Contains(t, err.Error(), "retired: use metafetch.asin-backfill")
+}
+
+// A per-book run from the metadata-apply queue (book_ids set) does NOT block
+// the scheduled full walk: a steady stream of applies would starve it.
+func TestASINBackfillTask_PerBookRunDoesNotBlockWalk(t *testing.T) {
+	ts, inserted := asinBackfillTaskFixture(t, true, "",
+		database.OperationV2Row{ID: "per-book", DefID: asinBackfillOpID, Status: "running",
+			Params: `{"dry_run":false,"book_ids":["b1","b2"],"retry_after_days":0}`})
+	task, _ := ts.GetTask(asinBackfillTaskName)
+	op, err := task.TriggerFn("test")
+	require.NoError(t, err)
+	require.NotNil(t, op, "a per-book run must not skip the walk")
+	require.Len(t, *inserted, 1)
+}
+
+// An active full walk blocks the tick whatever its params look like: no
+// book_ids, a resumed walk's cursor-only params, or params that do not parse.
+func TestASINBackfillTask_FullWalkParamsBlock(t *testing.T) {
+	for name, params := range map[string]string{
+		"live walk":   `{"dry_run":false}`,
+		"resumed":     `{"after_book_id":"b0500"}`,
+		"empty":       ``,
+		"empty ids":   `{"book_ids":[]}`,
+		"unparseable": `{not json`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ts, inserted := asinBackfillTaskFixture(t, true, "",
+				database.OperationV2Row{ID: "per-book", DefID: asinBackfillOpID, Status: "queued",
+					Params: `{"book_ids":["b1"]}`},
+				database.OperationV2Row{ID: "walk", DefID: asinBackfillOpID, Status: "running", Params: params})
+			task, _ := ts.GetTask(asinBackfillTaskName)
+			op, err := task.TriggerFn("test")
+			require.NoError(t, err)
+			assert.Nil(t, op)
+			assert.Empty(t, *inserted)
+		})
+	}
+}
+
+// scheduled.asin_backfill.interval drives the task: default 360 min (6h),
+// any other value is honoured, and 0 disables it.
+func TestASINBackfillTask_IntervalConfig(t *testing.T) {
+	ts, _ := asinBackfillTaskFixture(t, true, "")
+	task, _ := ts.GetTask(asinBackfillTaskName)
+	require.Equal(t, 360, config.AppConfig.Scheduled.ASINBackfill.Interval, "default must be 6h")
+	assert.True(t, task.IsEnabled())
+
+	config.AppConfig.Scheduled.ASINBackfill.Interval = 90
+	assert.Equal(t, 90*time.Minute, task.GetInterval())
+	assert.True(t, task.IsEnabled())
+
+	config.AppConfig.Scheduled.ASINBackfill.Interval = 0
+	assert.Equal(t, time.Duration(0), task.GetInterval())
+	assert.False(t, task.IsEnabled(), "interval 0 must disable the task")
 }

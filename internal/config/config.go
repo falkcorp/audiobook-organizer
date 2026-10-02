@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.127.0
+// version: 1.128.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-01
+// last-edited: 2026-10-02
 
 package config
 
@@ -1031,6 +1031,13 @@ type ScheduledTasksConfig struct {
 	// switch would leave the owner's interval write silently inert. Ships at
 	// 0 (off); scheduling it is an owner decision.
 	MetadataUpgrade ScheduledTaskConfig `json:"metadata_upgrade" mapstructure:"metadata_upgrade"`
+	// ASINBackfill schedules the asin_backfill task (metafetch.asin-backfill,
+	// live, Audible only) on its own interval, in minutes. Gated like
+	// MetadataUpgrade: only Interval is read, the task is scheduled whenever
+	// Interval > 0 (and the op is registered), and 0 turns it off. Ships at
+	// 360 (6h). It never runs on startup (memdb warmup) or in the
+	// maintenance window, so OnStartup and Enabled are not read.
+	ASINBackfill ScheduledTaskConfig `json:"asin_backfill" mapstructure:"asin_backfill"`
 }
 
 // Config holds application configuration
@@ -2408,6 +2415,9 @@ func InitConfig() {
 	// see ScheduledTasksConfig.MetadataUpgrade). Ships off.
 	viper.SetDefault("scheduled.metadata_upgrade.interval", 0)
 	viper.SetDefault("scheduled.metadata_upgrade.on_startup", false)
+	// asin_backfill: scheduled whenever interval > 0 (minutes; see
+	// ScheduledTasksConfig.ASINBackfill). Ships ON at 6h.
+	viper.SetDefault("scheduled.asin_backfill.interval", 360)
 	// label_refinement ships DISABLED (INIT-1 T6): the scheduled dry-run chain
 	// (dedup.rebuild-gold-labels → dedup.calibrate-composite) only runs when an
 	// owner flips enabled=true. Interval is weekly (10080 min).
@@ -3118,6 +3128,9 @@ func InitConfig() {
 					Interval:  viper.GetInt("scheduled.metadata_upgrade.interval"),
 					OnStartup: viper.GetBool("scheduled.metadata_upgrade.on_startup"),
 				},
+				ASINBackfill: ScheduledTaskConfig{
+					Interval: viper.GetInt("scheduled.asin_backfill.interval"),
+				},
 				LabelRefinement: ScheduledTaskConfig{
 					Enabled:   viper.GetBool("scheduled.label_refinement.enabled"),
 					Interval:  viper.GetInt("scheduled.label_refinement.interval"),
@@ -3789,6 +3802,11 @@ func ResetToDefaults() {
 				AcoustIDBackfill: ScheduledTaskConfig{
 					Enabled:  false,
 					Interval: 1440,
+				},
+				// asin_backfill defaults ON (interval alone gates it), so a
+				// missing Interval here would turn it off on a factory reset.
+				ASINBackfill: ScheduledTaskConfig{
+					Interval: 360,
 				},
 			},
 

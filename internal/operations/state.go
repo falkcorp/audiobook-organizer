@@ -1,7 +1,7 @@
 // file: internal/operations/state.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-18
+// last-edited: 2026-10-02
 
 package operations
 
@@ -48,12 +48,6 @@ type OrganizeParams struct {
 type BulkWriteBackParams struct {
 	BookIDs []string `json:"book_ids"`
 	Rename  bool     `json:"rename"`
-}
-
-// IsbnEnrichmentParams stores the immutable parameters for an ISBN enrichment operation.
-// BookIDs is the list to enrich; on resume, the checkpoint PhaseIndex is the next index.
-type IsbnEnrichmentParams struct {
-	BookIDs []string `json:"book_ids"`
 }
 
 // MetadataRefreshParams stores the immutable parameters for a metadata refresh operation.

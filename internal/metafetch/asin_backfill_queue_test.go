@@ -1,5 +1,5 @@
 // file: internal/metafetch/asin_backfill_queue_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f2b6d14-0a93-4c57-9e18-b4c7d2e05a61
 // last-edited: 2026-10-02
 
@@ -8,6 +8,7 @@ package metafetch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ type manualQueue struct {
 	mu       sync.Mutex
 	armed    []func()
 	enqueued [][]string
+	cleared  []string
 	status   map[string]string
 	err      error
 }
@@ -39,12 +41,17 @@ func newManualQueue() *manualQueue {
 				return "", m.err
 			}
 			m.enqueued = append(m.enqueued, append([]string(nil), ids...))
-			return "op-" + string(rune('0'+len(m.enqueued))), nil
+			return fmt.Sprintf("op-%d", len(m.enqueued)), nil
 		},
 		func(opID string) (string, error) {
 			m.mu.Lock()
 			defer m.mu.Unlock()
 			return m.status[opID], nil
+		},
+		func(bookID string) {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			m.cleared = append(m.cleared, bookID)
 		}, time.Hour)
 	m.q.afterFunc = func(_ time.Duration, f func()) *time.Timer {
 		m.mu.Lock()
@@ -151,10 +158,104 @@ func TestApplyMetadataCandidate_QueuesASINBackfillAndWritesNoASIN(t *testing.T) 
 		assert.True(t, w.ASIN == nil || *w.ASIN == "", "write %d set ASIN %v", i, w.ASIN)
 	}
 	mu.Unlock()
+	assert.Equal(t, []string{"b1"}, m.cleared,
+		"the apply must clear the book's no-match markers so the scheduled walk re-checks it if the queue is lost")
 	m.fire()
 	assert.Equal(t, [][]string{{"b1"}}, m.enqueued)
 
 	// A book that already has both identifiers is not queued.
 	asin, isbn := "B00X", "9780000000002"
 	assert.False(t, needsIdentifierBackfill(&database.Book{ASIN: &asin, ISBN13: &isbn}))
+}
+
+// Add clears the book's markers before anything else, even after Stop: the
+// clear is what survives a restart, the pending set is not.
+func TestASINBackfillQueue_AddClearsMarkersEvenWhenStopped(t *testing.T) {
+	m := newManualQueue()
+	m.q.Add("b1")
+	m.q.Stop()
+	m.q.Add("b2")
+	assert.Equal(t, []string{"b1", "b2"}, m.cleared)
+	assert.Equal(t, []string{"b1"}, m.q.Pending(), "only the pre-Stop id is pending")
+	assert.Equal(t, 1, m.fire(), "the flush armed before Stop is the only one")
+	assert.Empty(t, m.enqueued, "a flush after Stop enqueues nothing")
+}
+
+// Stop cancels the real debounce timer: nothing is enqueued after shutdown.
+func TestASINBackfillQueue_StopCancelsTimer(t *testing.T) {
+	var mu sync.Mutex
+	var enqueued int
+	q := NewASINBackfillQueue(func(context.Context, []string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		enqueued++
+		return "op", nil
+	}, nil, nil, 20*time.Millisecond)
+	q.Add("b1")
+	q.Stop()
+	q.Stop() // idempotent
+	time.Sleep(80 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Zero(t, enqueued, "the timer fired after Stop")
+
+	var nilQ *ASINBackfillQueue
+	nilQ.Stop()
+	nilQ.Add("x")
+}
+
+// A burst larger than maxASINBackfillRunIDs goes out as bounded runs, one at
+// a time: the rest wait while the previous run is still queued.
+func TestASINBackfillQueue_SplitsLargeBurst(t *testing.T) {
+	m := newManualQueue()
+	const n = 2*maxASINBackfillRunIDs + 201
+	for i := range n {
+		m.q.Add(fmt.Sprintf("b%05d", i))
+	}
+	require.Equal(t, 1, m.fire())
+	require.Len(t, m.enqueued, 1)
+	assert.Len(t, m.enqueued[0], maxASINBackfillRunIDs)
+	assert.Len(t, m.q.Pending(), n-maxASINBackfillRunIDs)
+
+	// Still queued: the re-armed flush holds.
+	m.status["op-1"] = "queued"
+	require.Equal(t, 1, m.fire())
+	require.Len(t, m.enqueued, 1)
+
+	m.status["op-1"] = "running"
+	require.Equal(t, 1, m.fire())
+	require.Len(t, m.enqueued, 2)
+	assert.Len(t, m.enqueued[1], maxASINBackfillRunIDs)
+
+	m.status["op-2"] = "succeeded"
+	require.Equal(t, 1, m.fire())
+	require.Len(t, m.enqueued, 3)
+	assert.Len(t, m.enqueued[2], 201)
+	assert.Empty(t, m.q.Pending())
+	assert.Equal(t, 0, m.fire(), "nothing left to arm")
+
+	seen := map[string]bool{}
+	for _, run := range m.enqueued {
+		for _, id := range run {
+			assert.False(t, seen[id], "id %s sent twice", id)
+			seen[id] = true
+		}
+	}
+	assert.Len(t, seen, n)
+}
+
+// SetASINBackfillQueue races an apply's read without a data race.
+func TestService_SetASINBackfillQueueConcurrent(t *testing.T) {
+	svc := NewService(&database.MockStore{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for range 100 {
+				svc.SetASINBackfillQueue(newManualQueue().q)
+				svc.queueIdentifierBackfill("b1", &database.Book{ID: "b1"})
+			}
+		})
+	}
+	wg.Wait()
+	assert.NotNil(t, svc.ASINBackfillQueue())
 }
