@@ -1,7 +1,7 @@
 // file: internal/versionprimary/vptest/vptest.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d3f2a18-7c4b-4e91-a05d-8b2e9f1c4d70
-// last-edited: 2026-09-24
+// last-edited: 2026-10-02
 
 // Package vptest seeds version groups on a real PebbleStore for the tests of
 // every path that hands a group's primary flag on (versionprimary.Ensure-
@@ -158,4 +158,45 @@ func (f *Fixture) SoftDelete(t testing.TB, id string) {
 		return nil
 	})
 	require.NoError(t, err)
+}
+
+// GroupOf is id's version group as stored ("" for none).
+func (f *Fixture) GroupOf(t testing.TB, id string) string {
+	t.Helper()
+	b, err := f.S.GetBookByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, b, "book %s", id)
+	if b.VersionGroupID == nil {
+		return ""
+	}
+	return *b.VersionGroupID
+}
+
+// RequireWaitsForHolder proves a membership writer excludes a concurrent
+// hand-off: with hold's lock taken (versionprimary.LockGroup on a group the
+// writer leaves or joins, "" for the no-group sentinel), write must not
+// return within 300ms and unchanged must keep reporting true; once the lock
+// is released, write must return nil within 10s.
+func RequireWaitsForHolder(t testing.TB, hold func() (unlock func()), write func() error, unchanged func() bool) {
+	t.Helper()
+	unlock := hold()
+	done := make(chan error, 1)
+	go func() { done <- write() }()
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("writer returned (err=%v) while the group lock was held", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if !unchanged() {
+		unlock()
+		t.Fatal("writer changed the book while the group lock was held")
+	}
+	unlock()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("writer still blocked after the group lock was released")
+	}
 }
