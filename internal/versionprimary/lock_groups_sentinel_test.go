@@ -1,5 +1,5 @@
 // file: internal/versionprimary/lock_groups_sentinel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f2b8d14-3a9c-4e57-b0d2-8c1e7a5f3b96
 // last-edited: 2026-10-02
 
@@ -7,6 +7,7 @@ package versionprimary
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand"
 	"runtime/pprof"
@@ -180,4 +181,53 @@ func TestLockGroups_NoDeadlockAcrossOverlappingGroups(t *testing.T) {
 		t.Fatalf("group lockers deadlocked:\n%s", buf.String())
 	}
 	requireAllStripesFree(t)
+}
+
+// mapStore is a BookReader over fixed groups ("-" = missing book).
+type mapStore map[string]string
+
+func (m mapStore) GetBookByID(id string) (*database.Book, error) {
+	g, ok := m[id]
+	if !ok || g == "-" {
+		return nil, nil
+	}
+	return &database.Book{ID: id, VersionGroupID: &g}, nil
+}
+
+// LockPlannedGroups refuses a book whose group is not the one its caller
+// planned from with ErrMembershipChanged and releases every lock; a padded
+// planned id matches its trimmed stored one; a missing book is skipped, as
+// LockBookGroups skips it (the caller's write reports it).
+func TestLockPlannedGroups_RefusesAMovedBook(t *testing.T) {
+	store := mapStore{"a": "g", "b": "h", "gone": "-"}
+	cases := []struct {
+		name    string
+		planned map[string]string
+		wantErr bool
+	}{
+		{"as planned", map[string]string{"a": "g", "b": " h "}, false},
+		{"moved between plan and lock", map[string]string{"a": "g", "b": "g"}, true},
+		{"moved out of no group", map[string]string{"a": ""}, true},
+		{"vanished is skipped", map[string]string{"a": "g", "gone": "g"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			unlock, groups, err := LockPlannedGroups(store, []string{"a"}, tc.planned, "dest")
+			if tc.wantErr {
+				if !errors.Is(err, ErrMembershipChanged) {
+					t.Fatalf("err = %v, want ErrMembershipChanged", err)
+				}
+				requireAllStripesFree(t)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, planB := tc.planned["b"]; groups["a"] != "g" || (planB && groups["b"] != "h") {
+				t.Fatalf("groups = %v", groups)
+			}
+			unlock()
+			requireAllStripesFree(t)
+		})
+	}
 }

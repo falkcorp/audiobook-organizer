@@ -90,3 +90,44 @@ func undoIntoGA(t *testing.T, f *vptest.Fixture) (func() error, func() bool) {
 	}
 	return write, unchanged
 }
+
+// movesAfterFirstRead returns the row as stored on the first GetBookByID of
+// id (the caller's planning read), then moves it into group `to` -- as a
+// concurrent writer would between the plan and the lock.
+type movesAfterFirstRead struct {
+	*database.PebbleStore
+	id, to string
+	moved  bool
+}
+
+func (s *movesAfterFirstRead) GetBookByID(id string) (*database.Book, error) {
+	b, err := s.PebbleStore.GetBookByID(id)
+	if id == s.id && !s.moved {
+		s.moved = true
+		to := s.to
+		if _, merr := s.PebbleStore.ModifyBook(id, func(r *database.Book) error {
+			r.VersionGroupID = &to
+			return nil
+		}); merr != nil {
+			return nil, merr
+		}
+	}
+	return b, err
+}
+
+// A live participant that changes group between the merge's planning read
+// and its group locks is refused with ErrMembershipChanged before anything
+// is written: the merge would otherwise move it out of a group it never
+// locked and hand off the group it planned from instead.
+func TestMergeBooks_RefusesParticipantMovedAfterPlanning(t *testing.T) {
+	f := combineUndoFixture(t)
+	x := f.Book(t, vptest.Spec{ID: "x", Group: "g", Primary: "true"})
+	y := f.Book(t, vptest.Spec{ID: "y", Primary: "nil"})
+	st := &movesAfterFirstRead{PebbleStore: f.S, id: y, to: "h"}
+	_, err := NewService(st).MergeBooksWithOptions([]string{x, y}, x, MergeOptions{})
+	require.ErrorIs(t, err, versionprimary.ErrMembershipChanged)
+	require.Equal(t, "h", f.GroupOf(t, y), "the moved participant stays where the other writer put it")
+	b, err := f.S.GetBookByID(y)
+	require.NoError(t, err)
+	require.False(t, b.IsSoftDeleted(), "nothing written for a refused merge")
+}
