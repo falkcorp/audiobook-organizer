@@ -252,6 +252,11 @@ func TestHarvest_StaleOnlyAfterCompleteFetch(t *testing.T) {
 	f := newFixtureServer(t)
 	st, _ := openCatalog(t)
 	h := newTestHarvester(f, st, 20)
+	// The owned book (Spiderlight) is product 55: past the 40 the partial
+	// run below receives, so that run cannot re-read the author ASIN from it
+	// and must fall back to the ASIN the complete run stored.
+	tchaikovsky := tchaikovsky
+	tchaikovsky.OwnedASINs = []string{"B0D4ZNFVBT"}
 	if _, err := h.HarvestAuthor(context.Background(), tchaikovsky, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -463,6 +468,26 @@ func TestUpsert_SameProviderIDTwiceInOneBatch(t *testing.T) {
 	}
 	if n, _ := st.CountEntries(); n != 1 {
 		t.Errorf("entries = %d; want 1", n)
+	}
+}
+
+// TestUpsert_GroupIDIsStable: a later upsert whose computed group key differs
+// (the author ASIN appeared) keeps the group id assigned on first sight (R6).
+func TestUpsert_GroupIDIsStable(t *testing.T) {
+	st, _ := openCatalog(t)
+	p := metadata.CatalogProduct{ASIN: "G1", Title: "Stable", Authors: []metadata.CatalogContributor{{Name: "A B"}}}
+	r1, err := st.UpsertEntries([]database.CatalogUpsert{{Entry: BuildEntry(p, "audible", "us")}}, "ab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := st.GetEntry(r1.IDs[0])
+	p.Authors[0].ASIN = "AB1"
+	if _, err := st.UpsertEntries([]database.CatalogUpsert{{Entry: BuildEntry(p, "audible", "us")}}, "ab"); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := st.GetEntry(r1.IDs[0])
+	if again.EditionGroupID != first.EditionGroupID {
+		t.Errorf("group id changed on re-upsert: %s -> %s", first.EditionGroupID, again.EditionGroupID)
 	}
 }
 

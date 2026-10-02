@@ -13,6 +13,10 @@
 # Each line is a lie the catalog could tell while still compiling: a reversed
 # range read as a position, a title-only group, a homonym's catalog kept, a
 # capped or partial listing marking the unlisted tail stale.
+#
+# M19 removes BOTH preserved fields: removing only the group id is an
+# equivalent mutant while the old group key is kept, because the key maps back
+# to the same id.
 
 M01 reversed-range-accepted | internal/catalog/sequence.go | s/errB != nil \x7c\x7c b < a/errB != nil/
 M02 range-branch-skipped | internal/catalog/sequence.go | s/seqRangeRe\.FindStringSubmatch\(t\); m != nil \{/seqRangeRe.FindStringSubmatch(t); m != nil && false {/
@@ -21,10 +25,10 @@ M04 group-ignores-title | internal/catalog/normalize.go | s/return id \+ "\x7c" 
 M05 markers-not-stripped | internal/catalog/normalize.go | s/return authorjunk\.FoldKey\(StripEditionMarkers\(title\)\)/return authorjunk.FoldKey(title)/
 M06 asin-not-preferred | internal/catalog/normalize.go | s/if k := AuthorASINKey\(authorASIN\); k != "" \{/if k := AuthorASINKey(authorASIN); k != "" && false {/
 M07 homonym-kept | internal/catalog/disambig.go | s/if asin == "" \x7c\x7c len\(res\.AuthorASINs\) == 0 \{/if true {/
-M08 coauthor-asin-taken | internal/catalog/disambig.go | s/if a\.ASIN == "" \x7c\x7c authorjunk\.FoldKey\(a\.Name\) != fold \{/if a.ASIN == "" {/
+M08 coauthor-asin-taken | internal/catalog/disambig.go | s/if a\.ASIN == "" \x7c\x7c authorjunk\.FoldKey\(a\.Name\) != fold \{/if a.ASIN == "" \x7c\x7c fold == "-" {/
 M09 conflict-never-set | internal/catalog/disambig.go | s/res\.Conflict = len\(res\.AuthorASINs\) > 1\n\treturn res, nil/res.Conflict = false\n\treturn res, nil/
 M10 lookup-even-when-listed | internal/catalog/disambig.go | s/if p, ok := fetched\[owned\]; ok \{/if p, ok := fetched[owned]; ok && false {/
-M11 language-filter-off | internal/catalog/disambig.go | s/return pl == "" \x7c\x7c pl == w/return true/
+M11 language-filter-off | internal/catalog/disambig.go | s/return pl == "" \x7c\x7c pl == w/return pl == pl \x7c\x7c pl == w/
 M12 dramatized-read-as-format | internal/catalog/entry.go | s/case dramatizedRe\.MatchString\(text\):/case false \&\& dramatizedRe.MatchString(text):/
 M13 capped-marks-stale | internal/catalog/harvest.go | s/\t\tif !fr\.capped \{/\t\tif true {/
 M14 cap-not-enforced | internal/catalog/harvest.go | s/if r\.raw >= h\.Cfg\.MaxProducts \{/if false {/
@@ -32,6 +36,6 @@ M15 prev-asins-ignored | internal/catalog/harvest.go | s/\&\& prevASINs != nil \
 M16 partial-not-retried | internal/catalog/harvest.go | s/if prev\.State != database\.CatalogHarvestComplete \x7c\x7c prev\.LastCompleteAt == nil \{/if prev.LastCompleteAt == nil {/
 M17 stop-at-total-ignored | internal/catalog/harvest.go | s/if len\(pg\.Products\) == 0 \x7c\x7c r\.raw >= pg\.TotalResults \{/if len(pg.Products) == 0 {/
 M18 stale-ignores-coauthors | internal/database/catalog_entry_store.go | s/if len\(e\.HarvestedBy\) == 0 \&\& e\.StaleSince == nil \{/if e.StaleSince == nil {/
-M19 group-id-recomputed | internal/database/catalog_entry_store.go | s/\t\t\tentry\.EditionGroupID = old\.EditionGroupID\n//
+M19 group-id-recomputed | internal/database/catalog_entry_store.go | s/\t\t\tentry\.EditionGroupID = old\.EditionGroupID\n\t\t\tentry\.EditionGroupKey = old\.EditionGroupKey\n//
 M20 batch-group-map-ignored | internal/database/catalog_entry_store.go | s/if gid, ok := pending\[key\]; ok \{/if gid, ok := pending[key]; ok \&\& false {/
 M21 batch-pid-map-ignored | internal/database/catalog_entry_store.go | s/if p, ok := pendingPID\[pk\]; ok \{/if p, ok := pendingPID[pk]; ok \&\& false {/
