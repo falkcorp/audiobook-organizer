@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-02
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -274,6 +275,20 @@ func (s *Server) OptimizeOLStore(ctx context.Context) error {
 		return nil
 	}
 	return s.olService.Store().Optimize(ctx)
+}
+
+func (s *Server) AIScanStoreCompactionStats() (compactprogress.Stats, bool) {
+	if s.aiScanStore == nil {
+		return compactprogress.Stats{}, false
+	}
+	return s.aiScanStore.CompactionStats()
+}
+
+func (s *Server) OLStoreCompactionStats() (compactprogress.Stats, bool) {
+	if s.olService == nil || s.olService.Store() == nil {
+		return compactprogress.Stats{}, false
+	}
+	return s.olService.Store().CompactionStats(), true
 }
 
 func (s *Server) PruneOldLogs(retentionDays int) error {

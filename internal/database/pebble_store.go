@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.188.0
+// version: 1.189.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-02
 
@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
+	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -5176,38 +5177,14 @@ func (p *PebbleStore) Optimize(ctx context.Context) error {
 // of whether work is happening would defeat that check instead of satisfying
 // it. See internal/operations/registry/types.go:200 — declaring liveness is a
 // contract precisely so a wedged op stays distinguishable from a working one.
-type CompactionStats struct {
-	// Count is the total number of completed compactions. Monotonic, so a
-	// caller can tell "finished some work since I last looked".
-	Count int64
-	// EstimatedDebt is Pebble's estimate of the bytes still needing compaction
-	// for the LSM to reach a stable shape. This is the closest thing to a
-	// "how much is left" number and it falls as a full compaction proceeds.
-	EstimatedDebt uint64
-	// InProgressBytes is the bytes in sstables being written by compactions
-	// running right now. Zero when nothing is compacting.
-	InProgressBytes int64
-	// NumInProgress is how many compactions are running. A caller uses this to
-	// tell a STALLED compaction (in progress but no counters moving — a real
-	// wedge the watchdog should catch) from an IDLE one (nothing running).
-	NumInProgress int64
-	// DiskSpaceUsage is the engine's own view of bytes on disk. Note this
-	// counts obsolete-but-not-yet-deleted files during a compaction, so it
-	// RISES before it falls.
-	DiskSpaceUsage uint64
-}
+type CompactionStats = compactprogress.Stats
 
 // CompactionStats reports Pebble's live compaction counters. Cheap: it reads
-// in-memory metrics and does not touch the LSM.
+// in-memory metrics and does not touch the LSM. The field mapping lives in
+// compactprogress.Collect so the AI-scan and OpenLibrary stores report the
+// same shape.
 func (p *PebbleStore) CompactionStats() CompactionStats {
-	m := p.db.Metrics()
-	return CompactionStats{
-		Count:           m.Compact.Count,
-		EstimatedDebt:   m.Compact.EstimatedDebt,
-		InProgressBytes: m.Compact.InProgressBytes,
-		NumInProgress:   m.Compact.NumInProgress,
-		DiskSpaceUsage:  m.DiskSpaceUsage(),
-	}
+	return compactprogress.Collect(p.db)
 }
 
 // derefInt64 safely dereferences a *int64, returning 0 for nil.

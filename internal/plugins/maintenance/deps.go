@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.65.0
+// version: 1.66.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-02
 
@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -710,6 +711,13 @@ type StoreOptimizer interface {
 	OptimizeAIScanStore(ctx context.Context) error
 	// OptimizeOLStore optimizes the OpenLibrary cache store (no-op if nil).
 	OptimizeOLStore(ctx context.Context) error
+	// AIScanStoreCompactionStats samples the AI scan store's own PebbleDB for
+	// db-optimize's progress lines. ok is false when there is no AI scan
+	// store or it shares the main database (its Optimize is then a no-op).
+	AIScanStoreCompactionStats() (stats compactprogress.Stats, ok bool)
+	// OLStoreCompactionStats samples the OpenLibrary cache's PebbleDB. ok is
+	// false when the cache is not wired.
+	OLStoreCompactionStats() (stats compactprogress.Stats, ok bool)
 }
 
 // CapabilityProbes reports which optional subsystems are wired.

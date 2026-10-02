@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/db_optimize_heartbeat_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b27f0a4-91c3-4de8-8a05-3c7e1b94d260
-// last-edited: 2026-09-08
+// last-edited: 2026-10-02
 
 // maintenance.db-optimize could not finish on a real database.
 //
@@ -130,7 +130,8 @@ func TestOptimizeMainWithHeartbeat_ReportsWhenCompactionIsMakingProgress(t *test
 	rep.mu.Lock()
 	first := rep.progress[0]
 	rep.mu.Unlock()
-	assert.Contains(t, first, "left to compact")
+	assert.Contains(t, first, "Compacting main database (1/3): ")
+	assert.Contains(t, first, "est. debt")
 	assert.Contains(t, first, "elapsed")
 }
 
