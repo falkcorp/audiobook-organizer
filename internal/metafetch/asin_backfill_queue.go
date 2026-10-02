@@ -1,5 +1,5 @@
 // file: internal/metafetch/asin_backfill_queue.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3d8a5f21-9c47-4e0b-b6d2-71f4e0a9c853
 // last-edited: 2026-10-02
 
@@ -21,7 +21,9 @@ package metafetch
 // ids and re-arms instead of enqueuing a second one. So at most one run from
 // this queue is ever waiting, and every id that arrives meanwhile goes into
 // the next one. A flush takes at most maxASINBackfillRunIDs ids; the rest stay
-// pending and go out in later runs, one at a time under the same rule.
+// pending and go out in later runs, one at a time under the same rule. Ids
+// leave in arrival order (first queued, first sent), so a sustained inflow
+// cannot starve any id behind newer ones.
 //
 // The pending set is in memory only, so a restart loses it. That is why Add
 // also clears the book's stored no-match markers (via the clear callback the
@@ -30,7 +32,6 @@ package metafetch
 
 import (
 	"context"
-	"slices"
 	"sync"
 	"time"
 
@@ -75,8 +76,10 @@ type ASINBackfillQueue struct {
 	// afterFunc is time.AfterFunc; tests replace it to fire flushes by hand.
 	afterFunc func(time.Duration, func()) *time.Timer
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// pending dedups ids; order holds them in arrival order (FIFO).
 	pending  map[string]struct{}
+	order    []string
 	armed    bool
 	timer    *time.Timer
 	stopped  bool
@@ -113,7 +116,10 @@ func (q *ASINBackfillQueue) Add(bookID string) {
 	if q.stopped {
 		return
 	}
-	q.pending[bookID] = struct{}{}
+	if _, dup := q.pending[bookID]; !dup {
+		q.pending[bookID] = struct{}{}
+		q.order = append(q.order, bookID)
+	}
 	q.armLocked()
 }
 
@@ -143,7 +149,8 @@ func (q *ASINBackfillQueue) Stop() {
 	}
 }
 
-// Pending returns the ids waiting for the next run, sorted (tests, metrics).
+// Pending returns the ids waiting for the next run, in arrival order (tests,
+// metrics).
 func (q *ASINBackfillQueue) Pending() []string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -151,15 +158,10 @@ func (q *ASINBackfillQueue) Pending() []string {
 }
 
 func (q *ASINBackfillQueue) pendingLocked() []string {
-	ids := make([]string, 0, len(q.pending))
-	for id := range q.pending {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	return ids
+	return append([]string(nil), q.order...)
 }
 
-// flush enqueues up to maxASINBackfillRunIDs pending ids (lowest first) as
+// flush enqueues up to maxASINBackfillRunIDs pending ids (oldest first) as
 // one run, unless the previous run from this queue is still waiting to start:
 // then the ids stay pending and the timer is re-armed. Ids beyond the cap stay
 // pending and the timer is re-armed for them.
@@ -178,10 +180,10 @@ func (q *ASINBackfillQueue) flush() {
 			return
 		}
 	}
-	ids := q.pendingLocked()
-	if len(ids) > maxASINBackfillRunIDs {
-		ids = ids[:maxASINBackfillRunIDs]
-	}
+	n := min(len(q.order), maxASINBackfillRunIDs)
+	ids := append([]string(nil), q.order[:n]...)
+	// Copy the remainder so the drained prefix's backing array is released.
+	q.order = append([]string(nil), q.order[n:]...)
 	for _, id := range ids {
 		delete(q.pending, id)
 	}
