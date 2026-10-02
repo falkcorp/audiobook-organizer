@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.189.0
+// version: 1.190.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-02
 
@@ -26,7 +26,6 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -5168,23 +5167,12 @@ func (p *PebbleStore) Optimize(ctx context.Context) error {
 	return p.db.Compact(ctx, nil, []byte{0xff}, false)
 }
 
-// CompactionStats is a point-in-time read of Pebble's compaction counters.
-//
-// It exists so a caller running a long Optimize() can report LIVENESS from
-// numbers the engine actually produces, rather than from a bare ticker. That
-// distinction is the whole point: the operations registry cancels an op that
-// reports no progress for five minutes, and a heartbeat that fires regardless
-// of whether work is happening would defeat that check instead of satisfying
-// it. See internal/operations/registry/types.go:200 — declaring liveness is a
-// contract precisely so a wedged op stays distinguishable from a working one.
-type CompactionStats = compactprogress.Stats
-
 // CompactionStats reports Pebble's live compaction counters. Cheap: it reads
 // in-memory metrics and does not touch the LSM. The field mapping lives in
-// compactprogress.Collect so the AI-scan and OpenLibrary stores report the
-// same shape.
+// CollectCompactionStats (compaction_stats.go) so the AI-scan and
+// OpenLibrary stores report the same shape.
 func (p *PebbleStore) CompactionStats() CompactionStats {
-	return compactprogress.Collect(p.db)
+	return CollectCompactionStats(p.db)
 }
 
 // derefInt64 safely dereferences a *int64, returning 0 for nil.
