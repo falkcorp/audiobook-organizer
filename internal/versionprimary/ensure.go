@@ -255,13 +255,13 @@ func CheckMembership(cur *database.Book, lockedGID string) error {
 	return nil
 }
 
-// storeAlive is the merge-target liveness check: a point read, with a read
-// error counting as alive (the loser then stays ineligible).
 // StoreAlive is the alive answer Crown and EnsureSinglePrimary use for a
 // merge survivor outside the group: live unless soft-deleted or gone, and
 // live on a read error (so a loser is never made Electable by a failed read).
 func StoreAlive(store EnsureStore) func(string) bool { return storeAlive(store) }
 
+// storeAlive is the merge-target liveness check: a point read, with a read
+// error counting as alive (the loser then stays ineligible).
 func storeAlive(store EnsureStore) func(string) bool {
 	return func(id string) bool {
 		b, err := store.GetBookByID(id)
