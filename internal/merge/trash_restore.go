@@ -1,11 +1,12 @@
 // file: internal/merge/trash_restore.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
 // last-edited: 2026-10-01
 
 package merge
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -68,10 +69,13 @@ type pendingRepairScanner interface {
 //     clear is idempotent, while a second restore of a row already written
 //     live is a no-op, so a clear that failed after the write could never be
 //     retried;
-//  3. writes that restore in one ModifyBook, then re-checks the written row
-//     (a concurrent edit or apply may have changed it) and puts the redirect
-//     back, or removes it, to match;
-//  4. when the redirect is gone, drops the pending user-state repair records
+//  3. writes that restore in one ModifyBook, releases the group lock, and
+//     hands off the primary of the row's version group (handOff, or by
+//     default versionprimary.EnsureSinglePrimary on its group before and
+//     after the write);
+//  4. re-reads the row, now carrying the flags the hand-off left, and puts the
+//     redirect back, or removes it, to match (reconcileRestoredRedirect);
+//  5. when the redirect is gone, drops the pending user-state repair records
 //     that would move the restored book's state onto its old survivor.
 //
 // The redirect is KEPT when the restored row will not be ABS-listable
@@ -85,14 +89,17 @@ type pendingRepairScanner interface {
 // records are kept with it: while the book is live the sweep defers them
 // (ErrPendingLoserLive), and they are still owed if it is trashed again.
 //
-// Known gap: the caller's EnsureSinglePrimary runs after this returns. When
-// a kept-redirect loser's group has no live incumbent (its survivor is gone
-// too), that hand-off can crown the loser, which ABS then lists but still
-// drops as a redirect. Closing it means re-running this decision after the
-// hand-off at each RestoreFromTrash call site (audiobooks/service_single.go
-// and three in batch/service.go). Likewise an organized row whose files are
-// all Missing keeps its redirect, and a later repoint that finds its audio
-// does not remove it.
+// The hand-off runs here, not in the callers, because it decides the flag the
+// redirect decision reads. Until the second re-review of #3649 every caller
+// handed off after this returned, so a loser whose survivor was gone too kept
+// its redirect (not primary at decision time) and was then crowned: ABS listed
+// it and still forwarded its id elsewhere. The hand-off takes the group lock
+// itself, so it runs after this call releases it, still under LockMergeRMW;
+// the decision then reads the row the hand-off wrote.
+//
+// Known gap (documented, not built): an organized row whose files are all
+// Missing keeps its redirect (no present file), and a later repoint that finds
+// its audio does not remove it.
 //
 // User state (progress, positions, bookmarks) the merge already followed onto
 // the survivor stays there; only the identity redirect is removed.
@@ -102,13 +109,19 @@ type pendingRepairScanner interface {
 // same ModifyBook after the restore (a batch update's other fields), and the
 // row is written whether or not it was in the trash.
 //
+// handOff, when set, replaces the default hand-off and runs after every write
+// (restore or apply), with the row as the write read it and as written; a
+// batch update passes its own, which honours an is_primary_version or
+// version_group_id in the same payload. Callers must not hand off again
+// afterwards: a flag change after the redirect decision is the gap this
+// closes.
+//
 // It takes LockMergeRMW, so it never interleaves with a merge or combine that
-// is recording a redirect on the same book. The caller hands off the group's
-// primary (EnsureSinglePrimary) after it returns, when Restored is set.
+// is recording a redirect on the same book.
 //
 // There is no operation journal for a trash restore (there is none for the
 // trash either); the redirect removal and every dropped record are logged.
-func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.Book)) (TrashRestoreResult, error) {
+func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.Book), handOff func(before, after *database.Book)) (TrashRestoreResult, error) {
 	var res TrashRestoreResult
 	LockMergeRMW()
 	defer UnlockMergeRMW()
@@ -221,24 +234,67 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 		return res, nil
 	}
 	res.Book = updated
-	if res.Restored && reconcileRestoredRedirect(store, &res, listable) {
+	before := res.Before
+	switch {
+	case handOff != nil:
+		handOff(&before, updated)
+	case res.Restored:
+		handOffRestoredGroups(store, &before, updated, env.RootDir)
+	}
+	if !res.Restored {
+		return res, nil
+	}
+	// The decision reads the row as the hand-off left it, not as written.
+	final, err := store.GetBookByID(id)
+	if err != nil || final == nil {
+		mlog.Error("restore from trash: re-read of book=%s after the primary hand-off failed (%v); deciding its redirect on the row as written",
+			logger.SanitizeLogValue(id), err)
+		final = updated
+	}
+	if reconcileRestoredRedirect(store, &res, final, func(b *database.Book) bool {
+		return database.RestoredRowIsABSListable(b, files, env)
+	}) {
 		dropRestoredPendingRepairs(store, id)
 	}
 	return res, nil
 }
 
-// reconcileRestoredRedirect re-runs the redirect decision on the row the
-// restore wrote, which a concurrent writer or the caller's apply may have
-// left different from the preview the decision ran on. A redirect removed
+// handOffRestoredGroups is the default hand-off after a restore: one live
+// primary in the row's version group, and in the group it was in when the
+// write read it if that differs. Best-effort: the restore has committed; a
+// failed hand-off is logged.
+func handOffRestoredGroups(store TrashRestoreStore, before, after *database.Book, rootDir string) {
+	seen := map[string]bool{}
+	for _, b := range []*database.Book{after, before} {
+		if b == nil || b.VersionGroupID == nil {
+			continue
+		}
+		gid := strings.TrimSpace(*b.VersionGroupID)
+		if gid == "" || seen[gid] {
+			continue
+		}
+		seen[gid] = true
+		if _, err := versionprimary.EnsureSinglePrimary(context.Background(), store, gid,
+			versionprimary.Env{RootDir: rootDir}); err != nil {
+			mlog.Warn("restore from trash: primary hand-off in version group %s after restoring %s failed: %v",
+				logger.SanitizeLogValue(gid), logger.SanitizeLogValue(after.ID), err)
+		}
+	}
+}
+
+// reconcileRestoredRedirect re-runs the redirect decision on final, the row as
+// the restore and its primary hand-off left it, which the hand-off, the
+// caller's apply or a concurrent writer may have left different from the
+// preview the decision ran on. A redirect removed
 // for a row that is not listable after all is put back; a row that turned
 // out listable has its redirect removed now. res.RedirectFrom is kept in step.
 // It reports whether the row is listable and no redirect is left on it, i.e.
 // whether the pending moves onto the old survivor are no longer owed.
-func reconcileRestoredRedirect(store any, res *TrashRestoreResult, listable func(*database.Book) bool) bool {
-	id := res.Book.ID
-	if !listable(res.Book) {
+func reconcileRestoredRedirect(store any, res *TrashRestoreResult, final *database.Book, listable func(*database.Book) bool) bool {
+	id := final.ID
+	if !listable(final) {
 		if res.RedirectFrom != "" {
-			mlog.Warn("restore from trash: book=%s is not ABS-listable as written; putting its sync redirect to survivor=%s back",
+			mlog.Warn("restore from trash: book=%s is not ABS-listable after the restore and hand-off; putting its sync redirect to survivor=%s back",
 				logger.SanitizeLogValue(id), logger.SanitizeLogValue(res.RedirectFrom))
 			restoreRedirect(store, id, res.RedirectFrom)
 			res.RedirectFrom = ""
