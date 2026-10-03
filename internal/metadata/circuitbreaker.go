@@ -1,7 +1,7 @@
 // file: internal/metadata/circuitbreaker.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e2f3a4b5-c6d7-8901-ef23-456789abcdef
-// last-edited: 2026-09-03
+// last-edited: 2026-10-03
 
 package metadata
 
@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
 // ErrCircuitOpen is returned when the circuit breaker is open and calls are rejected.
@@ -197,15 +199,22 @@ func (ps *ProtectedSource) allowThrottle(ctx context.Context) error {
 // only release a hold that already existed when the call started -- otherwise a
 // request already in flight when the first 429 lands would return 200 a moment
 // later and delete the hold that 429 had just installed.
+//
+// This is also the one place every live interface call through a chain-built
+// source passes, so it is where metadata_fetch_total{source="network"|"error"}
+// is counted. A call refused before the source was touched (breaker open,
+// throttled) never reaches here and is not a fetch.
 func (ps *ProtectedSource) recordOutcome(startedAt time.Time, err error) {
 	id := ps.ProviderID()
 	if err != nil {
 		ps.breaker.RecordFailure()
 		DefaultThrottleRegistry().RecordFailure(id, err)
+		metrics.IncMetadataFetch(ProviderKey(ps), metrics.FetchSourceError)
 		return
 	}
 	ps.breaker.RecordSuccess()
 	DefaultThrottleRegistry().RecordSuccess(id, startedAt)
+	metrics.IncMetadataFetch(ProviderKey(ps), metrics.FetchSourceNetwork)
 }
 
 // ProviderID forwards the wrapped source's canonical id. Without this the

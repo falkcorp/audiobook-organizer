@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
 )
@@ -59,6 +60,15 @@ const (
 	unreviewableStatusResolvedNoCandidates = "resolved_no_candidates"
 	unreviewableStatusDecodeError          = "decode_error"
 )
+
+// reviewViewLabel maps the request's view flag onto the bounded
+// review_index_request_seconds{view} label.
+func reviewViewLabel(indexView bool) string {
+	if indexView {
+		return metrics.ReviewViewIndex
+	}
+	return metrics.ReviewViewFull
+}
 
 // slowReviewListing is the handler-time threshold past which
 // GetCacheReviewResults logs a WARN with enough context to correlate the slow
@@ -485,6 +495,11 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	}
 	all := httputil.ParseQueryBool(c, "all", false)
 	indexView := c.Query("view") == "index"
+	// Handler latency by view, every exit path from here on (the WARN below
+	// only fires past slowReviewListing; the histogram sees every request).
+	defer func(view string) {
+		metrics.ObserveReviewIndexRequest(view, time.Since(began))
+	}(reviewViewLabel(indexView))
 	var wantIDs map[string]bool
 	if raw := strings.TrimSpace(c.Query("ids")); raw != "" {
 		wantIDs = map[string]bool{}

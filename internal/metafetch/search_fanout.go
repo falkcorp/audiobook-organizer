@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package metafetch
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
 var searchFanoutLog = logger.New("metafetch.search")
@@ -258,10 +259,12 @@ func (mfs *Service) askVariant(p fanoutParams, st *fanoutSource, v queryVariant)
 				for i := range rs {
 					rs[i].PublishYearIsAudiobookRelease = isRelease
 				}
+				metrics.IncMetadataFetch(metadata.ProviderKey(st.src), metrics.FetchSourceCacheHit)
 				st.results = append(st.results, p.accept(v, rs)...)
 				return
 			}
 		}
+		metrics.IncMetadataFetch(metadata.ProviderKey(st.src), metrics.FetchSourceCacheMiss)
 	}
 	if err := waitForLimiter(p.ctx, p.limiter); err != nil {
 		st.note(p.ctx, err)
@@ -332,10 +335,14 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 	if metadata.IsNotFound(err) {
 		res, err = nil, nil
 	}
+	// Counted by hand for the same reason the throttle is: this call does not
+	// go through ProtectedSource.recordOutcome.
 	if err != nil {
 		reg.RecordFailure(providerID, err)
+		metrics.IncMetadataFetch(providerID, metrics.FetchSourceError)
 	} else {
 		reg.RecordSuccess(providerID, startedAt)
+		metrics.IncMetadataFetch(providerID, metrics.FetchSourceNetwork)
 	}
 	return res, err
 }
