@@ -1,13 +1,12 @@
 // file: internal/quarantine/service.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package quarantine
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -103,12 +102,6 @@ func NewQuarantineService(store Store, cfg *config.Config, events plugin.EventPu
 // SetWriteBackBatcher wires in the iTunes write-back batcher (optional; nil is safe).
 func (qs *QuarantineService) SetWriteBackBatcher(batcher WriteBackEnqueuer) {
 	qs.batcher = batcher
-}
-
-// scanFailKey returns the PebbleDB key suffix for a file's scan-fail counter.
-func scanFailKey(path string) string {
-	h := sha256.Sum256([]byte(path))
-	return fmt.Sprintf("%x", h[:8])
 }
 
 const scanFailThreshold = 3
@@ -931,7 +924,7 @@ func (qs *QuarantineService) AutoQuarantineFailedScans() {
 		if b.QuarantinedAt != nil {
 			continue
 		}
-		n, _ := qs.store.GetScanFailCount(scanFailKey(b.FilePath))
+		n, _ := qs.store.GetScanFailCount(database.ScanFailKey(b.FilePath))
 		if n >= scanFailThreshold {
 			slog.Info("auto-quarantine (fail count)", "filePath", b.FilePath, "failCount", n)
 			_ = qs.QuarantineBook(b.ID, fmt.Sprintf("taglib failed to read file after %d consecutive scan attempts", n))

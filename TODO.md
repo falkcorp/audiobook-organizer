@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.75.2 -->
+<!-- version: 10.75.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -2086,7 +2086,7 @@ fine; the row simply predated it by 67 days and nothing ever buried it.
     unit), and `UpdateConfig` has no production caller — but that is one config edit
     plus a restart away. **Prod value unverified** (config.yaml is 0600, config API
     errored).
-  - [x] `internal/scanner/scanner.go:1398-1406` — ✅ DONE 2026-10-03 (branch fix/silent-failures-scanner-recover-dispatch-threshold): extracted `resetScanFailCount`; the error is logged via `warnSampled` and counted, the recover now logs and counts (kept: pebble-closed and nil-embedded-fake panics, no worker-level recover above it); both totals in the scan summary; `scan_fail_reset_test.go`. Bare `recover()` whose comment
+  - [x] `internal/scanner/scanner.go:1398-1406` — ✅ DONE 2026-10-03 (branch fix/silent-failures-scanner-recover-dispatch-threshold): extracted `resetScanFailCount`; the error is logged via `warnSampled` and counted, the recover now logs and counts (kept: pebble-closed and nil-embedded-fake panics, no worker-level recover above it); both totals in the scan summary; `scan_fail_reset_test.go`. Follow-up in the same PR: `IncrScanFailCount` gets the same guarded call (`callScanFailStore`), and the key derivation is now one function, `database.ScanFailKey`, used by the scanner and `internal/quarantine` (pinned by `TestScanFailKeyIsSharedWithQuarantine`). Bare `recover()` whose comment
     justifies it with `GetGlobalStore` while the code calls `getStore()`; it is
     swallowing a real `pebble: closed` panic from `ResetScanFailCount`, whose error
     is also discarded while its `IncrScanFailCount` neighbour logs. The repo already

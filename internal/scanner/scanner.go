@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.121.0
+// version: 1.122.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-03
 
@@ -79,6 +79,7 @@ var (
 	dupLookupSkipCount      atomic.Int64 // files skipped: duplicate status undeterminable
 	scanCacheUpdateErrCount atomic.Int64 // UpdateScanCache failures (file re-hashed every scan until it succeeds)
 	scanFailCountErrCount   atomic.Int64 // IncrScanFailCount failures
+	scanFailIncrPanicCount  atomic.Int64 // IncrScanFailCount panicked (closed store, or a store missing the method)
 	// ResetScanFailCount failures and panics. Until 2026-10-03 both were
 	// swallowed by a bare recover() plus a discarded error, so a reset that
 	// never landed left a file's stale failures counting toward auto-quarantine
@@ -925,13 +926,19 @@ func ScanDirectory(ctx context.Context, rootDir string, scanLog logger.Logger) (
 	return ScanDirectoryParallel(ctx, rootDir, 1, scanLog)
 }
 
-// scanFailKey is the scan-fail counter key for filePath: the first 8 bytes of
-// its SHA-256, hex. IncrScanFailCount and ResetScanFailCount must agree on it,
-// or a reset clears a counter nothing increments -- and so must the reader,
-// internal/quarantine's scanFailKey, which duplicates this derivation.
-func scanFailKey(filePath string) string {
-	sum := sha256.Sum256([]byte(filePath))
-	return fmt.Sprintf("%x", sum[:8])
+// incrScanFailCount bumps filePath's scan-fail counter after a failed read.
+// The quarantine service quarantines a book whose counter reaches its
+// threshold, so an increment that never lands disables auto-quarantine for
+// that file. It used to sit unguarded inline: an error was logged, but a
+// panic out of the store call crashed the process mid-scan.
+func incrScanFailCount(filePath string, scanLog logger.Logger) {
+	callScanFailStore("IncrScanFailCount", filePath, scanLog,
+		&scanFailCountErrCount, &scanFailIncrPanicCount,
+		"auto-quarantine will not see this failure",
+		func(s scannerStore, key string) error {
+			_, err := s.IncrScanFailCount(key)
+			return err
+		})
 }
 
 // resetScanFailCount clears filePath's scan-fail counter after a successful
@@ -939,37 +946,49 @@ func scanFailKey(filePath string) string {
 //
 // Until 2026-10-03 this ran inside `defer func() { recover() }()` with the
 // error discarded, so a panic and an error were both silent while the
-// IncrScanFailCount call beside it logged. A reset that never lands is not
-// harmless: the file's earlier failures keep counting, and enough later
-// transient ones quarantine a file that parses.
+// increment beside it logged. A reset that never lands is not harmless: the
+// file's earlier failures keep counting, and enough later transient ones
+// quarantine a file that parses.
+func resetScanFailCount(filePath string, scanLog logger.Logger) {
+	callScanFailStore("ResetScanFailCount", filePath, scanLog,
+		&scanFailResetErrCount, &scanFailResetPanicCount,
+		"earlier failures keep counting toward auto-quarantine",
+		func(s scannerStore, key string) error {
+			return s.ResetScanFailCount(key)
+		})
+}
+
+// callScanFailStore runs one scan-fail counter write for filePath against the
+// package store, keyed by database.ScanFailKey -- the same function the
+// quarantine service reads with, so the writer and the reader cannot diverge.
 //
-// Errors are logged (sampled) and counted for the run summary.
+// An error is logged (sampled) with consequence and counted in errCount; the
+// counters feed the run summary.
 //
-// The recover stays, but it logs and counts instead of swallowing. There are
-// two demonstrated panic sources at this call and no worker-level recover in
-// ProcessBooksParallel above it, so an unguarded panic here would take down
-// the whole process mid-scan:
-//   - "pebble: closed": PebbleStore.ResetScanFailCount is a raw db.Delete,
-//     which panics when the store was closed under a still-running scan
+// A panic is recovered, logged (sampled) and counted in panicCount, never
+// swallowed. The recover is needed: there are two demonstrated panic sources
+// at these calls and no worker-level recover in ProcessBooksParallel above
+// them, so an unguarded panic takes down the whole process mid-scan:
+//   - "pebble: closed": PebbleStore's counter methods are raw db.Set/Delete
+//     calls, which panic when the store was closed under a still-running scan
 //     (observed in the test suite, audit 2026-09).
-//   - test fakes that embed a nil scannerStore and do not implement this
+//   - test fakes that embed a nil scannerStore and do not implement the
 //     method; the call then dereferences the nil interface.
 //
 // It is the same logging recover writeBackScanCache uses.
-func resetScanFailCount(filePath string, scanLog logger.Logger) {
+func callScanFailStore(op, filePath string, scanLog logger.Logger, errCount, panicCount *atomic.Int64,
+	consequence string, call func(s scannerStore, key string) error) {
 	defer func() {
 		if r := recover(); r != nil {
-			warnSampled(&scanFailResetPanicCount, scanLog,
-				"ResetScanFailCount for %s recovered from panic: %v", filePath, r)
+			warnSampled(panicCount, scanLog, "%s for %s recovered from panic: %v", op, filePath, r)
 		}
 	}()
 	gs := getStore()
 	if gs == nil {
 		return
 	}
-	if err := gs.ResetScanFailCount(scanFailKey(filePath)); err != nil {
-		warnSampled(&scanFailResetErrCount, scanLog,
-			"ResetScanFailCount failed for %s: %v (earlier failures keep counting toward auto-quarantine)", filePath, err)
+	if err := call(gs, database.ScanFailKey(filePath)); err != nil {
+		warnSampled(errCount, scanLog, "%s failed for %s: %v (%s)", op, filePath, err, consequence)
 	}
 }
 
@@ -1425,6 +1444,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	})
 	scanCacheErrStart := scanCacheUpdateErrCount.Load()
 	scanFailCountErrStart := scanFailCountErrCount.Load()
+	scanFailIncrPanicStart := scanFailIncrPanicCount.Load()
 	scanFailResetErrStart := scanFailResetErrCount.Load()
 	scanFailResetPanicStart := scanFailResetPanicCount.Load()
 	scanCacheStatErrStart := scanCacheStatErrCount.Load()
@@ -1793,12 +1813,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			if pfErr != nil {
 				failures.Record(scanLog, FileFailure{Path: filePath, Stage: FileFailureStageRead, Reason: pfErr.Error()})
 				fallbackUsed = true
-				if gs := getStore(); gs != nil {
-					if _, ierr := gs.IncrScanFailCount(scanFailKey(filePath)); ierr != nil {
-						// Silent failure disabled the auto-quarantine escalation path (H5).
-						warnSampled(&scanFailCountErrCount, scanLog, "IncrScanFailCount failed for %s: %v", filePath, ierr)
-					}
-				}
+				// A failure that is not counted disables the auto-quarantine
+				// escalation path (H5), so errors and panics are both logged.
+				incrScanFailCount(filePath, scanLog)
 			} else {
 				// Reset fail counter on successful parse so transient failures
 				// don't accumulate toward the auto-quarantine threshold.
@@ -2116,6 +2133,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	}
 	if d := scanFailCountErrCount.Load() - scanFailCountErrStart; d > 0 {
 		scanLog.Warn("scan summary: %d scan-fail-count increments failed", d)
+	}
+	if d := scanFailIncrPanicCount.Load() - scanFailIncrPanicStart; d > 0 {
+		scanLog.Warn("scan summary: %d scan-fail-count increments panicked and were recovered (store closed or incomplete); auto-quarantine did not see those failures", d)
 	}
 	if d := scanFailResetErrCount.Load() - scanFailResetErrStart; d > 0 {
 		scanLog.Warn("scan summary: %d scan-fail-count resets failed (those files keep earlier failures counting toward auto-quarantine)", d)
