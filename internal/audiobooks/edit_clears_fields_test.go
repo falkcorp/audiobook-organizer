@@ -784,23 +784,32 @@ func TestUpdateAudiobook_RefusedEditLeavesNoHistory(t *testing.T) {
 	require.Empty(t, fieldStates(t, store, book.ID), "a refused edit left field state")
 }
 
-// An author-less book whose author box was dirtied back to empty: the
-// override "" is refused like any author clear (decision 2026-10-03), and
-// nothing is written.
-func TestUpdateAudiobook_AuthorOverrideClearOnAnAuthorlessBookIsRefused(t *testing.T) {
-	store, book := editFixture(t)
-	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
-		"title": "Renamed", "author_name": "", "series_name": "", "narrator": "", "description": "",
-		"overrides": map[string]any{
-			"title":       map[string]any{"value": "Renamed", "locked": true},
-			"author_name": map[string]any{"value": "", "locked": true},
-		},
-	})
-	require.ErrorIs(t, err, audiobooks.ErrInvalidAudiobookUpdate)
-	row, err := store.GetBookByID(book.ID)
-	require.NoError(t, err)
-	require.Equal(t, "T", row.Title)
-	require.Empty(t, historyByField(t, store, book.ID))
+// An author-less book whose author box was typed in and emptied again: the
+// override "" has no author to clear, so it is a no-op -- the rest of the
+// save goes through, and nothing is locked or recorded for the author.
+func TestUpdateAudiobook_AuthorOverrideClearOnAnAuthorlessBookIsANoop(t *testing.T) {
+	for name, value := range map[string]any{"empty string": "", "null": nil} {
+		t.Run(name, func(t *testing.T) {
+			store, book := editFixture(t)
+			_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+				"title": "Renamed", "author_name": "", "series_name": "", "narrator": "", "description": "",
+				"overrides": map[string]any{
+					"title":       map[string]any{"value": "Renamed", "locked": true},
+					"author_name": map[string]any{"value": value, "locked": true},
+				},
+			})
+			require.NoError(t, err)
+			row, err := store.GetBookByID(book.ID)
+			require.NoError(t, err)
+			require.Equal(t, "Renamed", row.Title)
+			require.ElementsMatch(t, []string{database.FieldKeyTitle}, lockedKeys(t, store, book.ID))
+			for field := range historyByField(t, store, book.ID) {
+				require.Equal(t, database.FieldKeyTitle, field)
+			}
+			_, hasAuthorState := fieldStates(t, store, book.ID)[database.FieldKeyAuthorName]
+			require.False(t, hasAuthorState, "an author override with nothing to clear left field state")
+		})
+	}
 }
 
 // A BookDetail save of a book that HAS a narrator, description and author:
@@ -901,4 +910,162 @@ func TestUpdateAudiobook_ResentStaleSeriesNameRelinksTheBook(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, view.Series, "GET lost the series after an ordinary save")
 	require.Equal(t, "Redshirts", view.Series.Name)
+}
+
+// authorNamesOf is the book's book_authors names, in order.
+func authorNamesOf(t *testing.T, store *database.PebbleStore, id string) []string {
+	t.Helper()
+	rows, err := store.GetBookAuthors(id)
+	require.NoError(t, err)
+	var names []string
+	for _, r := range rows {
+		a, err := store.GetAuthorByID(r.AuthorID)
+		require.NoError(t, err)
+		require.NotNil(t, a)
+		names = append(names, a.Name)
+	}
+	return names
+}
+
+// requireOnlyTitleEdited: the save locked and recorded the title and nothing
+// else.
+func requireOnlyTitleEdited(t *testing.T, store *database.PebbleStore, id string) {
+	t.Helper()
+	require.ElementsMatch(t, []string{database.FieldKeyTitle}, lockedKeys(t, store, id))
+	for field := range historyByField(t, store, id) {
+		require.Equal(t, database.FieldKeyTitle, field, "history row for a field the save did not change")
+	}
+}
+
+// GET shows a join-only author (no AuthorID) as the join names joined with
+// " & ", and BookDetail re-sends that. It used to be read as an author edit:
+// the book was relinked to a new author named "Alice Able & Bob Baker", the
+// field locked and history written.
+func TestUpdateAudiobook_ResentJoinOnlyAuthorIsNotAnEdit(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("Alice Able")
+	require.NoError(t, err)
+	b, err := store.CreateAuthor("Bob Baker")
+	require.NoError(t, err)
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/j.m4b", Format: "m4b"})
+	require.NoError(t, err)
+	require.NoError(t, store.SetBookAuthors(book.ID, []database.BookAuthor{
+		{BookID: book.ID, AuthorID: a.ID, Role: "author"},
+		{BookID: book.ID, AuthorID: b.ID, Role: "co-author", Position: 1}}))
+
+	body := bookDetailSave("Renamed")
+	body["author_name"] = "Alice Able & Bob Baker"
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, body)
+	require.NoError(t, err)
+
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.Nil(t, row.AuthorID, "the book was relinked")
+	require.Nil(t, row.Author, "an embedded author was written")
+	require.Equal(t, []string{"Alice Able", "Bob Baker"}, authorNamesOf(t, store, book.ID))
+	combined, err := store.GetAuthorByName("Alice Able & Bob Baker")
+	require.NoError(t, err)
+	require.Nil(t, combined, "an author named after the joined names was created")
+	requireOnlyTitleEdited(t, store, book.ID)
+}
+
+// A dangling AuthorID (no author row) with a join: GET shows the join names.
+// Re-sending them is not an edit either.
+func TestUpdateAudiobook_ResentAuthorOfADanglingAuthorIDIsNotAnEdit(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("Alice Able")
+	require.NoError(t, err)
+	dangling := 99999
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/d.m4b", Format: "m4b", AuthorID: &dangling})
+	require.NoError(t, err)
+	require.NoError(t, store.SetBookAuthors(book.ID, []database.BookAuthor{{BookID: book.ID, AuthorID: a.ID, Role: "author"}}))
+
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"title": "Renamed", "author_name": "Alice Able",
+	})
+	require.NoError(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row.AuthorID)
+	require.Equal(t, dangling, *row.AuthorID, "the author link was rewritten by a re-sent name")
+	require.Nil(t, row.Author, "an embedded author was written for a dangling id")
+	requireOnlyTitleEdited(t, store, book.ID)
+}
+
+// Review S4b: an override-only author_name / series_name (no top-level key)
+// was locked but never applied: resolution read only the top-level key.
+func TestUpdateAudiobook_OverrideOnlyAuthorAndSeriesAreApplied(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("Alice Able")
+	require.NoError(t, err)
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/o.m4b", Format: "m4b", AuthorID: &a.ID, Author: a})
+	require.NoError(t, err)
+
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"overrides": map[string]any{
+			"author_name": map[string]any{"value": "Carol Cole", "locked": true},
+			"series_name": map[string]any{"value": "New Series", "locked": true},
+		},
+	})
+	require.NoError(t, err)
+	view, err := audiobooks.NewAudiobookService(store).GetAudiobook(context.Background(), book.ID)
+	require.NoError(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	carol, err := store.GetAuthorByName("Carol Cole")
+	require.NoError(t, err)
+	require.NotNil(t, carol, "the override author was not created")
+	require.NotNil(t, row.AuthorID)
+	require.Equal(t, carol.ID, *row.AuthorID, "the override author was not applied")
+	require.Equal(t, []string{"Carol Cole"}, authorNamesOf(t, store, book.ID))
+	require.NotNil(t, row.SeriesID, "the override series was not applied")
+	require.NotNil(t, view.Series)
+	require.Equal(t, "New Series", view.Series.Name)
+	locks := lockedKeys(t, store, book.ID)
+	require.Contains(t, locks, database.FieldKeyAuthorName)
+	require.Contains(t, locks, database.FieldKeySeriesName)
+}
+
+// Whitespace around a re-sent author is still the same author, and a
+// whitespace-only narrator for a narrator-less book is a blank no-op.
+func TestUpdateAudiobook_WhitespaceOnlyDifferencesAreNotEdits(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("Alice Able")
+	require.NoError(t, err)
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/w.m4b", Format: "m4b", AuthorID: &a.ID, Author: a})
+	require.NoError(t, err)
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"author_name": "  Alice Able ", "narrator": " ",
+	})
+	require.NoError(t, err)
+	require.Empty(t, lockedKeys(t, store, book.ID))
+	require.Empty(t, historyByField(t, store, book.ID))
+}
+
+// A case-only author edit keeps the book on the same author row (the lookup
+// is case-insensitive) instead of creating a new one. The series side of a
+// case-only edit is open (todo.d EDIT-SERIES-CASE-RENAME) and not pinned.
+func TestUpdateAudiobook_CaseOnlyAuthorEditKeepsTheSameRow(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("alice able")
+	require.NoError(t, err)
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/c.m4b", Format: "m4b", AuthorID: &a.ID, Author: a})
+	require.NoError(t, err)
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"author_name": "Alice Able",
+	})
+	require.NoError(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.Equal(t, a.ID, *row.AuthorID, "a case-only author edit moved the book to another author row")
 }

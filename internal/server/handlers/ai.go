@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -379,6 +379,40 @@ func (h *AIHandler) TestMetadataSource(c *gin.Context) {
 	}
 }
 
+// AIParsedUpdatePayload is the PUT-shaped payload ParseAudiobook sends to
+// the update service: only the fields the parser filled, under the update
+// service's own keys. The series number goes as series_position; it was sent
+// as series_sequence, a key the update service never reads, so every
+// AI-parsed series number was dropped.
+func AIParsedUpdatePayload(metadata *ai.ParsedMetadata) map[string]any {
+	payload := map[string]any{}
+	if metadata == nil {
+		return payload
+	}
+	if metadata.Title != "" {
+		payload["title"] = metadata.Title
+	}
+	if metadata.Author != "" {
+		payload["author_name"] = metadata.Author
+	}
+	if metadata.Narrator != "" {
+		payload["narrator"] = metadata.Narrator
+	}
+	if metadata.Publisher != "" {
+		payload["publisher"] = metadata.Publisher
+	}
+	if metadata.Year > 0 {
+		payload["audiobook_release_year"] = metadata.Year
+	}
+	if metadata.Series != "" {
+		payload["series_name"] = metadata.Series
+	}
+	if metadata.SeriesNum > 0 {
+		payload["series_position"] = metadata.SeriesNum
+	}
+	return payload
+}
+
 // ParseAudiobook parses an audiobook's filename with AI and updates its metadata.
 func (h *AIHandler) ParseAudiobook(c *gin.Context) {
 	id := c.Param("id")
@@ -440,28 +474,7 @@ func (h *AIHandler) ParseAudiobook(c *gin.Context) {
 
 	// Build payload for the update service (routes through AudiobookService
 	// which handles "&" splitting for authors/narrators, junction tables, etc.)
-	payload := map[string]any{}
-	if metadata.Title != "" {
-		payload["title"] = metadata.Title
-	}
-	if metadata.Author != "" {
-		payload["author_name"] = metadata.Author
-	}
-	if metadata.Narrator != "" {
-		payload["narrator"] = metadata.Narrator
-	}
-	if metadata.Publisher != "" {
-		payload["publisher"] = metadata.Publisher
-	}
-	if metadata.Year > 0 {
-		payload["audiobook_release_year"] = metadata.Year
-	}
-	if metadata.Series != "" {
-		payload["series_name"] = metadata.Series
-	}
-	if metadata.SeriesNum > 0 {
-		payload["series_sequence"] = metadata.SeriesNum
-	}
+	payload := AIParsedUpdatePayload(metadata)
 
 	// Route through the service layer for proper multi-author/narrator handling
 	updatedBook, err := h.updater.UpdateAudiobook(c.Request.Context(), id, payload)

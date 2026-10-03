@@ -73,14 +73,6 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	if currentBook == nil {
 		return nil, fmt.Errorf("audiobook not found")
 	}
-	// A book's author cannot be removed from this endpoint (see the
-	// author_name resolution below). An author_name override of "" -- the
-	// web editor's form of a clear -- used to lock the field at "" and record
-	// a history row while the author stayed, so the lock claimed a change
-	// that never happened. Refuse it before anything is written.
-	if o, ok := req.Updates.Overrides[database.FieldKeyAuthorName]; ok && authorOverrideClears(o) {
-		return nil, fmt.Errorf("%w: the author cannot be cleared; set a different author", ErrInvalidAudiobookUpdate)
-	}
 	// before is the row as read. Everything below edits currentBook (with
 	// author/series/narrator resolution and an os.Stat in between); the save
 	// then merges only the fields that changed relative to before onto the row
@@ -90,8 +82,27 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	if err != nil {
 		return nil, err
 	}
-	// beforeAuthor/beforeSeries: the names a GET shows for the book as read.
-	beforeAuthor, beforeSeries := resolveAuthorAndSeriesNames(svc.store, before)
+	// beforeAuthor/beforeSeries: the names a GET shows for the book as read
+	// (the author by database.ShownCreditName, as the GET builds it).
+	// authorLinked: the book has an author link (AuthorID or join rows).
+	beforeAuthor, authorLinked := svc.shownAuthorName(before)
+	_, beforeSeries := resolveAuthorAndSeriesNames(svc.store, before)
+
+	// A book's author cannot be removed from this endpoint (see the
+	// author_name resolution below). An author_name override of "" -- the
+	// web editor's form of a clear -- used to lock the field at "" and record
+	// a history row while the author stayed, so the lock claimed a change
+	// that never happened. Refuse it before anything is written, when the
+	// book has an author to clear. On a book with none (the user typed in
+	// the empty box and deleted it again) it changes nothing, so it is
+	// dropped: no lock, no history.
+	skipOverride := map[string]bool{}
+	if o, ok := req.Updates.Overrides[database.FieldKeyAuthorName]; ok && authorOverrideClears(o) {
+		if beforeAuthor != "" || authorLinked {
+			return nil, fmt.Errorf("%w: the author cannot be cleared; set a different author", ErrInvalidAudiobookUpdate)
+		}
+		skipOverride[database.FieldKeyAuthorName] = true
+	}
 
 	// overrideRecorded: history fields the override bookkeeping below
 	// recorded a row for ("override", "user_edit"); the column diff after the
@@ -230,6 +241,9 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 
 	// Process overrides
 	for field, override := range req.Updates.Overrides {
+		if skipOverride[field] {
+			continue
+		}
 		entry := state[field]
 		oldOverrideValue := entry.OverrideValue
 		if override.Clear {
@@ -304,16 +318,22 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// The join rows are resolved here and written after the book commits.
 	var resolvedAuthorName string
 	var pendingAuthors []database.BookAuthor
+	//
+	// The value is the effective one: an override's (ApplyOverrideToPayload
+	// put it on payload.AuthorName), else the top-level key. Reading only the
+	// top-level key locked an override-only author that was never applied.
 	authorName := ""
-	if req.Updates.AuthorName != nil && sent(database.FieldKeyAuthorName) {
-		authorName = strings.TrimSpace(*req.Updates.AuthorName)
+	if v := effectiveString(payload.AuthorName, req.Updates.AuthorName); v != nil && sent(database.FieldKeyAuthorName) && !skipOverride[database.FieldKeyAuthorName] {
+		authorName = strings.TrimSpace(*v)
 	}
 	// The name the book already shows is not an author edit (the editor
 	// re-sends it on every save). Re-resolving it would rewrite the join from
-	// that one name, collapsing a co-authored book to its primary author.
-	// Only while the book is linked by ID: a name shown from a stale embedded
-	// object alone still goes through the lookup, which relinks it.
-	authorUnchanged := authorName != "" && authorName == beforeAuthor && before.AuthorID != nil && !sent("author_id")
+	// that one name, collapsing a co-authored book to its primary author, or
+	// relink a join-only "A & B" book to a new author named "A & B". Only
+	// while the book has an author link (AuthorID or join rows): a name shown
+	// from a stale embedded object alone still goes through the lookup, which
+	// relinks it.
+	authorUnchanged := authorName != "" && authorName == beforeAuthor && authorLinked && !sent("author_id")
 	if authorUnchanged {
 		resolvedAuthorName = beforeAuthor
 	}
@@ -403,9 +423,12 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// its series after a 200.
 	var resolvedSeriesName string
 	seriesName := ""
-	seriesNameSent := req.Updates.SeriesName != nil && sent(database.FieldKeySeriesName)
+	// The effective value, as for the author: an override's, else the
+	// top-level key's.
+	seriesValue := effectiveString(payload.SeriesName, req.Updates.SeriesName)
+	seriesNameSent := seriesValue != nil && sent(database.FieldKeySeriesName)
 	if seriesNameSent {
-		seriesName = strings.TrimSpace(*req.Updates.SeriesName)
+		seriesName = strings.TrimSpace(*seriesValue)
 	}
 	clearSeries := seriesName == "" && (req.Updates.ClearSeries || seriesNameSent)
 	// hadSeries: the book showed a series name on GET (same resolver). Only
@@ -416,8 +439,9 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// Books hit by the old clear bug (nil SeriesID, stale embedded Series)
 	// show the stale name, so a repeat clear repairs them.
 	hadSeries := beforeSeries != ""
+	seriesUnchanged := seriesName != "" && seriesName == beforeSeries && before.SeriesID != nil && !sent("series_id")
 	switch {
-	case seriesName != "" && seriesName == beforeSeries && before.SeriesID != nil && !sent("series_id"):
+	case seriesUnchanged:
 		// The series the book already shows is not a series edit (the editor
 		// re-sends it on every save). Looking it up by name again could
 		// resolve -- or create -- a different series row of the same name
@@ -556,11 +580,11 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// author or series alone must not rewrite their stored objects (a
 	// title-only save used to stamp the series object with the book's
 	// author_id).
-	if payload.AuthorID != nil && resolvedAuthorName != "" &&
+	if !authorUnchanged && payload.AuthorID != nil && resolvedAuthorName != "" &&
 		(!sameIntPtr(payload.AuthorID, before.AuthorID) || before.Author == nil || before.Author.Name != resolvedAuthorName) {
 		payload.Book.Author = &database.Author{ID: *payload.AuthorID, Name: resolvedAuthorName}
 	}
-	if payload.SeriesID != nil && resolvedSeriesName != "" &&
+	if !seriesUnchanged && payload.SeriesID != nil && resolvedSeriesName != "" &&
 		(!sameIntPtr(payload.SeriesID, before.SeriesID) || before.Series == nil || before.Series.Name != resolvedSeriesName) {
 		payload.Book.Series = &database.Series{ID: *payload.SeriesID, Name: resolvedSeriesName, AuthorID: payload.AuthorID}
 	}
@@ -588,6 +612,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 
 	// The edit has committed. Everything below is written only now, and a
 	// failure in it is logged, not returned: the edit itself landed.
+	//
+	// Known race: these join writes run outside the book's write stripe.
+	// The store's per-book lock (PebbleStore.lockBook) is not exported, and
+	// ModifyBook's callback cannot call the store's join writers (they would
+	// re-enter the stripe). A concurrent writer that changes the same join
+	// between the commit and these writes can be overwritten by them, or
+	// overwrite them. Tracked in todo.d (EDIT-JOIN-WRITE-STRIPE).
 
 	// The book_authors join resolved above.
 	if pendingAuthors != nil {
@@ -644,11 +675,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 
 	svc.InvalidateBookCaches()
 
-	// Enrich response with resolved names
-	if resolvedAuthorName != "" && updatedBook.AuthorID != nil {
+	// Enrich response with resolved names (not for an unchanged name: the
+	// stored objects stand, and the shown name may be a join "A & B" that is
+	// no author's name).
+	if !authorUnchanged && resolvedAuthorName != "" && updatedBook.AuthorID != nil {
 		updatedBook.Author = &database.Author{ID: *updatedBook.AuthorID, Name: resolvedAuthorName}
 	}
-	if resolvedSeriesName != "" && updatedBook.SeriesID != nil {
+	if !seriesUnchanged && resolvedSeriesName != "" && updatedBook.SeriesID != nil {
 		updatedBook.Series = &database.Series{ID: *updatedBook.SeriesID, Name: resolvedSeriesName, AuthorID: payload.AuthorID}
 	}
 
@@ -738,18 +771,50 @@ func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written 
 // (enrichBookForResponse). "" when the junction is empty or unreadable.
 func (svc *AudiobookService) junctionNarratorText(id string) string {
 	rows, err := svc.store.GetBookNarrators(id)
-	if err != nil || len(rows) == 0 {
+	if err != nil {
 		return ""
 	}
 	names := make([]string, 0, len(rows))
 	for _, r := range rows {
-		n, nErr := svc.store.GetNarratorByID(r.NarratorID)
-		if nErr != nil || n == nil {
-			return ""
+		// A row whose narrator is gone is skipped, as the GET skips it.
+		if n, nErr := svc.store.GetNarratorByID(r.NarratorID); nErr == nil && n != nil {
+			names = append(names, n.Name)
 		}
-		names = append(names, n.Name)
 	}
-	return strings.Join(names, " & ")
+	return database.ShownCreditName("", names)
+}
+
+// shownAuthorName is the author a GET shows for book (database.
+// ShownCreditName over the resolved primary author and the book_authors
+// names, the way enrichBookForResponse builds it), and whether the book has
+// an author link at all (an AuthorID, dangling or not, or join rows).
+func (svc *AudiobookService) shownAuthorName(book *database.Book) (string, bool) {
+	primary, _ := resolveAuthorAndSeriesNames(svc.store, book)
+	linked := book.AuthorID != nil
+	rows, err := svc.store.GetBookAuthors(book.ID)
+	if err != nil {
+		return primary, linked
+	}
+	linked = linked || len(rows) > 0
+	names := make([]string, 0, len(rows))
+	for _, r := range rows {
+		// A row whose author is gone is skipped, as the GET skips it.
+		if a, aErr := svc.store.GetAuthorByID(r.AuthorID); aErr == nil && a != nil {
+			names = append(names, a.Name)
+		}
+	}
+	return database.ShownCreditName(primary, names), linked
+}
+
+// effectiveString is an edit's value for a field the request can carry both
+// at top level and as an override: the override's when there is one (it is
+// applied after the top-level keys, as for every field), else the top-level
+// value. nil when neither is present.
+func effectiveString(override, topLevel *string) *string {
+	if override != nil {
+		return override
+	}
+	return topLevel
 }
 
 // applySeriesPosition sets a book's series position from a value as a client
