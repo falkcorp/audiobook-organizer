@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7f21c6ad-95be-4c30-8d02-5b3a1e6f4c99
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package maintenance
 
@@ -195,9 +195,10 @@ func TestDedupeBookFileRows_ParallelDryRunDeletesNothing(t *testing.T) {
 // registry.ReporterOpID resolves through an optional `OpID() string`, and the
 // package's fakes deliberately do not implement it, so journal rows written
 // under a plain fake carry OperationID "". That is a supported degradation
-// (GetBookChanges scans every opchange: key and filters by BookID, so replay by
-// book still works), but it would leave the correlated path -- the one
-// production uses, and the one GetOperationChanges reads -- untested.
+// (GetBookChanges finds rows by BookID, through the opchange_by_book: index or
+// the full scan, whatever the OperationID, so replay by book still works), but
+// it would leave the correlated path -- the one production uses, and the one
+// GetOperationChanges reads -- untested.
 //
 // It is NOT the package's existing opIDReporter (scan_standdown_apply_test.go):
 // that one embeds fakeReporter, whose Log appends to an unguarded slice. This op
