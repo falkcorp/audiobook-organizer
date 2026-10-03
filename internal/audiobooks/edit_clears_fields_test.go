@@ -471,3 +471,34 @@ func TestUpdateAudiobook_JunctionOnlyNarratorClearEmptiesTheJunction(t *testing.
 	require.NoError(t, err)
 	require.True(t, locks[database.FieldKeyNarrator], "a real narrator clear was not locked")
 }
+
+// The junction is now written after the book commits (review N1). For a
+// changed credit the store's sync, which runs inside that commit, writes the
+// CLEANED cast ("Narrated by" stripped, the book's own author dropped), and
+// that cast must survive: before the move it overwrote the service's raw
+// split, and the service's later write must not now overwrite it back.
+func TestUpdateAudiobook_NarratorSetKeepsTheStoresCleanedCast(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("John Scalzi")
+	require.NoError(t, err)
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/n.m4b", Format: "m4b", AuthorID: &a.ID, Author: a})
+	require.NoError(t, err)
+	require.NoError(t, store.SetBookAuthors(book.ID, []database.BookAuthor{{BookID: book.ID, AuthorID: a.ID, Role: "author"}}))
+
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"narrator": "Narrated by Wil Wheaton & John Scalzi"})
+	require.NoError(t, err)
+
+	bn, err := store.GetBookNarrators(book.ID)
+	require.NoError(t, err)
+	var names []string
+	for _, r := range bn {
+		n, err := store.GetNarratorByID(r.NarratorID)
+		require.NoError(t, err)
+		require.NotNil(t, n)
+		names = append(names, n.Name)
+	}
+	require.Equal(t, []string{"Wil Wheaton"}, names, "junction is not the store's cleaned cast")
+}
