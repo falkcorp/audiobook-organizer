@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_snapshot.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 9d3c7a51-2e6b-4f08-b4a9-7c1e5f2d8a36
 // last-edited: 2026-10-03
 
@@ -213,10 +213,12 @@ func (b *reviewSnapshotBuilder) buildFull(ctx context.Context) (*reviewSnapshot,
 
 // buildIncremental re-reads only the affected ids and carries every other row
 // of prev over. A re-read row whose entry is gone is dropped; one whose book
-// is gone becomes an orphan; an orphan whose book is back becomes a row; a
-// row whose entry read failed keeps what prev had. The rows are re-sorted
-// into ListMetadataCacheKeys' order. builtAt is prev's: the age net measures
-// from the last full build.
+// is gone becomes an orphan; an orphan whose book is back becomes a row. A
+// read that FAILED (entry or book) makes the whole build a full one: the
+// generations would move past the id while its row is missing or wrongly
+// orphaned until the next full build, and a snapshot that guesses lives for
+// up to maxAge. The rows are re-sorted into ListMetadataCacheKeys' order.
+// builtAt is prev's: the age net measures from the last full build.
 func (b *reviewSnapshotBuilder) buildIncremental(ctx context.Context, prev *reviewSnapshot, affected map[string]struct{}, cacheGen, bookGen uint64) (*reviewSnapshot, error) {
 	ids := make([]string, 0, len(affected))
 	for id := range affected {
@@ -227,6 +229,10 @@ func (b *reviewSnapshotBuilder) buildIncremental(ctx context.Context, prev *revi
 	if err != nil {
 		return nil, err
 	}
+	if len(load.failedIDs) > 0 {
+		metadataCacheLog.Warn("review snapshot: %d of %d re-read rows failed to read (first: bookID=%s); building in full instead", len(load.failedIDs), len(ids), load.failedIDs[0])
+		return b.buildFull(ctx)
+	}
 	snap := &reviewSnapshot{
 		builtAt:     prev.builtAt,
 		rows:        make([]snapshotRow, 0, len(prev.rows)+len(load.rows)),
@@ -236,16 +242,9 @@ func (b *reviewSnapshotBuilder) buildIncremental(ctx context.Context, prev *revi
 		bookGen:     bookGen,
 		incremental: true,
 	}
-	failed := make(map[string]struct{}, len(load.failedIDs))
-	for _, id := range load.failedIDs {
-		failed[id] = struct{}{}
-	}
 	keep := func(id string) bool {
-		if _, hit := affected[id]; !hit {
-			return true
-		}
-		_, f := failed[id]
-		return f
+		_, hit := affected[id]
+		return !hit
 	}
 	for _, r := range prev.rows {
 		if keep(r.sum.BookID) {
@@ -267,9 +266,6 @@ func (b *reviewSnapshotBuilder) buildIncremental(ctx context.Context, prev *revi
 		snap.rows = append(snap.rows, dec.row(r))
 	}
 	dec.log()
-	if len(load.failedIDs) > 0 {
-		metadataCacheLog.Warn("review snapshot: %d cache row reads failed (first: bookID=%s); those rows were carried over unchanged", len(load.failedIDs), load.failedIDs[0])
-	}
 	sort.SliceStable(snap.rows, func(i, j int) bool {
 		a, c := snap.rows[i].sum, snap.rows[j].sum
 		if !a.FetchedAt.Equal(c.FetchedAt) {
@@ -559,9 +555,10 @@ type reviewOverlay struct {
 	orphaned   int
 	readErrors int
 	// rebuild is set when the overlay could not bound its reads to the books
-	// that changed (no change log, or the log could not name them) or found
-	// more than overlayRebuildThreshold of them: the handler asks the snapshot
-	// cache for a rebuild so the next request does not pay this again.
+	// that changed (no change log, or the log could not name them), had to
+	// read more than overlayRebuildThreshold of the snapshot's books, or had
+	// a book read fail: the handler asks the snapshot cache for a rebuild so
+	// the next request does not pay (or miss) this again.
 	rebuild bool
 	snap    *reviewSnapshot
 	// live is every book read for this request, keyed by id; a nil value is a
@@ -589,12 +586,14 @@ var errOverlayAllReadsFailed = errors.New("every review book read failed")
 //
 // Without a change log, or when it cannot name the change, every row's book
 // is read as before and a rebuild is requested; so is one when more than
-// overlayRebuildThreshold books changed, after reading them.
+// overlayRebuildThreshold of the snapshot's OWN books changed (a library scan
+// writes every book, most with no cache row; those cost this request
+// nothing and must not keep asking for rebuilds), after reading them.
 //
 // The books are read in one batch. A failed batch is logged and the books are
 // read one by one instead; a book the batch missed is confirmed by a point
-// read too. A failed point read is a readErrors row, not an orphan. Only when
-// every read failed is the overlay an error.
+// read too. A failed point read is a readErrors row, not an orphan, and asks
+// for a rebuild. Only when every read failed is the overlay an error.
 func overlayLiveBooks(snap *reviewSnapshot, store cacheRowBookReader, want map[string]bool, booksChangedSince changedSinceFunc) (reviewOverlay, error) {
 	out := reviewOverlay{orphaned: snap.orphaned(), snap: snap}
 	keepRow := func(id string) bool { return want == nil || want[id] }
@@ -605,14 +604,14 @@ func overlayLiveBooks(snap *reviewSnapshot, store cacheRowBookReader, want map[s
 	} else if changed, _, ok := booksChangedSince(snap.bookGen); !ok {
 		out.rebuild = true
 	} else {
-		if len(changed) > overlayRebuildThreshold {
-			out.rebuild = true
-		}
 		toRead = make([]string, 0, len(changed))
 		for _, id := range changed {
 			if _, isRow := snap.books[id]; isRow && keepRow(id) {
 				toRead = append(toRead, id)
 			}
+		}
+		if len(toRead) > overlayRebuildThreshold {
+			out.rebuild = true
 		}
 	}
 	if toRead == nil {
@@ -673,7 +672,8 @@ func overlayLiveBooks(snap *reviewSnapshot, store cacheRowBookReader, want map[s
 		return reviewOverlay{}, errOverlayAllReadsFailed
 	}
 	if out.readErrors > 0 {
-		metadataCacheLog.Warn("review overlay: %d book reads failed; those rows are counted under errors, not orphaned", out.readErrors)
+		out.rebuild = true
+		metadataCacheLog.Warn("review overlay: %d book reads failed; those rows are counted under errors, not orphaned, and a rebuild is requested", out.readErrors)
 	}
 	return out, nil
 }

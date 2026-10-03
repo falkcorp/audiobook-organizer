@@ -1,5 +1,5 @@
 // file: internal/database/book_change_log_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 0b1d4a52-6f0e-4c1a-9d37-5e8a2c7b1f63
 // last-edited: 2026-10-03
 
@@ -192,4 +192,79 @@ func TestPebbleStore_MetadataCacheChangedSince(t *testing.T) {
 	ids, _, ok = MetadataCacheChangedSinceOf(s, upTo)
 	require.True(t, ok)
 	require.Empty(t, ids)
+}
+
+// TestPebbleStore_ResetAndWipeMakeBookLogUnlistable: Reset wipes every book
+// and WipeByPrefixes wipes them when a prefix covers "book:" (a shorter
+// prefix, or keys inside it); neither can name the books, so the library
+// change log refuses from before them and a reader rebuilds. A wipe of an
+// unrelated prefix leaves both logs listable; one of "metadata_cache:" alone
+// moves only the cache log.
+func TestPebbleStore_ResetAndWipeMakeBookLogUnlistable(t *testing.T) {
+	open := func(t *testing.T) (*PebbleStore, *Book) {
+		s, err := NewPebbleStore(t.TempDir())
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+		s.WaitForWarmup()
+		b, err := s.CreateBook(&Book{Title: "A", FilePath: "/lib/A"})
+		require.NoError(t, err)
+		require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: b.ID}))
+		return s, b
+	}
+	t.Run("reset", func(t *testing.T) {
+		s, _ := open(t)
+		bg, cg := s.LibraryGeneration().Value(), s.MetadataCacheGeneration()
+		require.NoError(t, s.Reset())
+		_, upTo, ok := BooksChangedSinceOf(s, bg)
+		require.False(t, ok)
+		require.Equal(t, bg+1, upTo)
+		_, _, ok = MetadataCacheChangedSinceOf(s, cg)
+		require.False(t, ok)
+	})
+	for name, prefixes := range map[string][]string{
+		"book prefix":      {"book:"},
+		"shorter prefix":   {"b"},
+		"keys inside book": {"book:0"},
+	} {
+		t.Run("wipe "+name, func(t *testing.T) {
+			s, b := open(t)
+			bg, cg := s.LibraryGeneration().Value(), s.MetadataCacheGeneration()
+			if name == "keys inside book" {
+				prefixes = []string{"book:" + b.ID[:3]}
+			}
+			n, err := s.WipeByPrefixes(prefixes)
+			require.NoError(t, err)
+			require.Positive(t, n)
+			_, upTo, ok := BooksChangedSinceOf(s, bg)
+			require.False(t, ok, "the wiped books cannot be named")
+			require.Equal(t, bg+1, upTo)
+			ids, _, ok := BooksChangedSinceOf(s, upTo)
+			require.True(t, ok)
+			require.Empty(t, ids)
+			_, _, cacheOK := MetadataCacheChangedSinceOf(s, cg)
+			require.True(t, cacheOK, "none of these prefixes covers metadata_cache:")
+		})
+	}
+	t.Run("wipe cache prefix only", func(t *testing.T) {
+		s, _ := open(t)
+		bg, cg := s.LibraryGeneration().Value(), s.MetadataCacheGeneration()
+		_, err := s.WipeByPrefixes([]string{"metadata_cache:"})
+		require.NoError(t, err)
+		_, _, ok := BooksChangedSinceOf(s, bg)
+		require.True(t, ok, "no book was wiped")
+		_, _, ok = MetadataCacheChangedSinceOf(s, cg)
+		require.False(t, ok)
+	})
+	t.Run("wipe unrelated prefix", func(t *testing.T) {
+		s, _ := open(t)
+		require.NoError(t, s.SetRaw("zz_unrelated:1", []byte("x")))
+		bg, cg := s.LibraryGeneration().Value(), s.MetadataCacheGeneration()
+		n, err := s.WipeByPrefixes([]string{"zz_unrelated:"})
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+		_, _, ok := BooksChangedSinceOf(s, bg)
+		require.True(t, ok)
+		_, _, ok = MetadataCacheChangedSinceOf(s, cg)
+		require.True(t, ok)
+	})
 }

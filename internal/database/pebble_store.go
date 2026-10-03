@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.191.0
+// version: 1.192.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-03
 
@@ -5047,8 +5047,11 @@ func (p *PebbleStore) Reset() error {
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("failed to commit reset batch: %w", err)
 	}
-	// The wipe removed every metadata_cache: row too; no record can name
-	// them, so a reader behind this generation rebuilds.
+	// The wipe removed every book: and metadata_cache: row; no record can
+	// name them, so a reader behind either generation rebuilds (the review
+	// snapshot would otherwise keep serving the wiped books as live rows
+	// until its age net fired).
+	p.bookChanges.bumpAll(&p.libGen)
 	p.cacheChanges.bumpAll(&p.cacheGen)
 	// The wipe removed every work: row; invalidate any works cache.
 	p.bumpWorksGeneration()
@@ -5114,6 +5117,23 @@ func (p *PebbleStore) WipeByPrefixes(prefixes []string) (int, error) {
 			p.bumpWorksGeneration()
 		}
 	}()
+	// A prefix that covers the book: or metadata_cache: keyspace (shorter than
+	// it, or naming keys inside it) deletes rows the change logs cannot name,
+	// so the generation moves with a bumpAll and readers behind it rebuild --
+	// the review snapshot would otherwise serve the wiped books as live rows
+	// until its age net fired. Same rule as the works bump: on a commit error
+	// too, since a failed synced commit may have applied.
+	covers := func(prefix, keyspace string) bool {
+		return strings.HasPrefix(keyspace, prefix) || strings.HasPrefix(prefix, keyspace)
+	}
+	bumpCovered := func(prefix string) {
+		if covers(prefix, bookRowPrefix) {
+			p.bookChanges.bumpAll(&p.libGen)
+		}
+		if covers(prefix, metadataCacheKeyPrefix) {
+			p.cacheChanges.bumpAll(&p.cacheGen)
+		}
+	}
 	for _, prefix := range prefixes {
 		lb := []byte(prefix)
 		// Upper bound: increment the last byte to cover all keys with this prefix.
@@ -5149,9 +5169,11 @@ func (p *PebbleStore) WipeByPrefixes(prefixes []string) (int, error) {
 		}
 		if err := batch.Commit(pebble.Sync); err != nil {
 			maybeApplied = true
+			bumpCovered(prefix)
 			return total, fmt.Errorf("wipe prefix %q: commit: %w", prefix, err)
 		}
 		total += len(keys)
+		bumpCovered(prefix)
 	}
 	return total, nil
 }

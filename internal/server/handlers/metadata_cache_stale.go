@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
 // last-edited: 2026-10-03
 
@@ -92,9 +92,6 @@ type cacheRowSet struct {
 	// orphanIDs is every summary whose book no longer resolves.
 	orphanIDs []string
 }
-
-// orphaned counts the summaries whose book no longer resolves.
-func (s cacheRowSet) orphaned() int { return len(s.orphanIDs) }
 
 // bookFilesBatchReader is the batch file read loadCacheRows uses when the
 // store has it (database.Store does; with memdb published it is an index
@@ -254,8 +251,11 @@ func (l *cacheRowLoader) forEachChunk(ctx context.Context, rows []loadedCacheRow
 // lookupBooks reads the books of ids in ONE batch read, with a point read for
 // any id the batch missed (or every id when the batch call itself failed), so
 // a partial batch degrades in behavior-preserving fashion rather than
-// dropping rows. The returned lookup is for the calling goroutine only.
-func lookupBooks(store cacheRowBookReader, ids []string) func(id string) *database.Book {
+// dropping rows. The lookup returns (nil, nil) for a book that does not
+// exist and the error of a point read that failed: the two must not be
+// confused, since an orphan is published for as long as the snapshot lives.
+// The returned lookup is for the calling goroutine only.
+func lookupBooks(store cacheRowBookReader, ids []string) func(id string) (*database.Book, error) {
 	booksByID := make(map[string]*database.Book, len(ids))
 	if fetched, berr := store.GetBooksByIDs(ids); berr == nil {
 		for i := range fetched {
@@ -264,16 +264,18 @@ func lookupBooks(store cacheRowBookReader, ids []string) func(id string) *databa
 	} else {
 		metadataCacheLog.Warn("batch book fetch failed; falling back to per-book reads: %v", berr)
 	}
-	return func(id string) *database.Book {
+	return func(id string) (*database.Book, error) {
 		if b, ok := booksByID[id]; ok {
-			return b
+			return b, nil
 		}
 		b, err := store.GetBookByID(id)
-		if err != nil || b == nil {
-			return nil
+		if err != nil {
+			return nil, err
 		}
-		booksByID[id] = b
-		return b
+		if b != nil {
+			booksByID[id] = b
+		}
+		return b, nil
 	}
 }
 
@@ -304,8 +306,14 @@ func loadCacheRows(ctx context.Context, store cacheRowBookReader, svc cacheRowCa
 	lookupBook := lookupBooks(store, bookIDs)
 
 	set := cacheRowSet{rows: make([]loadedCacheRow, 0, len(summaries))}
+	bookReadErrors := 0
 	for _, sum := range summaries {
-		book := lookupBook(sum.BookID)
+		book, berr := lookupBook(sum.BookID)
+		if berr != nil {
+			// As before the id loader: counted as an orphan for this load,
+			// and said so once.
+			bookReadErrors++
+		}
 		if book == nil {
 			set.orphanIDs = append(set.orphanIDs, sum.BookID)
 			continue
@@ -313,6 +321,9 @@ func loadCacheRows(ctx context.Context, store cacheRowBookReader, svc cacheRowCa
 		set.rows = append(set.rows, loadedCacheRow{sum: sum, book: book})
 	}
 
+	if bookReadErrors > 0 {
+		metadataCacheLog.Warn("review rows: %d book point reads failed; those rows are counted orphaned until the next build", bookReadErrors)
+	}
 	l := newCacheRowLoader(store, svc)
 	err = l.forEachChunk(ctx, set.rows, func(_ int, chunk []loadedCacheRow, files chunkFiles) {
 		for i := range chunk {
@@ -341,8 +352,10 @@ type cacheRowsByID struct {
 	orphanIDs []string
 	// goneIDs is every id with no cache entry.
 	goneIDs []string
-	// failedIDs is every id whose cache entry read failed: the caller cannot
-	// tell whether the row exists and keeps what it had.
+	// failedIDs is every id whose cache entry or book read failed: the
+	// caller cannot tell whether the row exists or is an orphan, and must not
+	// publish a snapshot that guesses (reviewSnapshotBuilder falls back to a
+	// full build).
 	failedIDs []string
 }
 
@@ -354,9 +367,6 @@ type cacheRowsByID struct {
 func loadCacheRowsByID(ctx context.Context, store cacheRowBookReader, svc cacheRowCandidateReader, ids []string) (cacheRowsByID, error) {
 	lookupBook := lookupBooks(store, ids)
 	rows := make([]loadedCacheRow, len(ids))
-	for i, id := range ids {
-		rows[i] = loadedCacheRow{sum: metafetch.MetadataCacheSummary{BookID: id}, book: lookupBook(id)}
-	}
 	const (
 		outcomeRow = iota
 		outcomeOrphan
@@ -364,10 +374,20 @@ func loadCacheRowsByID(ctx context.Context, store cacheRowBookReader, svc cacheR
 		outcomeFailed
 	)
 	outcome := make([]int, len(ids))
+	for i, id := range ids {
+		book, berr := lookupBook(id)
+		if berr != nil {
+			outcome[i] = outcomeFailed
+		}
+		rows[i] = loadedCacheRow{sum: metafetch.MetadataCacheSummary{BookID: id}, book: book}
+	}
 	l := newCacheRowLoader(store, svc)
 	err := l.forEachChunk(ctx, rows, func(lo int, chunk []loadedCacheRow, files chunkFiles) {
 		for i := range chunk {
 			r := &chunk[i]
+			if outcome[lo+i] == outcomeFailed {
+				continue // the book read failed: nothing more to learn
+			}
 			entry, cerr := l.readEntry(r, files)
 			switch {
 			case cerr != nil:
