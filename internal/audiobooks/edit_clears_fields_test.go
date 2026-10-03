@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_clears_fields_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 451212a4-52da-4236-9a22-658fce80859a
 // last-edited: 2026-10-03
 
@@ -7,6 +7,7 @@ package audiobooks_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"testing"
@@ -155,7 +156,12 @@ func TestUpdateAudiobook_EditorSeriesClearRecordsOneRow(t *testing.T) {
 func TestUpdateAudiobook_SeriesClearReplacesALockedSeriesOverride(t *testing.T) {
 	store, book, _ := seriesFixture(t)
 	svc := audiobooks.NewAudiobookUpdateService(store)
-	_, err := svc.UpdateAudiobook(context.Background(), book.ID, map[string]any{"series_name": "Redshirts", "series_position": 1})
+	// Lock the current series and position through overrides (re-sending an
+	// unchanged value no longer locks it).
+	_, err := svc.UpdateAudiobook(context.Background(), book.ID, map[string]any{"overrides": map[string]any{
+		"series_name":     map[string]any{"value": "Redshirts", "locked": true},
+		"series_position": map[string]any{"value": 1, "locked": true},
+	}})
 	require.NoError(t, err)
 	before := fieldStates(t, store, book.ID)
 	require.True(t, before[database.FieldKeySeriesName].OverrideLocked, "fixture: set did not lock")
@@ -504,16 +510,17 @@ func TestUpdateAudiobook_NarratorSetKeepsTheStoresCleanedCast(t *testing.T) {
 	require.Equal(t, []string{"Wil Wheaton"}, names, "junction is not the store's cleaned cast")
 }
 
-// seriesPositionAfter is the position the stored row and a GET both report.
-func requireSeriesPosition(t *testing.T, store *database.PebbleStore, bookID string, want int) {
+// requireSeriesPosition checks the position the stored row and a GET both
+// report: the int, and the raw position exactly as wantRaw (the value as the
+// client sent it, decimal included).
+func requireSeriesPosition(t *testing.T, store *database.PebbleStore, bookID string, want int, wantRaw string) {
 	t.Helper()
 	row, err := store.GetBookByID(bookID)
 	require.NoError(t, err)
 	require.NotNil(t, row.SeriesSequence, "stored series_sequence is nil")
 	require.Equal(t, want, *row.SeriesSequence, "stored series_sequence")
-	if row.SeriesPositionRaw != nil {
-		require.Equal(t, strconv.Itoa(want), *row.SeriesPositionRaw, "stored raw position disagrees with series_sequence")
-	}
+	require.NotNil(t, row.SeriesPositionRaw, "stored raw position is nil")
+	require.Equal(t, wantRaw, *row.SeriesPositionRaw, "stored raw position")
 	view, err := audiobooks.NewAudiobookService(store).GetAudiobook(context.Background(), bookID)
 	require.NoError(t, err)
 	require.NotNil(t, view.SeriesSequence, "GET series_sequence is nil")
@@ -521,7 +528,7 @@ func requireSeriesPosition(t *testing.T, store *database.PebbleStore, bookID str
 	st := fieldStates(t, store, bookID)[database.FieldKeySeriesPosition]
 	if st.OverrideLocked {
 		require.NotNil(t, st.OverrideValue)
-		require.Equal(t, strconv.Itoa(want), *st.OverrideValue, "series_position locked at a different value")
+		require.Contains(t, []string{strconv.Itoa(want), wantRaw, strconv.Quote(wantRaw)}, *st.OverrideValue, "series_position locked at a different value")
 	}
 }
 
@@ -545,7 +552,7 @@ func TestUpdateAudiobook_NewSeriesAndPositionTogetherStoresThePosition(t *testin
 	row, err := store.GetBookByID(book.ID)
 	require.NoError(t, err)
 	require.NotNil(t, row.SeriesID, "series not linked")
-	requireSeriesPosition(t, store, book.ID, 8)
+	requireSeriesPosition(t, store, book.ID, 8, "8")
 }
 
 func TestUpdateAudiobook_PositionAloneOnABookWithASeriesStoresThePosition(t *testing.T) {
@@ -554,5 +561,274 @@ func TestUpdateAudiobook_PositionAloneOnABookWithASeriesStoresThePosition(t *tes
 	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
 		map[string]any{"series_position": float64(8)})
 	require.NoError(t, err)
-	requireSeriesPosition(t, store, book.ID, 8)
+	requireSeriesPosition(t, store, book.ID, 8, "8")
+}
+
+// --- 2026-10-03 re-review: "sent" means the client named the field ---------
+
+// richFixture is a book with something in every place a stray write could
+// reach: a cleaned narrator cast in the junction, two authors in the join,
+// a decimal raw series position, and text fields.
+func richFixture(t *testing.T) (*database.PebbleStore, *database.Book) {
+	t.Helper()
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("Terry Pratchett")
+	require.NoError(t, err)
+	co, err := store.CreateAuthor("Neil Gaiman")
+	require.NoError(t, err)
+	s, err := store.CreateSeries("Discworld", nil)
+	require.NoError(t, err)
+	seq, raw, desc, credit := 1, "1.5", "A description", "Narrated by Stephen Briggs & Terry Pratchett"
+	book, err := store.CreateBook(&database.Book{Title: "Good Omens", FilePath: "/library/g.m4b", Format: "m4b",
+		AuthorID: &a.ID, Author: a, SeriesID: &s.ID, Series: s, SeriesSequence: &seq, SeriesPositionRaw: &raw,
+		Description: &desc})
+	require.NoError(t, err)
+	require.NoError(t, store.SetBookAuthors(book.ID, []database.BookAuthor{
+		{BookID: book.ID, AuthorID: a.ID, Role: "author", Position: 0},
+		{BookID: book.ID, AuthorID: co.ID, Role: "co-author", Position: 1}}))
+	// The narrator written by a store write, so the store's own sync puts
+	// its cleaned cast in the junction (as a scan or an apply leaves it).
+	_, err = store.ModifyBook(book.ID, func(b *database.Book) error { b.Narrator = &credit; return nil })
+	require.NoError(t, err)
+	require.Equal(t, []string{"Stephen Briggs"}, narratorNames(t, store, book.ID), "fixture: cleaned cast")
+	require.Empty(t, historyByField(t, store, book.ID), "fixture: history")
+	require.Empty(t, fieldStates(t, store, book.ID), "fixture: field state")
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	return store, row
+}
+
+func narratorNames(t *testing.T, store *database.PebbleStore, id string) []string {
+	t.Helper()
+	bn, err := store.GetBookNarrators(id)
+	require.NoError(t, err)
+	var names []string
+	for _, r := range bn {
+		n, err := store.GetNarratorByID(r.NarratorID)
+		require.NoError(t, err)
+		require.NotNil(t, n)
+		names = append(names, n.Name)
+	}
+	return names
+}
+
+// The root cause: the update service pre-filled the request from the stored
+// row, so every field the book had looked sent. A PUT {"title": "X"} must
+// change the title and nothing else -- not the junction, not the co-authors,
+// not the raw position -- and record and lock nothing else.
+func TestUpdateAudiobook_TitleOnlyPutTouchesNothingButTitle(t *testing.T) {
+	store, before := richFixture(t)
+	beforeAuthors, err := store.GetBookAuthors(before.ID)
+	require.NoError(t, err)
+
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), before.ID,
+		map[string]any{"title": "Good Omens!"})
+	require.NoError(t, err)
+
+	after, err := store.GetBookByID(before.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Good Omens!", after.Title)
+	after.Title, after.UpdatedAt = before.Title, before.UpdatedAt
+	wantJSON, err := json.Marshal(before)
+	require.NoError(t, err)
+	gotJSON, err := json.Marshal(after)
+	require.NoError(t, err)
+	require.JSONEq(t, string(wantJSON), string(gotJSON), "a title-only PUT changed another column")
+	authors, err := store.GetBookAuthors(before.ID)
+	require.NoError(t, err)
+	require.Equal(t, beforeAuthors, authors, "a title-only PUT rewrote book_authors (co-authors collapsed)")
+	require.Equal(t, []string{"Stephen Briggs"}, narratorNames(t, store, before.ID), "a title-only PUT rewrote book_narrators")
+	for field := range historyByField(t, store, before.ID) {
+		require.Equal(t, database.FieldKeyTitle, field, "history row for a field the PUT did not send")
+	}
+	require.ElementsMatch(t, []string{database.FieldKeyTitle}, lockedKeys(t, store, before.ID))
+}
+
+// Review B1: every save rewrote SeriesPositionRaw from the int, turning
+// "1.5" into "1" and recording a history row. Re-sending the same series
+// name is not a position edit either.
+func TestUpdateAudiobook_UnsentPositionKeepsTheRawPosition(t *testing.T) {
+	for name, body := range map[string]map[string]any{
+		"title only":       {"title": "Only title"},
+		"same series name": {"series_name": "Discworld", "title": "Good Omens"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, before := richFixture(t)
+			_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), before.ID, body)
+			require.NoError(t, err)
+			requireSeriesPosition(t, store, before.ID, 1, "1.5")
+			h := historyByField(t, store, before.ID)
+			require.Empty(t, h["series_position_raw"], "raw position history for an unsent position")
+			require.Empty(t, h[database.HistoryFieldSeriesNo])
+			require.NotContains(t, lockedKeys(t, store, before.ID), database.FieldKeySeriesName,
+				"re-sending the unchanged series name locked it")
+		})
+	}
+}
+
+// A sent position is stored as sent: "2.5" or 2.5 keeps the decimal in the
+// raw position (the int gets 2), top level or override; null clears both.
+// An override of "2.5" used to fail Atoi and change nothing.
+func TestUpdateAudiobook_SentPositionIsStoredAsSent(t *testing.T) {
+	for name, body := range map[string]map[string]any{
+		"override string": {"overrides": map[string]any{"series_position": map[string]any{"value": "2.5", "locked": true}}},
+		"override number": {"overrides": map[string]any{"series_position": map[string]any{"value": 2.5, "locked": true}}},
+		"top-level":       {"series_position": 2.5},
+		"top-level string": {"series_position": "2.5"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, before := richFixture(t)
+			_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), before.ID, body)
+			require.NoError(t, err)
+			requireSeriesPosition(t, store, before.ID, 2, "2.5")
+		})
+	}
+	for name, body := range map[string]map[string]any{
+		"override null":  {"overrides": map[string]any{"series_position": map[string]any{"value": nil, "locked": true}}},
+		"top-level null": {"series_position": nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, before := richFixture(t)
+			_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), before.ID, body)
+			require.NoError(t, err)
+			row, err := store.GetBookByID(before.ID)
+			require.NoError(t, err)
+			require.Nil(t, row.SeriesSequence, "a null position did not clear the int")
+			require.Nil(t, row.SeriesPositionRaw, "a null position did not clear the raw position")
+			require.NotNil(t, row.SeriesID, "clearing the position unlinked the series")
+		})
+	}
+}
+
+// Review B2: a title-only PUT emptied book_narrators when the column held
+// "" (the narrator looked sent as "", and "" with a junction is a clear).
+func TestUpdateAudiobook_TitleOnlyPutKeepsAJunctionOnlyNarrator(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	empty := ""
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/j.m4b", Format: "m4b", Narrator: &empty})
+	require.NoError(t, err)
+	n, err := store.CreateNarrator("Wil Wheaton")
+	require.NoError(t, err)
+	require.NoError(t, store.SetBookNarrators(book.ID, []database.BookNarrator{{BookID: book.ID, NarratorID: n.ID, Role: "narrator"}}))
+
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"title": "Only title"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"Wil Wheaton"}, narratorNames(t, store, book.ID))
+}
+
+// Review S-a: BookDetail re-sends the narrator unchanged on every save. That
+// used to rewrite the junction from a raw split, undoing the store's cleaned
+// cast and creating a junk "Narrated by ..." narrator.
+func TestUpdateAudiobook_UnchangedNarratorKeepsTheCleanedCast(t *testing.T) {
+	store, before := richFixture(t)
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), before.ID, map[string]any{
+		"title": "Renamed", "narrator": *before.Narrator, "author_name": "Terry Pratchett",
+		"overrides": map[string]any{"title": map[string]any{"value": "Renamed", "locked": true}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"Stephen Briggs"}, narratorNames(t, store, before.ID))
+	junk, err := store.GetNarratorByName("Narrated by Stephen Briggs")
+	require.NoError(t, err)
+	require.Nil(t, junk, "a junk narrator entity was created from the raw credit")
+	require.NotContains(t, lockedKeys(t, store, before.ID), database.FieldKeyNarrator, "an unchanged narrator was locked")
+}
+
+// A credit naming only the book's own author is a self-read: the author
+// goes into the junction as the narrator.
+func TestUpdateAudiobook_SelfReadNarratorCreditGoesInTheJunction(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("John Scalzi")
+	require.NoError(t, err)
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/n.m4b", Format: "m4b", AuthorID: &a.ID, Author: a})
+	require.NoError(t, err)
+	require.NoError(t, store.SetBookAuthors(book.ID, []database.BookAuthor{{BookID: book.ID, AuthorID: a.ID, Role: "author"}}))
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"narrator": "John Scalzi"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"John Scalzi"}, narratorNames(t, store, book.ID))
+}
+
+// Review S-c: a refused edit writes nothing. The override history rows used
+// to be written before the author gate refused the request.
+func TestUpdateAudiobook_RefusedEditLeavesNoHistory(t *testing.T) {
+	store, book := editFixture(t)
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"title":       "X",
+		"author_name": "Unknown",
+		"overrides": map[string]any{
+			"title":       map[string]any{"value": "X", "locked": true},
+			"author_name": map[string]any{"value": "Unknown", "locked": true},
+		},
+	})
+	require.Error(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.Equal(t, "T", row.Title)
+	require.Empty(t, historyByField(t, store, book.ID), "a refused edit left history")
+	require.Empty(t, fieldStates(t, store, book.ID), "a refused edit left field state")
+}
+
+// An author-less book whose author box was dirtied back to empty: the
+// override "" is refused like any author clear (decision 2026-10-03), and
+// nothing is written.
+func TestUpdateAudiobook_AuthorOverrideClearOnAnAuthorlessBookIsRefused(t *testing.T) {
+	store, book := editFixture(t)
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"title": "Renamed", "author_name": "", "series_name": "", "narrator": "", "description": "",
+		"overrides": map[string]any{
+			"title":       map[string]any{"value": "Renamed", "locked": true},
+			"author_name": map[string]any{"value": "", "locked": true},
+		},
+	})
+	require.ErrorIs(t, err, audiobooks.ErrInvalidAudiobookUpdate)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.Equal(t, "T", row.Title)
+	require.Empty(t, historyByField(t, store, book.ID))
+}
+
+// A BookDetail save of a book that HAS a narrator, description and author:
+// the editor sends every field, but only the dirty one (the title, also
+// sent as an override) is locked. Locking every non-empty field present in
+// the payload froze the whole book against metadata fetches after any edit.
+func TestUpdateAudiobook_BookDetailSaveLocksOnlyTheDirtyField(t *testing.T) {
+	store, before := richFixture(t)
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), before.ID, map[string]any{
+		"title":       "Good Omens (Unabridged)",
+		"description": *before.Description,
+		"publisher":   "",
+		"language":    "",
+		"narrator":    *before.Narrator,
+		"isbn":        "",
+		"author_name": "Terry Pratchett",
+		"series_name": "Discworld",
+		"overrides": map[string]any{
+			"title": map[string]any{"value": "Good Omens (Unabridged)", "locked": true},
+		},
+	})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{database.FieldKeyTitle}, lockedKeys(t, store, before.ID))
+	for field := range historyByField(t, store, before.ID) {
+		require.Equal(t, database.FieldKeyTitle, field, "history row for a field the save did not change")
+	}
+	requireSeriesPosition(t, store, before.ID, 1, "1.5")
+}
+
+// A field the save did change, sent at top level without an override, is
+// still locked (and recorded).
+func TestUpdateAudiobook_ChangedTopLevelFieldIsLocked(t *testing.T) {
+	store, before := richFixture(t)
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), before.ID, map[string]any{
+		"description": "A new description", "narrator": *before.Narrator,
+	})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{database.FieldKeyDescription}, lockedKeys(t, store, before.ID))
+	require.NotEmpty(t, historyByField(t, store, before.ID)[database.FieldKeyDescription])
 }

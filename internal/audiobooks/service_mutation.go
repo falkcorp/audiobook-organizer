@@ -298,7 +298,14 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	if req.Updates.AuthorName != nil && sent(database.FieldKeyAuthorName) {
 		authorName = strings.TrimSpace(*req.Updates.AuthorName)
 	}
-	if authorName != "" {
+	// The name the book already shows is not an author edit (the editor
+	// re-sends it on every save). Re-resolving it would rewrite the join from
+	// that one name, collapsing a co-authored book to its primary author.
+	authorUnchanged := authorName != "" && authorName == beforeAuthor && !sent("author_id")
+	if authorUnchanged {
+		resolvedAuthorName = beforeAuthor
+	}
+	if authorName != "" && !authorUnchanged {
 		// Split on " & " to support multiple authors
 		authorNames := splitMultipleNames(authorName)
 		var bookAuthors []database.BookAuthor
@@ -398,6 +405,12 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// show the stale name, so a repeat clear repairs them.
 	hadSeries := beforeSeries != ""
 	switch {
+	case seriesName != "" && seriesName == beforeSeries && !sent("series_id"):
+		// The series the book already shows is not a series edit (the editor
+		// re-sends it on every save). Looking it up by name again could
+		// resolve -- or create -- a different series row of the same name
+		// (the lookup is scoped by author) and move the book onto it.
+		resolvedSeriesName = beforeSeries
 	case seriesName != "":
 		series, err := svc.store.GetSeriesByName(seriesName, payload.AuthorID)
 		if err != nil {
@@ -524,10 +537,17 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// non-nil), so the write side must honor its documented contract of setting
 	// BOTH the ID and a fresh object. This mirrors the response-enrichment block
 	// below, but must run before UpdateBook so the stored blob is correct too.
-	if payload.AuthorID != nil && resolvedAuthorName != "" {
+	//
+	// Only when the link or the name actually moved: an edit that leaves the
+	// author or series alone must not rewrite their stored objects (a
+	// title-only save used to stamp the series object with the book's
+	// author_id).
+	if payload.AuthorID != nil && resolvedAuthorName != "" &&
+		(!sameIntPtr(payload.AuthorID, before.AuthorID) || before.Author == nil || before.Author.Name != resolvedAuthorName) {
 		payload.Book.Author = &database.Author{ID: *payload.AuthorID, Name: resolvedAuthorName}
 	}
-	if payload.SeriesID != nil && resolvedSeriesName != "" {
+	if payload.SeriesID != nil && resolvedSeriesName != "" &&
+		(!sameIntPtr(payload.SeriesID, before.SeriesID) || before.Series == nil || before.Series.Name != resolvedSeriesName) {
 		payload.Book.Series = &database.Series{ID: *payload.SeriesID, Name: resolvedSeriesName, AuthorID: payload.AuthorID}
 	}
 
