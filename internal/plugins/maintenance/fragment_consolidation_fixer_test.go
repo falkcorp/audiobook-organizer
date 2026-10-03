@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -1848,9 +1848,9 @@ func TestFragmentFixer_PathTwinNeedsOneDonor(t *testing.T) {
 	}
 }
 
-// numberedSeed imports n differently-titled numbered chapters from one
-// folder, each as its own organized book of durSec seconds.
-func (f *fragFixture) numberedSeed(t *testing.T, dir string, stems []string, durSec int) []string {
+// numberedSeed imports differently-titled numbered chapters from one folder,
+// each as its own organized book of durSec seconds, by authorID (nil: none).
+func (f *fragFixture) numberedSeed(t *testing.T, dir string, stems []string, durSec int, authorID *int) []string {
 	t.Helper()
 	var ids []string
 	for i, stem := range stems {
@@ -1858,27 +1858,39 @@ func (f *fragFixture) numberedSeed(t *testing.T, dir string, stems []string, dur
 		id := f.book(t, "n:"+dir+":"+stem, stem, p, nil)
 		f.row(t, "nr:"+dir+":"+stem, id, p, stem+".mp3", int64(700+i), durSec, 0)
 		f.organized(t, id)
+		if authorID != nil {
+			_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.AuthorID = authorID; return nil })
+			require.NoError(t, err)
+		}
 		ids = append(ids, id)
 	}
 	return ids
 }
 
+func noRow(t *testing.T, res *repairs.PlanResult, id, why string) {
+	t.Helper()
+	for _, row := range res.Rows {
+		require.NotEqual(t, id, row.RowID, why)
+	}
+}
+
 // TestFragmentFixer_NumberedSet: a folder's numbered chapters with titles of
 // their own form ONE no-parent row, in number order, titled from the folder.
 func TestFragmentFixer_NumberedSet(t *testing.T) {
+	serial := []string{"005 - Core", "001 - Skating", "002 - Interlude", "003 - Gear", "004 - Interlude", "006 - Interlude"}
 	t.Run("differently titled chapters group and apply", func(t *testing.T) {
 		f := newFragFixture(t)
-		ids := f.numberedSeed(t, "lib/Serial", []string{"047 - Core", "001 - Skating", "002 - Gear", "010 - Interlude", "020 - Interlude", "030 - Interlude"}, 300)
+		ids := f.numberedSeed(t, "lib/Serial", serial, 300, nil)
 		res := f.plan(t, "op-plan")
 		r := findRow(t, res, noParentRowID(f.path("lib/Serial"), fragNumberedKey))
 		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 		require.Equal(t, fragClassNoParent, r.Class)
+		require.Equal(t, repairs.RiskReview, r.Risk)
 		require.ElementsMatch(t, ids, r.BookIDs, "the three Interludes belong to the set, not to a book of their own")
 		require.Equal(t, "Serial", r.Proposed["title"])
 		require.Contains(t, r.Evidence[0], "numbered chapters with titles of their own")
-		for _, row := range res.Rows {
-			require.NotEqual(t, noParentRowID(f.path("lib/Serial"), "interlude"), row.RowID, "no separate key group inside a numbered set")
-		}
+		require.Contains(t, r.Evidence[len(r.Evidence)-1], "in order: 001 - Skating | 002 - Interlude")
+		noRow(t, res, noParentRowID(f.path("lib/Serial"), "interlude"), "no separate key group inside a numbered set")
 		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
 		rows, err := f.s.GetBookFiles(r.Proposed["survivor"])
@@ -1887,29 +1899,131 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 		for _, row := range rows {
 			track[filepath.Base(row.FilePath)] = row.TrackNumber
 		}
-		require.Equal(t, map[string]int{"001 - Skating.mp3": 1, "002 - Gear.mp3": 2, "010 - Interlude.mp3": 3,
-			"020 - Interlude.mp3": 4, "030 - Interlude.mp3": 5, "047 - Core.mp3": 6}, track)
-	})
-	t.Run("two works in one folder are not one set", func(t *testing.T) {
-		f := newFragFixture(t)
-		f.numberedSeed(t, "lib/Shelf", []string{"01 - Book A", "02 - Book A", "03 - Book A", "01 - Book B", "02 - Book B", "03 - Book B"}, 300)
-		res := f.plan(t, "op-plan")
-		for _, row := range res.Rows {
-			require.NotEqual(t, noParentRowID(f.path("lib/Shelf"), fragNumberedKey), row.RowID, "colliding positions: the key groups decide")
-		}
-		require.True(t, findRow(t, res, noParentRowID(f.path("lib/Shelf"), "book a")).Applicable())
-		require.True(t, findRow(t, res, noParentRowID(f.path("lib/Shelf"), "book b")).Applicable())
-	})
-	t.Run("a series folder of whole books is gated by duration", func(t *testing.T) {
-		f := newFragFixture(t)
-		f.numberedSeed(t, "lib/Saga", []string{"1 - Secret Agent Mom", "2 - Last Bastion", "3 - Hamartia"}, 6*3600)
-		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path("lib/Saga"), fragNumberedKey))
-		require.Equal(t, fragSkipDurationGate, r.Skipped, r.SkipReason)
+		require.Equal(t, map[string]int{"001 - Skating.mp3": 1, "002 - Interlude.mp3": 2, "003 - Gear.mp3": 3,
+			"004 - Interlude.mp3": 4, "005 - Core.mp3": 5, "006 - Interlude.mp3": 6}, track)
+		sb, err := f.s.GetBookByID(r.Proposed["survivor"])
+		require.NoError(t, err)
+		require.Equal(t, "Serial", sb.Title, "titled from the folder, never from a chapter")
 	})
 	t.Run("fewer than three numbered files form nothing", func(t *testing.T) {
 		f := newFragFixture(t)
-		f.numberedSeed(t, "lib/Pair", []string{"01 - One", "02 - Two"}, 300)
+		f.numberedSeed(t, "lib/Pair", []string{"01 - One", "02 - Two"}, 300, nil)
 		require.Empty(t, f.plan(t, "op-plan").Rows)
+	})
+
+	// Shapes that are NOT one work's chapters. unsure: the set is listed,
+	// held, with the reason. fallback: no set row, the key groups decide.
+	unsure := func(t *testing.T, dir string, stems []string, dur int, authorID func(*fragFixture) *int, want string) {
+		t.Helper()
+		f := newFragFixture(t)
+		var a *int
+		if authorID != nil {
+			a = authorID(f)
+		}
+		f.numberedSeed(t, dir, stems, dur, a)
+		res := f.plan(t, "op-plan")
+		setDir := f.path(dir)
+		if strings.Contains(dir, "/CD") {
+			setDir = filepath.Dir(setDir)
+		}
+		r := findRow(t, res, noParentRowID(setDir, fragNumberedKey))
+		require.Equal(t, fragSkipNumberedUnsure, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, want)
+		require.Zero(t, res.Applicable, "nothing in this folder may apply")
+	}
+	t.Run("a folder with no title of its own", func(t *testing.T) {
+		// The Interludes do not split off as a book of their own either: the
+		// folder IS one serial, it only cannot be titled.
+		f := newFragFixture(t)
+		f.numberedSeed(t, "audiobooks/Serial", serial, 300, nil)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, noParentRowID(f.path("audiobooks/Serial"), fragNumberedKey))
+		require.Equal(t, fragSkipNumberedUnsure, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, "gives no title for the work")
+		noRow(t, res, noParentRowID(f.path("audiobooks/Serial"), "interlude"), "no key group splits off an untitled serial")
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("files dropped in the library root", func(t *testing.T) {
+		unsure(t, ".", []string{"01 - Green Eggs and Ham", "02 - Some Podcast Episode", "03 - A Poem"}, 300, nil, "is a library root or import path")
+	})
+	t.Run("years and title numbers are not chapter numbers", func(t *testing.T) {
+		unsure(t, "lib/Years", []string{"1632 - sample x", "1984 - sample", "2001 - A Space Odyssey sample"}, 300, nil, "not a chapter run from 0 or 1")
+	})
+	t.Run("an author folder of short works", func(t *testing.T) {
+		unsure(t, "lib/Jane Author", []string{"1 - Story One", "2 - Another Tale", "3 - Third Thing"}, 500,
+			func(f *fragFixture) *int {
+				a, err := f.s.CreateAuthor("Jane Author")
+				require.NoError(t, err)
+				return &a.ID
+			}, "named like the files' author")
+	})
+	t.Run("files by different authors", func(t *testing.T) {
+		f := newFragFixture(t)
+		a1, err := f.s.CreateAuthor("First Writer")
+		require.NoError(t, err)
+		a2, err := f.s.CreateAuthor("Second Writer")
+		require.NoError(t, err)
+		f.numberedSeed(t, "lib/Mixed", []string{"01 - Alpha", "03 - Gamma"}, 300, &a1.ID)
+		f.numberedSeed(t, "lib/Mixed", []string{"02 - Beta"}, 300, &a2.ID)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, noParentRowID(f.path("lib/Mixed"), fragNumberedKey))
+		require.Equal(t, fragSkipNumberedUnsure, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, "different authors")
+	})
+	t.Run("one file per disc folder", func(t *testing.T) {
+		f := newFragFixture(t)
+		for i, stem := range []string{"CD1/01 - Alpha", "CD2/01 - Beta", "CD3/01 - Gamma"} {
+			p := f.file(t, "lib/Shelf/"+stem+".mp3", 700+i)
+			id := f.book(t, "d"+stem, filepath.Base(stem), p, nil)
+			f.row(t, "dr"+stem, id, p, filepath.Base(stem)+".mp3", int64(700+i), 300, 0)
+			f.organized(t, id)
+		}
+		res := f.plan(t, "op-plan")
+		require.Zero(t, res.Applicable)
+		r := findRow(t, res, noParentRowID(f.path("lib/Shelf"), fragNumberedKey))
+		require.Equal(t, fragSkipNumberedUnsure, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, "disc")
+	})
+	t.Run("whole books in a series folder are gated by duration", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.numberedSeed(t, "lib/Saga", []string{"1 - Secret Agent Mom", "2 - Last Bastion", "3 - Hamartia"}, 6*3600, nil)
+		res := f.plan(t, "op-plan")
+		require.Equal(t, fragSkipDurationGate, findRow(t, res, noParentRowID(f.path("lib/Saga"), fragNumberedKey)).Skipped)
+		require.Zero(t, res.Applicable)
+	})
+
+	fallback := func(t *testing.T, stems []string, long string, wantKey string, wantN int) {
+		t.Helper()
+		f := newFragFixture(t)
+		for _, stem := range stems {
+			dur := 300
+			if stem == long {
+				dur = 40000
+			}
+			f.numberedSeed(t, "lib/Two", []string{stem}, dur, nil)
+		}
+		res := f.plan(t, "op-plan")
+		noRow(t, res, noParentRowID(f.path("lib/Two"), fragNumberedKey), "the key groups decide")
+		r := findRow(t, res, noParentRowID(f.path("lib/Two"), wantKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Len(t, r.BookIDs, wantN)
+	}
+	t.Run("two works that both start at 01 stay two key groups", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.numberedSeed(t, "lib/Shelf", []string{"01 - Book A", "02 - Book A", "03 - Book A", "01 - Book B", "02 - Book B", "03 - Book B"}, 300, nil)
+		res := f.plan(t, "op-plan")
+		noRow(t, res, noParentRowID(f.path("lib/Shelf"), fragNumberedKey), "colliding positions: the key groups decide")
+		require.True(t, findRow(t, res, noParentRowID(f.path("lib/Shelf"), "book a")).Applicable())
+		require.True(t, findRow(t, res, noParentRowID(f.path("lib/Shelf"), "book b")).Applicable())
+	})
+	t.Run("a work numbered after another is not its chapter", func(t *testing.T) {
+		fallback(t, []string{"01 - Book A", "02 - Book A", "03 - Book A", "04 - Book B", "05 - Book B"}, "", "book a", 3)
+	})
+	t.Run("a stray file after a key group does not join it", func(t *testing.T) {
+		fallback(t, []string{"01 - Intro", "02 - Intro", "03 - Intro", "04 - Something Else"}, "", "intro", 3)
+	})
+	t.Run("one long file does not block the folder's key group", func(t *testing.T) {
+		fallback(t, []string{"01 - A", "02 - Intro", "03 - B", "04 - Intro", "05 - Whole Book", "06 - Intro"}, "05 - Whole Book", "intro", 3)
 	})
 }
 
@@ -1917,34 +2031,60 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 // the row also owns is listed held, naming that book, instead of being
 // planned applicable and refused at apply.
 func TestFragmentFixer_CoOwnerIsHeldAtPlan(t *testing.T) {
-	f := newFragFixture(t)
-	p1 := f.file(t, "lib/P/01.mp3", 801)
-	parent := f.book(t, "parent", "P", f.path("lib/P"), nil)
-	f.row(t, "p01", parent, p1, "01.mp3", 801, 600, 1)
-	p2 := f.path("lib/P/02.mp3") // gone: organized away under the fragment
-	f.row(t, "p02", parent, p2, "02.mp3", 802, 600, 2)
-	at := f.file(t, "lib/P/02/02/02.mp3", 802)
-	frag := f.book(t, "frag", "02", p2, nil)
-	f.row(t, "f02", frag, at, "02.mp3", 802, 600, 0)
-	// A real-titled book that also holds a row at the fragment's file: not a
-	// chapter-shaped twin, so it is in no row of its own.
-	other := f.book(t, "other", "Prelude to P", at, nil)
-	f.row(t, "o02", other, at, "Prelude to P.mp3", 802, 600, 0)
-
-	res := f.plan(t, "op-plan")
-	r := findRow(t, res, "moved:"+parent)
-	require.False(t, r.Applicable())
-	require.Equal(t, fragClassHeld, r.Class)
-	require.Equal(t, fragSkipCoOwner, r.Skipped)
-	require.Contains(t, r.SkipReason, other)
-	require.Contains(t, r.SkipReason, "Prelude to P")
-	require.ElementsMatch(t, []string{parent, frag}, r.BookIDs, "the co-owner is listed, never written")
-	var role string
-	for _, m := range r.Members {
-		if m.BookID == other {
-			role = m.Role
-		}
+	seed := func(t *testing.T, f *fragFixture) (parent, frag, other string) {
+		p1 := f.file(t, "lib/P/01.mp3", 801)
+		parent = f.book(t, "parent", "P", f.path("lib/P"), nil)
+		f.row(t, "p01", parent, p1, "01.mp3", 801, 600, 1)
+		p2 := f.path("lib/P/02.mp3") // gone: organized away under the fragment
+		f.row(t, "p02", parent, p2, "02.mp3", 802, 600, 2)
+		at := f.file(t, "lib/P/02/02/02.mp3", 802)
+		frag = f.book(t, "frag", "02", p2, nil)
+		f.row(t, "f02", frag, at, "02.mp3", 802, 600, 0)
+		// A real-titled book that also holds a row at the fragment's file: not
+		// a chapter-shaped twin, so it is in no row of its own.
+		other = f.book(t, "other", "Prelude to P", at, nil)
+		f.row(t, "o02", other, at, "Prelude to P.mp3", 802, 600, 0)
+		return parent, frag, other
 	}
-	require.Equal(t, "co-owner", role)
-	require.Zero(t, res.Applicable)
+	t.Run("a moved row is held and keeps its class", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent, frag, other := seed(t, f)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, "moved:"+parent)
+		require.False(t, r.Applicable())
+		require.Equal(t, fragClassMoved, r.Class, "the class chip still counts it under Moved")
+		require.Equal(t, fragSkipCoOwner, r.Skipped)
+		require.Equal(t, repairs.RiskReview, r.Risk)
+		require.Contains(t, r.SkipReason, "1 file(s) of this row are also owned by 1 live book(s)")
+		require.Contains(t, r.SkipReason, other)
+		require.Contains(t, r.SkipReason, "Prelude to P")
+		require.ElementsMatch(t, []string{parent, frag}, r.BookIDs, "the co-owner is listed, never written")
+		var role string
+		for _, m := range r.Members {
+			if m.BookID == other {
+				role = m.Role
+			}
+		}
+		require.Equal(t, "co-owner", role)
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("a retired co-owner holds nothing", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent, _, other := seed(t, f)
+		_, err := f.s.ModifyBook(other, func(b *database.Book) error { yes := true; b.MarkedForDeletion = &yes; return nil })
+		require.NoError(t, err)
+		r := findRow(t, f.plan(t, "op-plan"), "moved:"+parent)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	})
+	t.Run("a no-parent row is held too", func(t *testing.T) {
+		f := newFragFixture(t)
+		ids := f.numberedSeed(t, "lib/Serial", []string{"001 - Skating", "002 - Gear", "003 - Core"}, 300, nil)
+		at := f.path("lib/Serial/002 - Gear.mp3")
+		other := f.book(t, "other", "A Real Book", at, nil)
+		f.row(t, "o", other, at, "A Real Book.mp3", 701, 300, 0)
+		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path("lib/Serial"), fragNumberedKey))
+		require.Equal(t, fragClassNoParent, r.Class)
+		require.Equal(t, fragSkipCoOwner, r.Skipped, r.SkipReason)
+		require.ElementsMatch(t, ids, r.BookIDs)
+	})
 }
