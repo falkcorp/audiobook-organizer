@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -472,6 +472,24 @@ func TestFragmentFixer_RefusesAFileAnotherBookNowOwns(t *testing.T) {
 	out := f.apply(t, "op-plan", "op-apply", []string{"moved:" + f.ids["parent"]}, nil)
 	require.Equal(t, 1, out.ChangedSincePlan, "%+v", out.Rows)
 	require.True(t, f.live(t, "fragF"), "nothing written")
+}
+
+// TestFragmentFixer_RetiredOwnerDoesNotBlock: a soft-deleted book that still
+// names the fragment's path (retired books keep their rows) is history, not
+// a live owner; the row applies.
+func TestFragmentFixer_RetiredOwnerDoesNotBlock(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	f.plan(t, "op-plan")
+	moved := f.path("lib/Eldest/03/03/03.mp3")
+	retired := f.book(t, "retired", "Someone else, retired", moved, nil)
+	f.row(t, "x", retired, moved, "03.mp3", 103, 600, 0)
+	_, err := f.s.ModifyBook(retired, func(b *database.Book) error { yes := true; b.MarkedForDeletion = &yes; return nil })
+	require.NoError(t, err)
+
+	out := f.apply(t, "op-plan", "op-apply", []string{"moved:" + f.ids["parent"]}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	require.False(t, f.live(t, "fragF"))
 }
 
 func TestFragmentFixer_ResumesFromCheckpoint(t *testing.T) {
