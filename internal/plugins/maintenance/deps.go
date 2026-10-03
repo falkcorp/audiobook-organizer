@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.66.0
+// version: 1.69.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -260,6 +260,25 @@ type opsHousekeeping interface {
 	opsSystemPreferences
 	database.RawKVStore
 	opsOperationJournalReader
+	opsFieldStateStore
+}
+
+// opsFieldStateStore is the field-state write and the field history read the
+// title repairs need beyond database.MetadataFieldStateReader. The Repairs
+// writer locks the title and author a repair wrote (repairs.Writer.LockFields)
+// so a forced rescan cannot put the file tags' swapped or junk values back,
+// and the swapped title/author fixer reads a field's history to tell a
+// narrator or ASIN the file gave the book from one a metadata fetch filled
+// in (which would corroborate the provider record by construction). Its own
+// interface because opsRecordsAndQueue already sits at the interfacebloat
+// limit of 8.
+//
+// DeleteUserPreference retires a book's pre-migration state blob once
+// LockFields has migrated it to rows (database.MigrateLegacyMetadataState).
+type opsFieldStateStore interface {
+	UpsertMetadataFieldState(state *database.MetadataFieldState) error
+	GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error)
+	DeleteUserPreference(key string) error
 }
 
 // opsOperationJournalReader lists an operation's change rows. The Repairs
@@ -325,7 +344,7 @@ type opsPeopleStore interface {
 	opsNarratorStore
 }
 
-// OpsStore is the 63 methods the maintenance ops need -- what they call directly
+// OpsStore is the 88 methods the maintenance ops need -- what they call directly
 // plus what the package's own helpers require of a store handed to them. Exported
 // so *server.Server can name it as a return type.
 type OpsStore interface {
@@ -372,7 +391,7 @@ type StoreProvider interface {
 // opsStoreProvider is the common path, OpsStore, plus the single-purpose
 // accessors that exist only because OpsStore itself is at the embed cap.
 type opsStoreProvider interface {
-	// OpsStore is the common path: 53 methods, used by 39 of the 41 sites.
+	// OpsStore is the common path: 88 methods, used by 39 of the 41 sites.
 	OpsStore() OpsStore
 	// OperationQueueStore serves the dedupe-book-file-rows scan guard: an apply
 	// run must refuse while library.scan is queued or running, because a scan

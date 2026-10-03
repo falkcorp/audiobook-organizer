@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package maintenance
 
@@ -2385,8 +2385,8 @@ func (f *junkAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repa
 // ignores case) is used as is, and no create is journaled for it. A row whose
 // folded key matches a live author the apply-time index knows is a possible
 // duplicate: refused, so the re-plan shows it for review. A created row is
-// journaled by id AFTER the create (the revert deletes exactly that id, and
-// only while nothing credits it).
+// journaled by id AFTER the create (mintJournaledAuthor: the revert deletes
+// exactly that id, and only while nothing credits it).
 func (f *junkAuthorFixer) createTarget(w *repairs.Writer, store OpsStore, d *junkAuthorBookDecision) (*database.Author, error) {
 	name := d.Target.Name
 	existing, err := store.GetAuthorByName(name)
@@ -2410,53 +2410,7 @@ func (f *junkAuthorFixer) createTarget(w *repairs.Writer, store OpsStore, d *jun
 	if !idx.mintable(name) {
 		return nil, fmt.Errorf("%w: book %s: %q is not a name to create an author for", repairs.ErrChangedSincePlan, d.Book.ID, name)
 	}
-	// MintAuthor writes the store directly, ahead of the journal row below:
-	// renew the scan stand-down lease first, so a lapsed one refuses the row
-	// before the author exists rather than after.
-	if err := w.Beat("create author " + name); err != nil {
-		return nil, err
-	}
-	created, minted, err := store.MintAuthor(name)
-	if err != nil {
-		return nil, fmt.Errorf("create author %q: %w", name, err)
-	}
-	if created == nil || created.ID <= 0 {
-		return nil, fmt.Errorf("create author %q: no row", name)
-	}
-	if !minted {
-		// Another writer made it since the lookup above: use it, journal no
-		// create (the undo of one deletes the row), take nothing back.
-		return created, nil
-	}
-	rec, err := json.Marshal(undo.JunkAuthorCreate{AuthorID: created.ID, Name: created.Name})
-	if err != nil {
-		return nil, fmt.Errorf("encode created author %d: %w", created.ID, err)
-	}
-	if err := w.RecordChange(d.Book.ID, repairs.UndoEntry{ChangeType: undo.ChangeTypeJunkAuthorCreate,
-		Field: "author_name", New: string(rec)}); err != nil {
-		// Take it back rather than leave an unjournaled author the revert
-		// cannot see -- but only while nothing credits it: another worker's
-		// MintAuthor resolves the same name to this row (created=false) and
-		// may already have linked a book to it.
-		credited, cerr := store.GetBooksByAuthorIDForRelinkCore(created.ID)
-		switch {
-		case cerr != nil:
-			return nil, fmt.Errorf("journal created author %d: %w (kept: reading its credits failed: %v)", created.ID, err, cerr)
-		case len(credited) > 0:
-			return nil, fmt.Errorf("journal created author %d: %w (kept: %d book(s) already credit it)", created.ID, err, len(credited))
-		}
-		// Deliberately NOT guarded by w.Beat: err is often ErrStandDownLost,
-		// and a lapsed lease must not stop this compensating delete. It only
-		// undoes the MintAuthor just above, of an author nothing credits and
-		// no journal row describes; an orphan junk author left behind would
-		// be invisible to the op revert, which is worse than one store write
-		// made after the lease lapsed.
-		if derr := store.DeleteAuthor(created.ID); derr != nil {
-			return nil, fmt.Errorf("journal created author %d: %w (and removing it failed: %v)", created.ID, err, derr)
-		}
-		return nil, fmt.Errorf("journal created author %d: %w", created.ID, err)
-	}
-	return created, nil
+	return mintJournaledAuthor(w, store, d.Book.ID, name)
 }
 
 // linkSeries sets the book's series to s while it has none and its series is

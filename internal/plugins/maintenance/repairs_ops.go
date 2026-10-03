@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-09-29
+// last-edited: 2026-10-03
 
 package maintenance
 
@@ -162,7 +162,11 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 			WithLiveness(func() { registry.TouchLiveness(reporter) }).
 			// A fixer that moves author credits (junk authors) journals them
 			// through the same op journal, so the op revert undoes them.
-			WithCredits(store)
+			WithCredits(store).
+			// The title repairs lock the fields they wrote so a forced
+			// rescan cannot restore the file tags' values; journaled, so
+			// the op revert lifts the lock.
+			WithFieldStates(store)
 		deps.Checkpoint = func(cp repairs.ApplyCheckpoint) error {
 			return reporter.Checkpoint(map[string]any{"resume": cp})
 		}

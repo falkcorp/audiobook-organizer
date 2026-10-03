@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.5.0
+// version: 1.8.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package repairs
 
@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 
@@ -45,7 +46,10 @@ import (
 var ErrNotJournaled = errors.New("repairs: undo row not recorded; the write was not made")
 
 // ChangeJournal records operation change rows and lists an op's rows (for the
-// resume dedupe).
+// resume dedupe). CreateOperationChange stores a row under its id, so writing
+// a row again with the same id replaces it: that is how JournalStep and
+// LockFields void the row they just wrote when the write it describes was
+// refused (Voided, RevertedAt), by id, without reading the op's journal.
 type ChangeJournal interface {
 	CreateOperationChange(change *database.OperationChange) error
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
@@ -70,6 +74,11 @@ type journalIndex struct {
 	loaded bool
 	keys   map[string]bool
 	books  map[string]bool
+	// created counts the rows this writer created per book, and found
+	// marks a book whose rows were already in the journal (a resumed run),
+	// so voiding a book's only row clears books for it again.
+	created map[string]int
+	found   map[string]bool
 	// latest is the NewValue of the newest row per book, type and field
 	// (valueKey), for JournaledValue.
 	latest map[string]string
@@ -90,6 +99,8 @@ func (ix *journalIndex) load(w *Writer) error {
 	}
 	ix.keys = map[string]bool{}
 	ix.books = map[string]bool{}
+	ix.created = map[string]int{}
+	ix.found = map[string]bool{}
 	ix.latest = map[string]string{}
 	for _, r := range rows {
 		if r.RevertedAt == nil {
@@ -162,38 +173,119 @@ func (w *Writer) Touch() {
 // identical row (same book, type, field and values) is already in the op's
 // journal: a resumed apply re-journals the step it was cut off in.
 func (w *Writer) Journal(bookID, changeType, field, oldV, newV string) error {
+	_, err := w.journalRow(bookID, changeType, field, oldV, newV)
+	return err
+}
+
+// journaledRow is a row journalRow created in this call; voidRow takes it
+// back. A zero value (the row was already in the journal) voids nothing.
+type journaledRow struct {
+	row               *database.OperationChange
+	id, key, valueKey string
+	// prevLatest / hadLatest restore JournaledValue's answer on a void.
+	prevLatest string
+	hadLatest  bool
+}
+
+func (w *Writer) journalRow(bookID, changeType, field, oldV, newV string) (journaledRow, error) {
 	if w.journal == nil || w.opID == "" || w.index == nil {
-		return fmt.Errorf("%w: no journal wired (book %s, %s)", ErrNotJournaled, bookID, changeType)
+		return journaledRow{}, fmt.Errorf("%w: no journal wired (book %s, %s)", ErrNotJournaled, bookID, changeType)
 	}
 	// Every journaled write (Step, the book_file methods, credits) journals
 	// first, so beating here renews the lease before each of them.
 	if err := w.beat(changeType + " on book " + bookID); err != nil {
-		return err
+		return journaledRow{}, err
 	}
 	key := journalKey(bookID, changeType, field, oldV, newV)
 	ix := w.index
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	if err := ix.load(w); err != nil {
-		return err
+		return journaledRow{}, err
 	}
 	if ix.keys[key] {
 		ix.books[bookID] = true
-		return nil
+		ix.found[bookID] = true
+		return journaledRow{}, nil
 	}
-	if err := w.journal.CreateOperationChange(&database.OperationChange{
-		ID: ulid.Make().String(), OperationID: w.opID, BookID: bookID,
+	id := ulid.Make().String()
+	change := &database.OperationChange{
+		ID: id, OperationID: w.opID, BookID: bookID,
 		ChangeType: changeType, FieldName: field, OldValue: oldV, NewValue: newV,
-	}); err != nil {
+	}
+	if err := w.journal.CreateOperationChange(change); err != nil {
 		w.log.Warn("%s: undo row not recorded; the write is not made: book_id=%s change=%s err=%s",
 			w.source, logger.SanitizeLogValue(bookID), changeType, logger.SanitizeLogValue(err.Error()))
-		return fmt.Errorf("%w: %s on %s: %v", ErrNotJournaled, changeType, bookID, err)
+		return journaledRow{}, fmt.Errorf("%w: %s on %s: %v", ErrNotJournaled, changeType, bookID, err)
 	}
+	vk := valueKey(bookID, changeType, field)
+	row := journaledRow{row: change, id: id, key: key, valueKey: vk}
+	row.prevLatest, row.hadLatest = ix.latest[vk]
 	ix.keys[key] = true
 	ix.books[bookID] = true
-	ix.latest[valueKey(bookID, changeType, field)] = newV
+	ix.created[bookID]++
+	ix.latest[vk] = newV
 	w.journaled.Add(1)
+	return row, nil
+}
+
+// voidRow marks a row this writer just created reverted, because the write
+// it describes was refused and never made: left in place, the op revert would
+// "restore" a change that never happened, over whatever the field holds then
+// (another operation's write included). A row that was already in the journal
+// (a resumed run) is left alone.
+func (w *Writer) voidRow(row journaledRow) error {
+	if row.id == "" {
+		return nil
+	}
+	voided := *row.row
+	now := time.Now()
+	voided.RevertedAt, voided.Voided = &now, true
+	if err := w.journal.CreateOperationChange(&voided); err != nil {
+		return fmt.Errorf("void undo row %s of a refused write: %w", row.id, err)
+	}
+	ix := w.index
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	delete(ix.keys, row.key)
+	// A book whose only row was voided has nothing journaled: its history
+	// batches are undone field by field again, not marked apply_op_journaled.
+	b := row.row.BookID
+	if ix.created[b]--; ix.created[b] <= 0 && !ix.found[b] {
+		delete(ix.books, b)
+	}
+	if row.hadLatest {
+		ix.latest[row.valueKey] = row.prevLatest
+	} else {
+		delete(ix.latest, row.valueKey)
+	}
+	w.journaled.Add(-1)
 	return nil
+}
+
+// JournalStep journals e and then makes the write it describes, like Step,
+// except that a failed write voids the row it journaled. write must return an
+// error only when it wrote nothing (a ModifyBook whose callback refused, or
+// whose commit failed); a step that can fail after writing reports that some
+// other way. JOURNAL FIRST still holds, with its exposure: a crash
+// between the row and the write leaves a live row for a write that never
+// happened. Its revert compare-and-sets against the row's NewValue, so if a
+// later operation writes that same value, reverting THIS operation puts the
+// old value back over the later one's write. Voiding covers refusals only;
+// the crash window stays.
+func (w *Writer) JournalStep(bookID string, e UndoEntry, write func() error) error {
+	row, err := w.journalRow(bookID, e.ChangeType, e.Field, e.Old, e.New)
+	if err != nil {
+		return err
+	}
+	w.Touch()
+	werr := write()
+	if werr != nil {
+		if verr := w.voidRow(row); verr != nil {
+			return errors.Join(werr, verr)
+		}
+	}
+	return werr
 }
 
 // Step journals one change and then makes it (write). write's error is

@@ -1,6 +1,7 @@
 // file: internal/metafetch/metadata_state_service_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
+// last-edited: 2026-10-03
 
 package metafetch
 
@@ -32,7 +33,7 @@ func TestMetadataStateService_LoadMetadataState_Empty(t *testing.T) {
 	}
 }
 
-func TestMetadataStateService_SaveMetadataState_Success(t *testing.T) {
+func TestMetadataStateService_Modify_Success(t *testing.T) {
 	mockDB := &database.MockStore{
 		GetMetadataFieldStatesFunc: func(bookID string) ([]database.MetadataFieldState, error) {
 			return []database.MetadataFieldState{}, nil
@@ -43,15 +44,14 @@ func TestMetadataStateService_SaveMetadataState_Success(t *testing.T) {
 	}
 
 	service := NewMetadataStateService(mockDB)
-	state := map[string]metadataFieldState{
-		"title": {
+	err := service.modify("book1", func(state map[string]metadataFieldState) error {
+		state["title"] = metadataFieldState{
 			FetchedValue:  "Test Title",
 			OverrideValue: "Custom Title",
 			UpdatedAt:     time.Now(),
-		},
-	}
-
-	err := service.SaveMetadataState("book1", state)
+		}
+		return nil
+	})
 
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)

@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_preview.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3d6a0f94-8b27-4c1e-a5d3-e9f2b7c04a18
-// last-edited: 2026-09-14
+// last-edited: 2026-10-03
 //
 // Read-only preview of ApplyMetadataCandidate, for the bulk-apply dry run.
 //
@@ -108,7 +108,7 @@ func (mfs *Service) RenamePreflight(id string, candidate MetadataCandidate, fiel
 // RenamePreflightWithOptions is RenamePreflight for
 // ApplyMetadataCandidateWithOptions(id, candidate, fields, opts).
 func (mfs *Service) RenamePreflightWithOptions(id string, candidate MetadataCandidate, fields []string, opts ApplyOptions) error {
-	pv, err := mfs.previewMetadataCandidate(id, candidate, fields, opts.FillOnly, true)
+	pv, err := mfs.previewMetadataCandidate(id, candidate, fields, opts, true)
 	if err != nil {
 		preflightLog.Warn("rename preflight could not preview book %s; leaving the decision to the apply: %s",
 			logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
@@ -180,15 +180,16 @@ func CandidateMetadata(candidate MetadataCandidate) metadata.BookMetadata {
 // row the fill. Only opts.FillOnly changes what is written; the rest only
 // labels history.
 func (mfs *Service) PreviewMetadataCandidateWithOptions(id string, candidate MetadataCandidate, writeBack bool, opts ApplyOptions) (*ApplyPreview, error) {
-	return mfs.previewMetadataCandidate(id, candidate, nil, opts.FillOnly, writeBack)
+	return mfs.previewMetadataCandidate(id, candidate, nil, opts, writeBack)
 }
 
 // previewMetadataCandidate is PreviewMetadataCandidateWithOptions for
-// ApplyMetadataCandidateWithOptions(id, candidate, fields, {FillOnly:
-// fillOnly}): the same field filter (FilterApplyFields) and fill-only strip
-// (StripFilledFields) the apply runs are applied before the diff and the
-// rename plan.
-func (mfs *Service) previewMetadataCandidate(id string, candidate MetadataCandidate, fields []string, fillOnly, writeBack bool) (*ApplyPreview, error) {
+// ApplyMetadataCandidateWithOptions(id, candidate, fields, opts): the same
+// field filter (FilterApplyFields), fill-only strip (StripFilledFields) and
+// lock set (a hand-picked apply ignores a repair's lock, applyLocks) the
+// apply runs are applied before the diff and the rename plan.
+func (mfs *Service) previewMetadataCandidate(id string, candidate MetadataCandidate, fields []string, opts ApplyOptions, writeBack bool) (*ApplyPreview, error) {
+	fillOnly := opts.FillOnly
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return nil, fmt.Errorf("audiobook not found")
@@ -206,7 +207,7 @@ func (mfs *Service) previewMetadataCandidate(id string, candidate MetadataCandid
 	if err != nil {
 		return nil, fmt.Errorf("refusing to preview metadata for %s: %w", id, err)
 	}
-	meta, skipped := StripLockedFields(meta, locks.Set())
+	meta, skipped := StripLockedFields(meta, applyLocks(locks, !opts.automatic()).Set())
 
 	changes, after := mfs.previewFields(book, meta)
 	out := &ApplyPreview{BookID: id, Changes: changes, SkippedLocked: skipped}

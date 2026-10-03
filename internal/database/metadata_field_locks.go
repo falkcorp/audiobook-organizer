@@ -1,7 +1,7 @@
 // file: internal/database/metadata_field_locks.go
-// version: 1.4.0
+// version: 1.6.0
 // guid: 0d1a2cd0-a75c-4990-bb1f-bac01864e50c
-// last-edited: 2026-09-26
+// last-edited: 2026-10-03
 
 package database
 
@@ -150,9 +150,14 @@ func DeleteLegacyMetadataState(store LegacyMetadataStateDeleter, bookID string) 
 // UserOverrideRecorder is the store surface RecordUserOverrides needs: read the
 // book's existing rows (to preserve each field's fetched value) and write them
 // back.
+//
+// DeleteUserPreference retires the pre-migration blob: a book still on the
+// blob is migrated to rows before its first override row is written
+// (MigrateLegacyMetadataState), or that row would hide every lock in it.
 type UserOverrideRecorder interface {
 	MetadataFieldStateReader
 	UpsertMetadataFieldState(state *MetadataFieldState) error
+	DeleteUserPreference(key string) error
 }
 
 // RecordUserOverrides marks each named field as the user's own: it stores the
@@ -172,6 +177,11 @@ type UserOverrideRecorder interface {
 func RecordUserOverrides(store UserOverrideRecorder, bookID string, values map[string]any) error {
 	if store == nil || bookID == "" || len(values) == 0 {
 		return nil
+	}
+	unlock := LockMetadataState(bookID)
+	defer unlock()
+	if _, err := MigrateLegacyMetadataState(store, bookID); err != nil {
+		return fmt.Errorf("migrate metadata state for %s: %w", bookID, err)
 	}
 	existing, err := store.GetMetadataFieldStates(bookID)
 	if err != nil {
@@ -197,6 +207,7 @@ func RecordUserOverrides(store UserOverrideRecorder, bookID string, values map[s
 		state.Field = field
 		state.OverrideValue = encoded
 		state.OverrideLocked = true
+		state.LockSource = "" // a person's value: their lock, not a repair's
 		state.UpdatedAt = now
 		if err := store.UpsertMetadataFieldState(&state); err != nil {
 			return fmt.Errorf("persist override for %s: %w", field, err)
@@ -221,37 +232,49 @@ var ErrFieldLocksUnavailable = errors.New("metadata field locks unavailable")
 // error wrapping ErrFieldLocksUnavailable and a nil map. Never proceed as if
 // nothing were locked on an error.
 func LockedUserFields(reader MetadataFieldStateReader, bookID string) (map[string]bool, error) {
+	locked, _, err := lockedUserFieldsDetail(reader, bookID)
+	return locked, err
+}
+
+// lockedUserFieldsDetail is LockedUserFields that also returns the keys whose
+// only claim is a repair's bare lock (MetadataFieldState.IsRepairLock). The
+// pre-migration blob predates repair locks, so none of its keys are.
+func lockedUserFieldsDetail(reader MetadataFieldStateReader, bookID string) (map[string]bool, map[string]bool, error) {
 	if reader == nil {
-		return nil, fmt.Errorf("%w: no store", ErrFieldLocksUnavailable)
+		return nil, nil, fmt.Errorf("%w: no store", ErrFieldLocksUnavailable)
 	}
 	if bookID == "" {
-		return nil, fmt.Errorf("%w: empty book id", ErrFieldLocksUnavailable)
+		return nil, nil, fmt.Errorf("%w: empty book id", ErrFieldLocksUnavailable)
 	}
 
 	states, err := reader.GetMetadataFieldStates(bookID)
 	if err != nil {
-		return nil, fmt.Errorf("%w for book %s: %w", ErrFieldLocksUnavailable, bookID, err)
+		return nil, nil, fmt.Errorf("%w for book %s: %w", ErrFieldLocksUnavailable, bookID, err)
 	}
 
 	locked := map[string]bool{}
+	repair := map[string]bool{}
 	for _, st := range states {
 		if st.HasUserOverride() {
 			locked[st.Field] = true
+			if st.IsRepairLock() {
+				repair[st.Field] = true
+			}
 		}
 	}
 	if len(states) > 0 {
-		return locked, nil
+		return locked, repair, nil
 	}
 
 	// No rows: the book's state, if any, is still in the pre-migration blob.
 	legacy, err := legacyLockedUserFields(reader, bookID)
 	if err != nil {
-		return nil, fmt.Errorf("%w for book %s: %w", ErrFieldLocksUnavailable, bookID, err)
+		return nil, nil, fmt.Errorf("%w for book %s: %w", ErrFieldLocksUnavailable, bookID, err)
 	}
 	for k := range legacy {
 		locked[k] = true
 	}
-	return locked, nil
+	return locked, repair, nil
 }
 
 // legacyFieldState is the subset of the pre-migration per-field JSON this guard
@@ -297,16 +320,36 @@ func legacyLockedUserFields(reader MetadataFieldStateReader, bookID string) (map
 type FieldLocks struct {
 	BookID string
 	locked map[string]bool
+	// repair holds the locked keys whose only claim is a repair's bare lock.
+	repair map[string]bool
 }
 
 // LoadFieldLocks reads the book's lock set. It fails closed exactly like
 // LockedUserFields: on any error the caller MUST NOT write the book.
 func LoadFieldLocks(reader MetadataFieldStateReader, bookID string) (FieldLocks, error) {
-	locked, err := LockedUserFields(reader, bookID)
+	locked, repair, err := lockedUserFieldsDetail(reader, bookID)
 	if err != nil {
 		return FieldLocks{BookID: bookID}, err
 	}
-	return FieldLocks{BookID: bookID, locked: locked}, nil
+	return FieldLocks{BookID: bookID, locked: locked, repair: repair}, nil
+}
+
+// RepairLocked reports whether key's lock is a repair's bare lock (and no
+// person's override).
+func (l FieldLocks) RepairLocked(key string) bool { return l.locked[key] && l.repair[key] }
+
+// WithoutRepairLocks is the lock set a metadata apply a PERSON picked by hand
+// honours: a repair's lock stops machines (scanner, auto-fetch, the nightly
+// upgrade) from restoring junk, not the owner from choosing a match. Every
+// lock a person set or touched stays.
+func (l FieldLocks) WithoutRepairLocks() FieldLocks {
+	cp := FieldLocks{BookID: l.BookID, locked: map[string]bool{}}
+	for k := range l.locked {
+		if !l.repair[k] {
+			cp.locked[k] = true
+		}
+	}
+	return cp
 }
 
 // NewFieldLocks builds a lock set from an already-loaded map (LockedUserFields
@@ -420,6 +463,23 @@ func ApplyRespectingLocks(reader MetadataFieldStateReader, book *Book, mutate fu
 		return nil, err
 	}
 	return locks.Apply(book, mutate), nil
+}
+
+// LockedColumnChanged reports whether the Book column lock key key protects
+// differs between before and after. An unknown key, or a nil book, is false.
+func LockedColumnChanged(key string, before, after *Book) bool {
+	if before == nil || after == nil {
+		return false
+	}
+	for _, f := range UserLockableFields {
+		if f.Key != key {
+			continue
+		}
+		b := reflect.ValueOf(before).Elem().FieldByName(f.Column)
+		a := reflect.ValueOf(after).Elem().FieldByName(f.Column)
+		return !columnEqual(snapshotColumn(b), a)
+	}
+	return false
 }
 
 // snapshotColumn copies a column value so a mutation that writes THROUGH an

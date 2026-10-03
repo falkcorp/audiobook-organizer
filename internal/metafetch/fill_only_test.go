@@ -1,7 +1,7 @@
 // file: internal/metafetch/fill_only_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c8e1f27-9a6b-4d35-8e02-b7f1c3a9d640
-// last-edited: 2026-09-14
+// last-edited: 2026-10-03
 
 package metafetch
 
@@ -127,7 +127,7 @@ func TestPreviewMetadataCandidate_BatchPreviewIsFillOnly(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, fieldsOf(labelled), "description", "OwnerReviewed must not lift FillOnly")
 
-	picked, err := svc.previewMetadataCandidate("b1", cand, nil, false, false)
+	picked, err := svc.previewMetadataCandidate("b1", cand, nil, ApplyOptions{}, false)
 	require.NoError(t, err)
 	assert.Contains(t, fieldsOf(picked), "description", "the hand-picked apply may overwrite")
 	assert.Contains(t, fieldsOf(picked), "narrator")

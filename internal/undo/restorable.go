@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package undo
 
@@ -701,6 +701,11 @@ func NotRestorableLabel(c *database.OperationChange) string {
 			return ""
 		}
 		return c.ChangeType + ":(no external id)"
+	case ChangeTypeFieldLock:
+		if validFieldLockRow(c) {
+			return ""
+		}
+		return ChangeTypeFieldLock + ":(unparsable)"
 	case "metadata_update":
 		if IsRevertableBookField(c.FieldName) {
 			return ""

@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_credits_test.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 1b72196d-b654-4270-bd15-c54923102210
-// last-edited: 2026-09-29
+// last-edited: 2026-10-03
 
 package repairs
 
@@ -49,6 +49,14 @@ func (f *creditFake) CreateOperationChange(c *database.OperationChange) error {
 	defer f.mu.Unlock()
 	if f.failJournl {
 		return errors.New("journal down")
+	}
+	// Stored under its id, like the real store: writing a row again with the
+	// same id replaces it (how a refused write's row is voided).
+	for i := range f.journal {
+		if f.journal[i].ID == c.ID {
+			f.journal[i] = *c
+			return nil
+		}
 	}
 	f.journal = append(f.journal, *c)
 	f.order = append(f.order, "journal:"+c.BookID)

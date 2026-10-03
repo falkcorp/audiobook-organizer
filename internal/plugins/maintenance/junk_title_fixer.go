@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.12.0
+// version: 1.16.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-10-03
 
@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -55,11 +56,20 @@ const (
 	junkSkipNeedsManual = "skipped_needs_manual"
 	// junkSkipUserLocked: the title carries a user override; never touched.
 	junkSkipUserLocked = "skipped_user_locked"
+	// junkSkipRepairLocked: the field carries the lock a Repairs apply set
+	// (database.MetadataFieldState.IsRepairLock), not a person's; reverting
+	// that operation lifts it.
+	junkSkipRepairLocked = "skipped_repair_locked"
 	// junkSkipNotJunk / junkSkipGone: what a re-plan reports for a book
 	// whose title stopped being junk, or that no longer exists. A plan never
 	// lists either.
 	junkSkipNotJunk = "skipped_not_junk"
 	junkSkipGone    = "skipped_gone"
+	// junkSkipSwapped: the stored author is the title a provider recorded,
+	// so title and author are swapped. maintenance.repair-swapped-title-author
+	// fixes both; retitling here first would leave the author holding the
+	// title.
+	junkSkipSwapped = "skipped_swapped_title_author"
 )
 
 // Sources of a proposed title, in priority order.
@@ -117,7 +127,11 @@ func (f *junkTitleFixer) Description() string {
 		"provider recorded for the book, the folder or " +
 		"filename, the series and number. A book another book owns a file of is a fragment for the consolidation " +
 		"fixer; one that only looks like a chapter file is listed for a person. A provider's recorded title counts only when " +
-		"it agrees with the title's own evidence or was recorded under the book's author. Writes the title only, never a user-locked one."
+		"it agrees with the title's own evidence or was recorded under the book's author. A book whose author holds the " +
+		"title a provider recorded (title and author swapped) is listed for the swapped title/author fixer " +
+		"(maintenance.repair-swapped-title-author), which runs first and fixes both. Writes the title only, never a " +
+		"user-locked one, and locks the title it wrote so a rescan cannot restore the file tag's junk. Undo with the " +
+		"apply operation's revert, which also lifts the lock."
 }
 
 // junkIndex is the library-wide state a decision reads besides the book
@@ -144,6 +158,12 @@ type junkIndex struct {
 	// roots are the library root and every import path, cleaned. A proposal
 	// that names one of their segments is a path, not a title.
 	roots []string
+	// authorTitles maps an author id to the distinct real titles (by letters
+	// key, junk titles left out) of the live books whose primary author it
+	// is, each with one spelling. The swapped title/author fixer reads it:
+	// an author record that credits other real titles is a real author,
+	// never a misplaced title.
+	authorTitles map[int]map[string]string
 	// authorRoot is the library root when the organizer files books
 	// author-first ("{author}/…", the default folder pattern): the folder
 	// right below it is an author folder, never a title. Import paths are
@@ -202,25 +222,35 @@ func narratorsOf(n *string) []string {
 // buildJunkIndex lists every book once (one consistent snapshot) and returns
 // the index plus the junk-titled candidates.
 func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, error) {
+	idx, cands, _, err := f.buildJunkIndexSnapshot()
+	return idx, cands, err
+}
+
+// buildJunkIndexSnapshot is buildJunkIndex that also returns the whole book
+// listing it was built from, so the swapped title/author fixer can pick its
+// author-only candidates (real titles) from the same snapshot instead of
+// listing every book a second time.
+func (f *junkTitleFixer) buildJunkIndexSnapshot() (*junkIndex, []database.BookCore, []database.BookCore, error) {
 	store := f.p.deps.OpsStore()
 	if store == nil {
-		return nil, nil, fmt.Errorf("database not initialized")
+		return nil, nil, nil, fmt.Errorf("database not initialized")
 	}
 	all, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
-		return nil, nil, fmt.Errorf("GetAllBooksCore: %w", err)
+		return nil, nil, nil, fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 	allSeries, err := store.GetAllSeries()
 	if err != nil {
-		return nil, nil, fmt.Errorf("GetAllSeries: %w", err)
+		return nil, nil, nil, fmt.Errorf("GetAllSeries: %w", err)
 	}
 	imports, err := store.GetAllImportPaths()
 	if err != nil {
 		// Fail closed: without the roots the path-segment refusal is blind.
-		return nil, nil, fmt.Errorf("GetAllImportPaths: %w", err)
+		return nil, nil, nil, fmt.Errorf("GetAllImportPaths: %w", err)
 	}
 	idx := &junkIndex{dirBooks: map[string]int{}, dirChapters: map[string]int{}, titles: map[string]bool{},
-		authors: map[int]string{}, series: map[int]string{}, owners: map[string][]string{}}
+		authors: map[int]string{}, series: map[int]string{}, owners: map[string][]string{},
+		authorTitles: map[int]map[string]string{}}
 	if config.AppConfig.RootDir != "" {
 		root := filepath.Clean(config.AppConfig.RootDir)
 		idx.roots = append(idx.roots, root)
@@ -257,6 +287,16 @@ func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, erro
 		}
 		if kind == metadata.JunkNone {
 			idx.titles[junkTitleKey(b.AuthorID, b.Title)] = true
+			if b.AuthorID != nil {
+				if k := junkLettersKey(b.Title); k != "" {
+					if idx.authorTitles[*b.AuthorID] == nil {
+						idx.authorTitles[*b.AuthorID] = map[string]string{}
+					}
+					if _, seen := idx.authorTitles[*b.AuthorID][k]; !seen {
+						idx.authorTitles[*b.AuthorID][k] = b.Title
+					}
+				}
+			}
 			continue
 		}
 		cands = append(cands, *b)
@@ -277,7 +317,7 @@ func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, erro
 	}
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return nil, nil, fmt.Errorf("GetAllBookFilesCore: %w", err)
+		return nil, nil, nil, fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
 	for i := range files {
 		if candIDs[files[i].BookID] && files[i].FilePath != "" {
@@ -289,7 +329,7 @@ func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, erro
 			idx.owners[files[i].FilePath] = append(idx.owners[files[i].FilePath], files[i].BookID)
 		}
 	}
-	return idx, cands, nil
+	return idx, cands, all, nil
 }
 
 func (f *junkTitleFixer) cachedIndex() (*junkIndex, error) {
@@ -415,17 +455,36 @@ func (f *junkTitleFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 	return writeTitleOnly(w, f.p.deps.OpsStore(), d.bookID, d.oldTitle, d.newTitle)
 }
 
-// titleStateReader reads a book's field provenance; writeTitleOnly re-checks
-// the user lock with it inside the write.
-type titleStateReader interface {
-	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
-}
+// titleStateReader reads a book's field provenance, rows and pre-migration
+// blob both; writeTitleOnly re-checks the title lock with it inside the write
+// (database.LockedUserFields, which reads a blob-only book's blob).
+type titleStateReader = database.MetadataFieldStateReader
 
 // writeTitleOnly sets Title through the framework writer, which records the
-// history row undo reverts. A title that moved since the re-plan, or that a
-// user locked since, is refused as changed_since_plan: returning
-// database.ErrSkipBookWrite here would make Modify report success with
-// nothing written.
+// history row for the book's history view, journals the change in the apply
+// op's journal, and locks the title. Shared by the junk-title and swapped
+// title/author fixers.
+//
+// Journal and lock: the file tags still hold the junk (or swapped) value the
+// scanner first read, and a forced rescan writes the tags back over the title
+// unless it is locked (scanner.applyScannerFields). So the title is locked
+// (repairs.Writer.LockFields) once it is written. The lock lives in the
+// field state, which metadata history does not cover, so the title is
+// journaled too (a metadata_update row) and the whole row is undone by the op
+// revert (POST /operations/<id>/revert), which puts the title back and lifts
+// the lock. "Undo last apply" refuses these batches (apply_op_journaled):
+// reverting the title from history alone would leave the junk title locked.
+//
+// The title is journaled before the write (repairs.Writer.JournalStep). A
+// write refused as changed_since_plan (the title moved, or a lock landed)
+// voids that row: left in place, the op revert would "restore" the junk title
+// over whatever the book holds then, another operation's write included. A
+// lock that fails after the title was written is reported as a partial apply;
+// the lock's own row is voided by LockFields.
+//
+// A title that moved since the re-plan, or that a user locked since, is
+// refused as changed_since_plan: returning database.ErrSkipBookWrite here
+// would make Modify report success with nothing written.
 //
 // The lock re-check runs inside the ModifyBook callback, so it is as late as
 // the write can make it. Field-state writes do not take the book stripe, so a
@@ -435,27 +494,34 @@ func writeTitleOnly(w *repairs.Writer, states titleStateReader, bookID, oldTitle
 	if states == nil {
 		return fmt.Errorf("book %s: no field-state reader to check the title lock with", bookID)
 	}
-	changed, err := w.Modify(bookID, func(cur *database.Book) error {
-		if cur.Title != oldTitle {
-			return fmt.Errorf("%w: title is now %q", repairs.ErrChangedSincePlan, cur.Title)
-		}
-		sts, err := states.GetMetadataFieldStates(bookID)
-		if err != nil {
-			return fmt.Errorf("read field states of %s: %w", bookID, err)
-		}
-		for i := range sts {
-			if sts[i].Field == "title" && sts[i].HasUserOverride() {
-				return fmt.Errorf("%w: the title is now user-locked", repairs.ErrChangedSincePlan)
+	var changed []string
+	err := w.JournalStep(bookID, repairs.UndoEntry{ChangeType: "metadata_update", Field: "title",
+		Old: oldTitle, New: newTitle}, func() error {
+		var merr error
+		changed, merr = w.Modify(bookID, func(cur *database.Book) error {
+			if cur.Title != oldTitle {
+				return fmt.Errorf("%w: title is now %q", repairs.ErrChangedSincePlan, cur.Title)
 			}
-		}
-		cur.Title = newTitle
-		return nil
+			locked, err := database.LockedUserFields(states, bookID)
+			if err != nil {
+				return fmt.Errorf("read field locks of %s: %w", bookID, err)
+			}
+			if locked[database.FieldKeyTitle] {
+				return fmt.Errorf("%w: the title is now locked", repairs.ErrChangedSincePlan)
+			}
+			cur.Title = newTitle
+			return nil
+		})
+		return merr
 	})
 	if err != nil {
 		return err
 	}
 	if !slices.Contains(changed, "title") {
 		return fmt.Errorf("book %s: the write committed but recorded no title change", bookID)
+	}
+	if err := w.LockFields(bookID, database.FieldKeyTitle); err != nil {
+		return fmt.Errorf("%w: book %s title written but not locked: %w", repairs.ErrPartiallyApplied, bookID, err)
 	}
 	return nil
 }
@@ -536,7 +602,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	for i := range states {
 		if states[i].Field == "author_name" {
 			if v, ok := metastate.Decode(states[i].FetchedValue).(string); ok {
-				fetchedAuthor = strings.TrimSpace(v)
+				fetchedAuthor = strings.TrimSpace(html.UnescapeString(v))
 			}
 			continue
 		}
@@ -544,7 +610,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 			continue
 		}
 		if states[i].HasUserOverride() {
-			return finish(junkSkipUserLocked, "the title carries a user override; it is never rewritten")
+			return finish(lockHold(&states[i], "title"))
 		}
 		// A provider value on the title does NOT stop the repair (owner,
 		// 2026-10-03). The book only gets here because its STORED title
@@ -562,8 +628,11 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		// answered with it, or returned no title at all (the fetch then
 		// records the book's own). Those are repaired too, never at low risk.
 		if states[i].HasProviderValue() {
+			// Some providers return HTML entities ("Magic Tides &amp; Magic
+			// Claims"): decoded before any comparison, and before the value
+			// can become the proposal.
 			if v, ok := metastate.Decode(states[i].FetchedValue).(string); ok {
-				fetchedTitle = strings.TrimSpace(v)
+				fetchedTitle = strings.TrimSpace(html.UnescapeString(v))
 			}
 			switch {
 			case fetchedTitle == "":
@@ -577,6 +646,33 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 			}
 			r.Reason += providerNote
 		}
+	}
+
+	if why := legacyStateUnreadable(store, b.ID, states); why != "" {
+		return finish(junkSkipNeedsManual, why)
+	}
+	// A blob-only book's title lock lives in the blob, which the rows loop
+	// above cannot see.
+	if len(states) == 0 {
+		locks, lerr := database.LoadFieldLocks(store, b.ID)
+		if lerr != nil {
+			return repairs.Row{}, fmt.Errorf("read field locks of %s: %w", b.ID, lerr)
+		}
+		if locks.Locked(database.FieldKeyTitle) {
+			return finish(junkSkipUserLocked, "the title carries a user override (pre-migration state); it is never rewritten")
+		}
+	}
+
+	// Title and author stored swapped: the author holds the title a provider
+	// recorded. Retitling here would leave the author holding the title, so
+	// the book is the swapped fixer's, which writes both. (That fixer also
+	// takes a book this fixer retitled before the guard existed, author
+	// only.)
+	if ak := junkLettersKey(author); ak != "" && fetchedTitle != "" &&
+		(ak == junkLettersKey(fetchedTitle) || ak == junkLettersKey(catalogEditionRe.ReplaceAllString(fetchedTitle, ""))) {
+		return finish(junkSkipSwapped, fmt.Sprintf(
+			"the author %q is the title a provider recorded (%q): title and author are swapped — use %s, which fixes both",
+			author, fetchedTitle, swappedFixerID))
 	}
 
 	files, err := store.GetBookFiles(b.ID)
@@ -1368,6 +1464,20 @@ func (f *junkTitleFixer) candidateTitle(bookID, author string) (string, float64,
 // catalogEditionRe is a bracketed edition marker on a catalog title:
 // "(Unabridged)", "[Abridged]".
 var catalogEditionRe = regexp.MustCompile(`(?i)\s*[(\[]\s*(?:un)?abridged\s*[)\]]`)
+
+// legacyStateUnreadable returns why a book whose field state is only in a
+// pre-migration blob that does not parse must be held: the apply locks the
+// title it writes, which migrates the blob first, and an unreadable blob
+// cannot be migrated. "" for every other book. states are the book's rows.
+func legacyStateUnreadable(reader database.MetadataFieldStateReader, bookID string, states []database.MetadataFieldState) string {
+	if len(states) > 0 {
+		return ""
+	}
+	if _, err := database.ParseLegacyMetadataState(reader, bookID); err != nil {
+		return fmt.Sprintf("its pre-migration metadata state cannot be read (%v); open the book once to repair it", err)
+	}
+	return ""
+}
 
 // junkLettersKey is a title reduced to its letters and digits, NFC and lower
 // case: what two spellings of one title share whatever punctuation, spacing

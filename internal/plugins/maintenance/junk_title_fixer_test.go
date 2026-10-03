@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
 // last-edited: 2026-10-03
 
@@ -14,9 +14,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // junkLib is a real Pebble library with one book per decision the fixer
@@ -388,8 +390,10 @@ func TestJunkTitleFixer_ApplyWritesTitleOnlyAndUndoRestoresIt(t *testing.T) {
 
 	series, err := lib.store.GetAllSeries()
 	require.NoError(t, err)
-	deps := repairs.ApplyDeps{Guard: lib.store, Series: repairs.SeriesNamesFrom(series),
-		Writer: repairs.NewWriter(lib.store, lib.store, f.ID(), "bulk_update", "repairs-")}
+	const opID = "op-junk-apply"
+	deps := repairs.ApplyDeps{Guard: lib.store, Series: repairs.SeriesNamesFrom(series), OpID: opID,
+		Writer: repairs.NewWriter(lib.store, lib.store, f.ID(), "bulk_update", "repairs-").
+			WithJournal(lib.store, lib.store, opID).WithFieldStates(lib.store)}
 	sel := []string{rows["folder"].RowID, rows["prefix"].RowID, rows["frag1"].RowID}
 	out, err := repairs.RunApply(context.Background(), f, &plan, "plan-1", sel, false, deps, &fakeReporter{})
 	require.NoError(t, err)
@@ -416,13 +420,31 @@ func TestJunkTitleFixer_ApplyWritesTitleOnlyAndUndoRestoresIt(t *testing.T) {
 	require.Equal(t, 0, again.Applied)
 	require.Equal(t, 2, again.ChangedSincePlan)
 
-	// Undo puts the junk title back: the write is visible to undo-last-apply.
-	undo, err := metafetch.NewService(lib.store).UndoLastApply(lib.ids["folder"])
+	// The title is locked, so a forced rescan cannot write the file tag's
+	// junk back over it.
+	locks, err := database.LoadFieldLocks(lib.store, lib.ids["folder"])
 	require.NoError(t, err)
-	require.Equal(t, []string{"title"}, undo.Reverted)
+	require.True(t, locks.Locked(database.FieldKeyTitle), "the written title is locked")
+
+	// Undo-last-apply refuses the batch: the lock lives in the op journal,
+	// and putting the title back alone would leave the junk title locked.
+	_, uerr := metafetch.NewService(lib.store).UndoLastApply(lib.ids["folder"])
+	require.Error(t, uerr)
+	still, err := lib.store.GetBookByID(lib.ids["folder"])
+	require.NoError(t, err)
+	require.Equal(t, "Good Book", still.Title)
+
+	// The op revert puts the junk title back and lifts the lock.
+	rev, err := audiobooks.NewRevertService(lib.store).RevertOperation(opID)
+	require.NoError(t, err)
+	require.Zero(t, rev.Failed, "revert: %+v", rev)
+	require.Equal(t, 2, rev.RestoredTypes[undo.ChangeTypeFieldLock], "both locks lifted: %+v", rev.RestoredTypes)
 	restored, err := lib.store.GetBookByID(lib.ids["folder"])
 	require.NoError(t, err)
 	require.Equal(t, "read by narrator", restored.Title)
+	locks, err = database.LoadFieldLocks(lib.store, lib.ids["folder"])
+	require.NoError(t, err)
+	require.False(t, locks.Locked(database.FieldKeyTitle), "the revert lifts the lock")
 
 	// The fixer keeps no memory of its writes: after the undo, a fresh plan
 	// proposes the title again and the same fixer applies it again.
@@ -436,6 +458,10 @@ func TestJunkTitleFixer_ApplyWritesTitleOnlyAndUndoRestoresIt(t *testing.T) {
 		}
 	}
 	require.True(t, row2.Applicable(), "%s: %s", row2.Skipped, row2.SkipReason)
+	// A new apply is a new operation with its own journal.
+	deps.OpID = "op-junk-apply-2"
+	deps.Writer = repairs.NewWriter(lib.store, lib.store, f.ID(), "bulk_update", "repairs-").
+		WithJournal(lib.store, lib.store, deps.OpID).WithFieldStates(lib.store)
 	re, err := repairs.RunApply(context.Background(), f, res2, "plan-2", []string{row2.RowID}, false, deps, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, re.Applied, "outcomes %v", re.ByOutcome)
@@ -447,7 +473,8 @@ func TestJunkTitleFixer_ApplyWritesTitleOnlyAndUndoRestoresIt(t *testing.T) {
 func TestJunkTitleFixer_TitleChangedAfterReplanIsRefused(t *testing.T) {
 	lib := newJunkLib(t)
 	_, _, rows := lib.plan(t)
-	w := repairs.NewWriter(lib.store, lib.store, junkTitlesFixerID, "bulk_update", "repairs-")
+	w := repairs.NewWriter(lib.store, lib.store, junkTitlesFixerID, "bulk_update", "repairs-").
+		WithJournal(lib.store, lib.store, "op-junk-refused").WithFieldStates(lib.store)
 	id := lib.ids["folder"]
 	_, err := lib.store.ModifyBook(id, func(b *database.Book) error { b.Title = "Hand Edited"; return nil })
 	require.NoError(t, err)
@@ -604,10 +631,11 @@ func TestLetterLOrdinalFixer(t *testing.T) {
 	require.Equal(t, "1 Corinthians", byID[ids["l Corinthians"]].Proposed["title"])
 	require.Equal(t, "2 Kings 4", byID[ids["ll Kings 4"]].Proposed["title"])
 
-	w := repairs.NewWriter(st, st, f.ID(), "bulk_update", "repairs-")
+	const opID = "op-letter-l"
+	w := repairs.NewWriter(st, st, f.ID(), "bulk_update", "repairs-").WithJournal(st, st, opID).WithFieldStates(st)
 	out, err := repairs.RunApply(context.Background(), f, res, "plan-1",
 		[]string{ids["l Corinthians"], ids["ll Kings 4"], ids["l Timothy"]}, false,
-		repairs.ApplyDeps{Guard: st, Writer: w}, &fakeReporter{})
+		repairs.ApplyDeps{Guard: st, Writer: w, OpID: opID}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 2, out.Applied, "%v", out.ByOutcome)
 	b, err := st.GetBookByID(ids["l Corinthians"])
@@ -616,6 +644,20 @@ func TestLetterLOrdinalFixer(t *testing.T) {
 	b, err = st.GetBookByID(ids["l Timothy"])
 	require.NoError(t, err)
 	require.Equal(t, "l Timothy", b.Title, "a user-locked title is never rewritten")
+	locks, err := database.LoadFieldLocks(st, ids["l Corinthians"])
+	require.NoError(t, err)
+	require.True(t, locks.Locked(database.FieldKeyTitle), "the written title is locked")
+
+	// The op revert puts the title back and lifts the lock.
+	rev, err := audiobooks.NewRevertService(st).RevertOperation(opID)
+	require.NoError(t, err)
+	require.Zero(t, rev.Failed, "revert: %+v", rev)
+	b, err = st.GetBookByID(ids["l Corinthians"])
+	require.NoError(t, err)
+	require.Equal(t, "l Corinthians", b.Title)
+	locks, err = database.LoadFieldLocks(st, ids["l Corinthians"])
+	require.NoError(t, err)
+	require.False(t, locks.Locked(database.FieldKeyTitle))
 }
 
 // planRows plans the fixer over st and returns the rows by book id.
@@ -905,8 +947,9 @@ func TestJunkTitleFixer_ProviderRecordedRowApplies(t *testing.T) {
 
 	series, err := lib.store.GetAllSeries()
 	require.NoError(t, err)
-	deps := repairs.ApplyDeps{Guard: lib.store, Series: repairs.SeriesNamesFrom(series),
-		Writer: repairs.NewWriter(lib.store, lib.store, f.ID(), "bulk_update", "repairs-")}
+	deps := repairs.ApplyDeps{Guard: lib.store, Series: repairs.SeriesNamesFrom(series), OpID: "op-junk-provider",
+		Writer: repairs.NewWriter(lib.store, lib.store, f.ID(), "bulk_update", "repairs-").
+			WithJournal(lib.store, lib.store, "op-junk-provider").WithFieldStates(lib.store)}
 	out, err := repairs.RunApply(context.Background(), f, &plan, "plan-1", []string{rows["provider-agrees"].RowID}, false, deps, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)

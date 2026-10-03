@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.8.0
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-09-30
+// last-edited: 2026-10-03
 //
 // Private utilities needed by the audiobooks service package. Most still mirror
 // equivalent helpers in internal/server/ (stringPtr, boolPtr, decodeRawValue,
@@ -67,112 +67,27 @@ func decodeRawValue(raw json.RawMessage) any {
 	return value
 }
 
-// loadLegacyMetadataState / loadMetadataState / saveMetadataState are now
-// methods on *AudiobookService so they read/write through svc.store
-// rather than the package-level GetGlobalStore (SERVER-GLOBAL-STORE-AUDIT
-// phase 6). Nil-safe: a zero-value AudiobookService falls back to
-// "database not initialized" same as the old GetGlobalStore == nil path.
+// loadMetadataState / modifyMetadataState are methods on *AudiobookService
+// so they read/write through svc.store rather than the package-level
+// GetGlobalStore (SERVER-GLOBAL-STORE-AUDIT phase 6). Nil-safe: a zero-value
+// AudiobookService reports "database not initialized".
 
-func (svc *AudiobookService) loadLegacyMetadataState(bookID string) (map[string]metadataFieldState, error) {
-	state := map[string]metadataFieldState{}
-	if svc == nil || svc.store == nil {
-		return state, nil
-	}
-	pref, err := svc.store.GetUserPreference(metastate.Key(bookID))
-	if err != nil {
-		return state, err
-	}
-	if pref == nil || pref.Value == nil || *pref.Value == "" {
-		return state, nil
-	}
-	if err := json.Unmarshal([]byte(*pref.Value), &state); err != nil {
-		return state, fmt.Errorf("failed to parse metadata state: %w", err)
-	}
-	return state, nil
-}
-
+// loadMetadataState is the read-only load (metafetch.LoadStateSnapshot).
 func (svc *AudiobookService) loadMetadataState(bookID string) (map[string]metadataFieldState, error) {
-	state := map[string]metadataFieldState{}
 	if svc == nil || svc.store == nil {
-		return state, fmt.Errorf("database not initialized")
+		return map[string]metadataFieldState{}, fmt.Errorf("database not initialized")
 	}
-	stored, err := svc.store.GetMetadataFieldStates(bookID)
-	if err != nil {
-		return state, err
-	}
-	for _, entry := range stored {
-		state[entry.Field] = metadataFieldState{
-			FetchedValue:   metastate.Decode(entry.FetchedValue),
-			OverrideValue:  metastate.Decode(entry.OverrideValue),
-			OverrideLocked: entry.OverrideLocked,
-			UpdatedAt:      entry.UpdatedAt,
-		}
-	}
-	if len(state) > 0 {
-		return state, nil
-	}
-	legacy, err := svc.loadLegacyMetadataState(bookID)
-	if err != nil {
-		return state, err
-	}
-	if len(legacy) == 0 {
-		return state, nil
-	}
-	if err := svc.saveMetadataState(bookID, legacy); err != nil {
-		slog.Warn("failed to migrate legacy metadata state for", "bookID", bookID, "err", err)
-	}
-	return legacy, nil
+	return metafetch.LoadStateSnapshot(svc.store, bookID)
 }
 
-func (svc *AudiobookService) saveMetadataState(bookID string, state map[string]metadataFieldState) error {
+// modifyMetadataState runs fn on the book's state under its field-state
+// stripe and saves the result (metafetch.WithStateSnapshot). fn does
+// in-memory work only.
+func (svc *AudiobookService) modifyMetadataState(bookID string, fn func(state map[string]metadataFieldState) error) error {
 	if svc == nil || svc.store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	existing, err := svc.store.GetMetadataFieldStates(bookID)
-	if err != nil {
-		return err
-	}
-	existingFields := map[string]struct{}{}
-	for _, entry := range existing {
-		existingFields[entry.Field] = struct{}{}
-	}
-	now := time.Now()
-	for field, entry := range state {
-		fetched, err := metastate.Encode(entry.FetchedValue)
-		if err != nil {
-			return fmt.Errorf("failed to encode fetched metadata for %s: %w", field, err)
-		}
-		override, err := metastate.Encode(entry.OverrideValue)
-		if err != nil {
-			return fmt.Errorf("failed to encode override metadata for %s: %w", field, err)
-		}
-		if entry.UpdatedAt.IsZero() {
-			entry.UpdatedAt = now
-		}
-		dbState := database.MetadataFieldState{
-			BookID:         bookID,
-			Field:          field,
-			FetchedValue:   fetched,
-			OverrideValue:  override,
-			OverrideLocked: entry.OverrideLocked,
-			UpdatedAt:      entry.UpdatedAt,
-		}
-		if err := svc.store.UpsertMetadataFieldState(&dbState); err != nil {
-			return fmt.Errorf("failed to persist metadata state for %s: %w", field, err)
-		}
-		delete(existingFields, field)
-	}
-	for field := range existingFields {
-		if err := svc.store.DeleteMetadataFieldState(bookID, field); err != nil {
-			return fmt.Errorf("failed to clean up metadata state for %s: %w", field, err)
-		}
-	}
-	// The rows are now authoritative; the pre-migration blob must not be
-	// consulted again (see database.DeleteLegacyMetadataState).
-	if err := database.DeleteLegacyMetadataState(svc.store, bookID); err != nil {
-		return fmt.Errorf("failed to retire legacy metadata state: %w", err)
-	}
-	return nil
+	return metafetch.WithStateSnapshot(svc.store, bookID, fn)
 }
 
 // --- metadata state change recorder ----------------------------------------

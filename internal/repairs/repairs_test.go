@@ -1,7 +1,7 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.11.0
+// version: 1.13.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package repairs
 
@@ -1168,7 +1168,8 @@ func TestWriter_HasNoDeletePrimitive(t *testing.T) {
 	require.ElementsMatch(t, []string{"Modify", "Writes", "HistoryRows", "HistoryFailed",
 		"WithJournal", "WithLiveness", "Touch", "Journal", "Journaled", "JournaledValue", "Step",
 		"RepointBookFile", "MoveBookFiles", "SetTrackNumber", "Recompute",
-		"WithCredits", "ModifyCredits", "SetPrimaryAuthor", "RecordChange", "Beat", "LockWaiting"}, names)
+		"WithCredits", "ModifyCredits", "SetPrimaryAuthor", "RecordChange", "Beat", "LockWaiting",
+		"WithFieldStates", "LockFields", "JournalStep"}, names)
 }
 
 func TestWriter_HistoryFailureWritesIncompleteMarker(t *testing.T) {

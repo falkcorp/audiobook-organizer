@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.19.1
+// version: 1.21.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package metafetch
 
@@ -18,7 +18,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 
-	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -670,10 +669,14 @@ func derefStr(s *string) string {
 
 // MetadataFieldState represents the state of a single metadata field.
 type MetadataFieldState struct {
-	FetchedValue   any       `json:"fetched_value,omitempty"`
-	OverrideValue  any       `json:"override_value,omitempty"`
-	OverrideLocked bool      `json:"override_locked"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	FetchedValue   any  `json:"fetched_value,omitempty"`
+	OverrideValue  any  `json:"override_value,omitempty"`
+	OverrideLocked bool `json:"override_locked"`
+	// LockSource is database.MetadataFieldState.LockSource: who set the lock
+	// when it was not a person ("repair:<op id>"). A path where a person
+	// sets, edits, locks or unlocks the field clears it.
+	LockSource string    `json:"lock_source,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // metadataFieldState is the unexported spelling of MetadataFieldState, used by
@@ -682,136 +685,33 @@ type MetadataFieldState struct {
 // it has plenty -- checked rather than assumed.
 type metadataFieldState = MetadataFieldState
 
-// These four helpers are *Service methods so they use mfs.db rather than
-// the package global (SERVER-GLOBAL-STORE-AUDIT phase 4).
-func (mfs *Service) loadLegacyMetadataState(bookID string) (map[string]metadataFieldState, error) {
-	state := map[string]metadataFieldState{}
-	if mfs == nil || mfs.db == nil {
-		return state, fmt.Errorf("database not initialized")
-	}
-
-	pref, err := mfs.db.GetUserPreference(metastate.Key(bookID))
-	if err != nil {
-		return state, err
-	}
-	if pref == nil || pref.Value == nil || *pref.Value == "" {
-		return state, nil
-	}
-
-	if err := json.Unmarshal([]byte(*pref.Value), &state); err != nil {
-		return state, fmt.Errorf("failed to parse metadata state: %w", err)
-	}
-	return state, nil
-}
-
+// loadMetadataState is the read-only load (LoadStateSnapshot). A *Service
+// method so it uses mfs.db rather than the package global
+// (SERVER-GLOBAL-STORE-AUDIT phase 4).
 func (mfs *Service) loadMetadataState(bookID string) (map[string]metadataFieldState, error) {
-	state := map[string]metadataFieldState{}
 	if mfs == nil || mfs.db == nil {
-		return state, fmt.Errorf("database not initialized")
+		return map[string]metadataFieldState{}, fmt.Errorf("database not initialized")
 	}
-
-	stored, err := mfs.db.GetMetadataFieldStates(bookID)
-	if err != nil {
-		return state, err
-	}
-	for _, entry := range stored {
-		state[entry.Field] = metadataFieldState{
-			FetchedValue:   metastate.Decode(entry.FetchedValue),
-			OverrideValue:  metastate.Decode(entry.OverrideValue),
-			OverrideLocked: entry.OverrideLocked,
-			UpdatedAt:      entry.UpdatedAt,
-		}
-	}
-	if len(state) > 0 {
-		return state, nil
-	}
-
-	legacy, err := mfs.loadLegacyMetadataState(bookID)
-	if err != nil {
-		return state, err
-	}
-	if len(legacy) == 0 {
-		return state, nil
-	}
-
-	if err := mfs.saveMetadataState(bookID, legacy); err != nil {
-		slog.Warn("failed to migrate legacy metadata state for", "id", logger.SanitizeLogValue(bookID), "error", err)
-	}
-	return legacy, nil
+	return LoadStateSnapshot(mfs.db, bookID)
 }
 
-func (mfs *Service) saveMetadataState(bookID string, state map[string]metadataFieldState) error {
+// updateFetchedMetadataState records provider values as each field's fetched
+// value, under the book's field-state stripe (WithStateSnapshot). Each field
+// written is stamped with the time of this write.
+func (mfs *Service) updateFetchedMetadataState(bookID string, values map[string]any) error {
 	if mfs == nil || mfs.db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-
-	existing, err := mfs.db.GetMetadataFieldStates(bookID)
-	if err != nil {
-		return err
-	}
-	existingFields := map[string]struct{}{}
-	for _, entry := range existing {
-		existingFields[entry.Field] = struct{}{}
-	}
-
-	now := time.Now()
-	for field, entry := range state {
-		fetched, err := metastate.Encode(entry.FetchedValue)
-		if err != nil {
-			return fmt.Errorf("failed to encode fetched metadata for %s: %w", field, err)
-		}
-		override, err := metastate.Encode(entry.OverrideValue)
-		if err != nil {
-			return fmt.Errorf("failed to encode override metadata for %s: %w", field, err)
-		}
-		if entry.UpdatedAt.IsZero() {
+	return WithStateSnapshot(mfs.db, bookID, func(state map[string]metadataFieldState) error {
+		now := time.Now()
+		for field, value := range values {
+			entry := state[field]
+			entry.FetchedValue = value
 			entry.UpdatedAt = now
+			state[field] = entry
 		}
-
-		dbState := database.MetadataFieldState{
-			BookID:         bookID,
-			Field:          field,
-			FetchedValue:   fetched,
-			OverrideValue:  override,
-			OverrideLocked: entry.OverrideLocked,
-			UpdatedAt:      entry.UpdatedAt,
-		}
-
-		if err := mfs.db.UpsertMetadataFieldState(&dbState); err != nil {
-			return fmt.Errorf("failed to persist metadata state for %s: %w", field, err)
-		}
-		delete(existingFields, field)
-	}
-
-	for field := range existingFields {
-		if err := mfs.db.DeleteMetadataFieldState(bookID, field); err != nil {
-			return fmt.Errorf("failed to clean up metadata state for %s: %w", field, err)
-		}
-	}
-
-	// The rows are now authoritative; the pre-migration blob must not be
-	// consulted again (see database.DeleteLegacyMetadataState).
-	if err := database.DeleteLegacyMetadataState(mfs.db, bookID); err != nil {
-		return fmt.Errorf("failed to retire legacy metadata state: %w", err)
-	}
-	return nil
-}
-
-func (mfs *Service) updateFetchedMetadataState(bookID string, values map[string]any) error {
-	state, err := mfs.loadMetadataState(bookID)
-	if err != nil {
-		return err
-	}
-	if state == nil {
-		state = map[string]metadataFieldState{}
-	}
-	for field, value := range values {
-		entry := state[field]
-		entry.FetchedValue = value
-		entry.UpdatedAt = time.Now()
-		state[field] = entry
-	}
-	return mfs.saveMetadataState(bookID, state)
+		return nil
+	})
 }
 
 func stringVal(p *string) any {
@@ -977,6 +877,7 @@ func BuildMetadataProvenance(book *database.Book, state map[string]MetadataField
 			StoredValue:     storedValue,
 			OverrideValue:   entryState.OverrideValue,
 			OverrideLocked:  entryState.OverrideLocked,
+			LockSource:      entryState.LockSource,
 			EffectiveValue:  effectiveValue,
 			EffectiveSource: effectiveSource,
 			UpdatedAt:       updatedAt,

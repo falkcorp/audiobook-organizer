@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.48.0
+// version: 1.51.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -44,6 +44,7 @@ type revertServiceStore interface {
 	revertSeriesStore
 	revertBookFileStore
 	revertAuthorStore
+	revertFieldStateStore
 	// revertBookPrimaryDemote re-crowns a restored primary and demotes the
 	// rest of its group (versionprimary.Crown).
 	versionprimary.EnsureStore
@@ -63,6 +64,12 @@ type revertLedgerStore interface {
 	// Needed by the embedded isProtectedPath call in revertTagWrite
 	// (SERVER-GLOBAL-STORE-AUDIT phase 6).
 	GetAllImportPaths() ([]database.ImportPath, error)
+}
+
+// revertFieldStateStore lifts the field lock a repair set (revertFieldLock).
+type revertFieldStateStore interface {
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+	UpsertMetadataFieldState(state *database.MetadataFieldState) error
 }
 
 // revertAuthorStore restores a book's author credits and removes an author
@@ -357,6 +364,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	var restorable []*database.OperationChange
 	restorableTotal := 0
 	for _, c := range changes {
+		if c.Voided {
+			continue // the write it describes never happened
+		}
 		if label := undo.NotRestorableLabel(c); label != "" {
 			result.NotRestorable++
 			if result.NotRestorableTypes == nil {
@@ -553,7 +563,7 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		// Book.file_path.
 		return rs.revertFileMove(c)
 	case "metadata_update":
-		return rs.revertMetadataUpdate(c)
+		return rs.revertMetadataUpdate(c, plan)
 	case "tag_write":
 		return rs.revertTagWrite(c)
 	case undo.ChangeTypeSeriesRename:
@@ -591,6 +601,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertJunkAuthorCreate(c)
 	case undo.ChangeTypeRepairBookCreate:
 		return rs.revertRepairBookCreate(c)
+	case undo.ChangeTypeFieldLock:
+		return rs.revertFieldLock(c)
 	case "organize_failed", "organize_skipped", "organize_summary":
 		// No filesystem or DB mutation recorded; nothing to reverse.
 		return nil
@@ -598,6 +610,71 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		// Unreachable from RevertOperation, which filters on undo.NotRestorableLabel.
 		return fmt.Errorf("unknown change type: %s", c.ChangeType)
 	}
+}
+
+// checkPairedFieldLock runs undo.CheckPairedFieldLock for a metadata_update
+// row whose operation also locked that field. The lock rows come from the
+// plan (every row of the operation); a lone row reverted without a plan reads
+// the operation's journal.
+func (rs *RevertService) checkPairedFieldLock(c *database.OperationChange, plan *undo.RevertPlan) error {
+	var locks []*database.OperationChange
+	if plan != nil {
+		locks = plan.FieldLocksOf(c)
+	} else {
+		all, err := rs.db.GetOperationChanges(c.OperationID)
+		if err != nil {
+			return fmt.Errorf("read the journal of %s: %w", c.OperationID, err)
+		}
+		locks = all
+	}
+	if len(locks) == 0 {
+		return nil
+	}
+	states, err := rs.db.GetMetadataFieldStates(c.BookID)
+	if err != nil {
+		return fmt.Errorf("read field states of %s: %w", c.BookID, err)
+	}
+	return undo.CheckPairedFieldLock(locks, states, c)
+}
+
+// revertFieldLock lifts the lock a repair operation set on one field, while
+// the field still carries exactly that operation's lock
+// (undo.CheckFieldLockCurrent): no override is already restored, and a
+// person's override or lock, or another operation's lock, is refused. Only
+// the lock changes; the provider value and the row's UpdatedAt stay, so the
+// swapped title/author fixer's same-record check still compares the times the
+// fields' values were recorded. Runs under the book's field-state stripe
+// (database.LockMetadataState), like every other read-modify-write of it.
+func (rs *RevertService) revertFieldLock(c *database.OperationChange) error {
+	if _, err := rs.loadBook(c.BookID); err != nil {
+		return err
+	}
+	unlock := database.LockMetadataState(c.BookID)
+	defer unlock()
+	states, err := rs.db.GetMetadataFieldStates(c.BookID)
+	if err != nil {
+		return fmt.Errorf("read field states of %s: %w", c.BookID, err)
+	}
+	if err := undo.CheckFieldLockCurrent(states, c); err != nil {
+		return err
+	}
+	for i := range states {
+		if states[i].Field != c.FieldName {
+			continue
+		}
+		st := states[i]
+		// Back to what the row recorded: no lock, or the earlier repair
+		// operation's lock this one took over.
+		st.OverrideLocked, st.LockSource = false, ""
+		if src, taken := undo.FieldLockTakenSource(c.OldValue); taken {
+			st.OverrideLocked, st.LockSource = true, src
+		}
+		if err := rs.db.UpsertMetadataFieldState(&st); err != nil {
+			return fmt.Errorf("unlock %s of %s: %w", c.FieldName, c.BookID, err)
+		}
+		return nil
+	}
+	return undo.ErrAlreadyRestored
 }
 
 // loadBook returns the change's book, or a refusal when it cannot be read or no
@@ -1288,7 +1365,7 @@ func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) e
 	return nil
 }
 
-func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error {
+func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange, plan *undo.RevertPlan) error {
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	if _, err := rs.loadBook(c.BookID); err != nil {
@@ -1300,6 +1377,14 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 	// preflight runs the same check, so it reports this row as a conflict. It
 	// reads series rows, so it runs before the book's write stripe is taken.
 	if err := undo.CheckRestoreReferent(rs.db, c); err != nil {
+		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
+	}
+	// A repair that wrote a field also locked it (undo.ChangeTypeFieldLock).
+	// The value goes back only while that lock is still the repair's or
+	// gone: one a person took over makes the value theirs
+	// (undo.CheckPairedFieldLock). The lock row is newer, so in this run it
+	// was lifted first when it was still the repair's.
+	if err := rs.checkPairedFieldLock(c, plan); err != nil {
 		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
 	}
 	// Compare-and-set, the same three-way check series_rename rows get, on the

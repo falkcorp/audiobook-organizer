@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.45.0
+// version: 1.48.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package metafetch
 
@@ -737,7 +737,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// book_authors lock, so undo removes exactly what this apply added. It
 	// replaces a join read taken here, outside that lock, which could miss
 	// another apply's credit and so let undo delete it.
-	meta, skippedLocked, credits, err := mfs.guardedApply(book, meta, historySource)
+	meta, skippedLocked, credits, claimedLocks, err := mfs.guardedApplyWith(book, meta, historySource, !opts.automatic())
 	if err != nil {
 		return nil, err
 	}
@@ -846,6 +846,22 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	updatedBook, updateErr := mfs.commitApply(id, before, book, credits, historySource, opts.BatchID, commitGuard)
 	if updatedBook == nil {
 		return nil, updateErr
+	}
+	// A hand-picked apply that changed a repair-locked field makes the lock
+	// the person's: reverting the repair later must not lift it and let a
+	// rescan put the junk back over the person's choice. Only fields whose
+	// committed value changed: a candidate that merely agrees with the
+	// repair leaves the lock the repair's.
+	var changedLocks []string
+	for _, k := range claimedLocks {
+		if database.LockedColumnChanged(k, before, updatedBook) ||
+			(k == database.FieldKeyAuthorName && credits.Changed()) {
+			changedLocks = append(changedLocks, k)
+		}
+	}
+	if cerr := database.ClaimRepairLocks(mfs.db, id, changedLocks); cerr != nil {
+		slog.Error("hand-picked apply: repair locks not claimed; reverting that repair may lift them",
+			"id", logger.SanitizeLogValue(id), "fields", claimedLocks, "error", logger.SanitizeLogValue(cerr.Error()))
 	}
 	// An owner-reviewed apply went through past legs the certainty gate
 	// refused, and its change history is the only record to audit or revert

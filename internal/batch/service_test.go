@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.7.0
-// last-edited: 2026-10-01
+// version: 1.8.0
+// last-edited: 2026-10-03
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -63,6 +63,8 @@ func (m *MockBookStore) GetMetadataFieldStates(bookID string) ([]database.Metada
 func (m *MockBookStore) GetUserPreference(string) (*database.UserPreference, error) {
 	return nil, nil
 }
+
+func (m *MockBookStore) DeleteUserPreference(string) error { return nil }
 
 func (m *MockBookStore) UpsertMetadataFieldState(state *database.MetadataFieldState) error {
 	if m.lockErr != nil {

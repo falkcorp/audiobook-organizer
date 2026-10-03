@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.105.0
+// version: 2.107.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package database
 
@@ -468,11 +468,14 @@ type BookSummary struct {
 
 // MetadataProvenanceEntry represents the source breakdown for a metadata field.
 type MetadataProvenanceEntry struct {
-	FileValue       any        `json:"file_value,omitempty"`
-	FetchedValue    any        `json:"fetched_value,omitempty"`
-	StoredValue     any        `json:"stored_value,omitempty"`
-	OverrideValue   any        `json:"override_value,omitempty"`
-	OverrideLocked  bool       `json:"override_locked"`
+	FileValue      any  `json:"file_value,omitempty"`
+	FetchedValue   any  `json:"fetched_value,omitempty"`
+	StoredValue    any  `json:"stored_value,omitempty"`
+	OverrideValue  any  `json:"override_value,omitempty"`
+	OverrideLocked bool `json:"override_locked"`
+	// LockSource names a repair's lock ("repair:<op id>"); empty for a
+	// person's lock (MetadataFieldState.LockSource).
+	LockSource      string     `json:"lock_source,omitempty"`
 	EffectiveValue  any        `json:"effective_value,omitempty"`
 	EffectiveSource string     `json:"effective_source,omitempty"`
 	ComparisonValue any        `json:"comparison_value,omitempty"`
@@ -644,7 +647,13 @@ type OperationChange struct {
 	OldValue   string     `json:"old_value"`
 	NewValue   string     `json:"new_value"`
 	RevertedAt *time.Time `json:"reverted_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
+	// Voided marks a row its writer took back because the write it
+	// describes was refused and never made (repairs.Writer.JournalStep,
+	// LockFields). RevertedAt is set with it, so no revert acts on it; the
+	// revert counts, the preflight and the change log leave it out
+	// altogether, since nothing happened.
+	Voided    bool      `json:"voided,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // SystemActivityLog represents a log entry from a housekeeping goroutine.
@@ -1169,12 +1178,18 @@ type UserStats struct {
 // MetadataFieldState persists per-field metadata provenance (fetched vs override)
 // using JSON-encoded values to preserve original types.
 type MetadataFieldState struct {
-	BookID         string    `json:"book_id"`
-	Field          string    `json:"field"`
-	FetchedValue   *string   `json:"fetched_value,omitempty"`  // JSON-encoded value
-	OverrideValue  *string   `json:"override_value,omitempty"` // JSON-encoded value
-	OverrideLocked bool      `json:"override_locked"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	BookID         string  `json:"book_id"`
+	Field          string  `json:"field"`
+	FetchedValue   *string `json:"fetched_value,omitempty"`  // JSON-encoded value
+	OverrideValue  *string `json:"override_value,omitempty"` // JSON-encoded value
+	OverrideLocked bool    `json:"override_locked"`
+	// LockSource says who set OverrideLocked when it was not a person: a
+	// Repairs apply writes RepairLockSource(opID). Empty means a person's lock
+	// (or no lock). Every path where a person sets, edits, locks or unlocks a
+	// field clears it, so a lock a person touched is theirs. See
+	// metadata_field_lock_source.go.
+	LockSource string    `json:"lock_source,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // MetadataChangeRecord tracks a single change to a metadata field for undo/audit.

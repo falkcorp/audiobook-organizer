@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.6.0
+// version: 1.9.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-03
 
@@ -333,12 +333,18 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_fragment: 'Fragment — use the consolidation fixer',
   skipped_possible_fragment: 'Possible fragment (not proven)',
   skipped_needs_manual: 'Needs manual',
-  skipped_user_locked: 'User-locked title',
+  skipped_user_locked: 'User-locked title or author',
+  skipped_repair_locked: 'Locked by an earlier repair',
   skipped_provider_title: 'Title from a metadata provider',
   skipped_itunes: 'iTunes library (hands-off)',
   skipped_owner_manual: 'Doctor Who / Big Finish / Torchwood (manual)',
   skipped_guard_unreadable: 'Could not read for the guard',
   skipped_co_owner: 'Another book owns the same file',
+  skipped_no_provider_author: 'No provider author on record',
+  skipped_multi_author: 'Several authors — needs a person',
+  skipped_implausible_author: 'Provider author is not a plausible name',
+  skipped_ambiguous_author: 'Several existing authors match the name',
+  skipped_swapped_title_author: 'Title and author swapped — use the swapped fixer',
   error: 'Error',
 };
 

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.12.0
+// version: 1.14.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -122,58 +122,16 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		Book: currentBook,
 	}
 
-	// Load and process metadata state
-	state, err := svc.loadMetadataState(id)
-	if err != nil {
-		slog.Info("[ERROR] UpdateAudiobook failed to load metadata state", "err", err)
-		return nil, fmt.Errorf("failed to load metadata state")
-	}
-	if state == nil {
-		state = map[string]metadataFieldState{}
-	}
-
 	// Create a MetadataStateService for recording change history.
 	mss := newMetadataStateSvc(svc.store)
 
-	// Process overrides
+	// An override value also edits the book row. The field state itself is
+	// written after the row, under the book's field-state stripe
+	// (applyState below, metafetch.WithStateSnapshot).
 	for field, override := range req.Updates.Overrides {
-		entry := state[field]
-		oldOverrideValue := entry.OverrideValue
-		if override.Clear {
-			entry.OverrideValue = nil
-			entry.OverrideLocked = false
-			entry.UpdatedAt = now
-			// Record history for clearing an override.
-			if fmt.Sprintf("%v", oldOverrideValue) != fmt.Sprintf("%v", nil) {
-				if mss.recordChange(id, field, "override", "user_edit", oldOverrideValue, nil) {
-					noteOverride(field)
-				}
-			}
-		} else {
-			if len(override.Value) > 0 {
-				val := decodeRawValue(override.Value)
-				entry.OverrideValue = val
-				entry.OverrideLocked = override.Locked == nil || *override.Locked
-				entry.UpdatedAt = now
-				ApplyOverrideToPayload(payload, field, val)
-				// Record history for setting an override.
-				if fmt.Sprintf("%v", oldOverrideValue) != fmt.Sprintf("%v", val) {
-					if mss.recordChange(id, field, "override", "user_edit", oldOverrideValue, val) {
-						noteOverride(field)
-					}
-				}
-			} else if override.Locked != nil {
-				entry.OverrideLocked = *override.Locked
-				entry.UpdatedAt = now
-			}
-			if len(override.FetchedValue) > 0 {
-				entry.FetchedValue = decodeRawValue(override.FetchedValue)
-				if entry.UpdatedAt.IsZero() {
-					entry.UpdatedAt = now
-				}
-			}
+		if !override.Clear && len(override.Value) > 0 {
+			ApplyOverrideToPayload(payload, field, decodeRawValue(override.Value))
 		}
-		state[field] = entry
 	}
 
 	// Resolve author by name or ID — auto-split on " & " for multiple authors
@@ -328,42 +286,92 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// lock key: the extractors are the WRITER side of database.UserLockableFields.
 	fieldExtractors := userEditFieldExtractors(payload, resolvedAuthorName, resolvedSeriesName)
 
-	for field, extractor := range fieldExtractors {
-		if _, ok := req.RawPayload[field]; !ok {
-			slog.Debug("UpdateAudiobook field not in RawPayload", "field", field)
-			continue
-		}
-		if _, hasOverride := req.Updates.Overrides[field]; hasOverride {
-			slog.Debug("UpdateAudiobook field has explicit override", "field", field)
-			continue
-		}
-		if value, ok := extractor(); ok {
-			slog.Debug("UpdateAudiobook creating state for field with value", "field", field, "value", value)
+	// applyState is this edit's change to the book's field state: run on
+	// the state read under the stripe, after the row is saved. In-memory
+	// work and history rows only.
+	applyState := func(state map[string]metadataFieldState) {
+		// Process overrides
+		for field, override := range req.Updates.Overrides {
 			entry := state[field]
-			oldValue := entry.OverrideValue
-
-			entry.OverrideValue = value
-			entry.OverrideLocked = true
-			entry.UpdatedAt = now
-			state[field] = entry
-
-			// Record history only when the value actually changed.
-			if fmt.Sprintf("%v", oldValue) != fmt.Sprintf("%v", value) {
-				if mss.recordChange(id, field, "override", "user_edit", oldValue, value) {
-					noteOverride(field)
+			oldOverrideValue := entry.OverrideValue
+			if override.Clear {
+				entry.OverrideValue = nil
+				entry.OverrideLocked = false
+				entry.LockSource = "" // a person touched it: no repair's lock any more
+				entry.UpdatedAt = now
+				// Record history for clearing an override.
+				if fmt.Sprintf("%v", oldOverrideValue) != fmt.Sprintf("%v", nil) {
+					if mss.recordChange(id, field, "override", "user_edit", oldOverrideValue, nil) {
+						noteOverride(field)
+					}
+				}
+			} else {
+				if len(override.Value) > 0 {
+					val := decodeRawValue(override.Value)
+					entry.OverrideValue = val
+					entry.OverrideLocked = override.Locked == nil || *override.Locked
+					entry.LockSource = ""
+					entry.UpdatedAt = now
+					// Record history for setting an override.
+					if fmt.Sprintf("%v", oldOverrideValue) != fmt.Sprintf("%v", val) {
+						if mss.recordChange(id, field, "override", "user_edit", oldOverrideValue, val) {
+							noteOverride(field)
+						}
+					}
+				} else if override.Locked != nil {
+					entry.OverrideLocked = *override.Locked
+					entry.LockSource = "" // the person's lock (or unlock) now
+					entry.UpdatedAt = now
+				}
+				if len(override.FetchedValue) > 0 {
+					entry.FetchedValue = decodeRawValue(override.FetchedValue)
+					if entry.UpdatedAt.IsZero() {
+						entry.UpdatedAt = now
+					}
 				}
 			}
-		} else {
-			slog.Debug("UpdateAudiobook extractor for field returned false/nil", "field", field)
+			state[field] = entry
 		}
-	}
 
-	// Process unlock overrides
-	for _, field := range req.Updates.UnlockOverrides {
-		entry := state[field]
-		entry.OverrideLocked = false
-		entry.UpdatedAt = now
-		state[field] = entry
+		for field, extractor := range fieldExtractors {
+			if _, ok := req.RawPayload[field]; !ok {
+				slog.Debug("UpdateAudiobook field not in RawPayload", "field", field)
+				continue
+			}
+			if _, hasOverride := req.Updates.Overrides[field]; hasOverride {
+				slog.Debug("UpdateAudiobook field has explicit override", "field", field)
+				continue
+			}
+			if value, ok := extractor(); ok {
+				slog.Debug("UpdateAudiobook creating state for field with value", "field", field, "value", value)
+				entry := state[field]
+				oldValue := entry.OverrideValue
+
+				entry.OverrideValue = value
+				entry.OverrideLocked = true
+				entry.LockSource = ""
+				entry.UpdatedAt = now
+				state[field] = entry
+
+				// Record history only when the value actually changed.
+				if fmt.Sprintf("%v", oldValue) != fmt.Sprintf("%v", value) {
+					if mss.recordChange(id, field, "override", "user_edit", oldValue, value) {
+						noteOverride(field)
+					}
+				}
+			} else {
+				slog.Debug("UpdateAudiobook extractor for field returned false/nil", "field", field)
+			}
+		}
+
+		// Process unlock overrides
+		for _, field := range req.Updates.UnlockOverrides {
+			entry := state[field]
+			entry.OverrideLocked = false
+			entry.LockSource = ""
+			entry.UpdatedAt = now
+			state[field] = entry
+		}
 	}
 
 	// Sync the denormalized Author/Series display objects to the resolved IDs
@@ -407,6 +415,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		return nil, fmt.Errorf("audiobook not found")
 	}
 
+	// Save the field state under its stripe, then the history (the history
+	// skips the fields the override bookkeeping recorded).
+	stateErr := svc.modifyMetadataState(id, func(state map[string]metadataFieldState) error {
+		applyState(state)
+		return nil
+	})
+
 	// A "manual" history row for EVERY field this edit changed, clears
 	// included (database.RecordBookEditHistory). A queued metadata apply reads
 	// this history to refuse overwriting a user's later edit; a changed field
@@ -429,9 +444,8 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		}
 	}
 
-	// Save metadata state
-	if err := svc.saveMetadataState(id, state); err != nil {
-		slog.Info("[ERROR] UpdateAudiobook failed to save metadata state", "err", err)
+	if stateErr != nil {
+		slog.Info("[ERROR] UpdateAudiobook failed to save metadata state", "err", stateErr)
 		return nil, fmt.Errorf("failed to persist metadata state")
 	}
 
