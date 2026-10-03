@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.120.0
+// version: 1.121.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package scanner
 
@@ -79,6 +79,12 @@ var (
 	dupLookupSkipCount      atomic.Int64 // files skipped: duplicate status undeterminable
 	scanCacheUpdateErrCount atomic.Int64 // UpdateScanCache failures (file re-hashed every scan until it succeeds)
 	scanFailCountErrCount   atomic.Int64 // IncrScanFailCount failures
+	// ResetScanFailCount failures and panics. Until 2026-10-03 both were
+	// swallowed by a bare recover() plus a discarded error, so a reset that
+	// never landed left a file's stale failures counting toward auto-quarantine
+	// with nothing in the log. See resetScanFailCount.
+	scanFailResetErrCount   atomic.Int64 // ResetScanFailCount returned an error
+	scanFailResetPanicCount atomic.Int64 // ResetScanFailCount panicked (closed store, or a store missing the method)
 
 	// The three ways a scan-cache write-back can be abandoned BEFORE
 	// UpdateScanCache is ever called. Until 2026-08-24 all three were dropped
@@ -919,6 +925,54 @@ func ScanDirectory(ctx context.Context, rootDir string, scanLog logger.Logger) (
 	return ScanDirectoryParallel(ctx, rootDir, 1, scanLog)
 }
 
+// scanFailKey is the scan-fail counter key for filePath: the first 8 bytes of
+// its SHA-256, hex. IncrScanFailCount and ResetScanFailCount must agree on it,
+// or a reset clears a counter nothing increments -- and so must the reader,
+// internal/quarantine's scanFailKey, which duplicates this derivation.
+func scanFailKey(filePath string) string {
+	sum := sha256.Sum256([]byte(filePath))
+	return fmt.Sprintf("%x", sum[:8])
+}
+
+// resetScanFailCount clears filePath's scan-fail counter after a successful
+// parse, so transient failures do not accumulate toward auto-quarantine.
+//
+// Until 2026-10-03 this ran inside `defer func() { recover() }()` with the
+// error discarded, so a panic and an error were both silent while the
+// IncrScanFailCount call beside it logged. A reset that never lands is not
+// harmless: the file's earlier failures keep counting, and enough later
+// transient ones quarantine a file that parses.
+//
+// Errors are logged (sampled) and counted for the run summary.
+//
+// The recover stays, but it logs and counts instead of swallowing. There are
+// two demonstrated panic sources at this call and no worker-level recover in
+// ProcessBooksParallel above it, so an unguarded panic here would take down
+// the whole process mid-scan:
+//   - "pebble: closed": PebbleStore.ResetScanFailCount is a raw db.Delete,
+//     which panics when the store was closed under a still-running scan
+//     (observed in the test suite, audit 2026-09).
+//   - test fakes that embed a nil scannerStore and do not implement this
+//     method; the call then dereferences the nil interface.
+//
+// It is the same logging recover writeBackScanCache uses.
+func resetScanFailCount(filePath string, scanLog logger.Logger) {
+	defer func() {
+		if r := recover(); r != nil {
+			warnSampled(&scanFailResetPanicCount, scanLog,
+				"ResetScanFailCount for %s recovered from panic: %v", filePath, r)
+		}
+	}()
+	gs := getStore()
+	if gs == nil {
+		return
+	}
+	if err := gs.ResetScanFailCount(scanFailKey(filePath)); err != nil {
+		warnSampled(&scanFailResetErrCount, scanLog,
+			"ResetScanFailCount failed for %s: %v (earlier failures keep counting toward auto-quarantine)", filePath, err)
+	}
+}
+
 // writeBackScanCache stamps the scan cache for filePath so the next incremental
 // scan can skip it.
 //
@@ -1371,6 +1425,8 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	})
 	scanCacheErrStart := scanCacheUpdateErrCount.Load()
 	scanFailCountErrStart := scanFailCountErrCount.Load()
+	scanFailResetErrStart := scanFailResetErrCount.Load()
+	scanFailResetPanicStart := scanFailResetPanicCount.Load()
 	scanCacheStatErrStart := scanCacheStatErrCount.Load()
 	scanCacheLookupErrStart := scanCacheLookupErrCount.Load()
 	scanCacheNoRowStart := scanCacheNoRowCount.Load()
@@ -1738,8 +1794,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				failures.Record(scanLog, FileFailure{Path: filePath, Stage: FileFailureStageRead, Reason: pfErr.Error()})
 				fallbackUsed = true
 				if gs := getStore(); gs != nil {
-					sum := sha256.Sum256([]byte(filePath))
-					if _, ierr := gs.IncrScanFailCount(fmt.Sprintf("%x", sum[:8])); ierr != nil {
+					if _, ierr := gs.IncrScanFailCount(scanFailKey(filePath)); ierr != nil {
 						// Silent failure disabled the auto-quarantine escalation path (H5).
 						warnSampled(&scanFailCountErrCount, scanLog, "IncrScanFailCount failed for %s: %v", filePath, ierr)
 					}
@@ -1747,15 +1802,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			} else {
 				// Reset fail counter on successful parse so transient failures
 				// don't accumulate toward the auto-quarantine threshold.
-				// Use recover guard: GetGlobalStore may return a non-nil interface
-				// wrapping a nil concrete pointer in tests.
-				func() {
-					defer func() { recover() }() //nolint:errcheck
-					if gs := getStore(); gs != nil {
-						sum := sha256.Sum256([]byte(filePath))
-						_ = gs.ResetScanFailCount(fmt.Sprintf("%x", sum[:8]))
-					}
-				}()
+				resetScanFailCount(filePath, scanLog)
 				if meta != nil {
 					fallbackUsed = meta.UsedFilenameFallback
 					if meta.Title != "" {
@@ -2069,6 +2116,12 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	}
 	if d := scanFailCountErrCount.Load() - scanFailCountErrStart; d > 0 {
 		scanLog.Warn("scan summary: %d scan-fail-count increments failed", d)
+	}
+	if d := scanFailResetErrCount.Load() - scanFailResetErrStart; d > 0 {
+		scanLog.Warn("scan summary: %d scan-fail-count resets failed (those files keep earlier failures counting toward auto-quarantine)", d)
+	}
+	if d := scanFailResetPanicCount.Load() - scanFailResetPanicStart; d > 0 {
+		scanLog.Warn("scan summary: %d scan-fail-count resets panicked and were recovered (store closed or incomplete)", d)
 	}
 	if d := scanCacheStatErrCount.Load() - scanCacheStatErrStart; d > 0 {
 		scanLog.Warn("scan summary: %d scan-cache write-backs skipped because os.Stat failed", d)
