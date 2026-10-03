@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-25
+// last-edited: 2026-10-03
 
 package registry
 
@@ -198,57 +198,87 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 		}
 		r.mu.Unlock()
 
-		// row.Params came from the ListQueuedOperationsV2 snapshot at the top
-		// of this cycle, which is read WITHOUT holding r.mu. For a def that can
-		// absorb a new request into an already-queued row, a merge can land in
-		// the gap between that read and the claim above:
+		// Everything in `row` came from the ListQueuedOperationsV2 snapshot at
+		// the top of this cycle, which is read WITHOUT holding r.mu. Two things
+		// can have happened to the row since, and the claim just published is
+		// what makes one re-read here enough to catch both.
 		//
-		//   T0  dispatchCycle reads row X, Params={BookIDs:[A]}
-		//   T1  EnqueueOp merges B -> persists {BookIDs:[A,B]}, hands the
-		//       caller X's op id, so the caller believes B is queued
-		//   T2  this loop reaches X and claims it (X was not yet claimed at T1,
-		//       so tryMergeQueuedParams was right to merge)
-		//   T3  without the re-read below, qr.params is the T0 snapshot [A]
+		// 1. The row is no longer queued. Gate 0 only knows about a run while
+		//    its claim is in r.running, and the claim is released when the run
+		//    ends. So a snapshot taken while the row still read "queued"
+		//    (claimed by the previous cycle, not yet marked running by the
+		//    worker) is stale by the time this loop reaches the row if that run
+		//    has already ended: no claim, and the op is dispatched and RUN A
+		//    SECOND TIME under the same id.
 		//
-		// The run then processes A only. B is never applied, progress reports
-		// "complete" against a total that never counted it, and the DB row
-		// shows [A,B] forever -- a silent drop with a success receipt.
+		//      T0  this cycle lists X (status queued; X is claimed, in nextRun)
+		//      T1  worker picks X up, marks it running, runs it, releases it
+		//      T2  this loop reaches X: Gate 0 finds no claim
+		//      T3  without the status check below, X is sent to a worker again
 		//
-		// The claim is the barrier that makes a plain re-read sufficient:
-		// tryMergeQueuedParams takes r.mu and skips any row already in
-		// r.running, so once the claim above is published no further merge can
-		// touch this row and whatever is in the store now is final. The two
-		// orderings are both safe -- merge-then-claim is caught by this
-		// re-read, claim-then-merge is refused by the merge.
+		//    The window is as wide as the cycle, so it grows with the queue. It
+		//    was caught in CI on 2026-10-03 (one op, two "starting run" lines in
+		//    TestDispatcher_PriorityOrderingHighBeforeLow). The symptom is the
+		//    same as the dedup.book-merge double run in Gate 0's comment, by a
+		//    path Gate 0 cannot see. A row canceled before this re-read was
+		//    dispatched the same way.
 		//
-		// Only defs that actually declare MergeQueuedParams can change while
-		// queued, so every other op keeps the snapshot and costs no extra read.
-		params := json.RawMessage(row.Params)
-		if def.MergeQueuedParams != nil {
-			fresh, freshErr := r.store.GetOperationV2(row.ID)
-			switch {
-			case freshErr != nil:
-				// Fail closed. Running with params we cannot confirm is exactly
-				// the silent drop this guard exists to prevent, and the op is
-				// still queued, so releasing the claim just retries next cycle.
-				r.logger.Warn("registry: re-read queued params failed; releasing claim",
-					"op_id", row.ID, "def_id", row.DefID, "error", freshErr)
-				r.releaseClaim(row.ID, def.Plugin, def.ConcurrencyKey)
-				continue
-			case fresh == nil:
-				// Canceled or deleted between the snapshot and the claim.
-				r.logger.Info("registry: queued op vanished before dispatch; releasing claim",
-					"op_id", row.ID, "def_id", row.DefID)
-				r.releaseClaim(row.ID, def.Plugin, def.ConcurrencyKey)
-				continue
-			default:
-				if fresh.Params != row.Params {
-					r.logger.Info("registry: dispatching merged params captured after snapshot",
-						"op_id", row.ID, "def_id", row.DefID)
-				}
-				params = json.RawMessage(fresh.Params)
-			}
+		//    Nothing can start this row while the claim is held, and a run only
+		//    starts through the worker's queued->running compare-and-set, so
+		//    "queued" now means it has not run. This check is the early exit;
+		//    the worker's compare-and-set is the guarantee (it also covers a
+		//    cancel that lands after this read).
+		//
+		// 2. The params changed. For a def that can absorb a new request into
+		//    an already-queued row, a merge can land between the snapshot and
+		//    the claim:
+		//
+		//      T0  dispatchCycle reads row X, Params={BookIDs:[A]}
+		//      T1  EnqueueOp merges B -> persists {BookIDs:[A,B]}, hands the
+		//          caller X's op id, so the caller believes B is queued
+		//      T2  this loop reaches X and claims it (X was not yet claimed at
+		//          T1, so tryMergeQueuedParams was right to merge)
+		//      T3  without the re-read, qr.params is the T0 snapshot [A]
+		//
+		//    The run then processes A only. B is never applied, progress
+		//    reports "complete" against a total that never counted it, and the
+		//    DB row shows [A,B] forever -- a silent drop with a success receipt.
+		//    tryMergeQueuedParams takes r.mu and skips any row already in
+		//    r.running, so once the claim is published no further merge can
+		//    touch this row: merge-then-claim is caught by this re-read,
+		//    claim-then-merge is refused by the merge.
+		//
+		// Until 2026-10-03 the re-read ran only for defs declaring
+		// MergeQueuedParams, to save the read. It is one point read per
+		// DISPATCHED op, not per queued row per cycle.
+		fresh, freshErr := r.store.GetOperationV2(row.ID)
+		if freshErr != nil {
+			// Fail closed. Running a row we cannot confirm is the double run
+			// and the silent drop this guard exists to prevent; if the op is
+			// still queued, releasing the claim just retries next cycle.
+			r.logger.Warn("registry: re-read of claimed op failed; releasing claim",
+				"op_id", row.ID, "def_id", row.DefID, "error", freshErr)
+			r.releaseClaim(row.ID, def.Plugin, def.ConcurrencyKey)
+			continue
 		}
+		if fresh == nil {
+			// Deleted between the snapshot and the claim.
+			r.logger.Info("registry: queued op vanished before dispatch; releasing claim",
+				"op_id", row.ID, "def_id", row.DefID)
+			r.releaseClaim(row.ID, def.Plugin, def.ConcurrencyKey)
+			continue
+		}
+		if fresh.Status != "queued" {
+			r.logger.Info("registry: stale snapshot, op is no longer queued; releasing claim",
+				"op_id", row.ID, "def_id", row.DefID, "status", fresh.Status)
+			r.releaseClaim(row.ID, def.Plugin, def.ConcurrencyKey)
+			continue
+		}
+		if fresh.Params != row.Params {
+			r.logger.Info("registry: dispatching merged params captured after snapshot",
+				"op_id", row.ID, "def_id", row.DefID)
+		}
+		params := json.RawMessage(fresh.Params)
 
 		qr := &queuedRun{
 			opID:         row.ID,
@@ -275,8 +305,9 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 
 // releaseClaim undoes the accounting published by the claim block in
 // dispatchCycle when the op turns out not to be dispatchable after all (worker
-// channel full, or its params could not be re-read). The op stays queued and is
-// retried on a later cycle.
+// channel full, its row could not be re-read, or the re-read showed it is no
+// longer queued). A row that is still queued is retried on a later cycle; one
+// that is not simply stops appearing in the queue listing.
 //
 // Dropping the stub handle from r.running is the load-bearing part: it is what
 // Gate 0 consults, so leaving it behind makes the op permanently

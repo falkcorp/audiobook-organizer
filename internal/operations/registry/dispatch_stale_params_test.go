@@ -1,9 +1,12 @@
 // file: internal/operations/registry/dispatch_stale_params_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5e18d3b7-0c92-44a6-8f31-b7d260e94a18
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
-// White-box regression tests for the dispatcher's stale-params TOCTOU.
+// White-box regression tests for the dispatcher's stale-snapshot TOCTOU: stale
+// params (below) and, since 2026-10-03, a stale status, where the snapshot still
+// lists a row as queued after its run has ended and the op was run again
+// (TestDispatchCycle_DropsARowThatIsNoLongerQueued).
 //
 // dispatchCycle snapshots every queued row via ListQueuedOperationsV2() WITHOUT
 // holding r.mu, then later claims a row under the lock. For a def that declares
@@ -64,7 +67,7 @@ func mergeableDef(id string) OperationDef {
 }
 
 // plainDef declares no MergeQueuedParams, so its params cannot change while
-// queued and the dispatcher must NOT pay for an extra read.
+// queued. Its STATUS still can, so the dispatcher re-reads it like any other.
 func plainDef(id string) OperationDef {
 	d := mergeableDef(id)
 	d.DisplayName = "Plain Op"
@@ -105,16 +108,20 @@ func TestDispatchCycle_UsesParamsMergedAfterSnapshot(t *testing.T) {
 	}
 }
 
-// TestDispatchCycle_SkipsRereadWhenDefCannotMerge pins the narrowing: a def
-// without MergeQueuedParams has immutable queued params, so GetOperationV2 must
-// not be called at all. mockery fails the test if an unexpected call happens.
-func TestDispatchCycle_SkipsRereadWhenDefCannotMerge(t *testing.T) {
+// TestDispatchCycle_RereadsEveryClaimedRow replaces a test that pinned the
+// opposite: until 2026-10-03 a def without MergeQueuedParams was dispatched
+// straight from the snapshot, on the reasoning that its queued params cannot
+// change. The params cannot, but the STATUS can, and a snapshot that still says
+// "queued" for a row whose run has ended got the op run a second time. The
+// re-read is now unconditional; mockery fails this test if it does not happen.
+func TestDispatchCycle_RereadsEveryClaimedRow(t *testing.T) {
 	store := databasemocks.NewMockOpsV2Store(t)
 	// RegisterOp persists the definition; not what these tests are about.
 	store.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
 	store.EXPECT().ListQueuedOperationsV2().
 		Return([]database.OperationV2Row{queuedRow("op-2", "test.plain", staleParams)}, nil).Once()
-	// Deliberately no GetOperationV2 expectation.
+	fresh := queuedRow("op-2", "test.plain", staleParams)
+	store.EXPECT().GetOperationV2("op-2").Return(&fresh, nil).Once()
 
 	r := New(store, slog.Default(), 1, nil)
 	require.NoError(t, r.RegisterOp(plainDef("test.plain")))
@@ -126,6 +133,40 @@ func TestDispatchCycle_SkipsRereadWhenDefCannotMerge(t *testing.T) {
 		require.JSONEq(t, staleParams, string(qr.params))
 	default:
 		t.Fatal("nothing was dispatched")
+	}
+}
+
+// TestDispatchCycle_DropsARowThatIsNoLongerQueued is the double-run guard at
+// the unit level: the snapshot lists the row as queued, the store says its run
+// has ended (or it was canceled, or it is running with its claim released just
+// before the terminal write). Nothing may be dispatched and the claim must be
+// released, or the op is stranded behind Gate 0.
+func TestDispatchCycle_DropsARowThatIsNoLongerQueued(t *testing.T) {
+	for _, status := range []string{
+		"completed", "failed", "canceled", "timeout", "running",
+		"interrupted_quiesced", "interrupted_dropped", "waiting_deps",
+	} {
+		t.Run(status, func(t *testing.T) {
+			store := databasemocks.NewMockOpsV2Store(t)
+			store.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
+			store.EXPECT().ListQueuedOperationsV2().
+				Return([]database.OperationV2Row{queuedRow("op-5", "test.plain", staleParams)}, nil).Once()
+			fresh := queuedRow("op-5", "test.plain", staleParams)
+			fresh.Status = status
+			store.EXPECT().GetOperationV2("op-5").Return(&fresh, nil).Once()
+
+			r := New(store, slog.Default(), 1, nil)
+			require.NoError(t, r.RegisterOp(plainDef("test.plain")))
+
+			r.dispatchCycle(context.Background())
+
+			select {
+			case qr := <-r.nextRun:
+				t.Fatalf("dispatched op %s whose row reads %q: it would run again", qr.opID, status)
+			default:
+			}
+			requireClaimReleased(t, r, "op-5", "test")
+		})
 	}
 }
 

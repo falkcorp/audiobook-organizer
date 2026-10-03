@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package registry_test
 
@@ -216,6 +216,185 @@ func TestDispatcher_PriorityOrderingHighBeforeLow(t *testing.T) {
 	}
 	if order[0] != "test.prio-high" {
 		t.Errorf("expected high-priority op first, got order %v", order)
+	}
+}
+
+// staleSnapshotStore hands the dispatcher a queue snapshot that is out of
+// date: the rows in `stale` are listed as queued on every cycle no matter what
+// the store says about them now. That is the dispatcher's real situation when
+// a row's run ends between the cycle's ListQueuedOperationsV2 read and the
+// loop reaching that row; pinning the snapshot makes the window permanent
+// instead of a few microseconds wide.
+type staleSnapshotStore struct {
+	*fakeStore
+	staleMu sync.Mutex
+	stale   []database.OperationV2Row
+	lists   atomic.Int64
+}
+
+func (s *staleSnapshotStore) ListQueuedOperationsV2() ([]database.OperationV2Row, error) {
+	s.lists.Add(1)
+	s.staleMu.Lock()
+	defer s.staleMu.Unlock()
+	return append([]database.OperationV2Row(nil), s.stale...), nil
+}
+
+// listAsQueued adds row to the pinned snapshot with status "queued".
+func (s *staleSnapshotStore) listAsQueued(row database.OperationV2Row) {
+	row.Status = "queued"
+	s.staleMu.Lock()
+	defer s.staleMu.Unlock()
+	s.stale = append(s.stale, row)
+}
+
+// awaitCycles blocks until the dispatcher has COMPLETED n more cycles. Cycles
+// run one after another on a single goroutine, so once list call k+n+1 has
+// started, the n cycles before it have processed every row they listed.
+func (s *staleSnapshotStore) awaitCycles(t *testing.T, n int64) {
+	t.Helper()
+	target := s.lists.Load() + n + 1
+	deadline := time.Now().Add(10 * time.Second)
+	for s.lists.Load() < target {
+		if time.Now().After(deadline) {
+			t.Fatalf("dispatcher ran %d list calls, wanted %d", s.lists.Load(), target)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestDispatcher_StaleSnapshotDoesNotRunAnOpAgain is the regression test for
+// an op being run twice under one id. The dispatcher's snapshot says the row
+// is queued; the store says it already finished (or was canceled, or is
+// running with its claim just released). Before the post-claim status check
+// each of these was sent to a worker and Run was invoked.
+func TestDispatcher_StaleSnapshotDoesNotRunAnOpAgain(t *testing.T) {
+	for _, now := range []string{"completed", "failed", "canceled", "running"} {
+		t.Run(now, func(t *testing.T) {
+			ctx := t.Context()
+			base := newFakeStore()
+			store := &staleSnapshotStore{fakeStore: base}
+			r := registry.New(store, slog.Default(), 2, nil)
+
+			var runs atomic.Int64
+			def := makeValidDef("test.stale")
+			// A key and a plugin cap of one: a claim that is not released
+			// would block every later cycle and show up as a hang, not a pass.
+			def.ConcurrencyKey = "stale-key"
+			def.Run = func(context.Context, json.RawMessage, registry.Reporter) error {
+				runs.Add(1)
+				return nil
+			}
+			if err := r.RegisterOp(def); err != nil {
+				t.Fatalf("RegisterOp: %v", err)
+			}
+			r.SetPluginMaxConcurrent(def.Plugin, 1)
+
+			// Start first: a row already "running" at Start is an orphan from a
+			// previous process and the startup sweep would resolve it.
+			r.Start(ctx)
+			row := database.OperationV2Row{
+				ID: "op-stale", DefID: def.ID, Plugin: def.Plugin,
+				Status: now, QueuedAt: time.Now().UTC(),
+			}
+			base.insertQueuedAtomic(row)
+			store.listAsQueued(row)
+			store.awaitCycles(t, 3)
+
+			if got := runs.Load(); got != 0 {
+				t.Fatalf("an op whose row reads %q was run %d time(s) from a stale queue snapshot", now, got)
+			}
+			if got := base.statusOf("op-stale"); got != now {
+				t.Fatalf("row status changed from %q to %q", now, got)
+			}
+
+			// The claim taken for the stale row was released: a really queued
+			// op behind the same key and plugin cap still runs.
+			live := database.OperationV2Row{
+				ID: "op-live", DefID: def.ID, Plugin: def.Plugin,
+				Status: "queued", QueuedAt: time.Now().UTC(),
+			}
+			base.insertQueuedAtomic(live)
+			store.listAsQueued(live)
+			awaitStatus(t, base, "op-live", "completed", 10*time.Second)
+			store.awaitCycles(t, 3)
+			if got := runs.Load(); got != 1 {
+				t.Fatalf("expected exactly one run (op-live), got %d", got)
+			}
+		})
+	}
+}
+
+// refuseRunningStore fails the worker's queued->running write for one op id,
+// every time. Before the worker made that write a compare-and-set it logged the
+// failure and ran the op anyway; the row then read "queued" through the whole
+// run and was dispatched again as soon as the run released its claim.
+type refuseRunningStore struct {
+	*fakeStore
+	refuse   string
+	attempts atomic.Int64
+}
+
+func (s *refuseRunningStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, error) {
+	if id == s.refuse && newStatus == "running" {
+		s.attempts.Add(1)
+		return false, context.DeadlineExceeded
+	}
+	return s.fakeStore.SetOperationV2StatusIfQueued(id, newStatus)
+}
+
+// TestWorker_DoesNotRunAnOpItCouldNotMarkRunning: an op whose "running" write
+// keeps failing is never run (it used to run once per dispatch cycle), stays
+// queued, and does not hold up another op behind the same concurrency key.
+func TestWorker_DoesNotRunAnOpItCouldNotMarkRunning(t *testing.T) {
+	ctx := t.Context()
+	base := newFakeStore()
+	store := &refuseRunningStore{fakeStore: base, refuse: "op-refused"}
+	r := registry.New(store, slog.Default(), 2, nil)
+
+	// Two defs behind one concurrency key, so each op's runs are counted apart.
+	var ranRefused, ranOK atomic.Int64
+	mk := func(id string, n *atomic.Int64) registry.OperationDef {
+		d := makeValidDef(id)
+		d.ConcurrencyKey = "refused-key"
+		d.Run = func(context.Context, json.RawMessage, registry.Reporter) error {
+			n.Add(1)
+			return nil
+		}
+		return d
+	}
+	refused, ok := mk("test.refused", &ranRefused), mk("test.ok", &ranOK)
+	for _, d := range []registry.OperationDef{refused, ok} {
+		if err := r.RegisterOp(d); err != nil {
+			t.Fatalf("RegisterOp: %v", err)
+		}
+	}
+	r.Start(ctx)
+
+	now := time.Now().UTC()
+	base.insertQueuedAtomic(
+		database.OperationV2Row{ID: "op-refused", DefID: refused.ID, Plugin: refused.Plugin, Status: "queued", QueuedAt: now},
+		database.OperationV2Row{ID: "op-ok", DefID: ok.ID, Plugin: ok.Plugin, Status: "queued", QueuedAt: now.Add(time.Second)},
+	)
+
+	awaitStatus(t, base, "op-ok", "completed", 10*time.Second)
+	// Several attempts on the refused op have happened by the time it has been
+	// tried three times; none may have reached Run.
+	deadline := time.Now().Add(10 * time.Second)
+	for store.attempts.Load() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the refused op was offered to a worker only %d time(s)", store.attempts.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	if got := ranRefused.Load(); got != 0 {
+		t.Fatalf("an op that could not be marked running was run %d time(s)", got)
+	}
+	if got := ranOK.Load(); got != 1 {
+		t.Fatalf("op-ok ran %d time(s), want 1", got)
+	}
+	if got := base.statusOf("op-refused"); got != "queued" {
+		t.Fatalf("refused op status = %q, want it left queued for a retry", got)
 	}
 }
 
