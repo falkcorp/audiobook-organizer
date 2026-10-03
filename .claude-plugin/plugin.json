@@ -1,6 +1,6 @@
 {
   "name": "audiobook-organizer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Expert Claude Code assistance for the audiobook-organizer codebase — shared context loading, Go/DB/docs/PII specialist agents.",
   "author": {
     "name": "audiobook-organizer contributors",
