@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-10-03
 
@@ -699,10 +699,11 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	weakFolder := folder != "" && folderSrc == junkSrcFilename && isWeakFileStem(folder)
 
 	spoken, _ := accept(transcribed, junkSrcTranscribed)
-	candidate := ""
+	candidate, refusedCandidate := "", ""
 	if t, score, ok := f.candidateTitle(b.ID, author); ok {
 		switch {
 		case embedded && !titleAgreesWithAny(t, agreeWith):
+			refusedCandidate = t
 			refused = append(refused, fmt.Sprintf("candidate %q (score %.2f) disagrees with the title's own evidence", t, score))
 		default:
 			candidate, _ = accept(t, junkSrcCandidate)
@@ -751,6 +752,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	// picking one would write the other's mistake half the time.
 	type evidence struct{ source, title string }
 	var pathEv []evidence
+	outvoted := "" // a transcription the path and the provider's title overruled
 	if stripped != "" {
 		pathEv = append(pathEv, evidence{junkSrcStripped, stripped})
 	}
@@ -770,16 +772,61 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		for i := range pathEv {
 			pathTitles[i] = pathEv[i].title
 		}
+		// The one exception: a transcription that disagrees with the path is
+		// overruled when the provider recorded EXACTLY the path's title (same
+		// letters and digits). The provider value is not an independent
+		// identification of the file: the fetch searched on the path-derived
+		// title, so its answer is an echo of that query. What the echo does
+		// prove is that a catalog work with that spelling exists, which is the
+		// evidence that separates a real title from a transcription that
+		// misheard it ("Hildiggers" for "Hilldiggers"), appended the series
+		// ("Polity Agent An Agent Cormac novel") or caught a fragment ("ated").
+		// 32 number-leading books on prod sat in needs-manual for exactly this,
+		// 2026-10-03. The proposal is the one the fixer would have made with no
+		// transcription at all; what is given up is the warning, so the row is
+		// never low risk and the reason names what was overruled.
+		//
+		// Exact, not titleAgreesWithAny: its "plus a subtitle" form is the shape
+		// of the first-book-of-the-series wrong hit (folder "Mistborn", provider
+		// "Mistborn: The Final Empire", transcription "The Well of Ascension"),
+		// where the transcription is the only source that has the book right.
+		//
+		// And not when the transcription has support of its own: a refused
+		// candidate that agrees with it, or a book this author already has under
+		// that very title. Then it is not a mishearing, it says the file may be
+		// mislabelled, and the conflict stands.
+		providerBacksPath := false
+		if provided != "" {
+			pk := junkLettersKey(provided)
+			for _, pt := range pathTitles {
+				if pk != "" && pk == junkLettersKey(pt) {
+					providerBacksPath = true
+				}
+			}
+		}
+		spokenHasSupport := spoken != "" &&
+			((refusedCandidate != "" && titleAgreesWithAny(refusedCandidate, []string{spoken})) ||
+				idx.titles[junkTitleKey(b.AuthorID, spoken)])
 		for _, other := range []evidence{{junkSrcTranscribed, spoken}, {junkSrcCandidate, candidate}, {junkSrcProvider, provided}} {
 			if other.title == "" || titleAgreesWithAny(other.title, pathTitles) {
+				continue
+			}
+			if other.source == junkSrcTranscribed && providerBacksPath && !spokenHasSupport {
+				outvoted, spoken = spoken, ""
 				continue
 			}
 			var sides []string
 			for _, e := range pathEv {
 				sides = append(sides, fmt.Sprintf("%s %q", e.source, e.title))
 			}
-			return finish(junkSkipNeedsManual, fmt.Sprintf("conflicting evidence: %s vs %s %q",
-				strings.Join(sides, ", "), other.source, other.title))
+			why := fmt.Sprintf("conflicting evidence: %s vs %s %q", strings.Join(sides, ", "), other.source, other.title)
+			if outvoted != "" {
+				why += fmt.Sprintf(" (and %s %q)", junkSrcTranscribed, outvoted)
+			}
+			if other.source == junkSrcTranscribed && refusedCandidate != "" && titleAgreesWithAny(refusedCandidate, []string{other.title}) {
+				why += fmt.Sprintf(", which the candidate %q agrees with", refusedCandidate)
+			}
+			return finish(junkSkipNeedsManual, why)
 		}
 	}
 
@@ -873,10 +920,16 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	if providerRefusal != "" {
 		r.Reason += "; not used: " + providerRefusal
 	}
+	if outvoted != "" {
+		r.Risk = repairs.RiskReview
+		r.Reason += fmt.Sprintf("; the transcription %q disagrees and was overruled: a provider recorded exactly the path's title", outvoted)
+	}
 	r.Detail = &junkDecision{bookID: b.ID, oldTitle: b.Title, newTitle: best.title}
 	// The provider's recorded title is an input: one that appears or changes
 	// between plan and apply is a different decision.
-	r.Fingerprint = junkFingerprint(r, string(kind)+"|"+best.source+"|"+fetchedTitle)
+	// So is a transcription that was overruled: one that changes may no longer
+	// be overruled, or may now agree.
+	r.Fingerprint = junkFingerprint(r, string(kind)+"|"+best.source+"|"+fetchedTitle+"|"+outvoted)
 	return r, nil
 }
 

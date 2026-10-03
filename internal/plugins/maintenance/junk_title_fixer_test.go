@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
 // last-edited: 2026-10-03
 
@@ -186,6 +186,37 @@ func newJunkLib(t *testing.T) *junkLib {
 	// a catalog title's bracketed edition marker is dropped, the title kept
 	withFetched("provider-format", "read by narrator", `"Probe Title (Unabridged)"`, "Author A", a,
 		"/lib/Author A/Probe Title/01.mp3", "/lib/Author A/Probe Title/02.mp3")
+	// The path and the provider agree exactly; the transcription misheard the
+	// name: the transcription is overruled.
+	withFetched("provider-outvotes", "20 - Hilldiggers", `"Hilldiggers"`, "", nil, "/lib/Author X/20 - Hilldiggers.m4b")
+	// …also for a credit title whose folder and author-gated provider agree
+	withFetched("provider-outvotes-folder", "read by narrator", `"Line of Polity"`, "Author A", a,
+		"/lib/Author A/Line of Polity/01.mp3", "/lib/Author A/Line of Polity/02.mp3")
+	// the same disagreement with no provider on record stays a conflict
+	add("no-provider-conflict", "21 - Line War", "/lib/Author Y/21 - Line War.m4b", nil, nil, "/lib/Author Y/21 - Line War.m4b")
+	// the provider names the series' first book, the path only the series:
+	// the transcription is the one source that has the book right
+	withFetched("provider-series-hit", "03 - Mistborn", `"Mistborn: The Final Empire"`, "", nil, "/lib/Author S/03 - Mistborn.m4b")
+	withFetched("provider-series-hit-folder", "read by narrator", `"Mistborn: The Final Empire"`, "Author A", a,
+		"/lib/Author A/Mistborn/01.mp3", "/lib/Author A/Mistborn/02.mp3")
+	// a refused candidate sides with the transcription: two against the path
+	withFetched("provider-vs-two", "03 - Gridlinked", `"Gridlinked"`, "", a, "/lib/Shelf G/03 - Gridlinked.m4b")
+	cacheRaw := `{"title":"The Line of Polity","author":"Author A","score":0.95}`
+	require.NoError(t, st.PutMetadataCache(&database.MetadataCandidateCache{BookID: lib.ids["provider-vs-two"], FetchedAt: time.Now(),
+		Candidates: []json.RawMessage{json.RawMessage(cacheRaw)}}))
+	// the transcription names a book this author already has
+	add("owned-title", "Brass Man", "/lib/Shelf O/Brass Man.m4b", a, nil, "/lib/Shelf O/Brass Man.m4b")
+	withFetched("provider-vs-owned", "05 - Polity Agent", `"Polity Agent"`, "", a, "/lib/Shelf P/05 - Polity Agent.m4b")
+	// an owner-manual transcription is never overruled into a proposal
+	withFetched("provider-vs-owner", "06 - Plain Title", `"Plain Title"`, "", nil, "/lib/Author T/06 - Plain Title.m4b")
+	for name, heard := range map[string]string{
+		"provider-outvotes": "Hildiggers", "provider-outvotes-folder": "Lime of Polly Tea", "no-provider-conflict": "Lime Wart",
+		"provider-series-hit": "The Hero of Ages", "provider-series-hit-folder": "The Well of Ascension",
+		"provider-vs-two": "The Line of Polity", "provider-vs-owned": "Brass Man", "provider-vs-owner": "Doctor Who: The Daleks",
+	} {
+		_, err := st.ModifyBook(lib.ids[name], func(b *database.Book) error { b.TranscribedTitle = &heard; return nil })
+		require.NoError(t, err)
+	}
 	// A bare unpadded number beside other books of its author may be the
 	// real title: needs a person, never a (possible) fragment.
 	add("bare13", "13", "/lib/Author A/13.m4b", a, nil, "/lib/Author A/13.m4b")
@@ -244,6 +275,9 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		"provider-near-equal": "to Yuma",
 		"provider-unreadable": "Null Book",
 		"provider-format":     "Probe Title",
+		// path + provider outvote a transcription that disagrees
+		"provider-outvotes":        "Hilldiggers",
+		"provider-outvotes-folder": "Line of Polity",
 	}
 	for name, want := range applicable {
 		r, ok := rows[name]
@@ -276,6 +310,16 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 	require.Contains(t, rows["provider-no-author"].Reason, "proposed from folder")
 	require.Contains(t, rows["provider-no-author"].Reason, `not used: provider value "Marvel Comics" was not recorded under this book's author`)
 	require.Contains(t, rows["provider-format"].Reason, "proposed from provider_value")
+	// Overruling a transcription is said in the reason and is never low risk.
+	for name, heard := range map[string]string{"provider-outvotes": "Hildiggers", "provider-outvotes-folder": "Lime of Polly Tea"} {
+		require.Equal(t, repairs.RiskReview, rows[name].Risk, name)
+		require.Contains(t, rows[name].Reason, fmt.Sprintf("the transcription %q disagrees and was overruled", heard), name)
+	}
+	// Every limit of the rule is still a conflict.
+	for _, name := range []string{"no-provider-conflict", "provider-series-hit", "provider-series-hit-folder", "provider-vs-two", "provider-vs-owned"} {
+		require.Contains(t, rows[name].SkipReason, "conflicting evidence", name)
+	}
+	require.Contains(t, rows["provider-vs-two"].SkipReason, `which the candidate "The Line of Polity" agrees with`)
 	require.Equal(t, repairs.RiskLow, rows["prefix"].Risk)
 	require.Contains(t, rows["eldest-prefix"].Reason, "title_prefix_stripped")
 	require.NotContains(t, rows["eldest-prefix"].Reason, "Eragon")
@@ -288,19 +332,25 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		"dup":           junkSkipPossibleFragment,
 		"eldest98":      junkSkipPossibleFragment,
 		// proven: another book owns one of its files
-		"owned":             junkSkipFragment,
-		"owner-proposal":    repairs.SkipOwnerManual,
-		"provider-conflict": junkSkipNeedsManual,
-		"bare13":            junkSkipNeedsManual,
-		"unabridged":        junkSkipNeedsManual,
-		"transcribed":       junkSkipNeedsManual,
-		"generic":           junkSkipNeedsManual,
-		"locked":            junkSkipUserLocked,
-		"manual":            junkSkipNeedsManual,
-		"person":            junkSkipNeedsManual,
-		"bf-title":          repairs.SkipOwnerManual,
-		"itunes":            repairs.SkipITunes,
-		"dw-series":         repairs.SkipOwnerManual,
+		"owned":                      junkSkipFragment,
+		"owner-proposal":             repairs.SkipOwnerManual,
+		"provider-conflict":          junkSkipNeedsManual,
+		"no-provider-conflict":       junkSkipNeedsManual,
+		"provider-series-hit":        junkSkipNeedsManual,
+		"provider-series-hit-folder": junkSkipNeedsManual,
+		"provider-vs-two":            junkSkipNeedsManual,
+		"provider-vs-owned":          junkSkipNeedsManual,
+		"provider-vs-owner":          repairs.SkipOwnerManual,
+		"bare13":                     junkSkipNeedsManual,
+		"unabridged":                 junkSkipNeedsManual,
+		"transcribed":                junkSkipNeedsManual,
+		"generic":                    junkSkipNeedsManual,
+		"locked":                     junkSkipUserLocked,
+		"manual":                     junkSkipNeedsManual,
+		"person":                     junkSkipNeedsManual,
+		"bf-title":                   repairs.SkipOwnerManual,
+		"itunes":                     repairs.SkipITunes,
+		"dw-series":                  repairs.SkipOwnerManual,
 	}
 	for name, want := range skipped {
 		r, ok := rows[name]
