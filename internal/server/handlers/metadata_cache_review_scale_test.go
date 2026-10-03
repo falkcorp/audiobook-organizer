@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_review_scale_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f7b2d90-5c1e-4a86-9e43-8b6d1f0c2a75
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package handlers
 
@@ -183,9 +183,9 @@ func TestReviewSnapshot_MatchesTheLegacyLoader(t *testing.T) {
 	require.NoError(t, err)
 	set, err := loadCacheRows(ctx, store, svc)
 	require.NoError(t, err)
-	snap, err := buildReviewSnapshot(ctx, store, svc)
+	snap, err := newReviewSnapshotBuilder(store, svc).build(ctx, nil)
 	require.NoError(t, err)
-	require.Equal(t, wantOrphaned, snap.orphaned)
+	require.Equal(t, wantOrphaned, snap.orphaned())
 	require.Len(t, set.rows, len(want))
 	require.Len(t, snap.rows, len(want))
 	legacyFiltered := 0
@@ -370,7 +370,7 @@ func BenchmarkReviewLoad(b *testing.B) {
 			var before, after runtime.MemStats
 			runtime.GC()
 			runtime.ReadMemStats(&before)
-			snap, err := buildReviewSnapshot(ctx, store, svc)
+			snap, err := newReviewSnapshotBuilder(store, svc).build(ctx, nil)
 			require.NoError(b, err)
 			runtime.GC()
 			runtime.ReadMemStats(&after)

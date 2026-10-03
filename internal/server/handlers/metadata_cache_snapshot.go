@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_snapshot.go
-// version: 1.4.0
+// version: 2.0.0
 // guid: 9d3c7a51-2e6b-4f08-b4a9-7c1e5f2d8a36
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package handlers
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -20,9 +21,11 @@ import (
 //
 // The snapshot is the expensive, cache-derived half of the review listing
 // (cache reads, the legacy candidate filter, the search-title resolver, file
-// facts, the candidate decode). Every request re-reads the books themselves
-// (overlayLiveBooks), so review status, applied, "no match" and deleted books
-// are always live; only what the snapshot derived can lag.
+// facts, the candidate decode), plus every row's book as read when the build
+// began. A request re-reads only the books the library change log says were
+// written since (overlayLiveBooks, database.BooksChangedSince), so review
+// status, applied, "no match" and deleted books are always live; only what the
+// snapshot derived from the cache can lag.
 //
 // The snapshot goes out of date, and the next request is served it while a
 // background rebuild runs (stale-while-revalidate), when:
@@ -31,7 +34,8 @@ import (
 //     (database.PebbleStore.MetadataCacheGeneration, which every writer of the
 //     keyspace moves, including UpdateBook's identity-change delete) -- the
 //     normal trigger, so paging an unchanged cache rebuilds nothing;
-//   - a handler action marked it (apply dispatch, clear no-match);
+//   - a handler action marked it (apply dispatch, clear no-match), or an
+//     overlay found more changed books than it will read per request;
 //   - nobody asked for reviewSnapshotIdleMark: the next visit after a long
 //     idle is served the old snapshot at once and refreshes it, rather than
 //     waiting for a cold build;
@@ -39,18 +43,38 @@ import (
 //     counter cannot see: a retitle or a file change that alters a row's
 //     searchability or runtime without touching the cache.
 //
-// A build allocates on the order of a GB at production scale, so none of these
-// rebuilds on a timer -- a rebuild only follows a request that found the
-// snapshot out of date -- and no rebuild starts within reviewSnapshotMinInterval
-// of the last one began (a fetch op Puts continuously; the snapshot is served
-// meanwhile). After a failed build no new build starts for
-// reviewSnapshotFailBackoff. Every build, cold or background, runs on a
-// goroutine the server tracks (spawn) under its lifetime context.
+// A rebuild is INCREMENTAL when it can be (reviewSnapshotBuilder.build): the
+// two change logs name the cache rows and books written since the previous
+// snapshot's build began, only those rows are re-read, and every other row is
+// carried over. An apply op deletes one cache row per book it applies, so on
+// production every rebuild used to be a full one (56k rows, ~1 GB allocated,
+// every 45 s for as long as the op ran); an incremental one re-reads the
+// handful of rows that moved. A full build still runs when there is no
+// previous snapshot, when a log cannot name the change (a Reset, a log
+// overrun, a generation bumped without a record), or when the previous
+// snapshot's FULL build is older than reviewSnapshotMaxAge -- an incremental
+// snapshot inherits the builtAt of the last full build, so the age net still
+// catches what neither log records.
+//
+// None of these rebuilds on a timer -- a rebuild only follows a request that
+// found the snapshot out of date -- and no rebuild starts within
+// reviewSnapshotMinInterval of the last one began (a fetch op Puts
+// continuously; the snapshot is served meanwhile). After a failed build no new
+// build starts for reviewSnapshotFailBackoff. Every build, cold or background,
+// runs on a goroutine the server tracks (spawn) under its lifetime context.
 const (
 	reviewSnapshotMaxAge      = 30 * time.Minute
 	reviewSnapshotIdleMark    = 15 * time.Minute
 	reviewSnapshotMinInterval = 45 * time.Second
 	reviewSnapshotFailBackoff = 30 * time.Second
+	// reviewSnapshotIncrementalMax is the share of the previous snapshot's rows
+	// past which an incremental build is not worth it: re-reading that many
+	// rows by id costs more than one key-range scan of the whole cache.
+	reviewSnapshotIncrementalMax = 0.5
+	// overlayRebuildThreshold is how many changed books a request will re-read
+	// before it asks for a rebuild instead: the per-request cost stays
+	// bounded, and the rebuilt snapshot carries the new books.
+	overlayRebuildThreshold = 2000
 )
 
 // snapshotRow is one loaded cache row plus the per-row work every review
@@ -69,51 +93,228 @@ type snapshotRow struct {
 
 // reviewSnapshot is never mutated after it is published.
 type reviewSnapshot struct {
-	builtAt  time.Time
-	rows     []snapshotRow
-	orphaned int
-	// cacheGen and invalGen are the write counter and the invalidation
-	// counter read when this snapshot's build BEGAN: a write that raced the
-	// build may not be in it, so it must still count as newer.
+	// builtAt is when the last FULL build ran; an incremental build inherits
+	// it, so reviewSnapshotMaxAge measures from the last full read of the
+	// cache.
+	builtAt time.Time
+	// rows is every cache row whose book resolved when the row was last read,
+	// ordered FetchedAt descending, BookID ascending (ListMetadataCacheKeys'
+	// order, which the page's grouping and paging depend on).
+	rows []snapshotRow
+	// books is the book of every row as read when the row was last read; the
+	// overlay replaces the ones written since (BooksChangedSince).
+	books map[string]*database.Book
+	// orphanIDs is every cache row whose book did not resolve.
+	orphanIDs map[string]struct{}
+	// cacheGen and bookGen are the metadata-cache and library generations read
+	// when this snapshot's build BEGAN: a write that raced the build may not
+	// be in it, so it must still count as newer, and the next build (or the
+	// overlay) asks the change logs what moved after them. invalGen is the
+	// invalidation counter read then.
 	cacheGen uint64
+	bookGen  uint64
 	invalGen uint64
+	// incremental records how this snapshot was built, for the build log line
+	// and the tests.
+	incremental bool
 }
 
-func buildReviewSnapshot(ctx context.Context, store cacheRowBookReader, svc cacheRowCandidateReader) (*reviewSnapshot, error) {
-	set, err := loadCacheRows(ctx, store, svc)
+// orphaned counts the cache rows whose book did not resolve.
+func (s *reviewSnapshot) orphaned() int { return len(s.orphanIDs) }
+
+// changedSinceFunc is database.BooksChangedSince / MetadataCacheChangedSince:
+// the ids written after gen, the generation that brings a reader up to date,
+// and whether the list is complete.
+type changedSinceFunc func(gen uint64) (ids []string, upTo uint64, ok bool)
+
+// reviewSnapshotBuilder builds review snapshots, incrementally when it can.
+type reviewSnapshotBuilder struct {
+	store cacheRowBookReader
+	svc   cacheRowCandidateReader
+	// cacheGen and bookGen read the two generations; nil reads 0.
+	cacheGen func() uint64
+	bookGen  func() uint64
+	// cacheChangedSince and booksChangedSince are the two change logs; nil
+	// (a store without one) means every build is full.
+	cacheChangedSince changedSinceFunc
+	booksChangedSince changedSinceFunc
+	maxAge            time.Duration
+	now               func() time.Time
+}
+
+func newReviewSnapshotBuilder(store cacheRowBookReader, svc cacheRowCandidateReader) *reviewSnapshotBuilder {
+	return &reviewSnapshotBuilder{store: store, svc: svc, maxAge: reviewSnapshotMaxAge, now: time.Now}
+}
+
+func readGen(f func() uint64) uint64 {
+	if f == nil {
+		return 0
+	}
+	return f()
+}
+
+// build returns a new snapshot: incremental over prev when prev exists, its
+// last full build is within maxAge, and both change logs can name what was
+// written since prev's generations (and it is less than
+// reviewSnapshotIncrementalMax of prev's rows); else a full build. The
+// generations are read at the BEGIN of the build, before any row.
+func (b *reviewSnapshotBuilder) build(ctx context.Context, prev *reviewSnapshot) (*reviewSnapshot, error) {
+	if prev != nil && b.cacheChangedSince != nil && b.booksChangedSince != nil && b.now().Sub(prev.builtAt) <= b.maxAge {
+		cacheIDs, cacheUpTo, cacheOK := b.cacheChangedSince(prev.cacheGen)
+		bookIDs, bookUpTo, bookOK := b.booksChangedSince(prev.bookGen)
+		if cacheOK && bookOK {
+			affected := make(map[string]struct{}, len(cacheIDs)+len(bookIDs))
+			for _, id := range cacheIDs {
+				affected[id] = struct{}{}
+			}
+			for _, id := range bookIDs {
+				// A book write matters only to a row or an orphan: a book with
+				// no cache row gets one only through a cache write, which the
+				// cache log names.
+				if _, isRow := prev.books[id]; isRow {
+					affected[id] = struct{}{}
+				} else if _, isOrphan := prev.orphanIDs[id]; isOrphan {
+					affected[id] = struct{}{}
+				}
+			}
+			if float64(len(affected)) <= reviewSnapshotIncrementalMax*float64(len(prev.rows)) {
+				return b.buildIncremental(ctx, prev, affected, cacheUpTo, bookUpTo)
+			}
+		}
+	}
+	return b.buildFull(ctx)
+}
+
+// buildFull reads every cache row.
+func (b *reviewSnapshotBuilder) buildFull(ctx context.Context) (*reviewSnapshot, error) {
+	cacheGen, bookGen := readGen(b.cacheGen), readGen(b.bookGen)
+	set, err := loadCacheRows(ctx, b.store, b.svc)
 	if err != nil {
 		return nil, err
 	}
-	snap := &reviewSnapshot{builtAt: time.Now(), rows: make([]snapshotRow, len(set.rows)), orphaned: set.orphaned}
-	undecodable := 0
-	var firstUndecodable string
+	snap := &reviewSnapshot{
+		builtAt:   b.now(),
+		rows:      make([]snapshotRow, len(set.rows)),
+		books:     make(map[string]*database.Book, len(set.rows)),
+		orphanIDs: make(map[string]struct{}, len(set.orphanIDs)),
+		cacheGen:  cacheGen, bookGen: bookGen,
+	}
+	for _, id := range set.orphanIDs {
+		snap.orphanIDs[id] = struct{}{}
+	}
+	var dec decodeTally
 	for i, r := range set.rows {
-		sr := snapshotRow{loadedCacheRow: r}
-		if r.first != nil {
-			var cand metafetch.MetadataCandidate
-			if derr := json.Unmarshal(r.first, &cand); derr != nil {
-				sr.decodeErr = derr
-				undecodable++
-				if firstUndecodable == "" {
-					firstUndecodable = r.sum.BookID
-				}
-			} else {
-				sr.cand = &cand
-				sr.hash = metafetch.CandidateHash(cand)
-			}
-		}
-		// Neither is read after this point: the decoded candidate replaces
-		// the raw one, and the overlay replaces the book.
-		sr.first = nil
-		sr.book = nil
-		snap.rows[i] = sr
+		snap.books[r.sum.BookID] = r.book
+		snap.rows[i] = dec.row(r)
 	}
-	if undecodable > 0 {
-		// One line per build, not one per row: the same rows fail on every
-		// rebuild, and the review summary already counts them (`errors`).
-		metadataCacheLog.Warn("review snapshot: %d stored candidates will not decode (first: bookID=%s); counted under errors", undecodable, firstUndecodable)
-	}
+	dec.log()
 	return snap, nil
+}
+
+// buildIncremental re-reads only the affected ids and carries every other row
+// of prev over. A re-read row whose entry is gone is dropped; one whose book
+// is gone becomes an orphan; an orphan whose book is back becomes a row; a
+// row whose entry read failed keeps what prev had. The rows are re-sorted
+// into ListMetadataCacheKeys' order. builtAt is prev's: the age net measures
+// from the last full build.
+func (b *reviewSnapshotBuilder) buildIncremental(ctx context.Context, prev *reviewSnapshot, affected map[string]struct{}, cacheGen, bookGen uint64) (*reviewSnapshot, error) {
+	ids := make([]string, 0, len(affected))
+	for id := range affected {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids) // deterministic read order
+	load, err := loadCacheRowsByID(ctx, b.store, b.svc, ids)
+	if err != nil {
+		return nil, err
+	}
+	snap := &reviewSnapshot{
+		builtAt:     prev.builtAt,
+		rows:        make([]snapshotRow, 0, len(prev.rows)+len(load.rows)),
+		books:       make(map[string]*database.Book, len(prev.books)+len(load.rows)),
+		orphanIDs:   make(map[string]struct{}, len(prev.orphanIDs)+len(load.orphanIDs)),
+		cacheGen:    cacheGen,
+		bookGen:     bookGen,
+		incremental: true,
+	}
+	failed := make(map[string]struct{}, len(load.failedIDs))
+	for _, id := range load.failedIDs {
+		failed[id] = struct{}{}
+	}
+	keep := func(id string) bool {
+		if _, hit := affected[id]; !hit {
+			return true
+		}
+		_, f := failed[id]
+		return f
+	}
+	for _, r := range prev.rows {
+		if keep(r.sum.BookID) {
+			snap.rows = append(snap.rows, r)
+			snap.books[r.sum.BookID] = prev.books[r.sum.BookID]
+		}
+	}
+	for id := range prev.orphanIDs {
+		if keep(id) {
+			snap.orphanIDs[id] = struct{}{}
+		}
+	}
+	for _, id := range load.orphanIDs {
+		snap.orphanIDs[id] = struct{}{}
+	}
+	var dec decodeTally
+	for _, r := range load.rows {
+		snap.books[r.sum.BookID] = r.book
+		snap.rows = append(snap.rows, dec.row(r))
+	}
+	dec.log()
+	if len(load.failedIDs) > 0 {
+		metadataCacheLog.Warn("review snapshot: %d cache row reads failed (first: bookID=%s); those rows were carried over unchanged", len(load.failedIDs), load.failedIDs[0])
+	}
+	sort.SliceStable(snap.rows, func(i, j int) bool {
+		a, c := snap.rows[i].sum, snap.rows[j].sum
+		if !a.FetchedAt.Equal(c.FetchedAt) {
+			return a.FetchedAt.After(c.FetchedAt)
+		}
+		return a.BookID < c.BookID
+	})
+	return snap, nil
+}
+
+// decodeTally turns loaded rows into snapshot rows (the first candidate
+// decoded and hashed) and counts the ones that will not decode, for one log
+// line per build rather than one per row: the same rows fail on every
+// rebuild, and the review summary already counts them (`errors`).
+type decodeTally struct {
+	undecodable int
+	first       string
+}
+
+func (d *decodeTally) row(r loadedCacheRow) snapshotRow {
+	sr := snapshotRow{loadedCacheRow: r}
+	if r.first != nil {
+		var cand metafetch.MetadataCandidate
+		if derr := json.Unmarshal(r.first, &cand); derr != nil {
+			sr.decodeErr = derr
+			d.undecodable++
+			if d.first == "" {
+				d.first = r.sum.BookID
+			}
+		} else {
+			sr.cand = &cand
+			sr.hash = metafetch.CandidateHash(cand)
+		}
+	}
+	// Neither is read after this point: the decoded candidate replaces the
+	// raw one, and the snapshot's books map (then the overlay) the book.
+	sr.first = nil
+	sr.book = nil
+	return sr
+}
+
+func (d *decodeTally) log() {
+	if d.undecodable > 0 {
+		metadataCacheLog.Warn("review snapshot: %d stored candidates will not decode (first: bookID=%s); counted under errors", d.undecodable, d.first)
+	}
 }
 
 // errReviewBuildBackoff is returned while a failed build's backoff runs.
@@ -132,7 +333,9 @@ type buildCall struct {
 // reviewSnapshotCache holds the current snapshot and runs at most one build at
 // a time. Safe for concurrent use.
 type reviewSnapshotCache struct {
-	build func(ctx context.Context) (*reviewSnapshot, error)
+	// build returns the next snapshot; prev is the one being replaced (nil on
+	// a cold build), which an incremental build carries rows over from.
+	build func(ctx context.Context, prev *reviewSnapshot) (*reviewSnapshot, error)
 	// gen reads the metadata cache's write counter; nil when the store has
 	// none, and then only marks and age make the snapshot out of date.
 	gen         func() uint64
@@ -159,7 +362,7 @@ type reviewSnapshotCache struct {
 	idle      *time.Timer
 }
 
-func newReviewSnapshotCache(build func(ctx context.Context) (*reviewSnapshot, error), gen func() uint64) *reviewSnapshotCache {
+func newReviewSnapshotCache(build func(ctx context.Context, prev *reviewSnapshot) (*reviewSnapshot, error), gen func() uint64) *reviewSnapshotCache {
 	return &reviewSnapshotCache{
 		build: build, gen: gen,
 		maxAge: reviewSnapshotMaxAge, idleMark: reviewSnapshotIdleMark,
@@ -222,17 +425,19 @@ func (c *reviewSnapshotCache) startBuild() *buildCall {
 	}
 	c.inflight = bc
 	c.lastStart = c.now()
-	startInval, startGen := c.invalGen, c.cacheGen()
+	// The build reads the cache and library generations itself, at its
+	// begin; the invalidation counter is this cache's own, read here.
+	startInval, prev := c.invalGen, c.snap
 	run := func() {
 		began := time.Now()
-		snap, err := c.build(ctx)
+		snap, err := c.build(ctx, prev)
 		c.mu.Lock()
 		c.inflight = nil
 		if err != nil {
 			c.failedAt, c.failErr = c.now(), err
 		} else {
 			c.failErr = nil
-			snap.cacheGen, snap.invalGen = startGen, startInval
+			snap.invalGen = startInval
 			c.snap = snap
 		}
 		c.mu.Unlock()
@@ -241,7 +446,11 @@ func (c *reviewSnapshotCache) startBuild() *buildCall {
 				metadataCacheLog.Warn("review snapshot build failed: %v", err)
 			}
 		} else {
-			metadataCacheLog.Info("review snapshot built: rows=%d orphaned=%d took=%s", len(snap.rows), snap.orphaned, time.Since(began).Round(time.Millisecond))
+			kind := "full"
+			if snap.incremental {
+				kind = "incremental"
+			}
+			metadataCacheLog.Info("review snapshot built: kind=%s rows=%d orphaned=%d took=%s", kind, len(snap.rows), snap.orphaned(), time.Since(began).Round(time.Millisecond))
 		}
 		bc.snap, bc.err = snap, err
 		close(bc.done)
@@ -322,79 +531,145 @@ func (c *reviewSnapshotCache) invalidate() {
 	c.mu.Unlock()
 }
 
-// reviewOverlay is a snapshot with its rows' books read NOW: review status,
-// "no match", applied and the book's own fields come from the live row. A
-// book that has gone since the snapshot was built is counted orphaned; a book
-// whose read FAILED is counted in readErrors -- it may well still exist, and
-// calling it orphaned would point an operator at the reaper for a store fault.
+// requestRebuild marks the snapshot out of date AND starts the rebuild now,
+// under get's rules (not during a failure's backoff, not within minInterval
+// of the last start). An overlay that found more changed books than it will
+// read per request calls it: waiting for the next request to start the
+// rebuild would make that request pay the same cost again.
+func (c *reviewSnapshotCache) requestRebuild() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.invalGen++
+	if c.snap != nil && !c.inBackoff() && c.now().Sub(c.lastStart) >= c.minInterval {
+		c.startBuild()
+	}
+}
+
+// reviewOverlay is a snapshot with the books written since its build read
+// NOW: review status, "no match", applied and the book's own fields come from
+// the live row. A book that has gone since the snapshot was built is counted
+// orphaned; a book whose read FAILED is counted in readErrors -- it may well
+// still exist, and calling it orphaned would point an operator at the reaper
+// for a store fault.
 type reviewOverlay struct {
 	rows       []snapshotRow
 	orphaned   int
 	readErrors int
-	books      map[string]*database.Book
+	// rebuild is set when the overlay could not bound its reads to the books
+	// that changed (no change log, or the log could not name them) or found
+	// more than overlayRebuildThreshold of them: the handler asks the snapshot
+	// cache for a rebuild so the next request does not pay this again.
+	rebuild bool
+	snap    *reviewSnapshot
+	// live is every book read for this request, keyed by id; a nil value is a
+	// book that no longer exists.
+	live map[string]*database.Book
+}
+
+// book returns the live book when this request read it, else the snapshot's.
+func (o reviewOverlay) book(id string) *database.Book {
+	if b, read := o.live[id]; read {
+		return b
+	}
+	return o.snap.books[id]
 }
 
 // errOverlayAllReadsFailed: not one of the overlay's book reads succeeded.
 var errOverlayAllReadsFailed = errors.New("every review book read failed")
 
-// overlayLiveBooks re-reads the books of snap's rows. With want non-nil (an
-// ids= lookup) only those rows are kept and only their books are read: a
+// overlayLiveBooks re-reads the books of snap's rows that were written since
+// the snapshot's build began (booksChangedSince over snap.bookGen) and serves
+// every other row the book the snapshot holds. With want non-nil (an ids=
+// lookup) only those rows are kept and only their changed books are read: a
 // page's detail fetch must cost the page, not the library. The summary counts
 // over such an overlay cover only the asked rows.
 //
-// The rows are read in one batch. A failed batch is logged and the rows are
-// read one by one instead; a row the batch missed is confirmed by a point
+// Without a change log, or when it cannot name the change, every row's book
+// is read as before and a rebuild is requested; so is one when more than
+// overlayRebuildThreshold books changed, after reading them.
+//
+// The books are read in one batch. A failed batch is logged and the books are
+// read one by one instead; a book the batch missed is confirmed by a point
 // read too. A failed point read is a readErrors row, not an orphan. Only when
 // every read failed is the overlay an error.
-func overlayLiveBooks(snap *reviewSnapshot, store cacheRowBookReader, want map[string]bool) (reviewOverlay, error) {
-	rows := snap.rows
-	if want != nil {
-		rows = make([]snapshotRow, 0, len(want))
-		for _, r := range snap.rows {
-			if want[r.sum.BookID] {
-				rows = append(rows, r)
+func overlayLiveBooks(snap *reviewSnapshot, store cacheRowBookReader, want map[string]bool, booksChangedSince changedSinceFunc) (reviewOverlay, error) {
+	out := reviewOverlay{orphaned: snap.orphaned(), snap: snap}
+	keepRow := func(id string) bool { return want == nil || want[id] }
+
+	var toRead []string
+	if booksChangedSince == nil {
+		out.rebuild = true
+	} else if changed, _, ok := booksChangedSince(snap.bookGen); !ok {
+		out.rebuild = true
+	} else {
+		if len(changed) > overlayRebuildThreshold {
+			out.rebuild = true
+		}
+		toRead = make([]string, 0, len(changed))
+		for _, id := range changed {
+			if _, isRow := snap.books[id]; isRow && keepRow(id) {
+				toRead = append(toRead, id)
 			}
 		}
 	}
-	ids := make([]string, len(rows))
-	for i := range rows {
-		ids[i] = rows[i].sum.BookID
-	}
-	books := make(map[string]*database.Book, len(ids))
-	batchOK := false
-	if fetched, err := store.GetBooksByIDs(ids); err != nil {
-		metadataCacheLog.Warn("review overlay: batch book read failed; reading %d books one by one: %v", len(ids), err)
-	} else {
-		batchOK = true
-		for i := range fetched {
-			books[fetched[i].ID] = &fetched[i]
+	if toRead == nil {
+		// Every row's book, as before the change log.
+		toRead = make([]string, 0, len(snap.rows))
+		for _, r := range snap.rows {
+			if keepRow(r.sum.BookID) {
+				toRead = append(toRead, r.sum.BookID)
+			}
 		}
 	}
-	out := reviewOverlay{rows: make([]snapshotRow, 0, len(rows)), orphaned: snap.orphaned, books: books}
+
+	out.live = make(map[string]*database.Book, len(toRead))
+	failed := map[string]struct{}{}
 	reads := 0
-	if batchOK {
-		reads = 1
-	}
-	for _, r := range rows {
-		b := books[r.sum.BookID]
-		if b == nil {
-			pb, perr := store.GetBookByID(r.sum.BookID)
+	if len(toRead) > 0 {
+		if fetched, err := store.GetBooksByIDs(toRead); err != nil {
+			metadataCacheLog.Warn("review overlay: batch book read failed; reading %d books one by one: %v", len(toRead), err)
+		} else {
+			reads++
+			for i := range fetched {
+				out.live[fetched[i].ID] = &fetched[i]
+			}
+		}
+		for _, id := range toRead {
+			if _, hit := out.live[id]; hit {
+				continue
+			}
+			pb, perr := store.GetBookByID(id)
 			if perr != nil {
 				out.readErrors++
+				failed[id] = struct{}{}
 				continue
 			}
 			reads++
-			if pb == nil {
-				out.orphaned++
-				continue
-			}
-			b = pb
-			books[r.sum.BookID] = pb
+			out.live[id] = pb // nil: the book is gone
+		}
+	}
+
+	out.rows = make([]snapshotRow, 0, len(snap.rows))
+	for _, r := range snap.rows {
+		id := r.sum.BookID
+		if !keepRow(id) {
+			continue
+		}
+		if _, f := failed[id]; f {
+			continue
+		}
+		b := out.book(id)
+		if b == nil {
+			out.orphaned++
+			continue
 		}
 		r.book = b
 		out.rows = append(out.rows, r)
 	}
-	if len(rows) > 0 && reads == 0 {
+	if len(toRead) > 0 && reads == 0 {
 		return reviewOverlay{}, errOverlayAllReadsFailed
 	}
 	if out.readErrors > 0 {
