@@ -36,3 +36,10 @@
   retired book counts as done only when this repair retired it into the
   survivor. A test cuts the repair at every single write and checks each
   resume reaches the same end state.
+- **A resume still notices outside changes, and reads the job log once.** A
+  book whose organized or primary flag changed since the plan stops the row,
+  unless the repair's own earlier run made that change. Who retired a book is
+  read from the repair's own job log, which is written before each change, so
+  a crash right after a change cannot strand the row. That log is now read in
+  one pass per resume instead of once per book (measured: 0.4 s instead of
+  about 99 s for a 346-file set with 300 books already retired).
