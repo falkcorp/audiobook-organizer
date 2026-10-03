@@ -3510,3 +3510,71 @@ func TestFragmentFixer_CrashBeforeHistoryResumes(t *testing.T) {
 type dropHistory struct{}
 
 func (dropHistory) RecordMetadataChange(*database.MetadataChangeRecord) error { return nil }
+
+// TestFragmentFixer_ReplanJournalCost measures a resumed re-plan's journal
+// read: a 346-fragment row cut off after 300 retires, on a store holding
+// 300,000 other journal rows. Skipped unless AORG_FRAG_REPLAN_BENCH=1 (it
+// seeds for about a minute); the numbers go in the log.
+func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
+	if os.Getenv("AORG_FRAG_REPLAN_BENCH") != "1" {
+		t.Skip("set AORG_FRAG_REPLAN_BENCH=1 to measure")
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	s.WaitForWarmup()
+	f := &fragFixture{s: s, root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
+	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
+	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
+	withRoot(t, root)
+	const n, cut, noise = 346, 300, 300000
+	var ids []string
+	for i := 1; i <= n; i++ {
+		stem := fmt.Sprintf("Chap %03d", i)
+		p := f.file(t, filepath.Join("lib/Big", stem+".mp3"), 800+i)
+		id := f.book(t, stem, stem, p, nil)
+		f.row(t, stem, id, p, stem+".mp3", int64(800+i), 300, 0)
+		ids = append(ids, id)
+	}
+	r := rowWithBooks(t, f.plan(t, "op-plan"), ids)
+	require.True(t, r.Applicable(), r.SkipReason)
+	plan := r.Detail.(*fragGroupPlan)
+
+	start := time.Now()
+	got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+	require.NoError(t, err)
+	require.Equal(t, r.Fingerprint, got.Fingerprint, got.Reason)
+	fresh := time.Since(start)
+
+	w := f.fragWriter(t, "op-cut")
+	done := 0
+	for _, m := range plan.Members {
+		if m.Frag.Book.ID == plan.SurvivorID || done >= cut {
+			continue
+		}
+		done++
+		require.NoError(t, w.MoveBookFiles([]string{m.Frag.File.ID}, m.Frag.Book.ID, plan.SurvivorID))
+		_, err := retireInto(context.Background(), f.p, s, w, time.Now, fragFixerID, m.Frag.Book.ID, plan.SurvivorID,
+			&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
+		require.NoError(t, err)
+	}
+	for i := 0; i < noise; i++ {
+		require.NoError(t, s.CreateOperationChange(&database.OperationChange{
+			ID: fmt.Sprintf("n%09d", i), OperationID: fmt.Sprintf("op-noise-%d", i%50), BookID: fmt.Sprintf("noise-%d", i%5000),
+			ChangeType: "metadata_update", FieldName: "title", OldValue: "a", NewValue: "b",
+		}))
+	}
+	start = time.Now()
+	got, err = newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+	require.NoError(t, err)
+	resumed := time.Since(start)
+	require.Equal(t, r.Fingerprint, got.Fingerprint, got.Reason)
+	start = time.Now()
+	_, err = s.GetBookChanges(plan.SurvivorID)
+	require.NoError(t, err)
+	one := time.Since(start)
+	t.Logf("346-fragment row: fresh re-plan %v (no journal read); after %d retires with %d other journal rows: re-plan %v (one pass); one GetBookChanges %v (x%d books per-book = ~%v)",
+		fresh, cut, noise, resumed, one, cut, one*cut)
+}
