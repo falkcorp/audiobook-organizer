@@ -126,11 +126,17 @@ func (f *letterLOrdinalFixer) evaluate(b database.BookCore) (repairs.Row, error)
 	}
 	for i := range states {
 		if states[i].Field == "title" && states[i].HasUserOverride() {
-			r.Skipped, r.SkipReason = junkSkipUserLocked, "the title carries a user override; it is never rewritten"
+			r.Skipped, r.SkipReason = junkSkipUserLocked, lockHoldReason(&states[i], "title")
 			r.Reason = r.SkipReason
 			r.Fingerprint = junkFingerprint(r, "")
 			return r, nil
 		}
+	}
+	if why := legacyStateUnreadable(f.p.deps.OpsStore(), b.ID, states); why != "" {
+		r.Skipped, r.SkipReason = junkSkipNeedsManual, why
+		r.Reason = r.SkipReason
+		r.Fingerprint = junkFingerprint(r, "")
+		return r, nil
 	}
 	r.Proposed = map[string]string{"title": fixed}
 	r.Reason = "the ordinal is the letter l, not the digit 1 / roman I"
