@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8223b479-ea79-40ca-a48a-1b7bc0f3bea2
 // last-edited: 2026-10-03
 
@@ -44,6 +44,13 @@ type swapBook struct {
 	lockTitle, lockAuthor bool
 	// noCredit leaves the book's credit only in its primary author id.
 	noCredit bool
+	// duration is the book's duration in seconds (0 none).
+	duration int
+	// prov holds further provider values on record, by field-state key
+	// ("narrator", "asin", "audible_runtime_min"), recorded with the title.
+	prov map[string]any
+	// authorAge records the provider author this long before the title.
+	authorAge time.Duration
 }
 
 func newSwapLib(t *testing.T) *swapLib {
@@ -68,6 +75,10 @@ func (l *swapLib) add(b swapBook) string {
 	}
 	n := b.narrator
 	book := &database.Book{Title: b.title, AuthorID: &holder.ID, SeriesID: b.series, Format: "mp3"}
+	if b.duration > 0 {
+		d := b.duration
+		book.Duration = &d
+	}
 	if n != "" {
 		book.Narrator = &n
 	}
@@ -82,8 +93,13 @@ func (l *swapLib) add(b swapBook) string {
 	if !b.noCredit {
 		require.NoError(t, st.SetBookAuthors(created.ID, []database.BookAuthor{{BookID: created.ID, AuthorID: holder.ID, Role: "author"}}))
 	}
+	now := time.Now()
 	state := func(field, val string, locked bool) {
-		s := &database.MetadataFieldState{BookID: created.ID, Field: field, UpdatedAt: time.Now(), OverrideLocked: locked}
+		at := now
+		if field == "author_name" {
+			at = now.Add(-b.authorAge)
+		}
+		s := &database.MetadataFieldState{BookID: created.ID, Field: field, UpdatedAt: at, OverrideLocked: locked}
 		if val != "" {
 			enc, err := json.Marshal(val)
 			require.NoError(t, err)
@@ -100,6 +116,13 @@ func (l *swapLib) add(b swapBook) string {
 	}
 	state("title", b.provTitle, b.lockTitle)
 	state("author_name", b.provAuthor, b.lockAuthor)
+	for field, v := range b.prov {
+		enc, err := json.Marshal(v)
+		require.NoError(t, err)
+		ev := string(enc)
+		require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: created.ID, Field: field,
+			FetchedValue: &ev, UpdatedAt: now}))
+	}
 	l.ids[b.name] = created.ID
 	l.holder[b.name] = holder.ID
 	return created.ID
@@ -133,7 +156,7 @@ func (l *swapLib) apply(plan *repairs.PlanResult, rowIDs []string) *repairs.Appl
 	series, err := l.store.GetAllSeries()
 	require.NoError(l.t, err)
 	w := repairs.NewWriter(l.store, l.store, l.fixer.ID(), "bulk_update", "repairs-").
-		WithJournal(l.store, l.store, swapTestOpID).WithCredits(l.store)
+		WithJournal(l.store, l.store, swapTestOpID).WithCredits(l.store).WithFieldStates(l.store)
 	res, err := repairs.RunApply(context.Background(), l.fixer, plan, "op-swap-plan", rowIDs, false,
 		repairs.ApplyDeps{Guard: l.store, Series: repairs.SeriesNamesFrom(series), Writer: w, OpID: swapTestOpID}, &fakeReporter{})
 	require.NoError(l.t, err)
@@ -157,6 +180,13 @@ func (l *swapLib) book(name string) *database.Book {
 	require.NoError(l.t, err)
 	require.NotNil(l.t, b)
 	return b
+}
+
+func (l *swapLib) locked(name, key string) bool {
+	l.t.Helper()
+	locks, err := database.LoadFieldLocks(l.store, l.ids[name])
+	require.NoError(l.t, err)
+	return locks.Locked(key)
 }
 
 func (l *swapLib) authorID(name string) int {
@@ -188,9 +218,11 @@ func (l *swapLib) populate() {
 	l.add(swapBook{name: "swap2", title: "read by narrator", storedAuthor: "Ultimate Level 2_ Ascension",
 		provTitle: "Ultimate Level 2: Ascension", provAuthor: "Shawn Wilson",
 		files: []string{lib + "Ultimate Level 2/a.mp3", lib + "Ultimate Level 2/b.mp3"}})
+	// A two-word title: filed under its author's folder, which ties the
+	// provider record to the book.
 	l.add(swapBook{name: "multi", title: "read by narrator", storedAuthor: "Galaxy Outlaws",
 		provTitle: "Galaxy Outlaws", provAuthor: "J.N. Chaney, Terry Mixon",
-		files: []string{lib + "Galaxy Outlaws/book.m4b"}})
+		files: []string{"/lib/J.N. Chaney/Galaxy Outlaws/book.m4b"}})
 	l.add(swapBook{name: "itunes", title: "read by narrator", storedAuthor: "Soul of the Warrior",
 		provTitle: "Soul of the Warrior", provAuthor: "Kyfe",
 		files: []string{"/mnt/data/books/itunes/Kyfe/Soul of the Warrior/01 Soul.m4b"}})
@@ -355,6 +387,14 @@ func TestSwappedTitleAuthorFixer_ApplyAndRevert(t *testing.T) {
 		require.NotNil(t, a, "%s: the title-holding author record is not deleted", name)
 	}
 
+	// Title and author are locked so a forced rescan cannot write the file
+	// tags' swapped values back.
+	for _, name := range []string{"swap", "multi", "itunes", "nocredit"} {
+		require.True(t, l.locked(name, database.FieldKeyTitle), "%s: title locked", name)
+		require.True(t, l.locked(name, database.FieldKeyAuthorName), "%s: author locked", name)
+	}
+	require.False(t, l.locked("no-provider-author", database.FieldKeyTitle), "a held row is never locked")
+
 	// History: the title change is recorded for the book's history view.
 	hist, err := l.store.GetMetadataChangeHistory(l.ids["swap"], "title", 10)
 	require.NoError(t, err)
@@ -390,6 +430,10 @@ func TestSwappedTitleAuthorFixer_ApplyAndRevert(t *testing.T) {
 	a, err := l.store.GetAuthorByID(chaney)
 	require.NoError(t, err)
 	require.NotNil(t, a, "an existing author the apply only resolved stays")
+	for _, name := range []string{"swap", "multi", "itunes", "nocredit"} {
+		require.False(t, l.locked(name, database.FieldKeyTitle), "%s: the revert lifts the title lock", name)
+		require.False(t, l.locked(name, database.FieldKeyAuthorName), "%s: the revert lifts the author lock", name)
+	}
 }
 
 // A provider value that changes between plan and apply is a different
@@ -439,7 +483,10 @@ func TestSwapAuthorNames(t *testing.T) {
 		{"Shawn Wilson", []string{"Shawn Wilson"}, ""},
 		{"J.M. Clarke", []string{"J. M. Clarke"}, ""},
 		{"J.N. Chaney, Terry Mixon", []string{"J. N. Chaney", "Terry Mixon"}, ""},
-		{"J.N. Chaney, Aaron Bunce, Terry Maggert", []string{"J. N. Chaney", "Aaron Bunce", "Terry Maggert"}, ""},
+		// Three names or more is held: the light-novel shape lists the
+		// illustrator with no role marker.
+		{"J.N. Chaney, Aaron Bunce, Terry Maggert", nil, swapSkipMultiAuthor},
+		{"Kumo Kagyu, Noboru Kannatuki, Shiro Nameless", nil, swapSkipMultiAuthor},
 		{"Kumo Kagyu, Noboru Kannatuki, Kevin Steinbach - translator", nil, swapSkipMultiAuthor},
 		{"Dmitry Dornichev, Nathan Klausner -translated by", nil, swapSkipMultiAuthor},
 		{"Gardner Dozois - editor, George R. R. Martin", nil, swapSkipMultiAuthor},
@@ -462,9 +509,19 @@ func TestSwapCredits(t *testing.T) {
 	got := swapCredits(cur, "b", 9, []*database.Author{a(1), a(5), a(2)})
 	require.Equal(t, []database.BookAuthor{
 		{BookID: "b", AuthorID: 1, Role: "author", Position: 0},
-		{BookID: "b", AuthorID: 2, Role: "author", Position: 1},
-		{AuthorID: 5, Role: "narrator", Position: 2},
-	}, got, "an author already credited is not added twice; other credits keep their order")
+		{BookID: "b", AuthorID: 5, Role: "author", Position: 1},
+		{BookID: "b", AuthorID: 2, Role: "author", Position: 2},
+		{AuthorID: 5, Role: "narrator", Position: 3},
+	}, got, "a target credited only as narrator (an author reading their own book) gets an author row and keeps the narrator row")
+	cur = []database.BookAuthor{
+		{AuthorID: 9, Role: "author", Position: 0},
+		{AuthorID: 5, Role: "author", Position: 1},
+	}
+	require.Equal(t, []database.BookAuthor{
+		{BookID: "b", AuthorID: 1, Role: "author", Position: 0},
+		{AuthorID: 5, Role: "author", Position: 1},
+	}, swapCredits(cur, "b", 9, []*database.Author{a(1), a(5)}),
+		"an author already credited as an author is not added twice; other credits keep their order")
 	require.Equal(t, []database.BookAuthor{{BookID: "b", AuthorID: 1, Role: "author", Position: 0}},
 		swapCredits(nil, "b", 9, []*database.Author{a(1)}))
 }
