@@ -3270,8 +3270,11 @@ func pinnedRolesDiffer(plan *fragGroupPlan, st fragGroupState) string {
 }
 
 // fragJournal is one re-plan's view of the operation journal for the books
-// it must judge (byBook), read in ONE pass, limited to rows written at or
-// after the plan (since): only those can be this row's apply.
+// it must judge (byBook), read in ONE pass. since is the plan time: a flag
+// change is explained only by a row written at or after it (an earlier one
+// is already in the planned flags), while a retire is judged on every row
+// (a plan made after a cut-off run re-forms the group with the member that
+// run retired, so its retire predates the plan).
 type fragJournal struct {
 	byBook map[string][]*database.OperationChange
 	since  time.Time
@@ -3303,8 +3306,8 @@ type opChangeScanner interface {
 // renewals.
 const fragJournalBeatEvery = 20000
 
-// loadJournal reads the journal rows of books ids written at or after since
-// (the plan time). The scan runs under the merge lock during an apply, so it
+// loadJournal reads the journal rows of books ids; since is the plan time
+// (see fragJournal). The scan runs under the merge lock during an apply, so it
 // renews the stand-down lease (beat) as it goes rather than let a long
 // journal outlast it.
 func (f *fragmentFixer) loadJournal(ctx context.Context, hist FragmentRepairReader, ids map[string]bool, since time.Time, beat func(string) error) (*fragJournal, error) {
@@ -3322,7 +3325,7 @@ func (f *fragmentFixer) loadJournal(ctx context.Context, hist FragmentRepairRead
 		return nil
 	}
 	keep := func(c *database.OperationChange) {
-		if c != nil && ids[c.BookID] && !c.CreatedAt.Before(since) {
+		if c != nil && ids[c.BookID] {
 			jr.byBook[c.BookID] = append(jr.byBook[c.BookID], c)
 		}
 	}
@@ -3395,14 +3398,18 @@ func (jr *fragJournal) ourChange(c *database.OperationChange) bool {
 	return ours
 }
 
-// ourRows returns book id's un-reverted journal rows of type changeType,
-// written since the plan by one of this fixer's apply runs.
-func (jr *fragJournal) ourRows(id, changeType string) []*database.OperationChange {
+// ourRows returns book id's un-reverted journal rows of type changeType
+// written by one of this fixer's apply runs; sincePlan keeps only those
+// written at or after the plan.
+func (jr *fragJournal) ourRows(id, changeType string, sincePlan bool) []*database.OperationChange {
 	if jr == nil {
 		return nil
 	}
 	var out []*database.OperationChange
 	for _, c := range jr.byBook[id] {
+		if sincePlan && c.CreatedAt.Before(jr.since) {
+			continue
+		}
 		if c.ChangeType == changeType && c.BookID == id && c.RevertedAt == nil && jr.ourChange(c) {
 			out = append(out, c)
 		}
@@ -3411,8 +3418,8 @@ func (jr *fragJournal) ourRows(id, changeType string) []*database.OperationChang
 }
 
 // ourRow reports whether ourRows holds a row match accepts.
-func (jr *fragJournal) ourRow(id, changeType string, match func(*database.OperationChange) bool) bool {
-	for _, c := range jr.ourRows(id, changeType) {
+func (jr *fragJournal) ourRow(id, changeType string, sincePlan bool, match func(*database.OperationChange) bool) bool {
+	for _, c := range jr.ourRows(id, changeType, sincePlan) {
 		if match(c) {
 			return true
 		}
@@ -3422,52 +3429,65 @@ func (jr *fragJournal) ourRow(id, changeType string, match func(*database.Operat
 
 // retiredHere is "" when retired book b was retired by this fixer into
 // survivor: merged_into names survivor and an un-reverted book_merged_into
-// row naming it was journaled since the plan by one of this fixer's apply
-// runs. Otherwise it says what is missing.
+// row naming it was journaled by one of this fixer's apply runs (at any
+// time: see fragJournal). Otherwise it says what is missing.
 func (jr *fragJournal) retiredHere(b fragBook, survivor string) string {
 	if b.MergedInto != survivor {
 		return fmt.Sprintf("book %s was retired into %q, not into the survivor %s", b.ID, b.MergedInto, survivor)
 	}
-	if !jr.ourRow(b.ID, undo.ChangeTypeBookMergedInto, func(c *database.OperationChange) bool { return c.NewValue == survivor }) {
+	if !jr.ourRow(b.ID, undo.ChangeTypeBookMergedInto, false, func(c *database.OperationChange) bool { return c.NewValue == survivor }) {
 		return fmt.Sprintf("book %s is merged into the survivor %s, but not by a %s apply (no journaled retire of one into it stands)", b.ID, survivor, fragFixerID)
 	}
 	return ""
 }
 
-// noteCrowns adds retired book b's hand-off evidence to cr: each member one
-// of our hand-off notes on b names as crowned in b's group, or, when b was
-// demoted by us and carries no hand-off note at all (of anyone's) since the
-// plan, b's group as pending (the crash window between the crown write and
-// its note). A retiree that was never primary has no demote and no hand-off
-// and adds nothing, so it never holds the window open.
+// noteCrowns adds retired book b's hand-off evidence to cr:
+//   - each member a hand-off note of ours on b, written since the plan,
+//     names as crowned in b's group (a crown before the plan is already in
+//     the planned flags);
+//   - b's group as pending when b's newest demote of ours is newer than
+//     every hand-off note on b (of anyone's): the hand-off is owed, and its
+//     crown may already be written with the note cut off (the crash window
+//     between the two writes).
+//
+// A retiree that was never primary has no demote and adds nothing, so it
+// never holds the window open.
 func (jr *fragJournal) noteCrowns(b fragBook, cr *fragCrowns) {
 	if jr == nil || b.VersionGroup == "" {
 		return
 	}
-	for _, c := range jr.ourRows(b.ID, undo.ChangeTypeBookPrimaryHandoff) {
+	for _, c := range jr.ourRows(b.ID, undo.ChangeTypeBookPrimaryHandoff, true) {
 		if id, ok := undo.HandOffCrowned(c); ok && c.NewValue == b.VersionGroup {
 			cr.named[id] = b.VersionGroup
 		}
 	}
-	for _, c := range jr.byBook[b.ID] {
-		if c.ChangeType == undo.ChangeTypeBookPrimaryHandoff && c.RevertedAt == nil {
-			return // handed off (by us or not): no crash window
+	demote := ""
+	for _, c := range jr.ourRows(b.ID, undo.ChangeTypeBookPrimaryDemote, false) {
+		if c.ID > demote {
+			demote = c.ID
 		}
 	}
-	if jr.ourRow(b.ID, undo.ChangeTypeBookPrimaryDemote, func(*database.OperationChange) bool { return true }) {
-		cr.pending[b.VersionGroup] = true
+	if demote == "" {
+		return
 	}
+	for _, c := range jr.byBook[b.ID] {
+		if c.ChangeType == undo.ChangeTypeBookPrimaryHandoff && c.RevertedAt == nil && c.ID > demote {
+			return // handed off after the demote (by us or not): no crash window
+		}
+	}
+	cr.pending[b.VersionGroup] = true
 }
 
 // liveFlagsExplained is "" when live book b's election flags are as planned
 // (fl), or differ only as this row's own apply changes them:
 //   - the primary flag dropped by this fixer's demote journaled since the
-//     plan (a retire cut off before its soft-delete);
+//     plan (a retire cut off before its soft-delete; a demote from before
+//     the plan is already in the planned flags);
 //   - the primary flag raised by one of this row's retire hand-offs: a
 //     hand-off note of ours on a retired book names b as crowned in b's
-//     group, or a retired book of b's group was demoted by us and its
-//     hand-off note is not written yet (crowns.pending: the crown is
-//     written straight to the store before its note).
+//     group (written since the plan), or a retired book of b's group was
+//     demoted by us and its hand-off is still owed (crowns.pending: the
+//     crown is written straight to the store before its note).
 //
 // Any other difference (a member organized in place, demoted by someone
 // else, another live member crowned by an outside actor) is a change.
@@ -3478,7 +3498,7 @@ func (jr *fragJournal) liveFlagsExplained(b fragBook, fl fragPlannedFlags, crown
 	switch {
 	case b.Primary == fl.Primary:
 		return ""
-	case fl.Primary && jr.ourRow(b.ID, undo.ChangeTypeBookPrimaryDemote, func(*database.OperationChange) bool { return true }):
+	case fl.Primary && jr.ourRow(b.ID, undo.ChangeTypeBookPrimaryDemote, true, func(*database.OperationChange) bool { return true }):
 		return ""
 	case !fl.Primary && b.VersionGroup != "" && (crowns.named[b.ID] == b.VersionGroup || crowns.pending[b.VersionGroup]):
 		return ""
