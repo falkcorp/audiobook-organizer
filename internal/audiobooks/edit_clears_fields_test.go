@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_clears_fields_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 451212a4-52da-4236-9a22-658fce80859a
 // last-edited: 2026-10-03
 
@@ -1122,8 +1122,7 @@ func TestUpdateAudiobook_CaseOnlySeriesEditOnAnAuthoredBookKeepsTheRow(t *testin
 	dup, err := store.GetSeriesByName("The Saga", authorID)
 	require.NoError(t, err)
 	require.Nil(t, dup, "a duplicate series row was created under the book's author")
-	h := historyByField(t, store, book.ID)
-	require.NotEmpty(t, h[database.HistoryFieldSeries], "the rename left no history")
+	requireOneSeriesRenameRow(t, store, book.ID)
 }
 
 // The same on an author-less book: the row (sole member) takes the casing.
@@ -1133,14 +1132,38 @@ func TestUpdateAudiobook_CaseOnlySeriesEditOnAnAuthorlessBookRenamesTheSoleRow(t
 		map[string]any{"series_name": "The Saga"})
 	require.NoError(t, err)
 	requireSeriesRow(t, store, book.ID, s.ID, "The Saga")
-	var found bool
-	for _, r := range historyByField(t, store, book.ID)[database.HistoryFieldSeries] {
-		if r.ChangeType == database.ChangeTypeManual && r.PreviousValue != nil && *r.PreviousValue == `"the saga"` &&
-			r.NewValue != nil && *r.NewValue == `"The Saga"` {
-			found = true
-		}
+	requireOneSeriesRenameRow(t, store, book.ID)
+}
+
+// seriesWebSave is the editor's shape for a series edit: the top-level key
+// and a locked override with the same value.
+func seriesWebSave(name string) map[string]any {
+	return map[string]any{
+		"series_name": name,
+		"overrides":   map[string]any{"series_name": map[string]any{"value": name, "locked": true}},
 	}
-	require.True(t, found, "no manual series history row the saga -> The Saga")
+}
+
+// requireOneSeriesRenameRow: a rename leaves exactly one history row (the
+// series_name override row, or the manual series row when there is none).
+func requireOneSeriesRenameRow(t *testing.T, store *database.PebbleStore, bookID string) {
+	t.Helper()
+	h := historyByField(t, store, bookID)
+	rows := append(append([]database.MetadataChangeRecord{}, h[database.FieldKeySeriesName]...), h[database.HistoryFieldSeries]...)
+	require.Len(t, rows, 1, "series rename history rows: %+v", rows)
+	require.NotNil(t, rows[0].NewValue)
+	require.Equal(t, `"The Saga"`, *rows[0].NewValue)
+}
+
+// The editor's shape (top-level + override) on a sole-member series: one
+// rename, one history row, locked at the new name.
+func TestUpdateAudiobook_CaseOnlySeriesEditViaTheEditorRecordsOneRow(t *testing.T) {
+	store, book, s, _ := caseFixture(t, true)
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, seriesWebSave("The Saga"))
+	require.NoError(t, err)
+	requireSeriesRow(t, store, book.ID, s.ID, "The Saga")
+	requireOneSeriesRenameRow(t, store, book.ID)
+	require.Contains(t, lockedKeys(t, store, book.ID), database.FieldKeySeriesName)
 }
 
 // A series other books share is not renamed by one book's edit: the link is
@@ -1150,11 +1173,19 @@ func TestUpdateAudiobook_CaseOnlySeriesEditOfASharedSeriesKeepsItsName(t *testin
 	store, book, s, _ := caseFixture(t, true)
 	_, err := store.CreateBook(&database.Book{Title: "Other", FilePath: "/library/other.m4b", Format: "m4b", SeriesID: &s.ID, Series: s})
 	require.NoError(t, err)
-	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
-		map[string]any{"series_name": "The Saga"})
+	// The editor's real shape: the override used to be locked and recorded
+	// at "The Saga" while the book kept showing "the saga".
+	got, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, seriesWebSave("The Saga"))
 	require.NoError(t, err)
 	requireSeriesRow(t, store, book.ID, s.ID, "the saga")
+	require.NotNil(t, got.Series)
+	require.Equal(t, "the saga", got.Series.Name, "response series name")
 	require.NotContains(t, lockedKeys(t, store, book.ID), database.FieldKeySeriesName)
+	_, hasState := fieldStates(t, store, book.ID)[database.FieldKeySeriesName]
+	require.False(t, hasState, "a series_name override the book does not show left field state")
+	h := historyByField(t, store, book.ID)
+	require.Empty(t, h[database.FieldKeySeriesName])
+	require.Empty(t, h[database.HistoryFieldSeries])
 }
 
 // A series name matching an existing series of the same author, in other
@@ -1176,4 +1207,129 @@ func TestUpdateAudiobook_SeriesNameInOtherCasingResolvesToTheAuthorsSeries(t *te
 	require.NoError(t, err)
 	require.NotNil(t, row.SeriesID)
 	require.Equal(t, s.ID, *row.SeriesID, "a duplicate series was created instead of resolving the author's series")
+}
+
+// A trashed book still counts as a member: the series is not renamed.
+func TestUpdateAudiobook_CaseOnlySeriesEditWithATrashedSiblingKeepsItsName(t *testing.T) {
+	store, book, s, _ := caseFixture(t, false)
+	other, err := store.CreateBook(&database.Book{Title: "Other", FilePath: "/library/other.m4b", Format: "m4b", SeriesID: &s.ID, Series: s})
+	require.NoError(t, err)
+	trashed := true
+	other.MarkedForDeletion = &trashed
+	_, err = store.UpdateBook(other.ID, other)
+	require.NoError(t, err)
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, seriesWebSave("The Saga"))
+	require.NoError(t, err)
+	requireSeriesRow(t, store, book.ID, s.ID, "the saga")
+}
+
+// A SeriesID whose row is gone is not "the current series": the edit goes
+// through the normal lookup and relinks the book, instead of stamping the
+// sent name on a dangling link.
+func TestUpdateAudiobook_CaseOnlySeriesEditOnADanglingSeriesIDRelinks(t *testing.T) {
+	store, book, s, _ := caseFixture(t, false)
+	require.NoError(t, store.DeleteSeries(s.ID))
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"series_name": "The Saga"})
+	require.NoError(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row.SeriesID)
+	require.NotEqual(t, s.ID, *row.SeriesID, "the dangling link was kept")
+	linked, err := store.GetSeriesByID(*row.SeriesID)
+	require.NoError(t, err)
+	require.NotNil(t, linked)
+	require.Equal(t, "The Saga", linked.Name)
+}
+
+// faultStore forces a ModifyBook or RenameSeriesIf failure.
+type faultStore struct {
+	*database.PebbleStore
+	failModify, failRename bool
+}
+
+func (f *faultStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if f.failModify {
+		return nil, errors.New("forced commit failure")
+	}
+	return f.PebbleStore.ModifyBook(id, fn)
+}
+
+func (f *faultStore) RenameSeriesIf(id int, expectCurrent, newName string) error {
+	if f.failRename {
+		return errors.New("forced rename failure")
+	}
+	return f.PebbleStore.RenameSeriesIf(id, expectCurrent, newName)
+}
+
+// The rename runs only after the book commits: a failed commit leaves the
+// series untouched.
+func TestUpdateAudiobook_FailedCommitDoesNotRenameTheSeries(t *testing.T) {
+	store, book, s, _ := caseFixture(t, false)
+	_, err := audiobooks.NewAudiobookUpdateService(&faultStore{PebbleStore: store, failModify: true}).
+		UpdateAudiobook(context.Background(), book.ID, seriesWebSave("The Saga"))
+	require.Error(t, err)
+	got, err := store.GetSeriesByID(s.ID)
+	require.NoError(t, err)
+	require.Equal(t, "the saga", got.Name, "a failed edit renamed the series")
+	require.Empty(t, historyByField(t, store, book.ID))
+	require.Empty(t, fieldStates(t, store, book.ID))
+}
+
+// A rename that fails after the commit leaves the book showing the row's
+// actual name, with no lock or history claiming the new one.
+func TestUpdateAudiobook_FailedRenameKeepsTheBookOnTheRowsName(t *testing.T) {
+	store, book, s, _ := caseFixture(t, false)
+	got, err := audiobooks.NewAudiobookUpdateService(&faultStore{PebbleStore: store, failRename: true}).
+		UpdateAudiobook(context.Background(), book.ID, seriesWebSave("The Saga"))
+	require.NoError(t, err)
+	requireSeriesRow(t, store, book.ID, s.ID, "the saga")
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row.Series)
+	require.Equal(t, "the saga", row.Series.Name, "the book's embedded series name diverged from the row")
+	require.NotNil(t, got.Series)
+	require.Equal(t, "the saga", got.Series.Name, "response series name")
+	require.NotContains(t, lockedKeys(t, store, book.ID), database.FieldKeySeriesName)
+	h := historyByField(t, store, book.ID)
+	require.Empty(t, h[database.FieldKeySeriesName])
+	require.Empty(t, h[database.HistoryFieldSeries])
+}
+
+// An author "" override on a book whose AuthorID has no author row (GET
+// shows no author) is a no-op, not a 400.
+func TestUpdateAudiobook_AuthorOverrideClearOnADanglingAuthorIDIsANoop(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	dangling := 99999
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/d.m4b", Format: "m4b", AuthorID: &dangling})
+	require.NoError(t, err)
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"overrides": map[string]any{"author_name": map[string]any{"value": "", "locked": true}},
+	})
+	require.NoError(t, err)
+	require.Empty(t, lockedKeys(t, store, book.ID))
+	require.Empty(t, historyByField(t, store, book.ID))
+}
+
+// A case-only author edit keeps the embedded Author name equal to the
+// author row's (the row is not renamed: todo.d EDIT-AUTHOR-CASE-RENAME).
+func TestUpdateAudiobook_CaseOnlyAuthorEditKeepsTheEmbeddedNameOnTheRow(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("alice able")
+	require.NoError(t, err)
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/c.m4b", Format: "m4b", AuthorID: &a.ID, Author: a})
+	require.NoError(t, err)
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"author_name": "Alice Able"})
+	require.NoError(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	authorRow, err := store.GetAuthorByID(a.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row.Author)
+	require.Equal(t, authorRow.Name, row.Author.Name, "embedded author name diverged from the author row")
 }
