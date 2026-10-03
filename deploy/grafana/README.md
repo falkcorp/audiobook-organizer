@@ -1,5 +1,5 @@
 <!-- file: deploy/grafana/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b0b4ed29-c562-4f65-b437-bea04f3dd564 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -101,3 +101,8 @@ All under the `audiobook_organizer_` namespace; defined in
 | `operations_{started,completed,failed,canceled}_total` | counter | `type` | same |
 | `fixer_duration_seconds` | histogram, 0.1 s–2 h | `fixer`, `phase` = `plan` \| `apply` | `repairs.RunPlan` / `repairs.RunApply` |
 | `books_total`, `search_index_docs_total`, `op_items_processed` | gauge | — / `op_id`,`op_type` | pre-existing |
+
+
+## Datasource binding
+
+The dashboard binds its Prometheus datasource through a `datasource` template variable (type `datasource`, query `prometheus`), the same way the server's existing `crowdsec-metrics.json` does. File-provisioned dashboards never resolve `__inputs` placeholders, so a `${DS_PROMETHEUS}` input would leave every panel without a datasource; a template variable is resolved at view time and defaults to the first Prometheus datasource.
