@@ -154,6 +154,12 @@ type junkIndex struct {
 	// roots are the library root and every import path, cleaned. A proposal
 	// that names one of their segments is a path, not a title.
 	roots []string
+	// authorTitles maps an author id to the distinct real titles (by letters
+	// key, junk titles left out) of the live books whose primary author it
+	// is, each with one spelling. The swapped title/author fixer reads it:
+	// an author record that credits other real titles is a real author,
+	// never a misplaced title.
+	authorTitles map[int]map[string]string
 	// authorRoot is the library root when the organizer files books
 	// author-first ("{author}/…", the default folder pattern): the folder
 	// right below it is an author folder, never a title. Import paths are
@@ -239,7 +245,8 @@ func (f *junkTitleFixer) buildJunkIndexSnapshot() (*junkIndex, []database.BookCo
 		return nil, nil, nil, fmt.Errorf("GetAllImportPaths: %w", err)
 	}
 	idx := &junkIndex{dirBooks: map[string]int{}, dirChapters: map[string]int{}, titles: map[string]bool{},
-		authors: map[int]string{}, series: map[int]string{}, owners: map[string][]string{}}
+		authors: map[int]string{}, series: map[int]string{}, owners: map[string][]string{},
+		authorTitles: map[int]map[string]string{}}
 	if config.AppConfig.RootDir != "" {
 		root := filepath.Clean(config.AppConfig.RootDir)
 		idx.roots = append(idx.roots, root)
@@ -276,6 +283,16 @@ func (f *junkTitleFixer) buildJunkIndexSnapshot() (*junkIndex, []database.BookCo
 		}
 		if kind == metadata.JunkNone {
 			idx.titles[junkTitleKey(b.AuthorID, b.Title)] = true
+			if b.AuthorID != nil {
+				if k := junkLettersKey(b.Title); k != "" {
+					if idx.authorTitles[*b.AuthorID] == nil {
+						idx.authorTitles[*b.AuthorID] = map[string]string{}
+					}
+					if _, seen := idx.authorTitles[*b.AuthorID][k]; !seen {
+						idx.authorTitles[*b.AuthorID][k] = b.Title
+					}
+				}
+			}
 			continue
 		}
 		cands = append(cands, *b)
@@ -592,7 +609,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 			continue
 		}
 		if states[i].HasUserOverride() {
-			return finish(junkSkipUserLocked, "the title carries a user override; it is never rewritten")
+			return finish(junkSkipUserLocked, lockHoldReason(&states[i], "title"))
 		}
 		// A provider value on the title does NOT stop the repair (owner,
 		// 2026-10-03). The book only gets here because its STORED title
@@ -628,6 +645,10 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 			}
 			r.Reason += providerNote
 		}
+	}
+
+	if why := legacyStateUnreadable(store, b.ID, states); why != "" {
+		return finish(junkSkipNeedsManual, why)
 	}
 
 	// Title and author stored swapped: the author holds the title a provider
@@ -1435,6 +1456,20 @@ var catalogEditionRe = regexp.MustCompile(`(?i)\s*[(\[]\s*(?:un)?abridged\s*[)\]
 // junkLettersKey is a title reduced to its letters and digits, NFC and lower
 // case: what two spellings of one title share whatever punctuation, spacing
 // or Unicode form each uses ("3-10 to Yuma", "3:10 to Yuma").
+// legacyStateUnreadable returns why a book whose field state is only in a
+// pre-migration blob that does not parse must be held: the apply locks the
+// title it writes, which migrates the blob first, and an unreadable blob
+// cannot be migrated. "" for every other book. states are the book's rows.
+func legacyStateUnreadable(reader database.MetadataFieldStateReader, bookID string, states []database.MetadataFieldState) string {
+	if len(states) > 0 {
+		return ""
+	}
+	if _, err := database.ParseLegacyMetadataState(reader, bookID); err != nil {
+		return fmt.Sprintf("its pre-migration metadata state cannot be read (%v); open the book once to repair it", err)
+	}
+	return ""
+}
+
 func junkLettersKey(title string) string {
 	var sb strings.Builder
 	for _, r := range norm.NFC.String(strings.ToLower(title)) {

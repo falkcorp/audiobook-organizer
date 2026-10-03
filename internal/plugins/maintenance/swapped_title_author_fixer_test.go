@@ -263,8 +263,8 @@ func (l *swapLib) populate() {
 	// ---- not this fixer's: never rows ----
 	l.add(swapBook{name: "not-swapped", title: "read by narrator", storedAuthor: "Real Person",
 		provTitle: "Some Other Title", provAuthor: "Real Person", files: []string{lib + "Other/book.m4b"}})
-	l.add(swapBook{name: "real-title", title: "A Real Title", storedAuthor: "Galaxy Outlaws",
-		provTitle: "Galaxy Outlaws", provAuthor: "J.N. Chaney", files: []string{lib + "Real/book.m4b"}})
+	l.add(swapBook{name: "real-title", title: "A Real Title", storedAuthor: "Space Outlaws",
+		provTitle: "Space Outlaws", provAuthor: "J.N. Chaney", files: []string{lib + "Real/book.m4b"}})
 }
 
 func TestSwappedTitleAuthorFixer_PlanDecisions(t *testing.T) {
@@ -589,13 +589,15 @@ func TestSwappedTitleAuthorFixer_ShortTitleNeedsCorroboration(t *testing.T) {
 		provTitle: "The Long Road Home Again", provAuthor: "Eve Writer", files: []string{lib + "Long/book.m4b"}})
 
 	_, rows := l.plan()
-	for _, name := range []string{"bare", "runtime-off", "circular"} {
+	// A runtime within 10% is not enough on its own: it is recorded as
+	// evidence, and the row is still held.
+	for _, name := range []string{"bare", "runtime", "runtime-off", "circular"} {
 		require.Equal(t, junkSkipNeedsManual, rows[name].Skipped, "%s: %s", name, rows[name].SkipReason)
 		require.Contains(t, rows[name].SkipReason, "nothing but the title ties the provider record", name)
 	}
+	require.Contains(t, rows["runtime"].SkipReason, "a runtime alone does not count")
 	want := map[string]string{
 		"read-by": `provider narrator "Kim Reader" matches the book's narrator "Kim Reader"`,
-		"runtime": "provider runtime 600 min is within 10% of the book's 605 min",
 		"asin":    "provider ASIN B00TEST123 matches the book's ASIN",
 	}
 	for name, ev := range want {
@@ -647,9 +649,12 @@ func TestSwappedTitleAuthorFixer_HTMLEntitiesDecoded(t *testing.T) {
 // title lock does not hold the row. Each op's revert undoes its own part.
 func TestSwappedTitleAuthorFixer_OrderWithJunkTitleFixer(t *testing.T) {
 	l := newSwapLib(t)
+	// The provider recorded the narrator too: an author-only row needs a tie
+	// besides the title.
 	l.add(swapBook{name: "swap", title: "read by Jack Voraces", narrator: "Jack Voraces",
 		storedAuthor: "Ultimate Level 1_ Divine Creation", provTitle: "Ultimate Level 1: Divine Creation (Unabridged)",
-		provAuthor: "Shawn Wilson", files: []string{"/lib/S/Ultimate Level 1_ Divine Creation/book.m4b"}})
+		provAuthor: "Shawn Wilson", prov: map[string]any{"narrator": "Jack Voraces"},
+		files: []string{"/lib/S/Ultimate Level 1_ Divine Creation/book.m4b"}})
 	id := l.ids["swap"]
 
 	junk := newJunkTitleFixer(&Plugin{deps: fakeDeps{store: l.store}, standDownWait: noWait})

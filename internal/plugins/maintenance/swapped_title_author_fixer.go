@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -348,6 +349,14 @@ type swapDecision struct {
 	// credits is the book's credit junction as the decision read it; the
 	// apply writes only while the book still has exactly this.
 	credits []database.BookAuthor
+	// creditsDone: an interrupted apply already moved the credits (every
+	// provider author is credited as an author and the title record is not)
+	// but not the primary author. The apply sets the primary only.
+	creditsDone bool
+	// lockTitle / lockAuthor: the field carries no lock yet. A field a
+	// repair already locked (an interrupted apply, or the junk-title
+	// fixer's title lock) is not locked twice.
+	lockTitle, lockAuthor bool
 }
 
 // evaluate decides one book. Plan and Replan both call it, so a row planned
@@ -402,6 +411,10 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 	if err != nil {
 		return repairs.Row{}, false, fmt.Errorf("read field states of %s: %w", b.ID, err)
 	}
+	// A book whose state is only in the pre-migration blob has no rows, so
+	// no provider title here and never the swapped shape; the blob is
+	// migrated by LockFields for the books the junk-title and letter-l
+	// fixers write (which hold an unreadable blob, legacyStateUnreadable).
 	fetched := swapFetchedValues(states)
 	fetchedTitle, fetchedAuthor := fetched["title"].str, fetched["author_name"].str
 	mode := string(kind)
@@ -455,18 +468,51 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 		}
 	}
 
+	// A real author is never a misplaced title. The record the title would
+	// sit in credits other real titles ("Edgar Allan Poe" also credits "The
+	// Raven"): the provider record titled with the person's name is then a
+	// book ABOUT them (a biography, a collection), and moving the credit
+	// would rewrite a real author's book. Distinct titles are counted, not
+	// books, so copies of one book do not count.
+	if others := otherTitles(idx, oldAuthorID, ak); len(others) > 0 {
+		return finish(junkSkipNeedsManual, fmt.Sprintf(
+			"the author record %q also credits %d other title(s) (%s): it is a real author, not a misplaced title; a person decides",
+			author, len(others), strings.Join(others, "; ")), true)
+	}
+	// Self-read: the junk title names the stored author as its reader ("read
+	// by T. S. Eliot" by T. S. Eliot), so the author field holds a person,
+	// not a title. The provider record titled with that name is about them.
+	if !authorOnly {
+		readers := narrators
+		if n, ok := metadata.NarratorCreditName(b.Title); ok {
+			readers = append([]string{n}, readers...)
+		}
+		for _, n := range readers {
+			if junkLettersKey(n) == ak {
+				return finish(junkSkipNeedsManual, fmt.Sprintf(
+					"the book is read by its stored author %q, so the author is a person, not a misplaced title; a person decides", n), true)
+			}
+		}
+	}
+
+	// Locks. A person's lock or override always holds the row. A repair's
+	// lock holds a field this row would write (the title of a full row);
+	// one on a field this row does not write (the junk-title fixer's title
+	// lock on an author-only row), or on the author of a book an interrupted
+	// apply of this fixer already locked, does not.
+	titleState, authorState := fieldStateOf(states, database.FieldKeyTitle), fieldStateOf(states, database.FieldKeyAuthorName)
 	locks, err := database.LoadFieldLocks(store, b.ID)
 	if err != nil {
 		return repairs.Row{}, false, fmt.Errorf("read field locks of %s: %w", b.ID, err)
 	}
-	// An author-only row writes no title, so a title lock (the junk-title
-	// fixer sets one on every title it writes) does not hold it.
 	if !authorOnly && locks.Locked(database.FieldKeyTitle) {
-		return finish(junkSkipUserLocked, "the title carries a user override; it is never rewritten", true)
+		return finish(junkSkipUserLocked, lockHoldReason(titleState, "title"), true)
 	}
-	if locks.Locked(database.FieldKeyAuthorName) {
-		return finish(junkSkipUserLocked, "the author carries a user override; it is never rewritten", true)
+	if locks.Locked(database.FieldKeyAuthorName) && !locks.RepairLocked(database.FieldKeyAuthorName) {
+		return finish(junkSkipUserLocked, lockHoldReason(authorState, "author"), true)
 	}
+	lockTitle := !authorOnly || !locks.Locked(database.FieldKeyTitle)
+	lockAuthor := !locks.Locked(database.FieldKeyAuthorName)
 
 	files, err := store.GetBookFiles(b.ID)
 	if err != nil {
@@ -582,9 +628,17 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 		holds = holds || ba.AuthorID == oldAuthorID
 	}
 	fp = append(fp, "c", strings.Join(creditKeys, ","))
+	creditsDone := false
 	if len(credits) > 0 && !holds {
-		return finish(junkSkipNeedsManual, fmt.Sprintf(
-			"the book's credit list does not include the author %q its title sits in; a person sorts out its credits", author), true)
+		// An interrupted apply moves the credits before the primary author:
+		// a book whose credits already name every provider author as an
+		// author, with the title record gone from them, only needs its
+		// primary set.
+		creditsDone = authorOnly && creditsNameAll(store, credits, names)
+		if !creditsDone {
+			return finish(junkSkipNeedsManual, fmt.Sprintf(
+				"the book's credit list does not include the author %q its title sits in; a person sorts out its credits", author), true)
+		}
 	}
 
 	// Title equality is the whole identity test, which is weak for a short
@@ -595,12 +649,28 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 	if err != nil {
 		return repairs.Row{}, false, err
 	}
-	fp = append(fp, "corr", strings.Join(corr, "\x1f"))
-	r.Evidence = append(r.Evidence, corr...)
-	if words := len(strings.Fields(catalog)); words <= swapShortTitleWords && len(corr) == 0 {
+	strong := 0
+	for _, c := range corr {
+		fp = append(fp, "corr", c.text)
+		r.Evidence = append(r.Evidence, c.text)
+		if c.kind != swapCorrRuntime {
+			strong++
+		}
+	}
+	// A runtime within 10% is common between unrelated books, so it never
+	// carries a weak row alone. An author-only row always needs a tie: its
+	// title is already real, so the provider record matched a title that may
+	// well be a person's name or another book's.
+	words := titleWords(catalog)
+	switch {
+	case authorOnly && strong == 0:
+		return finish(junkSkipNeedsManual, fmt.Sprintf(
+			"the title is already %q, so nothing but that title ties the provider record (by %q) to this book "+
+				"(no matching narrator, ASIN or author folder; a runtime alone does not count); a person decides", b.Title, fetchedAuthor), true)
+	case words <= swapShortTitleWords && strong == 0:
 		return finish(junkSkipNeedsManual, fmt.Sprintf(
 			"the provider title %q is %d word(s) and nothing but the title ties the provider record to this book "+
-				"(no matching narrator, ASIN, runtime or author folder); another book may share the title", catalog, words), true)
+				"(no matching narrator, ASIN or author folder; a runtime alone does not count); another book may share the title", catalog, words), true)
 	}
 
 	proposedTitle := newTitle
@@ -622,14 +692,18 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 		r.Reason += fmt.Sprintf("; %d authors credited", len(names))
 	}
 	r.Detail = &swapDecision{bookID: b.ID, oldTitle: b.Title, newTitle: newTitle, oldAuthorID: oldAuthorID,
-		names: names, credits: credits}
-	r.Fingerprint = fingerprintStrings(append(fp, "apply", newTitle, strings.Join(names, "\x1f"))...)
+		names: names, credits: credits, creditsDone: creditsDone, lockTitle: lockTitle, lockAuthor: lockAuthor}
+	r.Fingerprint = fingerprintStrings(append(fp, "apply", newTitle, strings.Join(names, "\x1f"),
+		strconv.FormatBool(creditsDone), strconv.FormatBool(lockTitle), strconv.FormatBool(lockAuthor))...)
 	return r, true, nil
 }
 
 // swapSameRecordWindow is how far apart a provider title and author may have
-// been recorded and still count as one record's. updateFetchedMetadataState
-// stamps every field one fetch writes with the same time.
+// been recorded and still count as one record's. A state row's UpdatedAt is
+// when anything on the row last changed: updateFetchedMetadataState stamps
+// each field one fetch writes in a single loop (microseconds apart), and a
+// person's edit of the field restamps it (that field is then user-locked and
+// the row held anyway). A repair's lock keeps the row's time.
 const swapSameRecordWindow = 5 * time.Second
 
 // swapShortTitleWords: a provider title of at most this many words needs
@@ -639,6 +713,86 @@ const swapShortTitleWords = 2
 // swapRuntimeTolerance is how far a provider runtime may be from the book's
 // duration, as a fraction of the runtime, to corroborate.
 const swapRuntimeTolerance = 0.10
+
+// swapHistoryAll asks GetMetadataChangeHistory for every row of a field.
+const swapHistoryAll = 1 << 30
+
+// Kinds of corroboration. A runtime alone never carries a weak row.
+const (
+	swapCorrNarrator = "narrator"
+	swapCorrASIN     = "asin"
+	swapCorrRuntime  = "runtime"
+	swapCorrPath     = "path"
+)
+
+// swapCorr is one thing besides the title that ties the provider record to
+// the book.
+type swapCorr struct{ kind, text string }
+
+// titleWords counts a title's words as runs of letters and digits, so "T.S.
+// Eliot" and "T. S. Eliot" are both three.
+func titleWords(s string) int {
+	n, in := 0, false
+	for _, r := range s {
+		w := unicode.IsLetter(r) || unicode.IsDigit(r)
+		if w && !in {
+			n++
+		}
+		in = w
+	}
+	return n
+}
+
+// otherTitles lists, sorted, the real titles credited to authorID whose
+// letters key is not key (the title this book should have).
+func otherTitles(idx *junkIndex, authorID int, key string) []string {
+	var out []string
+	for k, t := range idx.authorTitles[authorID] {
+		if k != key {
+			out = append(out, t)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// fieldStateOf returns the state row for field, or nil.
+func fieldStateOf(states []database.MetadataFieldState, field string) *database.MetadataFieldState {
+	for i := range states {
+		if states[i].Field == field {
+			return &states[i]
+		}
+	}
+	return nil
+}
+
+// lockHoldReason words a lock hold: a repair's lock names its operation, so
+// it is not reported as a person's override.
+func lockHoldReason(st *database.MetadataFieldState, what string) string {
+	if st != nil && st.IsRepairLock() {
+		return fmt.Sprintf("the %s is locked by a repair (%s); revert that operation first to rewrite it", what, st.LockSource)
+	}
+	return fmt.Sprintf("the %s carries a user override; it is never rewritten", what)
+}
+
+// creditsNameAll reports whether every provider name resolves to an existing
+// author (exact name) that credits holds in an author role: the credit move
+// of an interrupted apply already happened.
+func creditsNameAll(store OpsStore, credits []database.BookAuthor, names []string) bool {
+	asAuthor := map[int]bool{}
+	for _, ba := range credits {
+		if isPrimaryAuthorRole(ba.Role) {
+			asAuthor[ba.AuthorID] = true
+		}
+	}
+	for _, n := range names {
+		a, err := store.GetAuthorByName(n)
+		if err != nil || a == nil || !asAuthor[a.ID] {
+			return false
+		}
+	}
+	return len(names) > 0
+}
 
 // swapFetched is one field's provider value: a string (HTML entities decoded:
 // some providers return "Magic Tides &amp; Magic Claims") or a number.
@@ -691,14 +845,16 @@ func swapStateGap(a, b swapFetched) time.Duration {
 // fetch wrote it: the fill-only apply copies the provider record into empty
 // fields, and a value copied from the record matches it by construction. The
 // narrator a "read by X" title names came from the file.
-func (f *swappedTitleAuthorFixer) corroborate(store OpsStore, b database.BookCore, fetched map[string]swapFetched, names, paths []string) ([]string, error) {
+func (f *swappedTitleAuthorFixer) corroborate(store OpsStore, b database.BookCore, fetched map[string]swapFetched, names, paths []string) ([]swapCorr, error) {
 	title := fetched["title"]
 	sameRecord := func(field string) (swapFetched, bool) {
 		v := fetched[field]
 		return v, v.ok && swapStateGap(v, title) <= swapSameRecordWindow
 	}
 	fetchedByProvider := func(field string) (bool, error) {
-		hist, err := store.GetMetadataChangeHistory(b.ID, database.HistoryFieldName(field), 0)
+		// Every row: the store's default page is 50 rows, and the fetched
+		// row that filled the field may be older than the 50 newest.
+		hist, err := store.GetMetadataChangeHistory(b.ID, database.HistoryFieldName(field), swapHistoryAll)
 		if err != nil {
 			return false, fmt.Errorf("read %s history of %s: %w", field, b.ID, err)
 		}
@@ -709,7 +865,7 @@ func (f *swappedTitleAuthorFixer) corroborate(store OpsStore, b database.BookCor
 		}
 		return false, nil
 	}
-	var out []string
+	var out []swapCorr
 
 	if pn, ok := sameRecord("narrator"); ok && pn.str != "" {
 		local := map[string]string{}
@@ -730,7 +886,7 @@ func (f *swappedTitleAuthorFixer) corroborate(store OpsStore, b database.BookCor
 		for _, n := range splitCreditNames(pn.str) {
 			if k := junkLettersKey(n); k != "" {
 				if mine, ok := local[k]; ok {
-					out = append(out, fmt.Sprintf("provider narrator %q matches the book's narrator %q", n, mine))
+					out = append(out, swapCorr{swapCorrNarrator, fmt.Sprintf("provider narrator %q matches the book's narrator %q", n, mine)})
 					break
 				}
 			}
@@ -743,15 +899,15 @@ func (f *swappedTitleAuthorFixer) corroborate(store OpsStore, b database.BookCor
 			return nil, err
 		}
 		if !filled {
-			out = append(out, fmt.Sprintf("provider ASIN %s matches the book's ASIN", pa.str))
+			out = append(out, swapCorr{swapCorrASIN, fmt.Sprintf("provider ASIN %s matches the book's ASIN", pa.str)})
 		}
 	}
 
 	if pr, ok := sameRecord("audible_runtime_min"); ok && pr.num > 0 && b.Duration != nil && *b.Duration > 0 {
 		want := pr.num * 60
 		if diff := float64(*b.Duration) - want; diff <= want*swapRuntimeTolerance && -diff <= want*swapRuntimeTolerance {
-			out = append(out, fmt.Sprintf("provider runtime %.0f min is within %.0f%% of the book's %d min",
-				pr.num, swapRuntimeTolerance*100, *b.Duration/60))
+			out = append(out, swapCorr{swapCorrRuntime, fmt.Sprintf("provider runtime %.0f min is within %.0f%% of the book's %d min",
+				pr.num, swapRuntimeTolerance*100, *b.Duration/60)})
 		}
 	}
 
@@ -766,7 +922,7 @@ pathLoop:
 		for _, p := range paths {
 			for _, seg := range strings.Split(filepath.ToSlash(p), "/") {
 				if strings.Contains(junkLettersKey(seg), k) {
-					out = append(out, fmt.Sprintf("the provider author %q is in the file path %s", n, p))
+					out = append(out, swapCorr{swapCorrPath, fmt.Sprintf("the provider author %q is in the file path %s", n, p)})
 					break pathLoop
 				}
 			}
@@ -821,13 +977,21 @@ func swapAuthorNames(raw string) (names []string, skip, why string) {
 }
 
 // Apply writes one fresh row through w, in this order: authors resolved (an
-// author created only when no author has the name, journaled); the credit
-// move off the author record that held the title (journaled inside the
-// book's author lock, compare-and-set on the credit list); the primary
-// author; the title (journaled, compare-and-set, user lock re-checked inside
-// the write). Every check that can refuse the row runs before the first
-// write, so a refusal writes nothing; a failure after the credit move is
-// reported as partially applied.
+// author created only when no author has the name, journaled); the title
+// (journaled, compare-and-set, user lock re-checked inside the write, then
+// locked); the author lock; the credit move off the author record that held
+// the title (journaled inside the book's author lock, compare-and-set on the
+// credit list); the primary author. Every check that can refuse the row runs
+// before the first write, so a refusal writes nothing; a failure after the
+// first write is reported as partially applied.
+//
+// The order is chosen so an interrupted apply leaves a book the next plan
+// finishes. Cut after the title (or its lock): title real, author still the
+// title, which is the author-only shape, and its apply locks whichever of
+// the two fields is still unlocked. Cut after the author lock: author-only
+// again; the repair's author lock does not hold the row. Cut after the
+// credit move: author-only with creditsDone, whose apply sets the primary
+// only. Nothing is left that no plan lists.
 func (f *swappedTitleAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*swapDecision)
 	if !ok || d == nil {
@@ -842,8 +1006,10 @@ func (f *swappedTitleAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fr
 	if err != nil {
 		return fmt.Errorf("read field locks of %s: %w", id, err)
 	}
-	if (d.newTitle != "" && locks.Locked(database.FieldKeyTitle)) || locks.Locked(database.FieldKeyAuthorName) {
-		return fmt.Errorf("%w: book %s title or author was locked by the user", repairs.ErrChangedSincePlan, id)
+	if (d.newTitle != "" && locks.Locked(database.FieldKeyTitle)) ||
+		(locks.Locked(database.FieldKeyAuthorName) && !locks.RepairLocked(database.FieldKeyAuthorName)) ||
+		(d.lockAuthor && locks.Locked(database.FieldKeyAuthorName)) {
+		return fmt.Errorf("%w: book %s title or author was locked since the plan", repairs.ErrChangedSincePlan, id)
 	}
 	book, err := store.GetBookByID(id)
 	if err != nil {
@@ -886,63 +1052,92 @@ func (f *swappedTitleAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fr
 		return fmt.Errorf("%s: row %s resolved no author", swappedFixerID, fresh.RowID)
 	}
 
+	wrote := false // a field of the book was written: a later failure is partial
+	if d.newTitle != "" {
+		// writeTitleOnly journals the title (so the op revert puts it back
+		// with the credits) and locks it.
+		// Its error is as is: a refused write wrote nothing, and a lock that
+		// failed after the write is already ErrPartiallyApplied.
+		if terr := writeTitleOnly(w, store, id, d.oldTitle, d.newTitle); terr != nil {
+			return terr
+		}
+		wrote = true
+	} else if d.lockTitle {
+		// Author-only: the title is already real but unlocked (an apply of
+		// this fixer cut between its title write and its lock).
+		if lerr := w.LockFields(id, database.FieldKeyTitle); lerr != nil {
+			return lerr
+		}
+		wrote = true
+	}
+	partial := func(what string, err error) error {
+		if !wrote {
+			return err
+		}
+		return fmt.Errorf("%w: book %s: %s: %w", repairs.ErrPartiallyApplied, id, what, err)
+	}
+	// Lock the author before moving it: a forced rescan re-reads the file
+	// tags, which still hold the swapped values, and would put the title back
+	// into the author (scanner.applyScannerFields honours the lock).
+	// Journaled, so the op revert lifts it.
+	if d.lockAuthor {
+		if lerr := w.LockFields(id, database.FieldKeyAuthorName); lerr != nil {
+			return partial("the author was not locked", lerr)
+		}
+		wrote = true
+	}
+
+	// creditsDone (an interrupted apply moved the credits but not the
+	// primary): the junction is written back as it is, so the journaled move
+	// still records the primary change and the op revert puts it back.
 	primaryChanged := false
-	_, err = w.ModifyCredits(id, func(cur []database.BookAuthor) ([]database.BookAuthor, repairs.UndoEntry, error) {
-		if !sameCreditList(cur, d.credits) {
-			return nil, repairs.UndoEntry{}, fmt.Errorf("%w: book %s credits changed", repairs.ErrChangedSincePlan, id)
+	{
+		_, err = w.ModifyCredits(id, func(cur []database.BookAuthor) ([]database.BookAuthor, repairs.UndoEntry, error) {
+			if !sameCreditList(cur, d.credits) {
+				return nil, repairs.UndoEntry{}, fmt.Errorf("%w: book %s credits changed", repairs.ErrChangedSincePlan, id)
+			}
+			b, gerr := store.GetBookByID(id)
+			if gerr != nil {
+				return nil, repairs.UndoEntry{}, fmt.Errorf("read book %s: %w", id, gerr)
+			}
+			if b == nil {
+				return nil, repairs.UndoEntry{}, fmt.Errorf("%w: book %s vanished", repairs.ErrChangedSincePlan, id)
+			}
+			next := swapCredits(cur, id, d.oldAuthorID, targets)
+			if d.creditsDone {
+				next = append([]database.BookAuthor(nil), cur...)
+			}
+			primaryChanged = b.AuthorID != nil && *b.AuthorID == d.oldAuthorID
+			var afterID *int
+			if primaryChanged {
+				pid := targets[0].ID
+				afterID = &pid
+			}
+			after := make([]database.BookAuthor, len(next))
+			copy(after, next)
+			snap, merr := json.Marshal(undo.TitleRelinkCreditsSnapshot{AuthorID: b.AuthorID, Credits: cur})
+			if merr != nil {
+				return nil, repairs.UndoEntry{}, fmt.Errorf("encode credits of %s: %w", id, merr)
+			}
+			// The junk-author fixer's change type: the same move (one credit
+			// off a record that is not this book's author, the exact junction
+			// after), so the op revert's compare-and-set restore applies as is.
+			move, merr := json.Marshal(undo.JunkAuthorCreditsMove{FromAuthorID: d.oldAuthorID, IntoAuthorID: targets[0].ID,
+				PrimaryAfter: afterID, PrimaryChanged: primaryChanged, CreditsAfter: &after})
+			if merr != nil {
+				return nil, repairs.UndoEntry{}, fmt.Errorf("encode credit move of %s: %w", id, merr)
+			}
+			return next, repairs.UndoEntry{ChangeType: undo.ChangeTypeJunkAuthorCredits, Field: "book_authors",
+				Old: string(snap), New: string(move)}, nil
+		})
+		if err != nil {
+			return partial("the credits were not moved", err)
 		}
-		b, gerr := store.GetBookByID(id)
-		if gerr != nil {
-			return nil, repairs.UndoEntry{}, fmt.Errorf("read book %s: %w", id, gerr)
-		}
-		if b == nil {
-			return nil, repairs.UndoEntry{}, fmt.Errorf("%w: book %s vanished", repairs.ErrChangedSincePlan, id)
-		}
-		next := swapCredits(cur, id, d.oldAuthorID, targets)
-		primaryChanged = b.AuthorID != nil && *b.AuthorID == d.oldAuthorID
-		var afterID *int
-		if primaryChanged {
-			pid := targets[0].ID
-			afterID = &pid
-		}
-		after := make([]database.BookAuthor, len(next))
-		copy(after, next)
-		snap, merr := json.Marshal(undo.TitleRelinkCreditsSnapshot{AuthorID: b.AuthorID, Credits: cur})
-		if merr != nil {
-			return nil, repairs.UndoEntry{}, fmt.Errorf("encode credits of %s: %w", id, merr)
-		}
-		// The junk-author fixer's change type: the same move (one credit off
-		// a record that is not this book's author, the exact junction after),
-		// so the op revert's compare-and-set restore applies as is.
-		move, merr := json.Marshal(undo.JunkAuthorCreditsMove{FromAuthorID: d.oldAuthorID, IntoAuthorID: targets[0].ID,
-			PrimaryAfter: afterID, PrimaryChanged: primaryChanged, CreditsAfter: &after})
-		if merr != nil {
-			return nil, repairs.UndoEntry{}, fmt.Errorf("encode credit move of %s: %w", id, merr)
-		}
-		return next, repairs.UndoEntry{ChangeType: undo.ChangeTypeJunkAuthorCredits, Field: "book_authors",
-			Old: string(snap), New: string(move)}, nil
-	})
-	if err != nil {
-		return err
 	}
 	if primaryChanged {
 		if perr := w.SetPrimaryAuthor(id, d.oldAuthorID, targets[0]); perr != nil {
 			return fmt.Errorf("%w: book %s credits moved but the primary author was not: %w", repairs.ErrPartiallyApplied, id, perr)
 		}
-	}
-	if d.newTitle != "" {
-		// writeTitleOnly journals the title (so the op revert puts it back
-		// with the credits) and locks it.
-		if terr := writeTitleOnly(w, store, id, d.oldTitle, d.newTitle); terr != nil {
-			return fmt.Errorf("%w: book %s author moved but the title was not written: %w", repairs.ErrPartiallyApplied, id, terr)
-		}
-	}
-	// Lock the author too: a forced rescan re-reads the file tags, which
-	// still hold the swapped values, and would put the title back into the
-	// author (scanner.applyScannerFields honours the lock). Journaled, so the
-	// op revert lifts it.
-	if lerr := w.LockFields(id, database.FieldKeyAuthorName); lerr != nil {
-		return fmt.Errorf("%w: book %s author moved but the author was not locked: %w", repairs.ErrPartiallyApplied, id, lerr)
 	}
 	return nil
 }
