@@ -1,5 +1,5 @@
 // file: internal/metadata/chapter_group_key.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b1e4c2a-9d53-4f8e-a6b0-3c5d8e2f1a94
 // last-edited: 2026-10-03
 
@@ -30,18 +30,25 @@ var (
 	// chapterLeadingNumRe: a leading track/chapter number followed by a
 	// separator, or a stem that is nothing but a number ("98").
 	chapterLeadingNumRe = regexp.MustCompile(`^\d+(?:[\s\-–._]+|$)`)
+	// chapterLeadingPairRe: a leading DISC-TRACK (or book-chapter) pair,
+	// "8-02 Rubicon", "01_07-Star Wars", "02_001", "1-09 Starshine". The first
+	// number is short (1-2 digits) so a year ("2016 - Title") never reads as
+	// one; both numbers are stripped from the key and both kept in the
+	// position. Until 2026-10-03 only the first was read, so every file of
+	// "8-02 Rubicon … — 02" carried chapter number 8.
+	chapterLeadingPairRe = regexp.MustCompile(`^(\d{1,2})[-_](\d{1,3})(?:[\s\-–._]+|$)`)
 	// chapterLeadingMarkerRe: "Chapter 01 - Title", "Disc 2 - Title". The
 	// marker word must be followed by a number, so "Discworld - Mort" is not
 	// a disc marker.
-	chapterLeadingMarkerRe = regexp.MustCompile(`(?i)^(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_]*\d+(?:\s*of\s*\d+)?(?:[\s\-–._:]+|$)`)
+	chapterLeadingMarkerRe = regexp.MustCompile(`(?i)^(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_]*\d+(?:[\s_]*of[\s_]*\d+)?(?:[\s\-–._:]+|$)`)
 	// chapterTrailingMarkerRe: "Title - Chapter 12", "Title Part 3",
 	// "Title_Disc2", "Title (CD 1)", "Title Part 3 of 12". The marker must
 	// start a word (start of stem or after a separator) and be followed by a
 	// number, so "Discworld 5" is NOT a disc marker.
-	chapterTrailingMarkerRe = regexp.MustCompile(`(?i)(?:^|[\s\-–_.,(\[]+)(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_\-]*\d+(?:\s*of\s*\d+)?[)\]]?\s*$`)
+	chapterTrailingMarkerRe = regexp.MustCompile(`(?i)(?:^|[\s\-–_.,(\[]+)(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_\-]*\d+(?:[\s_]*of[\s_]*\d+)?[)\]]?\s*$`)
 	// chapterTrailingOfRe: "Title 3 of 12", "Title (03 of 12)". Captures the
 	// total, which is part of the grouping key.
-	chapterTrailingOfRe = regexp.MustCompile(`(?i)(?:^|[\s\-–_.,(\[]+)\d+\s*of\s*(\d+)[)\]]?\s*$`)
+	chapterTrailingOfRe = regexp.MustCompile(`(?i)(?:^|[\s\-–_.,(\[]+)\d+[\s_]*of[\s_]*(\d+)[)\]]?\s*$`)
 	// chapterTrailingNumRe: "Book Title 01", "Book Title - 01", "Title_01".
 	chapterTrailingNumRe = regexp.MustCompile(`(?:^|[\s\-–_.,(\[]+)\d+[)\]]?\s*$`)
 	// chapterSeriesWordRe: a trailing number after one of these is a series
@@ -61,6 +68,8 @@ var (
 //	                           two differently-sized sets do not merge)
 //	"My Book 01"            -> "my book"   (trailing number)
 //	"01 Genesis 001"        -> "genesis"   (both ends)
+//	"8-02 Rubicon"          -> "rubicon"   (leading disc-track pair)
+//	"02_Eldest_002_of_349"  -> "eldest|of 349" ("_" around "of" too)
 //
 // kind is ChapterKeyNone when the stem carries no chapter numbering at all; the
 // file then stands alone. A trailing number after "Book", "Vol" or "#" is a
@@ -75,6 +84,8 @@ func ChapterGroupKey(stem string) (key string, kind ChapterKeyKind) {
 
 	if loc := chapterLeadingMarkerRe.FindStringIndex(s); loc != nil {
 		s, kind = s[loc[1]:], ChapterKeyMarker
+	} else if loc := chapterLeadingPairRe.FindStringIndex(s); loc != nil {
+		s, kind = s[loc[1]:], ChapterKeyLeading
 	} else if loc := chapterLeadingNumRe.FindStringIndex(s); loc != nil {
 		s, kind = s[loc[1]:], ChapterKeyLeading
 	}
@@ -154,7 +165,7 @@ func (p ChapterPos) Compare(q ChapterPos) int {
 
 var (
 	chapterMarkerNumRe = regexp.MustCompile(`(?i)(chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_\-]*(\d+)`)
-	chapterOfNumRe     = regexp.MustCompile(`(?i)(\d+)\s*of\s*\d+`)
+	chapterOfNumRe     = regexp.MustCompile(`(?i)(\d+)[\s_]*of[\s_]*\d+`)
 	chapterAnyNumRe    = regexp.MustCompile(`\d+`)
 )
 
@@ -194,6 +205,8 @@ func firstNum(re *regexp.Regexp, piece string, group int) (int, bool) {
 //	"My Book Disc 2"        -> {Disc: 2}
 //	"Disc 2 - My Story 07"  -> {Disc: 2, Parts: [7]}
 //	"01 Genesis 001"        -> {Parts: [1, 1]}
+//	"8-02 Rubicon — 02"     -> {Parts: [8, 2, 2]}
+//	"02_Eldest_002_of_349"  -> {Parts: [2, 2]}
 //
 // ok is false when the stem carries no chapter numbering (ChapterKeyNone).
 func ChapterPosition(stem string) (pos ChapterPos, ok bool) {
@@ -211,6 +224,15 @@ func ChapterPosition(stem string) (pos ChapterPos, ok bool) {
 			ok = true
 		}
 		s = s[loc[1]:]
+	} else if m := chapterLeadingPairRe.FindStringSubmatchIndex(s); m != nil {
+		a, aerr := strconv.Atoi(s[m[2]:m[3]])
+		b, berr := strconv.Atoi(s[m[4]:m[5]])
+		if aerr == nil && berr == nil {
+			take(false, a)
+			take(false, b)
+			ok = true
+		}
+		s = s[m[1]:]
 	} else if loc := chapterLeadingNumRe.FindStringIndex(s); loc != nil {
 		if n, nok := firstNum(chapterAnyNumRe, s[:loc[1]], 0); nok {
 			take(false, n)

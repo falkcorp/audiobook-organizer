@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -1991,6 +1991,21 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 
 		config.AppConfig.RepairChapterMaxMin = 30
 		held(t, f, "lib/Serial", "30 min or longer")
+	})
+	// Leading pairs (2026-10-03): "1-03 Title" is book/disc 1, chapter 3.
+	t.Run("a pair-numbered set sharing its first number is one run", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.numberedSeed(t, "lib/Paired", []string{"1-01 Arrival", "1-02 The Road", "1-03 Gear", "1-04 Ash",
+			"1-05 Night", "1-06 Ember", "1-07 Coda", "1-08 Home"}, 300, nil)
+		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path("lib/Paired"), fragNumberedKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Len(t, r.BookIDs, 8)
+	})
+	t.Run("a pair-numbered set across several discs is held", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.numberedSeed(t, "lib/Discs", []string{"1-01 Arrival", "1-02 The Road", "1-03 Gear", "1-04 Ash",
+			"2-01 Night", "2-02 Ember", "2-03 Coda", "2-04 Home"}, 300, nil)
+		held(t, f, "lib/Discs", "disc-track numbers across several discs")
 	})
 	t.Run("an author folder whose files have no author linked", func(t *testing.T) {
 		f := newFragFixture(t)

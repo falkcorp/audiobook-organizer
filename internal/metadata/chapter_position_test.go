@@ -1,7 +1,7 @@
 // file: internal/metadata/chapter_position_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8b2d61-7c4e-4a19-9e05-b6d1c8a2f437
-// last-edited: 2026-09-28
+// last-edited: 2026-10-03
 
 package metadata
 
@@ -31,6 +31,15 @@ func TestChapterPosition(t *testing.T) {
 		{"My Book (03 of 12)", ChapterKeyOfTotal, ChapterPos{Parts: []int{3}}, true},
 		{"My Story 01", ChapterKeyTrailingNumber, ChapterPos{Parts: []int{1}}, true},
 		{"01 Genesis 001", ChapterKeyLeading, ChapterPos{Parts: []int{1, 1}}, true},
+		// Leading disc-track / book-chapter pairs (2026-10-03).
+		{"8-02 Rubicon", ChapterKeyLeading, ChapterPos{Parts: []int{8, 2}}, true},
+		{"01_07-Star Wars Darth Plagueis", ChapterKeyLeading, ChapterPos{Parts: []int{1, 7}}, true},
+		{"02_001", ChapterKeyLeading, ChapterPos{Parts: []int{2, 1}}, true},
+		// "_" around "of" is the of-total shape too.
+		{"02_Eldest_002_of_349", ChapterKeyLeading, ChapterPos{Parts: []int{2, 2}}, true},
+		{"Eldest_002_of_349", ChapterKeyOfTotal, ChapterPos{Parts: []int{2}}, true},
+		// A year is no pair: the first number of a pair has 1-2 digits.
+		{"2016 - Reality Alternatives", ChapterKeyLeading, ChapterPos{Parts: []int{2016}}, true},
 		{"My Book", ChapterKeyNone, ChapterPos{}, false},
 		{"Mistborn Book 2", ChapterKeyNone, ChapterPos{}, false},
 	}
@@ -81,4 +90,25 @@ func TestDiscFolder(t *testing.T) {
 			require.Equal(t, tc.rest, rest)
 		})
 	}
+}
+
+// TestChapterGroupKey_PairsAndUnderscoreOf: every file of a set numbered with
+// a leading pair or "_of_" shares one key. Before 2026-10-03 the second
+// number and "_002_of" stayed in the key, so all 349 Eldest chapters had 349
+// different keys and none of them grouped.
+func TestChapterGroupKey_PairsAndUnderscoreOf(t *testing.T) {
+	for _, set := range [][]string{
+		{"02_Eldest_002_of_349", "02_Eldest_003_of_349", "02_Eldest_349_of_349"},
+		{"8-02 Rubicon (Amaranthe 08) — 02", "8-03 Rubicon (Amaranthe 08) — 03", "8-62 Rubicon (Amaranthe 08) — 62"},
+		{"01_07-Star Wars Darth Plagueis", "01_12-Star Wars Darth Plagueis", "13_13-Star Wars Darth Plagueis"},
+	} {
+		first, _ := ChapterGroupKey(set[0])
+		require.NotEmpty(t, first, set[0])
+		for _, stem := range set[1:] {
+			k, _ := ChapterGroupKey(stem)
+			require.Equal(t, first, k, stem)
+		}
+	}
+	k, _ := ChapterGroupKey("02_Eldest_002_of_349")
+	require.Equal(t, "eldest|of 349", k)
 }
