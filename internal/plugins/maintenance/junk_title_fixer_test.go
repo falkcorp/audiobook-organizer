@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package maintenance
 
@@ -374,6 +374,36 @@ func TestJunkProposalCheck_Refusals(t *testing.T) {
 	// The format list applies to folder and filename evidence only; the
 	// root, person and generic checks apply to every source.
 	require.Empty(t, pc.refusal("Dune Tape 3", junkSrcTranscribed))
+	// A transcription that is the intro's first sentence, a publisher ident
+	// or a chapter heading is not a title (every one of these was proposed on
+	// prod 2026-10-03).
+	for c, want := range map[string]string{
+		"Chapter 26 The apartment was in Asimov, a city at":                        "chapter heading",
+		"Chapter 77. Testing. Primordials were strange, en":                        "chapter heading",
+		"Together, they fell toward the light. The wall be":                        "prose",
+		"his brain loose. The simulated G-forces, as he ro":                        "prose",
+		"It's easy to idealize the past. Take sailing ships, for instance. Not th": "prose",
+		"Tantor Audio, a division of recorded books presents. Class A threat":      "publisher",
+		"Tantor audio presents, The Legend of Coronair":                            "publisher",
+		"from Simon and Schuster Audio, Star Trek, Voyager, Pathways":              "publisher",
+		"Full cast audio resents. Wild magic":                                      "publisher",
+		"This is Audible.":                                                         "publisher",
+		"Star Force, Endless Crusade. Written":                                     "prose",
+	} {
+		got := pc.refusal(c, junkSrcTranscribed)
+		require.NotEmpty(t, got, "%q must be refused", c)
+		require.Contains(t, got, want, c)
+	}
+	for _, c := range []string{"The Shadow of Saginami", "Quantico", "Stormborn, The Seaborn Cycle", "Star Trek, Spectre",
+		"So Long and Thanks for All the Fish", "1984", "Life, the universe, and everything",
+		"Star Trek Deep Space Nine Millennium The Fall of Terok Nor", "Reunion, a Star Trek The Next Generation novel"} {
+		require.Empty(t, pc.refusal(c, junkSrcTranscribed), c)
+	}
+	// A chapter heading is refused from every source: "01 - Prologue" strips
+	// to "Prologue", "03 Chapter Two - The Hunter" to "Chapter Two - The Hunter".
+	require.Contains(t, pc.refusal("Prologue Bobbie Draper", junkSrcStripped), "chapter heading")
+	require.Contains(t, pc.refusal("Chapter Two - The Hunter", junkSrcStripped), "chapter heading")
+	require.Empty(t, pc.refusal("Prologue to Murder", junkSrcStripped), "a title can start with the word")
 	require.NotEmpty(t, pc.refusal("lib", junkSrcCandidate))
 	require.Empty(t, pc.refusal("Dune", junkSrcFolder))
 	// The author folder directly below an author-first library root is a path.
@@ -506,20 +536,22 @@ func TestJunkTitleFixer_ConflictingEvidenceProposesNeither(t *testing.T) {
 	two := func(dir string) []string { return []string{dir + "/01.mp3", dir + "/02.mp3"} }
 
 	conflicts := map[string][2]string{} // id -> the two values the reason must name
+	proposed := map[string]string{}     // id -> the title the row must propose
 	id := addJunkBook(t, st, "Unknown Title", herbert, "/lib/Frank Herbert/Dune Messiah/Dune Messiah.m4b")
 	cache(id, "Dune", "Frank Herbert", 0.6)
 	conflicts[id] = [2]string{"Dune Messiah", "Dune"}
 	id = addJunkBook(t, st, "Opening", herbert, two("/lib/Frank Herbert/Children of Dune")...)
 	cache(id, "Dune", "Frank Herbert", 0.9)
 	conflicts[id] = [2]string{"Children of Dune", "Dune"}
+	// A publisher ident is refused as a transcription (not evidence, not a
+	// conflict): the folder alone names the book.
 	id = addJunkBook(t, st, "read by narrator", banks, two("/lib/Iain M. Banks/Excession")...)
 	transcribe(id, "Audible Studios presents")
-	conflicts[id] = [2]string{"Excession", "Audible Studios presents"}
+	proposed[id] = "Excession"
 	id = addJunkBook(t, st, "Opening", sanderson, two("/lib/Brandon Sanderson/Libation")...)
 	transcribe(id, "Mistborn: The Final Empire")
 	conflicts[id] = [2]string{"Libation", "Mistborn: The Final Empire"}
 
-	proposed := map[string]string{} // id -> the title the row must propose
 	stormlight, err := st.CreateSeries("The Stormlight Archive", sanderson)
 	require.NoError(t, err)
 	id = addJunkBook(t, st, "Opening", sanderson, two("/lib/Brandon Sanderson/The Stormlight Archive")...)
