@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.193.0
+// version: 1.194.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-03
 
@@ -4006,11 +4006,13 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 	upper := append([]byte(nil), prefix...)
 	upper[len(upper)-1] = ';' // ':' + 1
 	var books []Book
+	indexed := 0 // index rows seen for this group, live or not
 	if err := forEachKeyInRange(p.db, prefix, upper, func(key, _ []byte) error {
 		bookID := string(key[len(prefix):])
 		if bookID == "" {
 			return nil
 		}
+		indexed++
 		b, err := p.GetBookByID(bookID)
 		if err != nil {
 			// Only a missing row may be skipped: GetBookByID reports not-found as
@@ -4041,6 +4043,15 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 	if len(books) > 0 {
 		sortVersions(books)
 		return books, nil
+	}
+	if indexed > 0 {
+		// The index KNOWS this group: every member it lists is soft-deleted
+		// (a lone fragment the repairs lane just retired is the common case).
+		// That is an answer, not a missing index, so the full scan below
+		// must not run. Measured on prod 2026-10-03: every retire of a lone
+		// fragment paid this scan twice (here and in the journal read it
+		// triggered), ~11 s per fragment on 51k books.
+		return nil, nil
 	}
 
 	// Fallback: full scan for groups whose index hasn't been backfilled yet.

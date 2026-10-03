@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 // The shared retire of the Repairs-lane merge fixers: fold one book into
 // another as merge.Service retires an absorbed book, every step journaled
@@ -370,6 +370,12 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	members, err := store.GetBooksByVersionGroup(gid)
 	if err != nil {
 		return refuse("group %s unreadable: %v", gid, err)
+	}
+	if len(members) == 0 {
+		// Nobody is left to crown: the retired book was the group's only
+		// live member (a lone fragment). Nothing is owed, and the journal
+		// scan below (every opchange row, no by-book index) is not paid.
+		return nil
 	}
 	live := livePrimaries(store, members, b.ID)
 	if live == 1 {
