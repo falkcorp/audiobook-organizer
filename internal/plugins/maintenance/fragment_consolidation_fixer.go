@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -192,6 +192,10 @@ const (
 	fragEvNameSizeFolder = "original filename and size equal the parent row's, imported from the parent row's folder"
 	fragEvNameSize       = "original filename and size equal the parent row's"
 	fragEvDone           = "parent row already points at the fragment's file (finished step)"
+	// fragEvTwinPrefix opens the evidence of a fragment that matched no parent
+	// row itself but shares its exact path with a fragment that did: two
+	// single-row books registered for one file. The twin's evidence follows.
+	fragEvTwinPrefix = "same path as fragment "
 )
 
 // fragMinGroup is the scanner's consolidation minimum: fewer same-key files
@@ -491,6 +495,21 @@ func (ix *fragIndex) match(c *fragCandidate) []fragMatch {
 	return out
 }
 
+// fragEvTwin is the evidence a path twin adopts from fragment id.
+func fragEvTwin(id, evidence string) string {
+	return fragEvTwinPrefix + id + ", whose " + evidence
+}
+
+// twinEvidence returns the adopted evidence inside a twin's, if it is one.
+func twinEvidence(evidence string) (inner string, ok bool) {
+	rest, ok := strings.CutPrefix(evidence, fragEvTwinPrefix)
+	if !ok {
+		return "", false
+	}
+	_, inner, ok = strings.Cut(rest, ", whose ")
+	return inner, ok
+}
+
 func hashesDisagree(a, b fragFile) bool {
 	ah, bh := uniqueNonEmpty(a.Hash, a.OrigHash), uniqueNonEmpty(b.Hash, b.OrigHash)
 	if len(ah) == 0 || len(bh) == 0 {
@@ -512,6 +531,9 @@ func hashesDisagree(a, b fragFile) bool {
 // still on disk, is proven only by the import path (with an equal size on
 // disk) or a hash.
 func provenMatch(kind, evidence string) bool {
+	if inner, ok := twinEvidence(evidence); ok {
+		return provenMatch(kind, inner)
+	}
 	switch evidence {
 	case fragEvImportPath, fragEvHash, fragEvDone:
 		return true
@@ -1204,6 +1226,48 @@ func sliceIn(rows []fragFile, target fragFile) merge.SliceMapping {
 // buildRows turns the evaluated candidates into rows. It is shared by Plan
 // (over the whole library) and Replan (over one row's books), so both reach
 // the same decision from the same state.
+// adoptTwinMatches gives a candidate that matched no parent row the single
+// match of a twin: another candidate whose row names the exact same path.
+// Two single-row books registered for one file (an import that ran twice
+// over the same chapter: "02" beside "Eldest - 02") carry one file's
+// evidence between them, and the one without it is the same chapter of the
+// same parent. Adopted evidence is as proven as the twin's own, so both
+// land in one row and retire together; without this the evidence-less twin
+// stayed a live co-owner of the path and made its sibling's row refused
+// (checkOwners: "also owned by book"), 21 of 48 applicable rows on prod
+// 2026-10-03. A twin whose own match is ambiguous, or whose path is shared
+// by two matched fragments, lends nothing.
+func adoptTwinMatches(cands []*fragCandidate, matchOf map[*fragCandidate][]fragMatch) {
+	byPath := map[string][]*fragCandidate{}
+	for _, c := range cands {
+		byPath[c.File.Path] = append(byPath[c.File.Path], c)
+	}
+	for _, c := range cands {
+		if len(matchOf[c]) > 0 || c.StatErr != "" {
+			continue
+		}
+		var donor *fragCandidate
+		for _, d := range byPath[c.File.Path] {
+			if d == c || len(matchOf[d]) != 1 {
+				continue
+			}
+			if _, adopted := twinEvidence(matchOf[d][0].Evidence); adopted {
+				continue
+			}
+			if donor != nil {
+				donor = nil
+				break
+			}
+			donor = d
+		}
+		if donor == nil {
+			continue
+		}
+		m := matchOf[donor][0]
+		matchOf[c] = []fragMatch{{Row: m.Row, Evidence: fragEvTwin(donor.Book.ID, m.Evidence)}}
+	}
+}
+
 func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*fragCandidate) []repairs.Row {
 	type parentKey struct{ parent, kind string }
 	pairs := map[parentKey][]fragPair{}
@@ -1215,23 +1279,30 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 	matchOf := map[*fragCandidate][]fragMatch{}
 	ignoredOf := map[*fragCandidate][]string{}
 
+	noteOf := map[*fragCandidate]string{}
 	for _, c := range cands {
 		ms := ix.match(c)
 		parents := map[string]bool{}
 		for _, m := range ms {
 			parents[m.Row.BookID] = true
 		}
-		note := ""
 		if len(parents) > 1 {
 			kept, ignored, ok, why := f.disregardITunesParents(lib, c, ms)
 			if ok {
 				ms, ignoredOf[c] = kept, ignored
-				parents = map[string]bool{kept[0].Row.BookID: true}
 			} else {
-				note = why
+				noteOf[c] = why
 			}
 		}
 		matchOf[c] = ms
+	}
+	adoptTwinMatches(cands, matchOf)
+	for _, c := range cands {
+		ms, note := matchOf[c], noteOf[c]
+		parents := map[string]bool{}
+		for _, m := range ms {
+			parents[m.Row.BookID] = true
+		}
 		switch {
 		case len(ms) == 0:
 			unmatched = append(unmatched, c)
