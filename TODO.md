@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.75.1 -->
+<!-- version: 10.75.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -49,20 +49,30 @@ into one of the curated sections below, is a normal direct edit.
       author-gated search variants miss it. Look for other narrator-as-author
       rows of the same shape.
 
-- [ ] **FLAKE-SCANLOCK-PENDING** `TestPendingBlocksOnlyTheIdleAcquires`
+- [x] **FLAKE-SCANLOCK-PENDING** `TestPendingBlocksOnlyTheIdleAcquires`
       (`internal/scanlock/scanlock_test.go:173`, "table not empty: 2") failed
       in CI on PR #3639, which does not touch scanlock. It passes 50/50 under
       `-race` locally, so the table check races the release cleanup under CI
       load. Wait for the table to drain instead of checking once.
+      Done 2026-10-03 (fix/test-flakes-scanlock-fpwindow-wdog-writeback): the "2" came from the close-before-release
+      order 7054dedbc already fixed (#3639's head predates it). The 30ms
+      "is it waiting" sleep is replaced by a `SetTrace` gate on the waiter's
+      release of `p`; 24,000/24,000 passes in 16 parallel `-race` runs.
 
-- [ ] **FLAKE-FPWINDOW** `TestFileWindow_ContextKill`
+- [x] **FLAKE-FPWINDOW** `TestFileWindow_ContextKill`
       (`internal/fingerprint/window_exec_test.go`) failed once on Woodpecker
       (pipeline 238, #3613's head) and passed on restart (241) with no code
       change. Find the timing assumption (context cancel vs. subprocess exit)
       and make it deterministic; done = 50 consecutive `-count=50 -race` passes
       on the Mac agent.
+      Done 2026-10-03 (fix/test-flakes-scanlock-fpwindow-wdog-writeback): a timeout that expired before ffmpeg
+      started came back from `exec.Cmd.Start` as `ctx.Err()`, which
+      `runWindowPipe` flattened into a transient ffmpeg failure (production
+      fix: `startFailure`). The test now cancels only after the fake ffmpeg
+      writes a ready file and checks the orphaned grandchild is still alive
+      instead of a 5s wall-clock bound; 600/600 in 12 parallel `-race` runs.
 
-- [ ] **FLAKE-WDOGTOUCH** `TestWatchdog_TouchLivenessAloneKeepsOpAlive`
+- [x] **FLAKE-WDOGTOUCH** `TestWatchdog_TouchLivenessAloneKeepsOpAlive`
       (`internal/operations/registry/touch_liveness_watchdog_test.go`) failed
       on Woodpecker pipeline 287 (#3619 head 8e2d181f4, unrelated change):
       the op touches liveness every 20ms against a 100ms ProgressTimeout, and
@@ -71,6 +81,10 @@ into one of the curated sections below, is a normal direct edit.
       (e.g. ProgressTimeout 1s, touch every 20ms, run 2s) or drive the
       watchdog with an injected clock; done = 50 consecutive `-count=50
       -race` passes under a parallel `make ci-woodpecker` load.
+      Done 2026-10-03 (fix/test-flakes-scanlock-fpwindow-wdog-writeback): new `registry.Options.LivenessNow` clock
+      drives the attempt baseline, touch stamps and the watchdog's now; the
+      test steps it 60ms per round against a 100ms timeout and runs one cycle
+      per round. 19,200/19,200 in 16 parallel `-race` runs.
 
 - [ ] **AUTHOR-SNAPSHOT** The metadata apply never refreshes the `Book.Author`
       snapshot stored in the book row. `internal/metafetch/service_apply.go`
@@ -366,7 +380,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **`dedup.embed-scan` should fail closed when routing is on and no endpoint can embed.** With `ai_endpoints_routing` on and zero usable `embed.text` candidates (none ticked, or none serving the pinned model), `Engine.EmbedConcurrency` falls back to 4 workers and every book fails with `NoCapableEndpointError`, one by one across the whole library. Check `EmbeddingClient.RoutedCapacity()` (or the dispatcher's candidates) at op start and fail the op with the dispatcher's refusal reasons instead. Same check belongs in the other embed fan-outs (`reembed_embeddings.go` uses `runtime.NumCPU()` workers). Found in the #3464 review, 2026-09-19.
 
-- [ ] **FLAKE-WRITEBACK-RESUME** `TestBulkWriteBack_ResumeSkipsCheckpointedBooks`
+- [x] **FLAKE-WRITEBACK-RESUME** `TestBulkWriteBack_ResumeSkipsCheckpointedBooks`
       (`internal/server/library_writeback_resume_test.go:76`) is flaky: it
       cancels the context when the nth callback reaches `n/2`, but the bulk
       write-back runs concurrent workers that can finish all 60 books before
@@ -375,6 +389,11 @@ into one of the curated sections below, is a normal direct edit.
       passed 8/8 locally. Fix: make the cancel point deterministic (block the
       remaining workers until the cancel lands, or run the first pass with
       concurrency 1) instead of racing the pool.
+      Done 2026-10-03 (fix/test-flakes-scanlock-fpwindow-wdog-writeback): the worker that drew the midpoint
+      progress call could stall between the recorder's unlock and its
+      `cancel()` (reproduced 8 in 2,400 under parallel load). Every later
+      progress callback now waits for the cancel, which bounds the first pass
+      to 30..29+workers books; 4,800/4,800 under the same load.
 
 - [x] **Flaky: `TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle`** — FIXED 2026-09-19 (fix/ckpt-idle-test-flake): the test accepted a TRUNCATE that ran in a pause between writes; later writes regrew the WAL (CI: 407,912 bytes). It now counts only a TRUNCATE after the last write. (`internal/database`) failed 4 of 5 isolated `-race` runs on a Mac on 2026-09-19, on clean `origin/main` as well as on a branch, so it is not caused by a change. Find the timing assumption (idle detection vs. checkpoint interval under `-race`) and make the test wait on the condition rather than on wall time. It can block unrelated PRs if CI hits it.
 
