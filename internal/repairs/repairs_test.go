@@ -1,7 +1,7 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package repairs
 
@@ -1192,6 +1192,28 @@ func TestWriter_HistoryFailureWritesIncompleteMarker(t *testing.T) {
 		}
 	}
 	require.True(t, marker, "undo must see the batch is incomplete")
+}
+
+// TestWriter_SeriesIDHistoryCarriesRefs: undo-last-apply restores series_id
+// from the history row's refs and fails the field without them.
+func TestWriter_SeriesIDHistoryCarriesRefs(t *testing.T) {
+	s := newMemStore()
+	s.add("b1", "Book", "/lib/a.m4b", nil)
+	w := NewWriter(s, s, "src", "bulk_update", "rp-")
+	changed, err := w.Modify("b1", func(b *database.Book) error {
+		id := 42
+		b.SeriesID = &id
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"series_id"}, changed)
+	require.Len(t, s.history, 1)
+	h := s.history[0]
+	require.NotNil(t, h.PreviousRef)
+	require.NotNil(t, h.NewRef)
+	require.Nil(t, h.PreviousRef.SeriesID)
+	require.NotNil(t, h.NewRef.SeriesID)
+	require.Equal(t, 42, *h.NewRef.SeriesID)
 }
 
 func TestRegistry(t *testing.T) {
