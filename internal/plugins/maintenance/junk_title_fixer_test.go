@@ -149,6 +149,26 @@ func newJunkLib(t *testing.T) *junkLib {
 		"/lib/Author P/02 - No Quarter.m4b")
 	require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: pos, Field: "title",
 		FetchedValue: &fetchedPos, UpdatedAt: time.Now()}))
+	// The provider's recorded title differs from the stored junk one: it is
+	// evidence. 1,216 of 1,233 provider-flagged rows on prod, 2026-10-03.
+	withFetched := func(name, title, fetched string, authorID *int, paths ...string) {
+		id := add(name, title, paths[0], authorID, nil, paths...)
+		enc, err := json.Marshal(fetched)
+		require.NoError(t, err)
+		val := string(enc)
+		require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: id, Field: "title",
+			FetchedValue: &val, UpdatedAt: time.Now()}))
+	}
+	// agrees with the stripped title
+	withFetched("provider-agrees", "85 - Echo Book", "Echo Book: A LitRPG Adventure", nil, "/lib/Author Q/85 - Echo Book.m4b")
+	// the fetch searched on the junk title and hit another book
+	withFetched("provider-wrong-hit", "07 - Mutineer Song", "Shadowfall", nil, "/lib/Author R/07 - Mutineer Song.m4b")
+	// a narrator credit with nothing in the title: the provider value and the folder agree
+	withFetched("provider-credit", "read by narrator", "Divine Creation", nil,
+		"/lib/Author S/Divine Creation/01.mp3", "/lib/Author S/Divine Creation/02.mp3")
+	// …and disagree
+	withFetched("provider-conflict", "read by narrator", "Divine Creation", nil,
+		"/lib/Author T/Quite Another Folder/01.mp3", "/lib/Author T/Quite Another Folder/02.mp3")
 	// A bare unpadded number beside other books of its author may be the
 	// real title: needs a person, never a (possible) fragment.
 	add("bare13", "13", "/lib/Author A/13.m4b", a, nil, "/lib/Author A/13.m4b")
@@ -199,6 +219,10 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		// repaired like a file-derived one (owner decision 2026-10-03)
 		"provider":        "Provider Folder",
 		"provider-prefix": "No Quarter",
+		// the provider's recorded title is evidence
+		"provider-agrees":    "Echo Book",
+		"provider-wrong-hit": "Mutineer Song",
+		"provider-credit":    "Divine Creation",
 	}
 	for name, want := range applicable {
 		r, ok := rows[name]
@@ -207,10 +231,19 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		require.Equal(t, want, r.Proposed["title"], name)
 		require.Equal(t, []string{lib.ids[name]}, r.BookIDs, "%s: one book per row", name)
 	}
+	// A provider that returned the junk title itself: repaired, never at low risk.
 	for _, name := range []string{"provider", "provider-prefix"} {
-		require.Contains(t, rows[name].Reason, "recorded as provider-supplied", name)
+		require.Contains(t, rows[name].Reason, "a metadata provider returned this same title", name)
+		require.Equal(t, repairs.RiskReview, rows[name].Risk, name)
 	}
-	require.NotContains(t, rows["prefix"].Reason, "provider-supplied")
+	require.NotContains(t, rows["prefix"].Reason, "provider")
+	// A recorded title that agrees with the stripped one corroborates it.
+	require.Equal(t, repairs.RiskLow, rows["provider-agrees"].Risk)
+	require.Contains(t, rows["provider-agrees"].Reason, `a metadata provider recorded the title "Echo Book: A LitRPG Adventure"`)
+	// One that disagrees with the title's own evidence is never proposed.
+	require.NotContains(t, rows["provider-wrong-hit"].Reason, "provider_value:")
+	require.Contains(t, rows["provider-wrong-hit"].Reason, "title_prefix_stripped")
+	require.Equal(t, repairs.RiskReview, rows["provider-credit"].Risk)
 	require.Equal(t, repairs.RiskLow, rows["prefix"].Risk)
 	require.Contains(t, rows["eldest-prefix"].Reason, "title_prefix_stripped")
 	require.NotContains(t, rows["eldest-prefix"].Reason, "Eragon")
@@ -223,24 +256,26 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		"dup":           junkSkipPossibleFragment,
 		"eldest98":      junkSkipPossibleFragment,
 		// proven: another book owns one of its files
-		"owned":          junkSkipFragment,
-		"owner-proposal": repairs.SkipOwnerManual,
-		"bare13":         junkSkipNeedsManual,
-		"unabridged":     junkSkipNeedsManual,
-		"transcribed":    junkSkipNeedsManual,
-		"generic":        junkSkipNeedsManual,
-		"locked":         junkSkipUserLocked,
-		"manual":         junkSkipNeedsManual,
-		"person":         junkSkipNeedsManual,
-		"bf-title":       repairs.SkipOwnerManual,
-		"itunes":         repairs.SkipITunes,
-		"dw-series":      repairs.SkipOwnerManual,
+		"owned":             junkSkipFragment,
+		"owner-proposal":    repairs.SkipOwnerManual,
+		"provider-conflict": junkSkipNeedsManual,
+		"bare13":            junkSkipNeedsManual,
+		"unabridged":        junkSkipNeedsManual,
+		"transcribed":       junkSkipNeedsManual,
+		"generic":           junkSkipNeedsManual,
+		"locked":            junkSkipUserLocked,
+		"manual":            junkSkipNeedsManual,
+		"person":            junkSkipNeedsManual,
+		"bf-title":          repairs.SkipOwnerManual,
+		"itunes":            repairs.SkipITunes,
+		"dw-series":         repairs.SkipOwnerManual,
 	}
 	for name, want := range skipped {
 		r, ok := rows[name]
 		require.True(t, ok, "%s: no row", name)
 		require.Equal(t, want, r.Skipped, "%s: %s", name, r.SkipReason)
 	}
+	require.Contains(t, rows["provider-conflict"].SkipReason, `provider_value "Divine Creation"`)
 	require.Contains(t, rows["frag1"].SkipReason, "possible fragment")
 	require.Contains(t, rows["owned"].SkipReason, "fragment — use the consolidation fixer")
 	require.Contains(t, rows["eldest98"].SkipReason, `its author "Eldest" is the name of its folder`)
@@ -766,4 +801,61 @@ func TestJunkTitleFixer_CandidateReadIsTheFilteredRow(t *testing.T) {
 		filtered: map[string]*database.MetadataCandidateCache{id: {BookID: id}}}, standDownWait: noWait})
 	_, _, ok = filtered.candidateTitle(id, "Author A")
 	require.False(t, ok, "the filtered row has no candidate; the raw row must not be read")
+}
+
+// TestJunkTitleFixer_ProviderRecordedRowApplies: a row whose title state
+// carries a provider value plans, re-plans to the same fingerprint, applies,
+// and leaves the recorded provider value exactly as it was.
+func TestJunkTitleFixer_ProviderRecordedRowApplies(t *testing.T) {
+	lib := newJunkLib(t)
+	f, res, rows := lib.plan(t)
+	raw, err := json.Marshal(res)
+	require.NoError(t, err)
+	var plan repairs.PlanResult
+	require.NoError(t, json.Unmarshal(raw, &plan))
+	id := lib.ids["provider-agrees"]
+	fetchedBefore := titleFetched(t, lib.store, id)
+	require.NotNil(t, fetchedBefore)
+
+	fresh, err := f.Replan(context.Background(), nil, rows["provider-agrees"], &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, rows["provider-agrees"].Fingerprint, fresh.Fingerprint, "plan and re-plan agree")
+
+	series, err := lib.store.GetAllSeries()
+	require.NoError(t, err)
+	deps := repairs.ApplyDeps{Guard: lib.store, Series: repairs.SeriesNamesFrom(series),
+		Writer: repairs.NewWriter(lib.store, lib.store, f.ID(), "bulk_update", "repairs-")}
+	out, err := repairs.RunApply(context.Background(), f, &plan, "plan-1", []string{rows["provider-agrees"].RowID}, false, deps, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+	b, err := lib.store.GetBookByID(id)
+	require.NoError(t, err)
+	require.Equal(t, "Echo Book", b.Title)
+	fetchedAfter := titleFetched(t, lib.store, id)
+	require.NotNil(t, fetchedAfter)
+	require.Equal(t, *fetchedBefore, *fetchedAfter, "the recorded provider value is not rewritten")
+}
+
+// TestJunkTitleFixer_UserLockBeatsProviderValue: a title with both a user
+// override and a provider value stays user-locked.
+func TestJunkTitleFixer_UserLockBeatsProviderValue(t *testing.T) {
+	lib := newJunkLib(t)
+	fetched := `"Some Provider Title"`
+	override := `"Unknown Title"`
+	require.NoError(t, lib.store.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: lib.ids["locked"], Field: "title",
+		FetchedValue: &fetched, OverrideValue: &override, OverrideLocked: true, UpdatedAt: time.Now()}))
+	_, _, rows := lib.plan(t)
+	require.Equal(t, junkSkipUserLocked, rows["locked"].Skipped, rows["locked"].SkipReason)
+}
+
+func titleFetched(t *testing.T, st database.Store, bookID string) *string {
+	t.Helper()
+	states, err := st.GetMetadataFieldStates(bookID)
+	require.NoError(t, err)
+	for i := range states {
+		if states[i].Field == "title" {
+			return states[i].FetchedValue
+		}
+	}
+	return nil
 }
