@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/letter_l_ordinal_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e4b7c21-6a3f-4d58-b1e0-2c8d5f9a3b47
-// last-edited: 2026-09-28
+// last-edited: 2026-10-03
 
 package maintenance
 
@@ -26,6 +26,11 @@ const letterLOrdinalFixerID = "maintenance.normalize-letter-l-ordinals"
 // used the glyph, and the titles inherited it. Only a numbered book name
 // after the token qualifies (util.NormalizeLetterLOrdinal), so "l'Étranger"
 // is never a row.
+//
+// The title goes through writeTitleOnly, which journals it and locks it (the
+// file tags still carry the letter-l spelling, and a forced rescan would
+// write it back otherwise). Undo is the apply operation's revert, which puts
+// the title back and lifts the lock; "Undo last apply" refuses the batch.
 type letterLOrdinalFixer struct{ p *Plugin }
 
 func newLetterLOrdinalFixer(p *Plugin) *letterLOrdinalFixer { return &letterLOrdinalFixer{p: p} }
@@ -37,7 +42,9 @@ func (f *letterLOrdinalFixer) Title() string { return "Letter-l ordinals (\"l Co
 func (f *letterLOrdinalFixer) Description() string {
 	return "Titles of numbered books whose ordinal is the letter l instead of the digit 1 or roman I " +
 		"(\"l Corinthians\", \"ll Kings\"). Rewrites the ordinal to digits (\"1 Corinthians\", \"2 Kings\") and " +
-		"leaves the rest of the title alone. Writes the title only, never a user-locked one."
+		"leaves the rest of the title alone. Writes the title only, never a user-locked one, and locks the title it " +
+		"wrote so a rescan cannot restore the file tag's spelling. Undo with the apply operation's revert, which also " +
+		"lifts the lock."
 }
 
 // Plan lists every live book whose title uses a letter-l ordinal.

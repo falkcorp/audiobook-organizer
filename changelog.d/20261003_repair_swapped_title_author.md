@@ -7,4 +7,4 @@
 
 ### Changed
 
-- The junk-title and swapped fixers lock the title (and the swapped fixer the author) they wrote, so a forced rescan cannot write the file tags' junk or swapped values back. The lock is recorded in the apply operation, and the operation's revert lifts it with the rest of the change. Junk-title applies are therefore undone with the operation's revert; "Undo last apply" now refuses them.
+- The junk-title, letter-l ordinal and swapped fixers lock the title (and the swapped fixer the author) they wrote, so a forced rescan cannot write the file tags' junk or swapped values back. The lock is recorded in the apply operation, and the operation's revert lifts it with the rest of the change. Junk-title and letter-l ordinal applies are therefore undone with the operation's revert; "Undo last apply" now refuses them.
