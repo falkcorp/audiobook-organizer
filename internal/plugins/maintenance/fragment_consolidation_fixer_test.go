@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package maintenance
 
@@ -268,7 +268,7 @@ func TestFragmentFixer_PlanClassifiesEveryShape(t *testing.T) {
 		{"no-parent", noParentRowID(f.path("lib/Loose"), "loose"), fragClassNoParent, "", []string{"loose01", "loose02", "loose03"}, ""},
 		{"duration gate", noParentRowID(f.path("lib/Long"), "long"), fragClassNoParent, fragSkipDurationGate, []string{"long01", "long02", "long03"}, ""},
 		{"itunes", "moved:" + f.ids["itunesParent"], fragClassManual, repairs.SkipITunes, []string{"itunesParent", "itunesFrag"}, ""},
-		{"held: fragment file missing", "held:" + f.ids["heldFrag"], fragClassHeld, fragSkipFilesMissing, []string{"heldFrag", "heldParent"}, fragEvImportPath},
+		{"ghost: fragment file missing, one proven parent", "ghost:" + f.ids["heldParent"], fragClassGhost, "", []string{"heldFrag", "heldParent"}, fragEvImportPath},
 		{"doctor who", noParentRowID(f.path("lib/Doctor Who - Loose"), ""), fragClassManual, repairs.SkipOwnerManual, []string{"dw01", "dw02", "dw03"}, ""},
 	}
 	for _, tc := range cases {
@@ -304,11 +304,20 @@ func TestFragmentFixer_ApplyThenUndoRoundTrip(t *testing.T) {
 			ids = append(ids, r.RowID)
 		}
 	}
-	require.Len(t, ids, 3, "moved, proven copy and no-parent")
+	require.Len(t, ids, 4, "moved, proven copy, no-parent and ghost")
 	before03 := *f.fileRow(t, "parent", "p03")
+	beforeHp02 := *f.fileRow(t, "heldParent", "hp02")
 
 	out := f.apply(t, "op-plan", "op-apply", ids, nil)
-	require.Equal(t, 3, out.Applied, "%+v", out.Rows)
+	require.Equal(t, 4, out.Applied, "%+v", out.Rows)
+
+	// ghost: the fragment is retired into the parent; neither book's missing
+	// row is touched (nothing is repointed, nothing is deleted).
+	require.False(t, f.live(t, "heldFrag"))
+	hp02 := f.fileRow(t, "heldParent", "hp02")
+	require.Equal(t, beforeHp02.FilePath, hp02.FilePath)
+	require.Equal(t, beforeHp02.Missing, hp02.Missing)
+	require.NotNil(t, f.fileRow(t, "heldFrag", "hf02"), "the ghost keeps its own (missing) row")
 
 	// moved: the parent's row names the file's real path; F is retired but
 	// keeps its row.
@@ -375,7 +384,7 @@ func TestFragmentFixer_ApplyThenUndoRoundTrip(t *testing.T) {
 	after03 := f.fileRow(t, "parent", "p03")
 	require.Equal(t, before03.FilePath, after03.FilePath)
 	require.Equal(t, before03.Missing, after03.Missing)
-	for _, role := range []string{"fragF", "fragG", "loose01", "loose02", "loose03"} {
+	for _, role := range []string{"fragF", "fragG", "loose01", "loose02", "loose03", "heldFrag"} {
 		require.True(t, f.live(t, role), "%s restored", role)
 	}
 	for _, n := range []string{"01", "02", "03"} {
@@ -554,6 +563,123 @@ func TestFragmentFixer_MovedNameSizeOnlyIsUnproven(t *testing.T) {
 		r := findRow(t, res, "moved:"+f.ids["parent"])
 		require.True(t, r.Applicable(), r.SkipReason)
 		require.Contains(t, r.Evidence[0], fragEvNameSizeFolder)
+	})
+}
+
+// TestFragmentFixer_GhostNeedsOneProvenParent: a fragment whose own file is
+// gone is a ghost only when exactly one parent row claims it by proof. Name
+// and size alone, or two candidate parents, keep it held for a person.
+func TestFragmentFixer_GhostNeedsOneProvenParent(t *testing.T) {
+	t.Run("name and size only", func(t *testing.T) {
+		f := newFragFixture(t)
+		p1 := f.file(t, "lib/P/01.mp3", 801)
+		parent := f.book(t, "parent", "P", f.path("lib/P"), nil)
+		f.row(t, "p01", parent, p1, "01.mp3", 801, 600, 1)
+		f.row(t, "p02", parent, f.path("lib/P/02.mp3"), "02.mp3", 802, 600, 2)
+		gone := f.path("lib/Q/02/02.mp3")
+		frag := f.book(t, "frag", "02", gone, nil)
+		f.row(t, "f02", frag, gone, "02.mp3", 802, 600, 0)
+		r := findRow(t, f.plan(t, "op-plan"), "held:"+frag)
+		require.Equal(t, fragClassHeld, r.Class)
+		require.Equal(t, fragSkipFilesMissing, r.Skipped)
+		require.Contains(t, r.Evidence[0], fragEvNameSize)
+	})
+	t.Run("two candidate parents", func(t *testing.T) {
+		f := newFragFixture(t)
+		gone := f.path("lib/R/02.mp3")
+		for _, n := range []string{"A", "B"} {
+			p := f.book(t, "parent"+n, "R "+n, f.path("lib/R"+n), nil)
+			f.row(t, "p"+n+"01", p, f.file(t, "lib/R"+n+"/01.mp3", 901), "01.mp3", 901, 600, 1)
+			f.row(t, "p"+n+"02", p, gone, "02.mp3", 902, 600, 2)
+		}
+		frag := f.book(t, "frag", "02", gone, nil)
+		f.row(t, "f02", frag, f.path("lib/R/02/02.mp3"), "02.mp3", 902, 600, 0)
+		r := findRow(t, f.plan(t, "op-plan"), "held:"+frag)
+		require.Equal(t, fragClassHeld, r.Class)
+		require.Equal(t, fragSkipFilesMissing, r.Skipped)
+		require.Len(t, r.Members, 3, "both candidate parents listed")
+	})
+}
+
+// TestFragmentFixer_SameParentRowClaims: one parent row claimed by several
+// fragments is not ambiguous for the claimants that prove their claim.
+func TestFragmentFixer_SameParentRowClaims(t *testing.T) {
+	seed := func(t *testing.T, f *fragFixture) (parent string) {
+		t1 := f.file(t, "lib/T/01.mp3", 1001)
+		t2 := f.file(t, "lib/T/02.mp3", 1002)
+		parent = f.book(t, "parent", "Twice", f.path("lib/T"), nil)
+		f.row(t, "t01", parent, t1, "01.mp3", 1001, 600, 1)
+		f.row(t, "t02", parent, t2, "02.mp3", 1002, 600, 2)
+		// J: imported FROM the parent's 02 (proven), its copy present elsewhere.
+		j := f.book(t, "fragJ", "02", t2, nil)
+		jCopy := f.file(t, "lib/T copy/02.mp3", 1002)
+		f.row(t, "j02", j, t2, "02.mp3", 1002, 600, 0)
+		_, err := f.s.ModifyBook(j, func(b *database.Book) error { b.FilePath = jCopy; return nil })
+		require.NoError(t, err)
+		rows, err := f.s.GetBookFiles(j)
+		require.NoError(t, err)
+		rows[0].FilePath = jCopy
+		require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
+		return parent
+	}
+	t.Run("proven and unproven claimant", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent := seed(t, f)
+		// K: named 02.mp3 at the parent row's size, no link (unproven).
+		kPath := f.file(t, "lib/Elsewhere/02.mp3", 1002)
+		k := f.book(t, "fragK", "02", kPath, nil)
+		f.row(t, "k02", k, kPath, "02.mp3", 1002, 590, 0)
+		res := f.plan(t, "op-plan")
+		proven := findRow(t, res, "copy:"+parent)
+		require.True(t, proven.Applicable(), proven.SkipReason)
+		require.ElementsMatch(t, []string{parent, f.ids["fragJ"]}, proven.BookIDs)
+		unproven := findRow(t, res, fragRowCopyUnproven+":"+parent)
+		require.Equal(t, fragSkipCopyUnproven, unproven.Skipped)
+		require.ElementsMatch(t, []string{parent, k}, unproven.BookIDs)
+		for _, r := range res.Rows {
+			require.NotEqual(t, fragClassAmbiguous, r.Class, "%s: %s", r.RowID, r.SkipReason)
+		}
+		out := f.apply(t, "op-plan", "op-apply", []string{proven.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		require.False(t, f.live(t, "fragJ"))
+		require.True(t, f.live(t, "fragK"))
+	})
+	t.Run("two proven claimants retire together", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent := seed(t, f)
+		// L: a second copy imported from the same parent row, file gone (ghost).
+		l := f.book(t, "fragL", "02", f.path("lib/T/02.mp3"), nil)
+		gone := f.path("lib/L/02/02.mp3")
+		f.row(t, "l02", l, gone, "02.mp3", 1002, 600, 0)
+		_, err := f.s.ModifyBook(l, func(b *database.Book) error { b.FilePath = gone; return nil })
+		require.NoError(t, err)
+		res := f.plan(t, "op-plan")
+		copyRow := findRow(t, res, "copy:"+parent)
+		require.ElementsMatch(t, []string{parent, f.ids["fragJ"]}, copyRow.BookIDs)
+		ghost := findRow(t, res, "ghost:"+parent)
+		require.True(t, ghost.Applicable(), ghost.SkipReason)
+		require.ElementsMatch(t, []string{parent, l}, ghost.BookIDs)
+		for _, r := range res.Rows {
+			require.NotEqual(t, fragClassAmbiguous, r.Class, "%s: %s", r.RowID, r.SkipReason)
+		}
+	})
+	t.Run("two unproven claimants stay ambiguous", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent := seed(t, f)
+		var ks []string
+		for _, n := range []string{"K", "M"} {
+			p := f.file(t, "lib/Elsewhere "+n+"/02.mp3", 1002)
+			k := f.book(t, "frag"+n, "02", p, nil)
+			f.row(t, n+"02", k, p, "02.mp3", 1002, 590, 0)
+			ks = append(ks, k)
+		}
+		res := f.plan(t, "op-plan")
+		for _, k := range ks {
+			r := findRow(t, res, "ambiguous:"+k)
+			require.Equal(t, fragSkipAmbiguous, r.Skipped)
+		}
+		proven := findRow(t, res, "copy:"+parent)
+		require.ElementsMatch(t, []string{parent, f.ids["fragJ"]}, proven.BookIDs, "the proven claimant still pairs")
 	})
 }
 

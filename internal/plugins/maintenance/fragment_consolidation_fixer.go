@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -56,8 +56,26 @@
 // A plan with the read-only assume_retired param is a what-if: the snapshot
 // is edited as if a duplicate-copies apply had retired its losers, and every
 // row is skipped with its would-be outcome in Current["what_if"].
+//   - ghost: a fragment whose own file is NOT on disk and that exactly one
+//     parent row claims by proof (import path, hash, or the parent row
+//     already pointing at the fragment's file). The parent's row is the
+//     record of that file, so the fragment is a duplicate record of it: Apply
+//     retires the fragment into the parent. Nothing is repointed (a missing
+//     file is never marked present) and no row is deleted; the fragment keeps
+//     its own missing row. Measured on prod 2026-10-03: 4,918 rows had sat in
+//     "held" with exactly this proof.
 //   - held: a fragment that matches a parent but whose own file is missing
-//     or unreadable. Listed, never applied.
+//     or unreadable, and the proof above is not there (name and size only,
+//     or two candidate parents). Listed, never applied.
+//
+// SAME PARENT ROW, SEVERAL CLAIMANTS (2026-10-03). A parent row that two
+// fragments claim used to make both ambiguous — 7,627 rows on prod, every one
+// against a single parent book (two copies of the same chapter file, one of
+// them the organized copy the parent already points at). The claimants that
+// prove their claim now pair with the parent as a lone claimant would (ghost,
+// copy or moved); of the unproven ones, a single survivor takes the normal
+// path and lands in copy-unproven / moved-unproven, while two or more stay
+// ambiguous as before.
 //
 // RETIRING a fragment into its parent or survivor is what merge.Service does
 // for an absorbed book: every user's listening state and positions follow it
@@ -140,6 +158,10 @@ const (
 	// not on disk (or cannot be read). Repointing a parent row at it would
 	// mark a missing file present, so it is listed, never applied.
 	fragClassHeld = "held"
+	// fragClassGhost: a fragment whose own file is gone and that exactly one
+	// parent row claims by proof; Apply retires it into the parent without
+	// touching any row (see the file comment).
+	fragClassGhost = "ghost"
 )
 
 // Row id prefixes of a parent's UNPROVEN matches, so they never share a row
@@ -1216,6 +1238,10 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		case c.StatErr != "":
 			rows = append(rows, f.holdRow(lib, c, fragClassHeld, fragClassHeld, fragSkipUnreadable,
 				fmt.Sprintf("file %s is unreadable (%s)", c.File.Path, c.StatErr), ms))
+		case !c.Present && len(ms) == 1 && provenMatch(fragClassGhost, ms[0].Evidence):
+			// A ghost: the parent's row is the record of this file. Paired
+			// below like any lone claim; the kind is decided in pairFor.
+			claims[ms[0].Row.ID] = append(claims[ms[0].Row.ID], c)
 		case !c.Present:
 			rows = append(rows, f.holdRow(lib, c, fragClassHeld, fragClassHeld, fragSkipFilesMissing,
 				fmt.Sprintf("file %s is not on disk", c.File.Path), ms))
@@ -1238,41 +1264,34 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 	for _, rid := range rowIDs {
 		cs := claims[rid]
 		if len(cs) > 1 {
+			// Proven claimants pair as a lone claimant would; the unproven
+			// ones are ambiguous among themselves unless only one is left.
+			var proven, unproven []*fragCandidate
 			for _, c := range cs {
-				rows = append(rows, f.ambiguousRow(lib, c, fmt.Sprintf("parent row %s is claimed by %d fragments", rid, len(cs)), matchOf[c]))
-			}
-			continue
-		}
-		c := cs[0]
-		m := matchOf[c][0]
-		p := fragPair{Frag: c, Parent: m.Row, Evidence: m.Evidence, Done: m.Evidence == fragEvDone,
-			Slice: sliceIn(lib.files[m.Row.BookID], m.Row), IgnoredITunes: ignoredOf[c]}
-		kind := fragClassMoved
-		if !p.Done {
-			fi, err := f.statFn(m.Row.Path)
-			switch {
-			case err == nil:
-				kind = fragClassCopy
-				// A path-proven copy must also be the same size on disk: the
-				// parent's file may have been replaced since the import.
-				if p.Evidence == fragEvImportPath && c.DiskSize >= 0 && fi.Size() != c.DiskSize {
-					p.Evidence = fmt.Sprintf("%s, but the files differ in size on disk (%d vs %d bytes)", fragEvImportPath, fi.Size(), c.DiskSize)
+				if provenMatch(fragClassGhost, matchOf[c][0].Evidence) {
+					proven = append(proven, c)
+				} else {
+					unproven = append(unproven, c)
 				}
-			case !errors.Is(err, fs.ErrNotExist):
-				rows = append(rows, f.ambiguousRow(lib, c, "parent row path unreadable: "+err.Error(), []fragMatch{m}))
+			}
+			if len(unproven) > 1 {
+				for _, c := range unproven {
+					rows = append(rows, f.ambiguousRow(lib, c, fmt.Sprintf("parent row %s is claimed by %d fragments", rid, len(cs)), matchOf[c]))
+				}
+				unproven = nil
+			}
+			cs = append(proven, unproven...)
+		}
+		for _, c := range cs {
+			m := matchOf[c][0]
+			kind, p, hold := f.pairFor(c, m, lib, ignoredOf[c])
+			if hold != "" {
+				rows = append(rows, f.ambiguousRow(lib, c, hold, []fragMatch{m}))
 				continue
 			}
+			k := parentKey{m.Row.BookID, kind}
+			pairs[k] = append(pairs[k], p)
 		}
-		if !provenMatch(kind, p.Evidence) {
-			switch kind {
-			case fragClassCopy:
-				kind = fragRowCopyUnproven
-			case fragClassMoved:
-				kind = fragRowMovedUnproven
-			}
-		}
-		k := parentKey{m.Row.BookID, kind}
-		pairs[k] = append(pairs[k], p)
 	}
 	var keys []parentKey
 	for k := range pairs {
@@ -1289,6 +1308,43 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 	}
 	rows = append(rows, f.noParentRows(lib, unmatched)...)
 	return rows
+}
+
+// pairFor decides the kind of one fragment's claim on one parent row: ghost
+// when the fragment's own file is gone, moved when the parent row's path is
+// gone, copy when both are on disk; an unproven moved or copy claim gets its
+// unproven row kind. A non-empty hold is a reason the claim cannot be decided
+// (the parent row's path is unreadable) and the fragment is listed ambiguous.
+func (f *fragmentFixer) pairFor(c *fragCandidate, m fragMatch, lib *fragLibrary, ignored []string) (kind string, p fragPair, hold string) {
+	p = fragPair{Frag: c, Parent: m.Row, Evidence: m.Evidence, Done: m.Evidence == fragEvDone,
+		Slice: sliceIn(lib.files[m.Row.BookID], m.Row), IgnoredITunes: ignored}
+	if !c.Present {
+		return fragClassGhost, p, ""
+	}
+	kind = fragClassMoved
+	if !p.Done {
+		fi, err := f.statFn(m.Row.Path)
+		switch {
+		case err == nil:
+			kind = fragClassCopy
+			// A path-proven copy must also be the same size on disk: the
+			// parent's file may have been replaced since the import.
+			if p.Evidence == fragEvImportPath && c.DiskSize >= 0 && fi.Size() != c.DiskSize {
+				p.Evidence = fmt.Sprintf("%s, but the files differ in size on disk (%d vs %d bytes)", fragEvImportPath, fi.Size(), c.DiskSize)
+			}
+		case !errors.Is(err, fs.ErrNotExist):
+			return "", p, "parent row path unreadable: " + err.Error()
+		}
+	}
+	if !provenMatch(kind, p.Evidence) {
+		switch kind {
+		case fragClassCopy:
+			kind = fragRowCopyUnproven
+		case fragClassMoved:
+			kind = fragRowMovedUnproven
+		}
+	}
+	return kind, p, ""
 }
 
 // guard runs the framework's hands-off check over every path the row names,
@@ -1413,6 +1469,9 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 			r.Skipped = fragSkipMovedUnproven
 			r.SkipReason = fmt.Sprintf("%d match(es) rest on the original name and size only (no import path, hash or shared import folder): check by hand before repointing", n)
 		}
+	case fragClassGhost:
+		r.Proposed = map[string]string{"action": fmt.Sprintf("retire %d fragment book(s) into the parent: their files are not on disk and the parent's rows are the record of them (nothing is repointed, no row is deleted)", n)}
+		r.Reason = fmt.Sprintf("%d fragment book(s) duplicate the record of a file the parent already has a row for; the fragments' own files are gone", n)
 	case fragClassCopy, fragRowCopyUnproven:
 		r.Proposed = map[string]string{"action": fmt.Sprintf("retire %d fragment book(s) into the parent (the parent keeps its own files; nothing is repointed)", n)}
 		r.Reason = fmt.Sprintf("%d fragment book(s) duplicate files the parent still has on disk", n)
@@ -1780,7 +1839,7 @@ func (f *fragmentFixer) Replan(ctx context.Context, _ json.RawMessage, planned r
 	}
 	class, rest, _ := strings.Cut(planned.RowID, ":")
 	switch class {
-	case fragClassMoved, fragClassCopy, fragRowCopyUnproven, fragRowMovedUnproven:
+	case fragClassMoved, fragClassCopy, fragClassGhost, fragRowCopyUnproven, fragRowMovedUnproven:
 		return f.replanParent(store, lib, hist, planned, rest)
 	case fragClassNoParent:
 		return f.replanGroup(store, lib, hist, planned)
