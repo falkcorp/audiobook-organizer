@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.7.0
-// last-edited: 2026-10-01
+// version: 1.8.0
+// last-edited: 2026-10-03
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -663,6 +663,60 @@ func TestApplyUpdates_ClearSeriesID(t *testing.T) {
 
 	if book.SeriesID != nil {
 		t.Errorf("expected series_id to be nil, got %v", book.SeriesID)
+	}
+}
+
+// A batch series_id null or a different series_id changes only the link.
+// The stored Series object (which reads prefer) used to survive both, so the
+// book kept showing the old series. The store now holds it to SeriesID.
+func TestUpdateAudiobooks_SeriesIDChangeDropsTheOldSeriesObject(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	oldSeries, err := store.CreateSeries("Redshirts", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSeries, err := store.CreateSeries("Old Man's War", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(path string) string {
+		t.Helper()
+		b, err := store.CreateBook(&database.Book{Title: "R", FilePath: path, SeriesID: &oldSeries.ID, Series: oldSeries})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b.ID
+	}
+	unlink, move := mk("/library/unlink.m4b"), mk("/library/move.m4b")
+	bs := NewBatchService(store)
+
+	if resp := bs.UpdateAudiobooks(&BatchUpdateRequest{IDs: []string{unlink}, Updates: map[string]any{"series_id": nil}}); resp.Success != 1 {
+		t.Fatalf("unlink resp = %+v", resp)
+	}
+	if resp := bs.UpdateAudiobooks(&BatchUpdateRequest{IDs: []string{move}, Updates: map[string]any{"series_id": float64(newSeries.ID)}}); resp.Success != 1 {
+		t.Fatalf("move resp = %+v", resp)
+	}
+
+	row, err := store.GetBookByID(unlink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.SeriesID != nil || row.Series != nil {
+		t.Errorf("series_id null kept the series: id=%v series=%+v", row.SeriesID, row.Series)
+	}
+	row, err = store.GetBookByID(move)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.SeriesID == nil || *row.SeriesID != newSeries.ID {
+		t.Fatalf("move did not link the new series: %v", row.SeriesID)
+	}
+	if row.Series != nil && row.Series.ID != newSeries.ID {
+		t.Errorf("move kept the old series object: %+v", row.Series)
 	}
 }
 
