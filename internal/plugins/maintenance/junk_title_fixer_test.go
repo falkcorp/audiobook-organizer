@@ -151,24 +151,41 @@ func newJunkLib(t *testing.T) *junkLib {
 		FetchedValue: &fetchedPos, UpdatedAt: time.Now()}))
 	// The provider's recorded title differs from the stored junk one: it is
 	// evidence. 1,216 of 1,233 provider-flagged rows on prod, 2026-10-03.
-	withFetched := func(name, title, fetched string, authorID *int, paths ...string) {
+	// recAuthor is the author the provider recorded beside the title ("" none).
+	withFetched := func(name, title, fetchedJSON, recAuthor string, authorID *int, paths ...string) {
 		id := add(name, title, paths[0], authorID, nil, paths...)
-		enc, err := json.Marshal(fetched)
-		require.NoError(t, err)
-		val := string(enc)
+		val := fetchedJSON
 		require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: id, Field: "title",
 			FetchedValue: &val, UpdatedAt: time.Now()}))
+		if recAuthor != "" {
+			enc, err := json.Marshal(recAuthor)
+			require.NoError(t, err)
+			av := string(enc)
+			require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: id, Field: "author_name",
+				FetchedValue: &av, UpdatedAt: time.Now()}))
+		}
 	}
 	// agrees with the stripped title
-	withFetched("provider-agrees", "85 - Echo Book", "Echo Book: A LitRPG Adventure", nil, "/lib/Author Q/85 - Echo Book.m4b")
+	withFetched("provider-agrees", "85 - Echo Book", `"Echo Book: A LitRPG Adventure"`, "", nil, "/lib/Author Q/85 - Echo Book.m4b")
 	// the fetch searched on the junk title and hit another book
-	withFetched("provider-wrong-hit", "07 - Mutineer Song", "Shadowfall", nil, "/lib/Author R/07 - Mutineer Song.m4b")
-	// a narrator credit with nothing in the title: the provider value and the folder agree
-	withFetched("provider-credit", "read by narrator", "Divine Creation", nil,
-		"/lib/Author S/Divine Creation/01.mp3", "/lib/Author S/Divine Creation/02.mp3")
-	// …and disagree
-	withFetched("provider-conflict", "read by narrator", "Divine Creation", nil,
-		"/lib/Author T/Quite Another Folder/01.mp3", "/lib/Author T/Quite Another Folder/02.mp3")
+	withFetched("provider-wrong-hit", "07 - Mutineer Song", `"Shadowfall"`, "", nil, "/lib/Author R/07 - Mutineer Song.m4b")
+	// a narrator credit with nothing in the title: recorded under the book's
+	// author, and the folder agrees
+	withFetched("provider-credit", "read by narrator", `"Divine Creation"`, "Author A", a,
+		"/lib/Author A/Divine Creation/01.mp3", "/lib/Author A/Divine Creation/02.mp3")
+	// …and the folder disagrees
+	withFetched("provider-conflict", "read by narrator", `"Divine Wrath"`, "Author A", a,
+		"/lib/Author A/Quite Another Folder/01.mp3", "/lib/Author A/Quite Another Folder/02.mp3")
+	// recorded under nobody the book knows: the value is not used at all
+	withFetched("provider-no-author", "read by narrator", `"Marvel Comics"`, "Somebody Else", nil,
+		"/lib/Author U/Third Folder/01.mp3", "/lib/Author U/Third Folder/02.mp3")
+	// the same title by its letters and digits is "the provider recorded this title"
+	withFetched("provider-near-equal", "3-10 to Yuma", `"3:10 to Yuma"`, "", nil, "/lib/Author V/3-10 to Yuma.m4b")
+	// a value on record that is no string
+	withFetched("provider-unreadable", "04 - Null Book", `null`, "", nil, "/lib/Author W/04 - Null Book.m4b")
+	// a catalog title with an edition marker is refused as a proposal
+	withFetched("provider-format", "read by narrator", `"Probe Title (Unabridged)"`, "Author A", a,
+		"/lib/Author A/Probe Title/01.mp3", "/lib/Author A/Probe Title/02.mp3")
 	// A bare unpadded number beside other books of its author may be the
 	// real title: needs a person, never a (possible) fragment.
 	add("bare13", "13", "/lib/Author A/13.m4b", a, nil, "/lib/Author A/13.m4b")
@@ -220,9 +237,13 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		"provider":        "Provider Folder",
 		"provider-prefix": "No Quarter",
 		// the provider's recorded title is evidence
-		"provider-agrees":    "Echo Book",
-		"provider-wrong-hit": "Mutineer Song",
-		"provider-credit":    "Divine Creation",
+		"provider-agrees":     "Echo Book",
+		"provider-wrong-hit":  "Mutineer Song",
+		"provider-credit":     "Divine Creation",
+		"provider-no-author":  "Third Folder",
+		"provider-near-equal": "to Yuma",
+		"provider-unreadable": "Null Book",
+		"provider-format":     "Probe Title",
 	}
 	for name, want := range applicable {
 		r, ok := rows[name]
@@ -231,19 +252,30 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		require.Equal(t, want, r.Proposed["title"], name)
 		require.Equal(t, []string{lib.ids[name]}, r.BookIDs, "%s: one book per row", name)
 	}
-	// A provider that returned the junk title itself: repaired, never at low risk.
-	for _, name := range []string{"provider", "provider-prefix"} {
-		require.Contains(t, rows[name].Reason, "a metadata provider returned this same title", name)
+	// The recorded title IS the stored one (exactly, or by its letters and
+	// digits): repaired, never at low risk.
+	for _, name := range []string{"provider", "provider-prefix", "provider-near-equal"} {
+		require.Contains(t, rows[name].Reason, "recorded for this book is this same title", name)
 		require.Equal(t, repairs.RiskReview, rows[name].Risk, name)
 	}
 	require.NotContains(t, rows["prefix"].Reason, "provider")
+	// A value on record that cannot be read says so, and is review risk.
+	require.Contains(t, rows["provider-unreadable"].Reason, "is not a readable string")
+	require.Equal(t, repairs.RiskReview, rows["provider-unreadable"].Risk)
 	// A recorded title that agrees with the stripped one corroborates it.
 	require.Equal(t, repairs.RiskLow, rows["provider-agrees"].Risk)
 	require.Contains(t, rows["provider-agrees"].Reason, `a metadata provider recorded the title "Echo Book: A LitRPG Adventure"`)
-	// One that disagrees with the title's own evidence is never proposed.
-	require.NotContains(t, rows["provider-wrong-hit"].Reason, "provider_value:")
+	// One that disagrees with the title's own evidence is never proposed,
+	// is named in the reason, and takes the row out of low risk.
 	require.Contains(t, rows["provider-wrong-hit"].Reason, "title_prefix_stripped")
+	require.Contains(t, rows["provider-wrong-hit"].Reason, `not used: provider value "Shadowfall" disagrees`)
+	require.Equal(t, repairs.RiskReview, rows["provider-wrong-hit"].Risk)
+	// With nothing in the title to vouch for it, it must be recorded under
+	// the book's own author.
 	require.Equal(t, repairs.RiskReview, rows["provider-credit"].Risk)
+	require.Contains(t, rows["provider-no-author"].Reason, "proposed from folder")
+	require.Contains(t, rows["provider-no-author"].Reason, `not used: provider value "Marvel Comics" was not recorded under this book's author`)
+	require.Contains(t, rows["provider-format"].Reason, "proposed from folder")
 	require.Equal(t, repairs.RiskLow, rows["prefix"].Risk)
 	require.Contains(t, rows["eldest-prefix"].Reason, "title_prefix_stripped")
 	require.NotContains(t, rows["eldest-prefix"].Reason, "Eragon")
@@ -275,7 +307,7 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		require.True(t, ok, "%s: no row", name)
 		require.Equal(t, want, r.Skipped, "%s: %s", name, r.SkipReason)
 	}
-	require.Contains(t, rows["provider-conflict"].SkipReason, `provider_value "Divine Creation"`)
+	require.Contains(t, rows["provider-conflict"].SkipReason, `provider_value "Divine Wrath"`)
 	require.Contains(t, rows["frag1"].SkipReason, "possible fragment")
 	require.Contains(t, rows["owned"].SkipReason, "fragment — use the consolidation fixer")
 	require.Contains(t, rows["eldest98"].SkipReason, `its author "Eldest" is the name of its folder`)
