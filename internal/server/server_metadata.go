@@ -1,7 +1,7 @@
 // file: internal/server/server_metadata.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 588350bc-83db-47ed-9590-2b6513aadcda
-// last-edited: 2026-09-01
+// last-edited: 2026-10-03
 
 package server
 
@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
@@ -280,7 +279,7 @@ func (s *Server) enrichBookForResponse(book *database.Book, bookAuthorsMap map[s
 				for i, a := range resp.Authors {
 					names[i] = a.Name
 				}
-				combined := strings.Join(names, " & ")
+				combined := database.ShownCreditName(authorName, names)
 				resp.AuthorName = &combined
 			}
 		}
@@ -300,7 +299,7 @@ func (s *Server) enrichBookForResponse(book *database.Book, bookAuthorsMap map[s
 				for i, n := range resp.Narrators {
 					names[i] = n.Name
 				}
-				combined := strings.Join(names, " & ")
+				combined := database.ShownCreditName("", names)
 				book.Narrator = &combined
 			}
 		}
