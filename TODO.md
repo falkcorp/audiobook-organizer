@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.23 -->
+<!-- version: 10.74.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-02 -->
+<!-- last-edited: 2026-10-03 -->
 
 # Project TODO — live items only
 
@@ -403,7 +403,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **FS-WATCHER-ENABLE**: Owner 2026-09-15 01:38 — new downloads only appear when the daily scheduled scan runs (and tonight's deploy restarts interrupted it 12 times). A filesystem watcher already exists (`internal/watcher`, fsnotify, wired in `internal/server/server_lifecycle.go` behind `auto_scan_enabled`) but prod runs with `auto_scan_enabled=false`. Task: make low-latency discovery of new books work unattended. (1) Confirm the download landing path is a local mount on the server, not written by a remote NFS/SMB client (fsnotify cannot see those writes — the config comment says so); if it is remote, add a polling fallback for that path instead. (2) Check `fs.inotify.max_user_watches`/`max_user_instances` against the number of directories under `root_dir` and each import path, and raise them in the deploy if short. (3) Verify the watcher's folder-scoped `library.scan` (`FolderPath` set) respects the scan stand-down held by metadata applies and the `library.scan` ConcurrencyKey, so an apply and a watcher-triggered scan never overlap. (4) Enable `auto_scan_enabled` in prod with a debounce sized for multi-file audiobook drops (30 s is the current stored value), and log every trigger to the activity log. (5) Keep the scheduled scan as the fallback (prod interval is 1440 min vs the shipped 360 default — decide which). Report with a real test: drop a book into the import path and time its appearance in AudioBooth.
 
-- [ ] **SPLIT-MERGE-ABS-FOLLOW**: `MergeSplitBookCluster` (internal/dedup/split_book_merge.go) does not call `FollowMerge`/`FollowFileMove`, so ABS sync identity and listening progress do not follow a split-book merge (the journal records `SyncRedirected=false`). CombineBooks does both. Wire the same calls, with undo support.
+- [x] **SPLIT-MERGE-ABS-FOLLOW**: `MergeSplitBookCluster` (internal/dedup/split_book_merge.go) does not call `FollowMerge`/`FollowFileMove`, so ABS sync identity and listening progress do not follow a split-book merge (the journal records `SyncRedirected=false`). CombineBooks does both. Wire the same calls, with undo support. — ✅ 2026-10-03: PR #2074 lineage; internal/dedup/split_book_merge.go:298 FollowFileMove + :317 merge.FollowAbsorbedJournaled (journals SyncRedirected + progress, undo-capable)
 
 - [ ] **PEBBLE-KEY-BOUND-SWEEP** Replace the fragile `[]byte("<prefix>:0")` /
       `[]byte("<prefix>:;")` iterator-bound pairs in `internal/database` with the
@@ -556,7 +556,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **DA-01b** `internal/maintenance/jobs/dedup_books.go` `ddMergeDuplicateBook` / `ddSoftDeleteBook` (~L329, ~L471) do the same GetBook → mutate → soft-delete read-modify-write as the merge family but take no `merge.LockMergeRMW` — a fifth unguarded path after DA-01 (TASK-300 / PR #3181 wired in `MergeSplitBookCluster`). A review-UI merge racing this job on the same book id can interleave writes (the #1930 corruption class). Surfaced by the TASK-300 worker and named as "NOT covered" in `internal/merge/serialize.go`'s doc comment; needs the lock, a deadlock check of its callers (must not already hold the lock), and a concurrent regression test like `TestMergeSplitBookCluster_SharesLockWithMergeService`.
 
-- [ ] **DB-04** Digest compaction swallows the delete error for the pre-existing digest row, risking a duplicate digest entry on I/O failure (dead-code backend, low impact) — `internal/database/nuts_activity_store.go:614`. Two digest rows for the same date would double-count that day's digest in any UI/summary that sums per-day digests. In practice this is low-impact: grep confirms `NewNutsActivityStore` has zero production call sites in this tree (only referenced in comments and `dual_write_activity_store.go`, which  Brief: `docs/agent-tasks/todo-completion-2026-09/database/TASK-334-digest-compaction-swallows-the-delete-error-for.md`.
+- [x] **DB-04** Digest compaction swallows the delete error for the pre-existing digest row, risking a duplicate digest entry on I/O failure (dead-code backend, low impact) — `internal/database/nuts_activity_store.go:614`. Two digest rows for the same date would double-count that day's digest in any UI/summary that sums per-day digests. In practice this is low-impact: grep confirms `NewNutsActivityStore` has zero production call sites in this tree (only referenced in comments and `dual_write_activity_store.go`, which  Brief: `docs/agent-tasks/todo-completion-2026-09/database/TASK-334-digest-compaction-swallows-the-delete-error-for.md`. — ✅ 2026-10-03: ab260e392 (2026-09-11); internal/database/nuts_activity_store.go:636 propagates the tx.Delete error
 
 - [x] **CI-02** frontend-ci.yml grants an unjustified, broad permission ceiling to an external reusable workflow — `.github/workflows/frontend-ci.yml:20`. Runs on push to main/develop and same-repo PRs. `actions: write`, `packages: write`, `id-token: write` handed to code the workflow doesn't control is more privilege than lint/build/test needs and breaks the least-privilege discipline used everywhere else in the repo. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-307-frontend-ci-yml-grants-an-unjustified-broad-perm.md`. ✅ **DONE 2026-09-12 (#3274):** frontend-ci.yml now declares `contents: read` only.
 
@@ -3931,11 +3931,11 @@ audiobooks list.
 `UpdateService.MaskSecrets` now covers the five scalar secret fields and
 `metadata_sources[].credentials`. These are still returned in full cleartext:
 
-- [ ] `OAuthGithubClientSecret` and `OAuthGoogleClientSecret` (`internal/config/config.go:895-898`)
-- [ ] `DelugeWebPassword` (`internal/config/config.go:991`)
-- [ ] `DownloadClient.Torrent.Deluge.Password` (`config.go:172`)
-- [ ] `DownloadClient.Torrent.QBittorrent.Password` (`config.go:180`)
-- [ ] `DownloadClient.Usenet.Sabnzbd.APIKey` (`config.go:188`)
+- [x] `OAuthGithubClientSecret` and `OAuthGoogleClientSecret` (`internal/config/config.go:895-898`) — ✅ 2026-10-03: PR #3199 merged 2026-09-10; internal/config/update_service.go MaskSecrets + TestMaskSecrets_MasksRemainingSecretFields
+- [x] `DelugeWebPassword` (`internal/config/config.go:991`) — ✅ 2026-10-03: PR #3199; internal/config/update_service.go MaskSecrets
+- [x] `DownloadClient.Torrent.Deluge.Password` (`config.go:172`) — ✅ 2026-10-03: PR #3199; internal/config/update_service.go MaskSecrets
+- [x] `DownloadClient.Torrent.QBittorrent.Password` (`config.go:180`) — ✅ 2026-10-03: PR #3199; internal/config/update_service.go MaskSecrets
+- [x] `DownloadClient.Usenet.Sabnzbd.APIKey` (`config.go:188`) — ✅ 2026-10-03: PR #3199; internal/config/update_service.go:126 MaskSecrets
 
 `ABSJWTSecret` is correctly excluded via `json:"-"` — leave it alone.
 
@@ -4694,8 +4694,8 @@ The decision to make:
 Doing neither leaves a lint whose findings reach main unopposed.
 
 - [ ] Verify whether `nightly.yml`'s reusable workflow actually runs staticcheck
-- [ ] Decide: add to PR CI, or document it as local/nightly-only
-- [ ] Audit the other `command -v <tool>` guards in the Makefile for the same skip-and-pass shape
+- [x] Decide: add to PR CI, or document it as local/nightly-only — ✅ 2026-10-03: 332248a8e; Makefile staticcheck target documents it is NOT run by PR workflows (`make ci` is the only gate) and now exits 1 when the binary is missing
+- [x] Audit the other `command -v <tool>` guards in the Makefile for the same skip-and-pass shape — ✅ 2026-10-03: 332248a8e; remaining `command -v` guards all fail closed (Makefile swift/gremlins exit 1; lsof is a diagnostic branch only)
 
 ## Scanner / scan cache
 
@@ -9538,7 +9538,7 @@ step 4 propagates to the server package with no edit there.
       Worth checking for the same fetch-and-`len()` pattern elsewhere in the
       handlers package while in there.
 
-- [ ] **VG-DOUBLE-PRIMARY** A version group can end up with **two** members both
+- [x] **VG-DOUBLE-PRIMARY** A version group can end up with **two** members both — ✅ 2026-10-03: PR #3535 (one primary-election rule + version-group-primary-repair op) merged 2026-09-24, PR #3375, PR #3661; internal/reconcile/primary_handoff_test.go
       flagged `is_primary_version=true`, so a merged book shows twice in the
       library forever. Found 2026-08-11 while investigating the owner's report
       that combined books still list individually.
@@ -11898,7 +11898,7 @@ book and is most likely to go looking for another by the same author.
       shape rather than a theoretical one. `Collection.Version` already exists and is
       incremented by `UpdateCollection` — a compare-and-swap on it is the cheap fix.
 
-- [ ] **`POST /api/session/local-all` 404s.** Observed from the app alongside the
+- [x] **`POST /api/session/local-all` 404s.** Observed from the app alongside the — ✅ 2026-10-03: PR #3470 merged 2026-09-19; internal/server/handlers/abs/handler.go:727 route + session_local_all.go SessionLocalAll; TestSessionLocalAll_AppliesOfflineProgress
       collections 404s on 2026-08-16. Separate ABS gap, not covered by #2498 — the
       `/api/session/` prefix is reserved, so this reaches the ABS surface and finds no
       route. Needs the same treatment: implement it, or confirm a 404 is the honest
@@ -12485,7 +12485,7 @@ total.
       and clock alongside it. Recovering 1860 → 2130 MHz is ~14.5% on the phase that is
       ~69% of the scan, for zero code risk.
 
-- [ ] **`make ci` cannot pass on `main` — staticcheck has 10 findings and aborts the target**
+- [x] **`make ci` cannot pass on `main` — staticcheck has 10 findings and aborts the target** — ✅ 2026-10-03: PR #3569 (staticcheck to zero) merged 2026-09-26; earlier #2922
 
   Measured 2026-08-17 by running `make staticcheck` at `origin/main` (detached) and on a
   feature branch and diffing the two lists: **10 findings, byte-identical on both**. The
@@ -12628,7 +12628,7 @@ this gets promoted to a real backfill it needs a bounded worker pool.
   same splitter rather than a second copy of the logic.
 - Decide and document whether `book.Narrator` or `book_narrators` wins.
 
-- [ ] **`OperationDef.Permissions` is enforced by nothing — and PR-3 is about to delete the code that *is* doing the enforcing**
+- [x] **`OperationDef.Permissions` is enforced by nothing — and PR-3 is about to delete the code that *is* doing the enforcing** — ✅ 2026-10-03: PR #2536 (enforce def.Permissions on the v2 trigger route) + #2551 merged 2026-08-18; internal/server/handlers/operations_v2.go:656
 
   `internal/operations/registry/types.go:78` documents the field as "user perms required to
   trigger via API". Measured 2026-08-17: the **only** read of `def.Permissions` anywhere in the
@@ -12702,7 +12702,7 @@ Explicitly LOW priority — per-book is fine for now.
 
 ### Contributor data cleanup — follow-ups to `maintenance.purge-empty-authors`
 
-- [ ] **Narrator equivalent of the empty-author purge.** There is no 🟡 **Store half DONE 2026-09-12 (#3288, TASK-035):** `DeleteNarrator` exists (junction + memdb cleanup); the purge op itself is still open. Follow-ups 2026-09-12: #3299 stamps narrator/author junction rows with their key's book ID (rows stored without `book_id` were aborting every later memdb update of the book); #3300 ownership-checks `DeleteNarrator`'s name-index delete so it cannot remove another narrator's entry.
+- [x] **Narrator equivalent of the empty-author purge.** There is no 🟡 **Store half DONE 2026-09-12 (#3288, TASK-035):** `DeleteNarrator` exists (junction + memdb cleanup); the purge op itself is still open. Follow-ups 2026-09-12: #3299 stamps narrator/author junction rows with their key's book ID (rows stored without `book_id` were aborting every later memdb update of the book); #3300 ownership-checks `DeleteNarrator`'s name-index delete so it cannot remove another narrator's entry. — ✅ 2026-10-03: DeleteNarrator in #3288; purge-empty-narrators op in internal/plugins/maintenance/narrator_purge_empty.go (bae801737, 2026-09-12)
   `DeleteNarrator` on the store at all — narrators live at `narrator:<id>` with no
   delete path, so the op cannot be written until that exists. Scope it alongside
   whatever decides the narrator identity question below.
@@ -17860,7 +17860,7 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   (`internal/config/config.go` ~:2016) with zero DRM awareness. Caution: ffmpeg's `aax`
   demuxer is **CRIWARE game audio, not Audible** — do not key detection off it.
 
-- [ ] **ABS-SYNC TASK-12 (P1, data-loss class): close the three identity gaps so §4.3's
+- [x] **ABS-SYNC TASK-12 (P1, data-loss class): close the three identity gaps so §4.3's — ✅ 2026-10-03: PR #2074 merged 2026-07-30 hooks dedup.MergeBooks (book_dedup.go FollowMergeWithStore), CombineBooks (merge/service.go FollowMerge/FollowFileMove) and the scanner untagged move (scanner.go followSyncIdentityOnVersionLink)
   ID-durability claim is actually true.** Owner decided (2026-07-30) to hook **all three**
   paths, not just the worst one. Today only `merge.Service.MergeBooks` repoints sync IDs;
   these three still orphan a device's listening position:
@@ -17930,14 +17930,14 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   unmerge/audit gap. (2) Classify the 13,464 `no_live_owner` tracks by audiobook genre to
   separate the user's non-AO music/podcasts from severed orphans (doesn't change the P3
   decision). See `docs/specs/2026-07-23-itunes-2way-p0-findings.md` §F4.
-- [ ] **iTunes 2-way-sync — remaining P0 measurements.** (a) Cross-type PID collisions
+- [x] **iTunes 2-way-sync — remaining P0 measurements.** (a) Cross-type PID collisions — ✅ 2026-10-03: PR #2042 (cross-type disjointness + field/bookmark preservation byte-proof) merged 2026-07-24
   (audiobook vs non-audiobook sharing a PID) — confirm PID-on-multiple-primaries stays 0
   post pid-repair. (b) Bookmark/field-preservation byte-proof: run a relocate AND a
   track-remove through `SafeWriteITL` on a ZFS clone, byte-compare every untouched track's
   record, assert ZERO changes. Then P1 (partitioned count-refresh, re-derive PID sample) /
   P2 (relocate-only sync-cycle op + oracle = MVP end).
 
-- [ ] **iTunes 2-way-sync P2 — relocate-only sync cycle (MVP end).** All prerequisites are
+- [x] **iTunes 2-way-sync P2 — relocate-only sync cycle (MVP end).** All prerequisites are — ✅ 2026-10-03: internal/itunes/relocate_sync_cycle.go; 8b42d17ef (--sync-apply, first live write done, 2026-07-25)
   merged: 4-state `LibrarySet` config (#2040), cleanup census → P3 no-op (#2041),
   cross-type + preservation proofs (#2042), relocate oracle `VerifyRelocateWrite` (#2043),
   P1 `RefreshLibraryIdentity`+`PartitionedTrackCount` (#2044), F7 guard scope
