@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package config
 
@@ -434,6 +434,10 @@ func TestResetToDefaults(t *testing.T) {
 	// Verify chapter consolidation defaults
 	if AppConfig.ChapterConsolidationThresholdMin != 10 {
 		t.Errorf("expected ChapterConsolidationThresholdMin to be reset to 10, got %d", AppConfig.ChapterConsolidationThresholdMin)
+	}
+	// The repair jobs' chapter limit is its own setting (owner 2026-10-03).
+	if AppConfig.RepairChapterMaxMin != 120 {
+		t.Errorf("expected RepairChapterMaxMin to be reset to 120, got %d", AppConfig.RepairChapterMaxMin)
 	}
 
 	// Verify ai_backend.local_base_url resets to empty, not a hardcoded LAN IP

@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.129.0
+// version: 1.130.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package config
 
@@ -1345,6 +1345,15 @@ type Config struct {
 	// averages below this duration, they are consolidated into one book record.
 	// Default 10. Set to 0 to disable consolidation.
 	ChapterConsolidationThresholdMin int `json:"chapter_consolidation_threshold_min"`
+	// RepairChapterMaxMin is the longest a single file may run (minutes) and
+	// still count as a chapter when a REPAIR JOB (the fragment consolidation
+	// fixer) folds separately imported chapter files into one book. It is
+	// deliberately separate from ChapterConsolidationThresholdMin, which the
+	// import scanner applies to files as they arrive: owner 2026-10-03, "one
+	// for import, one for jobs". A repair row is a dry run a person approves,
+	// so it can afford a longer limit than the unattended scanner. Default
+	// 120. 0 or less means the default, never "disabled".
+	RepairChapterMaxMin int `json:"repair_chapter_max_min" mapstructure:"repair_chapter_max_min"`
 	// MetadataCandidateFetchWorkers is the batch candidate fetch's worker
 	// count. 0 (the default) sizes it from the enabled sources' summed rate
 	// budget (server.candidateFetchWorkers); any other value is used as is,
@@ -2316,6 +2325,7 @@ func InitConfig() {
 	viper.SetDefault("concurrent_scans", defaultWorkers)
 	viper.SetDefault("scan_standdown_grace_seconds", 45)
 	viper.SetDefault("chapter_consolidation_threshold_min", 10)
+	viper.SetDefault("repair_chapter_max_min", 120)
 	viper.SetDefault("operation_timeout_minutes", 30)
 	viper.SetDefault("log_retention_days", 90)
 	viper.SetDefault("activity_log_nightly_compaction_enabled", true)
@@ -2839,6 +2849,7 @@ func InitConfig() {
 			ScanProgressEvery:                   viper.GetInt("scan_progress_every"),
 			ScanStandDownGraceSeconds:           viper.GetInt("scan_standdown_grace_seconds"),
 			ChapterConsolidationThresholdMin:    viper.GetInt("chapter_consolidation_threshold_min"),
+			RepairChapterMaxMin:                 viper.GetInt("repair_chapter_max_min"),
 			MetadataCandidateFetchWorkers:       viper.GetInt("metadata_candidate_fetch_workers"),
 			CoalesceShatteredSiblings:           viper.GetBool("coalesce_shattered_siblings"),
 			OperationTimeoutMinutes:             viper.GetInt("operation_timeout_minutes"),
@@ -3603,6 +3614,7 @@ func ResetToDefaults() {
 			ScanProgressEvery:                20,
 			ScanStandDownGraceSeconds:        45,
 			ChapterConsolidationThresholdMin: 10,
+			RepairChapterMaxMin:              120,
 			OperationTimeoutMinutes:          30,
 			MinBookSizeBytes:                 5 * 1024 * 1024,
 			MinRescanAgeHours:                144,
