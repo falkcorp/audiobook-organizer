@@ -62,6 +62,9 @@ func (p *Plugin) Repairs() *repairs.Registry {
 		if err := p.repairsReg.Register(newRelinkSeriesFixer(p)); err != nil {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
+		if err := p.repairsReg.Register(newSwappedTitleAuthorFixer(p)); err != nil {
+			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
+		}
 	})
 	return p.repairsReg
 }
