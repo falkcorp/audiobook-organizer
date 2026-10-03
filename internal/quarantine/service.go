@@ -1,5 +1,5 @@
 // file: internal/quarantine/service.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-03
 
@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -916,21 +917,62 @@ func (qs *QuarantineService) AutoQuarantineFailedScans() {
 	// memdb can skip or repeat rows whenever the snapshot swaps between calls
 	// (see reconcile #2443) — and this loop MUTATES via QuarantineBook as it
 	// walks, so paging was swapping the snapshot under its own feet.
+	//
+	// Every failure below is logged and counted. Each one used to return or
+	// continue silently, and each one switches auto-quarantine off for the
+	// books it covers -- for a failed listing, the whole library -- while the
+	// pass looks like it found nothing to do.
 	books, err := qs.store.GetAllBooksCore(0, 0)
 	if err != nil {
+		autoQuarantineListErrCount.Add(1)
+		autoQuarantineLog.Warn("auto-quarantine skipped: listing books failed: %v", err)
 		return
 	}
+	var readErrs, quarantineErrs int
+	var firstReadErr error
 	for _, b := range books {
 		if b.QuarantinedAt != nil {
 			continue
 		}
-		n, _ := qs.store.GetScanFailCount(database.ScanFailKey(b.FilePath))
+		n, err := qs.store.GetScanFailCount(database.ScanFailKey(b.FilePath))
+		if err != nil {
+			autoQuarantineReadErrCount.Add(1)
+			if readErrs == 0 {
+				firstReadErr = err
+			}
+			readErrs++
+			continue
+		}
 		if n >= scanFailThreshold {
 			slog.Info("auto-quarantine (fail count)", "filePath", b.FilePath, "failCount", n)
-			_ = qs.QuarantineBook(b.ID, fmt.Sprintf("taglib failed to read file after %d consecutive scan attempts", n))
+			if err := qs.QuarantineBook(b.ID, fmt.Sprintf("taglib failed to read file after %d consecutive scan attempts", n)); err != nil {
+				autoQuarantineMoveErrCount.Add(1)
+				quarantineErrs++
+				autoQuarantineLog.Warn("auto-quarantine of book %s (fail count %d) failed: %v", b.ID, n, err)
+			}
 		}
 	}
+	if readErrs > 0 {
+		// One summary line, not one per book: a store that cannot be read
+		// fails for every row.
+		autoQuarantineLog.Warn("auto-quarantine: %d of %d scan-fail counters could not be read; those books were not checked (first error: %v)",
+			readErrs, len(books), firstReadErr)
+	}
+	if quarantineErrs > 0 {
+		autoQuarantineLog.Warn("auto-quarantine: %d book(s) reached the fail threshold but could not be quarantined", quarantineErrs)
+	}
 }
+
+// Auto-quarantine failure counters, process-wide totals (tests read deltas).
+var (
+	autoQuarantineListErrCount atomic.Int64 // GetAllBooksCore failed: the whole pass was skipped
+	autoQuarantineReadErrCount atomic.Int64 // GetScanFailCount failed: that book was not checked
+	autoQuarantineMoveErrCount atomic.Int64 // QuarantineBook failed for a book over the threshold
+)
+
+// autoQuarantineLog carries the auto-quarantine failure lines through the
+// sanitizing logger rather than log/slog (TestGuard_NoDirectSlogCalls).
+var autoQuarantineLog = logger.New("quarantine")
 
 // ProcessITunesPurgePending finds books with itunes_sync_status = "purge_pending",
 // enqueues their PIDs for ITL removal, and clears their iTunes linkage.

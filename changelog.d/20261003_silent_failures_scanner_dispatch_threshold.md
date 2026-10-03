@@ -14,14 +14,22 @@
   worker, which then ran it to completion while the server was stopping. The
   worker now checks for shutdown before it starts a run and leaves the
   operation queued for the next start, and the dispatcher stops claiming
-  operations as soon as shutdown begins.
-- **Scanner: failed scan-fail-count resets are logged.** Resetting a file's
-  failure counter after a successful read discarded both errors and panics,
-  so a reset that never landed left earlier failures counting toward
-  auto-quarantine with nothing in the log. Both are now logged (sampled) and
-  counted in the scan summary. The matching increment after a failed read had
-  no panic guard at all, so a panic there (a closed database) crashed the
-  server mid-scan; it now gets the same logging and counting. The scanner and
-  the quarantine service now compute the counter's key with one shared
+  operations as soon as shutdown begins. Operations that had been handed out
+  but not yet started when shutdown began are put back as queued. Before,
+  they could be marked interrupted, and an operation set to be dropped on
+  interruption was lost without ever having run.
+- **Scanner and quarantine: scan-fail counter failures are logged.** Each
+  file has a failure counter, and auto-quarantine acts on it. Resetting the
+  counter after a successful read discarded both errors and panics, so a
+  reset that never landed left earlier failures counting toward
+  auto-quarantine with nothing in the log. The increment after a failed read
+  had no panic guard. Both now log (sampled) and are counted in the scan
+  summary. This does not keep a scan going on a database that has been
+  closed: the scan's next unguarded database call still stops it, which is
+  correct. What changes is that the counter failure is reported instead of
+  hidden. The quarantine side no longer reads an unreadable counter as zero:
+  the database now reports the read error, and the auto-quarantine pass logs
+  and counts failed reads, a failed book listing and failed quarantine moves.
+  The scanner and quarantine compute the counter's key with one shared
   function, so the counter the scanner writes is always the one quarantine
   reads.

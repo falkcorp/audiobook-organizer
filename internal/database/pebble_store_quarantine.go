@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_quarantine.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ace123a3-f577-4065-b41c-ae9de32c9b45
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -88,21 +88,38 @@ func (p *PebbleStore) CountQuarantinedBooks() (int, error) {
 }
 
 // GetScanFailCount returns the number of consecutive taglib failures for a file path hash.
+// A missing counter is 0 with no error: the file has not failed.
+//
+// Any other read error, and a stored value that does not parse, IS returned.
+// Until 2026-10-03 every error was reported as (0, nil), so a store that could
+// not be read looked exactly like a library with no failing files, and
+// auto-quarantine (internal/quarantine) quietly stopped quarantining anything.
 func (p *PebbleStore) GetScanFailCount(pathHash string) (int, error) {
 	key := []byte("scan_fail:" + pathHash)
 	val, closer, err := p.db.Get(key)
-	if err != nil {
+	if err == pebble.ErrNotFound {
 		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get scan-fail counter %s: %w", pathHash, err)
 	}
 	defer closer.Close()
 	n := 0
-	_, _ = fmt.Sscanf(string(val), "%d", &n)
+	if _, err := fmt.Sscanf(string(val), "%d", &n); err != nil {
+		return 0, fmt.Errorf("parse scan-fail counter %s (%q): %w", pathHash, val, err)
+	}
 	return n, nil
 }
 
 // IncrScanFailCount increments the scan-fail counter for a file path hash and returns the new count.
+// A read error is returned rather than treated as 0: restarting the count at 1
+// would erase the failures already recorded, which is the evidence
+// auto-quarantine acts on.
 func (p *PebbleStore) IncrScanFailCount(pathHash string) (int, error) {
-	n, _ := p.GetScanFailCount(pathHash)
+	n, err := p.GetScanFailCount(pathHash)
+	if err != nil {
+		return 0, err
+	}
 	n++
 	key := []byte("scan_fail:" + pathHash)
 	return n, p.db.Set(key, []byte(fmt.Sprintf("%d", n)), pebble.Sync)

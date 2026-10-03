@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.25.0
+// version: 2.26.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-03
 
@@ -204,6 +204,19 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		// Release the dispatcher's stub handle so its plugin slot and
 		// ConcurrencyKey don't leak (same leak shape as the force-drop path, C-2).
 		r.releaseRunHandle(qr.opID)
+		return false
+	}
+
+	// Early shutdown exit, before anything below can write a status. The
+	// infinite-restart check can force-drop the row (interrupted_dropped), and
+	// a run that reaches a worker after Shutdown began must leave its row
+	// exactly as it found it: "queued". This read is unlocked, so it only
+	// narrows the window; the locked check at handle registration below is
+	// the guarantee that no run STARTS after Shutdown.
+	if r.shuttingDown.Load() {
+		r.releaseRunHandle(qr.opID)
+		r.logger.Info("registry: run not started, shutdown in progress; left queued for the next start",
+			"op_id", qr.opID, "def_id", qr.defID)
 		return false
 	}
 

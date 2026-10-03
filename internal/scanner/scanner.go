@@ -968,7 +968,10 @@ func resetScanFailCount(filePath string, scanLog logger.Logger) {
 // A panic is recovered, logged (sampled) and counted in panicCount, never
 // swallowed. The recover is needed: there are two demonstrated panic sources
 // at these calls and no worker-level recover in ProcessBooksParallel above
-// them, so an unguarded panic takes down the whole process mid-scan:
+// them, so an unguarded panic here takes down the whole process. It does not
+// keep a scan alive on a closed store -- the scan's next unguarded store call
+// still panics, which is correct -- it keeps a best-effort counter write from
+// being that call, and makes the failure visible either way:
 //   - "pebble: closed": PebbleStore's counter methods are raw db.Set/Delete
 //     calls, which panic when the store was closed under a still-running scan
 //     (observed in the test suite, audit 2026-09).

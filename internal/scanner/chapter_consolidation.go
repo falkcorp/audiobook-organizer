@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_consolidation.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: f9a0b1c2-d3e4-5f60-a7b8-c9d0e1f2a3b4
 // last-edited: 2026-10-03
 
@@ -115,8 +115,9 @@ const (
 // grouped by chapterGroupKey -- leading numbers, trailing numbers, "Chapter N",
 // "Part N", "Disc N", "N of M". When a group has ≥ 3 files AND each file
 // individually averages below the chapter_consolidation_threshold_min setting
-// (default 10 min; 0 or less means the default, never "off"), the whole group is emitted as a single multi-file
-// Book with the total duration; otherwise each file becomes its own Book.
+// (default 10 min; 0 or less means the default, never "off"), the whole
+// group is emitted as a single multi-file Book with the total duration;
+// otherwise each file becomes its own Book.
 //
 // Files with no chapter numbering are passed through unchanged. Groups that
 // contain at least one file exceeding the threshold are not consolidated
