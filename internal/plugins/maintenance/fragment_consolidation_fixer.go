@@ -3474,9 +3474,28 @@ func (f *fragmentFixer) coOwnerFoldRow(lib *fragLibrary, r repairs.Row, target, 
 	for _, p := range shared {
 		isShared[p] = true
 	}
+	// The row's own fragment file at each shared path: the co-owner must not
+	// contradict it, exactly as a path twin must not (twinContradicts). A
+	// chapter-titled "02" whose size, hash, original name or import folder
+	// differs may be chapter 02 of another book.
+	donorAt := map[string]*fragCandidate{}
+	switch d := r.Detail.(type) {
+	case []fragPair:
+		for _, p := range d {
+			donorAt[p.Frag.File.Path] = p.Frag
+		}
+	case *fragGroupPlan:
+		for _, m := range d.Members {
+			donorAt[m.Frag.File.Path] = m.Frag
+		}
+	}
 	var paths []string
 	for _, fr := range lib.files[id] {
 		if !isShared[fr.Path] {
+			return repairs.Row{}, false
+		}
+		donor := donorAt[fr.Path]
+		if donor == nil || coOwnerContradicts(co, fr, donor) {
 			return repairs.Row{}, false
 		}
 		paths = append(paths, fr.Path)
@@ -3505,6 +3524,23 @@ func (f *fragmentFixer) coOwnerFoldRow(lib *fragLibrary, r repairs.Row, target, 
 	}
 	row.Fingerprint = fragFingerprint(append([]string{fragClassCoOwnerFold, id, target, co.Title}, paths...)...)
 	return row, true
+}
+
+// coOwnerContradicts is twinContradicts for a co-owner known only by its book
+// and its row at the shared path: its book path stands in for an import path.
+func coOwnerContradicts(co fragBook, fr fragFile, donor *fragCandidate) bool {
+	switch {
+	case hashesDisagree(fr, donor.File):
+		return true
+	case fr.Size > 0 && donor.File.Size > 0 && fr.Size != donor.File.Size:
+		return true
+	case fr.OriginalFilename != "" && donor.OrigName != "" && !strings.EqualFold(fr.OriginalFilename, donor.OrigName):
+		return true
+	case co.FilePath != "" && co.FilePath != fr.Path && donor.ImportPath != "" &&
+		filepath.Dir(co.FilePath) != filepath.Dir(donor.ImportPath):
+		return true
+	}
+	return false
 }
 
 // replanFold re-checks a co-owner-fold row: both books live, the co-owner

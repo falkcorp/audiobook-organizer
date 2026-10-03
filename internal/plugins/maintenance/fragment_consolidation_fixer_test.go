@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -2236,9 +2236,14 @@ func TestFragmentFixer_CoOwnerIsHeldAtPlan(t *testing.T) {
 	for _, coTitle := range []string{"", "c5", "7 - P"} {
 		t.Run(fmt.Sprintf("a junk co-owner %q folds, then the row applies", coTitle), func(t *testing.T) {
 			f := newFragFixture(t)
-			parent, frag, other := seed(t, f)
-			_, err := f.s.ModifyBook(other, func(b *database.Book) error { b.Title = coTitle; return nil })
+			parent, frag, real := seed(t, f)
+			// Replace the real-titled co-owner with a junk one whose row
+			// agrees with the fragment's file (same size, same original name).
+			_, err := f.s.ModifyBook(real, func(b *database.Book) error { yes := true; b.MarkedForDeletion = &yes; return nil })
 			require.NoError(t, err)
+			at := f.path("lib/P/02/02/02.mp3")
+			other := f.book(t, "junk", coTitle, at, nil)
+			f.row(t, "j02", other, at, "02.mp3", 802, 600, 0)
 			res := f.plan(t, "op-plan")
 			held := findRow(t, res, "moved:"+parent)
 			require.Equal(t, fragSkipCoOwner, held.Skipped)
@@ -2263,13 +2268,25 @@ func TestFragmentFixer_CoOwnerIsHeldAtPlan(t *testing.T) {
 	}
 	t.Run("a junk co-owner with other files of its own does not fold", func(t *testing.T) {
 		f := newFragFixture(t)
-		_, _, other := seed(t, f)
-		_, err := f.s.ModifyBook(other, func(b *database.Book) error { b.Title = ""; return nil })
+		_, _, real := seed(t, f)
+		_, err := f.s.ModifyBook(real, func(b *database.Book) error { yes := true; b.MarkedForDeletion = &yes; return nil })
 		require.NoError(t, err)
+		at := f.path("lib/P/02/02/02.mp3")
+		other := f.book(t, "junk", "", at, nil)
+		f.row(t, "j02", other, at, "02.mp3", 802, 600, 0)
 		extra := f.file(t, "lib/Elsewhere/x.mp3", 990)
 		f.row(t, "ox", other, extra, "x.mp3", 990, 600, 0)
 		for _, r := range f.plan(t, "op-plan").Rows {
 			require.NotEqual(t, fragClassCoOwnerFold, r.Class)
+		}
+	})
+	t.Run("a junk co-owner whose file facts contradict the fragment's does not fold", func(t *testing.T) {
+		f := newFragFixture(t)
+		_, _, real := seed(t, f)
+		_, err := f.s.ModifyBook(real, func(b *database.Book) error { b.Title = "02"; return nil })
+		require.NoError(t, err)
+		for _, r := range f.plan(t, "op-plan").Rows {
+			require.NotEqual(t, fragClassCoOwnerFold, r.Class, "original names differ: may be chapter 02 of another book")
 		}
 	})
 	t.Run("a no-parent row is held too", func(t *testing.T) {
