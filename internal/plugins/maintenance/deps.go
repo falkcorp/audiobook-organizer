@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.66.0
+// version: 1.67.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -410,6 +410,9 @@ type forwardingStoreProvider interface {
 type FragmentRepairReader interface {
 	GetBookPathHistory(bookID string) ([]database.BookPathChange, error)
 	GetBookChanges(bookID string) ([]*database.OperationChange, error)
+	// GetMetadataChangeHistory tells which fixer retired a book: the
+	// Writer's history row carries the fixer id as Source.
+	GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error)
 	database.BookFilePathLookup
 }
 

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -655,6 +655,11 @@ func (f *fragmentFixer) candidateFrom(store OpsStore, b fragBook, file fragFile,
 
 // fragLibrary is the library snapshot a plan reads.
 type fragLibrary struct {
+	// pin, set only by replanGroup, is the plan's own choices for one
+	// no-parent row: which book survives and which books were set aside as
+	// copies. A re-plan then keeps the files the plan kept instead of
+	// re-electing them from flags the apply itself changes (see fragPin).
+	pin     *fragPin
 	books   map[string]fragBook
 	files   map[string][]fragFile // by book id
 	series  map[int]string
@@ -1811,6 +1816,18 @@ type fragGroupCopy struct {
 // included. The numbered-set builder and noParentRow must agree, so both call
 // this with the counts over the same files.
 func keptOfCopies(lib *fragLibrary, run []*fragCandidate, keyN map[string]int) int {
+	if lib.pin != nil {
+		// A re-plan keeps the file the plan kept: the one book of the run
+		// the plan did not set aside. Any other shape (no such book, or
+		// two) is not the planned run; the first is returned and the row's
+		// role check in replanGroup reports the change.
+		for k, c := range run {
+			if !lib.pin.copies[c.Book.ID] {
+				return k
+			}
+		}
+		return 0
+	}
 	keys := make([]string, len(run))
 	for k, c := range run {
 		if b := lib.books[c.Book.ID]; b.Organized && b.Primary {
@@ -1888,19 +1905,30 @@ type fragGroupState struct {
 	Files         map[string]string `json:"files"`
 	SurvivorTitle string            `json:"survivor_title"`
 	SurvivorPath  string            `json:"survivor_path"`
-	// Books is each member's and copy's organized/primary flags at plan
-	// time. retireInto demotes every book it retires, and keptOfCopies and
-	// the survivor election read those flags, so a run cut off after some
-	// retires would otherwise re-plan a different kept file per chapter
-	// (a different fingerprint) and never resume. replanGroup restores
-	// these for books already retired into this row's survivor.
-	Books map[string]fragPlannedFlags `json:"books,omitempty"`
+	// Survivor and Roles are the plan's own choices: the survivor, each
+	// member's track, and each copy's kept member. Replan pins them
+	// (fragPin) rather than re-electing: the apply itself changes the flags
+	// the election and keptOfCopies read (retireInto demotes before it
+	// soft-deletes, and its version-group hand-off crowns another member),
+	// so a re-election after a cut could keep a different file per chapter
+	// or another survivor, and the row would never resume. Rows planned
+	// before these fields existed derive them from Row.Members' roles.
+	Survivor string                      `json:"survivor,omitempty"`
+	Roles    map[string]fragPlannedRole `json:"roles,omitempty"`
 }
 
-// fragPlannedFlags is one book's survivor-election flags as planned.
-type fragPlannedFlags struct {
-	Organized bool `json:"organized"`
-	Primary   bool `json:"primary"`
+// fragPlannedRole is one book's place in a no-parent row's plan: a member
+// at Track (the survivor included), or a copy of member Of.
+type fragPlannedRole struct {
+	Copy  bool   `json:"copy,omitempty"`
+	Track int    `json:"track,omitempty"`
+	Of    string `json:"of,omitempty"`
+}
+
+// fragPin is a re-plan's view of the plan's choices (fragGroupState).
+type fragPin struct {
+	survivor string
+	copies   map[string]bool
 }
 
 // importChapterSec is the IMPORT scanner's chapter threshold in seconds
@@ -2651,17 +2679,25 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	// as its fragments were, and is organized like any other imported
 	// multi-file book. Until 2026-10-03 such a set was held as "no survivor"
 	// (63 rows on prod once the 120-minute limit released them).
-	for _, id := range memberIDs {
-		if b := lib.books[id]; b.Organized && b.Primary {
-			plan.SurvivorID = id
-			break
+	if lib.pin != nil {
+		// A re-plan keeps the planned survivor; its live flags are still in
+		// the fingerprint (survivorState), so a real change to it refuses.
+		if slices.Contains(memberIDs, lib.pin.survivor) {
+			plan.SurvivorID = lib.pin.survivor
+		}
+	} else {
+		for _, id := range memberIDs {
+			if b := lib.books[id]; b.Organized && b.Primary {
+				plan.SurvivorID = id
+				break
+			}
 		}
 	}
 	anyOrganized := false
 	for _, id := range ids {
 		anyOrganized = anyOrganized || lib.books[id].Organized
 	}
-	if plan.SurvivorID == "" && !anyOrganized {
+	if plan.SurvivorID == "" && !anyOrganized && lib.pin == nil {
 		for _, id := range memberIDs {
 			if lib.books[id].Primary {
 				plan.SurvivorID = id
@@ -2705,10 +2741,12 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		r.Title = plan.Title
 	}
 	state := fragGroupState{Files: map[string]string{}, SurvivorTitle: survivor.Title, SurvivorPath: survivor.FilePath,
-		Books: map[string]fragPlannedFlags{}}
-	for _, id := range ids {
-		b := lib.books[id]
-		state.Books[id] = fragPlannedFlags{Organized: b.Organized, Primary: b.Primary}
+		Survivor: plan.SurvivorID, Roles: map[string]fragPlannedRole{}}
+	for _, m := range plan.Members {
+		state.Roles[m.Frag.Book.ID] = fragPlannedRole{Track: m.Track}
+	}
+	for _, cp := range plan.Copies {
+		state.Roles[cp.Frag.Book.ID] = fragPlannedRole{Copy: true, Of: cp.Of}
 	}
 	var fpParts []string
 	missing, unknown, long, withPID := 0, 0, 0, ""
@@ -2990,6 +3028,14 @@ func (f *fragmentFixer) replanGroup(store OpsStore, lib *fragLibrary, hist Fragm
 		return changedRow(planned, "the plan carries no stored member rows; plan again"), nil
 	}
 	survivorID := planned.Proposed["survivor"]
+	pin, err := plannedPin(st, planned)
+	if err != nil {
+		return changedRow(planned, err.Error()), nil
+	}
+	if pin.survivor != survivorID {
+		return changedRow(planned, fmt.Sprintf("the stored survivor %s is not the proposed %s; plan again", pin.survivor, survivorID)), nil
+	}
+	lib.pin = pin
 	// A partial run moved some members' rows onto the survivor. Each member
 	// is rebuilt from the row it was PLANNED with, found by id wherever it
 	// sits now (on the member, or on the survivor). A member holding any row
@@ -3011,19 +3057,14 @@ func (f *fragmentFixer) replanGroup(store OpsStore, lib *fragLibrary, hist Fragm
 			return changedRow(planned, fmt.Sprintf("fragment %s is gone", id)), nil
 		}
 		if b.SoftDeleted {
-			// Resumable only when THIS row's survivor took it: a book some
-			// other fixer or merge retired into another book is not ours to
-			// move onto the survivor.
-			if b.MergedInto != survivorID {
-				return changedRow(planned, fmt.Sprintf("book %s was retired into %q, not into the survivor %s", id, b.MergedInto, survivorID)), nil
+			// Resumable only when THIS fixer retired it into THIS row's
+			// survivor: merged_into says where a book went, not who sent it.
+			ok, why, err := retiredByFragFixer(hist, b, survivorID)
+			if err != nil {
+				return repairs.Row{}, err
 			}
-			// retireInto demoted it; judge it with the flags the plan saw,
-			// so the same file per chapter is kept and the fingerprint holds.
-			if fl, ok := st.Books[id]; ok {
-				b.Organized, b.Primary = fl.Organized, fl.Primary
-				lb := lib.books[id]
-				lb.Organized, lb.Primary = fl.Organized, fl.Primary
-				lib.books[id] = lb
+			if !ok {
+				return changedRow(planned, why), nil
 			}
 		}
 		b.SoftDeleted = false
@@ -3072,6 +3113,9 @@ func (f *fragmentFixer) replanGroup(store OpsStore, lib *fragLibrary, hist Fragm
 			continue
 		}
 		if plan, ok := r.Detail.(*fragGroupPlan); ok {
+			if why := pinnedRolesDiffer(plan, st); why != "" {
+				return changedRow(planned, why), nil
+			}
 			plan.WasTitle, plan.WasPath = st.SurvivorTitle, st.SurvivorPath
 			// The survivor's title and path must still be what the plan saw,
 			// or what this row's own finished step set, before anything moves.
@@ -3087,6 +3131,119 @@ func (f *fragmentFixer) replanGroup(store OpsStore, lib *fragLibrary, hist Fragm
 		return f.checkOwners(store, hist, planned, r)
 	}
 	return changedRow(planned, "the fragments no longer form this group"), nil
+}
+
+// plannedPin is the plan's survivor and copies for a re-plan: from the
+// stored state, or, for a row planned before Survivor/Roles were stored,
+// from the roles Row.Members lists ("survivor", "fragment", "copy"; a
+// "co-owner" is not in the row).
+func plannedPin(st fragGroupState, planned repairs.Row) (*fragPin, error) {
+	pin := &fragPin{copies: map[string]bool{}}
+	if st.Survivor != "" && len(st.Roles) > 0 {
+		pin.survivor = st.Survivor
+		for id, role := range st.Roles {
+			if role.Copy {
+				pin.copies[id] = true
+			}
+		}
+		return pin, nil
+	}
+	for _, m := range planned.Members {
+		switch m.Role {
+		case "survivor":
+			pin.survivor = m.BookID
+		case "copy":
+			pin.copies[m.BookID] = true
+		}
+	}
+	if pin.survivor == "" {
+		return nil, errors.New("the plan names no survivor; plan again")
+	}
+	return pin, nil
+}
+
+// pinnedRolesDiffer compares a re-planned group with the plan's stored
+// roles (when it has them): the same members at the same tracks, the same
+// copies of the same members. "" when they agree.
+func pinnedRolesDiffer(plan *fragGroupPlan, st fragGroupState) string {
+	if len(st.Roles) == 0 {
+		return ""
+	}
+	seen := 0
+	for _, m := range plan.Members {
+		role, ok := st.Roles[m.Frag.Book.ID]
+		if !ok || role.Copy || role.Track != m.Track {
+			return fmt.Sprintf("book %s is now member track %d, not as planned (%+v)", m.Frag.Book.ID, m.Track, role)
+		}
+		seen++
+	}
+	for _, cp := range plan.Copies {
+		role, ok := st.Roles[cp.Frag.Book.ID]
+		if !ok || !role.Copy || role.Of != cp.Of {
+			return fmt.Sprintf("book %s is now a copy of %s, not as planned (%+v)", cp.Frag.Book.ID, cp.Of, role)
+		}
+		seen++
+	}
+	if seen != len(st.Roles) {
+		return fmt.Sprintf("the group now has %d planned books, not %d", seen, len(st.Roles))
+	}
+	return ""
+}
+
+// retiredByFragFixer reports whether retired book b was retired by this
+// fixer into survivor: merged_into names survivor, the op journal holds an
+// un-reverted book_merged_into row naming it (journaled before the write),
+// and the book's history carries this fixer's merged_into_book_id change to
+// it. The history row is written after the soft-delete commits; when that
+// write failed, the Writer's apply_incomplete marker from this fixer stands
+// in for it. why says what is missing when ok is false.
+func retiredByFragFixer(hist FragmentRepairReader, b fragBook, survivor string) (ok bool, why string, err error) {
+	if b.MergedInto != survivor {
+		return false, fmt.Sprintf("book %s was retired into %q, not into the survivor %s", b.ID, b.MergedInto, survivor), nil
+	}
+	changes, err := hist.GetBookChanges(b.ID)
+	if err != nil {
+		return false, "", fmt.Errorf("changes of %s: %w", b.ID, err)
+	}
+	journaled := false
+	for _, c := range changes {
+		if c.ChangeType == undo.ChangeTypeBookMergedInto && c.BookID == b.ID && c.NewValue == survivor && c.RevertedAt == nil {
+			journaled = true
+			break
+		}
+	}
+	if !journaled {
+		return false, fmt.Sprintf("book %s is merged into the survivor %s, but no journaled retire into it stands", b.ID, survivor), nil
+	}
+	recs, err := hist.GetMetadataChangeHistory(b.ID, "merged_into_book_id", 200)
+	if err != nil {
+		return false, "", fmt.Errorf("history of %s: %w", b.ID, err)
+	}
+	for _, r := range recs {
+		if r.Source == fragFixerID && r.NewValue != nil && historyValue(*r.NewValue) == survivor {
+			return true, "", nil
+		}
+	}
+	marks, err := hist.GetMetadataChangeHistory(b.ID, "apply", 200)
+	if err != nil {
+		return false, "", fmt.Errorf("history of %s: %w", b.ID, err)
+	}
+	for _, r := range marks {
+		if r.Source == fragFixerID && r.ChangeType == repairs.ChangeTypeApplyIncomplete {
+			return true, "", nil
+		}
+	}
+	return false, fmt.Sprintf("book %s is merged into the survivor %s, but not by %s", b.ID, survivor, fragFixerID), nil
+}
+
+// historyValue decodes a history row's JSON-encoded value ("\"x\"" -> "x"),
+// leaving a value that is not a JSON string as it is.
+func historyValue(v string) string {
+	var s string
+	if json.Unmarshal([]byte(v), &s) == nil {
+		return s
+	}
+	return v
 }
 
 // checkOwners re-checks, with the strict lookup, that every file the fresh
@@ -3242,7 +3399,7 @@ func changedRow(planned repairs.Row, why string) repairs.Row {
 // between the check and the writes. Every step is compare-and-set and
 // journaled first; a step already done (by a run cut off mid-row) is skipped.
 func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
-	store, _, err := f.stores()
+	store, hist, err := f.stores()
 	if err != nil {
 		return err
 	}
@@ -3323,7 +3480,7 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 		// found here, before the first write: a refusal then writes nothing
 		// instead of leaving the members moved and the copy live.
 		for _, cp := range plan.Copies {
-			if err := copyRetireRefusal(store, cp, plan.SurvivorID); err != nil {
+			if err := copyRetireRefusal(store, hist, cp, plan.SurvivorID); err != nil {
 				return err
 			}
 		}
@@ -3428,7 +3585,7 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 // or an un-tombstoned external id carries an iTunes id. A copy an earlier,
 // cut-off run already retired INTO survivor is not refused (retireInto
 // resumes it); one retired into any other book is.
-func copyRetireRefusal(store OpsStore, cp fragGroupCopy, survivor string) error {
+func copyRetireRefusal(store OpsStore, hist FragmentRepairReader, cp fragGroupCopy, survivor string) error {
 	id := cp.Frag.Book.ID
 	b, err := store.GetBookByID(id)
 	if err != nil {
@@ -3438,8 +3595,12 @@ func copyRetireRefusal(store OpsStore, cp fragGroupCopy, survivor string) error 
 		return fmt.Errorf("%w: copy %s vanished", repairs.ErrChangedSincePlan, id)
 	}
 	if b.IsSoftDeleted() {
-		if b.MergedIntoBookID == nil || *b.MergedIntoBookID != survivor {
-			return fmt.Errorf("%w: copy %s was retired into another book, not the survivor %s", repairs.ErrChangedSincePlan, id, survivor)
+		ok, why, err := retiredByFragFixer(hist, fragBookOf(b), survivor)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("%w: copy %s: %s", repairs.ErrChangedSincePlan, id, why)
 		}
 		return nil
 	}

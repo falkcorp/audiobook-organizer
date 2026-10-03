@@ -2487,15 +2487,16 @@ func TestFragmentFixer_NumberedCopiesReview(t *testing.T) {
 				cp = c
 			}
 		}
-		// The Apply pre-check, called directly: the locked Replan below
-		// catches this case first, so Apply never reaches it here.
-		require.ErrorIs(t, copyRetireRefusal(f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
+		// The Apply pre-check, called directly: the engine's pre-apply
+		// Replan (repairs.RunApply) refuses this row first, so Apply never
+		// reaches the pre-check here.
+		require.ErrorIs(t, copyRetireRefusal(f.s, f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
 
 		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 		require.Equal(t, 0, out.Applied, "outcomes %v", out.ByOutcome)
 		require.Zero(t, out.ByOutcome[repairs.OutcomePartial])
 		require.Len(t, out.Rows, 1)
-		require.Equal(t, repairs.OutcomeNotApplicable, out.Rows[0].Outcome, "refused by the locked Replan")
+		require.Equal(t, repairs.OutcomeNotApplicable, out.Rows[0].Outcome, "refused by the engine's pre-apply Replan")
 		require.Equal(t, repairs.SkipITunes, out.Rows[0].Skipped)
 		for _, id := range orig {
 			b, err := f.s.GetBookByID(id)
@@ -2972,7 +2973,7 @@ func TestFragmentFixer_NumberedRetiredElsewhere(t *testing.T) {
 						cp = c
 					}
 				}
-				require.ErrorIs(t, copyRetireRefusal(f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
+				require.ErrorIs(t, copyRetireRefusal(f.s, f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
 			}
 			out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 			require.Equal(t, 0, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
@@ -3057,4 +3058,154 @@ func TestFragmentFixer_CopiesInAnotherGroup(t *testing.T) {
 			})
 		}
 	}
+}
+
+// p7Plan plans the 02_light_of_other_days copies folder and returns its row.
+func (f *fragFixture) p7Plan(t *testing.T, dir string) (repairs.Row, *fragGroupPlan) {
+	t.Helper()
+	r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), fragNumberedKey))
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	return r, r.Detail.(*fragGroupPlan)
+}
+
+// requireResumes re-plans r (same fingerprint, applicable) and applies it.
+func (f *fragFixture) requireResumes(t *testing.T, r repairs.Row, opID string) {
+	t.Helper()
+	got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+	require.NoError(t, err)
+	require.Equal(t, r.Fingerprint, got.Fingerprint, "reason=%q", got.Reason)
+	require.True(t, got.Applicable(), "%s: %s", got.Skipped, got.SkipReason)
+	out := f.apply(t, "op-plan", opID, []string{r.RowID}, nil)
+	require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
+}
+
+// TestFragmentFixer_NumberedPinnedResume: a re-plan keeps the plan's own
+// survivor and kept files, whatever the apply did to the election flags.
+func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
+	const dir = "lib/Clarke/02_light_of_other_days"
+
+	t.Run("cut between a member's demote and its soft-delete", func(t *testing.T) {
+		f := newFragFixture(t)
+		orig, copies := f.seedChapterCopies(t, dir, nil)
+		f.organizeCopiesFixture(t, "all", orig, copies)
+		r, plan := f.p7Plan(t, dir)
+		w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+		var m fragGroupMember
+		for _, x := range plan.Members {
+			if x.Frag.Book.ID != plan.SurvivorID {
+				m = x
+				break
+			}
+		}
+		require.NoError(t, w.MoveBookFiles([]string{m.Frag.File.ID}, m.Frag.Book.ID, plan.SurvivorID))
+		no := false
+		_, err := f.s.ModifyBook(m.Frag.Book.ID, func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
+		require.NoError(t, err)
+		f.requireResumes(t, r, "op-apply")
+		f.requireAllRetiredBut(t, r.BookIDs, plan.SurvivorID)
+	})
+
+	t.Run("a version-group hand-off crowns a live member with a lower id", func(t *testing.T) {
+		f := newFragFixture(t)
+		orig, _ := f.seedChapterCopies(t, dir, nil)
+		for _, id := range orig {
+			f.organized(t, id)
+		}
+		group := "vg-ch"
+		yes, no := true, false
+		_, err := f.s.ModifyBook(orig[0], func(b *database.Book) error { b.VersionGroupID = &group; b.IsPrimaryVersion = &no; return nil })
+		require.NoError(t, err)
+		_, err = f.s.ModifyBook(orig[2], func(b *database.Book) error { b.VersionGroupID = &group; b.IsPrimaryVersion = &yes; return nil })
+		require.NoError(t, err)
+		r, plan := f.p7Plan(t, dir)
+		require.NotEqual(t, orig[0], plan.SurvivorID)
+		w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+		var m fragGroupMember
+		for _, x := range plan.Members {
+			if x.Frag.Book.ID == orig[2] {
+				m = x
+			}
+		}
+		require.NotNil(t, m.Frag)
+		require.NoError(t, w.MoveBookFiles([]string{m.Frag.File.ID}, m.Frag.Book.ID, plan.SurvivorID))
+		_, err = retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, m.Frag.Book.ID, plan.SurvivorID,
+			&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
+		require.NoError(t, err)
+		b0, err := f.s.GetBookByID(orig[0])
+		require.NoError(t, err)
+		require.True(t, b0.IsPrimaryVersion == nil || *b0.IsPrimaryVersion, "the hand-off crowned orig[0]")
+		f.requireResumes(t, r, "op-apply")
+		f.requireAllRetiredBut(t, r.BookIDs, plan.SurvivorID)
+	})
+
+	t.Run("a row planned before roles were stored derives them from its members", func(t *testing.T) {
+		f := newFragFixture(t)
+		orig, copies := f.seedChapterCopies(t, dir, nil)
+		f.organizeCopiesFixture(t, "all", orig, copies)
+		r, plan := f.p7Plan(t, dir)
+		var st fragGroupState
+		require.NoError(t, json.Unmarshal(r.State, &st))
+		st.Survivor, st.Roles = "", nil
+		raw, err := json.Marshal(st)
+		require.NoError(t, err)
+		r.State = raw
+		w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+		n := 0
+		for _, m := range plan.Members {
+			if m.Frag.Book.ID == plan.SurvivorID || n >= 3 {
+				continue
+			}
+			n++
+			require.NoError(t, w.MoveBookFiles([]string{m.Frag.File.ID}, m.Frag.Book.ID, plan.SurvivorID))
+			_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, m.Frag.Book.ID, plan.SurvivorID,
+				&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
+			require.NoError(t, err)
+		}
+		got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+		require.NoError(t, err)
+		require.Equal(t, r.Fingerprint, got.Fingerprint, "reason=%q", got.Reason)
+		w2 := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-2")
+		require.NoError(t, newFragmentFixer(f.p).Apply(context.Background(), w2, r))
+		f.requireAllRetiredBut(t, r.BookIDs, plan.SurvivorID)
+	})
+
+	t.Run("a book merged into the survivor by someone else is a change", func(t *testing.T) {
+		f := newFragFixture(t)
+		_, copies := f.seedChapterCopies(t, dir, nil)
+		r, plan := f.p7Plan(t, dir)
+		surv := plan.SurvivorID
+		_, err := f.s.ModifyBook(copies[2], func(b *database.Book) error {
+			tr, now := true, time.Now()
+			b.MarkedForDeletion, b.MarkedForDeletionAt, b.MergedIntoBookID = &tr, &now, &surv
+			return nil
+		})
+		require.NoError(t, err)
+		got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+		require.NoError(t, err)
+		require.NotEqual(t, r.Fingerprint, got.Fingerprint, "a changed row")
+		require.Contains(t, got.Reason, "no journaled retire")
+		var cp fragGroupCopy
+		for _, c := range plan.Copies {
+			if c.Frag.Book.ID == copies[2] {
+				cp = c
+			}
+		}
+		require.ErrorIs(t, copyRetireRefusal(f.s, f.s, cp, surv), repairs.ErrChangedSincePlan)
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 0, out.Applied)
+		require.Zero(t, out.ByOutcome[repairs.OutcomePartial])
+	})
+
+	t.Run("a book another fixer retired into the survivor is a change", func(t *testing.T) {
+		f := newFragFixture(t)
+		_, copies := f.seedChapterCopies(t, dir, nil)
+		r, plan := f.p7Plan(t, dir)
+		w := repairs.NewWriter(f.s, f.s, "some-other-fixer", "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-other")
+		_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, "some-other-fixer", copies[2], plan.SurvivorID, nil)
+		require.NoError(t, err)
+		got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+		require.NoError(t, err)
+		require.NotEqual(t, r.Fingerprint, got.Fingerprint, "a changed row")
+		require.Contains(t, got.Reason, "not by "+fragFixerID)
+	})
 }
