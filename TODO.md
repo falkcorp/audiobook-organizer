@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.75.0 -->
+<!-- version: 10.75.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -13,6 +13,18 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **Version-group membership lock: rows created straight into a group.** Every writer that moves an EXISTING book between version groups now holds the shared group locks (and the no-group sentinel) across the write (#3666). Rows that are CREATED already carrying a `version_group_id` still join that group with no lock, so a group-lock holder (`itunes.regroup`'s apply-time recheck, a hand-off) can see a member appear mid-check. For each, hold `versionprimary.LockGroups(groupID)` across the `CreateBook` (and any follow-up flag write), released before any hand-off. Sites: `internal/server/transcode_version.go` recordTranscodedVersion's M4B version row (~148, `store.CreateBook(nb)`); `internal/scanner/version_link.go` the new scanned row that takes the auto-linked group (~453, `dbBook.VersionGroupID = &groupID` before the scanner's create); `internal/dedup/split_book_merge.go` (~594, the split/combine source plan carrying `VersionGroupID`); `internal/server/handlers/versions.go` (~865/876, the version row created into a group). `organizer.CreateOrganizedVersion` is done: it creates its copy under the locks (#3666).
+
+- [ ] **Number-leading titles — leftovers from the 2026-10-03 overnight (see `docs/executive-summaries/2026-10-03-the-books-titled-by-a-number-executive-summary.md`).**
+  - [ ] Fragment fixer: a path twin whose own match is AMBIGUOUS (two parents) or whose path two matched fragments share still lends/takes nothing by design (#3685); list those so the owner can resolve them by hand instead of them vanishing from the plan.
+  - [ ] Fragment fixer `no-parent`: a "numbered chapter set" rule for ≥3 short files from one import folder whose stems differ only by a leading number but carry DIFFERENT titles ("070 - Skating", "047 - Core" — SenescentSoul 262 rows, Anansi Boys 55, Lord of the Dragon Riders 45); `ChapterGroupKey` keys them apart today, so they never form a group. Survivor titled from the folder.
+  - [ ] Fragment fixer `no-parent`: folder-per-file layouts (each chapter in its own folder named after the file) group by the grandparent folder when the import dir holds only that file.
+  - [ ] `GetBookChanges(bookID)` has no by-book index: a full `opchange:` scan per call. Add `opchange:bybook:<bookID>:<changeID>` written with every change + a one-time backfill, then read the index.
+  - [ ] Junk-title fixer: proposals from a transcription that is a garbled title ("Cushial's Avatar", "NAMAS CURSE", "Star Tied Rising") need a corroborating source (folder/candidate agreement) before they are applicable; 18 such rows held by hand on 2026-10-03 (`.claude/notes/overnight-2026-10-03/junk-titles-held-batch2.tsv`).
+  - [ ] Repairs apply results: expose `RowResult` reasons via `GET /repairs/:fixer/apply/:op_id/rows` (today only the v1 `GET /operations/:id/result` shows why a row was `changed_since_plan`).
+  - [ ] Tracing: stand up Grafana Tempo per `deploy/grafana/TRACING-RUNBOOK.md` and set `OTEL_EXPORTER_OTLP_ENDPOINT` (needs `OTEL_EXPORTER_OTLP_TRACES_INSECURE=true` or `WithInsecure()` for plain gRPC).
+  - [ ] Grafana: screenshot of `aorg-overnight` could not be taken from a script — Grafana sits behind Cloudflare Access SSO; take it by hand or provision a service account.
 
 - [ ] **ALTQUERY-CACHE** An alt-query metadata search (custom title, no
       `refresh`) can be answered from the book row's own cached provider
