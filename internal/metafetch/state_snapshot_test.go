@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 )
 
 func snapshotStore(t *testing.T) *database.PebbleStore {
@@ -53,38 +54,46 @@ func repairLock(st *database.PebbleStore, bookID, field, op string) error {
 	return st.UpsertMetadataFieldState(&row)
 }
 
-// A snapshot read before a repair lock and saved after it keeps the lock: the
-// caller never saw it and did not change that field's lock. A repair lock on a
-// field the snapshot does not hold is kept too.
-func TestSaveStateSnapshot_KeepsLockWrittenSinceTheRead(t *testing.T) {
+// The stripe is held from the read through the save: a person's override
+// (or a repair lock) landing while a snapshot is being modified waits, and
+// survives the save. Before, a snapshot read outside the stripe deleted a
+// newer override and resurrected a cleared one.
+func TestWithStateSnapshot_HoldsTheStripeFromReadToSave(t *testing.T) {
 	st := snapshotStore(t)
-	fv := `"Provider Title"`
-	require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: "b1", Field: "title",
+	fv := `"Prov"`
+	require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: "b1", Field: "description",
 		FetchedValue: &fv, UpdatedAt: time.Now()}))
-	rows, err := st.GetMetadataFieldStates("b1")
+	done := make(chan error, 2)
+	err := WithStateSnapshot(st, "b1", func(state map[string]MetadataFieldState) error {
+		go func() { done <- database.RecordUserOverrides(st, "b1", map[string]any{"narrator": "Typed"}) }()
+		go func() { done <- repairLock(st, "b1", "title", "op-1") }()
+		time.Sleep(50 * time.Millisecond) // both writers are now waiting on the stripe
+		require.Nil(t, stateRow(t, st, "b1", "narrator"), "the override must wait for the save")
+		e := state["description"]
+		e.FetchedValue = "newer"
+		state["description"] = e
+		return nil
+	})
 	require.NoError(t, err)
-	stale := StateFromRows(rows)
+	require.NoError(t, <-done)
+	require.NoError(t, <-done)
+	narr := stateRow(t, st, "b1", "narrator")
+	require.NotNil(t, narr, "the person's override written during the snapshot survives")
+	assert.True(t, narr.OverrideLocked)
+	assert.True(t, stateRow(t, st, "b1", "title").IsRepairLock())
+	assert.Equal(t, `"newer"`, *stateRow(t, st, "b1", "description").FetchedValue)
 
-	require.NoError(t, repairLock(st, "b1", "title", "op-1"))
-	require.NoError(t, repairLock(st, "b1", "author_name", "op-1"))
-
-	e := stale["title"]
-	e.FetchedValue = "Newer Provider Title"
-	stale["title"] = e
-	require.NoError(t, SaveStateSnapshot(st, "b1", stale))
-
-	title := stateRow(t, st, "b1", "title")
-	require.NotNil(t, title)
-	assert.True(t, title.IsRepairLock(), "the stale snapshot must not erase the repair lock")
-	assert.Equal(t, `"Newer Provider Title"`, *title.FetchedValue)
-	author := stateRow(t, st, "b1", "author_name")
-	require.NotNil(t, author, "a repair lock row the snapshot never read is not deleted")
-	assert.True(t, author.IsRepairLock())
+	// A cleared override is not resurrected by a later save.
+	mss := NewMetadataStateService(st)
+	require.NoError(t, mss.SetOverride("b1", "publisher", "Typed Pub", true))
+	require.NoError(t, mss.ClearOverride("b1", "publisher"))
+	require.NoError(t, mss.UpdateFetchedMetadata("b1", map[string]any{"description": "newest"}))
+	assert.Nil(t, stateRow(t, st, "b1", "publisher"))
 }
 
 // A person who unlocks, locks or edits a repair-locked field makes it
 // theirs: the save writes what they did, with no repair source.
-func TestSaveStateSnapshot_PersonTakesOverARepairLock(t *testing.T) {
+func TestWithStateSnapshot_PersonTakesOverARepairLock(t *testing.T) {
 	st := snapshotStore(t)
 	require.NoError(t, repairLock(st, "b1", "title", "op-1"))
 	require.NoError(t, repairLock(st, "b1", "narrator", "op-1"))
@@ -109,7 +118,7 @@ func TestSaveStateSnapshot_PersonTakesOverARepairLock(t *testing.T) {
 
 // The snapshot save and a repair lock race on one book: every lock written
 // must survive every concurrent save. Run with -race.
-func TestSaveStateSnapshot_RaceWithRepairLock(t *testing.T) {
+func TestWithStateSnapshot_RaceWithRepairLock(t *testing.T) {
 	st := snapshotStore(t)
 	svc := NewService(st)
 	fields := []string{"title", "author_name", "narrator", "publisher", "language", "genre", "isbn10", "isbn13"}
@@ -196,4 +205,21 @@ func TestApplyMetadataCandidate_RepairLockYieldsToHandPickedApply(t *testing.T) 
 		assert.Equal(t, curatedBook().Title, book.Title)
 		assert.Contains(t, skipped, database.FieldKeyTitle)
 	})
+}
+
+// A person's override on a book still on the pre-migration blob migrates the
+// blob first: the blob's own locks stay locks, and a later save keeps them.
+func TestRecordUserOverrides_MigratesTheBlobFirst(t *testing.T) {
+	st := snapshotStore(t)
+	blob := `{"title":{"override_value":"Owner Title","override_locked":true,"updated_at":"2026-01-01T00:00:00Z"}}`
+	require.NoError(t, st.SetUserPreference(metastate.Key("b1"), blob))
+	require.NoError(t, database.RecordUserOverrides(st, "b1", map[string]any{"narrator": "N"}))
+	locked, err := database.LockedUserFields(st, "b1")
+	require.NoError(t, err)
+	assert.True(t, locked["title"], "the blob's title lock survives the first override row")
+	assert.True(t, locked["narrator"])
+	require.NoError(t, NewService(st).updateFetchedMetadataState("b1", map[string]any{"description": "d"}))
+	locked, err = database.LockedUserFields(st, "b1")
+	require.NoError(t, err)
+	assert.True(t, locked["title"], "and a later snapshot save keeps it")
 }

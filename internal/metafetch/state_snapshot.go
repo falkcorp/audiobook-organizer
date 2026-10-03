@@ -6,6 +6,7 @@
 package metafetch
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,84 +14,83 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 )
 
-// The ONE load and save of a book's whole field-state snapshot. Four copies
-// (this package's Service and MetadataStateService, audiobooks.AudiobookService
-// and server.Server) each read the rows into a map, let the caller change it,
-// and wrote every entry back while deleting every row missing from the map.
-// That read-modify-write erased anything written between the read and the
-// save, the Repairs lane's field locks in particular (repairs.Writer.LockFields),
-// and each copy would have had to learn LockSource separately. They now all
-// call StateFromRows and SaveStateSnapshot.
+// The ONE read-modify-write of a book's whole field-state snapshot. Four
+// copies (this package's Service and MetadataStateService,
+// audiobooks.AudiobookService and server.Server) each read the rows into a
+// map, let the caller change it, and wrote every entry back while deleting
+// every row missing from the map. Read outside any lock, that erased
+// whatever was written between the read and the save: a person's override, a
+// clear (resurrected), a Repairs lock (repairs.Writer.LockFields). They now
+// all go through WithStateSnapshot, which holds the book's field-state
+// stripe (database.LockMetadataState) from the read through the save. Every
+// other writer of the rows takes the same stripe: LockFields,
+// database.RecordUserOverrides, database.ClaimRepairLocks and the revert's
+// lock lift.
 
-// StateFromRows turns a book's field-state rows into the snapshot map,
-// remembering each field's lock as read so SaveStateSnapshot can tell a lock
-// written since the read from one the caller changed.
+// StateFromRows turns a book's field-state rows into the snapshot map. For
+// read-only callers; a caller that saves uses WithStateSnapshot.
 func StateFromRows(rows []database.MetadataFieldState) map[string]MetadataFieldState {
 	state := make(map[string]MetadataFieldState, len(rows))
 	for _, entry := range rows {
 		state[entry.Field] = MetadataFieldState{
-			FetchedValue:     metastate.Decode(entry.FetchedValue),
-			OverrideValue:    metastate.Decode(entry.OverrideValue),
-			OverrideLocked:   entry.OverrideLocked,
-			LockSource:       entry.LockSource,
-			UpdatedAt:        entry.UpdatedAt,
-			loadedLocked:     entry.OverrideLocked,
-			loadedLockSource: entry.LockSource,
+			FetchedValue:   metastate.Decode(entry.FetchedValue),
+			OverrideValue:  metastate.Decode(entry.OverrideValue),
+			OverrideLocked: entry.OverrideLocked,
+			LockSource:     entry.LockSource,
+			UpdatedAt:      entry.UpdatedAt,
 		}
 	}
 	return state
 }
 
-// StateSnapshotStore is what SaveStateSnapshot writes through.
+// StateSnapshotStore is what WithStateSnapshot reads and writes through: the
+// rows, the pre-migration blob (migrated on the way in), and row deletes.
 type StateSnapshotStore interface {
-	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
-	UpsertMetadataFieldState(state *database.MetadataFieldState) error
+	database.LegacyMetadataStateStore
 	DeleteMetadataFieldState(bookID, field string) error
-	DeleteUserPreference(key string) error
 }
 
-// SaveStateSnapshot writes state as the book's complete field state, under
-// the book's field-state stripe (database.LockMetadataState), which
-// repairs.Writer.LockFields also takes:
+// ErrNoStateChange, returned by a WithStateSnapshot callback, skips the save.
+var ErrNoStateChange = errors.New("metadata state: nothing to save")
+
+// WithStateSnapshot reads bookID's field state, hands it to fn, and saves what
+// fn leaves as the book's complete state, all under the book's field-state
+// stripe. fn must do in-memory work only (and quick Pebble writes such as a
+// history row): nothing slow or networked runs under the stripe.
 //
-//   - A lock written since the snapshot was read (the row's lock or source no
-//     longer what the caller read) is kept when the caller did not change
-//     that field's lock: the caller never saw it.
-//   - An entry with an override value is a person's, so its LockSource is
-//     cleared: a lock a person touched is theirs.
-//   - A row missing from the snapshot is deleted (a cleared field), except a
-//     repair's bare lock the caller never read, which appeared since.
-//
-// The pre-migration blob is deleted afterwards: the rows are authoritative
-// (database.DeleteLegacyMetadataState).
-func SaveStateSnapshot(store StateSnapshotStore, bookID string, state map[string]MetadataFieldState) error {
+// A book whose state is still in the pre-migration blob is migrated to rows
+// first (database.MigrateLegacyMetadataState), inside the same hold. The save
+// writes every entry and deletes every row fn removed from the map. An entry
+// with an override value is a person's, so its LockSource is cleared: a lock
+// a person touched is theirs.
+func WithStateSnapshot(store StateSnapshotStore, bookID string, fn func(state map[string]MetadataFieldState) error) error {
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
 	unlock := database.LockMetadataState(bookID)
 	defer unlock()
-
-	existing, err := store.GetMetadataFieldStates(bookID)
+	if _, err := database.MigrateLegacyMetadataState(store, bookID); err != nil {
+		return err
+	}
+	rows, err := store.GetMetadataFieldStates(bookID)
 	if err != nil {
 		return err
 	}
-	current := make(map[string]database.MetadataFieldState, len(existing))
-	for _, entry := range existing {
-		current[entry.Field] = entry
+	state := StateFromRows(rows)
+	if err := fn(state); err != nil {
+		if errors.Is(err, ErrNoStateChange) {
+			return nil
+		}
+		return err
 	}
+	return saveStateLocked(store, bookID, rows, state)
+}
 
+// saveStateLocked writes state as the book's complete field state. The
+// caller holds the stripe; rows are the rows state was read from.
+func saveStateLocked(store StateSnapshotStore, bookID string, rows []database.MetadataFieldState, state map[string]MetadataFieldState) error {
 	now := time.Now()
 	for field, entry := range state {
-		cur, had := current[field]
-		delete(current, field)
-		if entry.cleared {
-			if had {
-				if err := store.DeleteMetadataFieldState(bookID, field); err != nil {
-					return fmt.Errorf("failed to clean up metadata state for %s: %w", field, err)
-				}
-			}
-			continue
-		}
 		fetched, err := metastate.Encode(entry.FetchedValue)
 		if err != nil {
 			return fmt.Errorf("failed to encode fetched metadata for %s: %w", field, err)
@@ -102,49 +102,50 @@ func SaveStateSnapshot(store StateSnapshotStore, bookID string, state map[string
 		if entry.UpdatedAt.IsZero() {
 			entry.UpdatedAt = now
 		}
-		locked, source := entry.OverrideLocked, entry.LockSource
+		source := entry.LockSource
 		if override != nil {
 			source = ""
 		}
-		lockUntouched := entry.OverrideLocked == entry.loadedLocked && entry.LockSource == entry.loadedLockSource
-		lockMovedSince := had && (cur.OverrideLocked != entry.loadedLocked || cur.LockSource != entry.loadedLockSource)
-		if override == nil && lockUntouched && lockMovedSince {
-			locked, source = cur.OverrideLocked, cur.LockSource
-		}
-		dbState := database.MetadataFieldState{
-			BookID:         bookID,
-			Field:          field,
-			FetchedValue:   fetched,
-			OverrideValue:  override,
-			OverrideLocked: locked,
-			LockSource:     source,
-			UpdatedAt:      entry.UpdatedAt,
-		}
-		if err := store.UpsertMetadataFieldState(&dbState); err != nil {
+		if err := store.UpsertMetadataFieldState(&database.MetadataFieldState{
+			BookID: bookID, Field: field, FetchedValue: fetched, OverrideValue: override,
+			OverrideLocked: entry.OverrideLocked, LockSource: source, UpdatedAt: entry.UpdatedAt,
+		}); err != nil {
 			return fmt.Errorf("failed to persist metadata state for %s: %w", field, err)
 		}
 	}
-
-	for field, cur := range current {
-		if cur.IsRepairLock() {
+	for _, row := range rows {
+		if _, kept := state[row.Field]; kept {
 			continue
 		}
-		if err := store.DeleteMetadataFieldState(bookID, field); err != nil {
-			return fmt.Errorf("failed to clean up metadata state for %s: %w", field, err)
+		if err := store.DeleteMetadataFieldState(bookID, row.Field); err != nil {
+			return fmt.Errorf("failed to clean up metadata state for %s: %w", row.Field, err)
 		}
-	}
-
-	if err := database.DeleteLegacyMetadataState(store, bookID); err != nil {
-		return fmt.Errorf("failed to retire legacy metadata state: %w", err)
 	}
 	return nil
 }
 
-// ClearField marks field for deletion by SaveStateSnapshot (the person's
-// "clear override"). Deleting the key from the map would read as "not in the
-// snapshot", which keeps a repair lock the caller never read.
-func ClearField(state map[string]MetadataFieldState, field string) {
-	e := state[field]
-	e.cleared = true
-	state[field] = e
+// LoadStateSnapshot is the read-only load the services share: the rows, or a
+// blob-only book's pre-migration blob (not migrated: a read writes nothing;
+// the next WithStateSnapshot migrates it).
+func LoadStateSnapshot(reader database.MetadataFieldStateReader, bookID string) (map[string]MetadataFieldState, error) {
+	if reader == nil {
+		return map[string]MetadataFieldState{}, fmt.Errorf("database not initialized")
+	}
+	rows, err := reader.GetMetadataFieldStates(bookID)
+	if err != nil {
+		return map[string]MetadataFieldState{}, err
+	}
+	if len(rows) > 0 {
+		return StateFromRows(rows), nil
+	}
+	legacy, err := database.ParseLegacyMetadataState(reader, bookID)
+	if err != nil {
+		return map[string]MetadataFieldState{}, err
+	}
+	state := make(map[string]MetadataFieldState, len(legacy))
+	for field, e := range legacy {
+		state[field] = MetadataFieldState{FetchedValue: e.FetchedValue, OverrideValue: e.OverrideValue,
+			OverrideLocked: e.OverrideLocked, UpdatedAt: e.UpdatedAt}
+	}
+	return state, nil
 }
