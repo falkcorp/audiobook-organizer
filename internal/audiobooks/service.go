@@ -99,6 +99,7 @@ type narratorResolver interface {
 	CreateNarrator(name string) (*database.Narrator, error)
 	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
 	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
+	GetNarratorByID(id int) (*database.Narrator, error)
 }
 
 type seriesResolver interface {

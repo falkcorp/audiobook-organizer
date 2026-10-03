@@ -753,6 +753,15 @@ func TestUpdateAudiobook_SelfReadNarratorCreditGoesInTheJunction(t *testing.T) {
 		map[string]any{"narrator": "John Scalzi"})
 	require.NoError(t, err)
 	require.Equal(t, []string{"John Scalzi"}, narratorNames(t, store, book.ID))
+
+	// With a prefix: still the author, and no junk "Narrated by ..." entity.
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"narrator": "Narrated by John Scalzi"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"John Scalzi"}, narratorNames(t, store, book.ID))
+	junk, err := store.GetNarratorByName("Narrated by John Scalzi")
+	require.NoError(t, err)
+	require.Nil(t, junk, "a junk narrator entity was created from a prefixed self-read credit")
 }
 
 // Review S-c: a refused edit writes nothing. The override history rows used
@@ -819,6 +828,11 @@ func TestUpdateAudiobook_BookDetailSaveLocksOnlyTheDirtyField(t *testing.T) {
 		require.Equal(t, database.FieldKeyTitle, field, "history row for a field the save did not change")
 	}
 	requireSeriesPosition(t, store, before.ID, 1, "1.5")
+	// The editor sends the primary author's name (what GET shows); the
+	// co-author must survive it.
+	authors, err := store.GetBookAuthors(before.ID)
+	require.NoError(t, err)
+	require.Len(t, authors, 2, "the co-author was dropped by a save that re-sent the shown author")
 }
 
 // A field the save did change, sent at top level without an override, is
@@ -831,4 +845,60 @@ func TestUpdateAudiobook_ChangedTopLevelFieldIsLocked(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{database.FieldKeyDescription}, lockedKeys(t, store, before.ID))
 	require.NotEmpty(t, historyByField(t, store, before.ID)[database.FieldKeyDescription])
+}
+
+// GET shows a junction-only cast as the narrator (junction names joined with
+// " & "), and BookDetail re-sends it on every save. That is not a narrator
+// edit: the column stays empty, nothing is locked or recorded, and the
+// junction is left as it is.
+func TestUpdateAudiobook_ResentJunctionNarratorIsNotAnEdit(t *testing.T) {
+	store, book := editFixture(t)
+	a, err := store.CreateNarrator("Kate Reading")
+	require.NoError(t, err)
+	b, err := store.CreateNarrator("Michael Kramer")
+	require.NoError(t, err)
+	require.NoError(t, store.SetBookNarrators(book.ID, []database.BookNarrator{
+		{BookID: book.ID, NarratorID: a.ID, Role: "narrator", Position: 0},
+		{BookID: book.ID, NarratorID: b.ID, Role: "co-narrator", Position: 1}}))
+
+	body := bookDetailSave("Renamed")
+	body["narrator"] = "Kate Reading & Michael Kramer"
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, body)
+	require.NoError(t, err)
+
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.True(t, row.Narrator == nil || *row.Narrator == "", "the shown junction text was written to the column")
+	require.ElementsMatch(t, []string{database.FieldKeyTitle}, lockedKeys(t, store, book.ID))
+	for field := range historyByField(t, store, book.ID) {
+		require.Equal(t, database.FieldKeyTitle, field)
+	}
+	require.Equal(t, []string{"Kate Reading", "Michael Kramer"}, narratorNames(t, store, book.ID))
+}
+
+// A book hit by the old clear bug (nil SeriesID, stale embedded Series)
+// shows the stale name, and BookDetail re-sends it. The save must relink the
+// book to that series, not skip the lookup and let the store drop the
+// object (which would erase the series on an ordinary save).
+func TestUpdateAudiobook_ResentStaleSeriesNameRelinksTheBook(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	series, err := store.CreateSeries("Redshirts", nil)
+	require.NoError(t, err)
+	book, err := store.CreateBook(&database.Book{Title: "Redshirts", FilePath: "/library/stale.m4b", Format: "m4b", Series: series})
+	require.NoError(t, err)
+
+	body := bookDetailSave("Redshirts (Unabridged)")
+	body["series_name"] = "Redshirts"
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, body)
+	require.NoError(t, err)
+
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row.SeriesID, "the save did not relink the book to its shown series")
+	view, err := audiobooks.NewAudiobookService(store).GetAudiobook(context.Background(), book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, view.Series, "GET lost the series after an ordinary save")
+	require.Equal(t, "Redshirts", view.Series.Name)
 }

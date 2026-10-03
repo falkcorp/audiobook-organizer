@@ -280,6 +280,16 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			payload.Narrator = before.Narrator
 			blankNoop[database.FieldKeyNarrator] = true
 		}
+	} else if narratorSent && (before.Narrator == nil || *before.Narrator == "") {
+		// GET shows a junction-only cast as the narrator ("A & B", the
+		// junction names joined), and the editor re-sends that on every save.
+		// The same text back is not an edit: no column write, no lock, no
+		// junction rewrite. (blankNoop is the set of sent-but-not-edited
+		// fields.)
+		if shown := svc.junctionNarratorText(id); shown != "" && strings.TrimSpace(*payload.Narrator) == shown {
+			payload.Narrator = before.Narrator
+			blankNoop[database.FieldKeyNarrator] = true
+		}
 	}
 
 	// Resolve author by name or ID — auto-split on " & " for multiple authors
@@ -301,7 +311,9 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// The name the book already shows is not an author edit (the editor
 	// re-sends it on every save). Re-resolving it would rewrite the join from
 	// that one name, collapsing a co-authored book to its primary author.
-	authorUnchanged := authorName != "" && authorName == beforeAuthor && !sent("author_id")
+	// Only while the book is linked by ID: a name shown from a stale embedded
+	// object alone still goes through the lookup, which relinks it.
+	authorUnchanged := authorName != "" && authorName == beforeAuthor && before.AuthorID != nil && !sent("author_id")
 	if authorUnchanged {
 		resolvedAuthorName = beforeAuthor
 	}
@@ -405,11 +417,14 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// show the stale name, so a repeat clear repairs them.
 	hadSeries := beforeSeries != ""
 	switch {
-	case seriesName != "" && seriesName == beforeSeries && !sent("series_id"):
+	case seriesName != "" && seriesName == beforeSeries && before.SeriesID != nil && !sent("series_id"):
 		// The series the book already shows is not a series edit (the editor
 		// re-sends it on every save). Looking it up by name again could
 		// resolve -- or create -- a different series row of the same name
-		// (the lookup is scoped by author) and move the book onto it.
+		// (the lookup is scoped by author) and move the book onto it. Only
+		// while the book is linked by ID: a name shown from a stale embedded
+		// object alone (nil SeriesID) goes through the lookup, which relinks
+		// the book; skipping it would let the store drop that object.
 		resolvedSeriesName = beforeSeries
 	case seriesName != "":
 		series, err := svc.store.GetSeriesByName(seriesName, payload.AuthorID)
@@ -685,7 +700,10 @@ func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written 
 		case util.NarratorCreditPeople:
 			names = people
 		case util.NarratorCreditAllAuthors:
-			names = splitMultipleNames(credit)
+			// A self-read. The same cleaning with no authors to drop keeps
+			// the author names and still strips "Narrated by" and the like,
+			// so no junk narrator is created from the raw credit.
+			names, _ = util.CleanNarratorCredit(credit, nil)
 		}
 	}
 	var rows []database.BookNarrator
@@ -713,6 +731,25 @@ func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written 
 		singleLog.Warn("UpdateAudiobook %s: the edit was saved but book_narrators was not updated: %v",
 			logger.SanitizeLogValue(id), err)
 	}
+}
+
+// junctionNarratorText is the narrator a GET shows for a book whose
+// Narrator column is empty: its book_narrators names joined with " & "
+// (enrichBookForResponse). "" when the junction is empty or unreadable.
+func (svc *AudiobookService) junctionNarratorText(id string) string {
+	rows, err := svc.store.GetBookNarrators(id)
+	if err != nil || len(rows) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(rows))
+	for _, r := range rows {
+		n, nErr := svc.store.GetNarratorByID(r.NarratorID)
+		if nErr != nil || n == nil {
+			return ""
+		}
+		names = append(names, n.Name)
+	}
+	return strings.Join(names, " & ")
 }
 
 // applySeriesPosition sets a book's series position from a value as a client
