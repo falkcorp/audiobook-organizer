@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -756,12 +757,27 @@ func TestFragmentFixer_SurvivorMustBeOrganizedAndPrimary(t *testing.T) {
 	last := f.looseGroup(t, "lib/LastOrg", "Chap", 3, func(i int) bool { return i == 3 })
 	res := f.plan(t, "op-plan")
 
+	// No member organized: the lowest-id primary member takes the files
+	// (2026-10-03; it used to be held as "no survivor").
 	r := rowWithBooks(t, res, none)
-	require.Equal(t, fragSkipNoSurvivor, r.Skipped, r.SkipReason)
+	require.True(t, r.Applicable(), r.SkipReason)
+	sorted := append([]string(nil), none...)
+	sort.Strings(sorted)
+	require.Equal(t, sorted[0], r.Proposed["survivor"])
 
 	r = rowWithBooks(t, res, last)
 	require.True(t, r.Applicable(), r.SkipReason)
 	require.Equal(t, last[2], r.Proposed["survivor"], "the only organized member, not the lowest id")
+
+	// An organized member that is not primary blocks the unorganized
+	// fallback: the version group has an organized book elsewhere.
+	g := newFragFixture(t)
+	demoted := g.looseGroup(t, "lib/Demoted", "Chap", 3, func(i int) bool { return i == 1 })
+	no := false
+	_, err := g.s.ModifyBook(demoted[0], func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
+	require.NoError(t, err)
+	r = rowWithBooks(t, g.plan(t, "op-plan"), demoted)
+	require.Equal(t, fragSkipNoSurvivor, r.Skipped, r.SkipReason)
 }
 
 // TestFragmentFixer_ChapterOrderMustBeKnown (H1): two files at one position
@@ -2006,6 +2022,39 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 		f.numberedSeed(t, "lib/Discs", []string{"1-01 Arrival", "1-02 The Road", "1-03 Gear", "1-04 Ash",
 			"2-01 Night", "2-02 Ember", "2-03 Coda", "2-04 Home"}, 300, nil)
 		held(t, f, "lib/Discs", "disc-track numbers across several discs")
+	})
+	// Junk author/series fields copied from paths count as missing (owner
+	// 2026-10-03).
+	t.Run("an author field that is the folder's own non-person name is ignored", func(t *testing.T) {
+		f := newFragFixture(t)
+		dir := "lib/Pyper Down/Jennsen/Jennsen, GS_ 08 Rubicon (Amaranthe 08)"
+		f.numberedSeed(t, dir, serialStems, 300, author(t, f, "Jennsen, GS_ 08 Rubicon (Amaranthe 08)"))
+		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), fragNumberedKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	})
+	t.Run("series fields that are file names are ignored, a real second series is not", func(t *testing.T) {
+		f := newFragFixture(t)
+		ids := f.numberedSeed(t, "lib/Gone/08) Villain", serialStems, 300, nil)
+		for i, id := range ids {
+			name := []string{"read by narrator", "01.Intro", "02.Prologue"}[i%3]
+			sr, err := f.s.CreateSeries(name, nil)
+			require.NoError(t, err)
+			_, err = f.s.ModifyBook(id, func(b *database.Book) error { b.SeriesID = &sr.ID; return nil })
+			require.NoError(t, err)
+		}
+		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path("lib/Gone/08) Villain"), fragNumberedKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+
+		g := newFragFixture(t)
+		ids = g.numberedSeed(t, "lib/Children", serialStems, 300, nil)
+		for i, id := range ids {
+			name := []string{"Children of Time", "Children of Ruin"}[i%2]
+			sr, err := g.s.CreateSeries(name, nil)
+			require.NoError(t, err)
+			_, err = g.s.ModifyBook(id, func(b *database.Book) error { b.SeriesID = &sr.ID; return nil })
+			require.NoError(t, err)
+		}
+		held(t, g, "lib/Children", "different series")
 	})
 	t.Run("an author folder whose files have no author linked", func(t *testing.T) {
 		f := newFragFixture(t)
