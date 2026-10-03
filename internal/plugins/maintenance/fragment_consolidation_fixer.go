@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -1911,8 +1911,28 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 		for _, e := range es {
 			set.members = append(set.members, e.c)
 		}
+		// A leading PAIR ("02_Eldest_002_of_349", "8-02 Rubicon"): when every
+		// file shares the first number it is the book or disc, and the second
+		// is the chapter. When the first number varies it is a disc, and a
+		// numbered set is not formed across discs (see discDir below).
+		paired, sameMajor := true, true
+		for _, e := range es {
+			if len(e.pos.Parts) < 2 {
+				paired = false
+			} else if e.pos.Parts[0] != es[0].pos.Parts[0] {
+				sameMajor = false
+			}
+		}
+		if paired && sameMajor {
+			for i := range es {
+				es[i].num = es[i].pos.Parts[1]
+			}
+		}
 		first := es[0].c.Book
-		lo, hi := es[0].num, es[len(es)-1].num
+		lo, hi := es[0].num, es[0].num
+		for _, e := range es {
+			lo, hi = min(lo, e.num), max(hi, e.num)
+		}
 		clean := filepath.Clean(dir)
 		switch {
 		case slices.Contains(lib.roots, clean):
@@ -1930,6 +1950,10 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 			// decide (a book's discs share one key), never a numbered set.
 			set.sideBySide = true
 			set.problem = "some of the files sit in disc folders or carry a disc number: a numbered set is not formed across discs"
+		case paired && !sameMajor:
+			set.sideBySide = true
+			set.problem = fmt.Sprintf("the files carry disc-track numbers across several discs (%q … %q): a numbered set is not formed across discs",
+				es[0].c.origStem(), es[len(es)-1].c.origStem())
 		}
 		for i := 1; i < len(es) && set.problem == ""; i++ {
 			e := es[i]
