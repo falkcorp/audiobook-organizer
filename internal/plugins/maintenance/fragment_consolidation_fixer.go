@@ -2156,10 +2156,16 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 		case discDir[dir]:
 			// Disc folders keep the behaviour they had: the key groups
 			// decide (a book's discs share one key), never a numbered set.
-			set.sideBySide = true
+			// Not when the folder holds renamed copies: the key groups take
+			// every file of a key, so originals and copies would become two
+			// books of the same audio. Such a folder is held whole.
+			set.sideBySide = !hadCopies
 			set.problem = "some of the files sit in disc folders or carry a disc number: a numbered set is not formed across discs"
+			if hadCopies {
+				set.problem += "; the folder also holds renamed copies of its chapters, so it is held whole rather than split into books of the same audio"
+			}
 		case paired && !sameMajor:
-			set.sideBySide = true
+			set.sideBySide = !hadCopies
 			set.problem = fmt.Sprintf("the files carry disc-track numbers across several discs (%q … %q): a numbered set is not formed across discs",
 				es[0].c.origStem(), es[len(es)-1].c.origStem())
 		}

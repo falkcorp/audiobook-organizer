@@ -4,7 +4,8 @@
   imported in.** Each chapter keeps the file whose name the most files in the
   folder share, so a copy that holds the lower book id no longer pulls the
   set apart. When the kept files still disagree, the folder is held for review
-  instead of being split into two books with the same audio.
+  instead of being split into two books with the same audio. A disc folder
+  that holds renamed copies is held as a whole for the same reason.
 - **A copy with an iTunes id holds the row instead of stopping it halfway.**
   Copies are now checked for iTunes ids at plan time, and again before the
   first write, so a refusal writes nothing.
