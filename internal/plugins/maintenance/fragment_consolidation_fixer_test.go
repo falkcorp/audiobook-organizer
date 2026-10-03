@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -1694,6 +1694,107 @@ func TestFragmentFixer_PathTwinAdoptsMatch(t *testing.T) {
 	pb, err := f.s.GetBookByID(parent)
 	require.NoError(t, err)
 	require.False(t, pb.IsSoftDeleted())
+}
+
+// TestFragmentFixer_PathTwinLimits: what a path twin does NOT do.
+func TestFragmentFixer_PathTwinLimits(t *testing.T) {
+	// seed: parent P with rows 01, 02 (02 present unless gone), ghost/copy
+	// donor D imported from P's 02 at path `at`, then the caller adds a twin.
+	seed := func(t *testing.T, f *fragFixture, at string) (parent, donor string) {
+		p1 := f.file(t, "lib/P/01.mp3", 801)
+		p2 := f.file(t, "lib/P/02.mp3", 802)
+		parent = f.book(t, "parent", "P", f.path("lib/P"), nil)
+		f.row(t, "p01", parent, p1, "01.mp3", 801, 600, 1)
+		f.row(t, "p02", parent, p2, "02.mp3", 802, 600, 2)
+		donor = f.book(t, "donor", "02", p2, nil)
+		f.row(t, "d02", donor, at, "02.mp3", 802, 600, 0)
+		return parent, donor
+	}
+	inNoRow := func(t *testing.T, res *repairs.PlanResult, id string) {
+		t.Helper()
+		for _, r := range res.Rows {
+			for _, b := range r.BookIDs {
+				require.NotEqual(t, id, b, "%s should be in no row, is in %s", id, r.RowID)
+			}
+		}
+	}
+	t.Run("twin created first still joins the donor's row", func(t *testing.T) {
+		f := newFragFixture(t)
+		gone := f.path("lib/Q/02/02.mp3")
+		twin := f.book(t, "twin", "02", gone, nil)
+		f.row(t, "t02", twin, gone, "", 0, 0, 0)
+		parent, donor := seed(t, f, gone)
+		r := findRow(t, f.plan(t, "op-plan"), "ghost:"+parent)
+		require.ElementsMatch(t, []string{parent, donor, twin}, r.BookIDs)
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	})
+	t.Run("present twin joins a copy row", func(t *testing.T) {
+		f := newFragFixture(t)
+		at := f.file(t, "lib/Q/02/02.mp3", 802)
+		parent, donor := seed(t, f, at)
+		twin := f.book(t, "twin", "02", at, nil)
+		f.row(t, "t02", twin, at, "", 0, 0, 0)
+		r := findRow(t, f.plan(t, "op-plan"), "copy:"+parent)
+		require.True(t, r.Applicable(), r.SkipReason)
+		require.ElementsMatch(t, []string{parent, donor, twin}, r.BookIDs)
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	})
+	t.Run("contradicting import folder is not adopted", func(t *testing.T) {
+		f := newFragFixture(t)
+		gone := f.path("lib/Q/02/02.mp3")
+		parent, donor := seed(t, f, gone)
+		twin := f.book(t, "twin", "02", f.path("incoming/OtherBook/02.mp3"), nil)
+		f.row(t, "t02", twin, gone, "", 0, 0, 0)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, "ghost:"+parent)
+		require.ElementsMatch(t, []string{parent, donor}, r.BookIDs)
+		inNoRow(t, res, twin)
+	})
+	t.Run("contradicting size is not adopted", func(t *testing.T) {
+		f := newFragFixture(t)
+		gone := f.path("lib/Q/02/02.mp3")
+		parent, donor := seed(t, f, gone)
+		twin := f.book(t, "twin", "02", gone, nil)
+		f.row(t, "t02", twin, gone, "", 999, 0, 0)
+		res := f.plan(t, "op-plan")
+		require.ElementsMatch(t, []string{parent, donor}, findRow(t, res, "ghost:"+parent).BookIDs)
+		inNoRow(t, res, twin)
+	})
+	t.Run("a moved donor takes no twin", func(t *testing.T) {
+		f := newFragFixture(t)
+		p1 := f.file(t, "lib/P/01.mp3", 801)
+		parent := f.book(t, "parent", "P", f.path("lib/P"), nil)
+		f.row(t, "p01", parent, p1, "01.mp3", 801, 600, 1)
+		p2 := f.path("lib/P/02.mp3") // gone: organized away under the fragment
+		f.row(t, "p02", parent, p2, "02.mp3", 802, 600, 2)
+		at := f.file(t, "lib/P/02/02/02.mp3", 802)
+		donor := f.book(t, "donor", "02", p2, nil)
+		f.row(t, "d02", donor, at, "02.mp3", 802, 600, 0)
+		twin := f.book(t, "twin", "02", at, nil)
+		f.row(t, "t02", twin, at, "", 0, 0, 0)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, "moved:"+parent)
+		require.ElementsMatch(t, []string{parent, donor}, r.BookIDs)
+		inNoRow(t, res, twin)
+	})
+	t.Run("a twin never lends", func(t *testing.T) {
+		f := newFragFixture(t)
+		gone := f.path("lib/Q/02/02.mp3")
+		parent, donor := seed(t, f, gone)
+		t1 := f.book(t, "twin1", "02", gone, nil)
+		f.row(t, "t1", t1, gone, "", 0, 0, 0)
+		t2 := f.book(t, "twin2", "02", gone, nil)
+		f.row(t, "t2", t2, gone, "", 0, 0, 0)
+		r := findRow(t, f.plan(t, "op-plan"), "ghost:"+parent)
+		require.ElementsMatch(t, []string{parent, donor, t1, t2}, r.BookIDs)
+		for _, ev := range r.Evidence {
+			if strings.Contains(ev, fragEvTwinPrefix) {
+				require.Contains(t, ev, fragEvTwinPrefix+donor, "every twin names the donor, never another twin")
+			}
+		}
+	})
 }
 
 // TestFragmentFixer_PathTwinNeedsOneDonor: a path shared by two matched
