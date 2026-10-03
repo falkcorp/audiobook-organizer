@@ -30,5 +30,7 @@ at 0.92 s for 300k rows; expect roughly 3 to 10 s for about 1M rows. Look for
 
 **Rollback.** A build from before this change does not maintain the index.
 After any rollback followed by a roll-forward, run
-`maintenance.opchange-book-index-rebuild`, which clears the done-marker (reads
-fall back to the full scan at once) and rebuilds from the first row.
+`maintenance.opchange-book-index-rebuild`. With `{}` it is a read-only preview
+that reports journal rows with no index entry; with `{"dry_run": false}` it
+clears the done-marker (reads fall back to the full scan at once) and rebuilds
+from the first row.

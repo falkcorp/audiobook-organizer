@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 58b6fa0d-49f4-40bf-b1fe-a55af85a5098
 // last-edited: 2026-10-03
 
@@ -15,12 +15,32 @@ import (
 )
 
 type fakeOpChangeRebuilder struct {
-	res database.OpChangeByBookBackfillResult
-	err error
+	res     database.OpChangeByBookBackfillResult
+	err     error
+	rep     database.OpChangeByBookIndexReport
+	rebuilt *bool
+}
+
+func (f fakeOpChangeRebuilder) VerifyOpChangeByBookIndex(context.Context) (database.OpChangeByBookIndexReport, error) {
+	return f.rep, nil
 }
 
 func (f fakeOpChangeRebuilder) RebuildOpChangeByBookIndex(context.Context) (database.OpChangeByBookBackfillResult, error) {
+	if f.rebuilt != nil {
+		*f.rebuilt = true
+	}
 	return f.res, f.err
+}
+
+func TestOpchangeBookIndexRebuild_PreviewWritesNothing(t *testing.T) {
+	rebuilt := false
+	r := fakeOpChangeRebuilder{rep: database.OpChangeByBookIndexReport{Rows: 5, MissingEntries: 2}, rebuilt: &rebuilt}
+	if err := previewOpChangeBookIndex(context.Background(), r, &fakeReporter{}); err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt {
+		t.Fatal("preview rebuilt the index")
+	}
 }
 
 func TestOpchangeBookIndexRebuild_CleanRunPasses(t *testing.T) {
