@@ -50,11 +50,11 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 	// this package's own comment promised to accept) put the server in a
 	// crash loop for 75 seconds.
 	tracing := false
+	var tracingErr error
 	if cfg.TracingEnabled {
 		tp, err := initTracing(ctx, cfg)
 		if err != nil {
-			slog.Error("OpenTelemetry tracing is OFF: the trace exporter could not be started",
-				"endpoint", cfg.ExporterEndpoint, "error", err)
+			tracingErr = err
 		} else {
 			tracing = true
 			shutdowns = append(shutdowns, tp.Shutdown)
@@ -69,10 +69,16 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 		shutdowns = append(shutdowns, shutdownMetrics)
 	}
 
-	slog.Info("OpenTelemetry initialized",
-		"metrics", cfg.MetricsEnabled,
-		"tracing", tracing,
-		"endpoint", cfg.ExporterEndpoint)
+	// One line for the whole init (this package is allowed one direct slog
+	// call: internal/logger's ratchet). A trace exporter that could not be
+	// started makes it an error-level line that says so.
+	level, msg, attrs := slog.LevelInfo, "OpenTelemetry initialized", []any{
+		"metrics", cfg.MetricsEnabled, "tracing", tracing, "endpoint", cfg.ExporterEndpoint}
+	if tracingErr != nil {
+		level, msg = slog.LevelError, "OpenTelemetry initialized with tracing OFF: the trace exporter could not be started"
+		attrs = append(attrs, "tracing_error", tracingErr.Error())
+	}
+	slog.Log(ctx, level, msg, attrs...)
 
 	return func(shutdownCtx context.Context) error {
 		var errs []error

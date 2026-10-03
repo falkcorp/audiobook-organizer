@@ -230,7 +230,7 @@ Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317
 Environment=OTEL_SERVICE_NAME=audiobook-organizer
 EOT
 make deploy-debug     # from the primary checkout at 0 0; copies local.conf and restarts
-ssh unimatrixzero.local 'journalctl -u audiobook-organizer -n 80 --no-pager | grep -iE "OpenTelemetry (initialized|tracing is OFF)"'
+ssh unimatrixzero.local 'journalctl -u audiobook-organizer -n 80 --no-pager | grep -i "OpenTelemetry initialized"'
 ```
 
 `deploy/local.conf` is gitignored and is the only drop-in the sudoers file
@@ -241,8 +241,8 @@ URL form needs no second variable and is also what the OTel SDK expects when
 it reads the variable itself.
 
 Expected log line: `OpenTelemetry initialized metrics=true tracing=true endpoint=http://127.0.0.1:4317`.
-If instead you see `OpenTelemetry tracing is OFF: …`, the server is up and
-only tracing failed; the line names the reason.
+If instead you see `OpenTelemetry initialized with tracing OFF: …`, the server
+is up and only tracing failed; `tracing_error` on that line names the reason.
 
 A restart of prod is pre-authorized, but wait for `memdb warmup published`
 (~130 s) before judging anything else.

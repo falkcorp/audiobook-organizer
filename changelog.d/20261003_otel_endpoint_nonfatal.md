@@ -10,7 +10,8 @@ URL with scheme `localhost`, so no bare endpoint ever passed; the error was
 returned and `cmd/root.go` made it fatal. A URL that did pass was handed to
 `WithEndpoint`, which wants `host:port`, so it could not have exported either.
 
-A trace endpoint that cannot be used now turns tracing off and logs an error;
+A trace endpoint that cannot be used now turns tracing off and makes the init
+line an error-level one that names the reason;
 the server starts. `http://host:port` (plaintext), `https://host:port` (TLS),
 bare `host:port` and `dns:///host:port` are accepted and reach the exporter
 through the option that fits each. A test sends a span to a real plaintext
