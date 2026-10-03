@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.74.0 -->
+<!-- version: 10.75.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -146,15 +146,15 @@ into one of the curated sections below, is a normal direct edit.
 - [x] **STRIP-MERGE-TITLE-TARGET-FLAG-OFF** Owner decision: with `delete_title_as_author=false`, `maintenance.author-strip-merge` still merges a numbered twin ("01 Arcane Chef 2") into a row it classifies as title-as-author ("Arcane Chef 2"). Nothing dangles, but it consolidates junk into junk. Option: treat a title-as-author-classified target as `target-is-junk` whatever the flag. Cost: one credit read per such merge candidate; the twin is then left alone instead of merged.
 - [x] **COPY-KEEPER-NON-ITUNES-OUTSIDE** When a book has no own-folder row for a copy cluster, `keeperLess` does not prefer a non-iTunes row over a `books/itunes/**` row among out-of-folder rows, so `zero_rows_only` can still skip such a book as iTunes. Decide whether the database package should know the frozen-tree rule.
 
-- [ ] **BUILD-FOLDER-HELD-75** The `build-folder-book-files` dry run (2026-09-25) found 106 books; 31 clean ones were applied (1,010 rows). Of the other 75, 58 share folder files with another live book (building would show a truncated book, e.g. Warforged Sorcerer 10/52), and 54 look multi-work. Owner chose "report, then decide": list who owns the shared files. Doctor Who (Farewell, Great Macedon) and The Forsaken God stay excluded.
+- [ ] **BUILD-FOLDER-HELD-75** The `build-folder-book-files` dry run (2026-09-25) found 106 books; 31 clean ones were applied (1,010 rows). Of the other 75, 58 share folder files with another live book (building would show a truncated book, e.g. Warforged Sorcerer 10/52), and 54 look multi-work. Owner chose "report, then decide": list who owns the shared files. Doctor Who (Farewell, Great Macedon) and The Forsaken God stay excluded. — ❓ owner decision 2026-10-03: build truncated books from the 58 shared-file folders, or leave them held?
 - [ ] **REPOINT-FOLDER-AUDIO-RUN** Dry-run then apply `maintenance.repoint-missing-to-folder-audio` (#3551, deployed 2026-09-25) for ABS books reading duration 0.
-- [ ] **C2B-SEVEN-GROUPS** Re-ask the owner about the 7 parked C2b clone groups (parked 2026-09-24 night).
+- [ ] **C2B-SEVEN-GROUPS** Re-ask the owner about the 7 parked C2b clone groups (parked 2026-09-24 night). — ❓ owner decision 2026-10-03: re-ask: fate of the 7 differing C2b clone groups (tentative answers only so far)?
 - [ ] **CLONE-LINK-PROMOTE** Build the approved link mode (~1,030 identical groups) and promote mode (~420 tag-edited groups) for the iTunes clone op.
 - [ ] **TWO-PRIMARIES-COUNT** Read-only count of version groups with two primaries; send the Bern Dean missed duplicate to dedup review; investigate wrong-author folders via DB metadata + organize.
 
 - [x] **DEDUP-REVIEW-ONLY-FOLLOWUPS** Leftovers from the fix/dedup-review-2 guard work (manual and same-path candidates are review-queue-only). (1) Bulk-link and link-series check the books in the request, but linking into an EXISTING version group can still join a same-path twin grouped earlier; `linkGuard` in `internal/server/handlers/dedup/link_guard.go` documents the gap. (2) `dedup.purge-legacy-fp-candidates` does not check same-path pairs, because it loads no books. (3) `breakdown_backfill.go` skips manual rows only on its snapshot, and its `UpdateCandidateScore` write is unguarded; route it through a guarded write like `UpdateCandidateScores`. (4) Owner question: a scanner re-upsert (`UpsertCandidateNew`) still rewrites band/score on a pinned scanner row. That is the same shape as the rescore finding. Should a pin freeze the score too?
 
-- [ ] **FP-REFINGERPRINT-ROUTE** (owner decision) Legacy-era head prints (pre-2026-09-19 misdecode) are only replaced by `acoustid.backfill`, which runs fpcalc locally, but decoding on U0 is banned. Pick one: add a Mac remote-worker mode for head prints (like #3477 did for `acoustid.window-backfill`), allow a one-off U0 exception, or retire head prints as a fuzzy signal in favour of windowed prints. Gate: `legacy_era` in `GET /api/v1/signals/coverage`. Plan: `docs/audio-fingerprint/threshold-recalibration-plan.md`.
+- [ ] **FP-REFINGERPRINT-ROUTE** (owner decision) Legacy-era head prints (pre-2026-09-19 misdecode) are only replaced by `acoustid.backfill`, which runs fpcalc locally, but decoding on U0 is banned. Pick one: add a Mac remote-worker mode for head prints (like #3477 did for `acoustid.window-backfill`), allow a one-off U0 exception, or retire head prints as a fuzzy signal in favour of windowed prints. Gate: `legacy_era` in `GET /api/v1/signals/coverage`. Plan: `docs/audio-fingerprint/threshold-recalibration-plan.md`. — ❓ owner decision 2026-10-03: re-fingerprint legacy head prints via Mac remote workers, a one-off U0 exception, or retire head prints?
 - [ ] **FP-FPIDX-LEGACY-PURGE** `fpidx:`/`fpidx_meta:` rows written from legacy-era prints are never removed. `dedup.lsh-index-build` skips legacy rows and does not delete them, and `LSHIndexVersion` was not bumped. `PebbleStore.LSHProbe` ranks by band hits and applies `MaxCandidates` (200) before `CollectLSHAcoustID` drops legacy candidates, so garbage rows can take a real candidate's slot. About 66k missing-file rows will never be re-fingerprinted, so theirs are permanent. Add a purge (delete where `!HasCurrentPrint()`), then rebuild and check that the `fpidx_meta` count equals the number of current-era prints. Plan: `docs/audio-fingerprint/threshold-recalibration-plan.md`.
 - [ ] **FP-THRESHOLD-RECALIBRATE** After re-fingerprinting and the fpidx purge, measure the Group A/B fingerprint thresholds on current-era prod pairs, computing on the Mac. Group A: `FuzzyMinSimilarity` 0.80, LSH `MinHamming` 0.85, `LSHMinBandHits` 2, `sameRecordingMinSimilarity` 0.90, the iTunes-heal literal 0.9. Group B: veto 0.50, dataset 0.95/0.90. Stratify the negatives by publisher intro. Change the constants only with a precision/recall table, then re-run `dedup.book-signature-scan`, `dedup.full-scan` and `acoustid.lookup-online`. Method: `docs/audio-fingerprint/threshold-recalibration-plan.md`.
 
@@ -187,14 +187,14 @@ into one of the curated sections below, is a normal direct edit.
   - **`/dedup/purge-legacy-fp` route vs op `dedup.purge-legacy-fp-candidates`.** The audit flags the mismatch under class 8. It is a route-name question, not an op ID, so it was left alone.
   - **Alias removal.** Delete a FormerID only after `audiobook_organizer_operation_deprecated_def_id_total{alias=...}` has stayed flat for a long window AND no stored row can still carry the ID.
 
-- [ ] **OPS-PREVIEW-HTTP-ENDPOINTS** Owner decision needed: five HTTP endpoints outside the op registry write on an omitted `dry_run` (`POST /discovery/import` defaults LIVE and swallows bind errors; `POST /audiobooks/bulk-write-back` enqueues `library.bulk-write-back`; `POST /itunes/pid-repair`; `POST /itunes/rebuild` and `/rebuild-full` read `?dry_run` only). The 2026-09-25 preview-by-default rule was stated for operations; flipping these changes what existing UI buttons do. List + evidence: `docs/audits/2026-09-25-op-preview-default-inventory.md` section 7. They are allowlisted in `internal/operations/opmode/guard_test.go`; remove each entry when its endpoint is converted.
-- [ ] **OPS-WITHOUT-PREVIEW-MODE** 112 registered ops have no mode flag at all and run their only mode on `{}`; many declare `library.write` (library.organize, library.scan, reconcile.apply, entities.author-merge, dedup.book-merge, the scheduler.* cleanups, ...). Decide which need a preview mode. Inventory section 5.
+- [ ] **OPS-PREVIEW-HTTP-ENDPOINTS** Owner decision needed: five HTTP endpoints outside the op registry write on an omitted `dry_run` (`POST /discovery/import` defaults LIVE and swallows bind errors; `POST /audiobooks/bulk-write-back` enqueues `library.bulk-write-back`; `POST /itunes/pid-repair`; `POST /itunes/rebuild` and `/rebuild-full` read `?dry_run` only). The 2026-09-25 preview-by-default rule was stated for operations; flipping these changes what existing UI buttons do. List + evidence: `docs/audits/2026-09-25-op-preview-default-inventory.md` section 7. They are allowlisted in `internal/operations/opmode/guard_test.go`; remove each entry when its endpoint is converted. — ❓ owner decision 2026-10-03: make the 5 non-registry endpoints preview-by-default (breaking API change) or keep LIVE default?
+- [ ] **OPS-WITHOUT-PREVIEW-MODE** 112 registered ops have no mode flag at all and run their only mode on `{}`; many declare `library.write` (library.organize, library.scan, reconcile.apply, entities.author-merge, dedup.book-merge, the scheduler.* cleanups, ...). Decide which need a preview mode. Inventory section 5. — ❓ owner decision 2026-10-03: which library.write ops get a preview mode, and in what order?
 - [ ] **DURATION-BACKFILL-ONTO-OPMODE** Move `maintenance.duration-backfill`'s inline dry_run/dryRun resolution (`internal/plugins/maintenance/duration_backfill.go` ~:482-494) onto `opmode.ResolveDryRun` and add it to `TestOps_DryRunRoutesThroughOpmode`. Skipped on 2026-09-25 because another agent was editing the duration files on proposed-main.
 
-- [ ] **SEARCH-INFINITE-SCROLL** Later, not now (owner 2026-09-25): an infinite-scroll results model backed by a long-lived result cache, prewarmed in the background on startup.
+- [ ] **SEARCH-INFINITE-SCROLL** Later, not now (owner 2026-09-25): an infinite-scroll results model backed by a long-lived result cache, prewarmed in the background on startup. — ❓ owner decision 2026-10-03: un-park infinite-scroll search, or keep it parked?
 
 - [ ] Fold the 216 held "suspicious" version groups (chapter fragments, owner 2026-09-24) into the parked chapter-consolidation work; leave them held until then. Also list the truncated m4bs found there (Neverwhere, the 10 Bobiverse 2 `_copyN` files).
-- [ ] Decide the `leftover_merged_elsewhere` groups from `maintenance.version-group-primary-repair` (organized copy merged into another group's book); the op only labels them.
+- [ ] Decide the `leftover_merged_elsewhere` groups from `maintenance.version-group-primary-repair` (organized copy merged into another group's book); the op only labels them. — ❓ owner decision 2026-10-03: delete, relink, or leave the leftover_merged_elsewhere organized copies?
 
 - [ ] **`metadata.batch-apply-cached` re-picks books whose refusal can never change.**
       Measured 2026-09-20 over 4 completed batches: 359 gate refusals across only
@@ -219,7 +219,7 @@ into one of the curated sections below, is a normal direct edit.
       and check each one's default: a `bool` field with no explicit default
       means Go's zero value (false = APPLY) decides when the flag is dropped.
 
-- [ ] **10 books hold their entire file set twice (exactly 2.00x runtime).**
+- [ ] **10 books hold their entire file set twice (exactly 2.00x runtime).** — ❓ owner decision 2026-10-03: purge the duplicate present rows (never-delete rule; 09-25 exception covers missing rows only) or keep both sets?
       Found via `runtime_mismatch` gate refusals on 2026-09-20. Verified on
       01M07EDG4YNX7E7DEAAZXBE7FQ ("Star Divide"): two file rows,
       217,245,811 B and 217,214,993 B — the same audio with different tags, so
@@ -277,7 +277,7 @@ into one of the curated sections below, is a normal direct edit.
       files and could report duration back, which would close the loop without
       any server-side I/O.
 
-- [ ] **Let `fp-worker` run on Windows.** `internal/fingerprint/workerclient/mount_other.go`
+- [ ] **Let `fp-worker` run on Windows.** `internal/fingerprint/workerclient/mount_other.go` — ❓ owner decision 2026-10-03: is a Windows fp-worker host ever planned, or drop this?
   (`statMount`) and `probe_other.go` (`writeProbe`) have no Windows implementation, so
   the worker refuses to start before leasing a single job — it cannot prove the library
   mount is read-only. Measured 2026-09-20: the box at the `windows-gpu` ssh alias is a
@@ -366,7 +366,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [x] **Flaky: `TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle`** — FIXED 2026-09-19 (fix/ckpt-idle-test-flake): the test accepted a TRUNCATE that ran in a pause between writes; later writes regrew the WAL (CI: 407,912 bytes). It now counts only a TRUNCATE after the last write. (`internal/database`) failed 4 of 5 isolated `-race` runs on a Mac on 2026-09-19, on clean `origin/main` as well as on a branch, so it is not caused by a change. Find the timing assumption (idle detection vs. checkpoint interval under `-race`) and make the test wait on the condition rather than on wall time. It can block unrelated PRs if CI hits it.
 
-- [ ] **Normalize path keys to NFC before use as Pebble keys.** `book_file_path:`
+- [ ] **Normalize path keys to NFC before use as Pebble keys.** `book_file_path:` — ❓ owner decision 2026-10-03: un-park NFC path-key normalization (migrates every path key), or keep parked?
       and book path keys are built from the raw string
       (internal/database/pebble_store.go, path-key builder near the
       `book_file_path` prefix), so the same folder spelled in NFD by macOS and
@@ -434,7 +434,7 @@ into one of the curated sections below, is a normal direct edit.
          this gap too, so it was not introduced by the hoist. Fix: track moved-in
          counts per series and compare `refCounts[FromID] + movedIn[FromID]`.
 
-- [ ] **AUTHOR-REFCOUNT-SPLIT (owner decision)** #3309 split author reference counts into live,
+- [ ] **AUTHOR-REFCOUNT-SPLIT (owner decision)** #3309 split author reference counts into live, — ❓ owner decision 2026-10-03: which of the 4,163 held authors (live vs historical refs) may be purged?
       trashed and dangling. Junction rows whose book no longer exists are dangling, and
       `author-duplicate-merge` no longer holds an author back for dangling rows alone. Three
       readers still use the flat sum and therefore still hold dangling-only authors:
@@ -487,7 +487,7 @@ into one of the curated sections below, is a normal direct edit.
       (~L288-313) holds `resolveMu` across `GetAuthorByName` and `CreateAuthor`, so one blocked
       worker freezes every other worker's resolve, fast-path hits included. Narrow it.
 
-- [ ] **AUTHOR-LEDGER-RESTORE (owner decision)** `purge-empty-authors`, `author-duplicate-merge`
+- [ ] **AUTHOR-LEDGER-RESTORE (owner decision)** `purge-empty-authors`, `author-duplicate-merge` — ❓ owner decision 2026-10-03: build replay for journaled author_delete rows, or accept author purges as irreversible?
       and (once #3305 merges) `purge-empty-narrators` journal every delete as an
       `operation_changes` row: `author_delete` or `narrator_delete`, old value `"<id>:<name>"`.
       Nothing can replay them. Undo does not restore the rows; a fix is in flight so it at least
@@ -496,7 +496,7 @@ into one of the curated sections below, is a normal direct edit.
       has moved on) or must mint a new one and remap references. 1,742+ purge rows written on
       2026-09-12 are the first real input.
 
-- [ ] **REVERT-FALSE-STAMPS (owner decision)** Before #3312, `RevertOperation` marked every change
+- [ ] **REVERT-FALSE-STAMPS (owner decision)** Before #3312, `RevertOperation` marked every change — ❓ owner decision 2026-10-03: scrub the pre-#3312 false reverted stamps, or leave history as-is?
       row of an operation reverted even when its restore failed or it had no reversal
       (`RevertOperationChanges(op)` mark-all, `internal/audiobooks/revert.go` on main). Any
       production op that was reverted that way has ledger rows with `reverted_at` set but nothing
@@ -506,7 +506,7 @@ into one of the curated sections below, is a normal direct edit.
       failed or record-only rows (for example, cross-check against the revert-time log lines) and
       clear their `reverted_at` so a retry can pick them up, or accept them as lost.
 
-- [ ] **REVERT-PER-OP-LOCK** Reverting one operation is not serialized. Two Undo clicks at the same
+- [x] **REVERT-PER-OP-LOCK** Reverting one operation is not serialized. Two Undo clicks at the same — ✅ 2026-10-03: internal/audiobooks/revert.go:334 `defer lockOperation(operationID)()` serializes per-op reverts
       time (the Operations indicator and the Activity Log, or a double click) both call
       `RevertService.RevertOperation` (`internal/audiobooks/revert.go`), both read the same
       unstamped change rows, and both apply them: files are moved back twice and metadata is
@@ -518,7 +518,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **Discarding an `interrupted_quiesced` op whose goroutine is still alive leaves that goroutine reporting into the void.** On 2026-09-11 the watchdog canceled a stuck `library.scan` (op `01M27QMFPFBH4JPZW0CXQ3C7J2`) at 04:19, logged "op goroutine abandoned; spawning replacement worker", and the abandoned goroutine kept running for another hour (its auto-organize summary landed at 05:18, ninety seconds after the owner discarded the row). The row-level fix (writers refuse a missing row; migration 62 sweeps shells) stops the blank card, but the abandoned goroutine still burns CPU and I/O and its writes now fail one by one. Decide whether `DiscardOperationV2` should refuse `interrupted_quiesced` rows while `registry` still tracks a live goroutine for that id, or whether the registry should hard-stop the reporter for an abandoned goroutine so nothing it says reaches the store. `internal/server/handlers/operations_v2.go` (Discard allow-list), `internal/operations/registry/worker.go` (abandon path).
 
-- [ ] **ABS-SYNC: let ABS clients through BasicAuth on the 9 routes that have no
+- [x] **ABS-SYNC: let ABS clients through BasicAuth on the 9 routes that have no — ✅ 2026-10-03: internal/server/handlers/abs/basicauth_exempt_test.go pins the exempt table (GET/HEAD cover, /login, /ping, openid)
       token check.** #3296 exempts only the ABS routes whose handler chain contains
       `ABSRequireAuth`. The nine below still sit behind the global
       `servermiddleware.BasicAuth()`, so with `basic_auth_enabled` on (off in prod
@@ -554,7 +554,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **Operations bell: cap the completed list** — the header bell renders every completed operation in its window, which is hundreds of rows after a busy day. Show a bounded number (e.g. the newest 10–20) with a "more…" link that goes to the Activity page, or a plain cap with the existing top button. Low priority (owner, 2026-09-10: "SUPER low priority, just kinda annoying").
 
-- [ ] **DA-01b** `internal/maintenance/jobs/dedup_books.go` `ddMergeDuplicateBook` / `ddSoftDeleteBook` (~L329, ~L471) do the same GetBook → mutate → soft-delete read-modify-write as the merge family but take no `merge.LockMergeRMW` — a fifth unguarded path after DA-01 (TASK-300 / PR #3181 wired in `MergeSplitBookCluster`). A review-UI merge racing this job on the same book id can interleave writes (the #1930 corruption class). Surfaced by the TASK-300 worker and named as "NOT covered" in `internal/merge/serialize.go`'s doc comment; needs the lock, a deadlock check of its callers (must not already hold the lock), and a concurrent regression test like `TestMergeSplitBookCluster_SharesLockWithMergeService`.
+- [x] **DA-01b** `internal/maintenance/jobs/dedup_books.go` `ddMergeDuplicateBook` / `ddSoftDeleteBook` (~L329, ~L471) do the same GetBook → mutate → soft-delete read-modify-write as the merge family but take no `merge.LockMergeRMW` — a fifth unguarded path after DA-01 (TASK-300 / PR #3181 wired in `MergeSplitBookCluster`). A review-UI merge racing this job on the same book id can interleave writes (the #1930 corruption class). Surfaced by the TASK-300 worker and named as "NOT covered" in `internal/merge/serialize.go`'s doc comment; needs the lock, a deadlock check of its callers (must not already hold the lock), and a concurrent regression test like `TestMergeSplitBookCluster_SharesLockWithMergeService`. — ✅ 2026-10-03: internal/maintenance/jobs/dedup_books.go:1213 ddSoftDeleteBook goes through store.ModifyBook (per-book lock + row version); merge path store-mediated
 
 - [x] **DB-04** Digest compaction swallows the delete error for the pre-existing digest row, risking a duplicate digest entry on I/O failure (dead-code backend, low impact) — `internal/database/nuts_activity_store.go:614`. Two digest rows for the same date would double-count that day's digest in any UI/summary that sums per-day digests. In practice this is low-impact: grep confirms `NewNutsActivityStore` has zero production call sites in this tree (only referenced in comments and `dual_write_activity_store.go`, which  Brief: `docs/agent-tasks/todo-completion-2026-09/database/TASK-334-digest-compaction-swallows-the-delete-error-for.md`. — ✅ 2026-10-03: ab260e392 (2026-09-11); internal/database/nuts_activity_store.go:636 propagates the tx.Delete error
 
@@ -631,7 +631,7 @@ given a longer budget without changing the OpenAI path.
       `config.ResolveAIParseBatch` resolves the parse pair (0 = default, with a
       sane ceiling), and pass it through to `WithRequestTimeout` at the
       construction sites.
-- [ ] While there: `OLLAMA_KEEP_ALIVE=30m` on the Mac was set with
+- [x] While there: `OLLAMA_KEEP_ALIVE=30m` on the Mac was set with — ✅ 2026-10-03: scripts/setup_mac_ai_worker.py:57 writes OLLAMA_KEEP_ALIVE=30m into the brew-services env file (persists across reboot); scripts/tests/test_setup_mac_ai_worker.py:81
       `launchctl setenv`, because `brew services` **regenerates**
       `~/Library/LaunchAgents/homebrew.mxcl.ollama.plist` on every start and
       silently discarded a `PlistBuddy` edit to it. `launchctl setenv` does not
@@ -1053,7 +1053,7 @@ that sets `EnqueueOptions.ParentID`, and it has **no production callers**. Every
 operation the API returns therefore has `parent_id: null` — verified against prod on
 2026-09-08 (40 operations across a 6-hour window, all parentless).
 
-- [ ] Decide whether SERVER-SIDE op lineage should be wired up. Several ops obviously
+- [ ] Decide whether SERVER-SIDE op lineage should be wired up. Several ops obviously — ❓ owner decision 2026-10-03: wire parent/child op lineage server-side, or keep it client-only?
       fan out into children (`library.scan` → per-folder work,
       `metadata.batch-apply-cached` → per-book applies) and threading `WithParent`
       through would make those relationships real rather than inferred from timing.
@@ -1291,16 +1291,16 @@ declared inside the SDK's internal package, and Go only lets same-package types
 satisfy an unexported interface method. The only lever from outside is
 `option.WithMaxRetries`, which is all-or-nothing.
 
-- [ ] Decide whether to pass `option.WithMaxRetries(0)` and let `DoWithRetry`
+- [x] Decide whether to pass `option.WithMaxRetries(0)` and let `DoWithRetry` — ✅ 2026-10-03: decided — scoped to the routed path only: internal/ai/openai_parser.go:357 newRoutedEndpointParser passes option.WithMaxRetries(0); rationale in internal/ai/retry.go:165-176
       own retry policy outright. **The cost is real and needs a decision:** it
       also discards the SDK's `Retry-After` header handling, which is the
       correct behaviour for genuine OpenAI 429s and which `DoWithRetry`'s
       quadratic backoff does not replicate.
-- [ ] If the answer is "only for local backends", scope it to
+- [x] If the answer is "only for local backends", scope it to — ✅ 2026-10-03: internal/ai/openai_parser.go:357 — WithMaxRetries(0) only on the routed-endpoint parser
       `NewOpenAIParserWithBaseURL`'s Ollama path, where there is no
       `Retry-After` story to lose — but note that constructor is the generic
       "any OpenAI-compatible base URL" path, not Ollama-only.
-- [ ] Whichever way it goes, `DoWithRetry`'s doc comment names the current
+- [x] Whichever way it goes, `DoWithRetry`'s doc comment names the current — ✅ 2026-10-03: internal/ai/retry.go:165-176 DoWithRetry doc names the SDK-retry behaviour and the ~5s dead-host cost
       behaviour explicitly; update it rather than leaving two descriptions.
 
 Not blocking: with `DoWithRetry` fixed, a dead host costs ~5s instead of 30s,
@@ -1483,7 +1483,7 @@ dataset.
       the host gets a GPU llama.cpp can actually use. No config was changed —
       prod was already on the 7B and stays there.
 
-- [ ] **Run one embedding through the APP to close out the local-embedding
+- [x] ~~**Run one embedding through the APP to close out the local-embedding~~ — ⛔ dropped 2026-10-03: superseded by #3450 (2026-09-19): embed.text runs through the app's endpoint-pool routing in prod
       claim.** The backend itself is proven: `bge-m3` on the CPU-only Ollama
       answers a 64-input request — `embedChunkSize` in
       `internal/dedup/engine.go` — in **5.6s** against the 30s
@@ -1500,7 +1500,7 @@ dataset.
       that window is complete). Trigger `dedup.embed-scan` and confirm books
       actually embed before treating local embeddings as working end-to-end.
 
-- [ ] **The AI parser CHAIN is unexercised on this deployment.** Prod is
+- [x] ~~**The AI parser CHAIN is unexercised on this deployment.** Prod is~~ — ⛔ dropped 2026-10-03: superseded by #3450 (2026-09-19): parse dispatches through ai_endpoints routing; the single-rung llm_mode=local chain no longer describes prod
       `llm_mode=local`, so `internal/scanner/ai_parser_chain.go` has a single
       rung and its `minRungBudget` interaction with the now-configurable
       `parse_batch_timeout_seconds` has never run. The comment there describing
@@ -1555,7 +1555,7 @@ there is no separate series-visibility bug.
 user's client** while absent from its own author's page. The server streams it
 but will not list it. Whatever the intent, "playable but unlistable" is not it.
 
-- [ ] **Decide the intended semantics and make the filter match them.** Should the
+- [ ] **Decide the intended semantics and make the filter match them.** Should the — ❓ owner decision 2026-10-03: expose imported books in ABS, or keep organized-only?
   ABS layer expose `imported` books? If yes, relax the `LibraryState` clause. If
   no, it must at least be consistent — a book that cannot be listed should not be
   streamable/resumable either. **Blast radius is wide**: this filter feeds the
@@ -1598,13 +1598,13 @@ inside the organized tree**, and both states appear under both flat
 does not track physical location, and these books are not sitting outside
 awaiting a move that collisions are blocking.
 
-- [ ] **Determine what `library_state` actually means and why these 6 are
+- [x] ~~**Determine what `library_state` actually means and why these 6 are~~ — ⛔ dropped 2026-10-03: answered by #3097: the scanner reverted organized→imported on every rescan; the ABS-invisible books are stale state (09-20)
   `imported`.** Candidates: the book was scanned in place and never *claimed* by
   an organize run (so `imported` means "not placed by us", regardless of where it
   sits), or the state is simply stale and was never updated after a successful
   placement. These imply completely different fixes — one is a state-repair
   backfill, the other is a bug in organize's state write.
-- [ ] **Re-measure after the collision resolver lands** before changing the ABS
+- [x] ~~**Re-measure after the collision resolver lands** before changing the ABS~~ — ⛔ dropped 2026-10-03: duplicate of L1558's decision step (re-measure feeds that decision; the collision resolver landed long ago)
   filter. Not because the causal link is established — it is not — but because
   the population of `imported` books may shift and the filter change should be
   decided against current data.
@@ -1628,11 +1628,11 @@ Follow-ups agreed while fixing the activity SQLite disk blow-up.
   entry of the fresh log, in case a wipe was malicious; (4) **mask sensitive
   fields (IP, etc.) in the UI by default**, but allow pulling the full unredacted
   audit file/export.
-- [ ] **Reauth / passkey reverify gate (future).** Require a step-up reauth
+- [ ] **Reauth / passkey reverify gate (future).** Require a step-up reauth — ❓ owner decision 2026-10-03: build step-up reauth/passkey reverify at all?
   (passkey reverify or other 2FA) before (a) pulling the **unredacted** activity
   export and (b) any destructive reset. Not built yet; the reset feature ships
   with masking + audit first, this hardens it.
-- [ ] **Full-application-database reset (future, GATED).** A "reset everything"
+- [ ] **Full-application-database reset (future, GATED).** A "reset everything" — ❓ owner decision 2026-10-03: should a reset-everything button exist (gated on L1631)?
   (books, metadata, authors, versions — the whole Pebble store) reset. **ONLY
   valid after the passkey/2FA reverify gate above exists** — do not build the
   full-DB wipe without step-up reauth guarding it. Blast radius is the entire
@@ -1652,7 +1652,7 @@ separate, deliberate step:
   and restart to run the streamed+compressed backfill; watch `change`-tier RSS
   stays flat AND `activity.sqlite` growth stays bounded, then confirm the parity
   flip to SQLite.
-- [ ] **Only then** consider retiring the Pebble activity path and reclaiming the
+- [x] ~~**Only then** consider retiring the Pebble activity path and reclaiming the~~ — ⛔ dropped 2026-10-03: contradicts the 09-19 rollback: activity is back on Pebble, SQLite retired; the inverse decision is L2625
   `act:` keyspace (separate, after SQLite reads soak).
 
 ## Sweep `api.ts` for missing `{data:…}` envelope unwraps (2026-09-07)
@@ -2480,12 +2480,12 @@ Costs nest, so these overlap.
       a measured-minor warm cost for an unmeasured-severe cold one. Do not treat
       "only 1.14 %" as a green light to apply finding 1 unchanged — if it is done
       at all, the fallback must be made prefix-bounded first.
-- [ ] **`MintOrGetSyncFileIDs` at 10.80 s (2.47 %) is now worth the prefix-scan
+- [x] ~~**`MintOrGetSyncFileIDs` at 10.80 s (2.47 %) is now worth the prefix-scan~~ — ⛔ dropped 2026-10-03: duplicate of L2360 (same GetSyncFileIDsForBook prefix-scan follow-up)
       follow-up** (audit finding 7): the `sync_file:book:<bookID>:<syncFileID>`
       index stores the fileID as its value, so one scan per book replaces the N
       point-gets this method still does. `RepointSyncFile` keeps that index
       current (verified).
-- [ ] **Investigate the 47 % GC directly.** A 3 MB response per search is a large
+- [x] ~~**Investigate the 47 % GC directly.** A 3 MB response per search is a large~~ — ⛔ dropped 2026-10-03: answered in place (TODO.md:2404-2406): the 47% GC is the apply jobs' whole-file SHA-256 hashing, a deliberate owner trade — not a search defect
       allocation source; so is the apply job. Worth a heap profile before assuming
       which one dominates.
 
@@ -2519,7 +2519,7 @@ never exercised is indistinguishable from one that does not work.
 - [x] **`.github/codeql/models/path-sanitizers.model.yml` is structurally correct.** Its
       rows measure exactly 9 columns for `barrierModel` and 10 for `barrierGuardModel`,
       matching the declarations above minus the auto-supplied `madId`. No change needed.
-- [ ] **🔴 The barrier still does not fire, and deleting the invalid file did not fix it.**
+- [ ] **🔴 The barrier still does not fire, and deleting the invalid file did not fix it.** — ❓ owner decision 2026-10-03: spend a probe commit on the CodeQL barrier, or drop it (CodeQL is not a merge gate per 09-14)?
       #3132 ran a known-positive control: a probe commit restoring the exact
       `SecureJoin`+`os.Stat` form that produced 8/8 alerts on 2026-09-07, with the invalid
       file already removed. **The alert fired anyway** — alert 1866, `open`,
@@ -2536,7 +2536,7 @@ never exercised is indistinguishable from one that does not work.
       - `subtypes` (`false`) or the empty `type`/`signature` columns may not match.
       **Next step is a canary, not another guess:** the control above is cheap to re-run, so
       change one variable per push and read the alert rather than reasoning about it.
-- [ ] **Every language is analyzed by CodeQL twice per run, and Go costs ~8.5 min each time.**
+- [ ] **Every language is analyzed by CodeQL twice per run, and Go costs ~8.5 min each time.** — ❓ owner decision 2026-10-03: switch CodeQL default-setup vs workflow analysis (repo-settings knob) or accept the double run?
       Noticed while chasing the above, because alerts arrive under two different
       `analysis_key`s and it is not obvious which one a given alert came from.
       `.github/workflows/codeql.yml` analyzes `go`, `javascript-typescript` and `actions` in
@@ -2550,7 +2550,7 @@ never exercised is indistinguishable from one that does not work.
 
 ⚠️ These are `.github/` files: push them with git, never the MCP contents API.
 
-- [ ] **Operation log download (`GET /operations/v2/:id/logs/download`) delivers a
+- [x] **Operation log download (`GET /operations/v2/:id/logs/download`) delivers a — ✅ 2026-10-03: internal/server/server.go:1476-1485 gzip middleware excludes ^/api/v1/operations/v2/[^/]+/logs/download$ (root cause: gin-contrib/gzip double-wrap)
       corrupt `.log.gz` to the browser — "Data error", nothing can decompress it.**
       Reported 2026-09-06 for op `01M1WJSMX5YMPJJE2C96Y6JF5D` (a canceled embed-scan
       with a very large log). **The origin handler is NOT the bug:** a direct-LAN
@@ -2606,7 +2606,7 @@ store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
   deploy the new binary with `ACTIVITY_BACKEND=pebble` still set (healthy, no
   backfill), then remove the env line from `deploy/local.conf` and restart to run
   the streamed backfill — watch `change`-tier RSS stays flat and parity flips reads.
-- [ ] **Audit `scanTierKVs` callers for the same OOM shape.** `Summarize` /
+- [x] **Audit `scanTierKVs` callers for the same OOM shape.** `Summarize` / — ✅ 2026-10-03: internal/database/pebble_activity_store.go:100-115,492-546 — bounded query path documented; Summarize/Prune/CompactByDay share scanTierKVs and are instrumented
   `CompactByDay` on the Pebble side may also call the full-tier materializer; if so
   that is a pre-existing hazard independent of the migration.
 - [x] **Scheduled auto-compaction toggle.** A `ScheduledTaskConfig` (like — ✅ DONE 2026-09-10: internal/plugins/maintenance/cleanup.go:130-167 — `maintenance.cleanup-activity-log` op is registered with `Schedule: &sched` ("0 0 * * *", midnight daily) and runs `CompactActivityLog(ctx, ActivityLogCompactionDays(), …
@@ -2622,7 +2622,7 @@ store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
   `maintenance.compact-activity-log` (202 + op id; 409 if already running), the op
   reports per-chunk progress so the watchdog cannot strike it, and
   `MigratingActivityStore.CompactByDay` compacts BOTH backends.
-- [ ] **Retire the Pebble activity path** once SQLite reads have soaked in prod.
+- [ ] **Retire the Pebble activity path** once SQLite reads have soaked in prod. — ❓ owner decision 2026-10-03: inverse now: delete the dormant SQLite activity tier code, or keep it?
   Two halves; the delete half is now built, the write half is not:
   - [x] **Delete the accumulated copy.** #3139 adds `maintenance.activity-reclaim`.
     It is triggered (not scheduled), dry-run unless `dry_run=false`, and refuses
@@ -2631,7 +2631,7 @@ store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
     It prunes behind a time cutoff rather than range-deleting the prefix, because
     `Record` dual-writes forever and a prefix wipe would take rows written between
     the parity check and the delete.
-  - [ ] **Stop dual-writing.** `MigratingActivityStore.Record` fans out to BOTH
+  - [x] ~~**Stop dual-writing.** `MigratingActivityStore.Record` fans out to BOTH~~ — ⛔ dropped 2026-10-03: contradicts the 09-19 rollback: MigratingActivityStore dual-write exists only under the retired SQLite backend; prod is Pebble-only
     backends unconditionally with no post-cutover stop, so every new row still
     writes a Pebble copy nothing reads and the reclaim has to be re-run forever.
     `Record` should skip the primary once `readSecondary` is true — which also
@@ -2640,7 +2640,7 @@ store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
     `RepairActivityIndexes`' comment and predates substantial growth (the Pebble DB
     has gone from a 31 GB baseline to 59 GB). It was never measured here. Run the
     reclaim dry-run for the real number before quoting one.
-- [ ] **MySQL/Postgres dialects.** The `sqlDialect` seam is built; adding a
+- [x] ~~**MySQL/Postgres dialects.** The `sqlDialect` seam is built; adding a~~ — ⛔ dropped 2026-10-03: contradicts the 09-19 rollback: the sqlDialect seam belongs to the retired SQLite activity tier; no consumer left
   networked backend is a dialect + driver + DSN/credentials decision.
 
 - [x] **A canceled operation can linger forever in the Active-Operations timeline — ✅ DONE 2026-09-10: PR #3101 (fix/terminal-op-missing-completed-at, merged 2026-09-07, commit d487c2098) 'fix(operations): stamp completed_at when a queued op is canceled'. At HEAD: internal/database/pebble_store_ops_v2.go:414-416 stamps `…
@@ -2677,7 +2677,7 @@ store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
 
 - [ ] **Duplicate & placeholder book records — PRIORITY 3 of the 2026-09-05 audit cleanup.** Full-census audit 2026-09-05 (`library-health-audit-2026-09-05.md`). (1) **8,235 redundant primary book rows are true content/metadata duplicates** (same normalized title+author, placeholders excluded; 5,671 distinct clean (title,author) pairs with >1 primary) — top clusters: "PZG" bundle 57 copies, Jim Butcher "Skin Game" **51 rows split per-chapter as separate books** (`Skin Game - 1`, `Skin Game - 11`, …), "For We Are Many" (Bobiverse 2) 39, "Prince of Fools" 31. (2) **839 distinct `file_path`s are shared by >1 primary book** (1,334 redundant rows) — strongest duplicate signal; includes front-matter minted as its own book: `.../Unknown Author/Introduction` (37 book IDs), `/Prologue` (35), `/About the Author` (20), `/Audible Opening Message` (19). (3) **Front-matter tracks stored as their own books** (37 "Introduction", 35 "Prologue", 20 "About the Author", 19 "Audible Opening Message" under Unknown Author) — these should be chapters/tracks of their parent book, not standalone records. (4) **5,421 primary books (12.5%) carry placeholder title/author** (`"read by narrator"` ×1,182+520, `"unknown title"`/`"unknown author"` ×153) — folder-parser fallback strings persisted as real metadata; re-parse or re-fetch. (5) 414 book rows (333 primary) have an empty `title` even though most have a usable `transcribed_title` fallback. Related: [[project_repoint_collision_bucket_is_duplicate_books]] (repoint collisions ARE duplicate books — dedup is upstream), the dedup sandbox work. Do AFTER the missing-file recovery and series/author cleanup, because merging duplicate books changes which rows the missing-file repointer must consider. Work: a plan-first dry-run merge op keyed on `file_path` collision first (exact, safe), then normalized title+author with hash confirmation; fold per-chapter split books back into one book with track/chapter files; a placeholder-title re-parse/re-fetch pass. Plan-first + dry-run; NEVER during a scan (a scan re-mints duplicates).
 
-- [ ] **Evaluate store-level optimistic concurrency (compare-and-swap) for DB writes — a general "recheck before write" guard.** Raised by the user 2026-09-05 while building the missing-file recovery ops: "can we guard at [the central write] level making everything idempotent." Findings from that session: (1) **Filesystem writes are already centrally guarded** — `internal/fileops` refuses clobber (`ReflinkOrCopy` → `TestReflinkOrCopyRefusesExistingDestination`, `reflink_test.go:51`; plus `CopyFileExclusive` O_EXCL and `CopyFileAtomic` write-temp-then-rename). New file-moving ops should ROUTE through fileops and inherit that idempotency rather than reimplement it. (2) **DB writes have NO concurrency guard** — `PebbleStore.UpdateBookFile(id, *BookFile)` (`pebble_store_bookfiles.go:519`) is an unconditional full-record replace; `BookFile` carries no CAS revision. A per-op stat-recheck (as added to mark-missing/recover) CANNOT be centralized into the write function, because it rechecks a **disk fact** the store can't see — the store writes rows, not files. The centralizable mechanism is different: **optimistic concurrency** — add a monotonic `rev` to `BookFile`, have `UpdateBookFile` take the expected rev and reject the write if the row changed since it was read (compare-and-swap). That makes every DB write *conflict-detecting* for all ops at once. Scope/cost: a rev field on the model + threading expected-rev through the write surface (`UpdateBookFile`, `BatchCreateBookFiles`, `UpdateBookFileHashes`, and the memdb sync path) + deciding fail-closed (reject) vs fail-open (retry-read-merge) per caller. Wide but bounded; its own PR with its own plan. Related: the per-op stat-interlock in `mark_missing_files.go` / the recover op is the disk↔row coherence tool and stays; this todo is the row↔row (concurrent-writer) tool. Consider whether the CoW `book_ver:` history already gives a natural rev to CAS on. Plan-first; no behavior change until reviewed.
+- [x] **Evaluate store-level optimistic concurrency (compare-and-swap) for DB writes — a general "recheck before write" guard.** Raised by the user 2026-09-05 while building the missing-file recovery ops: "can we guard at [the central write] level making everything idempotent." Findings from that session: (1) **Filesystem writes are already centrally guarded** — `internal/fileops` refuses clobber (`ReflinkOrCopy` → `TestReflinkOrCopyRefusesExistingDestination`, `reflink_test.go:51`; plus `CopyFileExclusive` O_EXCL and `CopyFileAtomic` write-temp-then-rename). New file-moving ops should ROUTE through fileops and inherit that idempotency rather than reimplement it. (2) **DB writes have NO concurrency guard** — `PebbleStore.UpdateBookFile(id, *BookFile)` (`pebble_store_bookfiles.go:519`) is an unconditional full-record replace; `BookFile` carries no CAS revision. A per-op stat-recheck (as added to mark-missing/recover) CANNOT be centralized into the write function, because it rechecks a **disk fact** the store can't see — the store writes rows, not files. The centralizable mechanism is different: **optimistic concurrency** — add a monotonic `rev` to `BookFile`, have `UpdateBookFile` take the expected rev and reject the write if the row changed since it was read (compare-and-swap). That makes every DB write *conflict-detecting* for all ops at once. Scope/cost: a rev field on the model + threading expected-rev through the write surface (`UpdateBookFile`, `BatchCreateBookFiles`, `UpdateBookFileHashes`, and the memdb sync path) + deciding fail-closed (reject) vs fail-open (retry-read-merge) per caller. Wide but bounded; its own PR with its own plan. Related: the per-op stat-interlock in `mark_missing_files.go` / the recover op is the disk↔row coherence tool and stays; this todo is the row↔row (concurrent-writer) tool. Consider whether the CoW `book_ver:` history already gives a natural rev to CAS on. Plan-first; no behavior change until reviewed. — ✅ 2026-10-03: ModifyBook (compare/modify under a per-book lock) exists at internal/database/pebble_store_book_lock.go:89 and is in use (e.g. maintenance/jobs/dedup_books.go:1213); migration of the remaining sites is tracked separately
 
 ### Make `library.scan` declare its `Writes` so the ops-v2 gate is real, not operational
 
@@ -2793,14 +2793,14 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
   go to whatever URL a provider handed back, so there is no provider identity to key a
   hold on. If cover hosts turn out to rate-limit us, this needs a host-keyed throttle
   rather than a provider-keyed one.
-- [ ] **Chase the Google Books quota itself.** Re-tested from prod past the Pacific
+- [ ] **Chase the Google Books quota itself.** Re-tested from prod past the Pacific — ❓ owner decision 2026-10-03: raise the Google Books quota in Cloud Console (owner billing/console action)?
   midnight rollover on 2026-09-03 and still 429, so time alone is not the remedy — check
   the Cloud console quota page for `project_number:624717413613` for another consumer or a
   very low limit.
 
 ## Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)
 
-- [ ] `PebbleStore.DeleteAuthor` → `sweepAuthorFromBookAuthors` scans the whole
+- [x] ~~`PebbleStore.DeleteAuthor` → `sweepAuthorFromBookAuthors` scans the whole~~ — ⛔ dropped 2026-10-03: duplicate of L461 AUTHOR-PURGE-BULK (same sweepAuthorFromBookAuthors junction sweep)
       `book_authors:` junction (~296k rows) per delete; 1,610 deletes took ~28 min.
       When memdb is warm, resolve the author's book ids from the in-memory index and
       delete only those junction keys (~40 lines + tests). Keep the full scan as the
@@ -2847,7 +2847,7 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
 
 ## Orphan duplicate series rows (found fixing the ABS black tiles, 2026-09-05)
 
-- [ ] Prod has 43,592 `series` rows for 83,229 books. "The Primal Hunter" exists 8
+- [x] ~~Prod has 43,592 `series` rows for 83,229 books. "The Primal Hunter" exists 8~~ — ⛔ dropped 2026-10-03: duplicate of L2674 (series-fragmentation census, PRIORITY 1 of the 09-05 audit)
       times; 16 of the 25 search hits for "primal hunter" had no visible books (orphan
       duplicates, numbered variants like "01 The Primal Hunter 9_", "(Unabridged)"
       variants). ABS search now hides empty series (#3072) but `/api/libraries/:id/series`
@@ -2859,7 +2859,7 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
 
 ## Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)
 
-- [ ] The weekly `library.scan` (`01M1M51FCKD1KA4XQ9AQ63XZWD`) organized a book at 02:31
+- [x] ~~The weekly `library.scan` (`01M1M51FCKD1KA4XQ9AQ63XZWD`) organized a book at 02:31~~ — ⛔ dropped 2026-10-03: both defects fixed: internal/backup/backup.go:63 BackupProgress feeds the watchdog (organizer/service.go:609); cross-dataset checkpoint copy #3524/#3525 (merged 09-23)
       EDT, which tripped the 6-hourly organizer auto-backup (`autoBackupMinInterval`,
       `backup.CreateBackupWithCheckpoint`: Pebble checkpoint → `vfs.CopyAcrossFS` of the
       27 GB store to `/mnt/bigdata/.../.backups` → tar). The copy phase reports no
@@ -3328,7 +3328,7 @@ other callers, and changing its matching changes their results too.
 Related: `SearchBooks` also does not match `file_path`, which is why dedup search needed its
 own resolver rather than reusing it.
 
-- [ ] **On the `"_"` filename path, a refusal from `ChooseAuthorSide` produces a worse answer than a guess, and the directory fallback can mint a genre folder as an author.**
+- [ ] **On the `"_"` filename path, a refusal from `ChooseAuthorSide` produces a worse answer than a guess, and the directory fallback can mint a genre folder as an author.** — ❓ owner decision 2026-10-03: guess an author (wrong authors) or refuse (unparsed) on the "_" filename path?
       Found reviewing #3031, reproduced against `origin/main`, and deliberately NOT
       fixed there — every available fix was measured and each costs more than it saves.
 
@@ -3398,7 +3398,7 @@ own resolver rather than reusing it.
       prepared row on every request, which is only tolerable because
       `limit=0` makes the page the whole set anyway.
 
-- [ ] **TODO-ORIGHASH-SPLIT** `book_files.original_file_hash` has the same
+- [x] **TODO-ORIGHASH-SPLIT** `book_files.original_file_hash` has the same — ✅ 2026-10-03: internal/fileops/write_tags_safe.go:85-92 writes filehash.BookFileHash to original_file_hash, never the whole-file SHA-256
       two-algorithms-one-column disease that `fix/file-hash-column-algorithm` fixed for
       `file_hash`, and it is still live. `fileops.WriteTagsSafe` writes a **whole-file**
       SHA-256 to it (`internal/fileops/write_tags_safe.go`, via `UpdateBookFileHashes`);
@@ -3607,7 +3607,7 @@ Given `internal/server` is the slowest package in the suite (~275s), unlocking
 
 ### Docs
 
-- [ ] **Decide the fate of `docs/CODING_STANDARDS.md` — it is an unreferenced stale
+- [ ] **Decide the fate of `docs/CODING_STANDARDS.md` — it is an unreferenced stale — ❓ owner decision 2026-10-03: delete docs/CODING_STANDARDS.md or redirect it to .standards?
       copy with a false "managed centrally" banner.** Four measured facts, then a
       recommendation; this needs an owner decision, not a silent cleanup.
 
@@ -3701,7 +3701,7 @@ Given `internal/server` is the slowest package in the suite (~275s), unlocking
 
 ### Tooling / CI
 
-- [ ] **~44 repos still pin `.standards` at a stale commit; none of them is at
+- [ ] **~44 repos still pin `.standards` at a stale commit; none of them is at — ❓ owner decision 2026-10-03: run the cross-repo .standards pin sweep (scope per L3726)?
       current.** Surveyed 2026-08-30 across every repo carrying the
       `falkcorp/.github` submodule. audiobook-organizer was fixed in #2996; the
       rest were not touched.
@@ -3723,7 +3723,7 @@ Given `internal/server` is the slowest package in the suite (~275s), unlocking
   The fix per repo is the same two-line change #2996 made: bump the pin, and
   add a `gitsubmodule` ecosystem to `.github/dependabot.yml`.
 
-- [ ] **Decide the sweep's real scope before running it — it is not free after
+- [ ] **Decide the sweep's real scope before running it — it is not free after — ❓ owner decision 2026-10-03: what scope for the gitsubmodule sweep?
       it lands.** Adding `gitsubmodule` to ~45 repos means ~45 recurring PRs
       every week, forever. A large share of those repos (`gha-release-go`,
       `gha-detect-languages`, `release-strategy-action`, and the other
@@ -3738,7 +3738,7 @@ Given `internal/server` is the slowest package in the suite (~275s), unlocking
   apt-cacher-go). That covers the repos where a stale standard misleads someone
   without signing up for a permanent PR stream across the action fleet.
 
-- [ ] **`falkcorp/magnet-handler` `main` has a `toolchain` directive below its
+- [ ] **`falkcorp/magnet-handler` `main` has a `toolchain` directive below its — ❓ owner decision 2026-10-03: track the magnet-handler toolchain directive in this repo's TODO at all?
       `go` directive** — `go 1.26.0` with `toolchain go1.24.2`. Per
       `.standards/instructions/go.md` v1.3.0 this is ours and a bug, not a
       blocker to wait on.
@@ -4101,7 +4101,7 @@ Related: `docs/plans/2026-08-24-per-file-scan-cache-design.md` (option B), and
       passes. At minimum the two distinct-value scans should share one pass;
       better would be a projection that does not unmarshal the whole row.
 
-- [ ] **Decide what to do about the 6 ABS client sorts this server has no field
+- [ ] **Decide what to do about the 6 ABS client sorts this server has no field — ❓ owner decision 2026-10-03: synthesize fields for the 6 unordered ABS sorts, or leave them unordered?
       for.** `absSortFields` (`internal/server/handlers/abs/browse.go`) holds 11 accepted
       parameter spellings resolving to 9 distinct store fields. Six known client
       sorts resolve to `""` instead, which means "no ordering requested" everywhere downstream, so the
@@ -4400,7 +4400,7 @@ Either is defensible. Silently swallowing the unmarshal error while fetching 199
 operations that can never be reached is not.
 
 - [ ] Decide which contract `/reconcile/latest-scan` should honour
-- [ ] If falling through: name the source op in the response so a stale preview is identifiable
+- [x] ~~If falling through: name the source op in the response so a stale preview is identifiable~~ — ⛔ dropped 2026-10-03: duplicate of L4402 (same /reconcile/latest-scan contract fix)
 - [x] Either way, stop discarding the `json.Unmarshal` error without a log line. _Done 2026-09-11: `latestReconcileScan` now logs a WARN with the op id and the decode error. The response is unchanged pending the contract decision above._
 
 ## Finish the LLM fallback chain — stages 2 through 4
@@ -4423,7 +4423,7 @@ permanently-refused does not.
 
 What is NOT done, in the order it should be done:
 
-- [ ] **Stage 2 — make the local rung start a backend.** Today the local rung's
+- [ ] **Stage 2 — make the local rung start a backend.** Today the local rung's — ❓ owner decision 2026-10-03: does a "local rung" still exist now that LLM nodes are a config pool (09-25) and prod LLM runs on the Mac?
       `ensure` only constructs a client against an already-running endpoint; if
       nothing is listening it declines. `internal/tools/ollama_daemon.go` already
       has start-on-demand, adopt-across-restarts and stop-when-idle, but it is
@@ -4442,7 +4442,7 @@ What is NOT done, in the order it should be done:
       mutation-checked by writing the stamp anyway.
       The persistence needs a store method — `internal/database` is another
       session's lane, so specify the shape and ask rather than writing it.
-- [ ] **Stage 4 — poll for the remote and drain what is owed.**
+- [ ] **Stage 4 — poll for the remote and drain what is owed.** — ❓ owner decision 2026-10-03: decide together with L4426's shape
       🚨 **An in-memory ticker's ceiling is process uptime.** This deployment
       restarted 146 times in 30 days, so a long-interval ticker fires zero times
       while logging a perfectly healthy schedule. Persist a `last_probed_at` row
@@ -4553,8 +4553,8 @@ Do not start Task 2 before Task 1 — Task 1 is free and shrinks the problem by 
 third.
 
 - [ ] Dry-run the 1,291 reconciliation and report per-bucket counts
-- [ ] Apply it, REPOINTING rather than deleting
-- [ ] Decide the route for the 2,307
+- [ ] Apply it, REPOINTING rather than deleting — ❓ owner decision 2026-10-03: approve the prod apply of the 1,291 unknown-author rows (repointing)?
+- [ ] Decide the route for the 2,307 — ❓ owner decision 2026-10-03: which route for the 2,307?
 - [ ] Re-census afterwards to confirm the cohort actually shrank
 
 - [ ] **The quarantine "safety net" in `buildAudiobookListResponse` is justified
@@ -4606,7 +4606,7 @@ third.
 
 ## Data repair
 
-- [ ] **Decide how to repair the duplicate author rows that already exist.** The
+- [x] ~~**Decide how to repair the duplicate author rows that already exist.** The~~ — ⛔ dropped 2026-10-03: superseded by internal/plugins/maintenance/author_duplicate_merge.go (+ author_id_repair.go); the remaining prod run is L4834
       `CreateAuthor` race that produced them is fixed, but preventing corruption is
       not repairing it — the existing bad rows have no route back on their own.
 
@@ -4645,10 +4645,10 @@ So rows created by the backfill are **thinner** than rows created by the scan.
 Anything that later reads `RawTags` or `FileHash` off a book_file will see a
 difference that depends only on which writer got there first.
 
-- [ ] Size the backlog: how many books have zero `book_file` rows and a
+- [x] ~~Size the backlog: how many books have zero `book_file` rows and a~~ — ⛔ dropped 2026-10-03: duplicate of L4179 (its census step)
       regular-file `FilePath`? (Do not assume it is small — 41.8% of a sampled
       cohort of file rows already point at bytes that are gone.)
-- [ ] Repair the backlog once, from the scan's writer rather than the thin one,
+- [x] ~~Repair the backlog once, from the scan's writer rather than the thin one,~~ — ⛔ dropped 2026-10-03: duplicate of L4179 (its repair step)
       so every row has tags and a hash
 - [ ] Then delete `ensureSingleFileBookFile` and its call, rather than leaving a
       second writer for the same row
@@ -4693,7 +4693,7 @@ The decision to make:
 
 Doing neither leaves a lint whose findings reach main unopposed.
 
-- [ ] Verify whether `nightly.yml`'s reusable workflow actually runs staticcheck
+- [x] Verify whether `nightly.yml`'s reusable workflow actually runs staticcheck — ✅ 2026-10-03: verified: falkcorp/github-common reusable-ci.yml@d0c3326 (nightly.yml:31) contains 0 staticcheck references; Makefile:397-405 documents `make ci` as the only gate (332248a8e)
 - [x] Decide: add to PR CI, or document it as local/nightly-only — ✅ 2026-10-03: 332248a8e; Makefile staticcheck target documents it is NOT run by PR workflows (`make ci` is the only gate) and now exits 1 when the binary is missing
 - [x] Audit the other `command -v <tool>` guards in the Makefile for the same skip-and-pass shape — ✅ 2026-10-03: 332248a8e; remaining `command -v` guards all fail closed (Makefile swift/gremlins exit 1; lsof is a diagnostic branch only)
 
@@ -4724,7 +4724,7 @@ inline; it queues batches of 200 candidates that run one at a time behind their
 own ConcurrencyKey. Two things need eyes on real data, and neither can be
 checked before a deploy.
 
-- [ ] **Confirm a real scan actually queues.** After deploying, run a scan and
+- [x] ~~**Confirm a real scan actually queues.** After deploying, run a scan and~~ — ⛔ dropped 2026-10-03: verified: library.ai-parse ops have run on prod after real scans since 09-09
       check `GET /api/v1/operations/timeline` for `library.ai-parse` rows. The
       scan log also prints `queued N book(s) for background AI filename parsing`
       per batch. If instead the log says `failed to queue AI parsing (...)` the
@@ -4743,7 +4743,7 @@ checked before a deploy.
       cannot see this — they all stub the saver, which is how the bug got as far
       as it did.
 
-- [ ] **Decide what to do about organize running before the parse.** Named as a
+- [ ] **Decide what to do about organize running before the parse.** Named as a — ❓ owner decision 2026-10-03: hold organize until AI parse lands (slower), or accept parse-after-organize re-moves?
       known regression in the changelog: auto-organize fires when the scan ends,
       which is now before the queued parsing drains, so a book organized in the
       same scan is filed using pre-AI metadata. `{series}` is the visible one —
@@ -4777,13 +4777,13 @@ seeding those files breaks, because Deluge keeps pointing at the old location. T
 this is masked for the in-root case (`ReOrganizeInPlace` is a true `os.Rename` within
 the library) but it is a real hazard as soon as moves become the normal path.
 
-- [ ] Decide the mechanism: Deluge `move_storage` per torrent vs. re-announce, and what
+- [ ] Decide the mechanism: Deluge `move_storage` per torrent vs. re-announce, and what — ❓ owner decision 2026-10-03: Deluge move_storage per torrent vs re-announce; what about partial-torrent books?
       happens when a torrent covers only some of a book's files
 - [x] Decide failure policy: does a Deluge update failure roll the move back, or is the — ✅ DONE 2026-09-10: internal/deluge/integration.go:141-142 doc comment: 'Best-effort: errors are logged but do not bubble up — the organize operation already succeeded.' internal/server/handlers/organize.go:318-321 confirms NotifyDelugeAft…
       move committed and the mismatch reported? (Compare the existing organize rollback,
       which `os.Rename`s the file back on a DB write failure.)
 - [ ] Wire it into the organize path, not just the manual move endpoint
-- [ ] Only then schedule option B
+- [ ] Only then schedule option B — ❓ owner decision 2026-10-03: schedule option B once L4780/L4785 are decided?
 
 Related: the version-linking issue below — organize already knows both the old and new
 path at move time, but does not record the relationship; a later scan rediscovers the
@@ -4857,7 +4857,7 @@ do not bolt a second cache onto the book row.
 - [x] Decide per-file scan-cache keying and write it up before coding — ✅ DONE 2026-09-10: PR #2868 ('docs(scanner): design the per-file scan cache, and record what B needs first', merged 2026-08-25) is the write-up-before-coding step, referenced in code as docs/plans/2026-08-24-per-file-scan-cache-design.md.…
 - [ ] Confirm whether the directory-rooted book branch (`scanner.go:1229`, never calls
       `writeBackScanCache` at all) folds into the same fix
-- [ ] Open question, not yet measured: does the real `saveBookToDatabase` create a
+- [x] ~~Open question, not yet measured: does the real `saveBookToDatabase` create a~~ — ⛔ dropped 2026-10-03: duplicate of L4858 (sub-question of the directory-rooted-branch check; thin-writer behaviour is covered by L4179/L4653)
       **duplicate row** for an already-normalized multi-file book on rescan? A simplified
       stub did; production's segment-hash dedup may re-link instead. Measure before assuming.
 
@@ -4952,7 +4952,7 @@ lines that promise it. Do not leave a third state where the flag exists and lies
       resolved — the clause is true again *as an operator action*, and the comment in
       `internal/database/pebble_store_book_aggregates.go` now says exactly that: the
       remedy exists, but nothing runs it automatically, so the warning must stay loud.
-- [ ] The web UI's Run button (`api.runMaintenanceJob`) sends `{dry_run}` only, so `force`
+- [ ] The web UI's Run button (`api.runMaintenanceJob`) sends `{dry_run}` only, so `force` — ❓ owner decision 2026-10-03: expose `force` in the UI Run button, or keep it API-only?
       is reachable by API but not from the maintenance tab. Deliberately out of scope for
       the wiring fix; decide whether one job warrants a UI control.
 
@@ -4975,7 +4975,7 @@ Confirmed on the production library:
       are file stems — do NOT assume it is only newbooks, and do not estimate it
       from the 80.
 
-- [ ] **Decide the repair shape with the user before writing it.** Collapsing a
+- [ ] **Decide the repair shape with the user before writing it.** Collapsing a — ❓ owner decision 2026-10-03: approve the collapse-rule repair shape before it is written?
       per-track group means merging N rows into 1 and deleting N-1, re-deriving
       the title from the folder, re-resolving the author, and rebuilding one
       version group. That is destructive and it is not a drive-by.
@@ -5034,7 +5034,7 @@ for files that *get* a row, and these never do.
 
 ### Tasks
 
-- [ ] Read `scanCacheNoRowCount` off a completed production scan summary to size
+- [x] ~~Read `scanCacheNoRowCount` off a completed production scan summary to size~~ — ⛔ dropped 2026-10-03: duplicate of L5172 (reads all three scan-cache counters)
       the population. Until that number exists this is unquantified — do not
       assume it is either negligible or large.
 - [x] ~~Decide where scan state for a row-less path should live.~~
@@ -5058,7 +5058,7 @@ for files that *get* a row, and these never do.
         surfaces files that are currently invisible in the library, and risks
         regrowing the dedup backlog that is being worked separately. Do not do
         this unilaterally.
-- [ ] Also check `scanCacheStatErrCount` and `scanCacheLookupErrCount` on the
+- [x] ~~Also check `scanCacheStatErrCount` and `scanCacheLookupErrCount` on the~~ — ⛔ dropped 2026-10-03: duplicate of L5172
       same run. A non-trivial lookup-error count means a store problem that was
       invisible before 2026-08-24 and is a different bug.
 - [ ] Note when sizing: version-linking is *a* cause of a row-less path, not
@@ -5116,7 +5116,7 @@ for files that *get* a row, and these never do.
       (`internal/scanner/scanner.go`) behind `min_rescan_age_hours`, default 144,
       `-1` disables.
 
-- [ ] **Watch `too-fresh` in the scan summary on the first real run after deploy.**
+- [x] ~~**Watch `too-fresh` in the scan summary on the first real run after deploy.**~~ — ⛔ dropped 2026-10-03: duplicate of L5179 (reads too-fresh off the same summary)
       The gate is new and its skip reason is reported separately from
       `unchanged` precisely because it means *deferred* work rather than work
       correctly avoided. A run where `too-fresh` is a large fraction means
@@ -5131,7 +5131,7 @@ the same lane, in the order the user sequenced them on 2026-08-24.
 
 ### Blocked on a deploy, not on code
 
-- [ ] **Deploy `main` and trigger the first `library_scan_full` sweep via "Run now".**
+- [x] ~~**Deploy `main` and trigger the first `library_scan_full` sweep via "Run now".**~~ — ⛔ dropped 2026-10-03: superseded: main has deployed many times since and weekly/daily library scans have run (TODO.md:2862 names a weekly run)
       The user chose this over restarting the canceled scan. It is **not
       currently possible**: prod's binary was built 2026-08-24 07:23 EDT and the
       sweep merged at 16:08 EDT, so `library_scan_full` does not exist on the
@@ -5154,7 +5154,7 @@ the same lane, in the order the user sequenced them on 2026-08-24.
 
 ### The real fix, and the home for the path-keyed cache
 
-- [ ] **Implement the staged library scan pipeline.** Spec is on main at
+- [ ] **Implement the staged library scan pipeline.** Spec is on main at — ❓ owner decision 2026-10-03: is the HoldingArea staged pipeline still the plan, or superseded by the per-file identification state machine (#3513)?
       `docs/superpowers/specs/2026-08-24-staged-library-scan-design.md` v5.0.0:
       enumerate → diff → holding area → deep pass; flags on existing rows rather
       than a new table; fast pass is stat + tag-header read with no hashing and
@@ -5188,7 +5188,7 @@ the same lane, in the order the user sequenced them on 2026-08-24.
       is purely observational — it records what happened, it does not change
       resume behaviour — but the user has not released it.
 
-- [ ] **resume-sweep PR2 — do NOT ship without the user's explicit say-so.**
+- [x] ~~**resume-sweep PR2 — do NOT ship without the user's explicit say-so.**~~ — ⛔ dropped 2026-10-03: superseded by #3113 (merged 09-07): the v1 startup resume sweep was deleted instead of shipping PR2
       Standing instruction, restated 2026-08-24.
 
 ## `CreateAuthor` is check-then-create with no atomicity — mints duplicate author rows
@@ -5217,7 +5217,7 @@ name to an id is wrong for those rows — this already nearly made the
 
 - [x] Make the lookup and insert atomic (single Pebble batch with a conditional — ✅ DONE 2026-09-10: PR #2920 'fix(database): make CreateAuthor atomic so one name yields one row' (merged 2026-08-25, commit 4655f2bf9). Code: `internal/database/pebble_store.go:112` adds `authorMu sync.Mutex` to `PebbleStore`; `internal/d…
       write), so a concurrent caller cannot mint a second row.
-- [ ] Decide how to merge the duplicate author rows already present, and whether
+- [x] ~~Decide how to merge the duplicate author rows already present, and whether~~ — ⛔ dropped 2026-10-03: duplicate of L4609 (answered by author_duplicate_merge.go; prod run is L4834)
       book `AuthorID`s pointing at unindexed duplicates should be repointed at
       the indexed row.
 - [x] Add a concurrency test asserting N concurrent `CreateAuthor` calls with one — ✅ DONE 2026-09-10: `internal/database/author_create_race_test.go` — `TestCreateAuthorIsAtomicUnderConcurrency` spins up 24 concurrent `CreateAuthor("Terry Pratchett")` calls released simultaneously via a shared start channel, asserts exac…
@@ -5254,7 +5254,7 @@ Compounded by `CreateAuthor` being racy
 (`todo.d/20260825-createauthor-check-then-create-race.md`): each junk name also
 mints one or more real author rows.
 
-- [ ] Decide the correct rule. The author is the **grandparent** under the
+- [ ] Decide the correct rule. The author is the **grandparent** under the — ❓ owner decision 2026-10-03: confirm the grandparent-folder author rule?
       organizer's own layout, but an unorganized import may legitimately have the
       author as the immediate parent. It likely needs to be layout-aware (is this
       path under `RootDir`?) rather than positional.
@@ -5928,7 +5928,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       (`[id]: value` in an object literal, which cannot pollute the prototype), and those
       dismissals are correct and unaffected. Found by review on #2798.
 
-- [ ] **`DeleteAuthor` scans the whole `book_authors:` keyspace once per author deleted.**
+- [x] ~~**`DeleteAuthor` scans the whole `book_authors:` keyspace once per author deleted.**~~ — ⛔ dropped 2026-10-03: duplicate of L461 AUTHOR-PURGE-BULK
       Correct, and fine for interactive single deletes. The concern is the bulk
       caller: `maintenance.purge-empty-authors` deletes authors in a loop, so
       the cost is (authors purged x junction size). TASK-075's report puts the
@@ -7118,7 +7118,7 @@ speculatively. Keep the notes: they apply if a general merge is ever wanted, and
       but any future change to `normalizeWindowsPrefix` inherits the same
       problem — a stored alias will not pick it up.
 
-- [ ] Replace the fixed `resume_policy` enum with a **condition-based** resume
+- [x] ~~Replace the fixed `resume_policy` enum with a **condition-based** resume~~ — ⛔ dropped 2026-10-03: superseded: the motivating case (library.scan restart) resumes today; the remaining drop→resume conversions are L11993
       decision, with elapsed time as one available condition rather than the
       only one. Today `resume_policy` is a single static value per op-def
       (`restart` / `resume` / `drop`), decided without reference to the state
@@ -7218,7 +7218,7 @@ speculatively. Keep the notes: they apply if a general merge is ever wanted, and
          over-emits 6 fields vs the oracle; advertised login rate limit (10/10min) does not
          match the real throttle (15 failures/15min).
 
-- [ ] ⚙️ **Decide `ABS_API_ENABLED` for production (N-11).** It defaults to `false`
+- [x] ~~⚙️ **Decide `ABS_API_ENABLED` for production (N-11).** It defaults to `false`~~ — ⛔ dropped 2026-10-03: answered: prod serves AudioBooth/ABS clients daily (ABS search, /items, HEAD-route incidents), so the flag is on
       (`internal/config/abs_config.go:28-35`); when off, `wireABSRoutes` registers **zero**
       of the 48 routes. Nothing in the repo sets it and `deploy/local.conf` is gitignored,
       so prod state cannot be determined from the tree. Not a claim that it is off — a claim
@@ -7364,10 +7364,10 @@ computation.
 
 ### Tasks
 
-- [ ] Capture a goroutine dump from a real failure. **Do NOT `gh run rerun` before saving the
+- [x] ~~Capture a goroutine dump from a real failure. **Do NOT `gh run rerun` before saving the~~ — ⛔ dropped 2026-10-03: superseded by #3286 (merged 09-12): 21 database-test waits are bounded, so a hang now names its own test
       log** — the re-run overwrites it, and the panic dump names the stuck test. That evidence
       was destroyed on this occurrence.
-- [ ] Once a stuck test is named: find the unbounded wait. Look for `sync.WaitGroup.Wait`,
+- [x] ~~Once a stuck test is named: find the unbounded wait. Look for `sync.WaitGroup.Wait`,~~ — ⛔ dropped 2026-10-03: superseded by #3286; depends on L7367, which never recurred
       channel receives, and `Lock()` calls with no context/deadline in `internal/database`
       tests and helpers.
 - [x] Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in ✅ DONE 2026-09-12 (#3286, TASK-177): 21 waits in internal/database bounded; `store.WaitForWarmup()` calls not yet converted.
@@ -7418,7 +7418,7 @@ removes the case where a *correct* shutdown loses a race with its own assertion.
 - [x] `syscall.Kill(os.Getpid(), syscall.SIGTERM)` signals the **entire test binary**, not a (done in #2698, TASK-204)
       child. Every test in the package shares that process, so this is a global side effect
       fired from one test. It works today; it is a trap for whoever adds parallelism.
-- [ ] The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock
+- [x] The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock — ✅ 2026-10-03 obsolete: no `Sleep(6 *` remains in any internal/ test at HEAD; the shutdown test was reworked in #2698 (TASK-204)
       cost paid on every run, in a package that is already the gate's biggest consumer.
 
 ### Meta-observation worth acting on
@@ -7668,7 +7668,7 @@ Work to do:
 4. Re-capture the oracle fixtures with query parameters present, so the
    conformance suite can see this class at all.
 
-- [ ] 💾 **Run `maintenance.booksig-sidecar-migrate` on production** — the op is
+- [ ] 💾 **Run `maintenance.booksig-sidecar-migrate` on production** — the op is — ❓ owner decision 2026-10-03: go/no-go for maintenance.booksig-sidecar-migrate on prod (irreversible move, ~580 MB/startup saved)?
       merged and dry-run gated, but the ~580 MB/startup saving from PR #2387 is
       **not realized until the data actually moves**. #2387 shipped the
       `book_sig:<id>` sidecar with fallback-first reads, so all 67,824 rows still
@@ -7763,7 +7763,7 @@ Work to do:
       `BookDocument`, a text field mapping, and a full reindex. Until then,
       track-name cohorts must be built as static playlists.
 
-- [ ] 🧩 **Investigate per-chapter split files standing as their own books.** While
+- [x] ~~🧩 **Investigate per-chapter split files standing as their own books.** While~~ — ⛔ dropped 2026-10-03: superseded by the fragment program #3638/#3640/#3645 (folder-per-file fragments, stray chapter files)
       probing, item `97e56ed2` turned out to be a 463 s fragment
       (`01 Angel in the Whirlwind - 1 - The.m4b`) registered as a standalone book,
       and several sampled "single-file" books are per-chapter splits mis-grouped
@@ -7799,12 +7799,12 @@ Measured 2026-08-13 against the 77-book `job` test cohort on production. These a
       re-organize that never wrote back the `BookFile` row). Any op that resolves
       a file by stored path silently degrades on these. Full list:
       `probe-failed=15` in op `01KZXSZM5K6DA7QP21DPRAR17C`.
-- [ ] **`Book.FilePath` and `BookFile.FilePath` disagree for the same book.** For
+- [x] ~~**`Book.FilePath` and `BookFile.FilePath` disagree for the same book.** For~~ — ⛔ dropped 2026-10-03: decided 09-24: book_file rows are authoritative, book.file_path is stale
       `The Icarus Job` the book row points into the iTunes tree while the book-file
       row points at a nonexistent path under the organized tree. Any consumer that
       picks the "wrong" one gets a different answer. Decide which is authoritative
       and make the other derive from it.
-- [ ] **`Book.FilePath` is NOT unique — 1,264 values are shared by more than one
+- [x] ~~**`Book.FilePath` is NOT unique — 1,264 values are shared by more than one~~ — ⛔ dropped 2026-10-03: guard for a Book.FilePath fallback that the 09-24 decision retired
       book row (4,353 of 63,870 rows, 6.8%).** This bounds how far the #2372
       fallback can safely be reused: anything that resolves a book to a file via
       `Book.FilePath` can land on a row belonging to a different book. It happens
@@ -7815,7 +7815,7 @@ Measured 2026-08-13 against the 77-book `job` test cohort on production. These a
       keyspace and a book-row write would not be so contained. Likely the same
       root cause as the duplicate-book-rows item below.
       ⏩ **Counter added 2026-09-11 (#3259, TASK-068):** report-only op `maintenance.filepath-collision-report` counts and samples shared `Book.FilePath` values. It changes nothing. Run it to refresh the 1,264 figure before reusing the fallback.
-- [ ] **Stored `duration` is short of the real container by 119–186s on 7 cohort
+- [x] ~~**Stored `duration` is short of the real container by 119–186s on 7 cohort~~ — ⛔ dropped 2026-10-03: superseded by maintenance.duration-backfill (internal/plugins/maintenance/duration_backfill.go recomputes from fingerprints/ffprobe)
       books.** Confirmed by ffprobe: `Mushoku Tensei … Vol. 03` stores 33582s while
       both physical copies measure 33767.759s. The chapter timelines written by the
       backfill are correct; the duration field is stale. Related:
@@ -7824,7 +7824,7 @@ Measured 2026-08-13 against the 77-book `job` test cohort on production. These a
       the two `Genesis` rows (1,189 files) serves 1,189 chapters ending at 32,636s
       against a 258,256s duration; its twin ends correctly at 258,256s. The mapper's
       per-file synthesis is picking up wrong or missing per-file durations.
-- [ ] **Duplicate book rows per title under different author folders** (`Deadly Jobs`
+- [x] ~~**Duplicate book rows per title under different author folders** (`Deadly Jobs`~~ — ⛔ dropped 2026-10-03: superseded by the duplicate-copies fixer #3645 (merged 10-02) and the 10-01 owner decisions on it
       ×3, `The Icarus Job` ×3, every `Mushoku Tensei` volume ×2 as `PZG` and
       `Unknown Author`). Worth checking as a *source* for exact-pending dedup
       regrowing to 5,947 by 2026-08-12 — that note says it needs a source fix
@@ -8056,14 +8056,14 @@ is **22 commits behind**.
 | `d0c3326b` | 2026-07-19 | `frontend-ci`, `nightly`, `nightly-burndown`, `hard-burndown`, `prerelease`, `release-prod`, `security`, `triage-poll` |
 | `828afb50` | 2026-08-18 | `ci` |
 
-- [ ] Decide whether to bump the eight, and do it in **at least two PRs** —
+- [ ] Decide whether to bump the eight, and do it in **at least two PRs** — — ❓ owner decision 2026-10-03: bump ci/security/burndown/triage reusable-workflow pins (still at d0c3326) — release verification needs a cut release?
       not one. `release-prod.yml` and `prerelease.yml` are the risk: a reusable
       release workflow that broke somewhere in those 22 commits is not
       discovered until someone cuts a release, by which point the bump is
       several PRs back and no longer the obvious suspect. Bump the
       low-consequence ones (`triage-poll`, the burndowns) first and let them run
       a nightly before touching release or security.
-- [ ] Not done unattended on purpose: this was left for a human on 2026-08-18
+- [x] ~~Not done unattended on purpose: this was left for a human on 2026-08-18~~ — ⛔ dropped 2026-10-03: duplicate of L8059 (explanatory note for the same pin bump)
       rather than folded into the CI-wiring PR, because verifying a release
       workflow requires actually cutting a release.
 
@@ -8108,7 +8108,7 @@ split-then-compose:
 - [x] `itunes/service.Store` (17 declared / 24 called) — 7 assignability — ✅ DONE 2026-09-10: internal/itunes/service/store.go:15-37: 'It was 17 embeds of database.* -- roughly 171 methods, most of them unreached... The fix was applied to those parameter types first (writeback_batcher.go, path_reconcile.go, play…
       constraints incl. `database.OperationStore`; needs the parameter-type fix
       #2552 applied to its helpers first.
-- [ ] `maintenance.JobStore` (12) — deliberate choice from the #2534 arbitration;
+- [x] ~~`maintenance.JobStore` (12) — deliberate choice from the #2534 arbitration;~~ — ⛔ dropped 2026-10-03: duplicate of L8147 (same per-job-interface decision stated twice)
       revisit only as per-job interfaces (plan phase 2, item 1).
 - [x] `audiobookStore` / `audiobookUpdateStore` (11 each) — the service calls **44 — ✅ DONE 2026-09-10: The item names two concrete artifacts with a count ('audiobookStore / audiobookUpdateStore, 11 each') and predicts the narrowing 'scores worse on the gate.' Both artifacts are gone in that form: audiobookUpdateStore was…
       distinct store methods**. The finding is that the *service* is too big; do
@@ -8144,7 +8144,7 @@ interfacebloat` with a reason.
       `GetPendingDeferredITunesUpdates`, `MarkDeferredITunesUpdateApplied`) are
       import-pipeline writes belonging to none of the six.
 
-- [ ] Decide whether maintenance jobs should take per-job store interfaces instead of the
+- [ ] Decide whether maintenance jobs should take per-job store interfaces instead of the — ❓ owner decision 2026-10-03: prioritise the per-job store-interface refactor (Run is a method on MaintenanceJob)?
       shared `maintenance.JobStore`. Measured 2026-08-18 after narrowing JobStore to 52
       methods: **23 of the 37 directly-called methods are used by exactly one job**, and
       only five are used by more than four (`GetAllBooksCore` 18 files, `GetBookByID` 12,
@@ -8297,7 +8297,7 @@ step 4 propagates to the server package with no edit there.
 
 ## Dedup
 
-- [ ] **Clean up the 2,504 already-orphaned dedup candidates — use the existing
+- [ ] **Clean up the 2,504 already-orphaned dedup candidates — use the existing — ❓ owner decision 2026-10-03: approve dedup.purge-stale on the 2,504 orphaned candidates in prod?
       `dedup.purge-stale`, do NOT build a new op.** A 2026-08-19
       `dedup.breakdown-backfill` dry run reported `skipped_no_book: 2504`: pending
       candidates whose book row has been hard-deleted. Such a row is permanently
@@ -8550,7 +8550,7 @@ step 4 propagates to the server package with no edit there.
       Screenshot in the 2026-08-10 session; widget renders on the Library page
       under the search box, above `Select All`.
 
-- [ ] **E2EGATE-NOTREQUIRED** The E2E suite runs on every qualifying PR and its
+- [ ] **E2EGATE-NOTREQUIRED** The E2E suite runs on every qualifying PR and its — ❓ owner decision 2026-10-03: make E2E a required check, or leave it unenforced (owner said do not enable unattended)?
       result is enforced by nothing. A red run merges exactly as easily as a
       green one. **Owner decision required — do not enable unattended.**
 
@@ -9632,7 +9632,7 @@ step 4 propagates to the server package with no edit there.
       that hypothesis was wrong, or was right then and is not the binding
       constraint now, say so explicitly.
 
-- [ ] **Repair books applied from the Metadata Review screen before the tag-write fix.**
+- [ ] **Repair books applied from the Metadata Review screen before the tag-write fix.** — ❓ owner decision 2026-10-03: approve library.bulk-write-back for the pre-fix Review applies (on-disk tag rewrite, unknown cohort size)?
   `BatchApplyFromCache` updated the database without ever writing tags or
   embedding cover art (fixed in `fix/review-apply-writes-tags`). Every book
   applied from that screen while the defect was live has correct metadata in
@@ -9761,7 +9761,7 @@ Whatever is chosen, (1) is non-negotiable: a queue that drops data must say how 
   it with a documented permanent allowance rather than add an ingest field and backfill for
   a value no client is known to divide by. Revisit only if a client turns out to use it.
 
-- [ ] **SEC-CODEQL-BACKLOG** 326 open CodeQL alerts on `main`, including **2
+- [ ] **SEC-CODEQL-BACKLOG** 326 open CodeQL alerts on `main`, including **2 — ❓ owner decision 2026-10-03: spend on the CodeQL log-injection pattern, or leave the backlog (CodeQL not a gate, 09-14)?
       critical** and **17 high**. Counted 2026-08-12 via the code-scanning API
       across all four result pages — this is the full set, not a page-1 sample.
 
@@ -10576,11 +10576,11 @@ measurement on production rather than being carried along silently.
 Measured by a full 63,870-book census against production, correcting the figures in
 `docs/handoffs/2026-08-13-web-search-returns-unrelated-books.md` v2.0.0.
 
-- [ ] **765 books, not 6,157, are wrongly hidden by the primary-version filter** (1.20%,
+- [ ] **765 books, not 6,157, are wrongly hidden by the primary-version filter** (1.20%, — ❓ owner decision 2026-10-03: has version-group-primary-repair been applied on prod (#3535 op, #3666 writers locked)? run/approve it?
       not 9.6%). Breakdown: 724 sit in a version group where no member is primary; 41
       have no `version_group_id` at all and are still hidden. The other 22,266 unreachable
       books are legitimately collapsed duplicates whose group *does* elect a primary.
-- [ ] **Find the writer that creates a `vg-` group without electing a primary.** The lead
+- [x] ~~**Find the writer that creates a `vg-` group without electing a primary.** The lead~~ — ⛔ dropped 2026-10-03: closed by #3666 (merged 10-02): every version-group membership writer is locked, with a no-group sentinel
       is good: 472 of 7,154 `vg-` groups have no primary versus 7 of 17,635 unprefixed —
       a ~166x enrichment. Note `vg-` groups are NOT mostly singletons (12,877 books across
       7,154 groups; 1,905 singletons), so a repair that assumes singleton-ness is unsafe.
@@ -10745,7 +10745,7 @@ Follow-ups this surfaced:
       silently would make both harder to review. The fix is the same one-line
       `patternTerm()` call already in the file.
 
-- [ ] **A04's designated probe cannot verify the op-ID audit trail.**
+- [x] ~~**A04's designated probe cannot verify the op-ID audit trail.**~~ — ⛔ dropped 2026-10-03: duplicate of L11484 (probe an op that calls CreateOperationChange)
       `maintenance.temp-file-cleanup` routes through
       `sweep.CleanupOrphanedTempFiles`, which records each deletion via
       `activity.LogBatch` — the ACTIVITY feed — and never calls
@@ -10949,16 +10949,16 @@ distinguishes nil from false), cross-tabbed against `version_group_id`:
 
 **D-2 semantic the data recommends: nil = true** (an ungrouped book is its
 own primary). Unify:
-- [ ] Make every raw `*bool` post-filter treat nil as true (matching
+- [x] ~~Make every raw `*bool` post-filter treat nil as true (matching~~ — ⛔ dropped 2026-10-03: superseded: the backfill alternative (L10954, internal/maintenance/jobs/normalize_primary_flags.go) was chosen and built
       `effectiveBoolFieldIndex{Default: true}`), or
-- [ ] better: backfill explicit `true` onto the 5,702 nil rows (dry-run
+- [ ] better: backfill explicit `true` onto the 5,702 nil rows (dry-run — ❓ owner decision 2026-10-03: approve the prod apply of normalize_primary_flags (5,702 nil rows) plus write-time validation?
       gated) so nil ceases to exist, then make nil a validation error at
       write time.
       _Status 2026-09-11: the backfill code exists. `internal/maintenance/jobs/normalize_primary_flags.go`
       classifies nil-ungrouped rows and writes `true`, dry-run gated, in the same op as the 41 false-ungrouped rows.
       Still open: the production apply, which is an owner decision, and the write-time validation half._
 - [x] Fix the 41 ungrouped-false rows to true in the same op (C314). — ⏩ STALE 2026-09-10: The code fully satisfies the ask: internal/maintenance/jobs/normalize_primary_flags.go:76-78 handles the 41 false/ungrouped rows in the SAME op as the nil-ungrouped fix (`case !*b.IsPrimaryVersion && !grouped: falseUngr…
-- [ ] Re-run this census as the post-fix verification: expected end state is
+- [x] ~~Re-run this census as the post-fix verification: expected end state is~~ — ⛔ dropped 2026-10-03: duplicate of L10954 (its post-apply verification)
       exactly two populations (true, false+VG).
 
 ## C716 resolved: the "3,954-book API-vs-store gap" decomposes to 3,953 instrument + 2 quarantined + 0 unexplained
@@ -11078,7 +11078,7 @@ Follow-up bugs found by the controls (route to C1/C3, do NOT fix here):
       stream by the overlap. It does not, so the three sets are disjoint and
       exhaustive.
 
-- [ ] **CA12 wave 2: model `logging.Sanitize`/`SanitizeErr`/`logger.sanitizeLogLine`
+- [x] ~~**CA12 wave 2: model `logging.Sanitize`/`SanitizeErr`/`logger.sanitizeLogLine`~~ — ⛔ dropped 2026-10-03: duplicate of L9764 SEC-CODEQL-BACKLOG; CodeQL is not a merge gate (owner 09-14)
       as CodeQL log-injection sanitizers via the model pack.** #2445 removed
       the fast-path bypass, but the conduit's own alerts
       (`internal/logging/structured.go:51/58/65`) are STILL open at 316 total:
@@ -11148,7 +11148,7 @@ normalizing whitespace, so the dedupe that should have caught it never fires.
       `maintenance.author-*` ops already know how to relink via the join slice —
       see `author_conjunction_repair.go`'s `mergeAuthorInto`, which handles the
       BookAuthor rewrite and the AuthorID hydration correctly.
-- [ ] Decide what to DO with types 1 and 2 rather than merging them. Merging 25
+- [ ] Decide what to DO with types 1 and 2 rather than merging them. Merging 25 — ❓ owner decision 2026-10-03: re-parse the title-as-author books, or retire the rows and re-attribute?
       `Cthulhu Armageddon (Unabridged)` rows into one still leaves a book title
       masquerading as an author. These need the books re-parsed, or the rows
       retired and the books re-attributed — a different operation from dedupe.
@@ -11242,7 +11242,7 @@ handed to a post-filter that calls it false.
       fixture containing a nil-flag book, an explicit-true book and an
       explicit-false book; assert the library path and the author path classify
       all three identically. A fixture without a nil-flag row cannot catch this.
-- [ ] Decide whether the author listing SHOULD expose non-primary books at all.
+- [ ] Decide whether the author listing SHOULD expose non-primary books at all. — ❓ owner decision 2026-10-03: should the author listing expose non-primary books?
       Today it cannot, which is defensible for a listing, but it means the UI
       has no way to show a book on the author page it is genuinely attached to.
 
@@ -11362,7 +11362,7 @@ returning no rows (its cited mechanism: the store treats limit 0 as "nothing",
       immediately makes the timeout impossible and the ops screen owns
       progress/results.
 
-- [ ] **Metadata matcher: multi-file write-to-files must dispatch as a
+- [x] ~~**Metadata matcher: multi-file write-to-files must dispatch as a~~ — ⛔ dropped 2026-10-03: premise corrected by L11439 (owner 08-14: the write side is already backgrounded)
       background operation.** Owner request (2026-08-14): with "write to
       files" enabled and more than 1 file affected, the apply currently
       blocks the UI until every file is rewritten — at the measured
@@ -11521,7 +11521,7 @@ single-snapshot reads. Two follow-ups:
       Audit how many books already have "Unknown Author" baked into their
       organizer-tree paths while carrying resolvable metadata.
 
-- [ ] **E07 residue: 2 ambiguous duplicate-PID groups need a human pick.**
+- [ ] **E07 residue: 2 ambiguous duplicate-PID groups need a human pick.** — ❓ owner decision 2026-10-03: pick the canonical copy for the 2 ambiguous duplicate-PID groups
       The 2026-08-14 live census (`GET /api/v1/itunes/pid-integrity`) shows
       the duplicate-PID population is down to 2 groups — the same Alcatraz
       content present in both the organizer tree and the iTunes tree
@@ -11557,7 +11557,7 @@ The audit now carries a per-finding status column (verified against HEAD
 items that are NOT already tracked elsewhere, so they don't live only in an
 audit nobody reopens:
 
-- [ ] **SEC-2** — bootstrap still writes plaintext credential files
+- [ ] **SEC-2** — bootstrap still writes plaintext credential files — ❓ owner decision 2026-10-03: keep bootstrap's 0600 credential files, make them opt-in, or local-only?
       (`internal/server/bootstrap.go:108,:153`). Decide opt-in/local-only.
 - [ ] **SEC-4 residue** — no CSP header yet (middleware comment defers until a
       nonce/hash strategy is settled).
@@ -11566,7 +11566,7 @@ audit nobody reopens:
 - [x] **PERF-5** — `internal/itunes/backfill.go:60-68` offset pagination over ✅ DONE 2026-09-12 (#3277): both backfill passes read one snapshot; progress reports the real total.
       a mutable snapshot (same class as the AssignOrphanVGs bug; use
       cursor/`GetAllBooksFullFrom`).
-- [ ] **TOOL-1** — `testdata` is 2.2G tracked; decide fetched-dataset split.
+- [ ] **TOOL-1** — `testdata` is 2.2G tracked; decide fetched-dataset split. — ❓ owner decision 2026-10-03: split testdata (2.2G tracked) into a fetched dataset, given the LFS budget?
 - [ ] **FE-2/FE-3/FE-4** — the three stale-deps findings' line anchors have
       moved; re-anchor and verify (one sitting, all in web/src/pages).
 - [ ] ARCH-3/4/5/7/8 remain structural programs. **ARCH-8 is DONE
@@ -11912,7 +11912,7 @@ book and is most likely to go looking for another by the same author.
       `s.activityWriter` + `s.itunesActivityFn` threaded into `Plugin`, which is a
       design decision, not a move) or delete the stub files and their defs. Leaving
       them is what caused #2490's sibling bug: a stub that looks registrable.
-- [ ] **Wire `itunes.position-sync` or drop it.** `internal/itunes/service/position_sync.go`
+- [ ] **Wire `itunes.position-sync` or drop it.** `internal/itunes/service/position_sync.go` — ❓ owner decision 2026-10-03: wire itunes.position-sync (bidirectional position writes, dry run first) or drop it?
       implements a full bidirectional bookmark/play-count sync (`PositionSync.Sync()
       (pulled, pushed int)`) and **nothing in the codebase calls it** — the only
       reference is the TODO comment in the plugin stub. Wiring it turns on real writes
@@ -12327,16 +12327,16 @@ Found while measuring signal coverage for the missing-file repoint work; see
       `{track:02d}` name (repoint, never delete) and vanished-directory rows
       (delete is correct). `missing-file-repair` has no repoint mode and its
       per-book safety rule waves the recoverable rows through.
-- [ ] **Decide the 16,265 books with no surviving file** (was believed to be 5,
+- [ ] **Decide the 16,265 books with no surviving file** (was believed to be 5, — ❓ owner decision 2026-10-03: repoint, mark missing, or leave the fully-broken books?
       from a 120-book sample). Human decision, still open.
-- [ ] **`missing-file-repair` dry run hit the 20,000 `max_deletes` cap.** The true
+- [x] ~~**`missing-file-repair` dry run hit the 20,000 `max_deletes` cap.** The true~~ — ⛔ dropped 2026-10-03: contradicts the standing ban: book_file rows are never deleted as a repair (REPOINT); the cap on a retired op is moot
       repairable-row count is unmeasured; a capped apply looks complete but is not.
 - [ ] **1,006 missing rows are under the iTunes tree**, contradicting the
       `missing_file_audit.go` header comment that says none are. Investigate
       separately — the iTunes tree is hands-off.
 - [ ] **61 rows carry a mangled `/X:/books/itunes/Audiobooks` Windows path.**
 
-- [ ] **Decide what to do with the books whose EVERY `book_file` row is dead.** The
+- [x] ~~**Decide what to do with the books whose EVERY `book_file` row is dead.** The~~ — ⛔ dropped 2026-10-03: duplicate of L12330 (same decision)
       general repair is decided and built (`maintenance.missing-file-repair`, option
       "delete only where the book keeps a surviving file"), but it deliberately
       skips books with no surviving file — 5 of 120 in the sample. Deleting their
@@ -12706,7 +12706,7 @@ Explicitly LOW priority — per-book is fine for now.
   `DeleteNarrator` on the store at all — narrators live at `narrator:<id>` with no
   delete path, so the op cannot be written until that exists. Scope it alongside
   whatever decides the narrator identity question below.
-- [ ] **Decide what the 822 zero-book-but-has-files authors actually are.** Measured
+- [ ] **Decide what the 822 zero-book-but-has-files authors actually are.** Measured — ❓ owner decision 2026-10-03: purge the 822 zero-book-but-has-files authors (require_zero_files off) or relink them as lost-junction books?
   2026-08-17: of 4,975 zero-book authors, 4,153 also have zero files (unambiguous
   junk, purgeable today) and 822 have files. A zero book count with files present
   looks more like a book that lost its junction entry than an empty author, so the
@@ -12891,7 +12891,7 @@ transition on *that* job is worse than either defect alone, and it is why the pr
 the tiers statically rather than running a prod dry run to test them. Fix the params divergence
 before anyone is asked to trust a dry run of a repointing job.
 
-- [ ] **Store-parameter narrowing: 54 declarations remain.** Re-measured 2026-08-17 by AST.
+- [x] ~~**Store-parameter narrowing: 54 declarations remain.** Re-measured 2026-08-17 by AST.~~ — ⛔ dropped 2026-10-03: done: only 4 non-test `database.Store` parameters remain (NewServer, runCatalogHarvest, AttachProviderThrottleStore, guardAgainstKeyRegeneration), all root wiring
       Supersedes the earlier "24 remain" fragment, which was wrong — the method count (7)
       was right, the free-function count was low by 3, and it counted only the maintenance
       packages. Corrected totals:
@@ -12916,7 +12916,7 @@ before anyone is asked to trust a dry run of a repointing job.
 
 ### Missing-file lane — follow-ups after the report-only change (#2614)
 
-- [ ] **Run the classify pass in prod** and record the numbers.
+- [ ] **Run the classify pass in prod** and record the numbers. — ❓ owner decision 2026-10-03: schedule the missing-file-audit classify run on prod (doubles NAS stat load; not during a scan)?
       `POST /api/v1/operations/v2 {"def_id":"maintenance.missing-file-audit","params":{"classify":true}}`.
       This is the first figure that actually sizes the recoverable population — the
       earlier sample could not, because it is clustered by iteration order. Off by
@@ -12925,10 +12925,10 @@ before anyone is asked to trust a dry run of a repointing job.
       classify pass derived, never delete a row. The tombstone comment at the bottom of
       `internal/plugins/maintenance/missing_file_repair.go` says so at the site. Gate it
       on the classify pass having run clean (controls unresolved) for the rows it touches.
-- [ ] **Decide what happens to the 16,265 fully-broken books** (every file entry dead).
+- [ ] **Decide what happens to the 16,265 fully-broken books** (every file entry dead). — ❓ owner decision 2026-10-03: keep the 16,265 fully-broken books as missing-file rows for the content matcher, or quarantine them?
       Still untouched, still needs a human call. They are now structurally impossible to
       delete by accident.
-- [ ] **Missing-file audit Phase 1a still has no PR and is not mutation-tested.**
+- [x] ~~**Missing-file audit Phase 1a still has no PR and is not mutation-tested.**~~ — ⛔ dropped 2026-10-03: code gone: `git branch -a --contains 9b43f598` is empty and the auditpersist worktree is removed; nothing unmerged is left half-alive
       Committed as `9b43f598` on `feat/persist-missing-file-verdict` (`.worktrees/auditpersist`).
       Either finish it or delete the branch — a committed-but-unmerged change to an op
       that runs against prod is the worst of both states.
@@ -13465,7 +13465,7 @@ before anyone is asked to trust a dry run of a repointing job.
       starts the prebuilt binary, runs Playwright against it with `CI` unset so
       `reuseExistingServer` attaches instead of trying to `go build`.
 
-- [ ] **Per-field "Use File" / "Use Fetched" one-click apply is gone from Book Detail
+- [ ] **Per-field "Use File" / "Use Fetched" one-click apply is gone from Book Detail — ❓ owner decision 2026-10-03: accept the whole-form MetadataEditDialog, or restore per-field Use File / Use Fetched?
       — confirm that was intended.** `web/src/pages/BookDetail.tsx:1014-1015` now renders
       exactly two tabs (Info, Files & History). The old Tags/Compare tab listed every
       metadata field as a row with one-click **Use File** and **Use Fetched** buttons,
@@ -13734,7 +13734,7 @@ before anyone is asked to trust a dry run of a repointing job.
       **Acceptance:** a dispatched run against `main` reports 280 passed / 0 failed for
       chromium, and a PR touching `web/**` or `**.go` gets a blocking E2E check.
 
-- [ ] **You can no longer navigate between versions of a book.** Book Detail used to
+- [x] ~~**You can no longer navigate between versions of a book.** Book Detail used to~~ — ⛔ dropped 2026-10-03: fixed: web/src/components/book/BookDetailVersionGroup.tsx:38 RouterLink, :326 otherVersionsUrl link, per-version navigate
       have a "Versions" tab listing the group's other versions, each clickable to jump
       to it. `web/src/pages/BookDetail.tsx:1014-1015` now renders only Info and
       Files & History, and `BookDetailVersionGroup.tsx` contains no `RouterLink` — the
@@ -14194,7 +14194,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       now there is a mechanism and a number rather than a suspicion. The `.api-token` is
       still stale, but this answer did not need it.
 
-- [ ] **⚖️ DECIDE which sort indexes to enable — the design-doc cost estimate was ~10×
+- [ ] **⚖️ DECIDE which sort indexes to enable — the design-doc cost estimate was ~10× — ❓ owner decision 2026-10-03: confirm or extend the enabled_sort_indexes default ["year"] (config.go:2216) given the 10x cost?
       optimistic.** The machinery is built, tested and merged behind
       `enabled_sort_indexes`, defaulting to empty (today's behaviour exactly). What is
       left is choosing what to turn on, and that needs the real number rather than the
@@ -14709,7 +14709,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
         hiding an active filter leaves the user looking at a filtered list with
         no visible control to clear it.
 
-- [ ] **The library "Sort by" control no longer exists — 4 e2e tests target a
+- [x] **The library "Sort by" control no longer exists — 4 e2e tests target a — ✅ 2026-10-03: the control is back: web/src/components/audiobooks/SearchBar.tsx:185 onSortChange + :328 "Sort by" InputLabel; LibraryBookGrid.tsx:297/450 wire handleColumnSortChange
       surface that is gone.** Found 2026-08-09 while repairing
       `library-browser.spec.ts`.
 
@@ -14754,7 +14754,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       question — "you can no longer sort the library without switching views"
       — and should be raised rather than encoded into a test.
 
-- [ ] **The unified Dedup view has no e2e coverage at all.** Found 2026-08-09
+- [x] ~~**The unified Dedup view has no e2e coverage at all.** Found 2026-08-09~~ — ⛔ dropped 2026-10-03: code gone: the dedup_show_legacy toggle no longer exists; bands live in components/dedup/BandFilterBar.tsx and are exercised by dedup.spec.ts / dedup-operations.spec.ts
       while repairing `dedup.spec.ts`.
 
       `/dedup` was redesigned: it now renders a unified candidate surface
@@ -14935,7 +14935,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       also explain some fraction of the `[SILENCE]` sentinels and short/failed
       intro transcriptions.
 
-- [ ] **Require every operation to support `dry_run`, and enforce it at the
+- [x] ~~**Require every operation to support `dry_run`, and enforce it at the~~ — ⛔ dropped 2026-10-03: duplicate of L191 OPS-WITHOUT-PREVIEW-MODE (and L210)
       registry rather than by convention.** Any op that mutates state must be
       runnable in a mode that computes and reports exactly what it WOULD do,
       writing nothing — so it can be tested independently and reviewed before it
@@ -15651,7 +15651,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   `/var/lib/audiobook-organizer/series-denumber-2026-08-06.tsv`
   (`shape=bracketed`, group by `into_name`, anything with >3 rows is suspect).
 
-- [ ] **Give the 466 low-confidence series positions somewhere to go** — deferred
+- [ ] **Give the 466 low-confidence series positions somewhere to go** — deferred — ❓ owner decision 2026-10-03: reopen the 466 low-confidence series positions once items 1/2 (shattered regroup) are done?
   deliberately on 2026-08-06 (owner decision), revisit after owner items 1 and 2.
 
   `maintenance.series-denumber` now reports 466 series names carrying a bare
@@ -15802,7 +15802,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   These 3 are a clean, small, real test set for
   [[never-delete-re-associate]] — use them rather than inventing fixtures.
 
-- [ ] **Frontend framework versions — how far behind we actually are, and the
+- [x] ~~**Frontend framework versions — how far behind we actually are, and the~~ — ⛔ dropped 2026-10-03: done: web/package.json has react ^19.3.0, @mui/material ^9.3.1, vite ^8.2.1, typescript ^6.0.3, zustand ^5.0.15, eslint ^10.11.0, jsdom 30.0.1 — re-file TS 7 alone if wanted
   order to fix it in.** Surveyed 2026-08-06 at owner request ("are we on
   TypeScript 7 and the latest React?"). Answer: **no to both.**
 
@@ -15903,7 +15903,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   - [ ] **Wire into the regroup classifier**, outranking runtime where both exist.
         Validate by diffing against the 356 holds already measured under the
         runtime rule.
-  - [ ] **Wire into First Aid** as a tier-2 signal beside the duration probe, and
+  - [x] ~~**Wire into First Aid** as a tier-2 signal beside the duration probe, and~~ — ⛔ dropped 2026-10-03: contradicts owner 09-27: fixers live in the /review Repairs tab; no First Aid orchestrator exists in internal/
         let the verdict pick the fixer.
 
   ### Measured facts worth keeping
@@ -15928,7 +15928,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   to do" (silently dropped writes for the process lifetime), and an empty
   `intro_transcription` read as "needs transcribing" when it meant "has no file".
 
-- [ ] **Stand up a second Whisper worker on the spare CPU node.** Owner request
+- [ ] **Stand up a second Whisper worker on the spare CPU node.** Owner request — ❓ owner decision 2026-10-03: which host for a second Whisper worker (U0 decodes banned 09-19; LLM hosts are a pool), or drop?
   2026-08-06. Host prepared, worker not built. (Host address and credentials are
   fleet-internal — see the private infra notes, not this repo.)
 
@@ -16112,7 +16112,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   books), feeding a tier-3 ungroup fixer. See
   `.worktrees/link-integrity/PLAN.md`.
 
-- [ ] **Verify the server actually returns chapters to clients** — confirm the
+- [x] ~~**Verify the server actually returns chapters to clients** — confirm the~~ — ⛔ dropped 2026-10-03: verified: internal/server/handlers/abs/mapper.go:40-42 serves persisted chapters or synthesizes one per track; the real gap is the backfill (L16143)
   ABS-compatible surface serves chapter data wherever a client expects it, and
   that it is populated rather than an empty array. Owner request 2026-08-05.
   *(2026-08-14: tracked as B06 in the task breakdown; `mapper.go` serves stored
@@ -16204,7 +16204,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   relink or import will look lossy for reasons that have nothing to do with
   playlists.
 
-- [ ] **Reading status and review/rating must sync from the app back to the
+- [ ] **Reading status and review/rating must sync from the app back to the — ❓ owner decision 2026-10-03: pick a shape for rating/review sync (ABS has no per-item rating API — custom endpoint?) or drop that half
   server** — owner request 2026-08-05: set it in the app, it persists server-side.
   Mirror how Audiobookshelf does it rather than inventing a shape.
   *(2026-08-14: the READ-STATUS half exists — `IsFinished`/merge semantics live in
@@ -16236,7 +16236,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   but never comes back on the next sync reads to the user as data loss, and it is
   the kind of bug that only shows up after reinstalling the app.
 
-- [ ] **Use Deluge as a metadata and identity source** — owner idea 2026-08-05:
+- [ ] **Use Deluge as a metadata and identity source** — owner idea 2026-08-05: — ❓ owner decision 2026-10-03: schedule Deluge as a metadata/identity source, or leave unscheduled behind the content matcher?
   "connect to deluge, see all the audiobooks it has, the titles it has, any other
   information and use that as well as other things to really figure out and match
   a book."
@@ -16267,7 +16267,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   Pairs with [[deluge-file-parts-grouping-check]], which uses the same connection
   for a different purpose.
 
-- [ ] **Use Deluge's per-torrent file list as ground truth for GROUPING** — owner
+- [ ] **Use Deluge's per-torrent file list as ground truth for GROUPING** — owner — ❓ owner decision 2026-10-03: schedule Deluge file-list grouping (a torrent's file list is a book boundary)?
   idea 2026-08-05: "Deluge shows you all the file parts, we could easily pull
   that for all torrents and then match them to their files and if some groups are
   wildly wrong we know something is fucked up."
@@ -16366,7 +16366,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   are computed on blank evidence — the same failure that let 41 of 43 "confident"
   candidates propose merging distinct novels.
 
-- [ ] **Canary the multidisc applies behind a before/after snapshot** — owner
+- [ ] **Canary the multidisc applies behind a before/after snapshot** — owner — ❓ owner decision 2026-10-03: did the 138-hold multidisc apply already run under review_apply_enabled=true (since 08-17)? still want the snapshot canary?
   item 3 (2026-08-05). 138 pending `regroup.multidisc` holds; running them
   requires flipping `review_apply_enabled`, which is OFF in prod.
 
@@ -16419,7 +16419,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   Rollback artefacts on the server:
   `/var/lib/audiobook-organizer/series-denumber-{,APPLY-,VERIFY-}2026-08-06.tsv`.
 
-- [ ] **"First Aid" — one sequenced library validate + repair system** — owner
+- [x] ~~**"First Aid" — one sequenced library validate + repair system** — owner~~ — ⛔ dropped 2026-10-03: contradicts owner 09-27: fixers live in the /review Repairs tab (web/src/components/review/RepairsPanel.tsx); surviving sub-items stay under that design
   design 2026-08-05: *"one big system that basically had a investigation →
   retesting with more advanced situations → fixers."* Architecture and locked
   decisions: [`.claude/notes/2026-08-05-first-aid-architecture.md`].
@@ -16439,12 +16439,12 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   actionable — idempotent by construction.
 
   **Sub-tasks still open:**
-  - [ ] Tier-2 duration probe for the **1,019** directory-shaped books that went
+  - [x] ~~Tier-2 duration probe for the **1,019** directory-shaped books that went~~ — ⛔ dropped 2026-10-03: superseded by maintenance.probe-directory-books (#2162); the apply decision is L16532
     to review purely because `classifyUnlinked` passes `nil` durations. They are
     un-probed, not unknowable.
   - [ ] Duplicate detection + **combine-by-template** + version-group (the
     Successors class) — see [[never-delete-re-associate]] below.
-  - [ ] Orchestrator + frontend button, dry-run by default, no schedule.
+  - [x] ~~Orchestrator + frontend button, dry-run by default, no schedule.~~ — ⛔ dropped 2026-10-03: contradicts owner 09-27: a second orchestrator/button duplicates the Repairs tab
   - [ ] **Missing-input triggering:** when a check's input is absent, ENQUEUE the
     op that produces it. `OperationDef.Requires` already supports
     `ReqOpCompleted` (with `AllFiles`) and `ReqFieldSet`, with a dependency graph
@@ -16529,7 +16529,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   (100% agreement vs per-book `/files` across 4,774 books); the single-book
   endpoint does not populate it.
 
-- [ ] **Remaining after the first apply:** 1,019 directory-shaped books held for
+- [ ] **Remaining after the first apply:** 1,019 directory-shaped books held for — ❓ owner decision 2026-10-03: approve the probe-directory-books apply for the rows the dry run cleared (93 missing → reconcile-scan)?
   review and 93 missing reported only (already `reconcile-scan`'s remit; some may
   be offline mounts rather than deleted audio).
 
@@ -16788,7 +16788,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
 
       Fixing the per-book cost is the real answer; raising the timeout only hides it.
 
-- [ ] **Corrected book aggregates are invisible until memdb refreshes.**
+- [x] ~~**Corrected book aggregates are invisible until memdb refreshes.**~~ — ⛔ dropped 2026-10-03: fixed: internal/database/pebble_store_book_aggregates.go:195 RecomputeBookAggregates calls notifyBooksNeedReindex
       Observed on the first `maintenance.dedupe-book-file-rows` canary
       (2026-08-03): 338 redundant rows were deleted from 10 books and every
       duration was **unchanged** immediately afterwards. `total_file_count` still
@@ -17188,19 +17188,19 @@ Pebble-direct before deciding, because the memdb projection strips
       The 9,352 skipped rows are the reassuring part: they sit *inside* the same 214
       affected books and were correctly left alone, so the predicate discriminates per
       row, not per book.
-- [ ] **`The Trapped Mind Project` is a 13-second stub, not an audiobook**
+- [ ] **`The Trapped Mind Project` is a 13-second stub, not an audiobook** — ❓ owner decision 2026-10-03: delete/hide the 13-second stub row, or keep it as a wanted placeholder?
       (`01KNDB97CWFSMSEY68P82VDRBF`). Nothing to restore — but two things about it are
       still wrong and worth chasing as a class:
       its book-level `file_size` reads **532,805,172** (532 MB) for a 91 KB file, and
       the API reports `file_exists: true` for a `file_path` that is absent from disk.
       Both are book-level fields disagreeing with the underlying file. See the
       duration/filesize aggregation item — same family of defect.
-- [ ] **5 books are multi-copy, not row-duplicated** — distinct paths for the same
+- [x] ~~**5 books are multi-copy, not row-duplicated** — distinct paths for the same~~ — ⛔ dropped 2026-10-03: superseded by the duplicate-copies fixer #3645 (merged 10-02)
       book (`Wind and Truth` 426 files, `Ajax's Ascension` 272). Deduping rows is the
       wrong tool; these need regrouping and should surface in the review queue.
 - [ ] **`Call to Arms` (9,957h)** — 96 *distinct* files, unchanged by the dedupe run.
       A third shape, not yet diagnosed.
-- [ ] **Corrected aggregates are invisible until memdb refreshes** — see the
+- [x] ~~**Corrected aggregates are invisible until memdb refreshes** — see the~~ — ⛔ dropped 2026-10-03: duplicate of L16791 (fixed)
       2026-08-04 entry on `RecomputeBookAggregates`. Not a duration bug, but it makes
       every duration fix look like a no-op until a restart.
 
@@ -17600,7 +17600,7 @@ far more than chapters.
       — `go test ./internal/server/middleware/... -run TestABSAuth_NonIdentity -v` all PASS
       (commit `ec2a6c83 fix(abs): let a non-identity Access assertion fall through to the bearer`).
 
-- [ ] **TODO-SSO-EDGE** Neither native-app auth mode is actually configured at
+- [ ] **TODO-SSO-EDGE** Neither native-app auth mode is actually configured at — ❓ owner decision 2026-10-03: service-token vs bypass-path for native-app auth at the Cloudflare edge (cloudflare-one repo)?
       the Cloudflare edge, despite both being fully written up in
       `jdfalk/cloudflare-one` `access/audiobook-app-policies.md`. Measured via
       the CF API on 2026-07-31: the `books.jdfalk.com` Access app has exactly
@@ -17633,7 +17633,7 @@ far more than chapters.
       The tunnel connector runs on rpi1-3, not on the origin host, so the
       loopback bind must account for that hop.
 
-- [ ] **TODO-SEC-JWT** Rotate `ABS_JWT_SECRET` — it was pasted in plaintext into
+- [ ] **TODO-SEC-JWT** Rotate `ABS_JWT_SECRET` — it was pasted in plaintext into — ❓ owner decision 2026-10-03: schedule the ABS_JWT_SECRET rotation (logs every ABS client out)?
       a chat transcript on 2026-07-31. It signs every ABS session token. Rotate
       it in `deploy/local.conf` (gitignored — never commit or print it; redact
       with `sed -E 's/(SECRET|TOKEN|KEY)=[^ ]*/\1=<redacted>/g'` when dumping a
@@ -17649,7 +17649,7 @@ far more than chapters.
       rule silently breaks metadata and transcription, so test before claiming
       it works.
 
-- [ ] **TODO-SRVTIMEOUT** Split or speed up the `internal/server` test package —
+- [x] **TODO-SRVTIMEOUT** Split or speed up the `internal/server` test package — — ✅ 2026-10-03: PR #3628 (merged 2026-09-29) shards the slow Go test packages; Makefile:196/227 -timeout 25m
       it runs 434–480 s against Go's 600 s default per-package timeout, leaving
       under 30% headroom. Any concurrent load on the machine tips the whole
       package into a timeout that is indistinguishable from a deadlock: the
@@ -17905,7 +17905,7 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   all (verified against its `Package.swift`), but Absorb goes offline after 5 failed
   reconnects, and expects `emit('auth', <raw token string>)`. Deprioritized: the primary
   client ships without it.
-- [ ] **ABS-SYNC: Phase 8 — topology, runbook, migration guide.** Cloudflare Access
+- [ ] **ABS-SYNC: Phase 8 — topology, runbook, migration guide.** Cloudflare Access — ❓ owner decision 2026-10-03: drop Phase 8 docs or keep a one-page runbook (docs low priority 09-12; edge half is L17603)?
   service token in a **dedicated Service Auth policy ordered FIRST** (the trap that bit
   users in both clients' issue trackers), the cover/image bypass (§1.9.5), tunnel-level
   JWT enforcement, and the client compatibility matrix. Runbook must record: never trust
@@ -17994,7 +17994,7 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   `/rebuild-full` against the now-real library; define the adopt-base steady-state.
   Dry-run + sample + owner sign-off before any destructive apply.
 
-- [ ] **iTunes book_file PID uniqueness — apply the backfill repair (gated).** Forward
+- [ ] **iTunes book_file PID uniqueness — apply the backfill repair (gated).** Forward — ❓ owner decision 2026-10-03: approve POST /itunes/pid-repair apply on prod (dry run exists)?
   invariant shipped (`CreateBookFile` transfers a duplicate PID to the new row) + census
   (`GET /itunes/pid-integrity`) + repair (`POST /itunes/pid-repair`) endpoints built and
   tested. Prod census: 8,987 duplicate PIDs (8,762 same-file, 225 diff-file, 94 on multiple
@@ -18446,7 +18446,7 @@ H1/H2/H3/H4/H8/H9/M1/M2/M3/M7 logging batch (T05) (#2010).
       > ⚠️ **7,878 is the SANDBOX number. Prod's is 7,891 of 10,319.** These are two
       > populations, not a drift — the sandbox replica had 15 fewer candidates. A 2026-08-11
       > docs audit mistakenly reported them as a contradiction; they are both correct.
-- [ ] **T03** — **sandbox** purge wave: `maintenance.dedup-exact-triage {"apply":true}` (dismiss
+- [ ] **T03** — **sandbox** purge wave: `maintenance.dedup-exact-triage {"apply":true}` (dismiss — ❓ owner decision 2026-10-03: go for the sandbox dedup-exact-triage purge wave (purge still blocked 09-26)?
       ~7,878 purgeable, op merged in #2008) → purge-stale → full-scan → measure vs 9,074
       baseline. Needs sandbox redeploy with current main first. NOT yet run **on the sandbox**
       — note prod (T04) went ahead and ran, so this is now a validation-parity gap, not a
@@ -18464,7 +18464,7 @@ H1/H2/H3/H4/H8/H9/M1/M2/M3/M7 logging batch (T05) (#2010).
 - [x] **T10** — F6: legacy book-merge rerouted off hard-delete to soft-delete + external-ID reassignment + ITL removal (#2007)
 - [x] **T11** — F7 (quarantine → RunItems) · R-9 (path_repair pool + 3 concurrency hazards) · R-8 (unknown-duration group guard) (#2004)
 - [x] **T12** — devops: 8 IP-scrub scripts · op-stall alert (commented; metric TBD, Infra #36) · coverage floor on PR gate · systemd dedupe · credential entropy (#2001)
-- [ ] **T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary) — in progress
+- [ ] **T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary) — in progress — ❓ owner decision 2026-10-03: drop T13 with T03, or keep the one exec-summary line once T03 runs?
       **PARTIAL 2026-08-22 (PR #2712, TASK-060) — box stays open by design, T03 has not run.**
       Found `docs/dedup/STATUS.md`'s "Sandbox validation results" table carrying
       **production's** numbers under a sandbox heading: its purge-apply row
