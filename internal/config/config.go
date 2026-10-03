@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.130.0
+// version: 1.131.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-03
 
@@ -1343,8 +1343,14 @@ type Config struct {
 	// used during scanning to detect chapter-named files. If a group of ≥ 3 files
 	// sharing the same base title (e.g. "01 - My Book", "02 - My Book") each
 	// averages below this duration, they are consolidated into one book record.
-	// Default 10. Set to 0 to disable consolidation.
-	ChapterConsolidationThresholdMin int `json:"chapter_consolidation_threshold_min"`
+	// Default 10 (DefaultChapterConsolidationThresholdMin). 0 or less means the
+	// default, never "disabled": until 2026-10-03 a 0 switched consolidation
+	// off, and because 0 is also what any partially-populated Config carries, a
+	// stray zero silently stopped multi-file grouping for eleven days (12,525
+	// books imported without book_file rows). Read it through
+	// ResolveChapterConsolidationThresholdMin; Validate and SaveConfigToDatabase
+	// rewrite a stored zero to the default with a warning.
+	ChapterConsolidationThresholdMin int `json:"chapter_consolidation_threshold_min" mapstructure:"chapter_consolidation_threshold_min"`
 	// RepairChapterMaxMin is the longest a single file may run (minutes) and
 	// still count as a chapter when a REPAIR JOB (the fragment consolidation
 	// fixer) folds separately imported chapter files into one book. It is
@@ -2324,7 +2330,7 @@ func InitConfig() {
 	defaultWorkers := max(runtime.NumCPU(), 4)
 	viper.SetDefault("concurrent_scans", defaultWorkers)
 	viper.SetDefault("scan_standdown_grace_seconds", 45)
-	viper.SetDefault("chapter_consolidation_threshold_min", 10)
+	viper.SetDefault("chapter_consolidation_threshold_min", DefaultChapterConsolidationThresholdMin)
 	viper.SetDefault("repair_chapter_max_min", 120)
 	viper.SetDefault("operation_timeout_minutes", 30)
 	viper.SetDefault("log_retention_days", 90)
@@ -3427,6 +3433,14 @@ func (c *Config) Validate() error {
 		errs = append(errs, "embedding.vector_backend must be 'hnsw' or 'chromem'")
 	}
 
+	// chapter_consolidation_threshold_min: normalize, never reject. A 0 in a
+	// stored blob or config file predates the rule that 0 means the default,
+	// and refusing to start over it would turn a recovered setting into an
+	// outage. Validate runs after InitConfig, after the database overlay and
+	// on every PUT candidate, so this is where a zero is caught on every path
+	// that loads or changes config. See ResolveChapterConsolidationThresholdMin.
+	normalizeChapterConsolidationThreshold(c, "the loaded configuration")
+
 	// Backup compression is validated HERE, at startup and on PUT /config,
 	// rather than at backup time.
 	//
@@ -3613,7 +3627,7 @@ func ResetToDefaults() {
 			ConcurrentScans:                  max(runtime.NumCPU(), 4),
 			ScanProgressEvery:                20,
 			ScanStandDownGraceSeconds:        45,
-			ChapterConsolidationThresholdMin: 10,
+			ChapterConsolidationThresholdMin: DefaultChapterConsolidationThresholdMin,
 			RepairChapterMaxMin:              120,
 			OperationTimeoutMinutes:          30,
 			MinBookSizeBytes:                 5 * 1024 * 1024,

@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package logger
 
@@ -9,7 +9,7 @@ package logger
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
 	slogRatchetFileCeiling = 310
-	slogRatchetCallCeiling = 1787
+	slogRatchetCallCeiling = 1785
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -56,8 +56,8 @@ var slogRatchet = map[string]int{
 	"internal/audioutil/duration.go":                             1,
 	"internal/backup/backup.go":                                  9,
 	"internal/config/ai_endpoints.go":                            4,
-	"internal/config/blob_default_audit.go":                      2,
-	"internal/config/persistence.go":                             48,
+	"internal/config/blob_default_audit.go":                      1,
+	"internal/config/persistence.go":                             47,
 	"internal/config/removed_keys.go":                            1,
 	"internal/config/state_dir.go":                               1,
 	"internal/config/update_service.go":                          10,

@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package config
 
@@ -838,7 +838,6 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			// suppressed precisely because that is a behaviour change an
 			// operator must be able to see and audit after an upgrade.
 			logDefaultsPreservedOverBlob(blobStr, loaded)
-			logExplicitChapterConsolidationDisable(blobStr, loaded)
 		} else {
 			slog.Warn("Failed to parse config_blob — falling back to individual keys", "err", err)
 		}
@@ -935,6 +934,11 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 		if c.OpenLibraryDumpDir == "" && c.RootDir != "" {
 			c.OpenLibraryDumpDir = filepath.Join(c.RootDir, "openlibrary-dumps")
 		}
+		// A stored 0 (blob, legacy row or file fallback) is rewritten to the
+		// default here, once, with a warning naming the database as the source,
+		// rather than left for the caller's Validate. Every layer above can
+		// carry it, and the blob that produced it is healed on the next save.
+		normalizeChapterConsolidationThreshold(c, "the settings database")
 	})
 
 	// LAST: re-apply environment-authoritative keys (OAuth / Cloudflare Access /
@@ -1563,10 +1567,11 @@ func SaveConfigToDatabase(store database.SettingsStore) error {
 	// build the blob; a concurrent Mutate could otherwise see a torn read.
 	// Build a safe copy with secrets zeroed — they are saved separately (encrypted).
 	safeConfig := Snapshot()
-	if safeConfig.ChapterConsolidationThresholdMin <= 0 {
-		slog.Warn("config: saving chapter consolidation disabled; album-less multi-file books will not be grouped",
-			"chapter_consolidation_threshold_min", safeConfig.ChapterConsolidationThresholdMin)
-	}
+	// Never persist a 0 threshold: it would reload as 0 on every boot. The
+	// live value still resolves to the default through
+	// ResolveChapterConsolidationThresholdMin, so writing the default here only
+	// makes the stored blob say what the process actually does.
+	normalizeChapterConsolidationThreshold(&safeConfig, "the config being saved")
 	safeConfig.OpenAIAPIKey = ""
 	safeConfig.GoogleBooksAPIKey = ""
 	safeConfig.HardcoverAPIToken = ""
