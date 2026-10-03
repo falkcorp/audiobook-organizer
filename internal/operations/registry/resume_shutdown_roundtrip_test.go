@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume_shutdown_roundtrip_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 0b5c4a19-7e2d-4f83-9a61-3c8d5e7f012a
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package registry_test
 
@@ -287,9 +287,13 @@ func TestResume_ShutdownTimeoutLeavesQuiescedAndResumable(t *testing.T) {
 // r2.Start. A real shutdown is still exercised here by the blocker, and
 // end-to-end by TestResume_RealShutdownLeavesNothingForTheSweep.
 //
-// The dispatcher's check-then-act window is a real defect in its own right --
-// it starts brand-new runs after Shutdown begins, each then recorded interrupted
-// -- but it is not what this PR set out to fix. Filed as OPS-V2-DISPATCH-RACE.
+// The dispatcher's check-then-act window was a real defect in its own right --
+// it started brand-new runs after Shutdown began -- filed as
+// OPS-V2-DISPATCH-RACE and fixed 2026-10-03: executeRun now checks shuttingDown
+// under r.mu before registering its handle and leaves the row queued, and
+// dispatchCycle re-checks the flag in its claim block
+// (dispatch_shutdown_race_test.go). The plant stays because it is still the
+// simplest sound fixture; it no longer works around a live bug.
 func TestResume_QueuedAtShutdownIsRestartedNotDropped(t *testing.T) {
 	store := newFakeStore()
 	r1 := newRoundtripRegistry(store, 1)

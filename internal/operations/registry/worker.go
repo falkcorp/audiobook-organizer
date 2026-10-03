@@ -118,9 +118,13 @@ type runHandle struct {
 // (worker.go). Between those two events a handle is present in r.running with
 // cancel == nil. Callers that walk r.running and cancel (Shutdown, Cancel, the
 // watchdog) must go through this guard so they no-op on a stub instead of
-// panicking with a nil-pointer dereference. For Shutdown this is fully correct:
-// shuttingDown is set before the walk, so a stubbed op is never executed by the
-// worker that eventually picks it up.
+// panicking with a nil-pointer dereference. For Shutdown a no-op on a stub is
+// correct only because of the shutdown pickup gate in executeRun: shuttingDown
+// is set before the walk, and the worker that eventually picks the stub up
+// checks the flag under r.mu before registering its full handle, so a stubbed
+// op is never executed. That gate did not exist until 2026-10-03 -- this
+// comment claimed it anyway, and stubs ran to completion after Shutdown began
+// (OPS-V2-DISPATCH-RACE).
 func (h *runHandle) cancelIfActive() {
 	if h != nil && h.cancel != nil {
 		h.cancel()
@@ -287,6 +291,37 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		// bell drops the op instead of leaving it phantom-"running".
 		r.publishOpTerminal(qr.opID, qr.defID, "canceled")
 		r.logger.Info("registry: dropped run canceled while queued in worker channel", "op_id", qr.opID, "def_id", qr.defID)
+		return false
+	}
+	// Shutdown pickup gate (OPS-V2-DISPATCH-RACE). A run that reaches a worker
+	// after Shutdown has begun must not start. Two paths deliver one here:
+	//   - a dispatchCycle that passed its shuttingDown check before the flag
+	//     flipped, then claimed and sent the row afterwards;
+	//   - a claim already sitting in the buffered nextRun channel when
+	//     Shutdown began.
+	// Either way Shutdown cannot stop it: the handle it gathered (if any) was
+	// the dispatcher's stub, whose cancel funcs are nil, so cancelWithCause was
+	// a no-op and the run would execute to completion on a live context -- the
+	// "dispatched op" after "registry: shutting down" then "status=completed"
+	// sequence measured on CI run 32655184277.
+	//
+	// This check is the guarantee. Shutdown stores the flag BEFORE it gathers
+	// r.running under r.mu, and this check runs under r.mu too, so exactly one
+	// of two things happens: this worker took the lock first, registered the
+	// full handle, and Shutdown's gather sees it and cancels it with
+	// ErrShutdown (the normal interrupted path); or Shutdown flipped the flag
+	// first and this worker sees it here and never starts the run.
+	//
+	// It sits after the queuedCancel check so a user cancel still wins (that
+	// row ends canceled, not queued), and before the queued->running
+	// compare-and-set, so no status is written: the row stays "queued", which
+	// is exactly what it is -- it never ran -- and the next Start dispatches it
+	// (TestResume_QueuedAtShutdownIsRestartedNotDropped).
+	if r.shuttingDown.Load() {
+		r.mu.Unlock()
+		r.releaseRunHandle(qr.opID)
+		r.logger.Info("registry: run not started, shutdown in progress; left queued for the next start",
+			"op_id", qr.opID, "def_id", qr.defID)
 		return false
 	}
 	r.running[qr.opID] = h

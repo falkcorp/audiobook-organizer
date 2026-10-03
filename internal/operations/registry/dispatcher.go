@@ -1,5 +1,5 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-10-03
 
@@ -152,6 +152,18 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 
 		// All gates passed — claim and dispatch.
 		r.mu.Lock()
+		// Shutdown re-check (OPS-V2-DISPATCH-RACE). The check at the top of
+		// this cycle is a whole store list plus a dispatch loop stale by now;
+		// Shutdown can have begun anywhere in between. Stop claiming the moment
+		// it has: nothing claimed after this point could run anyway (the
+		// worker's pickup gate in executeRun drops it, and that gate -- not
+		// this check -- is the guarantee, because the flag can still flip
+		// between this unlock and the channel send). This is the early exit
+		// that keeps a shutdown from logging "dispatched op" lines at all.
+		if r.shuttingDown.Load() {
+			r.mu.Unlock()
+			return
+		}
 		// Re-check under write lock to avoid TOCTOU.
 		if _, alreadyClaimed := r.running[row.ID]; alreadyClaimed {
 			r.mu.Unlock()
