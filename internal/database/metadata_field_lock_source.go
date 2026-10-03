@@ -1,5 +1,5 @@
 // file: internal/database/metadata_field_lock_source.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: bee79451-3875-44ce-b66f-6dda1128e3ce
 // last-edited: 2026-10-03
 
@@ -35,6 +35,12 @@ const repairLockPrefix = "repair:"
 
 // RepairLockSource is the LockSource a Repairs apply operation writes.
 func RepairLockSource(opID string) string { return repairLockPrefix + opID }
+
+// RepairLockOp returns the operation id a repair lock source names.
+func RepairLockOp(src string) (string, bool) {
+	op, ok := strings.CutPrefix(src, repairLockPrefix)
+	return op, ok && op != ""
+}
 
 // IsRepairLockSource reports whether src names a Repairs apply.
 func IsRepairLockSource(src string) bool { return strings.HasPrefix(src, repairLockPrefix) }
