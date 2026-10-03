@@ -1,7 +1,7 @@
 // file: internal/metadata/junk_title.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4d7a2c91-3e6b-4f08-a1d5-8c2e9b7f4a13
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package metadata
 
@@ -97,6 +97,32 @@ var (
 	// a real title's number, which is what keeps "10-Minute Toughness" and
 	// "21-Day Sugar Detox" titles.
 	zeroPaddedPrefixRe = regexp.MustCompile(`^0\d{1,2}(?:\s+|-+)(\S.*)$`)
+	// Shapes found on prod 2026-10-03 (metadata/junk_title_test.go has one
+	// fixture per shape and the negatives each must leave alone):
+	//   - discTrackPrefixRe "1-06 Chapter 1_ Return to Peril", "10-13 …": a
+	//     disc and a track, then a space and the rest ("1-2-3 Magic" has no
+	//     space after its second number).
+	//   - yearPrefixRe "1987 - In the Flesh": a four-digit year is a prefix
+	//     only with a spaced hyphen after it ("1988 Metrophage" is a title).
+	//   - dotNoSpacePrefixRe "01.Victory": zero-padded only ("1.5" stays).
+	//   - decimalPositionRe "12.1 Aftermath", "02.02 What Have I Done?": a
+	//     two-digit or zero-padded position with a decimal part ("2.5 Men"
+	//     stays).
+	//   - colonPrefixRe "4:Historical Crisis", "01: A New Beginning": 1-3
+	//     digits, a colon, then a letter ("3:10 to Yuma" and "2001: A Space
+	//     Odyssey" stay).
+	//   - positionOfTotalRe "01/52 - Leviathan Falls", "01/33 Invasive
+	//     Procedures": the space is required ("11/22/63" stays).
+	//   - wideUnderscorePrefixRe "13_Whispers of the Nether": two or three
+	//     digits, so "3_Body" keeps its number.
+	discTrackPrefixRe      = regexp.MustCompile(`^\d{1,2}-\d{2,3}\s+(\S.*)$`)
+	yearPrefixRe           = regexp.MustCompile(`^(?:1[89]|20)\d\d\s+-+\s+(\S.*)$`)
+	dotNoSpacePrefixRe     = regexp.MustCompile(`^0\d{1,2}\.(\pL.*)$`)
+	decimalPositionRe      = regexp.MustCompile(`^(?:0\d|\d{2,3})\.\d{1,2}\s+(\pL.*)$`)
+	colonPrefixRe          = regexp.MustCompile(`^\d{1,3}:\s*(\pL.*)$`)
+	positionOfTotalRe      = regexp.MustCompile(`^\d{1,3}/\d{1,3}\s+(?:-+\s+)?(\S.*)$`)
+	wideUnderscorePrefixRe = regexp.MustCompile(`^\d{2,3}_+(\pL.*)$`)
+	numberPrefixShapes     = []*regexp.Regexp{discTrackPrefixRe, yearPrefixRe, dotNoSpacePrefixRe, decimalPositionRe, colonPrefixRe, positionOfTotalRe, wideUnderscorePrefixRe}
 	// punctuationPrefixRe: leading punctuation that no title starts with.
 	// Quotes, apostrophes, brackets and "¿¡" are excluded ("'Salem's Lot"),
 	// and so are dots touching a letter ("...And Justice for All").
@@ -182,6 +208,11 @@ func stripNumberPrefix(t string) (string, bool) {
 	if m := zeroPaddedPrefixRe.FindStringSubmatch(t); m != nil {
 		return strings.TrimSpace(m[1]), true
 	}
+	for _, re := range numberPrefixShapes {
+		if m := re.FindStringSubmatch(t); m != nil {
+			return strings.TrimSpace(m[1]), true
+		}
+	}
 	return "", false
 }
 
@@ -191,6 +222,10 @@ func stripNumberPrefix(t string) (string, bool) {
 func StripJunkTitlePrefix(title string) (string, bool) {
 	t := strings.TrimSpace(title)
 	if _, ok := util.NumberedBookSortForm(t); ok {
+		return "", false
+	}
+	if IsChapterOnlyTitle(t) {
+		// "77_copy1", "28_4": there is no title behind the number.
 		return "", false
 	}
 	for range 3 { // "01 - - Eldest": at most a few stacked prefixes
@@ -205,11 +240,18 @@ func StripJunkTitlePrefix(title string) (string, bool) {
 		}
 		t = rest
 	}
-	if t == strings.TrimSpace(title) || len([]rune(t)) < 2 || ClassifyJunkTitle(t) != JunkNone {
+	if t == strings.TrimSpace(title) || len([]rune(t)) < 2 || ClassifyJunkTitle(t) != JunkNone || junkResidueRe.MatchString(t) {
 		return "", false
 	}
 	return t, true
 }
+
+// junkResidueRe is what is left behind a stripped prefix when the title was a
+// chapter file's name all along: a chapter marker with its number or spelled
+// number ("Chapter 1_ Return to Peril", "Chapter Two - The Hunter"), a copy
+// suffix ("copy1"), or a track-count tag ("(138-track)"). The junk-title
+// fixer proposed every one of these as a book title on prod 2026-10-03.
+var junkResidueRe = regexp.MustCompile(`(?i)^(?:(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_\-]*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(?:[^\pL\d]|$)|copy\s*\d+$|\(\d+-track\)$)`)
 
 // NarratorCreditName returns the name a "Read by <name>" / "Narrated by
 // <name>" / "Performed by <name>" title credits, and whether the title has
