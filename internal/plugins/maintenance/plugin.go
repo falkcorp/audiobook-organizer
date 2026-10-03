@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.62.0
+// version: 1.63.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-10-03
 
@@ -57,6 +57,9 @@ func (p *Plugin) Repairs() *repairs.Registry {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 		if err := p.repairsReg.Register(newDuplicateCopiesFixer(p)); err != nil {
+			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
+		}
+		if err := p.repairsReg.Register(newSwappedTitleAuthorFixer(p)); err != nil {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 	})
