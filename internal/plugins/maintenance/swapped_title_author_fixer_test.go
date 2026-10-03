@@ -552,3 +552,187 @@ func TestSwappedTitleAuthorFixer_TwoSpellingsMintOneAuthor(t *testing.T) {
 	require.Equal(t, pikes[0].ID, *l.book("a").AuthorID)
 	require.Equal(t, pikes[0].ID, *l.book("b").AuthorID)
 }
+
+// A title of one or two words is weak identity: another book may share it.
+// Such a row applies only when something besides the title ties the provider
+// record to the book; a narrator or ASIN a metadata fetch filled in does not
+// count, since it was copied from the record it would corroborate.
+func TestSwappedTitleAuthorFixer_ShortTitleNeedsCorroboration(t *testing.T) {
+	l := newSwapLib(t)
+	lib := "/lib/Short/"
+	l.add(swapBook{name: "bare", title: "read by narrator", storedAuthor: "Descent",
+		provTitle: "Descent", provAuthor: "Tracy Gregory", files: []string{lib + "Descent/book.m4b"}})
+	l.add(swapBook{name: "read-by", title: "read by Kim Reader", narrator: "Kim Reader", storedAuthor: "Fury",
+		provTitle: "Fury", provAuthor: "Henry Kuttner", prov: map[string]any{"narrator": "Kim Reader"},
+		files: []string{lib + "Fury/book.m4b"}})
+	l.add(swapBook{name: "runtime", title: "read by narrator", storedAuthor: "Lust",
+		provTitle: "Lust", provAuthor: "Ann Writer", duration: 10*3600 + 300, prov: map[string]any{"audible_runtime_min": 600},
+		files: []string{lib + "Lust/book.m4b"}})
+	l.add(swapBook{name: "runtime-off", title: "read by narrator", storedAuthor: "Titans",
+		provTitle: "Titans", provAuthor: "Ben Writer", duration: 3 * 3600, prov: map[string]any{"audible_runtime_min": 600},
+		files: []string{lib + "Titans/book.m4b"}})
+	l.add(swapBook{name: "asin", title: "read by narrator", storedAuthor: "Majestic",
+		provTitle: "Majestic", provAuthor: "Cal Writer", prov: map[string]any{"asin": "B00TEST123"},
+		files: []string{lib + "Majestic/book.m4b"}})
+	l.add(swapBook{name: "circular", title: "read by narrator", narrator: "Pat Voice", storedAuthor: "Vengeance",
+		provTitle: "Vengeance", provAuthor: "Dee Writer", prov: map[string]any{"narrator": "Pat Voice"},
+		files: []string{lib + "Vengeance/book.m4b"}})
+	asin := "B00TEST123"
+	_, err := l.store.ModifyBook(l.ids["asin"], func(b *database.Book) error { b.ASIN = &asin; return nil })
+	require.NoError(t, err)
+	// The circular book's narrator was filled in by a metadata fetch.
+	prev, next := `""`, `"Pat Voice"`
+	require.NoError(t, l.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: l.ids["circular"],
+		Field: database.HistoryFieldName("narrator"), PreviousValue: &prev, NewValue: &next, ChangeType: "fetched", Source: "Audible"}))
+	// A long title needs nothing more.
+	l.add(swapBook{name: "long", title: "read by narrator", storedAuthor: "The Long Road Home Again",
+		provTitle: "The Long Road Home Again", provAuthor: "Eve Writer", files: []string{lib + "Long/book.m4b"}})
+
+	_, rows := l.plan()
+	for _, name := range []string{"bare", "runtime-off", "circular"} {
+		require.Equal(t, junkSkipNeedsManual, rows[name].Skipped, "%s: %s", name, rows[name].SkipReason)
+		require.Contains(t, rows[name].SkipReason, "nothing but the title ties the provider record", name)
+	}
+	want := map[string]string{
+		"read-by": `provider narrator "Kim Reader" matches the book's narrator "Kim Reader"`,
+		"runtime": "provider runtime 600 min is within 10% of the book's 605 min",
+		"asin":    "provider ASIN B00TEST123 matches the book's ASIN",
+	}
+	for name, ev := range want {
+		require.True(t, rows[name].Applicable(), "%s: %s %s", name, rows[name].Skipped, rows[name].SkipReason)
+		require.Contains(t, rows[name].Evidence, ev, name)
+	}
+	require.True(t, rows["long"].Applicable(), "%s %s", rows["long"].Skipped, rows["long"].SkipReason)
+}
+
+// Fetched values merge field by field, so a title and an author recorded at
+// different times may be two provider records' halves: the row is held.
+func TestSwappedTitleAuthorFixer_TitleAndAuthorFromDifferentFetches(t *testing.T) {
+	l := newSwapLib(t)
+	l.add(swapBook{name: "split", title: "read by narrator", storedAuthor: "Ultimate Level 1_ Divine Creation",
+		provTitle: "Ultimate Level 1: Divine Creation", provAuthor: "Shawn Wilson", authorAge: time.Hour,
+		files: []string{"/lib/S/Ultimate Level 1/book.m4b"}})
+	l.add(swapBook{name: "together", title: "read by narrator", storedAuthor: "Ultimate Level 2_ Ascension",
+		provTitle: "Ultimate Level 2: Ascension", provAuthor: "Shawn Wilson", authorAge: 2 * time.Second,
+		files: []string{"/lib/S/Ultimate Level 2/book.m4b"}})
+	_, rows := l.plan()
+	require.Equal(t, junkSkipNeedsManual, rows["split"].Skipped, rows["split"].SkipReason)
+	require.Contains(t, rows["split"].SkipReason, "recorded 1h0m0s apart")
+	require.True(t, rows["together"].Applicable(), "%s %s", rows["together"].Skipped, rows["together"].SkipReason)
+}
+
+// A provider value carrying HTML entities is decoded before it is compared,
+// split or written.
+func TestSwappedTitleAuthorFixer_HTMLEntitiesDecoded(t *testing.T) {
+	l := newSwapLib(t)
+	l.add(swapBook{name: "amp", title: "read by narrator", storedAuthor: "Magic Tides & Magic Claims",
+		provTitle: "Magic Tides &amp; Magic Claims", provAuthor: "Jo O&#39;Neil",
+		files: []string{"/lib/M/Magic Tides/book.m4b"}})
+	plan, rows := l.plan()
+	r := rows["amp"]
+	require.True(t, r.Applicable(), "%s %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Magic Tides & Magic Claims", r.Proposed["title"])
+	out := l.apply(plan, []string{r.RowID})
+	require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+	require.Equal(t, "Magic Tides & Magic Claims", l.book("amp").Title)
+	a, err := l.store.GetAuthorByID(*l.book("amp").AuthorID)
+	require.NoError(t, err)
+	require.Equal(t, "Jo O'Neil", a.Name)
+}
+
+// The order of the two fixers: the junk-title fixer lists a swapped book for
+// this fixer instead of retitling it. A book it retitled before that guard
+// existed (title real, author still the title) is planned here author-only:
+// the author moves, the title is not written, and the junk-title fixer's
+// title lock does not hold the row. Each op's revert undoes its own part.
+func TestSwappedTitleAuthorFixer_OrderWithJunkTitleFixer(t *testing.T) {
+	l := newSwapLib(t)
+	l.add(swapBook{name: "swap", title: "read by Jack Voraces", narrator: "Jack Voraces",
+		storedAuthor: "Ultimate Level 1_ Divine Creation", provTitle: "Ultimate Level 1: Divine Creation (Unabridged)",
+		provAuthor: "Shawn Wilson", files: []string{"/lib/S/Ultimate Level 1_ Divine Creation/book.m4b"}})
+	id := l.ids["swap"]
+
+	junk := newJunkTitleFixer(&Plugin{deps: fakeDeps{store: l.store}, standDownWait: noWait})
+	jrows, err := junk.Plan(context.Background(), nil, &fakeReporter{})
+	require.NoError(t, err)
+	var jr repairs.Row
+	for _, r := range jrows {
+		if r.RowID == id {
+			jr = r
+		}
+	}
+	require.Equal(t, junkSkipSwapped, jr.Skipped, jr.SkipReason)
+	require.Contains(t, jr.SkipReason, swappedFixerID)
+
+	// The title written the way the junk-title fixer wrote it before the
+	// guard: journaled under its own op and locked.
+	const junkOp = "op-junk-early"
+	jw := repairs.NewWriter(l.store, l.store, junkTitlesFixerID, "bulk_update", "repairs-").
+		WithJournal(l.store, l.store, junkOp).WithFieldStates(l.store)
+	require.NoError(t, writeTitleOnly(jw, l.store, id, "read by Jack Voraces", "Ultimate Level 1: Divine Creation"))
+	require.True(t, l.locked("swap", database.FieldKeyTitle))
+
+	plan, rows := l.plan()
+	r := rows["swap"]
+	require.True(t, r.Applicable(), "author-only row: %s %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Ultimate Level 1: Divine Creation", r.Proposed["title"], "the title is shown unchanged")
+	require.Contains(t, r.Reason, "the title is not changed")
+
+	out := l.apply(plan, []string{r.RowID})
+	require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+	wilson := l.authorID("Shawn Wilson")
+	require.Equal(t, wilson, *l.book("swap").AuthorID)
+	require.Equal(t, []int{wilson}, l.credits("swap"))
+	require.Equal(t, "Ultimate Level 1: Divine Creation", l.book("swap").Title)
+	require.True(t, l.locked("swap", database.FieldKeyAuthorName))
+	titleHist, err := l.store.GetMetadataChangeHistory(id, "title", 10)
+	require.NoError(t, err)
+	for _, h := range titleHist {
+		require.NotEqual(t, swappedFixerID, h.Source, "an author-only apply writes no title")
+	}
+
+	// Reverting the swapped op puts the author back and lifts its lock; the
+	// junk-title fixer's title and lock are its own op's.
+	rev, err := audiobooks.NewRevertService(l.store).RevertOperation(swapTestOpID)
+	require.NoError(t, err)
+	require.Zero(t, rev.Failed, "revert: %+v", rev)
+	require.Equal(t, l.holder["swap"], *l.book("swap").AuthorID)
+	require.False(t, l.locked("swap", database.FieldKeyAuthorName))
+	require.True(t, l.locked("swap", database.FieldKeyTitle))
+	require.Equal(t, "Ultimate Level 1: Divine Creation", l.book("swap").Title)
+
+	rev, err = audiobooks.NewRevertService(l.store).RevertOperation(junkOp)
+	require.NoError(t, err)
+	require.Zero(t, rev.Failed, "revert: %+v", rev)
+	require.Equal(t, "read by Jack Voraces", l.book("swap").Title)
+	require.False(t, l.locked("swap", database.FieldKeyTitle))
+}
+
+// An author who narrates their own book keeps the narrator credit and gains
+// the author credit; the book is never left with no author-role credit.
+func TestSwappedTitleAuthorFixer_AuthorWhoNarratesKeepsBothCredits(t *testing.T) {
+	l := newSwapLib(t)
+	l.add(swapBook{name: "war", title: "read by Bob Woodward", narrator: "Bob Woodward", storedAuthor: "War",
+		provTitle: "War", provAuthor: "Bob Woodward", prov: map[string]any{"narrator": "Bob Woodward"},
+		files: []string{"/lib/W/War/book.m4b"}})
+	bob, err := l.store.CreateAuthor("Bob Woodward")
+	require.NoError(t, err)
+	id := l.ids["war"]
+	require.NoError(t, l.store.SetBookAuthors(id, []database.BookAuthor{
+		{BookID: id, AuthorID: l.holder["war"], Role: "author", Position: 0},
+		{BookID: id, AuthorID: bob.ID, Role: "narrator", Position: 1},
+	}))
+	plan, rows := l.plan()
+	require.True(t, rows["war"].Applicable(), "%s %s", rows["war"].Skipped, rows["war"].SkipReason)
+	out := l.apply(plan, []string{rows["war"].RowID})
+	require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+	cs, err := l.store.GetBookAuthors(id)
+	require.NoError(t, err)
+	roles := map[string]bool{}
+	for _, c := range cs {
+		require.Equal(t, bob.ID, c.AuthorID)
+		roles[c.Role] = true
+	}
+	require.Equal(t, map[string]bool{"author": true, "narrator": true}, roles)
+	require.Equal(t, bob.ID, *l.book("war").AuthorID)
+}
