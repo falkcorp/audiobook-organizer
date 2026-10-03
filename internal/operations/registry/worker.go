@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.24.0
+// version: 2.25.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-03
 
@@ -257,7 +257,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// queuedCancel instead. The flag is written and read under r.mu, so this
 	// check races with nothing — if Cancel got the lock first, we see the flag
 	// and drop the run without ever invoking Run.
-	attemptStartedAt := time.Now().UTC()
+	attemptStartedAt := r.livenessClock().UTC()
 	h := &runHandle{
 		id:             qr.opID,
 		defID:          qr.defID,
@@ -371,7 +371,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// this instead of the DB row, preventing false-positive cancellations when
 	// UpdateOpProgressV2 is blocked behind PebbleDB compaction.
 	setItemFn := func(label string) { h.setCurrentItem(label) }
-	touchFn := func() { h.lastProgressAt.Store(time.Now().UnixNano()) }
+	touchFn := func() { h.lastProgressAt.Store(r.livenessClock().UnixNano()) }
 	flushInterval := def.ProgressFlushInterval
 	if flushInterval <= 0 || flushInterval > 5*time.Minute {
 		flushInterval = 30 * time.Second

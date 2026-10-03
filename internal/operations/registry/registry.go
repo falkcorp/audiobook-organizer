@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.31.0
+// version: 3.32.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-26
+// last-edited: 2026-10-03
 
 package registry
 
@@ -144,6 +144,11 @@ type Registry struct {
 	// time.Now; tests inject a fake so lease tests do not depend on how
 	// quickly a loaded CI runner wakes from a sleep.
 	scanStandDownNow func() time.Time
+	// livenessNow is the clock behind the stuck-op watchdog: the attempt
+	// start baseline, every liveness/progress stamp, and the watchdog's own
+	// "now". Nil means time.Now. All three must read the same clock or the
+	// idle time the watchdog computes is meaningless.
+	livenessNow func() time.Time
 	// scanStandDownGrace is the static re-queue grace from Options (see
 	// scanStandDownGraceFor). scanStandDownGraceFn, when set, overrides it
 	// with a live value (the server wires the config setting through it).
@@ -203,6 +208,20 @@ type Options struct {
 	// ScanStandDownNow overrides the clock used for stand-down lease expiry.
 	// Nil = time.Now. Tests only.
 	ScanStandDownNow func() time.Time
+	// LivenessNow overrides the clock the stuck-op watchdog measures idle
+	// time with (attempt start, TouchLiveness/UpdateProgress stamps, and the
+	// watchdog cycle's now). Nil = time.Now. Tests only: it lets a watchdog
+	// test advance time explicitly instead of racing real sleeps against
+	// ProgressTimeout on a loaded runner.
+	LivenessNow func() time.Time
+}
+
+// livenessClock is the watchdog's clock (see Options.LivenessNow).
+func (r *Registry) livenessClock() time.Time {
+	if r.livenessNow != nil {
+		return r.livenessNow()
+	}
+	return time.Now()
 }
 
 // SetScanStandDownGraceFunc installs a live source for the scan stand-down
@@ -251,6 +270,7 @@ func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int,
 		scanGate:           scanStandDown{holders: make(map[string]time.Time)},
 		scanStandDownLease: opts.ScanStandDownLease,
 		scanStandDownNow:   opts.ScanStandDownNow,
+		livenessNow:        opts.LivenessNow,
 		scanStandDownGrace: opts.ScanStandDownGrace,
 	}
 }
