@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
 // last-edited: 2026-10-03
 
@@ -512,4 +512,94 @@ func (p *PebbleStore) opChangeBackfillChunk(lower, upper []byte, chunk int, res 
 	res.Indexed += indexed
 	res.Undecodable += undecodable
 	return n, last, nil
+}
+
+// opChangeByBookSampleCap bounds the sample list in the verify report.
+const opChangeByBookSampleCap = 50
+
+// OpChangeByBookIndexReport is the result of VerifyOpChangeByBookIndex.
+type OpChangeByBookIndexReport struct {
+	SentinelSet bool `json:"sentinel_set"`
+	Rows        int  `json:"rows"`
+	// Indexable rows decode and name a book, so they must have an entry.
+	Indexable int `json:"indexable"`
+	// MissingEntries are indexable rows with no entry: once the sentinel is
+	// set, GetBookChanges cannot see them. This is the count a rebuild fixes.
+	MissingEntries int `json:"missing_entries"`
+	// Undecodable rows; UnmarkedUndecodable have no opchange_undecodable:
+	// marker, so the indexed reader does not fail closed on them.
+	Undecodable         int `json:"undecodable"`
+	UnmarkedUndecodable int `json:"unmarked_undecodable"`
+	// SampleMissing holds up to opChangeByBookSampleCap primary keys.
+	SampleMissing []string `json:"sample_missing,omitempty"`
+}
+
+// VerifyOpChangeByBookIndex checks every journal row against the index from
+// one snapshot. Read-only. One sequential pass with a point read per row: the
+// work is Pebble reads in a single instance, as in the backfill.
+func (p *PebbleStore) VerifyOpChangeByBookIndex(ctx context.Context) (OpChangeByBookIndexReport, error) {
+	var rep OpChangeByBookIndexReport
+	built, err := p.opChangeByBookIndexBuilt()
+	if err != nil {
+		return rep, err
+	}
+	rep.SentinelSet = built
+
+	snap := p.db.NewSnapshot()
+	defer snap.Close()
+	iter, err := snap.NewIter(&pebble.IterOptions{
+		LowerBound: []byte(opChangeKeyPrefix),
+		UpperBound: []byte(opChangeScanUpperBound),
+	})
+	if err != nil {
+		return rep, err
+	}
+	defer iter.Close()
+	present := func(key []byte) (bool, error) {
+		_, closer, err := snap.Get(key)
+		if errors.Is(err, pebble.ErrNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		closer.Close()
+		return true, nil
+	}
+	for iter.First(); iter.Valid(); iter.Next() {
+		if rep.Rows%10_000 == 0 {
+			if err := ctx.Err(); err != nil {
+				return rep, err
+			}
+		}
+		rep.Rows++
+		k := iter.Key()
+		var c OperationChange
+		if json.Unmarshal(iter.Value(), &c) != nil {
+			rep.Undecodable++
+			ok, err := present(opChangeUndecodableKey(k))
+			if err != nil {
+				return rep, err
+			}
+			if !ok {
+				rep.UnmarkedUndecodable++
+			}
+			continue
+		}
+		if c.BookID == "" {
+			continue
+		}
+		rep.Indexable++
+		ok, err := present(opChangeByBookKey(c.BookID, k))
+		if err != nil {
+			return rep, err
+		}
+		if !ok {
+			rep.MissingEntries++
+			if len(rep.SampleMissing) < opChangeByBookSampleCap {
+				rep.SampleMissing = append(rep.SampleMissing, string(k))
+			}
+		}
+	}
+	return rep, iter.Error()
 }
