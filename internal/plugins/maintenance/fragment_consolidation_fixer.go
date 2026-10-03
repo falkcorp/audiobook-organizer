@@ -136,6 +136,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/boilerplate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -771,6 +772,63 @@ func (lib *fragLibrary) authorName(b fragBook) string {
 		return ""
 	}
 	return lib.authors[*b.AuthorID]
+}
+
+// realAuthorID is b's author for the numbered-set checks, or nil when the
+// author field is junk copied from a path: a placeholder ("Unknown", "read by
+// narrator"), or the files' own folder name when that name cannot be a
+// person's ("Jennsen, GS_ 08 Rubicon (Amaranthe 08)/" with that very string as
+// the author). Owner decision 2026-10-03: such an author counts as missing, so
+// it neither makes the folder an "author folder" nor makes two files "by
+// different authors". The shape test matters: "Jane Author/" holding files by
+// Jane Author is a real author folder, and must stay one.
+func (lib *fragLibrary) realAuthorID(b fragBook, dir string) *int {
+	if b.AuthorID == nil {
+		return nil
+	}
+	name := lib.authors[*b.AuthorID]
+	if authorname.IsPlaceholderAuthor(name) {
+		return nil
+	}
+	if k := junkLettersKey(name); k != "" && k == junkLettersKey(filepath.Base(filepath.Clean(dir))) && !personShapedName(name) {
+		return nil
+	}
+	return b.AuthorID
+}
+
+// realSeriesID is b's series for the numbered-set checks, or nil when the
+// series field is junk copied from a file name: a junk title ("read by
+// narrator"), a numbered stem ("01.Intro", "41.ASO-7"), or the file's own
+// stem or title. Owner decision 2026-10-03, as for realAuthorID.
+func (lib *fragLibrary) realSeriesID(b fragBook, stem string) *int {
+	if b.SeriesID == nil {
+		return nil
+	}
+	name := strings.TrimSpace(lib.series[*b.SeriesID])
+	k := junkLettersKey(name)
+	switch {
+	case k == "",
+		metadata.ClassifyJunkTitle(name) != metadata.JunkNone,
+		metadata.HasLeadingChapterNumber(name),
+		k == junkLettersKey(stem),
+		k == junkLettersKey(b.Title):
+		return nil
+	}
+	return b.SeriesID
+}
+
+// personShapedName reports whether name could be a person's: no digits and
+// none of the characters a path or title carries ("_", brackets, ":", "#").
+// A false answer does not mean junk on its own; realAuthorID also requires
+// the name to be the folder's own.
+func personShapedName(name string) bool {
+	return !strings.ContainsAny(name, "0123456789_()[]{}:#")
+}
+
+// sameOrMissing reports whether two optional ids do not contradict: equal,
+// or either missing.
+func sameOrMissing(a, b *int) bool {
+	return a == nil || b == nil || *a == *b
 }
 
 // moveRow re-attributes row id from one book to another in the snapshot.
@@ -1925,7 +1983,22 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 				es[i].num = es[i].pos.Parts[1]
 			}
 		}
-		first := es[0].c.Book
+		// (the set is judged by setAuthor/setSeries below, not by its first file)
+		// The set's author and series, ignoring junk fields (realAuthorID,
+		// realSeriesID): the first real one any member carries.
+		var setAuthor, setSeries *int
+		junkAuthorNames := map[string]bool{}
+		for _, e := range es {
+			if a := lib.realAuthorID(e.c.Book, dir); a != nil && setAuthor == nil {
+				setAuthor = a
+			} else if a == nil && e.c.Book.AuthorID != nil {
+				junkAuthorNames[junkLettersKey(lib.authorName(e.c.Book))] = true
+			}
+			if sr := lib.realSeriesID(e.c.Book, e.c.origStem()); sr != nil && setSeries == nil {
+				setSeries = sr
+			}
+		}
+		namedFor := lib.folderNamesAnyAuthor(filepath.Base(filepath.Clean(dir)))
 		lo, hi := es[0].num, es[0].num
 		for _, e := range es {
 			lo, hi = min(lo, e.num), max(hi, e.num)
@@ -1936,12 +2009,14 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 			set.problem = fmt.Sprintf("%s is a library root or import path: it holds whatever was put there, not one work", dir)
 		case lib.libraryRoot != "" && filepath.Dir(clean) == lib.libraryRoot:
 			set.problem = fmt.Sprintf("%s sits directly under the library root: an author folder holds several works", dir)
-		case folderNamesAuthor(filepath.Base(clean), lib.authorName(first)):
-			set.problem = fmt.Sprintf("the folder %q is named for the files' author (%q): an author folder holds several works", filepath.Base(clean), lib.authorName(first))
-		case first.AuthorID == nil && lib.folderNamesAnyAuthor(filepath.Base(clean)) != "":
-			// Files with no author linked, in a folder named like an author
-			// the library knows: still an author folder.
-			set.problem = fmt.Sprintf("the folder %q is named like the author %q: an author folder holds several works", filepath.Base(clean), lib.folderNamesAnyAuthor(filepath.Base(clean)))
+		case setAuthor != nil && folderNamesAuthor(filepath.Base(clean), lib.authors[*setAuthor]):
+			set.problem = fmt.Sprintf("the folder %q is named for the files' author (%q): an author folder holds several works", filepath.Base(clean), lib.authors[*setAuthor])
+		case setAuthor == nil && namedFor != "" && !junkAuthorNames[junkLettersKey(namedFor)]:
+			// Files with no (real) author linked, in a folder named like an
+			// author the library knows: still an author folder. Not when that
+			// "author" is the junk one the files themselves carry, copied from
+			// this folder's own name.
+			set.problem = fmt.Sprintf("the folder %q is named like the author %q: an author folder holds several works", filepath.Base(clean), namedFor)
 		case discDir[dir]:
 			// Disc folders keep the behaviour they had: the key groups
 			// decide (a book's discs share one key), never a numbered set.
@@ -1961,10 +2036,10 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 				// "01 - Book A" and "01 - Book B" two works.
 				set.sideBySide = true
 				set.problem = fmt.Sprintf("%q and %q carry the same chapter number: a duplicate file, or more than one work in the folder", es[i-1].c.origStem(), e.c.origStem())
-			case !sameIntPtr(e.c.Book.AuthorID, first.AuthorID):
-				set.problem = fmt.Sprintf("the files are by different authors (%q, %q)", lib.authorName(first), lib.authorName(e.c.Book))
-			case !sameIntPtr(e.c.Book.SeriesID, first.SeriesID):
-				set.problem = fmt.Sprintf("the files belong to different series (%q, %q)", lib.seriesName(first), lib.seriesName(e.c.Book))
+			case !sameOrMissing(lib.realAuthorID(e.c.Book, dir), setAuthor):
+				set.problem = fmt.Sprintf("the files are by different authors (%q, %q)", lib.authors[*setAuthor], lib.authorName(e.c.Book))
+			case !sameOrMissing(lib.realSeriesID(e.c.Book, e.c.origStem()), setSeries):
+				set.problem = fmt.Sprintf("the files belong to different series (%q, %q)", lib.series[*setSeries], lib.seriesName(e.c.Book))
 			}
 		}
 		if set.problem == "" && (lo > 1 || float64(hi-lo+1) > 1.25*float64(len(es))) {
@@ -2239,11 +2314,28 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	}
 	sort.Strings(ids)
 	// The survivor: the lowest-id member that is organized and primary, so it
-	// is a book ABS shows and a version group can keep.
+	// is a book ABS shows and a version group can keep. When no member is
+	// organized (every chapter still sits unorganized in an import folder),
+	// the lowest-id primary member: the merged book is then exactly as visible
+	// as its fragments were, and is organized like any other imported
+	// multi-file book. Until 2026-10-03 such a set was held as "no survivor"
+	// (63 rows on prod once the 120-minute limit released them).
 	for _, id := range ids {
 		if b := lib.books[id]; b.Organized && b.Primary {
 			plan.SurvivorID = id
 			break
+		}
+	}
+	anyOrganized := false
+	for _, id := range ids {
+		anyOrganized = anyOrganized || lib.books[id].Organized
+	}
+	if plan.SurvivorID == "" && !anyOrganized {
+		for _, id := range ids {
+			if lib.books[id].Primary {
+				plan.SurvivorID = id
+				break
+			}
 		}
 	}
 	survivor := lib.books[plan.SurvivorID]
@@ -2362,7 +2454,7 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	case orderProblem != "":
 		r.Skipped, r.SkipReason = fragSkipTrackOrder, orderProblem+": the chapter order cannot be told"
 	case plan.SurvivorID == "":
-		r.Skipped, r.SkipReason = fragSkipNoSurvivor, "no member is both organized and primary, so none can take the others' files"
+		r.Skipped, r.SkipReason = fragSkipNoSurvivor, "no member can take the others' files: none is organized and primary, and none is a primary unorganized book either (an organized member that is not primary blocks the fallback)"
 	}
 	if k, why := f.guard(lib, books, extra); k != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
