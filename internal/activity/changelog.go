@@ -117,6 +117,9 @@ func (svc *ChangelogService) GetBookChangelog(bookID string) ([]ChangeLogEntry, 
 		slog.Warn("changelog GetBookChanges", "bookID", bookID, "err", err)
 	} else {
 		for _, oc := range opChanges {
+			if oc.Voided {
+				continue // a refused write that never happened
+			}
 			entryType := "import"
 			summary := fmt.Sprintf("Operation change — %s: %s → %s", oc.FieldName, oc.OldValue, oc.NewValue)
 

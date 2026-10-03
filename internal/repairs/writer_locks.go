@@ -86,17 +86,22 @@ func (w *Writer) lockField(bookID, key string) error {
 	if err != nil {
 		return err
 	}
-	if cur != nil && cur.HasUserOverride() {
-		if cur.IsRepairLock() && cur.LockSource == source {
-			return nil // this op locked it already (a resumed run)
-		}
-		return fmt.Errorf("%w: book %s %s carries a lock or user override", ErrChangedSincePlan, bookID, key)
+	// old is what the field carries now, as the journal records it: no lock,
+	// or another repair operation's lock this op takes over (an apply
+	// finishing an interrupted one owns its locks; its revert hands the lock
+	// back). A person's lock or override is never taken.
+	old := undo.FieldLockStateOf(cur, w.opID)
+	switch {
+	case old == undo.FieldLockLocked:
+		return nil // this op locked it already (a resumed run)
+	case old == "":
+		return fmt.Errorf("%w: book %s %s carries a person's lock or override", ErrChangedSincePlan, bookID, key)
 	}
-	row, err := w.journalRow(bookID, undo.ChangeTypeFieldLock, key, undo.FieldLockUnlocked, undo.FieldLockLocked)
+	row, err := w.journalRow(bookID, undo.ChangeTypeFieldLock, key, old, undo.FieldLockLocked)
 	if err != nil {
 		return err
 	}
-	if werr := w.writeLock(bookID, key, source); werr != nil {
+	if werr := w.writeLock(bookID, key, source, old); werr != nil {
 		if verr := w.voidRow(row); verr != nil {
 			return errors.Join(werr, verr)
 		}
@@ -107,8 +112,9 @@ func (w *Writer) lockField(bookID, key string) error {
 }
 
 // writeLock migrates a blob-only book, re-reads the field and sets the lock,
-// all under the book's field-state stripe.
-func (w *Writer) writeLock(bookID, key, source string) error {
+// all under the book's field-state stripe. old is the state the journal row
+// recorded; anything else now is someone's change since.
+func (w *Writer) writeLock(bookID, key, source, old string) error {
 	unlock := database.LockMetadataState(bookID)
 	defer unlock()
 	if _, err := database.MigrateLegacyMetadataState(w.fieldStates, bookID); err != nil {
@@ -118,11 +124,11 @@ func (w *Writer) writeLock(bookID, key, source string) error {
 	if err != nil {
 		return err
 	}
+	if undo.FieldLockStateOf(cur, w.opID) != old {
+		return fmt.Errorf("%w: book %s %s was locked or given an override during the apply", ErrChangedSincePlan, bookID, key)
+	}
 	st := database.MetadataFieldState{BookID: bookID, Field: key}
 	if cur != nil {
-		if cur.HasUserOverride() {
-			return fmt.Errorf("%w: book %s %s was locked or given an override during the apply", ErrChangedSincePlan, bookID, key)
-		}
 		st = *cur
 	}
 	st.OverrideLocked = true

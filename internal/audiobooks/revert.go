@@ -364,6 +364,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	var restorable []*database.OperationChange
 	restorableTotal := 0
 	for _, c := range changes {
+		if c.Voided {
+			continue // the write it describes never happened
+		}
 		if label := undo.NotRestorableLabel(c); label != "" {
 			result.NotRestorable++
 			if result.NotRestorableTypes == nil {
@@ -560,7 +563,7 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		// Book.file_path.
 		return rs.revertFileMove(c)
 	case "metadata_update":
-		return rs.revertMetadataUpdate(c)
+		return rs.revertMetadataUpdate(c, plan)
 	case "tag_write":
 		return rs.revertTagWrite(c)
 	case undo.ChangeTypeSeriesRename:
@@ -609,6 +612,31 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	}
 }
 
+// checkPairedFieldLock runs undo.CheckPairedFieldLock for a metadata_update
+// row whose operation also locked that field. The lock rows come from the
+// plan (every row of the operation); a lone row reverted without a plan reads
+// the operation's journal.
+func (rs *RevertService) checkPairedFieldLock(c *database.OperationChange, plan *undo.RevertPlan) error {
+	var locks []*database.OperationChange
+	if plan != nil {
+		locks = plan.FieldLocksOf(c)
+	} else {
+		all, err := rs.db.GetOperationChanges(c.OperationID)
+		if err != nil {
+			return fmt.Errorf("read the journal of %s: %w", c.OperationID, err)
+		}
+		locks = all
+	}
+	if len(locks) == 0 {
+		return nil
+	}
+	states, err := rs.db.GetMetadataFieldStates(c.BookID)
+	if err != nil {
+		return fmt.Errorf("read field states of %s: %w", c.BookID, err)
+	}
+	return undo.CheckPairedFieldLock(locks, states, c)
+}
+
 // revertFieldLock lifts the lock a repair operation set on one field, while
 // the field still carries exactly that operation's lock
 // (undo.CheckFieldLockCurrent): no override is already restored, and a
@@ -635,8 +663,12 @@ func (rs *RevertService) revertFieldLock(c *database.OperationChange) error {
 			continue
 		}
 		st := states[i]
-		st.OverrideLocked = false
-		st.LockSource = ""
+		// Back to what the row recorded: no lock, or the earlier repair
+		// operation's lock this one took over.
+		st.OverrideLocked, st.LockSource = false, ""
+		if src, taken := undo.FieldLockTakenSource(c.OldValue); taken {
+			st.OverrideLocked, st.LockSource = true, src
+		}
 		if err := rs.db.UpsertMetadataFieldState(&st); err != nil {
 			return fmt.Errorf("unlock %s of %s: %w", c.FieldName, c.BookID, err)
 		}
@@ -1333,7 +1365,7 @@ func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) e
 	return nil
 }
 
-func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error {
+func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange, plan *undo.RevertPlan) error {
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	if _, err := rs.loadBook(c.BookID); err != nil {
@@ -1345,6 +1377,14 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 	// preflight runs the same check, so it reports this row as a conflict. It
 	// reads series rows, so it runs before the book's write stripe is taken.
 	if err := undo.CheckRestoreReferent(rs.db, c); err != nil {
+		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
+	}
+	// A repair that wrote a field also locked it (undo.ChangeTypeFieldLock).
+	// The value goes back only while that lock is still the repair's or
+	// gone: one a person took over makes the value theirs
+	// (undo.CheckPairedFieldLock). The lock row is newer, so in this run it
+	// was lifted first when it was still the repair's.
+	if err := rs.checkPairedFieldLock(c, plan); err != nil {
 		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
 	}
 	// Compare-and-set, the same three-way check series_rename rows get, on the

@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.141.0
+// version: 2.142.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -251,6 +251,8 @@ export interface TagSourceValues {
   stored_value?: string | number | boolean | null;
   override_value?: string | number | boolean | null;
   override_locked?: boolean;
+  /** "repair:<operation id>" when a Repairs apply set the lock; absent for your own lock. */
+  lock_source?: string;
   effective_value?: string | number | boolean | null;
   effective_source?: string;
   updated_at?: string;
@@ -4965,6 +4967,8 @@ export interface MetadataFieldStateEntry {
   fetched_value?: unknown;
   override_value?: unknown;
   override_locked: boolean;
+  /** "repair:<operation id>" when a Repairs apply set the lock; absent for your own lock. */
+  lock_source?: string;
   updated_at: string;
 }
 

@@ -223,3 +223,29 @@ func TestRecordUserOverrides_MigratesTheBlobFirst(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, locked["title"], "and a later snapshot save keeps it")
 }
+
+// A hand-picked apply whose candidate agrees with the repaired value leaves
+// the repair's lock the repair's: only a field whose value changed is claimed.
+func TestApplyMetadataCandidate_ClaimsOnlyChangedFields(t *testing.T) {
+	store, updated := candidateStore(t)
+	store.GetMetadataFieldStatesFunc = func(string) ([]database.MetadataFieldState, error) {
+		return []database.MetadataFieldState{{BookID: "b-locks", Field: database.FieldKeyTitle, OverrideLocked: true,
+			LockSource: database.RepairLockSource("op-1")}}, nil
+	}
+	var claimed []database.MetadataFieldState
+	store.UpsertMetadataFieldStateFunc = func(st *database.MetadataFieldState) error {
+		if st.Field == database.FieldKeyTitle {
+			claimed = append(claimed, *st)
+		}
+		return nil
+	}
+	cand := candidateFor("")
+	cand.Title = curatedBook().Title
+	_, err := NewService(store).ApplyMetadataCandidate("b-locks", cand, nil)
+	require.NoError(t, err)
+	require.NotNil(t, updated())
+	require.Equal(t, curatedBook().Title, updated().Title)
+	for _, c := range claimed {
+		assert.NotEmpty(t, c.LockSource, "an unchanged title must not have its repair lock claimed: %+v", c)
+	}
+}
