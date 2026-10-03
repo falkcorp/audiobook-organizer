@@ -10,18 +10,27 @@ among them, and the set takes the folder's whole numbered run (three
 `Interlude` chapters spread through a serial stay with it).
 
 Numbers alone do not make a serial, so a set must also pass these tests, each
-written against a shape that would have merged different works: the folder is
-not a library root or import path; no file sits in a disc folder; no two files
-claim one position; all files have the same author and series; the numbers run
-from 0 or 1 without large gaps (years and title numbers are not chapters); no
-chapter key with three or more files sits together as one block (`01-03 - Book
-A`, then `04 - Book B`); the folder is not named like the files' author; and
-the folder gives the work a title. A set that fails is dropped in favour of the
-key groups, as before the rule existed; when no key group forms from its files
-either, it is listed held (`skipped_numbered_set_unsure`) with the reason, so
-the cluster is visible. The duration gate, the track-order check and the
-survivor rule are unchanged, and the row is review-risk with the first twelve
-file names in its evidence: it is planned for the owner to approve.
+written against a shape that merged different works in review: the folder is
+not a library root or import path, does not sit directly under the library
+root, and is not named for the files' author (`J. Author`, `Author, Jane`,
+`Jane Author Collection`); no file sits in a disc folder; no two files claim
+one position; all files have the same author and series; the numbers run from
+0 or 1 without large gaps (years and title numbers are not chapters); the
+folder does not hold works side by side (one name's files as a block of half
+the folder, or every name on two or more files); no file carries its own ASIN
+or a title that is not its file name; there are at least eight files; and the
+folder gives the work a title.
+
+A folder found to hold works side by side is left to the key groups, as before
+the rule existed, and each key row says how many other numbered files the
+folder holds. Every other set stays ONE row whatever its state, held with the
+reason (`skipped_numbered_set_unsure`, or the existing duration, missing-file
+and track-order skips): three same-named chapters of a numbered run are no
+longer handed to a key group to become a partial book under the folder's name,
+which the key-group rule did before wherever a folder's numbered files carried
+two or more names. The duration gate still applies, so a serial with chapters
+of ten minutes or more is listed held, not applied. Rows are review-risk and
+show the first twelve file names in order.
 
 ### Changed
 
