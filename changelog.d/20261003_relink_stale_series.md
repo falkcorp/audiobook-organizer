@@ -11,4 +11,5 @@
 ### Fixed
 
 - **Repairs `Writer` history for `series_id`:** rows now carry the previous and new series refs. "Undo last apply" can now revert a `series_id` write made through the Repairs lane.
-- **Operation revert records history:** every book column a revert restores now gets a history row. The source is `operation_revert`, the operation id is the batch id, and the change type is undo. Before, a reverted series link left the newest history saying "set to X".
+- **Operation revert records history:** every book column a revert restores now gets a history row, including the version-group settle's `is_primary_version` writes (yield, crown, single-primary hand-off). The source is `operation_revert`, the operation id is the batch id, the change type is undo, and the time is taken beside the write. Before, a reverted series link left the newest history saying "set to X". A failed history write is logged and does not fail the revert.
+- **Metadata history panel:** rows are keyed on id plus field. One edit stamps every row it records with the same id, which gave duplicate React keys and could put the undo button on an older row of another field.
