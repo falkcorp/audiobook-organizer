@@ -1,7 +1,7 @@
 // file: internal/scanlock/scanlock_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 17e29a0f-0309-4e70-ad4c-1f5d29bcdfac
-// last-edited: 2026-09-30
+// last-edited: 2026-10-03
 
 package scanlock
 
@@ -153,8 +153,11 @@ func TestPendingBlocksOnlyTheIdleAcquires(t *testing.T) {
 	go func() {
 		g, err := tb.LockSetIdle(context.Background(), []string{"p", "q"})
 		if err == nil {
-			close(got)
+			// Release BEFORE signalling: the test reads tb.Held() as soon as
+			// got closes, and signalling first raced it ("table not empty: 1"
+			// on the CI coverage runner, 2026-10-03).
 			g.Release()
+			close(got)
 		}
 	}()
 	select {
