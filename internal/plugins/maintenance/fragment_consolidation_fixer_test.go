@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -159,7 +160,8 @@ func (f *fragFixture) seed(t *testing.T) {
 	for i, n := range []string{"01", "02", "03"} {
 		p := f.file(t, "lib/Long/Long "+n+".mp3", 400+i)
 		f.book(t, "long"+n, "Long "+n, p, nil)
-		f.row(t, "lg"+n, f.ids["long"+n], p, "Long "+n+".mp3", int64(400+i), 3600, 0)
+		// 3 h each: whole books, over the repairs' 120-min chapter limit.
+		f.row(t, "lg"+n, f.ids["long"+n], p, "Long "+n+".mp3", int64(400+i), 3*3600, 0)
 	}
 	// iTunes: the moved shape under the frozen tree.
 	i1 := f.file(t, "books/itunes/Eldest/01.mp3", 501)
@@ -1965,7 +1967,7 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 				a = author(t, f, tc.author)
 			}
 			if tc.dur == 0 {
-				f.numberedSeed(t, tc.dir, tc.stems[:1], 40*60, a)
+				f.numberedSeed(t, tc.dir, tc.stems[:1], 3*3600, a)
 				f.numberedSeed(t, tc.dir, tc.stems[1:], 300, a)
 			} else {
 				f.numberedSeed(t, tc.dir, tc.stems, tc.dur, a)
@@ -1973,6 +1975,23 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 			held(t, f, tc.dir, tc.want)
 		})
 	}
+	// The repairs' chapter limit is repair_chapter_max_min (default 120), not
+	// the import scanner's chapter_consolidation_threshold_min (owner
+	// 2026-10-03: "one for import, one for jobs").
+	t.Run("hour-long chapters merge under the repairs' own limit", func(t *testing.T) {
+		prevImport, prevRepair := config.AppConfig.ChapterConsolidationThresholdMin, config.AppConfig.RepairChapterMaxMin
+		t.Cleanup(func() {
+			config.AppConfig.ChapterConsolidationThresholdMin, config.AppConfig.RepairChapterMaxMin = prevImport, prevRepair
+		})
+		config.AppConfig.ChapterConsolidationThresholdMin, config.AppConfig.RepairChapterMaxMin = 10, 120
+		f := newFragFixture(t)
+		f.numberedSeed(t, "lib/Serial", serialStems, 60*60, nil)
+		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path("lib/Serial"), fragNumberedKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+
+		config.AppConfig.RepairChapterMaxMin = 30
+		held(t, f, "lib/Serial", "30 min or longer")
+	})
 	t.Run("an author folder whose files have no author linked", func(t *testing.T) {
 		f := newFragFixture(t)
 		author(t, f, "Jane Author") // known to the library, linked to none of the files

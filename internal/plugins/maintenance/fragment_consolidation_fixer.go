@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -1716,10 +1716,26 @@ type fragGroupState struct {
 	SurvivorPath  string            `json:"survivor_path"`
 }
 
-func thresholdSec() int {
+// importChapterSec is the IMPORT scanner's chapter threshold in seconds
+// (chapter_consolidation_threshold_min, default 10). The folder-books fixer
+// reads it as "a group shorter than this is a fragment, not a book".
+func importChapterSec() int {
 	mins := config.AppConfig.ChapterConsolidationThresholdMin
 	if mins <= 0 {
 		mins = 10 // config's documented default; the scanner uses the same fallback
+	}
+	return mins * 60
+}
+
+// repairChapterMaxSec is the longest a file may run and still be a chapter
+// when this fixer folds fragments into one book (repair_chapter_max_min,
+// default 120). It used to be the import threshold above; the owner split
+// them 2026-10-03 so the jobs could use 120 minutes without changing what
+// the scanner groups on import.
+func repairChapterMaxSec() int {
+	mins := config.AppConfig.RepairChapterMaxMin
+	if mins <= 0 {
+		mins = 120 // the documented default; never "disabled"
 	}
 	return mins * 60
 }
@@ -2247,7 +2263,7 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	state := fragGroupState{Files: map[string]string{}, SurvivorTitle: survivor.Title, SurvivorPath: survivor.FilePath}
 	var fpParts []string
 	missing, unknown, long, withPID := 0, 0, 0, ""
-	limit := thresholdSec()
+	limit := repairChapterMaxSec()
 	for _, m := range plan.Members {
 		role := "fragment"
 		if m.Frag.Book.ID == plan.SurvivorID {
