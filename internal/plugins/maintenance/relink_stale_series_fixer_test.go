@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_stale_series_fixer_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: edaf6525-dcbd-426d-b672-c3293aff05f5
 // last-edited: 2026-10-03
 
@@ -57,7 +57,9 @@ func newRelinkLib(t *testing.T) *relinkLib {
 	mk("dw", "Doctor Who: The Monthly Adventures", nil)
 
 	// add creates a book; emb (when set) is written as the stored series
-	// object with SeriesID nil, the state older bugs left.
+	// object with SeriesID nil, the state older builds left. This build's
+	// write path drops such an object (pebble_store.go holds Series to
+	// SeriesID), so the legacy row is seeded the way an older binary wrote it.
 	add := func(key, title, path string, author *int, seriesID *int, emb *database.Series) {
 		t.Helper()
 		b, err := st.CreateBook(&database.Book{Title: title, FilePath: path, AuthorID: author, SeriesID: seriesID, Format: "mp3"})
@@ -65,7 +67,7 @@ func newRelinkLib(t *testing.T) *relinkLib {
 		require.NoError(t, st.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: path + "/01.mp3", Format: "mp3"}))
 		if emb != nil {
 			e := *emb
-			_, err = st.ModifyBook(b.ID, func(row *database.Book) error {
+			_, err = st.SeedLegacyBookRowForTest(b.ID, func(row *database.Book) error {
 				row.SeriesID = nil
 				row.Series = &e
 				return nil
@@ -100,7 +102,9 @@ func newRelinkLib(t *testing.T) *relinkLib {
 	add("linked", "Linked", "/lib/A/Linked", a, &linkedID, nil)
 	add("plain", "Plain", "/lib/A/Plain", a, nil, nil)
 	add("deleted", "Deleted", "/lib/A/Deleted", a, nil, live)
-	_, err = st.ModifyBook(lib.ids["deleted"], func(row *database.Book) error {
+	// Seeded, not ModifyBook: an ordinary write would drop the legacy object
+	// and "deleted is not a row" would pass for the wrong reason.
+	_, err = st.SeedLegacyBookRowForTest(lib.ids["deleted"], func(row *database.Book) error {
 		yes := true
 		row.MarkedForDeletion = &yes
 		return nil
@@ -272,15 +276,18 @@ func TestRelinkStaleSeries_ApplyRelinksAndUndoRestores(t *testing.T) {
 	require.Equal(t, 0, again.Applied)
 	require.Equal(t, 1, again.ChangedSincePlan)
 
-	// Undo puts SeriesID back to nil, object intact.
+	// Undo puts SeriesID back to nil. The store holds Series to SeriesID on
+	// every write (PR #3698), so the undo write drops the object too: the
+	// legacy "object without a link" state is one this build refuses to
+	// write, and undo does not get an exception. The book ends with no
+	// series rather than the stale display it had before the relink.
 	undo, err := metafetch.NewService(lib.store).UndoLastApply(lib.ids["relink"])
 	require.NoError(t, err)
 	require.Equal(t, []string{"series_id"}, undo.Reverted, "%+v", undo)
 	restored, err := lib.store.GetBookByID(lib.ids["relink"])
 	require.NoError(t, err)
 	require.Nil(t, restored.SeriesID)
-	require.NotNil(t, restored.Series)
-	require.Equal(t, *before.Series, *restored.Series)
+	require.Nil(t, restored.Series, "undo writes no series, never a legacy object without its link")
 }
 
 func TestRelinkStaleSeries_ReplanRefusesChangedSincePlan(t *testing.T) {
@@ -295,8 +302,8 @@ func TestRelinkStaleSeries_ReplanRefusesChangedSincePlan(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	// "relink2": the stored object changed.
-	_, err = lib.store.ModifyBook(lib.ids["relink2"], func(b *database.Book) error {
+	// "relink2": the stored object changed (an older build's write).
+	_, err = lib.store.SeedLegacyBookRowForTest(lib.ids["relink2"], func(b *database.Book) error {
 		b.Series = &database.Series{ID: lib.series["live"].ID, Name: "Something Else"}
 		return nil
 	})
@@ -321,8 +328,8 @@ func TestRelinkStaleSeries_ApplyCompareAndSetInsideTheWrite(t *testing.T) {
 	fresh, err := f.Replan(context.Background(), nil, rows["relink"], &fakeReporter{})
 	require.NoError(t, err)
 	require.True(t, fresh.Applicable())
-	// The book changes between Replan and the write.
-	_, err = lib.store.ModifyBook(lib.ids["relink"], func(b *database.Book) error {
+	// The book changes between Replan and the write (an older build's write).
+	_, err = lib.store.SeedLegacyBookRowForTest(lib.ids["relink"], func(b *database.Book) error {
 		b.Series = &database.Series{ID: 1, Name: "Changed"}
 		return nil
 	})
@@ -354,7 +361,7 @@ func TestRelinkStaleSeries_GuardExclusion(t *testing.T) {
 		FilePath: "/mnt/books/itunes/Author/Book/book.m4b", Format: "m4b"}))
 	live := *lib.series["live"]
 	pid := "ABCDEF0123456789"
-	_, err = lib.store.ModifyBook(b.ID, func(row *database.Book) error {
+	_, err = lib.store.SeedLegacyBookRowForTest(b.ID, func(row *database.Book) error {
 		row.Series = &live
 		row.ITunesPersistentID = &pid
 		return nil
@@ -363,7 +370,7 @@ func TestRelinkStaleSeries_GuardExclusion(t *testing.T) {
 	// A relinkable book whose TITLE names Doctor Who (series is neutral).
 	dwt, err := lib.store.CreateBook(&database.Book{Title: "Doctor Who: Placebo Effect", FilePath: "/lib/X/Placebo", Format: "mp3"})
 	require.NoError(t, err)
-	_, err = lib.store.ModifyBook(dwt.ID, func(row *database.Book) error {
+	_, err = lib.store.SeedLegacyBookRowForTest(dwt.ID, func(row *database.Book) error {
 		row.Series = &live
 		return nil
 	})
@@ -409,8 +416,7 @@ func TestRelinkStaleSeries_UserClearAfterTheFixersRelinkHolds(t *testing.T) {
 	require.Equal(t, 1, out.Applied)
 	id := lib.ids["relink"]
 	time.Sleep(2 * time.Millisecond)
-	// Editor clear: SeriesID nil (the object stays, preserve-on-nil) plus the
-	// history row the editor writes.
+	// Editor clear: SeriesID nil plus the history row the editor writes.
 	var pre *database.Book
 	post, err := lib.store.ModifyBook(id, func(b *database.Book) error {
 		pre, _ = database.SnapshotBook(b)
@@ -423,8 +429,19 @@ func TestRelinkStaleSeries_UserClearAfterTheFixersRelinkHolds(t *testing.T) {
 	b, err := lib.store.GetBookByID(id)
 	require.NoError(t, err)
 	require.Nil(t, b.SeriesID)
-	require.NotNil(t, b.Series, "the editor clear leaves the stale object")
+	require.Nil(t, b.Series, "this build's clear drops the object with the link")
+	_, _, rowsNow := lib.plan(t)
+	_, listed := rowsNow["relink"]
+	require.False(t, listed, "a series this build cleared leaves nothing to relink")
 
+	// An older build's clear left the object behind (preserve-on-nil). With
+	// that row and the same history, the clear must still win over the
+	// fixer's own series_id row.
+	_, err = lib.store.SeedLegacyBookRowForTest(id, func(b *database.Book) error {
+		b.Series = pre.Series
+		return nil
+	})
+	require.NoError(t, err)
 	_, _, rows2 := lib.plan(t)
 	r := rows2["relink"]
 	require.False(t, r.Applicable(), "the user's later clear must win over the fixer's own series_id row")
@@ -449,8 +466,11 @@ func TestRelinkStaleSeries_StaleObjectNamingThePreviousSeriesHolds(t *testing.T)
 		return nil
 	})
 	require.NoError(t, err)
+	// Both writes below are an older build's: the move to B by SeriesID
+	// alone and the unlink each left the object naming A. This build's
+	// write path would drop that object, so they are seeded.
 	var pre *database.Book
-	post, err := st.ModifyBook(bk.ID, func(row *database.Book) error {
+	post, err := st.SeedLegacyBookRowForTest(bk.ID, func(row *database.Book) error {
 		pre, _ = database.SnapshotBook(row)
 		id := bser.ID
 		row.SeriesID = &id
@@ -459,7 +479,7 @@ func TestRelinkStaleSeries_StaleObjectNamingThePreviousSeriesHolds(t *testing.T)
 	require.NoError(t, err)
 	_, err = database.RecordBookEditHistory(st, pre, post, database.ChangeTypeManual, "manual", time.Now(), nil)
 	require.NoError(t, err)
-	_, err = st.ModifyBook(bk.ID, func(row *database.Book) error {
+	_, err = st.SeedLegacyBookRowForTest(bk.ID, func(row *database.Book) error {
 		row.SeriesID, row.SeriesSequence = nil, nil
 		return nil
 	})
@@ -565,7 +585,7 @@ func TestRelinkStaleSeries_HistoryAgreeingWithTheObjectStaysApplicable(t *testin
 func TestRelinkStaleSeries_IncompatibleSeriesAuthorHolds(t *testing.T) {
 	lib := newRelinkLib(t)
 	dune := lib.series["other-author"] // author B; the book is author A's
-	_, err := lib.store.ModifyBook(lib.ids["relink"], func(b *database.Book) error {
+	_, err := lib.store.SeedLegacyBookRowForTest(lib.ids["relink"], func(b *database.Book) error {
 		b.Series = &database.Series{ID: dune.ID, Name: dune.Name, AuthorID: dune.AuthorID}
 		return nil
 	})
@@ -634,8 +654,19 @@ func TestRelinkStaleSeries_OperationRevertOfAWriterLinkHolds(t *testing.T) {
 	b, err := lib.store.GetBookByID(id)
 	require.NoError(t, err)
 	require.Nil(t, b.SeriesID)
-	require.NotNil(t, b.Series, "the revert leaves the stale object (preserve-on-nil)")
+	require.Nil(t, b.Series, "this build's revert drops the object with the link")
+	_, _, rowsNow := lib.plan(t)
+	_, listed := rowsNow["relink"]
+	require.False(t, listed, "a link this build reverted leaves nothing to relink")
 
+	// An older build's revert left the object behind (preserve-on-nil). The
+	// revert's history row must still hold that book.
+	live := *lib.series["live"]
+	_, err = lib.store.SeedLegacyBookRowForTest(id, func(b *database.Book) error {
+		b.Series = &live
+		return nil
+	})
+	require.NoError(t, err)
 	_, _, rows := lib.plan(t)
 	r := rows["relink"]
 	require.False(t, r.Applicable(), "the reverted link must not be re-proposed: %v", r.Evidence)

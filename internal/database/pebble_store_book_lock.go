@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
-// last-edited: 2026-09-23
+// last-edited: 2026-10-03
 
 package database
 
@@ -238,6 +238,6 @@ func (p *PebbleStore) ClearBookSignature(id string) error {
 	if _, has := bookSigOf(fresh); !has {
 		return nil
 	}
-	_, err = p.updateBookLockedMode(id, fresh, true, nil)
+	_, err = p.updateBookLockedMode(id, fresh, bookWriteOpts{clearSig: true})
 	return err
 }
