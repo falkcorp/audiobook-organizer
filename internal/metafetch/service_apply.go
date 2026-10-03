@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.46.0
+// version: 1.47.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-10-03
 
@@ -737,7 +737,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// book_authors lock, so undo removes exactly what this apply added. It
 	// replaces a join read taken here, outside that lock, which could miss
 	// another apply's credit and so let undo delete it.
-	meta, skippedLocked, credits, err := mfs.guardedApplyWith(book, meta, historySource, !opts.automatic())
+	meta, skippedLocked, credits, claimedLocks, err := mfs.guardedApplyWith(book, meta, historySource, !opts.automatic())
 	if err != nil {
 		return nil, err
 	}
@@ -846,6 +846,13 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	updatedBook, updateErr := mfs.commitApply(id, before, book, credits, historySource, opts.BatchID, commitGuard)
 	if updatedBook == nil {
 		return nil, updateErr
+	}
+	// A hand-picked apply that wrote over a repair's lock makes the lock the
+	// person's: reverting the repair later must not lift it and let a rescan
+	// put the junk back over the person's choice.
+	if cerr := database.ClaimRepairLocks(mfs.db, id, claimedLocks); cerr != nil {
+		slog.Error("hand-picked apply: repair locks not claimed; reverting that repair may lift them",
+			"id", logger.SanitizeLogValue(id), "fields", claimedLocks, "error", logger.SanitizeLogValue(cerr.Error()))
 	}
 	// An owner-reviewed apply went through past legs the certainty gate
 	// refused, and its change history is the only record to audit or revert

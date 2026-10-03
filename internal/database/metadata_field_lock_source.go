@@ -1,5 +1,5 @@
 // file: internal/database/metadata_field_lock_source.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bee79451-3875-44ce-b66f-6dda1128e3ce
 // last-edited: 2026-10-03
 
@@ -141,4 +141,43 @@ func ParseLegacyMetadataState(reader MetadataFieldStateReader, bookID string) (m
 		return nil, fmt.Errorf("legacy metadata state of %s does not parse: %w", bookID, err)
 	}
 	return entries, nil
+}
+
+// RepairLockClaimStore is what ClaimRepairLocks needs.
+type RepairLockClaimStore interface {
+	GetMetadataFieldStates(bookID string) ([]MetadataFieldState, error)
+	UpsertMetadataFieldState(state *MetadataFieldState) error
+}
+
+// ClaimRepairLocks turns the repair locks on keys into a person's locks
+// (LockSource cleared, the lock kept), under the book's field-state stripe.
+// A metadata apply a person picked by hand calls it for the repair-locked
+// fields it was allowed to write: the value is now the person's choice, so
+// reverting the repair must not lift the lock and let a rescan restore the
+// junk over it. A key whose row is not a repair lock is left alone.
+func ClaimRepairLocks(store RepairLockClaimStore, bookID string, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	unlock := LockMetadataState(bookID)
+	defer unlock()
+	rows, err := store.GetMetadataFieldStates(bookID)
+	if err != nil {
+		return fmt.Errorf("read field states of %s: %w", bookID, err)
+	}
+	want := map[string]bool{}
+	for _, k := range keys {
+		want[k] = true
+	}
+	for i := range rows {
+		if !want[rows[i].Field] || !rows[i].IsRepairLock() {
+			continue
+		}
+		row := rows[i]
+		row.LockSource = ""
+		if err := store.UpsertMetadataFieldState(&row); err != nil {
+			return fmt.Errorf("claim the %s lock of %s: %w", row.Field, bookID, err)
+		}
+	}
+	return nil
 }
