@@ -1,7 +1,7 @@
 // file: internal/database/bookfiles_for_ids_fallback_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c2f6d14-7a39-4e05-b1d8-3e9a5c07f2b6
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package database
 
@@ -21,7 +21,10 @@ func TestGetBookFilesForIDsCore_PebbleFallbackPerBookMatchesFullScan(t *testing.
 	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	require.False(t, store.UseMemDB && store.mem() != nil, "the test needs the Pebble path")
+	// The memdb warmup is asynchronous, so asserting that it has NOT published
+	// yet races (it failed on the CI race runner 2026-10-03). Force the Pebble
+	// path instead: that is what this test is about.
+	store.UseMemDB = false
 
 	withFiles, err := store.CreateBook(&Book{Title: "Two Files", FilePath: "/lib/a", Format: "mp3"})
 	require.NoError(t, err)
