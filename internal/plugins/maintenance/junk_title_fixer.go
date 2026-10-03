@@ -718,14 +718,19 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	provided, providerRefusal := "", ""
 	if fetchedTitle != "" && !providerSaidIt {
 		a := strings.TrimSpace(author)
+		// A catalog title carries its edition in brackets ("Dune
+		// (Unabridged)"): the marker is dropped, the title kept. The
+		// folder rule's formatWordRe is not used here, it would refuse
+		// real catalog titles ("Magnum Opus", "The Abridged History of…").
+		catalog := strings.TrimSpace(catalogEditionRe.ReplaceAllString(fetchedTitle, ""))
 		switch {
-		case embedded && !titleAgreesWithAny(fetchedTitle, agreeWith):
+		case embedded && !titleAgreesWithAny(catalog, agreeWith):
 			providerRefusal = fmt.Sprintf("provider value %q disagrees with the title's own evidence", fetchedTitle)
 		case !embedded && (a == "" || authorname.IsPlaceholderAuthor(a) ||
 			!strings.EqualFold(util.NormalizeAuthor(fetchedAuthor), util.NormalizeAuthor(a))):
 			providerRefusal = fmt.Sprintf("provider value %q was not recorded under this book's author (recorded %q)", fetchedTitle, fetchedAuthor)
 		default:
-			provided, _ = accept(fetchedTitle, junkSrcProvider)
+			provided, _ = accept(catalog, junkSrcProvider)
 		}
 		if providerRefusal != "" {
 			refused = append(refused, providerRefusal)
@@ -1070,16 +1075,13 @@ func (pc junkProposalCheck) refusal(c, source string) string {
 			return fmt.Sprintf("%q reads like transcribed prose, not a title", c)
 		}
 	}
-	if source == junkSrcFolder || source == junkSrcFilename || source == junkSrcProvider || source == junkSrcCandidate {
-		// A catalog title carries these too ("Dune (Unabridged)").
+	if source == junkSrcFolder || source == junkSrcFilename {
 		switch {
 		case formatWordRe.MatchString(c):
 			return fmt.Sprintf("%q carries a format, edition or disc marker", c)
 		case idCodeRe.MatchString(c):
 			return fmt.Sprintf("%q carries an ASIN or ISBN", c)
 		}
-	}
-	if source == junkSrcFolder || source == junkSrcFilename {
 		if head, _, ok := strings.Cut(c, " - "); ok && pc.namesAPersonNormalized(head) {
 			return fmt.Sprintf("%q starts with a person's name (an \"Author - …\" filename)", c)
 		}
@@ -1309,6 +1311,10 @@ func (f *junkTitleFixer) candidateTitle(bookID, author string) (string, float64,
 	}
 	return best, bestScore, found
 }
+
+// catalogEditionRe is a bracketed edition marker on a catalog title:
+// "(Unabridged)", "[Abridged]".
+var catalogEditionRe = regexp.MustCompile(`(?i)\s*[(\[]\s*(?:un)?abridged\s*[)\]]`)
 
 // junkLettersKey is a title reduced to its letters and digits, NFC and lower
 // case: what two spellings of one title share whatever punctuation, spacing

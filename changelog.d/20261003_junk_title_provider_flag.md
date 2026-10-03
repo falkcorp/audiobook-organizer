@@ -21,5 +21,5 @@ where it disagrees with the folder the row needs a person. A recorded title
 that is refused, that cannot be read, or that is the stored title itself by
 its letters and digits (`3-10 to Yuma` / `3:10 to Yuma`) never yields a
 low-risk row, and the row says what was recorded and why it was not used. A
-catalog title with an edition marker (`(Unabridged)`) is not proposed. A user
+catalog title's bracketed edition marker (`(Unabridged)`) is dropped. A user
 override still stops the repair, and the recorded value is not rewritten.
