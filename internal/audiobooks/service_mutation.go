@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-03
 
@@ -26,6 +26,26 @@ import (
 // row, as re-read under its write stripe, is already deleted.
 var errAlreadySoftDeleted = errors.New("audiobook already soft deleted")
 
+// ErrInvalidAudiobookUpdate marks an UpdateAudiobook request that asks for
+// something the endpoint does not do. Nothing is written for it; the handler
+// answers 400 with the error text.
+var ErrInvalidAudiobookUpdate = errors.New("invalid audiobook update")
+
+// authorOverrideClears reports whether an author_name override asks for the
+// author to be removed: a value that is JSON null or trims to "".
+func authorOverrideClears(o OverridePayload) bool {
+	if o.Clear || len(o.Value) == 0 {
+		return false
+	}
+	switch v := decodeRawValue(o.Value).(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(v) == ""
+	}
+	return false
+}
+
 // UpdateAudiobook updates an audiobook with new metadata and handles overrides
 func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req *UpdateAudiobookRequest) (*database.Book, error) {
 	if svc.store == nil {
@@ -38,6 +58,14 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	}
 	if currentBook == nil {
 		return nil, fmt.Errorf("audiobook not found")
+	}
+	// A book's author cannot be removed from this endpoint (see the
+	// author_name resolution below). An author_name override of "" -- the
+	// web editor's form of a clear -- used to lock the field at "" and record
+	// a history row while the author stayed, so the lock claimed a change
+	// that never happened. Refuse it before anything is written.
+	if o, ok := req.Updates.Overrides[database.FieldKeyAuthorName]; ok && authorOverrideClears(o) {
+		return nil, fmt.Errorf("%w: the author cannot be cleared; set a different author", ErrInvalidAudiobookUpdate)
 	}
 	// before is the row as read. Everything below edits currentBook (with
 	// author/series/narrator resolution and an os.Stat in between); the save
@@ -93,22 +121,56 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		slog.Info("audiobook_service FilePath changed for →", "id", id, "currentBook", currentBook.FilePath, "value2", absNewPath)
 		currentBook.FilePath = absNewPath
 	}
-	if req.Updates.Narrator != nil {
+	// A top-level "" for a field that is already empty (nil or "") is not an
+	// edit. The web editor sends description, publisher, language and
+	// narrator as "" on EVERY save, whatever the user changed; applying that
+	// turned nil into "" (a history row for nothing) and the extractor loop
+	// below then locked the field at "", which stops every later metadata
+	// fetch from filling it. Such a field is skipped entirely: no apply, no
+	// lock, no history. blankNoop holds their lock keys.
+	blankNoop := map[string]bool{}
+	skipBlank := func(lockKey string, sent, current *string) bool {
+		if sent == nil || strings.TrimSpace(*sent) != "" || (current != nil && *current != "") {
+			return false
+		}
+		blankNoop[lockKey] = true
+		return true
+	}
+	// narratorClear: a narrator "" that has something to clear -- the column,
+	// or the book_narrators junction alone. GET fills the narrator from the
+	// junction when the column is empty, so the editor shows those names and
+	// sends "" when the user deletes them.
+	narratorClear := false
+	if req.Updates.Narrator != nil && strings.TrimSpace(*req.Updates.Narrator) == "" {
+		hasCredit := currentBook.Narrator != nil && *currentBook.Narrator != ""
+		if !hasCredit {
+			junction, jErr := svc.store.GetBookNarrators(id)
+			// An unreadable junction counts as non-empty: clearing an empty
+			// junction is harmless, keeping a cleared cast is not.
+			hasCredit = jErr != nil || len(junction) > 0
+		}
+		if hasCredit {
+			narratorClear = true
+		} else {
+			blankNoop[database.FieldKeyNarrator] = true
+		}
+	}
+	if req.Updates.Narrator != nil && !blankNoop[database.FieldKeyNarrator] {
 		currentBook.Narrator = req.Updates.Narrator
 	}
-	if req.Updates.Publisher != nil {
+	if req.Updates.Publisher != nil && !skipBlank(database.FieldKeyPublisher, req.Updates.Publisher, currentBook.Publisher) {
 		currentBook.Publisher = req.Updates.Publisher
 	}
-	if req.Updates.Language != nil {
+	if req.Updates.Language != nil && !skipBlank(database.FieldKeyLanguage, req.Updates.Language, currentBook.Language) {
 		currentBook.Language = req.Updates.Language
 	}
 	if req.Updates.AudiobookReleaseYear != nil {
 		currentBook.AudiobookReleaseYear = req.Updates.AudiobookReleaseYear
 	}
-	if req.Updates.ISBN10 != nil {
+	if req.Updates.ISBN10 != nil && !skipBlank(database.FieldKeyISBN10, req.Updates.ISBN10, currentBook.ISBN10) {
 		currentBook.ISBN10 = req.Updates.ISBN10
 	}
-	if req.Updates.ISBN13 != nil {
+	if req.Updates.ISBN13 != nil && !skipBlank(database.FieldKeyISBN13, req.Updates.ISBN13, currentBook.ISBN13) {
 		currentBook.ISBN13 = req.Updates.ISBN13
 	}
 	// Description, genre, ASIN and series_position were parsed from the
@@ -116,13 +178,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// any of them -- a set or a clear -- changed nothing, and the extractor
 	// below then locked the field at its OLD value. They only worked through
 	// "overrides", which ApplyOverrideToPayload writes onto currentBook.
-	if req.Updates.Description != nil {
+	if req.Updates.Description != nil && !skipBlank(database.FieldKeyDescription, req.Updates.Description, currentBook.Description) {
 		currentBook.Description = req.Updates.Description
 	}
-	if req.Updates.Genre != nil {
+	if req.Updates.Genre != nil && !skipBlank(database.FieldKeyGenre, req.Updates.Genre, currentBook.Genre) {
 		currentBook.Genre = req.Updates.Genre
 	}
-	if req.Updates.ASIN != nil {
+	if req.Updates.ASIN != nil && !skipBlank(database.FieldKeyASIN, req.Updates.ASIN, currentBook.ASIN) {
 		currentBook.ASIN = req.Updates.ASIN
 	}
 	if req.Updates.SeriesSequence != nil {
@@ -286,7 +348,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		}
 	}
 
-	// Resolve narrator — auto-split on " & " for multiple narrators
+	// Resolve narrator — auto-split on " & " for multiple narrators.
+	//
+	// The book_narrators junction is written only after the book commits
+	// (below): written here, a failed save left the junction on the new cast
+	// (or empty, for a clear) while the column kept the old one.
+	var narratorJunction []database.BookNarrator
+	writeNarratorJunction := false
 	if req.Updates.Narrator != nil {
 		narStr := strings.TrimSpace(*req.Updates.Narrator)
 		if narStr != "" {
@@ -314,19 +382,17 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 				})
 			}
 			if len(bookNarrators) > 0 {
-				if err := svc.store.SetBookNarrators(id, bookNarrators); err != nil {
-					slog.Warn("failed to set book narrators", "err", err)
-				}
+				narratorJunction = bookNarrators
+				writeNarratorJunction = true
 			}
-		} else if before.Narrator != nil && strings.TrimSpace(*before.Narrator) != "" {
-			// A clear of a narrator the book had. The column goes to "" above,
-			// but the store's junction sync only runs for a non-empty credit,
-			// so book_narrators -- which ABS prefers over the column -- kept
-			// the old cast. Guarded on the old column so the editor's "" on
-			// every save of a narrator-less book never touches the junction.
-			if err := svc.store.SetBookNarrators(id, nil); err != nil {
-				slog.Warn("failed to clear book narrators", "book_id", id, "err", err)
-			}
+		} else if narratorClear {
+			// A clear of a narrator the book had, in the column or in the
+			// junction alone. The column goes to "" above, but the store's
+			// junction sync only runs for a non-empty credit, so
+			// book_narrators -- which ABS prefers over the column -- kept the
+			// old cast. A "" with nothing to clear is a blankNoop and never
+			// reaches here.
+			writeNarratorJunction = true
 		}
 	}
 
@@ -344,9 +410,16 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		seriesName = strings.TrimSpace(*req.Updates.SeriesName)
 	}
 	clearSeries := seriesName == "" && (req.Updates.ClearSeries || req.Updates.SeriesName != nil)
-	// hadSeries: the clear removes something. Books already hit by the bug
-	// above have a nil SeriesID but a stale Series, so either one counts.
-	hadSeries := before.SeriesID != nil || before.Series != nil
+	// shownSeries: the series name a GET shows for this book, from the same
+	// resolver (the embedded object, else the series row by SeriesID). Only a
+	// clear of a series the user could see is a user edit: it wipes the
+	// position and is locked below. A SeriesID whose series row is gone shows
+	// no name, so the editor sends "" for it like for any series-less book;
+	// that link is dropped, but nothing is locked and the position stays.
+	// Books hit by the old clear bug (nil SeriesID, stale embedded Series)
+	// show the stale name, so a repeat clear repairs them.
+	_, shownSeries := resolveAuthorAndSeriesNames(svc.store, before)
+	hadSeries := shownSeries != ""
 	switch {
 	case seriesName != "":
 		series, err := svc.store.GetSeriesByName(seriesName, payload.AuthorID)
@@ -362,10 +435,14 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		payload.SeriesID = &series.ID
 		resolvedSeriesName = series.Name
 	case clearSeries:
+		// The embedded Series object goes with the link in the store, which
+		// keeps Series consistent with SeriesID on every write
+		// (PebbleStore.updateBookLockedMode).
 		payload.SeriesID = nil
-		payload.Book.Series = nil
-		payload.SeriesSequence = nil
-		payload.SeriesPositionRaw = nil
+		if hadSeries {
+			payload.SeriesSequence = nil
+			payload.SeriesPositionRaw = nil
+		}
 	case payload.SeriesID != nil:
 		if series, err := svc.store.GetSeriesByID(*payload.SeriesID); err == nil && series != nil {
 			resolvedSeriesName = series.Name
@@ -389,6 +466,9 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		}
 		if _, hasOverride := req.Updates.Overrides[field]; hasOverride {
 			slog.Debug("UpdateAudiobook field has explicit override", "field", field)
+			continue
+		}
+		if blankNoop[field] {
 			continue
 		}
 		if value, ok := extractor(); ok {
@@ -415,11 +495,18 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// Lock a series clear the way a set is locked, so a rescan or a queued
 	// metadata apply cannot put the series back. The extractor above skips
 	// series_name when it resolves to nothing, so the clear is handled here.
-	// Only when the book had a series: the web editor sends series_name ""
+	// Only when the book showed a series: the web editor sends series_name ""
 	// on every save, and locking every series-less book it saves would block
 	// a later fetch from ever adding one. No override history row here: the
 	// column diff after the save records the one "series" row (old name ->
 	// ""), and the series_sequence row with it.
+	//
+	// series_position gets no lock of its own: a locked series_name already
+	// protects and blanks the position (lockedColumns, StripLockedFields),
+	// and a position lock would outlive a later re-set of the series, so a
+	// fetch could never fill the new series' number. A position override
+	// left from an earlier edit is dropped and unlocked instead, so its
+	// stale number is not re-projected onto the book.
 	if clearSeries && hadSeries {
 		if _, hasOverride := req.Updates.Overrides[database.FieldKeySeriesName]; !hasOverride {
 			entry := state[database.FieldKeySeriesName]
@@ -428,14 +515,14 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			entry.UpdatedAt = now
 			state[database.FieldKeySeriesName] = entry
 		}
-		// The position goes with the series, whatever the request said about
-		// it: a locked stale position would be re-projected onto a book that
-		// has no series.
-		entry := state[database.FieldKeySeriesPosition]
-		entry.OverrideValue = nil
-		entry.OverrideLocked = true
-		entry.UpdatedAt = now
-		state[database.FieldKeySeriesPosition] = entry
+		if _, hasOverride := req.Updates.Overrides[database.FieldKeySeriesPosition]; !hasOverride {
+			if entry, ok := state[database.FieldKeySeriesPosition]; ok && (entry.OverrideLocked || entry.OverrideValue != nil) {
+				entry.OverrideValue = nil
+				entry.OverrideLocked = false
+				entry.UpdatedAt = now
+				state[database.FieldKeySeriesPosition] = entry
+			}
+		}
 	}
 
 	// Process unlock overrides
@@ -485,6 +572,18 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	}
 	if updatedBook == nil {
 		return nil, fmt.Errorf("audiobook not found")
+	}
+
+	// The narrator junction, now that the column it mirrors has committed.
+	// The store's own junction sync (inside ModifyBook) has already run for a
+	// changed non-empty credit; this write records the cast as the user split
+	// it, and is the only junction write for a clear. A failure is logged, not
+	// returned: the edit itself landed.
+	if writeNarratorJunction {
+		if err := svc.store.SetBookNarrators(id, narratorJunction); err != nil {
+			singleLog.Warn("UpdateAudiobook %s: the edit was saved but book_narrators was not updated: %v",
+				logger.SanitizeLogValue(id), err)
+		}
 	}
 
 	// A "manual" history row for EVERY field this edit changed, clears

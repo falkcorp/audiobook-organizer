@@ -9,7 +9,7 @@ package logger
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
 	slogRatchetFileCeiling = 310
-	slogRatchetCallCeiling = 1785
+	slogRatchetCallCeiling = 1784
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -49,7 +49,7 @@ var slogRatchet = map[string]int{
 	"internal/audiobooks/helpers.go":                             2,
 	"internal/audiobooks/service.go":                             1,
 	"internal/audiobooks/service_filtering.go":                   3,
-	"internal/audiobooks/service_mutation.go":                    14,
+	"internal/audiobooks/service_mutation.go":                    13,
 	"internal/audiobooks/service_query.go":                       14,
 	"internal/audiobooks/service_single.go":                      8,
 	"internal/audiobooks/service_tags.go":                        2,

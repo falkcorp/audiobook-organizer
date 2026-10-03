@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-27
+// last-edited: 2026-10-03
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -78,6 +78,8 @@ type bookWriter interface {
 // payload names an author, narrator, or series by string rather than by ID.
 // Each entity follows the same lookup-then-create shape, and the two Set*
 // calls rewrite the book's join rows once the IDs are resolved.
+// GetBookNarrators tells a narrator clear whether the junction has anything to
+// clear when the column is already empty.
 type contributorResolver interface {
 	GetAuthorByName(name string) (*database.Author, error)
 	CreateAuthor(name string) (*database.Author, error)
@@ -85,6 +87,7 @@ type contributorResolver interface {
 	GetNarratorByName(name string) (*database.Narrator, error)
 	CreateNarrator(name string) (*database.Narrator, error)
 	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
+	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
 }
