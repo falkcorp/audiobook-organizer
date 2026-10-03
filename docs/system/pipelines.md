@@ -1,7 +1,7 @@
 <!-- file: docs/system/pipelines.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b2c3d4e5-f6a7-8901-bcde-f01234567890 -->
-<!-- last-edited: 2026-06-29 -->
+<!-- last-edited: 2026-10-03 -->
 
 # Data Pipelines
 
@@ -83,6 +83,36 @@ stateDiagram-v2
 ```
 
 Values: `null` (unreviewed), `"matched"` (operator approved), `"no_match"` (operator rejected), `"audio_confirmed"` (Whisper transcription confirms metadata).
+
+Separately from this per-book status, the **review queue** (`database.ReviewStore`, `/api/v1/review/*`) holds items a producer flagged for a human decision (e.g. regroup holds). Approving dispatches the chosen action to a registered apply handler only while `review_apply_enabled` is on; otherwise the decision is recorded and `POST /review/replay-approved` executes it later.
+
+## Repairs Pipeline (plan → rows → apply)
+
+Library fixers run through one engine in `internal/repairs`, surfaced as the Repairs lane of `/review`:
+
+```mermaid
+sequenceDiagram
+    participant UI as Repairs lane
+    participant API as /api/v1/repairs
+    participant Plan as repairs.plan op
+    participant Apply as repairs.apply op
+    participant Store as PebbleDB
+
+    UI->>API: POST /repairs/:fixer/plan (trial)
+    API->>Plan: enqueue; Fixer.Plan(params) → []Row
+    Plan->>Store: op result holds every Row (id, class, risk, fingerprint, members)
+    UI->>API: GET /repairs/:fixer/plan/:op_id/rows?filter&class&offset&limit
+    UI->>API: POST /repairs/:fixer/apply {plan_op_id, row_ids, dry_run:false}
+    API->>Apply: enqueue; acquire library-scan stand-down
+    loop each selected row
+        Apply->>Apply: Fixer.Replan → fingerprint must equal the plan's (else changed_since_plan)
+        Apply->>Apply: guards: skip books/itunes/**, Doctor Who / Big Finish / Torchwood
+        Apply->>Store: Fixer.Apply via Writer (metadata-history row per changed field; no delete primitive)
+    end
+    Apply->>Store: ApplyResult per row (applied / would_apply / changed_since_plan / partially_applied / skipped)
+```
+
+Fixers registered in production: `duplicate-copies`, `folder-books`, `fragment-consolidation`, `maintenance.normalize-letter-l-ordinals`, `maintenance.repair-junk-authors`, `maintenance.repair-junk-titles`, `version-group-primary-repair` (`internal/plugins/maintenance/*_fixer.go`, registered by `Plugin.Repairs()`). An omitted `dry_run` is a preview; only an explicit `false` writes.
 
 ## Fingerprint Pipeline
 

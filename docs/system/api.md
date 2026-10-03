@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-09-25 -->
+<!-- last-edited: 2026-10-03 -->
 
 # HTTP API
 
@@ -32,14 +32,15 @@ To obtain an API key:
 |---|---|---|
 | `GET` | `/api/v1/audiobooks` | List books with filtering and pagination |
 | `GET` | `/api/v1/audiobooks/:id` | Get single book with enrichment |
-| `PATCH` | `/api/v1/audiobooks/:id` | Update book metadata |
+| `PUT` | `/api/v1/audiobooks/:id` | Update book metadata |
 | `DELETE` | `/api/v1/audiobooks/:id` | Soft-delete book |
 | `POST` | `/api/v1/audiobooks/batch-operations` | Per-item update / delete / restore |
 | `GET` | `/api/v1/audiobooks/:id/files` | List book file segments |
 | `GET` | `/api/v1/audiobooks/:id/cover` | Get cover art image |
-| `POST` | `/api/v1/audiobooks/:id/cover` | Upload/replace cover art |
-| `GET` | `/api/v1/audiobooks/:id/activity` | Activity log entries for a book |
+| `GET` | `/api/v1/audiobooks/:id/cover-text` | Vision-extracted cover text |
 | `GET` | `/api/v1/audiobooks/:id/changelog` | Metadata changelog |
+| `GET` | `/api/v1/audiobooks/:id/metadata-history` | Per-field metadata history (`/:field`, `/:field/undo`) |
+| `POST` | `/api/v1/audiobooks/:id/rescan` | Reconcile the book's files against disk (`/force-rescan` re-reads tags) |
 
 #### Library List Query Parameters
 
@@ -63,29 +64,61 @@ To obtain an API key:
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/v1/authors` | List authors |
-| `GET` | `/api/v1/authors/:id` | Get author |
-| `PATCH` | `/api/v1/authors/:id` | Update author |
-| `DELETE` | `/api/v1/authors/:id` | Delete author |
+| `GET` | `/api/v1/authors/:id` | Get author (`/books`, `/aliases`) |
+| `PUT` | `/api/v1/authors/:id/name` | Rename author |
+| `POST` | `/api/v1/authors/:id/split` · `/reclassify-as-narrator` · `/resolve-production` | Author repairs |
+| `POST` | `/api/v1/authors/merge` | Merge authors |
+| `DELETE` | `/api/v1/authors/:id` | Delete author (`POST /authors/bulk-delete` for many) |
 | `GET` | `/api/v1/series` | List series |
-| `GET` | `/api/v1/series/:id` | Get series |
-| `PATCH` | `/api/v1/series/:id` | Update series |
+| `PATCH` | `/api/v1/series/:id` | Update series name (`PUT /series/:id/name`, `/split`, `DELETE` empty series) |
+| `GET` | `/api/v1/series/duplicates` · `/prune/preview` · `/normalize/preview` | Series dedup / prune / normalize previews (POST applies) |
 
 ### Metadata
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/audiobooks/:id/metadata/fetch` | Trigger metadata fetch for a book |
-| `POST` | `/api/v1/audiobooks/:id/metadata/apply` | Apply fetched metadata |
-| `GET` | `/api/v1/audiobooks/:id/metadata/candidates` | List scored metadata candidates |
-| `POST` | `/api/v1/metadata/batch-fetch` | Queue bulk metadata fetch |
+| `POST` | `/api/v1/audiobooks/:id/fetch-metadata` | Trigger metadata fetch for a book |
+| `POST` | `/api/v1/audiobooks/:id/apply-metadata` | Apply fetched metadata |
+| `GET` | `/api/v1/audiobooks/:id/metadata-rejections` | Candidates a human rejected for this book |
+| `POST` | `/api/v1/metadata/bulk-fetch` | Queue bulk metadata fetch |
+| `GET` | `/api/v1/metadata/search` · `/fields` | Provider search; known metadata fields |
+| `GET` | `/api/v1/metadata/providers/throttles` | Provider throttle state (`DELETE` clears) |
 
 ### Deduplication
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/dedup/candidates` | List dedup candidate pairs |
-| `POST` | `/api/v1/dedup/candidates/:id/resolve` | Resolve a candidate pair |
+| `GET` | `/api/v1/dedup/candidates` | List dedup candidate pairs (`/export`, `/:id/breakdown`) |
+| `POST` | `/api/v1/dedup/candidates/:id/link` | Link (merge) a candidate pair; `/:id/reject` dismisses it. `/merge` and `/dismiss` are deprecated aliases |
+| `POST` | `/api/v1/dedup/candidates/bulk-link` · `/link-cluster` · `/reject-cluster` | Bulk and cluster forms of link/reject |
+| `POST` | `/api/v1/dedup/scan` · `/scan-llm` · `/scan-acoustid` · `/scan-book-signature` · `/split-book-scan` | Trigger the dedup scans (each enqueues a v2 op) |
 | `GET` | `/api/v1/dedup/stats` | Dedup statistics |
+
+### Review Queue
+
+The producer-agnostic review queue behind the `/review` workspace's **Review queue** lane (`internal/server/handlers/review`). Reads need `library.view`; mutations need `library.edit-metadata`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/review/count` | Pending item count |
+| `GET` | `/api/v1/review/items` | List review items |
+| `POST` | `/api/v1/review/items/:id/approve` | Approve; dispatches the chosen action to its apply handler only while `review_apply_enabled` is on, otherwise records `approved` |
+| `POST` | `/api/v1/review/items/:id/reject` | Reject |
+| `POST` | `/api/v1/review/bulk` | Bulk approve/reject |
+| `POST` | `/api/v1/review/replay-approved` | Re-run apply for items already approved |
+
+### Repairs Lane
+
+Library fixers built on `internal/repairs`; the **Repairs** lane of `/review` calls these (`internal/server/wire_repairs_routes.go`, handler `internal/server/handlers/repairs`).
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/repairs` | List fixers: `{fixers: [{id, title, description, last_plan, last_apply}]}` |
+| `POST` | `/api/v1/repairs/:fixer/plan` | Enqueue a `repairs.plan` run (a "trial"); 202 with `operation_id`; an identical queued/running request is deduped |
+| `GET` | `/api/v1/repairs/:fixer/plan/:op_id/rows` | Page the stored plan's rows: `?filter=`, `?class=`, `?offset=`, `?limit=` |
+| `POST` | `/api/v1/repairs/:fixer/apply` | Enqueue `repairs.apply` for `{plan_op_id, row_ids, dry_run}`; only an explicit `dry_run: false` writes, omitted means preview |
+
+Registered fixers: `duplicate-copies`, `folder-books`, `fragment-consolidation`, `maintenance.normalize-letter-l-ordinals`, `maintenance.repair-junk-authors`, `maintenance.repair-junk-titles`, `version-group-primary-repair`. Apply re-plans each selected row and refuses one whose fingerprint changed (`changed_since_plan`); rows under `books/itunes/**` or Doctor Who / Big Finish / Torchwood are skipped at plan time and refused at apply time; nothing is deleted through the lane.
 
 ### Operations (v2)
 
@@ -107,10 +140,11 @@ Remove finished runs one at a time with `DELETE /api/v1/operations/v2/:id/record
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/admin/scan` | Trigger library scan |
+| `POST` | `/api/v1/operations/v2` `{"def_id":"library.scan"}` | Trigger a library scan (there is no separate scan route) |
 | `POST` | `/api/v1/admin/recompact-digests` | Enqueue `maintenance.recompact-activity-digests` (re-derives legacy digest items on every activity backend); 202 with the op id |
-| `GET` | `/api/v1/admin/diagnostics` | Diagnostic ZIP export |
+| `POST` | `/api/v1/diagnostics/export` | Diagnostic ZIP export (`GET /diagnostics/export/:operationId/download`; `/diagnostics/db-health`) |
 | `POST` | `/api/v1/backup/create` | Create PebbleDB backup (checkpoint) |
+| `POST` | `/api/v1/system/reset` · `/system/factory-reset` | Admin-only resets |
 
 ### Authentication
 
@@ -161,7 +195,11 @@ sequenceDiagram
 | `maintenance.transcribe-book-intros` | Whisper intro transcription (`reparse_only` param supported) |
 | `maintenance.transcribe-book-intros` (reparse_only) | Re-parse stored transcripts only (no GPU/ffmpeg) |
 | `maintenance.dedup-exact-triage` | Classify dedup candidates (read-only, dry-run) |
-| `maintenance.dedup-auto-purge` | Purge confirmed purgeable dedup candidates |
+| `dedup.purge-stale` | Cleanup stale dedup candidates (manual) |
+| `repairs.plan` / `repairs.apply` | Repairs lane plan ("trial") and apply runs; launched via `/api/v1/repairs/:fixer/*` |
+| `maintenance.version-group-primary-repair` | Elect exactly one primary per version group (also the `version-group-primary-repair` fixer) |
+| `maintenance.purge-empty-authors` / `maintenance.purge-empty-narrators` | Purge author/narrator rows with no books (fail-closed ref counts) |
+| `library.scan` | Library scan (per-book scan lock since #3635, so repairs may apply during a scan) |
 | `itunes.heal` | Heal stale iTunes file paths after organize (former ID `maintenance.itunes-heal` still resolves) |
 | `maintenance.reconcile-scan` | Reconcile library paths vs. filesystem |
 | `maintenance.author-dedup-scan` | Scan for author near-duplicates |

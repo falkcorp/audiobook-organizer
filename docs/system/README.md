@@ -1,7 +1,7 @@
 <!-- file: docs/system/README.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 42030117-6ba8-4f26-a2c6-9b5f9014ef88 -->
-<!-- last-edited: 2026-07-11 -->
+<!-- last-edited: 2026-10-03 -->
 
 # System Documentation
 
@@ -22,10 +22,10 @@ changes, metadata fetches, AI-assisted parsing, and operational workflows.
 
 | Document | Summary |
 |---|---|
-| [Architecture](architecture.md) | System boundaries, runtime shape, package responsibilities, and request flow. |
-| [Pipelines](pipelines.md) | Scan, metadata, deduplication, organization, import, and background operation flows. |
+| [Architecture](architecture.md) | System boundaries, runtime shape, package responsibilities, request flow, Operations v2 plugins, the review workspace and the Repairs lane. |
+| [Pipelines](pipelines.md) | Scan, metadata, deduplication, organization, import, repairs (plan → rows → apply), and background operation flows. |
 | [Storage](storage.md) | PebbleDB keyspaces, logical entities, filesystem assets, migrations, and persistence tradeoffs. |
-| [API](api.md) | HTTP route families, authentication expectations, response conventions, and frontend/API contracts. |
+| [API](api.md) | HTTP route families (including `/review/*` and `/repairs/*`), authentication expectations, response conventions, and frontend/API contracts. |
 | [Runbooks](runbooks.md) | Operational procedures for local builds, production service care, deployments, backups, and recovery. |
 | [Components](components.md) | Backend packages, frontend surfaces, integrations, and their primary ownership areas. |
 | [Incidents](incidents.md) | Known failure modes, historical incident notes, diagnostic entry points, and prevention follow-ups. |

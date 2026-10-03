@@ -1,7 +1,7 @@
 <!-- file: docs/system/components.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f6a7b8c9-d0e1-2345-f012-345678901234 -->
-<!-- last-edited: 2026-06-29 -->
+<!-- last-edited: 2026-10-03 -->
 
 # Component Inventory
 
@@ -36,7 +36,7 @@ This document lists all backend packages in `internal/`, their responsibilities,
 | `itunes` | iTunes XML parser, PID backfill, path translation (W:\ → /mnt/bigdata/books/) | `Parser`, `BackfillExternalIDs`, `HealPaths` |
 | `logger` | Structured slog wrapper with request context | `Logger`, `FromContext` |
 | `logging` | Log-level management and log-line formatting | `LevelSetter` |
-| `maintenance` | Plugin package: all maintenance OperationDefs (scan, organize, transcribe, dedup-triage, reconcile, …) | `Plugin`, multiple `*Def()` + `run*()` methods |
+| `maintenance` | Plugin package: all maintenance OperationDefs (scan, organize, transcribe, dedup-triage, reconcile, …) and the Repairs-lane fixers (`*_fixer.go`: duplicate-copies, folder-books, fragment-consolidation, letter-l ordinals, junk authors, junk titles, version-group primary) | `Plugin`, `Plugin.Repairs()`, multiple `*Def()` + `run*()` methods |
 | `matcher` | Fuzzy title/author matching for metadata scoring | `Score`, `NormalizeTitle`, `NormalizeAuthor` |
 | `mediainfo` | `mediainfo` CLI wrapper; extended format/codec metadata | `GetInfo`, `FileInfo` |
 | `merge` | Book merge/consolidation service | `Merger`, `MergeBooks` |
@@ -47,22 +47,23 @@ This document lists all backend packages in `internal/`, their responsibilities,
 | `models` | Shared domain model types (not database-specific) | `AudiobookSummary`, `TagMap` |
 | `mtls` | mTLS bridge for subprocess isolation (Whisper, etc.) | `Bridge`, `Client` |
 | `openlibrary` | Open Library API client for ISBN/ASIN lookup | `Client`, `Search` |
-| `operations` | Operations v1 legacy types and `ProgressReporter` interface | `ProgressReporter`, `Operation` |
+| `operations` | Operations v2 registry (`registry/`: `OperationDef`, `Reporter`, `RunItems`), plus v1 legacy types | `registry.OperationDef`, `registry.RunItems`, `ProgressReporter` |
 | `organizer` | File rename/move according to configurable template | `Organize`, `PreviewOrganize`, `BuildPath` |
 | `pathutil` | Safe path utilities, import-path conflict detection | `IsUnder`, `IsDangerousRoot` |
 | `playlist` | Playlist CRUD and playback order management | `Service`, `Playlist`, `Item` |
 | `plugin` | Plugin SDK: `OperationDef`, `Reporter`, `Plugin` interface | `OperationDef`, `Plugin`, `Reporter` |
-| `plugins` | Plugin registry and built-in plugin loader | `Registry`, `Load` |
+| `plugins` | Plugin registry and built-in plugin loader (`acoustid`, `dedup`, `deluge`, `itunes`, `maintenance`, `metafetch`, `webhook`) | `Registry`, `Load` |
 | `policy` | Authorization policy (role checks) | `Policy`, `CanAdmin` |
 | `quarantine` | Quarantine zone: mark/unmark books for manual review | `Service`, `Quarantine` |
 | `readstatus` | Per-user book read/unread/in-progress status | `StatusStore` |
 | `realtime` | Server-Sent Events bus for live operation progress | `EventBus`, `Publish` |
 | `reconcile` | Path reconciliation (BookFile.FilePath vs. actual filesystem) | `Reconciler`, `ReconcileBook` |
 | `remux` | ffmpeg-based audio remux for format conversion | `Remux`, `Options` |
+| `repairs` | Repairs lane framework: the `Fixer` contract, the plan/apply engine (`repairs.plan`, `repairs.apply` ops), shared guards (iTunes / Doctor Who skip, `changed_since_plan`), history-recording `Writer`, scan stand-down | `Fixer`, `Registry`, `RunPlan`, `RunApply`, `Writer`, `AcquireStandDownWaiting` |
 | `scanner` | Filesystem scanner: walk, group, extract, upsert | `Scanner`, `ScanResult`, `DetectMultiFileGroup` |
 | `scheduler` | Cron-based scheduled operation dispatcher | `Scheduler`, `Schedule` |
 | `search` | Bleve full-text search index management | `Index`, `Search`, `IndexBook` |
-| `server` | Gin HTTP server, middleware, route wiring, serviceregistry wiring | `Server`, `NewServer`, `wireServerFromContainer` |
+| `server` | Gin HTTP server, middleware, route wiring (`wire_*_routes.go`), serviceregistry wiring; handlers in `handlers/{abs,review,repairs,…}` | `Server`, `NewServer`, `wireServerFromContainer` |
 | `serviceregistry` | Dependency-injection container for domain services | `Container`, `Get[T]`, keys in `keys.go` |
 | `sweep` | Bulk sweep utilities for large-library fan-out | `Sweep`, `RunItems[T]` |
 | `sysinfo` | System info (disk usage, OS, Go runtime stats) | `SystemInfo`, `DiskUsage` |
@@ -166,7 +167,7 @@ The React/TypeScript UI (`web/src/`) provides these main views:
 | Book detail | Metadata, files (format-grouped trays), iTunes linked panel, version group chip |
 | Tag comparison | Transposed table: tags as columns, sources as rows; resizable; snapshot dismiss |
 | Changelog | Timeline with revert buttons; clicking metadata_apply or tag_write shows snapshot diff |
-| Dedup | Unified dedup tab with candidate pairs, triage results, scoring breakdown |
+| Review (`/review`) | One workspace, four lanes (`web/src/components/review/lanes/`): Review queue (producer-agnostic holds, approve/reject/replay), Duplicates (dedup candidates with evidence and scoring breakdown), Metadata (candidate apply), Repairs (per fixer: run trial → page rows → pick rows → apply) |
 | Diagnostics | ZIP export, AI batch analysis, results review |
 | Activity log | Namespace-colored tag chips, click-to-filter, per-item timestamps, digest expansion |
 | Settings | Import paths, metadata sources, backup, config sub-structs (7 groups) |
