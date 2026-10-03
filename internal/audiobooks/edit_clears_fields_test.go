@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_clears_fields_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 451212a4-52da-4236-9a22-658fce80859a
 // last-edited: 2026-10-03
 
