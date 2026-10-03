@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -1762,7 +1762,7 @@ func TestFragmentFixer_PathTwinLimits(t *testing.T) {
 		require.ElementsMatch(t, []string{parent, donor}, findRow(t, res, "ghost:"+parent).BookIDs)
 		inNoRow(t, res, twin)
 	})
-	t.Run("a moved donor takes no twin", func(t *testing.T) {
+	t.Run("a moved donor takes the twin and repoints once", func(t *testing.T) {
 		f := newFragFixture(t)
 		p1 := f.file(t, "lib/P/01.mp3", 801)
 		parent := f.book(t, "parent", "P", f.path("lib/P"), nil)
@@ -1776,8 +1776,24 @@ func TestFragmentFixer_PathTwinLimits(t *testing.T) {
 		f.row(t, "t02", twin, at, "", 0, 0, 0)
 		res := f.plan(t, "op-plan")
 		r := findRow(t, res, "moved:"+parent)
-		require.ElementsMatch(t, []string{parent, donor}, r.BookIDs)
-		inNoRow(t, res, twin)
+		require.True(t, r.Applicable(), r.SkipReason)
+		require.ElementsMatch(t, []string{parent, donor, twin}, r.BookIDs)
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		rows, err := f.s.GetBookFiles(parent)
+		require.NoError(t, err)
+		var repointed int
+		for _, row := range rows {
+			if row.FilePath == at {
+				repointed++
+			}
+		}
+		require.Equal(t, 1, repointed, "the parent's 02 row points at the shared file exactly once")
+		for _, id := range []string{donor, twin} {
+			b, err := f.s.GetBookByID(id)
+			require.NoError(t, err)
+			require.True(t, b.IsSoftDeleted(), "%s retired", id)
+		}
 	})
 	t.Run("a twin never lends", func(t *testing.T) {
 		f := newFragFixture(t)

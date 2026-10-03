@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -1352,18 +1352,19 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 	// carry one file's evidence between them; the one without it used to fall
 	// out of the plan silently and then, as a live co-owner of the path, make
 	// its sibling's row refused (checkOwners: "also owned by book") — 21 of
-	// 48 applicable rows on prod 2026-10-03. Only ghost and copy rows take a
-	// twin: both retire the fragment and repoint nothing, so the twin's own
-	// row is never the one a parent row is pointed at. A moved pair repoints
-	// to its fragment's file and is left alone. The twin's own facts must not
-	// contradict the donor's (hash, size, original name, import folder), and
-	// exactly one donor pair must name the path.
+	// 48 applicable rows on prod 2026-10-03. Only proven kinds take a twin
+	// (ghost, copy, moved — never an unproven row). A moved row repoints the
+	// parent row at the donor's file, which is the twin's file too, so the
+	// twin adds nothing to repoint: Apply repoints a parent row once per row
+	// and retires both. The twin's own facts must not contradict the donor's
+	// (hash, size, original name, import folder), and exactly one donor pair
+	// must name the path.
 	donors := map[string][]struct {
 		k parentKey
 		p fragPair
 	}{}
 	for k, ps := range pairs {
-		if k.kind != fragClassGhost && k.kind != fragClassCopy {
+		if k.kind != fragClassGhost && k.kind != fragClassCopy && k.kind != fragClassMoved {
 			continue
 		}
 		for _, p := range ps {
@@ -2233,15 +2234,20 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	switch plan := locked.Detail.(type) {
 	case []fragPair:
 		_, parentID, _ := strings.Cut(locked.RowID, ":")
+		// A parent row is repointed once per row: a path twin's pair names
+		// the same parent row and the same file as its donor's, and the
+		// donor's pair comes first (twins are appended after the claimants).
+		repointed := map[string]bool{}
 		for _, p := range plan {
 			if err := ctx.Err(); err != nil {
 				return partial(err)
 			}
-			if locked.Class == fragClassMoved && !p.Done {
+			if locked.Class == fragClassMoved && !p.Done && !repointed[p.Parent.ID] {
 				to := undo.BookFileLocation{Path: p.Frag.File.Path, Missing: false, Hash: p.Frag.File.Hash, Size: p.Frag.File.Size}
 				if err := w.RepointBookFile(parentID, p.Parent.ID, p.Parent.location(), to); err != nil {
 					return partial(err)
 				}
+				repointed[p.Parent.ID] = true
 				steps++
 			}
 			did, err := f.retire(ctx, store, w, p.Frag.Book.ID, parentID, p.Slice)
