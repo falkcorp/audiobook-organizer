@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package cmd
 
@@ -271,7 +271,8 @@ var serveCmd = &cobra.Command{
 
 		fmt.Printf("Using database: %s (%s)\n", config.AppConfig.DatabasePath, config.AppConfig.DatabaseType)
 
-		// Initialize OpenTelemetry (optional; disabled if OTEL_EXPORTER_OTLP_ENDPOINT not set)
+		// Initialize OpenTelemetry: the Prometheus-exporting meter provider
+		// always; the OTLP tracer only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 		otelCfg := telemetry.LoadConfig("audiobook-organizer", config.AppConfig.OTelExporterOTLPEndpoint)
 		otelShutdown, err := telemetry.InitOTEL(context.Background(), otelCfg)
 		if err != nil {
