@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.23.0
+// version: 2.24.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-03
 
@@ -273,12 +273,16 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	r.mu.Lock()
 	if prev, exists := r.running[qr.opID]; exists && prev.queuedCancel {
 		r.mu.Unlock()
-		r.releaseRunHandle(qr.opID)
+		// Status first, release second. The claim is what stops the dispatcher
+		// from handing this row out again, and the row still reads "queued"
+		// until this write lands; releasing first left a window in which a
+		// canceled op was dispatched and run.
 		now := time.Now().UTC()
 		msg := "canceled before start (canceled while queued for a worker)"
 		if err := r.store.UpdateOperationV2Status(qr.opID, "canceled", nil, &now, &msg); err != nil {
 			r.logger.Warn("registry: failed to mark channel-canceled op canceled", "op_id", qr.opID, "error", err)
 		}
+		r.releaseRunHandle(qr.opID)
 		// R-1: this is a terminal transition too — publish op.terminal so the UI
 		// bell drops the op instead of leaving it phantom-"running".
 		r.publishOpTerminal(qr.opID, qr.defID, "canceled")
@@ -296,13 +300,17 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// passed it. The scan resumes from its checkpoint when the gate clears.
 	if qr.defID == scanStandDownDefID && r.scanStandDownActive() {
 		close(h.parked)
-		r.releaseRunHandle(qr.opID)
+		// Status first, release second (same reason as the canceled-while-queued
+		// exit above): released first, the row still read "queued" with no
+		// claim, so a stand-down ending in that gap let the scan be dispatched
+		// and run, and this write then landed on top of the live run.
 		quiescedAt := time.Now().UTC()
 		status := interruptedStatus(qr.resumePolicy)
 		msg := "quiesced before start: scan gate held by a maintenance op"
 		if err := r.store.UpdateOperationV2Status(qr.opID, status, nil, &quiescedAt, &msg); err != nil {
 			r.logger.Warn("registry: failed to mark scan quiesced-before-start", "op_id", qr.opID, "error", err)
 		}
+		r.releaseRunHandle(qr.opID)
 		r.publishOpTerminal(qr.opID, qr.defID, status)
 		r.logger.Info("registry: scan quiesced before start (scan gate held)", "op_id", qr.opID, "status", status)
 		// Without this the dropped scan was never recorded anywhere a release
@@ -313,10 +321,46 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		return false
 	}
 
-	// Mark running in DB.
+	// Take the row from "queued" to "running" as a compare-and-set, and do not
+	// run unless it applied. This is the one place that decides a run starts.
+	//
+	// It used to be an unconditional write whose failure was only logged, and
+	// Run was invoked regardless. That let an op run more than once under one
+	// id, three ways:
+	//   - the write failed: the row read "queued" for the whole run, so the
+	//     moment this worker released its claim the dispatcher handed the row
+	//     out again (and forever, if the terminal write failed too);
+	//   - the row was no longer queued at all (already finished, picked from a
+	//     stale dispatcher snapshot): the write flipped a completed row back to
+	//     "running" and ran it again;
+	//   - Registry.Cancel flipped a queued row to "canceled" just as the
+	//     dispatcher claimed it: the write overwrote "canceled" and the op ran
+	//     after the caller had been told it was canceled.
+	// The dispatcher re-reads the row after claiming it and catches most of
+	// these earlier, but it reads and then sends; only a conditional write here
+	// leaves no gap.
+	//
+	// Not applied means some other transition owns the row now, so its status is
+	// left alone. A failed write leaves the row as it was: still queued, it is
+	// dispatched again next cycle; anything else, it was not ours to run.
+	started, casErr := r.store.SetOperationV2StatusIfQueued(qr.opID, "running")
+	if casErr != nil || !started {
+		close(h.parked)
+		r.releaseRunHandle(qr.opID)
+		if casErr != nil {
+			r.logger.Warn("registry: could not mark op running; not running it (retried while it stays queued)",
+				"op_id", qr.opID, "def_id", qr.defID, "error", casErr)
+		} else {
+			r.logger.Info("registry: dropped run; the row is no longer queued",
+				"op_id", qr.opID, "def_id", qr.defID)
+		}
+		return false
+	}
+	// Stamp the attempt's start time. The conditional write above takes no
+	// timestamp; a failure here costs only the displayed start time.
 	now := attemptStartedAt
 	if err := r.store.UpdateOperationV2Status(qr.opID, "running", &now, nil, nil); err != nil {
-		r.logger.Warn("registry: failed to mark op running", "op_id", qr.opID, "error", err)
+		r.logger.Warn("registry: failed to stamp op start time", "op_id", qr.opID, "error", err)
 	}
 
 	r.logger.Info("registry: starting run", "op_id", qr.opID, "def_id", qr.defID)
@@ -698,7 +742,12 @@ func (r *Registry) checkInfiniteRestart(qr *queuedRun, def OperationDef) bool {
 	// Mark interrupted_dropped.
 	completed := time.Now().UTC()
 	msg := "force-dropped: infinite restart without progress"
-	_ = r.store.UpdateOperationV2Status(qr.opID, "interrupted_dropped", nil, &completed, &msg)
+	if err := r.store.UpdateOperationV2Status(qr.opID, "interrupted_dropped", nil, &completed, &msg); err != nil {
+		// The row stays queued, so this drop repeats every dispatch cycle until
+		// the write lands. Say so rather than loop silently.
+		r.logger.Warn("registry: failed to mark force-dropped op interrupted_dropped; it will be dropped again",
+			"op_id", qr.opID, "def_id", def.ID, "error", err)
+	}
 	// R-1: fan out op.terminal for the force-drop transition.
 	r.publishOpTerminal(qr.opID, def.ID, "interrupted_dropped")
 	// C-2: release the dispatcher's stub handle. The force-drop path returned
