@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.49.0
+// version: 1.50.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-03
 
@@ -744,14 +744,30 @@ const RevertHistorySource = "operation_revert"
 // The write has committed when history is recorded; a history failure is
 // logged at Error and does not fail the restore.
 func (rs *RevertService) modifyBook(opID, id string, fn func(*database.Book) error) error {
+	updated, err := recordedModifyBook(rs.db, opID, id, fn)
+	if err != nil {
+		return err
+	}
+	if updated == nil {
+		return &undo.ReferentError{Reason: undo.ReasonBookMissing, Detail: fmt.Sprintf("book %s no longer exists", id)}
+	}
+	return nil
+}
+
+// recordedModifyBook is db.ModifyBook plus the history rows of what the
+// committed attempt changed (see modifyBook). It returns ModifyBook's own
+// result, so it can stand in for ModifyBook (revertHistoryStore). A refused
+// write (fn's error, ErrSkipBookWrite) records nothing.
+func recordedModifyBook(db revertServiceStore, opID, id string, fn func(*database.Book) error) (*database.Book, error) {
 	var before, after *database.Book
-	updated, err := rs.db.ModifyBook(id, func(book *database.Book) error {
+	var at time.Time
+	updated, err := db.ModifyBook(id, func(book *database.Book) error {
+		before, after = nil, nil
 		snap, serr := database.SnapshotBook(book)
 		if serr != nil {
 			return serr
 		}
 		if ferr := fn(book); ferr != nil {
-			before, after = nil, nil
 			return ferr
 		}
 		post, perr := database.SnapshotBook(book)
@@ -759,25 +775,34 @@ func (rs *RevertService) modifyBook(opID, id string, fn func(*database.Book) err
 			return perr
 		}
 		// Captured on every invocation, so a retried callback leaves the
-		// values of the attempt that committed.
-		before, after = snap, post
+		// values (and the time) of the attempt that committed. The time is
+		// taken here, beside the write, not after the store returns.
+		before, after, at = snap, post, time.Now()
 		return nil
 	})
-	if err != nil {
-		return err
+	if err != nil || updated == nil || before == nil || after == nil {
+		return updated, err
 	}
-	if updated == nil {
-		return &undo.ReferentError{Reason: undo.ReasonBookMissing, Detail: fmt.Sprintf("book %s no longer exists", id)}
-	}
-	if before == nil || after == nil {
-		return nil
-	}
-	if _, herr := database.RecordBookEditHistory(revertHistoryRecorder{rs.db, opID}, before, after,
-		metafetch.ChangeTypeApplyUndo, RevertHistorySource, time.Now(), nil); herr != nil {
+	if _, herr := database.RecordBookEditHistory(revertHistoryRecorder{db, opID}, before, after,
+		metafetch.ChangeTypeApplyUndo, RevertHistorySource, at, nil); herr != nil {
 		revertLog.Error("revert of operation %s restored book %s but its history was not fully recorded: %s",
 			logger.SanitizeLogValue(opID), logger.SanitizeLogValue(id), logger.SanitizeLogValue(herr.Error()))
 	}
-	return nil
+	return updated, nil
+}
+
+// revertHistoryStore is the revert's store with every ModifyBook recorded
+// (recordedModifyBook). It is handed to the versionprimary helpers the
+// version-group settle calls (Crown, EnsureSinglePrimary), whose writes of
+// is_primary_version would otherwise leave no history. versionprimary's other
+// callers keep their own stores.
+type revertHistoryStore struct {
+	revertServiceStore
+	opID string
+}
+
+func (s revertHistoryStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	return recordedModifyBook(s.revertServiceStore, s.opID, id, fn)
 }
 
 // revertHistoryRecorder stamps the operation id into every history row's
