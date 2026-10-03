@@ -1,5 +1,5 @@
 // file: internal/server/handlers/ai_parsed_payload_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5154d5a5-0191-49dc-95fa-0d8b4f784a05
 // last-edited: 2026-10-03
 
@@ -19,7 +19,7 @@ import (
 // service never reads, so every AI-parsed series number was dropped. It goes
 // as series_position now, and the update service stores it.
 func TestAIParsedUpdatePayload_SeriesNumberIsStored(t *testing.T) {
-	payload := handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Title: "Saga 3", Series: "Saga", SeriesNum: 3}, &database.Book{})
+	payload := handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Title: "Saga 3", Series: "Saga", SeriesNum: 3}, &database.Book{}, "")
 	if _, ok := payload["series_sequence"]; ok {
 		t.Fatalf("payload still uses series_sequence: %v", payload)
 	}
@@ -52,17 +52,17 @@ func TestAIParsedUpdatePayload_SeriesNumberIsStored(t *testing.T) {
 }
 
 func TestAIParsedUpdatePayload_OnlyFilledFields(t *testing.T) {
-	if got := handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{}, nil); len(got) != 0 {
+	if got := handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{}, nil, ""); len(got) != 0 {
 		t.Fatalf("empty parse produced %v", got)
 	}
-	if got := handlers.AIParsedUpdatePayload(nil, nil); len(got) != 0 {
+	if got := handlers.AIParsedUpdatePayload(nil, nil, ""); len(got) != 0 {
 		t.Fatalf("nil parse produced %v", got)
 	}
 }
 
-// The parse only fills a missing position: a stored "1.5" (or any stored
-// number) is not overwritten by the parse's whole number, which the update
-// service would also lock like a user edit.
+// For the book's own series the parse only fills a missing position: a
+// stored "1.5" (or any stored number) is not overwritten by the parse's whole
+// number, which the update service would also lock like a user edit.
 func TestAIParsedUpdatePayload_DoesNotOverwriteAStoredPosition(t *testing.T) {
 	raw, seq := "1.5", 1
 	for name, book := range map[string]*database.Book{
@@ -70,12 +70,64 @@ func TestAIParsedUpdatePayload_DoesNotOverwriteAStoredPosition(t *testing.T) {
 		"int only": {SeriesSequence: &seq},
 		"both":     {SeriesSequence: &seq, SeriesPositionRaw: &raw},
 	} {
-		payload := handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Series: "Saga", SeriesNum: 1}, book)
+		payload := handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Series: "Saga", SeriesNum: 1}, book, "saga")
 		if _, ok := payload["series_position"]; ok {
 			t.Errorf("%s: payload overwrites the stored position: %v", name, payload)
 		}
 		if payload["series_name"] != "Saga" {
 			t.Errorf("%s: series name dropped: %v", name, payload)
 		}
+	}
+}
+
+// A parse that moves the book to a DIFFERENT series sends its number even
+// when the book has one (the old number belongs to the old series), and with
+// no parsed number clears the position. A stored 0 counts as no position.
+func TestAIParsedUpdatePayload_SeriesChangeReplacesOrClearsThePosition(t *testing.T) {
+	raw, seq, zero := "1", 1, 0
+	book := &database.Book{SeriesSequence: &seq, SeriesPositionRaw: &raw}
+
+	payload := handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Series: "Other Saga", SeriesNum: 3}, book, "The Saga")
+	if payload["series_position"] != 3 {
+		t.Fatalf("series change: series_position = %v, want 3", payload["series_position"])
+	}
+	payload = handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Series: "Other Saga"}, book, "The Saga")
+	if v, ok := payload["series_position"]; !ok || v != nil {
+		t.Fatalf("series change without a number: series_position = %v (sent %v), want null", v, ok)
+	}
+	payload = handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Series: "the  saga", SeriesNum: 3}, book, "The Saga")
+	if _, ok := payload["series_position"]; ok {
+		t.Fatalf("same series (other spelling) overwrote the position: %v", payload)
+	}
+	payload = handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Series: "The Saga", SeriesNum: 3}, &database.Book{SeriesSequence: &zero}, "The Saga")
+	if payload["series_position"] != 3 {
+		t.Fatalf("stored 0 should count as no position: %v", payload)
+	}
+
+	// Through the update service: the move stores the new number.
+	store, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	s, err := store.CreateSeries("The Saga", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/m.m4b", Format: "m4b",
+		SeriesID: &s.ID, Series: s, SeriesSequence: &seq, SeriesPositionRaw: &raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Series: "Other Saga", SeriesNum: 3}, b, "The Saga")
+	if _, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), b.ID, p); err != nil {
+		t.Fatal(err)
+	}
+	row, err := store.GetBookByID(b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.SeriesSequence == nil || *row.SeriesSequence != 3 || row.SeriesPositionRaw == nil || *row.SeriesPositionRaw != "3" {
+		t.Fatalf("moved book position = %v / %v, want 3 / \"3\"", row.SeriesSequence, row.SeriesPositionRaw)
 	}
 }

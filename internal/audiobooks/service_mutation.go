@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-03
 
@@ -478,6 +478,15 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		series, err := svc.store.GetSeriesByName(seriesName, payload.AuthorID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve series")
+		}
+		if series == nil && payload.AuthorID != nil {
+			// The lookup is scoped by author. A series stored with no author
+			// that answers to the name (case and spacing insensitive) is the
+			// same series; creating an author-scoped twin of it is the
+			// duplicate this edit path used to mint.
+			if series, err = svc.store.GetSeriesByName(seriesName, nil); err != nil {
+				return nil, fmt.Errorf("failed to resolve series")
+			}
 		}
 		if series == nil {
 			series, err = svc.store.CreateSeries(seriesName, payload.AuthorID)
@@ -999,7 +1008,12 @@ func (svc *AudiobookService) planSeriesEdit(bookID string, before *database.Book
 	case sentName == row.Name:
 		return seriesEditPlan{sameRow: true, name: row.Name}
 	case norm != util.NormalizeAuthor(row.Name):
-		// Matches only a stale shown name: keep the row's name.
+		// Matches only a stale shown name (the row was renamed since the book
+		// was written): keep the link and show the row's name. The response
+		// has no field to tell the user, so it is logged (todo.d
+		// EDIT-STALE-SERIES-NOTE).
+		singleLog.Info("UpdateAudiobook %s: sent series %q matched the book's stale series name %q; series %d is named %q, which the book now shows",
+			logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(sentName), logger.SanitizeLogValue(shown), row.ID, logger.SanitizeLogValue(row.Name))
 		return seriesEditPlan{sameRow: true, name: row.Name}
 	}
 	counts, err := database.SeriesRefCounts(svc.store)
