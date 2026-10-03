@@ -339,4 +339,3 @@ func TestRelinkStaleSeries_GuardExclusion(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, got.SeriesID)
 }
-
