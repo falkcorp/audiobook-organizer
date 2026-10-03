@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -285,7 +285,7 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 		if gid == "" {
 			continue
 		}
-		explicit, err := rs.settleGroup(gid, g.originals, g.owed, in.crowned)
+		explicit, err := rs.settleGroup(operationID, gid, g.originals, g.owed, in.crowned)
 		if err == nil {
 			continue
 		}
@@ -324,7 +324,10 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 //
 // On an error it returns the members explicit true now, for the owed
 // record.
-func (rs *RevertService) settleGroup(gid string, originals []string, owed *settleOwedGroup, crowned map[string][]string) ([]string, error) {
+func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed *settleOwedGroup, crowned map[string][]string) ([]string, error) {
+	// Every is_primary_version write below records history, Source
+	// operation_revert, BatchID the operation id (revertHistoryStore).
+	hist := revertHistoryStore{revertServiceStore: rs.db, opID: opID}
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	members, err := rs.db.GetBooksByVersionGroup(gid)
@@ -375,7 +378,7 @@ func (rs *RevertService) settleGroup(gid string, originals []string, owed *settl
 				if !electable[y] {
 					continue
 				}
-				if err := rs.yieldOriginal(y); err != nil {
+				if err := rs.yieldOriginal(opID, y); err != nil {
 					return explicit, fmt.Errorf("return %s non-primary in group %s: %w", y, gid, err)
 				}
 			}
@@ -388,7 +391,7 @@ func (rs *RevertService) settleGroup(gid string, originals []string, owed *settl
 			}
 			break
 		}
-		if _, err := versionprimary.Crown(rs.db, gid, o); err != nil {
+		if _, err := versionprimary.Crown(hist, gid, o); err != nil {
 			return explicit, fmt.Errorf("crown %s and demote the rest of group %s: %w", o, gid, err)
 		}
 		return nil, nil
@@ -396,7 +399,7 @@ func (rs *RevertService) settleGroup(gid string, originals []string, owed *settl
 	if effective == 1 {
 		return nil, nil
 	}
-	if _, err := versionprimary.EnsureSinglePrimary(context.Background(), rs.db, gid,
+	if _, err := versionprimary.EnsureSinglePrimary(context.Background(), hist, gid,
 		versionprimary.Env{RootDir: merge.TrashRestoreEnv().RootDir}); err != nil {
 		return explicit, fmt.Errorf("hand off version group %s: %w", gid, err)
 	}
@@ -421,8 +424,10 @@ func laterPick(explicit, originals, crowned []string) string {
 
 // yieldOriginal writes an explicit false on an original that yields to a
 // later pick (a nil would read as primary).
-func (rs *RevertService) yieldOriginal(id string) error {
-	_, err := rs.db.ModifyBook(id, func(b *database.Book) error {
+// The write records history like every other revert write (modifyBook); a
+// book gone by now is nothing to yield, as before.
+func (rs *RevertService) yieldOriginal(opID, id string) error {
+	err := rs.modifyBook(opID, id, func(b *database.Book) error {
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 			return database.ErrSkipBookWrite
 		}
@@ -430,7 +435,8 @@ func (rs *RevertService) yieldOriginal(id string) error {
 		b.IsPrimaryVersion = &no
 		return nil
 	})
-	if errors.Is(err, database.ErrSkipBookWrite) {
+	var gone *undo.ReferentError
+	if errors.Is(err, database.ErrSkipBookWrite) || (errors.As(err, &gone) && gone.Reason == undo.ReasonBookMissing) {
 		return nil
 	}
 	return err
