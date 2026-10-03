@@ -3296,26 +3296,18 @@ func (f *fragFixture) copiesFixtureState(t *testing.T) map[string]string {
 	return out
 }
 
-// cutTemplate is a seeded and planned copies folder whose store directory
-// is cloned per cut point, so a cut costs one store open, the cut-off apply
-// and the resume, never a re-seed or re-plan. The clone keeps every id, so
-// the template's plan row is valid against every clone, and the files on
-// disk are shared (the fixer moves no file).
-type cutTemplate struct {
-	dir, root string
-	ids       map[string]string
-	planJSON  string
-	row       repairs.Row
-}
-
-func newCutTemplate(t *testing.T, org string, vg bool) *cutTemplate {
+// newCutFixture seeds and plans the copies folder on an in-memory store
+// (database.NewPebbleStoreInMemory: every Pebble write passes pebble.Sync,
+// and on a real disk the ~130 events of each cut point cost seconds of
+// fsync). The fixer's reads and writes are the same code either way.
+func newCutFixture(t *testing.T, org string, vg bool) (*fragFixture, repairs.Row) {
 	t.Helper()
 	const folder = "lib/Clarke/02_light_of_other_days"
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
-	dir := t.TempDir()
-	s, err := database.NewPebbleStore(dir)
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
 	f := &fragFixture{s: s, root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
 	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
@@ -3332,26 +3324,7 @@ func newCutTemplate(t *testing.T, org string, vg bool) *cutTemplate {
 		}
 	}
 	r, _ := f.p7Plan(t, folder)
-	tm := &cutTemplate{dir: dir, root: root, ids: f.ids, planJSON: *f.ops.rows["op-plan"].ResultData, row: r}
-	require.NoError(t, s.Close())
-	return tm
-}
-
-// clone opens a copy of the template's store as a fixture.
-func (tm *cutTemplate) clone(t *testing.T) *fragFixture {
-	t.Helper()
-	dir := t.TempDir()
-	require.NoError(t, os.CopyFS(dir, os.DirFS(tm.dir)))
-	s, err := database.NewPebbleStore(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	s.WaitForWarmup()
-	f := &fragFixture{s: s, root: tm.root, ids: tm.ids, rowIDs: map[string]string{}}
-	plan := tm.planJSON
-	f.ops = &planOps{rows: map[string]*database.OperationV2Row{
-		"op-plan": {ID: "op-plan", DefID: repairs.PlanOpID, Status: "completed", ResultData: &plan}}}
-	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
-	return f
+	return f, r
 }
 
 // TestFragmentFixer_NumberedCopiesCutAtEveryStep cuts a numbered set with
@@ -3372,17 +3345,16 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 	for _, org := range []string{"none", "all", "copies"} {
 		for _, vg := range []bool{false, true} {
 			t.Run(fmt.Sprintf("organized=%s vg=%t", org, vg), func(t *testing.T) {
-				tm := newCutTemplate(t, org, vg)
-				ref := tm.clone(t)
-				out := ref.apply(t, "op-plan", "op-apply", []string{tm.row.RowID}, nil)
+				ref, rr := newCutFixture(t, org, vg)
+				out := ref.apply(t, "op-plan", "op-apply", []string{rr.RowID}, nil)
 				require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
 				want := ref.copiesFixtureState(t)
 				cuts, through := 0, 0
 				for at := 1; ; at++ {
-					f := tm.clone(t)
+					f, r := newCutFixture(t, org, vg)
 					cs := &cutStore{PebbleStore: f.s, at: at}
 					w := repairs.NewWriter(cs, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(cs, cs, "op-cut")
-					err := newFragmentFixer(f.p).Apply(context.Background(), w, tm.row)
+					err := newFragmentFixer(f.p).Apply(context.Background(), w, r)
 					if !cs.hit {
 						require.NoError(t, err, "event %d never reached", at)
 						break
@@ -3394,10 +3366,10 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 						continue
 					}
 					cuts++
-					got, rerr := newFragmentFixer(f.p).Replan(context.Background(), nil, tm.row, nil)
+					got, rerr := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
 					require.NoError(t, rerr)
-					require.Equal(t, tm.row.Fingerprint, got.Fingerprint, "cut at event %d: re-plan reason %q", at, got.Reason)
-					res := f.apply(t, "op-plan", "op-resume", []string{tm.row.RowID}, nil)
+					require.Equal(t, r.Fingerprint, got.Fingerprint, "cut at event %d: re-plan reason %q", at, got.Reason)
+					res := f.apply(t, "op-plan", "op-resume", []string{r.RowID}, nil)
 					require.Equal(t, 1, res.Applied, "cut at event %d: outcomes %v %+v", at, res.ByOutcome, res.Rows)
 					require.Equal(t, want, f.copiesFixtureState(t), "cut at event %d: end state", at)
 				}
