@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_lease_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6b1e8d42-3c7f-4a95-b2d6-9f0a4e7c1d38
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package maintenance
 
@@ -36,6 +36,57 @@ func (f *fragFixture) applyErr(t *testing.T, planOpID, opID string, rowIDs []str
 
 func (f *fragFixture) scan() *scriptedScan { return f.p.deps.(scanDeps).scan }
 
+// holdMergeLockPastTheLease holds merge.LockMergeRMW while start's apply
+// waits for it, for six lease lengths of the scan's clock, and releases it.
+// start launches the apply in a goroutine and returns; the caller collects
+// the apply's result after this returns, pass or fail.
+//
+// No wall-clock margin decides the outcome. The scan's lease clock moves only
+// here, 3/4 of a lease at a time, and only after a renewal has landed since
+// the last move (scriptedScan.advanceAfterRenewal), so the lock is held until
+// the test has OBSERVED the renewals, however slowly the runner schedules
+// them. Before the lock is released the apply can renew three times without
+// the wait's own renewals (RunApply's two per-row beats and LockWaiting's
+// beat before it blocks); the eight moves need eight, so at least five come
+// from the wait. An apply that blocks without renewing never gets the clock
+// moved again and fails the test on the liveness deadline below, which only bounds a
+// run that is already failing. The clock stops before the lock is released,
+// so the row's own writes are never raced against the lease: how long one
+// store write takes on a busy runner is not what these tests are about.
+//
+// (They used a 400ms wall-clock lease and a 1.5s sleep. The wait renewed
+// correctly, and then the lease lapsed between two of the row's WRITES on a
+// slow CI runner, where one write took longer than 400ms.)
+func holdMergeLockPastTheLease(t *testing.T, scan *scriptedScan, wait *repairs.WaitOptions, start func()) {
+	t.Helper()
+	const (
+		ttl   = 5 * time.Minute // the registry's lease
+		moves = 8               // x 3/4 ttl = six leases
+	)
+	scan.mu.Lock()
+	scan.ttl = ttl
+	scan.mu.Unlock()
+	wait.LockRenewEvery = 2 * time.Millisecond
+
+	merge.LockMergeRMW()
+	// Released on every path, the failing one included: the caller then
+	// collects the apply's result before the fixture's store closes.
+	defer merge.UnlockMergeRMW()
+	start()
+	deadline := time.Now().Add(time.Minute)
+	for moved := 0; moved < moves; {
+		if scan.advanceAfterRenewal(ttl * 3 / 4) {
+			moved++
+			continue
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("the apply stopped renewing the lease while it waited for the merge lock: %d of %d renewals seen", moved, moves)
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // An outside holder keeps merge.LockMergeRMW (a dedup merge, say) for longer
 // than the stand-down lease while the fragment row waits for it. The wait
 // renews the lease, so the row applies once the lock is free. Before the fix
@@ -47,24 +98,17 @@ func TestFragmentFixer_MergeLockWaitKeepsTheLease(t *testing.T) {
 	f := newFragFixture(t)
 	f.seed(t)
 	f.plan(t, "op-plan")
-	scan := f.scan()
-	scan.mu.Lock()
-	scan.ttl = 400 * time.Millisecond
-	scan.mu.Unlock()
-	f.p.standDownWait.LockRenewEvery = 20 * time.Millisecond
-
-	merge.LockMergeRMW()
 	type out struct {
 		res *repairs.ApplyResult
 		err error
 	}
 	done := make(chan out, 1)
-	go func() {
-		res, err := f.applyErr(t, "op-plan", "op-apply", []string{"moved:" + f.ids["parent"]}, nil)
-		done <- out{res, err}
-	}()
-	time.Sleep(1500 * time.Millisecond) // well past the 400ms lease
-	merge.UnlockMergeRMW()
+	holdMergeLockPastTheLease(t, f.scan(), &f.p.standDownWait, func() {
+		go func() {
+			res, err := f.applyErr(t, "op-plan", "op-apply", []string{"moved:" + f.ids["parent"]}, nil)
+			done <- out{res, err}
+		}()
+	})
 	o := <-done
 	require.NoError(t, o.err, "%+v", o.res)
 	require.Equal(t, 1, o.res.Applied, "%+v", o.res.Rows)
@@ -351,19 +395,12 @@ func TestDuplicateCopies_MergeLockWaitKeepsTheLease(t *testing.T) {
 	d := newDCFixture(t)
 	s, l := d.dune(t)
 	d.planFor(t, dcFixerID, "op-plan", nil)
-	scan := d.scan()
-	scan.mu.Lock()
-	scan.ttl = 400 * time.Millisecond
-	scan.mu.Unlock()
-	d.p.standDownWait.LockRenewEvery = 20 * time.Millisecond
-
-	merge.LockMergeRMW()
 	type out struct {
 		res *repairs.ApplyResult
 		err error
 	}
 	done := make(chan out, 1)
-	go func() {
+	apply := func() {
 		no := false
 		params, err := json.Marshal(repairs.ApplyParams{FixerID: dcFixerID, PlanOpID: "op-plan", RowIDs: []string{dupRowID(s, l)}, DryRun: &no})
 		if err != nil {
@@ -374,9 +411,8 @@ func TestDuplicateCopies_MergeLockWaitKeepsTheLease(t *testing.T) {
 		runErr := d.p.runRepairsApply(context.Background(), params, rep)
 		res, _ := rep.result.(*repairs.ApplyResult)
 		done <- out{res, runErr}
-	}()
-	time.Sleep(1500 * time.Millisecond) // well past the 400ms lease
-	merge.UnlockMergeRMW()
+	}
+	holdMergeLockPastTheLease(t, d.scan(), &d.p.standDownWait, func() { go apply() })
 	o := <-done
 	require.NoError(t, o.err, "%+v", o.res)
 	require.Equal(t, 1, o.res.Applied, "%+v", o.res.Rows)
