@@ -1,5 +1,5 @@
 // file: internal/database/series_preserve_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d326551d-56ac-4803-a326-a38f5176bb35
 // last-edited: 2026-10-03
 
@@ -51,5 +51,66 @@ func TestUpdateBook_SeriesPreserveGuardFollowsSeriesID(t *testing.T) {
 	}
 	if row.SeriesID != nil || row.Series != nil {
 		t.Fatalf("series clear did not stick: id=%v series=%+v", row.SeriesID, row.Series)
+	}
+}
+
+// The store holds Series to SeriesID on every write, so a writer that changes
+// only the link -- batch series_id null or another id, the cleanup/reconcile
+// unlinks -- cannot leave the old series' object (which reads prefer) behind.
+func TestUpdateBook_SeriesObjectFollowsALinkOnlyChange(t *testing.T) {
+	store, err := NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	oldSeries, err := store.CreateSeries("Redshirts", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSeries, err := store.CreateSeries("Old Man's War", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book, err := store.CreateBook(&Book{Title: "R", FilePath: "/library/link.m4b", SeriesID: &oldSeries.ID, Series: oldSeries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reread := func() *Book {
+		t.Helper()
+		row, err := store.GetBookByID(book.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+
+	// Moved to another series by ID alone, stale object still attached.
+	row := reread()
+	row.SeriesID = &newSeries.ID
+	if _, err := store.UpdateBook(book.ID, row); err != nil {
+		t.Fatal(err)
+	}
+	if got := reread(); got.Series != nil && got.Series.ID != newSeries.ID {
+		t.Fatalf("old series object survived a move to series %d: %+v", newSeries.ID, got.Series)
+	}
+
+	// A write that carries the right object keeps it.
+	row = reread()
+	row.Series = newSeries
+	if _, err := store.UpdateBook(book.ID, row); err != nil {
+		t.Fatal(err)
+	}
+	if got := reread(); got.Series == nil || got.Series.ID != newSeries.ID {
+		t.Fatalf("matching series object was dropped: %+v", got.Series)
+	}
+
+	// Unlinked by ID alone (batch series_id null), stale object attached.
+	row = reread()
+	row.SeriesID = nil
+	if _, err := store.UpdateBook(book.ID, row); err != nil {
+		t.Fatal(err)
+	}
+	if got := reread(); got.SeriesID != nil || got.Series != nil {
+		t.Fatalf("link-only unlink kept the series: id=%v series=%+v", got.SeriesID, got.Series)
 	}
 }

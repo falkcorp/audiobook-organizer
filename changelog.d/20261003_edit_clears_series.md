@@ -1,6 +1,9 @@
 ### Fixed
 
-- Clearing a book's series in the editor now actually removes it. Before, saving an empty series returned success but the book kept showing its old series, because a cached copy of the series name was left on the book. The series number is cleared along with it, and the change is locked so a rescan or metadata fetch does not put the series back. Sending `"series_id": null` to the API now clears the series too.
+- Clearing a book's series in the editor now actually removes it. Before, saving an empty series returned success but the book kept showing its old series, because a cached copy of the series name was left on the book. The series number is cleared along with it, and the series is locked so a rescan or metadata fetch does not put it back. Setting a new series later leaves the number free for a fetch to fill. Sending `"series_id": null` to the API now clears the series too.
+- The database now keeps a book's cached series name in step with its series link on every save. Unlinking or moving a book to another series from bulk edit (or any other path that changes only the link) used to leave the old series name showing.
+- Saving a book in the editor no longer locks fields the user never touched. The editor sends every text field on each save, empty when the book has no value; an empty value for a field that is already empty is now ignored instead of being locked as empty, which used to stop metadata fetches from ever filling the description, publisher, language or narrator.
+- A book whose series link points at a series that no longer exists has that broken link removed when it is saved, without locking the series or erasing its series number.
 - Description, genre, ASIN and series number sent as plain fields to the book edit API were ignored. They are now saved, and can be cleared.
-- Clearing a narrator now also clears the narrator list Audiobookshelf reads, so the old narrator no longer lingers there.
-- An empty author name in a book edit is now ignored. It used to half-remove the author, leaving the book in an inconsistent state.
+- Clearing a narrator now also clears the narrator list Audiobookshelf reads, including when the narrator is stored only in that list, so the old narrator no longer lingers there.
+- An empty author name in a book edit is ignored. Asking the editor to clear the author is refused with a clear message ("the author cannot be cleared; set a different author") instead of reporting success and locking an empty author while the old one stayed.
