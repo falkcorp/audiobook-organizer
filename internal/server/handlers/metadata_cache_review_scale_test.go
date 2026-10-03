@@ -378,6 +378,29 @@ func BenchmarkReviewLoad(b *testing.B) {
 			runtime.KeepAlive(snap)
 		}
 	})
+	// An apply op's footprint between two rebuilds: one cache row deleted and
+	// one book written per applied book.
+	const changedPerRound = 50
+	bld, _ := incrBuilder(b, store, svc)
+	b.Run("after_incremental_rebuild_50_changed", func(b *testing.B) {
+		prev, err := bld.build(ctx, nil)
+		require.NoError(b, err)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			for _, r := range prev.rows[i*changedPerRound%(len(prev.rows)-changedPerRound):][:changedPerRound] {
+				require.NoError(b, store.DeleteMetadataCache(r.sum.BookID))
+				_, err := store.ModifyBook(r.sum.BookID, func(bk *database.Book) error { st := "matched"; bk.MetadataReviewStatus = &st; return nil })
+				require.NoError(b, err)
+			}
+			b.StartTimer()
+			next, err := bld.build(ctx, prev)
+			require.NoError(b, err)
+			require.True(b, next.incremental)
+			prev = next
+		}
+		b.ReportMetric(float64(len(prev.rows)), "rows")
+	})
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
 	_, _ = serveReview(b, h, "limit=1") // build the snapshot once
 	for _, q := range []string{"all=true", "all=true&view=index", "limit=50&offset=1000", "ids=" + firstIDs(b, h, 50)} {
@@ -389,6 +412,20 @@ func BenchmarkReviewLoad(b *testing.B) {
 			b.ReportMetric(float64(bytes), "body_bytes")
 		})
 	}
+	// The index request while books are being written under the snapshot
+	// (no rebuild in between): the overlay reads only the changed books.
+	b.Run("after_warm_index_50_books_changed_since_snapshot", func(b *testing.B) {
+		r, _ := serveReview(b, h, "limit=50&offset=3000")
+		for _, x := range r.Data.Results {
+			_, err := store.ModifyBook(x.Book.ID, func(bk *database.Book) error { st := "no_match"; bk.MetadataReviewStatus = &st; return nil })
+			require.NoError(b, err)
+		}
+		var bytes int
+		for i := 0; i < b.N; i++ {
+			_, bytes = serveReview(b, h, "all=true&view=index")
+		}
+		b.ReportMetric(float64(bytes), "body_bytes")
+	})
 }
 
 func firstIDs(b *testing.B, h *MetadataCacheHandler, n int) string {
