@@ -234,7 +234,7 @@ func TestUpdateAudiobook_TopLevelDescriptionGenreASINPositionApply(t *testing.T)
 	row, err = store.GetBookByID(book.ID)
 	require.NoError(t, err)
 	for name, v := range map[string]*string{"description": row.Description, "genre": row.Genre, "asin": row.ASIN} {
-		require.True(t, v == nil || *v == "", "%s not cleared: %q", name, *v)
+		require.True(t, v == nil || *v == "", "%s not cleared: %v", name, v)
 	}
 	h := historyByField(t, store, book.ID)
 	for _, f := range []string{"description", "genre", "asin"} {
