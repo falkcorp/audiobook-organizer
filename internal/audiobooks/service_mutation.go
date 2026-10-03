@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-03
 
@@ -439,17 +439,36 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// Books hit by the old clear bug (nil SeriesID, stale embedded Series)
 	// show the stale name, so a repeat clear repairs them.
 	hadSeries := beforeSeries != ""
-	seriesUnchanged := seriesName != "" && seriesName == beforeSeries && before.SeriesID != nil && !sent("series_id")
+	// seriesSameRow: the sent name is the book's CURRENT series, compared
+	// the way the name lookup compares (util.NormalizeAuthor: case and
+	// whitespace insensitive). The link is kept and no row is ever created
+	// for it. Looking the name up again could resolve -- or create -- a
+	// different row of that name, because the lookup is scoped by the
+	// book's author: a case-only edit of a series stored without an author
+	// minted a second "The Saga" under the book's author and moved the book
+	// onto it. Only while the book is linked by ID: a name shown from a stale
+	// embedded object alone (nil SeriesID) goes through the lookup, which
+	// relinks the book; skipping it would let the store drop that object.
+	seriesSameRow := seriesName != "" && beforeSeries != "" && before.SeriesID != nil && !sent("series_id") &&
+		util.NormalizeAuthor(seriesName) == util.NormalizeAuthor(beforeSeries)
+	seriesUnchanged := seriesSameRow && seriesName == beforeSeries
+	// seriesRenamedFrom: the name the case-only rename replaced, recorded in
+	// the book's history after the commit (the column diff does not see it:
+	// series_id did not change).
+	seriesRenamedFrom := ""
 	switch {
 	case seriesUnchanged:
-		// The series the book already shows is not a series edit (the editor
-		// re-sends it on every save). Looking it up by name again could
-		// resolve -- or create -- a different series row of the same name
-		// (the lookup is scoped by author) and move the book onto it. Only
-		// while the book is linked by ID: a name shown from a stale embedded
-		// object alone (nil SeriesID) goes through the lookup, which relinks
-		// the book; skipping it would let the store drop that object.
+		// Re-sent as shown (the editor sends it on every save): not an edit.
 		resolvedSeriesName = beforeSeries
+	case seriesSameRow:
+		// A case (or spacing) change of the current series: the row is
+		// renamed when this book is its only member, else left as is.
+		resolvedSeriesName = svc.recaseSoleSeries(id, *before.SeriesID, seriesName)
+		if resolvedSeriesName == beforeSeries {
+			seriesUnchanged = true
+		} else {
+			seriesRenamedFrom = beforeSeries
+		}
 	case seriesName != "":
 		series, err := svc.store.GetSeriesByName(seriesName, payload.AuthorID)
 		if err != nil {
@@ -586,7 +605,14 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	}
 	if !seriesUnchanged && payload.SeriesID != nil && resolvedSeriesName != "" &&
 		(!sameIntPtr(payload.SeriesID, before.SeriesID) || before.Series == nil || before.Series.Name != resolvedSeriesName) {
-		payload.Book.Series = &database.Series{ID: *payload.SeriesID, Name: resolvedSeriesName, AuthorID: payload.AuthorID}
+		if before.Series != nil && before.Series.ID == *payload.SeriesID {
+			// Same row, new spelling: keep the row's own fields (its author).
+			renamed := *before.Series
+			renamed.Name = resolvedSeriesName
+			payload.Book.Series = &renamed
+		} else {
+			payload.Book.Series = &database.Series{ID: *payload.SeriesID, Name: resolvedSeriesName, AuthorID: payload.AuthorID}
+		}
 	}
 
 	// Save to database: this edit's changed fields only, onto the fresh row.
@@ -665,6 +691,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			editHistoryLog.Error("UpdateAudiobook %s: the edit was saved but its change history was not fully recorded "+
 				"(a queued metadata apply may not see it): %v", logger.SanitizeLogValue(id), herr)
 		}
+	}
+
+	// The case-only series rename (recaseSoleSeries), which the column diff
+	// above cannot see.
+	if seriesRenamedFrom != "" {
+		newMetadataStateSvc(svc.store).recordChange(id, database.HistoryFieldSeries,
+			database.ChangeTypeManual, "manual", seriesRenamedFrom, resolvedSeriesName)
 	}
 
 	// Save metadata state
@@ -764,6 +797,51 @@ func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written 
 		singleLog.Warn("UpdateAudiobook %s: the edit was saved but book_narrators was not updated: %v",
 			logger.SanitizeLogValue(id), err)
 	}
+}
+
+// recaseSoleSeries handles an edit that renames a book's current series to
+// a name the lookup treats as the same (only case or spacing differ). The
+// book keeps its link either way. When this book is the series' only member
+// -- counted in ANY state, trashed and non-primary versions included
+// (database.SeriesRefCounts) -- the row takes the sent spelling, through the
+// store's guarded rename (RenameSeriesIf: only if still named as read, and
+// only if no other series of that author answers to the name). When other
+// books share it, a one-book edit does not rename it for all of them, and the
+// row keeps its name. It returns the series' name after the call.
+//
+// The book's own change history records the rename: the save refreshes the
+// book's embedded Series object to the returned name, and the column diff
+// records the series row (old -> new). A failure leaves the name unchanged
+// and is logged; the edit still saves.
+func (svc *AudiobookService) recaseSoleSeries(bookID string, seriesID int, sentName string) string {
+	row, err := svc.store.GetSeriesByID(seriesID)
+	if err != nil || row == nil {
+		singleLog.Warn("UpdateAudiobook %s: series %d unreadable; case-only rename skipped: %v",
+			logger.SanitizeLogValue(bookID), seriesID, err)
+		if row != nil {
+			return row.Name
+		}
+		return sentName
+	}
+	if row.Name == sentName {
+		return row.Name
+	}
+	counts, err := database.SeriesRefCounts(svc.store)
+	if err != nil {
+		// Fail closed: an unanswerable count must not rename a shared row.
+		singleLog.Warn("UpdateAudiobook %s: series %d member count unavailable; case-only rename skipped: %v",
+			logger.SanitizeLogValue(bookID), seriesID, err)
+		return row.Name
+	}
+	if counts[seriesID] != 1 {
+		return row.Name
+	}
+	if err := svc.store.RenameSeriesIf(seriesID, row.Name, sentName); err != nil {
+		singleLog.Warn("UpdateAudiobook %s: case-only rename of series %d to %q skipped: %v",
+			logger.SanitizeLogValue(bookID), seriesID, logger.SanitizeLogValue(sentName), err)
+		return row.Name
+	}
+	return sentName
 }
 
 // junctionNarratorText is the narrator a GET shows for a book whose
