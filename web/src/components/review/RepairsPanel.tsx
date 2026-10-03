@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-03
 
@@ -278,7 +278,9 @@ function classLabel(c: string): string {
     'manual-only': 'Manual only',
     ambiguous: 'Ambiguous',
     held: 'Held',
-    relink: 'Relink',
+    'relink-no-history': 'Relink (no history)',
+    'held-cleared-by-history': 'Cleared (history)',
+    'held-name-mismatch': 'Name mismatch',
     'name-match': 'Name match',
     orphan: 'Orphan',
   };
@@ -342,7 +344,9 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_owner_manual: 'Doctor Who / Big Finish / Torchwood (manual)',
   skipped_guard_unreadable: 'Could not read for the guard',
   skipped_co_owner: 'Another book owns the same file',
-  skipped_user_cleared_series: 'Series cleared or overridden by a user',
+  skipped_cleared_by_field_lock: 'Series cleared or overridden (field lock)',
+  skipped_series_mismatch: 'Series evidence disagrees',
+  skipped_history_unreadable: 'Could not read series history',
   error: 'Error',
 };
 

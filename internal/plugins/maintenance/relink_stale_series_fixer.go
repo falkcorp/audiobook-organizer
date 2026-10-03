@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_stale_series_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1d26959f-7774-48db-b0ea-fa7813f655ef
 // last-edited: 2026-10-03
 
@@ -27,25 +27,43 @@ import (
 // relinkSeriesFixerID is the Repairs-lane id of the stale-series relink.
 const relinkSeriesFixerID = "maintenance.relink-stale-series"
 
-// Row classes of the relink fixer.
+// Row classes of the relink fixer. Every class but relinkClassRelink is
+// held; each is its own count in PlanResult.ByClass, so the plan summary is
+// the census.
 const (
 	// relinkClassRelink: the series row the embedded object names (by id)
-	// still exists; apply points SeriesID back at it.
-	relinkClassRelink = "relink"
-	// relinkClassNameMatch: that row is gone, but exactly one series row has
-	// the same normalized name and a compatible author. Held for the owner.
+	// exists, its name and author agree with the object and the book, and no
+	// series history clears or contradicts it. The only applicable class.
+	relinkClassRelink = "relink-no-history"
+	// relinkClassCleared: the newest series history row (or a series_name
+	// lock) cleared the series. Almost every series clear ever made leaves
+	// this exact state: the store kept the old object when SeriesID went nil
+	// (pebble_store.go preserve-on-nil). The clearing source is in the skip
+	// kind (skipped_cleared_by_<source>), so SkippedByKind groups the rows by
+	// who cleared them, and in Evidence.
+	relinkClassCleared = "held-cleared-by-history"
+	// relinkClassMismatch: something disagrees with the embedded id: the
+	// series row's name or author, or a newer history row naming another
+	// series.
+	relinkClassMismatch = "held-name-mismatch"
+	// relinkClassNameMatch: the row by id is gone, but exactly one series row
+	// has the same normalized name and a compatible author.
 	relinkClassNameMatch = "name-match"
 	// relinkClassOrphan: no series row by id and no unique name match. The
-	// embedded object is the only record of the series. Held.
+	// embedded object is the only record of the series.
 	relinkClassOrphan = "orphan"
 )
 
 // Skip kinds of the relink fixer besides the framework's and junkSkip*.
 const (
-	// relinkSkipUserCleared: the book's series was cleared or overridden by a
-	// user (a series_name field lock, or a history row that set a series
-	// field to empty). Relinking would undo that edit.
-	relinkSkipUserCleared = "skipped_user_cleared_series"
+	// relinkSkipClearedPrefix + the clearing row's source (or "field_lock"):
+	// the series was cleared or overridden; relinking would undo that edit.
+	relinkSkipClearedPrefix = "skipped_cleared_by_"
+	// relinkSkipMismatch: the evidence disagrees with the embedded id.
+	relinkSkipMismatch = "skipped_series_mismatch"
+	// relinkSkipHistoryUnreadable: the series history could not be read in
+	// full, so a clear cannot be ruled out.
+	relinkSkipHistoryUnreadable = "skipped_history_unreadable"
 	// relinkSkipNotStale: what a re-plan reports for a book that no longer
 	// has SeriesID == nil with an embedded Series object. A plan never lists
 	// it.
@@ -272,23 +290,18 @@ func (f *relinkSeriesFixer) evaluate(store OpsStore, idx *relinkSeriesIndex, b *
 	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
 		r.Evidence = append(r.Evidence, fmt.Sprintf("book carries iTunes persistent id %s (database write only; no file is touched)", *b.ITunesPersistentID))
 	}
+	authors, err := relinkBookAuthorIDs(store, b)
+	if err != nil {
+		return repairs.Row{}, err
+	}
 
-	// Classify.
-	var target *database.Series
-	var candidate *database.Series
+	// The series row by id, and the unique same-name candidate when it is gone.
+	var target, candidate *database.Series
 	if s, ok := idx.byID[emb.ID]; ok && emb.ID > 0 {
-		r.Class = relinkClassRelink
 		target = &s
 		r.Evidence = append(r.Evidence, fmt.Sprintf("series row %d exists: %q", s.ID, s.Name))
-		if normSeriesName(s.Name) != normSeriesName(emb.Name) {
-			r.Evidence = append(r.Evidence, fmt.Sprintf("the series row's name %q differs from the stored object's %q (renamed since?)", s.Name, emb.Name))
-		}
 	} else {
 		r.Evidence = append(r.Evidence, fmt.Sprintf("no series row has id %d", emb.ID))
-		authors, err := relinkBookAuthorIDs(store, b)
-		if err != nil {
-			return repairs.Row{}, err
-		}
 		var matches []database.Series
 		for _, s := range idx.byName[normSeriesName(emb.Name)] {
 			if relinkAuthorCompatible(s, authors) {
@@ -297,72 +310,111 @@ func (f *relinkSeriesFixer) evaluate(store OpsStore, idx *relinkSeriesIndex, b *
 		}
 		sort.Slice(matches, func(i, j int) bool { return matches[i].ID < matches[j].ID })
 		switch len(matches) {
+		case 0:
+			r.Evidence = append(r.Evidence, "no series row has that name with a compatible author")
 		case 1:
-			r.Class = relinkClassNameMatch
 			candidate = &matches[0]
-			r.Proposed = map[string]string{"candidate_series_id": strconv.Itoa(candidate.ID)}
 			r.Evidence = append(r.Evidence, fmt.Sprintf("candidate: series %d %q is the only same-name series with a compatible author", candidate.ID, candidate.Name))
 		default:
-			r.Class = relinkClassOrphan
-			if len(matches) > 1 {
-				ids := make([]string, len(matches))
-				for i, m := range matches {
-					ids[i] = strconv.Itoa(m.ID)
-				}
-				r.Evidence = append(r.Evidence, fmt.Sprintf("%d same-name series with a compatible author (%s); none chosen", len(matches), strings.Join(ids, ", ")))
-			} else {
-				r.Evidence = append(r.Evidence, "no series row has that name with a compatible author")
+			ids := make([]string, len(matches))
+			for i, m := range matches {
+				ids[i] = strconv.Itoa(m.ID)
 			}
+			r.Evidence = append(r.Evidence, fmt.Sprintf("%d same-name series with a compatible author (%s); none chosen", len(matches), strings.Join(ids, ", ")))
 		}
 	}
 
-	extra := relinkFingerprintExtra(b, emb, r.Class, target, candidate)
+	// History first, for every class: a series someone cleared is a
+	// deliberate unlink whether or not its row still exists.
+	hv, err := relinkSeriesHistory(store, b.ID, emb, target)
+	if err != nil {
+		return repairs.Row{}, err
+	}
+	if hv.evidence != "" {
+		r.Evidence = append(r.Evidence, hv.evidence)
+	}
+	lockWhy := ""
+	if target != nil {
+		if lockWhy, err = relinkSeriesLockWhy(store, b.ID, emb, *target); err != nil {
+			return repairs.Row{}, err
+		}
+	} else if lockWhy, err = relinkSeriesLockWhy(store, b.ID, emb, emb); err != nil {
+		return repairs.Row{}, err
+	}
+
+	switch {
+	case hv.unreadable != "":
+		r.Class, r.Skipped, r.SkipReason = relinkClassError, relinkSkipHistoryUnreadable, hv.unreadable
+	case hv.cleared:
+		r.Class, r.Skipped = relinkClassCleared, relinkSkipClearedPrefix+skipKindToken(hv.source)
+		r.SkipReason = "the series was cleared: " + hv.evidence
+	case lockWhy != "":
+		r.Class, r.Skipped, r.SkipReason = relinkClassCleared, relinkSkipClearedPrefix+"field_lock", lockWhy
+		r.Evidence = append(r.Evidence, "field lock: "+lockWhy)
+	case hv.mismatch:
+		r.Class, r.Skipped = relinkClassMismatch, relinkSkipMismatch
+		r.SkipReason = "series history disagrees with the stored object: " + hv.evidence
+	case target != nil && normSeriesName(target.Name) != normSeriesName(emb.Name):
+		r.Class, r.Skipped = relinkClassMismatch, relinkSkipMismatch
+		r.SkipReason = fmt.Sprintf("series row %d is named %q, the stored object %q", target.ID, target.Name, emb.Name)
+	case target != nil && !relinkAuthorCompatible(*target, authors):
+		r.Class, r.Skipped = relinkClassMismatch, relinkSkipMismatch
+		r.SkipReason = fmt.Sprintf("series row %d belongs to author %s, which is not one of the book's", target.ID, intPtrStr(target.AuthorID))
+	case target != nil:
+		r.Class = relinkClassRelink
+	case candidate != nil:
+		r.Class, r.Skipped = relinkClassNameMatch, junkSkipNeedsManual
+		r.SkipReason = "the series row the object named is gone; one same-name series exists, but which series this book belongs to is the owner's call"
+		r.Proposed = map[string]string{"candidate_series_id": strconv.Itoa(candidate.ID)}
+	default:
+		r.Class, r.Skipped = relinkClassOrphan, junkSkipNeedsManual
+		r.SkipReason = "no series row matches the stored object; it is the only record of this series"
+	}
+	extra := relinkFingerprintExtra(b, emb, r.Class, target, candidate) + "|h=" + hv.key + "|lock=" + lockWhy
 
 	// Doctor Who / Big Finish / Torchwood by series name. The framework
 	// guard reads the series name through SeriesID, which is nil on every
-	// row here, so it never sees these names.
+	// row here, so it never sees these names. It overrides the skip kind but
+	// keeps the class, so the census still counts the row.
 	for _, name := range []string{emb.Name, nameOf(target), nameOf(candidate)} {
 		if name != "" && applygate.IsOwnerManualOnly("", name) {
 			r.Skipped = repairs.SkipOwnerManual
 			r.SkipReason = fmt.Sprintf("series %q is Doctor Who / Big Finish / Torchwood; owner applies these by hand", name)
-			r.Reason = r.SkipReason
-			r.Fingerprint = relinkFingerprint(r, extra)
-			return r, nil
+			r.Proposed = nil
+			break
 		}
 	}
-
-	switch r.Class {
-	case relinkClassNameMatch:
-		r.Skipped, r.SkipReason = junkSkipNeedsManual,
-			"the series row the object named is gone; one same-name series exists, but which series this book belongs to is the owner's call"
+	if r.Skipped != "" {
 		r.Reason = r.SkipReason
 		r.Fingerprint = relinkFingerprint(r, extra)
-		return r, nil
-	case relinkClassOrphan:
-		r.Skipped, r.SkipReason = junkSkipNeedsManual,
-			"no series row matches the stored object; it is the only record of this series"
-		r.Reason = r.SkipReason
-		r.Fingerprint = relinkFingerprint(r, extra)
-		return r, nil
-	}
-
-	// relink: refuse a book whose series a user cleared or overrode.
-	why, err := relinkUserCleared(store, b.ID, emb, *target)
-	if err != nil {
-		return repairs.Row{}, err
-	}
-	if why != "" {
-		r.Skipped, r.SkipReason = relinkSkipUserCleared, why
-		r.Reason = why
-		r.Fingerprint = relinkFingerprint(r, extra+"|cleared:"+why)
 		return r, nil
 	}
 	r.Proposed = map[string]string{"series_id": strconv.Itoa(target.ID), "series_name": target.Name}
-	r.Reason = "the series id was lost but the stored series object still names an existing series; " +
-		"review: a user's series clear made before field locks were written leaves this same state"
+	r.Reason = "the series id was lost, the stored series object names an existing series with the same name, " +
+		"and no series history clears or contradicts it; review: a series clear made through the old top-level " +
+		"edit path wrote no history and leaves this same state"
 	r.Detail = &relinkDecision{bookID: b.ID, seriesID: target.ID, embedded: emb}
 	r.Fingerprint = relinkFingerprint(r, extra)
 	return r, nil
+}
+
+// skipKindToken turns a history source into a skip-kind suffix: lowercase
+// letters, digits and "_" only ("maintenance.junk-author" ->
+// "maintenance_junk_author"); "" becomes "unknown".
+func skipKindToken(source string) string {
+	var sb strings.Builder
+	for _, c := range strings.ToLower(strings.TrimSpace(source)) {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+			sb.WriteRune(c)
+		default:
+			sb.WriteByte('_')
+		}
+	}
+	if sb.Len() == 0 {
+		return "unknown"
+	}
+	return sb.String()
 }
 
 func nameOf(s *database.Series) string {
@@ -395,55 +447,160 @@ func relinkAuthorCompatible(s database.Series, bookAuthors map[int]bool) bool {
 	return s.AuthorID == nil || len(bookAuthors) == 0 || bookAuthors[*s.AuthorID]
 }
 
+// seriesHistoryReader reads one field's full change history. The store keys
+// history by book, FIELD and time, so the whole-book read
+// (GetBookChangeHistory) is ordered field by field, not newest first across
+// fields, and its limit is applied after that: neither can find the newest
+// series row. Asserted on the ops store rather than widening OpsStore.
+type seriesHistoryReader interface {
+	GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error)
+}
+
 // The prod ops store (Server.OpsStore) is a database.Store; this proves it
-// answers relinkUserCleared's history read, so the assertion there never
-// misses in prod.
-var _ bookHistoryReader = database.Store(nil)
+// answers the per-field history read, so the assertion never misses in prod.
+var _ seriesHistoryReader = database.Store(nil)
 
-// relinkSeriesFields are the history fields a series edit is recorded under.
-var relinkSeriesFields = map[string]bool{"series_id": true, "series": true, database.FieldKeySeriesName: true}
+// relinkSeriesHistoryFields are the history fields a series change is
+// recorded under: "series" (edits and metadata applies, display names with
+// refs), "series_id" (the repairs Writer) and "series_name" (overrides).
+var relinkSeriesHistoryFields = []string{database.HistoryFieldSeries, "series_id", database.FieldKeySeriesName}
 
-// relinkHistoryWindow bounds the history read per book.
-const relinkHistoryWindow = 200
+// relinkHistoryAll reads a field's whole history: a series clear may be
+// older than any fixed window.
+const relinkHistoryAll = 1 << 30
 
-// relinkUserCleared reports why the book's series must not be relinked
-// because a user cleared or replaced it ("" when nothing says so):
-//   - a series_name field lock or override whose value is empty or names
-//     neither the stored object nor the target series;
-//   - the newest history row for a series field set it to empty, written by
-//     anyone but this fixer.
-//
-// A clear made through the old top-level edit path wrote neither, so it is
-// not detectable here; that is why every relink row is RiskReview.
-func relinkUserCleared(store OpsStore, bookID string, emb, target database.Series) (string, error) {
-	why, err := relinkSeriesLockWhy(store, bookID, emb, target)
-	if err != nil || why != "" {
-		return why, err
-	}
-	hist, ok := store.(bookHistoryReader)
+// relinkHistoryVerdict is what the series history says about a stale book.
+type relinkHistoryVerdict struct {
+	// cleared: the newest series row set the series to empty (or null).
+	cleared bool
+	// mismatch: the newest series row names a different series.
+	mismatch bool
+	// source of the deciding row; evidence describes it; key goes into the
+	// fingerprint.
+	source, evidence, key string
+	// unreadable says why the history could not be read in full.
+	unreadable string
+}
+
+// relinkSeriesHistory finds the newest series-related history row by
+// ChangedAt across series, series_id and series_name (all rows of each
+// field), and judges it. A row this fixer wrote counts like any other: a user
+// clear after the fixer's relink must hold the row. Rows sharing the newest
+// time are judged together, a clear among them winning.
+func relinkSeriesHistory(store OpsStore, bookID string, emb database.Series, target *database.Series) (relinkHistoryVerdict, error) {
+	var v relinkHistoryVerdict
+	hist, ok := store.(seriesHistoryReader)
 	if !ok {
-		// Fail closed: without the history a user's series clear is
-		// invisible, and relinking would undo it. The prod ops store is a
-		// database.Store, which has the method (asserted below), so this only
-		// fires for a store that cannot answer.
-		return "the store cannot read change history, so a user's series clear cannot be ruled out", nil
+		v.unreadable = "the store cannot read per-field change history, so a series clear cannot be ruled out"
+		v.key = "unreadable"
+		return v, nil
 	}
-	rows, err := hist.GetBookChangeHistory(bookID, relinkHistoryWindow)
-	if err != nil {
-		return "", fmt.Errorf("read change history of %s: %w", bookID, err)
-	}
-	for _, h := range rows {
-		if !relinkSeriesFields[h.Field] {
-			continue
+	var newest []database.MetadataChangeRecord
+	for _, field := range relinkSeriesHistoryFields {
+		rows, err := hist.GetMetadataChangeHistory(bookID, field, relinkHistoryAll)
+		if err != nil {
+			return v, fmt.Errorf("read %s history of %s: %w", field, bookID, err)
 		}
-		// The newest series row decides.
-		if h.Source != relinkSeriesFixerID && h.NewValue != nil && decodeJSONString(*h.NewValue) == "" &&
-			strings.TrimSpace(*h.NewValue) != "null" {
-			return fmt.Sprintf("history: %s set %s to empty (%s)", h.Source, h.Field, h.ChangedAt.UTC().Format(time.RFC3339)), nil
+		for _, h := range rows {
+			switch {
+			case len(newest) == 0 || h.ChangedAt.After(newest[0].ChangedAt):
+				newest = []database.MetadataChangeRecord{h}
+			case h.ChangedAt.Equal(newest[0].ChangedAt):
+				newest = append(newest, h)
+			}
 		}
-		break
 	}
-	return "", nil
+	if len(newest) == 0 {
+		v.key = "none"
+		return v, nil
+	}
+	sort.Slice(newest, func(i, j int) bool { return newest[i].Field < newest[j].Field })
+	describe := func(h database.MetadataChangeRecord, what string) string {
+		return fmt.Sprintf("history: %s %s by source %q at %s (change type %q)", h.Field, what, h.Source,
+			h.ChangedAt.UTC().Format(time.RFC3339Nano), h.ChangeType)
+	}
+	var agree *database.MetadataChangeRecord
+	for i := range newest {
+		h := newest[i]
+		switch relinkHistoryNames(h, emb, target) {
+		case relinkHistCleared:
+			v.cleared, v.source = true, h.Source
+			v.evidence = describe(h, "set to empty")
+			v.key = fmt.Sprintf("cleared/%s/%s/%d", h.Field, h.Source, h.ChangedAt.UnixNano())
+			return v, nil
+		case relinkHistOther:
+			if !v.mismatch {
+				v.mismatch, v.source = true, h.Source
+				v.evidence = describe(h, "set to another series ("+relinkHistValue(h)+")")
+				v.key = fmt.Sprintf("other/%s/%s/%d", h.Field, h.Source, h.ChangedAt.UnixNano())
+			}
+		default:
+			if agree == nil {
+				agree = &newest[i]
+			}
+		}
+	}
+	if v.mismatch {
+		return v, nil
+	}
+	v.source = agree.Source
+	v.evidence = describe(*agree, "last set to this series ("+relinkHistValue(*agree)+")")
+	v.key = fmt.Sprintf("agree/%s/%s/%d", agree.Field, agree.Source, agree.ChangedAt.UnixNano())
+	return v, nil
+}
+
+// What one history row says about the series.
+const (
+	relinkHistAgrees = iota
+	relinkHistCleared
+	relinkHistOther
+)
+
+// relinkHistoryNames judges one series history row against the stored
+// object (and the target row, by name, when it exists). The ref's series id
+// decides when the row has one; a Writer series_id row carries the id as its
+// value; any other row is compared by name. An absent, null or empty value
+// is a clear.
+func relinkHistoryNames(h database.MetadataChangeRecord, emb database.Series, target *database.Series) int {
+	if h.NewRef != nil {
+		if h.NewRef.SeriesID == nil {
+			return relinkHistCleared
+		}
+		if *h.NewRef.SeriesID == emb.ID {
+			return relinkHistAgrees
+		}
+		return relinkHistOther
+	}
+	if h.NewValue == nil || strings.TrimSpace(*h.NewValue) == "null" {
+		return relinkHistCleared
+	}
+	val := decodeJSONString(*h.NewValue)
+	if val == "" {
+		return relinkHistCleared
+	}
+	if h.Field == "series_id" {
+		if id, err := strconv.Atoi(val); err == nil {
+			if id == emb.ID {
+				return relinkHistAgrees
+			}
+			return relinkHistOther
+		}
+	}
+	n := normSeriesName(val)
+	if n == normSeriesName(emb.Name) || (target != nil && n == normSeriesName(target.Name)) {
+		return relinkHistAgrees
+	}
+	return relinkHistOther
+}
+
+func relinkHistValue(h database.MetadataChangeRecord) string {
+	if h.NewRef != nil && h.NewRef.SeriesID != nil {
+		return "series id " + strconv.Itoa(*h.NewRef.SeriesID)
+	}
+	if h.NewValue == nil {
+		return "no value"
+	}
+	return *h.NewValue
 }
 
 // relinkSeriesLockWhy reports why a series_name lock forbids the relink (""
@@ -555,6 +712,13 @@ func (f *relinkSeriesFixer) Apply(_ context.Context, w *repairs.Writer, fresh re
 		}
 		if why != "" {
 			return fmt.Errorf("%w: %s", repairs.ErrChangedSincePlan, why)
+		}
+		hv, herr := relinkSeriesHistory(store, d.bookID, d.embedded, s)
+		if herr != nil {
+			return herr
+		}
+		if hv.unreadable != "" || hv.cleared || hv.mismatch {
+			return fmt.Errorf("%w: %s%s", repairs.ErrChangedSincePlan, hv.unreadable, hv.evidence)
 		}
 		id := d.seriesID
 		row.SeriesID = &id

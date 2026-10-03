@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_stale_series_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: edaf6525-dcbd-426d-b672-c3293aff05f5
 // last-edited: 2026-10-03
 
@@ -8,6 +8,8 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,7 +75,8 @@ func newRelinkLib(t *testing.T) *relinkLib {
 	}
 	a, bb := &authorA.ID, &authorB.ID
 	add("relink", "Leviathan Wakes", "/lib/A/Leviathan", a, nil, live)
-	// Renamed since: the id still matches, so it is a relink.
+	add("relink2", "Nemesis Games", "/lib/A/Nemesis", a, nil, live)
+	// Renamed since: the id matches but the names differ, so it is held.
 	add("renamed", "Calibans War", "/lib/A/Caliban", a, nil, &database.Series{ID: live.ID, Name: "Expanse (old name)"})
 	// The row is gone; one same-name series with a compatible author.
 	add("name-match", "Guards Guards", "/lib/A/Guards", a, nil, &database.Series{ID: 9001, Name: "  discworld "})
@@ -144,9 +147,9 @@ func TestRelinkStaleSeries_PlanClasses(t *testing.T) {
 		_, ok := rows[key]
 		require.False(t, ok, "%s is not a stale book and must not be a row", key)
 	}
-	require.Equal(t, 8, res.Total)
-	require.Equal(t, map[string]int{relinkClassRelink: 4, relinkClassNameMatch: 1, relinkClassOrphan: 3}, res.ByClass,
-		"the census: rows per class")
+	require.Equal(t, 9, res.Total)
+	require.Equal(t, map[string]int{relinkClassRelink: 3, relinkClassMismatch: 1, relinkClassCleared: 1,
+		relinkClassNameMatch: 1, relinkClassOrphan: 3}, res.ByClass, "the census: rows per class")
 
 	r := rows["relink"]
 	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
@@ -154,9 +157,10 @@ func TestRelinkStaleSeries_PlanClasses(t *testing.T) {
 	require.Equal(t, repairs.RiskReview, r.Risk)
 	require.Equal(t, itoa(lib.series["live"].ID), r.Proposed["series_id"])
 
-	require.True(t, rows["renamed"].Applicable())
-	require.Equal(t, relinkClassRelink, rows["renamed"].Class)
-	require.Contains(t, rows["renamed"].Evidence[len(rows["renamed"].Evidence)-1], "differs")
+	ren := rows["renamed"]
+	require.False(t, ren.Applicable(), "a series row whose name differs from the stored object is held")
+	require.Equal(t, relinkClassMismatch, ren.Class)
+	require.Equal(t, relinkSkipMismatch, ren.Skipped)
 
 	nm := rows["name-match"]
 	require.Equal(t, relinkClassNameMatch, nm.Class)
@@ -173,13 +177,14 @@ func TestRelinkStaleSeries_PlanClasses(t *testing.T) {
 	require.Equal(t, relinkClassRelink, rows["dw"].Class, "the class still counts in the census")
 	require.Equal(t, repairs.SkipOwnerManual, rows["dw"].Skipped)
 
-	require.Equal(t, relinkClassRelink, rows["user-cleared"].Class)
-	require.Equal(t, relinkSkipUserCleared, rows["user-cleared"].Skipped)
+	require.Equal(t, relinkClassCleared, rows["user-cleared"].Class)
+	require.Equal(t, relinkSkipClearedPrefix+"field_lock", rows["user-cleared"].Skipped)
 
 	require.Equal(t, 2, res.Applicable)
 	require.Equal(t, 4, res.SkippedByKind[junkSkipNeedsManual])
 	require.Equal(t, 1, res.SkippedByKind[repairs.SkipOwnerManual])
-	require.Equal(t, 1, res.SkippedByKind[relinkSkipUserCleared])
+	require.Equal(t, 1, res.SkippedByKind[relinkSkipClearedPrefix+"field_lock"])
+	require.Equal(t, 1, res.SkippedByKind[relinkSkipMismatch])
 }
 
 func TestRelinkStaleSeries_HistoryClearHoldsTheRow(t *testing.T) {
@@ -188,7 +193,9 @@ func TestRelinkStaleSeries_HistoryClearHoldsTheRow(t *testing.T) {
 	require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: lib.ids["relink"],
 		Field: "series", PreviousValue: &prev, NewValue: &empty, ChangeType: "override", Source: "user_edit", ChangedAt: time.Now()}))
 	_, _, rows := lib.plan(t)
-	require.Equal(t, relinkSkipUserCleared, rows["relink"].Skipped, rows["relink"].SkipReason)
+	require.Equal(t, relinkClassCleared, rows["relink"].Class)
+	require.Equal(t, relinkSkipClearedPrefix+"user_edit", rows["relink"].Skipped, rows["relink"].SkipReason)
+	require.Contains(t, strings.Join(rows["relink"].Evidence, "\n"), "user_edit", "the clearing source is in the evidence")
 }
 
 // TestRelinkStaleSeries_LegacyBlobLockHoldsTheRow: a series_name lock that
@@ -198,8 +205,8 @@ func TestRelinkStaleSeries_LegacyBlobLockHoldsTheRow(t *testing.T) {
 	require.NoError(t, lib.store.SetUserPreference(metastate.Key(lib.ids["relink"]),
 		`{"series_name":{"override_value":"","override_locked":true}}`))
 	_, _, rows := lib.plan(t)
-	require.Equal(t, relinkSkipUserCleared, rows["relink"].Skipped, rows["relink"].SkipReason)
-	require.Equal(t, relinkClassRelink, rows["relink"].Class)
+	require.Equal(t, relinkSkipClearedPrefix+"field_lock", rows["relink"].Skipped, rows["relink"].SkipReason)
+	require.Equal(t, relinkClassCleared, rows["relink"].Class)
 }
 
 // TestRelinkStaleSeries_LockAgreeingWithTheSeriesAllowsRelink: a lock whose
@@ -287,22 +294,22 @@ func TestRelinkStaleSeries_ReplanRefusesChangedSincePlan(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	// "renamed": the stored object changed.
-	_, err = lib.store.ModifyBook(lib.ids["renamed"], func(b *database.Book) error {
+	// "relink2": the stored object changed.
+	_, err = lib.store.ModifyBook(lib.ids["relink2"], func(b *database.Book) error {
 		b.Series = &database.Series{ID: lib.series["live"].ID, Name: "Something Else"}
 		return nil
 	})
 	require.NoError(t, err)
 
 	out, err := repairs.RunApply(context.Background(), f, res, "plan-1",
-		[]string{rows["relink"].RowID, rows["renamed"].RowID}, false, deps, &fakeReporter{})
+		[]string{rows["relink"].RowID, rows["relink2"].RowID}, false, deps, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 0, out.Applied)
 	require.Equal(t, 2, out.ChangedSincePlan, "%v", out.Rows)
 	b, err := lib.store.GetBookByID(lib.ids["relink"])
 	require.NoError(t, err)
 	require.Equal(t, other, *b.SeriesID, "the newer link is never overwritten")
-	b, err = lib.store.GetBookByID(lib.ids["renamed"])
+	b, err = lib.store.GetBookByID(lib.ids["relink2"])
 	require.NoError(t, err)
 	require.Nil(t, b.SeriesID)
 }
@@ -325,12 +332,12 @@ func TestRelinkStaleSeries_ApplyCompareAndSetInsideTheWrite(t *testing.T) {
 	require.Equal(t, 0, w.Writes())
 
 	// The target series row vanished between Replan and the write.
-	fresh, err = f.Replan(context.Background(), nil, rows["renamed"], &fakeReporter{})
+	fresh, err = f.Replan(context.Background(), nil, rows["relink2"], &fakeReporter{})
 	require.NoError(t, err)
 	require.NoError(t, lib.store.DeleteSeries(lib.series["live"].ID))
 	err = f.Apply(context.Background(), w, fresh)
 	require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
-	b, err := lib.store.GetBookByID(lib.ids["renamed"])
+	b, err := lib.store.GetBookByID(lib.ids["relink2"])
 	require.NoError(t, err)
 	require.Nil(t, b.SeriesID)
 }
@@ -379,4 +386,224 @@ func TestRelinkStaleSeries_GuardExclusion(t *testing.T) {
 	got, err := lib.store.GetBookByID(b.ID)
 	require.NoError(t, err)
 	require.Nil(t, got.SeriesID)
+}
+
+// The history tests below are the review probes of PR #3703. History is keyed
+// by book, FIELD and time, so the whole-book read is ordered field by field;
+// the fixer must find the newest series row by time across fields.
+
+// TestRelinkStaleSeries_UserClearAfterTheFixersRelinkHolds: the fixer
+// relinks, then the user clears the series in the editor. The next plan must
+// hold the row, not relink it again.
+func TestRelinkStaleSeries_UserClearAfterTheFixersRelinkHolds(t *testing.T) {
+	lib := newRelinkLib(t)
+	f, res, rows := lib.plan(t)
+	raw, err := json.Marshal(res)
+	require.NoError(t, err)
+	var plan repairs.PlanResult
+	require.NoError(t, json.Unmarshal(raw, &plan))
+	out, err := repairs.RunApply(context.Background(), f, &plan, "plan-1", []string{rows["relink"].RowID}, false,
+		lib.applyDeps(t, f), &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, out.Applied)
+	id := lib.ids["relink"]
+	time.Sleep(2 * time.Millisecond)
+	// Editor clear: SeriesID nil (the object stays, preserve-on-nil) plus the
+	// history row the editor writes.
+	var pre *database.Book
+	post, err := lib.store.ModifyBook(id, func(b *database.Book) error {
+		pre, _ = database.SnapshotBook(b)
+		b.SeriesID = nil
+		return nil
+	})
+	require.NoError(t, err)
+	_, err = database.RecordBookEditHistory(lib.store, pre, post, database.ChangeTypeManual, "manual", time.Now(), nil)
+	require.NoError(t, err)
+	b, err := lib.store.GetBookByID(id)
+	require.NoError(t, err)
+	require.Nil(t, b.SeriesID)
+	require.NotNil(t, b.Series, "the editor clear leaves the stale object")
+
+	_, _, rows2 := lib.plan(t)
+	r := rows2["relink"]
+	require.False(t, r.Applicable(), "the user's later clear must win over the fixer's own series_id row")
+	require.Equal(t, relinkClassCleared, r.Class)
+	require.Equal(t, relinkSkipClearedPrefix+"manual", r.Skipped)
+}
+
+// TestRelinkStaleSeries_StaleObjectNamingThePreviousSeriesHolds: the book
+// moved from series A to B by a SeriesID-only writer (the object still names
+// A), then B was unlinked and deleted with no history. Relinking to A would
+// put the book back in a series the user moved it off.
+func TestRelinkStaleSeries_StaleObjectNamingThePreviousSeriesHolds(t *testing.T) {
+	lib := newRelinkLib(t)
+	st := lib.store
+	a := lib.series["named"]
+	bser, err := st.CreateSeries("Temp Series B", nil)
+	require.NoError(t, err)
+	bk, err := st.CreateBook(&database.Book{Title: "Mover", FilePath: "/lib/A/Mover", SeriesID: &a.ID, Format: "mp3"})
+	require.NoError(t, err)
+	_, err = st.ModifyBook(bk.ID, func(row *database.Book) error {
+		row.Series = &database.Series{ID: a.ID, Name: a.Name, AuthorID: a.AuthorID}
+		return nil
+	})
+	require.NoError(t, err)
+	var pre *database.Book
+	post, err := st.ModifyBook(bk.ID, func(row *database.Book) error {
+		pre, _ = database.SnapshotBook(row)
+		id := bser.ID
+		row.SeriesID = &id
+		return nil
+	})
+	require.NoError(t, err)
+	_, err = database.RecordBookEditHistory(st, pre, post, database.ChangeTypeManual, "manual", time.Now(), nil)
+	require.NoError(t, err)
+	_, err = st.ModifyBook(bk.ID, func(row *database.Book) error {
+		row.SeriesID, row.SeriesSequence = nil, nil
+		return nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, st.DeleteSeries(bser.ID))
+
+	_, res, _ := lib.plan(t)
+	var r repairs.Row
+	for _, row := range res.Rows {
+		if row.RowID == bk.ID {
+			r = row
+		}
+	}
+	require.False(t, r.Applicable(), "relinks to series A, which the user moved the book off")
+	require.Equal(t, relinkClassMismatch, r.Class)
+	require.Equal(t, relinkSkipMismatch, r.Skipped)
+}
+
+// TestRelinkStaleSeries_ManyOtherHistoryRowsCannotHideAClear: rows of other
+// fields never push a series clear out of a window.
+func TestRelinkStaleSeries_ManyOtherHistoryRowsCannotHideAClear(t *testing.T) {
+	lib := newRelinkLib(t)
+	id := lib.ids["relink"]
+	prev, empty := `"The Expanse"`, `""`
+	require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id,
+		Field: "series", PreviousValue: &prev, NewValue: &empty, ChangeType: "manual", Source: "manual", ChangedAt: time.Now().Add(-time.Hour)}))
+	for i := 0; i < 201; i++ {
+		v := fmt.Sprintf(`"t%d"`, i)
+		require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id,
+			Field: "title", NewValue: &v, Source: "x", ChangedAt: time.Now().Add(-time.Duration(i) * time.Second)}))
+	}
+	_, _, rows := lib.plan(t)
+	require.False(t, rows["relink"].Applicable(), "201 title rows must not hide the series clear")
+	require.Equal(t, relinkClassCleared, rows["relink"].Class)
+}
+
+// TestRelinkStaleSeries_OlderSeriesIDRowCannotShadowANewerClear: an older
+// Writer series_id row sorts before the newer editor "series" clear by field
+// name; time decides.
+func TestRelinkStaleSeries_OlderSeriesIDRowCannotShadowANewerClear(t *testing.T) {
+	lib := newRelinkLib(t)
+	id := lib.ids["relink"]
+	old, nw := `""`, `"5"`
+	require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id,
+		Field: "series_id", PreviousValue: &old, NewValue: &nw, Source: "maintenance.junk-author", ChangedAt: time.Now().Add(-48 * time.Hour)}))
+	prev, empty := `"The Expanse"`, `""`
+	require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id,
+		Field: "series", PreviousValue: &prev, NewValue: &empty, ChangeType: "manual", Source: "manual", ChangedAt: time.Now()}))
+	_, _, rows := lib.plan(t)
+	require.False(t, rows["relink"].Applicable())
+	require.Equal(t, relinkSkipClearedPrefix+"manual", rows["relink"].Skipped)
+}
+
+// TestRelinkStaleSeries_EditorSetThenClearHolds: T1 the user sets the series
+// (series_name override row, lock, "series" row); T2 the user clears it (a
+// "series" -> "" row only; the old lock stays and agrees with the object).
+func TestRelinkStaleSeries_EditorSetThenClearHolds(t *testing.T) {
+	lib := newRelinkLib(t)
+	id := lib.ids["relink"]
+	t1 := time.Now().Add(-24 * time.Hour)
+	v := `"The Expanse"`
+	require.NoError(t, lib.store.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: id,
+		Field: database.FieldKeySeriesName, OverrideValue: &v, OverrideLocked: true, UpdatedAt: t1}))
+	empty := `""`
+	require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id,
+		Field: "series_name", PreviousValue: &empty, NewValue: &v, ChangeType: "override", Source: "user_edit", ChangedAt: t1}))
+	require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id,
+		Field: "series", PreviousValue: &empty, NewValue: &v, ChangeType: "manual", Source: "manual", ChangedAt: t1}))
+	require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id,
+		Field: "series", PreviousValue: &v, NewValue: &empty, ChangeType: "manual", Source: "manual", ChangedAt: time.Now()}))
+	_, _, rows := lib.plan(t)
+	require.False(t, rows["relink"].Applicable(), "the T1 series_name row must not shadow the T2 clear")
+	require.Equal(t, relinkSkipClearedPrefix+"manual", rows["relink"].Skipped)
+}
+
+// TestRelinkStaleSeries_NullHistoryValueHolds: a JSON null new value is a
+// clear, not a reason to stop looking.
+func TestRelinkStaleSeries_NullHistoryValueHolds(t *testing.T) {
+	lib := newRelinkLib(t)
+	prev, null := `"The Expanse"`, `null`
+	require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: lib.ids["relink"],
+		Field: "series_name", PreviousValue: &prev, NewValue: &null, ChangeType: "batch", Source: "batch", ChangedAt: time.Now()}))
+	_, _, rows := lib.plan(t)
+	require.Equal(t, relinkSkipClearedPrefix+"batch", rows["relink"].Skipped)
+}
+
+// TestRelinkStaleSeries_HistoryAgreeingWithTheObjectStaysApplicable: a newest
+// series row naming the same series is not a clear.
+func TestRelinkStaleSeries_HistoryAgreeingWithTheObjectStaysApplicable(t *testing.T) {
+	lib := newRelinkLib(t)
+	empty, v := `""`, `"The Expanse"`
+	sid := lib.series["live"].ID
+	require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: lib.ids["relink"],
+		Field: "series", PreviousValue: &empty, NewValue: &v, NewRef: &database.MetadataChangeRef{SeriesID: &sid},
+		ChangeType: "fetched", Source: "Audible", ChangedAt: time.Now()}))
+	_, _, rows := lib.plan(t)
+	require.True(t, rows["relink"].Applicable(), "%s: %s", rows["relink"].Skipped, rows["relink"].SkipReason)
+	require.Equal(t, relinkClassRelink, rows["relink"].Class)
+}
+
+// TestRelinkStaleSeries_IncompatibleSeriesAuthorHolds: the series row by id
+// belongs to another author.
+func TestRelinkStaleSeries_IncompatibleSeriesAuthorHolds(t *testing.T) {
+	lib := newRelinkLib(t)
+	dune := lib.series["other-author"] // author B; the book is author A's
+	_, err := lib.store.ModifyBook(lib.ids["relink"], func(b *database.Book) error {
+		b.Series = &database.Series{ID: dune.ID, Name: dune.Name, AuthorID: dune.AuthorID}
+		return nil
+	})
+	require.NoError(t, err)
+	_, _, rows := lib.plan(t)
+	require.Equal(t, relinkClassMismatch, rows["relink"].Class)
+	require.Equal(t, relinkSkipMismatch, rows["relink"].Skipped)
+}
+
+// TestRelinkStaleSeries_CensusGroupsClearsBySource: the plan summary counts
+// the cleared rows by who cleared them.
+func TestRelinkStaleSeries_CensusGroupsClearsBySource(t *testing.T) {
+	lib := newRelinkLib(t)
+	prev, empty := `"The Expanse"`, `""`
+	for key, src := range map[string]string{"relink": "manual", "relink2": "maintenance.junk-author"} {
+		require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: lib.ids[key],
+			Field: "series_id", PreviousValue: &prev, NewValue: &empty, ChangeType: "bulk_update", Source: src, ChangedAt: time.Now()}))
+	}
+	_, res, rows := lib.plan(t)
+	require.Equal(t, 3, res.ByClass[relinkClassCleared], "two by history, one by field lock")
+	require.Equal(t, 1, res.SkippedByKind[relinkSkipClearedPrefix+"manual"])
+	require.Equal(t, 1, res.SkippedByKind[relinkSkipClearedPrefix+"maintenance_junk_author"])
+	require.Equal(t, 1, res.SkippedByKind[relinkSkipClearedPrefix+"field_lock"])
+	require.Contains(t, strings.Join(rows["relink2"].Evidence, "\n"), "maintenance.junk-author")
+	require.Equal(t, 0, res.Applicable)
+}
+
+// TestRelinkStaleSeries_ApplyRefusesAClearRecordedAfterReplan: history is
+// read again inside the write.
+func TestRelinkStaleSeries_ApplyRefusesAClearRecordedAfterReplan(t *testing.T) {
+	lib := newRelinkLib(t)
+	f, _, rows := lib.plan(t)
+	fresh, err := f.Replan(context.Background(), nil, rows["relink"], &fakeReporter{})
+	require.NoError(t, err)
+	require.True(t, fresh.Applicable())
+	prev, empty := `"The Expanse"`, `""`
+	require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: lib.ids["relink"],
+		Field: "series", PreviousValue: &prev, NewValue: &empty, ChangeType: "manual", Source: "manual", ChangedAt: time.Now()}))
+	w := repairs.NewWriter(lib.store, lib.store, f.ID(), "bulk_update", "repairs-")
+	require.ErrorIs(t, f.Apply(context.Background(), w, fresh), repairs.ErrChangedSincePlan)
+	require.Equal(t, 0, w.Writes())
 }
