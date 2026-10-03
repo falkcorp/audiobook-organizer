@@ -1,7 +1,7 @@
 // file: internal/database/metadata_field_state_guards.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 34bc346c-8d4e-4097-89a5-810dc4e9807d
-// last-edited: 2026-09-28
+// last-edited: 2026-10-03
 
 package database
 
@@ -11,8 +11,9 @@ package database
 // deliberate difference look like a typo:
 //
 //   - plugins/maintenance/junk_title_fixer.go (was repair_junk_titles.go) tests
-//     locked || override, then fetched separately (skipped_user_locked vs
-//     skipped_provider_title)
+//     locked || override (skipped_user_locked); since 2026-10-03 a fetched
+//     value no longer skips a title that fails the junk classifier, it only
+//     annotates the row
 //   - plugins/maintenance/title_repair.go       tested locked || override, then
 //     fetched separately so it could report a different skip reason
 //   - server/handlers/metadata/handler.go       tested locked || override only
