@@ -76,6 +76,10 @@ type Writer struct {
 	// WithCredits. Its rows go through journal above.
 	credits CreditStore
 
+	// fieldStates is the metadata field-state surface (writer_locks.go); nil
+	// until WithFieldStates. Its locks are journaled through journal above.
+	fieldStates FieldStateStore
+
 	// lease renews the apply's scan stand-down lease and reports whether it
 	// is still held; nil when no lease is held (RunApply installs it for the
 	// run, see setLease). leaseLost latches the first failed renewal.
