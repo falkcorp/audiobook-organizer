@@ -1,7 +1,7 @@
 // file: internal/server/library_writeback_resume_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 06cd9d1b-4457-4af0-b3f0-5ac22a64e395
-// last-edited: 2026-09-11
+// last-edited: 2026-10-03
 
 package server
 
@@ -54,12 +54,31 @@ func TestBulkWriteBack_ResumeSkipsCheckpointedBooks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	first := &resumeRecorder{opID: "op-writeback-resume-1"}
+	// runBulkWriteBack reports progress once per examined book, after the
+	// book. Cancel at the midpoint so the run has crossed the checkpoint
+	// cadence (25) at least once and still has work left to owe.
+	//
+	// The cancel point must be a GATE, not just a cancel() call. The
+	// recorder appends the progress call under its lock and runs this
+	// callback after unlocking, so the worker that drew nth == n/2 can be
+	// descheduled before it reaches cancel() while the other workers
+	// examine every remaining book ("checkpoint owes 0 of 60" in CI on
+	// 2026-09-19; reproduced 8 in 2,400 under parallel load). So every
+	// later callback waits until the cancel has landed. A worker checks
+	// ctx before each book and its callback returns only after cancel, so
+	// each worker examines at most one book past the gate: at least n/2
+	// and at most n/2-1+workers books are examined, and workers is capped
+	// at maxWriteBackWorkers (8), well under n/2. Blocking here cannot
+	// deadlock: neither the recorder nor the worker pool holds a lock
+	// across UpdateProgress, and the n/2 callback itself never waits.
+	canceled := make(chan struct{})
 	first.onProgress = func(nth int) {
-		// runBulkWriteBack reports progress once per examined book. Cancel
-		// around the midpoint so the run has crossed the checkpoint cadence
-		// (25) at least once and still has work left to owe.
-		if nth == n/2 {
+		switch {
+		case nth == n/2:
 			cancel()
+			close(canceled)
+		case nth > n/2:
+			<-canceled
 		}
 	}
 	// runBulkWriteBack reports cancellation through its log and returns nil;
@@ -80,6 +99,10 @@ func TestBulkWriteBack_ResumeSkipsCheckpointedBooks(t *testing.T) {
 	// unexamined one IN it — the done-set must track what the workers actually
 	// reached, not a count that out-of-order completion makes meaningless.
 	examined := examinedBooks(first.logLines())
+	if maxExamined := n/2 - 1 + writeBackWorkers(); len(examined) > maxExamined {
+		t.Fatalf("first attempt examined %d books after a cancel at %d (max %d with %d workers); workers ignored the cancel",
+			len(examined), n/2, maxExamined, writeBackWorkers())
+	}
 	for _, id := range ids {
 		switch {
 		case examined[id] && remaining[id]:
