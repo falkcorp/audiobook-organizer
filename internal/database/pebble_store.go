@@ -112,6 +112,12 @@ type PebbleStore struct {
 	// bookAtPathBuilt caches a positive read of the book_atpath: backfill
 	// sentinel. Only true is ever stored; see bookAtPathIndexBuilt.
 	bookAtPathBuilt atomic.Bool
+	// opChangeByBookBuilt caches a positive read of the opchange_by_book:
+	// backfill sentinel. Only true is stored by readers; the rebuild clears it
+	// (pebble_store_opchange_index.go).
+	opChangeByBookBuilt atomic.Bool
+	// opChangeIdxRunMu admits one opchange_by_book backfill/rebuild at a time.
+	opChangeIdxRunMu sync.Mutex
 	// worksGen is the works generation counter (see WorksGeneration in
 	// pebble_store_works.go). Every writer of a work: key bumps it after its
 	// commit, so a cache of the works table can tell whether it is still current.
@@ -5156,6 +5162,9 @@ func (p *PebbleStore) Reset() error {
 	// liveBookIDsAtPathIndex can snapshot after the wipe and return an empty
 	// set. Reset is a factory-reset path with no concurrent library work.
 	p.bookAtPathBuilt.Store(false)
+	// Same for the opchange_by_book: sentinel: GetBookChanges falls back to
+	// the full scan instead of trusting a wiped index.
+	p.opChangeByBookBuilt.Store(false)
 
 	// Use DeleteRange to wipe the entire keyspace in one operation.
 	// The range ["\x00", "\xff\xff") covers all possible keys.
