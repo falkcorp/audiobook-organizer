@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -2487,11 +2487,16 @@ func TestFragmentFixer_NumberedCopiesReview(t *testing.T) {
 				cp = c
 			}
 		}
-		require.ErrorIs(t, copyRetireRefusal(f.s, cp), repairs.ErrChangedSincePlan)
+		// The Apply pre-check, called directly: the locked Replan below
+		// catches this case first, so Apply never reaches it here.
+		require.ErrorIs(t, copyRetireRefusal(f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
 
 		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 		require.Equal(t, 0, out.Applied, "outcomes %v", out.ByOutcome)
 		require.Zero(t, out.ByOutcome[repairs.OutcomePartial])
+		require.Len(t, out.Rows, 1)
+		require.Equal(t, repairs.OutcomeNotApplicable, out.Rows[0].Outcome, "refused by the locked Replan")
+		require.Equal(t, repairs.SkipITunes, out.Rows[0].Skipped)
 		for _, id := range orig {
 			b, err := f.s.GetBookByID(id)
 			require.NoError(t, err)
@@ -2563,10 +2568,39 @@ func TestFragmentFixer_NumberedResumeAfterRetitle(t *testing.T) {
 		require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
 	})
 
-	t.Run("copies, cut off after every retire and the retitle", func(t *testing.T) {
+	for _, org := range []string{"none", "all", "copies"} {
+		t.Run("copies, cut off after every retire and the retitle, organized="+org, func(t *testing.T) {
+			resumeAfterEveryRetire(t, org)
+		})
+		t.Run("copies, retitled before anything else, organized="+org, func(t *testing.T) {
+			resumeRetitledFirst(t, org)
+		})
+	}
+}
+
+// organizeCopiesFixture marks books organized (and so electable) per mode:
+// "none", "all" (originals and copies), or "copies" (copies only, so
+// keptOfCopies keeps every copy).
+func (f *fragFixture) organizeCopiesFixture(t *testing.T, mode string, orig, copies []string) {
+	t.Helper()
+	switch mode {
+	case "all":
+		for _, id := range append(append([]string(nil), orig...), copies...) {
+			f.organized(t, id)
+		}
+	case "copies":
+		for _, id := range copies {
+			f.organized(t, id)
+		}
+	}
+}
+
+func resumeAfterEveryRetire(t *testing.T, org string) {
+	{
 		f := newFragFixture(t)
 		const dir = "lib/Clarke/02_light_of_other_days"
-		_, copies := f.seedChapterCopies(t, dir, nil)
+		orig, copies := f.seedChapterCopies(t, dir, nil)
+		f.organizeCopiesFixture(t, org, orig, copies)
 		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), fragNumberedKey))
 		require.True(t, r.Applicable(), r.SkipReason)
 		plan := r.Detail.(*fragGroupPlan)
@@ -2581,8 +2615,8 @@ func TestFragmentFixer_NumberedResumeAfterRetitle(t *testing.T) {
 				&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
 			require.NoError(t, err)
 		}
-		for _, id := range copies {
-			_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, id, surv, &merge.SliceMapping{Mappable: true})
+		for _, cp := range plan.Copies {
+			_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, cp.Frag.Book.ID, surv, &merge.SliceMapping{Mappable: true})
 			require.NoError(t, err)
 		}
 		_, err := f.s.ModifyBook(surv, func(b *database.Book) error { b.Title = plan.Title; return nil })
@@ -2596,12 +2630,15 @@ func TestFragmentFixer_NumberedResumeAfterRetitle(t *testing.T) {
 		b, err := f.s.GetBookByID(surv)
 		require.NoError(t, err)
 		require.Equal(t, plan.Title, b.Title)
-	})
+	}
+}
 
-	t.Run("copies, retitled before anything else", func(t *testing.T) {
+func resumeRetitledFirst(t *testing.T, org string) {
+	{
 		f := newFragFixture(t)
 		const dir = "lib/Clarke/02_light_of_other_days"
-		_, copies := f.seedChapterCopies(t, dir, nil)
+		orig, copies := f.seedChapterCopies(t, dir, nil)
+		f.organizeCopiesFixture(t, org, orig, copies)
 		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), fragNumberedKey))
 		require.True(t, r.Applicable(), r.SkipReason)
 		plan := r.Detail.(*fragGroupPlan)
@@ -2609,12 +2646,29 @@ func TestFragmentFixer_NumberedResumeAfterRetitle(t *testing.T) {
 		require.NoError(t, err)
 		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 		require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
-		for _, id := range copies {
-			b, err := f.s.GetBookByID(id)
-			require.NoError(t, err)
-			require.True(t, b.IsSoftDeleted())
+		f.requireAllRetiredBut(t, r.BookIDs, plan.SurvivorID)
+		_ = copies
+	}
+}
+
+// requireAllRetiredBut checks every book of ids but survivor is retired into
+// survivor, and that every book still holds a file row (copies keep theirs).
+func (f *fragFixture) requireAllRetiredBut(t *testing.T, ids []string, survivor string) {
+	t.Helper()
+	for _, id := range ids {
+		b, err := f.s.GetBookByID(id)
+		require.NoError(t, err)
+		if id == survivor {
+			require.False(t, b.IsSoftDeleted())
+			continue
 		}
-	})
+		require.True(t, b.IsSoftDeleted(), "book %s retired", id)
+		require.NotNil(t, b.MergedIntoBookID)
+		require.Equal(t, survivor, *b.MergedIntoBookID)
+	}
+	rows, err := f.s.GetBookFiles(survivor)
+	require.NoError(t, err)
+	require.Len(t, rows, 8, "the survivor holds one file per chapter")
 }
 
 // TestFragmentFixer_BracketedAuthorFolder: an author with a bracketed role,
@@ -2641,6 +2695,12 @@ func TestFragmentPersonShapedName(t *testing.T) {
 		"(Narrator)":                             false,
 		"Book 2 (Narrator)":                      false,
 		"A (B) C":                                false,
+		"Rubicon (Amaranthe Book Eight)":         false,
+		"Light of Other Days (Unabridged)":       false,
+		"Rubicon (Amaranthe 08)":                 false,
+		"The Expanse [Book 3]":                   false,
+		"Jane Author (ed.)":                      true,
+		"Jane Author (Translator)":               true,
 	} {
 		require.Equal(t, want, personShapedName(name), name)
 	}
@@ -2651,10 +2711,20 @@ func TestFragmentPersonShapedName(t *testing.T) {
 func TestFragmentFixer_NumberedReviewProbes(t *testing.T) {
 	serial := []string{"001 - Arrival", "002 - The Road", "003 - Gear", "004 - Ash", "005 - Night", "006 - Ember", "007 - Coda", "008 - Home"}
 
-	t.Run("cut off after members and two copies retired, before the retitle", func(t *testing.T) {
+	for _, org := range []string{"none", "all", "copies"} {
+		t.Run("cut off after members and two copies retired, organized="+org, func(t *testing.T) {
+			partialCopiesResume(t, org)
+		})
+	}
+	reviewProbesRest(t, serial)
+}
+
+func partialCopiesResume(t *testing.T, org string) {
+	{
 		f := newFragFixture(t)
 		const dir = "lib/Clarke/02_light_of_other_days"
-		_, copies := f.seedChapterCopies(t, dir, nil)
+		orig, copies := f.seedChapterCopies(t, dir, nil)
+		f.organizeCopiesFixture(t, org, orig, copies)
 		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), fragNumberedKey))
 		require.True(t, r.Applicable(), r.SkipReason)
 		plan := r.Detail.(*fragGroupPlan)
@@ -2669,19 +2739,21 @@ func TestFragmentFixer_NumberedReviewProbes(t *testing.T) {
 				&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
 			require.NoError(t, err)
 		}
-		for _, id := range copies[:2] {
-			_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, id, surv, &merge.SliceMapping{Mappable: true})
+		for _, cp := range plan.Copies[:2] {
+			_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, cp.Frag.Book.ID, surv, &merge.SliceMapping{Mappable: true})
 			require.NoError(t, err)
 		}
+		got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+		require.NoError(t, err)
+		require.Equal(t, r.Fingerprint, got.Fingerprint, got.Reason)
 		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 		require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
-		for _, id := range copies {
-			b, err := f.s.GetBookByID(id)
-			require.NoError(t, err)
-			require.True(t, b.IsSoftDeleted())
-		}
-	})
+		f.requireAllRetiredBut(t, r.BookIDs, surv)
+		_ = copies
+	}
+}
 
+func reviewProbesRest(t *testing.T, serial []string) {
 	t.Run("half the files by a real author, half by none: applicable (owner decision)", func(t *testing.T) {
 		f := newFragFixture(t)
 		a, err := f.s.CreateAuthor("Jane Author")
@@ -2820,4 +2892,169 @@ func discFolderCopies(t *testing.T, organizedCopies int) {
 		}
 	}
 	require.Equal(t, 1, held, "the folder is one held row")
+}
+
+// TestFragmentFixer_NumberedCopiesResumeMidMembers: a run cut off after only
+// some member retires resumes when the books are organized and primary.
+// retireInto demotes what it retires; without the planned flags Replan kept
+// a different file per chapter and the row was stranded.
+func TestFragmentFixer_NumberedCopiesResumeMidMembers(t *testing.T) {
+	for _, org := range []string{"none", "all", "copies"} {
+		for _, cut := range []int{1, 4, 7} {
+			t.Run(fmt.Sprintf("organized=%s cut=%d", org, cut), func(t *testing.T) {
+				f := newFragFixture(t)
+				const dir = "lib/Clarke/02_light_of_other_days"
+				orig, copies := f.seedChapterCopies(t, dir, nil)
+				f.organizeCopiesFixture(t, org, orig, copies)
+				r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), fragNumberedKey))
+				require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+				plan := r.Detail.(*fragGroupPlan)
+				surv := plan.SurvivorID
+				w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+				var done []fragGroupMember
+				for _, m := range plan.Members {
+					if m.Frag.Book.ID != surv && len(done) < cut {
+						done = append(done, m)
+					}
+				}
+				for _, m := range done {
+					require.NoError(t, w.MoveBookFiles([]string{m.Frag.File.ID}, m.Frag.Book.ID, surv))
+				}
+				for _, m := range done {
+					_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, m.Frag.Book.ID, surv,
+						&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
+					require.NoError(t, err)
+				}
+				got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+				require.NoError(t, err)
+				require.Equal(t, r.Fingerprint, got.Fingerprint, "cut after %d member retires must resume: %s", cut, got.Reason)
+				require.True(t, got.Applicable(), "%s: %s", got.Skipped, got.SkipReason)
+				out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+				require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
+				f.requireAllRetiredBut(t, r.BookIDs, surv)
+			})
+		}
+	}
+}
+
+// TestFragmentFixer_NumberedRetiredElsewhere: a member or copy that another
+// fixer retired into an unrelated book after the plan makes the row changed;
+// nothing is written and the book stays merged where it went.
+func TestFragmentFixer_NumberedRetiredElsewhere(t *testing.T) {
+	for _, which := range []string{"copy", "member"} {
+		t.Run(which, func(t *testing.T) {
+			f := newFragFixture(t)
+			const dir = "lib/Clarke/02_light_of_other_days"
+			orig, copies := f.seedChapterCopies(t, dir, nil)
+			r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), fragNumberedKey))
+			require.True(t, r.Applicable())
+			plan := r.Detail.(*fragGroupPlan)
+			x := f.book(t, "X", "Other Book", f.file(t, "lib/Other/x.mp3", 5), nil)
+			victim := copies[3]
+			if which == "member" {
+				for _, m := range plan.Members {
+					if m.Frag.Book.ID != plan.SurvivorID {
+						victim = m.Frag.Book.ID
+						break
+					}
+				}
+			}
+			_, err := f.s.ModifyBook(victim, func(b *database.Book) error {
+				tr, now := true, time.Now()
+				b.MarkedForDeletion, b.MarkedForDeletionAt, b.MergedIntoBookID = &tr, &now, &x
+				return nil
+			})
+			require.NoError(t, err)
+			if which == "copy" {
+				var cp fragGroupCopy
+				for _, c := range plan.Copies {
+					if c.Frag.Book.ID == victim {
+						cp = c
+					}
+				}
+				require.ErrorIs(t, copyRetireRefusal(f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
+			}
+			out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+			require.Equal(t, 0, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
+			require.Zero(t, out.ByOutcome[repairs.OutcomePartial])
+			b, err := f.s.GetBookByID(victim)
+			require.NoError(t, err)
+			require.Equal(t, x, *b.MergedIntoBookID)
+			for _, id := range orig {
+				if id == victim {
+					continue
+				}
+				ob, err := f.s.GetBookByID(id)
+				require.NoError(t, err)
+				require.False(t, ob.IsSoftDeleted(), "member %s untouched", id)
+			}
+			rows, err := f.s.GetBookFiles(victim)
+			require.NoError(t, err)
+			require.Len(t, rows, 1, "the victim keeps its row")
+		})
+	}
+}
+
+// TestFragmentFixer_CopyHashesPairwise: three files at one position, the
+// first with no hash and the other two with different hashes, are not one
+// chapter: each pair must agree, not each file with the first.
+func TestFragmentFixer_CopyHashesPairwise(t *testing.T) {
+	f := newFragFixture(t)
+	const dir = "lib/Clarke/02_light_of_other_days"
+	_, copies := f.seedChapterCopies(t, dir, nil)
+	stem := "02_004 (1)"
+	p := f.file(t, dir+"/"+stem+".mp3", 1004)
+	third := f.book(t, "c:"+stem, stem, p, nil)
+	f.row(t, "cr:"+stem, third, p, stem+".mp3", 1004, 300, 0)
+	for id, h := range map[string]string{third: "hash-x", copies[3]: "hash-y"} {
+		rows, err := f.s.GetBookFiles(id)
+		require.NoError(t, err)
+		rows[0].FileHash = h
+		require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
+	}
+	r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), fragNumberedKey))
+	require.False(t, r.Applicable(), "two different known hashes at one position must not both retire as copies")
+}
+
+// TestFragmentFixer_CopiesInAnotherGroup: renamed copies whose names put
+// them in a different group than their originals (a key group beside a
+// numbered set, or beside a "Chapter NNN" key group) hold both rows.
+func TestFragmentFixer_CopiesInAnotherGroup(t *testing.T) {
+	for _, variant := range []string{"numbered originals", "no leading numbers"} {
+		for _, organized := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s organized=%t", variant, organized), func(t *testing.T) {
+				f := newFragFixture(t)
+				const dir = "lib/Clarke/Light of Other Days"
+				names := []string{"Arrival", "The Road", "Gear", "Ash", "Night", "Ember", "Coda", "Home"}
+				var ids []string
+				for i, nm := range names {
+					n := i + 1
+					orig := fmt.Sprintf("%03d - %s", n, nm)
+					if variant == "no leading numbers" {
+						orig = fmt.Sprintf("Chapter %03d", n)
+					}
+					for _, stem := range []string{orig, fmt.Sprintf("Light of Other Days - Part %03d", n)} {
+						size := 5000 + n
+						p := f.file(t, dir+"/"+stem+".mp3", size)
+						id := f.book(t, "g:"+stem, stem, p, nil)
+						f.row(t, "gr:"+stem, id, p, stem+".mp3", int64(size), 300, 0)
+						if organized {
+							f.organized(t, id)
+						}
+						ids = append(ids, id)
+					}
+				}
+				res := f.plan(t, "op-plan")
+				require.Empty(t, applicableRowsWith(res, ids), "never two books of the same audio")
+				held := 0
+				for _, x := range res.Rows {
+					if x.Skipped == fragSkipSameAudioRows {
+						held++
+						require.Contains(t, x.SkipReason, "no-parent:")
+					}
+				}
+				require.Equal(t, 2, held, "both rows are held, each naming the other")
+			})
+		}
+	}
 }

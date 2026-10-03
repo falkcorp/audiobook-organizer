@@ -17,3 +17,15 @@
   The author, series, ASIN and title checks now cover copies too, and so does
   the co-owner check. An author such as "Jane Author (Narrator)" in a folder
   with that exact name is now treated as an author folder, as "Jane Author" is.
+- **Copies whose names put them in another group no longer make a second
+  book.** When two rows from one folder hold the same chapters (same position,
+  same size, no conflicting hash), both rows are held and each names the other.
+- **A numbered-set repair cut off partway now resumes when the books were
+  organized.** The plan records each book's organized and primary flags, so
+  books already retired are judged as they were planned. A book that something
+  else retired into another book stops the row instead of being moved onto the
+  survivor.
+- **Three files at one chapter must all agree.** Every pair must match on size
+  and on any known hash, not just each file against the first. Only a role in
+  brackets, such as "(Narrator)", is set aside when testing whether an author
+  name looks like a person; "(Unabridged)" or "[Book 3]" is not.

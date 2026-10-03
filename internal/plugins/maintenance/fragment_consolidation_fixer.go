@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -197,6 +197,12 @@ const (
 	// several works in one folder (the numbering, the authors, the folder).
 	// Listed so the owner sees the cluster; never applied.
 	fragSkipNumberedUnsure = "skipped_numbered_set_unsure"
+	// fragSkipSameAudioRows: two rows from one folder hold files that are
+	// one chapter twice (same position, same size, no conflicting hash), so
+	// applying both would make two books of the same audio (renamed copies
+	// whose names put them in a different group than their originals).
+	// Both rows are held; the owner decides which files form the book.
+	fragSkipSameAudioRows = "skipped_same_audio_other_row"
 )
 
 // Evidence kinds of a fragment-to-parent match, strongest first.
@@ -819,19 +825,20 @@ func (lib *fragLibrary) realSeriesID(b fragBook, stem string) *int {
 
 // personShapedName reports whether name could be a person's: no digits and
 // none of the characters a path or title carries ("_", brackets, ":", "#"),
-// once one trailing bracketed qualifier is set aside ("Jane Author
-// (Narrator)" is Jane Author with a role; "Jennsen, GS_ 08 Rubicon
-// (Amaranthe 08)" still fails on its digits and "_"). A false answer does
-// not mean junk on its own; realAuthorID also requires the name to be the
-// folder's own.
+// once one trailing bracketed ROLE is set aside ("Jane Author (Narrator)" is
+// Jane Author with a role). Only a role word is set aside: "Rubicon
+// (Amaranthe 08)", "The Expanse [Book 3]" and "Light of Other Days
+// (Unabridged)" keep their brackets and are not person-shaped. A false
+// answer does not mean junk on its own; realAuthorID also requires the name
+// to be the folder's own.
 func personShapedName(name string) bool {
 	name = trailingQualifierRe.ReplaceAllString(strings.TrimSpace(name), "")
 	return name != "" && !strings.ContainsAny(name, "0123456789_()[]{}:#")
 }
 
-// trailingQualifierRe matches one bracketed qualifier at the end of a name:
-// " (Narrator)", " [Editor]", " {Translator}".
-var trailingQualifierRe = regexp.MustCompile(`\s*(\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\})$`)
+// trailingQualifierRe matches one bracketed contributor role at the end of a
+// name: " (Narrator)", " [Editor]", " (ed.)", " {Translator}".
+var trailingQualifierRe = regexp.MustCompile(`(?i)\s*[(\[{]\s*(narrator|narrated by|reader|read by|editor|ed\.?|eds\.?|translator|trans\.?|translated by|illustrator|illustrated by|foreword|foreword by|introduction|introduction by|intro|afterword|contributor|author|adaptor|adapter|adapted by|compiler|compiled by)\s*[)\]}]$`)
 
 // sameOrMissing reports whether two optional ids do not contradict: equal,
 // or either missing.
@@ -1845,10 +1852,32 @@ func chapterKeyBetter(a, b string, keyN map[string]int) bool {
 // encodes of one length), are not provably the same audio and stay a
 // conflict. A missing hash falls back to size and position.
 func sameChapterCopy(a, b *fragCandidate) bool {
-	if a.File.Size <= 0 || a.File.Size != b.File.Size {
+	return sameChapterFiles(a.File, b.File)
+}
+
+func sameChapterFiles(a, b fragFile) bool {
+	if a.Size <= 0 || a.Size != b.Size {
 		return false
 	}
-	return a.File.Hash == "" || b.File.Hash == "" || a.File.Hash == b.File.Hash
+	return a.Hash == "" || b.Hash == "" || a.Hash == b.Hash
+}
+
+// sameChapterRun reports whether every file of run is one chapter: two or
+// more files, all pairwise sameChapterCopy. Pairwise, not against the first
+// file only: with the first file's hash unknown, "hash-x" and "hash-y" would
+// each pass against it and both retire as copies of different audio.
+func sameChapterRun(run []*fragCandidate) bool {
+	if len(run) < 2 {
+		return false
+	}
+	for i := range run {
+		for j := i + 1; j < len(run); j++ {
+			if !sameChapterCopy(run[i], run[j]) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // fragGroupState is a no-parent row's Row.State: what Replan needs from plan
@@ -1859,6 +1888,19 @@ type fragGroupState struct {
 	Files         map[string]string `json:"files"`
 	SurvivorTitle string            `json:"survivor_title"`
 	SurvivorPath  string            `json:"survivor_path"`
+	// Books is each member's and copy's organized/primary flags at plan
+	// time. retireInto demotes every book it retires, and keptOfCopies and
+	// the survivor election read those flags, so a run cut off after some
+	// retires would otherwise re-plan a different kept file per chapter
+	// (a different fingerprint) and never resume. replanGroup restores
+	// these for books already retired into this row's survivor.
+	Books map[string]fragPlannedFlags `json:"books,omitempty"`
+}
+
+// fragPlannedFlags is one book's survivor-election flags as planned.
+type fragPlannedFlags struct {
+	Organized bool `json:"organized"`
+	Primary   bool `json:"primary"`
 }
 
 // importChapterSec is the IMPORT scanner's chapter threshold in seconds
@@ -2093,15 +2135,11 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 					j++
 				}
 				run := es[i:j]
-				same := len(run) > 1
-				for _, q := range run[1:] {
-					same = same && sameChapterCopy(run[0].c, q.c)
+				rc := make([]*fragCandidate, len(run))
+				for k, q := range run {
+					rc[k] = q.c
 				}
-				if same {
-					rc := make([]*fragCandidate, len(run))
-					for k, q := range run {
-						rc[k] = q.c
-					}
+				if sameChapterRun(rc) {
 					kept = append(kept, run[keptOfCopies(lib, rc, allKeyN)])
 					nCopies += len(run) - 1
 				} else {
@@ -2398,7 +2436,75 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 		}
 		rows = append(rows, row)
 	}
+	holdSameAudioRows(rows)
 	return rows
+}
+
+// holdSameAudioRows holds every pair of rows from one folder that hold one
+// chapter twice between them: a file of one and a file of the other at the
+// same chapter position with the same size and no conflicting hash
+// (sameChapterFiles). Renamed copies whose names put them in another group
+// than their originals ("001 - Arrival" beside "Light of Other Days - Part
+// 001", "Chapter 001" beside the same) would otherwise make two applicable
+// rows and two books of the same audio. Within one row the copies are set
+// aside (noParentRow); across rows nothing could tell which files form the
+// book, so both are held and each names the other. Plan only: Replan sees
+// one row's books, and a held row is never re-planned.
+func holdSameAudioRows(rows []repairs.Row) {
+	type placedFile struct {
+		pos  metadata.ChapterPos
+		file fragFile
+		stem string
+	}
+	files := make([][]placedFile, len(rows))
+	byDir := map[string][]int{}
+	for i, r := range rows {
+		plan, ok := r.Detail.(*fragGroupPlan)
+		if !ok {
+			continue
+		}
+		add := func(c *fragCandidate) {
+			if pos, ok := chapterPos(c); ok && len(pos.Parts) > 0 {
+				files[i] = append(files[i], placedFile{pos, c.File, c.origStem()})
+			}
+		}
+		for _, m := range plan.Members {
+			add(m.Frag)
+		}
+		for _, cp := range plan.Copies {
+			add(cp.Frag)
+		}
+		byDir[plan.Dir] = append(byDir[plan.Dir], i)
+	}
+	why := map[int][]string{}
+	for _, idx := range byDir {
+		for a := 0; a < len(idx); a++ {
+			for b := a + 1; b < len(idx); b++ {
+				i, j := idx[a], idx[b]
+			pair:
+				for _, x := range files[i] {
+					for _, y := range files[j] {
+						if x.pos.Compare(y.pos) == 0 && sameChapterFiles(x.file, y.file) {
+							why[i] = append(why[i], fmt.Sprintf("%q here and %q in row %s", x.stem, y.stem, rows[j].RowID))
+							why[j] = append(why[j], fmt.Sprintf("%q here and %q in row %s", y.stem, x.stem, rows[i].RowID))
+							break pair
+						}
+					}
+				}
+			}
+		}
+	}
+	for i, ws := range why {
+		r := &rows[i]
+		sort.Strings(ws)
+		r.Evidence = append(r.Evidence, "the same chapter, same size, sits in another row of this folder: "+strings.Join(ws, "; "))
+		if r.Class == fragClassManual {
+			continue // already held for its guard; the evidence still names the other row
+		}
+		r.Risk, r.Skipped = repairs.RiskReview, fragSkipSameAudioRows
+		r.SkipReason = fmt.Sprintf("files of this row are the same chapters (same position, same size) as files of another row from this folder (%s): applying both would make two books of the same audio; decide which files form the book, then plan again",
+			strings.Join(ws, "; "))
+	}
 }
 
 func noParentRowID(dir, key string) string {
@@ -2481,18 +2587,14 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 				j++
 			}
 			run := ps[i:j]
-			same := len(run) > 1
-			for _, q := range run[1:] {
-				same = same && sameChapterCopy(run[0].c, q.c)
-			}
-			if !same {
-				kept = append(kept, run...)
-				i = j
-				continue
-			}
 			rc := make([]*fragCandidate, len(run))
 			for k, q := range run {
 				rc[k] = q.c
+			}
+			if !sameChapterRun(rc) {
+				kept = append(kept, run...)
+				i = j
+				continue
 			}
 			keep := keptOfCopies(lib, rc, keyN)
 			kept = append(kept, run[keep])
@@ -2602,7 +2704,12 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	if plan.Title != "" {
 		r.Title = plan.Title
 	}
-	state := fragGroupState{Files: map[string]string{}, SurvivorTitle: survivor.Title, SurvivorPath: survivor.FilePath}
+	state := fragGroupState{Files: map[string]string{}, SurvivorTitle: survivor.Title, SurvivorPath: survivor.FilePath,
+		Books: map[string]fragPlannedFlags{}}
+	for _, id := range ids {
+		b := lib.books[id]
+		state.Books[id] = fragPlannedFlags{Organized: b.Organized, Primary: b.Primary}
+	}
 	var fpParts []string
 	missing, unknown, long, withPID := 0, 0, 0, ""
 	limit := repairChapterMaxSec()
@@ -2903,6 +3010,22 @@ func (f *fragmentFixer) replanGroup(store OpsStore, lib *fragLibrary, hist Fragm
 		if !ok {
 			return changedRow(planned, fmt.Sprintf("fragment %s is gone", id)), nil
 		}
+		if b.SoftDeleted {
+			// Resumable only when THIS row's survivor took it: a book some
+			// other fixer or merge retired into another book is not ours to
+			// move onto the survivor.
+			if b.MergedInto != survivorID {
+				return changedRow(planned, fmt.Sprintf("book %s was retired into %q, not into the survivor %s", id, b.MergedInto, survivorID)), nil
+			}
+			// retireInto demoted it; judge it with the flags the plan saw,
+			// so the same file per chapter is kept and the fingerprint holds.
+			if fl, ok := st.Books[id]; ok {
+				b.Organized, b.Primary = fl.Organized, fl.Primary
+				lb := lib.books[id]
+				lb.Organized, lb.Primary = fl.Organized, fl.Primary
+				lib.books[id] = lb
+			}
+		}
 		b.SoftDeleted = false
 		if id == survivorID && planned.Proposed["title"] != "" && b.Title == planned.Proposed["title"] {
 			// This row's own retitle already ran (a run cut off after it):
@@ -3200,7 +3323,7 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 		// found here, before the first write: a refusal then writes nothing
 		// instead of leaving the members moved and the copy live.
 		for _, cp := range plan.Copies {
-			if err := copyRetireRefusal(store, cp); err != nil {
+			if err := copyRetireRefusal(store, cp, plan.SurvivorID); err != nil {
 				return err
 			}
 		}
@@ -3303,8 +3426,9 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 // before a numbered set writes anything: the copy's book is gone or holds
 // another id, it holds anything but exactly its planned row, or it, its row
 // or an un-tombstoned external id carries an iTunes id. A copy an earlier,
-// cut-off run already retired is not refused (retireInto resumes it).
-func copyRetireRefusal(store OpsStore, cp fragGroupCopy) error {
+// cut-off run already retired INTO survivor is not refused (retireInto
+// resumes it); one retired into any other book is.
+func copyRetireRefusal(store OpsStore, cp fragGroupCopy, survivor string) error {
 	id := cp.Frag.Book.ID
 	b, err := store.GetBookByID(id)
 	if err != nil {
@@ -3314,6 +3438,9 @@ func copyRetireRefusal(store OpsStore, cp fragGroupCopy) error {
 		return fmt.Errorf("%w: copy %s vanished", repairs.ErrChangedSincePlan, id)
 	}
 	if b.IsSoftDeleted() {
+		if b.MergedIntoBookID == nil || *b.MergedIntoBookID != survivor {
+			return fmt.Errorf("%w: copy %s was retired into another book, not the survivor %s", repairs.ErrChangedSincePlan, id, survivor)
+		}
 		return nil
 	}
 	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
