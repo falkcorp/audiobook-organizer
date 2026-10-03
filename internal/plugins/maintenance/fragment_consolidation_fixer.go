@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -126,6 +126,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -133,6 +134,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/boilerplate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -144,7 +146,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 const fragFixerID = "fragment-consolidation"
@@ -671,12 +672,16 @@ type fragLibrary struct {
 	// roots are the library root and the import paths, cleaned: a folder
 	// that IS one of them holds whatever was dropped there, never one work.
 	roots []string
+	// libraryRoot is the organized library's root ("" unset). A folder
+	// directly under it is an author folder, whatever its name.
+	libraryRoot string
 }
 
 // loadRoots reads the library root and the import paths into the snapshot.
 func (lib *fragLibrary) loadRoots(store OpsStore) error {
 	if r := strings.TrimSpace(config.AppConfig.RootDir); r != "" {
-		lib.roots = append(lib.roots, filepath.Clean(r))
+		lib.libraryRoot = filepath.Clean(r)
+		lib.roots = append(lib.roots, lib.libraryRoot)
 	}
 	imports, err := store.GetAllImportPaths()
 	if err != nil {
@@ -726,10 +731,14 @@ func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
 	for _, s := range all {
 		lib.series[s.ID] = s.Name
 	}
-	if authors, aerr := store.GetAllAuthors(); aerr == nil {
-		for _, a := range authors {
-			lib.authors[a.ID] = a.Name
-		}
+	authors, err := store.GetAllAuthors()
+	if err != nil {
+		// The numbered-set rule compares a folder with its files' author:
+		// fail rather than plan with that test silently off.
+		return nil, fmt.Errorf("list authors: %w", err)
+	}
+	for _, a := range authors {
+		lib.authors[a.ID] = a.Name
 	}
 	if err := lib.loadRoots(store); err != nil {
 		return nil, err
@@ -1730,15 +1739,63 @@ type numberedSet struct {
 	dir     string
 	members []*fragCandidate
 	problem string
+	// small is set instead of problem when the only objection is the size.
+	small string
+	// sideBySide: the problem is that the folder holds works side by side
+	// (two files at one position, a key block, only multi-part names). Those
+	// works are what the key groups find, so the key groups decide. Any
+	// other problem doubts the folder as a whole, key groups included.
+	sideBySide bool
+}
+
+// fragNumberedMin is the fewest files a numbered set is applied with. Three
+// short numbered files with different names are as likely a shelf of short
+// works ("1 - Green Eggs and Ham", "2 - The Cat in the Hat") or a few
+// podcast episodes as a serial, and nothing recorded tells them apart; the
+// serials this rule is for have dozens to hundreds of chapters.
+const fragNumberedMin = 8
+
+// authorFolderSuffixRe drops what a folder adds to an author's name.
+var authorFolderSuffixRe = regexp.MustCompile(`(?i)[\s,_-]+(?:collection|collected works|complete works|works|short stories|stories|anthology|omnibus)$`)
+
+// folderNamesAuthor reports whether a folder is named for the author rather
+// than for a work: the same name tokens in any order ("Author, Jane"), or the
+// surname with the other names as initials ("J. Author"), with a collection
+// suffix ignored ("Jane Author Collection").
+func folderNamesAuthor(folder, author string) bool {
+	tokens := func(s string) []string {
+		return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	}
+	at := tokens(author)
+	ft := tokens(authorFolderSuffixRe.ReplaceAllString(strings.TrimSpace(folder), ""))
+	if len(at) == 0 || len(ft) == 0 || len(ft) > len(at) {
+		return false
+	}
+	surname := at[len(at)-1]
+	if !slices.Contains(ft, surname) {
+		return false
+	}
+	for _, f := range ft {
+		ok := false
+		for _, a := range at {
+			if f == a || (len(f) == 1 && strings.HasPrefix(a, f)) {
+				ok = true
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // numberedSets finds, per import folder, the candidate numbered chapter
 // sets: at least fragMinGroup unmatched fragments whose stems open with a
 // chapter number and carry at least two different chapter keys
-// ("070 - Skating", "047 - Core"). A serial's chapters each have their own
-// title, so ChapterGroupKey keys them apart and no key group ever forms;
-// 4,966 such books were left on prod on 2026-10-03 (SenescentSoul 262,
-// Anansi Boys 55).
+// ("070 - Skating", "047 - Core", "002 - Arc Part 1"). A serial's chapters
+// each have their own title, so ChapterGroupKey keys them apart and no key
+// group ever forms; 4,966 such books were left on prod on 2026-10-03
+// (SenescentSoul 262, Anansi Boys 55).
 //
 // Numbers alone do not make a serial. Each test below answers a shape that
 // merged different works in review (2026-10-03), and a set that fails one
@@ -1746,16 +1803,22 @@ type numberedSet struct {
 //
 //   - a library root or import path as the folder: whatever was dropped
 //     there ("downloads/01 - Green Eggs", "02 - Some Podcast");
+//   - a folder directly under the library root, or named for the files'
+//     author: an author folder holds several works;
 //   - a file in a disc folder: "CD1/01 - Alpha", "CD2/01 - Beta" never
 //     collide on position, so nothing would tell three works apart;
 //   - two files at one position: two works that both start at 01;
 //   - members by different authors or of different series;
 //   - numbering that does not run from 0 or 1 without large gaps: years and
 //     title numbers ("1632 - …", "1984 - …", "2001 - …") are not chapters;
-//   - a chapter key with fragMinGroup or more files that sit together as
-//     one block ("01-03 - Book A", then "04 - Book B"): that block is a
-//     work of its own. Three "Interlude" chapters spread through a serial
-//     are not a block and stay in the set.
+//   - a chapter key whose files sit together as one block covering half the
+//     set or more ("01-03 - Book A", then "04 - Book B"), or every key with
+//     two or more files and no key alone ("01-02 - Book A", "03-04 - Book
+//     B"): works side by side. Three chapters named alike inside a long
+//     serial are not such a block and stay in the set;
+//   - a member that is a published work in its own right: it carries an
+//     ASIN, or a title that is not its file name;
+//   - fewer than fragNumberedMin files.
 func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 	type entry struct {
 		c   *fragCandidate
@@ -1766,10 +1829,10 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 	byDir := map[string][]entry{}
 	discDir := map[string]bool{}
 	for _, c := range cands {
-		key, kind := metadata.ChapterGroupKey(c.origStem())
-		if kind != metadata.ChapterKeyLeading {
+		if !metadata.HasLeadingChapterNumber(c.origStem()) {
 			continue
 		}
+		key, _ := metadata.ChapterGroupKey(c.origStem())
 		pos, ok := chapterPos(c)
 		if !ok || len(pos.Parts) == 0 {
 			continue
@@ -1798,9 +1861,13 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 		if len(keyN) < 2 {
 			continue // one key: the key group already covers it
 		}
+		// The order noParentRow gives its members: position, stem, book id.
 		sort.SliceStable(es, func(i, j int) bool {
 			if cmp := es[i].pos.Compare(es[j].pos); cmp != 0 {
 				return cmp < 0
+			}
+			if a, b := es[i].c.origStem(), es[j].c.origStem(); a != b {
+				return a < b
 			}
 			return es[i].c.Book.ID < es[j].c.Book.ID
 		})
@@ -1810,9 +1877,14 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 		}
 		first := es[0].c.Book
 		lo, hi := es[0].num, es[len(es)-1].num
+		clean := filepath.Clean(dir)
 		switch {
-		case slices.Contains(lib.roots, filepath.Clean(dir)):
+		case slices.Contains(lib.roots, clean):
 			set.problem = fmt.Sprintf("%s is a library root or import path: it holds whatever was put there, not one work", dir)
+		case lib.libraryRoot != "" && filepath.Dir(clean) == lib.libraryRoot:
+			set.problem = fmt.Sprintf("%s sits directly under the library root: an author folder holds several works", dir)
+		case folderNamesAuthor(filepath.Base(clean), lib.authorName(first)):
+			set.problem = fmt.Sprintf("the folder %q is named for the files' author (%q): an author folder holds several works", filepath.Base(clean), lib.authorName(first))
 		case discDir[dir]:
 			set.problem = "some of the files sit in disc folders or carry a disc number; discs are grouped by chapter key only"
 		}
@@ -1820,6 +1892,7 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 			e := es[i]
 			switch {
 			case e.pos.Compare(es[i-1].pos) == 0:
+				set.sideBySide = true
 				set.problem = fmt.Sprintf("%q and %q claim the same chapter position: more than one work in the folder", es[i-1].c.origStem(), e.c.origStem())
 			case !sameIntPtr(e.c.Book.AuthorID, first.AuthorID):
 				set.problem = fmt.Sprintf("the files are by different authors (%q, %q)", lib.authorName(first), lib.authorName(e.c.Book))
@@ -1831,65 +1904,94 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 			set.problem = fmt.Sprintf("the numbers run %d to %d over %d files: not a chapter run from 0 or 1 without large gaps", lo, hi, len(es))
 		}
 		if set.problem == "" {
-			// A key with enough files to be a group of its own, all adjacent.
-			for i := 0; i < len(es); {
+			// Works side by side: one key's files all adjacent and at least
+			// half the set, or no key standing alone.
+			single := 0
+			for _, n := range keyN {
+				if n == 1 {
+					single++
+				}
+			}
+			if single == 0 {
+				set.sideBySide = true
+				set.problem = fmt.Sprintf("every one of the %d names in the folder is carried by two or more files: several multi-part works, not one work's chapters", len(keyN))
+			}
+			for i := 0; i < len(es) && set.problem == ""; {
 				j := i
 				for j < len(es) && es[j].key == es[i].key {
 					j++
 				}
-				if run := j - i; run >= fragMinGroup && run == keyN[es[i].key] {
-					set.problem = fmt.Sprintf("the %d files keyed %q sit together as one block (%q … %q): a work of its own beside the others",
+				if run := j - i; run >= fragMinGroup && run == keyN[es[i].key] && 2*run >= len(es) {
+					set.sideBySide = true
+					set.problem = fmt.Sprintf("the %d files keyed %q sit together as one block (%q … %q) and are half the folder or more: a work of its own beside the others",
 						run, es[i].key, es[i].c.origStem(), es[j-1].c.origStem())
-					break
 				}
 				i = j
 			}
+		}
+		for _, e := range es {
+			if set.problem != "" {
+				break
+			}
+			b := e.c.Book
+			stem := e.c.origStem()
+			switch {
+			case b.ASIN != "":
+				set.problem = fmt.Sprintf("%q carries its own ASIN (%s): a published work, not a chapter", stem, b.ASIN)
+			case !metadata.IsChapterOnlyTitle(b.Title) && !chapterTitleIsStem(b.Title, stem):
+				set.problem = fmt.Sprintf("%q is titled %q, not after its file: a work with a title of its own, not a chapter", stem, b.Title)
+			}
+		}
+		if set.problem == "" && len(es) < fragNumberedMin {
+			// Not a failed test: the run may well be one work. It is held,
+			// and its files are not handed to the key groups either.
+			set.small = fmt.Sprintf("only %d files: fewer than %d cannot be told from a shelf of short works; merge by hand if they are one work", len(es), fragNumberedMin)
 		}
 		sets = append(sets, set)
 	}
 	return sets
 }
 
+// chapterTitleIsStem reports whether a book's title is just its file's name:
+// the stem itself, or the stem without its leading number, by letters and
+// digits. That is what the filename fallback gives a chapter file; a tagged
+// work carries a title of its own.
+func chapterTitleIsStem(title, stem string) bool {
+	key := func(s string) string {
+		var sb strings.Builder
+		for _, r := range strings.ToLower(s) {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				sb.WriteRune(r)
+			}
+		}
+		return sb.String()
+	}
+	t := key(title)
+	if t == key(stem) {
+		return true
+	}
+	rest, _ := metadata.ChapterGroupKey(stem)
+	return rest != "" && t == key(rest)
+}
+
 // noParentRows groups unmatched fragments by import folder and chapter key,
 // and a folder's differently-titled numbered files as one numbered set.
 //
-// A numbered set that passes every test and whose row is not stopped by its
-// files (missing, unknown or long durations, no work folder to title it
-// from) takes all the folder's numbered files, including any that would
-// have formed a key group among themselves. A set that does not is dropped
-// in favour of the key groups, exactly as before the rule existed; when no
-// key group forms from its files either, its row is listed with the reason
-// so the cluster is visible, and nothing is applied.
+// A set found to be works side by side (numberedSet.sideBySide) is left to
+// the key groups, exactly as before the rule existed; the key rows then say
+// how many other numbered files the folder holds. Every other set keeps all
+// its files in ONE row whatever that row's state: applicable, held for a
+// test it failed (an author folder, mixed authors, too few files, …), held
+// for missing, unknown or long files, or for a folder that gives no title.
+// Three same-named chapters of a numbered run are never handed to a key
+// group to become a partial book under the folder's name; before this rule
+// they were, wherever a folder's numbered files carried two or more names.
 func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) []repairs.Row {
 	var rows []repairs.Row
 	inSet := map[*fragCandidate]bool{}
+	besides := map[string]int{} // dir -> numbered files of a set that fell back
 	for _, set := range numberedSets(lib, cands) {
-		if a := lib.authorName(set.members[0].Book); set.problem == "" && a != "" &&
-			strings.EqualFold(util.NormalizeAuthor(filepath.Base(set.dir)), util.NormalizeAuthor(a)) {
-			set.problem = fmt.Sprintf("the folder %q is named like the files' author: an author folder holds several works", filepath.Base(set.dir))
-		}
-		row := f.noParentRow(lib, set.dir, fragNumberedKey, set.members)
-		// untitled: the files ARE one numbered run, but nothing names the
-		// work. The set is held and its files are not handed to the key
-		// groups: three "Interlude" chapters of an untitled serial are not
-		// a book either.
-		untitled := false
-		if row.Class != fragClassManual {
-			switch {
-			case set.problem != "":
-				row.Skipped, row.SkipReason = fragSkipNumberedUnsure, set.problem
-			case row.Proposed["title"] == "":
-				untitled = true
-				row.Skipped, row.SkipReason = fragSkipNumberedUnsure,
-					"the folder gives no title for the work (a generic folder, or one directly under a root); the survivor would keep one chapter's name"
-			}
-		}
-		usable := row.Class == fragClassManual || untitled
-		switch row.Skipped {
-		case "", fragSkipTrackOrder, fragSkipNoSurvivor:
-			usable = true
-		}
-		if !usable {
+		if set.sideBySide {
 			keyN := map[string]int{}
 			fallback := false
 			for _, c := range set.members {
@@ -1899,7 +2001,20 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 				}
 			}
 			if fallback {
-				continue // the key groups decide, as before
+				besides[set.dir] = len(set.members)
+				continue
+			}
+		}
+		row := f.noParentRow(lib, set.dir, fragNumberedKey, set.members)
+		if row.Class != fragClassManual {
+			switch {
+			case set.problem != "":
+				row.Skipped, row.SkipReason = fragSkipNumberedUnsure, set.problem
+			case set.small != "":
+				row.Skipped, row.SkipReason = fragSkipNumberedUnsure, set.small
+			case row.Proposed["title"] == "":
+				row.Skipped, row.SkipReason = fragSkipNumberedUnsure,
+					"the folder gives no title for the work (a generic folder, or one directly under a root); the survivor would keep one chapter's name"
 			}
 		}
 		for _, c := range set.members {
@@ -1932,9 +2047,13 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 			continue
 		}
 		dir, key, _ := strings.Cut(gk, "\x00")
-		rows = append(rows, f.noParentRow(lib, dir, key, cs))
+		row := f.noParentRow(lib, dir, key, cs)
+		if n := besides[dir]; n > len(cs) {
+			row.Evidence = append(row.Evidence, fmt.Sprintf(
+				"%d other numbered file(s) from this folder are not in this row: the folder was not taken as one numbered set", n-len(cs)))
+		}
+		rows = append(rows, row)
 	}
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].RowID < rows[j].RowID })
 	return rows
 }
 
@@ -2216,7 +2335,11 @@ func replanLoad(store OpsStore, lib *fragLibrary, id string) error {
 	}
 	lib.books[id] = fragBookOf(b)
 	if b.AuthorID != nil {
-		if a, aerr := store.GetAuthorByID(*b.AuthorID); aerr == nil && a != nil {
+		a, aerr := store.GetAuthorByID(*b.AuthorID)
+		if aerr != nil {
+			return fmt.Errorf("read author %d of %s: %w", *b.AuthorID, id, aerr)
+		}
+		if a != nil {
 			lib.authors[a.ID] = a.Name
 		}
 	}

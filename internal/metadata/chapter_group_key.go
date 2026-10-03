@@ -1,7 +1,7 @@
 // file: internal/metadata/chapter_group_key.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b1e4c2a-9d53-4f8e-a6b0-3c5d8e2f1a94
-// last-edited: 2026-09-28
+// last-edited: 2026-10-03
 
 package metadata
 
@@ -106,6 +106,15 @@ func ChapterGroupKey(stem string) (key string, kind ChapterKeyKind) {
 	s = strings.Trim(strings.ToLower(s), " -–_.,:")
 	s = strings.Join(strings.Fields(s), " ")
 	return s + suffix, kind
+}
+
+// HasLeadingChapterNumber reports whether the stem opens with a bare number
+// ("002 - Arc Part 1", "070 - Skating", "98"), whatever else it carries.
+// ChapterGroupKey reports the LAST piece it strips as the kind, so a stem
+// with a leading number and a trailing marker is ChapterKeyMarker; a caller
+// that asks "is this file numbered at the front?" needs this instead.
+func HasLeadingChapterNumber(stem string) bool {
+	return chapterLeadingNumRe.MatchString(strings.TrimSpace(stem))
 }
 
 // ChapterPos is where a chapter file sits in its set, read from exactly the
