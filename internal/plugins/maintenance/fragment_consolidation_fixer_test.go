@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -1762,39 +1762,50 @@ func TestFragmentFixer_PathTwinLimits(t *testing.T) {
 		require.ElementsMatch(t, []string{parent, donor}, findRow(t, res, "ghost:"+parent).BookIDs)
 		inNoRow(t, res, twin)
 	})
-	t.Run("a moved donor takes the twin and repoints once", func(t *testing.T) {
-		f := newFragFixture(t)
-		p1 := f.file(t, "lib/P/01.mp3", 801)
-		parent := f.book(t, "parent", "P", f.path("lib/P"), nil)
-		f.row(t, "p01", parent, p1, "01.mp3", 801, 600, 1)
-		p2 := f.path("lib/P/02.mp3") // gone: organized away under the fragment
-		f.row(t, "p02", parent, p2, "02.mp3", 802, 600, 2)
-		at := f.file(t, "lib/P/02/02/02.mp3", 802)
-		donor := f.book(t, "donor", "02", p2, nil)
-		f.row(t, "d02", donor, at, "02.mp3", 802, 600, 0)
-		twin := f.book(t, "twin", "02", at, nil)
-		f.row(t, "t02", twin, at, "", 0, 0, 0)
-		res := f.plan(t, "op-plan")
-		r := findRow(t, res, "moved:"+parent)
-		require.True(t, r.Applicable(), r.SkipReason)
-		require.ElementsMatch(t, []string{parent, donor, twin}, r.BookIDs)
-		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
-		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
-		rows, err := f.s.GetBookFiles(parent)
-		require.NoError(t, err)
-		var repointed int
-		for _, row := range rows {
-			if row.FilePath == at {
-				repointed++
+	// moved: the parent's 02 row is gone (organized away under the donor);
+	// donor and twin both name the present file. Row pairs are sorted by
+	// book id, so the twin is created first in one variant: the repoint must
+	// still carry the donor's size, not the twin's unknown one.
+	for _, twinFirst := range []bool{false, true} {
+		name := "a moved donor takes the twin and repoints once"
+		if twinFirst {
+			name += " (twin created first)"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFragFixture(t)
+			at := f.file(t, "lib/P/02/02/02.mp3", 802)
+			var twin string
+			if twinFirst {
+				twin = f.book(t, "twin", "02", at, nil)
+				f.row(t, "t02", twin, at, "", 0, 0, 0)
 			}
-		}
-		require.Equal(t, 1, repointed, "the parent's 02 row points at the shared file exactly once")
-		for _, id := range []string{donor, twin} {
-			b, err := f.s.GetBookByID(id)
-			require.NoError(t, err)
-			require.True(t, b.IsSoftDeleted(), "%s retired", id)
-		}
-	})
+			p1 := f.file(t, "lib/P/01.mp3", 801)
+			parent := f.book(t, "parent", "P", f.path("lib/P"), nil)
+			f.row(t, "p01", parent, p1, "01.mp3", 801, 600, 1)
+			p2 := f.path("lib/P/02.mp3")
+			f.row(t, "p02", parent, p2, "02.mp3", 802, 600, 2)
+			donor := f.book(t, "donor", "02", p2, nil)
+			f.row(t, "d02", donor, at, "02.mp3", 802, 600, 0)
+			if !twinFirst {
+				twin = f.book(t, "twin", "02", at, nil)
+				f.row(t, "t02", twin, at, "", 0, 0, 0)
+			}
+			res := f.plan(t, "op-plan")
+			r := findRow(t, res, "moved:"+parent)
+			require.True(t, r.Applicable(), r.SkipReason)
+			require.ElementsMatch(t, []string{parent, donor, twin}, r.BookIDs)
+			out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+			require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+			p02 := f.fileRow(t, "parent", "p02")
+			require.Equal(t, at, p02.FilePath, "the parent's 02 row points at the shared file")
+			require.Equal(t, int64(802), p02.FileSize, "the repoint carries the donor's size, not the twin's unknown one")
+			for _, id := range []string{donor, twin} {
+				b, err := f.s.GetBookByID(id)
+				require.NoError(t, err)
+				require.True(t, b.IsSoftDeleted(), "%s retired", id)
+			}
+		})
+	}
 	t.Run("a twin never lends", func(t *testing.T) {
 		f := newFragFixture(t)
 		gone := f.path("lib/Q/02/02.mp3")

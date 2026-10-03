@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -2234,16 +2234,29 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	switch plan := locked.Detail.(type) {
 	case []fragPair:
 		_, parentID, _ := strings.Cut(locked.RowID, ":")
-		// A parent row is repointed once per row: a path twin's pair names
-		// the same parent row and the same file as its donor's, and the
-		// donor's pair comes first (twins are appended after the claimants).
+		// A parent row is repointed once per row, and from the pair that
+		// carries the file's own facts: a path twin's pair names the same
+		// parent row and the same file as its donor's but has no hash or
+		// size of its own (that is what made it a twin), and the row's pairs
+		// are sorted by book id, so the twin may come first.
+		target := map[string]fragPair{}
+		for _, p := range plan {
+			if _, twin := twinEvidence(p.Evidence); twin {
+				if _, ok := target[p.Parent.ID]; !ok {
+					target[p.Parent.ID] = p
+				}
+				continue
+			}
+			target[p.Parent.ID] = p
+		}
 		repointed := map[string]bool{}
 		for _, p := range plan {
 			if err := ctx.Err(); err != nil {
 				return partial(err)
 			}
 			if locked.Class == fragClassMoved && !p.Done && !repointed[p.Parent.ID] {
-				to := undo.BookFileLocation{Path: p.Frag.File.Path, Missing: false, Hash: p.Frag.File.Hash, Size: p.Frag.File.Size}
+				from := target[p.Parent.ID].Frag.File
+				to := undo.BookFileLocation{Path: from.Path, Missing: false, Hash: from.Hash, Size: from.Size}
 				if err := w.RepointBookFile(parentID, p.Parent.ID, p.Parent.location(), to); err != nil {
 					return partial(err)
 				}
