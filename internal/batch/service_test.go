@@ -64,6 +64,8 @@ func (m *MockBookStore) GetUserPreference(string) (*database.UserPreference, err
 	return nil, nil
 }
 
+func (m *MockBookStore) DeleteUserPreference(string) error { return nil }
+
 func (m *MockBookStore) UpsertMetadataFieldState(state *database.MetadataFieldState) error {
 	if m.lockErr != nil {
 		return m.lockErr

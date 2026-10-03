@@ -1,7 +1,7 @@
 // file: internal/audiobooks/legacy_metadata_state_migration_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a6f9d18-7c34-4e05-b1a8-9f3c6d0e4b72
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -38,13 +38,22 @@ func TestUnlockAfterLegacyMigrationIsNotInert(t *testing.T) {
 		t.Fatalf("seed legacy blob: %v", err)
 	}
 
-	// 2. Opening the book migrates the blob into rows.
+	// 2. A read sees the blob's lock without writing; the first change
+	// migrates the blob into rows (under the field-state stripe).
 	state, err := svc.loadMetadataState("b1")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if entry, ok := state["title"]; !ok || !entry.OverrideLocked {
-		t.Fatalf("state = %+v, want the legacy title lock migrated", state)
+		t.Fatalf("state = %+v, want the legacy title lock read", state)
+	}
+	if err := svc.modifyMetadataState("b1", func(cur map[string]metadataFieldState) error {
+		if entry, ok := cur["title"]; !ok || !entry.OverrideLocked {
+			t.Fatalf("state = %+v, want the legacy title lock migrated", cur)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("migrate: %v", err)
 	}
 	rows, _ := store.GetMetadataFieldStates("b1")
 	if len(rows) != 1 {

@@ -150,9 +150,14 @@ func DeleteLegacyMetadataState(store LegacyMetadataStateDeleter, bookID string) 
 // UserOverrideRecorder is the store surface RecordUserOverrides needs: read the
 // book's existing rows (to preserve each field's fetched value) and write them
 // back.
+//
+// DeleteUserPreference retires the pre-migration blob: a book still on the
+// blob is migrated to rows before its first override row is written
+// (MigrateLegacyMetadataState), or that row would hide every lock in it.
 type UserOverrideRecorder interface {
 	MetadataFieldStateReader
 	UpsertMetadataFieldState(state *MetadataFieldState) error
+	DeleteUserPreference(key string) error
 }
 
 // RecordUserOverrides marks each named field as the user's own: it stores the
@@ -175,6 +180,9 @@ func RecordUserOverrides(store UserOverrideRecorder, bookID string, values map[s
 	}
 	unlock := LockMetadataState(bookID)
 	defer unlock()
+	if _, err := MigrateLegacyMetadataState(store, bookID); err != nil {
+		return fmt.Errorf("migrate metadata state for %s: %w", bookID, err)
+	}
 	existing, err := store.GetMetadataFieldStates(bookID)
 	if err != nil {
 		return fmt.Errorf("read metadata field states for %s: %w", bookID, err)

@@ -240,6 +240,10 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	if state == nil {
 		state = map[string]metadataFieldState{}
 	}
+	// loadedState is the state as read; the save applies only what this edit
+	// changed relative to it, onto the rows as they stand under the book's
+	// field-state stripe (saveEditedMetadataState).
+	loadedState := copyMetadataState(state)
 
 	// The series outcome (planSeriesEdit), from the effective sent name.
 	seriesValue := effectiveString(overrideString(req.Updates.Overrides[database.FieldKeySeriesName]), req.Updates.SeriesName)
@@ -922,8 +926,8 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			database.ChangeTypeManual, "manual", seriesPlan.renameFrom, seriesPlan.name)
 	}
 
-	// Save metadata state
-	if err := svc.saveMetadataState(id, state); err != nil {
+	// Save metadata state: this edit's changes only, under the stripe.
+	if err := svc.saveEditedMetadataState(id, loadedState, state); err != nil {
 		slog.Info("[ERROR] UpdateAudiobook failed to save metadata state", "err", err)
 		return nil, fmt.Errorf("failed to persist metadata state")
 	}
