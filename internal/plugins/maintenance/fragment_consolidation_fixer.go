@@ -510,6 +510,25 @@ func twinEvidence(evidence string) (inner string, ok bool) {
 	return inner, ok
 }
 
+// twinContradicts reports whether anything the twin carries refutes it being
+// the same chapter of the same parent as the donor at its path: hashes that
+// share nothing, differing known sizes, differing original names, or import
+// folders that differ. Facts the twin lacks contradict nothing.
+func twinContradicts(twin, donor *fragCandidate) bool {
+	switch {
+	case hashesDisagree(twin.File, donor.File):
+		return true
+	case twin.File.Size > 0 && donor.File.Size > 0 && twin.File.Size != donor.File.Size:
+		return true
+	case twin.OrigName != "" && donor.OrigName != "" && !strings.EqualFold(twin.OrigName, donor.OrigName):
+		return true
+	case twin.ImportPath != "" && twin.ImportPath != twin.File.Path && donor.ImportPath != "" &&
+		filepath.Dir(twin.ImportPath) != filepath.Dir(donor.ImportPath):
+		return true
+	}
+	return false
+}
+
 func hashesDisagree(a, b fragFile) bool {
 	ah, bh := uniqueNonEmpty(a.Hash, a.OrigHash), uniqueNonEmpty(b.Hash, b.OrigHash)
 	if len(ah) == 0 || len(bh) == 0 {
@@ -1226,48 +1245,6 @@ func sliceIn(rows []fragFile, target fragFile) merge.SliceMapping {
 // buildRows turns the evaluated candidates into rows. It is shared by Plan
 // (over the whole library) and Replan (over one row's books), so both reach
 // the same decision from the same state.
-// adoptTwinMatches gives a candidate that matched no parent row the single
-// match of a twin: another candidate whose row names the exact same path.
-// Two single-row books registered for one file (an import that ran twice
-// over the same chapter: "02" beside "Eldest - 02") carry one file's
-// evidence between them, and the one without it is the same chapter of the
-// same parent. Adopted evidence is as proven as the twin's own, so both
-// land in one row and retire together; without this the evidence-less twin
-// stayed a live co-owner of the path and made its sibling's row refused
-// (checkOwners: "also owned by book"), 21 of 48 applicable rows on prod
-// 2026-10-03. A twin whose own match is ambiguous, or whose path is shared
-// by two matched fragments, lends nothing.
-func adoptTwinMatches(cands []*fragCandidate, matchOf map[*fragCandidate][]fragMatch) {
-	byPath := map[string][]*fragCandidate{}
-	for _, c := range cands {
-		byPath[c.File.Path] = append(byPath[c.File.Path], c)
-	}
-	for _, c := range cands {
-		if len(matchOf[c]) > 0 || c.StatErr != "" {
-			continue
-		}
-		var donor *fragCandidate
-		for _, d := range byPath[c.File.Path] {
-			if d == c || len(matchOf[d]) != 1 {
-				continue
-			}
-			if _, adopted := twinEvidence(matchOf[d][0].Evidence); adopted {
-				continue
-			}
-			if donor != nil {
-				donor = nil
-				break
-			}
-			donor = d
-		}
-		if donor == nil {
-			continue
-		}
-		m := matchOf[donor][0]
-		matchOf[c] = []fragMatch{{Row: m.Row, Evidence: fragEvTwin(donor.Book.ID, m.Evidence)}}
-	}
-}
-
 func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*fragCandidate) []repairs.Row {
 	type parentKey struct{ parent, kind string }
 	pairs := map[parentKey][]fragPair{}
@@ -1279,30 +1256,23 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 	matchOf := map[*fragCandidate][]fragMatch{}
 	ignoredOf := map[*fragCandidate][]string{}
 
-	noteOf := map[*fragCandidate]string{}
 	for _, c := range cands {
 		ms := ix.match(c)
 		parents := map[string]bool{}
 		for _, m := range ms {
 			parents[m.Row.BookID] = true
 		}
+		note := ""
 		if len(parents) > 1 {
 			kept, ignored, ok, why := f.disregardITunesParents(lib, c, ms)
 			if ok {
 				ms, ignoredOf[c] = kept, ignored
+				parents = map[string]bool{kept[0].Row.BookID: true}
 			} else {
-				noteOf[c] = why
+				note = why
 			}
 		}
 		matchOf[c] = ms
-	}
-	adoptTwinMatches(cands, matchOf)
-	for _, c := range cands {
-		ms, note := matchOf[c], noteOf[c]
-		parents := map[string]bool{}
-		for _, m := range ms {
-			parents[m.Row.BookID] = true
-		}
 		switch {
 		case len(ms) == 0:
 			unmatched = append(unmatched, c)
@@ -1376,6 +1346,53 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 			pairs[k] = append(pairs[k], p)
 		}
 	}
+	// A path twin: an unmatched fragment whose row names the exact path of a
+	// fragment paired as a ghost or a copy joins that pair's row. Two
+	// single-row books registered for one file ("02" beside "Eldest - 02")
+	// carry one file's evidence between them; the one without it used to fall
+	// out of the plan silently and then, as a live co-owner of the path, make
+	// its sibling's row refused (checkOwners: "also owned by book") — 21 of
+	// 48 applicable rows on prod 2026-10-03. Only ghost and copy rows take a
+	// twin: both retire the fragment and repoint nothing, so the twin's own
+	// row is never the one a parent row is pointed at. A moved pair repoints
+	// to its fragment's file and is left alone. The twin's own facts must not
+	// contradict the donor's (hash, size, original name, import folder), and
+	// exactly one donor pair must name the path.
+	donors := map[string][]struct {
+		k parentKey
+		p fragPair
+	}{}
+	for k, ps := range pairs {
+		if k.kind != fragClassGhost && k.kind != fragClassCopy {
+			continue
+		}
+		for _, p := range ps {
+			donors[p.Frag.File.Path] = append(donors[p.Frag.File.Path], struct {
+				k parentKey
+				p fragPair
+			}{k, p})
+		}
+	}
+	var stillUnmatched []*fragCandidate
+	for _, c := range unmatched {
+		ds := donors[c.File.Path]
+		if c.StatErr != "" || len(ds) != 1 || twinContradicts(c, ds[0].p.Frag) {
+			stillUnmatched = append(stillUnmatched, c)
+			continue
+		}
+		d := ds[0]
+		if (d.k.kind == fragClassGhost) != !c.Present {
+			// The same path cannot be both on disk and gone; a disagreement
+			// means the snapshot moved under the plan.
+			stillUnmatched = append(stillUnmatched, c)
+			continue
+		}
+		twin := d.p
+		twin.Frag, twin.Done = c, false
+		twin.Evidence = fragEvTwin(d.p.Frag.Book.ID, d.p.Evidence)
+		pairs[d.k] = append(pairs[d.k], twin)
+	}
+	unmatched = stillUnmatched
 	var keys []parentKey
 	for k := range pairs {
 		keys = append(keys, k)
