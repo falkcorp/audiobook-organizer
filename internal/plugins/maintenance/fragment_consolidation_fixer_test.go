@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1646,4 +1647,75 @@ func TestFragmentFixer_RetryAfterCutOffRetireStillLeavesGroupAlone(t *testing.T)
 	fb, err = f.s.GetBookByID(frag)
 	require.NoError(t, err)
 	require.Nil(t, fb.IsPrimaryVersion, "the fragment's flag was written")
+}
+
+// TestFragmentFixer_PathTwinAdoptsMatch: a fragment that matched no parent
+// row but shares its exact path with a proven fragment adopts that match,
+// so both retire in one row and neither is left as a live co-owner that
+// refuses the other's row.
+func TestFragmentFixer_PathTwinAdoptsMatch(t *testing.T) {
+	f := newFragFixture(t)
+	p1 := f.file(t, "lib/P/01.mp3", 801)
+	p2 := f.file(t, "lib/P/02.mp3", 802)
+	parent := f.book(t, "parent", "P", f.path("lib/P"), nil)
+	f.row(t, "p01", parent, p1, "01.mp3", 801, 600, 1)
+	f.row(t, "p02", parent, p2, "02.mp3", 802, 600, 2)
+	// X: a ghost — imported from the parent's 02 (proven), its own file gone.
+	gone := f.path("lib/Q/02/02.mp3")
+	ghost := f.book(t, "ghost", "02", p2, nil)
+	f.row(t, "x02", ghost, gone, "02.mp3", 802, 600, 0)
+	// T: a second book registered for the same gone path, with no evidence of
+	// its own: no import history beyond its path, no hash, size unknown.
+	twin := f.book(t, "twin", "02", gone, nil)
+	f.row(t, "t02", twin, gone, "", 0, 0, 0)
+
+	res := f.plan(t, "op-plan")
+	r := findRow(t, res, "ghost:"+parent)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.ElementsMatch(t, []string{parent, ghost, twin}, r.BookIDs)
+	var adopted bool
+	for _, ev := range r.Evidence {
+		if strings.Contains(ev, fragEvTwinPrefix+ghost) {
+			adopted = true
+		}
+	}
+	require.True(t, adopted, "the twin's evidence names the fragment it adopted from: %v", r.Evidence)
+	for _, row := range res.Rows {
+		require.NotContains(t, []string{"held:" + twin, "no-parent:" + twin}, row.RowID, "the twin is in the parent's row, not held alone")
+	}
+
+	out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	for _, id := range []string{ghost, twin} {
+		b, err := f.s.GetBookByID(id)
+		require.NoError(t, err)
+		require.True(t, b.IsSoftDeleted(), "%s retired", id)
+	}
+	pb, err := f.s.GetBookByID(parent)
+	require.NoError(t, err)
+	require.False(t, pb.IsSoftDeleted())
+}
+
+// TestFragmentFixer_PathTwinNeedsOneDonor: a path shared by two matched
+// fragments, or a donor whose own match is ambiguous, lends nothing.
+func TestFragmentFixer_PathTwinNeedsOneDonor(t *testing.T) {
+	f := newFragFixture(t)
+	gone := f.path("lib/R/02.mp3")
+	for _, n := range []string{"A", "B"} {
+		p := f.book(t, "parent"+n, "R "+n, f.path("lib/R"+n), nil)
+		f.row(t, "p"+n+"01", p, f.file(t, "lib/R"+n+"/01.mp3", 901), "01.mp3", 901, 600, 1)
+		f.row(t, "p"+n+"02", p, gone, "02.mp3", 902, 600, 2)
+	}
+	// X matches both parents' 02 rows (ambiguous); T shares X's path.
+	xPath := f.path("lib/R/02/02.mp3")
+	x := f.book(t, "fragX", "02", gone, nil)
+	f.row(t, "x02", x, xPath, "02.mp3", 902, 600, 0)
+	twin := f.book(t, "twin", "02", xPath, nil)
+	f.row(t, "t02", twin, xPath, "", 0, 0, 0)
+	res := f.plan(t, "op-plan")
+	for _, r := range res.Rows {
+		for _, id := range r.BookIDs {
+			require.NotEqual(t, twin, id, "an ambiguous donor lends nothing: %s", r.RowID)
+		}
+	}
 }
