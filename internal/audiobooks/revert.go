@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -41,6 +41,10 @@ import (
 // narrow slice", which it was only relative to database.Store.
 type revertServiceStore interface {
 	revertLedgerStore
+	// RecordMetadataChange records the history row of every book column a
+	// revert restores (modifyBook), so readers of a book's history (the
+	// relink-stale-series fixer, the queued-apply check) see the revert.
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
 	revertSeriesStore
 	revertBookFileStore
 	revertAuthorStore
@@ -657,7 +661,7 @@ func (rs *RevertService) revertFileMove(c *database.OperationChange) error {
 	if err := organizer.MoveExclusive(c.NewValue, c.OldValue); err != nil {
 		return fmt.Errorf("failed to move file back from %s to %s: %w", c.NewValue, c.OldValue, err)
 	}
-	if err := rs.modifyBook(c.BookID, func(b *database.Book) error {
+	if err := rs.modifyBook(c.OperationID, c.BookID, func(b *database.Book) error {
 		if b.FilePath != c.NewValue {
 			return driftRefusal("book %s path changed to %q during the revert", b.ID, b.FilePath)
 		}
@@ -719,17 +723,81 @@ func repointPath(p, from, to string) (string, bool) {
 	return "", false
 }
 
-// modifyBook runs fn inside ModifyBook and turns "the book is gone" into the
-// same refusal loadBook gives.
-func (rs *RevertService) modifyBook(id string, fn func(*database.Book) error) error {
-	updated, err := rs.db.ModifyBook(id, fn)
+// RevertHistorySource is the Source of the history rows a revert records for
+// the book columns it restores. The operation id goes in the row's BatchID,
+// never in Source, so every revert reads as one source.
+const RevertHistorySource = "operation_revert"
+
+// modifyBook runs fn inside ModifyBook, turns "the book is gone" into the
+// same refusal loadBook gives, and records one history row per tracked
+// column the write changed (database.RecordBookEditHistory, so series_id and
+// author_id rows carry their refs), Source RevertHistorySource, BatchID the
+// operation id, change type "undo" (metafetch.ChangeTypeApplyUndo, which
+// "undo last apply" never treats as an apply).
+//
+// WHY: a revert used to restore columns with no history row. A series link
+// journaled with an empty old value (junk-author linkSeries, dedup
+// MergeSeries) was reverted to nil while the newest history still said "set
+// to X", so maintenance.relink-stale-series read the history as agreeing and
+// re-proposed the link the owner had just reverted.
+//
+// The write has committed when history is recorded; a history failure is
+// logged at Error and does not fail the restore.
+func (rs *RevertService) modifyBook(opID, id string, fn func(*database.Book) error) error {
+	var before, after *database.Book
+	updated, err := rs.db.ModifyBook(id, func(book *database.Book) error {
+		snap, serr := database.SnapshotBook(book)
+		if serr != nil {
+			return serr
+		}
+		if ferr := fn(book); ferr != nil {
+			before, after = nil, nil
+			return ferr
+		}
+		post, perr := database.SnapshotBook(book)
+		if perr != nil {
+			return perr
+		}
+		// Captured on every invocation, so a retried callback leaves the
+		// values of the attempt that committed.
+		before, after = snap, post
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 	if updated == nil {
 		return &undo.ReferentError{Reason: undo.ReasonBookMissing, Detail: fmt.Sprintf("book %s no longer exists", id)}
 	}
+	if before == nil || after == nil {
+		return nil
+	}
+	if _, herr := database.RecordBookEditHistory(revertHistoryRecorder{rs.db, opID}, before, after,
+		metafetch.ChangeTypeApplyUndo, RevertHistorySource, time.Now(), nil); herr != nil {
+		revertLog.Error("revert of operation %s restored book %s but its history was not fully recorded: %s",
+			logger.SanitizeLogValue(opID), logger.SanitizeLogValue(id), logger.SanitizeLogValue(herr.Error()))
+	}
 	return nil
+}
+
+// revertHistoryRecorder stamps the operation id into every history row's
+// BatchID on its way to the store.
+type revertHistoryRecorder struct {
+	db    revertServiceStore
+	batch string
+}
+
+func (r revertHistoryRecorder) RecordMetadataChange(rec *database.MetadataChangeRecord) error {
+	rec.BatchID = r.batch
+	return r.db.RecordMetadataChange(rec)
+}
+
+func (r revertHistoryRecorder) GetAuthorByID(id int) (*database.Author, error) {
+	return r.db.GetAuthorByID(id)
+}
+
+func (r revertHistoryRecorder) GetSeriesByID(id int) (*database.Series, error) {
+	return r.db.GetSeriesByID(id)
 }
 
 // revertBookFileReassign moves one book_file row from the book it was moved
@@ -979,7 +1047,7 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 func (rs *RevertService) revertBookMergedInto(c *database.OperationChange) error {
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
-	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		if err := undo.CheckMergedIntoCurrent(book, c); err != nil {
 			return err
 		}
@@ -1037,7 +1105,7 @@ func (rs *RevertService) revertUserStateFollow(c *database.OperationChange) erro
 func (rs *RevertService) revertBookPathUpdate(c *database.OperationChange) error {
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
-	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		if err := undo.CheckPathUpdateCurrent(book, c); err != nil {
 			return err
 		}
@@ -1162,7 +1230,7 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 			return err
 		}
 	}
-	err = rs.modifyBook(c.BookID, func(book *database.Book) error {
+	err = rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		// A live book is already restored; a stamped row is reverted only
 		// while the book carries a stamp this operation journaled for it
 		// (undo.CheckSoftDeleteCurrent).
@@ -1242,7 +1310,7 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) er
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	crowns := restored == nil || *restored
-	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		live := !book.IsSoftDeleted()
 		if err := undo.CheckPrimaryDemoteCurrent(book, c); err != nil {
 			return err
@@ -1310,7 +1378,7 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 	// nothing is written and the row is marked reverted. Anything else changed
 	// since and is refused. The preflight runs the same check. Only this field
 	// is written; the rest of the row is whatever the store holds now.
-	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		if err := undo.CheckBookFieldCurrent(book, c); err != nil {
 			if errors.Is(err, undo.ErrAlreadyRestored) {
 				return database.ErrSkipBookWrite
@@ -1518,7 +1586,7 @@ func (rs *RevertService) revertTitleRelinkCredits(c *database.OperationChange) e
 	}); err != nil && !errors.Is(err, database.ErrSkipBookAuthorsWrite) {
 		return err
 	}
-	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		switch {
 		case sameIntPtr(book.AuthorID, snap.AuthorID):
 			return database.ErrSkipBookWrite
@@ -1590,7 +1658,7 @@ func (rs *RevertService) revertJunkAuthorCredits(c *database.OperationChange) er
 	if !move.PrimaryChanged || primaryDone {
 		return nil
 	}
-	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		if perr := undo.CheckJunkAuthorPrimaryCurrent(c.BookID, book.AuthorID, snap, move); perr != nil {
 			if errors.Is(perr, undo.ErrAlreadyRestored) {
 				return database.ErrSkipBookWrite
@@ -1670,7 +1738,7 @@ func (rs *RevertService) revertRepairBookCreate(c *database.OperationChange) err
 		}
 		return err
 	}
-	_, err := rs.db.ModifyBook(c.BookID, func(book *database.Book) error {
+	err := rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		if book.IsSoftDeleted() {
 			return database.ErrSkipBookWrite
 		}
@@ -1680,6 +1748,12 @@ func (rs *RevertService) revertRepairBookCreate(c *database.OperationChange) err
 		book.MarkedForDeletionAt = &now
 		return nil
 	})
+	// A book gone by now has nothing left to retire; the path index is still
+	// moved off it, as before modifyBook recorded history here.
+	var gone *undo.ReferentError
+	if errors.As(err, &gone) && gone.Reason == undo.ReasonBookMissing {
+		err = nil
+	}
 	if err != nil && !errors.Is(err, database.ErrSkipBookWrite) {
 		return err
 	}
