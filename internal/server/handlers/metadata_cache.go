@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -183,6 +183,14 @@ type MetadataCacheHandler struct {
 	// requests (metadata_cache_snapshot.go). nil on a handler built as a
 	// struct literal; GetCacheReviewResults then loads the rows per request.
 	reviewSnap *reviewSnapshotCache
+	// reviewBuilder builds the review snapshot, incrementally over the
+	// previous one when the store's change logs allow.
+	reviewBuilder *reviewSnapshotBuilder
+	// booksChangedSince is the store's library change log
+	// (database.BooksChangedSince), through which a review request learns
+	// which of the snapshot's books to re-read; nil when the store has none,
+	// and every request then re-reads every book.
+	booksChangedSince changedSinceFunc
 }
 
 // OpEnqueuer is the slice of the v2 operations registry this handler needs:
@@ -201,34 +209,48 @@ type OpEnqueuer interface {
 func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetchService, batcher WriteBackEnqueuer, fileIOPool FileIOPool, ops OpEnqueuer, scanActive func() bool) *MetadataCacheHandler {
 	h := &MetadataCacheHandler{store: store, svc: svc, batcher: batcher, fileIOPool: fileIOPool, ops: ops, scanActive: scanActive}
 	if store != nil && svc != nil {
-		var gen func() uint64
+		b := newReviewSnapshotBuilder(store, svc)
 		if g, ok := database.AsCapability[metadataCacheGenerationReader](store); ok {
-			gen = g.MetadataCacheGeneration
+			b.cacheGen = g.MetadataCacheGeneration
 			metadataCacheLog.Info("review snapshot: metadata-cache write counter resolved; cache writes trigger a rebuild")
 		} else {
 			metadataCacheLog.Info("review snapshot: store has no metadata-cache write counter; only apply/clear marks, idle and age trigger a rebuild")
 		}
-		h.reviewSnap = newReviewSnapshotCache(func(ctx context.Context) (*reviewSnapshot, error) {
-			return buildReviewSnapshot(ctx, store, svc)
-		}, gen)
+		if c, ok := database.AsCapability[database.MetadataCacheChangeLogProvider](store); ok {
+			b.cacheChangedSince = c.MetadataCacheChangedSince
+		}
+		if g, tracked := database.LibraryGenerationOf(store); tracked {
+			b.bookGen = g.Value
+		}
+		if c, ok := database.AsCapability[database.BookChangeLogProvider](store); ok {
+			b.booksChangedSince = c.BooksChangedSince
+			h.booksChangedSince = c.BooksChangedSince
+		}
+		if b.cacheChangedSince != nil && b.booksChangedSince != nil {
+			metadataCacheLog.Info("review snapshot: both change logs resolved; rebuilds are incremental and requests re-read only changed books")
+		} else {
+			metadataCacheLog.Info("review snapshot: a change log is missing (cache=%v books=%v); every rebuild is full and every request re-reads every book", b.cacheChangedSince != nil, b.booksChangedSince != nil)
+		}
+		h.reviewBuilder = b
+		h.reviewSnap = newReviewSnapshotCache(b.build, b.cacheGen)
 	}
 	return h
 }
 
 // metadataCacheGenerationReader is database.PebbleStore's metadata-cache
-// write counter, resolved through any store decorators (AsCapability). The
+// generation, resolved through any store decorators (AsCapability). The
 // review snapshot rebuilds when it moves.
 type metadataCacheGenerationReader interface {
 	MetadataCacheGeneration() uint64
 }
 
 // reviewSnapshot returns the review rows: the cached snapshot when the
-// handler has one (see reviewSnapshotCache.get), else a fresh load.
+// handler has one (see reviewSnapshotCache.get), else a fresh full load.
 func (h *MetadataCacheHandler) reviewSnapshot(ctx context.Context) (*reviewSnapshot, error) {
 	if h.reviewSnap != nil {
 		return h.reviewSnap.get(ctx)
 	}
-	return buildReviewSnapshot(ctx, h.store, h.svc)
+	return newReviewSnapshotBuilder(h.store, h.svc).build(ctx, nil)
 }
 
 // WarmReviewSnapshot builds the review snapshot now, under ctx (the server's
@@ -507,22 +529,61 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// the real call path the lane sends all=true, so its page is every row
 	// anyway; that describes the current caller, and is not an argument that
 	// the full fan-out is cheap.
+	//
+	// Phase timings: snapshot (get, a cold build included), overlay (the
+	// changed books' reads), prepare (status, sort, buckets, counts) and
+	// encode (the JSON write), logged with the slow-listing WARN below after
+	// the response is written, so a slow request says WHICH phase was slow.
+	var phase struct{ snapshot, overlay, prepare, encode time.Duration }
 	snap, err := h.reviewSnapshot(c.Request.Context())
 	if err != nil {
 		httputil.InternalError(c, "failed to list metadata cache", err)
 		return
 	}
-	set, err := overlayLiveBooks(snap, h.store, wantIDs)
+	phase.snapshot = time.Since(began)
+	set, err := overlayLiveBooks(snap, h.store, wantIDs, h.booksChangedSince)
 	if err != nil {
 		httputil.InternalError(c, "failed to read the review books", err)
 		return
 	}
-	lookupBook := func(id string) *database.Book { return set.books[id] }
+	phase.overlay = time.Since(began) - phase.snapshot
+	if set.rebuild {
+		// The overlay read every book, or more changed ones than it will per
+		// request: refresh the snapshot so the next request does not.
+		h.reviewSnap.requestRebuild()
+	}
+	lookupBook := set.book
 	// orphaned counts cache rows that outlived their book. loadCacheRows counts
 	// it where the row is dropped: that is the only place that still knows WHY
 	// the row is going away, and a subtraction at the end cannot tell it apart
 	// from a book that simply has no candidates stored.
 	orphaned := set.orphaned
+	// respond writes the response and then, past slowReviewListing, logs the
+	// phase timings. Handler time, not client-observed latency: this turns
+	// "sometimes slow" into a line that can be correlated with a concurrent
+	// library.scan or an apply op.
+	respond := func(summary gin.H, totalReviewable, returned int) {
+		phase.prepare = time.Since(began) - phase.snapshot - phase.overlay
+		httputil.RespondWithOK(c, summary)
+		phase.encode = time.Since(began) - phase.snapshot - phase.overlay - phase.prepare
+		if d := time.Since(began); d > slowReviewListing {
+			attrs := []any{
+				"duration", d.Round(time.Millisecond),
+				"threshold", slowReviewListing,
+				"snapshot_ms", phase.snapshot.Milliseconds(),
+				"overlay_ms", phase.overlay.Milliseconds(),
+				"prepare_ms", phase.prepare.Milliseconds(),
+				"encode_ms", phase.encode.Milliseconds(),
+				"overlay_books_read", len(set.live),
+				"rebuild_requested", set.rebuild,
+				"total_reviewable", totalReviewable,
+				"returned", returned,
+				"all", all,
+			}
+			attrs = append(attrs, ScanActiveLogAttrs(h.scanActive)...)
+			slog.Warn("GetCacheReviewResults exceeded slow-request threshold", attrs...)
+		}
+	}
 
 	type entryWithStatus struct {
 		row    snapshotRow
@@ -803,7 +864,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		summary["total_count"] = len(unreviewableRows)
 		summary["truncated"] = end-start < len(unreviewableRows)
 		summary["limit"] = limit
-		httputil.RespondWithOK(c, summary)
+		respond(summary, len(reviewable), len(rows))
 		return
 	}
 
@@ -875,22 +936,6 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		})
 	}
 
-	// Handler time, not client-observed latency: this turns "sometimes slow" into
-	// a line that can be correlated with a concurrent library.scan. Capping the
-	// page does not remove the per-row GetCachedCandidates fan-out above, so a
-	// slow request is still possible and should say why it might have been.
-	if d := time.Since(began); d > slowReviewListing {
-		attrs := []any{
-			"duration", d.Round(time.Millisecond),
-			"threshold", slowReviewListing,
-			"total_reviewable", len(reviewable),
-			"returned", len(results),
-			"all", all,
-		}
-		attrs = append(attrs, ScanActiveLogAttrs(h.scanActive)...)
-		slog.Warn("GetCacheReviewResults exceeded slow-request threshold", attrs...)
-	}
-
 	summary["results"] = results
 	summary["total_count"] = len(reviewable)
 	// Whether `results` is the whole reviewable set, and the page size that
@@ -898,7 +943,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// capped to defaultReviewPageSize and must be able to tell.
 	summary["truncated"] = truncated
 	summary["limit"] = limit
-	httputil.RespondWithOK(c, summary)
+	respond(summary, len(reviewable), len(results))
 }
 
 // BatchApplyFromCache handles POST /api/v1/audiobooks/metadata/batch-apply-cached.

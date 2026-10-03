@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package handlers
 
@@ -89,12 +89,12 @@ type loadedCacheRow struct {
 type cacheRowSet struct {
 	// rows is every summary whose book resolved, in summary order.
 	rows []loadedCacheRow
-	// orphaned counts summaries whose book no longer resolves.
-	orphaned int
-	// lookupBook serves books from the batch read, falling back to a point
-	// read (and caching it) when the batch missed the row.
-	lookupBook func(id string) *database.Book
+	// orphanIDs is every summary whose book no longer resolves.
+	orphanIDs []string
 }
+
+// orphaned counts the summaries whose book no longer resolves.
+func (s cacheRowSet) orphaned() int { return len(s.orphanIDs) }
 
 // bookFilesBatchReader is the batch file read loadCacheRows uses when the
 // store has it (database.Store does; with memdb published it is an index
@@ -142,9 +142,11 @@ func filesForChunk(store cacheRowBookReader, rows []loadedCacheRow) chunkFiles {
 	if !ok {
 		return chunkFiles{cacheRowBookReader: store}
 	}
-	ids := make([]string, len(rows))
+	ids := make([]string, 0, len(rows))
 	for i := range rows {
-		ids[i] = rows[i].book.ID
+		if rows[i].book != nil { // an id load's orphans have no files to read
+			ids = append(ids, rows[i].book.ID)
+		}
 	}
 	cores, err := batch.GetBookFilesForIDsCore(ids)
 	if err != nil {
@@ -176,6 +178,105 @@ func filesForChunk(store cacheRowBookReader, rows []loadedCacheRow) chunkFiles {
 	return chunkFiles{cacheRowBookReader: store, byBook: byBook}
 }
 
+// cacheRowLoader is the per-row half of loading cache rows, shared by the
+// summary-driven whole-cache load (loadCacheRows) and the explicit-id load the
+// review snapshot's incremental build uses (loadCacheRowsByID): the cached
+// entry read (through GetCachedCandidatesPreloaded when the service has it),
+// the legacy filter, the search-title resolver and the row's file facts.
+type cacheRowLoader struct {
+	store      cacheRowBookReader
+	svc        cacheRowCandidateReader
+	preloaded  preloadedCandidateReader
+	canPreload bool
+	// memo is one folder memo for the pass: a chapter set's rows share one
+	// folder listing instead of one each (roots are the resolver's own
+	// concern).
+	memo *metabatch.FolderMemo
+}
+
+func newCacheRowLoader(store cacheRowBookReader, svc cacheRowCandidateReader) *cacheRowLoader {
+	l := &cacheRowLoader{store: store, svc: svc, memo: metabatch.NewFolderMemo()}
+	l.preloaded, l.canPreload = svc.(preloadedCandidateReader)
+	return l
+}
+
+// readEntry reads r's cache entry (r.book may be nil); (nil, nil) when the
+// row is gone.
+func (l *cacheRowLoader) readEntry(r *loadedCacheRow, files chunkFiles) (*metafetch.MetadataCandidateCache, error) {
+	if l.canPreload {
+		entry, _, err := l.preloaded.GetCachedCandidatesPreloaded(r.sum.BookID, r.book, files, l.store)
+		return entry, err
+	}
+	entry, _, err := l.svc.GetCachedCandidates(r.sum.BookID)
+	return entry, err
+}
+
+// fill completes r (its book set) from its entry, nil when the read failed:
+// the row is then dated off its summary and holds no candidate.
+func (l *cacheRowLoader) fill(r *loadedCacheRow, entry *metafetch.MetadataCandidateCache, files chunkFiles) {
+	r.lastChecked = cacheRowLastChecked(entry, r.sum.FetchedAt)
+	if entry != nil && len(entry.Candidates) > 0 {
+		r.candidateCount = len(entry.Candidates)
+		// json.RawMessage decoding copies each element, so holding the first
+		// does not keep the other nine alive.
+		r.first = entry.Candidates[0]
+	}
+	// The same resolver fetchCandidateForBook runs before it searches. For an
+	// ordinary title it is a text check; it reads the book's files (and at
+	// most its authors) only for a title that needs corroborating or a
+	// fallback, which is why it runs here in the pool rather than in the
+	// serial pass that applies cacheRowStale.
+	r.searchable = metabatch.ResolveCandidateSearchQueryMemo(files, r.book, l.memo).Usable
+	r.files = metabatch.ReadBookFileFacts(files, r.book)
+}
+
+// forEachChunk runs fn over disjoint loadChunkSize ranges of rows on a bounded
+// pool (reviewListConcurrency), with one batch file read per chunk. No two
+// workers write the same row. A cancelled ctx stops the work and is returned.
+func (l *cacheRowLoader) forEachChunk(ctx context.Context, rows []loadedCacheRow, fn func(lo int, chunk []loadedCacheRow, files chunkFiles)) error {
+	var cg errgroup.Group
+	cg.SetLimit(reviewListConcurrency)
+	for lo := 0; lo < len(rows); lo += loadChunkSize {
+		hi := min(lo+loadChunkSize, len(rows))
+		cg.Go(func() error {
+			if ctx.Err() != nil {
+				return nil
+			}
+			chunk := rows[lo:hi]
+			fn(lo, chunk, filesForChunk(l.store, chunk))
+			return nil // a per-entry failure skips that row, never the whole batch
+		})
+	}
+	_ = cg.Wait()
+	return ctx.Err()
+}
+
+// lookupBooks reads the books of ids in ONE batch read, with a point read for
+// any id the batch missed (or every id when the batch call itself failed), so
+// a partial batch degrades in behavior-preserving fashion rather than
+// dropping rows. The returned lookup is for the calling goroutine only.
+func lookupBooks(store cacheRowBookReader, ids []string) func(id string) *database.Book {
+	booksByID := make(map[string]*database.Book, len(ids))
+	if fetched, berr := store.GetBooksByIDs(ids); berr == nil {
+		for i := range fetched {
+			booksByID[fetched[i].ID] = &fetched[i]
+		}
+	} else {
+		metadataCacheLog.Warn("batch book fetch failed; falling back to per-book reads: %v", berr)
+	}
+	return func(id string) *database.Book {
+		if b, ok := booksByID[id]; ok {
+			return b
+		}
+		b, err := store.GetBookByID(id)
+		if err != nil || b == nil {
+			return nil
+		}
+		booksByID[id] = b
+		return b
+	}
+}
+
 // loadCacheRows lists every metadata-cache summary, resolves each one's book
 // in ONE batch read (with a per-book fallback), drops the orphans, and reads
 // every surviving row's cached candidates over a bounded worker pool.
@@ -200,91 +301,104 @@ func loadCacheRows(ctx context.Context, store cacheRowBookReader, svc cacheRowCa
 	for _, sum := range summaries {
 		bookIDs = append(bookIDs, sum.BookID)
 	}
-	booksByID := make(map[string]*database.Book, len(summaries))
-	if fetched, berr := store.GetBooksByIDs(bookIDs); berr == nil {
-		for i := range fetched {
-			booksByID[fetched[i].ID] = &fetched[i]
-		}
-	} else {
-		metadataCacheLog.Warn("batch book fetch failed; falling back to per-book reads: %v", berr)
-	}
-	// Serves from the batch result and falls back to a point read only when
-	// the batch missed the row (or the batch call itself failed), so a partial
-	// batch degrades in behavior-preserving fashion rather than dropping rows.
-	// Only called from this goroutine.
-	lookupBook := func(id string) *database.Book {
-		if b, ok := booksByID[id]; ok {
-			return b
-		}
-		b, err := store.GetBookByID(id)
-		if err != nil || b == nil {
-			return nil
-		}
-		booksByID[id] = b
-		return b
-	}
+	lookupBook := lookupBooks(store, bookIDs)
 
-	set := cacheRowSet{rows: make([]loadedCacheRow, 0, len(summaries)), lookupBook: lookupBook}
+	set := cacheRowSet{rows: make([]loadedCacheRow, 0, len(summaries))}
 	for _, sum := range summaries {
 		book := lookupBook(sum.BookID)
 		if book == nil {
-			set.orphaned++
+			set.orphanIDs = append(set.orphanIDs, sum.BookID)
 			continue
 		}
 		set.rows = append(set.rows, loadedCacheRow{sum: sum, book: book})
 	}
 
-	preloaded, canPreload := svc.(preloadedCandidateReader)
-	// One folder memo for the pass: a chapter set's rows share one folder
-	// listing instead of one each (roots are the resolver's own concern).
-	memo := metabatch.NewFolderMemo()
-	var cg errgroup.Group
-	cg.SetLimit(reviewListConcurrency)
-	// Chunks are disjoint index ranges of set.rows, so no two workers write
-	// the same row.
-	for lo := 0; lo < len(set.rows); lo += loadChunkSize {
-		hi := min(lo+loadChunkSize, len(set.rows))
-		cg.Go(func() error {
-			if ctx.Err() != nil {
-				return nil
+	l := newCacheRowLoader(store, svc)
+	err = l.forEachChunk(ctx, set.rows, func(_ int, chunk []loadedCacheRow, files chunkFiles) {
+		for i := range chunk {
+			r := &chunk[i]
+			entry, cerr := l.readEntry(r, files)
+			if cerr != nil {
+				entry = nil
 			}
-			chunk := set.rows[lo:hi]
-			files := filesForChunk(store, chunk)
-			for i := range chunk {
-				r := &chunk[i]
-				var entry *metafetch.MetadataCandidateCache
-				var cerr error
-				if canPreload {
-					entry, _, cerr = preloaded.GetCachedCandidatesPreloaded(r.sum.BookID, r.book, files, store)
-				} else {
-					entry, _, cerr = svc.GetCachedCandidates(r.sum.BookID)
-				}
-				if cerr != nil {
-					entry = nil
-				}
-				r.lastChecked = cacheRowLastChecked(entry, r.sum.FetchedAt)
-				if entry != nil && len(entry.Candidates) > 0 {
-					r.candidateCount = len(entry.Candidates)
-					// json.RawMessage decoding copies each element, so
-					// holding the first does not keep the other nine alive.
-					r.first = entry.Candidates[0]
-				}
-				// The same resolver fetchCandidateForBook runs before it searches.
-				// For an ordinary title it is a text check; it reads the book's
-				// files (and at most its authors) only for a title that needs
-				// corroborating or a fallback, which is why it runs here in the
-				// pool rather than in the serial pass that applies cacheRowStale.
-				r.searchable = metabatch.ResolveCandidateSearchQueryMemo(files, r.book, memo).Usable
-				r.files = metabatch.ReadBookFileFacts(files, r.book)
-			}
-			return nil // a per-entry failure skips that row, never the whole batch
-		})
-	}
-	_ = cg.Wait()
-	if err := ctx.Err(); err != nil {
+			l.fill(r, entry, files)
+		}
+	})
+	if err != nil {
 		return cacheRowSet{}, err
 	}
 	return set, nil
+}
+
+// cacheRowsByID is what loadCacheRowsByID read: every asked id lands in
+// exactly one of the four.
+type cacheRowsByID struct {
+	// rows is every id whose cache entry and book both resolve, in asked
+	// order, with the summary derived from the entry (BookID, FetchedAt,
+	// CandidateCount after the legacy filter).
+	rows []loadedCacheRow
+	// orphanIDs is every id whose cache entry exists but whose book does not.
+	orphanIDs []string
+	// goneIDs is every id with no cache entry.
+	goneIDs []string
+	// failedIDs is every id whose cache entry read failed: the caller cannot
+	// tell whether the row exists and keeps what it had.
+	failedIDs []string
+}
+
+// loadCacheRowsByID is loadCacheRows for an explicit set of book ids: the
+// review snapshot's incremental build re-reads only the rows the change logs
+// name, and must learn which of them are gone, orphaned, or rows again. The
+// same batch book read, chunked file reads and per-row work as the whole-cache
+// load, over the ids instead of the key listing.
+func loadCacheRowsByID(ctx context.Context, store cacheRowBookReader, svc cacheRowCandidateReader, ids []string) (cacheRowsByID, error) {
+	lookupBook := lookupBooks(store, ids)
+	rows := make([]loadedCacheRow, len(ids))
+	for i, id := range ids {
+		rows[i] = loadedCacheRow{sum: metafetch.MetadataCacheSummary{BookID: id}, book: lookupBook(id)}
+	}
+	const (
+		outcomeRow = iota
+		outcomeOrphan
+		outcomeGone
+		outcomeFailed
+	)
+	outcome := make([]int, len(ids))
+	l := newCacheRowLoader(store, svc)
+	err := l.forEachChunk(ctx, rows, func(lo int, chunk []loadedCacheRow, files chunkFiles) {
+		for i := range chunk {
+			r := &chunk[i]
+			entry, cerr := l.readEntry(r, files)
+			switch {
+			case cerr != nil:
+				outcome[lo+i] = outcomeFailed
+			case entry == nil:
+				outcome[lo+i] = outcomeGone
+			case r.book == nil:
+				outcome[lo+i] = outcomeOrphan
+			default:
+				r.sum = metafetch.MetadataCacheSummary{BookID: r.sum.BookID, FetchedAt: entry.FetchedAt, CandidateCount: len(entry.Candidates)}
+				l.fill(r, entry, files)
+			}
+		}
+	})
+	if err != nil {
+		return cacheRowsByID{}, err
+	}
+	var out cacheRowsByID
+	for i, id := range ids {
+		switch outcome[i] {
+		case outcomeRow:
+			out.rows = append(out.rows, rows[i])
+		case outcomeOrphan:
+			out.orphanIDs = append(out.orphanIDs, id)
+		case outcomeGone:
+			out.goneIDs = append(out.goneIDs, id)
+		case outcomeFailed:
+			out.failedIDs = append(out.failedIDs, id)
+		}
+	}
+	return out, nil
 }
 
 // cacheRowLastChecked is when this book was last SEARCHED FOR, which is not
