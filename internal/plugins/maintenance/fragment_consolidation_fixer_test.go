@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -2017,6 +2018,29 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 		require.Len(t, r.BookIDs, 8)
 	})
+	t.Run("a leading number plus a trailing (n of m) is no pair: the serial stays one run", func(t *testing.T) {
+		f := newFragFixture(t)
+		var stems []string
+		for i, name := range []string{"Arrival", "The Road", "Gear", "Ash", "Night", "Ember", "Coda", "Home"} {
+			stems = append(stems, fmt.Sprintf("%03d - %s (%d of 8)", i+1, name, i+1))
+		}
+		f.numberedSeed(t, "lib/OfM", stems, 300, nil)
+		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path("lib/OfM"), fragNumberedKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	})
+	t.Run("two titles on two discs split into their own groups", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.numberedSeed(t, "lib/TwoDiscs", []string{"1-01 Book A", "1-02 Book A", "1-03 Book A", "1-04 Book A",
+			"2-01 Book B", "2-02 Book B", "2-03 Book B", "2-04 Book B"}, 300, nil)
+		res := f.plan(t, "op-plan")
+		var groups int
+		for _, r := range res.Rows {
+			if r.Class == fragClassNoParent && len(r.BookIDs) == 4 {
+				groups++
+			}
+		}
+		require.Equal(t, 2, groups, "one row per title, never one row for both")
+	})
 	t.Run("a pair-numbered set across several discs is held", func(t *testing.T) {
 		f := newFragFixture(t)
 		f.numberedSeed(t, "lib/Discs", []string{"1-01 Arrival", "1-02 The Road", "1-03 Gear", "1-04 Ash",
@@ -2213,5 +2237,84 @@ func TestFragmentFixer_CoOwnerIsHeldAtPlan(t *testing.T) {
 		require.Equal(t, fragClassNoParent, r.Class)
 		require.Equal(t, fragSkipCoOwner, r.Skipped, r.SkipReason)
 		require.ElementsMatch(t, ids, r.BookIDs)
+	})
+}
+
+// TestFragmentFixer_RenamedChapterCopies: a folder holding every chapter
+// twice, under its original name and renamed, with the same size (owner
+// decision 2026-10-03: one chapter). The copies are not members: their
+// books are retired into the survivor, each keeping its own file row.
+func TestFragmentFixer_RenamedChapterCopies(t *testing.T) {
+	seed := func(t *testing.T, f *fragFixture, dir string, sizeOf func(n int, copy bool) int) (orig, copies []string) {
+		for n := 1; n <= 8; n++ {
+			for _, cp := range []bool{false, true} {
+				stem := fmt.Sprintf("02_%03d", n)
+				if cp {
+					stem += " - 02_light_of_other_days - read by narrator"
+				}
+				size := sizeOf(n, cp)
+				p := f.file(t, dir+"/"+stem+".mp3", size)
+				id := f.book(t, "c:"+stem, stem, p, nil)
+				f.row(t, "cr:"+stem, id, p, stem+".mp3", int64(size), 300, 0)
+				if cp {
+					copies = append(copies, id)
+				} else {
+					orig = append(orig, id)
+				}
+			}
+		}
+		return orig, copies
+	}
+	t.Run("same size: one chapter, the copy retired with its row", func(t *testing.T) {
+		f := newFragFixture(t)
+		dir := "lib/Clarke/02_light_of_other_days"
+		orig, copies := seed(t, f, dir, func(n int, _ bool) int { return 1000 + n })
+		res := f.plan(t, "op-plan")
+		for _, x := range res.Rows {
+			t.Logf("ROW %s class=%s books=%d skipped=%s %s", x.RowID, x.Class, len(x.BookIDs), x.Skipped, x.SkipReason)
+		}
+		r := findRow(t, res, noParentRowID(f.path(dir), fragNumberedKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Len(t, r.BookIDs, 16)
+		require.Contains(t, r.Proposed["action"], "retire 8 renamed copy book(s)")
+		plan := r.Detail.(*fragGroupPlan)
+		require.Len(t, plan.Members, 8)
+		require.Len(t, plan.Copies, 8)
+
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+		survivor := r.Proposed["survivor"]
+		rows, err := f.s.GetBookFiles(survivor)
+		require.NoError(t, err)
+		require.Len(t, rows, 8, "the survivor holds one file per chapter, never the copies")
+		for _, id := range copies {
+			b, err := f.s.GetBookByID(id)
+			require.NoError(t, err)
+			require.True(t, b.IsSoftDeleted(), "copy %s retired", id)
+			own, err := f.s.GetBookFiles(id)
+			require.NoError(t, err)
+			require.Len(t, own, 1, "a retired copy keeps its own file row")
+		}
+		for _, id := range orig {
+			if id == survivor {
+				continue
+			}
+			b, err := f.s.GetBookByID(id)
+			require.NoError(t, err)
+			require.True(t, b.IsSoftDeleted())
+		}
+	})
+	t.Run("different sizes at one position stay a conflict", func(t *testing.T) {
+		f := newFragFixture(t)
+		dir := "lib/Clarke/03_light_of_other_days"
+		seed(t, f, dir, func(n int, cp bool) int {
+			if cp && n == 4 {
+				return 5000
+			}
+			return 1000 + n
+		})
+		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), fragNumberedKey))
+		require.False(t, r.Applicable())
+		require.Contains(t, r.SkipReason, "same chapter number")
 	})
 }
