@@ -456,8 +456,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	beforeExtractors := userEditFieldExtractors(&AudiobookUpdate{Book: before}, beforeAuthor, beforeSeries)
 
 	for field, extractor := range fieldExtractors {
-		if _, ok := req.RawPayload[field]; !ok {
-			slog.Debug("UpdateAudiobook field not in RawPayload", "field", field)
+		if !sent(field) {
 			continue
 		}
 		if _, hasOverride := req.Updates.Overrides[field]; hasOverride {
