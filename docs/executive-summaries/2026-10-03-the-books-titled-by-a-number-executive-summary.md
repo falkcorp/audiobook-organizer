@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-03-the-books-titled-by-a-number-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9c4f2e71-3a8d-4b06-b5e2-7d1c0f6a9e38 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -42,7 +42,9 @@ the change recorded so it can be undone.
 ## What changed
 
 - Ghost entries and proven duplicate copies are now applied, not merely
-  listed. The Bible was retitled **The Holy Bible**, its narrator credited
+  listed. A stray entry registered twice for the same file (one with the
+  evidence, one with none) is folded in together with its twin instead of
+  blocking it. The Bible was retitled **The Holy Bible**, its narrator credited
   correctly, and its copies folded in.
 - The title classifier learned eleven more filename shapes, each with the
   look-alike real titles it must leave alone (`1984`, `2001: A Space
@@ -75,4 +77,4 @@ the change recorded so it can be undone.
 | Primary books with a number-leading title | 11,934 | FINAL_COUNT |
 | Review page (`view=index&all=true`) | 8.3 s quiet, 40–105 s under load | 2.2–2.5 s warm, 4.0 s cold |
 | Time to fold one stray entry | 0.7 s small rows, 11 s large rows | 0.25 s |
-| Pull requests merged | — | 11 (#3672–#3684) |
+| Pull requests merged | — | 13 (#3672–#3685) |
