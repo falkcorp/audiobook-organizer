@@ -4006,13 +4006,12 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 	upper := append([]byte(nil), prefix...)
 	upper[len(upper)-1] = ';' // ':' + 1
 	var books []Book
-	indexed := 0 // index rows seen for this group, live or not
+	indexed := 0 // members the index lists whose book row exists, live or soft-deleted
 	if err := forEachKeyInRange(p.db, prefix, upper, func(key, _ []byte) error {
 		bookID := string(key[len(prefix):])
 		if bookID == "" {
 			return nil
 		}
-		indexed++
 		b, err := p.GetBookByID(bookID)
 		if err != nil {
 			// Only a missing row may be skipped: GetBookByID reports not-found as
@@ -4024,8 +4023,9 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 			return fmt.Errorf("GetBooksByVersionGroup %s: reading member %s: %w", groupID, bookID, err)
 		}
 		if b == nil {
-			return nil
+			return nil // a stale row for a hard-deleted book says nothing about the group
 		}
+		indexed++
 		if bookIsSoftDeleted(b) {
 			return nil
 		}
