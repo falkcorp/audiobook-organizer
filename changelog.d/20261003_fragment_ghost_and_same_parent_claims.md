@@ -1,0 +1,3 @@
+### Fixed
+
+- **Fragment-consolidation fixer — ghost rows and same-parent claims:** a fragment whose own file is gone and that exactly one parent row claims by proof (import path, hash, or the parent row already pointing at its file) is now an applicable `ghost` row — retired into the parent, nothing repointed, no row deleted — instead of sitting in `held` (4,918 rows on prod 2026-10-03). A parent row claimed by several fragments no longer makes the proven claimants ambiguous: they pair with the parent as a lone claim would; a single unproven claimant takes the copy-unproven / moved-unproven path, two or more stay ambiguous (7,627 rows on prod).
