@@ -3243,6 +3243,9 @@ type cutStore struct {
 	*database.PebbleStore
 	at, n int
 	hit   bool
+	// history makes each history row an event too (a process that dies
+	// after a write and before its history rows).
+	history bool
 }
 
 func (c *cutStore) event() error {
@@ -3276,8 +3279,10 @@ func (c *cutStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookF
 }
 
 func (c *cutStore) RecordMetadataChange(r *database.MetadataChangeRecord) error {
-	if err := c.event(); err != nil {
-		return err
+	if c.history {
+		if err := c.event(); err != nil {
+			return err
+		}
 	}
 	return c.PebbleStore.RecordMetadataChange(r)
 }
@@ -3375,19 +3380,20 @@ func newCutFixture(t *testing.T, org string, vg bool) (*fragFixture, repairs.Row
 // logged, not returned, by design. A cut there must still end in the same
 // state. The crown write itself goes past the Writer and cannot be cut here.
 //
-// Cost: every cut point re-seeds and re-applies, ~130 events per shape.
-// Measured 2026-10-03: the six shapes take 92s, and 589s under -race (each
-// shape ~100s), which with the rest of the package passes the 10-minute
-// default and crowds CI's 25-minute budget. So the default run covers two
-// shapes at every cut point: organized=all with the version group (the
-// prod shape: demote before soft-delete, a hand-off crowning a live member,
-// the survivor in the group) and organized=copies (every copy kept, the
-// originals set aside). AORG_FRAG_CUT_MATRIX=full runs all six.
+// Cost: every cut point re-seeds and re-applies. With history rows as
+// events too, a shape is ~230 events. Measured 2026-10-03: the package's
+// TestFragment run under -race took 716s with two shapes and history cuts,
+// over CI's comfort and the 10-minute default. So the default run covers ONE
+// shape, organized=all with the version group (the prod shape: demote
+// before soft-delete, a hand-off crowning a live member, the survivor in the
+// group, copies), cutting at every journal row and write.
+// AORG_FRAG_CUT_MATRIX=full runs all six shapes and also cuts at every
+// history row (the crash-before-history window).
 func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 	full := os.Getenv("AORG_FRAG_CUT_MATRIX") == "full"
 	for _, org := range []string{"none", "all", "copies"} {
 		for _, vg := range []bool{false, true} {
-			if !full && !(org == "all" && vg) && !(org == "copies" && !vg) {
+			if !full && !(org == "all" && vg) {
 				continue
 			}
 			t.Run(fmt.Sprintf("organized=%s vg=%t", org, vg), func(t *testing.T) {
@@ -3399,7 +3405,7 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 				cuts, through := 0, 0
 				for at := 1; ; at++ {
 					f, r, closeCut := newCutFixture(t, org, vg)
-					cs := &cutStore{PebbleStore: f.s, at: at}
+					cs := &cutStore{PebbleStore: f.s, at: at, history: full}
 					f.applyOp("op-cut", fragFixerID)
 					w := repairs.NewWriter(cs, cs, fragFixerID, "bulk_update", "repairs-").WithJournal(cs, cs, "op-cut")
 					err := newFragmentFixer(f.p).Apply(context.Background(), w, r)
