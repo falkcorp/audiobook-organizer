@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package maintenance
 
@@ -933,7 +933,17 @@ var (
 	// formatWordRe: a container, format or edition word, a side/tape/disc
 	// position or range. A folder or filename carrying one names a rip, not
 	// a work ("Dune (Unabridged)", "Dune MP3", "Side A", "Tape 3", "CD01-02").
-	formatWordRe = regexp.MustCompile(`(?i)\b(?:mp3|m4b|m4a|aac|flac|ogg|opus|wma|unabridged|abridged|side\s+[a-d0-9]|tape\s*\d+|(?:cd|disc|disk)\s*\d+(?:\s*-\s*\d+)?)\b`)
+	// chapterHeadingRe: a chapter/part heading with a number or spelled
+	// number, or a bare prologue/epilogue heading followed by more words
+	// ("Prologue Bobbie Draper"). "Prologue to Murder" is a title: the word
+	// must be followed by a capitalised name or a dash, not a lowercase word.
+	chapterHeadingRe = regexp.MustCompile(`(?i)^(?:chapter|chap|ch|part|pt)\.?[\s_\-]*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(?:[^\pL\d]|$)`)
+	// prologueHeadingRe is case-sensitive on purpose: the capital after the
+	// word is what separates "Prologue Bobbie Draper" from "Prologue to Murder".
+	prologueHeadingRe = regexp.MustCompile(`^(?:[Pp]rologue|[Ee]pilogue|[Ii]ntroduction)(?:\s*[-–:.]\s*\S|\s+\p{Lu})`)
+	// publisherIdentRe: the ident a publisher puts before the title.
+	publisherIdentRe = regexp.MustCompile(`(?i)^(?:this is audible|audible (?:presents|studios)|(?:from\s+)?(?:tantor|blackstone|brilliance|podium|hachette|recorded books|simon and schuster|simon & schuster|penguin|random house|harper\s*(?:audio|collins)?|macmillan|graphic\s*audio|full cast audio|books on tape|listening library|audible|recorded books)\b.*\b(?:presents?|resents|production|audio\b.*,)|.*\ba division of\b)`)
+	formatWordRe     = regexp.MustCompile(`(?i)\b(?:mp3|m4b|m4a|aac|flac|ogg|opus|wma|unabridged|abridged|side\s+[a-d0-9]|tape\s*\d+|(?:cd|disc|disk)\s*\d+(?:\s*-\s*\d+)?)\b`)
 	// idCodeRe: an ASIN (B0 + 8), an ISBN-10/13, or a trailing bracketed
 	// 10-character id ("Dune [B002V1OF70]").
 	idCodeRe = regexp.MustCompile(`(?i)\bB0[0-9A-Z]{8}\b|\b(?:97[89][- ]?)?\d{9}[\dX]\b|\[[0-9A-Z]{10}\]\s*$`)
@@ -959,6 +969,23 @@ func (pc junkProposalCheck) refusal(c, source string) string {
 		return fmt.Sprintf("%q names the author or narrator", c)
 	case pc.isPathRoot(c):
 		return fmt.Sprintf("%q is a library or path root", c)
+	case chapterHeadingRe.MatchString(c), prologueHeadingRe.MatchString(c):
+		// "Prologue Bobbie Draper", "Chapter Two - The Hunter": a chapter
+		// heading, whatever stripped or spoke it.
+		return fmt.Sprintf("%q is a chapter heading", c)
+	}
+	if source == junkSrcTranscribed {
+		// The intro transcription is the first thing said, which is often
+		// the publisher's ident or the opening sentence of the text, not the
+		// title. Measured on prod 2026-10-03: the plan proposed "Chapter 26
+		// The apartment was in Asimov, a city at" and "Tantor audio
+		// presents, The Legend of Coronair" as book titles.
+		switch {
+		case publisherIdentRe.MatchString(c):
+			return fmt.Sprintf("%q is a publisher ident, not the title", c)
+		case transcribedProse(c):
+			return fmt.Sprintf("%q reads like transcribed prose, not a title", c)
+		}
 	}
 	if source == junkSrcFolder || source == junkSrcFilename {
 		switch {
@@ -976,6 +1003,35 @@ func (pc junkProposalCheck) refusal(c, source string) string {
 
 // namesAPersonNormalized compares normalized names, and a "Last, First"
 // spelling in either position ("Herbert, Frank" is Frank Herbert).
+// transcribedProse reports whether a transcription reads like the opening
+// sentence(s) of the text rather than a spoken title: more than thirteen words,
+// or a sentence break followed by more words in a string of more than six
+// words ("Together, they fell toward the light. The wall be"). A title with
+// a subtitle after a period ("Kieran, the Eternal Mage. Book 3. Ashes…")
+// is refused too and left for a person: the cost of a wrong title is higher
+// than the cost of a skipped row.
+func transcribedProse(c string) bool {
+	words := len(strings.Fields(c))
+	if words > 13 {
+		return true
+	}
+	if !sentenceBreakRe.MatchString(c) {
+		return false
+	}
+	if words > 6 {
+		return true
+	}
+	// "Star Force, Endless Crusade. Written": the transcription window cut
+	// the next sentence off after a word or two. That tail is prose.
+	parts := sentenceEndRe.Split(c, -1)
+	return len(strings.Fields(parts[len(parts)-1])) <= 2
+}
+
+var (
+	sentenceBreakRe = regexp.MustCompile(`[.!?]\s+\pL`)
+	sentenceEndRe   = regexp.MustCompile(`[.!?]\s+`)
+)
+
 func (pc junkProposalCheck) namesAPersonNormalized(s string) bool {
 	forms := func(n string) []string {
 		out := []string{util.NormalizeAuthor(n)}

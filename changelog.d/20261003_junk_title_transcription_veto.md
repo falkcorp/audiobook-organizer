@@ -1,0 +1,3 @@
+### Fixed
+
+- **Junk-title fixer no longer proposes the intro's first sentence, a publisher ident or a chapter heading as a book title.** On the prod plan of 2026-10-03 the transcription source offered "Chapter 26 The apartment was in Asimov, a city at", "Tantor audio presents, The Legend of Coronair" and "Together, they fell toward the light. The wall be"; the prefix source offered "Prologue Bobbie Draper" and "Chapter Two - The Hunter". Transcribed prose (more than thirteen words, or a sentence break in a longer string, or a cut-off tail) and publisher idents are refused as transcription evidence; a chapter heading is refused from every source. A refused ident is not a conflict either: the folder alone then names the book.
