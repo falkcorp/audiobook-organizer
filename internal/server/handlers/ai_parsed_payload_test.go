@@ -1,5 +1,5 @@
 // file: internal/server/handlers/ai_parsed_payload_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5154d5a5-0191-49dc-95fa-0d8b4f784a05
 // last-edited: 2026-10-03
 
@@ -129,5 +129,22 @@ func TestAIParsedUpdatePayload_SeriesChangeReplacesOrClearsThePosition(t *testin
 	}
 	if row.SeriesSequence == nil || *row.SeriesSequence != 3 || row.SeriesPositionRaw == nil || *row.SeriesPositionRaw != "3" {
 		t.Fatalf("moved book position = %v / %v, want 3 / \"3\"", row.SeriesSequence, row.SeriesPositionRaw)
+	}
+}
+
+// A book that shows no series (a dangling link, no embedded object) has no
+// other series' number to replace: fill-only, and never a null that would
+// clear the stored position.
+func TestAIParsedUpdatePayload_BookShowingNoSeriesIsFillOnly(t *testing.T) {
+	seq, raw := 4, "4"
+	book := &database.Book{SeriesSequence: &seq, SeriesPositionRaw: &raw}
+	if p := handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Series: "Foo", SeriesNum: 2}, book, ""); p["series_position"] != nil {
+		t.Fatalf("overwrote the stored position: %v", p)
+	}
+	if p := handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Series: "Foo"}, book, ""); func() bool { _, ok := p["series_position"]; return ok }() {
+		t.Fatalf("sent a series_position for a book showing no series: %v", p)
+	}
+	if p := handlers.AIParsedUpdatePayload(&ai.ParsedMetadata{Series: "Foo", SeriesNum: 2}, &database.Book{}, ""); p["series_position"] != 2 {
+		t.Fatalf("did not fill a missing position: %v", p)
 	}
 }

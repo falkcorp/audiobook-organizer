@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-03
 
@@ -262,8 +262,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// the lock and history claimed a value the book did not have.
 	// overrideLock: fields whose override carries a value, with the lock it
 	// asks for; overrideSent: that value as sent.
+	// overrideLockOnly: lock-only overrides ({"locked": ...}, no value) on a
+	// field an extractor covers; they too are finalized in phase 2, so the
+	// value stored with the lock is the one the book shows.
 	overrideLock := map[string]bool{}
 	overrideSent := map[string]any{}
+	overrideLockOnly := map[string]bool{}
+	extractorKeys := userEditFieldExtractors(payload, "", "")
 	for field, override := range req.Updates.Overrides {
 		if skipOverride[field] {
 			continue
@@ -284,6 +289,11 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			overrideLock[field] = override.Locked == nil || *override.Locked
 			overrideSent[field] = val
 		case override.Locked != nil:
+			if _, covered := extractorKeys[field]; covered {
+				overrideLock[field] = *override.Locked
+				overrideLockOnly[field] = true
+				break
+			}
 			entry.OverrideLocked = *override.Locked
 			entry.UpdatedAt = now
 			touched = true
@@ -479,15 +489,10 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve series")
 		}
-		if series == nil && payload.AuthorID != nil {
-			// The lookup is scoped by author. A series stored with no author
-			// that answers to the name (case and spacing insensitive) is the
-			// same series; creating an author-scoped twin of it is the
-			// duplicate this edit path used to mint.
-			if series, err = svc.store.GetSeriesByName(seriesName, nil); err != nil {
-				return nil, fmt.Errorf("failed to resolve series")
-			}
-		}
+		// Scoped by the book's author on purpose: an author-less series of
+		// the same name ("Collected Stories") may be another author's work,
+		// and linking this book into it is a wrong link, while a second row
+		// of that name for this author is only a duplicate.
 		if series == nil {
 			series, err = svc.store.CreateSeries(seriesName, payload.AuthorID)
 			if err != nil {
@@ -514,9 +519,20 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// A move to a DIFFERENT series with no position sent drops the stored
 	// position: a number from the old series is wrong in the new one, and
 	// leaving it (with the new series locked) kept fetches from fixing it.
-	// A position override left from an earlier edit is dropped and unlocked
-	// for the same reason.
-	seriesMoved := payload.SeriesID != nil && before.SeriesID != nil && *payload.SeriesID != *before.SeriesID
+	// A position override left from an earlier edit is dropped (value and
+	// lock flag) for the same reason.
+	//
+	// "Moved" is judged against what GET showed: the book showed a series,
+	// the edit resolved to a different row than the one shown (its SeriesID,
+	// or a stale embedded object's ID when the link is nil), and it is not
+	// the current row in another spelling. A dangling SeriesID shows no
+	// series, so relinking it by name keeps the position.
+	shownRowID := before.SeriesID
+	if shownRowID == nil && before.Series != nil {
+		shownRowID = &before.Series.ID
+	}
+	seriesMoved := beforeSeries != "" && !seriesPlan.sameRow && payload.SeriesID != nil &&
+		(shownRowID == nil || *payload.SeriesID != *shownRowID)
 	if seriesMoved && !sent(database.FieldKeySeriesPosition) {
 		payload.SeriesSequence = nil
 		payload.SeriesPositionRaw = nil
@@ -537,9 +553,11 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// every field on every save, and locking each one at its current value
 	// froze the whole book against metadata fetches after any edit. This
 	// holds for overrides too: an override whose resolved value is what the
-	// book already showed is dropped (no lock, no history), except that an
-	// explicit locked:false still unlocks the field. An empty value and no
-	// value count as the same. An author_name of "" is ignored (see above),
+	// book already showed is dropped (no lock, no history) -- unless it is an
+	// explicit lock request on the shown value (a lock-only override, or the
+	// current value with locked:true), which locks at the shown value, or a
+	// locked:false, which clears the lock flag. An empty value and no value
+	// count as the same. An author_name of "" is ignored (see above),
 	// so it locks nothing either, even though the author_id fallback resolved
 	// the current author's name.
 	lockAuthorName := resolvedAuthorName
@@ -564,32 +582,62 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 				continue
 			}
 			if _, hasOverride := req.Updates.Overrides[field]; hasOverride {
-				continue // a clear or lock-only override handled it in phase 1
+				continue // a clear override handled it in phase 1
 			}
 		}
 		if blankNoop[field] || skipOverride[field] {
+			if overridden && overrideLockOnly[field] {
+				// A lock-only override on a field whose sent value was not an
+				// edit: the lock request still applies, at the shown value.
+				svc.setLockAtShown(state, field, beforeExtractors[field], lockReq, now, recordOverride)
+			}
 			continue
 		}
 		value, ok := extractor()
 		if !ok {
+			if overridden {
+				// Nothing to show for the field: a lock holds no value, and
+				// locked:false clears the lock flag.
+				entry := state[field]
+				if lockReq {
+					old := entry.OverrideValue
+					entry.OverrideValue = nil
+					recordOverride(field, old, nil)
+				}
+				entry.OverrideLocked = lockReq
+				entry.UpdatedAt = now
+				state[field] = entry
+			}
 			continue
 		}
 		old, oldOK := beforeExtractors[field]()
-		if shownValue(old, oldOK) == shownValue(value, true) {
-			// Unchanged: not an edit of this field.
-			if overridden && !lockReq {
-				if entry, exists := state[field]; exists && entry.OverrideLocked {
-					entry.OverrideLocked = false
-					entry.UpdatedAt = now
-					state[field] = entry
-				}
+		if sameShownValue(field, old, oldOK, value) {
+			// Unchanged: not an edit of this field. An explicit lock request
+			// -- a lock-only override, or an override whose value as SENT is
+			// the shown value -- locks it at the value the book shows, and
+			// locked:false clears the lock flag. An override whose sent value
+			// differed but resolved back to the shown one (a shared series in
+			// other casing) asked to lock a value the book does not get, so it
+			// is dropped, like a top-level key alone.
+			explicit := overrideLockOnly[field] ||
+				(overridden && sameShownValue(field, old, oldOK, overrideSent[field]))
+			if overridden && (explicit || !lockReq) {
+				svc.setLockAtShown(state, field, func() (any, bool) { return value, true }, lockReq, now, recordOverride)
 			}
 			continue
 		}
 		entry := state[field]
 		oldValue := entry.OverrideValue
-		entry.OverrideValue = value
-		entry.OverrideLocked = !overridden || lockReq
+		if overridden && !lockReq {
+			// A changed field sent with locked:false: recorded, not locked. No
+			// override value is stored either, since a stored value is itself
+			// treated as a user override by the lock guards.
+			entry.OverrideValue = nil
+			entry.OverrideLocked = false
+		} else {
+			entry.OverrideValue = value
+			entry.OverrideLocked = true
+		}
 		entry.UpdatedAt = now
 		state[field] = entry
 		recordOverride(field, oldValue, value)
@@ -622,7 +670,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// protects and blanks the position (lockedColumns, StripLockedFields),
 	// and a position lock would outlive a later re-set of the series, so a
 	// fetch could never fill the new series' number. A position override
-	// left from an earlier edit is dropped and unlocked instead, so its
+	// left from an earlier edit is dropped (value and lock flag) instead, so its
 	// stale number is not re-projected onto the book.
 	//
 	// With a series_name override (the editor's clear), its own lock flag is
@@ -648,7 +696,10 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		}
 	}
 
-	// Process unlock overrides
+	// unlock_overrides: clears each field's lock flag. The override value
+	// stays, and the lock guards (HasUserOverride / LockedUserFields) still
+	// treat a stored value as a user override -- tracked in todo.d
+	// EDIT-UNLOCK-KEEPS-OVERRIDE.
 	for _, field := range req.Updates.UnlockOverrides {
 		entry := state[field]
 		entry.OverrideLocked = false
@@ -763,12 +814,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			} else {
 				delete(state, database.FieldKeySeriesName)
 			}
-			// The rollback withdraws only this edit's new value; an unlock the
-			// same request asked for (locked:false, or unlock_overrides)
-			// still applies.
-			if entry, exists := state[database.FieldKeySeriesName]; exists && entry.OverrideLocked &&
-				(slices.Contains(req.Updates.UnlockOverrides, database.FieldKeySeriesName) ||
-					(func() bool { l, o := overrideLock[database.FieldKeySeriesName]; return o && !l })()) {
+			// The rollback withdraws only this edit's new value; a lock-flag
+			// clear the same request asked for (locked:false, or
+			// unlock_overrides) still applies.
+			seriesLockReq, seriesOverridden := overrideLock[database.FieldKeySeriesName]
+			unlockRequested := slices.Contains(req.Updates.UnlockOverrides, database.FieldKeySeriesName) ||
+				(seriesOverridden && !seriesLockReq)
+			if entry, exists := state[database.FieldKeySeriesName]; exists && entry.OverrideLocked && unlockRequested {
 				entry.OverrideLocked = false
 				entry.UpdatedAt = now
 				state[database.FieldKeySeriesName] = entry
@@ -1078,6 +1130,49 @@ func (svc *AudiobookService) shownAuthorName(book *database.Book) (string, bool)
 		}
 	}
 	return database.ShownCreditName(primary, names), linked
+}
+
+// setLockAtShown applies an explicit lock request to a field whose value the
+// edit did not change: locked:true stores the value the book shows (shown)
+// with the lock, locked:false clears the lock flag only.
+func (svc *AudiobookService) setLockAtShown(state map[string]metadataFieldState, field string, shown func() (any, bool),
+	lockReq bool, now time.Time, record func(field string, old, new any)) {
+	entry, existed := state[field]
+	if !lockReq {
+		if existed && entry.OverrideLocked {
+			entry.OverrideLocked = false
+			entry.UpdatedAt = now
+			state[field] = entry
+		}
+		return
+	}
+	value, ok := shown()
+	var v any
+	if ok {
+		v = value
+	}
+	old := entry.OverrideValue
+	entry.OverrideValue = v
+	entry.OverrideLocked = true
+	entry.UpdatedAt = now
+	state[field] = entry
+	record(field, old, v)
+}
+
+// sameShownValue reports whether an edit left a field as GET showed it.
+// Values compare as text (shownValue); a series position compares as a
+// number when both sides parse ("2.0" and 2 are the same position).
+func sameShownValue(field string, old any, oldOK bool, value any) bool {
+	a, b := shownValue(old, oldOK), shownValue(value, true)
+	if a == b {
+		return true
+	}
+	if field == database.FieldKeySeriesPosition {
+		fa, errA := strconv.ParseFloat(strings.TrimSpace(a), 64)
+		fb, errB := strconv.ParseFloat(strings.TrimSpace(b), 64)
+		return errA == nil && errB == nil && fa == fb
+	}
+	return false
 }
 
 // shownValue is how a field's value compares for "did the edit change it":

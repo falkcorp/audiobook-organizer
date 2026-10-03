@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_clears_fields_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 451212a4-52da-4236-9a22-658fce80859a
 // last-edited: 2026-10-03
 
@@ -1413,12 +1413,14 @@ func requireLocksAndHistoryMatchGET(t *testing.T, store *database.PebbleStore, i
 	t.Helper()
 	shown := shownByGET(t, store, id)
 	for field, st := range fieldStates(t, store, id) {
-		if !st.OverrideLocked {
+		// A stored override value counts as a user override for the lock
+		// guards even with the lock flag clear, so it is checked either way.
+		if !st.OverrideLocked && st.OverrideValue == nil {
 			continue
 		}
 		want, mapped := shown[field]
-		require.True(t, mapped, "%s: locked field %q has no GET mapping", label, field)
-		require.Equal(t, want, jsonText(t, st.OverrideValue), "%s: lock on %q disagrees with GET", label, field)
+		require.True(t, mapped, "%s: overridden field %q has no GET mapping", label, field)
+		require.Equal(t, want, jsonText(t, st.OverrideValue), "%s: override on %q disagrees with GET", label, field)
 	}
 	for field, rows := range historyByField(t, store, id) {
 		key := field
@@ -1498,6 +1500,13 @@ func TestUpdateAudiobook_LocksAndHistoryAlwaysMatchWhatGETShows(t *testing.T) {
 			"series_name": "Completely Different",
 			"overrides":   map[string]any{"series_name": map[string]any{"value": "The Saga", "locked": true}},
 		},
+		"lock-only with a top-level change": {
+			"title": "New Title", "overrides": map[string]any{"title": map[string]any{"locked": true}},
+		},
+		"lock-only unchanged":          {"overrides": map[string]any{"publisher": map[string]any{"locked": true}}},
+		"current value + locked:true":  editor("genre", "G"),
+		"changed value + locked:false": {"title": "New", "overrides": map[string]any{"title": map[string]any{"value": "New", "locked": false}}},
+		"position equal as a number":   editor("series_position", "1.0"),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1516,6 +1525,15 @@ func TestUpdateAudiobook_LocksAndHistoryAlwaysMatchWhatGETShows(t *testing.T) {
 		require.NoError(t, err)
 		requireLocksAndHistoryMatchGET(t, store, book.ID, "shared")
 		require.Empty(t, lockedKeys(t, store, book.ID), "nothing the book shows changed")
+	})
+	t.Run("dangling SeriesID relinked by name", func(t *testing.T) {
+		store, book := invariantFixture(t)
+		dangling := 999999
+		_, err := store.ModifyBook(book.ID, func(b *database.Book) error { b.SeriesID, b.Series = &dangling, nil; return nil })
+		require.NoError(t, err)
+		_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, editor("series_name", "the saga"))
+		require.NoError(t, err)
+		requireLocksAndHistoryMatchGET(t, store, book.ID, "dangling relink")
 	})
 	t.Run("series rename fails", func(t *testing.T) {
 		store, book := invariantFixture(t)
@@ -1574,9 +1592,11 @@ func TestUpdateAudiobook_AuthorChangeToAnExistingRowInOtherCasingLocksTheRowsNam
 	requireLocksAndHistoryMatchGET(t, store, book.ID, "author other case")
 }
 
-// A series change to an existing series typed in other casing resolves to
-// it (no duplicate) and locks its name; on a book with an author, an
-// existing author-less series of that name is the one linked.
+// A series change to an existing series typed in other casing resolves to it
+// (no duplicate) when the lookup's author scope holds it, and locks its name.
+// On a book with an author, an author-less series of that name is NOT
+// linked: it may be another author's work (see
+// AuthorlessSeriesOfTheSameNameIsNotLinked); the book gets its own row.
 func TestUpdateAudiobook_SeriesChangeToAnExistingSeriesInOtherCasing(t *testing.T) {
 	for _, withAuthor := range []bool{false, true} {
 		store, book, _, authorID := caseFixture(t, withAuthor)
@@ -1586,16 +1606,48 @@ func TestUpdateAudiobook_SeriesChangeToAnExistingSeriesInOtherCasing(t *testing.
 		require.NoError(t, err)
 		row, err := store.GetBookByID(book.ID)
 		require.NoError(t, err)
-		require.Equal(t, expanse.ID, *row.SeriesID, "withAuthor=%v: linked to a new series instead of the existing one", withAuthor)
-		if authorID != nil {
-			dup, err := store.GetSeriesByName("The Expanse", authorID)
+		if withAuthor {
+			require.NotEqual(t, expanse.ID, *row.SeriesID, "linked into an author-less series of another scope")
+			own, err := store.GetSeriesByName("the expanse", authorID)
 			require.NoError(t, err)
-			require.Nil(t, dup, "an author-scoped duplicate was created")
+			require.NotNil(t, own)
+			require.Equal(t, own.ID, *row.SeriesID)
+		} else {
+			require.Equal(t, expanse.ID, *row.SeriesID, "linked to a new series instead of the existing one")
+			st := fieldStates(t, store, book.ID)[database.FieldKeySeriesName]
+			require.Equal(t, `"The Expanse"`, *st.OverrideValue)
 		}
-		st := fieldStates(t, store, book.ID)[database.FieldKeySeriesName]
-		require.Equal(t, `"The Expanse"`, *st.OverrideValue)
 		requireLocksAndHistoryMatchGET(t, store, book.ID, "series other case")
 	}
+}
+
+// Author B's book named into a series title that author A's book holds as
+// an author-less series ("Collected Stories") gets B's own row: linking it
+// into A's series is a wrong link, a second row is only a duplicate.
+func TestUpdateAudiobook_AuthorlessSeriesOfTheSameNameIsNotLinked(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("Author A")
+	require.NoError(t, err)
+	b, err := store.CreateAuthor("Author B")
+	require.NoError(t, err)
+	cs, err := store.CreateSeries("Collected Stories", nil)
+	require.NoError(t, err)
+	_, err = store.CreateBook(&database.Book{Title: "A's", FilePath: "/library/a.m4b", Format: "m4b", AuthorID: &a.ID, Author: a, SeriesID: &cs.ID, Series: cs})
+	require.NoError(t, err)
+	bb, err := store.CreateBook(&database.Book{Title: "B's", FilePath: "/library/b.m4b", Format: "m4b", AuthorID: &b.ID, Author: b})
+	require.NoError(t, err)
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), bb.ID, seriesWebSave("Collected Stories"))
+	require.NoError(t, err)
+	row, err := store.GetBookByID(bb.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row.SeriesID)
+	require.NotEqual(t, cs.ID, *row.SeriesID, "author B's book was linked into author A's series")
+	own, err := store.GetSeriesByName("Collected Stories", &b.ID)
+	require.NoError(t, err)
+	require.NotNil(t, own)
+	require.Equal(t, own.ID, *row.SeriesID)
 }
 
 // Any edit that moves the book to a different series without sending a
@@ -1665,4 +1717,125 @@ func TestUpdateAudiobook_FailedRenameKeepsASameRequestUnlock(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, fieldStates(t, store, book.ID)[database.FieldKeySeriesName].OverrideLocked,
 		"the same-request unlock was discarded")
+}
+
+// --- probe15 cases ---------------------------------------------------------
+
+// A dangling SeriesID shows no series; re-typing the series name relinks the
+// book by name, and that is not a move: the position stays.
+func TestUpdateAudiobook_DanglingRelinkBySameNameKeepsThePosition(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	foo, err := store.CreateSeries("Foo", nil)
+	require.NoError(t, err)
+	dangling, seq, raw := 999999, 4, "4"
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/d.m4b", Format: "m4b",
+		SeriesID: &dangling, SeriesSequence: &seq, SeriesPositionRaw: &raw})
+	require.NoError(t, err)
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, seriesWebSave("Foo"))
+	require.NoError(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.Equal(t, foo.ID, *row.SeriesID)
+	requireSeriesPosition(t, store, book.ID, 4, "4")
+}
+
+// A stale embedded Series (nil SeriesID) shows a series; moving to another
+// one IS a move, and the old position goes.
+func TestUpdateAudiobook_MoveFromAStaleEmbeddedSeriesClearsThePosition(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	alpha, err := store.CreateSeries("Alpha", nil)
+	require.NoError(t, err)
+	seq, raw := 3, "3"
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/s.m4b", Format: "m4b",
+		Series: alpha, SeriesSequence: &seq, SeriesPositionRaw: &raw})
+	require.NoError(t, err)
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, seriesWebSave("Beta"))
+	require.NoError(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.Nil(t, row.SeriesSequence, "the old series' number was kept")
+	require.Nil(t, row.SeriesPositionRaw)
+}
+
+// Changing the author while re-sending the shown series name keeps the
+// series link and its position (the name is the current row).
+func TestUpdateAudiobook_AuthorChangeKeepsTheShownSeriesAndPosition(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("Author A")
+	require.NoError(t, err)
+	scoped, err := store.CreateSeries("Foo", &a.ID)
+	require.NoError(t, err)
+	_, err = store.CreateSeries("Foo", nil)
+	require.NoError(t, err)
+	seq, raw := 2, "2"
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/t.m4b", Format: "m4b", AuthorID: &a.ID, Author: a,
+		SeriesID: &scoped.ID, Series: scoped, SeriesSequence: &seq, SeriesPositionRaw: &raw})
+	require.NoError(t, err)
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"author_name": "Author B", "series_name": "Foo",
+		"overrides": map[string]any{"author_name": map[string]any{"value": "Author B", "locked": true}}})
+	require.NoError(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.Equal(t, scoped.ID, *row.SeriesID, "the series link moved")
+	requireSeriesPosition(t, store, book.ID, 2, "2")
+}
+
+// A lock-only override with a top-level change stores the new (shown) value
+// with the lock; a lock-only override, or the current value with
+// locked:true, on an unchanged field locks it at the shown value.
+func TestUpdateAudiobook_LockOnlyOverridesLockTheShownValue(t *testing.T) {
+	store, book := invariantFixture(t)
+	svc := audiobooks.NewAudiobookUpdateService(store)
+	_, err := svc.UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"title": "New", "overrides": map[string]any{"title": map[string]any{"locked": true}}})
+	require.NoError(t, err)
+	st := fieldStates(t, store, book.ID)[database.FieldKeyTitle]
+	require.True(t, st.OverrideLocked)
+	require.Equal(t, `"New"`, *st.OverrideValue)
+
+	_, err = svc.UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"overrides": map[string]any{"publisher": map[string]any{"locked": true}}})
+	require.NoError(t, err)
+	st = fieldStates(t, store, book.ID)[database.FieldKeyPublisher]
+	require.True(t, st.OverrideLocked)
+	require.Equal(t, `"P"`, *st.OverrideValue)
+
+	_, err = svc.UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"genre": "G", "overrides": map[string]any{"genre": map[string]any{"value": "G", "locked": true}}})
+	require.NoError(t, err)
+	require.True(t, fieldStates(t, store, book.ID)[database.FieldKeyGenre].OverrideLocked)
+	requireLocksAndHistoryMatchGET(t, store, book.ID, "lock-only")
+}
+
+// A changed field sent with locked:false is recorded but stores no override
+// value (a stored value would itself count as a user override).
+func TestUpdateAudiobook_ChangedFieldWithLockedFalseStoresNoOverride(t *testing.T) {
+	store, book := invariantFixture(t)
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+		"title": "New", "overrides": map[string]any{"title": map[string]any{"value": "New", "locked": false}}})
+	require.NoError(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.Equal(t, "New", row.Title)
+	st := fieldStates(t, store, book.ID)[database.FieldKeyTitle]
+	require.False(t, st.OverrideLocked)
+	require.Nil(t, st.OverrideValue, "a locked:false edit stored an override value")
+	require.NotContains(t, lockedKeys(t, store, book.ID), database.FieldKeyTitle)
+	require.NotEmpty(t, historyByField(t, store, book.ID)[database.FieldKeyTitle], "the edit left no history")
+}
+
+// A position re-sent as "2.0" for a stored 2 is not an edit.
+func TestUpdateAudiobook_PositionEqualAsANumberIsNotAnEdit(t *testing.T) {
+	store, book, _ := seriesFixture(t) // position 1, raw "1"
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"series_position": "1.0"})
+	require.NoError(t, err)
+	require.NotContains(t, lockedKeys(t, store, book.ID), database.FieldKeySeriesPosition)
 }
