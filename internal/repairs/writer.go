@@ -323,8 +323,8 @@ func copyInt(p *int) *int {
 }
 
 // jsonString encodes s as a JSON string, the shape every history value has.
-// Marshalling a Go string cannot fail; the fallback only keeps the linter
-// honest.
+// Marshalling a Go string cannot fail; the fallback only satisfies the
+// linter.
 func jsonString(s string) string {
 	b, err := json.Marshal(s)
 	if err != nil {

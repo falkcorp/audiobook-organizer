@@ -193,8 +193,12 @@ func relinkStale(b *database.Book) bool {
 	return b != nil && !b.IsSoftDeleted() && b.SeriesID == nil && b.Series != nil
 }
 
+// relinkClassError is the class of a row whose book could not be read or
+// classified, so the census (PlanResult.ByClass) still counts it.
+const relinkClassError = "error"
+
 func relinkErrorRow(bookID, title string, err error) repairs.Row {
-	r := repairs.Row{RowID: bookID, BookIDs: []string{bookID}, Title: title,
+	r := repairs.Row{RowID: bookID, BookIDs: []string{bookID}, Title: title, Class: relinkClassError,
 		Skipped: "error", SkipReason: err.Error(), Reason: err.Error(), Risk: repairs.RiskReview}
 	r.Fingerprint = relinkFingerprint(r, "error")
 	return r
@@ -391,6 +395,11 @@ func relinkAuthorCompatible(s database.Series, bookAuthors map[int]bool) bool {
 	return s.AuthorID == nil || len(bookAuthors) == 0 || bookAuthors[*s.AuthorID]
 }
 
+// The prod ops store (Server.OpsStore) is a database.Store; this proves it
+// answers relinkUserCleared's history read, so the assertion there never
+// misses in prod.
+var _ bookHistoryReader = database.Store(nil)
+
 // relinkSeriesFields are the history fields a series edit is recorded under.
 var relinkSeriesFields = map[string]bool{"series_id": true, "series": true, database.FieldKeySeriesName: true}
 
@@ -407,29 +416,17 @@ const relinkHistoryWindow = 200
 // A clear made through the old top-level edit path wrote neither, so it is
 // not detectable here; that is why every relink row is RiskReview.
 func relinkUserCleared(store OpsStore, bookID string, emb, target database.Series) (string, error) {
-	states, err := store.GetMetadataFieldStates(bookID)
-	if err != nil {
-		return "", fmt.Errorf("read field states of %s: %w", bookID, err)
-	}
-	for _, st := range states {
-		if st.Field != database.FieldKeySeriesName || !st.HasUserOverride() {
-			continue
-		}
-		if st.OverrideValue == nil {
-			return "the series_name field is user-locked", nil
-		}
-		v := decodeJSONString(*st.OverrideValue)
-		n := normSeriesName(v)
-		if n == "" {
-			return "a user override set the series to empty", nil
-		}
-		if n != normSeriesName(emb.Name) && n != normSeriesName(target.Name) {
-			return fmt.Sprintf("a user override names series %q, not %q", v, target.Name), nil
-		}
+	why, err := relinkSeriesLockWhy(store, bookID, emb, target)
+	if err != nil || why != "" {
+		return why, err
 	}
 	hist, ok := store.(bookHistoryReader)
 	if !ok {
-		return "", nil
+		// Fail closed: without the history a user's series clear is
+		// invisible, and relinking would undo it. The prod ops store is a
+		// database.Store, which has the method (asserted below), so this only
+		// fires for a store that cannot answer.
+		return "the store cannot read change history, so a user's series clear cannot be ruled out", nil
 	}
 	rows, err := hist.GetBookChangeHistory(bookID, relinkHistoryWindow)
 	if err != nil {
@@ -447,6 +444,42 @@ func relinkUserCleared(store OpsStore, bookID string, emb, target database.Serie
 		break
 	}
 	return "", nil
+}
+
+// relinkSeriesLockWhy reports why a series_name lock forbids the relink (""
+// when none does). The lock set comes from database.LoadFieldLocks, the one
+// reader of both lock stores (field states and the legacy preference blob).
+// A lock is honoured as agreeing only when its override value names the
+// stored object's series or the target's; a lock with no readable value
+// (the legacy blob carries none) holds the row.
+func relinkSeriesLockWhy(store OpsStore, bookID string, emb, target database.Series) (string, error) {
+	locks, err := database.LoadFieldLocks(store, bookID)
+	if err != nil {
+		return "", fmt.Errorf("read field locks of %s: %w", bookID, err)
+	}
+	if !locks.Locked(database.FieldKeySeriesName) {
+		return "", nil
+	}
+	states, err := store.GetMetadataFieldStates(bookID)
+	if err != nil {
+		return "", fmt.Errorf("read field states of %s: %w", bookID, err)
+	}
+	for _, st := range states {
+		if st.Field != database.FieldKeySeriesName || st.OverrideValue == nil {
+			continue
+		}
+		v := decodeJSONString(*st.OverrideValue)
+		n := normSeriesName(v)
+		switch {
+		case n == "":
+			return "a user override set the series to empty", nil
+		case n == normSeriesName(emb.Name) || n == normSeriesName(target.Name):
+			return "", nil // the lock names this series: relinking agrees with it
+		default:
+			return fmt.Sprintf("a user override names series %q, not %q", v, target.Name), nil
+		}
+	}
+	return "the series_name field is user-locked", nil
 }
 
 // decodeJSONString decodes a JSON-encoded string value; anything that is not
@@ -515,6 +548,13 @@ func (f *relinkSeriesFixer) Apply(_ context.Context, w *repairs.Writer, fresh re
 		}
 		if row.Series == nil || !sameSeries(*row.Series, d.embedded) {
 			return fmt.Errorf("%w: book %s's series object changed", repairs.ErrChangedSincePlan, d.bookID)
+		}
+		why, lerr := relinkSeriesLockWhy(store, d.bookID, d.embedded, *s)
+		if lerr != nil {
+			return lerr
+		}
+		if why != "" {
+			return fmt.Errorf("%w: %s", repairs.ErrChangedSincePlan, why)
 		}
 		id := d.seriesID
 		row.SeriesID = &id

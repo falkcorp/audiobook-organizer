@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
@@ -188,6 +189,46 @@ func TestRelinkStaleSeries_HistoryClearHoldsTheRow(t *testing.T) {
 		Field: "series", PreviousValue: &prev, NewValue: &empty, ChangeType: "override", Source: "user_edit", ChangedAt: time.Now()}))
 	_, _, rows := lib.plan(t)
 	require.Equal(t, relinkSkipUserCleared, rows["relink"].Skipped, rows["relink"].SkipReason)
+}
+
+// TestRelinkStaleSeries_LegacyBlobLockHoldsTheRow: a series_name lock that
+// still lives in the pre-migration preference blob holds the row too.
+func TestRelinkStaleSeries_LegacyBlobLockHoldsTheRow(t *testing.T) {
+	lib := newRelinkLib(t)
+	require.NoError(t, lib.store.SetUserPreference(metastate.Key(lib.ids["relink"]),
+		`{"series_name":{"override_value":"","override_locked":true}}`))
+	_, _, rows := lib.plan(t)
+	require.Equal(t, relinkSkipUserCleared, rows["relink"].Skipped, rows["relink"].SkipReason)
+	require.Equal(t, relinkClassRelink, rows["relink"].Class)
+}
+
+// TestRelinkStaleSeries_LockAgreeingWithTheSeriesAllowsRelink: a lock whose
+// override names the same series does not hold the row.
+func TestRelinkStaleSeries_LockAgreeingWithTheSeriesAllowsRelink(t *testing.T) {
+	lib := newRelinkLib(t)
+	v := `"the  expanse"`
+	require.NoError(t, lib.store.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: lib.ids["relink"],
+		Field: database.FieldKeySeriesName, OverrideValue: &v, OverrideLocked: true, UpdatedAt: time.Now()}))
+	_, _, rows := lib.plan(t)
+	require.True(t, rows["relink"].Applicable(), "%s: %s", rows["relink"].Skipped, rows["relink"].SkipReason)
+}
+
+// TestRelinkStaleSeries_ApplyRefusesALockAddedAfterReplan: the lock is read
+// again inside the write.
+func TestRelinkStaleSeries_ApplyRefusesALockAddedAfterReplan(t *testing.T) {
+	lib := newRelinkLib(t)
+	f, _, rows := lib.plan(t)
+	fresh, err := f.Replan(context.Background(), nil, rows["relink"], &fakeReporter{})
+	require.NoError(t, err)
+	require.True(t, fresh.Applicable())
+	empty := `""`
+	require.NoError(t, lib.store.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: lib.ids["relink"],
+		Field: database.FieldKeySeriesName, OverrideValue: &empty, OverrideLocked: true, UpdatedAt: time.Now()}))
+	w := repairs.NewWriter(lib.store, lib.store, f.ID(), "bulk_update", "repairs-")
+	require.ErrorIs(t, f.Apply(context.Background(), w, fresh), repairs.ErrChangedSincePlan)
+	b, err := lib.store.GetBookByID(lib.ids["relink"])
+	require.NoError(t, err)
+	require.Nil(t, b.SeriesID)
 }
 
 func TestRelinkStaleSeries_ApplyRelinksAndUndoRestores(t *testing.T) {
