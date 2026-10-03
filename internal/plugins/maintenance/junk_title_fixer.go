@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -64,10 +65,14 @@ const (
 const (
 	junkSrcTranscribed = "transcription"
 	junkSrcCandidate   = "metadata_candidate"
-	junkSrcStripped    = "title_prefix_stripped"
-	junkSrcFolder      = "folder"
-	junkSrcFilename    = "filename"
-	junkSrcSeriesNum   = "series_and_number"
+	// junkSrcProvider: the title a metadata provider returned for this book,
+	// recorded in the title's field state but never applied (a scheduled
+	// fetch only fills empty fields, and the junk title was not empty).
+	junkSrcProvider  = "provider_value"
+	junkSrcStripped  = "title_prefix_stripped"
+	junkSrcFolder    = "folder"
+	junkSrcFilename  = "filename"
+	junkSrcSeriesNum = "series_and_number"
 )
 
 // junkCandidateMinScore is the lowest metafetch candidate score the fixer
@@ -109,8 +114,8 @@ func (f *junkTitleFixer) Description() string {
 		"roman numeral, or a title behind a track-number or punctuation prefix. Proposes the real title from, in " +
 		"order: the intro transcription, the title without its prefix, a matching metadata candidate, the folder or " +
 		"filename, the series and number. A book another book owns a file of is a fragment for the consolidation " +
-		"fixer; one that only looks like a chapter file is listed for a person. Writes the title only, never a " +
-		"user-locked or provider-supplied one."
+		"fixer; one that only looks like a chapter file is listed for a person. A title a provider recorded for " +
+		"the book but never applied is used as evidence. Writes the title only, never a user-locked one."
 }
 
 // junkIndex is the library-wide state a decision reads besides the book
@@ -301,7 +306,7 @@ func (f *junkTitleFixer) cachedIndex() (*junkIndex, error) {
 
 // Plan lists every junk-titled book as a row: applicable when a replacement
 // was found, skipped (fragment / possible_fragment / needs_manual /
-// user_locked / provider_title / owner-manual) otherwise.
+// user_locked / owner-manual) otherwise.
 func (f *junkTitleFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
 	idx, cands, err := f.buildJunkIndex()
 	if err != nil {
@@ -518,6 +523,9 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	// a provider's value; kept apart because the reason is rebuilt once a
 	// proposal is chosen.
 	providerNote := ""
+	// fetchedTitle is the provider's recorded title, providerSaidIt whether
+	// it IS the stored junk title (or cannot be read: treated the same).
+	fetchedTitle, providerSaidIt := "", false
 	states, err := store.GetMetadataFieldStates(b.ID)
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("read field states of %s: %w", b.ID, err)
@@ -530,15 +538,28 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 			return finish(junkSkipUserLocked, "the title carries a user override; it is never rewritten")
 		}
 		// A provider value on the title does NOT stop the repair (owner,
-		// 2026-10-03). The book only gets here because its title fails the
-		// junk classifier, and no provider answers "02 - No Quarter" or
-		// "read by narrator": the fetched value is a file-derived title that
-		// a refetch echoed back and recorded as the provider's. 350 such
-		// books were refused on prod as skipped_provider_title. The proposal
-		// gates below are unchanged, and the row says where the title came
-		// from so the reviewer sees it.
+		// 2026-10-03). The book only gets here because its STORED title
+		// fails the junk classifier. Measured on prod that day over the
+		// 1,233 rows the old skipped_provider_title rule held: in 1,216 the
+		// recorded value is a DIFFERENT title ("85 - Echoes of the System…"
+		// has "Echoes of the System: A LitRPG Adventure" on record), because
+		// a scheduled fetch records the provider's candidate and then only
+		// fills empty fields, so the junk title stayed. The stored title is
+		// file-derived and the recorded value is evidence, weighed below
+		// like a cached candidate (the fetch searched on the junk title, and
+		// its hit can be another book: "01 The Shadow of Gods 01-34" has
+		// "Shadowfall" on record). In 11 a provider did return the stored
+		// title: those are repaired too, but never at low risk.
 		if states[i].HasProviderValue() {
-			providerNote = "; the stored title is recorded as provider-supplied"
+			if v, ok := metastate.Decode(states[i].FetchedValue).(string); ok {
+				fetchedTitle = strings.TrimSpace(v)
+			}
+			providerSaidIt = fetchedTitle == "" || strings.EqualFold(fetchedTitle, strings.TrimSpace(b.Title))
+			if providerSaidIt {
+				providerNote = "; a metadata provider returned this same title"
+			} else {
+				providerNote = fmt.Sprintf("; a metadata provider recorded the title %q for this book", fetchedTitle)
+			}
 			r.Reason += providerNote
 		}
 	}
@@ -673,6 +694,16 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		}
 	}
 
+	provided := ""
+	if fetchedTitle != "" && !providerSaidIt {
+		switch {
+		case embedded && !titleAgreesWithAny(fetchedTitle, agreeWith):
+			refused = append(refused, fmt.Sprintf("provider value %q disagrees with the title's own evidence", fetchedTitle))
+		default:
+			provided, _ = accept(fetchedTitle, junkSrcProvider)
+		}
+	}
+
 	// An owner-manual proposal decides the book before any conflict does.
 	if ownerManual != "" {
 		return finish(repairs.SkipOwnerManual, fmt.Sprintf(
@@ -706,7 +737,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		for i := range pathEv {
 			pathTitles[i] = pathEv[i].title
 		}
-		for _, other := range []evidence{{junkSrcTranscribed, spoken}, {junkSrcCandidate, candidate}} {
+		for _, other := range []evidence{{junkSrcTranscribed, spoken}, {junkSrcProvider, provided}, {junkSrcCandidate, candidate}} {
 			if other.title == "" || titleAgreesWithAny(other.title, pathTitles) {
 				continue
 			}
@@ -725,6 +756,9 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	if stripped != "" {
 		props = append(props, proposal{stripped, junkSrcStripped, repairs.RiskLow})
 	}
+	if provided != "" {
+		props = append(props, proposal{provided, junkSrcProvider, repairs.RiskReview})
+	}
 	if candidate != "" {
 		props = append(props, proposal{candidate, junkSrcCandidate, repairs.RiskReview})
 	}
@@ -736,7 +770,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		climbed := titleDir != "" && titleDir != filepath.Dir(paths[0])
 		if climbed && slices.Contains(idx.roots, filepath.Dir(titleDir)) {
 			corroborated := false
-			for _, c := range []string{spoken, candidate} {
+			for _, c := range []string{spoken, provided, candidate} {
 				if c != "" && titleAgreesWithAny(c, []string{folder}) {
 					corroborated = true
 				}
@@ -785,6 +819,11 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	}
 	r.Proposed = map[string]string{"title": best.title}
 	r.Risk = best.risk
+	if providerSaidIt {
+		// A provider answered with this very title: it may be a real one the
+		// classifier misreads ("3-10 to Yuma"). Never a low-risk row.
+		r.Risk = repairs.RiskReview
+	}
 	var also []string
 	for _, p := range props[1:] {
 		if p.title != best.title {
@@ -797,7 +836,9 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	}
 	r.Reason += providerNote
 	r.Detail = &junkDecision{bookID: b.ID, oldTitle: b.Title, newTitle: best.title}
-	r.Fingerprint = junkFingerprint(r, string(kind)+"|"+best.source)
+	// The provider's recorded title is an input: one that appears or changes
+	// between plan and apply is a different decision.
+	r.Fingerprint = junkFingerprint(r, string(kind)+"|"+best.source+"|"+fetchedTitle)
 	return r, nil
 }
 

@@ -12,8 +12,8 @@ package database
 //
 //   - plugins/maintenance/junk_title_fixer.go (was repair_junk_titles.go) tests
 //     locked || override (skipped_user_locked); since 2026-10-03 a fetched
-//     value no longer skips a title that fails the junk classifier, it only
-//     annotates the row
+//     value no longer skips a title that fails the junk classifier, it is
+//     weighed as evidence for the replacement
 //   - plugins/maintenance/title_repair.go       tested locked || override, then
 //     fetched separately so it could report a different skip reason
 //   - server/handlers/metadata/handler.go       tested locked || override only
@@ -32,9 +32,10 @@ func (s MetadataFieldState) HasUserOverride() bool {
 }
 
 // HasProviderValue reports whether a metadata provider supplied a value for this
-// field. Weaker than HasUserOverride: a fetched value blocks the repair jobs,
-// which only ever want to fix file-derived junk, but must NOT block the
-// bulk-fetch handler, whose entire job is to write a newly fetched value over an
+// field. Weaker than HasUserOverride: a fetched value blocks title_repair,
+// which only ever wants to fix file-derived junk (the junk-title fixer reads
+// the fetched value as evidence instead, since 2026-10-03), but must NOT block
+// the bulk-fetch handler, whose entire job is to write a newly fetched value over an
 // older one.
 func (s MetadataFieldState) HasProviderValue() bool {
 	return s.FetchedValue != nil
