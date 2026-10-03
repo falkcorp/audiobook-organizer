@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-09-26
+// last-edited: 2026-10-03
 
 package maintenance
 
@@ -226,8 +226,10 @@ type icStore struct {
 }
 
 type icRunner struct {
-	store   icStore
-	cloner  LibraryCloner
+	store  icStore
+	cloner LibraryCloner
+	// reflink clones one file for the mixed kind (see Plugin.reflinkFile).
+	reflink func(src, dst string) error
 	rootDir string
 	opID    string
 	apply   bool
@@ -267,7 +269,11 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 	if writes && opID == "" {
 		return report, fmt.Errorf("itunes-clone-into-library: no operation id; refusing to write")
 	}
-	run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, cloner: p.deps, rootDir: rootDir, opID: opID, apply: params.Apply}
+	reflink := p.reflinkFile
+	if reflink == nil {
+		reflink = fileops.Reflink
+	}
+	run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, cloner: p.deps, reflink: reflink, rootDir: rootDir, opID: opID, apply: params.Apply}
 	if writes {
 		cp, ok := database.AsCapability[chapterPersister](ops)
 		if !ok {
@@ -880,7 +886,7 @@ func (r *icRunner) applyMixed(ctx context.Context, g icGroupReport, p *icPlan) i
 		if !pathutil.UnderFrozenITunesTree(f.FilePath) {
 			continue
 		}
-		if err := fileops.Reflink(f.FilePath, p.dests[i]); err != nil {
+		if err := r.reflink(f.FilePath, p.dests[i]); err != nil {
 			cleanup()
 			g.Outcome, g.Error = icOutcomeFailed, fmt.Sprintf("reflink %s: %v", f.FilePath, err)
 			return g

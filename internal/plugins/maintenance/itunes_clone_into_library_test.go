@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2e8b5d10-7c4a-4f93-8a61-d9f3b7c2e045
-// last-edited: 2026-09-25
+// last-edited: 2026-10-03
 
 package maintenance
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
@@ -79,6 +81,8 @@ type icFixture struct {
 	s          *database.PebbleStore
 	base, root string
 	deps       icTestDeps
+	// reflink overrides the mixed kind's clone; nil is a plain exclusive copy.
+	reflink func(src, dst string) error
 }
 
 func newICFixture(t *testing.T) *icFixture {
@@ -125,7 +129,15 @@ func (f *icFixture) itunes(name string) string {
 
 func (f *icFixture) run(t *testing.T, params icParams) *icReport {
 	t.Helper()
-	p := &Plugin{deps: f.deps}
+	// The mixed kind clones outside the cloner above, so it gets the same
+	// treatment: a copy that keeps Reflink's "never overwrite" contract. With
+	// the real fileops.Reflink this test failed on every filesystem that cannot
+	// clone, which is every GitHub-hosted runner.
+	reflink := f.reflink
+	if reflink == nil {
+		reflink = fileops.CopyFileIngestExclusive
+	}
+	p := &Plugin{deps: f.deps, reflinkFile: reflink}
 	rep, err := p.itunesCloneIntoLibrary(context.Background(), params, f.root, &opIDReporter{id: "op-ic-test"})
 	require.NoError(t, err)
 	return rep
@@ -240,6 +252,42 @@ func TestITunesClone_MixedCompletesInPlaceAndRollsBack(t *testing.T) {
 	}
 	_, err = os.Stat(dest)
 	require.True(t, os.IsNotExist(err))
+}
+
+// A clone that fails part-way leaves the book exactly as it was: the files
+// already cloned are removed, no row is repointed, and the group reports
+// failed with the reason.
+func TestITunesClone_MixedCloneFailureLeavesNothingBehind(t *testing.T) {
+	f := newICFixture(t)
+	lib := filepath.Join(f.root, "Author", "Book F", "01.mp3")
+	it2, it3 := f.itunes("02.mp3"), f.itunes("03.mp3")
+	f.book(t, "F", "vg-f", "Book F", []string{lib, it2, it3})
+
+	calls := 0
+	f.reflink = func(src, dst string) error {
+		calls++
+		if calls == 2 {
+			return fmt.Errorf("%w: forced", fileops.ErrReflinkUnsupported)
+		}
+		return fileops.CopyFileIngestExclusive(src, dst)
+	}
+	rep := f.run(t, icParams{Apply: true, GroupIDs: []string{"vg-f"}})
+	g := icGroup(t, rep, "vg-f")
+	require.Equal(t, icOutcomeFailed, g.Outcome)
+	require.Contains(t, g.Error, "reflink")
+	require.Equal(t, 2, calls, "stopped at the first failure")
+
+	for _, name := range []string{"02.mp3", "03.mp3"} {
+		_, err := os.Stat(filepath.Join(f.root, "Author", "Book F", name))
+		require.True(t, os.IsNotExist(err), "%s was left in the library after a failed clone", name)
+	}
+	rows, err := f.s.GetBookFiles("F")
+	require.NoError(t, err)
+	got := map[string]string{}
+	for _, r := range rows {
+		got[r.ID] = r.FilePath
+	}
+	require.Equal(t, map[string]string{"F-f0": lib, "F-f1": it2, "F-f2": it3}, got)
 }
 
 // A mixed book whose library file is not where the planner would put it is
