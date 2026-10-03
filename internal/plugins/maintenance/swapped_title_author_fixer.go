@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a80ddfb1-95dc-402f-941a-142b9388bcf0
 // last-edited: 2026-10-03
 
@@ -506,10 +506,12 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 		return repairs.Row{}, false, fmt.Errorf("read field locks of %s: %w", b.ID, err)
 	}
 	if !authorOnly && locks.Locked(database.FieldKeyTitle) {
-		return finish(junkSkipUserLocked, lockHoldReason(titleState, "title"), true)
+		kind, why := lockHold(titleState, "title")
+		return finish(kind, why, true)
 	}
 	if locks.Locked(database.FieldKeyAuthorName) && !locks.RepairLocked(database.FieldKeyAuthorName) {
-		return finish(junkSkipUserLocked, lockHoldReason(authorState, "author"), true)
+		kind, why := lockHold(authorState, "author")
+		return finish(kind, why, true)
 	}
 	lockTitle := !authorOnly || !locks.Locked(database.FieldKeyTitle)
 	lockAuthor := !locks.Locked(database.FieldKeyAuthorName)
@@ -766,13 +768,14 @@ func fieldStateOf(states []database.MetadataFieldState, field string) *database.
 	return nil
 }
 
-// lockHoldReason words a lock hold: a repair's lock names its operation, so
-// it is not reported as a person's override.
-func lockHoldReason(st *database.MetadataFieldState, what string) string {
+// lockHold is the skip kind and reason of a lock hold: a repair's lock is
+// its own kind (skipped_repair_locked) and names its operation, so it is not
+// reported as a person's override.
+func lockHold(st *database.MetadataFieldState, what string) (kind, why string) {
 	if st != nil && st.IsRepairLock() {
-		return fmt.Sprintf("the %s is locked by a repair (%s); revert that operation first to rewrite it", what, st.LockSource)
+		return junkSkipRepairLocked, fmt.Sprintf("the %s is locked by a repair (%s); revert that operation first to rewrite it", what, st.LockSource)
 	}
-	return fmt.Sprintf("the %s carries a user override; it is never rewritten", what)
+	return junkSkipUserLocked, fmt.Sprintf("the %s carries a user override; it is never rewritten", what)
 }
 
 // creditsNameAll reports whether every provider name resolves to an existing

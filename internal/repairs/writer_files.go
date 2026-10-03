@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_files.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
 // last-edited: 2026-10-03
 
@@ -244,9 +244,12 @@ func (w *Writer) voidRow(row journaledRow) error {
 
 // JournalStep journals e and then makes the write it describes, like Step,
 // except that a write refused as ErrChangedSincePlan (nothing written) voids
-// the row it journaled. JOURNAL FIRST still holds: a crash between the row
-// and the write leaves a row for a write that did not happen; its revert is a
-// compare-and-set against a value the field never left.
+// the row it journaled. JOURNAL FIRST still holds, with its exposure: a crash
+// between the row and the write leaves a live row for a write that never
+// happened. Its revert compare-and-sets against the row's NewValue, so if a
+// later operation writes that same value, reverting THIS operation puts the
+// old value back over the later one's write. Voiding covers refusals only;
+// the crash window stays.
 func (w *Writer) JournalStep(bookID string, e UndoEntry, write func() error) error {
 	row, err := w.journalRow(bookID, e.ChangeType, e.Field, e.Old, e.New)
 	if err != nil {

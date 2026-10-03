@@ -1,5 +1,5 @@
 // file: internal/metafetch/state_snapshot_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b9d0f57-6fc7-45ea-9c21-992a7ba92708
 // last-edited: 2026-10-03
 
@@ -146,11 +146,22 @@ func TestApplyMetadataCandidate_RepairLockYieldsToHandPickedApply(t *testing.T) 
 		store.GetMetadataFieldStatesFunc = func(string) ([]database.MetadataFieldState, error) {
 			return repairRows(database.RepairLockSource("op-1")), nil
 		}
+		var claimed []database.MetadataFieldState
+		store.UpsertMetadataFieldStateFunc = func(st *database.MetadataFieldState) error {
+			if st.Field == database.FieldKeyTitle {
+				claimed = append(claimed, *st)
+			}
+			return nil
+		}
 		resp, err := NewService(store).ApplyMetadataCandidate("b-locks", candidateFor(""), nil)
 		require.NoError(t, err)
 		require.NotNil(t, updated())
 		assert.NotEqual(t, curatedBook().Title, updated().Title)
 		assert.NotContains(t, resp.SkippedLockedFields, database.FieldKeyTitle)
+		// The lock becomes the person's: still locked, no repair source.
+		require.NotEmpty(t, claimed)
+		assert.True(t, claimed[0].OverrideLocked)
+		assert.Empty(t, claimed[0].LockSource)
 	})
 	t.Run("automatic apply honours a repair lock", func(t *testing.T) {
 		store, updated := candidateStore(t)

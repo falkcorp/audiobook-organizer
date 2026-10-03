@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-10-03
 
@@ -56,6 +56,10 @@ const (
 	junkSkipNeedsManual = "skipped_needs_manual"
 	// junkSkipUserLocked: the title carries a user override; never touched.
 	junkSkipUserLocked = "skipped_user_locked"
+	// junkSkipRepairLocked: the field carries the lock a Repairs apply set
+	// (database.MetadataFieldState.IsRepairLock), not a person's; reverting
+	// that operation lifts it.
+	junkSkipRepairLocked = "skipped_repair_locked"
 	// junkSkipNotJunk / junkSkipGone: what a re-plan reports for a book
 	// whose title stopped being junk, or that no longer exists. A plan never
 	// lists either.
@@ -451,11 +455,10 @@ func (f *junkTitleFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 	return writeTitleOnly(w, f.p.deps.OpsStore(), d.bookID, d.oldTitle, d.newTitle)
 }
 
-// titleStateReader reads a book's field provenance; writeTitleOnly re-checks
-// the user lock with it inside the write.
-type titleStateReader interface {
-	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
-}
+// titleStateReader reads a book's field provenance, rows and pre-migration
+// blob both; writeTitleOnly re-checks the title lock with it inside the write
+// (database.LockedUserFields, which reads a blob-only book's blob).
+type titleStateReader = database.MetadataFieldStateReader
 
 // writeTitleOnly sets Title through the framework writer, which records the
 // history row for the book's history view, journals the change in the apply
@@ -499,14 +502,12 @@ func writeTitleOnly(w *repairs.Writer, states titleStateReader, bookID, oldTitle
 			if cur.Title != oldTitle {
 				return fmt.Errorf("%w: title is now %q", repairs.ErrChangedSincePlan, cur.Title)
 			}
-			sts, err := states.GetMetadataFieldStates(bookID)
+			locked, err := database.LockedUserFields(states, bookID)
 			if err != nil {
-				return fmt.Errorf("read field states of %s: %w", bookID, err)
+				return fmt.Errorf("read field locks of %s: %w", bookID, err)
 			}
-			for i := range sts {
-				if sts[i].Field == "title" && sts[i].HasUserOverride() {
-					return fmt.Errorf("%w: the title is now user-locked", repairs.ErrChangedSincePlan)
-				}
+			if locked[database.FieldKeyTitle] {
+				return fmt.Errorf("%w: the title is now locked", repairs.ErrChangedSincePlan)
 			}
 			cur.Title = newTitle
 			return nil
@@ -609,7 +610,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 			continue
 		}
 		if states[i].HasUserOverride() {
-			return finish(junkSkipUserLocked, lockHoldReason(&states[i], "title"))
+			return finish(lockHold(&states[i], "title"))
 		}
 		// A provider value on the title does NOT stop the repair (owner,
 		// 2026-10-03). The book only gets here because its STORED title
@@ -649,6 +650,17 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 
 	if why := legacyStateUnreadable(store, b.ID, states); why != "" {
 		return finish(junkSkipNeedsManual, why)
+	}
+	// A blob-only book's title lock lives in the blob, which the rows loop
+	// above cannot see.
+	if len(states) == 0 {
+		locks, lerr := database.LoadFieldLocks(store, b.ID)
+		if lerr != nil {
+			return repairs.Row{}, fmt.Errorf("read field locks of %s: %w", b.ID, lerr)
+		}
+		if locks.Locked(database.FieldKeyTitle) {
+			return finish(junkSkipUserLocked, "the title carries a user override (pre-migration state); it is never rewritten")
+		}
 	}
 
 	// Title and author stored swapped: the author holds the title a provider

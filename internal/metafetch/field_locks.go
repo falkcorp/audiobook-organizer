@@ -1,5 +1,5 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
 // last-edited: 2026-10-03
 
@@ -153,7 +153,8 @@ func (mfs *Service) loadFieldLocks(bookID string) (database.FieldLocks, error) {
 // It also returns the author join the apply read and wrote under the store's
 // book_authors lock (nil when no author was applied), for CommitApply's history.
 func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata, source string) (metadata.BookMetadata, []string, *AuthorCredits, error) {
-	return mfs.guardedApplyWith(book, meta, source, false)
+	meta, skipped, credits, _, err := mfs.guardedApplyWith(book, meta, source, false)
+	return meta, skipped, credits, err
 }
 
 // applyLocks is the lock set an apply honours. A metadata apply a PERSON
@@ -171,14 +172,26 @@ func applyLocks(locks database.FieldLocks, handPicked bool) database.FieldLocks 
 }
 
 // guardedApplyWith is guardedApply; handPicked says a person picked this
-// candidate (applyLocks).
-func (mfs *Service) guardedApplyWith(book *database.Book, meta metadata.BookMetadata, source string, handPicked bool) (metadata.BookMetadata, []string, *AuthorCredits, error) {
+// candidate (applyLocks). claimed lists the repair-locked keys the candidate
+// carries a value for, which a hand-picked apply may write: the caller hands
+// them to database.ClaimRepairLocks once the write commits.
+func (mfs *Service) guardedApplyWith(book *database.Book, meta metadata.BookMetadata, source string, handPicked bool) (metadata.BookMetadata, []string, *AuthorCredits, []string, error) {
 	if book == nil {
-		return meta, nil, nil, fmt.Errorf("apply metadata: nil book")
+		return meta, nil, nil, nil, fmt.Errorf("apply metadata: nil book")
 	}
 	locks, err := mfs.loadFieldLocks(book.ID)
 	if err != nil {
-		return meta, nil, nil, fmt.Errorf("refusing to apply metadata to %s: %w", book.ID, err)
+		return meta, nil, nil, nil, fmt.Errorf("refusing to apply metadata to %s: %w", book.ID, err)
+	}
+	var claimed []string
+	if handPicked {
+		repairOnly := map[string]bool{}
+		for _, f := range database.UserLockableFields {
+			if locks.RepairLocked(f.Key) {
+				repairOnly[f.Key] = true
+			}
+		}
+		_, claimed = StripLockedFields(meta, repairOnly)
 	}
 	locks = applyLocks(locks, handPicked)
 	meta, skipped := StripLockedFields(meta, locks.Set())
@@ -189,7 +202,7 @@ func (mfs *Service) guardedApplyWith(book *database.Book, meta metadata.BookMeta
 	var credits *AuthorCredits
 	restored := locks.Apply(book, func(b *database.Book) { credits, bodyErr = mfs.applyMetadataUnguarded(b, meta) })
 	if bodyErr != nil {
-		return meta, nil, nil, fmt.Errorf("apply metadata to %s: %w", book.ID, bodyErr)
+		return meta, nil, nil, nil, fmt.Errorf("apply metadata to %s: %w", book.ID, bodyErr)
 	}
 	if len(restored) > 0 {
 		// Strip should have made this unreachable; if it fires, a new write in
@@ -203,7 +216,7 @@ func (mfs *Service) guardedApplyWith(book *database.Book, meta metadata.BookMeta
 		fieldLockLog.Info("metadata apply: skipped user-locked fields book_id=%s source=%s skipped_locked=%v",
 			book.ID, logger.SanitizeLogValue(source), skipped)
 	}
-	return meta, skipped, credits, nil
+	return meta, skipped, credits, claimed, nil
 }
 
 // fieldLockLog is this file's logger.New printf-style logger.
