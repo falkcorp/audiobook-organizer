@@ -1,7 +1,7 @@
 // file: web/src/components/review/useDedupPipeline.tsx
-// version: 2.1.0
+// version: 2.2.0
 // guid: 8c2e5a17-4d93-4f6b-a0e8-71b3d9c4f25e
-// last-edited: 2026-09-28
+// last-edited: 2026-10-03
 //
 // State + UI for the Dedup menu's two whole-library runs (see dedupPipeline.ts):
 // "Find all duplicates" (server op dedup.run-all) and "Force full rescan"
@@ -101,6 +101,23 @@ const runListeners = new Set<() => void>();
 let bindings: UseDedupPipelineOptions | null = null;
 let followGeneration = 0;
 let previewGeneration = 0;
+// One controller per live follower. Bumping a generation makes the old
+// follower's result ignored; aborting its controller is what ends its wait
+// between polls, so it does not sit on a timer for up to a minute first.
+let followAbort: AbortController | null = null;
+let previewAbort: AbortController | null = null;
+
+function nextFollow(): { gen: number; signal: AbortSignal } {
+  followAbort?.abort();
+  followAbort = new AbortController();
+  return { gen: ++followGeneration, signal: followAbort.signal };
+}
+
+function nextPreview(): { gen: number; signal: AbortSignal } {
+  previewAbort?.abort();
+  previewAbort = new AbortController();
+  return { gen: ++previewGeneration, signal: previewAbort.signal };
+}
 
 const STORAGE_KEY = 'review.dedupRun';
 
@@ -130,6 +147,13 @@ function recall(): { run: DedupRunKind; opId: string } | null {
 
 function setRunState(next: RunState | ((s: RunState) => RunState)) {
   runState = typeof next === 'function' ? next(runState) : next;
+  // The preview only feeds the confirmation prompt. Once the prompt is gone
+  // (cancelled, closed, or confirmed) nothing reads it, so stop following it
+  // now rather than at its next poll.
+  if (runState.kind !== 'confirm' && previewAbort) {
+    previewAbort.abort();
+    previewAbort = null;
+  }
   runListeners.forEach((l) => l());
 }
 function subscribeRun(l: () => void) {
@@ -144,16 +168,21 @@ export function resetDedupPipelineForTests() {
   bindings = null;
   followGeneration++;
   previewGeneration++;
+  followAbort?.abort();
+  previewAbort?.abort();
+  followAbort = null;
+  previewAbort = null;
 }
 
 async function follow(run: DedupRunKind, opId: string) {
-  const gen = ++followGeneration;
+  const { gen, signal } = nextFollow();
   const label = DEDUP_RUNS[run].label;
   let final: Operation;
   try {
     final = await followOperation(opId, {
       pollIntervalMs: bindings?.pollIntervalMs,
       shouldStopFollowing: () => gen !== followGeneration,
+      signal,
       onUpdate: (op) =>
         setRunState((s) =>
           s.kind === 'running' && s.opId === opId ? { ...s, op, unreachable: false } : s
@@ -242,11 +271,12 @@ async function requestRun(run: DedupRunKind) {
     }
     // Put real numbers in the prompt: run the op as a preview (writes
     // nothing) while the dialog is open.
-    const gen = ++previewGeneration;
+    const { gen, signal } = nextPreview();
     setRunState({ kind: 'confirm', run, risks, preview: 'loading' });
     const preview = await previewRunAll({
       pollIntervalMs: bindings?.pollIntervalMs,
       shouldStop: () => gen !== previewGeneration || runState.kind !== 'confirm',
+      signal,
     });
     setRunState((s) => (s.kind === 'confirm' && gen === previewGeneration ? { ...s, preview } : s));
     return;
