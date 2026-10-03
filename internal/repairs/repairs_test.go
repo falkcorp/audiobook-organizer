@@ -1169,7 +1169,7 @@ func TestWriter_HasNoDeletePrimitive(t *testing.T) {
 		"WithJournal", "WithLiveness", "Touch", "Journal", "Journaled", "JournaledValue", "Step",
 		"RepointBookFile", "MoveBookFiles", "SetTrackNumber", "Recompute",
 		"WithCredits", "ModifyCredits", "SetPrimaryAuthor", "RecordChange", "Beat", "LockWaiting",
-		"WithFieldStates", "LockFields"}, names)
+		"WithFieldStates", "LockFields", "JournalStep"}, names)
 }
 
 func TestWriter_HistoryFailureWritesIncompleteMarker(t *testing.T) {

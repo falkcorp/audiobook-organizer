@@ -613,16 +613,20 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	}
 }
 
-// revertFieldLock lifts the lock a repair set on one field, while the field
-// still carries exactly that lock (undo.CheckFieldLockCurrent): no override
-// is already restored, and an override value a person typed since is
-// refused. Only OverrideLocked changes; the provider value and the row's
-// UpdatedAt stay, so the swapped title/author fixer's same-record check still
-// reads the time the provider recorded the value.
+// revertFieldLock lifts the lock a repair operation set on one field, while
+// the field still carries exactly that operation's lock
+// (undo.CheckFieldLockCurrent): no override is already restored, and a
+// person's override or lock, or another operation's lock, is refused. Only
+// the lock changes; the provider value and the row's UpdatedAt stay, so the
+// swapped title/author fixer's same-record check still compares the times the
+// fields' values were recorded. Runs under the book's field-state stripe
+// (database.LockMetadataState), like every other read-modify-write of it.
 func (rs *RevertService) revertFieldLock(c *database.OperationChange) error {
 	if _, err := rs.loadBook(c.BookID); err != nil {
 		return err
 	}
+	unlock := database.LockMetadataState(c.BookID)
+	defer unlock()
 	states, err := rs.db.GetMetadataFieldStates(c.BookID)
 	if err != nil {
 		return fmt.Errorf("read field states of %s: %w", c.BookID, err)
@@ -636,6 +640,7 @@ func (rs *RevertService) revertFieldLock(c *database.OperationChange) error {
 		}
 		st := states[i]
 		st.OverrideLocked = false
+		st.LockSource = ""
 		if err := rs.db.UpsertMetadataFieldState(&st); err != nil {
 			return fmt.Errorf("unlock %s of %s: %w", c.FieldName, c.BookID, err)
 		}
