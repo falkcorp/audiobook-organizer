@@ -1,7 +1,7 @@
 // file: internal/metadata/chapter_title.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c962e504-746a-454a-996f-1020803a8cab
-// last-edited: 2026-09-30
+// last-edited: 2026-10-03
 
 package metadata
 
@@ -24,6 +24,21 @@ var chapterOnlyTitleRe = regexp.MustCompile(`(?i)^(?:(?:chapter|chap|ch|part|pt|
 // not a chapter position: chapter numbers are zero-padded ("0012") or small.
 var yearLikeTitleRe = regexp.MustCompile(`^(?:1\d|20)\d\d$`)
 
+// chapterShapeRes are more stored titles that are a chapter file's own
+// numbering and nothing else, found on prod 2026-10-03 (one example each):
+//   - "2-04": disc and zero-padded track ("1-12" is NOT one: it reads like
+//     "9-11", so only a zero-padded track qualifies);
+//   - "77_copy1": a numbered copy a file-copy tool made of a chapter file;
+//   - "28_4": a chapter and its part;
+//   - "000m_00s__058m_32s_51h": a split tool's time range, with or without a
+//     trailing "- Unknown Author" the importer glued on.
+var chapterShapeRes = []*regexp.Regexp{
+	regexp.MustCompile(`^\d{1,2}-0\d$`),
+	regexp.MustCompile(`(?i)^\d{1,3}_copy\d+$`),
+	regexp.MustCompile(`^\d{1,3}_\d{1,2}$`),
+	regexp.MustCompile(`(?i)^\d{3}m_\d{2}s(?:_\d+h)?__\d{3}m_\d{2}s(?:_\d+h)?(?:\s*-\s*unknown author)?$`),
+}
+
 // IsChapterOnlyTitle reports whether a filename-derived title carries no title
 // at all, only a chapter number. An empty title counts: a parser that strips a
 // leading number before it looks at the rest hands "98.mp3" over as "". A
@@ -34,7 +49,15 @@ func IsChapterOnlyTitle(title string) bool {
 	if yearLikeTitleRe.MatchString(t) {
 		return false
 	}
-	return t == "" || chapterOnlyTitleRe.MatchString(t)
+	if t == "" || chapterOnlyTitleRe.MatchString(t) {
+		return true
+	}
+	for _, re := range chapterShapeRes {
+		if re.MatchString(t) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsUnsearchableTitle reports whether a book's title is no title to search a
