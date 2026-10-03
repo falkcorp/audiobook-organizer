@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.70.0
+// version: 1.70.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-03
 
@@ -432,6 +432,9 @@ type forwardingStoreProvider interface {
 type FragmentRepairReader interface {
 	GetBookPathHistory(bookID string) ([]database.BookPathChange, error)
 	GetBookChanges(bookID string) ([]*database.OperationChange, error)
+	// GetMetadataChangeHistory tells which fixer retired a book: the
+	// Writer's history row carries the fixer id as Source.
+	GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error)
 	database.BookFilePathLookup
 }
 
