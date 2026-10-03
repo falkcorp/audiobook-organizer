@@ -1,5 +1,5 @@
 // file: internal/scanlock/scanlock_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 17e29a0f-0309-4e70-ad4c-1f5d29bcdfac
 // last-edited: 2026-10-03
 
@@ -149,27 +149,52 @@ func TestPendingBlocksOnlyTheIdleAcquires(t *testing.T) {
 	}
 	h.Release()
 
-	got := make(chan struct{})
+	// The waiting LockSetIdle takes p and q, sees p's pending mark, releases
+	// both ("-" q, then "-" p) and parks on the idle channel. The trace tells
+	// the test exactly when that release has happened, so "it is waiting" is
+	// an observed fact rather than a 30ms guess. The hook runs under the
+	// table mutex: it only does a non-blocking send.
+	parked := make(chan struct{}, 1)
+	tb.SetTrace(func(ev Event) {
+		if ev.Op == "-" && ev.Key == "p" {
+			select {
+			case parked <- struct{}{}:
+			default:
+			}
+		}
+	})
+	got := make(chan error, 1)
 	go func() {
 		g, err := tb.LockSetIdle(context.Background(), []string{"p", "q"})
 		if err == nil {
 			// Release BEFORE signalling: the test reads tb.Held() as soon as
-			// got closes, and signalling first raced it ("table not empty: 1"
-			// on the CI coverage runner, 2026-10-03).
+			// got fires. Signalling first raced it ("table not empty: 2" on
+			// PR #3639, "1" on the CI coverage runner, 2026-10-03).
 			g.Release()
-			close(got)
 		}
+		got <- err
 	}()
 	select {
-	case <-got:
-		t.Fatal("LockSetIdle returned while file work was pending")
-	case <-time.After(30 * time.Millisecond):
+	case <-parked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("LockSetIdle never released its keys to wait for the pending mark")
 	}
+	// It has released and is parked on idle, which only done() closes: it
+	// cannot have returned, whatever the scheduler does.
+	select {
+	case err := <-got:
+		t.Fatalf("LockSetIdle returned (err=%v) while file work was pending", err)
+	default:
+	}
+	tb.SetTrace(nil)
 	done()
 	done() // idempotent
 	select {
-	case <-got:
-	case <-time.After(2 * time.Second):
+	case err := <-got:
+		if err != nil {
+			t.Fatalf("LockSetIdle: %v", err)
+		}
+	case <-time.After(10 * time.Second):
 		t.Fatal("LockSetIdle never acquired after the pending mark cleared")
 	}
 	if n := tb.Held(); n != 0 {
