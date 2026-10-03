@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_fail_reset_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7091c056-0ab5-4755-bcfa-5e5f6c8c8ad9
 // last-edited: 2026-10-03
 
@@ -9,83 +9,140 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/quarantine"
 	"github.com/stretchr/testify/require"
 )
 
-// fakeScanFailResetStore implements only ResetScanFailCount. The embedded nil
-// scannerStore makes any other method call panic, which resetScanFailCount's
-// recover would absorb into scanFailResetPanicCount -- so every case below
-// asserts the panic counter too, or a dependency the helper should not have
-// would pass silently.
-type fakeScanFailResetStore struct {
+// fakeScanFailStore implements only the two scan-fail counter writes. The
+// embedded nil scannerStore makes any other method call panic, which
+// callScanFailStore's recover would absorb into a panic counter -- so every
+// case below asserts the panic counters too, or a dependency the helpers
+// should not have would pass silently.
+type fakeScanFailStore struct {
 	scannerStore
-	err  error
-	keys []string
+	incrErr, resetErr   error
+	incrKeys, resetKeys []string
 }
 
-func (f *fakeScanFailResetStore) ResetScanFailCount(pathHash string) error {
-	f.keys = append(f.keys, pathHash)
-	return f.err
+func (f *fakeScanFailStore) IncrScanFailCount(pathHash string) (int, error) {
+	f.incrKeys = append(f.incrKeys, pathHash)
+	return len(f.incrKeys), f.incrErr
 }
 
-type scanFailResetCounters struct{ errs, panics int64 }
-
-func snapshotScanFailReset() scanFailResetCounters {
-	return scanFailResetCounters{scanFailResetErrCount.Load(), scanFailResetPanicCount.Load()}
+func (f *fakeScanFailStore) ResetScanFailCount(pathHash string) error {
+	f.resetKeys = append(f.resetKeys, pathHash)
+	return f.resetErr
 }
 
-func (before scanFailResetCounters) delta() scanFailResetCounters {
-	now := snapshotScanFailReset()
-	return scanFailResetCounters{now.errs - before.errs, now.panics - before.panics}
+type scanFailCounters struct{ incrErrs, incrPanics, resetErrs, resetPanics int64 }
+
+func snapshotScanFail() scanFailCounters {
+	return scanFailCounters{
+		scanFailCountErrCount.Load(), scanFailIncrPanicCount.Load(),
+		scanFailResetErrCount.Load(), scanFailResetPanicCount.Load(),
+	}
 }
 
-// TestResetScanFailCount covers the three outcomes the old bare
-// `defer func() { recover() }()` plus `_ =` collapsed into one silent nothing.
-func TestResetScanFailCount(t *testing.T) {
-	const path = "/library/Author/Book/01.mp3"
+func (before scanFailCounters) delta() scanFailCounters {
+	now := snapshotScanFail()
+	return scanFailCounters{
+		now.incrErrs - before.incrErrs, now.incrPanics - before.incrPanics,
+		now.resetErrs - before.resetErrs, now.resetPanics - before.resetPanics,
+	}
+}
 
-	t.Run("success resets the key the increment path uses", func(t *testing.T) {
-		fake := &fakeScanFailResetStore{}
+const scanFailTestPath = "/library/Author/Book/01.mp3"
+
+// TestScanFailCounterWrites covers the outcomes of both counter writes. The
+// reset used to sit under a bare `defer func() { recover() }()` with `_ =` on
+// its error, and the increment had no recover at all, so a panic out of either
+// was silent or fatal.
+func TestScanFailCounterWrites(t *testing.T) {
+	log := logger.New("test")
+
+	t.Run("success writes the shared key", func(t *testing.T) {
+		fake := &fakeScanFailStore{}
 		withStore(t, fake)
-		before := snapshotScanFailReset()
+		before := snapshotScanFail()
 
-		resetScanFailCount(path, logger.New("test"))
+		incrScanFailCount(scanFailTestPath, log)
+		resetScanFailCount(scanFailTestPath, log)
 
-		require.Equal(t, []string{scanFailKey(path)}, fake.keys)
-		require.Len(t, fake.keys[0], 16, "key is 8 bytes of SHA-256, hex")
-		require.Equal(t, scanFailResetCounters{}, before.delta())
+		key := database.ScanFailKey(scanFailTestPath)
+		require.Equal(t, []string{key}, fake.incrKeys)
+		require.Equal(t, []string{key}, fake.resetKeys)
+		require.Equal(t, scanFailCounters{}, before.delta())
 	})
 
-	t.Run("store error is counted, not swallowed", func(t *testing.T) {
-		fake := &fakeScanFailResetStore{err: errors.New("disk full")}
-		withStore(t, fake)
-		before := snapshotScanFailReset()
+	t.Run("store errors are counted per op, not swallowed", func(t *testing.T) {
+		withStore(t, &fakeScanFailStore{incrErr: errors.New("disk full"), resetErr: errors.New("disk full")})
+		before := snapshotScanFail()
 
-		resetScanFailCount(path, logger.New("test"))
+		incrScanFailCount(scanFailTestPath, log)
+		resetScanFailCount(scanFailTestPath, log)
 
-		require.Equal(t, scanFailResetCounters{errs: 1}, before.delta(),
-			"a failed reset must reach the run summary; it used to be discarded with `_ =`")
+		require.Equal(t, scanFailCounters{incrErrs: 1, resetErrs: 1}, before.delta())
 	})
 
-	t.Run("panic is recovered and counted, not swallowed", func(t *testing.T) {
-		// The bare embedded interface has no ResetScanFailCount, so the call
-		// dereferences a nil interface -- the same panic a closed Pebble store
-		// raises in shape: a panic out of the store call.
+	t.Run("panics are recovered and counted per op, not swallowed or fatal", func(t *testing.T) {
+		// The bare embedded interface implements neither method, so each call
+		// dereferences a nil interface: a panic out of the store call, the
+		// same shape as a closed Pebble store's.
 		withStore(t, struct{ scannerStore }{})
-		before := snapshotScanFailReset()
+		before := snapshotScanFail()
 
-		require.NotPanics(t, func() { resetScanFailCount(path, logger.New("test")) })
+		require.NotPanics(t, func() { incrScanFailCount(scanFailTestPath, log) })
+		require.NotPanics(t, func() { resetScanFailCount(scanFailTestPath, log) })
 
-		require.Equal(t, scanFailResetCounters{panics: 1}, before.delta())
+		require.Equal(t, scanFailCounters{incrPanics: 1, resetPanics: 1}, before.delta())
 	})
 
 	t.Run("no store is a no-op", func(t *testing.T) {
 		withStore(t, nil)
-		before := snapshotScanFailReset()
+		before := snapshotScanFail()
 
-		resetScanFailCount(path, logger.New("test"))
+		incrScanFailCount(scanFailTestPath, log)
+		resetScanFailCount(scanFailTestPath, log)
 
-		require.Equal(t, scanFailResetCounters{}, before.delta())
+		require.Equal(t, scanFailCounters{}, before.delta())
 	})
+}
+
+// quarantineKeyStore is the reader side: the quarantine service lists books and
+// reads each one's scan-fail counter. It records the keys it is asked for and
+// reports every counter below the threshold, so nothing is quarantined.
+type quarantineKeyStore struct {
+	quarantine.Store
+	books    []database.BookCore
+	readKeys []string
+}
+
+func (q *quarantineKeyStore) GetAllBooksCore(_, _ int) ([]database.BookCore, error) {
+	return q.books, nil
+}
+
+func (q *quarantineKeyStore) GetScanFailCount(pathHash string) (int, error) {
+	q.readKeys = append(q.readKeys, pathHash)
+	return 0, nil
+}
+
+// TestScanFailKeyIsSharedWithQuarantine pins the writer and the reader to one
+// key for one file. If the scanner and the quarantine service ever derive the
+// key differently again, increments land where the threshold check never
+// looks and auto-quarantine silently stops working -- with every unit test on
+// either side still green, which is why this test drives both.
+func TestScanFailKeyIsSharedWithQuarantine(t *testing.T) {
+	writer := &fakeScanFailStore{}
+	withStore(t, writer)
+	incrScanFailCount(scanFailTestPath, logger.New("test"))
+
+	reader := &quarantineKeyStore{books: []database.BookCore{{ID: "b1", FilePath: scanFailTestPath}}}
+	quarantine.NewQuarantineService(reader, &config.Config{}, nil).AutoQuarantineFailedScans()
+
+	require.Len(t, writer.incrKeys, 1)
+	require.Equal(t, writer.incrKeys, reader.readKeys,
+		"scanner increments a counter the quarantine service never reads")
 }

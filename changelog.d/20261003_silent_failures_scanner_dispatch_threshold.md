@@ -19,4 +19,9 @@
   failure counter after a successful read discarded both errors and panics,
   so a reset that never landed left earlier failures counting toward
   auto-quarantine with nothing in the log. Both are now logged (sampled) and
-  counted in the scan summary.
+  counted in the scan summary. The matching increment after a failed read had
+  no panic guard at all, so a panic there (a closed database) crashed the
+  server mid-scan; it now gets the same logging and counting. The scanner and
+  the quarantine service now compute the counter's key with one shared
+  function, so the counter the scanner writes is always the one quarantine
+  reads.
