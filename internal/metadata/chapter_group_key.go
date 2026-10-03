@@ -29,32 +29,36 @@ const (
 var (
 	// chapterLeadingNumRe: a leading track/chapter number followed by a
 	// separator, or a stem that is nothing but a number ("98").
-	chapterLeadingNumRe = regexp.MustCompile(`^\d+(?:[\s\-–._]+|$)`)
+	chapterLeadingNumRe = regexp.MustCompile(`^\d+(?:[\s\-–—._]+|$)`)
 	// chapterLeadingPairRe: a leading DISC-TRACK (or book-chapter) pair,
 	// "8-02 Rubicon", "01_07-Star Wars", "02_001", "1-09 Starshine". The first
 	// number is short (1-2 digits) so a year ("2016 - Title") never reads as
 	// one; both numbers are stripped from the key and both kept in the
 	// position. Until 2026-10-03 only the first was read, so every file of
 	// "8-02 Rubicon … — 02" carried chapter number 8.
-	chapterLeadingPairRe = regexp.MustCompile(`^(\d{1,2})[-_](\d{1,3})(?:[\s\-–._]+|$)`)
+	chapterLeadingPairRe = regexp.MustCompile(`^(\d{1,2})[-_](\d{1,3})(?:[\s\-–—._]+|$)`)
+	// chapterDateRe: a stem that opens with a date ("01-05-1945",
+	// "12_25_2019", "3.4.21") carries no chapter numbering: read as a pair,
+	// every file of a year would share the key "1945".
+	chapterDateRe = regexp.MustCompile(`^\d{1,2}[-_.]\d{1,2}[-_.](?:\d{2}|\d{4})(?:\D|$)`)
 	// chapterLeadingMarkerRe: "Chapter 01 - Title", "Disc 2 - Title". The
 	// marker word must be followed by a number, so "Discworld - Mort" is not
 	// a disc marker.
-	chapterLeadingMarkerRe = regexp.MustCompile(`(?i)^(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_]*\d+(?:[\s_]*of[\s_]*\d+)?(?:[\s\-–._:]+|$)`)
+	chapterLeadingMarkerRe = regexp.MustCompile(`(?i)^(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_]*\d+(?:[\s_]*of[\s_]*\d+)?(?:[\s\-–—._:]+|$)`)
 	// chapterTrailingMarkerRe: "Title - Chapter 12", "Title Part 3",
 	// "Title_Disc2", "Title (CD 1)", "Title Part 3 of 12". The marker must
 	// start a word (start of stem or after a separator) and be followed by a
 	// number, so "Discworld 5" is NOT a disc marker.
-	chapterTrailingMarkerRe = regexp.MustCompile(`(?i)(?:^|[\s\-–_.,(\[]+)(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_\-]*\d+(?:[\s_]*of[\s_]*\d+)?[)\]]?\s*$`)
+	chapterTrailingMarkerRe = regexp.MustCompile(`(?i)(?:^|[\s\-–—_.,(\[]+)(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_\-]*\d+(?:[\s_]*of[\s_]*\d+)?[)\]]?\s*$`)
 	// chapterTrailingOfRe: "Title 3 of 12", "Title (03 of 12)". Captures the
 	// total, which is part of the grouping key.
-	chapterTrailingOfRe = regexp.MustCompile(`(?i)(?:^|[\s\-–_.,(\[]+)\d+[\s_]*of[\s_]*(\d+)[)\]]?\s*$`)
+	chapterTrailingOfRe = regexp.MustCompile(`(?i)(?:^|[\s\-–—_.,(\[]+)\d+[\s_]*of[\s_]*(\d+)[)\]]?\s*$`)
 	// chapterTrailingNumRe: "Book Title 01", "Book Title - 01", "Title_01".
-	chapterTrailingNumRe = regexp.MustCompile(`(?:^|[\s\-–_.,(\[]+)\d+[)\]]?\s*$`)
+	chapterTrailingNumRe = regexp.MustCompile(`(?:^|[\s\-–—_.,(\[]+)\d+[)\]]?\s*$`)
 	// chapterSeriesWordRe: a trailing number after one of these is a series
 	// entry ("Mistborn Book 2", "Vol. 3", "#4"), a separate book, not a
 	// chapter.
-	chapterSeriesWordRe = regexp.MustCompile(`(?i)(?:^|[\s\-–_.,(\[])(?:book|bk|volume|vol|no|#)\.?$`)
+	chapterSeriesWordRe = regexp.MustCompile(`(?i)(?:^|[\s\-–—_.,(\[])(?:book|bk|volume|vol|no|#)\.?$`)
 )
 
 // ChapterGroupKey reduces a filename stem to the key its chapter siblings
@@ -81,6 +85,9 @@ var (
 // require ≥3 files and short durations before they group anything.
 func ChapterGroupKey(stem string) (key string, kind ChapterKeyKind) {
 	s := strings.TrimSpace(stem)
+	if chapterDateRe.MatchString(s) {
+		return "", ChapterKeyNone
+	}
 
 	if loc := chapterLeadingMarkerRe.FindStringIndex(s); loc != nil {
 		s, kind = s[loc[1]:], ChapterKeyMarker
@@ -114,7 +121,7 @@ func ChapterGroupKey(stem string) (key string, kind ChapterKeyKind) {
 		return "", ChapterKeyNone
 	}
 
-	s = strings.Trim(strings.ToLower(s), " -–_.,:")
+	s = strings.Trim(strings.ToLower(s), " -–—_.,:")
 	s = strings.Join(strings.Fields(s), " ")
 	return s + suffix, kind
 }
@@ -135,6 +142,11 @@ func HasLeadingChapterNumber(stem string) bool {
 type ChapterPos struct {
 	Disc  int
 	Parts []int
+	// LeadPair is true when the stem opened with a disc-track / book-chapter
+	// pair ("8-02 …", "01_07-…"), so Parts[0] and Parts[1] are that pair. A
+	// stem whose second number is trailing ("001 - Arrival (1 of 8)") has two
+	// Parts too, and is NOT a pair.
+	LeadPair bool
 }
 
 // Compare orders two positions: disc first, then Parts element by element, a
@@ -211,6 +223,9 @@ func firstNum(re *regexp.Regexp, piece string, group int) (int, bool) {
 // ok is false when the stem carries no chapter numbering (ChapterKeyNone).
 func ChapterPosition(stem string) (pos ChapterPos, ok bool) {
 	s := strings.TrimSpace(stem)
+	if chapterDateRe.MatchString(s) {
+		return ChapterPos{}, false
+	}
 	take := func(disc bool, n int) {
 		if disc {
 			pos.Disc = n
@@ -230,6 +245,7 @@ func ChapterPosition(stem string) (pos ChapterPos, ok bool) {
 		if aerr == nil && berr == nil {
 			take(false, a)
 			take(false, b)
+			pos.LeadPair = true
 			ok = true
 		}
 		s = s[m[1]:]
