@@ -8,6 +8,7 @@ package audiobooks_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -501,4 +502,57 @@ func TestUpdateAudiobook_NarratorSetKeepsTheStoresCleanedCast(t *testing.T) {
 		names = append(names, n.Name)
 	}
 	require.Equal(t, []string{"Wil Wheaton"}, names, "junction is not the store's cleaned cast")
+}
+
+// seriesPositionAfter is the position the stored row and a GET both report.
+func requireSeriesPosition(t *testing.T, store *database.PebbleStore, bookID string, want int) {
+	t.Helper()
+	row, err := store.GetBookByID(bookID)
+	require.NoError(t, err)
+	require.NotNil(t, row.SeriesSequence, "stored series_sequence is nil")
+	require.Equal(t, want, *row.SeriesSequence, "stored series_sequence")
+	if row.SeriesPositionRaw != nil {
+		require.Equal(t, strconv.Itoa(want), *row.SeriesPositionRaw, "stored raw position disagrees with series_sequence")
+	}
+	view, err := audiobooks.NewAudiobookService(store).GetAudiobook(context.Background(), bookID)
+	require.NoError(t, err)
+	require.NotNil(t, view.SeriesSequence, "GET series_sequence is nil")
+	require.Equal(t, want, *view.SeriesSequence, "GET series_sequence")
+	st := fieldStates(t, store, bookID)[database.FieldKeySeriesPosition]
+	if st.OverrideLocked {
+		require.NotNil(t, st.OverrideValue)
+		require.Equal(t, strconv.Itoa(want), *st.OverrideValue, "series_position locked at a different value")
+	}
+}
+
+// Observed on prod 2026-10-03 (main d2a4a290e): PUT {"series_name":
+// "Amaranthe", "series_position": 8}, creating the series in the same
+// request, stored series_sequence 1, the book's old position. A follow-up
+// PUT {"series_position": 8} alone also left it at 1. series_position was
+// parsed but never applied, and the extractor then locked the OLD value.
+func TestUpdateAudiobook_NewSeriesAndPositionTogetherStoresThePosition(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	seq, raw := 1, "1"
+	book, err := store.CreateBook(&database.Book{Title: "Amaranthe 8", FilePath: "/library/am8.m4b", Format: "m4b",
+		SeriesSequence: &seq, SeriesPositionRaw: &raw})
+	require.NoError(t, err)
+
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"series_name": "Amaranthe", "series_position": float64(8)})
+	require.NoError(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row.SeriesID, "series not linked")
+	requireSeriesPosition(t, store, book.ID, 8)
+}
+
+func TestUpdateAudiobook_PositionAloneOnABookWithASeriesStoresThePosition(t *testing.T) {
+	store, book, _ := seriesFixture(t) // position 1, raw "1"
+
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"series_position": float64(8)})
+	require.NoError(t, err)
+	requireSeriesPosition(t, store, book.ID, 8)
 }
