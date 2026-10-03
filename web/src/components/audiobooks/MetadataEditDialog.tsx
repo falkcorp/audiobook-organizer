@@ -1,9 +1,9 @@
 // file: web/src/components/audiobooks/MetadataEditDialog.tsx
-// version: 2.3.0
+// version: 2.4.0
 // guid: 4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d
 // last-edited: 2026-10-03
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -83,15 +83,24 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
     }
   }, []);
 
+  // Reset the form only when the dialog opens or switches to another book,
+  // never because the parent handed over a new object for the same book.
+  // Keyed on prop identity, a parent re-render mid-save (BookDetail toggles
+  // its loading state around the request) wiped the user's edits while a
+  // failed save kept the dialog open.
+  const resetKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (audiobook) {
+    const key = open && audiobook ? audiobook.id : null;
+    if (key === resetKeyRef.current) return;
+    resetKeyRef.current = key;
+    if (key && audiobook) {
       setFormData(audiobook);
       setYearInput(typeof audiobook.year === 'number' ? String(audiobook.year) : '');
       setYearError(null);
       setDirtyFields(new Set());
       setLockOverrides({});
     }
-  }, [audiobook]);
+  }, [open, audiobook]);
 
   useEffect(() => {
     if (open && audiobook?.id) {
@@ -108,26 +117,44 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
     setDirtyFields((prev) => new Set(prev).add(field));
   };
 
+  // A field whose value is back to what the dialog opened with is not dirty:
+  // typing in a box and deleting it again must not send an edit (or lock the
+  // field). Empty, null and undefined count as the same empty value.
+  const setDirty = (field: string, value: unknown) => {
+    const original = audiobook
+      ? (audiobook as unknown as Record<string, unknown>)[field]
+      : undefined;
+    const same = formatValue(original) === formatValue(value);
+    setDirtyFields((prev) => {
+      const next = new Set(prev);
+      if (same) next.delete(field);
+      else next.add(field);
+      return next;
+    });
+  };
+
   const handleChange = (field: keyof Audiobook, value: string | number | undefined) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
-    markDirty(field);
+    setDirty(field, value);
   };
 
   const handleYearChange = (value: string) => {
     setYearInput(value);
-    markDirty('year');
     if (value.trim() === '') {
       setYearError(null);
       setFormData((prev) => ({ ...prev, year: undefined }));
+      setDirty('year', undefined);
       return;
     }
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) {
+      markDirty('year');
       setYearError('Year must be a number');
       return;
     }
     setYearError(null);
     setFormData((prev) => ({ ...prev, year: parsed }));
+    setDirty('year', parsed);
   };
 
   const handleSave = async () => {
