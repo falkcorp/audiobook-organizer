@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -545,9 +545,17 @@ func (p *PebbleStore) GetRecentCompletedOperations(limit int) ([]Operation, erro
 	return ops, nil
 }
 
-// CreateOperationChange stores an operation change in PebbleDB.
+// CreateOperationChange stores an operation change in PebbleDB, together with
+// its opchange_by_book: index entry in the same batch
+// (pebble_store_opchange_index.go). When the caller supplies an id, the call
+// may rewrite an existing row: if that row named a different book, its old
+// entry is deleted in the same batch, so the entry moves with the BookID. The
+// new entry is Set unconditionally, so a rewrite self-heals a missing one. Two
+// concurrent rewrites of one id can at worst leave an extra entry, which the
+// reader drops; neither can leave the stored row without its entry.
 func (p *PebbleStore) CreateOperationChange(change *OperationChange) error {
-	if change.ID == "" {
+	supplied := change.ID != ""
+	if !supplied {
 		change.ID = ulid.Make().String()
 	}
 	change.CreatedAt = time.Now()
@@ -555,8 +563,29 @@ func (p *PebbleStore) CreateOperationChange(change *OperationChange) error {
 	if err != nil {
 		return err
 	}
-	key := fmt.Sprintf("opchange:%s:%s", change.OperationID, change.ID)
-	return p.db.Set([]byte(key), data, pebble.Sync)
+	key := opChangeKey(change.OperationID, change.ID)
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	// A freshly minted ULID cannot name a stored row, so only a supplied id
+	// pays the read.
+	if supplied {
+		oldBook, found, err := p.storedOpChangeBookID(key)
+		if err != nil {
+			return err
+		}
+		if found && oldBook != change.BookID {
+			if err := unstageOpChangeIndex(batch, oldBook, key); err != nil {
+				return err
+			}
+		}
+	}
+	if err := batch.Set(key, data, nil); err != nil {
+		return err
+	}
+	if err := stageOpChangeIndex(batch, change.BookID, key); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
 }
 
 // GetOperationChanges returns all changes for a given operation.
@@ -582,35 +611,29 @@ func (p *PebbleStore) GetOperationChanges(operationID string) ([]*OperationChang
 	return changes, iter.Error()
 }
 
-// GetBookChanges returns all changes for a given book.
+// GetBookChanges returns all changes for a given book, in primary key order
+// (operation id, then change id). Once the opchange_by_book: backfill sentinel
+// is set it reads the index and point-gets each row; until then, and always
+// for an empty bookID, it scans and decodes every opchange row. Both paths
+// return the same rows in the same order, and both fail on an undecodable row
+// (see pebble_store_opchange_index.go for how the index keeps that).
 func (p *PebbleStore) GetBookChanges(bookID string) ([]*OperationChange, error) {
-	prefix := []byte("opchange:")
-	upperBound := []byte("opchange;") // ':' + 1 = ';'
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: prefix,
-		UpperBound: upperBound,
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
-	var changes []*OperationChange
-	for iter.First(); iter.Valid(); iter.Next() {
-		var c OperationChange
-		if err := json.Unmarshal(iter.Value(), &c); err != nil {
+	if bookID != "" {
+		built, err := p.opChangeByBookIndexBuilt()
+		if err != nil {
 			return nil, err
 		}
-		if c.BookID == bookID {
-			changes = append(changes, &c)
+		if built {
+			return p.getBookChangesIndexed(bookID)
 		}
 	}
-	return changes, iter.Error()
+	return p.getBookChangesScan(bookID)
 }
 
 // MarkOperationChangesReverted marks the listed changes of an operation as
 // reverted. IDs that are not changes of this operation are ignored; rows not
-// listed are left untouched.
+// listed are left untouched. Every rewritten row and its re-Set
+// opchange_by_book: entry commit in one batch, so the marks land together.
 func (p *PebbleStore) MarkOperationChangesReverted(operationID string, changeIDs []string) error {
 	if len(changeIDs) == 0 {
 		return nil
@@ -623,6 +646,9 @@ func (p *PebbleStore) MarkOperationChangesReverted(operationID string, changeIDs
 	if err != nil {
 		return err
 	}
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	staged := 0
 	now := time.Now()
 	for _, c := range changes {
 		if _, ok := want[c.ID]; !ok {
@@ -634,11 +660,18 @@ func (p *PebbleStore) MarkOperationChangesReverted(operationID string, changeIDs
 			if err != nil {
 				return err
 			}
-			key := fmt.Sprintf("opchange:%s:%s", c.OperationID, c.ID)
-			if err := p.db.Set([]byte(key), data, pebble.Sync); err != nil {
+			key := opChangeKey(c.OperationID, c.ID)
+			if err := batch.Set(key, data, nil); err != nil {
 				return err
 			}
+			if err := stageOpChangeIndex(batch, c.BookID, key); err != nil {
+				return err
+			}
+			staged++
 		}
 	}
-	return nil
+	if staged == 0 {
+		return nil
+	}
+	return batch.Commit(pebble.Sync)
 }

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
-// last-edited: 2026-07-03
+// last-edited: 2026-10-03
 
 package database
 
@@ -98,7 +98,9 @@ func (p *PebbleStore) PruneOperationLogs(olderThan time.Time) (int, error) {
 	return 0, nil
 }
 
-// PruneOperationChanges deletes operation change entries older than the given time.
+// PruneOperationChanges deletes operation change entries older than the given time,
+// each with its opchange_by_book: index entry. Undecodable rows are skipped
+// (never deleted), as before.
 // Key format: opchange:<operation_id>:<ulid>
 func (p *PebbleStore) PruneOperationChanges(olderThan time.Time) (int, error) {
 	prefix := "opchange:"
@@ -124,6 +126,11 @@ func (p *PebbleStore) PruneOperationChanges(olderThan time.Time) (int, error) {
 		if change.CreatedAt.Before(olderThan) {
 			if bErr := batch.Delete(iter.Key(), nil); bErr != nil {
 				return 0, fmt.Errorf("pebble batch delete opchange: %w", bErr)
+			}
+			// The row's opchange_by_book: entry goes in the same batch
+			// (pebble_store_opchange_index.go).
+			if bErr := unstageOpChangeIndex(batch, change.BookID, iter.Key()); bErr != nil {
+				return 0, bErr
 			}
 			deleted++
 		}
