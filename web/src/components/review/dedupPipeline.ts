@@ -1,7 +1,7 @@
 // file: web/src/components/review/dedupPipeline.ts
-// version: 2.1.0
+// version: 2.2.0
 // guid: 3f6b1d82-7a4e-4c90-b5d1-2e8f0a9c6d47
-// last-edited: 2026-09-28
+// last-edited: 2026-10-03
 //
 // The Dedup menu's two whole-library runs, both SERVER-SIDE operations that the
 // browser only starts and follows:
@@ -85,13 +85,42 @@ export function isPausedForRestart(status: string): boolean {
   return status === 'interrupted_quiesced';
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * Waits `ms`, or until `signal` aborts, whichever comes first. The timer is
+ * always cleared and the abort listener always removed, so a wait that is cut
+ * short leaves nothing pending: without this a follower that had been told to
+ * stop kept its timer (and everything its callbacks close over) alive for up to
+ * MAX_RETRY_BACKOFF_MS, and then made one more status read before noticing.
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timeoutId);
+      resolve();
+    };
+    const timeoutId = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 export interface FollowOptions {
   onUpdate?: (op: Operation) => void;
   pollIntervalMs?: number;
   /** Checked between polls; true stops FOLLOWING (not the server op). */
   shouldStopFollowing?: () => boolean;
+  /**
+   * Aborting stops FOLLOWING (not the server op) immediately: it ends the wait
+   * between polls instead of letting it run out. Same outcome as
+   * shouldStopFollowing returning true, without the delay.
+   */
+  signal?: AbortSignal;
   /** Called on each failed read with the consecutive-failure count. */
   onUnreachable?: (failures: number) => void;
 }
@@ -102,7 +131,8 @@ export interface FollowOptions {
  * throws OperationGoneError.
  */
 export async function followOperation(id: string, opts: FollowOptions = {}): Promise<Operation> {
-  const { onUpdate, pollIntervalMs = 5000, shouldStopFollowing, onUnreachable } = opts;
+  const { onUpdate, pollIntervalMs = 5000, shouldStopFollowing, onUnreachable, signal } = opts;
+  const stopped = () => signal?.aborted === true || shouldStopFollowing?.() === true;
   let failures = 0;
   while (true) {
     let op: Operation;
@@ -113,15 +143,18 @@ export async function followOperation(id: string, opts: FollowOptions = {}): Pro
       if (isNotFound(err)) throw new OperationGoneError(id);
       failures++;
       onUnreachable?.(failures);
-      if (shouldStopFollowing?.()) throw err;
+      if (stopped()) throw err;
       const backoff = Math.min(pollIntervalMs * 2 ** Math.min(failures, 6), MAX_RETRY_BACKOFF_MS);
-      await sleep(Math.max(backoff, pollIntervalMs));
+      await sleep(Math.max(backoff, pollIntervalMs), signal);
+      // Told to stop during the wait: do not make another read first.
+      if (stopped()) throw err;
       continue;
     }
     onUpdate?.(op);
     if (api.isOperationTerminal(op.status) && !isPausedForRestart(op.status)) return op;
-    if (shouldStopFollowing?.()) return op;
-    await sleep(pollIntervalMs);
+    if (stopped()) return op;
+    await sleep(pollIntervalMs, signal);
+    if (stopped()) return op;
   }
 }
 
@@ -132,7 +165,7 @@ export async function followOperation(id: string, opts: FollowOptions = {}): Pro
  * here never blocks the prompt.
  */
 export async function previewRunAll(
-  opts: { pollIntervalMs?: number; shouldStop?: () => boolean } = {}
+  opts: { pollIntervalMs?: number; shouldStop?: () => boolean; signal?: AbortSignal } = {}
 ): Promise<DedupRunAllResult | null> {
   try {
     const op = await api.startDedupRunAll(true);
@@ -140,6 +173,7 @@ export async function previewRunAll(
     const final = await followOperation(op.id, {
       pollIntervalMs: opts.pollIntervalMs,
       shouldStopFollowing: opts.shouldStop,
+      signal: opts.signal,
     });
     if (final.status !== 'completed') return null;
     return await readRunAllResult(op.id);

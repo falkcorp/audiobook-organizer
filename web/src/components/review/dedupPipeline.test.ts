@@ -1,9 +1,9 @@
 // file: web/src/components/review/dedupPipeline.test.ts
-// version: 2.1.0
+// version: 2.2.0
 // guid: 6d1a8f35-2c94-4e7b-b3f0-9a5e4c2d7b18
-// last-edited: 2026-09-28
+// last-edited: 2026-10-03
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as api from '../../services/api';
 import {
   OperationGoneError,
@@ -105,6 +105,60 @@ describe('followOperation', () => {
       followOperation('r', { pollIntervalMs: 0, onUnreachable: (f) => failures.push(f) })
     ).resolves.toMatchObject({ status: 'completed' });
     expect(failures).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  describe('abort', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('ends the wait between polls at once, with no timer left and no further read', async () => {
+      vi.mocked(api.getOperationStatus).mockResolvedValue(op('r', 'running'));
+      const ctl = new AbortController();
+      const following = followOperation('r', { pollIntervalMs: 60_000, signal: ctl.signal });
+      await vi.advanceTimersByTimeAsync(0); // first read done, now waiting
+      expect(vi.getTimerCount()).toBe(1);
+
+      ctl.abort();
+      await expect(following).resolves.toMatchObject({ status: 'running' });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(api.getOperationStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it('ends an outage backoff at once and does not read again', async () => {
+      vi.mocked(api.getOperationStatus).mockRejectedValue(new Error('fetch failed'));
+      const ctl = new AbortController();
+      const following = followOperation('r', { pollIntervalMs: 60_000, signal: ctl.signal });
+      const outcome = expect(following).rejects.toThrow('fetch failed');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(1);
+
+      ctl.abort();
+      await outcome;
+      expect(vi.getTimerCount()).toBe(0);
+      expect(api.getOperationStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it('never starts a wait when the signal is already aborted', async () => {
+      vi.mocked(api.getOperationStatus).mockResolvedValue(op('r', 'running'));
+      const ctl = new AbortController();
+      ctl.abort();
+      await expect(
+        followOperation('r', { pollIntervalMs: 60_000, signal: ctl.signal })
+      ).resolves.toMatchObject({ status: 'running' });
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('leaves no abort listener behind when a wait runs out normally', async () => {
+      const seq = [op('r', 'running'), op('r', 'completed')];
+      vi.mocked(api.getOperationStatus).mockImplementation(async () => seq.shift()!);
+      const ctl = new AbortController();
+      const remove = vi.spyOn(ctl.signal, 'removeEventListener');
+      const following = followOperation('r', { pollIntervalMs: 1000, signal: ctl.signal });
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(following).resolves.toMatchObject({ status: 'completed' });
+      expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 
   it('stops with OperationGoneError when the op no longer exists', async () => {
