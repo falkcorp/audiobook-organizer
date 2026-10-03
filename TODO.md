@@ -2086,7 +2086,7 @@ fine; the row simply predated it by 67 days and nothing ever buried it.
     unit), and `UpdateConfig` has no production caller — but that is one config edit
     plus a restart away. **Prod value unverified** (config.yaml is 0600, config API
     errored).
-  - [ ] `internal/scanner/scanner.go:1398-1406` — bare `recover()` whose comment
+  - [x] `internal/scanner/scanner.go:1398-1406` — ✅ DONE 2026-10-03 (branch fix/silent-failures-scanner-recover-dispatch-threshold): extracted `resetScanFailCount`; the error is logged via `warnSampled` and counted, the recover now logs and counts (kept: pebble-closed and nil-embedded-fake panics, no worker-level recover above it); both totals in the scan summary; `scan_fail_reset_test.go`. Bare `recover()` whose comment
     justifies it with `GetGlobalStore` while the code calls `getStore()`; it is
     swallowing a real `pebble: closed` panic from `ResetScanFailCount`, whose error
     is also discarded while its `IncrScanFailCount` neighbour logs. The repo already
@@ -4210,7 +4210,7 @@ Three separate pieces of work fall out of this, and only the first is a config c
 - [ ] Repair the 12,525 existing books with no `book_file` rows, and the ~1,710
       track-titled fragment rows. Already-written damage; the config change does not
       touch it.
-- [ ] Fix the silent-disable defect: `ChapterConsolidationThresholdMin` has no
+- [x] ✅ DONE 2026-10-03 (branch fix/silent-failures-scanner-recover-dispatch-threshold): 0 or less now means the default (10), never "off": `Config.ResolveChapterConsolidationThresholdMin` in scanner + fixer; DB load, `Validate` and `SaveConfigToDatabase` rewrite a stored zero to 10 with a warning. Fix the silent-disable defect: `ChapterConsolidationThresholdMin` has no
       `omitempty` (`config.go:811`), so a write from a partially-populated struct
       persists a hard `0` that beats viper's default on every later load — with no log
       line and no startup warning. The absence of any signal is why this ran eleven days
@@ -6003,7 +6003,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       path is allowed. Prefer pointing the demo at a directory under an already-allowed prefix
       over widening the allow-list. Found by review on #2798.
 
-- [ ] **OPS-V2-DISPATCH-RACE — `dispatchCycle` can start a brand-new run after `Shutdown()` has been entered.**
+- [x] **OPS-V2-DISPATCH-RACE — `dispatchCycle` can start a brand-new run after `Shutdown()` has been entered.** ✅ DONE 2026-10-03 (branch fix/silent-failures-scanner-recover-dispatch-threshold): still live after #3694 (stubs have nil cancel, so Shutdown could not stop them, and `executeRun` never read the flag). `executeRun` now checks `shuttingDown` under `r.mu` before registering its handle and leaves the row queued; `dispatchCycle` re-checks in its claim block. Deterministic tests in `dispatch_shutdown_race_test.go` (both fail without the fix).
       `internal/operations/registry/dispatcher.go:36` reads `r.shuttingDown` once at
       the top of the cycle, then does a `ListQueuedOperationsV2()` store round-trip and
       a dispatch loop. `Shutdown` (`registry.go:1026`) flips the flag at its top, but a
