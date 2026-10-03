@@ -183,7 +183,7 @@ func newJunkLib(t *testing.T) *junkLib {
 	withFetched("provider-near-equal", "3-10 to Yuma", `"3:10 to Yuma"`, "", nil, "/lib/Author V/3-10 to Yuma.m4b")
 	// a value on record that is no string
 	withFetched("provider-unreadable", "04 - Null Book", `null`, "", nil, "/lib/Author W/04 - Null Book.m4b")
-	// a catalog title with an edition marker is refused as a proposal
+	// a catalog title's bracketed edition marker is dropped, the title kept
 	withFetched("provider-format", "read by narrator", `"Probe Title (Unabridged)"`, "Author A", a,
 		"/lib/Author A/Probe Title/01.mp3", "/lib/Author A/Probe Title/02.mp3")
 	// A bare unpadded number beside other books of its author may be the
@@ -275,7 +275,7 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 	require.Equal(t, repairs.RiskReview, rows["provider-credit"].Risk)
 	require.Contains(t, rows["provider-no-author"].Reason, "proposed from folder")
 	require.Contains(t, rows["provider-no-author"].Reason, `not used: provider value "Marvel Comics" was not recorded under this book's author`)
-	require.Contains(t, rows["provider-format"].Reason, "proposed from folder")
+	require.Contains(t, rows["provider-format"].Reason, "proposed from provider_value")
 	require.Equal(t, repairs.RiskLow, rows["prefix"].Risk)
 	require.Contains(t, rows["eldest-prefix"].Reason, "title_prefix_stripped")
 	require.NotContains(t, rows["eldest-prefix"].Reason, "Eragon")
