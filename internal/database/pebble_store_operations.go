@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
 // last-edited: 2026-10-03
 
@@ -620,6 +620,35 @@ func (p *PebbleStore) GetOperationChanges(operationID string) ([]*OperationChang
 		changes = append(changes, &c)
 	}
 	return changes, iter.Error()
+}
+
+// ScanOperationChanges calls fn for every operation change row, in key
+// order, in ONE pass, and stops at fn's first error (returned as is). It is
+// for a caller that reads the WHOLE journal (a plan looking for every
+// interrupted run): one pass, rather than one GetBookChanges per book. A
+// caller that needs a few known books should use GetBookChanges, which reads
+// the opchange_by_book index once it is trusted. The bounds stop at
+// "opchange;" (':' + 1), so the index keys ("opchange_by_book:") are never
+// visited. Resolve it with database.AsCapability; it is not on Store.
+func (p *PebbleStore) ScanOperationChanges(fn func(*OperationChange) error) error {
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte("opchange:"),
+		UpperBound: []byte("opchange;"), // ':' + 1 = ';'
+	})
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+	for iter.First(); iter.Valid(); iter.Next() {
+		var c OperationChange
+		if err := json.Unmarshal(iter.Value(), &c); err != nil {
+			return err
+		}
+		if err := fn(&c); err != nil {
+			return err
+		}
+	}
+	return iter.Error()
 }
 
 // GetBookChanges returns all changes for a given book, in primary key order
