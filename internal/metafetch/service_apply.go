@@ -737,7 +737,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// book_authors lock, so undo removes exactly what this apply added. It
 	// replaces a join read taken here, outside that lock, which could miss
 	// another apply's credit and so let undo delete it.
-	meta, skippedLocked, credits, err := mfs.guardedApply(book, meta, historySource)
+	meta, skippedLocked, credits, err := mfs.guardedApplyWith(book, meta, historySource, !opts.automatic())
 	if err != nil {
 		return nil, err
 	}

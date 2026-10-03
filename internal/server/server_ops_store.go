@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-09-24
+// last-edited: 2026-10-03
 
 package server
 
@@ -298,10 +298,13 @@ type serverCredentialStore interface {
 }
 
 // serverMetadataStateStore: Per-field metadata provenance state.
+// DeleteUserPreference retires a book's pre-migration state blob once its rows
+// are saved (metafetch.SaveStateSnapshot, database.DeleteLegacyMetadataState).
 type serverMetadataStateStore interface {
 	DeleteMetadataFieldState(bookID string, field string) error
 	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
 	UpsertMetadataFieldState(state *database.MetadataFieldState) error
+	DeleteUserPreference(key string) error
 }
 
 // serverImportPathStore: Configured import paths.

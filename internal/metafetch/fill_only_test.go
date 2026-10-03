@@ -127,7 +127,7 @@ func TestPreviewMetadataCandidate_BatchPreviewIsFillOnly(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, fieldsOf(labelled), "description", "OwnerReviewed must not lift FillOnly")
 
-	picked, err := svc.previewMetadataCandidate("b1", cand, nil, false, false)
+	picked, err := svc.previewMetadataCandidate("b1", cand, nil, ApplyOptions{}, false)
 	require.NoError(t, err)
 	assert.Contains(t, fieldsOf(picked), "description", "the hand-picked apply may overwrite")
 	assert.Contains(t, fieldsOf(picked), "narrator")

@@ -280,6 +280,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			old := entry.OverrideValue
 			entry.OverrideValue = nil
 			entry.OverrideLocked = false
+			entry.LockSource = "" // a person touched it: no repair's lock any more
 			entry.UpdatedAt = now
 			recordOverride(field, old, nil)
 			touched = true
@@ -733,6 +734,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	for _, field := range req.Updates.UnlockOverrides {
 		entry := state[field]
 		entry.OverrideLocked = false
+		entry.LockSource = ""
 		entry.UpdatedAt = now
 		state[field] = entry
 	}

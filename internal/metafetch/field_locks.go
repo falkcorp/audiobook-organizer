@@ -153,6 +153,26 @@ func (mfs *Service) loadFieldLocks(bookID string) (database.FieldLocks, error) {
 // It also returns the author join the apply read and wrote under the store's
 // book_authors lock (nil when no author was applied), for CommitApply's history.
 func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata, source string) (metadata.BookMetadata, []string, *AuthorCredits, error) {
+	return mfs.guardedApplyWith(book, meta, source, false)
+}
+
+// applyLocks is the lock set an apply honours. A metadata apply a PERSON
+// picked by hand (the search dialog, the manual apply path: ApplyOptions not
+// automatic) may overwrite a field only a repair locked
+// (database.FieldLocks.WithoutRepairLocks): the repair lock is there to stop
+// the scanner, auto-fetch and the nightly upgrade from restoring junk, not the
+// owner from choosing a match (owner decision 2026-10-03). Every other apply
+// honours it.
+func applyLocks(locks database.FieldLocks, handPicked bool) database.FieldLocks {
+	if handPicked {
+		return locks.WithoutRepairLocks()
+	}
+	return locks
+}
+
+// guardedApplyWith is guardedApply; handPicked says a person picked this
+// candidate (applyLocks).
+func (mfs *Service) guardedApplyWith(book *database.Book, meta metadata.BookMetadata, source string, handPicked bool) (metadata.BookMetadata, []string, *AuthorCredits, error) {
 	if book == nil {
 		return meta, nil, nil, fmt.Errorf("apply metadata: nil book")
 	}
@@ -160,6 +180,7 @@ func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata
 	if err != nil {
 		return meta, nil, nil, fmt.Errorf("refusing to apply metadata to %s: %w", book.ID, err)
 	}
+	locks = applyLocks(locks, handPicked)
 	meta, skipped := StripLockedFields(meta, locks.Set())
 	// History is NOT recorded here: this runs before the apply body's IsBetter
 	// checks and before the caller commits, so it recorded changes the apply

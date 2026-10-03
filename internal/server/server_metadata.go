@@ -54,14 +54,7 @@ func (s *Server) loadMetadataState(bookID string) (map[string]metafetch.Metadata
 	if err != nil {
 		return state, err
 	}
-	for _, entry := range stored {
-		state[entry.Field] = metafetch.MetadataFieldState{
-			FetchedValue:   metastate.Decode(entry.FetchedValue),
-			OverrideValue:  metastate.Decode(entry.OverrideValue),
-			OverrideLocked: entry.OverrideLocked,
-			UpdatedAt:      entry.UpdatedAt,
-		}
-	}
+	state = metafetch.StateFromRows(stored)
 	if len(state) > 0 {
 		return state, nil
 	}
@@ -85,52 +78,7 @@ func (s *Server) saveMetadataState(bookID string, state map[string]metafetch.Met
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-
-	existing, err := store.GetMetadataFieldStates(bookID)
-	if err != nil {
-		return err
-	}
-	existingFields := map[string]struct{}{}
-	for _, entry := range existing {
-		existingFields[entry.Field] = struct{}{}
-	}
-
-	now := time.Now()
-	for field, entry := range state {
-		fetched, err := metastate.Encode(entry.FetchedValue)
-		if err != nil {
-			return fmt.Errorf("failed to encode fetched metadata for %s: %w", field, err)
-		}
-		override, err := metastate.Encode(entry.OverrideValue)
-		if err != nil {
-			return fmt.Errorf("failed to encode override metadata for %s: %w", field, err)
-		}
-		if entry.UpdatedAt.IsZero() {
-			entry.UpdatedAt = now
-		}
-
-		dbState := database.MetadataFieldState{
-			BookID:         bookID,
-			Field:          field,
-			FetchedValue:   fetched,
-			OverrideValue:  override,
-			OverrideLocked: entry.OverrideLocked,
-			UpdatedAt:      entry.UpdatedAt,
-		}
-
-		if err := store.UpsertMetadataFieldState(&dbState); err != nil {
-			return fmt.Errorf("failed to persist metadata state for %s: %w", field, err)
-		}
-		delete(existingFields, field)
-	}
-
-	for field := range existingFields {
-		if err := store.DeleteMetadataFieldState(bookID, field); err != nil {
-			return fmt.Errorf("failed to clean up metadata state for %s: %w", field, err)
-		}
-	}
-
-	return nil
+	return metafetch.SaveStateSnapshot(store, bookID, state)
 }
 
 func decodeRawValue(raw json.RawMessage) any {

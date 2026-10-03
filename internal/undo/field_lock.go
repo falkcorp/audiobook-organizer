@@ -1,5 +1,5 @@
 // file: internal/undo/field_lock.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4ea3ea92-44d9-4af5-ae13-c7c0ccc3e1c7
 // last-edited: 2026-10-03
 
@@ -17,13 +17,14 @@ import (
 //
 // OldValue is FieldLockUnlocked (the field carried no user override when the
 // repair locked it: a repair never locks a field a person already spoke for)
-// and NewValue is FieldLockLocked (OverrideLocked set, no override value).
+// and NewValue is FieldLockLocked (OverrideLocked set, no override value,
+// LockSource database.RepairLockSource(the row's OperationID)).
 //
 // Restorable. The revert lifts the lock only while the field still carries
-// exactly the lock the repair set: no override at all is already restored,
-// and an override VALUE (a person typed one since) is a later change the
-// revert must not throw away. A lock-only row a person set since cannot be
-// told apart from the repair's; lifting it is the price of reverting.
+// exactly the lock this operation set: no override at all is already
+// restored, and anything else (a person's override value, a person's lock,
+// which clears LockSource, or another operation's lock) is a later change the
+// revert must not throw away.
 const ChangeTypeFieldLock = "field_lock"
 
 // Values of a ChangeTypeFieldLock row.
@@ -33,14 +34,14 @@ const (
 )
 
 // FieldLockStateOf renders the part of a field's state a ChangeTypeFieldLock
-// row records: FieldLockUnlocked when the field carries no user override,
-// FieldLockLocked when it carries the bare lock a repair sets, and "" for an
-// override with a value (a person's edit), which neither row value matches.
-func FieldLockStateOf(st *database.MetadataFieldState) string {
+// row of operation opID records: FieldLockUnlocked when the field carries no
+// user override, FieldLockLocked when it carries the bare lock opID set, and
+// "" for anything else, which neither row value matches.
+func FieldLockStateOf(st *database.MetadataFieldState, opID string) string {
 	switch {
 	case st == nil || !st.HasUserOverride():
 		return FieldLockUnlocked
-	case st.OverrideValue == nil:
+	case st.IsRepairLock() && st.LockSource == database.RepairLockSource(opID):
 		return FieldLockLocked
 	default:
 		return ""
@@ -49,9 +50,8 @@ func FieldLockStateOf(st *database.MetadataFieldState) string {
 
 // CheckFieldLockCurrent is the compare-and-set for a ChangeTypeFieldLock row,
 // shared by the revert and the preflight: nil while the field still carries
-// the repair's lock (lift it), ErrAlreadyRestored when it carries no
-// override, and a ReasonChangedSince refusal when a person has given it an
-// override value since.
+// the lock the row's operation set (lift it), ErrAlreadyRestored when it
+// carries no override, and a ReasonChangedSince refusal otherwise.
 func CheckFieldLockCurrent(states []database.MetadataFieldState, c *database.OperationChange) error {
 	var cur *database.MetadataFieldState
 	for i := range states {
@@ -60,13 +60,13 @@ func CheckFieldLockCurrent(states []database.MetadataFieldState, c *database.Ope
 			break
 		}
 	}
-	switch FieldLockStateOf(cur) {
+	switch FieldLockStateOf(cur, c.OperationID) {
 	case c.NewValue:
 		return nil
 	case c.OldValue:
 		return ErrAlreadyRestored
 	default:
-		return refuse(ReasonChangedSince, "book %s field %s has a user override value since the operation", c.BookID, c.FieldName)
+		return refuse(ReasonChangedSince, "book %s field %s is locked or overridden by someone else since the operation", c.BookID, c.FieldName)
 	}
 }
 

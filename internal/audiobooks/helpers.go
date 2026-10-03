@@ -100,14 +100,7 @@ func (svc *AudiobookService) loadMetadataState(bookID string) (map[string]metada
 	if err != nil {
 		return state, err
 	}
-	for _, entry := range stored {
-		state[entry.Field] = metadataFieldState{
-			FetchedValue:   metastate.Decode(entry.FetchedValue),
-			OverrideValue:  metastate.Decode(entry.OverrideValue),
-			OverrideLocked: entry.OverrideLocked,
-			UpdatedAt:      entry.UpdatedAt,
-		}
-	}
+	state = metafetch.StateFromRows(stored)
 	if len(state) > 0 {
 		return state, nil
 	}
@@ -128,51 +121,7 @@ func (svc *AudiobookService) saveMetadataState(bookID string, state map[string]m
 	if svc == nil || svc.store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	existing, err := svc.store.GetMetadataFieldStates(bookID)
-	if err != nil {
-		return err
-	}
-	existingFields := map[string]struct{}{}
-	for _, entry := range existing {
-		existingFields[entry.Field] = struct{}{}
-	}
-	now := time.Now()
-	for field, entry := range state {
-		fetched, err := metastate.Encode(entry.FetchedValue)
-		if err != nil {
-			return fmt.Errorf("failed to encode fetched metadata for %s: %w", field, err)
-		}
-		override, err := metastate.Encode(entry.OverrideValue)
-		if err != nil {
-			return fmt.Errorf("failed to encode override metadata for %s: %w", field, err)
-		}
-		if entry.UpdatedAt.IsZero() {
-			entry.UpdatedAt = now
-		}
-		dbState := database.MetadataFieldState{
-			BookID:         bookID,
-			Field:          field,
-			FetchedValue:   fetched,
-			OverrideValue:  override,
-			OverrideLocked: entry.OverrideLocked,
-			UpdatedAt:      entry.UpdatedAt,
-		}
-		if err := svc.store.UpsertMetadataFieldState(&dbState); err != nil {
-			return fmt.Errorf("failed to persist metadata state for %s: %w", field, err)
-		}
-		delete(existingFields, field)
-	}
-	for field := range existingFields {
-		if err := svc.store.DeleteMetadataFieldState(bookID, field); err != nil {
-			return fmt.Errorf("failed to clean up metadata state for %s: %w", field, err)
-		}
-	}
-	// The rows are now authoritative; the pre-migration blob must not be
-	// consulted again (see database.DeleteLegacyMetadataState).
-	if err := database.DeleteLegacyMetadataState(svc.store, bookID); err != nil {
-		return fmt.Errorf("failed to retire legacy metadata state: %w", err)
-	}
-	return nil
+	return metafetch.SaveStateSnapshot(svc.store, bookID, state)
 }
 
 // --- metadata state change recorder ----------------------------------------

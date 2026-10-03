@@ -55,14 +55,7 @@ func (mss *MetadataStateService) LoadMetadataState(bookID string) (map[string]me
 		return state, err
 	}
 
-	for _, entry := range stored {
-		state[entry.Field] = metadataFieldState{
-			FetchedValue:   metastate.Decode(entry.FetchedValue),
-			OverrideValue:  metastate.Decode(entry.OverrideValue),
-			OverrideLocked: entry.OverrideLocked,
-			UpdatedAt:      entry.UpdatedAt,
-		}
-	}
+	state = StateFromRows(stored)
 
 	if len(state) > 0 {
 		return state, nil
@@ -86,65 +79,12 @@ func (mss *MetadataStateService) LoadMetadataState(bookID string) (map[string]me
 	return legacy, nil
 }
 
-// SaveMetadataState persists metadata state to the database
+// SaveMetadataState persists metadata state to the database (SaveStateSnapshot).
 func (mss *MetadataStateService) SaveMetadataState(bookID string, state map[string]metadataFieldState) error {
 	if mss.db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-
-	existing, err := mss.db.GetMetadataFieldStates(bookID)
-	if err != nil {
-		return err
-	}
-
-	existingFields := make(map[string]struct{})
-	for _, entry := range existing {
-		existingFields[entry.Field] = struct{}{}
-	}
-
-	now := time.Now()
-	for field, entry := range state {
-		fetched, err := metastate.Encode(entry.FetchedValue)
-		if err != nil {
-			return fmt.Errorf("failed to encode fetched metadata for %s: %w", field, err)
-		}
-		override, err := metastate.Encode(entry.OverrideValue)
-		if err != nil {
-			return fmt.Errorf("failed to encode override metadata for %s: %w", field, err)
-		}
-
-		if entry.UpdatedAt.IsZero() {
-			entry.UpdatedAt = now
-		}
-
-		dbState := database.MetadataFieldState{
-			BookID:         bookID,
-			Field:          field,
-			FetchedValue:   fetched,
-			OverrideValue:  override,
-			OverrideLocked: entry.OverrideLocked,
-			UpdatedAt:      entry.UpdatedAt,
-		}
-
-		if err := mss.db.UpsertMetadataFieldState(&dbState); err != nil {
-			return fmt.Errorf("failed to persist metadata state for %s: %w", field, err)
-		}
-		delete(existingFields, field)
-	}
-
-	// Clean up fields that are no longer in the state
-	for field := range existingFields {
-		if err := mss.db.DeleteMetadataFieldState(bookID, field); err != nil {
-			return fmt.Errorf("failed to clean up metadata state for %s: %w", field, err)
-		}
-	}
-
-	// The rows are now authoritative; the pre-migration blob must not be
-	// consulted again (see database.DeleteLegacyMetadataState).
-	if err := database.DeleteLegacyMetadataState(mss.db, bookID); err != nil {
-		return fmt.Errorf("failed to retire legacy metadata state: %w", err)
-	}
-	return nil
+	return SaveStateSnapshot(mss.db, bookID, state)
 }
 
 // recordChange is a helper that records a metadata change for undo/audit.
@@ -206,6 +146,7 @@ func (mss *MetadataStateService) SetOverride(bookID string, field string, value 
 	oldValue := entry.OverrideValue
 	entry.OverrideValue = value
 	entry.OverrideLocked = locked
+	entry.LockSource = "" // a person set it
 	entry.UpdatedAt = time.Now()
 	state[field] = entry
 
@@ -223,6 +164,7 @@ func (mss *MetadataStateService) UnlockOverride(bookID string, field string) err
 
 	if entry, exists := state[field]; exists {
 		entry.OverrideLocked = false
+		entry.LockSource = ""
 		entry.UpdatedAt = time.Now()
 		state[field] = entry
 		return mss.SaveMetadataState(bookID, state)
@@ -240,7 +182,7 @@ func (mss *MetadataStateService) ClearOverride(bookID string, field string) erro
 
 	if entry, exists := state[field]; exists {
 		mss.recordChange(bookID, field, "clear", "manual", entry.OverrideValue, nil)
-		delete(state, field)
+		ClearField(state, field)
 		return mss.SaveMetadataState(bookID, state)
 	}
 
