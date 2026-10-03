@@ -1,12 +1,14 @@
 // file: internal/audiobooks/service_mutation_author_sync_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f9a0c71-6d24-4e83-b1a7-5c8e9f0a2d13
-// last-edited: 2026-09-05
+// last-edited: 2026-10-03
 
 package audiobooks
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -50,6 +52,7 @@ func TestUpdateAudiobook_SyncsDenormalizedAuthorOnIDChange(t *testing.T) {
 		Updates: &AudiobookUpdate{
 			Book: &database.Book{AuthorID: &newAuthor.ID},
 		},
+		RawPayload: map[string]json.RawMessage{"author_id": json.RawMessage(strconv.Itoa(newAuthor.ID))},
 	})
 	require.NoError(t, err)
 
@@ -110,6 +113,7 @@ func TestUpdateAudiobook_SyncsJoinTableOnIDChange(t *testing.T) {
 		Updates: &AudiobookUpdate{
 			Book: &database.Book{AuthorID: &newAuthor.ID},
 		},
+		RawPayload: map[string]json.RawMessage{"author_id": json.RawMessage(strconv.Itoa(newAuthor.ID))},
 	})
 	require.NoError(t, err)
 
@@ -187,6 +191,7 @@ func TestUpdateAudiobook_SyncsDenormalizedSeriesOnIDChange(t *testing.T) {
 		Updates: &AudiobookUpdate{
 			Book: &database.Book{SeriesID: &newSeries.ID},
 		},
+		RawPayload: map[string]json.RawMessage{"series_id": json.RawMessage(strconv.Itoa(newSeries.ID))},
 	})
 	require.NoError(t, err)
 
