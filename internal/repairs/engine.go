@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package repairs
 
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
@@ -85,6 +86,11 @@ type PlanDeps struct {
 // SkipGuardUnreadable), sorts the rows by id and tallies them. Read-only:
 // it takes no stand-down and runs during a library.scan.
 func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps, reporter registry.Reporter) (*PlanResult, error) {
+	// Per-fixer wall time. operation_duration_seconds{type="repairs.plan"} pools
+	// every fixer under one label; this is the series that tells them apart.
+	defer func(start time.Time) {
+		metrics.ObserveFixerDuration(f.ID(), metrics.FixerPhasePlan, time.Since(start))
+	}(time.Now())
 	if deps.Guard == nil {
 		return nil, fmt.Errorf("repairs: plan %s: no guard reader", f.ID())
 	}
@@ -425,6 +431,9 @@ const defaultApplyConcurrency = 4
 // caller persists the result before returning the error.
 func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, rowIDs []string,
 	dryRun bool, deps ApplyDeps, reporter registry.Reporter) (*ApplyResult, error) {
+	defer func(start time.Time) {
+		metrics.ObserveFixerDuration(f.ID(), metrics.FixerPhaseApply, time.Since(start))
+	}(time.Now())
 	res := &ApplyResult{FixerID: f.ID(), PlanOpID: planOpID, DryRun: dryRun, ByOutcome: map[string]int{}}
 	if deps.Guard == nil {
 		return res, fmt.Errorf("repairs: apply %s: no guard reader", f.ID())

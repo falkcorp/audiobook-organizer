@@ -1,7 +1,7 @@
 // file: internal/database/book_scan_fault_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5d1f7c2e-8a4b-4e3f-9c6d-2b7a1e0f4d93
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -128,7 +128,7 @@ func TestBookScans_FailOnMidScanReadError(t *testing.T) {
 		{"getBooksByAuthorIDFull", 1, func() error { return err1(p.getBooksByAuthorIDFull(1)) }, ""},
 		{"booksByAuthorIDForMutation", 1, func() error { return err1(p.booksByAuthorIDForMutation(1, true)) }, ""},
 		{"SearchBooks", 1, func() error { return err1(p.SearchBooks("no-such-title", 0, 0)) }, ""},
-		{"countPrimaryBooksScan", 1, func() error { return err1(p.countPrimaryBooksScan()) }, ""},
+		{"countPrimaryBooksScan", 1, func() error { _, _, err := p.countPrimaryBooksScan(); return err }, ""},
 		{"CountAllBooks", 1, func() error { return err1(p.CountAllBooks()) }, ""},
 		{"GetDistinctGenres", 1, func() error { return err1(p.GetDistinctGenres()) }, ""},
 		{"GetDistinctLanguages", 1, func() error { return err1(p.GetDistinctLanguages()) }, ""},

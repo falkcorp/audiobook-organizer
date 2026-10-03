@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package metafetch
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
 // FetchMetadataForBook fetches and applies metadata for a single audiobook,
@@ -126,6 +127,11 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 				results = cachedResults
 				slog.Debug("metadata-fetch cache HIT for ( ) — results, age", "id", logger.SanitizeLogValue(id), "name", src.Name(), "count", len(cachedResults), "value", time.Since(cached.CachedAt).Round(time.Second))
 			}
+		}
+		if len(results) > 0 {
+			metrics.IncMetadataFetch(metadata.ProviderKey(src), metrics.FetchSourceCacheHit)
+		} else {
+			metrics.IncMetadataFetch(metadata.ProviderKey(src), metrics.FetchSourceCacheMiss)
 		}
 
 		if len(results) == 0 {

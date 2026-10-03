@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.22.0
+// version: 2.23.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-25
+// last-edited: 2026-10-03
 
 package registry
 
@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
 var operationTracer = otel.Tracer("audiobook-organizer/operations")
@@ -345,6 +347,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// to group, filter, and search without parsing the message. Every op
 	// gets this even if its Run forgets to emit one.
 	runStartedAt := time.Now().UTC()
+	metrics.IncOperationStarted(qr.defID)
 	reporter.Logger().LogAttrs(runCtx, slog.LevelInfo, "operation started",
 		slog.String("phase", "start"),
 		slog.String("op_display", def.DisplayName),
@@ -375,6 +378,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		}
 		// R-1: fan out op.terminal so the UI bell stops showing this op as running.
 		r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
+		recordRunMetrics(qr.defID, finalStatus, runStartedAt)
 		// C-5: notify the dep scheduler on ALL terminal transitions (the
 		// subprocess path previously notified on none of them).
 		r.notifyDepTerminal(finalStatus, qr)
@@ -547,6 +551,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 
 	// R-1: fan out op.terminal so the UI bell stops showing this op as running.
 	r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
+	recordRunMetrics(qr.defID, finalStatus, runStartedAt)
 
 	// Notify the dependency scheduler (async; non-blocking) so waiting_deps ops
 	// for the same subject can be re-evaluated or failed as appropriate.
@@ -555,6 +560,33 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	emitOpFinishedLog(runCtx, reporter, runStartedAt, finalStatus, runErr, false, h.lastProgressAt.Load() != 0)
 	r.logger.Info("registry: run finished", "op_id", qr.opID, "status", finalStatus)
 	return false
+}
+
+// recordRunMetrics publishes one finished run attempt to the Prometheus
+// lifecycle counters and the operation_duration_seconds histogram, keyed by
+// def_id. Both the in-process and the subprocess (Isolate=true) completion
+// paths call it, right after publishOpTerminal, so every attempt that
+// executed is observed once. The counters map the terminal vocabulary as:
+// completed -> operations_completed_total; failed and timeout ->
+// operations_failed_total; canceled -> operations_canceled_total. The
+// interrupted_* statuses (quiesced, dropped, ask) are a pause, not an end,
+// and increment nothing -- the resumed attempt reports its own outcome. The
+// duration is observed for every status, so a run that was canceled after
+// three hours still shows up as three hours.
+//
+// Before 2026-10-03 the four Inc* helpers and ObserveOperationDuration were
+// defined in internal/metrics and called from nowhere: the deploy/prometheus
+// alert rules on operations_failed_total had never had a sample to fire on.
+func recordRunMetrics(defID, finalStatus string, startedAt time.Time) {
+	switch finalStatus {
+	case "completed":
+		metrics.IncOperationCompleted(defID)
+	case "failed", "timeout":
+		metrics.IncOperationFailed(defID)
+	case "canceled":
+		metrics.IncOperationCanceled(defID)
+	}
+	metrics.ObserveOperationDuration(defID, time.Since(startedAt))
 }
 
 // notifyDepTerminal notifies the dependency scheduler for every subject of a

@@ -1,7 +1,7 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
-// last-edited: 2026-09-28
+// last-edited: 2026-10-03
 
 package metafetch
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
 // DefaultPerProviderFetchCap is the fallback bound on concurrent live search
@@ -219,10 +220,12 @@ func WalkSourceChain(
 		if cached, _, cerr := database.CachedMetadataForProvider(store, bookID, slotKey, name, identity, maxAge); cerr == nil && cached != nil {
 			var cr []metadata.BookMetadata
 			if jerr := json.Unmarshal(cached.Results, &cr); jerr == nil && len(cr) > 0 {
+				metrics.IncMetadataFetch(slotKey, metrics.FetchSourceCacheHit)
 				out.Results, out.SourceName, out.ProviderKey, out.CacheHit = cr, name, slotKey, true
 				return out, nil
 			}
 		}
+		metrics.IncMetadataFetch(slotKey, metrics.FetchSourceCacheMiss)
 
 		// Live calls only: bound concurrency per provider. A ctx cancel while
 		// waiting on the semaphore aborts the book with ctx.Err().

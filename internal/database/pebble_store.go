@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.192.0
+// version: 1.193.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-03
 
@@ -28,6 +28,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/titleutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -3790,10 +3792,14 @@ func (p *PebbleStore) CountPrimaryBooks() (int, error) {
 	}
 	p.primaryCountMu.Unlock()
 
-	count, err := p.countPrimaryBooksScan()
+	count, numberLeading, err := p.countPrimaryBooksScan()
 	if err != nil {
 		return 0, err
 	}
+	// Same scan, same rows, same instant as books_total: the gauge is set
+	// here, where the one full pass that produces the primary count refreshes,
+	// so the two never describe different snapshots of the library.
+	metrics.SetNumberLeadingTitles(numberLeading)
 
 	p.primaryCountMu.Lock()
 	p.primaryCount = count
@@ -3804,10 +3810,11 @@ func (p *PebbleStore) CountPrimaryBooks() (int, error) {
 	return count, nil
 }
 
-// countPrimaryBooksScan is the uncached full scan behind CountPrimaryBooks.
-func (p *PebbleStore) countPrimaryBooksScan() (int, error) {
-	count := 0
-
+// countPrimaryBooksScan is the uncached full scan behind CountPrimaryBooks. It
+// returns the primary count and, from the same rows, how many of those
+// primaries have a number-leading title (titleutil.IsNumberLeadingTitle), so
+// the number_leading_titles gauge costs no second pass.
+func (p *PebbleStore) countPrimaryBooksScan() (count, numberLeading int, err error) {
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var book Book
 		if err := json.Unmarshal(rowValue, &book); err != nil {
@@ -3821,12 +3828,15 @@ func (p *PebbleStore) countPrimaryBooksScan() (int, error) {
 			return nil
 		}
 		count++
+		if titleutil.IsNumberLeadingTitle(book.Title) {
+			numberLeading++
+		}
 		return nil
 	}); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
-	return count, nil
+	return count, numberLeading, nil
 }
 
 // CountAllBooks returns the count of all non-deleted books regardless of
