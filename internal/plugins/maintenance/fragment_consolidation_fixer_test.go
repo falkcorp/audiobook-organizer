@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -225,7 +226,7 @@ func (f *fragFixture) apply(t *testing.T, planOpID, opID string, rowIDs []string
 	params, err := json.Marshal(repairs.ApplyParams{FixerID: fragFixerID, PlanOpID: planOpID, RowIDs: rowIDs, DryRun: &no, Resume: resume})
 	require.NoError(t, err)
 	rep := &repairsOpReporter{id: opID}
-	require.NoError(t, f.p.runRepairsApply(context.Background(), params, rep))
+	require.NoError(t, f.p.runRepairsApply(context.Background(), params, rep), "apply op %s of plan %s", opID, planOpID)
 	res, ok := rep.result.(*repairs.ApplyResult)
 	require.True(t, ok)
 	return res
@@ -3327,14 +3328,19 @@ func (f *fragFixture) copiesFixtureState(t *testing.T) map[string]string {
 // (database.NewPebbleStoreInMemory: every Pebble write passes pebble.Sync,
 // and on a real disk the ~130 events of each cut point cost seconds of
 // fsync). The fixer's reads and writes are the same code either way.
-func newCutFixture(t *testing.T, org string, vg bool) (*fragFixture, repairs.Row) {
+//
+// The returned close frees the store at once (a cut loop opens one per cut
+// point, ~120 per shape; left to the subtest's cleanup they all stay open).
+func newCutFixture(t *testing.T, org string, vg bool) (*fragFixture, repairs.Row, func()) {
 	t.Helper()
 	const folder = "lib/Clarke/02_light_of_other_days"
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	s, err := database.NewPebbleStoreInMemory(t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	require.NoError(t, err, "open the in-memory store")
+	var once sync.Once
+	closeStore := func() { once.Do(func() { _ = s.Close() }) }
+	t.Cleanup(closeStore)
 	s.WaitForWarmup()
 	f := &fragFixture{s: s, root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
 	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
@@ -3351,7 +3357,7 @@ func newCutFixture(t *testing.T, org string, vg bool) (*fragFixture, repairs.Row
 		}
 	}
 	r, _ := f.p7Plan(t, folder)
-	return f, r
+	return f, r, closeStore
 }
 
 // TestFragmentFixer_NumberedCopiesCutAtEveryStep cuts a numbered set with
@@ -3385,34 +3391,39 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 				continue
 			}
 			t.Run(fmt.Sprintf("organized=%s vg=%t", org, vg), func(t *testing.T) {
-				ref, rr := newCutFixture(t, org, vg)
+				ref, rr, closeRef := newCutFixture(t, org, vg)
 				out := ref.apply(t, "op-plan", "op-apply", []string{rr.RowID}, nil)
 				require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
 				want := ref.copiesFixtureState(t)
+				closeRef()
 				cuts, through := 0, 0
 				for at := 1; ; at++ {
-					f, r := newCutFixture(t, org, vg)
+					f, r, closeCut := newCutFixture(t, org, vg)
 					cs := &cutStore{PebbleStore: f.s, at: at}
 					f.applyOp("op-cut", fragFixerID)
 					w := repairs.NewWriter(cs, cs, fragFixerID, "bulk_update", "repairs-").WithJournal(cs, cs, "op-cut")
 					err := newFragmentFixer(f.p).Apply(context.Background(), w, r)
 					if !cs.hit {
 						require.NoError(t, err, "event %d never reached", at)
+						closeCut()
 						break
 					}
 					if err == nil {
-						// The best-effort hand-off note: the run went on.
+						// A best-effort write (the hand-off note, a history
+						// row): the run went on.
 						through++
 						require.Equal(t, want, f.copiesFixtureState(t), "cut at event %d (not stopping): end state", at)
+						closeCut()
 						continue
 					}
 					cuts++
 					got, rerr := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
-					require.NoError(t, rerr)
+					require.NoError(t, rerr, "cut at event %d: re-plan", at)
 					require.Equal(t, r.Fingerprint, got.Fingerprint, "cut at event %d: re-plan reason %q", at, got.Reason)
 					res := f.apply(t, "op-plan", "op-resume", []string{r.RowID}, nil)
 					require.Equal(t, 1, res.Applied, "cut at event %d: outcomes %v %+v", at, res.ByOutcome, res.Rows)
 					require.Equal(t, want, f.copiesFixtureState(t), "cut at event %d: end state", at)
+					closeCut()
 				}
 				t.Logf("organized=%s vg=%t: %d cut points resumed to the same end state; %d best-effort events ran through", org, vg, cuts, through)
 				require.Greater(t, cuts, 40)
