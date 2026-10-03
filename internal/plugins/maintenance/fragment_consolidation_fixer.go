@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -183,6 +183,11 @@ const (
 	fragSkipTrackOrder      = "skipped_track_order"
 	fragSkipNoSurvivor      = "skipped_no_survivor"
 	fragSkipStranded        = "skipped_stranded"
+	// fragSkipCoOwner: a file the row would fold is also a row of another
+	// LIVE book that is not part of the row and is no path twin (a real
+	// title, or facts that contradict the fragment's). Which book keeps the
+	// file is the owner's decision; the row lists both.
+	fragSkipCoOwner = "skipped_co_owner"
 )
 
 // Evidence kinds of a fragment-to-parent match, strongest first.
@@ -863,6 +868,7 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 		return nil, err
 	}
 	rows := f.buildRows(lib, ix, live)
+	holdCoOwned(lib, rows)
 	rows = append(rows, strandedRows(lib, rows)...)
 	if fp.AssumeRetired != nil {
 		whatIf(rows)
@@ -1681,10 +1687,89 @@ func groupDir(c *fragCandidate) (dir string, disc int) {
 	return d, 0
 }
 
-// noParentRows groups unmatched fragments by import folder and chapter key.
-func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) []repairs.Row {
-	groups := map[string][]*fragCandidate{}
+// fragNumberedKey is the group key of a numbered set: a folder's leading-
+// numbered files taken together whatever follows the number. It cannot
+// collide with a chapter key, which is lower-case text.
+const fragNumberedKey = "\x01numbered"
+
+// numberedSets finds, per import folder, the numbered chapter sets: at least
+// fragMinGroup unmatched fragments whose stems open with a chapter number,
+// every number different, and at least two different chapter keys among
+// them ("070 - Skating", "047 - Core"). A serial's chapters each carry their
+// own title, so ChapterGroupKey keys them apart and no key group ever forms;
+// 4,966 such books were left on prod on 2026-10-03 (SenescentSoul 262,
+// Anansi Boys 55). The set takes the whole folder's leading-numbered files,
+// including any that would have formed a key group among themselves (three
+// "Interlude" chapters of the same serial belong to it, not to a book of
+// their own). Two numbered files claiming one position mean the folder
+// holds more than one work ("01 - Book A", "01 - Book B"): no set is formed
+// and the key groups decide, as before. The duration gate, the track-order
+// check and the survivor rule of noParentRow apply unchanged.
+func numberedSets(cands []*fragCandidate) map[string][]*fragCandidate {
+	type entry struct {
+		c   *fragCandidate
+		key string
+		pos metadata.ChapterPos
+	}
+	byDir := map[string][]entry{}
 	for _, c := range cands {
+		key, kind := metadata.ChapterGroupKey(c.origStem())
+		if kind != metadata.ChapterKeyLeading {
+			continue
+		}
+		pos, ok := chapterPos(c)
+		if !ok {
+			continue
+		}
+		dir, _ := groupDir(c)
+		byDir[dir] = append(byDir[dir], entry{c, key, pos})
+	}
+	sets := map[string][]*fragCandidate{}
+	for dir, es := range byDir {
+		if len(es) < fragMinGroup {
+			continue
+		}
+		keys := map[string]bool{}
+		for _, e := range es {
+			keys[e.key] = true
+		}
+		if len(keys) < 2 {
+			continue // one key: the key group already covers it
+		}
+		sort.SliceStable(es, func(i, j int) bool { return es[i].pos.Compare(es[j].pos) < 0 })
+		collide := false
+		for i := 1; i < len(es); i++ {
+			if es[i].pos.Compare(es[i-1].pos) == 0 {
+				collide = true
+				break
+			}
+		}
+		if collide {
+			continue
+		}
+		for _, e := range es {
+			sets[dir] = append(sets[dir], e.c)
+		}
+	}
+	return sets
+}
+
+// noParentRows groups unmatched fragments by import folder and chapter key,
+// and a folder's differently-titled numbered files as one numbered set.
+func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) []repairs.Row {
+	sets := numberedSets(cands)
+	inSet := map[*fragCandidate]bool{}
+	groups := map[string][]*fragCandidate{}
+	for dir, cs := range sets {
+		for _, c := range cs {
+			inSet[c] = true
+		}
+		groups[dir+"\x00"+fragNumberedKey] = cs
+	}
+	for _, c := range cands {
+		if inSet[c] {
+			continue
+		}
 		key, kind := metadata.ChapterGroupKey(c.origStem())
 		if kind == metadata.ChapterKeyNone {
 			// A chapter-only TITLE with an unkeyed file name: no group rule.
@@ -1866,8 +1951,14 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	if raw, err := json.Marshal(state); err == nil {
 		r.State = raw
 	}
+	shared := fmt.Sprintf("%d fragment books imported from %s share the chapter key %q", len(cs), dir, key)
+	if key == fragNumberedKey {
+		first, last := plan.Members[0].Frag, plan.Members[len(plan.Members)-1].Frag
+		shared = fmt.Sprintf("%d fragment books imported from %s are numbered chapters with titles of their own (%q … %q), no two at the same position",
+			len(cs), dir, first.origStem(), last.origStem())
+	}
 	r.Evidence = []string{
-		fmt.Sprintf("%d fragment books imported from %s share the chapter key %q", len(cs), dir, key),
+		shared,
 		fmt.Sprintf("durations: %d known, %d unknown, %d at or over %d min", len(cs)-unknown, unknown, long, limit/60),
 		"no existing book owns any of these files",
 	}
@@ -2141,17 +2232,7 @@ func (f *fragmentFixer) checkOwners(store OpsStore, look database.BookFilePathLo
 	if !fresh.Applicable() {
 		return fresh, nil
 	}
-	var paths []string
-	switch d := fresh.Detail.(type) {
-	case []fragPair:
-		for _, p := range d {
-			paths = append(paths, p.Frag.File.Path)
-		}
-	case *fragGroupPlan:
-		for _, m := range d.Members {
-			paths = append(paths, m.Frag.File.Path)
-		}
-	}
+	paths := rowPaths(fresh)
 	allowed := map[string]bool{}
 	for _, id := range fresh.BookIDs {
 		allowed[id] = true
@@ -2180,6 +2261,86 @@ func (f *fragmentFixer) checkOwners(store OpsStore, look database.BookFilePathLo
 		}
 	}
 	return fresh, nil
+}
+
+// rowPaths lists the fragment files a row folds: the paths checkOwners
+// guards at apply and holdCoOwned reads at plan.
+func rowPaths(r repairs.Row) []string {
+	var paths []string
+	switch d := r.Detail.(type) {
+	case []fragPair:
+		for _, p := range d {
+			paths = append(paths, p.Frag.File.Path)
+		}
+	case *fragGroupPlan:
+		for _, m := range d.Members {
+			paths = append(paths, m.Frag.File.Path)
+		}
+	}
+	return paths
+}
+
+// holdCoOwned turns an applicable row into a held one when a file it folds
+// is also a row of a live book outside the row. checkOwners refuses exactly
+// these at apply ("also owned by book X"), where the reason was visible only
+// in the apply op's result; five rows (about 400 fragment books: Eldest 313,
+// Foundation 74) were planned applicable and refused on every apply of
+// 2026-10-03. A co-owner that is a path twin is already in the row; what is
+// left carries a real title ("Prelude to Foundation") or facts that
+// contradict the fragment's, so it may be a second edition, and which book
+// keeps the file is the owner's decision (owner, 2026-10-03). The co-owner is
+// listed as a member with its role, never in BookIDs: the row writes nothing
+// to it. Plan only: it needs the whole library, and a held row is never
+// re-planned.
+func holdCoOwned(lib *fragLibrary, rows []repairs.Row) {
+	owners := map[string][]string{} // path -> live books holding a row at it
+	for id, files := range lib.files {
+		if b, ok := lib.books[id]; !ok || b.SoftDeleted {
+			continue
+		}
+		for _, r := range files {
+			owners[r.Path] = append(owners[r.Path], id)
+		}
+	}
+	for i := range rows {
+		r := &rows[i]
+		if !r.Applicable() {
+			continue
+		}
+		in := map[string]bool{}
+		for _, id := range r.BookIDs {
+			in[id] = true
+		}
+		at := map[string][]string{} // co-owner -> the row's paths it also holds
+		for _, path := range rowPaths(*r) {
+			for _, id := range owners[path] {
+				if !in[id] && !contains(at[id], path) {
+					at[id] = append(at[id], path)
+				}
+			}
+		}
+		if len(at) == 0 {
+			continue
+		}
+		var ids []string
+		for id := range at {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		var names []string
+		for _, id := range ids {
+			b := lib.books[id]
+			r.Members = append(r.Members, member(lib, b, "co-owner"))
+			sort.Strings(at[id])
+			for _, path := range at[id] {
+				r.Evidence = append(r.Evidence, fmt.Sprintf("%s is also a file of book %s (%q)", path, id, b.Title))
+			}
+			names = append(names, fmt.Sprintf("%s (%q)", id, b.Title))
+		}
+		r.Class, r.Risk, r.Skipped = fragClassHeld, repairs.RiskReview, fragSkipCoOwner
+		r.SkipReason = fmt.Sprintf("%d file(s) of this row are also owned by live book(s) outside it: %s; decide which book keeps each file (merge or retire the other by hand), then plan again",
+			len(at), strings.Join(names, ", "))
+	}
 }
 
 // changedRow is the planned row with a fingerprint that cannot match, so the
