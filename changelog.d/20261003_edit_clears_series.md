@@ -11,3 +11,8 @@
 - Saving a book now locks only the fields the save changed. Re-sending an unchanged value (the editor sends every field on each save) no longer locks it against metadata fetches, and re-sending the book's current series name no longer moves the book to another series row of the same name.
 - A series number is stored as entered: 2.5 keeps its decimal, and clearing the Series Number box clears the number instead of saving 0. The edit dialog now opens with the book's current series number.
 - A refused or failed edit leaves nothing behind: change history and the author and narrator lists are written only after the book itself is saved. When the server refuses a save, the edit dialog stays open with your changes and shows the server's reason.
+- A failed save in the edit dialog no longer wipes what you typed: the dialog keeps your edits so you can fix the problem and save again. Typing in a box and then putting the original value back no longer counts as an edit.
+- Saving a book whose author is known only through its author list (shown as "A & B") no longer creates a new author named "A & B" or locks the author field.
+- Clearing the author box on a book that has no author is no longer refused; it simply changes nothing.
+- An author or series sent only as a locked override is now applied, not just locked.
+- AI filename parsing now saves the series number it finds; it was being dropped.
