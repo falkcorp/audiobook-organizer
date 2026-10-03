@@ -168,9 +168,9 @@ func TestRenamePreflight_PlansTheAppliedFieldSubset(t *testing.T) {
 	})
 	cand := MetadataCandidate{Title: "New Title", Author: "Someone", Description: "A description"}
 
-	whole, err := svc.previewMetadataCandidate("b1", cand, nil, false, true)
+	whole, err := svc.previewMetadataCandidate("b1", cand, nil, ApplyOptions{}, true)
 	require.NoError(t, err)
-	subset, err := svc.previewMetadataCandidate("b1", cand, []string{"description"}, false, true)
+	subset, err := svc.previewMetadataCandidate("b1", cand, []string{"description"}, ApplyOptions{}, true)
 	require.NoError(t, err)
 
 	fieldsOf := func(pv *ApplyPreview) []string {

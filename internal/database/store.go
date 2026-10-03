@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.105.0
+// version: 2.106.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package database
 
@@ -1174,7 +1174,13 @@ type MetadataFieldState struct {
 	FetchedValue   *string   `json:"fetched_value,omitempty"`  // JSON-encoded value
 	OverrideValue  *string   `json:"override_value,omitempty"` // JSON-encoded value
 	OverrideLocked bool      `json:"override_locked"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	// LockSource says who set OverrideLocked when it was not a person: a
+	// Repairs apply writes RepairLockSource(opID). Empty means a person's lock
+	// (or no lock). Every path where a person sets, edits, locks or unlocks a
+	// field clears it, so a lock a person touched is theirs. See
+	// metadata_field_lock_source.go.
+	LockSource string    `json:"lock_source,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // MetadataChangeRecord tracks a single change to a metadata field for undo/audit.

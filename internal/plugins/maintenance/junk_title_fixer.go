@@ -455,10 +455,12 @@ type titleStateReader interface {
 // the lock. "Undo last apply" refuses these batches (apply_op_journaled):
 // reverting the title from history alone would leave the junk title locked.
 //
-// The title is journaled before the write: if the write is then refused, the
-// row names a value the book never left, which the revert's compare-and-set
-// counts as already restored. A lock that fails after the title was written
-// is reported as a partial apply.
+// The title is journaled before the write (repairs.Writer.JournalStep). A
+// write refused as changed_since_plan (the title moved, or a lock landed)
+// voids that row: left in place, the op revert would "restore" the junk title
+// over whatever the book holds then, another operation's write included. A
+// lock that fails after the title was written is reported as a partial apply;
+// the lock's own row is voided by LockFields.
 //
 // A title that moved since the re-plan, or that a user locked since, is
 // refused as changed_since_plan: returning database.ErrSkipBookWrite here
@@ -472,25 +474,27 @@ func writeTitleOnly(w *repairs.Writer, states titleStateReader, bookID, oldTitle
 	if states == nil {
 		return fmt.Errorf("book %s: no field-state reader to check the title lock with", bookID)
 	}
-	if err := w.RecordChange(bookID, repairs.UndoEntry{ChangeType: "metadata_update", Field: "title",
-		Old: oldTitle, New: newTitle}); err != nil {
-		return fmt.Errorf("book %s: the title change was not journaled: %w", bookID, err)
-	}
-	changed, err := w.Modify(bookID, func(cur *database.Book) error {
-		if cur.Title != oldTitle {
-			return fmt.Errorf("%w: title is now %q", repairs.ErrChangedSincePlan, cur.Title)
-		}
-		sts, err := states.GetMetadataFieldStates(bookID)
-		if err != nil {
-			return fmt.Errorf("read field states of %s: %w", bookID, err)
-		}
-		for i := range sts {
-			if sts[i].Field == "title" && sts[i].HasUserOverride() {
-				return fmt.Errorf("%w: the title is now user-locked", repairs.ErrChangedSincePlan)
+	var changed []string
+	err := w.JournalStep(bookID, repairs.UndoEntry{ChangeType: "metadata_update", Field: "title",
+		Old: oldTitle, New: newTitle}, func() error {
+		var merr error
+		changed, merr = w.Modify(bookID, func(cur *database.Book) error {
+			if cur.Title != oldTitle {
+				return fmt.Errorf("%w: title is now %q", repairs.ErrChangedSincePlan, cur.Title)
 			}
-		}
-		cur.Title = newTitle
-		return nil
+			sts, err := states.GetMetadataFieldStates(bookID)
+			if err != nil {
+				return fmt.Errorf("read field states of %s: %w", bookID, err)
+			}
+			for i := range sts {
+				if sts[i].Field == "title" && sts[i].HasUserOverride() {
+					return fmt.Errorf("%w: the title is now user-locked", repairs.ErrChangedSincePlan)
+				}
+			}
+			cur.Title = newTitle
+			return nil
+		})
+		return merr
 	})
 	if err != nil {
 		return err

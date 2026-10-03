@@ -142,6 +142,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		if override.Clear {
 			entry.OverrideValue = nil
 			entry.OverrideLocked = false
+			entry.LockSource = "" // a person touched it: no repair's lock any more
 			entry.UpdatedAt = now
 			// Record history for clearing an override.
 			if fmt.Sprintf("%v", oldOverrideValue) != fmt.Sprintf("%v", nil) {
@@ -154,6 +155,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 				val := decodeRawValue(override.Value)
 				entry.OverrideValue = val
 				entry.OverrideLocked = override.Locked == nil || *override.Locked
+				entry.LockSource = ""
 				entry.UpdatedAt = now
 				ApplyOverrideToPayload(payload, field, val)
 				// Record history for setting an override.
@@ -164,6 +166,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 				}
 			} else if override.Locked != nil {
 				entry.OverrideLocked = *override.Locked
+				entry.LockSource = "" // the person's lock (or unlock) now
 				entry.UpdatedAt = now
 			}
 			if len(override.FetchedValue) > 0 {
@@ -344,6 +347,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 
 			entry.OverrideValue = value
 			entry.OverrideLocked = true
+			entry.LockSource = ""
 			entry.UpdatedAt = now
 			state[field] = entry
 
@@ -362,6 +366,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	for _, field := range req.Updates.UnlockOverrides {
 		entry := state[field]
 		entry.OverrideLocked = false
+		entry.LockSource = ""
 		entry.UpdatedAt = now
 		state[field] = entry
 	}

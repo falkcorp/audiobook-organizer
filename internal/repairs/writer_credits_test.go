@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_credits_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1b72196d-b654-4270-bd15-c54923102210
-// last-edited: 2026-09-29
+// last-edited: 2026-10-03
 
 package repairs
 
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -66,6 +67,22 @@ func (f *creditFake) GetOperationChanges(opID string) ([]*database.OperationChan
 		}
 	}
 	return out, nil
+}
+
+func (f *creditFake) MarkOperationChangesReverted(opID string, ids []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	now := time.Now()
+	for i := range f.journal {
+		if f.journal[i].OperationID == opID && want[f.journal[i].ID] {
+			f.journal[i].RevertedAt = &now
+		}
+	}
+	return nil
 }
 
 // credWriter wires a Writer with the op journal and the credit store.
