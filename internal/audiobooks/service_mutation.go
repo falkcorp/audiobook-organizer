@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -111,6 +111,23 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	if req.Updates.ISBN13 != nil {
 		currentBook.ISBN13 = req.Updates.ISBN13
 	}
+	// Description, genre, ASIN and series_position were parsed from the
+	// top-level payload keys but never copied onto currentBook, so a PUT of
+	// any of them -- a set or a clear -- changed nothing, and the extractor
+	// below then locked the field at its OLD value. They only worked through
+	// "overrides", which ApplyOverrideToPayload writes onto currentBook.
+	if req.Updates.Description != nil {
+		currentBook.Description = req.Updates.Description
+	}
+	if req.Updates.Genre != nil {
+		currentBook.Genre = req.Updates.Genre
+	}
+	if req.Updates.ASIN != nil {
+		currentBook.ASIN = req.Updates.ASIN
+	}
+	if req.Updates.SeriesSequence != nil {
+		currentBook.SeriesSequence = req.Updates.SeriesSequence
+	}
 	if req.Updates.AuthorID != nil {
 		currentBook.AuthorID = req.Updates.AuthorID
 	}
@@ -177,64 +194,70 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	}
 
 	// Resolve author by name or ID — auto-split on " & " for multiple authors
+	//
+	// An author_name that trims to "" is ignored, as if it were not sent: a
+	// book's author is not cleared from this endpoint. The web editor sends
+	// author_name on EVERY save ("" for a book with no author), so "" cannot
+	// be read as a deliberate clear, and it used to half-clear: author_id went
+	// nil while the book_authors join (which the organizer trusts) and the
+	// embedded Author (which reads prefer) kept the old author.
 	var resolvedAuthorName string
+	authorName := ""
 	if req.Updates.AuthorName != nil {
-		name := strings.TrimSpace(*req.Updates.AuthorName)
-		if name != "" {
-			// Split on " & " to support multiple authors
-			authorNames := splitMultipleNames(name)
-			var bookAuthors []database.BookAuthor
-			var primaryAuthorID int
-			for i, aName := range authorNames {
-				aName = strings.TrimSpace(aName)
-				if aName == "" {
-					continue
-				}
-				// Creation gate. This is a direct user edit, so a rejected name
-				// is reported rather than silently dropped -- see the error
-				// returned below when nothing usable survives.
-				normalizedName, nameOK := dedup.CleanAuthorNameForCreation(aName)
-				if !nameOK {
-					slog.Warn("author name rejected as unusable", "book_id", id, "name", aName)
-					continue
-				}
-				author, err := svc.store.GetAuthorByName(normalizedName)
+		authorName = strings.TrimSpace(*req.Updates.AuthorName)
+	}
+	if authorName != "" {
+		// Split on " & " to support multiple authors
+		authorNames := splitMultipleNames(authorName)
+		var bookAuthors []database.BookAuthor
+		var primaryAuthorID int
+		for i, aName := range authorNames {
+			aName = strings.TrimSpace(aName)
+			if aName == "" {
+				continue
+			}
+			// Creation gate. This is a direct user edit, so a rejected name
+			// is reported rather than silently dropped -- see the error
+			// returned below when nothing usable survives.
+			normalizedName, nameOK := dedup.CleanAuthorNameForCreation(aName)
+			if !nameOK {
+				slog.Warn("author name rejected as unusable", "book_id", id, "name", aName)
+				continue
+			}
+			author, err := svc.store.GetAuthorByName(normalizedName)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve author")
+			}
+			if author == nil {
+				author, err = svc.store.CreateAuthor(normalizedName)
 				if err != nil {
-					return nil, fmt.Errorf("failed to resolve author")
-				}
-				if author == nil {
-					author, err = svc.store.CreateAuthor(normalizedName)
-					if err != nil {
-						return nil, fmt.Errorf("failed to create author")
-					}
-				}
-				role := "author"
-				if i > 0 {
-					role = "co-author"
-				}
-				bookAuthors = append(bookAuthors, database.BookAuthor{
-					BookID: id, AuthorID: author.ID, Role: role, Position: i,
-				})
-				if i == 0 {
-					primaryAuthorID = author.ID
+					return nil, fmt.Errorf("failed to create author")
 				}
 			}
-			// Every part was rejected by the gate. Say so instead of writing
-			// AuthorID = 0: that is not "no author", it is a reference to an
-			// id no row has, and the caller asked for a specific change that
-			// did not happen.
-			if len(bookAuthors) == 0 {
-				return nil, fmt.Errorf("no usable author name in %q", name)
+			role := "author"
+			if i > 0 {
+				role = "co-author"
 			}
-			// Set primary author on the book for backward compat
-			payload.AuthorID = &primaryAuthorID
-			resolvedAuthorName = name // Keep the combined name for display
-			// Save multiple authors to join table
-			if err := svc.store.SetBookAuthors(id, bookAuthors); err != nil {
-				slog.Warn("failed to set book authors", "err", err)
+			bookAuthors = append(bookAuthors, database.BookAuthor{
+				BookID: id, AuthorID: author.ID, Role: role, Position: i,
+			})
+			if i == 0 {
+				primaryAuthorID = author.ID
 			}
-		} else {
-			payload.AuthorID = nil
+		}
+		// Every part was rejected by the gate. Say so instead of writing
+		// AuthorID = 0: that is not "no author", it is a reference to an
+		// id no row has, and the caller asked for a specific change that
+		// did not happen.
+		if len(bookAuthors) == 0 {
+			return nil, fmt.Errorf("no usable author name in %q", authorName)
+		}
+		// Set primary author on the book for backward compat
+		payload.AuthorID = &primaryAuthorID
+		resolvedAuthorName = authorName // Keep the combined name for display
+		// Save multiple authors to join table
+		if err := svc.store.SetBookAuthors(id, bookAuthors); err != nil {
+			slog.Warn("failed to set book authors", "err", err)
 		}
 	} else if payload.AuthorID != nil {
 		if author, err := svc.store.GetAuthorByID(*payload.AuthorID); err == nil && author != nil {
@@ -295,30 +318,55 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 					slog.Warn("failed to set book narrators", "err", err)
 				}
 			}
+		} else if before.Narrator != nil && strings.TrimSpace(*before.Narrator) != "" {
+			// A clear of a narrator the book had. The column goes to "" above,
+			// but the store's junction sync only runs for a non-empty credit,
+			// so book_narrators -- which ABS prefers over the column -- kept
+			// the old cast. Guarded on the old column so the editor's "" on
+			// every save of a narrator-less book never touches the junction.
+			if err := svc.store.SetBookNarrators(id, nil); err != nil {
+				slog.Warn("failed to clear book narrators", "book_id", id, "err", err)
+			}
 		}
 	}
 
 	// Resolve series by name or ID
+	//
+	// series_name "" (or series_id null) removes the series: the link, the
+	// embedded Series display object, and the position, which means nothing
+	// without a series. Until 2026-10-03 only SeriesID was nilled; the stale
+	// embedded Series survived the save (and the store's preserve-on-nil
+	// guard), and every read prefers that object, so the book still showed
+	// its series after a 200.
 	var resolvedSeriesName string
+	seriesName := ""
 	if req.Updates.SeriesName != nil {
-		name := strings.TrimSpace(*req.Updates.SeriesName)
-		if name != "" {
-			series, err := svc.store.GetSeriesByName(name, payload.AuthorID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to resolve series")
-			}
-			if series == nil {
-				series, err = svc.store.CreateSeries(name, payload.AuthorID)
-				if err != nil {
-					return nil, fmt.Errorf("failed to create series")
-				}
-			}
-			payload.SeriesID = &series.ID
-			resolvedSeriesName = series.Name
-		} else {
-			payload.SeriesID = nil
+		seriesName = strings.TrimSpace(*req.Updates.SeriesName)
+	}
+	clearSeries := seriesName == "" && (req.Updates.ClearSeries || req.Updates.SeriesName != nil)
+	// hadSeries: the clear removes something. Books already hit by the bug
+	// above have a nil SeriesID but a stale Series, so either one counts.
+	hadSeries := before.SeriesID != nil || before.Series != nil
+	switch {
+	case seriesName != "":
+		series, err := svc.store.GetSeriesByName(seriesName, payload.AuthorID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve series")
 		}
-	} else if payload.SeriesID != nil {
+		if series == nil {
+			series, err = svc.store.CreateSeries(seriesName, payload.AuthorID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create series")
+			}
+		}
+		payload.SeriesID = &series.ID
+		resolvedSeriesName = series.Name
+	case clearSeries:
+		payload.SeriesID = nil
+		payload.Book.Series = nil
+		payload.SeriesSequence = nil
+		payload.SeriesPositionRaw = nil
+	case payload.SeriesID != nil:
 		if series, err := svc.store.GetSeriesByID(*payload.SeriesID); err == nil && series != nil {
 			resolvedSeriesName = series.Name
 		}
@@ -326,7 +374,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 
 	// Process direct field updates (non-override). Every key written here is a
 	// lock key: the extractors are the WRITER side of database.UserLockableFields.
-	fieldExtractors := userEditFieldExtractors(payload, resolvedAuthorName, resolvedSeriesName)
+	// An author_name of "" is ignored (see above), so it locks nothing either,
+	// even though the author_id fallback resolved the current author's name.
+	lockAuthorName := resolvedAuthorName
+	if authorName == "" {
+		lockAuthorName = ""
+	}
+	fieldExtractors := userEditFieldExtractors(payload, lockAuthorName, resolvedSeriesName)
 
 	for field, extractor := range fieldExtractors {
 		if _, ok := req.RawPayload[field]; !ok {
@@ -356,6 +410,32 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		} else {
 			slog.Debug("UpdateAudiobook extractor for field returned false/nil", "field", field)
 		}
+	}
+
+	// Lock a series clear the way a set is locked, so a rescan or a queued
+	// metadata apply cannot put the series back. The extractor above skips
+	// series_name when it resolves to nothing, so the clear is handled here.
+	// Only when the book had a series: the web editor sends series_name ""
+	// on every save, and locking every series-less book it saves would block
+	// a later fetch from ever adding one. No override history row here: the
+	// column diff after the save records the one "series" row (old name ->
+	// ""), and the series_sequence row with it.
+	if clearSeries && hadSeries {
+		if _, hasOverride := req.Updates.Overrides[database.FieldKeySeriesName]; !hasOverride {
+			entry := state[database.FieldKeySeriesName]
+			entry.OverrideValue = ""
+			entry.OverrideLocked = true
+			entry.UpdatedAt = now
+			state[database.FieldKeySeriesName] = entry
+		}
+		// The position goes with the series, whatever the request said about
+		// it: a locked stale position would be re-projected onto a book that
+		// has no series.
+		entry := state[database.FieldKeySeriesPosition]
+		entry.OverrideValue = nil
+		entry.OverrideLocked = true
+		entry.UpdatedAt = now
+		state[database.FieldKeySeriesPosition] = entry
 	}
 
 	// Process unlock overrides

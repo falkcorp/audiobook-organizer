@@ -1,7 +1,7 @@
 // file: internal/audiobooks/update_service.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6g7-h8i9-j0k1-l2m3n4o5p6q7
-// last-edited: 2026-08-20
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -75,6 +75,11 @@ func (aus *AudiobookUpdateService) UpdateAudiobook(ctx context.Context, id strin
 	}
 	if seriesID, ok := util.ExtractIntField(payload, "series_id"); ok {
 		updates.SeriesID = &seriesID
+	} else if v, sent := payload["series_id"]; sent && v == nil {
+		// An explicit `"series_id": null` removes the series link, like
+		// `"series_name": ""`. ExtractIntField reports nil as "absent", so
+		// without this the request was silently ignored.
+		updates.ClearSeries = true
 	}
 	if authorName, ok := util.ExtractStringField(payload, "author_name"); ok {
 		updates.AuthorName = &authorName

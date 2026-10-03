@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.195.0
+// version: 1.196.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-03
 
@@ -2786,7 +2786,12 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 	if book.Author == nil {
 		book.Author = oldBook.Author
 	}
-	if book.Series == nil {
+	//
+	// Series is preserved only while the write still links a series: a nil
+	// SeriesID is a removed series (a projection strips the object, never the
+	// ID), and restoring the old object there kept the series on display
+	// after a user cleared it -- reads prefer the embedded object.
+	if book.Series == nil && book.SeriesID != nil {
 		book.Series = oldBook.Series
 	}
 	if clearSig {

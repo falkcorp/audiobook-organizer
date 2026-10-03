@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -65,6 +65,11 @@ type AudiobookUpdate struct {
 	SeriesName      *string                    `json:"series_name,omitempty"`
 	Overrides       map[string]OverridePayload `json:"overrides,omitempty"`
 	UnlockOverrides []string                   `json:"unlock_overrides,omitempty"`
+
+	// ClearSeries asks for the book's series link to be removed, the same
+	// as a SeriesName that trims to "". The JSON form is `"series_id": null`,
+	// which SeriesID (an *int) cannot carry: nil there means "not sent".
+	ClearSeries bool `json:"-"`
 }
 
 // OverridePayload represents metadata override information
