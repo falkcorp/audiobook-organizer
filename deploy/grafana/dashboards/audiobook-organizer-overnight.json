@@ -1,40 +1,4 @@
 {
-  "__inputs": [
-    {
-      "name": "DS_PROMETHEUS",
-      "label": "Prometheus",
-      "description": "Prometheus scraping the audiobook-organizer job",
-      "type": "datasource",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus"
-    }
-  ],
-  "__requires": [
-    {
-      "type": "grafana",
-      "id": "grafana",
-      "name": "Grafana",
-      "version": "10.0.0"
-    },
-    {
-      "type": "datasource",
-      "id": "prometheus",
-      "name": "Prometheus",
-      "version": "1.0.0"
-    },
-    {
-      "type": "panel",
-      "id": "timeseries",
-      "name": "Time series",
-      "version": ""
-    },
-    {
-      "type": "panel",
-      "id": "stat",
-      "name": "Stat",
-      "version": ""
-    }
-  ],
   "annotations": {
     "list": [
       {
@@ -78,7 +42,7 @@
       "description": "Handler time of GET /audiobooks/metadata/cache/review. Target: <3s on view=index. The red line is the handler's own slow-request WARN threshold (5s).",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -90,7 +54,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.50, sum by (le, view) (rate(audiobook_organizer_review_index_request_seconds_bucket[$__rate_interval])))",
           "legendFormat": "p50 {{view}}",
@@ -100,7 +64,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le, view) (rate(audiobook_organizer_review_index_request_seconds_bucket[$__rate_interval])))",
           "legendFormat": "p95 {{view}}",
@@ -171,7 +135,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 16,
@@ -183,7 +147,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(audiobook_organizer_review_index_request_seconds_bucket{view=\"index\"}[1h])))",
           "legendFormat": "p95",
@@ -240,7 +204,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 20,
@@ -252,7 +216,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum(increase(audiobook_organizer_review_index_request_seconds_count[1h]))",
           "legendFormat": "req",
@@ -301,7 +265,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 16,
@@ -313,7 +277,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum(increase(audiobook_organizer_review_index_request_seconds_count[1h])) - sum(increase(audiobook_organizer_review_index_request_seconds_bucket{le=\"5\"}[1h]))",
           "legendFormat": "slow",
@@ -379,7 +343,7 @@
       "description": "PRIMARY books whose title starts with a digit, minus titleutil.LegitNumberTitles. Computed in the same scan as books_total. Overnight goal 2026-10-02: under 500 by morning.",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -391,7 +355,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "audiobook_organizer_number_leading_titles",
           "legendFormat": "number-leading titles",
@@ -458,7 +422,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 16,
@@ -470,7 +434,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "audiobook_organizer_number_leading_titles",
           "legendFormat": "now",
@@ -527,7 +491,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 16,
@@ -539,7 +503,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "delta(audiobook_organizer_number_leading_titles[$__range])",
           "legendFormat": "delta",
@@ -605,7 +569,7 @@
       "description": "Counter is instrumented on this branch; the parser call sites are wired by the fixer branch, so this panel is empty until that deploys.",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -617,7 +581,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum by (shape, outcome) (increase(audiobook_organizer_filename_parse_total[5m]))",
           "legendFormat": "{{shape}} / {{outcome}}",
@@ -668,7 +632,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 16,
@@ -680,7 +644,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum by (outcome) (rate(audiobook_organizer_filename_parse_total[$__rate_interval])) / ignoring(outcome) group_left sum(rate(audiobook_organizer_filename_parse_total[$__rate_interval]))",
           "legendFormat": "{{outcome}}",
@@ -744,7 +708,7 @@
       "description": "cache_hit/cache_miss are counted at the fetch-cache check; network/error at the live provider call. A miss that goes live counts once as cache_miss and once as network or error.",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -756,7 +720,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum by (provider, source) (rate(audiobook_organizer_metadata_fetch_total[$__rate_interval]))",
           "legendFormat": "{{provider}} / {{source}}",
@@ -807,7 +771,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 16,
@@ -819,7 +783,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum by (provider) (rate(audiobook_organizer_metadata_fetch_total{source=\"cache_hit\"}[$__rate_interval])) / sum by (provider) (rate(audiobook_organizer_metadata_fetch_total{source=~\"cache_hit|cache_miss\"}[$__rate_interval]))",
           "legendFormat": "{{provider}}",
@@ -870,7 +834,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -882,7 +846,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum by (provider) (rate(audiobook_organizer_metadata_fetch_total{source=\"error\"}[$__rate_interval])) / sum by (provider) (rate(audiobook_organizer_metadata_fetch_total{source=~\"network|error\"}[$__rate_interval]))",
           "legendFormat": "{{provider}}",
@@ -949,7 +913,7 @@
       "description": "Pre-existing per-cache counters, no provider label; cross-check for the panel above.",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -961,7 +925,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum(rate(audiobook_organizer_cache_hits_total{cache=\"metadata_fetch\"}[$__rate_interval]))",
           "legendFormat": "hits",
@@ -971,7 +935,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum by (reason) (rate(audiobook_organizer_cache_misses_total{cache=\"metadata_fetch\"}[$__rate_interval]))",
           "legendFormat": "miss {{reason}}",
@@ -1035,7 +999,7 @@
       "description": "operation_duration_seconds is observed once per finished run attempt (wired 2026-10-03; it existed but was never called before).",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -1047,7 +1011,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le, type) (rate(audiobook_organizer_operation_duration_seconds_bucket{type=~\"repairs.*|maintenance.*\"}[1h])))",
           "legendFormat": "{{type}}",
@@ -1098,7 +1062,7 @@
       "description": "Per-fixer wall time; repairs.plan / repairs.apply pool every fixer under one op type, so this is the series that tells them apart.",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -1110,7 +1074,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le, fixer, phase) (rate(audiobook_organizer_fixer_duration_seconds_bucket[1h])))",
           "legendFormat": "{{fixer}} / {{phase}}",
@@ -1161,7 +1125,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -1173,7 +1137,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum by (type) (increase(audiobook_organizer_operations_completed_total{type=~\"repairs.*|maintenance.*\"}[1h]))",
           "legendFormat": "completed {{type}}",
@@ -1183,7 +1147,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum by (type) (increase(audiobook_organizer_operations_failed_total{type=~\"repairs.*|maintenance.*\"}[1h]))",
           "legendFormat": "failed {{type}}",
@@ -1193,7 +1157,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "sum by (type) (increase(audiobook_organizer_operations_canceled_total{type=~\"repairs.*|maintenance.*\"}[1h]))",
           "legendFormat": "canceled {{type}}",
@@ -1244,7 +1208,7 @@
       "description": "Flat line on a running op = stalled (OPS-5).",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 16,
@@ -1256,7 +1220,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "audiobook_organizer_op_items_processed",
           "legendFormat": "{{op_type}} {{op_id}}",
@@ -1320,7 +1284,7 @@
       "description": "Primary books (one per version group) against the Bleve document count; divergence = stale index.",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -1332,7 +1296,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "audiobook_organizer_books_total",
           "legendFormat": "books_total",
@@ -1342,7 +1306,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "audiobook_organizer_search_index_docs_total",
           "legendFormat": "search index docs",
@@ -1393,7 +1357,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 16,
@@ -1405,7 +1369,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "audiobook_organizer_books_total",
           "legendFormat": "books",
@@ -1454,7 +1418,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 16,
@@ -1466,7 +1430,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "expr": "audiobook_organizer_number_leading_titles / audiobook_organizer_books_total",
           "legendFormat": "share",
@@ -1526,7 +1490,7 @@
   "templating": {
     "list": [
       {
-        "name": "DS_PROMETHEUS",
+        "name": "datasource",
         "label": "Prometheus",
         "type": "datasource",
         "query": "prometheus",
@@ -1536,7 +1500,8 @@
         "multi": false,
         "options": [],
         "refresh": 1,
-        "regex": ""
+        "regex": "",
+        "skipUrlSync": false
       }
     ]
   },
@@ -1546,7 +1511,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Audiobook Organizer — Overnight",
+  "title": "Audiobook Organizer \u2014 Overnight",
   "uid": "aorg-overnight",
   "version": 1,
   "weekStart": ""
