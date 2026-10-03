@@ -1,6 +1,7 @@
 // file: web/src/components/audiobooks/MetadataEditDialog.tsx
-// version: 2.2.2
+// version: 2.3.0
 // guid: 4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d
+// last-edited: 2026-10-03
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -107,7 +108,7 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
     setDirtyFields((prev) => new Set(prev).add(field));
   };
 
-  const handleChange = (field: keyof Audiobook, value: string | number) => {
+  const handleChange = (field: keyof Audiobook, value: string | number | undefined) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
     markDirty(field);
   };
@@ -280,7 +281,17 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
                 if (field === 'year') {
                   handleYearChange(e.target.value);
                 } else if (type === 'number') {
-                  handleChange(field, parseInt(e.target.value) || 0);
+                  // An emptied box clears the value (undefined, sent as
+                  // null) instead of becoming 0, and a decimal series
+                  // number ("2.5") keeps its decimal. parseInt(...) || 0
+                  // turned a cleared Series Number into position 0.
+                  const raw = e.target.value.trim();
+                  const parsed = Number(raw);
+                  if (raw === '') {
+                    handleChange(field, undefined);
+                  } else if (Number.isFinite(parsed)) {
+                    handleChange(field, parsed);
+                  }
                 } else {
                   handleChange(field, e.target.value);
                 }

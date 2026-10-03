@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.59.0
+// version: 1.60.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-09-30
+// last-edited: 2026-10-03
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -40,6 +40,17 @@ import {
 } from '../components/bookdetail/BookDetailDialogs';
 import { sanitizeReturn } from '../utils/safeReturn';
 import { describeDeleteBookError } from '../utils/deleteBookError';
+
+// seriesNumberOf is the series number the edit dialog opens with: the raw
+// position as entered when it parses (it keeps a decimal like 2.5), else the
+// int series_sequence, else series_position.
+export const seriesNumberOf = (book: Book): number | undefined => {
+  if (book.series_position_raw != null && book.series_position_raw.trim() !== '') {
+    const raw = Number(book.series_position_raw.trim());
+    if (Number.isFinite(raw)) return raw;
+  }
+  return book.series_sequence ?? book.series_position ?? undefined;
+};
 
 export const BookDetail = () => {
   const { id } = useParams();
@@ -854,7 +865,11 @@ export const BookDetail = () => {
     author: current.author_name,
     narrator: current.narrator,
     series: current.series_name,
-    series_number: current.series_position,
+    // GET returns the position as series_sequence (the int column) and
+    // series_position_raw (as entered, decimal kept); series_position is
+    // only a request key. Reading only series_position left the Series
+    // Number box empty for every book.
+    series_number: seriesNumberOf(current),
     // Genre was missing, so the Edit Metadata dialog rendered an empty Genre
     // box no matter what was stored. Safe to add: `genre` is not part of the
     // payload handleEditSave builds, so populating it cannot change what a
@@ -928,7 +943,11 @@ export const BookDetail = () => {
       publisher: updated.publisher ?? '',
       language: updated.language ?? '',
       narrator: updated.narrator ?? '',
-      series_position: updated.series_number ?? undefined,
+      // Only when the user changed it (the override below carries the same
+      // value, and null for a cleared box). Now that the box opens with the
+      // stored number, re-sending it on every save would rewrite a raw
+      // position the box cannot show exactly (e.g. "Book 3").
+      series_position: dirtyFields?.has('series_number') ? (updated.series_number ?? undefined) : undefined,
       audiobook_release_year:
         updated.audiobook_release_year || updated.year || book.audiobook_release_year || undefined,
       // PRESERVE-ONLY. This used to be `updated.year || book.print_year`, which
@@ -990,8 +1009,15 @@ export const BookDetail = () => {
           return;
         }
       }
+      // Any other failure keeps the dialog open with the user's edits: the
+      // error is rethrown so MetadataEditDialog shows it and does not close.
+      // A 400 carries the server's reason (e.g. "the author cannot be
+      // cleared; set a different author"), so that text is what is shown.
       console.error('Failed to update metadata', error);
-      toast('Failed to update metadata.', 'error');
+      const message =
+        error instanceof api.ApiError && error.message ? error.message : 'Failed to update metadata.';
+      toast(message, 'error');
+      throw error instanceof Error ? error : new Error(message);
     } finally {
       setActionLabel(null);
       setActionLoading(false);
