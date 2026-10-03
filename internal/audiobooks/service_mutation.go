@@ -547,6 +547,16 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// non-nil), so the write side must honor its documented contract of setting
 	// BOTH the ID and a fresh object. This mirrors the response-enrichment block
 	// below, but must run before UpdateBook so the stored blob is correct too.
+	// A position the request set replaces the raw position too. Readers that
+	// order or gate by position (bookSeriesPosition, applygate) prefer
+	// SeriesPositionRaw over the int SeriesSequence, so a set that changed
+	// only the int left them on the old number (prod 2026-10-03: a book set
+	// to position 8 still read as 1 there).
+	_, positionOverride := req.Updates.Overrides[database.FieldKeySeriesPosition]
+	if payload.SeriesSequence != nil && (req.Updates.SeriesSequence != nil || positionOverride) {
+		payload.SeriesPositionRaw = new(strconv.Itoa(*payload.SeriesSequence))
+	}
+
 	if payload.AuthorID != nil && resolvedAuthorName != "" {
 		payload.Book.Author = &database.Author{ID: *payload.AuthorID, Name: resolvedAuthorName}
 	}
