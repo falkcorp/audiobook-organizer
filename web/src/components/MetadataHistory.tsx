@@ -33,6 +33,7 @@ import RestoreIcon from '@mui/icons-material/Restore';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import type { MetadataChangeRecord, BookVersionEntry } from '../services/api';
 import * as api from '../services/api';
+import { historyRowKey } from './metadataHistoryKey';
 
 const FIELD_LABELS: Record<string, string> = {
   title: 'Title',
@@ -75,15 +76,6 @@ function parseJsonValue(raw?: string): string {
   } catch {
     return raw;
   }
-}
-
-/**
- * A history row's identity. The store stamps every row of one edit with the
- * same id (the edit's time in nanoseconds), so the id alone repeats across
- * the fields that edit changed; id plus field is unique.
- */
-export function historyRowKey(record: Pick<MetadataChangeRecord, 'id' | 'field'>): string {
-  return `${record.id}:${record.field}`;
 }
 
 function fieldLabel(field: string): string {

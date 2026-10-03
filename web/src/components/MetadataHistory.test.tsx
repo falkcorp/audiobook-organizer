@@ -6,7 +6,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { renderWithProviders } from '../test/renderWithProviders';
-import { MetadataHistory, historyRowKey } from './MetadataHistory';
+import { MetadataHistory } from './MetadataHistory';
+import { historyRowKey } from './metadataHistoryKey';
 import * as api from '../services/api';
 import type { MetadataChangeRecord } from '../services/api';
 
