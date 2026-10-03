@@ -166,6 +166,10 @@ const (
 	// parent row claims by proof; Apply retires it into the parent without
 	// touching any row (see the file comment).
 	fragClassGhost = "ghost"
+	// fragClassCoOwnerFold: retire a junk-titled co-owner of a held row's file
+	// into the book that row targets (owner decision 2026-10-03: "fold the
+	// junk co-owners"). The co-owner keeps its own file row, as a copy does.
+	fragClassCoOwnerFold = "co-owner-fold"
 )
 
 // Row id prefixes of a parent's UNPROVEN matches, so they never share a row
@@ -999,7 +1003,7 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 		return nil, err
 	}
 	rows := f.buildRows(lib, ix, live)
-	holdCoOwned(lib, rows)
+	rows = append(rows, holdCoOwned(f, lib, rows)...)
 	rows = append(rows, strandedRows(lib, rows)...)
 	if fp.AssumeRetired != nil {
 		whatIf(rows)
@@ -2910,6 +2914,8 @@ func (f *fragmentFixer) Replan(ctx context.Context, _ json.RawMessage, planned r
 		return f.replanParent(store, lib, hist, planned, rest)
 	case fragClassNoParent:
 		return f.replanGroup(store, lib, hist, planned)
+	case fragClassCoOwnerFold:
+		return f.replanFold(lib, planned)
 	default:
 		return planned, nil // held and ambiguous rows are never applicable; return as planned
 	}
@@ -3320,7 +3326,8 @@ func rowPaths(r repairs.Row) []string {
 // listed as a member with its role, never in BookIDs: the row writes nothing
 // to it. The row keeps its class; the skip kind is what holds it. Plan only: it needs the whole library, and a held row is never
 // re-planned.
-func holdCoOwned(lib *fragLibrary, rows []repairs.Row) {
+func holdCoOwned(f *fragmentFixer, lib *fragLibrary, rows []repairs.Row) []repairs.Row {
+	var folds []repairs.Row
 	owners := map[string][]string{} // path -> live books holding a row at it
 	for id, files := range lib.files {
 		if b, ok := lib.books[id]; !ok || b.SoftDeleted {
@@ -3379,7 +3386,151 @@ func holdCoOwned(lib *fragLibrary, rows []repairs.Row) {
 		r.Risk, r.Skipped = repairs.RiskReview, fragSkipCoOwner
 		r.SkipReason = fmt.Sprintf("%d file(s) of this row are also owned by %d live book(s) outside it: %s; decide which book keeps each file (merge or retire the other by hand), then plan again",
 			len(shared), len(ids), strings.Join(names, ", "))
+		// Co-owners that are this work under a junk name get a fold row each;
+		// once they are retired, the next plan finds this row unblocked.
+		target := foldTarget(*r)
+		nFold := 0
+		for _, id := range ids {
+			if fr, ok := f.coOwnerFoldRow(lib, *r, target, id, at[id]); ok {
+				folds = append(folds, fr)
+				nFold++
+			}
+		}
+		if nFold == len(ids) {
+			r.SkipReason += fmt.Sprintf("; every co-owner is this work under a junk name: apply the %d co-owner-fold row(s), then plan again", nFold)
+		} else if nFold > 0 {
+			r.SkipReason += fmt.Sprintf("; %d of the %d co-owners have a co-owner-fold row, the rest are the owner's call", nFold, len(ids))
+		}
 	}
+	return folds
+}
+
+// foldTarget is the book a held row would fold its fragments into: the
+// parent of a pair row ("moved:<parent>"), the survivor of a no-parent row.
+func foldTarget(r repairs.Row) string {
+	class, rest, _ := strings.Cut(r.RowID, ":")
+	switch class {
+	case fragClassMoved, fragClassCopy, fragClassGhost, fragRowCopyUnproven, fragRowMovedUnproven:
+		return rest
+	case fragClassNoParent:
+		return r.Proposed["survivor"]
+	}
+	return ""
+}
+
+// fragFold is a co-owner-fold row's decision.
+type fragFold struct {
+	CoOwner, Target string
+	CoTitle         string
+	Paths           []string // the co-owner's live rows: exactly the shared files
+}
+
+var (
+	coChapterTitleRe = regexp.MustCompile(`(?i)^c\d{1,3}$`)
+	leadingNumberRe  = regexp.MustCompile(`^\s*\d+\s*[-–—._)]?\s*`)
+)
+
+// junkCoOwnerOf reports whether a co-owner titled coTitle is the held row's
+// work under a junk name: no title, a chapter-only title ("Chapter 3",
+// "c5"), or the row's own title with a different leading number ("2 - Genius
+// Camp…" beside "5 - Genius Camp…"). A real title of its own ("Prelude to
+// Foundation") is not: which book keeps the file stays the owner's call.
+func junkCoOwnerOf(coTitle string, rowTitles []string) bool {
+	t := strings.TrimSpace(coTitle)
+	if t == "" || metadata.IsChapterOnlyTitle(t) || coChapterTitleRe.MatchString(t) {
+		return true
+	}
+	ck := junkLettersKey(leadingNumberRe.ReplaceAllString(t, ""))
+	if ck == "" {
+		return true
+	}
+	for _, rt := range rowTitles {
+		if ck == junkLettersKey(leadingNumberRe.ReplaceAllString(rt, "")) {
+			return true
+		}
+	}
+	return false
+}
+
+// coOwnerFoldRow builds the fold row for co-owner id of held row r, or false
+// when it may not fold: not a junk co-owner, no target, or it holds anything
+// besides the shared files (retiring it would hide its other files).
+func (f *fragmentFixer) coOwnerFoldRow(lib *fragLibrary, r repairs.Row, target, id string, shared []string) (repairs.Row, bool) {
+	co, ok := lib.books[id]
+	tb, tok := lib.books[target]
+	if !ok || !tok || target == "" || target == id || co.SoftDeleted || tb.SoftDeleted {
+		return repairs.Row{}, false
+	}
+	titles := []string{r.Title, tb.Title}
+	for _, m := range r.Members {
+		if m.Role != "co-owner" {
+			titles = append(titles, m.Title)
+		}
+	}
+	if !junkCoOwnerOf(co.Title, titles) {
+		return repairs.Row{}, false
+	}
+	isShared := map[string]bool{}
+	for _, p := range shared {
+		isShared[p] = true
+	}
+	var paths []string
+	for _, fr := range lib.files[id] {
+		if !isShared[fr.Path] {
+			return repairs.Row{}, false
+		}
+		paths = append(paths, fr.Path)
+	}
+	if len(paths) == 0 {
+		return repairs.Row{}, false
+	}
+	sort.Strings(paths)
+	fold := &fragFold{CoOwner: id, Target: target, CoTitle: co.Title, Paths: paths}
+	row := repairs.Row{
+		RowID:   fragClassCoOwnerFold + ":" + id + ":" + target,
+		Class:   fragClassCoOwnerFold,
+		BookIDs: []string{id, target},
+		Title:   tb.Title,
+		Author:  lib.authorName(tb),
+		Risk:    repairs.RiskReview,
+		Members: []repairs.RowMember{member(lib, co, "co-owner"), member(lib, tb, "target")},
+		Reason: fmt.Sprintf("book %s (%q) holds only file(s) that row %s folds, and is that work under a junk name; retire it into %s (%q), keeping its own file row",
+			id, co.Title, r.RowID, target, tb.Title),
+		Evidence: []string{"shared file(s): " + strings.Join(paths, " | ")},
+		Proposed: map[string]string{"action": fmt.Sprintf("retire %s into %s (nothing is repointed, no row is deleted)", id, target), "target": target},
+		Detail:   fold,
+	}
+	if k, why := f.guard(lib, []fragBook{co, tb}, nil); k != "" {
+		row.Class, row.Skipped, row.SkipReason = fragClassManual, k, why
+	}
+	row.Fingerprint = fragFingerprint(append([]string{fragClassCoOwnerFold, id, target, co.Title}, paths...)...)
+	return row, true
+}
+
+// replanFold re-checks a co-owner-fold row: both books live, the co-owner
+// still junk-named with exactly the planned rows.
+func (f *fragmentFixer) replanFold(lib *fragLibrary, planned repairs.Row) (repairs.Row, error) {
+	if len(planned.BookIDs) != 2 {
+		return changedRow(planned, "the fold row names no co-owner and target"), nil
+	}
+	id, target := planned.BookIDs[0], planned.BookIDs[1]
+	co, ok := lib.books[id]
+	tb, tok := lib.books[target]
+	if !ok || !tok || co.SoftDeleted || tb.SoftDeleted {
+		return changedRow(planned, "the co-owner or the target is gone or retired"), nil
+	}
+	var paths []string
+	for _, fr := range lib.files[id] {
+		paths = append(paths, fr.Path)
+	}
+	sort.Strings(paths)
+	fresh := planned
+	fresh.Fingerprint = fragFingerprint(append([]string{fragClassCoOwnerFold, id, target, co.Title}, paths...)...)
+	fresh.Detail = &fragFold{CoOwner: id, Target: target, CoTitle: co.Title, Paths: paths}
+	if k, why := f.guard(lib, []fragBook{co, tb}, nil); k != "" {
+		fresh.Class, fresh.Skipped, fresh.SkipReason = fragClassManual, k, why
+	}
+	return fresh, nil
 }
 
 // changedRow is the planned row with a fingerprint that cannot match, so the
@@ -3473,6 +3624,15 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 			if err := w.Recompute(parentID); err != nil {
 				return partial(fmt.Errorf("recompute %s: %w", parentID, err))
 			}
+		}
+		return nil
+	case *fragFold:
+		// No slice: the co-owner is the whole work under another name, so its
+		// listening state follows onto the target as a whole book does.
+		did, err := retireInto(ctx, f.p, store, w, f.now, fragFixerID, plan.CoOwner, plan.Target, nil)
+		steps += did
+		if err != nil {
+			return partial(err)
 		}
 		return nil
 	case *fragGroupPlan:

@@ -2224,6 +2224,54 @@ func TestFragmentFixer_CoOwnerIsHeldAtPlan(t *testing.T) {
 		r := findRow(t, f.plan(t, "op-plan"), "moved:"+parent)
 		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 	})
+	// Owner decision 2026-10-03: a co-owner that is this work under a junk
+	// name gets a fold row; a real title ("Prelude to P") does not.
+	t.Run("a real-titled co-owner gets no fold row", func(t *testing.T) {
+		f := newFragFixture(t)
+		_, _, other := seed(t, f)
+		for _, r := range f.plan(t, "op-plan").Rows {
+			require.NotEqual(t, fragClassCoOwnerFold, r.Class, "fold row for %s", other)
+		}
+	})
+	for _, coTitle := range []string{"", "c5", "7 - P"} {
+		t.Run(fmt.Sprintf("a junk co-owner %q folds, then the row applies", coTitle), func(t *testing.T) {
+			f := newFragFixture(t)
+			parent, frag, other := seed(t, f)
+			_, err := f.s.ModifyBook(other, func(b *database.Book) error { b.Title = coTitle; return nil })
+			require.NoError(t, err)
+			res := f.plan(t, "op-plan")
+			held := findRow(t, res, "moved:"+parent)
+			require.Equal(t, fragSkipCoOwner, held.Skipped)
+			require.Contains(t, held.SkipReason, "apply the 1 co-owner-fold row(s)")
+			fold := findRow(t, res, fragClassCoOwnerFold+":"+other+":"+parent)
+			require.True(t, fold.Applicable(), "%s: %s", fold.Skipped, fold.SkipReason)
+			require.Equal(t, []string{other, parent}, fold.BookIDs)
+
+			out := f.apply(t, "op-plan", "op-fold", []string{fold.RowID}, nil)
+			require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+			b, err := f.s.GetBookByID(other)
+			require.NoError(t, err)
+			require.True(t, b.IsSoftDeleted(), "the co-owner is retired")
+			own, err := f.s.GetBookFiles(other)
+			require.NoError(t, err)
+			require.Len(t, own, 1, "it keeps its own file row")
+
+			r := findRow(t, f.plan(t, "op-plan2"), "moved:"+parent)
+			require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+			require.ElementsMatch(t, []string{parent, frag}, r.BookIDs)
+		})
+	}
+	t.Run("a junk co-owner with other files of its own does not fold", func(t *testing.T) {
+		f := newFragFixture(t)
+		_, _, other := seed(t, f)
+		_, err := f.s.ModifyBook(other, func(b *database.Book) error { b.Title = ""; return nil })
+		require.NoError(t, err)
+		extra := f.file(t, "lib/Elsewhere/x.mp3", 990)
+		f.row(t, "ox", other, extra, "x.mp3", 990, 600, 0)
+		for _, r := range f.plan(t, "op-plan").Rows {
+			require.NotEqual(t, fragClassCoOwnerFold, r.Class)
+		}
+	})
 	t.Run("a no-parent row is held too", func(t *testing.T) {
 		f := newFragFixture(t)
 		ids := f.numberedSeed(t, "lib/Serial", serialStems, 300, nil)
