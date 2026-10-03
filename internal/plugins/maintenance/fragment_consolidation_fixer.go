@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -1957,7 +1957,7 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 	rows := f.buildRows(lib, ix, cands)
 	for _, r := range rows {
 		if r.RowID == planned.RowID {
-			return f.checkOwners(hist, planned, r)
+			return f.checkOwners(store, hist, planned, r)
 		}
 	}
 	return changedRow(planned, "the fragments no longer match the parent in this kind"), nil
@@ -2039,7 +2039,7 @@ func (f *fragmentFixer) replanGroup(store OpsStore, lib *fragLibrary, hist Fragm
 			}
 		}
 		r.State = planned.State
-		return f.checkOwners(hist, planned, r)
+		return f.checkOwners(store, hist, planned, r)
 	}
 	return changedRow(planned, "the fragments no longer form this group"), nil
 }
@@ -2048,7 +2048,7 @@ func (f *fragmentFixer) replanGroup(store OpsStore, lib *fragLibrary, hist Fragm
 // row touches is owned only by books of the row. A file some other book also
 // claims makes the row changed (the plan's whole-library listing no longer
 // holds); an incomplete lookup fails the row rather than guessing.
-func (f *fragmentFixer) checkOwners(look database.BookFilePathLookup, planned, fresh repairs.Row) (repairs.Row, error) {
+func (f *fragmentFixer) checkOwners(store OpsStore, look database.BookFilePathLookup, planned, fresh repairs.Row) (repairs.Row, error) {
 	if !fresh.Applicable() {
 		return fresh, nil
 	}
@@ -2073,9 +2073,21 @@ func (f *fragmentFixer) checkOwners(look database.BookFilePathLookup, planned, f
 			return repairs.Row{}, fmt.Errorf("who owns %s: %w", path, err)
 		}
 		for _, o := range owners {
-			if !allowed[o.BookID] {
-				return changedRow(planned, fmt.Sprintf("%s is also owned by book %s", path, o.BookID)), nil
+			if allowed[o.BookID] {
+				continue
 			}
+			// A retired book keeps its rows (no book_file row is ever deleted),
+			// so a soft-deleted owner is history, not a live claim. Measured
+			// on prod 2026-10-03: 26 of 29 rows were refused because an
+			// iTunes copy retired by an earlier apply still named the path.
+			ob, err := store.GetBookByID(o.BookID)
+			if err != nil {
+				return repairs.Row{}, fmt.Errorf("owner %s of %s: %w", o.BookID, path, err)
+			}
+			if ob == nil || ob.IsSoftDeleted() {
+				continue
+			}
+			return changedRow(planned, fmt.Sprintf("%s is also owned by book %s", path, o.BookID)), nil
 		}
 	}
 	return fresh, nil
