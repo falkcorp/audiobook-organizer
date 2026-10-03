@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
 // last-edited: 2026-10-03
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -31,21 +32,29 @@ import (
 // assertion: OpsStore() is server.indexedStore in production, which hides
 // every *PebbleStore method outside database.Store. The rebuild writes index
 // entries only, never journal rows.
+//
+// Preview by default (owner rule 2026-09-25): `{}` runs the read-only verify
+// and reports how many journal rows have no entry; `{"dry_run": false}`
+// rebuilds.
 
 type opChangeIndexRebuilder interface {
+	VerifyOpChangeByBookIndex(ctx context.Context) (database.OpChangeByBookIndexReport, error)
 	RebuildOpChangeByBookIndex(ctx context.Context) (database.OpChangeByBookBackfillResult, error)
 }
 
+const opChangeBookIndexRebuildID = "maintenance.opchange-book-index-rebuild"
+
 func (p *Plugin) opChangeBookIndexRebuildDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.opchange-book-index-rebuild",
+		ID:          opChangeBookIndexRebuildID,
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Operation-journal by-book index rebuild",
 		Description: "Rebuilds the opchange_by_book: index that GetBookChanges reads, ignoring the " +
 			"one-time startup sentinel. Run after any rollback to a build that predates the index. " +
-			"GetBookChanges uses the full journal scan while it runs. Writes index keys only, never " +
-			"journal rows.",
+			"Preview by default: reports journal rows with no index entry, writes nothing. With " +
+			"dry_run=false it rebuilds; GetBookChanges uses the full journal scan while it runs. " +
+			"Writes index keys only, never journal rows.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.opchange-book-index",
@@ -56,7 +65,17 @@ func (p *Plugin) opChangeBookIndexRebuildDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runOpChangeBookIndexRebuild(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runOpChangeBookIndexRebuild(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
+	var params opmode.DryRunParams
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return fmt.Errorf("decode params: %w", err)
+		}
+	}
+	dryRun, err := opmode.ResolveDryRun(opChangeBookIndexRebuildID, params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return err
+	}
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
@@ -66,7 +85,29 @@ func (p *Plugin) runOpChangeBookIndexRebuild(ctx context.Context, _ json.RawMess
 		return fmt.Errorf("cannot run: store is %T, which has no opchange_by_book: index "+
 			"(and no store in its decorator chain does)", store)
 	}
+	if dryRun {
+		return previewOpChangeBookIndex(ctx, r, reporter)
+	}
 	return rebuildOpChangeBookIndex(ctx, r, reporter)
+}
+
+// previewOpChangeBookIndex is the read-only mode: it reports what a rebuild
+// would fix and writes nothing.
+func previewOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
+	_ = reporter.UpdateProgress(0, 1, "verifying opchange_by_book: index (preview, writes nothing)")
+	rep, err := r.VerifyOpChangeByBookIndex(ctx)
+	if err != nil {
+		return fmt.Errorf("verify opchange_by_book index: %w", err)
+	}
+	msg := fmt.Sprintf("preview: sentinel_set=%t rows=%d indexable=%d missing_entries=%d "+
+		"undecodable=%d unmarked_undecodable=%d; run with dry_run=false to rebuild",
+		rep.SentinelSet, rep.Rows, rep.Indexable, rep.MissingEntries, rep.Undecodable, rep.UnmarkedUndecodable)
+	_ = reporter.Log(slog.LevelInfo, msg)
+	if len(rep.SampleMissing) > 0 {
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("sample rows with no entry: %v", rep.SampleMissing))
+	}
+	_ = reporter.UpdateProgress(1, 1, msg)
+	return nil
 }
 
 func rebuildOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {

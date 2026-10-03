@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
 // last-edited: 2026-10-03
 
@@ -642,4 +642,112 @@ func TestOpchangeIndex_RebuildInvalidatesCachedSentinel(t *testing.T) {
 	if built, _ := p.opChangeByBookIndexBuilt(); !built {
 		t.Fatal("not built after rebuild")
 	}
+}
+
+func TestOpchangeIndex_Verify(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	rawPutOpChange(t, p, &OperationChange{ID: "c1", OperationID: "op1", BookID: "b1"})
+	rawPutOpChange(t, p, &OperationChange{ID: "c2", OperationID: "op1"})
+	if err := p.db.Set(opChangeKey("op9", "bad"), []byte("{"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := p.VerifyOpChangeByBookIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.SentinelSet || rep.Rows != 3 || rep.Indexable != 1 || rep.MissingEntries != 1 ||
+		rep.Undecodable != 1 || rep.UnmarkedUndecodable != 1 {
+		t.Fatalf("pre-backfill report = %+v", rep)
+	}
+	mustBackfillOpChange(t, p)
+	rep, err = p.VerifyOpChangeByBookIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.SentinelSet || rep.MissingEntries != 0 || rep.UnmarkedUndecodable != 0 || rep.Undecodable != 1 {
+		t.Fatalf("post-backfill report = %+v", rep)
+	}
+}
+
+// TestOpchangeIndex_PruneLeavesNoOrphans: nightly retention must take each
+// pruned row's index entry with it, so no orphan entries accumulate.
+func TestOpchangeIndex_PruneLeavesNoOrphans(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	mustBackfillOpChange(t, p)
+	for i := 0; i < 50; i++ {
+		if err := p.CreateOperationChange(&OperationChange{
+			OperationID: fmt.Sprintf("op%d", i%5), BookID: fmt.Sprintf("b%d", i%7),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Move some rows between books first, so pruned rows have moved entries.
+	all, err := p.GetOperationChanges("op1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range all {
+		c.BookID = "moved"
+		if err := p.CreateOperationChange(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := countOpChangeIndexKeys(t, p); n != 50 {
+		t.Fatalf("index keys before prune = %d, want 50", n)
+	}
+	n, err := p.PruneOperationChanges(time.Now().Add(time.Second))
+	if err != nil || n != 50 {
+		t.Fatalf("prune = %d, %v; want 50", n, err)
+	}
+	if n := countOpChangeIndexKeys(t, p); n != 0 {
+		t.Fatalf("index keys after pruning every row = %d, want 0", n)
+	}
+}
+
+// TestOpchangeIndex_DanglingEntrySkipped: an entry whose row is gone (e.g. a
+// backfill that re-Set the entry after a concurrent prune) is skipped, never
+// an error.
+func TestOpchangeIndex_DanglingEntrySkipped(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	mustBackfillOpChange(t, p)
+	keep := &OperationChange{OperationID: "op1", BookID: "b1"}
+	if err := p.CreateOperationChange(keep); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Set(opChangeByBookKey("b1", opChangeKey("op0", "gone")), nil, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.GetBookChanges("b1")
+	if err != nil || len(got) != 1 || got[0].ID != keep.ID {
+		t.Fatalf("GetBookChanges with a dangling entry = %v, %v; want only the live row", changeIDs(got), err)
+	}
+}
+
+// TestOpchangeIndex_OperationDeletesKeepJournal: the per-op delete paths
+// (DeleteOperationV2, used by registry.Discard, and DeleteOperationWithLogs)
+// do not delete journal rows, so they have no index entries to delete. Pin it:
+// if either ever starts deleting opchange rows, it must take the entries too.
+func TestOpchangeIndex_OperationDeletesKeepJournal(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	mustBackfillOpChange(t, p)
+	if err := p.InsertOperationV2(OperationV2Row{ID: "op1", DefID: "test.def", Status: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CreateOperationChange(&OperationChange{OperationID: "op1", BookID: "b1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, deleted, err := p.DeleteOperationV2("op1", []string{"completed"}); err != nil || !deleted {
+		t.Fatalf("DeleteOperationV2 = %v, %v", deleted, err)
+	}
+	if err := p.DeleteOperationWithLogs("op1"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := p.GetOperationChanges("op1")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("journal rows after op deletes = %d, %v; want 1", len(rows), err)
+	}
+	if n := countOpChangeIndexKeys(t, p); n != 1 {
+		t.Fatalf("index keys = %d, want 1 (row and entry both kept)", n)
+	}
+	assertIndexedMatchesScan(t, p, []string{"b1"})
 }
