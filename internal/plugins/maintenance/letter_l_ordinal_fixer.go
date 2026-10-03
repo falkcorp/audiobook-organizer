@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/letter_l_ordinal_fixer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e4b7c21-6a3f-4d58-b1e0-2c8d5f9a3b47
 // last-edited: 2026-10-03
 
@@ -126,7 +126,7 @@ func (f *letterLOrdinalFixer) evaluate(b database.BookCore) (repairs.Row, error)
 	}
 	for i := range states {
 		if states[i].Field == "title" && states[i].HasUserOverride() {
-			r.Skipped, r.SkipReason = junkSkipUserLocked, lockHoldReason(&states[i], "title")
+			r.Skipped, r.SkipReason = lockHold(&states[i], "title")
 			r.Reason = r.SkipReason
 			r.Fingerprint = junkFingerprint(r, "")
 			return r, nil
@@ -137,6 +137,19 @@ func (f *letterLOrdinalFixer) evaluate(b database.BookCore) (repairs.Row, error)
 		r.Reason = r.SkipReason
 		r.Fingerprint = junkFingerprint(r, "")
 		return r, nil
+	}
+	if len(states) == 0 {
+		// A blob-only book's title lock lives in the blob.
+		locks, lerr := database.LoadFieldLocks(f.p.deps.OpsStore(), b.ID)
+		if lerr != nil {
+			return repairs.Row{}, fmt.Errorf("read field locks of %s: %w", b.ID, lerr)
+		}
+		if locks.Locked(database.FieldKeyTitle) {
+			r.Skipped, r.SkipReason = junkSkipUserLocked, "the title carries a user override (pre-migration state); it is never rewritten"
+			r.Reason = r.SkipReason
+			r.Fingerprint = junkFingerprint(r, "")
+			return r, nil
+		}
 	}
 	r.Proposed = map[string]string{"title": fixed}
 	r.Reason = "the ordinal is the letter l, not the digit 1 / roman I"

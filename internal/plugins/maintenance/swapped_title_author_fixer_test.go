@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8223b479-ea79-40ca-a48a-1b7bc0f3bea2
 // last-edited: 2026-10-03
 
@@ -860,7 +860,9 @@ func TestSwappedTitleAuthorFixer_RevertKeepsAPersonsLock(t *testing.T) {
 	st := fieldStateOf(mustStates(t, l, "swap"), database.FieldKeyAuthorName)
 	require.NotNil(t, st)
 	require.True(t, st.IsRepairLock())
-	require.Contains(t, lockHoldReason(st, "author"), "locked by a repair")
+	kind, why := lockHold(st, "author")
+	require.Equal(t, junkSkipRepairLocked, kind)
+	require.Contains(t, why, "locked by a repair")
 	row := *st
 	row.LockSource = ""
 	require.NoError(t, l.store.UpsertMetadataFieldState(&row))
@@ -957,4 +959,29 @@ func TestSwappedTitleAuthorFixer_FetchedNarratorFoundBehindAPage(t *testing.T) {
 	}
 	_, rows := l.plan()
 	require.Equal(t, junkSkipNeedsManual, rows["deep"].Skipped, rows["deep"].SkipReason)
+}
+
+// A person's title lock kept only in the pre-migration blob holds the row at
+// plan time, and the write re-check refuses it too: nothing is written and
+// no live undo row is left.
+func TestJunkTitleFixer_BlobTitleLockHolds(t *testing.T) {
+	jl := newJunkLib(t)
+	id := jl.ids["folder"]
+	require.NoError(t, jl.store.SetUserPreference(metastate.Key(id), `{"title":{"override_locked":true}}`))
+	_, _, rows := jl.plan(t)
+	require.Equal(t, junkSkipUserLocked, rows["folder"].Skipped, rows["folder"].SkipReason)
+
+	before, err := jl.store.GetBookByID(id)
+	require.NoError(t, err)
+	w := repairs.NewWriter(jl.store, jl.store, junkTitlesFixerID, "bulk_update", "repairs-").
+		WithJournal(jl.store, jl.store, "op-blob").WithFieldStates(jl.store)
+	require.ErrorIs(t, writeTitleOnly(w, jl.store, id, before.Title, "Good Book"), repairs.ErrChangedSincePlan)
+	after, err := jl.store.GetBookByID(id)
+	require.NoError(t, err)
+	require.Equal(t, before.Title, after.Title)
+	ch, err := jl.store.GetOperationChanges("op-blob")
+	require.NoError(t, err)
+	for _, c := range ch {
+		require.NotNil(t, c.RevertedAt, "no live undo row for a refused write: %+v", c)
+	}
 }
