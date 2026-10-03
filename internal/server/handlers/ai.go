@@ -1,5 +1,5 @@
 // file: internal/server/handlers/ai.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
 // last-edited: 2026-10-03
 
@@ -392,7 +392,8 @@ func (h *AIHandler) TestMetadataSource(c *gin.Context) {
 //
 // The series number depends on whether the parse keeps the book's series.
 // shownSeries is the series name the book shows now.
-//   - Same series (the names normalize alike, or the parse names none): the
+//   - Same series (the names normalize alike, the parse names none, or the
+//     book shows no series): the
 //     number only fills a book with no stored position. A parse yields a
 //     whole number, and sending it would overwrite a stored "1.5" with 1 and
 //     lock it like a user edit.
@@ -423,7 +424,10 @@ func AIParsedUpdatePayload(metadata *ai.ParsedMetadata, book *database.Book, sho
 	if metadata.Series != "" {
 		payload["series_name"] = metadata.Series
 	}
-	seriesChanges := metadata.Series != "" &&
+	// A book that shows no series (none, or a dangling link with no embedded
+	// object) has no position from another series to replace: the parse is
+	// treated like its own series, fill-only, and never clears the number.
+	seriesChanges := metadata.Series != "" && shownSeries != "" &&
 		util.NormalizeAuthor(metadata.Series) != util.NormalizeAuthor(shownSeries)
 	switch {
 	case metadata.SeriesNum > 0 && (seriesChanges || !hasSeriesPosition(book)):
