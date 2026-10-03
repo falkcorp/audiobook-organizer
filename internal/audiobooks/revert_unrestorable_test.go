@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -105,6 +105,14 @@ func (s *ledgerStub) GetBooksByAuthorIDForRelinkCore(int) ([]database.BookCore, 
 }
 func (s *ledgerStub) DeleteAuthor(int) error {
 	return errors.New("ledgerStub: DeleteAuthor not stubbed")
+}
+
+func (s *ledgerStub) GetMetadataFieldStates(string) ([]database.MetadataFieldState, error) {
+	return nil, errors.New("ledgerStub: GetMetadataFieldStates not stubbed")
+}
+
+func (s *ledgerStub) UpsertMetadataFieldState(*database.MetadataFieldState) error {
+	return errors.New("ledgerStub: UpsertMetadataFieldState not stubbed")
 }
 
 // GetSeriesByID answers from s.series; a missing id is (nil, nil), as the

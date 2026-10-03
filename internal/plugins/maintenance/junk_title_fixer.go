@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-10-03
 
@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -60,6 +61,11 @@ const (
 	// lists either.
 	junkSkipNotJunk = "skipped_not_junk"
 	junkSkipGone    = "skipped_gone"
+	// junkSkipSwapped: the stored author is the title a provider recorded,
+	// so title and author are swapped. maintenance.repair-swapped-title-author
+	// fixes both; retitling here first would leave the author holding the
+	// title.
+	junkSkipSwapped = "skipped_swapped_title_author"
 )
 
 // Sources of a proposed title, in priority order.
@@ -117,7 +123,11 @@ func (f *junkTitleFixer) Description() string {
 		"provider recorded for the book, the folder or " +
 		"filename, the series and number. A book another book owns a file of is a fragment for the consolidation " +
 		"fixer; one that only looks like a chapter file is listed for a person. A provider's recorded title counts only when " +
-		"it agrees with the title's own evidence or was recorded under the book's author. Writes the title only, never a user-locked one."
+		"it agrees with the title's own evidence or was recorded under the book's author. A book whose author holds the " +
+		"title a provider recorded (title and author swapped) is listed for the swapped title/author fixer " +
+		"(maintenance.repair-swapped-title-author), which runs first and fixes both. Writes the title only, never a " +
+		"user-locked one, and locks the title it wrote so a rescan cannot restore the file tag's junk. Undo with the " +
+		"apply operation's revert, which also lifts the lock."
 }
 
 // junkIndex is the library-wide state a decision reads besides the book
@@ -202,22 +212,31 @@ func narratorsOf(n *string) []string {
 // buildJunkIndex lists every book once (one consistent snapshot) and returns
 // the index plus the junk-titled candidates.
 func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, error) {
+	idx, cands, _, err := f.buildJunkIndexSnapshot()
+	return idx, cands, err
+}
+
+// buildJunkIndexSnapshot is buildJunkIndex that also returns the whole book
+// listing it was built from, so the swapped title/author fixer can pick its
+// author-only candidates (real titles) from the same snapshot instead of
+// listing every book a second time.
+func (f *junkTitleFixer) buildJunkIndexSnapshot() (*junkIndex, []database.BookCore, []database.BookCore, error) {
 	store := f.p.deps.OpsStore()
 	if store == nil {
-		return nil, nil, fmt.Errorf("database not initialized")
+		return nil, nil, nil, fmt.Errorf("database not initialized")
 	}
 	all, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
-		return nil, nil, fmt.Errorf("GetAllBooksCore: %w", err)
+		return nil, nil, nil, fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 	allSeries, err := store.GetAllSeries()
 	if err != nil {
-		return nil, nil, fmt.Errorf("GetAllSeries: %w", err)
+		return nil, nil, nil, fmt.Errorf("GetAllSeries: %w", err)
 	}
 	imports, err := store.GetAllImportPaths()
 	if err != nil {
 		// Fail closed: without the roots the path-segment refusal is blind.
-		return nil, nil, fmt.Errorf("GetAllImportPaths: %w", err)
+		return nil, nil, nil, fmt.Errorf("GetAllImportPaths: %w", err)
 	}
 	idx := &junkIndex{dirBooks: map[string]int{}, dirChapters: map[string]int{}, titles: map[string]bool{},
 		authors: map[int]string{}, series: map[int]string{}, owners: map[string][]string{}}
@@ -277,7 +296,7 @@ func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, erro
 	}
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return nil, nil, fmt.Errorf("GetAllBookFilesCore: %w", err)
+		return nil, nil, nil, fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
 	for i := range files {
 		if candIDs[files[i].BookID] && files[i].FilePath != "" {
@@ -289,7 +308,7 @@ func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, erro
 			idx.owners[files[i].FilePath] = append(idx.owners[files[i].FilePath], files[i].BookID)
 		}
 	}
-	return idx, cands, nil
+	return idx, cands, all, nil
 }
 
 func (f *junkTitleFixer) cachedIndex() (*junkIndex, error) {
@@ -422,10 +441,28 @@ type titleStateReader interface {
 }
 
 // writeTitleOnly sets Title through the framework writer, which records the
-// history row undo reverts. A title that moved since the re-plan, or that a
-// user locked since, is refused as changed_since_plan: returning
-// database.ErrSkipBookWrite here would make Modify report success with
-// nothing written.
+// history row for the book's history view, journals the change in the apply
+// op's journal, and locks the title. Shared by the junk-title and swapped
+// title/author fixers.
+//
+// Journal and lock: the file tags still hold the junk (or swapped) value the
+// scanner first read, and a forced rescan writes the tags back over the title
+// unless it is locked (scanner.applyScannerFields). So the title is locked
+// (repairs.Writer.LockFields) once it is written. The lock lives in the
+// field state, which metadata history does not cover, so the title is
+// journaled too (a metadata_update row) and the whole row is undone by the op
+// revert (POST /operations/<id>/revert), which puts the title back and lifts
+// the lock. "Undo last apply" refuses these batches (apply_op_journaled):
+// reverting the title from history alone would leave the junk title locked.
+//
+// The title is journaled before the write: if the write is then refused, the
+// row names a value the book never left, which the revert's compare-and-set
+// counts as already restored. A lock that fails after the title was written
+// is reported as a partial apply.
+//
+// A title that moved since the re-plan, or that a user locked since, is
+// refused as changed_since_plan: returning database.ErrSkipBookWrite here
+// would make Modify report success with nothing written.
 //
 // The lock re-check runs inside the ModifyBook callback, so it is as late as
 // the write can make it. Field-state writes do not take the book stripe, so a
@@ -434,6 +471,10 @@ type titleStateReader interface {
 func writeTitleOnly(w *repairs.Writer, states titleStateReader, bookID, oldTitle, newTitle string) error {
 	if states == nil {
 		return fmt.Errorf("book %s: no field-state reader to check the title lock with", bookID)
+	}
+	if err := w.RecordChange(bookID, repairs.UndoEntry{ChangeType: "metadata_update", Field: "title",
+		Old: oldTitle, New: newTitle}); err != nil {
+		return fmt.Errorf("book %s: the title change was not journaled: %w", bookID, err)
 	}
 	changed, err := w.Modify(bookID, func(cur *database.Book) error {
 		if cur.Title != oldTitle {
@@ -456,6 +497,9 @@ func writeTitleOnly(w *repairs.Writer, states titleStateReader, bookID, oldTitle
 	}
 	if !slices.Contains(changed, "title") {
 		return fmt.Errorf("book %s: the write committed but recorded no title change", bookID)
+	}
+	if err := w.LockFields(bookID, database.FieldKeyTitle); err != nil {
+		return fmt.Errorf("%w: book %s title written but not locked: %w", repairs.ErrPartiallyApplied, bookID, err)
 	}
 	return nil
 }
@@ -536,7 +580,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	for i := range states {
 		if states[i].Field == "author_name" {
 			if v, ok := metastate.Decode(states[i].FetchedValue).(string); ok {
-				fetchedAuthor = strings.TrimSpace(v)
+				fetchedAuthor = strings.TrimSpace(html.UnescapeString(v))
 			}
 			continue
 		}
@@ -562,8 +606,11 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		// answered with it, or returned no title at all (the fetch then
 		// records the book's own). Those are repaired too, never at low risk.
 		if states[i].HasProviderValue() {
+			// Some providers return HTML entities ("Magic Tides &amp; Magic
+			// Claims"): decoded before any comparison, and before the value
+			// can become the proposal.
 			if v, ok := metastate.Decode(states[i].FetchedValue).(string); ok {
-				fetchedTitle = strings.TrimSpace(v)
+				fetchedTitle = strings.TrimSpace(html.UnescapeString(v))
 			}
 			switch {
 			case fetchedTitle == "":
@@ -577,6 +624,18 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 			}
 			r.Reason += providerNote
 		}
+	}
+
+	// Title and author stored swapped: the author holds the title a provider
+	// recorded. Retitling here would leave the author holding the title, so
+	// the book is the swapped fixer's, which writes both. (That fixer also
+	// takes a book this fixer retitled before the guard existed, author
+	// only.)
+	if ak := junkLettersKey(author); ak != "" && fetchedTitle != "" &&
+		(ak == junkLettersKey(fetchedTitle) || ak == junkLettersKey(catalogEditionRe.ReplaceAllString(fetchedTitle, ""))) {
+		return finish(junkSkipSwapped, fmt.Sprintf(
+			"the author %q is the title a provider recorded (%q): title and author are swapped — use %s, which fixes both",
+			author, fetchedTitle, swappedFixerID))
 	}
 
 	files, err := store.GetBookFiles(b.ID)

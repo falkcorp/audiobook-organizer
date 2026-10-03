@@ -1,7 +1,7 @@
 // file: internal/repairs/writer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package repairs
 
@@ -75,6 +75,10 @@ type Writer struct {
 	// credits is the book-credit surface (writer_credits.go); nil until
 	// WithCredits. Its rows go through journal above.
 	credits CreditStore
+
+	// fieldStates is the metadata field-state surface (writer_locks.go); nil
+	// until WithFieldStates. Its locks are journaled through journal above.
+	fieldStates FieldStateStore
 
 	// lease renews the apply's scan stand-down lease and reports whether it
 	// is still held; nil when no lease is held (RunApply installs it for the

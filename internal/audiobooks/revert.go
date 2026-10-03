@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -44,6 +44,7 @@ type revertServiceStore interface {
 	revertSeriesStore
 	revertBookFileStore
 	revertAuthorStore
+	revertFieldStateStore
 	// revertBookPrimaryDemote re-crowns a restored primary and demotes the
 	// rest of its group (versionprimary.Crown).
 	versionprimary.EnsureStore
@@ -63,6 +64,12 @@ type revertLedgerStore interface {
 	// Needed by the embedded isProtectedPath call in revertTagWrite
 	// (SERVER-GLOBAL-STORE-AUDIT phase 6).
 	GetAllImportPaths() ([]database.ImportPath, error)
+}
+
+// revertFieldStateStore lifts the field lock a repair set (revertFieldLock).
+type revertFieldStateStore interface {
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+	UpsertMetadataFieldState(state *database.MetadataFieldState) error
 }
 
 // revertAuthorStore restores a book's author credits and removes an author
@@ -591,6 +598,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertJunkAuthorCreate(c)
 	case undo.ChangeTypeRepairBookCreate:
 		return rs.revertRepairBookCreate(c)
+	case undo.ChangeTypeFieldLock:
+		return rs.revertFieldLock(c)
 	case "organize_failed", "organize_skipped", "organize_summary":
 		// No filesystem or DB mutation recorded; nothing to reverse.
 		return nil
@@ -598,6 +607,37 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		// Unreachable from RevertOperation, which filters on undo.NotRestorableLabel.
 		return fmt.Errorf("unknown change type: %s", c.ChangeType)
 	}
+}
+
+// revertFieldLock lifts the lock a repair set on one field, while the field
+// still carries exactly that lock (undo.CheckFieldLockCurrent): no override
+// is already restored, and an override value a person typed since is
+// refused. Only OverrideLocked changes; the provider value and the row's
+// UpdatedAt stay, so the swapped title/author fixer's same-record check still
+// reads the time the provider recorded the value.
+func (rs *RevertService) revertFieldLock(c *database.OperationChange) error {
+	if _, err := rs.loadBook(c.BookID); err != nil {
+		return err
+	}
+	states, err := rs.db.GetMetadataFieldStates(c.BookID)
+	if err != nil {
+		return fmt.Errorf("read field states of %s: %w", c.BookID, err)
+	}
+	if err := undo.CheckFieldLockCurrent(states, c); err != nil {
+		return err
+	}
+	for i := range states {
+		if states[i].Field != c.FieldName {
+			continue
+		}
+		st := states[i]
+		st.OverrideLocked = false
+		if err := rs.db.UpsertMetadataFieldState(&st); err != nil {
+			return fmt.Errorf("unlock %s of %s: %w", c.FieldName, c.BookID, err)
+		}
+		return nil
+	}
+	return undo.ErrAlreadyRestored
 }
 
 // loadBook returns the change's book, or a refusal when it cannot be read or no
