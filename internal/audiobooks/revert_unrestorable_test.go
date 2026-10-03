@@ -114,6 +114,14 @@ func (s *ledgerStub) DeleteAuthor(int) error {
 	return errors.New("ledgerStub: DeleteAuthor not stubbed")
 }
 
+func (s *ledgerStub) GetMetadataFieldStates(string) ([]database.MetadataFieldState, error) {
+	return nil, errors.New("ledgerStub: GetMetadataFieldStates not stubbed")
+}
+
+func (s *ledgerStub) UpsertMetadataFieldState(*database.MetadataFieldState) error {
+	return errors.New("ledgerStub: UpsertMetadataFieldState not stubbed")
+}
+
 // GetSeriesByID answers from s.series; a missing id is (nil, nil), as the
 // Pebble store reports ErrNotFound. seriesErr makes every series read fail.
 func (s *ledgerStub) GetSeriesByID(id int) (*database.Series, error) {

@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -262,6 +262,23 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return rowVerdict{refusal: refusal}
 	case ChangeTypeSeriesRename:
 		return verdictOf(CheckRestoreReferent(store, c))
+	case ChangeTypeFieldLock:
+		// The revert reads the book, then lifts the lock only while the
+		// field still carries exactly it (CheckFieldLockCurrent). A store
+		// that cannot read field states gets the book check alone; the
+		// revert still runs the compare-and-set.
+		if _, refusal := CheckRestoreBook(store, c.BookID); refusal != nil {
+			return rowVerdict{refusal: refusal}
+		}
+		r, ok := store.(fieldStateReader)
+		if !ok {
+			return rowVerdict{}
+		}
+		states, err := r.GetMetadataFieldStates(c.BookID)
+		if err != nil {
+			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read field states of %s: %v", c.BookID, err)}
+		}
+		return verdictOf(CheckFieldLockCurrent(states, c))
 	case ChangeTypeRepairBookCreate:
 		// The revert soft-deletes the created book; one that is absent or
 		// already soft-deleted counts restored, one whose rows moved or that
@@ -334,6 +351,10 @@ func checkFileMoveConflict(store ConflictChecker, c *database.OperationChange) (
 // own compare-and-set.
 type bookFilesReader interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+type fieldStateReader interface {
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
 }
 
 type bookFileByIDReader interface {
