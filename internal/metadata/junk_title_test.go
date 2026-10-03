@@ -1,5 +1,5 @@
 // file: internal/metadata/junk_title_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8b1e5f27-9c3a-4d60-b2e4-7f1a0c6d9e38
 // last-edited: 2026-10-03
 
@@ -206,6 +206,14 @@ func TestStripJunkTitlePrefix(t *testing.T) {
 		{"03 Chapter Two - The Hunter", "", false},
 		{"02_copy1", "", false},
 		{"29. Vengeful Spirit", "Vengeful Spirit", true},
+		// shapes the 03:05 plan still proposed
+		{"01-introduction", "", false},
+		{"01 - Prologue", "", false},
+		{"2-02 Manhunt Track 01", "", false},
+		{"05_Citation_B0GCNXH7DR_xHE-AAC - Unknown Author", "", false},
+		{"03_Guardian Rising_B0G2ZPBFW8_xHE-AAC", "", false},
+		{"01 - Prologue to Murder", "Prologue to Murder", true},
+		{"02 - Introduction to Algorithms", "Introduction to Algorithms", true},
 		{"2001: A Space Odyssey", "", false},
 		{"11/22/63", "", false},
 	}

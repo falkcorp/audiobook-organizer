@@ -1,5 +1,5 @@
 // file: internal/metadata/junk_title.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4d7a2c91-3e6b-4f08-a1d5-8c2e9b7f4a13
 // last-edited: 2026-10-03
 
@@ -249,9 +249,12 @@ func StripJunkTitlePrefix(title string) (string, bool) {
 // junkResidueRe is what is left behind a stripped prefix when the title was a
 // chapter file's name all along: a chapter marker with its number or spelled
 // number ("Chapter 1_ Return to Peril", "Chapter Two - The Hunter"), a copy
-// suffix ("copy1"), or a track-count tag ("(138-track)"). The junk-title
-// fixer proposed every one of these as a book title on prod 2026-10-03.
-var junkResidueRe = regexp.MustCompile(`(?i)^(?:(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_\-]*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(?:[^\pL\d]|$)|copy\s*\d+$|\(\d+-track\)$)`)
+// suffix ("copy1"), a track-count tag ("(138-track)"), a bare section word
+// ("introduction", "Prologue"), a trailing track number ("Manhunt Track 01")
+// or an ASIN / codec tag glued on by a downloader
+// ("Citation_B0GCNXH7DR_xHE-AAC"). The junk-title fixer proposed every one
+// of these as a book title on prod 2026-10-03 (two plans, 00:00 and 03:05).
+var junkResidueRe = regexp.MustCompile(`(?i)^(?:(?:chapter|chap|ch|part|pt|disc|disk|cd|track)\.?[\s_\-]*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(?:[^\pL\d]|$)|(?:introduction|intro|prologue|epilogue|outro|opening|credits)$|copy\s*\d+$|\(\d+-track\)$|.*\btrack\s*\d+$|.*_B0[0-9A-Z]{8}|.*xhe-aac)`)
 
 // NarratorCreditName returns the name a "Read by <name>" / "Narrated by
 // <name>" / "Performed by <name>" title credits, and whether the title has
