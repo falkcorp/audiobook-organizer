@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.75.4 -->
+<!-- version: 10.75.5 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -20,7 +20,7 @@ into one of the curated sections below, is a normal direct edit.
   - [ ] Fragment fixer: a path twin whose own match is AMBIGUOUS (two parents) or whose path two matched fragments share still lends/takes nothing by design (#3685); list those so the owner can resolve them by hand instead of them vanishing from the plan.
   - [ ] Fragment fixer `no-parent`: a "numbered chapter set" rule for ≥3 short files from one import folder whose stems differ only by a leading number but carry DIFFERENT titles ("070 - Skating", "047 - Core" — SenescentSoul 262 rows, Anansi Boys 55, Lord of the Dragon Riders 45); `ChapterGroupKey` keys them apart today, so they never form a group. Survivor titled from the folder.
   - [ ] Fragment fixer `no-parent`: folder-per-file layouts (each chapter in its own folder named after the file) group by the grandparent folder when the import dir holds only that file.
-  - [ ] `GetBookChanges(bookID)` has no by-book index: a full `opchange:` scan per call. Add `opchange:bybook:<bookID>:<changeID>` written with every change + a one-time backfill, then read the index.
+  - [x] `GetBookChanges(bookID)` has no by-book index: a full `opchange:` scan per call. Add `opchange:bybook:<bookID>:<changeID>` written with every change + a one-time backfill, then read the index. (Done 2026-10-03 as `opchange_by_book:<bookID>:<opID>:<changeID>`, outside the `opchange:` scan range, with a resumable startup backfill; `internal/database/pebble_store_opchange_index.go`.)
   - [ ] Junk-title fixer: proposals from a transcription that is a garbled title ("Cushial's Avatar", "NAMAS CURSE", "Star Tied Rising") need a corroborating source (folder/candidate agreement) before they are applicable; 18 such rows held by hand on 2026-10-03 (`.claude/notes/overnight-2026-10-03/junk-titles-held-batch2.tsv`).
   - [ ] Repairs apply results: expose `RowResult` reasons via `GET /repairs/:fixer/apply/:op_id/rows` (today only the v1 `GET /operations/:id/result` shows why a row was `changed_since_plan`).
   - [ ] Tracing: stand up Grafana Tempo per `deploy/grafana/TRACING-RUNBOOK.md` and set `OTEL_EXPORTER_OTLP_ENDPOINT` (needs `OTEL_EXPORTER_OTLP_TRACES_INSECURE=true` or `WithInsecure()` for plain gRPC).
