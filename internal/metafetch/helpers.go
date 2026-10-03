@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-10-03
 

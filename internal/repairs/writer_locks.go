@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_locks.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 37c8abdf-afee-4662-8fc6-4e18d4194825
 // last-edited: 2026-10-03
 

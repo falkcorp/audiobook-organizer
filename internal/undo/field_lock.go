@@ -1,5 +1,5 @@
 // file: internal/undo/field_lock.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4ea3ea92-44d9-4af5-ae13-c7c0ccc3e1c7
 // last-edited: 2026-10-03
 

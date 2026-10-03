@@ -1,7 +1,7 @@
 // file: internal/activity/changelog.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 93167949-a587-41e9-8ef9-92d03f86aea6
-// last-edited: 2026-08-18
+// last-edited: 2026-10-03
 
 package activity
 
