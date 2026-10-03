@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.75.3 -->
+<!-- version: 10.75.4 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -6003,7 +6003,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       path is allowed. Prefer pointing the demo at a directory under an already-allowed prefix
       over widening the allow-list. Found by review on #2798.
 
-- [x] **OPS-V2-DISPATCH-RACE — `dispatchCycle` can start a brand-new run after `Shutdown()` has been entered.** ✅ DONE 2026-10-03 (branch fix/silent-failures-scanner-recover-dispatch-threshold): still live after #3694 (stubs have nil cancel, so Shutdown could not stop them, and `executeRun` never read the flag). `executeRun` now checks `shuttingDown` under `r.mu` before registering its handle and leaves the row queued; `dispatchCycle` re-checks in its claim block. Deterministic tests in `dispatch_shutdown_race_test.go` (both fail without the fix).
+- [x] **OPS-V2-DISPATCH-RACE — `dispatchCycle` can start a brand-new run after `Shutdown()` has been entered.** ✅ DONE 2026-10-03 (branch fix/silent-failures-scanner-recover-dispatch-threshold): still live after #3694 (stubs have nil cancel, so Shutdown could not stop them, and `executeRun` never read the flag). `executeRun` now checks `shuttingDown` under `r.mu` before registering its handle and leaves the row queued; `dispatchCycle` re-checks in its claim block. Deterministic tests in `dispatch_shutdown_race_test.go` (both fail without the fix). Review round: `executeRun` also exits before `checkInfiniteRestart` once shutdown has begun; `Shutdown` releases claims still in `nextRun` (no status write), and its timeout path releases stubs instead of stamping never-run rows `interrupted_*`.
       `internal/operations/registry/dispatcher.go:36` reads `r.shuttingDown` once at
       the top of the cycle, then does a `ListQueuedOperationsV2()` store round-trip and
       a dispatch loop. `Shutdown` (`registry.go:1026`) flips the flag at its top, but a

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.32.0
+// version: 3.33.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-03
 
@@ -1384,6 +1384,10 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	// with no marker, which the next startup's resume sweep re-queues.
 	r.stopScanStandDownGrace()
 
+	// Claims still waiting in nextRun never ran; give them back as queued
+	// rows now rather than leaving stubs for the drain below to wait on.
+	r.releaseQueuedClaimsForShutdown()
+
 	// Gather running ops.
 	r.mu.Lock()
 	handles := make([]*runHandle, 0, len(r.running))
@@ -1402,8 +1406,13 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	// Wait until context expires or all workers drain.
 	done := make(chan struct{})
 	go func() {
-		// Poll until no running ops remain.
+		// Poll until no running ops remain. Each round first releases any
+		// claim that reached nextRun since the last round (a dispatch cycle
+		// that claimed before the flag flipped can still send afterwards), so
+		// a stub with no worker left to drop it cannot hold the drain open
+		// until ctx expires.
 		for {
+			r.releaseQueuedClaimsForShutdown()
 			r.mu.RLock()
 			n := len(r.running)
 			r.mu.RUnlock()
@@ -1424,9 +1433,17 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	case <-done:
 		r.logger.Info("registry: all workers drained")
 	case <-ctx.Done():
-		// Mark remaining as interrupted.
+		// Mark remaining as interrupted. A stub (cancel == nil) is not a run:
+		// its claim was made but no worker ever started it, so its row is
+		// still "queued" and must stay that way -- stamping it interrupted_*
+		// turned a never-run ResumeDrop op into interrupted_dropped, losing
+		// it. Release the claim instead. Deleting during range is safe in Go.
 		r.mu.Lock()
 		for opID, h := range r.running {
+			if h.cancel == nil {
+				r.releaseRunHandleLocked(opID)
+				continue
+			}
 			h.abandoned = true
 			status := interruptedStatus(h.resumePolicy)
 			now := time.Now().UTC()
@@ -1529,23 +1546,68 @@ func (r *Registry) pingDispatch() {
 // the concurrency key if held.
 func (r *Registry) releaseRunHandle(opID string) {
 	r.mu.Lock()
-	h, ok := r.running[opID]
-	if ok {
-		delete(r.running, opID)
-		if h.plugin != "" {
-			r.pluginRunning[h.plugin]--
-			if r.pluginRunning[h.plugin] < 0 {
-				r.pluginRunning[h.plugin] = 0
-			}
-		}
-		if h.concurrencyKey != "" {
-			if holder, held := r.concurrencyKeys[h.concurrencyKey]; held && holder == opID {
-				delete(r.concurrencyKeys, h.concurrencyKey)
-			}
-		}
-	}
+	r.releaseRunHandleLocked(opID)
 	r.mu.Unlock()
 	r.pingDispatch()
+}
+
+// releaseRunHandleLocked is releaseRunHandle's accounting for callers that
+// already hold r.mu. It does not ping the dispatcher.
+func (r *Registry) releaseRunHandleLocked(opID string) {
+	h, ok := r.running[opID]
+	if !ok {
+		return
+	}
+	delete(r.running, opID)
+	if h.plugin != "" {
+		r.pluginRunning[h.plugin]--
+		if r.pluginRunning[h.plugin] < 0 {
+			r.pluginRunning[h.plugin] = 0
+		}
+	}
+	if h.concurrencyKey != "" {
+		if holder, held := r.concurrencyKeys[h.concurrencyKey]; held && holder == opID {
+			delete(r.concurrencyKeys, h.concurrencyKey)
+		}
+	}
+}
+
+// releaseQueuedClaimsForShutdown empties the nextRun buffer without blocking
+// and releases each claim it held, writing NO status. Shutdown calls it after
+// setting shuttingDown, and on every drain poll.
+//
+// A claim in nextRun has never run: its handle is still the dispatcher's stub
+// (cancel == nil) and its row still reads "queued", which is the true state
+// and what the next Start dispatches. Left in the buffer, the claim would sit
+// in r.running with no worker to pick it up if the workers are gone (a worker
+// exits after abandoning a run), so the drain poll would wait out the whole
+// shutdown context, and the timeout path would then stamp a never-run row
+// interrupted_* -- interrupted_dropped for a ResumeDrop op, which loses it.
+// A worker that receives a claim first drops it through executeRun's shutdown
+// gate instead; the channel hands each claim to exactly one of the two.
+//
+// Only a stub is released: a full handle means a worker owns the run.
+// A claim the user canceled while queued is released the same way; Cancel
+// already moved its row to canceled.
+func (r *Registry) releaseQueuedClaimsForShutdown() int {
+	released := 0
+	for {
+		select {
+		case qr := <-r.nextRun:
+			r.mu.Lock()
+			if h, ok := r.running[qr.opID]; ok && h.cancel == nil {
+				r.releaseRunHandleLocked(qr.opID)
+				released++
+			}
+			r.mu.Unlock()
+		default:
+			if released > 0 {
+				r.logger.Info("registry: released queued claims at shutdown; rows stay queued for the next start",
+					"count", released)
+			}
+			return released
+		}
+	}
 }
 
 // --- Helpers ---
