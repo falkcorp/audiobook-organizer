@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-03-the-books-titled-by-a-number-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 9c4f2e71-3a8d-4b06-b5e2-7d1c0f6a9e38 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -14,7 +14,7 @@ that an old import had registered as their own book, and the real book, the
 one that already owned that chapter, sat right next to them.
 
 Overnight on 2 to 3 October the count of such entries went from **11,934**
-to **FINAL_COUNT** (primary books only; see the table at the end). Nothing was
+to **6,613** (primary books only; see the table at the end). The target of fewer than 500 was not reached; the section "What is still open" says why. Nothing was
 deleted. Each stray entry was folded back into the book it belonged to, with
 the change recorded so it can be undone.
 
@@ -61,10 +61,20 @@ the change recorded so it can be undone.
 
 ## What is still open
 
-- Chapter clusters where the real book does not exist as a single entry at
-  all (a serial's 262 chapters, a novel's 57 chapters each registered as a
-  book) cannot be folded into anything yet; they need a consolidation rule
-  for "many short chapters in one folder with different titles".
+- **4,966 of the remaining 6,613 are chapter sets with no real book to fold
+  into**: every chapter of a serial or novel was registered as its own book
+  and there is no multi-file entry that owns the set (S. M. Stirling 419,
+  Paolini's Inheritance 346, Lightbringer 309, Shadow's Edge 298, Horizon
+  Storms 293, Delve 267…). They need a consolidation rule for "many short
+  chapters in one folder with different titles", not a retitle.
+- About 350 entries titled like `02 - No Quarter` are refused by the title
+  repair because their title is marked as supplied by a metadata provider,
+  which no provider would do; whether the repair may override that flag is
+  the owner's call.
+- Five folded-chapter rows (about 400 entries: Eldest 313, Foundation 74…)
+  are blocked by a second book owning the same file whose title is a real
+  title ("Prelude to Foundation"); that may be a legitimate second edition,
+  so it is listed for the owner rather than merged.
 - Copies that match only by name and size, with no hash recorded, stay
   skipped until their files are hashed.
 - Titles that are a bare number with nothing else ("96 Hours", a year) are
@@ -74,7 +84,14 @@ the change recorded so it can be undone.
 
 | Measure | Before | After |
 |---|---|---|
-| Primary books with a number-leading title | 11,934 | FINAL_COUNT |
+| Primary books with a number-leading title | 11,934 | 6,613 |
+| …of which `NN - Text` | 6,920 | 4,070 |
+| …of which digits only (`03`) | 1,578 | 958 |
+| …of which disc-track (`1-06`) | 1,189 | 327 |
+| …of which `N of M` | 932 | 621 |
+| …of which `copyN` | 705 | 50 |
+| …of which `NN Text`, other, year-led | 610 | 587 |
+| Books retired into their real book | — | 9,563 |
 | Review page (`view=index&all=true`) | 8.3 s quiet, 40–105 s under load | 2.2–2.5 s warm, 4.0 s cold |
 | Time to fold one stray entry | 0.7 s small rows, 11 s large rows | 0.25 s |
 | Pull requests merged | — | 13 (#3672–#3685) |
