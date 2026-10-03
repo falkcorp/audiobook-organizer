@@ -3209,3 +3209,201 @@ func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
 		require.Contains(t, got.Reason, "not by "+fragFixerID)
 	})
 }
+
+// errInjectedCut is the failure cutStore injects.
+var errInjectedCut = errors.New("injected cut")
+
+// cutStore wraps the fixture store for a Writer and fails the at-th event,
+// counting every journal row and every book or book_file write in order:
+// cutting at the journal row of a step stops before the step, cutting at
+// its write leaves the journal row standing with nothing written (the two
+// ways a run is cut off between steps). at <= 0 never cuts.
+type cutStore struct {
+	*database.PebbleStore
+	at, n int
+	hit   bool
+}
+
+func (c *cutStore) event() error {
+	c.n++
+	if c.at > 0 && c.n == c.at {
+		c.hit = true
+		return errInjectedCut
+	}
+	return nil
+}
+
+func (c *cutStore) CreateOperationChange(ch *database.OperationChange) error {
+	if err := c.event(); err != nil {
+		return err
+	}
+	return c.PebbleStore.CreateOperationChange(ch)
+}
+
+func (c *cutStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if err := c.event(); err != nil {
+		return nil, err
+	}
+	return c.PebbleStore.ModifyBook(id, fn)
+}
+
+func (c *cutStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	if err := c.event(); err != nil {
+		return nil, err
+	}
+	return c.PebbleStore.ModifyBookFile(bookID, fileID, fn)
+}
+
+func (c *cutStore) MoveBookFilesToBook(fileIDs []string, source, target string) error {
+	if err := c.event(); err != nil {
+		return err
+	}
+	return c.PebbleStore.MoveBookFilesToBook(fileIDs, source, target)
+}
+
+// copiesFixtureState is the outcome of a numbered-copies apply, keyed by
+// stem so two fixtures (different ids) compare.
+func (f *fragFixture) copiesFixtureState(t *testing.T) map[string]string {
+	t.Helper()
+	stemOf := map[string]string{}
+	for role, id := range f.ids {
+		if stem, ok := strings.CutPrefix(role, "c:"); ok {
+			stemOf[id] = stem
+		}
+	}
+	out := map[string]string{}
+	for id, stem := range stemOf {
+		b, err := f.s.GetBookByID(id)
+		require.NoError(t, err)
+		merged := ""
+		if b.MergedIntoBookID != nil {
+			merged = stemOf[*b.MergedIntoBookID]
+		}
+		rows, err := f.s.GetBookFiles(id)
+		require.NoError(t, err)
+		var rs []string
+		for _, r := range rows {
+			rs = append(rs, fmt.Sprintf("%s#%d", r.OriginalFilename, r.TrackNumber))
+		}
+		sort.Strings(rs)
+		rel, _ := filepath.Rel(f.root, b.FilePath)
+		if b.FilePath == "" {
+			rel = ""
+		}
+		out[stem] = fmt.Sprintf("deleted=%t merged=%q primary=%t title=%q path=%q rows=%v",
+			b.IsSoftDeleted(), merged, b.IsPrimaryVersion == nil || *b.IsPrimaryVersion, b.Title, rel, rs)
+	}
+	return out
+}
+
+// cutTemplate is a seeded and planned copies folder whose store directory
+// is cloned per cut point, so a cut costs one store open, the cut-off apply
+// and the resume, never a re-seed or re-plan. The clone keeps every id, so
+// the template's plan row is valid against every clone, and the files on
+// disk are shared (the fixer moves no file).
+type cutTemplate struct {
+	dir, root string
+	ids       map[string]string
+	planJSON  string
+	row       repairs.Row
+}
+
+func newCutTemplate(t *testing.T, org string, vg bool) *cutTemplate {
+	t.Helper()
+	const folder = "lib/Clarke/02_light_of_other_days"
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	dir := t.TempDir()
+	s, err := database.NewPebbleStore(dir)
+	require.NoError(t, err)
+	s.WaitForWarmup()
+	f := &fragFixture{s: s, root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
+	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
+	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
+	withRoot(t, root)
+	orig, copies := f.seedChapterCopies(t, folder, nil)
+	f.organizeCopiesFixture(t, org, orig, copies)
+	if vg {
+		group := "vg-ch"
+		for i, id := range orig {
+			primary := i == 3
+			_, err := s.ModifyBook(id, func(b *database.Book) error { b.VersionGroupID = &group; b.IsPrimaryVersion = &primary; return nil })
+			require.NoError(t, err)
+		}
+	}
+	r, _ := f.p7Plan(t, folder)
+	tm := &cutTemplate{dir: dir, root: root, ids: f.ids, planJSON: *f.ops.rows["op-plan"].ResultData, row: r}
+	require.NoError(t, s.Close())
+	return tm
+}
+
+// clone opens a copy of the template's store as a fixture.
+func (tm *cutTemplate) clone(t *testing.T) *fragFixture {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.CopyFS(dir, os.DirFS(tm.dir)))
+	s, err := database.NewPebbleStore(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	s.WaitForWarmup()
+	f := &fragFixture{s: s, root: tm.root, ids: tm.ids, rowIDs: map[string]string{}}
+	plan := tm.planJSON
+	f.ops = &planOps{rows: map[string]*database.OperationV2Row{
+		"op-plan": {ID: "op-plan", DefID: repairs.PlanOpID, Status: "completed", ResultData: &plan}}}
+	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
+	return f
+}
+
+// TestFragmentFixer_NumberedCopiesCutAtEveryStep cuts a numbered set with
+// renamed copies at EVERY write event of Apply (each journal row and each
+// write: moves, track numbers, each retire's demote, merged-into, path and
+// soft-delete steps and its hand-off note, the copy retires, the folder and
+// the title), then resumes through the engine: the re-plan must keep the
+// plan's fingerprint and the end state must equal an uninterrupted run's.
+// Organized none / all / copies, with and without a version group linking
+// the originals.
+//
+// One event does not stop the run: the version-group hand-off's journal row
+// (retireHandOff) is written AFTER versionprimary.EnsureSinglePrimary has
+// written the crown straight to the store, and a failure to journal it is
+// logged, not returned, by design. A cut there must still end in the same
+// state. The crown write itself goes past the Writer and cannot be cut here.
+func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
+	for _, org := range []string{"none", "all", "copies"} {
+		for _, vg := range []bool{false, true} {
+			t.Run(fmt.Sprintf("organized=%s vg=%t", org, vg), func(t *testing.T) {
+				tm := newCutTemplate(t, org, vg)
+				ref := tm.clone(t)
+				out := ref.apply(t, "op-plan", "op-apply", []string{tm.row.RowID}, nil)
+				require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
+				want := ref.copiesFixtureState(t)
+				cuts, through := 0, 0
+				for at := 1; ; at++ {
+					f := tm.clone(t)
+					cs := &cutStore{PebbleStore: f.s, at: at}
+					w := repairs.NewWriter(cs, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(cs, cs, "op-cut")
+					err := newFragmentFixer(f.p).Apply(context.Background(), w, tm.row)
+					if !cs.hit {
+						require.NoError(t, err, "event %d never reached", at)
+						break
+					}
+					if err == nil {
+						// The best-effort hand-off note: the run went on.
+						through++
+						require.Equal(t, want, f.copiesFixtureState(t), "cut at event %d (not stopping): end state", at)
+						continue
+					}
+					cuts++
+					got, rerr := newFragmentFixer(f.p).Replan(context.Background(), nil, tm.row, nil)
+					require.NoError(t, rerr)
+					require.Equal(t, tm.row.Fingerprint, got.Fingerprint, "cut at event %d: re-plan reason %q", at, got.Reason)
+					res := f.apply(t, "op-plan", "op-resume", []string{tm.row.RowID}, nil)
+					require.Equal(t, 1, res.Applied, "cut at event %d: outcomes %v %+v", at, res.ByOutcome, res.Rows)
+					require.Equal(t, want, f.copiesFixtureState(t), "cut at event %d: end state", at)
+				}
+				t.Logf("organized=%s vg=%t: %d cut points resumed to the same end state; %d best-effort events ran through", org, vg, cuts, through)
+				require.Greater(t, cuts, 40)
+			})
+		}
+	}
+}
