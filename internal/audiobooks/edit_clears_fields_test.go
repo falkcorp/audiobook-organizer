@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_clears_fields_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 451212a4-52da-4236-9a22-658fce80859a
 // last-edited: 2026-10-03
 
@@ -1051,8 +1051,8 @@ func TestUpdateAudiobook_WhitespaceOnlyDifferencesAreNotEdits(t *testing.T) {
 }
 
 // A case-only author edit keeps the book on the same author row (the lookup
-// is case-insensitive) instead of creating a new one. The series side of a
-// case-only edit is open (todo.d EDIT-SERIES-CASE-RENAME) and not pinned.
+// is case-insensitive) instead of creating a new one. Case-only series edits
+// are covered below.
 func TestUpdateAudiobook_CaseOnlyAuthorEditKeepsTheSameRow(t *testing.T) {
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
@@ -1068,4 +1068,112 @@ func TestUpdateAudiobook_CaseOnlyAuthorEditKeepsTheSameRow(t *testing.T) {
 	row, err := store.GetBookByID(book.ID)
 	require.NoError(t, err)
 	require.Equal(t, a.ID, *row.AuthorID, "a case-only author edit moved the book to another author row")
+}
+
+// --- case-only series edits --------------------------------------------------
+
+// caseFixture: a series "the saga" stored with no author, and a book linked
+// to it whose author is set (withAuthor) or not.
+func caseFixture(t *testing.T, withAuthor bool) (*database.PebbleStore, *database.Book, *database.Series, *int) {
+	t.Helper()
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s, err := store.CreateSeries("the saga", nil)
+	require.NoError(t, err)
+	b := &database.Book{Title: "T", FilePath: "/library/case.m4b", Format: "m4b", SeriesID: &s.ID, Series: s}
+	var authorID *int
+	if withAuthor {
+		a, err := store.CreateAuthor("Alice Able")
+		require.NoError(t, err)
+		b.AuthorID, b.Author, authorID = &a.ID, a, &a.ID
+	}
+	book, err := store.CreateBook(b)
+	require.NoError(t, err)
+	return store, book, s, authorID
+}
+
+func requireSeriesRow(t *testing.T, store *database.PebbleStore, bookID string, wantID int, wantName string) {
+	t.Helper()
+	row, err := store.GetBookByID(bookID)
+	require.NoError(t, err)
+	require.NotNil(t, row.SeriesID)
+	require.Equal(t, wantID, *row.SeriesID, "the book was moved to another series row")
+	s, err := store.GetSeriesByID(wantID)
+	require.NoError(t, err)
+	require.Equal(t, wantName, s.Name, "series row name")
+	view, err := audiobooks.NewAudiobookService(store).GetAudiobook(context.Background(), bookID)
+	require.NoError(t, err)
+	require.NotNil(t, view.Series)
+	require.Equal(t, wantName, view.Series.Name, "GET series name")
+}
+
+// A case-only edit on a book that has an author: the author-scoped lookup
+// used to miss the author-less row, create a second "The Saga" under the
+// book's author and move the book onto it. The link is kept, no row is
+// created, and as the only member the row takes the new casing (recorded
+// in the book's history).
+func TestUpdateAudiobook_CaseOnlySeriesEditOnAnAuthoredBookKeepsTheRow(t *testing.T) {
+	store, book, s, authorID := caseFixture(t, true)
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"series_name": "The Saga"})
+	require.NoError(t, err)
+	requireSeriesRow(t, store, book.ID, s.ID, "The Saga")
+	dup, err := store.GetSeriesByName("The Saga", authorID)
+	require.NoError(t, err)
+	require.Nil(t, dup, "a duplicate series row was created under the book's author")
+	h := historyByField(t, store, book.ID)
+	require.NotEmpty(t, h[database.HistoryFieldSeries], "the rename left no history")
+}
+
+// The same on an author-less book: the row (sole member) takes the casing.
+func TestUpdateAudiobook_CaseOnlySeriesEditOnAnAuthorlessBookRenamesTheSoleRow(t *testing.T) {
+	store, book, s, _ := caseFixture(t, false)
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"series_name": "The Saga"})
+	require.NoError(t, err)
+	requireSeriesRow(t, store, book.ID, s.ID, "The Saga")
+	var found bool
+	for _, r := range historyByField(t, store, book.ID)[database.HistoryFieldSeries] {
+		if r.ChangeType == database.ChangeTypeManual && r.PreviousValue != nil && *r.PreviousValue == `"the saga"` &&
+			r.NewValue != nil && *r.NewValue == `"The Saga"` {
+			found = true
+		}
+	}
+	require.True(t, found, "no manual series history row the saga -> The Saga")
+}
+
+// A series other books share is not renamed by one book's edit: the link is
+// kept and the row keeps its name (and nothing is locked, since nothing
+// changed).
+func TestUpdateAudiobook_CaseOnlySeriesEditOfASharedSeriesKeepsItsName(t *testing.T) {
+	store, book, s, _ := caseFixture(t, true)
+	_, err := store.CreateBook(&database.Book{Title: "Other", FilePath: "/library/other.m4b", Format: "m4b", SeriesID: &s.ID, Series: s})
+	require.NoError(t, err)
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"series_name": "The Saga"})
+	require.NoError(t, err)
+	requireSeriesRow(t, store, book.ID, s.ID, "the saga")
+	require.NotContains(t, lockedKeys(t, store, book.ID), database.FieldKeySeriesName)
+}
+
+// A series name matching an existing series of the same author, in other
+// casing, resolves to that series instead of creating a duplicate.
+func TestUpdateAudiobook_SeriesNameInOtherCasingResolvesToTheAuthorsSeries(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	a, err := store.CreateAuthor("Alice Able")
+	require.NoError(t, err)
+	s, err := store.CreateSeries("The Saga", &a.ID)
+	require.NoError(t, err)
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/n.m4b", Format: "m4b", AuthorID: &a.ID, Author: a})
+	require.NoError(t, err)
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"series_name": "the  saga"})
+	require.NoError(t, err)
+	row, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row.SeriesID)
+	require.Equal(t, s.ID, *row.SeriesID, "a duplicate series was created instead of resolving the author's series")
 }

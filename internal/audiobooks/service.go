@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.47.0
+// version: 1.48.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-03
 
@@ -105,6 +105,7 @@ type narratorResolver interface {
 type seriesResolver interface {
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
+	RenameSeriesIf(id int, expectCurrent, newName string) error
 }
 
 // contributorHydrator is the batch side used when enriching a page of results:
