@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -127,6 +127,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -143,6 +144,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 const fragFixerID = "fragment-consolidation"
@@ -188,6 +190,11 @@ const (
 	// title, or facts that contradict the fragment's). Which book keeps the
 	// file is the owner's decision; the row lists both.
 	fragSkipCoOwner = "skipped_co_owner"
+	// fragSkipNumberedUnsure: a folder's numbered files look like one
+	// serial's chapters but fail a test that tells a chapter set from
+	// several works in one folder (the numbering, the authors, the folder).
+	// Listed so the owner sees the cluster; never applied.
+	fragSkipNumberedUnsure = "skipped_numbered_set_unsure"
 )
 
 // Evidence kinds of a fragment-to-parent match, strongest first.
@@ -661,6 +668,27 @@ type fragLibrary struct {
 	// turns the rule off (the fragments stay ambiguous, and say why).
 	verdicts    dcRejections
 	verdictsErr string
+	// roots are the library root and the import paths, cleaned: a folder
+	// that IS one of them holds whatever was dropped there, never one work.
+	roots []string
+}
+
+// loadRoots reads the library root and the import paths into the snapshot.
+func (lib *fragLibrary) loadRoots(store OpsStore) error {
+	if r := strings.TrimSpace(config.AppConfig.RootDir); r != "" {
+		lib.roots = append(lib.roots, filepath.Clean(r))
+	}
+	imports, err := store.GetAllImportPaths()
+	if err != nil {
+		// Fail closed: a numbered set must not be formed in a root unseen.
+		return fmt.Errorf("list import paths: %w", err)
+	}
+	for i := range imports {
+		if p := strings.TrimSpace(imports[i].Path); p != "" {
+			lib.roots = append(lib.roots, filepath.Clean(p))
+		}
+	}
+	return nil
 }
 
 func newFragLibrary() *fragLibrary {
@@ -702,6 +730,9 @@ func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
 		for _, a := range authors {
 			lib.authors[a.ID] = a.Name
 		}
+	}
+	if err := lib.loadRoots(store); err != nil {
+		return nil, err
 	}
 	return lib, nil
 }
@@ -1692,80 +1723,191 @@ func groupDir(c *fragCandidate) (dir string, disc int) {
 // collide with a chapter key, which is lower-case text.
 const fragNumberedKey = "\x01numbered"
 
-// numberedSets finds, per import folder, the numbered chapter sets: at least
-// fragMinGroup unmatched fragments whose stems open with a chapter number,
-// every number different, and at least two different chapter keys among
-// them ("070 - Skating", "047 - Core"). A serial's chapters each carry their
-// own title, so ChapterGroupKey keys them apart and no key group ever forms;
+// numberedSet is one folder's leading-numbered fragments taken as a serial's
+// chapters. problem is "" when every test passed, else why the folder may
+// hold something other than one work's chapters.
+type numberedSet struct {
+	dir     string
+	members []*fragCandidate
+	problem string
+}
+
+// numberedSets finds, per import folder, the candidate numbered chapter
+// sets: at least fragMinGroup unmatched fragments whose stems open with a
+// chapter number and carry at least two different chapter keys
+// ("070 - Skating", "047 - Core"). A serial's chapters each have their own
+// title, so ChapterGroupKey keys them apart and no key group ever forms;
 // 4,966 such books were left on prod on 2026-10-03 (SenescentSoul 262,
-// Anansi Boys 55). The set takes the whole folder's leading-numbered files,
-// including any that would have formed a key group among themselves (three
-// "Interlude" chapters of the same serial belong to it, not to a book of
-// their own). Two numbered files claiming one position mean the folder
-// holds more than one work ("01 - Book A", "01 - Book B"): no set is formed
-// and the key groups decide, as before. The duration gate, the track-order
-// check and the survivor rule of noParentRow apply unchanged.
-func numberedSets(cands []*fragCandidate) map[string][]*fragCandidate {
+// Anansi Boys 55).
+//
+// Numbers alone do not make a serial. Each test below answers a shape that
+// merged different works in review (2026-10-03), and a set that fails one
+// carries the reason in problem:
+//
+//   - a library root or import path as the folder: whatever was dropped
+//     there ("downloads/01 - Green Eggs", "02 - Some Podcast");
+//   - a file in a disc folder: "CD1/01 - Alpha", "CD2/01 - Beta" never
+//     collide on position, so nothing would tell three works apart;
+//   - two files at one position: two works that both start at 01;
+//   - members by different authors or of different series;
+//   - numbering that does not run from 0 or 1 without large gaps: years and
+//     title numbers ("1632 - …", "1984 - …", "2001 - …") are not chapters;
+//   - a chapter key with fragMinGroup or more files that sit together as
+//     one block ("01-03 - Book A", then "04 - Book B"): that block is a
+//     work of its own. Three "Interlude" chapters spread through a serial
+//     are not a block and stay in the set.
+func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 	type entry struct {
 		c   *fragCandidate
 		key string
 		pos metadata.ChapterPos
+		num int
 	}
 	byDir := map[string][]entry{}
+	discDir := map[string]bool{}
 	for _, c := range cands {
 		key, kind := metadata.ChapterGroupKey(c.origStem())
 		if kind != metadata.ChapterKeyLeading {
 			continue
 		}
 		pos, ok := chapterPos(c)
-		if !ok {
+		if !ok || len(pos.Parts) == 0 {
 			continue
 		}
-		dir, _ := groupDir(c)
-		byDir[dir] = append(byDir[dir], entry{c, key, pos})
+		dir, disc := groupDir(c)
+		if disc > 0 || pos.Disc > 0 {
+			discDir[dir] = true
+		}
+		byDir[dir] = append(byDir[dir], entry{c, key, pos, pos.Parts[0]})
 	}
-	sets := map[string][]*fragCandidate{}
-	for dir, es := range byDir {
+	var dirs []string
+	for dir := range byDir {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+	var sets []numberedSet
+	for _, dir := range dirs {
+		es := byDir[dir]
 		if len(es) < fragMinGroup {
 			continue
 		}
-		keys := map[string]bool{}
+		keyN := map[string]int{}
 		for _, e := range es {
-			keys[e.key] = true
+			keyN[e.key]++
 		}
-		if len(keys) < 2 {
+		if len(keyN) < 2 {
 			continue // one key: the key group already covers it
 		}
-		sort.SliceStable(es, func(i, j int) bool { return es[i].pos.Compare(es[j].pos) < 0 })
-		collide := false
-		for i := 1; i < len(es); i++ {
-			if es[i].pos.Compare(es[i-1].pos) == 0 {
-				collide = true
-				break
+		sort.SliceStable(es, func(i, j int) bool {
+			if cmp := es[i].pos.Compare(es[j].pos); cmp != 0 {
+				return cmp < 0
+			}
+			return es[i].c.Book.ID < es[j].c.Book.ID
+		})
+		set := numberedSet{dir: dir}
+		for _, e := range es {
+			set.members = append(set.members, e.c)
+		}
+		first := es[0].c.Book
+		lo, hi := es[0].num, es[len(es)-1].num
+		switch {
+		case slices.Contains(lib.roots, filepath.Clean(dir)):
+			set.problem = fmt.Sprintf("%s is a library root or import path: it holds whatever was put there, not one work", dir)
+		case discDir[dir]:
+			set.problem = "some of the files sit in disc folders or carry a disc number; discs are grouped by chapter key only"
+		}
+		for i := 1; i < len(es) && set.problem == ""; i++ {
+			e := es[i]
+			switch {
+			case e.pos.Compare(es[i-1].pos) == 0:
+				set.problem = fmt.Sprintf("%q and %q claim the same chapter position: more than one work in the folder", es[i-1].c.origStem(), e.c.origStem())
+			case !sameIntPtr(e.c.Book.AuthorID, first.AuthorID):
+				set.problem = fmt.Sprintf("the files are by different authors (%q, %q)", lib.authorName(first), lib.authorName(e.c.Book))
+			case !sameIntPtr(e.c.Book.SeriesID, first.SeriesID):
+				set.problem = fmt.Sprintf("the files belong to different series (%q, %q)", lib.seriesName(first), lib.seriesName(e.c.Book))
 			}
 		}
-		if collide {
-			continue
+		if set.problem == "" && (lo > 1 || float64(hi-lo+1) > 1.25*float64(len(es))) {
+			set.problem = fmt.Sprintf("the numbers run %d to %d over %d files: not a chapter run from 0 or 1 without large gaps", lo, hi, len(es))
 		}
-		for _, e := range es {
-			sets[dir] = append(sets[dir], e.c)
+		if set.problem == "" {
+			// A key with enough files to be a group of its own, all adjacent.
+			for i := 0; i < len(es); {
+				j := i
+				for j < len(es) && es[j].key == es[i].key {
+					j++
+				}
+				if run := j - i; run >= fragMinGroup && run == keyN[es[i].key] {
+					set.problem = fmt.Sprintf("the %d files keyed %q sit together as one block (%q … %q): a work of its own beside the others",
+						run, es[i].key, es[i].c.origStem(), es[j-1].c.origStem())
+					break
+				}
+				i = j
+			}
 		}
+		sets = append(sets, set)
 	}
 	return sets
 }
 
 // noParentRows groups unmatched fragments by import folder and chapter key,
 // and a folder's differently-titled numbered files as one numbered set.
+//
+// A numbered set that passes every test and whose row is not stopped by its
+// files (missing, unknown or long durations, no work folder to title it
+// from) takes all the folder's numbered files, including any that would
+// have formed a key group among themselves. A set that does not is dropped
+// in favour of the key groups, exactly as before the rule existed; when no
+// key group forms from its files either, its row is listed with the reason
+// so the cluster is visible, and nothing is applied.
 func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) []repairs.Row {
-	sets := numberedSets(cands)
+	var rows []repairs.Row
 	inSet := map[*fragCandidate]bool{}
-	groups := map[string][]*fragCandidate{}
-	for dir, cs := range sets {
-		for _, c := range cs {
+	for _, set := range numberedSets(lib, cands) {
+		if a := lib.authorName(set.members[0].Book); set.problem == "" && a != "" &&
+			strings.EqualFold(util.NormalizeAuthor(filepath.Base(set.dir)), util.NormalizeAuthor(a)) {
+			set.problem = fmt.Sprintf("the folder %q is named like the files' author: an author folder holds several works", filepath.Base(set.dir))
+		}
+		row := f.noParentRow(lib, set.dir, fragNumberedKey, set.members)
+		// untitled: the files ARE one numbered run, but nothing names the
+		// work. The set is held and its files are not handed to the key
+		// groups: three "Interlude" chapters of an untitled serial are not
+		// a book either.
+		untitled := false
+		if row.Class != fragClassManual {
+			switch {
+			case set.problem != "":
+				row.Skipped, row.SkipReason = fragSkipNumberedUnsure, set.problem
+			case row.Proposed["title"] == "":
+				untitled = true
+				row.Skipped, row.SkipReason = fragSkipNumberedUnsure,
+					"the folder gives no title for the work (a generic folder, or one directly under a root); the survivor would keep one chapter's name"
+			}
+		}
+		usable := row.Class == fragClassManual || untitled
+		switch row.Skipped {
+		case "", fragSkipTrackOrder, fragSkipNoSurvivor:
+			usable = true
+		}
+		if !usable {
+			keyN := map[string]int{}
+			fallback := false
+			for _, c := range set.members {
+				key, _ := metadata.ChapterGroupKey(c.origStem())
+				if keyN[key]++; keyN[key] >= fragMinGroup {
+					fallback = true
+				}
+			}
+			if fallback {
+				continue // the key groups decide, as before
+			}
+		}
+		for _, c := range set.members {
 			inSet[c] = true
 		}
-		groups[dir+"\x00"+fragNumberedKey] = cs
+		rows = append(rows, row)
 	}
+	groups := map[string][]*fragCandidate{}
 	for _, c := range cands {
 		if inSet[c] {
 			continue
@@ -1784,7 +1926,6 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	var rows []repairs.Row
 	for _, gk := range keys {
 		cs := groups[gk]
 		if len(cs) < fragMinGroup {
@@ -1793,6 +1934,7 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 		dir, key, _ := strings.Cut(gk, "\x00")
 		rows = append(rows, f.noParentRow(lib, dir, key, cs))
 	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].RowID < rows[j].RowID })
 	return rows
 }
 
@@ -1952,15 +2094,34 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		r.State = raw
 	}
 	shared := fmt.Sprintf("%d fragment books imported from %s share the chapter key %q", len(cs), dir, key)
+	var stems []string
 	if key == fragNumberedKey {
+		keyN := map[string]int{}
+		bigKey := ""
+		for _, m := range plan.Members {
+			k, _ := metadata.ChapterGroupKey(m.Frag.origStem())
+			if keyN[k]++; keyN[k] > keyN[bigKey] || bigKey == "" {
+				bigKey = k
+			}
+			if len(stems) < 12 {
+				stems = append(stems, m.Frag.origStem())
+			}
+		}
 		first, last := plan.Members[0].Frag, plan.Members[len(plan.Members)-1].Frag
-		shared = fmt.Sprintf("%d fragment books imported from %s are numbered chapters with titles of their own (%q … %q), no two at the same position",
-			len(cs), dir, first.origStem(), last.origStem())
+		shared = fmt.Sprintf("%d fragment books imported from %s are numbered chapters with titles of their own (%q … %q): %d different chapter keys, the commonest %q on %d file(s)",
+			len(cs), dir, first.origStem(), last.origStem(), len(keyN), bigKey, keyN[bigKey])
 	}
 	r.Evidence = []string{
 		shared,
 		fmt.Sprintf("durations: %d known, %d unknown, %d at or over %d min", len(cs)-unknown, unknown, long, limit/60),
 		"no existing book owns any of these files",
+	}
+	if len(stems) > 0 {
+		more := ""
+		if len(cs) > len(stems) {
+			more = fmt.Sprintf(" … and %d more", len(cs)-len(stems))
+		}
+		r.Evidence = append(r.Evidence, "in order: "+strings.Join(stems, " | ")+more)
 	}
 	r.Current = map[string]string{"fragments": strconv.Itoa(len(cs)), "folder": dir}
 	r.Proposed = map[string]string{
@@ -2020,6 +2181,9 @@ func (f *fragmentFixer) Replan(ctx context.Context, _ json.RawMessage, planned r
 	}
 	for _, s := range all {
 		lib.series[s.ID] = s.Name
+	}
+	if err := lib.loadRoots(store); err != nil {
+		return repairs.Row{}, err
 	}
 	for _, id := range planned.BookIDs {
 		if err := ctx.Err(); err != nil {
@@ -2290,7 +2454,7 @@ func rowPaths(r repairs.Row) []string {
 // contradict the fragment's, so it may be a second edition, and which book
 // keeps the file is the owner's decision (owner, 2026-10-03). The co-owner is
 // listed as a member with its role, never in BookIDs: the row writes nothing
-// to it. Plan only: it needs the whole library, and a held row is never
+// to it. The row keeps its class; the skip kind is what holds it. Plan only: it needs the whole library, and a held row is never
 // re-planned.
 func holdCoOwned(lib *fragLibrary, rows []repairs.Row) {
 	owners := map[string][]string{} // path -> live books holding a row at it
@@ -2327,19 +2491,30 @@ func holdCoOwned(lib *fragLibrary, rows []repairs.Row) {
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
+		listed := map[string]bool{}
+		for _, m := range r.Members {
+			listed[m.BookID] = true
+		}
+		shared := map[string]bool{}
 		var names []string
 		for _, id := range ids {
 			b := lib.books[id]
-			r.Members = append(r.Members, member(lib, b, "co-owner"))
+			if !listed[id] {
+				r.Members = append(r.Members, member(lib, b, "co-owner"))
+			}
 			sort.Strings(at[id])
 			for _, path := range at[id] {
+				shared[path] = true
 				r.Evidence = append(r.Evidence, fmt.Sprintf("%s is also a file of book %s (%q)", path, id, b.Title))
 			}
 			names = append(names, fmt.Sprintf("%s (%q)", id, b.Title))
 		}
-		r.Class, r.Risk, r.Skipped = fragClassHeld, repairs.RiskReview, fragSkipCoOwner
-		r.SkipReason = fmt.Sprintf("%d file(s) of this row are also owned by live book(s) outside it: %s; decide which book keeps each file (merge or retire the other by hand), then plan again",
-			len(at), strings.Join(names, ", "))
+		// The class stays what it was (moved, copy, no-parent): the class
+		// chips keep counting the row where the owner looks for it, and the
+		// skip kind says why it is held.
+		r.Risk, r.Skipped = repairs.RiskReview, fragSkipCoOwner
+		r.SkipReason = fmt.Sprintf("%d file(s) of this row are also owned by %d live book(s) outside it: %s; decide which book keeps each file (merge or retire the other by hand), then plan again",
+			len(shared), len(ids), strings.Join(names, ", "))
 	}
 }
 
