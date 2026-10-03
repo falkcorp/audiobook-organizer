@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -35,6 +35,13 @@ type ledgerStub struct {
 	// renameErr makes RenameSeriesIf refuse, as the store does when a create
 	// or rename lands after CheckRestoreReferent passed.
 	renameErr error
+	// history records the rows RecordMetadataChange received.
+	history []database.MetadataChangeRecord
+}
+
+func (s *ledgerStub) RecordMetadataChange(rec *database.MetadataChangeRecord) error {
+	s.history = append(s.history, *rec)
+	return nil
 }
 
 func (s *ledgerStub) GetBookByID(id string) (*database.Book, error) {

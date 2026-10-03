@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_series_id_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 5a0e7c3d-9b41-4f62-8d17-c2e4a6f19b08
-// last-edited: 2026-09-13
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -62,6 +62,48 @@ func TestRevertOperation_SeriesID_EmptyOldValueClearsToNil(t *testing.T) {
 	}
 	if result.Restored != 1 || !slices.Equal(s.marked, []string{"c1"}) {
 		t.Errorf("restored = %d, marked = %v, want 1 and [c1]", result.Restored, s.marked)
+	}
+}
+
+// A restored series_id records a history row: Source operation_revert, the
+// operation id in BatchID, change type undo, and the refs. Without it the
+// newest history still said "set to 9" after the revert cleared the link, and
+// maintenance.relink-stale-series re-proposed the reverted link.
+func TestRevertOperation_SeriesID_RecordsHistory(t *testing.T) {
+	s := &ledgerStub{
+		book:    &database.Book{ID: "b1", Title: "T", SeriesID: intp(9)},
+		changes: []*database.OperationChange{seriesIDRow("c1", "", "9")},
+		series:  map[int]*database.Series{9: {ID: 9, Name: "Kept"}},
+	}
+	if _, err := NewRevertService(s).RevertOperation("op"); err != nil {
+		t.Fatalf("RevertOperation: %v", err)
+	}
+	if len(s.history) != 1 {
+		t.Fatalf("history = %+v, want exactly one row", s.history)
+	}
+	h := s.history[0]
+	if h.Field != database.HistoryFieldSeries || h.Source != RevertHistorySource || h.BatchID != "op" || h.ChangeType != "undo" {
+		t.Errorf("row = %+v, want field series, source %s, batch op, change type undo", h, RevertHistorySource)
+	}
+	if h.PreviousRef == nil || h.PreviousRef.SeriesID == nil || *h.PreviousRef.SeriesID != 9 || h.NewRef == nil || h.NewRef.SeriesID != nil {
+		t.Errorf("refs = %+v -> %+v, want series 9 -> nil", h.PreviousRef, h.NewRef)
+	}
+	if h.NewValue == nil || *h.NewValue != `""` {
+		t.Errorf("new value = %v, want empty", h.NewValue)
+	}
+}
+
+// A row already restored writes nothing and records no history.
+func TestRevertOperation_SeriesID_AlreadyRestoredRecordsNothing(t *testing.T) {
+	s := &ledgerStub{
+		book:    &database.Book{ID: "b1", Title: "T"},
+		changes: []*database.OperationChange{seriesIDRow("c1", "", "9")},
+	}
+	if _, err := NewRevertService(s).RevertOperation("op"); err != nil {
+		t.Fatalf("RevertOperation: %v", err)
+	}
+	if len(s.history) != 0 {
+		t.Errorf("history = %+v, want none", s.history)
 	}
 }
 

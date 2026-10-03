@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_service_organize_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f8c2a1d-5e9b-4f70-a3c6-8d1e0f2b9a47
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package audiobooks
 
@@ -85,6 +85,9 @@ type stubStoreForRevert struct {
 	database.Store
 	book *database.Book
 }
+
+// RecordMetadataChange accepts the history rows a revert records.
+func (s *stubStoreForRevert) RecordMetadataChange(*database.MetadataChangeRecord) error { return nil }
 
 // GetBookByID returns an independent copy per read, as PebbleStore does, so
 // the caller's edits never reach s.book except through ModifyBook/UpdateBook.
