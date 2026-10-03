@@ -156,11 +156,11 @@ func TestUpdateAudiobook_EditorSeriesClearRecordsOneRow(t *testing.T) {
 func TestUpdateAudiobook_SeriesClearReplacesALockedSeriesOverride(t *testing.T) {
 	store, book, _ := seriesFixture(t)
 	svc := audiobooks.NewAudiobookUpdateService(store)
-	// Lock the current series and position through overrides (re-sending an
-	// unchanged value no longer locks it).
+	// Lock a series and position through overrides (re-sending an unchanged
+	// value no longer locks it, so the fixture changes both).
 	_, err := svc.UpdateAudiobook(context.Background(), book.ID, map[string]any{"overrides": map[string]any{
-		"series_name":     map[string]any{"value": "Redshirts", "locked": true},
-		"series_position": map[string]any{"value": 1, "locked": true},
+		"series_name":     map[string]any{"value": "Old Man's War", "locked": true},
+		"series_position": map[string]any{"value": 2, "locked": true},
 	}})
 	require.NoError(t, err)
 	before := fieldStates(t, store, book.ID)
@@ -402,7 +402,7 @@ func TestUpdateAudiobook_DanglingSeriesIDIsDroppedWithoutLockOrPositionWipe(t *t
 	require.NoError(t, err)
 
 	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
-		bookDetailSave("T"))
+		bookDetailSave("Renamed"))
 	require.NoError(t, err)
 	row, err := store.GetBookByID(book.ID)
 	require.NoError(t, err)
