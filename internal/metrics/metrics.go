@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package metrics
 
@@ -35,11 +35,17 @@ var (
 		Name:      "operations_canceled_total",
 		Help:      "Total number of operations canceled by type",
 	}, []string{"type"})
+	// operationDuration is one observation per finished run attempt, labelled by
+	// the op's def_id (library.scan, repairs.apply, maintenance.*, ...). The
+	// buckets span 0.1s..24h: ops here run anywhere from a sub-second config
+	// poke to a multi-hour dedup.full-scan, and the former 50ms..3.4s ladder
+	// (never observed -- the helpers below were defined but not called until
+	// 2026-10-03) would have put every real op in +Inf.
 	operationDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "audiobook_organizer",
 		Name:      "operation_duration_seconds",
-		Help:      "Histogram of operation durations in seconds by type",
-		Buckets:   prometheus.ExponentialBuckets(0.05, 1.6, 10), // ~50ms up to several seconds/minutes
+		Help:      "Histogram of operation run-attempt durations in seconds by op def_id (type)",
+		Buckets:   []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 14400, 43200, 86400},
 	}, []string{"type"})
 
 	booksGauge = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -295,6 +301,7 @@ func Register() {
 			itunesLocationUnmappable, organizeTargetPathCollision, aiBackendAvailable,
 			opItemsProcessed, opItemsTotal,
 			absListeningStatsReadFailures)
+		prometheus.MustRegister(pipelineCollectors...)
 	})
 }
 
