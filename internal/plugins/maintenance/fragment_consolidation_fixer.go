@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -675,6 +675,19 @@ type fragLibrary struct {
 	// libraryRoot is the organized library's root ("" unset). A folder
 	// directly under it is an author folder, whatever its name.
 	libraryRoot string
+}
+
+// folderNamesAnyAuthor returns the author the folder is named for, among the
+// authors the snapshot holds ("" none). The lowest id wins, so the answer
+// does not depend on map order.
+func (lib *fragLibrary) folderNamesAnyAuthor(folder string) string {
+	best, name := 0, ""
+	for id, a := range lib.authors {
+		if (name == "" || id < best) && folderNamesAuthor(folder, a) {
+			best, name = id, a
+		}
+	}
+	return name
 }
 
 // loadRoots reads the library root and the import paths into the snapshot.
@@ -1746,6 +1759,12 @@ type numberedSet struct {
 	// works are what the key groups find, so the key groups decide. Any
 	// other problem doubts the folder as a whole, key groups included.
 	sideBySide bool
+	// keyGroups are the chapter keys the key-group rule may still take from a
+	// sideBySide folder: three or more files with consecutive numbers ("01-03
+	// - Book A"), or any key when the folder has disc folders (the tested
+	// disc path). Scattered same-named chapters ("04, 06, 08 - Intro") are
+	// not a work of their own and are not among them.
+	keyGroups map[string]bool
 }
 
 // fragNumberedMin is the fewest files a numbered set is applied with. Three
@@ -1807,7 +1826,8 @@ func folderNamesAuthor(folder, author string) bool {
 //     author: an author folder holds several works;
 //   - a file in a disc folder: "CD1/01 - Alpha", "CD2/01 - Beta" never
 //     collide on position, so nothing would tell three works apart;
-//   - two files at one position: two works that both start at 01;
+//   - two files with one chapter number: a duplicate file, or two works
+//     that both start at 01;
 //   - members by different authors or of different series;
 //   - numbering that does not run from 0 or 1 without large gaps: years and
 //     title numbers ("1632 - …", "1984 - …", "2001 - …") are not chapters;
@@ -1885,15 +1905,25 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 			set.problem = fmt.Sprintf("%s sits directly under the library root: an author folder holds several works", dir)
 		case folderNamesAuthor(filepath.Base(clean), lib.authorName(first)):
 			set.problem = fmt.Sprintf("the folder %q is named for the files' author (%q): an author folder holds several works", filepath.Base(clean), lib.authorName(first))
+		case first.AuthorID == nil && lib.folderNamesAnyAuthor(filepath.Base(clean)) != "":
+			// Files with no author linked, in a folder named like an author
+			// the library knows: still an author folder.
+			set.problem = fmt.Sprintf("the folder %q is named like the author %q: an author folder holds several works", filepath.Base(clean), lib.folderNamesAnyAuthor(filepath.Base(clean)))
 		case discDir[dir]:
-			set.problem = "some of the files sit in disc folders or carry a disc number; discs are grouped by chapter key only"
+			// Disc folders keep the behaviour they had: the key groups
+			// decide (a book's discs share one key), never a numbered set.
+			set.sideBySide = true
+			set.problem = "some of the files sit in disc folders or carry a disc number: a numbered set is not formed across discs"
 		}
 		for i := 1; i < len(es) && set.problem == ""; i++ {
 			e := es[i]
 			switch {
-			case e.pos.Compare(es[i-1].pos) == 0:
+			case e.num == es[i-1].num && e.pos.Disc == es[i-1].pos.Disc:
+				// The leading number, not the whole position: "05 - Ash" and
+				// "05 - Ash (1)" are one chapter twice (a second download),
+				// "01 - Book A" and "01 - Book B" two works.
 				set.sideBySide = true
-				set.problem = fmt.Sprintf("%q and %q claim the same chapter position: more than one work in the folder", es[i-1].c.origStem(), e.c.origStem())
+				set.problem = fmt.Sprintf("%q and %q carry the same chapter number: a duplicate file, or more than one work in the folder", es[i-1].c.origStem(), e.c.origStem())
 			case !sameIntPtr(e.c.Book.AuthorID, first.AuthorID):
 				set.problem = fmt.Sprintf("the files are by different authors (%q, %q)", lib.authorName(first), lib.authorName(e.c.Book))
 			case !sameIntPtr(e.c.Book.SeriesID, first.SeriesID):
@@ -1940,6 +1970,28 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 				set.problem = fmt.Sprintf("%q carries its own ASIN (%s): a published work, not a chapter", stem, b.ASIN)
 			case !metadata.IsChapterOnlyTitle(b.Title) && !chapterTitleIsStem(b.Title, stem):
 				set.problem = fmt.Sprintf("%q is titled %q, not after its file: a work with a title of its own, not a chapter", stem, b.Title)
+			}
+		}
+		if set.sideBySide {
+			set.keyGroups = map[string]bool{}
+			nums := map[string][]int{}
+			for _, e := range es {
+				nums[e.key] = append(nums[e.key], e.num)
+			}
+			for key, ns := range nums {
+				if len(ns) < fragMinGroup {
+					continue
+				}
+				run := true
+				sort.Ints(ns)
+				for i := 1; i < len(ns); i++ {
+					if ns[i] != ns[i-1]+1 {
+						run = false
+					}
+				}
+				if run || discDir[dir] {
+					set.keyGroups[key] = true
+				}
 			}
 		}
 		if set.problem == "" && len(es) < fragNumberedMin {
@@ -1989,21 +2041,19 @@ func chapterTitleIsStem(title, stem string) bool {
 func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) []repairs.Row {
 	var rows []repairs.Row
 	inSet := map[*fragCandidate]bool{}
-	besides := map[string]int{} // dir -> numbered files of a set that fell back
+	besides := map[string][]*fragCandidate{} // dir -> numbered files of a set left to the key groups
 	for _, set := range numberedSets(lib, cands) {
-		if set.sideBySide {
-			keyN := map[string]int{}
-			fallback := false
+		if set.sideBySide && len(set.keyGroups) > 0 {
+			// The works side by side are the key groups' to take. The other
+			// numbered files of the folder go to no group: scattered
+			// same-named chapters are not a work.
+			besides[set.dir] = set.members
 			for _, c := range set.members {
-				key, _ := metadata.ChapterGroupKey(c.origStem())
-				if keyN[key]++; keyN[key] >= fragMinGroup {
-					fallback = true
+				if key, _ := metadata.ChapterGroupKey(c.origStem()); !set.keyGroups[key] {
+					inSet[c] = true
 				}
 			}
-			if fallback {
-				besides[set.dir] = len(set.members)
-				continue
-			}
+			continue
 		}
 		row := f.noParentRow(lib, set.dir, fragNumberedKey, set.members)
 		if row.Class != fragClassManual {
@@ -2048,9 +2098,19 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 		}
 		dir, key, _ := strings.Cut(gk, "\x00")
 		row := f.noParentRow(lib, dir, key, cs)
-		if n := besides[dir]; n > len(cs) {
+		in := map[*fragCandidate]bool{}
+		for _, c := range cs {
+			in[c] = true
+		}
+		others := 0
+		for _, c := range besides[dir] {
+			if !in[c] {
+				others++
+			}
+		}
+		if others > 0 {
 			row.Evidence = append(row.Evidence, fmt.Sprintf(
-				"%d other numbered file(s) from this folder are not in this row: the folder was not taken as one numbered set", n-len(cs)))
+				"%d other numbered file(s) from this folder are not in this row: the folder was not taken as one numbered set", others))
 		}
 		rows = append(rows, row)
 	}

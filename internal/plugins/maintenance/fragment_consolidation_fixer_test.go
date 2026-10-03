@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -1950,6 +1950,9 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 		{"an author folder by initial", "lib/J. Author", serialStems, 300, "Jane Author", "named for the files' author"},
 		{"an author folder, surname first", "lib/Author, Jane", serialStems, 300, "Jane Author", "named for the files' author"},
 		{"an author's collection folder", "lib/Jane Author Collection", serialStems, 300, "Jane Author", "named for the files' author"},
+		{"a duplicate download is not an extra chapter", "lib/Serial", append([]string{"005 - Core (1)"}, serialStems...), 300, "", "carry the same chapter number"},
+		{"scattered chapters named alike are not carved out by a duplicate number", "lib/Dup",
+			[]string{"01 - A", "01 - B", "02 - C", "03 - D", "04 - Intro", "05 - F", "06 - Intro", "07 - H", "08 - Intro", "09 - Z"}, 300, "", "carry the same chapter number"},
 		{"a shelf of short works", "lib/Kids", []string{"1 - Green Eggs and Ham", "2 - The Cat in the Hat", "3 - Fox in Socks"}, 300, "", "only 3 files"},
 		{"two two-part works", "lib/Shelf", []string{"01 - Book A", "02 - Book A", "03 - Book B", "04 - Book B"}, 300, "", "several multi-part works"},
 		{"one chapter too long for the gate holds the whole run", "lib/Serial", append([]string{"009 - Long One"}, serialStems...), 0, "", "min or longer"},
@@ -1970,6 +1973,13 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 			held(t, f, tc.dir, tc.want)
 		})
 	}
+	t.Run("an author folder whose files have no author linked", func(t *testing.T) {
+		f := newFragFixture(t)
+		author(t, f, "Jane Author") // known to the library, linked to none of the files
+		f.numberedSeed(t, "lib/Jane Author", serialStems, 300, nil)
+		r := held(t, f, "lib/Jane Author", `named like the author "Jane Author"`)
+		noRow(t, &repairs.PlanResult{Rows: []repairs.Row{r}}, noParentRowID(f.path("lib/Jane Author"), "interlude"), "")
+	})
 	t.Run("files by different authors", func(t *testing.T) {
 		f := newFragFixture(t)
 		f.numberedSeed(t, "lib/Mixed", serialStems[:5], 300, author(t, f, "First Writer"))
@@ -1999,7 +2009,22 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 			f.row(t, "dr"+stem, id, p, filepath.Base(stem)+".mp3", 2400000, 300, 0)
 			f.organized(t, id)
 		}
-		held(t, f, "lib/Shelf", "disc")
+		held(t, f, "lib/Shelf", "not formed across discs")
+	})
+	t.Run("a book's disc folders still form their key group", func(t *testing.T) {
+		f := newFragFixture(t)
+		for i, stem := range []string{"CD1/00 - Intro", "CD1/01 - Book", "CD1/02 - Book", "CD2/01 - Book", "CD2/02 - Book"} {
+			p := f.file(t, "lib/Discs/"+stem+".mp3", 700+i)
+			id := f.book(t, "d"+stem, filepath.Base(stem), p, nil)
+			f.row(t, "dr"+stem, id, p, filepath.Base(stem)+".mp3", 2400000, 300, 0)
+			f.organized(t, id)
+		}
+		res := f.plan(t, "op-plan")
+		noRow(t, res, noParentRowID(f.path("lib/Discs"), fragNumberedKey), "discs are the key groups' to take")
+		r := findRow(t, res, noParentRowID(f.path("lib/Discs"), "book"))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Len(t, r.BookIDs, 4)
+		require.Contains(t, r.Evidence[len(r.Evidence)-1], "1 other numbered file(s)")
 	})
 
 	// A folder that is NOT one numbered run: the key groups decide, as they
