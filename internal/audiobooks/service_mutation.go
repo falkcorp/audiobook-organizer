@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-03
 
@@ -585,6 +585,28 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 				continue // a clear override handled it in phase 1
 			}
 		}
+		if overrideLockOnly[field] && !sent(field) {
+			// A lock-only override on a field the edit did not send: lock it
+			// at the value GET will show after the edit. That is the shown
+			// value from before (junction-aware for the narrator), except an
+			// author moved by author_id (its resolved name) and fields the
+			// edit itself changed (series by series_id, position by a series
+			// move), which the edited payload carries. No history row: the
+			// field's value did not change.
+			shown := extractor
+			switch field {
+			case database.FieldKeyAuthorName:
+				shown = beforeExtractors[field]
+				if sent("author_id") && resolvedAuthorName != "" {
+					moved := resolvedAuthorName
+					shown = func() (any, bool) { return moved, true }
+				}
+			case database.FieldKeyNarrator:
+				shown = beforeExtractors[field]
+			}
+			svc.setLockAtShown(state, field, shown, lockReq, now, func(string, any, any) {})
+			continue
+		}
 		if blankNoop[field] || skipOverride[field] {
 			if overridden && overrideLockOnly[field] {
 				// A lock-only override on a field whose sent value was not an
@@ -598,10 +620,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			if overridden {
 				// Nothing to show for the field: a lock holds no value, and
 				// locked:false clears the lock flag.
+				// No value is stored either way: a stored value is itself a
+				// user override for the lock guards, so locked:false must not
+				// leave the old one behind.
 				entry := state[field]
+				old := entry.OverrideValue
+				entry.OverrideValue = nil
 				if lockReq {
-					old := entry.OverrideValue
-					entry.OverrideValue = nil
 					recordOverride(field, old, nil)
 				}
 				entry.OverrideLocked = lockReq
@@ -682,6 +707,11 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		entry.OverrideLocked = true
 		if lockReq, overridden := overrideLock[database.FieldKeySeriesName]; overridden {
 			entry.OverrideLocked = lockReq
+			if !lockReq {
+				// Not locked: no value is stored (a stored value would itself
+				// count as a user override for the lock guards).
+				entry.OverrideValue = nil
+			}
 			recordOverride(database.FieldKeySeriesName, oldValue, "")
 		}
 		entry.UpdatedAt = now
