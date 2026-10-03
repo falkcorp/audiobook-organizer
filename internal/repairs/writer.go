@@ -1,7 +1,7 @@
 // file: internal/repairs/writer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package repairs
 
@@ -149,7 +149,7 @@ func (w *Writer) recordHistory(bookID string, before, after *database.Book) []st
 		}
 		changed = append(changed, field)
 		oldJSON, newJSON := jsonString(oldV), jsonString(newV)
-		if err := w.history.RecordMetadataChange(&database.MetadataChangeRecord{
+		rec := &database.MetadataChangeRecord{
 			BookID:        bookID,
 			Field:         field,
 			PreviousValue: &oldJSON,
@@ -158,7 +158,19 @@ func (w *Writer) recordHistory(bookID string, before, after *database.Book) []st
 			Source:        w.source,
 			ChangedAt:     now,
 			BatchID:       batchID,
-		}); err != nil {
+		}
+		// "Undo last apply" restores a foreign-key column from the row's refs,
+		// never from the rendered value, and fails the field without them; a
+		// series_id write through the Writer was not undoable until these
+		// were recorded. author_id is left without refs on purpose: undo of
+		// that column also needs the book_authors join (BookAuthorsKnown),
+		// which the Writer does not read, and reverting the column alone
+		// would leave the join naming the new author.
+		if field == "series_id" {
+			rec.PreviousRef = &database.MetadataChangeRef{SeriesID: copyInt(before.SeriesID)}
+			rec.NewRef = &database.MetadataChangeRef{SeriesID: copyInt(after.SeriesID)}
+		}
+		if err := w.history.RecordMetadataChange(rec); err != nil {
 			failed++
 			w.log.Warn("%s: history row not recorded (the write itself committed): book_id=%s field=%s err=%s",
 				w.source, logger.SanitizeLogValue(bookID), field, logger.SanitizeLogValue(err.Error()))
@@ -301,6 +313,14 @@ func (w *Writer) HistoryRows() int { return int(w.historyRows.Load()) }
 
 // HistoryFailed is how many history rows could not be recorded.
 func (w *Writer) HistoryFailed() int { return int(w.historyFailed.Load()) }
+
+func copyInt(p *int) *int {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
 
 // jsonString encodes s as a JSON string, the shape every history value has.
 // Marshalling a Go string cannot fail; the fallback only keeps the linter
