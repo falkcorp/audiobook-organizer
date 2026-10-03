@@ -1,13 +1,14 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-09-10
+// last-edited: 2026-10-03
 
 package jobs_test
 
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,48 @@ func TestBackfillFileHashesJob_Metadata(t *testing.T) {
 	assert.NotNil(t, j.DefaultParams())
 	assert.True(t, j.CanResume(), "backfill-file-hashes must support resume (checkpoint-based)")
 }
+
+// TestBackfillFileHashesJob_BookIDsScope: a book_ids param limits the run to
+// those books' rows (the Bible's 3,541 rows on prod, not the library's
+// 700k), and the total reported is the scoped count.
+func TestBackfillFileHashesJob_BookIDsScope(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(name string) string {
+		p := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(p, []byte(name+" audio bytes"), 0o644))
+		return p
+	}
+	files := []database.BookFileCore{
+		{ID: "a1", BookID: "A", FilePath: mk("a1.mp3")},
+		{ID: "b1", BookID: "B", FilePath: mk("b1.mp3")},
+		{ID: "c1", BookID: "C", FilePath: mk("c1.mp3")},
+	}
+	var mu sync.Mutex
+	hashed := map[string]bool{}
+	store := &database.MockStore{
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
+		SetBookFileHashFunc: func(id, h string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			hashed[id] = true
+			return nil
+		},
+	}
+	j, err := maintenance.Get("backfill-file-hashes")
+	require.NoError(t, err)
+	ctx := maintenance.WithRawParams(context.Background(), json.RawMessage(`{"dry_run":false,"book_ids":["A","C"]}`))
+	rep := &countingReporter{}
+	require.NoError(t, j.Run(ctx, store, rep, false))
+	assert.Equal(t, map[string]bool{"a1": true, "c1": true}, hashed)
+	assert.Equal(t, 2, rep.total, "the total is the scoped row count")
+}
+
+type countingReporter struct {
+	noopReporter
+	total int
+}
+
+func (r *countingReporter) SetTotal(n int) { r.total = n }
 
 func TestBackfillFileHashesJob_SkipsAlreadyHashed(t *testing.T) {
 	hash := "existinghash"

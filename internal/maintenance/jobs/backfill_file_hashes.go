@@ -1,12 +1,13 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-09-25
+// last-edited: 2026-10-03
 
 package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -32,9 +33,34 @@ func (j *backfillFileHashesJob) ID() string       { return "backfill-file-hashes
 func (j *backfillFileHashesJob) Name() string     { return "Backfill File Hashes" }
 func (j *backfillFileHashesJob) Category() string { return "files" }
 func (j *backfillFileHashesJob) DefaultParams() any {
-	return struct {
-		DryRun bool `json:"dry_run"`
-	}{DryRun: true} // preview by default (owner 2026-09-25); send dry_run=false to apply
+	return hashBackfillParams{DryRun: true} // preview by default (owner 2026-09-25); send dry_run=false to apply
+}
+
+// hashBackfillParams is the job's params shape. BookIDs, when set, limits
+// the run to those books' rows: a repair that needs hashes for one set of
+// books (the fragment fixer proves a duplicate copy by hash) must not have
+// to hash the whole library first. Empty means every row, as before.
+type hashBackfillParams struct {
+	DryRun  bool     `json:"dry_run"`
+	BookIDs []string `json:"book_ids,omitempty"`
+}
+
+// scopeToBooks keeps the rows of the given books, in their original order.
+func scopeToBooks(files []database.BookFileCore, bookIDs []string) []database.BookFileCore {
+	if len(bookIDs) == 0 {
+		return files
+	}
+	want := make(map[string]bool, len(bookIDs))
+	for _, id := range bookIDs {
+		want[id] = true
+	}
+	out := files[:0:0]
+	for _, f := range files {
+		if want[f.BookID] {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 func (j *backfillFileHashesJob) Description() string {
 	return "Compute and store file hashes for book_files missing them"
@@ -65,6 +91,13 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return err
+	}
+	if raw := maintenance.RawParamsFromCtx(ctx); len(raw) > 0 {
+		var p hashBackfillParams
+		if jerr := json.Unmarshal(raw, &p); jerr != nil {
+			return fmt.Errorf("backfill-file-hashes: params: %w", jerr)
+		}
+		files = scopeToBooks(files, p.BookIDs)
 	}
 	reporter.SetTotal(len(files))
 
