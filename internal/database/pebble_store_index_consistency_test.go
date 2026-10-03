@@ -1,11 +1,12 @@
 // file: internal/database/pebble_store_index_consistency_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 3f7a9c21-6b4d-4e8f-a1c2-5d6e7f8091ab
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -86,6 +87,49 @@ func TestVersionGroupIndexExcludesSoftDeleted(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Title != "Live" {
 		t.Errorf("version-group listing = %d books %v; want [Live]", len(got), titles(got))
+	}
+}
+
+// TestVersionGroupAllSoftDeletedDoesNotFullScan: a group whose every indexed
+// member is soft-deleted is a KNOWN empty group, not a missing index, so the
+// lookup answers empty without the full-scan fallback. The unindexed live
+// sibling below is what the fallback would have found; its absence proves
+// the scan did not run (the partial-index under-report the fallback's own
+// comment already accepts).
+func TestVersionGroupAllSoftDeletedDoesNotFullScan(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	vg := "VG0000000000000000000000CC"
+	retired, err := store.CreateBook(&Book{Title: "Retired", FilePath: "/test/vg2/retired.mp3", VersionGroupID: new(vg)})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	upd := *retired
+	upd.MarkedForDeletion = new(true)
+	if _, err := store.UpdateBook(retired.ID, &upd); err != nil {
+		t.Fatalf("UpdateBook soft-delete: %v", err)
+	}
+	// A live member written behind the index's back (raw row, no index key).
+	raw := Book{ID: "01UNINDEXED00000000000000A", Title: "Unindexed", FilePath: "/test/vg2/unindexed.mp3", VersionGroupID: new(vg)}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, ok := store.(*PebbleStore)
+	if !ok {
+		t.Fatalf("store is %T, want *PebbleStore", store)
+	}
+	if err := ps.db.Set([]byte("book:"+raw.ID), data, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.GetBooksByVersionGroup(vg)
+	if err != nil {
+		t.Fatalf("GetBooksByVersionGroup: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("all-soft-deleted group listed %v; want nothing (no fallback scan)", titles(got))
 	}
 }
 
