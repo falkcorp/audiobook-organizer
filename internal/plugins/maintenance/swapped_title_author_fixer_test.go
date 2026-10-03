@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8223b479-ea79-40ca-a48a-1b7bc0f3bea2
 // last-edited: 2026-10-03
 
@@ -1096,4 +1096,59 @@ func TestSwappedTitleAuthorFixer_RevertAfterHandPickedApplyKeepsThePersonsTitle(
 	_, _ = audiobooks.NewRevertService(l2.store).RevertOperation(swapTestOpID)
 	require.Equal(t, "Ultimate Level 1: Divine Creation", l2.book("swap").Title)
 	require.True(t, l2.locked("swap", database.FieldKeyTitle))
+}
+
+// An author-only row writes no title, so a person's lock on the title
+// neither holds nor refuses it, and the lock stays theirs.
+func TestSwappedTitleAuthorFixer_AuthorOnlyKeepsAPersonsTitleLock(t *testing.T) {
+	l := newSwapLib(t)
+	id := l.add(swapBook{name: "swap", title: "read by Jack Voraces", narrator: "Jack Voraces",
+		storedAuthor: "Ultimate Level 1_ Divine Creation", provTitle: "Ultimate Level 1: Divine Creation",
+		provAuthor: "Shawn Wilson", prov: map[string]any{"narrator": "Jack Voraces"},
+		files: []string{"/lib/S/Ultimate Level 1_ Divine Creation/book.m4b"}})
+	jw := repairs.NewWriter(l.store, l.store, junkTitlesFixerID, "bulk_update", "repairs-").
+		WithJournal(l.store, l.store, "op-junk").WithFieldStates(l.store)
+	require.NoError(t, writeTitleOnly(jw, l.store, id, "read by Jack Voraces", "Ultimate Level 1: Divine Creation"))
+	row := *fieldStateOf(mustStates(t, l, "swap"), database.FieldKeyTitle)
+	row.LockSource = "" // the person locked it as theirs
+	require.NoError(t, l.store.UpsertMetadataFieldState(&row))
+
+	plan, rows := l.plan()
+	r := rows["swap"]
+	require.True(t, r.Applicable(), "%s %s", r.Skipped, r.SkipReason)
+	out := l.apply(plan, []string{r.RowID})
+	require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+	require.Equal(t, l.authorID("Shawn Wilson"), *l.book("swap").AuthorID)
+	st := fieldStateOf(mustStates(t, l, "swap"), database.FieldKeyTitle)
+	require.True(t, st.OverrideLocked)
+	require.Empty(t, st.LockSource, "the person's title lock is left theirs")
+}
+
+// The continuation waiver is tied to the provider record the cut apply's
+// plan passed: a different record fetched after the cut is judged afresh,
+// and a one-word title with no tie is held.
+func TestSwappedTitleAuthorFixer_ContinuationNeedsTheSameProviderRecord(t *testing.T) {
+	l := newSwapLib(t)
+	id := l.add(swapBook{name: "swap", title: "read by narrator", storedAuthor: "Descent",
+		provTitle: "Descent", provAuthor: "Real Writer", files: []string{"/lib/Real Writer/Descent/book.m4b"}})
+	_, rows := l.plan()
+	require.True(t, rows["swap"].Applicable(), "%s %s", rows["swap"].Skipped, rows["swap"].SkipReason)
+	cw := repairs.NewWriter(l.store, l.store, swappedFixerID, "bulk_update", "repairs-").
+		WithJournal(l.store, l.store, "op-cut").WithCredits(l.store).WithFieldStates(l.store)
+	require.NoError(t, cw.LockFields(id, database.FieldKeyAuthorName))
+
+	// A later fetch records another book called "Descent".
+	time.Sleep(5 * time.Millisecond)
+	now := time.Now()
+	for field, v := range map[string]string{"title": `"Descent"`, "author_name": `"Tracy Gregory"`} {
+		st := fieldStateOf(mustStates(t, l, "swap"), field)
+		require.NotNil(t, st)
+		row := *st
+		val := v
+		row.FetchedValue, row.UpdatedAt = &val, now
+		require.NoError(t, l.store.UpsertMetadataFieldState(&row))
+	}
+	_, rows = l.plan()
+	require.Equal(t, junkSkipNeedsManual, rows["swap"].Skipped, rows["swap"].SkipReason)
+	require.Contains(t, rows["swap"].SkipReason, "nothing but the title ties")
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a80ddfb1-95dc-402f-941a-142b9388bcf0
 // last-edited: 2026-10-03
 
@@ -518,7 +518,10 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 		kind, why := lockHold(authorState, "author")
 		return finish(kind, why, true)
 	}
-	continuation := authorState != nil && authorState.IsRepairLock()
+	continuation, contOp, err := swapContinuation(store, b.ID, authorState, fetched)
+	if err != nil {
+		return repairs.Row{}, false, err
+	}
 
 	files, err := store.GetBookFiles(b.ID)
 	if err != nil {
@@ -669,7 +672,8 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 	// well be a person's name or another book's.
 	words := titleWords(catalog)
 	if continuation {
-		r.Evidence = append(r.Evidence, "an apply of this fixer was cut short on this book (its author lock is set); the plan that started it passed")
+		r.Evidence = append(r.Evidence, fmt.Sprintf(
+			"apply %s of this fixer was cut short on this book (its author lock is set, after the provider record was recorded); the plan that started it passed", contOp))
 	}
 	switch {
 	case continuation:
@@ -723,6 +727,38 @@ const swapShortTitleWords = 2
 // swapRuntimeTolerance is how far a provider runtime may be from the book's
 // duration, as a fraction of the runtime, to corroborate.
 const swapRuntimeTolerance = 0.10
+
+// swapContinuation reports whether the book is mid-repair by an earlier apply
+// of this fixer that was cut short: its author carries a repair lock (only
+// this fixer locks an author, first thing in its apply), that operation's
+// journal holds the lock row for this book, and the provider title and author
+// were recorded no later than that lock. The last condition ties the waiver
+// to the provider record the cut apply's plan passed: a record fetched since
+// is judged like any other.
+func swapContinuation(store OpsStore, bookID string, author *database.MetadataFieldState, fetched map[string]swapFetched) (bool, string, error) {
+	if author == nil || !author.IsRepairLock() {
+		return false, "", nil
+	}
+	op, ok := database.RepairLockOp(author.LockSource)
+	if !ok {
+		return false, "", nil
+	}
+	changes, err := store.GetOperationChanges(op)
+	if err != nil {
+		return false, "", fmt.Errorf("read the journal of %s: %w", op, err)
+	}
+	for _, c := range changes {
+		if c.Voided || c.BookID != bookID || c.ChangeType != undo.ChangeTypeFieldLock || c.FieldName != database.FieldKeyAuthorName {
+			continue
+		}
+		t, a := fetched["title"], fetched["author_name"]
+		if t.at.After(c.CreatedAt) || a.at.After(c.CreatedAt) {
+			return false, "", nil
+		}
+		return true, op, nil
+	}
+	return false, "", nil
+}
 
 // swapHistoryAll asks GetMetadataChangeHistory for every row of a field.
 const swapHistoryAll = 1 << 30
@@ -1023,8 +1059,10 @@ func (f *swappedTitleAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fr
 	if err != nil {
 		return fmt.Errorf("read field locks of %s: %w", id, err)
 	}
+	// A full row writes the title, so any title lock refuses it; an
+	// author-only row writes no title, so a person's title lock is left
+	// alone and does not refuse it.
 	if (d.newTitle != "" && locks.Locked(database.FieldKeyTitle)) ||
-		(locks.Locked(database.FieldKeyTitle) && !locks.RepairLocked(database.FieldKeyTitle)) ||
 		(locks.Locked(database.FieldKeyAuthorName) && !locks.RepairLocked(database.FieldKeyAuthorName)) {
 		return fmt.Errorf("%w: book %s title or author was locked since the plan", repairs.ErrChangedSincePlan, id)
 	}
@@ -1088,10 +1126,12 @@ func (f *swappedTitleAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fr
 		if terr := writeTitleOnly(w, store, id, d.oldTitle, d.newTitle); terr != nil {
 			return partial("the title was not written", terr)
 		}
-	} else if lerr := w.LockFields(id, database.FieldKeyTitle); lerr != nil {
+	} else if !locks.Locked(database.FieldKeyTitle) || locks.RepairLocked(database.FieldKeyTitle) {
 		// Author-only: the title is already real; this op locks it under its
-		// own id (or finds it already so).
-		return partial("the title was not locked", lerr)
+		// own id (or finds it already so). A person's title lock is theirs.
+		if lerr := w.LockFields(id, database.FieldKeyTitle); lerr != nil {
+			return partial("the title was not locked", lerr)
+		}
 	}
 
 	// creditsDone (an interrupted apply moved the credits but not the

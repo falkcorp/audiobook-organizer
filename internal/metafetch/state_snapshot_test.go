@@ -1,5 +1,5 @@
 // file: internal/metafetch/state_snapshot_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0b9d0f57-6fc7-45ea-9c21-992a7ba92708
 // last-edited: 2026-10-03
 
@@ -63,12 +63,14 @@ func TestWithStateSnapshot_HoldsTheStripeFromReadToSave(t *testing.T) {
 	fv := `"Prov"`
 	require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: "b1", Field: "description",
 		FetchedValue: &fv, UpdatedAt: time.Now()}))
-	done := make(chan error, 2)
+	// The concurrent override targets a field the snapshot already holds:
+	// without the stripe, the save's upsert of that field from the stale
+	// snapshot would wipe it.
+	done := make(chan error, 1)
 	err := WithStateSnapshot(st, "b1", func(state map[string]MetadataFieldState) error {
-		go func() { done <- database.RecordUserOverrides(st, "b1", map[string]any{"narrator": "Typed"}) }()
-		go func() { done <- repairLock(st, "b1", "title", "op-1") }()
-		time.Sleep(50 * time.Millisecond) // both writers are now waiting on the stripe
-		require.Nil(t, stateRow(t, st, "b1", "narrator"), "the override must wait for the save")
+		go func() { done <- database.RecordUserOverrides(st, "b1", map[string]any{"description": "Typed"}) }()
+		time.Sleep(50 * time.Millisecond) // the writer is now waiting on the stripe
+		require.Nil(t, stateRow(t, st, "b1", "description").OverrideValue, "the override must wait for the save")
 		e := state["description"]
 		e.FetchedValue = "newer"
 		state["description"] = e
@@ -76,12 +78,11 @@ func TestWithStateSnapshot_HoldsTheStripeFromReadToSave(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, <-done)
-	require.NoError(t, <-done)
-	narr := stateRow(t, st, "b1", "narrator")
-	require.NotNil(t, narr, "the person's override written during the snapshot survives")
-	assert.True(t, narr.OverrideLocked)
-	assert.True(t, stateRow(t, st, "b1", "title").IsRepairLock())
-	assert.Equal(t, `"newer"`, *stateRow(t, st, "b1", "description").FetchedValue)
+	desc := stateRow(t, st, "b1", "description")
+	require.NotNil(t, desc.OverrideValue, "the person's override written during the snapshot survives")
+	assert.Equal(t, `"Typed"`, *desc.OverrideValue)
+	assert.True(t, desc.OverrideLocked)
+	assert.Equal(t, `"newer"`, *desc.FetchedValue)
 
 	// A cleared override is not resurrected by a later save.
 	mss := NewMetadataStateService(st)
