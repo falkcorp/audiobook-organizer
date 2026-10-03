@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-03
 
@@ -1718,13 +1718,10 @@ type fragGroupState struct {
 
 // importChapterSec is the IMPORT scanner's chapter threshold in seconds
 // (chapter_consolidation_threshold_min, default 10). The folder-books fixer
-// reads it as "a group shorter than this is a fragment, not a book".
+// reads it as "a group shorter than this is a fragment, not a book". The
+// resolver supplies the default for 0 or less, the same rule the scanner uses.
 func importChapterSec() int {
-	mins := config.AppConfig.ChapterConsolidationThresholdMin
-	if mins <= 0 {
-		mins = 10 // config's documented default; the scanner uses the same fallback
-	}
-	return mins * 60
+	return config.AppConfig.ResolveChapterConsolidationThresholdMin() * 60
 }
 
 // repairChapterMaxSec is the longest a file may run and still be a chapter

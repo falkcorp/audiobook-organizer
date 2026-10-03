@@ -1,7 +1,7 @@
 // file: internal/config/blob_default_audit.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b8d5f60-c179-4e34-a5d2-70f9e1c46b8a
-// last-edited: 2026-08-30
+// last-edited: 2026-10-03
 
 package config
 
@@ -114,34 +114,6 @@ func logDefaultsPreservedOverBlob(blobStr string, loaded Config) {
 	}
 
 	slog.Info(msg, attrs...)
-}
-
-// explicitChapterConsolidationDisable reports only an operator-persisted
-// disable. A missing key must remain distinguishable because it inherits the
-// shipped default; treating it as zero would recreate the silent-default loss
-// this audit was written to prevent.
-func explicitChapterConsolidationDisable(blobStr string, loaded Config) bool {
-	if loaded.ChapterConsolidationThresholdMin > 0 {
-		return false
-	}
-	var blob map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(blobStr), &blob); err != nil {
-		return false
-	}
-	raw, present := blob["chapter_consolidation_threshold_min"]
-	if !present {
-		return false
-	}
-	var stored int
-	return json.Unmarshal(raw, &stored) == nil && stored <= 0
-}
-
-func logExplicitChapterConsolidationDisable(blobStr string, loaded Config) {
-	if !explicitChapterConsolidationDisable(blobStr, loaded) {
-		return
-	}
-	slog.Warn("config: chapter consolidation is explicitly disabled; album-less multi-file books will not be grouped",
-		"chapter_consolidation_threshold_min", loaded.ChapterConsolidationThresholdMin)
 }
 
 // flattenKeys records every leaf path present in a decoded JSON object. Nested

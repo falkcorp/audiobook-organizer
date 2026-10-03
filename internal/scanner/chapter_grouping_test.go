@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_grouping_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 950c3ace-c8d3-4885-9a1d-d90682d41415
-// last-edited: 2026-09-28
+// last-edited: 2026-10-03
 
 package scanner
 
@@ -183,18 +183,23 @@ func TestConsolidateChapterGroups_ProvenSequenceHasNoCeiling(t *testing.T) {
 // TestConsolidateOversized_NeverShattersASameTitleGroup is S2: in the
 // oversized-directory path a same-key group becomes one book, stays per-file
 // only when EVERY file is a whole book (a shelf), and is otherwise refused and
-// counted -- including when untagged consolidation is switched off and when a
-// single long file sits among hundreds of short chapters.
+// counted -- including when the threshold is 0 and when a single long file
+// sits among hundreds of short chapters.
 func TestConsolidateOversized_NeverShattersASameTitleGroup(t *testing.T) {
 	files := pathsIn("/lib/W", willNames(maxDirectoryBookFiles+10)...)
-	t.Run("consolidation switched off still groups", func(t *testing.T) {
+	t.Run("a zero threshold is the default, not off", func(t *testing.T) {
+		// Until 2026-10-03 a 0 switched untagged consolidation off and the
+		// untagged path returned one book per file. A stray 0 did exactly
+		// that in production for eleven days, so 0 now resolves to the
+		// default on BOTH paths.
 		stubChapterDurations(t, 300, nil)
 		config.AppConfig.ChapterConsolidationThresholdMin = 0
 		books := consolidateChapterGroupsMode(context.Background(), files, consolidateOversized)
 		require.Len(t, books, 1)
 		require.Len(t, books[0].SegmentFiles, len(files))
-		// The untagged path keeps honouring the switch.
-		require.Len(t, consolidateChapterGroups(context.Background(), files), len(files))
+		untagged := consolidateChapterGroups(context.Background(), files)
+		require.Len(t, untagged, 1, "a zero threshold must not shatter untagged chapters into one book per file")
+		require.Len(t, untagged[0].SegmentFiles, len(files))
 	})
 	t.Run("one long chapter among short ones is refused, not shattered", func(t *testing.T) {
 		stubChapterDurations(t, 300, map[string]int{files[7]: 3 * 3600})

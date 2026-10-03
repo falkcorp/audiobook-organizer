@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidation.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: f9a0b1c2-d3e4-5f60-a7b8-c9d0e1f2a3b4
-// last-edited: 2026-09-28
+// last-edited: 2026-10-03
 
 package scanner
 
@@ -48,11 +48,6 @@ var chapterFileDurationSec = func(path string) int {
 	}
 	return 0
 }
-
-// defaultChapterConsolidationThresholdMin is config's documented default
-// (chapter_consolidation_threshold_min: 10), used by the oversized-directory
-// path when the setting is 0.
-const defaultChapterConsolidationThresholdMin = 10
 
 // durationProbeSem bounds duration probes across the WHOLE scan. The
 // consolidation pass runs inside each discovery worker, so a per-call pool
@@ -119,8 +114,8 @@ const (
 // tag and no playlist claim) and detects chapter-naming patterns. Files are
 // grouped by chapterGroupKey -- leading numbers, trailing numbers, "Chapter N",
 // "Part N", "Disc N", "N of M". When a group has ≥ 3 files AND each file
-// individually averages below config.AppConfig.ChapterConsolidationThresholdMin
-// minutes (default 10 min), the whole group is emitted as a single multi-file
+// individually averages below the chapter_consolidation_threshold_min setting
+// (default 10 min; 0 or less means the default, never "off"), the whole group is emitted as a single multi-file
 // Book with the total duration; otherwise each file becomes its own Book.
 //
 // Files with no chapter numbering are passed through unchanged. Groups that
@@ -143,17 +138,12 @@ func consolidateChapterGroupsMode(ctx context.Context, files []string, mode cons
 		return nil
 	}
 
-	thresholdMin := config.AppConfig.ChapterConsolidationThresholdMin
-	if thresholdMin <= 0 {
-		if mode == consolidateUntagged {
-			// Consolidation disabled for untagged files.
-			return filesToBooks(files)
-		}
-		// The switch turns off merging of UNTAGGED files. It never licensed
-		// shattering an oversized album into one book per file; that path
-		// judges with the default threshold.
-		thresholdMin = defaultChapterConsolidationThresholdMin
-	}
+	// Until 2026-10-03 a threshold of 0 switched untagged consolidation off
+	// here and returned one book per file. A stray 0 -- the zero value of any
+	// partially-populated Config -- did exactly that in production for eleven
+	// days with no log line, so 0 now resolves to the default like any other
+	// unusable value. See config.ResolveChapterConsolidationThresholdMin.
+	thresholdMin := config.AppConfig.ResolveChapterConsolidationThresholdMin()
 	thresholdSec := thresholdMin * 60
 
 	type candidate struct {
@@ -311,17 +301,5 @@ func consolidateChapterGroupsMode(ctx context.Context, files []string, mode cons
 			"unknown_duration_groups", unknownDurationGroups)
 	}
 
-	return books
-}
-
-// filesToBooks converts a flat slice of file paths into individual Book records.
-func filesToBooks(files []string) []Book {
-	books := make([]Book, 0, len(files))
-	for _, f := range files {
-		books = append(books, Book{
-			FilePath: f,
-			Format:   strings.ToLower(filepath.Ext(f)),
-		})
-	}
 	return books
 }
