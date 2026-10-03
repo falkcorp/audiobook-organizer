@@ -1,7 +1,7 @@
 <!-- file: docs/system/architecture.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890 -->
-<!-- last-edited: 2026-06-29 -->
+<!-- last-edited: 2026-10-03 -->
 
 # System Architecture
 
@@ -67,24 +67,39 @@ flowchart TD
     SvcReg --> PluginReg["Plugin Registry\ninternal/plugin + internal/plugins"]
     PluginReg --> MaintenancePlug["maintenance plugin\ninternal/plugins/maintenance"]
     PluginReg --> DedupPlug["dedup plugin\ninternal/plugins/dedup"]
-    PluginReg --> DélugePlug["deluge plugin\ninternal/plugins/deluge"]
+    PluginReg --> DelugePlug["deluge plugin\ninternal/plugins/deluge"]
+    PluginReg --> OtherPlugs["acoustid · itunes · metafetch · webhook\ninternal/plugins/*"]
+    MaintenancePlug --> Repairs["Repairs lane\ninternal/repairs (Fixer registry + engine)"]
+    Handlers --> ReviewH["review + repairs handlers\n/api/v1/review/* · /api/v1/repairs/*"]
+    ReviewH --> Repairs
 ```
 
 ## Service Registry / Container Pattern
 
-All domain services are registered in `internal/serviceregistry` with string keys defined in `internal/serviceregistry/keys.go`. During server startup (`NewServer`), the registry resolves dependency order, calls `Build`, then `PostInit` before wiring HTTP handlers. The known keys are:
+All domain services are registered in `internal/serviceregistry` with string keys defined in `internal/serviceregistry/keys.go`. During server startup (`NewServer`), the registry resolves dependency order, calls `Build`, then `PostInit` before wiring HTTP handlers. The keys in `keys.go` are:
 
 | Key constant | Service |
 |---|---|
 | `KeyStore` | `database.Store` (PebbleDB-backed) |
-| `KeyScan` | Scanner / importer |
+| `KeyActivity`, `KeyActivityStore` | Activity log service and its store |
+| `KeyAudiobook` | AudiobookService (list/filter/get/update) |
+| `KeyBatch` | AI batch job dispatch |
+| `KeyConfig`, `KeyConfigUpdate` | Configuration read and update services |
+| `KeyDashboard` | Dashboard stats |
 | `KeyDedup` | Dedup engine |
-| `KeyOrganize` | File organizer |
-| `KeyMetaFetch` | Metadata fetch + scoring |
-| `KeyActivity` | Activity log service |
-| `KeyOpHub` | Operations hub (v2 registry) |
+| `KeyEmbeddingStore` | Vector embedding store |
+| `KeyEventBus` | SSE event bus |
+| `KeyFilesystem` | Filesystem abstraction |
+| `KeyImportPath` | Import-path management |
 | `KeyITunes` | iTunes XML sync |
-| `KeyConfig` | Configuration service |
+| `KeyMerge` | Book merge service |
+| `KeyMetadataState`, `KeyMetaFetch` | Metadata state tracking; metadata fetch + scoring |
+| `KeyOpHub` | Operations hub (v2 registry) |
+| `KeyOrganize` | File organizer |
+| `KeyQuarantine` | Quarantine zone |
+| `KeyScan` | Scanner / importer |
+| `KeySystem` | System info / reset |
+| `KeyUpdater` | Auto-updater |
 | `KeyWork` | Work-item / task queue |
 
 ## Layer Responsibilities
@@ -92,12 +107,18 @@ All domain services are registered in `internal/serviceregistry` with string key
 ### HTTP Layer (`internal/server`)
 
 - Gin engine with CORS, security headers, session/cookie auth middleware
-- Routes split across per-domain files: `wire_auth_routes.go`, `wire_library_routes.go`, `wire_audiobooks_routes.go`, `wire_metadata_routes.go`, `wire_entities_routes.go`, `wire_operations_routes.go`, `wire_system_routes.go`, `wire_dedup_routes.go`, `wire_media_routes.go`
-- Handler instantiation stays in `wire_handlers.go`
+- Routes split across per-domain files: `wire_abs_routes.go` (Audiobookshelf-compatible surface), `wire_audiobooks_routes.go`, `wire_auth_routes.go`, `wire_catalog_routes.go`, `wire_dedup_routes.go`, `wire_entities_routes.go`, `wire_fpworker_routes.go` (remote fingerprint workers), `wire_library_routes.go`, `wire_media_routes.go`, `wire_metadata_routes.go`, `wire_operations_routes.go`, `wire_repairs_routes.go`, `wire_review_routes.go`, `wire_system_routes.go`
+- Handler instantiation stays in `wire_handlers.go`; handlers live in per-domain packages under `internal/server/handlers/` (`abs`, `review`, `repairs`, …)
 
 ### Operations / Plugin System
 
-Long-running jobs run as v2 Operations registered via `opsregistry.OperationDef`. Plugins (`internal/plugin` SDK, `internal/plugins/*`) implement the `sdk.Plugin` interface and register their `OperationDef` entries at startup. The operation hub persists state to PebbleDB (`opv2:*` keys) and exposes `POST /api/v1/operations/v2` and `GET /api/v1/operations/v2/:id` for launch and polling.
+Long-running jobs run as v2 Operations registered via `registry.OperationDef` (`internal/operations/registry`). Plugins (`internal/plugin` SDK, `internal/plugins/{acoustid,dedup,deluge,itunes,maintenance,metafetch,webhook}`) implement the `sdk.Plugin` interface and register their `OperationDef` entries at startup. The operation hub persists state to PebbleDB (`opv2:*` keys) and exposes `POST /api/v1/operations/v2` and `GET /api/v1/operations/v2/:id` for launch and polling, plus `/retry` and `/record` (see [api.md](api.md)). A renamed def keeps its old ID as an alias (`OperationDef.FormerIDs`), and `OperationDef.Permissions` is checked on the trigger route.
+
+### Review Workspace and Repairs Lane
+
+`/review` in the UI is one workspace with four lanes — Review queue, Duplicates, Metadata and Repairs (`web/src/components/review/lanes/`). The review queue (`internal/server/handlers/review`, `database.ReviewStore`) is producer-agnostic: a producer such as the regroup op writes items, a human approves or rejects, and approve dispatches on the chosen action to a registered apply handler only while `review_apply_enabled` is on; `POST /review/replay-approved` re-runs approved items later.
+
+The Repairs lane is the shared framework in `internal/repairs`: a `Fixer` (`ID/Title/Description/Plan/Replan/Apply`) decides what a row is and how one row is written, and the engine owns everything that must not differ between fixers — plans run as the `repairs.plan` operation with every row stored in the op result, `repairs.apply` takes explicit row ids from a stored plan and refuses a row whose fingerprint changed (`changed_since_plan`), rows under `books/itunes/**` or Doctor Who / Big Finish / Torchwood are skipped and refused, writes go through a `Writer` that records metadata history and offers no delete, and apply holds the library-scan stand-down. The maintenance plugin registers the fixers (`Plugin.Repairs()`): `duplicate-copies`, `folder-books`, `fragment-consolidation`, `maintenance.normalize-letter-l-ordinals`, `maintenance.repair-junk-authors`, `maintenance.repair-junk-titles`, `version-group-primary-repair`. HTTP surface: `GET /api/v1/repairs`, `POST /repairs/:fixer/plan`, `GET /repairs/:fixer/plan/:op_id/rows`, `POST /repairs/:fixer/apply`.
 
 ### AI / Embeddings
 
