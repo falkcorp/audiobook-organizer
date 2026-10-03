@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-03
 
@@ -7,14 +7,19 @@ package telemetry
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric/noop"
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"google.golang.org/grpc"
 )
 
 func TestLoadConfig_MetricsOnWithoutEndpoint(t *testing.T) {
@@ -95,12 +100,99 @@ func TestInitOTEL_CalledTwice_SharesOneMeterProvider(t *testing.T) {
 	}
 }
 
-func TestInitOTEL_WithInvalidEndpoint(t *testing.T) {
-	cfg := LoadConfig("test", "invalid://endpoint")
+// TestInitOTEL_UnusableEndpointIsNotFatal: a trace endpoint that cannot be
+// used turns tracing off and nothing else. On 2026-10-03 the error was
+// returned, cmd/root.go made it fatal, and prod crash-looped on
+// OTEL_EXPORTER_OTLP_ENDPOINT=127.0.0.1:4317.
+func TestInitOTEL_UnusableEndpointIsNotFatal(t *testing.T) {
+	for _, ep := range []string{"invalid://endpoint", "no-port", "http://", "ftp://host:21", "dns:///"} {
+		shutdown, err := InitOTEL(context.Background(), LoadConfig("test", ep))
+		if err != nil {
+			t.Fatalf("InitOTEL(%q) = %v; an unusable trace endpoint must not fail init", ep, err)
+		}
+		if err := shutdown(context.Background()); err != nil {
+			t.Fatalf("shutdown after %q: %v", ep, err)
+		}
+	}
+}
 
-	// Should fail due to invalid endpoint format
-	_, err := InitOTEL(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("InitOTEL with invalid endpoint should return error")
+func TestTraceEndpointOption_Forms(t *testing.T) {
+	ok := []string{"127.0.0.1:4317", "localhost:4317", "[::1]:4317", "tempo:4317",
+		"http://127.0.0.1:4317", "https://collector.example:4317", "dns:///tempo:4317", " http://127.0.0.1:4317 "}
+	for _, ep := range ok {
+		if _, err := traceEndpointOption(ep); err != nil {
+			t.Errorf("traceEndpointOption(%q) = %v, want accepted", ep, err)
+		}
+	}
+	bad := []string{"", "127.0.0.1", "http://127.0.0.1", "http://:4317", "ftp://host:21", "invalid://endpoint", "dns:///", ":4317"}
+	for _, ep := range bad {
+		if _, err := traceEndpointOption(ep); err == nil {
+			t.Errorf("traceEndpointOption(%q) accepted, want an error", ep)
+		}
+	}
+}
+
+// traceSink is a plaintext OTLP/gRPC collector that counts the spans it gets.
+type traceSink struct {
+	coltracepb.UnimplementedTraceServiceServer
+	spans atomic.Int64
+}
+
+func (s *traceSink) Export(_ context.Context, req *coltracepb.ExportTraceServiceRequest) (*coltracepb.ExportTraceServiceResponse, error) {
+	for _, rs := range req.GetResourceSpans() {
+		for _, ss := range rs.GetScopeSpans() {
+			s.spans.Add(int64(len(ss.GetSpans())))
+		}
+	}
+	return &coltracepb.ExportTraceServiceResponse{}, nil
+}
+
+// TestInitTracing_SpansReachAPlaintextCollector proves both endpoint forms
+// against a real gRPC listener, the way Tempo listens on :4317: the URL form
+// needs nothing else, the bare form needs the SDK's insecure switch.
+func TestInitTracing_SpansReachAPlaintextCollector(t *testing.T) {
+	prev := otel.GetTracerProvider()
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &traceSink{}
+	srv := grpc.NewServer()
+	coltracepb.RegisterTraceServiceServer(srv, sink)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	addr := lis.Addr().String()
+
+	for _, tc := range []struct {
+		name, endpoint string
+		insecureEnv    bool
+	}{
+		{"url form", "http://" + addr, false},
+		{"bare host:port with the insecure switch", addr, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.insecureEnv {
+				t.Setenv("OTEL_EXPORTER_OTLP_TRACES_INSECURE", "true")
+			}
+			before := sink.spans.Load()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			tp, err := initTracing(ctx, LoadConfig("test", tc.endpoint))
+			if err != nil {
+				t.Fatalf("initTracing(%q): %v", tc.endpoint, err)
+			}
+			_, span := tp.Tracer("test").Start(ctx, "op")
+			span.End()
+			if err := tp.ForceFlush(ctx); err != nil {
+				t.Fatalf("flush to %q: %v", tc.endpoint, err)
+			}
+			if err := tp.Shutdown(ctx); err != nil {
+				t.Fatalf("shutdown: %v", err)
+			}
+			if got := sink.spans.Load() - before; got != 1 {
+				t.Fatalf("collector received %d spans from %q, want 1", got, tc.endpoint)
+			}
+		})
 	}
 }

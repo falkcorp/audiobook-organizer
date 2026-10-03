@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-03
 
@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
+	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel"
@@ -40,15 +42,23 @@ import (
 func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, error) {
 	var shutdowns []func(context.Context) error
 
-	// Tracing is validated and started first: a bad endpoint fails the whole
-	// init before any registry-global side effect (the Prometheus exporter
-	// registration) has happened.
+	// Tracing is started first and is never fatal. A wrong endpoint, or an
+	// exporter that cannot be built, costs the traces and nothing else: it is
+	// logged at error level and the server starts with tracing off. Until
+	// 2026-10-03 the error was returned, cmd/root.go made it fatal, and
+	// setting OTEL_EXPORTER_OTLP_ENDPOINT=127.0.0.1:4317 in prod (the form
+	// this package's own comment promised to accept) put the server in a
+	// crash loop for 75 seconds.
+	tracing := false
 	if cfg.TracingEnabled {
 		tp, err := initTracing(ctx, cfg)
 		if err != nil {
-			return nil, err
+			slog.Error("OpenTelemetry tracing is OFF: the trace exporter could not be started",
+				"endpoint", cfg.ExporterEndpoint, "error", err)
+		} else {
+			tracing = true
+			shutdowns = append(shutdowns, tp.Shutdown)
 		}
-		shutdowns = append(shutdowns, tp.Shutdown)
 	}
 
 	if cfg.MetricsEnabled {
@@ -61,7 +71,7 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 
 	slog.Info("OpenTelemetry initialized",
 		"metrics", cfg.MetricsEnabled,
-		"tracing", cfg.TracingEnabled,
+		"tracing", tracing,
 		"endpoint", cfg.ExporterEndpoint)
 
 	return func(shutdownCtx context.Context) error {
@@ -75,20 +85,56 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 	}, nil
 }
 
-// initTracing validates the OTLP endpoint, builds the gRPC span exporter and
+// traceEndpointOption turns the configured endpoint into the exporter option
+// that reaches it. Two forms are accepted:
+//
+//   - a URL, "http://host:port" or "https://host:port": the form the OTel
+//     spec gives OTEL_EXPORTER_OTLP_ENDPOINT, which the SDK also reads for
+//     itself. "http" is plaintext gRPC, "https" is TLS.
+//   - a bare "host:port" (or a "dns:///host:port" gRPC target): TLS unless
+//     OTEL_EXPORTER_OTLP_TRACES_INSECURE or OTEL_EXPORTER_OTLP_INSECURE is
+//     true, which the SDK honours.
+//
+// The old check ran url.Parse on the bare form, which rejects "127.0.0.1:4317"
+// ("first path segment in URL cannot contain colon") and reads "localhost" in
+// "localhost:4317" as a scheme, so no bare endpoint ever passed; and a URL
+// that did pass was handed to WithEndpoint, which wants host:port.
+func traceEndpointOption(endpoint string) (otlptracegrpc.Option, error) {
+	ep := strings.TrimSpace(endpoint)
+	if scheme, rest, ok := strings.Cut(ep, "://"); ok {
+		switch strings.ToLower(scheme) {
+		case "http", "https":
+			u, err := url.Parse(ep)
+			if err != nil {
+				return nil, fmt.Errorf("endpoint %q is not a URL: %w", endpoint, err)
+			}
+			if u.Hostname() == "" || u.Port() == "" {
+				return nil, fmt.Errorf("endpoint %q must name a host and a port", endpoint)
+			}
+			return otlptracegrpc.WithEndpointURL(ep), nil
+		case "dns":
+			if strings.TrimLeft(rest, "/") == "" {
+				return nil, fmt.Errorf("endpoint %q names no target", endpoint)
+			}
+			return otlptracegrpc.WithEndpoint(ep), nil
+		}
+		return nil, fmt.Errorf("endpoint %q: scheme %q is not http, https or dns", endpoint, scheme)
+	}
+	host, port, err := net.SplitHostPort(ep)
+	if err != nil || host == "" || port == "" {
+		return nil, fmt.Errorf("endpoint %q is neither a URL nor host:port", endpoint)
+	}
+	return otlptracegrpc.WithEndpoint(ep), nil
+}
+
+// initTracing builds the gRPC span exporter for the configured endpoint and
 // installs the tracer provider globally.
 func initTracing(ctx context.Context, cfg *Config) (*sdktrace.TracerProvider, error) {
-	// Validate endpoint format: must be a valid gRPC endpoint (host:port, dns://, or http(s)://)
-	parsedURL, err := url.Parse(cfg.ExporterEndpoint)
+	opt, err := traceEndpointOption(cfg.ExporterEndpoint)
 	if err != nil {
 		return nil, err
 	}
-	// Allow hostnames with ports, or valid URL schemes for gRPC (http, https, dns)
-	if parsedURL.Scheme != "" && parsedURL.Scheme != "http" && parsedURL.Scheme != "https" && parsedURL.Scheme != "dns" {
-		return nil, fmt.Errorf("invalid endpoint scheme %q: must be http, https, dns, or omitted for host:port", parsedURL.Scheme)
-	}
-
-	exporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithEndpoint(cfg.ExporterEndpoint))
+	exporter, err := otlptracegrpc.New(ctx, opt)
 	if err != nil {
 		return nil, err
 	}
