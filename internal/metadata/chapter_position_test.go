@@ -32,11 +32,16 @@ func TestChapterPosition(t *testing.T) {
 		{"My Story 01", ChapterKeyTrailingNumber, ChapterPos{Parts: []int{1}}, true},
 		{"01 Genesis 001", ChapterKeyLeading, ChapterPos{Parts: []int{1, 1}}, true},
 		// Leading disc-track / book-chapter pairs (2026-10-03).
-		{"8-02 Rubicon", ChapterKeyLeading, ChapterPos{Parts: []int{8, 2}}, true},
-		{"01_07-Star Wars Darth Plagueis", ChapterKeyLeading, ChapterPos{Parts: []int{1, 7}}, true},
-		{"02_001", ChapterKeyLeading, ChapterPos{Parts: []int{2, 1}}, true},
+		{"8-02 Rubicon", ChapterKeyLeading, ChapterPos{Parts: []int{8, 2}, LeadPair: true}, true},
+		{"01_07-Star Wars Darth Plagueis", ChapterKeyLeading, ChapterPos{Parts: []int{1, 7}, LeadPair: true}, true},
+		{"02_001", ChapterKeyLeading, ChapterPos{Parts: []int{2, 1}, LeadPair: true}, true},
 		// "_" around "of" is the of-total shape too.
 		{"02_Eldest_002_of_349", ChapterKeyLeading, ChapterPos{Parts: []int{2, 2}}, true},
+		// A leading number plus a trailing "(n of m)" is two Parts but no pair.
+		{"001 - Arrival (1 of 8)", ChapterKeyLeading, ChapterPos{Parts: []int{1, 1}}, true},
+		// A date is no chapter numbering at all.
+		{"01-05-1945", ChapterKeyNone, ChapterPos{}, false},
+		{"12_25_2019 Speech", ChapterKeyNone, ChapterPos{}, false},
 		{"Eldest_002_of_349", ChapterKeyOfTotal, ChapterPos{Parts: []int{2}}, true},
 		// A year is no pair: the first number of a pair has 1-2 digits.
 		{"2016 - Reality Alternatives", ChapterKeyLeading, ChapterPos{Parts: []int{2016}}, true},

@@ -1762,6 +1762,44 @@ type fragGroupPlan struct {
 	// against them.
 	WasTitle, WasPath string
 	Members           []fragGroupMember
+	// Copies are renamed second copies of a member's chapter: same chapter
+	// position, same size ("02_001" and "02_001 - Title - read by narrator").
+	// Owner decision 2026-10-03: one chapter, so the copy is not a member; its
+	// book is retired into the survivor like the copy class retires a
+	// fragment, keeping its own file row (nothing is repointed or deleted).
+	Copies []fragGroupCopy
+}
+
+// fragGroupCopy is a renamed copy of member Of's chapter.
+type fragGroupCopy struct {
+	Frag *fragCandidate
+	Of   string
+	// Offset is the kept member's place in the survivor's timeline, so the
+	// copy's listening position maps onto the same chapter.
+	Offset float64
+}
+
+// keptOfCopies picks which of one chapter's copies stays a member: the one
+// that is organized and primary if any is, else the lowest book id. The
+// numbered-set builder and noParentRow must agree, so both call this.
+func keptOfCopies(lib *fragLibrary, run []*fragCandidate) int {
+	keep := 0
+	for k, c := range run {
+		if b := lib.books[c.Book.ID]; b.Organized && b.Primary {
+			return k
+		}
+		if c.Book.ID < run[keep].Book.ID {
+			keep = k
+		}
+	}
+	return keep
+}
+
+// sameChapterCopy reports whether a and b are one chapter twice: both sizes
+// known and equal. Two files at one position with different sizes are not
+// provably the same audio and stay a conflict.
+func sameChapterCopy(a, b *fragCandidate) bool {
+	return a.File.Size > 0 && a.File.Size == b.File.Size
 }
 
 // fragGroupState is a no-parent row's Row.State: what Replan needs from plan
@@ -1972,7 +2010,7 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 		// numbered set is not formed across discs (see discDir below).
 		paired, sameMajor := true, true
 		for _, e := range es {
-			if len(e.pos.Parts) < 2 {
+			if !e.pos.LeadPair {
 				paired = false
 			} else if e.pos.Parts[0] != es[0].pos.Parts[0] {
 				sameMajor = false
@@ -1981,6 +2019,47 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 		if paired && sameMajor {
 			for i := range es {
 				es[i].num = es[i].pos.Parts[1]
+			}
+		}
+		// Renamed copies (same position, same size; owner 2026-10-03) are one
+		// chapter. They stay in set.members, where noParentRow sets them aside
+		// again, but the set is judged on one file per chapter. Without this
+		// the originals ("02_001") and the copies ("02_001 - Title - read by
+		// narrator") read as two works side by side and became two books.
+		oneWork, hadCopies := false, false
+		{
+			kept := es[:0:0]
+			nCopies := 0
+			for i := 0; i < len(es); {
+				j := i + 1
+				for j < len(es) && es[j].pos.Compare(es[i].pos) == 0 {
+					j++
+				}
+				run := es[i:j]
+				same := len(run) > 1
+				for _, q := range run[1:] {
+					same = same && sameChapterCopy(run[0].c, q.c)
+				}
+				if same {
+					rc := make([]*fragCandidate, len(run))
+					for k, q := range run {
+						rc[k] = q.c
+					}
+					kept = append(kept, run[keptOfCopies(lib, rc)])
+					nCopies += len(run) - 1
+				} else {
+					kept = append(kept, run...)
+				}
+				i = j
+			}
+			if nCopies > 0 {
+				hadCopies = true
+				es = kept
+				keyN = map[string]int{}
+				for _, e := range es {
+					keyN[e.key]++
+				}
+				oneWork = len(keyN) == 1
 			}
 		}
 		// (the set is judged by setAuthor/setSeries below, not by its first file)
@@ -2030,11 +2109,15 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 		for i := 1; i < len(es) && set.problem == ""; i++ {
 			e := es[i]
 			switch {
-			case e.num == es[i-1].num && e.pos.Disc == es[i-1].pos.Disc:
+			case e.num == es[i-1].num && e.pos.Disc == es[i-1].pos.Disc &&
+				!(e.pos.Compare(es[i-1].pos) == 0 && sameChapterCopy(e.c, es[i-1].c)):
 				// The leading number, not the whole position: "05 - Ash" and
 				// "05 - Ash (1)" are one chapter twice (a second download),
 				// "01 - Book A" and "01 - Book B" two works.
-				set.sideBySide = true
+				// A folder that holds renamed copies of its chapters is one
+				// work, so a pair that differs in size is a conflict inside it,
+				// never two works side by side.
+				set.sideBySide = !hadCopies
 				set.problem = fmt.Sprintf("%q and %q carry the same chapter number: a duplicate file, or more than one work in the folder", es[i-1].c.origStem(), e.c.origStem())
 			case !sameOrMissing(lib.realAuthorID(e.c.Book, dir), setAuthor):
 				set.problem = fmt.Sprintf("the files are by different authors (%q, %q)", lib.authors[*setAuthor], lib.authorName(e.c.Book))
@@ -2045,9 +2128,10 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 		if set.problem == "" && (lo > 1 || float64(hi-lo+1) > 1.25*float64(len(es))) {
 			set.problem = fmt.Sprintf("the numbers run %d to %d over %d files: not a chapter run from 0 or 1 without large gaps", lo, hi, len(es))
 		}
-		if set.problem == "" {
+		if set.problem == "" && !oneWork {
 			// Works side by side: one key's files all adjacent and at least
-			// half the set, or no key standing alone.
+			// half the set, or no key standing alone. (Not when the copies
+			// set aside leave one key: that is one work, kept once.)
 			single := 0
 			for _, n := range keyN {
 				if n == 1 {
@@ -2087,8 +2171,23 @@ func numberedSets(lib *fragLibrary, cands []*fragCandidate) []numberedSet {
 		if set.sideBySide {
 			set.keyGroups = map[string]bool{}
 			nums := map[string][]int{}
+			major := map[string]map[int]bool{}
 			for _, e := range es {
-				nums[e.key] = append(nums[e.key], e.num)
+				if e.pos.LeadPair {
+					if major[e.key] == nil {
+						major[e.key] = map[int]bool{}
+					}
+					major[e.key][e.pos.Parts[0]] = true
+				}
+			}
+			for _, e := range es {
+				n := e.num
+				// A key whose files all share one disc of a leading pair
+				// ("1-01 Book A" … "1-04 Book A"): its run is the tracks.
+				if e.pos.LeadPair && len(major[e.key]) == 1 {
+					n = e.pos.Parts[1]
+				}
+				nums[e.key] = append(nums[e.key], n)
 			}
 			for key, ns := range nums {
 				if len(ns) < fragMinGroup {
@@ -2288,6 +2387,44 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		}
 		return ps[i].c.Book.ID < ps[j].c.Book.ID
 	})
+	// Renamed copies: a run of files at one position whose sizes all match is
+	// one chapter; keep the organized-and-primary file if exactly one is, else
+	// the lowest book id, and set the others aside as copies.
+	var copies []placed
+	copyOf := map[string]string{}
+	{
+		kept := ps[:0:0]
+		for i := 0; i < len(ps); {
+			j := i + 1
+			for j < len(ps) && ps[j].ok && ps[i].ok && ps[j].pos.Compare(ps[i].pos) == 0 {
+				j++
+			}
+			run := ps[i:j]
+			same := len(run) > 1
+			for _, q := range run[1:] {
+				same = same && sameChapterCopy(run[0].c, q.c)
+			}
+			if !same {
+				kept = append(kept, run...)
+				i = j
+				continue
+			}
+			rc := make([]*fragCandidate, len(run))
+			for k, q := range run {
+				rc[k] = q.c
+			}
+			keep := keptOfCopies(lib, rc)
+			kept = append(kept, run[keep])
+			for k, q := range run {
+				if k != keep {
+					copies = append(copies, q)
+					copyOf[q.c.Book.ID] = run[keep].c.Book.ID
+				}
+			}
+			i = j
+		}
+		ps = kept
+	}
 	orderProblem := ""
 	for i, p := range ps {
 		if !p.ok {
@@ -2305,14 +2442,25 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	books := make([]fragBook, 0, len(cs))
 	extra := map[string][]string{}
 	var off float64
+	offsetOf := map[string]float64{}
 	for i, p := range ps {
 		plan.Members = append(plan.Members, fragGroupMember{Frag: p.c, Track: i + 1, Offset: off})
+		offsetOf[p.c.Book.ID] = off
 		off += float64(p.c.File.Duration)
 		ids = append(ids, p.c.Book.ID)
 		books = append(books, p.c.Book)
 		extra[p.c.Book.ID] = []string{p.c.ImportPath}
 	}
 	sort.Strings(ids)
+	memberIDs := append([]string(nil), ids...)
+	for _, q := range copies {
+		plan.Copies = append(plan.Copies, fragGroupCopy{Frag: q.c, Of: copyOf[q.c.Book.ID], Offset: offsetOf[copyOf[q.c.Book.ID]]})
+		ids = append(ids, q.c.Book.ID)
+		books = append(books, q.c.Book)
+		extra[q.c.Book.ID] = []string{q.c.ImportPath}
+	}
+	sort.Strings(ids)
+	sort.Slice(plan.Copies, func(i, j int) bool { return plan.Copies[i].Frag.Book.ID < plan.Copies[j].Frag.Book.ID })
 	// The survivor: the lowest-id member that is organized and primary, so it
 	// is a book ABS shows and a version group can keep. When no member is
 	// organized (every chapter still sits unorganized in an import folder),
@@ -2320,7 +2468,7 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	// as its fragments were, and is organized like any other imported
 	// multi-file book. Until 2026-10-03 such a set was held as "no survivor"
 	// (63 rows on prod once the 120-minute limit released them).
-	for _, id := range ids {
+	for _, id := range memberIDs {
 		if b := lib.books[id]; b.Organized && b.Primary {
 			plan.SurvivorID = id
 			break
@@ -2331,7 +2479,7 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		anyOrganized = anyOrganized || lib.books[id].Organized
 	}
 	if plan.SurvivorID == "" && !anyOrganized {
-		for _, id := range ids {
+		for _, id := range memberIDs {
 			if lib.books[id].Primary {
 				plan.SurvivorID = id
 				break
@@ -2398,6 +2546,14 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		}
 		fpParts = append(fpParts, fmt.Sprintf("%s|%s|%s|%d", m.Frag.Book.ID, m.Frag.File.ID, m.Frag.File.Path, m.Track))
 	}
+	for _, cp := range plan.Copies {
+		r.Members = append(r.Members, member(lib, cp.Frag.Book, "copy"))
+		state.Files[cp.Frag.Book.ID] = cp.Frag.File.ID
+		if !cp.Frag.Present {
+			missing++
+		}
+		fpParts = append(fpParts, fmt.Sprintf("copy|%s|%s|%s|%s", cp.Frag.Book.ID, cp.Frag.File.ID, cp.Frag.File.Path, cp.Of))
+	}
 	if raw, err := json.Marshal(state); err == nil {
 		r.State = raw
 	}
@@ -2431,9 +2587,24 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		}
 		r.Evidence = append(r.Evidence, "in order: "+strings.Join(stems, " | ")+more)
 	}
+	if len(plan.Copies) > 0 {
+		var ex []string
+		for _, cp := range plan.Copies {
+			if len(ex) < 6 {
+				ex = append(ex, fmt.Sprintf("%q (copy of %s)", cp.Frag.origStem(), cp.Of))
+			}
+		}
+		r.Evidence = append(r.Evidence, fmt.Sprintf("%d renamed copies of chapters (same position, same size) are retired, not added: %s",
+			len(plan.Copies), strings.Join(ex, ", ")))
+	}
 	r.Current = map[string]string{"fragments": strconv.Itoa(len(cs)), "folder": dir}
+	moving := len(plan.Members) - 1
+	action := fmt.Sprintf("move %d fragment row(s) onto %s in track order; retire %d emptied book(s) into it", moving, plan.SurvivorID, moving)
+	if len(plan.Copies) > 0 {
+		action += fmt.Sprintf("; retire %d renamed copy book(s) into it, each keeping its own file row", len(plan.Copies))
+	}
 	r.Proposed = map[string]string{
-		"action":   fmt.Sprintf("move %d fragment row(s) onto %s in track order; retire %d emptied book(s) into it", len(cs)-1, plan.SurvivorID, len(cs)-1),
+		"action":   action,
 		"survivor": plan.SurvivorID,
 	}
 	if plan.Title != "" {
@@ -2981,6 +3152,24 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 			}
 			did, err := f.retire(ctx, store, w, m.Frag.Book.ID, plan.SurvivorID,
 				merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
+			steps += did
+			if err != nil {
+				return partial(err)
+			}
+		}
+		for _, cp := range plan.Copies {
+			if err := ctx.Err(); err != nil {
+				return partial(err)
+			}
+			rows, err := store.GetBookFiles(cp.Frag.Book.ID)
+			if err != nil {
+				return partial(err)
+			}
+			if len(rows) != 1 || rows[0].ID != cp.Frag.File.ID {
+				return partial(fmt.Errorf("%w: copy %s no longer holds exactly its planned row", repairs.ErrChangedSincePlan, cp.Frag.Book.ID))
+			}
+			did, err := f.retire(ctx, store, w, cp.Frag.Book.ID, plan.SurvivorID,
+				merge.SliceMapping{OffsetSeconds: cp.Offset, Mappable: true})
 			steps += did
 			if err != nil {
 				return partial(err)
